@@ -13,6 +13,7 @@ export const StatusBar: Component = () => (
 			<input type="checkbox" checked={state.soften} onChange={e => setState("soften", e.currentTarget.checked)} />
 			soft fade
 		</label>
+		{state.queuedMessageCount > 0 && <span class="queued-chip">queued: {state.queuedMessageCount}</span>}
 		{!state.connected && <span class="disconnected-pill">disconnected</span>}
 		<span class="status-dot" classList={{ streaming: state.streaming }} title={state.streaming ? "streaming" : "idle"} />
 		{state.error && (

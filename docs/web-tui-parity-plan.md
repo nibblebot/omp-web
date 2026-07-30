@@ -2,7 +2,8 @@
 
 ## Progress
 - [x] Phase 0 — Protocol generalization & state mirror (2026-07-30)
-- [ ] Phase 1 — Streaming input parity
+  - Deviation: `setSubagentSubscription("progress")` is issued in `connect()` on every (re)open (idempotent, per RpcClient) — moved here from Phase 4 step 8 so the server's subagent forwards actually fire; Phase 4 only consumes the frames.
+- [x] Phase 1 — Streaming input parity (2026-07-30)
 - [ ] Phase 2 — Slash commands, autocomplete, bang-shell
 - [ ] Phase 3 — Status bar parity
 - [ ] Phase 4 — Rich tool renderers + subagent plumbing

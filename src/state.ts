@@ -436,6 +436,8 @@ export function connect(): void {
 	socket.onopen = () => {
 		backoff = 1000;
 		setState("connected", true);
+		// Enable server-side subagent frame forwards (Phase 4 consumes them).
+		void call("setSubagentSubscription", ["progress"]).catch(() => {});
 	};
 	socket.onmessage = ev => {
 		const frame = JSON.parse(String(ev.data)) as ServerFrame;

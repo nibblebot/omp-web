@@ -224,17 +224,67 @@ pre {
 
 .prompt-box textarea {
 	width: 100%;
-	resize: vertical;
+	resize: none;
 	background: #151a22;
 	border: 1px solid #2c3342;
 	border-radius: 8px;
 	color: #d7dae0;
 	padding: 8px 10px;
 	font: inherit;
+	max-height: 40vh;
+	overflow-y: auto;
+	/* Progressive enhancement: native content sizing where supported. */
+	field-sizing: content;
 }
 
-.prompt-box textarea:disabled {
-	opacity: 0.6;
+.hint-chip,
+.queued-chip {
+	align-self: center;
+	margin-right: auto;
+	background: #232a37;
+	border: 1px solid #333c4d;
+	color: #8b93a1;
+	border-radius: 999px;
+	padding: 1px 10px;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.queued-chip {
+	margin-right: 0;
+	color: #facc15;
+	border-color: #5c4a12;
+	background: #2e2712;
+}
+
+.image-tray {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.image-thumb {
+	position: relative;
+	display: inline-flex;
+}
+
+.image-thumb img {
+	height: 56px;
+	border-radius: 6px;
+	border: 1px solid #2c3342;
+}
+
+.image-remove {
+	position: absolute;
+	top: -6px;
+	right: -6px;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border-radius: 50%;
+	font-size: 12px;
+	line-height: 1;
 }
 
 .prompt-actions {
