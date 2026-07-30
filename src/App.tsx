@@ -1,8 +1,12 @@
 import { onMount, Show, type Component } from "solid-js";
 import { MessageList } from "./components/MessageList";
 import { Modal } from "./components/Modal";
+import { ModelPicker } from "./components/ModelPicker";
 import { PromptBox } from "./components/PromptBox";
+import { SettingsPopover } from "./components/SettingsPopover";
+import { StatsPopover } from "./components/StatsPopover";
 import { StatusBar } from "./components/StatusBar";
+import { ThinkingPicker } from "./components/ThinkingPicker";
 import { connect, setState, state } from "./state";
 
 const SHORTCUTS: Array<[string, string]> = [
@@ -37,6 +41,18 @@ export const App: Component = () => {
 						</tbody>
 					</table>
 				</Modal>
+			</Show>
+			<Show when={state.modal === "model"}>
+				<ModelPicker onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "thinking"}>
+				<ThinkingPicker onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "stats"}>
+				<StatsPopover onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "settings"}>
+				<SettingsPopover onClose={() => setState("modal", null)} />
 			</Show>
 		</div>
 	);

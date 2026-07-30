@@ -7,7 +7,10 @@
 - [x] Phase 2 — Slash commands, autocomplete, bang-shell (2026-07-30)
   - Deviation: when the typed query exactly equals the selected completion (e.g. `/compact` fully typed), Enter submits instead of applying — otherwise fully-typed commands could never be submitted. Tab always applies.
   - Deviation: the `/` popup merges web-local commands (`LOCAL_COMMANDS`) with `state.availableCommands` so web-native commands (`/new`, `/help`, …) are discoverable too.
-- [ ] Phase 3 — Status bar parity
+- [x] Phase 3 — Status bar parity (2026-07-30)
+  - Deviation: context coloring uses the TUI's real `context-thresholds.ts` breakpoints (warning 50%/150k, purple 70%/270k, error 90%/500k), ported to `src/context.ts` — the plan's guessed 60/85 thresholds were wrong, and the plan said to copy the file when they differ.
+  - Deviation: `THINKING_LEVELS` is a hardcoded literal array with a comment — value-importing the `ThinkingLevel` const pulls all of `pi-agent-core` into the browser bundle and vite's optimizer fails to build it (type-only imports are fine).
+  - Gap noted: `RpcSessionState` exposes no `autoRetryEnabled`, so the auto-retry checkbox is fire-and-forget (defaults to checked, not read back).
 - [ ] Phase 4 — Rich tool renderers + subagent plumbing
 - [ ] Phase 5 — Session management & compaction display
 - [ ] Phase 6 — Secondary surfaces

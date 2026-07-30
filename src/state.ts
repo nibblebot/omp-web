@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { ModelInfo } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
 import type {
 	RpcAvailableSlashCommand,
 	RpcSessionState,
@@ -61,10 +62,12 @@ export const [state, setState] = createStore({
 	followUpMode: "all" as RpcSessionState["followUpMode"],
 	interruptMode: "immediate" as RpcSessionState["interruptMode"],
 	autoCompactionEnabled: true,
+	dumpTools: [] as NonNullable<RpcSessionState["dumpTools"]>,
 	// --- Server-pushed extras ---
 	availableCommands: [] as RpcAvailableSlashCommand[],
-	availableModels: [] as unknown[],
+	availableModels: [] as ModelInfo[],
 	stats: null as SessionStats | null,
+	goal: null as { objective: string } | null,
 	subagents: new Map<string, unknown>(),
 	connected: false,
 	modal: null as ModalName | null,
@@ -339,6 +342,9 @@ export function applyEvent(e: AgentSessionEvent): void {
 		case "thinking_level_changed":
 			setState("thinkingLevel", e.thinkingLevel ?? undefined);
 			break;
+		case "goal_updated":
+			setState("goal", e.goal ? { objective: e.goal.objective } : null);
+			break;
 		case "auto_retry_start":
 			pushItem({
 				kind: "notice",
@@ -418,6 +424,7 @@ function applyState(s: RpcSessionState, stats?: SessionStats): void {
 		queuedMessageCount: s.queuedMessageCount,
 		todoPhases: s.todoPhases,
 		contextUsage: s.contextUsage,
+		dumpTools: s.dumpTools ?? [],
 		...(stats !== undefined ? { stats } : {}),
 	});
 }
