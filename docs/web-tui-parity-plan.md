@@ -20,7 +20,7 @@
   - Deviation (server): for `newSession`/`switchSession`/`branch` the server now broadcasts history+state BEFORE `call_result` — picker success UI (branch notice) must run after the transcript resync or the notice is wiped by it. Post-mutation resync is best-effort so a resync failure can't falsely fail a successful mutation.
   - Deviation (server): `/download` canonicalizes (realpath) both target and allowed roots (tmpdir, agent cwd, session dir), requires a regular file — closes symlink escapes and wrong-cwd relative export paths. Verified: symlink escape 403, `/etc/passwd` 403, directory 404, real export 200 text/html via 4711 and the vite proxy.
   - vite dev server now proxies `/download` to the Bun server (dev-only parity with `bun run start`).
-- [ ] Phase 6 — Secondary surfaces
+- [x] Phase 6 — Secondary surfaces (2026-07-30: login providers, subagent drill-down, theme/font-size settings; extension UI dialogs skipped — upstream limitation noted in step 3. Caveats: drill-down live click-through not browser-verified (browser tool wedged mid-session; types/tests/build green); real OAuth flow not exercised — needs interactive provider consent)
 
 ## Context
 
