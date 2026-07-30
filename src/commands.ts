@@ -1,5 +1,5 @@
 import type { ImageArg } from "./protocol";
-import { addBashItem, call, pushNotice, resolveBashItem, setState, state, type BashResultLike } from "./state";
+import { addBashItem, call, pushCompaction, pushNotice, resolveBashItem, setState, state, type BashResultLike } from "./state";
 
 export type InputMode = "enter" | "followup";
 
@@ -24,14 +24,50 @@ function showError(err: unknown): void {
 }
 
 /**
+ * New session: `/new` and the header button share this. Confirmation only
+ * when the transcript is non-empty.
+ */
+function confirmNewSession(): void {
+	if (state.items.length > 0 && !window.confirm("Start a new session? The current transcript is replaced.")) return;
+	void call("newSession").catch(showError);
+}
+
+function exportSession(): void {
+	void call("exportHtml")
+		.then(result => {
+			const path = (result as { path?: string } | null)?.path;
+			if (path) pushNotice("info", "Exported session HTML", `/download?path=${encodeURIComponent(path)}`);
+			else pushNotice("info", "Exported session HTML");
+		})
+		.catch(showError);
+}
+
+/**
  * Web-local slash commands: TUI-only commands that have RPC equivalents (or
  * web-native displays). Anything not in this table is sent to the agent
  * verbatim — server-side interception runs builtins/skills/extensions.
  */
 export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
-	new: () => void call("newSession").catch(showError),
-	clear: () => void call("newSession").catch(showError),
-	compact: args => void call("compact", args ? [args] : []).catch(showError),
+	new: confirmNewSession,
+	clear: confirmNewSession,
+	resume: () => setState("modal", "sessions"),
+	tree: () => setState("modal", "branch"),
+	branch: () => setState("modal", "branch"),
+	export: exportSession,
+	compact: args =>
+		void call("compact", args ? [args] : [])
+			.then(result => {
+				const r = result as { summary?: string; tokensBefore?: number } | null;
+				pushCompaction({
+					action: "manual",
+					summary: r?.summary,
+					tokensBefore: r?.tokensBefore,
+					skipped: false,
+					aborted: false,
+					willRetry: false,
+				});
+			})
+			.catch(showError),
 	model: () => setState("modal", "model"),
 	usage: () => setState("modal", "stats"),
 	context: () => setState("modal", "stats"),

@@ -1,9 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ModelInfo } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
-import type {
-	RpcAvailableSlashCommand,
-	RpcSessionState,
-} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import type { RpcAvailableSlashCommand, RpcSessionState } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { createStore, produce } from "solid-js/store";
@@ -21,12 +18,24 @@ export type BashItem = {
 	exitCode: number | null;
 	truncated: boolean;
 };
+export type CompactionItem = {
+	kind: "compaction";
+	id: number;
+	action: string;
+	summary?: string;
+	tokensBefore?: number;
+	skipped: boolean;
+	aborted: boolean;
+	willRetry: boolean;
+	errorMessage?: string;
+};
 export type ChatItem =
 	| { kind: "user"; id: number; text: string }
 	| { kind: "assistant"; id: number; blocks: Block[] }
 	| { kind: "tool"; id: number; toolCallId: string; name: string; args: unknown; status: ToolStatus; output: string }
 	| BashItem
-	| { kind: "notice"; id: number; level: string; message: string };
+	| CompactionItem
+	| { kind: "notice"; id: number; level: string; message: string; href?: string };
 
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
@@ -131,8 +140,12 @@ function pushItem(item: ChatItem): void {
 	setState("items", items => [...items, item]);
 }
 
-export function pushNotice(level: string, message: string): void {
-	pushItem({ kind: "notice", id: nextId++, level, message });
+export function pushNotice(level: string, message: string, href?: string): void {
+	pushItem({ kind: "notice", id: nextId++, level, message, href });
+}
+
+export function pushCompaction(item: Omit<CompactionItem, "kind" | "id">): void {
+	pushItem({ kind: "compaction", id: nextId++, ...item });
 }
 
 /** Bang-shell item: appears immediately as a spinner, resolved by the bash call. */
@@ -370,15 +383,55 @@ export function applyEvent(e: AgentSessionEvent): void {
 		case "auto_compaction_start":
 			pushItem({ kind: "notice", id: nextId++, level: "info", message: "Compacting context…" });
 			break;
+		case "auto_compaction_end": {
+			pushCompaction({
+				action: e.action,
+				summary: e.result?.summary,
+				tokensBefore: e.result?.tokensBefore,
+				skipped: e.skipped ?? false,
+				aborted: e.aborted,
+				willRetry: e.willRetry,
+				errorMessage: e.errorMessage,
+			});
+			break;
+		}
+		case "auto_retry_end":
+			pushItem({
+				kind: "notice",
+				id: nextId++,
+				level: e.success ? "info" : "error",
+				message: e.success
+					? `Retry ${e.attempt} succeeded`
+					: `Retry ${e.attempt} failed: ${e.finalError ?? "unknown error"}`,
+			});
+			break;
+		case "retry_fallback_applied":
+			pushItem({
+				kind: "notice",
+				id: nextId++,
+				level: "warning",
+				message: `Model fallback: ${e.from} → ${e.to}`,
+			});
+			break;
+		case "retry_fallback_succeeded":
+			pushItem({
+				kind: "notice",
+				id: nextId++,
+				level: "info",
+				message: `Fallback model ${e.model} succeeded`,
+			});
+			break;
 		default:
-			// turn_start/turn_end, auto_*_end, retry_fallback_*, ttsr_triggered,
-			// todo_*, irc_message, goal_updated: ignored.
+			// turn_start/turn_end, ttsr_triggered, todo_*, irc_message: ignored.
 			break;
 	}
 }
 
 export function loadHistory(messages: AgentMessage[]): void {
 	pendingDeltas.clear();
+	// Phase 5: reset id sequence so newly-switched sessions don't collide with
+	// leftover ids from the prior transcript.
+	nextId = 1;
 	setState({ items: [], live: { active: false, blocks: [] } });
 	for (const msg of messages) {
 		if (msg.role === "user") {
@@ -479,7 +532,7 @@ export function call(method: RpcMethodName, args: unknown[] = []): Promise<unkno
 }
 
 // list_sessions / list_files carry no id on the wire; with a single user,
-// latest-wins correlation is sufficient (a superseded request resolves empty).
+// latest-wins correlation is sufficient (a superseded request resolves empty.
 let pendingSessions: ((sessions: SessionListEntry[]) => void) | null = null;
 let pendingFiles: ((files: string[]) => void) | null = null;
 

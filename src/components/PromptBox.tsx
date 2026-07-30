@@ -11,6 +11,10 @@ const history = new PromptHistory();
 const LOCAL_DETAILS: Record<string, string> = {
 	new: "Start a new session",
 	clear: "Start a new session",
+	resume: "Resume a previous session",
+	tree: "Branch from an earlier message",
+	branch: "Branch from an earlier message",
+	export: "Export session as HTML",
 	compact: "Compact session context",
 	help: "Keyboard shortcuts",
 	hotkeys: "Keyboard shortcuts",
@@ -223,7 +227,7 @@ export const PromptBox: Component = () => {
 			</div>
 			<div class="prompt-actions">
 				<span class="hint-chip">{state.streaming ? "steer" : "send"}</span>
-				<button class="new-session" onClick={() => void call("newSession").catch(err => setState("error", String(err)))}>
+				<button class="new-session" onClick={() => dispatchInput("/new", undefined, "enter")}>
 					New session
 				</button>
 				{state.streaming && (

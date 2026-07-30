@@ -872,3 +872,19 @@ pre.terminal {
 .segment-button.active {
 	background: #1f3a5f;
 }
+
+/* --- Phase 5: compaction items --- */
+
+.compaction-item {
+	align-self: stretch;
+	background: #151a22;
+	border: 1px solid #262b36;
+	border-radius: 8px;
+	font-size: 12px;
+}
+
+.compaction-item summary {
+	cursor: pointer;
+	padding: 6px 10px;
+	color: #aab2c0;
+}

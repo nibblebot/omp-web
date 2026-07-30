@@ -1,8 +1,10 @@
 import { onMount, Show, type Component } from "solid-js";
+import { BranchPicker } from "./components/BranchPicker";
 import { MessageList } from "./components/MessageList";
 import { Modal } from "./components/Modal";
 import { ModelPicker } from "./components/ModelPicker";
 import { PromptBox } from "./components/PromptBox";
+import { SessionPicker } from "./components/SessionPicker";
 import { SettingsPopover } from "./components/SettingsPopover";
 import { StatsPopover } from "./components/StatsPopover";
 import { StatusBar } from "./components/StatusBar";
@@ -67,6 +69,12 @@ export const App: Component = () => {
 			</Show>
 			<Show when={state.modal === "subagents"}>
 				<SubagentPanel onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "sessions"}>
+				<SessionPicker onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "branch"}>
+				<BranchPicker onClose={() => setState("modal", null)} />
 			</Show>
 		</div>
 	);

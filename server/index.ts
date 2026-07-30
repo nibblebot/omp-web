@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -159,12 +159,25 @@ async function handleCommand(ws: ServerWebSocket<unknown>, raw: string | Buffer)
 				const method = RPC_METHODS[cmd.method];
 				if (!method) throw new Error(`Unknown RPC method: ${cmd.method}`);
 				const data = await method(cmd.args ?? []);
-				send(ws, { type: "call_result", id: cmd.id, ok: true, data });
+				// Post-mutation resync is best-effort: the mutation already
+				// succeeded, so a resync failure must not fail the call.
+				const resync = async () => {
+					try {
+						if (HISTORY_RELOAD[cmd.method]) await broadcastHistory();
+						if (HISTORY_RELOAD[cmd.method] || !READ_ONLY[cmd.method]) await broadcastState();
+					} catch (err) {
+						console.error("Post-mutation resync failed:", err);
+						broadcast({ type: "error", error: `resync failed: ${String(err)}` });
+					}
+				};
 				if (HISTORY_RELOAD[cmd.method]) {
-					await broadcastHistory();
-					await broadcastState();
-				} else if (!READ_ONLY[cmd.method]) {
-					await broadcastState();
+					// Resync BEFORE the call_result: picker success UI (notices,
+					// modal close) must run after the transcript is replaced.
+					await resync();
+					send(ws, { type: "call_result", id: cmd.id, ok: true, data });
+				} else {
+					send(ws, { type: "call_result", id: cmd.id, ok: true, data });
+					await resync();
 				}
 				break;
 			}
@@ -198,16 +211,26 @@ async function handleCommand(ws: ServerWebSocket<unknown>, raw: string | Buffer)
 }
 
 // /download streams a server-side file (used by /export). The only trust
-// boundary on this unauthenticated server: the resolved path must live inside
-// the system temp dir or the current session file's directory.
-async function isDownloadAllowed(resolved: string): Promise<boolean> {
-	const roots = [os.tmpdir()];
+// boundary on this unauthenticated server: the canonical (realpath) target
+// must live inside the system temp dir, the agent cwd (where bare-filename
+// exports land), or the current session file's directory. Canonicalizing both
+// sides closes symlink escapes that a lexical prefix check would miss.
+async function canonicalRoots(): Promise<string[]> {
+	const roots = [os.tmpdir(), cwd];
 	try {
 		const sessionFile = (await client.getState()).sessionFile;
 		if (sessionFile) roots.push(path.dirname(sessionFile));
 	} catch {
-		// State unavailable: tmpdir only.
+		// State unavailable: tmpdir + cwd only.
 	}
+	const out: string[] = [];
+	for (const root of roots) {
+		out.push(await realpath(root).catch(() => root));
+	}
+	return out;
+}
+
+function isInside(resolved: string, roots: string[]): boolean {
 	return roots.some(root => {
 		const rel = path.relative(root, resolved);
 		return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
@@ -225,11 +248,13 @@ const server = Bun.serve({
 		if (url.pathname === "/download") {
 			const requested = url.searchParams.get("path");
 			if (!requested) return new Response("Missing path", { status: 400 });
-			const resolved = path.resolve(requested);
-			if (!(await isDownloadAllowed(resolved))) return new Response("Forbidden", { status: 403 });
-			const file = Bun.file(resolved);
-			if (!(await file.exists())) return new Response("Not found", { status: 404 });
-			return new Response(file);
+			// Relative export paths are written by the agent into its cwd.
+			const canonical = await realpath(path.resolve(cwd, requested)).catch(() => null);
+			if (!canonical) return new Response("Not found", { status: 404 });
+			const fileStat = await stat(canonical).catch(() => null);
+			if (!fileStat?.isFile()) return new Response("Not found", { status: 404 });
+			if (!isInside(canonical, await canonicalRoots())) return new Response("Forbidden", { status: 403 });
+			return new Response(Bun.file(canonical));
 		}
 		const file = Bun.file(url.pathname === "/" ? "dist/index.html" : `dist${url.pathname}`);
 		if (!(await file.exists())) return new Response("Not found", { status: 404 });

@@ -125,9 +125,34 @@ export const MessageList: Component = () => {
 							</div>
 						)}
 					</Match>
-						<Match when={item.kind === "notice" && item}>
-							{notice => <div class="msg-notice">{notice().message}</div>}
-						</Match>
+						<Match when={item.kind === "compaction" && item}>
+						{c => (
+							<details class="compaction-item">
+								<summary>
+									compaction ({c().action})
+									{c().tokensBefore !== undefined && <span class="picker-detail"> · {c().tokensBefore} tokens before</span>}
+									{c().skipped && <span class="picker-detail"> · skipped</span>}
+									{c().aborted && <span class="picker-detail"> · aborted</span>}
+								</summary>
+								{c().errorMessage && <div class="msg-notice">{c().errorMessage}</div>}
+								{c().summary && <Markdown src={c().summary!} />}
+								{!c().summary && !c().errorMessage && <div class="tool-collapsed-note">no summary</div>}
+							</details>
+						)}
+					</Match>
+					<Match when={item.kind === "notice" && item}>
+						{notice => (
+							<div class="msg-notice">
+								{notice().href ? (
+									<a href={notice().href} target="_blank" rel="noreferrer">
+										{notice().message}
+									</a>
+								) : (
+									notice().message
+								)}
+							</div>
+						)}
+					</Match>
 					</Switch>
 				)}
 			</For>

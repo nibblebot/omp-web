@@ -11,8 +11,15 @@
   - Deviation: context coloring uses the TUI's real `context-thresholds.ts` breakpoints (warning 50%/150k, purple 70%/270k, error 90%/500k), ported to `src/context.ts` — the plan's guessed 60/85 thresholds were wrong, and the plan said to copy the file when they differ.
   - Deviation: `THINKING_LEVELS` is a hardcoded literal array with a comment — value-importing the `ThinkingLevel` const pulls all of `pi-agent-core` into the browser bundle and vite's optimizer fails to build it (type-only imports are fine).
   - Gap noted: `RpcSessionState` exposes no `autoRetryEnabled`, so the auto-retry checkbox is fire-and-forget (defaults to checked, not read back).
-- [ ] Phase 4 — Rich tool renderers + subagent plumbing
-- [ ] Phase 5 — Session management & compaction display
+- [x] Phase 4 — Rich tool renderers + subagent plumbing (2026-07-30)
+  - Deviation: `edit` tool args use the hashline/apply_patch shapes in 17.1.8 (no top-level `oldText`/`newText`), so the classic replace diff falls back to GenericToolCard per the plan's documented escape hatch.
+  - Deviation: TodoTool also parses `item.args` as a fallback (phases/items arrays) — the `state.todoPhases` mirror was observed empty in one run; live mirror still wins when populated (verified 5 phases / 15 items in the final run).
+  - Deviation: dev-only `window.__ompState` handle (guarded by `import.meta.env.DEV`) kept permanently for verification/debugging.
+- [x] Phase 5 — Session management & compaction display (2026-07-30)
+  - Deviation: manual `/compact` does not emit `auto_compaction_end` (that event is auto-compaction-only); the web `/compact` handler renders the RPC `CompactionResult` as a compaction item directly. Real compact error path ("session too small") verified; item rendering verified via synthetic `auto_compaction_end` (a dev-only `__ompApplyEvent` hook, since removed).
+  - Deviation (server): for `newSession`/`switchSession`/`branch` the server now broadcasts history+state BEFORE `call_result` — picker success UI (branch notice) must run after the transcript resync or the notice is wiped by it. Post-mutation resync is best-effort so a resync failure can't falsely fail a successful mutation.
+  - Deviation (server): `/download` canonicalizes (realpath) both target and allowed roots (tmpdir, agent cwd, session dir), requires a regular file — closes symlink escapes and wrong-cwd relative export paths. Verified: symlink escape 403, `/etc/passwd` 403, directory 404, real export 200 text/html via 4711 and the vite proxy.
+  - vite dev server now proxies `/download` to the Bun server (dev-only parity with `bun run start`).
 - [ ] Phase 6 — Secondary surfaces
 
 ## Context
