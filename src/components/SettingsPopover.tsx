@@ -1,13 +1,20 @@
 import { createSignal, type Component } from "solid-js";
 import { call, setState, state } from "../state";
-import { currentFontSize, currentTheme, setTheme, stepFontSize } from "../theme";
+import {
+	currentFontSize,
+	currentThemePreference,
+	setTheme,
+	stepFontSize,
+	THEME_OPTIONS,
+	type ThemePreference,
+} from "../theme";
 import { Modal } from "./Modal";
 
 /** Gear popover: queue modes, auto-retry, and the local display toggles. */
 export const SettingsPopover: Component<{ onClose: () => void }> = props => {
 	// RpcSessionState does not expose autoRetryEnabled; the toggle is fire-and-forget.
 	const [autoRetry, setAutoRetry] = createSignal(true);
-	const [theme, setThemeSignal] = createSignal(currentTheme());
+	const [theme, setThemeSignal] = createSignal<ThemePreference>(currentThemePreference());
 	const [fontSize, setFontSize] = createSignal(currentFontSize());
 
 	const modeSelect = (label: string, value: () => string, method: "setSteeringMode" | "setFollowUpMode") => (
@@ -46,9 +53,10 @@ export const SettingsPopover: Component<{ onClose: () => void }> = props => {
 				</label>
 				<label class="settings-row">
 					theme
-					<select value={theme()} onChange={e => setThemeSignal(setTheme(e.currentTarget.value as "dark" | "light"))}>
-						<option value="dark">dark</option>
-						<option value="light">light</option>
+					<select value={theme()} onChange={e => setThemeSignal(setTheme(e.currentTarget.value as ThemePreference))}>
+						{THEME_OPTIONS.map(o => (
+							<option value={o.id}>{o.label}</option>
+						))}
 					</select>
 				</label>
 				<div class="settings-row">
