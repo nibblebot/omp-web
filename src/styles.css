@@ -317,3 +317,146 @@ button.stop {
 	background: #4a2028;
 	border-color: #7f3440;
 }
+
+/* --- Phase 2: autocomplete, modal, bang-shell cards --- */
+
+.prompt-input {
+	position: relative;
+}
+
+.autocomplete {
+	position: absolute;
+	bottom: calc(100% + 4px);
+	left: 0;
+	right: 0;
+	max-height: 300px;
+	overflow-y: auto;
+	background: #1a2029;
+	border: 1px solid #333c4d;
+	border-radius: 8px;
+	z-index: 20;
+}
+
+.autocomplete-row {
+	display: flex;
+	gap: 10px;
+	padding: 5px 10px;
+	cursor: pointer;
+	align-items: baseline;
+}
+
+.autocomplete-row.selected {
+	background: #232f42;
+}
+
+.autocomplete-label {
+	color: #7cc7ff;
+	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+.autocomplete-detail {
+	color: #6b7280;
+	font-size: 11px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.modal-backdrop {
+	position: fixed;
+	inset: 0;
+	background: rgba(4, 6, 10, 0.65);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 50;
+}
+
+.modal {
+	background: #151a22;
+	border: 1px solid #333c4d;
+	border-radius: 10px;
+	padding: 16px;
+	min-width: 320px;
+	max-width: 640px;
+	max-height: 80vh;
+	overflow-y: auto;
+	outline: none;
+}
+
+.modal-title {
+	margin: 0 0 10px;
+	font-size: 14px;
+	color: #aab2c0;
+}
+
+.shortcuts {
+	border-collapse: collapse;
+	font-size: 13px;
+}
+
+.shortcuts td {
+	padding: 3px 12px 3px 0;
+}
+
+.shortcut-key {
+	color: #7cc7ff;
+	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	white-space: nowrap;
+}
+
+.bash-card {
+	background: #151a22;
+	border: 1px solid #262b36;
+	border-radius: 8px;
+	font-size: 12px;
+}
+
+.bash-card.dimmed {
+	opacity: 0.55;
+}
+
+.bash-header {
+	display: flex;
+	gap: 8px;
+	align-items: baseline;
+	padding: 6px 10px;
+}
+
+.bash-cmd {
+	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	color: #d7dae0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.exit-badge {
+	margin-left: auto;
+	background: #14301c;
+	border: 1px solid #1f5c31;
+	color: #4ade80;
+	border-radius: 999px;
+	padding: 0 8px;
+	font-size: 11px;
+}
+
+.exit-badge.nonzero {
+	background: #3a1d22;
+	border-color: #7f3440;
+	color: #f87171;
+}
+
+.bash-abort {
+	margin-left: auto;
+	padding: 1px 10px;
+	font-size: 11px;
+}
+
+.bash-truncated {
+	color: #6b7280;
+	padding: 0 10px 6px;
+	font-size: 11px;
+}

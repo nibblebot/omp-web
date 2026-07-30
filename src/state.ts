@@ -10,11 +10,25 @@ import type { ClientCommand, RpcMethodName, ServerFrame, SessionListEntry } from
 
 export type Block = { kind: "text" | "thinking"; text: string };
 export type ToolStatus = "running" | "done" | "error";
+export type BashItem = {
+	kind: "bash";
+	id: number;
+	command: string;
+	dimmed: boolean;
+	status: "running" | "done";
+	output: string;
+	exitCode: number | null;
+	truncated: boolean;
+};
 export type ChatItem =
 	| { kind: "user"; id: number; text: string }
 	| { kind: "assistant"; id: number; blocks: Block[] }
 	| { kind: "tool"; id: number; toolCallId: string; name: string; args: unknown; status: ToolStatus; output: string }
+	| BashItem
 	| { kind: "notice"; id: number; level: string; message: string };
+
+/** Names of the modals the store can summon; components render on match. */
+export type ModalName = "help" | "model" | "thinking" | "stats" | "settings" | "sessions" | "branch";
 
 /** Derived one-line args summary for the generic tool card (raw args stay structured). */
 export function argsSummary(args: unknown): string {
@@ -53,6 +67,7 @@ export const [state, setState] = createStore({
 	stats: null as SessionStats | null,
 	subagents: new Map<string, unknown>(),
 	connected: false,
+	modal: null as ModalName | null,
 	// Display toggles (StatusBar checkboxes); both default off = raw streaming.
 	reveal: false,
 	soften: false,
@@ -97,6 +112,46 @@ function userText(content: UserContent): string {
 
 function pushItem(item: ChatItem): void {
 	setState("items", items => [...items, item]);
+}
+
+export function pushNotice(level: string, message: string): void {
+	pushItem({ kind: "notice", id: nextId++, level, message });
+}
+
+/** Bang-shell item: appears immediately as a spinner, resolved by the bash call. */
+export function addBashItem(command: string, dimmed: boolean): number {
+	const id = nextId++;
+	pushItem({ kind: "bash", id, command, dimmed, status: "running", output: "", exitCode: null, truncated: false });
+	return id;
+}
+
+export interface BashResultLike {
+	output: string;
+	exitCode: number;
+	cancelled?: boolean;
+	timedOut?: boolean;
+	truncated?: boolean;
+}
+
+export function resolveBashItem(id: number, result: BashResultLike | { error: string }): void {
+	const index = state.items.findIndex(it => it.kind === "bash" && it.id === id);
+	if (index < 0) return;
+	setState(
+		"items",
+		produce(items => {
+			const item = items[index];
+			if (item?.kind !== "bash") return;
+			item.status = "done";
+			if ("error" in result) {
+				item.output = result.error;
+				item.exitCode = null;
+			} else {
+				item.output = capTail(result.output, 8000);
+				item.exitCode = result.exitCode;
+				item.truncated = result.truncated ?? false;
+			}
+		}),
+	);
 }
 
 function findToolIndex(toolCallId: string): number {
@@ -368,6 +423,9 @@ function applyState(s: RpcSessionState, stats?: SessionStats): void {
 }
 
 let ws: WebSocket | null = null;
+
+// Dev-only inspection handle (tests drive the UI through it).
+if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__ompState = state;
 
 // ---------------------------------------------------------------------------
 // call() relay: id-keyed promise map resolved by matching call_result frames.

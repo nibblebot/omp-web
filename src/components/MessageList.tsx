@@ -1,6 +1,6 @@
 import { createEffect, For, Match, Show, Switch, type Component } from "solid-js";
 import { renderMarkdown, splitForStreaming } from "../markdown";
-import { state, type Block } from "../state";
+import { call, state, type Block } from "../state";
 import { Markdown } from "./Markdown";
 import { ToolCard } from "./ToolCard";
 
@@ -100,6 +100,31 @@ export const MessageList: Component = () => {
 							)}
 						</Match>
 						<Match when={item.kind === "tool" && item}>{tool => <ToolCard item={tool()} />}</Match>
+					<Match when={item.kind === "bash" && item}>
+						{bash => (
+							<div class="bash-card" classList={{ dimmed: bash().dimmed }}>
+								<div class="bash-header">
+									<span class="bash-cmd">$ {bash().command}</span>
+									{bash().status === "running" ? (
+										<>
+											<span class="tool-status" data-status="running">
+												running
+											</span>
+											<button class="bash-abort" onClick={() => void call("abortBash").catch(() => {})}>
+												abort
+											</button>
+										</>
+									) : (
+										<span class="exit-badge" classList={{ nonzero: bash().exitCode !== 0 }}>
+											{bash().exitCode ?? "err"}
+										</span>
+									)}
+								</div>
+								{bash().output && <pre>{bash().output}</pre>}
+								{bash().truncated && <div class="bash-truncated">(truncated)</div>}
+							</div>
+						)}
+					</Match>
 						<Match when={item.kind === "notice" && item}>
 							{notice => <div class="msg-notice">{notice().message}</div>}
 						</Match>

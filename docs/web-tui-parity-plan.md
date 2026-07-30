@@ -4,7 +4,9 @@
 - [x] Phase 0 — Protocol generalization & state mirror (2026-07-30)
   - Deviation: `setSubagentSubscription("progress")` is issued in `connect()` on every (re)open (idempotent, per RpcClient) — moved here from Phase 4 step 8 so the server's subagent forwards actually fire; Phase 4 only consumes the frames.
 - [x] Phase 1 — Streaming input parity (2026-07-30)
-- [ ] Phase 2 — Slash commands, autocomplete, bang-shell
+- [x] Phase 2 — Slash commands, autocomplete, bang-shell (2026-07-30)
+  - Deviation: when the typed query exactly equals the selected completion (e.g. `/compact` fully typed), Enter submits instead of applying — otherwise fully-typed commands could never be submitted. Tab always applies.
+  - Deviation: the `/` popup merges web-local commands (`LOCAL_COMMANDS`) with `state.availableCommands` so web-native commands (`/new`, `/help`, …) are discoverable too.
 - [ ] Phase 3 — Status bar parity
 - [ ] Phase 4 — Rich tool renderers + subagent plumbing
 - [ ] Phase 5 — Session management & compaction display

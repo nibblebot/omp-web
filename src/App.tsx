@@ -1,8 +1,21 @@
-import { onMount, type Component } from "solid-js";
+import { onMount, Show, type Component } from "solid-js";
 import { MessageList } from "./components/MessageList";
+import { Modal } from "./components/Modal";
 import { PromptBox } from "./components/PromptBox";
 import { StatusBar } from "./components/StatusBar";
-import { connect } from "./state";
+import { connect, setState, state } from "./state";
+
+const SHORTCUTS: Array<[string, string]> = [
+	["Enter", "Send (steers while the agent is streaming)"],
+	["Ctrl+Enter", "Queue as follow-up"],
+	["Shift+Enter", "Newline"],
+	["Esc", "Abort the running turn"],
+	["↑ / ↓", "Prompt history (caret on first/last line)"],
+	["/ …", "Slash commands (Tab completes)"],
+	["@ …", "File mentions (Tab completes)"],
+	["! cmd", "Run shell command, output into context"],
+	["!! cmd", "Run shell command, output local only (dimmed)"],
+];
 
 export const App: Component = () => {
 	onMount(connect);
@@ -11,6 +24,20 @@ export const App: Component = () => {
 			<StatusBar />
 			<MessageList />
 			<PromptBox />
+			<Show when={state.modal === "help"}>
+				<Modal title="Shortcuts" onClose={() => setState("modal", null)}>
+					<table class="shortcuts">
+						<tbody>
+							{SHORTCUTS.map(([key, desc]) => (
+								<tr>
+									<td class="shortcut-key">{key}</td>
+									<td>{desc}</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</Modal>
+			</Show>
 		</div>
 	);
 };
