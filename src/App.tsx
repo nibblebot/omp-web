@@ -1,5 +1,6 @@
 import { onMount, Show, type Component } from "solid-js";
 import { BranchPicker } from "./components/BranchPicker";
+import { LoginPanel } from "./components/LoginPanel";
 import { MessageList } from "./components/MessageList";
 import { Modal } from "./components/Modal";
 import { ModelPicker } from "./components/ModelPicker";
@@ -11,6 +12,10 @@ import { StatusBar } from "./components/StatusBar";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { ThinkingPicker } from "./components/ThinkingPicker";
 import { connect, setState, state } from "./state";
+import { initTheme } from "./theme";
+
+// Apply persisted theme/font-size before first render to avoid a dark flash.
+initTheme();
 
 const SHORTCUTS: Array<[string, string]> = [
 	["Enter", "Send (steers while the agent is streaming)"],
@@ -75,6 +80,9 @@ export const App: Component = () => {
 			</Show>
 			<Show when={state.modal === "branch"}>
 				<BranchPicker onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "login"}>
+				<LoginPanel onClose={() => setState("modal", null)} />
 			</Show>
 		</div>
 	);

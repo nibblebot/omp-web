@@ -84,6 +84,7 @@ const READ_ONLY: Partial<Record<RpcMethodName, true>> = {
 	getBranchMessages: true,
 	getLoginProviders: true,
 	getSubagents: true,
+	getSubagentMessages: true,
 };
 
 // Calls that replace the transcript; every tab resyncs, not just the requester.
@@ -115,9 +116,44 @@ const RPC_METHODS: Record<RpcMethodName, (args: unknown[]) => Promise<unknown>> 
 	branch: a => client.branch(a[0] as string),
 	getBranchMessages: () => client.getBranchMessages(),
 	getLoginProviders: () => client.getLoginProviders(),
+	login: () => Promise.reject(new Error("login is handled per-socket")),
 	setSubagentSubscription: a => client.setSubagentSubscription(a[0] as RpcSubagentSubscriptionLevel),
 	getSubagents: () => client.getSubagents(),
+	getSubagentMessages: a => client.getSubagentMessages(a[0] as { subagentId?: string; sessionFile?: string; fromByte?: number }),
 };
+
+// Login callbacks are streaming (open_url + manual code input), so login is
+// special-cased in handleCommand with the requesting socket in scope.
+// Pending code inputs are rejected on login settle and on socket close.
+const pendingCodeInputs = new Map<
+	string,
+	{ ws: ServerWebSocket<unknown>; resolve: (code: string) => void; reject: (err: Error) => void }
+>();
+let nextLoginRequestId = 1;
+
+async function loginWithCallbacks(ws: ServerWebSocket<unknown>, providerId: string): Promise<unknown> {
+	try {
+		return await client.login(providerId, {
+			onOpenUrl: (url, instructions, launchUrl) => send(ws, { type: "login_url", url, launchUrl, instructions }),
+			onManualCodeInput: prompt => {
+				const requestId = `lr${nextLoginRequestId++}`;
+				const { promise, resolve, reject } = Promise.withResolvers<string>();
+				pendingCodeInputs.set(requestId, { ws, resolve, reject });
+				send(ws, { type: "login_code_request", requestId, title: prompt.title, placeholder: prompt.placeholder });
+				return promise;
+			},
+		});
+	} finally {
+		// Reject this socket's leftover code inputs (already-resolved entries
+		// were deleted by the login_code handler, so only stragglers remain).
+		for (const [id, p] of pendingCodeInputs) {
+			if (p.ws === ws) {
+				p.reject(new Error("login ended"));
+				pendingCodeInputs.delete(id);
+			}
+		}
+	}
+}
 
 const LIST_FILES_SKIP: Record<string, true> = { ".git": true, node_modules: true };
 const LIST_FILES_CEILING = 10_000;
@@ -158,7 +194,8 @@ async function handleCommand(ws: ServerWebSocket<unknown>, raw: string | Buffer)
 			case "call": {
 				const method = RPC_METHODS[cmd.method];
 				if (!method) throw new Error(`Unknown RPC method: ${cmd.method}`);
-				const data = await method(cmd.args ?? []);
+				const data =
+					cmd.method === "login" ? await loginWithCallbacks(ws, cmd.args?.[0] as string) : await method(cmd.args ?? []);
 				// Post-mutation resync is best-effort: the mutation already
 				// succeeded, so a resync failure must not fail the call.
 				const resync = async () => {
@@ -178,6 +215,14 @@ async function handleCommand(ws: ServerWebSocket<unknown>, raw: string | Buffer)
 				} else {
 					send(ws, { type: "call_result", id: cmd.id, ok: true, data });
 					await resync();
+				}
+				break;
+			}
+			case "login_code": {
+				const pending = pendingCodeInputs.get(cmd.requestId);
+				if (pending) {
+					pendingCodeInputs.delete(cmd.requestId);
+					pending.resolve(cmd.code);
 				}
 				break;
 			}
@@ -271,6 +316,12 @@ const server = Bun.serve({
 		},
 		close(ws) {
 			sockets.delete(ws);
+			for (const [id, p] of pendingCodeInputs) {
+				if (p.ws === ws) {
+					p.reject(new Error("socket closed"));
+					pendingCodeInputs.delete(id);
+				}
+			}
 		},
 		message(ws, raw) {
 			void handleCommand(ws, raw);

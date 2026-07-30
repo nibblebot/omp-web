@@ -39,12 +39,15 @@ export type RpcMethodName =
 	| "branch"
 	| "getBranchMessages"
 	| "getLoginProviders"
+	| "login"
 	| "setSubagentSubscription"
-	| "getSubagents";
+	| "getSubagents"
+	| "getSubagentMessages";
 
 // Client → server
 export type ClientCommand =
 	| { type: "call"; id: string; method: RpcMethodName; args?: unknown[] }
+	| { type: "login_code"; requestId: string; code: string }
 	| { type: "list_sessions" }
 	| { type: "list_files"; query: string; limit?: number };
 
@@ -61,6 +64,10 @@ export type ServerFrame =
 	| { type: "sessions"; sessions: SessionListEntry[] }
 	// Unicast answer to list_files.
 	| { type: "files"; files: string[] }
+	// Unicast: OAuth URL to open (during a login call).
+	| { type: "login_url"; url: string; launchUrl?: string; instructions?: string }
+	// Unicast: provider needs a pasted code to finish login.
+	| { type: "login_code_request"; requestId: string; title: string; placeholder?: string }
 	| { type: "error"; error: string };
 
 export type SessionListEntry = {

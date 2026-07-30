@@ -51,7 +51,16 @@ export interface SubagentInfo {
 }
 
 /** Names of the modals the store can summon; components render on match. */
-export type ModalName = "help" | "model" | "thinking" | "stats" | "settings" | "sessions" | "branch" | "subagents";
+export type ModalName =
+	| "help"
+	| "model"
+	| "thinking"
+	| "stats"
+	| "settings"
+	| "sessions"
+	| "branch"
+	| "subagents"
+	| "login";
 
 /** Derived one-line args summary for the generic tool card (raw args stay structured). */
 export function argsSummary(args: unknown): string {
@@ -94,6 +103,9 @@ export const [state, setState] = createStore({
 	connected: false,
 	modal: null as ModalName | null,
 	toolsExpanded: false,
+	// Phase 6: in-flight OAuth login prompts (unicast frames).
+	loginUrl: null as { url: string; launchUrl?: string; instructions?: string } | null,
+	loginCodeRequest: null as { requestId: string; title: string; placeholder?: string } | null,
 	// Display toggles (StatusBar checkboxes); both default off = raw streaming.
 	reveal: false,
 	soften: false,
@@ -515,17 +527,21 @@ function rejectPendingCalls(err: Error): void {
 	}
 }
 
-export function call(method: RpcMethodName, args: unknown[] = []): Promise<unknown> {
+export function call(method: RpcMethodName, args: unknown[] = [], timeoutMs = 30_000): Promise<unknown> {
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	if (!ws || ws.readyState !== WebSocket.OPEN) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
 	const id = `c${nextCallId++}`;
-	const timer = window.setTimeout(() => {
-		pendingCalls.delete(id);
-		reject(new Error(`call "${method}" timed out`));
-	}, 30_000);
+	// OAuth/manual-code flows exceed any sane default; login passes 0.
+	const timer =
+		timeoutMs > 0
+			? window.setTimeout(() => {
+					pendingCalls.delete(id);
+					reject(new Error(`call "${method}" timed out`));
+				}, timeoutMs)
+			: 0;
 	pendingCalls.set(id, { resolve, reject, timer });
 	ws.send(JSON.stringify({ type: "call", id, method, args } satisfies ClientCommand));
 	return promise;
@@ -558,6 +574,13 @@ export function listFiles(query: string, limit?: number): Promise<string[]> {
 	pendingFiles = resolve;
 	ws.send(JSON.stringify({ type: "list_files", query, limit } satisfies ClientCommand));
 	return promise;
+}
+
+export function sendLoginCode(requestId: string, code: string): void {
+	setState("loginCodeRequest", null);
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({ type: "login_code", requestId, code } satisfies ClientCommand));
+	}
 }
 
 let backoff = 1000;
@@ -657,6 +680,14 @@ export function connect(): void {
 			}
 			case "subagent_event":
 				// Raw subagent session events: not subscribed ("progress" level only).
+				break;
+			case "login_url":
+				// No window.open here: async WS frames lack user activation and the
+				// popup would be blocked. LoginPanel owns the tab handoff.
+				setState("loginUrl", { url: frame.url, launchUrl: frame.launchUrl, instructions: frame.instructions });
+				break;
+			case "login_code_request":
+				setState("loginCodeRequest", { requestId: frame.requestId, title: frame.title, placeholder: frame.placeholder });
 				break;
 			case "error":
 				setState("error", frame.error);

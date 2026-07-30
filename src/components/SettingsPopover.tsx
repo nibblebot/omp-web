@@ -1,11 +1,14 @@
 import { createSignal, type Component } from "solid-js";
 import { call, setState, state } from "../state";
+import { currentFontSize, currentTheme, setTheme, stepFontSize } from "../theme";
 import { Modal } from "./Modal";
 
 /** Gear popover: queue modes, auto-retry, and the local display toggles. */
 export const SettingsPopover: Component<{ onClose: () => void }> = props => {
 	// RpcSessionState does not expose autoRetryEnabled; the toggle is fire-and-forget.
 	const [autoRetry, setAutoRetry] = createSignal(true);
+	const [theme, setThemeSignal] = createSignal(currentTheme());
+	const [fontSize, setFontSize] = createSignal(currentFontSize());
 
 	const modeSelect = (label: string, value: () => string, method: "setSteeringMode" | "setFollowUpMode") => (
 		<label class="settings-row">
@@ -41,6 +44,22 @@ export const SettingsPopover: Component<{ onClose: () => void }> = props => {
 					soft fade
 					<input type="checkbox" checked={state.soften} onChange={e => setState("soften", e.currentTarget.checked)} />
 				</label>
+				<label class="settings-row">
+					theme
+					<select value={theme()} onChange={e => setThemeSignal(setTheme(e.currentTarget.value as "dark" | "light"))}>
+						<option value="dark">dark</option>
+						<option value="light">light</option>
+					</select>
+				</label>
+				<div class="settings-row">
+					font size
+					<span>
+						<button onClick={() => setFontSize(stepFontSize(-1))}>A−</button>{" "}
+						{fontSize()}px{" "}
+						<button onClick={() => setFontSize(stepFontSize(1))}>A+</button>
+					</span>
+				</div>
+				<button onClick={() => setState("modal", "login")}>Login providers…</button>
 			</div>
 		</Modal>
 	);
