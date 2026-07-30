@@ -1,12 +1,12 @@
 import { createSignal, type Component } from "solid-js";
-import { send, state } from "../state";
+import { call, setState, state } from "../state";
 
 export const PromptBox: Component = () => {
 	const [message, setMessage] = createSignal("");
 	const submit = () => {
 		const text = message().trim();
 		if (!text || state.streaming) return;
-		send({ type: "prompt", message: text });
+		call("prompt", [text]).catch(err => setState("error", String(err)));
 		setMessage("");
 	};
 	return (
@@ -25,11 +25,11 @@ export const PromptBox: Component = () => {
 				rows={3}
 			/>
 			<div class="prompt-actions">
-				<button class="new-session" onClick={() => send({ type: "new_session" })}>
+				<button class="new-session" onClick={() => void call("newSession").catch(err => setState("error", String(err)))}>
 					New session
 				</button>
 				{state.streaming ? (
-					<button class="stop" onClick={() => send({ type: "abort" })}>
+					<button class="stop" onClick={() => void call("abort").catch(err => setState("error", String(err)))}>
 						Stop
 					</button>
 				) : (

@@ -57,6 +57,16 @@ body {
 	box-shadow: 0 0 6px #4ade80;
 }
 
+.disconnected-pill {
+	background: #7f3440;
+	color: #f0a8b3;
+	border-radius: 999px;
+	padding: 1px 10px;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
 .toggle {
 	display: inline-flex;
 	align-items: center;

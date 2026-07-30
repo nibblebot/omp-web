@@ -1,27 +1,62 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { RpcSessionState } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import type {
+	RpcAvailableSlashCommand,
+	RpcSessionState,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { createStore, produce } from "solid-js/store";
-import type { ClientCommand, ServerFrame } from "./protocol";
+import type { ClientCommand, RpcMethodName, ServerFrame, SessionListEntry } from "./protocol";
 
 export type Block = { kind: "text" | "thinking"; text: string };
 export type ToolStatus = "running" | "done" | "error";
 export type ChatItem =
 	| { kind: "user"; id: number; text: string }
 	| { kind: "assistant"; id: number; blocks: Block[] }
-	| { kind: "tool"; id: number; toolCallId: string; name: string; args: string; status: ToolStatus; output: string }
+	| { kind: "tool"; id: number; toolCallId: string; name: string; args: unknown; status: ToolStatus; output: string }
 	| { kind: "notice"; id: number; level: string; message: string };
+
+/** Derived one-line args summary for the generic tool card (raw args stay structured). */
+export function argsSummary(args: unknown): string {
+	let s: string;
+	try {
+		s = JSON.stringify(args ?? null) ?? "";
+	} catch {
+		s = String(args);
+	}
+	s = tabsToSpaces(s);
+	return s.length > 500 ? s.slice(0, 500) : s;
+}
 
 export const [state, setState] = createStore({
 	items: [] as ChatItem[],
 	live: { active: false, blocks: [] as Block[] },
+	// --- RpcSessionState mirror (verbatim; see protocol state frames) ---
 	streaming: false,
-	model: "",
-	thinking: undefined as string | undefined,
-	error: null as string | null,
+	compacting: false,
+	model: undefined as RpcSessionState["model"],
+	thinkingLevel: undefined as RpcSessionState["thinkingLevel"],
+	sessionName: undefined as string | undefined,
+	sessionId: "",
+	sessionFile: undefined as string | undefined,
+	contextUsage: undefined as RpcSessionState["contextUsage"],
+	queuedMessageCount: 0,
+	messageCount: 0,
+	todoPhases: [] as RpcSessionState["todoPhases"],
+	steeringMode: "all" as RpcSessionState["steeringMode"],
+	followUpMode: "all" as RpcSessionState["followUpMode"],
+	interruptMode: "immediate" as RpcSessionState["interruptMode"],
+	autoCompactionEnabled: true,
+	// --- Server-pushed extras ---
+	availableCommands: [] as RpcAvailableSlashCommand[],
+	availableModels: [] as unknown[],
+	stats: null as SessionStats | null,
+	subagents: new Map<string, unknown>(),
+	connected: false,
 	// Display toggles (StatusBar checkboxes); both default off = raw streaming.
 	reveal: false,
 	soften: false,
+	error: null as string | null,
 });
 
 let nextId = 1;
@@ -211,7 +246,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 				id: nextId++,
 				toolCallId: e.toolCallId,
 				name: e.toolName,
-				args: (s => (s.length > 500 ? s.slice(0, 500) : s))(tabsToSpaces(JSON.stringify(e.args ?? null) ?? "")),
+				args: e.args ?? null,
 				status: "running",
 				output: "",
 			});
@@ -247,7 +282,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 			pushItem({ kind: "notice", id: nextId++, level: e.level, message: e.message });
 			break;
 		case "thinking_level_changed":
-			setState("thinking", e.thinkingLevel ? String(e.thinkingLevel) : undefined);
+			setState("thinkingLevel", e.thinkingLevel ?? undefined);
 			break;
 		case "auto_retry_start":
 			pushItem({
@@ -282,7 +317,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 						id: nextId++,
 						toolCallId: c.id,
 						name: c.name,
-						args: (s => (s.length > 500 ? s.slice(0, 500) : s))(tabsToSpaces(JSON.stringify(c.arguments ?? {}))),
+						args: c.arguments ?? {},
 						status: "done",
 						output: "",
 					});
@@ -304,24 +339,104 @@ export function loadHistory(messages: AgentMessage[]): void {
 					}),
 				);
 			} else {
-				pushItem({ kind: "tool", id: nextId++, toolCallId: msg.toolCallId, name: msg.toolName, args: "", status, output });
+				pushItem({ kind: "tool", id: nextId++, toolCallId: msg.toolCallId, name: msg.toolName, args: null, status, output });
 			}
 		}
 		// Any other role (developer, custom messages): skip.
 	}
 }
 
-function applyState(s: RpcSessionState): void {
-	setState("model", s.model ? `${s.model.provider}/${s.model.id}` : "");
-	setState("thinking", s.thinkingLevel ? String(s.thinkingLevel) : undefined);
-	setState("streaming", s.isStreaming);
+function applyState(s: RpcSessionState, stats?: SessionStats): void {
+	setState({
+		model: s.model,
+		thinkingLevel: s.thinkingLevel,
+		streaming: s.isStreaming,
+		compacting: s.isCompacting,
+		steeringMode: s.steeringMode,
+		followUpMode: s.followUpMode,
+		interruptMode: s.interruptMode,
+		sessionFile: s.sessionFile,
+		sessionId: s.sessionId,
+		sessionName: s.sessionName,
+		autoCompactionEnabled: s.autoCompactionEnabled,
+		messageCount: s.messageCount,
+		queuedMessageCount: s.queuedMessageCount,
+		todoPhases: s.todoPhases,
+		contextUsage: s.contextUsage,
+		...(stats !== undefined ? { stats } : {}),
+	});
 }
 
 let ws: WebSocket | null = null;
 
+// ---------------------------------------------------------------------------
+// call() relay: id-keyed promise map resolved by matching call_result frames.
+// ---------------------------------------------------------------------------
+let nextCallId = 1;
+const pendingCalls = new Map<string, { resolve: (data: unknown) => void; reject: (err: Error) => void; timer: number }>();
+
+function rejectPendingCalls(err: Error): void {
+	for (const [id, p] of pendingCalls) {
+		clearTimeout(p.timer);
+		p.reject(err);
+		pendingCalls.delete(id);
+	}
+}
+
+export function call(method: RpcMethodName, args: unknown[] = []): Promise<unknown> {
+	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+	if (!ws || ws.readyState !== WebSocket.OPEN) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	const id = `c${nextCallId++}`;
+	const timer = window.setTimeout(() => {
+		pendingCalls.delete(id);
+		reject(new Error(`call "${method}" timed out`));
+	}, 30_000);
+	pendingCalls.set(id, { resolve, reject, timer });
+	ws.send(JSON.stringify({ type: "call", id, method, args } satisfies ClientCommand));
+	return promise;
+}
+
+// list_sessions / list_files carry no id on the wire; with a single user,
+// latest-wins correlation is sufficient (a superseded request resolves empty).
+let pendingSessions: ((sessions: SessionListEntry[]) => void) | null = null;
+let pendingFiles: ((files: string[]) => void) | null = null;
+
+export function listSessions(): Promise<SessionListEntry[]> {
+	const { promise, resolve, reject } = Promise.withResolvers<SessionListEntry[]>();
+	if (!ws || ws.readyState !== WebSocket.OPEN) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	pendingSessions?.([]);
+	pendingSessions = resolve;
+	ws.send(JSON.stringify({ type: "list_sessions" } satisfies ClientCommand));
+	return promise;
+}
+
+export function listFiles(query: string, limit?: number): Promise<string[]> {
+	const { promise, resolve, reject } = Promise.withResolvers<string[]>();
+	if (!ws || ws.readyState !== WebSocket.OPEN) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	pendingFiles?.([]);
+	pendingFiles = resolve;
+	ws.send(JSON.stringify({ type: "list_files", query, limit } satisfies ClientCommand));
+	return promise;
+}
+
+let backoff = 1000;
+
 export function connect(): void {
 	const socket = new WebSocket(`ws://${location.host}/ws`);
 	ws = socket;
+	socket.onopen = () => {
+		backoff = 1000;
+		setState("connected", true);
+	};
 	socket.onmessage = ev => {
 		const frame = JSON.parse(String(ev.data)) as ServerFrame;
 		switch (frame.type) {
@@ -329,10 +444,35 @@ export function connect(): void {
 				loadHistory(frame.messages);
 				break;
 			case "state":
-				applyState(frame.state);
+				applyState(frame.state, frame.stats);
 				break;
 			case "event":
 				applyEvent(frame.event);
+				break;
+			case "call_result": {
+				const pending = pendingCalls.get(frame.id);
+				if (!pending) break; // unknown id (timed out or stale): ignore
+				pendingCalls.delete(frame.id);
+				clearTimeout(pending.timer);
+				if (frame.ok) pending.resolve(frame.data);
+				else pending.reject(new Error(frame.error ?? "call failed"));
+				break;
+			}
+			case "available_commands":
+				setState("availableCommands", frame.commands);
+				break;
+			case "sessions":
+				pendingSessions?.(frame.sessions);
+				pendingSessions = null;
+				break;
+			case "files":
+				pendingFiles?.(frame.files);
+				pendingFiles = null;
+				break;
+			case "subagent_lifecycle":
+			case "subagent_progress":
+			case "subagent_event":
+				// Phase 4 maintains state.subagents from these frames.
 				break;
 			case "error":
 				setState("error", frame.error);
@@ -340,10 +480,15 @@ export function connect(): void {
 		}
 	};
 	socket.onclose = () => {
-		if (ws === socket) setTimeout(connect, 1000);
+		setState("connected", false);
+		if (ws !== socket) return;
+		rejectPendingCalls(new Error("Disconnected"));
+		pendingSessions?.([]);
+		pendingSessions = null;
+		pendingFiles?.([]);
+		pendingFiles = null;
+		const delay = backoff;
+		backoff = Math.min(backoff * 2, 8000);
+		setTimeout(connect, delay);
 	};
-}
-
-export function send(cmd: ClientCommand): void {
-	if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(cmd));
 }

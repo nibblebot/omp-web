@@ -1,5 +1,5 @@
 import type { Component } from "solid-js";
-import type { ChatItem } from "../state";
+import { argsSummary, type ChatItem } from "../state";
 
 type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
@@ -11,7 +11,7 @@ export const ToolCard: Component<{ item: ToolItem }> = props => (
 			<span class="tool-status" data-status={props.item.status}>
 				{props.item.status}
 			</span>
-			<span class="tool-args">{props.item.args.slice(0, 120)}</span>
+			<span class="tool-args">{argsSummary(props.item.args).slice(0, 120)}</span>
 		</summary>
 		<pre>{props.item.output}</pre>
 	</details>

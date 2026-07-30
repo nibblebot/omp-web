@@ -1,7 +1,7 @@
 # Web UI ↔ TUI feature parity — iterative plan
 
 ## Progress
-- [ ] Phase 0 — Protocol generalization & state mirror
+- [x] Phase 0 — Protocol generalization & state mirror (2026-07-30)
 - [ ] Phase 1 — Streaming input parity
 - [ ] Phase 2 — Slash commands, autocomplete, bang-shell
 - [ ] Phase 3 — Status bar parity
