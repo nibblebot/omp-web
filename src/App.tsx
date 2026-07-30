@@ -6,6 +6,7 @@ import { PromptBox } from "./components/PromptBox";
 import { SettingsPopover } from "./components/SettingsPopover";
 import { StatsPopover } from "./components/StatsPopover";
 import { StatusBar } from "./components/StatusBar";
+import { SubagentPanel } from "./components/SubagentPanel";
 import { ThinkingPicker } from "./components/ThinkingPicker";
 import { connect, setState, state } from "./state";
 
@@ -22,7 +23,17 @@ const SHORTCUTS: Array<[string, string]> = [
 ];
 
 export const App: Component = () => {
-	onMount(connect);
+	onMount(() => {
+		connect();
+		// Ctrl+O toggles all tool cards open/closed (not while typing).
+		window.addEventListener("keydown", e => {
+			if (e.key.toLowerCase() !== "o" || !e.ctrlKey || e.shiftKey || e.altKey) return;
+			const target = e.target as HTMLElement | null;
+			if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
+			e.preventDefault();
+			setState("toolsExpanded", v => !v);
+		});
+	});
 	return (
 		<div class="app">
 			<StatusBar />
@@ -53,6 +64,9 @@ export const App: Component = () => {
 			</Show>
 			<Show when={state.modal === "settings"}>
 				<SettingsPopover onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "subagents"}>
+				<SubagentPanel onClose={() => setState("modal", null)} />
 			</Show>
 		</div>
 	);

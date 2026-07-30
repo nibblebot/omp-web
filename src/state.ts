@@ -28,8 +28,21 @@ export type ChatItem =
 	| BashItem
 	| { kind: "notice"; id: number; level: string; message: string };
 
+export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
+
+/** Tracked subagent, maintained from subagent_lifecycle/subagent_progress frames. */
+export interface SubagentInfo {
+	id: string;
+	index: number;
+	agent: string;
+	description?: string;
+	task?: string;
+	status: string;
+	lastUpdate: number;
+}
+
 /** Names of the modals the store can summon; components render on match. */
-export type ModalName = "help" | "model" | "thinking" | "stats" | "settings" | "sessions" | "branch";
+export type ModalName = "help" | "model" | "thinking" | "stats" | "settings" | "sessions" | "branch" | "subagents";
 
 /** Derived one-line args summary for the generic tool card (raw args stay structured). */
 export function argsSummary(args: unknown): string {
@@ -68,9 +81,10 @@ export const [state, setState] = createStore({
 	availableModels: [] as ModelInfo[],
 	stats: null as SessionStats | null,
 	goal: null as { objective: string } | null,
-	subagents: new Map<string, unknown>(),
+	subagents: new Map<string, SubagentInfo>(),
 	connected: false,
 	modal: null as ModalName | null,
+	toolsExpanded: false,
 	// Display toggles (StatusBar checkboxes); both default off = raw streaming.
 	reveal: false,
 	soften: false,
@@ -503,6 +517,13 @@ export function connect(): void {
 		setState("connected", true);
 		// Enable server-side subagent frame forwards (Phase 4 consumes them).
 		void call("setSubagentSubscription", ["progress"]).catch(() => {});
+		void call("getSubagents")
+			.then(subs => {
+				const next = new Map<string, SubagentInfo>();
+				for (const s of subs as SubagentInfo[]) if (s.id) next.set(s.id, s);
+				setState("subagents", next);
+			})
+			.catch(() => {});
 	};
 	socket.onmessage = ev => {
 		const frame = JSON.parse(String(ev.data)) as ServerFrame;
@@ -536,10 +557,53 @@ export function connect(): void {
 				pendingFiles?.(frame.files);
 				pendingFiles = null;
 				break;
-			case "subagent_lifecycle":
-			case "subagent_progress":
+			case "subagent_lifecycle": {
+				const p = frame.payload as Partial<SubagentInfo> | undefined;
+				if (!p?.id) break;
+				setState("subagents", prev => {
+					const next = new Map(prev);
+					const existing = next.get(p.id as string);
+					next.set(p.id as string, {
+						id: p.id as string,
+						index: p.index ?? existing?.index ?? -1,
+						agent: p.agent ?? existing?.agent ?? "agent",
+						description: p.description ?? existing?.description,
+						task: existing?.task,
+						status: p.status ?? "started",
+						lastUpdate: Date.now(),
+					});
+					return next;
+				});
+				break;
+			}
+			case "subagent_progress": {
+				const p = frame.payload as { index?: number; agent?: string; task?: string; progress?: { status?: string } } | undefined;
+				if (p?.index === undefined) break;
+				setState("subagents", prev => {
+					const next = new Map(prev);
+					let key = [...next.keys()].find(k => next.get(k)?.index === p.index);
+					if (!key) {
+						key = `progress-${p.index}`;
+						next.set(key, {
+							id: key,
+							index: p.index as number,
+							agent: p.agent ?? "agent",
+							status: "started",
+							lastUpdate: Date.now(),
+						});
+					}
+					const entry = next.get(key);
+					if (entry) {
+						if (p.task !== undefined) entry.task = p.task;
+						if (p.progress?.status) entry.status = p.progress.status;
+						entry.lastUpdate = Date.now();
+					}
+					return next;
+				});
+				break;
+			}
 			case "subagent_event":
-				// Phase 4 maintains state.subagents from these frames.
+				// Raw subagent session events: not subscribed ("progress" level only).
 				break;
 			case "error":
 				setState("error", frame.error);

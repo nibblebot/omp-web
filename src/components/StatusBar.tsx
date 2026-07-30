@@ -64,6 +64,19 @@ export const StatusBar: Component = () => {
 			</Show>
 			{state.queuedMessageCount > 0 && <span class="queued-chip">queued: {state.queuedMessageCount}</span>}
 			<span class="status-spacer" />
+			<Show when={state.subagents.size > 0}>
+				<button class="segment segment-button" onClick={() => setState("modal", "subagents")}>
+					subagents ({state.subagents.size})
+				</button>
+			</Show>
+			<button
+				class="segment segment-button"
+				classList={{ active: state.toolsExpanded }}
+				onClick={() => setState("toolsExpanded", v => !v)}
+				title="Expand all tool outputs (Ctrl+O)"
+			>
+				⤢
+			</button>
 			<button class="segment segment-button session-name" onClick={rename} title="Rename session">
 				{state.sessionName ?? state.sessionId.slice(0, 8)}
 			</button>
