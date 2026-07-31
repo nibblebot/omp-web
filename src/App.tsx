@@ -1,6 +1,7 @@
 import { onMount, Show, type Component } from "solid-js";
 import { BranchPicker } from "./components/BranchPicker";
 import { LoginPanel } from "./components/LoginPanel";
+import { Kimi } from "./components/Kimi";
 import { MessageList } from "./components/MessageList";
 import { Modal } from "./components/Modal";
 import { ModelPicker } from "./components/ModelPicker";
@@ -46,6 +47,7 @@ export const App: Component = () => {
 			<StatusBar />
 			<MessageList />
 			<PromptBox />
+			<Kimi />
 			<Show when={state.modal === "help"}>
 				<Modal title="Shortcuts" onClose={() => setState("modal", null)}>
 					<table class="shortcuts">
