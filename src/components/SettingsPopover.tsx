@@ -12,8 +12,6 @@ import { Modal } from "./Modal";
 
 /** Gear popover: queue modes, auto-retry, and the local display toggles. */
 export const SettingsPopover: Component<{ onClose: () => void }> = props => {
-	// RpcSessionState does not expose autoRetryEnabled; the toggle is fire-and-forget.
-	const [autoRetry, setAutoRetry] = createSignal(true);
 	const [theme, setThemeSignal] = createSignal<ThemePreference>(currentThemePreference());
 	const [fontSize, setFontSize] = createSignal(currentFontSize());
 
@@ -36,9 +34,8 @@ export const SettingsPopover: Component<{ onClose: () => void }> = props => {
 					auto-retry
 					<input
 						type="checkbox"
-						checked={autoRetry()}
+						checked={state.autoRetryEnabled}
 						onChange={e => {
-							setAutoRetry(e.currentTarget.checked);
 							void call("setAutoRetry", [e.currentTarget.checked]).catch(err => setState("error", String(err)));
 						}}
 					/>

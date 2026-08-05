@@ -1,5 +1,5 @@
 import { createSignal, For, onMount, type Component } from "solid-js";
-import type { ModelInfo } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
+import type { ModelInfo } from "../protocol";
 import { fuzzyRank } from "../autocomplete";
 import { call, setState, state } from "../state";
 import { Modal } from "./Modal";

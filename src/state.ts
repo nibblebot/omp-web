@@ -1,10 +1,8 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { ModelInfo } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
-import type { RpcAvailableSlashCommand, RpcSessionState } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { createStore, produce } from "solid-js/store";
-import type { ClientCommand, RpcMethodName, ServerFrame, SessionListEntry } from "./protocol";
+import type { ClientCommand, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry } from "./protocol";
 
 export type Block = { kind: "text" | "thinking"; text: string };
 export type ToolStatus = "running" | "done" | "error";
@@ -74,28 +72,36 @@ export function argsSummary(args: unknown): string {
 	return s.length > 500 ? s.slice(0, 500) : s;
 }
 
+/** localStorage key for the sessions sidebar visibility toggle. */
+const SIDEBAR_KEY = "omp.sidebarVisible";
+
 export const [state, setState] = createStore({
 	items: [] as ChatItem[],
 	live: { active: false, blocks: [] as Block[] },
-	// --- RpcSessionState mirror (verbatim; see protocol state frames) ---
+	// --- WebSessionState mirror (verbatim; see protocol state frames) ---
 	streaming: false,
 	compacting: false,
-	model: undefined as RpcSessionState["model"],
-	thinkingLevel: undefined as RpcSessionState["thinkingLevel"],
+	model: undefined as WebSessionState["model"],
+	thinkingLevel: undefined as WebSessionState["thinkingLevel"],
 	sessionName: undefined as string | undefined,
 	sessionId: "",
+	// Phase 2: server-assigned handle of the live session this tab is attached
+	// to (distinct from sessionId above, the agent's own id, which changes on
+	// switchSession). Session-scoped frames for any other handle are dropped.
+	currentSessionId: "",
 	sessionFile: undefined as string | undefined,
-	contextUsage: undefined as RpcSessionState["contextUsage"],
+	contextUsage: undefined as WebSessionState["contextUsage"],
 	queuedMessageCount: 0,
 	messageCount: 0,
-	todoPhases: [] as RpcSessionState["todoPhases"],
-	steeringMode: "all" as RpcSessionState["steeringMode"],
-	followUpMode: "all" as RpcSessionState["followUpMode"],
-	interruptMode: "immediate" as RpcSessionState["interruptMode"],
+	todoPhases: [] as WebSessionState["todoPhases"],
+	steeringMode: "all" as WebSessionState["steeringMode"],
+	followUpMode: "all" as WebSessionState["followUpMode"],
+	interruptMode: "immediate" as WebSessionState["interruptMode"],
 	autoCompactionEnabled: true,
-	dumpTools: [] as NonNullable<RpcSessionState["dumpTools"]>,
+	autoRetryEnabled: true,
+	dumpTools: [] as NonNullable<WebSessionState["dumpTools"]>,
 	// --- Server-pushed extras ---
-	availableCommands: [] as RpcAvailableSlashCommand[],
+	availableCommands: [] as AvailableSlashCommand[],
 	availableModels: [] as ModelInfo[],
 	stats: null as SessionStats | null,
 	goal: null as { objective: string } | null,
@@ -103,9 +109,16 @@ export const [state, setState] = createStore({
 	connected: false,
 	modal: null as ModalName | null,
 	toolsExpanded: false,
+	// Sessions sidebar: polled live-session roster + server process stats.
+	liveSessions: [] as LiveSessionEntry[],
+	processStats: null as ProcessStats | null,
+	sidebarVisible: typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
 	// Phase 6: in-flight OAuth login prompts (unicast frames).
 	loginUrl: null as { url: string; launchUrl?: string; instructions?: string } | null,
 	loginCodeRequest: null as { requestId: string; title: string; placeholder?: string } | null,
+	// Phase 3: pending server-pushed ExtensionUIContext dialog (ui_request
+	// frame); answered via sendUiResponse/cancelUiRequest.
+	uiRequest: null as { id: string; method: string; params: unknown } | null,
 	// Display toggles (StatusBar checkboxes); both default off = raw streaming.
 	reveal: false,
 	soften: false,
@@ -486,7 +499,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 	}
 }
 
-function applyState(s: RpcSessionState, stats?: SessionStats): void {
+function applyState(s: WebSessionState, stats?: SessionStats): void {
 	setState({
 		model: s.model,
 		thinkingLevel: s.thinkingLevel,
@@ -499,6 +512,7 @@ function applyState(s: RpcSessionState, stats?: SessionStats): void {
 		sessionId: s.sessionId,
 		sessionName: s.sessionName,
 		autoCompactionEnabled: s.autoCompactionEnabled,
+		autoRetryEnabled: s.autoRetryEnabled,
 		messageCount: s.messageCount,
 		queuedMessageCount: s.queuedMessageCount,
 		todoPhases: s.todoPhases,
@@ -527,7 +541,7 @@ function rejectPendingCalls(err: Error): void {
 	}
 }
 
-export function call(method: RpcMethodName, args: unknown[] = [], timeoutMs = 30_000): Promise<unknown> {
+export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30_000): Promise<unknown> {
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	if (!ws || ws.readyState !== WebSocket.OPEN) {
 		reject(new Error("Not connected"));
@@ -583,6 +597,147 @@ export function sendLoginCode(requestId: string, code: string): void {
 	}
 }
 
+// Phase 3: answer the server's ui_request (ExtensionUIContext dialogs).
+// Routing is by socket attachment — no sessionId on the command.
+export function sendUiResponse(id: string, result: unknown): void {
+	if (state.uiRequest?.id === id) setState("uiRequest", null);
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({ type: "ui_response", id, result } satisfies ClientCommand));
+	}
+}
+
+// Cancellation resolves the request undefined — NOT the error variant. The
+// AskTool rich-dialog path (tools/ask.ts) maps an undefined result to
+// ToolAbortError("Ask tool was cancelled by the user"); a rejected promise
+// (`error` field) would surface the raw error text instead.
+export function cancelUiRequest(id: string): void {
+	if (state.uiRequest?.id === id) setState("uiRequest", null);
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({ type: "ui_response", id } satisfies ClientCommand));
+	}
+}
+
+/** Steer a running subagent mid-task; rejects for unknown/idle/parked agents. */
+export function steerSubagent(agentId: string, text: string): Promise<unknown> {
+	return call("subagentSteer", [agentId, text]);
+}
+
+/** Abort one running subagent; Main and siblings are unaffected. */
+export function abortSubagent(agentId: string): Promise<unknown> {
+	return call("subagentAbort", [agentId]);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 multiplexing. create_session/attach are acknowledged by the
+// server's unicast `attached` frame (latest-wins, like listSessions);
+// close_session is fire-and-forget — the server detaches affected sockets.
+// ---------------------------------------------------------------------------
+/** Answer to list_live_sessions: roster plus server process stats. */
+export type LiveSessionsResult = { sessions: LiveSessionEntry[]; process: ProcessStats | null };
+
+let pendingAttach: { resolve: (sessionId: string) => void; reject: (err: Error) => void } | null = null;
+let pendingLive: ((result: LiveSessionsResult) => void) | null = null;
+
+function requestAttach(cmd: ClientCommand): Promise<string> {
+	const { promise, resolve, reject } = Promise.withResolvers<string>();
+	if (!ws || ws.readyState !== WebSocket.OPEN) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	// Latest-wins: a superseded attach resolves to whatever session is current.
+	pendingAttach?.resolve(state.currentSessionId);
+	pendingAttach = { resolve, reject };
+	ws.send(JSON.stringify(cmd));
+	return promise;
+}
+
+/** Create a new live session and attach this tab to it; resolves with its handle. */
+export function createSession(cwd?: string): Promise<string> {
+	return requestAttach({ type: "create_session", cwd });
+}
+
+/** Attach this tab to an existing live session; resolves with the handle. */
+export function attachSession(sessionId: string): Promise<string> {
+	return requestAttach({ type: "attach", sessionId });
+}
+
+/** Dispose a live session server-side; tabs attached to it are detached there. */
+export function closeSession(sessionId: string): void {
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({ type: "close_session", sessionId } satisfies ClientCommand));
+	}
+}
+
+export function listLiveSessions(): Promise<LiveSessionsResult> {
+	const { promise, resolve, reject } = Promise.withResolvers<LiveSessionsResult>();
+	if (!ws || ws.readyState !== WebSocket.OPEN) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	pendingLive?.({ sessions: [], process: null });
+	pendingLive = resolve;
+	ws.send(JSON.stringify({ type: "list_live_sessions" } satisfies ClientCommand));
+	return promise;
+}
+
+// ---------------------------------------------------------------------------
+// Sessions sidebar poll: refresh the roster every 5s, but only while the
+// sidebar is visible and the socket is connected (started from onopen,
+// stopped from onclose/setSidebarVisible; restart on reconnect/re-show).
+// ---------------------------------------------------------------------------
+let sidebarPoll: number | undefined;
+
+function refreshLiveSessions(): void {
+	void listLiveSessions()
+		.then(({ sessions, process }) => {
+			setState("liveSessions", sessions);
+			setState("processStats", process);
+		})
+		.catch(() => {});
+}
+
+function startSidebarPoll(): void {
+	stopSidebarPoll();
+	refreshLiveSessions(); // immediate refresh — no 5s initial gap
+	sidebarPoll = window.setInterval(refreshLiveSessions, 5000);
+}
+
+function stopSidebarPoll(): void {
+	if (sidebarPoll !== undefined) {
+		clearInterval(sidebarPoll);
+		sidebarPoll = undefined;
+	}
+}
+
+export function setSidebarVisible(visible: boolean): void {
+	if (typeof localStorage !== "undefined") localStorage.setItem(SIDEBAR_KEY, String(visible));
+	setState("sidebarVisible", visible);
+	if (visible && state.connected) startSidebarPoll();
+	else stopSidebarPoll();
+}
+
+export function toggleSidebar(): void {
+	setSidebarVisible(!state.sidebarVisible);
+}
+
+/** Per-session UI state dropped when attaching to a different session. */
+function resetSessionView(): void {
+	pendingDeltas.clear();
+	// Same rationale as loadHistory: ids must not collide across transcripts.
+	nextId = 1;
+	setState({
+		items: [],
+		live: { active: false, blocks: [] },
+		subagents: new Map<string, SubagentInfo>(),
+		stats: null,
+		goal: null,
+		modal: null,
+		loginUrl: null,
+		loginCodeRequest: null,
+		uiRequest: null,
+	});
+}
+
 let backoff = 1000;
 
 export function connect(): void {
@@ -591,8 +746,7 @@ export function connect(): void {
 	socket.onopen = () => {
 		backoff = 1000;
 		setState("connected", true);
-		// Enable server-side subagent frame forwards (Phase 4 consumes them).
-		void call("setSubagentSubscription", ["progress"]).catch(() => {});
+		if (state.sidebarVisible) startSidebarPoll();
 		void call("getSubagents")
 			.then(subs => {
 				const next = new Map<string, SubagentInfo>();
@@ -603,6 +757,33 @@ export function connect(): void {
 	};
 	socket.onmessage = ev => {
 		const frame = JSON.parse(String(ev.data)) as ServerFrame;
+		if (frame.type === "attached") {
+			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
+			setState("currentSessionId", frame.sessionId);
+			pendingAttach?.resolve(frame.sessionId);
+			pendingAttach = null;
+			// Roster changed (create/attach/close): refresh immediately instead of
+			// waiting for the next 5s poll tick.
+			refreshLiveSessions();
+			if (switched) {
+				// In-flight calls belonged to the previous session; their results
+				// are stale now and would be filtered out below.
+				rejectPendingCalls(new Error("session switched"));
+				resetSessionView();
+				// Roster is event-driven; pull the attached session's once.
+				void call("getSubagents")
+					.then(subs => {
+						const next = new Map<string, SubagentInfo>();
+						for (const s of subs as SubagentInfo[]) if (s.id) next.set(s.id, s);
+						setState("subagents", next);
+					})
+					.catch(() => {});
+			}
+			return;
+		}
+		// Stale-frame guard: session-scoped frames for a handle this tab no
+		// longer views (in flight during a switch) are dropped.
+		if ("sessionId" in frame && frame.sessionId !== state.currentSessionId) return;
 		switch (frame.type) {
 			case "history":
 				loadHistory(frame.messages);
@@ -628,6 +809,10 @@ export function connect(): void {
 			case "sessions":
 				pendingSessions?.(frame.sessions);
 				pendingSessions = null;
+				break;
+			case "live_sessions":
+				pendingLive?.({ sessions: frame.sessions, process: frame.process });
+				pendingLive = null;
 				break;
 			case "files":
 				pendingFiles?.(frame.files);
@@ -689,19 +874,39 @@ export function connect(): void {
 			case "login_code_request":
 				setState("loginCodeRequest", { requestId: frame.requestId, title: frame.title, placeholder: frame.placeholder });
 				break;
+			case "ui_request":
+				// Replace-with-warning: a second dialog supersedes the open one.
+				// Answer the stale id as cancelled so its server-side pending
+				// promise settles instead of hanging until socket close.
+				if (state.uiRequest) {
+					console.warn(`ui_request ${frame.id} superseding unanswered ${state.uiRequest.id}`);
+					cancelUiRequest(state.uiRequest.id);
+				}
+				setState("uiRequest", { id: frame.id, method: frame.method, params: frame.params });
+				break;
 			case "error":
 				setState("error", frame.error);
+				// create_session/attach failures surface as a (global) error
+				// frame rather than `attached`; settle the waiter instead of
+				// leaving it hanging.
+				pendingAttach?.reject(new Error(frame.error));
+				pendingAttach = null;
 				break;
 		}
 	};
 	socket.onclose = () => {
 		setState("connected", false);
+		stopSidebarPoll();
 		if (ws !== socket) return;
 		rejectPendingCalls(new Error("Disconnected"));
 		pendingSessions?.([]);
 		pendingSessions = null;
 		pendingFiles?.([]);
 		pendingFiles = null;
+		pendingAttach?.reject(new Error("Disconnected"));
+		pendingAttach = null;
+		pendingLive?.({ sessions: [], process: null });
+		pendingLive = null;
 		const delay = backoff;
 		backoff = Math.min(backoff * 2, 8000);
 		setTimeout(connect, delay);

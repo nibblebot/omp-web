@@ -1,6 +1,6 @@
 # omp-web
 
-A Solid.js web UI for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent). The agent runs headless in JSON-RPC mode; a Bun WebSocket server bridges it to the browser. Brings the TUI's core feature set to the web.
+A Solid.js web UI for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent). The agent runs in-process via its SDK (`createAgentSession`); a Bun WebSocket server bridges it to the browser. Brings the TUI's core feature set to the web.
 
 ## Features
 
@@ -36,7 +36,7 @@ A Solid.js web UI for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/packag
 
 ```sh
 bun install
-bun run dev:server   # agent RPC bridge on :4711
+bun run dev:server   # agent SDK server on :4711
 bun run dev:web      # vite dev server on :4713
 ```
 
@@ -49,11 +49,11 @@ Checks: `bun run check:types`, `bun test`.
 ## Architecture
 
 ```
-browser (Solid) ⇄ WebSocket ⇄ Bun server ⇄ stdio JSON-RPC ⇄ pi-coding-agent
+browser (Solid) ⇄ WebSocket ⇄ Bun server (in-process pi-coding-agent SDK)
 ```
 
-- `server/index.ts` — spawns the agent CLI, relays a whitelist of RPC methods, broadcasts session events/state; serves static files and `/download`
-- `src/protocol.ts` — client/server frame types (including unicast frames for OAuth)
-- `src/state.ts` — client store: chat items, streaming, session state mirror, `call()` RPC helper
+- `server/index.ts` — hosts agent sessions in-process via `createAgentSession`, relays a whitelist of session methods, broadcasts session events/state; multiplexes multiple live sessions (attach/create/close from the Sessions modal); serves static files and `/download`
+- `src/protocol.ts` — client/server frame types (including unicast frames for OAuth and `ui_request`/`ui_response` for the `ask` tool)
+- `src/state.ts` — client store: chat items, streaming, session state mirror, `call()` method helper
 
 See `docs/web-tui-parity-plan.md` for the phased parity plan against the TUI.

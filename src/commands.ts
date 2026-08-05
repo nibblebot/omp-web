@@ -43,8 +43,8 @@ function exportSession(): void {
 }
 
 /**
- * Web-local slash commands: TUI-only commands that have RPC equivalents (or
- * web-native displays). Anything not in this table is sent to the agent
+ * Web-local slash commands: TUI-only commands that have session-method
+ * equivalents (or web-native displays). Anything not in this table is sent to the agent
  * verbatim — server-side interception runs builtins/skills/extensions.
  */
 export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
@@ -97,7 +97,7 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 				return;
 			}
 			// Agent-side builtin/skill/extension/file commands handle it. Their
-			// command_output frames are unreachable over RPC (documented tradeoff).
+			// command_output frames are unreachable over the WebSocket protocol (documented tradeoff).
 			void call("prompt", [trimmed]).catch(showError);
 			return;
 		}

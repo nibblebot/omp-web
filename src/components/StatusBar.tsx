@@ -1,7 +1,7 @@
 import { Show, type Component } from "solid-js";
 import { dispatchInput } from "../commands";
 import { formatTokens, getContextUsageLevel } from "../context";
-import { call, setState, state } from "../state";
+import { call, setState, state, toggleSidebar } from "../state";
 
 const ContextSegment: Component = () => {
 	const usage = () => state.contextUsage;
@@ -76,6 +76,14 @@ export const StatusBar: Component = () => {
 				title="Expand all tool outputs (Ctrl+O)"
 			>
 				⤢
+			</button>
+			<button
+				class="segment segment-button"
+				classList={{ active: state.sidebarVisible }}
+				onClick={toggleSidebar}
+				title="Sessions"
+			>
+				☰
 			</button>
 			<button class="segment segment-button session-name" onClick={rename} title="Rename session">
 				{state.sessionName ?? state.sessionId.slice(0, 8)}

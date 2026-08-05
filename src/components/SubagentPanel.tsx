@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { RpcSubagentMessagesResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import type { SubagentMessagesResult } from "../protocol";
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
-import { call, state, type SubagentInfo } from "../state";
+import { abortSubagent, call, pushNotice, state, steerSubagent, type SubagentInfo } from "../state";
 import { Modal } from "./Modal";
 import { SubagentRow } from "./tools/TaskTool";
 
@@ -71,7 +71,7 @@ const SubagentDetail: Component<{ sub: SubagentInfo; onBack: () => void }> = pro
 		try {
 			const args: { subagentId: string; fromByte?: number } = { subagentId: props.sub.id };
 			if (from !== undefined) args.fromByte = from;
-			const res = (await call("getSubagentMessages", [args])) as RpcSubagentMessagesResult;
+			const res = (await call("getSubagentMessages", [args])) as SubagentMessagesResult;
 			setMessages(prev => (from === undefined || res.reset ? res.messages : [...prev, ...res.messages]));
 			setFromByte(res.fromByte);
 			setNextByte(res.nextByte);
@@ -104,6 +104,76 @@ const SubagentDetail: Component<{ sub: SubagentInfo; onBack: () => void }> = pro
 	);
 };
 
+/** Steer/abort controls for a running subagent row; hidden for finished/idle/parked agents. */
+const SubagentControls: Component<{ sub: SubagentInfo }> = props => {
+	const [confirming, setConfirming] = createSignal(false);
+	const [pending, setPending] = createSignal(false);
+	const [steerText, setSteerText] = createSignal("");
+
+	const report = (err: unknown) => pushNotice("error", err instanceof Error ? err.message : String(err));
+
+	const steer = async (): Promise<void> => {
+		const text = steerText().trim();
+		if (!text || pending()) return;
+		setPending(true);
+		try {
+			await steerSubagent(props.sub.id, text);
+			setSteerText("");
+		} catch (err) {
+			report(err);
+		} finally {
+			setPending(false);
+		}
+	};
+
+	const abort = async (): Promise<void> => {
+		setPending(true);
+		try {
+			await abortSubagent(props.sub.id);
+		} catch (err) {
+			report(err);
+		} finally {
+			setPending(false);
+			setConfirming(false);
+		}
+	};
+
+	// The row itself opens the transcript; controls must not bubble to it.
+	return (
+		<div class="subagent-controls" onClick={e => e.stopPropagation()}>
+			<input
+				class="picker-filter"
+				type="text"
+				placeholder="steer…"
+				value={steerText()}
+				disabled={pending()}
+				onInput={e => setSteerText(e.currentTarget.value)}
+				onKeyDown={e => {
+					if (e.key === "Enter") void steer();
+				}}
+			/>
+			<button type="button" disabled={pending() || !steerText().trim()} onClick={() => void steer()}>
+				steer
+			</button>
+			<Show
+				when={confirming()}
+				fallback={
+					<button type="button" disabled={pending()} onClick={() => setConfirming(true)}>
+						abort
+					</button>
+				}
+			>
+				<button type="button" disabled={pending()} onClick={() => void abort()}>
+					{pending() ? "aborting…" : "confirm"}
+				</button>
+				<button type="button" disabled={pending()} onClick={() => setConfirming(false)}>
+					cancel
+				</button>
+			</Show>
+		</div>
+	);
+};
+
 /** Read-only subagent list with per-agent transcript drill-down. */
 export const SubagentPanel: Component<{ onClose: () => void }> = props => {
 	const [selected, setSelected] = createSignal<SubagentInfo | null>(null);
@@ -122,6 +192,9 @@ export const SubagentPanel: Component<{ onClose: () => void }> = props => {
 									onClick={() => setSelected(sub)}
 								>
 									<SubagentRow sub={sub} />
+									<Show when={sub.status === "started" || sub.status === "running"}>
+										<SubagentControls sub={sub} />
+									</Show>
 									<span class="subagent-time">
 										{new Date(sub.lastUpdate).toLocaleTimeString()}
 									</span>

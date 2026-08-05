@@ -1,4 +1,5 @@
 import { onMount, Show, type Component } from "solid-js";
+import { AskDialog } from "./components/AskDialog";
 import { BranchPicker } from "./components/BranchPicker";
 import { LoginPanel } from "./components/LoginPanel";
 import { Kimi } from "./components/Kimi";
@@ -7,6 +8,7 @@ import { Modal } from "./components/Modal";
 import { ModelPicker } from "./components/ModelPicker";
 import { PromptBox } from "./components/PromptBox";
 import { SessionPicker } from "./components/SessionPicker";
+import { SessionsSidebar } from "./components/SessionsSidebar";
 import { SettingsPopover } from "./components/SettingsPopover";
 import { StatsPopover } from "./components/StatsPopover";
 import { StatusBar } from "./components/StatusBar";
@@ -45,8 +47,15 @@ export const App: Component = () => {
 	return (
 		<div class="app">
 			<StatusBar />
-			<MessageList />
-			<PromptBox />
+			<div class="app-body">
+				<div class="app-main">
+					<MessageList />
+					<PromptBox />
+				</div>
+				<Show when={state.sidebarVisible}>
+					<SessionsSidebar />
+				</Show>
+			</div>
 			<Kimi />
 			<Show when={state.modal === "help"}>
 				<Modal title="Shortcuts" onClose={() => setState("modal", null)}>
@@ -86,6 +95,7 @@ export const App: Component = () => {
 			<Show when={state.modal === "login"}>
 				<LoginPanel onClose={() => setState("modal", null)} />
 			</Show>
+			<AskDialog />
 		</div>
 	);
 };
