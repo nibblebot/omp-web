@@ -1,4 +1,4 @@
-import { createSignal, Show, type Component } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show, type Component } from "solid-js";
 import { formatTokens, getContextUsageLevel } from "../context";
 import { call, setState, state, toggleSidebar } from "../state";
 
@@ -16,6 +16,31 @@ const ContextSegment: Component = () => {
 					{u().percent.toFixed(0)}%
 				</span>
 			)}
+		</Show>
+	);
+};
+
+// Phase 9: live auto-retry countdown ("retry 2/5 · 3.2s"). Re-renders on a
+// 100ms interval while a retry is pending; the interval dies with the effect
+// cleanup when auto_retry_end clears retryInfo.
+const RetryBadge: Component = () => {
+	const [now, setNow] = createSignal(Date.now());
+	createEffect(() => {
+		if (!state.retryInfo) return;
+		setNow(Date.now());
+		const id = setInterval(() => setNow(Date.now()), 100);
+		onCleanup(() => clearInterval(id));
+	});
+	return (
+		<Show when={state.retryInfo}>
+			{r => {
+				const remainingMs = Math.max(0, r().until - now());
+				return (
+					<span class="segment badge retry-badge" title={`auto-retry ${r().attempt}/${r().maxAttempts}`}>
+						retry {r().attempt}/{r().maxAttempts} · {(remainingMs / 1000).toFixed(1)}s
+					</span>
+				);
+			}}
 		</Show>
 	);
 };
@@ -53,11 +78,21 @@ export const StatusBar: Component = () => {
 			</Show>
 			<Show when={state.goal}>
 				{g => (
-					<span class="segment badge" title={g().objective}>
+					<button class="segment segment-button badge goal-badge" title={g().objective} onClick={() => setState("modal", "goal")}>
 						goal: {g().objective.slice(0, 20)}
-					</span>
+					</button>
 				)}
 			</Show>
+			<Show when={state.planModeEnabled}>
+				<button
+					class="segment segment-button badge plan-badge"
+					title="Plan mode — click to toggle (/plan)"
+					onClick={() => void call("prompt", ["/plan"]).catch(err => setState("error", String(err)))}
+				>
+					plan
+				</button>
+			</Show>
+			<RetryBadge />
 			<ContextSegment />
 			<Show when={state.stats}>
 				{s => (

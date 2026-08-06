@@ -3,6 +3,7 @@ import { renderMarkdown, splitForStreaming } from "../markdown";
 import { call, state, type Block } from "../state";
 import { copyText, Markdown } from "./Markdown";
 import { ToolCard } from "./ToolCard";
+import { buildUsageRow, formatUsageRow } from "../usage";
 
 // Elements that cannot carry text children; append the fresh span to their parent instead.
 const VOID_TAGS: Record<string, true> = { BR: true, HR: true, IMG: true, INPUT: true, WBR: true };
@@ -113,6 +114,16 @@ export const MessageList: Component = () => {
 												)
 											}
 										</For>
+										<Show when={assistant().usage}>
+											{u => {
+												const row = buildUsageRow(u(), assistant().ttft, assistant().duration);
+												return row ? (
+													<div class="usage-row" title="per-turn usage">
+														{formatUsageRow(row)}
+													</div>
+												) : null;
+											}}
+										</Show>
 									</div>
 								);
 							}}

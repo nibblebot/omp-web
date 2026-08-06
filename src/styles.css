@@ -1487,3 +1487,211 @@ pre.terminal {
 	text-align: center;
 	padding: 12px 0;
 }
+
+/* ---------------------------------------------------------------------------
+   Phase 9 — status, modes & usage parity
+   --------------------------------------------------------------------------- */
+
+/* Per-turn usage footer under settled assistant messages. */
+.usage-row {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+	color: var(--muted-2);
+	font-size: 0.75rem;
+	margin-top: 6px;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Status-bar badge buttons (goal/plan) keep their warning tint on hover. */
+.goal-badge,
+.plan-badge {
+	cursor: pointer;
+}
+
+.goal-badge:hover,
+.plan-badge:hover {
+	background: var(--warning-bg);
+	border-color: var(--warning-border);
+}
+
+/* Auto-retry countdown badge. */
+.retry-badge {
+	font-variant-numeric: tabular-nums;
+}
+
+/* Shared progress bar (goal budget, usage limits). */
+.amount-bar {
+	height: 6px;
+	border-radius: 3px;
+	background: var(--panel-2);
+	overflow: hidden;
+}
+
+.amount-bar-fill {
+	height: 100%;
+	background: var(--accent);
+	border-radius: 3px;
+}
+
+/* Goal popover. */
+.goal-empty {
+	color: var(--muted);
+	text-align: center;
+	padding: 12px 0;
+}
+
+.goal-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-width: 320px;
+}
+
+.goal-objective {
+	font-size: 1rem;
+	color: var(--text);
+}
+
+.goal-meta {
+	display: flex;
+	gap: 6px;
+	align-items: baseline;
+	color: var(--muted-3);
+}
+
+.goal-budget {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.goal-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.goal-actions button.danger {
+	background: var(--error-bg);
+	border-color: var(--error-border);
+	color: var(--error-text);
+}
+
+/* Usage panel. */
+.usage-empty {
+	color: var(--muted);
+	text-align: center;
+	padding: 16px 0;
+}
+
+.usage-list {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	min-width: 380px;
+}
+
+.usage-provider h3 {
+	margin-bottom: 6px;
+}
+
+.usage-limit {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 6px 0;
+	border-top: 1px solid var(--border);
+}
+
+.usage-limit-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+
+.usage-status {
+	font-size: 0.75rem;
+	text-transform: uppercase;
+	padding: 0 6px;
+	border-radius: 4px;
+	margin-left: auto;
+}
+
+.usage-status[data-status="warning"] {
+	background: var(--warning-bg);
+	color: var(--warning);
+}
+
+.usage-status[data-status="exhausted"] {
+	background: var(--error-bg);
+	color: var(--error-text);
+}
+
+.usage-status[data-status="unknown"] {
+	background: var(--panel-2);
+	color: var(--muted-2);
+}
+
+.usage-limit-amount {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 8px;
+	font-variant-numeric: tabular-nums;
+}
+
+.usage-note {
+	color: var(--muted-2);
+	font-size: 0.786rem;
+}
+
+/* Context breakdown stacked bar. */
+.breakdown {
+	margin-top: 12px;
+}
+
+.breakdown-bar {
+	display: flex;
+	height: 10px;
+	border-radius: 5px;
+	overflow: hidden;
+	background: var(--panel-2);
+}
+
+.breakdown-seg:first-child {
+	border-radius: 5px 0 0 5px;
+}
+
+.breakdown-seg:last-child {
+	border-radius: 0 5px 5px 0;
+}
+
+.breakdown-seg:nth-child(1) {
+	background: var(--accent);
+}
+
+.breakdown-seg:nth-child(2) {
+	background: var(--purple);
+}
+
+.breakdown-seg:nth-child(3) {
+	background: var(--success);
+}
+
+.breakdown-seg:nth-child(4) {
+	background: var(--warning);
+}
+
+.breakdown-seg:nth-child(5) {
+	background: var(--muted);
+}
+
+.breakdown-numbers {
+	display: flex;
+	gap: 8px;
+	margin-top: 6px;
+	color: var(--muted-3);
+	font-size: 0.857rem;
+	font-variant-numeric: tabular-nums;
+}

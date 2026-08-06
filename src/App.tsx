@@ -1,7 +1,9 @@
 import { onMount, Show, type Component } from "solid-js";
 import { AskDialog } from "./components/AskDialog";
 import { BranchPicker } from "./components/BranchPicker";
+import { GoalPopover } from "./components/GoalPopover";
 import { HistorySearch } from "./components/HistorySearch";
+import { UsagePanel } from "./components/UsagePanel";
 import { LoginPanel } from "./components/LoginPanel";
 import { Kimi } from "./components/Kimi";
 import { MessageList } from "./components/MessageList";
@@ -111,6 +113,12 @@ export const App: Component = () => {
 			</Show>
 			<Show when={state.modal === "login"}>
 				<LoginPanel onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "goal"}>
+				<GoalPopover onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "usage"}>
+				<UsagePanel onClose={() => setState("modal", null)} />
 			</Show>
 			<AskDialog />
 		</div>

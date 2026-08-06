@@ -1,15 +1,34 @@
-import { For, onMount, Show, type Component } from "solid-js";
+import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
+import type { ContextUsageBreakdown } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { formatTokens } from "../context";
 import { call, setState, state } from "../state";
 import { Modal } from "./Modal";
 
+/** One stacked-bar segment: width proportional to the context window. */
+const BreakdownSegment: Component<{ tokens: number; contextWindow: number; label: string }> = props => {
+	const width = () => (props.contextWindow > 0 ? `${(props.tokens / props.contextWindow) * 100}%` : "0%");
+	return (
+		<div
+			class="breakdown-seg"
+			title={`${props.label}: ${formatTokens(props.tokens)} tokens`}
+			style={{ width: width() }}
+		/>
+	);
+};
+
 /** Native `/usage` + `/context` + `/tools` display: full session stats and tool list. */
 export const StatsPopover: Component<{ onClose: () => void }> = props => {
+	const [breakdown, setBreakdown] = createSignal<ContextUsageBreakdown | null>(null);
+
 	onMount(() => {
 		void call("getSessionStats")
 			.then(stats => setState("stats", stats as SessionStats))
 			.catch(err => setState("error", String(err)));
+		// Phase 9: /context parity — per-category token breakdown.
+		void call("getContextBreakdown")
+			.then(b => setBreakdown((b as ContextUsageBreakdown | null) ?? null))
+			.catch(() => setBreakdown(null));
 	});
 
 	const rows = () => {
@@ -47,6 +66,7 @@ export const StatsPopover: Component<{ onClose: () => void }> = props => {
 			</table>
 			<div class="stats-actions">
 				<button onClick={() => void call("compact", []).catch(err => setState("error", String(err)))}>Compact now</button>
+				<button onClick={() => setState("modal", "usage")}>usage reports</button>
 				<label class="toggle">
 					<input
 						type="checkbox"
@@ -56,6 +76,29 @@ export const StatsPopover: Component<{ onClose: () => void }> = props => {
 					auto-compaction
 				</label>
 			</div>
+			<Show when={breakdown()}>
+				{b => {
+					const pct = () => (b().contextWindow > 0 ? (b().usedTokens / b().contextWindow) * 100 : 0);
+					return (
+						<div class="breakdown">
+							<h3 class="stats-subhead">Context breakdown</h3>
+							<div class="breakdown-bar">
+								<BreakdownSegment tokens={b().systemPromptTokens} contextWindow={b().contextWindow} label="system prompt" />
+								<BreakdownSegment tokens={b().systemToolsTokens} contextWindow={b().contextWindow} label="tools" />
+								<BreakdownSegment tokens={b().systemContextTokens} contextWindow={b().contextWindow} label="system context" />
+								<BreakdownSegment tokens={b().skillsTokens} contextWindow={b().contextWindow} label="skills" />
+								<BreakdownSegment tokens={b().messagesTokens} contextWindow={b().contextWindow} label="messages" />
+							</div>
+							<div class="breakdown-numbers">
+								<span>used {formatTokens(b().usedTokens)}</span>
+								<span>/ {formatTokens(b().contextWindow)}</span>
+								<span>({pct().toFixed(1)}%)</span>
+								<span class="picker-detail">{b().anchored ? "anchored" : "not anchored"}</span>
+							</div>
+						</div>
+					);
+				}}
+			</Show>
 			<Show when={state.dumpTools && state.dumpTools.length > 0}>
 				<h3 class="stats-subhead">Tools ({state.dumpTools.length})</h3>
 				<div class="stats-tools">

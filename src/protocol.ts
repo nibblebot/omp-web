@@ -1,8 +1,10 @@
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model, ToolExample } from "@oh-my-pi/pi-ai";
 import type { ContextUsage } from "@oh-my-pi/pi-coding-agent";
+import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
+import type { InspectImageMode } from "@oh-my-pi/pi-coding-agent/utils/inspect-image-mode";
 import type { FileEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import type { AvailableSlashCommandSource } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
@@ -38,6 +40,17 @@ export interface WebSessionState {
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 	/** Current context window usage. */
 	contextUsage?: ContextUsage;
+	// --- Phase 9: modes & usage parity (cheap sync getters, refreshed every broadcast) ---
+	/** Goal mode state (getGoalModeState()); undefined when no goal session is active. */
+	goalModeState: GoalModeState | undefined;
+	/** Plan mode presence (getPlanModeState()?.enabled). */
+	planModeEnabled: boolean;
+	/** Priority-service flag for the active model family (isFastModeEnabled()). */
+	fastModeEnabled: boolean;
+	/** Whether the computer tool is exposed (getActiveToolNames().includes("computer")). */
+	computerToolEnabled: boolean;
+	/** Effective inspect_image mode (inspectImageState().mode). */
+	inspectImageMode: InspectImageMode;
 }
 
 export interface AvailableSlashCommand {
@@ -94,6 +107,11 @@ export type WebMethodName =
 	| "setAutoCompaction"
 	| "setAutoRetry"
 	| "abortRetry"
+	| "setFastMode"
+	| "setComputerToolEnabled"
+	| "setInspectImageMode"
+	| "fetchUsageReports"
+	| "getContextBreakdown"
 	| "bash"
 	| "abortBash"
 	| "getSessionStats"

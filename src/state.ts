@@ -4,6 +4,7 @@ import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { ClientCommand, ImageArg, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry } from "./protocol";
+import type { UsageLike } from "./usage";
 
 export type Block = { kind: "text" | "thinking"; text: string };
 export type ToolStatus = "running" | "done" | "error";
@@ -30,7 +31,7 @@ export type CompactionItem = {
 };
 export type ChatItem =
 	| { kind: "user"; id: number; text: string }
-	| { kind: "assistant"; id: number; blocks: Block[] }
+	| { kind: "assistant"; id: number; blocks: Block[]; usage?: UsageLike; ttft?: number; duration?: number }
 	| { kind: "tool"; id: number; toolCallId: string; name: string; args: unknown; status: ToolStatus; output: string }
 	| BashItem
 	| CompactionItem
@@ -60,7 +61,9 @@ export type ModalName =
 	| "branch"
 	| "history"
 	| "subagents"
-	| "login";
+	| "login"
+	| "goal"
+	| "usage";
 
 /** Derived one-line args summary for the generic tool card (raw args stay structured). */
 export function argsSummary(args: unknown): string {
@@ -102,6 +105,14 @@ export const [state, setState] = createStore({
 	autoCompactionEnabled: true,
 	autoRetryEnabled: true,
 	dumpTools: [] as NonNullable<WebSessionState["dumpTools"]>,
+	// --- Phase 9: modes & usage parity (WebSessionState mirror) ---
+	goalModeState: undefined as WebSessionState["goalModeState"],
+	planModeEnabled: false,
+	fastModeEnabled: false,
+	computerToolEnabled: false,
+	inspectImageMode: "auto" as WebSessionState["inspectImageMode"],
+	// Live auto-retry countdown (auto_retry_start/auto_retry_end events).
+	retryInfo: null as { attempt: number; maxAttempts: number; delayMs: number; until: number } | null,
 	// --- Server-pushed extras ---
 	availableCommands: [] as AvailableSlashCommand[],
 	availableModels: [] as ModelInfo[],
@@ -347,7 +358,17 @@ export function applyEvent(e: AgentSessionEvent): void {
 			const msg = e.message;
 			if (msg.role === "assistant") {
 				pendingDeltas.clear();
-				pushItem({ kind: "assistant", id: nextId++, blocks: assistantBlocks(msg.content) });
+				// Phase 9: per-turn usage comes from the settled message itself
+				// (AssistantMessage.usage/ttft/duration in the message_end payload).
+				const meta = msg as { usage?: UsageLike; ttft?: number; duration?: number };
+				pushItem({
+					kind: "assistant",
+					id: nextId++,
+					blocks: assistantBlocks(msg.content),
+					usage: meta.usage,
+					ttft: meta.ttft,
+					duration: meta.duration,
+				});
 				setState("live", "active", false);
 			}
 			break;
@@ -397,9 +418,20 @@ export function applyEvent(e: AgentSessionEvent): void {
 			setState("thinkingLevel", e.thinkingLevel ?? undefined);
 			break;
 		case "goal_updated":
+			// The event carries the full GoalModeState when available; fall back
+			// to deriving a minimal active state from the goal payload.
+			if (e.state) setState("goalModeState", e.state);
+			else setState("goalModeState", e.goal ? { enabled: true, mode: "active", goal: e.goal } : undefined);
 			setState("goal", e.goal ? { objective: e.goal.objective } : null);
 			break;
 		case "auto_retry_start":
+			// Phase 9: live countdown badge in the status bar; notice stays.
+			setState("retryInfo", {
+				attempt: e.attempt,
+				maxAttempts: e.maxAttempts,
+				delayMs: e.delayMs,
+				until: Date.now() + e.delayMs,
+			});
 			pushItem({
 				kind: "notice",
 				id: nextId++,
@@ -423,6 +455,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 			break;
 		}
 		case "auto_retry_end":
+			setState("retryInfo", null);
 			pushItem({
 				kind: "notice",
 				id: nextId++,
@@ -459,12 +492,20 @@ export function loadHistory(messages: AgentMessage[]): void {
 	// Phase 5: reset id sequence so newly-switched sessions don't collide with
 	// leftover ids from the prior transcript.
 	nextId = 1;
-	setState({ items: [], live: { active: false, blocks: [] } });
+	setState({ items: [], live: { active: false, blocks: [] }, retryInfo: null });
 	for (const msg of messages) {
 		if (msg.role === "user") {
 			pushItem({ kind: "user", id: nextId++, text: userText(msg.content) });
 		} else if (msg.role === "assistant") {
-			pushItem({ kind: "assistant", id: nextId++, blocks: assistantBlocks(msg.content) });
+			const meta = msg as { usage?: UsageLike; ttft?: number; duration?: number };
+			pushItem({
+				kind: "assistant",
+				id: nextId++,
+				blocks: assistantBlocks(msg.content),
+				usage: meta.usage,
+				ttft: meta.ttft,
+				duration: meta.duration,
+			});
 			for (const c of msg.content) {
 				if (c.type === "toolCall") {
 					pushItem({
@@ -520,6 +561,11 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		todoPhases: s.todoPhases,
 		contextUsage: s.contextUsage,
 		dumpTools: s.dumpTools ?? [],
+		goalModeState: s.goalModeState,
+		planModeEnabled: s.planModeEnabled,
+		fastModeEnabled: s.fastModeEnabled,
+		computerToolEnabled: s.computerToolEnabled,
+		inspectImageMode: s.inspectImageMode,
 		...(stats !== undefined ? { stats } : {}),
 	});
 }
@@ -755,6 +801,8 @@ function resetSessionView(): void {
 		subagents: new Map<string, SubagentInfo>(),
 		stats: null,
 		goal: null,
+		goalModeState: undefined,
+		retryInfo: null,
 		modal: null,
 		loginUrl: null,
 		loginCodeRequest: null,

@@ -51,6 +51,39 @@ export const SettingsPopover: Component<{ onClose: () => void }> = props => {
 					/>
 				</label>
 				<label class="settings-row">
+					fast mode
+					<input
+						type="checkbox"
+						checked={state.fastModeEnabled}
+						onChange={e => {
+							void call("setFastMode", [e.currentTarget.checked]).catch(err => setState("error", String(err)));
+						}}
+					/>
+				</label>
+				<label class="settings-row">
+					computer tool
+					<input
+						type="checkbox"
+						checked={state.computerToolEnabled}
+						onChange={e => {
+							void call("setComputerToolEnabled", [e.currentTarget.checked]).catch(err => setState("error", String(err)));
+						}}
+					/>
+				</label>
+				<label class="settings-row">
+					inspect-image mode
+					<select
+						value={state.inspectImageMode}
+						onChange={e => {
+							void call("setInspectImageMode", [e.currentTarget.value]).catch(err => setState("error", String(err)));
+						}}
+					>
+						<option value="auto">auto</option>
+						<option value="on">on</option>
+						<option value="off">off</option>
+					</select>
+				</label>
+				<label class="settings-row">
 					reveal queue
 					<input type="checkbox" checked={state.reveal} onChange={e => setState("reveal", e.currentTarget.checked)} />
 				</label>

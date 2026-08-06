@@ -17,6 +17,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import type { InspectImageMode } from "@oh-my-pi/pi-coding-agent/utils/inspect-image-mode";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { FileEntry, SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { listAllSessions } from "@oh-my-pi/pi-coding-agent/session/session-listing";
@@ -413,6 +414,12 @@ function buildStateSnapshot(session: AgentSession): WebSessionState {
 			examples: tool.examples,
 		})),
 		contextUsage: session.getContextUsage(),
+		// Phase 9: cheap sync getters — refreshed on every state broadcast.
+		goalModeState: session.getGoalModeState(),
+		planModeEnabled: session.getPlanModeState()?.enabled ?? false,
+		fastModeEnabled: session.isFastModeEnabled(),
+		computerToolEnabled: session.getActiveToolNames().includes("computer"),
+		inspectImageMode: session.inspectImageState().mode,
 	};
 }
 
@@ -538,6 +545,8 @@ const READ_ONLY: Partial<Record<WebMethodName, true>> = {
 	getSubagentMessages: true,
 	formatSessionAsText: true,
 	dumpLlmRequestToTmpDir: true,
+	fetchUsageReports: true,
+	getContextBreakdown: true,
 };
 
 // Calls that replace the transcript; every tab resyncs, not just the requester.
@@ -691,6 +700,14 @@ const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[]) => P
 	abortRetry: async entry => {
 		entry.session.abortRetry();
 	},
+	setFastMode: async (entry, a) => {
+		entry.session.setFastMode(a[0] as boolean);
+	},
+	setComputerToolEnabled: (entry, a) => entry.session.setComputerToolEnabled(a[0] as boolean),
+	setInspectImageMode: (entry, a) => entry.session.setInspectImageMode(a[0] as InspectImageMode),
+	// READ_ONLY rows: usage reports + context breakdown (skip the state broadcast).
+	fetchUsageReports: entry => entry.session.fetchUsageReports(),
+	getContextBreakdown: async entry => entry.session.getContextBreakdown(),
 	bash: (entry, a) => entry.session.executeBash(a[0] as string),
 	abortBash: async entry => {
 		entry.session.abortBash();
