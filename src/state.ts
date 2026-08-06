@@ -107,6 +107,7 @@ export const [state, setState] = createStore({
 	streaming: false,
 	compacting: false,
 	model: undefined as WebSessionState["model"],
+	modelRoles: undefined as WebSessionState["modelRoles"],
 	thinkingLevel: undefined as WebSessionState["thinkingLevel"],
 	sessionName: undefined as string | undefined,
 	sessionId: "",
@@ -725,6 +726,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 function applyState(s: WebSessionState, stats?: SessionStats): void {
 	setState({
 		model: s.model,
+		modelRoles: s.modelRoles,
 		thinkingLevel: s.thinkingLevel,
 		streaming: s.isStreaming,
 		compacting: s.isCompacting,

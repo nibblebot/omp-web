@@ -20,6 +20,8 @@ export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reaso
 
 export interface WebSessionState {
 	model?: Model;
+	/** Resolved model-role assignments (role -> provider/id) in canonical role order; undefined when nothing resolves. */
+	modelRoles?: Array<{ role: string; provider: string; id: string }>;
 	thinkingLevel: ThinkingLevel | undefined;
 	isStreaming: boolean;
 	isCompacting: boolean;

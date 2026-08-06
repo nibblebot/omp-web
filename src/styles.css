@@ -1726,10 +1726,14 @@ pre.terminal {
 }
 
 .pet canvas {
-	width: 64px;
-	height: 64px;
 	image-rendering: pixelated;
 	filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+}
+
+/* Full-size primary avatar (see .pet-main-canvas). */
+.pet-main-canvas {
+	width: 64px;
+	height: 64px;
 }
 
 /* Keep the pet inside the chat column when the sessions sidebar is open. */
@@ -1737,12 +1741,50 @@ pre.terminal {
 	right: 280px;
 }
 
-.pet-name {
+.pet-roster {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+}
+
+/* One role model: avatar with its short name under it, role labels beside. */
+.pet-role {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.pet-role-avatar {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2px;
+}
+
+.pet-role-name {
 	font-size: 9px;
 	letter-spacing: 0.12em;
 	text-transform: uppercase;
-	color: var(--muted-2);
+	font-weight: 700;
+	color: var(--text);
 	font-family: inherit;
+}
+
+.pet-role-labels {
+	display: flex;
+	flex-direction: column;
+	font-size: 9px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted-2);
+	line-height: 1.15;
+}
+
+/* Secondary rows: ~80% color, slightly translucent — clearly secondary but
+   still showing the character's colors; primary keeps full color. */
+.pet-role.secondary canvas {
+	filter: grayscale(0.2) opacity(0.8) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
 }
 
 @keyframes pet-bob {
@@ -1751,12 +1793,12 @@ pre.terminal {
 	100% { transform: translateY(0); }
 }
 
-.pet[data-streaming="true"] canvas {
+.pet[data-streaming="true"] .pet-main-canvas {
 	animation: pet-bob 0.6s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.pet[data-streaming="true"] canvas {
+	.pet[data-streaming="true"] .pet-main-canvas {
 		animation: none;
 	}
 }

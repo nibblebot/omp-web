@@ -15,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
+import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { SETTINGS_SCHEMA, type SettingPath } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { getAvailableThemes } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -412,9 +413,21 @@ let nextHandle = 1;
 /** Most-recently-created live session: the WS-open auto-attach target. */
 let lastHandle: string | null = null;
 
+/** Resolved model-role assignments via the SDK's getRoleModelCycle (skips unconfigured/unavailable roles). */
+function buildModelRoles(session: AgentSession): WebSessionState["modelRoles"] {
+	// Canonical built-in order, then any custom roles from settings (deduped).
+	const customRoles = Object.keys(session.settings.getModelRoles()).filter(
+		role => !(MODEL_ROLE_IDS as readonly string[]).includes(role),
+	);
+	const cycle = session.getRoleModelCycle([...MODEL_ROLE_IDS, ...customRoles]);
+	if (!cycle) return undefined;
+	return cycle.models.map(entry => ({ role: entry.role, provider: entry.model.provider, id: entry.model.id }));
+}
+
 function buildStateSnapshot(session: AgentSession): WebSessionState {
 	return {
 		model: session.model,
+		modelRoles: buildModelRoles(session),
 		thinkingLevel: session.thinkingLevel,
 		isStreaming: session.isStreaming,
 		isCompacting: session.isCompacting,
