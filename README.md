@@ -23,7 +23,8 @@ A Solid.js web UI for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/packag
 - Status bar segments: model, thinking level, plan/goal badges, context usage % (threshold-colored), cost/tokens, queued count, subagents, retry countdown, session name, streaming state, disconnected indicator
 - Model and thinking-level pickers, session stats popover with context-usage breakdown bars and per-turn usage rows under each reply
 - Goal mode popover (set/pause/resume/drop with budget), plan-mode toggle, usage reports panel (provider windows/limits), auto-retry live countdown
-- Settings popover: steering/follow-up/interrupt modes, auto-retry, fast mode, computer tool, inspect-image mode, desktop notifications, theme, font-size stepper (persisted)
+- Full settings panel (TUI `/settings` parity): left sidebar with the main sections and the active section's nested subsections on wide screens, horizontal tab bar fallback on narrow — a client-local "Web UI" tab (web-only toggles — theme preference, font-size stepper, desktop notifications, reveal queue, soft fade, fast mode, auto-retry, login providers — plus an Images group with `images.autoResize`/`images.blockImages`), one tab per web-relevant schema tab (Model, Interaction, Context, Memory, Files, Shell, Tools, Tasks, Providers), and a "TUI" tab limited to terminal-only appearance (Theme, Status Line, Display + terminal image rendering); per-type controls (toggles, selects, text/secret inputs, multiselect chips, per-provider request limits), changed-vs-default markers, global search, live condition gating (e.g. the Hindsight cluster appears when `memory.backend` is hindsight), session side effects (steering/interrupt modes, thinking level, sampling params), and in-process + disk persistence via the shared Settings singleton
+- "TUI" tab: terminal-only settings — Theme, Status Line, and Display groups (`theme.*`, `statusLine.*`, `display.*`, `tui.*`, `terminal.*`, symbol preset, color-blind mode, hardware cursor, resolved-model badge) plus the terminal image renderer (`terminal.showImages`)
 - Inline session rename in the status bar; new-session with confirmation
 
 ### Sessions
@@ -35,7 +36,7 @@ A Solid.js web UI for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/packag
 
 ### Side channels & extras
 - `/btw <question>` answers a side question in a streaming panel without touching the transcript
-- OAuth login for 60+ providers from the settings popover: popup-safe flow with manual code entry and authenticated badges
+- OAuth login for 60+ providers from the settings panel: popup-safe flow with manual code entry and authenticated badges
 - Desktop notifications when the tab is hidden (opt-in); Kimi, the streaming pet; 7 themes and a font-size stepper
 
 ## Develop

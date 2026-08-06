@@ -15,6 +15,8 @@ import {
 } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
+import { SETTINGS_SCHEMA, type SettingPath } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import { getAvailableThemes } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
@@ -49,6 +51,7 @@ import type {
 	LiveSessionEntry,
 	ProcessStats,
 } from "../src/protocol";
+import { applySettingSideEffects, buildSettingsModel, coerceSettingValue } from "./settings-model";
 
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
@@ -555,6 +558,7 @@ async function runBuiltinSlashCommand(entry: SessionEntry, text: string, images:
 const READ_ONLY: Partial<Record<WebMethodName, true>> = {
 	getSessionStats: true,
 	getAvailableModels: true,
+	getSettings: true,
 	getBranchMessages: true,
 	getQueuedMessages: true,
 	getLoginProviders: true,
@@ -709,6 +713,27 @@ const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[], stre
 	getAvailableModels: async entry => {
 		await entry.session.modelRegistry.awaitBackgroundRefresh();
 		return entry.session.getAvailableModels();
+	},
+	// Settings panel (TUI /settings parity). getSettings is READ_ONLY; the
+	// model is built fresh per call from the shared Settings singleton.
+	getSettings: async entry => {
+		await entry.session.modelRegistry.awaitBackgroundRefresh();
+		return buildSettingsModel(entry.session, await getAvailableThemes());
+	},
+	setSetting: async (entry, a) => {
+		const [path, value] = [String(a[0]), a[1]];
+		const coerced = coerceSettingValue(path, value);
+		// Persist via the shared Settings singleton (in-process merge +
+		// debounced disk write — the TUI's settings.set semantics). Session-
+		// managed paths (autoCompact, thinkingLevel) have no schema entry and
+		// are applied only through the side-effect switch below.
+		if (path in SETTINGS_SCHEMA) {
+			settings.set(path as SettingPath, coerced as never);
+		}
+		await applySettingSideEffects(entry.session, path, coerced);
+		const model = buildSettingsModel(entry.session, await getAvailableThemes());
+		broadcastTo(entry.handle, { type: "settings_changed", model });
+		return model;
 	},
 	setThinkingLevel: async (entry, a) => {
 		entry.session.setThinkingLevel(a[0] as ThinkingLevel);

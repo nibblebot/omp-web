@@ -3,7 +3,7 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import type { ClientCommand, ImageArg, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry } from "./protocol";
+import type { ClientCommand, ImageArg, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "./protocol";
 import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
 
@@ -131,6 +131,9 @@ export const [state, setState] = createStore({
 	// Sessions sidebar: polled live-session roster + server process stats.
 	liveSessions: [] as LiveSessionEntry[],
 	processStats: null as ProcessStats | null,
+	// Settings model (getSettings/setSetting + settings_changed frames).
+	settingsModel: null as SettingsModel | null,
+	settingsLoading: false,
 	sidebarVisible: typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
 	// Phase 6: in-flight OAuth login prompts (unicast frames).
 	loginUrl: null as { url: string; launchUrl?: string; instructions?: string } | null,
@@ -231,7 +234,7 @@ function maybeNotify(title: string, body: string): void {
 	}
 }
 
-/** Persisted SettingsPopover toggle; requests permission on first enable. */
+/** Persisted desktop-notifications toggle; requests permission on first enable. */
 export function setNotifyEnabled(enabled: boolean): void {
 	if (typeof localStorage !== "undefined") localStorage.setItem(NOTIFY_KEY, String(enabled));
 	setState("notifyEnabled", enabled);
@@ -771,6 +774,26 @@ export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30
 	return promise;
 }
 
+// ---------------------------------------------------------------------------
+// Settings model (TUI /settings parity). getSettings/setSetting return a
+// fresh authoritative model each time; settings_changed frames keep every
+// tab's settings panel in sync.
+// ---------------------------------------------------------------------------
+export function refreshSettings(): void {
+	setState("settingsLoading", true);
+	call("getSettings")
+		.then(m => setState("settingsModel", m as SettingsModel))
+		.catch(err => setState("error", String(err)))
+		.finally(() => setState("settingsLoading", false));
+}
+
+/** Send one setting; the fresh model returned is authoritative, apply it. */
+export function updateSetting(path: string, value: unknown): void {
+	call("setSetting", [path, value])
+		.then(m => setState("settingsModel", m as SettingsModel))
+		.catch(err => setState("error", String(err)));
+}
+
 /** Payload delivered into the PromptBox textarea (and image tray) by QueueBar/HistorySearch. */
 export interface PromptInsert {
 	text: string;
@@ -1133,6 +1156,13 @@ export function connect(): void {
 				}
 				setState("uiRequest", { id: frame.id, method: frame.method, params: frame.params });
 				break;
+			case "settings_changed": {
+				// Session-scoped broadcast: a fresh model after any setSetting,
+				// so every attached tab's panel stays in sync.
+				const model = (frame as { model: SettingsModel }).model;
+				setState("settingsModel", model);
+				break;
+			}
 			case "error":
 				setState("error", frame.error);
 				// create_session/attach failures surface as a (global) error

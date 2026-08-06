@@ -74,6 +74,55 @@ export interface SubagentMessagesResult {
 /** Image payload accepted by prompt/steer/followUp (structurally compatible with pi-ai's ImageContent). */
 export type ImageArg = { type: "image"; data: string; mimeType: string; detail?: string };
 
+// ---------------------------------------------------------------------------
+// Settings panel (TUI /settings parity). The server builds the model from the
+// shared settings-schema metadata; the client renders it verbatim.
+// ---------------------------------------------------------------------------
+
+export interface SettingsOption {
+	value: string;
+	label: string;
+	description?: string;
+}
+
+export type SettingsItemType = "boolean" | "enum" | "submenu" | "text" | "multiselect" | "providerLimits";
+
+export interface SettingsItem {
+	path: string;
+	label: string;
+	description: string;
+	type: SettingsItemType;
+	/** Raw current value (JSON-safe). */
+	value: unknown;
+	/** True when the value differs from the schema default (arrays elementwise). */
+	changed: boolean;
+	/** text type only */
+	secret?: boolean;
+	/** multiselect only */
+	ordered?: boolean;
+	/** enum type only */
+	values?: string[];
+	/** submenu + multiselect */
+	options?: SettingsOption[];
+	/** providerLimits only */
+	providers?: string[];
+}
+
+export interface SettingsGroup {
+	name: string;
+	items: SettingsItem[];
+}
+
+export interface SettingsTab {
+	id: string;
+	label: string;
+	groups: SettingsGroup[];
+}
+
+export interface SettingsModel {
+	tabs: SettingsTab[];
+}
+
 /**
  * Allowlist of session methods reachable from the browser. The server owns a
  * dispatch table keyed by these names; adding a capability = one row there.
@@ -129,6 +178,9 @@ export type WebMethodName =
 	| "runEphemeralTurn"
 	| "abortEphemeral"
 	| "getSessionStats"
+	// Settings panel (TUI /settings parity)
+	| "getSettings"
+	| "setSetting"
 	| "exportHtml"
 	| "switchSession"
 	| "branch"
@@ -179,6 +231,8 @@ export type SessionScopedFrame =
 	// Unicast answer to a "call" command.
 	| { type: "call_result"; id: string; ok: boolean; data?: unknown; error?: string }
 	| { type: "available_commands"; commands: AvailableSlashCommand[] }
+	// Settings panel: fresh model after a setSetting mutation (TUI /settings parity).
+	| { type: "settings_changed"; model: SettingsModel }
 	| { type: "subagent_lifecycle" | "subagent_progress" | "subagent_event"; payload: unknown }
 	// Server-driven ExtensionUIContext dialog; the client answers with ui_response.
 	| { type: "ui_request"; id: string; method: string; params: unknown };

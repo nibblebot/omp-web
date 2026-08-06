@@ -14,7 +14,7 @@ import { PromptBox } from "./components/PromptBox";
 import { QueueBar } from "./components/QueueBar";
 import { SessionPicker } from "./components/SessionPicker";
 import { SessionsSidebar } from "./components/SessionsSidebar";
-import { SettingsPopover } from "./components/SettingsPopover";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { StatsPopover } from "./components/StatsPopover";
 import { StatusBar } from "./components/StatusBar";
 import { SubagentPanel } from "./components/SubagentPanel";
@@ -98,7 +98,7 @@ export const App: Component = () => {
 				<StatsPopover onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "settings"}>
-				<SettingsPopover onClose={() => setState("modal", null)} />
+				<SettingsPanel onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "subagents"}>
 				<SubagentPanel onClose={() => setState("modal", null)} />

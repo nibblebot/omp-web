@@ -36,6 +36,17 @@ cannot offer. Written 2026-08-05 from three ground inventories:
 - [x] Phase 12 — Parity audit sweep & docs (complete 2026-08-06: side-by-side
   checklist run in browser; README updated; deviation: `/download` jail now
   also allows the server process cwd — bare-filename exports land there)
+- [x] Phase 13 — `/settings` settings panel (complete 2026-08-06: full-screen
+  settings UI driven by the same settings-schema metadata as the TUI,
+  with TUI-identical semantics — in-process `settings.set` + debounced disk
+  persist; deviations: no Plugins tab (web has no plugin management), TUI-only
+  render side effects skipped; layout: left sidebar with the main sections and
+  the active section's nested subsections on wide screens (horizontal tab bar
+  fallback on narrow) — client-local "Web UI" tab (web-only toggles +
+  web-relevant Images group), one tab per web-relevant schema tab (Model,
+  Interaction, Context, Memory, Files, Shell, Tools, Tasks, Providers), and a
+  "TUI" tab holding only terminal-specific appearance — Theme, Status Line,
+  Display groups + `terminal.showImages`)
 
 ## Architecture (in place; every phase only adds rows/frames)
 
@@ -224,6 +235,63 @@ Verification: typecheck + tests; browser: enable notifications, background the t
 run a prompt → notification fires; `/btw what does x do` streams in the side sheet;
 hover a user message → branch-from-here forks.
 
+## Phase 13 — Settings panel (`/settings` parity)
+
+TUI reference: `modes/components/settings-selector.ts` + `settings-defs.ts`,
+backed by `config/settings-schema.ts` and the `Settings` singleton
+(`settings.set` = in-process merge + debounced disk persist).
+
+1. **Relay rows**: `getSettings` (READ_ONLY; fresh `SettingsModel` built from
+   the shared schema — tabs/groups/items, per-item type, value, changed-vs-
+   default flag, condition gates evaluated live, runtime option injection for
+   `defaultThinkingLevel` (auto + session levels) and `theme.dark`/`theme.light`
+   (installed themes), providerLimits provider list from session models) and
+   `setSetting(path, value)` (schema-driven coercion mirroring the TUI's
+   `#setSettingValue` — "default"→-1 thresholds, record JSON parse +
+   `validateProviderMaxInFlightRequests`, number/boolean/string/array by
+   current value, session-managed `autoCompact`/`thinkingLevel` pass-through;
+   then `settings.set` for schema paths, then the web-relevant subset of the
+   TUI's `handleSettingChange` side effects — session setters, prompt/memory/
+   vision refreshers, sampling params, search/image provider orders; returns
+   the fresh model and broadcasts it as a `settings_changed` frame so every
+   tab's panel stays in sync).
+2. **SettingsPanel** (web affordance over the TUI's fullscreen selector):
+   full-screen modal, left sidebar with the main sections and the active
+   section's nested subsections on wide screens (horizontal tab bar fallback
+   on narrow) — a client-local "Web UI" tab
+   (theme preference, font size, desktop notifications, reveal queue, soft
+   fade, fast mode, auto-retry, login providers, plus an "Images" group with
+   the web-relevant image handling `images.autoResize`/`images.blockImages`),
+   one tab per web-relevant schema tab (Model, Interaction, Context, Memory,
+   Files, Shell, Tools, Tasks, Providers) rendering the schema content
+   directly, and a "TUI" tab limited to the terminal-only appearance groups
+   (Theme, Status Line, Display: `theme.*`, `statusLine.*`, `display.*`,
+   `tui.*`, `terminal.*`, symbol preset, color-blind mode, hardware cursor,
+   resolved-model badge) plus the terminal image renderer
+   (`terminal.showImages`); group headings (ungrouped items first, mirroring
+   the TUI's section layout), per-type widgets (boolean toggle, enum/submenu
+   select, text input with secret masking + show/hide, multiselect chips
+   with reorder for ordered lists, providerLimits per-provider number
+   inputs), changed dot, global type-to-search across every tab.
+
+> **Deviations (web host):** no Plugins tab (plugin management is a TUI
+> file-dashboard, excluded app-config); TUI-only render side effects
+> (`display.*`, `tui.*`, `terminal.*`, `statusLine.*`, theme preview) are
+> skipped — the values still persist, only the re-render is absent; the tab
+> split is client-side presentation — the "Web UI" tab holds the client-local
+> toggles plus web-relevant image handling (`images.autoResize`,
+> `images.blockImages`), the 9 web-relevant schema tabs render their schema
+> content directly, and the "TUI" tab hosts only terminal-specific appearance
+> (Theme, Status Line, Display) plus `terminal.showImages`; the wire model
+> still mirrors the TUI's 10-tab `/settings` schema 1:1.
+
+Verification: typecheck + `bun test`; browser: open ⚙ → tabs render with
+real values; flip a boolean → `config.yml`/`settings.json` updated on disk and
+the in-process session reflects it (steering-mode change also lands in the
+status bar via the state broadcast); `memory.backend` → Hindsight cluster
+appears/disappears; search finds settings across tabs; a second browser tab
+stays in sync via `settings_changed`.
+
 ## Phase 12 — Parity audit sweep & docs
 
 1. Side-by-side checklist: same 15-minute workflow in TUI (`omp`) and web UI on a
@@ -242,11 +310,12 @@ hover a user message → branch-from-here forks.
 - Terminal-only protocols: sixel/kitty graphics, OSC hyperlinks/appearance, SGR
   mouse, external `$EDITOR` (Ctrl+G) — the browser textarea and modals are the
   equivalent affordances.
-- App-config management UIs: marketplace/plugins, MCP server wizard, setup wizard,
-  full 10-tab settings schema, memory backend ops, SSH hosts, debug tools, agent
-  hub dashboard, security scan UI — these manage the installation, not a session.
-  Their per-session effects (available commands, tool slates, MCP prompt commands)
-  already flow through existing frames.
+- App-config management UIs: marketplace/plugins (incl. the /settings Plugins
+  tab), MCP server wizard, setup wizard, memory backend ops, SSH hosts, debug
+  tools, agent hub dashboard, security scan UI — these manage the installation,
+  not a session. Their per-session effects (available commands, tool slates,
+  MCP prompt commands) already flow through existing frames. (The schema-backed
+  /settings tabs themselves are NOT excluded — Phase 13 ships them.)
 - `/share` (needs a share server/gist credentials), snapcompact bitmap preview,
   tiny-title download progress, codex reset fireworks — cosmetic or infra-bound.
 - Session-DAG tree view — BranchPicker stays a linear list (prior decision stands).
