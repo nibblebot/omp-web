@@ -1,4 +1,6 @@
 import { onMount, Show, type Component } from "solid-js";
+import { ActiveSubagents } from "./components/ActiveSubagents";
+import { ActiveDaemons } from "./components/ActiveDaemons";
 import { AskDialog } from "./components/AskDialog";
 import { BranchPicker } from "./components/BranchPicker";
 import { BtwPanel } from "./components/BtwPanel";
@@ -67,6 +69,10 @@ export const App: Component = () => {
 				<div class="app-main">
 					<MessageList />
 					<QueueBar />
+					<div class="active-strips">
+						<ActiveSubagents />
+						<ActiveDaemons />
+					</div>
 					<PromptBox />
 				</div>
 				<Show when={state.sidebarVisible}>

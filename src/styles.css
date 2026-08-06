@@ -1582,6 +1582,112 @@ pre.terminal {
 	font-size: 0.786rem;
 }
 
+.active-subagents {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	flex: 1;
+	min-width: 0;
+	padding: 6px 12px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	animation: active-strip-in 180ms ease-out;
+}
+
+.active-subagent-row {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 2px 4px;
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.active-subagent-row:hover {
+	background: var(--bg-deep);
+}
+
+.active-subagent-row .subagent-row {
+	flex: 1;
+}
+
+.active-strips {
+	display: flex;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.active-daemons {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	flex: 1;
+	min-width: 0;
+	padding: 6px 12px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	animation: active-strip-in 180ms ease-out;
+}
+
+.active-daemon-row {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	font-size: 0.857rem;
+}
+
+.daemon-glyph[data-state="ready"] {
+	color: var(--success);
+}
+
+.daemon-glyph[data-state="failed"],
+.daemon-glyph[data-state="exited"] {
+	color: var(--error);
+}
+
+.daemon-glyph[data-state="starting"],
+.daemon-glyph[data-state="running"],
+.daemon-glyph[data-state="restarting"] {
+	color: var(--warning);
+}
+
+.daemon-glyph[data-state="stopping"] {
+	color: var(--muted-2);
+}
+
+.daemon-name {
+	color: var(--accent);
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.daemon-state {
+	color: var(--muted-2);
+	font-size: 0.786rem;
+}
+
+.daemon-meta {
+	color: var(--muted);
+	font-size: 0.786rem;
+	margin-left: auto;
+	white-space: nowrap;
+}
+
+@keyframes active-strip-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
 .subagent-controls button {
 	padding: 1px 6px;
 	font-size: 0.786rem;

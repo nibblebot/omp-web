@@ -3,7 +3,7 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import type { ClientCommand, ImageArg, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "./protocol";
+import type { ClientCommand, DaemonInfo, ImageArg, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "./protocol";
 import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
 
@@ -51,6 +51,20 @@ export interface SubagentInfo {
 	task?: string;
 	status: string;
 	lastUpdate: number;
+}
+
+const ACTIVE_SUBAGENT_STATUSES = new Set(["pending", "started", "running"]);
+
+/** True while the subagent is in flight; terminal statuses collapse the strip. */
+export function isActiveSubagent(sub: SubagentInfo): boolean {
+	return ACTIVE_SUBAGENT_STATUSES.has(sub.status);
+}
+
+const LIVE_DAEMON_STATES = new Set(["starting", "running", "ready", "restarting", "stopping"]);
+
+/** Daemon still supervised (not exited/failed); drives the processes strip's visibility. */
+export function isLiveDaemon(d: DaemonInfo): boolean {
+	return LIVE_DAEMON_STATES.has(d.state);
 }
 
 /** Names of the modals the store can summon; components render on match. */
@@ -130,6 +144,9 @@ export const [state, setState] = createStore({
 	toolsExpanded: false,
 	// Sessions sidebar: polled live-session roster + server process stats.
 	liveSessions: [] as LiveSessionEntry[],
+	// Daemon broker roster (hub/launch long-running processes); project-scoped
+	// like liveSessions, so resetSessionView must NOT clear it.
+	daemons: new Map<string, DaemonInfo>(),
 	processStats: null as ProcessStats | null,
 	// Settings model (getSettings/setSetting + settings_changed frames).
 	settingsModel: null as SettingsModel | null,
@@ -1111,6 +1128,9 @@ export function connect(): void {
 				setState("liveSessions", frame.sessions);
 				pendingLive?.({ sessions: frame.sessions });
 				pendingLive = null;
+				break;
+			case "daemons":
+				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [d.name, d])));
 				break;
 			case "process_stats":
 				setState("processStats", frame.process);

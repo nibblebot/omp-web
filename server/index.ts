@@ -38,6 +38,8 @@ import {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { daemonClientForProject } from "@oh-my-pi/pi-coding-agent/launch/client";
+import type { DaemonSnapshot } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import type { ServerWebSocket } from "bun";
 import type {
@@ -50,6 +52,7 @@ import type {
 	SessionScopedFrame,
 	LiveSessionEntry,
 	ProcessStats,
+	DaemonInfo,
 } from "../src/protocol";
 import { applySettingSideEffects, buildSettingsModel, coerceSettingValue } from "./settings-model";
 
@@ -483,6 +486,64 @@ function processStatsSnapshot(): ProcessStats {
 
 function broadcastLiveSessions(): void {
 	broadcast({ type: "live_sessions", sessions: liveSessionSnapshot() });
+}
+
+const DAEMON_POLL_MS = 3000;
+let daemonPoll: ReturnType<typeof setInterval> | undefined;
+
+function daemonInfo(snap: DaemonSnapshot): DaemonInfo {
+	return {
+		name: snap.name,
+		id: snap.id,
+		state: snap.state,
+		pid: snap.pid,
+		createdAt: snap.createdAt,
+		startedAt: snap.startedAt,
+		readyAt: snap.readyAt,
+		exitedAt: snap.exitedAt,
+		exitCode: snap.exitCode,
+		exitReason: snap.exitReason,
+		restartCount: snap.restartCount,
+		outputBytes: snap.outputBytes,
+		owner: snap.owner,
+		persist: snap.persist,
+		detached: snap.detached,
+	};
+}
+
+/**
+ * Poll every project's daemon broker (server cwd + each live session's cwd)
+ * and broadcast the merged roster every tick. A change-gate would strand
+ * clients that connect between broadcasts (or miss one frame): the roster is
+ * small (~2.5 KB) and the tick cadence is 3s, so re-broadcasting unconditionally
+ * self-heals late joins and dropped frames. On broker failure the empty roster
+ * is broadcast, and the next successful tick restores the real one.
+ */
+async function refreshDaemons(): Promise<void> {
+	const dirs = new Set<string>([cwd]);
+	for (const entry of sessions.values()) if (entry.cwd) dirs.add(entry.cwd);
+	const merged = new Map<string, DaemonInfo>();
+	for (const dir of dirs) {
+		try {
+			const client = await daemonClientForProject(dir);
+			const result = await client.request({ op: "list" });
+			if (result.op === "list") for (const snap of result.daemons) merged.set(snap.name, daemonInfo(snap));
+		} catch {
+			// Broker unreachable (not started / shut down): skip this project's roster.
+		}
+	}
+	broadcast({ type: "daemons", daemons: [...merged.values()] });
+}
+
+function startDaemonPoll(): void {
+	if (daemonPoll) return;
+	daemonPoll = setInterval(() => void refreshDaemons(), DAEMON_POLL_MS);
+}
+
+function stopDaemonPoll(): void {
+	if (!daemonPoll) return;
+	clearInterval(daemonPoll);
+	daemonPoll = undefined;
 }
 
 function wireSession(entry: SessionEntry): void {
@@ -1228,6 +1289,7 @@ const server = Bun.serve<SocketData>({
 	websocket: {
 		open(ws) {
 			sockets.add(ws);
+			startDaemonPoll();
 			// Auto-attach to the most-recently-created live session: a bare WS
 			// open reproduces the single-session priming sequence unchanged.
 			const entry = lastHandle ? sessions.get(lastHandle) : undefined;
@@ -1236,6 +1298,7 @@ const server = Bun.serve<SocketData>({
 		close(ws) {
 			// Detach only: sessions outlive sockets.
 			sockets.delete(ws);
+			if (sockets.size === 0) stopDaemonPoll();
 			ws.data.attached = null;
 			for (const [id, p] of pendingCodeInputs) {
 				if (p.ws === ws) {

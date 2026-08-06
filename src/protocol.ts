@@ -261,6 +261,8 @@ export type ServerFrame =
 	// snapshot to the sidebar roster and resolve a pending list request if one is
 	// in flight.
 	| { type: "live_sessions"; sessions: LiveSessionEntry[] }
+	// Project-wide daemon broker roster (hub launch processes); global broadcast, like live_sessions.
+	| { type: "daemons"; daemons: DaemonInfo[] }
 	// Unicast answer to get_process_stats — the 5s poll carries only process stats.
 	| { type: "process_stats"; process: ProcessStats }
 	| { type: "error"; error: string };
@@ -284,6 +286,25 @@ export type ProcessStats = {
 	rssBytes: number;
 	uptimeSec: number;
 	sessionCount: number;
+};
+
+/** One supervised long-running process (hub launch / daemon broker), wire-safe. */
+export type DaemonInfo = {
+	name: string;
+	id: string;
+	state: string;
+	pid?: number;
+	createdAt: number;
+	startedAt: number;
+	readyAt?: number;
+	exitedAt?: number;
+	exitCode?: number;
+	exitReason?: string;
+	restartCount: number;
+	outputBytes: number;
+	owner?: string;
+	persist: boolean;
+	detached: boolean;
 };
 
 export type SessionListEntry = {
