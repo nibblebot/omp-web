@@ -1,8 +1,9 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
+import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import type { ClientCommand, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry } from "./protocol";
+import type { ClientCommand, ImageArg, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry } from "./protocol";
 
 export type Block = { kind: "text" | "thinking"; text: string };
 export type ToolStatus = "running" | "done" | "error";
@@ -57,6 +58,7 @@ export type ModalName =
 	| "settings"
 	| "sessions"
 	| "branch"
+	| "history"
 	| "subagents"
 	| "login";
 
@@ -559,6 +561,28 @@ export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30
 	pendingCalls.set(id, { resolve, reject, timer });
 	ws.send(JSON.stringify({ type: "call", id, method, args } satisfies ClientCommand));
 	return promise;
+}
+
+/** Payload delivered into the PromptBox textarea (and image tray) by QueueBar/HistorySearch. */
+export interface PromptInsert {
+	text: string;
+	images?: ImageArg[];
+}
+
+/**
+ * Cross-component prompt insertion inbox: QueueBar dequeue and HistorySearch
+ * picks publish here; PromptBox consumes and clears (it owns the textarea).
+ */
+export const [promptInsert, setPromptInsert] = createSignal<PromptInsert | null>(null);
+
+/** Phase 7: pop the last queued message back into the prompt (QueueBar ×, Alt+↑). */
+export function dequeueLastQueued(): void {
+	void call("popLastQueuedMessage")
+		.then(restored => {
+			const msg = restored as { text: string; images?: ImageArg[] } | undefined;
+			if (msg) setPromptInsert({ text: msg.text, images: msg.images });
+		})
+		.catch(err => setState("error", String(err)));
 }
 
 // list_sessions / list_files carry no id on the wire; with a single user,

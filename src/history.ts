@@ -33,6 +33,11 @@ export class PromptHistory {
 		return this.entries.length;
 	}
 
+	/** Newest-first snapshot of the stored entries (for the Ctrl+R search overlay). */
+	list(): string[] {
+		return [...this.entries].reverse();
+	}
+
 	get browsing(): boolean {
 		return this.cursor !== null;
 	}

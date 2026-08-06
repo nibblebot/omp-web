@@ -1,12 +1,14 @@
 import { onMount, Show, type Component } from "solid-js";
 import { AskDialog } from "./components/AskDialog";
 import { BranchPicker } from "./components/BranchPicker";
+import { HistorySearch } from "./components/HistorySearch";
 import { LoginPanel } from "./components/LoginPanel";
 import { Kimi } from "./components/Kimi";
 import { MessageList } from "./components/MessageList";
 import { Modal } from "./components/Modal";
 import { ModelPicker } from "./components/ModelPicker";
 import { PromptBox } from "./components/PromptBox";
+import { QueueBar } from "./components/QueueBar";
 import { SessionPicker } from "./components/SessionPicker";
 import { SessionsSidebar } from "./components/SessionsSidebar";
 import { SettingsPopover } from "./components/SettingsPopover";
@@ -25,6 +27,10 @@ const SHORTCUTS: Array<[string, string]> = [
 	["Ctrl+Enter", "Queue as follow-up"],
 	["Shift+Enter", "Newline"],
 	["Esc", "Abort the running turn"],
+	["Esc Esc", "Branch picker (empty prompt)"],
+	["Ctrl+R", "Fuzzy-search prompt history"],
+	["Alt+↑", "Pop last queued message into the prompt"],
+	["-> / => msg", "Queue as steer / follow-up"],
 	["↑ / ↓", "Prompt history (caret on first/last line)"],
 	["/ …", "Slash commands (Tab completes)"],
 	["@ …", "File mentions (Tab completes)"],
@@ -43,6 +49,13 @@ export const App: Component = () => {
 			e.preventDefault();
 			setState("toolsExpanded", v => !v);
 		});
+		// Ctrl+R opens history search (suppressed while a modal is open).
+		window.addEventListener("keydown", e => {
+			if (e.key.toLowerCase() !== "r" || !e.ctrlKey || e.shiftKey || e.altKey) return;
+			if (state.modal !== null) return;
+			e.preventDefault();
+			setState("modal", "history");
+		});
 	});
 	return (
 		<div class="app">
@@ -50,6 +63,7 @@ export const App: Component = () => {
 			<div class="app-body">
 				<div class="app-main">
 					<MessageList />
+					<QueueBar />
 					<PromptBox />
 				</div>
 				<Show when={state.sidebarVisible}>
@@ -91,6 +105,9 @@ export const App: Component = () => {
 			</Show>
 			<Show when={state.modal === "branch"}>
 				<BranchPicker onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "history"}>
+				<HistorySearch onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "login"}>
 				<LoginPanel onClose={() => setState("modal", null)} />

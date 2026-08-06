@@ -463,6 +463,83 @@ pre {
 	background: var(--warning-bg);
 }
 
+.queue-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	padding: 8px 0 0;
+	border-top: 1px solid var(--border);
+}
+
+.queue-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+	background: var(--panel);
+	border: 1px solid var(--border-strong);
+	border-radius: 999px;
+	padding: 2px 4px 2px 10px;
+	font-size: 0.786rem;
+}
+
+.queue-kind {
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--muted);
+}
+
+.queue-kind.steer {
+	color: var(--accent);
+}
+
+.queue-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.queue-pop {
+	background: none;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	padding: 0 6px;
+	font-size: 0.857rem;
+}
+
+.queue-pop:hover {
+	color: var(--error);
+}
+
+.queue-clear {
+	background: none;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	font-size: 0.786rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	padding: 0 4px;
+}
+
+.queue-clear:hover {
+	color: var(--error);
+}
+
+.history-search-input {
+	width: 100%;
+	box-sizing: border-box;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	color: var(--text);
+	padding: 6px 10px;
+	font: inherit;
+	margin-bottom: 6px;
+}
+
 .image-tray {
 	display: flex;
 	gap: 8px;

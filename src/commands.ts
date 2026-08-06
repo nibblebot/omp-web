@@ -6,12 +6,18 @@ export type InputMode = "enter" | "followup";
 export type ParsedInput =
 	| { kind: "bash"; command: string; dimmed: boolean }
 	| { kind: "slash"; name: string; args: string }
+	| { kind: "queue"; steering: boolean; text: string }
 	| { kind: "text" };
 
-/** Prefix semantics: `!!` dimmed bang-shell, `!` bang-shell, `/name args` slash, else plain text. */
+/**
+ * Prefix semantics: `!!` dimmed bang-shell, `!` bang-shell, `/name args` slash,
+ * `-> msg` steer-queue shorthand, `=> msg` follow-up-queue shorthand, else plain text.
+ */
 export function parseInput(text: string): ParsedInput {
 	if (text.startsWith("!!")) return { kind: "bash", command: text.slice(2).trim(), dimmed: true };
 	if (text.startsWith("!")) return { kind: "bash", command: text.slice(1).trim(), dimmed: false };
+	if (text.startsWith("-> ")) return { kind: "queue", steering: true, text: text.slice(3) };
+	if (text.startsWith("=> ")) return { kind: "queue", steering: false, text: text.slice(3) };
 	if (text.startsWith("/")) {
 		const m = /^\/(\S+)(?:\s+(.*))?$/s.exec(text);
 		if (m) return { kind: "slash", name: m[1].toLowerCase(), args: m[2] ?? "" };
@@ -54,6 +60,11 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	tree: () => setState("modal", "branch"),
 	branch: () => setState("modal", "branch"),
 	export: exportSession,
+	queue: args => {
+		const msg = args.trim();
+		if (!msg) return;
+		void call("followUp", [msg]).catch(showError);
+	},
 	compact: args =>
 		void call("compact", args ? [args] : [])
 			.then(result => {
@@ -78,6 +89,15 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	quit: () => pushNotice("info", "Session persists — close this browser tab to exit."),
 };
 
+/**
+ * Queue-shorthand method selection: `->` steer-queues while streaming but
+ * falls back to prompt when idle (steer errors on an idle session);
+ * `=>` follow-up queues regardless of streaming state.
+ */
+export function queueMethod(steering: boolean, streaming: boolean): "prompt" | "steer" | "followUp" {
+	return steering ? (streaming ? "steer" : "prompt") : "followUp";
+}
+
 export function dispatchInput(text: string, images: ImageArg[] | undefined, mode: InputMode): void {
 	const trimmed = text.trim();
 	const parsed = parseInput(trimmed);
@@ -99,6 +119,15 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			// Agent-side builtin/skill/extension/file commands handle it. Their
 			// command_output frames are unreachable over the WebSocket protocol (documented tradeoff).
 			void call("prompt", [trimmed]).catch(showError);
+			return;
+		}
+		case "queue": {
+			const body = parsed.text.trim();
+			if (!body && (!images || images.length === 0)) return;
+			// `->` forces steer-queue: steer errors on an idle session, so it
+			// falls back to prompt. `=>` forces follow-up queue in both states.
+			const method = queueMethod(parsed.steering, state.streaming);
+			void call(method, [body, images && images.length > 0 ? images : undefined]).catch(showError);
 			return;
 		}
 		case "text": {

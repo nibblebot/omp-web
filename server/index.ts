@@ -532,6 +532,7 @@ const READ_ONLY: Partial<Record<WebMethodName, true>> = {
 	getSessionStats: true,
 	getAvailableModels: true,
 	getBranchMessages: true,
+	getQueuedMessages: true,
 	getLoginProviders: true,
 	getSubagents: true,
 	getSubagentMessages: true,
@@ -621,6 +622,9 @@ const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[]) => P
 	},
 	steer: (entry, a) => entry.session.steer(a[0] as string, a[1] as Images),
 	followUp: (entry, a) => entry.session.followUp(a[0] as string, a[1] as Images),
+	getQueuedMessages: async entry => entry.session.getQueuedMessages(),
+	popLastQueuedMessage: async entry => entry.session.popLastQueuedMessage(),
+	clearQueue: async entry => entry.session.clearQueue(),
 	abort: entry => entry.session.abort({ reason: USER_INTERRUPT_LABEL }),
 	abortAndPrompt: async (entry, a) => {
 		await entry.session.abort({ reason: USER_INTERRUPT_LABEL });

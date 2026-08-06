@@ -3,7 +3,7 @@ import { currentToken, fuzzyRank, type AcToken } from "../autocomplete";
 import { dispatchInput, LOCAL_COMMANDS, type InputMode } from "../commands";
 import { PromptHistory } from "../history";
 import type { ImageArg } from "../protocol";
-import { call, listFiles, setState, state } from "../state";
+import { call, dequeueLastQueued, listFiles, promptInsert, setPromptInsert, setState, state } from "../state";
 import { Autocomplete, type AcItem } from "./Autocomplete";
 
 const history = new PromptHistory();
@@ -16,6 +16,7 @@ const LOCAL_DETAILS: Record<string, string> = {
 	branch: "Branch from an earlier message",
 	export: "Export session as HTML",
 	compact: "Compact session context",
+	queue: "Queue a follow-up message",
 	help: "Keyboard shortcuts",
 	hotkeys: "Keyboard shortcuts",
 	exit: "Close this tab",
@@ -31,6 +32,8 @@ export const PromptBox: Component = () => {
 	const [files, setFiles] = createSignal<string[]>([]);
 	let textarea!: HTMLTextAreaElement;
 	let debounceTimer: number | undefined;
+	// Double-Esc on an empty textarea opens the branch picker (TUI parity).
+	let lastEsc = 0;
 
 	const autoGrow = () => {
 		textarea.style.height = "auto";
@@ -52,6 +55,19 @@ export const PromptBox: Component = () => {
 				.then(setFiles)
 				.catch(() => setFiles([]));
 		}, 150);
+	});
+
+	// QueueBar dequeue / HistorySearch picks land here.
+	createEffect(() => {
+		const insert = promptInsert();
+		if (!insert) return;
+		setPromptInsert(null);
+		if (insert.text) setMessage(prev => (prev.trim() ? `${prev}\n${insert.text}` : insert.text));
+		if (insert.images?.length) setImages(prev => [...prev, ...insert.images!]);
+		requestAnimationFrame(() => {
+			textarea.focus();
+			autoGrow();
+		});
 	});
 
 	const items = (): AcItem[] => {
@@ -121,6 +137,12 @@ export const PromptBox: Component = () => {
 	};
 
 	const onKeyDown = (e: KeyboardEvent) => {
+		// Alt+↑ pops the last queued message back into the textarea.
+		if (e.key === "ArrowUp" && e.altKey) {
+			e.preventDefault();
+			dequeueLastQueued();
+			return;
+		}
 		// Autocomplete owns navigation while the popup is open.
 		if (open()) {
 			const list = items();
@@ -141,6 +163,7 @@ export const PromptBox: Component = () => {
 			}
 			if (e.key === "Escape") {
 				e.preventDefault();
+				lastEsc = 0;
 				setDismissed(true);
 				setToken(null);
 				return;
@@ -158,7 +181,20 @@ export const PromptBox: Component = () => {
 		}
 		if (e.key === "Escape" && state.streaming) {
 			e.preventDefault();
+			lastEsc = 0;
 			void call("abort").catch(err => setState("error", String(err)));
+			return;
+		}
+		if (e.key === "Escape") {
+			// Double-Esc on an empty textarea opens the branch picker (TUI
+			// parity); Esc with text just resets the chord timer.
+			if (message().trim() === "") {
+				const now = Date.now();
+				if (now - lastEsc <= 500) {
+					lastEsc = 0;
+					setState("modal", "branch");
+				} else lastEsc = now;
+			} else lastEsc = 0;
 			return;
 		}
 		if (e.key === "Enter") {
