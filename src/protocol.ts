@@ -211,7 +211,9 @@ export type ClientCommand =
 	| { type: "detach" }
 	// Dispose a live session; sockets attached to it are detached.
 	| { type: "close_session"; sessionId: string }
-	| { type: "list_live_sessions" };
+	| { type: "list_live_sessions" }
+	// The 5s sidebar poll command; answered with a process_stats frame.
+	| { type: "get_process_stats" };
 
 /**
  * Session-scoped frames as the server composes them, before broadcastTo
@@ -253,8 +255,14 @@ export type ServerFrame =
 	// Unicast: socket is now attached to this handle; history, state and
 	// available_commands follow immediately (in that order).
 	| { type: "attached"; sessionId: string }
-	// Unicast answer to list_live_sessions.
-	| { type: "live_sessions"; sessions: LiveSessionEntry[]; process: ProcessStats }
+	// Both the unicast answer to list_live_sessions AND a global broadcast the
+	// server pushes whenever sidebar-relevant session state changes (create/close,
+	// session events, model/thinking/title changes). Clients always apply the
+	// snapshot to the sidebar roster and resolve a pending list request if one is
+	// in flight.
+	| { type: "live_sessions"; sessions: LiveSessionEntry[] }
+	// Unicast answer to get_process_stats — the 5s poll carries only process stats.
+	| { type: "process_stats"; process: ProcessStats }
 	| { type: "error"; error: string };
 
 /** One live in-process session, as reported by the live_sessions frame. */
@@ -271,7 +279,7 @@ export type LiveSessionEntry = {
 	isStreaming: boolean;
 };
 
-/** Server process stats, reported alongside the live session list. */
+/** Server process stats, reported by the process_stats frame (the 5s sidebar poll). */
 export type ProcessStats = {
 	rssBytes: number;
 	uptimeSec: number;

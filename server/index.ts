@@ -456,6 +456,35 @@ async function broadcastAvailableCommands(entry: SessionEntry): Promise<void> {
 	broadcastTo(entry.handle, { type: "available_commands", commands: await buildAvailableSlashCommands(entry.session) });
 }
 
+function liveSessionSnapshot(): LiveSessionEntry[] {
+	return [...sessions.values()].map(entry => {
+		const { session } = entry;
+		const live: LiveSessionEntry = {
+			sessionId: entry.handle,
+			name: session.sessionName,
+			cwd: entry.cwd,
+			thinkingLevel: session.thinkingLevel,
+			contextUsage: session.getContextUsage(),
+			messageCount: session.messages.length,
+			isStreaming: session.isStreaming,
+		};
+		if (session.model) live.model = `${session.model.provider}/${session.model.id}`;
+		return live;
+	});
+}
+
+function processStatsSnapshot(): ProcessStats {
+	return {
+		rssBytes: process.memoryUsage().rss,
+		uptimeSec: process.uptime(),
+		sessionCount: sessions.size,
+	};
+}
+
+function broadcastLiveSessions(): void {
+	broadcast({ type: "live_sessions", sessions: liveSessionSnapshot() });
+}
+
 function wireSession(entry: SessionEntry): void {
 	const { session, eventBus } = entry;
 	// session.subscribe covers the entire AgentSessionEvent union — the same
@@ -464,6 +493,10 @@ function wireSession(entry: SessionEntry): void {
 		broadcastTo(entry.handle, { type: "event", event });
 		// Tokens/cost/context/queue counts all change at turn end.
 		if (event.type === "agent_end") void broadcastState(entry, true).catch(() => {});
+		// Roster-visible state changed; push a fresh live-sessions snapshot.
+		if (event.type === "agent_start" || event.type === "agent_end" || event.type === "message_start" || event.type === "message_end") {
+			broadcastLiveSessions();
+		}
 	});
 	eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data => {
 		handleSubagentLifecycle(entry, data as SubagentLifecyclePayload);
@@ -529,6 +562,7 @@ async function createSession(sessionCwd: string): Promise<SessionEntry> {
 function registerSession(entry: SessionEntry): void {
 	sessions.set(entry.handle, entry);
 	lastHandle = entry.handle;
+	broadcastLiveSessions();
 }
 
 try {
@@ -557,7 +591,10 @@ function maybeGenerateTitle(entry: SessionEntry, text: string): void {
 	entry.session
 		.generateTitle(text)
 		.then(async title => {
-			if (title && !sessionManager.getSessionName()) await sessionManager.setSessionName(title, "auto");
+			if (title && !sessionManager.getSessionName()) {
+				await sessionManager.setSessionName(title, "auto");
+				broadcastLiveSessions();
+			}
 		})
 		.catch(() => {});
 }
@@ -589,6 +626,18 @@ const READ_ONLY: Partial<Record<WebMethodName, true>> = {
 // Calls that replace the transcript; every tab resyncs, not just the requester.
 // handoff starts a new session server-side; fork rewrites history in place.
 const HISTORY_RELOAD: Partial<Record<WebMethodName, true>> = { newSession: true, switchSession: true, branch: true, fork: true, handoff: true };
+
+// Calls that change sidebar-visible session state; every tab's roster resyncs.
+const ROSTER_RELOAD: Partial<Record<WebMethodName, true>> = {
+	newSession: true,
+	switchSession: true,
+	branch: true,
+	compact: true,
+	setModel: true,
+	cycleModel: true,
+	setThinkingLevel: true,
+	cycleThinkingLevel: true,
+};
 
 async function changeSession(
 	entry: SessionEntry,
@@ -985,6 +1034,7 @@ async function closeSession(entry: SessionEntry, reason: string): Promise<void> 
 	for (const ws of sockets) if (ws.data.attached === entry.handle) ws.data.attached = null;
 	sessions.delete(entry.handle);
 	if (lastHandle === entry.handle) lastHandle = [...sessions.keys()].at(-1) ?? null;
+	broadcastLiveSessions();
 }
 
 /** The session this socket's call/login_code/ui_response commands route to. */
@@ -1017,6 +1067,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 					try {
 						if (HISTORY_RELOAD[cmd.method]) await broadcastHistory(entry);
 						if (HISTORY_RELOAD[cmd.method] || !READ_ONLY[cmd.method]) await broadcastState(entry);
+						if (ROSTER_RELOAD[cmd.method]) broadcastLiveSessions();
 					} catch (err) {
 						console.error("Post-mutation resync failed:", err);
 						broadcast({ type: "error", error: `resync failed: ${String(err)}` });
@@ -1099,28 +1150,11 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				break;
 			}
 			case "list_live_sessions": {
-				send(ws, {
-					type: "live_sessions",
-					sessions: [...sessions.values()].map(entry => {
-						const { session } = entry;
-						const live: LiveSessionEntry = {
-							sessionId: entry.handle,
-							name: session.sessionName,
-							cwd: entry.cwd,
-							thinkingLevel: session.thinkingLevel,
-							contextUsage: session.getContextUsage(),
-							messageCount: session.messages.length,
-							isStreaming: session.isStreaming,
-						};
-						if (session.model) live.model = `${session.model.provider}/${session.model.id}`;
-						return live;
-					}),
-					process: {
-						rssBytes: process.memoryUsage().rss,
-						uptimeSec: process.uptime(),
-						sessionCount: sessions.size,
-					},
-				});
+				send(ws, { type: "live_sessions", sessions: liveSessionSnapshot() });
+				break;
+			}
+			case "get_process_stats": {
+				send(ws, { type: "process_stats", process: processStatsSnapshot() });
 				break;
 			}
 			default:

@@ -887,11 +887,12 @@ export function abortSubagent(agentId: string): Promise<unknown> {
 // server's unicast `attached` frame (latest-wins, like listSessions);
 // close_session is fire-and-forget — the server detaches affected sockets.
 // ---------------------------------------------------------------------------
-/** Answer to list_live_sessions: roster plus server process stats. */
-export type LiveSessionsResult = { sessions: LiveSessionEntry[]; process: ProcessStats | null };
+/** Answer to list_live_sessions: roster only; process stats come from getProcessStats. */
+export type LiveSessionsResult = { sessions: LiveSessionEntry[] };
 
 let pendingAttach: { resolve: (sessionId: string) => void; reject: (err: Error) => void } | null = null;
 let pendingLive: ((result: LiveSessionsResult) => void) | null = null;
+let pendingProcessStats: { resolve: (process: ProcessStats) => void; reject: (err: Error) => void } | null = null;
 
 function requestAttach(cmd: ClientCommand): Promise<string> {
 	const { promise, resolve, reject } = Promise.withResolvers<string>();
@@ -929,14 +930,30 @@ export function listLiveSessions(): Promise<LiveSessionsResult> {
 		reject(new Error("Not connected"));
 		return promise;
 	}
-	pendingLive?.({ sessions: [], process: null });
+	pendingLive?.({ sessions: [] });
 	pendingLive = resolve;
 	ws.send(JSON.stringify({ type: "list_live_sessions" } satisfies ClientCommand));
 	return promise;
 }
 
+/** Fetch server process stats (RSS, uptime, session count) — the 5s sidebar poll. */
+export function getProcessStats(): Promise<ProcessStats> {
+	const { promise, resolve, reject } = Promise.withResolvers<ProcessStats>();
+	if (!ws || ws.readyState !== WebSocket.OPEN) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	pendingProcessStats?.reject(new Error("superseded"));
+	pendingProcessStats = { resolve, reject };
+	ws.send(JSON.stringify({ type: "get_process_stats" } satisfies ClientCommand));
+	return promise;
+}
+
 // ---------------------------------------------------------------------------
-// Sessions sidebar poll: refresh the roster every 5s, but only while the
+// Sidebar refresh: the 5s poll fetches ONLY server process stats (RSS). The
+// live-session roster is event-driven via server-pushed live_sessions
+// broadcasts, so it needs no polling; the one-time listLiveSessions pull still
+// runs on start so the roster shows up immediately. Poll only while the
 // sidebar is visible and the socket is connected (started from onopen,
 // stopped from onclose/setSidebarVisible; restart on reconnect/re-show).
 // ---------------------------------------------------------------------------
@@ -944,17 +961,23 @@ let sidebarPoll: number | undefined;
 
 function refreshLiveSessions(): void {
 	void listLiveSessions()
-		.then(({ sessions, process }) => {
+		.then(({ sessions }) => {
 			setState("liveSessions", sessions);
-			setState("processStats", process);
 		})
+		.catch(() => {});
+}
+
+function refreshProcessStats(): void {
+	void getProcessStats()
+		.then(p => setState("processStats", p))
 		.catch(() => {});
 }
 
 function startSidebarPoll(): void {
 	stopSidebarPoll();
-	refreshLiveSessions(); // immediate refresh — no 5s initial gap
-	sidebarPoll = window.setInterval(refreshLiveSessions, 5000);
+	refreshLiveSessions(); // immediate roster pull — no 5s initial gap
+	refreshProcessStats();
+	sidebarPoll = window.setInterval(refreshProcessStats, 5000);
 }
 
 function stopSidebarPoll(): void {
@@ -1083,8 +1106,16 @@ export function connect(): void {
 				pendingSessions = null;
 				break;
 			case "live_sessions":
-				pendingLive?.({ sessions: frame.sessions, process: frame.process });
+				// Both the unicast answer to list_live_sessions and the server's
+				// global roster broadcast: always apply, resolve a pending pull.
+				setState("liveSessions", frame.sessions);
+				pendingLive?.({ sessions: frame.sessions });
 				pendingLive = null;
+				break;
+			case "process_stats":
+				setState("processStats", frame.process);
+				pendingProcessStats?.resolve(frame.process);
+				pendingProcessStats = null;
 				break;
 			case "files":
 				pendingFiles?.(frame.files);
@@ -1184,8 +1215,10 @@ export function connect(): void {
 		pendingFiles = null;
 		pendingAttach?.reject(new Error("Disconnected"));
 		pendingAttach = null;
-		pendingLive?.({ sessions: [], process: null });
+		pendingLive?.({ sessions: [] });
 		pendingLive = null;
+		pendingProcessStats?.reject(new Error("Disconnected"));
+		pendingProcessStats = null;
 		const delay = backoff;
 		backoff = Math.min(backoff * 2, 8000);
 		setTimeout(connect, delay);
