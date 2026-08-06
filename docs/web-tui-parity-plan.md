@@ -19,13 +19,23 @@ cannot offer. Written 2026-08-05 from three ground inventories:
   login/subagents/settings. See git history for the archived plan.
 - [x] SDK conversion (2026-08-05) — in-process sessions, ui_request dialogs,
   multi-session multiplexing, subagent steer/abort.
-- [ ] Phase 7 — Input & queue parity
-- [ ] Phase 8 — Session command parity
-- [ ] Phase 9 — Status, modes & usage parity
-- [ ] Phase 10 — Tool rendering completion + inline images
+- [x] Phase 7 — Input & queue parity (complete 2026-08-06: queue chip bar with
+  dequeue/clear, `->`/`=>` shorthand + `/queue`, double-Esc branch, Ctrl+R history search)
+- [x] Phase 8 — Session command parity (complete 2026-08-06: retry/fork/fresh/
+  handoff/rename/interrupt/dump relays, inline rename, copy buttons)
+- [x] Phase 9 — Status, modes & usage parity (complete 2026-08-06: per-turn usage
+  rows, retry countdown, goal popover, plan badge, usage panel, context breakdown,
+  fast/computer/vision toggles; deviation: `/goal`+`/plan` are NOT ACP-intercepted
+  on 17.1.8 — relayed via `setGoalModeState`/`setPlanModeState` + `goalRuntime` rows)
+- [x] Phase 10 — Tool rendering completion + inline images (complete 2026-08-06:
+  eval/lsp/hub/ask renderers, inline images in user messages + tool results,
+  streaming bash/python via chunk frames, `$`/`$$` python mode; deviation:
+  `!!` now sets `excludeFromContext` server-side, matching the TUI)
 - [x] Phase 11 — Web-plus enhancements (complete 2026-08-06: desktop
   notifications, `/btw` side panel, message hover actions, export themes)
-- [ ] Phase 12 — Parity audit sweep & docs
+- [x] Phase 12 — Parity audit sweep & docs (complete 2026-08-06: side-by-side
+  checklist run in browser; README updated; deviation: `/download` jail now
+  also allows the server process cwd — bare-filename exports land there)
 
 ## Architecture (in place; every phase only adds rows/frames)
 

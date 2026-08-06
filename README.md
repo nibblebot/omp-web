@@ -1,36 +1,42 @@
 # omp-web
 
-A Solid.js web UI for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent). The agent runs in-process via its SDK (`createAgentSession`); a Bun WebSocket server bridges it to the browser. Brings the TUI's core feature set to the web.
+A Solid.js web UI for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent). The agent runs in-process via its SDK (`createAgentSession`); a Bun WebSocket server bridges it to the browser. Brings the TUI's core feature set to the web, plus web-only affordances (inline images, clickable queue chips, per-message copy/branch, live bash streaming).
 
 ## Features
 
 ### Chat & streaming
 - Streaming assistant replies with text + thinking blocks, optional reveal-queue and soft-fade display modes
-- Steer and follow-up prompts while the agent is streaming (queued with a chip indicator)
-- Escape to abort; queued steer shown until consumed
-- Image paste into the prompt with thumbnail tray
-- Prompt history recall (↑/↓), auto-growing textarea
-- Slash commands and `!` bang-shell with `@`-file and `/`-command autocomplete
+- Steer and follow-up prompts while streaming; queue shorthand (`->` steer, `=>` follow-up) and `/queue`
+- Queued-message chip bar above the composer: per-message previews, dequeue (× or Alt+↑ restores the text), clear-all
+- Escape to abort; Ctrl+Enter queues a follow-up; double-Esc on an empty composer opens the branch picker
+- Image paste into the prompt with thumbnail tray; images render inline in the transcript with click-to-zoom
+- Prompt history recall (↑/↓) plus Ctrl+R fuzzy history search; auto-growing textarea
+- Slash commands (`!` bang-shell, `$` python mode) with `@`-file, `/`-command autocomplete, and `/`-command help
+- `!`/`!!` bash and `$`/`$$` python execution stream live output; abort buttons; exit-code and truncation badges
 
 ### Rich tool rendering
-- Dedicated renderers: bash terminal card, diff view, file read with line numbers, todo checklist, grep/glob search results, web search, task/agent tool
-- Everything collapsible; unknown payloads fall back to a generic card
-- Live subagent list in the status bar with progress; click through to a paged transcript drill-down
+- Dedicated renderers: bash terminal card, diff view, file read with line numbers, todo checklist, grep/glob search results, web search, task/agent tool, eval, lsp, hub, ask Q&A
+- Inline images inside tool results (computer/inspect_image screenshots); everything collapsible (Ctrl+O), unknown payloads fall back to a generic card
+- Live subagent list in the status bar with progress; click through to a paged transcript drill-down, steer or abort running agents
 
 ### Status & controls
-- Status bar segments: model, thinking level, context usage %, session cost/tokens, streaming state, disconnected indicator
-- Model and thinking-level pickers, session stats popover
-- Settings popover: steering/follow-up modes, auto-retry, theme (dark/light), font-size stepper (both persisted)
-- Session rename; new-session with confirmation
+- Status bar segments: model, thinking level, plan/goal badges, context usage % (threshold-colored), cost/tokens, queued count, subagents, retry countdown, session name, streaming state, disconnected indicator
+- Model and thinking-level pickers, session stats popover with context-usage breakdown bars and per-turn usage rows under each reply
+- Goal mode popover (set/pause/resume/drop with budget), plan-mode toggle, usage reports panel (provider windows/limits), auto-retry live countdown
+- Settings popover: steering/follow-up/interrupt modes, auto-retry, fast mode, computer tool, inspect-image mode, desktop notifications, theme, font-size stepper (persisted)
+- Inline session rename in the status bar; new-session with confirmation
 
 ### Sessions
-- Resume past sessions from a picker (full transcript restored)
-- Branch a session from any earlier turn
-- Compaction summaries rendered inline; auto-compaction and retry notices shown in the transcript
+- Resume past sessions from a picker (full transcript restored); multi-session multiplexing with a live-sessions sidebar (attach/create/close, process stats)
+- Branch or fork from any earlier turn (hover a user message for branch/copy)
+- Compaction summaries rendered inline; auto-compaction, retry and model-fallback notices shown in the transcript
+- `/handoff` starts a new session carrying a summary document; `/fresh` resets provider state; `/dump` downloads transcript + LLM request JSON
 - `/export` downloads a standalone HTML transcript (served with path-traversal protection)
 
-### Login providers
+### Side channels & extras
+- `/btw <question>` answers a side question in a streaming panel without touching the transcript
 - OAuth login for 60+ providers from the settings popover: popup-safe flow with manual code entry and authenticated badges
+- Desktop notifications when the tab is hidden (opt-in); Kimi, the streaming pet; 7 themes and a font-size stepper
 
 ## Develop
 
@@ -52,8 +58,8 @@ Checks: `bun run check:types`, `bun test`.
 browser (Solid) ⇄ WebSocket ⇄ Bun server (in-process pi-coding-agent SDK)
 ```
 
-- `server/index.ts` — hosts agent sessions in-process via `createAgentSession`, relays a whitelist of session methods, broadcasts session events/state; multiplexes multiple live sessions (attach/create/close from the Sessions modal); serves static files and `/download`
-- `src/protocol.ts` — client/server frame types (including unicast frames for OAuth and `ui_request`/`ui_response` for the `ask` tool)
-- `src/state.ts` — client store: chat items, streaming, session state mirror, `call()` method helper
+- `server/index.ts` — hosts agent sessions in-process via `createAgentSession`, relays an allowlist of session methods, broadcasts session events/state; multiplexes multiple live sessions (attach/create/close from the Sessions sidebar); serves static files and `/download` (realpath-jailed to tmpdir/agent cwd/server cwd/session dirs)
+- `src/protocol.ts` — client/server frame types (including unicast frames for OAuth, `ui_request`/`ui_response` for the `ask` tool, and streamed bash/python/ephemeral chunk frames)
+- `src/state.ts` — client store: chat items, streaming, session state mirror, `call()` method helper, reconnect with backoff
 
 See `docs/web-tui-parity-plan.md` for the phased parity plan against the TUI.

@@ -1102,7 +1102,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 // exports land), or a live session file's directory. Canonicalizing both
 // sides closes symlink escapes that a lexical prefix check would miss.
 async function canonicalRoots(): Promise<string[]> {
-	const roots = [os.tmpdir(), cwd];
+	const roots = [os.tmpdir(), cwd, process.cwd()];
 	for (const entry of sessions.values()) {
 		const sessionFile = entry.session.sessionFile;
 		if (sessionFile) roots.push(path.dirname(sessionFile));
@@ -1132,8 +1132,14 @@ const server = Bun.serve<SocketData>({
 		if (url.pathname === "/download") {
 			const requested = url.searchParams.get("path");
 			if (!requested) return new Response("Missing path", { status: 400 });
-			// Relative export paths are written by the agent into its cwd.
-			const canonical = await realpath(path.resolve(cwd, requested)).catch(() => null);
+			// Relative export paths are written by the agent into its cwd (or the
+			// server's process cwd when the session dir lives there); absolute
+			// paths are used as-is.
+			const resolved = path.isAbsolute(requested) ? requested : path.resolve(cwd, requested);
+			let canonical = await realpath(resolved).catch(() => null);
+			if (!canonical && !path.isAbsolute(requested)) {
+				canonical = await realpath(path.resolve(process.cwd(), requested)).catch(() => null);
+			}
 			if (!canonical) return new Response("Not found", { status: 404 });
 			const fileStat = await stat(canonical).catch(() => null);
 			if (!fileStat?.isFile()) return new Response("Not found", { status: 404 });
