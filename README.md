@@ -37,7 +37,7 @@ A Solid.js web UI for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/packag
 ### Side channels & extras
 - `/btw <question>` answers a side question in a streaming panel without touching the transcript
 - OAuth login for 60+ providers from the settings panel: popup-safe flow with manual code entry and authenticated badges
-- Desktop notifications when the tab is hidden (opt-in); Kimi, the streaming pet; 7 themes and a font-size stepper
+- Desktop notifications when the tab is hidden (opt-in); a streaming pixel-art pet that matches the active model provider (kimi catgirl, minimax robot, deepseek whale); 7 themes and a font-size stepper
 
 ## Develop
 

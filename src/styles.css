@@ -1713,7 +1713,7 @@ pre.terminal {
 	color: var(--muted-3);
 }
 
-.kimi-pet {
+.pet {
 	position: fixed;
 	top: 48px;
 	right: 20px;
@@ -1725,7 +1725,7 @@ pre.terminal {
 	user-select: none;
 }
 
-.kimi-pet canvas {
+.pet canvas {
 	width: 64px;
 	height: 64px;
 	image-rendering: pixelated;
@@ -1733,11 +1733,11 @@ pre.terminal {
 }
 
 /* Keep the pet inside the chat column when the sessions sidebar is open. */
-.app:has(.sidebar) .kimi-pet {
+.app:has(.sidebar) .pet {
 	right: 280px;
 }
 
-.kimi-name {
+.pet-name {
 	font-size: 9px;
 	letter-spacing: 0.12em;
 	text-transform: uppercase;
@@ -1745,18 +1745,18 @@ pre.terminal {
 	font-family: inherit;
 }
 
-@keyframes kimi-bob {
+@keyframes pet-bob {
 	0% { transform: translateY(0); }
 	50% { transform: translateY(-2px); }
 	100% { transform: translateY(0); }
 }
 
-.kimi-pet[data-streaming="true"] canvas {
-	animation: kimi-bob 0.6s ease-in-out infinite;
+.pet[data-streaming="true"] canvas {
+	animation: pet-bob 0.6s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.kimi-pet[data-streaming="true"] canvas {
+	.pet[data-streaming="true"] canvas {
 		animation: none;
 	}
 }

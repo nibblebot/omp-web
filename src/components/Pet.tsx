@@ -1,5 +1,6 @@
 import { createEffect, createRenderEffect, createSignal, onCleanup, onMount, type Component } from "solid-js";
-import { drawKimi, KIMI_SPRITE_SIZE, type KimiPose } from "../kimi-sprite";
+import { characterForProvider, drawCharacter } from "../characters";
+import { SPRITE_SIZE, type PetPose } from "../sprite";
 import { state } from "../state";
 
 const IDLE_BLINK_MS = 150;
@@ -9,15 +10,16 @@ const WORK_BLINK_EVERY_MS = 2400;
 const HAPPY_MS = 900;
 const idleBlinkDelay = () => 2500 + Math.random() * 2500;
 
-export const Kimi: Component = () => {
+/** Animated corner pet: cycles poses by streaming state, character by model provider. */
+export const Pet: Component = () => {
 	let canvas!: HTMLCanvasElement;
-	const [pose, setPose] = createSignal<KimiPose>("idle");
+	const [pose, setPose] = createSignal<PetPose>("idle");
 	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 	let wasStreaming = false;
 
 	onMount(() => {
 		const ctx = canvas.getContext("2d")!;
-		createRenderEffect(() => drawKimi(ctx, pose()));
+		createRenderEffect(() => drawCharacter(ctx, characterForProvider(state.model?.provider), pose()));
 	});
 
 	createEffect(() => {
@@ -28,7 +30,7 @@ export const Kimi: Component = () => {
 
 		if (state.streaming) {
 			wasStreaming = true;
-			let workFrame: KimiPose = "work1";
+			let workFrame: PetPose = "work1";
 			let blinkTimeout: number | undefined;
 			setPose(workFrame);
 			const workInterval = window.setInterval(() => {
@@ -74,9 +76,9 @@ export const Kimi: Component = () => {
 	});
 
 	return (
-		<div class="kimi-pet" data-streaming={state.streaming} title="Kimi">
-			<canvas ref={el => (canvas = el)} width={KIMI_SPRITE_SIZE} height={KIMI_SPRITE_SIZE} />
-			<span class="kimi-name">kimi</span>
+		<div class="pet" data-streaming={state.streaming} title={characterForProvider(state.model?.provider).name}>
+			<canvas ref={el => (canvas = el)} width={SPRITE_SIZE} height={SPRITE_SIZE} />
+			<span class="pet-name">{characterForProvider(state.model?.provider).name}</span>
 		</div>
 	);
 };

@@ -1,7 +1,7 @@
 import { For, Show, type Component } from "solid-js";
 import type { LiveSessionEntry } from "../protocol";
 import { attachSession, createSession, setSidebarVisible, setState, state } from "../state";
-import { KimiAvatar } from "./KimiAvatar";
+import { CharacterAvatar } from "./CharacterAvatar";
 
 /** Spawn a new live session (new server handle) and attach this tab to it. */
 function spawnSession(): void {
@@ -35,7 +35,7 @@ const SessionRow: Component<{ session: LiveSessionEntry }> = props => {
 			onClick={attach}
 			title={props.session.cwd}
 		>
-			<KimiAvatar size={16} />
+			<CharacterAvatar size={16} provider={props.session.model?.split("/")[0]} />
 			<div class="sidebar-row-main">
 				<div class="sidebar-row-top">
 					<span class="sidebar-row-title">{props.session.name ?? props.session.sessionId}</span>

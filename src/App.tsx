@@ -8,10 +8,10 @@ import { GoalPopover } from "./components/GoalPopover";
 import { HistorySearch } from "./components/HistorySearch";
 import { UsagePanel } from "./components/UsagePanel";
 import { LoginPanel } from "./components/LoginPanel";
-import { Kimi } from "./components/Kimi";
 import { MessageList } from "./components/MessageList";
 import { Modal } from "./components/Modal";
 import { ModelPicker } from "./components/ModelPicker";
+import { Pet } from "./components/Pet";
 import { PromptBox } from "./components/PromptBox";
 import { QueueBar } from "./components/QueueBar";
 import { SessionPicker } from "./components/SessionPicker";
@@ -79,7 +79,7 @@ export const App: Component = () => {
 					<SessionsSidebar />
 				</Show>
 			</div>
-			<Kimi />
+			<Pet />
 			<Show when={state.modal === "help"}>
 				<Modal title="Shortcuts" onClose={() => setState("modal", null)}>
 					<table class="shortcuts">

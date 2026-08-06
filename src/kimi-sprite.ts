@@ -7,12 +7,7 @@
  * Poses: idle/blink for at rest, work1/work2/work-blink cycled while the agent
  * is streaming, happy briefly when a stream finishes.
  */
-
-export type KimiPose = "idle" | "blink" | "work1" | "work2" | "work-blink" | "happy";
-
-export const KIMI_POSES: readonly KimiPose[] = ["idle", "blink", "work1", "work2", "work-blink", "happy"];
-
-export const KIMI_SPRITE_SIZE = 32;
+import { drawSprite, type PetPose, type SpriteArt } from "./sprite";
 
 const PALETTE: Record<string, string> = {
 	o: "#2a2333", // outline (dark plum)
@@ -31,7 +26,7 @@ const PALETTE: Record<string, string> = {
 	r: "#e85d75", // bow knot red
 };
 
-const POSES: Record<KimiPose, string[]> = {
+const POSES: Record<PetPose, string[]> = {
 	idle: [
 		"................................",
 		"........o..............o........",
@@ -238,17 +233,13 @@ const POSES: Record<KimiPose, string[]> = {
 	],
 };
 
-/** Paints `pose` onto a 32x32 canvas context (clears first). */
-export function drawKimi(ctx: CanvasRenderingContext2D, pose: KimiPose): void {
-	ctx.clearRect(0, 0, KIMI_SPRITE_SIZE, KIMI_SPRITE_SIZE);
-	const rows = POSES[pose];
-	for (let y = 0; y < KIMI_SPRITE_SIZE; y++) {
-		const row = rows[y];
-		for (let x = 0; x < KIMI_SPRITE_SIZE; x++) {
-			const color = PALETTE[row[x]];
-			if (!color) continue;
-			ctx.fillStyle = color;
-			ctx.fillRect(x, y, 1, 1);
-		}
-	}
+/** Kimi's pixel art (palette + poses) for the shared sprite engine. */
+export const KIMI_SPRITE: SpriteArt = {
+	palette: PALETTE,
+	poses: POSES,
+};
+
+/** Paints `pose` of kimi onto a 32x32 canvas context (clears first). */
+export function drawKimi(ctx: CanvasRenderingContext2D, pose: PetPose): void {
+	drawSprite(ctx, KIMI_SPRITE, pose);
 }
