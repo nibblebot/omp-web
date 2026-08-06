@@ -544,6 +544,22 @@ type Images = ImageContent[] | undefined;
 // the relay. Failures surface as an error frame.
 function fireAndForgetPrompt(entry: SessionEntry, text: string, images: Images): void {
 	entry.session.prompt(text, { images }).catch(err => broadcast({ type: "error", error: String(err) }));
+	maybeGenerateTitle(entry, text);
+}
+
+// Auto-name unnamed sessions from the first prompt, mirroring the TUI's
+// input-controller title flow: skip when already named or PI_NO_TITLE is set,
+// re-check the name before writing so a concurrent namer wins. The SDK's
+// generateSessionTitle already rejects low-signal inputs.
+function maybeGenerateTitle(entry: SessionEntry, text: string): void {
+	const { sessionManager } = entry.session;
+	if (sessionManager.getSessionName() || Bun.env.PI_NO_TITLE) return;
+	entry.session
+		.generateTitle(text)
+		.then(async title => {
+			if (title && !sessionManager.getSessionName()) await sessionManager.setSessionName(title, "auto");
+		})
+		.catch(() => {});
 }
 
 /** Runs builtin / commands (/export, /compact, …); returns true when the input was consumed. */

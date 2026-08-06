@@ -1,5 +1,7 @@
 :root {
 	color-scheme: dark;
+	--font-sans: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 	--bg: #0f1115;
 	--bg-deep: #0a0d12;
 	--panel: #151a22;
@@ -222,13 +224,11 @@ body {
 	margin: 0;
 	background: var(--bg);
 	color: var(--text);
-	font-family:
-		system-ui,
-		-apple-system,
-		"Segoe UI",
-		Roboto,
-		sans-serif;
+	font-family: var(--font-sans);
 	font-size: 1rem;
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
 }
 
 .app {
@@ -244,7 +244,7 @@ body {
 	display: flex;
 	align-items: center;
 	gap: 12px;
-	padding: 10px 0;
+	padding: 8px 0;
 	border-bottom: 1px solid var(--border);
 	font-size: 0.857rem;
 	color: var(--muted);
@@ -350,8 +350,8 @@ body {
 .thinking-block {
 	color: var(--muted);
 	border-left: 2px solid var(--border);
-	padding-left: 10px;
-	margin: 4px 0;
+	padding-left: 12px;
+	margin: 0;
 	font-size: 0.929rem;
 }
 
@@ -369,7 +369,7 @@ body {
 
 .tool-card summary {
 	cursor: pointer;
-	padding: 6px 10px;
+	padding: 8px 12px;
 	display: flex;
 	gap: 8px;
 	align-items: baseline;
@@ -402,11 +402,11 @@ body {
 
 pre {
 	margin: 0;
-	padding: 8px 10px;
+	padding: 8px 12px;
 	overflow-x: auto;
 	white-space: pre-wrap;
 	word-break: break-word;
-	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-family: var(--font-mono);
 	font-size: 0.857rem;
 }
 
@@ -417,7 +417,7 @@ pre {
 }
 
 .md code {
-	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-family: var(--font-mono);
 	font-size: 0.893rem;
 }
 
@@ -436,7 +436,7 @@ pre {
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	color: var(--text);
-	padding: 8px 10px;
+	padding: 8px 12px;
 	font: inherit;
 	max-height: 40vh;
 	overflow-y: auto;
@@ -452,7 +452,7 @@ pre {
 	border: 1px solid var(--border-strong);
 	color: var(--muted);
 	border-radius: 999px;
-	padding: 1px 10px;
+	padding: 1px 12px;
 	font-size: 0.786rem;
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
@@ -635,7 +635,7 @@ button.stop {
 
 .autocomplete-label {
 	color: var(--accent);
-	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-family: var(--font-mono);
 	font-size: 0.857rem;
 	white-space: nowrap;
 }
@@ -1088,7 +1088,7 @@ button.stop {
 
 .shortcut-key {
 	color: var(--accent);
-	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-family: var(--font-mono);
 	white-space: nowrap;
 }
 
@@ -1107,11 +1107,11 @@ button.stop {
 	display: flex;
 	gap: 8px;
 	align-items: baseline;
-	padding: 6px 10px;
+	padding: 8px 12px;
 }
 
 .bash-cmd {
-	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-family: var(--font-mono);
 	color: var(--text);
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1136,13 +1136,13 @@ button.stop {
 
 .bash-abort {
 	margin-left: auto;
-	padding: 1px 10px;
+	padding: 1px 12px;
 	font-size: 0.786rem;
 }
 
 .bash-truncated {
 	color: var(--muted-2);
-	padding: 0 10px 6px;
+	padding: 0 12px 8px;
 	font-size: 0.786rem;
 }
 
@@ -1346,7 +1346,7 @@ button.stop {
 	display: flex;
 	gap: 8px;
 	align-items: baseline;
-	padding: 6px 10px;
+	padding: 8px 12px;
 	overflow: hidden;
 }
 
@@ -1364,7 +1364,7 @@ button.stop {
 .tool-collapsed-note {
 	color: var(--muted-2);
 	font-size: 0.786rem;
-	padding: 2px 10px 6px;
+	padding: 2px 12px 8px;
 }
 
 pre.terminal {
@@ -1373,7 +1373,7 @@ pre.terminal {
 }
 
 .diff-view {
-	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-family: var(--font-mono);
 	font-size: 0.857rem;
 	padding: 4px 0;
 	overflow-x: auto;
@@ -1381,7 +1381,7 @@ pre.terminal {
 
 .diff-line {
 	white-space: pre;
-	padding: 0 10px;
+	padding: 0 12px;
 }
 
 .diff-line[data-type="add"] {
@@ -1408,12 +1408,12 @@ pre.terminal {
 .diff-collapse {
 	color: var(--muted-2);
 	font-size: 0.786rem;
-	padding: 1px 10px 1px 24px;
+	padding: 1px 12px 1px 24px;
 }
 
 .write-view,
 .read-body {
-	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-family: var(--font-mono);
 	font-size: 0.857rem;
 	padding: 4px 0;
 	overflow-x: auto;
@@ -1421,7 +1421,7 @@ pre.terminal {
 
 .write-line {
 	white-space: pre;
-	padding: 0 10px;
+	padding: 0 12px;
 	color: var(--text);
 }
 
@@ -1435,7 +1435,7 @@ pre.terminal {
 }
 
 .todo-body {
-	padding: 4px 10px 8px;
+	padding: 4px 12px 8px;
 }
 
 .todo-phase-name {
@@ -1464,9 +1464,9 @@ pre.terminal {
 }
 
 .search-body {
-	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-family: var(--font-mono);
 	font-size: 0.857rem;
-	padding: 4px 10px 8px;
+	padding: 4px 12px 8px;
 	max-height: 320px;
 	overflow-y: auto;
 }
@@ -1493,7 +1493,7 @@ pre.terminal {
 	display: flex;
 	flex-direction: column;
 	gap: 3px;
-	padding: 4px 10px 8px;
+	padding: 4px 12px 8px;
 }
 
 .websearch-link {
@@ -1508,7 +1508,7 @@ pre.terminal {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
-	padding: 4px 10px 8px;
+	padding: 4px 12px 8px;
 }
 
 .subagent-row {
@@ -1603,7 +1603,7 @@ pre.terminal {
 
 .compaction-item summary {
 	cursor: pointer;
-	padding: 6px 10px;
+	padding: 8px 12px;
 	color: var(--muted-3);
 }
 
@@ -1624,6 +1624,11 @@ pre.terminal {
 	height: 64px;
 	image-rendering: pixelated;
 	filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+}
+
+/* Keep the pet inside the chat column when the sessions sidebar is open. */
+.app:has(.sidebar) .kimi-pet {
+	right: 280px;
 }
 
 .kimi-name {
@@ -1761,19 +1766,22 @@ pre.terminal {
 	min-height: 0;
 	border-left: 1px solid var(--border);
 	background: var(--bg-deep);
-	font-size: 0.857rem;
+	font-size: 0.8125rem;
+	line-height: 1.4;
 }
 
 .sidebar-header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
+	gap: 4px;
 	padding: 8px 10px;
 	border-bottom: 1px solid var(--border);
 }
 
 .sidebar-title {
 	font-weight: 600;
+	letter-spacing: 0.02em;
 	color: var(--muted-3);
 }
 
@@ -1793,7 +1801,9 @@ pre.terminal {
 }
 
 .sidebar-stats {
-	padding: 6px 10px;
+	padding: 4px 10px 6px;
+	font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+	font-size: 0.75rem;
 	color: var(--muted);
 	border-bottom: 1px solid var(--border);
 	white-space: nowrap;
@@ -1807,14 +1817,23 @@ pre.terminal {
 	padding: 6px;
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: 2px;
 }
 
 .sidebar-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
 	padding: 6px 8px;
 	border-radius: 6px;
 	border: 1px solid transparent;
 	cursor: pointer;
+}
+
+.sidebar-row > canvas {
+	flex: none;
+	margin-top: 1px;
+	border-radius: 3px;
 }
 
 .sidebar-row:hover {
@@ -1826,6 +1845,14 @@ pre.terminal {
 	border-color: var(--accent-border);
 }
 
+.sidebar-row-main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
 .sidebar-row-top {
 	display: flex;
 	align-items: center;
@@ -1835,6 +1862,7 @@ pre.terminal {
 
 .sidebar-row-title {
 	font-weight: 600;
+	font-size: 0.8125rem;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -1849,37 +1877,42 @@ pre.terminal {
 	box-shadow: 0 0 5px var(--success);
 }
 
-.sidebar-row-meta {
-	color: var(--muted-2);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.sidebar-ctx {
+.sidebar-row-data {
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	margin-top: 4px;
+	font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+	font-size: 0.6875rem;
+	color: var(--muted-2);
+	white-space: nowrap;
 }
 
 .sidebar-ctx-bar {
-	flex: 1;
-	height: 4px;
+	display: inline-block;
+	width: 40px;
+	height: 3px;
 	border-radius: 2px;
-	background: var(--panel-2);
+	background: var(--border);
 	overflow: hidden;
 }
 
 .sidebar-ctx-fill {
+	display: block;
 	height: 100%;
 	background: var(--accent);
 	border-radius: 2px;
 }
 
 .sidebar-ctx-pct {
-	color: var(--muted-2);
-	font-size: 0.786rem;
+	flex: none;
+}
+
+.sidebar-data-sep {
+	color: var(--muted);
+	opacity: 0.6;
+}
+
+.sidebar-sub-count {
 	flex: none;
 }
 

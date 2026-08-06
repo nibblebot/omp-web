@@ -1,6 +1,7 @@
 import { For, Show, type Component } from "solid-js";
 import type { LiveSessionEntry } from "../protocol";
 import { attachSession, createSession, setSidebarVisible, setState, state } from "../state";
+import { KimiAvatar } from "./KimiAvatar";
 
 /** Spawn a new live session (new server handle) and attach this tab to it. */
 function spawnSession(): void {
@@ -34,26 +35,36 @@ const SessionRow: Component<{ session: LiveSessionEntry }> = props => {
 			onClick={attach}
 			title={props.session.cwd}
 		>
-			<div class="sidebar-row-top">
-				<span class="sidebar-row-title">{props.session.name ?? props.session.sessionId}</span>
-				<Show when={props.session.isStreaming}>
-					<span class="sidebar-stream-dot" title="streaming" />
-				</Show>
+			<KimiAvatar size={16} />
+			<div class="sidebar-row-main">
+				<div class="sidebar-row-top">
+					<span class="sidebar-row-title">{props.session.name ?? props.session.sessionId}</span>
+					<Show when={props.session.isStreaming}>
+						<span class="sidebar-stream-dot" title="streaming" />
+					</Show>
+				</div>
+				<div class="sidebar-row-data">
+					<Show when={props.session.contextUsage}>
+						{u => (
+							<>
+								<span class="sidebar-ctx-bar">
+									<span
+										class="sidebar-ctx-fill"
+										style={{ width: `${Math.min(100, u().percent)}%` }}
+									/>
+								</span>
+								<span class="sidebar-ctx-pct" title={`${u().tokens} / ${u().contextWindow} tokens`}>
+									{u().percent.toFixed(0)}%
+								</span>
+								<span class="sidebar-data-sep">·</span>
+							</>
+						)}
+					</Show>
+					<span class="sidebar-sub-count" title="subagents (placeholder)">
+						0 sub
+					</span>
+				</div>
 			</div>
-			<div class="sidebar-row-meta">
-				{props.session.model ?? "no model"}
-				{props.session.thinkingLevel && props.session.thinkingLevel !== "inherit" && ` · ${props.session.thinkingLevel}`}
-			</div>
-			<Show when={props.session.contextUsage}>
-				{u => (
-					<div class="sidebar-ctx" title={`${u().tokens} / ${u().contextWindow} tokens`}>
-						<div class="sidebar-ctx-bar">
-							<div class="sidebar-ctx-fill" style={{ width: `${Math.min(100, u().percent)}%` }} />
-						</div>
-						<span class="sidebar-ctx-pct">{u().percent.toFixed(0)}%</span>
-					</div>
-				)}
-			</Show>
 		</div>
 	);
 };
