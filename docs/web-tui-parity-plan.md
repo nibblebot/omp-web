@@ -23,7 +23,8 @@ cannot offer. Written 2026-08-05 from three ground inventories:
 - [ ] Phase 8 — Session command parity
 - [ ] Phase 9 — Status, modes & usage parity
 - [ ] Phase 10 — Tool rendering completion + inline images
-- [ ] Phase 11 — Web-plus enhancements
+- [x] Phase 11 — Web-plus enhancements (complete 2026-08-06: desktop
+  notifications, `/btw` side panel, message hover actions, export themes)
 - [ ] Phase 12 — Parity audit sweep & docs
 
 ## Architecture (in place; every phase only adds rows/frames)
@@ -175,16 +176,39 @@ streams output live; `$print(2+2)` runs python.
 
 ## Phase 11 — Web-plus enhancements
 
+> **Status: complete (2026-08-06).** All four items landed; see the Progress
+> checkbox. Deviations from the sketch, recorded inline:
+
 1. **Desktop notifications**: on `agent_end` (and error notices) when
    `document.hidden`, fire a `Notification` (opt-in toggle in SettingsPopover,
    permission requested on enable). TUI parity: OSC notification on turn complete.
+   - Implemented in `src/state.ts` (`maybeNotify`/`setNotifyEnabled`); the
+     toggle persists under `omp.notifyEnabled`; body = first ~80 code points of
+     the last assistant text (`truncateHead`, unit-tested in
+     `src/notify.test.ts`). Non-secure contexts and denied/revoked permission
+     are silent no-ops.
 2. **`/btw` side-question**: relay `runEphemeralTurn`; `/btw <question>` opens a
    side panel that streams the ephemeral answer (onTextDelta → unicast frames)
    without touching the transcript. TUI has a btw panel; web gets a dismissible
    side sheet (affordance: readable markdown, not an alt-screen).
+   - Relay: `runEphemeralTurn` METHOD row broadcasts `ephemeral_delta`
+     session-scoped frames (streamId = client btw panel id) and resolves the
+     call with `{replyText}` — the Phase 10 `bash_chunk` pattern, which was
+     already generic (every METHOD row takes a third `streamId` arg).
+   - Abort: wired for real — the row backs each in-flight side turn with a
+     per-(session, streamId) `AbortController`; `abortEphemeral` cancels it via
+     the SDK `signal`. `closeBtw`/panel stop send that row.
+   - `AgentMessage` user payloads carry no `entryId`, so branch resolution is
+     match-by-text against `getUserMessagesForBranching()` (see item 3).
 3. **Message hover actions**: per-message toolbar — copy, branch-from-here
    (`branch(entryId)` directly, skipping the picker when the target is obvious).
+   - User messages: hover toolbar with branch + copy; assistant keeps its copy
+     button (now styled via the shared `.msg-copy-btn`). Because pi-ai's
+     `UserMessage` has no id field, the entryId is resolved by exact-text match
+     against the `getBranchMessages` list; unmatched messages warn and no-op.
 4. **Export themes**: extend `exportHtml` row with the `useUserThemes` flag.
+   - `/export --themes` → `exportHtml [undefined, true]`; bare `/export`
+     unchanged. The row normalizes a null path back to `undefined`.
 
 Verification: typecheck + tests; browser: enable notifications, background the tab,
 run a prompt → notification fires; `/btw what does x do` streams in the side sheet;

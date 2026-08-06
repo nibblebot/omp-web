@@ -124,6 +124,10 @@ export type WebMethodName =
 	| "abortBash"
 	| "python"
 	| "abortEval"
+	// Phase 11: /btw side-channel Q&A (runEphemeralTurn never touches the
+	// transcript); abortEphemeral cancels the in-flight side turn via its signal.
+	| "runEphemeralTurn"
+	| "abortEphemeral"
 	| "getSessionStats"
 	| "exportHtml"
 	| "switchSession"
@@ -169,6 +173,9 @@ export type SessionScopedFrame =
 	// bash-item id); broadcast session-scoped so every tab stays consistent.
 	| { type: "bash_chunk"; id: number; text: string }
 	| { type: "python_chunk"; id: number; text: string }
+	// Phase 11: live output of an in-flight /btw side question (id = the
+	// client's btw streamId); broadcast session-scoped like bash_chunk.
+	| { type: "ephemeral_delta"; id: number; text: string }
 	// Unicast answer to a "call" command.
 	| { type: "call_result"; id: string; ok: boolean; data?: unknown; error?: string }
 	| { type: "available_commands"; commands: AvailableSlashCommand[] }

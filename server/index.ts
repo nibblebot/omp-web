@@ -100,6 +100,21 @@ function notifyEvent(entry: SessionEntry, message: string, level: "info" | "warn
 	broadcastTo(entry.handle, { type: "event", event: { type: "notice", level, message } });
 }
 
+// Phase 11: AbortControllers for in-flight runEphemeralTurn calls, keyed by
+// (session, streamId). abortEphemeral cancels via the SDK signal — the same
+// side-channel pattern bash/python use, but those have dedicated SDK aborters.
+const ephemeralAborts = new Map<SessionEntry, Map<number, AbortController>>();
+
+function setEphemeralAbort(entry: SessionEntry, streamId: number, controller: AbortController): void {
+	let byStream = ephemeralAborts.get(entry);
+	if (!byStream) ephemeralAborts.set(entry, (byStream = new Map()));
+	byStream.set(streamId, controller);
+}
+
+function clearEphemeralAbort(entry: SessionEntry, streamId: number): void {
+	ephemeralAborts.get(entry)?.delete(streamId);
+}
+
 // ---------------------------------------------------------------------------
 // ExtensionUIContext (plan §1.7): the dialog subset round-trips over the
 // socket as ui_request/ui_response frames; terminal-only surface is stubbed.
@@ -742,8 +757,38 @@ const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[], stre
 	abortEval: async entry => {
 		entry.session.abortEval();
 	},
+	// Phase 11: /btw side question. runEphemeralTurn never touches the
+	// transcript; onTextDelta relays as session-scoped ephemeral_delta frames
+	// (streamId = the client's btw panel id), and the call resolves with the
+	// final replyText. A per-streamId AbortController backs abortEphemeral.
+	runEphemeralTurn: (entry, a, streamId) => {
+		const controller = new AbortController();
+		if (streamId !== undefined) setEphemeralAbort(entry, streamId, controller);
+		return entry.session
+			.runEphemeralTurn({
+				promptText: String(a[0] ?? ""),
+				signal: controller.signal,
+				onTextDelta: chunk => {
+					if (streamId !== undefined) broadcastTo(entry.handle, { type: "ephemeral_delta", id: streamId, text: chunk });
+				},
+			})
+			.then(
+				result => {
+					if (streamId !== undefined) clearEphemeralAbort(entry, streamId);
+					return { replyText: result.replyText };
+				},
+				err => {
+					if (streamId !== undefined) clearEphemeralAbort(entry, streamId);
+					throw err;
+				},
+			);
+	},
+	abortEphemeral: async (entry, _a, streamId) => {
+		if (streamId === undefined) return;
+		ephemeralAborts.get(entry)?.get(streamId)?.abort();
+	},
 	getSessionStats: async entry => entry.session.getSessionStats(),
-	exportHtml: async (entry, a) => ({ path: await entry.session.exportToHtml(a[0] as string | undefined) }),
+	exportHtml: async (entry, a) => ({ path: await entry.session.exportToHtml(a[0] ? String(a[0]) : undefined, a[1] === true) }),
 	getBranchMessages: async entry => entry.session.getUserMessagesForBranching(),
 	getLoginProviders: async () =>
 		getOAuthProviders().map(provider => ({

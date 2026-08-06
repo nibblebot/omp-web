@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	exportDispatch,
 	goalDispatch,
 	handoffArgs,
 	LOCAL_COMMANDS,
@@ -150,5 +151,32 @@ describe("goal/plan local commands", () => {
 		expect(planDispatch().args[0].enabled).toBe(before);
 		// Restore for sibling tests.
 		setState("planModeEnabled", before);
+	});
+});
+
+describe("Phase 11 web-plus commands", () => {
+	test("parseInput classifies /btw with and without a question", () => {
+		expect(parseInput("/btw")).toEqual({ kind: "slash", name: "btw", args: "" });
+		expect(parseInput("/btw what does this function do")).toEqual({
+			kind: "slash",
+			name: "btw",
+			args: "what does this function do",
+		});
+		// parseInput keeps the trailing space verbatim (dispatchInput trims).
+		expect(parseInput("/BTW  explain  main() ")).toEqual({ kind: "slash", name: "btw", args: "explain  main() " });
+	});
+
+	test("LOCAL_COMMANDS covers the Phase 11 set", () => {
+		expect(LOCAL_COMMANDS.btw).toBeFunction();
+		expect(LOCAL_COMMANDS.export).toBeFunction();
+	});
+
+	test("/export --themes passes useUserThemes, bare /export does not", () => {
+		expect(exportDispatch("--themes")).toEqual({ useThemes: true });
+		expect(exportDispatch("  --themes  ")).toEqual({ useThemes: true });
+		expect(exportDispatch("--themes --verbose")).toEqual({ useThemes: true });
+		expect(exportDispatch("")).toEqual({ useThemes: false });
+		expect(exportDispatch("--verbose")).toEqual({ useThemes: false });
+		expect(exportDispatch("themes")).toEqual({ useThemes: false });
 	});
 });

@@ -83,6 +83,9 @@ export function argsSummary(args: unknown): string {
 /** localStorage key for the sessions sidebar visibility toggle. */
 const SIDEBAR_KEY = "omp.sidebarVisible";
 
+/** localStorage key for the Phase 11 desktop-notifications toggle. */
+const NOTIFY_KEY = "omp.notifyEnabled";
+
 export const [state, setState] = createStore({
 	items: [] as ChatItem[],
 	live: { active: false, blocks: [] as Block[] },
@@ -139,6 +142,15 @@ export const [state, setState] = createStore({
 	reveal: false,
 	soften: false,
 	error: null as string | null,
+	// Phase 11: desktop notifications on turn completion while hidden
+	// (persisted toggle; firing is gated on Notification support + permission).
+	notifyEnabled:
+		typeof localStorage !== "undefined" && typeof Notification !== "undefined"
+			? localStorage.getItem(NOTIFY_KEY) === "true"
+			: false,
+	// Phase 11: /btw side-panel session. streamId routes ephemeral_delta
+	// frames to this panel; the panel never appears in the transcript.
+	btw: null as null | { question: string; reply: string; streaming: boolean; streamId: number; error?: string },
 });
 
 let nextId = 1;
@@ -175,6 +187,100 @@ type AssistantContent = Extract<AgentMessage, { role: "assistant" }>["content"];
 function userText(content: UserContent): string {
 	if (typeof content === "string") return tabsToSpaces(content);
 	return tabsToSpaces(content.map(c => (c.type === "text" ? c.text : "[image]")).join("\n"));
+}
+
+/**
+ * First ~max code points of a string, never splitting a surrogate pair —
+ * the desktop-notification body is capped so the OS banner stays readable.
+ */
+export function truncateHead(s: string, max = 80): string {
+	if (s.length <= max) return s;
+	let i = 0;
+	while (i < max && i < s.length) {
+		const c = s.charCodeAt(i);
+		i += c >= 0xd800 && c <= 0xdbff ? 2 : 1;
+	}
+	return s.slice(0, i);
+}
+
+/** Last settled assistant message's visible text (thinking excluded). */
+function lastAssistantText(): string {
+	for (let i = state.items.length - 1; i >= 0; i--) {
+		const it = state.items[i];
+		if (it.kind === "assistant") {
+			const visible = it.blocks.filter(b => b.kind !== "thinking");
+			return (visible.length > 0 ? visible : it.blocks).map(b => b.text).join("\n\n");
+		}
+	}
+	return "";
+}
+
+/**
+ * Phase 11: desktop notification, fired only when the tab is hidden and the
+ * user opted in with granted permission. Non-secure contexts (typeof
+ * Notification === "undefined") and denied/revoked permission are silent
+ * no-ops — mirroring the TUI's OSC turn-complete notification.
+ */
+function maybeNotify(title: string, body: string): void {
+	if (!state.notifyEnabled || !document.hidden) return;
+	if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+	try {
+		new Notification(title, body ? { body } : undefined);
+	} catch {
+		// Permission revoked between checks: silent no-op.
+	}
+}
+
+/** Persisted SettingsPopover toggle; requests permission on first enable. */
+export function setNotifyEnabled(enabled: boolean): void {
+	if (typeof localStorage !== "undefined") localStorage.setItem(NOTIFY_KEY, String(enabled));
+	setState("notifyEnabled", enabled);
+	if (enabled && typeof Notification !== "undefined" && Notification.permission === "default") {
+		// Denied is handled by the caller simply not getting notifications;
+		// the request promise can reject in non-secure contexts.
+		void Notification.requestPermission().catch(() => {});
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11: /btw side panel (runEphemeralTurn relay). The panel owns a
+// streamId that routes ephemeral_delta frames and abortEphemeral; nothing
+// here touches the transcript or the main turn.
+// ---------------------------------------------------------------------------
+let nextEphemeralStreamId = 1;
+
+/** Open the /btw panel and (with a question) start a side-channel turn. */
+export function askBtw(question: string): void {
+	const q = question.trim();
+	if (!q) {
+		// Bare /btw: open the panel empty; the hint explains the usage.
+		setState("btw", { question: "", reply: "", streaming: false, streamId: -1 });
+		return;
+	}
+	const streamId = nextEphemeralStreamId++;
+	setState("btw", { question: q, reply: "", streaming: true, streamId });
+	// Long-running side turn: no timeout (0); the panel's stop/close aborts it.
+	void call("runEphemeralTurn", [q], 0, streamId)
+		.then(result => {
+			const replyText = (result as { replyText?: string } | null)?.replyText ?? "";
+			setState("btw", prev =>
+				prev && prev.streamId === streamId ? { ...prev, reply: replyText, streaming: false } : prev,
+			);
+		})
+		.catch(err => {
+			setState("btw", prev =>
+				prev && prev.streamId === streamId ? { ...prev, streaming: false, error: String(err) } : prev,
+			);
+		});
+}
+
+/** Close the /btw panel; aborts the in-flight side turn server-side. */
+export function closeBtw(): void {
+	const current = state.btw;
+	setState("btw", null);
+	if (current?.streaming && current.streamId >= 0) {
+		void call("abortEphemeral", [], 5_000, current.streamId).catch(() => {});
+	}
 }
 
 function pushItem(item: ChatItem): void {
@@ -335,6 +441,8 @@ export function applyEvent(e: AgentSessionEvent): void {
 			pendingDeltas.clear();
 			setState("streaming", false);
 			setState("live", "active", false);
+			// Phase 11: desktop notification while the tab is hidden (OSC parity).
+			maybeNotify("Turn complete", truncateHead(lastAssistantText(), 80));
 			break;
 		case "message_start": {
 			const msg = e.message;
@@ -445,6 +553,9 @@ export function applyEvent(e: AgentSessionEvent): void {
 		}
 		case "notice":
 			pushItem({ kind: "notice", id: nextId++, level: e.level, message: e.message });
+			// Phase 11: error-level notices (turn failure, failed retry, …) get
+			// a notification too; the TUI surfaces these with an error OSC.
+			if (e.level === "error") maybeNotify("Turn stopped with error", truncateHead(e.message, 80));
 			break;
 		case "thinking_level_changed":
 			setState("thinkingLevel", e.thinkingLevel ?? undefined);
@@ -858,6 +969,7 @@ function resetSessionView(): void {
 		loginUrl: null,
 		loginCodeRequest: null,
 		uiRequest: null,
+		btw: null,
 	});
 }
 
@@ -923,6 +1035,14 @@ export function connect(): void {
 			case "python_chunk":
 				appendBashChunk(frame.id, frame.text);
 				break;
+			case "ephemeral_delta": {
+				// Phase 11: /btw side-panel stream; route by streamId, ignore
+				// stale frames from a superseded question.
+				if (state.btw?.streaming && frame.id === state.btw.streamId) {
+					setState("btw", "reply", reply => reply + frame.text);
+				}
+				break;
+			}
 			case "call_result": {
 				const pending = pendingCalls.get(frame.id);
 				if (!pending) break; // unknown id (timed out or stale): ignore

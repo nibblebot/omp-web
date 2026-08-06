@@ -1,5 +1,5 @@
 import { createSignal, type Component } from "solid-js";
-import { call, setState, state } from "../state";
+import { call, setNotifyEnabled, setState, state } from "../state";
 import {
 	currentFontSize,
 	currentThemePreference,
@@ -48,6 +48,14 @@ export const SettingsPopover: Component<{ onClose: () => void }> = props => {
 						onChange={e => {
 							void call("setAutoRetry", [e.currentTarget.checked]).catch(err => setState("error", String(err)));
 						}}
+					/>
+				</label>
+				<label class="settings-row">
+					desktop notifications
+					<input
+						type="checkbox"
+						checked={state.notifyEnabled}
+						onChange={e => setNotifyEnabled(e.currentTarget.checked)}
 					/>
 				</label>
 				<label class="settings-row">

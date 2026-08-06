@@ -1,5 +1,5 @@
 import type { ImageArg } from "./protocol";
-import { addBashItem, call, pushCompaction, pushNotice, resolveBashItem, setState, state, type BashResultLike } from "./state";
+import { addBashItem, askBtw, call, pushCompaction, pushNotice, resolveBashItem, setState, state, type BashResultLike } from "./state";
 
 export type InputMode = "enter" | "followup";
 
@@ -42,8 +42,18 @@ function confirmNewSession(): void {
 	void call("newSession").catch(showError);
 }
 
-function exportSession(): void {
-	void call("exportHtml")
+/**
+ * `/export [--themes]` — the flag passes useUserThemes to exportToHtml so the
+ * exported HTML carries the active theme instead of the default look.
+ */
+export function exportDispatch(args: string): { useThemes: boolean } {
+	// Hyphens are non-word chars, so \b won't anchor around "--themes".
+	return { useThemes: /(^|\s)--themes($|\s)/.test(args) };
+}
+
+function exportSession(args: string): void {
+	const { useThemes } = exportDispatch(args);
+	void call("exportHtml", [undefined, useThemes])
 		.then(result => {
 			const path = (result as { path?: string } | null)?.path;
 			if (path) pushNotice("info", "Exported session HTML", `/download?path=${encodeURIComponent(path)}`);
@@ -153,6 +163,9 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	resume: () => setState("modal", "sessions"),
 	tree: () => setState("modal", "branch"),
 	branch: () => setState("modal", "branch"),
+	// Phase 11: /btw <question> asks a side-channel question in the panel
+	// (never the transcript); bare /btw opens the panel empty.
+	btw: askBtw,
 	export: exportSession,
 	retry: () =>
 		void call("retry")

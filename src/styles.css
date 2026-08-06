@@ -329,6 +329,8 @@ body {
 	padding: 8px 12px;
 	max-width: 80%;
 	white-space: pre-wrap;
+	/* Phase 11: anchors the hover toolbar above the bubble. */
+	position: relative;
 }
 
 .msg-assistant {
@@ -668,6 +670,66 @@ button.stop {
 	margin: 0 0 10px;
 	font-size: 1rem;
 	color: var(--muted-3);
+}
+
+/* Phase 11: /btw side-panel sheet (Modal-based, wide enough for markdown). */
+.btw-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	min-width: 420px;
+	max-width: 560px;
+}
+
+.btw-question {
+	background: var(--accent-dim);
+	border-radius: 10px;
+	padding: 8px 12px;
+	white-space: pre-wrap;
+}
+
+.btw-reply {
+	min-height: 60px;
+	max-height: 50vh;
+	overflow-y: auto;
+}
+
+.btw-cursor {
+	display: inline-block;
+	width: 8px;
+	height: 1em;
+	vertical-align: -0.15em;
+	margin-left: 2px;
+	background: var(--accent);
+	animation: btw-blink 1s steps(2, start) infinite;
+}
+
+@keyframes btw-blink {
+	to {
+		visibility: hidden;
+	}
+}
+
+.btw-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.btw-abort,
+.btw-close {
+	background: var(--btn);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text);
+	font-size: 0.857rem;
+	padding: 4px 12px;
+	cursor: pointer;
+}
+
+.btw-abort:hover,
+.btw-close:hover {
+	background: var(--hover);
 }
 
 .shortcuts {
@@ -1769,6 +1831,39 @@ pre.terminal {
 .msg-user-images .img-thumb img {
 	max-width: 140px;
 	max-height: 110px;
+}
+
+/* Phase 11: per-message hover toolbar (user: branch + copy; assistant: copy). */
+.msg-toolbar {
+	position: absolute;
+	top: -8px;
+	right: 8px;
+	display: flex;
+	gap: 6px;
+	opacity: 0;
+	transition: opacity 0.12s ease;
+	z-index: 2;
+}
+
+.msg-user:hover .msg-toolbar {
+	opacity: 1;
+}
+
+.msg-copy-btn,
+.msg-branch-btn {
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--muted-2);
+	font-size: 0.786rem;
+	padding: 2px 8px;
+	cursor: pointer;
+}
+
+.msg-copy-btn:hover,
+.msg-branch-btn:hover {
+	background: var(--hover);
+	color: var(--text);
 }
 
 pre.terminal.eval-code {

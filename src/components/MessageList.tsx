@@ -5,6 +5,7 @@ import type { ImageArg } from "../protocol";
 import { imageDataUrl } from "../images";
 import { FullImageOverlay } from "./tools/ImageScan";
 import { copyText, Markdown } from "./Markdown";
+import { pushNotice, setState } from "../state";
 import { ToolCard } from "./ToolCard";
 import { buildUsageRow, formatUsageRow } from "../usage";
 
@@ -86,8 +87,52 @@ export const MessageList: Component = () => {
 						<Match when={item.kind === "user" && item}>
 							{user => {
 								const images = () => user().images ?? [];
+								const [copied, setCopied] = createSignal(false);
+								// Phase 11: branch-from-here. AgentMessage user
+								// payloads carry no entryId (pi-ai UserMessage has
+								// no id field), so resolve it via the branching
+								// list and match by exact text.
+								const branchFromHere = (text: string) => {
+									void call("getBranchMessages")
+										.then(msgs => {
+											const entry = (msgs as Array<{ entryId: string; text: string }>).find(m => m.text === text);
+											if (!entry) {
+												pushNotice("warning", "No branch point found for this message.");
+												return undefined;
+											}
+											return call("branch", [entry.entryId]);
+										})
+										.then(result => {
+											const r = result as { text?: string; cancelled?: boolean } | null;
+											if (!r || r.cancelled) return;
+											pushNotice("info", `branched at: ${(r.text ?? text).slice(0, 200)}`);
+										})
+										.catch(err => setState("error", String(err)));
+								};
 								return (
 									<div class="msg-user">
+										<div class="msg-toolbar">
+											<button
+												class="msg-branch-btn"
+												title="Branch from here"
+												disabled={!user().text}
+												onClick={() => branchFromHere(user().text)}
+											>
+												branch
+											</button>
+											<button
+												class="msg-copy-btn"
+												title="Copy message text"
+												onClick={() => {
+													void copyText(user().text).then(ok => {
+														setCopied(ok);
+														setTimeout(() => setCopied(false), 1200);
+													});
+												}}
+											>
+												{copied() ? "copied" : "copy"}
+											</button>
+										</div>
 										{user().text && <div class="msg-user-text">{user().text}</div>}
 										<Show when={images().length > 0}>
 											<div class="msg-user-images">

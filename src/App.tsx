@@ -1,6 +1,7 @@
 import { onMount, Show, type Component } from "solid-js";
 import { AskDialog } from "./components/AskDialog";
 import { BranchPicker } from "./components/BranchPicker";
+import { BtwPanel } from "./components/BtwPanel";
 import { GoalPopover } from "./components/GoalPopover";
 import { HistorySearch } from "./components/HistorySearch";
 import { UsagePanel } from "./components/UsagePanel";
@@ -121,6 +122,7 @@ export const App: Component = () => {
 				<UsagePanel onClose={() => setState("modal", null)} />
 			</Show>
 			<AskDialog />
+			<BtwPanel />
 		</div>
 	);
 };
