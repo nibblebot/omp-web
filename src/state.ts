@@ -4,6 +4,7 @@ import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { ClientCommand, ImageArg, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry } from "./protocol";
+import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
 
 export type Block = { kind: "text" | "thinking"; text: string };
@@ -13,6 +14,8 @@ export type BashItem = {
 	id: number;
 	command: string;
 	dimmed: boolean;
+	/** "python" for $/$$ items; the same card/streaming path as bang-shell. */
+	lang: "bash" | "python";
 	status: "running" | "done";
 	output: string;
 	exitCode: number | null;
@@ -30,9 +33,9 @@ export type CompactionItem = {
 	errorMessage?: string;
 };
 export type ChatItem =
-	| { kind: "user"; id: number; text: string }
+	| { kind: "user"; id: number; text: string; images?: ImageArg[] }
 	| { kind: "assistant"; id: number; blocks: Block[]; usage?: UsageLike; ttft?: number; duration?: number }
-	| { kind: "tool"; id: number; toolCallId: string; name: string; args: unknown; status: ToolStatus; output: string }
+	| { kind: "tool"; id: number; toolCallId: string; name: string; args: unknown; status: ToolStatus; output: string; images?: ImageArg[] }
 	| BashItem
 	| CompactionItem
 	| { kind: "notice"; id: number; level: string; message: string; href?: string };
@@ -186,11 +189,28 @@ export function pushCompaction(item: Omit<CompactionItem, "kind" | "id">): void 
 	pushItem({ kind: "compaction", id: nextId++, ...item });
 }
 
-/** Bang-shell item: appears immediately as a spinner, resolved by the bash call. */
-export function addBashItem(command: string, dimmed: boolean): number {
+/** Bang-shell/python item: appears immediately as a spinner, resolved by the call. */
+export function addBashItem(command: string, dimmed: boolean, lang: "bash" | "python" = "bash"): number {
 	const id = nextId++;
-	pushItem({ kind: "bash", id, command, dimmed, status: "running", output: "", exitCode: null, truncated: false });
+	pushItem({ kind: "bash", id, command, dimmed, lang, status: "running", output: "", exitCode: null, truncated: false });
 	return id;
+}
+
+/** Live chunk from the server relay: append to the in-flight item's output. */
+export function appendBashChunk(id: number, text: string): void {
+	if (!text) return;
+	const index = state.items.findIndex(it => it.kind === "bash" && it.id === id);
+	if (index < 0) return;
+	setState(
+		"items",
+		produce(items => {
+			const item = items[index];
+			// Chunks only stream while running; the completion result is
+			// authoritative and replaces the buffered output wholesale.
+			if (item?.kind !== "bash" || item.status !== "running") return;
+			item.output = capTail(item.output + tabsToSpaces(text), 8000);
+		}),
+	);
 }
 
 export interface BashResultLike {
@@ -319,7 +339,13 @@ export function applyEvent(e: AgentSessionEvent): void {
 		case "message_start": {
 			const msg = e.message;
 			if (msg.role === "user") {
-				pushItem({ kind: "user", id: nextId++, text: userText(msg.content) });
+				const images = scanImages(msg.content);
+				pushItem({
+					kind: "user",
+					id: nextId++,
+					text: userText(msg.content),
+					...(images.length > 0 ? { images } : {}),
+				});
 			} else if (msg.role === "assistant") {
 				setState("live", { active: true, blocks: [] });
 			}
@@ -391,7 +417,11 @@ export function applyEvent(e: AgentSessionEvent): void {
 					"items",
 					produce(items => {
 						const item = items[index];
-						if (item?.kind === "tool") item.output = capTail(tabsToSpaces(extractText(e.partialResult)), 8000);
+						if (item?.kind === "tool") {
+							item.output = capTail(tabsToSpaces(extractText(e.partialResult)), 8000);
+							const images = scanImages(e.partialResult);
+							if (images.length > 0) item.images = images;
+						}
 					}),
 				);
 			break;
@@ -406,6 +436,8 @@ export function applyEvent(e: AgentSessionEvent): void {
 						if (item?.kind === "tool") {
 							item.status = e.isError ? "error" : "done";
 							item.output = capTail(tabsToSpaces(extractText(e.result)), 8000);
+							const images = scanImages(e.result);
+							if (images.length > 0) item.images = images;
 						}
 					}),
 				);
@@ -495,7 +527,13 @@ export function loadHistory(messages: AgentMessage[]): void {
 	setState({ items: [], live: { active: false, blocks: [] }, retryInfo: null });
 	for (const msg of messages) {
 		if (msg.role === "user") {
-			pushItem({ kind: "user", id: nextId++, text: userText(msg.content) });
+			const images = scanImages(msg.content);
+			pushItem({
+				kind: "user",
+				id: nextId++,
+				text: userText(msg.content),
+				...(images.length > 0 ? { images } : {}),
+			});
 		} else if (msg.role === "assistant") {
 			const meta = msg as { usage?: UsageLike; ttft?: number; duration?: number };
 			pushItem({
@@ -523,6 +561,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 			const index = findToolIndex(msg.toolCallId);
 			const output = capTail(tabsToSpaces(extractText(msg)), 8000);
 			const status: ToolStatus = msg.isError ? "error" : "done";
+			const images = scanImages(msg);
 			if (index >= 0) {
 				setState(
 					"items",
@@ -531,11 +570,21 @@ export function loadHistory(messages: AgentMessage[]): void {
 						if (item?.kind === "tool") {
 							item.output = output;
 							item.status = status;
+							if (images.length > 0) item.images = images;
 						}
 					}),
 				);
 			} else {
-				pushItem({ kind: "tool", id: nextId++, toolCallId: msg.toolCallId, name: msg.toolName, args: null, status, output });
+				pushItem({
+					kind: "tool",
+					id: nextId++,
+					toolCallId: msg.toolCallId,
+					name: msg.toolName,
+					args: null,
+					status,
+					output,
+					...(images.length > 0 ? { images } : {}),
+				});
 			}
 		}
 		// Any other role (developer, custom messages): skip.
@@ -589,7 +638,7 @@ function rejectPendingCalls(err: Error): void {
 	}
 }
 
-export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30_000): Promise<unknown> {
+export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30_000, streamId?: number): Promise<unknown> {
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	if (!ws || ws.readyState !== WebSocket.OPEN) {
 		reject(new Error("Not connected"));
@@ -605,7 +654,9 @@ export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30
 				}, timeoutMs)
 			: 0;
 	pendingCalls.set(id, { resolve, reject, timer });
-	ws.send(JSON.stringify({ type: "call", id, method, args } satisfies ClientCommand));
+	// streamId tags server-side bash/python chunk frames so the client can
+	// route them to the in-flight chat item (the bash item id).
+	ws.send(JSON.stringify({ type: "call", id, method, args, ...(streamId !== undefined ? { streamId } : {}) } satisfies ClientCommand));
 	return promise;
 }
 
@@ -865,6 +916,12 @@ export function connect(): void {
 				break;
 			case "event":
 				applyEvent(frame.event);
+				break;
+			case "bash_chunk":
+				appendBashChunk(frame.id, frame.text);
+				break;
+			case "python_chunk":
+				appendBashChunk(frame.id, frame.text);
 				break;
 			case "call_result": {
 				const pending = pendingCalls.get(frame.id);

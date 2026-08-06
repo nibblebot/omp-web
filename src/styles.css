@@ -1710,3 +1710,111 @@ pre.terminal {
 	font-size: 0.857rem;
 	font-variant-numeric: tabular-nums;
 }
+
+/* --- Phase 10: inline images, eval/lsp/hub/ask tool cards, python shell --- */
+
+.img-scan {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 8px 10px;
+}
+
+.img-thumb {
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: zoom-in;
+	line-height: 0;
+}
+
+.img-thumb img {
+	max-width: 160px;
+	max-height: 120px;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	display: block;
+}
+
+.img-overlay {
+	position: fixed;
+	inset: 0;
+	background: var(--backdrop);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 100;
+	cursor: zoom-out;
+}
+
+.img-overlay img {
+	max-width: 92vw;
+	max-height: 92vh;
+	border-radius: 8px;
+	cursor: default;
+	box-shadow: 0 8px 40px rgb(0 0 0 / 0.5);
+}
+
+.msg-user-text {
+	white-space: pre-wrap;
+}
+
+.msg-user-images {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 6px;
+}
+
+.msg-user-images .img-thumb img {
+	max-width: 140px;
+	max-height: 110px;
+}
+
+pre.terminal.eval-code {
+	margin: 0 10px;
+	border: 1px solid var(--border);
+	padding: 6px 10px;
+}
+
+.tool-args {
+	padding: 0 10px 6px;
+	color: var(--muted-3);
+	font-size: 0.857rem;
+	display: flex;
+	gap: 10px;
+	overflow: hidden;
+}
+
+.lsp-file,
+.lsp-symbol {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.lsp-symbol::before {
+	content: "↳ ";
+	color: var(--accent);
+}
+
+.hub-message {
+	padding: 0 10px 6px;
+	color: var(--muted-2);
+	font-style: italic;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ask-question {
+	padding: 0 10px 4px;
+	font-weight: 600;
+	color: var(--muted-3);
+}
+
+.ask-options {
+	padding: 0 10px 6px;
+	color: var(--muted-3);
+	font-size: 0.857rem;
+}

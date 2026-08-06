@@ -5,17 +5,21 @@ export type InputMode = "enter" | "followup";
 
 export type ParsedInput =
 	| { kind: "bash"; command: string; dimmed: boolean }
+	| { kind: "python"; code: string; dimmed: boolean }
 	| { kind: "slash"; name: string; args: string }
 	| { kind: "queue"; steering: boolean; text: string }
 	| { kind: "text" };
 
 /**
- * Prefix semantics: `!!` dimmed bang-shell, `!` bang-shell, `/name args` slash,
- * `-> msg` steer-queue shorthand, `=> msg` follow-up-queue shorthand, else plain text.
+ * Prefix semantics: `!!` dimmed bang-shell, `!` bang-shell, `$$` excluded
+ * python, `$` python, `/name args` slash, `-> msg` steer-queue shorthand,
+ * `=> msg` follow-up-queue shorthand, else plain text.
  */
 export function parseInput(text: string): ParsedInput {
 	if (text.startsWith("!!")) return { kind: "bash", command: text.slice(2).trim(), dimmed: true };
 	if (text.startsWith("!")) return { kind: "bash", command: text.slice(1).trim(), dimmed: false };
+	if (text.startsWith("$$")) return { kind: "python", code: text.slice(2).trim(), dimmed: true };
+	if (text.startsWith("$")) return { kind: "python", code: text.slice(1).trim(), dimmed: false };
 	if (text.startsWith("-> ")) return { kind: "queue", steering: true, text: text.slice(3) };
 	if (text.startsWith("=> ")) return { kind: "queue", steering: false, text: text.slice(3) };
 	if (text.startsWith("/")) {
@@ -240,7 +244,17 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 		case "bash": {
 			if (!parsed.command) return;
 			const id = addBashItem(parsed.command, parsed.dimmed);
-			call("bash", [parsed.command])
+			// streamId routes bash_chunk frames to this item; dimmed = excluded
+			// from the agent's context (server-side option).
+			call("bash", [parsed.command, parsed.dimmed], 30_000, id)
+				.then(result => resolveBashItem(id, result as BashResultLike))
+				.catch(err => resolveBashItem(id, { error: String(err) }));
+			return;
+		}
+		case "python": {
+			if (!parsed.code) return;
+			const id = addBashItem(parsed.code, parsed.dimmed, "python");
+			call("python", [parsed.code, parsed.dimmed], 30_000, id)
 				.then(result => resolveBashItem(id, result as BashResultLike))
 				.catch(err => resolveBashItem(id, { error: String(err) }));
 			return;

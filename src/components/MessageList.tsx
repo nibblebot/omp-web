@@ -1,6 +1,9 @@
 import { createEffect, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
 import { renderMarkdown, splitForStreaming } from "../markdown";
 import { call, state, type Block } from "../state";
+import type { ImageArg } from "../protocol";
+import { imageDataUrl } from "../images";
+import { FullImageOverlay } from "./tools/ImageScan";
 import { copyText, Markdown } from "./Markdown";
 import { ToolCard } from "./ToolCard";
 import { buildUsageRow, formatUsageRow } from "../usage";
@@ -67,6 +70,7 @@ const LiveBlock: Component<{ block: Block }> = props => {
 
 export const MessageList: Component = () => {
 	let container!: HTMLDivElement;
+	const [zoomed, setZoomed] = createSignal<ImageArg | null>(null);
 	// Auto-scroll only when the user is already near the bottom.
 	createEffect(() => {
 		state.items.length;
@@ -80,7 +84,25 @@ export const MessageList: Component = () => {
 				{item => (
 					<Switch>
 						<Match when={item.kind === "user" && item}>
-							{user => <div class="msg-user">{user().text}</div>}
+							{user => {
+								const images = () => user().images ?? [];
+								return (
+									<div class="msg-user">
+										{user().text && <div class="msg-user-text">{user().text}</div>}
+										<Show when={images().length > 0}>
+											<div class="msg-user-images">
+												<For each={images()}>
+													{img => (
+														<button class="img-thumb" type="button" onClick={() => setZoomed(img)}>
+															<img src={imageDataUrl(img)} alt="user attached image" />
+														</button>
+													)}
+												</For>
+											</div>
+										</Show>
+									</div>
+								);
+							}}
 						</Match>
 						<Match when={item.kind === "assistant" && item}>
 							{assistant => {
@@ -133,13 +155,16 @@ export const MessageList: Component = () => {
 						{bash => (
 							<div class="bash-card" classList={{ dimmed: bash().dimmed }}>
 								<div class="bash-header">
-									<span class="bash-cmd">$ {bash().command}</span>
+									<span class="bash-cmd">{bash().lang === "python" ? ">>> " : "$ "}{bash().command}</span>
 									{bash().status === "running" ? (
 										<>
 											<span class="tool-status" data-status="running">
 												running
 											</span>
-											<button class="bash-abort" onClick={() => void call("abortBash").catch(() => {})}>
+											<button
+												class="bash-abort"
+												onClick={() => void call(bash().lang === "python" ? "abortEval" : "abortBash").catch(() => {})}
+											>
 												abort
 											</button>
 										</>
@@ -201,6 +226,7 @@ export const MessageList: Component = () => {
 					</For>
 				</div>
 			</Show>
+			<Show when={zoomed()}>{img => <FullImageOverlay image={img()} onClose={() => setZoomed(null)} />}</Show>
 		</div>
 	);
 };

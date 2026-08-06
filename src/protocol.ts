@@ -122,6 +122,8 @@ export type WebMethodName =
 	| "getContextBreakdown"
 	| "bash"
 	| "abortBash"
+	| "python"
+	| "abortEval"
 	| "getSessionStats"
 	| "exportHtml"
 	| "switchSession"
@@ -139,7 +141,7 @@ export type WebMethodName =
 // live session handle and call/login_code/ui_response implicitly target it.
 // Only the multiplexing commands themselves carry a handle.
 export type ClientCommand =
-	| { type: "call"; id: string; method: WebMethodName; args?: unknown[] }
+	| { type: "call"; id: string; method: WebMethodName; args?: unknown[]; streamId?: number }
 	| { type: "login_code"; requestId: string; code: string }
 	// Answer to a server "ui_request" frame (ExtensionUIContext dialogs).
 	| { type: "ui_response"; id: string; result?: unknown; error?: string }
@@ -163,6 +165,10 @@ export type SessionScopedFrame =
 	| { type: "history"; messages: AgentMessage[] }
 	| { type: "state"; state: WebSessionState; stats?: SessionStats }
 	| { type: "event"; event: AgentSessionEvent }
+	// Live output of an in-flight bash/python call (streamId = the client's
+	// bash-item id); broadcast session-scoped so every tab stays consistent.
+	| { type: "bash_chunk"; id: number; text: string }
+	| { type: "python_chunk"; id: number; text: string }
 	// Unicast answer to a "call" command.
 	| { type: "call_result"; id: string; ok: boolean; data?: unknown; error?: string }
 	| { type: "available_commands"; commands: AvailableSlashCommand[] }

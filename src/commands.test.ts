@@ -20,6 +20,21 @@ describe("parseInput", () => {
 		expect(parseInput("!!secret")).toEqual({ kind: "bash", command: "secret", dimmed: true });
 	});
 
+	test("python-shell, normal and excluded", () => {
+		expect(parseInput("$print(2+2)")).toEqual({ kind: "python", code: "print(2+2)", dimmed: false });
+		expect(parseInput("$$print('secret')")).toEqual({ kind: "python", code: "print('secret')", dimmed: true });
+	});
+
+	test("$$ is not $ with an extra $; both trim surrounding space", () => {
+		expect(parseInput("$ print(2+2)")).toEqual({ kind: "python", code: "print(2+2)", dimmed: false });
+		expect(parseInput("$$  print(1)")).toEqual({ kind: "python", code: "print(1)", dimmed: true });
+	});
+
+	test("lone $ is an empty python call, not text", () => {
+		expect(parseInput("$")).toEqual({ kind: "python", code: "", dimmed: false });
+		expect(parseInput("$$")).toEqual({ kind: "python", code: "", dimmed: true });
+	});
+
 	test("slash with and without args", () => {
 		expect(parseInput("/compact focus on api")).toEqual({ kind: "slash", name: "compact", args: "focus on api" });
 		expect(parseInput("/new")).toEqual({ kind: "slash", name: "new", args: "" });

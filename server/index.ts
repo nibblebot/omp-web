@@ -626,7 +626,7 @@ async function abortSubagent(entry: SessionEntry, agentId: string): Promise<void
 	await AgentLifecycleManager.global().release(agentId);
 }
 
-const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[]) => Promise<unknown>> = {
+const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[], streamId?: number) => Promise<unknown>> = {
 	prompt: async (entry, a) => {
 		const text = a[0] as string;
 		const images = a[1] as Images;
@@ -725,9 +725,22 @@ const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[]) => P
 	// READ_ONLY rows: usage reports + context breakdown (skip the state broadcast).
 	fetchUsageReports: entry => entry.session.fetchUsageReports(),
 	getContextBreakdown: async entry => entry.session.getContextBreakdown(),
-	bash: (entry, a) => entry.session.executeBash(a[0] as string),
+	// Phase 10: onChunk relays live output as session-scoped chunk frames
+	// (streamId = the client's bash-item id). `!!`/`$$` dimmed variants are
+	// excluded from the agent's context, matching the TUI semantic.
+	bash: (entry, a, streamId) =>
+		entry.session.executeBash(a[0] as string, chunk => {
+			if (streamId !== undefined) broadcastTo(entry.handle, { type: "bash_chunk", id: streamId, text: chunk });
+		}, { excludeFromContext: a[1] === true }),
 	abortBash: async entry => {
 		entry.session.abortBash();
+	},
+	python: (entry, a, streamId) =>
+		entry.session.executePython(a[0] as string, chunk => {
+			if (streamId !== undefined) broadcastTo(entry.handle, { type: "python_chunk", id: streamId, text: chunk });
+		}, { excludeFromContext: a[1] === true }),
+	abortEval: async entry => {
+		entry.session.abortEval();
 	},
 	getSessionStats: async entry => entry.session.getSessionStats(),
 	exportHtml: async (entry, a) => ({ path: await entry.session.exportToHtml(a[0] as string | undefined) }),
@@ -911,7 +924,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				const data =
 					cmd.method === "login"
 						? await loginWithCallbacks(ws, entry, cmd.args?.[0] as string)
-						: await method(entry, cmd.args ?? []);
+						: await method(entry, cmd.args ?? [], cmd.streamId);
 				// Post-mutation resync is best-effort: the mutation already
 				// succeeded, so a resync failure must not fail the call.
 				const resync = async () => {
