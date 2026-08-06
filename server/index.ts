@@ -17,6 +17,8 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
+import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type { InspectImageMode } from "@oh-my-pi/pi-coding-agent/utils/inspect-image-mode";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { FileEntry, SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
@@ -656,6 +658,21 @@ const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[]) => P
 	setInterruptMode: async (entry, a) => {
 		entry.session.setInterruptMode(a[0] as "immediate" | "wait");
 	},
+	// Phase 9 (17.1.8): /goal and /plan are NOT ACP-intercepted server-side, so
+	// goal/plan control drives the SDK directly. The post-mutation state
+	// broadcast re-reads getGoalModeState()/getPlanModeState()?.enabled.
+	setGoalModeState: async (entry, a) => {
+		entry.session.setGoalModeState(a[0] as GoalModeState | undefined);
+	},
+	setPlanModeState: async (entry, a) => {
+		entry.session.setPlanModeState(a[0] as PlanModeState | undefined);
+	},
+	// goalRuntime rows: createGoal throws when a goal is already active
+	// (matching the CLI's refusal) — the client only offers "set" with no goal.
+	goalCreate: (entry, a) => entry.session.goalRuntime.createGoal({ objective: String(a[0] ?? "") }),
+	goalPause: entry => entry.session.goalRuntime.pauseGoal(),
+	goalResume: entry => entry.session.goalRuntime.resumeGoal(),
+	goalDrop: entry => entry.session.goalRuntime.dropGoal(),
 	formatSessionAsText: async entry => entry.session.formatSessionAsText(),
 	// Dump lands in os.tmpdir(), already inside the /download realpath jail.
 	dumpLlmRequestToTmpDir: entry => entry.session.dumpLlmRequestToTmpDir(),

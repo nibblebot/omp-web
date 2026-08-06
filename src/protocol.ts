@@ -95,6 +95,14 @@ export type WebMethodName =
 	| "handoff"
 	| "setSessionName"
 	| "setInterruptMode"
+	// Phase 9 (17.1.8): goal/plan modes are NOT ACP-intercepted — /goal and
+	// /plan fall through to the model. Control relays via these SDK rows.
+	| "setGoalModeState"
+	| "setPlanModeState"
+	| "goalCreate"
+	| "goalPause"
+	| "goalResume"
+	| "goalDrop"
 	| "formatSessionAsText"
 	| "dumpLlmRequestToTmpDir"
 	| "setModel"

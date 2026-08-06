@@ -1,5 +1,6 @@
 import { createEffect, createSignal, onCleanup, Show, type Component } from "solid-js";
 import { formatTokens, getContextUsageLevel } from "../context";
+import { planToggle } from "../commands";
 import { call, setState, state, toggleSidebar } from "../state";
 
 const ContextSegment: Component = () => {
@@ -87,7 +88,7 @@ export const StatusBar: Component = () => {
 				<button
 					class="segment segment-button badge plan-badge"
 					title="Plan mode — click to toggle (/plan)"
-					onClick={() => void call("prompt", ["/plan"]).catch(err => setState("error", String(err)))}
+					onClick={planToggle}
 				>
 					plan
 				</button>

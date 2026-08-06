@@ -129,6 +129,19 @@ files, interrupt-mode toggle reflects in state.
    `computerToolEnabled` via `getActiveToolNames().includes("computer")`), vision
    (`setInspectImageMode`; add `inspectImageState()`).
 
+> **Deviation (17.1.8):** the goal/plan "prompt passthrough" assumption in
+> items 3–4 above was WRONG on the pinned 17.1.8 — `executeAcpBuiltinSlashCommand`
+> returns `false` for both `/goal` and `/plan` (verified by probe), so they fell
+> through to the model as plain prompts and goal/plan mode never engaged. Goal
+> and plan control now relay through the SDK directly: `setGoalModeState` /
+> `setPlanModeState` plus the `goalCreate`/`goalPause`/`goalResume`/`goalDrop`
+> goalRuntime rows (all MUTATING — the post-mutation state broadcast re-reads
+> `getGoalModeState()`/`getPlanModeState()?.enabled`). The client routes `/goal …`
+> and `/plan` through `LOCAL_COMMANDS` (never prompt passthrough); the goal
+> popover's set/pause/resume/drop and the status-bar plan badge call the same
+> relay rows. `createGoal` throws when a goal is already active (CLI parity), so
+> "set" is only offered when no goal exists.
+
 Verification: typecheck + tests; browser: run a turn → usage row appears with real
 numbers; force a retry (bad key in a scratch env or offline model) → countdown
 badge; `/goal set …` then badge → popover pauses/resumes; `/plan` toggles badge;

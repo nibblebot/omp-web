@@ -1,8 +1,24 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
-import { resolveUsedFraction, type UsageLimit, type UsageReport } from "@oh-my-pi/pi-ai";
+import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import { formatUnitAmount } from "../usage";
 import { call, setState } from "../state";
 import { Modal } from "./Modal";
+
+/**
+ * Fraction of a limit used (0..1), or undefined when the report gives no
+ * usable ratio. Local copy of pi-ai's resolveUsedFraction — a runtime value
+ * import from @oh-my-pi/pi-ai pulls the package's non-JS assets into the
+ * vite dep graph and breaks the optimizer (documented plan constraint:
+ * type-only imports only).
+ */
+export function resolveUsedFraction(limit: UsageLimit): number | undefined {
+	const a = limit.amount;
+	if (typeof a.usedFraction === "number" && Number.isFinite(a.usedFraction)) return a.usedFraction;
+	if (typeof a.used === "number" && typeof a.limit === "number" && a.limit > 0) return a.used / a.limit;
+	if (typeof a.remainingFraction === "number" && Number.isFinite(a.remainingFraction)) return 1 - a.remainingFraction;
+	if (typeof a.remaining === "number" && typeof a.limit === "number" && a.limit > 0) return 1 - a.remaining / a.limit;
+	return undefined;
+}
 
 /** One limit row: label, window, amount (used/limit + bar), status, notes. */
 const LimitRow: Component<{ limit: UsageLimit }> = props => {

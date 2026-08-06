@@ -1,20 +1,30 @@
-import { Show, type Component } from "solid-js";
+import { createSignal, Show, type Component } from "solid-js";
 import { formatTokens } from "../context";
 import { call, setState, state } from "../state";
 import { Modal } from "./Modal";
 
 /**
  * Phase 9: goal badge popover (/goal parity). Shows the objective, budget
- * usage, and pause/resume/drop controls — all executed through the existing
- * prompt passthrough, since /goal is a universal builtin intercepted
- * server-side (goal_updated events keep the state fresh).
+ * usage, and pause/resume/drop controls. On 17.1.8 /goal is NOT intercepted by
+ * the server's ACP builtin dispatch, so these drive the goalRuntime relay rows
+ * directly (goal_updated events + the post-mutation state broadcast keep the
+ * state fresh).
  */
 export const GoalPopover: Component<{ onClose: () => void }> = props => {
 	const goal = () => state.goalModeState?.goal;
 	const mode = () => state.goalModeState?.mode;
+	const [objective, setObjective] = createSignal("");
 
-	const goalPrompt = (sub: string) =>
-		void call("prompt", [`/goal ${sub}`]).catch(err => setState("error", String(err)));
+	const goalCall = (method: "goalCreate" | "goalPause" | "goalResume" | "goalDrop", arg?: string) => {
+		void call(method, arg !== undefined ? [arg] : [])
+			.then(() => setObjective(""))
+			.catch(err => setState("error", String(err)));
+	};
+
+	const submitGoal = () => {
+		const text = objective().trim();
+		if (text) goalCall("goalCreate", text);
+	};
 
 	return (
 		<Modal title="Goal" onClose={props.onClose}>
@@ -22,7 +32,24 @@ export const GoalPopover: Component<{ onClose: () => void }> = props => {
 				when={goal()}
 				fallback={
 					<div class="goal-empty">
-						No active goal. Set one with <code>/goal set …</code>
+						No active goal. Set one below.
+						<form
+							class="goal-actions"
+							onSubmit={e => {
+								e.preventDefault();
+								submitGoal();
+							}}
+						>
+							<input
+								class="goal-set-input"
+								placeholder="Goal objective…"
+								value={objective()}
+								onInput={e => setObjective(e.currentTarget.value)}
+							/>
+							<button type="submit" disabled={!objective().trim()}>
+								set
+							</button>
+						</form>
 					</div>
 				}
 			>
@@ -57,9 +84,9 @@ export const GoalPopover: Component<{ onClose: () => void }> = props => {
 								<span class="picker-label">elapsed</span> {Math.round(g().timeUsedSeconds / 60)}m
 							</div>
 							<div class="goal-actions">
-								<button onClick={() => goalPrompt("pause")}>pause</button>
-								<button onClick={() => goalPrompt("resume")}>resume</button>
-								<button class="danger" onClick={() => goalPrompt("drop")}>
+								<button onClick={() => goalCall("goalPause")}>pause</button>
+								<button onClick={() => goalCall("goalResume")}>resume</button>
+								<button class="danger" onClick={() => goalCall("goalDrop")}>
 									drop
 								</button>
 							</div>

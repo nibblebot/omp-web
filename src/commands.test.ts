@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { handoffArgs, LOCAL_COMMANDS, parseInput, queueMethod, renameDispatch } from "./commands";
+import {
+	goalDispatch,
+	handoffArgs,
+	LOCAL_COMMANDS,
+	parseInput,
+	planDispatch,
+	queueMethod,
+	renameDispatch,
+} from "./commands";
+import { setState, state } from "./state";
 
 describe("parseInput", () => {
 	test("plain text", () => {
@@ -83,5 +92,48 @@ describe("session command parsing", () => {
 		expect(handoffArgs("focus on the api layer")).toEqual(["focus on the api layer"]);
 		expect(handoffArgs("")).toEqual([undefined]);
 		expect(handoffArgs("   ")).toEqual([undefined]);
+	});
+});
+
+describe("goal/plan local commands", () => {
+	test("LOCAL_COMMANDS covers goal and plan", () => {
+		expect(LOCAL_COMMANDS.goal).toBeFunction();
+		expect(LOCAL_COMMANDS.plan).toBeFunction();
+	});
+
+	test("parseInput classifies /goal and /plan as slash (local dispatch gate, not passthrough)", () => {
+		expect(parseInput("/goal set implement the API")).toEqual({
+			kind: "slash",
+			name: "goal",
+			args: "set implement the API",
+		});
+		expect(parseInput("/goal pause")).toEqual({ kind: "slash", name: "goal", args: "pause" });
+		expect(parseInput("/plan")).toEqual({ kind: "slash", name: "plan", args: "" });
+	});
+
+	test("/goal subcommands route to goalRuntime relay rows", () => {
+		expect(goalDispatch("set implement the API")).toEqual({ kind: "call", method: "goalCreate", args: ["implement the API"] });
+		expect(goalDispatch("set   padded   objective  ")).toEqual({ kind: "call", method: "goalCreate", args: ["padded objective"] });
+		expect(goalDispatch("pause")).toEqual({ kind: "call", method: "goalPause", args: [] });
+		expect(goalDispatch("resume")).toEqual({ kind: "call", method: "goalResume", args: [] });
+		expect(goalDispatch("drop")).toEqual({ kind: "call", method: "goalDrop", args: [] });
+	});
+
+	test("bare or unknown /goal opens the popover instead of prompting", () => {
+		expect(goalDispatch("")).toEqual({ kind: "popover" });
+		expect(goalDispatch("   ")).toEqual({ kind: "popover" });
+		expect(goalDispatch("set")).toEqual({ kind: "popover" });
+		expect(goalDispatch("wat")).toEqual({ kind: "popover" });
+	});
+
+	test("/plan toggles planModeEnabled via setPlanModeState", () => {
+		const before = state.planModeEnabled;
+		expect(planDispatch().args[0].enabled).toBe(!before);
+		expect(planDispatch().args[0].planFilePath).toBe("");
+		// Flip the store and confirm the toggle inverts.
+		setState("planModeEnabled", !before);
+		expect(planDispatch().args[0].enabled).toBe(before);
+		// Restore for sibling tests.
+		setState("planModeEnabled", before);
 	});
 });

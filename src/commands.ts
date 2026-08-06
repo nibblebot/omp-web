@@ -63,6 +63,49 @@ export function handoffArgs(args: string): [string | undefined] {
 	return [focus || undefined];
 }
 
+/**
+ * `/goal` — on 17.1.8 /goal is NOT intercepted by the server's ACP builtin
+ * dispatch, so it must never reach the prompt passthrough. Subcommands route
+ * to the goalRuntime relay rows; anything else (bare, unknown, or `set`
+ * without an objective) opens the goal popover, which owns objective entry.
+ */
+export function goalDispatch(
+	args: string,
+):
+	| { kind: "popover" }
+	| { kind: "call"; method: "goalCreate" | "goalPause" | "goalResume" | "goalDrop"; args: unknown[] } {
+	const [sub, ...rest] = args.trim().split(/\s+/);
+	switch (sub) {
+		case "set":
+			if (rest.length === 0) return { kind: "popover" };
+			return { kind: "call", method: "goalCreate", args: [rest.join(" ")] };
+		case "pause":
+			return { kind: "call", method: "goalPause", args: [] };
+		case "resume":
+			return { kind: "call", method: "goalResume", args: [] };
+		case "drop":
+			return { kind: "call", method: "goalDrop", args: [] };
+		default:
+			return { kind: "popover" };
+	}
+}
+
+/**
+ * `/plan` toggle — same reasoning as /goal: 17.1.8 does not ACP-intercept
+ * /plan, so the toggle drives setPlanModeState directly. planFilePath is not
+ * read by the server runtime (only the CLI/tool-views mention it), so the
+ * toggle passes "".
+ */
+export function planDispatch(): { method: "setPlanModeState"; args: [{ enabled: boolean; planFilePath: string }] } {
+	return { method: "setPlanModeState", args: [{ enabled: !state.planModeEnabled, planFilePath: "" }] };
+}
+
+/** Shared /plan toggle used by the LOCAL_COMMANDS entry and the status-bar badge. */
+export function planToggle(): void {
+	const d = planDispatch();
+	void call(d.method, d.args).catch(showError);
+}
+
 /** `/drop` mirrors /new but the confirm warns the transcript is discarded. */
 function confirmDropSession(): void {
 	if (state.items.length > 0 && !window.confirm("Drop this session? The current session transcript is discarded.")) return;
@@ -144,6 +187,14 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 		const d = renameDispatch(args);
 		void (d.method === "setSessionName" ? call("setSessionName", [d.title]) : call("prompt", [d.text])).catch(showError);
 	},
+	// Phase 9 (17.1.8): /goal and /plan are NOT ACP-intercepted, so they are
+	// web-local — never prompt passthrough (see goalDispatch/planDispatch).
+	goal: args => {
+		const d = goalDispatch(args);
+		if (d.kind === "popover") setState("modal", "goal");
+		else void call(d.method, d.args).catch(showError);
+	},
+	plan: planToggle,
 	queue: args => {
 		const msg = args.trim();
 		if (!msg) return;
