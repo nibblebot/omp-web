@@ -1,5 +1,4 @@
-import { Show, type Component } from "solid-js";
-import { dispatchInput } from "../commands";
+import { createSignal, Show, type Component } from "solid-js";
 import { formatTokens, getContextUsageLevel } from "../context";
 import { call, setState, state, toggleSidebar } from "../state";
 
@@ -22,9 +21,14 @@ const ContextSegment: Component = () => {
 };
 
 export const StatusBar: Component = () => {
-	const rename = () => {
-		const title = window.prompt("Rename session", state.sessionName ?? "");
-		if (title?.trim()) dispatchInput(`/rename ${title.trim()}`, undefined, "enter");
+	const [editingName, setEditingName] = createSignal(false);
+	// Enter commits and closes first, so the trailing blur is a harmless no-op.
+	const commitName = (el: HTMLInputElement) => {
+		const title = el.value.trim();
+		setEditingName(false);
+		if (title && title !== state.sessionName) {
+			void call("setSessionName", [title]).catch(err => setState("error", String(err)));
+		}
 	};
 
 	return (
@@ -85,9 +89,25 @@ export const StatusBar: Component = () => {
 			>
 				☰
 			</button>
-			<button class="segment segment-button session-name" onClick={rename} title="Rename session">
-				{state.sessionName ?? state.sessionId.slice(0, 8)}
-			</button>
+			<Show
+				when={editingName()}
+				fallback={
+					<button class="segment segment-button session-name" onClick={() => setEditingName(true)} title="Rename session">
+						{state.sessionName ?? state.sessionId.slice(0, 8)}
+					</button>
+				}
+			>
+				<input
+					ref={el => queueMicrotask(() => { el.focus(); el.select(); })}
+					class="segment session-name-input"
+					value={state.sessionName ?? ""}
+					onKeyDown={e => {
+						if (e.key === "Enter") commitName(e.currentTarget);
+						else if (e.key === "Escape") setEditingName(false);
+					}}
+					onBlur={() => setEditingName(false)}
+				/>
+			</Show>
 			<button class="segment segment-button" onClick={() => setState("modal", "settings")} title="Settings">
 				⚙
 			</button>

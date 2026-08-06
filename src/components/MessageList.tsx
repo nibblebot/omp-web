@@ -1,7 +1,7 @@
-import { createEffect, For, Match, Show, Switch, type Component } from "solid-js";
+import { createEffect, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
 import { renderMarkdown, splitForStreaming } from "../markdown";
 import { call, state, type Block } from "../state";
-import { Markdown } from "./Markdown";
+import { copyText, Markdown } from "./Markdown";
 import { ToolCard } from "./ToolCard";
 
 // Elements that cannot carry text children; append the fresh span to their parent instead.
@@ -82,25 +82,43 @@ export const MessageList: Component = () => {
 							{user => <div class="msg-user">{user().text}</div>}
 						</Match>
 						<Match when={item.kind === "assistant" && item}>
-							{assistant => (
-								<div class="msg-assistant">
-									<For each={assistant().blocks}>
-										{block =>
-											block.kind === "thinking" ? (
-												<details class="thinking-block">
-													<summary>thinking</summary>
+							{assistant => {
+								const [copied, setCopied] = createSignal(false);
+								return (
+									<div class="msg-assistant">
+										<button
+											class="msg-copy-btn"
+											title="Copy message markdown"
+											onClick={() => {
+												const blocks = assistant().blocks;
+												const visible = blocks.filter(b => b.kind !== "thinking");
+												const text = (visible.length > 0 ? visible : blocks).map(b => b.text).join("\n\n");
+												void copyText(text).then(ok => {
+													setCopied(ok);
+													setTimeout(() => setCopied(false), 1200);
+												});
+											}}
+										>
+											{copied() ? "copied" : "copy"}
+										</button>
+										<For each={assistant().blocks}>
+											{block =>
+												block.kind === "thinking" ? (
+													<details class="thinking-block">
+														<summary>thinking</summary>
+														<Markdown src={block.text} />
+													</details>
+												) : (
 													<Markdown src={block.text} />
-												</details>
-											) : (
-												<Markdown src={block.text} />
-											)
-										}
-									</For>
-								</div>
-							)}
+												)
+											}
+										</For>
+									</div>
+								);
+							}}
 						</Match>
 						<Match when={item.kind === "tool" && item}>{tool => <ToolCard item={tool()} />}</Match>
-					<Match when={item.kind === "bash" && item}>
+						<Match when={item.kind === "bash" && item}>
 						{bash => (
 							<div class="bash-card" classList={{ dimmed: bash().dimmed }}>
 								<div class="bash-header">

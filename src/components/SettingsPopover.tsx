@@ -31,6 +31,16 @@ export const SettingsPopover: Component<{ onClose: () => void }> = props => {
 				{modeSelect("steering mode", () => state.steeringMode, "setSteeringMode")}
 				{modeSelect("follow-up mode", () => state.followUpMode, "setFollowUpMode")}
 				<label class="settings-row">
+					interrupt mode
+					<select
+						value={state.interruptMode}
+						onChange={e => void call("setInterruptMode", [e.currentTarget.value]).catch(err => setState("error", String(err)))}
+					>
+						<option value="immediate">immediate</option>
+						<option value="wait">wait</option>
+					</select>
+				</label>
+				<label class="settings-row">
 					auto-retry
 					<input
 						type="checkbox"

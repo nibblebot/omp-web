@@ -49,6 +49,53 @@ function exportSession(): void {
 }
 
 /**
+ * `/rename <title>` renames instantly via setSessionName; bare `/rename` keeps
+ * the prompt passthrough so the agent auto-titles (server-side builtin).
+ */
+export function renameDispatch(args: string): { method: "setSessionName"; title: string } | { method: "prompt"; text: string } {
+	const title = args.trim();
+	return title ? { method: "setSessionName", title } : { method: "prompt", text: "/rename" };
+}
+
+/** `/handoff [focus...]` — free-text focus joins into one optional instructions arg. */
+export function handoffArgs(args: string): [string | undefined] {
+	const focus = args.trim();
+	return [focus || undefined];
+}
+
+/** `/drop` mirrors /new but the confirm warns the transcript is discarded. */
+function confirmDropSession(): void {
+	if (state.items.length > 0 && !window.confirm("Drop this session? The current session transcript is discarded.")) return;
+	void call("newSession").catch(showError);
+}
+
+/** `/dump`: transcript downloads client-side; the LLM-request JSON downloads via /download. */
+function dumpSession(): void {
+	void (async () => {
+		try {
+			const [text, dumpPath] = await Promise.all([call("formatSessionAsText"), call("dumpLlmRequestToTmpDir")]);
+			if (typeof text === "string" && text) {
+				const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+				const a = document.createElement("a");
+				a.href = url;
+				a.download = "transcript.txt";
+				a.click();
+				URL.revokeObjectURL(url);
+			} else {
+				pushNotice("info", "Transcript is empty — nothing to download.");
+			}
+			if (typeof dumpPath === "string" && dumpPath) {
+				pushNotice("info", "LLM request dump", `/download?path=${encodeURIComponent(dumpPath)}`);
+			} else {
+				pushNotice("info", "No LLM request dump available yet.");
+			}
+		} catch (err) {
+			showError(err);
+		}
+	})();
+}
+
+/**
  * Web-local slash commands: TUI-only commands that have session-method
  * equivalents (or web-native displays). Anything not in this table is sent to the agent
  * verbatim — server-side interception runs builtins/skills/extensions.
@@ -60,6 +107,43 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	tree: () => setState("modal", "branch"),
 	branch: () => setState("modal", "branch"),
 	export: exportSession,
+	retry: () =>
+		void call("retry")
+			.then(ok => {
+				if (ok === false) pushNotice("error", "Nothing to retry — no failed turn or the session is busy.");
+			})
+			.catch(showError),
+	fork: () =>
+		void call("fork")
+			.then(ok => {
+				// HISTORY_RELOAD resync replaces the transcript; this is just the outcome.
+				if (ok === false) pushNotice("error", "Fork failed.");
+				else pushNotice("info", "Forked session.");
+			})
+			.catch(showError),
+	fresh: () =>
+		void call("freshSession")
+			.then(() => pushNotice("info", "Fresh session — provider state reset, transcript kept."))
+			.catch(showError),
+	handoff: args =>
+		void call("handoff", handoffArgs(args))
+			.then(result => {
+				const r = result as { document?: string; savedPath?: string } | null | undefined;
+				// HISTORY_RELOAD resync brings in the new session's transcript.
+				if (r?.document) {
+					pushCompaction({ action: "handoff", summary: r.document, skipped: false, aborted: false, willRetry: false });
+				} else {
+					pushNotice("info", "Handoff complete — new session started.");
+				}
+				if (r?.savedPath) pushNotice("info", "Handoff document", `/download?path=${encodeURIComponent(r.savedPath)}`);
+			})
+			.catch(showError),
+	drop: confirmDropSession,
+	dump: dumpSession,
+	rename: args => {
+		const d = renameDispatch(args);
+		void (d.method === "setSessionName" ? call("setSessionName", [d.title]) : call("prompt", [d.text])).catch(showError);
+	},
 	queue: args => {
 		const msg = args.trim();
 		if (!msg) return;

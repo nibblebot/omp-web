@@ -536,10 +536,13 @@ const READ_ONLY: Partial<Record<WebMethodName, true>> = {
 	getLoginProviders: true,
 	getSubagents: true,
 	getSubagentMessages: true,
+	formatSessionAsText: true,
+	dumpLlmRequestToTmpDir: true,
 };
 
 // Calls that replace the transcript; every tab resyncs, not just the requester.
-const HISTORY_RELOAD: Partial<Record<WebMethodName, true>> = { newSession: true, switchSession: true, branch: true };
+// handoff starts a new session server-side; fork rewrites history in place.
+const HISTORY_RELOAD: Partial<Record<WebMethodName, true>> = { newSession: true, switchSession: true, branch: true, fork: true, handoff: true };
 
 async function changeSession(
 	entry: SessionEntry,
@@ -634,6 +637,19 @@ const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[]) => P
 	switchSession: (entry, a) => changeSession(entry, "switchSession", a[0] as string),
 	branch: (entry, a) => changeSession(entry, "branch", a[0] as string),
 	compact: (entry, a) => entry.session.compact(a[0] as string | undefined),
+	retry: entry => entry.session.retry(),
+	fork: entry => entry.session.fork(),
+	// Sync SDK method: resets provider streams, keeps the transcript — the
+	// post-mutation state broadcast picks up the new sessionId.
+	freshSession: async entry => entry.session.freshSession() ?? null,
+	handoff: (entry, a) => entry.session.handoff(a[0] as string | undefined),
+	setSessionName: (entry, a) => entry.session.setSessionName(a[0] as string, "user"),
+	setInterruptMode: async (entry, a) => {
+		entry.session.setInterruptMode(a[0] as "immediate" | "wait");
+	},
+	formatSessionAsText: async entry => entry.session.formatSessionAsText(),
+	// Dump lands in os.tmpdir(), already inside the /download realpath jail.
+	dumpLlmRequestToTmpDir: entry => entry.session.dumpLlmRequestToTmpDir(),
 	setModel: async (entry, a) => {
 		const { session } = entry;
 		const [provider, modelId] = [a[0] as string, a[1] as string];

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { LOCAL_COMMANDS, parseInput, queueMethod } from "./commands";
+import { handoffArgs, LOCAL_COMMANDS, parseInput, queueMethod, renameDispatch } from "./commands";
 
 describe("parseInput", () => {
 	test("plain text", () => {
@@ -59,5 +59,29 @@ describe("LOCAL_COMMANDS table", () => {
 		for (const name of ["new", "clear", "compact", "help", "hotkeys", "exit", "quit"]) {
 			expect(LOCAL_COMMANDS[name]).toBeFunction();
 		}
+	});
+
+	test("covers the Phase 8 session-command set", () => {
+		for (const name of ["retry", "fork", "fresh", "handoff", "drop", "dump", "rename"]) {
+			expect(LOCAL_COMMANDS[name]).toBeFunction();
+		}
+	});
+});
+
+describe("session command parsing", () => {
+	test("/rename with a title renames directly, no LLM round-trip", () => {
+		expect(renameDispatch("My Session")).toEqual({ method: "setSessionName", title: "My Session" });
+		expect(renameDispatch("  padded title  ")).toEqual({ method: "setSessionName", title: "padded title" });
+	});
+
+	test("bare /rename keeps the agent auto-title passthrough", () => {
+		expect(renameDispatch("")).toEqual({ method: "prompt", text: "/rename" });
+		expect(renameDispatch("   ")).toEqual({ method: "prompt", text: "/rename" });
+	});
+
+	test("/handoff joins free-text focus into one optional instructions arg", () => {
+		expect(handoffArgs("focus on the api layer")).toEqual(["focus on the api layer"]);
+		expect(handoffArgs("")).toEqual([undefined]);
+		expect(handoffArgs("   ")).toEqual([undefined]);
 	});
 });
