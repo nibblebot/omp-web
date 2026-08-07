@@ -47,7 +47,7 @@ import {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import { daemonClientForProject } from "@oh-my-pi/pi-coding-agent/launch/client";
+import { daemonClientForProject, type DaemonBrokerClient } from "@oh-my-pi/pi-coding-agent/launch/client";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import type { ServerWebSocket } from "bun";
@@ -738,6 +738,46 @@ function daemonInfo(projectDir: string, snap: DaemonSnapshot): DaemonInfo {
 }
 
 /**
+ * Per-daemon ready endpoint cache keyed by projectDir+name. Daemon ids are
+ * stable across restarts and change only when a NEW daemon record is started
+ * (new spec), so id equality invalidates stale specs.
+ */
+const readyEndpointCache = new Map<string, { id: string; port?: number; host?: string }>();
+
+/**
+ * Resolve a daemon's ready host/port from its launch spec via the broker
+ * describe op, cached by daemon id. Any failure (daemon died between list and
+ * describe, broker hiccup) resolves undefined without propagating — the next
+ * poll tick retries.
+ */
+async function readyEndpointFor(client: DaemonBrokerClient, dir: string, snap: DaemonSnapshot): Promise<{ port?: number; host?: string } | undefined> {
+	const key = `${dir}\u0000${snap.name}`;
+	const cached = readyEndpointCache.get(key);
+	if (cached?.id === snap.id) return cached;
+	try {
+		const result = await client.request({ op: "describe", name: snap.name });
+		if (result.op !== "describe") return undefined;
+		const ready = result.spec.ready;
+		const endpoint = { id: snap.id, port: ready?.port, host: ready?.host };
+		readyEndpointCache.set(key, endpoint);
+		return endpoint;
+	} catch {
+		// Daemon died between list and describe, or broker hiccup: retry next tick.
+		return undefined;
+	}
+}
+
+async function daemonInfoWithEndpoint(client: DaemonBrokerClient, dir: string, snap: DaemonSnapshot): Promise<DaemonInfo> {
+	const info = daemonInfo(dir, snap);
+	const endpoint = await readyEndpointFor(client, dir, snap);
+	if (endpoint?.port !== undefined) {
+		info.readyPort = endpoint.port;
+		info.readyHost = endpoint.host ?? "127.0.0.1";
+	}
+	return info;
+}
+
+/**
  * Poll every project's daemon broker (server cwd + each live session's cwd)
  * and broadcast the merged roster every tick. A change-gate would strand
  * clients that connect between broadcasts (or miss one frame): the roster is
@@ -757,10 +797,17 @@ async function refreshDaemons(): Promise<void> {
 			// projectDir+name so same-named daemons in different projects both
 			// reach the roster (the web client uses the same identity).
 			if (result.op === "list")
-				for (const snap of result.daemons) merged.set(`${dir}\u0000${snap.name}`, daemonInfo(dir, snap));
+				for (const snap of result.daemons) merged.set(`${dir}\u0000${snap.name}`, await daemonInfoWithEndpoint(client, dir, snap));
 		} catch {
 			// Broker unreachable (not started / shut down): skip this project's roster.
 		}
+	}
+	// Drop cached endpoints for project dirs that left the roster scope. The
+	// \u0000 separator cannot appear in paths, so a plain prefix check is
+	// unambiguous.
+	const dirPrefixes = [...dirs].map(dir => `${dir}\u0000`);
+	for (const key of [...readyEndpointCache.keys()]) {
+		if (!dirPrefixes.some(prefix => key.startsWith(prefix))) readyEndpointCache.delete(key);
 	}
 	broadcast({ type: "daemons", daemons: [...merged.values()] });
 }
@@ -1662,7 +1709,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 					const client = await daemonClientForProject(cmd.projectDir);
 					const result = await client.request({ op: "stop", name: cmd.name, timeoutMs: cmd.timeoutMs ?? 10_000 });
 					if (result.op !== "stop") throw new Error("unexpected daemon broker response");
-					send(ws, { type: "daemon_control_result", id: cmd.id, ok: true, daemon: daemonInfo(cmd.projectDir, result.daemon) });
+					send(ws, { type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
 				} catch (err) {
 					send(ws, { type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
 				}
@@ -1673,7 +1720,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 					const client = await daemonClientForProject(cmd.projectDir);
 					const result = await client.request({ op: "restart", name: cmd.name });
 					if (result.op !== "restart") throw new Error("unexpected daemon broker response");
-					send(ws, { type: "daemon_control_result", id: cmd.id, ok: true, daemon: daemonInfo(cmd.projectDir, result.daemon) });
+					send(ws, { type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
 				} catch (err) {
 					send(ws, { type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
 				}
