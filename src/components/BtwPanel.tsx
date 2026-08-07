@@ -14,7 +14,7 @@ export const BtwPanel: Component = () => {
 	return (
 		<Show when={btw()}>
 			{b => (
-				<Modal title="btw — side question" onClose={closeBtw}>
+				<Modal title="btw — side question" variant="sheet" onClose={closeBtw}>
 					<div class="btw-panel">
 						<Show when={b().question}>
 							<div class="btw-question">{b().question}</div>

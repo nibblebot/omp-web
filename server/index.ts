@@ -716,10 +716,11 @@ function broadcastLiveSessions(): void {
 const DAEMON_POLL_MS = 3000;
 let daemonPoll: ReturnType<typeof setInterval> | undefined;
 
-function daemonInfo(snap: DaemonSnapshot): DaemonInfo {
+function daemonInfo(projectDir: string, snap: DaemonSnapshot): DaemonInfo {
 	return {
 		name: snap.name,
 		id: snap.id,
+		projectDir,
 		state: snap.state,
 		pid: snap.pid,
 		createdAt: snap.createdAt,
@@ -752,7 +753,11 @@ async function refreshDaemons(): Promise<void> {
 		try {
 			const client = await daemonClientForProject(dir);
 			const result = await client.request({ op: "list" });
-			if (result.op === "list") for (const snap of result.daemons) merged.set(snap.name, daemonInfo(snap));
+			// Daemon names are unique per project dir only; key by
+			// projectDir+name so same-named daemons in different projects both
+			// reach the roster (the web client uses the same identity).
+			if (result.op === "list")
+				for (const snap of result.daemons) merged.set(`${dir}\u0000${snap.name}`, daemonInfo(dir, snap));
 		} catch {
 			// Broker unreachable (not started / shut down): skip this project's roster.
 		}
@@ -1630,6 +1635,48 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				await adapter.stop("collab stopped by web user");
 				if (roomId) relay.closeRoom(roomId);
 				broadcastTo(entry.handle, { type: "collab_status", status: { state: "off" } });
+				break;
+			}
+			case "daemon_logs": {
+				// Per-daemon log tail/head, answered by unicast daemon_logs_result.
+				try {
+					const client = await daemonClientForProject(cmd.projectDir);
+					const result = await client.request({
+						op: "logs",
+						name: cmd.name,
+						lines: cmd.lines,
+						head: cmd.head ?? false,
+						grep: cmd.grep,
+						follow: false,
+						timeoutMs: 30_000,
+					});
+					if (result.op !== "logs") throw new Error("unexpected daemon broker response");
+					send(ws, { type: "daemon_logs_result", id: cmd.id, ok: true, text: result.text, cursor: result.cursor, state: result.state });
+				} catch (err) {
+					send(ws, { type: "daemon_logs_result", id: cmd.id, ok: false, error: String(err) });
+				}
+				break;
+			}
+			case "daemon_stop": {
+				try {
+					const client = await daemonClientForProject(cmd.projectDir);
+					const result = await client.request({ op: "stop", name: cmd.name, timeoutMs: cmd.timeoutMs ?? 10_000 });
+					if (result.op !== "stop") throw new Error("unexpected daemon broker response");
+					send(ws, { type: "daemon_control_result", id: cmd.id, ok: true, daemon: daemonInfo(cmd.projectDir, result.daemon) });
+				} catch (err) {
+					send(ws, { type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
+				}
+				break;
+			}
+			case "daemon_restart": {
+				try {
+					const client = await daemonClientForProject(cmd.projectDir);
+					const result = await client.request({ op: "restart", name: cmd.name });
+					if (result.op !== "restart") throw new Error("unexpected daemon broker response");
+					send(ws, { type: "daemon_control_result", id: cmd.id, ok: true, daemon: daemonInfo(cmd.projectDir, result.daemon) });
+				} catch (err) {
+					send(ws, { type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
+				}
 				break;
 			}
 			default:

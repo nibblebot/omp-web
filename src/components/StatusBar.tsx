@@ -1,7 +1,7 @@
-import { createEffect, createSignal, onCleanup, Show, type Component } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show, type Component, type JSX } from "solid-js";
 import { formatTokens, getContextUsageLevel } from "../context";
 import { planToggle } from "../commands";
-import { call, setState, state, toggleSidebar } from "../state";
+import { call, setState, state, togglePetVisible, toggleSidebar } from "../state";
 
 const ContextSegment: Component = () => {
 	const usage = () => state.contextUsage;
@@ -14,6 +14,7 @@ const ContextSegment: Component = () => {
 					data-level={level()}
 					title={`${formatTokens(u().tokens)} / ${formatTokens(u().contextWindow)} tokens`}
 				>
+					<span class="context-prefix">ctx </span>
 					{u().percent.toFixed(0)}%
 				</span>
 			)}
@@ -46,6 +47,28 @@ const RetryBadge: Component = () => {
 	);
 };
 
+// Declarative status-bar segment button: unifies the repeated
+// `segment segment-button` + active/hover/title boilerplate. `class` adds
+// variant classes (e.g. "badge goal-badge", "session-name").
+const Segment: Component<{
+	class?: string;
+	title?: string;
+	active?: boolean;
+	onClick?: () => void;
+	onContextMenu?: (e: MouseEvent) => void;
+	children: JSX.Element;
+}> = props => (
+	<button
+		class={props.class ? `segment segment-button ${props.class}` : "segment segment-button"}
+		classList={{ active: !!props.active }}
+		title={props.title}
+		onClick={props.onClick}
+		onContextMenu={props.onContextMenu}
+	>
+		{props.children}
+	</button>
+);
+
 export const StatusBar: Component = () => {
 	const [editingName, setEditingName] = createSignal(false);
 	// Enter commits and closes first, so the trailing blur is a harmless no-op.
@@ -59,12 +82,11 @@ export const StatusBar: Component = () => {
 
 	return (
 		<header class="status-bar">
-			<button class="segment segment-button" onClick={() => setState("modal", "model")} title="Switch model">
+			<Segment onClick={() => setState("modal", "model")} title="Switch model">
 				{state.model ? `${state.model.provider}/${state.model.id}` : "no model"}
-				{state.thinkingLevel && state.thinkingLevel !== "inherit" && <span class="thinking-suffix"> · {state.thinkingLevel}</span>}
-			</button>
-			<button
-				class="segment segment-button thinking-segment"
+			</Segment>
+			<Segment
+				class="thinking-segment"
 				onClick={() => void call("cycleThinkingLevel").catch(err => setState("error", String(err)))}
 				onContextMenu={e => {
 					e.preventDefault();
@@ -73,64 +95,57 @@ export const StatusBar: Component = () => {
 				title="Click: cycle thinking level · right-click: pick"
 			>
 				{state.thinkingLevel ?? "inherit"}
-			</button>
+			</Segment>
 			<Show when={state.compacting}>
 				<span class="segment badge">compacting…</span>
 			</Show>
 			<Show when={state.goal}>
 				{g => (
-					<button class="segment segment-button badge goal-badge" title={g().objective} onClick={() => setState("modal", "goal")}>
+					<Segment class="badge goal-badge" title={g().objective} onClick={() => setState("modal", "goal")}>
 						goal: {g().objective.slice(0, 20)}
-					</button>
+					</Segment>
 				)}
 			</Show>
 			<Show when={state.planModeEnabled}>
-				<button
-					class="segment segment-button badge plan-badge"
-					title="Plan mode — click to toggle (/plan)"
-					onClick={planToggle}
-				>
+				<Segment class="badge plan-badge" title="Plan mode — click to toggle (/plan)" onClick={planToggle}>
 					plan
-				</button>
+				</Segment>
 			</Show>
 			<RetryBadge />
 			<ContextSegment />
 			<Show when={state.stats}>
 				{s => (
-					<button class="segment segment-button" onClick={() => setState("modal", "stats")} title="Session stats">
+					<Segment onClick={() => setState("modal", "stats")} title="Session stats">
 						${s().cost.toFixed(2)} · ↑{formatTokens(s().tokens.input)} ↓{formatTokens(s().tokens.output)}
-					</button>
+					</Segment>
 				)}
 			</Show>
 			{state.queuedMessageCount > 0 && <span class="queued-chip">queued: {state.queuedMessageCount}</span>}
 			<span class="status-spacer" />
 			<Show when={state.subagents.size > 0}>
-				<button class="segment segment-button" onClick={() => setState("modal", "subagents")}>
+				<Segment onClick={() => setState("modal", "subagents")}>
 					subagents ({state.subagents.size})
-				</button>
+				</Segment>
 			</Show>
-			<button
-				class="segment segment-button"
-				classList={{ active: state.toolsExpanded }}
+			<Segment active={state.petVisible} onClick={togglePetVisible} title="Show/hide pet roster">
+				pet
+			</Segment>
+			<Segment
+				active={state.toolsExpanded}
 				onClick={() => setState("toolsExpanded", v => !v)}
 				title="Expand all tool outputs (Ctrl+O)"
 			>
 				⤢
-			</button>
-			<button
-				class="segment segment-button"
-				classList={{ active: state.sidebarVisible }}
-				onClick={toggleSidebar}
-				title="Sessions"
-			>
+			</Segment>
+			<Segment active={state.sidebarVisible} onClick={toggleSidebar} title="Sessions">
 				☰
-			</button>
+			</Segment>
 			<Show
 				when={editingName()}
 				fallback={
-					<button class="segment segment-button session-name" onClick={() => setEditingName(true)} title="Rename session">
+					<Segment class="session-name" onClick={() => setEditingName(true)} title="Rename session">
 						{state.sessionName ?? state.sessionId.slice(0, 8)}
-					</button>
+					</Segment>
 				}
 			>
 				<input
@@ -144,9 +159,9 @@ export const StatusBar: Component = () => {
 					onBlur={() => setEditingName(false)}
 				/>
 			</Show>
-			<button class="segment segment-button" onClick={() => setState("modal", "settings")} title="Settings">
+			<Segment onClick={() => setState("modal", "settings")} title="Settings">
 				⚙
-			</button>
+			</Segment>
 			{!state.connected && <span class="disconnected-pill">disconnected</span>}
 			<span class="status-dot" classList={{ streaming: state.streaming }} title={state.streaming ? "streaming" : "idle"} />
 			{state.error && (

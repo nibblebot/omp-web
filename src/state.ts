@@ -97,6 +97,9 @@ export function argsSummary(args: unknown): string {
 /** localStorage key for the sessions sidebar visibility toggle. */
 const SIDEBAR_KEY = "omp.sidebarVisible";
 
+/** localStorage key for the pet roster visibility toggle. */
+const PET_KEY = "omp.petVisible";
+
 /** localStorage key for the Phase 11 desktop-notifications toggle. */
 const NOTIFY_KEY = "omp.notifyEnabled";
 
@@ -156,6 +159,7 @@ export const [state, setState] = createStore({
 	settingsModel: null as SettingsModel | null,
 	settingsLoading: false,
 	sidebarVisible: typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
+	petVisible: typeof localStorage !== "undefined" ? localStorage.getItem(PET_KEY) !== "false" : true,
 	// Phase 6: in-flight OAuth login prompts (unicast frames).
 	loginUrl: null as { url: string; launchUrl?: string; instructions?: string } | null,
 	loginCodeRequest: null as { requestId: string; title: string; placeholder?: string } | null,
@@ -1011,6 +1015,106 @@ function refreshProcessStats(): void {
 		.catch(() => {});
 }
 
+// ---------------------------------------------------------------------------
+// Daemon web exposure: per-daemon logs/stop/restart commands carry an explicit
+// id and are answered by unicast daemon_logs_result / daemon_control_result
+// frames, resolved through id-keyed pending maps (same timeout style as
+// pendingCalls/call). Multiple commands may be in flight concurrently (e.g. a
+// log refresh + a stop) so the maps are keyed by id rather than single-slot.
+// ---------------------------------------------------------------------------
+
+/** Result of requestDaemonLogs: tail/head text plus the broker log cursor. */
+export type DaemonLogsResult = { text: string; cursor: number; state: string };
+
+let nextDaemonCallId = 1;
+const pendingDaemonLogs = new Map<string, { resolve: (r: DaemonLogsResult) => void; reject: (err: Error) => void; timer: number }>();
+const pendingDaemonControl = new Map<string, { resolve: (d: DaemonInfo) => void; reject: (err: Error) => void; timer: number }>();
+
+function rejectPendingDaemons(err: Error): void {
+	for (const [id, p] of pendingDaemonLogs) {
+		clearTimeout(p.timer);
+		p.reject(err);
+		pendingDaemonLogs.delete(id);
+	}
+	for (const [id, p] of pendingDaemonControl) {
+		clearTimeout(p.timer);
+		p.reject(err);
+		pendingDaemonControl.delete(id);
+	}
+}
+
+type DaemonControlCmd = Extract<ClientCommand, { type: "daemon_stop" | "daemon_restart" }>;
+type DaemonLogsCmd = Extract<ClientCommand, { type: "daemon_logs" }>;
+type DaemonPending<T> = Map<string, { resolve: (v: T) => void; reject: (err: Error) => void; timer: number }>;
+
+const DAEMON_TIMEOUT_MS = 30_000;
+
+function registerDaemonPending<T>(
+	resolve: (v: T) => void,
+	reject: (err: Error) => void,
+	map: DaemonPending<T>,
+): { id: string; timer: number } {
+	const id = `d${nextDaemonCallId++}`;
+	const timer =
+		DAEMON_TIMEOUT_MS > 0
+			? window.setTimeout(() => {
+					map.delete(id);
+					reject(new Error("daemon command timed out"));
+				}, DAEMON_TIMEOUT_MS)
+			: 0;
+	map.set(id, { resolve, reject, timer });
+	return { id, timer };
+}
+
+/** Fetch daemon log text (default tail 200 lines); resolves with text + broker cursor + state. */
+export function requestDaemonLogs(
+	projectDir: string,
+	name: string,
+	opts: { lines?: number; head?: boolean; grep?: string } = {},
+): Promise<DaemonLogsResult> {
+	const { promise, resolve, reject } = Promise.withResolvers<DaemonLogsResult>();
+	if (!ws || ws.readyState !== WebSocket.OPEN) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	const cmd: Omit<DaemonLogsCmd, "id"> = {
+		type: "daemon_logs",
+		projectDir,
+		name,
+		lines: opts.lines ?? 200,
+		...(opts.head !== undefined ? { head: opts.head } : {}),
+		...(opts.grep !== undefined ? { grep: opts.grep } : {}),
+	};
+	const { id } = registerDaemonPending<DaemonLogsResult>(resolve, reject, pendingDaemonLogs);
+	ws.send(JSON.stringify({ ...cmd, id } satisfies ClientCommand));
+	return promise;
+}
+
+/** Stop a daemon via its broker; resolves with the refreshed DaemonInfo. */
+export function stopDaemon(projectDir: string, name: string): Promise<DaemonInfo> {
+	const { promise, resolve, reject } = Promise.withResolvers<DaemonInfo>();
+	if (!ws || ws.readyState !== WebSocket.OPEN) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	const cmd: Omit<Extract<ClientCommand, { type: "daemon_stop" }>, "id"> = { type: "daemon_stop", projectDir, name };
+	const { id } = registerDaemonPending<DaemonInfo>(resolve, reject, pendingDaemonControl);
+	ws.send(JSON.stringify({ ...cmd, id } satisfies ClientCommand));
+	return promise;
+}
+
+/** Restart a daemon via its broker; resolves with the refreshed DaemonInfo. */
+export function restartDaemon(projectDir: string, name: string): Promise<DaemonInfo> {
+	const { promise, resolve, reject } = Promise.withResolvers<DaemonInfo>();
+	if (!ws || ws.readyState !== WebSocket.OPEN) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	const cmd: Omit<Extract<ClientCommand, { type: "daemon_restart" }>, "id"> = { type: "daemon_restart", projectDir, name };
+	const { id } = registerDaemonPending<DaemonInfo>(resolve, reject, pendingDaemonControl);
+	ws.send(JSON.stringify({ ...cmd, id } satisfies ClientCommand));
+	return promise;
+}
 function startSidebarPoll(): void {
 	stopSidebarPoll();
 	refreshLiveSessions(); // immediate roster pull — no 5s initial gap
@@ -1034,6 +1138,16 @@ export function setSidebarVisible(visible: boolean): void {
 
 export function toggleSidebar(): void {
 	setSidebarVisible(!state.sidebarVisible);
+}
+
+/** Persisted pet-roster visibility (status-bar segment + card ×). */
+export function setPetVisible(visible: boolean): void {
+	if (typeof localStorage !== "undefined") localStorage.setItem(PET_KEY, String(visible));
+	setState("petVisible", visible);
+}
+
+export function togglePetVisible(): void {
+	setPetVisible(!state.petVisible);
 }
 
 /** Per-session UI state dropped when attaching to a different session. */
@@ -1153,8 +1267,29 @@ export function connect(): void {
 				pendingLive = null;
 				break;
 			case "daemons":
-				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [d.name, d])));
+				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [d.projectDir + "\u0000" + d.name, d])));
 				break;
+			case "daemon_logs_result": {
+				const pending = pendingDaemonLogs.get(frame.id);
+				if (!pending) break; // unknown id (timed out or stale): ignore
+				pendingDaemonLogs.delete(frame.id);
+				clearTimeout(pending.timer);
+				if (frame.ok && frame.text !== undefined && frame.cursor !== undefined && frame.state !== undefined) {
+					pending.resolve({ text: frame.text, cursor: frame.cursor, state: frame.state });
+				} else {
+					pending.reject(new Error(frame.error ?? "daemon logs failed"));
+				}
+				break;
+			}
+			case "daemon_control_result": {
+				const pending = pendingDaemonControl.get(frame.id);
+				if (!pending) break; // unknown id (timed out or stale): ignore
+				pendingDaemonControl.delete(frame.id);
+				clearTimeout(pending.timer);
+				if (frame.ok && frame.daemon) pending.resolve(frame.daemon);
+				else pending.reject(new Error(frame.error ?? "daemon control failed"));
+				break;
+			}
 			case "collab_status":
 				// Session-scoped: the stale-frame guard above already drops it
 				// for any session we're not attached to (collab_start/collab_stop
@@ -1268,6 +1403,7 @@ export function connect(): void {
 		pendingLive = null;
 		pendingProcessStats?.reject(new Error("Disconnected"));
 		pendingProcessStats = null;
+		rejectPendingDaemons(new Error("Disconnected"));
 		const delay = backoff;
 		backoff = Math.min(backoff * 2, 8000);
 		setTimeout(connect, delay);

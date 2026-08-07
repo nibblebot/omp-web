@@ -1,5 +1,6 @@
 import { For, type Component } from "solid-js";
 import { state, type ToolItem } from "../../state";
+import { ToolShell } from "./ToolShell";
 
 const GLYPH: Record<string, string> = { done: "☑", completed: "☑", in_progress: "◐", pending: "☐", abandoned: "⊘", blocked: "✗" };
 
@@ -31,10 +32,7 @@ export const TodoTool: Component<{ item: ToolItem }> = props => {
 	const fallback = () => parsePhases(props.item.args);
 	const phases = () => (live().length > 0 ? live() : fallback());
 	return (
-		<div class="tool-card todo-tool">
-			<div class="tool-header">
-				<span class="tool-name">todos</span>
-			</div>
+		<ToolShell name="todos" class="todo-tool">
 			<div class="todo-body">
 				<For each={phases()}>
 					{phase => (
@@ -53,6 +51,6 @@ export const TodoTool: Component<{ item: ToolItem }> = props => {
 				</For>
 				{phases().length === 0 && <div class="tool-collapsed-note">no todos</div>}
 			</div>
-		</div>
+		</ToolShell>
 	);
 };

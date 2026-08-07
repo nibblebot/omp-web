@@ -77,7 +77,7 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 			<div class="picker-list">
 				<For each={live()}>
 					{s => (
-						<div class={`picker-row${s.sessionId === state.currentSessionId ? " active" : ""}`} onClick={() => attach(s)}>
+						<div class="picker-row" classList={{ active: s.sessionId === state.currentSessionId }} onClick={() => attach(s)}>
 							<span class="picker-label">{s.name ?? s.sessionId}</span>
 							<span class="picker-detail">
 								{s.cwd || "(no cwd)"} · {s.messageCount} msgs{s.isStreaming ? " · streaming" : ""}

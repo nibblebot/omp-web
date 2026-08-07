@@ -1,20 +1,12 @@
-import { createMemo, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
+import { createMemo, For, Match, Show, Switch, type Component } from "solid-js";
 import type { LiveSessionEntry } from "../protocol";
 import { attachSession, createSession, setSidebarVisible, setState, startCollab, state, stopCollab } from "../state";
 import { CharacterAvatar } from "./CharacterAvatar";
-import { copyText } from "./Markdown";
+import { CopyButton } from "./CopyButton";
 
 /** Spawn a new live session (new server handle) and attach this tab to it. */
 function spawnSession(): void {
 	void createSession().catch(err => setState("error", String(err)));
-}
-
-/** Spawn 10 live sessions sequentially (create_session attaches each, so
- *  concurrent fires would churn the view); ends attached to the last one. */
-function spawnTenSessions(): void {
-	void (async () => {
-		for (let i = 0; i < 10; i++) await createSession();
-	})().catch(err => setState("error", String(err)));
 }
 
 function formatRss(bytes: number): string {
@@ -26,27 +18,6 @@ function formatUptime(sec: number): string {
 	if (m < 60) return `${m}m`;
 	return `${Math.floor(m / 60)}h${m % 60}m`;
 }
-
-/** Small copy button with a transient "copied" label (clipboard + textarea fallback). */
-const CollabCopyButton: Component<{ text: string; title?: string }> = props => {
-	const [copied, setCopied] = createSignal(false);
-	return (
-		<button
-			class="sidebar-collab-copy"
-			type="button"
-			title={props.title}
-			onClick={e => {
-				e.stopPropagation();
-				void copyText(props.text).then(ok => {
-					setCopied(ok);
-					setTimeout(() => setCopied(false), 1200);
-				});
-			}}
-		>
-			{copied() ? "copied" : "copy"}
-		</button>
-	);
-};
 
 const SessionRow: Component<{ session: LiveSessionEntry }> = props => {
 	const attach = () => void attachSession(props.session.sessionId).catch(() => {});
@@ -70,22 +41,18 @@ const SessionRow: Component<{ session: LiveSessionEntry }> = props => {
 					<Show when={props.session.contextUsage}>
 						{u => (
 							<>
-								<span class="sidebar-ctx-bar">
+								<span class="amount-bar amount-bar--sm">
 									<span
-										class="sidebar-ctx-fill"
+										class="amount-bar-fill"
 										style={{ width: `${Math.min(100, u().percent)}%` }}
 									/>
 								</span>
-								<span class="sidebar-ctx-pct" title={`${u().tokens} / ${u().contextWindow} tokens`}>
+								<span class="amount-bar-pct" title={`${u().tokens} / ${u().contextWindow} tokens`}>
 									{u().percent.toFixed(0)}%
 								</span>
-								<span class="sidebar-data-sep">·</span>
 							</>
 						)}
 					</Show>
-					<span class="sidebar-sub-count" title="subagents (placeholder)">
-						0 sub
-					</span>
 				</div>
 			</div>
 			{/* Collab controls: only on the attached session's row (collab_start/
@@ -163,14 +130,14 @@ const SessionRow: Component<{ session: LiveSessionEntry }> = props => {
 									<code class="sidebar-collab-link" title={s().link}>
 										{s().link}
 									</code>
-									<CollabCopyButton text={s().link} title="Copy `omp join` link" />
+									<CopyButton class="sidebar-collab-copy" text={s().link} title="Copy `omp join` link" />
 								</div>
 								<div class="sidebar-collab-linkrow">
 									<span class="sidebar-collab-label">view</span>
 									<code class="sidebar-collab-link" title={s().viewLink}>
 										{s().viewLink}
 									</code>
-									<CollabCopyButton text={s().viewLink} title="Copy read-only view link" />
+									<CopyButton class="sidebar-collab-copy" text={s().viewLink} title="Copy read-only view link" />
 								</div>
 								<ul class="sidebar-collab-list">
 									<For each={s().participants}>
@@ -198,24 +165,22 @@ export const SessionsSidebar: Component = () => (
 	<aside class="sidebar">
 		<div class="sidebar-header">
 			<span class="sidebar-title">Sessions</span>
-			<button class="sidebar-hide" onClick={spawnSession} title="New session">
+			<span class="sidebar-stats">
+				<Show when={state.processStats} fallback={<>{state.liveSessions.length} sessions</>}>
+					{p => (
+						<>
+							{formatRss(p().rssBytes)} · up {formatUptime(p().uptimeSec)} · {p().sessionCount}{" "}
+							sessions
+						</>
+					)}
+				</Show>
+			</span>
+			<button class="sidebar-icon-btn" onClick={spawnSession} title="New session">
 				+
 			</button>
-			<button class="sidebar-hide" onClick={spawnTenSessions} title="Create 10 sessions">
-				+10
-			</button>
-			<button class="sidebar-hide" onClick={() => setSidebarVisible(false)} title="Hide sidebar">
+			<button class="sidebar-icon-btn" onClick={() => setSidebarVisible(false)} title="Hide sidebar">
 				×
 			</button>
-		</div>
-		<div class="sidebar-stats">
-			<Show when={state.processStats} fallback={<span>{state.liveSessions.length} sessions</span>}>
-				{p => (
-					<span>
-						{formatRss(p().rssBytes)} · up {formatUptime(p().uptimeSec)} · {p().sessionCount} sessions
-					</span>
-				)}
-			</Show>
 		</div>
 		<div class="sidebar-list">
 			<For each={state.liveSessions}>{s => <SessionRow session={s} />}</For>

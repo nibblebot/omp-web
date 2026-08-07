@@ -1,6 +1,7 @@
 import { For, Show, type Component } from "solid-js";
 import type { ToolItem } from "../../state";
 import { GenericToolCard } from "./GenericToolCard";
+import { ToolShell } from "./ToolShell";
 
 const URL_RE = /https?:\/\/[^\s)"'<>]+/g;
 
@@ -10,13 +11,7 @@ export const WebSearchTool: Component<{ item: ToolItem }> = props => {
 	const urls = () => [...new Set(props.item.output.match(URL_RE) ?? [])];
 	return (
 		<Show when={props.item.status === "running" || urls().length > 0} fallback={<GenericToolCard item={props.item} />}>
-			<div class="tool-card websearch-tool">
-				<div class="tool-header">
-					<span class="tool-name">web search {query()}</span>
-					<span class="tool-status" data-status={props.item.status}>
-						{props.item.status}
-					</span>
-				</div>
+			<ToolShell name={<>web search {query()}</>} status={props.item.status} class="websearch-tool">
 				<div class="websearch-body">
 					<For each={urls()}>
 						{url => (
@@ -26,7 +21,7 @@ export const WebSearchTool: Component<{ item: ToolItem }> = props => {
 						)}
 					</For>
 				</div>
-			</div>
+			</ToolShell>
 		</Show>
 	);
 };

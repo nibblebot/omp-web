@@ -2,7 +2,7 @@ import { For, Show, createEffect, createRenderEffect, createSignal, onCleanup, o
 import { characterForProvider, drawCharacter } from "../characters";
 import { ROLE_NAMES, groupModelRoles, type RoleGroup } from "../model-roles";
 import { SPRITE_SIZE, type PetPose } from "../sprite";
-import { state } from "../state";
+import { setState, state, togglePetVisible } from "../state";
 import { CharacterAvatar } from "./CharacterAvatar";
 
 const IDLE_BLINK_MS = 150;
@@ -103,26 +103,44 @@ export const Pet: Component = () => {
 	});
 
 	return (
-		<div class="pet" data-streaming={state.streaming} title={characterForProvider(state.model?.provider).name}>
-			<div class="pet-roster">
-				<For each={roster()}>
-					{e => (
-						<div class="pet-role" classList={{ secondary: !e.primary }}>
-							<div class="pet-role-avatar">
-								{e.primary ? (
-									<PetMainAvatar pose={pose} />
-								) : (
-									<CharacterAvatar provider={e.group.provider} size={SECONDARY_AVATAR_SIZE} />
-								)}
-								<span class="pet-role-name">{characterForProvider(e.group.provider).name}</span>
+		<Show when={roster().length > 0}>
+			<div class="pet" data-streaming={state.streaming}>
+				<button
+					class="pet-hide"
+					type="button"
+					title="Hide pet roster"
+					aria-label="Hide pet roster"
+					onClick={togglePetVisible}
+				>
+					×
+				</button>
+				<div class="pet-roster">
+					<For each={roster()}>
+						{e => (
+							<div class="pet-role" classList={{ secondary: !e.primary }}>
+								<div class="pet-role-avatar">
+									{e.primary ? (
+										<button
+											type="button"
+											class="pet-main-button"
+											aria-label={`${characterForProvider(e.group.provider).name} — open model picker`}
+											onClick={() => setState("modal", "model")}
+										>
+											<PetMainAvatar pose={pose} />
+										</button>
+									) : (
+										<CharacterAvatar provider={e.group.provider} size={SECONDARY_AVATAR_SIZE} />
+									)}
+									<span class="pet-role-name">{characterForProvider(e.group.provider).name}</span>
+								</div>
+								<Show when={e.group.roles.length > 0}>
+									<div class="pet-role-labels">{e.group.roles.map(r => ROLE_NAMES[r] ?? r).join(" · ")}</div>
+								</Show>
 							</div>
-							<div class="pet-role-labels">
-								<For each={e.group.roles}>{r => <span>{ROLE_NAMES[r] ?? r}</span>}</For>
-							</div>
-						</div>
-					)}
-				</For>
+						)}
+					</For>
+				</div>
 			</div>
-		</div>
+		</Show>
 	);
 };

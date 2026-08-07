@@ -264,12 +264,11 @@ export const PromptBox: Component = () => {
 					onKeyUp={refreshToken}
 					onClick={refreshToken}
 					onPaste={onPaste}
-					placeholder="Message the agent… (Enter send/steer, Ctrl+Enter follow-up, Shift+Enter newline)"
+					placeholder="Message the agent… (Enter send, Ctrl+Enter follow-up, / for commands)"
 					rows={3}
 				/>
 			</div>
 			<div class="prompt-actions">
-				<span class="hint-chip">{state.streaming ? "steer" : "send"}</span>
 				<button class="new-session" onClick={() => dispatchInput("/new", undefined, "enter")}>
 					New session
 				</button>
@@ -279,7 +278,7 @@ export const PromptBox: Component = () => {
 					</button>
 				)}
 				<button class="send" onClick={() => submit("enter")} disabled={!message().trim() && images().length === 0}>
-					Send
+					{state.streaming ? "Steer" : "Send"}
 				</button>
 			</div>
 		</div>

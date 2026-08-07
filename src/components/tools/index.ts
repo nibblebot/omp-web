@@ -12,6 +12,8 @@ import { TaskTool } from "./TaskTool";
 import { TodoTool } from "./TodoTool";
 import { WebSearchTool } from "./WebSearchTool";
 
+export { COLLAPSED_LINES, CollapsiblePre, ToolShell, toolExpanded } from "./ToolShell";
+
 /** Per-tool renderers; anything missing falls back to GenericToolCard. */
 export const RENDERERS: Record<string, Component<{ item: ToolItem }>> = {
 	bash: BashTool,

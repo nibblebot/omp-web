@@ -4,7 +4,7 @@ import { formatDaemonUptime } from "./components/ActiveDaemons";
 import type { DaemonInfo } from "./protocol";
 
 function daemon(state: string): DaemonInfo {
-	return { name: "d1", id: "id1", state, createdAt: 0, startedAt: 0, restartCount: 0, outputBytes: 0, persist: false, detached: false };
+	return { name: "d1", id: "id1", projectDir: "/tmp/proj", state, createdAt: 0, startedAt: 0, restartCount: 0, outputBytes: 0, persist: false, detached: false };
 }
 
 describe("isLiveDaemon", () => {

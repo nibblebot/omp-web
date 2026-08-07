@@ -1,5 +1,6 @@
 import { createEffect, createMemo, type Component } from "solid-js";
 import { renderMarkdown } from "../markdown";
+import { COPY_FEEDBACK_MS } from "./CopyButton";
 
 /** navigator.clipboard with a textarea fallback for non-secure origins. */
 export async function copyText(text: string): Promise<boolean> {
@@ -44,7 +45,7 @@ function decorateCodeBlocks(root: HTMLElement): void {
 				btn.textContent = ok ? "copied" : "failed";
 				setTimeout(() => {
 					btn.textContent = "copy";
-				}, 1200);
+				}, COPY_FEEDBACK_MS);
 			});
 		});
 		pre.appendChild(btn);

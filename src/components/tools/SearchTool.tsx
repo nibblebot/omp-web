@@ -1,5 +1,6 @@
 import { For, type Component } from "solid-js";
 import type { ToolItem } from "../../state";
+import { ToolShell } from "./ToolShell";
 
 const MATCH_LINE = /^(.+?):(\d+):(.*)$/;
 
@@ -11,15 +12,7 @@ export const SearchTool: Component<{ item: ToolItem }> = props => {
 	};
 	const lines = () => props.item.output.split("\n").filter(l => l.length > 0);
 	return (
-		<div class="tool-card search-tool">
-			<div class="tool-header">
-				<span class="tool-name">
-					{props.item.name} {summary()}
-				</span>
-				<span class="tool-status" data-status={props.item.status}>
-					{props.item.status}
-				</span>
-			</div>
+		<ToolShell name={<>{props.item.name} {summary()}</>} status={props.item.status} class="search-tool">
 			<div class="search-body">
 				<For each={lines()}>
 					{line => {
@@ -40,6 +33,6 @@ export const SearchTool: Component<{ item: ToolItem }> = props => {
 					}}
 				</For>
 			</div>
-		</div>
+		</ToolShell>
 	);
 };

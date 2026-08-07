@@ -4,7 +4,8 @@ import { call, state, type Block } from "../state";
 import type { ImageArg } from "../protocol";
 import { imageDataUrl } from "../images";
 import { FullImageOverlay } from "./tools/ImageScan";
-import { copyText, Markdown } from "./Markdown";
+import { Markdown } from "./Markdown";
+import { CopyButton } from "./CopyButton";
 import { pushNotice, setState } from "../state";
 import { ToolCard } from "./ToolCard";
 import { buildUsageRow, formatUsageRow } from "../usage";
@@ -87,7 +88,6 @@ export const MessageList: Component = () => {
 						<Match when={item.kind === "user" && item}>
 							{user => {
 								const images = () => user().images ?? [];
-								const [copied, setCopied] = createSignal(false);
 								// Phase 11: branch-from-here. AgentMessage user
 								// payloads carry no entryId (pi-ai UserMessage has
 								// no id field), so resolve it via the branching
@@ -120,18 +120,11 @@ export const MessageList: Component = () => {
 											>
 												branch
 											</button>
-											<button
+											<CopyButton
 												class="msg-copy-btn"
 												title="Copy message text"
-												onClick={() => {
-													void copyText(user().text).then(ok => {
-														setCopied(ok);
-														setTimeout(() => setCopied(false), 1200);
-													});
-												}}
-											>
-												{copied() ? "copied" : "copy"}
-											</button>
+												text={() => user().text}
+											/>
 										</div>
 										{user().text && <div class="msg-user-text">{user().text}</div>}
 										<Show when={images().length > 0}>
@@ -150,25 +143,17 @@ export const MessageList: Component = () => {
 							}}
 						</Match>
 						<Match when={item.kind === "assistant" && item}>
-							{assistant => {
-								const [copied, setCopied] = createSignal(false);
-								return (
-									<div class="msg-assistant">
-										<button
+							{assistant => (
+								<div class="msg-assistant">
+										<CopyButton
 											class="msg-copy-btn"
 											title="Copy message markdown"
-											onClick={() => {
+											text={() => {
 												const blocks = assistant().blocks;
 												const visible = blocks.filter(b => b.kind !== "thinking");
-												const text = (visible.length > 0 ? visible : blocks).map(b => b.text).join("\n\n");
-												void copyText(text).then(ok => {
-													setCopied(ok);
-													setTimeout(() => setCopied(false), 1200);
-												});
+												return (visible.length > 0 ? visible : blocks).map(b => b.text).join("\n\n");
 											}}
-										>
-											{copied() ? "copied" : "copy"}
-										</button>
+										/>
 										<For each={assistant().blocks}>
 											{block =>
 												block.kind === "thinking" ? (
@@ -192,8 +177,7 @@ export const MessageList: Component = () => {
 											}}
 										</Show>
 									</div>
-								);
-							}}
+							)}
 						</Match>
 						<Match when={item.kind === "tool" && item}>{tool => <ToolCard item={tool()} />}</Match>
 						<Match when={item.kind === "bash" && item}>

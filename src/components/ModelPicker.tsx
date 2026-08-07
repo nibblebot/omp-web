@@ -5,6 +5,13 @@ import { call, setState, state } from "../state";
 import { Modal } from "./Modal";
 
 /** Model picker: fetches on open, fuzzy-filtered, grouped by provider. */
+/** Compact context-window label for model rows, e.g. "ctx 128k" / "ctx 1.2M". */
+function formatCtx(tokens: number | null | undefined): string | undefined {
+	if (!tokens || tokens <= 0) return undefined;
+	if (tokens >= 1_000_000) return `ctx ${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+	return `ctx ${Math.round(tokens / 1000)}k`;
+}
+
 export const ModelPicker: Component<{ onClose: () => void }> = props => {
 	const [filter, setFilter] = createSignal("");
 	let input!: HTMLInputElement;
@@ -62,7 +69,10 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 										onClick={() => choose(m)}
 									>
 										<span class="picker-label">{m.id}</span>
-										{m.reasoning && <span class="picker-detail">reasoning</span>}
+										{m.reasoning && <span class="picker-chip">reasoning</span>}
+										{formatCtx(m.contextWindow) && (
+											<span class="picker-meta">{formatCtx(m.contextWindow)}</span>
+										)}
 									</div>
 								)}
 							</For>

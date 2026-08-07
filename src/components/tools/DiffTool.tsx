@@ -1,7 +1,8 @@
 import { For, Show, type Component } from "solid-js";
 import { buildDiffRows } from "../../diff";
-import { state, type ToolItem } from "../../state";
+import { type ToolItem } from "../../state";
 import { GenericToolCard } from "./GenericToolCard";
+import { ToolShell, toolExpanded } from "./ToolShell";
 
 interface WriteArgs {
 	path: string;
@@ -76,26 +77,18 @@ const WriteView: Component<{ content: string; expanded: boolean }> = props => {
 export const DiffTool: Component<{ item: ToolItem }> = props => {
 	const edit = () => parseEdit(props.item.args);
 	const write = () => (props.item.name === "write" ? parseWrite(props.item.args) : null);
-	const expanded = () => state.toolsExpanded || props.item.status === "running";
+	const expanded = () => toolExpanded(props.item);
 
 	return (
 		<Show when={edit() || write()} fallback={<GenericToolCard item={props.item} />}>
-			<div class="tool-card diff-tool">
-				<div class="tool-header">
-					<span class="tool-name">
-						{props.item.name} {edit()?.path ?? write()?.path}
-					</span>
-					<span class="tool-status" data-status={props.item.status}>
-						{props.item.status}
-					</span>
-				</div>
+			<ToolShell name={<>{props.item.name} {edit()?.path ?? write()?.path}</>} status={props.item.status} class="diff-tool">
 				<Show when={edit()}>
 					{e => (
 						<For each={e().edits}>{(ed: { oldText: string; newText: string }) => <DiffView oldText={ed.oldText} newText={ed.newText} />}</For>
 					)}
 				</Show>
 				<Show when={write()}>{w => <WriteView content={w().content} expanded={expanded()} />}</Show>
-			</div>
+			</ToolShell>
 		</Show>
 	);
 };

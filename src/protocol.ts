@@ -218,7 +218,12 @@ export type ClientCommand =
 	| { type: "get_process_stats" }
 	// Collab: start/stop the collab room for the socket's ATTACHED session.
 	| { type: "collab_start" }
-	| { type: "collab_stop" };
+	| { type: "collab_stop" }
+	// Daemon web exposure: per-daemon logs/stop/restart, answered by unicast
+	// daemon_logs_result / daemon_control_result frames.
+	| { type: "daemon_logs"; id: string; projectDir: string; name: string; lines: number; head?: boolean; grep?: string }
+	| { type: "daemon_stop"; id: string; projectDir: string; name: string; timeoutMs?: number }
+	| { type: "daemon_restart"; id: string; projectDir: string; name: string };
 
 // ---------------------------------------------------------------------------
 // Collab (TUI-mux): per-session collab host status, pushed to attached
@@ -285,6 +290,10 @@ export type ServerFrame =
 	| { type: "live_sessions"; sessions: LiveSessionEntry[] }
 	// Project-wide daemon broker roster (hub launch processes); global broadcast, like live_sessions.
 	| { type: "daemons"; daemons: DaemonInfo[] }
+	// Unicast answer to daemon_logs.
+	| { type: "daemon_logs_result"; id: string; ok: boolean; text?: string; cursor?: number; state?: string; error?: string }
+	// Unicast answer to daemon_stop / daemon_restart.
+	| { type: "daemon_control_result"; id: string; ok: boolean; daemon?: DaemonInfo; error?: string }
 	// Unicast answer to get_process_stats — the 5s poll carries only process stats.
 	| { type: "process_stats"; process: ProcessStats }
 	| { type: "error"; error: string };
@@ -314,11 +323,14 @@ export type ProcessStats = {
 export type DaemonInfo = {
 	name: string;
 	id: string;
+	projectDir: string;
 	state: string;
 	pid?: number;
 	createdAt: number;
 	startedAt: number;
 	readyAt?: number;
+	readyPort?: number;
+	readyHost?: string;
 	exitedAt?: number;
 	exitCode?: number;
 	exitReason?: string;

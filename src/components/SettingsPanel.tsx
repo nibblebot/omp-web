@@ -121,7 +121,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 	};
 
 	return (
-		<Modal class="modal-wide settings-panel" onClose={props.onClose}>
+		<Modal variant="sheet" class="settings-panel" onClose={props.onClose}>
 			<div class="settings-header">
 				<h2 class="settings-title">Settings</h2>
 				<input
@@ -141,7 +141,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 						{tab => (
 							<button
 								type="button"
-								class={tab.id === activeTabId() ? "settings-tab active" : "settings-tab"}
+								class="settings-tab" classList={{ active: tab.id === activeTabId() }}
 								role="tab"
 								aria-selected={tab.id === activeTabId()}
 								onClick={() => selectTab(tab.id)}
@@ -160,7 +160,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 								<>
 									<button
 										type="button"
-										class={tab.id === activeTabId() ? "settings-section active" : "settings-section"}
+										class="settings-section" classList={{ active: tab.id === activeTabId() }}
 										aria-current={tab.id === activeTabId() ? "true" : undefined}
 										onClick={() => selectTab(tab.id)}
 									>
@@ -171,7 +171,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 											{name => (
 												<button
 													type="button"
-													class={activeGroup() === name ? "settings-subsection active" : "settings-subsection"}
+													class="settings-subsection" classList={{ active: activeGroup() === name }}
 													onClick={() => {
 														setActiveGroup(name);
 														setQuery("");

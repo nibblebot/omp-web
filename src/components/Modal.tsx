@@ -5,7 +5,14 @@ import { Portal } from "solid-js/web";
  * Generic overlay: backdrop click and Esc close, Tab cycles within the
  * dialog. Every picker (model, thinking, stats, sessions, branch) reuses it.
  */
-export const Modal: Component<{ title?: string; onClose: () => void; class?: string; children: JSX.Element }> = props => {
+export const Modal: Component<{
+	title?: string;
+	onClose: () => void;
+	class?: string;
+	/** "sheet" anchors the dialog as a full-height right-anchored side sheet. */
+	variant?: "sheet";
+	children: JSX.Element;
+}> = props => {
 	let box!: HTMLDivElement;
 
 	const onKeyDown = (e: KeyboardEvent) => {
@@ -38,9 +45,14 @@ export const Modal: Component<{ title?: string; onClose: () => void; class?: str
 
 	return (
 		<Portal>
-			<div class="modal-backdrop" onClick={props.onClose}>
+			<div
+				class="modal-backdrop"
+				classList={{ sheet: props.variant === "sheet" }}
+				onClick={props.onClose}
+			>
 				<div
 					class={props.class ? `modal ${props.class}` : "modal"}
+					classList={{ sheet: props.variant === "sheet" }}
 					role="dialog"
 					aria-modal="true"
 					tabindex="-1"

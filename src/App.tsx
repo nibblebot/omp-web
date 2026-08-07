@@ -1,9 +1,11 @@
-import { onMount, Show, type Component } from "solid-js";
+import { For, onMount, Show, type Component } from "solid-js";
+import { characterForProvider } from "./characters";
 import { ActiveSubagents } from "./components/ActiveSubagents";
 import { ActiveDaemons } from "./components/ActiveDaemons";
 import { AskDialog } from "./components/AskDialog";
 import { BranchPicker } from "./components/BranchPicker";
 import { BtwPanel } from "./components/BtwPanel";
+import { CharacterAvatar } from "./components/CharacterAvatar";
 import { GoalPopover } from "./components/GoalPopover";
 import { HistorySearch } from "./components/HistorySearch";
 import { UsagePanel } from "./components/UsagePanel";
@@ -21,7 +23,7 @@ import { StatsPopover } from "./components/StatsPopover";
 import { StatusBar } from "./components/StatusBar";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { ThinkingPicker } from "./components/ThinkingPicker";
-import { connect, setState, state } from "./state";
+import { connect, setPromptInsert, setState, state } from "./state";
 import { initTheme } from "./theme";
 
 // Apply persisted theme/font-size before first render to avoid a dark flash.
@@ -42,6 +44,26 @@ const SHORTCUTS: Array<[string, string]> = [
 	["! cmd", "Run shell command, output into context"],
 	["!! cmd", "Run shell command, output local only (dimmed)"],
 ];
+
+/** First-run empty state: large character sprite, greeting, and suggested
+ *  prompts that insert into the prompt box (consumed by PromptBox). */
+const SUGGESTED_PROMPTS = ["Summarize this repo", "Explain the server protocol", "List open issues"];
+
+const EmptyState: Component = () => (
+	<div class="empty-state">
+		<CharacterAvatar provider={state.model?.provider} pose="happy" size={96} />
+		<p class="empty-greeting">{characterForProvider(state.model?.provider).name} is ready. What should we work on?</p>
+		<div class="empty-chips">
+			<For each={SUGGESTED_PROMPTS}>
+				{text => (
+					<button type="button" class="empty-chip" onClick={() => setPromptInsert({ text })}>
+						{text}
+					</button>
+				)}
+			</For>
+		</div>
+	</div>
+);
 
 export const App: Component = () => {
 	onMount(() => {
@@ -67,7 +89,9 @@ export const App: Component = () => {
 			<StatusBar />
 			<div class="app-body">
 				<div class="app-main">
-					<MessageList />
+					<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyState />}>
+						<MessageList />
+					</Show>
 					<QueueBar />
 					<div class="active-strips">
 						<ActiveSubagents />
@@ -79,7 +103,9 @@ export const App: Component = () => {
 					<SessionsSidebar />
 				</Show>
 			</div>
-			<Pet />
+			<Show when={state.petVisible}>
+				<Pet />
+			</Show>
 			<Show when={state.modal === "help"}>
 				<Modal title="Shortcuts" onClose={() => setState("modal", null)}>
 					<table class="shortcuts">

@@ -1,5 +1,6 @@
 import { For, Show, type Component } from "solid-js";
 import { state, type SubagentInfo, type ToolItem } from "../../state";
+import { ToolShell } from "./ToolShell";
 
 export const STATUS_GLYPH: Record<string, string> = {
 	started: "◐",
@@ -30,18 +31,12 @@ export const TaskTool: Component<{ item: ToolItem }> = props => {
 	};
 	const subs = () => [...state.subagents.values()].sort((a, b) => a.index - b.index);
 	return (
-		<div class="tool-card task-tool">
-			<div class="tool-header">
-				<span class="tool-name">task {description()}</span>
-				<span class="tool-status" data-status={props.item.status}>
-					{props.item.status}
-				</span>
-			</div>
+		<ToolShell name={<>task {description()}</>} status={props.item.status} class="task-tool">
 			<Show when={subs().length > 0}>
 				<div class="subagent-list">
 					<For each={subs()}>{sub => <SubagentRow sub={sub} />}</For>
 				</div>
 			</Show>
-		</div>
+		</ToolShell>
 	);
 };
