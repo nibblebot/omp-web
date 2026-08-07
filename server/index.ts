@@ -10,11 +10,19 @@ import {
 	discoverAuthStorage,
 	ModelRegistry,
 	Settings,
+	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
+	type ExtensionAskDialogResultItem,
 	type ExtensionUIContext,
 } from "@oh-my-pi/pi-coding-agent";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
+import {
+	COLLAB_PROMPT_MESSAGE_TYPE,
+	type CollabPromptDetails,
+	type CollabUiRequestDraft,
+	type CollabUiSelectItem,
+} from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { SETTINGS_SCHEMA, type SettingPath } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { getAvailableThemes } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -54,8 +62,17 @@ import type {
 	LiveSessionEntry,
 	ProcessStats,
 	DaemonInfo,
+	CollabParticipantInfo,
+	CollabWireStatus,
 } from "../src/protocol";
 import { applySettingSideEffects, buildSettingsModel, coerceSettingValue } from "./settings-model";
+import {
+	CollabHostAdapter,
+	type CollabAgentRef,
+	type CollabHostStatus,
+	type CollabSessionPort,
+} from "./collab-host";
+import { createRelay, type RelayHandle, type SocketData } from "./collab-relay";
 
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
@@ -73,13 +90,18 @@ const authStorage = await discoverAuthStorage(agentDir);
 const modelRegistry = new ModelRegistry(authStorage);
 const settings = await Settings.init({ cwd, agentDir });
 
-interface SocketData {
-	/** Handle of the session this socket is attached to (null = detached). */
-	attached: string | null;
-}
 type Ws = ServerWebSocket<SocketData>;
 
 const sockets = new Set<Ws>();
+
+// ---------------------------------------------------------------------------
+// Collab relay (Slice A): rooms that forward opaque AES-GCM envelopes between
+// a per-session host adapter and real omp TUI guests (`omp join <link>`).
+// Relay sockets are typed { kind: "relay" } and are NEVER added to `sockets`.
+// ---------------------------------------------------------------------------
+
+const relayMaxGuests = Number(Bun.env.OMP_WEB_COLLAB_MAX_GUESTS ?? 64);
+const relay: RelayHandle = createRelay({ maxGuests: relayMaxGuests });
 
 /** Global frames only (error). Session-scoped frames MUST go through broadcastTo/sendScoped. */
 function broadcast(frame: ServerFrame): void {
@@ -99,7 +121,9 @@ function sendScoped(ws: Ws, handle: string, frame: SessionScopedFrame): void {
 /** Stamp the session handle and deliver a session-scoped frame to every socket attached to it. */
 function broadcastTo(handle: string, frame: SessionScopedFrame): void {
 	const data = JSON.stringify({ ...frame, sessionId: handle });
-	for (const ws of sockets) if (ws.data.attached === handle) ws.send(data);
+	for (const ws of sockets) {
+		if (ws.data.kind === "web" && ws.data.attached === handle) ws.send(data);
+	}
 }
 
 /** Surface operator-facing text as the existing notice event frame. */
@@ -132,15 +156,196 @@ function clearEphemeralAbort(entry: SessionEntry, streamId: number): void {
 
 let nextUiRequestId = 1;
 
+/**
+ * Sentinel for the collab ui preference: the collab channel went away
+ * mid-request (no writable guest at send time, teardown, abort) — the caller
+ * falls through to the web-socket path below.
+ */
+const COLLAB_UI_FALLTHROUGH = Symbol("collab-ui-fallthrough");
+
+/**
+ * The ExtensionUIContext dialog subset, answered by a writable collab guest
+ * FIRST (mirroring the TUI's collab-host preference in #runGuestDialog); when
+ * no writable guest is attached the request falls through to the web sockets.
+ */
 function uiRequest(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
+	const adapter = entry.collab.adapter;
+	if (adapter?.isLive && adapter.writableGuestCount > 0) {
+		return uiRequestViaCollab(entry, method, params).then(value => {
+			if (value === COLLAB_UI_FALLTHROUGH) return webUiRequest(entry, method, params);
+			return value;
+		});
+	}
+	return webUiRequest(entry, method, params);
+}
+
+/** The pre-existing web-socket dialog path (one pending request per entry). */
+function webUiRequest(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
 	const targets = new Set<Ws>();
-	for (const ws of sockets) if (ws.data.attached === entry.handle) targets.add(ws);
+	for (const ws of sockets) {
+		if (ws.data.kind === "web" && ws.data.attached === entry.handle) targets.add(ws);
+	}
 	if (targets.size === 0) return Promise.reject(new Error("No connected client to answer the UI request"));
 	const id = `ui${nextUiRequestId++}`;
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	entry.pendingUiRequests.set(id, { sockets: targets, resolve, reject });
 	broadcastTo(entry.handle, { type: "ui_request", id, method, params });
 	return promise;
+}
+
+// Params shapes are fixed by buildUiContext's uiRequest call sites below
+// (one object literal per method), so a single named cast at the mapper
+// boundary is safe; the same objects ride the wire as the web ui_request.
+interface SelectDialogParams {
+	title: string;
+	options: CollabUiSelectItem[];
+}
+interface ConfirmDialogParams {
+	title: string;
+	message?: string;
+}
+interface InputDialogParams {
+	title: string;
+	placeholder?: string;
+}
+interface EditorDialogParams {
+	title: string;
+	prefill?: string;
+}
+interface AskDialogParams {
+	questions: ExtensionAskDialogQuestion[];
+}
+
+/** Map one dialog method to its collab wire request; null = not a collab surface. */
+function mapUiMethodToCollab(method: string, params: unknown): CollabUiRequestDraft | null {
+	switch (method) {
+		case "select": {
+			// Shape fixed by buildUiContext's select call site.
+			const p = params as SelectDialogParams;
+			return { kind: "select", title: p.title, options: p.options };
+		}
+		case "confirm": {
+			// Shape fixed by buildUiContext's confirm call site.
+			const p = params as ConfirmDialogParams;
+			return { kind: "select", title: p.title, options: ["Yes", "No"] };
+		}
+		case "input": {
+			// Shape fixed by buildUiContext's input call site.
+			const p = params as InputDialogParams;
+			return { kind: "editor", title: p.title, prefill: p.placeholder };
+		}
+		case "editor": {
+			// Shape fixed by buildUiContext's editor call site.
+			const p = params as EditorDialogParams;
+			return { kind: "editor", title: p.title, prefill: p.prefill };
+		}
+		default:
+			return null;
+	}
+}
+
+/**
+ * One collab dialog round-trip. Resolves with the guest's value (undefined =
+ * genuine guest cancel) or COLLAB_UI_FALLTHROUGH when the collab channel is
+ * unavailable.
+ */
+async function collabAsk(adapter: CollabHostAdapter, draft: CollabUiRequestDraft): Promise<unknown> {
+	const request = adapter.requestGuestUi(draft);
+	if (!request) return COLLAB_UI_FALLTHROUGH;
+	const result = await request;
+	if (result.kind === "unavailable") return COLLAB_UI_FALLTHROUGH;
+	return result.value;
+}
+
+/**
+ * Sequential per-question askDialog over the wire, mirroring the TUI's
+ * #runGuestAskDialog minus the "Chat about this" escape. `undefined` is a
+ * genuine guest cancel that aborts the whole dialog; COLLAB_UI_FALLTHROUGH
+ * routes back to the web sockets.
+ */
+async function askDialogViaCollab(adapter: CollabHostAdapter, questions: ExtensionAskDialogQuestion[]): Promise<unknown> {
+	const results: ExtensionAskDialogResultItem[] = [];
+	for (let index = 0; index < questions.length; index++) {
+		const q = questions[index];
+		const selected = new Set<string>();
+		let customInput: string | undefined;
+		const baseOptions: CollabUiSelectItem[] = q.options.map(o =>
+			o.description?.trim() ? { label: o.label, description: o.description.trim() } : o.label,
+		);
+		if (q.multi) {
+			while (true) {
+				const checkedIndices = q.options
+					.map((option, i) => (selected.has(option.label) ? i : -1))
+					.filter(i => i >= 0);
+				const choice = await collabAsk(adapter, {
+					kind: "select",
+					title: q.question,
+					options: [...baseOptions, "Other (type your own)", "Next →"],
+					selectionMarker: "checkbox",
+					checkedIndices,
+					markableCount: q.options.length,
+				});
+				if (choice === COLLAB_UI_FALLTHROUGH || choice === undefined) return choice;
+				if (choice === "Next →") break;
+				if (choice === "Other (type your own)") {
+					const input = await collabAsk(adapter, { kind: "editor", title: q.question, prefill: "" });
+					if (input === COLLAB_UI_FALLTHROUGH) return input;
+					// Guest cancelled the Other editor: back to the option list.
+					if (input === undefined) continue;
+					customInput = input as string;
+					break;
+				}
+				if (selected.has(choice as string)) selected.delete(choice as string);
+				else selected.add(choice as string);
+			}
+		} else {
+			while (true) {
+				const choice = await collabAsk(adapter, {
+					kind: "select",
+					title: q.question,
+					options: [...baseOptions, "Other (type your own)"],
+				});
+				if (choice === COLLAB_UI_FALLTHROUGH || choice === undefined) return choice;
+				if (choice === "Other (type your own)") {
+					const input = await collabAsk(adapter, { kind: "editor", title: q.question, prefill: "" });
+					if (input === COLLAB_UI_FALLTHROUGH) return input;
+					// Guest cancelled the Other editor: re-show the option list.
+					if (input === undefined) continue;
+					customInput = input as string;
+				} else {
+					selected.add(choice as string);
+				}
+				break;
+			}
+		}
+		results.push({
+			id: q.id ?? String(index),
+			question: q.question,
+			options: q.options.map(o => o.label),
+			multi: !!q.multi,
+			selectedOptions: q.options.map(o => o.label).filter(label => selected.has(label)),
+			customInput,
+		});
+	}
+	return { kind: "submit", results };
+}
+
+/** Dialog dispatch through a live collab adapter; COLLAB_UI_FALLTHROUGH when unanswerable there. */
+async function uiRequestViaCollab(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
+	const adapter = entry.collab.adapter;
+	if (!adapter?.isLive) return COLLAB_UI_FALLTHROUGH;
+	if (method === "askDialog") {
+		// Shape fixed by buildUiContext's askDialog call site.
+		const p = params as AskDialogParams;
+		return askDialogViaCollab(adapter, p.questions);
+	}
+	const draft = mapUiMethodToCollab(method, params);
+	if (!draft) return COLLAB_UI_FALLTHROUGH;
+	const value = await collabAsk(adapter, draft);
+	if (value === COLLAB_UI_FALLTHROUGH) return value;
+	// confirm answers with Yes/No over the wire; the web contract wants a boolean.
+	if (method === "confirm") return value === "Yes";
+	return value;
 }
 
 function rejectEntryUiRequests(entry: SessionEntry, reason: string): void {
@@ -270,6 +475,7 @@ function clearSubagents(entry: SessionEntry): void {
 	}
 	entry.subagentSnapshots.clear();
 	entry.transcriptSessionFilesBySubagentId.clear();
+	entry.onSubagentsChange?.();
 }
 
 // Payloads are JSON-safe snapshots; drop a frame rather than kill the relay
@@ -310,6 +516,8 @@ function handleSubagentLifecycle(entry: SessionEntry, payload: SubagentLifecycle
 		entry.subagentSnapshots.delete(payload.id);
 	}
 	broadcastSubagentFrame(entry, "subagent_lifecycle", payload);
+	// Collab guests mirror the same roster; notify the tap after the mutation.
+	entry.onSubagentsChange?.();
 }
 
 function handleSubagentProgress(entry: SessionEntry, payload: SubagentProgressPayload): void {
@@ -406,6 +614,10 @@ interface SessionEntry {
 	subagentSnapshots: Map<string, SubagentSnapshot>;
 	transcriptSessionFilesBySubagentId: Map<string, string>;
 	staleSubagentIds: Set<string>;
+	/** Collab host state: the live adapter (null when not live) plus the start-in-flight flag. */
+	collab: { adapter: CollabHostAdapter | null; starting: boolean };
+	/** Fired by the subagent mirror when the roster may have changed (collab agents tap). */
+	onSubagentsChange: (() => void) | null;
 }
 
 const sessions = new Map<string, SessionEntry>();
@@ -580,6 +792,143 @@ function wireSession(entry: SessionEntry): void {
 	});
 }
 
+// ---------------------------------------------------------------------------
+// Collab session port (Slice C): the daemon's per-session surface the collab
+// host adapter drives — session getters, event/entry/bus taps, guest prompt
+// injection, agent roster/control, and transcript resolution.
+// ---------------------------------------------------------------------------
+
+/** Collab wire rosters only carry running/idle/parked/aborted; the mirror's wider status union maps down. */
+function collabAgentStatus(status: AgentProgress["status"]): CollabAgentRef["status"] {
+	if (status === "running" || status === "pending") return "running";
+	if (status === "aborted") return "aborted";
+	return "idle";
+}
+
+function buildCollabPort(entry: SessionEntry): CollabSessionPort {
+	const { session } = entry;
+	return {
+		getSessionId: () => session.sessionId,
+		getCwd: () => session.sessionManager.getCwd(),
+		getSessionName: () => session.sessionName,
+		isStreaming: () => session.isStreaming,
+		isAborting: () => session.isAborting,
+		queuedMessageCount: () => session.queuedMessageCount,
+		getModel: () => session.model,
+		getThinkingLevel: () => session.thinkingLevel,
+		getContextUsage: () => session.getContextUsage(),
+		snapshot: () => session.sessionManager.snapshotForReplication(),
+		subscribe: cb => session.subscribe(cb),
+		// Single slot; the adapter restores it (with null) on teardown.
+		onEntryAppended: cb => {
+			session.sessionManager.onEntryAppended = cb ?? undefined;
+		},
+		// Both task channels: the same EventBus traffic the subagent mirror taps.
+		subscribeBus: cb => {
+			const unsubs = [
+				entry.eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data => cb(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data)),
+				entry.eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, data => cb(TASK_SUBAGENT_PROGRESS_CHANNEL, data)),
+			];
+			return () => {
+				for (const unsub of unsubs) unsub();
+			};
+		},
+		subscribeAgents: cb => {
+			const unsubRegistry = entry.agentRegistry.onChange(() => cb());
+			entry.onSubagentsChange = cb;
+			return () => {
+				unsubRegistry();
+				entry.onSubagentsChange = null;
+			};
+		},
+		emitNotice: (level, message) => notifyEvent(entry, message, level),
+		promptFromGuest: (text, images, fromName) =>
+			session.promptCustomMessage(
+				{
+					customType: COLLAB_PROMPT_MESSAGE_TYPE,
+					content: images?.length ? [{ type: "text", text }, ...images] : text,
+					display: true,
+					details: { from: fromName } satisfies CollabPromptDetails,
+					attribution: "user",
+				},
+				{ streamingBehavior: "steer", queueChipText: text },
+			),
+		abort: () => session.abort({ reason: USER_INTERRUPT_LABEL }),
+		listAgents: () => {
+			const refs: CollabAgentRef[] = [];
+			// Main lives in the per-session registry; task subagents register in
+			// AgentRegistry.global() and are mirrored per-session as snapshots.
+			for (const ref of entry.agentRegistry.list()) {
+				if (ref.kind !== "main") continue;
+				refs.push({
+					id: ref.id,
+					kind: "main",
+					displayName: ref.displayName,
+					status: ref.status,
+					hasSessionFile: !!ref.sessionFile,
+					createdAt: ref.createdAt,
+					lastActivity: ref.lastActivity,
+				});
+			}
+			for (const snap of entry.subagentSnapshots.values()) {
+				const ref = AgentRegistry.global().get(snap.id);
+				refs.push({
+					id: snap.id,
+					kind: "sub",
+					displayName: ref?.displayName ?? snap.agent ?? snap.id,
+					status: ref?.status ?? collabAgentStatus(snap.status),
+					parentId: snap.parentToolCallId,
+					hasSessionFile: !!snap.sessionFile,
+					createdAt: ref?.createdAt ?? 0,
+					lastActivity: ref?.lastActivity ?? snap.lastUpdate,
+				});
+			}
+			return refs;
+		},
+		agentCmd: async (cmd, agentId, text) => {
+			if (cmd === "chat") {
+				if (agentId === MAIN_AGENT_ID) {
+					// Fire-and-forget: prompt resolves at turn end; failures are
+					// logged (the adapter targets its own error frames).
+					void session.prompt(text ?? "", { streamingBehavior: "steer" }).catch(err => {
+						console.error("collab guest prompt failed:", err);
+					});
+				} else {
+					await liveSubagentSession(entry, agentId, "steer").steer(text ?? "");
+				}
+				return;
+			}
+			if (cmd === "kill") {
+				if (agentId === MAIN_AGENT_ID) await session.abort({ reason: USER_INTERRUPT_LABEL });
+				else await abortSubagent(entry, agentId);
+				return;
+			}
+			// revive: the Main agent cannot be revived (it never dies).
+			if (agentId === MAIN_AGENT_ID) throw new Error("no such agent");
+			await AgentLifecycleManager.global().ensureLive(agentId);
+		},
+		resolveTranscriptFile: agentId =>
+			agentId === MAIN_AGENT_ID
+				? (session.sessionFile ?? null)
+				: (entry.transcriptSessionFilesBySubagentId.get(agentId) ?? entry.subagentSnapshots.get(agentId)?.sessionFile ?? null),
+	};
+}
+
+/** Map the adapter's host status onto the wire status web clients render. */
+function toWireStatus(status: CollabHostStatus | null): CollabWireStatus {
+	if (!status) return { state: "off" };
+	if (status.state === "error") return { state: "error", error: status.error ?? "collab error" };
+	return {
+		state: "live",
+		link: status.link,
+		viewLink: status.viewLink,
+		relayUrl: status.relayUrl,
+		roomId: status.roomId,
+		participants: status.participants,
+		maxGuests: relayMaxGuests,
+	};
+}
+
 // Slash commands typed into chat run through the ACP builtin dispatch before
 // hitting the model (parity with RPC mode's prompt flow).
 function buildSlashRuntime(entry: SessionEntry): SlashCommandRuntime {
@@ -625,6 +974,8 @@ async function createSession(sessionCwd: string): Promise<SessionEntry> {
 		subagentSnapshots: new Map(),
 		transcriptSessionFilesBySubagentId: new Map(),
 		staleSubagentIds: new Set(),
+		collab: { adapter: null, starting: false },
+		onSubagentsChange: null,
 	};
 	entry.slashRuntime = buildSlashRuntime(entry);
 	// Feeds the tool UI context; without hasUI the ask tool never registers.
@@ -1077,6 +1428,7 @@ async function listFiles(query: string, limit: number): Promise<string[]> {
 
 /** Attach a socket and push the session priming sequence, in contract order. */
 function attachSocket(ws: Ws, entry: SessionEntry): void {
+	if (ws.data.kind !== "web") return;
 	ws.data.attached = entry.handle;
 	send(ws, { type: "attached", sessionId: entry.handle });
 	sendScoped(ws, entry.handle, { type: "history", messages: entry.session.messages });
@@ -1085,6 +1437,8 @@ function attachSocket(ws: Ws, entry: SessionEntry): void {
 		state: buildStateSnapshot(entry.session),
 		stats: entry.session.getSessionStats(),
 	});
+	// Current collab status, so a client attaching to a live room sees it immediately.
+	sendScoped(ws, entry.handle, { type: "collab_status", status: toWireStatus(entry.collab.adapter?.status ?? null) });
 	void buildAvailableSlashCommands(entry.session)
 		.then(commands => sendScoped(ws, entry.handle, { type: "available_commands", commands }))
 		.catch(err => console.error("Failed to build available commands:", err));
@@ -1096,16 +1450,25 @@ function attachSocket(ws: Ws, entry: SessionEntry): void {
  * login code inputs of those sockets are rejected.
  */
 async function closeSession(entry: SessionEntry, reason: string): Promise<void> {
+	// Collab teardown before dispose: stop the adapter (guests get a bye) and
+	// destroy the relay room (guests get room-closed + 4001).
+	const adapter = entry.collab.adapter;
+	const roomId = adapter?.status?.roomId;
+	entry.collab.adapter = null;
+	if (adapter) await adapter.stop(reason).catch(() => {});
+	if (roomId) relay.closeRoom(roomId);
 	entry.session.beginDispose();
 	await entry.session.dispose().catch(() => {});
 	rejectEntryUiRequests(entry, reason);
 	for (const [id, p] of pendingCodeInputs) {
-		if (p.ws.data.attached === entry.handle) {
+		if (p.ws.data.kind === "web" && p.ws.data.attached === entry.handle) {
 			p.reject(new Error(reason));
 			pendingCodeInputs.delete(id);
 		}
 	}
-	for (const ws of sockets) if (ws.data.attached === entry.handle) ws.data.attached = null;
+	for (const ws of sockets) {
+		if (ws.data.kind === "web" && ws.data.attached === entry.handle) ws.data.attached = null;
+	}
 	sessions.delete(entry.handle);
 	if (lastHandle === entry.handle) lastHandle = [...sessions.keys()].at(-1) ?? null;
 	broadcastLiveSessions();
@@ -1113,10 +1476,12 @@ async function closeSession(entry: SessionEntry, reason: string): Promise<void> 
 
 /** The session this socket's call/login_code/ui_response commands route to. */
 function attachedEntry(ws: Ws): SessionEntry | undefined {
+	if (ws.data.kind !== "web") return undefined;
 	return ws.data.attached ? sessions.get(ws.data.attached) : undefined;
 }
 
 async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
+	if (ws.data.kind !== "web") return;
 	let cmd: ClientCommand;
 	try {
 		cmd = JSON.parse(String(raw)) as ClientCommand;
@@ -1231,6 +1596,42 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				send(ws, { type: "process_stats", process: processStatsSnapshot() });
 				break;
 			}
+			case "collab_start": {
+				const entry = attachedEntry(ws);
+				if (!entry) throw new Error("Not attached to a session");
+				if (entry.collab.starting || entry.collab.adapter) {
+					throw new Error("collab already active for this session");
+				}
+				entry.collab.starting = true;
+				broadcastTo(entry.handle, { type: "collab_status", status: { state: "starting" } });
+				const adapter = new CollabHostAdapter(buildCollabPort(entry), {
+					hostName: Bun.env.OMP_WEB_COLLAB_HOSTNAME ?? (os.userInfo().username || "web"),
+					onStatusChange: status => broadcastTo(entry.handle, { type: "collab_status", status: toWireStatus(status) }),
+				});
+				try {
+					await adapter.start(relayBaseUrl());
+					entry.collab.adapter = adapter;
+				} catch (err) {
+					broadcastTo(entry.handle, { type: "collab_status", status: { state: "error", error: String(err) } });
+				} finally {
+					entry.collab.starting = false;
+				}
+				break;
+			}
+			case "collab_stop": {
+				const entry = attachedEntry(ws);
+				if (!entry) throw new Error("Not attached to a session");
+				if (entry.collab.starting) throw new Error("collab is starting");
+				const adapter = entry.collab.adapter;
+				if (!adapter) throw new Error("collab is not active");
+				// Capture the room id BEFORE stop clears the adapter status.
+				const roomId = adapter.status?.roomId;
+				entry.collab.adapter = null;
+				await adapter.stop("collab stopped by web user");
+				if (roomId) relay.closeRoom(roomId);
+				broadcastTo(entry.handle, { type: "collab_status", status: { state: "off" } });
+				break;
+			}
 			default:
 				throw new Error(`Unknown command: ${JSON.stringify(cmd)}`);
 		}
@@ -1271,11 +1672,14 @@ function isInside(resolved: string, roots: string[]): boolean {
 }
 
 const server = Bun.serve<SocketData>({
-	port: 4711,
+	port: Number(Bun.env.OMP_WEB_PORT ?? 4711),
 	async fetch(req, srv) {
 		const url = new URL(req.url);
+		// Collab relay rooms (/r/<roomId>?role=host|guest) upgrade here; the
+		// relay returns false for every other pathname so web handling continues.
+		if (relay.handleUpgrade(url, srv, req)) return;
 		if (url.pathname === "/ws") {
-			if (srv.upgrade(req, { data: { attached: null } })) return;
+			if (srv.upgrade(req, { data: { kind: "web", attached: null } })) return;
 			return new Response("WebSocket upgrade failed", { status: 400 });
 		}
 		if (url.pathname === "/download") {
@@ -1301,6 +1705,10 @@ const server = Bun.serve<SocketData>({
 	},
 	websocket: {
 		open(ws) {
+			if (ws.data.kind === "relay") {
+				relay.handleOpen(ws);
+				return;
+			}
 			sockets.add(ws);
 			startDaemonPoll();
 			// Auto-attach to the most-recently-created live session: a bare WS
@@ -1309,6 +1717,10 @@ const server = Bun.serve<SocketData>({
 			if (entry) attachSocket(ws, entry);
 		},
 		close(ws) {
+			if (ws.data.kind === "relay") {
+				relay.handleClose(ws);
+				return;
+			}
 			// Detach only: sessions outlive sockets.
 			sockets.delete(ws);
 			if (sockets.size === 0) stopDaemonPoll();
@@ -1331,10 +1743,19 @@ const server = Bun.serve<SocketData>({
 			}
 		},
 		message(ws, raw) {
+			if (ws.data.kind === "relay") {
+				relay.handleMessage(ws, raw);
+				return;
+			}
 			void handleCommand(ws, raw);
 		},
 	},
 });
+
+/** Collab relay base URL: env-overridable, defaults to this server's own port. */
+function relayBaseUrl(): string {
+	return Bun.env.OMP_WEB_COLLAB_URL ?? `ws://localhost:${server.port}`;
+}
 
 console.log(`omp-web listening on http://localhost:${server.port}`);
 
@@ -1350,6 +1771,12 @@ async function shutdown(): Promise<void> {
 		pendingCodeInputs.delete(id);
 	}
 	for (const entry of sessions.values()) {
+		// Collab teardown first: stop the adapter and destroy its relay room.
+		const adapter = entry.collab.adapter;
+		const roomId = adapter?.status?.roomId;
+		entry.collab.adapter = null;
+		if (adapter) await adapter.stop("server shutting down").catch(() => {});
+		if (roomId) relay.closeRoom(roomId);
 		entry.session.beginDispose();
 		await entry.session.dispose().catch(() => {});
 	}

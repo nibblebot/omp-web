@@ -29,6 +29,7 @@ A Solid.js web UI for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/packag
 
 ### Sessions
 - Resume past sessions from a picker (full transcript restored); multi-session multiplexing with a live-sessions sidebar (attach/create/close, process stats)
+- **TUI collab join**: share any live session with real omp TUI clients — the sidebar's share button produces an `omp join <link>` (write) and a read-only view link; many TUIs attach to the same session through the daemon's collab relay (`/r/<roomId>`), prompt/steer/abort, answer `ask` dialogs, and see the live transcript, events, subagent roster and state. The relay URL defaults to `ws://localhost:<port>`; set `OMP_WEB_COLLAB_URL` for remote/wss deployments, `OMP_WEB_COLLAB_MAX_GUESTS` for the per-room cap (default 64)
 - Branch or fork from any earlier turn (hover a user message for branch/copy)
 - Compaction summaries rendered inline; auto-compaction, retry and model-fallback notices shown in the transcript
 - `/handoff` starts a new session carrying a summary document; `/fresh` resets provider state; `/dump` downloads transcript + LLM request JSON
@@ -50,6 +51,18 @@ bun run dev:web      # vite dev server on :4713
 Production: `bun run build && bun run start` (serves `dist/` on :4711).
 
 The agent's working directory defaults to the server's cwd; override with `OMP_WEB_CWD`.
+
+### Join from the CLI (no browser)
+
+```sh
+bun run collab            # start the collab room for the newest session, print links
+bun run collab -- --join  # …and open the TUI immediately (write link)
+bun run collab -- --view --join   # join with the read-only (view) link
+bun run collab -- --stop  # stop the room
+bun run collab -- --list  # list live session handles (for --session <handle>)
+```
+
+Output is copy-paste-ready: `room: <id>` plus two `omp join <link>` lines (write, then read-only). `omp join` needs a terminal; the links default to `ws://localhost:4711` (set `OMP_WEB_PORT`/`--port` for a different daemon port).
 
 Checks: `bun run check:types`, `bun test`.
 

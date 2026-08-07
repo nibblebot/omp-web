@@ -3,7 +3,7 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import type { ClientCommand, DaemonInfo, ImageArg, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "./protocol";
+import type { ClientCommand, CollabWireStatus, DaemonInfo, ImageArg, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "./protocol";
 import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
 
@@ -145,6 +145,9 @@ export const [state, setState] = createStore({
 	toolsExpanded: false,
 	// Sessions sidebar: polled live-session roster + server process stats.
 	liveSessions: [] as LiveSessionEntry[],
+	// Collab host status for the ATTACHED session (collab_status frames; the
+	// collab room is per-session UI state, reset when attaching elsewhere).
+	collabStatus: { state: "off" } as CollabWireStatus,
 	// Daemon broker roster (hub/launch long-running processes); project-scoped
 	// like liveSessions, so resetSessionView must NOT clear it.
 	daemons: new Map<string, DaemonInfo>(),
@@ -943,6 +946,22 @@ export function closeSession(sessionId: string): void {
 	}
 }
 
+/** Start the collab room for the ATTACHED session; fire-and-forget, the
+ *  resulting state arrives via session-scoped collab_status broadcasts. */
+export function startCollab(): void {
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({ type: "collab_start" } satisfies ClientCommand));
+	}
+}
+
+/** Stop the collab room for the ATTACHED session; fire-and-forget, the
+ *  resulting state arrives via session-scoped collab_status broadcasts. */
+export function stopCollab(): void {
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({ type: "collab_stop" } satisfies ClientCommand));
+	}
+}
+
 export function listLiveSessions(): Promise<LiveSessionsResult> {
 	const { promise, resolve, reject } = Promise.withResolvers<LiveSessionsResult>();
 	if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -1035,6 +1054,8 @@ function resetSessionView(): void {
 		loginCodeRequest: null,
 		uiRequest: null,
 		btw: null,
+		// Collab room is per-session UI state; a fresh session starts with no room.
+		collabStatus: { state: "off" },
 	});
 }
 
@@ -1133,6 +1154,12 @@ export function connect(): void {
 				break;
 			case "daemons":
 				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [d.name, d])));
+				break;
+			case "collab_status":
+				// Session-scoped: the stale-frame guard above already drops it
+				// for any session we're not attached to (collab_start/collab_stop
+				// act on the attached session).
+				setState("collabStatus", frame.status);
 				break;
 			case "process_stats":
 				setState("processStats", frame.process);

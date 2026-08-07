@@ -1971,6 +1971,7 @@ pre.terminal {
 .sidebar-row {
 	display: flex;
 	align-items: flex-start;
+	flex-wrap: wrap;
 	gap: 8px;
 	padding: 6px 8px;
 	border-radius: 6px;
@@ -2068,6 +2069,170 @@ pre.terminal {
 	color: var(--muted);
 	text-align: center;
 	padding: 12px 0;
+}
+
+/* Collab controls (attached session row): share button + live panel with
+   omp join/view links and the participant list. */
+.sidebar-collab-row,
+.sidebar-collab-error,
+.sidebar-collab {
+	flex: 1 0 100%;
+}
+
+.sidebar-collab-row {
+	display: flex;
+}
+
+.sidebar-collab-btn,
+.sidebar-collab-copy {
+	background: none;
+	border: 1px solid var(--border-strong);
+	color: var(--muted-3);
+	font: inherit;
+	cursor: pointer;
+}
+
+.sidebar-collab-btn {
+	border-radius: 999px;
+	padding: 1px 10px;
+	font-size: 0.75rem;
+}
+
+.sidebar-collab-btn:hover,
+.sidebar-collab-copy:hover {
+	background: var(--btn);
+	color: var(--text);
+	border-color: var(--accent-border);
+}
+
+.sidebar-collab-copy {
+	flex: none;
+	border-color: var(--border);
+	border-radius: 4px;
+	padding: 0 6px;
+	font-size: 0.6875rem;
+	color: var(--muted);
+}
+
+.sidebar-collab-muted {
+	font-size: 0.75rem;
+	font-style: italic;
+	color: var(--muted-2);
+}
+
+.sidebar-collab-error {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.sidebar-collab-errtext {
+	flex: 1;
+	min-width: 0;
+	font-size: 0.75rem;
+	color: var(--error);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidebar-collab {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-top: 2px;
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg-deep);
+	font-size: 0.75rem;
+}
+
+.sidebar-collab-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.sidebar-collab-live {
+	font-weight: 600;
+	letter-spacing: 0.03em;
+	color: var(--success);
+}
+
+.sidebar-collab-guests {
+	flex: none;
+	color: var(--muted-2);
+}
+
+.sidebar-collab-stop {
+	margin-left: auto;
+	color: var(--error);
+}
+
+.sidebar-collab-linkrow {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.sidebar-collab-label,
+.sidebar-collab-link {
+	font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+	font-size: 0.6875rem;
+}
+
+.sidebar-collab-label {
+	flex: none;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--muted-2);
+}
+
+.sidebar-collab-link {
+	flex: 1;
+	min-width: 0;
+	color: var(--muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidebar-collab-list {
+	margin: 0;
+	padding: 4px 0 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	border-top: 1px solid var(--border);
+}
+
+.sidebar-collab-list li {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--muted-2);
+	overflow: hidden;
+}
+
+.sidebar-collab-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidebar-collab-ro {
+	flex: none;
+	font-size: 0.6875rem;
+	color: var(--muted-2);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 0 6px;
 }
 
 /* ---------------------------------------------------------------------------

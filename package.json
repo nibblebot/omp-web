@@ -8,7 +8,8 @@
 		"build": "vite build",
 		"start": "bun server/index.ts",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
-		"test": "bun test"
+		"test": "bun test",
+		"collab": "bun server/collab-cli.ts"
 	},
 	"dependencies": {
 		"@oh-my-pi/pi-agent-core": "17.1.8",

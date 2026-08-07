@@ -305,7 +305,11 @@ stays in sync via `settings_changed`.
 
 ## Exclusions (recorded decisions, not gaps)
 
-- Multi-session/collab surfaces (collab/QR/join/leave) — out of single-session scope.
+- ~~Multi-session/collab surfaces (collab/QR/join/leave) — out of single-session scope.~~
+  SHIPPED (tui-mux): the daemon runs an omp collab relay (`/r/<roomId>`) and a
+  per-session host adapter, so real TUI clients can `omp join` a session link
+  (write or read-only view link) and multiplex with the web UI. See README
+  "TUI collab join".
 - Voice/STT/TTS (`/live`, push-to-talk) — excluded.
 - Terminal-only protocols: sixel/kitty graphics, OSC hyperlinks/appearance, SGR
   mouse, external `$EDITOR` (Ctrl+G) — the browser textarea and modals are the

@@ -1,7 +1,8 @@
-import { For, Show, type Component } from "solid-js";
+import { createMemo, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
 import type { LiveSessionEntry } from "../protocol";
-import { attachSession, createSession, setSidebarVisible, setState, state } from "../state";
+import { attachSession, createSession, setSidebarVisible, setState, startCollab, state, stopCollab } from "../state";
 import { CharacterAvatar } from "./CharacterAvatar";
+import { copyText } from "./Markdown";
 
 /** Spawn a new live session (new server handle) and attach this tab to it. */
 function spawnSession(): void {
@@ -26,12 +27,34 @@ function formatUptime(sec: number): string {
 	return `${Math.floor(m / 60)}h${m % 60}m`;
 }
 
+/** Small copy button with a transient "copied" label (clipboard + textarea fallback). */
+const CollabCopyButton: Component<{ text: string; title?: string }> = props => {
+	const [copied, setCopied] = createSignal(false);
+	return (
+		<button
+			class="sidebar-collab-copy"
+			type="button"
+			title={props.title}
+			onClick={e => {
+				e.stopPropagation();
+				void copyText(props.text).then(ok => {
+					setCopied(ok);
+					setTimeout(() => setCopied(false), 1200);
+				});
+			}}
+		>
+			{copied() ? "copied" : "copy"}
+		</button>
+	);
+};
+
 const SessionRow: Component<{ session: LiveSessionEntry }> = props => {
 	const attach = () => void attachSession(props.session.sessionId).catch(() => {});
+	const isAttached = () => props.session.sessionId === state.currentSessionId;
 	return (
 		<div
 			class="sidebar-row"
-			classList={{ active: props.session.sessionId === state.currentSessionId }}
+			classList={{ active: isAttached() }}
 			onClick={attach}
 			title={props.session.cwd}
 		>
@@ -65,6 +88,107 @@ const SessionRow: Component<{ session: LiveSessionEntry }> = props => {
 					</span>
 				</div>
 			</div>
+			{/* Collab controls: only on the attached session's row (collab_start/
+			    collab_stop target the attached session). */}
+			<Show when={isAttached()}>
+				<Switch>
+					<Match when={state.collabStatus.state === "off"}>
+						<div class="sidebar-collab-row">
+							<button
+								class="sidebar-collab-btn"
+								type="button"
+								title="Start collab — TUI clients can `omp join` this session"
+								onClick={e => {
+									e.stopPropagation();
+									startCollab();
+								}}
+							>
+								share
+							</button>
+						</div>
+					</Match>
+					<Match when={state.collabStatus.state === "starting"}>
+						<div class="sidebar-collab-row">
+							<span class="sidebar-collab-muted">collab starting…</span>
+						</div>
+					</Match>
+					<Match when={state.collabStatus.state === "error" ? state.collabStatus : false}>
+						{s => (
+							<div class="sidebar-collab-error">
+								<span class="sidebar-collab-errtext" title={s().error}>
+									{s().error}
+								</span>
+								<button
+									class="sidebar-collab-btn"
+									type="button"
+									title="Retry starting collab"
+									onClick={e => {
+										e.stopPropagation();
+										startCollab();
+									}}
+								>
+									share
+								</button>
+							</div>
+						)}
+					</Match>
+				</Switch>
+				<Show when={state.collabStatus.state === "live" ? state.collabStatus : false}>
+					{s => {
+						// Memo, not a plain const: Show re-runs its child only when
+						// the when-value flips truthiness, so derived values must
+						// track s() themselves to follow later collab_status frames.
+						const guests = createMemo(() => s().participants.filter(p => p.role === "guest").length);
+						return (
+							<div class="sidebar-collab">
+								<div class="sidebar-collab-head">
+									<span class="sidebar-collab-live">collab live</span>
+									<span class="sidebar-collab-guests">
+										{guests()} guest{guests() === 1 ? "" : "s"}
+									</span>
+									<button
+										class="sidebar-collab-btn sidebar-collab-stop"
+										type="button"
+										title="Stop collab and close the room"
+										onClick={e => {
+											e.stopPropagation();
+											stopCollab();
+										}}
+									>
+										stop
+									</button>
+								</div>
+								<div class="sidebar-collab-linkrow">
+									<span class="sidebar-collab-label">join</span>
+									<code class="sidebar-collab-link" title={s().link}>
+										{s().link}
+									</code>
+									<CollabCopyButton text={s().link} title="Copy `omp join` link" />
+								</div>
+								<div class="sidebar-collab-linkrow">
+									<span class="sidebar-collab-label">view</span>
+									<code class="sidebar-collab-link" title={s().viewLink}>
+										{s().viewLink}
+									</code>
+									<CollabCopyButton text={s().viewLink} title="Copy read-only view link" />
+								</div>
+								<ul class="sidebar-collab-list">
+									<For each={s().participants}>
+										{p => (
+											<li>
+												<span class="sidebar-collab-name">{p.name}</span>
+												{p.role === "guest" && p.readOnly ? (
+													<span class="sidebar-collab-ro">read-only</span>
+												) : null}
+											</li>
+										)}
+									</For>
+								</ul>
+							</div>
+						);
+					}}
+				</Show>
+			</Show>
 		</div>
 	);
 };

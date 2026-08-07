@@ -215,7 +215,25 @@ export type ClientCommand =
 	| { type: "close_session"; sessionId: string }
 	| { type: "list_live_sessions" }
 	// The 5s sidebar poll command; answered with a process_stats frame.
-	| { type: "get_process_stats" };
+	| { type: "get_process_stats" }
+	// Collab: start/stop the collab room for the socket's ATTACHED session.
+	| { type: "collab_start" }
+	| { type: "collab_stop" };
+
+// ---------------------------------------------------------------------------
+// Collab (TUI-mux): per-session collab host status, pushed to attached
+// sockets as collab_status frames (also sent during the attach priming).
+// ---------------------------------------------------------------------------
+
+/** Wire-safe participant roster entry (structurally identical to pi-wire's Participant). */
+export type CollabParticipantInfo = { name: string; role: "host" | "guest"; readOnly?: boolean };
+
+/** Collab host status as broadcast to web clients. */
+export type CollabWireStatus =
+	| { state: "off" }
+	| { state: "starting" }
+	| { state: "live"; link: string; viewLink: string; relayUrl: string; roomId: string; participants: CollabParticipantInfo[]; maxGuests: number }
+	| { state: "error"; error: string };
 
 /**
  * Session-scoped frames as the server composes them, before broadcastTo
@@ -239,7 +257,9 @@ export type SessionScopedFrame =
 	| { type: "settings_changed"; model: SettingsModel }
 	| { type: "subagent_lifecycle" | "subagent_progress" | "subagent_event"; payload: unknown }
 	// Server-driven ExtensionUIContext dialog; the client answers with ui_response.
-	| { type: "ui_request"; id: string; method: string; params: unknown };
+	| { type: "ui_request"; id: string; method: string; params: unknown }
+	// Collab host status for the attached session (start/stop/live/error/off).
+	| { type: "collab_status"; status: CollabWireStatus };
 
 // Server → browser. Session-scoped frames carry the live-session handle in
 // sessionId and reach only sockets attached to it; the rest are global
