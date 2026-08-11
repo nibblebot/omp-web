@@ -99,7 +99,7 @@ export const App: Component = () => {
 					</div>
 					<PromptBox />
 				</div>
-				{/* Roster mode (orchestrator edge): the daemon sidebar replaces the
+				{/* Roster mode (fleet edge): the fleet roster sidebar replaces the
 				    sessions sidebar; single mode has no sidebar at all. */}
 				<Show when={state.sidebarVisible && state.sessionMode === "roster"}>
 					<DaemonSidebar />

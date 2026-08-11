@@ -8,7 +8,7 @@ export default defineConfig({
 		proxy: {
 			"/ws": { target: "ws://localhost:4721", ws: true },
 			"/download": { target: "http://localhost:4721" },
-			// Roster-mode control API (orchestrator edge) — dev against `omp-orchestrator serve` on 4722.
+			// Roster-mode control API (omp-fleet edge) — dev against `omp-fleet serve` on 4722.
 			"/ctl": { target: "http://localhost:4722" },
 		},
 	},

@@ -1,17 +1,17 @@
 /**
- * Real-daemon end-to-end integration suite (orchestrator core).
+ * Real-daemon end-to-end integration suite (fleet core).
  *
- * Boots a real orchestrator (startOrchestrator) on an ephemeral loopback port
- * with tmp state + config, spawns THREE real ompd daemons (bun server/index.ts
+ * Boots a real fleet (startFleet) on an ephemeral loopback port
+ * with tmp state + config, spawns THREE real omp-session daemons (bun server/index.ts
  * via the configured local spawn template) over the HTTP control plane,
  * prompts each, SIGKILLs one child and asserts the supervisor's
  * restart-on-failure (fresh token per attempt, --resume of the known session
- * file), `add`s an externally launched ompd and drives it, then exercises the
+ * file), `add`s an externally launched omp-session and drives it, then exercises the
  * idle auto-exit → asleep → respawn-on-demand-with---resume lifecycle on a
  * short-idle daemon.
  *
  * Real model prompts issued: exactly 5 (d1, d2, d3, the added external daemon,
- * and the respawned idle daemon). Tests are serial and share one orchestrator
+ * and the respawned idle daemon). Tests are serial and share one fleet
  * instance; waits are generous and every timeout failure includes the daemon's
  * stderr tail when the supervisor can provide it.
  */
@@ -20,13 +20,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startOrchestrator, type OrchestratorServer } from "./server";
+import { startFleet, type FleetServer } from "./server";
 import type { RegistryEntry } from "./registry";
-import { parseOmpdLine } from "./spawn-parse";
+import { parseContractLine } from "./spawn-parse";
 
 const PROMPT_TEXT = "Reply with exactly: PONG";
 
-/** Local spawn template: real ompd via bun; the child's cwd is the repo root (inherited). */
+/** Local spawn template: real omp-session via bun; the child's cwd is the repo root (inherited). */
 const LOCAL_TEMPLATE = "bun server/index.ts --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}";
 /** Same, with a short idle auto-exit so the R11 lifecycle is testable in seconds. */
 const SHORTIDLE_TEMPLATE = "bun server/index.ts --cwd {cwd} --port 0 --token {token} --name {name} --idle-timeout 3s {labels} {resume}";
@@ -38,7 +38,7 @@ interface PromptResultWire {
 	error?: string;
 }
 
-/** The externally launched ompd we manage ourselves (step 5). */
+/** The externally launched omp-session we manage ourselves (step 5). */
 interface ExtDaemon {
 	child: { pid: number; kill(signal?: string): void; exited: Promise<number | null> };
 	url: string;
@@ -46,7 +46,7 @@ interface ExtDaemon {
 
 /**
  * Polling here deliberately uses real wall-clock time: the daemons under test
- * are separate OS processes with their own clocks (model latency, ompd's idle
+ * are separate OS processes with their own clocks (model latency, omp-session's idle
  * timer, the supervisor's restart backoff). Deterministic fake timers cannot
  * drive them, so the waits below await real status transitions instead.
  */
@@ -56,12 +56,12 @@ function sleep(ms: number): Promise<void> {
 	return promise;
 }
 
-describe("orchestrator integration — real ompd daemons", () => {
+describe("fleet integration — real omp-session daemons", () => {
 	let tmp: string;
 	let statePath: string;
 	let configPath: string;
 	let projDirs: string[];
-	let server!: OrchestratorServer;
+	let server!: FleetServer;
 	let d1!: RegistryEntry;
 	let d2!: RegistryEntry;
 	let d3!: RegistryEntry;
@@ -84,8 +84,8 @@ describe("orchestrator integration — real ompd daemons", () => {
 	}
 
 	async function listDaemons(): Promise<RegistryEntry[]> {
-		const res = await fetch(`${base()}/ctl/daemons`);
-		if (res.status !== 200) throw new Error(`GET /ctl/daemons → ${res.status}`);
+		const res = await fetch(`${base()}/ctl/sessions`);
+		if (res.status !== 200) throw new Error(`GET /ctl/sessions → ${res.status}`);
 		return (await res.json()) as RegistryEntry[];
 	}
 
@@ -94,7 +94,7 @@ describe("orchestrator integration — real ompd daemons", () => {
 	}
 
 	/**
-	 * Poll GET /ctl/daemons until `predicate(entry)` holds. Every observed
+	 * Poll GET /ctl/sessions until `predicate(entry)` holds. Every observed
 	 * status is recorded; a timeout (or an error status) throws with the
 	 * daemon's stderr tail when available.
 	 */
@@ -138,7 +138,7 @@ describe("orchestrator integration — real ompd daemons", () => {
 		return body[0];
 	}
 
-	/** Launch `bun server/index.ts` ourselves and parse its OMPD| listening line. */
+	/** Launch `bun server/index.ts` ourselves and parse its OMP_SESSION| listening line. */
 	async function spawnExternal(cwd: string, token: string, name: string, extraArgs: string[]): Promise<ExtDaemon> {
 		const command = ["bun", "server/index.ts", "--cwd", cwd, "--port", "0", "--token", token, "--name", name, ...extraArgs].join(" ");
 		const child = Bun.spawn(["sh", "-c", command], { stdout: "pipe", stderr: "pipe" });
@@ -155,7 +155,7 @@ describe("orchestrator integration — real ompd daemons", () => {
 			while ((newline = buffer.indexOf("\n")) >= 0) {
 				const line = buffer.slice(0, newline);
 				buffer = buffer.slice(newline + 1);
-				const parsed = parseOmpdLine(line);
+				const parsed = parseContractLine(line);
 				if (parsed?.event === "listening" && url === undefined) url = parsed.url;
 			}
 		}
@@ -168,7 +168,7 @@ describe("orchestrator integration — real ompd daemons", () => {
 			} catch {
 				// already gone
 			}
-			throw new Error(`external ompd ${name} printed no OMPD| listening line within 30s`);
+			throw new Error(`external omp-session ${name} printed no OMP_SESSION| listening line within 30s`);
 		}
 		return { child: child as unknown as ExtDaemon["child"], url };
 	}
@@ -187,10 +187,10 @@ describe("orchestrator integration — real ompd daemons", () => {
 	beforeAll(async () => {
 		if (!existsSync(join(process.cwd(), "server", "index.ts"))) {
 			throw new Error(
-				"integration tests must run from the repo root: bun test orchestrator/integration.test.ts",
+				"integration tests must run from the repo root: bun test fleet/integration.test.ts",
 			);
 		}
-		tmp = mkdtempSync(join(tmpdir(), "omp-orch-integration-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-integration-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		const projectsRoot = join(tmp, "projects");
@@ -205,7 +205,7 @@ describe("orchestrator integration — real ompd daemons", () => {
 				defaultTemplate: "local",
 			}),
 		);
-		server = await startOrchestrator({ port: 0, statePath, configPath });
+		server = await startFleet({ port: 0, statePath, configPath });
 	});
 
 	afterAll(async () => {
@@ -250,7 +250,7 @@ describe("orchestrator integration — real ompd daemons", () => {
 	});
 
 	test("boots the control plane against a fresh tmp state", async () => {
-		const res = await fetch(`${base()}/ctl/daemons`);
+		const res = await fetch(`${base()}/ctl/sessions`);
 		expect(res.status).toBe(200);
 		expect((await res.json()) as unknown[]).toEqual([]);
 	});
@@ -333,7 +333,7 @@ describe("orchestrator integration — real ompd daemons", () => {
 		expect(after.lastSessionFile).toBe(sessionBefore);
 	}, 180_000);
 
-	test("add an externally launched ompd and drive it (1 real prompt)", async () => {
+	test("add an externally launched omp-session and drive it (1 real prompt)", async () => {
 		ext = await spawnExternal(projDirs[1], "ext-token-123", "ext-drive", ["--idle-timeout", "0"]);
 		trackedPids.add(ext.child.pid);
 		const res = await postJson("/ctl/add", { name: "ext-drive", url: ext.url, token: "ext-token-123" });
@@ -360,7 +360,7 @@ describe("orchestrator integration — real ompd daemons", () => {
 		const sessionBefore = ready.entry.lastSessionFile;
 		expect(sessionBefore).toBeTruthy();
 		trackedPids.add(ready.entry.pid!);
-		// Drop the orchestrator's socket; ompd's idle timer only fires with NO
+		// Drop the fleet's socket; omp-session's idle timer only fires with NO
 		// attached clients (3s idle + 15s check tick → clean exit within ~20s).
 		server.connector.disconnect(d4.daemonId);
 		const asleep = await waitForEntry(d4.daemonId, (e) => e.status === "asleep", 60_000, "go asleep after idle exit");
@@ -373,7 +373,7 @@ describe("orchestrator integration — real ompd daemons", () => {
 		const before = (await getEntry(d4.daemonId))!;
 		const sessionBefore = before.lastSessionFile!;
 		expect(sessionBefore).toBeTruthy();
-		// Note: ompd creates the session log lazily on the first turn, so a
+		// Note: omp-session creates the session log lazily on the first turn, so a
 		// never-prompted daemon's file may not exist on disk yet — the resume
 		// proof is the path identity across the respawn, checked below.
 		const result = await ctlPrompt(d4.daemonId, 90_000);

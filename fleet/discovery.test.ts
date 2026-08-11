@@ -1,5 +1,5 @@
 /**
- * Hermetic tests for orchestrator/discovery.ts: porcelain fixture parsing
+ * Hermetic tests for fleet/discovery.ts: porcelain fixture parsing
  * (main + two linked worktrees, one detached) through an injected fake git,
  * real tmp-dir git repositories end-to-end (git init + git worktree add),
  * the 60s cache, missing-root tolerance, and validateProjectPath. No live

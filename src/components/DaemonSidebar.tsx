@@ -5,8 +5,8 @@ import { formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
 
 // ---------------------------------------------------------------------------
-// Orchestrator-edge roster sidebar (Phase 3). Rendered by App.tsx only in
-// roster mode. Rows show the daemon
+// Fleet-edge roster sidebar (Phase 3). Rendered by App.tsx only in
+// roster mode. Rows show the session
 // status dot, project/label chips and cwd; ready rows attach on click, asleep
 // rows wake-then-attach, stop is a two-click confirm (DaemonPanel pattern),
 // and each row opens a detail popover (facts + stderr tail).
@@ -17,9 +17,9 @@ import { Modal } from "./Modal";
 type RosterEntry = DaemonEntry & { template?: string };
 
 const STATUS_TITLE: Record<DaemonStatus, string> = {
-	spawning: "starting the daemon process…",
-	connecting: "connecting to the daemon…",
-	session: "daemon session created…",
+	spawning: "starting the session process…",
+	connecting: "connecting to the session…",
+	session: "session created…",
 	resolving: "resolving provider/model…",
 	ready: "ready — click to attach",
 	asleep: "asleep — click to wake and attach",
@@ -40,7 +40,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 			void attachSession(daemon.daemonId).catch(err => setState("error", String(err)));
 		} else if (daemon.status === "asleep") {
 			// Wake then attach: the edge wakes first and answers the attach
-			// once the daemon is ready — send both immediately, the edge
+			// once the session is ready — send both immediately, the edge
 			// serializes them.
 			spawnResume(daemon.daemonId);
 			void attachSession(daemon.daemonId).catch(err => setState("error", String(err)));
@@ -104,7 +104,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 								<button
 									type="button"
 									class="daemon-row-btn"
-									title="Stop this daemon"
+									title="Stop this session"
 									onClick={e => {
 										e.stopPropagation();
 										setConfirmStop(true);
@@ -117,7 +117,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 							<button
 								type="button"
 								class="daemon-row-btn danger"
-								title="Stop this daemon (second click confirms)"
+								title="Stop this session (second click confirms)"
 								onClick={e => {
 									e.stopPropagation();
 									doStop();
@@ -128,7 +128,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 							<button
 								type="button"
 								class="daemon-row-btn"
-								title="Keep the daemon running"
+								title="Keep the session running"
 								onClick={e => {
 									e.stopPropagation();
 									setConfirmStop(false);
@@ -140,7 +140,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 						<button
 							type="button"
 							class="daemon-row-btn daemon-detail-btn"
-							title="Daemon details"
+							title="Session details"
 							onClick={e => {
 								e.stopPropagation();
 								setDetailOpen(true);
@@ -158,7 +158,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 	);
 };
 
-/** Detail popover: roster facts + live stderr tail from /ctl/daemons/{id}/stderr. */
+/** Detail popover: roster facts + live stderr tail from /ctl/sessions/{id}/stderr. */
 const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = props => {
 	const [stderrText, setStderrText] = createSignal<string | null>(null);
 	const [stderrError, setStderrError] = createSignal<string | null>(null);
@@ -172,10 +172,10 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 		// untrack: the daemon object is replaced on every roster broadcast;
 		// reading it here must not turn broadcasts into refetch triggers.
 		const daemonId = untrack(d).daemonId;
-		fetch(`/ctl/daemons/${encodeURIComponent(daemonId)}/stderr`)
+		fetch(`/ctl/sessions/${encodeURIComponent(daemonId)}/stderr`)
 			.then(r => {
 				if (!r.ok) {
-					throw new Error(r.status === 404 ? "not a spawned daemon — no stderr captured" : `stderr fetch failed (${r.status})`);
+					throw new Error(r.status === 404 ? "not a spawned session — no stderr captured" : `stderr fetch failed (${r.status})`);
 				}
 				return r.json() as Promise<{ text: string }>;
 			})
@@ -199,7 +199,7 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 				<span class="daemon-row-state" data-status={d().status}>
 					{d().status}
 				</span>
-				<button type="button" class="daemon-detail-close" aria-label="Close daemon details" onClick={props.onClose}>
+				<button type="button" class="daemon-detail-close" aria-label="Close session details" onClick={props.onClose}>
 					×
 				</button>
 			</div>
@@ -336,7 +336,7 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 		}
 		// Comma-separated k=v list; the edge validates each label's shape and
 		// answers an error frame on a bad one. Fire-and-forget: the new
-		// daemon appears in the roster as spawning → ready.
+		// session appears in the roster as spawning → ready.
 		const parsedLabels = labels()
 			.split(",")
 			.map(l => l.trim())
@@ -346,7 +346,7 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 	};
 
 	return (
-		<Modal title="Spawn daemon" onClose={props.onClose}>
+		<Modal title="Spawn session" onClose={props.onClose}>
 			<div class="spawn-form">
 				<label class="daemon-detail-label" for="spawn-path">
 					path
@@ -464,17 +464,17 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 	);
 };
 
-/** Right-side column: orchestrator daemon roster (click to attach/wake). */
+/** Right-side column: fleet session roster (click to attach/wake). */
 export const DaemonSidebar: Component = () => {
 	const [spawnOpen, setSpawnOpen] = createSignal(false);
 	return (
 		<aside class="sidebar">
 			<div class="sidebar-header">
-				<span class="sidebar-title">Daemons</span>
+				<span class="sidebar-title">Sessions</span>
 				<span class="sidebar-stats">
-					{state.daemonRoster.length} daemon{state.daemonRoster.length === 1 ? "" : "s"}
+					{state.daemonRoster.length} session{state.daemonRoster.length === 1 ? "" : "s"}
 				</span>
-				<button class="sidebar-icon-btn" onClick={() => setSpawnOpen(true)} title="Spawn a daemon">
+				<button class="sidebar-icon-btn" onClick={() => setSpawnOpen(true)} title="Spawn a session">
 					+
 				</button>
 				<button class="sidebar-icon-btn" onClick={() => setSidebarVisible(false)} title="Hide sidebar">
@@ -484,7 +484,7 @@ export const DaemonSidebar: Component = () => {
 			<div class="sidebar-list">
 				<For each={state.daemonRoster}>{d => <DaemonRow daemon={d} />}</For>
 				<Show when={state.daemonRoster.length === 0}>
-					<div class="sidebar-empty">no daemons — press + to spawn one</div>
+					<div class="sidebar-empty">no sessions — press + to spawn one</div>
 				</Show>
 			</div>
 			<Show when={spawnOpen()}>

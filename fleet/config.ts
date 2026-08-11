@@ -1,11 +1,11 @@
 /**
- * Orchestrator configuration: discovery roots, spawn templates, and the
- * default template, loaded from `~/.omp/orchestrator/config.json`.
+ * Fleet configuration: discovery roots, spawn templates, and the
+ * default template, loaded from `~/.omp/fleet/config.json`.
  *
  * Resolution order: an explicit `path` argument wins, then env
- * `OMP_ORCHESTRATOR_CONFIG`, then the default location. A missing file yields
+ * `OMP_FLEET_CONFIG`, then the default location. A missing file yields
  * defaults; the file is shallow-merged over the defaults and unknown fields
- * are tolerated. `OMP_ORCHESTRATOR_SPAWN_HOOK` overrides the config file's
+ * are tolerated. `OMP_FLEET_SPAWN_HOOK` overrides the config file's
  * `spawnHook`. A leading `~` is expanded to `os.homedir()` in paths.
  */
 
@@ -20,7 +20,7 @@ export interface SpawnTemplate {
 	host?: string;
 }
 
-export interface OrchestratorConfig {
+export interface FleetConfig {
 	/** Discovery roots; default `["~/repos"]` (~ expanded). */
 	roots: string[];
 	templates: Record<string, SpawnTemplate>;
@@ -30,7 +30,7 @@ export interface OrchestratorConfig {
 	 * consulted by supervisor.spawn when no explicit template is given.
 	 */
 	projectTemplates?: Record<string, string>;
-	/** Env `OMP_ORCHESTRATOR_SPAWN_HOOK` wins over the config file value. */
+	/** Env `OMP_FLEET_SPAWN_HOOK` wins over the config file value. */
 	spawnHook?: string;
 }
 
@@ -41,10 +41,10 @@ export interface OrchestratorConfig {
  * the other placeholders are filled from the registry entry at spawn time.
  */
 export const DEFAULT_LOCAL_TEMPLATE: SpawnTemplate = {
-	command: "ompd --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
+	command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
 };
 
-function defaultConfig(): OrchestratorConfig {
+function defaultConfig(): FleetConfig {
 	return {
 		roots: [expandTilde("~/repos")],
 		templates: { local: { ...DEFAULT_LOCAL_TEMPLATE } },
@@ -59,7 +59,7 @@ function expandTilde(p: string): string {
 	return p;
 }
 
-export async function loadConfig(path?: string): Promise<OrchestratorConfig> {
+export async function loadConfig(path?: string): Promise<FleetConfig> {
 	const file = resolveConfigPath(path);
 	if (!existsSync(file)) return defaultConfig();
 	let raw: unknown;
@@ -74,13 +74,13 @@ export async function loadConfig(path?: string): Promise<OrchestratorConfig> {
 
 function resolveConfigPath(explicit?: string): string {
 	if (explicit !== undefined) return expandTilde(explicit);
-	const env = process.env.OMP_ORCHESTRATOR_CONFIG;
+	const env = process.env.OMP_FLEET_CONFIG;
 	if (env !== undefined && env !== "") return expandTilde(env);
-	return join(homedir(), ".omp", "orchestrator", "config.json");
+	return join(homedir(), ".omp", "fleet", "config.json");
 }
 
 /** Shallow-merge the parsed file over the defaults; malformed/unknown fields fall back. */
-function mergeConfig(raw: unknown): OrchestratorConfig {
+function mergeConfig(raw: unknown): FleetConfig {
 	const config = defaultConfig();
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return config;
 	const file = raw as Record<string, unknown>;
@@ -96,7 +96,7 @@ function mergeConfig(raw: unknown): OrchestratorConfig {
 	if (isProjectTemplateMap(file.projectTemplates)) {
 		config.projectTemplates = file.projectTemplates;
 	}
-	const hook = process.env.OMP_ORCHESTRATOR_SPAWN_HOOK;
+	const hook = process.env.OMP_FLEET_SPAWN_HOOK;
 	if (hook !== undefined && hook !== "") {
 		config.spawnHook = hook;
 	} else if (typeof file.spawnHook === "string") {

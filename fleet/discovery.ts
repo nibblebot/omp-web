@@ -1,5 +1,5 @@
 /**
- * Project discovery for the orchestrator.
+ * Project discovery for the fleet.
  *
  * `listProjects` scans each root ONE level deep for directories containing a
  * `.git` entry (directory for a main checkout, file for a linked worktree),

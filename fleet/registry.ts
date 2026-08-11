@@ -1,11 +1,11 @@
 /**
- * Daemon registry for the omp-orchestrator: the persistent, insertion-ordered
+ * Daemon registry for the omp-fleet: the persistent, insertion-ordered
  * roster of daemons (spawned, attached, remote) with monotonic `dN` id
  * allocation that survives restarts.
  *
  * State is a JSON file `{ "nextId": number, "entries": RegistryEntry[] }` —
- * the path is injectable for tests; the orchestrator server resolves
- * `OMP_ORCHESTRATOR_STATE` / `~/.omp/orchestrator/state.json` and passes it
+ * the path is injectable for tests; the fleet server resolves
+ * `OMP_FLEET_STATE` / `~/.omp/fleet/state.json` and passes it
  * in. Every mutation is persisted atomically (write a sibling tmp file, then
  * rename over the real one) before the mutation returns, and fires
  * `onChange` (set by the edge server for roster broadcasts).
@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 import type { DaemonEntry, DaemonStatus } from "../src/protocol";
 
-/** A roster entry: DaemonEntry plus orchestrator-side registration data. */
+/** A roster entry: DaemonEntry plus fleet-side registration data. */
 export interface RegistryEntry extends DaemonEntry {
 	/** Remote/attached: the ws(s)://host:port as registered. */
 	endpoint?: string;

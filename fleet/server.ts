@@ -1,12 +1,12 @@
 /**
- * omp-orchestrator headless control plane (Phase 2).
+ * omp-fleet headless control plane (Phase 2).
  *
- * A loopback-only HTTP JSON API (default port 4722, env OMP_ORCHESTRATOR_PORT,
+ * A loopback-only HTTP JSON API (default port 4722, env OMP_FLEET_PORT,
  * opts.port wins; 0 = ephemeral) on a shared Bun.serve — Phase 3 adds the
  * browser WS edge on the same server. Wires the persistent Registry, the
  * remote DaemonConnector and the SpawnSupervisor:
  *
- *   GET  /ctl/daemons  {…}                         → RegistryEntry[]
+ *   GET  /ctl/sessions {…}                         → RegistryEntry[]
  *   GET  /ctl/projects {…}                         → ProjectEntry[]
  *   POST /ctl/spawn    {cwd, template?, name?, labels?} → RegistryEntry
  *   POST /ctl/add      {name, url, token?, labels?, cwd?} → RegistryEntry
@@ -33,7 +33,7 @@
 import type { Server } from "bun";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import type { OrchestratorConfig } from "./config";
+import type { FleetConfig } from "./config";
 import { loadConfig } from "./config";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
@@ -43,13 +43,13 @@ import { DaemonConnector } from "./connector";
 import { SpawnSupervisor } from "./supervisor";
 import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
-import { OrchestratorEdge } from "./edge";
+import { FleetEdge } from "./edge";
 
 const DEFAULT_PORT = 4722;
-const DEFAULT_STATE_PATH = join(homedir(), ".omp", "orchestrator", "state.json");
+const DEFAULT_STATE_PATH = join(homedir(), ".omp", "fleet", "state.json");
 
 /** Control plane as consumed by the CLI (and, in Phase 3, the edge server). */
-export interface OrchestratorServer {
+export interface FleetServer {
 	port: number;
 	registry: Registry;
 	connector: DaemonConnector;
@@ -66,14 +66,14 @@ function expandTilde(p: string): string {
 
 function resolveStatePath(explicit?: string): string {
 	if (explicit !== undefined && explicit !== "") return expandTilde(explicit);
-	const env = process.env.OMP_ORCHESTRATOR_STATE;
+	const env = process.env.OMP_FLEET_STATE;
 	if (env !== undefined && env !== "") return expandTilde(env);
 	return DEFAULT_STATE_PATH;
 }
 
 function resolvePort(explicit?: number): number {
 	if (explicit !== undefined) return explicit;
-	const env = process.env.OMP_ORCHESTRATOR_PORT;
+	const env = process.env.OMP_FLEET_PORT;
 	if (env !== undefined && env !== "") {
 		const n = Number(env);
 		if (Number.isFinite(n)) return n;
@@ -256,29 +256,29 @@ function parseHookOutput(stdout: string): HookOutput {
 	return out;
 }
 
-class OrchestratorServerImpl implements OrchestratorServer {
+class FleetServerImpl implements FleetServer {
 	readonly port: number;
 	readonly registry: Registry;
 	readonly connector: DaemonConnector;
 	readonly supervisor: SpawnSupervisor;
-	readonly config: OrchestratorConfig;
-	readonly edge: OrchestratorEdge;
+	readonly config: FleetConfig;
+	readonly edge: FleetEdge;
 
 	/** daemonIds currently mid-respawn (onDialFailed guard, one respawn per daemon). */
 	readonly #respawnInFlight = new Set<string>();
 
 	readonly #server: Server<undefined>;
 
-	constructor(registry: Registry, config: OrchestratorConfig, port: number) {
+	constructor(registry: Registry, config: FleetConfig, port: number) {
 		this.registry = registry;
 		this.config = config;
-		let edge: OrchestratorEdge | null = null;
+		let edge: FleetEdge | null = null;
 		this.connector = new DaemonConnector(registry, {
 			onDialFailed: (entry) => this.#onDialFailed(entry),
 			onStatus: (entry) => edge?.onDaemonStatus(entry),
 		});
 		this.supervisor = new SpawnSupervisor(registry, this.connector, config);
-		edge = new OrchestratorEdge({
+		edge = new FleetEdge({
 			registry,
 			connector: this.connector,
 			supervisor: this.supervisor,
@@ -334,7 +334,7 @@ class OrchestratorServerImpl implements OrchestratorServer {
 			try {
 				await this.supervisor.respawn(entry);
 			} catch (err) {
-				console.error(`orchestrator: respawn ${entry.daemonId} failed`, err);
+				console.error(`fleet: respawn ${entry.daemonId} failed`, err);
 			} finally {
 				this.#respawnInFlight.delete(entry.daemonId);
 			}
@@ -355,7 +355,7 @@ class OrchestratorServerImpl implements OrchestratorServer {
 			const path = url.pathname;
 			if (req.method === "GET") {
 				switch (path) {
-					case "/ctl/daemons":
+					case "/ctl/sessions":
 						return json(this.registry.list());
 					case "/ctl/projects":
 						return json(await listProjects(this.config.roots));
@@ -382,7 +382,7 @@ class OrchestratorServerImpl implements OrchestratorServer {
 			return json({ error: "method not allowed" }, 405);
 		} catch (err) {
 			if (err instanceof HttpError) return json({ error: err.message }, err.status);
-			console.error("orchestrator: control request failed", err);
+			console.error("fleet: control request failed", err);
 			return json({ error: err instanceof Error ? err.message : String(err) }, 500);
 		}
 	};
@@ -485,7 +485,7 @@ class OrchestratorServerImpl implements OrchestratorServer {
 			// Fire-and-forget: dispatch to each match without awaiting turn
 			// completion; the caller gets the target list back immediately.
 			void fanOut(this.#fanoutDeps(), matches, text, undefined)
-				.catch((err: unknown) => console.error("orchestrator: background prompt failed", err));
+				.catch((err: unknown) => console.error("fleet: background prompt failed", err));
 			return json({ submitted: matches.map((entry) => entry.daemonId) });
 		}
 		const results = await fanOut(this.#fanoutDeps(), matches, text, waitMs);
@@ -493,9 +493,9 @@ class OrchestratorServerImpl implements OrchestratorServer {
 	}
 }
 
-export async function startOrchestrator(opts: { port?: number; statePath?: string; configPath?: string } = {}): Promise<OrchestratorServer> {
+export async function startFleet(opts: { port?: number; statePath?: string; configPath?: string } = {}): Promise<FleetServer> {
 	const registry = new Registry(resolveStatePath(opts.statePath));
 	await registry.load();
 	const config = await loadConfig(opts.configPath);
-	return new OrchestratorServerImpl(registry, config, resolvePort(opts.port));
+	return new FleetServerImpl(registry, config, resolvePort(opts.port));
 }

@@ -12,5 +12,5 @@
 		"skipLibCheck": true,
 		"verbatimModuleSyntax": true
 	},
-	"include": ["src", "server", "orchestrator", "scripts"]
+	"include": ["src", "server", "fleet", "scripts"]
 }

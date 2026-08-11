@@ -1,25 +1,25 @@
 /**
- * Orchestrator edge (Phase 3): the browser-facing half of the aggregate UI.
+ * Fleet edge (Phase 3): the browser-facing half of the aggregate UI.
  *
- * Mounted by orchestrator/server.ts on the same loopback Bun.serve as the
+ * Mounted by fleet/server.ts on the same loopback Bun.serve as the
  * /ctl control API:
  *
  *   - `/ws` is the browser WebSocket edge. Every browser socket gets an
  *     immediate roster unicast; registry mutations broadcast a fresh roster;
  *     connector status transitions broadcast `daemon_status`. Browser
  *     commands are either handled here (list_projects / spawn /
- *     spawn_resume / stop / attach) or forwarded VERBATIM to the daemon
+ *     spawn_resume / stop / attach) or forwarded VERBATIM to the session
  *     over the browser's proxy pipe; anything outside the browser-command
  *     allowlist is rejected with an error frame.
- *   - PROXY ATTACH: one daemon socket PER BROWSER (ompd auto-attaches and
- *     primes every new socket, so history/state/available_commands come from
- *     the daemon itself). The pipe opens with the Bearer token, sends the
- *     hello handshake, swallows hello_ok, and forwards every other daemon
- *     frame, STAMPING the daemonId as sessionId on every session-scoped
- *     frame (ompd no longer sends one) and rewriting `attached`'s guard
- *     token the same way.
+ *   - PROXY ATTACH: one session socket PER BROWSER (omp-session auto-attaches
+ *     and primes every new socket, so history/state/available_commands come
+ *     from the session itself). The pipe opens with the Bearer token, sends
+ *     the hello handshake, swallows hello_ok, and forwards every other
+ *     session frame, STAMPING the daemonId as sessionId on every
+ *     session-scoped frame (omp-session no longer sends one) and rewriting
+ *     `attached`'s guard token the same way.
  *     connector.retain on pipe open / release on close feeds the idle
- *     policy. Asleep daemons are woken first (respawn for spawned entries,
+ *     policy. Asleep sessions are woken first (respawn for spawned entries,
  *     connector redial otherwise) and awaited to ready (60s) before piping.
  *   - Backpressure: a browser socket buffering more than 4 MiB has the
  *     frame dropped and receives one error frame marking the drop
@@ -32,17 +32,17 @@
  *     are stripped from proxy pipes (the merged frame is the only one
  *     browsers see), and removing a daemon from the registry evicts its
  *     cache (see daemons-aggregator.ts).
- *   - Static dist/ is served from the process cwd like ompd, with a tiny
- *     placeholder page when the file is missing.
+ *   - Static dist/ is served from the process cwd like omp-session, with a
+ *     tiny placeholder page when the file is missing.
  *
  * Roster serialization never leaks tokens/endpoints to browsers (see
  * toRosterEntry).
  */
 
 import type { Server, ServerWebSocket } from "bun";
-import { OMPD_PROTO } from "../src/protocol";
+import { OMP_PROTO } from "../src/protocol";
 import type { ClientCommand, DaemonEntry, DaemonInfo, ServerFrame, SessionScopedFrame } from "../src/protocol";
-import type { OrchestratorConfig } from "./config";
+import type { FleetConfig } from "./config";
 import { listProjects, validateProjectPath } from "./discovery";
 import type { DaemonConnector } from "./connector";
 import { daemonWsUrl, startSocketKeepalive, DEFAULT_PING_INTERVAL_MS, DEFAULT_PONG_TIMEOUT_MS } from "./connector";
@@ -74,7 +74,7 @@ function parseSpawnLabels(value: unknown): string[] | undefined {
 	return value as string[];
 }
 
-const STDERR_ROUTE = /^\/ctl\/daemons\/([^/]+)\/stderr$/;
+const STDERR_ROUTE = /^\/ctl\/sessions\/([^/]+)\/stderr$/;
 
 /**
  * Error frame for any browser command outside the allowlist. Phase 6: the
@@ -82,13 +82,13 @@ const STDERR_ROUTE = /^\/ctl\/daemons\/([^/]+)\/stderr$/;
  * client sending them (or plain garbage) must not reach the daemon — the
  * edge rejects it with this instead.
  */
-const UNKNOWN_COMMAND_MESSAGE = "orchestrator edge: use spawn/stop/roster";
+const UNKNOWN_COMMAND_MESSAGE = "fleet edge: use spawn/stop/roster";
 
 /**
  * Browser-command allowlist, checked on the RAW parsed frame before any
  * dispatch: edge-handled commands plus the ClientCommand variants forwarded
  * verbatim over the browser's pipe. `hello` is deliberately absent — it is
- * orchestrator→ompd only (the pipe handshake is the edge's job). Anything
+ * fleet→omp-session only (the pipe handshake is the edge's job). Anything
  * else is rejected with UNKNOWN_COMMAND_MESSAGE. Typed against ClientCommand
  * so a removed variant stops compiling instead of silently broadening the
  * allowlist.
@@ -116,11 +116,12 @@ const BROWSER_COMMAND_LIST: ClientCommand["type"][] = [
 const BROWSER_COMMAND_TYPES: Record<string, true> = Object.fromEntries(BROWSER_COMMAND_LIST.map((type) => [type, true]));
 
 /**
- * Session-scoped frame types (protocol's SessionScopedFrame). ompd no
- * longer stamps a sessionId on these; the pipe forwarder adds the daemonId
- * unconditionally so roster-mode clients can guard daemon switches. `attached`
- * is handled alongside: its sessionId is REQUIRED ("s1" from ompd) and must
- * read as the daemonId when it comes through the edge.
+ * Session-scoped frame types (protocol's SessionScopedFrame). omp-session
+ * no longer stamps a sessionId on these; the pipe forwarder adds the
+ * daemonId unconditionally so roster-mode clients can guard daemon
+ * switches. `attached` is handled alongside: its sessionId is REQUIRED
+ * ("s1" from omp-session) and must read as the daemonId when it comes
+ * through the edge.
  */
 const SESSION_SCOPED_FRAME_LIST: SessionScopedFrame["type"][] = [
 	"history",
@@ -144,11 +145,11 @@ const PLACEHOLDER_HTML = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>omp-orchestrator</title>
+    <title>omp-fleet</title>
   </head>
   <body style="background:#0d1117;color:#e6edf3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;display:grid;place-items:center;min-height:100vh;margin:0">
     <main style="text-align:center">
-      <h1>omp-orchestrator</h1>
+      <h1>omp-fleet</h1>
       <p>The aggregate UI has not been built into <code>dist/</code> yet.</p>
     </main>
   </body>
@@ -159,7 +160,7 @@ export interface EdgeDeps {
 	registry: Registry;
 	connector: DaemonConnector;
 	supervisor: SpawnSupervisor;
-	config: OrchestratorConfig;
+	config: FleetConfig;
 }
 
 /** A browser socket on the edge (data is unused; sockets are tracked by identity). */
@@ -217,11 +218,11 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 	return roster;
 }
 
-export class OrchestratorEdge {
+export class FleetEdge {
 	readonly #registry: Registry;
 	readonly #connector: DaemonConnector;
 	readonly #supervisor: SpawnSupervisor;
-	readonly #config: OrchestratorConfig;
+	readonly #config: FleetConfig;
 	readonly #backpressureBytes: number;
 	readonly #pingIntervalMs: number;
 	readonly #pongTimeoutMs: number;
@@ -415,7 +416,7 @@ export class OrchestratorEdge {
 		for (const [ws, state] of [...this.#browsers]) {
 			this.#closePipe(state);
 			try {
-				ws.close(1000, "orchestrator close");
+				ws.close(1000, "fleet close");
 			} catch {
 				// Ignore; the socket is already gone.
 			}
@@ -547,8 +548,9 @@ export class OrchestratorEdge {
 		if (!this.#browsers.has(browser)) return;
 		let pipeWs: WebSocket;
 		try {
-			// ompd only upgrades /ws; registered endpoints are pathless, so
-			// normalize like the connector's own dial (daemonWsUrl).
+			// omp-session only upgrades /ws; registered endpoints are
+			// pathless, so normalize like the connector's own dial
+			// (daemonWsUrl).
 			pipeWs = new WebSocket(daemonWsUrl(entry.endpoint!), {
 				headers: { Authorization: `Bearer ${entry.token ?? ""}` },
 			} as never);
@@ -570,7 +572,7 @@ export class OrchestratorEdge {
 			pipe.retained = true;
 			this.#connector.retain(pipe.daemonId);
 			try {
-				pipeWs.send(JSON.stringify({ type: "hello", proto: OMPD_PROTO, token: entry.token } satisfies ClientCommand));
+				pipeWs.send(JSON.stringify({ type: "hello", proto: OMP_PROTO, token: entry.token } satisfies ClientCommand));
 			} catch {
 				// Socket died between open and send; the close handler owns teardown.
 			}
@@ -603,10 +605,11 @@ export class OrchestratorEdge {
 	}
 
 	/**
-	 * Forward a daemon frame: swallow hello_ok and per-daemon broker
+	 * Forward a session frame: swallow hello_ok and per-daemon broker
 	 * rosters; STAMP sessionId = daemonId on every session-scoped frame
-	 * (ompd no longer sends one) and on `attached` (its required "s1" must
-	 * read as the daemonId through the edge). Global frames pass unchanged.
+	 * (omp-session no longer sends one) and on `attached` (its required
+	 * "s1" must read as the daemonId through the edge). Global frames pass
+	 * unchanged.
 	 */
 	#onPipeFrame(browser: EdgeSocket, pipe: PipeState, data: string): void {
 		let raw: unknown;
@@ -757,7 +760,7 @@ export class OrchestratorEdge {
 	// /ctl routes + static
 	// ---------------------------------------------------------------------
 
-	/** GET /ctl/daemons/{id}/stderr: 404 for unknown/non-spawned entries. */
+	/** GET /ctl/sessions/{id}/stderr: 404 for unknown/non-spawned entries. */
 	#handleStderr(daemonId: string): Response {
 		const entry = this.#registry.get(daemonId);
 		if (!entry || entry.mode !== "spawned") {

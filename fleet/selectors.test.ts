@@ -1,5 +1,5 @@
 /**
- * Tests for orchestrator selector resolution (orchestrator/selectors.ts).
+ * Tests for fleet selector resolution (fleet/selectors.ts).
  *
  * Pure and hermetic: entries are constructed inline against the DaemonEntry
  * shape from src/protocol.ts (plus the RegistryEntry-only `registeredAt`

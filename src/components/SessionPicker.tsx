@@ -5,9 +5,9 @@ import type { SessionListEntry } from "../protocol";
 
 /**
  * `/resume` and the header button: on-disk session files, click to
- * switchSession. (The mux live-session roster is gone — a standalone ompd
- * has one live session, and the orchestrator edge's daemon list lives in
- * the DaemonSidebar.)
+ * switchSession. (The mux live-session roster is gone — a standalone
+ * omp-session has one live session, and the fleet edge's session list lives
+ * in the DaemonSidebar.)
  */
 export const SessionPicker: Component<{ onClose: () => void }> = props => {
 	const [filter, setFilter] = createSignal("");
@@ -44,7 +44,7 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 	};
 
 	return (
-		<Modal title="Sessions" onClose={props.onClose}>
+		<Modal title="History" onClose={props.onClose}>
 			<div class="picker-group-name">Resume from disk</div>
 			<input
 				class="picker-filter"

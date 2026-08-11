@@ -7,7 +7,7 @@ import { Registry } from "./registry";
 const tmpDirs: string[] = [];
 
 function tmpStatePath(): string {
-	const dir = mkdtempSync(join(tmpdir(), "ompd-registry-"));
+	const dir = mkdtempSync(join(tmpdir(), "omp-session-registry-"));
 	tmpDirs.push(dir);
 	return join(dir, "state.json");
 }

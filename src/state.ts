@@ -114,7 +114,7 @@ export const [state, setState] = createStore({
 	thinkingLevel: undefined as WebSessionState["thinkingLevel"],
 	sessionName: undefined as string | undefined,
 	sessionId: "",
-	// R8 ompd readiness: set by the `ready` broadcast (or a stamped state
+	// R8 omp-session readiness: set by the `ready` broadcast (or a stamped state
 	// frame) once the SDK session is live and provider/model/auth resolved.
 	readyAt: undefined as WebSessionState["readyAt"],
 	// Phase 2: server-assigned handle of the live session this tab is attached
@@ -158,14 +158,14 @@ export const [state, setState] = createStore({
 	// Settings model (getSettings/setSetting + settings_changed frames).
 	settingsModel: null as SettingsModel | null,
 	settingsLoading: false,
-	// Attach mode: "single" (standalone ompd — no sidebar) or "roster"
-	// (orchestrator edge — the daemon sidebar). "roster" is set by the roster
+	// Attach mode: "single" (standalone omp-session — no sidebar) or "roster"
+	// (fleet edge — the fleet roster sidebar). "roster" is set by the roster
 	// frame and sticky across reconnects; the attached frame always carries
-	// "single" from ompd and must not clobber it (Phase 6 de-mux).
+	// "single" from omp-session and must not clobber it (Phase 6 de-mux).
 	sessionMode: "single" as "single" | "roster",
-	// Orchestrator edge roster (roster frame). Patched in place by
+	// Fleet edge roster (roster frame). Patched in place by
 	// daemon_status frames; NOT cleared by resetSessionView (it is
-	// orchestrator-scoped, not session-scoped).
+	// fleet-scoped, not session-scoped).
 	daemonRoster: [] as DaemonEntry[],
 	sidebarVisible: typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
 	petVisible: typeof localStorage !== "undefined" ? localStorage.getItem(PET_KEY) !== "false" : true,
@@ -190,7 +190,7 @@ export const [state, setState] = createStore({
 	btw: null as null | { question: string; reply: string; streaming: boolean; streamId: number; error?: string },
 });
 
-/** R8 ompd readiness accessor: true once the boot session's gate has cleared
+/** R8 omp-session readiness accessor: true once the boot session's gate has cleared
  *  (the server broadcast `ready` or stamped readyAt into a state frame). */
 export function isReady(): boolean {
 	return state.readyAt !== undefined;
@@ -890,7 +890,7 @@ export function listFiles(query: string, limit?: number): Promise<string[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3 orchestrator edge: roster-mode command senders. spawn/spawn_resume/
+// Phase 3 fleet edge: roster-mode command senders. spawn/spawn_resume/
 // stop are fire-and-forget — results arrive as roster + daemon_status
 // broadcasts (spawn failures surface as an error frame). list_projects is a
 // latest-wins pull like listSessions (the edge answers with one `projects`
@@ -977,11 +977,11 @@ export function abortSubagent(agentId: string): Promise<unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Orchestrator-edge attach. The edge answers `attach` with a unicast
+// Fleet-edge attach. The edge answers `attach` with a unicast
 // `attached` frame (latest-wins, like listSessions); the sessionId is the
 // daemonId, and the daemon's own priming (history/state/available_commands)
-// follows the proxied frame. A bare ompd never receives attach (its sockets
-// are attached from upgrade).
+// follows the proxied frame. A bare omp-session never receives attach (its
+// sockets are attached from upgrade).
 // ---------------------------------------------------------------------------
 let pendingAttach: { resolve: (sessionId: string) => void; reject: (err: Error) => void } | null = null;
 
@@ -1182,7 +1182,7 @@ export function connect(): void {
 		if (frame.type === "attached") {
 			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
 			setState("currentSessionId", frame.sessionId);
-			// Phase 6: ompd always sends mode "single" — there is no mux to
+			// Phase 6: omp-session always sends mode "single" — there is no mux to
 			// switch to. In roster mode the attached frame is PROXIED from the
 			// daemon and must not clobber the roster sidebar; the roster frame
 			// owns sessionMode there.
@@ -1207,14 +1207,14 @@ export function connect(): void {
 				// Phase 3 daemon switch: drop readiness too. The edge only pipes
 				// daemons that passed waitReady, so the proxied priming re-delivers
 				// `ready` immediately; until then the composer stays gated and the
-				// roster hint shows the daemon's status.
+				// roster hint shows the session's status.
 				setState("readyAt", undefined);
 			}
 			return;
 		}
 		// Stale-frame guard: session-scoped frames for a handle this tab no
 		// longer views (in flight during a switch) are dropped. Frames WITHOUT
-		// a sessionId (standalone ompd: one live session, connect = attached)
+		// a sessionId (standalone omp-session: one live session, connect = attached)
 		// always pass — there is nothing to mismatch.
 		if ("sessionId" in frame && frame.sessionId !== state.currentSessionId) return;
 		switch (frame.type) {
@@ -1267,8 +1267,8 @@ export function connect(): void {
 				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [d.projectDir + "\u0000" + d.name, d])));
 				break;
 			case "roster":
-				// The orchestrator edge sent its daemon roster — this tab is in
-				// roster mode (sidebar swaps to the daemon list). The edge never
+				// The fleet edge sent its daemon roster — this tab is in
+				// roster mode (sidebar swaps to the session list). The edge never
 				// sends attached.mode "roster"; this frame is the mode signal,
 				// and it must not be undone by the proxied attached frames
 				// (handled above).
@@ -1402,10 +1402,10 @@ export function connect(): void {
 				pendingAttach = null;
 				break;
 			default:
-				// The ompd hello handshake (hello_ok) is swallowed by the
-				// orchestrator edge; anything else unknown is tolerated and
+				// The omp-session hello handshake (hello_ok) is swallowed by the
+				// fleet edge; anything else unknown is tolerated and
 				// ignored, never thrown.
-				console.debug(`[ompd] ignoring ${frame.type} frame`);
+				console.debug(`[omp-session] ignoring ${frame.type} frame`);
 				break;
 		}
 	};

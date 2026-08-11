@@ -1,11 +1,11 @@
 /**
- * ompd Phase 1 server tests: config surface, stdout contract line, bearer
+ * omp-session Phase 1 server tests: config surface, stdout contract line, bearer
  * auth (R14), readiness gate (R8), idle auto-exit (R11), and (Phase 6) the
  * removed-mux-command fallthrough. Spawns server/index.ts as a subprocess on
- * an ephemeral port (OMPD_PORT=0) with a hermetic tmp cwd; connects over
+ * an ephemeral port (OMP_SESSION_PORT=0) with a hermetic tmp cwd; connects over
  * loopback and (for the token-gate test) the machine's LAN IP. No external
  * network, no real model calls — the readiness gate is deferred via the
- * OMPD_TEST_READY_DELAY_MS test hook instead of racing provider discovery.
+ * OMP_SESSION_TEST_READY_DELAY_MS test hook instead of racing provider discovery.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -13,7 +13,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Subprocess } from "bun";
-import { OMPD_CLOSE_UNAUTHORIZED, OMPD_PROTO, type OmpdStdoutLine } from "../src/protocol";
+import { OMP_CLOSE_UNAUTHORIZED, OMP_PROTO, type StdoutContractLine } from "../src/protocol";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -66,10 +66,10 @@ function onClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
 	return promise;
 }
 
-function parseOmpdLine(line: string): OmpdStdoutLine | null {
-	if (!line.startsWith("OMPD|")) return null;
+function parseContractLine(line: string): StdoutContractLine | null {
+	if (!line.startsWith("OMP_SESSION|")) return null;
 	try {
-		return JSON.parse(line.slice(5)) as OmpdStdoutLine;
+		return JSON.parse(line.slice("OMP_SESSION|".length)) as StdoutContractLine;
 	} catch {
 		return null;
 	}
@@ -89,32 +89,32 @@ async function readFirstStdoutLine(stdout: ReadableStream<Uint8Array>, timeoutMs
 			sleep(remaining).then(() => ({ value: undefined, done: true, timedOut: true as const })),
 		]);
 		if (result.timedOut) throw new Error("timed out waiting for the first stdout line");
-		if (result.done) throw new Error("server exited before printing the OMPD| line");
+		if (result.done) throw new Error("server exited before printing the OMP_SESSION| line");
 		buffer += decoder.decode(result.value, { stream: true });
 		const nl = buffer.indexOf("\n");
 		if (nl >= 0) return buffer.slice(0, nl);
 	}
 }
 
-interface OmpdProc {
+interface SessionProc {
 	child: Subprocess<"ignore", "pipe", "pipe">;
 	tmp: string;
 	port: number;
-	/** The first stdout line (the OMPD| listening line). */
+	/** The first stdout line (the OMP_SESSION| listening line). */
 	firstLine: string;
 	stderrTail: () => string;
 	cleanup: () => Promise<void>;
 }
 
 /** Spawn server/index.ts on an ephemeral port with a hermetic tmp cwd. */
-async function spawnOmpd(opts: { args?: string[]; env?: Record<string, string> } = {}): Promise<OmpdProc> {
-	const tmp = await mkdtemp(path.join(os.tmpdir(), "ompd-test-"));
+async function spawnSession(opts: { args?: string[]; env?: Record<string, string> } = {}): Promise<SessionProc> {
+	const tmp = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-"));
 	const child = Bun.spawn(["bun", "server/index.ts", ...(opts.args ?? [])], {
 		cwd: repoRoot,
 		env: {
 			...process.env,
-			OMPD_PORT: "0",
-			OMPD_CWD: tmp,
+			OMP_SESSION_PORT: "0",
+			OMP_SESSION_CWD: tmp,
 			PI_NO_TITLE: "1",
 			...opts.env,
 		},
@@ -137,7 +137,7 @@ async function spawnOmpd(opts: { args?: string[]; env?: Record<string, string> }
 		child.kill();
 		throw err;
 	});
-	const parsed = parseOmpdLine(line);
+	const parsed = parseContractLine(line);
 	if (!parsed || parsed.event !== "listening") {
 		child.kill();
 		throw new Error(`unexpected first stdout line: ${line}`);
@@ -155,7 +155,7 @@ async function spawnOmpd(opts: { args?: string[]; env?: Record<string, string> }
 /** Send a hello and wait for the hello_ok answer (R14). */
 async function expectHelloOk(ws: WebSocket, token?: string): Promise<Frame> {
 	const frames = collect(ws);
-	ws.send(JSON.stringify({ type: "hello", proto: OMPD_PROTO, ...(token !== undefined ? { token } : {}) }));
+	ws.send(JSON.stringify({ type: "hello", proto: OMP_PROTO, ...(token !== undefined ? { token } : {}) }));
 	return waitFor(() => frames.find(f => f.type === "hello_ok") ?? null, 10_000, "hello_ok");
 }
 
@@ -169,7 +169,7 @@ function lanIpv4(): string | undefined {
 	return undefined;
 }
 
-const running: OmpdProc[] = [];
+const running: SessionProc[] = [];
 
 afterAll(async () => {
 	await Promise.all(running.map(p => p.cleanup()));
@@ -177,8 +177,8 @@ afterAll(async () => {
 
 test("SIGTERM runs the graceful shutdown path (exit 0, not 143)", async () => {
 	// Regression: pi-utils' postmortem installs import-time SIGINT/SIGTERM/
-	// SIGHUP handlers that exit 130/143/129, preempting ompd's shutdown().
-	const proc = await spawnOmpd();
+	// SIGHUP handlers that exit 130/143/129, preempting omp-session's shutdown().
+	const proc = await spawnSession();
 	running.push(proc);
 	proc.child.kill("SIGTERM");
 	const code = await Promise.race([proc.child.exited, sleep(20_000).then(() => "timeout" as const)]);
@@ -186,10 +186,10 @@ test("SIGTERM runs the graceful shutdown path (exit 0, not 143)", async () => {
 }, 60_000);
 
 test("off-loopback bind without a token is a startup hard error", async () => {
-	const tmp = await mkdtemp(path.join(os.tmpdir(), "ompd-test-"));
+	const tmp = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-"));
 	const child = Bun.spawn(["bun", "server/index.ts", "--host", "0.0.0.0", "--cwd", tmp], {
 		cwd: repoRoot,
-		env: { ...process.env, OMPD_PORT: "0", PI_NO_TITLE: "1" },
+		env: { ...process.env, OMP_SESSION_PORT: "0", PI_NO_TITLE: "1" },
 		stdout: "pipe",
 		stderr: "pipe",
 	});
@@ -206,7 +206,7 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 		console.warn("no non-loopback IPv4 interface found; skipping token-gate test");
 		return;
 	}
-	const proc = await spawnOmpd({ args: ["--host", "0.0.0.0", "--token", "sekret"] });
+	const proc = await spawnSession({ args: ["--host", "0.0.0.0", "--token", "sekret"] });
 	running.push(proc);
 	const { child, tmp, port, cleanup } = proc;
 	const base = `ws://${lanIp}:${port}/ws`;
@@ -216,12 +216,12 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	const noToken = await openWebSocket(base);
 	const closeInfo = await Promise.race([onClose(noToken), sleep(10_000).then(() => "timeout" as const)]);
 	expect(closeInfo).not.toBe("timeout");
-	expect((closeInfo as { code: number }).code).toBe(OMPD_CLOSE_UNAUTHORIZED);
+	expect((closeInfo as { code: number }).code).toBe(OMP_CLOSE_UNAUTHORIZED);
 
 	// Authorization header → authenticated; a valid hello is answered hello_ok.
 	const withHeader = await openWebSocket(base, { authorization: "Bearer sekret" });
 	const headerHello = await expectHelloOk(withHeader, "sekret");
-	expect(headerHello.proto).toBe(OMPD_PROTO);
+	expect(headerHello.proto).toBe(OMP_PROTO);
 	expect(headerHello.cwd).toBe(tmp);
 	expect(headerHello.pid).toBe(child.pid);
 	expect(headerHello.name).toBe(path.basename(tmp));
@@ -230,7 +230,7 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	// ?token= query → authenticated (same bearer, query form).
 	const withQuery = await openWebSocket(`${base}?token=sekret`);
 	const queryHello = await expectHelloOk(withQuery, "sekret");
-	expect(queryHello.proto).toBe(OMPD_PROTO);
+	expect(queryHello.proto).toBe(OMP_PROTO);
 
 	// Loopback without a token still works: the priming (attached) arrives.
 	const loopback = await openWebSocket(`ws://127.0.0.1:${port}/ws`);
@@ -247,11 +247,11 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	await cleanup();
 }, 60_000);
 
-test("OMPD| listening line is the first stdout line and parses as OmpdStdoutLine", async () => {
-	const proc = await spawnOmpd({ args: ["--advertise", "myhost:9999"] });
+test("OMP_SESSION| listening line is the first stdout line and parses as StdoutContractLine", async () => {
+	const proc = await spawnSession({ args: ["--advertise", "myhost:9999"] });
 	running.push(proc);
-	const parsed = parseOmpdLine(proc.firstLine);
-	if (!parsed) throw new Error(`first stdout line is not an OMPD| line: ${proc.firstLine}`);
+	const parsed = parseContractLine(proc.firstLine);
+	if (!parsed) throw new Error(`first stdout line is not an OMP_SESSION| line: ${proc.firstLine}`);
 	if (parsed.event !== "listening") throw new Error(`expected listening line, got ${parsed.event}`);
 	expect(parsed.bind).toBe("127.0.0.1");
 	expect(parsed.port).toBe(proc.port);
@@ -261,12 +261,12 @@ test("OMPD| listening line is the first stdout line and parses as OmpdStdoutLine
 }, 30_000);
 
 test("loopback hello is answered hello_ok with the daemon identity", async () => {
-	const proc = await spawnOmpd({});
+	const proc = await spawnSession({});
 	running.push(proc);
 	const { child, tmp, port, cleanup } = proc;
 	const ws = await openWebSocket(`ws://127.0.0.1:${port}/ws`);
 	const hello = await expectHelloOk(ws);
-	expect(hello.proto).toBe(OMPD_PROTO);
+	expect(hello.proto).toBe(OMP_PROTO);
 	expect(hello.cwd).toBe(tmp);
 	expect(hello.pid).toBe(child.pid);
 	expect(hello.name).toBe(path.basename(tmp));
@@ -276,7 +276,7 @@ test("loopback hello is answered hello_ok with the daemon identity", async () =>
 }, 30_000);
 
 test("idle auto-exit: --idle-timeout 3s exits the process via shutdown", async () => {
-	const proc = await spawnOmpd({ args: ["--idle-timeout", "3s"] });
+	const proc = await spawnSession({ args: ["--idle-timeout", "3s"] });
 	running.push(proc);
 	expect(proc.port).toBeGreaterThan(0);
 	// No sockets: the first 15s check finds it idle and shutdown() exits 0.
@@ -286,7 +286,7 @@ test("idle auto-exit: --idle-timeout 3s exits the process via shutdown", async (
 }, 45_000);
 
 test("an attached web socket suppresses idle auto-exit", async () => {
-	const proc = await spawnOmpd({ args: ["--idle-timeout", "3s"] });
+	const proc = await spawnSession({ args: ["--idle-timeout", "3s"] });
 	running.push(proc);
 	const { child, port, cleanup } = proc;
 	const ws = await openWebSocket(`ws://127.0.0.1:${port}/ws`);
@@ -302,7 +302,7 @@ test("an attached web socket suppresses idle auto-exit", async () => {
 }, 60_000);
 
 test("prompt-family calls fail with not_ready until the readiness gate clears", async () => {
-	const proc = await spawnOmpd({ env: { OMPD_TEST_READY_DELAY_MS: "5000" } });
+	const proc = await spawnSession({ env: { OMP_SESSION_TEST_READY_DELAY_MS: "5000" } });
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const ws = await openWebSocket(`ws://127.0.0.1:${port}/ws`);
@@ -333,7 +333,7 @@ test("prompt-family calls fail with not_ready until the readiness gate clears", 
 }, 45_000);
 
 test("removed mux commands fall through to the unknown-command error; process stats stay", async () => {
-	const proc = await spawnOmpd({});
+	const proc = await spawnSession({});
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const ws = await openWebSocket(`ws://127.0.0.1:${port}/ws`);
@@ -344,7 +344,7 @@ test("removed mux commands fall through to the unknown-command error; process st
 	expect(attached.sessionId).toBe("s1");
 
 	// The four removed mux commands (plus attach/detach, which only exist at
-	// the orchestrator edge) fall through to the generic unknown-command error;
+	// the fleet edge) fall through to the generic unknown-command error;
 	// get_process_stats is kept.
 	ws.send(JSON.stringify({ type: "create_session", cwd: "/tmp" }));
 	ws.send(JSON.stringify({ type: "attach", sessionId: "s1" }));
@@ -371,13 +371,13 @@ test("removed mux commands fall through to the unknown-command error; process st
 	await sleep(1000);
 	expect(frames.some(f => f.type === "live_sessions")).toBe(false);
 
-	// Orchestrator-edge commands are rejected on a bare ompd.
+	// Fleet-edge commands are rejected on a bare omp-session.
 	ws.send(JSON.stringify({ type: "spawn", cwd: "/tmp" }));
 	ws.send(JSON.stringify({ type: "list_projects" }));
 	await waitFor(
-		() => (frames.filter(f => f.type === "error" && f.error === "orchestrator-only command").length >= 2 ? true : null),
+		() => (frames.filter(f => f.type === "error" && f.error === "fleet-only command").length >= 2 ? true : null),
 		10_000,
-		"orchestrator-only errors",
+		"fleet-only errors",
 	);
 	ws.close();
 	await cleanup();

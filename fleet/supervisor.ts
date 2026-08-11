@@ -1,29 +1,29 @@
 /**
- * SpawnSupervisor: owns spawned ompd children.
+ * SpawnSupervisor: owns spawned omp-session children.
  *
  * spawn() creates a "spawned" registry entry, mints a fresh bearer token
  * (32 random bytes, base64url), fills the spawn template, and runs it via
- * `sh -c` with stdout/stderr piped. The OMPD| stdout contract lines are
- * parsed; once a listening line is seen the endpoint is resolved
- * (resolveEndpoint, R6b precedence) and the connector dials the daemon.
+ * `sh -c` with stdout/stderr piped. The OMP_SESSION| stdout contract lines
+ * are parsed; once a listening line is seen the endpoint is resolved
+ * (resolveEndpoint, R6b precedence) and the connector dials the session.
  * A 30s endpoint-resolution timeout → status error + child killed.
  *
- * Failure handling: an unexpected child exit restarts the daemon with a
+ * Failure handling: an unexpected child exit restarts the session with a
  * FRESH token per attempt, bounded backoff 1s→30s jittered, at most
- * restartMax (default 5) restarts, then status "error". A daemon that had
+ * restartMax (default 5) restarts, then status "error". A session that had
  * reached "ready" and whose socket was dropped (connector idle policy)
  * exiting cleanly goes "asleep" instead of restarting. respawn()/stop()
  * are the intentional paths: respawn uses `{resume} = "--resume
- * <lastSessionFile>"` when the daemon has one (R3), stop() SIGTERMs,
+ * <lastSessionFile>"` when the session has one (R3), stop() SIGTERMs,
  * escalates to SIGKILL after 5s, and sets status "asleep" (respawnable).
  * Child stderr is kept in a rolling ring (default 64KB) for stderrTail().
  */
 
 import { basename } from "node:path";
 import type { Subprocess } from "bun";
-import type { OmpdStdoutLine } from "../src/protocol";
-import type { OrchestratorConfig, SpawnTemplate } from "./config";
-import { fillTemplate, parseOmpdLine, resolveEndpoint } from "./spawn-parse";
+import type { StdoutContractLine } from "../src/protocol";
+import type { FleetConfig, SpawnTemplate } from "./config";
+import { fillTemplate, parseContractLine, resolveEndpoint } from "./spawn-parse";
 import type { DaemonConnector } from "./connector";
 import type { Registry, RegistryEntry } from "./registry";
 
@@ -34,7 +34,7 @@ interface ChildState {
 	child: Child | null;
 	resolved: boolean;
 	endpointTimer: ReturnType<typeof setTimeout> | null;
-	lines: OmpdStdoutLine[];
+	lines: StdoutContractLine[];
 	restarts: number;
 	restartTimer: ReturnType<typeof setTimeout> | null;
 	stopping: boolean;
@@ -112,7 +112,7 @@ function readChunks(stream: ReadableStream<Uint8Array>, onChunk: (chunk: string)
 export class SpawnSupervisor {
 	#registry: Registry;
 	#connector: DaemonConnector;
-	#config: OrchestratorConfig;
+	#config: FleetConfig;
 	#restartMax: number;
 	#stderrRingBytes: number;
 	#children = new Map<string, ChildState>();
@@ -120,7 +120,7 @@ export class SpawnSupervisor {
 	constructor(
 		registry: Registry,
 		connector: DaemonConnector,
-		config: OrchestratorConfig,
+		config: FleetConfig,
 		opts?: { restartMax?: number; stderrRingBytes?: number },
 	) {
 		this.#registry = registry;
@@ -276,12 +276,12 @@ export class SpawnSupervisor {
 		state.endpointTimer = setTimeout(() => {
 			if (state.resolved) return;
 			state.exitHandled = true; // we own the aftermath — no restart
-			this.#registry.setStatus(daemonId, "error", "endpoint timeout: no OMPD| listening line within 30s");
+			this.#registry.setStatus(daemonId, "error", "endpoint timeout: no OMP_SESSION| listening line within 30s");
 			child.kill();
 		}, ENDPOINT_TIMEOUT_MS);
 		void readLines(child.stdout, (line) => {
 			if (state.resolved) return;
-			const parsed = parseOmpdLine(line);
+			const parsed = parseContractLine(line);
 			if (!parsed) return;
 			state.lines.push(parsed);
 			const resolved = resolveEndpoint(state.lines, template.host);

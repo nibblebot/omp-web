@@ -1,10 +1,10 @@
 /**
- * Control-plane tests for orchestrator/server.ts: every route exercised over
- * loopback HTTP against a real DaemonConnector + a tiny fake ompd WS daemon
+ * Control-plane tests for fleet/server.ts: every route exercised over
+ * loopback HTTP against a real DaemonConnector + a tiny fake omp-session WS daemon
  * (speaking hello_ok/state/ready/event frames, mirroring server/index.ts's
  * handshake: hello_ok only after a valid hello... which the connector never
  * sends, so the fake primes hello_ok → state → ready on open per OCore's
- * dial contract). No real ompd children are spawned.
+ * dial contract). No real omp-session children are spawned.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -12,10 +12,10 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
-import { OMPD_PROTO } from "../src/protocol";
+import { OMP_PROTO } from "../src/protocol";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
-import { runSpawnHook, startOrchestrator, type OrchestratorServer } from "./server";
+import { runSpawnHook, startFleet, type FleetServer } from "./server";
 import { main } from "./cli";
 
 const FAKE_CWD = "/tmp/fake-proj";
@@ -62,7 +62,7 @@ interface FakeDaemon {
 	close(): void;
 }
 
-/** Tiny fake ompd: records the Bearer header, primes the status machine, answers prompt calls. */
+/** Tiny fake omp-session: records the Bearer header, primes the status machine, answers prompt calls. */
 function startFakeDaemon(token: string): FakeDaemon {
 	const seen: FakeSeen = { authHeader: null, calls: [], closed: false };
 	const server = Bun.serve({
@@ -103,7 +103,7 @@ function startFakeDaemon(token: string): FakeDaemon {
 }
 
 function prime(ws: ServerWebSocket<unknown>) {
-	ws.send(JSON.stringify({ type: "hello_ok", proto: OMPD_PROTO, name: "fake", cwd: FAKE_CWD, pid: 4242, version: "0.0.0-test", sessionFile: FAKE_SESSION_FILE }));
+	ws.send(JSON.stringify({ type: "hello_ok", proto: OMP_PROTO, name: "fake", cwd: FAKE_CWD, pid: 4242, version: "0.0.0-test", sessionFile: FAKE_SESSION_FILE }));
 	ws.send(JSON.stringify({ type: "state", sessionId: "s1", state: FAKE_STATE }));
 	ws.send(JSON.stringify({ type: "ready", readyAt: Date.now() }));
 }
@@ -132,22 +132,22 @@ function postJson(port: number, path: string, body: unknown): Promise<Response> 
 	});
 }
 
-describe("orchestrator control plane", () => {
+describe("fleet control plane", () => {
 	let tmp: string;
 	let statePath: string;
 	let configPath: string;
-	let server: OrchestratorServer;
+	let server: FleetServer;
 	let fake: FakeDaemon;
 	let entry: RegistryEntry;
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-orch-test-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-test-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		const rootsDir = join(tmp, "roots");
 		mkdirSync(rootsDir, { recursive: true });
 		writeFileSync(configPath, JSON.stringify({ roots: [rootsDir] }));
-		server = await startOrchestrator({ port: 0, statePath, configPath });
+		server = await startFleet({ port: 0, statePath, configPath });
 	});
 
 	afterAll(async () => {
@@ -155,8 +155,8 @@ describe("orchestrator control plane", () => {
 		if (fake !== undefined) fake.close();
 	});
 
-	test("GET /ctl/daemons reflects the registry (empty at boot)", async () => {
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/daemons`);
+	test("GET /ctl/sessions reflects the registry (empty at boot)", async () => {
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as unknown[];
 		expect(Array.isArray(body)).toBe(true);
@@ -210,8 +210,8 @@ describe("orchestrator control plane", () => {
 		expect(server.registry.get(entry.daemonId)?.cwd).toBe(FAKE_CWD);
 	});
 
-	test("daemons list reflects the registry after add", async () => {
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/daemons`);
+	test("sessions list reflects the registry after add", async () => {
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as RegistryEntry[];
 		const found = body.find((e) => e.daemonId === entry.daemonId);
@@ -270,11 +270,11 @@ describe("POST /ctl/provision (spawn hook)", () => {
 	let configPath: string;
 	let hookPath: string;
 	let envFile: string;
-	let hookServer: OrchestratorServer;
+	let hookServer: FleetServer;
 	let hookFake: FakeDaemon;
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-orch-provision-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-provision-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		envFile = join(tmp, "hook-env.txt");
@@ -284,7 +284,7 @@ describe("POST /ctl/provision (spawn hook)", () => {
 		// `sh -c <path>` needs the exec bit; rewrites below keep the mode.
 		chmodSync(hookPath, 0o755);
 		writeFileSync(configPath, JSON.stringify({ roots: [], spawnHook: hookPath }));
-		hookServer = await startOrchestrator({ port: 0, statePath, configPath });
+		hookServer = await startFleet({ port: 0, statePath, configPath });
 	});
 
 	afterAll(async () => {
@@ -330,13 +330,13 @@ describe("POST /ctl/provision (spawn hook)", () => {
 	});
 
 	test("uses the requested name and empty cwd when the hook output omits them", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "omp-orch-provision-noname-"));
+		const dir = mkdtempSync(join(tmpdir(), "omp-fleet-provision-noname-"));
 		const hook = join(dir, "hook.sh");
 		writeFileSync(hook, `#!/bin/sh\nprintf '{"url":"ws://127.0.0.1:${hookFake.port}","token":"hook-token"}\\n'\n`);
 		chmodSync(hook, 0o755);
 		const cfg = join(dir, "config.json");
 		writeFileSync(cfg, JSON.stringify({ roots: [], spawnHook: hook }));
-		const srv = await startOrchestrator({ port: 0, statePath: join(dir, "state.json"), configPath: cfg });
+		const srv = await startFleet({ port: 0, statePath: join(dir, "state.json"), configPath: cfg });
 		try {
 			const res = await postJson(srv.port, "/ctl/provision", { name: "requested-name" });
 			expect(res.status).toBe(200);
@@ -428,17 +428,17 @@ describe("CLI", () => {
 	let tmp: string;
 	let statePath: string;
 	let configPath: string;
-	let server: OrchestratorServer;
+	let server: FleetServer;
 	let seeded: RegistryEntry;
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-orch-cli-test-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-cli-test-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		const rootsDir = join(tmp, "roots");
 		mkdirSync(rootsDir, { recursive: true });
 		writeFileSync(configPath, JSON.stringify({ roots: [rootsDir] }));
-		// Seed the registry directly so `daemons` has a row to print.
+		// Seed the registry directly so `sessions` has a row to print.
 		const registry = new Registry(statePath);
 		await registry.load();
 		seeded = registry.create({
@@ -451,21 +451,21 @@ describe("CLI", () => {
 			token: "t",
 			status: "asleep",
 		});
-		server = await startOrchestrator({ port: 0, statePath, configPath });
+		server = await startFleet({ port: 0, statePath, configPath });
 	});
 
 	afterAll(async () => {
 		if (server !== undefined) await server.close();
 	});
 
-	test("main(['daemons']) prints a table via fetch end-to-end", async () => {
+	test("main(['sessions']) prints a table via fetch end-to-end", async () => {
 		const logs: string[] = [];
 		const originalLog = console.log;
 		console.log = (msg?: unknown) => {
 			logs.push(String(msg));
 		};
 		try {
-			const code = await main(["daemons", "--port", String(server.port)]);
+			const code = await main(["sessions", "--port", String(server.port)]);
 			expect(code).toBe(0);
 		} finally {
 			console.log = originalLog;
@@ -488,33 +488,33 @@ describe("CLI", () => {
 			errors.push(String(msg));
 		};
 		try {
-			const code = await main(["daemons", "--port", String(freePort)]);
+			const code = await main(["sessions", "--port", String(freePort)]);
 			expect(code).toBe(1);
 		} finally {
 			console.error = originalError;
 		}
-		expect(errors.join("\n")).toContain("orchestrator not running — start it: omp-orchestrator serve");
+		expect(errors.join("\n")).toContain("fleet not running — start it: omp-fleet serve");
 	});
 
-	test("CLI serve + daemons end-to-end via Bun.spawn", async () => {
-		const serve = Bun.spawn(["bun", "orchestrator/cli.ts", "serve", "--port", "0"], {
+	test("CLI serve + sessions end-to-end via Bun.spawn", async () => {
+		const serve = Bun.spawn(["bun", "fleet/cli.ts", "serve", "--port", "0"], {
 			cwd: join(import.meta.dir, ".."),
-			env: { ...process.env, OMP_ORCHESTRATOR_STATE: statePath, OMP_ORCHESTRATOR_CONFIG: configPath },
+			env: { ...process.env, OMP_FLEET_STATE: statePath, OMP_FLEET_CONFIG: configPath },
 			stdout: "pipe",
 			stderr: "pipe",
 		});
 		try {
 			const port = await readListeningPort(serve.stdout, 10_000);
 			expect(port).toBeGreaterThan(0);
-			const daemons = Bun.spawn(["bun", "orchestrator/cli.ts", "daemons", "--port", String(port)], {
+			const sessions = Bun.spawn(["bun", "fleet/cli.ts", "sessions", "--port", String(port)], {
 				cwd: join(import.meta.dir, ".."),
-				env: { ...process.env, OMP_ORCHESTRATOR_STATE: statePath, OMP_ORCHESTRATOR_CONFIG: configPath },
+				env: { ...process.env, OMP_FLEET_STATE: statePath, OMP_FLEET_CONFIG: configPath },
 				stdout: "pipe",
 				stderr: "pipe",
 			});
-			const out = await readAll(daemons.stdout);
-			const errText = await readAll(daemons.stderr);
-			const exit = await daemons.exited;
+			const out = await readAll(sessions.stdout);
+			const errText = await readAll(sessions.stderr);
+			const exit = await sessions.exited;
 			expect(exit).toBe(0);
 			expect(out).toContain(seeded.daemonId);
 			expect(out).toContain("cli-smoke");
@@ -540,7 +540,7 @@ async function readListeningPort(stream: ReadableStream<Uint8Array>, timeoutMs: 
 			const result = (await Promise.race([reader.read(), timer])) as { value?: Uint8Array; done?: boolean } | null;
 			if (result === null || result.done) break;
 			buffer += decoder.decode(result.value, { stream: true });
-			const match = /orchestrator listening on 127\.0\.0\.1:(\d+)/.exec(buffer);
+			const match = /fleet listening on 127\.0\.0\.1:(\d+)/.exec(buffer);
 			if (match) return Number(match[1]);
 		}
 	} finally {

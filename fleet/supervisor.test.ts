@@ -1,7 +1,7 @@
 /**
- * SpawnSupervisor tests. A FAKE child script (sh) stands in for ompd: it
+ * SpawnSupervisor tests. A FAKE child script (sh) stands in for omp-session: it
  * appends its argv (which carries the template-filled token / labels /
- * resume args) to a file, optionally prints the OMPD| listening line for a
+ * resume args) to a file, optionally prints the OMP_SESSION| listening line for a
  * fake WS daemon the connector dials, and optionally fails. Covers spawn →
  * endpoint resolution → connect, respawn with --resume + fresh token,
  * restart-on-failure with fresh token per attempt, stop (kill + asleep),
@@ -13,8 +13,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
-import { OMPD_PROTO } from "../src/protocol";
-import type { OrchestratorConfig } from "./config";
+import { OMP_PROTO } from "../src/protocol";
+import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
 import { Registry, type RegistryEntry } from "./registry";
 import { SpawnSupervisor } from "./supervisor";
@@ -56,7 +56,7 @@ interface FakeServer {
 	stop(): void;
 }
 
-/** Fake ompd daemon: primes hello_ok (hello.cwd) → state → ready on every dial. */
+/** Fake omp-session daemon: primes hello_ok (hello.cwd) → state → ready on every dial. */
 function startFake(hello: { cwd: string; sessionFile: string }): FakeServer {
 	const fake: FakeServer = {
 		server: null as unknown as Server<undefined>,
@@ -81,7 +81,7 @@ function startFake(hello: { cwd: string; sessionFile: string }): FakeServer {
 				ws.send(
 					JSON.stringify({
 						type: "hello_ok",
-						proto: OMPD_PROTO,
+						proto: OMP_PROTO,
 						name: "fake",
 						cwd: hello.cwd,
 						pid: 4242,
@@ -111,7 +111,7 @@ function startFake(hello: { cwd: string; sessionFile: string }): FakeServer {
 }
 
 async function loadedRegistry(): Promise<Registry> {
-	const registry = new Registry(join(tmpPath("ompd-sup-state-"), "state.json"));
+	const registry = new Registry(join(tmpPath("omp-session-sup-state-"), "state.json"));
 	await registry.load();
 	return registry;
 }
@@ -119,7 +119,7 @@ async function loadedRegistry(): Promise<Registry> {
 /**
  * Write a fake child script. It appends "$@" (the template-filled token /
  * labels / resume args) to argsFile, optionally records its pid, prints
- * stderr lines, then either exits 1 (fail) or prints the OMPD| listening
+ * stderr lines, then either exits 1 (fail) or prints the OMP_SESSION| listening
  * line for `port` and idles.
  */
 function writeChildScript(dir: string, port: number, argsFile: string, opts: { fail?: boolean; pidFile?: string; stderrLines?: string[] } = {}): string {
@@ -134,7 +134,7 @@ function writeChildScript(dir: string, port: number, argsFile: string, opts: { f
 	if (opts.fail) {
 		lines.push("exit 1");
 	} else {
-		lines.push(`printf 'OMPD|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${port},"url":"ws://127.0.0.1:${port}"}'`);
+		lines.push(`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${port},"url":"ws://127.0.0.1:${port}"}'`);
 		lines.push("while :; do sleep 1; done");
 	}
 	writeFileSync(script, lines.join("\n") + "\n");
@@ -142,7 +142,7 @@ function writeChildScript(dir: string, port: number, argsFile: string, opts: { f
 }
 
 /** Spawn template that fills {token} {labels} {resume} as argv for the fake child. */
-function makeConfig(script: string): OrchestratorConfig {
+function makeConfig(script: string): FleetConfig {
 	return {
 		roots: [],
 		templates: { test: { command: `sh ${script} {token} {labels} {resume}` } },
@@ -151,7 +151,7 @@ function makeConfig(script: string): OrchestratorConfig {
 }
 
 /** Two-template config for resolution-order tests: default "test", override "other". */
-function makeTierConfig(scriptDefault: string, scriptOverride: string, projectTemplates?: Record<string, string>): OrchestratorConfig {
+function makeTierConfig(scriptDefault: string, scriptOverride: string, projectTemplates?: Record<string, string>): FleetConfig {
 	return {
 		roots: [],
 		templates: {
@@ -169,7 +169,7 @@ function makeConnector(registry: Registry): DaemonConnector {
 
 describe("SpawnSupervisor", () => {
 	test("spawn runs the child, resolves the endpoint, and connects to ready", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
 		const script = writeChildScript(projectDir, fake.port, argsFile, { pidFile: join(projectDir, "pid.txt") });
@@ -199,7 +199,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("respawn uses --resume lastSessionFile and a fresh token; reconnects to ready", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
 		const script = writeChildScript(projectDir, fake.port, argsFile);
@@ -237,7 +237,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("restart-on-failure: bounded restarts with a fresh token per attempt, then error", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
 		const script = writeChildScript(projectDir, fake.port, argsFile, { fail: true });
@@ -261,7 +261,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("stop kills the child, drops the socket, and sets status asleep", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
 		const pidFile = join(projectDir, "pid.txt");
@@ -293,7 +293,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("stop cancels a scheduled restart", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
 		const script = writeChildScript(projectDir, fake.port, argsFile, { fail: true });
@@ -322,7 +322,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("stderrTail returns the ring buffer; the ring truncates to stderrRingBytes", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
 		const script = writeChildScript(projectDir, fake.port, argsFile, { stderrLines: ["boom-one", "boom-two"] });
@@ -352,7 +352,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("unknown template rejects and creates nothing", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt"));
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
@@ -365,7 +365,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("projectTemplates: basename(cwd) picks the template when init.template is absent", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsDefault = join(projectDir, "args-default.txt");
 		const argsOverride = join(projectDir, "args-override.txt");
@@ -391,7 +391,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("init.template wins over projectTemplates", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsDefault = join(projectDir, "args-default.txt");
 		const argsOverride = join(projectDir, "args-override.txt");
@@ -415,7 +415,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("defaultTemplate applies when the project has no override", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsDefault = join(projectDir, "args-default.txt");
 		const argsOverride = join(projectDir, "args-override.txt");
@@ -440,7 +440,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("unknown projectTemplates value rejects and creates nothing", async () => {
-		const projectDir = tmpPath("ompd-sup-proj-");
+		const projectDir = tmpPath("omp-session-sup-proj-");
 		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt"));
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);

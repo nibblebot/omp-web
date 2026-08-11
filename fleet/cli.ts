@@ -1,27 +1,27 @@
 /**
- * omp-orchestrator CLI (Phase 2 headless control plane).
+ * omp-fleet CLI (Phase 2 headless control plane).
  *
  * `serve` runs the control plane in-process (foreground). Every other
  * subcommand is a thin loopback HTTP client against the control plane:
  *
- *   omp-orchestrator serve [--port n]
- *   omp-orchestrator daemons [--port n]
- *   omp-orchestrator projects [--port n]
- *   omp-orchestrator spawn <path> [--template t] [--name n] [--label k=v]…
- *   omp-orchestrator add <name> <url> --token <t> [--label k=v]… [--cwd c]
- *   omp-orchestrator provision <name> [--label k=v]…
- *   omp-orchestrator stop <selector>
- *   omp-orchestrator prompt <selector> <text> [--wait <ms>] [--fan-out]
+ *   omp-fleet serve [--port n]
+ *   omp-fleet sessions [--port n]
+ *   omp-fleet projects [--port n]
+ *   omp-fleet spawn <path> [--template t] [--name n] [--label k=v]…
+ *   omp-fleet add <name> <url> --token <t> [--label k=v]… [--cwd c]
+ *   omp-fleet provision <name> [--label k=v]…
+ *   omp-fleet stop <selector>
+ *   omp-fleet prompt <selector> <text> [--wait <ms>] [--fan-out]
  *
- * Port resolution: `--port` flag, else OMP_ORCHESTRATOR_PORT, else 4722.
- * A refused connection prints "orchestrator not running — start it:
- * omp-orchestrator serve" and exits 1.
+ * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722.
+ * A refused connection prints "fleet not running — start it:
+ * omp-fleet serve" and exits 1.
  */
 
-import { startOrchestrator } from "./server";
+import { startFleet } from "./server";
 
 const DEFAULT_PORT = 4722;
-const NOT_RUNNING_MESSAGE = "orchestrator not running — start it: omp-orchestrator serve";
+const NOT_RUNNING_MESSAGE = "fleet not running — start it: omp-fleet serve";
 
 /** Wire shapes the CLI renders (subsets of RegistryEntry / ProjectEntry). */
 interface DaemonRow {
@@ -110,11 +110,11 @@ function resolvePort(flags: Map<string, FlagValue>): number {
 		if (Number.isInteger(fromFlag) && fromFlag >= 0 && fromFlag <= 65535) return fromFlag;
 		throw new CliError(`invalid --port: ${flags.get("port")}`);
 	}
-	const env = process.env.OMP_ORCHESTRATOR_PORT;
+	const env = process.env.OMP_FLEET_PORT;
 	if (env !== undefined && env !== "") {
 		const n = Number(env);
 		if (Number.isInteger(n) && n >= 0 && n <= 65535) return n;
-		throw new CliError(`invalid OMP_ORCHESTRATOR_PORT: ${env}`);
+		throw new CliError(`invalid OMP_FLEET_PORT: ${env}`);
 	}
 	return DEFAULT_PORT;
 }
@@ -147,7 +147,7 @@ async function ctl(port: number, path: string, init?: RequestInit): Promise<unkn
 			body !== null && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
 				? (body as { error: string }).error
 				: `HTTP ${res.status}`;
-		throw new CliError(`orchestrator error (${res.status}): ${message}`);
+		throw new CliError(`fleet error (${res.status}): ${message}`);
 	}
 	return body;
 }
@@ -165,13 +165,13 @@ function isDaemonRow(value: unknown): value is DaemonRow {
 }
 
 async function serveCmd(port: number): Promise<number> {
-	const server = await startOrchestrator({ port });
-	console.log(`orchestrator listening on 127.0.0.1:${server.port}`);
+	const server = await startFleet({ port });
+	console.log(`fleet listening on 127.0.0.1:${server.port}`);
 	let shuttingDown = false;
 	const shutdown = async (signal: string) => {
 		if (shuttingDown) return;
 		shuttingDown = true;
-		console.error(`orchestrator: ${signal}, shutting down`);
+		console.error(`fleet: ${signal}, shutting down`);
 		try {
 			await server.close();
 		} finally {
@@ -184,9 +184,9 @@ async function serveCmd(port: number): Promise<number> {
 	return 0;
 }
 
-async function daemonsCmd(port: number): Promise<number> {
-	const body = await ctl(port, "/ctl/daemons");
-	if (!Array.isArray(body)) throw new CliError("unexpected daemons response");
+async function sessionsCmd(port: number): Promise<number> {
+	const body = await ctl(port, "/ctl/sessions");
+	if (!Array.isArray(body)) throw new CliError("unexpected sessions response");
 	const rows = (body as unknown[])
 		.filter(isDaemonRow)
 		.map((entry) => [entry.daemonId, entry.name, entry.mode, entry.status, entry.project, entry.cwd ?? "", (entry.labels ?? []).join(",")]);
@@ -207,7 +207,7 @@ async function projectsCmd(port: number): Promise<number> {
 
 async function spawnCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
 	const cwd = positionals[0];
-	if (cwd === undefined) throw new CliError("usage: omp-orchestrator spawn <path> [--template t] [--name n] [--label k=v]…");
+	if (cwd === undefined) throw new CliError("usage: omp-fleet spawn <path> [--template t] [--name n] [--label k=v]…");
 	const body = (await ctl(port, "/ctl/spawn", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -227,7 +227,7 @@ async function addCmd(positionals: string[], flags: Map<string, FlagValue>, port
 	const url = positionals[1];
 	const token = flagString(flags, "token");
 	if (name === undefined || url === undefined) {
-		throw new CliError("usage: omp-orchestrator add <name> <url> --token <t> [--label k=v]… [--cwd c]");
+		throw new CliError("usage: omp-fleet add <name> <url> --token <t> [--label k=v]… [--cwd c]");
 	}
 	const body = (await ctl(port, "/ctl/add", {
 		method: "POST",
@@ -247,7 +247,7 @@ async function addCmd(positionals: string[], flags: Map<string, FlagValue>, port
 async function provisionCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
 	const name = positionals[0];
 	if (name === undefined) {
-		throw new CliError("usage: omp-orchestrator provision <name> [--label k=v]…");
+		throw new CliError("usage: omp-fleet provision <name> [--label k=v]…");
 	}
 	const body = (await ctl(port, "/ctl/provision", {
 		method: "POST",
@@ -263,7 +263,7 @@ async function provisionCmd(positionals: string[], flags: Map<string, FlagValue>
 
 async function stopCmd(positionals: string[], _flags: Map<string, FlagValue>, port: number): Promise<number> {
 	const selector = positionals[0];
-	if (selector === undefined) throw new CliError("usage: omp-orchestrator stop <selector>");
+	if (selector === undefined) throw new CliError("usage: omp-fleet stop <selector>");
 	const body = (await ctl(port, "/ctl/stop", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -285,7 +285,7 @@ async function promptCmd(positionals: string[], flags: Map<string, FlagValue>, p
 	const selector = positionals[0];
 	const text = positionals.slice(1).join(" ");
 	if (selector === undefined || text === "") {
-		throw new CliError("usage: omp-orchestrator prompt <selector> <text> [--wait <ms>] [--fan-out]");
+		throw new CliError("usage: omp-fleet prompt <selector> <text> [--wait <ms>] [--fan-out]");
 	}
 	const waitValue = flags.get("wait");
 	const waitMs = flagNumber(flags, "wait");
@@ -317,11 +317,11 @@ async function promptCmd(positionals: string[], flags: Map<string, FlagValue>, p
 	return 0;
 }
 
-const USAGE = `usage: omp-orchestrator <command> [options]
+const USAGE = `usage: omp-fleet <command> [options]
 
 commands:
   serve                        run the control plane (loopback HTTP)
-  daemons                      list daemons
+  sessions                     list sessions
   projects                     list discovered projects
   spawn <path> [--template t] [--name n] [--label k=v]…
   add <name> <url> --token <t> [--label k=v]… [--cwd c]
@@ -330,7 +330,7 @@ commands:
   prompt <selector> <text> [--wait <ms>] [--fan-out]
 
 options:
-  --port <n>   control plane port (default 4722, env OMP_ORCHESTRATOR_PORT)`;
+  --port <n>   control plane port (default 4722, env OMP_FLEET_PORT)`;
 
 export async function main(argv: string[]): Promise<number> {
 	const { positionals, flags } = parseArgs(argv);
@@ -346,8 +346,8 @@ export async function main(argv: string[]): Promise<number> {
 				return 0;
 			case "serve":
 				return await serveCmd(port);
-			case "daemons":
-				return await daemonsCmd(port);
+			case "sessions":
+				return await sessionsCmd(port);
 			case "projects":
 				return await projectsCmd(port);
 			case "spawn":

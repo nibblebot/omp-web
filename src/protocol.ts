@@ -30,7 +30,7 @@ export interface WebSessionState {
 	interruptMode: "immediate" | "wait";
 	sessionFile?: string;
 	sessionId: string;
-	/** Set once the ompd readiness gate clears (R8): SDK session live + provider/model/auth resolved. */
+	/** Set once the omp-session readiness gate clears (R8): SDK session live + provider/model/auth resolved. */
 	readyAt?: number;
 	sessionName?: string;
 	autoCompactionEnabled: boolean;
@@ -128,29 +128,30 @@ export interface SettingsModel {
 }
 
 // ---------------------------------------------------------------------------
-// ompd / orchestrator contract (README.md). OMPD_PROTO gates
-// orchestrator↔ompd drift (the collab COLLAB_PROTO pattern); bump on any
+// omp-session / omp-fleet contract (README.md). OMP_PROTO gates
+// fleet↔omp-session drift (the collab COLLAB_PROTO pattern); bump on any
 // breaking change to the hello handshake or frame shapes.
 // ---------------------------------------------------------------------------
 
-export const OMPD_PROTO = 1;
+export const OMP_PROTO = 1;
 
 /** WS close code for a missing/invalid bearer token (R14). */
-export const OMPD_CLOSE_UNAUTHORIZED = 4001;
+export const OMP_CLOSE_UNAUTHORIZED = 4001;
 
 /**
- * The `OMPD|` stdout contract lines (R6b). ompd prints `listening`
- * immediately after bind, before session creation; a remote wrapper MAY print
- * `endpoint` when the reachable address differs from the bind.
+ * The `OMP_SESSION|` stdout contract lines (R6b). omp-session prints
+ * `listening` immediately after bind, before session creation; a remote
+ * wrapper MAY print `endpoint` when the reachable address differs from the
+ * bind.
  */
-export type OmpdStdoutLine =
+export type StdoutContractLine =
 	| { event: "listening"; bind: string; port: number; url: string; advertise?: string }
 	| { event: "endpoint"; url: string };
 
-/** Daemon lifecycle as surfaced by the orchestrator (daemon_status frame). */
+/** Daemon lifecycle as surfaced by omp-fleet (daemon_status frame). */
 export type DaemonStatus = "spawning" | "connecting" | "session" | "resolving" | "ready" | "asleep" | "reconnecting" | "error";
 
-/** One daemon in the orchestrator roster (roster frame). */
+/** One daemon in the omp-fleet roster (roster frame). */
 export interface DaemonEntry {
 	daemonId: string;
 	name: string;
@@ -246,10 +247,10 @@ export type WebMethodName =
 	| "subagentAbort";
 
 // Client → server
-// Routing is by SOCKET ATTACHMENT: on ompd a socket is attached to the single
-// live session from upgrade (connect = attached), so call/login_code/
-// ui_response implicitly target it. `attach` exists only at the orchestrator
-// edge, where it selects the daemon to proxy.
+// Routing is by SOCKET ATTACHMENT: on omp-session a socket is attached to the
+// single live session from upgrade (connect = attached), so call/login_code/
+// ui_response implicitly target it. `attach` exists only at the fleet edge,
+// where it selects the daemon to proxy.
 export type ClientCommand =
 	| { type: "call"; id: string; method: WebMethodName; args?: unknown[]; streamId?: number }
 	| { type: "login_code"; requestId: string; code: string }
@@ -257,8 +258,8 @@ export type ClientCommand =
 	| { type: "ui_response"; id: string; result?: unknown; error?: string }
 	| { type: "list_sessions" }
 	| { type: "list_files"; query: string; limit?: number }
-	// Orchestrator edge only: attach this socket to the daemon with this id
-	// (the edge proxies it through; a bare ompd never receives attach).
+	// Fleet edge only: attach this socket to the daemon with this id
+	// (the edge proxies it through; a bare omp-session never receives attach).
 	| { type: "attach"; sessionId: string }
 	// Plain process-stats poll; answered with a process_stats frame.
 	| { type: "get_process_stats" }
@@ -270,11 +271,11 @@ export type ClientCommand =
 	| { type: "daemon_logs"; id: string; projectDir: string; name: string; lines: number; head?: boolean; grep?: string }
 	| { type: "daemon_stop"; id: string; projectDir: string; name: string; timeoutMs?: number }
 	| { type: "daemon_restart"; id: string; projectDir: string; name: string }
-	// --- Orchestrator control plane (orchestrator → ompd) ---
+	// --- Fleet control plane (omp-fleet → omp-session) ---
 	// First-frame auth fallback when the transport can't set an Authorization
 	// header (R14 handshake); answered by hello_ok or close 4001.
 	| { type: "hello"; proto: number; token?: string }
-	// --- Orchestrator edge (browser → orchestrator only; a bare ompd rejects these) ---
+	// --- Fleet edge (browser → omp-fleet only; a bare omp-session rejects these) ---
 	| { type: "spawn"; cwd: string; template?: string; labels?: string[] }
 	| { type: "spawn_resume"; daemonId: string }
 	| { type: "stop"; daemonId: string }
@@ -321,8 +322,8 @@ export type SessionScopedFrame =
 	// Collab host status for the attached session (start/stop/live/error/off).
 	| { type: "collab_status"; status: CollabWireStatus };
 
-// Server → browser. Session-scoped frames on a bare ompd carry NO sessionId
-// (one live session; connect = attached). The orchestrator edge STAMPS the
+// Server → browser. Session-scoped frames on a bare omp-session carry NO
+// sessionId (one live session; connect = attached). The fleet edge STAMPS the
 // daemonId as sessionId when proxying, so roster-mode clients can guard
 // daemon switches. The rest are global broadcasts or unicast answers (noted
 // per variant).
@@ -337,9 +338,10 @@ export type ServerFrame =
 	// Unicast: provider needs a pasted code to finish login.
 	| { type: "login_code_request"; requestId: string; title: string; placeholder?: string }
 	// Unicast: socket is now attached to this handle; history, state and
-	// available_commands follow immediately (in that order). mode tells the
-	// client which UI to show: "single" hides the sessions sidebar (R10
-	// standalone), "multi" is today's mux. Absent = multi (legacy servers).
+	// available_commands follow immediately (in that order). mode "single" is
+	// the standalone omp-session UI (no sidebar); roster mode is signaled by
+	// the fleet edge's roster frame, never by attached (the edge proxies the
+	// daemon's "single" through unchanged).
 	| { type: "attached"; sessionId: string; mode?: "single" | "multi" }
 	// Project-wide daemon broker roster (hub launch processes); global broadcast.
 	| { type: "daemons"; daemons: DaemonInfo[] }
@@ -349,14 +351,14 @@ export type ServerFrame =
 	| { type: "daemon_control_result"; id: string; ok: boolean; daemon?: DaemonInfo; error?: string }
 	// Unicast answer to get_process_stats — the 5s poll carries only process stats.
 	| { type: "process_stats"; process: ProcessStats }
-	// --- ompd readiness (R8) ---
+	// --- omp-session readiness (R8) ---
 	// Broadcast once the SDK session is live AND provider/model/auth has
 	// resolved. Before it, prompt-family calls fail with a not_ready error.
 	| { type: "ready"; readyAt: number }
-	// --- Orchestrator control plane (ompd → orchestrator) ---
+	// --- Fleet control plane (omp-session → omp-fleet) ---
 	// Unicast answer to the hello handshake (Authorization header or hello frame).
 	| { type: "hello_ok"; proto: number; name: string; cwd: string; pid: number; version: string; sessionFile?: string }
-	// --- Orchestrator edge (orchestrator → browser; a bare ompd never sends these) ---
+	// --- Fleet edge (omp-fleet → browser; a bare omp-session never sends these) ---
 	// Global broadcast + unicast answer; the roster-mode sidebar's source.
 	| { type: "roster"; daemons: DaemonEntry[] }
 	| { type: "daemon_status"; daemonId: string; status: DaemonStatus; error?: string }

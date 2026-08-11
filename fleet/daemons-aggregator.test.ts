@@ -1,6 +1,6 @@
 /**
  * Aggregated daemons panel (Phase 4/5): pure merge/cache semantics of
- * orchestrator/daemons-aggregator.ts — cross-daemon merging keyed by
+ * fleet/daemons-aggregator.ts — cross-daemon merging keyed by
  * `${projectDir}\u0000${name}`, same-projectDir preference, latest-wins
  * tie-breaks, full-replace ingest, and removal eviction. The browser-facing
  * integration (broadcast on update/open, pipe stripping, registry-removal

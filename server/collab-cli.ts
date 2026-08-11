@@ -7,10 +7,10 @@
  *   bun server/collab-cli.ts --join          # …and immediately `omp join` the write link
  *   bun server/collab-cli.ts --view --join   # …join with the read-only (view) link
  *   bun server/collab-cli.ts --stop          # stop the collab room
- *   bun server/collab-cli.ts --port 4721     # daemon WS port (env OMPD_PORT also works)
+ *   bun server/collab-cli.ts --port 4721     # daemon WS port (env OMP_SESSION_PORT also works)
  *
  * The daemon must be running (`bun dev:server`). Connect = attached on a
- * bare ompd: the socket primes the single boot session's collab status on
+ * bare omp-session: the socket primes the single boot session's collab status on
  * open. The room link is generated server-side on collab_start; this client
  * drives the same WS protocol the web UI uses.
  */
@@ -30,7 +30,7 @@ function usage(): string {
 }
 
 function parseArgs(argv: string[]): Options | null {
-	const opts: Options = { port: Number(process.env.OMPD_PORT ?? 4721), join: false, view: false, stop: false };
+	const opts: Options = { port: Number(process.env.OMP_SESSION_PORT ?? 4721), join: false, view: false, stop: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		switch (arg) {
@@ -76,7 +76,7 @@ function openSocket(port: number): Promise<WebSocket> {
 	};
 	const timer = setTimeout(() => {
 		ws.close();
-		settle(new Error(`timed out connecting to ws://127.0.0.1:${port}/ws — is the daemon running? (bun dev:server; port from --port or OMPD_PORT)`));
+		settle(new Error(`timed out connecting to ws://127.0.0.1:${port}/ws — is the daemon running? (bun dev:server; port from --port or OMP_SESSION_PORT)`));
 	}, 5_000);
 	ws.onopen = () => settle(null);
 	ws.onerror = () => {};

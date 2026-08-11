@@ -1,5 +1,5 @@
 /**
- * DaemonConnector: the orchestrator's per-daemon WebSocket client.
+ * DaemonConnector: the fleet's per-daemon WebSocket client.
  *
  * Dials the daemon's registered endpoint with the bearer token on the
  * upgrade (R14 — the token in the Authorization header means no hello frame
@@ -24,7 +24,7 @@
  * ping terminates the socket and the close path below drives reconnecting.
  */
 
-import { OMPD_PROTO } from "../src/protocol";
+import { OMP_PROTO } from "../src/protocol";
 import type { ClientCommand, DaemonStatus, ServerFrame, WebSessionState } from "../src/protocol";
 import type { Registry, RegistryEntry } from "./registry";
 
@@ -84,9 +84,10 @@ function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
 }
 
 /**
- * Normalize a registered endpoint for dialing: ompd's OMPD| listening line
- * (and `add`-registered URLs) are pathless (`ws://host:port`), but ompd only
- * upgrades `/ws`. Append it when the path is empty or "/".
+ * Normalize a registered endpoint for dialing: omp-session's OMP_SESSION|
+ * listening line (and `add`-registered URLs) are pathless
+ * (`ws://host:port`), but omp-session only upgrades `/ws`. Append it when
+ * the path is empty or "/".
  */
 export function daemonWsUrl(endpoint: string): string {
 	const url = new URL(endpoint);
@@ -254,7 +255,7 @@ export class DaemonConnector {
 		if (!ws) return;
 		if (ws.readyState === WS_OPEN) {
 			try {
-				ws.close(1000, "orchestrator disconnect");
+				ws.close(1000, "fleet disconnect");
 			} catch {
 				// Already closing; the close handler is guarded by state.closed.
 			}
@@ -359,7 +360,7 @@ export class DaemonConnector {
 			state.socket = null;
 			if (ws && ws.readyState === WS_OPEN) {
 				try {
-					ws.close(1000, "orchestrator close");
+					ws.close(1000, "fleet close");
 				} catch {
 					// Ignore; the close handler is guarded by state.closed.
 				}
@@ -421,16 +422,17 @@ export class DaemonConnector {
 			if (state.socket !== ws) return;
 			if (state.closed || state.dropWhenOpen) {
 				try {
-					ws.close(1000, "orchestrator disconnect");
+					ws.close(1000, "fleet disconnect");
 				} catch {
 					// Ignore.
 				}
 				return;
 			}
-			// ompd answers a valid hello with hello_ok on ANY socket (R14); the
-			// Authorization header alone does NOT elicit a proactive hello_ok.
+			// omp-session answers a valid hello with hello_ok on ANY socket
+			// (R14); the Authorization header alone does NOT elicit a
+			// proactive hello_ok.
 			try {
-				ws.send(JSON.stringify({ type: "hello", proto: OMPD_PROTO, token: entry.token } satisfies ClientCommand));
+				ws.send(JSON.stringify({ type: "hello", proto: OMP_PROTO, token: entry.token } satisfies ClientCommand));
 			} catch {
 				// Socket died between open and send; the close handler owns the machine.
 			}
@@ -501,7 +503,7 @@ export class DaemonConnector {
 			this.#transition(
 				state.daemonId,
 				"error",
-				`cwd mismatch: ompd reports ${hello.cwd}, registered ${entry.cwd}`,
+				`cwd mismatch: omp-session reports ${hello.cwd}, registered ${entry.cwd}`,
 			);
 			state.socket?.close(1000, "cwd mismatch");
 			return;
@@ -575,10 +577,10 @@ export class DaemonConnector {
 
 	/**
 	 * Readiness-ladder transitions are monotonic: connecting < session <
-	 * resolving < ready, and "error" is never overwritten. A real ompd sends
-	 * its attach priming (state, and ready when the gate already cleared)
-	 * BEFORE it answers our hello — an out-of-order hello_ok/state must not
-	 * downgrade an already-ready daemon.
+	 * resolving < ready, and "error" is never overwritten. A real
+	 * omp-session sends its attach priming (state, and ready when the gate
+	 * already cleared) BEFORE it answers our hello — an out-of-order
+	 * hello_ok/state must not downgrade an already-ready daemon.
 	 */
 	#transitionLadder(daemonId: string, status: "session" | "resolving" | "ready"): void {
 		const current = this.#registry.get(daemonId)?.status;

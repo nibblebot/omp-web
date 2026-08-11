@@ -2,7 +2,7 @@
  * Slice C integration test: the REAL daemon server wired end-to-end with the
  * collab relay and host adapter.
  *
- * Spawns server/index.ts as a subprocess (ephemeral port via OMPD_PORT=0),
+ * Spawns server/index.ts as a subprocess (ephemeral port via OMP_SESSION_PORT=0),
  * drives a web client through collab_start → collab_stop, and connects a REAL
  * CollabSocket guest (pi-coding-agent's relay client) to the room: welcome +
  * snapshot-chunks, a guest prompt landing as a custom_message entry frame,
@@ -66,10 +66,10 @@ async function readServerPort(stdout: ReadableStream<Uint8Array>, timeoutMs: num
 		while ((nl = buffer.indexOf("\n")) >= 0) {
 			const line = buffer.slice(0, nl);
 			buffer = buffer.slice(nl + 1);
-			// ompd prints the OMPD| listening contract line (JSON) on stdout after bind.
-			if (!line.startsWith("OMPD|")) continue;
+			// omp-session prints the OMP_SESSION| listening contract line (JSON) on stdout after bind.
+			if (!line.startsWith("OMP_SESSION|")) continue;
 			try {
-				const parsed = JSON.parse(line.slice(5)) as { event?: string; port?: number };
+				const parsed = JSON.parse(line.slice("OMP_SESSION|".length)) as { event?: string; port?: number };
 				if (parsed.event === "listening" && typeof parsed.port === "number") return parsed.port;
 			} catch {
 				// not a contract line — keep waiting
@@ -126,10 +126,10 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 		cwd: repoRoot,
 		env: {
 			...process.env,
-			OMPD_PORT: "0",
-			OMPD_CWD: tmpDir,
+			OMP_SESSION_PORT: "0",
+			OMP_SESSION_CWD: tmpDir,
 			PI_NO_TITLE: "1",
-			OMPD_COLLAB_MAX_GUESTS: "8",
+			OMP_SESSION_COLLAB_MAX_GUESTS: "8",
 		},
 		stdout: "pipe",
 		stderr: "pipe",
@@ -154,7 +154,7 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 	webSockets.push(ws);
 	ws.onmessage = ev => webFrames.push(JSON.parse(String(ev.data)) as WebFrame);
 
-	// Connect = attached on a bare ompd (Phase 6): the priming — attached with
+	// Connect = attached on a bare omp-session (Phase 6): the priming — attached with
 	// the constant guard token, then history/state/collab_status — arrives at
 	// open; collab_start targets the attached session directly.
 	const attached = await waitFor(() => webFrames.find(f => f.type === "attached") ?? null, 10_000, "attached frame");

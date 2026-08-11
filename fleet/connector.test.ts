@@ -1,5 +1,5 @@
 /**
- * DaemonConnector tests. A fake ompd (Bun.serve speaking the hello_ok /
+ * DaemonConnector tests. A fake omp-session (Bun.serve speaking the hello_ok /
  * state / ready / event frame protocol) stands in for a real daemon; the
  * connector dials it over loopback with the bearer token on the upgrade.
  * Covers the status machine, cwd sanity, lastSessionFile tracking, clean vs
@@ -13,14 +13,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
-import { OMPD_PROTO, type ClientCommand } from "../src/protocol";
+import { OMP_PROTO, type ClientCommand } from "../src/protocol";
 import { DaemonConnector, type ConnectorEvents } from "./connector";
 import { Registry, type RegistryEntry } from "./registry";
 
 const tmpDirs: string[] = [];
 
 function tmpStatePath(): string {
-	const dir = mkdtempSync(join(tmpdir(), "ompd-conn-"));
+	const dir = mkdtempSync(join(tmpdir(), "omp-session-conn-"));
 	tmpDirs.push(dir);
 	return join(dir, "state.json");
 }
@@ -98,7 +98,7 @@ const HELLO_CWD = "/srv/proj";
 function helloFrame(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 	return {
 		type: "hello_ok",
-		proto: OMPD_PROTO,
+		proto: OMP_PROTO,
 		name: "fake",
 		cwd: HELLO_CWD,
 		pid: 4242,
@@ -108,7 +108,7 @@ function helloFrame(overrides: Record<string, unknown> = {}): Record<string, unk
 }
 
 /** Prime sequence on open: state (sessionFile) → ready. hello_ok is NOT
- * primed — like the real ompd, it is answered to the connector's hello. */
+ * primed — like the real omp-session, it is answered to the connector's hello. */
 function prime(ws: ServerWebSocket, opts: { ready?: boolean } = {}): void {
 	ws.send(
 		JSON.stringify({
@@ -158,7 +158,7 @@ function startFake(opts: FakeOptions = {}): FakeServer {
 				} catch {
 					return;
 				}
-				// Real ompd behavior: a hello is answered hello_ok and is not
+				// Real omp-session behavior: a hello is answered hello_ok and is not
 				// part of the command stream (received stays call-frames only).
 				if (typeof frame === "object" && frame !== null && "type" in frame && frame.type === "hello") {
 					ws.send(JSON.stringify(helloFrame(opts.hello)));
@@ -405,8 +405,8 @@ describe("DaemonConnector", () => {
 		bad.stop();
 	});
 
-	test("real ompd frame order (state+ready before hello_ok) never downgrades from ready", async () => {
-		// The real ompd sends its attach priming (history/state, and ready when
+	test("real omp-session frame order (state+ready before hello_ok) never downgrades from ready", async () => {
+		// The real omp-session sends its attach priming (history/state, and ready when
 		// the gate already cleared) immediately on upgrade — BEFORE it answers
 		// the connector's hello. The ladder must ignore the late session signal.
 		const fake = startFake({

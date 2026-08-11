@@ -1,5 +1,5 @@
 /**
- * Fan-out prompt correlation tests. A fake ompd primes hello_ok/state/ready
+ * Fan-out prompt correlation tests. A fake omp-session primes hello_ok/state/ready
  * on dial and responds to `{type:"call", method:"prompt"}` per-test: happy
  * path emits assistant message_end events + agent_end (with usage), error
  * frames, abort events, or nothing (timeout). Covers promptEntry's
@@ -13,8 +13,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server, ServerWebSocket } from "bun";
-import { OMPD_PROTO } from "../src/protocol";
-import type { OrchestratorConfig } from "./config";
+import { OMP_PROTO } from "../src/protocol";
+import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
 import { fanOut, promptEntry, type FanoutDeps } from "./fanout";
 import { Registry, type RegistryEntry } from "./registry";
@@ -23,7 +23,7 @@ import { SpawnSupervisor } from "./supervisor";
 const tmpDirs: string[] = [];
 
 function tmpStatePath(): string {
-	const dir = mkdtempSync(join(tmpdir(), "ompd-fanout-"));
+	const dir = mkdtempSync(join(tmpdir(), "omp-session-fanout-"));
 	tmpDirs.push(dir);
 	return join(dir, "state.json");
 }
@@ -83,7 +83,7 @@ interface FakeOptions {
 	onMessage?: (fake: FakeServer, ws: ServerWebSocket, frame: unknown) => void;
 }
 
-/** Fake ompd: primes hello_ok (cwd /srv/proj) → state → ready on every dial. */
+/** Fake omp-session: primes hello_ok (cwd /srv/proj) → state → ready on every dial. */
 function startFake(opts: FakeOptions = {}): FakeServer {
 	const fake: FakeServer = {
 		server: null as unknown as Server<undefined>,
@@ -117,7 +117,7 @@ function startFake(opts: FakeOptions = {}): FakeServer {
 					return;
 				}
 				// The connector opens with a hello handshake (answered hello_ok
-				// by a real ompd); it is not part of the command stream here.
+				// by a real omp-session); it is not part of the command stream here.
 				if (typeof frame === "object" && frame !== null && "type" in frame && frame.type === "hello") return;
 				fake.received.push(frame);
 				opts.onMessage?.(fake, ws, frame);
@@ -133,7 +133,7 @@ function prime(ws: ServerWebSocket, helloCwd = "/srv/proj"): void {
 	ws.send(
 		JSON.stringify({
 			type: "hello_ok",
-			proto: OMPD_PROTO,
+			proto: OMP_PROTO,
 			name: "fake",
 			cwd: helloCwd,
 			pid: 4242,
@@ -180,7 +180,7 @@ function happyResponder(_fake: FakeServer, ws: ServerWebSocket, frame: unknown):
 async function readyEntry(fake: FakeServer): Promise<{ deps: FanoutDeps; registry: Registry; connector: DaemonConnector; entry: RegistryEntry }> {
 	const registry = await loadedRegistry();
 	const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50 });
-	const config: OrchestratorConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+	const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
 	const supervisor = new SpawnSupervisor(registry, connector, config);
 	const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
 	connector.connect(entry.daemonId);
@@ -292,7 +292,7 @@ describe("promptEntry", () => {
 		const fake = startFake({ helloCwd: "/elsewhere" });
 		const registry = await loadedRegistry();
 		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50 });
-		const config: OrchestratorConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
 		connector.connect(entry.daemonId);

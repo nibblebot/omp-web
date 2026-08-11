@@ -310,7 +310,7 @@ body {
 	white-space: nowrap;
 }
 
-/* R8 ompd readiness: subtle "starting…" hint in the composer while the boot
+/* R8 omp-session readiness: subtle "starting…" hint in the composer while the boot
    session's gate is still clearing (neutral counterpart to disconnected-pill). */
 .ready-pill {
 	background: var(--panel);
@@ -2903,7 +2903,7 @@ pre.terminal.eval-code {
 	font-size: var(--fs-md);
 }
 
-/* --- Daemon roster sidebar (orchestrator edge, Phase 3) --- */
+/* --- Session roster sidebar (fleet edge, Phase 3) --- */
 
 .daemon-row {
 	/* sidebar-row defaults to a pointer cursor; only attachable rows get one. */

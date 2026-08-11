@@ -1,13 +1,13 @@
 /**
- * Orchestrator edge tests: the browser WS edge (/ws) and the new /ctl routes
- * against the real server mount (startOrchestrator), with a FAKE ompd that
+ * Fleet edge tests: the browser WS edge (/ws) and the new /ctl routes
+ * against the real server mount (startFleet), with a FAKE omp-session that
  * primes every socket on open (attached → history → state →
  * available_commands → ready), answers hello with hello_ok, echoes calls as
  * call_result, and records per-socket auth headers / messages / closes.
  *
  * The real DaemonConnector + SpawnSupervisor drive the fake; the only child
  * process spawned is the fake-spawn template in the "respawn an asleep
- * spawned daemon" test, which prints an OMPD| listening line pointing at the
+ * spawned daemon" test, which prints an OMP_SESSION| listening line pointing at the
  * fake daemon and idles until stopped.
  */
 
@@ -16,20 +16,20 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
-import { OMPD_PROTO } from "../src/protocol";
+import { OMP_PROTO } from "../src/protocol";
 import type { DaemonEntry, DaemonInfo, ServerFrame } from "../src/protocol";
-import type { OrchestratorConfig } from "./config";
+import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
-import { OrchestratorEdge, shouldDropFrame, toRosterEntry } from "./edge";
+import { FleetEdge, shouldDropFrame, toRosterEntry } from "./edge";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
-import { startOrchestrator, type OrchestratorServer } from "./server";
+import { startFleet, type FleetServer } from "./server";
 import { SpawnSupervisor } from "./supervisor";
 
 const FAKE_CWD = "/tmp/fake-proj";
 const FAKE_SESSION_FILE = "/tmp/fake-proj/.omp/session.json";
 const FAKE_TOKEN = "sekret";
-/** Second fake ompd's cwd — different projectDir for cross-daemon merge tests. */
+/** Second fake omp-session's cwd — different projectDir for cross-daemon merge tests. */
 const OTHER_CWD = "/tmp/other-proj";
 
 /** A wire-safe DaemonInfo (hub launch / broker roster entry) for fake emissions. */
@@ -84,7 +84,7 @@ interface FakeSocketSeen {
 	closeCode: number | null;
 }
 
-interface FakeOmpd {
+interface FakeSession {
 	url: string;
 	port: number;
 	cwd: string;
@@ -95,8 +95,8 @@ interface FakeOmpd {
 	close(): void;
 }
 
-/** Fake ompd: primes on open, answers hello, echoes calls, records everything. */
-function startFakeOmpd(opts: { cwd?: string } = {}): FakeOmpd {
+/** Fake omp-session: primes on open, answers hello, echoes calls, records everything. */
+function startFakeSession(opts: { cwd?: string } = {}): FakeSession {
 	const cwd = opts.cwd ?? FAKE_CWD;
 	const sessionFile = join(cwd, ".omp", "session.json");
 	const state = { ...FAKE_STATE, sessionFile };
@@ -106,7 +106,7 @@ function startFakeOmpd(opts: { cwd?: string } = {}): FakeOmpd {
 		hostname: "127.0.0.1",
 		port: 0,
 		fetch(req, srv) {
-			// Real ompd only upgrades /ws; registered endpoints are pathless,
+			// Real omp-session only upgrades /ws; registered endpoints are pathless,
 			// so this also proves the daemonWsUrl normalization end-to-end.
 			if (new URL(req.url).pathname !== "/ws") return new Response("expected /ws", { status: 400 });
 			const auth = req.headers.get("authorization");
@@ -135,7 +135,7 @@ function startFakeOmpd(opts: { cwd?: string } = {}): FakeOmpd {
 					ws.send(
 						JSON.stringify({
 							type: "hello_ok",
-							proto: OMPD_PROTO,
+							proto: OMP_PROTO,
 							name: "fake",
 							cwd,
 							pid: 4242,
@@ -156,9 +156,9 @@ function startFakeOmpd(opts: { cwd?: string } = {}): FakeOmpd {
 			},
 		},
 	});
-	/** ompd's attach priming: attached → history → state → available_commands → ready. */
+	/** omp-session's attach priming: attached → history → state → available_commands → ready. */
 	function prime(ws: ServerWebSocket<{ auth: string | null }>): void {
-		// Phase 6 wire format: ompd keeps the required "s1" on `attached` but
+		// Phase 6 wire format: omp-session keeps the required "s1" on `attached` but
 		// no longer stamps session-scoped frames — the edge adds the daemonId.
 		ws.send(JSON.stringify({ type: "attached", sessionId: "s1", mode: "single" }));
 		ws.send(JSON.stringify({ type: "history", messages: [] }));
@@ -266,13 +266,13 @@ function asRoster(frame: ServerFrame): { type: "roster"; daemons: DaemonEntry[] 
 	return frame;
 }
 
-describe("orchestrator edge", () => {
+describe("fleet edge", () => {
 	let tmp: string;
 	let statePath: string;
 	let configPath: string;
 	let rootsDir: string;
-	let server: OrchestratorServer;
-	let fake: FakeOmpd;
+	let server: FleetServer;
+	let fake: FakeSession;
 	let remoteEntry: RegistryEntry;
 	let spawnedEntry: RegistryEntry;
 	let browserA: BrowserSocket;
@@ -285,12 +285,12 @@ describe("orchestrator edge", () => {
 	/** The entry the wrapper's last spawn returned (its cwd must match the fake's hello cwd). */
 	let spawnedByEdge: RegistryEntry | null = null;
 	// Aggregated daemons panel tests (second fake + its registered entry).
-	let fake2: FakeOmpd;
+	let fake2: FakeSession;
 	let daemonsEntryB: RegistryEntry;
 	let daemonsBrowser: BrowserSocket;
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-orch-edge-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		rootsDir = join(tmp, "roots");
@@ -298,17 +298,17 @@ describe("orchestrator edge", () => {
 		// A fake repo (git is not needed: an unreadable .git degrades to a
 		// plain entry, which is exactly what list_projects must return).
 		mkdirSync(join(rootsDir, "proj", ".git"), { recursive: true });
-		// The spawn fixture: the fake ompd's hello_ok.cwd is FAKE_CWD, and
+		// The spawn fixture: the fake omp-session's hello_ok.cwd is FAKE_CWD, and
 		// the connector rejects a cwd mismatch — so edge spawns must use it.
 		mkdirSync(FAKE_CWD, { recursive: true });
-		fake = startFakeOmpd();
+		fake = startFakeSession();
 		writeFileSync(
 			configPath,
 			JSON.stringify({
 				roots: [rootsDir],
 				templates: {
 					local: {
-						command: `printf 'OMPD|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}' && while :; do sleep 1; done`,
+						command: `printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}' && while :; do sleep 1; done`,
 					},
 				},
 				defaultTemplate: "local",
@@ -336,7 +336,7 @@ describe("orchestrator edge", () => {
 			template: "local",
 			status: "asleep",
 		});
-		server = await startOrchestrator({ port: 0, statePath, configPath });
+		server = await startFleet({ port: 0, statePath, configPath });
 		// Count supervisor.respawn calls across the wake tests (real impl runs underneath).
 		const origRespawn = server.supervisor.respawn.bind(server.supervisor);
 		server.supervisor.respawn = async (entry: RegistryEntry) => {
@@ -367,8 +367,8 @@ describe("orchestrator edge", () => {
 		expect(body).toEqual(["local"]);
 	});
 
-	test("GET /ctl/daemons/{id}/stderr 404s for unknown daemons", async () => {
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/daemons/d999/stderr`);
+	test("GET /ctl/sessions/{id}/stderr 404s for unknown daemons", async () => {
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions/d999/stderr`);
 		expect(res.status).toBe(404);
 	});
 
@@ -508,7 +508,7 @@ describe("orchestrator edge", () => {
 		for (const type of [...removedMuxTypes, "detach", "bogus_command"]) {
 			browser.send({ type });
 			const frame = await browser.waitForFrame(
-				(f) => f.type === "error" && f.error === "orchestrator edge: use spawn/stop/roster",
+				(f) => f.type === "error" && f.error === "fleet edge: use spawn/stop/roster",
 				`rejection error for ${type}`,
 			);
 			expect(frame.type).toBe("error");
@@ -544,7 +544,7 @@ describe("orchestrator edge", () => {
 			5000,
 			"pipe hello",
 		);
-		expect(hello).toEqual({ type: "hello", proto: OMPD_PROTO, token: FAKE_TOKEN });
+		expect(hello).toEqual({ type: "hello", proto: OMP_PROTO, token: FAKE_TOKEN });
 		// Priming is forwarded with the sessionId rewritten to the daemonId.
 		await browserA.waitForFrame((f) => f.type === "history" && f.sessionId === remoteEntry.daemonId, "history");
 		await browserA.waitForFrame((f) => f.type === "state" && f.sessionId === remoteEntry.daemonId, "state");
@@ -650,12 +650,12 @@ describe("orchestrator edge", () => {
 		expect(server.registry.get(entry.daemonId)?.status).toBe("ready");
 	});
 
-	test("GET /ctl/daemons/{id}/stderr returns text for spawned and 404 for remote", async () => {
-		const spawned = await fetch(`http://127.0.0.1:${server.port}/ctl/daemons/${spawnedEntry.daemonId}/stderr`);
+	test("GET /ctl/sessions/{id}/stderr returns text for spawned and 404 for remote", async () => {
+		const spawned = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions/${spawnedEntry.daemonId}/stderr`);
 		expect(spawned.status).toBe(200);
 		const body = (await spawned.json()) as { text?: unknown };
 		expect(typeof body.text).toBe("string");
-		const remote = await fetch(`http://127.0.0.1:${server.port}/ctl/daemons/${remoteEntry.daemonId}/stderr`);
+		const remote = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions/${remoteEntry.daemonId}/stderr`);
 		expect(remote.status).toBe(404);
 	});
 
@@ -676,14 +676,14 @@ describe("orchestrator edge", () => {
 		const root = await fetch(`http://127.0.0.1:${server.port}/`);
 		expect(root.status).toBe(200);
 		expect(root.headers.get("content-type") ?? "").toContain("text/html");
-		const probe = await fetch(`http://127.0.0.1:${server.port}/__omp_orchestrator_placeholder_probe__`);
+		const probe = await fetch(`http://127.0.0.1:${server.port}/__omp_fleet_placeholder_probe__`);
 		expect(probe.status).toBe(200);
-		expect(await probe.text()).toContain("omp-orchestrator");
+		expect(await probe.text()).toContain("omp-fleet");
 	});
 
 	test("aggregated daemons: merge across daemons with same-projectDir preference", async () => {
-		// A second fake ompd with a different cwd, registered like any remote daemon.
-		fake2 = startFakeOmpd({ cwd: OTHER_CWD });
+		// A second fake omp-session with a different cwd, registered like any remote daemon.
+		fake2 = startFakeSession({ cwd: OTHER_CWD });
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/add`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
@@ -833,13 +833,13 @@ describe("edge pure helpers", () => {
 	});
 
 	test("backpressure drops frames and marks the drop with one error frame", async () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-orch-edge-bp-"));
+		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-bp-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry);
-		const config: OrchestratorConfig = { roots: [], templates: { local: { command: "true" } }, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: { local: { command: "true" } }, defaultTemplate: "local" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
-		const edge = new OrchestratorEdge({ registry, connector, supervisor, config }, { backpressureBytes: 128 });
+		const edge = new FleetEdge({ registry, connector, supervisor, config }, { backpressureBytes: 128 });
 		const sent: unknown[] = [];
 		const fakeBrowser = {
 			getBufferedAmount: () => 4096, // already over the tiny cap
@@ -864,7 +864,7 @@ describe("edge pure helpers", () => {
 	});
 
 	test("proxy pipes share the connector keepalive: pings flow, a responsive pipe stays up", async () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-orch-edge-ka-"));
+		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-ka-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry, undefined, {
@@ -874,7 +874,7 @@ describe("edge pure helpers", () => {
 			pingIntervalMs: 30,
 			pongTimeoutMs: 20,
 		});
-		const daemon = startFakeOmpd();
+		const daemon = startFakeSession();
 		const entry = registry.create({
 			name: "ka",
 			cwd: FAKE_CWD,
@@ -887,9 +887,9 @@ describe("edge pure helpers", () => {
 		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 3000);
-		const config: OrchestratorConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
-		const edge = new OrchestratorEdge({ registry, connector, supervisor, config }, { pingIntervalMs: 30, pongTimeoutMs: 20 });
+		const edge = new FleetEdge({ registry, connector, supervisor, config }, { pingIntervalMs: 30, pongTimeoutMs: 20 });
 		const sent: unknown[] = [];
 		const fakeBrowser = {
 			getBufferedAmount: () => 0,

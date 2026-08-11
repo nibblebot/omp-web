@@ -6,10 +6,10 @@
  * {type:"daemons"} frame browsers see.
  *
  * The client keys entries by `${projectDir}\u0000${name}` (ActiveDaemons);
- * daemon names are unique per projectDir and two ompds can share a
+ * daemon names are unique per projectDir and two omp-sessions can share a
  * projectDir. When several daemons report the same key, the entry from the
- * daemon whose cwd equals the entry's projectDir wins (that ompd's broker
- * poll owns the directory), otherwise the latest arrival.
+ * daemon whose cwd equals the entry's projectDir wins (that omp-session's
+ * broker poll owns the directory), otherwise the latest arrival.
  */
 
 import type { DaemonInfo } from "../src/protocol";

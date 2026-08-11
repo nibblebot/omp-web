@@ -1,21 +1,21 @@
 /**
- * Pure parse/format helpers for the orchestrator's daemon-spawn surface
- * (README.md §Spawn templates). No subprocess, no live daemons — the spawn SUPERVISOR
- * imports from here.
+ * Pure parse/format helpers for the fleet's session-spawn surface
+ * (README.md §Spawn templates). No subprocess, no live sessions — the spawn
+ * SUPERVISOR imports from here.
  *
  * Wire contract:
- * - ompd prints `OMPD|{"event":"listening",bind,port,url,advertise?}` on
+ * - omp-session prints `OMP_SESSION|{"event":"listening",bind,port,url,advertise?}` on
  *   stdout immediately after bind; a remote wrapper MAY print
- *   `OMPD|{"event":"endpoint","url":…}` when the reachable address differs
+ *   `OMP_SESSION|{"event":"endpoint","url":…}` when the reachable address differs
  *   from the bind.
  * - Templates are trusted config: `{key}` substitution is plain text
  *   replacement, never shell-escaped.
  */
 
-import type { OmpdStdoutLine } from "../src/protocol";
+import type { StdoutContractLine } from "../src/protocol";
 
-/** `OMPD|` prefix on contract stdout lines (R6b). */
-const OMPD_PREFIX = "OMPD|";
+/** `OMP_SESSION|` prefix on contract stdout lines (R6b). */
+const OMP_SESSION_PREFIX = "OMP_SESSION|";
 
 /**
  * `{key}` substitution for spawn templates. Unknown keys are left verbatim
@@ -31,22 +31,22 @@ export function fillTemplate(command: string, vars: Record<string, string>): str
 }
 
 /**
- * Parse one `OMPD|` stdout line into an {@link OmpdStdoutLine}, or `null`
- * for anything that isn't one: non-prefixed lines (interleaved human logs),
- * malformed JSON, valid JSON with an unknown event, or a known event with
- * the wrong shape. Never throws.
+ * Parse one `OMP_SESSION|` stdout line into a {@link StdoutContractLine}, or
+ * `null` for anything that isn't one: non-prefixed lines (interleaved human
+ * logs), malformed JSON, valid JSON with an unknown event, or a known event
+ * with the wrong shape. Never throws.
  *
  * Validation per contract: `listening` requires `bind:string`,
  * `port:number`, `url:string` (advertise optional, must be a string when
  * present); `endpoint` requires `url:string`. Extra fields are ignored.
  */
-export function parseOmpdLine(line: string): OmpdStdoutLine | null {
-	if (typeof line !== "string" || !line.startsWith(OMPD_PREFIX)) {
+export function parseContractLine(line: string): StdoutContractLine | null {
+	if (typeof line !== "string" || !line.startsWith(OMP_SESSION_PREFIX)) {
 		return null;
 	}
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(line.slice(OMPD_PREFIX.length));
+		parsed = JSON.parse(line.slice(OMP_SESSION_PREFIX.length));
 	} catch {
 		return null;
 	}
@@ -63,7 +63,7 @@ export function parseOmpdLine(line: string): OmpdStdoutLine | null {
 		) {
 			return null;
 		}
-		const out: OmpdStdoutLine = { event: "listening", bind: obj.bind, port: obj.port, url: obj.url };
+		const out: StdoutContractLine = { event: "listening", bind: obj.bind, port: obj.port, url: obj.url };
 		if (obj.advertise !== undefined) {
 			out.advertise = obj.advertise;
 		}
@@ -85,8 +85,8 @@ export interface ResolvedEndpoint {
 }
 
 /**
- * Resolve the reachable endpoint for a spawned daemon from its parsed
- * `OMPD|` lines, per R6b precedence:
+ * Resolve the reachable endpoint for a spawned session from its parsed
+ * `OMP_SESSION|` lines, per R6b precedence:
  *
  *  1. wrapper `{event:"endpoint"}` url — the LAST endpoint line wins;
  *  2. `templateHost` + the last `listening` port;
@@ -96,8 +96,8 @@ export interface ResolvedEndpoint {
  * Returns `null` until at least one `listening` line has been seen
  * (endpoint-only output doesn't count).
  */
-export function resolveEndpoint(lines: OmpdStdoutLine[], templateHost?: string): ResolvedEndpoint | null {
-	let listening: OmpdStdoutLine & { event: "listening" } | null = null;
+export function resolveEndpoint(lines: StdoutContractLine[], templateHost?: string): ResolvedEndpoint | null {
+	let listening: StdoutContractLine & { event: "listening" } | null = null;
 	let lastEndpoint: string | null = null;
 	for (const line of lines) {
 		if (line.event === "listening") {

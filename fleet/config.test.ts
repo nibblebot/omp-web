@@ -7,7 +7,7 @@ import { DEFAULT_LOCAL_TEMPLATE, loadConfig } from "./config";
 const tmpDirs: string[] = [];
 
 function tmpDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "ompd-config-"));
+	const dir = mkdtempSync(join(tmpdir(), "omp-session-config-"));
 	tmpDirs.push(dir);
 	return dir;
 }
@@ -34,7 +34,7 @@ describe("loadConfig", () => {
 			JSON.stringify({
 				roots: ["/srv/repos"],
 				templates: {
-					docker: { command: "ompd --cwd {cwd} --port 0 --token {token} --name {name}", host: "docker.local" },
+					docker: { command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name}", host: "docker.local" },
 				},
 				defaultTemplate: "docker",
 				futureOption: { nested: true },
@@ -43,7 +43,7 @@ describe("loadConfig", () => {
 		const config = await loadConfig(file);
 		expect(config.roots).toEqual(["/srv/repos"]);
 		expect(config.templates).toEqual({
-			docker: { command: "ompd --cwd {cwd} --port 0 --token {token} --name {name}", host: "docker.local" },
+			docker: { command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name}", host: "docker.local" },
 		});
 		expect(config.defaultTemplate).toBe("docker");
 		expect(config.spawnHook).toBeUndefined();
@@ -65,14 +65,14 @@ describe("loadConfig", () => {
 		expect(config.roots).toEqual([homedir(), join(homedir(), "work"), "/abs/path"]);
 	});
 
-	test("OMP_ORCHESTRATOR_CONFIG is honored; an explicit path wins over it", async () => {
+	test("OMP_FLEET_CONFIG is honored; an explicit path wins over it", async () => {
 		const dir = tmpDir();
 		const envFile = join(dir, "env.json");
 		writeFileSync(envFile, JSON.stringify({ roots: ["/from-env"], defaultTemplate: "remote" }));
 		const explicitFile = join(dir, "explicit.json");
 		writeFileSync(explicitFile, JSON.stringify({ roots: ["/from-explicit"] }));
-		const prev = process.env.OMP_ORCHESTRATOR_CONFIG;
-		process.env.OMP_ORCHESTRATOR_CONFIG = envFile;
+		const prev = process.env.OMP_FLEET_CONFIG;
+		process.env.OMP_FLEET_CONFIG = envFile;
 		try {
 			const fromEnv = await loadConfig();
 			expect(fromEnv.roots).toEqual(["/from-env"]);
@@ -81,8 +81,8 @@ describe("loadConfig", () => {
 			const fromExplicit = await loadConfig(explicitFile);
 			expect(fromExplicit.roots).toEqual(["/from-explicit"]);
 		} finally {
-			if (prev === undefined) delete process.env.OMP_ORCHESTRATOR_CONFIG;
-			else process.env.OMP_ORCHESTRATOR_CONFIG = prev;
+			if (prev === undefined) delete process.env.OMP_FLEET_CONFIG;
+			else process.env.OMP_FLEET_CONFIG = prev;
 		}
 	});
 
@@ -107,20 +107,20 @@ describe("loadConfig", () => {
 		expect(config2.projectTemplates).toBeUndefined();
 	});
 
-	test("spawnHook: env OMP_ORCHESTRATOR_SPAWN_HOOK wins over the file", async () => {
+	test("spawnHook: env OMP_FLEET_SPAWN_HOOK wins over the file", async () => {
 		const file = join(tmpDir(), "config.json");
 		writeFileSync(file, JSON.stringify({ spawnHook: "/cfg/hook.sh" }));
 		const fromFile = await loadConfig(file);
 		expect(fromFile.spawnHook).toBe("/cfg/hook.sh");
 
-		const prev = process.env.OMP_ORCHESTRATOR_SPAWN_HOOK;
-		process.env.OMP_ORCHESTRATOR_SPAWN_HOOK = "/env/hook.sh";
+		const prev = process.env.OMP_FLEET_SPAWN_HOOK;
+		process.env.OMP_FLEET_SPAWN_HOOK = "/env/hook.sh";
 		try {
 			const fromEnv = await loadConfig(file);
 			expect(fromEnv.spawnHook).toBe("/env/hook.sh");
 		} finally {
-			if (prev === undefined) delete process.env.OMP_ORCHESTRATOR_SPAWN_HOOK;
-			else process.env.OMP_ORCHESTRATOR_SPAWN_HOOK = prev;
+			if (prev === undefined) delete process.env.OMP_FLEET_SPAWN_HOOK;
+			else process.env.OMP_FLEET_SPAWN_HOOK = prev;
 		}
 	});
 
@@ -137,7 +137,7 @@ describe("loadConfig", () => {
 describe("DEFAULT_LOCAL_TEMPLATE", () => {
 	test("matches the contract command string", () => {
 		expect(DEFAULT_LOCAL_TEMPLATE).toEqual({
-			command: "ompd --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
+			command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
 		});
 	});
 });

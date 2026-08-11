@@ -64,8 +64,8 @@ import type {
 	CollabParticipantInfo,
 	CollabWireStatus,
 } from "../src/protocol";
-import { OMPD_CLOSE_UNAUTHORIZED, OMPD_PROTO, type OmpdStdoutLine } from "../src/protocol";
-import { isLoopbackHost, parseConfig, type OmpdConfig } from "./config";
+import { OMP_CLOSE_UNAUTHORIZED, OMP_PROTO, type StdoutContractLine } from "../src/protocol";
+import { isLoopbackHost, parseConfig, type SessionConfig } from "./config";
 import { EMBEDDED_DIST } from "./embedded-dist";
 import { applySettingSideEffects, buildSettingsModel, coerceSettingValue } from "./settings-model";
 import {
@@ -78,7 +78,7 @@ import { createRelay, type RelayHandle, type SocketData } from "./collab-relay";
 
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
-// pairing), one Settings instance, then the single boot session. ompd is
+// pairing), one Settings instance, then the single boot session. omp-session is
 // de-muxed (Phase 6): every web socket is attached to that one session from
 // upgrade (connect = attached), which routes call/login_code/ui_response and
 // all session-scoped frames. The constant handle "s1" survives only as the
@@ -86,16 +86,16 @@ import { createRelay, type RelayHandle, type SocketData } from "./collab-relay";
 // sessionId on the wire.
 // ---------------------------------------------------------------------------
 
-let config: OmpdConfig;
+let config: SessionConfig;
 try {
 	config = parseConfig(process.argv.slice(2));
 } catch (err) {
-	console.error(`ompd: ${String(err)}`);
+	console.error(`omp-session: ${String(err)}`);
 	process.exit(1);
 }
 // Non-loopback bind without a token is a startup hard error (R14).
 if (!isLoopbackHost(config.host) && !config.token) {
-	console.error(`ompd: refusing to bind non-loopback address "${config.host}" without a token; pass --token or set OMPD_TOKEN`);
+	console.error(`omp-session: refusing to bind non-loopback address "${config.host}" without a token; pass --token or set OMP_SESSION_TOKEN`);
 	process.exit(1);
 }
 // TUI default global config directory (~/.omp/agent; sdk.ts documents the same).
@@ -109,7 +109,7 @@ type Ws = ServerWebSocket<SocketData>;
 const sockets = new Set<Ws>();
 
 // ---------------------------------------------------------------------------
-// ompd auth + idle bookkeeping. The authenticated bit rides ws.data (decided
+// omp-session auth + idle bookkeeping. The authenticated bit rides ws.data (decided
 // at /ws upgrade: loopback, valid Authorization header, or ?token=); sockets
 // that upgraded without a credential must complete the hello handshake (R14)
 // inside HELLO_WINDOW_MS or they are closed 4001.
@@ -123,7 +123,7 @@ const helloTimers = new Map<Ws, ReturnType<typeof setTimeout>>();
 let readyAt: number | null = null;
 /** The single boot session; hello_ok's sessionFile comes from it. */
 let bootEntry: SessionEntry | null = null;
-/** ompd version for hello_ok; read from package.json when resolvable, else "dev". */
+/** omp-session version for hello_ok; read from package.json when resolvable, else "dev". */
 const version = await resolveVersion();
 
 /** In-flight user bash/python calls (idle suppression, R11) — wrapper counters around METHODS rows. */
@@ -143,7 +143,7 @@ function markActivity(): void {
 }
 
 /**
- * Boot gate: the OMPD| listening line prints BEFORE the boot session exists,
+ * Boot gate: the OMP_SESSION| listening line prints BEFORE the boot session exists,
  * so early connectors (and the first requests) wait for registration — the
  * connect-implies-attached invariant holds even for sockets that race boot.
  */
@@ -158,7 +158,7 @@ function sleep(ms: number): Promise<void> {
 	return promise;
 }
 
-/** ompd version for hello_ok: package.json next to server/ when resolvable, else "dev". */
+/** omp-session version for hello_ok: package.json next to server/ when resolvable, else "dev". */
 async function resolveVersion(): Promise<string> {
 	try {
 		const pkg = (await Bun.file(path.join(import.meta.dir, "..", "package.json")).json()) as { version?: unknown };
@@ -676,7 +676,7 @@ async function readSubagentTranscript(sessionFile: string, fromByte = 0): Promis
 }
 
 // ---------------------------------------------------------------------------
-// Session registry: the single boot session. ompd is de-muxed (Phase 6) —
+// Session registry: the single boot session. omp-session is de-muxed (Phase 6) —
 // there is exactly one SessionEntry and every web socket is attached to it
 // from upgrade. The handle "s1" survives only as the attached frame's client
 // guard token. Per-session AgentRegistry/EventBus/SessionManager (Phase 1
@@ -1535,7 +1535,7 @@ async function listFiles(query: string, limit: number): Promise<string[]> {
 function attachSocket(ws: Ws, entry: SessionEntry): void {
 	if (ws.data.kind !== "web") return;
 	ws.data.attached = entry.handle;
-	// attached carries the client guard token: sessionId "s1" (bare ompd) and
+	// attached carries the client guard token: sessionId "s1" (bare omp-session) and
 	// mode "single" always — the client hides the sessions sidebar.
 	send(ws, { type: "attached", sessionId: BOOT_HANDLE, mode: "single" });
 	sendScoped(ws, { type: "history", messages: entry.session.messages });
@@ -1593,7 +1593,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 		cmd = JSON.parse(String(raw)) as ClientCommand;
 	} catch {
 		if (!ws.data.authenticated) {
-			ws.close(OMPD_CLOSE_UNAUTHORIZED, "unauthorized");
+			ws.close(OMP_CLOSE_UNAUTHORIZED, "unauthorized");
 			return;
 		}
 		send(ws, { type: "error", error: "Malformed command frame" });
@@ -1602,7 +1602,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 	// R14: sockets that upgraded without a credential (off-loopback + token,
 	// no Authorization header / ?token=) must open with a valid hello frame.
 	if (!ws.data.authenticated && cmd.type !== "hello") {
-		ws.close(OMPD_CLOSE_UNAUTHORIZED, "unauthorized");
+		ws.close(OMP_CLOSE_UNAUTHORIZED, "unauthorized");
 		return;
 	}
 	try {
@@ -1686,10 +1686,10 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 			case "hello": {
 				// R14 handshake: valid = proto matches AND the token matches
 				// (when one is set). Loopback clients MAY hello; valid hellos
-				// are always answered hello_ok (uniform orchestrator code path).
-				const valid = cmd.proto === OMPD_PROTO && (config.token === undefined || cmd.token === config.token);
+				// are always answered hello_ok (uniform fleet code path).
+				const valid = cmd.proto === OMP_PROTO && (config.token === undefined || cmd.token === config.token);
 				if (!valid) {
-					ws.close(OMPD_CLOSE_UNAUTHORIZED, "unauthorized");
+					ws.close(OMP_CLOSE_UNAUTHORIZED, "unauthorized");
 					break;
 				}
 				if (!ws.data.authenticated) {
@@ -1707,7 +1707,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				}
 				send(ws, {
 					type: "hello_ok",
-					proto: OMPD_PROTO,
+					proto: OMP_PROTO,
 					name: config.name,
 					cwd: config.cwd,
 					pid: process.pid,
@@ -1720,9 +1720,9 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 			case "spawn_resume":
 			case "stop":
 			case "list_projects":
-				// Orchestrator-edge commands on a bare ompd (the registry lives
-				// in the orchestrator, Phase 3).
-				send(ws, { type: "error", error: "orchestrator-only command" });
+				// Fleet-edge commands on a bare omp-session (the registry lives
+				// in omp-fleet, Phase 3).
+				send(ws, { type: "error", error: "fleet-only command" });
 				break;
 			case "get_process_stats": {
 				send(ws, { type: "process_stats", process: processStatsSnapshot() });
@@ -1879,7 +1879,7 @@ const server = Bun.serve<SocketData>({
 	port: config.port,
 	hostname: config.host,
 	async fetch(req, srv) {
-		// Boot gate: the OMPD| listening line prints before the boot session
+		// Boot gate: the OMP_SESSION| listening line prints before the boot session
 		// exists; the first requests (and /ws upgrades) wait for registration
 		// so connect-implies-attached holds for sockets that race boot.
 		await bootReady;
@@ -1949,7 +1949,7 @@ const server = Bun.serve<SocketData>({
 				// inside the window, else the socket is closed 4001.
 				const timer = setTimeout(() => {
 					const data = ws.data;
-					if (data.kind === "web" && !data.authenticated) ws.close(OMPD_CLOSE_UNAUTHORIZED, "unauthorized");
+					if (data.kind === "web" && !data.authenticated) ws.close(OMP_CLOSE_UNAUTHORIZED, "unauthorized");
 					helloTimers.delete(ws);
 				}, HELLO_WINDOW_MS);
 				helloTimers.set(ws, timer);
@@ -2005,24 +2005,24 @@ const server = Bun.serve<SocketData>({
 });
 
 // ---------------------------------------------------------------------------
-// R6b: the OMPD| listening contract line goes to STDOUT immediately after
+// R6b: the OMP_SESSION| listening contract line goes to STDOUT immediately after
 // bind, BEFORE session creation (the spawner learns the endpoint early and is
 // typically already connected when `ready` arrives). Human logs go to stderr.
 // ---------------------------------------------------------------------------
 
-const listeningLine: OmpdStdoutLine = {
+const listeningLine: StdoutContractLine = {
 	event: "listening",
 	bind: config.host,
 	port: server.port!,
 	url: `ws://${config.host}:${server.port}`,
 };
 if (config.advertise) listeningLine.advertise = config.advertise;
-console.log(`OMPD|${JSON.stringify(listeningLine)}`);
-console.error(`ompd listening on http://localhost:${server.port}`);
+console.log(`OMP_SESSION|${JSON.stringify(listeningLine)}`);
+console.error(`omp-session listening on http://localhost:${server.port}`);
 
 // pi-utils' postmortem installs its own SIGINT/SIGTERM/SIGHUP handlers at
 // import time (run SDK cleanup, then exitProcess(130/143/129)) — they preempt
-// ompd's graceful shutdown with the default-disposition exit code. ompd owns
+// omp-session's graceful shutdown with the default-disposition exit code. omp-session owns
 // these signals from bind onward (BEFORE the boot-session await below — a
 // kill during session creation must not skip disposal): drop the import-time
 // handlers, run the same SDK cleanup callbacks inside our shutdown
@@ -2044,7 +2044,7 @@ async function bootReadiness(entry: SessionEntry): Promise<void> {
 	try {
 		await modelRegistry.awaitBackgroundRefresh();
 	} catch (err) {
-		console.error("ompd: background model refresh failed:", err);
+		console.error("omp-session: background model refresh failed:", err);
 	}
 	// Test hook: hold the gate open so tests exercise not_ready deterministically.
 	if (config.readyDeferMs > 0) await sleep(config.readyDeferMs);
@@ -2072,10 +2072,10 @@ if (config.resume) {
 			clearSubagents(bootEntry);
 			await broadcastAvailableCommands(bootEntry);
 		} else {
-			console.error(`ompd: --resume ${config.resume}: session switch returned false; starting fresh`);
+			console.error(`omp-session: --resume ${config.resume}: session switch returned false; starting fresh`);
 		}
 	} catch (err) {
-		console.error(`ompd: --resume ${config.resume} failed (${String(err)}); starting fresh`);
+		console.error(`omp-session: --resume ${config.resume} failed (${String(err)}); starting fresh`);
 	}
 }
 resolveBootReady();
@@ -2108,7 +2108,7 @@ function idleCheckTick(): void {
 		return;
 	}
 	if (Date.now() - lastActivityAt >= config.idleTimeoutMs) {
-		console.error(`ompd: idle for ${config.idleTimeoutMs}ms; shutting down`);
+		console.error(`omp-session: idle for ${config.idleTimeoutMs}ms; shutting down`);
 		void shutdown();
 	}
 }

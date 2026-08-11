@@ -1,5 +1,5 @@
 /**
- * Daemon selector resolution for the orchestrator control plane.
+ * Daemon selector resolution for the fleet control plane.
  *
  * A selector names a set of registry entries:
  * - `all` — every entry.
