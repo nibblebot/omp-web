@@ -24,8 +24,13 @@ import { ENVELOPE_HEADER_LENGTH, rewriteEnvelopePeer } from "@oh-my-pi/pi-coding
 import type { RelayControlToGuest, RelayControlToHost } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import type { BufferSource, Server, ServerWebSocket } from "bun";
 
-/** Per-socket data for every socket served by the omp-web daemon (web + relay). */
-export type SocketData = { kind: "web"; attached: string | null } | RelaySocketData;
+/**
+ * Per-socket data for every socket served by the omp-web daemon (web + relay).
+ * `authenticated` is set at /ws upgrade time (loopback, valid Authorization
+ * header, or ?token=); sockets without it must complete the hello handshake
+ * (R14) before they are attached or receive any frames.
+ */
+export type SocketData = { kind: "web"; attached: string | null; authenticated: boolean } | RelaySocketData;
 
 export interface RelaySocketData {
 	kind: "relay";

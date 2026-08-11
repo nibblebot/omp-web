@@ -3,7 +3,7 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import type { ClientCommand, CollabWireStatus, DaemonInfo, ImageArg, LiveSessionEntry, ProcessStats, ModelInfo, AvailableSlashCommand, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "./protocol";
+import type { ClientCommand, CollabWireStatus, DaemonEntry, DaemonInfo, ImageArg, ModelInfo, AvailableSlashCommand, ProjectEntry, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "./protocol";
 import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
 
@@ -94,7 +94,7 @@ export function argsSummary(args: unknown): string {
 	return s.length > 500 ? s.slice(0, 500) : s;
 }
 
-/** localStorage key for the sessions sidebar visibility toggle. */
+/** localStorage key for the roster sidebar visibility toggle. */
 const SIDEBAR_KEY = "omp.sidebarVisible";
 
 /** localStorage key for the pet roster visibility toggle. */
@@ -114,6 +114,9 @@ export const [state, setState] = createStore({
 	thinkingLevel: undefined as WebSessionState["thinkingLevel"],
 	sessionName: undefined as string | undefined,
 	sessionId: "",
+	// R8 ompd readiness: set by the `ready` broadcast (or a stamped state
+	// frame) once the SDK session is live and provider/model/auth resolved.
+	readyAt: undefined as WebSessionState["readyAt"],
 	// Phase 2: server-assigned handle of the live session this tab is attached
 	// to (distinct from sessionId above, the agent's own id, which changes on
 	// switchSession). Session-scoped frames for any other handle are dropped.
@@ -146,18 +149,24 @@ export const [state, setState] = createStore({
 	connected: false,
 	modal: null as ModalName | null,
 	toolsExpanded: false,
-	// Sessions sidebar: polled live-session roster + server process stats.
-	liveSessions: [] as LiveSessionEntry[],
 	// Collab host status for the ATTACHED session (collab_status frames; the
 	// collab room is per-session UI state, reset when attaching elsewhere).
 	collabStatus: { state: "off" } as CollabWireStatus,
-	// Daemon broker roster (hub/launch long-running processes); project-scoped
-	// like liveSessions, so resetSessionView must NOT clear it.
+	// Daemon broker roster (hub/launch long-running processes); project-scoped,
+	// so resetSessionView must NOT clear it.
 	daemons: new Map<string, DaemonInfo>(),
-	processStats: null as ProcessStats | null,
 	// Settings model (getSettings/setSetting + settings_changed frames).
 	settingsModel: null as SettingsModel | null,
 	settingsLoading: false,
+	// Attach mode: "single" (standalone ompd — no sidebar) or "roster"
+	// (orchestrator edge — the daemon sidebar). "roster" is set by the roster
+	// frame and sticky across reconnects; the attached frame always carries
+	// "single" from ompd and must not clobber it (Phase 6 de-mux).
+	sessionMode: "single" as "single" | "roster",
+	// Orchestrator edge roster (roster frame). Patched in place by
+	// daemon_status frames; NOT cleared by resetSessionView (it is
+	// orchestrator-scoped, not session-scoped).
+	daemonRoster: [] as DaemonEntry[],
 	sidebarVisible: typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
 	petVisible: typeof localStorage !== "undefined" ? localStorage.getItem(PET_KEY) !== "false" : true,
 	// Phase 6: in-flight OAuth login prompts (unicast frames).
@@ -180,6 +189,12 @@ export const [state, setState] = createStore({
 	// frames to this panel; the panel never appears in the transcript.
 	btw: null as null | { question: string; reply: string; streaming: boolean; streamId: number; error?: string },
 });
+
+/** R8 ompd readiness accessor: true once the boot session's gate has cleared
+ *  (the server broadcast `ready` or stamped readyAt into a state frame). */
+export function isReady(): boolean {
+	return state.readyAt !== undefined;
+}
 
 let nextId = 1;
 
@@ -755,6 +770,9 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		fastModeEnabled: s.fastModeEnabled,
 		computerToolEnabled: s.computerToolEnabled,
 		inspectImageMode: s.inspectImageMode,
+		// R8: state snapshots carry readyAt once the gate clears. Only apply it
+		// when present so a pre-gate snapshot can't clobber a `ready` broadcast.
+		...(s.readyAt !== undefined ? { readyAt: s.readyAt } : {}),
 		...(stats !== undefined ? { stats } : {}),
 	});
 }
@@ -871,6 +889,56 @@ export function listFiles(query: string, limit?: number): Promise<string[]> {
 	return promise;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3 orchestrator edge: roster-mode command senders. spawn/spawn_resume/
+// stop are fire-and-forget — results arrive as roster + daemon_status
+// broadcasts (spawn failures surface as an error frame). list_projects is a
+// latest-wins pull like listSessions (the edge answers with one `projects`
+// frame).
+// ---------------------------------------------------------------------------
+let pendingProjects: ((projects: ProjectEntry[]) => void) | null = null;
+
+export function listProjects(): Promise<ProjectEntry[]> {
+	const { promise, resolve, reject } = Promise.withResolvers<ProjectEntry[]>();
+	if (!ws || ws.readyState !== WebSocket.OPEN) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	pendingProjects?.([]);
+	pendingProjects = resolve;
+	ws.send(JSON.stringify({ type: "list_projects" } satisfies ClientCommand));
+	return promise;
+}
+
+/** Spawn a new daemon from a repo/worktree path (validated edge-side; the
+ *  resulting entry appears in the roster as it transitions spawning → ready). */
+export function spawnDaemon(cwd: string, template?: string, labels?: string[]): void {
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(
+			JSON.stringify({
+				type: "spawn",
+				cwd,
+				...(template !== undefined ? { template } : {}),
+				...(labels !== undefined ? { labels } : {}),
+			} satisfies ClientCommand),
+		);
+	}
+}
+
+/** Wake an asleep daemon (spawned → respawn --resume; attached/remote → redial). */
+export function spawnResume(daemonId: string): void {
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({ type: "spawn_resume", daemonId } satisfies ClientCommand));
+	}
+}
+
+/** Stop a daemon (spawned → terminate child; attached/remote → drop + asleep). */
+export function stopDaemonById(daemonId: string): void {
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({ type: "stop", daemonId } satisfies ClientCommand));
+	}
+}
+
 export function sendLoginCode(requestId: string, code: string): void {
 	setState("loginCodeRequest", null);
 	if (ws?.readyState === WebSocket.OPEN) {
@@ -909,16 +977,13 @@ export function abortSubagent(agentId: string): Promise<unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2 multiplexing. create_session/attach are acknowledged by the
-// server's unicast `attached` frame (latest-wins, like listSessions);
-// close_session is fire-and-forget — the server detaches affected sockets.
+// Orchestrator-edge attach. The edge answers `attach` with a unicast
+// `attached` frame (latest-wins, like listSessions); the sessionId is the
+// daemonId, and the daemon's own priming (history/state/available_commands)
+// follows the proxied frame. A bare ompd never receives attach (its sockets
+// are attached from upgrade).
 // ---------------------------------------------------------------------------
-/** Answer to list_live_sessions: roster only; process stats come from getProcessStats. */
-export type LiveSessionsResult = { sessions: LiveSessionEntry[] };
-
 let pendingAttach: { resolve: (sessionId: string) => void; reject: (err: Error) => void } | null = null;
-let pendingLive: ((result: LiveSessionsResult) => void) | null = null;
-let pendingProcessStats: { resolve: (process: ProcessStats) => void; reject: (err: Error) => void } | null = null;
 
 function requestAttach(cmd: ClientCommand): Promise<string> {
 	const { promise, resolve, reject } = Promise.withResolvers<string>();
@@ -933,21 +998,9 @@ function requestAttach(cmd: ClientCommand): Promise<string> {
 	return promise;
 }
 
-/** Create a new live session and attach this tab to it; resolves with its handle. */
-export function createSession(cwd?: string): Promise<string> {
-	return requestAttach({ type: "create_session", cwd });
-}
-
-/** Attach this tab to an existing live session; resolves with the handle. */
+/** Attach this tab to a daemon in the roster; resolves with its handle. */
 export function attachSession(sessionId: string): Promise<string> {
 	return requestAttach({ type: "attach", sessionId });
-}
-
-/** Dispose a live session server-side; tabs attached to it are detached there. */
-export function closeSession(sessionId: string): void {
-	if (ws?.readyState === WebSocket.OPEN) {
-		ws.send(JSON.stringify({ type: "close_session", sessionId } satisfies ClientCommand));
-	}
 }
 
 /** Start the collab room for the ATTACHED session; fire-and-forget, the
@@ -964,55 +1017,6 @@ export function stopCollab(): void {
 	if (ws?.readyState === WebSocket.OPEN) {
 		ws.send(JSON.stringify({ type: "collab_stop" } satisfies ClientCommand));
 	}
-}
-
-export function listLiveSessions(): Promise<LiveSessionsResult> {
-	const { promise, resolve, reject } = Promise.withResolvers<LiveSessionsResult>();
-	if (!ws || ws.readyState !== WebSocket.OPEN) {
-		reject(new Error("Not connected"));
-		return promise;
-	}
-	pendingLive?.({ sessions: [] });
-	pendingLive = resolve;
-	ws.send(JSON.stringify({ type: "list_live_sessions" } satisfies ClientCommand));
-	return promise;
-}
-
-/** Fetch server process stats (RSS, uptime, session count) — the 5s sidebar poll. */
-export function getProcessStats(): Promise<ProcessStats> {
-	const { promise, resolve, reject } = Promise.withResolvers<ProcessStats>();
-	if (!ws || ws.readyState !== WebSocket.OPEN) {
-		reject(new Error("Not connected"));
-		return promise;
-	}
-	pendingProcessStats?.reject(new Error("superseded"));
-	pendingProcessStats = { resolve, reject };
-	ws.send(JSON.stringify({ type: "get_process_stats" } satisfies ClientCommand));
-	return promise;
-}
-
-// ---------------------------------------------------------------------------
-// Sidebar refresh: the 5s poll fetches ONLY server process stats (RSS). The
-// live-session roster is event-driven via server-pushed live_sessions
-// broadcasts, so it needs no polling; the one-time listLiveSessions pull still
-// runs on start so the roster shows up immediately. Poll only while the
-// sidebar is visible and the socket is connected (started from onopen,
-// stopped from onclose/setSidebarVisible; restart on reconnect/re-show).
-// ---------------------------------------------------------------------------
-let sidebarPoll: number | undefined;
-
-function refreshLiveSessions(): void {
-	void listLiveSessions()
-		.then(({ sessions }) => {
-			setState("liveSessions", sessions);
-		})
-		.catch(() => {});
-}
-
-function refreshProcessStats(): void {
-	void getProcessStats()
-		.then(p => setState("processStats", p))
-		.catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1115,25 +1119,11 @@ export function restartDaemon(projectDir: string, name: string): Promise<DaemonI
 	ws.send(JSON.stringify({ ...cmd, id } satisfies ClientCommand));
 	return promise;
 }
-function startSidebarPoll(): void {
-	stopSidebarPoll();
-	refreshLiveSessions(); // immediate roster pull — no 5s initial gap
-	refreshProcessStats();
-	sidebarPoll = window.setInterval(refreshProcessStats, 5000);
-}
 
-function stopSidebarPoll(): void {
-	if (sidebarPoll !== undefined) {
-		clearInterval(sidebarPoll);
-		sidebarPoll = undefined;
-	}
-}
-
+/** Persisted roster-sidebar visibility (status-bar ☰ + sidebar ×). */
 export function setSidebarVisible(visible: boolean): void {
 	if (typeof localStorage !== "undefined") localStorage.setItem(SIDEBAR_KEY, String(visible));
 	setState("sidebarVisible", visible);
-	if (visible && state.connected) startSidebarPoll();
-	else stopSidebarPoll();
 }
 
 export function toggleSidebar(): void {
@@ -1181,43 +1171,51 @@ export function connect(): void {
 	socket.onopen = () => {
 		backoff = 1000;
 		setState("connected", true);
-		if (state.sidebarVisible) startSidebarPoll();
-		void call("getSubagents")
-			.then(subs => {
-				const next = new Map<string, SubagentInfo>();
-				for (const s of subs as SubagentInfo[]) if (s.id) next.set(s.id, s);
-				setState("subagents", next);
-			})
-			.catch(() => {});
+		// No boot-time calls: a roster-mode edge answers every call with
+		// "not attached" until the browser picks a daemon. The attached handler
+		// pulls getSubagents. On a roster-mode RECONNECT the edge has no attach
+		// memory — re-attach to the daemon we were viewing.
+		if (state.sessionMode === "roster" && state.currentSessionId) void attachSession(state.currentSessionId).catch(() => {});
 	};
 	socket.onmessage = ev => {
 		const frame = JSON.parse(String(ev.data)) as ServerFrame;
 		if (frame.type === "attached") {
 			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
 			setState("currentSessionId", frame.sessionId);
+			// Phase 6: ompd always sends mode "single" — there is no mux to
+			// switch to. In roster mode the attached frame is PROXIED from the
+			// daemon and must not clobber the roster sidebar; the roster frame
+			// owns sessionMode there.
+			if (state.sessionMode !== "roster") setState("sessionMode", "single");
 			pendingAttach?.resolve(frame.sessionId);
 			pendingAttach = null;
-			// Roster changed (create/attach/close): refresh immediately instead of
-			// waiting for the next 5s poll tick.
-			refreshLiveSessions();
+			// Subagent mirror is per-session; pull on EVERY attach (first attach,
+			// switch, roster re-attach after reconnect) — calls are answered only
+			// once attached, so this is the earliest safe point.
+			void call("getSubagents")
+				.then(subs => {
+					const next = new Map<string, SubagentInfo>();
+					for (const s of subs as SubagentInfo[]) if (s.id) next.set(s.id, s);
+					setState("subagents", next);
+				})
+				.catch(() => {});
 			if (switched) {
 				// In-flight calls belonged to the previous session; their results
 				// are stale now and would be filtered out below.
 				rejectPendingCalls(new Error("session switched"));
 				resetSessionView();
-				// Roster is event-driven; pull the attached session's once.
-				void call("getSubagents")
-					.then(subs => {
-						const next = new Map<string, SubagentInfo>();
-						for (const s of subs as SubagentInfo[]) if (s.id) next.set(s.id, s);
-						setState("subagents", next);
-					})
-					.catch(() => {});
+				// Phase 3 daemon switch: drop readiness too. The edge only pipes
+				// daemons that passed waitReady, so the proxied priming re-delivers
+				// `ready` immediately; until then the composer stays gated and the
+				// roster hint shows the daemon's status.
+				setState("readyAt", undefined);
 			}
 			return;
 		}
 		// Stale-frame guard: session-scoped frames for a handle this tab no
-		// longer views (in flight during a switch) are dropped.
+		// longer views (in flight during a switch) are dropped. Frames WITHOUT
+		// a sessionId (standalone ompd: one live session, connect = attached)
+		// always pass — there is nothing to mismatch.
 		if ("sessionId" in frame && frame.sessionId !== state.currentSessionId) return;
 		switch (frame.type) {
 			case "history":
@@ -1225,6 +1223,12 @@ export function connect(): void {
 				break;
 			case "state":
 				applyState(frame.state, frame.stats);
+				break;
+			case "ready":
+				// R8: the boot session's readiness gate cleared; the composer
+				// un-gates. A stamped state frame may have set readyAt already;
+				// this later broadcast wins either way.
+				setState("readyAt", frame.readyAt);
 				break;
 			case "event":
 				applyEvent(frame.event);
@@ -1259,15 +1263,32 @@ export function connect(): void {
 				pendingSessions?.(frame.sessions);
 				pendingSessions = null;
 				break;
-			case "live_sessions":
-				// Both the unicast answer to list_live_sessions and the server's
-				// global roster broadcast: always apply, resolve a pending pull.
-				setState("liveSessions", frame.sessions);
-				pendingLive?.({ sessions: frame.sessions });
-				pendingLive = null;
-				break;
 			case "daemons":
 				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [d.projectDir + "\u0000" + d.name, d])));
+				break;
+			case "roster":
+				// The orchestrator edge sent its daemon roster — this tab is in
+				// roster mode (sidebar swaps to the daemon list). The edge never
+				// sends attached.mode "roster"; this frame is the mode signal,
+				// and it must not be undone by the proxied attached frames
+				// (handled above).
+				setState("daemonRoster", frame.daemons);
+				setState("sessionMode", "roster");
+				break;
+			case "daemon_status":
+				// Patch the matching roster entry in place; the error field
+				// clears unless the frame carries a fresh one.
+				setState("daemonRoster", roster =>
+					roster.map(d =>
+						d.daemonId === frame.daemonId
+							? { ...d, status: frame.status, ...(frame.error !== undefined ? { error: frame.error } : { error: undefined }) }
+							: d,
+					),
+				);
+				break;
+			case "projects":
+				pendingProjects?.(frame.projects);
+				pendingProjects = null;
 				break;
 			case "daemon_logs_result": {
 				const pending = pendingDaemonLogs.get(frame.id);
@@ -1295,11 +1316,6 @@ export function connect(): void {
 				// for any session we're not attached to (collab_start/collab_stop
 				// act on the attached session).
 				setState("collabStatus", frame.status);
-				break;
-			case "process_stats":
-				setState("processStats", frame.process);
-				pendingProcessStats?.resolve(frame.process);
-				pendingProcessStats = null;
 				break;
 			case "files":
 				pendingFiles?.(frame.files);
@@ -1380,29 +1396,34 @@ export function connect(): void {
 			}
 			case "error":
 				setState("error", frame.error);
-				// create_session/attach failures surface as a (global) error
-				// frame rather than `attached`; settle the waiter instead of
-				// leaving it hanging.
+				// attach failures surface as a (global) error frame rather than
+				// `attached`; settle the waiter instead of leaving it hanging.
 				pendingAttach?.reject(new Error(frame.error));
 				pendingAttach = null;
+				break;
+			default:
+				// The ompd hello handshake (hello_ok) is swallowed by the
+				// orchestrator edge; anything else unknown is tolerated and
+				// ignored, never thrown.
+				console.debug(`[ompd] ignoring ${frame.type} frame`);
 				break;
 		}
 	};
 	socket.onclose = () => {
 		setState("connected", false);
-		stopSidebarPoll();
+		// Readiness is per-connection: the reconnecting socket's boot session
+		// must clear its own gate before the composer un-gates again.
+		setState("readyAt", undefined);
 		if (ws !== socket) return;
 		rejectPendingCalls(new Error("Disconnected"));
 		pendingSessions?.([]);
 		pendingSessions = null;
 		pendingFiles?.([]);
 		pendingFiles = null;
+		pendingProjects?.([]);
+		pendingProjects = null;
 		pendingAttach?.reject(new Error("Disconnected"));
 		pendingAttach = null;
-		pendingLive?.({ sessions: [] });
-		pendingLive = null;
-		pendingProcessStats?.reject(new Error("Disconnected"));
-		pendingProcessStats = null;
 		rejectPendingDaemons(new Error("Disconnected"));
 		const delay = backoff;
 		backoff = Math.min(backoff * 2, 8000);

@@ -1,9 +1,9 @@
-import { createEffect, createSignal, For, type Component } from "solid-js";
+import { createEffect, createSignal, For, Show, type Component } from "solid-js";
 import { currentToken, fuzzyRank, type AcToken } from "../autocomplete";
 import { dispatchInput, LOCAL_COMMANDS, type InputMode } from "../commands";
 import { PromptHistory } from "../history";
 import type { ImageArg } from "../protocol";
-import { call, dequeueLastQueued, listFiles, promptInsert, setPromptInsert, setState, state } from "../state";
+import { call, dequeueLastQueued, isReady, listFiles, promptInsert, setPromptInsert, setState, state } from "../state";
 import { Autocomplete, type AcItem } from "./Autocomplete";
 
 const history = new PromptHistory();
@@ -45,6 +45,17 @@ export const PromptBox: Component = () => {
 	const autoGrow = () => {
 		textarea.style.height = "auto";
 		textarea.style.height = `${textarea.scrollHeight}px`;
+	};
+
+	// Phase 3 roster mode: while the composer is gated (readyAt cleared on
+	// daemon switch, re-armed by the proxied ready frame), hint the attached
+	// daemon's status instead of the generic "starting…".
+	const rosterHint = () => {
+		if (state.sessionMode !== "roster") return null;
+		const daemon = state.daemonRoster.find(x => x.daemonId === state.currentSessionId);
+		if (!daemon) return "no daemon attached — pick one in the sidebar";
+		if (daemon.status === "ready") return "attaching to daemon…";
+		return `daemon ${daemon.status}…`;
 	};
 
 	const refreshToken = () => {
@@ -113,6 +124,9 @@ export const PromptBox: Component = () => {
 	};
 
 	const submit = (mode: InputMode) => {
+		// R8 readiness gate: the send button is disabled and Enter is suppressed
+		// until the server broadcasts `ready` (boot session's gate cleared).
+		if (!isReady()) return;
 		const text = message().trim();
 		const imgs = images();
 		if (!text && imgs.length === 0) return;
@@ -277,7 +291,35 @@ export const PromptBox: Component = () => {
 						Stop
 					</button>
 				)}
-				<button class="send" onClick={() => submit("enter")} disabled={!message().trim() && images().length === 0}>
+				{/* R8: subtle "starting…" pill while the boot session's readiness
+				    gate is clearing (disconnect already has its own pill). Phase 3
+				    roster mode: show the attached daemon's status instead. */}
+				<Show when={state.connected && !isReady()}>
+					<span
+						class="ready-pill"
+						title={
+							state.sessionMode === "roster"
+								? "The attached daemon is still starting (or reconnecting)…"
+								: "The agent is finishing startup (model/provider resolution)…"
+						}
+					>
+						{rosterHint() ?? "starting…"}
+					</span>
+				</Show>
+				<button
+					class="send"
+					onClick={() => submit("enter")}
+					disabled={!isReady() || (!message().trim() && images().length === 0)}
+					title={
+						!state.connected
+							? "Not connected"
+							: !isReady()
+								? state.sessionMode === "roster"
+									? "The attached daemon is not ready yet…"
+									: "The agent is still starting…"
+								: undefined
+					}
+				>
 					{state.streaming ? "Steer" : "Send"}
 				</button>
 			</div>

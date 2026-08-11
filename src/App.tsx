@@ -6,6 +6,7 @@ import { AskDialog } from "./components/AskDialog";
 import { BranchPicker } from "./components/BranchPicker";
 import { BtwPanel } from "./components/BtwPanel";
 import { CharacterAvatar } from "./components/CharacterAvatar";
+import { DaemonSidebar } from "./components/DaemonSidebar";
 import { GoalPopover } from "./components/GoalPopover";
 import { HistorySearch } from "./components/HistorySearch";
 import { UsagePanel } from "./components/UsagePanel";
@@ -17,7 +18,6 @@ import { Pet } from "./components/Pet";
 import { PromptBox } from "./components/PromptBox";
 import { QueueBar } from "./components/QueueBar";
 import { SessionPicker } from "./components/SessionPicker";
-import { SessionsSidebar } from "./components/SessionsSidebar";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { StatsPopover } from "./components/StatsPopover";
 import { StatusBar } from "./components/StatusBar";
@@ -99,8 +99,10 @@ export const App: Component = () => {
 					</div>
 					<PromptBox />
 				</div>
-				<Show when={state.sidebarVisible}>
-					<SessionsSidebar />
+				{/* Roster mode (orchestrator edge): the daemon sidebar replaces the
+				    sessions sidebar; single mode has no sidebar at all. */}
+				<Show when={state.sidebarVisible && state.sessionMode === "roster"}>
+					<DaemonSidebar />
 				</Show>
 			</div>
 			<Show when={state.petVisible}>

@@ -1,5 +1,11 @@
 # Web UI ↔ TUI feature parity — SDK-era plan
 
+> **Archived 2026-08-11.** This plan's scope — single-session feature parity against
+> the TUI — is complete, and the architecture has since moved on: the mux/multi-session
+> paths described here are gone (Phase 6 of the ompd plan), the daemon is single-session
+> **ompd**, and multi-daemon work lives in the orchestrator. This document is kept as
+> history only; see `ompd-plan.md` and `README.md` for the current architecture.
+
 **Supersedes the RPC-era plan (Phases 0–6, all complete).** The agent now runs
 in-process via `createAgentSession` (`@oh-my-pi/pi-coding-agent@17.1.8`); the old
 JSON-RPC child is gone. This document is the reformulated parity plan against the

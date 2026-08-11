@@ -1,39 +1,36 @@
 #!/usr/bin/env bun
 /**
- * Collab CLI: start (or stop) the collab room for a daemon session and print
- * the `omp join` links — no browser needed.
+ * Collab CLI: start (or stop) the collab room for the daemon's session and
+ * print the `omp join` links — no browser needed.
  *
  *   bun server/collab-cli.ts                 # start collab, print write + view links
  *   bun server/collab-cli.ts --join          # …and immediately `omp join` the write link
  *   bun server/collab-cli.ts --view --join   # …join with the read-only (view) link
  *   bun server/collab-cli.ts --stop          # stop the collab room
- *   bun server/collab-cli.ts --session s2    # act on handle s2 (default: the last session)
- *   bun server/collab-cli.ts --list          # list live sessions (handles) for --session
- *   bun server/collab-cli.ts --port 4711     # daemon WS port (env OMP_WEB_PORT also works)
+ *   bun server/collab-cli.ts --port 4721     # daemon WS port (env OMPD_PORT also works)
  *
- * The daemon must be running (`bun dev:server`). The room link is generated
- * server-side on collab_start; this client drives the same WS protocol the
- * web UI uses.
+ * The daemon must be running (`bun dev:server`). Connect = attached on a
+ * bare ompd: the socket primes the single boot session's collab status on
+ * open. The room link is generated server-side on collab_start; this client
+ * drives the same WS protocol the web UI uses.
  */
 
 import { spawn } from "bun";
-import type { ClientCommand, CollabWireStatus, LiveSessionEntry, ServerFrame } from "../src/protocol";
+import type { ClientCommand, CollabWireStatus, ServerFrame } from "../src/protocol";
 
 interface Options {
 	port: number;
-	session: string | null;
 	join: boolean;
 	view: boolean;
 	stop: boolean;
-	list: boolean;
 }
 
 function usage(): string {
-	return `Usage: bun server/collab-cli.ts [--join] [--view] [--stop] [--list] [--session <handle>] [--port <port>]`;
+	return `Usage: bun server/collab-cli.ts [--join] [--view] [--stop] [--port <port>]`;
 }
 
 function parseArgs(argv: string[]): Options | null {
-	const opts: Options = { port: Number(process.env.OMP_WEB_PORT ?? 4711), session: null, join: false, view: false, stop: false, list: false };
+	const opts: Options = { port: Number(process.env.OMPD_PORT ?? 4721), join: false, view: false, stop: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		switch (arg) {
@@ -46,15 +43,6 @@ function parseArgs(argv: string[]): Options | null {
 			case "--stop":
 				opts.stop = true;
 				break;
-			case "--list":
-				opts.list = true;
-				break;
-			case "--session": {
-				const value = argv[++i];
-				if (!value) return null;
-				opts.session = value;
-				break;
-			}
 			case "--port": {
 				const value = argv[++i];
 				if (!value || !/^\d+$/.test(value)) return null;
@@ -74,7 +62,7 @@ function parseArgs(argv: string[]): Options | null {
 	return opts;
 }
 
-/** Open the daemon's /ws socket; auto-attaches to the most recent session. */
+/** Open the daemon's /ws socket; connect = attached (single boot session). */
 function openSocket(port: number): Promise<WebSocket> {
 	const { promise, resolve, reject } = Promise.withResolvers<WebSocket>();
 	const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
@@ -88,7 +76,7 @@ function openSocket(port: number): Promise<WebSocket> {
 	};
 	const timer = setTimeout(() => {
 		ws.close();
-		settle(new Error(`timed out connecting to ws://127.0.0.1:${port}/ws — is the daemon running? (bun dev:server; port from --port or OMP_WEB_PORT)`));
+		settle(new Error(`timed out connecting to ws://127.0.0.1:${port}/ws — is the daemon running? (bun dev:server; port from --port or OMPD_PORT)`));
 	}, 5_000);
 	ws.onopen = () => settle(null);
 	ws.onerror = () => {};
@@ -99,18 +87,14 @@ function openSocket(port: number): Promise<WebSocket> {
 interface FrameCollector {
 	statuses: CollabWireStatus[];
 	errors: string[];
-	sessions: LiveSessionEntry[];
-	sessionId: string | null;
 }
 
 function collect(ws: WebSocket): FrameCollector {
-	const c: FrameCollector = { statuses: [], errors: [], sessions: [], sessionId: null };
+	const c: FrameCollector = { statuses: [], errors: [] };
 	ws.onmessage = ev => {
 		const frame = JSON.parse(String(ev.data)) as ServerFrame;
-		if (frame.type === "attached") c.sessionId = frame.sessionId;
-		else if (frame.type === "collab_status") c.statuses.push(frame.status);
+		if (frame.type === "collab_status") c.statuses.push(frame.status);
 		else if (frame.type === "error") c.errors.push(frame.error);
-		else if (frame.type === "live_sessions") c.sessions = frame.sessions;
 	};
 	return c;
 }
@@ -125,19 +109,11 @@ function printLinks(roomId: string, link: string, viewLink: string): void {
 	console.log(`omp join ${viewLink}  # read-only (view)`);
 }
 
-async function waitUntil(cond: () => boolean, timeoutMs: number, fail: () => Error): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (cond()) return true;
-		await Bun.sleep(50);
-	}
-	throw fail();
-}
-
 /**
- * Poll the collector until the collab room is live. Handles the already-active
- * race by re-attaching to re-prime the current status; throws on error
- * statuses, global error frames, and timeout.
+ * Poll the collector until the collab room is live. The open priming carries
+ * the current status, so an already-live room prints immediately; otherwise
+ * collab_start transitions off → live. Throws on error statuses, global error
+ * frames (except the already-active notice), and timeout.
  */
 async function awaitLiveRoom(
 	ws: WebSocket,
@@ -152,13 +128,11 @@ async function awaitLiveRoom(
 			if (status.state === "error") throw new Error(`collab_start failed: ${status.error}`);
 		}
 		const error = c.errors.at(-1);
-		if (error?.includes("collab already active for this session")) {
-			// The primed live frame lost a race with the rejection; re-attach
-			// to re-prime the current status.
-			send(ws, { type: "attach", sessionId: c.sessionId ?? "" });
-		} else if (error) {
+		if (error && !error.includes("collab already active for this session")) {
 			throw new Error(`collab_start failed: ${error}`);
 		}
+		// "collab already active": another client started the room — the live
+		// status arrives via the adapter's onStatusChange broadcast, so just wait.
 		await Bun.sleep(50);
 	}
 	throw new Error(`timed out waiting for the collab room (is the daemon on port ${port}?)`);
@@ -173,35 +147,6 @@ async function main(): Promise<number> {
 
 	const ws = await openSocket(opts.port);
 	const c = collect(ws);
-
-	if (opts.list) {
-		send(ws, { type: "list_live_sessions" });
-		try {
-			await waitUntil(
-				() => c.sessions.length > 0 || c.errors.length > 0,
-				5_000,
-				() => new Error("timed out waiting for the session roster"),
-			);
-		} catch (err) {
-			console.error(String(err));
-			ws.close();
-			return 1;
-		}
-		if (c.errors.length > 0) {
-			console.error(`list_live_sessions failed: ${c.errors.at(-1)}`);
-			ws.close();
-			return 1;
-		}
-		for (const s of c.sessions) {
-			console.log(`${s.sessionId}\t${s.name ?? "(unnamed)"}\t${s.cwd}${s.isStreaming ? "\tstreaming" : ""}`);
-		}
-		ws.close();
-		return 0;
-	}
-
-	if (opts.session) {
-		send(ws, { type: "attach", sessionId: opts.session });
-	}
 
 	if (opts.stop) {
 		send(ws, { type: "collab_stop" });
@@ -230,7 +175,7 @@ async function main(): Promise<number> {
 		return 0;
 	}
 
-	// Start: the first status is the attach priming (off or live); a room that
+	// Start: the first status is the open priming (off or live); a room that
 	// is already live prints immediately. Otherwise collab_start transitions
 	// off → live/error.
 	send(ws, { type: "collab_start" });
@@ -253,6 +198,15 @@ async function main(): Promise<number> {
 		return await child.exited;
 	}
 	return 0;
+}
+
+async function waitUntil(cond: () => boolean, timeoutMs: number, fail: () => Error): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (cond()) return true;
+		await Bun.sleep(50);
+	}
+	throw fail();
 }
 
 const exitCode = await main();

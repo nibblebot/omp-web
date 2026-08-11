@@ -1,25 +1,22 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
-import { attachSession, call, closeSession, createSession, listLiveSessions, listSessions, setState, state } from "../state";
+import { call, listSessions, setState } from "../state";
 import { Modal } from "./Modal";
-import type { LiveSessionEntry, SessionListEntry } from "../protocol";
+import type { SessionListEntry } from "../protocol";
 
 /**
- * `/resume` and the header button. Top section: live in-process sessions —
- * click to attach, × to close, "New session" to create. Below it, unchanged:
- * on-disk session files, click to switchSession.
+ * `/resume` and the header button: on-disk session files, click to
+ * switchSession. (The mux live-session roster is gone — a standalone ompd
+ * has one live session, and the orchestrator edge's daemon list lives in
+ * the DaemonSidebar.)
  */
 export const SessionPicker: Component<{ onClose: () => void }> = props => {
 	const [filter, setFilter] = createSignal("");
 	const [sessions, setSessions] = createSignal<SessionListEntry[]>([]);
-	const [live, setLive] = createSignal<LiveSessionEntry[]>([]);
 	const [error, setError] = createSignal<string | null>(null);
 
 	onMount(() => {
 		listSessions()
 			.then(setSessions)
-			.catch(err => setError(String(err)));
-		listLiveSessions()
-			.then(r => setLive(r.sessions))
 			.catch(err => setError(String(err)));
 	});
 
@@ -46,50 +43,8 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 			.catch(err => setError(String(err)));
 	};
 
-	const attach = (s: LiveSessionEntry) => {
-		if (s.sessionId === state.currentSessionId) {
-			close();
-			return;
-		}
-		void attachSession(s.sessionId)
-			.then(close)
-			.catch(err => setError(String(err)));
-	};
-
-	const newSession = () => {
-		void createSession()
-			.then(close)
-			.catch(err => setError(String(err)));
-	};
-
-	const closeLive = (s: LiveSessionEntry, ev: MouseEvent) => {
-		ev.stopPropagation();
-		closeSession(s.sessionId);
-		setLive(list => list.filter(x => x.sessionId !== s.sessionId));
-	};
-
 	return (
 		<Modal title="Sessions" onClose={props.onClose}>
-			<div class="picker-group-name picker-group-head">
-				<span>Live sessions</span>
-				<button onClick={newSession}>New session</button>
-			</div>
-			<div class="picker-list">
-				<For each={live()}>
-					{s => (
-						<div class="picker-row" classList={{ active: s.sessionId === state.currentSessionId }} onClick={() => attach(s)}>
-							<span class="picker-label">{s.name ?? s.sessionId}</span>
-							<span class="picker-detail">
-								{s.cwd || "(no cwd)"} · {s.messageCount} msgs{s.isStreaming ? " · streaming" : ""}
-							</span>
-							<button class="picker-row-close" title="Close session" onClick={ev => closeLive(s, ev)}>
-								×
-							</button>
-						</div>
-					)}
-				</For>
-				{live().length === 0 && <div class="tool-collapsed-note">no live sessions</div>}
-			</div>
 			<div class="picker-group-name">Resume from disk</div>
 			<input
 				class="picker-filter"

@@ -310,6 +310,17 @@ body {
 	white-space: nowrap;
 }
 
+/* R8 ompd readiness: subtle "starting…" hint in the composer while the boot
+   session's gate is still clearing (neutral counterpart to disconnected-pill). */
+.ready-pill {
+	background: var(--panel);
+	border: 1px solid var(--border);
+	color: var(--muted-2);
+	border-radius: var(--r-pill);
+	padding: var(--space-1) var(--space-4);
+	white-space: nowrap;
+}
+
 .toggle {
 	display: inline-flex;
 	align-items: center;
@@ -2026,6 +2037,7 @@ pre.terminal {
 	.btw-cursor,
 	.active-subagents,
 	.active-daemons,
+	.daemon-status-dot,
 	.msg-toolbar {
 		animation: none !important;
 		transition: none !important;
@@ -2890,3 +2902,406 @@ pre.terminal.eval-code {
 	color: var(--muted-3);
 	font-size: var(--fs-md);
 }
+
+/* --- Daemon roster sidebar (orchestrator edge, Phase 3) --- */
+
+.daemon-row {
+	/* sidebar-row defaults to a pointer cursor; only attachable rows get one. */
+	cursor: default;
+}
+
+.daemon-row.clickable {
+	cursor: pointer;
+}
+
+.daemon-row.clickable:hover .daemon-row-hint {
+	color: var(--muted-3);
+}
+
+/* Status dot: ready = green glow, asleep = flat grey, reconnecting = amber,
+   error = red, transitional (spawning/connecting/session/resolving) = pulsing
+   accent. Unambiguous at a glance: exactly one visual language per state. */
+.daemon-status-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex: none;
+	margin-top: 4px;
+	background: var(--muted-2);
+}
+
+.daemon-status-dot[data-status="ready"] {
+	background: var(--success);
+	box-shadow: var(--shadow-glow-success);
+}
+
+.daemon-status-dot[data-status="asleep"] {
+	background: var(--muted-2);
+	box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.daemon-status-dot[data-status="reconnecting"] {
+	background: var(--warning);
+	box-shadow: 0 0 6px var(--warning);
+}
+
+.daemon-status-dot[data-status="error"] {
+	background: var(--error);
+	box-shadow: 0 0 6px var(--error);
+}
+
+.daemon-status-dot[data-status="spawning"],
+.daemon-status-dot[data-status="connecting"],
+.daemon-status-dot[data-status="session"],
+.daemon-status-dot[data-status="resolving"] {
+	background: var(--accent);
+	box-shadow: 0 0 6px var(--accent);
+	animation: daemon-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes daemon-dot-pulse {
+	0%,
+	100% {
+		opacity: 0.4;
+		transform: scale(0.85);
+	}
+	50% {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+.daemon-row-state {
+	flex: none;
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	white-space: nowrap;
+}
+
+.daemon-row-state[data-status="ready"] {
+	color: var(--success);
+}
+
+.daemon-row-state[data-status="spawning"],
+.daemon-row-state[data-status="connecting"],
+.daemon-row-state[data-status="session"],
+.daemon-row-state[data-status="resolving"] {
+	color: var(--accent);
+}
+
+.daemon-row-state[data-status="reconnecting"] {
+	color: var(--warning);
+}
+
+.daemon-row-state[data-status="error"] {
+	color: var(--error);
+}
+
+.daemon-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+}
+
+.daemon-chip {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	color: var(--muted);
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	padding: 0 var(--space-3);
+	white-space: nowrap;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.daemon-chip--worktree {
+	color: var(--purple);
+	border-color: var(--purple);
+}
+
+.daemon-chip--label {
+	color: var(--muted-2);
+}
+
+.daemon-cwd {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.daemon-row-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	flex-wrap: wrap;
+}
+
+.daemon-row-hint {
+	flex: 1;
+	min-width: 0;
+	font-size: var(--fs-micro);
+	font-style: italic;
+	color: var(--muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.daemon-row-btn {
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--muted);
+	font-size: var(--fs-micro);
+	padding: 1px var(--space-3);
+	cursor: pointer;
+	flex: none;
+}
+
+.daemon-row-btn:hover {
+	color: var(--text);
+	border-color: var(--accent);
+}
+
+.daemon-row-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.daemon-row-btn.danger {
+	color: var(--error);
+	border-color: var(--error-border);
+	background: var(--error-bg);
+}
+
+.daemon-row-btn.danger:hover {
+	color: var(--error-text);
+	border-color: var(--error);
+}
+
+/* Detail popover (Modal): roster facts + stderr tail. */
+.daemon-detail {
+	width: min(480px, 92vw);
+}
+
+.daemon-detail-header {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin-bottom: var(--space-4);
+}
+
+.daemon-detail-header .daemon-status-dot {
+	margin-top: 0;
+}
+
+.daemon-detail-name {
+	flex: 1;
+	min-width: 0;
+	font-weight: 600;
+	font-size: var(--fs-lg);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.daemon-detail-close {
+	flex: none;
+	background: none;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	font: inherit;
+	font-size: var(--fs-lg);
+	padding: 0 var(--space-2);
+	border-radius: var(--r-sm);
+}
+
+.daemon-detail-close:hover {
+	background: var(--btn);
+	color: var(--text);
+}
+
+.daemon-detail-facts {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin-bottom: var(--space-5);
+}
+
+.daemon-detail-fact {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+	min-width: 0;
+}
+
+.daemon-detail-label {
+	flex: none;
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	color: var(--muted-2);
+	width: 72px;
+}
+
+.daemon-detail-value {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.daemon-detail-labels {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+}
+
+.daemon-detail-fact--error .daemon-detail-value {
+	color: var(--error-text);
+	white-space: normal;
+	word-break: break-word;
+}
+
+.daemon-stderr-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin-bottom: var(--space-2);
+}
+
+.daemon-stderr {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	line-height: 1.5;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: var(--space-3) var(--space-4);
+	max-height: 200px;
+	overflow-y: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	color: var(--muted-3);
+}
+
+.daemon-stderr-empty {
+	font-size: var(--fs-sm);
+	font-style: italic;
+	color: var(--muted-2);
+	padding: var(--space-2) 0;
+}
+
+.daemon-stderr-error {
+	margin: var(--space-2) 0 0;
+}
+
+/* Spawn picker modal. */
+.spawn-form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin-bottom: var(--space-5);
+}
+
+.spawn-path {
+	margin-bottom: var(--space-2);
+}
+
+.spawn-path-error,
+.spawn-template-error {
+	margin: var(--space-1) 0 var(--space-2);
+	text-align: left;
+	font-size: var(--fs-sm);
+}
+
+.spawn-template {
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-sm);
+	padding: var(--space-2) var(--space-3);
+	width: 100%;
+}
+
+.spawn-projects {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	max-height: 40vh;
+	overflow-y: auto;
+	margin-top: var(--space-2);
+}
+
+.spawn-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+
+.spawn-project {
+	align-items: center;
+	width: 100%;
+	text-align: left;
+	cursor: pointer;
+}
+
+.spawn-project--worktree {
+	margin-left: var(--space-5);
+}
+
+.spawn-project-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.spawn-of {
+	flex: none;
+	font-size: var(--fs-micro);
+	color: var(--purple);
+	font-style: italic;
+}
+
+.spawn-branch {
+	flex: none;
+}
+
+.spawn-actions {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: var(--space-5);
+}
+
+.spawn-btn {
+	background: var(--accent-dim);
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	font-weight: 600;
+	padding: var(--space-2) var(--space-6);
+	cursor: pointer;
+}
+
+.spawn-btn:hover {
+	background: var(--hover);
+	border-color: var(--accent);
+}
+

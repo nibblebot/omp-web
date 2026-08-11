@@ -137,9 +137,12 @@ export const StatusBar: Component = () => {
 			>
 				⤢
 			</Segment>
-			<Segment active={state.sidebarVisible} onClick={toggleSidebar} title="Sessions">
-				☰
-			</Segment>
+			{/* Roster sidebar visibility toggle; hidden in single mode (no sidebar). */}
+			<Show when={state.sessionMode === "roster"}>
+				<Segment active={state.sidebarVisible} onClick={toggleSidebar} title="Roster">
+					☰
+				</Segment>
+			</Show>
 			<Show
 				when={editingName()}
 				fallback={

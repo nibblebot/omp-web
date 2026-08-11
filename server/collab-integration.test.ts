@@ -2,7 +2,7 @@
  * Slice C integration test: the REAL daemon server wired end-to-end with the
  * collab relay and host adapter.
  *
- * Spawns server/index.ts as a subprocess (ephemeral port via OMP_WEB_PORT=0),
+ * Spawns server/index.ts as a subprocess (ephemeral port via OMPD_PORT=0),
  * drives a web client through collab_start → collab_stop, and connects a REAL
  * CollabSocket guest (pi-coding-agent's relay client) to the room: welcome +
  * snapshot-chunks, a guest prompt landing as a custom_message entry frame,
@@ -66,8 +66,14 @@ async function readServerPort(stdout: ReadableStream<Uint8Array>, timeoutMs: num
 		while ((nl = buffer.indexOf("\n")) >= 0) {
 			const line = buffer.slice(0, nl);
 			buffer = buffer.slice(nl + 1);
-			const match = /omp-web listening on http:\/\/localhost:(\d+)/.exec(line);
-			if (match) return Number(match[1]);
+			// ompd prints the OMPD| listening contract line (JSON) on stdout after bind.
+			if (!line.startsWith("OMPD|")) continue;
+			try {
+				const parsed = JSON.parse(line.slice(5)) as { event?: string; port?: number };
+				if (parsed.event === "listening" && typeof parsed.port === "number") return parsed.port;
+			} catch {
+				// not a contract line — keep waiting
+			}
 		}
 	}
 }
@@ -120,10 +126,10 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 		cwd: repoRoot,
 		env: {
 			...process.env,
-			OMP_WEB_PORT: "0",
-			OMP_WEB_CWD: tmpDir,
+			OMPD_PORT: "0",
+			OMPD_CWD: tmpDir,
 			PI_NO_TITLE: "1",
-			OMP_WEB_COLLAB_MAX_GUESTS: "8",
+			OMPD_COLLAB_MAX_GUESTS: "8",
 		},
 		stdout: "pipe",
 		stderr: "pipe",
@@ -148,17 +154,11 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 	webSockets.push(ws);
 	ws.onmessage = ev => webFrames.push(JSON.parse(String(ev.data)) as WebFrame);
 
-	// Attach to a live session (list_live_sessions → attach, per the contract).
-	ws.send(JSON.stringify({ type: "list_live_sessions" }));
-	const live = await waitFor(() => webFrames.find(f => f.type === "live_sessions") ?? null, 10_000, "live_sessions");
-	const sessionsList = live.sessions as Array<{ sessionId: string }>;
-	expect(sessionsList.length).toBeGreaterThanOrEqual(1);
-	const handle = sessionsList[0].sessionId as string;
-
-	webFrames.length = 0;
-	ws.send(JSON.stringify({ type: "attach", sessionId: handle }));
+	// Connect = attached on a bare ompd (Phase 6): the priming — attached with
+	// the constant guard token, then history/state/collab_status — arrives at
+	// open; collab_start targets the attached session directly.
 	const attached = await waitFor(() => webFrames.find(f => f.type === "attached") ?? null, 10_000, "attached frame");
-	expect(attached.sessionId).toBe(handle);
+	expect(attached.sessionId).toBe("s1");
 
 	// Start collab; collect frames until live (fail fast on an error status).
 	webFrames.length = 0;

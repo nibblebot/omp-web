@@ -33,7 +33,6 @@ import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type { InspectImageMode } from "@oh-my-pi/pi-coding-agent/utils/inspect-image-mode";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { FileEntry, SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { listAllSessions } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { parseSessionEntries } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
@@ -50,6 +49,7 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { daemonClientForProject, type DaemonBrokerClient } from "@oh-my-pi/pi-coding-agent/launch/client";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { cleanup as postmortemCleanup } from "@oh-my-pi/pi-utils/postmortem";
 import type { ServerWebSocket } from "bun";
 import type {
 	ClientCommand,
@@ -59,12 +59,14 @@ import type {
 	ServerFrame,
 	SessionListEntry,
 	SessionScopedFrame,
-	LiveSessionEntry,
 	ProcessStats,
 	DaemonInfo,
 	CollabParticipantInfo,
 	CollabWireStatus,
 } from "../src/protocol";
+import { OMPD_CLOSE_UNAUTHORIZED, OMPD_PROTO, type OmpdStdoutLine } from "../src/protocol";
+import { isLoopbackHost, parseConfig, type OmpdConfig } from "./config";
+import { EMBEDDED_DIST } from "./embedded-dist";
 import { applySettingSideEffects, buildSettingsModel, coerceSettingValue } from "./settings-model";
 import {
 	CollabHostAdapter,
@@ -76,23 +78,105 @@ import { createRelay, type RelayHandle, type SocketData } from "./collab-relay";
 
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
-// pairing), one Settings instance, then the in-process session registry.
-// Phase 2: N concurrent sessions live in `sessions`, keyed by a stable
-// server-assigned handle (s1, s2, … — NOT the agent sessionId, which changes
-// on switchSession). Each socket attaches to exactly one handle; that
-// attachment routes call/login_code/ui_response and all session-scoped frames.
+// pairing), one Settings instance, then the single boot session. ompd is
+// de-muxed (Phase 6): every web socket is attached to that one session from
+// upgrade (connect = attached), which routes call/login_code/ui_response and
+// all session-scoped frames. The constant handle "s1" survives only as the
+// attached frame's client guard token — session-scoped frames carry no
+// sessionId on the wire.
 // ---------------------------------------------------------------------------
 
-const cwd = process.env.OMP_WEB_CWD ?? process.cwd();
+let config: OmpdConfig;
+try {
+	config = parseConfig(process.argv.slice(2));
+} catch (err) {
+	console.error(`ompd: ${String(err)}`);
+	process.exit(1);
+}
+// Non-loopback bind without a token is a startup hard error (R14).
+if (!isLoopbackHost(config.host) && !config.token) {
+	console.error(`ompd: refusing to bind non-loopback address "${config.host}" without a token; pass --token or set OMPD_TOKEN`);
+	process.exit(1);
+}
 // TUI default global config directory (~/.omp/agent; sdk.ts documents the same).
 const agentDir = getAgentDir();
 const authStorage = await discoverAuthStorage(agentDir);
 const modelRegistry = new ModelRegistry(authStorage);
-const settings = await Settings.init({ cwd, agentDir });
+const settings = await Settings.init({ cwd: config.cwd, agentDir });
 
 type Ws = ServerWebSocket<SocketData>;
 
 const sockets = new Set<Ws>();
+
+// ---------------------------------------------------------------------------
+// ompd auth + idle bookkeeping. The authenticated bit rides ws.data (decided
+// at /ws upgrade: loopback, valid Authorization header, or ?token=); sockets
+// that upgraded without a credential must complete the hello handshake (R14)
+// inside HELLO_WINDOW_MS or they are closed 4001.
+// ---------------------------------------------------------------------------
+
+const HELLO_WINDOW_MS = 5_000;
+/** Pending hello-fallback timers for unauthenticated sockets, keyed by socket. */
+const helloTimers = new Map<Ws, ReturnType<typeof setTimeout>>();
+
+/** Set once the boot session's provider/model/auth resolution completes (R8). */
+let readyAt: number | null = null;
+/** The single boot session; hello_ok's sessionFile comes from it. */
+let bootEntry: SessionEntry | null = null;
+/** ompd version for hello_ok; read from package.json when resolvable, else "dev". */
+const version = await resolveVersion();
+
+/** In-flight user bash/python calls (idle suppression, R11) — wrapper counters around METHODS rows. */
+let inFlightBash = 0;
+let inFlightPython = 0;
+
+// Idle auto-exit (R11): a 15s tick exits via shutdown() when the daemon has
+// been continuously idle for config.idleTimeoutMs (0 disables).
+const IDLE_CHECK_INTERVAL_MS = 15_000;
+let lastActivityAt = Date.now();
+let idleTimer: ReturnType<typeof setInterval> | undefined;
+/** Set once shutdown begins (signal or idle-exit); also read by the boot catch. */
+let shuttingDown = false;
+
+function markActivity(): void {
+	lastActivityAt = Date.now();
+}
+
+/**
+ * Boot gate: the OMPD| listening line prints BEFORE the boot session exists,
+ * so early connectors (and the first requests) wait for registration — the
+ * connect-implies-attached invariant holds even for sockets that race boot.
+ */
+let resolveBootReady: () => void = () => {};
+const bootReady = new Promise<void>(resolve => {
+	resolveBootReady = resolve;
+});
+
+function sleep(ms: number): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	setTimeout(resolve, ms);
+	return promise;
+}
+
+/** ompd version for hello_ok: package.json next to server/ when resolvable, else "dev". */
+async function resolveVersion(): Promise<string> {
+	try {
+		const pkg = (await Bun.file(path.join(import.meta.dir, "..", "package.json")).json()) as { version?: unknown };
+		return typeof pkg.version === "string" && pkg.version.length > 0 ? pkg.version : "dev";
+	} catch {
+		return "dev";
+	}
+}
+
+/** True for 127.0.0.0/8, ::1, and IPv4-mapped IPv6 of the same. */
+function isLoopbackIp(address: string | null | undefined): boolean {
+	if (!address) return false;
+	const a = address.toLowerCase();
+	if (a === "::1") return true;
+	const v4 = a.startsWith("::ffff:") ? a.slice(7) : a;
+	const parts = v4.split(".");
+	return parts.length === 4 && parts.every(p => /^\d+$/.test(p)) && Number(parts[0]) === 127;
+}
 
 // ---------------------------------------------------------------------------
 // Collab relay (Slice A): rooms that forward opaque AES-GCM envelopes between
@@ -100,8 +184,7 @@ const sockets = new Set<Ws>();
 // Relay sockets are typed { kind: "relay" } and are NEVER added to `sockets`.
 // ---------------------------------------------------------------------------
 
-const relayMaxGuests = Number(Bun.env.OMP_WEB_COLLAB_MAX_GUESTS ?? 64);
-const relay: RelayHandle = createRelay({ maxGuests: relayMaxGuests });
+const relay: RelayHandle = createRelay({ maxGuests: config.collabMaxGuests });
 
 /** Global frames only (error). Session-scoped frames MUST go through broadcastTo/sendScoped. */
 function broadcast(frame: ServerFrame): void {
@@ -113,14 +196,14 @@ function send(ws: Ws, frame: ServerFrame): void {
 	ws.send(JSON.stringify(frame));
 }
 
-/** Stamp the session handle and deliver a session-scoped frame to one socket. */
-function sendScoped(ws: Ws, handle: string, frame: SessionScopedFrame): void {
-	send(ws, { ...frame, sessionId: handle });
+/** Deliver a session-scoped frame to one socket (no sessionId on the wire: one live session). */
+function sendScoped(ws: Ws, frame: SessionScopedFrame): void {
+	send(ws, frame);
 }
 
-/** Stamp the session handle and deliver a session-scoped frame to every socket attached to it. */
+/** Deliver a session-scoped frame to every socket attached to the given handle. */
 function broadcastTo(handle: string, frame: SessionScopedFrame): void {
-	const data = JSON.stringify({ ...frame, sessionId: handle });
+	const data = JSON.stringify(frame);
 	for (const ws of sockets) {
 		if (ws.data.kind === "web" && ws.data.attached === handle) ws.send(data);
 	}
@@ -593,11 +676,12 @@ async function readSubagentTranscript(sessionFile: string, fromByte = 0): Promis
 }
 
 // ---------------------------------------------------------------------------
-// Session registry: Map<handle, SessionEntry>. The handle is server-assigned
-// at creation and stable for the session's lifetime — it, not the agent
-// sessionId, is the multiplexing key. Per-session AgentRegistry/EventBus/
-// SessionManager (Phase 1 factory) keeps subagent rosters namespaced per
-// session; ui_request pending maps and the subagent mirror live here too.
+// Session registry: the single boot session. ompd is de-muxed (Phase 6) —
+// there is exactly one SessionEntry and every web socket is attached to it
+// from upgrade. The handle "s1" survives only as the attached frame's client
+// guard token. Per-session AgentRegistry/EventBus/SessionManager (Phase 1
+// factory) keeps subagent rosters namespaced per session; ui_request pending
+// maps and the subagent mirror live here too.
 // ---------------------------------------------------------------------------
 
 interface SessionEntry {
@@ -620,10 +704,8 @@ interface SessionEntry {
 	onSubagentsChange: (() => void) | null;
 }
 
-const sessions = new Map<string, SessionEntry>();
-let nextHandle = 1;
-/** Most-recently-created live session: the WS-open auto-attach target. */
-let lastHandle: string | null = null;
+/** The single boot session's constant handle: the attached frame's client guard token. */
+const BOOT_HANDLE = "s1";
 
 /** Resolved model-role assignments via the SDK's getRoleModelCycle (skips unconfigured/unavailable roles). */
 function buildModelRoles(session: AgentSession): WebSessionState["modelRoles"] {
@@ -648,6 +730,7 @@ function buildStateSnapshot(session: AgentSession): WebSessionState {
 		interruptMode: session.interruptMode,
 		sessionFile: session.sessionFile,
 		sessionId: session.sessionId,
+		readyAt: readyAt ?? undefined,
 		sessionName: session.sessionName,
 		autoCompactionEnabled: session.autoCompactionEnabled,
 		autoRetryEnabled: session.autoRetryEnabled,
@@ -684,33 +767,12 @@ async function broadcastAvailableCommands(entry: SessionEntry): Promise<void> {
 	broadcastTo(entry.handle, { type: "available_commands", commands: await buildAvailableSlashCommands(entry.session) });
 }
 
-function liveSessionSnapshot(): LiveSessionEntry[] {
-	return [...sessions.values()].map(entry => {
-		const { session } = entry;
-		const live: LiveSessionEntry = {
-			sessionId: entry.handle,
-			name: session.sessionName,
-			cwd: entry.cwd,
-			thinkingLevel: session.thinkingLevel,
-			contextUsage: session.getContextUsage(),
-			messageCount: session.messages.length,
-			isStreaming: session.isStreaming,
-		};
-		if (session.model) live.model = `${session.model.provider}/${session.model.id}`;
-		return live;
-	});
-}
-
 function processStatsSnapshot(): ProcessStats {
 	return {
 		rssBytes: process.memoryUsage().rss,
 		uptimeSec: process.uptime(),
-		sessionCount: sessions.size,
+		sessionCount: 1,
 	};
-}
-
-function broadcastLiveSessions(): void {
-	broadcast({ type: "live_sessions", sessions: liveSessionSnapshot() });
 }
 
 const DAEMON_POLL_MS = 3000;
@@ -778,34 +840,31 @@ async function daemonInfoWithEndpoint(client: DaemonBrokerClient, dir: string, s
 }
 
 /**
- * Poll every project's daemon broker (server cwd + each live session's cwd)
- * and broadcast the merged roster every tick. A change-gate would strand
- * clients that connect between broadcasts (or miss one frame): the roster is
- * small (~2.5 KB) and the tick cadence is 3s, so re-broadcasting unconditionally
- * self-heals late joins and dropped frames. On broker failure the empty roster
- * is broadcast, and the next successful tick restores the real one.
+ * Poll the daemon broker for the bound cwd and broadcast the roster every
+ * tick. A change-gate would strand clients that connect between broadcasts
+ * (or miss one frame): the roster is small (~2.5 KB) and the tick cadence is
+ * 3s, so re-broadcasting unconditionally self-heals late joins and dropped
+ * frames. On broker failure the empty roster is broadcast, and the next
+ * successful tick restores the real one.
  */
 async function refreshDaemons(): Promise<void> {
-	const dirs = new Set<string>([cwd]);
-	for (const entry of sessions.values()) if (entry.cwd) dirs.add(entry.cwd);
+	const dir = config.cwd;
 	const merged = new Map<string, DaemonInfo>();
-	for (const dir of dirs) {
-		try {
-			const client = await daemonClientForProject(dir);
-			const result = await client.request({ op: "list" });
-			// Daemon names are unique per project dir only; key by
-			// projectDir+name so same-named daemons in different projects both
-			// reach the roster (the web client uses the same identity).
-			if (result.op === "list")
-				for (const snap of result.daemons) merged.set(`${dir}\u0000${snap.name}`, await daemonInfoWithEndpoint(client, dir, snap));
-		} catch {
-			// Broker unreachable (not started / shut down): skip this project's roster.
-		}
+	try {
+		const client = await daemonClientForProject(dir);
+		const result = await client.request({ op: "list" });
+		// Daemon names are unique per project dir only; key by
+		// projectDir+name so same-named daemons in different projects both
+		// reach the roster (the web client uses the same identity).
+		if (result.op === "list")
+			for (const snap of result.daemons) merged.set(`${dir}\u0000${snap.name}`, await daemonInfoWithEndpoint(client, dir, snap));
+	} catch {
+		// Broker unreachable (not started / shut down): empty roster.
 	}
 	// Drop cached endpoints for project dirs that left the roster scope. The
 	// \u0000 separator cannot appear in paths, so a plain prefix check is
 	// unambiguous.
-	const dirPrefixes = [...dirs].map(dir => `${dir}\u0000`);
+	const dirPrefixes = [`${dir}\u0000`];
 	for (const key of [...readyEndpointCache.keys()]) {
 		if (!dirPrefixes.some(prefix => key.startsWith(prefix))) readyEndpointCache.delete(key);
 	}
@@ -831,10 +890,6 @@ function wireSession(entry: SessionEntry): void {
 		broadcastTo(entry.handle, { type: "event", event });
 		// Tokens/cost/context/queue counts all change at turn end.
 		if (event.type === "agent_end") void broadcastState(entry, true).catch(() => {});
-		// Roster-visible state changed; push a fresh live-sessions snapshot.
-		if (event.type === "agent_start" || event.type === "agent_end" || event.type === "message_start" || event.type === "message_end") {
-			broadcastLiveSessions();
-		}
 	});
 	eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data => {
 		handleSubagentLifecycle(entry, data as SubagentLifecyclePayload);
@@ -977,7 +1032,7 @@ function toWireStatus(status: CollabHostStatus | null): CollabWireStatus {
 		relayUrl: status.relayUrl,
 		roomId: status.roomId,
 		participants: status.participants,
-		maxGuests: relayMaxGuests,
+		maxGuests: config.collabMaxGuests,
 	};
 }
 
@@ -1015,7 +1070,7 @@ async function createSession(sessionCwd: string): Promise<SessionEntry> {
 		hasUI: true,
 	});
 	const entry: SessionEntry = {
-		handle: `s${nextHandle++}`,
+		handle: BOOT_HANDLE,
 		cwd: sessionCwd,
 		session: result.session,
 		agentRegistry,
@@ -1034,19 +1089,6 @@ async function createSession(sessionCwd: string): Promise<SessionEntry> {
 	result.setToolUIContext(buildUiContext(entry), true);
 	wireSession(entry);
 	return entry;
-}
-
-function registerSession(entry: SessionEntry): void {
-	sessions.set(entry.handle, entry);
-	lastHandle = entry.handle;
-	broadcastLiveSessions();
-}
-
-try {
-	registerSession(await createSession(cwd));
-} catch (err) {
-	console.error("Failed to start agent session:", err);
-	process.exit(1);
 }
 
 type Images = ImageContent[] | undefined;
@@ -1070,7 +1112,6 @@ function maybeGenerateTitle(entry: SessionEntry, text: string): void {
 		.then(async title => {
 			if (title && !sessionManager.getSessionName()) {
 				await sessionManager.setSessionName(title, "auto");
-				broadcastLiveSessions();
 			}
 		})
 		.catch(() => {});
@@ -1100,21 +1141,20 @@ const READ_ONLY: Partial<Record<WebMethodName, true>> = {
 	getContextBreakdown: true,
 };
 
+// Readiness gate (R8): before the boot session's provider/model/auth
+// resolution completes, prompt-family methods fail with a not_ready error
+// instead of failing obscurely against a half-built session.
+const NOT_READY_GATED: Partial<Record<WebMethodName, true>> = {
+	prompt: true,
+	steer: true,
+	followUp: true,
+	abortAndPrompt: true,
+	runEphemeralTurn: true,
+};
+
 // Calls that replace the transcript; every tab resyncs, not just the requester.
 // handoff starts a new session server-side; fork rewrites history in place.
 const HISTORY_RELOAD: Partial<Record<WebMethodName, true>> = { newSession: true, switchSession: true, branch: true, fork: true, handoff: true };
-
-// Calls that change sidebar-visible session state; every tab's roster resyncs.
-const ROSTER_RELOAD: Partial<Record<WebMethodName, true>> = {
-	newSession: true,
-	switchSession: true,
-	branch: true,
-	compact: true,
-	setModel: true,
-	cycleModel: true,
-	setThinkingLevel: true,
-	cycleThinkingLevel: true,
-};
 
 async function changeSession(
 	entry: SessionEntry,
@@ -1310,17 +1350,30 @@ const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[], stre
 	// Phase 10: onChunk relays live output as session-scoped chunk frames
 	// (streamId = the client's bash-item id). `!!`/`$$` dimmed variants are
 	// excluded from the agent's context, matching the TUI semantic.
-	bash: (entry, a, streamId) =>
-		entry.session.executeBash(a[0] as string, chunk => {
-			if (streamId !== undefined) broadcastTo(entry.handle, { type: "bash_chunk", id: streamId, text: chunk });
-		}, { excludeFromContext: a[1] === true }),
+	// In-flight counters feed the idle auto-exit check (R11).
+	bash: (entry, a, streamId) => {
+		inFlightBash++;
+		return entry.session
+			.executeBash(a[0] as string, chunk => {
+				if (streamId !== undefined) broadcastTo(entry.handle, { type: "bash_chunk", id: streamId, text: chunk });
+			}, { excludeFromContext: a[1] === true })
+			.finally(() => {
+				inFlightBash--;
+			});
+	},
 	abortBash: async entry => {
 		entry.session.abortBash();
 	},
-	python: (entry, a, streamId) =>
-		entry.session.executePython(a[0] as string, chunk => {
-			if (streamId !== undefined) broadcastTo(entry.handle, { type: "python_chunk", id: streamId, text: chunk });
-		}, { excludeFromContext: a[1] === true }),
+	python: (entry, a, streamId) => {
+		inFlightPython++;
+		return entry.session
+			.executePython(a[0] as string, chunk => {
+				if (streamId !== undefined) broadcastTo(entry.handle, { type: "python_chunk", id: streamId, text: chunk });
+			}, { excludeFromContext: a[1] === true })
+			.finally(() => {
+				inFlightPython--;
+			});
+	},
 	abortEval: async entry => {
 		entry.session.abortEval();
 	},
@@ -1473,7 +1526,7 @@ async function listFiles(query: string, limit: number): Promise<string[]> {
 			else entries.push(rel);
 		}
 	};
-	await walk(cwd, "");
+	await walk(config.cwd, "");
 	const q = query.toLowerCase();
 	return entries.filter(f => f.toLowerCase().includes(q)).slice(0, limit);
 }
@@ -1482,24 +1535,28 @@ async function listFiles(query: string, limit: number): Promise<string[]> {
 function attachSocket(ws: Ws, entry: SessionEntry): void {
 	if (ws.data.kind !== "web") return;
 	ws.data.attached = entry.handle;
-	send(ws, { type: "attached", sessionId: entry.handle });
-	sendScoped(ws, entry.handle, { type: "history", messages: entry.session.messages });
-	sendScoped(ws, entry.handle, {
+	// attached carries the client guard token: sessionId "s1" (bare ompd) and
+	// mode "single" always — the client hides the sessions sidebar.
+	send(ws, { type: "attached", sessionId: BOOT_HANDLE, mode: "single" });
+	sendScoped(ws, { type: "history", messages: entry.session.messages });
+	sendScoped(ws, {
 		type: "state",
 		state: buildStateSnapshot(entry.session),
 		stats: entry.session.getSessionStats(),
 	});
 	// Current collab status, so a client attaching to a live room sees it immediately.
-	sendScoped(ws, entry.handle, { type: "collab_status", status: toWireStatus(entry.collab.adapter?.status ?? null) });
+	sendScoped(ws, { type: "collab_status", status: toWireStatus(entry.collab.adapter?.status ?? null) });
+	// Late attachers get `ready` appended to the priming sequence (R8).
+	if (readyAt !== null) send(ws, { type: "ready", readyAt });
 	void buildAvailableSlashCommands(entry.session)
-		.then(commands => sendScoped(ws, entry.handle, { type: "available_commands", commands }))
+		.then(commands => sendScoped(ws, { type: "available_commands", commands }))
 		.catch(err => console.error("Failed to build available commands:", err));
 }
 
 /**
- * Dispose a live session and cut it out of the registry. Sockets attached to
- * it are detached (never closed); its pending ui_requests and the pending
- * login code inputs of those sockets are rejected.
+ * Dispose the boot session and cut every socket off it. Only invoked from
+ * shutdown: sockets are detached (never closed); pending ui_requests and the
+ * pending login code inputs of those sockets are rejected.
  */
 async function closeSession(entry: SessionEntry, reason: string): Promise<void> {
 	// Collab teardown before dispose: stop the adapter (guests get a bye) and
@@ -1521,15 +1578,12 @@ async function closeSession(entry: SessionEntry, reason: string): Promise<void> 
 	for (const ws of sockets) {
 		if (ws.data.kind === "web" && ws.data.attached === entry.handle) ws.data.attached = null;
 	}
-	sessions.delete(entry.handle);
-	if (lastHandle === entry.handle) lastHandle = [...sessions.keys()].at(-1) ?? null;
-	broadcastLiveSessions();
 }
 
 /** The session this socket's call/login_code/ui_response commands route to. */
 function attachedEntry(ws: Ws): SessionEntry | undefined {
 	if (ws.data.kind !== "web") return undefined;
-	return ws.data.attached ? sessions.get(ws.data.attached) : undefined;
+	return ws.data.attached ? bootEntry ?? undefined : undefined;
 }
 
 async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
@@ -1538,7 +1592,17 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 	try {
 		cmd = JSON.parse(String(raw)) as ClientCommand;
 	} catch {
+		if (!ws.data.authenticated) {
+			ws.close(OMPD_CLOSE_UNAUTHORIZED, "unauthorized");
+			return;
+		}
 		send(ws, { type: "error", error: "Malformed command frame" });
+		return;
+	}
+	// R14: sockets that upgraded without a credential (off-loopback + token,
+	// no Authorization header / ?token=) must open with a valid hello frame.
+	if (!ws.data.authenticated && cmd.type !== "hello") {
+		ws.close(OMPD_CLOSE_UNAUTHORIZED, "unauthorized");
 		return;
 	}
 	try {
@@ -1546,6 +1610,10 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 			case "call": {
 				const entry = attachedEntry(ws);
 				if (!entry) throw new Error("Not attached to a session");
+				// Readiness gate (R8): prompt-family methods are rejected until
+				// the boot session's provider/model/auth resolution completes.
+				// The wire error is the literal string "not_ready".
+				if (readyAt === null && NOT_READY_GATED[cmd.method]) throw "not_ready";
 				const method = METHODS[cmd.method];
 				if (!method) throw new Error(`Unknown method: ${cmd.method}`);
 				const data =
@@ -1558,7 +1626,6 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 					try {
 						if (HISTORY_RELOAD[cmd.method]) await broadcastHistory(entry);
 						if (HISTORY_RELOAD[cmd.method] || !READ_ONLY[cmd.method]) await broadcastState(entry);
-						if (ROSTER_RELOAD[cmd.method]) broadcastLiveSessions();
 					} catch (err) {
 						console.error("Post-mutation resync failed:", err);
 						broadcast({ type: "error", error: `resync failed: ${String(err)}` });
@@ -1568,9 +1635,9 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 					// Resync BEFORE the call_result: picker success UI (notices,
 					// modal close) must run after the transcript is replaced.
 					await resync();
-					sendScoped(ws, entry.handle, { type: "call_result", id: cmd.id, ok: true, data });
+					sendScoped(ws, { type: "call_result", id: cmd.id, ok: true, data });
 				} else {
-					sendScoped(ws, entry.handle, { type: "call_result", id: cmd.id, ok: true, data });
+					sendScoped(ws, { type: "call_result", id: cmd.id, ok: true, data });
 					await resync();
 				}
 				break;
@@ -1594,7 +1661,10 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				break;
 			}
 			case "list_sessions": {
-				const infos = await listAllSessions();
+				// Scope to the bound project root (config.cwd) like the TUI's
+				// --resume picker (main.ts): never surface other projects'
+				// sessions, even when this project has none (issue #3099).
+				const infos = await SessionManager.list(config.cwd);
 				const sessionsList: SessionListEntry[] = infos
 					.map(i => ({
 						path: i.path,
@@ -1613,37 +1683,47 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				send(ws, { type: "files", files: await listFiles(cmd.query, cmd.limit ?? 50) });
 				break;
 			}
-			case "create_session": {
-				try {
-					const entry = await createSession(cmd.cwd ?? cwd);
-					registerSession(entry);
-					attachSocket(ws, entry);
-				} catch (err) {
-					// Factory failure leaves the socket on its previous session.
-					send(ws, { type: "error", error: `create_session failed: ${String(err)}` });
+			case "hello": {
+				// R14 handshake: valid = proto matches AND the token matches
+				// (when one is set). Loopback clients MAY hello; valid hellos
+				// are always answered hello_ok (uniform orchestrator code path).
+				const valid = cmd.proto === OMPD_PROTO && (config.token === undefined || cmd.token === config.token);
+				if (!valid) {
+					ws.close(OMPD_CLOSE_UNAUTHORIZED, "unauthorized");
+					break;
 				}
+				if (!ws.data.authenticated) {
+					// First-frame auth succeeded: admit the socket (attach +
+					// broadcasts) exactly like an upgrade-time-authenticated one.
+					ws.data.authenticated = true;
+					const timer = helloTimers.get(ws);
+					if (timer) {
+						clearTimeout(timer);
+						helloTimers.delete(ws);
+					}
+					sockets.add(ws);
+					startDaemonPoll();
+					if (bootEntry) attachSocket(ws, bootEntry);
+				}
+				send(ws, {
+					type: "hello_ok",
+					proto: OMPD_PROTO,
+					name: config.name,
+					cwd: config.cwd,
+					pid: process.pid,
+					version,
+					...(bootEntry?.session.sessionFile ? { sessionFile: bootEntry.session.sessionFile } : {}),
+				});
 				break;
 			}
-			case "attach": {
-				const entry = sessions.get(cmd.sessionId);
-				if (!entry) send(ws, { type: "error", error: `Unknown session: ${cmd.sessionId}` });
-				else attachSocket(ws, entry);
+			case "spawn":
+			case "spawn_resume":
+			case "stop":
+			case "list_projects":
+				// Orchestrator-edge commands on a bare ompd (the registry lives
+				// in the orchestrator, Phase 3).
+				send(ws, { type: "error", error: "orchestrator-only command" });
 				break;
-			}
-			case "detach": {
-				ws.data.attached = null;
-				break;
-			}
-			case "close_session": {
-				const entry = sessions.get(cmd.sessionId);
-				if (!entry) send(ws, { type: "error", error: `Unknown session: ${cmd.sessionId}` });
-				else await closeSession(entry, "session closed");
-				break;
-			}
-			case "list_live_sessions": {
-				send(ws, { type: "live_sessions", sessions: liveSessionSnapshot() });
-				break;
-			}
 			case "get_process_stats": {
 				send(ws, { type: "process_stats", process: processStatsSnapshot() });
 				break;
@@ -1657,7 +1737,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				entry.collab.starting = true;
 				broadcastTo(entry.handle, { type: "collab_status", status: { state: "starting" } });
 				const adapter = new CollabHostAdapter(buildCollabPort(entry), {
-					hostName: Bun.env.OMP_WEB_COLLAB_HOSTNAME ?? (os.userInfo().username || "web"),
+					hostName: config.collabHostname ?? (os.userInfo().username || "web"),
 					onStatusChange: status => broadcastTo(entry.handle, { type: "collab_status", status: toWireStatus(status) }),
 				});
 				try {
@@ -1732,7 +1812,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 	} catch (err) {
 		if (cmd.type === "call") {
 			const entry = attachedEntry(ws);
-			if (entry) sendScoped(ws, entry.handle, { type: "call_result", id: cmd.id, ok: false, error: String(err) });
+			if (entry) sendScoped(ws, { type: "call_result", id: cmd.id, ok: false, error: String(err) });
 			else send(ws, { type: "error", error: String(err) });
 		} else {
 			send(ws, { type: "error", error: String(err) });
@@ -1746,11 +1826,9 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 // exports land), or a live session file's directory. Canonicalizing both
 // sides closes symlink escapes that a lexical prefix check would miss.
 async function canonicalRoots(): Promise<string[]> {
-	const roots = [os.tmpdir(), cwd, process.cwd()];
-	for (const entry of sessions.values()) {
-		const sessionFile = entry.session.sessionFile;
-		if (sessionFile) roots.push(path.dirname(sessionFile));
-	}
+	const roots = [os.tmpdir(), config.cwd, process.cwd()];
+	const sessionFile = bootEntry?.session.sessionFile;
+	if (sessionFile) roots.push(path.dirname(sessionFile));
 	const out: string[] = [];
 	for (const root of roots) {
 		out.push(await realpath(root).catch(() => root));
@@ -1765,24 +1843,77 @@ function isInside(resolved: string, roots: string[]): boolean {
 	});
 }
 
+/** Content-type by extension for embedded static assets (R15). */
+const EMBEDDED_CONTENT_TYPES: Record<string, string> = {
+	".html": "text/html; charset=utf-8",
+	".js": "text/javascript; charset=utf-8",
+	".mjs": "text/javascript; charset=utf-8",
+	".css": "text/css; charset=utf-8",
+	".json": "application/json",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif": "image/gif",
+	".webp": "image/webp",
+	".ico": "image/x-icon",
+	".woff": "font/woff",
+	".woff2": "font/woff2",
+	".ttf": "font/ttf",
+	".map": "application/json",
+	".txt": "text/plain; charset=utf-8",
+};
+
+function contentTypeForPath(pathname: string): string {
+	return EMBEDDED_CONTENT_TYPES[path.extname(pathname).toLowerCase()] ?? "application/octet-stream";
+}
+
+/** Bearer check for plain-HTTP paths (/download, static): Authorization header or ?token=. */
+function bearerOk(req: Request): boolean {
+	const header = req.headers.get("authorization");
+	if (header !== null && header.toLowerCase() === `bearer ${config.token!.toLowerCase()}`) return true;
+	return new URL(req.url).searchParams.get("token") === config.token;
+}
+
 const server = Bun.serve<SocketData>({
-	port: Number(Bun.env.OMP_WEB_PORT ?? 4711),
+	port: config.port,
+	hostname: config.host,
 	async fetch(req, srv) {
+		// Boot gate: the OMPD| listening line prints before the boot session
+		// exists; the first requests (and /ws upgrades) wait for registration
+		// so connect-implies-attached holds for sockets that race boot.
+		await bootReady;
 		const url = new URL(req.url);
 		// Collab relay rooms (/r/<roomId>?role=host|guest) upgrade here; the
 		// relay returns false for every other pathname so web handling continues.
 		if (relay.handleUpgrade(url, srv, req)) return;
+		// R14: off-loopback peers need the bearer token; loopback is exempt.
+		const loopback = isLoopbackIp(srv.requestIP(req)?.address);
 		if (url.pathname === "/ws") {
-			if (srv.upgrade(req, { data: { kind: "web", attached: null } })) return;
+			if (!loopback && config.token) {
+				const header = req.headers.get("authorization");
+				const headerOk = header !== null && header.toLowerCase() === `bearer ${config.token.toLowerCase()}`;
+				const queryOk = url.searchParams.get("token") === config.token;
+				// A wrong header is rejected outright; a missing one upgrades
+				// unauthenticated and must complete the hello handshake (clients
+				// that can't set headers, e.g. browsers).
+				if (header !== null && !headerOk) return new Response("Unauthorized", { status: 401 });
+				if (srv.upgrade(req, { data: { kind: "web", attached: null, authenticated: headerOk || queryOk } })) return;
+				return new Response("WebSocket upgrade failed", { status: 400 });
+			}
+			if (srv.upgrade(req, { data: { kind: "web", attached: null, authenticated: true } })) return;
 			return new Response("WebSocket upgrade failed", { status: 400 });
 		}
+		// /download and static: off-loopback requests require the token too when
+		// one is set (Authorization header or ?token= — downloads are plain fetch).
+		if (!loopback && config.token && !bearerOk(req)) return new Response("Unauthorized", { status: 401 });
 		if (url.pathname === "/download") {
 			const requested = url.searchParams.get("path");
 			if (!requested) return new Response("Missing path", { status: 400 });
 			// Relative export paths are written by the agent into its cwd (or the
 			// server's process cwd when the session dir lives there); absolute
 			// paths are used as-is.
-			const resolved = path.isAbsolute(requested) ? requested : path.resolve(cwd, requested);
+			const resolved = path.isAbsolute(requested) ? requested : path.resolve(config.cwd, requested);
 			let canonical = await realpath(resolved).catch(() => null);
 			if (!canonical && !path.isAbsolute(requested)) {
 				canonical = await realpath(path.resolve(process.cwd(), requested)).catch(() => null);
@@ -1793,8 +1924,18 @@ const server = Bun.serve<SocketData>({
 			if (!isInside(canonical, await canonicalRoots())) return new Response("Forbidden", { status: 403 });
 			return new Response(Bun.file(canonical));
 		}
+		// Static: disk dist/ first (today's behavior), then EMBEDDED_DIST (R15).
 		const file = Bun.file(url.pathname === "/" ? "dist/index.html" : `dist${url.pathname}`);
-		if (!(await file.exists())) return new Response("Not found", { status: 404 });
+		if (!(await file.exists())) {
+			// Content type must come from the resolved asset key: "/" maps to
+			// index.html and has no extension itself.
+			const key = url.pathname === "/" ? "/index.html" : url.pathname;
+			const embedded = EMBEDDED_DIST[key];
+			if (embedded) {
+				return new Response(Bun.file(embedded), { headers: { "content-type": contentTypeForPath(key) } });
+			}
+			return new Response("Not found", { status: 404 });
+		}
 		return new Response(file);
 	},
 	websocket: {
@@ -1803,17 +1944,33 @@ const server = Bun.serve<SocketData>({
 				relay.handleOpen(ws);
 				return;
 			}
+			if (!ws.data.authenticated) {
+				// R14 hello fallback: the token must arrive as the first frame
+				// inside the window, else the socket is closed 4001.
+				const timer = setTimeout(() => {
+					const data = ws.data;
+					if (data.kind === "web" && !data.authenticated) ws.close(OMPD_CLOSE_UNAUTHORIZED, "unauthorized");
+					helloTimers.delete(ws);
+				}, HELLO_WINDOW_MS);
+				helloTimers.set(ws, timer);
+				return;
+			}
 			sockets.add(ws);
 			startDaemonPoll();
-			// Auto-attach to the most-recently-created live session: a bare WS
-			// open reproduces the single-session priming sequence unchanged.
-			const entry = lastHandle ? sessions.get(lastHandle) : undefined;
-			if (entry) attachSocket(ws, entry);
+			// Connect = attached: a bare WS open reproduces the single-session
+			// priming sequence (the bootReady gate admits upgrades only after
+			// the boot session exists).
+			if (bootEntry) attachSocket(ws, bootEntry);
 		},
 		close(ws) {
 			if (ws.data.kind === "relay") {
 				relay.handleClose(ws);
 				return;
+			}
+			const timer = helloTimers.get(ws);
+			if (timer) {
+				clearTimeout(timer);
+				helloTimers.delete(ws);
 			}
 			// Detach only: sessions outlive sockets.
 			sockets.delete(ws);
@@ -1826,12 +1983,12 @@ const server = Bun.serve<SocketData>({
 				}
 			}
 			// A UI request dies only when every socket it was shown to is gone.
-			for (const entry of sessions.values()) {
-				for (const [id, p] of entry.pendingUiRequests) {
+			if (bootEntry) {
+				for (const [id, p] of bootEntry.pendingUiRequests) {
 					p.sockets.delete(ws);
 					if (p.sockets.size === 0) {
 						p.reject(new Error("socket closed"));
-						entry.pendingUiRequests.delete(id);
+						bootEntry.pendingUiRequests.delete(id);
 					}
 				}
 			}
@@ -1841,42 +1998,139 @@ const server = Bun.serve<SocketData>({
 				relay.handleMessage(ws, raw);
 				return;
 			}
+			markActivity();
 			void handleCommand(ws, raw);
 		},
 	},
 });
 
-/** Collab relay base URL: env-overridable, defaults to this server's own port. */
-function relayBaseUrl(): string {
-	return Bun.env.OMP_WEB_COLLAB_URL ?? `ws://localhost:${server.port}`;
-}
+// ---------------------------------------------------------------------------
+// R6b: the OMPD| listening contract line goes to STDOUT immediately after
+// bind, BEFORE session creation (the spawner learns the endpoint early and is
+// typically already connected when `ready` arrives). Human logs go to stderr.
+// ---------------------------------------------------------------------------
 
-console.log(`omp-web listening on http://localhost:${server.port}`);
+const listeningLine: OmpdStdoutLine = {
+	event: "listening",
+	bind: config.host,
+	port: server.port!,
+	url: `ws://${config.host}:${server.port}`,
+};
+if (config.advertise) listeningLine.advertise = config.advertise;
+console.log(`OMPD|${JSON.stringify(listeningLine)}`);
+console.error(`ompd listening on http://localhost:${server.port}`);
 
-// Graceful shutdown: reject pending dialogs/code inputs, then dispose every
-// session (beginDispose is the sync admission barrier; dispose is idempotent).
-let shuttingDown = false;
-async function shutdown(): Promise<void> {
-	if (shuttingDown) return;
-	shuttingDown = true;
-	for (const entry of sessions.values()) rejectEntryUiRequests(entry, "server shutting down");
-	for (const [id, p] of pendingCodeInputs) {
-		p.reject(new Error("server shutting down"));
-		pendingCodeInputs.delete(id);
-	}
-	for (const entry of sessions.values()) {
-		// Collab teardown first: stop the adapter and destroy its relay room.
-		const adapter = entry.collab.adapter;
-		const roomId = adapter?.status?.roomId;
-		entry.collab.adapter = null;
-		if (adapter) await adapter.stop("server shutting down").catch(() => {});
-		if (roomId) relay.closeRoom(roomId);
-		entry.session.beginDispose();
-		await entry.session.dispose().catch(() => {});
-	}
-	sessions.clear();
-	server.stop();
-	process.exit(0);
+// pi-utils' postmortem installs its own SIGINT/SIGTERM/SIGHUP handlers at
+// import time (run SDK cleanup, then exitProcess(130/143/129)) — they preempt
+// ompd's graceful shutdown with the default-disposition exit code. ompd owns
+// these signals from bind onward (BEFORE the boot-session await below — a
+// kill during session creation must not skip disposal): drop the import-time
+// handlers, run the same SDK cleanup callbacks inside our shutdown
+// (postmortemCleanup never exits), and exit 0. The shutdown function is
+// hoisted and every binding it touches is already initialized.
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+	for (const listener of process.listeners(sig)) process.removeListener(sig, listener);
 }
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
+process.on("SIGHUP", () => void shutdown());
+
+// ---------------------------------------------------------------------------
+// Boot (R8): fresh session (or --resume switch, R3), then the readiness gate
+// clears in the background once provider/model/auth resolution completes.
+// ---------------------------------------------------------------------------
+
+async function bootReadiness(entry: SessionEntry): Promise<void> {
+	try {
+		await modelRegistry.awaitBackgroundRefresh();
+	} catch (err) {
+		console.error("ompd: background model refresh failed:", err);
+	}
+	// Test hook: hold the gate open so tests exercise not_ready deterministically.
+	if (config.readyDeferMs > 0) await sleep(config.readyDeferMs);
+	readyAt = Date.now();
+	// Stamp readyAt into every state snapshot, then announce the gate.
+	void broadcastState(entry, true);
+	broadcast({ type: "ready", readyAt });
+}
+
+let bootSession: SessionEntry;
+try {
+	bootSession = await createSession(config.cwd);
+} catch (err) {
+	// A signal during boot runs shutdown() concurrently; the torn-down SDK
+	// state fails createSession — that is the shutdown, not a boot failure.
+	if (shuttingDown) process.exit(0);
+	console.error("Failed to start agent session:", err);
+	process.exit(1);
+}
+bootEntry = bootSession;
+if (config.resume) {
+	try {
+		const ok = await bootEntry.session.switchSession(config.resume);
+		if (ok) {
+			clearSubagents(bootEntry);
+			await broadcastAvailableCommands(bootEntry);
+		} else {
+			console.error(`ompd: --resume ${config.resume}: session switch returned false; starting fresh`);
+		}
+	} catch (err) {
+		console.error(`ompd: --resume ${config.resume} failed (${String(err)}); starting fresh`);
+	}
+}
+resolveBootReady();
+void bootReadiness(bootEntry);
+
+// ---------------------------------------------------------------------------
+// Idle auto-exit (R11): a 15s tick exits via shutdown() once the daemon has
+// been continuously idle for config.idleTimeoutMs (0 disables). Idle = ALL
+// suppression conditions false; any socket message or suppression resets the
+// activity clock.
+// ---------------------------------------------------------------------------
+
+function isIdleSuppressed(): boolean {
+	if (sockets.size > 0) return true;
+	if (inFlightBash > 0 || inFlightPython > 0) return true;
+	if (bootEntry) {
+		if (bootEntry.session.isStreaming) return true;
+		if (bootEntry.session.queuedMessageCount > 0) return true;
+		if (bootEntry.pendingUiRequests.size > 0) return true;
+		if (ephemeralAborts.get(bootEntry)?.size) return true;
+		if (bootEntry.collab.adapter?.isLive || bootEntry.collab.starting) return true;
+	}
+	return false;
+}
+
+function idleCheckTick(): void {
+	if (config.idleTimeoutMs <= 0) return;
+	if (isIdleSuppressed()) {
+		markActivity();
+		return;
+	}
+	if (Date.now() - lastActivityAt >= config.idleTimeoutMs) {
+		console.error(`ompd: idle for ${config.idleTimeoutMs}ms; shutting down`);
+		void shutdown();
+	}
+}
+
+lastActivityAt = Date.now();
+if (config.idleTimeoutMs > 0) idleTimer = setInterval(idleCheckTick, IDLE_CHECK_INTERVAL_MS);
+
+/** Collab relay base URL: env-overridable, defaults to this server's own port. */
+function relayBaseUrl(): string {
+	return config.collabUrl ?? `ws://localhost:${server.port}`;
+}
+
+// Graceful shutdown: dispose the boot session via closeSession (beginDispose
+// is the sync admission barrier; dispose is idempotent), then exit.
+async function shutdown(): Promise<void> {
+	if (shuttingDown) return;
+	shuttingDown = true;
+	if (idleTimer) clearInterval(idleTimer);
+	if (bootEntry) await closeSession(bootEntry, "server shutting down");
+	server.stop();
+	// Run the SDK's registered postmortem cleanup callbacks (browser/pty/MCP
+	// teardown etc.) without exiting — the exit is ours below.
+	await postmortemCleanup().catch(() => {});
+	process.exit(0);
+}

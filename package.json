@@ -1,19 +1,22 @@
 {
-	"name": "omp-web",
+	"name": "ompd",
 	"private": true,
 	"type": "module",
 	"scripts": {
 		"dev:server": "bun --watch server/index.ts",
 		"dev:web": "vite",
 		"build": "vite build",
+		"build:ompd": "bun scripts/build-ompd.ts",
 		"start": "bun server/index.ts",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"test": "bun test",
-		"collab": "bun server/collab-cli.ts"
+		"collab": "bun server/collab-cli.ts",
+		"orchestrator": "bun orchestrator/cli.ts"
 	},
 	"dependencies": {
 		"@oh-my-pi/pi-agent-core": "17.1.8",
 		"@oh-my-pi/pi-coding-agent": "17.1.8",
+		"@oh-my-pi/pi-utils": "17.1.8",
 		"diff": "^9.0.0",
 		"dompurify": "^3.3.0",
 		"marked": "^18.0.6",

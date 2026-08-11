@@ -1,79 +1,117 @@
-# omp-web
+# ompd + omp-orchestrator
 
-A Solid.js web UI for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent). The agent runs in-process via its SDK (`createAgentSession`); a Bun WebSocket server bridges it to the browser. Brings the TUI's core feature set to the web, plus web-only affordances (inline images, clickable queue chips, per-message copy/branch, live bash streaming).
+**ompd** is a single-session agent daemon for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent): one process, one project directory (bound at spawn, immutable), one live agent session, served to a Solid.js web UI over WebSocket. The agent runs in-process via the SDK (`createAgentSession`). It ships as a self-contained binary (`bun run build:ompd`) — no repo checkout, no node_modules on the target.
 
-## Features
+**omp-orchestrator** holds the registry of N daemons — local children it spawns and supervises, externally launched daemons it attaches to, and remote sandboxes it dials into — and re-exposes them to the same web UI (roster mode) and to non-interactive drivers (CLI fan-out). It holds zero SDK state; all agent truth lives in the ompd processes and their `.jsonl` session logs.
 
-### Chat & streaming
-- Streaming assistant replies with text + thinking blocks, optional reveal-queue and soft-fade display modes
-- Steer and follow-up prompts while streaming; queue shorthand (`->` steer, `=>` follow-up) and `/queue`
-- Queued-message chip bar above the composer: per-message previews, dequeue (× or Alt+↑ restores the text), clear-all
-- Escape to abort; Ctrl+Enter queues a follow-up; double-Esc on an empty composer opens the branch picker
-- Image paste into the prompt with thumbnail tray; images render inline in the transcript with click-to-zoom
-- Prompt history recall (↑/↓) plus Ctrl+R fuzzy history search; auto-growing textarea
-- Slash commands (`!` bang-shell, `$` python mode) with `@`-file, `/`-command autocomplete, and `/`-command help
-- `!`/`!!` bash and `$`/`$$` python execution stream live output; abort buttons; exit-code and truncation badges
+```
+browser (Solid, one app, two modes)
+   ⇄ WS  ⇄ ompd (standalone: today's UI, no sidebar)
+   ⇄ WS  ⇄ omp-orchestrator (roster mode) ⇄ per-browser proxied WS ⇄ ompd …
+                                             ⇄ control WS ⇄ ompd …  (remote: ssh -L / tailnet / direct)
+```
 
-### Rich tool rendering
-- Dedicated renderers: bash terminal card, diff view, file read with line numbers, todo checklist, grep/glob search results, web search, task/agent tool, eval, lsp, hub, ask Q&A
-- Inline images inside tool results (computer/inspect_image screenshots); everything collapsible (Ctrl+O), unknown payloads fall back to a generic card
-- Live subagent list in the status bar with progress; click through to a paged transcript drill-down, steer or abort running agents
+## ompd
 
-### Status & controls
-- Status bar segments: model, thinking level, plan/goal badges, context usage % (threshold-colored), cost/tokens, queued count, subagents, retry countdown, session name, streaming state, disconnected indicator
-- Model and thinking-level pickers, session stats popover with context-usage breakdown bars and per-turn usage rows under each reply
-- Goal mode popover (set/pause/resume/drop with budget), plan-mode toggle, usage reports panel (provider windows/limits), auto-retry live countdown
-- Full settings panel (TUI `/settings` parity): left sidebar with the main sections and the active section's nested subsections on wide screens, horizontal tab bar fallback on narrow — a client-local "Web UI" tab (web-only toggles — theme preference, font-size stepper, desktop notifications, reveal queue, soft fade, fast mode, auto-retry, login providers — plus an Images group with `images.autoResize`/`images.blockImages`), one tab per web-relevant schema tab (Model, Interaction, Context, Memory, Files, Shell, Tools, Tasks, Providers), and a "TUI" tab limited to terminal-only appearance (Theme, Status Line, Display + terminal image rendering); per-type controls (toggles, selects, text/secret inputs, multiselect chips, per-provider request limits), changed-vs-default markers, global search, live condition gating (e.g. the Hindsight cluster appears when `memory.backend` is hindsight), session side effects (steering/interrupt modes, thinking level, sampling params), and in-process + disk persistence via the shared Settings singleton
-- "TUI" tab: terminal-only settings — Theme, Status Line, and Display groups (`theme.*`, `statusLine.*`, `display.*`, `tui.*`, `terminal.*`, symbol preset, color-blind mode, hardware cursor, resolved-model badge) plus the terminal image renderer (`terminal.showImages`)
-- Inline session rename in the status bar; new-session with confirmation
+One live session per daemon. Sequential session *replacement* is preserved (`newSession`, `switchSession`, `branch`, `fork`, `handoff`, `compact`, `retry`, `freshSession`); what doesn't exist is concurrent in-process sessions — that is what the orchestrator is for. Disk-backed `.jsonl` logs make the daemon disposable: respawn with `--resume <file>` and the transcript is back.
 
-### Sessions
-- Resume past sessions from a picker (full transcript restored); multi-session multiplexing with a live-sessions sidebar (attach/create/close, process stats)
-- **TUI collab join**: share any live session with real omp TUI clients — the sidebar's share button produces an `omp join <link>` (write) and a read-only view link; many TUIs attach to the same session through the daemon's collab relay (`/r/<roomId>`), prompt/steer/abort, answer `ask` dialogs, and see the live transcript, events, subagent roster and state. The relay URL defaults to `ws://localhost:<port>`; set `OMP_WEB_COLLAB_URL` for remote/wss deployments, `OMP_WEB_COLLAB_MAX_GUESTS` for the per-room cap (default 64)
-- Branch or fork from any earlier turn (hover a user message for branch/copy)
-- Compaction summaries rendered inline; auto-compaction, retry and model-fallback notices shown in the transcript
-- `/handoff` starts a new session carrying a summary document; `/fresh` resets provider state; `/dump` downloads transcript + LLM request JSON
-- `/export` downloads a standalone HTML transcript (served with path-traversal protection)
+### Config surface
 
-### Side channels & extras
-- `/btw <question>` answers a side question in a streaming panel without touching the transcript
-- OAuth login for 60+ providers from the settings panel: popup-safe flow with manual code entry and authenticated badges
-- Desktop notifications when the tab is hidden (opt-in); a streaming pixel-art pet that matches the active model provider (kimi catgirl, minimax robot, deepseek whale) plus a role roster of all resolved model roles (stacked labels, secondary roles greyed); 7 themes and a font-size stepper
+Flags map 1:1 to env vars:
+
+| Flag / env | Default | Meaning |
+| --- | --- | --- |
+| `--cwd` / `OMPD_CWD` | process cwd | Bound project root (immutable for the process lifetime) |
+| `--port` / `OMPD_PORT` | `4721` | Listen port (`0` = ephemeral; actual bind reported on the `OMPD\|` line) |
+| `--host` / `OMPD_HOST` | `127.0.0.1` | Bind address; anything else **requires** `--token` (hard error otherwise) |
+| `--advertise` / `OMPD_ADVERTISE` | — | Overrides the address reported on the `OMPD\|` line (reporting only) |
+| `--token` / `OMPD_TOKEN` | — | Bearer token gating off-loopback peers (loopback exempt) |
+| `--resume` / `OMPD_RESUME` | — | Session file to resume at boot |
+| `--idle-timeout` / `OMPD_IDLE_TIMEOUT` | `30m` | Idle auto-exit (`0` disables); `90s`/`30m`/`1h` suffixes |
+| `--name` / `OMPD_NAME` | cwd basename | Registry display name |
+| `--label k=v` / `OMPD_LABELS` | — | Selector labels (repeatable / comma-separated) |
+
+Immediately after bind — before session creation — ompd prints a contract line on **stdout** (logs go to stderr):
+
+```
+OMPD|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"ws://127.0.0.1:4721"}
+```
+
+Readiness: after the SDK session exists and provider/model/auth resolution completes, ompd broadcasts `ready` and stamps `readyAt` into `state`; before that, prompt-family calls fail with a `not_ready` error. Idle exit: with no attached clients, no running agent/queue, no in-flight bash/eval, no open dialog, and no live collab room, the daemon shuts down cleanly after the idle timeout — the orchestrator marks it `asleep` and respawns on demand.
+
+## omp-orchestrator
+
+Registry + WS clients + proxy + fan-out. Config `~/.omp/orchestrator/config.json`, state `~/.omp/orchestrator/state.json` (remote entries persist `endpoint + token + labels`; spawned entries persist template + cwd + last session file, so the roster survives an orchestrator restart).
+
+```sh
+bun run orchestrator -- serve                       # foreground; UI + control API on 127.0.0.1:4722
+bun run orchestrator -- daemons                     # roster table
+bun run orchestrator -- projects                    # discovered projects (roots + git worktrees)
+bun run orchestrator -- spawn <path> [--template t] [--name n] [--label k=v]…
+bun run orchestrator -- add <name> <url> --token <t>   # register an externally launched / remote ompd
+bun run orchestrator -- provision <name> [--label k=v]… # run the spawn hook (sandbox provisioning)
+bun run orchestrator -- stop <selector>
+bun run orchestrator -- prompt <selector> <text> [--wait ms]
+```
+
+Selectors: `dN`, `all`, name glob (`api-*`), `label:k=v` (alias `tag:k=v`), `project:name`. `prompt --wait` correlates on the daemon's `agent_end` event and collects the final assistant text + usage per daemon; fan-out across a selector is the default.
+
+### Spawn templates
+
+Daemons are spawned from **command templates** — the orchestrator never hardcodes a launch method. `{cwd}` `{token}` `{name}` `{labels}` `{resume}` are substituted; the child's stdout is parsed for `OMPD|` contract lines; endpoint resolution order: wrapper `endpoint` line › template-declared `host` + listening port › `advertise` › loopback. Default local template:
+
+```jsonc
+// ~/.omp/orchestrator/config.json
+{
+	"roots": ["~/repos"],              // project discovery roots (one level deep, git repos + worktrees)
+	"defaultTemplate": "local",
+	"templates": {
+		"local": { "command": "ompd --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}" },
+		"vm":    { "command": "ssh vm ompd --cwd {cwd} --port 4721 --host 0.0.0.0 --token {token} --name {name} {labels} {resume}", "host": "vm" }
+	},
+	"projectTemplates": { "my-project": "vm" },   // optional per-project override
+	"spawnHook": "~/.omp/orchestrator/provision.sh" // optional; or OMP_ORCHESTRATOR_SPAWN_HOOK
+}
+```
+
+Copy-pasteable examples live in `orchestrator/examples/` (`ssh-remote.json`, `docker.json` + wrapper, `provider-skeleton.sh` provision hook). The spawn hook (N3 hook point) is any script that creates a sandbox and prints `{ "name", "url", "token" }` JSON as its last stdout line; `provision <name>` runs it and registers the result.
+
+### Security model
+
+- Remote daemons are **dial-in only**: the orchestrator initiates every connection; a sandbox image contains zero knowledge of the external world (no orchestrator URL, no outbound credentials), and egress may be denied entirely.
+- The bearer token inside a sandbox gates inbound connections to that daemon only — a leaked token grants nothing beyond it. Loopback peers are exempt; off-loopback requires the token (header, `?token=`, or a first-frame `hello`) and a secure transport (ssh `-L`, tailnet, or your own TLS).
+- The orchestrator's UI binds loopback. For local children the token travels in the spawn environment — visible in `/proc/<pid>/environ`; accepted for the single-operator v1.
+- `/download` stays realpath-jailed to the bound cwd + tmpdir + session dirs; it is the only file-egress path.
+
+## The web UI (one app, two modes)
+
+- **Standalone** (served by an ompd): the full single-session UI — chat, steering, queue chips, live bash/python streaming, rich tool cards, subagent roster + drill-down, settings panel (TUI `/settings` parity), OAuth login for 60+ providers, collab rooms (`omp join` TUI guests), session resume/branch/fork/handoff, `/btw` side questions, `/export` HTML transcripts.
+- **Roster** (served by the orchestrator): the daemon sidebar replaces the sessions sidebar — status dots (`spawning`/`ready`/`asleep`/`reconnecting`/`error`), spawn picker (projects + worktrees + freeform path + template + labels), wake-on-click for asleep daemons, stop with confirm, per-daemon detail popover (cwd, uptime, labels, last session, stderr tail). Attaching proxies the browser through to that ompd; everything else about the UI is identical.
+
+Collab from the CLI (standalone daemon):
+
+```sh
+bun run collab            # start the collab room, print write + view links
+bun run collab -- --join  # …and open the TUI immediately
+bun run collab -- --stop
+```
 
 ## Develop
 
 ```sh
 bun install
-bun run dev:server   # agent SDK server on :4711
-bun run dev:web      # vite dev server on :4713
+bun run dev:server      # ompd on :4721 (single-session)
+bun run dev:web         # vite dev server on :4713 (proxies /ws + /download → 4721, /ctl → 4722)
+bun run orchestrator -- serve   # orchestrator on :4722
 ```
 
-Production: `bun run build && bun run start` (serves `dist/` on :4711).
-
-The agent's working directory defaults to the server's cwd; override with `OMP_WEB_CWD`.
-
-### Join from the CLI (no browser)
-
-```sh
-bun run collab            # start the collab room for the newest session, print links
-bun run collab -- --join  # …and open the TUI immediately (write link)
-bun run collab -- --view --join   # join with the read-only (view) link
-bun run collab -- --stop  # stop the room
-bun run collab -- --list  # list live session handles (for --session <handle>)
-```
-
-Output is copy-paste-ready: `room: <id>` plus two `omp join <link>` lines (write, then read-only). `omp join` needs a terminal; the links default to `ws://localhost:4711` (set `OMP_WEB_PORT`/`--port` for a different daemon port).
-
-Checks: `bun run check:types`, `bun test`.
+Production: `bun run build:ompd` → self-contained `dist-bin/ompd` (UI embedded). Checks: `bun run check:types`, `bun test`.
 
 ## Architecture
 
-```
-browser (Solid) ⇄ WebSocket ⇄ Bun server (in-process pi-coding-agent SDK)
-```
+- `server/index.ts` — the ompd daemon: one in-process SDK session, the 58-method dispatch allowlist, session event forwarding, `ui_request` dialog relay, settings model, OAuth login frames, bash/python/ephemeral streaming, subagent mirror, collab host adapter + relay, `/download` jail, static UI serving, bearer auth, readiness gate, idle auto-exit.
+- `orchestrator/` — registry + JSON persistence (`registry.ts`), project discovery (`discovery.ts`), spawn templates + `OMPD|` parsing (`spawn-parse.ts`, `supervisor.ts`), dial-in connector with hello handshake, cwd sanity check, backoff and ping/pong liveness (`connector.ts`), selectors + fan-out correlation (`selectors.ts`, `fanout.ts`), loopback control API + CLI (`server.ts`, `cli.ts`), browser edge + per-browser daemon proxy + aggregated daemons panel (`edge.ts`, `daemons-aggregator.ts`).
+- `src/protocol.ts` — the shared wire contract (client commands, server frames, `OMPD|` line, hello/`ready`, roster frames); additive changes only, gated by `OMPD_PROTO`.
+- `src/state.ts` — client store: chat items, streaming, session state mirror, `call()` helper, reconnect with backoff, roster state, stale-frame guard (now guards daemon switches).
 
-- `server/index.ts` — hosts agent sessions in-process via `createAgentSession`, relays an allowlist of session methods, broadcasts session events/state; multiplexes multiple live sessions (attach/create/close from the Sessions sidebar); serves static files and `/download` (realpath-jailed to tmpdir/agent cwd/server cwd/session dirs)
-- `src/protocol.ts` — client/server frame types (including unicast frames for OAuth, `ui_request`/`ui_response` for the `ask` tool, and streamed bash/python/ephemeral chunk frames)
-- `src/state.ts` — client store: chat items, streaming, session state mirror, `call()` method helper, reconnect with backoff
-
-See `docs/web-tui-parity-plan.md` for the phased parity plan against the TUI.
+`docs/web-tui-parity-plan.md` is archived history; `ompd-plan.md` is the current architecture document.
