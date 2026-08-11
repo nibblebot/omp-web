@@ -1,5 +1,5 @@
 /**
- * Real-daemon end-to-end integration suite (ompd-plan.md §Phase 2 Verification).
+ * Real-daemon end-to-end integration suite (orchestrator core).
  *
  * Boots a real orchestrator (startOrchestrator) on an ephemeral loopback port
  * with tmp state + config, spawns THREE real ompd daemons (bun server/index.ts

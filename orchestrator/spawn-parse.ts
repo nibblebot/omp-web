@@ -1,6 +1,6 @@
 /**
  * Pure parse/format helpers for the orchestrator's daemon-spawn surface
- * (ompd-plan.md R6b). No subprocess, no live daemons — the spawn SUPERVISOR
+ * (README.md §Spawn templates). No subprocess, no live daemons — the spawn SUPERVISOR
  * imports from here.
  *
  * Wire contract:

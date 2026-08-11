@@ -128,7 +128,7 @@ export interface SettingsModel {
 }
 
 // ---------------------------------------------------------------------------
-// ompd / orchestrator contract (ompd-plan.md). OMPD_PROTO gates
+// ompd / orchestrator contract (README.md). OMPD_PROTO gates
 // orchestrator↔ompd drift (the collab COLLAB_PROTO pattern); bump on any
 // breaking change to the hello handshake or frame shapes.
 // ---------------------------------------------------------------------------

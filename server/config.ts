@@ -1,7 +1,7 @@
 import path from "node:path";
 
 /**
- * ompd config surface (ompd-plan.md / ompd-contract.md). Flags map 1:1 to
+ * ompd config surface (README.md §Config surface). Flags map 1:1 to
  * env vars (`OMPD_*` only).
  */
 
