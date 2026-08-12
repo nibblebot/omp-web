@@ -7,16 +7,18 @@
  *   bun server/collab-cli.ts --join          # …and immediately `omp join` the write link
  *   bun server/collab-cli.ts --view --join   # …join with the read-only (view) link
  *   bun server/collab-cli.ts --stop          # stop the collab room
- *   bun server/collab-cli.ts --port 4721     # daemon WS port (env OMP_SESSION_PORT also works)
+ *   bun server/collab-cli.ts --port 4721     # daemon HTTP port (env OMP_SESSION_PORT also works)
  *
  * The daemon must be running (`bun dev:server`). Connect = attached on a
- * bare omp-session: the socket primes the single boot session's collab status on
- * open. The room link is generated server-side on collab_start; this client
- * drives the same WS protocol the web UI uses.
+ * bare omp-session: the /events stream primes the single boot session's
+ * collab status on open. The room link is generated server-side on
+ * collab_start; this client drives the same OMP_PROTO 2 transport the web UI
+ * uses (GET /events down, POST /command up).
  */
 
 import { spawn } from "bun";
 import type { ClientCommand, CollabWireStatus, ServerFrame } from "../src/protocol";
+import { parseSseUnits, SSE_PING_EVENT } from "../src/sse";
 
 interface Options {
 	port: number;
@@ -62,25 +64,40 @@ function parseArgs(argv: string[]): Options | null {
 	return opts;
 }
 
-/** Open the daemon's /ws socket; connect = attached (single boot session). */
-function openSocket(port: number): Promise<WebSocket> {
-	const { promise, resolve, reject } = Promise.withResolvers<WebSocket>();
-	const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-	let settled = false;
-	const settle = (err: Error | null) => {
-		if (settled) return;
-		settled = true;
-		clearTimeout(timer);
-		if (err) reject(err);
-		else resolve(ws);
-	};
+/**
+ * Open the daemon's /events stream; connect = attached (single boot session).
+ * Resolves once the stream is established; frames accumulate on the returned
+ * collector as they arrive. Loopback is R14-exempt, so no token is needed.
+ */
+function openEvents(port: number): Promise<{ close: () => void; frames: FrameCollector }> {
+	const { promise, resolve, reject } = Promise.withResolvers<{ close: () => void; frames: FrameCollector }>();
+	const controller = new AbortController();
+	const frames: FrameCollector = { statuses: [], errors: [] };
 	const timer = setTimeout(() => {
-		ws.close();
-		settle(new Error(`timed out connecting to ws://127.0.0.1:${port}/ws — is the daemon running? (bun dev:server; port from --port or OMP_SESSION_PORT)`));
+		controller.abort();
+		reject(
+			new Error(
+				`timed out connecting to http://127.0.0.1:${port}/events — is the daemon running? (bun dev:server; port from --port or OMP_SESSION_PORT)`,
+			),
+		);
 	}, 5_000);
-	ws.onopen = () => settle(null);
-	ws.onerror = () => {};
-	ws.onclose = () => settle(new Error(`connection to ws://127.0.0.1:${port}/ws closed before opening`));
+	void (async () => {
+		try {
+			const res = await fetch(`http://127.0.0.1:${port}/events`, { signal: controller.signal });
+			if (!res.ok || !res.body) throw new Error(`GET /events returned ${res.status}`);
+			clearTimeout(timer);
+			resolve({ close: () => controller.abort(), frames });
+			for await (const unit of parseSseUnits(res.body)) {
+				if (unit.kind !== "event" || unit.event === SSE_PING_EVENT) continue;
+				const frame = JSON.parse(unit.data) as ServerFrame;
+				if (frame.type === "collab_status") frames.statuses.push(frame.status);
+				else if (frame.type === "error") frames.errors.push(frame.error);
+			}
+		} catch (err) {
+			if (controller.signal.aborted) return; // close() — expected teardown
+			reject(err instanceof Error ? err : new Error(String(err)));
+		}
+	})();
 	return promise;
 }
 
@@ -89,18 +106,14 @@ interface FrameCollector {
 	errors: string[];
 }
 
-function collect(ws: WebSocket): FrameCollector {
-	const c: FrameCollector = { statuses: [], errors: [] };
-	ws.onmessage = ev => {
-		const frame = JSON.parse(String(ev.data)) as ServerFrame;
-		if (frame.type === "collab_status") c.statuses.push(frame.status);
-		else if (frame.type === "error") c.errors.push(frame.error);
-	};
-	return c;
-}
-
-function send(ws: WebSocket, cmd: ClientCommand): void {
-	ws.send(JSON.stringify(cmd));
+/** POST one command; every command carries an id (idempotency/dedup). */
+async function send(port: number, cmd: ClientCommand): Promise<void> {
+	const res = await fetch(`http://127.0.0.1:${port}/command`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(cmd),
+	});
+	if (!res.ok) throw new Error(`POST /command returned ${res.status}`);
 }
 
 function printLinks(roomId: string, link: string, viewLink: string): void {
@@ -116,18 +129,17 @@ function printLinks(roomId: string, link: string, viewLink: string): void {
  * frames (except the already-active notice), and timeout.
  */
 async function awaitLiveRoom(
-	ws: WebSocket,
-	c: FrameCollector,
+	frames: FrameCollector,
 	timeoutMs: number,
 	port: number,
 ): Promise<Extract<CollabWireStatus, { state: "live" }>> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		for (const status of c.statuses) {
+		for (const status of frames.statuses) {
 			if (status.state === "live") return status;
 			if (status.state === "error") throw new Error(`collab_start failed: ${status.error}`);
 		}
-		const error = c.errors.at(-1);
+		const error = frames.errors.at(-1);
 		if (error && !error.includes("collab already active for this session")) {
 			throw new Error(`collab_start failed: ${error}`);
 		}
@@ -145,19 +157,18 @@ async function main(): Promise<number> {
 		return 1;
 	}
 
-	const ws = await openSocket(opts.port);
-	const c = collect(ws);
+	const { close, frames } = await openEvents(opts.port);
 
 	if (opts.stop) {
-		send(ws, { type: "collab_stop" });
+		await send(opts.port, { type: "collab_stop", id: crypto.randomUUID() });
 		let sawActive = false;
 		try {
 			await waitUntil(
 				() => {
-					if (c.statuses.some(s => s.state === "live" || s.state === "starting")) sawActive = true;
-					const error = c.errors.at(-1);
+					if (frames.statuses.some(s => s.state === "live" || s.state === "starting")) sawActive = true;
+					const error = frames.errors.at(-1);
 					if (error?.includes("collab is not active")) return true;
-					if (c.statuses.some(s => s.state === "off" && sawActive)) return true;
+					if (frames.statuses.some(s => s.state === "off" && sawActive)) return true;
 					if (error && !error.includes("collab is not active")) throw new Error(`collab_stop failed: ${error}`);
 					return false;
 				},
@@ -166,28 +177,28 @@ async function main(): Promise<number> {
 			);
 		} catch (err) {
 			console.error(String(err));
-			ws.close();
+			close();
 			return 1;
 		}
-		if (c.errors.some(e => e.includes("collab is not active"))) console.log("collab is not active");
+		if (frames.errors.some(e => e.includes("collab is not active"))) console.log("collab is not active");
 		else console.log("collab stopped");
-		ws.close();
+		close();
 		return 0;
 	}
 
 	// Start: the first status is the open priming (off or live); a room that
 	// is already live prints immediately. Otherwise collab_start transitions
 	// off → live/error.
-	send(ws, { type: "collab_start" });
+	await send(opts.port, { type: "collab_start", id: crypto.randomUUID() });
 	let live: Extract<CollabWireStatus, { state: "live" }>;
 	try {
-		live = await awaitLiveRoom(ws, c, 10_000, opts.port);
+		live = await awaitLiveRoom(frames, 10_000, opts.port);
 	} catch (err) {
 		console.error(String(err));
-		ws.close();
+		close();
 		return 1;
 	}
-	ws.close();
+	close();
 
 	printLinks(live.roomId, live.link, live.viewLink);
 

@@ -3,7 +3,7 @@
  * dev — one-command dev runner.
  *
  *   bun run dev          single-session mode: omp-session (:4721, --watch) + vite (:4713 HMR)
- *   bun run dev:fleet    fleet mode: vite (:4713 HMR, /ws proxied to omp-fleet) + omp-fleet
+ *   bun run dev:fleet    fleet mode: vite (:4713 HMR, /events + /command proxied to omp-fleet) + omp-fleet
  *                        (:4722) + an omp-session (:4721) auto-registered into the roster as "dev"
  *
  *   --host [addr]        bind vite to addr (default 0.0.0.0) for LAN access; backends stay
@@ -42,7 +42,7 @@ const MODES: Record<string, { children: Child[]; open: string }> = {
 	},
 	fleet: {
 		children: [
-			// OMP_DEV_FLEET switches vite's /ws + /download proxy to omp-fleet
+			// OMP_DEV_FLEET switches vite's /events + /command + /download proxy to omp-fleet
 			// (:4722), so the roster UI runs with HMR — no dist/ build needed.
 			{ name: "vite", cmd: ["bunx", "vite"], env: { OMP_DEV_FLEET: "1" } },
 			{
@@ -164,7 +164,7 @@ async function registerDevSession(): Promise<void> {
 }
 
 if (host !== undefined) {
-	// Expose vite only: the /ws, /download, /ctl proxies run server-side, so
+	// Expose vite only: the /events, /command, /download, /ctl proxies run server-side, so
 	// remote browsers reach the loopback backends through vite. omp-session
 	// hard-requires --token off-loopback and the fleet edge is loopback-only
 	// by design — neither needs to change.

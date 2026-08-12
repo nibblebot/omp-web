@@ -3,7 +3,9 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import { SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS } from "./protocol";
 import type { ClientCommand, CollabWireStatus, DaemonEntry, DaemonInfo, ImageArg, ModelInfo, AvailableSlashCommand, ProjectEntry, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "./protocol";
+import { SSE_PING_EVENT } from "./sse";
 import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
 
@@ -777,7 +779,89 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 	});
 }
 
-let ws: WebSocket | null = null;
+// Transport (OMP_PROTO 2): EventSource downlink on GET /events (frame events),
+// POST /command uplink. Native auto-reconnect sends Last-Event-ID for ring
+// replay; `connected` is true between the first `open` and a terminal CLOSED
+// (transient CONNECTING blips keep it true — the browser resumes the stream).
+let events: EventSource | null = null;
+let connected = false;
+
+/** Silence deadline for the /events stream: any frame or ping re-arms it; a
+ *  fire means the peer is dead — the socket is open but nothing is flowing
+ *  (e.g. a hung middlebox) → teardown + reconnect. The daemon emits a named
+ *  `ping` event every SSE_KEEPALIVE_MS precisely so this browser-side
+ *  consumer can observe liveness. */
+let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** (Re)arm the silence deadline from any downlink activity. */
+function armSilenceTimer(): void {
+	if (silenceTimer !== null) clearTimeout(silenceTimer);
+	silenceTimer = setTimeout(() => {
+		silenceTimer = null;
+		if (!events) return; // already torn down / no live stream
+		const dead = events;
+		teardownStream(dead);
+		// Reconnect immediately (no backoff delay): the server may be
+		// perfectly healthy behind a hung middlebox. If the reconnect itself
+		// fails, the CLOSED-onerror backoff ladder takes over.
+		connect();
+	}, SSE_SILENCE_DEADLINE_MS);
+}
+
+function clearSilenceTimer(): void {
+	if (silenceTimer !== null) {
+		clearTimeout(silenceTimer);
+		silenceTimer = null;
+	}
+}
+
+/** Teardown for a dead /events stream (terminal CLOSED or silence deadline):
+ *  drop readiness and reject pendings. Does NOT schedule the reconnect —
+ *  callers pick the delay (backoff ladder for CLOSED, immediate for silence). */
+function teardownStream(source: EventSource): void {
+	if (events !== source) return; // a newer connect() already superseded this stream
+	clearSilenceTimer();
+	connected = false;
+	events = null;
+	source.close();
+	setState("connected", false);
+	// Readiness is per-connection: the reconnecting stream's boot session
+	// must clear its own gate before the composer un-gates again.
+	setState("readyAt", undefined);
+	rejectPendingCalls(new Error("Disconnected"));
+	pendingSessions?.([]);
+	pendingSessions = null;
+	pendingFiles?.([]);
+	pendingFiles = null;
+	pendingProjects?.([]);
+	pendingProjects = null;
+	pendingAttach?.reject(new Error("Disconnected"));
+	pendingAttach = null;
+	rejectPendingDaemons(new Error("Disconnected"));
+}
+
+/** Off-loopback bearer token from the page URL (?token=…); loopback dev needs none. */
+let token: string | null = null;
+
+/** One page-scoped client id: the fleet edge matches it across the /events
+ *  stream and POST /command to route anonymous commands to the owning browser
+ *  stream (a bare omp-session ignores both). */
+const clientId = crypto.randomUUID();
+
+/**
+ * Uplink: POST one ClientCommand to /command (202 fire-and-forget accept —
+ * answers ride the /events stream only). A non-2xx rejects here so the
+ * caller's pending promise settles instead of hanging until timeout.
+ */
+function postCommand(cmd: ClientCommand): Promise<void> {
+	return fetch("/command", {
+		method: "POST",
+		headers: { "Content-Type": "application/json", "X-Omp-Client-Id": clientId, ...(token !== null ? { Authorization: `Bearer ${token}` } : {}) },
+		body: JSON.stringify(cmd),
+	}).then(res => {
+		if (!res.ok) throw new Error(`command "${cmd.type}" rejected (HTTP ${res.status})`);
+	});
+}
 
 // Dev-only inspection handle (tests drive the UI through it).
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__ompState = state;
@@ -798,7 +882,7 @@ function rejectPendingCalls(err: Error): void {
 
 export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30_000, streamId?: number): Promise<unknown> {
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-	if (!ws || ws.readyState !== WebSocket.OPEN) {
+	if (!connected) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
@@ -814,7 +898,11 @@ export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30
 	pendingCalls.set(id, { resolve, reject, timer });
 	// streamId tags server-side bash/python chunk frames so the client can
 	// route them to the in-flight chat item (the bash item id).
-	ws.send(JSON.stringify({ type: "call", id, method, args, ...(streamId !== undefined ? { streamId } : {}) } satisfies ClientCommand));
+	postCommand({ type: "call", id, method, args, ...(streamId !== undefined ? { streamId } : {}) } satisfies ClientCommand).catch(err => {
+		pendingCalls.delete(id);
+		clearTimeout(timer);
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
@@ -867,25 +955,33 @@ let pendingFiles: ((files: string[]) => void) | null = null;
 
 export function listSessions(): Promise<SessionListEntry[]> {
 	const { promise, resolve, reject } = Promise.withResolvers<SessionListEntry[]>();
-	if (!ws || ws.readyState !== WebSocket.OPEN) {
+	if (!connected) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
 	pendingSessions?.([]);
 	pendingSessions = resolve;
-	ws.send(JSON.stringify({ type: "list_sessions" } satisfies ClientCommand));
+	postCommand({ type: "list_sessions", id: crypto.randomUUID() } satisfies ClientCommand).catch(err => {
+		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
+		if (pendingSessions === resolve) pendingSessions = null;
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
 export function listFiles(query: string, limit?: number): Promise<string[]> {
 	const { promise, resolve, reject } = Promise.withResolvers<string[]>();
-	if (!ws || ws.readyState !== WebSocket.OPEN) {
+	if (!connected) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
 	pendingFiles?.([]);
 	pendingFiles = resolve;
-	ws.send(JSON.stringify({ type: "list_files", query, limit } satisfies ClientCommand));
+	postCommand({ type: "list_files", id: crypto.randomUUID(), query, limit } satisfies ClientCommand).catch(err => {
+		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
+		if (pendingFiles === resolve) pendingFiles = null;
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
@@ -900,66 +996,64 @@ let pendingProjects: ((projects: ProjectEntry[]) => void) | null = null;
 
 export function listProjects(): Promise<ProjectEntry[]> {
 	const { promise, resolve, reject } = Promise.withResolvers<ProjectEntry[]>();
-	if (!ws || ws.readyState !== WebSocket.OPEN) {
+	if (!connected) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
 	pendingProjects?.([]);
 	pendingProjects = resolve;
-	ws.send(JSON.stringify({ type: "list_projects" } satisfies ClientCommand));
+	postCommand({ type: "list_projects", id: crypto.randomUUID() } satisfies ClientCommand).catch(err => {
+		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
+		if (pendingProjects === resolve) pendingProjects = null;
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
 /** Spawn a new daemon from a repo/worktree path (validated edge-side; the
  *  resulting entry appears in the roster as it transitions spawning → ready). */
 export function spawnDaemon(cwd: string, template?: string, labels?: string[]): void {
-	if (ws?.readyState === WebSocket.OPEN) {
-		ws.send(
-			JSON.stringify({
-				type: "spawn",
-				cwd,
-				...(template !== undefined ? { template } : {}),
-				...(labels !== undefined ? { labels } : {}),
-			} satisfies ClientCommand),
-		);
-	}
+	if (!connected) return;
+	void postCommand({
+		type: "spawn",
+		id: crypto.randomUUID(),
+		cwd,
+		...(template !== undefined ? { template } : {}),
+		...(labels !== undefined ? { labels } : {}),
+	} satisfies ClientCommand).catch(() => {});
 }
 
 /** Wake an asleep daemon (spawned → respawn --resume; attached/remote → redial). */
 export function spawnResume(daemonId: string): void {
-	if (ws?.readyState === WebSocket.OPEN) {
-		ws.send(JSON.stringify({ type: "spawn_resume", daemonId } satisfies ClientCommand));
-	}
+	if (!connected) return;
+	void postCommand({ type: "spawn_resume", id: crypto.randomUUID(), daemonId } satisfies ClientCommand).catch(() => {});
 }
 
 /** Stop a daemon (spawned → terminate child; attached/remote → drop + asleep). */
 export function stopDaemonById(daemonId: string): void {
-	if (ws?.readyState === WebSocket.OPEN) {
-		ws.send(JSON.stringify({ type: "stop", daemonId } satisfies ClientCommand));
-	}
+	if (!connected) return;
+	void postCommand({ type: "stop", id: crypto.randomUUID(), daemonId } satisfies ClientCommand).catch(() => {});
 }
 
 /** Stop a daemon AND evict it from the fleet roster (registry removal). */
 export function removeDaemonById(daemonId: string): void {
-	if (ws?.readyState === WebSocket.OPEN) {
-		ws.send(JSON.stringify({ type: "remove", daemonId } satisfies ClientCommand));
-	}
+	if (!connected) return;
+	void postCommand({ type: "remove", id: crypto.randomUUID(), daemonId } satisfies ClientCommand).catch(() => {});
 }
 
 export function sendLoginCode(requestId: string, code: string): void {
 	setState("loginCodeRequest", null);
-	if (ws?.readyState === WebSocket.OPEN) {
-		ws.send(JSON.stringify({ type: "login_code", requestId, code } satisfies ClientCommand));
-	}
+	if (!connected) return;
+	void postCommand({ type: "login_code", id: crypto.randomUUID(), requestId, code } satisfies ClientCommand).catch(() => {});
 }
 
 // Phase 3: answer the server's ui_request (ExtensionUIContext dialogs).
-// Routing is by socket attachment — no sessionId on the command.
+// Routing is by stream attachment — no sessionId on the command. The
+// ui_request id doubles as the POST dedup id.
 export function sendUiResponse(id: string, result: unknown): void {
 	if (state.uiRequest?.id === id) setState("uiRequest", null);
-	if (ws?.readyState === WebSocket.OPEN) {
-		ws.send(JSON.stringify({ type: "ui_response", id, result } satisfies ClientCommand));
-	}
+	if (!connected) return;
+	void postCommand({ type: "ui_response", id, result } satisfies ClientCommand).catch(() => {});
 }
 
 // Cancellation resolves the request undefined — NOT the error variant. The
@@ -968,9 +1062,8 @@ export function sendUiResponse(id: string, result: unknown): void {
 // (`error` field) would surface the raw error text instead.
 export function cancelUiRequest(id: string): void {
 	if (state.uiRequest?.id === id) setState("uiRequest", null);
-	if (ws?.readyState === WebSocket.OPEN) {
-		ws.send(JSON.stringify({ type: "ui_response", id } satisfies ClientCommand));
-	}
+	if (!connected) return;
+	void postCommand({ type: "ui_response", id } satisfies ClientCommand).catch(() => {});
 }
 
 /** Steer a running subagent mid-task; rejects for unknown/idle/parked agents. */
@@ -994,36 +1087,37 @@ let pendingAttach: { resolve: (sessionId: string) => void; reject: (err: Error) 
 
 function requestAttach(cmd: ClientCommand): Promise<string> {
 	const { promise, resolve, reject } = Promise.withResolvers<string>();
-	if (!ws || ws.readyState !== WebSocket.OPEN) {
+	if (!connected) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
 	// Latest-wins: a superseded attach resolves to whatever session is current.
 	pendingAttach?.resolve(state.currentSessionId);
 	pendingAttach = { resolve, reject };
-	ws.send(JSON.stringify(cmd));
+	postCommand(cmd).catch(err => {
+		if (pendingAttach?.reject === reject) pendingAttach = null;
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
 /** Attach this tab to a daemon in the roster; resolves with its handle. */
 export function attachSession(sessionId: string): Promise<string> {
-	return requestAttach({ type: "attach", sessionId });
+	return requestAttach({ type: "attach", id: crypto.randomUUID(), sessionId });
 }
 
 /** Start the collab room for the ATTACHED session; fire-and-forget, the
  *  resulting state arrives via session-scoped collab_status broadcasts. */
 export function startCollab(): void {
-	if (ws?.readyState === WebSocket.OPEN) {
-		ws.send(JSON.stringify({ type: "collab_start" } satisfies ClientCommand));
-	}
+	if (!connected) return;
+	void postCommand({ type: "collab_start", id: crypto.randomUUID() } satisfies ClientCommand).catch(() => {});
 }
 
 /** Stop the collab room for the ATTACHED session; fire-and-forget, the
  *  resulting state arrives via session-scoped collab_status broadcasts. */
 export function stopCollab(): void {
-	if (ws?.readyState === WebSocket.OPEN) {
-		ws.send(JSON.stringify({ type: "collab_stop" } satisfies ClientCommand));
-	}
+	if (!connected) return;
+	void postCommand({ type: "collab_stop", id: crypto.randomUUID() } satisfies ClientCommand).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1084,7 +1178,7 @@ export function requestDaemonLogs(
 	opts: { lines?: number; head?: boolean; grep?: string } = {},
 ): Promise<DaemonLogsResult> {
 	const { promise, resolve, reject } = Promise.withResolvers<DaemonLogsResult>();
-	if (!ws || ws.readyState !== WebSocket.OPEN) {
+	if (!connected) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
@@ -1096,34 +1190,46 @@ export function requestDaemonLogs(
 		...(opts.head !== undefined ? { head: opts.head } : {}),
 		...(opts.grep !== undefined ? { grep: opts.grep } : {}),
 	};
-	const { id } = registerDaemonPending<DaemonLogsResult>(resolve, reject, pendingDaemonLogs);
-	ws.send(JSON.stringify({ ...cmd, id } satisfies ClientCommand));
+	const { id, timer } = registerDaemonPending<DaemonLogsResult>(resolve, reject, pendingDaemonLogs);
+	postCommand({ ...cmd, id } satisfies ClientCommand).catch(err => {
+		pendingDaemonLogs.delete(id);
+		clearTimeout(timer);
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
 /** Stop a daemon via its broker; resolves with the refreshed DaemonInfo. */
 export function stopDaemon(projectDir: string, name: string): Promise<DaemonInfo> {
 	const { promise, resolve, reject } = Promise.withResolvers<DaemonInfo>();
-	if (!ws || ws.readyState !== WebSocket.OPEN) {
+	if (!connected) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
 	const cmd: Omit<Extract<ClientCommand, { type: "daemon_stop" }>, "id"> = { type: "daemon_stop", projectDir, name };
-	const { id } = registerDaemonPending<DaemonInfo>(resolve, reject, pendingDaemonControl);
-	ws.send(JSON.stringify({ ...cmd, id } satisfies ClientCommand));
+	const { id, timer } = registerDaemonPending<DaemonInfo>(resolve, reject, pendingDaemonControl);
+	postCommand({ ...cmd, id } satisfies ClientCommand).catch(err => {
+		pendingDaemonControl.delete(id);
+		clearTimeout(timer);
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
 /** Restart a daemon via its broker; resolves with the refreshed DaemonInfo. */
 export function restartDaemon(projectDir: string, name: string): Promise<DaemonInfo> {
 	const { promise, resolve, reject } = Promise.withResolvers<DaemonInfo>();
-	if (!ws || ws.readyState !== WebSocket.OPEN) {
+	if (!connected) {
 		reject(new Error("Not connected"));
 		return promise;
 	}
 	const cmd: Omit<Extract<ClientCommand, { type: "daemon_restart" }>, "id"> = { type: "daemon_restart", projectDir, name };
-	const { id } = registerDaemonPending<DaemonInfo>(resolve, reject, pendingDaemonControl);
-	ws.send(JSON.stringify({ ...cmd, id } satisfies ClientCommand));
+	const { id, timer } = registerDaemonPending<DaemonInfo>(resolve, reject, pendingDaemonControl);
+	postCommand({ ...cmd, id } satisfies ClientCommand).catch(err => {
+		pendingDaemonControl.delete(id);
+		clearTimeout(timer);
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
@@ -1173,12 +1279,20 @@ function resetSessionView(): void {
 let backoff = 1000;
 
 export function connect(): void {
-	// wss when the page itself is https (e.g. tailscale serve in front of the
-	// dev server) — browsers block ws:// from an https page as mixed content.
-	const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
-	ws = socket;
-	socket.onopen = () => {
+	// Same-origin http(s): EventSource for the downlink (native auto-reconnect
+	// sends Last-Event-ID for ring replay) + POST /command for the uplink.
+	// EventSource can't set headers, so the off-loopback bearer token rides
+	// the query string when the page URL carries one; loopback dev needs none.
+	clearSilenceTimer(); // a new connect() supersedes any prior stream's deadline
+	token = new URLSearchParams(location.search).get("token") ?? null;
+	const params = new URLSearchParams({ client: clientId });
+	if (token !== null) params.set("token", token);
+	const source = new EventSource(`/events?${params}`);
+	events = source;
+	armSilenceTimer();
+	source.onopen = () => {
 		backoff = 1000;
+		connected = true;
 		setState("connected", true);
 		// No boot-time calls: a roster-mode edge answers every call with
 		// "not attached" until the browser picks a daemon. The attached handler
@@ -1186,8 +1300,9 @@ export function connect(): void {
 		// memory — re-attach to the daemon we were viewing.
 		if (state.sessionMode === "roster" && state.currentSessionId) void attachSession(state.currentSessionId).catch(() => {});
 	};
-	socket.onmessage = ev => {
-		const frame = JSON.parse(String(ev.data)) as ServerFrame;
+	source.addEventListener(SSE_EVENT_NAME, ev => {
+		armSilenceTimer(); // any downlink activity means the peer is alive
+		const frame = JSON.parse(String((ev as MessageEvent).data)) as ServerFrame;
 		if (frame.type === "attached") {
 			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
 			setState("currentSessionId", frame.sessionId);
@@ -1417,23 +1532,19 @@ export function connect(): void {
 				console.debug(`[omp-session] ignoring ${frame.type} frame`);
 				break;
 		}
-	};
-	socket.onclose = () => {
-		setState("connected", false);
-		// Readiness is per-connection: the reconnecting socket's boot session
-		// must clear its own gate before the composer un-gates again.
-		setState("readyAt", undefined);
-		if (ws !== socket) return;
-		rejectPendingCalls(new Error("Disconnected"));
-		pendingSessions?.([]);
-		pendingSessions = null;
-		pendingFiles?.([]);
-		pendingFiles = null;
-		pendingProjects?.([]);
-		pendingProjects = null;
-		pendingAttach?.reject(new Error("Disconnected"));
-		pendingAttach = null;
-		rejectPendingDaemons(new Error("Disconnected"));
+	});
+	source.addEventListener(SSE_PING_EVENT, () => {
+		// Keepalive tick: the server is alive (the stream is not silently
+		// hung). Re-arm the silence deadline. The wire block carries no id,
+		// so this never advances Last-Event-ID / ring replay.
+		armSilenceTimer();
+	});
+	source.onerror = () => {
+		// Terminal (401 or fatal): EventSource gives up (readyState CLOSED) and
+		// will NOT retry. Teardown like a socket close, then manually reconnect
+		// with the same 1s→8s backoff — auth failures must not hot-loop.
+		if (source.readyState !== EventSource.CLOSED) return; // transient blip: native auto-reconnect resumes with Last-Event-ID
+		teardownStream(source); // no-op if a newer connect() superseded this stream
 		const delay = backoff;
 		backoff = Math.min(backoff * 2, 8000);
 		setTimeout(connect, delay);

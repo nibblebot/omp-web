@@ -8,6 +8,8 @@
  * snapshot-chunks, a guest prompt landing as a custom_message entry frame,
  * and the stop flow (guest `bye` + web {state:"off"}).
  *
+ * The web channel is OMP_PROTO 2 (GET /events SSE down, POST /command up);
+ * the guest's relay socket is the collab protocol and stays WebSocket.
  * The subprocess is killed with SIGTERM at the end — the in-process server is
  * NEVER stopped from the test (server.stop() would exit the whole test run).
  */
@@ -20,6 +22,7 @@ import type { Subprocess } from "bun";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
+import { parseSseUnits, SSE_PING_EVENT } from "../src/sse";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -90,28 +93,46 @@ interface WireCollabStatus {
 	roomId?: string;
 }
 
-function openWebSocket(port: number): Promise<WebSocket> {
-	const { promise, resolve, reject } = Promise.withResolvers<WebSocket>();
-	const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-	const timer = setTimeout(() => reject(new Error("web websocket open timed out")), 15_000);
-	ws.onopen = () => {
-		clearTimeout(timer);
-		resolve(ws);
-	};
-	ws.onerror = () => {
-		clearTimeout(timer);
-		reject(new Error("web websocket failed before open"));
-	};
+/** Open the web /events SSE stream (loopback is R14-exempt); frames accumulate. */
+function openEvents(port: number): Promise<{ frames: WebFrame[]; close: () => void }> {
+	const { promise, resolve, reject } = Promise.withResolvers<{ frames: WebFrame[]; close: () => void }>();
+	const controller = new AbortController();
+	const frames: WebFrame[] = [];
+	const timer = setTimeout(() => reject(new Error("web events stream open timed out")), 15_000);
+	void (async () => {
+		try {
+			const res = await fetch(`http://127.0.0.1:${port}/events`, { signal: controller.signal });
+			if (!res.ok || !res.body) throw new Error(`GET /events returned ${res.status}`);
+			clearTimeout(timer);
+			resolve({ frames, close: () => controller.abort() });
+			for await (const unit of parseSseUnits(res.body)) {
+				// Keepalive pings (id-less, empty-object data) are not frames.
+				if (unit.kind === "event" && unit.event !== SSE_PING_EVENT) frames.push(JSON.parse(unit.data) as WebFrame);
+			}
+		} catch (err) {
+			if (controller.signal.aborted) return; // close() — expected teardown
+			reject(err instanceof Error ? err : new Error(String(err)));
+		}
+	})();
 	return promise;
+}
+
+/** POST one web command (every command carries an id for idempotency). */
+function postCommand(port: number, cmd: Record<string, unknown>): Promise<Response> {
+	return fetch(`http://127.0.0.1:${port}/command`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(cmd),
+	});
 }
 
 let child: Subprocess<"ignore", "pipe", "pipe"> | undefined;
 let tmpDir: string | undefined;
-const webSockets: WebSocket[] = [];
+const webStreams: Array<{ close: () => void }> = [];
 const guestSockets: CollabSocket[] = [];
 
 afterAll(async () => {
-	for (const ws of webSockets) ws.close();
+	for (const stream of webStreams) stream.close();
 	for (const guest of guestSockets) guest.close();
 	if (child) {
 		child.kill(); // SIGTERM → the server's graceful shutdown handler runs.
@@ -149,10 +170,8 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 
 	const port = await readServerPort(child.stdout as ReadableStream<Uint8Array>, 45_000);
 
-	const webFrames: WebFrame[] = [];
-	const ws = await openWebSocket(port);
-	webSockets.push(ws);
-	ws.onmessage = ev => webFrames.push(JSON.parse(String(ev.data)) as WebFrame);
+	const { frames: webFrames, close: closeWeb } = await openEvents(port);
+	webStreams.push({ close: closeWeb });
 
 	// Connect = attached on a bare omp-session (Phase 6): the priming — attached with
 	// the constant guard token, then history/state/collab_status — arrives at
@@ -162,7 +181,8 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 
 	// Start collab; collect frames until live (fail fast on an error status).
 	webFrames.length = 0;
-	ws.send(JSON.stringify({ type: "collab_start" }));
+	const startResp = await postCommand(port, { type: "collab_start", id: crypto.randomUUID() });
+	expect(startResp.status).toBe(202);
 	const liveStatus = await waitFor(() => {
 		// The latest collab_status: starting → live (or error) overrides the priming off.
 		const frame = webFrames.findLast(f => f.type === "collab_status");
@@ -252,7 +272,8 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 	// control and the fatal close — so the bye is the preferred signal and the
 	// room teardown is the guaranteed one.
 	webFrames.length = 0;
-	ws.send(JSON.stringify({ type: "collab_stop" }));
+	const stopResp = await postCommand(port, { type: "collab_stop", id: crypto.randomUUID() });
+	expect(stopResp.status).toBe(202);
 	const stopped = await waitFor<{ bye?: Extract<CollabFrame, { t: "bye" }>; teardown?: true }>(() => {
 		const bye = guestFrames.find((f): f is Extract<CollabFrame, { t: "bye" }> => f.t === "bye");
 		if (bye) return { bye };

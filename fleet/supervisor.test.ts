@@ -2,7 +2,7 @@
  * SpawnSupervisor tests. A FAKE child script (sh) stands in for omp-session: it
  * appends its argv (which carries the template-filled token / labels /
  * resume args) to a file, optionally prints the OMP_SESSION| listening line for a
- * fake WS daemon the connector dials, and optionally fails. Covers spawn →
+ * fake daemon the connector dials, and optionally fails. Covers spawn →
  * endpoint resolution → connect, respawn with --resume + fresh token,
  * restart-on-failure with fresh token per attempt, stop (kill + asleep),
  * restart cancellation, and the stderr ring.
@@ -12,8 +12,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import type { Server, ServerWebSocket } from "bun";
-import { OMP_PROTO } from "../src/protocol";
+import type { Server } from "bun";
+import { OMP_PROTO, SSE_EVENT_NAME } from "../src/protocol";
+import { encodeSseEvent } from "../src/sse";
 import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
 import { Registry, type RegistryEntry } from "./registry";
@@ -52,18 +53,20 @@ interface FakeServer {
 	port: number;
 	openCount: number;
 	headers: Array<Record<string, string>>;
-	serverCloses: Array<{ code: number }>;
+	/** Client aborts observed server-side (client disconnect). */
+	serverCloses: number;
 	stop(): void;
 }
 
 /** Fake omp-session daemon: primes hello_ok (hello.cwd) → state → ready on every dial. */
 function startFake(hello: { cwd: string; sessionFile: string }): FakeServer {
+	const encoder = new TextEncoder();
 	const fake: FakeServer = {
 		server: null as unknown as Server<undefined>,
 		port: 0,
 		openCount: 0,
 		headers: [],
-		serverCloses: [],
+		serverCloses: 0,
 		stop() {
 			this.server.stop(true);
 		},
@@ -71,39 +74,58 @@ function startFake(hello: { cwd: string; sessionFile: string }): FakeServer {
 	fake.server = Bun.serve({
 		port: 0,
 		hostname: "127.0.0.1",
-		fetch(req, srv) {
+		fetch(req) {
+			const url = new URL(req.url);
+			if (url.pathname === "/command") {
+				return (async () => {
+					await req.json().catch(() => null);
+					return Response.json({ commandId: "" }, { status: 202 });
+				})();
+			}
+			if (url.pathname !== "/events") return new Response("not found", { status: 404 });
 			fake.openCount++;
 			fake.headers.push(Object.fromEntries(req.headers.entries()));
-			if (!srv.upgrade(req)) return new Response("upgrade failed", { status: 500 });
-		},
-		websocket: {
-			open(ws) {
-				ws.send(
-					JSON.stringify({
-						type: "hello_ok",
-						proto: OMP_PROTO,
-						name: "fake",
-						cwd: hello.cwd,
-						pid: 4242,
-						version: "test",
-						sessionFile: hello.sessionFile,
-					}),
-				);
-				ws.send(
-					JSON.stringify({
-						type: "state",
-						sessionId: "s1",
-						state: { sessionId: "s1", sessionFile: hello.sessionFile, isStreaming: false },
-					}),
-				);
-				ws.send(JSON.stringify({ type: "ready", readyAt: Date.now() }));
-			},
-			message() {
-				// The fake daemon never receives client frames in these tests.
-			},
-			close(ws, code) {
-				fake.serverCloses.push({ code });
-			},
+			let closeRecorded = false;
+			const recordClose = (): void => {
+				if (closeRecorded) return;
+				closeRecorded = true;
+				fake.serverCloses++;
+			};
+			const write = (controller: ReadableStreamDefaultController<Uint8Array>, frame: unknown, seq: number): void => {
+				controller.enqueue(encoder.encode(encodeSseEvent(SSE_EVENT_NAME, frame, seq)));
+			};
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					req.signal.addEventListener("abort", recordClose);
+					write(
+						controller,
+						{
+							type: "hello_ok",
+							proto: OMP_PROTO,
+							name: "fake",
+							cwd: hello.cwd,
+							pid: 4242,
+							version: "test",
+							sessionFile: hello.sessionFile,
+						},
+						1,
+					);
+					write(
+						controller,
+						{
+							type: "state",
+							sessionId: "s1",
+							state: { sessionId: "s1", sessionFile: hello.sessionFile, isStreaming: false },
+						},
+						2,
+					);
+					write(controller, { type: "ready", readyAt: Date.now() }, 3);
+				},
+				cancel() {
+					recordClose();
+				},
+			});
+			return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
 		},
 	});
 	fake.port = fake.server.port ?? 0;
@@ -343,7 +365,7 @@ describe("SpawnSupervisor", () => {
 		await supervisor.stop(entry.daemonId);
 		expect(registry.get(entry.daemonId)?.status).toBe("asleep");
 		expect(connector.isConnected(entry.daemonId)).toBe(false);
-		await waitFor(() => (fake.serverCloses.length >= 1 ? "closed" : null), 2000, "server-observed close");
+		await waitFor(() => (fake.serverCloses >= 1 ? "closed" : null), 2000, "server-observed close");
 		let alive = true;
 		try {
 			process.kill(pid, 0);

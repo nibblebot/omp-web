@@ -3,8 +3,8 @@
  *
  * A loopback-only HTTP JSON API (default port 4722, env OMP_FLEET_PORT,
  * opts.port wins; 0 = ephemeral) on a shared Bun.serve — Phase 3 adds the
- * browser WS edge on the same server. Wires the persistent Registry, the
- * remote DaemonConnector and the SpawnSupervisor:
+ * browser SSE edge (/events + /command) on the same server. Wires the
+ * persistent Registry, the remote DaemonConnector and the SpawnSupervisor:
  *
  *   GET  /ctl/sessions {…}                         → RegistryEntry[]
  *   GET  /ctl/projects {…}                         → ProjectEntry[]
@@ -292,12 +292,10 @@ class FleetServerImpl implements FleetServer {
 		this.#server = Bun.serve({
 			hostname: "127.0.0.1", // loopback-only control API + browser edge (Phase 3)
 			port,
-			fetch: (req, server) => this.#fetch(req, server),
-			websocket: {
-				open: (ws) => this.edge.onSocketOpen(ws),
-				message: (ws, message) => this.edge.onSocketMessage(ws, message),
-				close: (ws) => this.edge.onSocketClose(ws),
-			},
+			// SSE responses are long-lived and quiet between 15s keepalive
+			// pings; Bun's default 10s fetch idleTimeout would kill them.
+			idleTimeout: 0,
+			fetch: (req) => this.#fetch(req),
 		});
 		this.port = this.#server.port!;
 	}
@@ -349,10 +347,10 @@ class FleetServerImpl implements FleetServer {
 		return { registry: this.registry, connector: this.connector, supervisor: this.supervisor };
 	}
 
-	#fetch = async (req: Request, server: Server<undefined>): Promise<Response | undefined> => {
-		// Edge routes first: /ws upgrade (returns undefined on success), the
-		// new /ctl routes, and static dist. null = not an edge route.
-		const edgeHandled = await this.edge.handleFetch(req, server);
+	#fetch = async (req: Request): Promise<Response> => {
+		// Edge routes first: /events (SSE), /command (POST), the /ctl routes,
+		// and static dist. null = not an edge route.
+		const edgeHandled = await this.edge.handleFetch(req);
 		if (edgeHandled !== null) return edgeHandled;
 		try {
 			const url = new URL(req.url);

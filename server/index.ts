@@ -50,8 +50,9 @@ import { daemonClientForProject, type DaemonBrokerClient } from "@oh-my-pi/pi-co
 import type { DaemonSnapshot } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { cleanup as postmortemCleanup } from "@oh-my-pi/pi-utils/postmortem";
-import type { ServerWebSocket } from "bun";
+import type { Server } from "bun";
 import type {
+	AvailableSlashCommand,
 	ClientCommand,
 	WebMethodName,
 	WebSessionState,
@@ -64,7 +65,18 @@ import type {
 	CollabParticipantInfo,
 	CollabWireStatus,
 } from "../src/protocol";
-import { OMP_CLOSE_UNAUTHORIZED, OMP_PROTO, type StdoutContractLine } from "../src/protocol";
+import {
+	COMMAND_DEDUP_CAP,
+	COMMAND_DEDUP_WINDOW_MS,
+	OMP_PROTO,
+	SSE_BACKPRESSURE_BYTES,
+	SSE_DELTA_SEQ_START,
+	SSE_EVENT_NAME,
+	SSE_KEEPALIVE_MS,
+	SSE_RING_CAP,
+	type StdoutContractLine,
+} from "../src/protocol";
+import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "../src/sse";
 import { isLoopbackHost, parseConfig, type SessionConfig } from "./config";
 import { EMBEDDED_DIST } from "./embedded-dist";
 import { applySettingSideEffects, buildSettingsModel, coerceSettingValue } from "./settings-model";
@@ -79,8 +91,8 @@ import { createRelay, type RelayHandle, type SocketData } from "./collab-relay";
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
 // pairing), one Settings instance, then the single boot session. omp-session is
-// de-muxed (Phase 6): every web socket is attached to that one session from
-// upgrade (connect = attached), which routes call/login_code/ui_response and
+// de-muxed (Phase 6): every /events stream is attached to that one session from
+// open (connect = attached), which routes call/login_code/ui_response and
 // all session-scoped frames. The constant handle "s1" survives only as the
 // attached frame's client guard token — session-scoped frames carry no
 // sessionId on the wire.
@@ -104,20 +116,28 @@ const authStorage = await discoverAuthStorage(agentDir);
 const modelRegistry = new ModelRegistry(authStorage);
 const settings = await Settings.init({ cwd: config.cwd, agentDir });
 
-type Ws = ServerWebSocket<SocketData>;
+/**
+ * One live GET /events consumer (OMP_PROTO 2 transport). Each stream is a
+ * connection: it primes on open (hello_ok → attached → …), then receives live
+ * deltas (daemon-global seqs ≥ SSE_DELTA_SEQ_START) and unicast answers. It is
+ * also the per-connection key for pending code inputs and UI requests.
+ * Relay sockets are typed { kind: "relay" } and are NEVER added to `streams`.
+ */
+interface SseConsumer {
+	/** Stable identity; keys pending code inputs and ui_request targets. */
+	id: number;
+	controller: ReadableStreamDefaultController<Uint8Array>;
+	/** Attached session handle ("s1"); streams attach at open. */
+	attached: string | null;
+	/**
+	 * Bytes enqueued while no reader is attached (desiredSize is null then).
+	 * Reset once a reader becomes visible and desiredSize reports the truth.
+	 */
+	unreadEstimate: number;
+}
 
-const sockets = new Set<Ws>();
-
-// ---------------------------------------------------------------------------
-// omp-session auth + idle bookkeeping. The authenticated bit rides ws.data (decided
-// at /ws upgrade: loopback, valid Authorization header, or ?token=); sockets
-// that upgraded without a credential must complete the hello handshake (R14)
-// inside HELLO_WINDOW_MS or they are closed 4001.
-// ---------------------------------------------------------------------------
-
-const HELLO_WINDOW_MS = 5_000;
-/** Pending hello-fallback timers for unauthenticated sockets, keyed by socket. */
-const helloTimers = new Map<Ws, ReturnType<typeof setTimeout>>();
+let nextConsumerId = 1;
+const streams = new Set<SseConsumer>();
 
 /** Set once the boot session's provider/model/auth resolution completes (R8). */
 let readyAt: number | null = null;
@@ -145,7 +165,7 @@ function markActivity(): void {
 /**
  * Boot gate: the OMP_SESSION| listening line prints BEFORE the boot session exists,
  * so early connectors (and the first requests) wait for registration — the
- * connect-implies-attached invariant holds even for sockets that race boot.
+ * connect-implies-attached invariant holds even for streams that race boot.
  */
 let resolveBootReady: () => void = () => {};
 const bootReady = new Promise<void>(resolve => {
@@ -181,31 +201,134 @@ function isLoopbackIp(address: string | null | undefined): boolean {
 // ---------------------------------------------------------------------------
 // Collab relay (Slice A): rooms that forward opaque AES-GCM envelopes between
 // a per-session host adapter and real omp TUI guests (`omp join <link>`).
-// Relay sockets are typed { kind: "relay" } and are NEVER added to `sockets`.
+// Relay sockets are typed { kind: "relay" } and are NEVER added to `streams`.
 // ---------------------------------------------------------------------------
 
 const relay: RelayHandle = createRelay({ maxGuests: config.collabMaxGuests });
 
-/** Global frames only (error). Session-scoped frames MUST go through broadcastTo/sendScoped. */
+// ---------------------------------------------------------------------------
+// SSE delivery (OMP_PROTO 2). Live deltas carry daemon-global seqs
+// (≥ SSE_DELTA_SEQ_START) and are kept in a bounded ring so a reconnecting
+// stream can resume from its Last-Event-ID. Priming frames and unicast
+// answers are NOT ringed: priming is always re-derived fresh on open, and a
+// lost answer is retried by re-POSTing the command (deduped by id).
+// ---------------------------------------------------------------------------
+
+const ring = new SseRing<string>(SSE_RING_CAP);
+let nextDeltaSeq = SSE_DELTA_SEQ_START;
+const sseEncoder = new TextEncoder();
+
+/** Frames that are deltas (ringed + streamed); everything else is priming-only or a unicast answer. */
+const RING_DELTAS: Record<string, true> = {
+	state: true,
+	event: true,
+	bash_chunk: true,
+	python_chunk: true,
+	ephemeral_delta: true,
+	settings_changed: true,
+	subagent_lifecycle: true,
+	subagent_progress: true,
+	subagent_event: true,
+	ui_request: true,
+	collab_status: true,
+	ready: true,
+	daemons: true,
+	error: true,
+};
+
+/** Bytes currently buffered on a stream (the queue is byte-sized via the stream's queuing strategy). */
+function bufferedBytes(stream: SseConsumer): number {
+	const desired = stream.controller.desiredSize;
+	if (desired === null) return stream.unreadEstimate;
+	if (stream.unreadEstimate > 0) stream.unreadEstimate = 0;
+	return Math.max(0, SSE_BACKPRESSURE_BYTES - desired);
+}
+
+/** Enqueue one pre-encoded block; past the backpressure cap the stream is terminated (drop-and-resume). */
+function enqueueTo(stream: SseConsumer, block: string): void {
+	try {
+		if (bufferedBytes(stream) + block.length > SSE_BACKPRESSURE_BYTES) {
+			terminateStream(stream, "backpressure");
+			return;
+		}
+		stream.unreadEstimate += block.length;
+		stream.controller.enqueue(sseEncoder.encode(block));
+	} catch {
+		// Stream already closed/cancelled: dropped (removal happens on cancel/terminate).
+	}
+}
+
+/** End a stream (buffered data is still delivered; the client resumes via Last-Event-ID). */
+function terminateStream(stream: SseConsumer, reason: string): void {
+	try {
+		stream.controller.close();
+	} catch {
+		// already closed or errored; detach below still cleans up.
+	}
+	detachConsumer(stream, reason);
+}
+
+/** Global frames (error, daemons roster, ready): ringed deltas to every stream. */
 function broadcast(frame: ServerFrame): void {
-	const data = JSON.stringify(frame);
-	for (const ws of sockets) ws.send(data);
+	const seq = nextDeltaSeq++;
+	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
+	ring.push(seq, block);
+	for (const stream of streams) enqueueTo(stream, block);
 }
 
-function send(ws: Ws, frame: ServerFrame): void {
-	ws.send(JSON.stringify(frame));
+/**
+ * Unicast answers (call_result, sessions, files, login_url, …): every live
+ * stream of this single-session daemon — the SSE stream is the one answer
+ * channel. NOT ringed; a lost answer is re-POSTed by the client.
+ */
+function broadcastAnswer(frame: ServerFrame): void {
+	const seq = nextDeltaSeq++;
+	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
+	for (const stream of streams) enqueueTo(stream, block);
 }
 
-/** Deliver a session-scoped frame to one socket (no sessionId on the wire: one live session). */
-function sendScoped(ws: Ws, frame: SessionScopedFrame): void {
-	send(ws, frame);
-}
-
-/** Deliver a session-scoped frame to every socket attached to the given handle. */
+/**
+ * Deliver a session-scoped frame to every stream attached to the handle.
+ * Delta types get a ring entry (resumable); priming-style frames (history,
+ * available_commands) are re-derivable from fresh priming, so live streams
+ * only.
+ */
 function broadcastTo(handle: string, frame: SessionScopedFrame): void {
-	const data = JSON.stringify(frame);
-	for (const ws of sockets) {
-		if (ws.data.kind === "web" && ws.data.attached === handle) ws.send(data);
+	const seq = nextDeltaSeq++;
+	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
+	if (RING_DELTAS[frame.type]) ring.push(seq, block);
+	for (const stream of streams) {
+		if (stream.attached === handle) enqueueTo(stream, block);
+	}
+}
+
+/**
+ * Remove a stream from every bookkeeping structure (stream close, backpressure
+ * termination, or shutdown). Sessions outlive streams: pending code inputs
+ * and UI requests that only this stream could answer are rejected.
+ */
+function detachConsumer(stream: SseConsumer, reason: string): void {
+	streams.delete(stream);
+	if (streams.size === 0) {
+		stopDaemonPoll();
+		stopKeepalive();
+	}
+	stream.attached = null;
+	for (const [id, p] of pendingCodeInputs) {
+		if (p.streams.delete(stream) && p.streams.size === 0) {
+			p.reject(new Error(reason));
+			pendingCodeInputs.delete(id);
+		}
+	}
+	// A UI request dies only when every stream it was shown to is gone.
+	if (bootEntry) {
+		for (const [id, p] of bootEntry.pendingUiRequests) {
+			p.streams.delete(stream);
+			if (p.streams.size === 0) {
+				p.reject(new Error(reason));
+				bootEntry.pendingUiRequests.delete(id);
+			}
+		}
 	}
 }
 
@@ -233,7 +356,7 @@ function clearEphemeralAbort(entry: SessionEntry, streamId: number): void {
 // ExtensionUIContext (plan §1.7): the dialog subset round-trips over the
 // socket as ui_request/ui_response frames; terminal-only surface is stubbed.
 // Pending requests live on the owning SessionEntry, target only that
-// session's attached sockets, and are rejected when every targeted socket has
+// session's attached streams, and are rejected when every targeted stream has
 // closed and on session close / server shutdown.
 // ---------------------------------------------------------------------------
 
@@ -249,7 +372,7 @@ const COLLAB_UI_FALLTHROUGH = Symbol("collab-ui-fallthrough");
 /**
  * The ExtensionUIContext dialog subset, answered by a writable collab guest
  * FIRST (mirroring the TUI's collab-host preference in #runGuestDialog); when
- * no writable guest is attached the request falls through to the web sockets.
+ * no writable guest is attached the request falls through to the /events streams.
  */
 function uiRequest(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
 	const adapter = entry.collab.adapter;
@@ -262,16 +385,16 @@ function uiRequest(entry: SessionEntry, method: string, params: unknown): Promis
 	return webUiRequest(entry, method, params);
 }
 
-/** The pre-existing web-socket dialog path (one pending request per entry). */
+/** The pre-existing web dialog path (one pending request per entry). */
 function webUiRequest(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
-	const targets = new Set<Ws>();
-	for (const ws of sockets) {
-		if (ws.data.kind === "web" && ws.data.attached === entry.handle) targets.add(ws);
+	const targets = new Set<SseConsumer>();
+	for (const stream of streams) {
+		if (stream.attached === entry.handle) targets.add(stream);
 	}
 	if (targets.size === 0) return Promise.reject(new Error("No connected client to answer the UI request"));
 	const id = `ui${nextUiRequestId++}`;
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-	entry.pendingUiRequests.set(id, { sockets: targets, resolve, reject });
+	entry.pendingUiRequests.set(id, { streams: targets, resolve, reject });
 	broadcastTo(entry.handle, { type: "ui_request", id, method, params });
 	return promise;
 }
@@ -344,7 +467,7 @@ async function collabAsk(adapter: CollabHostAdapter, draft: CollabUiRequestDraft
  * Sequential per-question askDialog over the wire, mirroring the TUI's
  * #runGuestAskDialog minus the "Chat about this" escape. `undefined` is a
  * genuine guest cancel that aborts the whole dialog; COLLAB_UI_FALLTHROUGH
- * routes back to the web sockets.
+ * routes back to the /events streams.
  */
 async function askDialogViaCollab(adapter: CollabHostAdapter, questions: ExtensionAskDialogQuestion[]): Promise<unknown> {
 	const results: ExtensionAskDialogResultItem[] = [];
@@ -438,7 +561,7 @@ function rejectEntryUiRequests(entry: SessionEntry, reason: string): void {
 	}
 }
 
-/** One context per session: dialog requests and notices route to that session's sockets. */
+/** One context per session: dialog requests and notices route to that session's streams. */
 function buildUiContext(entry: SessionEntry): ExtensionUIContext {
 	return {
 		select: (title, options) => uiRequest(entry, "select", { title, options }) as Promise<string | undefined>,
@@ -693,7 +816,7 @@ interface SessionEntry {
 	slashRuntime: SlashCommandRuntime;
 	pendingUiRequests: Map<
 		string,
-		{ sockets: Set<Ws>; resolve: (value: unknown) => void; reject: (err: Error) => void }
+		{ streams: Set<SseConsumer>; resolve: (value: unknown) => void; reject: (err: Error) => void }
 	>;
 	subagentSnapshots: Map<string, SubagentSnapshot>;
 	transcriptSessionFilesBySubagentId: Map<string, string>;
@@ -880,6 +1003,26 @@ function stopDaemonPoll(): void {
 	if (!daemonPoll) return;
 	clearInterval(daemonPoll);
 	daemonPoll = undefined;
+}
+
+// Keepalive: a named ping event block (SSE_PING_BLOCK — deliberately no id
+// field, so it never advances a consumer's resume counter) on every open
+// /events stream every SSE_KEEPALIVE_MS; consumers treat >
+// SSE_SILENCE_DEADLINE_MS of total silence as a dead peer and reconnect.
+// Runs only while streams are live.
+let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
+
+function startKeepalive(): void {
+	if (keepaliveTimer) return;
+	keepaliveTimer = setInterval(() => {
+		for (const stream of streams) enqueueTo(stream, SSE_PING_BLOCK);
+	}, SSE_KEEPALIVE_MS);
+}
+
+function stopKeepalive(): void {
+	if (!keepaliveTimer) return;
+	clearInterval(keepaliveTimer);
+	keepaliveTimer = undefined;
 }
 
 function wireSession(entry: SessionEntry): void {
@@ -1449,27 +1592,30 @@ const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[], stre
 };
 
 // Login callbacks are streaming (open_url + manual code input), so login is
-// special-cased in handleCommand with the requesting socket in scope.
-// Pending code inputs stay per-socket and are rejected on login settle, on
-// socket close, on the attached session's close, and on shutdown.
+// special-cased in dispatch. Pending code inputs are keyed per connection
+// (the streams live at dispatch time) and are rejected on login settle, on
+// every owning stream closing, on the attached session's close, and on shutdown.
 const pendingCodeInputs = new Map<
 	string,
-	{ ws: Ws; resolve: (code: string) => void; reject: (err: Error) => void }
+	{ streams: Set<SseConsumer>; resolve: (code: string) => void; reject: (err: Error) => void }
 >();
 let nextLoginRequestId = 1;
 
-async function loginWithCallbacks(ws: Ws, entry: SessionEntry, providerId: string): Promise<unknown> {
+async function loginWithCallbacks(entry: SessionEntry, providerId: string): Promise<unknown> {
 	const knownProvider = getOAuthProviders().find(p => p.id === providerId);
 	if (!knownProvider) throw new Error(`Unknown OAuth provider: ${providerId}`);
 	// Track whether onAuth has fired. Providers that require interactive input
 	// before a browser URL cannot be satisfied by the web UI; after onAuth,
 	// prompt input is the pasted OAuth code/redirect URL path.
 	let authEmitted = false;
+	// The streams live at dispatch time own this login's code prompts; when
+	// every one closes, the prompt dies with them.
+	const promptStreams = new Set(streams);
 	try {
 		await authStorage.login(providerId as Parameters<AuthStorage["login"]>[0], {
 			onAuth: info => {
 				authEmitted = true;
-				send(ws, { type: "login_url", url: info.url, launchUrl: info.launchUrl, instructions: info.instructions });
+				broadcastAnswer({ type: "login_url", url: info.url, launchUrl: info.launchUrl, instructions: info.instructions });
 			},
 			onProgress: message => notifyEvent(entry, message),
 			onPrompt: prompt => {
@@ -1483,8 +1629,8 @@ async function loginWithCallbacks(ws: Ws, entry: SessionEntry, providerId: strin
 				}
 				const requestId = `lr${nextLoginRequestId++}`;
 				const { promise, resolve, reject } = Promise.withResolvers<string>();
-				pendingCodeInputs.set(requestId, { ws, resolve, reject });
-				send(ws, { type: "login_code_request", requestId, title: prompt.message, placeholder: prompt.placeholder });
+				pendingCodeInputs.set(requestId, { streams: promptStreams, resolve, reject });
+				broadcastAnswer({ type: "login_code_request", requestId, title: prompt.message, placeholder: prompt.placeholder });
 				return promise;
 			},
 		});
@@ -1494,10 +1640,10 @@ async function loginWithCallbacks(ws: Ws, entry: SessionEntry, providerId: strin
 		await broadcastAvailableCommands(entry);
 		return { providerId };
 	} finally {
-		// Reject this socket's leftover code inputs (already-resolved entries
+		// Reject this call's leftover code inputs (already-resolved entries
 		// were deleted by the login_code handler, so only stragglers remain).
 		for (const [id, p] of pendingCodeInputs) {
-			if (p.ws === ws) {
+			if (p.streams === promptStreams) {
 				p.reject(new Error("login ended"));
 				pendingCodeInputs.delete(id);
 			}
@@ -1531,32 +1677,111 @@ async function listFiles(query: string, limit: number): Promise<string[]> {
 	return entries.filter(f => f.toLowerCase().includes(q)).slice(0, limit);
 }
 
-/** Attach a socket and push the session priming sequence, in contract order. */
-function attachSocket(ws: Ws, entry: SessionEntry): void {
-	if (ws.data.kind !== "web") return;
-	ws.data.attached = entry.handle;
-	// attached carries the client guard token: sessionId "s1" (bare omp-session) and
-	// mode "single" always — the client hides the sessions sidebar.
-	send(ws, { type: "attached", sessionId: BOOT_HANDLE, mode: "single" });
-	sendScoped(ws, { type: "history", messages: entry.session.messages });
-	sendScoped(ws, {
-		type: "state",
-		state: buildStateSnapshot(entry.session),
-		stats: entry.session.getSessionStats(),
-	});
-	// Current collab status, so a client attaching to a live room sees it immediately.
-	sendScoped(ws, { type: "collab_status", status: toWireStatus(entry.collab.adapter?.status ?? null) });
+/**
+ * Prime a fresh /events stream synchronously: hello_ok first (daemon identity
+ * — HTTP-level auth replaced the WS hello handshake), then the attach priming
+ * (attached → history → state → collab_status → available_commands → ready),
+ * seqs 1..k (k < SSE_DELTA_SEQ_START). `commands` is built BEFORE the stream
+ * opens so every priming seq is assigned contiguously (no async gap between
+ * priming and the delta era). Then resume per Last-Event-ID: only a delta-era
+ * id (≥ SSE_DELTA_SEQ_START) replays ring deltas after it; anything below (or
+ * absent) means priming already carries full current state.
+ */
+function primeConsumer(
+	consumer: SseConsumer,
+	entry: SessionEntry,
+	commands: AvailableSlashCommand[] | null,
+	lastEventId: string | null,
+): void {
+	consumer.attached = entry.handle;
+	let seq = 1;
+	const priming: Array<ServerFrame> = [
+		{
+			type: "hello_ok",
+			proto: OMP_PROTO,
+			name: config.name,
+			cwd: config.cwd,
+			pid: process.pid,
+			version,
+			...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
+		},
+		{ type: "attached", sessionId: BOOT_HANDLE, mode: "single" },
+		{ type: "history", messages: entry.session.messages },
+		{ type: "state", state: buildStateSnapshot(entry.session), stats: entry.session.getSessionStats() },
+		// Current collab status, so a client attaching to a live room sees it immediately.
+		{ type: "collab_status", status: toWireStatus(entry.collab.adapter?.status ?? null) },
+	];
+	if (commands !== null) priming.push({ type: "available_commands", commands });
 	// Late attachers get `ready` appended to the priming sequence (R8).
-	if (readyAt !== null) send(ws, { type: "ready", readyAt });
-	void buildAvailableSlashCommands(entry.session)
-		.then(commands => sendScoped(ws, { type: "available_commands", commands }))
-		.catch(err => console.error("Failed to build available commands:", err));
+	if (readyAt !== null) priming.push({ type: "ready", readyAt });
+	for (const frame of priming) {
+		enqueueTo(consumer, encodeSseEvent(SSE_EVENT_NAME, frame, seq++));
+	}
+	const last = lastEventId === null ? NaN : Number(lastEventId);
+	if (Number.isFinite(last) && last >= SSE_DELTA_SEQ_START) {
+		for (const { value } of ring.after(last)) enqueueTo(consumer, value);
+	}
 }
 
 /**
- * Dispose the boot session and cut every socket off it. Only invoked from
- * shutdown: sockets are detached (never closed); pending ui_requests and the
- * pending login code inputs of those sockets are rejected.
+ * Open a GET /events SSE response: register the consumer (connect = attached
+ * to the single boot session, exactly like the WS open), prime it, and stream
+ * live deltas until the client goes away. The body's queuing strategy sizes
+ * chunks in bytes so backpressure is measured against SSE_BACKPRESSURE_BYTES.
+ */
+async function openEventsResponse(req: Request): Promise<Response> {
+	const entry = bootEntry!;
+	// Build slash commands before the stream opens so the priming sequence is
+	// written contiguously (seqs 1..k) with no async gap into the delta era.
+	let commands: AvailableSlashCommand[] | null = null;
+	try {
+		commands = await buildAvailableSlashCommands(entry.session);
+	} catch (err) {
+		console.error("Failed to build available commands:", err);
+	}
+	const lastEventId = req.headers.get("last-event-id");
+	let consumer: SseConsumer | undefined;
+	const stream = new ReadableStream<Uint8Array>(
+		{
+			start: controller => {
+				// The constructor's start callback types the controller as the
+				// default/byte union; this stream is built with a default
+				// source, so the default controller is the actual runtime type.
+				const c: SseConsumer = {
+					id: nextConsumerId++,
+					controller: controller as ReadableStreamDefaultController<Uint8Array>,
+					attached: null,
+					unreadEstimate: 0,
+				};
+				consumer = c;
+				streams.add(c);
+				startDaemonPoll();
+				startKeepalive();
+				// Connect = attached: a bare /events open reproduces the
+				// single-session priming sequence (the bootReady gate admits
+				// requests only after the boot session exists).
+				primeConsumer(c, entry, commands, lastEventId);
+			},
+			cancel: () => {
+				// Detach only: sessions outlive streams.
+				if (consumer) detachConsumer(consumer, "stream closed");
+			},
+		},
+		{ highWaterMark: SSE_BACKPRESSURE_BYTES, size: chunk => chunk?.byteLength ?? 0 },
+	);
+	return new Response(stream, {
+		headers: {
+			"content-type": "text/event-stream",
+			"cache-control": "no-cache",
+			"x-accel-buffering": "no",
+		},
+	});
+}
+
+/**
+ * Dispose the boot session and cut every stream off it. Only invoked from
+ * shutdown: streams are detached (never closed); pending ui_requests and the
+ * pending login code inputs of those streams are rejected.
  */
 async function closeSession(entry: SessionEntry, reason: string): Promise<void> {
 	// Collab teardown before dispose: stop the adapter (guests get a bye) and
@@ -1570,45 +1795,30 @@ async function closeSession(entry: SessionEntry, reason: string): Promise<void> 
 	await entry.session.dispose().catch(() => {});
 	rejectEntryUiRequests(entry, reason);
 	for (const [id, p] of pendingCodeInputs) {
-		if (p.ws.data.kind === "web" && p.ws.data.attached === entry.handle) {
+		let attachedHere = false;
+		for (const stream of p.streams) {
+			if (stream.attached === entry.handle) attachedHere = true;
+		}
+		if (attachedHere) {
 			p.reject(new Error(reason));
 			pendingCodeInputs.delete(id);
 		}
 	}
-	for (const ws of sockets) {
-		if (ws.data.kind === "web" && ws.data.attached === entry.handle) ws.data.attached = null;
+	for (const stream of streams) {
+		if (stream.attached === entry.handle) stream.attached = null;
 	}
 }
 
-/** The session this socket's call/login_code/ui_response commands route to. */
-function attachedEntry(ws: Ws): SessionEntry | undefined {
-	if (ws.data.kind !== "web") return undefined;
-	return ws.data.attached ? bootEntry ?? undefined : undefined;
+/** The session this command's call/login_code/ui_response route to. */
+function attachedEntry(): SessionEntry | undefined {
+	return bootEntry ?? undefined;
 }
 
-async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
-	if (ws.data.kind !== "web") return;
-	let cmd: ClientCommand;
-	try {
-		cmd = JSON.parse(String(raw)) as ClientCommand;
-	} catch {
-		if (!ws.data.authenticated) {
-			ws.close(OMP_CLOSE_UNAUTHORIZED, "unauthorized");
-			return;
-		}
-		send(ws, { type: "error", error: "Malformed command frame" });
-		return;
-	}
-	// R14: sockets that upgraded without a credential (off-loopback + token,
-	// no Authorization header / ?token=) must open with a valid hello frame.
-	if (!ws.data.authenticated && cmd.type !== "hello") {
-		ws.close(OMP_CLOSE_UNAUTHORIZED, "unauthorized");
-		return;
-	}
+async function handleCommand(cmd: ClientCommand): Promise<void> {
 	try {
 		switch (cmd.type) {
 			case "call": {
-				const entry = attachedEntry(ws);
+				const entry = attachedEntry();
 				if (!entry) throw new Error("Not attached to a session");
 				// Readiness gate (R8): prompt-family methods are rejected until
 				// the boot session's provider/model/auth resolution completes.
@@ -1618,7 +1828,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				if (!method) throw new Error(`Unknown method: ${cmd.method}`);
 				const data =
 					cmd.method === "login"
-						? await loginWithCallbacks(ws, entry, cmd.args?.[0] as string)
+						? await loginWithCallbacks(entry, cmd.args?.[0] as string)
 						: await method(entry, cmd.args ?? [], cmd.streamId);
 				// Post-mutation resync is best-effort: the mutation already
 				// succeeded, so a resync failure must not fail the call.
@@ -1635,9 +1845,9 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 					// Resync BEFORE the call_result: picker success UI (notices,
 					// modal close) must run after the transcript is replaced.
 					await resync();
-					sendScoped(ws, { type: "call_result", id: cmd.id, ok: true, data });
+					broadcastAnswer({ type: "call_result", id: cmd.id, ok: true, data });
 				} else {
-					sendScoped(ws, { type: "call_result", id: cmd.id, ok: true, data });
+					broadcastAnswer({ type: "call_result", id: cmd.id, ok: true, data });
 					await resync();
 				}
 				break;
@@ -1651,7 +1861,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				break;
 			}
 			case "ui_response": {
-				const entry = attachedEntry(ws);
+				const entry = attachedEntry();
 				const pending = entry?.pendingUiRequests.get(cmd.id);
 				if (entry && pending) {
 					entry.pendingUiRequests.delete(cmd.id);
@@ -1676,44 +1886,11 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 					}))
 					.sort((x, y) => y.modifiedAt - x.modifiedAt)
 					.slice(0, 200);
-				send(ws, { type: "sessions", sessions: sessionsList });
+				broadcastAnswer({ type: "sessions", sessions: sessionsList });
 				break;
 			}
 			case "list_files": {
-				send(ws, { type: "files", files: await listFiles(cmd.query, cmd.limit ?? 50) });
-				break;
-			}
-			case "hello": {
-				// R14 handshake: valid = proto matches AND the token matches
-				// (when one is set). Loopback clients MAY hello; valid hellos
-				// are always answered hello_ok (uniform fleet code path).
-				const valid = cmd.proto === OMP_PROTO && (config.token === undefined || cmd.token === config.token);
-				if (!valid) {
-					ws.close(OMP_CLOSE_UNAUTHORIZED, "unauthorized");
-					break;
-				}
-				if (!ws.data.authenticated) {
-					// First-frame auth succeeded: admit the socket (attach +
-					// broadcasts) exactly like an upgrade-time-authenticated one.
-					ws.data.authenticated = true;
-					const timer = helloTimers.get(ws);
-					if (timer) {
-						clearTimeout(timer);
-						helloTimers.delete(ws);
-					}
-					sockets.add(ws);
-					startDaemonPoll();
-					if (bootEntry) attachSocket(ws, bootEntry);
-				}
-				send(ws, {
-					type: "hello_ok",
-					proto: OMP_PROTO,
-					name: config.name,
-					cwd: config.cwd,
-					pid: process.pid,
-					version,
-					...(bootEntry?.session.sessionFile ? { sessionFile: bootEntry.session.sessionFile } : {}),
-				});
+				broadcastAnswer({ type: "files", files: await listFiles(cmd.query, cmd.limit ?? 50) });
 				break;
 			}
 			case "spawn":
@@ -1722,14 +1899,14 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 			case "list_projects":
 				// Fleet-edge commands on a bare omp-session (the registry lives
 				// in omp-fleet, Phase 3).
-				send(ws, { type: "error", error: "fleet-only command" });
+				broadcastAnswer({ type: "error", error: "fleet-only command" });
 				break;
 			case "get_process_stats": {
-				send(ws, { type: "process_stats", process: processStatsSnapshot() });
+				broadcastAnswer({ type: "process_stats", process: processStatsSnapshot() });
 				break;
 			}
 			case "collab_start": {
-				const entry = attachedEntry(ws);
+				const entry = attachedEntry();
 				if (!entry) throw new Error("Not attached to a session");
 				if (entry.collab.starting || entry.collab.adapter) {
 					throw new Error("collab already active for this session");
@@ -1751,7 +1928,7 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 				break;
 			}
 			case "collab_stop": {
-				const entry = attachedEntry(ws);
+				const entry = attachedEntry();
 				if (!entry) throw new Error("Not attached to a session");
 				if (entry.collab.starting) throw new Error("collab is starting");
 				const adapter = entry.collab.adapter;
@@ -1778,9 +1955,9 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 						timeoutMs: 30_000,
 					});
 					if (result.op !== "logs") throw new Error("unexpected daemon broker response");
-					send(ws, { type: "daemon_logs_result", id: cmd.id, ok: true, text: result.text, cursor: result.cursor, state: result.state });
+					broadcastAnswer({ type: "daemon_logs_result", id: cmd.id, ok: true, text: result.text, cursor: result.cursor, state: result.state });
 				} catch (err) {
-					send(ws, { type: "daemon_logs_result", id: cmd.id, ok: false, error: String(err) });
+					broadcastAnswer({ type: "daemon_logs_result", id: cmd.id, ok: false, error: String(err) });
 				}
 				break;
 			}
@@ -1789,9 +1966,9 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 					const client = await daemonClientForProject(cmd.projectDir);
 					const result = await client.request({ op: "stop", name: cmd.name, timeoutMs: cmd.timeoutMs ?? 10_000 });
 					if (result.op !== "stop") throw new Error("unexpected daemon broker response");
-					send(ws, { type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
+					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
 				} catch (err) {
-					send(ws, { type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
+					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
 				}
 				break;
 			}
@@ -1800,9 +1977,9 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 					const client = await daemonClientForProject(cmd.projectDir);
 					const result = await client.request({ op: "restart", name: cmd.name });
 					if (result.op !== "restart") throw new Error("unexpected daemon broker response");
-					send(ws, { type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
+					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
 				} catch (err) {
-					send(ws, { type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
+					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
 				}
 				break;
 			}
@@ -1811,11 +1988,11 @@ async function handleCommand(ws: Ws, raw: string | Buffer): Promise<void> {
 		}
 	} catch (err) {
 		if (cmd.type === "call") {
-			const entry = attachedEntry(ws);
-			if (entry) sendScoped(ws, { type: "call_result", id: cmd.id, ok: false, error: String(err) });
-			else send(ws, { type: "error", error: String(err) });
+			const entry = attachedEntry();
+			if (entry) broadcastAnswer({ type: "call_result", id: cmd.id, ok: false, error: String(err) });
+			else broadcastAnswer({ type: "error", error: String(err) });
 		} else {
-			send(ws, { type: "error", error: String(err) });
+			broadcastAnswer({ type: "error", error: String(err) });
 		}
 	}
 }
@@ -1875,37 +2052,91 @@ function bearerOk(req: Request): boolean {
 	return new URL(req.url).searchParams.get("token") === config.token;
 }
 
+/**
+ * R14 gate for the agent-driving endpoints (/events, /command): loopback is
+ * exempt; off-loopback peers need the bearer token via Authorization header
+ * or ?token=. A missing or wrong credential is a 401 — no hello window, no
+ * close codes.
+ */
+function r14Authorized(req: Request, srv: Server<SocketData>): boolean {
+	if (isLoopbackIp(srv.requestIP(req)?.address)) return true;
+	if (!config.token) return true;
+	const header = req.headers.get("authorization");
+	if (header !== null && header.toLowerCase() === `bearer ${config.token.toLowerCase()}`) return true;
+	return new URL(req.url).searchParams.get("token") === config.token;
+}
+
+/**
+ * POST /command idempotency: re-accept duplicates of a command id within
+ * COMMAND_DEDUP_WINDOW_MS (capped at COMMAND_DEDUP_CAP remembered ids)
+ * without re-dispatching. The client's replay covers any lost answer.
+ */
+const commandDedup = new Map<string, number>();
+
+function commandSeenRecently(id: string | undefined): boolean {
+	if (typeof id !== "string" || id.length === 0) return false;
+	const now = Date.now();
+	for (const [key, at] of commandDedup) {
+		if (now - at > COMMAND_DEDUP_WINDOW_MS) commandDedup.delete(key);
+	}
+	if (commandDedup.has(id)) return true;
+	commandDedup.set(id, now);
+	if (commandDedup.size > COMMAND_DEDUP_CAP) {
+		let oldestKey: string | undefined;
+		let oldestAt = Infinity;
+		for (const [key, at] of commandDedup) {
+			if (at < oldestAt) {
+				oldestAt = at;
+				oldestKey = key;
+			}
+		}
+		if (oldestKey !== undefined) commandDedup.delete(oldestKey);
+	}
+	return false;
+}
+
 const server = Bun.serve<SocketData>({
 	port: config.port,
 	hostname: config.host,
+	// SSE responses are long-lived and quiet between 15s keepalive pings;
+	// Bun's default 10s fetch idleTimeout would kill them mid-stream.
+	idleTimeout: 0,
 	async fetch(req, srv) {
 		// Boot gate: the OMP_SESSION| listening line prints before the boot session
-		// exists; the first requests (and /ws upgrades) wait for registration
-		// so connect-implies-attached holds for sockets that race boot.
+		// exists; the first requests (and /events opens) wait for registration
+		// so connect-implies-attached holds for streams that race boot.
 		await bootReady;
 		const url = new URL(req.url);
 		// Collab relay rooms (/r/<roomId>?role=host|guest) upgrade here; the
 		// relay returns false for every other pathname so web handling continues.
 		if (relay.handleUpgrade(url, srv, req)) return;
-		// R14: off-loopback peers need the bearer token; loopback is exempt.
-		const loopback = isLoopbackIp(srv.requestIP(req)?.address);
-		if (url.pathname === "/ws") {
-			if (!loopback && config.token) {
-				const header = req.headers.get("authorization");
-				const headerOk = header !== null && header.toLowerCase() === `bearer ${config.token.toLowerCase()}`;
-				const queryOk = url.searchParams.get("token") === config.token;
-				// A wrong header is rejected outright; a missing one upgrades
-				// unauthenticated and must complete the hello handshake (clients
-				// that can't set headers, e.g. browsers).
-				if (header !== null && !headerOk) return new Response("Unauthorized", { status: 401 });
-				if (srv.upgrade(req, { data: { kind: "web", attached: null, authenticated: headerOk || queryOk } })) return;
-				return new Response("WebSocket upgrade failed", { status: 400 });
+		// Agent-driving transport (OMP_PROTO 2): GET /events down (SSE),
+		// POST /command up (one ClientCommand per request, 202 accept).
+		if (url.pathname === "/events") {
+			if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
+			return openEventsResponse(req);
+		}
+		if (url.pathname === "/command") {
+			if (req.method !== "POST") return new Response("Not found", { status: 404 });
+			if (!r14Authorized(req, srv)) return new Response("Unauthorized", { status: 401 });
+			markActivity();
+			let cmd: ClientCommand;
+			try {
+				cmd = JSON.parse(await req.text()) as ClientCommand;
+			} catch {
+				return new Response("Malformed JSON", { status: 400 });
 			}
-			if (srv.upgrade(req, { data: { kind: "web", attached: null, authenticated: true } })) return;
-			return new Response("WebSocket upgrade failed", { status: 400 });
+			// Idempotent accept: a duplicate id is 202 without a re-dispatch.
+			if (commandSeenRecently(cmd.id)) {
+				return Response.json({ commandId: cmd.id }, { status: 202 });
+			}
+			// Fire-and-forget accept: answers ride the /events stream only.
+			void handleCommand(cmd).catch(err => console.error("command dispatch failed:", err));
+			return Response.json({ commandId: cmd.id }, { status: 202 });
 		}
 		// /download and static: off-loopback requests require the token too when
 		// one is set (Authorization header or ?token= — downloads are plain fetch).
+		const loopback = isLoopbackIp(srv.requestIP(req)?.address);
 		if (!loopback && config.token && !bearerOk(req)) return new Response("Unauthorized", { status: 401 });
 		if (url.pathname === "/download") {
 			const requested = url.searchParams.get("path");
@@ -1939,67 +2170,17 @@ const server = Bun.serve<SocketData>({
 		return new Response(file);
 	},
 	websocket: {
+		// Only collab relay sockets reach these handlers: the agent-driving
+		// channel is SSE (/events) + POST (/command), and the relay's own
+		// handlers are defensive against non-relay sockets.
 		open(ws) {
-			if (ws.data.kind === "relay") {
-				relay.handleOpen(ws);
-				return;
-			}
-			if (!ws.data.authenticated) {
-				// R14 hello fallback: the token must arrive as the first frame
-				// inside the window, else the socket is closed 4001.
-				const timer = setTimeout(() => {
-					const data = ws.data;
-					if (data.kind === "web" && !data.authenticated) ws.close(OMP_CLOSE_UNAUTHORIZED, "unauthorized");
-					helloTimers.delete(ws);
-				}, HELLO_WINDOW_MS);
-				helloTimers.set(ws, timer);
-				return;
-			}
-			sockets.add(ws);
-			startDaemonPoll();
-			// Connect = attached: a bare WS open reproduces the single-session
-			// priming sequence (the bootReady gate admits upgrades only after
-			// the boot session exists).
-			if (bootEntry) attachSocket(ws, bootEntry);
+			if (ws.data.kind === "relay") relay.handleOpen(ws);
 		},
 		close(ws) {
-			if (ws.data.kind === "relay") {
-				relay.handleClose(ws);
-				return;
-			}
-			const timer = helloTimers.get(ws);
-			if (timer) {
-				clearTimeout(timer);
-				helloTimers.delete(ws);
-			}
-			// Detach only: sessions outlive sockets.
-			sockets.delete(ws);
-			if (sockets.size === 0) stopDaemonPoll();
-			ws.data.attached = null;
-			for (const [id, p] of pendingCodeInputs) {
-				if (p.ws === ws) {
-					p.reject(new Error("socket closed"));
-					pendingCodeInputs.delete(id);
-				}
-			}
-			// A UI request dies only when every socket it was shown to is gone.
-			if (bootEntry) {
-				for (const [id, p] of bootEntry.pendingUiRequests) {
-					p.sockets.delete(ws);
-					if (p.sockets.size === 0) {
-						p.reject(new Error("socket closed"));
-						bootEntry.pendingUiRequests.delete(id);
-					}
-				}
-			}
+			if (ws.data.kind === "relay") relay.handleClose(ws);
 		},
 		message(ws, raw) {
-			if (ws.data.kind === "relay") {
-				relay.handleMessage(ws, raw);
-				return;
-			}
-			markActivity();
-			void handleCommand(ws, raw);
+			if (ws.data.kind === "relay") relay.handleMessage(ws, raw);
 		},
 	},
 });
@@ -2089,7 +2270,7 @@ void bootReadiness(bootEntry);
 // ---------------------------------------------------------------------------
 
 function isIdleSuppressed(): boolean {
-	if (sockets.size > 0) return true;
+	if (streams.size > 0) return true;
 	if (inFlightBash > 0 || inFlightPython > 0) return true;
 	if (bootEntry) {
 		if (bootEntry.session.isStreaming) return true;

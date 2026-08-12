@@ -1,20 +1,28 @@
 /**
- * DaemonConnector tests. A fake omp-session (Bun.serve speaking the hello_ok /
- * state / ready / event frame protocol) stands in for a real daemon; the
- * connector dials it over loopback with the bearer token on the upgrade.
+ * DaemonConnector tests. A fake omp-session (Bun.serve speaking the /events
+ * SSE + /command POST protocol) stands in for a real daemon; the connector
+ * dials it over loopback with the bearer token on the Authorization header.
  * Covers the status machine, cwd sanity, lastSessionFile tracking, clean vs
- * unexpected close (backoff redial + caps), idle-drop, waitReady, and frame
- * fan-out. All timers are shrunk via connector opts so tests stay fast.
+ * unexpected stream end (backoff redial + caps), 401-terminal auth, silence
+ * deadline (with and without keepalives: ping event and raw comment), idle-drop, waitReady,
+ * Last-Event-ID resume, and frame fan-out. All timers are shrunk via
+ * connector opts so tests stay fast.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Server, ServerWebSocket } from "bun";
-import { OMP_PROTO, type ClientCommand } from "../src/protocol";
-import { DaemonConnector, type ConnectorEvents } from "./connector";
+import type { Server } from "bun";
+import {
+	OMP_PROTO,
+	SSE_DELTA_SEQ_START,
+	SSE_EVENT_NAME,
+	SSE_RING_CAP,
+	type ClientCommand,
+} from "../src/protocol";
+import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "../src/sse";
+import { DaemonConnector, daemonHttpBase, type ConnectorEvents } from "./connector";
 import { Registry, type RegistryEntry } from "./registry";
 
 const tmpDirs: string[] = [];
@@ -64,34 +72,6 @@ async function loadedRegistry(statePath: string): Promise<Registry> {
 	return registry;
 }
 
-interface FakeServer {
-	server: Server<undefined>;
-	port: number;
-	url: string;
-	/** Upgrades observed (each = one dial that reached the server). */
-	openCount: number;
-	openTimes: number[];
-	headers: Array<Record<string, string>>;
-	serverSockets: ServerWebSocket[];
-	/** Server-side close observations: { code } (code = the close frame code). */
-	serverCloses: Array<{ code: number }>;
-	/** Ping frame payloads received from clients (LIVENESS keepalive). */
-	pings: string[];
-	received: unknown[];
-	stop(): void;
-}
-
-interface FakeOptions {
-	hello?: Record<string, unknown>;
-	/** Prime state + ready on open (default true). */
-	prime?: boolean;
-	/** When true: nothing on open; the hello answer is followed by state+ready
-	 * in order (exercises the session → resolving → ready ladder sequence). */
-	primeOnHello?: boolean;
-	onOpen?: (fake: FakeServer, ws: ServerWebSocket) => void;
-	onMessage?: (fake: FakeServer, ws: ServerWebSocket, frame: unknown) => void;
-}
-
 const HELLO_CWD = "/srv/proj";
 
 /** hello_ok frame with the test's default cwd/sessionFile, overridable. */
@@ -107,20 +87,81 @@ function helloFrame(overrides: Record<string, unknown> = {}): Record<string, unk
 	};
 }
 
-/** Prime sequence on open: state (sessionFile) → ready. hello_ok is NOT
- * primed — like the real omp-session, it is answered to the connector's hello. */
-function prime(ws: ServerWebSocket, opts: { ready?: boolean } = {}): void {
-	ws.send(
-		JSON.stringify({
-			type: "state",
-			sessionId: "s1",
-			state: { sessionId: "s1", sessionFile: "/srv/proj/sess.jsonl", isStreaming: false },
-		}),
-	);
-	if (opts.ready !== false) ws.send(JSON.stringify({ type: "ready", readyAt: Date.now() }));
+/** The attach-priming state frame (sessionFile from the daemon). */
+function stateFrame(sessionFile = "/srv/proj/sess.jsonl"): Record<string, unknown> {
+	return {
+		type: "state",
+		sessionId: "s1",
+		state: { sessionId: "s1", sessionFile, isStreaming: false },
+	};
+}
+
+/** One open /events stream on the fake. */
+interface FakeStream {
+	/** Push a delta frame: ring-recorded with a seq from the fake's delta counter. */
+	send(frame: unknown): void;
+	/** Push a frame with an explicit seq (priming / ring replay). */
+	write(frame: unknown, seq: number): void;
+	/** Push the keepalive ping event (liveness only, never a frame). */
+	comment(): void;
+	/** Push a raw `: ping` comment (legacy liveness shape; parseSseUnits still surfaces it). */
+	commentLine(): void;
+	/** Cleanly end the stream (the daemon closed it — clean close). */
+	close(): void;
+	/** Abruptly error the stream (unexpected close). */
+	error(): void;
+	/** Optional cleanup hook, invoked when the client disconnects. */
+	onEnd?: () => void;
+	/** Internal: true once the stream has been closed (broadcast skips it). */
+	closed?: boolean;
+}
+
+interface FakeServer {
+	server: Server<undefined>;
+	port: number;
+	/** Registered endpoint: pathless ws:// (the connector maps it to http). */
+	url: string;
+	/** /events opens observed (each = one dial that reached the server). */
+	openCount: number;
+	openTimes: number[];
+	headers: Array<Record<string, string>>;
+	streams: FakeStream[];
+	/** Client aborts observed server-side (client disconnect). */
+	serverCloses: number;
+	/** POST /command bodies received. */
+	received: unknown[];
+	/** Delta ring for Last-Event-ID replay (daemon-side). */
+	ring: SseRing<unknown>;
+	/** Delta seq counter: deltas start at SSE_DELTA_SEQ_START. */
+	nextSeq: number;
+	/** Ring entries replayed per stream open (after priming). */
+	replayCounts: number[];
+	/** Push one delta: ring-recorded AND delivered to every open stream. */
+	broadcast(frame: unknown): void;
+	/** When set, /events 401s unless the bearer token matches. */
+	expectedToken?: string;
+	stop(): void;
+}
+
+interface FakeOptions {
+	hello?: Record<string, unknown>;
+	/** Prime hello_ok → state → ready on open (default true). */
+	prime?: boolean;
+	onOpen?: (fake: FakeServer, stream: FakeStream) => void;
+	onCommand?: (fake: FakeServer, stream: FakeStream, frame: unknown) => void;
+	/** When set, /events 401s unless the bearer token matches. */
+	expectedToken?: string;
+}
+
+/** Prime sequence on open: hello_ok (seq 1) → state (2) → ready (3). */
+function prime(stream: FakeStream, opts: { ready?: boolean; hello?: Record<string, unknown> } = {}): void {
+	stream.write(helloFrame(opts.hello), 1);
+	stream.write(stateFrame(), 2);
+	if (opts.ready !== false) stream.write({ type: "ready", readyAt: Date.now() }, 3);
 }
 
 function startFake(opts: FakeOptions = {}): FakeServer {
+	const encoder = new TextEncoder();
 	const fake: FakeServer = {
 		server: null as unknown as Server<undefined>,
 		port: 0,
@@ -128,55 +169,107 @@ function startFake(opts: FakeOptions = {}): FakeServer {
 		openCount: 0,
 		openTimes: [],
 		headers: [],
-		serverSockets: [],
-		serverCloses: [],
-		pings: [],
+		streams: [],
+		serverCloses: 0,
 		received: [],
+		ring: new SseRing<unknown>(SSE_RING_CAP),
+		nextSeq: SSE_DELTA_SEQ_START,
+		replayCounts: [],
+		broadcast(frame) {
+			const seq = fake.nextSeq++;
+			fake.ring.push(seq, frame);
+			for (const stream of fake.streams) {
+				if (!stream.closed) stream.write(frame, seq);
+			}
+		},
 		stop() {
 			this.server.stop(true);
 		},
 	};
+	fake.expectedToken = opts.expectedToken;
 	fake.server = Bun.serve({
 		port: 0,
 		hostname: "127.0.0.1",
-		fetch(req, srv) {
+		fetch(req) {
+			const url = new URL(req.url);
+			if (url.pathname === "/command") {
+				return (async () => {
+					let frame: unknown;
+					try {
+						frame = await req.json();
+					} catch {
+						return new Response("malformed", { status: 400 });
+					}
+					fake.received.push(frame);
+					const stream = fake.streams.at(-1);
+					const id = (frame as { id?: string }).id ?? "";
+					if (stream && opts.onCommand) opts.onCommand(fake, stream, frame);
+					return Response.json({ commandId: id }, { status: 202 });
+				})();
+			}
+			if (url.pathname !== "/events") return new Response("not found", { status: 404 });
 			fake.openCount++;
 			fake.openTimes.push(Date.now());
-			fake.headers.push(Object.fromEntries(req.headers.entries()));
-			if (!srv.upgrade(req)) return new Response("upgrade failed", { status: 500 });
-		},
-		websocket: {
-			open(ws) {
-				fake.serverSockets.push(ws);
-				if (opts.onOpen) opts.onOpen(fake, ws);
-				else if (opts.prime !== false && !opts.primeOnHello) prime(ws);
-			},
-			message(ws, message) {
-				let frame: unknown;
-				try {
-					frame = JSON.parse(String(message));
-				} catch {
-					return;
-				}
-				// Real omp-session behavior: a hello is answered hello_ok and is not
-				// part of the command stream (received stays call-frames only).
-				if (typeof frame === "object" && frame !== null && "type" in frame && frame.type === "hello") {
-					ws.send(JSON.stringify(helloFrame(opts.hello)));
-					if (opts.primeOnHello) prime(ws);
-					return;
-				}
-				fake.received.push(frame);
-				opts.onMessage?.(fake, ws, frame);
-			},
-			close(ws, code) {
-				fake.serverCloses.push({ code });
-			},
-			ping(ws, data) {
-				// Bun.serve surfaces client ping frames here; the server
-				// auto-pongs (sendPings default), which is exactly the
-				// responsive-peer behavior the keepalive relies on.
-				fake.pings.push(data.toString());
-			},
+			const headers = Object.fromEntries(req.headers.entries());
+			fake.headers.push(headers);
+			if (fake.expectedToken && headers.authorization !== `Bearer ${fake.expectedToken}`) {
+				return new Response("unauthorized", { status: 401 });
+			}
+			const lastId = Number(headers["last-event-id"]);
+			const wantsReplay = Number.isFinite(lastId) && lastId >= SSE_DELTA_SEQ_START;
+			let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+			let closeRecorded = false;
+			const recordClose = (): void => {
+				if (closeRecorded) return;
+				closeRecorded = true;
+				fake.serverCloses++;
+				stream.onEnd?.();
+			};
+			const stream: FakeStream = {
+				send(frame) {
+					const seq = fake.nextSeq++;
+					fake.ring.push(seq, frame);
+					controller!.enqueue(encoder.encode(encodeSseEvent(SSE_EVENT_NAME, frame, seq)));
+				},
+				write(frame, seq) {
+					controller!.enqueue(encoder.encode(encodeSseEvent(SSE_EVENT_NAME, frame, seq)));
+				},
+				comment() {
+					controller!.enqueue(encoder.encode(SSE_PING_BLOCK));
+				},
+				commentLine() {
+					controller!.enqueue(encoder.encode(": ping\n\n"));
+				},
+				close() {
+					stream.closed = true;
+					controller!.close();
+				},
+				error() {
+					controller!.error(new Error("stream aborted"));
+				},
+			};
+			const body = new ReadableStream<Uint8Array>({
+				start(ctrl) {
+					controller = ctrl;
+					fake.streams.push(stream);
+					req.signal.addEventListener("abort", recordClose);
+					if (opts.onOpen) opts.onOpen(fake, stream);
+					else if (opts.prime !== false) prime(stream, { hello: opts.hello });
+					// Ring replay AFTER priming (wire contract); replayed entries
+					// keep their original seqs.
+					if (wantsReplay) {
+						const replayed = fake.ring.after(lastId);
+						fake.replayCounts.push(replayed.length);
+						for (const { seq, value } of replayed) stream.write(value, seq);
+					} else {
+						fake.replayCounts.push(0);
+					}
+				},
+				cancel() {
+					recordClose();
+				},
+			});
+			return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
 		},
 	});
 	fake.port = fake.server.port ?? 0;
@@ -189,25 +282,34 @@ function makeConnector(registry: Registry, events?: ConnectorEvents): DaemonConn
 	return new DaemonConnector(registry, events, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
 }
 
+/** SSE chunk-wrapping for the raw crash server's HTTP/1.1 chunked body. */
+function chunked(text: string): string {
+	const bytes = Buffer.from(text, "utf8");
+	return bytes.length.toString(16) + "\r\n" + text + "\r\n";
+}
+
 /**
- * A minimal raw-TCP WebSocket server that completes the upgrade handshake
- * and then NEVER answers ping frames. Bun.serve cannot fake a silent peer:
- * its ping→pong auto-response is hardwired (verified with sendPings:false),
- * so the silent-peer keepalive test speaks the WS protocol directly.
- * Client frames are masked per RFC 6455; opcode 0x9 = ping, 0x8 = close.
+ * A minimal raw HTTP/1.1 SSE server that ends the connection mid-chunked-body
+ * (like a real daemon crash): the client's body read rejects with a network
+ * error — the "unexpected close" the connector maps to reconnecting. Bun.serve
+ * cannot fake this: its fetch handler closes even errored response streams
+ * cleanly (scratch-verified), which the connector would read as a dormant
+ * daemon and go asleep.
  */
-function startSilentWsServer() {
+function startCrashServer(opts: { primeHello?: boolean } = {}) {
 	interface Conn {
 		buf: Buffer;
 		handshakeDone: boolean;
-		pings: number;
-		closed: boolean;
 	}
 	const connections: Conn[] = [];
+	const openTimes: number[] = [];
 	const server = Bun.listen<Conn>({
 		hostname: "127.0.0.1",
 		port: 0,
 		socket: {
+			open(socket) {
+				socket.data = { buf: Buffer.alloc(0), handshakeDone: false } satisfies Conn;
+			},
 			data(socket, data) {
 				const conn = socket.data;
 				const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
@@ -215,49 +317,31 @@ function startSilentWsServer() {
 				if (!conn.handshakeDone) {
 					const headerEnd = conn.buf.indexOf("\r\n\r\n");
 					if (headerEnd === -1) return;
-					const head = conn.buf.subarray(0, headerEnd).toString("utf8");
 					conn.buf = conn.buf.subarray(headerEnd + 4);
 					conn.handshakeDone = true;
-					const key = /Sec-WebSocket-Key:\s*([^\r\n]+)/i.exec(head)?.[1]?.trim() ?? "";
-					const accept = createHash("sha1")
-						.update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
-						.digest("base64");
-					socket.write(
-						`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
-					);
+					connections.push(conn);
+					openTimes.push(Date.now());
+					let out = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+					if (opts.primeHello) out += chunked(encodeSseEvent(SSE_EVENT_NAME, helloFrame(), 1));
+					socket.write(out);
+					// Crash: FIN mid-body without the terminating 0-chunk. The
+					// client's next read rejects → the connector redials.
+					setTimeout(() => {
+						try {
+							socket.end();
+						} catch {
+							// Already closed.
+						}
+					}, 2);
 				}
-				for (;;) {
-					if (conn.buf.length < 2) return;
-					const opcode = conn.buf[0]! & 0x0f;
-					let len = conn.buf[1]! & 0x7f;
-					let offset = 2;
-					if (len === 126) {
-						if (conn.buf.length < 4) return;
-						len = conn.buf.readUInt16BE(2);
-						offset = 4;
-					} else if (len === 127) {
-						if (conn.buf.length < 10) return;
-						len = Number(conn.buf.readBigUInt64BE(2));
-						offset = 10;
-					}
-					if (conn.buf.length < offset + 4 + len) return; // 4 mask bytes
-					if (opcode === 0x9) conn.pings++;
-					else if (opcode === 0x8) socket.write(Buffer.from([0x88, 0x00])); // close echo
-					conn.buf = conn.buf.subarray(offset + 4 + len);
-				}
-			},
-			open(socket) {
-				socket.data = { buf: Buffer.alloc(0), handshakeDone: false, pings: 0, closed: false } satisfies Conn;
-				connections.push(socket.data);
-			},
-			close(socket) {
-				socket.data.closed = true;
 			},
 		},
 	});
 	return {
 		url: `ws://127.0.0.1:${server.port}`,
 		connections,
+		openTimes,
+		openCount: () => connections.length,
 		stop: () => {
 			server.stop(true);
 		},
@@ -265,8 +349,15 @@ function startSilentWsServer() {
 }
 
 describe("DaemonConnector", () => {
+	test("daemonHttpBase derives the origin base for /events and /command", () => {
+		expect(daemonHttpBase("ws://127.0.0.1:4721")).toBe("http://127.0.0.1:4721");
+		expect(daemonHttpBase("wss://omp.example.com:9443")).toBe("https://omp.example.com:9443");
+		expect(daemonHttpBase("ws://host:8000/ws")).toBe("http://host:8000");
+		expect(daemonHttpBase("http://host:8000")).toBe("http://host:8000");
+	});
+
 	test("status machine: connecting → session → resolving → ready; auth header; lastSessionFile", async () => {
-		const fake = startFake({ hello: { sessionFile: "/srv/proj/hello.sess" }, primeOnHello: true });
+		const fake = startFake({ hello: { sessionFile: "/srv/proj/hello.sess" } });
 		const registry = await loadedRegistry(tmpStatePath());
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-1", mode: "attached" }));
 		const statuses: string[] = [];
@@ -296,6 +387,22 @@ describe("DaemonConnector", () => {
 		fake.stop();
 	});
 
+	test("hello_ok.proto mismatch (protocol drift) → error, no redial", async () => {
+		const fake = startFake({ hello: { proto: 1 } });
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
+		const connector = makeConnector(registry);
+		connector.connect(entry.daemonId);
+		await waitFor(() => registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null, 2000, "error");
+		const updated = registry.get(entry.daemonId)!;
+		expect(updated.error).toContain("proto mismatch");
+		expect(updated.status).toBe("error");
+		await sleep(150);
+		expect(fake.openCount).toBe(1); // error is terminal: no reconnect churn
+		await connector.close();
+		fake.stop();
+	});
+
 	test("hello_ok.cwd mismatch → error, no redial", async () => {
 		const fake = startFake({ hello: { cwd: "/elsewhere" } });
 		const registry = await loadedRegistry(tmpStatePath());
@@ -312,11 +419,11 @@ describe("DaemonConnector", () => {
 		fake.stop();
 	});
 
-	test("clean close (1000) → asleep, no redial", async () => {
+	test("clean stream end → asleep, no redial", async () => {
 		const fake = startFake({
-			onOpen: (fake, ws) => {
-				prime(ws);
-				ws.close(1000, "idle");
+			onOpen: (_fake, stream) => {
+				prime(stream);
+				stream.close();
 			},
 		});
 		const registry = await loadedRegistry(tmpStatePath());
@@ -331,43 +438,55 @@ describe("DaemonConnector", () => {
 		fake.stop();
 	});
 
-	test("unexpected close → reconnecting with redial; backoff stays capped", async () => {
-		const fake = startFake({
-			onOpen: (fake, ws) => {
-				ws.send(JSON.stringify(helloFrame()));
-				ws.close(1011, "crash");
-			},
-		});
+	test("unexpected stream end → reconnecting with redial; backoff stays capped", async () => {
+		const crash = startCrashServer({ primeHello: true });
 		const registry = await loadedRegistry(tmpStatePath());
-		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "remote" }));
+		const entry = registry.create(baseInit({ endpoint: crash.url, token: "tok", mode: "remote" }));
 		const statuses: string[] = [];
 		const connector = makeConnector(registry, { onStatus: (e) => statuses.push(e.status) });
 		connector.connect(entry.daemonId);
 		// Unbounded exponential backoff would take ~10s to reach 10 dials at
 		// min=10ms; reaching 10 here within 5s proves the 50ms cap holds.
-		await waitFor(() => (fake.openCount >= 10 ? "dialed" : null), 5000, "10 redials");
+		await waitFor(() => (crash.openCount() >= 10 ? "dialed" : null), 5000, "10 redials");
 		expect(statuses).toContain("reconnecting");
 		const gaps: number[] = [];
-		for (let i = 1; i < fake.openTimes.length; i++) gaps.push(fake.openTimes[i] - fake.openTimes[i - 1]);
+		for (let i = 1; i < crash.openTimes.length; i++) gaps.push(crash.openTimes[i] - crash.openTimes[i - 1]);
 		expect(Math.max(...gaps)).toBeLessThanOrEqual(120); // 50ms cap × 1.5 jitter + slack
 		await connector.close();
-		fake.stop();
+		crash.stop();
 	});
 
-	test("dial failure (close before hello) fires onDialFailed and keeps redialing", async () => {
-		const fake = startFake({
-			onOpen: (fake, ws) => {
-				ws.close(1011, "boom"); // never a hello_ok
-			},
-		});
+	test("dial failure (crash before hello) fires onDialFailed and keeps redialing", async () => {
+		const crash = startCrashServer();
 		const registry = await loadedRegistry(tmpStatePath());
-		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "spawned" }));
+		const entry = registry.create(baseInit({ endpoint: crash.url, token: "tok", mode: "spawned" }));
 		let dialFailed = 0;
 		const connector = makeConnector(registry, { onDialFailed: () => dialFailed++ });
 		connector.connect(entry.daemonId);
-		await waitFor(() => (fake.openCount >= 3 ? "dialed" : null), 3000, "3 dials");
+		await waitFor(() => (crash.openCount() >= 3 ? "dialed" : null), 3000, "3 dials");
 		expect(dialFailed).toBeGreaterThanOrEqual(1);
 		expect(registry.get(entry.daemonId)?.status).toBe("reconnecting");
+		await connector.close();
+		crash.stop();
+	});
+
+	test("401 on /events (wrong token) → terminal error, no reconnect loop", async () => {
+		const fake = startFake({ expectedToken: "right" });
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "wrong", mode: "spawned" }));
+		let dialFailed = 0;
+		const connector = makeConnector(registry, { onDialFailed: () => dialFailed++ });
+		connector.connect(entry.daemonId);
+		await waitFor(() => registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null, 2000, "error");
+		const updated = registry.get(entry.daemonId)!;
+		expect(updated.error).toContain("401");
+		expect(updated.status).toBe("error");
+		expect(connector.isConnected(entry.daemonId)).toBe(false);
+		await sleep(150);
+		expect(fake.openCount).toBe(1); // auth errors are terminal: no redial churn
+		await expect(connector.waitReady(entry.daemonId, 200)).rejects.toThrow(/401/);
+		// The respawn path fires once so a fresh token can be issued.
+		expect(dialFailed).toBe(1);
 		await connector.close();
 		fake.stop();
 	});
@@ -384,7 +503,7 @@ describe("DaemonConnector", () => {
 		fake.stop();
 
 		// Timeout: the fake never sends ready.
-		const slow = startFake({ onOpen: (_fake, ws) => prime(ws, { ready: false }) });
+		const slow = startFake({ onOpen: (_fake, stream) => prime(stream, { ready: false }) });
 		const registry2 = await loadedRegistry(tmpStatePath());
 		const entry2 = registry2.create(baseInit({ endpoint: slow.url, token: "tok", mode: "attached" }));
 		const connector2 = makeConnector(registry2);
@@ -405,7 +524,7 @@ describe("DaemonConnector", () => {
 		bad.stop();
 	});
 
-	test("waitReady ignores a stale ready status with no live socket; a fresh dial resolves it", async () => {
+	test("waitReady ignores a stale ready status with no live stream; a fresh dial resolves it", async () => {
 		// Regression: waitReady short-circuited on the registry's "ready" even
 		// after an idle-drop removed the socket, so promptEntry's send() hit a
 		// dead connection ("daemon not connected").
@@ -415,7 +534,7 @@ describe("DaemonConnector", () => {
 		const connector = makeConnector(registry);
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 2000);
-		// Idle policy drop: socket gone, registry status stays "ready".
+		// Idle policy drop: stream gone, registry status stays "ready".
 		connector.disconnect(entry.daemonId);
 		expect(connector.isConnected(entry.daemonId)).toBe(false);
 		expect(registry.get(entry.daemonId)?.status).toBe("ready");
@@ -426,7 +545,7 @@ describe("DaemonConnector", () => {
 		});
 		await sleep(150);
 		expect(resolved).toBe(false);
-		// ...until a fresh dial's ready frame arrives over a live socket.
+		// ...until a fresh dial's ready frame arrives over a live stream.
 		connector.connect(entry.daemonId);
 		await pending;
 		expect(resolved).toBe(true);
@@ -435,43 +554,40 @@ describe("DaemonConnector", () => {
 		fake.stop();
 	});
 
-	test("real omp-session frame order (state+ready before hello_ok) never downgrades from ready", async () => {
-		// The real omp-session sends its attach priming (history/state, and ready when
-		// the gate already cleared) immediately on upgrade — BEFORE it answers
-		// the connector's hello. The ladder must ignore the late session signal.
-		const fake = startFake({
-			onOpen: (_fake, ws) => {
-				ws.send(
-					JSON.stringify({
-						type: "state",
-						sessionId: "s1",
-						state: { sessionId: "s1", sessionFile: "/srv/proj/sess.jsonl", isStreaming: false },
-					}),
-				);
-				ws.send(JSON.stringify({ type: "ready", readyAt: Date.now() }));
-			},
-		});
+	test("replayed/stale frames after ready never downgrade (ring replay)", async () => {
+		// A reconnect's ring replay can re-deliver frames the connector already
+		// acted on (hello_ok, state). The ladder must stay put at ready and the
+		// status history must show exactly the canonical rungs.
+		const fake = startFake();
 		const registry = await loadedRegistry(tmpStatePath());
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
 		const statuses: string[] = [];
 		const connector = makeConnector(registry, { onStatus: (e) => statuses.push(e.status) });
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 2000);
-		// Give the hello_ok (answered to our hello) time to arrive and be processed.
-		await sleep(150);
+		// Replayed deltas: a duplicate hello_ok and an older state frame.
+		const stream = fake.streams[0]!;
+		stream.send(helloFrame());
+		stream.send(stateFrame());
+		await sleep(100);
 		expect(registry.get(entry.daemonId)?.status).toBe("ready");
-		// Early state/ready frames only mark progress; the validated hello_ok
-		// replays straight to ready (no resolving/session regressions).
-		expect(statuses).toEqual(["connecting", "ready"]);
+		// The ladder must never regress: after the first ready, every
+		// subsequent transition is a re-announcement of ready (the replayed
+		// hello_ok replays the furthest ladder position), never a downgrade.
+		const firstReady = statuses.indexOf("ready");
+		expect(statuses.slice(firstReady).every((s) => s === "ready")).toBe(true);
 		// Side effects still landed even though the status did not downgrade.
 		expect(registry.get(entry.daemonId)?.lastSessionFile).toBe("/srv/proj/sess.jsonl");
 		await connector.close();
 		fake.stop();
 	});
 
-	test("onFrame fans out to multiple listeners; unsubscribe works", async () => {		const fake = startFake({
-			onMessage: (fake, ws) => {
-				ws.send(JSON.stringify({ type: "event", sessionId: "s1", event: { type: "notice", level: "info", message: "hi" } }));
+	test("onFrame fans out to multiple listeners; unsubscribe works", async () => {
+		const fake = startFake({
+			onCommand: (_fake, stream, frame) => {
+				if ((frame as { type?: string }).type === "call") {
+					stream.send({ type: "event", sessionId: "s1", event: { type: "notice", level: "info", message: "hi" } });
+				}
 			},
 		});
 		const registry = await loadedRegistry(tmpStatePath());
@@ -504,7 +620,7 @@ describe("DaemonConnector", () => {
 		await connector.waitReady(entry.daemonId, 2000);
 		connector.retain(entry.daemonId);
 		connector.release(entry.daemonId);
-		await waitFor(() => (fake.serverCloses.length >= 1 ? "closed" : null), 2000, "server-observed close");
+		await waitFor(() => (fake.serverCloses >= 1 ? "closed" : null), 2000, "server-observed close");
 		// Disconnect is intentional: no status change, no reconnect.
 		expect(registry.get(entry.daemonId)?.status).toBe("ready");
 		await sleep(150);
@@ -528,14 +644,14 @@ describe("DaemonConnector", () => {
 		connector.retain(entry.daemonId);
 		connector.release(entry.daemonId);
 		await sleep(150);
-		expect(fake.serverCloses).toHaveLength(0); // still retained once
+		expect(fake.serverCloses).toBe(0); // still retained once
 		connector.release(entry.daemonId);
-		await waitFor(() => (fake.serverCloses.length >= 1 ? "closed" : null), 2000, "server-observed close");
+		await waitFor(() => (fake.serverCloses >= 1 ? "closed" : null), 2000, "server-observed close");
 		await connector.close();
 		fake.stop();
 	});
 
-	test("disconnect: no status change, no redial; send() reflects socket state", async () => {
+	test("disconnect: no status change, no redial; send() reflects stream state", async () => {
 		const fake = startFake();
 		const registry = await loadedRegistry(tmpStatePath());
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
@@ -551,7 +667,7 @@ describe("DaemonConnector", () => {
 		connector.disconnect(entry.daemonId);
 		expect(connector.send(entry.daemonId, cmd)).toBe(false);
 		expect(registry.get(entry.daemonId)?.status).toBe("ready"); // unchanged
-		await waitFor(() => (fake.serverCloses.length >= 1 ? "closed" : null), 2000, "server-observed close");
+		await waitFor(() => (fake.serverCloses >= 1 ? "closed" : null), 2000, "server-observed close");
 		await sleep(150);
 		expect(fake.openCount).toBe(1); // no reconnect after intentional drop
 		await connector.close();
@@ -585,55 +701,137 @@ describe("DaemonConnector", () => {
 		fake.stop();
 	});
 
-	test("keepalive pings an open socket; a responsive peer (auto-pong) stays connected", async () => {
-		const fake = startFake();
+	test("keepalive ping events reset the silence deadline; a responsive daemon stays connected", async () => {
+		const fake = startFake({
+			onOpen: (_fake, stream) => {
+				prime(stream);
+				// A keepalive ping event every 20ms — liveness that must keep
+				// the stream alive far past the 50ms silence deadline. The ping
+				// carries no id and must never be dispatched as a frame.
+				const timer = setInterval(() => stream.comment(), 20);
+				stream.onEnd = () => clearInterval(timer);
+			},
+		});
 		const registry = await loadedRegistry(tmpStatePath());
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
 		const connector = new DaemonConnector(registry, undefined, {
 			backoffMinMs: 10,
 			backoffMaxMs: 50,
 			idleDropMs: 60_000,
-			pingIntervalMs: 30,
-			pongTimeoutMs: 20,
+			silenceDeadlineMs: 50,
 		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 2000);
-		// Ping frames reach the daemon (Bun.serve surfaces them in `ping`).
-		await waitFor(() => (fake.pings.length >= 2 ? "pings" : null), 2000, "two server-side ping frames");
-		// The fake auto-pongs (sendPings default): several more intervals must
-		// NOT trip the silence deadline.
-		await sleep(150);
-		expect(fake.serverCloses).toHaveLength(0);
+		// Several deadlines' worth of comments: the stream must NOT be treated
+		// as dead, and no reconnect may be scheduled.
+		await sleep(200);
+		expect(fake.serverCloses).toBe(0);
+		expect(fake.openCount).toBe(1);
 		expect(connector.isConnected(entry.daemonId)).toBe(true);
 		expect(registry.get(entry.daemonId)?.status).toBe("ready");
 		await connector.close();
 		fake.stop();
 	});
 
-	test("a silent peer (no pong) is terminated and the close path reconnects", async () => {
-		const silent = startSilentWsServer();
+	test("a raw `: ping` comment also resets the silence deadline (parseSseUnits surfaces comments)", async () => {
+		const fake = startFake({
+			onOpen: (_fake, stream) => {
+				prime(stream);
+				// Legacy comment keepalive — still surfaced by parseSseUnits and
+				// still credited to the silence deadline.
+				const timer = setInterval(() => stream.commentLine(), 20);
+				stream.onEnd = () => clearInterval(timer);
+			},
+		});
 		const registry = await loadedRegistry(tmpStatePath());
-		const entry = registry.create(baseInit({ endpoint: silent.url, token: "tok", mode: "remote" }));
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+			silenceDeadlineMs: 50,
+		});
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 2000);
+		await sleep(200);
+		expect(fake.serverCloses).toBe(0);
+		expect(fake.openCount).toBe(1);
+		expect(connector.isConnected(entry.daemonId)).toBe(true);
+		expect(registry.get(entry.daemonId)?.status).toBe("ready");
+		await connector.close();
+		fake.stop();
+	});
+
+	test("a silent stream (no events, no comments) trips the silence deadline and reconnects", async () => {
+		const fake = startFake(); // primes, then goes silent
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "remote" }));
 		const statuses: string[] = [];
 		const connector = new DaemonConnector(
 			registry,
 			{ onStatus: (e) => statuses.push(e.status) },
-			{ backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000, pingIntervalMs: 30, pongTimeoutMs: 20 },
+			{ backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000, silenceDeadlineMs: 40 },
 		);
 		connector.connect(entry.daemonId);
-		// The ping goes out, no pong comes back → terminate → 1006 (unexpected)
-		// → reconnecting + redial. The raw server counts ping frames.
-		await waitFor(() => (silent.connections.some((c) => c.pings >= 1) ? "ping seen" : null), 2000, "server-side ping");
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "reconnecting" ? "reconnecting" : null),
-			2000,
-			"reconnecting status",
-		);
-		await waitFor(() => (silent.connections.length >= 2 ? "redial" : null), 3000, "second dial");
-		// The redialed socket re-arms the keepalive and is terminated in turn.
-		await waitFor(() => (silent.connections[1]?.pings >= 1 ? "second ping" : null), 2000, "ping on second dial");
+		await connector.waitReady(entry.daemonId, 2000);
+		// After priming nothing arrives: the silence deadline aborts the stream
+		// and the reconnect path redials. Each fresh stream primes, then goes
+		// silent in turn.
+		await waitFor(() => (fake.openCount >= 3 ? "redials" : null), 3000, "3 redials");
 		expect(statuses).toContain("reconnecting");
 		await connector.close();
-		silent.stop();
+		fake.stop();
+	});
+
+	test("Last-Event-ID resume: reconnect replays ring deltas after the last seen id", async () => {
+		const fake = startFake();
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
+		const connector = makeConnector(registry);
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 2000);
+		const seen: string[] = [];
+		const unsub = connector.onFrame(entry.daemonId, (f) => {
+			if (f.type === "event") seen.push((f.event as { message?: string }).message ?? "");
+		});
+		// Two deltas land on stream 1 (and in the daemon-side ring).
+		fake.broadcast({ type: "event", sessionId: "s1", event: { type: "notice", level: "info", message: "one" } });
+		fake.broadcast({ type: "event", sessionId: "s1", event: { type: "notice", level: "info", message: "two" } });
+		await waitFor(() => (seen.includes("one") && seen.includes("two") ? "both" : null), 2000, "both deltas");
+		// Clean end → asleep; lastSeq is now 1025.
+		fake.streams[0]!.close();
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null), 2000, "asleep");
+		// A delta emitted while no stream was open lands only in the ring.
+		fake.broadcast({ type: "event", sessionId: "s1", event: { type: "notice", level: "info", message: "three" } });
+		// Redial resumes from the last seen id; the server replays ring entries
+		// with seqs strictly greater than it, AFTER priming.
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 2000);
+		expect(fake.headers[1]?.["last-event-id"]).toBe("1025");
+		expect(fake.replayCounts[1]).toBe(1);
+		await waitFor(() => (seen.includes("three") ? "replayed" : null), 2000, "replayed delta");
+		unsub();
+		await connector.close();
+		fake.stop();
+	});
+
+	test("a stale resume point (priming only) skips ring replay", async () => {
+		const fake = startFake();
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
+		const connector = makeConnector(registry);
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 2000);
+		// The stream only ever carried priming (seqs 1..3 < SSE_DELTA_SEQ_START):
+		// no delta ever arrived, so a reconnect must NOT request replay — the
+		// fresh priming already carries full current state.
+		fake.streams[0]!.close();
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null), 2000, "asleep");
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 2000);
+		expect(fake.headers[1]?.["last-event-id"]).toBeUndefined();
+		expect(fake.replayCounts[1]).toBe(0);
+		await connector.close();
+		fake.stop();
 	});
 });

@@ -130,13 +130,46 @@ export interface SettingsModel {
 // ---------------------------------------------------------------------------
 // omp-session / omp-fleet contract (README.md). OMP_PROTO gates
 // fleet↔omp-session drift (the collab COLLAB_PROTO pattern); bump on any
-// breaking change to the hello handshake or frame shapes.
+// breaking change to the transport or frame shapes.
+//
+// Transport (OMP_PROTO 2): no WebSockets on the agent-driving path. Client →
+// server commands are POST /command bodies (one ClientCommand per request,
+// answered 202); server → client frames are SSE events on GET /events
+// (event: frame, id: <seq>, data: <JSON ServerFrame>). Auth is HTTP-level
+// (R14): loopback exempt, off-loopback bearer via Authorization header or
+// ?token=; a wrong credential is a 401, not a close code. hello_ok is the
+// FIRST event on every stream open (daemon identity), followed by the attach
+// priming (attached → history → state → available_commands → ready).
 // ---------------------------------------------------------------------------
 
-export const OMP_PROTO = 1;
+export const OMP_PROTO = 2;
 
-/** WS close code for a missing/invalid bearer token (R14). */
-export const OMP_CLOSE_UNAUTHORIZED = 4001;
+// --- SSE framing constants (shared by daemon, fleet connector, and edge) ---
+
+/** SSE event field carrying every ServerFrame. */
+export const SSE_EVENT_NAME = "frame";
+/** Keepalive ping event (see SSE_PING_BLOCK in src/sse.ts) interval written to every open stream. */
+export const SSE_KEEPALIVE_MS = 15_000;
+/**
+ * Consumers treat this much total silence (no event, no comment) as a dead
+ * peer → abort + reconnect. Generous vs SSE_KEEPALIVE_MS so one delayed
+ * comment never trips it.
+ */
+export const SSE_SILENCE_DEADLINE_MS = 30_000;
+/** Bounded replay ring of recent deltas, per daemon / per browser stream. */
+export const SSE_RING_CAP = 10_000;
+/**
+ * First seq assigned to post-priming deltas (a daemon-global counter).
+ * Priming frames carry seqs 1..k (k < SSE_DELTA_SEQ_START) per stream, so a
+ * Last-Event-ID below this value means "stale/empty client: priming already
+ * carries full current state, skip ring replay".
+ */
+export const SSE_DELTA_SEQ_START = 1024;
+/** Per-stream enqueue cap: beyond it the stream is terminated (drop-and-resume). */
+export const SSE_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
+/** POST /command idempotency: dedup window and remembered-id cap. */
+export const COMMAND_DEDUP_WINDOW_MS = 60_000;
+export const COMMAND_DEDUP_CAP = 64;
 
 /**
  * The `OMP_SESSION|` stdout contract lines (R6b). omp-session prints
@@ -246,42 +279,41 @@ export type WebMethodName =
 	| "subagentSteer"
 	| "subagentAbort";
 
-// Client → server
-// Routing is by SOCKET ATTACHMENT: on omp-session a socket is attached to the
-// single live session from upgrade (connect = attached), so call/login_code/
-// ui_response implicitly target it. `attach` exists only at the fleet edge,
-// where it selects the daemon to proxy.
+// Client → server (POST /command bodies; one command per request, 202 accept).
+// Routing is by STREAM ATTACHMENT: on omp-session an /events stream is attached
+// to the single live session from open (connect = attached), so call/
+// login_code/ui_response implicitly target it. `attach` exists only at the
+// fleet edge, where it selects the daemon to proxy.
+// Every command carries a client-supplied `id` for POST idempotency: the
+// server dedups within a window (COMMAND_DEDUP_CAP / COMMAND_DEDUP_WINDOW_MS)
+// and re-accepts duplicates with 202; answers ride the /events stream.
 export type ClientCommand =
 	| { type: "call"; id: string; method: WebMethodName; args?: unknown[]; streamId?: number }
-	| { type: "login_code"; requestId: string; code: string }
+	| { type: "login_code"; id: string; requestId: string; code: string }
 	// Answer to a server "ui_request" frame (ExtensionUIContext dialogs).
 	| { type: "ui_response"; id: string; result?: unknown; error?: string }
-	| { type: "list_sessions" }
-	| { type: "list_files"; query: string; limit?: number }
-	// Fleet edge only: attach this socket to the daemon with this id
+	| { type: "list_sessions"; id: string }
+	| { type: "list_files"; id: string; query: string; limit?: number }
+	// Fleet edge only: attach this stream to the daemon with this id
 	// (the edge proxies it through; a bare omp-session never receives attach).
-	| { type: "attach"; sessionId: string }
+	| { type: "attach"; id: string; sessionId: string }
 	// Plain process-stats poll; answered with a process_stats frame.
-	| { type: "get_process_stats" }
-	// Collab: start/stop the collab room for the socket's ATTACHED session.
-	| { type: "collab_start" }
-	| { type: "collab_stop" }
+	| { type: "get_process_stats"; id: string }
+	// Collab: start/stop the collab room for the stream's ATTACHED session.
+	| { type: "collab_start"; id: string }
+	| { type: "collab_stop"; id: string }
 	// Daemon web exposure: per-daemon logs/stop/restart, answered by unicast
 	// daemon_logs_result / daemon_control_result frames.
 	| { type: "daemon_logs"; id: string; projectDir: string; name: string; lines: number; head?: boolean; grep?: string }
 	| { type: "daemon_stop"; id: string; projectDir: string; name: string; timeoutMs?: number }
 	| { type: "daemon_restart"; id: string; projectDir: string; name: string }
-	// --- Fleet control plane (omp-fleet → omp-session) ---
-	// First-frame auth fallback when the transport can't set an Authorization
-	// header (R14 handshake); answered by hello_ok or close 4001.
-	| { type: "hello"; proto: number; token?: string }
 	// --- Fleet edge (browser → omp-fleet only; a bare omp-session rejects these) ---
-	| { type: "spawn"; cwd: string; template?: string; labels?: string[] }
-	| { type: "spawn_resume"; daemonId: string }
-	| { type: "stop"; daemonId: string }
+	| { type: "spawn"; id: string; cwd: string; template?: string; labels?: string[] }
+	| { type: "spawn_resume"; id: string; daemonId: string }
+	| { type: "stop"; id: string; daemonId: string }
 	// Stop the daemon AND evict it from the roster (registry removal).
-	| { type: "remove"; daemonId: string }
-	| { type: "list_projects" };
+	| { type: "remove"; id: string; daemonId: string }
+	| { type: "list_projects"; id: string };
 
 // ---------------------------------------------------------------------------
 // Collab (TUI-mux): per-session collab host status, pushed to attached
@@ -357,8 +389,9 @@ export type ServerFrame =
 	// Broadcast once the SDK session is live AND provider/model/auth has
 	// resolved. Before it, prompt-family calls fail with a not_ready error.
 	| { type: "ready"; readyAt: number }
-	// --- Fleet control plane (omp-session → omp-fleet) ---
-	// Unicast answer to the hello handshake (Authorization header or hello frame).
+	// --- Daemon identity (omp-session → any /events consumer) ---
+	// FIRST event on every /events stream open (HTTP-level auth replaced the
+	// hello handshake); the attach priming follows immediately.
 	| { type: "hello_ok"; proto: number; name: string; cwd: string; pid: number; version: string; sessionFile?: string }
 	// --- Fleet edge (omp-fleet → browser; a bare omp-session never sends these) ---
 	// Global broadcast + unicast answer; the roster-mode sidebar's source.

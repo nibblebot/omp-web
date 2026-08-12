@@ -1,31 +1,53 @@
 /**
- * DaemonConnector: the fleet's per-daemon WebSocket client.
+ * DaemonConnector: the fleet's per-daemon SSE client.
  *
- * Dials the daemon's registered endpoint with the bearer token on the
- * upgrade (R14 — the token in the Authorization header means no hello frame
- * is needed) and drives the status machine:
+ * Dials the daemon's registered endpoint over HTTP (R14 — the bearer token
+ * rides the Authorization header, so there is no hello handshake) and drives
+ * the status machine off the /events stream:
  *
- *   connect → "connecting" → (hello_ok) "session" → (first state frame)
+ *   connect → "connecting" → (hello_ok event) "session" → (first state frame)
  *   "resolving" → (ready frame) "ready"
  *
- * An unexpected close (anything but 1000/1001, not connector-initiated)
- * → "reconnecting" with jittered exponential backoff (1s→30s by default)
- * and a fresh dial. A clean close → "asleep" (cwd + lastSessionFile kept).
- * A dial that never reached hello_ok additionally fires `onDialFailed` so
- * the server can respawn spawned daemons with a fresh token.
+ * Every ServerFrame arrives as an SSE `frame` event with a monotonic id;
+ * the keepalive ping event — and any other unit, including comments — resets
+ * the silence deadline. A stream
+ * that ends cleanly after a validated hello → "asleep" (cwd +
+ * lastSessionFile kept) — the daemon went dormant. A stream that ends in
+ * error, or a dial that never opened, → "reconnecting" with jittered
+ * exponential backoff (1s→30s by default) and a fresh dial. A dial that
+ * never reached hello_ok additionally fires `onDialFailed` so the server can
+ * respawn spawned daemons with a fresh token. A 401 (wrong token) is
+ * terminal: status "error", no reconnect loop — only a respawn can refresh
+ * the credential.
  *
- * Idle policy: when retain()/release() subscribers drop to zero, the socket
- * is dropped after idleDropMs (default 60s) — "disconnect", no status
+ * Commands are POST /command (fire-and-forget accept; answers ride /events).
+ * On redial the connector resumes from the last event id seen on the
+ * previous stream: `Last-Event-ID: <lastSeq>` — the daemon replays ring
+ * deltas with seqs strictly greater than it, so a dropped stream never loses
+ * frames.
+ *
+ * Idle policy: when retain()/release() subscribers drop to zero, the stream
+ * is aborted after idleDropMs (default 60s) — "disconnect", no status
  * change — letting the daemon's own idle timer fire (→ asleep) and making
  * the next promptEntry respawn/redial on demand.
  *
- * Liveness: every open socket is pinged every 15s (startSocketKeepalive,
- * shared with the edge's proxy pipes); a pong not observed within 10s of a
- * ping terminates the socket and the close path below drives reconnecting.
+ * Liveness: no unit at all (frame event, keepalive ping, or comment) for
+ * silenceDeadlineMs (default 30s) means the peer is dead → abort the stream,
+ * and the reader error drives the same reconnect path an unexpected close
+ * takes.
  */
 
-import { OMP_PROTO } from "../src/protocol";
-import type { ClientCommand, DaemonStatus, ServerFrame, WebSessionState } from "../src/protocol";
+import {
+	OMP_PROTO,
+	SSE_DELTA_SEQ_START,
+	SSE_EVENT_NAME,
+	SSE_SILENCE_DEADLINE_MS,
+	type ClientCommand,
+	type DaemonStatus,
+	type ServerFrame,
+	type WebSessionState,
+} from "../src/protocol";
+import { parseSseUnits } from "../src/sse";
 import type { Registry, RegistryEntry } from "./registry";
 
 export interface ConnectorEvents {
@@ -40,12 +62,6 @@ const DEFAULT_BACKOFF_MIN_MS = 1_000;
 const DEFAULT_BACKOFF_MAX_MS = 30_000;
 const DEFAULT_IDLE_DROP_MS = 60_000;
 const DEFAULT_WAIT_READY_MS = 60_000;
-/** LIVENESS: ping each open socket every 15s… */
-export const DEFAULT_PING_INTERVAL_MS = 15_000;
-/** …and treat 10s without a pong as a dead peer (terminate → reconnect). */
-export const DEFAULT_PONG_TIMEOUT_MS = 10_000;
-const WS_CONNECTING = 0;
-const WS_OPEN = 1;
 
 /** Readiness ladder ranks for #transitionLadder (monotonic upgrades only). */
 const LADDER_RANK = { connecting: 0, session: 1, resolving: 2, ready: 3 } as const;
@@ -59,20 +75,23 @@ interface Waiter {
 
 interface ConnState {
 	daemonId: string;
-	socket: WebSocket | null;
+	/** AbortController for the in-flight /events fetch — the socket handle. */
+	abort: AbortController | null;
+	/** True while a /events response is live (200 + body streaming). */
+	streamOpen: boolean;
 	/** Connector-level intentional drop (disconnect/close): no status change, no redial. */
 	closed: boolean;
-	/** A disconnect() raced an in-flight dial; drop the socket as soon as it opens. */
-	dropWhenOpen: boolean;
 	sawHello: boolean;
 	sawState: boolean;
 	sawReady: boolean;
+	/** Last event id seen on the current/previous stream (Last-Event-ID resume). */
+	lastSeq: number;
 	reconnectTimer: ReturnType<typeof setTimeout> | null;
 	redialAttempt: number;
 	idleTimer: ReturnType<typeof setTimeout> | null;
 	retainCount: number;
-	/** Stops the socket keepalive (ping/pong liveness) for the current socket. */
-	keepaliveStop: (() => void) | null;
+	/** Resets on every SSE unit (event or comment); on fire the stream is dead. */
+	silenceTimer: ReturnType<typeof setTimeout> | null;
 	listeners: Set<(frame: ServerFrame) => void>;
 	waiters: Waiter[];
 }
@@ -84,94 +103,19 @@ function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
 }
 
 /**
- * Normalize a registered endpoint for dialing: omp-session's OMP_SESSION|
+ * Normalize a registered endpoint for HTTP use: omp-session's OMP_SESSION|
  * listening line (and `add`-registered URLs) are pathless
- * (`ws://host:port`), but omp-session only upgrades `/ws`. Append it when
- * the path is empty or "/".
+ * (`ws://host:port`), so the base is the origin with the scheme mapped
+ * ws→http / wss→https and any path stripped (no trailing slash). Callers
+ * append the route (`/events`, `/command`).
  */
-export function daemonWsUrl(endpoint: string): string {
+export function daemonHttpBase(endpoint: string): string {
 	const url = new URL(endpoint);
-	if (url.pathname === "" || url.pathname === "/") url.pathname = "/ws";
-	return url.toString();
-}
-
-/**
- * Socket liveness (LIVENESS contract), shared by the connector's control
- * sockets and the edge's proxy pipes. Pings the peer every
- * `pingIntervalMs`; if no pong is observed within `pongTimeoutMs` of a ping,
- * the socket is terminated and the caller's existing close handler drives
- * reconnecting. Any pong — the server's automatic ping→pong response or an
- * unsolicited one — proves the peer's stack is alive and clears the
- * deadline.
- *
- * Pongs are observed via `addEventListener("pong", …)`: Bun 1.3.14's client
- * WebSocket surfaces received pong frames this way (scratch-verified — the
- * event fires with the pong payload for both auto-pongs and server-initiated
- * pongs). `ws.onpong` is NOT a real property on the client (`"onpong" in ws
- * === false`); assigning it creates a dead expando that never fires, and the
- * typed WebSocketEventMap only lists close/error/message/open, so the
- * listener registers through the untyped string overload.
- *
- * Returns an idempotent stop function (clears both timers and removes the
- * pong listener). Call it on every socket teardown path.
- */
-export function startSocketKeepalive(
-	ws: WebSocket,
-	opts: { pingIntervalMs: number; pongTimeoutMs: number },
-): () => void {
-	// Bun's client WebSocket implements ping()/terminate(), but tsconfig's
-	// DOM lib shadows the global with the DOM type, which lacks them — narrow
-	// to the Bun type once (the runtime object is always Bun's).
-	const bunWs = ws as unknown as Bun.WebSocket;
-	let pingTimer: ReturnType<typeof setTimeout> | null = null;
-	let pongTimer: ReturnType<typeof setTimeout> | null = null;
-	let stopped = false;
-
-	const onPong = (): void => {
-		if (pongTimer !== null) {
-			clearTimeout(pongTimer);
-			pongTimer = null;
-		}
-	};
-	ws.addEventListener("pong", onPong);
-
-	const sendPing = (): void => {
-		if (stopped || ws.readyState !== WS_OPEN) return;
-		try {
-			bunWs.ping();
-		} catch {
-			return; // Socket died between check and send; the close handler owns the machine.
-		}
-		pongTimer = setTimeout(() => {
-			pongTimer = null;
-			if (stopped || ws.readyState !== WS_OPEN) return;
-			// Silent peer: no pong within the deadline. Terminate and let the
-			// close handler (1006 → reconnecting) drive the redial.
-			try {
-				bunWs.terminate();
-			} catch {
-				// Socket already gone; the close handler owns the machine.
-			}
-		}, opts.pongTimeoutMs);
-		// Re-arm the interval AFTER the ping went out, so the loop is
-		// continuous while the socket is open (and dies with it otherwise).
-		pingTimer = setTimeout(sendPing, opts.pingIntervalMs);
-	};
-
-	pingTimer = setTimeout(sendPing, opts.pingIntervalMs);
-
-	return () => {
-		stopped = true;
-		if (pingTimer !== null) {
-			clearTimeout(pingTimer);
-			pingTimer = null;
-		}
-		if (pongTimer !== null) {
-			clearTimeout(pongTimer);
-			pongTimer = null;
-		}
-		ws.removeEventListener("pong", onPong);
-	};
+	url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+	url.pathname = "/";
+	url.search = "";
+	url.hash = "";
+	return url.toString().replace(/\/$/, "");
 }
 
 export class DaemonConnector {
@@ -180,8 +124,7 @@ export class DaemonConnector {
 	#backoffMinMs: number;
 	#backoffMaxMs: number;
 	#idleDropMs: number;
-	#pingIntervalMs: number;
-	#pongTimeoutMs: number;
+	#silenceDeadlineMs: number;
 	#states = new Map<string, ConnState>();
 
 	constructor(
@@ -191,10 +134,8 @@ export class DaemonConnector {
 			backoffMinMs?: number;
 			backoffMaxMs?: number;
 			idleDropMs?: number;
-			/** LIVENESS: ping interval per open socket (default 15s). */
-			pingIntervalMs?: number;
-			/** LIVENESS: silence deadline after a ping before terminating (default 10s). */
-			pongTimeoutMs?: number;
+			/** LIVENESS: total silence (no event, no comment) before the stream is treated as dead (default 30s). */
+			silenceDeadlineMs?: number;
 		},
 	) {
 		this.#registry = registry;
@@ -202,14 +143,14 @@ export class DaemonConnector {
 		this.#backoffMinMs = opts?.backoffMinMs ?? DEFAULT_BACKOFF_MIN_MS;
 		this.#backoffMaxMs = opts?.backoffMaxMs ?? DEFAULT_BACKOFF_MAX_MS;
 		this.#idleDropMs = opts?.idleDropMs ?? DEFAULT_IDLE_DROP_MS;
-		this.#pingIntervalMs = opts?.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
-		this.#pongTimeoutMs = opts?.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS;
+		this.#silenceDeadlineMs = opts?.silenceDeadlineMs ?? SSE_SILENCE_DEADLINE_MS;
 	}
 
 	/**
-	 * Idempotent: dials entry.endpoint with Authorization: Bearer entry.token
-	 * and drives the status machine. No-op when a socket is already open or a
-	 * dial is in flight; cancels any scheduled reconnect and dials now.
+	 * Idempotent: dials entry.endpoint's /events with Authorization: Bearer
+	 * entry.token and drives the status machine. No-op when a stream is
+	 * already open or a dial is in flight; cancels any scheduled reconnect
+	 * and dials now.
 	 */
 	connect(daemonId: string): void {
 		const entry = this.#registry.get(daemonId);
@@ -224,10 +165,9 @@ export class DaemonConnector {
 			state.idleTimer = null;
 		}
 		state.closed = false;
-		state.dropWhenOpen = false;
 		state.redialAttempt = 0;
-		if (state.socket && (state.socket.readyState === WS_CONNECTING || state.socket.readyState === WS_OPEN)) {
-			return; // already connected or dialing
+		if (state.abort) {
+			return; // already dialing or streaming
 		}
 		this.#transition(daemonId, "connecting");
 		this.#dial(state, entry);
@@ -246,40 +186,41 @@ export class DaemonConnector {
 			clearTimeout(state.idleTimer);
 			state.idleTimer = null;
 		}
-		if (state.keepaliveStop) {
-			state.keepaliveStop();
-			state.keepaliveStop = null;
-		}
-		const ws = state.socket;
-		state.socket = null;
-		if (!ws) return;
-		if (ws.readyState === WS_OPEN) {
+		this.#clearSilenceTimer(state);
+		const abort = state.abort;
+		state.abort = null;
+		state.streamOpen = false;
+		if (abort) {
 			try {
-				ws.close(1000, "fleet disconnect");
+				abort.abort();
 			} catch {
-				// Already closing; the close handler is guarded by state.closed.
+				// Already aborted; the consume loop is guarded by state.closed.
 			}
-		} else if (ws.readyState === WS_CONNECTING) {
-			state.dropWhenOpen = true;
 		}
 	}
 
-	/** False when the socket is down (or the daemon is no longer registered). */
+	/** False when the stream is down (or the daemon is no longer registered). */
 	send(daemonId: string, cmd: ClientCommand): boolean {
-		if (!this.#registry.get(daemonId)) return false; // removed entries are down
+		const entry = this.#registry.get(daemonId);
+		if (!entry?.endpoint) return false; // removed entries are down
 		const state = this.#states.get(daemonId);
-		if (!state?.socket || state.socket.readyState !== WS_OPEN || state.closed) return false;
-		try {
-			state.socket.send(JSON.stringify(cmd));
-			return true;
-		} catch {
-			return false;
-		}
+		if (!state?.abort || !state.streamOpen || state.closed) return false;
+		// Fire-and-forget accept: answers ride /events; a dropped POST is
+		// recovered by the daemon-side dedup window + replay.
+		fetch(daemonHttpBase(entry.endpoint) + "/command", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${entry.token ?? ""}`, "Content-Type": "application/json" },
+			body: JSON.stringify(cmd),
+		}).catch(() => {
+			// Ignore: the stream's reconnect path owns liveness; the daemon
+			// dedups by command id if this POST is retried after replay.
+		});
+		return true;
 	}
 
 	isConnected(daemonId: string): boolean {
 		const state = this.#states.get(daemonId);
-		return state !== undefined && !state.closed && state.socket !== null && state.socket.readyState === WS_OPEN;
+		return state !== undefined && !state.closed && state.abort !== null && state.streamOpen;
 	}
 
 	/** +1 subscriber (proxied browser / in-flight prompt); cancels the idle-drop timer. */
@@ -315,10 +256,10 @@ export class DaemonConnector {
 	}
 
 	/**
-	 * Resolves on status "ready" WITH a live socket; rejects on status "error"
+	 * Resolves on status "ready" WITH a live stream; rejects on status "error"
 	 * or timeout (default 60s). A stale "ready" registry status alone is NOT
-	 * enough — the socket may have been idle-dropped or killed behind the
-	 * status's back, and send() would fail right after. Without a live socket
+	 * enough — the stream may have been idle-dropped or killed behind the
+	 * status's back, and send() would fail right after. Without a live stream
 	 * we wait for a ready transition, which only a fresh dial can produce.
 	 */
 	waitReady(daemonId: string, timeoutMs: number = DEFAULT_WAIT_READY_MS): Promise<void> {
@@ -346,7 +287,7 @@ export class DaemonConnector {
 		return promise;
 	}
 
-	/** Drop every socket and cancel all timers. */
+	/** Drop every stream and cancel all timers. */
 	async close(): Promise<void> {
 		for (const state of this.#states.values()) {
 			state.closed = true;
@@ -358,17 +299,15 @@ export class DaemonConnector {
 				clearTimeout(state.idleTimer);
 				state.idleTimer = null;
 			}
-			if (state.keepaliveStop) {
-				state.keepaliveStop();
-				state.keepaliveStop = null;
-			}
-			const ws = state.socket;
-			state.socket = null;
-			if (ws && ws.readyState === WS_OPEN) {
+			this.#clearSilenceTimer(state);
+			const abort = state.abort;
+			state.abort = null;
+			state.streamOpen = false;
+			if (abort) {
 				try {
-					ws.close(1000, "fleet close");
+					abort.abort();
 				} catch {
-					// Ignore; the close handler is guarded by state.closed.
+					// Ignore; the consume loop is guarded by state.closed.
 				}
 			}
 		}
@@ -379,17 +318,18 @@ export class DaemonConnector {
 		if (!state) {
 			state = {
 				daemonId,
-				socket: null,
+				abort: null,
+				streamOpen: false,
 				closed: false,
-				dropWhenOpen: false,
 				sawHello: false,
 				sawState: false,
 				sawReady: false,
+				lastSeq: 0,
 				reconnectTimer: null,
 				redialAttempt: 0,
 				idleTimer: null,
 				retainCount: 0,
-				keepaliveStop: null,
+				silenceTimer: null,
 				listeners: new Set(),
 				waiters: [],
 			};
@@ -402,79 +342,99 @@ export class DaemonConnector {
 		state.sawHello = false;
 		state.sawState = false;
 		state.sawReady = false;
-		// A stale keepalive (from a previous socket that never got its close
-		// processed) must not outlive the new dial.
-		if (state.keepaliveStop) {
-			state.keepaliveStop();
-			state.keepaliveStop = null;
-		}
+		// A stale silence timer from a previous stream must not outlive the new dial.
+		this.#clearSilenceTimer(state);
 		const endpoint = entry.endpoint;
 		if (!endpoint) {
 			this.#transition(entry.daemonId, "error", "no endpoint registered");
 			return;
 		}
-		let ws: WebSocket;
-		try {
-			// Bun's WebSocket accepts { headers } (Bun.WebSocketOptions); the DOM
-			// type only allows protocols, hence the cast.
-			ws = new WebSocket(daemonWsUrl(endpoint), { headers: { Authorization: `Bearer ${entry.token ?? ""}` } } as never);
-		} catch (err) {
-			this.#transition(entry.daemonId, "error", `dial failed: ${(err as Error).message}`);
-			this.#events?.onDialFailed?.(this.#registry.get(entry.daemonId) ?? entry);
-			return;
-		}
-		state.socket = ws;
-		ws.onopen = () => {
-			if (state.socket !== ws) return;
-			if (state.closed || state.dropWhenOpen) {
-				try {
-					ws.close(1000, "fleet disconnect");
-				} catch {
-					// Ignore.
+		const headers: Record<string, string> = {};
+		if (entry.token) headers.Authorization = `Bearer ${entry.token}`;
+		// Resume from the last event id seen. Priming already carries full
+		// current state, so only delta-range seqs (≥ SSE_DELTA_SEQ_START)
+		// warrant a replay request.
+		if (state.lastSeq >= SSE_DELTA_SEQ_START) headers["Last-Event-ID"] = String(state.lastSeq);
+		const abort = new AbortController();
+		state.abort = abort;
+		fetch(daemonHttpBase(endpoint) + "/events", { headers, signal: abort.signal })
+			.then((res) => {
+				if (state.abort !== abort) return; // superseded by a newer dial / drop
+				if (state.closed) {
+					abort.abort();
+					return;
 				}
-				return;
-			}
-			// omp-session answers a valid hello with hello_ok on ANY socket
-			// (R14); the Authorization header alone does NOT elicit a
-			// proactive hello_ok.
-			try {
-				ws.send(JSON.stringify({ type: "hello", proto: OMP_PROTO, token: entry.token } satisfies ClientCommand));
-			} catch {
-				// Socket died between open and send; the close handler owns the machine.
-			}
-			// LIVENESS: ping every #pingIntervalMs, terminate on #pongTimeoutMs
-			// of silence; the close handler below drives reconnecting.
-			state.keepaliveStop = startSocketKeepalive(ws, {
-				pingIntervalMs: this.#pingIntervalMs,
-				pongTimeoutMs: this.#pongTimeoutMs,
+				if (res.status === 401) {
+					// Wrong credential: terminal. No reconnect loop — a respawn
+					// (via onDialFailed) refreshes the token.
+					res.body?.cancel().catch(() => {});
+					this.#transition(entry.daemonId, "error", "unauthorized (401): daemon rejected the token");
+					this.#events?.onDialFailed?.(this.#registry.get(entry.daemonId) ?? entry);
+					this.#onStreamEnded(state, { clean: false });
+					return;
+				}
+				if (!res.ok) {
+					// HTTP-level refusal — the dial never reached hello_ok.
+					this.#onStreamEnded(state, { clean: false });
+					return;
+				}
+				if (!res.body) {
+					this.#onStreamEnded(state, { clean: true });
+					return;
+				}
+				state.streamOpen = true;
+				this.#armSilenceTimer(state);
+				this.#consume(state, abort, res);
+			})
+			.catch(() => {
+				if (state.abort !== abort) return; // superseded
+				if (state.closed) return; // intentional abort (disconnect/close/idle)
+				this.#onStreamEnded(state, { clean: false });
 			});
-		};
-		ws.onmessage = (ev) => {
-			if (state.socket !== ws) return;
-			this.#onMessage(state, String(ev.data));
-		};
-		ws.onerror = () => {
-			// Bun fires onclose after onerror; the close handler owns the machine.
-		};
-		ws.onclose = (ev) => {
-			if (state.socket !== ws) return;
-			state.socket = null;
-			this.#onClose(state, ev.code);
-		};
 	}
 
-	#onMessage(state: ConnState, data: string): void {
+	async #consume(state: ConnState, abort: AbortController, res: Response): Promise<void> {
+		try {
+			for await (const unit of parseSseUnits(res.body!)) {
+				if (state.abort !== abort) return; // superseded or dropped
+				// Any unit — frame event, keepalive ping, or comment — proves the
+				// peer lives and resets the deadline.
+				this.#armSilenceTimer(state);
+				// Keepalive pings (and any other non-frame event) carry no
+				// ServerFrame; skip before dispatch.
+				if (unit.kind !== "event" || unit.event !== SSE_EVENT_NAME) continue;
+				const seq = Number(unit.id);
+				if (Number.isFinite(seq) && seq > state.lastSeq) state.lastSeq = seq;
+				const frame = this.#parseFrame(unit.data);
+				if (!frame) continue; // non-JSON noise
+				this.#onFrame(state, frame);
+			}
+		} catch {
+			if (state.abort !== abort) return; // superseded
+			if (state.closed) return; // intentional abort raced the read
+			this.#onStreamEnded(state, { clean: false });
+			return;
+		}
+		if (state.abort !== abort) return;
+		// Normal end of stream: the daemon closed it cleanly (dormant).
+		this.#onStreamEnded(state, { clean: true });
+	}
+
+	#parseFrame(data: string): ServerFrame | null {
 		let raw: unknown;
 		try {
 			raw = JSON.parse(data);
 		} catch {
-			return; // non-JSON noise
+			return null; // non-JSON noise
 		}
 		// Boundary validation: a frame is an object with a string discriminator.
 		if (typeof raw !== "object" || raw === null || !("type" in raw) || typeof raw.type !== "string") {
-			return;
+			return null;
 		}
-		const frame = raw as unknown as ServerFrame;
+		return raw as unknown as ServerFrame;
+	}
+
+	#onFrame(state: ConnState, frame: ServerFrame): void {
 		// Fan out first so correlation listeners see every frame; a throwing
 		// listener must not break the status machine.
 		for (const fn of [...state.listeners]) {
@@ -502,6 +462,13 @@ export class DaemonConnector {
 	#onHello(state: ConnState, hello: Extract<ServerFrame, { type: "hello_ok" }>): void {
 		if (!this.#registry.get(state.daemonId)) return;
 		const entry = this.#registry.get(state.daemonId)!;
+		// Proto gate: a daemon speaking a newer/older OMP_PROTO is not drivable;
+		// the mismatch is terminal until a compatible daemon is respawned.
+		if (hello.proto !== OMP_PROTO) {
+			this.#transition(state.daemonId, "error", `proto mismatch: daemon speaks OMP_PROTO ${hello.proto}, expected ${OMP_PROTO}`);
+			state.abort?.abort();
+			return;
+		}
 		if (!entry.cwd) {
 			// `add`ed entries with an empty cwd adopt the daemon's real cwd.
 			this.#registry.update(state.daemonId, { cwd: hello.cwd });
@@ -511,7 +478,7 @@ export class DaemonConnector {
 				"error",
 				`cwd mismatch: omp-session reports ${hello.cwd}, registered ${entry.cwd}`,
 			);
-			state.socket?.close(1000, "cwd mismatch");
+			state.abort?.abort();
 			return;
 		}
 		if (hello.sessionFile) {
@@ -545,17 +512,17 @@ export class DaemonConnector {
 		if (state.sawHello) this.#transitionLadder(state.daemonId, "ready");
 	}
 
-	#onClose(state: ConnState, code: number): void {
-		if (state.keepaliveStop) {
-			state.keepaliveStop();
-			state.keepaliveStop = null;
-		}
+	/** The stream (or its fetch) ended: clean → asleep, else reconnect. */
+	#onStreamEnded(state: ConnState, opts: { clean: boolean }): void {
+		state.streamOpen = false;
+		this.#clearSilenceTimer(state);
+		state.abort = null;
 		if (state.closed) return; // disconnect()/close() — intentional, no status change
 		const entry = this.#registry.get(state.daemonId);
 		if (!entry) return;
 		if (entry.status === "error") return; // error is terminal: never overwrite or redial
-		if (code === 1000 || code === 1001) {
-			// Clean close: the daemon went dormant; keep cwd + lastSessionFile.
+		if (opts.clean) {
+			// Clean end: the daemon went dormant; keep cwd + lastSessionFile.
 			this.#transition(state.daemonId, "asleep");
 			return;
 		}
@@ -595,8 +562,28 @@ export class DaemonConnector {
 		this.#transition(daemonId, status);
 	}
 
+	/** Reset the silence deadline; every SSE unit (event or comment) re-arms it. */
+	#armSilenceTimer(state: ConnState): void {
+		this.#clearSilenceTimer(state);
+		state.silenceTimer = setTimeout(() => {
+			state.silenceTimer = null;
+			if (state.closed || !state.abort) return;
+			// Dead peer: no event/comment within the deadline. Abort the stream;
+			// the reader error drives the same reconnect path as an unexpected close.
+			state.abort.abort();
+		}, this.#silenceDeadlineMs);
+	}
+
+	#clearSilenceTimer(state: ConnState): void {
+		if (state.silenceTimer) {
+			clearTimeout(state.silenceTimer);
+			state.silenceTimer = null;
+		}
+	}
+
 	/** Central status transition: persist, flush waiters, notify. */
-	#transition(daemonId: string, status: DaemonStatus, error?: string): void {		if (!this.#registry.get(daemonId)) return;
+	#transition(daemonId: string, status: DaemonStatus, error?: string): void {
+		if (!this.#registry.get(daemonId)) return;
 		this.#registry.setStatus(daemonId, status, error);
 		const state = this.#states.get(daemonId);
 		if (state && state.waiters.length > 0) {

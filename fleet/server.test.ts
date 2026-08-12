@@ -1,18 +1,18 @@
 /**
  * Control-plane tests for fleet/server.ts: every route exercised over
- * loopback HTTP against a real DaemonConnector + a tiny fake omp-session WS daemon
- * (speaking hello_ok/state/ready/event frames, mirroring server/index.ts's
- * handshake: hello_ok only after a valid hello... which the connector never
- * sends, so the fake primes hello_ok → state → ready on open per OCore's
- * dial contract). No real omp-session children are spawned.
+ * loopback HTTP against a real DaemonConnector + a tiny fake omp-session
+ * daemon speaking the OMP_PROTO 2 wire contract (/events SSE + /command
+ * POST): the fake primes hello_ok → state → ready on stream open and
+ * answers prompt calls with call_result + event frames on the stream. No
+ * real omp-session children are spawned.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ServerWebSocket } from "bun";
-import { OMP_PROTO } from "../src/protocol";
+import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../src/protocol";
+import { encodeSseEvent } from "../src/sse";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
 import { runSpawnHook, startFleet, type FleetServer } from "./server";
@@ -62,36 +62,60 @@ interface FakeDaemon {
 	close(): void;
 }
 
-/** Tiny fake omp-session: records the Bearer header, primes the status machine, answers prompt calls. */
+/** One open /events stream on the fake (these tests open exactly one per daemon — the connector's). */
+interface FakeStream {
+	write(frame: unknown, seq: number): void;
+}
+
+/**
+ * Tiny fake omp-session over HTTP: serves /events (SSE) + /command (POST)
+ * on a pathless ws:// base (proving daemonHttpBase normalization). Records
+ * the Bearer header, primes the status machine on stream open (hello_ok →
+ * state → ready — no hello handshake on the wire), and answers prompt
+ * calls with call_result + event frames on the stream.
+ */
 function startFakeDaemon(token: string): FakeDaemon {
 	const seen: FakeSeen = { authHeader: null, calls: [], closed: false };
+	let stream: FakeStream | null = null;
+	const nextSeq = { value: SSE_DELTA_SEQ_START };
+	const encoder = new TextEncoder();
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
-		fetch(req, srv) {
+		fetch(req) {
+			const url = new URL(req.url);
+			if (url.pathname === "/command") {
+				return (async () => {
+					let msg: unknown;
+					try {
+						msg = await req.json();
+					} catch {
+						return new Response("malformed", { status: 400 });
+					}
+					seen.calls.push(msg);
+					const cmd = msg as { type?: string; id?: string; method?: string };
+					if (cmd.type === "call" && cmd.method === "prompt" && cmd.id !== undefined && stream) {
+						answerTurn(stream, cmd.id, nextSeq);
+					}
+					return Response.json({ commandId: cmd.id ?? "" }, { status: 202 });
+				})();
+			}
+			if (url.pathname !== "/events") return new Response("not found", { status: 404 });
 			seen.authHeader = req.headers.get("authorization");
-			if (srv.upgrade(req)) return undefined;
-			return new Response("expected websocket", { status: 400 });
-		},
-		websocket: {
-			open(ws) {
-				prime(ws);
-			},
-			message(ws, raw) {
-				let msg: unknown;
-				try {
-					msg = JSON.parse(String(raw));
-				} catch {
-					return;
-				}
-				seen.calls.push(msg);
-				const cmd = msg as { type?: string; id?: string; method?: string };
-				if (cmd.type === "hello") prime(ws);
-				if (cmd.type === "call" && cmd.method === "prompt" && cmd.id !== undefined) answerTurn(ws, cmd.id);
-			},
-			close() {
-				seen.closed = true;
-			},
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					stream = {
+						write(frame, seq) {
+							controller.enqueue(encoder.encode(encodeSseEvent(SSE_EVENT_NAME, frame, seq)));
+						},
+					};
+					prime(stream);
+				},
+				cancel() {
+					seen.closed = true;
+				},
+			});
+			return new Response(body, { headers: { "content-type": "text/event-stream" } });
 		},
 	});
 	return {
@@ -102,16 +126,16 @@ function startFakeDaemon(token: string): FakeDaemon {
 	};
 }
 
-function prime(ws: ServerWebSocket<unknown>) {
-	ws.send(JSON.stringify({ type: "hello_ok", proto: OMP_PROTO, name: "fake", cwd: FAKE_CWD, pid: 4242, version: "0.0.0-test", sessionFile: FAKE_SESSION_FILE }));
-	ws.send(JSON.stringify({ type: "state", sessionId: "s1", state: FAKE_STATE }));
-	ws.send(JSON.stringify({ type: "ready", readyAt: Date.now() }));
+function prime(stream: FakeStream) {
+	stream.write({ type: "hello_ok", proto: OMP_PROTO, name: "fake", cwd: FAKE_CWD, pid: 4242, version: "0.0.0-test", sessionFile: FAKE_SESSION_FILE }, 1);
+	stream.write({ type: "state", sessionId: "s1", state: FAKE_STATE }, 2);
+	stream.write({ type: "ready", readyAt: Date.now() }, 3);
 }
 
-function answerTurn(ws: ServerWebSocket<unknown>, callId: string) {
-	ws.send(JSON.stringify({ type: "call_result", id: callId, ok: true }));
-	ws.send(JSON.stringify({ type: "event", sessionId: "s1", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "fake reply" }] } } }));
-	ws.send(JSON.stringify({ type: "event", sessionId: "s1", event: { type: "agent_end", messages: [{ role: "assistant", content: [{ type: "text", text: "fake reply" }] }] } }));
+function answerTurn(stream: FakeStream, callId: string, nextSeq: { value: number }) {
+	stream.write({ type: "call_result", id: callId, ok: true }, nextSeq.value++);
+	stream.write({ type: "event", sessionId: "s1", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "fake reply" }] } } }, nextSeq.value++);
+	stream.write({ type: "event", sessionId: "s1", event: { type: "agent_end", messages: [{ role: "assistant", content: [{ type: "text", text: "fake reply" }] }] } }, nextSeq.value++);
 }
 
 /** Poll until `predicate` is truthy or the timeout elapses. */

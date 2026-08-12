@@ -4,31 +4,47 @@
  * Mounted by fleet/server.ts on the same loopback Bun.serve as the
  * /ctl control API:
  *
- *   - `/ws` is the browser WebSocket edge. Every browser socket gets an
- *     immediate roster unicast; registry mutations broadcast a fresh roster;
- *     connector status transitions broadcast `daemon_status`. Browser
- *     commands are either handled here (list_projects / spawn /
- *     spawn_resume / stop / attach) or forwarded VERBATIM to the session
- *     over the browser's proxy pipe; anything outside the browser-command
- *     allowlist is rejected with an error frame.
- *   - PROXY ATTACH: one session socket PER BROWSER (omp-session auto-attaches
- *     and primes every new socket, so history/state/available_commands come
- *     from the session itself). The pipe opens with the Bearer token, sends
- *     the hello handshake, swallows hello_ok, and forwards every other
- *     session frame, STAMPING the daemonId as sessionId on every
- *     session-scoped frame (omp-session no longer sends one) and rewriting
- *     `attached`'s guard token the same way.
- *     connector.retain on pipe open / release on close feeds the idle
- *     policy. Asleep sessions are woken first (respawn for spawned entries,
- *     connector redial otherwise) and awaited to ready (60s) before piping.
- *   - Backpressure: a browser socket buffering more than 4 MiB has the
- *     frame dropped and receives one error frame marking the drop
- *     (drop-and-mark).
+ *   - GET /events is the browser SSE downlink. Every open stream gets an
+ *     immediate roster + merged-daemons priming (edge-local seqs 1..k,
+ *     k < SSE_DELTA_SEQ_START); live `roster` / `daemon_status` / `daemons`
+ *     broadcasts and proxied daemon frames follow as SSE events with
+ *     edge-local monotonic seqs from SSE_DELTA_SEQ_START, kept in a
+ *     per-client SseRing (cap SSE_RING_CAP) for Last-Event-ID resume:
+ *     N ≥ SSE_DELTA_SEQ_START replays ring.after(N) after priming, anything
+ *     below skips replay (priming already carries full current state).
+ *   - POST /command is the browser uplink: one ClientCommand per request,
+ *     202 {commandId} on accept, answers ride /events only. Commands are
+ *     routed to a browser by the X-Omp-Client-Id header (the browser binds
+ *     its stream at /events open with ?client=<id>); a missing or unknown
+ *     id is a 400. Fleet-level commands (list_projects / spawn /
+ *     spawn_resume / stop / remove / attach) are handled here;
+ *     attached-session commands (call / login_code / ui_response /
+ *     collab_* / daemon_* / list_* / get_process_stats) proxy to the
+ *     attached daemon's POST /command with the bearer token. Anything
+ *     outside the browser-command allowlist is rejected with an error
+ *     frame.
+ *   - PROXY ATTACH: one daemon /events stream PER BROWSER (the daemon
+ *     primes every new stream, so hello_ok → attached → history → state →
+ *     available_commands → ready come from the session itself). The pipe
+ *     opens with the Bearer token, swallows hello_ok, ingests per-daemon
+ *     broker rosters, and forwards every other session frame, STAMPING the
+ *     daemonId as sessionId on every session-scoped frame (omp-session no
+ *     longer sends one) and rewriting `attached`'s guard token the same
+ *     way. connector.retain on pipe open / release on pipe end feeds the
+ *     idle policy. Asleep sessions are woken first (respawn for spawned
+ *     entries, connector redial otherwise) and awaited to ready (60s)
+ *     before piping. Pipe liveness: no event and no comment for
+ *     silenceDeadlineMs (default 30s) → the pipe is treated as lost → the
+ *     same re-attach path the old close handler drove.
+ *   - Backpressure: a browser stream buffering more than the cap (default
+ *     SSE_BACKPRESSURE_BYTES) is terminated (drop-and-resume): the browser
+ *     reconnects with Last-Event-ID and the edge replays its ring. One slow
+ *     browser never stalls the daemon stream or other browsers.
  *   - Aggregated daemons: every daemon connection (the connector's control
- *     socket and each proxy pipe) is tapped for {type:"daemons"} broker
+ *     stream and each proxy pipe) is tapped for {type:"daemons"} broker
  *     rosters. The latest roster per daemonId is cached (full-replace),
  *     merged across daemons, and broadcast as ONE {type:"daemons"} frame to
- *     every edge socket — also on browser open. Per-daemon daemons frames
+ *     every edge stream — also on browser open. Per-daemon daemons frames
  *     are stripped from proxy pipes (the merged frame is the only one
  *     browsers see), and removing a daemon from the registry evicts its
  *     cache (see daemons-aggregator.ts).
@@ -39,24 +55,36 @@
  * toRosterEntry).
  */
 
-import type { Server, ServerWebSocket } from "bun";
-import { OMP_PROTO } from "../src/protocol";
-import type { ClientCommand, DaemonEntry, DaemonInfo, ServerFrame, SessionScopedFrame } from "../src/protocol";
+import {
+	SSE_BACKPRESSURE_BYTES,
+	SSE_DELTA_SEQ_START,
+	SSE_EVENT_NAME,
+	SSE_KEEPALIVE_MS,
+	SSE_RING_CAP,
+	SSE_SILENCE_DEADLINE_MS,
+	type ClientCommand,
+	type DaemonEntry,
+	type DaemonInfo,
+	type ServerFrame,
+	type SessionScopedFrame,
+} from "../src/protocol";
+import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK, SSE_PING_EVENT, SseRing } from "../src/sse";
 import type { FleetConfig } from "./config";
 import { listProjects, validateProjectPath } from "./discovery";
 import type { DaemonConnector } from "./connector";
-import { daemonWsUrl, startSocketKeepalive, DEFAULT_PING_INTERVAL_MS, DEFAULT_PONG_TIMEOUT_MS } from "./connector";
+import { daemonHttpBase } from "./connector";
 import { DaemonsAggregator } from "./daemons-aggregator";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
 
-/** Backpressure cap for browser sockets: frames are dropped above this. */
-export const DEFAULT_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
-
 /** How long a proxy attach waits for the daemon to become ready (contract: 60s). */
 const ATTACH_WAIT_READY_MS = 60_000;
 
-const WS_OPEN = 1;
+/** Reclaim grace for a disconnected browser's ring (Last-Event-ID resume window). */
+const CLIENT_RECLAIM_MS = 60_000;
+
+/** Encode SSE blocks once per edge (the queue strategy sizes in bytes). */
+const SSE_ENCODER = new TextEncoder();
 
 /** k=v labels accepted on spawn (contract: `^[^=]+=.*$`). */
 const LABEL_RE = /^[^=]+=.*$/;
@@ -87,11 +115,10 @@ const UNKNOWN_COMMAND_MESSAGE = "fleet edge: use spawn/stop/roster";
 /**
  * Browser-command allowlist, checked on the RAW parsed frame before any
  * dispatch: edge-handled commands plus the ClientCommand variants forwarded
- * verbatim over the browser's pipe. `hello` is deliberately absent — it is
- * fleet→omp-session only (the pipe handshake is the edge's job). Anything
- * else is rejected with UNKNOWN_COMMAND_MESSAGE. Typed against ClientCommand
- * so a removed variant stops compiling instead of silently broadening the
- * allowlist.
+ * to the attached daemon. `hello` is gone from the protocol (OMP_PROTO 2:
+ * daemon auth is HTTP-level, the bearer header). Anything else is rejected
+ * with UNKNOWN_COMMAND_MESSAGE. Typed against ClientCommand so a removed
+ * variant stops compiling instead of silently broadening the allowlist.
  */
 const BROWSER_COMMAND_LIST: ClientCommand["type"][] = [
 	// Handled at the edge.
@@ -101,7 +128,7 @@ const BROWSER_COMMAND_LIST: ClientCommand["type"][] = [
 	"stop",
 	"remove",
 	"attach",
-	// Forwarded verbatim over the browser's pipe.
+	// Forwarded to the attached daemon's POST /command.
 	"call",
 	"login_code",
 	"ui_response",
@@ -164,22 +191,60 @@ export interface EdgeDeps {
 	config: FleetConfig;
 }
 
-/** A browser socket on the edge (data is unused; sockets are tracked by identity). */
-export type EdgeSocket = ServerWebSocket<unknown>;
-
-/** One proxy pipe: a browser's dedicated WebSocket to a daemon. */
-interface PipeState {
-	daemonId: string;
-	ws: WebSocket;
-	retained: boolean;
-	/** Intentional teardown (browser close / re-attach) — onclose must not double-release. */
-	closed: boolean;
-	/** Stops the shared socket keepalive (same LIVENESS contract as the connector). */
-	keepaliveStop: (() => void) | null;
+/**
+ * One browser /events consumer on the edge, keyed by the browser's
+ * page-scoped clientId. The ring + seq counter live here so a reconnecting
+ * browser (same clientId) resumes from its Last-Event-ID across stream
+ * replacement; the state is reclaimed after a grace period with no stream.
+ */
+interface BrowserClient {
+	/** Page-scoped id from ?client= (null for anonymous streams — not command-addressable). */
+	clientId: string | null;
+	/** Edge-local replay ring of this browser's deltas (cap SSE_RING_CAP). */
+	ring: SseRing<string>;
+	/** Next edge-local delta seq for this browser (≥ SSE_DELTA_SEQ_START). */
+	nextSeq: number;
+	/** Live stream, or null while disconnected (the ring is kept for resume). */
+	stream: BrowserStream | null;
+	/** Reclaim timer: drops the client state when no stream rebinds in time. */
+	gcTimer: ReturnType<typeof setTimeout> | null;
 }
 
-interface BrowserState {
+/** One live GET /events stream on the edge. */
+interface BrowserStream {
+	controller: ReadableStreamDefaultController<Uint8Array>;
+	/**
+	 * Bytes enqueued while no reader is attached (desiredSize is null then).
+	 * Reset once a reader becomes visible and desiredSize reports the truth.
+	 */
+	unreadEstimate: number;
+	/** The client this stream belongs to (ring/seq live there). */
+	client: BrowserClient;
+	/** This browser's dedicated daemon pipe (attach). */
 	pipe: PipeState | null;
+}
+
+/** One proxy pipe: a browser's dedicated /events stream to a daemon. */
+interface PipeState {
+	daemonId: string;
+	/** AbortController for the daemon /events fetch — the pipe handle. */
+	abort: AbortController;
+	/** Intentional teardown (browser close / re-attach) — the pipe-end handler must not double-release. */
+	closed: boolean;
+	/** Retain fed to the connector's idle policy; released on pipe end. */
+	retained: boolean;
+	/** Resets on every SSE unit (event or comment); on fire the pipe is treated as lost. */
+	silenceTimer: ReturnType<typeof setTimeout> | null;
+}
+
+function newClient(clientId: string | null): BrowserClient {
+	return {
+		clientId,
+		ring: new SseRing<string>(SSE_RING_CAP),
+		nextSeq: SSE_DELTA_SEQ_START,
+		stream: null,
+		gcTimer: null,
+	};
 }
 
 function json(data: unknown, status = 200): Response {
@@ -225,15 +290,19 @@ export class FleetEdge {
 	readonly #supervisor: SpawnSupervisor;
 	readonly #config: FleetConfig;
 	readonly #backpressureBytes: number;
-	readonly #pingIntervalMs: number;
-	readonly #pongTimeoutMs: number;
-	readonly #browsers = new Map<EdgeSocket, BrowserState>();
+	readonly #silenceDeadlineMs: number;
+	/** Live browser streams (broadcasts + backpressure). */
+	readonly #browsers = new Set<BrowserStream>();
+	/** Command-addressable browsers by clientId (ring survives stream replacement). */
+	readonly #clients = new Map<string, BrowserClient>();
 	/** daemonIds mid-wake (respawn/redial); serializes spawn_resume + attach. */
 	readonly #waking = new Set<string>();
 	/** Cached broker rosters per daemonId, merged into the broadcast daemons frame. */
 	readonly #daemonsAggregator = new DaemonsAggregator();
 	/** Control-socket taps per daemonId (unsubscribe fns), reconciled on registry change. */
 	readonly #daemonTaps = new Map<string, () => void>();
+	/** Keepalive ping events on every open browser stream every SSE_KEEPALIVE_MS. */
+	#keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
 	/** Bound once so close() can unset registry.onChange without clobbering a replacement. */
 	readonly #onRegistryChange = (): void => {
@@ -252,39 +321,38 @@ export class FleetEdge {
 	constructor(
 		deps: EdgeDeps,
 		opts?: {
+			/** Backpressure cap for browser streams (default SSE_BACKPRESSURE_BYTES). */
 			backpressureBytes?: number;
-			/** LIVENESS: ping interval for proxy pipes (default 15s, shared with the connector). */
-			pingIntervalMs?: number;
-			/** LIVENESS: silence deadline for proxy pipes (default 10s). */
-			pongTimeoutMs?: number;
+			/** LIVENESS: total silence on a daemon pipe (no event, no comment) before it is treated as lost (default SSE_SILENCE_DEADLINE_MS). */
+			silenceDeadlineMs?: number;
 		},
 	) {
 		this.#registry = deps.registry;
 		this.#connector = deps.connector;
 		this.#supervisor = deps.supervisor;
 		this.#config = deps.config;
-		this.#backpressureBytes = opts?.backpressureBytes ?? DEFAULT_BACKPRESSURE_BYTES;
-		this.#pingIntervalMs = opts?.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
-		this.#pongTimeoutMs = opts?.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS;
+		this.#backpressureBytes = opts?.backpressureBytes ?? SSE_BACKPRESSURE_BYTES;
+		this.#silenceDeadlineMs = opts?.silenceDeadlineMs ?? SSE_SILENCE_DEADLINE_MS;
 		deps.registry.onChange = this.#onRegistryChange;
 		// Tap daemons that already exist at construction (state.json load).
 		this.#reconcileDaemonTaps();
 	}
 
 	/**
-	 * Edge HTTP surface. Returns a Response (route handled), undefined (a
-	 * successful /ws upgrade — the caller's fetch handler must return
-	 * undefined), or null (not an edge route; the control plane decides).
-	 * Never throws.
+	 * Edge HTTP surface. Returns a Response (route handled) or null (not an
+	 * edge route; the control plane decides). Never throws.
 	 */
-	async handleFetch(req: Request, server: Server<undefined>): Promise<Response | null | undefined> {
+	async handleFetch(req: Request): Promise<Response | null> {
 		try {
 			const url = new URL(req.url);
 			const path = url.pathname;
-			if (path === "/ws") {
+			if (path === "/events") {
 				if (req.method !== "GET") return null; // control plane 405s
-				if (server.upgrade(req)) return undefined;
-				return json({ error: "websocket upgrade failed" }, 400);
+				return this.#openEventsResponse(req);
+			}
+			if (path === "/command") {
+				if (req.method !== "POST") return null; // control plane 405s
+				return await this.#handleCommand(req);
 			}
 			if (req.method !== "GET") return null;
 			if (path === "/ctl/templates") {
@@ -301,108 +369,6 @@ export class FleetEdge {
 		}
 	}
 
-	/** Bun websocket `open` handler for the edge's browser sockets. */
-	onSocketOpen(ws: EdgeSocket): void {
-		this.#browsers.set(ws, { pipe: null });
-		// Roster unicast on open.
-		this.#sendToBrowser(ws, { type: "roster", daemons: this.#registry.list().map(toRosterEntry) });
-		// Aggregated daemons broadcast on open (the cached merged roster).
-		this.#broadcastDaemons();
-	}
-
-	/** Bun websocket `message` handler: browser command dispatch. */
-	onSocketMessage(ws: EdgeSocket, message: string | Buffer): void {
-		const state = this.#browsers.get(ws);
-		if (!state) return;
-		let raw: unknown;
-		try {
-			raw = JSON.parse(String(message));
-		} catch {
-			return; // non-JSON noise
-		}
-		if (typeof raw !== "object" || raw === null) return;
-		const cmd = raw as Record<string, unknown>;
-		if (typeof cmd.type !== "string") return;
-		const type = cmd.type;
-		// Phase 6: the mux-era commands and detach are gone from
-		// ClientCommand. Any type outside the browser allowlist — a stale
-		// client's removed command or plain garbage — is rejected here so
-		// the daemon never sees a command it no longer understands.
-		if (BROWSER_COMMAND_TYPES[type] !== true) {
-			this.#sendError(ws, UNKNOWN_COMMAND_MESSAGE);
-			return;
-		}
-		switch (type) {
-			case "list_projects":
-				void this.#handleListProjects(ws);
-				break;
-			case "spawn": {
-				const cwd = typeof cmd.cwd === "string" && cmd.cwd !== "" ? cmd.cwd : undefined;
-				if (cwd === undefined) {
-					this.#sendError(ws, "spawn: missing cwd");
-					break;
-				}
-				const template = typeof cmd.template === "string" && cmd.template !== "" ? cmd.template : undefined;
-				let labels: string[] | undefined;
-				try {
-					labels = parseSpawnLabels(cmd.labels);
-				} catch (err) {
-					this.#sendError(ws, err instanceof Error ? err.message : String(err));
-					break;
-				}
-				void this.#handleSpawn(ws, cwd, template, labels);
-				break;
-			}
-			case "spawn_resume": {
-				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(ws, "spawn_resume: missing daemonId");
-					break;
-				}
-				void this.#handleSpawnResume(ws, daemonId);
-				break;
-			}
-			case "stop": {
-				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(ws, "stop: missing daemonId");
-					break;
-				}
-				void this.#handleStop(ws, daemonId);
-				break;
-			}
-			case "remove": {
-				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(ws, "remove: missing daemonId");
-					break;
-				}
-				void this.#handleRemove(ws, daemonId);
-				break;
-			}
-			case "attach": {
-				const daemonId = typeof cmd.sessionId === "string" && cmd.sessionId !== "" ? cmd.sessionId : undefined;
-				if (daemonId === undefined) {
-					this.#sendError(ws, "attach: missing sessionId");
-					break;
-				}
-				void this.#handleAttach(ws, state, daemonId);
-				break;
-			}
-			default:
-				this.#forwardCommand(ws, state, cmd);
-				break;
-		}
-	}
-
-	/** Bun websocket `close` handler: browser gone → close its pipe + release. */
-	onSocketClose(ws: EdgeSocket): void {
-		const state = this.#browsers.get(ws);
-		if (!state) return;
-		this.#browsers.delete(ws);
-		this.#closePipe(state);
-	}
-
 	/** Connector status transition → daemon_status broadcast (wired by server.ts). */
 	onDaemonStatus(entry: RegistryEntry): void {
 		const frame: ServerFrame = {
@@ -411,78 +377,254 @@ export class FleetEdge {
 			status: entry.status,
 			...(entry.error !== undefined ? { error: entry.error } : {}),
 		};
-		for (const ws of [...this.#browsers.keys()]) {
-			this.#sendToBrowser(ws, frame);
-		}
+		this.#broadcast(frame);
 	}
 
-	/** Detach broadcast wiring and close every browser socket + pipe. */
+	/** Detach broadcast wiring and close every browser stream + pipe. */
 	close(): void {
 		if (this.#registry.onChange === this.#onRegistryChange) {
 			this.#registry.onChange = null;
 		}
 		for (const unsubscribe of this.#daemonTaps.values()) unsubscribe();
 		this.#daemonTaps.clear();
-		for (const [ws, state] of [...this.#browsers]) {
-			this.#closePipe(state);
+		this.#stopKeepalive();
+		for (const client of this.#clients.values()) {
+			if (client.gcTimer) clearTimeout(client.gcTimer);
+		}
+		this.#clients.clear();
+		for (const stream of [...this.#browsers]) {
+			this.#closePipe(stream);
 			try {
-				ws.close(1000, "fleet close");
+				stream.controller.close();
 			} catch {
-				// Ignore; the socket is already gone.
+				// Ignore; the stream is already gone.
 			}
 		}
 		this.#browsers.clear();
 	}
 
 	// ---------------------------------------------------------------------
+	// Browser streams
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Open a browser GET /events SSE response: bind the stream to the
+	 * clientId (?client=), prime it (roster + merged daemons, seqs 1..k),
+	 * replay the client's ring per Last-Event-ID, and stream live deltas
+	 * until the browser goes away. The body's queuing strategy sizes chunks
+	 * in bytes so backpressure is measured against the configured cap.
+	 */
+	#openEventsResponse(req: Request): Response {
+		const clientId = new URL(req.url).searchParams.get("client");
+		const lastEventId = req.headers.get("last-event-id");
+		let stream: BrowserStream | null = null;
+		const body = new ReadableStream<Uint8Array>(
+			{
+				start: (controller) => {
+					const client = this.#bindClient(clientId);
+					// The constructor's start callback types the controller as the
+					// default/byte union; this stream is built with a default
+					// source, so the default controller is the actual runtime type.
+					stream = { controller: controller as ReadableStreamDefaultController<Uint8Array>, unreadEstimate: 0, client, pipe: null };
+					client.stream = stream;
+					this.#browsers.add(stream);
+					this.#startKeepalive();
+					// Priming: roster + merged daemons (seqs 1..k, k < SSE_DELTA_SEQ_START).
+					let seq = 1;
+					this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "roster", daemons: this.#registry.list().map(toRosterEntry) }, seq++));
+					this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "daemons", daemons: this.#daemonsAggregator.merge() }, seq++));
+					// Resume: only a delta-era id (≥ SSE_DELTA_SEQ_START) replays
+					// the ring; anything below means priming carries full state.
+					const last = lastEventId === null ? NaN : Number(lastEventId);
+					if (Number.isFinite(last) && last >= SSE_DELTA_SEQ_START) {
+						for (const { value } of client.ring.after(last)) this.#enqueue(stream, value);
+					}
+				},
+				cancel: () => {
+					// The browser went away: close its pipe + release; the
+					// client's ring is kept for Last-Event-ID resume.
+					if (stream) this.#releaseBrowser(stream);
+				},
+			},
+			{ highWaterMark: this.#backpressureBytes, size: (chunk) => chunk?.byteLength ?? 0 },
+		);
+		return new Response(body, {
+			headers: {
+				"content-type": "text/event-stream",
+				"cache-control": "no-cache",
+				"x-accel-buffering": "no",
+			},
+		});
+	}
+
+	/** Find or create the client state for a stream open (?client= optional). */
+	#bindClient(clientId: string | null): BrowserClient {
+		if (clientId !== null && clientId !== "") {
+			let client = this.#clients.get(clientId);
+			if (client) {
+				// Reconnect with the same clientId: clear the reclaim timer and
+				// rebind — the ring resumes from the browser's Last-Event-ID.
+				if (client.gcTimer) {
+					clearTimeout(client.gcTimer);
+					client.gcTimer = null;
+				}
+				return client;
+			}
+			client = newClient(clientId);
+			this.#clients.set(clientId, client);
+			return client;
+		}
+		// Anonymous stream: served (priming + broadcasts + ring) but not
+		// command-addressable (POST /command needs a client id).
+		return newClient(null);
+	}
+
+	/**
+	 * POST /command: one ClientCommand per request, 202 {commandId} on
+	 * accept; answers ride the /events stream only. The X-Omp-Client-Id
+	 * header selects the browser stream the command acts on (edge-level
+	 * commands answer there; attached-session commands proxy to that
+	 * browser's daemon pipe).
+	 */
+	async #handleCommand(req: Request): Promise<Response> {
+		const clientId = req.headers.get("x-omp-client-id");
+		const client = typeof clientId === "string" && clientId !== "" ? this.#clients.get(clientId) : undefined;
+		const stream = client?.stream ?? null;
+		if (!stream) {
+			return json({ error: "unknown client or not connected" }, 400);
+		}
+		let raw: unknown;
+		try {
+			raw = await req.json();
+		} catch {
+			return json({ error: "malformed JSON body" }, 400);
+		}
+		if (typeof raw !== "object" || raw === null || !("type" in raw) || typeof raw.type !== "string") {
+			return json({ error: "request body must be a JSON object with a string type" }, 400);
+		}
+		const cmd = raw as Record<string, unknown>;
+		const type = cmd.type as string;
+		// Phase 6: the mux-era commands and detach are gone from
+		// ClientCommand. Any type outside the browser allowlist — a stale
+		// client's removed command or plain garbage — is rejected here so
+		// the daemon never sees a command it no longer understands.
+		if (BROWSER_COMMAND_TYPES[type] !== true) {
+			this.#sendError(stream, UNKNOWN_COMMAND_MESSAGE);
+			return json({ commandId: cmd.id }, 202);
+		}
+		switch (type) {
+			case "list_projects":
+				void this.#handleListProjects(stream);
+				break;
+			case "spawn": {
+				const cwd = typeof cmd.cwd === "string" && cmd.cwd !== "" ? cmd.cwd : undefined;
+				if (cwd === undefined) {
+					this.#sendError(stream, "spawn: missing cwd");
+					break;
+				}
+				const template = typeof cmd.template === "string" && cmd.template !== "" ? cmd.template : undefined;
+				let labels: string[] | undefined;
+				try {
+					labels = parseSpawnLabels(cmd.labels);
+				} catch (err) {
+					this.#sendError(stream, err instanceof Error ? err.message : String(err));
+					break;
+				}
+				void this.#handleSpawn(stream, cwd, template, labels);
+				break;
+			}
+			case "spawn_resume": {
+				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				if (daemonId === undefined) {
+					this.#sendError(stream, "spawn_resume: missing daemonId");
+					break;
+				}
+				void this.#handleSpawnResume(stream, daemonId);
+				break;
+			}
+			case "stop": {
+				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				if (daemonId === undefined) {
+					this.#sendError(stream, "stop: missing daemonId");
+					break;
+				}
+				void this.#handleStop(stream, daemonId);
+				break;
+			}
+			case "remove": {
+				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				if (daemonId === undefined) {
+					this.#sendError(stream, "remove: missing daemonId");
+					break;
+				}
+				void this.#handleRemove(stream, daemonId);
+				break;
+			}
+			case "attach": {
+				const daemonId = typeof cmd.sessionId === "string" && cmd.sessionId !== "" ? cmd.sessionId : undefined;
+				if (daemonId === undefined) {
+					this.#sendError(stream, "attach: missing sessionId");
+					break;
+				}
+				void this.#handleAttach(stream, daemonId);
+				break;
+			}
+			default:
+				this.#forwardCommand(stream, cmd);
+				break;
+		}
+		return json({ commandId: cmd.id }, 202);
+	}
+
+	// ---------------------------------------------------------------------
 	// Commands
 	// ---------------------------------------------------------------------
 
-	async #handleListProjects(ws: EdgeSocket): Promise<void> {
+	async #handleListProjects(stream: BrowserStream): Promise<void> {
 		try {
 			const projects = await listProjects(this.#config.roots);
-			this.#sendToBrowser(ws, { type: "projects", projects });
+			this.#sendAnswer(stream, { type: "projects", projects });
 		} catch (err) {
-			this.#sendError(ws, err instanceof Error ? err.message : String(err));
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
 	}
 
-	async #handleSpawn(ws: EdgeSocket, cwd: string, template: string | undefined, labels: string[] | undefined): Promise<void> {
+	async #handleSpawn(stream: BrowserStream, cwd: string, template: string | undefined, labels: string[] | undefined): Promise<void> {
 		try {
 			const resolved = await validateProjectPath(cwd);
 			if (resolved === null) {
-				this.#sendError(ws, `not a directory: ${cwd}`);
+				this.#sendError(stream, `not a directory: ${cwd}`);
 				return;
 			}
 			// Progress surfaces via roster/daemon_status broadcasts.
 			await this.#supervisor.spawn({ cwd: resolved, template, labels });
 		} catch (err) {
-			this.#sendError(ws, err instanceof Error ? err.message : String(err));
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
 	}
 
-	async #handleSpawnResume(ws: EdgeSocket, daemonId: string): Promise<void> {
+	async #handleSpawnResume(stream: BrowserStream, daemonId: string): Promise<void> {
 		try {
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
-				this.#sendError(ws, `unknown daemon: ${daemonId}`);
+				this.#sendError(stream, `unknown daemon: ${daemonId}`);
 				return;
 			}
 			if (entry.status !== "asleep") {
-				this.#sendError(ws, `daemon ${daemonId} is not asleep (status ${entry.status})`);
+				this.#sendError(stream, `daemon ${daemonId} is not asleep (status ${entry.status})`);
 				return;
 			}
 			await this.#wake(entry);
 		} catch (err) {
-			this.#sendError(ws, err instanceof Error ? err.message : String(err));
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
 	}
 
-	async #handleStop(ws: EdgeSocket, daemonId: string): Promise<void> {
+	async #handleStop(stream: BrowserStream, daemonId: string): Promise<void> {
 		try {
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
-				this.#sendError(ws, `unknown daemon: ${daemonId}`);
+				this.#sendError(stream, `unknown daemon: ${daemonId}`);
 				return;
 			}
 			if (entry.mode === "spawned") {
@@ -492,20 +634,20 @@ export class FleetEdge {
 				this.#registry.setStatus(daemonId, "asleep");
 			}
 		} catch (err) {
-			this.#sendError(ws, err instanceof Error ? err.message : String(err));
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
 	}
 
-	async #handleRemove(ws: EdgeSocket, daemonId: string): Promise<void> {
+	async #handleRemove(stream: BrowserStream, daemonId: string): Promise<void> {
 		try {
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
-				this.#sendError(ws, `unknown daemon: ${daemonId}`);
+				this.#sendError(stream, `unknown daemon: ${daemonId}`);
 				return;
 			}
 			// A browser attached to the removed daemon must not keep a live pipe.
-			for (const state of this.#browsers.values()) {
-				if (state.pipe?.daemonId === daemonId) this.#closePipe(state);
+			for (const s of this.#browsers) {
+				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
 			}
 			if (entry.mode === "spawned") {
 				await this.#supervisor.stop(daemonId);
@@ -515,31 +657,31 @@ export class FleetEdge {
 			// The entry is gone; the roster broadcast rides registry.onChange.
 			this.#registry.remove(daemonId);
 		} catch (err) {
-			this.#sendError(ws, err instanceof Error ? err.message : String(err));
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
 	}
 
-	async #handleAttach(ws: EdgeSocket, state: BrowserState, daemonId: string): Promise<void> {
+	async #handleAttach(stream: BrowserStream, daemonId: string): Promise<void> {
 		const entry = this.#registry.get(daemonId);
 		if (!entry) {
-			this.#sendError(ws, `unknown daemon: ${daemonId}`);
+			this.#sendError(stream, `unknown daemon: ${daemonId}`);
 			return;
 		}
 		// Re-attach (same or another daemon) closes the previous pipe first.
-		this.#closePipe(state);
+		this.#closePipe(stream);
 		try {
 			await this.#wake(entry);
 			await this.#connector.waitReady(daemonId, ATTACH_WAIT_READY_MS);
 		} catch (err) {
-			this.#sendError(ws, err instanceof Error ? err.message : String(err));
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 			return;
 		}
 		const current = this.#registry.get(daemonId);
 		if (!current?.endpoint) {
-			this.#sendError(ws, `daemon ${daemonId} has no endpoint`);
+			this.#sendError(stream, `daemon ${daemonId} has no endpoint`);
 			return;
 		}
-		this.#openPipe(ws, state, current);
+		this.#openPipe(stream, current);
 	}
 
 	// ---------------------------------------------------------------------
@@ -575,69 +717,64 @@ export class FleetEdge {
 		}
 	}
 
-	/** Open this browser's dedicated pipe to the daemon (Authorization + hello). */
-	#openPipe(browser: EdgeSocket, state: BrowserState, entry: RegistryEntry): void {
-		// A racing attach may have replaced state.pipe while we waited; never leak it.
-		this.#closePipe(state);
+	/** Open this browser's dedicated daemon /events stream (Authorization + consume). */
+	#openPipe(stream: BrowserStream, entry: RegistryEntry): void {
+		// A racing attach may have replaced stream.pipe while we waited; never leak it.
+		this.#closePipe(stream);
 		// The browser may have closed while waitReady was pending; don't open
 		// a pipe nobody will close (its retain would pin the connector socket).
-		if (!this.#browsers.has(browser)) return;
-		let pipeWs: WebSocket;
-		try {
-			// omp-session only upgrades /ws; registered endpoints are
-			// pathless, so normalize like the connector's own dial
-			// (daemonWsUrl).
-			pipeWs = new WebSocket(daemonWsUrl(entry.endpoint!), {
-				headers: { Authorization: `Bearer ${entry.token ?? ""}` },
-			} as never);
-		} catch (err) {
-			this.#sendError(browser, `pipe open failed: ${(err as Error).message}`);
+		if (!this.#browsers.has(stream)) return;
+		const endpoint = entry.endpoint;
+		if (!endpoint) {
+			this.#sendError(stream, `daemon ${entry.daemonId} has no endpoint`);
 			return;
 		}
-		const pipe: PipeState = { daemonId: entry.daemonId, ws: pipeWs, retained: false, closed: false, keepaliveStop: null };
-		state.pipe = pipe;
-		pipeWs.onopen = () => {
-			if (pipe.closed) {
-				try {
-					pipeWs.close(1000, "edge closed");
-				} catch {
-					// Ignore.
+		const headers: Record<string, string> = {};
+		if (entry.token) headers.Authorization = `Bearer ${entry.token}`;
+		const abort = new AbortController();
+		const pipe: PipeState = { daemonId: entry.daemonId, abort, retained: false, closed: false, silenceTimer: null };
+		stream.pipe = pipe;
+		fetch(daemonHttpBase(endpoint) + "/events", { headers, signal: abort.signal })
+			.then((res) => {
+				if (stream.pipe !== pipe || pipe.closed) {
+					abort.abort();
+					return;
 				}
-				return;
-			}
-			pipe.retained = true;
-			this.#connector.retain(pipe.daemonId);
-			try {
-				pipeWs.send(JSON.stringify({ type: "hello", proto: OMP_PROTO, token: entry.token } satisfies ClientCommand));
-			} catch {
-				// Socket died between open and send; the close handler owns teardown.
-			}
-			// LIVENESS: the pipe shares the connector's keepalive helper; a
-			// silent daemon pipe is terminated and reported lost (re-attach).
-			pipe.keepaliveStop = startSocketKeepalive(pipeWs, {
-				pingIntervalMs: this.#pingIntervalMs,
-				pongTimeoutMs: this.#pongTimeoutMs,
+				if (!res.ok || !res.body) {
+					this.#pipeLost(stream, pipe);
+					return;
+				}
+				// The pipe is live: feed the connector's idle policy.
+				pipe.retained = true;
+				this.#connector.retain(pipe.daemonId);
+				this.#armPipeSilence(pipe);
+				void this.#consumePipe(stream, pipe, res);
+			})
+			.catch(() => {
+				if (stream.pipe !== pipe || pipe.closed) return;
+				this.#pipeLost(stream, pipe);
 			});
-		};
-		pipeWs.onmessage = (ev) => {
-			if (pipe.closed) return;
-			this.#onPipeFrame(browser, pipe, String(ev.data));
-		};
-		pipeWs.onerror = () => {
-			// Bun fires onclose after onerror; the close handler owns teardown.
-		};
-		pipeWs.onclose = () => {
-			if (pipe.closed) return; // intentional teardown already released
-			pipe.closed = true;
-			if (pipe.keepaliveStop) {
-				pipe.keepaliveStop();
-				pipe.keepaliveStop = null;
+	}
+
+	async #consumePipe(stream: BrowserStream, pipe: PipeState, res: Response): Promise<void> {
+		try {
+			for await (const unit of parseSseUnits(res.body!)) {
+				if (stream.pipe !== pipe || pipe.closed) return; // superseded or dropped
+				// Any unit — event or keepalive — proves the daemon lives.
+				this.#armPipeSilence(pipe);
+				if (unit.kind !== "event") continue;
+				if (unit.event === SSE_PING_EVENT) continue; // keepalive: no id, not a delta
+				if (unit.event !== SSE_EVENT_NAME) continue;
+				this.#onPipeFrame(stream, pipe, unit.data);
 			}
-			const browserState = this.#browsers.get(browser);
-			if (browserState?.pipe === pipe) browserState.pipe = null;
-			this.#releaseRetain(pipe);
-			this.#sendError(browser, "daemon connection lost");
-		};
+		} catch {
+			if (stream.pipe !== pipe || pipe.closed) return;
+			this.#pipeLost(stream, pipe);
+			return;
+		}
+		if (stream.pipe !== pipe || pipe.closed) return;
+		// Clean end (dormant daemon / server close): the pipe is lost either way.
+		this.#pipeLost(stream, pipe);
 	}
 
 	/**
@@ -645,9 +782,10 @@ export class FleetEdge {
 	 * rosters; STAMP sessionId = daemonId on every session-scoped frame
 	 * (omp-session no longer sends one) and on `attached` (its required
 	 * "s1" must read as the daemonId through the edge). Global frames pass
-	 * unchanged.
+	 * unchanged. Every forwarded frame is an edge-local delta for this
+	 * browser (ringed; recoverable via Last-Event-ID).
 	 */
-	#onPipeFrame(browser: EdgeSocket, pipe: PipeState, data: string): void {
+	#onPipeFrame(stream: BrowserStream, pipe: PipeState, data: string): void {
 		let raw: unknown;
 		try {
 			raw = JSON.parse(data);
@@ -668,24 +806,31 @@ export class FleetEdge {
 			SESSION_SCOPED_FRAME_TYPES[String(frame.type)] === true || frame.type === "attached"
 				? { ...frame, sessionId: pipe.daemonId }
 				: frame;
-		this.#sendToBrowser(browser, stamped);
+		this.#sendDelta(stream, stamped);
 	}
 
-	/** Intentional pipe teardown (browser close / re-attach): release + close. */
-	#closePipe(state: BrowserState): void {
-		const pipe = state.pipe;
-		if (!pipe) return;
-		state.pipe = null;
+	/** The daemon pipe ended (silence, error, or clean close): release + report lost. */
+	#pipeLost(stream: BrowserStream, pipe: PipeState): void {
+		if (pipe.closed) return; // intentional teardown already released
 		pipe.closed = true;
-		if (pipe.keepaliveStop) {
-			pipe.keepaliveStop();
-			pipe.keepaliveStop = null;
-		}
+		this.#clearPipeSilence(pipe);
+		if (stream.pipe === pipe) stream.pipe = null;
+		this.#releaseRetain(pipe);
+		this.#sendError(stream, "daemon connection lost");
+	}
+
+	/** Intentional pipe teardown (browser close / re-attach / removal): release + abort. */
+	#closePipe(stream: BrowserStream): void {
+		const pipe = stream.pipe;
+		if (!pipe) return;
+		stream.pipe = null;
+		pipe.closed = true;
+		this.#clearPipeSilence(pipe);
 		this.#releaseRetain(pipe);
 		try {
-			pipe.ws.close(1000, "edge close");
+			pipe.abort.abort();
 		} catch {
-			// Ignore; the socket is already gone.
+			// Ignore; the pipe is already gone.
 		}
 	}
 
@@ -695,17 +840,41 @@ export class FleetEdge {
 		this.#connector.release(pipe.daemonId);
 	}
 
-	/** Forward a non-edge command verbatim over the browser's pipe. */
-	#forwardCommand(ws: EdgeSocket, state: BrowserState, cmd: Record<string, unknown>): void {
-		const pipe = state.pipe;
-		if (!pipe || pipe.ws.readyState !== WS_OPEN) {
-			this.#sendError(ws, "not attached");
+	/** Forward a non-edge command verbatim to the attached daemon's POST /command. */
+	#forwardCommand(stream: BrowserStream, cmd: Record<string, unknown>): void {
+		const pipe = stream.pipe;
+		const entry = pipe ? this.#registry.get(pipe.daemonId) : undefined;
+		if (!pipe || !entry?.endpoint) {
+			this.#sendError(stream, "not attached");
 			return;
 		}
-		try {
-			pipe.ws.send(JSON.stringify(cmd));
-		} catch {
-			this.#sendError(ws, "not attached");
+		// Fire-and-forget accept: answers ride the pipe's /events stream (and
+		// thus this browser's). A dropped POST is recovered by the browser's
+		// pending-map timeout + re-send; the daemon dedups by command id.
+		fetch(daemonHttpBase(entry.endpoint) + "/command", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${entry.token ?? ""}`, "Content-Type": "application/json" },
+			body: JSON.stringify(cmd),
+		}).catch(() => {
+			// Ignore: the pipe's silence deadline owns daemon liveness.
+		});
+	}
+
+	/** Reset the pipe's silence deadline; every SSE unit (event or comment) re-arms it. */
+	#armPipeSilence(pipe: PipeState): void {
+		this.#clearPipeSilence(pipe);
+		pipe.silenceTimer = setTimeout(() => {
+			pipe.silenceTimer = null;
+			// Dead daemon pipe: no event/comment within the deadline. Abort the
+			// stream; the consume loop's error path drives #pipeLost.
+			pipe.abort.abort();
+		}, this.#silenceDeadlineMs);
+	}
+
+	#clearPipeSilence(pipe: PipeState): void {
+		if (pipe.silenceTimer) {
+			clearTimeout(pipe.silenceTimer);
+			pipe.silenceTimer = null;
 		}
 	}
 
@@ -713,32 +882,123 @@ export class FleetEdge {
 	// Sending + broadcasting
 	// ---------------------------------------------------------------------
 
-	/** Drop-and-mark: frames over the backpressure cap are dropped, one error frame marks it. */
-	#sendToBrowser(ws: EdgeSocket, frame: unknown): void {
-		if (shouldDropFrame(ws.getBufferedAmount(), this.#backpressureBytes)) {
-			this.#sendError(ws, "backpressure: output dropped — re-attach");
-			return;
-		}
+	/** Bytes currently buffered on a browser stream (the queue is byte-sized via the stream's queuing strategy). */
+	#bufferedBytes(stream: BrowserStream): number {
+		const desired = stream.controller.desiredSize;
+		if (desired === null) return stream.unreadEstimate;
+		if (stream.unreadEstimate > 0) stream.unreadEstimate = 0;
+		return Math.max(0, this.#backpressureBytes - desired);
+	}
+
+	/** Enqueue one pre-encoded block; past the backpressure cap the stream is terminated (drop-and-resume). */
+	#enqueue(stream: BrowserStream, block: string): void {
 		try {
-			ws.send(JSON.stringify(frame));
+			if (shouldDropFrame(this.#bufferedBytes(stream) + block.length, this.#backpressureBytes)) {
+				this.#dropBrowser(stream);
+				return;
+			}
+			stream.unreadEstimate += block.length;
+			stream.controller.enqueue(SSE_ENCODER.encode(block));
 		} catch {
-			// Socket dying; the close handler owns cleanup.
+			// Stream already closed/cancelled: dropped (removal happens on cancel/drop).
 		}
 	}
 
-	#sendError(ws: EdgeSocket, error: string): void {
-		try {
-			ws.send(JSON.stringify({ type: "error", error }));
-		} catch {
-			// Socket dying; the close handler owns cleanup.
+	/** One live delta: ringed (resumable) with a fresh edge-local seq. */
+	#sendDelta(stream: BrowserStream, frame: unknown): void {
+		const client = stream.client;
+		const seq = client.nextSeq++;
+		const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
+		client.ring.push(seq, block);
+		this.#enqueue(stream, block);
+	}
+
+	/** Ring one client's copy of a broadcast delta; deliver when its stream is live. */
+	#broadcastTo(client: BrowserClient, frame: ServerFrame): void {
+		const seq = client.nextSeq++;
+		const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
+		client.ring.push(seq, block);
+		if (client.stream) this.#enqueue(client.stream, block);
+	}
+
+	/** Unicast answer (projects / error): fresh seq but NOT ringed (lost answers are re-POSTed). */
+	#sendAnswer(stream: BrowserStream, frame: unknown): void {
+		const seq = stream.client.nextSeq++;
+		this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, frame, seq));
+	}
+
+	#sendError(stream: BrowserStream, error: string): void {
+		this.#sendAnswer(stream, { type: "error", error });
+	}
+
+	/**
+	 * Broadcast one frame to every browser. Named clients ring EVERY delta —
+	 * also while disconnected — so a Last-Event-ID resume replays the gap;
+	 * anonymous streams ring only what they receive (no resume contract).
+	 */
+	#broadcast(frame: ServerFrame): void {
+		for (const stream of this.#browsers) this.#broadcastTo(stream.client, frame);
+		for (const client of this.#clients.values()) {
+			if (client.stream === null) this.#broadcastTo(client, frame);
 		}
 	}
 
 	#broadcastRoster(): void {
-		const daemons = this.#registry.list().map(toRosterEntry);
-		for (const ws of [...this.#browsers.keys()]) {
-			this.#sendToBrowser(ws, { type: "roster", daemons });
+		this.#broadcast({ type: "roster", daemons: this.#registry.list().map(toRosterEntry) });
+	}
+
+	/**
+	 * Drop-and-resume: a browser stream past the backpressure cap is
+	 * terminated (buffered data still flushes; the browser reconnects with
+	 * Last-Event-ID and the edge replays its ring). The client state (ring)
+	 * survives for the resume; the pipe is closed + released.
+	 */
+	#dropBrowser(stream: BrowserStream): void {
+		this.#browsers.delete(stream);
+		this.#closePipe(stream);
+		stream.client.stream = null;
+		this.#armClientReclaim(stream.client);
+		try {
+			stream.controller.close();
+		} catch {
+			// Already closed/cancelled.
 		}
+		if (this.#browsers.size === 0) this.#stopKeepalive();
+	}
+
+	/** The browser's stream ended (client cancel): close pipe + release; keep the ring for resume. */
+	#releaseBrowser(stream: BrowserStream): void {
+		this.#browsers.delete(stream);
+		this.#closePipe(stream);
+		stream.client.stream = null;
+		this.#armClientReclaim(stream.client);
+		if (this.#browsers.size === 0) this.#stopKeepalive();
+	}
+
+	/** After a disconnect the client's ring is kept for a grace period, then reclaimed. */
+	#armClientReclaim(client: BrowserClient): void {
+		if (client.clientId === null) return; // anonymous: no map entry to reclaim
+		if (client.gcTimer) {
+			clearTimeout(client.gcTimer);
+			client.gcTimer = null;
+		}
+		client.gcTimer = setTimeout(() => {
+			client.gcTimer = null;
+			if (client.stream === null) this.#clients.delete(client.clientId!);
+		}, CLIENT_RECLAIM_MS);
+	}
+
+	#startKeepalive(): void {
+		if (this.#keepaliveTimer) return;
+		this.#keepaliveTimer = setInterval(() => {
+			for (const stream of [...this.#browsers]) this.#enqueue(stream, SSE_PING_BLOCK);
+		}, SSE_KEEPALIVE_MS);
+	}
+
+	#stopKeepalive(): void {
+		if (!this.#keepaliveTimer) return;
+		clearInterval(this.#keepaliveTimer);
+		this.#keepaliveTimer = null;
 	}
 
 	// ---------------------------------------------------------------------
@@ -784,12 +1044,9 @@ export class FleetEdge {
 		this.#broadcastDaemons();
 	}
 
-	/** Broadcast ONE merged {type:"daemons"} frame to every edge socket. */
+	/** Broadcast ONE merged {type:"daemons"} frame to every edge stream. */
 	#broadcastDaemons(): void {
-		const frame: ServerFrame = { type: "daemons", daemons: this.#daemonsAggregator.merge() };
-		for (const ws of [...this.#browsers.keys()]) {
-			this.#sendToBrowser(ws, frame);
-		}
+		this.#broadcast({ type: "daemons", daemons: this.#daemonsAggregator.merge() });
 	}
 
 	// ---------------------------------------------------------------------

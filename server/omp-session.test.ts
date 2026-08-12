@@ -1,9 +1,10 @@
 /**
  * omp-session Phase 1 server tests: config surface, stdout contract line, bearer
- * auth (R14), readiness gate (R8), idle auto-exit (R11), and (Phase 6) the
- * removed-mux-command fallthrough. Spawns server/index.ts as a subprocess on
+ * auth (R14), readiness gate (R8), idle auto-exit (R11), POST idempotency, and
+ * the removed-mux-command fallthrough. Spawns server/index.ts as a subprocess on
  * an ephemeral port (OMP_SESSION_PORT=0) with a hermetic tmp cwd; connects over
- * loopback and (for the token-gate test) the machine's LAN IP. No external
+ * loopback and (for the token-gate test) the machine's LAN IP using the
+ * OMP_PROTO 2 transport (GET /events SSE down, POST /command up). No external
  * network, no real model calls — the readiness gate is deferred via the
  * OMP_SESSION_TEST_READY_DELAY_MS test hook instead of racing provider discovery.
  */
@@ -13,7 +14,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Subprocess } from "bun";
-import { OMP_CLOSE_UNAUTHORIZED, OMP_PROTO, type StdoutContractLine } from "../src/protocol";
+import { OMP_PROTO, type StdoutContractLine } from "../src/protocol";
+import { parseSseUnits, SSE_PING_EVENT } from "../src/sse";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -36,34 +38,74 @@ async function waitFor<T>(probe: () => T | null, timeoutMs: number, label: strin
 
 type Frame = { type: string; [key: string]: unknown };
 
-/** Collect every frame the socket receives into a shared array (poll with waitFor). */
-function collect(ws: WebSocket): Frame[] {
+/** The daemon's /events URL for an origin (optionally carrying ?token=). */
+function eventsUrlFor(baseUrl: string): string {
+	const [origin, query] = baseUrl.split("?");
+	return query === undefined ? `${origin}/events` : `${origin}/events?${query}`;
+}
+
+/**
+ * Open a daemon /events SSE stream; resolves once the stream is established.
+ * Frames accumulate on `frames` (poll with waitFor); `close()` aborts the
+ * stream. Auth goes through an optional Authorization header (loopback is
+ * exempt, so plain tests need none).
+ */
+function openEvents(
+	baseUrl: string,
+	opts: { headers?: Record<string, string> } = {},
+): Promise<{ frames: Frame[]; pings: number; close: () => void }> {
+	const { promise, resolve, reject } = Promise.withResolvers<{ frames: Frame[]; pings: number; close: () => void }>();
+	const controller = new AbortController();
 	const frames: Frame[] = [];
-	ws.onmessage = ev => frames.push(JSON.parse(String(ev.data)) as Frame);
-	return frames;
-}
-
-function openWebSocket(url: string, headers?: Record<string, string>): Promise<WebSocket> {
-	const { promise, resolve, reject } = Promise.withResolvers<WebSocket>();
-	// The DOM lib's WebSocket type only allows protocols as the second arg;
-	// Bun's runtime accepts { headers } (Bun.WebSocketOptions).
-	const ws = new WebSocket(url, headers ? ({ headers } as never) : undefined);
-	const timer = setTimeout(() => reject(new Error(`websocket open timed out: ${url}`)), 15_000);
-	ws.onopen = () => {
-		clearTimeout(timer);
-		resolve(ws);
-	};
-	ws.onerror = () => {
-		clearTimeout(timer);
-		reject(new Error(`websocket failed: ${url}`));
-	};
+	let pings = 0;
+	const url = eventsUrlFor(baseUrl);
+	const timer = setTimeout(() => reject(new Error(`events stream open timed out: ${url}`)), 15_000);
+	void (async () => {
+		try {
+			const res = await fetch(url, { headers: opts.headers, signal: controller.signal });
+			if (!res.ok || !res.body) throw new Error(`GET /events returned ${res.status}`);
+			clearTimeout(timer);
+			resolve({ frames, get pings() { return pings; }, close: () => controller.abort() });
+			for await (const unit of parseSseUnits(res.body)) {
+				if (unit.kind !== "event") continue;
+				// Keepalive pings are not frames (no id, empty-object data);
+				// count them separately so the keepalive contract stays observable.
+				if (unit.event === SSE_PING_EVENT) {
+					pings++;
+					continue;
+				}
+				frames.push(JSON.parse(unit.data) as Frame);
+			}
+		} catch (err) {
+			if (controller.signal.aborted) return; // close() — expected teardown
+			reject(err instanceof Error ? err : new Error(String(err)));
+		}
+	})();
 	return promise;
 }
 
-function onClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
-	const { promise, resolve } = Promise.withResolvers<{ code: number; reason: string }>();
-	ws.onclose = ev => resolve({ code: ev.code, reason: ev.reason });
-	return promise;
+/** The daemon's /command URL for an origin (optionally carrying ?token=). */
+function commandUrlFor(baseUrl: string): string {
+	const [origin, query] = baseUrl.split("?");
+	return query === undefined ? `${origin}/command` : `${origin}/command?${query}`;
+}
+
+/** POST one ClientCommand (JSON body); every command carries an id. */
+function postCommand(
+	baseUrl: string,
+	cmd: Record<string, unknown>,
+	opts: { headers?: Record<string, string> } = {},
+): Promise<Response> {
+	return fetch(commandUrlFor(baseUrl), {
+		method: "POST",
+		headers: { "content-type": "application/json", ...opts.headers },
+		body: JSON.stringify(cmd),
+	});
+}
+
+/** The first frame of a given type, waiting for it to arrive. */
+function waitForFrame(frames: Frame[], type: string, timeoutMs: number, label: string): Promise<Frame> {
+	return waitFor(() => frames.find(f => f.type === type) ?? null, timeoutMs, label);
 }
 
 function parseContractLine(line: string): StdoutContractLine | null {
@@ -152,13 +194,6 @@ async function spawnSession(opts: { args?: string[]; env?: Record<string, string
 	return { child, tmp, port: parsed.port, firstLine: line, stderrTail: () => stderrTail, cleanup };
 }
 
-/** Send a hello and wait for the hello_ok answer (R14). */
-async function expectHelloOk(ws: WebSocket, token?: string): Promise<Frame> {
-	const frames = collect(ws);
-	ws.send(JSON.stringify({ type: "hello", proto: OMP_PROTO, ...(token !== undefined ? { token } : {}) }));
-	return waitFor(() => frames.find(f => f.type === "hello_ok") ?? null, 10_000, "hello_ok");
-}
-
 /** First non-internal IPv4 address (the machine's LAN IP); undefined when none exists. */
 function lanIpv4(): string | undefined {
 	for (const addrs of Object.values(os.networkInterfaces())) {
@@ -209,41 +244,51 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	const proc = await spawnSession({ args: ["--host", "0.0.0.0", "--token", "sekret"] });
 	running.push(proc);
 	const { child, tmp, port, cleanup } = proc;
-	const base = `ws://${lanIp}:${port}/ws`;
+	const base = `http://${lanIp}:${port}`;
 
-	// No credential: the socket upgrades unauthenticated and is closed 4001 when
-	// the 5s hello window expires.
-	const noToken = await openWebSocket(base);
-	const closeInfo = await Promise.race([onClose(noToken), sleep(10_000).then(() => "timeout" as const)]);
-	expect(closeInfo).not.toBe("timeout");
-	expect((closeInfo as { code: number }).code).toBe(OMP_CLOSE_UNAUTHORIZED);
+	// Wrong credential → 401 on both endpoints (no hello window, no close codes).
+	const wrongStream = await fetch(`${base}/events`, { headers: { authorization: "Bearer nope" } });
+	expect(wrongStream.status).toBe(401);
+	const wrongCommand = await fetch(`${base}/command`, {
+		method: "POST",
+		headers: { authorization: "Bearer nope", "content-type": "application/json" },
+		body: JSON.stringify({ type: "get_process_stats", id: "c-wrong" }),
+	});
+	expect(wrongCommand.status).toBe(401);
 
-	// Authorization header → authenticated; a valid hello is answered hello_ok.
-	const withHeader = await openWebSocket(base, { authorization: "Bearer sekret" });
-	const headerHello = await expectHelloOk(withHeader, "sekret");
+	// Authorization header → the stream primes hello_ok with the daemon identity.
+	const headerStream = await openEvents(base, { headers: { authorization: "Bearer sekret" } });
+	const headerHello = await waitForFrame(headerStream.frames, "hello_ok", 10_000, "header hello_ok");
 	expect(headerHello.proto).toBe(OMP_PROTO);
 	expect(headerHello.cwd).toBe(tmp);
 	expect(headerHello.pid).toBe(child.pid);
 	expect(headerHello.name).toBe(path.basename(tmp));
 	expect(typeof headerHello.version).toBe("string");
+	// …and commands accept with 202 echoing the id.
+	const headerCmd = await postCommand(base, { type: "get_process_stats", id: "c-h1" }, { headers: { authorization: "Bearer sekret" } });
+	expect(headerCmd.status).toBe(202);
+	expect((await headerCmd.json()).commandId).toBe("c-h1");
 
-	// ?token= query → authenticated (same bearer, query form).
-	const withQuery = await openWebSocket(`${base}?token=sekret`);
-	const queryHello = await expectHelloOk(withQuery, "sekret");
+	// ?token= query → same bearer, query form.
+	const queryStream = await openEvents(`${base}?token=sekret`);
+	const queryHello = await waitForFrame(queryStream.frames, "hello_ok", 10_000, "query hello_ok");
 	expect(queryHello.proto).toBe(OMP_PROTO);
+	const queryCmd = await postCommand(`${base}?token=sekret`, { type: "get_process_stats", id: "c-q1" });
+	expect(queryCmd.status).toBe(202);
 
 	// Loopback without a token still works: the priming (attached) arrives.
-	const loopback = await openWebSocket(`ws://127.0.0.1:${port}/ws`);
-	const lbFrames = collect(loopback);
-	await waitFor(() => lbFrames.find(f => f.type === "attached") ?? null, 10_000, "loopback attached frame");
+	const loopback = await openEvents(`http://127.0.0.1:${port}`);
+	await waitForFrame(loopback.frames, "attached", 10_000, "loopback attached frame");
 
 	// Static serving is gated for off-loopback peers too (Authorization or ?token=).
-	const unauth = await fetch(`http://${lanIp}:${port}/`);
+	const unauth = await fetch(`${base}/`);
 	expect(unauth.status).toBe(401);
-	const authed = await fetch(`http://${lanIp}:${port}/?token=sekret`);
+	const authed = await fetch(`${base}/?token=sekret`);
 	expect(authed.status).toBe(200);
 
-	for (const ws of [withHeader, withQuery, loopback]) ws.close();
+	headerStream.close();
+	queryStream.close();
+	loopback.close();
 	await cleanup();
 }, 60_000);
 
@@ -260,18 +305,26 @@ test("OMP_SESSION| listening line is the first stdout line and parses as StdoutC
 	await proc.cleanup();
 }, 30_000);
 
-test("loopback hello is answered hello_ok with the daemon identity", async () => {
+test("loopback /events opens with hello_ok as the FIRST event, carrying the daemon identity", async () => {
 	const proc = await spawnSession({});
 	running.push(proc);
 	const { child, tmp, port, cleanup } = proc;
-	const ws = await openWebSocket(`ws://127.0.0.1:${port}/ws`);
-	const hello = await expectHelloOk(ws);
+	const events = await openEvents(`http://127.0.0.1:${port}`);
+	const hello = await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
 	expect(hello.proto).toBe(OMP_PROTO);
 	expect(hello.cwd).toBe(tmp);
 	expect(hello.pid).toBe(child.pid);
 	expect(hello.name).toBe(path.basename(tmp));
 	expect(typeof hello.version).toBe("string");
-	ws.close();
+	// hello_ok precedes the attach priming on every stream open.
+	expect(events.frames[0].type).toBe("hello_ok");
+	const attached = await waitForFrame(events.frames, "attached", 10_000, "attached frame");
+	expect(attached.sessionId).toBe("s1");
+
+	// Malformed command bodies are rejected with 400.
+	const bad = await fetch(`http://127.0.0.1:${port}/command`, { method: "POST", body: "{not json" });
+	expect(bad.status).toBe(400);
+	events.close();
 	await cleanup();
 }, 30_000);
 
@@ -279,23 +332,26 @@ test("idle auto-exit: --idle-timeout 3s exits the process via shutdown", async (
 	const proc = await spawnSession({ args: ["--idle-timeout", "3s"] });
 	running.push(proc);
 	expect(proc.port).toBeGreaterThan(0);
-	// No sockets: the first 15s check finds it idle and shutdown() exits 0.
+	// No streams: the first 15s check finds it idle and shutdown() exits 0.
 	const code = await Promise.race([proc.child.exited, sleep(30_000).then(() => "timeout" as const)]);
 	expect(code).toBe(0);
 	await proc.cleanup();
 }, 45_000);
 
-test("an attached web socket suppresses idle auto-exit", async () => {
+test("an attached /events stream suppresses idle auto-exit", async () => {
 	const proc = await spawnSession({ args: ["--idle-timeout", "3s"] });
 	running.push(proc);
 	const { child, port, cleanup } = proc;
-	const ws = await openWebSocket(`ws://127.0.0.1:${port}/ws`);
-	const frames = collect(ws);
-	await waitFor(() => frames.find(f => f.type === "attached") ?? null, 10_000, "attached frame");
-	// Span at least one 15s idle-check tick with the socket attached.
+	const events = await openEvents(`http://127.0.0.1:${port}`);
+	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
+	// Span at least one 15s idle-check tick with the stream attached.
 	await sleep(17_000);
 	expect(child.exitCode).toBeNull();
-	ws.close();
+	// The keepalive timer (15s) fired at least once on this live stream: the
+	// ping event block, not the old `: ping` comment (the comment was dropped
+	// because native EventSource never surfaces it).
+	expect(events.pings).toBeGreaterThan(0);
+	events.close();
 	const code = await Promise.race([child.exited, sleep(30_000).then(() => "timeout" as const)]);
 	expect(code).toBe(0);
 	await cleanup();
@@ -305,30 +361,38 @@ test("prompt-family calls fail with not_ready until the readiness gate clears", 
 	const proc = await spawnSession({ env: { OMP_SESSION_TEST_READY_DELAY_MS: "5000" } });
 	running.push(proc);
 	const { port, cleanup } = proc;
-	const ws = await openWebSocket(`ws://127.0.0.1:${port}/ws`);
-	const frames = collect(ws);
+	const base = `http://127.0.0.1:${port}`;
+	const events = await openEvents(base);
 	// The open auto-attaches; the priming arrives with mode "single" (Phase 6:
 	// de-muxed — the client hides the sessions sidebar) and the guard token.
-	const attached = await waitFor(() => frames.find(f => f.type === "attached") ?? null, 10_000, "attached frame");
+	const attached = await waitForFrame(events.frames, "attached", 10_000, "attached frame");
 	expect(attached.mode).toBe("single");
 	expect(attached.sessionId).toBe("s1");
 	// The gate is still closed: prompt is rejected with not_ready, not a model error.
-	ws.send(JSON.stringify({ type: "call", id: "c1", method: "prompt", args: ["hello"] }));
+	const resp = await postCommand(base, { type: "call", id: "c1", method: "prompt", args: ["hello"] });
+	expect(resp.status).toBe(202);
 	const notReady = await waitFor(
-		() => frames.find(f => f.type === "call_result" && f.id === "c1") ?? null,
+		() => events.frames.find(f => f.type === "call_result" && f.id === "c1") ?? null,
 		10_000,
 		"not_ready call_result",
 	);
 	expect(notReady.ok).toBe(false);
 	expect(notReady.error).toBe("not_ready");
 	// The gate clears: ready is broadcast and state snapshots carry readyAt.
-	await waitFor(() => frames.find(f => f.type === "ready") ?? null, 20_000, "ready frame");
+	await waitForFrame(events.frames, "ready", 20_000, "ready frame");
 	await waitFor(
-		() => frames.find(f => f.type === "state" && (f.state as { readyAt?: number })?.readyAt !== undefined) ?? null,
+		() => {
+			const frame = events.frames.find(f => {
+				if (f.type !== "state") return false;
+				const st = f.state;
+				return typeof st === "object" && st !== null && "readyAt" in st && st.readyAt !== undefined;
+			});
+			return frame ?? null;
+		},
 		10_000,
 		"state with readyAt",
 	);
-	ws.close();
+	events.close();
 	await cleanup();
 }, 45_000);
 
@@ -336,25 +400,25 @@ test("removed mux commands fall through to the unknown-command error; process st
 	const proc = await spawnSession({});
 	running.push(proc);
 	const { port, cleanup } = proc;
-	const ws = await openWebSocket(`ws://127.0.0.1:${port}/ws`);
-	const frames = collect(ws);
+	const base = `http://127.0.0.1:${port}`;
+	const events = await openEvents(base);
 	// The attached frame says "single" with the constant guard token.
-	const attached = await waitFor(() => frames.find(f => f.type === "attached") ?? null, 10_000, "attached frame");
+	const attached = await waitForFrame(events.frames, "attached", 10_000, "attached frame");
 	expect(attached.mode).toBe("single");
 	expect(attached.sessionId).toBe("s1");
 
 	// The four removed mux commands (plus attach/detach, which only exist at
 	// the fleet edge) fall through to the generic unknown-command error;
 	// get_process_stats is kept.
-	ws.send(JSON.stringify({ type: "create_session", cwd: "/tmp" }));
-	ws.send(JSON.stringify({ type: "attach", sessionId: "s1" }));
-	ws.send(JSON.stringify({ type: "detach" }));
-	ws.send(JSON.stringify({ type: "close_session", sessionId: "s1" }));
-	ws.send(JSON.stringify({ type: "list_live_sessions" }));
-	ws.send(JSON.stringify({ type: "get_process_stats" }));
+	await postCommand(base, { type: "create_session", cwd: "/tmp", id: "m1" });
+	await postCommand(base, { type: "attach", sessionId: "s1", id: "m2" });
+	await postCommand(base, { type: "detach", id: "m3" });
+	await postCommand(base, { type: "close_session", sessionId: "s1", id: "m4" });
+	await postCommand(base, { type: "list_live_sessions", id: "m5" });
+	await postCommand(base, { type: "get_process_stats", id: "m6" });
 	const unknown = await waitFor<Frame[]>(
 		() => {
-			const errors = frames.filter(f => f.type === "error" && String(f.error).includes("Unknown command:"));
+			const errors = events.frames.filter(f => f.type === "error" && String(f.error).includes("Unknown command:"));
 			return errors.length >= 5 ? errors : null;
 		},
 		10_000,
@@ -363,22 +427,51 @@ test("removed mux commands fall through to the unknown-command error; process st
 	for (const type of ["create_session", "attach", "detach", "close_session", "list_live_sessions"]) {
 		expect(unknown.some(f => String(f.error).includes(`"${type}"`))).toBe(true);
 	}
-	const stats = await waitFor(() => frames.find(f => f.type === "process_stats") ?? null, 10_000, "process_stats");
-	expect(typeof (stats.process as { uptimeSec?: unknown }).uptimeSec).toBe("number");
-	expect((stats.process as { sessionCount?: unknown }).sessionCount).toBe(1);
+	const stats = await waitForFrame(events.frames, "process_stats", 10_000, "process_stats");
+	const processField = stats.process;
+	if (typeof processField !== "object" || processField === null || !("uptimeSec" in processField) || !("sessionCount" in processField)) {
+		throw new Error("process_stats missing uptimeSec/sessionCount");
+	}
+	expect(typeof processField.uptimeSec).toBe("number");
+	expect(processField.sessionCount).toBe(1);
 
 	// live_sessions is never emitted (the frame is gone from the protocol).
+	// Real delay: the subprocess is the only authority on what it broadcasts;
+	// fake timers cannot drive another process's event loop.
 	await sleep(1000);
-	expect(frames.some(f => f.type === "live_sessions")).toBe(false);
+	expect(events.frames.some(f => f.type === "live_sessions")).toBe(false);
 
 	// Fleet-edge commands are rejected on a bare omp-session.
-	ws.send(JSON.stringify({ type: "spawn", cwd: "/tmp" }));
-	ws.send(JSON.stringify({ type: "list_projects" }));
+	await postCommand(base, { type: "spawn", cwd: "/tmp", id: "m7" });
+	await postCommand(base, { type: "list_projects", id: "m8" });
 	await waitFor(
-		() => (frames.filter(f => f.type === "error" && f.error === "fleet-only command").length >= 2 ? true : null),
+		() => (events.frames.filter(f => f.type === "error" && f.error === "fleet-only command").length >= 2 ? true : null),
 		10_000,
 		"fleet-only errors",
 	);
-	ws.close();
+	events.close();
+	await cleanup();
+}, 45_000);
+
+test("POST /command dedups by id within the window", async () => {
+	const proc = await spawnSession({});
+	running.push(proc);
+	const { port, cleanup } = proc;
+	const base = `http://127.0.0.1:${port}`;
+	const events = await openEvents(base);
+	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
+	// The same command id posted twice: both accept 202, but only ONE dispatch
+	// happens (a single process_stats answer, not two).
+	const payload = { type: "get_process_stats", id: "dup-cmd" };
+	const first = await postCommand(base, payload);
+	const second = await postCommand(base, payload);
+	expect(first.status).toBe(202);
+	expect(second.status).toBe(202);
+	await waitForFrame(events.frames, "process_stats", 10_000, "process_stats");
+	// Real delay: the dedup window and answer delivery live in the subprocess;
+	// only observing real time proves the duplicate was NOT re-dispatched.
+	await sleep(1200);
+	expect(events.frames.filter(f => f.type === "process_stats").length).toBe(1);
+	events.close();
 	await cleanup();
 }, 45_000);

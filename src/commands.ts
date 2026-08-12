@@ -279,7 +279,7 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 				return;
 			}
 			// Agent-side builtin/skill/extension/file commands handle it. Their
-			// command_output frames are unreachable over the WebSocket protocol (documented tradeoff).
+			// command_output frames don't arrive over the SSE/POST transport (documented tradeoff).
 			void call("prompt", [trimmed]).catch(showError);
 			return;
 		}

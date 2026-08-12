@@ -1,14 +1,14 @@
 # omp-session + omp-fleet
 
-**omp-session** is a single-session agent daemon for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent): one process, one project directory (bound at spawn, immutable), one live agent session, served to a Solid.js web UI over WebSocket. The agent runs in-process via the SDK (`createAgentSession`) — there is no child process and no JSON-RPC hop. It builds as a self-contained binary (`bun run build:omp-session`) — no repo checkout, no node_modules on the target.
+**omp-session** is a single-session agent daemon for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent): one process, one project directory (bound at spawn, immutable), one live agent session, served to a Solid.js web UI over SSE + POST commands. The agent runs in-process via the SDK (`createAgentSession`) — there is no child process and no JSON-RPC hop. It builds as a self-contained binary (`bun run build:omp-session`) — no repo checkout, no node_modules on the target.
 
 **omp-fleet** holds the registry of N sessions — local children it spawns and supervises, externally launched sessions it attaches to, and remote sandboxes it dials into — and re-exposes them to the same web UI (roster mode) and to non-interactive drivers (CLI fan-out). It holds zero SDK state; all agent truth lives in the omp-session processes and their `.jsonl` session logs.
 
 ```
 browser (Solid, one app, two modes)
-   ⇄ WS  ⇄ omp-session (standalone: full single-session UI)
-   ⇄ WS  ⇄ omp-fleet (roster mode) ⇄ per-browser proxied WS ⇄ omp-session …
-                                      ⇄ control WS ⇄ omp-session …  (remote: ssh -L / tailnet / direct)
+   ⇄ SSE/POST ⇄ omp-session (standalone: full single-session UI)
+   ⇄ SSE/POST ⇄ omp-fleet (roster mode) ⇄ per-browser proxied SSE/POST ⇄ omp-session …
+                                      ⇄ control SSE/POST ⇄ omp-session …  (remote: ssh -L / tailnet / direct)
 ```
 
 ## Quickstart
@@ -18,7 +18,7 @@ Prerequisite: [Bun](https://bun.sh). Then `bun install` once.
 ### Dev mode — standalone omp-session (single-session UI)
 
 ```sh
-bun run dev   # omp-session on :4721 (--watch reload) + vite on :4713 (proxies /ws + /download → 4721)
+bun run dev   # omp-session on :4721 (--watch reload) + vite on :4713 (proxies /events + /command + /download → 4721)
 ```
 
 Open <http://localhost:4713>. UI edits hot-reload; server edits restart the daemon. (Need the processes in separate terminals? `bun run dev:server` and `bun run dev:web` still exist.)
@@ -26,13 +26,13 @@ Open <http://localhost:4713>. UI edits hot-reload; server edits restart the daem
 ### Dev mode — omp-fleet (roster UI)
 
 ```sh
-bun run dev:fleet   # vite on :4713 (HMR; /ws + /download proxied to the fleet edge) + omp-fleet on :4722
+bun run dev:fleet   # vite on :4713 (HMR; /events + /command + /download proxied to the fleet edge) + omp-fleet on :4722
                     # + an omp-session on :4721, auto-registered into the roster as "dev"
 ```
 
 Open <http://localhost:4713>, click a `ready` row to attach. UI edits hot-reload in roster mode too; `:4722` only serves the last production `dist/` build. Sidebar spawns work out of the box: `dev:fleet` sets `OMP_FLEET_LOCAL_TEMPLATE` so the default `local` template runs `bun server/index.ts` from the checkout instead of the `omp-session` binary (spawned daemons are not `--watch`ed; restart them to pick up server edits). Outside `dev:fleet` the `local` template runs the binary, so it needs to be on PATH: `bun run build:omp-session` and add `dist-bin/` to PATH (or set `OMP_FLEET_LOCAL_TEMPLATE` / edit the template in `~/.omp/fleet/config.json` to launch from a checkout).
 
-Both dev commands put the UI on :4713 with HMR; `bun run dev` proxies `/ws` to the standalone omp-session, `bun run dev:fleet` proxies it to the fleet edge (`OMP_DEV_FLEET=1` in `vite.config.ts`). To reach the UI from another machine, pass `--host` (optionally with an address) to either command — `bun run dev -- --host` binds vite to `0.0.0.0:4713` while the backends stay loopback (remote browsers reach them through vite's proxies). No auth on the UI — trusted networks only. Accessing via a non-localhost domain (e.g. tailscale) trips vite's host check; add `--allow-hosts` to allow every Host header, or `--allow-hosts myhost.tail1234.ts.net` for an allowlist.
+Both dev commands put the UI on :4713 with HMR; `bun run dev` proxies `/events` + `/command` to the standalone omp-session, `bun run dev:fleet` proxies them to the fleet edge (`OMP_DEV_FLEET=1` in `vite.config.ts`). To reach the UI from another machine, pass `--host` (optionally with an address) to either command — `bun run dev -- --host` binds vite to `0.0.0.0:4713` while the backends stay loopback (remote browsers reach them through vite's proxies). No auth on the UI — trusted networks only. Accessing via a non-localhost domain (e.g. tailscale) trips vite's host check; add `--allow-hosts` to allow every Host header, or `--allow-hosts myhost.tail1234.ts.net` for an allowlist.
 
 ### Production build
 
@@ -77,7 +77,7 @@ Readiness: after the SDK session exists and provider/model/auth resolution compl
 ## Security model
 
 - Remote sessions are **dial-in only**: omp-fleet initiates every connection; omp-session never dials out and has no `--fleet` flag. A sandbox image contains zero knowledge of the external world (no fleet URL, no outbound credentials), and egress may be denied entirely.
-- The bearer token inside a sandbox gates inbound connections to that omp-session only — a leaked token grants nothing beyond it. Loopback peers are exempt; off-loopback requires the token (`Authorization` header, `?token=`, or a first-frame `hello`; failures close with WS code 4001) and a secure transport (ssh `-L`, tailnet, or your own TLS).
+- The bearer token inside a sandbox gates inbound connections to that omp-session only — a leaked token grants nothing beyond it. Loopback peers are exempt; off-loopback requires the token (`Authorization` header or `?token=`; wrong credentials → 401, no hello window) and a secure transport (ssh `-L`, tailnet, or your own TLS).
 - omp-fleet's UI binds loopback. For local children the token travels in the spawn environment — visible in `/proc/<pid>/environ`; accepted for the single-operator v1.
 - `/download` stays realpath-jailed to the bound cwd + tmpdir + session dirs; it is the only file-egress path. `list_files` never escapes the cwd.
 
@@ -98,7 +98,7 @@ bun run fleet -- prompt <selector> <text> [--wait <ms>] [--fan-out]
 
 Selectors: `dN`, `all`, name glob (`api-*`), `label:k=v` (alias `tag:k=v`), `project:name`. `prompt --wait` correlates on each target session's `agent_end` event and collects the final assistant text + usage per session.
 
-The connector dials each session's resolved endpoint with exponential backoff, runs the `hello`/`hello_ok` handshake (`OMP_PROTO` version gate), verifies `hello_ok.cwd` matches the registry entry (mismatch → `error`, guards stale endpoints and IP reuse), and keeps liveness with ping/pong; a dropped session shows `reconnecting` and proxied browser clients re-attach on return.
+The connector dials each session's resolved endpoint over HTTP with exponential backoff and bearer-token auth (loopback exempt), verifies `hello_ok.cwd` from the SSE priming matches the registry entry (mismatch → `error`, guards stale endpoints and IP reuse; `OMP_PROTO`, currently 2, gates drift), and keeps liveness with the SSE silence deadline; a dropped session shows `reconnecting` and proxied browser clients re-attach on return.
 
 ### Spawn templates
 
@@ -139,8 +139,8 @@ bun run collab -- --stop
 
 ```sh
 bun install
-bun run dev           # single-session: omp-session :4721 (--watch) + vite :4713 (HMR; proxies /ws + /download → 4721, /ctl → 4722)
-bun run dev:fleet     # roster: vite :4713 (HMR, /ws → fleet edge) + omp-fleet :4722 + omp-session :4721 (auto-attached as "dev")
+bun run dev           # single-session: omp-session :4721 (--watch) + vite :4713 (HMR; proxies /events + /command + /download → 4721, /ctl → 4722)
+bun run dev:fleet     # roster: vite :4713 (HMR, /events + /command → fleet edge) + omp-fleet :4722 + omp-session :4721 (auto-attached as "dev")
 # or separately: bun run dev:server / dev:web / fleet -- serve
 ```
 
@@ -150,8 +150,8 @@ Production: `bun run build:omp-session` → self-contained `dist-bin/omp-session
 
 - `server/index.ts` — the omp-session daemon: one in-process SDK session, the 71-method dispatch table (`WebMethodName`), post-mutation state broadcast with `READ_ONLY`/`HISTORY_RELOAD` resync semantics, builtin slash interception (`executeAcpBuiltinSlashCommand`), full `AgentSessionEvent` forwarding, `ui_request`/`ui_response` dialog relay, settings model + side effects, OAuth login frames, bash/python/ephemeral chunk streaming, subagent lifecycle/progress mirror + steer/abort, collab host adapter + relay, `/download` jail, static UI serving, bearer auth, readiness gate, idle auto-exit.
 - `server/config.ts` — flag/env parsing into the config surface above.
-- `fleet/` — registry + JSON persistence (`registry.ts`), project discovery (`discovery.ts`), spawn templates + `OMP_SESSION|` parsing (`spawn-parse.ts`, `supervisor.ts`), dial-in connector with hello handshake, cwd sanity check, backoff and ping/pong liveness (`connector.ts`), selectors + fan-out correlation (`selectors.ts`, `fanout.ts`), loopback control API + CLI (`server.ts`, `cli.ts`), browser edge + per-browser session proxy + aggregated sessions panel (`edge.ts`, `daemons-aggregator.ts`).
-- `src/protocol.ts` — the shared wire contract: client commands, server frames, the `OMP_SESSION|` line, `hello`/`hello_ok`/`ready`, roster frames. Additive changes only; `OMP_PROTO` (currently 1) gates omp-fleet↔omp-session drift and must bump on any breaking change to the handshake or frame shapes.
+- `fleet/` — registry + JSON persistence (`registry.ts`), project discovery (`discovery.ts`), spawn templates + `OMP_SESSION|` parsing (`spawn-parse.ts`, `supervisor.ts`), dial-in SSE client with hello priming, cwd sanity check, backoff and silence-deadline liveness (`connector.ts`), selectors + fan-out correlation (`selectors.ts`, `fanout.ts`), loopback control API + CLI (`server.ts`, `cli.ts`), browser edge + per-browser session proxy + aggregated sessions panel (`edge.ts`, `daemons-aggregator.ts`).
+- `src/protocol.ts` — the shared wire contract: client commands (`POST /command`), server frames (`GET /events` SSE), the `OMP_SESSION|` line, the `hello_ok`→`attached`→`history`→`state`→`available_commands`→`ready` priming sequence, roster frames. Additive changes only; `OMP_PROTO` (currently 2) gates omp-fleet↔omp-session drift and must bump on any breaking change to the handshake or frame shapes.
 - `src/state.ts` — client store: chat items, streaming, session state mirror, `call()` helper, reconnect with backoff, roster state, stale-frame guard (guards session switches).
 
 ## Non-goals
@@ -160,7 +160,7 @@ Production: `bun run build:omp-session` → self-contained `dist-bin/omp-session
 - **Multi-user omp-fleet, RBAC, audit.** Single operator assumed.
 - **Sandbox provisioning** (creating VMs/containers). Only the spawn-hook contract exists here; providers are external.
 - **Collab guest protocol changes** (`pi-wire` frames, TUI guests) — untouched.
-- **Unix domain sockets.** WS over TCP everywhere; one transport code path.
+- **Unix domain sockets.** The agent-driving path is HTTP + SSE; WS remains only on the collab relay.
 - **Plugin/marketplace management UI** — config-file/TUI territory.
 - **Voice mode (`/live`) and STT** — audio product surface, no web analog planned.
 

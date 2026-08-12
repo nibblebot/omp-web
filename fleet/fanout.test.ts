@@ -12,8 +12,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Server, ServerWebSocket } from "bun";
-import { OMP_PROTO } from "../src/protocol";
+import type { Server } from "bun";
+import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../src/protocol";
+import { encodeSseEvent } from "../src/sse";
 import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
 import { fanOut, promptEntry, type FanoutDeps } from "./fanout";
@@ -67,31 +68,46 @@ async function loadedRegistry(): Promise<Registry> {
 	return registry;
 }
 
+interface FakeStream {
+	/** Push a delta frame (seq from the fake's delta counter). */
+	send(frame: unknown): void;
+	/** Push a frame with an explicit seq (priming). */
+	write(frame: unknown, seq: number): void;
+	/** Cleanly end the stream (daemon dormant — clean close). */
+	close(): void;
+	/** Internal: true once the stream has been closed. */
+	closed?: boolean;
+}
+
 interface FakeServer {
 	server: Server<undefined>;
 	port: number;
 	url: string;
 	openCount: number;
-	serverSockets: ServerWebSocket[];
+	streams: FakeStream[];
 	received: unknown[];
+	/** Delta seq counter: response events start at SSE_DELTA_SEQ_START. */
+	nextSeq: number;
 	stop(): void;
 }
 
 interface FakeOptions {
 	helloCwd?: string;
-	onOpen?: (fake: FakeServer, ws: ServerWebSocket) => void;
-	onMessage?: (fake: FakeServer, ws: ServerWebSocket, frame: unknown) => void;
+	onOpen?: (fake: FakeServer, stream: FakeStream) => void;
+	onCommand?: (fake: FakeServer, stream: FakeStream, frame: unknown) => void;
 }
 
 /** Fake omp-session: primes hello_ok (cwd /srv/proj) → state → ready on every dial. */
 function startFake(opts: FakeOptions = {}): FakeServer {
+	const encoder = new TextEncoder();
 	const fake: FakeServer = {
 		server: null as unknown as Server<undefined>,
 		port: 0,
 		url: "",
 		openCount: 0,
-		serverSockets: [],
+		streams: [],
 		received: [],
+		nextSeq: SSE_DELTA_SEQ_START,
 		stop() {
 			this.server.stop(true);
 		},
@@ -99,29 +115,48 @@ function startFake(opts: FakeOptions = {}): FakeServer {
 	fake.server = Bun.serve({
 		port: 0,
 		hostname: "127.0.0.1",
-		fetch(req, srv) {
+		fetch(req) {
+			const url = new URL(req.url);
+			if (url.pathname === "/command") {
+				return (async () => {
+					let frame: unknown;
+					try {
+						frame = await req.json();
+					} catch {
+						return new Response("malformed", { status: 400 });
+					}
+					fake.received.push(frame);
+					const stream = fake.streams.at(-1);
+					if (stream && opts.onCommand) opts.onCommand(fake, stream, frame);
+					return Response.json({ commandId: (frame as { id?: string }).id ?? "" }, { status: 202 });
+				})();
+			}
+			if (url.pathname !== "/events") return new Response("not found", { status: 404 });
 			fake.openCount++;
-			if (!srv.upgrade(req)) return new Response("upgrade failed", { status: 500 });
-		},
-		websocket: {
-			open(ws) {
-				fake.serverSockets.push(ws);
-				if (opts.onOpen) opts.onOpen(fake, ws);
-				else prime(ws, opts.helloCwd);
-			},
-			message(ws, message) {
-				let frame: unknown;
-				try {
-					frame = JSON.parse(String(message));
-				} catch {
-					return;
-				}
-				// The connector opens with a hello handshake (answered hello_ok
-				// by a real omp-session); it is not part of the command stream here.
-				if (typeof frame === "object" && frame !== null && "type" in frame && frame.type === "hello") return;
-				fake.received.push(frame);
-				opts.onMessage?.(fake, ws, frame);
-			},
+			let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+			const stream: FakeStream = {
+				send(frame) {
+					controller!.enqueue(
+						encoder.encode(encodeSseEvent(SSE_EVENT_NAME, frame, fake.nextSeq++)),
+					);
+				},
+				write(frame, seq) {
+					controller!.enqueue(encoder.encode(encodeSseEvent(SSE_EVENT_NAME, frame, seq)));
+				},
+				close() {
+					stream.closed = true;
+					controller!.close();
+				},
+			};
+			const body = new ReadableStream<Uint8Array>({
+				start(ctrl) {
+					controller = ctrl;
+					fake.streams.push(stream);
+					if (opts.onOpen) opts.onOpen(fake, stream);
+					else prime(stream, opts.helloCwd);
+				},
+			});
+			return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
 		},
 	});
 	fake.port = fake.server.port ?? 0;
@@ -129,9 +164,9 @@ function startFake(opts: FakeOptions = {}): FakeServer {
 	return fake;
 }
 
-function prime(ws: ServerWebSocket, helloCwd = "/srv/proj"): void {
-	ws.send(
-		JSON.stringify({
+function prime(stream: FakeStream, helloCwd = "/srv/proj"): void {
+	stream.write(
+		{
 			type: "hello_ok",
 			proto: OMP_PROTO,
 			name: "fake",
@@ -139,20 +174,22 @@ function prime(ws: ServerWebSocket, helloCwd = "/srv/proj"): void {
 			pid: 4242,
 			version: "test",
 			sessionFile: "/srv/proj/sess.jsonl",
-		}),
+		},
+		1,
 	);
-	ws.send(
-		JSON.stringify({
+	stream.write(
+		{
 			type: "state",
 			sessionId: "s1",
 			state: { sessionId: "s1", sessionFile: "/srv/proj/sess.jsonl", isStreaming: false },
-		}),
+		},
+		2,
 	);
-	ws.send(JSON.stringify({ type: "ready", readyAt: Date.now() }));
+	stream.write({ type: "ready", readyAt: Date.now() }, 3);
 }
 
-function sendEvent(ws: ServerWebSocket, event: Record<string, unknown>): void {
-	ws.send(JSON.stringify({ type: "event", sessionId: "s1", event }));
+function sendEvent(stream: FakeStream, event: Record<string, unknown>): void {
+	stream.send({ type: "event", sessionId: "s1", event });
 }
 
 /** Assistant text part helper for message_end frames. */
@@ -161,10 +198,10 @@ function assistantMessage(content: unknown[]): Record<string, unknown> {
 }
 
 /** Happy-path responder: two assistant messages (last one wins), then agent_end with usage. */
-function happyResponder(_fake: FakeServer, ws: ServerWebSocket, frame: unknown): void {
+function happyResponder(_fake: FakeServer, stream: FakeStream, frame: unknown): void {
 	const call = frame as { type?: string };
 	if (call.type !== "call") return;
-	sendEvent(ws, {
+	sendEvent(stream, {
 		type: "message_end",
 		message: assistantMessage([
 			{ type: "text", text: "Hello " },
@@ -172,8 +209,8 @@ function happyResponder(_fake: FakeServer, ws: ServerWebSocket, frame: unknown):
 			{ type: "text", text: "world" },
 		]),
 	});
-	sendEvent(ws, { type: "message_end", message: assistantMessage([{ type: "text", text: "Final answer" }]) });
-	sendEvent(ws, { type: "agent_end", usage: { tokens: 42 }, messages: [] });
+	sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Final answer" }]) });
+	sendEvent(stream, { type: "agent_end", usage: { tokens: 42 }, messages: [] });
 }
 
 /** Build registry + connector + supervisor and one ready entry on the fake. */
@@ -190,7 +227,7 @@ async function readyEntry(fake: FakeServer): Promise<{ deps: FanoutDeps; registr
 
 describe("promptEntry", () => {
 	test("happy path: last assistant text + usage from agent_end; call frame is correct", async () => {
-		const fake = startFake({ onMessage: happyResponder });
+		const fake = startFake({ onCommand: happyResponder });
 		const { deps, connector, entry } = await readyEntry(fake);
 		const result = await promptEntry(deps, entry, "hi", 2000);
 		expect(result).toEqual({ daemonId: entry.daemonId, ok: true, text: "Final answer", usage: { tokens: 42 } });
@@ -206,9 +243,9 @@ describe("promptEntry", () => {
 
 	test("rejects on {type:error} frames", async () => {
 		const fake = startFake({
-			onMessage: (_fake, ws, frame) => {
+			onCommand: (_fake, stream, frame) => {
 				if ((frame as { type?: string }).type === "call") {
-					ws.send(JSON.stringify({ type: "error", error: "boom" }));
+					stream.send({ type: "error", error: "boom" });
 				}
 			},
 		});
@@ -221,9 +258,9 @@ describe("promptEntry", () => {
 
 	test("rejects on abort events", async () => {
 		const fake = startFake({
-			onMessage: (_fake, ws, frame) => {
+			onCommand: (_fake, stream, frame) => {
 				if ((frame as { type?: string }).type === "call") {
-					sendEvent(ws, { type: "abort_turn_started", reason: "user" });
+					sendEvent(stream, { type: "abort_turn_started", reason: "user" });
 				}
 			},
 		});
@@ -235,7 +272,7 @@ describe("promptEntry", () => {
 	});
 
 	test("times out with error 'timeout' when the daemon never answers", async () => {
-		const fake = startFake({ onMessage: () => {} });
+		const fake = startFake({ onCommand: () => {} });
 		const { deps, connector, entry } = await readyEntry(fake);
 		const result = await promptEntry(deps, entry, "hi", 50);
 		expect(result).toEqual({ daemonId: entry.daemonId, ok: false, error: "timeout" });
@@ -245,10 +282,10 @@ describe("promptEntry", () => {
 
 	test("rejects on call_result ok:false for our call id", async () => {
 		const fake = startFake({
-			onMessage: (_fake, ws, frame) => {
+			onCommand: (_fake, stream, frame) => {
 				const call = frame as { type?: string; id?: string };
 				if (call.type === "call") {
-					ws.send(JSON.stringify({ type: "call_result", id: call.id, ok: false, error: "not_ready" }));
+					stream.send({ type: "call_result", id: call.id, ok: false, error: "not_ready" });
 				}
 			},
 		});
@@ -261,20 +298,20 @@ describe("promptEntry", () => {
 
 	test("wakes an asleep attached entry (redial) before prompting", async () => {
 		const fake = startFake({
-			onOpen: (fake, ws) => {
-				prime(ws);
+			onOpen: (fake, stream) => {
+				prime(stream);
 				if (fake.openCount === 1) {
-					// Clean close after priming: the entry goes asleep.
+					// Clean end after priming: the entry goes asleep.
 					setTimeout(() => {
 						try {
-							ws.close(1000, "idle");
+							stream.close();
 						} catch {
 							// Already closed.
 						}
 					}, 20);
 				}
 			},
-			onMessage: happyResponder,
+			onCommand: happyResponder,
 		});
 		const { deps, registry, connector, entry } = await readyEntry(fake);
 		await waitFor(() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null), 2000, "asleep");
@@ -290,7 +327,7 @@ describe("promptEntry", () => {
 		// Regression: an entry whose socket the idle policy dropped still reads
 		// "ready" in the registry. promptEntry must redial and succeed, not
 		// trust the stale status and fail with "daemon not connected".
-		const fake = startFake({ onMessage: happyResponder });
+		const fake = startFake({ onCommand: happyResponder });
 		const registry = await loadedRegistry();
 		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 30 });
 		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
@@ -332,19 +369,25 @@ describe("promptEntry", () => {
 
 describe("fanOut", () => {
 	test("preserves entry order across mixed ok/error outcomes", async () => {
-		const fake = startFake({
-			onMessage: (fake, ws, frame) => {
-				if ((frame as { type?: string }).type !== "call") return;
-				if (ws === fake.serverSockets[0]) {
-					ws.send(JSON.stringify({ type: "error", error: "first failed" }));
-				} else {
-					sendEvent(ws, { type: "message_end", message: assistantMessage([{ type: "text", text: "Second ok" }]) });
-					sendEvent(ws, { type: "agent_end", messages: [] });
+		// Each daemon has its own endpoint (real fleets never share one); the
+		// per-daemon POST /command → SSE stream routing stays unambiguous.
+		const failing = startFake({
+			onCommand: (_fake, stream, frame) => {
+				if ((frame as { type?: string }).type === "call") {
+					stream.send({ type: "error", error: "first failed" });
 				}
 			},
 		});
-		const { deps, registry, connector, entry: first } = await readyEntry(fake);
-		const second = registry.create(baseInit({ name: "proj-b", cwd: "/srv/proj", project: "proj-b", endpoint: fake.url, token: "tok-b" }));
+		const ok = startFake({
+			onCommand: (_fake, stream, frame) => {
+				if ((frame as { type?: string }).type === "call") {
+					sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Second ok" }]) });
+					sendEvent(stream, { type: "agent_end", messages: [] });
+				}
+			},
+		});
+		const { deps, registry, connector, entry: first } = await readyEntry(failing);
+		const second = registry.create(baseInit({ name: "proj-b", cwd: "/srv/proj", project: "proj-b", endpoint: ok.url, token: "tok-b" }));
 		connector.connect(second.daemonId);
 		await connector.waitReady(second.daemonId, 2000);
 		const results = await fanOut(deps, [first, second], "hi", 2000);
@@ -352,6 +395,7 @@ describe("fanOut", () => {
 		expect(results[0]).toEqual({ daemonId: first.daemonId, ok: false, error: "first failed" });
 		expect(results[1]).toEqual({ daemonId: second.daemonId, ok: true, text: "Second ok" });
 		await connector.close();
-		fake.stop();
+		failing.stop();
+		ok.stop();
 	});
 });

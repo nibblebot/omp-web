@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import solidPlugin from "vite-plugin-solid";
 
-// OMP_DEV_FLEET=1 (set by `bun run dev:fleet`): proxy /ws + /download to the
+// OMP_DEV_FLEET=1 (set by `bun run dev:fleet`): proxy /events + /command + /download to the
 // omp-fleet edge instead of a standalone omp-session, so the roster UI runs
 // under HMR. Either way /ctl goes to the fleet control plane.
 const fleet = process.env.OMP_DEV_FLEET === "1";
@@ -27,7 +27,10 @@ export default defineConfig({
 		port: 4713,
 		allowedHosts,
 		proxy: {
-			"/ws": { target: `ws://${sessionTarget}`, ws: true },
+			// /events is a long-lived SSE stream: http-proxy pipes it through (no ws: true);
+			// X-Accel-Buffering asks intermediaries not to buffer the response.
+			"/events": { target: `http://${sessionTarget}`, headers: { "X-Accel-Buffering": "no" } },
+			"/command": { target: `http://${sessionTarget}` },
 			"/download": { target: `http://${sessionTarget}` },
 			// Roster-mode control API (omp-fleet edge) — dev against `omp-fleet serve` on 4722.
 			"/ctl": { target: "http://localhost:4722" },
