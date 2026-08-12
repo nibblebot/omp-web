@@ -2,8 +2,8 @@
  * Hermetic tests for fleet/discovery.ts: porcelain fixture parsing
  * (main + two linked worktrees, one detached) through an injected fake git,
  * real tmp-dir git repositories end-to-end (git init + git worktree add),
- * the 60s cache, missing-root tolerance, and validateProjectPath. No live
- * daemons.
+ * the 60s cache, missing-root tolerance, validateProjectPath, and
+ * resolveWorktreeOf. No live daemons.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -11,7 +11,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { listProjects, validateProjectPath } from "./discovery";
+import { listProjects, resolveWorktreeOf, validateProjectPath } from "./discovery";
 import type { GitResult, GitRunner } from "./discovery";
 import type { ProjectEntry } from "../src/protocol";
 
@@ -271,5 +271,48 @@ describe("validateProjectPath", () => {
 		const file = join(root, "file.txt");
 		await writeFile(file, "x");
 		expect(await validateProjectPath(file)).toBeNull();
+	});
+});
+
+describe("resolveWorktreeOf", () => {
+	test("a linked worktree path resolves to the main repo basename", async () => {
+		const calls: GitCall[] = [];
+		const exec = fakeGit({ exitCode: 0, stderr: "", stdout: PORCELAIN_FIXTURE }, calls);
+		expect(await resolveWorktreeOf("/srv/repos/acme-wt-feature", { exec })).toBe("acme");
+		expect(calls).toEqual([{ args: ["worktree", "list", "--porcelain"], cwd: "/srv/repos/acme-wt-feature" }]);
+	});
+
+	test("the main checkout itself resolves to undefined", async () => {
+		const exec = fakeGit({ exitCode: 0, stderr: "", stdout: PORCELAIN_FIXTURE }, []);
+		expect(await resolveWorktreeOf("/srv/repos/acme", { exec })).toBeUndefined();
+	});
+
+	test("a throwing git or a nonzero exit resolves to undefined", async () => {
+		const throwing: GitRunner = async () => {
+			throw new Error("spawn failed");
+		};
+		expect(await resolveWorktreeOf("/srv/repos/acme-wt-feature", { exec: throwing })).toBeUndefined();
+		const failing = fakeGit({ exitCode: 128, stderr: "not a repo", stdout: "" }, []);
+		expect(await resolveWorktreeOf("/srv/repos/acme-wt-feature", { exec: failing })).toBeUndefined();
+	});
+
+	test("unparseable output resolves to undefined", async () => {
+		const exec = fakeGit({ exitCode: 0, stderr: "", stdout: "garbage\n" }, []);
+		expect(await resolveWorktreeOf("/srv/repos/acme-wt-feature", { exec })).toBeUndefined();
+	});
+
+	test("real git: worktree path → main basename; main checkout → undefined", async () => {
+		const root = await makeRoot();
+		const main = join(root, "main-repo");
+		await mkdir(main);
+		await git(["init", "-b", "main"], main);
+		await writeFile(join(main, "README.md"), "# main\n");
+		await git(["add", "."], main);
+		await git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"], main);
+		const wt = join(root, "wt-feature");
+		await git(["worktree", "add", wt, "-b", "feature/x"], main);
+
+		expect(await resolveWorktreeOf(wt)).toBe("main-repo");
+		expect(await resolveWorktreeOf(main)).toBeUndefined();
 	});
 });

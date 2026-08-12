@@ -3018,13 +3018,13 @@ pre.terminal.eval-code {
 	text-overflow: ellipsis;
 }
 
-.daemon-chip--worktree {
-	color: var(--purple);
-	border-color: var(--purple);
-}
-
 .daemon-chip--label {
 	color: var(--muted-2);
+}
+
+/* Repo group headers nested under the top-level "Local" header. */
+.daemon-repo-name {
+	padding-left: var(--space-6);
 }
 
 .daemon-cwd {

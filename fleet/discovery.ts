@@ -13,6 +13,9 @@
  *
  * `validateProjectPath` resolves a path to its realpath, or null unless it is
  * an existing directory.
+ *
+ * `resolveWorktreeOf` answers the owning-repo basename for one path (spawn
+ * cwd tagging): undefined for a main checkout or when git can't tell.
  */
 
 import { readdir, realpath, stat } from "node:fs/promises";
@@ -198,4 +201,24 @@ export async function validateProjectPath(p: string): Promise<string | null> {
 	if (!resolved) return null;
 	const st = await stat(resolved).catch(() => null);
 	return st?.isDirectory() ? resolved : null;
+}
+
+/**
+ * Resolve the owning repo of a spawn cwd: the basename of the MAIN worktree
+ * of the repository containing `path`, or undefined when `path` IS the main
+ * checkout or git can't tell (not a repo, spawn failure, nonzero exit,
+ * unparseable output). One uncached git call — spawn/backfill are rare, and
+ * the result is persisted on the registry entry. Realpaths are compared so a
+ * cwd naming the main checkout through a symlink still counts as the main
+ * checkout.
+ */
+export async function resolveWorktreeOf(path: string, options?: ListProjectsOptions): Promise<string | undefined> {
+	const exec = options?.exec ?? runGit;
+	const result = await exec(["worktree", "list", "--porcelain"], path).catch(() => null);
+	if (!result || result.exitCode !== 0) return undefined;
+	const mainPath = parseWorktreeList(result.stdout)[0]?.path;
+	if (!mainPath) return undefined;
+	const resolved = await realpath(path).catch(() => path);
+	const mainResolved = await realpath(mainPath).catch(() => mainPath);
+	return mainResolved === resolved ? undefined : basename(mainPath);
 }

@@ -286,6 +286,9 @@ class FleetServerImpl implements FleetServer {
 			config,
 		});
 		this.edge = edge;
+		// Tag pre-existing local entries with their owning repo (roster
+		// grouping); per-entry git failures are swallowed inside.
+		void this.supervisor.backfillWorktrees();
 		this.#server = Bun.serve({
 			hostname: "127.0.0.1", // loopback-only control API + browser edge (Phase 3)
 			port,

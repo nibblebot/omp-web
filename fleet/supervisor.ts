@@ -25,6 +25,7 @@ import type { StdoutContractLine } from "../src/protocol";
 import type { FleetConfig, SpawnTemplate } from "./config";
 import { fillTemplate, parseContractLine, resolveEndpoint } from "./spawn-parse";
 import type { DaemonConnector } from "./connector";
+import { resolveWorktreeOf } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
 
 type Child = Subprocess<"ignore", "pipe", "pipe">;
@@ -139,16 +140,22 @@ export class SpawnSupervisor {
 	 * else `config.projectTemplates[basename(cwd)]`, else
 	 * `config.defaultTemplate`. An unknown template name at any tier rejects
 	 * before any entry is created.
+	 *
+	 * A cwd inside a linked git worktree is tagged with the owning repo's
+	 * name (worktreeOf) so the roster can group it; a main checkout or an
+	 * unresolvable cwd stays untagged.
 	 */
 	async spawn(init: { cwd: string; template?: string; name?: string; labels?: string[] }): Promise<RegistryEntry> {
 		const project = basename(init.cwd);
 		const templateName = init.template ?? this.#config.projectTemplates?.[project] ?? this.#config.defaultTemplate;
 		const template = this.#config.templates[templateName];
 		if (!template) throw new Error(`unknown spawn template: ${templateName}`);
+		const worktreeOf = await resolveWorktreeOf(init.cwd);
 		const entry = this.#registry.create({
 			name: init.name ?? project,
 			cwd: init.cwd,
 			project,
+			...(worktreeOf !== undefined ? { worktreeOf } : {}),
 			labels: init.labels ?? [],
 			mode: "spawned",
 			template: templateName,
@@ -213,6 +220,22 @@ export class SpawnSupervisor {
 	/** Last 64KB (or configured ring) of the child's stderr, as text. */
 	stderrTail(daemonId: string): string {
 		return this.#children.get(daemonId)?.stderrRing ?? "";
+	}
+
+	/**
+	 * Backfill worktreeOf on local entries registered before spawn-time
+	 * tagging existed (fired once at server start). Remote entries name paths
+	 * on ANOTHER host — never probe those with local git. An unresolvable cwd
+	 * leaves the entry untouched; entries removed mid-scan are skipped.
+	 */
+	async backfillWorktrees(): Promise<void> {
+		for (const entry of this.#registry.list()) {
+			if (entry.mode === "remote" || entry.worktreeOf !== undefined || entry.cwd === "") continue;
+			const worktreeOf = await resolveWorktreeOf(entry.cwd);
+			if (worktreeOf !== undefined && this.#registry.get(entry.daemonId)) {
+				this.#registry.update(entry.daemonId, { worktreeOf });
+			}
+		}
 	}
 
 	/** Stop every spawned child. */

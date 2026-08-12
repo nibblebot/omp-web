@@ -6,7 +6,8 @@ import { Modal } from "./Modal";
 
 // ---------------------------------------------------------------------------
 // Fleet-edge roster sidebar (Phase 3). Rendered by App.tsx only in
-// roster mode. Rows show the session
+// roster mode. Sessions are grouped: worktree sessions under a header per
+// owning repo, the rest under "Local". Rows show the session
 // status dot, project/label chips and cwd; ready rows attach on click, asleep
 // rows wake-then-attach, stop and remove are two-click confirms (DaemonPanel
 // pattern), and each row opens a detail popover (facts + stderr tail).
@@ -80,13 +81,6 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 						<span class="daemon-chip" title={d().cwd}>
 							{d().project}
 						</span>
-						<Show when={d().worktreeOf}>
-							{wt => (
-								<span class="daemon-chip daemon-chip--worktree" title={`worktree of ${wt()}`}>
-									of {wt()}
-								</span>
-							)}
-						</Show>
 						<For each={d().labels}>
 							{l => (
 								<span class="daemon-chip daemon-chip--label" title={`label ${l}`}>
@@ -511,9 +505,27 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 	);
 };
 
-/** Right-side column: fleet session roster (click to attach/wake). */
+/** Right-side column: fleet session roster (click to attach/wake). All
+ *  sessions sit under a top-level "Local" header, grouped beneath it by
+ *  owning repo: worktree sessions under their repo, everything else under
+ *  its project name (main checkouts join their repo's group). */
 export const DaemonSidebar: Component = () => {
 	const [spawnOpen, setSpawnOpen] = createSignal(false);
+
+	/** Repo groups sorted alphabetically; roster order preserved within each. */
+	const groups = () => {
+		const byRepo = new Map<string, DaemonEntry[]>();
+		for (const d of state.daemonRoster) {
+			const key = d.worktreeOf ?? d.project;
+			const list = byRepo.get(key) ?? [];
+			list.push(d);
+			byRepo.set(key, list);
+		}
+		return [...byRepo.keys()]
+			.sort((a, b) => a.localeCompare(b))
+			.map(name => ({ name, entries: byRepo.get(name)! }));
+	};
+
 	return (
 		<aside class="sidebar">
 			<div class="sidebar-header">
@@ -529,7 +541,17 @@ export const DaemonSidebar: Component = () => {
 				</button>
 			</div>
 			<div class="sidebar-list">
-				<For each={state.daemonRoster}>{d => <DaemonRow daemon={d} />}</For>
+				<Show when={state.daemonRoster.length > 0}>
+					<div class="picker-group-name">Local</div>
+					<For each={groups()}>
+						{g => (
+							<>
+								<div class="picker-group-name daemon-repo-name">{g.name}</div>
+								<For each={g.entries}>{d => <DaemonRow daemon={d} />}</For>
+							</>
+						)}
+					</For>
+				</Show>
 				<Show when={state.daemonRoster.length === 0}>
 					<div class="sidebar-empty">no sessions — press + to spawn one</div>
 				</Show>

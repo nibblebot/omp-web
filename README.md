@@ -125,7 +125,7 @@ Local children are restarted `on-failure` with bounded backoff; the stderr ring 
 ## The web UI (one app, two modes)
 
 - **Standalone** (served by an omp-session): the full single-session UI — chat, steering, queue chips, live bash/python streaming, rich tool cards, subagent roster + drill-down, settings panel (TUI `/settings` parity), OAuth login, collab rooms (`omp join` TUI guests), session resume/branch/fork/handoff, `/btw` side questions, `/export` HTML transcripts. Composer stays disabled until the daemon's `ready` frame.
-- **Roster** (served by omp-fleet): the roster sidebar replaces the sessions sidebar — status dots (`spawning`/`ready`/`asleep`/`reconnecting`/`error`), spawn picker (projects + worktrees + freeform path + template + labels), wake-on-click for asleep sessions, stop with confirm, per-session detail popover (cwd, uptime, labels, last session, stderr tail). Attaching proxies the browser through to that omp-session (`daemonId` at the edge); everything else about the UI is identical.
+- **Roster** (served by omp-fleet): the roster sidebar replaces the sessions sidebar — sessions under a top-level **Local** header, grouped beneath it by owning repo (worktree sessions join their repo's group; spawned sessions are tagged at spawn time and pre-existing ones backfilled at startup), status dots (`spawning`/`ready`/`asleep`/`reconnecting`/`error`), spawn picker (projects + worktrees + freeform path + template + labels), wake-on-click for asleep sessions, stop with confirm, per-session detail popover (cwd, uptime, labels, last session, stderr tail). Attaching proxies the browser through to that omp-session (`daemonId` at the edge); everything else about the UI is identical.
 
 Collab from the CLI (standalone omp-session):
 

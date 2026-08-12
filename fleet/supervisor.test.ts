@@ -167,7 +167,72 @@ function makeConnector(registry: Registry): DaemonConnector {
 	return new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50 });
 }
 
+/** Run a real git command, throwing on failure. */
+function gitSync(args: string[], cwd: string): void {
+	const proc = Bun.spawnSync(["git", "-C", cwd, ...args]);
+	if (proc.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed (${proc.exitCode}): ${proc.stderr.toString()}`);
+}
+
+/** Real git repo: main checkout + one linked worktree, both under `dir`. */
+function makeWorktreeRepo(dir: string): { main: string; wt: string } {
+	const main = join(dir, "main-repo");
+	const wt = join(dir, "wt-feature");
+	mkdirSync(main, { recursive: true });
+	gitSync(["init", "-b", "main"], main);
+	writeFileSync(join(main, "README.md"), "# main\n");
+	gitSync(["add", "."], main);
+	gitSync(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"], main);
+	gitSync(["worktree", "add", wt, "-b", "feature/x"], main);
+	return { main, wt };
+}
+
 describe("SpawnSupervisor", () => {
+	test("spawn tags worktreeOf for a worktree cwd; a main checkout stays untagged", async () => {
+		const projectDir = tmpPath("omp-session-sup-wt-");
+		const { main, wt } = makeWorktreeRepo(projectDir);
+		const fake = startFake({ cwd: wt, sessionFile: "/srv/proj/sess.jsonl" });
+		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 0 });
+
+		const wtEntry = await supervisor.spawn({ cwd: wt });
+		expect(wtEntry.worktreeOf).toBe("main-repo");
+		const mainEntry = await supervisor.spawn({ cwd: main });
+		expect(mainEntry.worktreeOf).toBeUndefined();
+
+		await supervisor.close();
+		await connector.close();
+		fake.stop();
+	});
+
+	test("backfillWorktrees tags untagged local entries; remote entries are never probed", async () => {
+		const projectDir = tmpPath("omp-session-sup-backfill-");
+		const { main, wt } = makeWorktreeRepo(projectDir);
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), { restartMax: 0 });
+		const spawned = registry.create({ name: "wt", cwd: wt, project: basename(wt), labels: [], mode: "spawned", template: "test" });
+		// A remote entry pointing at a local worktree path must stay untagged:
+		// its cwd lives on another host.
+		const remote = registry.create({
+			name: "r",
+			cwd: wt,
+			project: "r",
+			labels: [],
+			mode: "remote",
+			endpoint: "ws://127.0.0.1:1",
+		});
+		const mainEntry = registry.create({ name: "m", cwd: main, project: "main-repo", labels: [], mode: "spawned", template: "test" });
+
+		await supervisor.backfillWorktrees();
+		expect(registry.get(spawned.daemonId)!.worktreeOf).toBe("main-repo");
+		expect(registry.get(remote.daemonId)!.worktreeOf).toBeUndefined();
+		expect(registry.get(mainEntry.daemonId)!.worktreeOf).toBeUndefined();
+
+		await connector.close();
+	});
+
 	test("spawn runs the child, resolves the endpoint, and connects to ready", async () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
