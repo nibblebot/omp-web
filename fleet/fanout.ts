@@ -51,14 +51,15 @@ export async function promptEntry(
 	try {
 		const current = deps.registry.get(daemonId) ?? entry;
 		try {
-			// Wake on demand: asleep, error, reconnecting, or idle-dropped
-			// (ready but no live socket) entries are respawned/redialed first.
-			if (current.status !== "ready" || !deps.connector.isConnected(daemonId)) {
-				if (current.mode === "spawned") {
-					await deps.supervisor.respawn(current);
-				} else {
-					deps.connector.connect(daemonId);
-				}
+			// Wake on demand. A spawned entry that is asleep/error/reconnecting
+			// is relaunched (--resume); anything whose socket is merely gone
+			// behind a stale "ready" status (idle-drop) needs only a redial —
+			// far cheaper than killing a healthy child with a respawn.
+			if (current.mode === "spawned" && current.status !== "ready") {
+				await deps.supervisor.respawn(current);
+				await deps.connector.waitReady(daemonId, DEFAULT_WAIT_READY_MS);
+			} else if (!deps.connector.isConnected(daemonId)) {
+				deps.connector.connect(daemonId);
 				await deps.connector.waitReady(daemonId, DEFAULT_WAIT_READY_MS);
 			}
 		} catch (err) {
@@ -66,10 +67,15 @@ export async function promptEntry(
 		}
 		const id = randomUUID();
 		const cmd: ClientCommand = { type: "call", id, method: "prompt", args: [text] };
+		// Subscribe BEFORE send: a fast daemon's answer frames must never
+		// arrive to find no listener (correlate-after-send could miss them and
+		// run to timeout despite a completed turn).
+		const correlation = correlate(deps, daemonId, id, waitMs);
 		if (!deps.connector.send(daemonId, cmd)) {
+			correlation.cancel();
 			return { daemonId, ok: false, error: "daemon not connected" };
 		}
-		return await correlate(deps, daemonId, id, waitMs);
+		return await correlation.promise;
 	} finally {
 		deps.connector.release(daemonId);
 	}
@@ -85,13 +91,17 @@ export async function fanOut(
 	return Promise.all(entries.map((entry) => promptEntry(deps, entry, text, waitMs)));
 }
 
-/** Subscribe to daemon frames and settle on agent_end / error / abort / timeout. */
+/**
+ * Subscribe to daemon frames and settle on agent_end / error / abort /
+ * timeout. Returns the result promise plus a cancel() that detaches without
+ * settling (used when send() fails after subscribing).
+ */
 function correlate(
 	deps: FanoutDeps,
 	daemonId: string,
 	callId: string,
 	waitMs?: number,
-): Promise<PromptResult> {
+): { promise: Promise<PromptResult>; cancel: () => void } {
 	const { promise, resolve } = Promise.withResolvers<PromptResult>();
 	let settled = false;
 	let lastText: string | undefined;
@@ -102,6 +112,12 @@ function correlate(
 		if (settled) return;
 		handleFrame(frame);
 	});
+	const cancel = (): void => {
+		if (settled) return;
+		settled = true;
+		clearTimeout(timer);
+		unsubscribe();
+	};
 
 	function settle(result: PromptResult): void {
 		if (settled) return;
@@ -163,5 +179,5 @@ function correlate(
 		}
 	}
 
-	return promise;
+	return { promise, cancel };
 }

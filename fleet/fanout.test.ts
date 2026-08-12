@@ -286,6 +286,31 @@ describe("promptEntry", () => {
 		fake.stop();
 	});
 
+	test("wakes an idle-dropped ready entry (socket gone, stale ready status) before prompting", async () => {
+		// Regression: an entry whose socket the idle policy dropped still reads
+		// "ready" in the registry. promptEntry must redial and succeed, not
+		// trust the stale status and fail with "daemon not connected".
+		const fake = startFake({ onMessage: happyResponder });
+		const registry = await loadedRegistry();
+		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 30 });
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 2000);
+		// Arm the idle policy (drop happens only after a retain/release pair).
+		connector.retain(entry.daemonId);
+		connector.release(entry.daemonId);
+		await waitFor(() => (!connector.isConnected(entry.daemonId) ? "dropped" : null), 2000, "idle drop");
+		expect(registry.get(entry.daemonId)?.status).toBe("ready"); // stale
+		const result = await promptEntry({ registry, connector, supervisor }, entry, "hi", 2000);
+		expect(result.ok).toBe(true);
+		expect(result.text).toBe("Final answer");
+		expect(fake.openCount).toBe(2); // redial + prompt on the fresh socket
+		await connector.close();
+		fake.stop();
+	});
+
 	test("returns an error result when the daemon cannot be woken", async () => {
 		// A cwd-mismatched daemon lands in error status; the wake path's
 		// waitReady rejects with the error and promptEntry reports it.

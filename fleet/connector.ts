@@ -314,11 +314,17 @@ export class DaemonConnector {
 		};
 	}
 
-	/** Resolves on status "ready"; rejects on status "error" or timeout (default 60s). */
+	/**
+	 * Resolves on status "ready" WITH a live socket; rejects on status "error"
+	 * or timeout (default 60s). A stale "ready" registry status alone is NOT
+	 * enough — the socket may have been idle-dropped or killed behind the
+	 * status's back, and send() would fail right after. Without a live socket
+	 * we wait for a ready transition, which only a fresh dial can produce.
+	 */
 	waitReady(daemonId: string, timeoutMs: number = DEFAULT_WAIT_READY_MS): Promise<void> {
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
 		const entry = this.#registry.get(daemonId);
-		if (entry?.status === "ready") {
+		if (entry?.status === "ready" && this.isConnected(daemonId)) {
 			resolve();
 			return promise;
 		}

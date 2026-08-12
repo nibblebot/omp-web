@@ -405,6 +405,36 @@ describe("DaemonConnector", () => {
 		bad.stop();
 	});
 
+	test("waitReady ignores a stale ready status with no live socket; a fresh dial resolves it", async () => {
+		// Regression: waitReady short-circuited on the registry's "ready" even
+		// after an idle-drop removed the socket, so promptEntry's send() hit a
+		// dead connection ("daemon not connected").
+		const fake = startFake();
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
+		const connector = makeConnector(registry);
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 2000);
+		// Idle policy drop: socket gone, registry status stays "ready".
+		connector.disconnect(entry.daemonId);
+		expect(connector.isConnected(entry.daemonId)).toBe(false);
+		expect(registry.get(entry.daemonId)?.status).toBe("ready");
+		// The stale status must NOT resolve a new waitReady...
+		let resolved = false;
+		const pending = connector.waitReady(entry.daemonId, 2000).then(() => {
+			resolved = true;
+		});
+		await sleep(150);
+		expect(resolved).toBe(false);
+		// ...until a fresh dial's ready frame arrives over a live socket.
+		connector.connect(entry.daemonId);
+		await pending;
+		expect(resolved).toBe(true);
+		expect(fake.openCount).toBe(2);
+		await connector.close();
+		fake.stop();
+	});
+
 	test("real omp-session frame order (state+ready before hello_ok) never downgrades from ready", async () => {
 		// The real omp-session sends its attach priming (history/state, and ready when
 		// the gate already cleared) immediately on upgrade — BEFORE it answers

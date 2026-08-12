@@ -547,18 +547,21 @@ export class FleetEdge {
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Wake an asleep daemon: spawned → supervisor.respawn, else connector
-	 * redial. Serialized per daemon — the roster UI sends spawn_resume and
-	 * attach back-to-back; a second wake (from the attach) while the first is
-	 * in flight must not respawn the child again, it just awaits ready.
+	 * Wake a daemon whose control socket is down: asleep spawned entries are
+	 * respawned (--resume); everything else — asleep remote entries AND
+	 * "ready" entries whose socket was idle-dropped behind the stale status —
+	 * just needs a redial (far cheaper than killing a healthy child).
+	 * Serialized per daemon — the roster UI sends spawn_resume and attach
+	 * back-to-back; a second wake (from the attach) while the first is in
+	 * flight must not respawn the child again, it just awaits ready.
 	 */
 	async #wake(entry: RegistryEntry): Promise<void> {
-		if (entry.status !== "asleep") return;
 		const daemonId = entry.daemonId;
+		if (entry.status !== "asleep" && this.#connector.isConnected(daemonId)) return;
 		if (this.#waking.has(daemonId)) return;
 		this.#waking.add(daemonId);
 		try {
-			if (entry.mode === "spawned") {
+			if (entry.mode === "spawned" && entry.status === "asleep") {
 				await this.#supervisor.respawn(entry);
 			} else {
 				this.#connector.connect(daemonId);
