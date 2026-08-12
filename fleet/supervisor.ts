@@ -17,6 +17,10 @@
  * <lastSessionFile>"` when the session has one (R3), stop() SIGTERMs,
  * escalates to SIGKILL after 5s, and sets status "asleep" (respawnable).
  * Child stderr is kept in a rolling ring (default 64KB) for stderrTail().
+ *
+ * Git-state polling (startGitStatePolling) keeps every local registry
+ * entry's branch + dirty counts fresh for the roster; remote entries are
+ * never probed with local git (their cwd is on another host).
  */
 
 import { basename } from "node:path";
@@ -25,7 +29,8 @@ import type { StdoutContractLine } from "../src/protocol";
 import type { FleetConfig, SpawnTemplate } from "./config";
 import { fillTemplate, parseContractLine, resolveEndpoint } from "./spawn-parse";
 import type { DaemonConnector } from "./connector";
-import { resolveWorktreeOf } from "./discovery";
+import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
+import type { GitRunner } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
 
 type Child = Subprocess<"ignore", "pipe", "pipe">;
@@ -52,11 +57,26 @@ const STOP_SIGTERM_GRACE_MS = 5_000;
 const RESP_AWN_KILL_GRACE_MS = 2_000;
 const RESTART_BACKOFF_MIN_MS = 1_000;
 const RESTART_BACKOFF_MAX_MS = 30_000;
+const DEFAULT_GIT_STATE_POLL_MS = 10_000;
 
 /** Jittered exponential backoff: base = min(max, min·2^attempt), ±50%. */
 function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
 	const base = Math.min(maxMs, minMs * 2 ** attempt);
 	return Math.round(base * (0.5 + Math.random()));
+}
+
+/** Field-wise git-counts compare: undefined (never probed) differs from any counts object. */
+function sameGitState(
+	a: { added: number; modified: number; deleted: number; untracked: number } | undefined,
+	b: { added: number; modified: number; deleted: number; untracked: number },
+): boolean {
+	return (
+		a !== undefined &&
+		a.added === b.added &&
+		a.modified === b.modified &&
+		a.deleted === b.deleted &&
+		a.untracked === b.untracked
+	);
 }
 
 /** Fresh 32-byte bearer token, base64url-encoded (43 chars). */
@@ -117,6 +137,10 @@ export class SpawnSupervisor {
 	#restartMax: number;
 	#stderrRingBytes: number;
 	#children = new Map<string, ChildState>();
+	/** Git-state poll timer (startGitStatePolling); cleared by close(). */
+	#gitStateTimer: ReturnType<typeof setInterval> | null = null;
+	/** Exec injected via startGitStatePolling (tests); undefined = real git. */
+	#gitExec: GitRunner | undefined;
 
 	constructor(
 		registry: Registry,
@@ -161,6 +185,8 @@ export class SpawnSupervisor {
 			template: templateName,
 		});
 		this.#launch(entry, template, { resume: false });
+		// Give the fresh entry its branch/git before the next poll tick.
+		this.probeGitState(entry.daemonId);
 		return entry;
 	}
 
@@ -238,8 +264,75 @@ export class SpawnSupervisor {
 		}
 	}
 
-	/** Stop every spawned child. */
+	/**
+	 * Start polling git state (branch + dirty counts) for every local
+	 * registry entry: one immediate pass, then one pass every `intervalMs`
+	 * (default 10s). Remote entries are NEVER probed — their cwd lives on
+	 * another host (same rule as backfillWorktrees). A pass updates the
+	 * registry only when the probed state actually differs from the entry's
+	 * current branch/git — every update broadcasts the roster via
+	 * registry.onChange — and a probe failure clears previously-set fields
+	 * only. The injected `exec` keeps tests hermetic. Idempotent: a second
+	 * call while polling is ignored so passes never stack. `close()` stops
+	 * the timer.
+	 */
+	startGitStatePolling(opts?: { intervalMs?: number; exec?: GitRunner }): void {
+		if (this.#gitStateTimer) return;
+		this.#gitExec = opts?.exec;
+		const intervalMs = opts?.intervalMs ?? DEFAULT_GIT_STATE_POLL_MS;
+		void this.#pollGitState();
+		this.#gitStateTimer = setInterval(() => void this.#pollGitState(), intervalMs);
+	}
+
+	/**
+	 * One-off git-state probe for one daemon (fire-and-forget). spawn()
+	 * calls this right after entry creation so a fresh session shows its
+	 * branch and dirty counts before the next poll tick. Uses the exec
+	 * injected via startGitStatePolling (real git before that).
+	 */
+	probeGitState(daemonId: string): void {
+		const entry = this.#registry.get(daemonId);
+		if (!entry) return;
+		void this.#probeEntry(entry);
+	}
+
+	/** One poll pass: every local entry, in registry order. */
+	async #pollGitState(): Promise<void> {
+		for (const entry of this.#registry.list()) {
+			await this.#probeEntry(entry);
+		}
+	}
+
+	/**
+	 * Probe one entry and reconcile the registry. The entry is re-read after
+	 * the probe so a removal mid-probe is skipped; an update happens only on
+	 * an actual branch/git change.
+	 */
+	async #probeEntry(entry: RegistryEntry): Promise<void> {
+		if (entry.mode === "remote" || entry.cwd === "") return;
+		const result = await probeGit(entry.cwd, { exec: this.#gitExec });
+		const current = this.#registry.get(entry.daemonId);
+		if (!current) return; // removed while probing
+		if (result === undefined) {
+			// Probe failure (spawn error / nonzero exit / unparseable): clear
+			// stale fields only when previously set, so a never-probed entry
+			// doesn't churn the registry with a no-op broadcast.
+			if (current.branch !== undefined || current.git !== undefined) {
+				this.#registry.update(current.daemonId, { branch: undefined, git: undefined });
+			}
+			return;
+		}
+		if (current.branch !== result.branch || !sameGitState(current.git, result.git)) {
+			this.#registry.update(current.daemonId, { branch: result.branch, git: result.git });
+		}
+	}
+
+	/** Stop every spawned child and the git-state poll timer. */
 	async close(): Promise<void> {
+		if (this.#gitStateTimer) {
+			clearInterval(this.#gitStateTimer);
+			this.#gitStateTimer = null;
+		}
 		for (const daemonId of [...this.#children.keys()]) {
 			await this.stop(daemonId);
 		}

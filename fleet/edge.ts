@@ -277,6 +277,8 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 		uptime: Math.max(0, Math.floor((Date.now() - uptimeBase) / 1000)),
 	};
 	if (entry.worktreeOf !== undefined) roster.worktreeOf = entry.worktreeOf;
+	if (entry.branch !== undefined) roster.branch = entry.branch;
+	if (entry.git !== undefined) roster.git = { ...entry.git };
 	if (entry.lastSessionFile !== undefined) roster.lastSessionFile = entry.lastSessionFile;
 	if (entry.readyAt !== undefined) roster.readyAt = entry.readyAt;
 	if (entry.pid !== undefined) roster.pid = entry.pid;

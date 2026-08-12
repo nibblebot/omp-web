@@ -11,7 +11,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { listProjects, resolveWorktreeOf, validateProjectPath } from "./discovery";
+import { listProjects, parseGitStatePorcelain, probeGitState, resolveWorktreeOf, validateProjectPath } from "./discovery";
 import type { GitResult, GitRunner } from "./discovery";
 import type { ProjectEntry } from "../src/protocol";
 
@@ -314,5 +314,100 @@ describe("resolveWorktreeOf", () => {
 
 		expect(await resolveWorktreeOf(wt)).toBe("main-repo");
 		expect(await resolveWorktreeOf(main)).toBeUndefined();
+	});
+});
+
+describe("parseGitStatePorcelain", () => {
+	/** Counts shorthand for the parsed git object. */
+	const zero = { added: 0, modified: 0, deleted: 0, untracked: 0 };
+
+	test("a clean repo: header only, all counts zero", () => {
+		expect(parseGitStatePorcelain("## main\n")).toEqual({ branch: "main", git: zero });
+	});
+
+	test("a dirty repo counts A/M/D/?? lines", () => {
+		const stdout = [
+			"## main",
+			" M file-m.txt",
+			"A  file-a.txt",
+			" D file-d.txt",
+			"?? file-u.txt",
+			"",
+		].join("\n");
+		expect(parseGitStatePorcelain(stdout)).toEqual({
+			branch: "main",
+			git: { added: 1, modified: 1, deleted: 1, untracked: 1 },
+		});
+	});
+
+	test("staged+unstaged combos: A beats D, everything else counts modified", () => {
+		const stdout = [
+			"## feature/x",
+			"MM file-mm.txt", // staged M + unstaged M
+			"AM file-am.txt", // staged A + unstaged M
+			"AD file-ad.txt", // staged A + unstaged D → added (A checked first)
+			" R file-r.txt", // unstaged rename
+			"R  file-r2.txt", // staged rename
+			"UU file-uu.txt", // unmerged
+			"T  file-t.txt", // type change
+			" C file-c.txt", // unstaged copy
+			"",
+		].join("\n");
+		expect(parseGitStatePorcelain(stdout)).toEqual({
+			branch: "feature/x",
+			git: { added: 2, modified: 6, deleted: 0, untracked: 0 },
+		});
+	});
+
+	test("detached HEAD: `## HEAD (no branch)` → branch undefined", () => {
+		const stdout = ["## HEAD (no branch)", "?? notes.txt", " M tracked.txt", ""].join("\n");
+		expect(parseGitStatePorcelain(stdout)).toEqual({
+			git: { added: 0, modified: 1, deleted: 0, untracked: 1 },
+		});
+	});
+
+	test("empty repo: `## No commits yet on X` still names the branch", () => {
+		const stdout = ["## No commits yet on main", "?? first.txt", ""].join("\n");
+		expect(parseGitStatePorcelain(stdout)).toEqual({
+			branch: "main",
+			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
+		});
+	});
+
+	test("upstream tracking + `[ahead N]` suffix: the branch is cut at `...`", () => {
+		const stdout = ["## main...origin/main [ahead 1]", " M x", ""].join("\n");
+		expect(parseGitStatePorcelain(stdout)).toEqual({
+			branch: "main",
+			git: { added: 0, modified: 1, deleted: 0, untracked: 0 },
+		});
+	});
+
+	test("unparseable output (no `## ` header) is undefined, never a clean repo", () => {
+		expect(parseGitStatePorcelain("garbage\n")).toBeUndefined();
+		expect(parseGitStatePorcelain("")).toBeUndefined();
+	});
+});
+
+describe("probeGitState", () => {
+	test("runs status --porcelain=v1 --branch and returns the parsed state", async () => {
+		const stdout = ["## main", "?? new.txt", ""].join("\n");
+		const calls: GitCall[] = [];
+		const exec = fakeGit({ exitCode: 0, stderr: "", stdout }, calls);
+		expect(await probeGitState("/srv/repos/acme", { exec })).toEqual({
+			branch: "main",
+			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
+		});
+		expect(calls).toEqual([{ args: ["status", "--porcelain=v1", "--branch"], cwd: "/srv/repos/acme" }]);
+	});
+
+	test("spawn failure, nonzero exit, and unparseable output all resolve to undefined", async () => {
+		const throwing: GitRunner = async () => {
+			throw new Error("spawn failed");
+		};
+		expect(await probeGitState("/srv/repos/acme", { exec: throwing })).toBeUndefined();
+		const failing = fakeGit({ exitCode: 128, stderr: "not a repo", stdout: "" }, []);
+		expect(await probeGitState("/srv/repos/acme", { exec: failing })).toBeUndefined();
+		const garbage = fakeGit({ exitCode: 0, stderr: "", stdout: "not porcelain\n" }, []);
+		expect(await probeGitState("/srv/repos/acme", { exec: garbage })).toBeUndefined();
 	});
 });

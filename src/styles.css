@@ -2046,6 +2046,7 @@ pre.terminal {
 	button:not(:disabled),
 	.picker-row,
 	.sidebar-row,
+	.sidebar-caret,
 	.segment-button,
 	.autocomplete-row {
 		transition: none;
@@ -2220,6 +2221,7 @@ pre.terminal {
 	min-height: 0;
 	border-left: 1px solid var(--border);
 	background: var(--bg-deep);
+	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
 	line-height: 1.4;
 }
@@ -2241,7 +2243,6 @@ pre.terminal {
 .sidebar-stats {
 	flex: 1;
 	min-width: 0;
-	font-family: var(--font-mono);
 	font-size: var(--fs-micro);
 	color: var(--muted);
 	white-space: nowrap;
@@ -2914,10 +2915,6 @@ pre.terminal.eval-code {
 	cursor: pointer;
 }
 
-.daemon-row.clickable:hover .daemon-row-hint {
-	color: var(--muted-3);
-}
-
 /* Status dot: ready = green glow, asleep = flat grey, reconnecting = amber,
    error = red, transitional (spawning/connecting/session/resolving) = pulsing
    accent. Unambiguous at a glance: exactly one visual language per state. */
@@ -2973,7 +2970,6 @@ pre.terminal.eval-code {
 
 .daemon-row-state {
 	flex: none;
-	font-family: var(--font-mono);
 	font-size: var(--fs-micro);
 	color: var(--muted-2);
 	white-space: nowrap;
@@ -3022,13 +3018,77 @@ pre.terminal.eval-code {
 	color: var(--muted-2);
 }
 
-/* Repo group headers nested under the top-level "Local" header. */
-.daemon-repo-name {
-	padding-left: var(--space-6);
+/* --- Roster group headers: per-repo collapsible containers under the static
+   REPOS header (caret rotates when collapsed), plus rows nested under them --- */
+
+.sidebar-group {
+	background: none;
+	border: none;
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	padding: var(--space-3) var(--space-4) var(--space-1);
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	cursor: pointer;
+	text-align: left;
+	border-radius: var(--r-md);
+}
+
+.sidebar-group:hover {
+	background: var(--hover);
+}
+
+.sidebar-caret {
+	flex: none;
+	color: var(--muted-2);
+	transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.sidebar-caret::before {
+	content: "▾";
+}
+
+button.sidebar-group[data-open="false"] .sidebar-caret {
+	transform: rotate(-90deg);
+}
+
+.sidebar-group-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidebar-group-count {
+	flex: none;
+	font-size: var(--fs-micro);
+	color: var(--muted-3);
+}
+
+.sidebar-group--repo {
+	/* Slight indent under the static REPOS header. */
+	padding-left: var(--space-4);
+}
+
+.picker-group-name.sidebar-subgroup {
+	/* Static REPOS header sits at the sidebar's edge (no caret, no indent);
+	   mono uppercase inherits the sidebar font. */
+	font-family: var(--font-mono);
+	padding-left: 0;
+}
+
+.daemon-row--nested {
+	/* Indents nested row content deeper than the repo container's label. */
+	padding-left: calc(var(--space-4) + var(--space-4));
 }
 
 .daemon-cwd {
-	font-family: var(--font-mono);
 	font-size: var(--fs-micro);
 	color: var(--muted-2);
 	white-space: nowrap;
@@ -3036,22 +3096,94 @@ pre.terminal.eval-code {
 	text-overflow: ellipsis;
 }
 
-.daemon-row-actions {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-	flex-wrap: wrap;
+/* Stop/remove/info icons sit at the row's right end (inside the git meta
+   row): the first of the group pushes itself (and the rest) over. */
+.daemon-stop-btn {
+	margin-left: auto;
 }
 
-.daemon-row-hint {
-	flex: 1;
-	min-width: 0;
+/* Bare icon actions: no button chrome, just the glyph. Armed (first click
+   of a two-click confirm) turns danger-colored until the second click. */
+.daemon-icon-btn {
+	background: none;
+	border: none;
+	padding: 0 var(--space-1);
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	line-height: 1;
+	cursor: pointer;
+	flex: none;
+	border-radius: var(--r-sm);
+}
+
+.daemon-icon-btn:hover {
+	color: var(--text);
+}
+
+.daemon-icon-btn.armed {
+	color: var(--error);
+}
+
+.daemon-icon-btn.armed:hover {
+	color: var(--error-text);
+}
+
+/* Bottom meta row: branch + dirty counts in compact mono, with the
+   stop/remove/info icons right-aligned (margin-left: auto above). */
+.daemon-git {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	flex-wrap: wrap;
 	font-size: var(--fs-micro);
-	font-style: italic;
-	color: var(--muted);
+	color: var(--muted-2);
+	min-width: 0;
+}
+
+.daemon-git-branch {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.daemon-git-dirty {
+	flex: none;
+	font-variant-numeric: tabular-nums;
+}
+
+.daemon-git-dirty[data-kind="added"] {
+	color: var(--success);
+}
+
+.daemon-git-dirty[data-kind="modified"] {
+	color: var(--warning);
+}
+
+.daemon-git-dirty[data-kind="deleted"] {
+	color: var(--error);
+}
+
+.daemon-git-dirty[data-kind="untracked"] {
+	color: var(--muted-3);
+}
+
+/* Git-branch glyph next to worktree row titles. */
+.daemon-worktree-icon {
+	width: 0.9em;
+	height: 0.9em;
+	flex: none;
+	vertical-align: -0.1em;
+	margin-right: var(--space-2);
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.4;
+}
+
+.daemon-row-title {
+	display: inline-flex;
+	align-items: center;
+	min-width: 0;
 }
 
 .daemon-row-btn {
@@ -3073,17 +3205,6 @@ pre.terminal.eval-code {
 .daemon-row-btn:disabled {
 	opacity: 0.5;
 	cursor: default;
-}
-
-.daemon-row-btn.danger {
-	color: var(--error);
-	border-color: var(--error-border);
-	background: var(--error-bg);
-}
-
-.daemon-row-btn.danger:hover {
-	color: var(--error-text);
-	border-color: var(--error);
 }
 
 /* Detail popover (Modal): roster facts + stderr tail. */

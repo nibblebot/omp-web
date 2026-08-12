@@ -17,6 +17,7 @@ import { OMP_PROTO, SSE_EVENT_NAME } from "../src/protocol";
 import { encodeSseEvent } from "../src/sse";
 import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
+import type { GitResult, GitRunner } from "./discovery";
 import { Registry, type RegistryEntry } from "./registry";
 import { SpawnSupervisor } from "./supervisor";
 
@@ -187,6 +188,26 @@ function makeTierConfig(scriptDefault: string, scriptOverride: string, projectTe
 
 function makeConnector(registry: Registry): DaemonConnector {
 	return new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50 });
+}
+
+/** Recorded git invocation for the fake exec. */
+interface GitCall {
+	args: string[];
+	cwd: string;
+}
+
+/**
+ * Fake git answering each invocation from `phases` (the LAST phase repeats),
+ * recording every call — the phases drive state transitions across poll
+ * ticks.
+ */
+function fakeGitPhases(phases: GitResult[]): { exec: GitRunner; calls: GitCall[] } {
+	const calls: GitCall[] = [];
+	const exec: GitRunner = async (args, cwd) => {
+		calls.push({ args, cwd });
+		return phases[Math.min(calls.length - 1, phases.length - 1)];
+	};
+	return { exec, calls };
 }
 
 /** Run a real git command, throwing on failure. */
@@ -537,5 +558,172 @@ describe("SpawnSupervisor", () => {
 		expect(registry.list()).toHaveLength(before);
 		await supervisor.close();
 		await connector.close();
+	});
+});
+
+describe("git-state polling", () => {
+	/** Supervisor with a config whose child would fail: polling tests never spawn. */
+	async function pollSupervisor(): Promise<{ registry: Registry; connector: DaemonConnector; supervisor: SpawnSupervisor }> {
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), { restartMax: 0 });
+		return { registry, connector, supervisor };
+	}
+
+	test("probes local entries only on change; remote and empty-cwd entries are never probed", async () => {
+		const { registry, connector, supervisor } = await pollSupervisor();
+		const local = registry.create({
+			name: "l",
+			cwd: "/srv/repos/acme",
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+		});
+		// Same cwd as the local entry: if the poll ever probed the remote
+		// entry the fake exec would see its cwd too.
+		registry.create({ name: "r", cwd: "/srv/repos/acme", project: "acme", labels: [], mode: "remote", endpoint: "ws://127.0.0.1:1" });
+		registry.create({ name: "e", cwd: "", project: "", labels: [], mode: "attached", endpoint: "ws://127.0.0.1:2" });
+		let onChange = 0;
+		registry.onChange = () => {
+			onChange++;
+		};
+
+		const dirty = ["## main", "?? new.txt", ""].join("\n");
+		const { exec, calls } = fakeGitPhases([{ exitCode: 0, stderr: "", stdout: dirty }]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 25 });
+
+		await waitFor(() => (registry.get(local.daemonId)?.git !== undefined ? "probed" : null), 5000, "first probe");
+		// Several more ticks with an unchanged state: no registry update, no
+		// roster broadcast (every update fires onChange).
+		await waitFor(() => (calls.length >= 4 ? "ticks" : null), 5000, "multiple ticks");
+		expect(onChange).toBe(1);
+		expect(registry.get(local.daemonId)).toMatchObject({
+			branch: "main",
+			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
+		});
+		// Remote + empty-cwd entries are never probed with local git.
+		expect(calls.length).toBeGreaterThanOrEqual(4);
+		for (const call of calls) {
+			expect(call.cwd).toBe("/srv/repos/acme");
+			expect(call.args).toEqual(["status", "--porcelain=v1", "--branch"]);
+		}
+		expect(registry.get("d2")?.worktreeOf).toBeUndefined();
+		expect(registry.get("d2")?.git).toBeUndefined();
+		expect(registry.get("d3")?.git).toBeUndefined();
+
+		await supervisor.close();
+		await connector.close();
+	});
+
+	test("a changed state updates the registry and persists to disk", async () => {
+		const statePath = join(tmpPath("omp-session-sup-gitstate-"), "state.json");
+		const registry = new Registry(statePath);
+		await registry.load();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), { restartMax: 0 });
+		const local = registry.create({
+			name: "l",
+			cwd: "/srv/repos/acme",
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+		});
+		let onChange = 0;
+		registry.onChange = () => {
+			onChange++;
+		};
+
+		// Clean for the first two calls (immediate tick + one interval tick),
+		// then dirty from the third call on.
+		const { exec, calls } = fakeGitPhases([
+			{ exitCode: 0, stderr: "", stdout: "## main\n" },
+			{ exitCode: 0, stderr: "", stdout: "## main\n" },
+			{ exitCode: 0, stderr: "", stdout: ["## main", "?? new.txt", ""].join("\n") },
+		]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 25 });
+
+		await waitFor(() => (registry.get(local.daemonId)?.branch !== undefined ? "clean" : null), 5000, "clean state");
+		expect(registry.get(local.daemonId)!.git).toEqual({ added: 0, modified: 0, deleted: 0, untracked: 0 });
+		await waitFor(() => (registry.get(local.daemonId)?.git?.untracked === 1 ? "dirty" : null), 5000, "dirty state");
+		expect(onChange).toBe(2);
+		// Steady state: further ticks change nothing.
+		const changedAt = calls.length;
+		await waitFor(() => (calls.length >= changedAt + 3 ? "more ticks" : null), 5000, "more ticks");
+		expect(onChange).toBe(2);
+		// The polled fields persist (registry persists every update) and
+		// reload cleanly (old state files without them load too).
+		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
+		expect(onDisk.entries[0]).toMatchObject({ branch: "main", git: { added: 0, modified: 0, deleted: 0, untracked: 1 } });
+		const reloaded = new Registry(statePath);
+		await reloaded.load();
+		expect(reloaded.get(local.daemonId)).toMatchObject({ branch: "main", git: { added: 0, modified: 0, deleted: 0, untracked: 1 } });
+
+		await supervisor.close();
+		await connector.close();
+	});
+
+	test("a probe failure clears previously-set fields, once", async () => {
+		const { registry, connector, supervisor } = await pollSupervisor();
+		const local = registry.create({
+			name: "l",
+			cwd: "/srv/repos/acme",
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+		});
+		let onChange = 0;
+		registry.onChange = () => {
+			onChange++;
+		};
+
+		// First call: dirty state. Then the repo disappears (nonzero exit).
+		// A slow interval keeps the transient set state observable between
+		// the immediate tick (set) and the first interval tick (clear).
+		const { exec, calls } = fakeGitPhases([
+			{ exitCode: 0, stderr: "", stdout: ["## main", " M x", ""].join("\n") },
+			{ exitCode: 128, stderr: "fatal: not a git repository", stdout: "" },
+		]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 250 });
+
+		await waitFor(() => (registry.get(local.daemonId)?.git?.modified === 1 ? "set" : null), 5000, "state set");
+		await waitFor(() => (registry.get(local.daemonId)?.git === undefined ? "cleared" : null), 5000, "state cleared");
+		expect(registry.get(local.daemonId)!.branch).toBeUndefined();
+		expect(onChange).toBe(2); // set, then clear
+		// Repeated failures must not re-update (nothing stale left to clear).
+		const clearedAt = calls.length;
+		await waitFor(() => (calls.length >= clearedAt + 3 ? "more ticks" : null), 5000, "more failure ticks");
+		expect(onChange).toBe(2);
+
+		await supervisor.close();
+		await connector.close();
+	});
+
+	test("spawn() runs a one-off probe before the next poll tick", async () => {
+		const projectDir = tmpPath("omp-session-sup-gitone-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+
+		const stdout = ["## main", "?? new.txt", ""].join("\n");
+		const { exec, calls } = fakeGitPhases([{ exitCode: 0, stderr: "", stdout }]);
+		// A long interval: the immediate start tick runs before the entry
+		// exists, so only the spawn() one-off can probe in this window.
+		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await waitFor(() => (registry.get(entry.daemonId)?.git !== undefined ? "probed" : null), 5000, "one-off probe");
+		expect(registry.get(entry.daemonId)).toMatchObject({
+			branch: "main",
+			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
+		});
+		expect(calls).toHaveLength(1); // exactly the one-off probe
+
+		await supervisor.close();
+		await connector.close();
+		fake.stop();
 	});
 });

@@ -191,6 +191,10 @@ export interface DaemonEntry {
 	cwd: string;
 	project: string;
 	worktreeOf?: string;
+	/** Current git branch of the session cwd for local entries (source: fleet edge roster; older edges omit it). */
+	branch?: string;
+	/** git dirty-state file counts (source: fleet edge roster; older edges omit them). */
+	git?: { added: number; modified: number; deleted: number; untracked: number };
 	labels: string[];
 	mode: "spawned" | "attached" | "remote";
 	status: DaemonStatus;

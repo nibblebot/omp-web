@@ -1008,6 +1008,29 @@ describe("edge pure helpers", () => {
 		expect(neverReady.uptime).toBeLessThanOrEqual(201);
 	});
 
+	test("toRosterEntry serializes branch and git when present, omits when absent", () => {
+		const entry: RegistryEntry = {
+			daemonId: "d2",
+			name: "n",
+			cwd: "/srv/repos/acme-wt-feature",
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			branch: "feature/x",
+			git: { added: 2, modified: 3, deleted: 1, untracked: 4 },
+			registeredAt: Date.now(),
+		};
+		const roster = toRosterEntry(entry);
+		expect(roster.branch).toBe("feature/x");
+		expect(roster.git).toEqual({ added: 2, modified: 3, deleted: 1, untracked: 4 });
+		// Old entries (pre-git-state) never carry the fields; a stale probe
+		// that cleared them must serialize without them too.
+		const bare = toRosterEntry({ ...entry, branch: undefined, git: undefined });
+		expect(bare).not.toHaveProperty("branch");
+		expect(bare).not.toHaveProperty("git");
+	});
+
 	test("shouldDropFrame guards the cap boundary", () => {
 		const cap = 4 * 1024 * 1024;
 		expect(shouldDropFrame(0, cap)).toBe(false);

@@ -222,3 +222,70 @@ export async function resolveWorktreeOf(path: string, options?: ListProjectsOpti
 	const mainResolved = await realpath(mainPath).catch(() => mainPath);
 	return mainResolved === resolved ? undefined : basename(mainPath);
 }
+
+/** Parsed `git status --porcelain=v1 --branch` for one repo (probeGitState). */
+export interface GitState {
+	/** Current branch; undefined when detached (or absent from the header). */
+	branch?: string;
+	/** Dirty-state file counts (all-zero for a clean repo). */
+	git: { added: number; modified: number; deleted: number; untracked: number };
+}
+
+/** Branch name from a `## ` header (the text AFTER `## `); undefined when detached. */
+function branchFromHeader(header: string): string | undefined {
+	// Detached HEAD reads `## HEAD (no branch)`.
+	if (header.startsWith("HEAD (no branch)")) return undefined;
+	// An empty repo (no commits yet) reads `## No commits yet on X`.
+	if (header.startsWith("No commits yet on ")) return header.slice("No commits yet on ".length);
+	// `## main...origin/main [ahead 1]`: cut at the upstream `...` (refnames
+	// can't contain it); a space cut also defends a no-upstream `[ahead N]`
+	// suffix. Branch names can't contain spaces either, so both are safe.
+	const cut = header.search(/\.\.\.| /);
+	if (cut === -1) return header;
+	const branch = header.slice(0, cut);
+	return branch === "" ? undefined : branch;
+}
+
+/**
+ * Parse `git status --porcelain=v1 --branch` output into the current branch
+ * and per-file dirty counts. The `## <branch>` header is REQUIRED — a real
+ * `--branch` run always emits it, even in an empty repo — so unparseable
+ * output (garbage, a different command's stdout) returns undefined instead
+ * of masquerading as a clean repo. Per-file XY codes: `??` untracked;
+ * X or Y == 'A' added; X or Y == 'D' deleted; anything else (M/T/R/C/U)
+ * modified.
+ */
+export function parseGitStatePorcelain(stdout: string): GitState | undefined {
+	let headerSeen = false;
+	let branch: string | undefined;
+	const git = { added: 0, modified: 0, deleted: 0, untracked: 0 };
+	for (const line of stdout.split("\n")) {
+		if (line.startsWith("## ")) {
+			headerSeen = true;
+			if (branch === undefined) branch = branchFromHeader(line.slice("## ".length));
+			continue;
+		}
+		if (line.length < 2) continue;
+		const x = line[0];
+		const y = line[1];
+		if (x === "?" && y === "?") git.untracked++;
+		else if (x === "A" || y === "A") git.added++;
+		else if (x === "D" || y === "D") git.deleted++;
+		else git.modified++;
+	}
+	if (!headerSeen) return undefined;
+	return { ...(branch !== undefined ? { branch } : {}), git };
+}
+
+/**
+ * Probe one repo's git state: `git status --porcelain=v1 --branch` via the
+ * injectable GitRunner (like resolveWorktreeOf). Returns undefined on spawn
+ * failure, nonzero exit, or unparseable output — the caller (supervisor
+ * git-state polling) treats that as "no state", never as a clean repo.
+ */
+export async function probeGitState(cwd: string, options?: ListProjectsOptions): Promise<GitState | undefined> {
+	const exec = options?.exec ?? runGit;
+	const result = await exec(["status", "--porcelain=v1", "--branch"], cwd).catch(() => null);
+	if (!result || result.exitCode !== 0) return undefined;
+	return parseGitStatePorcelain(result.stdout);
+}

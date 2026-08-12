@@ -6,16 +6,28 @@ import { Modal } from "./Modal";
 
 // ---------------------------------------------------------------------------
 // Fleet-edge roster sidebar (Phase 3). Rendered by App.tsx only in
-// roster mode. Sessions are grouped: worktree sessions under a header per
-// owning repo, the rest under "Local". Rows show the session
-// status dot, project/label chips and cwd; ready rows attach on click, asleep
-// rows wake-then-attach, stop and remove are two-click confirms (DaemonPanel
-// pattern), and each row opens a detail popover (facts + stderr tail).
+// roster mode. ALL sessions (spawned, attached, remote alike) sit under a
+// single static "REPOS" header, grouped by owning repo (`worktreeOf ??
+// project`); a repo with worktree sessions becomes a label-only collapsible
+// container (main checkouts first, then worktrees) with rows indented
+// beneath, while repos without worktrees render their rows directly.
+// Collapse state persists per repo in localStorage. Rows show the session
+// status dot, a git-branch icon + branch for worktrees, project/label chips
+// and a git-dirty line; ready rows attach on click, asleep rows
+// wake-then-attach, stop and remove are bare-icon two-click confirms, and
+// each row opens a detail popover (facts + stderr tail).
 // ---------------------------------------------------------------------------
 
-/** Roster entries may carry a template name (registry-only field the edge may
- *  serialize; protocol.ts DaemonEntry is frozen so read it tolerantly). */
-type RosterEntry = DaemonEntry & { template?: string };
+/** Roster entries may carry a template name plus per-repo git facts
+ *  (branch + porcelain counts) that the fleet edge may serialize;
+ *  protocol.ts DaemonEntry is frozen so read all of them tolerantly. */
+type RosterEntry = DaemonEntry & {
+	template?: string;
+	/** Current branch of the session cwd; absent for detached/non-git/remote/unprobed. */
+	branch?: string;
+	/** Porcelain file counts; absent when unknown. */
+	git?: { added: number; modified: number; deleted: number; untracked: number };
+};
 
 const STATUS_TITLE: Record<DaemonStatus, string> = {
 	spawning: "starting the session process…",
@@ -28,13 +40,44 @@ const STATUS_TITLE: Record<DaemonStatus, string> = {
 	error: "error — see details",
 };
 
-const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
+/** Porcelain dirty counts, in the order they render: added, modified,
+ *  deleted, untracked — the `git status --porcelain` short-hand glyphs. */
+type DirtyKind = "added" | "modified" | "deleted" | "untracked";
+
+/** Simple 3-node git-branch glyph; strokes follow currentColor so it tints
+ *  with the row title. Rendered inline (no icon font dependency). */
+const WorktreeIcon = () => (
+	<svg class="daemon-worktree-icon" viewBox="0 0 16 16" aria-hidden="true">
+		<circle cx="4" cy="4" r="1.6" />
+		<circle cx="4" cy="12" r="1.6" />
+		<circle cx="12" cy="4" r="1.6" />
+		<path d="M4 5.6v4.8M12 5.6c0 3-4 2.6-8 4.8" />
+	</svg>
+);
+
+const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props => {
 	const [confirmStop, setConfirmStop] = createSignal(false);
 	const [confirmRemove, setConfirmRemove] = createSignal(false);
 	const [detailOpen, setDetailOpen] = createSignal(false);
-	const d = () => props.daemon;
+	const d = () => props.daemon as RosterEntry;
+	// Worktree sessions belong to a main checkout and read as branches, not
+	// dirs — the branch (or name fallback) becomes the title and the project
+	// chip + cwd path are dropped so the row never shows the directory.
+	const isWorktree = () => d().worktreeOf !== undefined;
 	const isAttached = () => d().daemonId === state.currentSessionId;
 	const clickable = () => d().status === "ready" || d().status === "asleep";
+	/** Dirty spans to render: nonzero counts only, kept in fixed order. */
+	const gitKinds = (): Array<{ kind: DirtyKind; n: number; glyph: string }> => {
+		const g = d().git;
+		if (!g) return [];
+		const kinds: Array<{ kind: DirtyKind; n: number; glyph: string }> = [
+			{ kind: "added", n: g.added, glyph: "+" },
+			{ kind: "modified", n: g.modified, glyph: "~" },
+			{ kind: "deleted", n: g.deleted, glyph: "-" },
+			{ kind: "untracked", n: g.untracked, glyph: "?" },
+		];
+		return kinds.filter(k => k.n > 0);
+	};
 
 	const rowClick = () => {
 		const daemon = d();
@@ -63,124 +106,101 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 		<>
 			<div
 				class="sidebar-row daemon-row"
-				classList={{ active: isAttached(), clickable: clickable() }}
+				classList={{ active: isAttached(), clickable: clickable(), "daemon-row--nested": props.nested === true }}
 				onClick={clickable() ? rowClick : undefined}
 				title={STATUS_TITLE[d().status] ?? d().status}
 			>
 				<span class="daemon-status-dot" data-status={d().status} title={d().status} />
 				<div class="sidebar-row-main">
 					<div class="sidebar-row-top">
-						<span class="sidebar-row-title" title={d().name}>
-							{d().name}
+						<span class="sidebar-row-title daemon-row-title" title={isWorktree() ? (d().branch ?? d().name) : d().name}>
+							<Show when={isWorktree()}>
+								<WorktreeIcon />
+							</Show>
+							{isWorktree() ? (d().branch ?? d().name) : d().name}
 						</span>
 						<span class="daemon-row-state" data-status={d().status}>
 							{d().status}
 						</span>
 					</div>
-					<div class="daemon-chips">
-						<span class="daemon-chip" title={d().cwd}>
-							{d().project}
-						</span>
-						<For each={d().labels}>
-							{l => (
-								<span class="daemon-chip daemon-chip--label" title={`label ${l}`}>
-									{l}
+					<Show when={!isWorktree()}>
+						<div class="daemon-chips">
+							<span class="daemon-chip" title={d().cwd}>
+								{d().project}
+							</span>
+							<For each={d().labels}>
+								{l => (
+									<span class="daemon-chip daemon-chip--label" title={`label ${l}`}>
+										{l}
+									</span>
+								)}
+							</For>
+						</div>
+						<div class="daemon-cwd" title={d().cwd}>
+							{d().cwd}
+						</div>
+					</Show>
+					{/* Bottom meta row: branch (non-worktree rows only — worktree
+					    rows already show it as the title), nonzero dirty counts, and
+					    the stop/remove/info icons pushed right. Always rendered —
+					    it carries the actions even with no git info to show. */}
+					<div class="daemon-git">
+						<Show when={!isWorktree() && d().branch !== undefined}>
+							<span class="daemon-git-branch" title={d().cwd}>
+								{d().branch}
+							</span>
+						</Show>
+						<For each={gitKinds()}>
+							{k => (
+								<span
+									class="daemon-git-dirty"
+									data-kind={k.kind}
+									title={`${k.n} ${k.kind}`}
+								>
+									{k.glyph}
+									{k.n}
 								</span>
 							)}
 						</For>
-					</div>
-					<div class="daemon-cwd" title={d().cwd}>
-						{d().cwd}
-					</div>
-					<div class="daemon-row-actions">
-						<Show when={clickable()}>
-							<span class="daemon-row-hint">
-								{isAttached() ? "attached" : d().status === "ready" ? "click to attach" : "click to wake + attach"}
-							</span>
-						</Show>
-						<Show
-							when={confirmStop()}
-							fallback={
-								<button
-									type="button"
-									class="daemon-row-btn"
-									title="Stop this session"
-									onClick={e => {
-										e.stopPropagation();
-										setConfirmStop(true);
-										setConfirmRemove(false);
-									}}
-								>
-									stop
-								</button>
-							}
-						>
-							<button
-								type="button"
-								class="daemon-row-btn danger"
-								title="Stop this session (second click confirms)"
-								onClick={e => {
-									e.stopPropagation();
-									doStop();
-								}}
-							>
-								confirm?
-							</button>
-							<button
-								type="button"
-								class="daemon-row-btn"
-								title="Keep the session running"
-								onClick={e => {
-									e.stopPropagation();
-									setConfirmStop(false);
-								}}
-							>
-								cancel
-							</button>
-						</Show>
-						<Show
-							when={confirmRemove()}
-							fallback={
-								<button
-									type="button"
-									class="daemon-row-btn"
-									title="Remove this session from the roster (stops it first)"
-									onClick={e => {
-										e.stopPropagation();
-										setConfirmRemove(true);
-										setConfirmStop(false);
-									}}
-								>
-									remove
-								</button>
-							}
-						>
-							<button
-								type="button"
-								class="daemon-row-btn danger"
-								title="Remove this session (second click confirms)"
-								onClick={e => {
-									e.stopPropagation();
-									doRemove();
-								}}
-							>
-								confirm?
-							</button>
-							<button
-								type="button"
-								class="daemon-row-btn"
-								title="Keep this session in the roster"
-								onClick={e => {
-									e.stopPropagation();
-									setConfirmRemove(false);
-								}}
-							>
-								cancel
-							</button>
-						</Show>
 						<button
 							type="button"
-							class="daemon-row-btn daemon-detail-btn"
+							class="daemon-icon-btn daemon-stop-btn"
+							classList={{ armed: confirmStop() }}
+							title={confirmStop() ? "Stop this session (second click confirms)" : "Stop this session"}
+							onClick={e => {
+								e.stopPropagation();
+								if (confirmStop()) doStop();
+								else {
+									setConfirmStop(true);
+									setConfirmRemove(false);
+								}
+							}}
+						>
+							■
+						</button>
+						<button
+							type="button"
+							class="daemon-icon-btn daemon-remove-btn"
+							classList={{ armed: confirmRemove() }}
+							title={
+								confirmRemove()
+									? "Remove this session (second click confirms)"
+									: "Remove this session from the roster (stops it first)"
+							}
+							onClick={e => {
+								e.stopPropagation();
+								if (confirmRemove()) doRemove();
+								else {
+									setConfirmRemove(true);
+									setConfirmStop(false);
+								}
+							}}
+						>
+							✕
+						</button>
+						<button
+							type="button"
+							class="daemon-icon-btn daemon-detail-btn"
 							title="Session details"
 							onClick={e => {
 								e.stopPropagation();
@@ -505,25 +525,104 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 	);
 };
 
-/** Right-side column: fleet session roster (click to attach/wake). All
- *  sessions sit under a top-level "Local" header, grouped beneath it by
- *  owning repo: worktree sessions under their repo, everything else under
- *  its project name (main checkouts join their repo's group). */
+/** Right-side column: fleet session roster (click to attach/wake).
+ *  ALL sessions — spawned, attached, and remote alike — group under a
+ *  single static "REPOS" header by owning repo (`worktreeOf ?? project`,
+ *  sorted); a repo with worktree sessions renders as a label-only
+ *  collapsible container with its sessions indented beneath (main
+ *  checkouts first, then worktrees, roster order preserved), while repos
+ *  without worktree sessions render their rows directly. Per-repo collapse
+ *  state persists in localStorage. */
+
+/** localStorage key for the roster sidebar's collapsed group headers. */
+const GROUPS_KEY = "omp.sidebarGroupsCollapsed";
+
+/** One repo group in the roster: its entries and whether it contains
+ *  worktree sessions (which changes how it renders). */
+type SidebarGroup = {
+	name: string;
+	entries: DaemonEntry[];
+	hasWorktrees: boolean;
+};
+
+/** Group roster entries by repo (`worktreeOf ?? project`), sorted by group
+ *  name via localeCompare. Groups that contain worktree sessions
+ *  stable-partition main checkouts first, then worktrees — roster order
+ *  preserved within each partition. Entries without worktreeOf (plain
+ *  checkouts, remote sessions) reduce to a plain per-project grouping. */
+function buildGroups(entries: DaemonEntry[]): SidebarGroup[] {
+	const byRepo = new Map<string, DaemonEntry[]>();
+	for (const d of entries) {
+		const key = d.worktreeOf ?? d.project;
+		const list = byRepo.get(key) ?? [];
+		list.push(d);
+		byRepo.set(key, list);
+	}
+	return [...byRepo.keys()]
+		.sort((a, b) => a.localeCompare(b))
+		.map(name => {
+			const all = byRepo.get(name)!;
+			const hasWorktrees = all.some(d => d.worktreeOf !== undefined);
+			return {
+				name,
+				hasWorktrees,
+				entries: hasWorktrees
+					? [...all.filter(d => d.worktreeOf === undefined), ...all.filter(d => d.worktreeOf !== undefined)]
+					: all,
+			};
+		});
+}
+
+/** Read the collapsed group-key set from localStorage; malformed or
+ *  unavailable storage yields an empty set (all groups default open). */
+function readCollapsedGroups(): Set<string> {
+	if (typeof localStorage === "undefined") return new Set();
+	try {
+		const raw = localStorage.getItem(GROUPS_KEY);
+		if (raw === null) return new Set();
+		const parsed: unknown = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return new Set();
+		return new Set(parsed.filter((k): k is string => typeof k === "string"));
+	} catch {
+		return new Set();
+	}
+}
+
 export const DaemonSidebar: Component = () => {
 	const [spawnOpen, setSpawnOpen] = createSignal(false);
+	const [collapsedGroups, setCollapsedGroups] = createSignal<Set<string>>(readCollapsedGroups());
 
-	/** Repo groups sorted alphabetically; roster order preserved within each. */
-	const groups = () => {
-		const byRepo = new Map<string, DaemonEntry[]>();
-		for (const d of state.daemonRoster) {
-			const key = d.worktreeOf ?? d.project;
-			const list = byRepo.get(key) ?? [];
-			list.push(d);
-			byRepo.set(key, list);
-		}
-		return [...byRepo.keys()]
-			.sort((a, b) => a.localeCompare(b))
-			.map(name => ({ name, entries: byRepo.get(name)! }));
+	/** Flip a group's collapse state and persist the updated key set. */
+	const toggleGroup = (key: string) => {
+		const next = new Set(collapsedGroups());
+		if (next.has(key)) next.delete(key);
+		else next.add(key);
+		setCollapsedGroups(next);
+		if (typeof localStorage !== "undefined") localStorage.setItem(GROUPS_KEY, JSON.stringify([...next]));
+	};
+
+	/** The whole roster grouped per buildGroups; entries without worktreeOf
+	 *  (plain checkouts, remote sessions) render as plain rows, repos with
+	 *  worktrees as collapsible containers. */
+	const groups = () => buildGroups(state.daemonRoster);
+
+	/** Collapsible caret group header; the caret glyph and its rotation come
+	 *  from CSS via the data-open attribute. gkey names the collapse slot. */
+	const GroupHeader: Component<{ label: string; gkey: string; count: number; class?: string }> = props => {
+		const open = () => !collapsedGroups().has(props.gkey);
+		return (
+			<button
+				type="button"
+				class={`sidebar-group${props.class ? ` ${props.class}` : ""}`}
+				aria-expanded={open()}
+				data-open={open() ? "true" : "false"}
+				onClick={() => toggleGroup(props.gkey)}
+			>
+				<span class="sidebar-caret" data-open={open() ? "true" : "false"} />
+				<span class="sidebar-group-label">{props.label}</span>
+				<span class="sidebar-group-count">{props.count}</span>
+			</button>
+		);
 	};
 
 	return (
@@ -542,14 +641,27 @@ export const DaemonSidebar: Component = () => {
 			</div>
 			<div class="sidebar-list">
 				<Show when={state.daemonRoster.length > 0}>
-					<div class="picker-group-name">Local</div>
+					{/* Static top-level header: single grouping for the whole
+					    roster, no caret (not collapsible), no indent. */}
+					<div class="picker-group-name sidebar-subgroup">Repos</div>
 					<For each={groups()}>
-						{g => (
-							<>
-								<div class="picker-group-name daemon-repo-name">{g.name}</div>
+						{g =>
+							g.hasWorktrees ? (
+								<>
+									<GroupHeader
+										label={g.name}
+										gkey={`repo:${g.name}`}
+										count={g.entries.length}
+										class="sidebar-group--repo"
+									/>
+									<Show when={!collapsedGroups().has(`repo:${g.name}`)}>
+										<For each={g.entries}>{d => <DaemonRow daemon={d} nested />}</For>
+									</Show>
+								</>
+							) : (
 								<For each={g.entries}>{d => <DaemonRow daemon={d} />}</For>
-							</>
-						)}
+							)
+						}
 					</For>
 				</Show>
 				<Show when={state.daemonRoster.length === 0}>

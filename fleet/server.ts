@@ -289,6 +289,9 @@ class FleetServerImpl implements FleetServer {
 		// Tag pre-existing local entries with their owning repo (roster
 		// grouping); per-entry git failures are swallowed inside.
 		void this.supervisor.backfillWorktrees();
+		// Keep branch + dirty counts fresh for local entries; close() clears
+		// the timer via supervisor.close().
+		this.supervisor.startGitStatePolling();
 		this.#server = Bun.serve({
 			hostname: "127.0.0.1", // loopback-only control API + browser edge (Phase 3)
 			port,
