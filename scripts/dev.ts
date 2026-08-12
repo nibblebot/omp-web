@@ -42,7 +42,17 @@ const MODES: Record<string, { children: Child[]; open: string }> = {
 			// OMP_DEV_FLEET switches vite's /ws + /download proxy to omp-fleet
 			// (:4722), so the roster UI runs with HMR — no dist/ build needed.
 			{ name: "vite", cmd: ["bunx", "vite"], env: { OMP_DEV_FLEET: "1" } },
-			{ name: "fleet", cmd: ["bun", "fleet/cli.ts", "serve"] },
+			{
+				name: "fleet",
+				cmd: ["bun", "fleet/cli.ts", "serve"],
+				env: {
+					// Sidebar spawns use the default `local` template, which runs the
+					// production `omp-session` binary — not built in dev. Point it at
+					// the source entry instead (absolute: spawned children inherit
+					// the fleet's cwd, and the repo isn't necessarily it).
+					OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "server", "index.ts")} --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`,
+				},
+			},
 			{ name: "session", cmd: ["bun", "--watch", "server/index.ts"] },
 		],
 		open: 'open http://localhost:4713 (roster UI with HMR; dev session auto-attached as "dev")',

@@ -107,6 +107,33 @@ describe("loadConfig", () => {
 		expect(config2.projectTemplates).toBeUndefined();
 	});
 
+	test("OMP_FLEET_LOCAL_TEMPLATE replaces the local template, file or not", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(
+			file,
+			JSON.stringify({
+				templates: { docker: { command: "docker run omp-session {cwd}", host: "docker.local" } },
+			}),
+		);
+		const prev = process.env.OMP_FLEET_LOCAL_TEMPLATE;
+		process.env.OMP_FLEET_LOCAL_TEMPLATE = "bun /repo/server/index.ts --cwd {cwd} --port 0";
+		try {
+			const expected = { command: "bun /repo/server/index.ts --cwd {cwd} --port 0" };
+
+			// Wins over the file's templates (and survives `local` being absent there).
+			const fromFile = await loadConfig(file);
+			expect(fromFile.templates).toEqual({ docker: { command: "docker run omp-session {cwd}", host: "docker.local" }, local: expected });
+			expect(fromFile.defaultTemplate).toBe("local");
+
+			// Applies on the missing-file default path too.
+			const fromDefaults = await loadConfig(join(tmpDir(), "missing.json"));
+			expect(fromDefaults.templates.local).toEqual(expected);
+		} finally {
+			if (prev === undefined) delete process.env.OMP_FLEET_LOCAL_TEMPLATE;
+			else process.env.OMP_FLEET_LOCAL_TEMPLATE = prev;
+		}
+	});
+
 	test("spawnHook: env OMP_FLEET_SPAWN_HOOK wins over the file", async () => {
 		const file = join(tmpDir(), "config.json");
 		writeFileSync(file, JSON.stringify({ spawnHook: "/cfg/hook.sh" }));

@@ -6,7 +6,10 @@
  * `OMP_FLEET_CONFIG`, then the default location. A missing file yields
  * defaults; the file is shallow-merged over the defaults and unknown fields
  * are tolerated. `OMP_FLEET_SPAWN_HOOK` overrides the config file's
- * `spawnHook`. A leading `~` is expanded to `os.homedir()` in paths.
+ * `spawnHook`; `OMP_FLEET_LOCAL_TEMPLATE` replaces the `local` template's
+ * command outright (dev runners point it at the source entry when the
+ * production binary isn't built). A leading `~` is expanded to
+ * `os.homedir()` in paths.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -61,15 +64,26 @@ function expandTilde(p: string): string {
 
 export async function loadConfig(path?: string): Promise<FleetConfig> {
 	const file = resolveConfigPath(path);
-	if (!existsSync(file)) return defaultConfig();
-	let raw: unknown;
-	try {
-		raw = JSON.parse(readFileSync(file, "utf8"));
-	} catch {
-		// Unreadable or corrupt config falls back to defaults (missing file handled above).
-		return defaultConfig();
+	let config: FleetConfig;
+	if (!existsSync(file)) {
+		config = defaultConfig();
+	} else {
+		let raw: unknown;
+		try {
+			raw = JSON.parse(readFileSync(file, "utf8"));
+		} catch {
+			// Unreadable or corrupt config falls back to defaults.
+			raw = undefined;
+		}
+		config = raw === undefined ? defaultConfig() : mergeConfig(raw);
 	}
-	return mergeConfig(raw);
+	// Env wins over every file source (scripts/dev.ts fleet mode sets this so
+	// sidebar spawns run the source entry, not the unbuilt production binary).
+	const localCommand = process.env.OMP_FLEET_LOCAL_TEMPLATE;
+	if (localCommand !== undefined && localCommand !== "") {
+		config.templates = { ...config.templates, local: { command: localCommand } };
+	}
+	return config;
 }
 
 function resolveConfigPath(explicit?: string): string {
