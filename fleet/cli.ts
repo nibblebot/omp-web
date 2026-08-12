@@ -11,6 +11,7 @@
  *   omp-fleet add <name> <url> --token <t> [--label k=v]… [--cwd c]
  *   omp-fleet provision <name> [--label k=v]…
  *   omp-fleet stop <selector>
+ *   omp-fleet remove <selector>
  *   omp-fleet prompt <selector> <text> [--wait <ms>] [--fan-out]
  *
  * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722.
@@ -274,6 +275,19 @@ async function stopCmd(positionals: string[], _flags: Map<string, FlagValue>, po
 	return 0;
 }
 
+async function removeCmd(positionals: string[], _flags: Map<string, FlagValue>, port: number): Promise<number> {
+	const selector = positionals[0];
+	if (selector === undefined) throw new CliError("usage: omp-fleet remove <selector>");
+	const body = (await ctl(port, "/ctl/remove", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ selector }),
+	})) as { removed?: unknown };
+	if (!Array.isArray(body.removed)) throw new CliError("unexpected remove response");
+	console.log(`removed ${(body.removed as string[]).join(", ")}`);
+	return 0;
+}
+
 interface PromptResultRow {
 	daemonId: string;
 	ok: boolean;
@@ -327,6 +341,7 @@ commands:
   add <name> <url> --token <t> [--label k=v]… [--cwd c]
   provision <name> [--label k=v]…
   stop <selector>
+  remove <selector>
   prompt <selector> <text> [--wait <ms>] [--fan-out]
 
 options:
@@ -358,6 +373,8 @@ export async function main(argv: string[]): Promise<number> {
 				return await provisionCmd(rest, flags, port);
 			case "stop":
 				return await stopCmd(rest, flags, port);
+			case "remove":
+				return await removeCmd(rest, flags, port);
 			case "prompt":
 				return await promptCmd(rest, flags, port);
 			default:

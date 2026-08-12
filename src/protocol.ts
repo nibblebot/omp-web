@@ -279,6 +279,8 @@ export type ClientCommand =
 	| { type: "spawn"; cwd: string; template?: string; labels?: string[] }
 	| { type: "spawn_resume"; daemonId: string }
 	| { type: "stop"; daemonId: string }
+	// Stop the daemon AND evict it from the roster (registry removal).
+	| { type: "remove"; daemonId: string }
 	| { type: "list_projects" };
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@
  *   POST /ctl/add      {name, url, token?, labels?, cwd?} → RegistryEntry
  *   POST /ctl/provision {name, labels?}            → RegistryEntry (spawn hook)
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
+ *   POST /ctl/remove   {selector}                  → { removed: string[] }
  *   POST /ctl/prompt   {selector, text, waitMs?}   → PromptResult[] | { submitted: string[] }
  *
  * /ctl/provision runs config.spawnHook via `sh -c` with env OMP_HOOK_NAME /
@@ -373,6 +374,8 @@ class FleetServerImpl implements FleetServer {
 						return await this.#handleProvision(req);
 					case "/ctl/stop":
 						return await this.#handleStop(req);
+					case "/ctl/remove":
+						return await this.#handleRemove(req);
 					case "/ctl/prompt":
 						return await this.#handlePrompt(req);
 					default:
@@ -472,6 +475,24 @@ class FleetServerImpl implements FleetServer {
 			stopped.push(entry.daemonId);
 		}
 		return json({ stopped });
+	}
+
+	async #handleRemove(req: Request): Promise<Response> {
+		const body = await readJson(req);
+		const selector = requireString(body, "selector");
+		const matches = matchSelector(this.registry.list(), selector);
+		if (matches.length === 0) throw new HttpError(404, `no daemon matches selector: ${selector}`);
+		const removed: string[] = [];
+		for (const entry of matches) {
+			if (entry.mode === "spawned") {
+				await this.supervisor.stop(entry.daemonId);
+			} else {
+				this.connector.disconnect(entry.daemonId);
+			}
+			this.registry.remove(entry.daemonId);
+			removed.push(entry.daemonId);
+		}
+		return json({ removed });
 	}
 
 	async #handlePrompt(req: Request): Promise<Response> {

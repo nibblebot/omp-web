@@ -258,6 +258,30 @@ describe("fleet control plane", () => {
 		expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
 	});
 
+	test("POST /ctl/remove 404s on an unknown selector", async () => {
+		const res = await postJson(server.port, "/ctl/remove", { selector: "nope" });
+		expect(res.status).toBe(404);
+	});
+
+	test("POST /ctl/remove evicts a remote entry from the registry", async () => {
+		// Its own fake daemon + fresh entry, so the shared `entry` fixture
+		// (and the shared `fake`) stays intact for later tests.
+		const localFake = startFakeDaemon("remove-token");
+		try {
+			const res = await postJson(server.port, "/ctl/add", { name: "removable", url: localFake.url, token: "remove-token" });
+			expect(res.status).toBe(200);
+			const added = (await res.json()) as RegistryEntry;
+			await waitFor(() => server.registry.get(added.daemonId)?.status === "ready", 5000, "removable daemon ready");
+			const del = await postJson(server.port, "/ctl/remove", { selector: added.daemonId });
+			expect(del.status).toBe(200);
+			const body = (await del.json()) as { removed?: unknown };
+			expect(body.removed).toEqual([added.daemonId]);
+			expect(server.registry.get(added.daemonId)).toBeUndefined();
+		} finally {
+			localFake.close();
+		}
+	});
+
 	test("unknown route 404s", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/nope`);
 		expect(res.status).toBe(404);

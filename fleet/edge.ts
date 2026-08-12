@@ -99,6 +99,7 @@ const BROWSER_COMMAND_LIST: ClientCommand["type"][] = [
 	"spawn",
 	"spawn_resume",
 	"stop",
+	"remove",
 	"attach",
 	// Forwarded verbatim over the browser's pipe.
 	"call",
@@ -370,6 +371,15 @@ export class FleetEdge {
 				void this.#handleStop(ws, daemonId);
 				break;
 			}
+			case "remove": {
+				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				if (daemonId === undefined) {
+					this.#sendError(ws, "remove: missing daemonId");
+					break;
+				}
+				void this.#handleRemove(ws, daemonId);
+				break;
+			}
 			case "attach": {
 				const daemonId = typeof cmd.sessionId === "string" && cmd.sessionId !== "" ? cmd.sessionId : undefined;
 				if (daemonId === undefined) {
@@ -481,6 +491,29 @@ export class FleetEdge {
 				this.#connector.disconnect(daemonId);
 				this.#registry.setStatus(daemonId, "asleep");
 			}
+		} catch (err) {
+			this.#sendError(ws, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async #handleRemove(ws: EdgeSocket, daemonId: string): Promise<void> {
+		try {
+			const entry = this.#registry.get(daemonId);
+			if (!entry) {
+				this.#sendError(ws, `unknown daemon: ${daemonId}`);
+				return;
+			}
+			// A browser attached to the removed daemon must not keep a live pipe.
+			for (const state of this.#browsers.values()) {
+				if (state.pipe?.daemonId === daemonId) this.#closePipe(state);
+			}
+			if (entry.mode === "spawned") {
+				await this.#supervisor.stop(daemonId);
+			} else {
+				this.#connector.disconnect(daemonId);
+			}
+			// The entry is gone; the roster broadcast rides registry.onChange.
+			this.#registry.remove(daemonId);
 		} catch (err) {
 			this.#sendError(ws, err instanceof Error ? err.message : String(err));
 		}

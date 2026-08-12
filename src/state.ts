@@ -939,6 +939,13 @@ export function stopDaemonById(daemonId: string): void {
 	}
 }
 
+/** Stop a daemon AND evict it from the fleet roster (registry removal). */
+export function removeDaemonById(daemonId: string): void {
+	if (ws?.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify({ type: "remove", daemonId } satisfies ClientCommand));
+	}
+}
+
 export function sendLoginCode(requestId: string, code: string): void {
 	setState("loginCodeRequest", null);
 	if (ws?.readyState === WebSocket.OPEN) {

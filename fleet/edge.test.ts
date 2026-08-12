@@ -788,6 +788,44 @@ describe("fleet edge", () => {
 		await sleep(50);
 		expect(daemonsBrowser.frames.some((f) => f.type === "daemons" && f.daemons.some((d) => d.name === "zombie"))).toBe(false);
 	});
+
+	test("remove evicts a remote daemon and broadcasts a roster without it", async () => {
+		// A fresh entry so the shared remoteEntry fixture stays intact for earlier tests.
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/add`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ name: "removable", url: fake.url, token: FAKE_TOKEN }),
+		});
+		expect(res.status).toBe(200);
+		const added = (await res.json()) as RegistryEntry;
+		await waitFor(() => (server.registry.get(added.daemonId)?.status === "ready" ? "ready" : null), 5000, "removable daemon ready");
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame(
+			(f) => f.type === "roster" && f.daemons.some((d) => d.daemonId === added.daemonId),
+			"roster with removable",
+		);
+		browser.send({ type: "remove", daemonId: added.daemonId });
+		const roster = asRoster(
+			await browser.waitForFrame(
+				(f) => f.type === "roster" && !f.daemons.some((d) => d.daemonId === added.daemonId),
+				"roster without removable",
+			),
+		);
+		expect(roster.daemons.some((d) => d.daemonId === added.daemonId)).toBe(false);
+		expect(server.registry.get(added.daemonId)).toBeUndefined();
+	});
+
+	test("remove of an unknown daemon answers an error frame", async () => {
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		browser.send({ type: "remove", daemonId: "d999" });
+		const frame = await browser.waitForFrame(
+			(f) => f.type === "error" && typeof f.error === "string" && f.error.includes("unknown daemon"),
+			"remove unknown error",
+		);
+		if (frame.type !== "error") throw new Error("expected error");
+		expect(frame.error).toContain("unknown daemon");
+	});
 });
 
 describe("edge pure helpers", () => {

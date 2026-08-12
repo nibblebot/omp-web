@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, onMount, Show, untrack, type Component } from "solid-js";
 import type { DaemonEntry, DaemonStatus, ProjectEntry } from "../protocol";
-import { attachSession, listProjects, setSidebarVisible, setState, spawnDaemon, spawnResume, state, stopDaemonById } from "../state";
+import { attachSession, listProjects, removeDaemonById, setSidebarVisible, setState, spawnDaemon, spawnResume, state, stopDaemonById } from "../state";
 import { formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
 
@@ -8,8 +8,8 @@ import { Modal } from "./Modal";
 // Fleet-edge roster sidebar (Phase 3). Rendered by App.tsx only in
 // roster mode. Rows show the session
 // status dot, project/label chips and cwd; ready rows attach on click, asleep
-// rows wake-then-attach, stop is a two-click confirm (DaemonPanel pattern),
-// and each row opens a detail popover (facts + stderr tail).
+// rows wake-then-attach, stop and remove are two-click confirms (DaemonPanel
+// pattern), and each row opens a detail popover (facts + stderr tail).
 // ---------------------------------------------------------------------------
 
 /** Roster entries may carry a template name (registry-only field the edge may
@@ -29,6 +29,7 @@ const STATUS_TITLE: Record<DaemonStatus, string> = {
 
 const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 	const [confirmStop, setConfirmStop] = createSignal(false);
+	const [confirmRemove, setConfirmRemove] = createSignal(false);
 	const [detailOpen, setDetailOpen] = createSignal(false);
 	const d = () => props.daemon;
 	const isAttached = () => d().daemonId === state.currentSessionId;
@@ -50,6 +51,11 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 	const doStop = () => {
 		stopDaemonById(d().daemonId);
 		setConfirmStop(false);
+	};
+
+	const doRemove = () => {
+		removeDaemonById(d().daemonId);
+		setConfirmRemove(false);
 	};
 
 	return (
@@ -108,6 +114,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 									onClick={e => {
 										e.stopPropagation();
 										setConfirmStop(true);
+										setConfirmRemove(false);
 									}}
 								>
 									stop
@@ -132,6 +139,46 @@ const DaemonRow: Component<{ daemon: DaemonEntry }> = props => {
 								onClick={e => {
 									e.stopPropagation();
 									setConfirmStop(false);
+								}}
+							>
+								cancel
+							</button>
+						</Show>
+						<Show
+							when={confirmRemove()}
+							fallback={
+								<button
+									type="button"
+									class="daemon-row-btn"
+									title="Remove this session from the roster (stops it first)"
+									onClick={e => {
+										e.stopPropagation();
+										setConfirmRemove(true);
+										setConfirmStop(false);
+									}}
+								>
+									remove
+								</button>
+							}
+						>
+							<button
+								type="button"
+								class="daemon-row-btn danger"
+								title="Remove this session (second click confirms)"
+								onClick={e => {
+									e.stopPropagation();
+									doRemove();
+								}}
+							>
+								confirm?
+							</button>
+							<button
+								type="button"
+								class="daemon-row-btn"
+								title="Keep this session in the roster"
+								onClick={e => {
+									e.stopPropagation();
+									setConfirmRemove(false);
 								}}
 							>
 								cancel
