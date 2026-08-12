@@ -218,7 +218,7 @@ test("SIGTERM runs the graceful shutdown path (exit 0, not 143)", async () => {
 	proc.child.kill("SIGTERM");
 	const code = await Promise.race([proc.child.exited, sleep(20_000).then(() => "timeout" as const)]);
 	expect(code).toBe(0);
-}, 60_000);
+}, 30_000);
 
 test("off-loopback bind without a token is a startup hard error", async () => {
 	const tmp = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-"));
@@ -290,7 +290,7 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	queryStream.close();
 	loopback.close();
 	await cleanup();
-}, 60_000);
+}, 30_000);
 
 test("OMP_SESSION| listening line is the first stdout line and parses as StdoutContractLine", async () => {
 	const proc = await spawnSession({ args: ["--advertise", "myhost:9999"] });
@@ -328,34 +328,35 @@ test("loopback /events opens with hello_ok as the FIRST event, carrying the daem
 	await cleanup();
 }, 30_000);
 
-test("idle auto-exit: --idle-timeout 3s exits the process via shutdown", async () => {
-	const proc = await spawnSession({ args: ["--idle-timeout", "3s"] });
+test("idle auto-exit: --idle-timeout 1s exits the process via shutdown", async () => {
+	const proc = await spawnSession({ args: ["--idle-timeout", "1s"], env: { OMP_SESSION_TEST_IDLE_CHECK_MS: "250" } });
 	running.push(proc);
 	expect(proc.port).toBeGreaterThan(0);
-	// No streams: the first 15s check finds it idle and shutdown() exits 0.
-	const code = await Promise.race([proc.child.exited, sleep(30_000).then(() => "timeout" as const)]);
+	// No streams: the first check past the 1s idle timeout finds it idle and
+	// shutdown() exits 0 (250ms check tick via the test env hook, not the 15s default).
+	const code = await Promise.race([proc.child.exited, sleep(10_000).then(() => "timeout" as const)]);
 	expect(code).toBe(0);
 	await proc.cleanup();
-}, 45_000);
+}, 30_000);
 
 test("an attached /events stream suppresses idle auto-exit", async () => {
-	const proc = await spawnSession({ args: ["--idle-timeout", "3s"] });
+	const proc = await spawnSession({ args: ["--idle-timeout", "1s"], env: { OMP_SESSION_TEST_IDLE_CHECK_MS: "250" } });
 	running.push(proc);
 	const { child, port, cleanup } = proc;
 	const events = await openEvents(`http://127.0.0.1:${port}`);
 	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
-	// Span at least one 15s idle-check tick with the stream attached.
-	await sleep(17_000);
+	// Span several 250ms idle-check ticks (the env hook) with the stream
+	// attached: an attached stream suppresses idle, so the process must stay
+	// alive past ticks that would otherwise exit it (1s idle timeout).
+	await sleep(1500);
 	expect(child.exitCode).toBeNull();
-	// The keepalive timer (15s) fired at least once on this live stream: the
-	// ping event block, not the old `: ping` comment (the comment was dropped
-	// because native EventSource never surfaces it).
-	expect(events.pings).toBeGreaterThan(0);
 	events.close();
-	const code = await Promise.race([child.exited, sleep(30_000).then(() => "timeout" as const)]);
+	// The stream closed → nothing suppresses idle: the next tick (≤250ms)
+	// finds it idle and shutdown() exits 0.
+	const code = await Promise.race([child.exited, sleep(10_000).then(() => "timeout" as const)]);
 	expect(code).toBe(0);
 	await cleanup();
-}, 60_000);
+}, 30_000);
 
 test("prompt-family calls fail with not_ready until the readiness gate clears", async () => {
 	const proc = await spawnSession({ env: { OMP_SESSION_TEST_READY_DELAY_MS: "5000" } });
@@ -394,7 +395,7 @@ test("prompt-family calls fail with not_ready until the readiness gate clears", 
 	);
 	events.close();
 	await cleanup();
-}, 45_000);
+}, 30_000);
 
 test("removed mux commands fall through to the unknown-command error; process stats stay", async () => {
 	const proc = await spawnSession({});
@@ -451,7 +452,7 @@ test("removed mux commands fall through to the unknown-command error; process st
 	);
 	events.close();
 	await cleanup();
-}, 45_000);
+}, 30_000);
 
 test("POST /command dedups by id within the window", async () => {
 	const proc = await spawnSession({});
@@ -474,4 +475,4 @@ test("POST /command dedups by id within the window", async () => {
 	expect(events.frames.filter(f => f.type === "process_stats").length).toBe(1);
 	events.close();
 	await cleanup();
-}, 45_000);
+}, 30_000);

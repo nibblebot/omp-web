@@ -31,6 +31,12 @@ export interface SessionConfig {
 	 * model. 0 = no delay (production).
 	 */
 	readyDeferMs: number;
+	/**
+	 * Internal test hook (OMP_SESSION_TEST_IDLE_CHECK_MS): idle auto-exit check
+	 * interval in ms (default 15000, production). Tests shrink it so the idle
+	 * path is exercised fast instead of waiting on the real 15s tick.
+	 */
+	idleCheckMs: number;
 	collabMaxGuests: number;
 	collabHostname?: string;
 	collabUrl?: string;
@@ -113,6 +119,7 @@ export function parseConfig(argv: string[]): SessionConfig {
 		name: flag("name") ?? Bun.env.OMP_SESSION_NAME ?? path.basename(cwd),
 		labels,
 		readyDeferMs: Math.max(0, Number(Bun.env.OMP_SESSION_TEST_READY_DELAY_MS ?? 0) || 0),
+		idleCheckMs: Math.max(1, Number(Bun.env.OMP_SESSION_TEST_IDLE_CHECK_MS ?? 15000) || 15000),
 		collabMaxGuests: Number(Bun.env.OMP_SESSION_COLLAB_MAX_GUESTS ?? 64),
 		collabHostname: Bun.env.OMP_SESSION_COLLAB_HOSTNAME,
 		collabUrl: Bun.env.OMP_SESSION_COLLAB_URL,

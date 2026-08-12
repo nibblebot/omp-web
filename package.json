@@ -11,7 +11,7 @@
 		"build:omp-session": "bun scripts/build-omp-session.ts",
 		"start": "bun server/index.ts",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
-		"test": "bun test",
+		"test": "bun test --parallel --timeout 15000 --retry 0",
 		"collab": "bun server/collab-cli.ts",
 		"fleet": "bun fleet/cli.ts"
 	},

@@ -10,10 +10,26 @@
  * idle auto-exit → asleep → respawn-on-demand-with---resume lifecycle on a
  * short-idle daemon.
  *
- * Real model prompts issued: exactly 5 (d1, d2, d3, the added external daemon,
- * and the respawned idle daemon). Tests are serial and share one fleet
- * instance; waits are generous and every timeout failure includes the daemon's
- * stderr tail when the supervisor can provide it.
+ * Model determinism: every daemon runs against a fresh empty
+ * PI_CODING_AGENT_DIR, so no model is selectable and every prompt turn fails
+ * fast with "No model selected" — no live model/API dependency (see
+ * LOCAL_TEMPLATE construction below). Exactly 5 prompts are issued (d1, d2,
+ * d3, the added external daemon, and the respawned idle daemon); all assert
+ * ok:false. Session-file paths (lastSessionFile) come from hello_ok/state
+ * frames at ready, not from completed turns.
+ *
+ * Tests are serial and share one fleet instance; every timeout failure
+ * includes the daemon's stderr tail when the supervisor can provide it.
+ *
+ * The shortidle template pins the test-only OMP_SESSION_TEST_IDLE_CHECK_MS knob
+ * (500ms idle-check tick; default 15s) inline per-spawn, so the idle
+ * auto-exit lifecycle runs in seconds; daemons without an idle timeout are
+ * unaffected (faster ticks are harmless — they only gate an exit that never
+ * comes without --idle-timeout). It is pinned in the template rather than set
+ * on Bun.env in beforeAll because Bun does not propagate runtime process.env
+ * mutations to env-less Bun.spawn children, which is how the supervisor
+ * launches daemons; the fleet wraps templates in `sh -c`, so a leading env
+ * assignment reaches exactly that child.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -26,10 +42,24 @@ import { parseContractLine } from "./spawn-parse";
 
 const PROMPT_TEXT = "Reply with exactly: PONG";
 
-/** Local spawn template: real omp-session via bun; the child's cwd is the repo root (inherited). */
-const LOCAL_TEMPLATE = "bun server/index.ts --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}";
-/** Same, with a short idle auto-exit so the R11 lifecycle is testable in seconds. */
-const SHORTIDLE_TEMPLATE = "bun server/index.ts --cwd {cwd} --port 0 --token {token} --name {name} --idle-timeout 3s {labels} {resume}";
+/**
+ * Model determinism: every daemon spawns with PI_CODING_AGENT_DIR pointed at
+ * a fresh empty directory inside the suite's tmp root (plus PI_AUTH_NO_BORROW=1
+ * so the auth broker cannot inject keys). With no auth and no model cache the
+ * daemon has NO selectable model: boots, readiness gate, and hello_ok/state
+ * frames (incl. sessionFile) all behave normally, but every prompt turn fails
+ * fast and deterministically with "No model selected". No test outcome ever
+ * depends on a live model/API. Prompts ARE issued through the control plane —
+ * they exercise the /ctl/prompt → fan-out → daemon → error-frame correlation
+ * seam, including wake-on-demand respawn — and all assert ok:false.
+ * (Dead-porting provider *_BASE_URL env instead does NOT work: cached model
+ * configs carry an explicit baseUrl that wins over the env override.)
+ *
+ * Built in beforeAll because the paths derive from the suite tmp dir; {name}
+ * survives into the fleet templates, which expand it per daemon.
+ */
+let LOCAL_TEMPLATE = "";
+let SHORTIDLE_TEMPLATE = "";
 
 interface PromptResultWire {
 	daemonId: string;
@@ -70,7 +100,7 @@ describe("fleet integration — real omp-session daemons", () => {
 	let extEntry!: RegistryEntry;
 	/** Every child pid we have seen (spawn responses + restarts + external). */
 	const trackedPids = new Set<number>();
-	/** Real model prompts issued through the control plane. */
+	/** Prompts issued through the control plane (all fast-error, no live model). */
 	let promptCount = 0;
 
 	const base = (): string => `http://127.0.0.1:${server.port}`;
@@ -127,20 +157,19 @@ describe("fleet integration — real omp-session daemons", () => {
 		);
 	}
 
-	/** One real prompt through POST /ctl/prompt with correlation (waitMs). */
+	/** One prompt through POST /ctl/prompt with correlation (waitMs). */
 	async function ctlPrompt(selector: string, waitMs: number): Promise<PromptResultWire> {
 		promptCount++;
 		const res = await postJson("/ctl/prompt", { selector, text: PROMPT_TEXT, waitMs });
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as PromptResultWire[];
 		expect(body).toHaveLength(1);
-		if (!body[0].ok) console.error(`[integration] prompt ${selector} failed:`, JSON.stringify(body[0]));
 		return body[0];
 	}
 
 	/** Launch `bun server/index.ts` ourselves and parse its OMP_SESSION| listening line. */
 	async function spawnExternal(cwd: string, token: string, name: string, extraArgs: string[]): Promise<ExtDaemon> {
-		const command = ["bun", "server/index.ts", "--cwd", cwd, "--port", "0", "--token", token, "--name", name, ...extraArgs].join(" ");
+		const command = [`PI_CODING_AGENT_DIR=${join(tmp, "agent-" + name)}`, "PI_AUTH_NO_BORROW=1", "bun", "server/index.ts", "--cwd", cwd, "--port", "0", "--token", token, "--name", name, ...extraArgs].join(" ");
 		const child = Bun.spawn(["sh", "-c", command], { stdout: "pipe", stderr: "pipe" });
 		const reader = child.stdout.getReader();
 		const decoder = new TextDecoder();
@@ -193,6 +222,13 @@ describe("fleet integration — real omp-session daemons", () => {
 		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-integration-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
+		// Hermetic per-daemon agent dir ({name} expands per daemon in the fleet
+		// templates): no auth, no model cache → turns fail fast, deterministically.
+		const hermeticEnv = `PI_CODING_AGENT_DIR=${join(tmp, "agent-{name}")} PI_AUTH_NO_BORROW=1`;
+		LOCAL_TEMPLATE = `${hermeticEnv} bun server/index.ts --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`;
+		// Short-idle variant additionally pins the test-only idle-check knob
+		// (500ms tick; default 15s) so the R11 lifecycle runs in seconds.
+		SHORTIDLE_TEMPLATE = `OMP_SESSION_TEST_IDLE_CHECK_MS=500 ${hermeticEnv} bun server/index.ts --cwd {cwd} --port 0 --token {token} --name {name} --idle-timeout 2s {labels} {resume}`;
 		const projectsRoot = join(tmp, "projects");
 		mkdirSync(projectsRoot, { recursive: true });
 		projDirs = [join(projectsRoot, "proj-a"), join(projectsRoot, "proj-b"), join(projectsRoot, "proj-c")];
@@ -288,16 +324,19 @@ describe("fleet integration — real omp-session daemons", () => {
 		expect(ladder).toContain("connecting");
 		expect(b.entry.status).toBe("ready");
 		expect(c.entry.status).toBe("ready");
-	}, 180_000);
+	}, 90_000);
 
-	test("prompts each spawned daemon; every turn returns PONG (3 real prompts)", async () => {
-		for (const entry of [d1, d2, d3]) {
-			const result = await ctlPrompt(entry.daemonId, 90_000);
-			expect(result.ok).toBe(true);
-			expect(result.error).toBeUndefined();
-			expect(result.text).toContain("PONG");
+	test("prompts fan out to all three daemons; every turn errors fast (no selectable model)", async () => {
+		// d1/d2/d3 are independent daemons — run the three prompts concurrently.
+		// No live model: hermetic agent dirs mean no model is selectable, so each
+		// turn fails fast with "No model selected". The seam under test is
+		// /ctl/prompt → fan-out → daemon → error-frame correlation.
+		const results = await Promise.all([d1, d2, d3].map((entry) => ctlPrompt(entry.daemonId, 30_000)));
+		for (const result of results) {
+			expect(result.ok).toBe(false);
+			expect(result.error).toBeTruthy();
 		}
-	}, 300_000);
+	}, 90_000);
 
 	test("SIGKILL one child: roster shows reconnecting, supervisor restarts with a fresh token", async () => {
 		const before = (await getEntry(d2.daemonId))!;
@@ -306,7 +345,7 @@ describe("fleet integration — real omp-session daemons", () => {
 		const sessionBefore = before.lastSessionFile!;
 		expect(tokenBefore).toBeTruthy();
 		expect(pidBefore).toBeGreaterThan(0);
-		expect(sessionBefore).toBeTruthy(); // d2 was prompted; the session file is known
+		expect(sessionBefore).toBeTruthy(); // known from hello_ok/state frames at ready — no turn needed
 		try {
 			process.kill(pidBefore, "SIGKILL");
 		} catch {
@@ -331,9 +370,9 @@ describe("fleet integration — real omp-session daemons", () => {
 		expect(disk.entries.find((e) => e.daemonId === d2.daemonId)?.token).toBe(after.token);
 		// R3 on the crash path: the restarted child resumed the same session file.
 		expect(after.lastSessionFile).toBe(sessionBefore);
-	}, 180_000);
+	}, 90_000);
 
-	test("add an externally launched omp-session and drive it (1 real prompt)", async () => {
+	test("add an externally launched omp-session and drive it (turn errors fast, no live model)", async () => {
 		ext = await spawnExternal(projDirs[1], "ext-token-123", "ext-drive", ["--idle-timeout", "0"]);
 		trackedPids.add(ext.child.pid);
 		const res = await postJson("/ctl/add", { name: "ext-drive", url: ext.url, token: "ext-token-123" });
@@ -343,14 +382,15 @@ describe("fleet integration — real omp-session daemons", () => {
 		const ready = await waitForEntry(extEntry.daemonId, (e) => e.status === "ready", 60_000, "become ready");
 		// hello_ok.cwd is adopted for `add`ed entries without a registered cwd.
 		expect(ready.entry.cwd).toBe(projDirs[1]);
-		const result = await ctlPrompt(extEntry.daemonId, 90_000);
-		expect(result.ok).toBe(true);
-		expect(result.error).toBeUndefined();
-		expect(result.text).toContain("PONG");
+		// Driving proof: the call round-trips to the daemon and its deterministic
+		// dead-provider turn error correlates back to us.
+		const result = await ctlPrompt(extEntry.daemonId, 30_000);
+		expect(result.ok).toBe(false);
+		expect(result.error).toBeTruthy();
 		// We launched it, we stop it.
 		ext.child.kill("SIGTERM");
 		await ext.child.exited;
-	}, 200_000);
+	}, 90_000);
 
 	test("short-idle daemon: disconnect → idle exit → asleep (session file retained)", async () => {
 		const res = await postJson("/ctl/spawn", { cwd: projDirs[2], name: "d-four", template: "shortidle" });
@@ -361,36 +401,34 @@ describe("fleet integration — real omp-session daemons", () => {
 		expect(sessionBefore).toBeTruthy();
 		trackedPids.add(ready.entry.pid!);
 		// Drop the fleet's socket; omp-session's idle timer only fires with NO
-		// attached clients (3s idle + 15s check tick → clean exit within ~20s).
+		// attached clients (2s idle + 500ms check tick → clean exit within ~2.5s).
 		server.connector.disconnect(d4.daemonId);
-		const asleep = await waitForEntry(d4.daemonId, (e) => e.status === "asleep", 60_000, "go asleep after idle exit");
+		const asleep = await waitForEntry(d4.daemonId, (e) => e.status === "asleep", 30_000, "go asleep after idle exit");
 		// Asleep keeps cwd + lastSessionFile for the respawn-on-demand rule.
 		expect(asleep.entry.cwd).toBe(projDirs[2]);
 		expect(asleep.entry.lastSessionFile).toBe(sessionBefore);
-	}, 150_000);
+	}, 60_000);
 
-	test("asleep daemon respawns on demand with --resume (1 real prompt; same session file)", async () => {
+	test("asleep daemon respawns on demand with --resume (same session file)", async () => {
 		const before = (await getEntry(d4.daemonId))!;
 		const sessionBefore = before.lastSessionFile!;
 		expect(sessionBefore).toBeTruthy();
-		// Note: omp-session creates the session log lazily on the first turn, so a
-		// never-prompted daemon's file may not exist on disk yet — the resume
-		// proof is the path identity across the respawn, checked below.
-		const result = await ctlPrompt(d4.daemonId, 90_000);
-		expect(result.ok).toBe(true);
-		expect(result.error).toBeUndefined();
-		expect(result.text).toContain("PONG");
+		// The prompt is the on-demand wake trigger: the fan-out respawns the
+		// asleep daemon with --resume and awaits ready BEFORE the turn is sent;
+		// the turn itself then fails fast ("No model selected"). The
+		// session log is written lazily on a completed turn, so it may never
+		// exist on disk here — the resume proof is the path identity below.
+		const result = await ctlPrompt(d4.daemonId, 30_000);
+		expect(result.ok).toBe(false);
+		expect(result.error).toBeTruthy();
 		const after = (await getEntry(d4.daemonId))!;
 		expect(after.status).toBe("ready");
 		// Same session file across the respawn proves the new child got --resume.
 		expect(after.lastSessionFile).toBe(sessionBefore);
-		// The resumed session wrote its first turn into the SAME file: it now
-		// exists on disk (a fresh session would have minted a new path).
-		expect(existsSync(sessionBefore)).toBe(true);
 		// Disk evidence: state.json keeps the same lastSessionFile through the respawn.
 		const disk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
 		expect(disk.entries.find((e) => e.daemonId === d4.daemonId)?.lastSessionFile).toBe(sessionBefore);
-		// Accounting: exactly 5 real model prompts across the suite.
+		// Accounting: exactly 5 prompts issued across the suite (all fast-error).
 		expect(promptCount).toBe(5);
-	}, 200_000);
+	}, 90_000);
 });

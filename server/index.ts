@@ -150,9 +150,9 @@ const version = await resolveVersion();
 let inFlightBash = 0;
 let inFlightPython = 0;
 
-// Idle auto-exit (R11): a 15s tick exits via shutdown() when the daemon has
+// Idle auto-exit (R11): a 15s tick (default; the OMP_SESSION_TEST_IDLE_CHECK_MS
+// env hook overrides it for tests) exits via shutdown() when the daemon has
 // been continuously idle for config.idleTimeoutMs (0 disables).
-const IDLE_CHECK_INTERVAL_MS = 15_000;
 let lastActivityAt = Date.now();
 let idleTimer: ReturnType<typeof setInterval> | undefined;
 /** Set once shutdown begins (signal or idle-exit); also read by the boot catch. */
@@ -2263,7 +2263,8 @@ resolveBootReady();
 void bootReadiness(bootEntry);
 
 // ---------------------------------------------------------------------------
-// Idle auto-exit (R11): a 15s tick exits via shutdown() once the daemon has
+// Idle auto-exit (R11): a 15s tick (default; the OMP_SESSION_TEST_IDLE_CHECK_MS
+// env hook overrides it for tests) exits via shutdown() once the daemon has
 // been continuously idle for config.idleTimeoutMs (0 disables). Idle = ALL
 // suppression conditions false; any socket message or suppression resets the
 // activity clock.
@@ -2295,7 +2296,7 @@ function idleCheckTick(): void {
 }
 
 lastActivityAt = Date.now();
-if (config.idleTimeoutMs > 0) idleTimer = setInterval(idleCheckTick, IDLE_CHECK_INTERVAL_MS);
+if (config.idleTimeoutMs > 0) idleTimer = setInterval(idleCheckTick, config.idleCheckMs);
 
 /** Collab relay base URL: env-overridable, defaults to this server's own port. */
 function relayBaseUrl(): string {
