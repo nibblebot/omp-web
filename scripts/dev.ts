@@ -13,7 +13,10 @@
  *                        domains etc.), or a comma-separated allowlist.
  *
  * Child output is line-prefixed ([session] [vite] [fleet]); the runner's
- * own messages use [dev]. Ctrl-C (or any child exiting) tears down the rest.
+ * own messages use [dev]. Ctrl-C (or vite/fleet exiting) tears down the rest.
+ * The omp-session child is different: idle exit is a FEATURE (no attached
+ * clients → clean shutdown), so a session exit just restarts it with
+ * backoff — it never nukes the stack.
  */
 
 import type { Subprocess } from "bun";
@@ -175,13 +178,47 @@ if (allowHosts !== undefined) {
 	}
 }
 
-const procs: Subprocess[] = [];
-for (const child of mode.children) {
+/**
+ * Children whose exit is EXPECTED and must not tear down the stack: the dev
+ * omp-session idle-exits when it has no attached clients (that is its
+ * designed lifecycle), so it is relaunched with a bounded backoff instead.
+ * A vite/fleet exit means the dev environment is actually broken and stays
+ * fatal (first exit wins, everything comes down).
+ */
+const RESTARTABLE: Record<string, true> = { session: true };
+const RESTART_BACKOFF_MIN_MS = 1_000;
+const RESTART_BACKOFF_MAX_MS = 30_000;
+/** Uptime after which the restart backoff resets (a crash loop keeps it capped). */
+const RESTART_RESET_AFTER_MS = 60_000;
+
+const procs = new Map<string, Subprocess>();
+const fatalExits: Promise<{ name: string; code: number | null }>[] = [];
+let restartBackoffMs = RESTART_BACKOFF_MIN_MS;
+
+function launch(child: Child): void {
 	const proc = Bun.spawn(child.cmd, { cwd: ROOT, env: { ...process.env, ...child.env }, stdout: "pipe", stderr: "pipe" });
-	procs.push(proc);
+	procs.set(child.name, proc);
 	void pipePrefixed(proc.stdout, child.name, process.stdout);
 	void pipePrefixed(proc.stderr, child.name, process.stderr);
+	if (RESTARTABLE[child.name] === true) {
+		const startedAt = Date.now();
+		void proc.exited.then((code) => {
+			procs.delete(child.name);
+			if (shuttingDown) return;
+			if (Date.now() - startedAt > RESTART_RESET_AFTER_MS) restartBackoffMs = RESTART_BACKOFF_MIN_MS;
+			const delay = restartBackoffMs;
+			restartBackoffMs = Math.min(restartBackoffMs * 2, RESTART_BACKOFF_MAX_MS);
+			log(`${child.name} exited (${code ?? "signal"}) — idle exit is expected; restarting in ${delay / 1000}s (the rest of the stack stays up)`);
+			setTimeout(() => {
+				if (!shuttingDown) launch(child);
+			}, delay);
+		});
+	} else {
+		fatalExits.push(proc.exited.then((code) => ({ name: child.name, code })));
+	}
 }
+
+for (const child of mode.children) launch(child);
 
 log(`mode: ${modeArg} — ${mode.open}`);
 if (host !== undefined) log(`vite listening on ${host}:4713 — the UI (and full agent control through it) is reachable from the network with no auth; trusted networks only`);
@@ -191,14 +228,17 @@ if (modeArg === "fleet") void registerDevSession();
 async function shutdown(code: number): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
-	for (const proc of procs) proc.kill();
-	await Promise.all(procs.map((proc) => proc.exited));
+	const running = [...procs.values()];
+	for (const proc of running) proc.kill();
+	await Promise.all(running.map((proc) => proc.exited));
 	process.exit(code);
 }
 
 process.on("SIGINT", () => void shutdown(130));
 process.on("SIGTERM", () => void shutdown(143));
 
-// First child to exit wins: tear the rest down and propagate its code.
-const first = await Promise.race(procs.map(async (proc) => ({ code: await proc.exited })));
+// First FATAL child (vite/fleet) to exit wins: tear the rest down and
+// propagate its code. Restartable children (session) never reach this race.
+const first = await Promise.race(fatalExits);
+log(`${first.name} exited (${first.code ?? "signal"}) — shutting down`);
 await shutdown(first.code ?? 1);
