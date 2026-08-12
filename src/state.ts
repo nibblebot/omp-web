@@ -1166,7 +1166,9 @@ function resetSessionView(): void {
 let backoff = 1000;
 
 export function connect(): void {
-	const socket = new WebSocket(`ws://${location.host}/ws`);
+	// wss when the page itself is https (e.g. tailscale serve in front of the
+	// dev server) — browsers block ws:// from an https page as mixed content.
+	const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
 	ws = socket;
 	socket.onopen = () => {
 		backoff = 1000;

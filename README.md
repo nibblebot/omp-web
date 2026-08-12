@@ -18,26 +18,21 @@ Prerequisite: [Bun](https://bun.sh). Then `bun install` once.
 ### Dev mode — standalone omp-session (single-session UI)
 
 ```sh
-bun run dev:server   # terminal 1: omp-session on :4721, --watch reload
-bun run dev:web      # terminal 2: vite on :4713 (proxies /ws + /download → 4721)
+bun run dev   # omp-session on :4721 (--watch reload) + vite on :4713 (proxies /ws + /download → 4721)
 ```
 
-Open <http://localhost:4713>. UI edits hot-reload; server edits restart the daemon.
+Open <http://localhost:4713>. UI edits hot-reload; server edits restart the daemon. (Need the processes in separate terminals? `bun run dev:server` and `bun run dev:web` still exist.)
 
 ### Dev mode — omp-fleet (roster UI)
 
 ```sh
-bun run build                        # one-time (and after UI edits): roster mode serves dist/ from disk
-bun run fleet -- serve               # terminal 1: omp-fleet on :4722
-bun run dev:server                   # terminal 2: an omp-session to attach (or spawn from the UI instead)
+bun run dev:fleet   # vite on :4713 (HMR; /ws + /download proxied to the fleet edge) + omp-fleet on :4722
+                    # + an omp-session on :4721, auto-registered into the roster as "dev"
 ```
 
-Open <http://localhost:4722>, click a `ready` row to attach. Two ways to get a session into the roster:
+Open <http://localhost:4713>, click a `ready` row to attach. UI edits hot-reload in roster mode too; `:4722` only serves the last production `dist/` build. Prefer spawning from the sidebar instead? The default `local` template runs `omp-session …`, so it needs the binary on PATH: `bun run build:omp-session` and add `dist-bin/` to PATH (or edit the template in `~/.omp/fleet/config.json` to launch from the checkout).
 
-- **Sidebar spawn** — the default `local` template runs `omp-session …`, so it needs the binary on PATH: `bun run build:omp-session` and add `dist-bin/` to PATH (or edit the template in `~/.omp/fleet/config.json` to launch from the checkout).
-- **Attach the dev server** — `bun run fleet -- add dev ws://127.0.0.1:4721 --cwd "$PWD"` (loopback, no token needed; `--cwd` must match the dev server's working directory).
-
-For UI work, keep vite on :4713 for single-session HMR and use :4722 for roster checks — the vite proxy targets omp-session only.
+Both dev commands put the UI on :4713 with HMR; `bun run dev` proxies `/ws` to the standalone omp-session, `bun run dev:fleet` proxies it to the fleet edge (`OMP_DEV_FLEET=1` in `vite.config.ts`). To reach the UI from another machine, pass `--host` (optionally with an address) to either command — `bun run dev -- --host` binds vite to `0.0.0.0:4713` while the backends stay loopback (remote browsers reach them through vite's proxies). No auth on the UI — trusted networks only. Accessing via a non-localhost domain (e.g. tailscale) trips vite's host check; add `--allow-hosts` to allow every Host header, or `--allow-hosts myhost.tail1234.ts.net` for an allowlist.
 
 ### Production build
 
@@ -144,9 +139,9 @@ bun run collab -- --stop
 
 ```sh
 bun install
-bun run dev:server      # omp-session on :4721 (single-session)
-bun run dev:web         # vite dev server on :4713 (proxies /ws + /download → 4721, /ctl → 4722)
-bun run fleet -- serve  # omp-fleet on :4722
+bun run dev           # single-session: omp-session :4721 (--watch) + vite :4713 (HMR; proxies /ws + /download → 4721, /ctl → 4722)
+bun run dev:fleet     # roster: vite :4713 (HMR, /ws → fleet edge) + omp-fleet :4722 + omp-session :4721 (auto-attached as "dev")
+# or separately: bun run dev:server / dev:web / fleet -- serve
 ```
 
 Production: `bun run build:omp-session` → self-contained `dist-bin/omp-session` (UI embedded). Checks: `bun run check:types`, `bun test`.
