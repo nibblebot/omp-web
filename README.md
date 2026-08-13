@@ -1,6 +1,8 @@
+> **⚠️ Pre-alpha.** This is personal infrastructure with sharp edges: expect breaking protocol changes, rough UI corners, and the occasional wedged daemon. It is provided **as-is, with no warranty of any kind** — don't run it on anything you can't afford to restart, and don't expose it to a network you don't trust.
+
 # omp-session + omp-fleet
 
-**omp-session** is a single-session agent daemon for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent): one process, one project directory (bound at spawn, immutable), one live agent session, served to a Solid.js web UI over SSE + POST commands. The agent runs in-process via the SDK (`createAgentSession`) — there is no child process and no JSON-RPC hop. It builds as a self-contained binary (`bun run build:omp-session`) — no repo checkout, no node_modules on the target.
+**omp-session** is a single-session agent daemon for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent): one process, one project directory (bound at spawn, immutable), one live agent session, served to a Solid.js web UI over SSE + POST commands. The agent runs in-process via the SDK (`createAgentSession`) — there is no child process and no JSON-RPC hop.
 
 **omp-fleet** holds the registry of N daemons — local children it spawns and supervises, externally launched daemons it attaches to, and remote sandboxes it dials into — and re-exposes them to the same web UI (roster mode) and to non-interactive drivers (CLI fan-out). It holds zero SDK state; all agent truth lives in the omp-session processes and their `.jsonl` session logs.
 
@@ -27,7 +29,7 @@ Prerequisite: [Bun](https://bun.sh). Then `bun install` once.
 bun run dev   # vite on :4713 (HMR; /events + /command + /download proxied to the fleet edge) + omp-fleet on :4722
 ```
 
-Open <http://localhost:4713>, click a `ready` row to attach. UI edits hot-reload in roster mode too; `:4722` only serves the last production `dist/` build. Sidebar spawns work out of the box: `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so the default `local` template runs `bun server/index.ts` from the checkout instead of the `omp-session` binary (spawned daemons are not `--watch`ed; restart them to pick up server edits). Outside `bun run dev` the `local` template runs the binary, so it needs to be on PATH: `bun run build:omp-session` and add `dist-bin/` to PATH (or set `OMP_FLEET_LOCAL_TEMPLATE` / edit the template in `~/.omp/fleet/config.json` to launch from a checkout).
+Open <http://localhost:4713>, click a `ready` row to attach. UI edits hot-reload in roster mode too. Sidebar spawns work out of the box: `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so the default `local` template runs `bun server/index.ts` from the checkout (spawned daemons are not `--watch`ed; restart them to pick up server edits).
 
 ### Dev mode — standalone omp-session (single-session UI)
 
@@ -38,16 +40,6 @@ bun run dev:single   # omp-session on :4721 (--watch reload) + vite on :4713 (pr
 Open <http://localhost:4713>. UI edits hot-reload; server edits restart the daemon. (Need the processes in separate terminals? `bun run dev:server` and `bun run dev:web` still exist.)
 
 Both dev commands put the UI on :4713 with HMR; `bun run dev` proxies `/events` + `/command` to the fleet edge (`OMP_DEV_FLEET=1` in `vite.config.ts`), `bun run dev:single` proxies them to the standalone omp-session. To reach the UI from another machine, pass `--host` (optionally with an address) to either command — `bun run dev -- --host` binds vite to `0.0.0.0:4713` while the backends stay loopback (remote browsers reach them through vite's proxies). No auth on the UI — trusted networks only. Accessing via a non-localhost domain (e.g. tailscale) trips vite's host check; add `--allow-hosts` to allow every Host header, or `--allow-hosts myhost.tail1234.ts.net` for an allowlist.
-
-### Production build
-
-```sh
-bun run build:omp-session             # → dist-bin/omp-session: self-contained binary, UI embedded
-./dist-bin/omp-session --cwd ~/repos/my-project            # listen on 127.0.0.1:4721
-./dist-bin/omp-session --cwd . --port 0 --token "$(openssl rand -hex 16)"   # ephemeral port; token required once you bind off-loopback via --host
-```
-
-No repo checkout or node_modules needed on the target — copy the binary and run. omp-fleet has no compiled binary yet; run it from a checkout (`bun run build && bun run fleet -- serve`).
 
 ## omp-session
 
@@ -69,8 +61,6 @@ Flags map 1:1 to env vars:
 | `--name` / `OMP_SESSION_NAME` | cwd basename | Registry display name |
 | `--label k=v` / `OMP_SESSION_LABELS` | — | Selector labels (repeatable / comma-separated) |
 
-Env-only collab knobs: `OMP_SESSION_COLLAB_MAX_GUESTS` (default 64), `OMP_SESSION_COLLAB_MAX_ROOMS` (default 256; caps concurrent collab rooms), `OMP_SESSION_COLLAB_HOSTNAME`, `OMP_SESSION_COLLAB_URL` (public URL base for join links).
-
 Immediately after bind — before session creation — omp-session prints a contract line on **stdout** (logs go to stderr), so a spawner learns the endpoint early:
 
 ```
@@ -79,17 +69,9 @@ OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"ws://127.
 
 Readiness: after the SDK session exists and provider/model/auth resolution completes, omp-session broadcasts `ready` and stamps `readyAt` into `state`; before that, prompt-family calls fail with a `not_ready` error. Idle exit: with no attached clients, no running agent/queue, no in-flight bash/eval, no open dialog, and no live collab room, omp-session shuts down cleanly after the idle timeout — the `.jsonl` is already durable, and omp-fleet marks the entry `asleep` and respawns it on demand.
 
-## Security model
-
-- Remote sessions are **dial-in only**: omp-fleet initiates every connection; omp-session never dials out and has no `--fleet` flag. A sandbox image contains zero knowledge of the external world (no fleet URL, no outbound credentials), and egress may be denied entirely.
-- The bearer token inside a sandbox gates inbound connections to that omp-session only — a leaked token grants nothing beyond it. Loopback peers are exempt; off-loopback requires the token (`Authorization` header or `?token=`; wrong credentials → 401, no hello window) and a secure transport (ssh `-L`, tailnet, or your own TLS).
-- Collab relay host upgrades (`/r/<roomId>?role=host`) are gated by the same rule — an off-loopback host needs the token before it can create a room. Guests are exempt by design: they join with the E2E room key from the shareable link. Rooms are capped (`OMP_SESSION_COLLAB_MAX_ROOMS`, default 256); new host rooms past the cap get 503 before the upgrade.
-- omp-fleet's UI binds loopback. For local children the token travels in the spawn environment — visible in `/proc/<pid>/environ`; accepted for the single-operator v1.
-- `/download` stays realpath-jailed to the bound cwd + tmpdir + session dirs; it is the only file-egress path. `list_files` never escapes the cwd.
-
 ## omp-fleet
 
-Registry + WS clients + proxy + fan-out. Config `~/.omp/fleet/config.json`, state `~/.omp/fleet/state.json` (remote entries persist `endpoint + token + labels`; spawned entries persist template + cwd + last session file, so the roster survives a fleet restart).
+Registry + SSE clients + proxy + fan-out. Config `~/.omp/fleet/config.json`, state `~/.omp/fleet/state.json` (remote entries persist `endpoint + token + labels`; spawned entries persist template + cwd + last session file, so the roster survives a fleet restart).
 
 ```sh
 bun run fleet -- serve                          # foreground; UI + control API on 127.0.0.1:4722
@@ -107,40 +89,12 @@ Selectors: `dN`, `all`, name glob (`api-*`), `label:k=v` (alias `tag:k=v`), `pro
 
 The connector dials each daemon's resolved endpoint over HTTP with exponential backoff and bearer-token auth (loopback exempt), verifies `hello_ok.cwd` from the SSE priming matches the registry entry (mismatch → `error`, guards stale endpoints and IP reuse; `OMP_PROTO`, currently 2, gates drift), and keeps liveness with the SSE silence deadline; a dropped daemon shows `reconnecting` and proxied browser clients re-attach on return.
 
-### Spawn templates
-
-Daemons are spawned from **command templates** — omp-fleet never hardcodes a launch method. `{cwd}` `{token}` `{name}` `{labels}` `{resume}` are substituted; the child's stdout is parsed for `OMP_SESSION|` contract lines; endpoint resolution order: wrapper `endpoint` line › template-declared `host` + listening port › `advertise` › loopback. Default local template:
-
-```jsonc
-// ~/.omp/fleet/config.json
-{
-	"roots": ["~/repos"],              // project discovery roots (one level deep, git repos + worktrees)
-	"defaultTemplate": "local",
-	"templates": {
-		"local": { "command": "omp-session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}" },
-		"vm":    { "command": "ssh vm omp-session --cwd {cwd} --port 4721 --host 0.0.0.0 --token {token} --name {name} {labels} {resume}", "host": "vm" }
-	},
-	"projectTemplates": { "my-project": "vm" },   // optional per-project override
-	"spawnHook": "~/.omp/fleet/provision.sh" // optional; or OMP_FLEET_SPAWN_HOOK
-}
-```
-
-Copy-pasteable examples live in `fleet/examples/` (`ssh-remote.json`, `docker.json` + `docker-omp-session.sh` wrapper, `provider-skeleton.sh` provision hook). The spawn hook is any script that creates a sandbox and prints `{ "name", "url", "token" }` JSON as its last stdout line; `provision <name>` runs it and registers the result.
-
 Local children are restarted `on-failure` with bounded backoff; the stderr ring buffer is surfaced in the daemon detail popover.
 
 ## The web UI (one app, two modes)
 
 - **Standalone** (served by an omp-session): the full single-session UI — chat, steering, queue chips, live bash/python streaming, rich tool cards, subagent roster + drill-down, settings panel (TUI `/settings` parity), OAuth login, session resume/branch/fork/handoff, `/btw` side questions, `/export` HTML transcripts. Composer stays disabled until the daemon's `ready` frame.
 - **Roster** (served by omp-fleet): the roster sidebar replaces the standalone single-session layout — standalone has no sidebar; session switching there is a modal via `/resume`. All daemons sit under a top-level **Repos** header, grouped by owning repo (worktree daemons join their repo's group; spawned daemons are tagged at spawn time and pre-existing ones backfilled at startup); repos with worktree daemons render as a collapsible label with main + worktree rows indented beneath (worktree rows show a branch icon + branch name, never the dir/path), plain repos as regular rows, per-row branch + git dirty counts (`+N ~M -D ?U`, polled from local cwds), status dots (`spawning`/`ready`/`asleep`/`reconnecting`/`error`), bare-icon attach/stop/remove actions (stop/remove are two-click confirms), spawn picker (projects + worktrees + freeform path + template + labels), wake-on-click for asleep daemons, per-daemon detail popover (cwd, uptime, labels, last session file, stderr tail). Attaching proxies the browser through to that omp-session (`daemonId` at the edge); everything else about the UI is identical.
-
-Collab rooms are CLI/TUI-only — there is no collab surface in the web UI. A room is hosted from the standalone omp-session's TUI; guests join a shareable link with `omp join`:
-
-```sh
-bun run collab            # start the collab room, print write + view links
-bun run collab -- --join  # …and open the TUI immediately
-bun run collab -- --stop
-```
 
 ## Develop
 
@@ -151,12 +105,13 @@ bun run dev:single    # single-session: omp-session :4721 (--watch) + vite :4713
 # or separately: bun run dev:server / dev:web / fleet -- serve
 ```
 
-Production: `bun run build:omp-session` → self-contained `dist-bin/omp-session` (UI embedded). Checks: `bun run check:types`, `bun test`.
+Only the dev path is supported. Checks: `bun run check:types`, `bun test`.
 
 ## Architecture
 
-- `server/index.ts` — the omp-session daemon: one in-process SDK session, the `WebMethodName` dispatch table, post-mutation state broadcast with `READ_ONLY`/`HISTORY_RELOAD` resync semantics, builtin slash interception (`executeAcpBuiltinSlashCommand`), full `AgentSessionEvent` forwarding, `ui_request`/`ui_response`/`ui_request_end` dialog relay, settings model + side effects, OAuth login frames, bash/python/ephemeral chunk streaming, subagent lifecycle/progress mirror + steer/abort, collab host adapter + relay, `/download` jail, static UI serving, bearer auth, readiness gate, idle auto-exit.
-- `server/config.ts` — flag/env parsing into the config surface above.
+Layering is strictly leaf-ward: `server/` and `fleet/` import only from `shared/`, `src/` imports neither backend layer, and `server/` and `fleet/` never import each other. See [`docs/architecture.md`](docs/architecture.md) for the full treatment (wire contract, lifecycle, security model, state ownership).
+
+- `server/` — the omp-session daemon: `index.ts` (boot, routing, auth, `/download` jail, idle auto-exit, static UI), `methods.ts` (`WebMethodName` dispatch table), `sse-delivery.ts` (ring, broadcast, backpressure), `ui-context.ts` (dialog relay), `subagent-mirror.ts` (subagent lifecycle/progress + transcripts), `daemon-broker.ts` (hub ActiveDaemons panel), `settings-model.ts`, `session-entry.ts`, `config.ts`, `collab-*.ts` (host adapter + relay).
 - `fleet/` — registry + JSON persistence (`registry.ts`), project discovery (`discovery.ts`), spawn templates + `OMP_SESSION|` parsing (`spawn-parse.ts`, `supervisor.ts`), dial-in SSE client with hello priming, cwd sanity check, backoff and silence-deadline liveness (`connector.ts`), selectors + fan-out correlation (`selectors.ts`, `fanout.ts`), loopback control API + CLI (`server.ts`, `cli.ts`), browser edge + per-browser daemon proxy + aggregated daemons panel (`edge.ts`, `daemons-aggregator.ts`).
 - `shared/protocol.ts` — the shared wire contract: client commands (`POST /command`), server frames (`GET /events` SSE), the `OMP_SESSION|` line, the `hello_ok`→`attached`→`history`→`state`→`collab_status`→`available_commands`→`ready` priming sequence, roster frames. Additive changes only; `OMP_PROTO` (currently 2) gates omp-fleet↔omp-session drift and must bump on any breaking change to the handshake or frame shapes.
 - `src/state.ts` — client store: chat items, streaming, session state mirror, `call()` helper, reconnect with backoff, roster state, stale-frame guard (guards session switches).
@@ -166,15 +121,12 @@ Production: `bun run build:omp-session` → self-contained `dist-bin/omp-session
 - **Concurrent in-process sessions.** The multiplexing registry was removed; the old mux commands (`create_session`/`attach`/`detach`/`close_session`/`list_live_sessions`) are rejected as unknown. Multiplexing lives one layer up: N sessions behind omp-fleet.
 - **Multi-user omp-fleet, RBAC, audit.** Single operator assumed.
 - **Sandbox provisioning** (creating VMs/containers). Only the spawn-hook contract exists here; providers are external.
-- **Collab guest protocol changes** (`pi-wire` frames, TUI guests) — untouched.
-- **Unix domain sockets.** The agent-driving path is HTTP + SSE; WS remains only on the collab relay.
 - **Plugin/marketplace management UI** — config-file/TUI territory.
 - **Voice mode (`/live`) and STT** — audio product surface, no web analog planned.
 
 ## Roadmap
 
-- **Token rotation** — none in v1; worth a phase if sandboxes are long-lived.
-- **First-class `wss://`** — per-daemon self-signed cert + fingerprint pinning, if ssh `-L` and tailnet stop covering the remote cases. Today omp-session ships with zero TLS code; off-loopback goes through ssh/tailnet or your own TLS termination.
-- **omp-fleet packaging** — today it runs from a checkout via `bun run fleet`; a compiled binary like `build:omp-session` is future work.
-- **Registry persistence** — JSON state file today; SQLite only if the registry gains history.
+Strategic positioning (moat, differentiators, open product items): [`docs/position.md`](docs/position.md).
+
+- **Packaging** — everything runs from a checkout today; a compiled binary is future work.
 - **Deferred TUI surfaces** — session DAG tree view (`/tree`), extension dashboard, MCP/SSH management wizards, `/security` scan UI, `/stats` dashboard embed, `/tan`/`/omfg` panels, first-run setup wizard, LaTeX math rendering. Deferred in the parity sweep, not excluded.

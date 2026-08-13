@@ -1,6 +1,6 @@
 # omp-web — Audit Remediation Plan
 
-Companion to `audit.html` (2026-08-12). Finding numbers (`#N`) reference the report. Severity order within each phase. Each phase is independently shippable; phases 0–1 are correctness fires, phases 2–5 are hardening, phase 6 is strategy.
+Companion to the 2026-08-12 full audit. Finding numbers (`#N`) reference the report (`audit.html`, removed 2026-08-13 after phases 0–6 shipped). Severity order within each phase. Each phase is independently shippable; phases 0–1 were correctness fires, phases 2–5 hardening, phase 6 docs/dead code. The strategic Phase 7 items moved to [`docs/position.md`](docs/position.md).
 
 ## Phase 0 — Baseline hygiene (do first, blocks reliable verification)
 
@@ -95,13 +95,4 @@ Several findings share root causes in SSE resume/reconnect handling; fix as one 
 
 ## Phase 7 — Product & positioning (strategic)
 
-- [ ] **#72** Reposition around the ops/security moat: single binary, in-process SDK, dial-in-only sandboxes, disposable daemons — lead with this, not "web UI"
-- [ ] **#71** Accept incumbent absorption of the chat surface; differentiate where they don't play (self-hosted fleet ops)
-- [ ] **#73** Bring fan-out prompting into the roster UI (multi-select + prompt-many); it's the headline fleet feature and currently CLI-only
-- [ ] **#75** Ship an omp-fleet compiled binary — "single binary self-hosted" is half true while the differentiator needs a checkout
-- [ ] **#76** Fleet-level usage/cost aggregation in the roster
-- [ ] **#74** Decide on multi-user/auth roadmap: single-operator caps the team/enterprise segment competitors now win
-- [ ] **#78** Close the remote story: wss:// or documented TLS termination, token rotation, cross-device continuity
-- [ ] **#77** Assess a mobile-responsive or companion surface (Codex already ships mobile remote control)
-- [ ] **#80** Promote collab guest rooms — link-based live sharing with no identity burden is under-sold
-- [ ] **#79** Track ecosystem coupling risk: the ceiling is omp agent adoption; monitor aggregator-pattern commoditization
+Moved to [`docs/position.md`](docs/position.md) — the full positioning case (#71/#72), open strategic items (#73–#80), and strengths to preserve.
