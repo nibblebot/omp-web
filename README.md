@@ -2,7 +2,7 @@
 
 **omp-session** is a single-session agent daemon for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent): one process, one project directory (bound at spawn, immutable), one live agent session, served to a Solid.js web UI over SSE + POST commands. The agent runs in-process via the SDK (`createAgentSession`) — there is no child process and no JSON-RPC hop. It builds as a self-contained binary (`bun run build:omp-session`) — no repo checkout, no node_modules on the target.
 
-**omp-fleet** holds the registry of N sessions — local children it spawns and supervises, externally launched sessions it attaches to, and remote sandboxes it dials into — and re-exposes them to the same web UI (roster mode) and to non-interactive drivers (CLI fan-out). It holds zero SDK state; all agent truth lives in the omp-session processes and their `.jsonl` session logs.
+**omp-fleet** holds the registry of N daemons — local children it spawns and supervises, externally launched daemons it attaches to, and remote sandboxes it dials into — and re-exposes them to the same web UI (roster mode) and to non-interactive drivers (CLI fan-out). It holds zero SDK state; all agent truth lives in the omp-session processes and their `.jsonl` session logs.
 
 ```
 browser (Solid, one app, two modes)
@@ -14,6 +14,12 @@ browser (Solid, one app, two modes)
 ## Quickstart
 
 Prerequisite: [Bun](https://bun.sh). Then `bun install` once.
+
+> **First run:** the daemon serves the UI immediately, but a prompt needs a
+> model provider. Configure one via the settings panel (TUI `/settings`
+> parity), an existing `~/.omp/agent` provider/auth config, or the OAuth login
+> flow. With no auth and no model cache, every prompt fails with
+> `No model selected`.
 
 ### Dev mode — standalone omp-session (single-session UI)
 
@@ -64,7 +70,7 @@ Flags map 1:1 to env vars:
 | `--name` / `OMP_SESSION_NAME` | cwd basename | Registry display name |
 | `--label k=v` / `OMP_SESSION_LABELS` | — | Selector labels (repeatable / comma-separated) |
 
-Env-only collab knobs: `OMP_SESSION_COLLAB_MAX_GUESTS` (default 64), `OMP_SESSION_COLLAB_HOSTNAME`, `OMP_SESSION_COLLAB_URL` (public URL base for join links).
+Env-only collab knobs: `OMP_SESSION_COLLAB_MAX_GUESTS` (default 64), `OMP_SESSION_COLLAB_MAX_ROOMS` (default 256; caps concurrent collab rooms), `OMP_SESSION_COLLAB_HOSTNAME`, `OMP_SESSION_COLLAB_URL` (public URL base for join links).
 
 Immediately after bind — before session creation — omp-session prints a contract line on **stdout** (logs go to stderr), so a spawner learns the endpoint early:
 
@@ -78,6 +84,7 @@ Readiness: after the SDK session exists and provider/model/auth resolution compl
 
 - Remote sessions are **dial-in only**: omp-fleet initiates every connection; omp-session never dials out and has no `--fleet` flag. A sandbox image contains zero knowledge of the external world (no fleet URL, no outbound credentials), and egress may be denied entirely.
 - The bearer token inside a sandbox gates inbound connections to that omp-session only — a leaked token grants nothing beyond it. Loopback peers are exempt; off-loopback requires the token (`Authorization` header or `?token=`; wrong credentials → 401, no hello window) and a secure transport (ssh `-L`, tailnet, or your own TLS).
+- Collab relay host upgrades (`/r/<roomId>?role=host`) are gated by the same rule — an off-loopback host needs the token before it can create a room. Guests are exempt by design: they join with the E2E room key from the shareable link. Rooms are capped (`OMP_SESSION_COLLAB_MAX_ROOMS`, default 256); new host rooms past the cap get 503 before the upgrade.
 - omp-fleet's UI binds loopback. For local children the token travels in the spawn environment — visible in `/proc/<pid>/environ`; accepted for the single-operator v1.
 - `/download` stays realpath-jailed to the bound cwd + tmpdir + session dirs; it is the only file-egress path. `list_files` never escapes the cwd.
 
@@ -93,16 +100,17 @@ bun run fleet -- spawn <path> [--template t] [--name n] [--label k=v]…
 bun run fleet -- add <name> <url> --token <t> [--label k=v]… [--cwd c]   # register an external/remote omp-session
 bun run fleet -- provision <name> [--label k=v]…  # run the spawn hook (sandbox provisioning)
 bun run fleet -- stop <selector>
+bun run fleet -- remove <selector>                    # remove from the roster (stops it first)
 bun run fleet -- prompt <selector> <text> [--wait <ms>] [--fan-out]
 ```
 
 Selectors: `dN`, `all`, name glob (`api-*`), `label:k=v` (alias `tag:k=v`), `project:name`. `prompt --wait` correlates on each target session's `agent_end` event and collects the final assistant text + usage per session.
 
-The connector dials each session's resolved endpoint over HTTP with exponential backoff and bearer-token auth (loopback exempt), verifies `hello_ok.cwd` from the SSE priming matches the registry entry (mismatch → `error`, guards stale endpoints and IP reuse; `OMP_PROTO`, currently 2, gates drift), and keeps liveness with the SSE silence deadline; a dropped session shows `reconnecting` and proxied browser clients re-attach on return.
+The connector dials each daemon's resolved endpoint over HTTP with exponential backoff and bearer-token auth (loopback exempt), verifies `hello_ok.cwd` from the SSE priming matches the registry entry (mismatch → `error`, guards stale endpoints and IP reuse; `OMP_PROTO`, currently 2, gates drift), and keeps liveness with the SSE silence deadline; a dropped daemon shows `reconnecting` and proxied browser clients re-attach on return.
 
 ### Spawn templates
 
-Sessions are spawned from **command templates** — omp-fleet never hardcodes a launch method. `{cwd}` `{token}` `{name}` `{labels}` `{resume}` are substituted; the child's stdout is parsed for `OMP_SESSION|` contract lines; endpoint resolution order: wrapper `endpoint` line › template-declared `host` + listening port › `advertise` › loopback. Default local template:
+Daemons are spawned from **command templates** — omp-fleet never hardcodes a launch method. `{cwd}` `{token}` `{name}` `{labels}` `{resume}` are substituted; the child's stdout is parsed for `OMP_SESSION|` contract lines; endpoint resolution order: wrapper `endpoint` line › template-declared `host` + listening port › `advertise` › loopback. Default local template:
 
 ```jsonc
 // ~/.omp/fleet/config.json
@@ -120,14 +128,14 @@ Sessions are spawned from **command templates** — omp-fleet never hardcodes a 
 
 Copy-pasteable examples live in `fleet/examples/` (`ssh-remote.json`, `docker.json` + `docker-omp-session.sh` wrapper, `provider-skeleton.sh` provision hook). The spawn hook is any script that creates a sandbox and prints `{ "name", "url", "token" }` JSON as its last stdout line; `provision <name>` runs it and registers the result.
 
-Local children are restarted `on-failure` with bounded backoff; the stderr ring buffer is surfaced in the session detail popover.
+Local children are restarted `on-failure` with bounded backoff; the stderr ring buffer is surfaced in the daemon detail popover.
 
 ## The web UI (one app, two modes)
 
-- **Standalone** (served by an omp-session): the full single-session UI — chat, steering, queue chips, live bash/python streaming, rich tool cards, subagent roster + drill-down, settings panel (TUI `/settings` parity), OAuth login, collab rooms (`omp join` TUI guests), session resume/branch/fork/handoff, `/btw` side questions, `/export` HTML transcripts. Composer stays disabled until the daemon's `ready` frame.
-- **Roster** (served by omp-fleet): the roster sidebar replaces the sessions sidebar — all sessions under a top-level **Repos** header, grouped by owning repo (worktree sessions join their repo's group; spawned sessions are tagged at spawn time and pre-existing ones backfilled at startup); repos with worktree sessions render as a collapsible label with main + worktree sessions indented beneath (worktree rows show a branch icon + branch name, never the dir/path), plain repos as regular rows, per-row branch + git dirty counts (`+N ~M -D ?U`, polled from local cwds), status dots (`spawning`/`ready`/`asleep`/`reconnecting`/`error`), bare-icon attach/stop/remove actions (stop/remove are two-click confirms), spawn picker (projects + worktrees + freeform path + template + labels), wake-on-click for asleep sessions, per-session detail popover (cwd, uptime, labels, last session, stderr tail). Attaching proxies the browser through to that omp-session (`daemonId` at the edge); everything else about the UI is identical.
+- **Standalone** (served by an omp-session): the full single-session UI — chat, steering, queue chips, live bash/python streaming, rich tool cards, subagent roster + drill-down, settings panel (TUI `/settings` parity), OAuth login, session resume/branch/fork/handoff, `/btw` side questions, `/export` HTML transcripts. Composer stays disabled until the daemon's `ready` frame.
+- **Roster** (served by omp-fleet): the roster sidebar replaces the standalone single-session layout — standalone has no sidebar; session switching there is a modal via `/resume`. All daemons sit under a top-level **Repos** header, grouped by owning repo (worktree daemons join their repo's group; spawned daemons are tagged at spawn time and pre-existing ones backfilled at startup); repos with worktree daemons render as a collapsible label with main + worktree rows indented beneath (worktree rows show a branch icon + branch name, never the dir/path), plain repos as regular rows, per-row branch + git dirty counts (`+N ~M -D ?U`, polled from local cwds), status dots (`spawning`/`ready`/`asleep`/`reconnecting`/`error`), bare-icon attach/stop/remove actions (stop/remove are two-click confirms), spawn picker (projects + worktrees + freeform path + template + labels), wake-on-click for asleep daemons, per-daemon detail popover (cwd, uptime, labels, last session file, stderr tail). Attaching proxies the browser through to that omp-session (`daemonId` at the edge); everything else about the UI is identical.
 
-Collab from the CLI (standalone omp-session):
+Collab rooms are CLI/TUI-only — there is no collab surface in the web UI. A room is hosted from the standalone omp-session's TUI; guests join a shareable link with `omp join`:
 
 ```sh
 bun run collab            # start the collab room, print write + view links
@@ -148,10 +156,10 @@ Production: `bun run build:omp-session` → self-contained `dist-bin/omp-session
 
 ## Architecture
 
-- `server/index.ts` — the omp-session daemon: one in-process SDK session, the 71-method dispatch table (`WebMethodName`), post-mutation state broadcast with `READ_ONLY`/`HISTORY_RELOAD` resync semantics, builtin slash interception (`executeAcpBuiltinSlashCommand`), full `AgentSessionEvent` forwarding, `ui_request`/`ui_response` dialog relay, settings model + side effects, OAuth login frames, bash/python/ephemeral chunk streaming, subagent lifecycle/progress mirror + steer/abort, collab host adapter + relay, `/download` jail, static UI serving, bearer auth, readiness gate, idle auto-exit.
+- `server/index.ts` — the omp-session daemon: one in-process SDK session, the `WebMethodName` dispatch table, post-mutation state broadcast with `READ_ONLY`/`HISTORY_RELOAD` resync semantics, builtin slash interception (`executeAcpBuiltinSlashCommand`), full `AgentSessionEvent` forwarding, `ui_request`/`ui_response`/`ui_request_end` dialog relay, settings model + side effects, OAuth login frames, bash/python/ephemeral chunk streaming, subagent lifecycle/progress mirror + steer/abort, collab host adapter + relay, `/download` jail, static UI serving, bearer auth, readiness gate, idle auto-exit.
 - `server/config.ts` — flag/env parsing into the config surface above.
-- `fleet/` — registry + JSON persistence (`registry.ts`), project discovery (`discovery.ts`), spawn templates + `OMP_SESSION|` parsing (`spawn-parse.ts`, `supervisor.ts`), dial-in SSE client with hello priming, cwd sanity check, backoff and silence-deadline liveness (`connector.ts`), selectors + fan-out correlation (`selectors.ts`, `fanout.ts`), loopback control API + CLI (`server.ts`, `cli.ts`), browser edge + per-browser session proxy + aggregated sessions panel (`edge.ts`, `daemons-aggregator.ts`).
-- `src/protocol.ts` — the shared wire contract: client commands (`POST /command`), server frames (`GET /events` SSE), the `OMP_SESSION|` line, the `hello_ok`→`attached`→`history`→`state`→`available_commands`→`ready` priming sequence, roster frames. Additive changes only; `OMP_PROTO` (currently 2) gates omp-fleet↔omp-session drift and must bump on any breaking change to the handshake or frame shapes.
+- `fleet/` — registry + JSON persistence (`registry.ts`), project discovery (`discovery.ts`), spawn templates + `OMP_SESSION|` parsing (`spawn-parse.ts`, `supervisor.ts`), dial-in SSE client with hello priming, cwd sanity check, backoff and silence-deadline liveness (`connector.ts`), selectors + fan-out correlation (`selectors.ts`, `fanout.ts`), loopback control API + CLI (`server.ts`, `cli.ts`), browser edge + per-browser daemon proxy + aggregated daemons panel (`edge.ts`, `daemons-aggregator.ts`).
+- `shared/protocol.ts` — the shared wire contract: client commands (`POST /command`), server frames (`GET /events` SSE), the `OMP_SESSION|` line, the `hello_ok`→`attached`→`history`→`state`→`collab_status`→`available_commands`→`ready` priming sequence, roster frames. Additive changes only; `OMP_PROTO` (currently 2) gates omp-fleet↔omp-session drift and must bump on any breaking change to the handshake or frame shapes.
 - `src/state.ts` — client store: chat items, streaming, session state mirror, `call()` helper, reconnect with backoff, roster state, stale-frame guard (guards session switches).
 
 ## Non-goals

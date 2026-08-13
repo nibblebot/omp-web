@@ -11,8 +11,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../src/protocol";
-import { encodeSseEvent } from "../src/sse";
+import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../shared/protocol";
+import { encodeSseEvent } from "../shared/sse";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
 import { runSpawnHook, startFleet, type FleetServer } from "./server";
@@ -202,6 +202,18 @@ describe("fleet control plane", () => {
 		expect(typeof body.error).toBe("string");
 	});
 
+	test("POST /ctl/spawn 400s when name/labels contain NUL", async () => {
+		const cwd = join(tmp, "roots");
+		const resName = await postJson(server.port, "/ctl/spawn", { cwd, name: "a\u0000b" });
+		expect(resName.status).toBe(400);
+		const bodyName = (await resName.json()) as { error?: string };
+		expect(bodyName.error).toContain("NUL");
+		const resLabels = await postJson(server.port, "/ctl/spawn", { cwd, labels: ["k=v", "x\u0000y"] });
+		expect(resLabels.status).toBe(400);
+		const bodyLabels = (await resLabels.json()) as { error?: string };
+		expect(bodyLabels.error).toContain("NUL");
+	});
+
 	test("POST /ctl/provision 400s when no spawnHook is configured", async () => {
 		const res = await postJson(server.port, "/ctl/provision", { name: "sandbox" });
 		expect(res.status).toBe(400);
@@ -296,11 +308,18 @@ describe("fleet control plane", () => {
 			expect(res.status).toBe(200);
 			const added = (await res.json()) as RegistryEntry;
 			await waitFor(() => server.registry.get(added.daemonId)?.status === "ready", 5000, "removable daemon ready");
+			// #24: the connector tracks per-daemon state for the dialed entry;
+			// removal must prune it, not leave listeners/waiters/retain counts
+			// behind a gone registry entry.
+			const before = server.connector.stateCount();
+			expect(before).toBeGreaterThan(0);
 			const del = await postJson(server.port, "/ctl/remove", { selector: added.daemonId });
 			expect(del.status).toBe(200);
 			const body = (await del.json()) as { removed?: unknown };
 			expect(body.removed).toEqual([added.daemonId]);
 			expect(server.registry.get(added.daemonId)).toBeUndefined();
+			expect(server.connector.stateCount()).toBe(before - 1);
+			expect(server.connector.isConnected(added.daemonId)).toBe(false);
 		} finally {
 			localFake.close();
 		}
@@ -309,6 +328,92 @@ describe("fleet control plane", () => {
 	test("unknown route 404s", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/nope`);
 		expect(res.status).toBe(404);
+	});
+});
+
+describe("boot reconciliation (#3)", () => {
+	let tmp: string;
+	let statePath: string;
+	let configPath: string;
+	let server: FleetServer;
+	let fake: FakeDaemon;
+
+	beforeAll(async () => {
+		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-boot-"));
+		statePath = join(tmp, "state.json");
+		configPath = join(tmp, "config.json");
+		writeFileSync(configPath, JSON.stringify({ roots: [] }));
+		fake = startFakeDaemon("boot-token");
+		// Seed the registry exactly as a previous fleet process would have
+		// left it: stale non-terminal statuses (children/sockets died with
+		// that process), an intentional stop, and a real error.
+		const registry = new Registry(statePath);
+		await registry.load();
+		registry.create({
+			name: "stale-ready",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+			status: "ready",
+			readyAt: Date.now() - 60_000,
+			pid: 12345,
+		});
+		registry.create({ name: "stuck-spawning", cwd: FAKE_CWD, project: "fake-proj", labels: [], mode: "spawned", template: "test", status: "spawning" });
+		registry.create({ name: "stale-connecting", cwd: FAKE_CWD, project: "fake-proj", labels: [], mode: "spawned", template: "test", status: "connecting" });
+		registry.create({
+			name: "boot-dial",
+			cwd: "",
+			project: "",
+			labels: [],
+			mode: "remote",
+			endpoint: fake.url,
+			token: "boot-token",
+			status: "ready",
+			readyAt: Date.now() - 120_000,
+		});
+		registry.create({ name: "stopped", cwd: "", project: "", labels: [], mode: "remote", endpoint: "ws://127.0.0.1:1", status: "asleep" });
+		registry.create({ name: "terminal-error", cwd: "", project: "", labels: [], mode: "remote", endpoint: "ws://127.0.0.1:1", status: "error", error: "unauthorized (401): daemon rejected the token" });
+		server = await startFleet({ port: 0, statePath, configPath });
+	});
+
+	afterAll(async () => {
+		if (server !== undefined) await server.close();
+		if (fake !== undefined) fake.close();
+	});
+
+	test("spawned stale 'ready'/'spawning'/'connecting' entries are downgraded to asleep with stale readyAt/pid cleared", () => {
+		const entries = server.registry.list();
+		const staleReady = entries.find((e) => e.name === "stale-ready")!;
+		expect(staleReady.status).toBe("asleep");
+		expect(staleReady.readyAt).toBeUndefined();
+		expect(staleReady.pid).toBeUndefined();
+		expect(entries.find((e) => e.name === "stuck-spawning")!.status).toBe("asleep");
+		expect(entries.find((e) => e.name === "stale-connecting")!.status).toBe("asleep");
+	});
+
+	test("a remote entry persisted 'ready' is redialed at boot (connecting → ready via the connector)", async () => {
+		const entry = server.registry.list().find((e) => e.name === "boot-dial")!;
+		// The boot reconcile dials immediately; the fake must see the token.
+		await waitFor(() => fake.seen.authHeader !== null, 5000, "boot dial");
+		expect(fake.seen.authHeader).toBe("Bearer boot-token");
+		await waitFor(() => server.registry.get(entry.daemonId)?.status === "ready", 5000, "re-ready after boot redial");
+		expect(server.registry.get(entry.daemonId)?.readyAt).toBeTypeOf("number");
+	});
+
+	test("intentionally stopped and terminal-error entries are left untouched", async () => {
+		const stopped = server.registry.list().find((e) => e.name === "stopped")!;
+		const errored = server.registry.list().find((e) => e.name === "terminal-error")!;
+		expect(stopped.status).toBe("asleep");
+		expect(errored.status).toBe("error");
+		expect(errored.error).toContain("unauthorized");
+		// A short wait proves the stopped entry was NOT dialed: the connector
+		// transitions synchronously on connect(), so any dial would have left
+		// "asleep" by now.
+		await new Promise((resolve) => setTimeout(resolve, 400));
+		expect(server.registry.get(stopped.daemonId)?.status).toBe("asleep");
+		expect(server.connector.isConnected(stopped.daemonId)).toBe(false);
 	});
 });
 
@@ -542,6 +647,55 @@ describe("CLI", () => {
 			console.error = originalError;
 		}
 		expect(errors.join("\n")).toContain("fleet not running — start it: omp-fleet serve");
+	});
+
+	test("usage no longer advertises the removed --fan-out flag (audit #26)", async () => {
+		const logs: string[] = [];
+		const originalLog = console.log;
+		console.log = (msg?: unknown) => {
+			logs.push(String(msg));
+		};
+		try {
+			const code = await main(["help"]);
+			expect(code).toBe(0);
+		} finally {
+			console.log = originalLog;
+		}
+		const output = logs.join("\n");
+		expect(output).not.toContain("--fan-out");
+		expect(output).toContain("prompt <selector> <text> [--wait <ms>]");
+	});
+
+	test("a flag value starting with '-' errors instead of being silently dropped (audit #26)", async () => {
+		const errors: string[] = [];
+		const originalError = console.error;
+		console.error = (msg?: unknown) => {
+			errors.push(String(msg));
+		};
+		try {
+			// --wait -1 previously parsed as boolean true (value "dropped" and
+			// "-1" leaked into the prompt text); now it is a parse error.
+			const code = await main(["prompt", "x", "hi", "--wait", "-1"]);
+			expect(code).toBe(1);
+		} finally {
+			console.error = originalError;
+		}
+		expect(errors.join("\n")).toContain("invalid value for --wait: -1");
+	});
+
+	test("a flag with no value at the end of argv errors (audit #26)", async () => {
+		const errors: string[] = [];
+		const originalError = console.error;
+		console.error = (msg?: unknown) => {
+			errors.push(String(msg));
+		};
+		try {
+			const code = await main(["sessions", "--port"]);
+			expect(code).toBe(1);
+		} finally {
+			console.error = originalError;
+		}
+		expect(errors.join("\n")).toContain("missing value for --port");
 	});
 
 	test("CLI serve + sessions end-to-end via Bun.spawn", async () => {

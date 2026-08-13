@@ -13,7 +13,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { DaemonEntry, DaemonStatus } from "../src/protocol";
+import type { DaemonEntry, DaemonStatus } from "../shared/protocol";
 
 /** A roster entry: DaemonEntry plus fleet-side registration data. */
 export interface RegistryEntry extends DaemonEntry {
@@ -34,6 +34,28 @@ export interface RegistryEntry extends DaemonEntry {
 interface RegistryFile {
 	nextId: number;
 	entries: RegistryEntry[];
+}
+
+/**
+ * Truthful boot status for a persisted entry after a fleet restart: every
+ * spawned child and connector socket died with the old process, so any
+ * non-terminal persisted status describes nothing that is running.
+ * Terminal statuses are kept: "error" (the failure is real) and "asleep"
+ * (an intentional stop). Everything else maps per mode:
+ *   - "spawning" → "asleep" — a failed spawn; nothing was ever dialed
+ *     (respawn --resume is the documented recovery for spawned entries);
+ *   - spawned + any other non-terminal status → "asleep" — the child is
+ *     gone, so "ready"/"connecting"/… are lies; the user respawns;
+ *   - remote/attached + any other non-terminal status → "connecting" — a
+ *     dial-in entry has nothing to respawn, so the server redials it at
+ *     boot (the same recovery the edge's #wake uses for remote entries).
+ * Returns null when the persisted status should be left untouched.
+ */
+export function bootStatusFor(entry: Pick<RegistryEntry, "mode" | "status">): DaemonStatus | null {
+	if (entry.status === "error" || entry.status === "asleep") return null;
+	if (entry.status === "spawning") return "asleep"; // failed spawn — no live child, never dialed
+	if (entry.mode === "spawned") return "asleep"; // child died with the old fleet process
+	return "connecting"; // dial-in: nothing to respawn — redial immediately
 }
 
 export class Registry {

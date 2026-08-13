@@ -1,7 +1,8 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import { call, listSessions, setState } from "../state";
 import { Modal } from "./Modal";
-import type { SessionListEntry } from "../protocol";
+import { PickerRow } from "./PickerRow";
+import type { SessionListEntry } from "../../shared/protocol";
 
 /**
  * `/resume` and the header button: on-disk session files, click to
@@ -56,12 +57,12 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 			<div class="picker-list">
 				<For each={filtered()}>
 					{s => (
-						<div class="picker-row" onClick={() => choose(s)}>
+						<PickerRow class="picker-row" onClick={() => choose(s)}>
 							<span class="picker-label">{s.name ?? s.id.slice(0, 8)}</span>
 							<span class="picker-detail">
 								{s.cwd || "(no cwd)"} · {s.messageCount} msgs · {new Date(s.modifiedAt).toLocaleString()}
 							</span>
-						</div>
+						</PickerRow>
 					)}
 				</For>
 				{filtered().length === 0 && !error() && <div class="tool-collapsed-note">no sessions</div>}

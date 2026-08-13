@@ -1,5 +1,5 @@
 import { createSignal, For, Show, type Component } from "solid-js";
-import type { DaemonInfo } from "../protocol";
+import { daemonsKey, type DaemonInfo } from "../../shared/protocol";
 import { isLiveDaemon, restartDaemon, setState, state, stopDaemon } from "../state";
 
 export const DAEMON_GLYPH: Record<string, string> = {
@@ -37,7 +37,7 @@ const DaemonRow: Component<{ d: DaemonInfo }> = props => {
 		setBusy(true);
 		try {
 			const info = await fn();
-			setState("daemons", m => new Map(m).set(`${props.d.projectDir}\u0000${props.d.name}`, info));
+			setState("daemons", m => new Map(m).set(daemonsKey(props.d), info));
 		} catch (err) {
 			setState("error", String(err));
 		} finally {

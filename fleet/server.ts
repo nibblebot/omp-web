@@ -26,9 +26,9 @@
  * /ctl/prompt dispatches fire-and-forget: each match gets the prompt in the
  * background and the route returns { submitted } without awaiting the turn.
  *
- * The connector's onDialFailed is wired to respawn spawned entries (guarded
- * against overlapping respawns per daemon); attached/remote entries are left
- * to their own backoff.
+ * The connector's onDialFailed is wired to respawn spawned entries (the
+ * supervisor serializes overlapping respawns per daemon); attached/remote
+ * entries are left to their own backoff.
  */
 
 import type { Server } from "bun";
@@ -37,11 +37,12 @@ import { basename, join } from "node:path";
 import type { FleetConfig } from "./config";
 import { loadConfig } from "./config";
 import type { RegistryEntry } from "./registry";
-import { Registry } from "./registry";
+import { bootStatusFor, Registry } from "./registry";
 import { listProjects, validateProjectPath } from "./discovery";
 import { matchSelector } from "./selectors";
 import { DaemonConnector } from "./connector";
 import { SpawnSupervisor } from "./supervisor";
+import { isValidEndpointUrl } from "./spawn-parse";
 import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
 import { FleetEdge } from "./edge";
@@ -145,14 +146,14 @@ function optionalWaitMs(body: Record<string, unknown>): number | undefined {
 	return value;
 }
 
+/**
+ * Reject endpoints that are not ws:// or wss:// URLs. The check itself lives
+ * in spawn-parse.ts (isValidEndpointUrl) — shared with the supervisor's
+ * resolved-endpoint guard and parseContractLine so every URL that reaches
+ * the connector has passed the same validation.
+ */
 function validateEndpointUrl(raw: string): void {
-	let url: URL;
-	try {
-		url = new URL(raw);
-	} catch {
-		throw new HttpError(400, `invalid url: ${raw}`);
-	}
-	if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+	if (!isValidEndpointUrl(raw)) {
 		throw new HttpError(400, `url must be ws:// or wss://: ${raw}`);
 	}
 }
@@ -265,9 +266,6 @@ class FleetServerImpl implements FleetServer {
 	readonly config: FleetConfig;
 	readonly edge: FleetEdge;
 
-	/** daemonIds currently mid-respawn (onDialFailed guard, one respawn per daemon). */
-	readonly #respawnInFlight = new Set<string>();
-
 	readonly #server: Server<undefined>;
 
 	constructor(registry: Registry, config: FleetConfig, port: number) {
@@ -276,7 +274,13 @@ class FleetServerImpl implements FleetServer {
 		let edge: FleetEdge | null = null;
 		this.connector = new DaemonConnector(registry, {
 			onDialFailed: (entry) => this.#onDialFailed(entry),
-			onStatus: (entry) => edge?.onDaemonStatus(entry),
+			onStatus: (entry) => {
+				edge?.onDaemonStatus(entry);
+				// #22: a spawned child that reaches the connector's "ready"
+				// transition is stable — the supervisor resets its
+				// consecutive-crash budget there (window-based, not lifetime).
+				this.supervisor.onConnectorStatus(entry);
+			},
 		});
 		this.supervisor = new SpawnSupervisor(registry, this.connector, config);
 		edge = new FleetEdge({
@@ -286,6 +290,10 @@ class FleetServerImpl implements FleetServer {
 			config,
 		});
 		this.edge = edge;
+		// #3: statuses persisted by a previous fleet process describe dead
+		// children/sockets — map them to a truthful boot state and redial
+		// remote entries BEFORE anything else starts acting on the roster.
+		this.#reconcileBootStatuses();
 		// Tag pre-existing local entries with their owning repo (roster
 		// grouping); per-entry git failures are swallowed inside.
 		void this.supervisor.backfillWorktrees();
@@ -330,20 +338,41 @@ class FleetServerImpl implements FleetServer {
 
 	#onDialFailed(entry: RegistryEntry): void {
 		// Respawn spawned children on transport failure (dial refused); the
-		// supervisor owns the R3 --resume rule. Attached/remote entries are
-		// dial-in only: their own backoff in the connector covers retries.
+		// supervisor owns the R3 --resume rule AND serializes overlapping
+		// respawns per daemon (concurrent calls coalesce into one launch).
+		// Attached/remote entries are dial-in only: their own backoff in the
+		// connector covers retries.
 		if (entry.mode !== "spawned") return;
-		if (this.#respawnInFlight.has(entry.daemonId)) return;
-		this.#respawnInFlight.add(entry.daemonId);
 		void (async () => {
 			try {
 				await this.supervisor.respawn(entry);
 			} catch (err) {
 				console.error(`fleet: respawn ${entry.daemonId} failed`, err);
-			} finally {
-				this.#respawnInFlight.delete(entry.daemonId);
 			}
 		})();
+	}
+
+	/**
+	 * #3: reconcile statuses persisted by a previous fleet process. Spawned
+	 * children and connector sockets died with that process, so non-terminal
+	 * statuses are mapped to a truthful boot state (bootStatusFor): spawned
+	 * entries → "asleep" (respawn --resume recovers), remote/attached → the
+	 * connector redials immediately. Stale liveness facts (readyAt, pid) are
+	 * cleared on every downgrade so the roster never shows uptime/pid for a
+	 * process that is not running.
+	 */
+	#reconcileBootStatuses(): void {
+		for (const entry of this.registry.list()) {
+			const target = bootStatusFor(entry);
+			if (target === null) continue;
+			const patch: Partial<RegistryEntry> = { status: target };
+			if (entry.readyAt !== undefined) patch.readyAt = undefined;
+			if (entry.pid !== undefined) patch.pid = undefined;
+			this.registry.update(entry.daemonId, patch);
+			if (target === "connecting") {
+				this.connector.connect(entry.daemonId);
+			}
+		}
 	}
 
 	#fanoutDeps(): FanoutDeps {
@@ -400,6 +429,15 @@ class FleetServerImpl implements FleetServer {
 		const template = optionalString(body, "template");
 		const name = optionalString(body, "name");
 		const labels = optionalLabels(body);
+		// NUL cannot exist in a shell command string; reject it at the
+		// boundary. (Quoting in supervisor #launch is the real injection
+		// defense — this only keeps NUL out of the wire/state.)
+		if (name !== undefined && name.includes("\0")) {
+			throw new HttpError(400, "invalid field: name must not contain NUL");
+		}
+		if (labels !== undefined && labels.some((label) => label.includes("\0"))) {
+			throw new HttpError(400, "labels must not contain NUL");
+		}
 		const resolved = await validateProjectPath(cwd);
 		if (resolved === null) throw new HttpError(400, `not a directory: ${cwd}`);
 		const entry = await this.supervisor.spawn({ cwd: resolved, template, name, labels });
@@ -488,10 +526,14 @@ class FleetServerImpl implements FleetServer {
 		if (matches.length === 0) throw new HttpError(404, `no daemon matches selector: ${selector}`);
 		const removed: string[] = [];
 		for (const entry of matches) {
+			// #24: prune/drop the per-daemon supervisor/connector state so a
+			// removed daemon leaks nothing (stderr ring, listeners, waiters,
+			// retain counts) and pending waitReady() waiters reject
+			// immediately instead of hanging until their timeout.
 			if (entry.mode === "spawned") {
-				await this.supervisor.stop(entry.daemonId);
+				await this.supervisor.prune(entry.daemonId);
 			} else {
-				this.connector.disconnect(entry.daemonId);
+				this.connector.drop(entry.daemonId);
 			}
 			this.registry.remove(entry.daemonId);
 			removed.push(entry.daemonId);

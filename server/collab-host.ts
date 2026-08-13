@@ -25,7 +25,6 @@ import type {
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { stripImagesFromMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { SessionEntry, SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import {
 	type AgentSnapshot,
@@ -82,10 +81,6 @@ const WIRE_SESSION_ENTRY_TYPES: Record<WireSessionEntry["type"], true> = {
 	model_change: true,
 	thinking_level_change: true,
 };
-const COLLAB_BUS_CHANNELS = [
-	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
-	TASK_SUBAGENT_PROGRESS_CHANNEL,
-] as const satisfies readonly BusChannel[];
 
 function isWireAgentEvent(event: AgentSessionEvent): event is AgentSessionEvent & WireAgentEvent {
 	return event.type in WIRE_AGENT_EVENT_TYPES;
@@ -285,7 +280,7 @@ export class CollabHostAdapter {
 	}
 
 	/** Generates room+key+token, connects to the relay; resolves once the socket first opens. Throws on connect failure. */
-	async start(relayUrl: string): Promise<void> {
+	async start(relayUrl: string, connectUrl?: string): Promise<void> {
 		const rawKey = generateRoomKey();
 		const writeToken = generateWriteToken();
 		const roomId = generateRoomId();
@@ -298,7 +293,13 @@ export class CollabHostAdapter {
 		if ("error" in parsed) throw new Error(parsed.error);
 		const key = await importRoomKey(rawKey);
 
-		const socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "host", key });
+		// The relay lives in the same process: connect via the local endpoint
+		// (loopback) so a public collabUrl — which join LINKS must advertise —
+		// never hairpins the host socket back through the network. The R14
+		// host gate requires a loopback peer or a bearer token, and the host
+		// adapter authenticates by loopback only.
+		const wsUrl = connectUrl !== undefined ? `${connectUrl.replace(/\/+$/, "")}/r/${roomId}` : parsed.wsUrl;
+		const socket = new CollabSocket({ wsUrl, role: "host", key });
 		this.#socket = socket;
 		this.#sessionId = this.#port.getSessionId();
 
@@ -350,11 +351,12 @@ export class CollabHostAdapter {
 			if (isWireAgentEvent(event)) this.#broadcast({ t: "event", event: shrinkForReplication(event) });
 			this.#onEventForState(event);
 		});
-		for (const channel of COLLAB_BUS_CHANNELS) {
-			this.#busUnsubscribers.push(
-				this.#port.subscribeBus((ch, data) => this.#broadcast({ t: "bus", channel: ch, data })),
-			);
-		}
+		// Port contract: one subscribeBus call covers BOTH task channels
+		// (lifecycle + progress); subscribing per channel would broadcast
+		// every bus frame to each guest twice.
+		this.#busUnsubscribers.push(
+			this.#port.subscribeBus((ch, data) => this.#broadcast({ t: "bus", channel: ch, data })),
+		);
 		this.#agentsUnsubscribe = this.#port.subscribeAgents(() => this.#scheduleAgentsBroadcast());
 		this.#port.onEntryAppended(entry => {
 			if (isWireSessionEntry(entry)) this.#broadcast({ t: "entry", entry: shrinkForReplication(entry) });

@@ -5,12 +5,14 @@ import { formatTokens } from "../context";
 import { call, setState, state } from "../state";
 import { Modal } from "./Modal";
 
-/** One stacked-bar segment: width proportional to the context window. */
-const BreakdownSegment: Component<{ tokens: number; contextWindow: number; label: string }> = props => {
+/** One stacked-bar segment: width proportional to the context window. The
+ *  variant drives the per-category swatch (see .breakdown-seg--* in
+ *  styles.css; an ordered cool-to-warm ramp, not the semantic status colors). */
+const BreakdownSegment: Component<{ tokens: number; contextWindow: number; label: string; variant: string }> = props => {
 	const width = () => (props.contextWindow > 0 ? `${(props.tokens / props.contextWindow) * 100}%` : "0%");
 	return (
 		<div
-			class="breakdown-seg"
+			class={`breakdown-seg breakdown-seg--${props.variant}`}
 			title={`${props.label}: ${formatTokens(props.tokens)} tokens`}
 			style={{ width: width() }}
 		/>
@@ -83,11 +85,33 @@ export const StatsPopover: Component<{ onClose: () => void }> = props => {
 						<div class="breakdown">
 							<h3 class="stats-subhead">Context breakdown</h3>
 							<div class="breakdown-bar">
-								<BreakdownSegment tokens={b().systemPromptTokens} contextWindow={b().contextWindow} label="system prompt" />
-								<BreakdownSegment tokens={b().systemToolsTokens} contextWindow={b().contextWindow} label="tools" />
-								<BreakdownSegment tokens={b().systemContextTokens} contextWindow={b().contextWindow} label="system context" />
-								<BreakdownSegment tokens={b().skillsTokens} contextWindow={b().contextWindow} label="skills" />
-								<BreakdownSegment tokens={b().messagesTokens} contextWindow={b().contextWindow} label="messages" />
+								<BreakdownSegment variant="system" tokens={b().systemPromptTokens} contextWindow={b().contextWindow} label="system prompt" />
+								<BreakdownSegment variant="tools" tokens={b().systemToolsTokens} contextWindow={b().contextWindow} label="tools" />
+								<BreakdownSegment variant="context" tokens={b().systemContextTokens} contextWindow={b().contextWindow} label="system context" />
+								<BreakdownSegment variant="skills" tokens={b().skillsTokens} contextWindow={b().contextWindow} label="skills" />
+								<BreakdownSegment variant="messages" tokens={b().messagesTokens} contextWindow={b().contextWindow} label="messages" />
+							</div>
+							<div class="breakdown-legend">
+								<span class="breakdown-legend-item">
+									<i class="breakdown-swatch breakdown-swatch--system" aria-hidden="true" />system prompt
+									<span class="breakdown-legend-count">{formatTokens(b().systemPromptTokens)}</span>
+								</span>
+								<span class="breakdown-legend-item">
+									<i class="breakdown-swatch breakdown-swatch--tools" aria-hidden="true" />tools
+									<span class="breakdown-legend-count">{formatTokens(b().systemToolsTokens)}</span>
+								</span>
+								<span class="breakdown-legend-item">
+									<i class="breakdown-swatch breakdown-swatch--context" aria-hidden="true" />system context
+									<span class="breakdown-legend-count">{formatTokens(b().systemContextTokens)}</span>
+								</span>
+								<span class="breakdown-legend-item">
+									<i class="breakdown-swatch breakdown-swatch--skills" aria-hidden="true" />skills
+									<span class="breakdown-legend-count">{formatTokens(b().skillsTokens)}</span>
+								</span>
+								<span class="breakdown-legend-item">
+									<i class="breakdown-swatch breakdown-swatch--messages" aria-hidden="true" />messages
+									<span class="breakdown-legend-count">{formatTokens(b().messagesTokens)}</span>
+								</span>
 							</div>
 							<div class="breakdown-numbers">
 								<span>used {formatTokens(b().usedTokens)}</span>

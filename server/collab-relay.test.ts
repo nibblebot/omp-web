@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { generateRoomId, packEnvelope } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import type { Server } from "bun";
 import { createRelay } from "./collab-relay";
-import type { RelayHandle, RelayOptions, SocketData } from "./collab-relay";
+import type { RelayHandle, RelayOptions, RelaySocketData } from "./collab-relay";
 
 const PAYLOAD_A = new Uint8Array([1, 2, 3, 4, 5]);
 const PAYLOAD_B = new Uint8Array([9, 8, 7, 6]);
@@ -32,17 +32,19 @@ function sleep(ms: number): Promise<void> {
 // Test infrastructure
 // ---------------------------------------------------------------------------
 
-const servers: Server<SocketData>[] = [];
+const servers: Server<RelaySocketData>[] = [];
 const clients: WebSocket[] = [];
 
-function startRelayServer(opts?: RelayOptions): { relay: RelayHandle; server: Server<SocketData>; baseUrl: string } {
+function startRelayServer(opts?: RelayOptions): { relay: RelayHandle; server: Server<RelaySocketData>; baseUrl: string } {
 	const relay = createRelay(opts);
-	const server = Bun.serve<SocketData>({
+	const server = Bun.serve<RelaySocketData>({
 		port: 0,
 		fetch(req, srv) {
 			const url = new URL(req.url);
-			if (relay.handleUpgrade(url, srv, req)) return;
-			return new Response("not found", { status: 404 });
+			const result = relay.handleUpgrade(url, srv, req);
+			if (result === null) return new Response("not found", { status: 404 });
+			if (result.handled) return;
+			return new Response(result.reason, { status: result.status });
 		},
 		websocket: {
 			open(ws) {
@@ -133,7 +135,7 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 	return true;
 }
 
-let shared: { relay: RelayHandle; server: Server<SocketData>; baseUrl: string } | null = null;
+let shared: { relay: RelayHandle; server: Server<RelaySocketData>; baseUrl: string } | null = null;
 
 beforeAll(() => {
 	shared = startRelayServer();
@@ -199,6 +201,67 @@ describe("collab relay", () => {
 		expect(ev.reason).toBe("room is full");
 
 		expect(relay.roomCount()).toBe(1);
+	});
+
+	test("host upgrades are refused with 401 when the authorizeHost predicate rejects; guests stay open", async () => {
+		// The daemon wires authorizeHost to the R14 gate (loopback exempt,
+		// off-loopback needs the bearer token). Here the predicate models an
+		// off-loopback peer without a token: every host upgrade is refused.
+		const { baseUrl } = startRelayServer({ authorizeHost: () => false });
+		const room = generateRoomId();
+		const httpBase = `http://127.0.0.1:${new URL(baseUrl).port}`;
+
+		// Refused BEFORE the upgrade with a plain 401 (no close code, no
+		// hello window — same convention as /events and /command).
+		const res = await fetch(`${httpBase}/r/${room}?role=host`);
+		expect(res.status).toBe(401);
+
+		// Guests are never gated: they still upgrade and get the ordinary
+		// no-room close instead of a 401.
+		const guest = openRelaySocket(baseUrl, room, "guest");
+		await awaitOpen(guest);
+		const ev = await awaitClose(guest);
+		expect(ev.code).toBe(4004);
+		expect(ev.reason).toBe("no such room");
+	});
+
+	test("host upgrades proceed when the authorizeHost predicate accepts", async () => {
+		// The predicate models a loopback peer (or an off-loopback peer with
+		// a valid token): the upgrade goes through and the room is created.
+		const { relay, baseUrl } = startRelayServer({ authorizeHost: () => true });
+		const room = generateRoomId();
+		const host = openRelaySocket(baseUrl, room, "host");
+		await awaitOpen(host);
+		expect(relay.roomCount()).toBe(1);
+		relay.closeRoom(room);
+	});
+
+	test("new host rooms past maxRooms are refused with 503; re-adoption still works at the cap", async () => {
+		const { relay, baseUrl } = startRelayServer({ maxRooms: 2 });
+		const httpBase = `http://127.0.0.1:${new URL(baseUrl).port}`;
+		const roomA = generateRoomId();
+		const roomB = generateRoomId();
+		const hostA = openRelaySocket(baseUrl, roomA, "host");
+		await awaitOpen(hostA);
+		const hostB = openRelaySocket(baseUrl, roomB, "host");
+		await awaitOpen(hostB);
+		expect(relay.roomCount()).toBe(2);
+
+		// A third NEW room is refused before the upgrade with 503.
+		const res = await fetch(`${httpBase}/r/${generateRoomId()}?role=host`);
+		expect(res.status).toBe(503);
+		expect(relay.roomCount()).toBe(2);
+
+		// The cap must not cut the host-resume path: an orphaned room is
+		// re-adopted even though the cap is already reached.
+		hostA.close();
+		await sleep(100);
+		const hostA2 = openRelaySocket(baseUrl, roomA, "host");
+		await awaitOpen(hostA2);
+		expect(relay.roomCount()).toBe(2);
+
+		relay.closeRoom(roomA);
+		relay.closeRoom(roomB);
 	});
 
 	test("guest join sends a peer-joined control to the host", async () => {

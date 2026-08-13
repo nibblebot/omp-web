@@ -10,9 +10,6 @@
  */
 
 import type { PetPose, SpriteArt } from "./sprite";
-import { drawSprite } from "./sprite";
-
-export type DeepSeekPose = PetPose;
 
 const PALETTE: Record<string, string> = {
 	o: "#141a2e", // outline (deep navy)
@@ -27,7 +24,7 @@ const PALETTE: Record<string, string> = {
 	p: "#ff9eb5", // blush (pink)
 };
 
-const POSES: Record<DeepSeekPose, string[]> = {
+const POSES: Record<PetPose, string[]> = {
 	idle: [
 		"................................",
 		"................................",
@@ -239,7 +236,3 @@ export const DEEPSEEK_SPRITE: SpriteArt = {
 	poses: POSES,
 };
 
-/** Paints `pose` onto a 32x32 canvas context (clears first). */
-export function drawDeepseek(ctx: CanvasRenderingContext2D, pose: DeepSeekPose): void {
-	drawSprite(ctx, DEEPSEEK_SPRITE, pose);
-}

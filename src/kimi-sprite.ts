@@ -7,7 +7,7 @@
  * Poses: idle/blink for at rest, work1/work2/work-blink cycled while the agent
  * is streaming, happy briefly when a stream finishes.
  */
-import { drawSprite, type PetPose, type SpriteArt } from "./sprite";
+import type { PetPose, SpriteArt } from "./sprite";
 
 const PALETTE: Record<string, string> = {
 	o: "#2a2333", // outline (dark plum)
@@ -239,7 +239,3 @@ export const KIMI_SPRITE: SpriteArt = {
 	poses: POSES,
 };
 
-/** Paints `pose` of kimi onto a 32x32 canvas context (clears first). */
-export function drawKimi(ctx: CanvasRenderingContext2D, pose: PetPose): void {
-	drawSprite(ctx, KIMI_SPRITE, pose);
-}

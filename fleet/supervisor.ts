@@ -25,9 +25,9 @@
 
 import { basename } from "node:path";
 import type { Subprocess } from "bun";
-import type { StdoutContractLine } from "../src/protocol";
+import type { StdoutContractLine } from "../shared/protocol";
 import type { FleetConfig, SpawnTemplate } from "./config";
-import { fillTemplate, parseContractLine, resolveEndpoint } from "./spawn-parse";
+import { fillTemplate, isValidEndpointUrl, parseContractLine, resolveEndpoint, shellQuote } from "./spawn-parse";
 import type { DaemonConnector } from "./connector";
 import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
 import type { GitRunner } from "./discovery";
@@ -46,6 +46,8 @@ interface ChildState {
 	stopping: boolean;
 	/** respawn() already launched a replacement; the old child's exit must not restart. */
 	manualRespawn: boolean;
+	/** In-flight respawn() promise; concurrent respawn() calls coalesce onto it (one launch). */
+	respawnInFlight: Promise<void> | null;
 	exitHandled: boolean;
 	stderrRing: string;
 }
@@ -136,6 +138,9 @@ export class SpawnSupervisor {
 	#config: FleetConfig;
 	#restartMax: number;
 	#stderrRingBytes: number;
+	#endpointTimeoutMs: number;
+	#backoffMinMs: number;
+	#backoffMaxMs: number;
 	#children = new Map<string, ChildState>();
 	/** Git-state poll timer (startGitStatePolling); cleared by close(). */
 	#gitStateTimer: ReturnType<typeof setInterval> | null = null;
@@ -146,13 +151,22 @@ export class SpawnSupervisor {
 		registry: Registry,
 		connector: DaemonConnector,
 		config: FleetConfig,
-		opts?: { restartMax?: number; stderrRingBytes?: number },
+		opts?: {
+			restartMax?: number;
+			stderrRingBytes?: number;
+			endpointTimeoutMs?: number;
+			backoffMinMs?: number;
+			backoffMaxMs?: number;
+		},
 	) {
 		this.#registry = registry;
 		this.#connector = connector;
 		this.#config = config;
 		this.#restartMax = opts?.restartMax ?? DEFAULT_RESTART_MAX;
 		this.#stderrRingBytes = opts?.stderrRingBytes ?? DEFAULT_STDERR_RING_BYTES;
+		this.#endpointTimeoutMs = opts?.endpointTimeoutMs ?? ENDPOINT_TIMEOUT_MS;
+		this.#backoffMinMs = opts?.backoffMinMs ?? RESTART_BACKOFF_MIN_MS;
+		this.#backoffMaxMs = opts?.backoffMaxMs ?? RESTART_BACKOFF_MAX_MS;
 	}
 
 	/**
@@ -190,7 +204,13 @@ export class SpawnSupervisor {
 		return entry;
 	}
 
-	/** R3 rule: respawn = --resume lastSessionFile when known. Fresh token per attempt. */
+	/**
+	 * R3 rule: respawn = --resume lastSessionFile when known. Fresh token per
+	 * attempt. Serialized per daemon: while one respawn is in flight, a
+	 * concurrent call coalesces onto the SAME in-flight promise — the child
+	 * is never launched twice and an orphan is never left behind. A failed
+	 * respawn drops the slot so a later call can retry.
+	 */
 	async respawn(entry: RegistryEntry): Promise<void> {
 		const current = this.#registry.get(entry.daemonId) ?? entry;
 		if (current.mode !== "spawned") {
@@ -199,6 +219,20 @@ export class SpawnSupervisor {
 		const template = this.#config.templates[current.template ?? ""];
 		if (!template) throw new Error(`unknown spawn template: ${current.template}`);
 		const state = this.#ensure(current.daemonId);
+		if (state.respawnInFlight) return state.respawnInFlight;
+		const inFlight = this.#respawnNow(state, current, template);
+		state.respawnInFlight = inFlight;
+		try {
+			await inFlight;
+		} finally {
+			// Only clear when this call still owns the slot (a newer respawn
+			// may have started after we settled).
+			if (state.respawnInFlight === inFlight) state.respawnInFlight = null;
+		}
+	}
+
+	/** The respawn body, run under respawn()'s per-daemon coalescing guard. */
+	async #respawnNow(state: ChildState, current: RegistryEntry, template: SpawnTemplate): Promise<void> {
 		if (state.restartTimer) {
 			clearTimeout(state.restartTimer);
 			state.restartTimer = null;
@@ -243,9 +277,37 @@ export class SpawnSupervisor {
 		}
 	}
 
+	/**
+	 * Removal-time cleanup (#24): stop() (cancel restarts, drop the socket,
+	 * kill the child, status asleep) then drop the per-daemon ChildState —
+	 * the stderr ring (up to 64KB), restart budget, and timers — so a
+	 * removed daemon leaks nothing. stop() alone keeps the state (the daemon
+	 * stays respawnable); prune() is for registry removal only. Idempotent
+	 * for daemons the supervisor never tracked.
+	 */
+	async prune(daemonId: string): Promise<void> {
+		await this.stop(daemonId);
+		this.#children.delete(daemonId);
+	}
+
 	/** Last 64KB (or configured ring) of the child's stderr, as text. */
 	stderrTail(daemonId: string): string {
 		return this.#children.get(daemonId)?.stderrRing ?? "";
+	}
+
+	/**
+	 * Connector status hook (wired by server.ts): when a spawned child
+	 * reaches the connector's "ready" transition it has demonstrably
+	 * stabilized — reset its consecutive-crash budget so `restartMax` bounds
+	 * crash LOOPS, not lifetime restarts. A daemon that crashes, recovers to
+	 * ready, and later crashes again never exhausts the budget; one that
+	 * crash-loops without ever reaching ready still errors after
+	 * `restartMax` consecutive exits.
+	 */
+	onConnectorStatus(entry: RegistryEntry): void {
+		if (entry.status !== "ready") return;
+		const state = this.#children.get(entry.daemonId);
+		if (state) state.restarts = 0;
 	}
 
 	/**
@@ -351,6 +413,7 @@ export class SpawnSupervisor {
 				restartTimer: null,
 				stopping: false,
 				manualRespawn: false,
+				respawnInFlight: null,
 				exitHandled: false,
 				stderrRing: "",
 			};
@@ -368,12 +431,16 @@ export class SpawnSupervisor {
 		state.resolved = false;
 		state.lines = [];
 		const token = mintToken();
-		const labelsArg = (entry.labels ?? []).map((label) => `--label ${label}`).join(" ");
-		const resumeArg = opts.resume && entry.lastSessionFile ? `--resume ${entry.lastSessionFile}` : "";
+		// Every value interpolated into the template command is
+		// attacker-controlled at some call site (POST /ctl/spawn name/labels)
+		// and lands in `sh -c` — shell-quote each one so it can never break
+		// out into command execution (CVE-style injection defense).
+		const labelsArg = (entry.labels ?? []).map((label) => `--label ${shellQuote(label)}`).join(" ");
+		const resumeArg = opts.resume && entry.lastSessionFile ? `--resume ${shellQuote(entry.lastSessionFile)}` : "";
 		const command = fillTemplate(template.command, {
-			cwd: entry.cwd,
-			token,
-			name: entry.name,
+			cwd: shellQuote(entry.cwd),
+			token: shellQuote(token),
+			name: shellQuote(entry.name),
 			labels: labelsArg,
 			resume: resumeArg,
 		});
@@ -388,13 +455,14 @@ export class SpawnSupervisor {
 		state.child = child;
 		// The fresh token is visible to the roster immediately (R14 rotation).
 		this.#registry.update(daemonId, { token, pid: child.pid });
-		// Endpoint resolution timeout: no listening line within 30s → error + kill.
+		// Endpoint resolution timeout: no listening line within the window →
+		// error + kill. (Injectable so tests can pin the no-resolution path.)
 		state.endpointTimer = setTimeout(() => {
 			if (state.resolved) return;
 			state.exitHandled = true; // we own the aftermath — no restart
-			this.#registry.setStatus(daemonId, "error", "endpoint timeout: no OMP_SESSION| listening line within 30s");
+			this.#registry.setStatus(daemonId, "error", `endpoint timeout: no OMP_SESSION| listening line within ${Math.round(this.#endpointTimeoutMs / 1000)}s`);
 			child.kill();
-		}, ENDPOINT_TIMEOUT_MS);
+		}, this.#endpointTimeoutMs);
 		void readLines(child.stdout, (line) => {
 			if (state.resolved) return;
 			const parsed = parseContractLine(line);
@@ -406,6 +474,17 @@ export class SpawnSupervisor {
 			if (state.endpointTimer) {
 				clearTimeout(state.endpointTimer);
 				state.endpointTimer = null;
+			}
+			// #23: a malformed resolved endpoint (garbage wrapper/advertise
+			// url, or a bad template host) would throw inside the connector's
+			// new URL() and kill this stdout pump — a sticky wedge in
+			// "connecting" with zero diagnostics. Validate BEFORE registering
+			// and dialing; fail loudly with the bad value and kill the child.
+			if (!isValidEndpointUrl(resolved.url)) {
+				state.exitHandled = true; // we own the aftermath — no restart
+				this.#registry.setStatus(daemonId, "error", `invalid endpoint from child: ${resolved.url}`);
+				child.kill();
+				return;
 			}
 			this.#registry.update(daemonId, { endpoint: resolved.url });
 			this.#connector.connect(daemonId);
@@ -455,7 +534,7 @@ export class SpawnSupervisor {
 			return;
 		}
 		const attempt = state.restarts++;
-		const delay = backoffDelay(attempt, RESTART_BACKOFF_MIN_MS, RESTART_BACKOFF_MAX_MS);
+		const delay = backoffDelay(attempt, this.#backoffMinMs, this.#backoffMaxMs);
 		state.restartTimer = setTimeout(() => {
 			state.restartTimer = null;
 			if (state.stopping) return;

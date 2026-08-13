@@ -2,7 +2,7 @@ import { For, Show, type Component } from "solid-js";
 import { buildDiffRows } from "../../diff";
 import { type ToolItem } from "../../state";
 import { GenericToolCard } from "./GenericToolCard";
-import { ToolShell, toolExpanded } from "./ToolShell";
+import { CollapsiblePre, ToolShell, WRITE_PREVIEW_LINES } from "./ToolShell";
 
 interface WriteArgs {
 	path: string;
@@ -53,31 +53,16 @@ const DiffView: Component<{ oldText: string; newText: string }> = props => (
 	</div>
 );
 
-const WriteView: Component<{ content: string; expanded: boolean }> = props => {
-	const lines = () => props.content.split("\n");
-	const shown = () => (props.expanded ? lines() : lines().slice(0, 200));
-	return (
-		<div class="write-view">
-			<For each={shown()}>
-				{(line, i) => (
-					<div class="write-line">
-						<span class="line-no">{i() + 1}</span>
-						{line}
-					</div>
-				)}
-			</For>
-			<Show when={!props.expanded && lines().length > 200}>
-				<div class="tool-collapsed-note">{lines().length - 200} more lines (Ctrl+O to expand)</div>
-			</Show>
-		</div>
-	);
-};
+const WriteView: Component<{ item: ToolItem; content: string }> = props => (
+	<div class="write-view">
+		<CollapsiblePre item={props.item} output={props.content} numbered maxLines={WRITE_PREVIEW_LINES} />
+	</div>
+);
 
 /** edit/write/apply_patch: inline diff for replacements, numbered content for writes. */
 export const DiffTool: Component<{ item: ToolItem }> = props => {
 	const edit = () => parseEdit(props.item.args);
 	const write = () => (props.item.name === "write" ? parseWrite(props.item.args) : null);
-	const expanded = () => toolExpanded(props.item);
 
 	return (
 		<Show when={edit() || write()} fallback={<GenericToolCard item={props.item} />}>
@@ -87,7 +72,7 @@ export const DiffTool: Component<{ item: ToolItem }> = props => {
 						<For each={e().edits}>{(ed: { oldText: string; newText: string }) => <DiffView oldText={ed.oldText} newText={ed.newText} />}</For>
 					)}
 				</Show>
-				<Show when={write()}>{w => <WriteView content={w().content} expanded={expanded()} />}</Show>
+				<Show when={write()}>{w => <WriteView item={props.item} content={w().content} />}</Show>
 			</ToolShell>
 		</Show>
 	);

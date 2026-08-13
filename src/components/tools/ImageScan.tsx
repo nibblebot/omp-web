@@ -1,6 +1,6 @@
 import { For, Show, createSignal, onCleanup, onMount, type Component } from "solid-js";
 import { Portal } from "solid-js/web";
-import type { ImageArg } from "../../protocol";
+import type { ImageArg } from "../../../shared/protocol";
 import { imageDataUrl } from "../../images";
 
 /** Full-size overlay: Esc or backdrop click closes. */

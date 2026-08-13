@@ -13,8 +13,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Server } from "bun";
-import { OMP_PROTO, SSE_EVENT_NAME } from "../src/protocol";
-import { encodeSseEvent } from "../src/sse";
+import { OMP_PROTO, SSE_EVENT_NAME } from "../shared/protocol";
+import { encodeSseEvent } from "../shared/sse";
 import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
 import type { GitResult, GitRunner } from "./discovery";
@@ -60,7 +60,7 @@ interface FakeServer {
 }
 
 /** Fake omp-session daemon: primes hello_ok (hello.cwd) → state → ready on every dial. */
-function startFake(hello: { cwd: string; sessionFile: string }): FakeServer {
+function startFake(hello: { cwd: string; sessionFile: string }, opts?: { closeAfterMs?: number }): FakeServer {
 	const encoder = new TextEncoder();
 	const fake: FakeServer = {
 		server: null as unknown as Server<undefined>,
@@ -121,6 +121,19 @@ function startFake(hello: { cwd: string; sessionFile: string }): FakeServer {
 						2,
 					);
 					write(controller, { type: "ready", readyAt: Date.now() }, 3);
+					// Simulate a daemon going dormant shortly after priming: the
+					// connector sees a clean EOF → "asleep", so a later relaunch
+					// dials fresh and produces a NEW ready transition.
+					if (opts?.closeAfterMs !== undefined) {
+						const closeTimer = setTimeout(() => {
+							try {
+								controller.close();
+							} catch {
+								// The stream was already closed/aborted (client drop).
+							}
+						}, opts.closeAfterMs);
+						req.signal.addEventListener("abort", () => clearTimeout(closeTimer));
+					}
 				},
 				cancel() {
 					recordClose();
@@ -344,6 +357,146 @@ describe("SpawnSupervisor", () => {
 		fake.stop();
 	});
 
+	test("spawn shell-quotes label/name values — a $(touch) payload stays inert", async () => {
+		const projectDir = tmpPath("omp-session-sup-quote-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const argsFile = join(projectDir, "args.txt");
+		const script = writeChildScript(projectDir, fake.port, argsFile);
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+
+		const pwn = join(projectDir, "pwned");
+		const entry = await supervisor.spawn({
+			cwd: projectDir,
+			labels: [`k=$(touch ${pwn})`, "q='quoted'", "sp ace"],
+		});
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		const line = readFileSync(argsFile, "utf8").split("\n")[0];
+		// The payloads arrived as literal argv text (sh stripped the outer
+		// quoting); none of the metacharacters was executed.
+		expect(line).toContain(`--label k=$(touch ${pwn})`);
+		expect(line).toContain(`--label q='quoted'`);
+		expect(line).toContain("--label sp ace");
+		expect(existsSync(pwn)).toBe(false);
+
+		await supervisor.close();
+		await connector.close();
+		fake.stop();
+	});
+
+	test("quoted cwd/name/labels with metacharacters round-trip as single argv entries", async () => {
+		const projectDir = tmpPath("omp-session-sup-roundtrip-");
+		// A REAL directory whose name contains spaces, quotes, $(), backticks,
+		// and a newline — the exact hostile value class the quoting must tame.
+		const weirdCwd = join(projectDir, "dir 'quoted' $(x) `y`\nnewline");
+		mkdirSync(weirdCwd, { recursive: true });
+		const fake = startFake({ cwd: weirdCwd, sessionFile: "/srv/proj/sess.jsonl" });
+		const argsFile = join(projectDir, "args.txt");
+		const script = join(projectDir, "child.sh");
+		writeFileSync(script, [
+			"#!/bin/sh",
+			'trap "exit 0" TERM INT',
+			`printf '%s\\0' "$@" > '${argsFile}'`,
+			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
+			"while :; do sleep 1; done",
+		].join("\n") + "\n");
+		const config: FleetConfig = {
+			roots: [],
+			templates: { test: { command: `sh ${script} --cwd {cwd} --token {token} --name {name} {labels} {resume}` } },
+			defaultTemplate: "test",
+		};
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, config, { restartMax: 2 });
+
+		const trickyName = "na'me $(nope) `nope` with spaces\nand a newline";
+		const pwn = join(projectDir, "pwned");
+		const entry = await supervisor.spawn({ cwd: weirdCwd, name: trickyName, labels: [`k=$(touch ${pwn})`] });
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+
+		// NUL-delimited "$@" dump (printf '%s\0' "$@"): each hostile value
+		// survived shell parsing as a single literal argument — even the
+		// embedded newline stays inside one argv entry.
+		const args = readFileSync(argsFile, "utf8").split("\0").slice(0, -1);
+		expect(args[0]).toBe("--cwd");
+		expect(args[1]).toBe(weirdCwd);
+		expect(args[2]).toBe("--token");
+		expect(args[3]).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(args[4]).toBe("--name");
+		expect(args[5]).toBe(trickyName);
+		expect(args[6]).toBe("--label");
+		expect(args[7]).toBe(`k=$(touch ${pwn})`);
+		expect(existsSync(pwn)).toBe(false);
+
+		await supervisor.close();
+		await connector.close();
+		fake.stop();
+	});
+
+	test("concurrent respawn() calls launch exactly one child — no orphan", async () => {
+		const projectDir = tmpPath("omp-session-sup-conc-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const argsFile = join(projectDir, "args.txt");
+		const pidsFile = join(projectDir, "pids.txt");
+		const script = join(projectDir, "child.sh");
+		writeFileSync(script, [
+			"#!/bin/sh",
+			'trap "exit 0" TERM INT',
+			`echo $$ >> '${pidsFile}'`,
+			`echo "$@" >> '${argsFile}'`,
+			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
+			"while :; do sleep 1; done",
+		].join("\n") + "\n");
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+
+		// Two overlapping respawns (no await between the calls): both must
+		// coalesce onto ONE launch — exactly one replacement child, and the
+		// original is terminated rather than orphaned.
+		await Promise.all([
+			supervisor.respawn(registry.get(entry.daemonId)!),
+			supervisor.respawn(registry.get(entry.daemonId)!),
+		]);
+		await waitFor(
+			() => {
+				const current = registry.get(entry.daemonId)!;
+				return fake.openCount >= 2 && current.status === "ready" ? "ready" : null;
+			},
+			8000,
+			"respawned ready",
+		);
+
+		// One launch per spawn/respawn, never a double-launch: the initial
+		// child wrote line/pid 1, the respawned child line/pid 2.
+		const lines = readFileSync(argsFile, "utf8").trim().split("\n");
+		expect(lines).toHaveLength(2);
+		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl");
+		const pids = readFileSync(pidsFile, "utf8").trim().split("\n").map((l) => Number.parseInt(l, 10));
+		expect(pids).toHaveLength(2);
+
+		// stop() kills the tracked (only) child; the pre-respawn child was
+		// terminated by the respawn — no orphan survives.
+		await supervisor.stop(entry.daemonId);
+		for (const pid of pids) {
+			let alive = true;
+			try {
+				process.kill(pid, 0);
+			} catch {
+				alive = false;
+			}
+			expect(alive).toBe(false);
+		}
+
+		await supervisor.close();
+		await connector.close();
+		fake.stop();
+	});
+
 	test("restart-on-failure: bounded restarts with a fresh token per attempt, then error", async () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
@@ -366,6 +519,206 @@ describe("SpawnSupervisor", () => {
 		await supervisor.close();
 		await connector.close();
 		fake.stop();
+	});
+
+	test("#22 rapid crashes without ever reaching ready exhaust the budget and error (window, not lifetime)", async () => {
+		const projectDir = tmpPath("omp-session-sup-budgetfail-");
+		const argsFile = join(projectDir, "args.txt");
+		const script = writeChildScript(projectDir, 1, argsFile, { fail: true });
+		const registry = await loadedRegistry();
+		// The connector's onStatus is wired to the supervisor exactly as
+		// server.ts wires it; a crash loop never reaches ready, so no reset.
+		let supervisor: SpawnSupervisor;
+		const connector = new DaemonConnector(
+			registry,
+			{ onStatus: (entry) => supervisor.onConnectorStatus(entry) },
+			{ backoffMinMs: 10, backoffMaxMs: 50 },
+		);
+		supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 5,
+			backoffMinMs: 20,
+			backoffMaxMs: 50,
+		});
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null), 10_000, "error status");
+		const updated = registry.get(entry.daemonId)!;
+		expect(updated.error).toContain("exited");
+		// Initial launch + 5 restarts; the 6th exit exceeds the consecutive cap.
+		expect(readFileSync(argsFile, "utf8").trim().split("\n")).toHaveLength(6);
+
+		await supervisor.close();
+		await connector.close();
+	}, 20_000);
+
+	test("#22 crash → ready → crash → ready never errors: the budget resets on the connector ready transition", async () => {
+		const projectDir = tmpPath("omp-session-sup-budget-");
+		// The fake closes each /events stream shortly after priming (dormant),
+		// so every relaunch dials fresh and produces a NEW ready transition —
+		// exactly what a real daemon process (which dies with the child) does.
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" }, { closeAfterMs: 200 });
+		const argsFile = join(projectDir, "args.txt");
+		const counterFile = join(projectDir, "counter.txt");
+		const script = join(projectDir, "child.sh");
+		writeFileSync(script, [
+			"#!/bin/sh",
+			'trap "exit 0" TERM INT',
+			`n=$(cat '${counterFile}' 2>/dev/null || echo 0)`,
+			"n=$((n + 1))",
+			`echo "$n" > '${counterFile}'`,
+			`echo "$@" >> '${argsFile}'`,
+			// Odd launches crash before printing anything; even launches
+			// resolve an endpoint (reaching ready), then crash after a beat.
+			"if [ $((n % 2)) -eq 1 ]; then exit 1; fi",
+			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
+			"sleep 0.6",
+			"exit 1",
+		].join("\n") + "\n");
+		const registry = await loadedRegistry();
+		let supervisor: SpawnSupervisor;
+		const connector = new DaemonConnector(
+			registry,
+			{ onStatus: (entry) => supervisor.onConnectorStatus(entry) },
+			{ backoffMinMs: 10, backoffMaxMs: 50 },
+		);
+		supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 5,
+			backoffMinMs: 20,
+			backoffMaxMs: 50,
+		});
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		// Six launches: three crash-only + three that reach ready. With the
+		// old LIFETIME budget this would hit the 5-restart cap; the ready
+		// transitions reset it, so the daemon keeps restarting instead of
+		// erroring.
+		await waitFor(() => {
+			try {
+				return readFileSync(argsFile, "utf8").trim().split("\n").length >= 6 ? "six-launches" : null;
+			} catch {
+				return null; // the child may not have written the file yet
+			}
+		}, 15_000, "six child launches");
+		const current = registry.get(entry.daemonId)!;
+		expect(current.status).not.toBe("error");
+		expect(current.error).toBeUndefined();
+
+		await supervisor.close();
+		await connector.close();
+		fake.stop();
+	}, 20_000);
+
+	test("#23 a malformed template-host endpoint fails loudly with the bad value and kills the child (no wedge)", async () => {
+		const projectDir = tmpPath("omp-session-sup-badhost-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const argsFile = join(projectDir, "args.txt");
+		const pidFile = join(projectDir, "pid.txt");
+		const script = writeChildScript(projectDir, fake.port, argsFile, { pidFile });
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		// A template host that can never form a valid ws:// URL: the resolved
+		// endpoint is rejected BEFORE the connector dials (the old behavior
+		// threw inside new URL() and wedged the stdout pump).
+		const config: FleetConfig = {
+			roots: [],
+			templates: { test: { command: `sh ${script} {token} {labels} {resume}`, host: "bad host" } },
+			defaultTemplate: "test",
+		};
+		const supervisor = new SpawnSupervisor(registry, connector, config, { restartMax: 2 });
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		const updated = await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null),
+			5000,
+			"error status",
+		);
+		expect(updated.error).toContain("invalid endpoint from child");
+		expect(updated.error).toContain("bad host");
+		// The child is dead — not left running behind a wedged pump — and the
+		// connector never touched it.
+		const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+		await waitFor(() => {
+			try {
+				process.kill(pid, 0);
+				return null;
+			} catch {
+				return "dead";
+			}
+		}, 2000, "child death");
+		expect(connector.isConnected(entry.daemonId)).toBe(false);
+		expect(registry.get(entry.daemonId)!.status).toBe("error");
+
+		await supervisor.close();
+		await connector.close();
+		fake.stop();
+	});
+
+	test("#23 a malformed endpoint line is dropped as noise; the valid listening line still resolves (no wedged pump)", async () => {
+		const projectDir = tmpPath("omp-session-sup-garbage-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const script = join(projectDir, "child.sh");
+		writeFileSync(script, [
+			"#!/bin/sh",
+			'trap "exit 0" TERM INT',
+			// The malformed wrapper endpoint line must not throw inside the
+			// supervisor's read loop: it is dropped at parse time and the
+			// following valid listening line resolves normally.
+			`printf 'OMP_SESSION|%s\\n' '{"event":"endpoint","url":"garbage"}'`,
+			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
+			"while :; do sleep 1; done",
+		].join("\n") + "\n");
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		const updated = registry.get(entry.daemonId)!;
+		expect(updated.endpoint).toBe(`ws://127.0.0.1:${fake.port}`);
+		expect(updated.status).toBe("ready");
+
+		await supervisor.close();
+		await connector.close();
+		fake.stop();
+	});
+
+	test("#23 a child that prints only malformed contract lines errors at the endpoint deadline and is killed", async () => {
+		const projectDir = tmpPath("omp-session-sup-onlygarbage-");
+		const argsFile = join(projectDir, "args.txt");
+		const pidFile = join(projectDir, "pid.txt");
+		const script = join(projectDir, "child.sh");
+		writeFileSync(script, [
+			"#!/bin/sh",
+			'trap "exit 0" TERM INT',
+			`echo $$ > '${pidFile}'`,
+			`echo "$@" >> '${argsFile}'`,
+			`printf 'OMP_SESSION|%s\\n' '{"event":"endpoint","url":"garbage"}'`,
+			"while :; do sleep 1; done",
+		].join("\n") + "\n");
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2, endpointTimeoutMs: 1000 });
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		const updated = await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null),
+			5000,
+			"error status",
+		);
+		expect(updated.error).toContain("endpoint timeout");
+		const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+		await waitFor(() => {
+			try {
+				process.kill(pid, 0);
+				return null;
+			} catch {
+				return "dead";
+			}
+		}, 2000, "child death");
+		expect(connector.isConnected(entry.daemonId)).toBe(false);
+
+		await supervisor.close();
+		await connector.close();
 	});
 
 	test("stop kills the child, drops the socket, and sets status asleep", async () => {
@@ -455,6 +808,31 @@ describe("SpawnSupervisor", () => {
 		expect(smallTail.endsWith("two\n")).toBe(true);
 
 		await supervisor2.close();
+		await connector.close();
+		fake.stop();
+	});
+
+	test("#24 prune() drops the per-daemon child state after stop (stderr ring, restart budget)", async () => {
+		const projectDir = tmpPath("omp-session-sup-prune-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const argsFile = join(projectDir, "args.txt");
+		const script = writeChildScript(projectDir, fake.port, argsFile, { stderrLines: ["prune-boom"] });
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script));
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		// The stderr ring is populated while the child lives.
+		expect(supervisor.stderrTail(entry.daemonId)).toContain("prune-boom");
+		// prune() = stop + drop the ChildState: the ring (up to 64KB per
+		// daemon) and restart budget must not outlive the removed daemon.
+		await supervisor.prune(entry.daemonId);
+		expect(registry.get(entry.daemonId)?.status).toBe("asleep");
+		expect(connector.isConnected(entry.daemonId)).toBe(false);
+		expect(supervisor.stderrTail(entry.daemonId)).toBe("");
+		// The child stays dead — no restart fires from the pruned state.
+		await sleep(100);
+		expect(supervisor.stderrTail(entry.daemonId)).toBe("");
 		await connector.close();
 		fake.stop();
 	});

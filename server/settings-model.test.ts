@@ -33,6 +33,16 @@ describe("coerceSettingValue", () => {
 		expect(coerceSettingValue("compaction.thresholdTokens", "default")).toBe(-1);
 	});
 
+	test("number settings reject non-finite values before persist", () => {
+		// Regression: Number("abc")/Number("NaN")/Number("Infinity") used to
+		// slip through, and JSON.stringify(NaN) → null corrupted settings.json.
+		for (const bad of ["abc", "NaN", "Infinity"]) {
+			expect(() => coerceSettingValue("compaction.thresholdPercent", bad)).toThrow(
+				"Invalid numeric value for compaction.thresholdPercent",
+			);
+		}
+	});
+
 	test("record settings parse JSON strings and pass objects through", () => {
 		expect(coerceSettingValue("providers.maxInFlightRequests", '{"openai": 4}')).toEqual({ openai: 4 });
 		expect(coerceSettingValue("providers.maxInFlightRequests", { openai: 2, anthropic: 1 })).toEqual({

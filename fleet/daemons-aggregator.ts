@@ -5,19 +5,17 @@
  * (full-replace, not union), and merges across daemons into the single
  * {type:"daemons"} frame browsers see.
  *
- * The client keys entries by `${projectDir}\u0000${name}` (ActiveDaemons);
- * daemon names are unique per projectDir and two omp-sessions can share a
- * projectDir. When several daemons report the same key, the entry from the
- * daemon whose cwd equals the entry's projectDir wins (that omp-session's
- * broker poll owns the directory), otherwise the latest arrival.
+ * The client keys entries by daemonsKey (shared/protocol.ts:
+ * `${projectDir}\u0000${name}`); daemon names are unique per projectDir and
+ * two omp-sessions can share a projectDir. When several daemons report the
+ * same key, the entry from the daemon whose cwd equals the entry's projectDir
+ * wins (that omp-session's broker poll owns the directory), otherwise the
+ * latest arrival.
  */
 
-import type { DaemonInfo } from "../src/protocol";
+import { daemonsKey, type DaemonInfo } from "../shared/protocol";
 
-/** The browser's merge key (src/state.ts: `d.projectDir + "\u0000" + d.name`). */
-export function daemonsKey(info: DaemonInfo): string {
-	return `${info.projectDir}\u0000${info.name}`;
-}
+export { daemonsKey };
 
 /** One daemon's cached roster plus arrival metadata (cwd = registry cwd). */
 export interface DaemonRosterSource {

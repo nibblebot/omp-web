@@ -3,9 +3,9 @@ import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS } from "./protocol";
-import type { ClientCommand, CollabWireStatus, DaemonEntry, DaemonInfo, ImageArg, ModelInfo, AvailableSlashCommand, ProjectEntry, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "./protocol";
-import { SSE_PING_EVENT } from "./sse";
+import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "../shared/protocol";
+import type { ClientCommand, DaemonEntry, DaemonInfo, ImageArg, ModelInfo, AvailableSlashCommand, ProjectEntry, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "../shared/protocol";
+import { SSE_PING_EVENT } from "../shared/sse";
 import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
 
@@ -53,6 +53,8 @@ export interface SubagentInfo {
 	task?: string;
 	status: string;
 	lastUpdate: number;
+	/** toolCallId of the task call that spawned this subagent (SDK payload field). */
+	parentToolCallId?: string;
 }
 
 const ACTIVE_SUBAGENT_STATUSES = new Set(["pending", "started", "running"]);
@@ -151,9 +153,6 @@ export const [state, setState] = createStore({
 	connected: false,
 	modal: null as ModalName | null,
 	toolsExpanded: false,
-	// Collab host status for the ATTACHED session (collab_status frames; the
-	// collab room is per-session UI state, reset when attaching elsewhere).
-	collabStatus: { state: "off" } as CollabWireStatus,
 	// Daemon broker roster (hub/launch long-running processes); project-scoped,
 	// so resetSessionView must NOT clear it.
 	daemons: new Map<string, DaemonInfo>(),
@@ -162,8 +161,8 @@ export const [state, setState] = createStore({
 	settingsLoading: false,
 	// Attach mode: "single" (standalone omp-session — no sidebar) or "roster"
 	// (fleet edge — the fleet roster sidebar). "roster" is set by the roster
-	// frame and sticky across reconnects; the attached frame always carries
-	// "single" from omp-session and must not clobber it (Phase 6 de-mux).
+	// frame and sticky across reconnects; the attached frame carries no mode
+	// field and must not clobber it (Phase 6 de-mux).
 	sessionMode: "single" as "single" | "roster",
 	// Fleet edge roster (roster frame). Patched in place by
 	// daemon_status frames; NOT cleared by resetSessionView (it is
@@ -382,7 +381,12 @@ export function resolveBashItem(id: number, result: BashResultLike | { error: st
 			if (item?.kind !== "bash") return;
 			item.status = "done";
 			if ("error" in result) {
-				item.output = result.error;
+				// Preserve streamed output: a failure mid-stream (timeout,
+				// session switch, HTTP rejection) appends an error marker
+				// instead of clobbering the buffer.
+				const marker = `[error] ${result.error}`;
+				const base = item.output.replace(/\n+$/, "");
+				item.output = capTail(base ? `${base}\n${marker}` : marker, 8000);
 				item.exitCode = null;
 			} else {
 				item.output = capTail(result.output, 8000);
@@ -675,8 +679,33 @@ export function applyEvent(e: AgentSessionEvent): void {
 	}
 }
 
+/**
+ * History chunks accumulate here while a chunked history series is in flight
+ * (a >4 MiB transcript primes as byte-bounded `history` frames, the last
+ * tagged `final: true`). A frame without `final` is a complete transcript on
+ * its own and flushes immediately; the accumulator resets on every `attached`
+ * (each attach starts a fresh priming series).
+ */
+let pendingHistory: AgentMessage[] | null = null;
+
+/**
+ * Frame seqs already applied on THIS connection's prime window. A delta that
+ * is live-delivered while the paced prime is in flight (the consumer attaches
+ * before priming completes) is re-sent verbatim by the ring replay, so the
+ * second copy must be dropped (finding #2 — without the guard, a resume or a
+ * fresh attach during activity double-applies every delta that arrived after
+ * the final history chunk). Cleared on every attach and every loadHistory:
+ * a frame wiped by the rebuild is legitimately re-applied by the replay, and
+ * seqs restart per connection, so only the overlap within one prime is tracked.
+ */
+const seenFrameSeqs = new Set<number>();
+
 export function loadHistory(messages: AgentMessage[]): void {
 	pendingDeltas.clear();
+	// The rebuild wipes items pushed by any live-delivered delta since the
+	// snapshot; the ring replay re-delivers those frames, so forget what was
+	// seen before the rebuild (see seenFrameSeqs).
+	seenFrameSeqs.clear();
 	// Phase 5: reset id sequence so newly-switched sessions don't collide with
 	// leftover ids from the prior transcript.
 	nextId = 1;
@@ -835,8 +864,11 @@ function teardownStream(source: EventSource): void {
 	pendingFiles = null;
 	pendingProjects?.([]);
 	pendingProjects = null;
-	pendingAttach?.reject(new Error("Disconnected"));
-	pendingAttach = null;
+	if (pendingAttach) {
+		clearTimeout(pendingAttach.timer);
+		pendingAttach.reject(new Error("Disconnected"));
+		pendingAttach = null;
+	}
 	rejectPendingDaemons(new Error("Disconnected"));
 }
 
@@ -1077,13 +1109,15 @@ export function abortSubagent(agentId: string): Promise<unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Fleet-edge attach. The edge answers `attach` with a unicast
-// `attached` frame (latest-wins, like listSessions); the sessionId is the
-// daemonId, and the daemon's own priming (history/state/available_commands)
-// follows the proxied frame. A bare omp-session never receives attach (its
-// sockets are attached from upgrade).
+// Fleet-edge attach. The edge answers `attach` with an id-keyed unicast
+// `attach_result` frame (finding #28): the sessionId is the daemonId, and
+// the daemon's own priming (history/state/available_commands) follows the
+// proxied attached frame. A bare omp-session never receives attach (its
+// sockets are attached from upgrade). An older edge that ignores the attach
+// id never sends the keyed frame — the DAEMON_TIMEOUT_MS backstop settles
+// the waiter then (#31-style pending map).
 // ---------------------------------------------------------------------------
-let pendingAttach: { resolve: (sessionId: string) => void; reject: (err: Error) => void } | null = null;
+let pendingAttach: { id: string; resolve: (sessionId: string) => void; reject: (err: Error) => void; timer: number } | null = null;
 
 function requestAttach(cmd: ClientCommand): Promise<string> {
 	const { promise, resolve, reject } = Promise.withResolvers<string>();
@@ -1092,10 +1126,26 @@ function requestAttach(cmd: ClientCommand): Promise<string> {
 		return promise;
 	}
 	// Latest-wins: a superseded attach resolves to whatever session is current.
-	pendingAttach?.resolve(state.currentSessionId);
-	pendingAttach = { resolve, reject };
+	if (pendingAttach) {
+		clearTimeout(pendingAttach.timer);
+		pendingAttach.resolve(state.currentSessionId);
+	}
+	const id = cmd.id;
+	const timer =
+		DAEMON_TIMEOUT_MS > 0
+			? window.setTimeout(() => {
+					if (pendingAttach?.id === id) {
+						pendingAttach = null;
+						reject(new Error("attach timed out"));
+					}
+				}, DAEMON_TIMEOUT_MS)
+			: 0;
+	pendingAttach = { id, resolve, reject, timer };
 	postCommand(cmd).catch(err => {
-		if (pendingAttach?.reject === reject) pendingAttach = null;
+		if (pendingAttach?.id === id) {
+			clearTimeout(pendingAttach.timer);
+			pendingAttach = null;
+		}
 		reject(err instanceof Error ? err : new Error(String(err)));
 	});
 	return promise;
@@ -1104,20 +1154,6 @@ function requestAttach(cmd: ClientCommand): Promise<string> {
 /** Attach this tab to a daemon in the roster; resolves with its handle. */
 export function attachSession(sessionId: string): Promise<string> {
 	return requestAttach({ type: "attach", id: crypto.randomUUID(), sessionId });
-}
-
-/** Start the collab room for the ATTACHED session; fire-and-forget, the
- *  resulting state arrives via session-scoped collab_status broadcasts. */
-export function startCollab(): void {
-	if (!connected) return;
-	void postCommand({ type: "collab_start", id: crypto.randomUUID() } satisfies ClientCommand).catch(() => {});
-}
-
-/** Stop the collab room for the ATTACHED session; fire-and-forget, the
- *  resulting state arrives via session-scoped collab_status broadcasts. */
-export function stopCollab(): void {
-	if (!connected) return;
-	void postCommand({ type: "collab_stop", id: crypto.randomUUID() } satisfies ClientCommand).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1271,8 +1307,6 @@ function resetSessionView(): void {
 		loginCodeRequest: null,
 		uiRequest: null,
 		btw: null,
-		// Collab room is per-session UI state; a fresh session starts with no room.
-		collabStatus: { state: "off" },
 	});
 }
 
@@ -1306,13 +1340,32 @@ export function connect(): void {
 		if (frame.type === "attached") {
 			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
 			setState("currentSessionId", frame.sessionId);
-			// Phase 6: omp-session always sends mode "single" — there is no mux to
-			// switch to. In roster mode the attached frame is PROXIED from the
-			// daemon and must not clobber the roster sidebar; the roster frame
-			// owns sessionMode there.
+			// Every attach re-primes history from scratch: drop any in-flight
+			// chunked-series accumulation from the previous attach/session.
+			pendingHistory = null;
+			// A fresh priming series starts; the replay-dedup window resets
+			// (seqs restart per connection, see seenFrameSeqs).
+			seenFrameSeqs.clear();
+			// Phase 6: there is no mux to switch to. In roster mode the attached
+			// frame is PROXIED from the daemon and must not clobber the roster
+			// sidebar; the roster frame owns sessionMode there.
 			if (state.sessionMode !== "roster") setState("sessionMode", "single");
-			pendingAttach?.resolve(frame.sessionId);
-			pendingAttach = null;
+			// Finding #28: the attach waiter settles from the edge's id-keyed
+			// attach_result, never from this PROXIED frame — the priming rides
+			// the daemon pipe, which may be mid-redial when the attach lands.
+			if (switched) {
+				// In-flight calls belonged to the previous session; their results
+				// are stale now and would be filtered out below. Clean up BEFORE
+				// the getSubagents pull below, or rejectPendingCalls would kill the
+				// fresh call too (and resetSessionView wipes its populated result).
+				rejectPendingCalls(new Error("session switched"));
+				resetSessionView();
+				// Phase 3 daemon switch: drop readiness too. The edge only pipes
+				// daemons that passed waitReady, so the proxied priming re-delivers
+				// `ready` immediately; until then the composer stays gated and the
+				// roster hint shows the session's status.
+				setState("readyAt", undefined);
+			}
 			// Subagent mirror is per-session; pull on EVERY attach (first attach,
 			// switch, roster re-attach after reconnect) — calls are answered only
 			// once attached, so this is the earliest safe point.
@@ -1323,28 +1376,41 @@ export function connect(): void {
 					setState("subagents", next);
 				})
 				.catch(() => {});
-			if (switched) {
-				// In-flight calls belonged to the previous session; their results
-				// are stale now and would be filtered out below.
-				rejectPendingCalls(new Error("session switched"));
-				resetSessionView();
-				// Phase 3 daemon switch: drop readiness too. The edge only pipes
-				// daemons that passed waitReady, so the proxied priming re-delivers
-				// `ready` immediately; until then the composer stays gated and the
-				// roster hint shows the session's status.
-				setState("readyAt", undefined);
-			}
 			return;
 		}
 		// Stale-frame guard: session-scoped frames for a handle this tab no
 		// longer views (in flight during a switch) are dropped. Frames WITHOUT
 		// a sessionId (standalone omp-session: one live session, connect = attached)
-		// always pass — there is nothing to mismatch.
-		if ("sessionId" in frame && frame.sessionId !== state.currentSessionId) return;
+		// always pass — there is nothing to mismatch. attach_result is a unicast
+		// answer whose sessionId is the ATTACHED daemonId (finding #28) and must
+		// pass too — id-matching against pendingAttach handles staleness.
+		if (frame.type !== "attach_result" && "sessionId" in frame && frame.sessionId !== state.currentSessionId) return;
+		// Replay-dedup guard (finding #2): a delta live-delivered during the
+		// paced prime is re-sent verbatim by the ring replay. Its seq was seen
+		// on this connection already, so the second copy is the replay — drop
+		// it (see seenFrameSeqs; native EventSource exposes the SSE id as
+		// MessageEvent.lastEventId, absent for ping/undecorated frames).
+		const frameSeq = Number((ev as MessageEvent).lastEventId);
+		if (Number.isFinite(frameSeq) && frameSeq > 0 && seenFrameSeqs.has(frameSeq)) return;
 		switch (frame.type) {
-			case "history":
-				loadHistory(frame.messages);
+			case "history": {
+				// A transcript over the SSE backpressure cap primes as
+				// sequential frames (final: false … final: true); a frame
+				// WITHOUT `final` (the original single-frame shape) is complete
+				// on its own. Reassemble before loadHistory — it rebuilds items
+				// from the whole transcript, so a partial load would lose data.
+				if (frame.final === undefined) {
+					pendingHistory = null;
+					loadHistory(frame.messages);
+				} else if (frame.final) {
+					const all = pendingHistory === null ? frame.messages : pendingHistory.concat(frame.messages);
+					pendingHistory = null;
+					loadHistory(all);
+				} else {
+					pendingHistory = pendingHistory === null ? frame.messages.slice() : pendingHistory.concat(frame.messages);
+				}
 				break;
+			}
 			case "state":
 				applyState(frame.state, frame.stats);
 				break;
@@ -1380,6 +1446,18 @@ export function connect(): void {
 				else pending.reject(new Error(frame.error ?? "call failed"));
 				break;
 			}
+			case "attach_result": {
+				// Finding #28: the edge answers attach with this id-keyed
+				// unicast; unrelated global error frames never settle the
+				// waiter. Unknown id = superseded/timed out: ignore.
+				if (!pendingAttach || pendingAttach.id !== frame.id) break;
+				clearTimeout(pendingAttach.timer);
+				const pending = pendingAttach;
+				pendingAttach = null;
+				if (frame.ok && frame.sessionId !== undefined) pending.resolve(frame.sessionId);
+				else pending.reject(new Error(frame.error ?? "attach failed"));
+				break;
+			}
 			case "available_commands":
 				setState("availableCommands", frame.commands);
 				break;
@@ -1388,14 +1466,14 @@ export function connect(): void {
 				pendingSessions = null;
 				break;
 			case "daemons":
-				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [d.projectDir + "\u0000" + d.name, d])));
+				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [daemonsKey(d), d])));
 				break;
 			case "roster":
 				// The fleet edge sent its daemon roster — this tab is in
-				// roster mode (sidebar swaps to the session list). The edge never
-				// sends attached.mode "roster"; this frame is the mode signal,
-				// and it must not be undone by the proxied attached frames
-				// (handled above).
+				// roster mode (sidebar swaps to the session list). The attached
+				// frame carries no mode; this frame is the mode signal, and it
+				// must not be undone by the proxied attached frames (handled
+				// above).
 				setState("daemonRoster", frame.daemons);
 				setState("sessionMode", "roster");
 				break;
@@ -1435,12 +1513,6 @@ export function connect(): void {
 				else pending.reject(new Error(frame.error ?? "daemon control failed"));
 				break;
 			}
-			case "collab_status":
-				// Session-scoped: the stale-frame guard above already drops it
-				// for any session we're not attached to (collab_start/collab_stop
-				// act on the attached session).
-				setState("collabStatus", frame.status);
-				break;
 			case "files":
 				pendingFiles?.(frame.files);
 				pendingFiles = null;
@@ -1451,21 +1523,30 @@ export function connect(): void {
 				setState("subagents", prev => {
 					const next = new Map(prev);
 					const existing = next.get(p.id as string);
+					// Finding #30: progress frames can arrive BEFORE the lifecycle
+					// frame — the progress handler created a `progress-${index}`
+					// placeholder. Migrate it into the real-id entry so the strip
+					// never shows two rows for one subagent, and keep the data the
+					// placeholder accumulated (task, and status when the lifecycle
+					// frame omits it) that this frame doesn't carry.
+					const placeholder = p.index !== undefined ? next.get(`progress-${p.index}`) : undefined;
+					if (placeholder) next.delete(`progress-${p.index}`);
 					next.set(p.id as string, {
 						id: p.id as string,
-						index: p.index ?? existing?.index ?? -1,
-						agent: p.agent ?? existing?.agent ?? "agent",
+						index: p.index ?? existing?.index ?? placeholder?.index ?? -1,
+						agent: p.agent ?? existing?.agent ?? placeholder?.agent ?? "agent",
 						description: p.description ?? existing?.description,
-						task: existing?.task,
-						status: p.status ?? "started",
+						task: existing?.task ?? placeholder?.task,
+						status: p.status ?? placeholder?.status ?? "started",
 						lastUpdate: Date.now(),
+						parentToolCallId: p.parentToolCallId ?? existing?.parentToolCallId ?? placeholder?.parentToolCallId,
 					});
 					return next;
 				});
 				break;
 			}
 			case "subagent_progress": {
-				const p = frame.payload as { index?: number; agent?: string; task?: string; progress?: { status?: string } } | undefined;
+				const p = frame.payload as { index?: number; agent?: string; task?: string; progress?: { status?: string }; parentToolCallId?: string } | undefined;
 				if (p?.index === undefined) break;
 				setState("subagents", prev => {
 					const next = new Map(prev);
@@ -1478,11 +1559,13 @@ export function connect(): void {
 							agent: p.agent ?? "agent",
 							status: "started",
 							lastUpdate: Date.now(),
+							parentToolCallId: p.parentToolCallId,
 						});
 					}
 					const entry = next.get(key);
 					if (entry) {
 						if (p.task !== undefined) entry.task = p.task;
+						if (p.parentToolCallId !== undefined) entry.parentToolCallId = p.parentToolCallId;
 						if (p.progress?.status) entry.status = p.progress.status;
 						entry.lastUpdate = Date.now();
 					}
@@ -1511,6 +1594,13 @@ export function connect(): void {
 				}
 				setState("uiRequest", { id: frame.id, method: frame.method, params: frame.params });
 				break;
+			case "ui_request_end":
+				// Finding #16: the dialog settled (answered/rejected). Dismiss
+				// it if it's the one shown — the ring replay delivers this
+				// AFTER a stale ui_request on resume, so an answered dialog
+				// never reappears as a hanging modal.
+				if (state.uiRequest?.id === frame.id) setState("uiRequest", null);
+				break;
 			case "settings_changed": {
 				// Session-scoped broadcast: a fresh model after any setSetting,
 				// so every attached tab's panel stays in sync.
@@ -1519,19 +1609,33 @@ export function connect(): void {
 				break;
 			}
 			case "error":
+				// Finding #28: an error frame is a GLOBAL uncorrelated broadcast
+				// (fire-and-forget spawn failures, a lost pipe for ANOTHER
+				// daemon, "not attached" answers) — it must never settle an
+				// in-flight attach. Attach failures arrive as id-keyed
+				// attach_result frames; global errors only display.
 				setState("error", frame.error);
-				// attach failures surface as a (global) error frame rather than
-				// `attached`; settle the waiter instead of leaving it hanging.
-				pendingAttach?.reject(new Error(frame.error));
-				pendingAttach = null;
+				break;
+			case "hello_ok":
+				// Finding #61: the browser enforces OMP_PROTO too. Standalone
+				// priming leads with hello_ok; the fleet edge forwards the
+				// (pipe-gated) hello_ok in roster mode. A mismatch is terminal
+				// — mirror the connector's fail-closed semantics: surface the
+				// error, tear the stream down, and do NOT schedule the
+				// reconnect (the backoff loop in onerror would otherwise hot-loop
+				// against an undrivable daemon).
+				if (frame.proto !== OMP_PROTO) {
+					setState("error", `proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`);
+					teardownStream(source);
+					return;
+				}
 				break;
 			default:
-				// The omp-session hello handshake (hello_ok) is swallowed by the
-				// fleet edge; anything else unknown is tolerated and
-				// ignored, never thrown.
+				// Anything else unknown is tolerated and ignored, never thrown.
 				console.debug(`[omp-session] ignoring ${frame.type} frame`);
 				break;
 		}
+		if (Number.isFinite(frameSeq) && frameSeq > 0) seenFrameSeqs.add(frameSeq);
 	});
 	source.addEventListener(SSE_PING_EVENT, () => {
 		// Keepalive tick: the server is alive (the stream is not silently

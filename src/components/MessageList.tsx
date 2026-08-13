@@ -1,7 +1,7 @@
 import { createEffect, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
 import { renderMarkdown, splitForStreaming } from "../markdown";
 import { call, state, type Block } from "../state";
-import type { ImageArg } from "../protocol";
+import type { ImageArg } from "../../shared/protocol";
 import { imageDataUrl } from "../images";
 import { FullImageOverlay } from "./tools/ImageScan";
 import { Markdown } from "./Markdown";
@@ -145,6 +145,7 @@ export const MessageList: Component = () => {
 						<Match when={item.kind === "assistant" && item}>
 							{assistant => (
 								<div class="msg-assistant">
+									<div class="msg-toolbar">
 										<CopyButton
 											class="msg-copy-btn"
 											title="Copy message markdown"
@@ -154,7 +155,8 @@ export const MessageList: Component = () => {
 												return (visible.length > 0 ? visible : blocks).map(b => b.text).join("\n\n");
 											}}
 										/>
-										<For each={assistant().blocks}>
+									</div>
+									<For each={assistant().blocks}>
 											{block =>
 												block.kind === "thinking" ? (
 													<details class="thinking-block">

@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export interface SpawnTemplate {
-	/** Command template; `{key}` placeholders are filled by spawn.ts's fillTemplate. */
+	/** Command template; `{key}` placeholders are filled by spawn-parse.ts's fillTemplate. */
 	command: string;
 	/** Template-declared reachable host (R6b): used when no wrapper endpoint/advertise is seen. */
 	host?: string;

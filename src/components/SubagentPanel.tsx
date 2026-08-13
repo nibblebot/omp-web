@@ -1,9 +1,10 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { SubagentMessagesResult } from "../protocol";
+import type { SubagentMessagesResult } from "../../shared/protocol";
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import { abortSubagent, call, pushNotice, state, steerSubagent, type SubagentInfo } from "../state";
 import { Modal } from "./Modal";
-import { SubagentRow } from "./tools/TaskTool";
+import { useClickableRow } from "./PickerRow";
+import { SubagentRow } from "./SubagentRow";
 
 const MAX_CHARS = 500;
 
@@ -26,7 +27,7 @@ const AssistantBlocks: Component<{ content: AssistantContent }> = props => (
 			}
 			if (block.type === "thinking") {
 				return (
-					<div style={{ opacity: "0.6", "white-space": "pre-wrap" }}>{clip(block.thinking)}</div>
+					<div class="dim-block" style={{ "white-space": "pre-wrap" }}>{clip(block.thinking)}</div>
 				);
 			}
 			if (block.type === "toolCall") {
@@ -48,7 +49,7 @@ const MessageView: Component<{ msg: AgentMessage }> = props => {
 	if (props.msg.role === "toolResult") {
 		const content = props.msg.content as Parameters<typeof flattenParts>[0];
 		return (
-			<pre style={{ opacity: "0.6", margin: "0", "white-space": "pre-wrap" }}>
+			<pre class="dim-block" style={{ margin: "0", "white-space": "pre-wrap" }}>
 				{clip(flattenParts(content))}
 			</pre>
 		);
@@ -189,7 +190,7 @@ export const SubagentPanel: Component<{ onClose: () => void }> = props => {
 								<div
 									class="subagent-panel-row"
 									style={{ cursor: "pointer" }}
-									onClick={() => setSelected(sub)}
+									{...useClickableRow(() => setSelected(sub))}
 								>
 									<SubagentRow sub={sub} />
 									<Show when={sub.status === "started" || sub.status === "running"}>

@@ -37,7 +37,16 @@ export interface SessionConfig {
 	 * path is exercised fast instead of waiting on the real 15s tick.
 	 */
 	idleCheckMs: number;
+	/**
+	 * Internal test hook (OMP_SESSION_TEST_UI_REQUEST=1): accept a
+	 * `test_ui_request` command that creates a real web ui_request, so tests
+	 * exercise the dialog round-trip + ring invalidation (finding #16)
+	 * without a model turn. Off in production; a fleet edge's allowlist
+	 * rejects the type for browsers.
+	 */
+	uiRequestTestHook: boolean;
 	collabMaxGuests: number;
+	collabMaxRooms: number;
 	collabHostname?: string;
 	collabUrl?: string;
 }
@@ -59,12 +68,17 @@ export function parseDuration(raw: string): number {
 	}
 }
 
-/** Loopback hosts: localhost, ::1, or anything in 127.0.0.0/8. */
+/**
+ * Loopback hosts: localhost, ::1, or anything in 127.0.0.0/8. Every dotted
+ * part must be numeric — "127.a.b.c" resolves off-loopback and is NOT
+ * loopback (same strictness as the runtime peer-address check in index.ts).
+ */
 export function isLoopbackHost(host: string): boolean {
 	const h = host.toLowerCase();
-	if (h === "localhost" || h === "::1" || h.startsWith("::ffff:127.")) return true;
-	const parts = h.split(".");
-	return parts.length === 4 && Number(parts[0]) === 127;
+	if (h === "localhost" || h === "::1") return true;
+	const v4 = h.startsWith("::ffff:") ? h.slice(7) : h;
+	const parts = v4.split(".");
+	return parts.length === 4 && parts.every(p => /^\d+$/.test(p)) && Number(parts[0]) === 127;
 }
 
 /**
@@ -120,7 +134,11 @@ export function parseConfig(argv: string[]): SessionConfig {
 		labels,
 		readyDeferMs: Math.max(0, Number(Bun.env.OMP_SESSION_TEST_READY_DELAY_MS ?? 0) || 0),
 		idleCheckMs: Math.max(1, Number(Bun.env.OMP_SESSION_TEST_IDLE_CHECK_MS ?? 15000) || 15000),
+		uiRequestTestHook: Bun.env.OMP_SESSION_TEST_UI_REQUEST === "1",
 		collabMaxGuests: Number(Bun.env.OMP_SESSION_COLLAB_MAX_GUESTS ?? 64),
+		// Floor of 1: the daemon's own collab host must always be able to
+		// create its room (0 would brick collab with no way to opt out).
+		collabMaxRooms: Math.max(1, Number(Bun.env.OMP_SESSION_COLLAB_MAX_ROOMS ?? 256) || 256),
 		collabHostname: Bun.env.OMP_SESSION_COLLAB_HOSTNAME,
 		collabUrl: Bun.env.OMP_SESSION_COLLAB_URL,
 	};

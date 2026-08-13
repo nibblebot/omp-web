@@ -13,6 +13,11 @@ import * as path from "node:path";
 import type { Server, ServerWebSocket } from "bun";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import {
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
+} from "@oh-my-pi/pi-coding-agent/task";
+import type { BusChannel } from "@oh-my-pi/pi-wire";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import {
 	COLLAB_PROTO,
@@ -202,6 +207,7 @@ class FakePort implements CollabSessionPort {
 	transcriptFiles = new Map<string, string>();
 	entryAppendedCb: ((entry: SessionEntry) => void) | null = null;
 	#eventCbs = new Set<(event: AgentSessionEvent) => void>();
+	#busCbs = new Set<(channel: BusChannel, data: unknown) => void>();
 
 	getSessionId(): string {
 		return this.sessionId;
@@ -252,8 +258,9 @@ class FakePort implements CollabSessionPort {
 		this.entryAppendedCb = cb;
 	}
 
-	subscribeBus(): () => void {
-		return () => {};
+	subscribeBus(cb: (channel: BusChannel, data: unknown) => void): () => void {
+		this.#busCbs.add(cb);
+		return () => this.#busCbs.delete(cb);
 	}
 
 	subscribeAgents(): () => void {
@@ -307,6 +314,15 @@ class FakePort implements CollabSessionPort {
 	/** Test hook: push an event through the subscribed taps. */
 	emitEvent(event: AgentSessionEvent): void {
 		for (const cb of this.#eventCbs) cb(event);
+	}
+
+	/**
+	 * Test hook: emit on a task channel. Mirrors the real port contract
+	 * (server/index.ts): a single subscribeBus call delivers BOTH task
+	 * channels, so every registered callback sees every channel.
+	 */
+	emitBus(channel: BusChannel, data: unknown): void {
+		for (const cb of this.#busCbs) cb(channel, data);
 	}
 
 	/** Test hook: fire the registered onEntryAppended slot. */
@@ -494,6 +510,42 @@ describe("CollabHostAdapter", () => {
 		const ev = await waitFor(() => guest.frames.find(f => f.t === "event"));
 		if (ev.t !== "event") throw new Error("expected event frame");
 		expect(ev.event.type).toBe("notice");
+	});
+
+	test("bus events: exactly one frame per guest per event, both task channels delivered", async () => {
+		const guest = await connectGuest(adapter.status!.link, "Eve");
+		guestSockets.push(guest.socket);
+		await waitForWelcome(guest);
+
+		// Regression: start() used to subscribeBus once per channel while the
+		// port contract delivers BOTH task channels per call, so every bus
+		// frame was broadcast to each guest twice.
+		const lifecycleData = { id: "sub-1", agent: "Sub One", status: "running" };
+		port.emitBus(TASK_SUBAGENT_LIFECYCLE_CHANNEL, lifecycleData);
+		// The progress event doubles as an ordering barrier: broadcast is a
+		// FIFO send and the relay forwards per connection in order, so once
+		// the progress frame arrives every lifecycle frame (duplicates from
+		// the old bug included) has already reached the guest. No timers.
+		const progressData = { index: 0, agent: "Sub One", status: "running" };
+		port.emitBus(TASK_SUBAGENT_PROGRESS_CHANNEL, progressData);
+
+		const progress = await waitFor(() =>
+			guest.frames.find(f => f.t === "bus" && f.channel === TASK_SUBAGENT_PROGRESS_CHANNEL),
+		);
+		if (progress.t !== "bus") throw new Error("expected bus frame");
+		expect(progress.data).toEqual(progressData);
+		expect(
+			guest.frames.filter(f => f.t === "bus" && f.channel === TASK_SUBAGENT_PROGRESS_CHANNEL),
+		).toHaveLength(1);
+
+		const lifecycle = guest.frames.find(
+			f => f.t === "bus" && f.channel === TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+		);
+		if (!lifecycle || lifecycle.t !== "bus") throw new Error("expected lifecycle bus frame");
+		expect(lifecycle.data).toEqual(lifecycleData);
+		expect(
+			guest.frames.filter(f => f.t === "bus" && f.channel === TASK_SUBAGENT_LIFECYCLE_CHANNEL),
+		).toHaveLength(1);
 	});
 
 	test("onEntryAppended fires → guest receives an entry frame", async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { isLiveDaemon } from "./state";
 import { formatDaemonUptime } from "./components/ActiveDaemons";
-import type { DaemonInfo } from "./protocol";
+import type { DaemonInfo } from "../shared/protocol";
 
 function daemon(state: string): DaemonInfo {
 	return { name: "d1", id: "id1", projectDir: "/tmp/proj", state, createdAt: 0, startedAt: 0, restartCount: 0, outputBytes: 0, persist: false, detached: false };

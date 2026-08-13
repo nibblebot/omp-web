@@ -12,9 +12,6 @@
  */
 
 import type { PetPose, SpriteArt } from "./sprite";
-import { drawSprite } from "./sprite";
-
-export type MinimaxPose = PetPose;
 
 const PALETTE: Record<string, string> = {
 	o: "#2a2333", // outline (dark plum)
@@ -30,7 +27,7 @@ const PALETTE: Record<string, string> = {
 	A: "#fde68a", // core (bright amber)
 };
 
-const POSES: Record<MinimaxPose, string[]> = {
+const POSES: Record<PetPose, string[]> = {
 	idle: [
 		"................................",
 		"................................",
@@ -242,7 +239,3 @@ export const MINIMAX_SPRITE: SpriteArt = {
 	poses: POSES,
 };
 
-/** Paints `pose` onto a 32x32 canvas context (clears first). */
-export function drawMinimax(ctx: CanvasRenderingContext2D, pose: MinimaxPose): void {
-	drawSprite(ctx, MINIMAX_SPRITE, pose);
-}

@@ -5,9 +5,9 @@
  * session's model provider here; unknown providers fall back to kimi, which
  * preserves the original always-kimi behavior.
  */
-import { drawDeepseek, DEEPSEEK_SPRITE } from "./deepseek-sprite";
-import { drawKimi, KIMI_SPRITE } from "./kimi-sprite";
-import { drawMinimax, MINIMAX_SPRITE } from "./minimax-sprite";
+import { DEEPSEEK_SPRITE } from "./deepseek-sprite";
+import { KIMI_SPRITE } from "./kimi-sprite";
+import { MINIMAX_SPRITE } from "./minimax-sprite";
 import { drawSprite, type PetPose, type SpriteArt } from "./sprite";
 
 export interface Character {

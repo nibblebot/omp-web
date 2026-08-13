@@ -1,8 +1,9 @@
 import { createEffect, createSignal, For, onMount, Show, untrack, type Component } from "solid-js";
-import type { DaemonEntry, DaemonStatus, ProjectEntry } from "../protocol";
+import type { DaemonEntry, DaemonStatus, ProjectEntry } from "../../shared/protocol";
 import { attachSession, listProjects, removeDaemonById, setSidebarVisible, setState, spawnDaemon, spawnResume, state, stopDaemonById } from "../state";
 import { formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
+import { PickerRow, useClickableRow } from "./PickerRow";
 
 // ---------------------------------------------------------------------------
 // Fleet-edge roster sidebar (Phase 3). Rendered by App.tsx only in
@@ -30,8 +31,8 @@ type RosterEntry = DaemonEntry & {
 };
 
 const STATUS_TITLE: Record<DaemonStatus, string> = {
-	spawning: "starting the session process…",
-	connecting: "connecting to the session…",
+	spawning: "starting the daemon…",
+	connecting: "connecting to the daemon…",
 	session: "session created…",
 	resolving: "resolving provider/model…",
 	ready: "ready — click to attach",
@@ -107,7 +108,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 			<div
 				class="sidebar-row daemon-row"
 				classList={{ active: isAttached(), clickable: clickable(), "daemon-row--nested": props.nested === true }}
-				onClick={clickable() ? rowClick : undefined}
+				{...useClickableRow(rowClick, clickable())}
 				title={STATUS_TITLE[d().status] ?? d().status}
 			>
 				<span class="daemon-status-dot" data-status={d().status} title={d().status} />
@@ -166,7 +167,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 							type="button"
 							class="daemon-icon-btn daemon-stop-btn"
 							classList={{ armed: confirmStop() }}
-							title={confirmStop() ? "Stop this session (second click confirms)" : "Stop this session"}
+							title={confirmStop() ? "Stop this daemon (second click confirms)" : "Stop this daemon"}
 							onClick={e => {
 								e.stopPropagation();
 								if (confirmStop()) doStop();
@@ -184,8 +185,8 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 							classList={{ armed: confirmRemove() }}
 							title={
 								confirmRemove()
-									? "Remove this session (second click confirms)"
-									: "Remove this session from the roster (stops it first)"
+									? "Remove this daemon (second click confirms)"
+									: "Remove this daemon from the roster (stops it first)"
 							}
 							onClick={e => {
 								e.stopPropagation();
@@ -201,7 +202,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 						<button
 							type="button"
 							class="daemon-icon-btn daemon-detail-btn"
-							title="Session details"
+							title="Daemon details"
 							onClick={e => {
 								e.stopPropagation();
 								setDetailOpen(true);
@@ -236,7 +237,7 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 		fetch(`/ctl/sessions/${encodeURIComponent(daemonId)}/stderr`)
 			.then(r => {
 				if (!r.ok) {
-					throw new Error(r.status === 404 ? "not a spawned session — no stderr captured" : `stderr fetch failed (${r.status})`);
+					throw new Error(r.status === 404 ? "not a spawned daemon — no stderr captured" : `stderr fetch failed (${r.status})`);
 				}
 				return r.json() as Promise<{ text: string }>;
 			})
@@ -253,14 +254,14 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 	});
 
 	return (
-		<Modal class="daemon-detail" onClose={props.onClose}>
+		<Modal class="daemon-detail" aria-label={`Daemon ${d().name}`} onClose={props.onClose}>
 			<div class="daemon-detail-header">
 				<span class="daemon-status-dot" data-status={d().status} title={d().status} />
 				<span class="daemon-detail-name">{d().name}</span>
 				<span class="daemon-row-state" data-status={d().status}>
 					{d().status}
 				</span>
-				<button type="button" class="daemon-detail-close" aria-label="Close session details" onClick={props.onClose}>
+				<button type="button" class="daemon-detail-close" aria-label="Close daemon details" onClick={props.onClose}>
 					×
 				</button>
 			</div>
@@ -407,7 +408,7 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 	};
 
 	return (
-		<Modal title="Spawn session" onClose={props.onClose}>
+		<Modal title="Spawn daemon" onClose={props.onClose}>
 			<div class="spawn-form">
 				<label class="daemon-detail-label" for="spawn-path">
 					path
@@ -462,8 +463,7 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 				<For each={mains()}>
 					{p => (
 						<div class="spawn-group">
-							<button
-								type="button"
+							<PickerRow
 								class="picker-row spawn-project"
 								classList={{ active: path() === p.path }}
 								onClick={() => pick(p)}
@@ -473,11 +473,10 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 								<Show when={p.branch}>
 									{b => <span class="picker-chip spawn-branch">{b()}</span>}
 								</Show>
-							</button>
+							</PickerRow>
 							<For each={worktreesOf(p.name)}>
 								{w => (
-									<button
-										type="button"
+									<PickerRow
 										class="picker-row spawn-project spawn-project--worktree"
 										classList={{ active: path() === w.path }}
 										onClick={() => pick(w)}
@@ -490,7 +489,7 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 										<Show when={w.branch}>
 											{b => <span class="picker-chip spawn-branch">{b()}</span>}
 										</Show>
-									</button>
+									</PickerRow>
 								)}
 							</For>
 						</div>
@@ -498,8 +497,7 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 				</For>
 				<For each={orphans()}>
 					{w => (
-						<button
-							type="button"
+						<PickerRow
 							class="picker-row spawn-project spawn-project--worktree"
 							classList={{ active: path() === w.path }}
 							onClick={() => pick(w)}
@@ -509,7 +507,7 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 							<Show when={w.branch}>
 								{b => <span class="picker-chip spawn-branch">{b()}</span>}
 							</Show>
-						</button>
+						</PickerRow>
 					)}
 				</For>
 				<Show when={projects().length === 0 && !projectsError()}>
@@ -628,11 +626,11 @@ export const DaemonSidebar: Component = () => {
 	return (
 		<aside class="sidebar">
 			<div class="sidebar-header">
-				<span class="sidebar-title">Sessions</span>
+				<span class="sidebar-title">Daemons</span>
 				<span class="sidebar-stats">
-					{state.daemonRoster.length} session{state.daemonRoster.length === 1 ? "" : "s"}
+					{state.daemonRoster.length} daemon{state.daemonRoster.length === 1 ? "" : "s"}
 				</span>
-				<button class="sidebar-icon-btn" onClick={() => setSpawnOpen(true)} title="Spawn a session">
+				<button class="sidebar-icon-btn" onClick={() => setSpawnOpen(true)} title="Spawn a daemon">
 					+
 				</button>
 				<button class="sidebar-icon-btn" onClick={() => setSidebarVisible(false)} title="Hide sidebar">
@@ -665,7 +663,7 @@ export const DaemonSidebar: Component = () => {
 					</For>
 				</Show>
 				<Show when={state.daemonRoster.length === 0}>
-					<div class="sidebar-empty">no sessions — press + to spawn one</div>
+					<div class="sidebar-empty">no daemons — press + to spawn one</div>
 				</Show>
 			</div>
 			<Show when={spawnOpen()}>

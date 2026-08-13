@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { listProjects, parseGitStatePorcelain, probeGitState, resolveWorktreeOf, validateProjectPath } from "./discovery";
 import type { GitResult, GitRunner } from "./discovery";
-import type { ProjectEntry } from "../src/protocol";
+import type { ProjectEntry } from "../shared/protocol";
 
 /** `git worktree list --porcelain` for acme: main + feature worktree + detached worktree. */
 const PORCELAIN_FIXTURE = [

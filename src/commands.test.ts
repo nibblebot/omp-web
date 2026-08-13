@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
+	dispatchInput,
 	exportDispatch,
 	goalDispatch,
 	handoffArgs,
@@ -9,7 +10,9 @@ import {
 	queueMethod,
 	renameDispatch,
 } from "./commands";
-import { setState, state } from "./state";
+import { SSE_EVENT_NAME } from "../shared/protocol";
+import type { ClientCommand, ServerFrame } from "../shared/protocol";
+import { addBashItem, appendBashChunk, call, connect, resolveBashItem, setState, state, type ChatItem } from "./state";
 
 describe("parseInput", () => {
 	test("plain text", () => {
@@ -178,5 +181,197 @@ describe("Phase 11 web-plus commands", () => {
 		expect(exportDispatch("")).toEqual({ useThemes: false });
 		expect(exportDispatch("--verbose")).toEqual({ useThemes: false });
 		expect(exportDispatch("themes")).toEqual({ useThemes: false });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Finding #29: bang-shell/python calls must not time out at 30s. Chunks
+// (bash_chunk/python_chunk) provide liveness, abortBash/abortEval are the
+// cancellation path, and a client-side timer stranded the server-side result:
+// the promise rejected, resolveBashItem wiped the streamed output, and the
+// late call_result found no pending entry. call(timeoutMs=0) arms no timer.
+// ---------------------------------------------------------------------------
+// Transport doubles mirroring state.test.ts: connect() registers its SSE
+// handler on a FakeEventSource; POST /command bodies land in `posted` via a
+// stubbed fetch. The controllable clock records the ONLY window.setTimeout
+// consumer (call()'s timeout timer), so tests can advance past the old 30s
+// default and prove nothing fires.
+type SseHandler = (ev: { data: string }) => void;
+
+class FakeEventSource {
+	static instances: FakeEventSource[] = [];
+	static handlers = new Map<string, SseHandler>();
+	onopen: (() => void) | null = null;
+	constructor(public readonly url: string) {
+		FakeEventSource.instances.push(this);
+	}
+	addEventListener(type: string, handler: SseHandler): void {
+		FakeEventSource.handlers.set(type, handler);
+	}
+	close(): void {}
+	static dispatch(type: string, data: string): void {
+		FakeEventSource.handlers.get(type)?.({ data });
+	}
+}
+
+const posted: ClientCommand[] = [];
+
+function dispatch(frame: ServerFrame): void {
+	FakeEventSource.dispatch(SSE_EVENT_NAME, JSON.stringify(frame));
+}
+
+function callResult(id: string, data: unknown): ServerFrame {
+	return { type: "call_result", id, ok: true, data };
+}
+
+async function flushMicrotasks(): Promise<void> {
+	await Promise.resolve();
+	await Promise.resolve();
+}
+
+const timers: { fn: () => void; ms: number; fired: boolean }[] = [];
+
+function installClock(): void {
+	timers.length = 0;
+	globalThis.window = {
+		setTimeout: (fn: () => void, ms?: number) => {
+			timers.push({ fn, ms: ms ?? 0, fired: false });
+			return timers.length;
+		},
+		clearTimeout: () => {},
+	} as unknown as Window & typeof globalThis;
+}
+
+function advance(ms: number): void {
+	for (const t of [...timers]) {
+		if (!t.fired && t.ms <= ms) {
+			t.fired = true;
+			t.fn();
+		}
+	}
+}
+
+beforeEach(() => {
+	posted.length = 0;
+	timers.length = 0;
+	FakeEventSource.instances.length = 0;
+	FakeEventSource.handlers.clear();
+	installClock();
+	globalThis.location = { search: "" } as Location;
+	globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
+	globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+		if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
+		return { ok: true, status: 202 } as Response;
+	}) as unknown as typeof fetch;
+	setState({
+		currentSessionId: "",
+		sessionMode: "single",
+		connected: false,
+		readyAt: undefined,
+		subagents: new Map(),
+		items: [],
+	});
+});
+
+describe("bang-shell/python stream lifecycle (#29)", () => {
+	function startBang(input: string, method: "bash" | "python") {
+		connect();
+		const es = FakeEventSource.instances.at(-1);
+		expect(es).toBeDefined();
+		es!.onopen?.(); // connected = true; without this call() fails fast
+		dispatchInput(input, undefined, "enter");
+		const postedCall = posted.find((c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call" && c.method === method);
+		expect(postedCall).toBeDefined();
+		expect(postedCall!.streamId).toBeDefined();
+		const itemId = postedCall!.streamId!;
+		const item = () => state.items.find((it): it is Extract<ChatItem, { kind: "bash" }> => it.kind === "bash" && it.id === itemId);
+		return { call: postedCall!, itemId, item };
+	}
+
+	test("long-running bash streams past 30s and resolves when the late call_result arrives", async () => {
+		const { call: bashCall, item } = startBang("!sleep 60", "bash");
+		// timeout 0 = no timer armed for streamed commands.
+		expect(timers).toEqual([]);
+		expect(item()?.status).toBe("running");
+
+		dispatch({ type: "bash_chunk", id: bashCall.streamId!, text: "tick\n" });
+		dispatch({ type: "bash_chunk", id: bashCall.streamId!, text: "tock\n" });
+		await flushMicrotasks();
+		expect(item()?.status).toBe("running");
+		expect(item()?.output).toBe("tick\ntock\n");
+
+		// Well past the old 30s default: still running, output intact.
+		advance(40_000);
+		await flushMicrotasks();
+		expect(item()?.status).toBe("running");
+		expect(item()?.output).toBe("tick\ntock\n");
+
+		// The server-side result is still correlated (not stranded) and is
+		// authoritative — it carries the full streamed output.
+		dispatch(callResult(bashCall.id, { output: "tick\ntock\nfull\n", exitCode: 0 }));
+		await flushMicrotasks();
+		expect(item()?.status).toBe("done");
+		expect(item()?.exitCode).toBe(0);
+		expect(item()?.output).toBe("tick\ntock\nfull\n");
+	});
+
+	test("long-running python streams past 30s and resolves when the late call_result arrives", async () => {
+		const { call: pyCall, item } = startBang("$print('sleep')", "python");
+		expect(timers).toEqual([]);
+
+		dispatch({ type: "python_chunk", id: pyCall.streamId!, text: "one\n" });
+		await flushMicrotasks();
+		advance(40_000);
+		await flushMicrotasks();
+		expect(item()?.status).toBe("running");
+		expect(item()?.output).toBe("one\n");
+
+		dispatch(callResult(pyCall.id, { output: "one\ntwo\n", exitCode: 0 }));
+		await flushMicrotasks();
+		expect(item()?.status).toBe("done");
+		expect(item()?.exitCode).toBe(0);
+		expect(item()?.output).toBe("one\ntwo\n");
+	});
+
+	test("abort still cancels a >30s command and keeps the streamed output", async () => {
+		const { call: bashCall, item } = startBang("!sleep 60", "bash");
+		dispatch({ type: "bash_chunk", id: bashCall.streamId!, text: "tick\n" });
+		await flushMicrotasks();
+		advance(40_000);
+		expect(item()?.status).toBe("running");
+
+		// The UI's abort button posts abortBash as its own command.
+		const abortPromise = call("abortBash");
+		await flushMicrotasks();
+		expect(posted.map(c => (c.type === "call" ? c.method : c.type))).toEqual(["bash", "abortBash"]);
+		const abortCall = posted.find((c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call" && c.method === "abortBash")!;
+
+		// The server answers the ORIGINAL call with the cancelled result.
+		dispatch(callResult(bashCall.id, { output: "tick\n", exitCode: 1, cancelled: true }));
+		dispatch(callResult(abortCall.id, undefined));
+		await abortPromise.catch(() => {});
+		await flushMicrotasks();
+		expect(item()?.status).toBe("done");
+		expect(item()?.exitCode).toBe(1);
+		expect(item()?.output).toBe("tick\n");
+	});
+
+	test("resolveBashItem appends an error marker instead of wiping streamed output", () => {
+		setState({ items: [] });
+		const streamed = addBashItem("!sleep 60", false);
+		const empty = addBashItem("!never started", false);
+		appendBashChunk(streamed, "partial output\n");
+		const findBash = (id: number) => state.items.find((it): it is Extract<ChatItem, { kind: "bash" }> => it.kind === "bash" && it.id === id);
+
+		expect(findBash(streamed)?.output).toBe("partial output\n");
+		resolveBashItem(streamed, { error: 'call "bash" timed out' });
+		resolveBashItem(empty, { error: "Not connected" });
+
+		expect(findBash(streamed)).toMatchObject({
+			status: "done",
+			exitCode: null,
+			output: 'partial output\n[error] call "bash" timed out',
+		});
+		expect(findBash(empty)).toMatchObject({ status: "done", exitCode: null, output: "[error] Not connected" });
 	});
 });

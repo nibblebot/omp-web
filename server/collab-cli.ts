@@ -17,8 +17,8 @@
  */
 
 import { spawn } from "bun";
-import type { ClientCommand, CollabWireStatus, ServerFrame } from "../src/protocol";
-import { parseSseUnits, SSE_PING_EVENT } from "../src/sse";
+import type { ClientCommand, CollabWireStatus, ServerFrame } from "../shared/protocol";
+import { parseSseUnits, SSE_PING_EVENT } from "../shared/sse";
 
 interface Options {
 	port: number;
@@ -125,11 +125,17 @@ function printLinks(roomId: string, link: string, viewLink: string): void {
 /**
  * Poll the collector until the collab room is live. The open priming carries
  * the current status, so an already-live room prints immediately; otherwise
- * collab_start transitions off → live. Throws on error statuses, global error
- * frames (except the already-active notice), and timeout.
+ * collab_start transitions off → live. Throws on collab_status error frames,
+ * global error frames that arrive AFTER our collab_start was sent (except
+ * the already-active notice), and timeout. `errorBase` is the collector's
+ * error count at the moment collab_start was sent — global errors the
+ * daemon broadcasts for UNRELATED failures (fireAndForgetPrompt, resync,
+ * non-call commands) must not be read as collab_start failures (#17);
+ * collab failures proper arrive as collab_status error frames above.
  */
 async function awaitLiveRoom(
 	frames: FrameCollector,
+	errorBase: number,
 	timeoutMs: number,
 	port: number,
 ): Promise<Extract<CollabWireStatus, { state: "live" }>> {
@@ -139,7 +145,7 @@ async function awaitLiveRoom(
 			if (status.state === "live") return status;
 			if (status.state === "error") throw new Error(`collab_start failed: ${status.error}`);
 		}
-		const error = frames.errors.at(-1);
+		const error = frames.errors.length > errorBase ? frames.errors.at(-1) : undefined;
 		if (error && !error.includes("collab already active for this session")) {
 			throw new Error(`collab_start failed: ${error}`);
 		}
@@ -161,12 +167,16 @@ async function main(): Promise<number> {
 
 	if (opts.stop) {
 		await send(opts.port, { type: "collab_stop", id: crypto.randomUUID() });
+		// #17: correlate global error frames only after our collab_stop was
+		// sent — the daemon broadcasts global errors for unrelated failures
+		// (fireAndForgetPrompt, resync, non-call commands) too.
+		const errorBase = frames.errors.length;
 		let sawActive = false;
 		try {
 			await waitUntil(
 				() => {
 					if (frames.statuses.some(s => s.state === "live" || s.state === "starting")) sawActive = true;
-					const error = frames.errors.at(-1);
+					const error = frames.errors.length > errorBase ? frames.errors.at(-1) : undefined;
 					if (error?.includes("collab is not active")) return true;
 					if (frames.statuses.some(s => s.state === "off" && sawActive)) return true;
 					if (error && !error.includes("collab is not active")) throw new Error(`collab_stop failed: ${error}`);
@@ -180,7 +190,7 @@ async function main(): Promise<number> {
 			close();
 			return 1;
 		}
-		if (frames.errors.some(e => e.includes("collab is not active"))) console.log("collab is not active");
+		if (frames.errors.slice(errorBase).some(e => e.includes("collab is not active"))) console.log("collab is not active");
 		else console.log("collab stopped");
 		close();
 		return 0;
@@ -190,9 +200,13 @@ async function main(): Promise<number> {
 	// is already live prints immediately. Otherwise collab_start transitions
 	// off → live/error.
 	await send(opts.port, { type: "collab_start", id: crypto.randomUUID() });
+	// #17: only errors that arrive after collab_start was sent can be this
+	// CLI's failure; pre-existing global errors (from other activity on the
+	// daemon) are not.
+	const errorBase = frames.errors.length;
 	let live: Extract<CollabWireStatus, { state: "live" }>;
 	try {
-		live = await awaitLiveRoom(frames, 10_000, opts.port);
+		live = await awaitLiveRoom(frames, errorBase, 10_000, opts.port);
 	} catch (err) {
 		console.error(String(err));
 		close();

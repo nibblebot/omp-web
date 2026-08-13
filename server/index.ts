@@ -1,92 +1,58 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import {
-	createAgentSession,
-	discoverAuthStorage,
-	ModelRegistry,
-	Settings,
-	type ExtensionAskDialogQuestion,
-	type ExtensionAskDialogResult,
-	type ExtensionAskDialogResultItem,
-	type ExtensionUIContext,
-} from "@oh-my-pi/pi-coding-agent";
-import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import {
-	COLLAB_PROMPT_MESSAGE_TYPE,
-	type CollabPromptDetails,
-	type CollabUiRequestDraft,
-	type CollabUiSelectItem,
-} from "@oh-my-pi/pi-coding-agent/collab/protocol";
-import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { SETTINGS_SCHEMA, type SettingPath } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
-import { getAvailableThemes } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { discoverAuthStorage, ModelRegistry, Settings } from "@oh-my-pi/pi-coding-agent";
+import { daemonClientForProject } from "@oh-my-pi/pi-coding-agent/launch/client";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
-import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
-import type { InspectImageMode } from "@oh-my-pi/pi-coding-agent/utils/inspect-image-mode";
-import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
-import type { FileEntry, SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { parseSessionEntries } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
-import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
-import {
-	type AgentProgress,
-	type SubagentLifecyclePayload,
-	type SubagentProgressPayload,
-	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
-	TASK_SUBAGENT_PROGRESS_CHANNEL,
-} from "@oh-my-pi/pi-coding-agent/task";
-import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import { daemonClientForProject, type DaemonBrokerClient } from "@oh-my-pi/pi-coding-agent/launch/client";
-import type { DaemonSnapshot } from "@oh-my-pi/pi-coding-agent/launch/protocol";
-import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getAgentDir } from "@oh-my-pi/pi-utils";
 import { cleanup as postmortemCleanup } from "@oh-my-pi/pi-utils/postmortem";
 import type { Server } from "bun";
-import type {
-	AvailableSlashCommand,
-	ClientCommand,
-	WebMethodName,
-	WebSessionState,
-	SubagentMessagesResult,
-	ServerFrame,
-	SessionListEntry,
-	SessionScopedFrame,
-	ProcessStats,
-	DaemonInfo,
-	CollabParticipantInfo,
-	CollabWireStatus,
-} from "../src/protocol";
+import type { AvailableSlashCommand, ClientCommand, SessionListEntry } from "../shared/protocol";
 import {
 	COMMAND_DEDUP_CAP,
 	COMMAND_DEDUP_WINDOW_MS,
 	OMP_PROTO,
+	OMP_SESSION_PREFIX,
 	SSE_BACKPRESSURE_BYTES,
 	SSE_DELTA_SEQ_START,
 	SSE_EVENT_NAME,
-	SSE_KEEPALIVE_MS,
-	SSE_RING_CAP,
 	type StdoutContractLine,
-} from "../src/protocol";
-import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "../src/sse";
+} from "../shared/protocol";
+import { encodeSseEvent } from "../shared/sse";
 import { isLoopbackHost, parseConfig, type SessionConfig } from "./config";
 import { EMBEDDED_DIST } from "./embedded-dist";
-import { applySettingSideEffects, buildSettingsModel, coerceSettingValue } from "./settings-model";
+import { CollabHostAdapter } from "./collab-host";
+import { createRelay, type RelayHandle, type RelaySocketData } from "./collab-relay";
+import { createCollabSession } from "./collab-session";
+import { createDaemonBroker } from "./daemon-broker";
+import { createWebMethods } from "./methods";
+import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
 import {
-	CollabHostAdapter,
-	type CollabAgentRef,
-	type CollabHostStatus,
-	type CollabSessionPort,
-} from "./collab-host";
-import { createRelay, type RelayHandle, type SocketData } from "./collab-relay";
+	broadcast,
+	broadcastAnswer,
+	broadcastHistory,
+	broadcastTo,
+	detachConsumer,
+	enqueuePaced,
+	enqueueTo,
+	ephemeralAborts,
+	notifyEvent,
+	pendingCodeInputs,
+	ringAfter,
+	sendHistoryPaced,
+	setOnConsumerDetached,
+	setOnStreamsEmpty,
+	snapshotDeltaSeq,
+	startKeepalive,
+	streams,
+	terminateStream,
+	type SseConsumer,
+} from "./sse-delivery";
+import { clearSubagents } from "./subagent-mirror";
+import { rejectEntryUiRequests, rejectStreamUiRequests, webUiRequest } from "./ui-context";
 
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
@@ -116,39 +82,12 @@ const authStorage = await discoverAuthStorage(agentDir);
 const modelRegistry = new ModelRegistry(authStorage);
 const settings = await Settings.init({ cwd: config.cwd, agentDir });
 
-/**
- * One live GET /events consumer (OMP_PROTO 2 transport). Each stream is a
- * connection: it primes on open (hello_ok → attached → …), then receives live
- * deltas (daemon-global seqs ≥ SSE_DELTA_SEQ_START) and unicast answers. It is
- * also the per-connection key for pending code inputs and UI requests.
- * Relay sockets are typed { kind: "relay" } and are NEVER added to `streams`.
- */
-interface SseConsumer {
-	/** Stable identity; keys pending code inputs and ui_request targets. */
-	id: number;
-	controller: ReadableStreamDefaultController<Uint8Array>;
-	/** Attached session handle ("s1"); streams attach at open. */
-	attached: string | null;
-	/**
-	 * Bytes enqueued while no reader is attached (desiredSize is null then).
-	 * Reset once a reader becomes visible and desiredSize reports the truth.
-	 */
-	unreadEstimate: number;
-}
-
-let nextConsumerId = 1;
-const streams = new Set<SseConsumer>();
-
 /** Set once the boot session's provider/model/auth resolution completes (R8). */
 let readyAt: number | null = null;
 /** The single boot session; hello_ok's sessionFile comes from it. */
 let bootEntry: SessionEntry | null = null;
 /** omp-session version for hello_ok; read from package.json when resolvable, else "dev". */
 const version = await resolveVersion();
-
-/** In-flight user bash/python calls (idle suppression, R11) — wrapper counters around METHODS rows. */
-let inFlightBash = 0;
-let inFlightPython = 0;
 
 // Idle auto-exit (R11): a 15s tick (default; the OMP_SESSION_TEST_IDLE_CHECK_MS
 // env hook overrides it for tests) exits via shutdown() when the daemon has
@@ -188,1417 +127,206 @@ async function resolveVersion(): Promise<string> {
 	}
 }
 
-/** True for 127.0.0.0/8, ::1, and IPv4-mapped IPv6 of the same. */
+/** True for 127.0.0.0/8, ::1, and IPv4-mapped IPv6 of the same (strict numeric parts). */
 function isLoopbackIp(address: string | null | undefined): boolean {
-	if (!address) return false;
-	const a = address.toLowerCase();
-	if (a === "::1") return true;
-	const v4 = a.startsWith("::ffff:") ? a.slice(7) : a;
-	const parts = v4.split(".");
-	return parts.length === 4 && parts.every(p => /^\d+$/.test(p)) && Number(parts[0]) === 127;
+	return address ? isLoopbackHost(address) : false;
 }
 
 // ---------------------------------------------------------------------------
 // Collab relay (Slice A): rooms that forward opaque AES-GCM envelopes between
 // a per-session host adapter and real omp TUI guests (`omp join <link>`).
-// Relay sockets are typed { kind: "relay" } and are NEVER added to `streams`.
+// Relay sockets are typed {@link RelaySocketData} and are NEVER added to `streams`.
 // ---------------------------------------------------------------------------
 
-const relay: RelayHandle = createRelay({ maxGuests: config.collabMaxGuests });
+const relay: RelayHandle = createRelay({
+	maxGuests: config.collabMaxGuests,
+	maxRooms: config.collabMaxRooms,
+	// Host upgrades create rooms, so they are gated exactly like /events and
+	// /command (R14): loopback exempt; off-loopback peers need the bearer
+	// token. Guests join by E2E room key — deliberately not gated.
+	authorizeHost: (req, srv) => r14Authorized(req, srv),
+});
 
 // ---------------------------------------------------------------------------
-// SSE delivery (OMP_PROTO 2). Live deltas carry daemon-global seqs
-// (≥ SSE_DELTA_SEQ_START) and are kept in a bounded ring so a reconnecting
-// stream can resume from its Last-Event-ID. Priming frames and unicast
-// answers are NOT ringed: priming is always re-derived fresh on open, and a
-// lost answer is retried by re-POSTing the command (deduped by id).
+// Extracted-module wiring (Phase 6 audit #7): each split module receives its
+// boot-time deps explicitly — config/settings/authStorage/modelRegistry from
+// the bootstrap above, plus the readiness clock. The delivery module's detach
+// hooks are registered so stream teardown keeps rejecting stream-owned
+// pending code inputs and UI requests exactly as before.
 // ---------------------------------------------------------------------------
 
-const ring = new SseRing<string>(SSE_RING_CAP);
-let nextDeltaSeq = SSE_DELTA_SEQ_START;
-const sseEncoder = new TextEncoder();
-
-/** Frames that are deltas (ringed + streamed); everything else is priming-only or a unicast answer. */
-const RING_DELTAS: Record<string, true> = {
-	state: true,
-	event: true,
-	bash_chunk: true,
-	python_chunk: true,
-	ephemeral_delta: true,
-	settings_changed: true,
-	subagent_lifecycle: true,
-	subagent_progress: true,
-	subagent_event: true,
-	ui_request: true,
-	collab_status: true,
-	ready: true,
-	daemons: true,
-	error: true,
-};
-
-/** Bytes currently buffered on a stream (the queue is byte-sized via the stream's queuing strategy). */
-function bufferedBytes(stream: SseConsumer): number {
-	const desired = stream.controller.desiredSize;
-	if (desired === null) return stream.unreadEstimate;
-	if (stream.unreadEstimate > 0) stream.unreadEstimate = 0;
-	return Math.max(0, SSE_BACKPRESSURE_BYTES - desired);
-}
-
-/** Enqueue one pre-encoded block; past the backpressure cap the stream is terminated (drop-and-resume). */
-function enqueueTo(stream: SseConsumer, block: string): void {
-	try {
-		if (bufferedBytes(stream) + block.length > SSE_BACKPRESSURE_BYTES) {
-			terminateStream(stream, "backpressure");
-			return;
-		}
-		stream.unreadEstimate += block.length;
-		stream.controller.enqueue(sseEncoder.encode(block));
-	} catch {
-		// Stream already closed/cancelled: dropped (removal happens on cancel/terminate).
-	}
-}
-
-/** End a stream (buffered data is still delivered; the client resumes via Last-Event-ID). */
-function terminateStream(stream: SseConsumer, reason: string): void {
-	try {
-		stream.controller.close();
-	} catch {
-		// already closed or errored; detach below still cleans up.
-	}
-	detachConsumer(stream, reason);
-}
-
-/** Global frames (error, daemons roster, ready): ringed deltas to every stream. */
-function broadcast(frame: ServerFrame): void {
-	const seq = nextDeltaSeq++;
-	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
-	ring.push(seq, block);
-	for (const stream of streams) enqueueTo(stream, block);
-}
-
-/**
- * Unicast answers (call_result, sessions, files, login_url, …): every live
- * stream of this single-session daemon — the SSE stream is the one answer
- * channel. NOT ringed; a lost answer is re-POSTed by the client.
- */
-function broadcastAnswer(frame: ServerFrame): void {
-	const seq = nextDeltaSeq++;
-	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
-	for (const stream of streams) enqueueTo(stream, block);
-}
-
-/**
- * Deliver a session-scoped frame to every stream attached to the handle.
- * Delta types get a ring entry (resumable); priming-style frames (history,
- * available_commands) are re-derivable from fresh priming, so live streams
- * only.
- */
-function broadcastTo(handle: string, frame: SessionScopedFrame): void {
-	const seq = nextDeltaSeq++;
-	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
-	if (RING_DELTAS[frame.type]) ring.push(seq, block);
-	for (const stream of streams) {
-		if (stream.attached === handle) enqueueTo(stream, block);
-	}
-}
-
-/**
- * Remove a stream from every bookkeeping structure (stream close, backpressure
- * termination, or shutdown). Sessions outlive streams: pending code inputs
- * and UI requests that only this stream could answer are rejected.
- */
-function detachConsumer(stream: SseConsumer, reason: string): void {
-	streams.delete(stream);
-	if (streams.size === 0) {
-		stopDaemonPoll();
-		stopKeepalive();
-	}
-	stream.attached = null;
-	for (const [id, p] of pendingCodeInputs) {
-		if (p.streams.delete(stream) && p.streams.size === 0) {
-			p.reject(new Error(reason));
-			pendingCodeInputs.delete(id);
-		}
-	}
+const daemonBroker = createDaemonBroker({ config, getReadyAt: () => readyAt });
+const collabSession = createCollabSession({ config, agentDir, authStorage, modelRegistry, settings, broker: daemonBroker });
+const {
+	methods: METHODS,
+	readOnly: READ_ONLY,
+	notReadyGated: NOT_READY_GATED,
+	historyReload: HISTORY_RELOAD,
+	getInFlightBash,
+	getInFlightPython,
+} = createWebMethods({ settings, authStorage, collab: collabSession, broker: daemonBroker });
+setOnStreamsEmpty(() => daemonBroker.stopDaemonPoll());
+setOnConsumerDetached((stream, reason) => {
 	// A UI request dies only when every stream it was shown to is gone.
-	if (bootEntry) {
-		for (const [id, p] of bootEntry.pendingUiRequests) {
-			p.streams.delete(stream);
-			if (p.streams.size === 0) {
-				p.reject(new Error(reason));
-				bootEntry.pendingUiRequests.delete(id);
-			}
-		}
-	}
-}
-
-/** Surface operator-facing text as the existing notice event frame. */
-function notifyEvent(entry: SessionEntry, message: string, level: "info" | "warning" | "error" = "info"): void {
-	broadcastTo(entry.handle, { type: "event", event: { type: "notice", level, message } });
-}
-
-// Phase 11: AbortControllers for in-flight runEphemeralTurn calls, keyed by
-// (session, streamId). abortEphemeral cancels via the SDK signal — the same
-// side-channel pattern bash/python use, but those have dedicated SDK aborters.
-const ephemeralAborts = new Map<SessionEntry, Map<number, AbortController>>();
-
-function setEphemeralAbort(entry: SessionEntry, streamId: number, controller: AbortController): void {
-	let byStream = ephemeralAborts.get(entry);
-	if (!byStream) ephemeralAborts.set(entry, (byStream = new Map()));
-	byStream.set(streamId, controller);
-}
-
-function clearEphemeralAbort(entry: SessionEntry, streamId: number): void {
-	ephemeralAborts.get(entry)?.delete(streamId);
-}
+	if (bootEntry) rejectStreamUiRequests(bootEntry, stream, reason);
+});
 
 // ---------------------------------------------------------------------------
-// ExtensionUIContext (plan §1.7): the dialog subset round-trips over the
-// socket as ui_request/ui_response frames; terminal-only surface is stubbed.
-// Pending requests live on the owning SessionEntry, target only that
-// session's attached streams, and are rejected when every targeted stream has
-// closed and on session close / server shutdown.
+// /events: register the consumer (connect = attached), prime it, and stream
+// live deltas. The consumer registry and all delivery primitives live in
+// sse-delivery.ts.
 // ---------------------------------------------------------------------------
 
-let nextUiRequestId = 1;
+let nextConsumerId = 1;
 
 /**
- * Sentinel for the collab ui preference: the collab channel went away
- * mid-request (no writable guest at send time, teardown, abort) — the caller
- * falls through to the web-socket path below.
+ * Prime a fresh /events stream: hello_ok first (daemon identity — HTTP-level
+ * auth replaced the WS hello handshake), then the attach priming (attached →
+ * history → state → collab_status → available_commands → ready), seqs 1..k
+ * (k < SSE_DELTA_SEQ_START). `commands` is built BEFORE the stream opens so
+ * every priming seq is assigned contiguously (no async gap between priming
+ * and the delta era). Then resume per Last-Event-ID: only ring deltas with
+ * seq > max(lastEventId, snapshotSeq - 1) replay — the snapshot mark (the
+ * next delta seq at prime start) bounds the overlap so a resume never
+ * re-delivers deltas whose effects are already inside the fresh priming
+ * (finding #2: a completed turn's event deltas would otherwise duplicate
+ * chat/tool items on top of the just-primed history).
+ *
+ * The history frame is the one potentially multi-megabyte payload (base64
+ * image data URLs inside messages): it is chunked and paced to the consumer's
+ * drain so a transcript over the 4 MiB backpressure cap still primes — a
+ * synchronous single-frame prime would be terminated by enqueueTo and the
+ * client could never attach (finding #11). Pacing lets the socket drain
+ * between chunks; the sequence stays 1..k because priming seqs never reach
+ * SSE_DELTA_SEQ_START.
  */
-const COLLAB_UI_FALLTHROUGH = Symbol("collab-ui-fallthrough");
-
-/**
- * The ExtensionUIContext dialog subset, answered by a writable collab guest
- * FIRST (mirroring the TUI's collab-host preference in #runGuestDialog); when
- * no writable guest is attached the request falls through to the /events streams.
- */
-function uiRequest(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
-	const adapter = entry.collab.adapter;
-	if (adapter?.isLive && adapter.writableGuestCount > 0) {
-		return uiRequestViaCollab(entry, method, params).then(value => {
-			if (value === COLLAB_UI_FALLTHROUGH) return webUiRequest(entry, method, params);
-			return value;
-		});
-	}
-	return webUiRequest(entry, method, params);
-}
-
-/** The pre-existing web dialog path (one pending request per entry). */
-function webUiRequest(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
-	const targets = new Set<SseConsumer>();
-	for (const stream of streams) {
-		if (stream.attached === entry.handle) targets.add(stream);
-	}
-	if (targets.size === 0) return Promise.reject(new Error("No connected client to answer the UI request"));
-	const id = `ui${nextUiRequestId++}`;
-	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-	entry.pendingUiRequests.set(id, { streams: targets, resolve, reject });
-	broadcastTo(entry.handle, { type: "ui_request", id, method, params });
-	return promise;
-}
-
-// Params shapes are fixed by buildUiContext's uiRequest call sites below
-// (one object literal per method), so a single named cast at the mapper
-// boundary is safe; the same objects ride the wire as the web ui_request.
-interface SelectDialogParams {
-	title: string;
-	options: CollabUiSelectItem[];
-}
-interface ConfirmDialogParams {
-	title: string;
-	message?: string;
-}
-interface InputDialogParams {
-	title: string;
-	placeholder?: string;
-}
-interface EditorDialogParams {
-	title: string;
-	prefill?: string;
-}
-interface AskDialogParams {
-	questions: ExtensionAskDialogQuestion[];
-}
-
-/** Map one dialog method to its collab wire request; null = not a collab surface. */
-function mapUiMethodToCollab(method: string, params: unknown): CollabUiRequestDraft | null {
-	switch (method) {
-		case "select": {
-			// Shape fixed by buildUiContext's select call site.
-			const p = params as SelectDialogParams;
-			return { kind: "select", title: p.title, options: p.options };
-		}
-		case "confirm": {
-			// Shape fixed by buildUiContext's confirm call site.
-			const p = params as ConfirmDialogParams;
-			return { kind: "select", title: p.title, options: ["Yes", "No"] };
-		}
-		case "input": {
-			// Shape fixed by buildUiContext's input call site.
-			const p = params as InputDialogParams;
-			return { kind: "editor", title: p.title, prefill: p.placeholder };
-		}
-		case "editor": {
-			// Shape fixed by buildUiContext's editor call site.
-			const p = params as EditorDialogParams;
-			return { kind: "editor", title: p.title, prefill: p.prefill };
-		}
-		default:
-			return null;
-	}
-}
-
-/**
- * One collab dialog round-trip. Resolves with the guest's value (undefined =
- * genuine guest cancel) or COLLAB_UI_FALLTHROUGH when the collab channel is
- * unavailable.
- */
-async function collabAsk(adapter: CollabHostAdapter, draft: CollabUiRequestDraft): Promise<unknown> {
-	const request = adapter.requestGuestUi(draft);
-	if (!request) return COLLAB_UI_FALLTHROUGH;
-	const result = await request;
-	if (result.kind === "unavailable") return COLLAB_UI_FALLTHROUGH;
-	return result.value;
-}
-
-/**
- * Sequential per-question askDialog over the wire, mirroring the TUI's
- * #runGuestAskDialog minus the "Chat about this" escape. `undefined` is a
- * genuine guest cancel that aborts the whole dialog; COLLAB_UI_FALLTHROUGH
- * routes back to the /events streams.
- */
-async function askDialogViaCollab(adapter: CollabHostAdapter, questions: ExtensionAskDialogQuestion[]): Promise<unknown> {
-	const results: ExtensionAskDialogResultItem[] = [];
-	for (let index = 0; index < questions.length; index++) {
-		const q = questions[index];
-		const selected = new Set<string>();
-		let customInput: string | undefined;
-		const baseOptions: CollabUiSelectItem[] = q.options.map(o =>
-			o.description?.trim() ? { label: o.label, description: o.description.trim() } : o.label,
-		);
-		if (q.multi) {
-			while (true) {
-				const checkedIndices = q.options
-					.map((option, i) => (selected.has(option.label) ? i : -1))
-					.filter(i => i >= 0);
-				const choice = await collabAsk(adapter, {
-					kind: "select",
-					title: q.question,
-					options: [...baseOptions, "Other (type your own)", "Next →"],
-					selectionMarker: "checkbox",
-					checkedIndices,
-					markableCount: q.options.length,
-				});
-				if (choice === COLLAB_UI_FALLTHROUGH || choice === undefined) return choice;
-				if (choice === "Next →") break;
-				if (choice === "Other (type your own)") {
-					const input = await collabAsk(adapter, { kind: "editor", title: q.question, prefill: "" });
-					if (input === COLLAB_UI_FALLTHROUGH) return input;
-					// Guest cancelled the Other editor: back to the option list.
-					if (input === undefined) continue;
-					customInput = input as string;
-					break;
-				}
-				if (selected.has(choice as string)) selected.delete(choice as string);
-				else selected.add(choice as string);
-			}
-		} else {
-			while (true) {
-				const choice = await collabAsk(adapter, {
-					kind: "select",
-					title: q.question,
-					options: [...baseOptions, "Other (type your own)"],
-				});
-				if (choice === COLLAB_UI_FALLTHROUGH || choice === undefined) return choice;
-				if (choice === "Other (type your own)") {
-					const input = await collabAsk(adapter, { kind: "editor", title: q.question, prefill: "" });
-					if (input === COLLAB_UI_FALLTHROUGH) return input;
-					// Guest cancelled the Other editor: re-show the option list.
-					if (input === undefined) continue;
-					customInput = input as string;
-				} else {
-					selected.add(choice as string);
-				}
-				break;
-			}
-		}
-		results.push({
-			id: q.id ?? String(index),
-			question: q.question,
-			options: q.options.map(o => o.label),
-			multi: !!q.multi,
-			selectedOptions: q.options.map(o => o.label).filter(label => selected.has(label)),
-			customInput,
-		});
-	}
-	return { kind: "submit", results };
-}
-
-/** Dialog dispatch through a live collab adapter; COLLAB_UI_FALLTHROUGH when unanswerable there. */
-async function uiRequestViaCollab(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
-	const adapter = entry.collab.adapter;
-	if (!adapter?.isLive) return COLLAB_UI_FALLTHROUGH;
-	if (method === "askDialog") {
-		// Shape fixed by buildUiContext's askDialog call site.
-		const p = params as AskDialogParams;
-		return askDialogViaCollab(adapter, p.questions);
-	}
-	const draft = mapUiMethodToCollab(method, params);
-	if (!draft) return COLLAB_UI_FALLTHROUGH;
-	const value = await collabAsk(adapter, draft);
-	if (value === COLLAB_UI_FALLTHROUGH) return value;
-	// confirm answers with Yes/No over the wire; the web contract wants a boolean.
-	if (method === "confirm") return value === "Yes";
-	return value;
-}
-
-function rejectEntryUiRequests(entry: SessionEntry, reason: string): void {
-	for (const [id, p] of entry.pendingUiRequests) {
-		p.reject(new Error(reason));
-		entry.pendingUiRequests.delete(id);
-	}
-}
-
-/** One context per session: dialog requests and notices route to that session's streams. */
-function buildUiContext(entry: SessionEntry): ExtensionUIContext {
-	return {
-		select: (title, options) => uiRequest(entry, "select", { title, options }) as Promise<string | undefined>,
-		confirm: async (title, message) => Boolean(await uiRequest(entry, "confirm", { title, message })),
-		input: (title, placeholder) => uiRequest(entry, "input", { title, placeholder }) as Promise<string | undefined>,
-		editor: (title, prefill) => uiRequest(entry, "editor", { title, prefill }) as Promise<string | undefined>,
-		askDialog: questions => uiRequest(entry, "askDialog", { questions }) as Promise<ExtensionAskDialogResult | undefined>,
-		notify: (message, type) => notifyEvent(entry, message, type ?? "info"),
-		// --- Terminal-only surface: no-ops in the headless web host. ---
-		onTerminalInput: () => () => {},
-		setStatus: () => {},
-		setWorkingMessage: () => {},
-		setWidget: () => {},
-		setFooter: () => {},
-		setHeader: () => {},
-		setTitle: () => {},
-		custom: () => Promise.reject(new Error("Custom UI components are not supported in the web host")),
-		setEditorText: () => {},
-		pasteToEditor: () => {},
-		getEditorText: () => "",
-		addAutocompleteProvider: () => {},
-		setEditorComponent: () => {},
-		theme: {} as ExtensionUIContext["theme"],
-		getAllThemes: () => Promise.resolve([]),
-		getTheme: () => Promise.resolve(undefined),
-		setTheme: () => Promise.resolve({ success: false, error: "Themes are not supported in the web host" }),
-		getToolsExpanded: () => false,
-		setToolsExpanded: () => {},
-	};
-}
-
-// ---------------------------------------------------------------------------
-// Subagent mirror: a port of the RPC mode's subagent registry semantics at a
-// fixed "progress" subscription level (subagent_event frames were never
-// emitted at that level, so the raw event channel is not relayed). Lifecycle
-// and progress payloads are broadcast verbatim — the client parses exactly
-// these shapes. The mirror state lives on the owning SessionEntry (rosters
-// stay namespaced per session) and owns subagentId → sessionFile resolution
-// for transcript reads, including finished agents.
-// ---------------------------------------------------------------------------
-
-interface SubagentSnapshot {
-	id: string;
-	index: number;
-	agent: string;
-	description?: string;
-	status: AgentProgress["status"];
-	task?: string;
-	assignment?: string;
-	sessionFile?: string;
-	parentToolCallId?: string;
-	lastUpdate: number;
-	progress?: AgentProgress;
-}
-
-const MAX_RETAINED_TRANSCRIPT_REFERENCES = 256;
-
-function isSessionMessageEntry(entry: FileEntry): entry is SessionMessageEntry {
-	return entry.type === "message";
-}
-
-function statusFromLifecycle(status: SubagentLifecyclePayload["status"]): AgentProgress["status"] {
-	return status === "started" ? "running" : status;
-}
-
-function hasSameOwner(
-	payload: Pick<SubagentLifecyclePayload | SubagentProgressPayload, "parentToolCallId" | "sessionFile">,
-	snapshot: SubagentSnapshot,
-): boolean {
-	if (payload.parentToolCallId !== undefined && snapshot.parentToolCallId !== undefined) {
-		return payload.parentToolCallId === snapshot.parentToolCallId;
-	}
-	if (payload.sessionFile !== undefined && snapshot.sessionFile !== undefined) {
-		return payload.sessionFile === snapshot.sessionFile;
-	}
-	return true;
-}
-
-function addPruned(set: Set<string>, value: string, maxSize: number): void {
-	set.delete(value);
-	set.add(value);
-	while (set.size > maxSize) {
-		const oldest = set.keys().next();
-		if (oldest.done) break;
-		set.delete(oldest.value);
-	}
-}
-
-function rememberTranscriptSession(entry: SessionEntry, subagentId: string, sessionFile: string | undefined): void {
-	if (!sessionFile) return;
-	entry.transcriptSessionFilesBySubagentId.delete(subagentId);
-	entry.transcriptSessionFilesBySubagentId.set(subagentId, sessionFile);
-	while (entry.transcriptSessionFilesBySubagentId.size > MAX_RETAINED_TRANSCRIPT_REFERENCES) {
-		const oldest = entry.transcriptSessionFilesBySubagentId.keys().next();
-		if (oldest.done) break;
-		entry.transcriptSessionFilesBySubagentId.delete(oldest.value);
-	}
-}
-
-function hasTranscriptSessionFile(entry: SessionEntry, sessionFile: string): boolean {
-	for (const snapshot of entry.subagentSnapshots.values()) {
-		if (snapshot.sessionFile === sessionFile) return true;
-	}
-	for (const transcriptSessionFile of entry.transcriptSessionFilesBySubagentId.values()) {
-		if (transcriptSessionFile === sessionFile) return true;
-	}
-	return false;
-}
-
-/** Session change drops every tracked subagent; late frames from the old session are stale. */
-function clearSubagents(entry: SessionEntry): void {
-	for (const subagentId of entry.subagentSnapshots.keys()) {
-		addPruned(entry.staleSubagentIds, subagentId, MAX_RETAINED_TRANSCRIPT_REFERENCES);
-	}
-	for (const subagentId of entry.transcriptSessionFilesBySubagentId.keys()) {
-		addPruned(entry.staleSubagentIds, subagentId, MAX_RETAINED_TRANSCRIPT_REFERENCES);
-	}
-	entry.subagentSnapshots.clear();
-	entry.transcriptSessionFilesBySubagentId.clear();
-	entry.onSubagentsChange?.();
-}
-
-// Payloads are JSON-safe snapshots; drop a frame rather than kill the relay
-// if one ever isn't serializable.
-function broadcastSubagentFrame(entry: SessionEntry, type: "subagent_lifecycle" | "subagent_progress", payload: unknown): void {
-	try {
-		broadcastTo(entry.handle, { type, payload });
-	} catch (err) {
-		console.error(`Dropping unserializable ${type} frame:`, err);
-	}
-}
-
-function handleSubagentLifecycle(entry: SessionEntry, payload: SubagentLifecyclePayload): void {
-	const existing = entry.subagentSnapshots.get(payload.id);
-	if (existing && !hasSameOwner(payload, existing)) return;
-	if (!existing && payload.status !== "started") return;
-	if (payload.status === "started") {
-		entry.staleSubagentIds.delete(payload.id);
-	}
-	const sessionFile = payload.sessionFile ?? existing?.sessionFile;
-	const snapshot: SubagentSnapshot = {
-		id: payload.id,
-		index: payload.index,
-		agent: payload.agent,
-		description: payload.description ?? existing?.description,
-		status: statusFromLifecycle(payload.status),
-		task: existing?.task,
-		assignment: existing?.assignment,
-		sessionFile,
-		parentToolCallId: payload.parentToolCallId ?? existing?.parentToolCallId,
-		lastUpdate: Date.now(),
-		progress: existing?.progress,
-	};
-	rememberTranscriptSession(entry, payload.id, sessionFile);
-	if (payload.status === "started") {
-		entry.subagentSnapshots.set(payload.id, snapshot);
-	} else {
-		entry.subagentSnapshots.delete(payload.id);
-	}
-	broadcastSubagentFrame(entry, "subagent_lifecycle", payload);
-	// Collab guests mirror the same roster; notify the tap after the mutation.
-	entry.onSubagentsChange?.();
-}
-
-function handleSubagentProgress(entry: SessionEntry, payload: SubagentProgressPayload): void {
-	const progress = payload.progress;
-	if (entry.staleSubagentIds.has(progress.id)) return;
-	const existing = entry.subagentSnapshots.get(progress.id);
-	if (!existing) return;
-	if (!hasSameOwner(payload, existing)) return;
-	const sessionFile = payload.sessionFile ?? existing.sessionFile;
-	rememberTranscriptSession(entry, progress.id, sessionFile);
-	entry.subagentSnapshots.set(progress.id, {
-		id: progress.id,
-		index: payload.index,
-		agent: payload.agent,
-		description: progress.description ?? existing.description,
-		status: progress.status,
-		task: payload.task,
-		assignment: payload.assignment,
-		sessionFile,
-		lastUpdate: Date.now(),
-		parentToolCallId: payload.parentToolCallId ?? existing.parentToolCallId,
-		progress,
-	});
-	broadcastSubagentFrame(entry, "subagent_progress", payload);
-}
-
-function resolveSubagentSessionFile(entry: SessionEntry, selector: { subagentId?: string; sessionFile?: string }): string {
-	if (selector.subagentId) {
-		const sessionFile =
-			entry.subagentSnapshots.get(selector.subagentId)?.sessionFile ??
-			entry.transcriptSessionFilesBySubagentId.get(selector.subagentId);
-		if (!sessionFile) {
-			throw new Error(`Unknown subagent or session file unavailable: ${selector.subagentId}`);
-		}
-		return sessionFile;
-	}
-	if (selector.sessionFile) {
-		if (hasTranscriptSessionFile(entry, selector.sessionFile)) return selector.sessionFile;
-		throw new Error("Unknown subagent session file");
-	}
-	throw new Error("getSubagentMessages requires subagentId or sessionFile");
-}
-
-/** Port of the RPC transcript reader: byte-offset paging over the subagent's .jsonl. */
-async function readSubagentTranscript(sessionFile: string, fromByte = 0): Promise<SubagentMessagesResult> {
-	let startByte = Number.isFinite(fromByte) ? Math.max(0, Math.trunc(fromByte)) : 0;
-	const file = Bun.file(sessionFile);
-	let size: number;
-	try {
-		({ size } = await stat(sessionFile));
-	} catch (err) {
-		if (!isEnoent(err)) throw err;
-		return { sessionFile, fromByte: startByte, nextByte: startByte, reset: false, entries: [], messages: [] };
-	}
-	let reset = false;
-	if (startByte > size) {
-		startByte = 0;
-		reset = true;
-	}
-	const text = startByte >= size ? "" : await file.slice(startByte).text();
-	const lastNewline = text.lastIndexOf("\n");
-	const completeText = lastNewline >= 0 ? text.slice(0, lastNewline + 1) : "";
-	const entries = completeText.length > 0 ? parseSessionEntries(completeText) : [];
-	const nextByte = startByte + Buffer.byteLength(completeText, "utf8");
-	return {
-		sessionFile,
-		fromByte: startByte,
-		nextByte,
-		reset,
-		entries,
-		messages: entries.filter(isSessionMessageEntry).map(entry => entry.message),
-	};
-}
-
-// ---------------------------------------------------------------------------
-// Session registry: the single boot session. omp-session is de-muxed (Phase 6) —
-// there is exactly one SessionEntry and every web socket is attached to it
-// from upgrade. The handle "s1" survives only as the attached frame's client
-// guard token. Per-session AgentRegistry/EventBus/SessionManager (Phase 1
-// factory) keeps subagent rosters namespaced per session; ui_request pending
-// maps and the subagent mirror live here too.
-// ---------------------------------------------------------------------------
-
-interface SessionEntry {
-	handle: string;
-	cwd: string;
-	session: AgentSession;
-	agentRegistry: AgentRegistry;
-	eventBus: EventBus;
-	slashRuntime: SlashCommandRuntime;
-	pendingUiRequests: Map<
-		string,
-		{ streams: Set<SseConsumer>; resolve: (value: unknown) => void; reject: (err: Error) => void }
-	>;
-	subagentSnapshots: Map<string, SubagentSnapshot>;
-	transcriptSessionFilesBySubagentId: Map<string, string>;
-	staleSubagentIds: Set<string>;
-	/** Collab host state: the live adapter (null when not live) plus the start-in-flight flag. */
-	collab: { adapter: CollabHostAdapter | null; starting: boolean };
-	/** Fired by the subagent mirror when the roster may have changed (collab agents tap). */
-	onSubagentsChange: (() => void) | null;
-}
-
-/** The single boot session's constant handle: the attached frame's client guard token. */
-const BOOT_HANDLE = "s1";
-
-/** Resolved model-role assignments via the SDK's getRoleModelCycle (skips unconfigured/unavailable roles). */
-function buildModelRoles(session: AgentSession): WebSessionState["modelRoles"] {
-	// Canonical built-in order, then any custom roles from settings (deduped).
-	const customRoles = Object.keys(session.settings.getModelRoles()).filter(
-		role => !(MODEL_ROLE_IDS as readonly string[]).includes(role),
-	);
-	const cycle = session.getRoleModelCycle([...MODEL_ROLE_IDS, ...customRoles]);
-	if (!cycle) return undefined;
-	return cycle.models.map(entry => ({ role: entry.role, provider: entry.model.provider, id: entry.model.id }));
-}
-
-function buildStateSnapshot(session: AgentSession): WebSessionState {
-	return {
-		model: session.model,
-		modelRoles: buildModelRoles(session),
-		thinkingLevel: session.thinkingLevel,
-		isStreaming: session.isStreaming,
-		isCompacting: session.isCompacting,
-		steeringMode: session.steeringMode,
-		followUpMode: session.followUpMode,
-		interruptMode: session.interruptMode,
-		sessionFile: session.sessionFile,
-		sessionId: session.sessionId,
-		readyAt: readyAt ?? undefined,
-		sessionName: session.sessionName,
-		autoCompactionEnabled: session.autoCompactionEnabled,
-		autoRetryEnabled: session.autoRetryEnabled,
-		messageCount: session.messages.length,
-		queuedMessageCount: session.queuedMessageCount,
-		todoPhases: session.getTodoPhases(),
-		systemPrompt: session.systemPrompt,
-		dumpTools: session.agent.state.tools.map(tool => ({
-			name: tool.name,
-			description: tool.description,
-			parameters: isZodSchema(tool.parameters) ? zodToWireSchema(tool.parameters) : tool.parameters,
-			examples: tool.examples,
-		})),
-		contextUsage: session.getContextUsage(),
-		// Phase 9: cheap sync getters — refreshed on every state broadcast.
-		goalModeState: session.getGoalModeState(),
-		planModeEnabled: session.getPlanModeState()?.enabled ?? false,
-		fastModeEnabled: session.isFastModeEnabled(),
-		computerToolEnabled: session.getActiveToolNames().includes("computer"),
-		inspectImageMode: session.inspectImageState().mode,
-	};
-}
-
-async function broadcastState(entry: SessionEntry, withStats = false): Promise<void> {
-	const stats = withStats ? entry.session.getSessionStats() : undefined;
-	broadcastTo(entry.handle, { type: "state", state: buildStateSnapshot(entry.session), stats });
-}
-
-async function broadcastHistory(entry: SessionEntry): Promise<void> {
-	broadcastTo(entry.handle, { type: "history", messages: entry.session.messages });
-}
-
-async function broadcastAvailableCommands(entry: SessionEntry): Promise<void> {
-	broadcastTo(entry.handle, { type: "available_commands", commands: await buildAvailableSlashCommands(entry.session) });
-}
-
-function processStatsSnapshot(): ProcessStats {
-	return {
-		rssBytes: process.memoryUsage().rss,
-		uptimeSec: process.uptime(),
-		sessionCount: 1,
-	};
-}
-
-const DAEMON_POLL_MS = 3000;
-let daemonPoll: ReturnType<typeof setInterval> | undefined;
-
-function daemonInfo(projectDir: string, snap: DaemonSnapshot): DaemonInfo {
-	return {
-		name: snap.name,
-		id: snap.id,
-		projectDir,
-		state: snap.state,
-		pid: snap.pid,
-		createdAt: snap.createdAt,
-		startedAt: snap.startedAt,
-		readyAt: snap.readyAt,
-		exitedAt: snap.exitedAt,
-		exitCode: snap.exitCode,
-		exitReason: snap.exitReason,
-		restartCount: snap.restartCount,
-		outputBytes: snap.outputBytes,
-		owner: snap.owner,
-		persist: snap.persist,
-		detached: snap.detached,
-	};
-}
-
-/**
- * Per-daemon ready endpoint cache keyed by projectDir+name. Daemon ids are
- * stable across restarts and change only when a NEW daemon record is started
- * (new spec), so id equality invalidates stale specs.
- */
-const readyEndpointCache = new Map<string, { id: string; port?: number; host?: string }>();
-
-/**
- * Resolve a daemon's ready host/port from its launch spec via the broker
- * describe op, cached by daemon id. Any failure (daemon died between list and
- * describe, broker hiccup) resolves undefined without propagating — the next
- * poll tick retries.
- */
-async function readyEndpointFor(client: DaemonBrokerClient, dir: string, snap: DaemonSnapshot): Promise<{ port?: number; host?: string } | undefined> {
-	const key = `${dir}\u0000${snap.name}`;
-	const cached = readyEndpointCache.get(key);
-	if (cached?.id === snap.id) return cached;
-	try {
-		const result = await client.request({ op: "describe", name: snap.name });
-		if (result.op !== "describe") return undefined;
-		const ready = result.spec.ready;
-		const endpoint = { id: snap.id, port: ready?.port, host: ready?.host };
-		readyEndpointCache.set(key, endpoint);
-		return endpoint;
-	} catch {
-		// Daemon died between list and describe, or broker hiccup: retry next tick.
-		return undefined;
-	}
-}
-
-async function daemonInfoWithEndpoint(client: DaemonBrokerClient, dir: string, snap: DaemonSnapshot): Promise<DaemonInfo> {
-	const info = daemonInfo(dir, snap);
-	const endpoint = await readyEndpointFor(client, dir, snap);
-	if (endpoint?.port !== undefined) {
-		info.readyPort = endpoint.port;
-		info.readyHost = endpoint.host ?? "127.0.0.1";
-	}
-	return info;
-}
-
-/**
- * Poll the daemon broker for the bound cwd and broadcast the roster every
- * tick. A change-gate would strand clients that connect between broadcasts
- * (or miss one frame): the roster is small (~2.5 KB) and the tick cadence is
- * 3s, so re-broadcasting unconditionally self-heals late joins and dropped
- * frames. On broker failure the empty roster is broadcast, and the next
- * successful tick restores the real one.
- */
-async function refreshDaemons(): Promise<void> {
-	const dir = config.cwd;
-	const merged = new Map<string, DaemonInfo>();
-	try {
-		const client = await daemonClientForProject(dir);
-		const result = await client.request({ op: "list" });
-		// Daemon names are unique per project dir only; key by
-		// projectDir+name so same-named daemons in different projects both
-		// reach the roster (the web client uses the same identity).
-		if (result.op === "list")
-			for (const snap of result.daemons) merged.set(`${dir}\u0000${snap.name}`, await daemonInfoWithEndpoint(client, dir, snap));
-	} catch {
-		// Broker unreachable (not started / shut down): empty roster.
-	}
-	// Drop cached endpoints for project dirs that left the roster scope. The
-	// \u0000 separator cannot appear in paths, so a plain prefix check is
-	// unambiguous.
-	const dirPrefixes = [`${dir}\u0000`];
-	for (const key of [...readyEndpointCache.keys()]) {
-		if (!dirPrefixes.some(prefix => key.startsWith(prefix))) readyEndpointCache.delete(key);
-	}
-	broadcast({ type: "daemons", daemons: [...merged.values()] });
-}
-
-function startDaemonPoll(): void {
-	if (daemonPoll) return;
-	daemonPoll = setInterval(() => void refreshDaemons(), DAEMON_POLL_MS);
-}
-
-function stopDaemonPoll(): void {
-	if (!daemonPoll) return;
-	clearInterval(daemonPoll);
-	daemonPoll = undefined;
-}
-
-// Keepalive: a named ping event block (SSE_PING_BLOCK — deliberately no id
-// field, so it never advances a consumer's resume counter) on every open
-// /events stream every SSE_KEEPALIVE_MS; consumers treat >
-// SSE_SILENCE_DEADLINE_MS of total silence as a dead peer and reconnect.
-// Runs only while streams are live.
-let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
-
-function startKeepalive(): void {
-	if (keepaliveTimer) return;
-	keepaliveTimer = setInterval(() => {
-		for (const stream of streams) enqueueTo(stream, SSE_PING_BLOCK);
-	}, SSE_KEEPALIVE_MS);
-}
-
-function stopKeepalive(): void {
-	if (!keepaliveTimer) return;
-	clearInterval(keepaliveTimer);
-	keepaliveTimer = undefined;
-}
-
-function wireSession(entry: SessionEntry): void {
-	const { session, eventBus } = entry;
-	// session.subscribe covers the entire AgentSessionEvent union — the same
-	// frames the RPC child emitted onSessionEvent.
-	session.subscribe(event => {
-		broadcastTo(entry.handle, { type: "event", event });
-		// Tokens/cost/context/queue counts all change at turn end.
-		if (event.type === "agent_end") void broadcastState(entry, true).catch(() => {});
-	});
-	eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data => {
-		handleSubagentLifecycle(entry, data as SubagentLifecyclePayload);
-	});
-	eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, data => {
-		handleSubagentProgress(entry, data as SubagentProgressPayload);
-	});
-}
-
-// ---------------------------------------------------------------------------
-// Collab session port (Slice C): the daemon's per-session surface the collab
-// host adapter drives — session getters, event/entry/bus taps, guest prompt
-// injection, agent roster/control, and transcript resolution.
-// ---------------------------------------------------------------------------
-
-/** Collab wire rosters only carry running/idle/parked/aborted; the mirror's wider status union maps down. */
-function collabAgentStatus(status: AgentProgress["status"]): CollabAgentRef["status"] {
-	if (status === "running" || status === "pending") return "running";
-	if (status === "aborted") return "aborted";
-	return "idle";
-}
-
-function buildCollabPort(entry: SessionEntry): CollabSessionPort {
-	const { session } = entry;
-	return {
-		getSessionId: () => session.sessionId,
-		getCwd: () => session.sessionManager.getCwd(),
-		getSessionName: () => session.sessionName,
-		isStreaming: () => session.isStreaming,
-		isAborting: () => session.isAborting,
-		queuedMessageCount: () => session.queuedMessageCount,
-		getModel: () => session.model,
-		getThinkingLevel: () => session.thinkingLevel,
-		getContextUsage: () => session.getContextUsage(),
-		snapshot: () => session.sessionManager.snapshotForReplication(),
-		subscribe: cb => session.subscribe(cb),
-		// Single slot; the adapter restores it (with null) on teardown.
-		onEntryAppended: cb => {
-			session.sessionManager.onEntryAppended = cb ?? undefined;
-		},
-		// Both task channels: the same EventBus traffic the subagent mirror taps.
-		subscribeBus: cb => {
-			const unsubs = [
-				entry.eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data => cb(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data)),
-				entry.eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, data => cb(TASK_SUBAGENT_PROGRESS_CHANNEL, data)),
-			];
-			return () => {
-				for (const unsub of unsubs) unsub();
-			};
-		},
-		subscribeAgents: cb => {
-			const unsubRegistry = entry.agentRegistry.onChange(() => cb());
-			entry.onSubagentsChange = cb;
-			return () => {
-				unsubRegistry();
-				entry.onSubagentsChange = null;
-			};
-		},
-		emitNotice: (level, message) => notifyEvent(entry, message, level),
-		promptFromGuest: (text, images, fromName) =>
-			session.promptCustomMessage(
-				{
-					customType: COLLAB_PROMPT_MESSAGE_TYPE,
-					content: images?.length ? [{ type: "text", text }, ...images] : text,
-					display: true,
-					details: { from: fromName } satisfies CollabPromptDetails,
-					attribution: "user",
-				},
-				{ streamingBehavior: "steer", queueChipText: text },
-			),
-		abort: () => session.abort({ reason: USER_INTERRUPT_LABEL }),
-		listAgents: () => {
-			const refs: CollabAgentRef[] = [];
-			// Main lives in the per-session registry; task subagents register in
-			// AgentRegistry.global() and are mirrored per-session as snapshots.
-			for (const ref of entry.agentRegistry.list()) {
-				if (ref.kind !== "main") continue;
-				refs.push({
-					id: ref.id,
-					kind: "main",
-					displayName: ref.displayName,
-					status: ref.status,
-					hasSessionFile: !!ref.sessionFile,
-					createdAt: ref.createdAt,
-					lastActivity: ref.lastActivity,
-				});
-			}
-			for (const snap of entry.subagentSnapshots.values()) {
-				const ref = AgentRegistry.global().get(snap.id);
-				refs.push({
-					id: snap.id,
-					kind: "sub",
-					displayName: ref?.displayName ?? snap.agent ?? snap.id,
-					status: ref?.status ?? collabAgentStatus(snap.status),
-					parentId: snap.parentToolCallId,
-					hasSessionFile: !!snap.sessionFile,
-					createdAt: ref?.createdAt ?? 0,
-					lastActivity: ref?.lastActivity ?? snap.lastUpdate,
-				});
-			}
-			return refs;
-		},
-		agentCmd: async (cmd, agentId, text) => {
-			if (cmd === "chat") {
-				if (agentId === MAIN_AGENT_ID) {
-					// Fire-and-forget: prompt resolves at turn end; failures are
-					// logged (the adapter targets its own error frames).
-					void session.prompt(text ?? "", { streamingBehavior: "steer" }).catch(err => {
-						console.error("collab guest prompt failed:", err);
-					});
-				} else {
-					await liveSubagentSession(entry, agentId, "steer").steer(text ?? "");
-				}
-				return;
-			}
-			if (cmd === "kill") {
-				if (agentId === MAIN_AGENT_ID) await session.abort({ reason: USER_INTERRUPT_LABEL });
-				else await abortSubagent(entry, agentId);
-				return;
-			}
-			// revive: the Main agent cannot be revived (it never dies).
-			if (agentId === MAIN_AGENT_ID) throw new Error("no such agent");
-			await AgentLifecycleManager.global().ensureLive(agentId);
-		},
-		resolveTranscriptFile: agentId =>
-			agentId === MAIN_AGENT_ID
-				? (session.sessionFile ?? null)
-				: (entry.transcriptSessionFilesBySubagentId.get(agentId) ?? entry.subagentSnapshots.get(agentId)?.sessionFile ?? null),
-	};
-}
-
-/** Map the adapter's host status onto the wire status web clients render. */
-function toWireStatus(status: CollabHostStatus | null): CollabWireStatus {
-	if (!status) return { state: "off" };
-	if (status.state === "error") return { state: "error", error: status.error ?? "collab error" };
-	return {
-		state: "live",
-		link: status.link,
-		viewLink: status.viewLink,
-		relayUrl: status.relayUrl,
-		roomId: status.roomId,
-		participants: status.participants,
-		maxGuests: config.collabMaxGuests,
-	};
-}
-
-// Slash commands typed into chat run through the ACP builtin dispatch before
-// hitting the model (parity with RPC mode's prompt flow).
-function buildSlashRuntime(entry: SessionEntry): SlashCommandRuntime {
-	const { session } = entry;
-	return {
-		session,
-		sessionManager: session.sessionManager,
-		settings: session.settings,
-		cwd: session.sessionManager.getCwd(),
-		output: text => notifyEvent(entry, text),
-		refreshCommands: () => broadcastAvailableCommands(entry),
-		// No plugin-state reloader is wired in the web host; re-advertising the
-		// command list is the observable part of the reload.
-		reloadPlugins: () => broadcastAvailableCommands(entry),
-		notifyTitleChanged: () => broadcastState(entry),
-		notifyConfigChanged: () => broadcastState(entry),
-	};
-}
-
-async function createSession(sessionCwd: string): Promise<SessionEntry> {
-	const agentRegistry = new AgentRegistry();
-	const eventBus = new EventBus();
-	const result = await createAgentSession({
-		cwd: sessionCwd,
-		agentDir,
-		authStorage,
-		modelRegistry,
-		settings,
-		sessionManager: SessionManager.create(sessionCwd),
-		agentRegistry,
-		eventBus,
-		hasUI: true,
-	});
-	const entry: SessionEntry = {
-		handle: BOOT_HANDLE,
-		cwd: sessionCwd,
-		session: result.session,
-		agentRegistry,
-		eventBus,
-		// Assigned right below: the runtime's closures need the entry.
-		slashRuntime: undefined!,
-		pendingUiRequests: new Map(),
-		subagentSnapshots: new Map(),
-		transcriptSessionFilesBySubagentId: new Map(),
-		staleSubagentIds: new Set(),
-		collab: { adapter: null, starting: false },
-		onSubagentsChange: null,
-	};
-	entry.slashRuntime = buildSlashRuntime(entry);
-	// Feeds the tool UI context; without hasUI the ask tool never registers.
-	result.setToolUIContext(buildUiContext(entry), true);
-	wireSession(entry);
-	return entry;
-}
-
-type Images = ImageContent[] | undefined;
-
-// Fire-and-forget: prompt resolves at turn end, so awaiting it would block
-// the relay. Failures surface as an error frame.
-function fireAndForgetPrompt(entry: SessionEntry, text: string, images: Images): void {
-	entry.session.prompt(text, { images }).catch(err => broadcast({ type: "error", error: String(err) }));
-	maybeGenerateTitle(entry, text);
-}
-
-// Auto-name unnamed sessions from the first prompt, mirroring the TUI's
-// input-controller title flow: skip when already named or PI_NO_TITLE is set,
-// re-check the name before writing so a concurrent namer wins. The SDK's
-// generateSessionTitle already rejects low-signal inputs.
-function maybeGenerateTitle(entry: SessionEntry, text: string): void {
-	const { sessionManager } = entry.session;
-	if (sessionManager.getSessionName() || Bun.env.PI_NO_TITLE) return;
-	entry.session
-		.generateTitle(text)
-		.then(async title => {
-			if (title && !sessionManager.getSessionName()) {
-				await sessionManager.setSessionName(title, "auto");
-			}
-		})
-		.catch(() => {});
-}
-
-/** Runs builtin / commands (/export, /compact, …); returns true when the input was consumed. */
-async function runBuiltinSlashCommand(entry: SessionEntry, text: string, images: Images): Promise<boolean> {
-	const builtinResult = await executeAcpBuiltinSlashCommand(text, entry.slashRuntime);
-	if (builtinResult === false) return false;
-	if ("prompt" in builtinResult) fireAndForgetPrompt(entry, builtinResult.prompt, images);
-	return true;
-}
-
-// Read-only calls skip the post-mutation state broadcast.
-const READ_ONLY: Partial<Record<WebMethodName, true>> = {
-	getSessionStats: true,
-	getAvailableModels: true,
-	getSettings: true,
-	getBranchMessages: true,
-	getQueuedMessages: true,
-	getLoginProviders: true,
-	getSubagents: true,
-	getSubagentMessages: true,
-	formatSessionAsText: true,
-	dumpLlmRequestToTmpDir: true,
-	fetchUsageReports: true,
-	getContextBreakdown: true,
-};
-
-// Readiness gate (R8): before the boot session's provider/model/auth
-// resolution completes, prompt-family methods fail with a not_ready error
-// instead of failing obscurely against a half-built session.
-const NOT_READY_GATED: Partial<Record<WebMethodName, true>> = {
-	prompt: true,
-	steer: true,
-	followUp: true,
-	abortAndPrompt: true,
-	runEphemeralTurn: true,
-};
-
-// Calls that replace the transcript; every tab resyncs, not just the requester.
-// handoff starts a new session server-side; fork rewrites history in place.
-const HISTORY_RELOAD: Partial<Record<WebMethodName, true>> = { newSession: true, switchSession: true, branch: true, fork: true, handoff: true };
-
-async function changeSession(
+async function primeConsumer(
+	consumer: SseConsumer,
 	entry: SessionEntry,
-	kind: "newSession" | "switchSession" | "branch",
-	arg: string | undefined,
-): Promise<unknown> {
-	const { session } = entry;
-	if (kind === "newSession") {
-		const ok = await session.newSession(arg ? { parentSession: arg } : undefined);
-		if (ok) {
-			clearSubagents(entry);
-			await broadcastAvailableCommands(entry);
-		}
-		return { cancelled: !ok };
+	commands: AvailableSlashCommand[] | null,
+	lastEventId: string | null,
+): Promise<void> {
+	// Snapshot the delta high-water mark BEFORE any priming is built: every
+	// ringed delta with seq < snapshotSeq is fully reflected in the history/
+	// state below, so replay must never deliver it again. Deltas >= snapshotSeq
+	// arrived while the paced prime was in flight and ride the ring replay.
+	const snapshotSeq = snapshotDeltaSeq();
+	consumer.attached = entry.handle;
+	let seq = 1;
+	enqueueTo(consumer, encodeSseEvent(SSE_EVENT_NAME, {
+		type: "hello_ok",
+		proto: OMP_PROTO,
+		name: config.name,
+		cwd: config.cwd,
+		pid: process.pid,
+		version,
+		...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
+	}, seq++));
+	enqueueTo(consumer, encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: BOOT_HANDLE }, seq++));
+	await sendHistoryPaced(consumer, entry.session.messages, () => seq++);
+	await enqueuePaced(consumer, encodeSseEvent(SSE_EVENT_NAME, {
+		type: "state",
+		state: daemonBroker.buildStateSnapshot(entry.session),
+		stats: entry.session.getSessionStats(),
+	}, seq++));
+	// Current collab status, so a client attaching to a live room sees it immediately.
+	await enqueuePaced(consumer, encodeSseEvent(SSE_EVENT_NAME, {
+		type: "collab_status",
+		status: collabSession.toWireStatus(entry.collab.adapter?.status ?? null),
+	}, seq++));
+	if (commands !== null) {
+		await enqueuePaced(consumer, encodeSseEvent(SSE_EVENT_NAME, { type: "available_commands", commands }, seq++));
 	}
-	if (kind === "switchSession") {
-		const ok = await session.switchSession(arg as string);
-		if (ok) {
-			clearSubagents(entry);
-			await broadcastAvailableCommands(entry);
-		}
-		return { cancelled: !ok };
+	// Late attachers get `ready` appended to the priming sequence (R8).
+	if (readyAt !== null) {
+		await enqueuePaced(consumer, encodeSseEvent(SSE_EVENT_NAME, { type: "ready", readyAt }, seq++));
 	}
-	const result = await session.branch(arg as string);
-	if (!result.cancelled) {
-		clearSubagents(entry);
-		await broadcastAvailableCommands(entry);
+	const last = lastEventId === null ? NaN : Number(lastEventId);
+	// Replay floor: the client already has everything up to its Last-Event-ID
+	// and the fresh priming carries everything before the snapshot, so only
+	// deltas after max(last, snapshotSeq-1) are new. An absent/sub-1024 id
+	// (fresh client, or a drop mid-prime) means priming carries full state up
+	// to the snapshot — the floor is just the snapshot mark, and deltas that
+	// arrived during the paced prime still replay exactly once.
+	const resumeFrom = Number.isFinite(last) && last >= SSE_DELTA_SEQ_START ? Math.max(last, snapshotSeq - 1) : snapshotSeq - 1;
+	const replay = ringAfter(resumeFrom);
+	// The ring keeps only the last SSE_RING_CAP deltas and evicts from the
+	// head; a first entry above resumeFrom+1 means entries the client still
+	// needs were evicted while the (paced) prime was in flight. Replaying the
+	// tail would silently skip them — drop-and-resume instead: the reconnect's
+	// Last-Event-ID is a priming seq, so it lands below the new snapshot mark
+	// and the fresh prime carries everything again.
+	if (replay.length > 0 && replay[0].seq > resumeFrom + 1) {
+		terminateStream(consumer, "ring eviction: resume window exceeded the replay ring");
+		return;
 	}
-	return { text: result.selectedText, cancelled: result.cancelled };
+	for (const { value } of replay) enqueueTo(consumer, value);
 }
 
 /**
- * Steer target: a registered agent with a live, running session. Parked refs have session null.
- * Task subagents register in AgentRegistry.global() (executor.ts hardcodes it), NOT the session's
- * private registry — that one only ever holds "Main". The per-session allowlist is the lifecycle
- * mirror: an id absent from subagentSnapshots belongs to another session (or no session) and is rejected.
+ * Open a GET /events SSE response: register the consumer (connect = attached
+ * to the single boot session, exactly like the WS open), prime it, and stream
+ * live deltas until the client goes away. The body's queuing strategy sizes
+ * chunks in bytes so backpressure is measured against SSE_BACKPRESSURE_BYTES.
  */
-function liveSubagentSession(entry: SessionEntry, agentId: string, op: "steer" | "abort"): AgentSession {
-	if (!entry.subagentSnapshots.has(agentId)) throw new Error(`Cannot ${op} agent ${agentId}: no such agent`);
-	const ref = AgentRegistry.global().get(agentId);
-	if (!ref) throw new Error(`Cannot ${op} agent ${agentId}: no such agent`);
-	if (ref.status !== "running" || !ref.session) {
-		throw new Error(`Cannot ${op} agent ${agentId}: not running (status: ${ref.status})`);
+async function openEventsResponse(req: Request): Promise<Response> {
+	const entry = bootEntry!;
+	// Build slash commands before the stream opens so the priming sequence is
+	// written contiguously (seqs 1..k) with no async gap into the delta era.
+	let commands: AvailableSlashCommand[] | null = null;
+	try {
+		commands = await buildAvailableSlashCommands(entry.session);
+	} catch (err) {
+		console.error("Failed to build available commands:", err);
 	}
-	return ref.session;
+	const lastEventId = req.headers.get("last-event-id");
+	let consumer: SseConsumer | undefined;
+	const stream = new ReadableStream<Uint8Array>(
+		{
+			start: controller => {
+				// The constructor's start callback types the controller as the
+				// default/byte union; this stream is built with a default
+				// source, so the default controller is the actual runtime type.
+				const c: SseConsumer = {
+					id: nextConsumerId++,
+					controller: controller as ReadableStreamDefaultController<Uint8Array>,
+					attached: null,
+					unreadEstimate: 0,
+				};
+				consumer = c;
+				streams.add(c);
+				daemonBroker.startDaemonPoll();
+				startKeepalive();
+				// Connect = attached: a bare /events open reproduces the
+				// single-session priming sequence (the bootReady gate admits
+				// requests only after the boot session exists). hello_ok and
+				// attached are enqueued synchronously above any await; only the
+				// history chunking paces (large transcripts drain between
+				// chunks).
+				void primeConsumer(c, entry, commands, lastEventId).catch(err => {
+					console.error("Failed to prime /events stream:", err);
+				});
+			},
+			cancel: () => {
+				// Detach only: sessions outlive streams.
+				if (consumer) detachConsumer(consumer, "stream closed");
+			},
+		},
+		{ highWaterMark: SSE_BACKPRESSURE_BYTES, size: chunk => chunk?.byteLength ?? 0 },
+	);
+	return new Response(stream, {
+		headers: {
+			"content-type": "text/event-stream",
+			"cache-control": "no-cache",
+			"x-accel-buffering": "no",
+		},
+	});
 }
-
-/**
- * Abort mirrors the hub tool's cancel path (tools/hub/jobs.ts executeCancel): kill the async job
- * first — bare session.abort() only interrupts the in-flight turn and the executor keeps the job
- * running. Jobless registrations (pre-job spawn, idle/parked zombies) die via abort + lifecycle release.
- */
-async function abortSubagent(entry: SessionEntry, agentId: string): Promise<void> {
-	if (!entry.subagentSnapshots.has(agentId)) throw new Error(`Cannot abort agent ${agentId}: no such agent`);
-	const manager = entry.session.asyncJobManager;
-	const job = manager?.getJob(agentId);
-	if (job) {
-		if (job.status === "running") {
-			if (!manager!.cancel(agentId)) throw new Error(`Cannot abort agent ${agentId}: job already settled`);
-			return;
-		}
-		// Settled job row: fall through to the registration kill (rows outlive
-		// the run inside the retention window while the agent lives on).
-	}
-	const ref = AgentRegistry.global().get(agentId);
-	if (!ref) throw new Error(`Cannot abort agent ${agentId}: no such agent`);
-	if (ref.status === "running" && ref.session) {
-		await ref.session.abort({ reason: USER_INTERRUPT_LABEL });
-	}
-	await AgentLifecycleManager.global().release(agentId);
-}
-
-const METHODS: Record<WebMethodName, (entry: SessionEntry, args: unknown[], streamId?: number) => Promise<unknown>> = {
-	prompt: async (entry, a) => {
-		const text = a[0] as string;
-		const images = a[1] as Images;
-		if (await runBuiltinSlashCommand(entry, text, images)) return undefined;
-		fireAndForgetPrompt(entry, text, images);
-		return undefined;
-	},
-	steer: (entry, a) => entry.session.steer(a[0] as string, a[1] as Images),
-	followUp: (entry, a) => entry.session.followUp(a[0] as string, a[1] as Images),
-	getQueuedMessages: async entry => entry.session.getQueuedMessages(),
-	popLastQueuedMessage: async entry => entry.session.popLastQueuedMessage(),
-	clearQueue: async entry => entry.session.clearQueue(),
-	abort: entry => entry.session.abort({ reason: USER_INTERRUPT_LABEL }),
-	abortAndPrompt: async (entry, a) => {
-		await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
-		fireAndForgetPrompt(entry, a[0] as string, a[1] as Images);
-	},
-	newSession: (entry, a) => changeSession(entry, "newSession", a[0] as string | undefined),
-	switchSession: (entry, a) => changeSession(entry, "switchSession", a[0] as string),
-	branch: (entry, a) => changeSession(entry, "branch", a[0] as string),
-	compact: (entry, a) => entry.session.compact(a[0] as string | undefined),
-	retry: entry => entry.session.retry(),
-	fork: entry => entry.session.fork(),
-	// Sync SDK method: resets provider streams, keeps the transcript — the
-	// post-mutation state broadcast picks up the new sessionId.
-	freshSession: async entry => entry.session.freshSession() ?? null,
-	handoff: (entry, a) => entry.session.handoff(a[0] as string | undefined),
-	setSessionName: (entry, a) => entry.session.setSessionName(a[0] as string, "user"),
-	setInterruptMode: async (entry, a) => {
-		entry.session.setInterruptMode(a[0] as "immediate" | "wait");
-	},
-	// Phase 9 (17.1.8): /goal and /plan are NOT ACP-intercepted server-side, so
-	// goal/plan control drives the SDK directly. The post-mutation state
-	// broadcast re-reads getGoalModeState()/getPlanModeState()?.enabled.
-	setGoalModeState: async (entry, a) => {
-		entry.session.setGoalModeState(a[0] as GoalModeState | undefined);
-	},
-	setPlanModeState: async (entry, a) => {
-		entry.session.setPlanModeState(a[0] as PlanModeState | undefined);
-	},
-	// goalRuntime rows: createGoal throws when a goal is already active
-	// (matching the CLI's refusal) — the client only offers "set" with no goal.
-	goalCreate: (entry, a) => entry.session.goalRuntime.createGoal({ objective: String(a[0] ?? "") }),
-	goalPause: entry => entry.session.goalRuntime.pauseGoal(),
-	goalResume: entry => entry.session.goalRuntime.resumeGoal(),
-	goalDrop: entry => entry.session.goalRuntime.dropGoal(),
-	formatSessionAsText: async entry => entry.session.formatSessionAsText(),
-	// Dump lands in os.tmpdir(), already inside the /download realpath jail.
-	dumpLlmRequestToTmpDir: entry => entry.session.dumpLlmRequestToTmpDir(),
-	setModel: async (entry, a) => {
-		const { session } = entry;
-		const [provider, modelId] = [a[0] as string, a[1] as string];
-		let model = session.getAvailableModels().find(m => m.provider === provider && m.id === modelId);
-		if (!model) {
-			// Cold start: discovery-backed providers populate seconds after
-			// session ready; wait for in-flight discovery before giving up.
-			await session.modelRegistry.awaitBackgroundRefresh();
-			model = session.getAvailableModels().find(m => m.provider === provider && m.id === modelId);
-		}
-		if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
-		await session.setModel(model);
-		return model;
-	},
-	cycleModel: async entry => (await entry.session.cycleModel()) ?? null,
-	getAvailableModels: async entry => {
-		await entry.session.modelRegistry.awaitBackgroundRefresh();
-		return entry.session.getAvailableModels();
-	},
-	// Settings panel (TUI /settings parity). getSettings is READ_ONLY; the
-	// model is built fresh per call from the shared Settings singleton.
-	getSettings: async entry => {
-		await entry.session.modelRegistry.awaitBackgroundRefresh();
-		return buildSettingsModel(entry.session, await getAvailableThemes());
-	},
-	setSetting: async (entry, a) => {
-		const [path, value] = [String(a[0]), a[1]];
-		const coerced = coerceSettingValue(path, value);
-		// Persist via the shared Settings singleton (in-process merge +
-		// debounced disk write — the TUI's settings.set semantics). Session-
-		// managed paths (autoCompact, thinkingLevel) have no schema entry and
-		// are applied only through the side-effect switch below.
-		if (path in SETTINGS_SCHEMA) {
-			settings.set(path as SettingPath, coerced as never);
-		}
-		await applySettingSideEffects(entry.session, path, coerced);
-		const model = buildSettingsModel(entry.session, await getAvailableThemes());
-		broadcastTo(entry.handle, { type: "settings_changed", model });
-		return model;
-	},
-	setThinkingLevel: async (entry, a) => {
-		entry.session.setThinkingLevel(a[0] as ThinkingLevel);
-	},
-	cycleThinkingLevel: async entry => {
-		const level = entry.session.cycleThinkingLevel();
-		return level ? { level } : null;
-	},
-	setSteeringMode: async (entry, a) => {
-		entry.session.setSteeringMode(a[0] as "all" | "one-at-a-time");
-	},
-	setFollowUpMode: async (entry, a) => {
-		entry.session.setFollowUpMode(a[0] as "all" | "one-at-a-time");
-	},
-	setAutoCompaction: async (entry, a) => {
-		entry.session.setAutoCompactionEnabled(a[0] as boolean);
-	},
-	setAutoRetry: async (entry, a) => {
-		entry.session.setAutoRetryEnabled(a[0] as boolean);
-	},
-	abortRetry: async entry => {
-		entry.session.abortRetry();
-	},
-	setFastMode: async (entry, a) => {
-		entry.session.setFastMode(a[0] as boolean);
-	},
-	setComputerToolEnabled: (entry, a) => entry.session.setComputerToolEnabled(a[0] as boolean),
-	setInspectImageMode: (entry, a) => entry.session.setInspectImageMode(a[0] as InspectImageMode),
-	// READ_ONLY rows: usage reports + context breakdown (skip the state broadcast).
-	fetchUsageReports: entry => entry.session.fetchUsageReports(),
-	getContextBreakdown: async entry => entry.session.getContextBreakdown(),
-	// Phase 10: onChunk relays live output as session-scoped chunk frames
-	// (streamId = the client's bash-item id). `!!`/`$$` dimmed variants are
-	// excluded from the agent's context, matching the TUI semantic.
-	// In-flight counters feed the idle auto-exit check (R11).
-	bash: (entry, a, streamId) => {
-		inFlightBash++;
-		return entry.session
-			.executeBash(a[0] as string, chunk => {
-				if (streamId !== undefined) broadcastTo(entry.handle, { type: "bash_chunk", id: streamId, text: chunk });
-			}, { excludeFromContext: a[1] === true })
-			.finally(() => {
-				inFlightBash--;
-			});
-	},
-	abortBash: async entry => {
-		entry.session.abortBash();
-	},
-	python: (entry, a, streamId) => {
-		inFlightPython++;
-		return entry.session
-			.executePython(a[0] as string, chunk => {
-				if (streamId !== undefined) broadcastTo(entry.handle, { type: "python_chunk", id: streamId, text: chunk });
-			}, { excludeFromContext: a[1] === true })
-			.finally(() => {
-				inFlightPython--;
-			});
-	},
-	abortEval: async entry => {
-		entry.session.abortEval();
-	},
-	// Phase 11: /btw side question. runEphemeralTurn never touches the
-	// transcript; onTextDelta relays as session-scoped ephemeral_delta frames
-	// (streamId = the client's btw panel id), and the call resolves with the
-	// final replyText. A per-streamId AbortController backs abortEphemeral.
-	runEphemeralTurn: (entry, a, streamId) => {
-		const controller = new AbortController();
-		if (streamId !== undefined) setEphemeralAbort(entry, streamId, controller);
-		return entry.session
-			.runEphemeralTurn({
-				promptText: String(a[0] ?? ""),
-				signal: controller.signal,
-				onTextDelta: chunk => {
-					if (streamId !== undefined) broadcastTo(entry.handle, { type: "ephemeral_delta", id: streamId, text: chunk });
-				},
-			})
-			.then(
-				result => {
-					if (streamId !== undefined) clearEphemeralAbort(entry, streamId);
-					return { replyText: result.replyText };
-				},
-				err => {
-					if (streamId !== undefined) clearEphemeralAbort(entry, streamId);
-					throw err;
-				},
-			);
-	},
-	abortEphemeral: async (entry, _a, streamId) => {
-		if (streamId === undefined) return;
-		ephemeralAborts.get(entry)?.get(streamId)?.abort();
-	},
-	getSessionStats: async entry => entry.session.getSessionStats(),
-	exportHtml: async (entry, a) => ({ path: await entry.session.exportToHtml(a[0] ? String(a[0]) : undefined, a[1] === true) }),
-	getBranchMessages: async entry => entry.session.getUserMessagesForBranching(),
-	getLoginProviders: async () =>
-		getOAuthProviders().map(provider => ({
-			id: provider.id,
-			name: provider.name,
-			available: provider.available,
-			authenticated: authStorage.hasAuth(provider.id),
-		})),
-	login: () => Promise.reject(new Error("login is handled per-socket")),
-	getSubagents: async entry => {
-		// Roster from the per-session lifecycle mirror (task subagents register in
-		// AgentRegistry.global(), not the private registry), enriched with live
-		// registry data when the global ref still exists.
-		return [...entry.subagentSnapshots.values()].map(snap => {
-			const ref = AgentRegistry.global().get(snap.id);
-			return {
-				id: snap.id,
-				index: snap.index,
-				agent: snap.agent ?? ref?.displayName ?? "agent",
-				description: snap.description,
-				task: snap.task,
-				status: snap.status ?? ref?.status,
-				lastUpdate: snap.lastUpdate,
-				sessionFile: snap.sessionFile ?? ref?.sessionFile,
-			};
-		});
-	},
-	getSubagentMessages: (entry, a) => {
-		const selector = a[0] as { subagentId?: string; sessionFile?: string; fromByte?: number };
-		return readSubagentTranscript(resolveSubagentSessionFile(entry, selector), selector.fromByte);
-	},
-	subagentSteer: async (entry, a) => {
-		await liveSubagentSession(entry, a[0] as string, "steer").steer(a[1] as string);
-	},
-	subagentAbort: async (entry, a) => {
-		await abortSubagent(entry, a[0] as string);
-	},
-};
 
 // Login callbacks are streaming (open_url + manual code input), so login is
 // special-cased in dispatch. Pending code inputs are keyed per connection
 // (the streams live at dispatch time) and are rejected on login settle, on
 // every owning stream closing, on the attached session's close, and on shutdown.
-const pendingCodeInputs = new Map<
-	string,
-	{ streams: Set<SseConsumer>; resolve: (code: string) => void; reject: (err: Error) => void }
->();
 let nextLoginRequestId = 1;
 
 async function loginWithCallbacks(entry: SessionEntry, providerId: string): Promise<unknown> {
@@ -1637,7 +365,7 @@ async function loginWithCallbacks(entry: SessionEntry, providerId: string): Prom
 		// Provider-scoped online refresh so the just-persisted credential
 		// re-runs discovery instead of reusing a fresh authoritative cache row.
 		await modelRegistry.refreshProvider(providerId, "online");
-		await broadcastAvailableCommands(entry);
+		await daemonBroker.broadcastAvailableCommands(entry);
 		return { providerId };
 	} finally {
 		// Reject this call's leftover code inputs (already-resolved entries
@@ -1678,107 +406,6 @@ async function listFiles(query: string, limit: number): Promise<string[]> {
 }
 
 /**
- * Prime a fresh /events stream synchronously: hello_ok first (daemon identity
- * — HTTP-level auth replaced the WS hello handshake), then the attach priming
- * (attached → history → state → collab_status → available_commands → ready),
- * seqs 1..k (k < SSE_DELTA_SEQ_START). `commands` is built BEFORE the stream
- * opens so every priming seq is assigned contiguously (no async gap between
- * priming and the delta era). Then resume per Last-Event-ID: only a delta-era
- * id (≥ SSE_DELTA_SEQ_START) replays ring deltas after it; anything below (or
- * absent) means priming already carries full current state.
- */
-function primeConsumer(
-	consumer: SseConsumer,
-	entry: SessionEntry,
-	commands: AvailableSlashCommand[] | null,
-	lastEventId: string | null,
-): void {
-	consumer.attached = entry.handle;
-	let seq = 1;
-	const priming: Array<ServerFrame> = [
-		{
-			type: "hello_ok",
-			proto: OMP_PROTO,
-			name: config.name,
-			cwd: config.cwd,
-			pid: process.pid,
-			version,
-			...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
-		},
-		{ type: "attached", sessionId: BOOT_HANDLE, mode: "single" },
-		{ type: "history", messages: entry.session.messages },
-		{ type: "state", state: buildStateSnapshot(entry.session), stats: entry.session.getSessionStats() },
-		// Current collab status, so a client attaching to a live room sees it immediately.
-		{ type: "collab_status", status: toWireStatus(entry.collab.adapter?.status ?? null) },
-	];
-	if (commands !== null) priming.push({ type: "available_commands", commands });
-	// Late attachers get `ready` appended to the priming sequence (R8).
-	if (readyAt !== null) priming.push({ type: "ready", readyAt });
-	for (const frame of priming) {
-		enqueueTo(consumer, encodeSseEvent(SSE_EVENT_NAME, frame, seq++));
-	}
-	const last = lastEventId === null ? NaN : Number(lastEventId);
-	if (Number.isFinite(last) && last >= SSE_DELTA_SEQ_START) {
-		for (const { value } of ring.after(last)) enqueueTo(consumer, value);
-	}
-}
-
-/**
- * Open a GET /events SSE response: register the consumer (connect = attached
- * to the single boot session, exactly like the WS open), prime it, and stream
- * live deltas until the client goes away. The body's queuing strategy sizes
- * chunks in bytes so backpressure is measured against SSE_BACKPRESSURE_BYTES.
- */
-async function openEventsResponse(req: Request): Promise<Response> {
-	const entry = bootEntry!;
-	// Build slash commands before the stream opens so the priming sequence is
-	// written contiguously (seqs 1..k) with no async gap into the delta era.
-	let commands: AvailableSlashCommand[] | null = null;
-	try {
-		commands = await buildAvailableSlashCommands(entry.session);
-	} catch (err) {
-		console.error("Failed to build available commands:", err);
-	}
-	const lastEventId = req.headers.get("last-event-id");
-	let consumer: SseConsumer | undefined;
-	const stream = new ReadableStream<Uint8Array>(
-		{
-			start: controller => {
-				// The constructor's start callback types the controller as the
-				// default/byte union; this stream is built with a default
-				// source, so the default controller is the actual runtime type.
-				const c: SseConsumer = {
-					id: nextConsumerId++,
-					controller: controller as ReadableStreamDefaultController<Uint8Array>,
-					attached: null,
-					unreadEstimate: 0,
-				};
-				consumer = c;
-				streams.add(c);
-				startDaemonPoll();
-				startKeepalive();
-				// Connect = attached: a bare /events open reproduces the
-				// single-session priming sequence (the bootReady gate admits
-				// requests only after the boot session exists).
-				primeConsumer(c, entry, commands, lastEventId);
-			},
-			cancel: () => {
-				// Detach only: sessions outlive streams.
-				if (consumer) detachConsumer(consumer, "stream closed");
-			},
-		},
-		{ highWaterMark: SSE_BACKPRESSURE_BYTES, size: chunk => chunk?.byteLength ?? 0 },
-	);
-	return new Response(stream, {
-		headers: {
-			"content-type": "text/event-stream",
-			"cache-control": "no-cache",
-			"x-accel-buffering": "no",
-		},
-	});
-}
-
-/**
  * Dispose the boot session and cut every stream off it. Only invoked from
  * shutdown: streams are detached (never closed); pending ui_requests and the
  * pending login code inputs of those streams are rejected.
@@ -1816,6 +443,19 @@ function attachedEntry(): SessionEntry | undefined {
 
 async function handleCommand(cmd: ClientCommand): Promise<void> {
 	try {
+		// Test hook (OMP_SESSION_TEST_UI_REQUEST=1, see server/config.ts):
+		// deterministically create a web ui_request so integration tests can
+		// exercise the dialog round-trip + ring invalidation (finding #16)
+		// without a model turn. Only accepted when the hook env is set; a
+		// fleet edge's allowlist rejects it for browsers.
+		if (config.uiRequestTestHook && (cmd as { type?: string }).type === "test_ui_request") {
+			const entry = attachedEntry();
+			if (!entry) throw new Error("Not attached to a session");
+			void webUiRequest(entry, "confirm", { title: "test dialog", message: "finding #16 regression" }).catch(err => {
+				broadcast({ type: "error", error: `test_ui_request failed: ${String(err)}` });
+			});
+			return;
+		}
 		switch (cmd.type) {
 			case "call": {
 				const entry = attachedEntry();
@@ -1835,7 +475,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				const resync = async () => {
 					try {
 						if (HISTORY_RELOAD[cmd.method]) await broadcastHistory(entry);
-						if (HISTORY_RELOAD[cmd.method] || !READ_ONLY[cmd.method]) await broadcastState(entry);
+						if (HISTORY_RELOAD[cmd.method] || !READ_ONLY[cmd.method]) await daemonBroker.broadcastState(entry);
 					} catch (err) {
 						console.error("Post-mutation resync failed:", err);
 						broadcast({ type: "error", error: `resync failed: ${String(err)}` });
@@ -1867,6 +507,11 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					entry.pendingUiRequests.delete(cmd.id);
 					if (cmd.error !== undefined) pending.reject(new Error(cmd.error));
 					else pending.resolve(cmd.result);
+					// Finding #16: broadcast the ringed ui_request_end so every
+					// attached tab dismisses the dialog and a resuming stream
+					// (older Last-Event-ID) replays end-after-request instead of
+					// a stale dialog whose answer would no-op.
+					broadcastTo(entry.handle, { type: "ui_request_end", id: cmd.id });
 				}
 				break;
 			}
@@ -1901,10 +546,6 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				// in omp-fleet, Phase 3).
 				broadcastAnswer({ type: "error", error: "fleet-only command" });
 				break;
-			case "get_process_stats": {
-				broadcastAnswer({ type: "process_stats", process: processStatsSnapshot() });
-				break;
-			}
 			case "collab_start": {
 				const entry = attachedEntry();
 				if (!entry) throw new Error("Not attached to a session");
@@ -1913,12 +554,17 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				}
 				entry.collab.starting = true;
 				broadcastTo(entry.handle, { type: "collab_status", status: { state: "starting" } });
-				const adapter = new CollabHostAdapter(buildCollabPort(entry), {
+				const adapter = new CollabHostAdapter(collabSession.buildCollabPort(entry), {
 					hostName: config.collabHostname ?? (os.userInfo().username || "web"),
-					onStatusChange: status => broadcastTo(entry.handle, { type: "collab_status", status: toWireStatus(status) }),
+					onStatusChange: status => broadcastTo(entry.handle, { type: "collab_status", status: collabSession.toWireStatus(status) }),
 				});
 				try {
-					await adapter.start(relayBaseUrl());
+					// Join links advertise collabUrl (or localhost); the host
+					// socket always connects to the local relay so a public
+					// collabUrl never hairpins off-loopback (the R14 host
+					// gate requires a bearer token there, which the adapter
+					// has no way to present).
+					await adapter.start(relayBaseUrl(), `ws://localhost:${server.port}`);
 					entry.collab.adapter = adapter;
 				} catch (err) {
 					broadcastTo(entry.handle, { type: "collab_status", status: { state: "error", error: String(err) } });
@@ -1966,7 +612,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					const client = await daemonClientForProject(cmd.projectDir);
 					const result = await client.request({ op: "stop", name: cmd.name, timeoutMs: cmd.timeoutMs ?? 10_000 });
 					if (result.op !== "stop") throw new Error("unexpected daemon broker response");
-					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
+					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonBroker.daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
 				} catch (err) {
 					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
 				}
@@ -1977,7 +623,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					const client = await daemonClientForProject(cmd.projectDir);
 					const result = await client.request({ op: "restart", name: cmd.name });
 					if (result.op !== "restart") throw new Error("unexpected daemon broker response");
-					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
+					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonBroker.daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
 				} catch (err) {
 					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
 				}
@@ -1988,9 +634,11 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 		}
 	} catch (err) {
 		if (cmd.type === "call") {
-			const entry = attachedEntry();
-			if (entry) broadcastAnswer({ type: "call_result", id: cmd.id, ok: false, error: String(err) });
-			else broadcastAnswer({ type: "error", error: String(err) });
+			// Finding #59: EVERY failed call answers with the id-keyed
+			// call_result — even without an attached session entry. The
+			// client correlates call() promises only with call_result; a bare
+			// error frame here would leave the promise hanging until timeout.
+			broadcastAnswer({ type: "call_result", id: cmd.id, ok: false, error: String(err) });
 		} else {
 			broadcastAnswer({ type: "error", error: String(err) });
 		}
@@ -2045,10 +693,21 @@ function contentTypeForPath(pathname: string): string {
 	return EMBEDDED_CONTENT_TYPES[path.extname(pathname).toLowerCase()] ?? "application/octet-stream";
 }
 
+/**
+ * Authorization header check: the scheme is case-insensitive (`bearer`/
+ * `Bearer`), but the token value is compared EXACTLY — consistent with the
+ * ?token= query path (regression: the whole header used to be lowercased,
+ * accepting wrong-case tokens).
+ */
+function bearerHeaderOk(header: string | null, token: string): boolean {
+	if (header === null) return false;
+	return header.slice(0, 7).toLowerCase() === "bearer " && header.slice(7) === token;
+}
+
 /** Bearer check for plain-HTTP paths (/download, static): Authorization header or ?token=. */
 function bearerOk(req: Request): boolean {
 	const header = req.headers.get("authorization");
-	if (header !== null && header.toLowerCase() === `bearer ${config.token!.toLowerCase()}`) return true;
+	if (bearerHeaderOk(header, config.token!)) return true;
 	return new URL(req.url).searchParams.get("token") === config.token;
 }
 
@@ -2058,11 +717,10 @@ function bearerOk(req: Request): boolean {
  * or ?token=. A missing or wrong credential is a 401 — no hello window, no
  * close codes.
  */
-function r14Authorized(req: Request, srv: Server<SocketData>): boolean {
+function r14Authorized(req: Request, srv: Server<RelaySocketData>): boolean {
 	if (isLoopbackIp(srv.requestIP(req)?.address)) return true;
 	if (!config.token) return true;
-	const header = req.headers.get("authorization");
-	if (header !== null && header.toLowerCase() === `bearer ${config.token.toLowerCase()}`) return true;
+	if (bearerHeaderOk(req.headers.get("authorization"), config.token)) return true;
 	return new URL(req.url).searchParams.get("token") === config.token;
 }
 
@@ -2095,7 +753,7 @@ function commandSeenRecently(id: string | undefined): boolean {
 	return false;
 }
 
-const server = Bun.serve<SocketData>({
+const server = Bun.serve<RelaySocketData>({
 	port: config.port,
 	hostname: config.host,
 	// SSE responses are long-lived and quiet between 15s keepalive pings;
@@ -2108,8 +766,15 @@ const server = Bun.serve<SocketData>({
 		await bootReady;
 		const url = new URL(req.url);
 		// Collab relay rooms (/r/<roomId>?role=host|guest) upgrade here; the
-		// relay returns false for every other pathname so web handling continues.
-		if (relay.handleUpgrade(url, srv, req)) return;
+		// relay returns null for every other pathname so web handling
+		// continues. Host upgrades can be refused before the handshake
+		// (off-loopback without the bearer token → 401; new host room past
+		// the cap → 503) — surface that response.
+		const relayResult = relay.handleUpgrade(url, srv, req);
+		if (relayResult !== null) {
+			if (relayResult.handled) return;
+			return new Response(relayResult.reason, { status: relayResult.status });
+		}
 		// Agent-driving transport (OMP_PROTO 2): GET /events down (SSE),
 		// POST /command up (one ClientCommand per request, 202 accept).
 		if (url.pathname === "/events") {
@@ -2171,16 +836,17 @@ const server = Bun.serve<SocketData>({
 	},
 	websocket: {
 		// Only collab relay sockets reach these handlers: the agent-driving
-		// channel is SSE (/events) + POST (/command), and the relay's own
-		// handlers are defensive against non-relay sockets.
+		// channel is SSE (/events) + POST (/command), and every upgraded
+		// socket carries RelaySocketData (audit #18 — the old "web" variant
+		// of the union was never constructed).
 		open(ws) {
-			if (ws.data.kind === "relay") relay.handleOpen(ws);
+			relay.handleOpen(ws);
 		},
 		close(ws) {
-			if (ws.data.kind === "relay") relay.handleClose(ws);
+			relay.handleClose(ws);
 		},
 		message(ws, raw) {
-			if (ws.data.kind === "relay") relay.handleMessage(ws, raw);
+			relay.handleMessage(ws, raw);
 		},
 	},
 });
@@ -2198,7 +864,7 @@ const listeningLine: StdoutContractLine = {
 	url: `ws://${config.host}:${server.port}`,
 };
 if (config.advertise) listeningLine.advertise = config.advertise;
-console.log(`OMP_SESSION|${JSON.stringify(listeningLine)}`);
+console.log(`${OMP_SESSION_PREFIX}${JSON.stringify(listeningLine)}`);
 console.error(`omp-session listening on http://localhost:${server.port}`);
 
 // pi-utils' postmortem installs its own SIGINT/SIGTERM/SIGHUP handlers at
@@ -2231,13 +897,13 @@ async function bootReadiness(entry: SessionEntry): Promise<void> {
 	if (config.readyDeferMs > 0) await sleep(config.readyDeferMs);
 	readyAt = Date.now();
 	// Stamp readyAt into every state snapshot, then announce the gate.
-	void broadcastState(entry, true);
+	void daemonBroker.broadcastState(entry, true);
 	broadcast({ type: "ready", readyAt });
 }
 
 let bootSession: SessionEntry;
 try {
-	bootSession = await createSession(config.cwd);
+	bootSession = await collabSession.createSession(config.cwd);
 } catch (err) {
 	// A signal during boot runs shutdown() concurrently; the torn-down SDK
 	// state fails createSession — that is the shutdown, not a boot failure.
@@ -2251,7 +917,7 @@ if (config.resume) {
 		const ok = await bootEntry.session.switchSession(config.resume);
 		if (ok) {
 			clearSubagents(bootEntry);
-			await broadcastAvailableCommands(bootEntry);
+			await daemonBroker.broadcastAvailableCommands(bootEntry);
 		} else {
 			console.error(`omp-session: --resume ${config.resume}: session switch returned false; starting fresh`);
 		}
@@ -2272,7 +938,7 @@ void bootReadiness(bootEntry);
 
 function isIdleSuppressed(): boolean {
 	if (streams.size > 0) return true;
-	if (inFlightBash > 0 || inFlightPython > 0) return true;
+	if (getInFlightBash() > 0 || getInFlightPython() > 0) return true;
 	if (bootEntry) {
 		if (bootEntry.session.isStreaming) return true;
 		if (bootEntry.session.queuedMessageCount > 0) return true;

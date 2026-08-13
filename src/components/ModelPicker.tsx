@@ -1,8 +1,9 @@
 import { createSignal, For, onMount, type Component } from "solid-js";
-import type { ModelInfo } from "../protocol";
+import type { ModelInfo } from "../../shared/protocol";
 import { fuzzyRank } from "../autocomplete";
 import { call, setState, state } from "../state";
 import { Modal } from "./Modal";
+import { PickerRow } from "./PickerRow";
 
 /** Model picker: fetches on open, fuzzy-filtered, grouped by provider. */
 /** Compact context-window label for model rows, e.g. "ctx 128k" / "ctx 1.2M". */
@@ -63,7 +64,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 							<div class="picker-group-name">{provider}</div>
 							<For each={models}>
 								{m => (
-									<div
+									<PickerRow
 										class="picker-row"
 										classList={{ active: state.model?.provider === m.provider && state.model?.id === m.id }}
 										onClick={() => choose(m)}
@@ -73,7 +74,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 										{formatCtx(m.contextWindow) && (
 											<span class="picker-meta">{formatCtx(m.contextWindow)}</span>
 										)}
-									</div>
+									</PickerRow>
 								)}
 							</For>
 						</div>

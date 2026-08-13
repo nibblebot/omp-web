@@ -16,7 +16,7 @@ import {
 	THEME_OPTIONS,
 	type ThemePreference,
 } from "../theme";
-import type { SettingsItem } from "../protocol";
+import type { SettingsItem } from "../../shared/protocol";
 import { Modal } from "./Modal";
 
 /**
@@ -121,7 +121,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 	};
 
 	return (
-		<Modal variant="sheet" class="settings-panel" onClose={props.onClose}>
+		<Modal variant="sheet" class="settings-panel" aria-label="Settings" onClose={props.onClose}>
 			<div class="settings-header">
 				<h2 class="settings-title">Settings</h2>
 				<input

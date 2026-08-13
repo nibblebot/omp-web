@@ -3,6 +3,7 @@ import { fuzzyRank } from "../autocomplete";
 import { PromptHistory } from "../history";
 import { setPromptInsert } from "../state";
 import { Modal } from "./Modal";
+import { PickerRow } from "./PickerRow";
 
 /**
  * Phase 7: Ctrl+R fuzzy search over prompt history (web affordance of the
@@ -67,14 +68,14 @@ export const HistorySearch: Component<{ onClose: () => void }> = props => {
 			<div class="picker-list">
 				<For each={filtered()}>
 					{(item, i) => (
-						<div
+						<PickerRow
 							class="picker-row"
 							classList={{ active: i() === selected() }}
 							onClick={() => choose(item.text)}
 							onMouseEnter={() => setSelected(i())}
 						>
 							<span class="picker-detail">{item.text}</span>
-						</div>
+						</PickerRow>
 					)}
 				</For>
 				{filtered().length === 0 && <div class="tool-collapsed-note">no matching history</div>}

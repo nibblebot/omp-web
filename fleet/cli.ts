@@ -12,7 +12,7 @@
  *   omp-fleet provision <name> [--label k=v]…
  *   omp-fleet stop <selector>
  *   omp-fleet remove <selector>
- *   omp-fleet prompt <selector> <text> [--wait <ms>] [--fan-out]
+ *   omp-fleet prompt <selector> <text> [--wait <ms>]
  *
  * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722.
  * A refused connection prints "fleet not running — start it:
@@ -75,12 +75,23 @@ function parseArgs(argv: string[]): ParsedArgs {
 				continue;
 			}
 			const next = argv[i + 1];
-			if (next !== undefined && !next.startsWith("-")) {
-				put(name, next);
-				i++;
-			} else {
-				put(name, true);
+			if (next === undefined || next.startsWith("-")) {
+				// #26: a missing value, or a value that looks like a flag
+				// (e.g. --wait -1), was silently converted to a boolean true
+				// and dropped by flagString/flagNumber. A non-multi flag with
+				// no usable value is a user error — say so instead of
+				// silently ignoring it. Multi flags keep the legacy leniency.
+				if (MULTI_FLAGS.has(name)) {
+					put(name, true);
+				} else if (next === undefined) {
+					throw new CliError(`missing value for --${name}`);
+				} else {
+					throw new CliError(`invalid value for --${name}: ${next}`);
+				}
+				continue;
 			}
+			put(name, next);
+			i++;
 		} else {
 			positionals.push(arg);
 		}
@@ -299,7 +310,7 @@ async function promptCmd(positionals: string[], flags: Map<string, FlagValue>, p
 	const selector = positionals[0];
 	const text = positionals.slice(1).join(" ");
 	if (selector === undefined || text === "") {
-		throw new CliError("usage: omp-fleet prompt <selector> <text> [--wait <ms>] [--fan-out]");
+		throw new CliError("usage: omp-fleet prompt <selector> <text> [--wait <ms>]");
 	}
 	const waitValue = flags.get("wait");
 	const waitMs = flagNumber(flags, "wait");
@@ -342,17 +353,17 @@ commands:
   provision <name> [--label k=v]…
   stop <selector>
   remove <selector>
-  prompt <selector> <text> [--wait <ms>] [--fan-out]
+  prompt <selector> <text> [--wait <ms>]
 
 options:
   --port <n>   control plane port (default 4722, env OMP_FLEET_PORT)`;
 
 export async function main(argv: string[]): Promise<number> {
-	const { positionals, flags } = parseArgs(argv);
-	const port = resolvePort(flags);
-	const command = positionals[0];
-	const rest = positionals.slice(1);
 	try {
+		const { positionals, flags } = parseArgs(argv);
+		const port = resolvePort(flags);
+		const command = positionals[0];
+		const rest = positionals.slice(1);
 		switch (command) {
 			case undefined:
 			case "":

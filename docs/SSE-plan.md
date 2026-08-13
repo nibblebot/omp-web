@@ -1,7 +1,7 @@
 # SSE-plan: remove WebSockets, adopt POST (client→server) + SSE (server→client)
 
 Status: implemented (OMP_PROTO 2). Deviations from this plan, decided during verification:
-1. **Keepalive is a named `ping` event** (`event: ping\ndata: {}\n\n`, no id), not a `: ping` comment — native EventSource drops comments without surfacing them, so the browser could not implement the silence deadline. `SSE_PING_BLOCK` in `src/sse.ts`.
+1. **Keepalive is a named `ping` event** (`event: ping\ndata: {}\n\n`, no id), not a `: ping` comment — native EventSource drops comments without surfacing them, so the browser could not implement the silence deadline. `SSE_PING_BLOCK` in `shared/sse.ts`.
 2. **Edge command routing carries a client id**: the browser appends `?client=<id>` to `/events` and sends `X-Omp-Client-Id: <id>` on every POST /command; the edge binds streams/rings/pipes by it (POST is connectionless, so per-browser routing needs an explicit identity). Missing/unknown → 400 on the edge; the bare daemon ignores it.
 3. **`idleTimeout: 0` on both Bun.serve instances** — Bun's default 10s fetch idle timeout kills quiet SSE responses between 15s pings.
 
@@ -73,8 +73,8 @@ The daemon keeps a bounded ring buffer of recent deltas (cap 10_000 events).
 On every `/events` open:
 
 1. Emit priming (fresh, current): `hello_ok` → `attached` → `history` →
-   `state` → `available_commands` → `ready` (same sequence as today's
-   connect=attached priming).
+   `state` → `collab_status` → `available_commands` → `ready` (same
+   sequence as today's connect=attached priming).
 2. If the client sent `Last-Event-ID: N` and N ≥ priming seq: replay ring
    events with seq > N.
 3. If N < priming seq (stale/empty client): skip ring replay — priming already
@@ -99,7 +99,7 @@ duplicate frames for unknown ids are ignored.
   `list_projects`, `attach`) are edge-only today; they stay POST targets on the
   edge, never proxied to the daemon.
 
-### protocol.ts diff (`src/protocol.ts`)
+### protocol.ts diff (`shared/protocol.ts`)
 
 - `OMP_PROTO` 1 → 2 (breaking handshake change).
 - `ClientCommand`: remove `hello`. Everything else unchanged (they become POST
@@ -121,7 +121,8 @@ duplicate frames for unknown ids are ignored.
     (`onSocketMessage` body, minus the auth/hello preamble at ~1601) → `202`.
 - Socket bookkeeping (`sockets` Set, `attachSocket`, `helloTimers`) becomes
   stream-keyed: each SSE connection is one consumer with `{ attached, ring,
-  buffer }`. `startDaemonPoll` (5s process_stats) writes to all live streams.
+  buffer }`. `startDaemonPoll` (3s refreshDaemons) broadcasts the daemon
+  broker roster to all live streams.
 - `pendingCodeInputs` / `pendingUiRequests` stay keyed per connection; a
   dropped stream rejects them (same as socket close today).
 - Backpressure: per-stream enqueue beyond 4 MiB (`DEFAULT_BACKPRESSURE_BYTES`
@@ -191,8 +192,8 @@ duplicate frames for unknown ids are ignored.
   - **`fetch POST /command`** for every sender: `call`, `listSessions`,
     `listFiles`, `listProjects`, `spawnDaemon`, `spawnResume`, `stopDaemonById`,
     `removeDaemonById`, `sendLoginCode`, `sendUiResponse` ×2, `attachToDaemon`,
-    `startCollab`, `stopCollab`, `daemonLogs`, `daemonStop`, `daemonRestart`,
-    `getProcessStats`. Each keeps its `{ type, id }` payload; the
+    `startCollab`, `stopCollab`, `daemonLogs`, `daemonStop`, `daemonRestart`.
+    Each keeps its `{ type, id }` payload; the
     `readyState === OPEN` guards become "connected" checks; pending promises
     still resolve on the matching answer frame, deduped by id.
 - The mixed-content `wss/ws` switch (~1177) dies — EventSource/fetch are

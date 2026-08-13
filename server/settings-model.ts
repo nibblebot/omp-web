@@ -12,7 +12,7 @@ import { getSettingsForTab, type SettingDef } from "@oh-my-pi/pi-coding-agent/mo
 import { setExcludedSearchProviders, setSearchProviderOrder } from "@oh-my-pi/pi-coding-agent/web/search/provider";
 import { isSearchProviderId } from "@oh-my-pi/pi-coding-agent/web/search/types";
 import { setImageProviderOrder } from "@oh-my-pi/pi-coding-agent/tools/image-gen";
-import type { SettingsGroup, SettingsItem, SettingsModel, SettingsOption, SettingsTab } from "../src/protocol";
+import type { SettingsGroup, SettingsItem, SettingsModel, SettingsOption, SettingsTab } from "../shared/protocol";
 
 // ---------------------------------------------------------------------------
 // Server-side settings panel (TUI /settings parity).
@@ -100,7 +100,11 @@ export function coerceSettingValue(path: string, value: unknown): unknown {
 	}
 
 	const currentValue = settings.get(path as SettingPath);
-	if (typeof currentValue === "number") return Number(value);
+	if (typeof currentValue === "number") {
+		const n = Number(value);
+		if (!Number.isFinite(n)) throw new Error(`Invalid numeric value for ${path}`);
+		return n;
+	}
 	if (typeof currentValue === "boolean") return value === true || value === "true";
 	// Optional/credential strings start undefined (never set); the TUI's
 	// fallback stores the raw input in that case — mirror it here.

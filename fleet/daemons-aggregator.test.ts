@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { DaemonInfo } from "../src/protocol";
+import type { DaemonInfo } from "../shared/protocol";
 import { daemonsKey, DaemonsAggregator, mergeDaemonRosters, type DaemonRosterSource } from "./daemons-aggregator";
 
 function info(name: string, projectDir: string, overrides: Partial<DaemonInfo> = {}): DaemonInfo {

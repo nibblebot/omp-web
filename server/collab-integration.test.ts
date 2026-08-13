@@ -22,7 +22,8 @@ import type { Subprocess } from "bun";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
-import { parseSseUnits, SSE_PING_EVENT } from "../src/sse";
+import { OMP_SESSION_PREFIX } from "../shared/protocol";
+import { parseSseUnits, SSE_PING_EVENT } from "../shared/sse";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -70,9 +71,9 @@ async function readServerPort(stdout: ReadableStream<Uint8Array>, timeoutMs: num
 			const line = buffer.slice(0, nl);
 			buffer = buffer.slice(nl + 1);
 			// omp-session prints the OMP_SESSION| listening contract line (JSON) on stdout after bind.
-			if (!line.startsWith("OMP_SESSION|")) continue;
+			if (!line.startsWith(OMP_SESSION_PREFIX)) continue;
 			try {
-				const parsed = JSON.parse(line.slice("OMP_SESSION|".length)) as { event?: string; port?: number };
+				const parsed = JSON.parse(line.slice(OMP_SESSION_PREFIX.length)) as { event?: string; port?: number };
 				if (parsed.event === "listening" && typeof parsed.port === "number") return parsed.port;
 			} catch {
 				// not a contract line — keep waiting

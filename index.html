@@ -4,11 +4,37 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>omp web</title>
-		<style>
-			body {
-				background: #0f1115;
-			}
-		</style>
+		<script>
+			// Resolve the persisted theme before first paint so light-theme users
+			// don't flash the dark boot background. Mirrors src/theme.ts's
+			// resolution exactly (same storage key, same system fallback); the
+			// app re-applies the theme on init, so this is just the pre-render
+			// paint. Dependency-free and minimal on purpose.
+			(function () {
+				var THEME_KEY = "omp-web:theme";
+				var BG = {
+					dark: "#0f1115",
+					light: "#f5f6f8",
+					"catppuccin-mocha": "#1e1e2e",
+					"catppuccin-latte": "#eff1f5",
+					"omp-dark": "oklch(13.5% 0.018 295)",
+					"omp-light": "oklch(94% 0.006 80)"
+				};
+				var pref = null;
+				try {
+					pref = localStorage.getItem(THEME_KEY);
+				} catch (e) {
+					// storage unavailable: fall through to the system default
+				}
+				var theme = BG[pref]
+					? pref
+					: window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+						? "light"
+						: "dark";
+				document.documentElement.dataset.theme = theme;
+				document.documentElement.style.background = BG[theme];
+			})();
+		</script>
 	</head>
 	<body>
 		<div id="root"></div>

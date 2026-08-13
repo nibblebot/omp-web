@@ -112,16 +112,18 @@ const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
 									{(opt, oi) => {
 										const isSelected = () => (selected()[qi()] ?? []).includes(opt.label);
 										return (
-											<div
+											<button
+												type="button"
 												class="picker-row ask-option"
 												classList={{ active: isSelected() }}
+												aria-pressed={isSelected()}
 												onClick={() => toggle(qi(), opt.label, q.multi ?? false)}
 											>
 												<span class="ask-marker">{isSelected() ? (q.multi ? "☑" : "●") : q.multi ? "☐" : "○"}</span>
 												<span class="picker-label">{opt.label}</span>
 												{oi() === q.recommended && <span class="ask-recommended">recommended</span>}
 												{opt.description && <span class="picker-detail">{opt.description}</span>}
-											</div>
+											</button>
 										);
 									}}
 								</For>
@@ -157,10 +159,14 @@ const SelectForm: Component<{ id: string; params: unknown }> = props => {
 			<div class="picker-list">
 				<For each={p().options ?? []}>
 					{opt => (
-						<div class="picker-row" onClick={() => sendUiResponse(props.id, label(opt))}>
+						<button
+							type="button"
+							class="picker-row ask-option"
+							onClick={() => sendUiResponse(props.id, label(opt))}
+						>
 							<span class="picker-label">{label(opt)}</span>
 							{typeof opt !== "string" && opt.description && <span class="picker-detail">{opt.description}</span>}
-						</div>
+						</button>
 					)}
 				</For>
 			</div>

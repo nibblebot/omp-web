@@ -17,9 +17,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../src/protocol";
-import type { DaemonEntry, DaemonInfo, ServerFrame } from "../src/protocol";
-import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK } from "../src/sse";
+import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../shared/protocol";
+import type { DaemonEntry, DaemonInfo, ServerFrame } from "../shared/protocol";
+import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK } from "../shared/sse";
 import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
 import { FleetEdge, shouldDropFrame, toRosterEntry } from "./edge";
@@ -166,7 +166,7 @@ function startFakeSession(opts: { cwd?: string } = {}): FakeSession {
 		write(encodeSseEvent(SSE_EVENT_NAME, { type: "hello_ok", proto: OMP_PROTO, name: "fake", cwd, pid: 4242, version: "0.0.0-test", sessionFile }, seq++));
 		// Phase 6 wire format: omp-session keeps the required "s1" on `attached` but
 		// no longer stamps session-scoped frames — the edge adds the daemonId.
-		write(encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: "s1", mode: "single" }, seq++));
+		write(encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: "s1" }, seq++));
 		write(encodeSseEvent(SSE_EVENT_NAME, { type: "history", messages: [] }, seq++));
 		write(encodeSseEvent(SSE_EVENT_NAME, { type: "state", state }, seq++));
 		write(encodeSseEvent(SSE_EVENT_NAME, { type: "available_commands", commands: [] }, seq++));
@@ -192,23 +192,35 @@ function startFakeSession(opts: { cwd?: string } = {}): FakeSession {
 interface PipeFake {
 	url: string;
 	port: number;
+	/** Last-Event-ID seen on each /events open, in open order (null when absent). */
+	lastEventIds(): Array<string | null>;
 	/** Stop the heartbeat keepalives: the pipe then goes silent (the edge trips its deadline). */
 	pause(): void;
+	/** Drop ONE live stream non-cleanly (index 0 = the connector's control stream, 1 = the pipe). */
+	killStream(index: number): void;
+	/** Drop every live stream non-cleanly (a daemon-side kill). */
+	kill(): void;
+	/** Broadcast a delta to live streams AND ring it for Last-Event-ID replay. */
+	emitDelta(frame: ServerFrame): void;
 	close(): void;
 }
 
 /**
- * Fake daemon for the pipe-liveness test: primes every /events stream
- * (the connector's control stream and the edge's pipe), answers prompt
- * calls with call_result on all open streams, and emits keepalive ping
- * events every heartbeatMs while not paused. pause() silences it so the
- * edge's pipe silence deadline trips.
+ * Fake daemon for the pipe tests: primes every /events stream (the
+ * connector's control stream and the edge's pipe), answers prompt calls
+ * with call_result on all open streams, emits keepalive ping events every
+ * heartbeatMs while not paused, and — like the real omp-session — keeps a
+ * delta ring so a stream opened with Last-Event-ID ≥ SSE_DELTA_SEQ_START
+ * replays the deltas it missed after the full priming.
  */
 function startPipeFake(opts: { heartbeatMs?: number } = {}): PipeFake {
 	const heartbeatMs = opts.heartbeatMs ?? 30;
 	let paused = false;
 	const encoder = new TextEncoder();
 	const live: Array<(block: string) => void> = [];
+	const controllers: Array<ReadableStreamDefaultController<Uint8Array>> = [];
+	const seen: Array<string | null> = [];
+	const ring: Array<{ seq: number; block: string }> = [];
 	let nextSeq = SSE_DELTA_SEQ_START;
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
@@ -225,32 +237,52 @@ function startPipeFake(opts: { heartbeatMs?: number } = {}): PipeFake {
 					}
 					const cmd = frame as { type?: string; id?: string };
 					if (cmd.type === "call" && cmd.id !== undefined) {
-						const answer = encodeSseEvent(SSE_EVENT_NAME, { type: "call_result", id: cmd.id, ok: true, data: { echoed: frame } }, nextSeq++);
-						for (const write of live) write(answer);
+						const seq = nextSeq++;
+						const block = encodeSseEvent(SSE_EVENT_NAME, { type: "call_result", id: cmd.id, ok: true, data: { echoed: frame } }, seq);
+						ring.push({ seq, block });
+						for (const write of live) write(block);
 					}
 					return Response.json({ commandId: cmd.id ?? "" }, { status: 202 });
 				})();
 			}
 			if (url.pathname !== "/events") return new Response("not found", { status: 404 });
+			const lastEventId = req.headers.get("last-event-id");
+			seen.push(lastEventId);
 			let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
 			const write = (block: string): void => {
-				controller!.enqueue(encoder.encode(block));
+				try {
+					controller!.enqueue(encoder.encode(block));
+				} catch {
+					// Stream already errored/closed (kill); the consumer saw the end.
+				}
 			};
 			live.push(write);
 			const body = new ReadableStream<Uint8Array>({
 				start(ctrl) {
 					controller = ctrl;
+					controllers.push(ctrl);
+					// Full priming on EVERY open (the real daemon re-primes even
+					// for a delta resume), then ring replay for delta-era ids.
 					let seq = 1;
 					write(encodeSseEvent(SSE_EVENT_NAME, { type: "hello_ok", proto: OMP_PROTO, name: "pipe-fake", cwd: FAKE_CWD, pid: 4243, version: "0.0.0-test" }, seq++));
-					write(encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: "s1", mode: "single" }, seq++));
+					write(encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: "s1" }, seq++));
 					write(encodeSseEvent(SSE_EVENT_NAME, { type: "history", messages: [] }, seq++));
 					write(encodeSseEvent(SSE_EVENT_NAME, { type: "state", state: { ...FAKE_STATE, sessionFile: FAKE_SESSION_FILE } }, seq++));
 					write(encodeSseEvent(SSE_EVENT_NAME, { type: "available_commands", commands: [] }, seq++));
 					write(encodeSseEvent(SSE_EVENT_NAME, { type: "ready", readyAt: Date.now() }, seq++));
+					const last = lastEventId === null ? NaN : Number(lastEventId);
+					if (Number.isFinite(last) && last >= SSE_DELTA_SEQ_START) {
+						for (const entry of ring) {
+							if (entry.seq > last) write(entry.block);
+						}
+					}
 				},
 				cancel() {
 					const index = live.indexOf(write);
-					if (index !== -1) live.splice(index, 1);
+					if (index !== -1) {
+						live.splice(index, 1);
+						controllers.splice(index, 1);
+					}
 				},
 			});
 			return new Response(body, { headers: { "content-type": "text/event-stream" } });
@@ -263,8 +295,25 @@ function startPipeFake(opts: { heartbeatMs?: number } = {}): PipeFake {
 	return {
 		url: `ws://127.0.0.1:${server.port}`,
 		port: server.port!,
+		lastEventIds: () => [...seen],
 		pause: () => {
 			paused = true;
+		},
+		killStream: (index: number) => {
+			const ctrl = controllers[index];
+			// A clean close is still a non-intentional drop to the edge (the
+			// consume loop's EOF path redials); close avoids Bun reporting an
+			// unhandled stream error the way controller.error() does.
+			if (ctrl) ctrl.close();
+		},
+		kill: () => {
+			for (const ctrl of [...controllers]) ctrl.close();
+		},
+		emitDelta: (frame: ServerFrame) => {
+			const seq = nextSeq++;
+			const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
+			ring.push({ seq, block });
+			for (const write of live) write(block);
 		},
 		close: () => {
 			clearInterval(heartbeat);
@@ -406,6 +455,57 @@ function serveEdge(edge: FleetEdge): { port: number; stop(): void } {
 		fetch: async (req) => (await edge.handleFetch(req)) ?? new Response("not found", { status: 404 }),
 	});
 	return { port: server.port!, stop: () => server.stop(true) };
+}
+
+/**
+ * Open /events for a clientId with a delta-era Last-Event-ID and collect the
+ * RING REPLAY (delta-era frames only) until `want` matches or `timeoutMs`
+ * elapses. The probe binds the client (a rebind closes any previous stream),
+ * so it must be the LAST use of that clientId in a test. A non-matching
+ * `want` falls through to the timeout abort and returns what was collected —
+ * assertions judge the frames.
+ */
+async function collectReplay(
+	port: number,
+	clientId: string,
+	lastEventId: number,
+	want: (f: ServerFrame) => boolean,
+	timeoutMs = 3000,
+): Promise<Array<{ id: number; frame: ServerFrame }>> {
+	const abort = new AbortController();
+	const res = await fetch(`http://127.0.0.1:${port}/events?client=${clientId}`, {
+		headers: { "Last-Event-ID": String(lastEventId) },
+		signal: abort.signal,
+	});
+	if (!res.ok || !res.body) throw new Error(`replay probe /events → HTTP ${res.status}`);
+	const frames: Array<{ id: number; frame: ServerFrame }> = [];
+	const timer = setTimeout(() => abort.abort(), timeoutMs);
+	try {
+		for await (const unit of parseSseUnits(res.body!)) {
+			if (unit.kind !== "event" || unit.event !== SSE_EVENT_NAME || unit.id === undefined) continue;
+			const frame = JSON.parse(unit.data) as ServerFrame;
+			if (Number(unit.id) >= SSE_DELTA_SEQ_START) {
+				frames.push({ id: Number(unit.id), frame });
+				if (want(frame)) break;
+			}
+		}
+	} catch {
+		// Aborted (timeout or teardown): the collected frames are the result.
+	} finally {
+		clearTimeout(timer);
+		abort.abort();
+	}
+	return frames;
+}
+
+/** Narrow a replay entry to an event frame (type guard preserving narrowing). */
+function isEventEntry(entry: { id: number; frame: ServerFrame }): entry is { id: number; frame: ServerFrame & { type: "event" } } {
+	return entry.frame.type === "event";
+}
+
+/** The `message` field of an event frame's event (undefined when absent). */
+function eventMessage(frame: ServerFrame & { type: "event" }): string | undefined {
+	return (frame.event as { message?: string }).message;
 }
 
 function asRoster(frame: ServerFrame): { type: "roster"; daemons: DaemonEntry[] } {
@@ -671,7 +771,7 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("attach opens a daemon /events pipe (Bearer), forwards priming with sessionId rewritten, swallows hello_ok", async () => {
+	test("attach opens a daemon /events pipe (Bearer), forwards priming with sessionId rewritten, forwards the gated hello_ok", async () => {
 		const origRelease = server.connector.release.bind(server.connector);
 		const origRetain = server.connector.retain.bind(server.connector);
 		server.connector.release = (daemonId: string) => {
@@ -704,8 +804,10 @@ describe("fleet edge", () => {
 			"available_commands",
 		);
 		await browserA.waitForFrame((f) => f.type === "ready", "ready");
-		// hello_ok is swallowed: it never reaches the browser.
-		expect(browserA.frames.some((f) => f.type === "hello_ok")).toBe(false);
+		// Finding #61: the proto-gated hello_ok is FORWARDED (not swallowed)
+		// so the browser's own proto check runs in roster mode too.
+		const hello = await browserA.waitForFrame((f) => f.type === "hello_ok", "hello_ok (proto-gated)");
+		expect((hello as { proto?: unknown }).proto).toBe(OMP_PROTO);
 		// Every forwarded session-scoped frame carries the daemonId.
 		for (const f of browserA.frames) {
 			if ("sessionId" in f) expect(f.sessionId).toBe(remoteEntry.daemonId);
@@ -756,6 +858,71 @@ describe("fleet edge", () => {
 		// The idle-drop timer (60s) has not fired: the connector socket is alive.
 		expect(server.connector.isConnected(remoteEntry.daemonId)).toBe(true);
 		expect(browserA.frames.some((f) => f.type === "error" && f.error === "daemon connection lost")).toBe(false);
+	});
+
+	test("an unattached call fails fast with an id-keyed call_result, not a bare error frame (finding #59)", async () => {
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		// No attach: the daemon-less forward must answer the call BY ID so the
+		// client's pending call() promise settles instead of hanging 30s.
+		await browser.send({ type: "call", id: "c-unattached", method: "prompt", args: ["hi"] });
+		const result = await browser.waitForFrame((f) => f.type === "call_result" && f.id === "c-unattached", "call_result c-unattached");
+		if (result.type !== "call_result") throw new Error("expected call_result");
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain("not attached");
+		// No global error frame rides along for this call.
+		expect(browser.frames.some((f) => f.type === "error" && String(f.error).includes("not attached"))).toBe(false);
+	});
+
+	test("clientId rebind closes the previous live stream and broadcasts ring exactly once (finding #25)", async () => {
+		const sharedId = crypto.randomUUID();
+		const oldBrowser = new BrowserSocket(server.port, sharedId);
+		allBrowsers.push(oldBrowser);
+		await oldBrowser.open();
+		await oldBrowser.waitForFrame((f) => f.type === "roster", "roster");
+		const beforePipe = fake.streamCount();
+		await oldBrowser.send({ type: "attach", sessionId: remoteEntry.daemonId });
+		await oldBrowser.waitForFrame(
+			(f) => f.type === "attached" && f.sessionId === remoteEntry.daemonId,
+			"attached (rebind old)",
+		);
+		await waitFor(() => (fake.streamCount() === beforePipe + 1 ? "pipe" : null), 5000, "rebind pipe stream");
+		const oldPipe = fake.streams()[beforePipe];
+
+		// Rebind: a SECOND /events open with the SAME clientId while the old
+		// stream is still live (the old EventSource's cancel has not fired).
+		const newBrowser = new BrowserSocket(server.port, sharedId);
+		allBrowsers.push(newBrowser);
+		await newBrowser.open();
+		await newBrowser.waitForFrame((f) => f.type === "roster", "roster");
+
+		// The old stream is torn down: its body ends and its pipe closes.
+		await oldBrowser.end(5000);
+		await waitFor(() => (oldPipe.closed ? "closed" : null), 5000, "old pipe closed after rebind");
+
+		// A broadcast after the rebind reaches the new stream EXACTLY once
+		// (pre-fix both streams sat in #browsers for one client → two ring
+		// entries + a double delivery on the rebound stream). The roster
+		// broadcast via registry.update is single-source (emitDaemons would be
+		// ingested once per still-live pipe from earlier tests).
+		const oldFramesAtEnd = oldBrowser.frames.length;
+		const seenBefore = newBrowser.frames.length;
+		server.registry.update(remoteEntry.daemonId, {});
+		await waitFor(
+			() => {
+				const hit = newBrowser.frames.slice(seenBefore).find((f) => f.type === "roster");
+				return hit ?? null;
+			},
+			5000,
+			"roster broadcast after rebind",
+		);
+		await sleep(200);
+		const dups = newBrowser.frames.slice(seenBefore).filter((f) => f.type === "roster");
+		expect(dups).toHaveLength(1);
+		// The old stream is dead: it received nothing after its teardown.
+		expect(oldBrowser.frames.length).toBe(oldFramesAtEnd);
+		oldBrowser.close();
+		newBrowser.close();
 	});
 
 	test("attach to an asleep spawned daemon respawns it, waits ready, then pipes", async () => {
@@ -1084,7 +1251,7 @@ describe("edge pure helpers", () => {
 		}
 	});
 
-	test("pipe liveness: a responsive daemon pipe stays up; silence past the deadline treats it as lost", async () => {
+	test("pipe liveness: a responsive daemon pipe stays up; a silent one redials without detaching the browser", async () => {
 		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-liveness-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
@@ -1104,7 +1271,10 @@ describe("edge pure helpers", () => {
 		await connector.waitReady(entry.daemonId, 3000);
 		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
-		const edge = new FleetEdge({ registry, connector, supervisor, config }, { silenceDeadlineMs: 200 });
+		const edge = new FleetEdge(
+			{ registry, connector, supervisor, config },
+			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
+		);
 		let releases = 0;
 		const origRelease = connector.release.bind(connector);
 		connector.release = (daemonId: string) => {
@@ -1124,19 +1294,334 @@ describe("edge pure helpers", () => {
 			// Commands still round-trip through the live pipe.
 			await browser.send({ type: "call", id: "l1", method: "prompt", args: ["hi"] });
 			await browser.waitForFrame((f) => f.type === "call_result" && f.id === "l1", "call_result l1");
-			// Silence: the daemon stops sending; the deadline trips → pipe lost
-			// (error frame + the pipe retain released; the connector socket
-			// itself is untouched).
+			// Silence: the daemon stops sending; the deadline trips → the pipe
+			// REDIALS (finding #4) instead of detaching: no error frame, no
+			// retain release, and the browser stays attached via the re-priming.
+			const attachedBefore = browser.frames.filter((f) => f.type === "attached").length;
+			const streamsBefore = daemon.lastEventIds().length;
 			daemon.pause();
+			await waitFor(() => (daemon.lastEventIds().length > streamsBefore ? "redial" : null), 3000, "pipe redial after silence");
+			// The redial's fresh priming reaches the SAME browser stream.
+			await waitFor(
+				() => (browser.frames.filter((f) => f.type === "attached").length > attachedBefore ? "re-primed" : null),
+				3000,
+				"re-prime after redial",
+			);
+			expect(browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost")).toBe(false);
+			expect(releases).toBe(0);
+			expect(connector.isConnected(entry.daemonId)).toBe(true);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("pipe resume: a mid-stream kill redials with Last-Event-ID and the browser stays attached", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-resume-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge(
+			{ registry, connector, supervisor, config },
+			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
+		);
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "pipe-resume",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			// A delta raises the pipe's Last-Event-ID into the delta era. The
+			// connector's control stream dials first (the wake), the pipe second.
+			await browser.send({ type: "call", id: "c1", method: "prompt", args: ["hi"] });
+			await browser.waitForFrame((f) => f.type === "call_result" && f.id === "c1", "call_result c1");
+			expect(daemon.lastEventIds().length).toBe(2); // connector stream + pipe
+			const deltaSeq = SSE_DELTA_SEQ_START; // c1's answer is the first delta
+			// Kill ONLY the pipe (index 1): the connector's control stream keeps
+			// the daemon reachable, so the redial stream below is the pipe's.
+			daemon.killStream(1);
+			// A delta emitted while the pipe is DOWN must be replayed after the
+			// redial — ringed before the redial dials (backoff is 10-50ms).
+			daemon.emitDelta({ type: "event", event: { type: "notice", level: "info", message: "after-kill" } });
+			await waitFor(() => (daemon.lastEventIds().length === 3 ? "redial" : null), 3000, "pipe redial");
+			// The redial resumes from the last forwarded daemon seq.
+			expect(daemon.lastEventIds()[2]).toBe(String(deltaSeq));
+			// The missed delta is replayed to the STILL-ATTACHED browser on the
+			// same stream — no loss frame, no user re-attach.
+			await browser.waitForFrame(
+				(f) => f.type === "event" && (f.event as { type?: string })?.type === "notice" && (f.event as { message?: string })?.message === "after-kill",
+				"replayed notice",
+			);
+			expect(browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost")).toBe(false);
+			// The redial re-primed (the daemon always primes every open), so the
+			// browser got a second attached frame — attachment survived.
+			expect(browser.frames.filter((f) => f.type === "attached" && f.sessionId === entry.daemonId).length).toBeGreaterThanOrEqual(2);
+			// Subsequent frames still flow without any re-attach.
+			await browser.send({ type: "call", id: "c2", method: "prompt", args: ["again"] });
+			await browser.waitForFrame((f) => f.type === "call_result" && f.id === "c2", "call_result c2");
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("pipe resume: a kill during priming redials WITHOUT Last-Event-ID and re-primes", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-priming-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge(
+			{ registry, connector, supervisor, config },
+			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
+		);
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "pipe-priming",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			// The pipe has only seen priming seqs (1..k < SSE_DELTA_SEQ_START).
+			// Kill it BEFORE any delta: the redial must NOT carry Last-Event-ID
+			// and the daemon's full re-prime must reach the still-attached browser.
+			const attachedBefore = browser.frames.filter((f) => f.type === "attached").length;
+			daemon.killStream(1);
+			await waitFor(() => (daemon.lastEventIds().length === 3 ? "redial" : null), 3000, "pipe redial");
+			expect(daemon.lastEventIds()[2]).toBeNull(); // sub-delta lastSeq → no resume header
+			await waitFor(
+				() => (browser.frames.filter((f) => f.type === "attached").length > attachedBefore ? "re-primed" : null),
+				3000,
+				"re-prime after redial",
+			);
+			expect(browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost")).toBe(false);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("pipe terminal: redial budget exhaustion surfaces the loss frame", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-terminal-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge(
+			{ registry, connector, supervisor, config },
+			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 3 },
+		);
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "pipe-dead",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		let releases = 0;
+		const origRelease = connector.release.bind(connector);
+		connector.release = (daemonId: string) => {
+			releases++;
+			origRelease(daemonId);
+		};
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			// The daemon dies for good: every redial fails, the budget
+			// exhausts, and the browser finally sees the loss frame + release.
+			daemon.close();
 			const lost = await browser.waitForFrame(
 				(f) => f.type === "error" && f.error === "daemon connection lost",
-				"pipe lost",
-				3000,
+				"daemon connection lost",
+				5000,
 			);
 			expect(lost.type).toBe("error");
 			await waitFor(() => (releases >= 1 ? "released" : null), 3000, "pipe retain released");
 			expect(releases).toBe(1);
-			expect(connector.isConnected(entry.daemonId)).toBe(true);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("edge rings only delta frames: history/call_result/stream_reset forward live but never replay (finding #5)", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-ring-filter-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "ring-filter",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 3000);
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge({ registry, connector, supervisor, config });
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			// Pipe priming is forwarded with delta-era edge seqs (hello_ok →
+			// attached → history → state → available_commands → ready); of
+			// those only state/ready are ringed. Wait for the priming history
+			// so its edge id is a stable replay floor below state.
+			const primingHistory = await browser.waitForEvent((ev) => ev.frame.type === "history", "priming history");
+			// Live emissions, oldest first: a full-transcript history broadcast,
+			// a call_result answer, a per-stream stream_reset, and a ringed
+			// event delta. All four must ARRIVE (forwarded live, never dropped).
+			daemon.emitDelta({ type: "history", messages: [{ role: "user", content: "transcript body", timestamp: 0 }], final: true });
+			daemon.emitDelta({ type: "call_result", id: "r1", ok: true, data: { huge: "y".repeat(5000) } });
+			daemon.emitDelta({ type: "stream_reset", reason: "test" });
+			daemon.emitDelta({ type: "event", event: { type: "notice", level: "info", message: "ring-me" } });
+			await browser.waitForFrame((f) => f.type === "history" && f.sessionId === entry.daemonId && Array.isArray(f.messages) && f.messages.length === 1, "live history");
+			await browser.waitForFrame((f) => f.type === "call_result" && f.id === "r1", "live call_result");
+			await browser.waitForFrame((f) => f.type === "stream_reset", "live stream_reset");
+			await browser.waitForFrame((f) => f.type === "event" && (f.event as { message?: string })?.message === "ring-me", "live event");
+			// Replay from just after the priming history: the ring must hold
+			// the ringed deltas (state, ready, the live event) but NOT any
+			// history/call_result/stream_reset/available_commands frame —
+			// those are re-derivable (re-attach priming / re-POST), exactly
+			// like the daemon's own ring.
+			const replay = await collectReplay(served.port, browser.clientId, primingHistory.id, (f) => f.type === "event" && (f.event as { message?: string })?.message === "ring-me");
+			expect(replay.some(({ frame }) => frame.type === "event")).toBe(true);
+			expect(replay.some(({ frame }) => frame.type === "state")).toBe(true); // live state deltas ARE ringed
+			const banned = ["history", "call_result", "stream_reset", "hello_ok", "attached", "available_commands"];
+			for (const { frame } of replay) expect(banned).not.toContain(frame.type);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("byte-bound ring eviction drops the oldest deltas; replay after eviction still works (finding #5)", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-ring-bytes-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "ring-bytes",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 3000);
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		// Tiny per-client ring budget (~2.5 KiB): a burst of large deltas must
+		// evict the ring's head, not grow without bound.
+		const edge = new FleetEdge({ registry, connector, supervisor, config }, { ringBytes: 2500 });
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			// Wait out the pipe priming (ready is its last frame) so the burst
+			// seqs are deterministic.
+			await browser.waitForFrame((f) => f.type === "ready", "priming ready");
+			// A burst of large ringed deltas: each block is ~700 bytes, so 20
+			// of them blow well past the 2500-byte budget and evict the head.
+			const N = 20;
+			for (let i = 0; i < N; i++) {
+				daemon.emitDelta({ type: "event", event: { type: "notice", level: "info", message: `evict-${i}` + "x".repeat(600) } });
+			}
+			await browser.waitForFrame(
+				(f) => f.type === "event" && ((f.event as { message?: string })?.message?.startsWith("evict-19") ?? false),
+				"last burst delta",
+			);
+			const firstId = browser.events.find((ev) => ev.frame.type === "event" && (ev.frame.event as { message?: string })?.message?.startsWith("evict-0"))!.id;
+			// Replay from just before the burst: only the byte-eviction-
+			// surviving tail replays — the newest delta is there, the oldest is
+			// gone, and the survivors are a contiguous suffix in seq order
+			// (drop-and-resume semantics: the browser resumes from what the
+			// ring still holds, never a corrupted tail).
+			const replay = await collectReplay(
+				served.port,
+				browser.clientId,
+				firstId - 1,
+				(f) => f.type === "event" && ((f.event as { message?: string })?.message?.startsWith("evict-19") ?? false),
+			);
+			const replayEvents = replay.filter(isEventEntry);
+			expect(replayEvents.some(({ frame }) => eventMessage(frame)?.startsWith("evict-19") ?? false)).toBe(true);
+			expect(replayEvents.some(({ frame }) => eventMessage(frame)?.startsWith("evict-0") ?? false)).toBe(false);
+			const indices = replayEvents.map(({ frame }) => {
+				const m = eventMessage(frame)?.match(/^evict-(\d+)/);
+				return m ? Number(m[1]) : NaN;
+			});
+			expect(indices.every(Number.isInteger)).toBe(true);
+			for (let i = 1; i < indices.length; i++) expect(indices[i]).toBe(indices[i - 1] + 1);
+			expect(indices[indices.length - 1]).toBe(N - 1);
+			// Seq order mirrors the survivor order (oldest first).
+			const seqs = replayEvents.map(({ id }) => id);
+			for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
 		} finally {
 			edge.close();
 			await supervisor.close();

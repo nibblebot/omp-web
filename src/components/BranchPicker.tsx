@@ -1,6 +1,7 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import { call, pushNotice, setState } from "../state";
 import { Modal } from "./Modal";
+import { PickerRow } from "./PickerRow";
 
 interface BranchEntry {
 	entryId: string;
@@ -39,10 +40,10 @@ export const BranchPicker: Component<{ onClose: () => void }> = props => {
 			<div class="picker-list">
 				<For each={entries()}>
 					{e => (
-						<div class="picker-row" onClick={() => choose(e)}>
+						<PickerRow class="picker-row" onClick={() => choose(e)}>
 							<span class="picker-label">{e.entryId.slice(0, 8)}</span>
 							<span class="picker-detail">{e.text.slice(0, 160) || "(no text)"}</span>
-						</div>
+						</PickerRow>
 					)}
 				</For>
 				{entries().length === 0 && !error() && <div class="tool-collapsed-note">no branch points</div>}

@@ -1,11 +1,15 @@
 /**
  * Fan-out prompt correlation tests. A fake omp-session primes hello_ok/state/ready
  * on dial and responds to `{type:"call", method:"prompt"}` per-test: happy
- * path emits assistant message_end events + agent_end (with usage), error
- * frames, abort events, or nothing (timeout). Covers promptEntry's
- * correlation contract and fanOut's order preservation across mixed
- * ok/error outcomes, plus the asleep → redial wake path for non-spawned
- * entries.
+ * path answers with call_result{ok:true} then assistant message_end events +
+ * agent_end (with usage), call_result{ok:false}, abort events, broadcast
+ * error frames, or nothing (timeout). Like the real daemon, the fake emits
+ * the call_result for a call BEFORE that call's turn frames — it is the
+ * acceptance verdict that scopes correlation (audit #21). Covers promptEntry's
+ * correlation contract (own-turn agent_end only, unrelated frames ignored),
+ * per-daemon serialization of concurrent fan-outs, fanOut's order
+ * preservation across mixed ok/error outcomes, plus the asleep → redial wake
+ * path for non-spawned entries.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -13,8 +17,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../src/protocol";
-import { encodeSseEvent } from "../src/sse";
+import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../shared/protocol";
+import { encodeSseEvent } from "../shared/sse";
 import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
 import { fanOut, promptEntry, type FanoutDeps } from "./fanout";
@@ -197,10 +201,11 @@ function assistantMessage(content: unknown[]): Record<string, unknown> {
 	return { role: "assistant", content };
 }
 
-/** Happy-path responder: two assistant messages (last one wins), then agent_end with usage. */
+/** Happy-path responder: accept the call, then two assistant messages (last one wins), then agent_end with usage. */
 function happyResponder(_fake: FakeServer, stream: FakeStream, frame: unknown): void {
-	const call = frame as { type?: string };
+	const call = frame as { type?: string; id?: string };
 	if (call.type !== "call") return;
+	stream.send({ type: "call_result", id: call.id, ok: true });
 	sendEvent(stream, {
 		type: "message_end",
 		message: assistantMessage([
@@ -241,27 +246,35 @@ describe("promptEntry", () => {
 		fake.stop();
 	});
 
-	test("rejects on {type:error} frames", async () => {
+	test("an unrelated broadcast error frame does not settle a fan-out", async () => {
+		// Regression (audit #21): a broadcast {type:"error"} frame (e.g. a
+		// concurrent browser turn failing) carries no call id and must not
+		// settle our prompt — even after our call_result acceptance. Our own
+		// call failures arrive as id-matched call_result{ok:false}.
 		const fake = startFake({
 			onCommand: (_fake, stream, frame) => {
-				if ((frame as { type?: string }).type === "call") {
-					stream.send({ type: "error", error: "boom" });
-				}
+				const call = frame as { type?: string; id?: string };
+				if (call.type !== "call") return;
+				stream.send({ type: "call_result", id: call.id, ok: true });
+				stream.send({ type: "error", error: "another turn blew up" });
+				sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Survived" }]) });
+				sendEvent(stream, { type: "agent_end", messages: [] });
 			},
 		});
 		const { deps, connector, entry } = await readyEntry(fake);
 		const result = await promptEntry(deps, entry, "hi", 2000);
-		expect(result).toEqual({ daemonId: entry.daemonId, ok: false, error: "boom" });
+		expect(result).toEqual({ daemonId: entry.daemonId, ok: true, text: "Survived" });
 		await connector.close();
 		fake.stop();
 	});
 
-	test("rejects on abort events", async () => {
+	test("rejects on abort events after our call is accepted", async () => {
 		const fake = startFake({
 			onCommand: (_fake, stream, frame) => {
-				if ((frame as { type?: string }).type === "call") {
-					sendEvent(stream, { type: "abort_turn_started", reason: "user" });
-				}
+				const call = frame as { type?: string; id?: string };
+				if (call.type !== "call") return;
+				stream.send({ type: "call_result", id: call.id, ok: true });
+				sendEvent(stream, { type: "abort_turn_started", reason: "user" });
 			},
 		});
 		const { deps, connector, entry } = await readyEntry(fake);
@@ -335,9 +348,8 @@ describe("promptEntry", () => {
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 2000);
-		// Arm the idle policy (drop happens only after a retain/release pair).
-		connector.retain(entry.daemonId);
-		connector.release(entry.daemonId);
+		// Idle policy is armed automatically at ready (never-attached dials
+		// are dropped after idleDropMs; no retain/release pair needed).
 		await waitFor(() => (!connector.isConnected(entry.daemonId) ? "dropped" : null), 2000, "idle drop");
 		expect(registry.get(entry.daemonId)?.status).toBe("ready"); // stale
 		const result = await promptEntry({ registry, connector, supervisor }, entry, "hi", 2000);
@@ -365,6 +377,75 @@ describe("promptEntry", () => {
 		await connector.close();
 		fake.stop();
 	});
+
+	test("serializes concurrent prompts to one daemon; each settles on its own turn's agent_end with its own text", async () => {
+		// Regression (audit #21): two concurrent fan-outs to the same daemon
+		// must not both settle on the FIRST agent_end. The per-daemon queue
+		// sends the second call only after the first turn fully settles, and
+		// each correlate resolves on its own turn's agent_end text. The proof
+		// is ordering-based (call 2 must not reach the daemon before turn 1's
+		// agent_end was emitted), so no real-time delay is needed.
+		let callCount = 0;
+		let firstTurnDone = false;
+		let secondSentBeforeFirstDone = false;
+		const fake = startFake({
+			onCommand: (_fake, stream, frame) => {
+				const call = frame as { type?: string; id?: string };
+				if (call.type !== "call") return;
+				const n = ++callCount;
+				stream.send({ type: "call_result", id: call.id, ok: true });
+				if (n === 1) {
+					sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "First turn" }]) });
+					sendEvent(stream, { type: "agent_end", messages: [] });
+					firstTurnDone = true;
+				} else {
+					if (!firstTurnDone) secondSentBeforeFirstDone = true;
+					sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Second turn" }]) });
+					sendEvent(stream, { type: "agent_end", messages: [] });
+				}
+			},
+		});
+		const { deps, connector, entry } = await readyEntry(fake);
+		const [first, second] = await Promise.all([
+			promptEntry(deps, entry, "one", 2000),
+			promptEntry(deps, entry, "two", 2000),
+		]);
+		expect(first).toEqual({ daemonId: entry.daemonId, ok: true, text: "First turn" });
+		expect(second).toEqual({ daemonId: entry.daemonId, ok: true, text: "Second turn" });
+		expect(fake.received).toHaveLength(2);
+		const firstCall = fake.received[0] as { args?: unknown[] };
+		const secondCall = fake.received[1] as { args?: unknown[] };
+		expect(firstCall.args).toEqual(["one"]);
+		expect(secondCall.args).toEqual(["two"]);
+		expect(secondSentBeforeFirstDone).toBe(false); // serialized: call 2 sent only after turn 1 settled
+		await connector.close();
+		fake.stop();
+	});
+
+	test("a browser-driven agent_end before our call_result acceptance does not settle", async () => {
+		// Regression (audit #21): the control stream carries every concurrent
+		// turn. An agent_end from a browser-driven turn that precedes our own
+		// call_result acceptance must be ignored; we settle only on our own
+		// turn's agent_end.
+		const fake = startFake({
+			onCommand: (_fake, stream, frame) => {
+				const call = frame as { type?: string; id?: string };
+				if (call.type !== "call") return;
+				// Browser turn finishing first: message_end + agent_end with
+				// foreign text, then OUR acceptance and OUR turn.
+				sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Browser turn" }]) });
+				sendEvent(stream, { type: "agent_end", messages: [] });
+				stream.send({ type: "call_result", id: call.id, ok: true });
+				sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Our turn" }]) });
+				sendEvent(stream, { type: "agent_end", messages: [] });
+			},
+		});
+		const { deps, connector, entry } = await readyEntry(fake);
+		const result = await promptEntry(deps, entry, "hi", 2000);
+		expect(result).toEqual({ daemonId: entry.daemonId, ok: true, text: "Our turn" });
+		await connector.close();
+		fake.stop();
+	});
 });
 
 describe("fanOut", () => {
@@ -373,14 +454,17 @@ describe("fanOut", () => {
 		// per-daemon POST /command → SSE stream routing stays unambiguous.
 		const failing = startFake({
 			onCommand: (_fake, stream, frame) => {
-				if ((frame as { type?: string }).type === "call") {
-					stream.send({ type: "error", error: "first failed" });
+				const call = frame as { type?: string; id?: string };
+				if (call.type === "call") {
+					stream.send({ type: "call_result", id: call.id, ok: false, error: "first failed" });
 				}
 			},
 		});
 		const ok = startFake({
 			onCommand: (_fake, stream, frame) => {
-				if ((frame as { type?: string }).type === "call") {
+				const call = frame as { type?: string; id?: string };
+				if (call.type === "call") {
+					stream.send({ type: "call_result", id: call.id, ok: true });
 					sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Second ok" }]) });
 					sendEvent(stream, { type: "agent_end", messages: [] });
 				}

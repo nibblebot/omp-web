@@ -14,7 +14,11 @@
  * that ends cleanly after a validated hello → "asleep" (cwd +
  * lastSessionFile kept) — the daemon went dormant. A stream that ends in
  * error, or a dial that never opened, → "reconnecting" with jittered
- * exponential backoff (1s→30s by default) and a fresh dial. A dial that
+ * exponential backoff (1s→30s by default) and a fresh dial. A
+ * `stream_reset` frame immediately before a clean end marks a daemon-side
+ * backpressure drop (the daemon is alive, the stream was too slow): the
+ * clean end is then treated as "reconnecting" too — drop-and-resume via
+ * Last-Event-ID, never "asleep". A dial that
  * never reached hello_ok additionally fires `onDialFailed` so the server can
  * respawn spawned daemons with a fresh token. A 401 (wrong token) is
  * terminal: status "error", no reconnect loop — only a respawn can refresh
@@ -26,8 +30,11 @@
  * deltas with seqs strictly greater than it, so a dropped stream never loses
  * frames.
  *
- * Idle policy: when retain()/release() subscribers drop to zero, the stream
- * is aborted after idleDropMs (default 60s) — "disconnect", no status
+ * Idle policy: the idle-drop timer is armed when a connection reaches
+ * "ready" with no retain() subscribers (never-attached dials — supervisor
+ * endpoint resolution, /ctl add/provision) and re-armed whenever
+ * retain()/release() subscribers drop to zero. On fire the stream is
+ * aborted after idleDropMs (default 60s) — "disconnect", no status
  * change — letting the daemon's own idle timer fire (→ asleep) and making
  * the next promptEntry respawn/redial on demand.
  *
@@ -46,8 +53,8 @@ import {
 	type DaemonStatus,
 	type ServerFrame,
 	type WebSessionState,
-} from "../src/protocol";
-import { parseSseUnits } from "../src/sse";
+} from "../shared/protocol";
+import { parseSseUnits } from "../shared/sse";
 import type { Registry, RegistryEntry } from "./registry";
 
 export interface ConnectorEvents {
@@ -84,6 +91,8 @@ interface ConnState {
 	sawHello: boolean;
 	sawState: boolean;
 	sawReady: boolean;
+	/** A stream_reset frame was seen on this stream (backpressure drop ahead of the end). */
+	sawReset: boolean;
 	/** Last event id seen on the current/previous stream (Last-Event-ID resume). */
 	lastSeq: number;
 	reconnectTimer: ReturnType<typeof setTimeout> | null;
@@ -97,7 +106,7 @@ interface ConnState {
 }
 
 /** Jittered exponential backoff: base = min(max, min·2^attempt), ±50%. */
-function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
+export function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
 	const base = Math.min(maxMs, minMs * 2 ** attempt);
 	return Math.round(base * (0.5 + Math.random()));
 }
@@ -199,6 +208,27 @@ export class DaemonConnector {
 		}
 	}
 
+	/**
+	 * Removal-time teardown (#24): superset of disconnect() — abort the
+	 * stream, cancel every timer, reject outstanding waitReady() waiters
+	 * immediately ("daemon removed"), and drop the per-daemon state
+	 * (listeners, waiters, retain count) entirely. A removed daemon must not
+	 * leak state behind a gone registry entry, and its waiters must not hang
+	 * until their timeout — the registry removal makes #transition's waiter
+	 * flush unreachable, so drop() owns the rejection.
+	 */
+	drop(daemonId: string): void {
+		const state = this.#states.get(daemonId);
+		if (!state) return;
+		this.disconnect(daemonId);
+		for (const waiter of state.waiters.splice(0)) {
+			clearTimeout(waiter.timer);
+			waiter.reject(new Error(`daemon ${daemonId} removed`));
+		}
+		state.listeners.clear();
+		this.#states.delete(daemonId);
+	}
+
 	/** False when the stream is down (or the daemon is no longer registered). */
 	send(daemonId: string, cmd: ClientCommand): boolean {
 		const entry = this.#registry.get(daemonId);
@@ -238,12 +268,22 @@ export class DaemonConnector {
 		const state = this.#states.get(daemonId);
 		if (!state) return;
 		if (state.retainCount > 0) state.retainCount--;
-		if (state.retainCount === 0 && state.idleTimer === null) {
-			state.idleTimer = setTimeout(() => {
-				state.idleTimer = null;
-				this.disconnect(daemonId);
-			}, this.#idleDropMs);
-		}
+		this.#armIdleDrop(state);
+	}
+
+	/**
+	 * Arm the idle-drop timer: fires only with zero retain() subscribers and
+	 * no timer already pending. Called from release() (last subscriber left)
+	 * and from the ready transition, so a connection that was NEVER retained
+	 * (supervisor endpoint resolution, /ctl add/provision) still drops its
+	 * control socket instead of pinning the daemon's idle auto-exit forever.
+	 */
+	#armIdleDrop(state: ConnState): void {
+		if (state.retainCount > 0 || state.idleTimer !== null) return;
+		state.idleTimer = setTimeout(() => {
+			state.idleTimer = null;
+			this.disconnect(state.daemonId);
+		}, this.#idleDropMs);
 	}
 
 	/** Subscribe to every frame from the daemon; returns the unsubscribe function. */
@@ -287,6 +327,11 @@ export class DaemonConnector {
 		return promise;
 	}
 
+	/** Number of per-daemon states currently tracked (diagnostics/tests; 0 = nothing retained). */
+	stateCount(): number {
+		return this.#states.size;
+	}
+
 	/** Drop every stream and cancel all timers. */
 	async close(): Promise<void> {
 		for (const state of this.#states.values()) {
@@ -324,6 +369,7 @@ export class DaemonConnector {
 				sawHello: false,
 				sawState: false,
 				sawReady: false,
+				sawReset: false,
 				lastSeq: 0,
 				reconnectTimer: null,
 				redialAttempt: 0,
@@ -342,6 +388,7 @@ export class DaemonConnector {
 		state.sawHello = false;
 		state.sawState = false;
 		state.sawReady = false;
+		state.sawReset = false;
 		// A stale silence timer from a previous stream must not outlive the new dial.
 		this.#clearSilenceTimer(state);
 		const endpoint = entry.endpoint;
@@ -454,6 +501,12 @@ export class DaemonConnector {
 			case "ready":
 				this.#onReady(state, frame);
 				break;
+			case "stream_reset":
+				// Daemon-side backpressure drop: the end that follows is a
+				// drop-and-resume, not a dormant close. #onStreamEnded treats
+				// the clean end as "reconnecting" (Last-Event-ID redial).
+				state.sawReset = true;
+				break;
 			default:
 				break;
 		}
@@ -510,6 +563,9 @@ export class DaemonConnector {
 		}
 		state.sawReady = true;
 		if (state.sawHello) this.#transitionLadder(state.daemonId, "ready");
+		// A ready connection nobody retained keeps no control socket open:
+		// arm the idle-drop so the daemon's own idle auto-exit can fire.
+		this.#armIdleDrop(state);
 	}
 
 	/** The stream (or its fetch) ended: clean → asleep, else reconnect. */
@@ -522,9 +578,16 @@ export class DaemonConnector {
 		if (!entry) return;
 		if (entry.status === "error") return; // error is terminal: never overwrite or redial
 		if (opts.clean) {
-			// Clean end: the daemon went dormant; keep cwd + lastSessionFile.
-			this.#transition(state.daemonId, "asleep");
-			return;
+			// A stream_reset frame just before EOF marks a backpressure drop:
+			// the daemon is alive and the stream was too slow — drop-and-resume
+			// (reconnecting + Last-Event-ID), never dormant.
+			const reset = state.sawReset;
+			state.sawReset = false;
+			if (!reset) {
+				// Clean end: the daemon went dormant; keep cwd + lastSessionFile.
+				this.#transition(state.daemonId, "asleep");
+				return;
+			}
 		}
 		const dialFailed = !state.sawHello;
 		this.#transition(state.daemonId, "reconnecting");

@@ -139,7 +139,8 @@ export interface SettingsModel {
 // (R14): loopback exempt, off-loopback bearer via Authorization header or
 // ?token=; a wrong credential is a 401, not a close code. hello_ok is the
 // FIRST event on every stream open (daemon identity), followed by the attach
-// priming (attached → history → state → available_commands → ready).
+// priming (attached → history → state → collab_status → available_commands →
+// ready).
 // ---------------------------------------------------------------------------
 
 export const OMP_PROTO = 2;
@@ -148,7 +149,7 @@ export const OMP_PROTO = 2;
 
 /** SSE event field carrying every ServerFrame. */
 export const SSE_EVENT_NAME = "frame";
-/** Keepalive ping event (see SSE_PING_BLOCK in src/sse.ts) interval written to every open stream. */
+/** Keepalive ping event (see SSE_PING_BLOCK in sse.ts) interval written to every open stream. */
 export const SSE_KEEPALIVE_MS = 15_000;
 /**
  * Consumers treat this much total silence (no event, no comment) as a dead
@@ -159,10 +160,24 @@ export const SSE_SILENCE_DEADLINE_MS = 30_000;
 /** Bounded replay ring of recent deltas, per daemon / per browser stream. */
 export const SSE_RING_CAP = 10_000;
 /**
+ * Byte budget for one replay ring (finding #5): a ring must be bounded in
+ * BYTES, not just entries — multi-megabyte deltas (large bash chunks, base64
+ * image payloads) across thousands of entries would otherwise balloon memory.
+ * Sized at 2× SSE_BACKPRESSURE_BYTES so the ring comfortably holds the
+ * post-drop replay window of a stream that was buffered up to the cap. The
+ * entry cap (SSE_RING_CAP) remains a secondary bound for many-small-delta
+ * bursts.
+ */
+export const SSE_RING_BYTES = 8 * 1024 * 1024;
+/**
  * First seq assigned to post-priming deltas (a daemon-global counter).
  * Priming frames carry seqs 1..k (k < SSE_DELTA_SEQ_START) per stream, so a
  * Last-Event-ID below this value means "stale/empty client: priming already
- * carries full current state, skip ring replay".
+ * carries full current state". The daemon replays ring deltas with
+ * seq > max(lastEventId, snapshotSeq-1) — the snapshot mark (the next delta
+ * seq captured before the priming snapshot is built) bounds the overlap, so
+ * a resume never re-delivers deltas whose effects are inside the fresh
+ * priming (finding #2: no duplicated items after a resume).
  */
 export const SSE_DELTA_SEQ_START = 1024;
 /** Per-stream enqueue cap: beyond it the stream is terminated (drop-and-resume). */
@@ -171,11 +186,19 @@ export const SSE_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
 export const COMMAND_DEDUP_WINDOW_MS = 60_000;
 export const COMMAND_DEDUP_CAP = 64;
 
+/** Prefix of the `OMP_SESSION|` stdout contract lines (R6b). */
+export const OMP_SESSION_PREFIX = "OMP_SESSION|";
+
 /**
  * The `OMP_SESSION|` stdout contract lines (R6b). omp-session prints
  * `listening` immediately after bind, before session creation; a remote
  * wrapper MAY print `endpoint` when the reachable address differs from the
  * bind.
+ *
+ * NOTE: the advertised `url` is ws-shaped (`ws://host:port`) for legacy
+ * reasons — OMP_PROTO 2 is plain HTTP SSE, and the fleet's dial path
+ * normalizes the scheme via daemonHttpBase (fleet/connector.ts). Consumers
+ * must never treat it as a WebSocket endpoint.
  */
 export type StdoutContractLine =
 	| { event: "listening"; bind: string; port: number; url: string; advertise?: string }
@@ -301,8 +324,6 @@ export type ClientCommand =
 	// Fleet edge only: attach this stream to the daemon with this id
 	// (the edge proxies it through; a bare omp-session never receives attach).
 	| { type: "attach"; id: string; sessionId: string }
-	// Plain process-stats poll; answered with a process_stats frame.
-	| { type: "get_process_stats"; id: string }
 	// Collab: start/stop the collab room for the stream's ATTACHED session.
 	| { type: "collab_start"; id: string }
 	| { type: "collab_stop"; id: string }
@@ -339,7 +360,11 @@ export type CollabWireStatus =
  * stamps the session handle. On the wire they always carry sessionId.
  */
 export type SessionScopedFrame =
-	| { type: "history"; messages: AgentMessage[] }
+	// History: a small transcript ships as ONE frame with no `final` field (the
+	// original shape); a transcript over the SSE backpressure cap ships as
+	// byte-bounded sequential frames (`final: false` … `final: true`) that the
+	// client accumulates until the `final` chunk completes the series.
+	| { type: "history"; messages: AgentMessage[]; final?: boolean }
 	| { type: "state"; state: WebSessionState; stats?: SessionStats }
 	| { type: "event"; event: AgentSessionEvent }
 	// Live output of an in-flight bash/python call (streamId = the client's
@@ -357,6 +382,12 @@ export type SessionScopedFrame =
 	| { type: "subagent_lifecycle" | "subagent_progress" | "subagent_event"; payload: unknown }
 	// Server-driven ExtensionUIContext dialog; the client answers with ui_response.
 	| { type: "ui_request"; id: string; method: string; params: unknown }
+	// The dialog above settled (answered via ui_response, or rejected when its
+	// last target stream closed / the session closed). Ringed like ui_request
+	// so a resuming stream replays the end AFTER the stale request (finding
+	// #16) and every other live tab dismisses the dialog. Mirrors the collab
+	// host's ui-request-end.
+	| { type: "ui_request_end"; id: string }
 	// Collab host status for the attached session (start/stop/live/error/off).
 	| { type: "collab_status"; status: CollabWireStatus };
 
@@ -376,19 +407,22 @@ export type ServerFrame =
 	// Unicast: provider needs a pasted code to finish login.
 	| { type: "login_code_request"; requestId: string; title: string; placeholder?: string }
 	// Unicast: socket is now attached to this handle; history, state and
-	// available_commands follow immediately (in that order). mode "single" is
-	// the standalone omp-session UI (no sidebar); roster mode is signaled by
-	// the fleet edge's roster frame, never by attached (the edge proxies the
-	// daemon's "single" through unchanged).
-	| { type: "attached"; sessionId: string; mode?: "single" | "multi" }
+	// available_commands follow immediately (in that order). Roster mode is
+	// signaled by the fleet edge's roster frame, never by attached (the edge
+	// proxies the daemon's frame through unchanged).
+	| { type: "attached"; sessionId: string }
 	// Project-wide daemon broker roster (hub launch processes); global broadcast.
 	| { type: "daemons"; daemons: DaemonInfo[] }
 	// Unicast answer to daemon_logs.
 	| { type: "daemon_logs_result"; id: string; ok: boolean; text?: string; cursor?: number; state?: string; error?: string }
 	// Unicast answer to daemon_stop / daemon_restart.
 	| { type: "daemon_control_result"; id: string; ok: boolean; daemon?: DaemonInfo; error?: string }
-	// Unicast answer to get_process_stats — the 5s poll carries only process stats.
-	| { type: "process_stats"; process: ProcessStats }
+	// Unicast answer to attach (fleet edge): settles the client's pending
+	// attach by command id. Success carries the daemonId as sessionId;
+	// failure carries the error. Added OMP_PROTO 2 additively — an older edge
+	// that ignores the attach id never sends this frame, and the client's
+	// pending-map timeout backstops it.
+	| { type: "attach_result"; id: string; ok: boolean; sessionId?: string; error?: string }
 	// --- omp-session readiness (R8) ---
 	// Broadcast once the SDK session is live AND provider/model/auth has
 	// resolved. Before it, prompt-family calls fail with a not_ready error.
@@ -397,6 +431,12 @@ export type ServerFrame =
 	// FIRST event on every /events stream open (HTTP-level auth replaced the
 	// hello handshake); the attach priming follows immediately.
 	| { type: "hello_ok"; proto: number; name: string; cwd: string; pid: number; version: string; sessionFile?: string }
+	// --- Stream lifecycle (omp-session → the one stream being dropped) ---
+	// Sent immediately before the stream ends when the SSE buffer exceeded
+	// the backpressure cap: the daemon is ALIVE and the drop is recoverable
+	// (resume via Last-Event-ID), so consumers must NOT treat the following
+	// clean close as a dormant daemon. Per-stream only, never ringed.
+	| { type: "stream_reset"; reason: string }
 	// --- Fleet edge (omp-fleet → browser; a bare omp-session never sends these) ---
 	// Global broadcast + unicast answer; the roster-mode sidebar's source.
 	| { type: "roster"; daemons: DaemonEntry[] }
@@ -404,13 +444,6 @@ export type ServerFrame =
 	// Unicast answer to list_projects.
 	| { type: "projects"; projects: ProjectEntry[] }
 	| { type: "error"; error: string };
-
-/** Server process stats, reported by the process_stats frame. */
-export type ProcessStats = {
-	rssBytes: number;
-	uptimeSec: number;
-	sessionCount: number;
-};
 
 /** One supervised long-running process (hub launch / daemon broker), wire-safe. */
 export type DaemonInfo = {
@@ -433,6 +466,20 @@ export type DaemonInfo = {
 	persist: boolean;
 	detached: boolean;
 };
+
+/**
+ * The daemon roster merge key: `${projectDir}${DAEMON_KEY_SEP}${name}`.
+ * Daemon names are unique per projectDir and several omp-sessions can share
+ * a projectDir, so the server's broker poll (refreshDaemons), the fleet
+ * edge's aggregator (daemons-aggregator.ts) and the client (state.ts /
+ * ActiveDaemons) all key daemon entries by this composite. Single-sourced
+ * here so the three layers cannot drift; the NUL separator cannot appear in
+ * paths, which keeps the prefix-cleanup check in refreshDaemons unambiguous.
+ */
+export const DAEMON_KEY_SEP = "\u0000";
+export function daemonsKey(info: { projectDir: string; name: string }): string {
+	return `${info.projectDir}${DAEMON_KEY_SEP}${info.name}`;
+}
 
 export type SessionListEntry = {
 	path: string;

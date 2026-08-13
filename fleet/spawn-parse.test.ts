@@ -6,8 +6,8 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { fillTemplate, parseContractLine, resolveEndpoint } from "./spawn-parse";
-import type { StdoutContractLine } from "../src/protocol";
+import { fillTemplate, isValidEndpointUrl, parseContractLine, resolveEndpoint, shellQuote } from "./spawn-parse";
+import type { StdoutContractLine } from "../shared/protocol";
 
 // ---------------------------------------------------------------------------
 // fillTemplate
@@ -40,11 +40,14 @@ describe("fillTemplate", () => {
 		expect(out).toBe("omp-session --label team=web --label tier=prod --name n");
 	});
 
-	test("does no shell escaping — values with spaces/quotes insert raw", () => {
+	test("is pure text substitution — no shell escaping by design (callers must shell-quote)", () => {
 		const out = fillTemplate("omp-session --cwd {cwd} --token {token}", {
 			cwd: "/path with spaces",
 			token: "s3cr&t;$(touch /tmp/x)",
 		});
+		// fillTemplate is deliberately escaping-free; the supervisor #launch
+		// call site shell-quotes every value BEFORE substitution (shellQuote)
+		// so nothing like this can reach `sh -c`.
 		expect(out).toBe("omp-session --cwd /path with spaces --token s3cr&t;$(touch /tmp/x)");
 	});
 
@@ -55,6 +58,54 @@ describe("fillTemplate", () => {
 	test("empty template and empty vars", () => {
 		expect(fillTemplate("", {})).toBe("");
 		expect(fillTemplate("{a}", { a: "" })).toBe("");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// isValidEndpointUrl
+// ---------------------------------------------------------------------------
+
+describe("isValidEndpointUrl", () => {
+	test("accepts ws:// and wss:// URLs", () => {
+		expect(isValidEndpointUrl("ws://127.0.0.1:4721")).toBe(true);
+		expect(isValidEndpointUrl("wss://omp.example.com:9443")).toBe(true);
+		expect(isValidEndpointUrl("ws://host:8000/ws")).toBe(true);
+		expect(isValidEndpointUrl("ws://x")).toBe(true);
+	});
+
+	test("rejects garbage, not-a-url, hostless ws://, and non-ws protocols", () => {
+		expect(isValidEndpointUrl("garbage")).toBe(false);
+		expect(isValidEndpointUrl("not a url")).toBe(false);
+		expect(isValidEndpointUrl("ws://")).toBe(false);
+		expect(isValidEndpointUrl("ws://:4721")).toBe(false);
+		expect(isValidEndpointUrl("http://example.com")).toBe(false);
+		expect(isValidEndpointUrl("ftp://h")).toBe(false);
+		expect(isValidEndpointUrl("")).toBe(false);
+		expect(isValidEndpointUrl(42)).toBe(false);
+		expect(isValidEndpointUrl(undefined)).toBe(false);
+		expect(isValidEndpointUrl(null)).toBe(false);
+	});
+});
+
+describe("shellQuote", () => {
+	test("wraps plain values in single quotes", () => {
+		expect(shellQuote("plain")).toBe("'plain'");
+		expect(shellQuote("")).toBe("''");
+		expect(shellQuote("/srv/repos/acme")).toBe("'/srv/repos/acme'");
+	});
+
+	test("escapes embedded single quotes as '\\''", () => {
+		expect(shellQuote("it's")).toBe("'it'\\''s'");
+		expect(shellQuote("a'b'c")).toBe("'a'\\''b'\\''c'");
+		expect(shellQuote("'")).toBe("''\\'''");
+	});
+
+	test("spaces, $(), backticks, and newlines stay literal inside the quotes", () => {
+		expect(shellQuote("/path with spaces")).toBe("'/path with spaces'");
+		expect(shellQuote("k=$(touch /tmp/pwned)")).toBe("'k=$(touch /tmp/pwned)'");
+		expect(shellQuote("`id`")).toBe("'`id`'");
+		expect(shellQuote("$HOME;rm -rf /")).toBe("'$HOME;rm -rf /'");
+		expect(shellQuote("line1\nline2")).toBe("'line1\nline2'");
 	});
 });
 
@@ -152,6 +203,34 @@ describe("parseContractLine", () => {
 		// endpoint wrong shape
 		expect(parseContractLine('OMP_SESSION|{"event":"endpoint"}')).toBeNull();
 		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":true}')).toBeNull();
+	});
+
+	test("contract lines with malformed endpoint/advertise/listening urls are dropped as noise", () => {
+		// wrapper endpoint url: garbage / not a url / hostless ws:// / wrong protocol
+		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"garbage"}')).toBeNull();
+		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"not a url"}')).toBeNull();
+		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"ws://"}')).toBeNull();
+		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"ws://:4721"}')).toBeNull();
+		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"http://example.com"}')).toBeNull();
+		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":""}')).toBeNull();
+		// listening.url
+		expect(parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"garbage"}')).toBeNull();
+		expect(parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"ws://"}')).toBeNull();
+		// advertise
+		expect(
+			parseContractLine('OMP_SESSION|{"event":"listening","bind":"0.0.0.0","port":4721,"url":"ws://0.0.0.0:4721","advertise":"garbage"}')
+		).toBeNull();
+		expect(
+			parseContractLine('OMP_SESSION|{"event":"listening","bind":"0.0.0.0","port":4721,"url":"ws://0.0.0.0:4721","advertise":"ws://"}')
+		).toBeNull();
+		expect(
+			parseContractLine('OMP_SESSION|{"event":"listening","bind":"0.0.0.0","port":4721,"url":"ws://0.0.0.0:4721","advertise":"ftp://h"}')
+		).toBeNull();
+		// valid ws/wss still parse
+		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"wss://omp.example.com:9443"}')).toEqual({
+			event: "endpoint",
+			url: "wss://omp.example.com:9443",
+		});
 	});
 
 	test("never throws on any input", () => {

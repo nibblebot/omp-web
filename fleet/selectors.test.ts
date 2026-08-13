@@ -2,13 +2,13 @@
  * Tests for fleet selector resolution (fleet/selectors.ts).
  *
  * Pure and hermetic: entries are constructed inline against the DaemonEntry
- * shape from src/protocol.ts (plus the RegistryEntry-only `registeredAt`
+ * shape from shared/protocol.ts (plus the RegistryEntry-only `registeredAt`
  * field) instead of importing ./registry, so this suite runs standalone
  * before the registry slice lands.
  */
 
 import { describe, expect, test } from "bun:test";
-import type { DaemonEntry } from "../src/protocol";
+import type { DaemonEntry } from "../shared/protocol";
 import { matchSelector } from "./selectors";
 
 type RegistryEntryShape = DaemonEntry & { registeredAt: number };

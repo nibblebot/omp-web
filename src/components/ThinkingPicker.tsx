@@ -2,6 +2,7 @@ import { For, type Component } from "solid-js";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { call, setState, state } from "../state";
 import { Modal } from "./Modal";
+import { PickerRow } from "./PickerRow";
 
 // Values mirror pi-agent-core/src/thinking.ts; kept as literals because the
 // const object can't be value-imported without bundling the agent runtime.
@@ -18,9 +19,13 @@ export const ThinkingPicker: Component<{ onClose: () => void }> = props => {
 			<div class="picker-list">
 				<For each={THINKING_LEVELS}>
 					{level => (
-						<div class="picker-row" classList={{ active: (state.thinkingLevel ?? "inherit") === level }} onClick={() => choose(level)}>
+						<PickerRow
+							class="picker-row"
+							classList={{ active: (state.thinkingLevel ?? "inherit") === level }}
+							onClick={() => choose(level)}
+						>
 							<span class="picker-label">{level}</span>
-						</div>
+						</PickerRow>
 					)}
 				</For>
 			</div>

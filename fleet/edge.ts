@@ -9,9 +9,14 @@
  *     k < SSE_DELTA_SEQ_START); live `roster` / `daemon_status` / `daemons`
  *     broadcasts and proxied daemon frames follow as SSE events with
  *     edge-local monotonic seqs from SSE_DELTA_SEQ_START, kept in a
- *     per-client SseRing (cap SSE_RING_CAP) for Last-Event-ID resume:
- *     N ≥ SSE_DELTA_SEQ_START replays ring.after(N) after priming, anything
- *     below skips replay (priming already carries full current state).
+ *     per-client SseRing (cap SSE_RING_CAP, byte budget SSE_RING_BYTES) for
+ *     Last-Event-ID resume: N ≥ SSE_DELTA_SEQ_START replays ring.after(N)
+ *     after priming, anything below skips replay (priming already carries
+ *     full current state). Only daemon DELTA types are ringed (mirror of the
+ *     daemon's RING_DELTAS, finding #5): priming frames (history,
+ *     available_commands) and unicast answers (call_result) ride the live
+ *     stream with a seq but no ring entry — re-derivable by re-attach
+ *     priming / re-POST, exactly like the daemon.
  *   - POST /command is the browser uplink: one ClientCommand per request,
  *     202 {commandId} on accept, answers ride /events only. Commands are
  *     routed to a browser by the X-Omp-Client-Id header (the browser binds
@@ -19,23 +24,32 @@
  *     id is a 400. Fleet-level commands (list_projects / spawn /
  *     spawn_resume / stop / remove / attach) are handled here;
  *     attached-session commands (call / login_code / ui_response /
- *     collab_* / daemon_* / list_* / get_process_stats) proxy to the
+ *     collab_* / daemon_* / list_*) proxy to the
  *     attached daemon's POST /command with the bearer token. Anything
  *     outside the browser-command allowlist is rejected with an error
  *     frame.
  *   - PROXY ATTACH: one daemon /events stream PER BROWSER (the daemon
  *     primes every new stream, so hello_ok → attached → history → state →
  *     available_commands → ready come from the session itself). The pipe
- *     opens with the Bearer token, swallows hello_ok, ingests per-daemon
- *     broker rosters, and forwards every other session frame, STAMPING the
+ *     opens with the Bearer token, proto-gates hello_ok then FORWARDS it
+ *     (finding #61: the browser's own proto check runs in roster mode too),
+ *     ingests per-daemon broker rosters, and forwards every other session
+ *     frame, STAMPING the
  *     daemonId as sessionId on every session-scoped frame (omp-session no
  *     longer sends one) and rewriting `attached`'s guard token the same
- *     way. connector.retain on pipe open / release on pipe end feeds the
- *     idle policy. Asleep sessions are woken first (respawn for spawned
- *     entries, connector redial otherwise) and awaited to ready (60s)
- *     before piping. Pipe liveness: no event and no comment for
- *     silenceDeadlineMs (default 30s) → the pipe is treated as lost → the
- *     same re-attach path the old close handler drove.
+ *     way. connector.retain on pipe open / release on terminal pipe end
+ *     feeds the idle policy. Asleep sessions are woken first (respawn for
+ *     spawned entries, connector redial otherwise) and awaited to ready
+ *     (60s) before piping. Pipe resume (finding #4): a non-intentional
+ *     pipe end (error, silence past silenceDeadlineMs, or clean close) is
+ *     NOT terminal — the edge redials /events with Last-Event-ID (the last
+ *     forwarded daemon seq, delta-era only) on jittered bounded backoff,
+ *     so the browser stays attached across a dropped stream. Only a
+ *     terminal outcome — 401, proto mismatch, no endpoint, or the redial
+ *     budget exhausted — releases the retain and emits the "daemon
+ *     connection lost" error frame. Attach is answered with an id-keyed
+ *     attach_result frame (finding #28) so unrelated global error frames
+ *     never settle a browser's in-flight attach.
  *   - Backpressure: a browser stream buffering more than the cap (default
  *     SSE_BACKPRESSURE_BYTES) is terminated (drop-and-resume): the browser
  *     reconnects with Last-Event-ID and the edge replays its ring. One slow
@@ -56,23 +70,25 @@
  */
 
 import {
+	OMP_PROTO,
 	SSE_BACKPRESSURE_BYTES,
 	SSE_DELTA_SEQ_START,
 	SSE_EVENT_NAME,
 	SSE_KEEPALIVE_MS,
 	SSE_RING_CAP,
+	SSE_RING_BYTES,
 	SSE_SILENCE_DEADLINE_MS,
 	type ClientCommand,
 	type DaemonEntry,
 	type DaemonInfo,
 	type ServerFrame,
 	type SessionScopedFrame,
-} from "../src/protocol";
-import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK, SSE_PING_EVENT, SseRing } from "../src/sse";
+} from "../shared/protocol";
+import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK, SSE_PING_EVENT, SseRing } from "../shared/sse";
 import type { FleetConfig } from "./config";
 import { listProjects, validateProjectPath } from "./discovery";
 import type { DaemonConnector } from "./connector";
-import { daemonHttpBase } from "./connector";
+import { backoffDelay, daemonHttpBase } from "./connector";
 import { DaemonsAggregator } from "./daemons-aggregator";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
@@ -82,6 +98,19 @@ const ATTACH_WAIT_READY_MS = 60_000;
 
 /** Reclaim grace for a disconnected browser's ring (Last-Event-ID resume window). */
 const CLIENT_RECLAIM_MS = 60_000;
+
+/**
+ * Proxy-pipe redial backoff bounds (finding #4). The pipe mirrors the
+ * connector's resume semantics: a non-intentional stream end schedules a
+ * jittered exponential redial (these bounds, connector-style) that carries
+ * Last-Event-ID so the daemon replays only what the pipe missed. A
+ * connected pipe that delivers ANY unit resets the budget; only
+ * consecutive failures (dial refusals or streams that never deliver a unit)
+ * count toward PIPE_MAX_REDIALS, after which the pipe is reported lost.
+ */
+const PIPE_BACKOFF_MIN_MS = 1_000;
+const PIPE_BACKOFF_MAX_MS = 30_000;
+const PIPE_MAX_REDIALS = 20;
 
 /** Encode SSE blocks once per edge (the queue strategy sizes in bytes). */
 const SSE_ENCODER = new TextEncoder();
@@ -120,7 +149,7 @@ const UNKNOWN_COMMAND_MESSAGE = "fleet edge: use spawn/stop/roster";
  * with UNKNOWN_COMMAND_MESSAGE. Typed against ClientCommand so a removed
  * variant stops compiling instead of silently broadening the allowlist.
  */
-const BROWSER_COMMAND_LIST: ClientCommand["type"][] = [
+const BROWSER_COMMAND_LIST = [
 	// Handled at the edge.
 	"list_projects",
 	"spawn",
@@ -134,13 +163,20 @@ const BROWSER_COMMAND_LIST: ClientCommand["type"][] = [
 	"ui_response",
 	"list_sessions",
 	"list_files",
-	"get_process_stats",
 	"collab_start",
 	"collab_stop",
 	"daemon_logs",
 	"daemon_stop",
 	"daemon_restart",
-];
+] as const satisfies readonly ClientCommand["type"][];
+// Exhaustiveness pin (finding #63): `as const satisfies` catches REMOVED
+// variants (a literal no longer in the union fails), and this assignment
+// fails tsc on ADDED ones — a variant added to the union without an
+// allowlist row would otherwise compile and silently stop being proxied.
+// `(typeof BROWSER_COMMAND_LIST)[number]` is the list's literal union only
+// because of the `as const`; with a plain annotated array it would be the
+// whole ClientCommand union and the pin would be a no-op.
+const _browserCommandAllowlistExhaustive: Record<Exclude<ClientCommand["type"], (typeof BROWSER_COMMAND_LIST)[number]>, never> = {};
 const BROWSER_COMMAND_TYPES: Record<string, true> = Object.fromEntries(BROWSER_COMMAND_LIST.map((type) => [type, true]));
 
 /**
@@ -151,7 +187,7 @@ const BROWSER_COMMAND_TYPES: Record<string, true> = Object.fromEntries(BROWSER_C
  * ("s1" from omp-session) and must read as the daemonId when it comes
  * through the edge.
  */
-const SESSION_SCOPED_FRAME_LIST: SessionScopedFrame["type"][] = [
+const SESSION_SCOPED_FRAME_LIST = [
 	"history",
 	"state",
 	"event",
@@ -165,9 +201,49 @@ const SESSION_SCOPED_FRAME_LIST: SessionScopedFrame["type"][] = [
 	"subagent_progress",
 	"subagent_event",
 	"ui_request",
+	// Finding #16: the dialog's settle marker rides the session scope like the
+	// request, so a daemon switch guard applies the same way.
+	"ui_request_end",
 	"collab_status",
-];
+] as const satisfies readonly SessionScopedFrame["type"][];
+// Exhaustiveness pin (finding #63): same addition-direction guard as the
+// browser-command allowlist — a session-scoped frame added to the union
+// without a row here would otherwise be forwarded UNSTAMPED (no daemonId),
+// which the client's stale-frame guard would drop on a daemon switch.
+const _sessionScopedFrameListExhaustive: Record<Exclude<SessionScopedFrame["type"], (typeof SESSION_SCOPED_FRAME_LIST)[number]>, never> = {};
 const SESSION_SCOPED_FRAME_TYPES: Record<string, true> = Object.fromEntries(SESSION_SCOPED_FRAME_LIST.map((type) => [type, true]));
+
+/**
+ * Daemon frame types the edge RINGS per client (finding #5). MUST mirror
+ * server/index.ts RING_DELTAS: a frame the daemon does not ring (priming:
+ * hello_ok/attached/history/available_commands; unicast answers:
+ * call_result; per-stream lifecycle: stream_reset) is forwarded live but
+ * never ringed — it is re-derivable by re-attach priming or re-POSTing the
+ * command. Ringed deltas are the frames a Last-Event-ID resume actually
+ * needs; everything else merely consumes a seq, exactly like the daemon's
+ * delta counter, so ring replay has the same deliberate gaps and a
+ * resuming consumer tolerates them (after() returns only ringed entries
+ * newer than the id).
+ */
+const EDGE_RING_DELTAS: Record<string, true> = {
+	state: true,
+	event: true,
+	bash_chunk: true,
+	python_chunk: true,
+	ephemeral_delta: true,
+	settings_changed: true,
+	subagent_lifecycle: true,
+	subagent_progress: true,
+	subagent_event: true,
+	ui_request: true,
+	// Finding #16: the dialog's settle marker is ringed like the request, so
+	// a resume replays request → end (dismissed), never a stale dialog.
+	ui_request_end: true,
+	collab_status: true,
+	ready: true,
+	daemons: true,
+	error: true,
+};
 
 const PLACEHOLDER_HTML = `<!doctype html>
 <html lang="en">
@@ -200,7 +276,7 @@ export interface EdgeDeps {
 interface BrowserClient {
 	/** Page-scoped id from ?client= (null for anonymous streams — not command-addressable). */
 	clientId: string | null;
-	/** Edge-local replay ring of this browser's deltas (cap SSE_RING_CAP). */
+	/** Edge-local replay ring of this browser's ringed deltas (cap SSE_RING_CAP, byte budget SSE_RING_BYTES). */
 	ring: SseRing<string>;
 	/** Next edge-local delta seq for this browser (≥ SSE_DELTA_SEQ_START). */
 	nextSeq: number;
@@ -235,12 +311,18 @@ interface PipeState {
 	retained: boolean;
 	/** Resets on every SSE unit (event or comment); on fire the pipe is treated as lost. */
 	silenceTimer: ReturnType<typeof setTimeout> | null;
+	/** Last daemon seq forwarded; the redial's Last-Event-ID (delta-era only). */
+	lastSeq: number;
+	/** Consecutive failed redials since the last unit; bounds the retry budget. */
+	redialAttempt: number;
+	/** Pending redial (jittered backoff); cleared on intentional teardown/terminal loss. */
+	reconnectTimer: ReturnType<typeof setTimeout> | null;
 }
 
-function newClient(clientId: string | null): BrowserClient {
+function newClient(clientId: string | null, ringBytes: number): BrowserClient {
 	return {
 		clientId,
-		ring: new SseRing<string>(SSE_RING_CAP),
+		ring: new SseRing<string>(SSE_RING_CAP, ringBytes),
 		nextSeq: SSE_DELTA_SEQ_START,
 		stream: null,
 		gcTimer: null,
@@ -292,7 +374,13 @@ export class FleetEdge {
 	readonly #supervisor: SpawnSupervisor;
 	readonly #config: FleetConfig;
 	readonly #backpressureBytes: number;
+	/** Per-client ring byte budget (default SSE_RING_BYTES; finding #5). */
+	readonly #ringBytes: number;
 	readonly #silenceDeadlineMs: number;
+	/** Proxy-pipe redial backoff bounds + retry budget (finding #4). */
+	readonly #pipeBackoffMinMs: number;
+	readonly #pipeBackoffMaxMs: number;
+	readonly #pipeMaxRedials: number;
 	/** Live browser streams (broadcasts + backpressure). */
 	readonly #browsers = new Set<BrowserStream>();
 	/** Command-addressable browsers by clientId (ring survives stream replacement). */
@@ -325,8 +413,16 @@ export class FleetEdge {
 		opts?: {
 			/** Backpressure cap for browser streams (default SSE_BACKPRESSURE_BYTES). */
 			backpressureBytes?: number;
+			/** Per-client replay-ring byte budget (default SSE_RING_BYTES). */
+			ringBytes?: number;
 			/** LIVENESS: total silence on a daemon pipe (no event, no comment) before it is treated as lost (default SSE_SILENCE_DEADLINE_MS). */
 			silenceDeadlineMs?: number;
+			/** Proxy-pipe redial backoff floor (default PIPE_BACKOFF_MIN_MS). */
+			pipeBackoffMinMs?: number;
+			/** Proxy-pipe redial backoff ceiling (default PIPE_BACKOFF_MAX_MS). */
+			pipeBackoffMaxMs?: number;
+			/** Consecutive failed pipe redials before the pipe is reported lost (default PIPE_MAX_REDIALS). */
+			pipeMaxRedials?: number;
 		},
 	) {
 		this.#registry = deps.registry;
@@ -334,7 +430,11 @@ export class FleetEdge {
 		this.#supervisor = deps.supervisor;
 		this.#config = deps.config;
 		this.#backpressureBytes = opts?.backpressureBytes ?? SSE_BACKPRESSURE_BYTES;
+		this.#ringBytes = opts?.ringBytes ?? SSE_RING_BYTES;
 		this.#silenceDeadlineMs = opts?.silenceDeadlineMs ?? SSE_SILENCE_DEADLINE_MS;
+		this.#pipeBackoffMinMs = opts?.pipeBackoffMinMs ?? PIPE_BACKOFF_MIN_MS;
+		this.#pipeBackoffMaxMs = opts?.pipeBackoffMaxMs ?? PIPE_BACKOFF_MAX_MS;
+		this.#pipeMaxRedials = opts?.pipeMaxRedials ?? PIPE_MAX_REDIALS;
 		deps.registry.onChange = this.#onRegistryChange;
 		// Tap daemons that already exist at construction (state.json load).
 		this.#reconcileDaemonTaps();
@@ -424,6 +524,24 @@ export class FleetEdge {
 			{
 				start: (controller) => {
 					const client = this.#bindClient(clientId);
+					// Finding #25: a rebind with a STILL-LIVE previous stream (the
+					// old EventSource's cancel hasn't fired yet — browser
+					// reconnects overlap) must not leave it in #browsers: two
+					// live streams for one client would ring every broadcast
+					// twice (two seqs) and double-deliver. Close the old
+					// stream's controller + pipe and drop its entry first,
+					// #dropBrowser-style. The stale cancel that fires later is a
+					// no-op thanks to the identity guard in #releaseBrowser.
+					const previous = client.stream;
+					if (previous) {
+						this.#browsers.delete(previous);
+						this.#closePipe(previous);
+						try {
+							previous.controller.close();
+						} catch {
+							// Already closed/cancelled.
+						}
+					}
 					// The constructor's start callback types the controller as the
 					// default/byte union; this stream is built with a default
 					// source, so the default controller is the actual runtime type.
@@ -472,13 +590,13 @@ export class FleetEdge {
 				}
 				return client;
 			}
-			client = newClient(clientId);
+			client = newClient(clientId, this.#ringBytes);
 			this.#clients.set(clientId, client);
 			return client;
 		}
 		// Anonymous stream: served (priming + broadcasts + ring) but not
 		// command-addressable (POST /command needs a client id).
-		return newClient(null);
+		return newClient(null, this.#ringBytes);
 	}
 
 	/**
@@ -568,7 +686,10 @@ export class FleetEdge {
 					this.#sendError(stream, "attach: missing sessionId");
 					break;
 				}
-				void this.#handleAttach(stream, daemonId);
+				// The command id keys the attach_result answer (finding #28); a
+				// malformed client without one falls back to the legacy error frame.
+				const commandId = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : undefined;
+				void this.#handleAttach(stream, daemonId, commandId);
 				break;
 			}
 			default:
@@ -651,10 +772,13 @@ export class FleetEdge {
 			for (const s of this.#browsers) {
 				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
 			}
+			// #24: prune/drop the per-daemon supervisor/connector state so a
+			// removed daemon leaks nothing and pending waitReady() waiters
+			// reject immediately instead of hanging until their timeout.
 			if (entry.mode === "spawned") {
-				await this.#supervisor.stop(daemonId);
+				await this.#supervisor.prune(daemonId);
 			} else {
-				this.#connector.disconnect(daemonId);
+				this.#connector.drop(daemonId);
 			}
 			// The entry is gone; the roster broadcast rides registry.onChange.
 			this.#registry.remove(daemonId);
@@ -663,10 +787,10 @@ export class FleetEdge {
 		}
 	}
 
-	async #handleAttach(stream: BrowserStream, daemonId: string): Promise<void> {
+	async #handleAttach(stream: BrowserStream, daemonId: string, commandId: string | undefined): Promise<void> {
 		const entry = this.#registry.get(daemonId);
 		if (!entry) {
-			this.#sendError(stream, `unknown daemon: ${daemonId}`);
+			this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
 			return;
 		}
 		// Re-attach (same or another daemon) closes the previous pipe first.
@@ -675,15 +799,18 @@ export class FleetEdge {
 			await this.#wake(entry);
 			await this.#connector.waitReady(daemonId, ATTACH_WAIT_READY_MS);
 		} catch (err) {
-			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+			this.#sendAttachOutcome(stream, commandId, { error: err instanceof Error ? err.message : String(err) });
 			return;
 		}
 		const current = this.#registry.get(daemonId);
 		if (!current?.endpoint) {
-			this.#sendError(stream, `daemon ${daemonId} has no endpoint`);
+			this.#sendAttachOutcome(stream, commandId, { error: `daemon ${daemonId} has no endpoint` });
 			return;
 		}
-		this.#openPipe(stream, current);
+		// #openPipe answers the attach: ok once the dial is underway (the
+		// pipe's resume machinery keeps the attachment alive across drops), or
+		// a keyed failure when the dial cannot start.
+		this.#openPipe(stream, current, commandId);
 	}
 
 	// ---------------------------------------------------------------------
@@ -719,8 +846,13 @@ export class FleetEdge {
 		}
 	}
 
-	/** Open this browser's dedicated daemon /events stream (Authorization + consume). */
-	#openPipe(stream: BrowserStream, entry: RegistryEntry): void {
+	/**
+	 * Open this browser's dedicated daemon /events stream (Authorization +
+	 * consume). The attach is answered here: ok once the dial is underway
+	 * (the resume machinery keeps the pipe attached across drops), or a
+	 * keyed failure when the dial cannot start (finding #28).
+	 */
+	#openPipe(stream: BrowserStream, entry: RegistryEntry, commandId?: string): void {
 		// A racing attach may have replaced stream.pipe while we waited; never leak it.
 		this.#closePipe(stream);
 		// The browser may have closed while waitReady was pending; don't open
@@ -728,33 +860,78 @@ export class FleetEdge {
 		if (!this.#browsers.has(stream)) return;
 		const endpoint = entry.endpoint;
 		if (!endpoint) {
-			this.#sendError(stream, `daemon ${entry.daemonId} has no endpoint`);
+			this.#sendAttachOutcome(stream, commandId, { error: `daemon ${entry.daemonId} has no endpoint` });
+			return;
+		}
+		const pipe: PipeState = {
+			daemonId: entry.daemonId,
+			abort: new AbortController(),
+			retained: false,
+			closed: false,
+			silenceTimer: null,
+			lastSeq: 0,
+			redialAttempt: 0,
+			reconnectTimer: null,
+		};
+		stream.pipe = pipe;
+		// Attach accepted: the dial below is asynchronous, but from here the
+		// pipe's resume machinery owns liveness (redial with Last-Event-ID, or
+		// a terminal "daemon connection lost" error frame) — the browser is
+		// attached.
+		if (commandId !== undefined) this.#sendAttachOutcome(stream, commandId, { sessionId: entry.daemonId });
+		this.#dialPipe(stream, pipe);
+	}
+
+	/**
+	 * One /events dial (initial or redial). Superseded-dial guard: a fetch
+	 * that resolved after a newer dial/drop is aborted and ignored. A redial
+	 * carries Last-Event-ID = the last forwarded daemon seq — delta-era only
+	 * (≥ SSE_DELTA_SEQ_START); anything below means the daemon's full
+	 * priming re-derives current state anyway. 401 (wrong credential) and
+	 * proto mismatch are terminal, like the connector.
+	 */
+	#dialPipe(stream: BrowserStream, pipe: PipeState): void {
+		const entry = this.#registry.get(pipe.daemonId);
+		const endpoint = entry?.endpoint;
+		if (!endpoint) {
+			// Redial impossible (daemon removed / never had an endpoint).
+			this.#pipeLost(stream, pipe);
 			return;
 		}
 		const headers: Record<string, string> = {};
 		if (entry.token) headers.Authorization = `Bearer ${entry.token}`;
+		if (pipe.lastSeq >= SSE_DELTA_SEQ_START) headers["Last-Event-ID"] = String(pipe.lastSeq);
 		const abort = new AbortController();
-		const pipe: PipeState = { daemonId: entry.daemonId, abort, retained: false, closed: false, silenceTimer: null };
-		stream.pipe = pipe;
+		pipe.abort = abort;
 		fetch(daemonHttpBase(endpoint) + "/events", { headers, signal: abort.signal })
 			.then((res) => {
 				if (stream.pipe !== pipe || pipe.closed) {
 					abort.abort();
 					return;
 				}
-				if (!res.ok || !res.body) {
-					this.#pipeLost(stream, pipe);
+				if (res.status === 401) {
+					// Wrong credential: terminal — only a respawn (via the
+					// connector's onDialFailed) refreshes the token.
+					res.body?.cancel().catch(() => {});
+					this.#pipeLost(stream, pipe, "unauthorized (401): daemon rejected the token");
 					return;
 				}
-				// The pipe is live: feed the connector's idle policy.
-				pipe.retained = true;
-				this.#connector.retain(pipe.daemonId);
+				if (!res.ok || !res.body) {
+					this.#pipeEnded(stream, pipe);
+					return;
+				}
+				// The pipe is live: feed the connector's idle policy (once per
+				// pipe lifetime — a redial must not double-retain).
+				if (!pipe.retained) {
+					pipe.retained = true;
+					this.#connector.retain(pipe.daemonId);
+				}
 				this.#armPipeSilence(pipe);
 				void this.#consumePipe(stream, pipe, res);
 			})
 			.catch(() => {
-				if (stream.pipe !== pipe || pipe.closed) return;
-				this.#pipeLost(stream, pipe);
+				if (stream.pipe !== pipe || pipe.closed) return; // superseded or dropped
+				this.#pipeEnded(stream, pipe);
 			});
 	}
 
@@ -762,30 +939,38 @@ export class FleetEdge {
 		try {
 			for await (const unit of parseSseUnits(res.body!)) {
 				if (stream.pipe !== pipe || pipe.closed) return; // superseded or dropped
-				// Any unit — event or keepalive — proves the daemon lives.
+				// Any unit — event or keepalive — proves the daemon lives:
+				// re-arm the silence deadline and reset the redial budget.
 				this.#armPipeSilence(pipe);
+				pipe.redialAttempt = 0;
 				if (unit.kind !== "event") continue;
 				if (unit.event === SSE_PING_EVENT) continue; // keepalive: no id, not a delta
 				if (unit.event !== SSE_EVENT_NAME) continue;
+				// Track the daemon's own seqs so a redial resumes via Last-Event-ID.
+				const seq = Number(unit.id);
+				if (Number.isFinite(seq) && seq > pipe.lastSeq) pipe.lastSeq = seq;
 				this.#onPipeFrame(stream, pipe, unit.data);
 			}
 		} catch {
 			if (stream.pipe !== pipe || pipe.closed) return;
-			this.#pipeLost(stream, pipe);
+			this.#pipeEnded(stream, pipe);
 			return;
 		}
 		if (stream.pipe !== pipe || pipe.closed) return;
-		// Clean end (dormant daemon / server close): the pipe is lost either way.
-		this.#pipeLost(stream, pipe);
+		// Clean end (dormant daemon / server close): non-intentional — resume.
+		this.#pipeEnded(stream, pipe);
 	}
 
 	/**
-	 * Forward a session frame: swallow hello_ok and per-daemon broker
-	 * rosters; STAMP sessionId = daemonId on every session-scoped frame
-	 * (omp-session no longer sends one) and on `attached` (its required
-	 * "s1" must read as the daemonId through the edge). Global frames pass
-	 * unchanged. Every forwarded frame is an edge-local delta for this
-	 * browser (ringed; recoverable via Last-Event-ID).
+	 * Forward a session frame: proto-gate then forward hello_ok (finding
+	 * #61 — the browser's own gate needs it in roster mode), tap and strip
+	 * per-daemon broker rosters; STAMP sessionId = daemonId on every
+	 * session-scoped frame (omp-session no longer sends one) and on
+	 * `attached` (its required "s1" must read as the daemonId through the
+	 * edge). Global frames pass unchanged. Every forwarded frame is an
+	 * edge-local delta for this browser (a fresh seq; RINGED only for the
+	 * daemon's delta types — see #sendDelta — recoverable via Last-Event-ID;
+	 * unringed priming/answer frames are re-derived on re-attach).
 	 */
 	#onPipeFrame(stream: BrowserStream, pipe: PipeState, data: string): void {
 		let raw: unknown;
@@ -796,7 +981,19 @@ export class FleetEdge {
 		}
 		if (typeof raw !== "object" || raw === null) return;
 		const frame = raw as Record<string, unknown>;
-		if (frame.type === "hello_ok") return; // swallow the handshake answer
+		if (frame.type === "hello_ok") {
+			// Proto gate (mirrors the connector): a daemon speaking a
+			// different OMP_PROTO is not drivable — the pipe is terminal.
+			if (Number(frame.proto) !== OMP_PROTO) {
+				this.#pipeLost(stream, pipe, `proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`);
+				return;
+			}
+			// Finding #61: the gate above proved proto === OMP_PROTO, so
+			// forwarding the daemon's REAL hello_ok gives the browser's own
+			// proto check something to run against in roster mode too (the
+			// edge's priming is roster + daemons only). Falls through to the
+			// stamping + #sendDelta below like any other global frame.
+		}
 		if (frame.type === "daemons") {
 			// Broker rosters are tapped here (like the control socket) but
 			// NEVER forwarded: browsers only ever see the edge's single
@@ -811,14 +1008,49 @@ export class FleetEdge {
 		this.#sendDelta(stream, stamped);
 	}
 
-	/** The daemon pipe ended (silence, error, or clean close): release + report lost. */
-	#pipeLost(stream: BrowserStream, pipe: PipeState): void {
+	/**
+	 * The daemon pipe ended non-intentionally (silence, error, clean close,
+	 * or a failed dial): schedule a Last-Event-ID redial so the browser stays
+	 * attached. The stale silence timer dies with the ended stream — a fresh
+	 * dial arms its own — so a late fire can't abort the redial. Only a
+	 * terminal outcome — budget exhausted, or the redial being impossible —
+	 * falls through to #pipeLost (finding #4).
+	 */
+	#pipeEnded(stream: BrowserStream, pipe: PipeState): void {
+		if (pipe.closed) return; // intentional teardown already handled
+		if (stream.pipe !== pipe) return; // superseded by a newer pipe
+		this.#clearPipeSilence(pipe);
+		if (pipe.redialAttempt >= this.#pipeMaxRedials) {
+			this.#pipeLost(stream, pipe);
+			return;
+		}
+		this.#schedulePipeRedial(stream, pipe);
+	}
+
+	/** Jittered bounded backoff, connector-style; the budget resets on any live unit. */
+	#schedulePipeRedial(stream: BrowserStream, pipe: PipeState): void {
+		if (pipe.reconnectTimer) return;
+		const attempt = pipe.redialAttempt++;
+		const delay = backoffDelay(attempt, this.#pipeBackoffMinMs, this.#pipeBackoffMaxMs);
+		pipe.reconnectTimer = setTimeout(() => {
+			pipe.reconnectTimer = null;
+			if (pipe.closed || stream.pipe !== pipe) return; // torn down / superseded
+			this.#dialPipe(stream, pipe);
+		}, delay);
+	}
+
+	/** The pipe is gone for good (budget exhausted / 401 / proto mismatch / redial impossible): release + report lost. */
+	#pipeLost(stream: BrowserStream, pipe: PipeState, message = "daemon connection lost"): void {
 		if (pipe.closed) return; // intentional teardown already released
 		pipe.closed = true;
 		this.#clearPipeSilence(pipe);
+		if (pipe.reconnectTimer) {
+			clearTimeout(pipe.reconnectTimer);
+			pipe.reconnectTimer = null;
+		}
 		if (stream.pipe === pipe) stream.pipe = null;
 		this.#releaseRetain(pipe);
-		this.#sendError(stream, "daemon connection lost");
+		this.#sendError(stream, message);
 	}
 
 	/** Intentional pipe teardown (browser close / re-attach / removal): release + abort. */
@@ -828,6 +1060,10 @@ export class FleetEdge {
 		stream.pipe = null;
 		pipe.closed = true;
 		this.#clearPipeSilence(pipe);
+		if (pipe.reconnectTimer) {
+			clearTimeout(pipe.reconnectTimer);
+			pipe.reconnectTimer = null;
+		}
 		this.#releaseRetain(pipe);
 		try {
 			pipe.abort.abort();
@@ -847,7 +1083,16 @@ export class FleetEdge {
 		const pipe = stream.pipe;
 		const entry = pipe ? this.#registry.get(pipe.daemonId) : undefined;
 		if (!pipe || !entry?.endpoint) {
-			this.#sendError(stream, "not attached");
+			// Finding #59: an unattached call must fail fast BY ID — the client
+			// correlates call() promises only with call_result, so a bare error
+			// frame would leave the promise hanging until its 30s timeout. A
+			// malformed id-less command keeps the legacy global error frame.
+			const commandId = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : undefined;
+			if (commandId !== undefined) {
+				this.#sendAnswer(stream, { type: "call_result", id: commandId, ok: false, error: "not attached" });
+			} else {
+				this.#sendError(stream, "not attached");
+			}
 			return;
 		}
 		// Fire-and-forget accept: answers ride the pipe's /events stream (and
@@ -906,12 +1151,24 @@ export class FleetEdge {
 		}
 	}
 
-	/** One live delta: ringed (resumable) with a fresh edge-local seq. */
+	/**
+	 * One live daemon-pipe frame as an edge-local delta: RINGED only when the
+	 * daemon would ring it (mirror of its RING_DELTAS, finding #5) — priming
+	 * frames (hello_ok, attached, history, available_commands), unicast
+	 * answers (call_result) and per-stream lifecycle (stream_reset) are
+	 * re-derivable (re-attach priming / re-POST) and consume a seq but no
+	 * ring entry, exactly like the daemon's delta counter. A resuming
+	 * browser's ring replay therefore has the same deliberate gaps and is
+	 * still correct: after() returns only ringed entries newer than the
+	 * Last-Event-ID, and the client re-attaches on every reconnect open,
+	 * re-deriving anything the ring never held.
+	 */
 	#sendDelta(stream: BrowserStream, frame: unknown): void {
 		const client = stream.client;
 		const seq = client.nextSeq++;
 		const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
-		client.ring.push(seq, block);
+		const type = (frame as { type?: unknown } | null)?.type;
+		if (typeof type === "string" && EDGE_RING_DELTAS[type]) client.ring.push(seq, block);
 		this.#enqueue(stream, block);
 	}
 
@@ -931,6 +1188,25 @@ export class FleetEdge {
 
 	#sendError(stream: BrowserStream, error: string): void {
 		this.#sendAnswer(stream, { type: "error", error });
+	}
+
+	/**
+	 * Answer an attach command (finding #28): an id-keyed attach_result
+	 * unicast when the command carried an id (new clients settle their
+	 * pending attach from exactly this frame); a legacy global error frame
+	 * for a malformed client that sent none.
+	 */
+	#sendAttachOutcome(stream: BrowserStream, commandId: string | undefined, outcome: { sessionId: string } | { error: string }): void {
+		if (commandId === undefined) {
+			this.#sendError(stream, "error" in outcome ? outcome.error : `attached: ${outcome.sessionId}`);
+			return;
+		}
+		this.#sendAnswer(
+			stream,
+			"error" in outcome
+				? { type: "attach_result", id: commandId, ok: false, error: outcome.error }
+				: { type: "attach_result", id: commandId, ok: true, sessionId: outcome.sessionId },
+		);
 	}
 
 	/**
@@ -958,7 +1234,10 @@ export class FleetEdge {
 	#dropBrowser(stream: BrowserStream): void {
 		this.#browsers.delete(stream);
 		this.#closePipe(stream);
-		stream.client.stream = null;
+		// Identity guard (finding #25): a STALE stream's late teardown (its
+		// cancel fired after a rebind installed a replacement) must not
+		// clobber the client's current stream reference.
+		if (stream.client.stream === stream) stream.client.stream = null;
 		this.#armClientReclaim(stream.client);
 		try {
 			stream.controller.close();
@@ -972,7 +1251,9 @@ export class FleetEdge {
 	#releaseBrowser(stream: BrowserStream): void {
 		this.#browsers.delete(stream);
 		this.#closePipe(stream);
-		stream.client.stream = null;
+		// Identity guard (finding #25): the cancel of a stream already
+		// superseded by a rebind must not null the client's NEW stream.
+		if (stream.client.stream === stream) stream.client.stream = null;
 		this.#armClientReclaim(stream.client);
 		if (this.#browsers.size === 0) this.#stopKeepalive();
 	}

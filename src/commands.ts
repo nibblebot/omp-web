@@ -1,4 +1,4 @@
-import type { ImageArg } from "./protocol";
+import type { ImageArg } from "../shared/protocol";
 import { addBashItem, askBtw, call, pushCompaction, pushNotice, resolveBashItem, setState, state, type BashResultLike } from "./state";
 
 export type InputMode = "enter" | "followup";
@@ -259,7 +259,9 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			const id = addBashItem(parsed.command, parsed.dimmed);
 			// streamId routes bash_chunk frames to this item; dimmed = excluded
 			// from the agent's context (server-side option).
-			call("bash", [parsed.command, parsed.dimmed], 30_000, id)
+			// No timeout (0): bash_chunk frames provide liveness while the
+			// server-side command runs; abortBash is the cancellation path.
+			call("bash", [parsed.command, parsed.dimmed], 0, id)
 				.then(result => resolveBashItem(id, result as BashResultLike))
 				.catch(err => resolveBashItem(id, { error: String(err) }));
 			return;
@@ -267,7 +269,9 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 		case "python": {
 			if (!parsed.code) return;
 			const id = addBashItem(parsed.code, parsed.dimmed, "python");
-			call("python", [parsed.code, parsed.dimmed], 30_000, id)
+			// No timeout (0): python_chunk frames provide liveness while the
+			// server-side command runs; abortEval is the cancellation path.
+			call("python", [parsed.code, parsed.dimmed], 0, id)
 				.then(result => resolveBashItem(id, result as BashResultLike))
 				.catch(err => resolveBashItem(id, { error: String(err) }));
 			return;

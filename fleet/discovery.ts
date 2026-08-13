@@ -21,7 +21,7 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-import type { ProjectEntry } from "../src/protocol";
+import type { ProjectEntry } from "../shared/protocol";
 
 /** Result of a git invocation (real subprocess or injected fake). */
 export interface GitResult {

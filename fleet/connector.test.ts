@@ -20,8 +20,8 @@ import {
 	SSE_EVENT_NAME,
 	SSE_RING_CAP,
 	type ClientCommand,
-} from "../src/protocol";
-import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "../src/sse";
+} from "../shared/protocol";
+import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "../shared/sse";
 import { DaemonConnector, daemonHttpBase, type ConnectorEvents } from "./connector";
 import { Registry, type RegistryEntry } from "./registry";
 
@@ -438,6 +438,39 @@ describe("DaemonConnector", () => {
 		fake.stop();
 	});
 
+	test("stream_reset before a clean end → reconnecting (drop-and-resume), never asleep", async () => {
+		// Regression (audit #0): a backpressure-killed stream must NOT read as
+		// a dormant close. The daemon's wire cannot error (Bun writes the
+		// chunked terminator for both close and error), so it marks the drop
+		// with a stream_reset frame immediately before EOF; the connector must
+		// map that clean end to reconnecting + Last-Event-ID redial.
+		const fake = startFake({
+			onOpen: (fake, stream) => {
+				prime(stream);
+				if (fake.openCount === 1) {
+					// The daemon dropped the stream for backpressure: reset
+					// marker (delta-era seq) then the close.
+					stream.write({ type: "stream_reset", reason: "backpressure" }, fake.nextSeq++);
+					stream.close();
+				}
+			},
+		});
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "remote" }));
+		const statuses: string[] = [];
+		const connector = makeConnector(registry, { onStatus: (e) => statuses.push(e.status) });
+		connector.connect(entry.daemonId);
+		// The reset marks a LIVE daemon: redial, never the dormant branch.
+		await waitFor(() => (fake.openCount >= 2 ? "redialed" : null), 3000, "redial after reset");
+		expect(statuses).toContain("reconnecting");
+		expect(statuses).not.toContain("asleep");
+		// The redial resumes from the reset frame's seq (drop-and-resume).
+		expect(fake.headers[1]?.["last-event-id"]).toBe(String(SSE_DELTA_SEQ_START));
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 2000, "ready after redial");
+		await connector.close();
+		fake.stop();
+	});
+
 	test("unexpected stream end → reconnecting with redial; backoff stays capped", async () => {
 		const crash = startCrashServer({ primeHello: true });
 		const registry = await loadedRegistry(tmpStatePath());
@@ -633,6 +666,32 @@ describe("DaemonConnector", () => {
 		fake.stop();
 	});
 
+	test("idle-drop arms at ready with no retain: a never-attached daemon's socket drops after idleDropMs", async () => {
+		// Regression (audit #1): release() was the ONLY arming site, so a
+		// daemon dialed without any retain/release pair (supervisor endpoint
+		// resolution, /ctl add/provision) held its control socket open
+		// forever, defeating the daemon's own idle auto-exit. The ready
+		// transition must arm the timer itself.
+		const fake = startFake();
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
+		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 50 });
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 2000);
+		// No retain()/release() pair anywhere in this test.
+		await waitFor(() => (fake.serverCloses >= 1 ? "closed" : null), 2000, "server-observed close");
+		// Disconnect is intentional: no status change, no reconnect.
+		expect(registry.get(entry.daemonId)?.status).toBe("ready");
+		await sleep(150);
+		expect(fake.openCount).toBe(1);
+		expect(connector.isConnected(entry.daemonId)).toBe(false);
+		// On-demand redial still works after the drop.
+		connector.connect(entry.daemonId);
+		await waitFor(() => (fake.openCount >= 2 && registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 2000, "redial ready");
+		await connector.close();
+		fake.stop();
+	});
+
 	test("retain/release are paired: one release does not drop a double-retained daemon", async () => {
 		const fake = startFake();
 		const registry = await loadedRegistry(tmpStatePath());
@@ -699,6 +758,32 @@ describe("DaemonConnector", () => {
 		expect(connector.send(entry.daemonId, { type: "call", id: "x", method: "prompt", args: [] })).toBe(false);
 		await connector.close();
 		fake.stop();
+	});
+
+	test("#24 drop() rejects pending waitReady waiters immediately and prunes per-daemon state", async () => {
+		// The fake never sends ready, so waitReady stays pending until drop.
+		// Pre-fix, removal left the waiter hanging until its timeout: #transition
+		// returns early once the registry entry is gone, so nothing flushed it.
+		const slow = startFake({ onOpen: (_fake, stream) => prime(stream, { ready: false }) });
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: slow.url, token: "tok", mode: "attached" }));
+		const connector = makeConnector(registry);
+		connector.connect(entry.daemonId);
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "resolving" ? "resolving" : null), 2000, "resolving");
+		expect(connector.stateCount()).toBe(1);
+		const pending = connector.waitReady(entry.daemonId, 5_000);
+		const start = Date.now();
+		connector.drop(entry.daemonId);
+		registry.remove(entry.daemonId);
+		await expect(pending).rejects.toThrow(/removed/);
+		// Rejected immediately, not after the 60s waitReady timeout.
+		expect(Date.now() - start).toBeLessThan(1_000);
+		// The per-daemon state (listeners, waiters, retain count) is gone.
+		expect(connector.stateCount()).toBe(0);
+		expect(connector.isConnected(entry.daemonId)).toBe(false);
+		expect(connector.send(entry.daemonId, { type: "call", id: "x", method: "prompt", args: [] })).toBe(false);
+		await connector.close();
+		slow.stop();
 	});
 
 	test("keepalive ping events reset the silence deadline; a responsive daemon stays connected", async () => {

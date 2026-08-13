@@ -1,6 +1,7 @@
 import { For, Show, type Component } from "solid-js";
 import { isActiveSubagent, setState, state } from "../state";
-import { SubagentRow } from "./tools/TaskTool";
+import { useClickableRow } from "./PickerRow";
+import { SubagentRow } from "./SubagentRow";
 
 /** Live strip above the prompt: visible only while >=1 subagent is in flight. */
 export const ActiveSubagents: Component = () => {
@@ -13,15 +14,7 @@ export const ActiveSubagents: Component = () => {
 					{sub => (
 						<div
 							class="active-subagent-row"
-							role="button"
-							tabindex={0}
-							onClick={() => setState("modal", "subagents")}
-							onKeyDown={e => {
-								if (e.key === "Enter" || e.key === " ") {
-									e.preventDefault();
-									setState("modal", "subagents");
-								}
-							}}
+							{...useClickableRow(() => setState("modal", "subagents"))}
 						>
 							<SubagentRow sub={sub} />
 						</div>

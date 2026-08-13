@@ -2,7 +2,7 @@ import { createEffect, createSignal, For, Show, type Component } from "solid-js"
 import { currentToken, fuzzyRank, type AcToken } from "../autocomplete";
 import { dispatchInput, LOCAL_COMMANDS, type InputMode } from "../commands";
 import { PromptHistory } from "../history";
-import type { ImageArg } from "../protocol";
+import type { ImageArg } from "../../shared/protocol";
 import { call, dequeueLastQueued, isReady, listFiles, promptInsert, setPromptInsert, setState, state } from "../state";
 import { Autocomplete, type AcItem } from "./Autocomplete";
 
@@ -53,9 +53,9 @@ export const PromptBox: Component = () => {
 	const rosterHint = () => {
 		if (state.sessionMode !== "roster") return null;
 		const daemon = state.daemonRoster.find(x => x.daemonId === state.currentSessionId);
-		if (!daemon) return "no session attached — pick one in the sidebar";
-		if (daemon.status === "ready") return "attaching to session…";
-		return `session ${daemon.status}…`;
+		if (!daemon) return "no daemon attached — pick one in the sidebar";
+		if (daemon.status === "ready") return "attaching to daemon…";
+		return `daemon ${daemon.status}…`;
 	};
 
 	const refreshToken = () => {

@@ -1,5 +1,5 @@
 import { createEffect, createSignal, Show, untrack, type Component } from "solid-js";
-import type { DaemonInfo } from "../protocol";
+import type { DaemonInfo } from "../../shared/protocol";
 import { requestDaemonLogs, restartDaemon, stopDaemon } from "../state";
 import { DAEMON_GLYPH, formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
@@ -82,7 +82,7 @@ export const DaemonPanel: Component<{ daemon: DaemonInfo; daemonKey: string; onC
 	};
 
 	return (
-		<Modal class="daemon-panel" onClose={props.onClose}>
+		<Modal class="daemon-panel" aria-label={`Daemon ${d().name}`} onClose={props.onClose}>
 			<div class="daemon-panel-header">
 				<span class="daemon-glyph" data-state={d().state}>
 					{DAEMON_GLYPH[d().state] ?? "◐"}
