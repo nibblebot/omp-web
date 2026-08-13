@@ -1,13 +1,12 @@
 import { createSignal, For, onCleanup, onMount, Show, type Component, type JSX } from "solid-js";
 import {
-	appearanceTuiGroups,
 	appearanceWebImages,
 	displayOptionValue,
 	filterSettings,
 	formatItemValue,
 	type SettingsMatch,
 } from "../settings";
-import { call, refreshSettings, setNotifyEnabled, setState, state, updateSetting } from "../state";
+import { call, fleetSettingsActive, refreshSettings, setNotifyEnabled, setState, state, updateSetting } from "../state";
 import {
 	currentFontSize,
 	currentThemePreference,
@@ -23,9 +22,8 @@ import { Modal } from "./Modal";
  * Full-screen settings panel (TUI /settings parity): sidebar navigation with
  * nested subsections on wide screens (horizontal tab bar fallback on narrow),
  * per-type controls and global type-to-search. Client sections are a "Web UI"
- * section (client-local toggles + web-relevant image handling), one entry per
- * non-appearance schema tab, and a "TUI" section holding the terminal-only
- * appearance groups. Server calls go through refreshSettings / updateSetting;
+ * section (client-local toggles + web-relevant image handling) and one entry
+ * per non-appearance schema tab. Server calls go through refreshSettings / updateSetting;
  * the returned model is authoritative and settings_changed frames keep this
  * panel (and every other tab) in sync.
  */
@@ -50,9 +48,8 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 
 	const model = () => state.settingsModel;
 	// Client tabs: "Web UI" first, then one tab per non-appearance schema tab
-	// (schema order), then "TUI" for the terminal-only appearance groups. The
-	// tab bar only renders once a model exists; with no model it's just
-	// "Web UI".
+	// (schema order). The tab bar only renders once a model exists; with no
+	// model it's just "Web UI".
 	const clientTabs = () => {
 		const tabs = [{ id: "web-ui", label: "Web UI" }];
 		const m = model();
@@ -60,7 +57,6 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 			for (const tab of m.tabs) {
 				if (tab.id !== "appearance") tabs.push({ id: tab.id, label: tab.label });
 			}
-			tabs.push({ id: "tui", label: "TUI" });
 		}
 		return tabs;
 	};
@@ -78,8 +74,6 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 	// names are skipped (the TUI/group rendering only shows h3s for named groups).
 	const tabSubsections = (id: string): string[] => {
 		if (id === "web-ui") return ["Interface", "Images"];
-		const m = model();
-		if (id === "tui") return m ? appearanceTuiGroups(m).map(g => g.name).filter(Boolean) : [];
 		const tab = schemaTab(id);
 		return tab ? tab.groups.map(g => g.name).filter(Boolean) : [];
 	};
@@ -105,13 +99,14 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 		const m = model();
 		return m && searching() ? filterSettings(m, query()) : [];
 	};
-	// Flat matches grouped by CLIENT tab label: appearance-tab matches show
-	// under "TUI", the rest under their schema tab's label.
+	// Flat matches grouped by CLIENT tab label: appearance-tab matches are the
+	// web Images group and show under "Web UI", the rest under their schema
+	// tab's label.
 	const resultsByTab = () => {
 		const tabs = clientTabs();
 		const byLabel = new Map<string, SettingsMatch[]>();
 		for (const match of results()) {
-			const clientId = match.tab.id === "appearance" ? "tui" : match.tab.id;
+			const clientId = match.tab.id === "appearance" ? "web-ui" : match.tab.id;
 			const label = tabs.find(t => t.id === clientId)?.label ?? clientId;
 			const list = byLabel.get(label) ?? [];
 			list.push(match);
@@ -188,6 +183,9 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 					</nav>
 				</Show>
 				<div class="settings-body">
+					<Show when={fleetSettingsActive()}>
+						<div class="settings-note">No session attached — changes save to config.yml and apply to new sessions.</div>
+					</Show>
 					<Show when={state.settingsLoading && !model()}>
 						<div class="settings-note">Loading settings…</div>
 					</Show>
@@ -250,29 +248,33 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 										onChange={e => setState("soften", e.currentTarget.checked)}
 									/>
 								</Row>
-								<Row label="fast mode">
-									<input
-										type="checkbox"
-										checked={state.fastModeEnabled}
-										onChange={e =>
-											void call("setFastMode", [e.currentTarget.checked]).catch(err => setState("error", String(err)))
-										}
-									/>
-								</Row>
-								<Row label="auto-retry">
-									<input
-										type="checkbox"
-										checked={state.autoRetryEnabled}
-										onChange={e =>
-											void call("setAutoRetry", [e.currentTarget.checked]).catch(err => setState("error", String(err)))
-										}
-									/>
-								</Row>
-								<Row label="Login providers…">
-									<button type="button" class="settings-control-btn" onClick={() => setState("modal", "login")}>
-										manage
-									</button>
-								</Row>
+								{/* Session-RPC rows: no live session under the fleet fallback, so they
+								    would only error — hidden, mirroring their main-UI session scope. */}
+								<Show when={!fleetSettingsActive()}>
+									<Row label="fast mode">
+										<input
+											type="checkbox"
+											checked={state.fastModeEnabled}
+											onChange={e =>
+												void call("setFastMode", [e.currentTarget.checked]).catch(err => setState("error", String(err)))
+											}
+										/>
+									</Row>
+									<Row label="auto-retry">
+										<input
+											type="checkbox"
+											checked={state.autoRetryEnabled}
+											onChange={e =>
+												void call("setAutoRetry", [e.currentTarget.checked]).catch(err => setState("error", String(err)))
+											}
+										/>
+									</Row>
+									<Row label="Login providers…">
+										<button type="button" class="settings-control-btn" onClick={() => setState("modal", "login")}>
+											manage
+										</button>
+									</Row>
+								</Show>
 							</div>
 						</Show>
 						<Show when={activeTabId() === "web-ui" && (visibleGroup() === null || visibleGroup() === "Images") && appearanceWebImages(model()!).length > 0}>
@@ -297,18 +299,6 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 									</For>
 								</>
 							)}
-						</Show>
-						<Show when={activeTabId() === "tui"}>
-							<For each={appearanceTuiGroups(model()!).filter(g => visibleGroup() === null || g.name === visibleGroup())}>
-								{group => (
-									<div class="settings-group">
-										<Show when={group.name}>
-											<h3 class="settings-group-title">{group.name}</h3>
-										</Show>
-										<For each={group.items}>{item => <SettingsRow item={item} />}</For>
-									</div>
-								)}
-							</For>
 						</Show>
 					</Show>
 				</div>

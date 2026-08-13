@@ -91,11 +91,6 @@ describe("coerceSettingValue", () => {
 		expect(coerceSettingValue("providers.webSearchOrder", "not-an-array")).toEqual([]);
 	});
 
-	test("session-managed paths pass through unchanged", () => {
-		expect(coerceSettingValue("autoCompact", true)).toBe(true);
-		expect(coerceSettingValue("thinkingLevel", "high")).toBe("high");
-	});
-
 	test("unknown paths throw", () => {
 		expect(() => coerceSettingValue("no.such.path", 1)).toThrow("Unknown setting: no.such.path");
 	});
@@ -203,7 +198,6 @@ describe("applySettingSideEffects", () => {
 			refreshBaseSystemPrompt: async () => void calls.push("refreshPrompt"),
 			applyMemoryBackend: async () => void calls.push("applyMemory"),
 			applyInspectImageModeChange: async () => void calls.push("applyInspectImage"),
-			setAutoCompactionEnabled: enabled => void calls.push(`autoCompact:${enabled}`),
 			agent,
 		};
 
@@ -212,7 +206,6 @@ describe("applySettingSideEffects", () => {
 		await applySettingSideEffects(session, "personality", "friendly");
 		await applySettingSideEffects(session, "temperature", "1.5");
 		await applySettingSideEffects(session, "omitThinking", true);
-		await applySettingSideEffects(session, "autoCompact", true);
 		await applySettingSideEffects(session, "memory.backend", "local");
 		// Persist-only paths have no side effect.
 		await applySettingSideEffects(session, "compaction.enabled", true);
@@ -221,7 +214,6 @@ describe("applySettingSideEffects", () => {
 			"steering:all",
 			"thinking:high:true",
 			"refreshPrompt",
-			"autoCompact:true",
 			"applyMemory",
 		]);
 		expect(agent.temperature).toBe(1.5);

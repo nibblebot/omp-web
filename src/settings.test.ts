@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SettingsItem, SettingsModel, SettingsTab } from "../shared/protocol";
 import {
-	appearanceTuiGroups,
 	appearanceWebImages,
 	displayOptionValue,
 	filterSettings,
@@ -140,7 +139,10 @@ describe("filterSettings", () => {
 		groups: [
 			{
 				name: "",
-				items: [item({ type: "text", path: "theme.name", label: "Max Tokens", description: "cap output" })],
+				items: [
+					item({ type: "text", path: "theme.name", label: "Max Tokens", description: "cap output" }),
+					item({ type: "enum", path: "images.blockImages", label: "Block images" }),
+				],
 			},
 		],
 	};
@@ -154,10 +156,10 @@ describe("filterSettings", () => {
 	});
 
 	test("matches item label case-insensitively across tabs", () => {
+		// Appearance items outside the web Images group are terminal-only and
+		// have no home in the panel, so they are excluded from search.
 		const matches = filterSettings(model, "MAX");
-		expect(matches).toHaveLength(1);
-		expect(matches[0].tab.label).toBe("Appearance");
-		expect(matches[0].item.label).toBe("Max Tokens");
+		expect(matches).toEqual([]);
 	});
 
 	test("matches group name", () => {
@@ -167,9 +169,16 @@ describe("filterSettings", () => {
 	});
 
 	test("matches item description", () => {
-		const matches = filterSettings(model, "cap output");
+		// Same exclusion as the label test: "cap output" only exists on the
+		// appearance tab's theme.name item, which is not an images.* item.
+		expect(filterSettings(model, "cap output")).toEqual([]);
+	});
+
+	test("matches an appearance item in the web Images group", () => {
+		const matches = filterSettings(model, "block images");
 		expect(matches).toHaveLength(1);
-		expect(matches[0].item.path).toBe("theme.name");
+		expect(matches[0].tab.id).toBe("appearance");
+		expect(matches[0].item.path).toBe("images.blockImages");
 	});
 
 	test("returns [] for no match and for empty/whitespace queries", () => {
@@ -179,7 +188,7 @@ describe("filterSettings", () => {
 	});
 });
 
-describe("appearanceTuiGroups / appearanceWebImages", () => {
+describe("appearanceWebImages", () => {
 	const tabAppearance: SettingsTab = {
 		id: "appearance",
 		label: "Appearance",
@@ -215,34 +224,6 @@ describe("appearanceTuiGroups / appearanceWebImages", () => {
 		label: "Model",
 		groups: [{ name: "", items: [item({ type: "enum", path: "model.name", label: "Model" })] }],
 	};
-
-	test("appearanceTuiGroups returns the TUI groups with their items", () => {
-		const groups = appearanceTuiGroups(model);
-		expect(groups.map(g => g.name)).toEqual(["Theme", "Status Line", "Display", "Images"]);
-		expect(groups[0]).toBe(tabAppearance.groups[0]);
-		expect(groups[0].items.map(i => i.path)).toEqual(["theme.dark", "theme.light"]);
-		expect(groups[1].items.map(i => i.path)).toEqual(["statusLine.showClock"]);
-		expect(groups[2].items.map(i => i.path)).toEqual(["terminal.altScreen"]);
-	});
-
-	test("appearanceTuiGroups keeps only terminal.showImages from the Images group", () => {
-		const images = appearanceTuiGroups(model).find(g => g.name === "Images");
-		expect(images?.items.map(i => i.path)).toEqual(["terminal.showImages"]);
-	});
-
-	test("appearanceTuiGroups returns [] when the appearance tab has no TUI groups", () => {
-		const bareAppearance: SettingsTab = {
-			id: "appearance",
-			label: "Appearance",
-			groups: [{ name: "Images", items: [item({ type: "boolean", path: "images.autoResize", label: "Auto-resize" })] }],
-		};
-		expect(appearanceTuiGroups({ tabs: [bareAppearance] })).toEqual([]);
-	});
-
-	test("appearanceTuiGroups returns [] without an appearance tab", () => {
-		expect(appearanceTuiGroups({ tabs: [tabNoAppearance] })).toEqual([]);
-		expect(appearanceTuiGroups({ tabs: [] })).toEqual([]);
-	});
 
 	test("appearanceWebImages returns the images.* items in schema order, never terminal.showImages", () => {
 		expect(appearanceWebImages(model).map(i => i.path)).toEqual(["images.autoResize", "images.blockImages"]);

@@ -66,9 +66,11 @@ export interface SettingsMatch {
 }
 
 /**
- * Case-insensitive global type-to-search across EVERY tab (mirrors the TUI's
- * /settings search): matches item label, item description, group name and
- * item path. Empty/whitespace queries return nothing.
+ * Case-insensitive global type-to-search limited to what the panel displays
+ * (mirrors the TUI's /settings search): matches item label, item description,
+ * group name and item path. The appearance tab only contributes its web
+ * "Images" group (images.* items); the rest of that tab is terminal-only and
+ * has no home in the panel. Empty/whitespace queries return nothing.
  */
 export function filterSettings(model: SettingsModel, query: string): SettingsMatch[] {
 	const q = query.trim().toLowerCase();
@@ -77,41 +79,13 @@ export function filterSettings(model: SettingsModel, query: string): SettingsMat
 	for (const tab of model.tabs) {
 		for (const group of tab.groups) {
 			for (const item of group.items) {
+				if (tab.id === "appearance" && !item.path.startsWith("images.")) continue;
 				const haystack = [item.label, item.description, group.name, item.path].join("\n").toLowerCase();
 				if (haystack.includes(q)) matches.push({ tab, group, item });
 			}
 		}
 	}
 	return matches;
-}
-
-/**
- * Appearance-tab groups that only matter in a real terminal (TUI rendering):
- * theme selection, status line segments, and display/terminal rendering. The
- * settings panel re-homes these groups under its "TUI" client tab.
- */
-export const APPEARANCE_TUI_GROUPS: readonly string[] = ["Theme", "Status Line", "Display"];
-
-/**
- * Terminal-only slice of the appearance tab: APPEARANCE_TUI_GROUPS groups as-is,
- * plus the terminal image renderer (terminal.showImages) from the "Images" group.
- * Any other appearance group is dropped — the appearance layout is upstream
- * TAB_GROUPS; update APPEARANCE_TUI_GROUPS if it changes. [] when the model has
- * no appearance tab.
- */
-export function appearanceTuiGroups(model: SettingsModel): SettingsGroup[] {
-	const appearance = model.tabs.find(tab => tab.id === "appearance");
-	if (!appearance) return [];
-	const groups: SettingsGroup[] = [];
-	for (const group of appearance.groups) {
-		if (APPEARANCE_TUI_GROUPS.includes(group.name)) {
-			groups.push(group);
-		} else if (group.name === "Images") {
-			const items = group.items.filter(item => item.path === "terminal.showImages");
-			if (items.length > 0) groups.push({ name: "Images", items });
-		}
-	}
-	return groups;
 }
 
 /**

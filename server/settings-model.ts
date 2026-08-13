@@ -37,7 +37,6 @@ export interface AgentSessionLike {
 	refreshBaseSystemPrompt(): Promise<void>;
 	applyMemoryBackend(): Promise<void>;
 	applyInspectImageModeChange(): Promise<unknown>;
-	setAutoCompactionEnabled(enabled: boolean): void;
 	agent: {
 		temperature?: number;
 		topP?: number;
@@ -48,9 +47,6 @@ export interface AgentSessionLike {
 		hideThinkingSummary?: boolean;
 	};
 }
-
-/** Session-managed settings: no schema entry, never persisted via settings.set. */
-const SESSION_MANAGED_PATHS = new Set(["autoCompact", "thinkingLevel"]);
 
 /**
  * True when the current value differs from the schema default. Arrays compare
@@ -68,11 +64,9 @@ export function settingChanged(current: unknown, defaultValue: unknown): boolean
 
 /**
  * Schema-driven value coercion, mirroring the TUI's #setSettingValue. Throws
- * Error on unknown/non-schema paths; session-managed paths (autoCompact,
- * thinkingLevel) pass through unchanged.
+ * Error on unknown/non-schema paths.
  */
 export function coerceSettingValue(path: string, value: unknown): unknown {
-	if (SESSION_MANAGED_PATHS.has(path)) return value;
 	if (!(path in SETTINGS_SCHEMA)) throw new Error(`Unknown setting: ${path}`);
 	const schemaType = getType(path as SettingPath);
 
@@ -137,7 +131,6 @@ export async function applySettingSideEffects(session: AgentSessionLike, path: s
 			session.setAdvisorEnabled(value === true);
 			break;
 		case "defaultThinkingLevel":
-		case "thinkingLevel":
 			session.setThinkingLevel(value as never, true);
 			break;
 		case "personality":
@@ -162,9 +155,6 @@ export async function applySettingSideEffects(session: AgentSessionLike, path: s
 		}
 		case "omitThinking":
 			session.agent.hideThinkingSummary = value === true;
-			break;
-		case "autoCompact":
-			session.setAutoCompactionEnabled(value === true);
 			break;
 		case "providers.webSearchOrder":
 			if (Array.isArray(value)) setSearchProviderOrder(value.filter(isSearchProviderId));

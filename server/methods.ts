@@ -185,10 +185,9 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		setSetting: async (entry, a) => {
 			const [path, value] = [String(a[0]), a[1]];
 			const coerced = coerceSettingValue(path, value);
-			// Persist via the shared Settings singleton (in-process merge +
-			// debounced disk write — the TUI's settings.set semantics). Session-
-			// managed paths (autoCompact, thinkingLevel) have no schema entry and
-			// are applied only through the side-effect switch below.
+			// All accepted paths are schema paths persisted via the shared
+			// Settings singleton (in-process merge + debounced disk write — the
+			// TUI's settings.set semantics).
 			if (path in SETTINGS_SCHEMA) {
 				deps.settings.set(path as SettingPath, coerced as never);
 			}
