@@ -60,6 +60,14 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 	const [confirmStop, setConfirmStop] = createSignal(false);
 	const [confirmRemove, setConfirmRemove] = createSignal(false);
 	const [detailOpen, setDetailOpen] = createSignal(false);
+	// Activating = wake-attach in flight for this row's daemon. Read from the
+	// module-level set, NOT a component signal: daemon_status/roster frames
+	// rebuild rows (fresh entry objects → <For> remounts), so component-local
+	// state would be dropped mid-wake and the highlight would vanish until
+	// the attached frame lands. Cleared when the attach settles — the edge
+	// answers attach only once the woken daemon is ready, so this spans the
+	// whole wake and drives the instant active highlight + waking indicator.
+	const activating = () => activatingIds().has(d().daemonId);
 	const d = () => props.daemon as RosterEntry;
 	// Worktree sessions belong to a main checkout and read as branches, not
 	// dirs — the branch (or name fallback) becomes the title and the project
@@ -67,6 +75,9 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 	const isWorktree = () => d().worktreeOf !== undefined;
 	const isAttached = () => d().daemonId === state.currentSessionId;
 	const clickable = () => d().status === "ready" || d().status === "asleep";
+	/** Loading phase: activating but the daemon isn't ready yet. Renders with
+	 *  the pulsing transitional ("resolving") visual vocabulary. */
+	const waking = () => activating() && d().status !== "ready";
 	/** Dirty spans to render: nonzero counts only, kept in fixed order. */
 	const gitKinds = (): Array<{ kind: DirtyKind; n: number; glyph: string }> => {
 		const g = d().git;
@@ -81,15 +92,27 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 	};
 
 	const rowClick = () => {
+		if (activating()) return;
 		const daemon = d();
 		if (daemon.status === "ready") {
 			void attachSession(daemon.daemonId).catch(err => setState("error", String(err)));
 		} else if (daemon.status === "asleep") {
 			// Wake then attach: the edge wakes first and answers the attach
 			// once the session is ready — send both immediately, the edge
-			// serializes them.
-			spawnResume(daemon.daemonId);
-			void attachSession(daemon.daemonId).catch(err => setState("error", String(err)));
+			// serializes them. Activate the row NOW (active highlight + waking
+			// pulse) rather than when the proxied attached frame lands.
+			const id = daemon.daemonId;
+			setActivatingIds(prev => new Set(prev).add(id));
+			spawnResume(id);
+			attachSession(id)
+				.catch(err => setState("error", String(err)))
+				.finally(() =>
+					setActivatingIds(prev => {
+						const next = new Set(prev);
+						next.delete(id);
+						return next;
+					}),
+				);
 		}
 	};
 
@@ -107,11 +130,11 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 		<>
 			<div
 				class="sidebar-row daemon-row"
-				classList={{ active: isAttached(), clickable: clickable(), "daemon-row--nested": props.nested === true }}
+				classList={{ active: isAttached() || activating(), clickable: clickable() && !activating(), "daemon-row--nested": props.nested === true }}
 				{...useClickableRow(rowClick, clickable())}
-				title={STATUS_TITLE[d().status] ?? d().status}
+				title={waking() ? "waking — session starting…" : (STATUS_TITLE[d().status] ?? d().status)}
 			>
-				<span class="daemon-status-dot" data-status={d().status} title={d().status} />
+				<span class="daemon-status-dot" data-status={waking() ? "resolving" : d().status} title={d().status} />
 				<div class="sidebar-row-main">
 					<div class="sidebar-row-top">
 						<span class="sidebar-row-title daemon-row-title" title={isWorktree() ? (d().branch ?? d().name) : d().name}>
@@ -120,8 +143,8 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 							</Show>
 							{isWorktree() ? (d().branch ?? d().name) : d().name}
 						</span>
-						<span class="daemon-row-state" data-status={d().status}>
-							{d().status}
+						<span class="daemon-row-state" data-status={waking() ? "resolving" : d().status}>
+							{waking() ? "waking" : d().status}
 						</span>
 					</div>
 					<Show when={!isWorktree()}>
@@ -534,6 +557,11 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 
 /** localStorage key for the roster sidebar's collapsed group headers. */
 const GROUPS_KEY = "omp.sidebarGroupsCollapsed";
+
+/** DaemonIds with a wake-attach in flight (asleep-row click → attach
+ *  settles). Module-level because roster/daemon_status frames remount rows
+ *  mid-wake; per-row component signals would not survive. */
+const [activatingIds, setActivatingIds] = createSignal<ReadonlySet<string>>(new Set());
 
 /** One repo group in the roster: its entries and whether it contains
  *  worktree sessions (which changes how it renders). */
