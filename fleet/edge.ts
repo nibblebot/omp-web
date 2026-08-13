@@ -92,6 +92,7 @@ import { backoffDelay, daemonHttpBase } from "./connector";
 import { DaemonsAggregator } from "./daemons-aggregator";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
+import type { FleetEventLog, FleetFacts } from "./events";
 
 /** How long a proxy attach waits for the daemon to become ready (contract: 60s). */
 const ATTACH_WAIT_READY_MS = 60_000;
@@ -265,6 +266,10 @@ export interface EdgeDeps {
 	connector: DaemonConnector;
 	supervisor: SpawnSupervisor;
 	config: FleetConfig;
+	/** Fleet lifecycle-event ring, surfaced verbatim by /ctl/debug. */
+	eventLog: FleetEventLog;
+	/** Fleet-wide facts (port/startedAt/state paths) surfaced by /ctl/debug. */
+	fleet: FleetFacts;
 }
 
 /**
@@ -373,6 +378,8 @@ export class FleetEdge {
 	readonly #connector: DaemonConnector;
 	readonly #supervisor: SpawnSupervisor;
 	readonly #config: FleetConfig;
+	readonly #eventLog: FleetEventLog;
+	readonly #fleet: FleetFacts;
 	readonly #backpressureBytes: number;
 	/** Per-client ring byte budget (default SSE_RING_BYTES; finding #5). */
 	readonly #ringBytes: number;
@@ -429,6 +436,8 @@ export class FleetEdge {
 		this.#connector = deps.connector;
 		this.#supervisor = deps.supervisor;
 		this.#config = deps.config;
+		this.#eventLog = deps.eventLog;
+		this.#fleet = deps.fleet;
 		this.#backpressureBytes = opts?.backpressureBytes ?? SSE_BACKPRESSURE_BYTES;
 		this.#ringBytes = opts?.ringBytes ?? SSE_RING_BYTES;
 		this.#silenceDeadlineMs = opts?.silenceDeadlineMs ?? SSE_SILENCE_DEADLINE_MS;
@@ -463,6 +472,9 @@ export class FleetEdge {
 			const stderrMatch = STDERR_ROUTE.exec(path);
 			if (stderrMatch) {
 				return this.#handleStderr(stderrMatch[1]);
+			}
+			if (path === "/ctl/debug") {
+				return json(this.#debugSnapshot());
 			}
 			if (path.startsWith("/ctl/")) return null; // the rest of /ctl is the control plane's
 			return await this.#serveStatic(path);
@@ -1343,6 +1355,48 @@ export class FleetEdge {
 			return json({ error: "not found" }, 404);
 		}
 		return json({ text: this.#supervisor.stderrTail(daemonId) });
+	}
+
+	/**
+	 * GET /ctl/debug: loopback developer introspection. Endpoint URLs and
+	 * ports are exposed on purpose (they are the point of the feature);
+	 * bearer tokens are NEVER — nothing from the registry's token field
+	 * reaches this payload.
+	 */
+	#debugSnapshot(): Record<string, unknown> {
+		const connectorSnap = this.#connector.snapshot();
+		const supervisorSnap = this.#supervisor.snapshot();
+		const sessions = this.#registry.list().map((entry) => {
+			const uptimeBase = entry.readyAt ?? entry.registeredAt;
+			const session: Record<string, unknown> = {
+				daemonId: entry.daemonId,
+				name: entry.name,
+				status: entry.status,
+				mode: entry.mode,
+				registeredAt: entry.registeredAt,
+				uptimeSec: Math.max(0, Math.floor((Date.now() - uptimeBase) / 1000)),
+			};
+			if (entry.endpoint !== undefined) session.endpoint = entry.endpoint;
+			if (entry.pid !== undefined) session.pid = entry.pid;
+			if (entry.readyAt !== undefined) session.readyAt = entry.readyAt;
+			if (entry.error !== undefined) session.error = entry.error;
+			const connector = connectorSnap[entry.daemonId];
+			if (connector) session.connector = connector;
+			const supervisor = supervisorSnap[entry.daemonId];
+			if (supervisor) session.supervisor = supervisor;
+			return session;
+		});
+		return {
+			fleet: {
+				port: this.#fleet.port,
+				startedAt: this.#fleet.startedAt,
+				uptimeSec: Math.max(0, Math.floor((Date.now() - this.#fleet.startedAt) / 1000)),
+				statePath: this.#fleet.statePath,
+				configPath: this.#fleet.configPath,
+			},
+			sessions,
+			log: this.#eventLog.list(),
+		};
 	}
 
 	/** Static dist/ from the process cwd, with a tiny placeholder fallback. */

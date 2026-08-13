@@ -324,6 +324,111 @@ describe("SpawnSupervisor", () => {
 		fake.stop();
 	});
 
+	test("snapshot exposes pid, restarts, and endpoint for a live spawned child", async () => {
+		const projectDir = tmpPath("omp-session-sup-snap-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		const snap = supervisor.snapshot()[entry.daemonId];
+		expect(snap).toBeDefined();
+		expect(snap?.restarts).toBe(0);
+		expect(typeof snap?.pid).toBe("number");
+		expect(snap?.endpoint).toBe(`ws://127.0.0.1:${fake.port}`);
+
+		await supervisor.close();
+		await connector.close();
+		fake.stop();
+	});
+
+	test("snapshot reports restart-budget use and no live pid after the budget is exhausted", async () => {
+		const projectDir = tmpPath("omp-session-sup-snapfail-");
+		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt"), { fail: true });
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 1,
+			backoffMinMs: 20,
+			backoffMaxMs: 40,
+		});
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null), 10_000, "error status");
+		const snap = supervisor.snapshot()[entry.daemonId];
+		expect(snap).toBeDefined();
+		expect(snap?.restarts).toBe(1); // one restart consumed before the cap hit
+		expect(snap?.pid).toBeUndefined(); // no live child
+		expect(snap?.endpoint).toBeUndefined(); // never resolved
+
+		await supervisor.close();
+		await connector.close();
+	});
+
+	test("onEvent reports spawn, endpoint resolution, exit/restart, and budget exhaustion", async () => {
+		const projectDir = tmpPath("omp-session-sup-events-");
+		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt"), { fail: true });
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const events: Array<{ level: string; message: string; daemonId?: string }> = [];
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 1,
+			backoffMinMs: 20,
+			backoffMaxMs: 40,
+			onEvent: (level, message, daemonId) => events.push({ level, message, daemonId }),
+		});
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null), 10_000, "error status");
+		expect(events.some((event) => event.daemonId === entry.daemonId && event.message.startsWith("spawn template="))).toBe(true);
+		expect(events.some((event) => event.daemonId === entry.daemonId && event.message.startsWith("exit code=1"))).toBe(true);
+		expect(events.some((event) => event.level === "warn" && event.message.includes("restart 1/1"))).toBe(true);
+		expect(events.some((event) => event.level === "error" && event.message.includes("restart budget exhausted"))).toBe(true);
+
+		await supervisor.close();
+		await connector.close();
+	});
+
+	test("onEvent reports respawn, replaced-exit, stop, and prune", async () => {
+		const projectDir = tmpPath("omp-session-sup-events2-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const events: Array<{ level: string; message: string; daemonId?: string }> = [];
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+			onEvent: (level, message, daemonId) => events.push({ level, message, daemonId }),
+		});
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		// lastSessionFile was adopted from hello_ok, so the respawn resumes.
+		const firstToken = registry.get(entry.daemonId)!.token;
+		await supervisor.respawn(registry.get(entry.daemonId)!);
+		await waitFor(
+			() => {
+				const updated = registry.get(entry.daemonId);
+				return updated?.status === "ready" && updated.token !== firstToken ? "ready" : null;
+			},
+			5000,
+			"ready after respawn",
+		);
+		await supervisor.prune(entry.daemonId);
+		// Give the killed child's exit handler a beat to land.
+		await waitFor(() => (events.some((event) => event.message.startsWith("exit code=") && event.message.includes("(replaced)")) ? "replaced-exit" : null), 3000, "replaced exit event");
+		expect(events.some((event) => event.daemonId === entry.daemonId && event.message.startsWith("respawn"))).toBe(true);
+		expect(events.some((event) => event.daemonId === entry.daemonId && event.message === "stop")).toBe(true);
+		expect(events.some((event) => event.daemonId === entry.daemonId && event.message === "prune")).toBe(true);
+
+		await supervisor.close();
+		await connector.close();
+		fake.stop();
+	});
+
 	test("respawn uses --resume lastSessionFile and a fresh token; reconnects to ready", async () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });

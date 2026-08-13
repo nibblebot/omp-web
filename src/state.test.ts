@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import { OMP_PROTO, SSE_EVENT_NAME } from "../shared/protocol";
 import type { ClientCommand, ServerFrame } from "../shared/protocol";
 import { attachSession, call, connect, setState, state, type SubagentInfo } from "./state";
@@ -14,6 +14,8 @@ class FakeEventSource {
 	static instances: FakeEventSource[] = [];
 	static handlers = new Map<string, SseHandler>();
 	onopen: (() => void) | null = null;
+	/** Assigned by connect() like the real EventSource; tests invoke it. */
+	onerror: (() => void) | null = null;
 	constructor(public readonly url: string) {
 		FakeEventSource.instances.push(this);
 	}
@@ -116,6 +118,9 @@ beforeEach(() => {
 		readyAt: undefined,
 		subagents: new Map(),
 		error: null,
+		debugLog: [],
+		lastFrameAt: 0,
+		reconnectDelay: 0,
 		// Transcript items are per-session view state; without a reset a test
 		// that attached (no switch → no resetSessionView) leaks its items into
 		// the next test.
@@ -391,5 +396,78 @@ describe("subagent placeholder migration (finding #30)", () => {
 		expect(state.subagents.get("progress-0")).toBeUndefined();
 		expect(state.subagents.get("sub-1")?.status).toBe("running");
 		expect(state.subagents.get("sub-1")?.task).toBe("t");
+	});
+});
+
+describe("client debug ring (transport observability)", () => {
+	/** The attach command id posted by the last attachSession() call. */
+	function lastAttachId(): string {
+		const cmd = posted.at(-1);
+		if (!cmd || cmd.type !== "attach") throw new Error("expected an attach command");
+		return cmd.id;
+	}
+
+	test("connect/open/teardown write ring entries; CLOSED onerror schedules the backoff retry", () => {
+		vi.useFakeTimers();
+		try {
+			connect();
+			expect(state.debugLog.at(-1)?.message).toBe("connecting /events");
+			const es = FakeEventSource.instances.at(-1)!;
+			es.onopen?.();
+			expect(state.debugLog.at(-1)?.message).toBe("stream open");
+			expect(state.reconnectDelay).toBe(0);
+
+			// The stub carries no readyState, so onerror takes the terminal CLOSED
+			// path (teardown + manual retry) rather than the transient-blip return.
+			es.onerror?.();
+			expect(state.connected).toBe(false);
+			expect(state.reconnectDelay).toBe(1000);
+			const messages = state.debugLog.map(e => e.message).join("\n");
+			expect(messages).toContain("stream closed");
+			expect(messages).toContain("connection lost — retrying in 1000ms");
+
+			// The scheduled retry dials a fresh stream once the backoff elapses.
+			vi.advanceTimersByTime(1000);
+			expect(FakeEventSource.instances.length).toBe(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("the ring is capped at 300 entries, oldest dropped", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		// daemon_status frames land one ring entry each; distinct daemon ids
+		// make the cap's drop boundary observable in the messages.
+		for (let i = 0; i < 320; i++) {
+			dispatch({ type: "daemon_status", daemonId: `d${i}`, status: "ready" });
+		}
+		expect(state.debugLog.length).toBe(300);
+		expect(state.debugLog[0].message).toContain("d20");
+		expect(state.debugLog[299].message).toContain("d319");
+	});
+
+	test("attach/attach_result and error frames land ring entries", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch(attached("daemon-a"));
+		expect(state.debugLog.at(-1)?.message).toBe("attached daemon-a");
+
+		dispatch({ type: "error", error: "daemon connection lost" });
+		expect(state.debugLog.at(-1)?.message).toBe("error frame: daemon connection lost");
+		expect(state.debugLog.at(-1)?.level).toBe("error");
+
+		const attach = attachSession("daemon-a");
+		dispatch({ type: "attach_result", id: lastAttachId(), ok: true, sessionId: "daemon-a" });
+		expect(state.debugLog.at(-1)?.message).toBe("attach ok: daemon-a");
+		await expect(attach).resolves.toBe("daemon-a");
+
+		// A failed attach writes a warn entry and rejects the caller.
+		const bad = attachSession("daemon-b");
+		dispatch({ type: "attach_result", id: lastAttachId(), ok: false, error: "unknown daemon: d9" });
+		expect(state.debugLog.at(-1)?.message).toBe("attach failed: unknown daemon: d9");
+		expect(state.debugLog.at(-1)?.level).toBe("warn");
+		await expect(bad).rejects.toThrow("unknown daemon: d9");
 	});
 });

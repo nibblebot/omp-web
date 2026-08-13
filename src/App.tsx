@@ -7,6 +7,7 @@ import { BranchPicker } from "./components/BranchPicker";
 import { BtwPanel } from "./components/BtwPanel";
 import { CharacterAvatar } from "./components/CharacterAvatar";
 import { DaemonSidebar } from "./components/DaemonSidebar";
+import { DebugPanel } from "./components/DebugPanel";
 import { GoalPopover } from "./components/GoalPopover";
 import { HistorySearch } from "./components/HistorySearch";
 import { UsagePanel } from "./components/UsagePanel";
@@ -154,6 +155,9 @@ export const App: Component = () => {
 			</Show>
 			<Show when={state.modal === "usage"}>
 				<UsagePanel onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "debug"}>
+				<DebugPanel onClose={() => setState("modal", null)} />
 			</Show>
 			<AskDialog />
 			<BtwPanel />

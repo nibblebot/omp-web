@@ -162,6 +162,13 @@ export const StatusBar: Component = () => {
 					onBlur={() => setEditingName(false)}
 				/>
 			</Show>
+			<Segment
+				active={state.modal === "debug"}
+				onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
+				title="Debug — transport and fleet visibility"
+			>
+				ⓘ
+			</Segment>
 			<Segment onClick={() => setState("modal", "settings")} title="Settings">
 				⚙
 			</Segment>

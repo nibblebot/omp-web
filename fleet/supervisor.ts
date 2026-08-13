@@ -32,6 +32,7 @@ import type { DaemonConnector } from "./connector";
 import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
 import type { GitRunner } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
+import type { FleetLogLevel } from "./events";
 
 type Child = Subprocess<"ignore", "pipe", "pipe">;
 
@@ -146,6 +147,8 @@ export class SpawnSupervisor {
 	#gitStateTimer: ReturnType<typeof setInterval> | null = null;
 	/** Exec injected via startGitStatePolling (tests); undefined = real git. */
 	#gitExec: GitRunner | undefined;
+	/** Lifecycle-event hook (server.ts wires it to the fleet event ring). */
+	#onEvent: ((level: FleetLogLevel, message: string, daemonId?: string) => void) | undefined;
 
 	constructor(
 		registry: Registry,
@@ -157,6 +160,8 @@ export class SpawnSupervisor {
 			endpointTimeoutMs?: number;
 			backoffMinMs?: number;
 			backoffMaxMs?: number;
+			/** Fired on spawn/endpoint/exit/stop/respawn/prune lifecycle transitions. */
+			onEvent?: (level: FleetLogLevel, message: string, daemonId?: string) => void;
 		},
 	) {
 		this.#registry = registry;
@@ -167,6 +172,7 @@ export class SpawnSupervisor {
 		this.#endpointTimeoutMs = opts?.endpointTimeoutMs ?? ENDPOINT_TIMEOUT_MS;
 		this.#backoffMinMs = opts?.backoffMinMs ?? RESTART_BACKOFF_MIN_MS;
 		this.#backoffMaxMs = opts?.backoffMaxMs ?? RESTART_BACKOFF_MAX_MS;
+		this.#onEvent = opts?.onEvent;
 	}
 
 	/**
@@ -246,6 +252,7 @@ export class SpawnSupervisor {
 			await this.#terminate(state.child, RESP_AWN_KILL_GRACE_MS);
 			state.child = null;
 		}
+		this.#onEvent?.("info", `respawn${current.lastSessionFile ? " (--resume)" : ""}`, current.daemonId);
 		this.#launch(this.#registry.get(current.daemonId) ?? current, template, { resume: true });
 	}
 
@@ -275,6 +282,7 @@ export class SpawnSupervisor {
 		if (this.#registry.get(daemonId)) {
 			this.#registry.setStatus(daemonId, "asleep");
 		}
+		this.#onEvent?.("info", "stop", daemonId);
 	}
 
 	/**
@@ -288,6 +296,24 @@ export class SpawnSupervisor {
 	async prune(daemonId: string): Promise<void> {
 		await this.stop(daemonId);
 		this.#children.delete(daemonId);
+		this.#onEvent?.("info", "prune", daemonId);
+	}
+
+	/**
+	 * Per-daemon supervisor state for /ctl/debug: the live child's pid
+	 * (absent when nothing is running), the consecutive-restart counter, and
+	 * the resolved endpoint (absent until the contract line resolves).
+	 */
+	snapshot(): Record<string, { pid?: number; restarts: number; endpoint?: string }> {
+		const out: Record<string, { pid?: number; restarts: number; endpoint?: string }> = {};
+		for (const [daemonId, state] of this.#children) {
+			const info: { pid?: number; restarts: number; endpoint?: string } = { restarts: state.restarts };
+			if (state.child) info.pid = state.child.pid;
+			const endpoint = this.#registry.get(daemonId)?.endpoint;
+			if (endpoint !== undefined) info.endpoint = endpoint;
+			out[daemonId] = info;
+		}
+		return out;
 	}
 
 	/** Last 64KB (or configured ring) of the child's stderr, as text. */
@@ -449,10 +475,12 @@ export class SpawnSupervisor {
 			child = Bun.spawn(["sh", "-c", command], { stdout: "pipe", stderr: "pipe" });
 		} catch (err) {
 			this.#registry.setStatus(daemonId, "error", `spawn failed: ${(err as Error).message}`);
+			this.#onEvent?.("error", `spawn failed: ${(err as Error).message}`, daemonId);
 			this.#children.delete(daemonId);
 			return;
 		}
 		state.child = child;
+		this.#onEvent?.("info", `spawn template=${entry.template ?? "?"} cwd=${entry.cwd}`, daemonId);
 		// The fresh token is visible to the roster immediately (R14 rotation).
 		this.#registry.update(daemonId, { token, pid: child.pid });
 		// Endpoint resolution timeout: no listening line within the window →
@@ -460,7 +488,9 @@ export class SpawnSupervisor {
 		state.endpointTimer = setTimeout(() => {
 			if (state.resolved) return;
 			state.exitHandled = true; // we own the aftermath — no restart
-			this.#registry.setStatus(daemonId, "error", `endpoint timeout: no OMP_SESSION| listening line within ${Math.round(this.#endpointTimeoutMs / 1000)}s`);
+			const message = `endpoint timeout: no OMP_SESSION| listening line within ${Math.round(this.#endpointTimeoutMs / 1000)}s`;
+			this.#registry.setStatus(daemonId, "error", message);
+			this.#onEvent?.("error", message, daemonId);
 			child.kill();
 		}, this.#endpointTimeoutMs);
 		void readLines(child.stdout, (line) => {
@@ -483,10 +513,12 @@ export class SpawnSupervisor {
 			if (!isValidEndpointUrl(resolved.url)) {
 				state.exitHandled = true; // we own the aftermath — no restart
 				this.#registry.setStatus(daemonId, "error", `invalid endpoint from child: ${resolved.url}`);
+				this.#onEvent?.("error", `invalid endpoint from child: ${resolved.url}`, daemonId);
 				child.kill();
 				return;
 			}
 			this.#registry.update(daemonId, { endpoint: resolved.url });
+			this.#onEvent?.("info", `endpoint ${resolved.url} pid ${child.pid}`, daemonId);
 			this.#connector.connect(daemonId);
 		});
 		void readChunks(child.stderr, (chunk) => {
@@ -517,12 +549,23 @@ export class SpawnSupervisor {
 		state.exitHandled = true;
 		const entry = this.#registry.get(state.daemonId);
 		if (!entry) return;
-		if (state.stopping) return; // stop() owns the aftermath (status asleep)
-		if (state.manualRespawn) return; // respawn() already launched a replacement
+		const exit = `exit code=${exitCode}${signalCode !== null ? ` signal=${signalCode}` : ""}`;
+		if (state.stopping) {
+			// stop() owns the aftermath (status asleep); the exit itself still
+			// lands in the ring as the child's last breath.
+			this.#onEvent?.("info", `${exit} (stopping)`, state.daemonId);
+			return;
+		}
+		if (state.manualRespawn) {
+			// respawn() already launched a replacement; the old child's exit is expected.
+			this.#onEvent?.("info", `${exit} (replaced)`, state.daemonId);
+			return;
+		}
 		// Idle auto-exit: a daemon that reached ready and whose socket was
 		// dropped (connector idle policy) exiting cleanly goes dormant.
 		if (entry.status === "ready" && !this.#connector.isConnected(state.daemonId) && exitCode === 0 && signalCode === null) {
 			this.#registry.setStatus(state.daemonId, "asleep");
+			this.#onEvent?.("info", `${exit} clean idle → asleep`, state.daemonId);
 			return;
 		}
 		if (state.restarts >= this.#restartMax) {
@@ -531,6 +574,7 @@ export class SpawnSupervisor {
 				"error",
 				`child exited ${state.restarts + 1} times (${this.#restartMax} restarts allowed)`,
 			);
+			this.#onEvent?.("error", `${exit} — restart budget exhausted (${this.#restartMax} restarts allowed)`, state.daemonId);
 			return;
 		}
 		const attempt = state.restarts++;
@@ -547,6 +591,7 @@ export class SpawnSupervisor {
 			}
 			this.#launch(current, template, { resume: true });
 		}, delay);
+		this.#onEvent?.("warn", `${exit} — restart ${attempt + 1}/${this.#restartMax} in ${delay}ms`, state.daemonId);
 	}
 
 	/** SIGTERM, then SIGKILL after graceMs; resolves once the child has exited. */

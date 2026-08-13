@@ -503,6 +503,47 @@ describe("DaemonConnector", () => {
 		crash.stop();
 	});
 
+	test("snapshot exposes the live transport state per daemon; never tokens", async () => {
+		const fake = startFake();
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
+		const connector = makeConnector(registry);
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 2000);
+		const live = connector.snapshot()[entry.daemonId];
+		expect(live).toBeDefined();
+		expect(live?.state).toBe("streaming");
+		expect(live?.attempts).toBe(0);
+		expect(live?.nextRetryInMs).toBeUndefined();
+		// The snapshot must never carry the bearer token.
+		expect(JSON.stringify(connector.snapshot())).not.toContain("tok");
+		await connector.close();
+		fake.stop();
+	});
+
+	test("snapshot shows the reconnect state and countdown while backing off; onReconnect fires per schedule", async () => {
+		const crash = startCrashServer({ primeHello: true });
+		const registry = await loadedRegistry(tmpStatePath());
+		const entry = registry.create(baseInit({ endpoint: crash.url, token: "tok", mode: "remote" }));
+		const reconnects: string[] = [];
+		// A generous backoff keeps the reconnecting window wide enough to read.
+		const connector = new DaemonConnector(
+			registry,
+			{ onReconnect: (daemonId, attempt, delayMs) => reconnects.push(`${daemonId}:${attempt}:${delayMs}`) },
+			{ backoffMinMs: 200, backoffMaxMs: 300 },
+		);
+		connector.connect(entry.daemonId);
+		await waitFor(() => (connector.snapshot()[entry.daemonId]?.state === "reconnecting" ? "reconnecting" : null), 3000, "reconnecting snapshot");
+		const snap = connector.snapshot()[entry.daemonId];
+		expect(snap?.attempts).toBeGreaterThanOrEqual(1);
+		expect(typeof snap?.nextRetryInMs).toBe("number");
+		expect(snap?.nextRetryInMs!).toBeLessThanOrEqual(300);
+		expect(reconnects.length).toBeGreaterThanOrEqual(1);
+		expect(reconnects[0]?.startsWith(`${entry.daemonId}:1:`)).toBe(true);
+		await connector.close();
+		crash.stop();
+	});
+
 	test("401 on /events (wrong token) → terminal error, no reconnect loop", async () => {
 		const fake = startFake({ expectedToken: "right" });
 		const registry = await loadedRegistry(tmpStatePath());

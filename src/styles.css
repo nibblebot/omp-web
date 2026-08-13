@@ -3532,3 +3532,262 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	border-color: var(--accent);
 }
 
+/* --- Debug panel (Modal sheet variant): transport + fleet visibility --- */
+.debug-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-6);
+	padding-right: var(--space-2);
+}
+
+.debug-section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	min-width: 0;
+}
+
+.debug-section-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-4);
+}
+
+/* Section kicker: mono uppercase like the roster group headers, kept small
+   so the dense facts/tables dominate. */
+.debug-section-title {
+	margin: 0;
+	flex: none;
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	color: var(--muted-2);
+}
+
+.debug-poll-hint {
+	flex: 1;
+	font-size: var(--fs-micro);
+	color: var(--muted);
+}
+
+.debug-refresh {
+	flex: none;
+	background: var(--btn);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-micro);
+	padding: var(--space-1) var(--space-3);
+	cursor: pointer;
+}
+
+.debug-refresh:hover {
+	background: var(--hover);
+}
+
+.debug-refresh:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+/* Key/value facts (mirror of the daemon-detail fact rows). */
+.debug-facts {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.debug-fact {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+	min-width: 0;
+}
+
+.debug-label {
+	flex: none;
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	color: var(--muted-2);
+	width: 88px;
+}
+
+.debug-value {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Connected/disconnected pill (success/error bg+fg pairs like usage-status). */
+.debug-pill {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	border-radius: var(--r-pill);
+	padding: var(--space-1) var(--space-4);
+	white-space: nowrap;
+}
+
+.debug-pill[data-status="connected"] {
+	background: var(--success-bg);
+	color: var(--success);
+}
+
+.debug-pill[data-status="disconnected"] {
+	background: var(--error-bg);
+	color: var(--error-text);
+}
+
+.debug-fleet-error {
+	font-size: var(--fs-sm);
+	color: var(--error-text);
+	background: var(--error-bg);
+	border: 1px solid var(--error-border);
+	border-radius: var(--r-md);
+	padding: var(--space-2) var(--space-4);
+	align-self: flex-start;
+}
+
+/* Sessions table: dense mono cells, clipped with title tooltips. */
+.debug-table-wrap {
+	min-width: 0;
+	overflow-x: auto;
+}
+
+.debug-table {
+	border-collapse: collapse;
+	width: 100%;
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+}
+
+.debug-table th {
+	text-align: left;
+	font-weight: 500;
+	color: var(--muted-2);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	padding: var(--space-1) var(--space-3);
+	border-bottom: 1px solid var(--border-strong);
+	white-space: nowrap;
+}
+
+.debug-table td {
+	padding: var(--space-1) var(--space-3);
+	border-bottom: 1px solid var(--border);
+	color: var(--text);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 200px;
+}
+
+.debug-table tr:last-child td {
+	border-bottom: none;
+}
+
+.debug-table .debug-cell-mono {
+	max-width: 150px;
+}
+
+/* Status text colors mirror .daemon-row-state's per-status vocabulary. */
+.debug-status {
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+}
+
+.debug-status[data-status="ready"] {
+	color: var(--success);
+}
+
+.debug-status[data-status="spawning"],
+.debug-status[data-status="connecting"],
+.debug-status[data-status="session"],
+.debug-status[data-status="resolving"] {
+	color: var(--accent);
+}
+
+.debug-status[data-status="reconnecting"] {
+	color: var(--warning);
+}
+
+.debug-status[data-status="error"] {
+	color: var(--error-text);
+}
+
+/* Shared log-ring renderer (fleet + client): level-colored rows, mono. */
+.debug-log {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	line-height: 1.6;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: var(--space-2) 0;
+	max-height: 220px;
+	overflow-y: auto;
+}
+
+.debug-log-line {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-4);
+	padding: 0 var(--space-4);
+	white-space: nowrap;
+}
+
+.debug-log-time {
+	flex: none;
+	color: var(--muted-2);
+}
+
+/* Fixed-width level tag: info/warn/error line up in one column across rows. */
+.debug-log-level {
+	flex: none;
+	width: 5ch;
+	color: var(--muted-3);
+}
+
+.debug-log-line[data-level="warn"] .debug-log-level {
+	color: var(--warning);
+}
+
+.debug-log-line[data-level="warn"] .debug-log-msg {
+	color: var(--warning);
+}
+
+.debug-log-line[data-level="error"] .debug-log-level,
+.debug-log-line[data-level="error"] .debug-log-msg {
+	color: var(--error-text);
+}
+
+.debug-log-source {
+	flex: none;
+	color: var(--muted-2);
+}
+
+.debug-log-msg {
+	flex: 1;
+	min-width: 0;
+	color: var(--muted-3);
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.debug-log-empty {
+	font-size: var(--fs-sm);
+	font-style: italic;
+	color: var(--muted-2);
+	padding: var(--space-2) var(--space-4);
+}
+

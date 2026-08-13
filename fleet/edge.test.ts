@@ -23,6 +23,7 @@ import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK } from "../shared/sse";
 import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
 import { FleetEdge, shouldDropFrame, toRosterEntry } from "./edge";
+import { FleetEventLog } from "./events";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
 import { startFleet, type FleetServer } from "./server";
@@ -1216,7 +1217,7 @@ describe("edge pure helpers", () => {
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		// The cap fits the priming (small roster) + the ring replay, but a
 		// synchronous burst of roster broadcasts overflows it.
-		const edge = new FleetEdge({ registry, connector, supervisor, config }, { backpressureBytes: 4096 });
+		const edge = new FleetEdge({ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } }, { backpressureBytes: 4096 });
 		const served = serveEdge(edge);
 		try {
 			const browser = await openBrowser(served.port);
@@ -1272,7 +1273,7 @@ describe("edge pure helpers", () => {
 		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
-			{ registry, connector, supervisor, config },
+			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
 		);
 		let releases = 0;
@@ -1328,7 +1329,7 @@ describe("edge pure helpers", () => {
 		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
-			{ registry, connector, supervisor, config },
+			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
 		);
 		const daemon = startPipeFake({ heartbeatMs: 30 });
@@ -1394,7 +1395,7 @@ describe("edge pure helpers", () => {
 		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
-			{ registry, connector, supervisor, config },
+			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
 		);
 		const daemon = startPipeFake({ heartbeatMs: 30 });
@@ -1445,7 +1446,7 @@ describe("edge pure helpers", () => {
 		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
-			{ registry, connector, supervisor, config },
+			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 3 },
 		);
 		const daemon = startPipeFake({ heartbeatMs: 30 });
@@ -1512,7 +1513,7 @@ describe("edge pure helpers", () => {
 		await connector.waitReady(entry.daemonId, 3000);
 		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
-		const edge = new FleetEdge({ registry, connector, supervisor, config });
+		const edge = new FleetEdge({ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } });
 		const served = serveEdge(edge);
 		try {
 			const browser = await openBrowser(served.port);
@@ -1577,7 +1578,7 @@ describe("edge pure helpers", () => {
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		// Tiny per-client ring budget (~2.5 KiB): a burst of large deltas must
 		// evict the ring's head, not grow without bound.
-		const edge = new FleetEdge({ registry, connector, supervisor, config }, { ringBytes: 2500 });
+		const edge = new FleetEdge({ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } }, { ringBytes: 2500 });
 		const served = serveEdge(edge);
 		try {
 			const browser = await openBrowser(served.port);

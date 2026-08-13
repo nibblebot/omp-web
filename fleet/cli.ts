@@ -178,7 +178,35 @@ function isDaemonRow(value: unknown): value is DaemonRow {
 
 async function serveCmd(port: number): Promise<number> {
 	const server = await startFleet({ port });
+	// Startup banner: where the fleet listens, where its state/config live,
+	// and what a previous fleet run left behind (boot statuses). The first
+	// line keeps its exact shape — scripts parse the port out of it.
 	console.log(`fleet listening on 127.0.0.1:${server.port}`);
+	console.log(`fleet state: ${server.fleetFacts.statePath}`);
+	console.log(`fleet config: ${server.fleetFacts.configPath ?? "(defaults)"}`);
+	const restored = server.registry.list();
+	const byStatus = new Map<string, number>();
+	for (const entry of restored) byStatus.set(entry.status, (byStatus.get(entry.status) ?? 0) + 1);
+	const statusSummary = [...byStatus.entries()].map(([status, n]) => `${status}: ${n}`).join(", ");
+	console.log(`fleet restored ${restored.length} session${restored.length === 1 ? "" : "s"}${statusSummary !== "" ? ` (${statusSummary})` : ""}`);
+	// Lifecycle events print as one human line per transition, enriched with
+	// the live registry facts the message alone doesn't carry (status,
+	// endpoint, pid).
+	server.eventLog.onEntry = (entry) => {
+		const daemon = entry.daemonId !== undefined ? server.registry.get(entry.daemonId) : undefined;
+		const parts = [entry.daemonId, daemon?.name, entry.message].filter((part): part is string => part !== undefined && part !== "");
+		let line = `fleet: ${parts.join(" ")}`;
+		if (daemon) {
+			// Connector transitions carry the status as the message itself;
+			// other sources (exit/respawn/stop) get the live status appended.
+			const details: string[] = [];
+			if (daemon.status && daemon.status !== entry.message) details.push(daemon.status);
+			if (daemon.endpoint) details.push(daemon.endpoint);
+			if (daemon.pid !== undefined) details.push(`pid ${daemon.pid}`);
+			if (details.length > 0) line += ` (${details.join(", ")})`;
+		}
+		console.log(line);
+	};
 	let shuttingDown = false;
 	const shutdown = async (signal: string) => {
 		if (shuttingDown) return;

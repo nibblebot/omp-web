@@ -63,6 +63,8 @@ export interface ConnectorEvents {
 	onHello?: (daemonId: string, hello: Extract<ServerFrame, { type: "hello_ok" }>) => void;
 	/** Transport refused/unreachable — server.ts wires this to supervisor.respawn for mode "spawned". */
 	onDialFailed?: (entry: RegistryEntry) => void;
+	/** A reconnect was scheduled: attempt is 1-based, delayMs the backoff wait. */
+	onReconnect?: (daemonId: string, attempt: number, delayMs: number) => void;
 }
 
 const DEFAULT_BACKOFF_MIN_MS = 1_000;
@@ -96,6 +98,8 @@ interface ConnState {
 	/** Last event id seen on the current/previous stream (Last-Event-ID resume). */
 	lastSeq: number;
 	reconnectTimer: ReturnType<typeof setTimeout> | null;
+	/** Epoch ms when the scheduled redial will fire (null when none pending). */
+	reconnectAt: number | null;
 	redialAttempt: number;
 	idleTimer: ReturnType<typeof setTimeout> | null;
 	retainCount: number;
@@ -169,6 +173,7 @@ export class DaemonConnector {
 			clearTimeout(state.reconnectTimer);
 			state.reconnectTimer = null;
 		}
+		state.reconnectAt = null;
 		if (state.idleTimer) {
 			clearTimeout(state.idleTimer);
 			state.idleTimer = null;
@@ -191,6 +196,7 @@ export class DaemonConnector {
 			clearTimeout(state.reconnectTimer);
 			state.reconnectTimer = null;
 		}
+		state.reconnectAt = null;
 		if (state.idleTimer) {
 			clearTimeout(state.idleTimer);
 			state.idleTimer = null;
@@ -332,6 +338,35 @@ export class DaemonConnector {
 		return this.#states.size;
 	}
 
+	/**
+	 * Per-daemon connector state for /ctl/debug: the live transport state
+	 * ("closed" | "streaming" | "reconnecting" | "dialing" | "idle"), the
+	 * redial-attempt counter, and the pending retry countdown (absent when no
+	 * redial is scheduled). Never includes tokens.
+	 */
+	snapshot(): Record<string, { state: string; attempts: number; nextRetryInMs?: number }> {
+		const out: Record<string, { state: string; attempts: number; nextRetryInMs?: number }> = {};
+		for (const [daemonId, state] of this.#states) {
+			const info: { state: string; attempts: number; nextRetryInMs?: number } = {
+				state: state.closed
+					? "closed"
+					: state.streamOpen
+						? "streaming"
+						: state.reconnectTimer
+							? "reconnecting"
+							: state.abort
+								? "dialing"
+								: "idle",
+				attempts: state.redialAttempt,
+			};
+			if (state.reconnectTimer && state.reconnectAt !== null) {
+				info.nextRetryInMs = Math.max(0, state.reconnectAt - Date.now());
+			}
+			out[daemonId] = info;
+		}
+		return out;
+	}
+
 	/** Drop every stream and cancel all timers. */
 	async close(): Promise<void> {
 		for (const state of this.#states.values()) {
@@ -340,6 +375,7 @@ export class DaemonConnector {
 				clearTimeout(state.reconnectTimer);
 				state.reconnectTimer = null;
 			}
+			state.reconnectAt = null;
 			if (state.idleTimer) {
 				clearTimeout(state.idleTimer);
 				state.idleTimer = null;
@@ -372,6 +408,7 @@ export class DaemonConnector {
 				sawReset: false,
 				lastSeq: 0,
 				reconnectTimer: null,
+				reconnectAt: null,
 				redialAttempt: 0,
 				idleTimer: null,
 				retainCount: 0,
@@ -602,8 +639,11 @@ export class DaemonConnector {
 		if (state.reconnectTimer) return;
 		const attempt = state.redialAttempt++;
 		const delay = backoffDelay(attempt, this.#backoffMinMs, this.#backoffMaxMs);
+		state.reconnectAt = Date.now() + delay;
+		this.#events?.onReconnect?.(state.daemonId, attempt + 1, delay);
 		state.reconnectTimer = setTimeout(() => {
 			state.reconnectTimer = null;
+			state.reconnectAt = null;
 			if (state.closed) return;
 			const entry = this.#registry.get(state.daemonId);
 			if (!entry) return;

@@ -44,6 +44,16 @@ export type ChatItem =
 
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
+export type DebugLevel = "info" | "warn" | "error";
+
+/** One client-side transport lifecycle event for the Debug panel. */
+export interface DebugEntry {
+	ts: number;
+	level: DebugLevel;
+	source: "transport" | "command" | "roster";
+	message: string;
+}
+
 /** Tracked subagent, maintained from subagent_lifecycle/subagent_progress frames. */
 export interface SubagentInfo {
 	id: string;
@@ -84,7 +94,8 @@ export type ModalName =
 	| "subagents"
 	| "login"
 	| "goal"
-	| "usage";
+	| "usage"
+	| "debug";
 
 /** Derived one-line args summary for the generic tool card (raw args stay structured). */
 export function argsSummary(args: unknown): string {
@@ -180,6 +191,16 @@ export const [state, setState] = createStore({
 	reveal: false,
 	soften: false,
 	error: null as string | null,
+	// Client-side debug ring (Debug panel): one entry per transport lifecycle
+	// event, capped at DEBUG_RING_CAP (oldest dropped). Mirror of the fleet's
+	// /ctl/debug log for the browser half of the connection loop.
+	debugLog: [] as DebugEntry[],
+	// Last /events downlink activity (frame or ping) in ms epoch; 0 = never.
+	// Drives the panel's "seconds since last frame" readout.
+	lastFrameAt: 0,
+	// Delay (ms) of the next scheduled manual reconnect; 0 = stream open (no
+	// retry pending). Mirrors the module-level backoff ladder for the panel.
+	reconnectDelay: 0,
 	// Phase 11: desktop notifications on turn completion while hidden
 	// (persisted toggle; firing is gated on Notification support + permission).
 	notifyEnabled:
@@ -808,6 +829,17 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 	});
 }
 
+// ---------------------------------------------------------------------------
+// Client-side debug ring (Debug panel): every transport lifecycle event lands
+// here, oldest first; the panel renders the newest entry last. Capped ring —
+// the oldest entries drop past DEBUG_RING_CAP.
+// ---------------------------------------------------------------------------
+export const DEBUG_RING_CAP = 300;
+
+function pushDebug(level: DebugLevel, source: DebugEntry["source"], message: string): void {
+	setState("debugLog", log => [...log.slice(-(DEBUG_RING_CAP - 1)), { ts: Date.now(), level, source, message }]);
+}
+
 // Transport (OMP_PROTO 2): EventSource downlink on GET /events (frame events),
 // POST /command uplink. Native auto-reconnect sends Last-Event-ID for ring
 // replay; `connected` is true between the first `open` and a terminal CLOSED
@@ -829,6 +861,7 @@ function armSilenceTimer(): void {
 		silenceTimer = null;
 		if (!events) return; // already torn down / no live stream
 		const dead = events;
+		pushDebug("warn", "transport", "silence deadline hit — forcing reconnect");
 		teardownStream(dead);
 		// Reconnect immediately (no backoff delay): the server may be
 		// perfectly healthy behind a hung middlebox. If the reconnect itself
@@ -849,6 +882,7 @@ function clearSilenceTimer(): void {
  *  callers pick the delay (backoff ladder for CLOSED, immediate for silence). */
 function teardownStream(source: EventSource): void {
 	if (events !== source) return; // a newer connect() already superseded this stream
+	pushDebug("info", "transport", "stream closed");
 	clearSilenceTimer();
 	connected = false;
 	events = null;
@@ -877,8 +911,9 @@ let token: string | null = null;
 
 /** One page-scoped client id: the fleet edge matches it across the /events
  *  stream and POST /command to route anonymous commands to the owning browser
- *  stream (a bare omp-session ignores both). */
-const clientId = crypto.randomUUID();
+ *  stream (a bare omp-session ignores both). Shown (truncated) in the Debug
+ *  panel; not a secret — it already rides the query string and headers. */
+export const clientId = crypto.randomUUID();
 
 /**
  * Uplink: POST one ClientCommand to /command (202 fire-and-forget accept —
@@ -891,7 +926,10 @@ function postCommand(cmd: ClientCommand): Promise<void> {
 		headers: { "Content-Type": "application/json", "X-Omp-Client-Id": clientId, ...(token !== null ? { Authorization: `Bearer ${token}` } : {}) },
 		body: JSON.stringify(cmd),
 	}).then(res => {
-		if (!res.ok) throw new Error(`command "${cmd.type}" rejected (HTTP ${res.status})`);
+		if (!res.ok) {
+			pushDebug("error", "command", `command "${cmd.type}" rejected (HTTP ${res.status})`);
+			throw new Error(`command "${cmd.type}" rejected (HTTP ${res.status})`);
+		}
 	});
 }
 
@@ -1318,6 +1356,7 @@ export function connect(): void {
 	// timer armed by an earlier suite in the same worker must no-op here,
 	// not crash on location.search.)
 	if (typeof EventSource === "undefined") return;
+	pushDebug("info", "transport", "connecting /events");
 	// Same-origin http(s): EventSource for the downlink (native auto-reconnect
 	// sends Last-Event-ID for ring replay) + POST /command for the uplink.
 	// EventSource can't set headers, so the off-loopback bearer token rides
@@ -1333,6 +1372,8 @@ export function connect(): void {
 		backoff = 1000;
 		connected = true;
 		setState("connected", true);
+		setState("reconnectDelay", 0);
+		pushDebug("info", "transport", "stream open");
 		// No boot-time calls: a roster-mode edge answers every call with
 		// "not attached" until the browser picks a daemon. The attached handler
 		// pulls getSubagents. On a roster-mode RECONNECT the edge has no attach
@@ -1341,8 +1382,10 @@ export function connect(): void {
 	};
 	source.addEventListener(SSE_EVENT_NAME, ev => {
 		armSilenceTimer(); // any downlink activity means the peer is alive
+		setState("lastFrameAt", Date.now());
 		const frame = JSON.parse(String((ev as MessageEvent).data)) as ServerFrame;
 		if (frame.type === "attached") {
+			pushDebug("info", "transport", `attached ${frame.sessionId}`);
 			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
 			setState("currentSessionId", frame.sessionId);
 			// Every attach re-primes history from scratch: drop any in-flight
@@ -1459,8 +1502,13 @@ export function connect(): void {
 				clearTimeout(pendingAttach.timer);
 				const pending = pendingAttach;
 				pendingAttach = null;
-				if (frame.ok && frame.sessionId !== undefined) pending.resolve(frame.sessionId);
-				else pending.reject(new Error(frame.error ?? "attach failed"));
+				if (frame.ok && frame.sessionId !== undefined) {
+					pending.resolve(frame.sessionId);
+					pushDebug("info", "transport", `attach ok: ${frame.sessionId}`);
+				} else {
+					pending.reject(new Error(frame.error ?? "attach failed"));
+					pushDebug("warn", "transport", `attach failed: ${frame.error ?? "unknown error"}`);
+				}
 				break;
 			}
 			case "available_commands":
@@ -1481,6 +1529,7 @@ export function connect(): void {
 				// above).
 				setState("daemonRoster", frame.daemons);
 				setState("sessionMode", "roster");
+				pushDebug("info", "roster", `roster frame: ${frame.daemons.length} daemon${frame.daemons.length === 1 ? "" : "s"}`);
 				break;
 			case "daemon_status":
 				// Patch the matching roster entry in place; the error field
@@ -1491,6 +1540,11 @@ export function connect(): void {
 							? { ...d, status: frame.status, ...(frame.error !== undefined ? { error: frame.error } : { error: undefined }) }
 							: d,
 					),
+				);
+				pushDebug(
+					frame.status === "error" || frame.error !== undefined ? "error" : "info",
+					"roster",
+					`daemon ${frame.daemonId.slice(0, 8)} → ${frame.status}${frame.error !== undefined ? `: ${frame.error}` : ""}`,
 				);
 				break;
 			case "projects":
@@ -1620,6 +1674,7 @@ export function connect(): void {
 				// in-flight attach. Attach failures arrive as id-keyed
 				// attach_result frames; global errors only display.
 				setState("error", frame.error);
+				pushDebug("error", "transport", `error frame: ${frame.error}`);
 				break;
 			case "hello_ok":
 				// Finding #61: the browser enforces OMP_PROTO too. Standalone
@@ -1631,6 +1686,7 @@ export function connect(): void {
 				// against an undrivable daemon).
 				if (frame.proto !== OMP_PROTO) {
 					setState("error", `proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`);
+					pushDebug("error", "transport", `proto mismatch: daemon speaks ${String(frame.proto)}, expected ${OMP_PROTO}`);
 					teardownStream(source);
 					return;
 				}
@@ -1647,15 +1703,21 @@ export function connect(): void {
 		// hung). Re-arm the silence deadline. The wire block carries no id,
 		// so this never advances Last-Event-ID / ring replay.
 		armSilenceTimer();
+		setState("lastFrameAt", Date.now());
 	});
 	source.onerror = () => {
 		// Terminal (401 or fatal): EventSource gives up (readyState CLOSED) and
 		// will NOT retry. Teardown like a socket close, then manually reconnect
 		// with the same 1s→8s backoff — auth failures must not hot-loop.
-		if (source.readyState !== EventSource.CLOSED) return; // transient blip: native auto-reconnect resumes with Last-Event-ID
+		if (source.readyState !== EventSource.CLOSED) {
+			pushDebug("info", "transport", "transient blip — native auto-reconnect");
+			return; // transient blip: native auto-reconnect resumes with Last-Event-ID
+		}
 		teardownStream(source); // no-op if a newer connect() superseded this stream
 		const delay = backoff;
 		backoff = Math.min(backoff * 2, 8000);
+		setState("reconnectDelay", delay);
+		pushDebug("warn", "transport", `connection lost — retrying in ${delay}ms`);
 		setTimeout(connect, delay);
 	};
 }

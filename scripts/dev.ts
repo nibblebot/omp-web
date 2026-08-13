@@ -3,8 +3,9 @@
  * dev — one-command dev runner.
  *
  *   bun run dev          single-session mode: omp-session (:4721, --watch) + vite (:4713 HMR)
- *   bun run dev:fleet    fleet mode: vite (:4713 HMR, /events + /command proxied to omp-fleet) + omp-fleet
- *                        (:4722) + an omp-session (:4721) auto-registered into the roster as "dev"
+ *   bun run dev:fleet    fleet mode: vite (:4713 HMR, /events + /command proxied to omp-fleet)
+ *                        (:4722) + omp-fleet serve. NO session is started or attached —
+ *                        spawn/add one from the roster UI when you want one.
  *
  *   --host [addr]        bind vite to addr (default 0.0.0.0) for LAN access; backends stay
  *                        loopback — remote browsers reach them through vite's proxies.
@@ -12,19 +13,34 @@
  *   --allow-hosts [csv]  vite allowedHosts: bare = allow every Host header (tailscale
  *                        domains etc.), or a comma-separated allowlist.
  *
- * Child output is line-prefixed ([session] [vite] [fleet]); the runner's
- * own messages use [dev]. Ctrl-C (or vite/fleet exiting) tears down the rest.
- * The omp-session child is different: idle exit is a FEATURE (no attached
- * clients → clean shutdown), so a session exit just restarts it with
- * backoff — it never nukes the stack.
+ * Output model: every child's stdout/stderr is forwarded line-by-line with a
+ * colored, fixed-width [name] prefix ([vite   ] [fleet  ] [session]); the
+ * runner's own messages use [dev    ]. Colors only when stdout is a TTY and
+ * NO_COLOR is unset — piped output has no escapes.
+ *
+ * Each child is tracked through starting → ready (vite: its `Local:` line;
+ * session: the OMP_SESSION| contract line, which is consumed for readiness
+ * and NOT echoed — machine noise; fleet: the control API responding, surfaced
+ * from the probeFleetReady poll). Every transition to ready logs one
+ * `✓ <name> ready` runner line; once every child in the mode has been ready
+ * at least once, a compact stack summary is printed once per full readiness
+ * (re-armed when a session restart brings the stack back). Ctrl-C (or
+ * vite/fleet exiting) tears down the rest. The omp-session child is
+ * different: idle exit is a FEATURE (no attached clients → clean shutdown),
+ * so a session exit just restarts it with backoff — it never nukes the
+ * stack.
  */
 
 import type { Subprocess } from "bun";
 import { join } from "node:path";
+import { OMP_SESSION_PREFIX } from "../shared/protocol";
 
 const ROOT = join(import.meta.dir, "..");
-const SESSION_URL = "ws://127.0.0.1:4721";
 const FLEET_HTTP = "http://127.0.0.1:4722";
+const FLEET_PORT = Number(new URL(FLEET_HTTP).port);
+/** Fallbacks for readiness that arrives without a parseable port. */
+const VITE_PORT_DEFAULT = 4713;
+const SESSION_PORT_DEFAULT = 4721;
 
 interface Child {
 	name: string;
@@ -56,9 +72,10 @@ const MODES: Record<string, { children: Child[]; open: string }> = {
 					OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "server", "index.ts")} --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`,
 				},
 			},
-			{ name: "session", cmd: ["bun", "--watch", "server/index.ts"] },
+			// No session child: attaching is a deliberate UI action (spawn/add
+			// from the roster sidebar), never a dev-runner default.
 		],
-		open: 'open http://localhost:4713 (roster UI with HMR; dev session auto-attached as "dev")',
+		open: "open http://localhost:4713 (roster UI with HMR; spawn/add a session from the sidebar)",
 	},
 };
 
@@ -104,56 +121,153 @@ if (mode === undefined) {
 
 let shuttingDown = false;
 
+// ---------------------------------------------------------------------------
+// Output: colored, fixed-width per-child prefixes. `dev` is the runner's own
+// tag. Colors are gated on a TTY stdout and NO_COLOR — piped output is plain.
+// ---------------------------------------------------------------------------
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const CHILD_COLORS: Record<string, number> = { vite: 36, fleet: 35, session: 33, dev: 32 };
+const useColor = process.stdout.isTTY === true && !("NO_COLOR" in process.env);
+
+function prefix(name: string): string {
+	const tag = `[${name.padEnd(7)}]`;
+	if (!useColor) return tag;
+	return `\x1b[${CHILD_COLORS[name] ?? 39}m${tag}\x1b[0m`;
+}
+
 function log(message: string): void {
-	process.stdout.write(`[dev] ${message}\n`);
+	process.stdout.write(`${prefix("dev")} ${message}\n`);
+}
+
+// ---------------------------------------------------------------------------
+// Per-child state: starting → ready (fatal exit: exited; restartable exit:
+// restarting). `readyOnce` tracks "ready at least once" for the summary.
+// ---------------------------------------------------------------------------
+
+type ChildStatus = "starting" | "ready" | "restarting" | "exited";
+
+interface ChildState {
+	name: string;
+	status: ChildStatus;
+	port?: number;
+	pid: number;
+	readyOnce: boolean;
+}
+
+const states = new Map<string, ChildState>();
+/** True until the summary has been printed for the current readiness pass. */
+let summaryArmed = true;
+
+function markReady(name: string, port: number, detail: string): void {
+	const st = states.get(name);
+	if (st === undefined || st.status === "ready") return;
+	st.status = "ready";
+	st.port = port;
+	st.readyOnce = true;
+	log(`✓ ${name} ready — ${detail} (pid ${st.pid})`);
+	checkSummary();
+}
+
+function checkSummary(): void {
+	if (!summaryArmed) return;
+	for (const child of mode.children) {
+		const st = states.get(child.name);
+		if (st === undefined || !st.readyOnce) return;
+	}
+	summaryArmed = false;
+	const fleetMode = modeArg === "fleet";
+	const uiPort = states.get("vite")?.port ?? VITE_PORT_DEFAULT;
+	log("stack ready");
+	log(
+		`  ${"ui".padEnd(9)}http://localhost:${uiPort}  ${
+			fleetMode ? "(vite, HMR, proxies /events /command /ctl → fleet)" : "(vite, HMR, proxies /events /command → session)"
+		}`,
+	);
+	if (fleetMode) {
+		const fleetPort = states.get("fleet")?.port ?? FLEET_PORT;
+		log(`  ${"fleet".padEnd(9)}http://127.0.0.1:${fleetPort}  (control plane + edge)`);
+		log("  no session attached — spawn/add one from the roster sidebar");
+	} else {
+		const sessionPort = states.get("session")?.port ?? SESSION_PORT_DEFAULT;
+		log(`  ${"session".padEnd(9)}ws://127.0.0.1:${sessionPort}  (dev session)`);
+	}
 }
 
 /** Forward a piped stream with a per-line `[name] ` prefix. */
-async function pipePrefixed(stream: ReadableStream<Uint8Array>, name: string, out: NodeJS.WriteStream): Promise<void> {
+async function pipePrefixed(
+	stream: ReadableStream<Uint8Array>,
+	name: string,
+	out: NodeJS.WriteStream,
+	onLine?: (line: string) => string | false | void,
+): Promise<void> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
 	let pending = "";
+	const writeLine = (line: string): void => {
+		if (onLine !== undefined) {
+			const replaced = onLine(line);
+			if (replaced === false) return;
+			if (typeof replaced === "string") line = replaced;
+		}
+		out.write(`${prefix(name)} ${line}\n`);
+	};
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) break;
 		pending += decoder.decode(value, { stream: true });
 		let nl = pending.indexOf("\n");
 		while (nl !== -1) {
-			out.write(`[${name}] ${pending.slice(0, nl)}\n`);
+			writeLine(pending.slice(0, nl));
 			pending = pending.slice(nl + 1);
 			nl = pending.indexOf("\n");
 		}
 	}
 	pending += decoder.decode();
-	if (pending.length > 0) out.write(`[${name}] ${pending}\n`);
+	if (pending.length > 0) writeLine(pending);
 }
 
 /**
- * Fleet mode: wait for omp-fleet's control API, then register the dev
- * omp-session unless an entry for its endpoint already exists (remote entries
- * persist across fleet restarts, so this must not pile up duplicates).
+ * Per-child stdout readiness hooks. Session: consume the OMP_SESSION| contract
+ * line (machine noise — never echoed; readiness + port come from it). Vite:
+ * watch for its `Local:` line. Fleet needs no hook: its readiness is probed by
+ * probeFleetReady (control API answering).
  */
-async function registerDevSession(): Promise<void> {
+function stdoutHook(name: string): ((line: string) => string | false | void) | undefined {
+	if (name === "session") {
+		return (line) => {
+			if (!line.startsWith(OMP_SESSION_PREFIX)) return;
+			let port = SESSION_PORT_DEFAULT;
+			try {
+				const parsed = JSON.parse(line.slice(OMP_SESSION_PREFIX.length)) as { event?: string; port?: number };
+				if (typeof parsed.port === "number") port = parsed.port;
+			} catch {
+				// not parseable — readiness still happened, keep the default port
+			}
+			markReady("session", port, `dev session on ws://127.0.0.1:${port}`);
+			return false;
+		};
+	}
+	if (name === "vite") {
+		return (line) => {
+			const m = line.replace(ANSI_RE, "").match(/Local:\s+http:\/\/localhost:(\d+)/);
+			if (m) markReady("vite", Number(m[1]), `ui on http://localhost:${m[1]}`);
+		};
+	}
+	return undefined;
+}
+
+/**
+ * Fleet mode: poll omp-fleet's control API until it answers — that first
+ * successful poll is fleet's readiness signal. Nothing is registered: adding
+ * a session is a deliberate UI action, not a dev-runner default.
+ */
+async function probeFleetReady(): Promise<void> {
 	while (!shuttingDown) {
 		try {
 			const res = await fetch(`${FLEET_HTTP}/ctl/sessions`);
 			if (res.ok) {
-				const sessions = (await res.json()) as Array<{ endpoint?: string }>;
-				if (sessions.some((s) => s.endpoint === SESSION_URL)) {
-					log(`dev session already in roster (${SESSION_URL})`);
-					return;
-				}
-				const add = await fetch(`${FLEET_HTTP}/ctl/add`, {
-					method: "POST",
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ name: "dev", url: SESSION_URL, cwd: ROOT }),
-				});
-				if (add.ok) {
-					const entry = (await add.json()) as { daemonId?: string };
-					log(`attached dev session to roster (${entry.daemonId ?? "?"})`);
-				} else {
-					log(`attach failed (${add.status}): ${await add.text()}`);
-				}
+				markReady("fleet", FLEET_PORT, `control+edge on ${FLEET_HTTP}`);
 				return;
 			}
 		} catch {
@@ -198,13 +312,19 @@ let restartBackoffMs = RESTART_BACKOFF_MIN_MS;
 function launch(child: Child): void {
 	const proc = Bun.spawn(child.cmd, { cwd: ROOT, env: { ...process.env, ...child.env }, stdout: "pipe", stderr: "pipe" });
 	procs.set(child.name, proc);
-	void pipePrefixed(proc.stdout, child.name, process.stdout);
+	states.set(child.name, { name: child.name, status: "starting", pid: proc.pid, readyOnce: false });
+	void pipePrefixed(proc.stdout, child.name, process.stdout, stdoutHook(child.name));
 	void pipePrefixed(proc.stderr, child.name, process.stderr);
 	if (RESTARTABLE[child.name] === true) {
 		const startedAt = Date.now();
 		void proc.exited.then((code) => {
 			procs.delete(child.name);
 			if (shuttingDown) return;
+			const st = states.get(child.name);
+			if (st !== undefined) st.status = "restarting";
+			// A restart re-arms the summary: it reprints once the stack is
+			// fully ready again (ports/pids from the fresh process).
+			summaryArmed = true;
 			if (Date.now() - startedAt > RESTART_RESET_AFTER_MS) restartBackoffMs = RESTART_BACKOFF_MIN_MS;
 			const delay = restartBackoffMs;
 			restartBackoffMs = Math.min(restartBackoffMs * 2, RESTART_BACKOFF_MAX_MS);
@@ -214,7 +334,13 @@ function launch(child: Child): void {
 			}, delay);
 		});
 	} else {
-		fatalExits.push(proc.exited.then((code) => ({ name: child.name, code })));
+		fatalExits.push(
+			proc.exited.then((code) => {
+				const st = states.get(child.name);
+				if (st !== undefined) st.status = "exited";
+				return { name: child.name, code };
+			}),
+		);
 	}
 }
 
@@ -223,7 +349,7 @@ for (const child of mode.children) launch(child);
 log(`mode: ${modeArg} — ${mode.open}`);
 if (host !== undefined) log(`vite listening on ${host}:4713 — the UI (and full agent control through it) is reachable from the network with no auth; trusted networks only`);
 if (allowHosts !== undefined) log(`vite allowedHosts: ${allowHosts === "*" ? "all Host headers allowed" : allowHosts}`);
-if (modeArg === "fleet") void registerDevSession();
+if (modeArg === "fleet") void probeFleetReady();
 
 async function shutdown(code: number): Promise<void> {
 	if (shuttingDown) return;

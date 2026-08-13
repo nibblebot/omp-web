@@ -32,10 +32,11 @@
  */
 
 import type { Server } from "bun";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { FleetConfig } from "./config";
-import { loadConfig } from "./config";
+import { loadConfig, resolveConfigPath } from "./config";
 import type { RegistryEntry } from "./registry";
 import { bootStatusFor, Registry } from "./registry";
 import { listProjects, validateProjectPath } from "./discovery";
@@ -46,6 +47,7 @@ import { isValidEndpointUrl } from "./spawn-parse";
 import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
 import { FleetEdge } from "./edge";
+import { FleetEventLog, type FleetFacts } from "./events";
 
 const DEFAULT_PORT = 4722;
 const DEFAULT_STATE_PATH = join(homedir(), ".omp", "fleet", "state.json");
@@ -56,6 +58,10 @@ export interface FleetServer {
 	registry: Registry;
 	connector: DaemonConnector;
 	supervisor: SpawnSupervisor;
+	/** Fleet lifecycle-event ring (backing /ctl/debug; CLI mirrors it to stdout). */
+	eventLog: FleetEventLog;
+	/** Fleet-wide facts (port/startedAt/state paths) for the banner + /ctl/debug. */
+	fleetFacts: FleetFacts;
 	close(): Promise<void>;
 }
 
@@ -265,12 +271,17 @@ class FleetServerImpl implements FleetServer {
 	readonly supervisor: SpawnSupervisor;
 	readonly config: FleetConfig;
 	readonly edge: FleetEdge;
+	readonly eventLog = new FleetEventLog();
+	readonly startedAt: number;
+	readonly fleetFacts: FleetFacts;
 
 	readonly #server: Server<undefined>;
 
-	constructor(registry: Registry, config: FleetConfig, port: number) {
+	constructor(registry: Registry, config: FleetConfig, port: number, facts: { statePath: string; configPath: string | null }) {
 		this.registry = registry;
 		this.config = config;
+		this.startedAt = Date.now();
+		this.fleetFacts = { port: 0, startedAt: this.startedAt, statePath: facts.statePath, configPath: facts.configPath };
 		let edge: FleetEdge | null = null;
 		this.connector = new DaemonConnector(registry, {
 			onDialFailed: (entry) => this.#onDialFailed(entry),
@@ -280,14 +291,28 @@ class FleetServerImpl implements FleetServer {
 				// transition is stable — the supervisor resets its
 				// consecutive-crash budget there (window-based, not lifetime).
 				this.supervisor.onConnectorStatus(entry);
+				// Fleet observability: every status transition lands in the ring.
+				this.eventLog.add(
+					entry.status === "error" ? "error" : entry.status === "reconnecting" ? "warn" : "info",
+					"connector",
+					entry.status === "error" ? `error: ${entry.error ?? "error"}` : entry.status,
+					entry.daemonId,
+				);
+			},
+			onReconnect: (daemonId, attempt, delayMs) => {
+				this.eventLog.add("warn", "connector", `reconnect scheduled (attempt ${attempt}, delay ${delayMs}ms)`, daemonId);
 			},
 		});
-		this.supervisor = new SpawnSupervisor(registry, this.connector, config);
+		this.supervisor = new SpawnSupervisor(registry, this.connector, config, {
+			onEvent: (level, message, daemonId) => this.eventLog.add(level, "supervisor", message, daemonId),
+		});
 		edge = new FleetEdge({
 			registry,
 			connector: this.connector,
 			supervisor: this.supervisor,
 			config,
+			eventLog: this.eventLog,
+			fleet: this.fleetFacts,
 		});
 		this.edge = edge;
 		// #3: statuses persisted by a previous fleet process describe dead
@@ -309,6 +334,7 @@ class FleetServerImpl implements FleetServer {
 			fetch: (req) => this.#fetch(req),
 		});
 		this.port = this.#server.port!;
+		this.fleetFacts.port = this.port;
 	}
 
 	async close(): Promise<void> {
@@ -342,12 +368,14 @@ class FleetServerImpl implements FleetServer {
 		// respawns per daemon (concurrent calls coalesce into one launch).
 		// Attached/remote entries are dial-in only: their own backoff in the
 		// connector covers retries.
+		this.eventLog.add("warn", "connector", `dial failed (${entry.mode})`, entry.daemonId);
 		if (entry.mode !== "spawned") return;
 		void (async () => {
 			try {
 				await this.supervisor.respawn(entry);
 			} catch (err) {
 				console.error(`fleet: respawn ${entry.daemonId} failed`, err);
+				this.eventLog.add("error", "server", `respawn ${entry.daemonId} failed: ${err instanceof Error ? err.message : String(err)}`, entry.daemonId);
 			}
 		})();
 	}
@@ -369,6 +397,7 @@ class FleetServerImpl implements FleetServer {
 			if (entry.readyAt !== undefined) patch.readyAt = undefined;
 			if (entry.pid !== undefined) patch.pid = undefined;
 			this.registry.update(entry.daemonId, patch);
+			this.eventLog.add("info", "server", `boot reconcile: ${entry.status} → ${target}`, entry.daemonId);
 			if (target === "connecting") {
 				this.connector.connect(entry.daemonId);
 			}
@@ -418,8 +447,10 @@ class FleetServerImpl implements FleetServer {
 			return json({ error: "method not allowed" }, 405);
 		} catch (err) {
 			if (err instanceof HttpError) return json({ error: err.message }, err.status);
+			const message = err instanceof Error ? err.message : String(err);
 			console.error("fleet: control request failed", err);
-			return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+			this.eventLog.add("error", "server", `request ${req.method} ${new URL(req.url).pathname} failed: ${message}`);
+			return json({ error: message }, 500);
 		}
 	};
 
@@ -463,6 +494,7 @@ class FleetServerImpl implements FleetServer {
 			status: "connecting",
 		});
 		this.connector.connect(entry.daemonId);
+		this.eventLog.add("info", "server", `added ${entry.name} (${url})`, entry.daemonId);
 		return json(entry);
 	}
 
@@ -498,6 +530,7 @@ class FleetServerImpl implements FleetServer {
 			status: "connecting",
 		});
 		this.connector.connect(entry.daemonId);
+		this.eventLog.add("info", "server", `provisioned ${entry.name} (spawn hook)`, entry.daemonId);
 		return json(entry);
 	}
 
@@ -514,6 +547,7 @@ class FleetServerImpl implements FleetServer {
 				this.connector.disconnect(entry.daemonId);
 				this.registry.setStatus(entry.daemonId, "asleep");
 			}
+			this.eventLog.add("info", "server", `stopped (${entry.mode})`, entry.daemonId);
 			stopped.push(entry.daemonId);
 		}
 		return json({ stopped });
@@ -536,6 +570,7 @@ class FleetServerImpl implements FleetServer {
 				this.connector.drop(entry.daemonId);
 			}
 			this.registry.remove(entry.daemonId);
+			this.eventLog.add("info", "server", "removed", entry.daemonId);
 			removed.push(entry.daemonId);
 		}
 		return json({ removed });
@@ -561,8 +596,14 @@ class FleetServerImpl implements FleetServer {
 }
 
 export async function startFleet(opts: { port?: number; statePath?: string; configPath?: string } = {}): Promise<FleetServer> {
-	const registry = new Registry(resolveStatePath(opts.statePath));
+	const statePath = resolveStatePath(opts.statePath);
+	const registry = new Registry(statePath);
 	await registry.load();
+	const configPath = resolveConfigPath(opts.configPath);
 	const config = await loadConfig(opts.configPath);
-	return new FleetServerImpl(registry, config, resolvePort(opts.port));
+	return new FleetServerImpl(registry, config, resolvePort(opts.port), {
+		statePath,
+		// Null when no config file exists at the resolved location (defaults apply).
+		configPath: existsSync(configPath) ? configPath : null,
+	});
 }

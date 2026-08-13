@@ -86,7 +86,8 @@ export async function loadConfig(path?: string): Promise<FleetConfig> {
 	return config;
 }
 
-function resolveConfigPath(explicit?: string): string {
+/** Resolve the config path the loader will read (explicit > env > default). */
+export function resolveConfigPath(explicit?: string): string {
 	if (explicit !== undefined) return expandTilde(explicit);
 	const env = process.env.OMP_FLEET_CONFIG;
 	if (env !== undefined && env !== "") return expandTilde(env);

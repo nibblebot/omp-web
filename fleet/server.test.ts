@@ -257,6 +257,48 @@ describe("fleet control plane", () => {
 		expect(found?.endpoint).toBe(fake.url);
 	});
 
+	test("GET /ctl/debug returns fleet facts, per-session internals, and the event log — never tokens", async () => {
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/debug`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as Record<string, unknown>;
+		// Fleet facts block.
+		const fleet = body.fleet as { port?: number; startedAt?: number; uptimeSec?: number; statePath?: string; configPath?: unknown };
+		expect(fleet.port).toBe(server.port);
+		expect(typeof fleet.startedAt).toBe("number");
+		expect(fleet.uptimeSec).toBeGreaterThanOrEqual(0);
+		expect(fleet.statePath).toBe(statePath);
+		expect(fleet.configPath).toBe(configPath);
+		// Sessions carry the live entry plus connector/supervisor internals.
+		const sessions = body.sessions as Array<Record<string, unknown>>;
+		expect(Array.isArray(sessions)).toBe(true);
+		const found = sessions.find((session) => session.daemonId === entry.daemonId);
+		expect(found).toBeDefined();
+		expect(found?.status).toBe("ready");
+		expect(found?.endpoint).toBe(fake.url);
+		expect(found?.registeredAt).toBe(server.registry.get(entry.daemonId)?.registeredAt);
+		expect(found?.uptimeSec).toBeGreaterThanOrEqual(0);
+		expect(found?.connector).toMatchObject({ state: "streaming", attempts: 0 });
+		// The log holds the lifecycle trail for this daemon (its status
+		// transitions landed in the ring at the connector wiring points).
+		const log = body.log as Array<{ source?: string; daemonId?: string; level?: string; message?: string }>;
+		expect(Array.isArray(log)).toBe(true);
+		expect(log.length).toBeGreaterThan(0);
+		expect(log.some((event) => event.source === "connector" && event.daemonId === entry.daemonId)).toBe(true);
+		expect(log.some((event) => event.source === "server" && event.message === `added added (${fake.url})`)).toBe(true);
+		// The browser-facing payload must never leak a bearer token: no key
+		// named "token" anywhere in the JSON tree.
+		const scan = (value: unknown): void => {
+			if (Array.isArray(value)) return value.forEach(scan);
+			if (typeof value === "object" && value !== null) {
+				for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+					expect(key).not.toBe("token");
+					scan(val);
+				}
+			}
+		};
+		scan(body);
+	});
+
 	test("POST /ctl/prompt with an unknown selector 404s", async () => {
 		const res = await postJson(server.port, "/ctl/prompt", { selector: "d999", text: "hi" });
 		expect(res.status).toBe(404);
