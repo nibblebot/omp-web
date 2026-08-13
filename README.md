@@ -21,24 +21,23 @@ Prerequisite: [Bun](https://bun.sh). Then `bun install` once.
 > flow. With no auth and no model cache, every prompt fails with
 > `No model selected`.
 
+### Dev mode — omp-fleet (roster UI)
+
+```sh
+bun run dev   # vite on :4713 (HMR; /events + /command + /download proxied to the fleet edge) + omp-fleet on :4722
+```
+
+Open <http://localhost:4713>, click a `ready` row to attach. UI edits hot-reload in roster mode too; `:4722` only serves the last production `dist/` build. Sidebar spawns work out of the box: `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so the default `local` template runs `bun server/index.ts` from the checkout instead of the `omp-session` binary (spawned daemons are not `--watch`ed; restart them to pick up server edits). Outside `bun run dev` the `local` template runs the binary, so it needs to be on PATH: `bun run build:omp-session` and add `dist-bin/` to PATH (or set `OMP_FLEET_LOCAL_TEMPLATE` / edit the template in `~/.omp/fleet/config.json` to launch from a checkout).
+
 ### Dev mode — standalone omp-session (single-session UI)
 
 ```sh
-bun run dev   # omp-session on :4721 (--watch reload) + vite on :4713 (proxies /events + /command + /download → 4721)
+bun run dev:single   # omp-session on :4721 (--watch reload) + vite on :4713 (proxies /events + /command + /download → 4721)
 ```
 
 Open <http://localhost:4713>. UI edits hot-reload; server edits restart the daemon. (Need the processes in separate terminals? `bun run dev:server` and `bun run dev:web` still exist.)
 
-### Dev mode — omp-fleet (roster UI)
-
-```sh
-bun run dev:fleet   # vite on :4713 (HMR; /events + /command + /download proxied to the fleet edge) + omp-fleet on :4722
-                    # + an omp-session on :4721, auto-registered into the roster as "dev"
-```
-
-Open <http://localhost:4713>, click a `ready` row to attach. UI edits hot-reload in roster mode too; `:4722` only serves the last production `dist/` build. Sidebar spawns work out of the box: `dev:fleet` sets `OMP_FLEET_LOCAL_TEMPLATE` so the default `local` template runs `bun server/index.ts` from the checkout instead of the `omp-session` binary (spawned daemons are not `--watch`ed; restart them to pick up server edits). Outside `dev:fleet` the `local` template runs the binary, so it needs to be on PATH: `bun run build:omp-session` and add `dist-bin/` to PATH (or set `OMP_FLEET_LOCAL_TEMPLATE` / edit the template in `~/.omp/fleet/config.json` to launch from a checkout).
-
-Both dev commands put the UI on :4713 with HMR; `bun run dev` proxies `/events` + `/command` to the standalone omp-session, `bun run dev:fleet` proxies them to the fleet edge (`OMP_DEV_FLEET=1` in `vite.config.ts`). To reach the UI from another machine, pass `--host` (optionally with an address) to either command — `bun run dev -- --host` binds vite to `0.0.0.0:4713` while the backends stay loopback (remote browsers reach them through vite's proxies). No auth on the UI — trusted networks only. Accessing via a non-localhost domain (e.g. tailscale) trips vite's host check; add `--allow-hosts` to allow every Host header, or `--allow-hosts myhost.tail1234.ts.net` for an allowlist.
+Both dev commands put the UI on :4713 with HMR; `bun run dev` proxies `/events` + `/command` to the fleet edge (`OMP_DEV_FLEET=1` in `vite.config.ts`), `bun run dev:single` proxies them to the standalone omp-session. To reach the UI from another machine, pass `--host` (optionally with an address) to either command — `bun run dev -- --host` binds vite to `0.0.0.0:4713` while the backends stay loopback (remote browsers reach them through vite's proxies). No auth on the UI — trusted networks only. Accessing via a non-localhost domain (e.g. tailscale) trips vite's host check; add `--allow-hosts` to allow every Host header, or `--allow-hosts myhost.tail1234.ts.net` for an allowlist.
 
 ### Production build
 
@@ -147,8 +146,8 @@ bun run collab -- --stop
 
 ```sh
 bun install
-bun run dev           # single-session: omp-session :4721 (--watch) + vite :4713 (HMR; proxies /events + /command + /download → 4721, /ctl → 4722)
-bun run dev:fleet     # roster: vite :4713 (HMR, /events + /command → fleet edge) + omp-fleet :4722 + omp-session :4721 (auto-attached as "dev")
+bun run dev           # roster: vite :4713 (HMR, /events + /command → fleet edge) + omp-fleet :4722
+bun run dev:single    # single-session: omp-session :4721 (--watch) + vite :4713 (HMR; proxies /events + /command + /download → 4721, /ctl → 4722)
 # or separately: bun run dev:server / dev:web / fleet -- serve
 ```
 

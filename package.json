@@ -3,8 +3,8 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev": "bun scripts/dev.ts",
-		"dev:fleet": "bun scripts/dev.ts fleet",
+		"dev": "bun scripts/dev.ts fleet",
+		"dev:single": "bun scripts/dev.ts session",
 		"dev:server": "bun --watch server/index.ts",
 		"dev:web": "vite",
 		"build": "vite build",

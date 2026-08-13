@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import solidPlugin from "vite-plugin-solid";
 
-// OMP_DEV_FLEET=1 (set by `bun run dev:fleet`): proxy /events + /command + /download to the
+// OMP_DEV_FLEET=1 (set by `bun run dev`): proxy /events + /command + /download to the
 // omp-fleet edge instead of a standalone omp-session, so the roster UI runs
 // under HMR. Either way /ctl goes to the fleet control plane.
 const fleet = process.env.OMP_DEV_FLEET === "1";

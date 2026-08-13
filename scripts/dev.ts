@@ -2,10 +2,10 @@
 /**
  * dev — one-command dev runner.
  *
- *   bun run dev          single-session mode: omp-session (:4721, --watch) + vite (:4713 HMR)
- *   bun run dev:fleet    fleet mode: vite (:4713 HMR, /events + /command proxied to omp-fleet)
+ *   bun run dev          fleet mode: vite (:4713 HMR, /events + /command proxied to omp-fleet)
  *                        (:4722) + omp-fleet serve. NO session is started or attached —
  *                        spawn/add one from the roster UI when you want one.
+ *   bun run dev:single   single-session mode: omp-session (:4721, --watch) + vite (:4713 HMR)
  *
  *   --host [addr]        bind vite to addr (default 0.0.0.0) for LAN access; backends stay
  *                        loopback — remote browsers reach them through vite's proxies.

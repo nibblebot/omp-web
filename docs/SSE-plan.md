@@ -252,8 +252,8 @@ duplicate frames for unknown ids are ignored.
 4. **Fleet edge** — `edge.ts` browser SSE+POST, attach streams, edge ring +
    drop-and-resume; `server.ts` deletes websocket wiring. Update
    `edge.test.ts`, `server.test.ts`. Verify: `bun test fleet`.
-5. **Browser** — `state.ts` EventSource + `postCommand`. Verify: `bun run dev`
-   and `bun run dev:fleet` smoke — open UI, prompt, watch streaming, attach,
+5. **Browser** — `state.ts` EventSource + `postCommand`. Verify: `bun run dev:single`
+   and `bun run dev` smoke — open UI, prompt, watch streaming, attach,
    daemon logs/stop/restart.
 6. **Infra + docs** — `vite.config.ts`, `scripts/dev.ts`, `README.md`.
 7. **Full verification** — `bun test` (whole suite), `bun run check:types`,
