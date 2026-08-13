@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import { OMP_PROTO, SSE_EVENT_NAME } from "../shared/protocol";
-import type { ClientCommand, ServerFrame } from "../shared/protocol";
-import { attachSession, call, connect, setState, state, type SubagentInfo } from "./state";
+import type { ClientCommand, ServerFrame, SettingsModel } from "../shared/protocol";
+import { attachSession, call, connect, refreshSettings, setState, state, updateSetting, type SubagentInfo } from "./state";
 
 // ---------------------------------------------------------------------------
 // Minimal /events transport double. connect() registers its SSE handler on a
@@ -469,5 +469,114 @@ describe("client debug ring (transport observability)", () => {
 		expect(state.debugLog.at(-1)?.message).toBe("attach failed: unknown daemon: d9");
 		expect(state.debugLog.at(-1)?.level).toBe("warn");
 		await expect(bad).rejects.toThrow("unknown daemon: d9");
+	});
+});
+
+describe("fleet settings fallback (roster mode, no daemon attached)", () => {
+	const model: SettingsModel = { tabs: [] };
+
+	/** Drain the async fetch/.then/.finally chain (each hop is one microtask). */
+	async function settle(): Promise<void> {
+		for (let i = 0; i < 8; i++) await Promise.resolve();
+	}
+
+	/** Swap globalThis.fetch for a JSON responder; records every request. */
+	function stubFetch(
+		respond: (url: string, init?: RequestInit) => { status: number; body: unknown },
+	): Array<{ url: string; method: string; body?: unknown }> {
+		const requests: Array<{ url: string; method: string; body?: unknown }> = [];
+		globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+			const url = String(input);
+			const { status, body } = respond(url, init);
+			requests.push({ url, method: init?.method ?? "GET", body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined });
+			return {
+				ok: status >= 200 && status < 300,
+				status,
+				json: async () => body,
+				text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+			} as unknown as Response;
+		}) as unknown as typeof fetch;
+		return requests;
+	}
+
+	test("refreshSettings GETs /ctl/settings and stores the model (no /command POST)", async () => {
+		setState({ sessionMode: "roster", currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		const requests = stubFetch(() => ({ status: 200, body: model }));
+
+		refreshSettings();
+		await settle();
+
+		expect(requests).toEqual([{ url: "/ctl/settings", method: "GET", body: undefined }]);
+		expect(posted).toEqual([]); // nothing went over the /command uplink
+		expect(state.settingsModel).toBe(model);
+		expect(state.settingsLoading).toBe(false);
+		expect(state.error).toBeNull();
+	});
+
+	test("updateSetting POSTs /ctl/settings/set with {path, value} and stores the response model", async () => {
+		setState({ sessionMode: "roster", currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		const requests = stubFetch(() => ({ status: 200, body: model }));
+
+		updateSetting("agent.model", "gpt-5");
+		await settle();
+
+		expect(requests).toEqual([
+			{ url: "/ctl/settings/set", method: "POST", body: { path: "agent.model", value: "gpt-5" } },
+		]);
+		expect(posted).toEqual([]);
+		expect(state.settingsModel).toBe(model);
+		expect(state.error).toBeNull();
+	});
+
+	test("a non-ok /ctl/settings/set response surfaces the server {error} message in state.error", async () => {
+		setState({ sessionMode: "roster", currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		stubFetch(() => ({ status: 400, body: { error: "unknown setting path" } }));
+
+		updateSetting("bogus.path", 1);
+		await settle();
+
+		expect(state.error).toBe("unknown setting path");
+		expect(state.settingsModel).toBeNull();
+	});
+
+	test("a non-ok /ctl/settings response surfaces the server error and leaves the model null", async () => {
+		setState({ sessionMode: "roster", currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		stubFetch(() => ({ status: 500, body: "boom" }));
+
+		refreshSettings();
+		await settle();
+
+		expect(state.error).toBe("boom");
+		expect(state.settingsModel).toBeNull();
+		expect(state.settingsLoading).toBe(false);
+	});
+
+	test("roster mode with a session attached keeps updateSetting on the /command call path (no /ctl fetch)", async () => {
+		setState({ sessionMode: "single", currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		const requests = stubFetch(() => ({ status: 200, body: model }));
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true so call() posts
+		// Flip to the attached roster state AFTER the stream opens, so the
+		// onopen auto-attach (roster + session) doesn't muddy the posted list.
+		setState({ sessionMode: "roster", currentSessionId: "daemon-a" });
+
+		updateSetting("agent.model", "gpt-5");
+		await settle();
+
+		expect(requests.filter(r => r.url.startsWith("/ctl"))).toEqual([]); // no /ctl fetch in attached mode
+		// The /command uplink carries the RPC (recorded by stubFetch, since it
+		// replaced the beforeEach fetch stub that feeds `posted`).
+		const calls = requests
+			.filter(r => r.url === "/command")
+			.map(r => r.body as Extract<ClientCommand, { type: "call" }>);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].method).toBe("setSetting");
+		expect(calls[0].args).toEqual(["agent.model", "gpt-5"]);
+
+		// Resolve the RPC so no dangling call timer survives the test. The
+		// frame round-trips through JSON, so the model is a clone, not `model`.
+		dispatch(callResult(calls[0].id, model));
+		await settle();
+		expect(state.settingsModel).toEqual(model);
 	});
 });

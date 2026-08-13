@@ -11,12 +11,18 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Settings } from "@oh-my-pi/pi-coding-agent";
 import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../shared/protocol";
 import { encodeSseEvent } from "../shared/sse";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
 import { runSpawnHook, startFleet, type FleetServer } from "./server";
 import { main } from "./cli";
+
+// The /ctl/settings routes lazily initialize the process-global Settings
+// singleton on first use; pin it to in-memory so route tests never touch the
+// real ~/.omp config.
+await Settings.init({ inMemory: true });
 
 const FAKE_CWD = "/tmp/fake-proj";
 const FAKE_SESSION_FILE = "/tmp/fake-proj/.omp/session.json";
@@ -171,7 +177,14 @@ describe("fleet control plane", () => {
 		const rootsDir = join(tmp, "roots");
 		mkdirSync(rootsDir, { recursive: true });
 		writeFileSync(configPath, JSON.stringify({ roots: [rootsDir] }));
-		server = await startFleet({ port: 0, statePath, configPath });
+		server = await startFleet({
+			port: 0,
+			statePath,
+			configPath,
+			// Stub the settings provider registry: the default lazily opens
+			// the real ~/.omp auth DB, and these tests must not touch it.
+			settings: { registry: async () => [] },
+		});
 	});
 
 	afterAll(async () => {
@@ -193,6 +206,56 @@ describe("fleet control plane", () => {
 		const body = (await res.json()) as unknown[];
 		expect(Array.isArray(body)).toBe(true);
 		expect(body).toHaveLength(0);
+	});
+
+	test("GET /ctl/settings returns the unattached settings model", async () => {
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/settings`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { tabs?: Array<{ id: string; label: string; groups: Array<{ items: unknown[] }> }> };
+		expect(Array.isArray(body.tabs)).toBe(true);
+		expect((body.tabs ?? []).length).toBeGreaterThan(0);
+		for (const tab of body.tabs ?? []) {
+			expect(tab.label.length).toBeGreaterThan(0);
+			expect(tab.groups.length).toBeGreaterThan(0);
+		}
+	});
+
+	test("POST /ctl/settings/set persists a coerced value and returns a fresh model", async () => {
+		const res = await postJson(server.port, "/ctl/settings/set", { path: "compaction.thresholdPercent", value: "50" });
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			tabs: Array<{ id: string; groups: Array<{ items: Array<{ path: string; value: unknown; changed: boolean }> }> }>;
+		};
+		const item = body.tabs
+			.find(tab => tab.id === "context")
+			?.groups.flatMap(group => group.items)
+			.find(item => item.path === "compaction.thresholdPercent");
+		expect(item?.value).toBe(50);
+		expect(item?.changed).toBe(true);
+		// Restore the schema default so the shared in-memory singleton stays
+		// pristine for the rest of the file.
+		await postJson(server.port, "/ctl/settings/set", { path: "compaction.thresholdPercent", value: "default" });
+	});
+
+	test("POST /ctl/settings/set 400s on an unknown path", async () => {
+		const res = await postJson(server.port, "/ctl/settings/set", { path: "no.such.path", value: 1 });
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toContain("Unknown setting");
+	});
+
+	test("POST /ctl/settings/set 400s on an uncoercible value", async () => {
+		const res = await postJson(server.port, "/ctl/settings/set", { path: "compaction.thresholdPercent", value: "abc" });
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toContain("Invalid numeric value");
+	});
+
+	test("POST /ctl/settings/set 400s when path is missing", async () => {
+		const res = await postJson(server.port, "/ctl/settings/set", { value: 1 });
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toContain("missing or invalid field: path");
 	});
 
 	test("POST /ctl/spawn 400s on a nonexistent path", async () => {

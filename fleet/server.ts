@@ -8,12 +8,14 @@
  *
  *   GET  /ctl/sessions {…}                         → RegistryEntry[]
  *   GET  /ctl/projects {…}                         → ProjectEntry[]
+ *   GET  /ctl/settings                             → SettingsModel
  *   POST /ctl/spawn    {cwd, template?, name?, labels?} → RegistryEntry
  *   POST /ctl/add      {name, url, token?, labels?, cwd?} → RegistryEntry
  *   POST /ctl/provision {name, labels?}            → RegistryEntry (spawn hook)
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
  *   POST /ctl/remove   {selector}                  → { removed: string[] }
  *   POST /ctl/prompt   {selector, text, waitMs?}   → PromptResult[] | { submitted: string[] }
+ *   POST /ctl/settings/set {path, value}           → SettingsModel (400 bad path/value)
  *
  * /ctl/provision runs config.spawnHook via `sh -c` with env OMP_HOOK_NAME /
  * OMP_HOOK_LABELS and a 60s deadline; the hook's last non-empty stdout line
@@ -48,6 +50,7 @@ import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
 import { FleetEdge } from "./edge";
 import { FleetEventLog, type FleetFacts } from "./events";
+import { createFleetSettings, type FleetSettings, type FleetSettingsOptions } from "./settings";
 
 const DEFAULT_PORT = 4722;
 const DEFAULT_STATE_PATH = join(homedir(), ".omp", "fleet", "state.json");
@@ -271,13 +274,20 @@ class FleetServerImpl implements FleetServer {
 	readonly supervisor: SpawnSupervisor;
 	readonly config: FleetConfig;
 	readonly edge: FleetEdge;
+	readonly fleetSettings: FleetSettings;
 	readonly eventLog = new FleetEventLog();
 	readonly startedAt: number;
 	readonly fleetFacts: FleetFacts;
 
 	readonly #server: Server<undefined>;
 
-	constructor(registry: Registry, config: FleetConfig, port: number, facts: { statePath: string; configPath: string | null }) {
+	constructor(
+		registry: Registry,
+		config: FleetConfig,
+		port: number,
+		facts: { statePath: string; configPath: string | null },
+		settingsOptions?: FleetSettingsOptions,
+	) {
 		this.registry = registry;
 		this.config = config;
 		this.startedAt = Date.now();
@@ -315,6 +325,10 @@ class FleetServerImpl implements FleetServer {
 			fleet: this.fleetFacts,
 		});
 		this.edge = edge;
+		// Unattached settings service (roster-mode /ctl/settings): lazy
+		// Settings.init + ModelRegistry, no live session required. Injectable
+		// provider source for tests (must not open the real auth DB).
+		this.fleetSettings = createFleetSettings(settingsOptions);
 		// #3: statuses persisted by a previous fleet process describe dead
 		// children/sockets — map them to a truthful boot state and redial
 		// remote entries BEFORE anything else starts acting on the roster.
@@ -422,6 +436,11 @@ class FleetServerImpl implements FleetServer {
 						return json(this.registry.list());
 					case "/ctl/projects":
 						return json(await listProjects(this.config.roots));
+					case "/ctl/settings":
+						// Unattached settings model (roster mode): the fleet
+						// service lazily initializes the process-global
+						// Settings singleton + ModelRegistry — no session.
+						return json(await this.fleetSettings.getModel());
 					default:
 						return json({ error: "not found" }, 404);
 				}
@@ -440,6 +459,8 @@ class FleetServerImpl implements FleetServer {
 						return await this.#handleRemove(req);
 					case "/ctl/prompt":
 						return await this.#handlePrompt(req);
+					case "/ctl/settings/set":
+						return await this.#handleSettingsSet(req);
 					default:
 						return json({ error: "not found" }, 404);
 				}
@@ -593,9 +614,32 @@ class FleetServerImpl implements FleetServer {
 		const results = await fanOut(this.#fanoutDeps(), matches, text, waitMs);
 		return json(results);
 	}
+
+	/**
+	 * POST /ctl/settings/set {path, value}: coerce + persist one schema
+	 * setting through the unattached fleet settings service and return a
+	 * fresh model. Unknown paths and uncoercible values are client errors
+	 * (400, safe messages from coerceSettingValue); anything else falls
+	 * through to the request-level 500 catch.
+	 */
+	async #handleSettingsSet(req: Request): Promise<Response> {
+		const body = await readJson(req);
+		const path = requireString(body, "path");
+		// value is arbitrary JSON (boolean/number/string/array/object) —
+		// coercion happens schema-side, so never requireString it.
+		const value = body["value"];
+		try {
+			return json(await this.fleetSettings.set(path, value));
+		} catch (err) {
+			if (err instanceof HttpError) throw err;
+			throw new HttpError(400, err instanceof Error ? err.message : String(err));
+		}
+	}
 }
 
-export async function startFleet(opts: { port?: number; statePath?: string; configPath?: string } = {}): Promise<FleetServer> {
+export async function startFleet(
+	opts: { port?: number; statePath?: string; configPath?: string; settings?: FleetSettingsOptions } = {},
+): Promise<FleetServer> {
 	const statePath = resolveStatePath(opts.statePath);
 	const registry = new Registry(statePath);
 	await registry.load();
@@ -605,5 +649,5 @@ export async function startFleet(opts: { port?: number; statePath?: string; conf
 		statePath,
 		// Null when no config file exists at the resolved location (defaults apply).
 		configPath: existsSync(configPath) ? configPath : null,
-	});
+	}, opts.settings);
 }
