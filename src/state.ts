@@ -1313,6 +1313,11 @@ function resetSessionView(): void {
 let backoff = 1000;
 
 export function connect(): void {
+	// Browser-only transport: without EventSource there is nothing to dial.
+	// (A bun test worker has neither EventSource nor location — a silence
+	// timer armed by an earlier suite in the same worker must no-op here,
+	// not crash on location.search.)
+	if (typeof EventSource === "undefined") return;
 	// Same-origin http(s): EventSource for the downlink (native auto-reconnect
 	// sends Last-Event-ID for ring replay) + POST /command for the uplink.
 	// EventSource can't set headers, so the off-loopback bearer token rides

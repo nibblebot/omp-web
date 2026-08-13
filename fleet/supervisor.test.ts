@@ -171,7 +171,12 @@ function writeChildScript(dir: string, port: number, argsFile: string, opts: { f
 		lines.push("exit 1");
 	} else {
 		lines.push(`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${port},"url":"ws://127.0.0.1:${port}"}'`);
-		lines.push("while :; do sleep 1; done");
+		// Idle loop. The tick must stay short: dash defers an untrapped SIGTERM
+		// until the running `sleep` returns, so the supervisor's stop()/close()
+		// teardown (SIGTERM, 5s grace) costs one tick per child — sleep 1 makes
+		// every spawn test pay ~1s at close. 0.05 keeps the child alive while
+		// making teardown ~instant.
+		lines.push("while :; do sleep 0.05; done");
 	}
 	writeFileSync(script, lines.join("\n") + "\n");
 	return script;
@@ -399,7 +404,7 @@ describe("SpawnSupervisor", () => {
 			'trap "exit 0" TERM INT',
 			`printf '%s\\0' "$@" > '${argsFile}'`,
 			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
-			"while :; do sleep 1; done",
+			"while :; do sleep 0.05; done",
 		].join("\n") + "\n");
 		const config: FleetConfig = {
 			roots: [],
@@ -446,7 +451,7 @@ describe("SpawnSupervisor", () => {
 			`echo $$ >> '${pidsFile}'`,
 			`echo "$@" >> '${argsFile}'`,
 			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
-			"while :; do sleep 1; done",
+			"while :; do sleep 0.05; done",
 		].join("\n") + "\n");
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
@@ -665,7 +670,7 @@ describe("SpawnSupervisor", () => {
 			// following valid listening line resolves normally.
 			`printf 'OMP_SESSION|%s\\n' '{"event":"endpoint","url":"garbage"}'`,
 			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
-			"while :; do sleep 1; done",
+			"while :; do sleep 0.05; done",
 		].join("\n") + "\n");
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
@@ -693,7 +698,7 @@ describe("SpawnSupervisor", () => {
 			`echo $$ > '${pidFile}'`,
 			`echo "$@" >> '${argsFile}'`,
 			`printf 'OMP_SESSION|%s\\n' '{"event":"endpoint","url":"garbage"}'`,
-			"while :; do sleep 1; done",
+			"while :; do sleep 0.05; done",
 		].join("\n") + "\n");
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);

@@ -11,12 +11,16 @@
  * short-idle daemon.
  *
  * Model determinism: every daemon runs against a fresh empty
- * PI_CODING_AGENT_DIR, so no model is selectable and every prompt turn fails
- * fast with "No model selected" — no live model/API dependency (see
- * LOCAL_TEMPLATE construction below). Exactly 5 prompts are issued (d1, d2,
- * d3, the added external daemon, and the respawned idle daemon); all assert
- * ok:false. Session-file paths (lastSessionFile) come from hello_ok/state
- * frames at ready, not from completed turns.
+ * PI_CODING_AGENT_DIR, so no model is selectable — no live model/API
+ * dependency (see LOCAL_TEMPLATE construction below). Exactly 5 prompts are
+ * issued (d1, d2, d3, the added external daemon, and the respawned idle
+ * daemon); all assert ok:false. The daemon's prompt method is fire-and-forget
+ * and its turn failure arrives as a broadcast error frame (which the fanout
+ * deliberately ignores), so a no-model prompt settles on the fanout's waitMs
+ * client timeout — the assertions above check the /ctl/prompt → fan-out →
+ * daemon correlation seam (dispatch + per-daemon serialization + timeout
+ * error), not a model error. Session-file paths (lastSessionFile) come from
+ * hello_ok/state frames at ready, not from completed turns.
  *
  * Tests are serial and share one fleet instance; every timeout failure
  * includes the daemon's stderr tail when the supervisor can provide it.
@@ -47,10 +51,13 @@ const PROMPT_TEXT = "Reply with exactly: PONG";
  * a fresh empty directory inside the suite's tmp root (plus PI_AUTH_NO_BORROW=1
  * so the auth broker cannot inject keys). With no auth and no model cache the
  * daemon has NO selectable model: boots, readiness gate, and hello_ok/state
- * frames (incl. sessionFile) all behave normally, but every prompt turn fails
- * fast and deterministically with "No model selected". No test outcome ever
- * depends on a live model/API. Prompts ARE issued through the control plane —
- * they exercise the /ctl/prompt → fan-out → daemon → error-frame correlation
+ * frames (incl. sessionFile) all behave normally, but every prompt turn never
+ * produces agent_end — the daemon's prompt is fire-and-forget and turn
+ * failures arrive as broadcast error frames, which the fanout deliberately
+ * ignores — so each prompt settles on the client waitMs timeout with
+ * ok:false. No test outcome ever depends on a live model/API. Prompts ARE
+ * issued through the control plane — they exercise the /ctl/prompt → fan-out
+ * → daemon dispatch + per-daemon serialization + timeout-error correlation
  * seam, including wake-on-demand respawn — and all assert ok:false.
  * (Dead-porting provider *_BASE_URL env instead does NOT work: cached model
  * configs carry an explicit baseUrl that wins over the env override.)
@@ -100,7 +107,7 @@ describe("fleet integration — real omp-session daemons", () => {
 	let extEntry!: RegistryEntry;
 	/** Every child pid we have seen (spawn responses + restarts + external). */
 	const trackedPids = new Set<number>();
-	/** Prompts issued through the control plane (all fast-error, no live model). */
+	/** Prompts issued through the control plane (all error-out, no live model). */
 	let promptCount = 0;
 
 	const base = (): string => `http://127.0.0.1:${server.port}`;
@@ -223,7 +230,7 @@ describe("fleet integration — real omp-session daemons", () => {
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		// Hermetic per-daemon agent dir ({name} expands per daemon in the fleet
-		// templates): no auth, no model cache → turns fail fast, deterministically.
+		// templates): no auth, no model cache → every prompt errors (no model).
 		const hermeticEnv = `PI_CODING_AGENT_DIR=${join(tmp, "agent-{name}")} PI_AUTH_NO_BORROW=1`;
 		LOCAL_TEMPLATE = `${hermeticEnv} bun server/index.ts --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`;
 		// Short-idle variant additionally pins the test-only idle-check knob
@@ -326,12 +333,16 @@ describe("fleet integration — real omp-session daemons", () => {
 		expect(c.entry.status).toBe("ready");
 	}, 90_000);
 
-	test("prompts fan out to all three daemons; every turn errors fast (no selectable model)", async () => {
+	test("prompts fan out to all three daemons; every turn errors (no selectable model)", async () => {
 		// d1/d2/d3 are independent daemons — run the three prompts concurrently.
-		// No live model: hermetic agent dirs mean no model is selectable, so each
-		// turn fails fast with "No model selected". The seam under test is
-		// /ctl/prompt → fan-out → daemon → error-frame correlation.
-		const results = await Promise.all([d1, d2, d3].map((entry) => ctlPrompt(entry.daemonId, 30_000)));
+		// No live model: hermetic agent dirs mean no model is selectable, so no
+		// turn ever produces agent_end. The daemon's prompt is fire-and-forget
+		// and its turn failure arrives as a broadcast error frame (deliberately
+		// ignored by the fanout), so each prompt settles on the client waitMs
+		// timeout. The seam under test is /ctl/prompt → fan-out → daemon
+		// dispatch + per-daemon serialization + timeout error. waitMs is short:
+		// a no-model prompt can never settle any other way.
+		const results = await Promise.all([d1, d2, d3].map((entry) => ctlPrompt(entry.daemonId, 5_000)));
 		for (const result of results) {
 			expect(result.ok).toBe(false);
 			expect(result.error).toBeTruthy();
@@ -372,7 +383,7 @@ describe("fleet integration — real omp-session daemons", () => {
 		expect(after.lastSessionFile).toBe(sessionBefore);
 	}, 90_000);
 
-	test("add an externally launched omp-session and drive it (turn errors fast, no live model)", async () => {
+	test("add an externally launched omp-session and drive it (turn errors, no live model)", async () => {
 		ext = await spawnExternal(projDirs[1], "ext-token-123", "ext-drive", ["--idle-timeout", "0"]);
 		trackedPids.add(ext.child.pid);
 		const res = await postJson("/ctl/add", { name: "ext-drive", url: ext.url, token: "ext-token-123" });
@@ -383,8 +394,8 @@ describe("fleet integration — real omp-session daemons", () => {
 		// hello_ok.cwd is adopted for `add`ed entries without a registered cwd.
 		expect(ready.entry.cwd).toBe(projDirs[1]);
 		// Driving proof: the call round-trips to the daemon and its deterministic
-		// dead-provider turn error correlates back to us.
-		const result = await ctlPrompt(extEntry.daemonId, 30_000);
+		// no-model outcome correlates back as an error (the fanout timeout).
+		const result = await ctlPrompt(extEntry.daemonId, 5_000);
 		expect(result.ok).toBe(false);
 		expect(result.error).toBeTruthy();
 		// We launched it, we stop it.
@@ -415,10 +426,10 @@ describe("fleet integration — real omp-session daemons", () => {
 		expect(sessionBefore).toBeTruthy();
 		// The prompt is the on-demand wake trigger: the fan-out respawns the
 		// asleep daemon with --resume and awaits ready BEFORE the turn is sent;
-		// the turn itself then fails fast ("No model selected"). The
+		// the turn itself then errors (fanout waitMs timeout). The
 		// session log is written lazily on a completed turn, so it may never
 		// exist on disk here — the resume proof is the path identity below.
-		const result = await ctlPrompt(d4.daemonId, 30_000);
+		const result = await ctlPrompt(d4.daemonId, 5_000);
 		expect(result.ok).toBe(false);
 		expect(result.error).toBeTruthy();
 		const after = (await getEntry(d4.daemonId))!;
@@ -428,7 +439,7 @@ describe("fleet integration — real omp-session daemons", () => {
 		// Disk evidence: state.json keeps the same lastSessionFile through the respawn.
 		const disk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
 		expect(disk.entries.find((e) => e.daemonId === d4.daemonId)?.lastSessionFile).toBe(sessionBefore);
-		// Accounting: exactly 5 prompts issued across the suite (all fast-error).
+		// Accounting: exactly 5 prompts issued across the suite (all error-out).
 		expect(promptCount).toBe(5);
 	}, 90_000);
 });

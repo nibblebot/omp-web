@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	dispatchInput,
 	exportDispatch,
@@ -271,6 +271,21 @@ beforeEach(() => {
 		subagents: new Map(),
 		items: [],
 	});
+});
+
+// The transport stubs are global and would otherwise leak into sibling test
+// files run in the same worker (a bun test worker can run several files);
+// restore the originals once this file's own tests are done.
+const originalLocation = globalThis.location;
+const originalWindow = globalThis.window;
+const originalEventSource = globalThis.EventSource;
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+	globalThis.location = originalLocation;
+	globalThis.window = originalWindow;
+	globalThis.EventSource = originalEventSource;
+	globalThis.fetch = originalFetch;
 });
 
 describe("bang-shell/python stream lifecycle (#29)", () => {

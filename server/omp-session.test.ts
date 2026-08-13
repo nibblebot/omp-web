@@ -513,7 +513,10 @@ test("an attached /events stream suppresses idle auto-exit", async () => {
 }, 30_000);
 
 test("prompt-family calls fail with not_ready until the readiness gate clears", async () => {
-	const proc = await spawnSession({ env: { OMP_SESSION_TEST_READY_DELAY_MS: "5000" } });
+	// The delay must outlast the stream open + prompt + not_ready round-trip
+	// (sub-second on any machine), then clear so the test sees the gate open.
+	// 2000ms keeps that ordering with margin; 5000 only padded the suite.
+	const proc = await spawnSession({ env: { OMP_SESSION_TEST_READY_DELAY_MS: "2000" } });
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const base = `http://127.0.0.1:${port}`;

@@ -555,7 +555,7 @@ describe("fleet edge", () => {
 				roots: [rootsDir],
 				templates: {
 					local: {
-						command: `printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}' && while :; do sleep 1; done`,
+						command: `printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}' && while :; do sleep 0.05; done`,
 					},
 				},
 				defaultTemplate: "local",
