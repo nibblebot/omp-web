@@ -1,16 +1,19 @@
-import { createEffect, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
+import { createEffect, createSignal, For, Match, Show, Switch, createMemo, type Component } from "solid-js";
 import { renderMarkdown, splitForStreaming } from "../markdown";
-import { call, pushNotice, setState, state, type Block } from "../state";
+import { call, pushNotice, setState, state, type Block, type ChatItem, type ToolItem } from "../state";
 import type { ImageArg } from "../../shared/protocol";
 import { imageDataUrl } from "../images";
 import { FullImageOverlay } from "./tools/ImageScan";
 import { Markdown } from "./Markdown";
 import { CopyButton } from "./CopyButton";
-import { ToolCard, ToolStripCard } from "./ToolCard";
+import { ToolCard, ToolStripCard, CycleRow, pruneCycleOpen } from "./ToolCard";
+import { groupChatRows, type Cycle } from "../tool-runs";
 import { buildUsageRow, formatUsageRow } from "../usage";
 
 // Elements that cannot carry text children; append the fresh span to their parent instead.
 const VOID_TAGS: Record<string, true> = { BR: true, HR: true, IMG: true, INPUT: true, WBR: true };
+
+const TOOL_CARD_VIEWS = ["expanded", "collapsed", "consolidated"] as const;
 
 // Appends the freshly-revealed text as one span at the end of the deepest last
 // element, so it inherits the surrounding inline context (<p>, <code>, <strong>…).
@@ -69,6 +72,51 @@ const LiveBlock: Component<{ block: Block }> = props => {
 	);
 };
 
+/** Assistant message card. With `thinking` false, thinking blocks are omitted
+ *  (consumed by a consolidated cycle row); a card with no text blocks then
+ *  renders nothing. */
+const AssistantCard: Component<{ assistant: Extract<ChatItem, { kind: "assistant" }>; thinking: boolean }> = props => {
+	const blocks = () => (props.thinking ? props.assistant.blocks : props.assistant.blocks.filter(b => b.kind !== "thinking"));
+	const text = () => blocks().filter(b => b.kind === "text");
+	if (!props.thinking && text().length === 0) return null;
+	return (
+		<div class="msg-assistant">
+			<div class="msg-toolbar">
+				<CopyButton
+					class="msg-copy-btn"
+					title="Copy message markdown"
+					text={() => {
+						const visible = blocks().filter(b => b.kind !== "thinking");
+						return (visible.length > 0 ? visible : props.assistant.blocks).map(b => b.text).join("\n\n");
+					}}
+				/>
+			</div>
+			<For each={blocks()}>
+				{block =>
+					block.kind === "thinking" ? (
+						<details class="thinking-block">
+							<summary>thinking</summary>
+							<Markdown src={block.text} />
+						</details>
+					) : (
+						<Markdown src={block.text} />
+					)
+				}
+			</For>
+			<Show when={props.assistant.usage}>
+				{u => {
+					const row = buildUsageRow(u(), props.assistant.ttft, props.assistant.duration);
+					return row ? (
+						<div class="usage-row" title="per-turn usage">
+							{formatUsageRow(row)}
+						</div>
+					) : null;
+				}}
+			</Show>
+		</div>
+	);
+};
+
 export const MessageList: Component = () => {
 	let container!: HTMLDivElement;
 	const [zoomed, setZoomed] = createSignal<ImageArg | null>(null);
@@ -79,18 +127,44 @@ export const MessageList: Component = () => {
 		const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
 		if (nearBottom) container.scrollTop = container.scrollHeight;
 	});
+	// id → cycle, for the consolidated view. Read only from the tool/assistant
+	// branches while consolidated, so expanded/collapsed rows never re-render on appends.
+	const cycleOf = createMemo(() => {
+		const m = new Map<number, Cycle>();
+		const keys: number[] = [];
+		for (const row of groupChatRows(state.items)) {
+			if (row.kind === "cycle") {
+				keys.push(row.key);
+				for (const tool of row.tools) m.set(tool.id, row);
+				for (const id of row.assistantIds) m.set(id, row);
+			}
+		}
+		// Drop expanded-cycle keys that no longer exist (session switches reset ids).
+		pruneCycleOpen(new Set(keys));
+		return m;
+	});
+	// The cycle an item leads (its first member), or null — consolidated view
+	// renders one row per cycle on the first member's slot.
+	const leadCycle = (item: ToolItem) => {
+		const cycle = cycleOf().get(item.id);
+		return cycle && cycle.key === item.id ? cycle : null;
+	};
 	return (
 		<>
-			<Show when={state.toolCardsCollapsed || state.items.some(it => it.kind === "tool")}>
+			<Show when={state.toolCardsView !== "expanded" || state.items.some(it => it.kind === "tool")}>
 				<div class="stream-toolbar">
-					<button
-						class="stream-cards-toggle"
-						aria-pressed={state.toolCardsCollapsed}
-						title={state.toolCardsCollapsed ? "Expand tool cards" : "Collapse tool cards"}
-						onClick={() => setState("toolCardsCollapsed", v => !v)}
-					>
-						{state.toolCardsCollapsed ? "expand cards" : "collapse cards"}
-					</button>
+					<For each={TOOL_CARD_VIEWS}>
+						{mode => (
+							<button
+								class="stream-cards-toggle"
+								aria-pressed={state.toolCardsView === mode}
+								title={`Show tool cards: ${mode}`}
+								onClick={() => setState("toolCardsView", mode)}
+							>
+								{mode}
+							</button>
+						)}
+					</For>
 				</div>
 			</Show>
 			<div class="message-list" ref={container}>
@@ -156,50 +230,36 @@ export const MessageList: Component = () => {
 						</Match>
 						<Match when={item.kind === "assistant" && item}>
 							{assistant => (
-								<div class="msg-assistant">
-									<div class="msg-toolbar">
-										<CopyButton
-											class="msg-copy-btn"
-											title="Copy message markdown"
-											text={() => {
-												const blocks = assistant().blocks;
-												const visible = blocks.filter(b => b.kind !== "thinking");
-												return (visible.length > 0 ? visible : blocks).map(b => b.text).join("\n\n");
-											}}
-										/>
-									</div>
-									<For each={assistant().blocks}>
-											{block =>
-												block.kind === "thinking" ? (
-													<details class="thinking-block">
-														<summary>thinking</summary>
-														<Markdown src={block.text} />
-													</details>
-												) : (
-													<Markdown src={block.text} />
-												)
-											}
-										</For>
-										<Show when={assistant().usage}>
-											{u => {
-												const row = buildUsageRow(u(), assistant().ttft, assistant().duration);
-												return row ? (
-													<div class="usage-row" title="per-turn usage">
-														{formatUsageRow(row)}
-													</div>
-												) : null;
-											}}
-										</Show>
-									</div>
+								<Show
+									when={state.toolCardsView === "consolidated"}
+									fallback={<AssistantCard assistant={assistant()} thinking />}
+								>
+									{/* Consolidated: thinking blocks join the cycle row; the text stays a message. */}
+									<Show when={cycleOf().get(assistant().id)} keyed fallback={<AssistantCard assistant={assistant()} thinking />}>
+										{cycle => (
+											<>
+												{cycle.key === assistant().id && <CycleRow cycle={cycle} />}
+												<AssistantCard assistant={assistant()} thinking={false} />
+											</>
+										)}
+									</Show>
+								</Show>
 							)}
 						</Match>
 						<Match when={item.kind === "tool" && item}>
 							{tool => (
 								<Show
-									when={!state.toolCardsCollapsed}
-									fallback={<ToolStripCard item={tool()} />}
+									when={state.toolCardsView === "consolidated"}
+									fallback={
+										<Show when={state.toolCardsView === "expanded"} fallback={<ToolStripCard item={tool()} />}>
+											<ToolCard item={tool()} />
+										</Show>
+									}
 								>
-									<ToolCard item={tool()} />
+									{/* Consolidated: one row per cycle on its first member; later members render nothing. */}
+									<Show when={leadCycle(tool())} keyed fallback={null}>
+										{cycle => <CycleRow cycle={cycle} />}
+									</Show>
 								</Show>
 							)}
 						</Match>

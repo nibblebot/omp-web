@@ -11,6 +11,7 @@ import type { UsageLike } from "./usage";
 
 export type Block = { kind: "text" | "thinking"; text: string };
 export type ToolStatus = "running" | "done" | "error";
+export type ToolCardsView = "expanded" | "collapsed" | "consolidated";
 export type BashItem = {
 	kind: "bash";
 	id: number;
@@ -164,7 +165,7 @@ export const [state, setState] = createStore({
 	connected: false,
 	modal: null as ModalName | null,
 	toolsExpanded: false,
-	toolCardsCollapsed: false,
+	toolCardsView: "expanded" as ToolCardsView,
 	// Daemon broker roster (hub/launch long-running processes); project-scoped,
 	// so resetSessionView must NOT clear it.
 	daemons: new Map<string, DaemonInfo>(),
