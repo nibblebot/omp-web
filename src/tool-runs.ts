@@ -1,76 +1,68 @@
 import type { Block, ChatItem, ToolItem } from "./state";
 
-/** One member of a cycle in original stream order: a tool call or a thinking block. */
-export type CycleMember =
-	| { kind: "tool"; item: ToolItem }
-	| { kind: "thinking"; block: Block };
-
-/** One turn's tool calls plus the thinking blocks of its assistant messages;
- *  `key` is the id of the cycle's first member. */
-export interface Cycle {
-	key: number;
-	tools: ToolItem[];
-	thinking: Block[];
-	assistantIds: number[];
-	/** All members in original stream order (tools and thinking interleaved). */
-	members: CycleMember[];
+/** One consolidated run: a maximal contiguous sequence of assistant messages
+ *  and tool calls, collapsed into a single expandable transcript row. */
+export interface Run {
+	key: number;          // id of the run's first member
+	items: Array<Extract<ChatItem, { kind: "assistant" }> | ToolItem>; // members in original stream order (assistant + tool only)
+	tools: ToolItem[];    // tool calls, stream order
+	thinking: Block[];    // thinking blocks only (text blocks excluded), stream order
+	turnCount: number;    // assistant messages (== model requests)
+	requestCount: number; // tool calls (tool requests)
+	errorCount: number;   // tool calls with status "error"
+	durationMs: number;   // Σ assistant.duration (ms); absent/NaN/negative → 0
+	running: boolean;     // any tool still "running"
 }
 
-/** One grouped chat row: a tool/thinking cycle or a single standalone item. */
-export type ChatRow =
-	| ({ kind: "cycle" } & Cycle)
-	| { kind: "item"; key: number; item: ChatItem };
-
 /**
- * Walk items in stream order, coalescing consecutive tool items and
- * thinking-bearing assistant items into one cycle row. A pending group with
- * no tools (thinking-only assistants) flushes as individual item rows; any
- * other item (user, bash, compaction, notice, or a thinking-less assistant)
- * breaks the cycle and becomes its own item row. Empty input yields no rows.
+ * Walk items in stream order, coalescing consecutive assistant and tool items
+ * into one run. Any other item (user, bash, compaction, notice) breaks the
+ * span and never joins a run. Empty input yields no runs.
  */
-export function groupChatRows(items: ChatItem[]): ChatRow[] {
-	const rows: ChatRow[] = [];
-	let pending: ChatItem[] = [];
+export function groupAssistantRuns(items: ChatItem[]): Run[] {
+	const runs: Run[] = [];
+	let pending: Array<Extract<ChatItem, { kind: "assistant" }> | ToolItem> = [];
 	let tools: ToolItem[] = [];
 	let thinking: Block[] = [];
-	let assistantIds: number[] = [];
-	let members: CycleMember[] = [];
+	let turnCount = 0;
+	let requestCount = 0;
+	let errorCount = 0;
+	let durationMs = 0;
+	let running = false;
 	let key = 0;
 	const flushPending = () => {
 		if (pending.length === 0) return;
-		if (tools.length > 0) {
-			rows.push({ kind: "cycle", key, tools, thinking, assistantIds, members });
-		} else {
-			for (const item of pending) rows.push({ kind: "item", key: item.id, item });
-		}
+		runs.push({ key, items: pending, tools, thinking, turnCount, requestCount, errorCount, durationMs, running });
 		pending = [];
 		tools = [];
 		thinking = [];
-		assistantIds = [];
-		members = [];
+		turnCount = 0;
+		requestCount = 0;
+		errorCount = 0;
+		durationMs = 0;
+		running = false;
 	};
 	for (const item of items) {
-		const joins = item.kind === "tool" || (item.kind === "assistant" && item.blocks.some(b => b.kind === "thinking"));
-		if (!joins) {
+		if (item.kind !== "assistant" && item.kind !== "tool") {
 			flushPending();
-			rows.push({ kind: "item", key: item.id, item });
 			continue;
 		}
 		if (pending.length === 0) key = item.id;
 		pending.push(item);
 		if (item.kind === "tool") {
 			tools.push(item);
-			members.push({ kind: "tool", item });
+			requestCount++;
+			if (item.status === "error") errorCount++;
+			if (item.status === "running") running = true;
 		} else if (item.kind === "assistant") {
-			assistantIds.push(item.id);
+			turnCount++;
+			const duration = item.duration;
+			if (typeof duration === "number" && Number.isFinite(duration) && duration >= 0) durationMs += duration;
 			for (const b of item.blocks) {
-				if (b.kind === "thinking") {
-					thinking.push(b);
-					members.push({ kind: "thinking", block: b });
-				}
+				if (b.kind === "thinking") thinking.push(b);
 			}
 		}
 	}
 	flushPending();
-	return rows;
+	return runs;
 }
