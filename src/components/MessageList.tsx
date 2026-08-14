@@ -1,13 +1,12 @@
 import { createEffect, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
 import { renderMarkdown, splitForStreaming } from "../markdown";
-import { call, state, type Block } from "../state";
+import { call, pushNotice, setState, state, type Block } from "../state";
 import type { ImageArg } from "../../shared/protocol";
 import { imageDataUrl } from "../images";
 import { FullImageOverlay } from "./tools/ImageScan";
 import { Markdown } from "./Markdown";
 import { CopyButton } from "./CopyButton";
-import { pushNotice, setState } from "../state";
-import { ToolCard } from "./ToolCard";
+import { ToolCard, ToolStripCard } from "./ToolCard";
 import { buildUsageRow, formatUsageRow } from "../usage";
 
 // Elements that cannot carry text children; append the fresh span to their parent instead.
@@ -81,7 +80,20 @@ export const MessageList: Component = () => {
 		if (nearBottom) container.scrollTop = container.scrollHeight;
 	});
 	return (
-		<div class="message-list" ref={container}>
+		<>
+			<Show when={state.toolCardsCollapsed || state.items.some(it => it.kind === "tool")}>
+				<div class="stream-toolbar">
+					<button
+						class="stream-cards-toggle"
+						aria-pressed={state.toolCardsCollapsed}
+						title={state.toolCardsCollapsed ? "Expand tool cards" : "Collapse tool cards"}
+						onClick={() => setState("toolCardsCollapsed", v => !v)}
+					>
+						{state.toolCardsCollapsed ? "expand cards" : "collapse cards"}
+					</button>
+				</div>
+			</Show>
+			<div class="message-list" ref={container}>
 			<For each={state.items}>
 				{item => (
 					<Switch>
@@ -181,7 +193,16 @@ export const MessageList: Component = () => {
 									</div>
 							)}
 						</Match>
-						<Match when={item.kind === "tool" && item}>{tool => <ToolCard item={tool()} />}</Match>
+						<Match when={item.kind === "tool" && item}>
+							{tool => (
+								<Show
+									when={!state.toolCardsCollapsed}
+									fallback={<ToolStripCard item={tool()} />}
+								>
+									<ToolCard item={tool()} />
+								</Show>
+							)}
+						</Match>
 						<Match when={item.kind === "bash" && item}>
 						{bash => (
 							<div class="bash-card" classList={{ dimmed: bash().dimmed }}>
@@ -258,6 +279,7 @@ export const MessageList: Component = () => {
 				</div>
 			</Show>
 			<Show when={zoomed()}>{img => <FullImageOverlay image={img()} onClose={() => setZoomed(null)} />}</Show>
-		</div>
+			</div>
+		</>
 	);
 };

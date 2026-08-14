@@ -164,6 +164,7 @@ export const [state, setState] = createStore({
 	connected: false,
 	modal: null as ModalName | null,
 	toolsExpanded: false,
+	toolCardsCollapsed: false,
 	// Daemon broker roster (hub/launch long-running processes); project-scoped,
 	// so resetSessionView must NOT clear it.
 	daemons: new Map<string, DaemonInfo>(),
