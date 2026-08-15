@@ -1,0 +1,958 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-15T03:56:18.540Z",
+  "title": "Design System: omp-fleet",
+  "extensions": {
+    "colorMeta": {
+      "bg": {
+        "role": "neutral",
+        "displayName": "Deep Console",
+        "canonical": "#0f1115",
+        "tonalRamp": [
+          "#090b0f",
+          "#232529",
+          "#404247",
+          "#5f6166",
+          "#808288",
+          "#a2a5ab",
+          "#c6c9cf",
+          "#ebeef5"
+        ]
+      },
+      "bg-deep": {
+        "role": "neutral",
+        "displayName": "Console Well",
+        "canonical": "#0a0d12",
+        "tonalRamp": [
+          "#080b10",
+          "#22252b",
+          "#3e4248",
+          "#5d6168",
+          "#7e838a",
+          "#a1a5ad",
+          "#c5c9d1",
+          "#eaeff7"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Instrument Panel",
+        "canonical": "#151a22",
+        "tonalRamp": [
+          "#070b13",
+          "#20252e",
+          "#3d424c",
+          "#5b626b",
+          "#7c838d",
+          "#9fa5b0",
+          "#c3cad5",
+          "#e8effb"
+        ]
+      },
+      "panel-2": {
+        "role": "neutral",
+        "displayName": "Panel Raised",
+        "canonical": "#1a2029",
+        "tonalRamp": [
+          "#060b13",
+          "#1f252f",
+          "#3c424d",
+          "#5b626d",
+          "#7b838e",
+          "#9ea6b2",
+          "#c2cad6",
+          "#e7effc"
+        ]
+      },
+      "btn": {
+        "role": "neutral",
+        "displayName": "Control Surface",
+        "canonical": "#232a37",
+        "tonalRamp": [
+          "#060b16",
+          "#1e2532",
+          "#3b4250",
+          "#596270",
+          "#7a8392",
+          "#9ca5b6",
+          "#c0cadb",
+          "#e5efff"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#262b36",
+        "tonalRamp": [
+          "#070b14",
+          "#202530",
+          "#3d424e",
+          "#5b616e",
+          "#7c8290",
+          "#9fa5b3",
+          "#c3c9d8",
+          "#e8effd"
+        ]
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Hairline Strong",
+        "canonical": "#333c4d",
+        "tonalRamp": [
+          "#050b19",
+          "#1d2535",
+          "#394253",
+          "#586274",
+          "#788396",
+          "#9ba5ba",
+          "#becadf",
+          "#e3efff"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Readout White",
+        "canonical": "#d7dae0",
+        "tonalRamp": [
+          "#090b0f",
+          "#232529",
+          "#404247",
+          "#5f6166",
+          "#808288",
+          "#a2a5ab",
+          "#c6c9cf",
+          "#ebeef5"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Readout",
+        "canonical": "#8b93a1",
+        "tonalRamp": [
+          "#060b15",
+          "#1f2530",
+          "#3b424e",
+          "#5a626f",
+          "#7b8390",
+          "#9da5b4",
+          "#c1cad8",
+          "#e6effe"
+        ]
+      },
+      "muted-2": {
+        "role": "neutral",
+        "displayName": "Faint Readout",
+        "canonical": "#7f8896",
+        "tonalRamp": [
+          "#060b15",
+          "#1e2531",
+          "#3b424f",
+          "#59626f",
+          "#7a8391",
+          "#9ca6b4",
+          "#c0cad9",
+          "#e5efff"
+        ]
+      },
+      "muted-3": {
+        "role": "neutral",
+        "displayName": "Bright Muted",
+        "canonical": "#aab2c0",
+        "tonalRamp": [
+          "#060b14",
+          "#1f2530",
+          "#3c424e",
+          "#5a626e",
+          "#7b8390",
+          "#9ea5b3",
+          "#c1cad8",
+          "#e6effe"
+        ]
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "Hover Wash",
+        "canonical": "#232f42",
+        "tonalRamp": [
+          "#030b1b",
+          "#1a2538",
+          "#364357",
+          "#546277",
+          "#75839a",
+          "#97a6be",
+          "#bbcae3",
+          "#e0f0ff"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Signal Blue",
+        "canonical": "#7cc7ff",
+        "tonalRamp": [
+          "#000634",
+          "#002754",
+          "#004676",
+          "#14679a",
+          "#3e89be",
+          "#62ade4",
+          "#87d2ff",
+          "#acf8ff"
+        ]
+      },
+      "accent-dim": {
+        "role": "primary",
+        "displayName": "Signal Wash",
+        "canonical": "#1f3a5f",
+        "tonalRamp": [
+          "#000829",
+          "#0a2448",
+          "#274368",
+          "#46628a",
+          "#6684ae",
+          "#88a7d3",
+          "#abccf9",
+          "#cff1ff"
+        ]
+      },
+      "accent-border": {
+        "role": "primary",
+        "displayName": "Signal Edge",
+        "canonical": "#2d527f",
+        "tonalRamp": [
+          "#00062e",
+          "#00244d",
+          "#1e436f",
+          "#3d6391",
+          "#5e85b5",
+          "#80a8db",
+          "#a3cdff",
+          "#c7f2ff"
+        ]
+      },
+      "success": {
+        "role": "status",
+        "displayName": "Go Green",
+        "canonical": "#4ade80",
+        "tonalRamp": [
+          "#001900",
+          "#003800",
+          "#005900",
+          "#007b21",
+          "#009f45",
+          "#23c468",
+          "#58ea8b",
+          "#83ffaf"
+        ]
+      },
+      "success-bg": {
+        "role": "status",
+        "displayName": "Go Green Ground",
+        "canonical": "#14301c",
+        "tonalRamp": [
+          "#001102",
+          "#102c18",
+          "#2d4a34",
+          "#4c6a53",
+          "#6d8b73",
+          "#8faf95",
+          "#b2d3b9",
+          "#d7f9de"
+        ]
+      },
+      "success-border": {
+        "role": "status",
+        "displayName": "Go Green Edge",
+        "canonical": "#1f5c31",
+        "tonalRamp": [
+          "#001400",
+          "#003007",
+          "#0f4f25",
+          "#347044",
+          "#569264",
+          "#79b686",
+          "#9ddba9",
+          "#c1ffcd"
+        ]
+      },
+      "warning": {
+        "role": "status",
+        "displayName": "Standby Amber",
+        "canonical": "#facc15",
+        "tonalRamp": [
+          "#230000",
+          "#421700",
+          "#633800",
+          "#855900",
+          "#a87b00",
+          "#cc9f00",
+          "#f2c400",
+          "#ffea4a"
+        ]
+      },
+      "warning-bg": {
+        "role": "status",
+        "displayName": "Standby Amber Ground",
+        "canonical": "#2e2712",
+        "tonalRamp": [
+          "#110a00",
+          "#2b240f",
+          "#49422c",
+          "#69614a",
+          "#8a826a",
+          "#ada58c",
+          "#d2c9af",
+          "#f7eed4"
+        ]
+      },
+      "warning-border": {
+        "role": "status",
+        "displayName": "Standby Amber Edge",
+        "canonical": "#5c4a12",
+        "tonalRamp": [
+          "#170700",
+          "#332200",
+          "#514003",
+          "#725f2a",
+          "#94814b",
+          "#b7a36d",
+          "#dcc890",
+          "#ffedb5"
+        ]
+      },
+      "error": {
+        "role": "status",
+        "displayName": "Alarm Red",
+        "canonical": "#f87171",
+        "tonalRamp": [
+          "#380000",
+          "#5e0000",
+          "#840012",
+          "#ac2933",
+          "#d35053",
+          "#fc7474",
+          "#ff9997",
+          "#ffbfbb"
+        ]
+      },
+      "error-bg": {
+        "role": "status",
+        "displayName": "Alarm Red Ground",
+        "canonical": "#3a1d22",
+        "tonalRamp": [
+          "#1a0307",
+          "#381b20",
+          "#57383d",
+          "#79575b",
+          "#9c777c",
+          "#c09a9f",
+          "#e5bdc3",
+          "#ffe3e8"
+        ]
+      },
+      "error-border": {
+        "role": "status",
+        "displayName": "Alarm Red Edge",
+        "canonical": "#7f3440",
+        "tonalRamp": [
+          "#290002",
+          "#4b0116",
+          "#6e2532",
+          "#924550",
+          "#b86771",
+          "#de8993",
+          "#ffadb6",
+          "#ffd2db"
+        ]
+      },
+      "error-text": {
+        "role": "status",
+        "displayName": "Alarm Red Text",
+        "canonical": "#f0a8b3",
+        "tonalRamp": [
+          "#240004",
+          "#450c1c",
+          "#672c38",
+          "#8a4b57",
+          "#af6c77",
+          "#d48f9a",
+          "#fbb2bd",
+          "#ffd7e2"
+        ]
+      },
+      "stop-bg": {
+        "role": "status",
+        "displayName": "Stop Fill",
+        "canonical": "#4a2028",
+        "tonalRamp": [
+          "#1f0006",
+          "#3e151e",
+          "#5f333a",
+          "#815259",
+          "#a5727a",
+          "#ca959c",
+          "#f0b8c0",
+          "#ffdde5"
+        ]
+      },
+      "purple": {
+        "role": "tertiary",
+        "displayName": "Auxiliary Violet",
+        "canonical": "#c084fc",
+        "tonalRamp": [
+          "#1f0044",
+          "#3b0066",
+          "#59148a",
+          "#7a3daf",
+          "#9c60d5",
+          "#c084fc",
+          "#e5a8ff",
+          "#ffceff"
+        ]
+      },
+      "diff-add-bg": {
+        "role": "status",
+        "displayName": "Diff Add Wash",
+        "canonical": "rgba(74, 222, 128, 0.09)"
+      },
+      "diff-add-text": {
+        "role": "status",
+        "displayName": "Diff Add Text",
+        "canonical": "#a7f3c7",
+        "tonalRamp": [
+          "#001500",
+          "#003211",
+          "#00512e",
+          "#24724c",
+          "#4a946c",
+          "#6db88e",
+          "#91ddb2",
+          "#b6ffd6"
+        ]
+      },
+      "diff-del-bg": {
+        "role": "status",
+        "displayName": "Diff Delete Wash",
+        "canonical": "rgba(248, 113, 113, 0.09)"
+      },
+      "diff-del-text": {
+        "role": "status",
+        "displayName": "Diff Delete Text",
+        "canonical": "#f3b3b3",
+        "tonalRamp": [
+          "#220001",
+          "#421216",
+          "#643032",
+          "#874f50",
+          "#ab7071",
+          "#d09293",
+          "#f6b6b6",
+          "#ffdbdb"
+        ]
+      },
+      "backdrop": {
+        "role": "neutral",
+        "displayName": "Backdrop Scrim",
+        "canonical": "rgba(4, 6, 10, 0.65)"
+      },
+      "breakdown-1": {
+        "role": "dataviz",
+        "displayName": "Breakdown Blue",
+        "canonical": "#6fa8dc",
+        "tonalRamp": [
+          "#000731",
+          "#002651",
+          "#044572",
+          "#2d6595",
+          "#4f87b9",
+          "#72abdf",
+          "#95cfff",
+          "#baf5ff"
+        ]
+      },
+      "breakdown-2": {
+        "role": "dataviz",
+        "displayName": "Breakdown Teal",
+        "canonical": "#57b8c2",
+        "tonalRamp": [
+          "#00131d",
+          "#00303a",
+          "#004f59",
+          "#007079",
+          "#2b929c",
+          "#55b6c0",
+          "#7bdbe5",
+          "#a1ffff"
+        ]
+      },
+      "breakdown-3": {
+        "role": "dataviz",
+        "displayName": "Breakdown Lavender",
+        "canonical": "#9a8fd8",
+        "tonalRamp": [
+          "#100033",
+          "#271554",
+          "#433576",
+          "#615599",
+          "#8276bd",
+          "#a499e3",
+          "#c8bdff",
+          "#ede3ff"
+        ]
+      },
+      "breakdown-4": {
+        "role": "dataviz",
+        "displayName": "Breakdown Clay",
+        "canonical": "#d88a6f",
+        "tonalRamp": [
+          "#290000",
+          "#4b0700",
+          "#6e2a10",
+          "#924a31",
+          "#b76c52",
+          "#dd8e73",
+          "#ffb296",
+          "#ffd7ba"
+        ]
+      },
+      "breakdown-5": {
+        "role": "dataviz",
+        "displayName": "Breakdown Ochre",
+        "canonical": "#cfa05a",
+        "tonalRamp": [
+          "#210000",
+          "#401900",
+          "#613700",
+          "#835700",
+          "#a67931",
+          "#cb9c56",
+          "#f0c07a",
+          "#ffe59e"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "body": {
+        "displayName": "Body",
+        "purpose": "Chat prose, markdown, settings copy. Rides the user-set root font size (12-18px)."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Machine truth: commands, diffs, paths, daemon metadata, the sidebar roster (0.75rem/1.4 there)."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Modal titles, sidebar section titles, row titles. Hierarchy by weight and color, not size."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase tracked section headers, queue kinds, group headers, usage statuses."
+      }
+    },
+    "shadows": [
+      {
+        "name": "overlay-lift",
+        "value": "0 8px 24px rgb(0 0 0 / 0.35)",
+        "purpose": "Modals, lightbox image, mobile sidebar sheet. The only structural shadow."
+      },
+      {
+        "name": "card-kiss",
+        "value": "0 1px 2px rgb(0 0 0 / 0.25)",
+        "purpose": "Exactly one resting card (the pet). A quirk, not a precedent."
+      },
+      {
+        "name": "sprite",
+        "value": "0 2px 6px rgb(0 0 0 / 0.45)",
+        "purpose": "drop-shadow on canvas sprites only."
+      },
+      {
+        "name": "glow-success",
+        "value": "0 0 6px var(--success)",
+        "purpose": "Streaming/ready status dots. Glow is a lamp, not elevation."
+      },
+      {
+        "name": "glow-warning",
+        "value": "0 0 6px var(--warning)",
+        "purpose": "Reconnecting daemon dots."
+      },
+      {
+        "name": "glow-error",
+        "value": "0 0 6px var(--error)",
+        "purpose": "Errored daemon dots."
+      },
+      {
+        "name": "glow-accent",
+        "value": "0 0 6px var(--accent)",
+        "purpose": "Transitional (spawning/connecting/session/resolving) daemon dots."
+      },
+      {
+        "name": "asleep-ring",
+        "value": "inset 0 0 0 1px var(--border-strong)",
+        "purpose": "Asleep daemon dot: fakes a border while staying 8px round."
+      }
+    ],
+    "motion": [
+      {
+        "name": "dur-fast",
+        "value": "140ms",
+        "purpose": "The single transition duration; pairs with ease-out for bg/border/color state changes."
+      },
+      {
+        "name": "dur-base",
+        "value": "200ms",
+        "purpose": "Defined but currently unused; reserve for larger surface transitions."
+      },
+      {
+        "name": "ease-out",
+        "value": "ease-out",
+        "purpose": "Default easing for all state transitions."
+      },
+      {
+        "name": "ease-in-out",
+        "value": "ease-in-out",
+        "purpose": "Easing for looping status animations (pulses, pet-bob)."
+      },
+      {
+        "name": "fresh-in",
+        "value": "150ms ease-out",
+        "purpose": "Newly streamed markdown blocks fading in."
+      },
+      {
+        "name": "daemon-dot-pulse",
+        "value": "1.2s ease-in-out infinite",
+        "purpose": "Transitional daemon status dots."
+      },
+      {
+        "name": "run-row-pulse",
+        "value": "1s ease-in-out infinite",
+        "purpose": "Active run row dot."
+      },
+      {
+        "name": "btw-blink",
+        "value": "1s steps(2,start) infinite",
+        "purpose": "Cursor blink."
+      },
+      {
+        "name": "active-strip-in",
+        "value": "180ms ease-out",
+        "purpose": "Active subagents/daemons strips entering."
+      },
+      {
+        "name": "pet-bob",
+        "value": "0.6s ease-in-out infinite",
+        "purpose": "Pet canvas bobbing while streaming."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "mobile",
+        "value": "720px",
+        "purpose": "max-width: sidebar becomes overlay sheet; sheets go full-viewport; settings nav rail swaps to tabs (tabs show at min-width 721px inverse)."
+      }
+    ],
+    "themes": {
+      "light": {
+        "--bg": "#f5f6f8",
+        "--bg-deep": "#eceef1",
+        "--panel": "#ffffff",
+        "--panel-2": "#f0f2f5",
+        "--btn": "#e4e7eb",
+        "--border": "#c9d0d8",
+        "--border-strong": "#aeb7c3",
+        "--text": "#1c2128",
+        "--hover": "#dce4f0",
+        "--accent-dim": "#cfe0f5",
+        "--muted": "#5a6472",
+        "--muted-2": "#4b5563",
+        "--muted-3": "#3d4756",
+        "--accent": "#1d4ed8",
+        "--success": "#15803d",
+        "--warning": "#92400e",
+        "--error": "#dc2626",
+        "--purple": "#9333ea",
+        "--success-bg": "#dcfce7",
+        "--success-border": "#86efac",
+        "--warning-bg": "#fef3c7",
+        "--warning-border": "#fcd34d",
+        "--error-bg": "#fee2e2",
+        "--error-border": "#fca5a5",
+        "--error-text": "#991b1b",
+        "--stop-bg": "#fee2e2",
+        "--diff-add-bg": "rgba(22, 163, 74, 0.1)",
+        "--diff-add-text": "#15803d",
+        "--diff-del-bg": "rgba(220, 38, 38, 0.08)",
+        "--diff-del-text": "#b91c1c",
+        "--accent-border": "#9db8e8",
+        "--backdrop": "rgba(15, 20, 30, 0.35)"
+      },
+      "catppuccin-mocha": {
+        "--bg": "#1e1e2e",
+        "--bg-deep": "#11111b",
+        "--panel": "#313244",
+        "--panel-2": "#181825",
+        "--btn": "#45475a",
+        "--border": "#45475a",
+        "--border-strong": "#585b70",
+        "--text": "#cdd6f4",
+        "--hover": "#45475a",
+        "--accent-dim": "rgba(137, 180, 250, 0.22)",
+        "--muted": "#a6adc8",
+        "--muted-2": "#979db6",
+        "--muted-3": "#bac2de",
+        "--accent": "#89b4fa",
+        "--accent-border": "rgba(137, 180, 250, 0.45)",
+        "--success": "#a6e3a1",
+        "--warning": "#f9e2af",
+        "--error": "#f38ba8",
+        "--purple": "#cba6f7",
+        "--success-bg": "rgba(166, 227, 161, 0.12)",
+        "--success-border": "rgba(166, 227, 161, 0.35)",
+        "--warning-bg": "rgba(249, 226, 175, 0.1)",
+        "--warning-border": "rgba(249, 226, 175, 0.35)",
+        "--error-bg": "rgba(243, 139, 168, 0.12)",
+        "--error-border": "rgba(243, 139, 168, 0.4)",
+        "--error-text": "#f6c3d2",
+        "--stop-bg": "rgba(243, 139, 168, 0.12)",
+        "--diff-add-bg": "rgba(166, 227, 161, 0.1)",
+        "--diff-add-text": "#a6e3a1",
+        "--diff-del-bg": "rgba(243, 139, 168, 0.1)",
+        "--diff-del-text": "#f38ba8",
+        "--backdrop": "rgba(17, 17, 27, 0.65)"
+      },
+      "catppuccin-latte": {
+        "--bg": "#eff1f5",
+        "--bg-deep": "#dce0e8",
+        "--panel": "#ffffff",
+        "--panel-2": "#e6e9ef",
+        "--btn": "#bcc0cc",
+        "--border": "#ccd0da",
+        "--border-strong": "#9ca0b0",
+        "--text": "#4c4f69",
+        "--hover": "#ccd0da",
+        "--accent-dim": "rgba(30, 102, 245, 0.15)",
+        "--muted": "#62657b",
+        "--muted-2": "#585b6c",
+        "--muted-3": "#6c6f85",
+        "--accent": "#1e66f5",
+        "--accent-border": "rgba(30, 102, 245, 0.4)",
+        "--success": "#256f1a",
+        "--warning": "#92400e",
+        "--error": "#d20f39",
+        "--purple": "#8839ef",
+        "--success-bg": "rgba(64, 160, 43, 0.12)",
+        "--success-border": "rgba(64, 160, 43, 0.35)",
+        "--warning-bg": "rgba(223, 142, 29, 0.12)",
+        "--warning-border": "rgba(223, 142, 29, 0.35)",
+        "--error-bg": "rgba(210, 15, 57, 0.1)",
+        "--error-border": "rgba(210, 15, 57, 0.35)",
+        "--error-text": "#d20f39",
+        "--stop-bg": "rgba(210, 15, 57, 0.1)",
+        "--diff-add-bg": "rgba(64, 160, 43, 0.1)",
+        "--diff-add-text": "#40a02b",
+        "--diff-del-bg": "rgba(210, 15, 57, 0.08)",
+        "--diff-del-text": "#d20f39",
+        "--backdrop": "rgba(76, 79, 105, 0.35)"
+      },
+      "omp-dark": {
+        "--bg": "oklch(13.5% 0.018 295)",
+        "--bg-deep": "oklch(10.5% 0.014 295)",
+        "--panel": "oklch(17.2% 0.022 295)",
+        "--panel-2": "oklch(21% 0.026 295)",
+        "--btn": "oklch(25% 0.03 295)",
+        "--border": "oklch(100% 0 0 / 0.09)",
+        "--border-strong": "oklch(100% 0 0 / 0.16)",
+        "--text": "oklch(97% 0.008 90)",
+        "--hover": "oklch(100% 0 0 / 0.08)",
+        "--accent-dim": "oklch(70% 0.24 340 / 0.22)",
+        "--muted": "oklch(66% 0.02 288)",
+        "--muted-2": "oklch(62% 0.022 290)",
+        "--muted-3": "oklch(82% 0.014 285)",
+        "--accent": "oklch(70% 0.24 340)",
+        "--accent-border": "oklch(70% 0.24 340 / 0.45)",
+        "--success": "oklch(80% 0.17 165)",
+        "--warning": "oklch(85% 0.13 90)",
+        "--error": "oklch(68% 0.2 20)",
+        "--purple": "oklch(72% 0.18 320)",
+        "--success-bg": "oklch(80% 0.17 165 / 0.12)",
+        "--success-border": "oklch(80% 0.17 165 / 0.4)",
+        "--warning-bg": "oklch(85% 0.13 90 / 0.12)",
+        "--warning-border": "oklch(85% 0.13 90 / 0.4)",
+        "--error-bg": "oklch(68% 0.2 20 / 0.14)",
+        "--error-border": "oklch(68% 0.2 20 / 0.45)",
+        "--error-text": "oklch(78% 0.15 20)",
+        "--stop-bg": "oklch(68% 0.2 20 / 0.14)",
+        "--diff-add-bg": "oklch(80% 0.17 165 / 0.12)",
+        "--diff-add-text": "oklch(84% 0.14 165)",
+        "--diff-del-bg": "oklch(68% 0.2 20 / 0.12)",
+        "--diff-del-text": "oklch(75% 0.16 20)",
+        "--backdrop": "oklch(10% 0.01 295 / 0.65)"
+      },
+      "omp-light": {
+        "--bg": "oklch(94% 0.006 80)",
+        "--bg-deep": "oklch(91% 0.007 80)",
+        "--panel": "oklch(96.5% 0.005 80)",
+        "--panel-2": "oklch(92% 0.008 80)",
+        "--btn": "oklch(89% 0.01 82)",
+        "--border": "oklch(22% 0.025 285 / 0.14)",
+        "--border-strong": "oklch(22% 0.025 285 / 0.24)",
+        "--text": "oklch(22% 0.025 285)",
+        "--hover": "oklch(22% 0.025 285 / 0.08)",
+        "--accent-dim": "oklch(44% 0.18 348 / 0.15)",
+        "--muted": "oklch(47% 0.018 285)",
+        "--muted-2": "oklch(50% 0.02 285)",
+        "--muted-3": "oklch(42% 0.02 285)",
+        "--accent": "oklch(44% 0.18 348)",
+        "--accent-border": "oklch(44% 0.18 348 / 0.4)",
+        "--success": "oklch(48% 0.15 160)",
+        "--warning": "oklch(50% 0.13 80)",
+        "--error": "oklch(52% 0.19 22)",
+        "--purple": "oklch(48% 0.2 320)",
+        "--success-bg": "oklch(55% 0.15 160 / 0.12)",
+        "--success-border": "oklch(55% 0.15 160 / 0.35)",
+        "--warning-bg": "oklch(62% 0.13 80 / 0.14)",
+        "--warning-border": "oklch(62% 0.13 80 / 0.35)",
+        "--error-bg": "oklch(52% 0.19 22 / 0.1)",
+        "--error-border": "oklch(52% 0.19 22 / 0.35)",
+        "--error-text": "oklch(48% 0.17 22)",
+        "--stop-bg": "oklch(52% 0.19 22 / 0.1)",
+        "--diff-add-bg": "oklch(55% 0.15 160 / 0.1)",
+        "--diff-add-text": "oklch(48% 0.13 160)",
+        "--diff-del-bg": "oklch(52% 0.19 22 / 0.08)",
+        "--diff-del-text": "oklch(48% 0.17 22)",
+        "--backdrop": "oklch(22% 0.025 285 / 0.35)"
+      }
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button (Send)",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one primary action per view — send/spawn. Signal Blue fill, console-black text, weight 600.",
+      "html": "<button class=\"ds-btn-primary\">Send</button>",
+      "css": ".ds-btn-primary { background: var(--accent); border: 1px solid var(--accent); color: var(--bg); font-weight: 600; font-size: 0.857rem; padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: background-color 140ms ease-out, border-color 140ms ease-out; } .ds-btn-primary:hover { background: color-mix(in srgb, var(--accent), var(--bg) 12%); border-color: color-mix(in srgb, var(--accent), var(--bg) 12%); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; } .ds-btn-primary:disabled { opacity: 0.5; cursor: default; }"
+    },
+    {
+      "name": "Base Button",
+      "kind": "button",
+      "refersTo": "button-base",
+      "description": "Default control: quiet Control Surface fill that wakes to Hover Wash on hover.",
+      "html": "<button class=\"ds-btn-base\">Branch</button>",
+      "css": ".ds-btn-base { background: var(--btn); border: 1px solid var(--border-strong); color: var(--text); font-size: 0.857rem; padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: background-color 140ms ease-out, border-color 140ms ease-out; } .ds-btn-base:hover { background: var(--hover); } .ds-btn-base:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; } .ds-btn-base:disabled { opacity: 0.5; cursor: default; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Roster/row actions: transparent and muted until hovered; arms red for destructive confirm.",
+      "html": "<button class=\"ds-btn-ghost\">restart</button> <button class=\"ds-btn-ghost ds-armed\">kill?</button>",
+      "css": ".ds-btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 0.75rem; padding: 1px 6px; border-radius: 4px; cursor: pointer; transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out; } .ds-btn-ghost:hover { color: var(--text); border-color: var(--accent); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; } .ds-btn-ghost.ds-armed, .ds-btn-ghost.ds-armed:hover { color: var(--error); border-color: var(--error-border); }"
+    },
+    {
+      "name": "Danger Button (Stop)",
+      "kind": "button",
+      "refersTo": "button-base",
+      "description": "Destructive/interrupt actions in the Alarm Red trio.",
+      "html": "<button class=\"ds-btn-danger\">Stop</button>",
+      "css": ".ds-btn-danger { background: var(--stop-bg); border: 1px solid var(--error-border); color: var(--error-text); font-size: 0.857rem; padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: background-color 140ms ease-out, border-color 140ms ease-out; } .ds-btn-danger:hover { background: color-mix(in srgb, var(--stop-bg), var(--error) 15%); } .ds-btn-danger:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Sunken Console Well field; focus is the global 2px Signal Blue ring (search-style fields swap border instead).",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Filter sessions…\" />",
+      "css": ".ds-input { background: var(--bg-deep); border: 1px solid var(--border); color: var(--text); font-size: 0.857rem; padding: 4px 8px; border-radius: 6px; } .ds-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }"
+    },
+    {
+      "name": "Queue Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Queued prompts and filter chips: pill, hairline, semantic trio when carrying status.",
+      "html": "<span class=\"ds-chip\"><span class=\"ds-chip-kind\">queued</span> rerun the failing suite</span> <span class=\"ds-chip ds-chip-warn\">2 steering</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--panel); border: 1px solid var(--border-strong); color: var(--text); font-size: 0.75rem; padding: 1px 8px 1px 12px; border-radius: 999px; } .ds-chip-kind { text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); } .ds-chip-warn { background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning); padding: 1px 12px; text-transform: uppercase; letter-spacing: 0.05em; }"
+    },
+    {
+      "name": "Daemon Status Dot",
+      "kind": "custom",
+      "refersTo": "status-dot",
+      "description": "The roster ladder in one atom: idle, ready (glow), transitional (pulse), reconnecting, error, asleep (inset ring).",
+      "html": "<span class=\"ds-dot\"></span> <span class=\"ds-dot ds-ready\"></span> <span class=\"ds-dot ds-busy\"></span> <span class=\"ds-dot ds-reconnecting\"></span> <span class=\"ds-dot ds-error\"></span> <span class=\"ds-dot ds-asleep\"></span>",
+      "css": ".ds-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted-2); margin-right: 8px; } .ds-dot.ds-ready { background: var(--success); box-shadow: 0 0 6px var(--success); } .ds-dot.ds-busy { background: var(--accent); box-shadow: 0 0 6px var(--accent); animation: ds-dot-pulse 1.2s ease-in-out infinite; } .ds-dot.ds-reconnecting { background: var(--warning); box-shadow: 0 0 6px var(--warning); } .ds-dot.ds-error { background: var(--error); box-shadow: 0 0 6px var(--error); } .ds-dot.ds-asleep { background: var(--muted-2); box-shadow: inset 0 0 0 1px var(--border-strong); } @keyframes ds-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } } @media (prefers-reduced-motion: reduce) { .ds-dot.ds-busy { animation: none; } }"
+    },
+    {
+      "name": "Tool Card",
+      "kind": "card",
+      "refersTo": "tool-card",
+      "description": "Every tool render's shell: flat panel, hairline, 8px radius, mono-capable body.",
+      "html": "<div class=\"ds-tool-card\"><div class=\"ds-tool-header\">bash</div><div class=\"ds-tool-body\">bun run test --bail 1</div></div>",
+      "css": ".ds-tool-card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; font-size: 0.857rem; color: var(--text); max-width: 420px; } .ds-tool-header { padding: 8px 12px; color: var(--muted-2); font-weight: 600; } .ds-tool-body { padding: 0 12px 8px; font-family: var(--font-mono); }"
+    },
+    {
+      "name": "User Message Bubble",
+      "kind": "custom",
+      "refersTo": "msg-user",
+      "description": "The only bubble in the system: the operator's own message, right-aligned in Signal Wash, max 80% width. Assistant messages are edge-to-edge.",
+      "html": "<div class=\"ds-msg-user\">respawn d3 on the design branch</div>",
+      "css": ".ds-msg-user { align-self: flex-end; background: var(--accent-dim); color: var(--text); border-radius: 10px; padding: 8px 12px; max-width: 80%; font-size: 1rem; line-height: 1.5; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Mission Control Console",
+    "overview": "One operator, many agents. This UI is the flight-ops room for a fleet of disposable agent daemons: calm, watchful, exact. The screen's job is supervision, not conversation — surfaces recede so that status (dots, pills, chips, streamed text) can carry the signal. Nothing competes with the readouts.\n\nDensity follows the terminal, not the chat app: compact 2-24px spacing rhythm, machine truth set in monospace, labels in small tracked caps, controls that sit quiet until hovered. Depth is nearly absent by doctrine — structure comes from 1px hairlines and tonal panel steps, and shadow appears only when something floats above the console or when a status light glows.\n\nThe palette is a dark instrument panel first: near-black blue-gray surfaces, a softened white readout, and a single Signal Blue accent used with deliberate rarity. Five alternate palettes rebalance the same semantic slots.",
+    "keyCharacteristics": [
+      "Dark-first instrument panel; five alternate themes overriding only color tokens",
+      "Flat-by-default surfaces; 1px borders do the structural work",
+      "One accent, used rarely; status speaks in a semantic trio (bg + border + text)",
+      "Zero font assets — system sans + system mono only",
+      "Single 140ms ease-out motion vocabulary; six small keyframes; full prefers-reduced-motion teardown"
+    ],
+    "rules": [
+      {
+        "name": "The One Voice Rule",
+        "body": "The accent appears on ≤10% of any screen — focus rings, the active selection, one primary action. If everything signals, nothing does.",
+        "section": "colors"
+      },
+      {
+        "name": "The Semantic Trio Rule",
+        "body": "A status is never a bare color. Every status surface ships background + border + text from the same trio; bare hue-on-neutral status fills are a defect.",
+        "section": "colors"
+      },
+      {
+        "name": "The Zero-Asset Rule",
+        "body": "No webfonts, ever. If a glyph can't come from the system stack, the design is wrong, not the stack.",
+        "section": "typography"
+      },
+      {
+        "name": "The Two-Voice Rule",
+        "body": "Sans is the operator speaking; mono is the machine reporting. Never set machine output (commands, paths, logs, git state) in sans, and never set prose in mono.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-By-Default Rule",
+        "body": "Surfaces are flat at rest. Shadow appears only on overlays (--shadow-2) or as a status glow. Adding a resting-state shadow to a card is a defect.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Hairline Rule",
+        "body": "Separation comes from 1px borders and tonal steps, never from shadow or whitespace alone. If a boundary matters, it gets a hairline.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do build every surface from the semantic tokens (var(--bg), var(--panel), …) so all six themes stay coherent; themes override colors only.",
+      "Do express status as the full trio (bg + border + text) — queued, ready, error, and diff states all follow it.",
+      "Do keep motion at 140ms ease-out (the single transition vocabulary) and gate anything animated behind prefers-reduced-motion.",
+      "Do set machine truth in the mono stack at 0.857rem or smaller; the roster lives at 0.75rem/1.4.",
+      "Do let assistant output run edge-to-edge; reserve bubbles for the operator's own messages.",
+      "Do reach for the pill + hairline + trio pattern for any new chip, badge, or status."
+    ],
+    "donts": [
+      "Don't add resting-state shadows or elevation to cards, buttons, or the sidebar (The Flat-By-Default Rule).",
+      "Don't introduce gradients, glassmorphism, backdrop-blur chrome, or glow on non-status elements.",
+      "Don't chat-app the surface: no avatar pairs, no messenger bubble symmetry, no emoji-forward empty states.",
+      "Don't load a webfont or hard-code a font family outside the two system stacks (The Zero-Asset Rule).",
+      "Don't invent one-off colors, radii, or spacing outside the token scales; extend the scale or reuse a rung.",
+      "Don't use the breakdown data-viz ramp for status, or status hues in charts — the ramps are deliberately disjoint."
+    ]
+  }
+}
