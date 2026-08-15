@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show, type Component } from "solid-js";
+import { createEffect, createSignal, createUniqueId, For, Show, type Component } from "solid-js";
 import { currentToken, fuzzyRank, type AcToken } from "../autocomplete";
 import { dispatchInput, LOCAL_COMMANDS, type InputMode } from "../commands";
 import { PromptHistory } from "../history";
@@ -38,6 +38,8 @@ export const PromptBox: Component = () => {
 	const [selected, setSelected] = createSignal(0);
 	const [files, setFiles] = createSignal<string[]>([]);
 	let textarea!: HTMLTextAreaElement;
+	// Stable id for the combobox/listbox wiring (aria-controls/activedescendant).
+	const listId = createUniqueId();
 	let debounceTimer: number | undefined;
 	// Double-Esc on an empty textarea opens the branch picker (TUI parity).
 	let lastEsc = 0;
@@ -251,8 +253,8 @@ export const PromptBox: Component = () => {
 					<For each={images()}>
 						{(img, i) => (
 							<span class="image-thumb">
-								<img src={`data:${img.mimeType};base64,${img.data}`} alt="pasted" />
-								<button class="image-remove" onClick={() => setImages(prev => prev.filter((_, j) => j !== i()))}>
+								<img src={`data:${img.mimeType};base64,${img.data}`} alt="" aria-hidden="true" />
+								<button class="image-remove" aria-label="Remove image" onClick={() => setImages(prev => prev.filter((_, j) => j !== i()))}>
 									×
 								</button>
 							</span>
@@ -262,10 +264,16 @@ export const PromptBox: Component = () => {
 			)}
 			<div class="prompt-input">
 				{open() && (
-					<Autocomplete items={items()} selected={selected()} onHover={setSelected} onApply={apply} />
+					<Autocomplete items={items()} selected={selected()} onHover={setSelected} onApply={apply} listId={listId} />
 				)}
 				<textarea
 					ref={textarea}
+					role="combobox"
+					aria-label="Message the agent"
+					aria-expanded={open()}
+					aria-controls={open() ? listId : undefined}
+					aria-activedescendant={open() ? `${listId}-opt-${selected()}` : undefined}
+					aria-autocomplete="list"
 					value={message()}
 					onInput={e => {
 						setMessage(e.currentTarget.value);

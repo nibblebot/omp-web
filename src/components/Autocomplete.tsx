@@ -12,13 +12,15 @@ export const Autocomplete: Component<{
 	selected: number;
 	onHover: (index: number) => void;
 	onApply: (item: AcItem) => void;
+	listId: string;
 }> = props => (
-	<div class="autocomplete" role="listbox">
-		<For each={props.items.slice(0, 12)}>
+	<div class="autocomplete" role="listbox" id={props.listId}>
+		<For each={props.items.slice(0, Math.max(12, props.selected + 1))}>
 			{(item, i) => (
 				<div
 					class="autocomplete-row"
 					classList={{ selected: i() === props.selected }}
+					id={`${props.listId}-opt-${i()}`}
 					role="option"
 					aria-selected={i() === props.selected}
 					onMouseEnter={() => props.onHover(i())}

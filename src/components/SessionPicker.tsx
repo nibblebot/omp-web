@@ -49,6 +49,7 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 			<div class="picker-group-name">Resume from disk</div>
 			<input
 				class="picker-filter"
+				aria-label="Filter sessions"
 				placeholder="Filter by name or cwd…"
 				value={filter()}
 				onInput={e => setFilter(e.currentTarget.value)}

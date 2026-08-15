@@ -35,6 +35,10 @@ const THEME_IDS: Record<ThemeId, true> = {
 function apply(theme: ThemeId, fontSize: number): void {
 	document.documentElement.dataset.theme = theme;
 	document.documentElement.style.fontSize = `${fontSize}px`;
+	// index.html pre-paints the boot background inline; once the theme is set,
+	// the CSS --bg token is authoritative, so drop the stale inline value
+	// (identical to the token on first paint, correct after runtime switches).
+	document.documentElement.style.background = "";
 }
 
 /** The stored preference; defaults to "system" when unset or unrecognized. */

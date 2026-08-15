@@ -122,6 +122,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 				<input
 					class="settings-search"
 					type="text"
+					aria-label="Search settings"
 					placeholder="Search settings…"
 					value={query()}
 					onInput={e => setQuery(e.currentTarget.value)}
@@ -208,6 +209,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 								<h3 class="settings-group-title">Interface</h3>
 								<Row label="theme preference">
 									<select
+										aria-label="theme preference"
 										value={theme()}
 										onChange={e => setThemeSignal(setTheme(e.currentTarget.value as ThemePreference))}
 									>
@@ -230,6 +232,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 								<Row label="desktop notifications">
 									<input
 										type="checkbox"
+										aria-label="desktop notifications"
 										checked={state.notifyEnabled}
 										onChange={e => setNotifyEnabled(e.currentTarget.checked)}
 									/>
@@ -237,6 +240,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 								<Row label="reveal queue">
 									<input
 										type="checkbox"
+										aria-label="reveal queue"
 										checked={state.reveal}
 										onChange={e => setState("reveal", e.currentTarget.checked)}
 									/>
@@ -244,6 +248,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 								<Row label="soft fade">
 									<input
 										type="checkbox"
+										aria-label="soft fade"
 										checked={state.soften}
 										onChange={e => setState("soften", e.currentTarget.checked)}
 									/>
@@ -254,6 +259,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 									<Row label="fast mode">
 										<input
 											type="checkbox"
+											aria-label="fast mode"
 											checked={state.fastModeEnabled}
 											onChange={e =>
 												void call("setFastMode", [e.currentTarget.checked]).catch(err => setState("error", String(err)))
@@ -263,6 +269,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 									<Row label="auto-retry">
 										<input
 											type="checkbox"
+											aria-label="auto-retry"
 											checked={state.autoRetryEnabled}
 											onChange={e =>
 												void call("setAutoRetry", [e.currentTarget.checked]).catch(err => setState("error", String(err)))
@@ -398,6 +405,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 			control = (
 				<input
 					type="checkbox"
+					aria-label={item.label}
 					checked={Boolean(item.value)}
 					onChange={e => updateSetting(item.path, e.currentTarget.checked)}
 				/>
@@ -406,6 +414,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 		case "enum":
 			control = (
 				<select
+					aria-label={item.label}
 					value={displayOptionValue(item, item.value)}
 					onChange={e => updateSetting(item.path, e.currentTarget.value)}
 				>
@@ -416,6 +425,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 		case "submenu":
 			control = (
 				<select
+					aria-label={item.label}
 					value={displayOptionValue(item, item.value)}
 					onChange={e => updateSetting(item.path, e.currentTarget.value)}
 				>
@@ -434,6 +444,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 				<div class="settings-text">
 					<input
 						type={item.secret && !showSecret() ? "password" : "text"}
+						aria-label={item.label}
 						value={draft()}
 						placeholder={formatItemValue(item)}
 						onInput={e => {

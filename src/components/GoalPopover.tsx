@@ -42,6 +42,7 @@ export const GoalPopover: Component<{ onClose: () => void }> = props => {
 						>
 							<input
 								class="goal-set-input"
+								aria-label="Goal objective"
 								placeholder="Goal objective…"
 								value={objective()}
 								onInput={e => setObjective(e.currentTarget.value)}

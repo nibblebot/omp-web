@@ -130,6 +130,7 @@ const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
 							</div>
 							<input
 								class="picker-filter ask-custom"
+								aria-label="Custom answer"
 								placeholder="Other…"
 								value={custom()[qi()] ?? ""}
 								onInput={e => setCustom({ ...custom(), [qi()]: e.currentTarget.value })}
@@ -214,6 +215,7 @@ const InputForm: Component<{ id: string; params: unknown }> = props => {
 				<input
 					class="picker-filter"
 					ref={el}
+					aria-label={p().title}
 					placeholder={p().placeholder}
 					value={value()}
 					onInput={e => setValue(e.currentTarget.value)}
@@ -245,7 +247,7 @@ const EditorForm: Component<{ id: string; params: unknown }> = props => {
 					sendUiResponse(props.id, value());
 				}}
 			>
-				<textarea class="ask-editor" ref={el} value={value()} onInput={e => setValue(e.currentTarget.value)} />
+				<textarea class="ask-editor" ref={el} aria-label={p().title} value={value()} onInput={e => setValue(e.currentTarget.value)} />
 				<div class="ask-actions">
 					<button type="submit" class="send">
 						Submit

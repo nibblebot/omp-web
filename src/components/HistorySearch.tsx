@@ -60,6 +60,7 @@ export const HistorySearch: Component<{ onClose: () => void }> = props => {
 			<input
 				ref={input}
 				class="history-search-input"
+				aria-label="Search prompt history"
 				placeholder="Search prompt history…"
 				value={query()}
 				onInput={e => setQuery(e.currentTarget.value)}

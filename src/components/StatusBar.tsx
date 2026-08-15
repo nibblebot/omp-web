@@ -53,6 +53,7 @@ const RetryBadge: Component = () => {
 const Segment: Component<{
 	class?: string;
 	title?: string;
+	ariaLabel?: string;
 	active?: boolean;
 	onClick?: () => void;
 	onContextMenu?: (e: MouseEvent) => void;
@@ -62,6 +63,7 @@ const Segment: Component<{
 		class={props.class ? `segment segment-button ${props.class}` : "segment segment-button"}
 		classList={{ active: !!props.active }}
 		title={props.title}
+		aria-label={props.ariaLabel}
 		onClick={props.onClick}
 		onContextMenu={props.onContextMenu}
 	>
@@ -113,12 +115,13 @@ export const StatusBar: Component = () => {
 				active={state.toolsExpanded}
 				onClick={() => setState("toolsExpanded", v => !v)}
 				title="Expand all tool outputs (Ctrl+O)"
+				ariaLabel="Expand all tool outputs (Ctrl+O)"
 			>
 				⤢
 			</Segment>
 			{/* Roster sidebar visibility toggle; hidden in single mode (no sidebar). */}
 			<Show when={state.sessionMode === "roster"}>
-				<Segment active={state.sidebarVisible} onClick={toggleSidebar} title="Roster">
+				<Segment active={state.sidebarVisible} onClick={toggleSidebar} title="Roster" ariaLabel="Roster">
 					☰
 				</Segment>
 			</Show>
@@ -126,16 +129,23 @@ export const StatusBar: Component = () => {
 				active={state.modal === "debug"}
 				onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
 				title="Debug — transport and fleet visibility"
+				ariaLabel="Debug — transport and fleet visibility"
 			>
 				ⓘ
 			</Segment>
-			<Segment onClick={() => setState("modal", "settings")} title="Settings">
+			<Segment onClick={() => setState("modal", "settings")} title="Settings" ariaLabel="Settings">
 				⚙
 			</Segment>
 			{!state.connected && <span class="disconnected-pill">disconnected</span>}
-			<span class="status-dot" classList={{ streaming: state.streaming }} title={state.streaming ? "streaming" : "idle"} />
+			<span
+				class="status-dot"
+				classList={{ streaming: state.streaming }}
+				role="status"
+				aria-label={state.streaming ? "Agent is streaming" : "Agent idle"}
+				title={state.streaming ? "streaming" : "idle"}
+			/>
 			{state.error && (
-				<div class="error-banner">
+				<div class="error-banner" role="alert">
 					<span>{state.error}</span>
 					<button onClick={() => setState("error", null)}>dismiss</button>
 				</div>
@@ -163,14 +173,27 @@ export const SessionHeader: Component = () => {
 			<Show
 				when={editingName()}
 				fallback={
-					<Segment class="session-name" onClick={() => setEditingName(true)} title="Rename session">
+					<h1
+						class="segment segment-button session-name"
+						style={{ margin: "0" }}
+						title="Rename session"
+						tabindex="0"
+						onClick={() => setEditingName(true)}
+						onKeyDown={e => {
+							if (e.key === "Enter" || e.key === " ") {
+								e.preventDefault();
+								setEditingName(true);
+							}
+						}}
+					>
 						{state.sessionName ?? state.sessionId.slice(0, 8)}
-					</Segment>
+					</h1>
 				}
 			>
 				<input
 					ref={el => queueMicrotask(() => { el.focus(); el.select(); })}
 					class="segment session-name-input"
+					aria-label="Session name"
 					value={state.sessionName ?? ""}
 					onKeyDown={e => {
 						if (e.key === "Enter") commitName(e.currentTarget);

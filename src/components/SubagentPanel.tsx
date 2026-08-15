@@ -145,6 +145,7 @@ const SubagentControls: Component<{ sub: SubagentInfo }> = props => {
 			<input
 				class="picker-filter"
 				type="text"
+				aria-label="Steer instructions"
 				placeholder="steer…"
 				value={steerText()}
 				disabled={pending()}

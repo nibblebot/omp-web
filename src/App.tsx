@@ -39,6 +39,7 @@ const SHORTCUTS: Array<[string, string]> = [
 	["Esc", "Abort the running turn"],
 	["Esc Esc", "Branch picker (empty prompt)"],
 	["Ctrl+R", "Fuzzy-search prompt history"],
+	["Ctrl+O", "Expand all tool outputs"],
 	["Alt+↑", "Pop last queued message into the prompt"],
 	["-> / => msg", "Queue as steer / follow-up"],
 	["↑ / ↓", "Prompt history (caret on first/last line)"],
@@ -55,7 +56,7 @@ const SUGGESTED_PROMPTS = ["Summarize this repo", "Explain the server protocol",
 const EmptyState: Component = () => (
 	<div class="empty-state">
 		<CharacterAvatar provider={state.model?.provider} pose="happy" size={96} />
-		<p class="empty-greeting">{characterForProvider(state.model?.provider).name} is ready. What should we work on?</p>
+		<p class="empty-greeting">{characterForProvider(state.model?.provider).name} is ready. What should we work on? Ctrl+O expands tool outputs, and Ctrl+R searches prompt history.</p>
 		<div class="empty-chips">
 			<For each={SUGGESTED_PROMPTS}>
 				{text => (
@@ -95,7 +96,7 @@ export const App: Component = () => {
 					<TxBrowser />
 				</Show>
 				<Show when={state.view === "chat"}>
-					<div class="app-main">
+					<main class="app-main">
 						{/* Session identity (name/rename) at the left edge above the stream. */}
 						<SessionHeader />
 						<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyState />}>
@@ -109,7 +110,7 @@ export const App: Component = () => {
 						{/* Session-send config bar (model/thinking/stats), glued to the composer. */}
 						<SessionBar />
 						<PromptBox />
-					</div>
+					</main>
 					{/* Roster mode (fleet edge): the fleet roster sidebar replaces the
 					    sessions sidebar; single mode has no sidebar at all. */}
 					<Show when={state.sidebarVisible && state.sessionMode === "roster"}>

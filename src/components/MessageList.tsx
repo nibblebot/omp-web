@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Match, Show, Switch, createMemo, type Component } from "solid-js";
+import { createEffect, createSignal, For, Match, Show, Switch, createMemo, onCleanup, type Component } from "solid-js";
 import { renderMarkdown, splitForStreaming } from "../markdown";
 import { call, pushNotice, setState, state, type Block, type ChatItem, type ToolItem } from "../state";
 import type { ImageArg } from "../../shared/protocol";
@@ -73,7 +73,9 @@ const LiveTail: Component<{ text: string }> = props => {
 };
 
 const LiveBlock: Component<{ block: Block }> = props => {
-	const split = () => splitForStreaming(props.block.text, false);
+	// splitForStreaming is a full O(n) scan of the block text; memoize it so
+	// each text change pays for the scan once instead of once per split() read.
+	const split = createMemo(() => splitForStreaming(props.block.text, false));
 	return (
 		<>
 			<For each={split().complete}>{segment => <Markdown src={segment} />}</For>
@@ -217,12 +219,31 @@ export const RunRow: Component<{ run: Run }> = props => {
 export const MessageList: Component = () => {
 	let container!: HTMLDivElement;
 	const [zoomed, setZoomed] = createSignal<ImageArg | null>(null);
-	// Auto-scroll only when the user is already near the bottom.
+	// Auto-scroll only when the user is already near the bottom. The near-bottom
+	// check reads layout, so it never runs inside the streaming effect: the
+	// effect only writes, and the read is deferred to one requestAnimationFrame
+	// per frame (coalesced) plus the user's own scroll events — no forced
+	// synchronous layout on every flush.
+	let pinned = false;
+	let pinCheckRaf = 0;
+	const schedulePinCheck = () => {
+		if (pinCheckRaf !== 0) return;
+		pinCheckRaf = requestAnimationFrame(() => {
+			pinCheckRaf = 0;
+			pinned = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+		});
+	};
+	const onContainerScroll = () => {
+		pinned = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+	};
+	onCleanup(() => {
+		if (pinCheckRaf !== 0) cancelAnimationFrame(pinCheckRaf);
+	});
 	createEffect(() => {
 		state.items.length;
 		state.live.blocks.map(b => b.text.length);
-		const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
-		if (nearBottom) container.scrollTop = container.scrollHeight;
+		if (pinned) container.scrollTop = container.scrollHeight;
+		schedulePinCheck();
 	});
 	// id → run, for the consolidated view. Read only from the tool/assistant
 	// branches while consolidated, so expanded/collapsed rows never re-render on appends.
@@ -268,7 +289,7 @@ export const MessageList: Component = () => {
 					</For>
 				</div>
 			</Show>
-			<div class="message-list" ref={container}>
+			<div class="message-list" ref={container} onScroll={onContainerScroll}>
 			<For each={state.items}>
 				{item => (
 					<Switch>
@@ -319,7 +340,7 @@ export const MessageList: Component = () => {
 												<For each={images()}>
 													{img => (
 														<button class="img-thumb" type="button" onClick={() => setZoomed(img)}>
-															<img src={imageDataUrl(img)} alt="user attached image" />
+															<img src={imageDataUrl(img)} alt="user attached image" decoding="async" />
 														</button>
 													)}
 												</For>

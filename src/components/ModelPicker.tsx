@@ -80,6 +80,12 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 		if (step() === "model") input?.focus();
 	});
 
+	/** Is this catalog entry the role's currently assigned model? */
+	const isActiveRole = (entry: ModelRoleCatalogEntry) =>
+		entry.provider !== undefined &&
+		entry.id !== undefined &&
+		state.model?.provider === entry.provider &&
+		state.model?.id === entry.id;
 	const roles = () => state.modelRoleCatalog?.filter(e => !e.hidden) ?? [];
 	const hiddenRoles = () => state.modelRoleCatalog?.filter(e => e.hidden) ?? [];
 
@@ -136,13 +142,8 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 						{entry => (
 							<div
 								class="picker-row"
-								classList={{
-									active:
-										entry.provider !== undefined &&
-										entry.id !== undefined &&
-										state.model?.provider === entry.provider &&
-										state.model?.id === entry.id,
-								}}
+								classList={{ active: isActiveRole(entry) }}
+								aria-pressed={isActiveRole(entry)}
 								{...useClickableRow(() => pickRole(entry))}
 								title={`${entry.tag ?? entry.name} — pick a model`}
 							>
@@ -229,6 +230,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 				<input
 					class="picker-filter"
 					ref={input}
+					aria-label="Filter models"
 					placeholder="Filter models…"
 					value={filter()}
 					onInput={e => setFilter(e.currentTarget.value)}
@@ -249,6 +251,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 										<PickerRow
 											class="picker-row"
 											classList={{ active: role()?.provider === m.provider && role()?.id === m.id }}
+											aria-pressed={role()?.provider === m.provider && role()?.id === m.id}
 											onClick={() => pickModel(m)}
 										>
 											<span class="picker-label">{m.id}</span>
@@ -276,6 +279,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 							<PickerRow
 								class="picker-row"
 								classList={{ active: (role()?.thinkingLevel ?? "inherit") === opt.value }}
+								aria-pressed={(role()?.thinkingLevel ?? "inherit") === opt.value}
 								onClick={() => commit(model()!, opt.value)}
 							>
 								<span class="picker-label">{opt.label}</span>

@@ -115,6 +115,7 @@ export const LoginPanel: Component<{ onClose: () => void }> = props => {
 						<span class="picker-label">{req().title}</span>
 						<input
 							class="picker-filter"
+							aria-label={req().title}
 							placeholder={req().placeholder ?? ""}
 							value={code()}
 							onInput={e => setCode(e.currentTarget.value)}

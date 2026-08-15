@@ -118,7 +118,7 @@
 	--error-text: #991b1b;
 	--stop-bg: #fee2e2;
 	--diff-add-bg: rgba(22, 163, 74, 0.1);
-	--diff-add-text: #15803d;
+	--diff-add-text: #166534;
 	--diff-del-bg: rgba(220, 38, 38, 0.08);
 	--diff-del-text: #b91c1c;
 	--accent-border: #9db8e8;
@@ -183,7 +183,7 @@
 	--muted: #62657b;
 	--muted-2: #585b6c;
 	--muted-3: #6c6f85;
-	--accent: #1e66f5;
+	--accent: #1a55d6;
 	--accent-border: rgba(30, 102, 245, 0.4);
 	--success: #256f1a;
 	--warning: #92400e;
@@ -198,9 +198,9 @@
 	--error-text: #d20f39;
 	--stop-bg: rgba(210, 15, 57, 0.1);
 	--diff-add-bg: rgba(64, 160, 43, 0.1);
-	--diff-add-text: #40a02b;
+	--diff-add-text: #1f5c2a;
 	--diff-del-bg: rgba(210, 15, 57, 0.08);
-	--diff-del-text: #d20f39;
+	--diff-del-text: #a6122e;
 	--backdrop: rgba(76, 79, 105, 0.35);
 }
 
@@ -257,7 +257,7 @@
 	--muted-3: oklch(42% 0.02 285);
 	--accent: oklch(44% 0.18 348);
 	--accent-border: oklch(44% 0.18 348 / 0.4);
-	--success: oklch(48% 0.15 160);
+	--success: oklch(46% 0.15 160);
 	--warning: oklch(50% 0.13 80);
 	--error: oklch(52% 0.19 22);
 	--purple: oklch(48% 0.2 320);
@@ -270,7 +270,7 @@
 	--error-text: oklch(48% 0.17 22);
 	--stop-bg: oklch(52% 0.19 22 / 0.1);
 	--diff-add-bg: oklch(55% 0.15 160 / 0.1);
-	--diff-add-text: oklch(48% 0.13 160);
+	--diff-add-text: oklch(44% 0.13 160);
 	--diff-del-bg: oklch(52% 0.19 22 / 0.08);
 	--diff-del-text: oklch(48% 0.17 22);
 	--backdrop: oklch(22% 0.025 285 / 0.35);
@@ -296,6 +296,7 @@ body {
 	display: flex;
 	flex-direction: column;
 	height: 100vh;
+	height: 100dvh;
 	max-width: 820px;
 	margin: 0 auto;
 	padding: 0 var(--space-6);
@@ -517,6 +518,7 @@ body {
 	align-items: center;
 	gap: var(--space-2);
 	min-width: 0;
+	flex-wrap: wrap;
 }
 
 .run-row-item {
@@ -827,6 +829,7 @@ pre {
 
 .prompt-actions {
 	display: flex;
+	flex-wrap: wrap;
 	justify-content: flex-end;
 	gap: var(--space-4);
 }
@@ -1079,7 +1082,6 @@ button.danger-confirm-btn:not(:disabled):hover {
 }
 
 .settings-search:focus {
-	outline: none;
 	border-color: var(--accent-border);
 }
 
@@ -1205,6 +1207,34 @@ button.danger-confirm-btn:not(:disabled):hover {
 @media (max-width: 720px) {
 	.settings-nav {
 		display: none;
+	}
+}
+
+/* Touch: hit targets at least 24px tall/wide (WCAG 2.5.8 AA); fine-pointer
+   layout is unchanged. */
+@media (pointer: coarse) {
+	.daemon-icon-btn,
+	.segment-button,
+	.image-remove,
+	.queue-pop,
+	.queue-clear,
+	.msg-copy-btn,
+	.msg-branch-btn,
+	.sidebar-icon-btn {
+		min-width: 24px;
+		min-height: 24px;
+	}
+
+	/* Copy/branch actions stay visible on touch, where there is no hover. */
+	.msg-user .msg-toolbar,
+	.msg-assistant .msg-toolbar {
+		opacity: 1;
+	}
+
+	/* Long log lines wrap instead of truncating on touch. */
+	.debug-log-msg {
+		white-space: normal;
+		overflow-wrap: anywhere;
 	}
 }
 
@@ -2143,6 +2173,7 @@ pre.terminal {
 .daemon-name {
 	color: var(--accent);
 	font-weight: 600;
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -2159,6 +2190,9 @@ pre.terminal {
 	color: var(--muted);
 	font-size: var(--fs-sm);
 	margin-left: auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
@@ -2389,6 +2423,7 @@ pre.terminal {
 	.active-subagents,
 	.active-daemons,
 	.daemon-status-dot,
+	.run-row-dot,
 	.msg-toolbar {
 		animation: none !important;
 		transition: none !important;
@@ -2538,7 +2573,6 @@ pre.terminal {
 }
 
 .ask-editor:focus {
-	outline: none;
 	border-color: var(--accent-border);
 }
 

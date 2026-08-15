@@ -22,6 +22,7 @@ export const ThinkingPicker: Component<{ onClose: () => void }> = props => {
 						<PickerRow
 							class="picker-row"
 							classList={{ active: (state.thinkingLevel ?? "inherit") === level }}
+							aria-pressed={(state.thinkingLevel ?? "inherit") === level}
 							onClick={() => choose(level)}
 						>
 							<span class="picker-label">{level}</span>
