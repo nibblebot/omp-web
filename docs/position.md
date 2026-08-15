@@ -1,6 +1,6 @@
 # omp-web — Product positioning
 
-Extracted 2026-08-13 from the 2026-08-12 full audit (`audit.html`, since removed; remediation history in `audit-plan.md`). Finding numbers (`#N`) are the audit's, kept for traceability. These are the audit's Phase 7 strategic items — the only unfinished phase.
+Extracted 2026-08-13 from the 2026-08-12 full audit (`audit.html`, since removed; `audit-plan.md` archived 2026-08-15 — remediation history survives as `finding #N` comments in code). Finding numbers (`#N`) are the audit's, kept for traceability. These are the audit's Phase 7 strategic items — the only unfinished phase.
 
 ## The core call (#71, #72 — both HIGH, verified)
 

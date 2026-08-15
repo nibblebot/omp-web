@@ -20,7 +20,7 @@ import type { StatsConfig } from "../config";
 const MAX_SESSIONS = 2000;
 
 // ---------------------------------------------------------------------------
-// Sessions list cache (audit-plan.md Phase 3).
+// Sessions list cache (2026-08 audit Phase 3).
 //
 // The computed list (disk walk + stats.db enrichment) is cached under a key
 // of (recursive sessions-tree dir stats, stats.db mtimeMs+size when the file

@@ -49,7 +49,7 @@ Two simultaneous differentiators, both user-confirmed:
 ## Evidence on Hand
 
 - `README.md` — full architecture, security model, config surface, roadmap.
-- `audit-plan.md` (2026-08-12) — completed technical audit remediation; phases 0–6 shipped, strategic items live in `docs/position.md`. The full report (`audit.html`) was removed 2026-08-13. This directory (`omp-fleet.design-audit`) is the design-audit worktree.
+- `docs/position.md` (2026-08-13) — audit Phase 7 strategic items (findings #71–#80). The full report (`audit.html`) was removed 2026-08-13 and the remediation plan (`audit-plan.md`) archived 2026-08-15; remediation history survives as `finding #N` comments in code. This directory (`omp-fleet.design-audit`) is the design-audit worktree.
 - `fleet/examples/` — copy-pasteable spawn template examples (ssh-remote, docker, provider-skeleton).
 - No testimonials, customers, benchmarks, or marketing claims exist; future work must not fabricate them.
 

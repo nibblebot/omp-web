@@ -10,7 +10,7 @@ Two products in one tree, sharing one Solid.js web UI and one wire contract:
 - **omp-fleet** (`fleet/`) — registry + supervisor + connector for N daemons (local children, external/remote). Re-exposes them to the same UI in **roster mode** and to CLI fan-out. Holds **zero agent state** — all truth lives in the omp-session processes and their `.jsonl` session logs.
 - **Web UI** (`src/`) — one Solid.js bundle serves both modes; mode is decided by the wire (`roster` frame ⇒ roster mode, sticky; a bare omp-session never sends it ⇒ standalone). No router.
 
-Runtime is **Bun** (`type: module`, `bun.lock` committed). No CI, no lint config, no formatter config — match existing style by hand (tabs; comments referencing audit findings as `finding #N`, from `audit-plan.md`).
+Runtime is **Bun** (`type: module`, `bun.lock` committed). No CI, no lint config, no formatter config — match existing style by hand (tabs; comments reference audit findings as `finding #N` — numbering kept from the 2026-08 audit).
 
 ## Commands
 
@@ -60,7 +60,7 @@ Ports: vite **4713**, omp-session **4721**, omp-fleet **4722**. Dev mode: `bun r
 | `src/state.ts` | **The entire client model**: one `createStore`; chat items, streaming, session mirror, `call()`, roster, stale-frame guards |
 | `src/components/` | Thin components: read `state` reactively, mutate only via exported store actions. No data props |
 | `scripts/dev.ts`, `scripts/test.ts`, `scripts/build-omp-session.ts` | Dev runner, test wrapper, binary build |
-| `docs/SSE-plan.md`, `audit-plan.md`, `audit.html` | Design doc + audit remediation plan (findings #0–#80) + generated audit report (committed artifacts) |
+| `docs/architecture.md`, `docs/position.md`, `docs/research/` | System architecture (wire contract, module map) + audit Phase 7 strategic items (findings #71–#80) + design-audit research (committed docs) |
 
 ## The wire contract (OMP_PROTO 2)
 
@@ -117,8 +117,8 @@ Key constants (all in `shared/protocol.ts`): `OMP_PROTO = 2`, `SSE_KEEPALIVE_MS`
 ### Style
 - Tabs for indentation. `verbatimModuleSyntax` is on → `import type` discipline (no value imports of types).
 - Typecheck with `tsgo` (`bun run check:types`); the `@typescript/native-preview` version is pinned exactly.
-- Comments reference audit remediation findings as `finding #N` (see `audit-plan.md`); keep the numbering when fixing/annotating.
-- `dist/`, `dist-bin/`, `node_modules/` are gitignored; `audit.html`, `audit-plan.md`, `docs/SSE-plan.md` are committed docs — regenerate/update, don't delete.
+- Comments reference audit remediation findings as `finding #N` (numbering kept from the 2026-08 audit; the strategic items live in `docs/position.md`); keep the numbering when fixing/annotating.
+- `dist/`, `dist-bin/`, `node_modules/` are gitignored; `docs/architecture.md`, `docs/position.md`, `docs/research/` are committed docs — update, don't delete.
 
 ## Editing workflows
 

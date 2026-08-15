@@ -1,5 +1,5 @@
 /**
- * Security wave 3 regression tests (audit-plan.md Phase 6):
+ * Security wave 3 regression tests (2026-08 audit Phase 6):
  *
  *  - Symlink escape: every `:file` handler (transcript, stats, subagents)
  *    rejects paths whose realpath escapes sessionsDir — file symlinks,
