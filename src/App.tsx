@@ -22,7 +22,7 @@ import { QueueBar } from "./components/QueueBar";
 import { SessionPicker } from "./components/SessionPicker";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { StatsPopover } from "./components/StatsPopover";
-import { StatusBar } from "./components/StatusBar";
+import { SessionBar, SessionHeader, StatusBar } from "./components/StatusBar";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { ThinkingPicker } from "./components/ThinkingPicker";
 import { connect, setPromptInsert, setState, state } from "./state";
@@ -96,6 +96,8 @@ export const App: Component = () => {
 				</Show>
 				<Show when={state.view === "chat"}>
 					<div class="app-main">
+						{/* Session identity (name/rename) at the left edge above the stream. */}
+						<SessionHeader />
 						<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyState />}>
 							<MessageList />
 						</Show>
@@ -104,6 +106,8 @@ export const App: Component = () => {
 							<ActiveSubagents />
 							<ActiveDaemons />
 						</div>
+						{/* Session-send config bar (model/thinking/stats), glued to the composer. */}
+						<SessionBar />
 						<PromptBox />
 					</div>
 					{/* Roster mode (fleet edge): the fleet roster sidebar replaces the

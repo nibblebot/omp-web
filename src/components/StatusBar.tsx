@@ -70,32 +70,8 @@ const Segment: Component<{
 );
 
 export const StatusBar: Component = () => {
-	const [editingName, setEditingName] = createSignal(false);
-	// Enter commits and closes first, so the trailing blur is a harmless no-op.
-	const commitName = (el: HTMLInputElement) => {
-		const title = el.value.trim();
-		setEditingName(false);
-		if (title && title !== state.sessionName) {
-			void call("setSessionName", [title]).catch(err => setState("error", String(err)));
-		}
-	};
-
 	return (
 		<header class="status-bar">
-			<Segment onClick={() => setState("modal", "model")} title="Model roles">
-				{state.model ? `${state.model.provider}/${state.model.id}` : "no model"}
-			</Segment>
-			<Segment
-				class="thinking-segment"
-				onClick={() => void call("cycleThinkingLevel").catch(err => setState("error", String(err)))}
-				onContextMenu={e => {
-					e.preventDefault();
-					setState("modal", "thinking");
-				}}
-				title="Click: cycle thinking level · right-click: pick"
-			>
-				{state.thinkingLevel ?? "inherit"}
-			</Segment>
 			<Show when={state.compacting}>
 				<span class="segment badge">compacting…</span>
 			</Show>
@@ -112,14 +88,6 @@ export const StatusBar: Component = () => {
 				</Segment>
 			</Show>
 			<RetryBadge />
-			<ContextSegment />
-			<Show when={state.stats}>
-				{s => (
-					<Segment onClick={() => setState("modal", "stats")} title="Session stats">
-						${s().cost.toFixed(2)} · ↑{formatTokens(s().tokens.input)} ↓{formatTokens(s().tokens.output)}
-					</Segment>
-				)}
-			</Show>
 			{/* Historical transcripts/stats browser; the /ctl/stats API only exists
 			    with a fleet process, so the toggle is roster-mode-only. */}
 			<Show when={state.sessionMode === "roster"}>
@@ -154,25 +122,6 @@ export const StatusBar: Component = () => {
 					☰
 				</Segment>
 			</Show>
-			<Show
-				when={editingName()}
-				fallback={
-					<Segment class="session-name" onClick={() => setEditingName(true)} title="Rename session">
-						{state.sessionName ?? state.sessionId.slice(0, 8)}
-					</Segment>
-				}
-			>
-				<input
-					ref={el => queueMicrotask(() => { el.focus(); el.select(); })}
-					class="segment session-name-input"
-					value={state.sessionName ?? ""}
-					onKeyDown={e => {
-						if (e.key === "Enter") commitName(e.currentTarget);
-						else if (e.key === "Escape") setEditingName(false);
-					}}
-					onBlur={() => setEditingName(false)}
-				/>
-			</Show>
 			<Segment
 				active={state.modal === "debug"}
 				onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
@@ -194,3 +143,74 @@ export const StatusBar: Component = () => {
 		</header>
 	);
 };
+
+/** Session identity — the name (click to rename) pinned to the left edge
+ *  directly above the session stream. Chrome and live state stay in
+ *  StatusBar; send configuration sits in SessionBar by the composer. */
+export const SessionHeader: Component = () => {
+	const [editingName, setEditingName] = createSignal(false);
+	// Enter commits and closes first, so the trailing blur is a harmless no-op.
+	const commitName = (el: HTMLInputElement) => {
+		const title = el.value.trim();
+		setEditingName(false);
+		if (title && title !== state.sessionName) {
+			void call("setSessionName", [title]).catch(err => setState("error", String(err)));
+		}
+	};
+
+	return (
+		<div class="session-header">
+			<Show
+				when={editingName()}
+				fallback={
+					<Segment class="session-name" onClick={() => setEditingName(true)} title="Rename session">
+						{state.sessionName ?? state.sessionId.slice(0, 8)}
+					</Segment>
+				}
+			>
+				<input
+					ref={el => queueMicrotask(() => { el.focus(); el.select(); })}
+					class="segment session-name-input"
+					value={state.sessionName ?? ""}
+					onKeyDown={e => {
+						if (e.key === "Enter") commitName(e.currentTarget);
+						else if (e.key === "Escape") setEditingName(false);
+					}}
+					onBlur={() => setEditingName(false)}
+				/>
+			</Show>
+		</div>
+	);
+};
+
+/** Session-send configuration (model, thinking) plus the session resource
+ *  meters (ctx fill, cumulative stats) — pinned directly above the composer,
+ *  where the send decision happens. Live turn-state (retry, badges) and
+ *  global chrome stay in StatusBar. */
+export const SessionBar: Component = () => (
+	<div class="session-bar">
+		<Segment class="model-segment" onClick={() => setState("modal", "model")} title="Model roles">
+			{state.model ? `${state.model.provider}/${state.model.id}` : "no model"}
+		</Segment>
+		<Segment
+			class="thinking-segment"
+			onClick={() => void call("cycleThinkingLevel").catch(err => setState("error", String(err)))}
+			onContextMenu={e => {
+				e.preventDefault();
+				setState("modal", "thinking");
+			}}
+			title="Click: cycle thinking level · right-click: pick"
+		>
+			{state.thinkingLevel ?? "inherit"}
+		</Segment>
+		<span class="status-spacer" />
+		<ContextSegment />
+		<Show when={state.stats}>
+			{s => (
+				<Segment onClick={() => setState("modal", "stats")} title="Session stats">
+					${s().cost.toFixed(2)} · ↑{formatTokens(s().tokens.input)} ↓{formatTokens(s().tokens.output)}
+				</Segment>
+			)}
+		</Show>
+	</div>
+);

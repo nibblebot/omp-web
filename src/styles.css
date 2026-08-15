@@ -312,6 +312,26 @@ body {
 	flex-wrap: wrap;
 }
 
+.session-header {
+	display: flex;
+	align-items: center;
+	padding: var(--space-4) 0 0;
+}
+
+.session-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-4);
+	padding: var(--space-4) 0;
+}
+
+.model-segment {
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 .status-dot {
 	width: 8px;
 	height: 8px;
