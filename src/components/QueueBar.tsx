@@ -66,7 +66,7 @@ export const QueueBar: Component = () => {
 							<span class="queue-chip">
 								<span class="queue-kind" classList={{ [chip.kind]: true }}>{chip.kind}</span>
 								<span class="queue-text">{preview(chip.text)}</span>
-								<button class="queue-pop" title="Pop back into the prompt (Alt+↑)" onClick={dequeueLastQueued}>
+								<button class="queue-pop" title="Pop back into the prompt (Alt+↑)" aria-label="Pop back into the prompt (Alt+↑)" onClick={dequeueLastQueued}>
 									×
 								</button>
 							</span>

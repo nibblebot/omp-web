@@ -4,7 +4,7 @@ import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "../shared/protocol";
-import type { ClientCommand, DaemonEntry, DaemonInfo, ImageArg, ModelInfo, AvailableSlashCommand, ProjectEntry, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "../shared/protocol";
+import type { ClientCommand, DaemonEntry, DaemonInfo, DaemonStatus, ImageArg, ModelInfo, AvailableSlashCommand, ProjectEntry, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "../shared/protocol";
 import { SSE_PING_EVENT } from "../shared/sse";
 import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
@@ -218,6 +218,10 @@ export const [state, setState] = createStore({
 	// Phase 11: /btw side-panel session. streamId routes ephemeral_delta
 	// frames to this panel; the panel never appears in the transcript.
 	btw: null as null | { question: string; reply: string; streaming: boolean; streamId: number; error?: string },
+	// finding #P1: aria-live announcement text — rendered into the always-mounted
+	// role="status" region in App.tsx. announce() dedupes identical consecutive
+	// text so a burst of the same transition doesn't re-announce.
+	announcement: "",
 });
 
 /** R8 omp-session readiness accessor: true once the boot session's gate has cleared
@@ -362,6 +366,38 @@ function pushItem(item: ChatItem): void {
 
 export function pushNotice(level: string, message: string, href?: string): void {
 	pushItem({ kind: "notice", id: nextId++, level, message, href });
+	// finding #P1: error-level notices are status messages — announce them so
+	// screen-reader users hear them without focus being yanked.
+	if (level === "error") announceIfReady(message);
+}
+
+// ---------------------------------------------------------------------------
+// finding #P1: aria-live announcements (WCAG 4.1.3 status messages). The store
+// holds the latest text; App.tsx renders it into an always-mounted
+// role="status" region. announce() dedupes identical CONSECUTIVE text (the
+// region re-announces on content change, so a repeat must be a no-op) and is
+// purely a store write — boot/priming gating is the call sites' job.
+// ---------------------------------------------------------------------------
+export function announce(text: string): void {
+	if (state.announcement === text) return;
+	setState("announcement", text);
+}
+
+/** Session-scoped announcements: silent until the boot readiness gate clears
+ *  (priming/history replay must not announce). Roster transitions are NOT
+ *  gated here — they are fleet-scoped and diffed against first sighting. */
+function announceIfReady(text: string): void {
+	if (isReady()) announce(text);
+}
+
+/** finding #P1: announce a daemon's transition to a terminal rung (ready/error).
+ *  First sighting (boot priming) and repeated identical statuses are silent.
+ *  Deliberately NOT gated on session readiness — the roster is fleet-scoped,
+ *  so a roster-mode tab with no attached session still hears its daemons come
+ *  up or fall over. */
+function announceDaemonStatus(prev: DaemonEntry | undefined, name: string, status: DaemonStatus): void {
+	if (!prev || prev.status === status) return;
+	if (status === "ready" || status === "error") announce(`${name} ${status}`);
 }
 
 export function pushCompaction(item: Omit<CompactionItem, "kind" | "id">): void {
@@ -512,6 +548,8 @@ export function applyEvent(e: AgentSessionEvent): void {
 	switch (e.type) {
 		case "agent_start":
 			setState("streaming", true);
+			// finding #P1: the agent turn became audible — announce the flip.
+			announceIfReady("agent started");
 			break;
 		case "agent_end":
 			// The final message content is authoritative (message_end pushes the
@@ -519,6 +557,8 @@ export function applyEvent(e: AgentSessionEvent): void {
 			pendingDeltas.clear();
 			setState("streaming", false);
 			setState("live", "active", false);
+			// finding #P1: turn ended (streamed text itself is never announced).
+			announceIfReady("agent finished");
 			// Phase 11: desktop notification while the tab is hidden (OSC parity).
 			maybeNotify("Turn complete", truncateHead(lastAssistantText(), 80));
 			break;
@@ -595,6 +635,8 @@ export function applyEvent(e: AgentSessionEvent): void {
 				status: "running",
 				output: "",
 			});
+			// finding #P1: tool run lifecycle is a status message.
+			announceIfReady(`${e.toolName} started`);
 			break;
 		case "tool_execution_update": {
 			const index = findToolIndex(e.toolCallId);
@@ -627,13 +669,20 @@ export function applyEvent(e: AgentSessionEvent): void {
 						}
 					}),
 				);
+			// finding #P1: announce the settled rung (failed/complete), never
+			// the tool output itself.
+			announceIfReady(`${e.toolName} ${e.isError ? "failed" : "completed"}`);
 			break;
 		}
 		case "notice":
 			pushItem({ kind: "notice", id: nextId++, level: e.level, message: e.message });
 			// Phase 11: error-level notices (turn failure, failed retry, …) get
 			// a notification too; the TUI surfaces these with an error OSC.
-			if (e.level === "error") maybeNotify("Turn stopped with error", truncateHead(e.message, 80));
+			if (e.level === "error") {
+				maybeNotify("Turn stopped with error", truncateHead(e.message, 80));
+				// finding #P1: an error notice firing is a status message.
+				announceIfReady(e.message);
+			}
 			break;
 		case "thinking_level_changed":
 			setState("thinkingLevel", e.thinkingLevel ?? undefined);
@@ -1574,7 +1623,14 @@ export function connect(): void {
 			case "daemons":
 				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [daemonsKey(d), d])));
 				break;
-			case "roster":
+			case "roster": {
+				// finding #P1: diff the replacement roster against what we had —
+				// first sighting is boot priming (silent); later transitions to
+				// ready/error announce.
+				const rosterBefore = state.daemonRoster;
+				for (const entry of frame.daemons) {
+					announceDaemonStatus(rosterBefore.find(d => d.daemonId === entry.daemonId), entry.name, entry.status);
+				}
 				// The fleet edge sent its daemon roster — this tab is in
 				// roster mode (sidebar swaps to the session list). The attached
 				// frame carries no mode; this frame is the mode signal, and it
@@ -1584,7 +1640,12 @@ export function connect(): void {
 				setState("sessionMode", "roster");
 				pushDebug("info", "roster", `roster frame: ${frame.daemons.length} daemon${frame.daemons.length === 1 ? "" : "s"}`);
 				break;
-			case "daemon_status":
+			}
+			case "daemon_status": {
+				// finding #P1: announce the transition to a terminal rung
+				// (ready/error) before patching the entry in place.
+				const daemonBefore = state.daemonRoster.find(d => d.daemonId === frame.daemonId);
+				announceDaemonStatus(daemonBefore, daemonBefore?.name ?? frame.daemonId, frame.status);
 				// Patch the matching roster entry in place; the error field
 				// clears unless the frame carries a fresh one.
 				setState("daemonRoster", roster =>
@@ -1600,6 +1661,7 @@ export function connect(): void {
 					`daemon ${frame.daemonId.slice(0, 8)} → ${frame.status}${frame.error !== undefined ? `: ${frame.error}` : ""}`,
 				);
 				break;
+			}
 			case "projects":
 				pendingProjects?.(frame.projects);
 				pendingProjects = null;

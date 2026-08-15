@@ -107,7 +107,7 @@
 	--accent: #1d4ed8;
 	--success: #15803d;
 	--warning: #92400e;
-	--error: #dc2626;
+	--error: #bf1c22;
 	--purple: #9333ea;
 	--success-bg: #dcfce7;
 	--success-border: #86efac;
@@ -174,20 +174,20 @@
 	   themes; inset tracks drop to mantle and borders soften to surface0. */
 	--panel: #ffffff;
 	--panel-2: #e6e9ef;
-	--btn: #bcc0cc;
+	--btn: #d9dde5;
 	--border: #ccd0da;
 	--border-strong: #9ca0b0;
 	--text: #4c4f69;
-	--hover: #ccd0da;
-	--accent-dim: rgba(30, 102, 245, 0.15);
-	--muted: #62657b;
-	--muted-2: #585b6c;
-	--muted-3: #6c6f85;
+	--hover: #e1e5ed;
+	--accent-dim: #dde8fd;
+	--muted: #575a6e;
+	--muted-2: #525567;
+	--muted-3: #5b5e74;
 	--accent: #1a55d6;
 	--accent-border: rgba(30, 102, 245, 0.4);
 	--success: #256f1a;
 	--warning: #92400e;
-	--error: #d20f39;
+	--error: #c20d34;
 	--purple: #8839ef;
 	--success-bg: rgba(64, 160, 43, 0.12);
 	--success-border: rgba(64, 160, 43, 0.35);
@@ -195,7 +195,7 @@
 	--warning-border: rgba(223, 142, 29, 0.35);
 	--error-bg: rgba(210, 15, 57, 0.1);
 	--error-border: rgba(210, 15, 57, 0.35);
-	--error-text: #d20f39;
+	--error-text: #c20d34;
 	--stop-bg: rgba(210, 15, 57, 0.1);
 	--diff-add-bg: rgba(64, 160, 43, 0.1);
 	--diff-add-text: #1f5c2a;
@@ -289,6 +289,21 @@ body {
 	line-height: 1.5;
 	-webkit-font-smoothing: antialiased;
 	text-rendering: optimizeLegibility;
+}
+
+/* finding #P1: visually-hidden utility for the aria-live status region — kept
+ * in the layout for screen readers, clipped out of the visual/paint surface. */
+.visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
 }
 
 .app {
@@ -764,6 +779,8 @@ pre {
 	color: var(--muted);
 	cursor: pointer;
 	padding: 0 var(--space-3);
+	min-width: 24px;
+	min-height: 24px;
 	font-size: var(--fs-md);
 }
 
@@ -780,6 +797,8 @@ pre {
 	text-transform: uppercase;
 	letter-spacing: var(--ls-micro);
 	padding: 0 var(--space-2);
+	min-width: 24px;
+	min-height: 24px;
 }
 
 .queue-clear:hover {
@@ -817,11 +836,15 @@ pre {
 
 .image-remove {
 	position: absolute;
-	top: -6px;
-	right: -6px;
-	width: 18px;
-	height: 18px;
-	padding: 0;
+	top: -9px;
+	right: -9px;
+	min-width: 24px;
+	min-height: 24px;
+	width: 24px;
+	height: 24px;
+	padding: 3px;
+	border: 0;
+	background-clip: content-box;
 	border-radius: 50%;
 	font-size: var(--fs-md);
 	line-height: 1;
@@ -1210,19 +1233,21 @@ button.danger-confirm-btn:not(:disabled):hover {
 	}
 }
 
-/* Touch: hit targets at least 24px tall/wide (WCAG 2.5.8 AA); fine-pointer
-   layout is unchanged. */
+/* Touch: hit targets at least 32px tall/wide (WCAG 2.5.8 AA); fine-pointer
+   controls carry the 24px minimum at their base rules. */
 @media (pointer: coarse) {
-	.daemon-icon-btn,
-	.segment-button,
-	.image-remove,
-	.queue-pop,
-	.queue-clear,
-	.msg-copy-btn,
-	.msg-branch-btn,
-	.sidebar-icon-btn {
-		min-width: 24px;
-		min-height: 24px;
+	/* Selectors doubled for specificity: the base rules sit later in the
+	   file and would otherwise win the cascade at equal specificity. */
+	.daemon-icon-btn.daemon-icon-btn,
+	.segment-button.segment-button,
+	.image-remove.image-remove,
+	.queue-pop.queue-pop,
+	.queue-clear.queue-clear,
+	.msg-copy-btn.msg-copy-btn,
+	.msg-branch-btn.msg-branch-btn,
+	.sidebar-icon-btn.sidebar-icon-btn {
+		min-width: 32px;
+		min-height: 32px;
 	}
 
 	/* Copy/branch actions stay visible on touch, where there is no hover. */
@@ -1565,6 +1590,8 @@ button.danger-confirm-btn:not(:disabled):hover {
 	background: none;
 	border: none;
 	padding: var(--space-1) var(--space-3);
+	min-width: 24px;
+	min-height: 24px;
 	border-radius: var(--r-sm);
 	transition: background-color var(--dur-fast) var(--ease-out);
 }
@@ -2642,6 +2669,8 @@ pre.terminal {
 	color: var(--muted);
 	cursor: pointer;
 	padding: 0 var(--space-2);
+	min-width: 24px;
+	min-height: 24px;
 	font: inherit;
 	border-radius: var(--r-sm);
 }
@@ -3275,6 +3304,8 @@ pre.terminal {
 	color: var(--muted-2);
 	font-size: var(--fs-sm);
 	padding: var(--space-1) var(--space-4);
+	min-width: 24px;
+	min-height: 24px;
 	cursor: pointer;
 }
 
@@ -3537,6 +3568,8 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	background: none;
 	border: none;
 	padding: 0 var(--space-1);
+	min-width: 24px;
+	min-height: 24px;
 	color: var(--muted-2);
 	font-size: var(--fs-sm);
 	line-height: 1;

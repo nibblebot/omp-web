@@ -220,11 +220,11 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 								</Row>
 								<Row label="font size">
 									<div class="settings-font">
-										<button type="button" class="settings-control-btn" onClick={() => setFontSize(stepFontSize(-1))}>
+										<button type="button" class="settings-control-btn" aria-label="Decrease font size" onClick={() => setFontSize(stepFontSize(-1))}>
 											−
 										</button>
 										<span class="settings-font-value">{fontSize()}</span>
-										<button type="button" class="settings-control-btn" onClick={() => setFontSize(stepFontSize(1))}>
+										<button type="button" class="settings-control-btn" aria-label="Increase font size" onClick={() => setFontSize(stepFontSize(1))}>
 											+
 										</button>
 									</div>

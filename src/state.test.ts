@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import { OMP_PROTO, SSE_EVENT_NAME } from "../shared/protocol";
 import type { ClientCommand, ServerFrame, SettingsModel, WebSessionState } from "../shared/protocol";
-import { attachSession, call, connect, refreshSettings, setState, state, updateSetting, type SubagentInfo } from "./state";
+import { announce, attachSession, call, connect, pushNotice, refreshSettings, setState, state, updateSetting, type SubagentInfo } from "./state";
 
 // ---------------------------------------------------------------------------
 // Minimal /events transport double. connect() registers its SSE handler on a
@@ -121,6 +121,7 @@ beforeEach(() => {
 		debugLog: [],
 		lastFrameAt: 0,
 		reconnectDelay: 0,
+		announcement: "",
 		// Transcript items are per-session view state; without a reset a test
 		// that attached (no switch → no resetSessionView) leaks its items into
 		// the next test.
@@ -646,5 +647,84 @@ describe("state-frame application (model-role picker state)", () => {
 		expect(state.modelRoleCatalog).toBeUndefined();
 		expect(state.modelRoleStorage).toBeUndefined();
 		expect(state.modelRoles).toBeUndefined();
+	});
+});
+
+describe("aria-live announcements (finding #P1)", () => {
+	/** A fully primed stream: attached, empty history, readiness gate cleared. */
+	function primeReady(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+		dispatchSeq({ type: "history", messages: [] }, 3);
+		dispatch({ type: "ready", readyAt: 123 });
+	}
+
+	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+	const agentEnd = (): ServerFrame => ({ type: "event", event: { type: "agent_end", messages: [] } });
+
+	test("an agent turn starting announces only after the session is ready", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+		// Streaming flips during priming — no announcement until the gate clears.
+		dispatchSeq(agentStart(), 1024);
+		expect(state.streaming).toBe(true);
+		expect(state.announcement).toBe("");
+
+		// Post-readiness: turn end announces, and the next turn start does too.
+		dispatch({ type: "ready", readyAt: 123 });
+		dispatchSeq(agentEnd(), 1025);
+		expect(state.announcement).toBe("agent finished");
+		dispatchSeq(agentStart(), 1026);
+		expect(state.announcement).toBe("agent started");
+	});
+
+	test("a tool run starting, completing, and failing announces its kind", () => {
+		primeReady();
+		dispatchSeq(
+			{ type: "event", event: { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "echo hi" } } },
+			1024,
+		);
+		expect(state.announcement).toBe("bash started");
+		dispatchSeq(
+			{ type: "event", event: { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", result: { output: "out" } } },
+			1025,
+		);
+		expect(state.announcement).toBe("bash completed");
+		// A failed run announces "failed" (the tool output itself is never announced).
+		dispatchSeq(
+			{ type: "event", event: { type: "tool_execution_start", toolCallId: "t2", toolName: "bash", args: { command: "boom" } } },
+			1026,
+		);
+		dispatchSeq(
+			{ type: "event", event: { type: "tool_execution_end", toolCallId: "t2", toolName: "bash", result: { output: "" }, isError: true } },
+			1027,
+		);
+		expect(state.announcement).toBe("bash failed");
+	});
+
+	test("an error notice announces its message; non-error notices stay silent", () => {
+		primeReady();
+		pushNotice("info", "not a status change");
+		expect(state.announcement).toBe("");
+		pushNotice("error", "nothing to retry");
+		expect(state.announcement).toBe("nothing to retry");
+	});
+
+	test("two identical consecutive announcements collapse to one (consecutive-only dedupe)", () => {
+		// The store field is the only observable here — Bun's runtime doesn't
+		// propagate Solid 1.9 store notifications, so write-counting via an
+		// effect would never fire. The field contract pins the dedupe: the
+		// identical repeat is a no-op, and a repeat after an intervening message
+		// re-announces (the region's content changed, so SRs hear it again).
+		announce("tick");
+		announce("tick"); // identical consecutive text → collapsed, no re-announce
+		expect(state.announcement).toBe("tick");
+		announce("tock");
+		expect(state.announcement).toBe("tock");
+		// Non-consecutive repeat of earlier text announces again.
+		announce("tick");
+		expect(state.announcement).toBe("tick");
 	});
 });

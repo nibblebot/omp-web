@@ -61,7 +61,7 @@ export const FullImageOverlay: Component<{ image: ImageArg; onClose: () => void 
 				<img
 					ref={img}
 					src={imageDataUrl(props.image)}
-					alt="full-size image"
+					alt={`full-size image (${props.image.mimeType})`}
 					decoding="async"
 					tabindex="0"
 					onClick={e => e.stopPropagation()}

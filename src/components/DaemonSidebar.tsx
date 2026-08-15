@@ -194,6 +194,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 							class="daemon-icon-btn daemon-stop-btn"
 							classList={{ armed: armedStop() }}
 							title={armedStop() ? "Stop this daemon (second click confirms)" : "Stop this daemon"}
+							aria-label={armedStop() ? "Stop this daemon (second click confirms)" : "Stop this daemon"}
 							onClick={e => {
 								e.stopPropagation();
 								if (armedStop()) doStop();
@@ -211,6 +212,11 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 									? "Remove this daemon (second click confirms)"
 									: "Remove this daemon from the roster (stops it first)"
 							}
+							aria-label={
+								armedRemove()
+									? "Remove this daemon (second click confirms)"
+									: "Remove this daemon from the roster (stops it first)"
+							}
 							onClick={e => {
 								e.stopPropagation();
 								if (armedRemove()) doRemove();
@@ -223,6 +229,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 							type="button"
 							class="daemon-icon-btn daemon-detail-btn"
 							title="Daemon details"
+							aria-label="Daemon details"
 							onClick={e => {
 								e.stopPropagation();
 								setDetailOpen(true);
@@ -685,10 +692,10 @@ export const DaemonSidebar: Component = () => {
 				<span class="sidebar-stats">
 					{state.daemonRoster.length} daemon{state.daemonRoster.length === 1 ? "" : "s"}
 				</span>
-				<button class="sidebar-icon-btn" onClick={() => setSpawnOpen(true)} title="Spawn a daemon">
+				<button class="sidebar-icon-btn" onClick={() => setSpawnOpen(true)} title="Spawn a daemon" aria-label="Spawn a daemon">
 					+
 				</button>
-				<button class="sidebar-icon-btn" onClick={() => setSidebarVisible(false)} title="Hide sidebar">
+				<button class="sidebar-icon-btn" onClick={() => setSidebarVisible(false)} title="Hide sidebar" aria-label="Hide sidebar">
 					×
 				</button>
 			</div>

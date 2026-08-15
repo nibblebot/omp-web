@@ -90,6 +90,10 @@ export const App: Component = () => {
 	});
 	return (
 		<div class="app">
+			{/* finding #P1: always-mounted aria-live region (WCAG 4.1.3). Announcements
+			    are written by state.announce() — never conditionally rendered, so
+			    screen readers register the polite region at mount. */}
+			<div role="status" aria-live="polite" class="visually-hidden">{state.announcement}</div>
 			<StatusBar />
 			<div class="app-body">
 				<Show when={state.view === "transcripts"}>

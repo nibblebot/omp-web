@@ -340,7 +340,7 @@ export const MessageList: Component = () => {
 												<For each={images()}>
 													{img => (
 														<button class="img-thumb" type="button" onClick={() => setZoomed(img)}>
-															<img src={imageDataUrl(img)} alt="user attached image" decoding="async" />
+															<img src={imageDataUrl(img)} alt={`user attached image (${img.mimeType})`} decoding="async" />
 														</button>
 													)}
 												</For>
