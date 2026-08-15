@@ -26,6 +26,7 @@ import { SubagentPanel } from "./components/SubagentPanel";
 import { ThinkingPicker } from "./components/ThinkingPicker";
 import { connect, setPromptInsert, setState, state } from "./state";
 import { initTheme } from "./theme";
+import { TxBrowser } from "./tx/Browser";
 
 // Apply persisted theme/font-size before first render to avoid a dark flash.
 initTheme();
@@ -89,21 +90,26 @@ export const App: Component = () => {
 		<div class="app">
 			<StatusBar />
 			<div class="app-body">
-				<div class="app-main">
-					<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyState />}>
-						<MessageList />
-					</Show>
-					<QueueBar />
-					<div class="active-strips">
-						<ActiveSubagents />
-						<ActiveDaemons />
+				<Show when={state.view === "transcripts"}>
+					<TxBrowser />
+				</Show>
+				<Show when={state.view === "chat"}>
+					<div class="app-main">
+						<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyState />}>
+							<MessageList />
+						</Show>
+						<QueueBar />
+						<div class="active-strips">
+							<ActiveSubagents />
+							<ActiveDaemons />
+						</div>
+						<PromptBox />
 					</div>
-					<PromptBox />
-				</div>
-				{/* Roster mode (fleet edge): the fleet roster sidebar replaces the
-				    sessions sidebar; single mode has no sidebar at all. */}
-				<Show when={state.sidebarVisible && state.sessionMode === "roster"}>
-					<DaemonSidebar />
+					{/* Roster mode (fleet edge): the fleet roster sidebar replaces the
+					    sessions sidebar; single mode has no sidebar at all. */}
+					<Show when={state.sidebarVisible && state.sessionMode === "roster"}>
+						<DaemonSidebar />
+					</Show>
 				</Show>
 			</div>
 			<Show when={state.petVisible}>

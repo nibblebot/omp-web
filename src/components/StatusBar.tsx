@@ -120,6 +120,17 @@ export const StatusBar: Component = () => {
 					</Segment>
 				)}
 			</Show>
+			{/* Historical transcripts/stats browser; the /ctl/stats API only exists
+			    with a fleet process, so the toggle is roster-mode-only. */}
+			<Show when={state.sessionMode === "roster"}>
+				<Segment
+					active={state.view === "transcripts"}
+					onClick={() => setState("view", v => (v === "transcripts" ? "chat" : "transcripts"))}
+					title="Transcripts"
+				>
+					◫ Tx
+				</Segment>
+			</Show>
 			{state.queuedMessageCount > 0 && <span class="queued-chip">queued: {state.queuedMessageCount}</span>}
 			<span class="status-spacer" />
 			<Show when={state.subagents.size > 0}>

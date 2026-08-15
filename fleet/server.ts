@@ -51,9 +51,17 @@ import { fanOut } from "./fanout";
 import { FleetEdge } from "./edge";
 import { FleetEventLog, type FleetFacts } from "./events";
 import { createFleetSettings, type FleetSettings, type FleetSettingsOptions } from "./settings";
+import { createStatsApp } from "./stats/index";
 
 const DEFAULT_PORT = 4722;
 const DEFAULT_STATE_PATH = join(homedir(), ".omp", "fleet", "state.json");
+
+/**
+ * Historical transcripts/stats API (read-only stats.db + session files),
+ * mounted under /ctl/stats. One instance per process, created at boot from
+ * process env; close() releases its stats.db handle on fleet shutdown.
+ */
+const statsApp = createStatsApp();
 
 /** Control plane as consumed by the CLI (and, in Phase 3, the edge server). */
 export interface FleetServer {
@@ -373,6 +381,11 @@ class FleetServerImpl implements FleetServer {
 		} catch (err) {
 			errors.push(err);
 		}
+		try {
+			statsApp.close();
+		} catch (err) {
+			errors.push(err);
+		}
 		if (errors.length > 0) throw errors[0];
 	}
 
@@ -430,6 +443,13 @@ class FleetServerImpl implements FleetServer {
 		try {
 			const url = new URL(req.url);
 			const path = url.pathname;
+			// Historical transcripts/stats API: /ctl/stats/* is stats-owned
+			// (statsApp returns null for unowned paths — the control-plane
+			// switch below owns the 404/405 for those).
+			if (path.startsWith("/ctl/stats")) {
+				const statsHandled = await statsApp.handleFetch(req, url);
+				if (statsHandled !== null) return statsHandled;
+			}
 			if (req.method === "GET") {
 				switch (path) {
 					case "/ctl/sessions":

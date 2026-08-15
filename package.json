@@ -12,6 +12,7 @@
 		"start": "bun server/index.ts",
 		"check:types": "tsgo -p tsconfig.json --noEmit",
 		"test": "bun scripts/test.ts",
+		"tx-fixture": "bun scripts/gen-tx-fixture.ts",
 		"collab": "bun server/collab-cli.ts",
 		"fleet": "bun fleet/cli.ts"
 	},
@@ -19,6 +20,7 @@
 		"@oh-my-pi/pi-agent-core": "17.1.8",
 		"@oh-my-pi/pi-coding-agent": "17.1.8",
 		"@oh-my-pi/pi-utils": "17.1.8",
+		"@tanstack/solid-virtual": "^3.13.36",
 		"diff": "^9.0.0",
 		"dompurify": "^3.3.0",
 		"marked": "^18.0.6",

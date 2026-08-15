@@ -185,6 +185,10 @@ export const [state, setState] = createStore({
 	daemonRoster: [] as DaemonEntry[],
 	sidebarVisible: typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
 	petVisible: typeof localStorage !== "undefined" ? localStorage.getItem(PET_KEY) !== "false" : true,
+	// Top-level view: "chat" (live session) or "transcripts" (historical
+	// transcripts/stats browser — only meaningful in roster mode, where the
+	// /ctl/stats API exists; the StatusBar toggle gates on sessionMode).
+	view: "chat" as "chat" | "transcripts",
 	// Phase 6: in-flight OAuth login prompts (unicast frames).
 	loginUrl: null as { url: string; launchUrl?: string; instructions?: string } | null,
 	loginCodeRequest: null as { requestId: string; title: string; placeholder?: string } | null,
