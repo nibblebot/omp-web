@@ -207,7 +207,7 @@ export const SessionBar: Component = () => (
 		<ContextSegment />
 		<Show when={state.stats}>
 			{s => (
-				<Segment onClick={() => setState("modal", "stats")} title="Session stats">
+				<Segment class="stats-segment" onClick={() => setState("modal", "stats")} title="Session stats">
 					${s().cost.toFixed(2)} · ↑{formatTokens(s().tokens.input)} ↓{formatTokens(s().tokens.output)}
 				</Segment>
 			)}

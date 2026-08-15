@@ -6,7 +6,7 @@ import { CollapsiblePre, ToolShell } from "./ToolShell";
 export const BashTool: Component<{ item: ToolItem }> = props => {
 	const command = () => (props.item.args as { command?: string } | null)?.command ?? "";
 	return (
-		<ToolShell name={<>$ {command()}</>} status={props.item.status} class="bash-tool">
+		<ToolShell name={<span class="bash-cmd">$ {command()}</span>} status={props.item.status} class="bash-tool">
 			<CollapsiblePre item={props.item} output={props.item.output} tail />
 		</ToolShell>
 	);

@@ -315,7 +315,7 @@ body {
 .session-header {
 	display: flex;
 	align-items: center;
-	padding: var(--space-4) 0 0;
+	padding: var(--space-4) 0 var(--space-2);
 }
 
 .session-bar {
@@ -327,6 +327,7 @@ body {
 }
 
 .model-segment {
+	font-family: var(--font-mono);
 	max-width: 220px;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -409,7 +410,7 @@ body {
 .message-list {
 	flex: 1;
 	overflow-y: auto;
-	padding: var(--space-6) 0;
+	padding: var(--space-6) 0 var(--space-4);
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-5);
@@ -526,6 +527,7 @@ body {
 }
 
 .run-row-count {
+	font-family: var(--font-mono);
 	font-weight: 600;
 }
 
@@ -539,6 +541,7 @@ body {
 
 /* Consolidated-run meta segments (err/req/duration/turns). */
 .run-row-meta {
+	font-family: var(--font-mono);
 	color: var(--muted-2);
 	white-space: nowrap;
 }
@@ -652,6 +655,7 @@ body {
 }
 
 .tool-args {
+	font-family: var(--font-mono);
 	color: var(--muted-2);
 	white-space: nowrap;
 	overflow: hidden;
@@ -681,7 +685,7 @@ pre {
 
 .prompt-box {
 	border-top: 1px solid var(--border);
-	padding: var(--space-5) 0;
+	padding: var(--space-4) 0;
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-4);
@@ -703,6 +707,7 @@ pre {
 }
 
 .queued-chip {
+	font-family: var(--font-mono);
 	align-self: center;
 	background: var(--warning-bg);
 	border: 1px solid var(--warning-border);
@@ -1540,7 +1545,13 @@ button.danger-confirm-btn:not(:disabled):hover {
 
 
 .thinking-segment {
+	font-family: var(--font-mono);
 	color: var(--muted);
+}
+
+/* Session resource meters (cost/tokens) — machine numbers. */
+.stats-segment {
+	font-family: var(--font-mono);
 }
 
 /* Muted "ctx" label prefix inside the context segment; the percent keeps
@@ -1556,6 +1567,10 @@ button.danger-confirm-btn:not(:disabled):hover {
 	border-radius: var(--r-pill);
 	padding: var(--space-1) var(--space-4);
 	font-size: var(--fs-sm);
+}
+
+.context-segment {
+	font-family: var(--font-mono);
 }
 
 .context-segment[data-level="normal"] {
@@ -1582,6 +1597,14 @@ button.danger-confirm-btn:not(:disabled):hover {
 	max-width: 200px;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	font-size: var(--fs-base);
+	font-weight: 600;
+	color: var(--text);
+}
+
+.session-name-input {
+	font-size: var(--fs-base);
+	font-weight: 600;
 }
 
 .picker-filter {
@@ -2126,11 +2149,13 @@ pre.terminal {
 }
 
 .daemon-state {
+	font-family: var(--font-mono);
 	color: var(--muted-2);
 	font-size: var(--fs-sm);
 }
 
 .daemon-meta {
+	font-family: var(--font-mono);
 	color: var(--muted);
 	font-size: var(--fs-sm);
 	margin-left: auto;
@@ -2138,6 +2163,7 @@ pre.terminal {
 }
 
 .daemon-port {
+	font-family: var(--font-mono);
 	color: var(--success);
 	font-size: var(--fs-sm);
 	font-variant-numeric: tabular-nums;
@@ -2870,6 +2896,7 @@ pre.terminal {
 
 /* Per-turn usage footer under settled assistant messages. */
 .usage-row {
+	font-family: var(--font-mono);
 	display: flex;
 	justify-content: flex-end;
 	gap: var(--space-4);
@@ -2893,6 +2920,7 @@ pre.terminal {
 
 /* Auto-retry countdown badge. */
 .retry-badge {
+	font-family: var(--font-mono);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -3229,6 +3257,7 @@ pre.terminal.eval-code {
 }
 
 .tool-meta {
+	font-family: var(--font-mono);
 	padding: 0 var(--space-4) var(--space-3);
 	color: var(--muted-3);
 	font-size: var(--fs-md);
