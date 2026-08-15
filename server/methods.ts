@@ -1,13 +1,17 @@
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { Settings } from "@oh-my-pi/pi-coding-agent";
+import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
+import { formatModelSelectorValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { SETTINGS_SCHEMA, type SettingPath } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { getAvailableThemes } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { resolveRoleModelFull } from "@oh-my-pi/pi-coding-agent/session/role-models";
 import type { InspectImageMode } from "@oh-my-pi/pi-coding-agent/utils/inspect-image-mode";
 import type { WebMethodName } from "../shared/protocol";
 import type { CollabSession, Images } from "./collab-session";
@@ -16,6 +20,36 @@ import type { SessionEntry } from "./session-entry";
 import { applySettingSideEffects, buildSettingsModel, coerceSettingValue } from "./settings-model";
 import { broadcastTo, clearEphemeralAbort, ephemeralAborts, setEphemeralAbort } from "./sse-delivery";
 import { clearSubagents, readSubagentTranscript, resolveSubagentSessionFile } from "./subagent-mirror";
+
+// ---------------------------------------------------------------------------
+// Model-role picker helpers (TUI model-hub parity).
+// ---------------------------------------------------------------------------
+
+// Role-id validation shared by the roles-picker mutations; matches the TUI
+// model-hub custom-role regex.
+const MODEL_ROLE_ID_RE = /^[a-zA-Z][\w-]*$/;
+
+function assertModelRoleId(role: string): void {
+	if (!MODEL_ROLE_ID_RE.test(role)) {
+		throw new Error(`Invalid model role: ${role}`);
+	}
+}
+
+/** Concrete thinking selectors accepted by setModelRole (excludes the "auto" sentinel). */
+const THINKING_LEVEL_VALUES = Object.values(ThinkingLevel);
+
+/**
+ * The session's currently active role per the same cycle order the daemon
+ * broker's state snapshot uses: built-in roles in canonical order, then
+ * custom roles from settings. Undefined when no role cycle resolves.
+ */
+function activeRoleOf(session: AgentSession): string | undefined {
+	const customRoles = Object.keys(session.settings.getModelRoles()).filter(
+		role => !(MODEL_ROLE_IDS as readonly string[]).includes(role),
+	);
+	const cycle = session.getRoleModelCycle([...MODEL_ROLE_IDS, ...customRoles]);
+	return cycle?.models[cycle.currentIndex]?.role;
+}
 
 // ---------------------------------------------------------------------------
 // The METHODS dispatch table: every WebMethodName the POST /command `call`
@@ -172,6 +206,125 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			return model;
 		},
 		cycleModel: async entry => (await entry.session.cycleModel()) ?? null,
+		// Model-roles picker (TUI model-hub parity). All three are mutations:
+		// none sit in READ_ONLY (the post-mutation broadcast refreshes state,
+		// incl. the catalog) and, like setModel, none are readiness-gated or
+		// transcript reloads. Persistence scope follows `modelRoleStorage`;
+		// a changed role applies live only when it is the session's active role.
+		setModelRole: async (entry, a) => {
+			const { session } = entry;
+			const role = String(a[0] ?? "");
+			assertModelRoleId(role);
+			const provider = String(a[1]);
+			const modelId = String(a[2]);
+			// `auto` cannot round-trip through a baked `provider/model:level`
+			// role value — reject it (the TUI persists it via
+			// defaultThinkingLevel instead). "inherit"/undefined → no explicit
+			// thinking baked in.
+			const rawLevel = a[3];
+			let level: ThinkingLevel | undefined;
+			if (rawLevel !== undefined) {
+				const asString = String(rawLevel);
+				if (asString === "auto") {
+					throw new Error("Thinking level 'auto' cannot be baked into a role value; pick a concrete level or 'inherit'");
+				}
+				if (!(THINKING_LEVEL_VALUES as readonly string[]).includes(asString)) {
+					throw new Error(`Invalid thinking level: ${asString}`);
+				}
+				level = asString === ThinkingLevel.Inherit ? undefined : (asString as ThinkingLevel);
+			}
+			let model = session.getAvailableModels().find(m => m.provider === provider && m.id === modelId);
+			if (!model) {
+				// Cold start: discovery-backed providers populate seconds after
+				// session ready; wait for in-flight discovery before giving up
+				// (mirrors setModel).
+				await session.modelRegistry.awaitBackgroundRefresh();
+				model = session.getAvailableModels().find(m => m.provider === provider && m.id === modelId);
+			}
+			if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
+			const settings = session.settings;
+			const targetScope = settings.get("modelRoleStorage") === "project" ? "project" : "global";
+			const selector = `${model.provider}/${model.id}`;
+			if (role === "default") {
+				const { switched } = await session.setModel(model, "default", {
+					thinkingLevel: level,
+					persist: targetScope === "global",
+					currentContextTokens: session.getContextUsage()?.tokens ?? 0,
+				});
+				if (!switched) return { role, provider: model.provider, id: model.id };
+				if (targetScope === "project") {
+					settings.setProjectModelRole("default", formatModelSelectorValue(selector, level));
+				}
+				return { role, provider: model.provider, id: model.id };
+			}
+			const modelRoleValue = formatModelSelectorValue(selector, level);
+			if (targetScope === "project") {
+				settings.setProjectModelRole(role, modelRoleValue);
+			} else {
+				settings.setModelRole(role, modelRoleValue);
+			}
+			// Apply live when the changed role is the session's active role.
+			if (activeRoleOf(session) === role) {
+				const resolved = resolveRoleModelFull(settings, role, session.getAvailableModels(), session.model);
+				if (resolved.model) {
+					await session.applyRoleModel({
+						role,
+						model: resolved.model,
+						thinkingLevel: resolved.thinkingLevel,
+						explicitThinkingLevel: resolved.explicitThinkingLevel,
+					});
+				}
+			}
+			return { role, provider: model.provider, id: model.id };
+		},
+		clearModelRole: async (entry, a) => {
+			const { session } = entry;
+			const role = String(a[0] ?? "");
+			assertModelRoleId(role);
+			const settings = session.settings;
+			const targetScope = settings.get("modelRoleStorage") === "project" ? "project" : "global";
+			// Capture the active role before clearing — an unassigned role drops
+			// out of the cycle entirely, so the post-clear cycle can't name it.
+			const wasActive = activeRoleOf(session) === role;
+			if (targetScope === "project") {
+				settings.clearProjectModelRole(role);
+			} else {
+				settings.setModelRole(role, undefined);
+			}
+			if (!wasActive) return { role };
+			// The cleared role re-resolves from the newly exposed persisted
+			// layer; apply the effective value live when one resolves (setModel
+			// for default, applyRoleModel otherwise — TUI onUnassign semantics).
+			const resolved = resolveRoleModelFull(settings, role, session.getAvailableModels(), session.model);
+			if (!resolved.model) return { role };
+			if (role === "default") {
+				await session.setModel(resolved.model, "default", {
+					persist: false,
+					thinkingLevel:
+						resolved.explicitThinkingLevel && resolved.thinkingLevel !== "auto" ? resolved.thinkingLevel : undefined,
+					currentContextTokens: session.getContextUsage()?.tokens ?? 0,
+				});
+			} else {
+				await session.applyRoleModel({
+					role,
+					model: resolved.model,
+					thinkingLevel: resolved.thinkingLevel,
+					explicitThinkingLevel: resolved.explicitThinkingLevel,
+				});
+			}
+			return { role };
+		},
+		setModelRoleHidden: async (entry, a) => {
+			const role = String(a[0] ?? "");
+			assertModelRoleId(role);
+			const hidden = a[1] === true;
+			const settings = entry.session.settings;
+			const tags = settings.get("modelTags");
+			// modelTags is a global-layer setting: persist globally, and the
+			// picker filters hidden roles client-side while they stay functional.
+			settings.set("modelTags", { ...tags, [role]: { ...tags[role], hidden } });
+			return { role, hidden };
+		},
 		getAvailableModels: async entry => {
 			await entry.session.modelRegistry.awaitBackgroundRefresh();
 			return entry.session.getAvailableModels();

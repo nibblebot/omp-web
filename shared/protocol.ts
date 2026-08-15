@@ -18,10 +18,35 @@ import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
 /** Pick of Model the model picker consumes (was the RPC client's ModelInfo). */
 export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
 
+/** Where a role assignment persists: global config.yml or project .omp/config.yml. */
+export type ModelRoleStorage = "global" | "project";
+
+/** One row of the roles picker catalog: every known role (built-in + custom), assigned or not. */
+export interface ModelRoleCatalogEntry {
+	role: string;
+	/** Display name from getRoleInfo (built-in name or configured modelTags override). */
+	name: string;
+	/** TUI-parity tag from getRoleInfo (e.g. SMOL, PLAN); absent for custom roles — render `tag ?? name`. */
+	tag?: string;
+	/** Hidden roles stay functional but are filtered from picker view (modelTags.<role>.hidden). */
+	hidden: boolean;
+	/** Effective assigned model; absent when unassigned (auto-selection applies). */
+	provider?: string;
+	id?: string;
+	/** Explicit thinking selector baked into the role value (`provider/model:level`); absent = inherit. */
+	thinkingLevel?: string;
+	/** Persisted layer owning the effective assignment. */
+	source: "project" | "global" | "default";
+}
+
 export interface WebSessionState {
 	model?: Model;
 	/** Resolved model-role assignments (role -> provider/id) in canonical role order; undefined when nothing resolves. */
 	modelRoles?: Array<{ role: string; provider: string; id: string }>;
+	/** Full role catalog for the roles picker; undefined when the catalog cannot be built (no models). */
+	modelRoleCatalog?: ModelRoleCatalogEntry[];
+	/** Configured persistence scope for role edits (settings `modelRoleStorage`). */
+	modelRoleStorage?: ModelRoleStorage;
 	thinkingLevel: ThinkingLevel | undefined;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -269,6 +294,9 @@ export type WebMethodName =
 	| "formatSessionAsText"
 	| "dumpLlmRequestToTmpDir"
 	| "setModel"
+	| "setModelRole"
+	| "clearModelRole"
+	| "setModelRoleHidden"
 	| "cycleModel"
 	| "getAvailableModels"
 	| "setThinkingLevel"

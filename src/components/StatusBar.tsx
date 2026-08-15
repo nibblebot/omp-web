@@ -82,7 +82,7 @@ export const StatusBar: Component = () => {
 
 	return (
 		<header class="status-bar">
-			<Segment onClick={() => setState("modal", "model")} title="Switch model">
+			<Segment onClick={() => setState("modal", "model")} title="Model roles">
 				{state.model ? `${state.model.provider}/${state.model.id}` : "no model"}
 			</Segment>
 			<Segment

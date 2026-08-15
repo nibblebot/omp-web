@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createRenderEffect, createSignal, onCleanup, onMount, type Component } from "solid-js";
 import { characterForProvider, drawCharacter } from "../characters";
-import { ROLE_NAMES, groupModelRoles, type RoleGroup } from "../model-roles";
+import { groupModelRoles, type RoleGroup } from "../model-roles";
 import { SPRITE_SIZE, type PetPose } from "../sprite";
 import { setState, state, togglePetVisible } from "../state";
 import { CharacterAvatar } from "./CharacterAvatar";
@@ -134,7 +134,7 @@ export const Pet: Component = () => {
 									<span class="pet-role-name">{characterForProvider(e.group.provider).name}</span>
 								</div>
 								<Show when={e.group.roles.length > 0}>
-									<div class="pet-role-labels">{e.group.roles.map(r => ROLE_NAMES[r] ?? r).join(" · ")}</div>
+									<div class="pet-role-labels">{e.group.roles.join(" · ")}</div>
 								</Show>
 							</div>
 						)}

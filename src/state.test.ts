@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import { OMP_PROTO, SSE_EVENT_NAME } from "../shared/protocol";
-import type { ClientCommand, ServerFrame, SettingsModel } from "../shared/protocol";
+import type { ClientCommand, ServerFrame, SettingsModel, WebSessionState } from "../shared/protocol";
 import { attachSession, call, connect, refreshSettings, setState, state, updateSetting, type SubagentInfo } from "./state";
 
 // ---------------------------------------------------------------------------
@@ -578,5 +578,73 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 		dispatch(callResult(calls[0].id, model));
 		await settle();
 		expect(state.settingsModel).toEqual(model);
+	});
+});
+
+describe("state-frame application (model-role picker state)", () => {
+	/** A complete `state` frame; `extra` overrides the role-picker fields under test. */
+	function stateFrame(extra?: Partial<WebSessionState>): ServerFrame {
+		const base: WebSessionState = {
+			thinkingLevel: undefined,
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "all",
+			interruptMode: "immediate",
+			sessionId: "sess-1",
+			autoCompactionEnabled: false,
+			autoRetryEnabled: true,
+			messageCount: 0,
+			queuedMessageCount: 0,
+			todoPhases: [],
+			goalModeState: undefined,
+			planModeEnabled: false,
+			fastModeEnabled: false,
+			computerToolEnabled: false,
+			inspectImageMode: "auto",
+			...(extra ?? {}),
+		};
+		return { type: "state", state: base };
+	}
+
+	test("modelRoleCatalog and modelRoleStorage mirror from a state frame alongside modelRoles", () => {
+		connect();
+		dispatch(
+			stateFrame({
+				modelRoles: [{ role: "default", provider: "anthropic", id: "claude-sonnet-4-5" }],
+				modelRoleCatalog: [
+					{ role: "default", name: "Default", hidden: false, provider: "anthropic", id: "claude-sonnet-4-5", source: "global" },
+					{ role: "advisor", name: "Advisor", hidden: true, source: "default" },
+				],
+				modelRoleStorage: "project",
+			}),
+		);
+		// The catalog/storage ride the same applyState path as modelRoles; the
+		// frame round-trips through JSON, so expect structural equality.
+		expect(state.modelRoles).toEqual([{ role: "default", provider: "anthropic", id: "claude-sonnet-4-5" }]);
+		expect(state.modelRoleCatalog).toEqual([
+			{ role: "default", name: "Default", hidden: false, provider: "anthropic", id: "claude-sonnet-4-5", source: "global" },
+			{ role: "advisor", name: "Advisor", hidden: true, source: "default" },
+		]);
+		expect(state.modelRoleStorage).toBe("project");
+	});
+
+	test("a frame without role state clears the prior mirror (session-scoped, unlike the daemon roster)", () => {
+		connect();
+		dispatch(
+			stateFrame({
+				modelRoleCatalog: [{ role: "default", name: "Default", hidden: false, source: "default" }],
+				modelRoleStorage: "global",
+			}),
+		);
+		expect(state.modelRoleCatalog).toHaveLength(1);
+		expect(state.modelRoleStorage).toBe("global");
+
+		// A later snapshot without role state (e.g. taken before the catalog
+		// could build) must reset the mirror, never keep stale entries.
+		dispatch(stateFrame());
+		expect(state.modelRoleCatalog).toBeUndefined();
+		expect(state.modelRoleStorage).toBeUndefined();
+		expect(state.modelRoles).toBeUndefined();
 	});
 });

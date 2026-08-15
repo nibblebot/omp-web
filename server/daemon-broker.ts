@@ -1,5 +1,7 @@
+import type { Model } from "@oh-my-pi/pi-ai";
 import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
+import { MODEL_ROLE_IDS, getKnownRoleIds, getRoleInfo } from "@oh-my-pi/pi-coding-agent/config/model-roles";
+import { resolveModelRoleValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { daemonClientForProject, type DaemonBrokerClient } from "@oh-my-pi/pi-coding-agent/launch/client";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -8,6 +10,7 @@ import {
 	DAEMON_KEY_SEP,
 	daemonsKey,
 	type DaemonInfo,
+	type ModelRoleCatalogEntry,
 	type WebSessionState,
 } from "../shared/protocol";
 import type { SessionConfig } from "./config";
@@ -40,6 +43,62 @@ export interface DaemonBroker {
 	stopDaemonPoll(): void;
 }
 
+/** Structural slice of the session the catalog builder needs (kept narrow for testability). */
+export interface ModelRoleCatalogContext {
+	settings: AgentSession["settings"];
+	availableModels: Model[];
+	currentModel: Model | undefined;
+}
+
+/**
+ * Full role catalog for the roles picker: every known role (built-in +
+ * custom) in canonical order with its display metadata, effective assignment,
+ * and persisted source. Undefined when no models are available.
+ *
+ * Unlike buildModelRoles, this lists every role whether or not it resolves —
+ * unassigned roles render as "auto-selection applies" rows, and hidden roles
+ * are emitted with their hidden flag for the client to filter.
+ */
+export function buildModelRoleCatalog(ctx: ModelRoleCatalogContext): WebSessionState["modelRoleCatalog"] {
+	const { settings, availableModels, currentModel } = ctx;
+	if (availableModels.length === 0) return undefined;
+	const catalog: ModelRoleCatalogEntry[] = [];
+	for (const role of getKnownRoleIds(settings)) {
+		const info = getRoleInfo(role, settings);
+		const entry: ModelRoleCatalogEntry = {
+			role,
+			name: info.name,
+			hidden: info.hidden ?? false,
+			source: settings.getModelRoleSource(role),
+		};
+		// Tag-first label parity with the TUI roles panel (model-hub.ts):
+		// built-ins carry an uppercase tag; custom roles leave it unset.
+		if (info.tag !== undefined) entry.tag = info.tag;
+		// The default role falls back to the active model when unassigned
+		// (same fallback the SDK's getRoleModelCycle uses).
+		const value =
+			role === "default"
+				? (settings.getModelRole("default") ??
+					(currentModel ? `${currentModel.provider}/${currentModel.id}` : undefined))
+				: settings.getModelRole(role);
+		if (value) {
+			const resolved = resolveModelRoleValue(value, availableModels, { settings });
+			if (resolved.model) {
+				entry.provider = resolved.model.provider;
+				entry.id = resolved.model.id;
+				// Surface the thinking selector only when it is baked into the
+				// role value and resolvable — the "auto" sentinel cannot
+				// round-trip through `provider/model:level`.
+				if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined && resolved.thinkingLevel !== "auto") {
+					entry.thinkingLevel = resolved.thinkingLevel;
+				}
+			}
+		}
+		catalog.push(entry);
+	}
+	return catalog;
+}
+
 export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 	/** Resolved model-role assignments via the SDK's getRoleModelCycle (skips unconfigured/unavailable roles). */
 	function buildModelRoles(session: AgentSession): WebSessionState["modelRoles"] {
@@ -56,6 +115,12 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 		return {
 			model: session.model,
 			modelRoles: buildModelRoles(session),
+			modelRoleCatalog: buildModelRoleCatalog({
+				settings: session.settings,
+				availableModels: session.getAvailableModels(),
+				currentModel: session.model,
+			}),
+			modelRoleStorage: session.settings.get("modelRoleStorage"),
 			thinkingLevel: session.thinkingLevel,
 			isStreaming: session.isStreaming,
 			isCompacting: session.isCompacting,

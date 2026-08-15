@@ -127,6 +127,8 @@ export const [state, setState] = createStore({
 	compacting: false,
 	model: undefined as WebSessionState["model"],
 	modelRoles: undefined as WebSessionState["modelRoles"],
+	modelRoleCatalog: undefined as WebSessionState["modelRoleCatalog"],
+	modelRoleStorage: undefined as WebSessionState["modelRoleStorage"],
 	thinkingLevel: undefined as WebSessionState["thinkingLevel"],
 	sessionName: undefined as string | undefined,
 	sessionId: "",
@@ -803,6 +805,8 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 	setState({
 		model: s.model,
 		modelRoles: s.modelRoles,
+		modelRoleCatalog: s.modelRoleCatalog,
+		modelRoleStorage: s.modelRoleStorage,
 		thinkingLevel: s.thinkingLevel,
 		streaming: s.isStreaming,
 		compacting: s.isCompacting,

@@ -1656,6 +1656,63 @@ button.picker-row.spawn-project {
 	color: var(--error);
 }
 
+/* Compact text action on role rows (clear/hide/unhide). */
+.picker-row-action {
+	margin-left: var(--space-1);
+	padding: 0 var(--space-3);
+	background: none;
+	border: none;
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}
+
+.picker-row-action:hover {
+	color: var(--text);
+}
+
+/* Collapsed "hidden roles (N)" section toggle (step 1 footer). */
+.picker-hidden-toggle {
+	margin: var(--space-2) 0;
+	padding: 0 var(--space-4);
+	background: none;
+	border: none;
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	cursor: pointer;
+}
+
+.picker-hidden-toggle:hover {
+	color: var(--muted-3);
+}
+
+/* Wizard back navigation (step 2/3 header). */
+.picker-back {
+	padding: var(--space-1) var(--space-3);
+	background: none;
+	border: none;
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+
+.picker-back:hover {
+	color: var(--text);
+}
+
+/* Footer hint / empty-state note (roles step). */
+.picker-note {
+	margin-top: var(--space-4);
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}
+
+.picker-note:empty {
+	margin-top: 0;
+}
+
 .stats-table {
 	border-collapse: collapse;
 	font-size: var(--fs-lg);

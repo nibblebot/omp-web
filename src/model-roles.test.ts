@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ROLE_NAMES, groupModelRoles } from "./model-roles";
+import { groupModelRoles } from "./model-roles";
 
 const MODEL_ROLES = [
 	{ role: "default", provider: "anthropic", id: "claude-sonnet" },
@@ -26,12 +26,5 @@ describe("groupModelRoles", () => {
 	test("empty and undefined input yield []", () => {
 		expect(groupModelRoles(undefined, undefined)).toEqual([]);
 		expect(groupModelRoles([], undefined)).toEqual([]);
-	});
-
-	test("ROLE_NAMES covers every built-in role id", () => {
-		const builtinRoles = ["default", "smol", "slow", "vision", "plan", "designer", "commit", "tiny", "task", "advisor"];
-		for (const role of builtinRoles) {
-			expect(ROLE_NAMES[role]).toBeDefined();
-		}
 	});
 });

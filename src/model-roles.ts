@@ -3,20 +3,6 @@
  * primary/secondary styling is decided by the caller (Pet.tsx).
  */
 
-/** Friendly lowercase labels for built-in role ids; unknown roles keep their raw id. */
-export const ROLE_NAMES: Record<string, string> = {
-	default: "default",
-	smol: "fast",
-	slow: "thinking",
-	vision: "vision",
-	plan: "architect",
-	designer: "designer",
-	commit: "commit",
-	tiny: "tiny",
-	task: "subtask",
-	advisor: "advisor",
-};
-
 /** One distinct role model: its provider/id plus every role it serves. */
 export interface RoleGroup {
 	provider: string;
