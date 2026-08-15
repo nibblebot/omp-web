@@ -13,6 +13,7 @@ import {
 import { SSE_EVENT_NAME } from "../shared/protocol";
 import type { ClientCommand, ServerFrame } from "../shared/protocol";
 import { addBashItem, appendBashChunk, call, connect, resolveBashItem, setState, state, type ChatItem } from "./state";
+import { cancelDangerConfirm, confirmDangerConfirm, dangerConfirm } from "./components/ConfirmDialog";
 
 describe("parseInput", () => {
 	test("plain text", () => {
@@ -388,5 +389,91 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 			output: 'partial output\n[error] call "bash" timed out',
 		});
 		expect(findBash(empty)).toMatchObject({ status: "done", exitCode: null, output: "[error] Not connected" });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// P1 danger-model hardening: /new, /drop, and /fresh gate through the app's
+// danger-confirm dialog (module-level state in ConfirmDialog.tsx) instead of
+// window.confirm. Confirmation only when there is something to lose (non-empty
+// transcript, or a turn streaming for /fresh); confirming runs the pending
+// action and clears the dialog. The file-level beforeEach already resets
+// items/connected and installs the fetch stub that records POSTed commands.
+// ---------------------------------------------------------------------------
+describe("danger confirm guards (P1 hardening)", () => {
+	const connectTransport = () => {
+		connect();
+		const es = FakeEventSource.instances.at(-1);
+		expect(es).toBeDefined();
+		es!.onopen?.(); // connected = true; without this call() fails fast
+	};
+
+	const postedMethod = (method: string) =>
+		posted.filter((c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call" && c.method === method);
+
+	// Lightest transcript: one minimal user item.
+	const seedItem = () => setState({ items: [{ kind: "user", id: 1, text: "hi" }] });
+
+	beforeEach(() => {
+		cancelDangerConfirm();
+		setState({ items: [], streaming: false });
+	});
+
+	test("/new with a non-empty transcript requests a danger confirm and POSTs only after confirming", async () => {
+		connectTransport();
+		seedItem();
+		dispatchInput("/new", undefined, "enter");
+		await flushMicrotasks();
+		expect(dangerConfirm()).toMatchObject({ title: "Start a new session", confirmLabel: "New session" });
+		expect(postedMethod("newSession")).toEqual([]);
+
+		confirmDangerConfirm();
+		await flushMicrotasks();
+		expect(dangerConfirm()).toBeNull();
+		expect(postedMethod("newSession").length).toBe(1);
+	});
+
+	test("/new with an empty transcript calls newSession immediately", async () => {
+		connectTransport();
+		dispatchInput("/new", undefined, "enter");
+		await flushMicrotasks();
+		expect(postedMethod("newSession").length).toBe(1);
+		expect(dangerConfirm()).toBeNull();
+	});
+
+	test("/drop with a non-empty transcript requests a danger confirm and POSTs only after confirming", async () => {
+		connectTransport();
+		seedItem();
+		dispatchInput("/drop", undefined, "enter");
+		await flushMicrotasks();
+		expect(dangerConfirm()).toMatchObject({ title: "Drop this session", confirmLabel: "Drop session" });
+		expect(postedMethod("newSession")).toEqual([]);
+
+		confirmDangerConfirm();
+		await flushMicrotasks();
+		expect(dangerConfirm()).toBeNull();
+		expect(postedMethod("newSession").length).toBe(1);
+	});
+
+	test("/fresh while streaming requests a danger confirm and POSTs only after confirming", async () => {
+		connectTransport();
+		setState("streaming", true);
+		dispatchInput("/fresh", undefined, "enter");
+		await flushMicrotasks();
+		expect(dangerConfirm()).toMatchObject({ title: "Reset provider state", confirmLabel: "Reset state" });
+		expect(postedMethod("freshSession")).toEqual([]);
+
+		confirmDangerConfirm();
+		await flushMicrotasks();
+		expect(dangerConfirm()).toBeNull();
+		expect(postedMethod("freshSession").length).toBe(1);
+	});
+
+	test("/fresh while idle calls freshSession directly", async () => {
+		connectTransport();
+		dispatchInput("/fresh", undefined, "enter");
+		await flushMicrotasks();
+		expect(postedMethod("freshSession").length).toBe(1);
+		expect(dangerConfirm()).toBeNull();
 	});
 });

@@ -57,8 +57,6 @@ const WorktreeIcon = () => (
 );
 
 const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props => {
-	const [confirmStop, setConfirmStop] = createSignal(false);
-	const [confirmRemove, setConfirmRemove] = createSignal(false);
 	const [detailOpen, setDetailOpen] = createSignal(false);
 	// Activating = wake-attach in flight for this row's daemon. Read from the
 	// module-level set, NOT a component signal: daemon_status/roster frames
@@ -69,6 +67,11 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 	// whole wake and drives the instant active highlight + waking indicator.
 	const activating = () => activatingIds().has(d().daemonId);
 	const d = () => props.daemon as RosterEntry;
+	// Stop/remove arm state, read from the module-level set (see armedRow):
+	// roster broadcasts remount rows, so per-row signals would drop a
+	// half-armed confirm between clicks.
+	const armedStop = () => armedRow()?.id === d().daemonId && armedRow()?.kind === "stop";
+	const armedRemove = () => armedRow()?.id === d().daemonId && armedRow()?.kind === "remove";
 	// Worktree sessions belong to a main checkout and read as branches, not
 	// dirs — the branch (or name fallback) becomes the title and the project
 	// chip + cwd path are dropped so the row never shows the directory.
@@ -118,12 +121,12 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 
 	const doStop = () => {
 		stopDaemonById(d().daemonId);
-		setConfirmStop(false);
+		disarmDaemon();
 	};
 
 	const doRemove = () => {
 		removeDaemonById(d().daemonId);
-		setConfirmRemove(false);
+		disarmDaemon();
 	};
 
 	return (
@@ -189,15 +192,12 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 						<button
 							type="button"
 							class="daemon-icon-btn daemon-stop-btn"
-							classList={{ armed: confirmStop() }}
-							title={confirmStop() ? "Stop this daemon (second click confirms)" : "Stop this daemon"}
+							classList={{ armed: armedStop() }}
+							title={armedStop() ? "Stop this daemon (second click confirms)" : "Stop this daemon"}
 							onClick={e => {
 								e.stopPropagation();
-								if (confirmStop()) doStop();
-								else {
-									setConfirmStop(true);
-									setConfirmRemove(false);
-								}
+								if (armedStop()) doStop();
+								else armDaemon(d().daemonId, "stop");
 							}}
 						>
 							■
@@ -205,19 +205,16 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 						<button
 							type="button"
 							class="daemon-icon-btn daemon-remove-btn"
-							classList={{ armed: confirmRemove() }}
+							classList={{ armed: armedRemove() }}
 							title={
-								confirmRemove()
+								armedRemove()
 									? "Remove this daemon (second click confirms)"
 									: "Remove this daemon from the roster (stops it first)"
 							}
 							onClick={e => {
 								e.stopPropagation();
-								if (confirmRemove()) doRemove();
-								else {
-									setConfirmRemove(true);
-									setConfirmStop(false);
-								}
+								if (armedRemove()) doRemove();
+								else armDaemon(d().daemonId, "remove");
 							}}
 						>
 							✕
@@ -562,6 +559,36 @@ const GROUPS_KEY = "omp.sidebarGroupsCollapsed";
  *  settles). Module-level because roster/daemon_status frames remount rows
  *  mid-wake; per-row component signals would not survive. */
 const [activatingIds, setActivatingIds] = createSignal<ReadonlySet<string>>(new Set());
+
+/** Stop/remove two-click arm: the one row action currently armed, if any.
+ *  Module-level for the same reason as activatingIds — roster broadcasts
+ *  rebuild rows (fresh entry objects → <For> remounts), so per-row component
+ *  signals would silently drop a half-armed confirm between clicks. Arming
+ *  anything disarms everything else (one armed action across the whole
+ *  sidebar, extending the old per-row mutual exclusion) and auto-disarms
+ *  after ARM_DISARM_MS. */
+const ARM_DISARM_MS = 4000;
+const [armedRow, setArmedRow] = createSignal<{ id: string; kind: "stop" | "remove" } | null>(null);
+let armTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Arm a row action, replacing any other armed action (and its timer). */
+function armDaemon(id: string, kind: "stop" | "remove"): void {
+	if (armTimer !== undefined) clearTimeout(armTimer);
+	setArmedRow({ id, kind });
+	armTimer = setTimeout(() => {
+		armTimer = undefined;
+		setArmedRow(null);
+	}, ARM_DISARM_MS);
+}
+
+/** Disarm the armed row action (and its timer). */
+function disarmDaemon(): void {
+	if (armTimer !== undefined) {
+		clearTimeout(armTimer);
+		armTimer = undefined;
+	}
+	setArmedRow(null);
+}
 
 /** One repo group in the roster: its entries and whether it contains
  *  worktree sessions (which changes how it renders). */

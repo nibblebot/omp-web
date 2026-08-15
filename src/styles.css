@@ -989,6 +989,26 @@ button.stop:not(:disabled):hover {
 	color: var(--muted-3);
 }
 
+/* Danger-confirm dialog (ConfirmDialog.tsx): Alarm Red confirm button. The
+   actions row reuses .ask-actions (flex, gap var(--space-4), flex-end);
+   geometry (radius var(--r-md), padding 6px 12px, font inherit) and the
+   140ms ease-out transition come from the global `button` rules. */
+.danger-confirm-body {
+	color: var(--muted-3);
+	margin: 0 0 var(--space-6);
+}
+
+button.danger-confirm-btn:not(:disabled) {
+	background: var(--error-bg);
+	border: 1px solid var(--error-border);
+	color: var(--error-text);
+	transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+button.danger-confirm-btn:not(:disabled):hover {
+	background: color-mix(in srgb, var(--error-bg), var(--error) 15%);
+}
+
 /* /btw side-panel sheet (Modal sheet variant). Fills the sheet;
    the reply area scrolls internally. */
 .btw-panel {

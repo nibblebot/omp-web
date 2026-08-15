@@ -1,4 +1,5 @@
 import type { ImageArg } from "../shared/protocol";
+import { requestDangerConfirm } from "./components/ConfirmDialog";
 import { addBashItem, askBtw, call, pushCompaction, pushNotice, resolveBashItem, setState, state, type BashResultLike } from "./state";
 
 export type InputMode = "enter" | "followup";
@@ -38,7 +39,15 @@ function showError(err: unknown): void {
  * when the transcript is non-empty.
  */
 function confirmNewSession(): void {
-	if (state.items.length > 0 && !window.confirm("Start a new session? The current transcript is replaced.")) return;
+	if (state.items.length > 0) {
+		requestDangerConfirm({
+			title: "Start a new session",
+			body: "The current transcript is replaced.",
+			confirmLabel: "New session",
+			onConfirm: () => void call("newSession").catch(showError),
+		});
+		return;
+	}
 	void call("newSession").catch(showError);
 }
 
@@ -122,8 +131,25 @@ export function planToggle(): void {
 
 /** `/drop` mirrors /new but the confirm warns the transcript is discarded. */
 function confirmDropSession(): void {
-	if (state.items.length > 0 && !window.confirm("Drop this session? The current session transcript is discarded.")) return;
+	if (state.items.length > 0) {
+		requestDangerConfirm({
+			title: "Drop this session",
+			body: "The current session transcript is discarded.",
+			confirmLabel: "Drop session",
+			onConfirm: () => void call("newSession").catch(showError),
+		});
+		return;
+	}
 	void call("newSession").catch(showError);
+}
+
+/** `/fresh`: reset provider state, keep the transcript. While a turn is
+ *  streaming the reset goes through the danger confirm — resetting provider
+ *  state mid-turn can fail the running turn. */
+function freshSession(): void {
+	void call("freshSession")
+		.then(() => pushNotice("info", "Fresh session — provider state reset, transcript kept."))
+		.catch(showError);
 }
 
 /** `/dump`: transcript downloads client-side; the LLM-request JSON downloads via /download. */
@@ -181,10 +207,18 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 				else pushNotice("info", "Forked session.");
 			})
 			.catch(showError),
-	fresh: () =>
-		void call("freshSession")
-			.then(() => pushNotice("info", "Fresh session — provider state reset, transcript kept."))
-			.catch(showError),
+	fresh: () => {
+		if (state.streaming) {
+			requestDangerConfirm({
+				title: "Reset provider state",
+				body: "A turn is in flight — the transcript is kept, but resetting provider state mid-turn can fail the running turn.",
+				confirmLabel: "Reset state",
+				onConfirm: freshSession,
+			});
+			return;
+		}
+		freshSession();
+	},
 	handoff: args =>
 		void call("handoff", handoffArgs(args))
 			.then(result => {

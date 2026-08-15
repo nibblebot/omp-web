@@ -6,6 +6,7 @@ import { AskDialog } from "./components/AskDialog";
 import { BranchPicker } from "./components/BranchPicker";
 import { BtwPanel } from "./components/BtwPanel";
 import { CharacterAvatar } from "./components/CharacterAvatar";
+import { DangerConfirmDialog } from "./components/ConfirmDialog";
 import { DaemonSidebar } from "./components/DaemonSidebar";
 import { DebugPanel } from "./components/DebugPanel";
 import { GoalPopover } from "./components/GoalPopover";
@@ -167,6 +168,7 @@ export const App: Component = () => {
 			</Show>
 			<AskDialog />
 			<BtwPanel />
+			<DangerConfirmDialog />
 		</div>
 	);
 };
