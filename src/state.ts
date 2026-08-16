@@ -124,6 +124,10 @@ export const [state, setState] = createStore({
 	live: { active: false, blocks: [] as Block[] },
 	// --- WebSessionState mirror (verbatim; see protocol state frames) ---
 	streaming: false,
+	// TUI-parity dynamic working label (interactive-mode's setWorkingMessage):
+	// the latest tool-call intent ("Reading config files…"), undefined = the
+	// default phrase. Session-scoped; cleared on turn end and transcript resets.
+	workingIntent: undefined as string | undefined,
 	compacting: false,
 	model: undefined as WebSessionState["model"],
 	modelRoles: undefined as WebSessionState["modelRoles"],
@@ -544,10 +548,26 @@ function assistantBlocks(content: AssistantContent): Block[] {
 	return blocks;
 }
 
+/** Working-label intent from a tool_execution_start event, TUI priority:
+ *  the loop's resolved `intent` first, then the harness-injected `i` arg
+ *  (INTENT_FIELD in pi-wire — kept a literal because pi-wire isn't a client
+ *  dependency). Non-strings arrive from partial JSON; ignore them. */
+function extractWorkingIntent(e: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): string | undefined {
+	const fromEvent = typeof e.intent === "string" ? e.intent.trim() : "";
+	if (fromEvent) return fromEvent;
+	const args = e.args;
+	if (args && typeof args === "object" && !Array.isArray(args)) {
+		const i = (args as Record<string, unknown>).i;
+		if (typeof i === "string" && i.trim()) return i.trim();
+	}
+	return undefined;
+}
+
 export function applyEvent(e: AgentSessionEvent): void {
 	switch (e.type) {
 		case "agent_start":
 			setState("streaming", true);
+			setState("workingIntent", undefined);
 			// finding #P1: the agent turn became audible — announce the flip.
 			announceIfReady("agent started");
 			break;
@@ -557,6 +577,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 			pendingDeltas.clear();
 			setState("streaming", false);
 			setState("live", "active", false);
+			setState("workingIntent", undefined);
 			// finding #P1: turn ended (streamed text itself is never announced).
 			announceIfReady("agent finished");
 			// Phase 11: desktop notification while the tab is hidden (OSC parity).
@@ -625,7 +646,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 			}
 			break;
 		}
-		case "tool_execution_start":
+		case "tool_execution_start": {
 			pushItem({
 				kind: "tool",
 				id: nextId++,
@@ -635,9 +656,14 @@ export function applyEvent(e: AgentSessionEvent): void {
 				status: "running",
 				output: "",
 			});
+			// TUI parity (event-controller #updateWorkingMessageFromIntent): the
+			// working label tracks the latest call's intent; last one wins.
+			const intent = extractWorkingIntent(e);
+			if (intent) setState("workingIntent", intent);
 			// finding #P1: tool run lifecycle is a status message.
 			announceIfReady(`${e.toolName} started`);
 			break;
+		}
 		case "tool_execution_update": {
 			const index = findToolIndex(e.toolCallId);
 			if (index >= 0)
@@ -787,7 +813,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 	// Phase 5: reset id sequence so newly-switched sessions don't collide with
 	// leftover ids from the prior transcript.
 	nextId = 1;
-	setState({ items: [], live: { active: false, blocks: [] }, retryInfo: null });
+	setState({ items: [], live: { active: false, blocks: [] }, retryInfo: null, workingIntent: undefined });
 	for (const msg of messages) {
 		if (msg.role === "user") {
 			const images = scanImages(msg.content);
@@ -884,6 +910,10 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		// R8: state snapshots carry readyAt once the gate clears. Only apply it
 		// when present so a pre-gate snapshot can't clobber a `ready` broadcast.
 		...(s.readyAt !== undefined ? { readyAt: s.readyAt } : {}),
+		// A snapshot taken while idle means any intent from a pre-reconnect turn
+		// is stale; an in-flight turn keeps it (the next tool_execution_start or
+		// agent_end will refresh/clear).
+		...(s.isStreaming ? {} : { workingIntent: undefined }),
 		...(stats !== undefined ? { stats } : {}),
 	});
 }
@@ -1442,6 +1472,7 @@ function resetSessionView(): void {
 		goal: null,
 		goalModeState: undefined,
 		retryInfo: null,
+		workingIntent: undefined,
 		modal: null,
 		loginUrl: null,
 		loginCodeRequest: null,

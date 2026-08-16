@@ -628,6 +628,47 @@ body {
 	opacity: 0.95;
 }
 
+/* In-progress shimmer under the stream: a bright band sweeping across the
+   label via a moving background gradient clipped to the glyphs. Colors come
+   from theme tokens so every palette gets a legible sweep for free. */
+.live-shimmer {
+	align-self: stretch;
+	padding: var(--space-1) var(--space-5) var(--space-2);
+	/* Body-size and semibold: the working label is the turn's primary status,
+	   not a caption — matches the TUI's bold-crest shimmer emphasis. */
+	font-size: var(--fs-base);
+	font-weight: 600;
+	font-style: italic;
+}
+
+.shimmer-text {
+	background: linear-gradient(
+		100deg,
+		var(--muted-2) 40%,
+		var(--muted-3) 50%,
+		var(--muted-2) 60%
+	);
+	background-size: 250% 100%;
+	background-position: 100% 0;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	animation: shimmer-sweep 1.8s linear infinite;
+}
+
+@keyframes shimmer-sweep {
+	to {
+		background-position: -150% 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.shimmer-text {
+		animation: none;
+		color: var(--muted-2);
+	}
+}
+
 .msg-notice {
 	text-align: center;
 	color: var(--muted-2);

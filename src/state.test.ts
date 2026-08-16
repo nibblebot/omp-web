@@ -126,6 +126,8 @@ beforeEach(() => {
 		// that attached (no switch → no resetSessionView) leaks its items into
 		// the next test.
 		items: [],
+		streaming: false,
+		workingIntent: undefined,
 	});
 });
 
@@ -726,5 +728,69 @@ describe("aria-live announcements (finding #P1)", () => {
 		// Non-consecutive repeat of earlier text announces again.
 		announce("tick");
 		expect(state.announcement).toBe("tick");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// workingIntent: the shimmer label's dynamic phrase (TUI setWorkingMessage
+// parity). Sourced from tool_execution_start — the loop-resolved `intent`
+// first, then the harness-injected `i` arg — and cleared with the turn.
+// ---------------------------------------------------------------------------
+describe("workingIntent (dynamic shimmer label)", () => {
+	function primeReady(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+		dispatchSeq({ type: "history", messages: [] }, 3);
+		dispatch({ type: "ready", readyAt: 123 });
+	}
+	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+	const agentEnd = (): ServerFrame => ({ type: "event", event: { type: "agent_end", messages: [] } });
+	const toolStart = (toolCallId: string, extra: Record<string, unknown>): ServerFrame => ({
+		type: "event",
+		event: { type: "tool_execution_start", toolCallId, toolName: "read", args: { path: "x.ts" }, ...extra },
+	});
+
+	test("loop-resolved intent wins; latest call's intent replaces it", () => {
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		expect(state.workingIntent).toBeUndefined();
+		dispatchSeq(toolStart("t1", { intent: "Reading config files" }), 1025);
+		expect(state.workingIntent).toBe("Reading config files");
+		dispatchSeq(toolStart("t2", { intent: "Editing the parser" }), 1026);
+		expect(state.workingIntent).toBe("Editing the parser");
+	});
+
+	test("falls back to the harness `i` arg when the event has no intent", () => {
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(toolStart("t1", { args: { path: "x.ts", i: "Searching for shimmer styles" } }), 1025);
+		expect(state.workingIntent).toBe("Searching for shimmer styles");
+	});
+
+	test("non-string intent payloads from partial JSON are ignored", () => {
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(toolStart("t1", { intent: { partial: true } }), 1025);
+		expect(state.workingIntent).toBeUndefined();
+	});
+
+	test("turn end and a fresh turn clear the intent", () => {
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(toolStart("t1", { intent: "Reading config files" }), 1025);
+		dispatchSeq(agentEnd(), 1026);
+		expect(state.streaming).toBe(false);
+		expect(state.workingIntent).toBeUndefined();
+	});
+
+	test("an idle state snapshot clears a stale intent from a pre-reconnect turn", () => {
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(toolStart("t1", { intent: "Reading config files" }), 1025);
+		// Reconnect primed against an idle daemon: the state frame says the turn
+		// is over, so the last intent must not linger under the shimmer.
+		dispatch({ type: "state", state: { isStreaming: false } as unknown as WebSessionState });
+		expect(state.workingIntent).toBeUndefined();
 	});
 });

@@ -468,6 +468,15 @@ export const MessageList: Component = () => {
 					</For>
 				</div>
 			</Show>
+			{/* In-progress shimmer: spans the whole agent turn (tool gaps included),
+			    not just the live message card. Label tracks the latest tool-call
+			    intent like the TUI working message; the TUI's default phrase
+			    ("Working…") applies until the first intent lands. */}
+			<Show when={state.streaming}>
+				<div class="live-shimmer" aria-hidden="true">
+					<span class="shimmer-text">{state.workingIntent ?? "Working…"}</span>
+				</div>
+			</Show>
 			<Show when={zoomed()}>{img => <FullImageOverlay image={img()} onClose={() => setZoomed(null)} />}</Show>
 			</div>
 		</>
