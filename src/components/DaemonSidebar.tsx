@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, onCleanup, onMount, Show, untrack, type Component } from "solid-js";
 import type { DaemonEntry, DaemonStatus, ProjectEntry } from "../../shared/protocol";
-import { attachSession, listProjects, removeDaemonById, setSidebarVisible, setState, spawnDaemon, spawnResume, state, stopDaemonById } from "../state";
+import { attachSession, listProjects, removeDaemonById, setSidebarVisible, setState, spawnDaemon, spawnResume, state, stopDaemonById, togglePetVisible } from "../state";
 import { formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
 import { PickerRow, useClickableRow } from "./PickerRow";
@@ -758,6 +758,35 @@ export const DaemonSidebar: Component = () => {
 				<Show when={state.daemonRoster.length === 0}>
 					<div class="sidebar-empty">no daemons — press + to spawn one</div>
 				</Show>
+			</div>
+			{/* Global chrome moved out of the StatusBar: pet roster, debug panel, settings. */}
+			<div class="sidebar-foot">
+				<button
+					class="sidebar-icon-btn"
+					classList={{ active: state.petVisible }}
+					onClick={togglePetVisible}
+					title="Show/hide pet roster"
+					aria-label="Show/hide pet roster"
+				>
+					pet
+				</button>
+				<button
+					class="sidebar-icon-btn"
+					classList={{ active: state.modal === "debug" }}
+					onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
+					title="Debug — transport and fleet visibility"
+					aria-label="Debug — transport and fleet visibility"
+				>
+					ⓘ
+				</button>
+				<button
+					class="sidebar-icon-btn"
+					onClick={() => setState("modal", "settings")}
+					title="Settings"
+					aria-label="Settings"
+				>
+					⚙
+				</button>
 			</div>
 			<Show when={spawnOpen()}>
 				<SpawnPicker onClose={() => setSpawnOpen(false)} />

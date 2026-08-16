@@ -108,36 +108,25 @@ export const StatusBar: Component = () => {
 					subagents ({state.subagents.size})
 				</Segment>
 			</Show>
-			<Segment active={state.petVisible} onClick={togglePetVisible} title="Show/hide pet roster">
-				pet
-			</Segment>
-			<Segment
-				active={state.toolsExpanded}
-				onClick={() => setState("toolsExpanded", v => !v)}
-				title="Expand all tool outputs (Ctrl+O)"
-				ariaLabel="Expand all tool outputs (Ctrl+O)"
-			>
-				⤢
-			</Segment>
-			<Segment
-				active={state.modal === "debug"}
-				onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
-				title="Debug — transport and fleet visibility"
-				ariaLabel="Debug — transport and fleet visibility"
-			>
-				ⓘ
-			</Segment>
-			<Segment onClick={() => setState("modal", "settings")} title="Settings" ariaLabel="Settings">
-				⚙
-			</Segment>
+			{/* pet/debug/settings live in the DaemonSidebar footer in roster chat;
+			    keep them in the header where no sidebar exists (standalone, Tx view). */}
+			<Show when={state.sessionMode !== "roster" || state.view !== "chat"}>
+				<Segment active={state.petVisible} onClick={togglePetVisible} title="Show/hide pet roster">
+					pet
+				</Segment>
+				<Segment
+					active={state.modal === "debug"}
+					onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
+					title="Debug — transport and fleet visibility"
+					ariaLabel="Debug — transport and fleet visibility"
+				>
+					ⓘ
+				</Segment>
+				<Segment onClick={() => setState("modal", "settings")} title="Settings" ariaLabel="Settings">
+					⚙
+				</Segment>
+			</Show>
 			{!state.connected && <span class="disconnected-pill">disconnected</span>}
-			<span
-				class="status-dot"
-				classList={{ streaming: state.streaming }}
-				role="status"
-				aria-label={state.streaming ? "Agent is streaming" : "Agent idle"}
-				title={state.streaming ? "streaming" : "idle"}
-			/>
 			{state.error && (
 				<div class="error-banner" role="alert">
 					<span>{state.error}</span>

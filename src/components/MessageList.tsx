@@ -336,6 +336,15 @@ export const MessageList: Component = () => {
 							</button>
 						)}
 					</For>
+					{/* Expand-all tool outputs (Ctrl+O); only meaningful in expanded/collapsed views. */}
+					<button
+						class="stream-cards-toggle"
+						aria-pressed={state.toolsExpanded}
+						title="Expand all tool outputs (Ctrl+O)"
+						onClick={() => setState("toolsExpanded", v => !v)}
+					>
+						⤢ expand
+					</button>
 				</div>
 			</Show>
 			<div class="message-list" ref={container} onScroll={onContainerScroll}>

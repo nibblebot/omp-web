@@ -363,19 +363,6 @@ body {
 	text-overflow: ellipsis;
 }
 
-.status-dot {
-	width: 8px;
-	height: 8px;
-	border-radius: 50%;
-	background: var(--muted-2);
-	margin-left: auto;
-}
-
-.status-dot.streaming {
-	background: var(--success);
-	box-shadow: var(--shadow-glow-success);
-}
-
 .disconnected-pill {
 	background: var(--error-border);
 	color: var(--error-text);
@@ -2815,6 +2802,20 @@ pre.terminal {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-1);
+}
+
+.sidebar-foot {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-3);
+	border-top: 1px solid var(--border);
+}
+
+.sidebar-foot .sidebar-icon-btn.active {
+	background: var(--btn);
+	color: var(--text);
 }
 
 .sidebar-row {
