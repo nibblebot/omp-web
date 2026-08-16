@@ -25,6 +25,7 @@ import { contentBlocks, entryTs, isMessage, messageRole, str, toolCallIdOf } fro
 import { createCollapseStore, RowStateCtx } from "./collapse";
 import { createPairingMaps } from "./pairing";
 import { EntryRow } from "./rows/entry-row";
+import { ArrowLeftIcon } from "../../../icons";
 
 const PAGE_SIZE = 200;
 
@@ -256,7 +257,7 @@ export function TranscriptView(props: TranscriptProps) {
         <div class="transcript-toolbar">
           <Show when={props.isSub}>
             <button class="btn" onClick={props.onBackToMain}>
-              ← back to main
+              <ArrowLeftIcon /> back to main
             </button>
             <span class="sub-tag">subagent transcript · {basename(props.file)}</span>
           </Show>

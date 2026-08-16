@@ -4,7 +4,7 @@ import { attachSession, daemonsByProject, removeDaemonById, sendWorktreeDeleteIn
 import { formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
 import { useClickableRow } from "./PickerRow";
-import { ChevronDownIcon, InfoIcon, PlusIcon, SettingsIcon, StopIcon, WorktreeIcon, XIcon } from "../icons";
+import { ChevronDownIcon, InfoIcon, PlusIcon, SettingsIcon, StopIcon, TrashIcon, WorktreeIcon, XIcon } from "../icons";
 
 // ---------------------------------------------------------------------------
 // Fleet-edge roster sidebar (Phase 5). Rendered by App.tsx only in
@@ -230,7 +230,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 									setState("deleteWorktreeTarget", d().daemonId);
 								}}
 							>
-								⌫
+								<TrashIcon />
 							</button>
 						</Show>
 						<button
@@ -568,7 +568,7 @@ export const DaemonSidebar: Component = () => {
 						aria-label={`Remove project ${props.project.name}`}
 						onClick={() => setState("removeProjectTarget", props.project.projectId)}
 					>
-						✕
+						<XIcon />
 					</button>
 				</div>
 				<Show when={open()}>
