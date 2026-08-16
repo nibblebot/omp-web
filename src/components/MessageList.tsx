@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Match, Show, Switch, createMemo, onCleanup, type Component } from "solid-js";
+import { createEffect, createSignal, For, Match, Show, Switch, createMemo, onCleanup, onMount, type Component } from "solid-js";
 import { renderMarkdown, splitForStreaming } from "../markdown";
 import { call, pushNotice, setState, state, type Block, type ChatItem, type ToolItem } from "../state";
 import type { ImageArg } from "../../shared/protocol";
@@ -14,6 +14,10 @@ import { buildUsageRow, formatDurationMs, formatUsageRow } from "../usage";
 const VOID_TAGS: Record<string, true> = { BR: true, HR: true, IMG: true, INPUT: true, WBR: true };
 
 const TOOL_CARD_VIEWS = ["expanded", "collapsed", "consolidated"] as const;
+
+// Right-edge hit zone treated as an inner scroller's own scrollbar: wheel
+// there (or Alt+wheel anywhere over it) scrolls the inner area, not the session.
+const INNER_SCROLLBAR_PX = 14;
 
 // Expanded run keys, module-level so they survive row re-renders while a run
 // grows (same pattern as DaemonSidebar's activatingIds).
@@ -245,6 +249,51 @@ export const MessageList: Component = () => {
 		if (pinned) container.scrollTop = container.scrollHeight;
 		schedulePinCheck();
 	});
+	// Session-first wheel scrolling. Tool bodies with their own vertical
+	// scrollbar (search results; any future capped output) otherwise trap the
+	// wheel: hovering them scrolls the inner area, and the session only moves
+	// once the inner scroller hits its boundary. Redirect instead — wheel over
+	// an inner scroller scrolls the session, unless the user explicitly asks
+	// for inner scroll: Alt+wheel, or wheel over the scroller's own scrollbar.
+	// At the scroller's boundary the event falls through to native scroll
+	// chaining, which moves the session anyway.
+	const onWheelRedirect = (e: WheelEvent) => {
+		// Alt+wheel is the explicit "scroll this inner area" gesture; the other
+		// modifiers are unrelated gestures (Ctrl zoom, Shift horizontal).
+		if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+		if (e.deltaY === 0) return; // horizontal-only wheel passes through
+		let el = e.target as HTMLElement | null;
+		let scroller: HTMLElement | null = null;
+		while (el && el !== container) {
+			const overflowY = getComputedStyle(el).overflowY;
+			if ((overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight + 1) {
+				scroller = el;
+				break;
+			}
+			el = el.parentElement;
+		}
+		if (!scroller) return; // nothing captures the wheel → native session scroll
+		const atBoundary =
+			e.deltaY > 0
+				? scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1
+				: scroller.scrollTop <= 0;
+		if (atBoundary) return; // native chaining moves the session
+		const rect = scroller.getBoundingClientRect();
+		if (e.clientX >= rect.right - INNER_SCROLLBAR_PX) return; // over its scrollbar
+		e.preventDefault();
+		const delta =
+			e.deltaMode === WheelEvent.DOM_DELTA_LINE
+				? e.deltaY * 16
+				: e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+					? e.deltaY * container.clientHeight
+					: e.deltaY;
+		container.scrollTop = Math.min(
+			Math.max(0, container.scrollTop + delta),
+			container.scrollHeight - container.clientHeight,
+		);
+	};
+	onMount(() => container.addEventListener("wheel", onWheelRedirect, { passive: false }));
+	onCleanup(() => container.removeEventListener("wheel", onWheelRedirect));
 	// id → run, for the consolidated view. Read only from the tool/assistant
 	// branches while consolidated, so expanded/collapsed rows never re-render on appends.
 	const runOf = createMemo(() => {

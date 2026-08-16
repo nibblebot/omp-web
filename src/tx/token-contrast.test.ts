@@ -116,8 +116,8 @@ describe("tx section token integrity", () => {
   });
 
   test("font stacks stay literal tx fonts", () => {
-    expect(txTokens["--tx-mono"]).toMatch(/^ui-monospace/);
-    expect(txTokens["--tx-sans"]).toMatch(/^system-ui/);
+    expect(txTokens["--tx-mono"]).toMatch(/^"Noto Sans Mono", ui-monospace/);
+    expect(txTokens["--tx-sans"]).toMatch(/^"Noto Sans", system-ui/);
   });
 
   test("light override block covers every fleet light theme selector", () => {

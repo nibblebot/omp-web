@@ -13,7 +13,7 @@ export const SearchTool: Component<{ item: ToolItem }> = props => {
 	const lines = () => props.item.output.split("\n").filter(l => l.length > 0);
 	return (
 		<ToolShell name={<>{props.item.name} {summary()}</>} status={props.item.status} class="search-tool">
-			<div class="search-body">
+			<div class="search-body" title="Wheel scrolls the session; Alt+wheel scrolls these results">
 				<For each={lines()}>
 					{line => {
 						const m = MATCH_LINE.exec(line);

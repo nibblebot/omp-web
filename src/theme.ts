@@ -21,7 +21,7 @@ const THEME_KEY = "omp-web:theme";
 const FONT_KEY = "omp-web:font-size";
 const FONT_MIN = 12;
 const FONT_MAX = 18;
-const FONT_DEFAULT = 14;
+const FONT_DEFAULT = 15;
 
 const THEME_IDS: Record<ThemeId, true> = {
 	dark: true,

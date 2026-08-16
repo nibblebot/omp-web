@@ -2,9 +2,14 @@
 	color-scheme: dark;
 	/* Fonts: a deliberate system stack — omp-web is a self-hosted, offline-first
 	   tool and ships zero font assets, so the platform's native UI / UI-monospace
-	   faces are used as-is instead of downloading a webfont. */
-	--font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-	--font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+	   faces are used as-is instead of downloading a webfont. The Linux faces are
+	   named FIRST because Chromium resolves system-ui to DejaVu Sans (its own
+	   fallback list) while Firefox goes through fontconfig (Noto Sans here) —
+	   the same CSS then renders two different faces. Naming the fontconfig
+	   default explicitly makes both engines pick the same family on Linux;
+	   macOS/Windows skip the absent Noto faces and keep their native UI fonts. */
+	--font-sans: "Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--font-mono: "Noto Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 	--bg: #0f1115;
 	--bg-deep: #0a0d12;
 	--panel: #151a22;
@@ -435,7 +440,11 @@ body {
 .message-list {
 	flex: 1;
 	overflow-y: auto;
-	padding: var(--space-6) 0 var(--space-4);
+	padding: var(--space-6) var(--space-5) var(--space-4);
+	/* Keep the scrollbar out of the text: overlay scrollbars float over the
+	   box, and the stable gutter stops cards reflowing when the bar appears
+	   or disappears. */
+	scrollbar-gutter: stable;
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-5);
@@ -448,7 +457,9 @@ body {
 	justify-content: flex-end;
 	align-items: center;
 	gap: var(--space-3);
-	padding: var(--space-2) 0 var(--space-3);
+	/* Matches .message-list side padding so the toggle stays aligned with
+	   the card edges. */
+	padding: var(--space-2) var(--space-5) var(--space-3);
 }
 
 .stream-cards-toggle {
@@ -4301,8 +4312,8 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	/* The old 22px hero was the one size above the ramp; fold it onto 2xl
 	   (18px) so the whole surface rides the same dial. */
 	--tx-fs-3xl: var(--fs-2xl);
-  --tx-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
-  --tx-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --tx-mono: "Noto Sans Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --tx-sans: "Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 /* Light palettes (fleet's light theme selectors): tokens with no fleet
