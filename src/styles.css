@@ -312,8 +312,8 @@ body {
 	flex-direction: column;
 	height: 100vh;
 	height: 100dvh;
-	max-width: 820px;
-	margin: 0 auto;
+	/* Full-viewport shell: the header floats to the edges; only the chat
+	   column (.app-main) is width-constrained and centered. */
 	padding: 0 var(--space-6);
 }
 
@@ -326,6 +326,12 @@ body {
 	font-size: var(--fs-md);
 	color: var(--muted);
 	flex-wrap: wrap;
+}
+
+/* Roster mode: the floating ☰ toggle owns the top-left corner; keep the
+   status-bar content clear of it. */
+.app:has(.sidebar-toggle) .status-bar {
+	padding-left: calc(var(--space-6) + 44px);
 }
 
 .session-header {
@@ -1012,25 +1018,6 @@ button.stop:not(:disabled):hover {
 	.modal.sheet {
 		width: 100vw;
 		border-left: none;
-	}
-
-	/* Narrow viewports: the sessions sidebar becomes a fixed overlay instead
-	   of stealing 240px of layout width; the existing ☰ roster segment still
-	   shows/hides it (state.sidebarVisible), and the pet stops offsetting for
-	   it since the main column now spans the full width. */
-	.sidebar {
-		position: fixed;
-		top: 0;
-		right: 0;
-		bottom: 0;
-		width: min(var(--sidebar-w), 80vw);
-		z-index: var(--z-sheet);
-		border-left: 1px solid var(--border);
-		box-shadow: var(--shadow-2);
-	}
-
-	.app:has(.sidebar) {
-		--sidebar-offset: 0;
 	}
 }
 
@@ -2370,13 +2357,6 @@ pre.terminal {
 	outline-offset: 2px;
 }
 
-/* Shift the pet left of the sessions sidebar (outer width = --sidebar-w plus
-   its 1px border) so it always hugs the main column's right edge. The extra
-   --space-2 keeps a small visual gap. */
-.app:has(.sidebar) {
-	--sidebar-offset: calc(var(--sidebar-w) + 1px + var(--space-2));
-}
-
 .pet-roster {
 	display: flex;
 	flex-direction: column;
@@ -2461,7 +2441,8 @@ pre.terminal {
 	.sidebar-row,
 	.sidebar-caret,
 	.segment-button,
-	.autocomplete-row {
+	.autocomplete-row,
+	.sidebar {
 		transition: none;
 	}
 }
@@ -2610,7 +2591,7 @@ pre.terminal {
 	margin-top: var(--space-5);
 }
 
-/* --- Sessions sidebar: main column + right-side live-session roster --- */
+/* --- Sessions sidebar: centered chat column + left-side overlay roster --- */
 
 .app-body {
 	display: flex;
@@ -2621,21 +2602,74 @@ pre.terminal {
 .app-main {
 	display: flex;
 	flex-direction: column;
-	flex: 1;
+	flex: 1 1 auto;
+	width: 100%;
+	max-width: 820px;
+	margin: 0 auto;
 	min-width: 0;
 }
 
 .sidebar {
-	width: var(--sidebar-w);
-	flex: none;
+	/* Fixed left overlay: never participates in layout, so the chat column
+	   keeps its full width whether the sidebar is open or closed. */
+	position: fixed;
+	top: 0;
+	left: 0;
+	bottom: 0;
+	width: min(var(--sidebar-w), 80vw);
+	z-index: var(--z-sheet);
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
-	border-left: 1px solid var(--border);
+	border-right: 1px solid var(--border);
 	background: var(--bg-deep);
 	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
 	line-height: 1.4;
+	box-shadow: var(--shadow-2);
+	transform: translateX(-100%);
+	visibility: hidden;
+	transition:
+		transform var(--dur-base) var(--ease-in-out),
+		visibility 0s linear var(--dur-base);
+}
+
+.sidebar.open {
+	transform: translateX(0);
+	visibility: visible;
+	transition: transform var(--dur-base) var(--ease-in-out);
+}
+
+/* Floating roster toggle: sticky top-left of the viewport. Roster mode only;
+   the open sidebar (z-sheet) covers it, so the sidebar's own × closes. */
+.sidebar-toggle {
+	position: fixed;
+	top: var(--space-4);
+	left: var(--space-6);
+	z-index: var(--z-overlay);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--muted-2);
+	font-size: var(--fs-lg);
+	line-height: 1;
+	cursor: pointer;
+	box-shadow: var(--shadow-1);
+}
+
+.sidebar-toggle:hover {
+	color: var(--text);
+	background: var(--hover);
+}
+
+.sidebar-toggle:focus-visible {
+	outline: var(--focus-ring);
+	outline-offset: 2px;
 }
 
 .sidebar-header {

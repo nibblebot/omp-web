@@ -25,7 +25,7 @@ import { StatsPopover } from "./components/StatsPopover";
 import { SessionBar, SessionHeader, StatusBar } from "./components/StatusBar";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { ThinkingPicker } from "./components/ThinkingPicker";
-import { connect, setPromptInsert, setState, state } from "./state";
+import { connect, setPromptInsert, setState, state, toggleSidebar } from "./state";
 import { initTheme } from "./theme";
 import { TxBrowser } from "./tx/Browser";
 
@@ -95,6 +95,22 @@ export const App: Component = () => {
 			    screen readers register the polite region at mount. */}
 			<div role="status" aria-live="polite" class="visually-hidden">{state.announcement}</div>
 			<StatusBar />
+			{/* Roster toggle: sticky top-left of the viewport (roster mode,
+			    chat view). Slides under the open sidebar, which carries its
+			    own × close. */}
+			<Show when={state.sessionMode === "roster" && state.view === "chat"}>
+				<button
+					type="button"
+					id="sidebar-toggle"
+					class="sidebar-toggle"
+					onClick={toggleSidebar}
+					title="Toggle roster sidebar"
+					aria-label="Toggle roster sidebar"
+					aria-expanded={state.sidebarVisible}
+				>
+					☰
+				</button>
+			</Show>
 			<div class="app-body">
 				<Show when={state.view === "transcripts"}>
 					<TxBrowser />
@@ -116,8 +132,10 @@ export const App: Component = () => {
 						<PromptBox />
 					</main>
 					{/* Roster mode (fleet edge): the fleet roster sidebar replaces the
-					    sessions sidebar; single mode has no sidebar at all. */}
-					<Show when={state.sidebarVisible && state.sessionMode === "roster"}>
+					    sessions sidebar; single mode has no sidebar at all. Always
+					    mounted so it can slide open/closed (class-driven); hidden
+					    off-canvas when closed. */}
+					<Show when={state.sessionMode === "roster"}>
 						<DaemonSidebar />
 					</Show>
 				</Show>

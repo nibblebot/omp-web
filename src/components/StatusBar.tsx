@@ -1,7 +1,7 @@
 import { createEffect, createSignal, onCleanup, Show, type Component, type JSX } from "solid-js";
 import { formatTokens, getContextUsageLevel } from "../context";
 import { planToggle } from "../commands";
-import { call, setState, state, togglePetVisible, toggleSidebar } from "../state";
+import { call, setState, state, togglePetVisible } from "../state";
 
 const ContextSegment: Component = () => {
 	const usage = () => state.contextUsage;
@@ -119,12 +119,6 @@ export const StatusBar: Component = () => {
 			>
 				⤢
 			</Segment>
-			{/* Roster sidebar visibility toggle; hidden in single mode (no sidebar). */}
-			<Show when={state.sessionMode === "roster"}>
-				<Segment active={state.sidebarVisible} onClick={toggleSidebar} title="Roster" ariaLabel="Roster">
-					☰
-				</Segment>
-			</Show>
 			<Segment
 				active={state.modal === "debug"}
 				onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}

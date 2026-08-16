@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, onMount, Show, untrack, type Component } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount, Show, untrack, type Component } from "solid-js";
 import type { DaemonEntry, DaemonStatus, ProjectEntry } from "../../shared/protocol";
 import { attachSession, listProjects, removeDaemonById, setSidebarVisible, setState, spawnDaemon, spawnResume, state, stopDaemonById } from "../state";
 import { formatDaemonUptime } from "./ActiveDaemons";
@@ -550,7 +550,8 @@ const SpawnPicker: Component<{ onClose: () => void }> = props => {
 	);
 };
 
-/** Right-side column: fleet session roster (click to attach/wake).
+/** Left overlay: fleet session roster (click to attach/wake). Fixed to the
+ *  viewport's left edge; slides in/out via the `.open` class.
  *  ALL sessions — spawned, attached, and remote alike — group under a
  *  single static "REPOS" header by owning repo (`worktreeOf ?? project`,
  *  sorted); a repo with worktree sessions renders as a label-only
@@ -666,6 +667,35 @@ export const DaemonSidebar: Component = () => {
 	 *  worktrees as collapsible containers. */
 	const groups = () => buildGroups(state.daemonRoster);
 
+	/** Narrow viewports (<1100px): the sidebar is a transient drawer — any
+	 *  blur or click outside slides it back shut. Desktop keeps it open
+	 *  until toggled. */
+	const [narrow, setNarrow] = createSignal(false);
+	createEffect(() => {
+		const mq = window.matchMedia("(max-width: 1099px)");
+		const sync = () => setNarrow(mq.matches);
+		sync();
+		mq.addEventListener("change", sync);
+		onCleanup(() => mq.removeEventListener("change", sync));
+	});
+	createEffect(() => {
+		if (!narrow() || !state.sidebarVisible) return;
+		const onMouseDown = (e: MouseEvent) => {
+			const t = e.target as Node | null;
+			const toggle = document.getElementById("sidebar-toggle");
+			if (t && asideRef && !asideRef.contains(t) && (!toggle || !toggle.contains(t))) setSidebarVisible(false);
+		};
+		const onFocusOut = (e: FocusEvent) => {
+			if (asideRef && !asideRef.contains(e.relatedTarget as Node | null)) setSidebarVisible(false);
+		};
+		document.addEventListener("mousedown", onMouseDown);
+		document.addEventListener("focusout", onFocusOut);
+		onCleanup(() => {
+			document.removeEventListener("mousedown", onMouseDown);
+			document.removeEventListener("focusout", onFocusOut);
+		});
+	});
+
 	/** Collapsible caret group header; the caret glyph and its rotation come
 	 *  from CSS via the data-open attribute. gkey names the collapse slot. */
 	const GroupHeader: Component<{ label: string; gkey: string; count: number; class?: string }> = props => {
@@ -685,8 +715,9 @@ export const DaemonSidebar: Component = () => {
 		);
 	};
 
+	let asideRef: HTMLElement | undefined;
 	return (
-		<aside class="sidebar">
+		<aside ref={asideRef} class="sidebar" classList={{ open: state.sidebarVisible }}>
 			<div class="sidebar-header">
 				<span class="sidebar-title">Daemons</span>
 				<span class="sidebar-stats">
