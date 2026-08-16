@@ -4269,13 +4269,17 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	flex: none;
 }
 
-/* Checked-out branches aren't selectable (git refuses a second checkout);
-   aria-disabled keeps the row visible and announced but inert. */
-.worktree-row[aria-disabled="true"],
-.worktree-row[aria-disabled="true"]:hover {
-	color: var(--muted-2);
-	cursor: default;
-	background: none;
+/* Existing-branch dropdown (create tab): mirrors .settings-row select.
+   Checked-out branches are <option disabled> — natively greyed and
+   unselectable (git refuses a second checkout). */
+.worktree-branch-select {
+	width: 100%;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	padding: var(--space-2) var(--space-4);
+	font: inherit;
 }
 
 /* --- Close-out dialogs (DeleteWorktreeDialog / RemoveProjectDialog) --- */

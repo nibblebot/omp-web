@@ -18,7 +18,6 @@ export const PickerRow: Component<PickerRowProps> = props => (
 		title={props.title}
 		aria-pressed={props["aria-pressed"]}
 		aria-selected={props["aria-selected"]}
-		aria-disabled={props["aria-disabled"]}
 	>
 		{props.children}
 	</button>
@@ -33,7 +32,6 @@ interface PickerRowProps {
 	title?: string;
 	"aria-pressed"?: boolean;
 	"aria-selected"?: boolean;
-	"aria-disabled"?: boolean;
 	children?: JSX.Element;
 }
 

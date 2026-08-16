@@ -38,9 +38,9 @@ const STAGE_LABELS: Record<Tab, string[]> = {
 
 /**
  * Add-worktree modal (Phase 5): register a linked worktree of a registered
- * project. Two tabs — Create new (a branch picker: create a fresh branch or
- * attach an existing local branch of the project; no freeform ref entry, no
- * advanced section) and Add existing (discovered-but-unregistered worktrees
+ * project. Two tabs — Create new (name input on top, a "+ New branch" row,
+ * then an existing-branch dropdown — checked-out branches last and disabled;
+ * no freeform ref entry, no advanced section) and Add existing (discovered-but-unregistered worktrees
  * of the project). "Start a session now" (default ON) spawns a daemon on
  * the worktree; the modal tracks register → spawn → attach so the
  * session-picker gate opens after attach settles. Failure at any rung
@@ -71,10 +71,11 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 	/** True when an existing branch is selected (vs. creating a new one). */
 	const branchSelected = () => selected().kind === "branch";
 
-	/** True when the given branch is the currently selected one. */
-	const isSelected = (branchName: string) => {
+	/** Name of the selected existing branch, or "" in new-branch mode (the
+	 *  dropdown's placeholder value). */
+	const selectedBranch = () => {
 		const sel = selected();
-		return sel.kind === "branch" && sel.name === branchName;
+		return sel.kind === "branch" ? sel.name : "";
 	};
 
 	/** Name input value: the selected branch's name (shown read-only), or the
@@ -83,6 +84,12 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 		const sel = selected();
 		return sel.kind === "branch" ? sel.name : name();
 	};
+
+	/** Branches for the dropdown: available first, checked-out (already in a
+	 *  workspace — git refuses a second checkout) last and disabled;
+	 *  alphabetical within each group. */
+	const sortedBranches = () =>
+		[...branches()].sort((a, b) => Number(a.checkedOut) - Number(b.checkedOut) || a.name.localeCompare(b.name));
 
 	// Existing-branch picker data: fetched on open and whenever the targeted
 	// project changes. Keyed on the projectId string, NOT the registry object
@@ -290,40 +297,6 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 							void submitCreate();
 						}}
 					>
-						<div class="picker-group-name">Branch</div>
-						<div class="worktree-list">
-							<PickerRow
-								class="picker-row worktree-row"
-								classList={{ active: selected().kind === "new" }}
-								onClick={() => setSelected({ kind: "new" })}
-								title="Create a new branch"
-							>
-								<span class="picker-label worktree-row-name session-new-label">+ New branch</span>
-							</PickerRow>
-							<Show when={branchesLoading()}>
-								<div class="tool-collapsed-note">loading branches…</div>
-							</Show>
-							<Show when={branchesError()}>{err => <div class="msg-notice">{err()}</div>}</Show>
-							<Show when={!branchesLoading() && !branchesError() && branches().length === 0}>
-								<div class="tool-collapsed-note">no branches in this repo yet</div>
-							</Show>
-							<For each={branches()}>
-								{b => (
-									<PickerRow
-										class="picker-row worktree-row"
-										classList={{ active: isSelected(b.name) }}
-										onClick={b.checkedOut ? undefined : () => setSelected({ kind: "branch", name: b.name })}
-										aria-disabled={b.checkedOut}
-										title={b.checkedOut ? `checked out at ${b.worktreePath}` : undefined}
-									>
-										<span class="picker-label worktree-row-name">{b.name}</span>
-										<Show when={b.checkedOut}>
-											<span class="picker-chip worktree-row-branch">checked out</span>
-										</Show>
-									</PickerRow>
-								)}
-							</For>
-						</div>
 						<label class="daemon-detail-label" for="worktree-name">
 							name
 						</label>
@@ -341,6 +314,46 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 							spellcheck={false}
 						/>
 						<Show when={nameError()}>{err => <div class="msg-notice worktree-name-error">{err()}</div>}</Show>
+						<div class="picker-group-name">Branch</div>
+						<div class="worktree-list">
+							<PickerRow
+								class="picker-row worktree-row"
+								classList={{ active: selected().kind === "new" }}
+								onClick={() => setSelected({ kind: "new" })}
+								title="Create a new branch"
+							>
+								<span class="picker-label worktree-row-name session-new-label">+ New branch</span>
+							</PickerRow>
+							<Show when={branchesLoading()}>
+								<div class="tool-collapsed-note">loading branches…</div>
+							</Show>
+							<Show when={branchesError()}>{err => <div class="msg-notice">{err()}</div>}</Show>
+							<Show when={!branchesLoading() && !branchesError() && branches().length === 0}>
+								<div class="tool-collapsed-note">no branches in this repo yet</div>
+							</Show>
+							<Show when={!branchesLoading() && !branchesError() && branches().length > 0}>
+								<select
+									class="worktree-branch-select"
+									aria-label="Existing branch"
+									value={selectedBranch()}
+									onChange={e => {
+										const v = e.currentTarget.value;
+										if (v !== "") setSelected({ kind: "branch", name: v });
+									}}
+								>
+									<option value="" disabled>
+										use an existing branch…
+									</option>
+									<For each={sortedBranches()}>
+										{b => (
+											<option value={b.name} disabled={b.checkedOut}>
+												{b.checkedOut ? `${b.name} (checked out)` : b.name}
+											</option>
+										)}
+									</For>
+								</select>
+							</Show>
+						</div>
 						<label class="worktree-start">
 							<input type="checkbox" checked={start()} onChange={e => setStart(e.currentTarget.checked)} />
 							Start a session now
