@@ -2,6 +2,7 @@ import { createEffect, createSignal, onCleanup, Show, type Component, type JSX }
 import { formatTokens, getContextUsageLevel } from "../context";
 import { planToggle } from "../commands";
 import { call, setState, state, togglePetVisible } from "../state";
+import { ArrowDownIcon, ArrowUpIcon, InfoIcon, PanelLeftIcon, SettingsIcon } from "../icons";
 
 const ContextSegment: Component = () => {
 	const usage = () => state.contextUsage;
@@ -98,7 +99,7 @@ export const StatusBar: Component = () => {
 					onClick={() => setState("view", v => (v === "transcripts" ? "chat" : "transcripts"))}
 					title="Transcripts"
 				>
-					◫ Tx
+					<PanelLeftIcon /> Tx
 				</Segment>
 			</Show>
 			{state.queuedMessageCount > 0 && <span class="queued-chip">queued: {state.queuedMessageCount}</span>}
@@ -120,10 +121,10 @@ export const StatusBar: Component = () => {
 					title="Debug — transport and fleet visibility"
 					ariaLabel="Debug — transport and fleet visibility"
 				>
-					ⓘ
+					<InfoIcon />
 				</Segment>
 				<Segment onClick={() => setState("modal", "settings")} title="Settings" ariaLabel="Settings">
-					⚙
+					<SettingsIcon />
 				</Segment>
 			</Show>
 			{!state.connected && <span class="disconnected-pill">disconnected</span>}
@@ -214,7 +215,7 @@ export const SessionBar: Component = () => (
 		<Show when={state.stats}>
 			{s => (
 				<Segment class="stats-segment" onClick={() => setState("modal", "stats")} title="Session stats">
-					${s().cost.toFixed(2)} · ↑{formatTokens(s().tokens.input)} ↓{formatTokens(s().tokens.output)}
+					${s().cost.toFixed(2)} · <ArrowUpIcon />{formatTokens(s().tokens.input)} <ArrowDownIcon />{formatTokens(s().tokens.output)}
 				</Segment>
 			)}
 		</Show>

@@ -3,6 +3,7 @@ import { characterForProvider, drawCharacter } from "../characters";
 import { groupModelRoles, type RoleGroup } from "../model-roles";
 import { SPRITE_SIZE, type PetPose } from "../sprite";
 import { setState, state, togglePetVisible } from "../state";
+import { XIcon } from "../icons";
 import { CharacterAvatar } from "./CharacterAvatar";
 
 const IDLE_BLINK_MS = 150;
@@ -112,7 +113,7 @@ export const Pet: Component = () => {
 					aria-label="Hide pet roster"
 					onClick={togglePetVisible}
 				>
-					×
+					<XIcon />
 				</button>
 				<div class="pet-roster">
 					<For each={roster()}>

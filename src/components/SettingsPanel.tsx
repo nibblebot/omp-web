@@ -7,6 +7,7 @@ import {
 	type SettingsMatch,
 } from "../settings";
 import { call, fleetSettingsActive, refreshSettings, setNotifyEnabled, setState, state, updateSetting } from "../state";
+import { ChevronDownIcon, ChevronUpIcon, MinusIcon, PlusIcon, XIcon } from "../icons";
 import {
 	currentFontSize,
 	currentThemePreference,
@@ -128,7 +129,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 					onInput={e => setQuery(e.currentTarget.value)}
 				/>
 				<button type="button" class="settings-close" aria-label="Close settings" onClick={props.onClose}>
-					×
+					<XIcon />
 				</button>
 			</div>
 			<Show when={model()}>
@@ -224,11 +225,11 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 								<Row label="font size">
 									<div class="settings-font">
 										<button type="button" class="settings-control-btn" aria-label="Decrease font size" onClick={() => setFontSize(stepFontSize(-1))}>
-											−
+											<MinusIcon />
 										</button>
 										<span class="settings-font-value">{fontSize()}</span>
 										<button type="button" class="settings-control-btn" aria-label="Increase font size" onClick={() => setFontSize(stepFontSize(1))}>
-											+
+											<PlusIcon />
 										</button>
 									</div>
 								</Row>
@@ -497,7 +498,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 												moveOption(opt.value, -1);
 											}}
 										>
-											▲
+											<ChevronUpIcon />
 										</button>
 										<button
 											type="button"
@@ -508,7 +509,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 												moveOption(opt.value, 1);
 											}}
 										>
-											▼
+											<ChevronDownIcon />
 										</button>
 									</Show>
 								</span>

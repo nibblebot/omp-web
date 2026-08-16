@@ -1,15 +1,17 @@
 import { createSignal, For, Show, type Component } from "solid-js";
+import { Dynamic } from "solid-js/web";
 import { daemonsKey, type DaemonInfo } from "../../shared/protocol";
 import { isLiveDaemon, restartDaemon, setState, state, stopDaemon } from "../state";
+import { CheckIcon, DiamondIcon, LoaderIcon, RefreshIcon, XIcon, type IconProps } from "../icons";
 
-export const DAEMON_GLYPH: Record<string, string> = {
-	starting: "◐",
-	running: "◐",
-	ready: "✓",
-	restarting: "↻",
-	stopping: "◇",
-	exited: "✗",
-	failed: "✗",
+export const DAEMON_ICON: Record<string, Component<IconProps>> = {
+	starting: LoaderIcon,
+	running: LoaderIcon,
+	ready: CheckIcon,
+	restarting: RefreshIcon,
+	stopping: DiamondIcon,
+	exited: XIcon,
+	failed: XIcon,
 };
 
 /** Compact uptime: "Ns", "Nm Ns", or "Nh Nm" (floor). */
@@ -47,7 +49,7 @@ const DaemonRow: Component<{ d: DaemonInfo }> = props => {
 	return (
 		<div class="active-daemon-row">
 			<span class="daemon-glyph" data-state={props.d.state}>
-				{DAEMON_GLYPH[props.d.state] ?? "◐"}
+				<Dynamic component={DAEMON_ICON[props.d.state] ?? LoaderIcon} />
 			</span>
 			<span class="daemon-name">{props.d.name}</span>
 			<span class="daemon-state">{props.d.state}</span>

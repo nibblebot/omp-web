@@ -23,6 +23,7 @@ import {
   userText,
 } from "../../../util/entries";
 import { formatCompact, formatCost, formatDateTime, formatMs } from "../../../util/format";
+import { ChevronDownIcon, CornerDownRightIcon } from "../../../../icons";
 import { Markdown } from "../../../../components/Markdown";
 import type { PairingMaps, ToolCallInfo } from "../pairing";
 import { useRowCollapse } from "../collapse";
@@ -58,6 +59,7 @@ export function AssistantMsg(props: { entry: RawEntry; pairing: PairingMaps }) {
     <div classList={{ "tx-msg": true, assistant: true, error: error, collapsed: row.collapsed() }}>
       <div class="tx-msg-meta">
         <button class="tx-msg-toggle" onClick={row.toggle} aria-expanded={!row.collapsed()} aria-label={rowAriaLabel(e)}>
+          <ChevronDownIcon class="tx-caret" />
           <span class="meta-time">{ts !== null ? formatDateTime(ts) : ""}</span>
           <span class="meta-who">assistant</span>
           <Show when={model !== ""}>
@@ -74,7 +76,7 @@ export function AssistantMsg(props: { entry: RawEntry; pairing: PairingMaps }) {
             <span class="meta-ttft">ttft {formatMs(ttft)}</span>
           </Show>
           <Show when={stopReason !== ""}>
-            <span class="meta-stop">↳ {stopReason}</span>
+            <span class="meta-stop"><CornerDownRightIcon /> {stopReason}</span>
           </Show>
           <Show when={tokens !== null}>
             <span class="meta-tok">{formatCompact(tokens)} tok</span>
@@ -230,6 +232,7 @@ export function UserMsg(props: { entry: RawEntry }) {
     <div classList={{ "tx-msg": true, user: true, collapsed: row.collapsed() }}>
       <div class="tx-msg-meta">
         <button class="tx-msg-toggle" onClick={row.toggle} aria-expanded={!row.collapsed()} aria-label={rowAriaLabel(e)}>
+          <ChevronDownIcon class="tx-caret" />
           <span class="meta-time">{ts !== null ? formatDateTime(ts) : ""}</span>
           <span class="meta-who">user</span>
           <Show when={attribution !== null}>
@@ -279,6 +282,7 @@ export function ToolResultMsg(props: { entry: RawEntry; calls: Map<string, ToolC
     <div classList={{ "tx-msg": true, "tool-result": true, error: isErr, collapsed: row.collapsed() }}>
       <div class="tx-msg-meta">
         <button class="tx-msg-toggle" onClick={row.toggle} aria-expanded={!row.collapsed()} aria-label={rowAriaLabel(e)}>
+          <ChevronDownIcon class="tx-caret" />
           <span class="meta-time">{ts !== null ? formatDateTime(ts) : ""}</span>
           <span class="meta-who">toolResult</span>
           <Show when={name !== ""}>
@@ -326,6 +330,7 @@ export function DeveloperMsg(props: { entry: RawEntry }) {
     <div classList={{ "tx-msg": true, "dev-system": true, collapsed: row.collapsed() }}>
       <div class="tx-msg-meta">
         <button class="tx-msg-toggle" onClick={row.toggle} aria-expanded={!row.collapsed()} aria-label={rowAriaLabel(e)}>
+          <ChevronDownIcon class="tx-caret" />
           <span class="meta-time">{ts !== null ? formatDateTime(ts) : ""}</span>
           <span class="meta-who">developer</span>
         </button>
@@ -354,6 +359,7 @@ export function FileMentionMsg(props: { entry: RawEntry }) {
     <div classList={{ "tx-msg": true, "file-mention": true, collapsed: row.collapsed() }}>
       <div class="tx-msg-meta">
         <button class="tx-msg-toggle" onClick={row.toggle} aria-expanded={!row.collapsed()} aria-label={rowAriaLabel(e)}>
+          <ChevronDownIcon class="tx-caret" />
           <span class="meta-time">{ts !== null ? formatDateTime(ts) : ""}</span>
           <span class="meta-who">fileMention</span>
           <span class="meta-tok">{files.length} file{files.length === 1 ? "" : "s"}</span>

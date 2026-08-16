@@ -1,8 +1,10 @@
 import { For, type Component } from "solid-js";
+import { Dynamic } from "solid-js/web";
+import { BanIcon, LoaderIcon, SquareCheckIcon, SquareIcon, XIcon, type IconProps } from "../../icons";
 import { state, type ToolItem } from "../../state";
 import { ToolShell } from "./ToolShell";
 
-const GLYPH: Record<string, string> = { done: "☑", completed: "☑", in_progress: "◐", pending: "☐", abandoned: "⊘", blocked: "✗" };
+const TODO_ICON: Record<string, Component<IconProps>> = { done: SquareCheckIcon, completed: SquareCheckIcon, in_progress: LoaderIcon, pending: SquareIcon, abandoned: BanIcon, blocked: XIcon };
 
 interface TodoTask { content: string; status: string }
 interface TodoPhaseShape { name: string; tasks: TodoTask[] }
@@ -41,7 +43,7 @@ export const TodoTool: Component<{ item: ToolItem }> = props => {
 							<For each={phase.tasks}>
 								{task => (
 									<div class="todo-item" data-status={task.status}>
-										<span class="todo-glyph">{GLYPH[task.status] ?? "☐"}</span>
+										<span class="todo-glyph"><Dynamic component={TODO_ICON[task.status] ?? SquareIcon} /></span>
 										<span class="todo-text">{task.content}</span>
 									</div>
 								)}

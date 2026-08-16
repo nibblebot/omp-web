@@ -1,4 +1,5 @@
 import { Show, type Component } from "solid-js";
+import { ArrowRightIcon } from "../../icons";
 import type { ToolItem } from "../../state";
 import { CollapsiblePre, ToolShell } from "./ToolShell";
 
@@ -16,7 +17,7 @@ export const HubTool: Component<{ item: ToolItem }> = props => {
 	return (
 		<ToolShell name={<>hub {op()}</>} status={props.item.status} class="hub-tool">
 			<Show when={target()}>
-				<div class="tool-meta">{to() ? `→ ${target()}` : target()}</div>
+				<div class="tool-meta">{to() ? (<><ArrowRightIcon /> {target()}</>) : target()}</div>
 			</Show>
 			<Show when={preview()}>
 				<div class="hub-message">"{preview()}"</div>

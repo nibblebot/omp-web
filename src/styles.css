@@ -314,6 +314,16 @@ body {
 	border: 0;
 }
 
+/* Base sizing for the vendored Lucide icons (src/icons.tsx): 1em so icons
+ * track the surrounding font-size exactly like the glyphs they replaced.
+ * Site classes (e.g. .daemon-worktree-icon) override width/height later. */
+.icon {
+	width: 1em;
+	height: 1em;
+	flex: none;
+	vertical-align: -0.125em;
+}
+
 .app {
 	position: relative;
 	display: flex;
@@ -3473,8 +3483,7 @@ pre.terminal.eval-code {
 	text-overflow: ellipsis;
 }
 
-.lsp-symbol::before {
-	content: "↳ ";
+.lsp-symbol-icon {
 	color: var(--accent);
 }
 
@@ -3642,10 +3651,6 @@ pre.terminal.eval-code {
 	flex: none;
 	color: var(--muted-2);
 	transition: transform var(--dur-fast) var(--ease-out);
-}
-
-.sidebar-caret::before {
-	content: "▾";
 }
 
 button.sidebar-group[data-open="false"] .sidebar-caret {
@@ -6162,14 +6167,12 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 }
 
 /* Row header buttons: collapse chevron + hover/active feedback. */
-.tx-msg-toggle::before,
-.sys-toggle::before {
-  content: "▾";
+.tx-caret {
   color: var(--tx-text-faint);
   flex: none;
 }
-.tx-msg-toggle[aria-expanded="false"]::before,
-.sys-toggle[aria-expanded="false"]::before {
+.tx-msg-toggle[aria-expanded="false"] .tx-caret,
+.sys-toggle[aria-expanded="false"] .tx-caret {
   transform: rotate(-90deg);
 }
 .tx-msg-toggle:hover,
@@ -6185,8 +6188,8 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
   .sys-toggle {
     transition: background-color 100ms ease;
   }
-  .tx-msg-toggle::before,
-  .sys-toggle::before {
+  .tx-msg-toggle .tx-caret,
+  .sys-toggle .tx-caret {
     transition: transform 100ms ease;
   }
 }

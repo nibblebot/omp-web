@@ -4,6 +4,7 @@ import { attachSession, daemonsByProject, removeDaemonById, sendWorktreeDeleteIn
 import { formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
 import { useClickableRow } from "./PickerRow";
+import { ChevronDownIcon, InfoIcon, PlusIcon, SettingsIcon, StopIcon, WorktreeIcon, XIcon } from "../icons";
 
 // ---------------------------------------------------------------------------
 // Fleet-edge roster sidebar (Phase 5). Rendered by App.tsx only in
@@ -47,17 +48,6 @@ const STATUS_TITLE: Record<DaemonStatus, string> = {
 /** Porcelain dirty counts, in the order they render: added, modified,
  *  deleted, untracked — the `git status --porcelain` short-hand glyphs. */
 type DirtyKind = "added" | "modified" | "deleted" | "untracked";
-
-/** Simple 3-node git-branch glyph; strokes follow currentColor so it tints
- *  with the row title. Rendered inline (no icon font dependency). */
-const WorktreeIcon = () => (
-	<svg class="daemon-worktree-icon" viewBox="0 0 16 16" aria-hidden="true">
-		<circle cx="4" cy="4" r="1.6" />
-		<circle cx="4" cy="12" r="1.6" />
-		<circle cx="12" cy="4" r="1.6" />
-		<path d="M4 5.6v4.8M12 5.6c0 3-4 2.6-8 4.8" />
-	</svg>
-);
 
 const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props => {
 	const [detailOpen, setDetailOpen] = createSignal(false);
@@ -145,7 +135,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 					<div class="sidebar-row-top">
 						<span class="sidebar-row-title daemon-row-title" title={isWorktree() ? (d().branch ?? d().name) : d().name}>
 							<Show when={isWorktree()}>
-								<WorktreeIcon />
+								<WorktreeIcon class="daemon-worktree-icon" />
 							</Show>
 							{isWorktree() ? (d().branch ?? d().name) : d().name}
 						</span>
@@ -204,7 +194,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 								else armDaemon(d().daemonId, "stop");
 							}}
 						>
-							■
+							<StopIcon />
 						</button>
 						<button
 							type="button"
@@ -226,7 +216,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 								else armDaemon(d().daemonId, "remove");
 							}}
 						>
-							✕
+							<XIcon />
 						</button>
 						<Show when={d().managed === true}>
 							<button
@@ -253,7 +243,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 								setDetailOpen(true);
 							}}
 						>
-							ⓘ
+							<InfoIcon />
 						</button>
 					</div>
 				</div>
@@ -307,7 +297,7 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 					{d().status}
 				</span>
 				<button type="button" class="daemon-detail-close" aria-label="Close daemon details" onClick={props.onClose}>
-					×
+					<XIcon />
 				</button>
 			</div>
 			<div class="daemon-detail-facts">
@@ -542,7 +532,7 @@ export const DaemonSidebar: Component = () => {
 				data-open={open() ? "true" : "false"}
 				onClick={() => toggleGroup(props.gkey)}
 			>
-				<span class="sidebar-caret" data-open={open() ? "true" : "false"} />
+				<ChevronDownIcon class="sidebar-caret" />
 				<span class="sidebar-group-label">{props.label}</span>
 				<span class="sidebar-group-count">{props.count}</span>
 			</button>
@@ -626,10 +616,10 @@ export const DaemonSidebar: Component = () => {
 					{state.daemonRoster.length} daemon{state.daemonRoster.length === 1 ? "" : "s"}
 				</span>
 				<button class="sidebar-icon-btn" onClick={() => setState("modal", "add-project")} title="Add a project" aria-label="Add a project">
-					+
+					<PlusIcon />
 				</button>
 				<button class="sidebar-icon-btn" onClick={() => setSidebarVisible(false)} title="Hide sidebar" aria-label="Hide sidebar">
-					×
+					<XIcon />
 				</button>
 			</div>
 			<div class="sidebar-list">
@@ -669,7 +659,7 @@ export const DaemonSidebar: Component = () => {
 					title="Debug — transport and fleet visibility"
 					aria-label="Debug — transport and fleet visibility"
 				>
-					ⓘ
+					<InfoIcon />
 				</button>
 				<button
 					class="sidebar-icon-btn"
@@ -677,7 +667,7 @@ export const DaemonSidebar: Component = () => {
 					title="Settings"
 					aria-label="Settings"
 				>
-					⚙
+					<SettingsIcon />
 				</button>
 			</div>
 		</aside>

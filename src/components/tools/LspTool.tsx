@@ -1,4 +1,5 @@
 import { Show, type Component } from "solid-js";
+import { CornerDownRightIcon } from "../../icons";
 import type { ToolItem } from "../../state";
 import { CollapsiblePre, ToolShell } from "./ToolShell";
 
@@ -13,7 +14,7 @@ export const LspTool: Component<{ item: ToolItem }> = props => {
 			<Show when={file() || symbol()}>
 				<div class="tool-meta">
 					{file() && <span class="lsp-file">{file()}</span>}
-					{symbol() && <span class="lsp-symbol">{symbol()}</span>}
+					{symbol() && <span class="lsp-symbol"><CornerDownRightIcon class="lsp-symbol-icon" />{symbol()}</span>}
 				</div>
 			</Show>
 			<CollapsiblePre item={props.item} output={props.item.output} />

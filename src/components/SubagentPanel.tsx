@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SubagentMessagesResult } from "../../shared/protocol";
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import { abortSubagent, call, pushNotice, state, steerSubagent, type SubagentInfo } from "../state";
+import { ArrowLeftIcon } from "../icons";
 import { Modal } from "./Modal";
 import { useClickableRow } from "./PickerRow";
 import { SubagentRow } from "./SubagentRow";
@@ -89,7 +90,7 @@ const SubagentDetail: Component<{ sub: SubagentInfo; onBack: () => void }> = pro
 	return (
 		<div class="subagent-list">
 			<button type="button" style={{ "align-self": "flex-start" }} onClick={props.onBack}>
-				← back
+				<ArrowLeftIcon /> back
 			</button>
 			<For each={messages()}>{msg => <MessageView msg={msg} />}</For>
 			{messages().length === 0 && !loading() && !error() && (

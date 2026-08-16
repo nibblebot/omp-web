@@ -1,7 +1,9 @@
 import { createEffect, createSignal, Show, untrack, type Component } from "solid-js";
+import { Dynamic } from "solid-js/web";
 import type { DaemonInfo } from "../../shared/protocol";
 import { requestDaemonLogs, restartDaemon, stopDaemon } from "../state";
-import { DAEMON_GLYPH, formatDaemonUptime } from "./ActiveDaemons";
+import { DAEMON_ICON, formatDaemonUptime } from "./ActiveDaemons";
+import { LoaderIcon, XIcon } from "../icons";
 import { Modal } from "./Modal";
 
 // Non-terminal daemon states (matches the server's port-resolution gate):
@@ -85,12 +87,12 @@ export const DaemonPanel: Component<{ daemon: DaemonInfo; daemonKey: string; onC
 		<Modal class="daemon-panel" aria-label={`Daemon ${d().name}`} onClose={props.onClose}>
 			<div class="daemon-panel-header">
 				<span class="daemon-glyph" data-state={d().state}>
-					{DAEMON_GLYPH[d().state] ?? "◐"}
+					<Dynamic component={DAEMON_ICON[d().state] ?? LoaderIcon} />
 				</span>
 				<span class="daemon-name">{d().name}</span>
 				<span class="daemon-state">{d().state}</span>
 				<button type="button" class="daemon-panel-close" aria-label="Close daemon panel" onClick={props.onClose}>
-					×
+					<XIcon />
 				</button>
 			</div>
 			<div class="daemon-facts">

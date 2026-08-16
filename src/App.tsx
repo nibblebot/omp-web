@@ -1,5 +1,6 @@
 import { For, onMount, Show, type Component } from "solid-js";
 import { characterForProvider } from "./characters";
+import { MenuIcon } from "./icons";
 import { ActiveSubagents } from "./components/ActiveSubagents";
 import { ActiveDaemons } from "./components/ActiveDaemons";
 import { AskDialog } from "./components/AskDialog";
@@ -112,7 +113,7 @@ export const App: Component = () => {
 					aria-label="Toggle roster sidebar"
 					aria-expanded={state.sidebarVisible}
 				>
-					☰
+					<MenuIcon />
 				</button>
 			</Show>
 			<div class="app-body">

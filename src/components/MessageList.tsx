@@ -9,6 +9,7 @@ import { CopyButton } from "./CopyButton";
 import { ToolCard, ToolStripCard } from "./ToolCard";
 import { groupAssistantRuns, type Run } from "../tool-runs";
 import { buildUsageRow, formatDurationMs, formatUsageRow } from "../usage";
+import { ExpandIcon } from "../icons";
 
 // Elements that cannot carry text children; append the fresh span to their parent instead.
 const VOID_TAGS: Record<string, true> = { BR: true, HR: true, IMG: true, INPUT: true, WBR: true };
@@ -343,7 +344,7 @@ export const MessageList: Component = () => {
 						title="Expand all tool outputs (Ctrl+O)"
 						onClick={() => setState("toolsExpanded", v => !v)}
 					>
-						⤢ expand
+						<ExpandIcon /> expand
 					</button>
 				</div>
 			</Show>

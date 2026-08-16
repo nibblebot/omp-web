@@ -1,5 +1,6 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import { cancelUiRequest, sendUiResponse, state } from "../state";
+import { CircleDotIcon, CircleIcon, SquareCheckIcon, SquareIcon } from "../icons";
 import { Modal } from "./Modal";
 
 // Wire shapes mirror the ExtensionUIContext dialog surface
@@ -119,7 +120,7 @@ const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
 												aria-pressed={isSelected()}
 												onClick={() => toggle(qi(), opt.label, q.multi ?? false)}
 											>
-												<span class="ask-marker">{isSelected() ? (q.multi ? "☑" : "●") : q.multi ? "☐" : "○"}</span>
+												<span class="ask-marker">{isSelected() ? (q.multi ? <SquareCheckIcon /> : <CircleDotIcon />) : q.multi ? <SquareIcon /> : <CircleIcon />}</span>
 												<span class="picker-label">{opt.label}</span>
 												{oi() === q.recommended && <span class="ask-recommended">recommended</span>}
 												{opt.description && <span class="picker-detail">{opt.description}</span>}

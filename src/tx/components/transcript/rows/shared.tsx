@@ -7,6 +7,7 @@ import type { JSX } from "solid-js";
 import type { RawEntry } from "../../../api";
 import { entryTimestamp, entryTypeLabel, rawJson, shortSummary, str, systemDetail } from "../../../util/entries";
 import { formatDateTime } from "../../../util/format";
+import { ChevronDownIcon } from "../../../../icons";
 import { RowStateCtx, useRowCollapse } from "../collapse";
 
 /** Stable details key for one <details> inside a row; survives remounts + page appends. */
@@ -82,6 +83,7 @@ export function SysCard(props: { entry: RawEntry; label: string; children?: JSX.
     <div classList={{ "sys-card": true, collapsed: row.collapsed() }}>
       <div class="sys-head">
         <button class="sys-toggle" onClick={row.toggle} aria-expanded={!row.collapsed()} aria-label={rowAriaLabel(props.entry)}>
+          <ChevronDownIcon class="tx-caret" />
           <span class="meta-time">{ts !== null ? formatDateTime(ts) : ""}</span>
           <span class="sys-label">{props.label}</span>
         </button>

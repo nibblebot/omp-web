@@ -4,6 +4,7 @@ import { dispatchInput, LOCAL_COMMANDS, type InputMode } from "../commands";
 import { PromptHistory } from "../history";
 import type { ImageArg } from "../../shared/protocol";
 import { call, dequeueLastQueued, isReady, listFiles, promptInsert, setPromptInsert, setState, state } from "../state";
+import { XIcon } from "../icons";
 import { Autocomplete, type AcItem } from "./Autocomplete";
 
 const history = new PromptHistory();
@@ -255,7 +256,7 @@ export const PromptBox: Component = () => {
 							<span class="image-thumb">
 								<img src={`data:${img.mimeType};base64,${img.data}`} alt="" aria-hidden="true" />
 								<button class="image-remove" aria-label="Remove image" onClick={() => setImages(prev => prev.filter((_, j) => j !== i()))}>
-									×
+									<XIcon />
 								</button>
 							</span>
 						)}

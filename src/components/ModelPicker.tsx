@@ -2,6 +2,7 @@ import { createEffect, createSignal, For, onMount, Show, type Component } from "
 import type { ModelInfo, ModelRoleCatalogEntry } from "../../shared/protocol";
 import { fuzzyRank } from "../autocomplete";
 import { call, setState, state } from "../state";
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon } from "../icons";
 import { Modal } from "./Modal";
 import { PickerRow, useClickableRow } from "./PickerRow";
 
@@ -188,7 +189,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 				<Show when={hiddenRoles().length > 0}>
 					<div class="picker-group-head">
 						<button class="picker-hidden-toggle" onClick={() => setShowHidden(v => !v)}>
-							{showHidden() ? "▾" : "▸"} hidden roles ({hiddenRoles().length})
+							{showHidden() ? <ChevronDownIcon /> : <ChevronRightIcon />} hidden roles ({hiddenRoles().length})
 						</button>
 					</div>
 					<Show when={showHidden()}>
@@ -224,7 +225,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 			<Show when={step() === "model"}>
 				<div class="picker-group-head">
 					<button class="picker-back" onClick={() => setStep("roles")}>
-						← roles
+						<ArrowLeftIcon /> roles
 					</button>
 				</div>
 				<input
@@ -270,7 +271,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 			<Show when={step() === "thinking"}>
 				<div class="picker-group-head">
 					<button class="picker-back" onClick={() => setStep("model")}>
-						← model
+						<ArrowLeftIcon /> model
 					</button>
 				</div>
 				<div class="picker-list">
