@@ -199,8 +199,9 @@ export const [state, setState] = createStore({
 	// Phase 3: pending server-pushed ExtensionUIContext dialog (ui_request
 	// frame); answered via sendUiResponse/cancelUiRequest.
 	uiRequest: null as { id: string; method: string; params: unknown } | null,
-	// Display toggles (StatusBar checkboxes); both default off = raw streaming.
-	reveal: false,
+	// Display toggles (SettingsPanel checkboxes); reveal paces streamed text
+	// (gradual reveal), soften fades the fresh tail. Reveal defaults ON.
+	reveal: true,
 	soften: false,
 	error: null as string | null,
 	// Client-side debug ring (Debug panel): one entry per transport lifecycle
