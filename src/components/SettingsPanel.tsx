@@ -132,21 +132,17 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 				</button>
 			</div>
 			<Show when={model()}>
-				<div class="settings-tabs" role="tablist">
-					<For each={clientTabs()}>
-						{tab => (
-							<button
-								type="button"
-								class="settings-tab" classList={{ active: tab.id === activeTabId() }}
-								role="tab"
-								aria-selected={tab.id === activeTabId()}
-								onClick={() => selectTab(tab.id)}
-							>
-								{tab.label}
-							</button>
-						)}
-					</For>
-				</div>
+				{/* Narrow-layout navigation (CSS-gated to ≤720px): a section
+				    picker instead of the wide layout's nav rail. */}
+				<nav class="settings-section-picker" aria-label="Settings sections">
+					<select
+						aria-label="Settings section"
+						value={activeTabId()}
+						onChange={e => selectTab(e.currentTarget.value)}
+					>
+						<For each={clientTabs()}>{tab => <option value={tab.id}>{tab.label}</option>}</For>
+					</select>
+				</nav>
 			</Show>
 			<div class="settings-content">
 				<Show when={model()}>
@@ -181,11 +177,18 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 								</>
 							)}
 						</For>
+						{/* Fleet fallback notice: a quiet footnote pinned to the
+						    bottom of the nav rail, not body chrome. */}
+						<Show when={fleetSettingsActive()}>
+							<div class="settings-nav-footnote">No session attached — changes save to config.yml and apply to new sessions.</div>
+						</Show>
 					</nav>
 				</Show>
 				<div class="settings-body">
+					{/* Narrow layout hides the nav rail, so the fleet fallback notice
+					    keeps a body copy there only (CSS-gated to ≤720px). */}
 					<Show when={fleetSettingsActive()}>
-						<div class="settings-note">No session attached — changes save to config.yml and apply to new sessions.</div>
+						<div class="settings-note settings-note-narrow">No session attached — changes save to config.yml and apply to new sessions.</div>
 					</Show>
 					<Show when={state.settingsLoading && !model()}>
 						<div class="settings-note">Loading settings…</div>

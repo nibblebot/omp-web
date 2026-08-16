@@ -1190,33 +1190,29 @@ button.danger-confirm-btn:not(:disabled):hover {
 	color: var(--text);
 }
 
-.settings-tabs {
-	display: flex;
-	gap: var(--space-1);
-	border-bottom: 1px solid var(--border);
-	margin-bottom: var(--space-3);
-	overflow-x: auto;
+/* Narrow-layout section picker: hidden on the wide layout, where the nav
+   rail takes over; mirrors the .settings-item select styling. */
+.settings-section-picker {
+	display: none;
 }
 
-.settings-tab {
-	background: none;
-	border: none;
-	border-bottom: 2px solid transparent;
-	color: var(--muted);
-	font: inherit;
-	font-size: var(--fs-md);
-	padding: var(--space-4) var(--space-5);
-	cursor: pointer;
-	white-space: nowrap;
-}
+@media (max-width: 720px) {
+	.settings-section-picker {
+		display: block;
+		padding: var(--space-3) var(--space-6);
+		border-bottom: 1px solid var(--border);
+	}
 
-.settings-tab:hover {
-	color: var(--text);
-}
-
-.settings-tab.active {
-	color: var(--accent);
-	border-bottom-color: var(--accent);
+	.settings-section-picker select {
+		width: 100%;
+		background: var(--bg-deep);
+		border: 1px solid var(--border);
+		border-radius: var(--r-md);
+		color: var(--text);
+		padding: var(--space-2) var(--space-4);
+		font: inherit;
+		font-size: var(--fs-md);
+	}
 }
 
 .settings-content {
@@ -1289,12 +1285,6 @@ button.danger-confirm-btn:not(:disabled):hover {
 	color: var(--accent);
 }
 
-@media (min-width: 721px) {
-	.settings-tabs {
-		display: none;
-	}
-}
-
 @media (max-width: 720px) {
 	.settings-nav {
 		display: none;
@@ -1335,7 +1325,23 @@ button.danger-confirm-btn:not(:disabled):hover {
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
-	padding: var(--space-1);
+	overflow-x: hidden;
+	padding: var(--space-3) var(--space-6);
+}
+
+/* Narrow-layout copy of the fleet fallback notice (the nav rail holding the
+   footnote is hidden at ≤720px); hidden on the wide layout. */
+@media (min-width: 721px) {
+	.settings-note-narrow {
+		display: none;
+	}
+}
+
+.settings-nav-footnote {
+	margin-top: auto;
+	padding-top: var(--space-5);
+	font-size: var(--fs-sm);
+	color: var(--muted);
 }
 
 .settings-note {
@@ -1355,15 +1361,18 @@ button.danger-confirm-btn:not(:disabled):hover {
 
 .settings-item {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) auto;
 	gap: var(--space-5);
 	align-items: center;
 	padding: var(--space-4) 0;
 	border-bottom: 1px solid var(--border);
 }
 
+/* Controls pin to the right edge so rows share one alignment rail;
+   min-width: 0 lets the cell shrink instead of forcing horizontal scroll. */
 .settings-item > .settings-item-control {
-	justify-self: start;
+	justify-self: end;
+	min-width: 0;
 }
 
 .settings-item:last-child {
@@ -1402,12 +1411,14 @@ button.danger-confirm-btn:not(:disabled):hover {
 	padding: var(--space-2) var(--space-4);
 	font: inherit;
 	font-size: var(--fs-md);
+	max-width: 100%;
 }
 
 .settings-text {
 	display: flex;
 	gap: var(--space-3);
 	align-items: center;
+	min-width: 0;
 }
 
 .settings-control-btn {
@@ -1442,8 +1453,8 @@ button.danger-confirm-btn:not(:disabled):hover {
 .settings-chips {
 	display: flex;
 	flex-wrap: wrap;
-	gap: var(--space-3);
 	justify-content: flex-end;
+	gap: var(--space-3);
 }
 
 .settings-chip-wrap {
