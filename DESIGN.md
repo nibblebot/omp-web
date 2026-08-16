@@ -42,16 +42,16 @@ colors:
 typography:
   body:
     fontFamily: "system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif"
-    fontSize: "1rem"
+    fontSize: "0.875rem"
     fontWeight: 400
     lineHeight: 1.5
   mono:
     fontFamily: "ui-monospace, \"SF Mono\", Menlo, Consolas, \"Liberation Mono\", monospace"
-    fontSize: "0.857rem"
+    fontSize: "0.813rem"
     fontWeight: 400
   title:
     fontFamily: "system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif"
-    fontSize: "1rem"
+    fontSize: "0.875rem"
     fontWeight: 600
     lineHeight: 1.5
   label:
@@ -194,11 +194,12 @@ Six palettes share one semantic contract (~40 slots) and one set of scales; them
 The root font size is user-settable (12–18px, `/settings` parity); every scale step below is rem-based and rides that dial.
 
 ### Hierarchy
-- **Title** (600, 1rem, 1.5): modal titles, sidebar section titles, row titles. The highest type in the system is deliberately small — hierarchy comes from weight and color, not size.
-- **Body** (400, 1rem, 1.5): chat prose, markdown, settings copy.
-- **Mono** (400, 0.857rem): code, terminals, diffs, daemon rows, picker metadata (`line-height: 1.4` in the roster).
+- **Heading** (700, 1rem/1.143rem, 1.3): in-stream markdown h1/h2 and tx section titles — the only type allowed above body size, capped at 16px so it never swamps the session title.
+- **Title** (600, 0.875rem, 1.5): modal titles, sidebar section titles, row titles. The highest chrome type is deliberately small — hierarchy comes from weight and color, not size.
+- **Body** (400, 0.875rem, 1.5): chat prose, markdown, settings copy.
+- **Mono** (400, 0.813rem): code, terminals, diffs, daemon rows, picker metadata (`line-height: 1.4` in the roster).
 - **Label** (600, 0.75rem, +0.05em tracking, uppercase): section headers, queue kinds, group headers, usage statuses.
-- **Micro** (400, 0.688rem): git dirty counts, debug pills, nested-row metadata — the smallest legible instrument.
+- **Micro** (400, 0.688rem): git dirty counts, debug pills, nested-row metadata — the floor; nothing functional renders below 9.6px.
 
 ### Named Rules
 **The Zero-Asset Rule.** No webfonts, ever. If a glyph can't come from the system stack, the design is wrong, not the stack.
