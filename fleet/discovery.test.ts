@@ -11,7 +11,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { listProjects, parseGitStatePorcelain, probeGitState, resolveWorktreeOf, validateProjectPath } from "./discovery";
+import { listProjects, parseGitStatePorcelain, parseNumstat, probeGitState, resolveWorktreeOf, validateProjectPath } from "./discovery";
 import type { GitResult, GitRunner } from "./discovery";
 import type { ProjectEntry } from "../shared/protocol";
 
@@ -57,6 +57,14 @@ function fakeGit(result: GitResult, calls: GitCall[]): GitRunner {
 	return async (args, cwd) => {
 		calls.push({ args, cwd });
 		return result;
+	};
+}
+
+/** Fake git answering each call from `byFirstArg` (keyed by the first arg: `status` vs `diff`). */
+function fakeGitByArg(byFirstArg: Record<string, GitResult>, calls: GitCall[]): GitRunner {
+	return async (args, cwd) => {
+		calls.push({ args, cwd });
+		return byFirstArg[args[0]];
 	};
 }
 
@@ -388,16 +396,84 @@ describe("parseGitStatePorcelain", () => {
 	});
 });
 
+describe("parseNumstat", () => {
+	test("sums added/deleted across rows; binary rows and blanks are skipped", () => {
+		const stdout = [
+			"3\t1\ta.ts",
+			"-\t-\timg.png", // binary: not counted
+			"",
+			"0\t0\tmode-only.sh", // real row, zero contribution
+			"2\t4\tc.ts",
+			"",
+		].join("\n");
+		expect(parseNumstat(stdout)).toEqual({ linesAdded: 5, linesDeleted: 5 });
+	});
+
+	test("no rows or garbage yields 0/0", () => {
+		expect(parseNumstat("")).toEqual({ linesAdded: 0, linesDeleted: 0 });
+		expect(parseNumstat("## main\n?? x\n")).toEqual({ linesAdded: 0, linesDeleted: 0 });
+	});
+});
+
 describe("probeGitState", () => {
-	test("runs status --porcelain=v1 --branch and returns the parsed state", async () => {
-		const stdout = ["## main", "?? new.txt", ""].join("\n");
+	test("runs status + numstat and returns the parsed state with line counts", async () => {
+		const statusOut = ["## main", "?? new.txt", ""].join("\n");
+		const numstatOut = ["10\t2\tnew.txt", "1\t0\tREADME.md", ""].join("\n");
 		const calls: GitCall[] = [];
-		const exec = fakeGit({ exitCode: 0, stderr: "", stdout }, calls);
+		const exec = fakeGitByArg(
+			{
+				status: { exitCode: 0, stderr: "", stdout: statusOut },
+				diff: { exitCode: 0, stderr: "", stdout: numstatOut },
+			},
+			calls,
+		);
+		expect(await probeGitState("/srv/repos/acme", { exec })).toEqual({
+			branch: "main",
+			git: { added: 0, modified: 0, deleted: 0, untracked: 1, linesAdded: 11, linesDeleted: 2 },
+		});
+		expect(calls).toEqual([
+			{ args: ["status", "--porcelain=v1", "--branch"], cwd: "/srv/repos/acme" },
+			{ args: ["diff", "--numstat", "HEAD", "--"], cwd: "/srv/repos/acme" },
+		]);
+	});
+
+	test("numstat rows sum across files; binary rows and blanks are skipped", async () => {
+		const numstatOut = [
+			"3\t1\ta.ts",
+			"-\t-\timg.png", // binary: skipped
+			"",
+			"0\t0\tmode-only.sh", // counts zero but is a real row
+			"2\t4\tc.ts",
+			"",
+		].join("\n");
+		const calls: GitCall[] = [];
+		const exec = fakeGitByArg(
+			{
+				status: { exitCode: 0, stderr: "", stdout: "## main\n" },
+				diff: { exitCode: 0, stderr: "", stdout: numstatOut },
+			},
+			calls,
+		);
+		expect(await probeGitState("/srv/repos/acme", { exec })).toEqual({
+			branch: "main",
+			git: { added: 0, modified: 0, deleted: 0, untracked: 0, linesAdded: 5, linesDeleted: 5 },
+		});
+	});
+
+	test("a failed numstat run still returns the parsed status state with no line fields", async () => {
+		const calls: GitCall[] = [];
+		const exec = fakeGitByArg(
+			{
+				status: { exitCode: 0, stderr: "", stdout: ["## main", "?? new.txt", ""].join("\n") },
+				diff: { exitCode: 128, stderr: "fatal: ambiguous argument 'HEAD': unknown revision", stdout: "" },
+			},
+			calls,
+		);
 		expect(await probeGitState("/srv/repos/acme", { exec })).toEqual({
 			branch: "main",
 			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
 		});
-		expect(calls).toEqual([{ args: ["status", "--porcelain=v1", "--branch"], cwd: "/srv/repos/acme" }]);
+		expect(calls).toHaveLength(2); // both runs happened; the numstat failure is non-fatal
 	});
 
 	test("spawn failure, nonzero exit, and unparseable output all resolve to undefined", async () => {

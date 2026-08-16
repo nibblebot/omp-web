@@ -254,7 +254,14 @@ export interface DaemonEntry {
 	/** Current git branch of the session cwd for local entries (source: fleet edge roster; older edges omit it). */
 	branch?: string;
 	/** git dirty-state file counts (source: fleet edge roster; older edges omit them). */
-	git?: { added: number; modified: number; deleted: number; untracked: number };
+	git?: {
+		added: number;
+		modified: number;
+		deleted: number;
+		untracked: number;
+		linesAdded?: number;
+		linesDeleted?: number;
+	};
 	labels: string[];
 	mode: "spawned" | "attached" | "remote";
 	status: DaemonStatus;
@@ -526,7 +533,7 @@ export type ServerFrame =
 	// Unicast answer to worktree_delete_info: guard evidence for the delete
 	// confirmation (ownership, dirty counts, branch merge/push state). Never
 	// carries tokens/endpoints.
-	| { type: "worktree_delete_info"; daemonId: string; owned: boolean; dirty: boolean; git?: { added: number; modified: number; deleted: number; untracked: number }; branch?: string; merged?: boolean; unpushed?: boolean; reason?: string }
+	| { type: "worktree_delete_info"; daemonId: string; owned: boolean; dirty: boolean; git?: { added: number; modified: number; deleted: number; untracked: number; linesAdded?: number; linesDeleted?: number }; branch?: string; merged?: boolean; unpushed?: boolean; reason?: string }
 	| { type: "error"; error: string };
 
 /** One supervised long-running process (hub launch / daemon broker), wire-safe. */

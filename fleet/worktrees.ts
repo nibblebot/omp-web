@@ -341,7 +341,14 @@ export interface WorktreeDeleteInfo {
 	/** True when git status shows any change (added/modified/deleted/untracked). */
 	dirty: boolean;
 	/** Per-file dirty counts (absent when git could not be probed). */
-	git?: { added: number; modified: number; deleted: number; untracked: number };
+	git?: {
+		added: number;
+		modified: number;
+		deleted: number;
+		untracked: number;
+		linesAdded?: number;
+		linesDeleted?: number;
+	};
 	/** Current branch (absent when detached or unreadable). */
 	branch?: string;
 	/** True when the branch tip is an ancestor of the main repo's base ref. */

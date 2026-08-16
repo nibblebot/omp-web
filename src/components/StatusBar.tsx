@@ -2,7 +2,7 @@ import { createEffect, createSignal, onCleanup, Show, type Component, type JSX }
 import { formatTokens, getContextUsageLevel } from "../context";
 import { planToggle } from "../commands";
 import { call, setState, state, togglePetVisible } from "../state";
-import { ArrowDownIcon, ArrowUpIcon, InfoIcon, PanelLeftIcon, SettingsIcon } from "../icons";
+import { ArrowDownIcon, ArrowUpIcon, InfoIcon, SettingsIcon } from "../icons";
 
 const ContextSegment: Component = () => {
 	const usage = () => state.contextUsage;
@@ -91,17 +91,8 @@ export const StatusBar: Component = () => {
 				</Segment>
 			</Show>
 			<RetryBadge />
-			{/* Historical transcripts/stats browser; the /ctl/stats API only exists
-			    with a fleet process, so the toggle is roster-mode-only. */}
-			<Show when={state.sessionMode === "roster"}>
-				<Segment
-					active={state.view === "transcripts"}
-					onClick={() => setState("view", v => (v === "transcripts" ? "chat" : "transcripts"))}
-					title="Transcripts"
-				>
-					<PanelLeftIcon /> Tx
-				</Segment>
-			</Show>
+			{/* Historical transcripts/stats browser (roster-mode-only: /ctl/stats
+			    needs a fleet process); the toggle lives in the sidebar footer. */}
 			{state.queuedMessageCount > 0 && <span class="queued-chip">queued: {state.queuedMessageCount}</span>}
 			<span class="status-spacer" />
 			<Show when={state.subagents.size > 0}>

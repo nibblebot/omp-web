@@ -4,7 +4,7 @@ import { attachSession, daemonsByProject, removeDaemonById, sendWorktreeDeleteIn
 import { formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
 import { useClickableRow } from "./PickerRow";
-import { ChevronDownIcon, InfoIcon, PlusIcon, SettingsIcon, StopIcon, TrashIcon, WorktreeIcon, XIcon } from "../icons";
+import { ChevronDownIcon, DotsIcon, FileIcon, InfoIcon, PanelLeftIcon, PlusIcon, SettingsIcon, StopIcon, TrashIcon, XIcon } from "../icons";
 
 // ---------------------------------------------------------------------------
 // Fleet-edge roster sidebar (Phase 5). Rendered by App.tsx only in
@@ -15,23 +15,33 @@ import { ChevronDownIcon, InfoIcon, PlusIcon, SettingsIcon, StopIcon, TrashIcon,
 // fall back to today's string-grouping in one trailing group. The header
 // "+" opens the Add-repo modal (the retired SpawnPicker's template/labels
 // fields live in its advanced section). Rows show the session status dot,
-// a git-branch icon + branch for worktrees, project/label chips and a
-// git-dirty line; ready rows attach on click, asleep rows wake-then-attach,
-// stop and remove are bare-icon two-click confirms, managed worktree rows
-// additionally offer "Delete worktree…" (guard-evidence confirm dialog),
-// and each row opens a detail popover (facts + stderr tail). Collapse
-// state persists per project in localStorage.
+// the branch as the title for worktrees, project/label chips and a
+//  git-dirty line; ready rows attach on click, asleep rows wake-then-attach,
+//  row actions (daemon details, stop/remove as two-click confirms, plus
+//  "Delete worktree…" on managed worktree rows) live in a hover-revealed
+//  "⋯" menu at the row's top-right, and the detail popover shows roster
+//  facts + stderr tail. Collapse
+//  state persists per project in localStorage.
 // ---------------------------------------------------------------------------
 
 /** Roster entries may carry a template name plus per-repo git facts
- *  (branch + porcelain counts) that the fleet edge may serialize;
- *  protocol.ts DaemonEntry is frozen so read all of them tolerantly. */
+ *  (branch + porcelain counts + numstat line counts) that the fleet edge
+ *  may serialize; protocol.ts DaemonEntry is frozen so read all of them
+ *  tolerantly. */
 type RosterEntry = DaemonEntry & {
 	template?: string;
 	/** Current branch of the session cwd; absent for detached/non-git/remote/unprobed. */
 	branch?: string;
-	/** Porcelain file counts; absent when unknown. */
-	git?: { added: number; modified: number; deleted: number; untracked: number };
+	/** Porcelain file counts, plus numstat line counts when the edge probed
+	 *  them (`git diff --numstat HEAD --`); absent when unknown. */
+	git?: {
+		added: number;
+		modified: number;
+		deleted: number;
+		untracked: number;
+		linesAdded?: number;
+		linesDeleted?: number;
+	};
 };
 
 const STATUS_TITLE: Record<DaemonStatus, string> = {
@@ -44,10 +54,6 @@ const STATUS_TITLE: Record<DaemonStatus, string> = {
 	reconnecting: "reconnecting…",
 	error: "error — see details",
 };
-
-/** Porcelain dirty counts, in the order they render: added, modified,
- *  deleted, untracked — the `git status --porcelain` short-hand glyphs. */
-type DirtyKind = "added" | "modified" | "deleted" | "untracked";
 
 const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props => {
 	const [detailOpen, setDetailOpen] = createSignal(false);
@@ -65,6 +71,10 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 	// half-armed confirm between clicks.
 	const armedStop = () => armedRow()?.id === d().daemonId && armedRow()?.kind === "stop";
 	const armedRemove = () => armedRow()?.id === d().daemonId && armedRow()?.kind === "remove";
+	// "⋯" actions-menu open state, read from the module-level signal (same
+	// remount-survival rationale as armedRow).
+	const menuOpen = () => menuOpenId() === d().daemonId;
+	bindMenuDismiss(menuOpen);
 	// Worktree sessions belong to a main checkout and read as branches, not
 	// dirs — the branch (or name fallback) becomes the title and the project
 	// chip + cwd path are dropped so the row never shows the directory.
@@ -74,18 +84,21 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 	/** Loading phase: activating but the daemon isn't ready yet. Renders with
 	 *  the pulsing transitional ("resolving") visual vocabulary. */
 	const waking = () => activating() && d().status !== "ready";
-	/** Dirty spans to render: nonzero counts only, kept in fixed order. */
-	const gitKinds = (): Array<{ kind: DirtyKind; n: number; glyph: string }> => {
+	/** Total files with uncommitted changes (nonzero porcelain counts),
+	 *  or 0 when git facts are absent. */
+	const filesChanged = (): number => {
 		const g = d().git;
-		if (!g) return [];
-		const kinds: Array<{ kind: DirtyKind; n: number; glyph: string }> = [
-			{ kind: "added", n: g.added, glyph: "+" },
-			{ kind: "modified", n: g.modified, glyph: "~" },
-			{ kind: "deleted", n: g.deleted, glyph: "-" },
-			{ kind: "untracked", n: g.untracked, glyph: "?" },
-		];
-		return kinds.filter(k => k.n > 0);
+		if (!g) return 0;
+		return g.added + g.modified + g.deleted + g.untracked;
 	};
+	/** Lines added/deleted per `git diff --numstat HEAD --`; undefined when
+	 *  the edge did not probe numstat (fresh repo, spawn error, binary-only). */
+	const linesAdded = (): number | undefined => d().git?.linesAdded;
+	const linesDeleted = (): number | undefined => d().git?.linesDeleted;
+	/** True when any diffstat group will render. */
+	const hasGitStats = () => filesChanged() > 0 || (linesAdded() ?? 0) > 0 || (linesDeleted() ?? 0) > 0;
+	/** "1 file" / "3 files" — English plural for the diffstat titles. */
+	const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 	const rowClick = () => {
 		if (activating()) return;
@@ -115,18 +128,20 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 	const doStop = () => {
 		stopDaemonById(d().daemonId);
 		disarmDaemon();
+		setMenuOpenId(null);
 	};
 
 	const doRemove = () => {
 		removeDaemonById(d().daemonId);
 		disarmDaemon();
+		setMenuOpenId(null);
 	};
 
 	return (
 		<>
 			<div
 				class="sidebar-row daemon-row"
-				classList={{ active: isAttached() || activating(), clickable: clickable() && !activating(), "daemon-row--nested": props.nested === true }}
+				classList={{ active: isAttached() || activating(), clickable: clickable() && !activating(), "daemon-row--nested": props.nested === true, "daemon-row--worktree": isWorktree() }}
 				{...useClickableRow(rowClick, clickable())}
 				title={waking() ? "waking — session starting…" : (STATUS_TITLE[d().status] ?? d().status)}
 			>
@@ -134,14 +149,100 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 				<div class="sidebar-row-main">
 					<div class="sidebar-row-top">
 						<span class="sidebar-row-title daemon-row-title" title={isWorktree() ? (d().branch ?? d().name) : d().name}>
-							<Show when={isWorktree()}>
-								<WorktreeIcon class="daemon-worktree-icon" />
-							</Show>
 							{isWorktree() ? (d().branch ?? d().name) : d().name}
 						</span>
-						<span class="daemon-row-state" data-status={waking() ? "resolving" : d().status}>
-							{waking() ? "waking" : d().status}
-						</span>
+						{/* Row actions collapsed into a "⋯" menu at the top row's
+						    right end: hidden until row hover/focus (always visible on
+						    touch, see the pointer:coarse block in styles.css). Stop/remove
+						    keep the two-click confirm inside the menu — the first click
+						    arms (menu stays open), the second executes and closes. */}
+						<div class="sidebar-menu-wrap">
+							<button
+								type="button"
+								class="daemon-icon-btn sidebar-menu-btn"
+								title="Row actions"
+								aria-label="Row actions"
+								aria-haspopup="menu"
+								aria-expanded={menuOpen()}
+								onClick={e => {
+									e.stopPropagation();
+									setMenuOpenId(menuOpen() ? null : d().daemonId);
+								}}
+							>
+								<DotsIcon />
+							</button>
+							<Show when={menuOpen()}>
+								<div class="sidebar-menu" role="menu">
+									<button
+										type="button"
+										role="menuitem"
+										class="sidebar-menu-item"
+										classList={{ armed: armedStop() }}
+										title={armedStop() ? "Second click confirms" : undefined}
+										onClick={e => {
+											e.stopPropagation();
+											if (armedStop()) doStop();
+											else armDaemon(d().daemonId, "stop");
+										}}
+									>
+										<StopIcon />
+										{armedStop() ? "Confirm stop" : "Stop daemon"}
+									</button>
+									<button
+										type="button"
+										role="menuitem"
+										class="sidebar-menu-item"
+										classList={{ armed: armedRemove() }}
+										title={
+											armedRemove()
+												? "Second click confirms"
+												: "Removes the daemon from the roster (stops it first)"
+										}
+										onClick={e => {
+											e.stopPropagation();
+											if (armedRemove()) doRemove();
+											else armDaemon(d().daemonId, "remove");
+										}}
+									>
+										<XIcon />
+										{armedRemove() ? "Confirm remove" : "Remove daemon"}
+									</button>
+									<button
+										type="button"
+										role="menuitem"
+										class="sidebar-menu-item"
+										onClick={e => {
+											e.stopPropagation();
+											setMenuOpenId(null);
+											setDetailOpen(true);
+										}}
+									>
+										<InfoIcon />
+										Daemon details
+									</button>
+									{/* Delete is offered on every worktree row — the
+									    dialog's guard evidence (managed-root ownership +
+									    clean tree) decides whether it can proceed. */}
+									<Show when={isWorktree()}>
+										<button
+											type="button"
+											role="menuitem"
+											class="sidebar-menu-item sidebar-menu-item--danger"
+											title="Stops the daemon and removes the worktree (guard checks first)"
+											onClick={e => {
+												e.stopPropagation();
+												setMenuOpenId(null);
+												sendWorktreeDeleteInfo(d().daemonId);
+												setState("deleteWorktreeTarget", d().daemonId);
+											}}
+										>
+											<TrashIcon />
+											Delete worktree…
+										</button>
+									</Show>
+								</div>
+							</Show>
+						</div>
 					</div>
 					<Show when={!isWorktree()}>
 						<div class="daemon-chips">
@@ -161,91 +262,41 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 						</div>
 					</Show>
 					{/* Bottom meta row: branch (non-worktree rows only — worktree
-					    rows already show it as the title), nonzero dirty counts, and
-					    the stop/remove/delete/info icons pushed right. Always rendered —
-					    it carries the actions even with no git info to show. */}
-					<div class="daemon-git">
-						<Show when={!isWorktree() && d().branch !== undefined}>
-							<span class="daemon-git-branch" title={d().cwd}>
-								{d().branch}
-							</span>
-						</Show>
-						<For each={gitKinds()}>
-							{k => (
-								<span
-									class="daemon-git-dirty"
-									data-kind={k.kind}
-									title={`${k.n} ${k.kind}`}
-								>
-									{k.glyph}
-									{k.n}
+					    rows already show it as the title) and the diffstat cluster
+					    (changed-file count + numstat +/- line counts when probed).
+					    Row actions live in the "⋯" menu on the top row. Rendered
+					    only when there is git info to show. */}
+					<Show when={(!isWorktree() && d().branch !== undefined) || hasGitStats()}>
+						<div class="daemon-git">
+							<Show when={!isWorktree() && d().branch !== undefined}>
+								<span class="daemon-git-branch" title={d().cwd}>
+									{d().branch}
 								</span>
-							)}
-						</For>
-						<button
-							type="button"
-							class="daemon-icon-btn daemon-stop-btn"
-							classList={{ armed: armedStop() }}
-							title={armedStop() ? "Stop this daemon (second click confirms)" : "Stop this daemon"}
-							aria-label={armedStop() ? "Stop this daemon (second click confirms)" : "Stop this daemon"}
-							onClick={e => {
-								e.stopPropagation();
-								if (armedStop()) doStop();
-								else armDaemon(d().daemonId, "stop");
-							}}
-						>
-							<StopIcon />
-						</button>
-						<button
-							type="button"
-							class="daemon-icon-btn daemon-remove-btn"
-							classList={{ armed: armedRemove() }}
-							title={
-								armedRemove()
-									? "Remove this daemon (second click confirms)"
-									: "Remove this daemon from the roster (stops it first)"
-							}
-							aria-label={
-								armedRemove()
-									? "Remove this daemon (second click confirms)"
-									: "Remove this daemon from the roster (stops it first)"
-							}
-							onClick={e => {
-								e.stopPropagation();
-								if (armedRemove()) doRemove();
-								else armDaemon(d().daemonId, "remove");
-							}}
-						>
-							<XIcon />
-						</button>
-						<Show when={d().managed === true}>
-							<button
-								type="button"
-								class="daemon-icon-btn daemon-del-btn"
-								title="Delete worktree… (stops the daemon and removes the managed worktree)"
-								aria-label="Delete worktree…"
-								onClick={e => {
-									e.stopPropagation();
-									sendWorktreeDeleteInfo(d().daemonId);
-									setState("deleteWorktreeTarget", d().daemonId);
-								}}
-							>
-								<TrashIcon />
-							</button>
-						</Show>
-						<button
-							type="button"
-							class="daemon-icon-btn daemon-detail-btn"
-							title="Daemon details"
-							aria-label="Daemon details"
-							onClick={e => {
-								e.stopPropagation();
-								setDetailOpen(true);
-							}}
-						>
-							<InfoIcon />
-						</button>
-					</div>
+							</Show>
+							<Show when={filesChanged()}>
+								{n => (
+									<span class="daemon-git-dirty" data-kind="files" title={`${plural(n(), "file")} changed`}>
+										<FileIcon />
+										{n()}
+									</span>
+								)}
+							</Show>
+							<Show when={linesAdded()}>
+								{n => (
+									<span class="daemon-git-dirty" data-kind="added" title={`${plural(n(), "line")} added`}>
+										+{n()}
+									</span>
+								)}
+							</Show>
+							<Show when={linesDeleted()}>
+								{n => (
+									<span class="daemon-git-dirty" data-kind="deleted" title={`${plural(n(), "line")} deleted`}>
+										-{n()}
+									</span>
+								)}
+							</Show>
+						</div>
+					</Show>
 				</div>
 			</div>
 			<Show when={detailOpen()}>
@@ -293,9 +344,6 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 			<div class="daemon-detail-header">
 				<span class="daemon-status-dot" data-status={d().status} title={d().status} />
 				<span class="daemon-detail-name">{d().name}</span>
-				<span class="daemon-row-state" data-status={d().status}>
-					{d().status}
-				</span>
 				<button type="button" class="daemon-detail-close" aria-label="Close daemon details" onClick={props.onClose}>
 					<XIcon />
 				</button>
@@ -406,6 +454,34 @@ const ARM_DISARM_MS = 4000;
 const [armedRow, setArmedRow] = createSignal<{ id: string; kind: "stop" | "remove" } | null>(null);
 let armTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** Which row's "⋯" actions menu is open, if any. Module-level for the same
+ *  reason as armedRow: roster broadcasts remount rows, so per-row signals
+ *  would silently close an open menu mid-interaction. Daemon rows key on the
+ *  daemonId, project-group headers on `project:<id>` — one open menu total. */
+const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
+
+/** Close-on-outside-pointerdown / Escape wiring shared by daemon-row and
+ *  project-group "⋯" menus. Listeners re-register after roster-broadcast
+ *  remounts because the open state itself is module-level. */
+function bindMenuDismiss(open: () => boolean): void {
+	createEffect(() => {
+		if (!open()) return;
+		const close = () => setMenuOpenId(null);
+		const onPointerDown = (e: PointerEvent) => {
+			if (!(e.target instanceof Element) || !e.target.closest(".sidebar-menu-wrap")) close();
+		};
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape") close();
+		};
+		document.addEventListener("pointerdown", onPointerDown);
+		document.addEventListener("keydown", onKeyDown);
+		onCleanup(() => {
+			document.removeEventListener("pointerdown", onPointerDown);
+			document.removeEventListener("keydown", onKeyDown);
+		});
+	});
+}
+
 /** Arm a row action, replacing any other armed action (and its timer). */
 function armDaemon(id: string, kind: "stop" | "remove"): void {
 	if (armTimer !== undefined) clearTimeout(armTimer);
@@ -494,31 +570,8 @@ export const DaemonSidebar: Component = () => {
 	/** Narrow viewports (<1100px): the sidebar is a transient drawer — any
 	 *  blur or click outside slides it back shut. Desktop keeps it open
 	 *  until toggled. */
-	const [narrow, setNarrow] = createSignal(false);
-	createEffect(() => {
-		const mq = window.matchMedia("(max-width: 1099px)");
-		const sync = () => setNarrow(mq.matches);
-		sync();
-		mq.addEventListener("change", sync);
-		onCleanup(() => mq.removeEventListener("change", sync));
-	});
-	createEffect(() => {
-		if (!narrow() || !state.sidebarVisible) return;
-		const onMouseDown = (e: MouseEvent) => {
-			const t = e.target as Node | null;
-			const toggle = document.getElementById("sidebar-toggle");
-			if (t && asideRef && !asideRef.contains(t) && (!toggle || !toggle.contains(t))) setSidebarVisible(false);
-		};
-		const onFocusOut = (e: FocusEvent) => {
-			if (asideRef && !asideRef.contains(e.relatedTarget as Node | null)) setSidebarVisible(false);
-		};
-		document.addEventListener("mousedown", onMouseDown);
-		document.addEventListener("focusout", onFocusOut);
-		onCleanup(() => {
-			document.removeEventListener("mousedown", onMouseDown);
-			document.removeEventListener("focusout", onFocusOut);
-		});
-	});
+	// The sidebar is docked layout (no slide-over, no click-away dismiss);
+	// the toggle opens it and its own close button (top-right) closes it.
 
 	/** Collapsible caret group header; the caret glyph and its rotation come
 	 *  from CSS via the data-open attribute. gkey names the collapse slot. */
@@ -539,12 +592,15 @@ export const DaemonSidebar: Component = () => {
 		);
 	};
 
-	/** One registered-project group: collapsible header (caret + name +
-	 *  daemon count + remove-project action), main-checkout row first then
-	 *  worktree rows (daemonsByProject order), and a "+ Add worktree" action. */
+	/** One registered-project group: collapsible header (caret + name, plus a
+	 *  hover-revealed "⋯" menu carrying Delete project), main-checkout row
+	 *  first then worktree rows (daemonsByProject order), and a "+ Add
+	 *  worktree" action. */
 	const ProjectGroup: Component<{ project: RegisteredProject; daemons: DaemonEntry[] }> = props => {
 		const gkey = `project:${props.project.projectId}`;
 		const open = () => !collapsedGroups().has(gkey);
+		const menuOpen = () => menuOpenId() === gkey;
+		bindMenuDismiss(menuOpen);
 		return (
 			<>
 				<div class="sidebar-group project-group">
@@ -555,21 +611,45 @@ export const DaemonSidebar: Component = () => {
 						data-open={open() ? "true" : "false"}
 						onClick={() => toggleGroup(gkey)}
 					>
-						<span class="sidebar-caret" data-open={open() ? "true" : "false"} />
+						<ChevronDownIcon class="sidebar-caret" />
 						<span class="sidebar-group-label" title={props.project.path}>
 							{props.project.name}
 						</span>
-						<span class="sidebar-group-count">{props.daemons.length}</span>
 					</button>
-					<button
-						type="button"
-						class="sidebar-icon-btn project-remove-btn"
-						title="Remove project"
-						aria-label={`Remove project ${props.project.name}`}
-						onClick={() => setState("removeProjectTarget", props.project.projectId)}
-					>
-						<XIcon />
-					</button>
+					<div class="sidebar-menu-wrap">
+						<button
+							type="button"
+							class="daemon-icon-btn sidebar-menu-btn"
+							title="Project actions"
+							aria-label={`Project actions for ${props.project.name}`}
+							aria-haspopup="menu"
+							aria-expanded={menuOpen()}
+							onClick={e => {
+								e.stopPropagation();
+								setMenuOpenId(menuOpen() ? null : gkey);
+							}}
+						>
+							<DotsIcon />
+						</button>
+						<Show when={menuOpen()}>
+							<div class="sidebar-menu" role="menu">
+								<button
+									type="button"
+									role="menuitem"
+									class="sidebar-menu-item sidebar-menu-item--danger"
+									title="Deregisters the project (never touches disk)"
+									onClick={e => {
+										e.stopPropagation();
+										setMenuOpenId(null);
+										setState("removeProjectTarget", props.project.projectId);
+									}}
+								>
+									<TrashIcon />
+									Delete project…
+								</button>
+							</div>
+						</Show>
+					</div>
 				</div>
 				<Show when={open()}>
 					<For each={props.daemons}>{d => <DaemonRow daemon={d} nested={d.worktreeOf !== undefined} />}</For>
@@ -607,29 +687,28 @@ export const DaemonSidebar: Component = () => {
 		</For>
 	);
 
-	let asideRef: HTMLElement | undefined;
 	return (
-		<aside ref={asideRef} class="sidebar" classList={{ open: state.sidebarVisible }}>
-			<div class="sidebar-header">
-				<span class="sidebar-title">Daemons</span>
-				<span class="sidebar-stats">
-					{state.daemonRoster.length} daemon{state.daemonRoster.length === 1 ? "" : "s"}
-				</span>
-				<button class="sidebar-icon-btn" onClick={() => setState("modal", "add-project")} title="Add a project" aria-label="Add a project">
-					<PlusIcon />
-				</button>
-				<button class="sidebar-icon-btn" onClick={() => setSidebarVisible(false)} title="Hide sidebar" aria-label="Hide sidebar">
-					<XIcon />
-				</button>
-			</div>
+		<aside class="sidebar" classList={{ open: state.sidebarVisible }}>
 			<div class="sidebar-list">
+				{/* Static top-level header: single grouping for the whole roster,
+				    no caret (not collapsible), no indent; carries the add-project
+				    action and the sidebar close button (top-right). Always rendered
+				    so the empty-state hint has a referent. */}
+				<div class="picker-group-name sidebar-subgroup sidebar-projects-head">
+					Projects
+					<span class="sidebar-projects-actions">
+						<button class="sidebar-icon-btn" onClick={() => setState("modal", "add-project")} title="Add a project" aria-label="Add a project">
+							<PlusIcon />
+						</button>
+						<button class="sidebar-icon-btn" onClick={() => setSidebarVisible(false)} title="Close sidebar" aria-label="Close sidebar">
+							<XIcon />
+						</button>
+					</span>
+				</div>
 				<Show when={groups().length === 0}>
 					<div class="sidebar-empty">no projects — press + to add one</div>
 				</Show>
 				<Show when={groups().length > 0}>
-					{/* Static top-level header: single grouping for the whole
-					    roster, no caret (not collapsible), no indent. */}
-					<div class="picker-group-name sidebar-subgroup">Projects</div>
 					<For each={groups()}>
 						{g =>
 							g.project === null ? (
@@ -641,8 +720,18 @@ export const DaemonSidebar: Component = () => {
 					</For>
 				</Show>
 			</div>
-			{/* Global chrome moved out of the StatusBar: pet roster, debug panel, settings. */}
+			{/* Global chrome moved out of the StatusBar: transcripts browser, pet
+			    roster, debug panel, settings. */}
 			<div class="sidebar-foot">
+				<button
+					class="sidebar-icon-btn"
+					classList={{ active: state.view === "transcripts" }}
+					onClick={() => setState("view", v => (v === "transcripts" ? "chat" : "transcripts"))}
+					title="Transcripts"
+					aria-label="Transcripts"
+				>
+					<PanelLeftIcon /> tx
+				</button>
 				<button
 					class="sidebar-icon-btn"
 					classList={{ active: state.petVisible }}

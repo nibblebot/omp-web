@@ -1,6 +1,6 @@
 import { For, onMount, Show, type Component } from "solid-js";
 import { characterForProvider } from "./characters";
-import { MenuIcon } from "./icons";
+import { PanelLeftIcon } from "./icons";
 import { ActiveSubagents } from "./components/ActiveSubagents";
 import { ActiveDaemons } from "./components/ActiveDaemons";
 import { AskDialog } from "./components/AskDialog";
@@ -101,22 +101,29 @@ export const App: Component = () => {
 			<div role="status" aria-live="polite" class="visually-hidden">{state.announcement}</div>
 			<StatusBar />
 			{/* Roster toggle: sticky top-left of the viewport (roster mode,
-			    chat view). Slides under the open sidebar, which carries its
-			    own × close. */}
-			<Show when={state.sessionMode === "roster" && state.view === "chat"}>
+			    chat view), shown only while the docked sidebar is closed —
+			    the open sidebar carries its own close button top-right. */}
+			<Show when={state.sessionMode === "roster" && state.view === "chat" && !state.sidebarVisible}>
 				<button
 					type="button"
 					id="sidebar-toggle"
 					class="sidebar-toggle"
 					onClick={toggleSidebar}
-					title="Toggle roster sidebar"
-					aria-label="Toggle roster sidebar"
+					title="Open roster sidebar"
+					aria-label="Open roster sidebar"
 					aria-expanded={state.sidebarVisible}
 				>
-					<MenuIcon />
+					<PanelLeftIcon />
 				</button>
 			</Show>
 			<div class="app-body">
+				{/* Roster mode (fleet edge): the docked fleet roster sidebar; single
+				    mode has no sidebar at all. First child so it docks LEFT, and
+				    mounted in every view (not just chat) because the transcripts
+				    toggle now lives in its footer. */}
+				<Show when={state.sessionMode === "roster"}>
+					<DaemonSidebar />
+				</Show>
 				<Show when={state.view === "transcripts"}>
 					<TxBrowser />
 				</Show>
@@ -136,13 +143,6 @@ export const App: Component = () => {
 						<SessionBar />
 						<PromptBox />
 					</main>
-					{/* Roster mode (fleet edge): the fleet roster sidebar replaces the
-					    sessions sidebar; single mode has no sidebar at all. Always
-					    mounted so it can slide open/closed (class-driven); hidden
-					    off-canvas when closed. */}
-					<Show when={state.sessionMode === "roster"}>
-						<DaemonSidebar />
-					</Show>
 				</Show>
 			</div>
 			<Show when={state.petVisible}>

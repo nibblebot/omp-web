@@ -70,15 +70,33 @@ function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
 
 /** Field-wise git-counts compare: undefined (never probed) differs from any counts object. */
 function sameGitState(
-	a: { added: number; modified: number; deleted: number; untracked: number } | undefined,
-	b: { added: number; modified: number; deleted: number; untracked: number },
+	a:
+		| {
+				added: number;
+				modified: number;
+				deleted: number;
+				untracked: number;
+				linesAdded?: number;
+				linesDeleted?: number;
+		  }
+		| undefined,
+	b: {
+		added: number;
+		modified: number;
+		deleted: number;
+		untracked: number;
+		linesAdded?: number;
+		linesDeleted?: number;
+	},
 ): boolean {
 	return (
 		a !== undefined &&
 		a.added === b.added &&
 		a.modified === b.modified &&
 		a.deleted === b.deleted &&
-		a.untracked === b.untracked
+		a.untracked === b.untracked &&
+		a.linesAdded === b.linesAdded &&
+		a.linesDeleted === b.linesDeleted
 	);
 }
 

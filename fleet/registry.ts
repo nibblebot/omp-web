@@ -27,7 +27,14 @@ export interface RegistryEntry extends DaemonEntry {
 	/** Current git branch of the session cwd for local entries; set by the supervisor's git-state polling. */
 	branch?: string;
 	/** git dirty-state file counts; set by the supervisor's git-state polling (absent until the first successful probe). */
-	git?: { added: number; modified: number; deleted: number; untracked: number };
+	git?: {
+		added: number;
+		modified: number;
+		deleted: number;
+		untracked: number;
+		linesAdded?: number;
+		linesDeleted?: number;
+	};
 	/** Remote/attached: the ws(s)://host:port as registered. */
 	endpoint?: string;
 	/** Bearer token for dial-in (R14). */

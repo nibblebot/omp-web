@@ -228,7 +228,16 @@ export interface GitState {
 	/** Current branch; undefined when detached (or absent from the header). */
 	branch?: string;
 	/** Dirty-state file counts (all-zero for a clean repo). */
-	git: { added: number; modified: number; deleted: number; untracked: number };
+	git: {
+		added: number;
+		modified: number;
+		deleted: number;
+		untracked: number;
+		/** Staged+unstaged added lines vs HEAD (numstat); absent when the numstat probe failed. */
+		linesAdded?: number;
+		/** Staged+unstaged deleted lines vs HEAD (numstat); absent when the numstat probe failed. */
+		linesDeleted?: number;
+	};
 }
 
 /** Branch name from a `## ` header (the text AFTER `## `); undefined when detached. */
@@ -278,14 +287,44 @@ export function parseGitStatePorcelain(stdout: string): GitState | undefined {
 }
 
 /**
+ * Parse `git diff --numstat HEAD --` output, summing the
+ * `<added>\t<deleted>\t<path>` rows. Binary rows (`-\t-`) and blank lines
+ * are skipped; anything else unparseable is ignored. Returns 0/0 when
+ * nothing matched.
+ */
+export function parseNumstat(stdout: string): { linesAdded: number; linesDeleted: number } {
+	let linesAdded = 0;
+	let linesDeleted = 0;
+	for (const line of stdout.split("\n")) {
+		const [added, deleted] = line.split("\t");
+		if (added === undefined || deleted === undefined) continue; // blank or not a numstat row
+		if (added === "-" || deleted === "-") continue; // binary file
+		const a = Number(added);
+		const d = Number(deleted);
+		if (Number.isNaN(a) || Number.isNaN(d)) continue;
+		linesAdded += a;
+		linesDeleted += d;
+	}
+	return { linesAdded, linesDeleted };
+}
+
+/**
  * Probe one repo's git state: `git status --porcelain=v1 --branch` via the
  * injectable GitRunner (like resolveWorktreeOf). Returns undefined on spawn
  * failure, nonzero exit, or unparseable output — the caller (supervisor
- * git-state polling) treats that as "no state", never as a clean repo.
+ * git-state polling) treats that as "no state", never as a clean repo. On
+ * success a best-effort `git diff --numstat HEAD --` run is merged into
+ * `git`: a failed numstat run (spawn error, nonzero exit — e.g. a fresh
+ * repo without commits) leaves the line fields absent — never 0-by-default,
+ * never fails the whole probe.
  */
 export async function probeGitState(cwd: string, options?: ListProjectsOptions): Promise<GitState | undefined> {
 	const exec = options?.exec ?? runGit;
 	const result = await exec(["status", "--porcelain=v1", "--branch"], cwd).catch(() => null);
 	if (!result || result.exitCode !== 0) return undefined;
-	return parseGitStatePorcelain(result.stdout);
+	const state = parseGitStatePorcelain(result.stdout);
+	if (state === undefined) return undefined;
+	const numstat = await exec(["diff", "--numstat", "HEAD", "--"], cwd).catch(() => null);
+	if (!numstat || numstat.exitCode !== 0) return state;
+	return { ...state, git: { ...state.git, ...parseNumstat(numstat.stdout) } };
 }

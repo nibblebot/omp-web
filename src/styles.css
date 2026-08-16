@@ -1324,6 +1324,12 @@ button.danger-confirm-btn:not(:disabled):hover {
 		opacity: 1;
 	}
 
+	/* Sidebar row-actions "⋯" trigger stays visible on touch too. */
+	.sidebar-menu-btn.sidebar-menu-btn {
+		opacity: 1;
+		pointer-events: auto;
+	}
+
 	/* Long log lines wrap instead of truncating on touch. */
 	.debug-log-msg {
 		white-space: normal;
@@ -2707,14 +2713,10 @@ pre.terminal {
 }
 
 .sidebar {
-	/* Fixed left overlay: never participates in layout, so the chat column
-	   keeps its full width whether the sidebar is open or closed. */
-	position: fixed;
-	top: 0;
-	left: 0;
-	bottom: 0;
-	width: min(var(--sidebar-w), 80vw);
-	z-index: var(--z-sheet);
+	/* Docked left column: participates in .app-body layout, so the chat
+	   column reflows to the remaining width while the sidebar is open. */
+	flex: none;
+	width: var(--sidebar-w);
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
@@ -2723,22 +2725,22 @@ pre.terminal {
 	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
 	line-height: 1.4;
-	box-shadow: var(--shadow-2);
-	transform: translateX(-100%);
-	visibility: hidden;
-	transition:
-		transform var(--dur-base) var(--ease-in-out),
-		visibility 0s linear var(--dur-base);
 }
 
-.sidebar.open {
-	transform: translateX(0);
-	visibility: visible;
-	transition: transform var(--dur-base) var(--ease-in-out);
+.sidebar:not(.open) {
+	display: none;
 }
 
-/* Floating roster toggle: sticky top-left of the viewport. Roster mode only;
-   the open sidebar (z-sheet) covers it, so the sidebar's own × closes. */
+/* Narrow viewports: the docked column caps at 80vw so the chat stays usable. */
+@media (max-width: 720px) {
+	.sidebar {
+		width: min(var(--sidebar-w), 80vw);
+	}
+}
+
+/* Floating roster toggle: sticky top-left of the viewport. Roster mode only,
+   and only while the sidebar is closed (the open sidebar carries its own ×
+   at its top-right). */
 .sidebar-toggle {
 	position: fixed;
 	top: var(--space-4);
@@ -2767,30 +2769,6 @@ pre.terminal {
 .sidebar-toggle:focus-visible {
 	outline: var(--focus-ring);
 	outline-offset: 2px;
-}
-
-.sidebar-header {
-	display: flex;
-	align-items: center;
-	gap: var(--space-3);
-	padding: var(--space-4) var(--space-5);
-	border-bottom: 1px solid var(--border);
-}
-
-.sidebar-title {
-	font-weight: 600;
-	letter-spacing: var(--ls-micro);
-	color: var(--muted-3);
-}
-
-.sidebar-stats {
-	flex: 1;
-	min-width: 0;
-	font-size: var(--fs-micro);
-	color: var(--muted);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
 }
 
 .sidebar-icon-btn {
@@ -2839,7 +2817,9 @@ pre.terminal {
 	align-items: flex-start;
 	flex-wrap: wrap;
 	gap: var(--space-4);
-	padding: var(--space-3) var(--space-4);
+	/* 6px all around: the status dot lands on the 12px scan line shared with
+	   project carets and the PROJECTS header text. */
+	padding: var(--space-3);
 	border-radius: var(--r-md);
 	border: 1px solid transparent;
 	cursor: pointer;
@@ -3531,6 +3511,12 @@ pre.terminal.eval-code {
 	background: var(--muted-2);
 }
 
+/* Worktree rows are headed by the name alone: center the dot on the top
+   row (its height is set by the 24px kebab button, not the title line). */
+.daemon-row--worktree .daemon-status-dot {
+	margin-top: var(--space-4);
+}
+
 .daemon-status-dot[data-status="ready"] {
 	background: var(--success);
 	box-shadow: var(--shadow-glow-success);
@@ -3572,32 +3558,6 @@ pre.terminal.eval-code {
 	}
 }
 
-.daemon-row-state {
-	flex: none;
-	font-size: var(--fs-micro);
-	color: var(--muted-2);
-	white-space: nowrap;
-}
-
-.daemon-row-state[data-status="ready"] {
-	color: var(--success);
-}
-
-.daemon-row-state[data-status="spawning"],
-.daemon-row-state[data-status="connecting"],
-.daemon-row-state[data-status="session"],
-.daemon-row-state[data-status="resolving"] {
-	color: var(--accent);
-}
-
-.daemon-row-state[data-status="reconnecting"] {
-	color: var(--warning);
-}
-
-.daemon-row-state[data-status="error"] {
-	color: var(--error);
-}
-
 .daemon-chips {
 	display: flex;
 	flex-wrap: wrap;
@@ -3632,7 +3592,7 @@ pre.terminal.eval-code {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
-	padding: var(--space-3) var(--space-4) var(--space-1);
+	padding: var(--space-3) var(--space-4) var(--space-1) var(--space-3);
 	color: var(--muted-2);
 	font: inherit;
 	font-size: var(--fs-sm);
@@ -3672,8 +3632,9 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 }
 
 .sidebar-group--repo {
-	/* Slight indent under the static REPOS header. */
-	padding-left: var(--space-4);
+	/* Same left edge as project groups (the PROJECTS header's text sits one
+	   notch further left at the same 12px scan line). */
+	padding-left: var(--space-3);
 }
 
 .picker-group-name.sidebar-subgroup {
@@ -3683,9 +3644,27 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	padding-left: 0;
 }
 
+/* PROJECTS header carries the add-project + close actions right-aligned.
+   Left padding lands its text on the same 12px scan line as the project
+   carets and row status dots below. Selector doubled: the base
+   .picker-group-name.sidebar-subgroup rule would win at equal specificity. */
+.picker-group-name.sidebar-projects-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding-left: var(--space-3);
+}
+
+.sidebar-projects-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-1);
+}
+
 .daemon-row--nested {
-	/* Indents nested row content deeper than the repo container's label. */
-	padding-left: calc(var(--space-4) + var(--space-4));
+	/* One notch deeper than main rows: the dot sits 6px right of the 12px
+	   scan line, marking the row as a child of its project. */
+	padding-left: calc(var(--space-3) + var(--space-3));
 }
 
 .daemon-cwd {
@@ -3696,14 +3675,85 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	text-overflow: ellipsis;
 }
 
-/* Stop/remove/info icons sit at the row's right end (inside the git meta
-   row): the first of the group pushes itself (and the rest) over. */
-.daemon-stop-btn {
+/* The "⋯" row-actions menu sits at the top row's right end (where main
+   rows also carry the status text); the title's flex:1 pushes it over. */
+.sidebar-menu-wrap {
+	position: relative;
 	margin-left: auto;
+	flex: none;
 }
 
-/* Bare icon actions: no button chrome, just the glyph. Armed (first click
-   of a two-click confirm) turns danger-colored until the second click. */
+/* Menu trigger: hidden until the row/group header is hovered/focused (or
+   the menu is open) on fine pointers; always visible on touch via the
+   pointer:coarse block near the top of this file. */
+.sidebar-menu-btn {
+	opacity: 0;
+	pointer-events: none;
+}
+
+.daemon-row:hover .sidebar-menu-btn,
+.daemon-row:focus-within .sidebar-menu-btn,
+.project-group:hover .sidebar-menu-btn,
+.project-group:focus-within .sidebar-menu-btn,
+.sidebar-menu-btn[aria-expanded="true"] {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* Dropdown: compact action list anchored under the trigger. */
+.sidebar-menu {
+	position: absolute;
+	top: 100%;
+	right: 0;
+	min-width: 9rem;
+	padding: var(--space-1);
+	background: var(--panel-2);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-md);
+	z-index: var(--z-autocomplete);
+	display: flex;
+	flex-direction: column;
+}
+
+.sidebar-menu-item {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	background: none;
+	border: none;
+	padding: var(--space-2) var(--space-3);
+	font-size: var(--fs-sm);
+	color: var(--text);
+	text-align: left;
+	white-space: nowrap;
+	cursor: pointer;
+	border-radius: var(--r-sm);
+}
+
+.sidebar-menu-item:hover {
+	background: var(--hover);
+}
+
+/* Armed (first click of the two-click confirm) turns danger-colored until
+   the second click. */
+.sidebar-menu-item.armed {
+	color: var(--error);
+}
+
+.sidebar-menu-item.armed:hover {
+	color: var(--error-text);
+}
+
+/* Destructive close-out action: always danger-colored, not just on hover. */
+.sidebar-menu-item--danger {
+	color: var(--error);
+}
+
+.sidebar-menu-item--danger:hover {
+	color: var(--error-text);
+}
+
+/* Bare icon actions: no button chrome, just the glyph. */
 .daemon-icon-btn {
 	background: none;
 	border: none;
@@ -3722,16 +3772,9 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	color: var(--text);
 }
 
-.daemon-icon-btn.armed {
-	color: var(--error);
-}
-
-.daemon-icon-btn.armed:hover {
-	color: var(--error-text);
-}
-
-/* Bottom meta row: branch + dirty counts in compact mono, with the
-   stop/remove/info icons right-aligned (margin-left: auto above). */
+/* Bottom meta row: branch + diffstat cluster (changed-file count, numstat
+   +/- line counts) in compact mono. Row actions live in the "⋯" menu on
+   the top row now, so nothing is right-aligned here. */
 .daemon-git {
 	display: flex;
 	align-items: center;
@@ -3754,37 +3797,27 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	font-variant-numeric: tabular-nums;
 }
 
-.daemon-git-dirty[data-kind="added"] {
-	color: var(--success);
+/* Changed-file count: file icon + total, tight inline pair. */
+.daemon-git-dirty[data-kind="files"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	color: var(--text);
 }
 
-.daemon-git-dirty[data-kind="modified"] {
-	color: var(--warning);
+/* Numstat line counts. */
+.daemon-git-dirty[data-kind="added"] {
+	color: var(--success);
 }
 
 .daemon-git-dirty[data-kind="deleted"] {
 	color: var(--error);
 }
 
-.daemon-git-dirty[data-kind="untracked"] {
-	color: var(--muted-3);
-}
-
-/* Git-branch glyph next to worktree row titles. */
-.daemon-worktree-icon {
-	width: 0.9em;
-	height: 0.9em;
-	flex: none;
-	vertical-align: -0.1em;
-	margin-right: var(--space-2);
-	fill: none;
-	stroke: currentColor;
-	stroke-width: 1.4;
-}
-
 .daemon-row-title {
 	display: inline-flex;
 	align-items: center;
+	flex: 1;
 	min-width: 0;
 }
 
@@ -4244,6 +4277,16 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	font-variant-numeric: tabular-nums;
 }
 
+/* The dialog's guard evidence still uses per-kind porcelain file counts
+   (the sidebar's same class now renders diffstat: files/+lines/-lines). */
+.worktree-evidence .daemon-git-dirty[data-kind="modified"] {
+	color: var(--warning);
+}
+
+.worktree-evidence .daemon-git-dirty[data-kind="untracked"] {
+	color: var(--muted-3);
+}
+
 .worktree-evidence-path {
 	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
@@ -4283,9 +4326,12 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 }
 
 /* --- Sidebar: project-first groups (DaemonSidebar.tsx) --- */
+/* Left padding lives entirely on the toggle so the caret lands on the 12px
+   scan line (list padding 6 + toggle padding 6). */
 .project-group {
 	display: flex;
 	align-items: center;
+	padding-left: 0;
 }
 
 .project-group-toggle {
@@ -4299,7 +4345,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	color: var(--text);
 	font: inherit;
 	text-align: left;
-	padding: var(--space-2) var(--space-3);
+	padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
 	cursor: pointer;
 }
 
@@ -4309,16 +4355,6 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 
 .project-group-toggle:hover {
 	background: var(--hover);
-}
-
-.project-remove-btn {
-	flex: none;
-	margin-right: var(--space-2);
-	color: var(--muted-2);
-}
-
-.project-remove-btn:hover {
-	color: var(--error);
 }
 
 .project-add-worktree {
@@ -4340,15 +4376,6 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 	color: var(--text);
 	border-color: var(--accent-border);
 	background: var(--hover);
-}
-
-/* Managed-worktree delete action (DeleteWorktreeDialog opener). */
-.daemon-del-btn {
-	color: var(--muted-2);
-}
-
-.daemon-del-btn:hover {
-	color: var(--error);
 }
 
 /* --- SessionPicker gate mode ("New session" top item) --- */
@@ -4538,7 +4565,8 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 	max-width: 150px;
 }
 
-/* Status text colors mirror .daemon-row-state's per-status vocabulary. */
+/* Per-status text colors (the sidebar's retired .daemon-row-state used the
+   same vocabulary; the status dot keeps it there). */
 .debug-status {
 	font-size: var(--fs-micro);
 	color: var(--muted-2);

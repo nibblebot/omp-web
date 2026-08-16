@@ -1961,7 +1961,9 @@ describe("edge worktree commands", () => {
 			"roster without the deleted worktree",
 		);
 		expect(registry.get(entry.daemonId)).toBeUndefined();
-		expect(existsSync(target)).toBe(false);
+		// The roster broadcast rides registry.remove, which precedes the git
+		// removal — wait for the directory to actually disappear.
+		await waitFor(() => (existsSync(target) ? null : "removed"), 5000, "worktree removed");
 		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(target);
 	});
 

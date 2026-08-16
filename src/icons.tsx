@@ -58,6 +58,15 @@ export const StopIcon: Component<IconProps> = props => (
 	</Svg>
 );
 
+/** Vertical ellipsis — "more actions" menu trigger (Lucide ellipsis-vertical). */
+export const DotsIcon: Component<IconProps> = props => (
+	<Svg class={props.class}>
+		<circle cx="12" cy="12" r="1" />
+		<circle cx="12" cy="19" r="1" />
+		<circle cx="12" cy="5" r="1" />
+	</Svg>
+);
+
 export const InfoIcon: Component<IconProps> = props => (
 	<Svg class={props.class}>
 		<circle cx="12" cy="12" r="10" />
@@ -80,6 +89,14 @@ export const ExpandIcon: Component<IconProps> = props => (
 		<path d="m21 3-7 7" />
 		<path d="m3 21 7-7" />
 		<path d="M9 21H3v-6" />
+	</Svg>
+);
+
+/** file — changed-files glyph on daemon git rows. */
+export const FileIcon: Component<IconProps> = props => (
+	<Svg class={props.class}>
+		<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+		<path d="M14 2v4a2 2 0 0 0 2 2h4" />
 	</Svg>
 );
 

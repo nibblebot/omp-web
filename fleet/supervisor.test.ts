@@ -217,15 +217,17 @@ interface GitCall {
 }
 
 /**
- * Fake git answering each invocation from `phases` (the LAST phase repeats),
- * recording every call — the phases drive state transitions across poll
- * ticks.
+ * Fake git answering each POLL PASS from `phases`: one pass is a full
+ * probeGitState — a status run then a numstat run — so each element is the
+ * pair [statusResult, numstatResult] and the LAST pass repeats. Records
+ * every call so tests can pin the exact git args and cwds.
  */
-function fakeGitPhases(phases: GitResult[]): { exec: GitRunner; calls: GitCall[] } {
+function fakeGitPhases(phases: [GitResult, GitResult][]): { exec: GitRunner; calls: GitCall[] } {
 	const calls: GitCall[] = [];
 	const exec: GitRunner = async (args, cwd) => {
+		const pass = phases[Math.min(Math.floor(calls.length / 2), phases.length - 1)];
 		calls.push({ args, cwd });
-		return phases[Math.min(calls.length - 1, phases.length - 1)];
+		return args[0] === "status" ? pass[0] : pass[1];
 	};
 	return { exec, calls };
 }
@@ -1082,7 +1084,12 @@ describe("git-state polling", () => {
 		};
 
 		const dirty = ["## main", "?? new.txt", ""].join("\n");
-		const { exec, calls } = fakeGitPhases([{ exitCode: 0, stderr: "", stdout: dirty }]);
+		const { exec, calls } = fakeGitPhases([
+			[
+				{ exitCode: 0, stderr: "", stdout: dirty },
+				{ exitCode: 0, stderr: "", stdout: "10\t2\tnew.txt\n" },
+			],
+		]);
 		supervisor.startGitStatePolling({ exec, intervalMs: 25 });
 
 		await waitFor(() => (registry.get(local.daemonId)?.git !== undefined ? "probed" : null), 5000, "first probe");
@@ -1092,13 +1099,15 @@ describe("git-state polling", () => {
 		expect(onChange).toBe(1);
 		expect(registry.get(local.daemonId)).toMatchObject({
 			branch: "main",
-			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
+			git: { added: 0, modified: 0, deleted: 0, untracked: 1, linesAdded: 10, linesDeleted: 2 },
 		});
 		// Remote + empty-cwd entries are never probed with local git.
 		expect(calls.length).toBeGreaterThanOrEqual(4);
 		for (const call of calls) {
 			expect(call.cwd).toBe("/srv/repos/acme");
-			expect(call.args).toEqual(["status", "--porcelain=v1", "--branch"]);
+			expect(call.args).toEqual(
+				call.args[0] === "status" ? ["status", "--porcelain=v1", "--branch"] : ["diff", "--numstat", "HEAD", "--"],
+			);
 		}
 		expect(registry.get("d2")?.worktreeOf).toBeUndefined();
 		expect(registry.get("d2")?.git).toBeUndefined();
@@ -1127,17 +1136,33 @@ describe("git-state polling", () => {
 			onChange++;
 		};
 
-		// Clean for the first two calls (immediate tick + one interval tick),
-		// then dirty from the third call on.
+		// Clean for the first two passes (immediate tick + one interval
+		// tick), then dirty from the third pass on.
 		const { exec, calls } = fakeGitPhases([
-			{ exitCode: 0, stderr: "", stdout: "## main\n" },
-			{ exitCode: 0, stderr: "", stdout: "## main\n" },
-			{ exitCode: 0, stderr: "", stdout: ["## main", "?? new.txt", ""].join("\n") },
+			[
+				{ exitCode: 0, stderr: "", stdout: "## main\n" },
+				{ exitCode: 0, stderr: "", stdout: "" },
+			],
+			[
+				{ exitCode: 0, stderr: "", stdout: "## main\n" },
+				{ exitCode: 0, stderr: "", stdout: "" },
+			],
+			[
+				{ exitCode: 0, stderr: "", stdout: ["## main", "?? new.txt", ""].join("\n") },
+				{ exitCode: 0, stderr: "", stdout: "3\t1\tnew.txt\n" },
+			],
 		]);
 		supervisor.startGitStatePolling({ exec, intervalMs: 25 });
 
 		await waitFor(() => (registry.get(local.daemonId)?.branch !== undefined ? "clean" : null), 5000, "clean state");
-		expect(registry.get(local.daemonId)!.git).toEqual({ added: 0, modified: 0, deleted: 0, untracked: 0 });
+		expect(registry.get(local.daemonId)!.git).toEqual({
+			added: 0,
+			modified: 0,
+			deleted: 0,
+			untracked: 0,
+			linesAdded: 0,
+			linesDeleted: 0,
+		});
 		await waitFor(() => (registry.get(local.daemonId)?.git?.untracked === 1 ? "dirty" : null), 5000, "dirty state");
 		expect(onChange).toBe(2);
 		// Steady state: further ticks change nothing.
@@ -1171,12 +1196,19 @@ describe("git-state polling", () => {
 			onChange++;
 		};
 
-		// First call: dirty state. Then the repo disappears (nonzero exit).
+		// First pass: dirty state (numstat succeeds). Then the repo
+		// disappears: the status run itself fails (nonzero exit).
 		// A slow interval keeps the transient set state observable between
 		// the immediate tick (set) and the first interval tick (clear).
 		const { exec, calls } = fakeGitPhases([
-			{ exitCode: 0, stderr: "", stdout: ["## main", " M x", ""].join("\n") },
-			{ exitCode: 128, stderr: "fatal: not a git repository", stdout: "" },
+			[
+				{ exitCode: 0, stderr: "", stdout: ["## main", " M x", ""].join("\n") },
+				{ exitCode: 0, stderr: "", stdout: "5\t1\tx\n" },
+			],
+			[
+				{ exitCode: 128, stderr: "fatal: not a git repository", stdout: "" },
+				{ exitCode: 128, stderr: "fatal: not a git repository", stdout: "" },
+			],
 		]);
 		supervisor.startGitStatePolling({ exec, intervalMs: 250 });
 
@@ -1202,7 +1234,12 @@ describe("git-state polling", () => {
 		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
 
 		const stdout = ["## main", "?? new.txt", ""].join("\n");
-		const { exec, calls } = fakeGitPhases([{ exitCode: 0, stderr: "", stdout }]);
+		const { exec, calls } = fakeGitPhases([
+			[
+				{ exitCode: 0, stderr: "", stdout },
+				{ exitCode: 0, stderr: "", stdout: "7\t4\tnew.txt\n" },
+			],
+		]);
 		// A long interval: the immediate start tick runs before the entry
 		// exists, so only the spawn() one-off can probe in this window.
 		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
@@ -1210,9 +1247,9 @@ describe("git-state polling", () => {
 		await waitFor(() => (registry.get(entry.daemonId)?.git !== undefined ? "probed" : null), 5000, "one-off probe");
 		expect(registry.get(entry.daemonId)).toMatchObject({
 			branch: "main",
-			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
+			git: { added: 0, modified: 0, deleted: 0, untracked: 1, linesAdded: 7, linesDeleted: 4 },
 		});
-		expect(calls).toHaveLength(1); // exactly the one-off probe
+		expect(calls).toHaveLength(2); // status + numstat for the one-off probe
 
 		await supervisor.close();
 		await connector.close();

@@ -310,7 +310,7 @@ describe("worktreeDeleteInfo", () => {
 		const info = await worktreeDeleteInfo(a.path, ws);
 		expect(info.owned).toBe(true);
 		expect(info.dirty).toBe(false);
-		expect(info.git).toEqual({ added: 0, modified: 0, deleted: 0, untracked: 0 });
+		expect(info.git).toEqual({ added: 0, modified: 0, deleted: 0, untracked: 0, linesAdded: 0, linesDeleted: 0 });
 		expect(info.branch).toBe("clean");
 		expect(info.merged).toBe(true); // no commits: tip is the base's tip
 		expect(info.unpushed).toBe(false); // no upstream: unknown → false
