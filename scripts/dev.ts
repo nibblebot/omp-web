@@ -207,6 +207,11 @@ function prefix(name: string): string {
 	return `\x1b[${CHILD_COLORS[name] ?? 39}m${tag}\x1b[0m`;
 }
 
+/** Bold wrapper, gated on the same TTY/NO_COLOR switch as prefix colors. */
+function bold(s: string): string {
+	return useColor ? `\x1b[1m${s}\x1b[0m` : s;
+}
+
 function log(message: string): void {
 	process.stdout.write(`${prefix("dev")} ${message}\n`);
 }
@@ -261,19 +266,19 @@ function checkSummary(): void {
 	summaryArmed = false;
 	const fleetMode = modeArg === "fleet";
 	const uiPort = states.get("vite")?.port ?? ports.vite;
-	log("stack ready");
+	log(bold("stack ready"));
 	log(
-		`  ${"ui".padEnd(9)}http://localhost:${uiPort}  ${
+		`${bold(`  ${"ui".padEnd(9)}http://localhost:${uiPort}  `)}${
 			fleetMode ? "(vite, HMR, proxies /events /command /ctl → fleet)" : "(vite, HMR, proxies /events /command → session)"
 		}`,
 	);
 	if (fleetMode) {
 		const fleetPort = states.get("fleet")?.port ?? ports.fleet;
-		log(`  ${"fleet".padEnd(9)}http://127.0.0.1:${fleetPort}  (control plane + edge)`);
+		log(`${bold(`  ${"fleet".padEnd(9)}http://127.0.0.1:${fleetPort}  `)}(control plane + edge)`);
 		log("  no session attached — spawn/add one from the roster sidebar");
 	} else {
 		const sessionPort = states.get("session")?.port ?? ports.session;
-		log(`  ${"session".padEnd(9)}ws://127.0.0.1:${sessionPort}  (dev session)`);
+		log(`${bold(`  ${"session".padEnd(9)}ws://127.0.0.1:${sessionPort}  `)}(dev session)`);
 	}
 }
 
