@@ -4,8 +4,13 @@ import solidPlugin from "vite-plugin-solid";
 // OMP_DEV_FLEET=1 (set by `bun run dev`): proxy /events + /command + /download to the
 // omp-fleet edge instead of a standalone omp-session, so the roster UI runs
 // under HMR. Either way /ctl goes to the fleet control plane.
+// Ports come from OMP_DEV_FLEET_PORT / OMP_DEV_SESSION_PORT (scripts/dev.ts
+// picks them per-run so parallel worktrees don't collide); the fixed defaults
+// keep `bun run dev:web` against manually started backends working.
 const fleet = process.env.OMP_DEV_FLEET === "1";
-const sessionTarget = fleet ? "localhost:4722" : "localhost:4721";
+const fleetPort = process.env.OMP_DEV_FLEET_PORT ?? "4722";
+const sessionPort = process.env.OMP_DEV_SESSION_PORT ?? "4721";
+const sessionTarget = fleet ? `localhost:${fleetPort}` : `localhost:${sessionPort}`;
 
 // OMP_DEV_ALLOW_HOSTS (set by `--allow-hosts`): "1"/"true"/"*" allows every
 // Host header (e.g. tailscale domains); anything else is a comma-separated
@@ -32,8 +37,8 @@ export default defineConfig({
 			"/events": { target: `http://${sessionTarget}`, headers: { "X-Accel-Buffering": "no" } },
 			"/command": { target: `http://${sessionTarget}` },
 			"/download": { target: `http://${sessionTarget}` },
-			// Roster-mode control API (omp-fleet edge) — dev against `omp-fleet serve` on 4722.
-			"/ctl": { target: "http://localhost:4722" },
+			// Roster-mode control API (omp-fleet edge) — dev against `omp-fleet serve`.
+			"/ctl": { target: `http://localhost:${fleetPort}` },
 		},
 	},
 });

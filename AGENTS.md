@@ -16,8 +16,8 @@ Runtime is **Bun** (`type: module`, `bun.lock` committed). No CI, no lint config
 
 ```sh
 bun install                    # once
-bun run dev                    # roster mode: vite :4713 (HMR, /events+/command proxied to fleet edge) + omp-fleet :4722
-bun run dev:single             # standalone: omp-session :4721 (--watch) + vite :4713 (proxies /events+/command+/download)
+bun run dev                    # roster mode: vite (HMR, /events+/command proxied to fleet edge) + omp-fleet — ports chosen per-run
+bun run dev:single             # standalone: omp-session (--watch) + vite (proxies /events+/command+/download) — ports chosen per-run
 bun run dev:server             # just the daemon, --watch
 bun run dev:web                # just vite
 bun run check:types            # tsgo -p tsconfig.json --noEmit  (tsgo = @typescript/native-preview, NOT tsc)
@@ -29,7 +29,7 @@ bun run fleet -- serve|sessions|projects|spawn|add|provision|stop|remove|prompt
 bun run collab [-- --join|--stop]   # collab room CLI (TUI/CLI-only surface)
 ```
 
-Ports: vite **4713**, omp-session **4721**, omp-fleet **4722**. Dev mode: `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so sidebar-spawned daemons run `bun server/index.ts` from the checkout (spawned daemons are not `--watch`ed — restart to pick up server edits). `--host`/`--allow-hosts` on dev commands bind vite to the network (backends stay loopback; see README for the tailscale host-check note).
+Ports: defaults vite **4713**, omp-session **4721**, omp-fleet **4722** (used by `dev:web`/`dev:server`/`fleet -- serve` run directly). The `dev`/`dev:single` runners instead pick ports per-run so parallel worktrees don't collide: backends bind port 0 (ephemeral; real port parsed from the `OMP_SESSION|` line / "fleet listening" banner), vite gets a probe-picked port with `--strictPort`, and a pre-ready exit is retried on a fresh port (bounded). Vite learns backend ports via `OMP_DEV_FLEET_PORT`/`OMP_DEV_SESSION_PORT` env in `vite.config.ts`. Dev mode: `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so sidebar-spawned daemons run `bun server/index.ts` from the checkout (spawned daemons are not `--watch`ed — restart to pick up server edits). `--host`/`--allow-hosts` on dev commands bind vite to the network (backends stay loopback; see README for the tailscale host-check note).
 
 ## Repo layout
 

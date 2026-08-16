@@ -26,20 +26,20 @@ Prerequisite: [Bun](https://bun.sh). Then `bun install` once.
 ### Dev mode — omp-fleet (roster UI)
 
 ```sh
-bun run dev   # vite on :4713 (HMR; /events + /command + /download proxied to the fleet edge) + omp-fleet on :4722
+bun run dev   # vite (HMR; /events + /command + /download proxied to the fleet edge) + omp-fleet
 ```
 
-Open <http://localhost:4713>, click a `ready` row to attach. UI edits hot-reload in roster mode too. Sidebar spawns work out of the box: `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so the default `local` template runs `bun server/index.ts` from the checkout (spawned daemons are not `--watch`ed; restart them to pick up server edits).
+Ports are chosen at runtime (backends bind ephemeral ports, vite gets a probe-picked port with retries on collision), so parallel worktrees can each run `bun run dev` — the runner prints the stack summary with the actual URLs. Open the printed UI URL, click a `ready` row to attach. UI edits hot-reload in roster mode too. Sidebar spawns work out of the box: `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so the default `local` template runs `bun server/index.ts` from the checkout (spawned daemons are not `--watch`ed; restart them to pick up server edits).
 
 ### Dev mode — standalone omp-session (single-session UI)
 
 ```sh
-bun run dev:single   # omp-session on :4721 (--watch reload) + vite on :4713 (proxies /events + /command + /download → 4721)
+bun run dev:single   # omp-session (--watch reload) + vite (proxies /events + /command + /download → session)
 ```
 
-Open <http://localhost:4713>. UI edits hot-reload; server edits restart the daemon. (Need the processes in separate terminals? `bun run dev:server` and `bun run dev:web` still exist.)
+Open the printed UI URL. UI edits hot-reload; server edits restart the daemon. (Need the processes in separate terminals? `bun run dev:server` and `bun run dev:web` still exist — those keep the fixed defaults :4721/:4713.)
 
-Both dev commands put the UI on :4713 with HMR; `bun run dev` proxies `/events` + `/command` to the fleet edge (`OMP_DEV_FLEET=1` in `vite.config.ts`), `bun run dev:single` proxies them to the standalone omp-session. To reach the UI from another machine, pass `--host` (optionally with an address) to either command — `bun run dev -- --host` binds vite to `0.0.0.0:4713` while the backends stay loopback (remote browsers reach them through vite's proxies). No auth on the UI — trusted networks only. Accessing via a non-localhost domain (e.g. tailscale) trips vite's host check; add `--allow-hosts` to allow every Host header, or `--allow-hosts myhost.tail1234.ts.net` for an allowlist.
+Both dev commands serve the UI with HMR on a per-run port; `bun run dev` proxies `/events` + `/command` to the fleet edge (`OMP_DEV_FLEET=1` in `vite.config.ts`), `bun run dev:single` proxies them to the standalone omp-session. To reach the UI from another machine, pass `--host` (optionally with an address) to either command — `bun run dev -- --host` binds vite to `0.0.0.0` while the backends stay loopback (remote browsers reach them through vite's proxies). No auth on the UI — trusted networks only. Accessing via a non-localhost domain (e.g. tailscale) trips vite's host check; add `--allow-hosts` to allow every Host header, or `--allow-hosts myhost.tail1234.ts.net` for an allowlist.
 
 ## omp-session
 
@@ -104,9 +104,9 @@ A read-only browser/analytics surface over all historical omp sessions, folded i
 
 ```sh
 bun install
-bun run dev           # roster: vite :4713 (HMR, /events + /command → fleet edge) + omp-fleet :4722
-bun run dev:single    # single-session: omp-session :4721 (--watch) + vite :4713 (HMR; proxies /events + /command + /download → 4721, /ctl → 4722)
-# or separately: bun run dev:server / dev:web / fleet -- serve
+bun run dev           # roster: vite (HMR, /events + /command → fleet edge) + omp-fleet — ports chosen per-run
+bun run dev:single    # single-session: omp-session (--watch) + vite (HMR) — ports chosen per-run
+# or separately: bun run dev:server / dev:web / fleet -- serve  (fixed defaults :4721 / :4713 / :4722)
 ```
 
 Only the dev path is supported. Checks: `bun run check:types`, `bun test`.
