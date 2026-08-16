@@ -239,6 +239,18 @@ export interface DaemonEntry {
 	cwd: string;
 	project: string;
 	worktreeOf?: string;
+	/**
+	 * The registered project this daemon belongs to (source: fleet edge
+	 * roster; absent for remote entries, whose string `project` grouping is
+	 * kept). Older edges omit it.
+	 */
+	projectId?: string;
+	/**
+	 * True when the entry's cwd realpath lives under the fleet workspaceDir
+	 * (a managed worktree — eligible for worktree deletion; source: fleet
+	 * edge roster). Absent when not managed; older edges omit it.
+	 */
+	managed?: boolean;
 	/** Current git branch of the session cwd for local entries (source: fleet edge roster; older edges omit it). */
 	branch?: string;
 	/** git dirty-state file counts (source: fleet edge roster; older edges omit them). */
@@ -260,6 +272,23 @@ export interface ProjectEntry {
 	isWorktree: boolean;
 	worktreeOf?: string;
 	branch?: string;
+}
+
+/**
+ * One first-class project registered with the fleet (registered_projects
+ * frame). Projects are realpath-keyed, deduped on registration, and persist
+ * in the fleet state file; `path` is always the realpath of the main
+ * checkout and `name` its basename. Local daemons carry the matching
+ * `projectId` on the roster; remote entries never do.
+ */
+export interface RegisteredProject {
+	projectId: string;
+	/** Realpath of the main checkout. */
+	path: string;
+	/** Basename of the realpath (display name). */
+	name: string;
+	/** Epoch ms of registration. */
+	addedAt: number;
 }
 
 /**
@@ -366,6 +395,24 @@ export type ClientCommand =
 	| { type: "stop"; id: string; daemonId: string }
 	// Stop the daemon AND evict it from the roster (registry removal).
 	| { type: "remove"; id: string; daemonId: string }
+	// First-class project registration (add_project registers the realpath —
+	// deduped — and optionally spawns a daemon on the main checkout with
+	// template/labels passthrough; answers ride the registered_projects /
+	// roster broadcasts + error frames).
+	| { type: "add_project"; id: string; path: string; start?: boolean; template?: string; labels?: string[] }
+	// Deregister a project; refused (error frame) while any daemon references it.
+	| { type: "remove_project"; id: string; projectId: string }
+	// Worktree lifecycle (projectId from the registered_projects frame).
+	// start:true also spawns a daemon on the worktree; progress rides the
+	// roster/daemon_status broadcasts.
+	| { type: "create_worktree"; id: string; projectId: string; name: string; baseRef?: string; existingBranch?: string; start?: boolean }
+	| { type: "add_worktree"; id: string; projectId: string; worktreePath: string; start?: boolean }
+	// Stop the daemon, evict it from the roster, and remove the managed
+	// worktree (owned + clean only; deleteBranch: true also `git branch -d`s).
+	| { type: "delete_worktree"; id: string; daemonId: string; deleteBranch?: boolean }
+	// Guard evidence for the delete confirmation (owned/dirty/branch state);
+	// answered by the unicast worktree_delete_info frame.
+	| { type: "worktree_delete_info"; id: string; daemonId: string }
 	| { type: "list_projects"; id: string };
 
 // ---------------------------------------------------------------------------
@@ -469,8 +516,17 @@ export type ServerFrame =
 	// Global broadcast + unicast answer; the roster-mode sidebar's source.
 	| { type: "roster"; daemons: DaemonEntry[] }
 	| { type: "daemon_status"; daemonId: string; status: DaemonStatus; error?: string }
+	// Global broadcast: first-class registered projects. Sent when the
+	// registry's project set changes (same trigger as the roster broadcast)
+	// AND during new-stream priming (near the roster frame), so project
+	// groups with zero daemons still render. Never carries tokens/endpoints.
+	| { type: "registered_projects"; projects: RegisteredProject[] }
 	// Unicast answer to list_projects.
 	| { type: "projects"; projects: ProjectEntry[] }
+	// Unicast answer to worktree_delete_info: guard evidence for the delete
+	// confirmation (ownership, dirty counts, branch merge/push state). Never
+	// carries tokens/endpoints.
+	| { type: "worktree_delete_info"; daemonId: string; owned: boolean; dirty: boolean; git?: { added: number; modified: number; deleted: number; untracked: number }; branch?: string; merged?: boolean; unpushed?: boolean; reason?: string }
 	| { type: "error"; error: string };
 
 /** One supervised long-running process (hub launch / daemon broker), wire-safe. */

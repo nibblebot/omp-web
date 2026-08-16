@@ -1800,11 +1800,6 @@ button.picker-row {
 	text-align: left;
 }
 
-/* Spawn-picker project tiles keep their raised button background. */
-button.picker-row.spawn-project {
-	background: var(--btn);
-}
-
 .picker-label {
 	color: var(--text);
 	font-size: var(--fs-lg);
@@ -3931,26 +3926,26 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	margin: var(--space-2) 0 0;
 }
 
-/* Spawn picker modal. */
-.spawn-form {
+/* --- Add-repo modal (AddProjectModal.tsx) --- */
+.project-form {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-1);
 	margin-bottom: var(--space-5);
 }
 
-.spawn-path {
+.project-path {
 	margin-bottom: var(--space-2);
 }
 
-.spawn-path-error,
-.spawn-template-error {
+.project-path-error,
+.project-template-error {
 	margin: var(--space-1) 0 var(--space-2);
 	text-align: left;
 	font-size: var(--fs-sm);
 }
 
-.spawn-template {
+.project-template {
 	background: var(--bg-deep);
 	border: 1px solid var(--border);
 	border-radius: var(--r-sm);
@@ -3961,7 +3956,41 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	width: 100%;
 }
 
-.spawn-projects {
+/* Collapsed advanced section (template + labels, ex-SpawnPicker). */
+.project-advanced {
+	margin: var(--space-2) 0;
+}
+
+.project-advanced summary {
+	cursor: pointer;
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	padding: var(--space-2) 0;
+}
+
+.project-advanced[open] summary {
+	margin-bottom: var(--space-3);
+}
+
+.project-start,
+.worktree-start {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin: var(--space-3) 0 0;
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+
+.project-start input,
+.worktree-start input {
+	cursor: pointer;
+}
+
+.project-list {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
@@ -3970,24 +3999,14 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	margin-top: var(--space-2);
 }
 
-.spawn-group {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-1);
-}
-
-.spawn-project {
+.project-row {
 	align-items: center;
 	width: 100%;
 	text-align: left;
 	cursor: pointer;
 }
 
-.spawn-project--worktree {
-	margin-left: var(--space-5);
-}
-
-.spawn-project-name {
+.project-row-name {
 	flex: 1;
 	min-width: 0;
 	overflow: hidden;
@@ -3995,24 +4014,24 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	white-space: nowrap;
 }
 
-.spawn-of {
+.project-row-branch {
+	flex: none;
+}
+
+.project-row-registered {
 	flex: none;
 	font-size: var(--fs-micro);
-	color: var(--purple);
+	color: var(--muted-2);
 	font-style: italic;
 }
 
-.spawn-branch {
-	flex: none;
-}
-
-.spawn-actions {
+.project-actions {
 	display: flex;
 	justify-content: flex-end;
 	margin-top: var(--space-5);
 }
 
-.spawn-btn {
+.project-btn {
 	background: var(--accent-dim);
 	border: 1px solid var(--accent-border);
 	border-radius: var(--r-md);
@@ -4023,9 +4042,327 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	cursor: pointer;
 }
 
-.spawn-btn:hover {
+.project-btn:hover {
 	background: var(--hover);
 	border-color: var(--accent);
+}
+
+/* Staged pipeline progress (register → spawn → attach), shared shape. */
+.project-progress,
+.worktree-progress {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	padding: var(--space-4) 0;
+}
+
+.project-progress-step,
+.worktree-progress-step {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	color: var(--muted-2);
+	font-size: var(--fs-md);
+}
+
+.project-progress-step.current,
+.worktree-progress-step.current {
+	color: var(--text);
+	font-weight: 600;
+}
+
+.project-progress-step.done,
+.worktree-progress-step.done {
+	color: var(--success);
+}
+
+.project-progress-dot,
+.worktree-progress-dot {
+	width: 8px;
+	height: 8px;
+	flex: none;
+	border-radius: 50%;
+	background: var(--border-strong);
+}
+
+.project-progress-step.current .project-progress-dot,
+.worktree-progress-step.current .worktree-progress-dot {
+	background: var(--accent);
+	box-shadow: 0 0 6px var(--accent);
+	animation: daemon-dot-pulse 1.2s ease-in-out infinite;
+}
+
+.project-progress-step.done .project-progress-dot,
+.worktree-progress-step.done .worktree-progress-dot {
+	background: var(--success);
+}
+
+.project-progress-note,
+.worktree-progress-note {
+	font-size: var(--fs-sm);
+	font-style: italic;
+	color: var(--muted-2);
+}
+
+.project-error,
+.worktree-error {
+	margin-bottom: var(--space-4);
+	text-align: left;
+}
+
+/* --- Add-worktree modal (WorktreeModal.tsx) --- */
+.worktree-tabs {
+	display: flex;
+	gap: var(--space-1);
+	border-bottom: 1px solid var(--border);
+	margin-bottom: var(--space-5);
+}
+
+.worktree-tab {
+	background: none;
+	border: none;
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
+	font: inherit;
+	font-size: var(--fs-md);
+	color: var(--muted-2);
+	padding: var(--space-3) var(--space-4);
+	cursor: pointer;
+	margin-bottom: -1px;
+}
+
+.worktree-tab.active {
+	color: var(--text);
+	border-bottom-color: var(--accent);
+}
+
+.worktree-form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+
+.worktree-name {
+	margin-bottom: var(--space-2);
+}
+
+.worktree-name-error {
+	margin: var(--space-1) 0 var(--space-2);
+	text-align: left;
+	font-size: var(--fs-sm);
+}
+
+.worktree-advanced {
+	margin: var(--space-2) 0;
+}
+
+.worktree-advanced summary {
+	cursor: pointer;
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	padding: var(--space-2) 0;
+}
+
+.worktree-advanced[open] summary {
+	margin-bottom: var(--space-3);
+}
+
+.worktree-base,
+.worktree-branch {
+	margin-bottom: var(--space-2);
+}
+
+.worktree-actions {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	gap: var(--space-3);
+	margin-top: var(--space-5);
+}
+
+.worktree-btn {
+	background: var(--accent-dim);
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	font-weight: 600;
+	padding: var(--space-2) var(--space-6);
+	cursor: pointer;
+}
+
+.worktree-btn:hover:not(:disabled) {
+	background: var(--hover);
+	border-color: var(--accent);
+}
+
+.worktree-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.worktree-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	max-height: 40vh;
+	overflow-y: auto;
+	margin-top: var(--space-2);
+}
+
+.worktree-row {
+	align-items: center;
+	width: 100%;
+	text-align: left;
+	cursor: pointer;
+}
+
+.worktree-row-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.worktree-row-branch {
+	flex: none;
+}
+
+/* --- Close-out dialogs (DeleteWorktreeDialog / RemoveProjectDialog) --- */
+.worktree-evidence {
+	display: inline-flex;
+	gap: var(--space-2);
+	margin-left: var(--space-2);
+	font-variant-numeric: tabular-nums;
+}
+
+.worktree-evidence-path {
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--text);
+	word-break: break-all;
+}
+
+.worktree-branch-check {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin: 0 0 var(--space-5);
+	color: var(--text);
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+
+.worktree-branch-check input {
+	cursor: pointer;
+}
+
+.worktree-branch-name {
+	font-family: var(--font-mono);
+}
+
+.worktree-branch-hint {
+	color: var(--muted-2);
+	font-size: var(--fs-micro);
+}
+
+.worktree-blockers {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
+	align-items: center;
+}
+
+/* --- Sidebar: project-first groups (DaemonSidebar.tsx) --- */
+.project-group {
+	display: flex;
+	align-items: center;
+}
+
+.project-group-toggle {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	background: none;
+	border: none;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	padding: var(--space-2) var(--space-3);
+	cursor: pointer;
+}
+
+button.project-group-toggle[data-open="false"] .sidebar-caret {
+	transform: rotate(-90deg);
+}
+
+.project-group-toggle:hover {
+	background: var(--hover);
+}
+
+.project-remove-btn {
+	flex: none;
+	margin-right: var(--space-2);
+	color: var(--muted-2);
+}
+
+.project-remove-btn:hover {
+	color: var(--error);
+}
+
+.project-add-worktree {
+	display: block;
+	width: calc(100% - var(--space-6));
+	margin: var(--space-1) var(--space-3) var(--space-4);
+	padding: var(--space-2) var(--space-3);
+	background: none;
+	border: 1px dashed var(--border-strong);
+	border-radius: var(--r-md);
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	text-align: center;
+	cursor: pointer;
+}
+
+.project-add-worktree:hover {
+	color: var(--text);
+	border-color: var(--accent-border);
+	background: var(--hover);
+}
+
+/* Managed-worktree delete action (DeleteWorktreeDialog opener). */
+.daemon-del-btn {
+	color: var(--muted-2);
+}
+
+.daemon-del-btn:hover {
+	color: var(--error);
+}
+
+/* --- SessionPicker gate mode ("New session" top item) --- */
+.session-new {
+	align-items: center;
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-md);
+	background: var(--accent-dim);
+	margin-bottom: var(--space-2);
+}
+
+.session-new:hover {
+	background: var(--hover);
+	border-color: var(--accent);
+}
+
+.session-new-label {
+	color: var(--accent);
+	font-weight: 600;
 }
 
 /* --- Debug panel (Modal sheet variant): transport + fleet visibility --- */

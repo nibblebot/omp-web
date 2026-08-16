@@ -1,19 +1,26 @@
 /**
  * Daemon registry for the omp-fleet: the persistent, insertion-ordered
  * roster of daemons (spawned, attached, remote) with monotonic `dN` id
- * allocation that survives restarts.
+ * allocation that survives restarts, plus the first-class registered
+ * `projects[]` (realpath-keyed, `pN` ids) that project groups hang off.
  *
- * State is a JSON file `{ "nextId": number, "entries": RegistryEntry[] }` —
+ * State is a JSON file
+ * `{ "nextId": number, "entries": RegistryEntry[], "projects"?: RegisteredProject[], "nextProjectId"?: number }` —
  * the path is injectable for tests; the fleet server resolves
- * `OMP_FLEET_STATE` / `~/.omp/fleet/state.json` and passes it
- * in. Every mutation is persisted atomically (write a sibling tmp file, then
- * rename over the real one) before the mutation returns, and fires
- * `onChange` (set by the edge server for roster broadcasts).
+ * `OMP_FLEET_STATE` / `~/.ompweb/fleet/state.json` and passes it
+ * in. Files written before projects existed lack the two new keys and load
+ * fine (projects start empty, the counter at 1). Every mutation is persisted
+ * atomically (write a sibling tmp file, then rename over the real one)
+ * before the mutation returns, and fires `onChange` (set by the edge server
+ * for roster broadcasts); project-set mutations additionally fire
+ * `onProjectsChange` (set by the edge server for registered_projects
+ * broadcasts).
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import type { DaemonEntry, DaemonStatus } from "../shared/protocol";
+import { basename, dirname, join } from "node:path";
+import type { DaemonEntry, DaemonStatus, RegisteredProject } from "../shared/protocol";
+import { validateProjectPath } from "./discovery";
 
 /** A roster entry: DaemonEntry plus fleet-side registration data. */
 export interface RegistryEntry extends DaemonEntry {
@@ -34,6 +41,10 @@ export interface RegistryEntry extends DaemonEntry {
 interface RegistryFile {
 	nextId: number;
 	entries: RegistryEntry[];
+	/** First-class registered projects; absent in files written before Phase 2. */
+	projects?: RegisteredProject[];
+	/** Next `pN` project id; absent in files written before Phase 2. */
+	nextProjectId?: number;
 }
 
 /**
@@ -61,10 +72,21 @@ export function bootStatusFor(entry: Pick<RegistryEntry, "mode" | "status">): Da
 export class Registry {
 	/** Fired after every mutation (not on load); set by the edge server for roster broadcasts. */
 	onChange: (() => void) | null = null;
+	/**
+	 * Fired after PROJECT-set mutations only (addProject/removeProject), not
+	 * daemon mutations; set by the edge server for registered_projects
+	 * broadcasts. Projects are rare mutations and the frame is re-derivable
+	 * from stream priming, so broadcasts ride this dedicated hook instead of
+	 * the every-mutation onChange.
+	 */
+	onProjectsChange: (() => void) | null = null;
 
 	private readonly statePath: string;
 	private entries: RegistryEntry[] = [];
 	private nextId = 1;
+	/** Registered projects in insertion order (public API: projects()). */
+	private projectList: RegisteredProject[] = [];
+	private nextProjectId = 1;
 
 	constructor(statePath: string) {
 		this.statePath = statePath;
@@ -75,6 +97,8 @@ export class Registry {
 		if (!existsSync(this.statePath)) {
 			this.entries = [];
 			this.nextId = 1;
+			this.projectList = [];
+			this.nextProjectId = 1;
 			return;
 		}
 		const file = this.#readFile();
@@ -89,6 +113,21 @@ export class Registry {
 		this.entries = [...file.entries];
 		// Never reuse ids: floor the counter above the highest id on disk.
 		this.nextId = Math.max(file.nextId, maxIndex + 1);
+		// Tolerant read: files written before projects existed lack the keys.
+		const projects = file.projects ?? [];
+		if (!Array.isArray(projects) || projects.some((p) => typeof p?.projectId !== "string")) {
+			throw new Error(`registry state corrupt at ${this.statePath}: projects entry missing projectId`);
+		}
+		let maxProjectIndex = 0;
+		for (const project of projects) {
+			const n = Number.parseInt(project.projectId.slice(1), 10);
+			if (Number.isFinite(n) && n > maxProjectIndex) maxProjectIndex = n;
+		}
+		this.projectList = [...projects];
+		// Same never-reuse rule as dN ids. Non-number garbage falls back to 1
+		// (missing key = 1), then the max-index floor applies.
+		const rawNextProjectId = typeof file.nextProjectId === "number" ? file.nextProjectId : 1;
+		this.nextProjectId = Math.max(rawNextProjectId, maxProjectIndex + 1);
 	}
 
 	/** Atomic persist (tmp + rename). Mutations persist internally; this is the public API. */
@@ -150,6 +189,57 @@ export class Registry {
 		return true;
 	}
 
+	/** Registered projects in insertion order (defensive copy). */
+	projects(): RegisteredProject[] {
+		return [...this.projectList];
+	}
+
+	/**
+	 * Register a project. Validates that `path` is an existing directory
+	 * containing a git repo (realpath-normalized via validateProjectPath —
+	 * symlinked paths alias the same project), dedups on realpath equality
+	 * returning the EXISTING project, and persists atomically + fires
+	 * onChange. Throws when the path is not a directory or not a git repo.
+	 */
+	async addProject(path: string): Promise<RegisteredProject> {
+		const resolved = await validateProjectPath(path);
+		if (resolved === null) throw new Error(`not a directory: ${path}`);
+		// Same .git dir-or-file heuristic discovery's scan uses: a main
+		// checkout has a .git directory, a linked worktree a .git file.
+		if (!existsSync(join(resolved, ".git"))) {
+			throw new Error(`not a git repository: ${path}`);
+		}
+		const existing = this.projectList.find((project) => project.path === resolved);
+		if (existing !== undefined) return existing;
+		const project: RegisteredProject = {
+			projectId: `p${this.nextProjectId++}`,
+			path: resolved,
+			name: basename(resolved),
+			addedAt: Date.now(),
+		};
+		this.projectList.push(project);
+		this.#mutated();
+		this.onProjectsChange?.();
+		return project;
+	}
+
+	/**
+	 * Remove a registered project. Throws with the referencing daemon ids in
+	 * the message while ANY roster entry still references it (callers
+	 * surface the blockers); never touches disk. Unknown ids also throw.
+	 */
+	removeProject(projectId: string): void {
+		const index = this.projectList.findIndex((project) => project.projectId === projectId);
+		if (index === -1) throw new Error(`unknown project id: ${projectId}`);
+		const blockers = this.entries.filter((entry) => entry.projectId === projectId).map((entry) => entry.daemonId);
+		if (blockers.length > 0) {
+			throw new Error(`project ${projectId} in use by daemons: ${blockers.join(", ")}`);
+		}
+		this.projectList.splice(index, 1);
+		this.#mutated();
+		this.onProjectsChange?.();
+	}
+
 	#readFile(): RegistryFile {
 		let parsed: unknown;
 		try {
@@ -185,7 +275,7 @@ export class Registry {
 
 	#persist(): void {
 		mkdirSync(dirname(this.statePath), { recursive: true });
-		const payload = JSON.stringify({ nextId: this.nextId, entries: this.entries } satisfies RegistryFile);
+		const payload = JSON.stringify({ nextId: this.nextId, entries: this.entries, projects: this.projectList, nextProjectId: this.nextProjectId } satisfies RegistryFile);
 		const tmp = `${this.statePath}.tmp`;
 		writeFileSync(tmp, payload, "utf8");
 		renameSync(tmp, this.statePath);

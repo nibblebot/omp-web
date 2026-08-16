@@ -1,7 +1,26 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import { OMP_PROTO, SSE_EVENT_NAME } from "../shared/protocol";
-import type { ClientCommand, ServerFrame, SettingsModel, WebSessionState } from "../shared/protocol";
-import { announce, attachSession, call, connect, pushNotice, refreshSettings, setState, state, updateSetting, type SubagentInfo } from "./state";
+import type { ClientCommand, DaemonEntry, RegisteredProject, ServerFrame, SessionListEntry, SettingsModel, WebSessionState } from "../shared/protocol";
+import {
+	announce,
+	attachSession,
+	call,
+	connect,
+	daemonsByProject,
+	pushNotice,
+	refreshSettings,
+	sendAddExistingWorktree,
+	sendAddProject,
+	sendCreateWorktree,
+	sendDeleteWorktree,
+	sendRemoveProject,
+	sendWorktreeDeleteInfo,
+	setState,
+	spawnResume,
+	state,
+	updateSetting,
+	type SubagentInfo,
+} from "./state";
 
 // ---------------------------------------------------------------------------
 // Minimal /events transport double. connect() registers its SSE handler on a
@@ -128,6 +147,17 @@ beforeEach(() => {
 		items: [],
 		streaming: false,
 		workingIntent: undefined,
+		// Phase 5 fleet-scoped + modal state: reset for isolation like the rest
+		// (roster frames / picker-gate tests otherwise leak into each other).
+		daemonRoster: [],
+		registeredProjects: [],
+		worktreeDeleteInfo: {},
+		pendingSessionPicker: null,
+		sessionPickerGate: null,
+		worktreeModalProjectId: null,
+		deleteWorktreeTarget: null,
+		removeProjectTarget: null,
+		modal: null,
 	});
 });
 
@@ -792,5 +822,367 @@ describe("workingIntent (dynamic shimmer label)", () => {
 		// is over, so the last intent must not linger under the shimmer.
 		dispatch({ type: "state", state: { isStreaming: false } as unknown as WebSessionState });
 		expect(state.workingIntent).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5: project-first sidebar state — registered_projects frame handling
+// (fleet-scoped, survives session resets) + daemonsByProject grouping.
+// ---------------------------------------------------------------------------
+describe("Phase 5: registered projects and project-first grouping", () => {
+	const p1: RegisteredProject = { projectId: "p1", path: "/repos/a", name: "a", addedAt: 1 };
+	const p2: RegisteredProject = { projectId: "p2", path: "/repos/b", name: "b", addedAt: 2 };
+	const p3: RegisteredProject = { projectId: "p3", path: "/repos/c", name: "c", addedAt: 3 };
+
+	/** Minimal roster entry; extra fields (projectId/worktreeOf/…) ride along. */
+	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return { daemonId: id, name: id, cwd: `/repos/${id}`, project: id, labels: [], mode: "spawned", status: "ready", ...extra };
+	}
+
+	test("registered_projects populates the store and survives a session reset (fleet-scoped)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "registered_projects", projects: [p1, p2, p3] });
+		expect(state.registeredProjects).toEqual([p1, p2, p3]);
+
+		// A daemon switch runs resetSessionView (session-scoped cleanup); the
+		// project registry is fleet-scoped and must come through intact.
+		dispatch(attached("daemon-a"));
+		dispatch(attached("daemon-b")); // switch → resetSessionView
+		expect(state.currentSessionId).toBe("daemon-b");
+		expect(state.registeredProjects).toEqual([p1, p2, p3]);
+	});
+
+	test("a later registered_projects broadcast replaces the collection wholesale", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "registered_projects", projects: [p1, p2] });
+		dispatch({ type: "registered_projects", projects: [p2] }); // p1 deregistered
+		expect(state.registeredProjects).toEqual([p2]);
+	});
+
+	test("daemonsByProject: registry order, zero-daemon projects present, main-checkout rows first", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		// Registry order deliberately differs from roster order.
+		dispatch({ type: "registered_projects", projects: [p2, p1, p3] });
+		dispatch({
+			type: "roster",
+			daemons: [
+				daemon("b-main", { projectId: "p2" }),
+				daemon("a-wt", { projectId: "p1", worktreeOf: "a" }),
+				daemon("a-main", { projectId: "p1" }),
+			],
+		});
+
+		const groups = daemonsByProject();
+		expect(groups.map(g => g.project?.projectId ?? null)).toEqual(["p2", "p1", "p3"]);
+		expect(groups[0].daemons.map(d => d.daemonId)).toEqual(["b-main"]);
+		// Main-checkout row first, then worktrees — regardless of roster order.
+		expect(groups[1].daemons.map(d => d.daemonId)).toEqual(["a-main", "a-wt"]);
+		expect(groups[2].daemons).toEqual([]); // zero-daemon project still renders
+	});
+
+	test("daemonsByProject: entries without a registered project fall into one trailing null group in string-grouping order", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "registered_projects", projects: [p1] });
+		dispatch({
+			type: "roster",
+			daemons: [
+				// Unregistered: no projectId at all (remote/unregistered).
+				daemon("zeta-main", { project: "zeta" }),
+				// Orphaned: projectId whose registry entry is gone — must not vanish.
+				daemon("orphan", { project: "orphan", projectId: "gone" }),
+				// A worktree of an unregistered repo: same string group, main first.
+				daemon("zeta-wt", { project: "zeta", worktreeOf: "zeta" }),
+				daemon("alpha", { project: "alpha" }),
+				// Registered daemon: belongs to p1's group, not the fallback.
+				daemon("a-main", { projectId: "p1" }),
+			],
+		});
+
+		const groups = daemonsByProject();
+		expect(groups.map(g => g.project?.projectId ?? null)).toEqual(["p1", null]);
+		expect(groups[0].daemons.map(d => d.daemonId)).toEqual(["a-main"]);
+		// Today's string grouping: repo keys sorted via localeCompare, main
+		// checkouts before worktrees within a repo, roster order within each.
+		expect(groups[1].daemons.map(d => d.daemonId)).toEqual(["alpha", "orphan", "zeta-main", "zeta-wt"]);
+	});
+
+	test("daemonsByProject with no unregistered entries emits no trailing null group", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({ type: "registered_projects", projects: [p1] });
+		dispatch({ type: "roster", daemons: [daemon("a-main", { projectId: "p1" })] });
+		const groups = daemonsByProject();
+		expect(groups.map(g => g.project?.projectId ?? null)).toEqual(["p1"]);
+	});
+
+	test("worktree_delete_info answers populate the daemonId-keyed evidence map (fleet-scoped)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "worktree_delete_info", daemonId: "d1", owned: true, dirty: true, git: { added: 1, modified: 0, deleted: 0, untracked: 2 }, branch: "feat", merged: false, unpushed: true });
+		dispatch({ type: "worktree_delete_info", daemonId: "d1", owned: true, dirty: false, branch: "feat", merged: true, unpushed: false });
+		dispatch({ type: "worktree_delete_info", daemonId: "d2", owned: false, dirty: false, reason: "not managed" });
+
+		expect(state.worktreeDeleteInfo["d1"]).toMatchObject({ owned: true, dirty: false, merged: true }); // latest-wins
+		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({ owned: false, dirty: false, reason: "not managed" });
+
+		// Fleet-scoped: survives the reset of a daemon switch.
+		dispatch(attached("daemon-a"));
+		dispatch(attached("daemon-b"));
+		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({ owned: false, dirty: false, reason: "not managed" });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5: project/worktree command senders — each POSTs the exact
+// ClientCommand variant the fleet edge allowlists.
+// ---------------------------------------------------------------------------
+describe("Phase 5: project/worktree command senders", () => {
+	test("sendAddProject posts add_project (path + optional start/template/labels)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendAddProject("/repos/a", { start: true, template: "agent", labels: ["x", "y"] });
+		expect(posted).toEqual([{ type: "add_project", id: expect.any(String), path: "/repos/a", start: true, template: "agent", labels: ["x", "y"] }]);
+
+		// Bare path: no optional fields on the wire.
+		posted.length = 0;
+		sendAddProject("/repos/b");
+		expect(posted).toEqual([{ type: "add_project", id: expect.any(String), path: "/repos/b" }]);
+	});
+
+	test("sendRemoveProject posts remove_project", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		sendRemoveProject("p1");
+		expect(posted).toEqual([{ type: "remove_project", id: expect.any(String), projectId: "p1" }]);
+	});
+
+	test("sendCreateWorktree posts create_worktree with name and optional overrides", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendCreateWorktree("p1", "feature-x", { baseRef: "main", start: true });
+		expect(posted).toEqual([
+			{ type: "create_worktree", id: expect.any(String), projectId: "p1", name: "feature-x", baseRef: "main", start: true },
+		]);
+
+		posted.length = 0;
+		sendCreateWorktree("p1", "feat", { existingBranch: "feat" });
+		expect(posted).toEqual([
+			{ type: "create_worktree", id: expect.any(String), projectId: "p1", name: "feat", existingBranch: "feat" },
+		]);
+	});
+
+	test("sendAddExistingWorktree posts add_worktree with the worktree path", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		sendAddExistingWorktree("p1", "/w/feat", { start: true });
+		expect(posted).toEqual([
+			{ type: "add_worktree", id: expect.any(String), projectId: "p1", worktreePath: "/w/feat", start: true },
+		]);
+	});
+
+	test("sendDeleteWorktree posts delete_worktree (deleteBranch optional)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendDeleteWorktree("d1", { deleteBranch: true });
+		expect(posted).toEqual([{ type: "delete_worktree", id: expect.any(String), daemonId: "d1", deleteBranch: true }]);
+
+		posted.length = 0;
+		sendDeleteWorktree("d1");
+		expect(posted).toEqual([{ type: "delete_worktree", id: expect.any(String), daemonId: "d1" }]);
+	});
+
+	test("sendWorktreeDeleteInfo posts worktree_delete_info for the daemon", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		sendWorktreeDeleteInfo("d1");
+		expect(posted).toEqual([{ type: "worktree_delete_info", id: expect.any(String), daemonId: "d1" }]);
+	});
+
+	test("start:false senders leave the gate untouched", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendAddProject("/repos/a", { start: false });
+		sendCreateWorktree("p1", "feat");
+		sendAddExistingWorktree("p1", "/w/feat", { start: false });
+		expect(state.pendingSessionPicker).toBeNull();
+		expect(posted.map(c => c.type)).toEqual(["add_project", "create_worktree", "add_worktree"]);
+		// start:false rides the wire (explicit opts pass through like spawnDaemon's)
+		// but must NOT arm the gate.
+		expect(posted[0]).toMatchObject({ type: "add_project", start: false });
+		expect(posted[1]).not.toHaveProperty("start");
+		expect(posted[2]).toMatchObject({ type: "add_worktree", start: false });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5: post-attach session-picker gate. A start:true onboarding sender
+// arms the gate (daemonId unknown at send time); the onboarding attach stamps
+// the real daemonId; attach_result for that daemon asks list_sessions; the
+// sessions answer decides new-vs-resume and clears the gate.
+// ---------------------------------------------------------------------------
+describe("Phase 5: post-attach session-picker gate", () => {
+	function sessionEntry(id: string, cwd: string): SessionListEntry {
+		return { path: cwd, id, cwd, name: id, messageCount: 0, modifiedAt: 0 };
+	}
+
+	/** The attach command posted by the most recent attachSession() call. */
+	function lastAttachCmd(): Extract<ClientCommand, { type: "attach" }> {
+		const cmd = posted.filter((c): c is Extract<ClientCommand, { type: "attach" }> => c.type === "attach").at(-1);
+		if (!cmd) throw new Error("expected an attach command");
+		return cmd;
+	}
+
+	/** Commands of one type as posted, oldest first. */
+	function postedOf<T extends ClientCommand["type"]>(type: T): Array<Extract<ClientCommand, { type: T }>> {
+		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
+	}
+
+	test("armed gate: attach_result asks list_sessions; non-empty answer opens the picker with the daemon context", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		// The sender arms the gate (it cannot know the spawned daemon's id).
+		sendAddProject("/repos/a", { start: true });
+		expect(state.pendingSessionPicker).not.toBeNull();
+
+		// The onboarding attach stamps the REAL daemonId.
+		const attach = attachSession("d1");
+		expect(state.pendingSessionPicker).toBe("d1");
+
+		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d1" });
+		await expect(attach).resolves.toBe("d1");
+		// The gate asked for sessions; the flag stays set until the answer.
+		expect(postedOf("list_sessions")).toHaveLength(1);
+		expect(state.pendingSessionPicker).toBe("d1");
+
+		// Non-empty answer: open the picker with the pending daemon context.
+		dispatch({ type: "sessions", sessions: [sessionEntry("s1", "/repos/a")] });
+		expect(state.pendingSessionPicker).toBeNull();
+		expect(state.sessionPickerGate).toEqual({ daemonId: "d1" });
+		expect(state.modal).toBe("sessions");
+	});
+
+	test("armed gate: empty sessions answer starts a new session and clears the gate (no picker)", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendCreateWorktree("p1", "feat", { start: true });
+		const attach = attachSession("d2");
+		expect(state.pendingSessionPicker).toBe("d2");
+		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d2" });
+		await expect(attach).resolves.toBe("d2");
+		expect(postedOf("list_sessions")).toHaveLength(1);
+
+		dispatch({ type: "sessions", sessions: [] });
+		expect(state.pendingSessionPicker).toBeNull();
+		expect(state.sessionPickerGate).toBeNull();
+		expect(state.modal).toBeNull();
+		// The daemon got the same new-session RPC /new uses.
+		const newSessionCalls = postedOf("call").filter(c => c.method === "newSession");
+		expect(newSessionCalls).toHaveLength(1);
+	});
+
+	test("an attach failure disarms the gate", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendAddExistingWorktree("p1", "/w/feat", { start: true });
+		const attach = attachSession("d3");
+		expect(state.pendingSessionPicker).toBe("d3");
+		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: false, error: "unknown daemon: d3" });
+		await expect(attach).rejects.toThrow("unknown daemon: d3");
+		expect(state.pendingSessionPicker).toBeNull();
+		expect(postedOf("list_sessions")).toHaveLength(0);
+	});
+
+	test("a superseding attach re-points the gate to the latest daemon (latest-wins)", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendAddProject("/repos/a", { start: true });
+		attachSession("d1");
+		expect(state.pendingSessionPicker).toBe("d1");
+		// A newer attach supersedes it before the first settles; the gate
+		// follows the LATEST attach (it gates whichever daemon onboarding
+		// ended up on).
+		attachSession("d9");
+		expect(state.pendingSessionPicker).toBe("d9");
+
+		// The superseded attach's keyed result is ignored (id mismatch) and
+		// the gate stays pointed at d9.
+		const firstCmd = postedOf("attach")[0];
+		dispatch({ type: "attach_result", id: firstCmd.id, ok: true, sessionId: "d1" });
+		expect(state.pendingSessionPicker).toBe("d9");
+		expect(postedOf("list_sessions")).toHaveLength(0);
+
+		// The current attach settles → the gate fires for d9.
+		const attach = attachSession("d9");
+		dispatch({ type: "attach_result", id: postedOf("attach").at(-1)!.id, ok: true, sessionId: "d9" });
+		await expect(attach).resolves.toBe("d9");
+		expect(postedOf("list_sessions")).toHaveLength(1);
+		expect(state.pendingSessionPicker).toBe("d9"); // armed until the answer
+
+		dispatch({ type: "sessions", sessions: [sessionEntry("s1", "/repos/a")] });
+		expect(state.sessionPickerGate).toEqual({ daemonId: "d9" });
+		expect(state.modal).toBe("sessions");
+	});
+
+	test("spawn_resume never arms the gate (routine asleep-row wake)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		expect(state.pendingSessionPicker).toBeNull();
+		spawnResume("d9");
+		expect(posted).toEqual([{ type: "spawn_resume", id: expect.any(String), daemonId: "d9" }]);
+		expect(state.pendingSessionPicker).toBeNull();
+	});
+
+	test("no armed gate: attach + sessions answer open nothing", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const attach = attachSession("d4");
+		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d4" });
+		await expect(attach).resolves.toBe("d4");
+		expect(postedOf("list_sessions")).toHaveLength(0);
+
+		// A sessions broadcast (e.g. the picker's own listSessions) with no
+		// gate must never open the picker on its own.
+		dispatch({ type: "sessions", sessions: [sessionEntry("s1", "/repos/a")] });
+		expect(state.modal).toBeNull();
+		expect(state.sessionPickerGate).toBeNull();
+	});
+
+	test("a switch to a different daemon disarms the gate; the onboarding daemon's own switch keeps it", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a")); // already attached elsewhere
+
+		// Onboarding flow: armed, then attached to the new daemon.
+		sendCreateWorktree("p1", "feat", { start: true });
+		attachSession("d1");
+		expect(state.pendingSessionPicker).toBe("d1");
+
+		// The proxied attached frame for the gate's own daemon (a switch from
+		// daemon-a) must NOT disarm — the sessions answer still has to land.
+		dispatch(attached("d1"));
+		expect(state.pendingSessionPicker).toBe("d1");
+
+		// A switch to yet another daemon disarms it.
+		dispatch(attached("daemon-c"));
+		expect(state.pendingSessionPicker).toBeNull();
 	});
 });

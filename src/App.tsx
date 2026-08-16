@@ -8,6 +8,10 @@ import { BtwPanel } from "./components/BtwPanel";
 import { CharacterAvatar } from "./components/CharacterAvatar";
 import { DangerConfirmDialog } from "./components/ConfirmDialog";
 import { DaemonSidebar } from "./components/DaemonSidebar";
+import { AddProjectModal } from "./components/AddProjectModal";
+import { WorktreeModal } from "./components/WorktreeModal";
+import { DeleteWorktreeDialog } from "./components/DeleteWorktreeDialog";
+import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
 import { DebugPanel } from "./components/DebugPanel";
 import { GoalPopover } from "./components/GoalPopover";
 import { HistorySearch } from "./components/HistorySearch";
@@ -193,9 +197,17 @@ export const App: Component = () => {
 			<Show when={state.modal === "debug"}>
 				<DebugPanel onClose={() => setState("modal", null)} />
 			</Show>
+			<Show when={state.modal === "add-project"}>
+				<AddProjectModal onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "worktree"}>
+				<WorktreeModal onClose={() => setState("modal", null)} />
+			</Show>
 			<AskDialog />
 			<BtwPanel />
 			<DangerConfirmDialog />
+			<DeleteWorktreeDialog />
+			<RemoveProjectDialog />
 		</div>
 	);
 };

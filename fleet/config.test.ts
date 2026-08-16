@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_LOCAL_TEMPLATE, loadConfig } from "./config";
+import { DEFAULT_LOCAL_TEMPLATE, loadConfig, type FleetConfig } from "./config";
 
 const tmpDirs: string[] = [];
 
@@ -25,6 +25,7 @@ describe("loadConfig", () => {
 		expect(config.templates).toEqual({ local: DEFAULT_LOCAL_TEMPLATE });
 		expect(config.defaultTemplate).toBe("local");
 		expect(config.spawnHook).toBeUndefined();
+		expect(config.workspaceDir).toBe(join(homedir(), "ompweb", "workspaces"));
 	});
 
 	test("shallow-merges the file over defaults, tolerating unknown fields", async () => {
@@ -158,6 +159,66 @@ describe("loadConfig", () => {
 
 		writeFileSync(join(dir, "bad-shape.json"), JSON.stringify({ roots: "nope", templates: 42, defaultTemplate: 7 }));
 		expect(await loadConfig(join(dir, "bad-shape.json"))).toEqual(await loadConfig(join(dir, "missing.json")));
+	});
+});
+
+describe("workspaceDir", () => {
+	/** Load with a controlled OMP_FLEET_WORKSPACE_DIR (isolated per call). */
+	async function loadWithEnv(envValue: string | undefined, file?: string, flag?: string): Promise<FleetConfig> {
+		const prev = process.env.OMP_FLEET_WORKSPACE_DIR;
+		if (envValue === undefined) delete process.env.OMP_FLEET_WORKSPACE_DIR;
+		else process.env.OMP_FLEET_WORKSPACE_DIR = envValue;
+		try {
+			return await loadConfig(file, flag !== undefined ? { workspaceDir: flag } : undefined);
+		} finally {
+			if (prev === undefined) delete process.env.OMP_FLEET_WORKSPACE_DIR;
+			else process.env.OMP_FLEET_WORKSPACE_DIR = prev;
+		}
+	}
+
+	test("defaults to ~/ompweb/workspaces (expanded)", async () => {
+		const config = await loadWithEnv(undefined, join(tmpDir(), "missing.json"));
+		expect(config.workspaceDir).toBe(join(homedir(), "ompweb", "workspaces"));
+	});
+
+	test("config-file workspaceDir key is honored (~ expanded)", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(file, JSON.stringify({ workspaceDir: "/ws/file" }));
+		expect((await loadWithEnv(undefined, file)).workspaceDir).toBe("/ws/file");
+
+		writeFileSync(file, JSON.stringify({ workspaceDir: "~/ws" }));
+		expect((await loadWithEnv(undefined, file)).workspaceDir).toBe(join(homedir(), "ws"));
+	});
+
+	test("malformed workspaceDir key falls back to the default", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(file, JSON.stringify({ workspaceDir: 42 }));
+		const config = await loadWithEnv(undefined, file);
+		expect(config.workspaceDir).toBe(join(homedir(), "ompweb", "workspaces"));
+	});
+
+	test("env OMP_FLEET_WORKSPACE_DIR wins over the config file (~ expanded)", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(file, JSON.stringify({ workspaceDir: "/ws/file" }));
+
+		expect((await loadWithEnv("/ws/env", file)).workspaceDir).toBe("/ws/env");
+		expect((await loadWithEnv("~/ws/env", file)).workspaceDir).toBe(join(homedir(), "ws/env"));
+	});
+
+	test("empty env value is ignored (file/default apply)", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(file, JSON.stringify({ workspaceDir: "/ws/file" }));
+		expect((await loadWithEnv("", file)).workspaceDir).toBe("/ws/file");
+
+		expect((await loadWithEnv("", join(tmpDir(), "missing.json"))).workspaceDir).toBe(join(homedir(), "ompweb", "workspaces"));
+	});
+
+	test("explicit flag (--workspace-dir) wins over env and the file (~ expanded)", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(file, JSON.stringify({ workspaceDir: "/ws/file" }));
+
+		expect((await loadWithEnv("/ws/env", file, "/ws/flag")).workspaceDir).toBe("/ws/flag");
+		expect((await loadWithEnv(undefined, file, "~/ws/flag")).workspaceDir).toBe(join(homedir(), "ws/flag"));
 	});
 });
 

@@ -7,15 +7,20 @@
  * persistent Registry, the remote DaemonConnector and the SpawnSupervisor:
  *
  *   GET  /ctl/sessions {…}                         → RegistryEntry[]
- *   GET  /ctl/projects {…}                         → ProjectEntry[]
- *   GET  /ctl/settings                             → SettingsModel
- *   POST /ctl/spawn    {cwd, template?, name?, labels?} → RegistryEntry
+ *   GET  /ctl/projects {…}                         → { projects: ProjectEntry[], registered: RegisteredProject[] }
+ *   POST /ctl/projects {path, start?, template?, labels?} → 201 { project, entry? } | 409 { error, project }
+ *   DELETE /ctl/projects/:projectId                → 200 { removed } | 409 { error }
+ *   GET  /ctl/settings                             -> SettingsModel
+ *   GET  /ctl/worktrees/:daemonId/delete-info      -> worktree_delete_info payload
+ *   POST /ctl/spawn    {cwd, template?, name?, labels?} -> RegistryEntry
  *   POST /ctl/add      {name, url, token?, labels?, cwd?} → RegistryEntry
  *   POST /ctl/provision {name, labels?}            → RegistryEntry (spawn hook)
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
  *   POST /ctl/remove   {selector}                  → { removed: string[] }
  *   POST /ctl/prompt   {selector, text, waitMs?}   → PromptResult[] | { submitted: string[] }
- *   POST /ctl/settings/set {path, value}           → SettingsModel (400 bad path/value)
+ *   POST /ctl/settings/set {path, value}           -> SettingsModel (400 bad path/value)
+ *   POST /ctl/projects/:id/worktrees               -> create or add-existing worktree -> 201 { entry }
+ *   DELETE /ctl/worktrees/:daemonId {deleteBranch?} -> stop -> remove entry -> git worktree remove
  *
  * /ctl/provision runs config.spawnHook via `sh -c` with env OMP_HOOK_NAME /
  * OMP_HOOK_LABELS and a 60s deadline; the hook's last non-empty stdout line
@@ -37,6 +42,7 @@ import type { Server } from "bun";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import type { RegisteredProject } from "../shared/protocol";
 import type { FleetConfig } from "./config";
 import { loadConfig, resolveConfigPath } from "./config";
 import type { RegistryEntry } from "./registry";
@@ -52,9 +58,21 @@ import { FleetEdge } from "./edge";
 import { FleetEventLog, type FleetFacts } from "./events";
 import { createFleetSettings, type FleetSettings, type FleetSettingsOptions } from "./settings";
 import { createStatsApp } from "./stats/index";
+import {
+	createWorktree,
+	deleteWorktree,
+	mergeUnregisteredWorktrees,
+	registerWorktreeEntry,
+	validateUnregisteredWorktree,
+	worktreeDeleteInfo,
+	WorktreeDirtyError,
+	WorktreeNotOwnedError,
+	WorktreeTargetExistsError,
+	type CreateWorktreeResult,
+} from "./worktrees";
 
 const DEFAULT_PORT = 4722;
-const DEFAULT_STATE_PATH = join(homedir(), ".omp", "fleet", "state.json");
+const DEFAULT_STATE_PATH = join(homedir(), ".ompweb", "fleet", "state.json");
 
 /**
  * Historical transcripts/stats API (read-only stats.db + session files),
@@ -145,6 +163,13 @@ function optionalString(body: Record<string, unknown>, key: string): string | un
 	return value;
 }
 
+function optionalBoolean(body: Record<string, unknown>, key: string): boolean | undefined {
+	const value = body[key];
+	if (value === undefined) return undefined;
+	if (typeof value !== "boolean") throw new HttpError(400, `invalid field: ${key}`);
+	return value;
+}
+
 function optionalLabels(body: Record<string, unknown>): string[] | undefined {
 	const value = body["labels"];
 	if (value === undefined) return undefined;
@@ -162,6 +187,11 @@ function optionalWaitMs(body: Record<string, unknown>): number | undefined {
 	}
 	return value;
 }
+
+/** Worktree route patterns (daemon ids / project ids are [^/]+ segments). */
+const PROJECT_WORKTREES_ROUTE = /^\/ctl\/projects\/([^/]+)\/worktrees$/;
+const WORKTREE_DELETE_ROUTE = /^\/ctl\/worktrees\/([^/]+)$/;
+const WORKTREE_INFO_ROUTE = /^\/ctl\/worktrees\/([^/]+)\/delete-info$/;
 
 /**
  * Reject endpoints that are not ws:// or wss:// URLs. The check itself lives
@@ -451,11 +481,26 @@ class FleetServerImpl implements FleetServer {
 				if (statsHandled !== null) return statsHandled;
 			}
 			if (req.method === "GET") {
+				// Delete-confirmation evidence for one worktree daemon.
+				const infoMatch = WORKTREE_INFO_ROUTE.exec(path);
+				if (infoMatch) return await this.#handleWorktreeDeleteInfo(infoMatch[1]);
 				switch (path) {
 					case "/ctl/sessions":
 						return json(this.registry.list());
-					case "/ctl/projects":
-						return json(await listProjects(this.config.roots));
+					case "/ctl/projects": {
+						// Discovery stays ephemeral + read-only; the registered
+						// set is merged alongside so clients see both. Each
+						// registered project also contributes its unregistered
+						// linked worktrees (deduped by realpath, roster cwds
+						// excluded) so clients see them even when the main
+						// checkout is outside the discovery roots.
+						const projects = await mergeUnregisteredWorktrees(
+							await listProjects(this.config.roots),
+							this.registry.projects(),
+							this.registry.list().map((entry) => entry.cwd),
+						);
+						return json({ projects, registered: this.registry.projects() });
+					}
 					case "/ctl/settings":
 						// Unattached settings model (roster mode): the fleet
 						// service lazily initializes the process-global
@@ -466,7 +511,13 @@ class FleetServerImpl implements FleetServer {
 				}
 			}
 			if (req.method === "POST") {
+				// Create-new ({name, baseRef?, existingBranch?, start?}) or
+				// add-existing ({worktreePath, start?}) for one project.
+				const worktreesMatch = PROJECT_WORKTREES_ROUTE.exec(path);
+				if (worktreesMatch) return await this.#handleCreateOrAddWorktree(req, worktreesMatch[1]);
 				switch (path) {
+					case "/ctl/projects":
+						return await this.#handleAddProject(req);
 					case "/ctl/spawn":
 						return await this.#handleSpawn(req);
 					case "/ctl/add":
@@ -484,6 +535,14 @@ class FleetServerImpl implements FleetServer {
 					default:
 						return json({ error: "not found" }, 404);
 				}
+			}
+			if (req.method === "DELETE") {
+				const projectMatch = /^\/ctl\/projects\/([^/]+)$/.exec(path);
+				if (projectMatch) return await this.#handleRemoveProject(projectMatch[1]);
+				// Worktree deletion: stop daemon -> remove entry -> git worktree remove.
+				const worktreeMatch = WORKTREE_DELETE_ROUTE.exec(path);
+				if (worktreeMatch) return await this.#handleDeleteWorktree(req, worktreeMatch[1]);
+				return json({ error: "not found" }, 404);
 			}
 			return json({ error: "method not allowed" }, 405);
 		} catch (err) {
@@ -514,6 +573,65 @@ class FleetServerImpl implements FleetServer {
 		if (resolved === null) throw new HttpError(400, `not a directory: ${cwd}`);
 		const entry = await this.supervisor.spawn({ cwd: resolved, template, name, labels });
 		return json(entry);
+	}
+
+	/**
+	 * POST /ctl/projects { path, start?, template?, labels? }: register the
+	 * project's realpath (registry.addProject validates + realpath-normalizes
+	 * and dedups). A path that is not an existing directory or git repo is
+	 * the registry's validation error surfaced as 400; a realpath that is
+	 * already registered dedups to the EXISTING project → 409 carrying it.
+	 * With `start: true` the main checkout is spawned via the supervisor
+	 * (template/labels passthrough) and the fresh entry is tagged with the
+	 * projectId. Staged: registration happens first, so a failed spawn
+	 * reports 500 (stage named in the message) but the project stays
+	 * registered. Returns 201 { project, entry? }.
+	 */
+	async #handleAddProject(req: Request): Promise<Response> {
+		const body = await readJson(req);
+		const path = requireString(body, "path");
+		const start = optionalBoolean(body, "start") ?? false;
+		const template = optionalString(body, "template");
+		const labels = optionalLabels(body);
+		if (labels !== undefined && labels.some((label) => label.includes("\0"))) {
+			throw new HttpError(400, "labels must not contain NUL");
+		}
+		const before = this.registry.projects();
+		let project: RegisteredProject;
+		try {
+			project = await this.registry.addProject(path);
+		} catch (err) {
+			// Validation failure (missing dir / not a git repo) → 400.
+			throw new HttpError(400, err instanceof Error ? err.message : String(err));
+		}
+		if (before.some((p) => p.projectId === project.projectId)) {
+			return json({ error: `project already registered: ${project.projectId}`, project }, 409);
+		}
+		if (!start) return json({ project }, 201);
+		try {
+			const entry = await this.supervisor.spawn({ cwd: project.path, template, labels });
+			const tagged = this.registry.update(entry.daemonId, { projectId: project.projectId });
+			return json({ project, entry: tagged }, 201);
+		} catch (err) {
+			// The project stays registered; the 500 names the stage.
+			throw new HttpError(500, `project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	/**
+	 * DELETE /ctl/projects/:projectId: deregister a project (never touches
+	 * disk). 409 when roster entries still reference it — the message names
+	 * the blocking daemon ids (registry.removeProject). Unknown ids → 404.
+	 */
+	async #handleRemoveProject(projectId: string): Promise<Response> {
+		try {
+			this.registry.removeProject(projectId);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			if (message.startsWith("unknown project id")) throw new HttpError(404, message);
+			throw new HttpError(409, message);
+		}
+		return json({ removed: projectId });
 	}
 
 	async #handleAdd(req: Request): Promise<Response> {
@@ -655,16 +773,138 @@ class FleetServerImpl implements FleetServer {
 			throw new HttpError(400, err instanceof Error ? err.message : String(err));
 		}
 	}
+
+	/**
+	 * POST /ctl/projects/:projectId/worktrees. Two shapes: create-new
+	 * `{ name, baseRef?, existingBranch?, start? }` (git worktree add under
+	 * workspaceDir, lazily creating the workspace root) and add-existing
+	 * `{ worktreePath, start? }` (a discovered-but-unregistered linked
+	 * worktree of the project). Both register a roster entry (mode
+	 * "spawned", projectId + worktreeOf tagged) and spawn a daemon only when
+	 * `start` is true. Staged: a failure at any stage names the stage and
+	 * leaves prior stages intact (a created-but-unspawned worktree shows up
+	 * in discovery / the Add-existing tab).
+	 */
+	async #handleCreateOrAddWorktree(req: Request, projectId: string): Promise<Response> {
+		const body = await readJson(req);
+		const project = this.registry.projects().find((p) => p.projectId === projectId);
+		if (!project) throw new HttpError(404, `unknown project: ${projectId}`);
+		const worktreePath = optionalString(body, "worktreePath");
+		const start = optionalBoolean(body, "start");
+		if (worktreePath === undefined) {
+			// Create-new.
+			const name = requireString(body, "name");
+			let created: CreateWorktreeResult;
+			try {
+				created = await createWorktree(project, name, {
+					workspaceDir: this.config.workspaceDir,
+					baseRef: optionalString(body, "baseRef"),
+					existingBranch: optionalString(body, "existingBranch"),
+				});
+			} catch (err) {
+				const status = err instanceof WorktreeTargetExistsError ? 409 : 400;
+				throw new HttpError(status, `create worktree failed: ${err instanceof Error ? err.message : String(err)}`);
+			}
+			let entry: RegistryEntry;
+			try {
+				entry = await registerWorktreeEntry(this.registry, this.supervisor, project, created.path, { start });
+			} catch (err) {
+				throw new HttpError(500, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+			}
+			this.eventLog.add("info", "server", `worktree created ${created.path} (${created.branch})`, entry.daemonId);
+			return json({ entry }, 201);
+		}
+		// Add-existing: validate it is an unregistered linked worktree of the project.
+		let resolved: string;
+		try {
+			resolved = await validateUnregisteredWorktree(worktreePath, project, this.registry.list().map((e) => e.cwd));
+		} catch (err) {
+			const status = err instanceof Error && err.message.startsWith("worktree already registered") ? 409 : 400;
+			throw new HttpError(status, err instanceof Error ? err.message : String(err));
+		}
+		let entry: RegistryEntry;
+		try {
+			entry = await registerWorktreeEntry(this.registry, this.supervisor, project, resolved, { start });
+		} catch (err) {
+			throw new HttpError(500, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		this.eventLog.add("info", "server", `worktree registered ${resolved}`, entry.daemonId);
+		return json({ entry }, 201);
+	}
+
+	/**
+	 * GET /ctl/worktrees/:daemonId/delete-info: guard evidence for the
+	 * delete confirmation (worktree_delete_info payload). Never deletes.
+	 */
+	async #handleWorktreeDeleteInfo(daemonId: string): Promise<Response> {
+		const entry = this.registry.get(daemonId);
+		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
+		const info = await worktreeDeleteInfo(entry.cwd ?? "", this.config.workspaceDir);
+		return json({ daemonId, ...info });
+	}
+
+	/**
+	 * DELETE /ctl/worktrees/:daemonId {deleteBranch?}: stop the daemon,
+	 * evict it from the roster, then git-remove the managed worktree (and
+	 * optionally `git branch -d` it). The ownership + dirty guards run
+	 * BEFORE any mutation: a refusal (403 not owned / 409 dirty — no
+	 * --force in v1) leaves the roster and daemon untouched. Session
+	 * transcripts live under the agent dir, never inside the worktree, so
+	 * nothing outside workspaceDir is ever removed.
+	 */
+	async #handleDeleteWorktree(req: Request, daemonId: string): Promise<Response> {
+		// The body is optional (`{ deleteBranch?: boolean }`) — a bodyless
+		// DELETE must not 400.
+		const raw = await req.text();
+		let body: Record<string, unknown>;
+		if (raw.trim() === "") {
+			body = {};
+		} else {
+			try {
+				body = JSON.parse(raw);
+			} catch {
+				throw new HttpError(400, "invalid JSON body");
+			}
+			if (typeof body !== "object" || body === null || Array.isArray(body)) {
+				throw new HttpError(400, "request body must be a JSON object");
+			}
+		}
+		const deleteBranch = optionalBoolean(body, "deleteBranch");
+		const entry = this.registry.get(daemonId);
+		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
+		const path = entry.cwd ?? "";
+		const info = await worktreeDeleteInfo(path, this.config.workspaceDir);
+		if (!info.owned) throw new HttpError(403, info.reason ?? `not a managed worktree: ${path}`);
+		if (info.dirty) throw new HttpError(409, info.reason ?? `worktree has uncommitted changes: ${path}`);
+		// Stop + evict (removal-time cleanup: #24 prune drops supervisor state).
+		if (entry.mode === "spawned") {
+			await this.supervisor.prune(daemonId);
+		} else {
+			this.connector.drop(daemonId);
+		}
+		this.registry.remove(daemonId);
+		// Git removal; the guards are re-asserted inside (race backstop).
+		let deleted: Awaited<ReturnType<typeof deleteWorktree>>;
+		try {
+			deleted = await deleteWorktree(path, this.config.workspaceDir, { deleteBranch });
+		} catch (err) {
+			if (err instanceof WorktreeNotOwnedError) throw new HttpError(403, err.message);
+			if (err instanceof WorktreeDirtyError) throw new HttpError(409, err.message);
+			throw new HttpError(500, `delete worktree failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		this.eventLog.add("info", "server", `worktree deleted ${deleted.path}${deleted.branch !== undefined ? ` (${deleted.branch})` : ""}`, daemonId);
+		return json({ removed: daemonId, worktree: deleted });
+	}
 }
 
 export async function startFleet(
-	opts: { port?: number; statePath?: string; configPath?: string; settings?: FleetSettingsOptions } = {},
+	opts: { port?: number; statePath?: string; configPath?: string; workspaceDir?: string; settings?: FleetSettingsOptions } = {},
 ): Promise<FleetServer> {
 	const statePath = resolveStatePath(opts.statePath);
 	const registry = new Registry(statePath);
 	await registry.load();
 	const configPath = resolveConfigPath(opts.configPath);
-	const config = await loadConfig(opts.configPath);
+	const config = await loadConfig(opts.configPath, { workspaceDir: opts.workspaceDir });
 	return new FleetServerImpl(registry, config, resolvePort(opts.port), {
 		statePath,
 		// Null when no config file exists at the resolved location (defaults apply).

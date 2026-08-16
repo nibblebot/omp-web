@@ -5,9 +5,10 @@
  * /ctl control API:
  *
  *   - GET /events is the browser SSE downlink. Every open stream gets an
- *     immediate roster + merged-daemons priming (edge-local seqs 1..k,
- *     k < SSE_DELTA_SEQ_START); live `roster` / `daemon_status` / `daemons`
- *     broadcasts and proxied daemon frames follow as SSE events with
+ *     immediate roster + merged-daemons + registered-projects priming
+ *     (edge-local seqs 1..k, k < SSE_DELTA_SEQ_START); live `roster` /
+ *     `daemon_status` / `daemons` / `registered_projects` broadcasts and
+ *     proxied daemon frames follow as SSE events with
  *     edge-local monotonic seqs from SSE_DELTA_SEQ_START, kept in a
  *     per-client SseRing (cap SSE_RING_CAP, byte budget SSE_RING_BYTES) for
  *     Last-Event-ID resume: N ≥ SSE_DELTA_SEQ_START replays ring.after(N)
@@ -81,6 +82,7 @@ import {
 	type ClientCommand,
 	type DaemonEntry,
 	type DaemonInfo,
+	type RegisteredProject,
 	type ServerFrame,
 	type SessionScopedFrame,
 } from "../shared/protocol";
@@ -93,6 +95,17 @@ import { DaemonsAggregator } from "./daemons-aggregator";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
 import type { FleetEventLog, FleetFacts } from "./events";
+import {
+	createWorktree,
+	deleteWorktree,
+	isPathUnder,
+	mergeUnregisteredWorktrees,
+	realpathOf,
+	registerWorktreeEntry,
+	validateUnregisteredWorktree,
+	worktreeDeleteInfo,
+	type CreateWorktreeResult,
+} from "./worktrees";
 
 /** How long a proxy attach waits for the daemon to become ready (contract: 60s). */
 const ATTACH_WAIT_READY_MS = 60_000;
@@ -157,7 +170,14 @@ const BROWSER_COMMAND_LIST = [
 	"spawn_resume",
 	"stop",
 	"remove",
+	"add_project",
+	"remove_project",
 	"attach",
+	// Worktree lifecycle (Phase 4): create/add/delete + delete-info evidence.
+	"create_worktree",
+	"add_worktree",
+	"delete_worktree",
+	"worktree_delete_info",
 	// Forwarded to the attached daemon's POST /command.
 	"call",
 	"login_code",
@@ -349,9 +369,12 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
 /**
  * Roster serialization: the DaemonEntry fields of a registry entry (never
  * token/endpoint/template/registeredAt) plus a live uptime in seconds since
- * readyAt (or registeredAt when never ready) and pid.
+ * readyAt (or registeredAt when never ready) and pid. `workspaceDir` (the
+ * fleet managed-worktree root) computes `managed`: true when the entry's cwd
+ * realpath is under it — the roster signal the close-out UI uses to offer
+ * worktree deletion.
  */
-export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
+export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): DaemonEntry {
 	const uptimeBase = entry.readyAt ?? entry.registeredAt;
 	const roster: DaemonEntry = {
 		daemonId: entry.daemonId,
@@ -364,6 +387,10 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 		uptime: Math.max(0, Math.floor((Date.now() - uptimeBase) / 1000)),
 	};
 	if (entry.worktreeOf !== undefined) roster.worktreeOf = entry.worktreeOf;
+	if (entry.projectId !== undefined) roster.projectId = entry.projectId;
+	if (workspaceDir !== undefined && workspaceDir !== "" && entry.cwd !== "") {
+		if (isPathUnder(realpathOf(entry.cwd), realpathOf(workspaceDir))) roster.managed = true;
+	}
 	if (entry.branch !== undefined) roster.branch = entry.branch;
 	if (entry.git !== undefined) roster.git = { ...entry.git };
 	if (entry.lastSessionFile !== undefined) roster.lastSessionFile = entry.lastSessionFile;
@@ -415,6 +442,11 @@ export class FleetEdge {
 		this.#broadcastRoster();
 	};
 
+	/** Project-set mutations only; the frame is re-derivable from priming, so it is never ringed. */
+	readonly #onProjectsChange = (): void => {
+		this.#broadcastRegisteredProjects();
+	};
+
 	constructor(
 		deps: EdgeDeps,
 		opts?: {
@@ -445,6 +477,9 @@ export class FleetEdge {
 		this.#pipeBackoffMaxMs = opts?.pipeBackoffMaxMs ?? PIPE_BACKOFF_MAX_MS;
 		this.#pipeMaxRedials = opts?.pipeMaxRedials ?? PIPE_MAX_REDIALS;
 		deps.registry.onChange = this.#onRegistryChange;
+		// Project-set mutations are rare and the frame is re-derivable from
+		// priming, so they broadcast via a dedicated hook, never ringed.
+		deps.registry.onProjectsChange = this.#onProjectsChange;
 		// Tap daemons that already exist at construction (state.json load).
 		this.#reconcileDaemonTaps();
 	}
@@ -498,6 +533,9 @@ export class FleetEdge {
 	close(): void {
 		if (this.#registry.onChange === this.#onRegistryChange) {
 			this.#registry.onChange = null;
+		}
+		if (this.#registry.onProjectsChange === this.#onProjectsChange) {
+			this.#registry.onProjectsChange = null;
 		}
 		for (const unsubscribe of this.#daemonTaps.values()) unsubscribe();
 		this.#daemonTaps.clear();
@@ -561,10 +599,12 @@ export class FleetEdge {
 					client.stream = stream;
 					this.#browsers.add(stream);
 					this.#startKeepalive();
-					// Priming: roster + merged daemons (seqs 1..k, k < SSE_DELTA_SEQ_START).
+					// Priming: roster + merged daemons + registered projects
+					// (seqs 1..k, k < SSE_DELTA_SEQ_START).
 					let seq = 1;
-					this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "roster", daemons: this.#registry.list().map(toRosterEntry) }, seq++));
+					this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "roster", daemons: this.#registry.list().map((entry) => toRosterEntry(entry, this.#config.workspaceDir)) }, seq++));
 					this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "daemons", daemons: this.#daemonsAggregator.merge() }, seq++));
+					this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "registered_projects", projects: this.#registry.projects() }, seq++));
 					// Resume: only a delta-era id (≥ SSE_DELTA_SEQ_START) replays
 					// the ring; anything below means priming carries full state.
 					const last = lastEventId === null ? NaN : Number(lastEventId);
@@ -692,6 +732,84 @@ export class FleetEdge {
 				void this.#handleRemove(stream, daemonId);
 				break;
 			}
+			case "add_project": {
+				const path = typeof cmd.path === "string" && cmd.path !== "" ? cmd.path : undefined;
+				if (path === undefined) {
+					this.#sendError(stream, "add_project: missing path");
+					break;
+				}
+				const start = cmd.start === true;
+				const template = typeof cmd.template === "string" && cmd.template !== "" ? cmd.template : undefined;
+				let labels: string[] | undefined;
+				try {
+					labels = parseSpawnLabels(cmd.labels);
+				} catch (err) {
+					this.#sendError(stream, err instanceof Error ? err.message : String(err));
+					break;
+				}
+				void this.#handleAddProject(stream, path, start, template, labels);
+				break;
+			}
+			case "remove_project": {
+				const projectId = typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
+				if (projectId === undefined) {
+					this.#sendError(stream, "remove_project: missing projectId");
+					break;
+				}
+				void this.#handleRemoveProject(stream, projectId);
+				break;
+			}
+			case "create_worktree": {
+				const projectId = typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
+				if (projectId === undefined) {
+					this.#sendError(stream, "create_worktree: missing projectId");
+					break;
+				}
+				const name = typeof cmd.name === "string" && cmd.name !== "" ? cmd.name : undefined;
+				if (name === undefined) {
+					this.#sendError(stream, "create_worktree: missing name");
+					break;
+				}
+				const baseRef = typeof cmd.baseRef === "string" && cmd.baseRef !== "" ? cmd.baseRef : undefined;
+				const existingBranch = typeof cmd.existingBranch === "string" && cmd.existingBranch !== "" ? cmd.existingBranch : undefined;
+				const start = cmd.start === true ? true : undefined;
+				void this.#handleCreateWorktree(stream, projectId, name, { baseRef, existingBranch, start });
+				break;
+			}
+			case "add_worktree": {
+				const projectId = typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
+				if (projectId === undefined) {
+					this.#sendError(stream, "add_worktree: missing projectId");
+					break;
+				}
+				const worktreePath = typeof cmd.worktreePath === "string" && cmd.worktreePath !== "" ? cmd.worktreePath : undefined;
+				if (worktreePath === undefined) {
+					this.#sendError(stream, "add_worktree: missing worktreePath");
+					break;
+				}
+				const start = cmd.start === true ? true : undefined;
+				void this.#handleAddWorktree(stream, projectId, worktreePath, start);
+				break;
+			}
+			case "delete_worktree": {
+				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				if (daemonId === undefined) {
+					this.#sendError(stream, "delete_worktree: missing daemonId");
+					break;
+				}
+				const deleteBranch = cmd.deleteBranch === true ? true : undefined;
+				void this.#handleDeleteWorktree(stream, daemonId, deleteBranch);
+				break;
+			}
+			case "worktree_delete_info": {
+				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				if (daemonId === undefined) {
+					this.#sendError(stream, "worktree_delete_info: missing daemonId");
+					break;
+				}
+				void this.#handleWorktreeDeleteInfo(stream, daemonId);
+				break;
+			}
 			case "attach": {
 				const daemonId = typeof cmd.sessionId === "string" && cmd.sessionId !== "" ? cmd.sessionId : undefined;
 				if (daemonId === undefined) {
@@ -717,7 +835,11 @@ export class FleetEdge {
 
 	async #handleListProjects(stream: BrowserStream): Promise<void> {
 		try {
-			const projects = await listProjects(this.#config.roots);
+			const projects = await mergeUnregisteredWorktrees(
+				await listProjects(this.#config.roots),
+				this.#registry.projects(),
+				this.#registry.list().map((entry) => entry.cwd),
+			);
 			this.#sendAnswer(stream, { type: "projects", projects });
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
@@ -733,6 +855,180 @@ export class FleetEdge {
 			}
 			// Progress surfaces via roster/daemon_status broadcasts.
 			await this.#supervisor.spawn({ cwd: resolved, template, labels });
+		} catch (err) {
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	/**
+	 * add_project: register the project's realpath (registry.addProject
+	 * validates + dedups). A dedup answers an error frame naming the
+	 * existing projectId. With start:true the main checkout is spawned via
+	 * the supervisor (template/labels passthrough) and the fresh entry is
+	 * tagged with the projectId (registry.update post-spawn — the
+	 * supervisor's spawn creates the entry, this tags it). Success surfaces
+	 * via the registered_projects + roster broadcasts, never a unicast.
+	 */
+	async #handleAddProject(stream: BrowserStream, path: string, start: boolean, template: string | undefined, labels: string[] | undefined): Promise<void> {
+		try {
+			const before = this.#registry.projects();
+			let project: RegisteredProject;
+			try {
+				project = await this.#registry.addProject(path);
+			} catch (err) {
+				this.#sendError(stream, err instanceof Error ? err.message : String(err));
+				return;
+			}
+			if (before.some((p) => p.projectId === project.projectId)) {
+				// Dedup: the realpath is already registered.
+				this.#sendError(stream, `project already registered: ${project.projectId}`);
+				return;
+			}
+			if (start) {
+				try {
+					const entry = await this.#supervisor.spawn({ cwd: project.path, template, labels });
+					this.#registry.update(entry.daemonId, { projectId: project.projectId });
+				} catch (err) {
+					// The project stays registered; the error names the stage.
+					this.#sendError(stream, `project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+					return;
+				}
+			}
+		} catch (err) {
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	/**
+	 * remove_project: deregister a project (never touches disk). While any
+	 * roster entry references it, registry.removeProject throws and the
+	 * error frame names the blocking daemon ids.
+	 */
+	async #handleRemoveProject(stream: BrowserStream, projectId: string): Promise<void> {
+		try {
+			this.#registry.removeProject(projectId);
+		} catch (err) {
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	/**
+	 * create_worktree: git worktree add under workspaceDir for a registered
+	 * project (branch = slugified name; existingBranch attaches instead).
+	 * With start:true the worktree is spawned (registerWorktreeEntry) —
+	 * progress rides the roster/daemon_status broadcasts; the supervisor
+	 * only spawns, attach/session-picker are client-side. Staged: a failure
+	 * names the stage and leaves prior stages intact (a created-but-
+	 * unspawned worktree shows up in discovery / the Add-existing tab).
+	 */
+	async #handleCreateWorktree(
+		stream: BrowserStream,
+		projectId: string,
+		name: string,
+		opts: { baseRef?: string; existingBranch?: string; start?: boolean },
+	): Promise<void> {
+		const project = this.#registry.projects().find((p) => p.projectId === projectId);
+		if (!project) {
+			this.#sendError(stream, `unknown project: ${projectId}`);
+			return;
+		}
+		let created: CreateWorktreeResult;
+		try {
+			created = await createWorktree(project, name, {
+				workspaceDir: this.#config.workspaceDir,
+				baseRef: opts.baseRef,
+				existingBranch: opts.existingBranch,
+			});
+		} catch (err) {
+			this.#sendError(stream, `create worktree failed: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
+		try {
+			await registerWorktreeEntry(this.#registry, this.#supervisor, project, created.path, { start: opts.start });
+		} catch (err) {
+			this.#sendError(stream, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	/**
+	 * add_worktree: register a discovered-but-unregistered linked worktree of
+	 * the project (validated via validateUnregisteredWorktree) and optionally
+	 * spawn a daemon on it (start:true).
+	 */
+	async #handleAddWorktree(stream: BrowserStream, projectId: string, worktreePath: string, start: boolean | undefined): Promise<void> {
+		const project = this.#registry.projects().find((p) => p.projectId === projectId);
+		if (!project) {
+			this.#sendError(stream, `unknown project: ${projectId}`);
+			return;
+		}
+		let resolved: string;
+		try {
+			resolved = await validateUnregisteredWorktree(worktreePath, project, this.#registry.list().map((e) => e.cwd));
+		} catch (err) {
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+			return;
+		}
+		try {
+			await registerWorktreeEntry(this.#registry, this.#supervisor, project, resolved, { start });
+		} catch (err) {
+			this.#sendError(stream, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	/**
+	 * delete_worktree: stop the daemon, evict it from the roster, then git
+	 * worktree remove (owned + clean only; optional `git branch -d`). The
+	 * guards run BEFORE any mutation, so a refusal leaves the daemon and
+	 * roster untouched.
+	 */
+	async #handleDeleteWorktree(stream: BrowserStream, daemonId: string, deleteBranch: boolean | undefined): Promise<void> {
+		try {
+			const entry = this.#registry.get(daemonId);
+			if (!entry) {
+				this.#sendError(stream, `unknown daemon: ${daemonId}`);
+				return;
+			}
+			const path = entry.cwd ?? "";
+			const info = await worktreeDeleteInfo(path, this.#config.workspaceDir);
+			if (!info.owned) {
+				this.#sendError(stream, info.reason ?? `not a managed worktree: ${path}`);
+				return;
+			}
+			if (info.dirty) {
+				this.#sendError(stream, info.reason ?? `worktree has uncommitted changes: ${path}`);
+				return;
+			}
+			// A browser attached to the removed daemon must not keep a live pipe.
+			for (const s of this.#browsers) {
+				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
+			}
+			// Stop + evict (removal-time cleanup: #24 prune drops supervisor state).
+			if (entry.mode === "spawned") {
+				await this.#supervisor.prune(daemonId);
+			} else {
+				this.#connector.drop(daemonId);
+			}
+			// The roster broadcast rides registry.onChange.
+			this.#registry.remove(daemonId);
+			await deleteWorktree(path, this.#config.workspaceDir, { deleteBranch });
+		} catch (err) {
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	/**
+	 * worktree_delete_info: answer with the unicast guard-evidence frame
+	 * (owned/dirty/branch merge+push state) for the delete confirmation.
+	 */
+	async #handleWorktreeDeleteInfo(stream: BrowserStream, daemonId: string): Promise<void> {
+		try {
+			const entry = this.#registry.get(daemonId);
+			if (!entry) {
+				this.#sendError(stream, `unknown daemon: ${daemonId}`);
+				return;
+			}
+			const info = await worktreeDeleteInfo(entry.cwd ?? "", this.#config.workspaceDir);
+			this.#sendAnswer(stream, { type: "worktree_delete_info", daemonId, ...info });
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
@@ -1184,11 +1480,16 @@ export class FleetEdge {
 		this.#enqueue(stream, block);
 	}
 
-	/** Ring one client's copy of a broadcast delta; deliver when its stream is live. */
-	#broadcastTo(client: BrowserClient, frame: ServerFrame): void {
+	/**
+	 * Ring one client's copy of a broadcast; deliver when its stream is
+	 * live. `ring: false` still advances the client seq (like priming and
+	 * unicast answers) but leaves no ring entry — the frame must be
+	 * re-derivable from the next open's priming.
+	 */
+	#broadcastTo(client: BrowserClient, frame: ServerFrame, ring = true): void {
 		const seq = client.nextSeq++;
 		const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
-		client.ring.push(seq, block);
+		if (ring) client.ring.push(seq, block);
 		if (client.stream) this.#enqueue(client.stream, block);
 	}
 
@@ -1225,16 +1526,26 @@ export class FleetEdge {
 	 * Broadcast one frame to every browser. Named clients ring EVERY delta —
 	 * also while disconnected — so a Last-Event-ID resume replays the gap;
 	 * anonymous streams ring only what they receive (no resume contract).
+	 * `ring: false` skips the ring (re-derivable frames only, e.g.
+	 * registered_projects).
 	 */
-	#broadcast(frame: ServerFrame): void {
-		for (const stream of this.#browsers) this.#broadcastTo(stream.client, frame);
+	#broadcast(frame: ServerFrame, opts?: { ring?: boolean }): void {
+		const ring = opts?.ring ?? true;
+		for (const stream of this.#browsers) this.#broadcastTo(stream.client, frame, ring);
 		for (const client of this.#clients.values()) {
-			if (client.stream === null) this.#broadcastTo(client, frame);
+			if (client.stream === null) this.#broadcastTo(client, frame, ring);
 		}
 	}
 
 	#broadcastRoster(): void {
-		this.#broadcast({ type: "roster", daemons: this.#registry.list().map(toRosterEntry) });
+		this.#broadcast({ type: "roster", daemons: this.#registry.list().map((entry) => toRosterEntry(entry, this.#config.workspaceDir)) });
+	}
+
+	/** Broadcast the current registered-project set to every edge stream. */
+	#broadcastRegisteredProjects(): void {
+		// Never ringed: the frame is re-derivable from the next open's
+		// priming (which always carries the full project set).
+		this.#broadcast({ type: "registered_projects", projects: this.#registry.projects() }, { ring: false });
 	}
 
 	/**

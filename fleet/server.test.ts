@@ -8,11 +8,11 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../shared/protocol";
+import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME, type RegisteredProject } from "../shared/protocol";
 import { encodeSseEvent } from "../shared/sse";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
@@ -78,9 +78,11 @@ interface FakeStream {
  * on a pathless ws:// base (proving daemonHttpBase normalization). Records
  * the Bearer header, primes the status machine on stream open (hello_ok →
  * state → ready — no hello handshake on the wire), and answers prompt
- * calls with call_result + event frames on the stream.
+ * calls with call_result + event frames on the stream. `cwd` is the
+ * hello_ok.cwd reported to the connector (which rejects mismatches, so
+ * spawn tests must point it at the spawned entry's cwd).
  */
-function startFakeDaemon(token: string): FakeDaemon {
+function startFakeDaemon(token: string, cwd = FAKE_CWD): FakeDaemon {
 	const seen: FakeSeen = { authHeader: null, calls: [], closed: false };
 	let stream: FakeStream | null = null;
 	const nextSeq = { value: SSE_DELTA_SEQ_START };
@@ -115,7 +117,7 @@ function startFakeDaemon(token: string): FakeDaemon {
 							controller.enqueue(encoder.encode(encodeSseEvent(SSE_EVENT_NAME, frame, seq)));
 						},
 					};
-					prime(stream);
+					prime(stream, cwd);
 				},
 				cancel() {
 					seen.closed = true;
@@ -132,8 +134,8 @@ function startFakeDaemon(token: string): FakeDaemon {
 	};
 }
 
-function prime(stream: FakeStream) {
-	stream.write({ type: "hello_ok", proto: OMP_PROTO, name: "fake", cwd: FAKE_CWD, pid: 4242, version: "0.0.0-test", sessionFile: FAKE_SESSION_FILE }, 1);
+function prime(stream: FakeStream, cwd: string) {
+	stream.write({ type: "hello_ok", proto: OMP_PROTO, name: "fake", cwd, pid: 4242, version: "0.0.0-test", sessionFile: FAKE_SESSION_FILE }, 1);
 	stream.write({ type: "state", sessionId: "s1", state: FAKE_STATE }, 2);
 	stream.write({ type: "ready", readyAt: Date.now() }, 3);
 }
@@ -200,12 +202,135 @@ describe("fleet control plane", () => {
 		expect(body).toHaveLength(0);
 	});
 
-	test("GET /ctl/projects returns an array (empty roots)", async () => {
+	test("GET /ctl/projects returns the discovered scan merged with registered projects", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/projects`);
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as unknown[];
-		expect(Array.isArray(body)).toBe(true);
-		expect(body).toHaveLength(0);
+		const body = (await res.json()) as { projects?: unknown; registered?: unknown };
+		expect(Array.isArray(body.projects)).toBe(true);
+		expect(body.projects).toHaveLength(0);
+		expect(Array.isArray(body.registered)).toBe(true);
+		expect(body.registered).toHaveLength(0);
+
+		// A registered project (real git repo) appears in `registered`
+		// alongside the still-empty ephemeral discovery scan.
+		const repoDir = join(tmp, "registered-repo");
+		mkdirSync(repoDir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		const project = await server.registry.addProject(repoDir);
+		try {
+			const merged = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as {
+				projects: unknown[];
+				registered: Array<{ projectId: string }>;
+			};
+			expect(merged.registered).toHaveLength(1);
+			expect(merged.registered[0].projectId).toBe(project.projectId);
+		} finally {
+			server.registry.removeProject(project.projectId);
+		}
+	});
+
+	test("POST /ctl/projects registers a git repo and returns 201 with the project", async () => {
+		const repoDir = join(tmp, "ctl-add-project-repo");
+		mkdirSync(repoDir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		const res = await postJson(server.port, "/ctl/projects", { path: repoDir });
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { project?: { projectId?: string; path?: string; name?: string; addedAt?: number }; entry?: unknown };
+		expect(body.project?.projectId).toMatch(/^p\d+$/);
+		expect(body.project?.path).toBe(realpathSync(repoDir));
+		expect(body.project?.name).toBe(basename(repoDir));
+		expect(typeof body.project?.addedAt).toBe("number");
+		expect(body.entry).toBeUndefined();
+		// The registered project shows up in GET /ctl/projects.
+		const merged = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as { registered: Array<{ projectId: string }> };
+		expect(merged.registered.some((p) => p.projectId === body.project!.projectId)).toBe(true);
+		// Cleanup: the project has no daemons, so removal succeeds.
+		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/${body.project!.projectId}`, { method: "DELETE" });
+		expect(del.status).toBe(200);
+	});
+
+	test("POST /ctl/projects dedupes an already-registered realpath to 409 with the existing project", async () => {
+		const repoDir = join(tmp, "ctl-dedup-repo");
+		mkdirSync(repoDir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		const first = await postJson(server.port, "/ctl/projects", { path: repoDir });
+		expect(first.status).toBe(201);
+		const firstBody = (await first.json()) as { project: { projectId: string } };
+		try {
+			// Same realpath again (also via a trailing-slash variant): dedup → 409 + project.
+			const dup = await postJson(server.port, "/ctl/projects", { path: repoDir });
+			expect(dup.status).toBe(409);
+			const dupBody = (await dup.json()) as { error?: string; project?: { projectId?: string } };
+			expect(dupBody.error).toContain("already registered");
+			expect(dupBody.error).toContain(firstBody.project.projectId);
+			expect(dupBody.project?.projectId).toBe(firstBody.project.projectId);
+			// One registration only.
+			expect(server.registry.projects().filter((p) => p.path === realpathSync(repoDir))).toHaveLength(1);
+		} finally {
+			server.registry.removeProject(firstBody.project.projectId);
+		}
+	});
+
+	test("POST /ctl/projects 400s when the path is not a git repo", async () => {
+		const plainDir = join(tmp, "ctl-not-a-repo");
+		mkdirSync(plainDir, { recursive: true });
+		const res = await postJson(server.port, "/ctl/projects", { path: plainDir });
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toContain("not a git repository");
+	});
+
+	test("DELETE /ctl/projects/:id 409s naming daemons that still reference the project", async () => {
+		const repoDir = join(tmp, "ctl-blocked-repo");
+		mkdirSync(repoDir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		const res = await postJson(server.port, "/ctl/projects", { path: repoDir });
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { project: { projectId: string } };
+		// A daemon referencing the project blocks removal (no cascade).
+		const ref = server.registry.create({
+			name: "ref",
+			cwd: realpathSync(repoDir),
+			project: basename(repoDir),
+			labels: [],
+			mode: "spawned",
+			template: "test",
+			status: "asleep",
+			projectId: body.project.projectId,
+		});
+		try {
+			const del = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/${body.project.projectId}`, { method: "DELETE" });
+			expect(del.status).toBe(409);
+			const delBody = (await del.json()) as { error?: string };
+			expect(delBody.error).toContain("in use by daemons");
+			expect(delBody.error).toContain(ref.daemonId);
+			expect(server.registry.projects().some((p) => p.projectId === body.project.projectId)).toBe(true);
+			// Once the daemon is gone, removal succeeds.
+			server.registry.remove(ref.daemonId);
+			const ok = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/${body.project.projectId}`, { method: "DELETE" });
+			expect(ok.status).toBe(200);
+			const okBody = (await ok.json()) as { removed?: unknown };
+			expect(okBody.removed).toBe(body.project.projectId);
+			expect(server.registry.projects().some((p) => p.projectId === body.project.projectId)).toBe(false);
+		} finally {
+			server.registry.remove(ref.daemonId);
+			try {
+				server.registry.removeProject(body.project.projectId);
+			} catch {
+				// Already removed by the happy path above.
+			}
+		}
+	});
+
+	test("DELETE /ctl/projects/:id 404s for an unknown project id", async () => {
+		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/p999`, { method: "DELETE" });
+		expect(del.status).toBe(404);
+		const body = (await del.json()) as { error?: string };
+		expect(body.error).toContain("unknown project id");
 	});
 
 	test("GET /ctl/settings returns the unattached settings model", async () => {
@@ -433,6 +558,82 @@ describe("fleet control plane", () => {
 	test("unknown route 404s", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/nope`);
 		expect(res.status).toBe(404);
+	});
+});
+
+describe("POST /ctl/projects with start:true (Phase 3 spawn)", () => {
+	let tmp: string;
+	let statePath: string;
+	let configPath: string;
+	let server: FleetServer;
+	let fake: FakeDaemon;
+	let repoReal: string;
+
+	beforeAll(async () => {
+		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-add-repo-spawn-"));
+		statePath = join(tmp, "state.json");
+		configPath = join(tmp, "config.json");
+		// The spawn fixture: the fake omp-session reports the spawned cwd in
+		// hello_ok (the connector rejects a mismatch), so the fake starts
+		// with the repo's realpath before registration — the template's
+		// listening line points at it.
+		const repoDir = join(tmp, "repo");
+		mkdirSync(repoDir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		repoReal = realpathSync(repoDir);
+		fake = startFakeDaemon("spawn-token", repoReal);
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				roots: [],
+				templates: {
+					test: {
+						command: `printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}' && while :; do sleep 0.05; done`,
+					},
+				},
+				defaultTemplate: "test",
+			}),
+		);
+		server = await startFleet({ port: 0, statePath, configPath, settings: { registry: async () => [] } });
+	});
+
+	afterAll(async () => {
+		if (server !== undefined) await server.close();
+		if (fake !== undefined) fake.close();
+	});
+
+	test("start:true spawns on the project path, tags the entry's projectId, and reaches ready", async () => {
+		const repoDir = join(tmp, "repo");
+		const res = await postJson(server.port, "/ctl/projects", { path: repoDir, start: true, template: "test", labels: ["env=prod"] });
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { project: { projectId: string; path: string }; entry: RegistryEntry };
+		expect(body.project.path).toBe(repoReal);
+		expect(body.entry.mode).toBe("spawned");
+		expect(body.entry.cwd).toBe(repoReal);
+		expect(body.entry.projectId).toBe(body.project.projectId);
+		expect(body.entry.labels).toEqual(["env=prod"]);
+		// The supervisor's spawn dialed the fake: the connector reaches ready.
+		await waitFor(() => server.registry.get(body.entry.daemonId)?.status === "ready", 5000, "spawned entry ready");
+		expect(server.registry.get(body.entry.daemonId)?.projectId).toBe(body.project.projectId);
+	});
+
+	test("start:true with an unknown template 500s but the project stays registered", async () => {
+		const otherDir = join(tmp, "other-repo");
+		mkdirSync(otherDir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: otherDir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		const before = server.registry.projects().length;
+		const res = await postJson(server.port, "/ctl/projects", { path: otherDir, start: true, template: "no-such-template" });
+		expect(res.status).toBe(500);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toContain("spawn failed");
+		// The project stays registered (staged: registration happens first).
+		expect(server.registry.projects().some((p) => p.path === realpathSync(otherDir))).toBe(true);
+		expect(server.registry.projects().length).toBe(before + 1);
+		// No daemon entry was created for the failed spawn.
+		const project = server.registry.projects().find((p) => p.path === realpathSync(otherDir));
+		expect(server.registry.list().some((e) => e.projectId === project?.projectId)).toBe(false);
 	});
 });
 
@@ -867,3 +1068,323 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 	}
 	return buffer;
 }
+
+describe("worktree lifecycle routes", () => {
+	let tmp: string;
+	let statePath: string;
+	let configPath: string;
+	let workspaceDir: string;
+	let repoDir: string;
+	let server: FleetServer;
+	let project: RegisteredProject;
+
+	/** One `git -C <cwd> <args>` invocation against the real local repo. */
+	async function gitIn(cwd: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+		const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr] = await Promise.all([
+			Bun.readableStreamToText(proc.stdout),
+			Bun.readableStreamToText(proc.stderr),
+		]);
+		return { exitCode: await proc.exited, stdout, stderr };
+	}
+
+	beforeAll(async () => {
+		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-wt-routes-"));
+		statePath = join(tmp, "state.json");
+		configPath = join(tmp, "config.json");
+		workspaceDir = join(tmp, "workspaces");
+		// A real git repo (main checkout) to register.
+		repoDir = join(tmp, "repo");
+		mkdirSync(repoDir, { recursive: true });
+		const init = Bun.spawn(["git", "init", "-q", "-b", "main"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await init.exited).toBe(0);
+		await gitIn(repoDir, ["config", "user.email", "test@example.com"]);
+		await gitIn(repoDir, ["config", "user.name", "Test"]);
+		writeFileSync(join(repoDir, "readme.md"), "hello\n");
+		await gitIn(repoDir, ["add", "."]);
+		await gitIn(repoDir, ["commit", "-q", "-m", "init"]);
+		// The "local" template idles so a start:true spawn never reaches a
+		// real omp-session; the route tests stop the child themselves.
+		writeFileSync(
+			configPath,
+			JSON.stringify({ roots: [], templates: { local: { command: "sleep 30" } }, defaultTemplate: "local" }),
+		);
+		server = await startFleet({ port: 0, statePath, configPath, workspaceDir });
+		project = await server.registry.addProject(repoDir);
+	});
+
+	afterAll(async () => {
+		if (server !== undefined) await server.close();
+	});
+
+	test("POST /ctl/projects/:id/worktrees creates a managed worktree and registers the entry (start:false)", async () => {
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Feature Branch" });
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { entry?: RegistryEntry };
+		const entry = body.entry!;
+		expect(entry.projectId).toBe(project.projectId);
+		expect(entry.worktreeOf).toBe(project.name);
+		expect(entry.mode).toBe("spawned");
+		expect(entry.status).toBe("asleep");
+		const target = join(workspaceDir, project.name, "feature-branch");
+		expect(entry.cwd).toBe(target);
+		expect(existsSync(target)).toBe(true);
+		// Ownership marker records the owning repo realpath.
+		expect(readFileSync(join(workspaceDir, project.name, ".ompweb-repo"), "utf8").trim()).toBe(repoDir);
+		// git agrees: the worktree is listed with the slug branch.
+		const list = await gitIn(repoDir, ["worktree", "list", "--porcelain"]);
+		expect(list.stdout).toContain(target);
+		expect(list.stdout).toContain("branch refs/heads/feature-branch");
+	});
+
+	test("POST create with start:true also spawns a daemon on the worktree", async () => {
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Started", start: true });
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { entry?: RegistryEntry };
+		const entry = body.entry!;
+		expect(entry.projectId).toBe(project.projectId);
+		expect(entry.worktreeOf).toBe(project.name);
+		expect(entry.mode).toBe("spawned");
+		const target = join(workspaceDir, project.name, "started");
+		expect(entry.cwd).toBe(target);
+		expect(existsSync(target)).toBe(true);
+		// The spawned child idles (`sleep 30`); stop it so the suite ends clean.
+		await server.supervisor.stop(entry.daemonId);
+	});
+
+	test("POST add-existing registers a discovered-but-unregistered worktree (start:false)", async () => {
+		// A linked worktree created out-of-band with raw git — exactly what
+		// discovery's Add-existing tab would list.
+		const outside = join(tmp, "raw-worktree");
+		const add = await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", outside]);
+		expect(add.exitCode).toBe(0);
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { worktreePath: outside });
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { entry?: RegistryEntry };
+		const entry = body.entry!;
+		expect(entry.cwd).toBe(outside);
+		expect(entry.projectId).toBe(project.projectId);
+		expect(entry.worktreeOf).toBe(project.name);
+		expect(entry.mode).toBe("spawned");
+		expect(entry.status).toBe("asleep");
+	});
+
+	test("POST add-existing refuses the main checkout and non-worktree paths", async () => {
+		const main = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { worktreePath: repoDir });
+		expect(main.status).toBe(400);
+		const mainBody = (await main.json()) as { error?: string };
+		expect(mainBody.error).toContain("not a linked worktree");
+		const notRepo = join(tmp, "not-a-repo");
+		mkdirSync(notRepo, { recursive: true });
+		const plain = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { worktreePath: notRepo });
+		expect(plain.status).toBe(400);
+	});
+
+	test("POST add-existing refuses an already-registered worktree (409)", async () => {
+		const outside = join(tmp, "raw-worktree");
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { worktreePath: outside });
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toContain("already registered");
+	});
+
+	test("POST create 404s on an unknown project and 409s on a duplicate target", async () => {
+		const unknown = await postJson(server.port, "/ctl/projects/p999/worktrees", { name: "x" });
+		expect(unknown.status).toBe(404);
+		const dup = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Feature Branch" });
+		expect(dup.status).toBe(409);
+		const dupBody = (await dup.json()) as { error?: string };
+		expect(dupBody.error).toContain("create worktree failed");
+	});
+
+	test("GET /ctl/worktrees/:id/delete-info returns guard evidence (never deletes)", async () => {
+		const target = join(workspaceDir, project.name, "feature-branch");
+		const entry = server.registry.list().find((e) => e.cwd === target)!;
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}/delete-info`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { daemonId?: string; owned?: boolean; dirty?: boolean; branch?: string; merged?: boolean; unpushed?: boolean };
+		expect(body.daemonId).toBe(entry.daemonId);
+		expect(body.owned).toBe(true);
+		expect(body.dirty).toBe(false);
+		expect(body.branch).toBe("feature-branch");
+		expect(body.merged).toBe(true);
+		expect(body.unpushed).toBe(false);
+		// Unknown daemons 404.
+		const missing = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/d999/delete-info`);
+		expect(missing.status).toBe(404);
+	});
+
+	test("DELETE /ctl/worktrees/:id stops, evicts, and git-removes the worktree", async () => {
+		const target = join(workspaceDir, project.name, "feature-branch");
+		const entry = server.registry.list().find((e) => e.cwd === target)!;
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, { method: "DELETE" });
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { removed?: string; worktree?: { path?: string; branch?: string } };
+		expect(body.removed).toBe(entry.daemonId);
+		expect(body.worktree?.path).toBe(target);
+		expect(server.registry.get(entry.daemonId)).toBeUndefined();
+		expect(existsSync(target)).toBe(false);
+		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(target);
+	});
+
+	test("DELETE refuses a dirty worktree with 409, leaving entry and dir intact", async () => {
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Dirty" });
+		expect(res.status).toBe(201);
+		const entry = ((await res.json()) as { entry: RegistryEntry }).entry;
+		const target = entry.cwd;
+		writeFileSync(join(target, "scratch.txt"), "x\n");
+		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
+			method: "DELETE",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		expect(del.status).toBe(409);
+		const delBody = (await del.json()) as { error?: string };
+		expect(delBody.error).toContain("uncommitted changes");
+		// The refusal mutated nothing.
+		expect(server.registry.get(entry.daemonId)).toBeDefined();
+		expect(existsSync(target)).toBe(true);
+		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).toContain(target);
+	});
+
+	test("DELETE refuses a not-owned cwd with 403", async () => {
+		const rogue = server.registry.create({
+			name: "rogue",
+			cwd: join(tmp, "outside-rogue"),
+			project: "x",
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+		});
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${rogue.daemonId}`, { method: "DELETE" });
+		expect(res.status).toBe(403);
+		expect(server.registry.get(rogue.daemonId)).toBeDefined();
+		server.registry.remove(rogue.daemonId);
+	});
+
+	test("DELETE with deleteBranch:true also removes the merged branch (-d only)", async () => {
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Branchy" });
+		expect(res.status).toBe(201);
+		const entry = ((await res.json()) as { entry: RegistryEntry }).entry;
+		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
+			method: "DELETE",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ deleteBranch: true }),
+		});
+		expect(del.status).toBe(200);
+		const delBody = (await del.json()) as { worktree?: { branch?: string; branchDeleted?: boolean } };
+		expect(delBody.worktree?.branch).toBe("branchy");
+		expect(delBody.worktree?.branchDeleted).toBe(true);
+		expect((await gitIn(repoDir, ["branch", "--list", "branchy"])).stdout.trim()).toBe("");
+	});
+
+	test("DELETE on an unknown daemon 404s", async () => {
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/d999`, { method: "DELETE" });
+		expect(res.status).toBe(404);
+	});
+
+	test("CLI add-worktree creates via the route (selector by name, --no-start respected)", async () => {
+		const logs: string[] = [];
+		const originalLog = console.log;
+		console.log = (msg?: unknown) => {
+			logs.push(String(msg));
+		};
+		let code: number;
+		try {
+			code = await main(["add-worktree", project.name, "Cli Branch", "--no-start", "--port", String(server.port)]);
+		} finally {
+			console.log = originalLog;
+		}
+		expect(code).toBe(0);
+		const output = logs.join("\n");
+		expect(output).toContain("created worktree");
+		expect(output).toContain("cli-branch");
+		expect(output).toContain("not started");
+		expect(existsSync(join(workspaceDir, project.name, "cli-branch"))).toBe(true);
+	});
+
+	test("CLI add-worktree --existing registers a discovered worktree", async () => {
+		const outside = join(tmp, "cli-existing");
+		await gitIn(repoDir, ["worktree", "add", "-b", "cli-feat", outside]);
+		const logs: string[] = [];
+		const originalLog = console.log;
+		console.log = (msg?: unknown) => {
+			logs.push(String(msg));
+		};
+		let code: number;
+		try {
+			code = await main(["add-worktree", project.projectId, "--existing", outside, "--no-start", "--port", String(server.port)]);
+		} finally {
+			console.log = originalLog;
+		}
+		expect(code).toBe(0);
+		expect(logs.join("\n")).toContain("registered worktree");
+		expect(server.registry.list().some((e) => e.cwd === outside && e.projectId === project.projectId)).toBe(true);
+	});
+
+	test("CLI rm-worktree deletes via the route (--delete-branch removes the merged branch)", async () => {
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Rm Me", start: false });
+		expect(res.status).toBe(201);
+		const entry = ((await res.json()) as { entry: RegistryEntry }).entry;
+		const target = entry.cwd;
+		const logs: string[] = [];
+		const originalLog = console.log;
+		console.log = (msg?: unknown) => {
+			logs.push(String(msg));
+		};
+		let code: number;
+		try {
+			code = await main(["rm-worktree", entry.daemonId, "--delete-branch", "--port", String(server.port)]);
+		} finally {
+			console.log = originalLog;
+		}
+		expect(code).toBe(0);
+		expect(logs.join("\n")).toContain("removed worktree daemon");
+		expect(server.registry.get(entry.daemonId)).toBeUndefined();
+		expect(existsSync(target)).toBe(false);
+		// The merged branch was `git branch -d`-ed (never -D).
+		expect((await gitIn(repoDir, ["branch", "--list", "rm-me"])).stdout.trim()).toBe("");
+	});
+
+	test("GET /ctl/projects merges a registered project's unregistered linked worktrees and drops roster cwds", async () => {
+		// A linked worktree OUTSIDE the discovery roots (roots are [] here):
+		// only the registry-backed merge can surface it.
+		const wtPath = join(tmp, "ctl-merge-wt");
+		const add = await gitIn(repoDir, ["worktree", "add", "-q", "-b", "merge-feat", wtPath]);
+		expect(add.exitCode).toBe(0);
+		const wtReal = realpathSync(wtPath);
+		let entry: RegistryEntry | undefined;
+		try {
+			const merged = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as {
+				projects: Array<{ name: string; path: string; isWorktree: boolean; worktreeOf?: string; branch?: string }>;
+			};
+			expect(merged.projects).toContainEqual({
+				name: "ctl-merge-wt",
+				path: wtReal,
+				isWorktree: true,
+				worktreeOf: project.name,
+				branch: "merge-feat",
+			});
+
+			// A roster entry for that cwd marks it managed → the row
+			// disappears from the projects array.
+			entry = server.registry.create({
+				name: "ctl-merge-wt",
+				cwd: wtReal,
+				project: "ctl-merge-wt",
+				projectId: project.projectId,
+				worktreeOf: project.name,
+				labels: [],
+				mode: "spawned",
+				status: "asleep",
+			});
+			const merged2 = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as {
+				projects: Array<{ path: string }>;
+			};
+			expect(merged2.projects.some((p) => p.path === wtReal)).toBe(false);
+		} finally {
+			if (entry) server.registry.remove(entry.daemonId);
+			await gitIn(repoDir, ["worktree", "remove", "--force", wtReal]);
+		}
+	});
+});

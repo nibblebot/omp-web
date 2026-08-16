@@ -188,6 +188,7 @@ function makeConfig(script: string): FleetConfig {
 		roots: [],
 		templates: { test: { command: `sh ${script} {token} {labels} {resume}` } },
 		defaultTemplate: "test",
+		workspaceDir: "/tmp/fleet-test-ws",
 	};
 }
 
@@ -200,6 +201,7 @@ function makeTierConfig(scriptDefault: string, scriptOverride: string, projectTe
 			other: { command: `sh ${scriptOverride} {token} {labels} {resume}` },
 		},
 		defaultTemplate: "test",
+		workspaceDir: "/tmp/fleet-test-ws",
 		...(projectTemplates !== undefined ? { projectTemplates } : {}),
 	};
 }
@@ -515,6 +517,7 @@ describe("SpawnSupervisor", () => {
 			roots: [],
 			templates: { test: { command: `sh ${script} --cwd {cwd} --token {token} --name {name} {labels} {resume}` } },
 			defaultTemplate: "test",
+			workspaceDir: "/tmp/fleet-test-ws",
 		};
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
@@ -733,6 +736,7 @@ describe("SpawnSupervisor", () => {
 			roots: [],
 			templates: { test: { command: `sh ${script} {token} {labels} {resume}`, host: "bad host" } },
 			defaultTemplate: "test",
+			workspaceDir: "/tmp/fleet-test-ws",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config, { restartMax: 2 });
 

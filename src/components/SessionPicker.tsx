@@ -1,21 +1,44 @@
-import { createSignal, For, onMount, Show, type Component } from "solid-js";
-import { call, listSessions, setState } from "../state";
+import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
+import { call, listSessions, setState, state } from "../state";
 import { Modal } from "./Modal";
 import { PickerRow } from "./PickerRow";
 import type { SessionListEntry } from "../../shared/protocol";
 
 /**
- * `/resume` and the header button: on-disk session files, click to
- * switchSession. (The mux live-session roster is gone — a standalone
- * omp-session has one live session, and the fleet edge's session list lives
- * in the DaemonSidebar.)
+ * Session picker: on-disk session files, click to switchSession.
+ *
+ * Two paths share this surface:
+ * - `/resume` (gate null): plain history list, unchanged behavior.
+ * - Onboarding gate (state.sessionPickerGate set): opened by state.ts after
+ *   an add-repo/add-worktree attach settles with sessions on disk. The list
+ *   renders most-recent-first with the newest session pre-highlighted and a
+ *   "New session" top item; Esc selects "New session" (intercepted before
+ *   the Modal's Esc-to-close, which still works outside gate mode).
+ * The asleep-row wake path never opens this picker (silent --resume).
  */
 export const SessionPicker: Component<{ onClose: () => void }> = props => {
 	const [filter, setFilter] = createSignal("");
 	const [sessions, setSessions] = createSignal<SessionListEntry[]>([]);
 	const [error, setError] = createSignal<string | null>(null);
 
+	const gate = () => state.sessionPickerGate;
+	const gateMode = () => gate() !== null;
+
+	// Gate-mode Esc = "New session". Registered in onMount — BEFORE the
+	// Modal's own capture-phase Esc handler (child onMounts run after the
+	// parent's) — so stopImmediatePropagation reliably swallows it. Outside
+	// gate mode Esc closes via the Modal as usual.
+	const onKeyDown = (e: KeyboardEvent) => {
+		if (gateMode() && e.key === "Escape") {
+			e.stopImmediatePropagation();
+			e.preventDefault();
+			startNewSession();
+		}
+	};
+
 	onMount(() => {
+		document.addEventListener("keydown", onKeyDown, true);
+		onCleanup(() => document.removeEventListener("keydown", onKeyDown, true));
 		listSessions()
 			.then(setSessions)
 			.catch(err => setError(String(err)));
@@ -23,11 +46,12 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 
 	const filtered = () => {
 		const q = filter().toLowerCase();
-		const list = sessions();
+		const list = gateMode() ? [...sessions()].sort((a, b) => b.modifiedAt - a.modifiedAt) : sessions();
 		return q ? list.filter(s => (s.name ?? s.id).toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q)) : list;
 	};
 
 	const close = () => {
+		if (gateMode()) setState("sessionPickerGate", null);
 		setState("modal", null);
 		props.onClose();
 	};
@@ -44,9 +68,16 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 			.catch(err => setError(String(err)));
 	};
 
+	/** Gate-mode Esc/row action: start a fresh session on the attached daemon. */
+	const startNewSession = () => {
+		setState("sessionPickerGate", null);
+		void call("newSession").catch(err => setError(String(err)));
+		close();
+	};
+
 	return (
-		<Modal title="History" onClose={props.onClose}>
-			<div class="picker-group-name">Resume from disk</div>
+		<Modal title="History" onClose={close}>
+			<div class="picker-group-name">{gateMode() ? "New session or resume" : "Resume from disk"}</div>
 			<input
 				class="picker-filter"
 				aria-label="Filter sessions"
@@ -56,9 +87,19 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 			/>
 			<Show when={error()}>{err => <div class="msg-notice">{err()}</div>}</Show>
 			<div class="picker-list">
+				<Show when={gateMode()}>
+					<PickerRow class="picker-row session-new" onClick={startNewSession} title="Start a fresh session (no history)">
+						<span class="picker-label session-new-label">New session</span>
+						<span class="picker-detail">start fresh — no history</span>
+					</PickerRow>
+				</Show>
 				<For each={filtered()}>
-					{s => (
-						<PickerRow class="picker-row" onClick={() => choose(s)}>
+					{(s, i) => (
+						<PickerRow
+							class="picker-row"
+							classList={{ active: gateMode() && i() === 0 }}
+							onClick={() => choose(s)}
+						>
 							<span class="picker-label">{s.name ?? s.id.slice(0, 8)}</span>
 							<span class="picker-detail">
 								{s.cwd || "(no cwd)"} · {s.messageCount} msgs · {new Date(s.modifiedAt).toLocaleString()}

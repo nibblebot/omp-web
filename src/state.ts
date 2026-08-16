@@ -4,7 +4,7 @@ import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "../shared/protocol";
-import type { ClientCommand, DaemonEntry, DaemonInfo, DaemonStatus, ImageArg, ModelInfo, AvailableSlashCommand, ProjectEntry, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "../shared/protocol";
+import type { ClientCommand, DaemonEntry, DaemonInfo, DaemonStatus, ImageArg, ModelInfo, AvailableSlashCommand, ProjectEntry, RegisteredProject, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "../shared/protocol";
 import { SSE_PING_EVENT } from "../shared/sse";
 import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
@@ -96,7 +96,14 @@ export type ModalName =
 	| "login"
 	| "goal"
 	| "usage"
-	| "debug";
+	| "debug"
+	// Phase 5: project/worktree onboarding (add-repo modal + two-tab worktree modal).
+	| "add-project"
+	| "worktree";
+
+/** Unicast answer to sendWorktreeDeleteInfo: guard evidence for the
+ *  delete-worktree confirm dialog (ownership, dirty counts, branch state). */
+export type WorktreeDeleteInfo = Extract<ServerFrame, { type: "worktree_delete_info" }>;
 
 /** Derived one-line args summary for the generic tool card (raw args stay structured). */
 export function argsSummary(args: unknown): string {
@@ -170,6 +177,13 @@ export const [state, setState] = createStore({
 	subagents: new Map<string, SubagentInfo>(),
 	connected: false,
 	modal: null as ModalName | null,
+	// Phase 5 modal payloads (components read these; set alongside modal):
+	// which project the worktree modal targets (both tabs).
+	worktreeModalProjectId: null as string | null,
+	// daemonId the delete-worktree confirm dialog targets.
+	deleteWorktreeTarget: null as string | null,
+	// projectId the remove-project confirm targets.
+	removeProjectTarget: null as string | null,
 	toolsExpanded: false,
 	toolCardsView: "expanded" as ToolCardsView,
 	// Daemon broker roster (hub/launch long-running processes); project-scoped,
@@ -185,8 +199,25 @@ export const [state, setState] = createStore({
 	sessionMode: "single" as "single" | "roster",
 	// Fleet edge roster (roster frame). Patched in place by
 	// daemon_status frames; NOT cleared by resetSessionView (it is
-	// fleet-scoped, not session-scoped).
+	// fleet-scoped, not session-scoped). Entries carry projectId/managed
+	// (Phase 5: project-first grouping + managed-worktree eligibility).
 	daemonRoster: [] as DaemonEntry[],
+	// Phase 5: first-class registered projects (registered_projects frame;
+	// fleet-scoped like daemonRoster — survives session resets, and
+	// zero-daemon projects still render).
+	registeredProjects: [] as RegisteredProject[],
+	// Phase 5: delete-worktree guard evidence (worktree_delete_info unicast),
+	// keyed by daemonId.
+	worktreeDeleteInfo: {} as Record<string, WorktreeDeleteInfo>,
+	// Phase 5: post-attach session-picker gate. Holds the daemonId awaiting
+	// the new-vs-resume decision (armed by start:true onboarding senders,
+	// stamped with the real daemonId when the attach fires, cleared by the
+	// sessions answer / attach failure / daemon switch). Fleet-scoped.
+	pendingSessionPicker: null as string | null,
+	// Phase 5: SessionPicker context when opened from the onboarding gate —
+	// non-null makes the picker render its "New session" top item (Esc =
+	// new session). Cleared by the picker on close/new-session.
+	sessionPickerGate: null as { daemonId: string } | null,
 	sidebarVisible: typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
 	petVisible: typeof localStorage !== "undefined" ? localStorage.getItem(PET_KEY) !== "false" : true,
 	// Top-level view: "chat" (live session) or "transcripts" (historical
@@ -993,6 +1024,10 @@ function teardownStream(source: EventSource): void {
 		pendingAttach.reject(new Error("Disconnected"));
 		pendingAttach = null;
 	}
+	// Phase 5: a dead stream cannot complete the onboarding flow — disarm the
+	// picker gate and drop any picker context.
+	setState("pendingSessionPicker", null);
+	setState("sessionPickerGate", null);
 	rejectPendingDaemons(new Error("Disconnected"));
 }
 
@@ -1244,6 +1279,136 @@ export function removeDaemonById(daemonId: string): void {
 	void postCommand({ type: "remove", id: crypto.randomUUID(), daemonId } satisfies ClientCommand).catch(() => {});
 }
 
+// ---------------------------------------------------------------------------
+// Phase 5: project/worktree onboarding senders. All fire-and-forget like the
+// senders above — answers ride the registered_projects / roster /
+// worktree_delete_info broadcasts and error frames. A `start: true` sender
+// also ARMS the post-attach session-picker gate: the spawned daemon's id is
+// server-assigned and unknowable here, so the gate is set to a sentinel and
+// requestAttach stamps the real daemonId when the onboarding attach fires.
+// ---------------------------------------------------------------------------
+
+/** Sentinel value of pendingSessionPicker between a start:true sender and the
+ *  attach that follows; never equals a real daemonId. */
+const PICKER_GATE_ARMED = "__picker_gate_armed__";
+
+/** Register a first-class project with the fleet (realpath-keyed, deduped
+ *  edge-side). start:true also spawns a daemon on the main checkout and
+ *  arms the post-attach picker gate. */
+export function sendAddProject(path: string, opts: { start?: boolean; template?: string; labels?: string[] } = {}): void {
+	if (!connected) return;
+	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
+	void postCommand({
+		type: "add_project",
+		id: crypto.randomUUID(),
+		path,
+		...(opts.start !== undefined ? { start: opts.start } : {}),
+		...(opts.template !== undefined ? { template: opts.template } : {}),
+		...(opts.labels !== undefined ? { labels: opts.labels } : {}),
+	} satisfies ClientCommand).catch(() => {});
+}
+
+/** Deregister a first-class project; refused edge-side (error frame) while
+ *  any daemon references it. */
+export function sendRemoveProject(projectId: string): void {
+	if (!connected) return;
+	void postCommand({ type: "remove_project", id: crypto.randomUUID(), projectId } satisfies ClientCommand).catch(() => {});
+}
+
+/** Create a managed worktree under workspaceDir (branch = slugified name
+ *  unless baseRef/existingBranch override) and optionally spawn a daemon on
+ *  it (start:true arms the post-attach picker gate). */
+export function sendCreateWorktree(projectId: string, name: string, opts: { baseRef?: string; existingBranch?: string; start?: boolean } = {}): void {
+	if (!connected) return;
+	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
+	void postCommand({
+		type: "create_worktree",
+		id: crypto.randomUUID(),
+		projectId,
+		name,
+		...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
+		...(opts.existingBranch !== undefined ? { existingBranch: opts.existingBranch } : {}),
+		...(opts.start !== undefined ? { start: opts.start } : {}),
+	} satisfies ClientCommand).catch(() => {});
+}
+
+/** Register an existing discovered worktree of a project and optionally
+ *  spawn a daemon on it (start:true arms the post-attach picker gate). */
+export function sendAddExistingWorktree(projectId: string, worktreePath: string, opts: { start?: boolean } = {}): void {
+	if (!connected) return;
+	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
+	void postCommand({
+		type: "add_worktree",
+		id: crypto.randomUUID(),
+		projectId,
+		worktreePath,
+		...(opts.start !== undefined ? { start: opts.start } : {}),
+	} satisfies ClientCommand).catch(() => {});
+}
+
+/** Stop + evict the worktree's daemon and git-remove the managed worktree
+ *  (deleteBranch:true also `git branch -d`s it). Owned+clean only — a
+ *  refusal surfaces as an error frame. */
+export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: boolean } = {}): void {
+	if (!connected) return;
+	void postCommand({
+		type: "delete_worktree",
+		id: crypto.randomUUID(),
+		daemonId,
+		...(opts.deleteBranch !== undefined ? { deleteBranch: opts.deleteBranch } : {}),
+	} satisfies ClientCommand).catch(() => {});
+}
+
+/** Pull guard evidence for the delete-worktree confirm; the answer lands in
+ *  state.worktreeDeleteInfo[daemonId] (worktree_delete_info unicast). */
+export function sendWorktreeDeleteInfo(daemonId: string): void {
+	if (!connected) return;
+	void postCommand({ type: "worktree_delete_info", id: crypto.randomUUID(), daemonId } satisfies ClientCommand).catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: project-first sidebar grouping. Registered projects render in
+// registry order (including zero-daemon projects), each followed by its
+// daemons (main-checkout rows first, then worktrees; roster order within
+// each partition). Entries with no matching registered project (remote /
+// unregistered, or a projectId whose registry entry is gone) fall into one
+// trailing { project: null } group in today's string-grouping order
+// (`worktreeOf ?? project`, localeCompare, main checkouts first).
+// ---------------------------------------------------------------------------
+
+export function daemonsByProject(): { project: RegisteredProject | null; daemons: DaemonEntry[] }[] {
+	const groups: { project: RegisteredProject | null; daemons: DaemonEntry[] }[] = state.registeredProjects.map(project => ({
+		project,
+		daemons: [],
+	}));
+	const byProjectId = new Map(state.registeredProjects.map((p, i) => [p.projectId, i]));
+	const unregistered: DaemonEntry[] = [];
+	for (const d of state.daemonRoster) {
+		const index = d.projectId !== undefined ? byProjectId.get(d.projectId) : undefined;
+		if (index === undefined) unregistered.push(d);
+		else groups[index].daemons.push(d);
+	}
+	for (const g of groups) {
+		const all = g.daemons;
+		g.daemons = [...all.filter(d => d.worktreeOf === undefined), ...all.filter(d => d.worktreeOf !== undefined)];
+	}
+	// Trailing fallback group: replicate the retired sidebar's string grouping.
+	const byRepo = new Map<string, DaemonEntry[]>();
+	for (const d of unregistered) {
+		const key = d.worktreeOf ?? d.project;
+		const list = byRepo.get(key);
+		if (list) list.push(d);
+		else byRepo.set(key, [d]);
+	}
+	const fallback: DaemonEntry[] = [];
+	for (const key of [...byRepo.keys()].sort((a, b) => a.localeCompare(b))) {
+		const all = byRepo.get(key)!;
+		fallback.push(...all.filter(d => d.worktreeOf === undefined), ...all.filter(d => d.worktreeOf !== undefined));
+	}
+	if (fallback.length > 0) groups.push({ project: null, daemons: fallback });
+	return groups;
+}
+
 export function sendLoginCode(requestId: string, code: string): void {
 	setState("loginCodeRequest", null);
 	if (!connected) return;
@@ -1290,7 +1455,9 @@ export function abortSubagent(agentId: string): Promise<unknown> {
 // ---------------------------------------------------------------------------
 let pendingAttach: { id: string; resolve: (sessionId: string) => void; reject: (err: Error) => void; timer: number } | null = null;
 
-function requestAttach(cmd: ClientCommand): Promise<string> {
+type AttachCmd = Extract<ClientCommand, { type: "attach" }>;
+
+function requestAttach(cmd: AttachCmd): Promise<string> {
 	const { promise, resolve, reject } = Promise.withResolvers<string>();
 	if (!connected) {
 		reject(new Error("Not connected"));
@@ -1301,12 +1468,19 @@ function requestAttach(cmd: ClientCommand): Promise<string> {
 		clearTimeout(pendingAttach.timer);
 		pendingAttach.resolve(state.currentSessionId);
 	}
+	// Phase 5: an armed picker gate (a start:true onboarding sender ran but
+	// could not know the spawned daemon's id) is stamped with the REAL
+	// daemonId now that the attach fires — the attach_result handler matches
+	// against exactly this.
+	if (state.pendingSessionPicker !== null) setState("pendingSessionPicker", cmd.sessionId);
 	const id = cmd.id;
 	const timer =
 		DAEMON_TIMEOUT_MS > 0
 			? window.setTimeout(() => {
 					if (pendingAttach?.id === id) {
 						pendingAttach = null;
+						// The armed gate's attach failed — disarm it.
+						if (state.pendingSessionPicker === cmd.sessionId) setState("pendingSessionPicker", null);
 						reject(new Error("attach timed out"));
 					}
 				}, DAEMON_TIMEOUT_MS)
@@ -1317,6 +1491,8 @@ function requestAttach(cmd: ClientCommand): Promise<string> {
 			clearTimeout(pendingAttach.timer);
 			pendingAttach = null;
 		}
+		// The armed gate's attach failed — disarm it.
+		if (state.pendingSessionPicker === cmd.sessionId) setState("pendingSessionPicker", null);
 		reject(err instanceof Error ? err : new Error(String(err)));
 	});
 	return promise;
@@ -1475,6 +1651,9 @@ function resetSessionView(): void {
 		retryInfo: null,
 		workingIntent: undefined,
 		modal: null,
+		// Phase 5: picker context dies with the modal it belongs to; the
+		// component also clears it on close/new-session.
+		sessionPickerGate: null,
 		loginUrl: null,
 		loginCodeRequest: null,
 		uiRequest: null,
@@ -1547,6 +1726,13 @@ export function connect(): void {
 				// `ready` immediately; until then the composer stays gated and the
 				// roster hint shows the session's status.
 				setState("readyAt", undefined);
+				// Phase 5: a switch to a DIFFERENT daemon disarms the picker gate
+				// (the onboarding attach to the gate's own daemon is a switch too —
+				// that one is kept so the sessions answer can still open the
+				// picker, per the attach_result → list_sessions → sessions order).
+				if (state.pendingSessionPicker !== null && state.pendingSessionPicker !== frame.sessionId) {
+					setState("pendingSessionPicker", null);
+				}
 			}
 			// Subagent mirror is per-session; pull on EVERY attach (first attach,
 			// switch, roster re-attach after reconnect) — calls are answered only
@@ -1639,9 +1825,22 @@ export function connect(): void {
 				if (frame.ok && frame.sessionId !== undefined) {
 					pending.resolve(frame.sessionId);
 					pushDebug("info", "transport", `attach ok: ${frame.sessionId}`);
+					// Phase 5: the onboarding daemon's attach settled — ask for
+					// its sessions to decide new-vs-resume; the sessions answer
+					// clears the gate (the flag stays set until then).
+					if (state.pendingSessionPicker === frame.sessionId) {
+						void postCommand({ type: "list_sessions", id: crypto.randomUUID() } satisfies ClientCommand).catch(() => {});
+					} else if (state.pendingSessionPicker !== null) {
+						// An armed gate settled against a DIFFERENT daemon: the
+						// onboarding attach was superseded — disarm so it can't
+						// fire the picker for the wrong daemon.
+						setState("pendingSessionPicker", null);
+					}
 				} else {
 					pending.reject(new Error(frame.error ?? "attach failed"));
 					pushDebug("warn", "transport", `attach failed: ${frame.error ?? "unknown error"}`);
+					// Phase 5: the armed gate's attach failed — disarm it.
+					setState("pendingSessionPicker", null);
 				}
 				break;
 			}
@@ -1651,6 +1850,22 @@ export function connect(): void {
 			case "sessions":
 				pendingSessions?.(frame.sessions);
 				pendingSessions = null;
+				// Phase 5: post-attach picker gate — the answer to the gate's
+				// list_sessions decides new-vs-resume for the daemon just
+				// attached. History exists → open the picker (its "New session"
+				// top item + Esc = new session are component-side); none →
+				// start a fresh session on the attached daemon directly.
+				if (state.pendingSessionPicker !== null) {
+					const daemonId = state.pendingSessionPicker;
+					setState("pendingSessionPicker", null);
+					if (frame.sessions.length > 0) {
+						setState("sessionPickerGate", { daemonId });
+						setState("modal", "sessions");
+					} else {
+						// Same path /new uses to start a new session.
+						void call("newSession").catch(err => setState("error", String(err)));
+					}
+				}
 				break;
 			case "daemons":
 				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [daemonsKey(d), d])));
@@ -1668,6 +1883,9 @@ export function connect(): void {
 				// frame carries no mode; this frame is the mode signal, and it
 				// must not be undone by the proxied attached frames (handled
 				// above).
+				// Phase 5: entries carry projectId/managed (project-first
+				// grouping + managed-worktree eligibility) — DaemonEntry owns
+				// those fields, so they flow through wholesale with the array.
 				setState("daemonRoster", frame.daemons);
 				setState("sessionMode", "roster");
 				pushDebug("info", "roster", `roster frame: ${frame.daemons.length} daemon${frame.daemons.length === 1 ? "" : "s"}`);
@@ -1697,6 +1915,18 @@ export function connect(): void {
 			case "projects":
 				pendingProjects?.(frame.projects);
 				pendingProjects = null;
+				break;
+			case "registered_projects":
+				// Phase 5: first-class project registry broadcast (fleet-scoped
+				// like the roster — survives session resets; zero-daemon
+				// projects still render via daemonsByProject).
+				setState("registeredProjects", frame.projects);
+				break;
+			case "worktree_delete_info":
+				// Phase 5: unicast guard evidence for the delete-worktree
+				// confirm, keyed by daemonId (latest-wins like the frames
+				// above; fleet-scoped).
+				setState("worktreeDeleteInfo", prev => ({ ...prev, [frame.daemonId]: frame }));
 				break;
 			case "daemon_logs_result": {
 				const pending = pendingDaemonLogs.get(frame.id);

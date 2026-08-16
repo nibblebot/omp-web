@@ -4,21 +4,29 @@
  * `serve` runs the control plane in-process (foreground). Every other
  * subcommand is a thin loopback HTTP client against the control plane:
  *
- *   omp-fleet serve [--port n]
+ *   omp-fleet serve [--port n] [--workspace-dir d]
  *   omp-fleet sessions [--port n]
  *   omp-fleet projects [--port n]
  *   omp-fleet spawn <path> [--template t] [--name n] [--label k=v]…
+ *   omp-fleet add-repo <path> [--start] [--template t] [--labels k=v,...]
  *   omp-fleet add <name> <url> --token <t> [--label k=v]… [--cwd c]
  *   omp-fleet provision <name> [--label k=v]…
  *   omp-fleet stop <selector>
  *   omp-fleet remove <selector>
+ *   omp-fleet rm-project <selector>
+ *   omp-fleet add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]
+ *   omp-fleet add-worktree <project> --existing <path> [--no-start]
+ *   omp-fleet rm-worktree <daemon-id> [--delete-branch]
  *   omp-fleet prompt <selector> <text> [--wait <ms>]
  *
  * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722.
+ * Managed-worktree root: `--workspace-dir` flag, else OMP_FLEET_WORKSPACE_DIR,
+ * else the config-file `workspaceDir` key, else `~/ompweb/workspaces`.
  * A refused connection prints "fleet not running — start it:
  * omp-fleet serve" and exits 1.
  */
 
+import { realpathSync } from "node:fs";
 import { startFleet } from "./server";
 
 const DEFAULT_PORT = 4722;
@@ -53,6 +61,9 @@ interface ParsedArgs {
 /** Flags that repeat and accumulate (each occurrence appends). */
 const MULTI_FLAGS = new Set(["label"]);
 
+/** Flags that are bare booleans: presence = true (never consume a value); `--flag=true|false` also accepted. */
+const BOOLEAN_FLAGS = new Set(["start", "no-start", "delete-branch"]);
+
 function parseArgs(argv: string[]): ParsedArgs {
 	const positionals: string[] = [];
 	const flags = new Map<string, FlagValue>();
@@ -71,7 +82,19 @@ function parseArgs(argv: string[]): ParsedArgs {
 			const eq = arg.indexOf("=");
 			const name = eq >= 0 ? arg.slice(2, eq) : arg.slice(2);
 			if (eq >= 0) {
+				if (BOOLEAN_FLAGS.has(name)) {
+					const value = arg.slice(eq + 1);
+					if (value !== "true" && value !== "false") throw new CliError(`invalid value for --${name}: ${value}`);
+					put(name, value === "true");
+					continue;
+				}
 				put(name, arg.slice(eq + 1));
+				continue;
+			}
+			// Bare boolean flags never consume the next argument (`--start /path`
+			// must not eat the path as a value).
+			if (BOOLEAN_FLAGS.has(name)) {
+				put(name, true);
 				continue;
 			}
 			const next = argv[i + 1];
@@ -104,6 +127,11 @@ function flagString(flags: Map<string, FlagValue>, name: string): string | undef
 	return typeof value === "string" ? value : undefined;
 }
 
+function flagBoolean(flags: Map<string, FlagValue>, name: string): boolean | undefined {
+	const value = flags.get(name);
+	return typeof value === "boolean" ? value : undefined;
+}
+
 function flagNumber(flags: Map<string, FlagValue>, name: string): number | undefined {
 	const value = flags.get(name);
 	if (typeof value !== "string") return undefined;
@@ -114,6 +142,26 @@ function flagNumber(flags: Map<string, FlagValue>, name: string): number | undef
 function labelList(flags: Map<string, FlagValue>): string[] | undefined {
 	const value = flags.get("label");
 	return Array.isArray(value) ? value : undefined;
+}
+
+/** `--labels k=v,a=b` (comma-joined single flag) → array; absent/empty → undefined. */
+function labelsCsv(flags: Map<string, FlagValue>): string[] | undefined {
+	const value = flagString(flags, "labels");
+	if (value === undefined) return undefined;
+	const labels = value
+		.split(",")
+		.map((label) => label.trim())
+		.filter((label) => label !== "");
+	return labels.length > 0 ? labels : undefined;
+}
+
+/** Realpath of a CLI path argument, or null when it does not exist. */
+function realpathOrNull(p: string): string | null {
+	try {
+		return realpathSync(p);
+	} catch {
+		return null;
+	}
 }
 
 function resolvePort(flags: Map<string, FlagValue>): number {
@@ -176,8 +224,8 @@ function isDaemonRow(value: unknown): value is DaemonRow {
 	return typeof row.daemonId === "string" && typeof row.name === "string" && typeof row.mode === "string" && typeof row.status === "string";
 }
 
-async function serveCmd(port: number): Promise<number> {
-	const server = await startFleet({ port });
+async function serveCmd(port: number, workspaceDir?: string): Promise<number> {
+	const server = await startFleet({ port, workspaceDir });
 	// Startup banner: where the fleet listens, where its state/config live,
 	// and what a previous fleet run left behind (boot statuses). The first
 	// line keeps its exact shape — scripts parse the port out of it.
@@ -235,12 +283,9 @@ async function sessionsCmd(port: number): Promise<number> {
 }
 
 async function projectsCmd(port: number): Promise<number> {
-	const body = await ctl(port, "/ctl/projects");
-	if (!Array.isArray(body)) throw new CliError("unexpected projects response");
-	const rows = (body as unknown[]).map((project) => {
-		const p = project as ProjectRow;
-		return [p.name, p.path, p.branch ?? "", p.worktreeOf ?? ""];
-	});
+	const body = (await ctl(port, "/ctl/projects")) as { projects?: unknown; registered?: unknown };
+	if (!Array.isArray(body.projects)) throw new CliError("unexpected projects response");
+	const rows = (body.projects as ProjectRow[]).map((p) => [p.name, p.path, p.branch ?? "", p.worktreeOf ?? ""]);
 	console.log(renderTable(["name", "path", "branch", "worktreeOf"], rows));
 	return 0;
 }
@@ -259,6 +304,118 @@ async function spawnCmd(positionals: string[], flags: Map<string, FlagValue>, po
 		}),
 	})) as Record<string, unknown>;
 	console.log(`spawned ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`);
+	return 0;
+}
+
+async function addRepoCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
+	const path = positionals[0];
+	if (path === undefined) {
+		throw new CliError("usage: omp-fleet add-repo <path> [--start] [--template t] [--labels k=v,...]");
+	}
+	const body = (await ctl(port, "/ctl/projects", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			path,
+			start: flagBoolean(flags, "start"),
+			template: flagString(flags, "template"),
+			labels: labelsCsv(flags),
+		}),
+	})) as { project?: { projectId?: string; path?: string }; entry?: { daemonId?: string } };
+	const project = body.project;
+	const registered = `${project?.projectId ?? "?"} (${project?.path ?? path})`;
+	if (body.entry?.daemonId !== undefined) {
+		console.log(`registered ${registered} — spawned ${body.entry.daemonId}`);
+	} else {
+		console.log(`registered ${registered}`);
+	}
+	return 0;
+}
+
+async function rmProjectCmd(positionals: string[], _flags: Map<string, FlagValue>, port: number): Promise<number> {
+	const selector = positionals[0];
+	if (selector === undefined) {
+		throw new CliError("usage: omp-fleet rm-project <selector> (projectId, realpath, or basename)");
+	}
+	// Resolve the selector client-side against the registered set: exact
+	// projectId, exact realpath (or the selector's own realpath, so a
+	// symlink/relative path still matches), or basename.
+	const body = (await ctl(port, "/ctl/projects")) as { registered?: Array<{ projectId: string; path: string; name: string }> };
+	if (!Array.isArray(body.registered)) throw new CliError("unexpected projects response");
+	const resolved = realpathOrNull(selector);
+	const match = body.registered.find(
+		(p) => p.projectId === selector || p.path === selector || p.name === selector || (resolved !== null && p.path === resolved),
+	);
+	if (match === undefined) throw new CliError(`no registered project matches selector: ${selector}`);
+	const out = (await ctl(port, `/ctl/projects/${match.projectId}`, { method: "DELETE" })) as { removed?: unknown };
+	console.log(`removed project ${String(out.removed)}`);
+	return 0;
+}
+
+/** Resolve a project selector (projectId, realpath, or basename) to its id. */
+async function resolveProjectId(port: number, selector: string): Promise<string> {
+	const body = (await ctl(port, "/ctl/projects")) as { registered?: Array<{ projectId: string; path: string; name: string }> };
+	if (!Array.isArray(body.registered)) throw new CliError("unexpected projects response");
+	const resolved = realpathOrNull(selector);
+	const match = body.registered.find(
+		(p) => p.projectId === selector || p.path === selector || p.name === selector || (resolved !== null && p.path === resolved),
+	);
+	if (match === undefined) throw new CliError(`no registered project matches selector: ${selector}`);
+	return match.projectId;
+}
+
+/**
+ * add-worktree: create-new (`<project> <name>` with optional --base/--branch)
+ * or add-existing (`<project> --existing <path>`). start defaults to ON
+ * (--no-start disables); the server registers the roster entry and spawns
+ * only when start is true.
+ */
+async function addWorktreeCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
+	const project = positionals[0];
+	const name = positionals[1];
+	const existing = flagString(flags, "existing");
+	if (project === undefined || (name === undefined) === (existing === undefined)) {
+		throw new CliError(
+			"usage: omp-fleet add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]\n" +
+				"       omp-fleet add-worktree <project> --existing <path> [--no-start]",
+		);
+	}
+	const projectId = await resolveProjectId(port, project);
+	const start = flagBoolean(flags, "start") ?? !(flags.get("no-start") === true);
+	const base = flagString(flags, "base");
+	const branch = flagString(flags, "branch");
+	const body = (await ctl(port, `/ctl/projects/${encodeURIComponent(projectId)}/worktrees`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(
+			existing !== undefined
+				? { worktreePath: existing, start }
+				: { name, baseRef: base, existingBranch: branch, start },
+		),
+	})) as { entry?: { daemonId?: string; cwd?: string; status?: string } };
+	const entry = body.entry ?? {};
+	const where = String(entry.cwd ?? existing ?? name);
+	if (existing !== undefined) {
+		console.log(`registered worktree ${where} (${String(entry.daemonId ?? "?")})${start ? ` — status ${String(entry.status ?? "?")}` : " — not started"}`);
+	} else {
+		console.log(`created worktree ${where} (${String(entry.daemonId ?? "?")})${start ? ` — status ${String(entry.status ?? "?")}` : " — not started"}`);
+	}
+	return 0;
+}
+
+/** rm-worktree <daemon-id> [--delete-branch]: stop + evict + git worktree remove. */
+async function rmWorktreeCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
+	const daemonId = positionals[0];
+	if (daemonId === undefined) throw new CliError("usage: omp-fleet rm-worktree <daemon-id> [--delete-branch]");
+	const deleteBranch = flagBoolean(flags, "delete-branch");
+	const body = (await ctl(port, `/ctl/worktrees/${encodeURIComponent(daemonId)}`, {
+		method: "DELETE",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(deleteBranch === true ? { deleteBranch: true } : {}),
+	})) as { removed?: unknown; worktree?: { path?: string; branch?: string } };
+	const wt = body.worktree ?? {};
+	const parts = [String(wt.path ?? ""), wt.branch !== undefined ? `branch ${wt.branch}` : ""].filter((part) => part !== "");
+	console.log(`removed worktree daemon ${String(body.removed ?? daemonId)}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`);
 	return 0;
 }
 
@@ -377,14 +534,21 @@ commands:
   sessions                     list sessions
   projects                     list discovered projects
   spawn <path> [--template t] [--name n] [--label k=v]…
+  add-repo <path> [--start] [--template t] [--labels k=v,...]
   add <name> <url> --token <t> [--label k=v]… [--cwd c]
   provision <name> [--label k=v]…
   stop <selector>
   remove <selector>
+  rm-project <selector>
+  add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]
+  add-worktree <project> --existing <path> [--no-start]
+  rm-worktree <daemon-id> [--delete-branch]
   prompt <selector> <text> [--wait <ms>]
 
 options:
-  --port <n>   control plane port (default 4722, env OMP_FLEET_PORT)`;
+  --port <n>           control plane port (default 4722, env OMP_FLEET_PORT)
+  --workspace-dir <d>  managed worktree root (default ~/ompweb/workspaces,
+                       env OMP_FLEET_WORKSPACE_DIR)`;
 
 export async function main(argv: string[]): Promise<number> {
 	try {
@@ -399,13 +563,15 @@ export async function main(argv: string[]): Promise<number> {
 				console.log(USAGE);
 				return 0;
 			case "serve":
-				return await serveCmd(port);
+				return await serveCmd(port, flagString(flags, "workspace-dir"));
 			case "sessions":
 				return await sessionsCmd(port);
 			case "projects":
 				return await projectsCmd(port);
 			case "spawn":
 				return await spawnCmd(rest, flags, port);
+			case "add-repo":
+				return await addRepoCmd(rest, flags, port);
 			case "add":
 				return await addCmd(rest, flags, port);
 			case "provision":
@@ -414,6 +580,12 @@ export async function main(argv: string[]): Promise<number> {
 				return await stopCmd(rest, flags, port);
 			case "remove":
 				return await removeCmd(rest, flags, port);
+			case "rm-project":
+				return await rmProjectCmd(rest, flags, port);
+			case "add-worktree":
+				return await addWorktreeCmd(rest, flags, port);
+			case "rm-worktree":
+				return await rmWorktreeCmd(rest, flags, port);
 			case "prompt":
 				return await promptCmd(rest, flags, port);
 			default:

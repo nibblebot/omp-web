@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { bootStatusFor, Registry } from "./registry";
@@ -229,6 +229,174 @@ describe("Registry", () => {
 		);
 		const registry = await loadedRegistry(statePath);
 		expect(registry.create(baseInit()).daemonId).toBe("d6");
+	});
+});
+
+describe("registered projects (Phase 2)", () => {
+	/** A real git repo in a fresh tmp dir (addProject validates the .git entry). */
+	async function makeRepo(): Promise<string> {
+		const dir = join(mkdtempSync(join(tmpdir(), "omp-fleet-repo-")), "repo");
+		mkdirSync(dir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		return dir;
+	}
+
+	test("addProject validates the path and allocates p1, p2, …", async () => {
+		const registry = await loadedRegistry(tmpStatePath());
+		await expect(registry.addProject(join(tmpdir(), "does-not-exist"))).rejects.toThrow("not a directory");
+		const plainDir = mkdtempSync(join(tmpdir(), "omp-fleet-plain-"));
+		await expect(registry.addProject(plainDir)).rejects.toThrow("not a git repository");
+
+		const repoA = await makeRepo();
+		const a = await registry.addProject(repoA);
+		expect(a).toMatchObject({ projectId: "p1", path: repoA, name: "repo" });
+		expect(a.addedAt).toBeGreaterThan(0);
+		const repoB = await makeRepo();
+		expect((await registry.addProject(repoB)).projectId).toBe("p2");
+		expect(registry.projects().map((p) => p.projectId)).toEqual(["p1", "p2"]);
+	});
+
+	test("dedup on realpath: a symlinked path aliases the same project", async () => {
+		const registry = await loadedRegistry(tmpStatePath());
+		const repo = await makeRepo();
+		const alias = join(dirname(repo), "alias");
+		symlinkSync(repo, alias);
+		const first = await registry.addProject(repo);
+		const second = await registry.addProject(alias);
+		expect(second).toBe(first); // no duplicate registration
+		expect(registry.projects()).toHaveLength(1);
+		expect(registry.projects()[0].path).toBe(first.path);
+	});
+
+	test("persistence round-trip: projects + nextProjectId survive reload; atomic write intact", async () => {
+		const statePath = tmpStatePath();
+		const registry = await loadedRegistry(statePath);
+		const repoA = await makeRepo();
+		const repoB = await makeRepo();
+		await registry.addProject(repoA);
+		const b = await registry.addProject(repoB);
+		// A local daemon tagged with a project id persists too.
+		registry.create(baseInit({ projectId: b.projectId }));
+
+		const reloaded = await loadedRegistry(statePath);
+		expect(reloaded.projects()).toEqual(registry.projects());
+		expect(reloaded.projects().map((p) => p.projectId)).toEqual(["p1", "p2"]);
+		expect(reloaded.get("d1")?.projectId).toBe(b.projectId);
+
+		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+		expect(onDisk.projects).toEqual(registry.projects());
+		expect(onDisk.nextProjectId).toBe(3);
+		expect(onDisk.nextId).toBe(2);
+		// Atomic write: complete JSON, no tmp files left behind.
+		expect(readdirSync(dirname(statePath)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+	});
+
+	test("old state files (no projects/nextProjectId keys) load fine and gain the keys on the next write", async () => {
+		const statePath = tmpStatePath();
+		writeFileSync(statePath, JSON.stringify({ nextId: 4, entries: [] }));
+		const registry = await loadedRegistry(statePath);
+		expect(registry.projects()).toEqual([]);
+		const repo = await makeRepo();
+		expect((await registry.addProject(repo)).projectId).toBe("p1");
+		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+		expect(onDisk.projects).toEqual(registry.projects());
+		expect(onDisk.nextProjectId).toBe(2);
+		expect(onDisk.nextId).toBe(4); // untouched by the project write
+	});
+
+	test("removeProject refuses while daemons reference it, naming the blockers", async () => {
+		const registry = await loadedRegistry(tmpStatePath());
+		const project = await registry.addProject(await makeRepo());
+		// Two referencing daemons, in insertion order.
+		registry.create(baseInit({ projectId: project.projectId }));
+		registry.create(baseInit({ projectId: project.projectId }));
+		expect(() => registry.removeProject(project.projectId)).toThrow(
+			`project ${project.projectId} in use by daemons: d1, d2`,
+		);
+		// The refused removal leaves the project registered.
+		expect(registry.projects()).toHaveLength(1);
+
+		registry.remove("d1");
+		expect(() => registry.removeProject(project.projectId)).toThrow(
+			`project ${project.projectId} in use by daemons: d2`,
+		);
+
+		registry.remove("d2");
+		expect(() => registry.removeProject(project.projectId)).not.toThrow();
+		expect(registry.projects()).toEqual([]);
+		expect(() => registry.removeProject(project.projectId)).toThrow(`unknown project id: ${project.projectId}`);
+	});
+
+	test("pN ids are monotonic across remove and reload (no reuse)", async () => {
+		const statePath = tmpStatePath();
+		const registry = await loadedRegistry(statePath);
+		const a = await registry.addProject(await makeRepo());
+		await registry.addProject(await makeRepo());
+		registry.removeProject(a.projectId);
+
+		const reloaded = await loadedRegistry(statePath);
+		expect(reloaded.projects().map((p) => p.projectId)).toEqual(["p2"]);
+		expect((await reloaded.addProject(await makeRepo())).projectId).toBe("p3");
+	});
+
+	test("addProject/removeProject fire onChange AND onProjectsChange; daemon mutations fire only onChange; projects() is a defensive copy", async () => {
+		const registry = await loadedRegistry(tmpStatePath());
+		let fired = 0;
+		let projectFired = 0;
+		registry.onChange = () => {
+			fired++;
+		};
+		registry.onProjectsChange = () => {
+			projectFired++;
+		};
+		const repo = await makeRepo();
+		const project = await registry.addProject(repo); // both hooks
+		expect(fired).toBe(1);
+		expect(projectFired).toBe(1);
+		// A daemon mutation fires onChange only — project broadcasts stay off
+		// the hot path (the edge's registered_projects frame rides
+		// onProjectsChange).
+		registry.create(baseInit({ projectId: project.projectId }));
+		expect(fired).toBe(2);
+		expect(projectFired).toBe(1);
+		registry.remove("d1"); // daemon mutation: onChange only
+		expect(fired).toBe(3);
+		expect(projectFired).toBe(1);
+		registry.removeProject(project.projectId); // both hooks
+		expect(fired).toBe(4);
+		expect(projectFired).toBe(2);
+		expect(() => registry.removeProject(project.projectId)).toThrow(); // refused: not a mutation
+		expect(fired).toBe(4);
+		expect(projectFired).toBe(2);
+
+		const again = await registry.addProject(repo);
+		const snapshot = registry.projects();
+		snapshot.pop();
+		expect(registry.projects()).toHaveLength(1);
+		expect(registry.projects()[0]).toBe(again);
+	});
+
+	test("nextProjectId is floored above the highest project id on disk (no reuse after hand-edit)", async () => {
+		const statePath = tmpStatePath();
+		writeFileSync(
+			statePath,
+			JSON.stringify({
+				nextId: 1,
+				entries: [],
+				projects: [{ projectId: "p7", path: "/x", name: "x", addedAt: 1 }],
+				nextProjectId: 2,
+			}),
+		);
+		const registry = await loadedRegistry(statePath);
+		expect(registry.projects().map((p) => p.projectId)).toEqual(["p7"]);
+		expect((await registry.addProject(await makeRepo())).projectId).toBe("p8");
+	});
+
+	test("corrupt projects in state files throw with the path in the message", async () => {
+		const statePath = tmpStatePath();
+		writeFileSync(statePath, JSON.stringify({ nextId: 1, entries: [], projects: [{ name: "missing-projectId" }] }));
+		await expect(new Registry(statePath).load()).rejects.toThrow(statePath);
 	});
 });
 

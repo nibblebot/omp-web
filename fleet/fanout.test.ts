@@ -222,7 +222,7 @@ function happyResponder(_fake: FakeServer, stream: FakeStream, frame: unknown): 
 async function readyEntry(fake: FakeServer): Promise<{ deps: FanoutDeps; registry: Registry; connector: DaemonConnector; entry: RegistryEntry }> {
 	const registry = await loadedRegistry();
 	const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50 });
-	const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+	const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
 	const supervisor = new SpawnSupervisor(registry, connector, config);
 	const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
 	connector.connect(entry.daemonId);
@@ -343,7 +343,7 @@ describe("promptEntry", () => {
 		const fake = startFake({ onCommand: happyResponder });
 		const registry = await loadedRegistry();
 		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 30 });
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
 		connector.connect(entry.daemonId);
@@ -366,7 +366,7 @@ describe("promptEntry", () => {
 		const fake = startFake({ helloCwd: "/elsewhere" });
 		const registry = await loadedRegistry();
 		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50 });
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
 		connector.connect(entry.daemonId);

@@ -71,7 +71,18 @@ Readiness: after the SDK session exists and provider/model/auth resolution compl
 
 ## omp-fleet
 
-Registry + SSE clients + proxy + fan-out. Config `~/.omp/fleet/config.json`, state `~/.omp/fleet/state.json` (remote entries persist `endpoint + token + labels`; spawned entries persist template + cwd + last session file, so the roster survives a fleet restart).
+Registry + SSE clients + proxy + fan-out. Config `~/.omp/fleet/config.json`, state `~/.ompweb/fleet/state.json` (remote entries persist `endpoint + token + labels`; spawned entries persist template + cwd + last session file; registered projects persist in the same file — the roster survives a fleet restart). **The state file moved:** pre-move fleets left `~/.omp/fleet/state.json` orphaned in place — it is never read and never migrated; the new state file starts empty.
+
+### Config surface
+
+| Flag / env | Default | Meaning |
+| --- | --- | --- |
+| `--port` / `OMP_FLEET_PORT` | `4722` | Control-plane port (`0` = ephemeral) |
+| `--workspace-dir` / `OMP_FLEET_WORKSPACE_DIR` | `~/ompweb/workspaces` | Root for managed worktrees (created on first worktree, not at boot) |
+| `OMP_FLEET_STATE` | `~/.ompweb/fleet/state.json` | Registry state file (env only) |
+| `OMP_FLEET_CONFIG` | `~/.omp/fleet/config.json` | Config file (env only; explicit path wins) |
+| `OMP_FLEET_SPAWN_HOOK` | — | Provision-hook command (env only; wins over the config file) |
+| `OMP_FLEET_LOCAL_TEMPLATE` | — | Replaces the `local` spawn-template command (dev runners) |
 
 ```sh
 bun run fleet -- serve                          # foreground; UI + control API on 127.0.0.1:4722
@@ -82,6 +93,11 @@ bun run fleet -- add <name> <url> --token <t> [--label k=v]… [--cwd c]   # reg
 bun run fleet -- provision <name> [--label k=v]…  # run the spawn hook (sandbox provisioning)
 bun run fleet -- stop <selector>
 bun run fleet -- remove <selector>                    # remove from the roster (stops it first)
+bun run fleet -- add-repo <path> [--start] [--template t] [--labels k=v,...]   # register a project (deduped on realpath)
+bun run fleet -- rm-project <selector>                # deregister a project (refused while daemons reference it)
+bun run fleet -- add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]   # create + register a managed worktree
+bun run fleet -- add-worktree <project> --existing <path> [--no-start]   # register a discovered-but-unregistered worktree
+bun run fleet -- rm-worktree <daemon-id> [--delete-branch]   # stop + evict + git worktree remove
 bun run fleet -- prompt <selector> <text> [--wait <ms>] [--fan-out]
 ```
 
@@ -91,10 +107,20 @@ The connector dials each daemon's resolved endpoint over HTTP with exponential b
 
 Local children are restarted `on-failure` with bounded backoff; the stderr ring buffer is surfaced in the daemon detail popover.
 
+### Projects and managed worktrees
+
+Fleet has first-class **registered projects** (realpath-keyed, `pN` ids, persisted in the state file). Everything hangs off them:
+
+- **Add a repo** — the sidebar header **+** (or `fleet add-repo`). Pick a path from the discovery list or type one; the retired spawn picker's template/labels fields live in the collapsed advanced section. **Start a session now** defaults **off**; when on, the main checkout is spawned and attached, and the session picker opens if the checkout has session history (new-vs-resume).
+- **Add a worktree** — the per-project **+ Add worktree** (or `fleet add-worktree`), two tabs: **Create new** (a name; the branch is the slugified name off `origin/HEAD` → local default branch → current `HEAD` — no fetch; the advanced section overrides the base ref or attaches an existing branch) and **Add existing** (discovered-but-unregistered linked worktrees of the project). **Start a session now** defaults **on**. Managed worktrees land at `<workspaceDir>/<repo>/<name>/` (a repo-basename collision gets a short hash suffix).
+- **Session picker** — a newly added worktree with history on disk opens the picker after attach: "New session" top item, most-recent-first with the newest pre-highlighted, **Esc = new session**; no history → straight into a fresh session, no modal. Routine wake of an asleep row stays silent (`--resume`).
+
+**Close-out ladder** — stop any daemon → remove it from the roster (disk untouched) → **Delete worktree…** on managed worktree rows → remove the project. Delete-worktree semantics: the path must be under `workspaceDir` (we never delete a directory we didn't create); a **dirty** worktree is **refused** (no `--force` in v1 — commit or stash first); the confirm dialog shows the dirty counts and the branch's merged/unpushed state, with "Also delete branch" defaulting on when merged and pushed — the branch delete is `git branch -d` only, never `-D`. Session transcripts always survive: they live under the agent dir, never inside the worktree. **Remove project** refuses while any daemon still references it (it names the blockers: stop/remove them first) and never touches disk.
+
 ## The web UI (one app, two modes)
 
 - **Standalone** (served by an omp-session): the full single-session UI — chat, steering, queue chips, live bash/python streaming, rich tool cards, subagent roster + drill-down, settings panel (TUI `/settings` parity), OAuth login, session resume/branch/fork/handoff, `/btw` side questions, `/export` HTML transcripts. Composer stays disabled until the daemon's `ready` frame.
-- **Roster** (served by omp-fleet): the roster sidebar replaces the standalone single-session layout — standalone has no sidebar; session switching there is a modal via `/resume`. All daemons sit under a top-level **Repos** header, grouped by owning repo (worktree daemons join their repo's group; spawned daemons are tagged at spawn time and pre-existing ones backfilled at startup); repos with worktree daemons render as a collapsible label with main + worktree rows indented beneath (worktree rows show a branch icon + branch name, never the dir/path), plain repos as regular rows, per-row branch + git dirty counts (`+N ~M -D ?U`, polled from local cwds), status dots (`spawning`/`ready`/`asleep`/`reconnecting`/`error`), bare-icon attach/stop/remove actions (stop/remove are two-click confirms), spawn picker (projects + worktrees + freeform path + template + labels), wake-on-click for asleep daemons, per-daemon detail popover (cwd, uptime, labels, last session file, stderr tail). Attaching proxies the browser through to that omp-session (`daemonId` at the edge); everything else about the UI is identical.
+- **Roster** (served by omp-fleet): the roster sidebar replaces the standalone single-session layout — standalone has no sidebar; session switching there is a modal via `/resume`. The sidebar is **project-first**: each registered project is a collapsible group with the main-checkout row first, then worktree rows (branch icon + branch name, never the dir/path), a per-project **+ Add worktree** action and a remove-project action; entries without a registered project (remote/unregistered) fall back to repo string-grouping in one trailing group. The header **+** opens the add-repo modal (the retired spawn picker's template/labels fields live in its advanced section). Rows show branch + git dirty counts (`+N ~M -D ?U`, polled from local cwds), status dots (`spawning`/`ready`/`asleep`/`reconnecting`/`error`), bare-icon attach/stop/remove actions (stop/remove are two-click confirms) and **Delete worktree…** on managed worktree rows, wake-on-click for asleep daemons, and a per-daemon detail popover (cwd, uptime, labels, last session file, stderr tail). Attaching proxies the browser through to that omp-session (`daemonId` at the edge); everything else about the UI is identical.
 
 ### Historical transcripts view (◫ Tx, roster mode)
 
@@ -116,7 +142,7 @@ Only the dev path is supported. Checks: `bun run check:types`, `bun test`.
 Layering is strictly leaf-ward: `server/` and `fleet/` import only from `shared/`, `src/` imports neither backend layer, and `server/` and `fleet/` never import each other. See [`docs/architecture.md`](docs/architecture.md) for the full treatment (wire contract, lifecycle, security model, state ownership).
 
 - `server/` — the omp-session daemon: `index.ts` (boot, routing, auth, `/download` jail, idle auto-exit, static UI), `methods.ts` (`WebMethodName` dispatch table), `sse-delivery.ts` (ring, broadcast, backpressure), `ui-context.ts` (dialog relay), `subagent-mirror.ts` (subagent lifecycle/progress + transcripts), `daemon-broker.ts` (hub ActiveDaemons panel), `settings-model.ts`, `session-entry.ts`, `config.ts`, `collab-*.ts` (host adapter + relay).
-- `fleet/` — registry + JSON persistence (`registry.ts`), project discovery (`discovery.ts`), spawn templates + `OMP_SESSION|` parsing (`spawn-parse.ts`, `supervisor.ts`), dial-in SSE client with hello priming, cwd sanity check, backoff and silence-deadline liveness (`connector.ts`), selectors + fan-out correlation (`selectors.ts`, `fanout.ts`), loopback control API + CLI (`server.ts`, `cli.ts`), browser edge + per-browser daemon proxy + aggregated daemons panel (`edge.ts`, `daemons-aggregator.ts`).
+- `fleet/` — registry + JSON persistence (`registry.ts`), project discovery (`discovery.ts`), managed-worktree lifecycle (`worktrees.ts`), spawn templates + `OMP_SESSION|` parsing (`spawn-parse.ts`, `supervisor.ts`), dial-in SSE client with hello priming, cwd sanity check, backoff and silence-deadline liveness (`connector.ts`), selectors + fan-out correlation (`selectors.ts`, `fanout.ts`), loopback control API + CLI (`server.ts`, `cli.ts`), browser edge + per-browser daemon proxy + aggregated daemons panel (`edge.ts`, `daemons-aggregator.ts`).
 - `shared/protocol.ts` — the shared wire contract: client commands (`POST /command`), server frames (`GET /events` SSE), the `OMP_SESSION|` line, the `hello_ok`→`attached`→`history`→`state`→`collab_status`→`available_commands`→`ready` priming sequence, roster frames. Additive changes only; `OMP_PROTO` (currently 2) gates omp-fleet↔omp-session drift and must bump on any breaking change to the handshake or frame shapes.
 - `src/state.ts` — client store: chat items, streaming, session state mirror, `call()` helper, reconnect with backoff, roster state, stale-frame guard (guards session switches).
 

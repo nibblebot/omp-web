@@ -8,8 +8,10 @@
  * are tolerated. `OMP_FLEET_SPAWN_HOOK` overrides the config file's
  * `spawnHook`; `OMP_FLEET_LOCAL_TEMPLATE` replaces the `local` template's
  * command outright (dev runners point it at the source entry when the
- * production binary isn't built). A leading `~` is expanded to
- * `os.homedir()` in paths.
+ * production binary isn't built). `workspaceDir` (root for managed
+ * worktrees) resolves flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR`
+ * > config-file `workspaceDir` key > `~/ompweb/workspaces`. A leading `~` is
+ * expanded to `os.homedir()` in paths.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -35,6 +37,12 @@ export interface FleetConfig {
 	projectTemplates?: Record<string, string>;
 	/** Env `OMP_FLEET_SPAWN_HOOK` wins over the config file value. */
 	spawnHook?: string;
+	/**
+	 * Root for managed worktrees (created lazily on first worktree, never at
+	 * boot). Flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR` >
+	 * config-file `workspaceDir` key > `~/ompweb/workspaces` (~ expanded).
+	 */
+	workspaceDir: string;
 }
 
 /**
@@ -52,6 +60,7 @@ function defaultConfig(): FleetConfig {
 		roots: [expandTilde("~/repos")],
 		templates: { local: { ...DEFAULT_LOCAL_TEMPLATE } },
 		defaultTemplate: "local",
+		workspaceDir: expandTilde("~/ompweb/workspaces"),
 	};
 }
 
@@ -62,7 +71,7 @@ function expandTilde(p: string): string {
 	return p;
 }
 
-export async function loadConfig(path?: string): Promise<FleetConfig> {
+export async function loadConfig(path?: string, opts?: { workspaceDir?: string }): Promise<FleetConfig> {
 	const file = resolveConfigPath(path);
 	let config: FleetConfig;
 	if (!existsSync(file)) {
@@ -82,6 +91,11 @@ export async function loadConfig(path?: string): Promise<FleetConfig> {
 	const localCommand = process.env.OMP_FLEET_LOCAL_TEMPLATE;
 	if (localCommand !== undefined && localCommand !== "") {
 		config.templates = { ...config.templates, local: { command: localCommand } };
+	}
+	// The explicit CLI flag (`--workspace-dir`) wins over env and the file.
+	const flagDir = opts?.workspaceDir;
+	if (flagDir !== undefined && flagDir !== "") {
+		config.workspaceDir = expandTilde(flagDir);
 	}
 	return config;
 }
@@ -116,6 +130,13 @@ function mergeConfig(raw: unknown): FleetConfig {
 		config.spawnHook = hook;
 	} else if (typeof file.spawnHook === "string") {
 		config.spawnHook = expandTilde(file.spawnHook);
+	}
+	// Env `OMP_FLEET_WORKSPACE_DIR` wins over the config-file key.
+	const workspaceDir = process.env.OMP_FLEET_WORKSPACE_DIR;
+	if (workspaceDir !== undefined && workspaceDir !== "") {
+		config.workspaceDir = expandTilde(workspaceDir);
+	} else if (typeof file.workspaceDir === "string") {
+		config.workspaceDir = expandTilde(file.workspaceDir);
 	}
 	return config;
 }

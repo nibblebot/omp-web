@@ -14,10 +14,10 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../shared/protocol";
+import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME, type RegisteredProject } from "../shared/protocol";
 import type { DaemonEntry, DaemonInfo, ServerFrame } from "../shared/protocol";
 import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK } from "../shared/sse";
 import type { FleetConfig } from "./config";
@@ -28,6 +28,7 @@ import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
 import { startFleet, type FleetServer } from "./server";
 import { SpawnSupervisor } from "./supervisor";
+import { managedWorktreePath, registerWorktreeEntry } from "./worktrees";
 
 const FAKE_CWD = "/tmp/fake-proj";
 const FAKE_SESSION_FILE = "/tmp/fake-proj/.omp/session.json";
@@ -655,6 +656,33 @@ describe("fleet edge", () => {
 		expect(JSON.stringify(second)).not.toContain(FAKE_TOKEN);
 	});
 
+	test("registered_projects primes on open and broadcasts on project registration, without tokens", async () => {
+		const browser = await openBrowser(server.port);
+		const priming = await browser.waitForFrame((f) => f.type === "registered_projects", "registered_projects priming");
+		if (priming.type !== "registered_projects") throw new Error("expected registered_projects");
+		expect(priming.projects).toEqual([]);
+
+		// Register a real git repo: the open browser gets a live broadcast.
+		const repoDir = join(tmp, "registered-repo");
+		mkdirSync(repoDir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		const project = await server.registry.addProject(repoDir);
+		try {
+			const frame = await browser.waitForFrame(
+				(f) => f.type === "registered_projects" && f.projects.some((p) => p.projectId === project.projectId),
+				"registered_projects broadcast",
+			);
+			if (frame.type !== "registered_projects") throw new Error("expected registered_projects");
+			expect(frame.projects).toHaveLength(1);
+			expect(frame.projects[0]).toMatchObject({ projectId: project.projectId, path: project.path, name: "registered-repo" });
+			expect(typeof frame.projects[0].addedAt).toBe("number");
+			expect(JSON.stringify(frame)).not.toContain(FAKE_TOKEN);
+		} finally {
+			server.registry.removeProject(project.projectId);
+		}
+	});
+
 	test("daemon_status is broadcast on connector status transitions", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
@@ -1141,6 +1169,135 @@ describe("fleet edge", () => {
 		if (frame.type !== "error") throw new Error("expected error");
 		expect(frame.error).toContain("unknown daemon");
 	});
+
+	test("browser allowlist accepts add_project and remove_project (their own validation errors, not the allowlist rejection)", async () => {
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		// Neither command may be rejected as an unknown browser command.
+		await browser.send({ type: "add_project" });
+		const addErr = await browser.waitForFrame((f) => f.type === "error" && f.error === "add_project: missing path", "add_project missing path");
+		expect(addErr.type).toBe("error");
+		await browser.send({ type: "remove_project" });
+		const rmErr = await browser.waitForFrame(
+			(f) => f.type === "error" && f.error === "remove_project: missing projectId",
+			"remove_project missing projectId",
+		);
+		expect(rmErr.type).toBe("error");
+		expect(browser.frames.filter((f) => f.type === "error" && f.error === "fleet edge: use spawn/stop/roster")).toHaveLength(0);
+	});
+
+	test("add_project registers a project (broadcast) and dedup answers an error frame naming the existing projectId", async () => {
+		const repoDir = join(tmp, "edge-add-project-repo");
+		mkdirSync(repoDir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		await browser.send({ type: "add_project", path: repoDir });
+		const frame = await browser.waitForFrame(
+			(f) => f.type === "registered_projects" && f.projects.some((p) => p.path === realpathSync(repoDir)),
+			"registered_projects broadcast",
+		);
+		if (frame.type !== "registered_projects") throw new Error("expected registered_projects");
+		const project = frame.projects.find((p) => p.path === realpathSync(repoDir))!;
+		expect(project).toMatchObject({ path: realpathSync(repoDir), name: "edge-add-project-repo" });
+		expect(project.projectId).toMatch(/^p\d+$/);
+		// Dedup: registering the same realpath again answers an error frame
+		// naming the existing projectId.
+		await browser.send({ type: "add_project", path: repoDir });
+		const dup = await browser.waitForFrame(
+			(f) => f.type === "error" && typeof f.error === "string" && f.error.includes(project.projectId),
+			"add_project dedup error",
+		);
+		if (dup.type !== "error") throw new Error("expected error");
+		expect(dup.error).toContain("already registered");
+		expect(server.registry.projects().filter((p) => p.path === realpathSync(repoDir))).toHaveLength(1);
+		try {
+			server.registry.removeProject(project.projectId);
+		} catch {
+			// Already clean.
+		}
+	});
+
+	test("add_project with start:true spawns on the project path, passes template/labels, and tags the entry's projectId", async () => {
+		const repoDir = join(tmp, "edge-add-project-spawn-repo");
+		mkdirSync(repoDir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		const before = spawnInits.length;
+		spawnedByEdge = null; // the wait below must observe the NEW spawn
+		await browser.send({ type: "add_project", path: repoDir, start: true, template: "local", labels: ["env=prod"] });
+		// The spawn + projectId tag land asynchronously after the broadcast.
+		const tagged = await waitFor(
+			() => {
+				const project = server.registry.projects().find((p) => p.path === realpathSync(repoDir));
+				const entry = spawnedByEdge ? server.registry.get(spawnedByEdge.daemonId) : undefined;
+				return project && entry && entry.projectId === project.projectId ? { project, entry } : null;
+			},
+			5000,
+			"spawned entry tagged with projectId",
+		);
+		expect(spawnInits.length).toBe(before + 1);
+		const init = spawnInits[spawnInits.length - 1];
+		expect(init.cwd).toBe(realpathSync(repoDir));
+		expect(init.template).toBe("local");
+		expect(init.labels).toEqual(["env=prod"]);
+		expect(tagged.entry.cwd).toBe(realpathSync(repoDir));
+		expect(tagged.entry.mode).toBe("spawned");
+		// Cleanup: drop the daemon (child runs under the config's template,
+		// whose hello cwd FAKE_CWD mismatches this repo — status error is fine).
+		await server.supervisor.prune(tagged.entry.daemonId);
+		server.registry.remove(tagged.entry.daemonId);
+		server.registry.removeProject(tagged.project.projectId);
+	});
+
+	test("remove_project refuses while daemons reference the project and removes once free", async () => {
+		const repoDir = join(tmp, "edge-rm-project-repo");
+		mkdirSync(repoDir, { recursive: true });
+		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await proc.exited).toBe(0);
+		const project = await server.registry.addProject(repoDir);
+		const ref = server.registry.create({
+			name: "ref",
+			cwd: realpathSync(repoDir),
+			project: project.name,
+			labels: [],
+			mode: "spawned",
+			template: "local",
+			status: "asleep",
+			projectId: project.projectId,
+		});
+		try {
+			const browser = await openBrowser(server.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "remove_project", projectId: project.projectId });
+			const err = await browser.waitForFrame(
+				(f) => f.type === "error" && typeof f.error === "string" && f.error.includes(ref.daemonId),
+				"remove_project blocker error",
+			);
+			if (err.type !== "error") throw new Error("expected error");
+			expect(err.error).toContain("in use by daemons");
+			expect(server.registry.projects().some((p) => p.projectId === project.projectId)).toBe(true);
+			// Once the referencing daemon is gone, removal succeeds and the
+			// registered_projects broadcast drops the project.
+			server.registry.remove(ref.daemonId);
+			await browser.send({ type: "remove_project", projectId: project.projectId });
+			await browser.waitForFrame(
+				(f) => f.type === "registered_projects" && !f.projects.some((p) => p.projectId === project.projectId),
+				"registered_projects after remove",
+			);
+			expect(server.registry.projects().some((p) => p.projectId === project.projectId)).toBe(false);
+		} finally {
+			server.registry.remove(ref.daemonId);
+			try {
+				server.registry.removeProject(project.projectId);
+			} catch {
+				// Already removed.
+			}
+		}
+	});
 });
 
 describe("edge pure helpers", () => {
@@ -1199,6 +1356,35 @@ describe("edge pure helpers", () => {
 		expect(bare).not.toHaveProperty("git");
 	});
 
+	test("toRosterEntry sets managed only for cwds realpath-under the workspaceDir", () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-managed-"));
+		const ws = join(tmp, "workspaces");
+		const inside = join(ws, "repo", "feature");
+		mkdirSync(inside, { recursive: true });
+		const outside = join(tmp, "outside");
+		mkdirSync(outside, { recursive: true });
+		const base: RegistryEntry = {
+			daemonId: "d9",
+			name: "n",
+			cwd: "",
+			project: "x",
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+			registeredAt: Date.now(),
+		};
+		expect(toRosterEntry({ ...base, cwd: inside }, ws).managed).toBe(true);
+		// Outside the workspace root: absent (older-edge behavior), never false.
+		expect(toRosterEntry({ ...base, cwd: outside }, ws)).not.toHaveProperty("managed");
+		// A prefix-lookalike sibling (tmp/workspaces-other) is NOT under ws.
+		expect(toRosterEntry({ ...base, cwd: `${ws}-other` }, ws)).not.toHaveProperty("managed");
+		// No workspaceDir argument: absent, whatever the cwd.
+		expect(toRosterEntry({ ...base, cwd: inside })).not.toHaveProperty("managed");
+		// Empty cwd (remote-style entries) never carry it either.
+		expect(toRosterEntry(base, ws)).not.toHaveProperty("managed");
+		rmSync(tmp, { recursive: true, force: true });
+	});
+
 	test("shouldDropFrame guards the cap boundary", () => {
 		const cap = 4 * 1024 * 1024;
 		expect(shouldDropFrame(0, cap)).toBe(false);
@@ -1213,7 +1399,7 @@ describe("edge pure helpers", () => {
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry);
-		const config: FleetConfig = { roots: [], templates: { local: { command: "true" } }, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: { local: { command: "true" } }, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		// The cap fits the priming (small roster) + the ring replay, but a
 		// synchronous burst of roster broadcasts overflows it.
@@ -1270,7 +1456,7 @@ describe("edge pure helpers", () => {
 		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 3000);
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
 			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
@@ -1326,7 +1512,7 @@ describe("edge pure helpers", () => {
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
 			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
@@ -1392,7 +1578,7 @@ describe("edge pure helpers", () => {
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
 			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
@@ -1443,7 +1629,7 @@ describe("edge pure helpers", () => {
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
 			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
@@ -1511,7 +1697,7 @@ describe("edge pure helpers", () => {
 		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 3000);
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge({ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } });
 		const served = serveEdge(edge);
@@ -1574,7 +1760,7 @@ describe("edge pure helpers", () => {
 		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 3000);
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local" };
+		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		// Tiny per-client ring budget (~2.5 KiB): a burst of large deltas must
 		// evict the ring's head, not grow without bound.
@@ -1630,6 +1816,283 @@ describe("edge pure helpers", () => {
 			daemon.close();
 			served.stop();
 			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("edge worktree commands", () => {
+	let tmp: string;
+	let registry: Registry;
+	let connector: DaemonConnector;
+	let config: FleetConfig;
+	let supervisor: SpawnSupervisor;
+	let edge: FleetEdge;
+	let served: { port: number; stop(): void };
+	let repoDir: string;
+	let project: RegisteredProject;
+	let browser: BrowserSocket;
+
+	async function gitIn(cwd: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+		const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr] = await Promise.all([
+			Bun.readableStreamToText(proc.stdout),
+			Bun.readableStreamToText(proc.stderr),
+		]);
+		return { exitCode: await proc.exited, stdout, stderr };
+	}
+
+	beforeAll(async () => {
+		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-wt-"));
+		registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		connector = new DaemonConnector(registry);
+		// The "local" template idles so a start:true spawn never reaches a
+		// real omp-session; the tests stop the child themselves.
+		config = {
+			roots: [],
+			templates: { local: { command: "sleep 30" } },
+			defaultTemplate: "local",
+			workspaceDir: join(tmp, "workspaces"),
+		};
+		supervisor = new SpawnSupervisor(registry, connector, config);
+		edge = new FleetEdge({
+			registry,
+			connector,
+			supervisor,
+			config,
+			eventLog: new FleetEventLog(),
+			fleet: { port: 0, startedAt: Date.now(), statePath: join(tmp, "state.json"), configPath: null },
+		});
+		served = serveEdge(edge);
+		// A real git repo (main checkout) to register.
+		repoDir = join(tmp, "repo");
+		mkdirSync(repoDir, { recursive: true });
+		const init = Bun.spawn(["git", "init", "-q", "-b", "main"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		expect(await init.exited).toBe(0);
+		await gitIn(repoDir, ["config", "user.email", "test@example.com"]);
+		await gitIn(repoDir, ["config", "user.name", "Test"]);
+		writeFileSync(join(repoDir, "readme.md"), "hi\n");
+		await gitIn(repoDir, ["add", "."]);
+		await gitIn(repoDir, ["commit", "-q", "-m", "init"]);
+		project = await registry.addProject(repoDir);
+	});
+
+	afterAll(async () => {
+		served.stop();
+		edge.close();
+		await supervisor.close();
+		await connector.close();
+		rmSync(tmp, { recursive: true, force: true });
+	});
+
+	test("create_worktree (start:false) lands under workspaceDir and broadcasts a tagged roster entry", async () => {
+		browser = await openBrowser(served.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		const target = managedWorktreePath(config.workspaceDir, project.path, "My Branch");
+		await browser.send({ type: "create_worktree", id: "wt1", projectId: project.projectId, name: "My Branch" });
+		const roster = asRoster(
+			await browser.waitForFrame(
+				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === target),
+				"roster with the new worktree",
+			),
+		);
+		const entry = roster.daemons.find((d) => d.cwd === target)!;
+		expect(entry.projectId).toBe(project.projectId);
+		expect(entry.worktreeOf).toBe(project.name);
+		expect(entry.mode).toBe("spawned");
+		expect(entry.status).toBe("asleep");
+		expect(entry.managed).toBe(true);
+		expect(existsSync(target)).toBe(true);
+		// The roster never leaks tokens/endpoints.
+		expect(JSON.stringify(roster)).not.toContain("token");
+		expect(JSON.stringify(roster)).not.toContain("endpoint");
+	});
+
+	test("add_worktree registers a discovered-but-unregistered worktree", async () => {
+		const outside = join(tmp, "raw-wt");
+		await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", outside]);
+		await browser.send({ type: "add_worktree", id: "wt2", projectId: project.projectId, worktreePath: outside });
+		const roster = asRoster(
+			await browser.waitForFrame(
+				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === outside),
+				"roster with the added worktree",
+			),
+		);
+		const entry = roster.daemons.find((d) => d.cwd === outside)!;
+		expect(entry.projectId).toBe(project.projectId);
+		expect(entry.worktreeOf).toBe(project.name);
+		expect(entry.status).toBe("asleep");
+		// Outside the workspace root: not managed (no worktree deletion offer).
+		expect(entry).not.toHaveProperty("managed");
+	});
+
+	test("worktree_delete_info answers with the unicast guard-evidence frame", async () => {
+		const target = managedWorktreePath(config.workspaceDir, project.path, "My Branch");
+		const entry = registry.list().find((e) => e.cwd === target)!;
+		await browser.send({ type: "worktree_delete_info", id: "wt3", daemonId: entry.daemonId });
+		const frame = await browser.waitForFrame(
+			(f) => f.type === "worktree_delete_info" && f.daemonId === entry.daemonId,
+			"worktree_delete_info",
+		);
+		if (frame.type !== "worktree_delete_info") throw new Error("expected worktree_delete_info");
+		expect(frame.owned).toBe(true);
+		expect(frame.dirty).toBe(false);
+		expect(frame.branch).toBe("my-branch");
+		expect(frame.merged).toBe(true);
+		expect(frame.unpushed).toBe(false);
+		expect(JSON.stringify(frame)).not.toContain("token");
+		// Unknown daemon: an error frame, never a fabricated evidence payload.
+		await browser.send({ type: "worktree_delete_info", id: "wt4", daemonId: "d999" });
+		const err = await browser.waitForFrame((f) => f.type === "error" && f.error.includes("unknown daemon"), "unknown-daemon error");
+		if (err.type !== "error") throw new Error("expected error");
+		expect(err.error).toContain("d999");
+	});
+
+	test("delete_worktree stops, evicts, and git-removes the managed worktree", async () => {
+		const target = managedWorktreePath(config.workspaceDir, project.path, "My Branch");
+		const entry = registry.list().find((e) => e.cwd === target)!;
+		// Floor: only roster frames NEWER than the last one seen so far count —
+		// the priming roster (pre-entry) must not satisfy the "gone" predicate.
+		const rosters = browser.events.filter((ev) => ev.frame.type === "roster");
+		const floorId = rosters.length > 0 ? rosters[rosters.length - 1].id : 0;
+		await browser.send({ type: "delete_worktree", id: "wt5", daemonId: entry.daemonId });
+		await browser.waitForEvent(
+			(ev) => ev.id > floorId && ev.frame.type === "roster" && !ev.frame.daemons.some((d) => d.daemonId === entry.daemonId),
+			"roster without the deleted worktree",
+		);
+		expect(registry.get(entry.daemonId)).toBeUndefined();
+		expect(existsSync(target)).toBe(false);
+		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(target);
+	});
+
+	test("delete_worktree refuses a dirty worktree with an error frame, nothing mutated", async () => {
+		const target = managedWorktreePath(config.workspaceDir, project.path, "Dirty");
+		await browser.send({ type: "create_worktree", id: "wt6", projectId: project.projectId, name: "Dirty" });
+		const roster = asRoster(
+			await browser.waitForFrame(
+				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === target),
+				"roster with the dirty worktree",
+			),
+		);
+		const entry = roster.daemons.find((d) => d.cwd === target)!;
+		writeFileSync(join(entry.cwd, "scratch.txt"), "x\n");
+		await browser.send({ type: "delete_worktree", id: "wt7", daemonId: entry.daemonId });
+		const err = await browser.waitForFrame(
+			(f) => f.type === "error" && f.error.includes("uncommitted changes"),
+			"dirty refusal",
+		);
+		if (err.type !== "error") throw new Error("expected error");
+		expect(err.error).toContain("uncommitted changes");
+		expect(registry.get(entry.daemonId)).toBeDefined();
+		expect(existsSync(target)).toBe(true);
+	});
+
+	test("create_worktree with start:true spawns a daemon on the worktree (project-tagged)", async () => {
+		const target = managedWorktreePath(config.workspaceDir, project.path, "Started");
+		// The spawn's own create broadcast precedes the projectId tag; wait
+		// for a NEWER roster that carries the tag.
+		const rosters = browser.events.filter((ev) => ev.frame.type === "roster");
+		const floorId = rosters.length > 0 ? rosters[rosters.length - 1].id : 0;
+		await browser.send({ type: "create_worktree", id: "wt8", projectId: project.projectId, name: "Started", start: true });
+		const tagged = await browser.waitForEvent(
+			(ev) =>
+				ev.id > floorId &&
+				ev.frame.type === "roster" &&
+				ev.frame.daemons.some((d) => d.cwd === target && d.projectId === project.projectId),
+			"roster with the spawned worktree",
+		);
+		const roster = asRoster(tagged.frame);
+		const entry = roster.daemons.find((d) => d.cwd === target)!;
+		expect(entry.mode).toBe("spawned");
+		expect(entry.projectId).toBe(project.projectId);
+		expect(entry.worktreeOf).toBe(project.name);
+		expect(entry.managed).toBe(true);
+		// Stop the idling child (`sleep 30`) so the suite ends clean.
+		await supervisor.stop(entry.daemonId);
+	});
+
+	test("create_worktree refuses an existing branch checked out elsewhere", async () => {
+		await browser.send({
+			type: "create_worktree",
+			id: "wt9",
+			projectId: project.projectId,
+			name: "Conflicting",
+			existingBranch: "main",
+		});
+		const err = await browser.waitForFrame(
+			(f) => f.type === "error" && f.error.includes("already checked out elsewhere"),
+			"checked-out refusal",
+		);
+		if (err.type !== "error") throw new Error("expected error");
+		expect(err.error).toContain("main");
+	});
+
+	test("create_worktree with an unknown project errors", async () => {
+		await browser.send({ type: "create_worktree", id: "wt10", projectId: "p999", name: "x" });
+		const err = await browser.waitForFrame((f) => f.type === "error" && f.error.includes("unknown project"), "unknown project");
+		if (err.type !== "error") throw new Error("expected error");
+		expect(err.error).toContain("p999");
+	});
+
+	test("list_projects lists a registered project's unmanaged linked worktrees and drops roster cwds", async () => {
+		// A linked worktree OUTSIDE the discovery roots (roots are [] here):
+		// only the registry-backed merge can surface it.
+		const wtPath = join(tmp, "merge-wt");
+		const add = await gitIn(repoDir, ["worktree", "add", "-q", "-b", "merge-branch", wtPath]);
+		expect(add.exitCode).toBe(0);
+		const wtReal = realpathSync(wtPath);
+		const expected = { name: "merge-wt", path: wtReal, isWorktree: true, worktreeOf: project.name, branch: "merge-branch" };
+		try {
+			browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "list_projects" });
+			const frame = await browser.waitForFrame((f) => f.type === "projects", "projects frame");
+			if (frame.type !== "projects") throw new Error("expected projects");
+			expect(frame.projects).toContainEqual(expected);
+
+			// Registering a daemon on that cwd marks it managed → the row
+			// disappears. A fresh browser avoids stale projects frames.
+			const entry = await registerWorktreeEntry(registry, supervisor, project, wtReal, { start: false });
+			try {
+				browser.close();
+				browser = await openBrowser(served.port);
+				await browser.waitForFrame((f) => f.type === "roster", "roster");
+				await browser.send({ type: "list_projects" });
+				const frame2 = await browser.waitForFrame((f) => f.type === "projects", "projects frame");
+				if (frame2.type !== "projects") throw new Error("expected projects");
+				expect(frame2.projects.some((p) => p.path === wtReal)).toBe(false);
+			} finally {
+				registry.remove(entry.daemonId);
+			}
+		} finally {
+			browser.close();
+			await gitIn(repoDir, ["worktree", "remove", "--force", wtReal]);
+		}
+	});
+
+	test("list_projects dedupes a worktree that is also under a discovery root", async () => {
+		// The worktree sits directly under a discovery root, so the scan
+		// reports it too; the merge must not list it twice (discovery wins).
+		const root = join(tmp, "discovery-root");
+		mkdirSync(root, { recursive: true });
+		const wtPath = join(root, "rooted-wt");
+		const add = await gitIn(repoDir, ["worktree", "add", "-q", "-b", "rooted-branch", wtPath]);
+		expect(add.exitCode).toBe(0);
+		const wtReal = realpathSync(wtPath);
+		config.roots = [root];
+		try {
+			browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "list_projects" });
+			const frame = await browser.waitForFrame((f) => f.type === "projects", "projects frame");
+			if (frame.type !== "projects") throw new Error("expected projects");
+			const rows = frame.projects.filter((p) => p.path === wtReal);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]).toEqual({ name: "rooted-wt", path: wtReal, isWorktree: true, worktreeOf: project.name, branch: "rooted-branch" });
+		} finally {
+			config.roots = [];
+			browser.close();
+			await gitIn(repoDir, ["worktree", "remove", "--force", wtReal]);
 		}
 	});
 });

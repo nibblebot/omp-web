@@ -1,22 +1,25 @@
-import { createEffect, createSignal, For, onCleanup, onMount, Show, untrack, type Component } from "solid-js";
-import type { DaemonEntry, DaemonStatus, ProjectEntry } from "../../shared/protocol";
-import { attachSession, listProjects, removeDaemonById, setSidebarVisible, setState, spawnDaemon, spawnResume, state, stopDaemonById, togglePetVisible } from "../state";
+import { createEffect, createSignal, For, onCleanup, Show, untrack, type Component } from "solid-js";
+import type { DaemonEntry, DaemonStatus, RegisteredProject } from "../../shared/protocol";
+import { attachSession, daemonsByProject, removeDaemonById, sendWorktreeDeleteInfo, setSidebarVisible, setState, spawnResume, state, stopDaemonById, togglePetVisible } from "../state";
 import { formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
-import { PickerRow, useClickableRow } from "./PickerRow";
+import { useClickableRow } from "./PickerRow";
 
 // ---------------------------------------------------------------------------
-// Fleet-edge roster sidebar (Phase 3). Rendered by App.tsx only in
-// roster mode. ALL sessions (spawned, attached, remote alike) sit under a
-// single static "REPOS" header, grouped by owning repo (`worktreeOf ??
-// project`); a repo with worktree sessions becomes a label-only collapsible
-// container (main checkouts first, then worktrees) with rows indented
-// beneath, while repos without worktrees render their rows directly.
-// Collapse state persists per repo in localStorage. Rows show the session
-// status dot, a git-branch icon + branch for worktrees, project/label chips
-// and a git-dirty line; ready rows attach on click, asleep rows
-// wake-then-attach, stop and remove are bare-icon two-click confirms, and
-// each row opens a detail popover (facts + stderr tail).
+// Fleet-edge roster sidebar (Phase 5). Rendered by App.tsx only in
+// roster mode. Project-first: registered projects (registered_projects
+// frame) group their daemons — main-checkout row first, then worktrees —
+// each group carrying "+ Add worktree" (opens the worktree modal) and a
+// remove-project action. Entries WITHOUT a projectId (remote/unregistered)
+// fall back to today's string-grouping in one trailing group. The header
+// "+" opens the Add-repo modal (the retired SpawnPicker's template/labels
+// fields live in its advanced section). Rows show the session status dot,
+// a git-branch icon + branch for worktrees, project/label chips and a
+// git-dirty line; ready rows attach on click, asleep rows wake-then-attach,
+// stop and remove are bare-icon two-click confirms, managed worktree rows
+// additionally offer "Delete worktree…" (guard-evidence confirm dialog),
+// and each row opens a detail popover (facts + stderr tail). Collapse
+// state persists per project in localStorage.
 // ---------------------------------------------------------------------------
 
 /** Roster entries may carry a template name plus per-repo git facts
@@ -169,7 +172,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 					</Show>
 					{/* Bottom meta row: branch (non-worktree rows only — worktree
 					    rows already show it as the title), nonzero dirty counts, and
-					    the stop/remove/info icons pushed right. Always rendered —
+					    the stop/remove/delete/info icons pushed right. Always rendered —
 					    it carries the actions even with no git info to show. */}
 					<div class="daemon-git">
 						<Show when={!isWorktree() && d().branch !== undefined}>
@@ -225,6 +228,21 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 						>
 							✕
 						</button>
+						<Show when={d().managed === true}>
+							<button
+								type="button"
+								class="daemon-icon-btn daemon-del-btn"
+								title="Delete worktree… (stops the daemon and removes the managed worktree)"
+								aria-label="Delete worktree…"
+								onClick={e => {
+									e.stopPropagation();
+									sendWorktreeDeleteInfo(d().daemonId);
+									setState("deleteWorktreeTarget", d().daemonId);
+								}}
+							>
+								⌫
+							</button>
+						</Show>
 						<button
 							type="button"
 							class="daemon-icon-btn daemon-detail-btn"
@@ -371,194 +389,13 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 	);
 };
 
-/** Spawn picker modal: discovered projects grouped repo → worktrees, a
- *  freeform path input, and a template dropdown from /ctl/templates. */
-const SpawnPicker: Component<{ onClose: () => void }> = props => {
-	const [projects, setProjects] = createSignal<ProjectEntry[]>([]);
-	const [projectsError, setProjectsError] = createSignal<string | null>(null);
-	const [templates, setTemplates] = createSignal<string[]>([]);
-	const [templatesError, setTemplatesError] = createSignal<string | null>(null);
-	const [path, setPath] = createSignal("");
-	const [template, setTemplate] = createSignal("local");
-	const [labels, setLabels] = createSignal("");
-	const [pathError, setPathError] = createSignal<string | null>(null);
-	let pathInput!: HTMLInputElement;
-
-	onMount(() => {
-		void listProjects()
-			.then(setProjects)
-			.catch(err => setProjectsError(String(err)));
-		void fetch("/ctl/templates")
-			.then(r => {
-				if (!r.ok) throw new Error(`templates fetch failed (${r.status})`);
-				return r.json() as Promise<string[]>;
-			})
-			.then(list => {
-				setTemplates(list);
-				if (list.length > 0 && !list.includes(template())) setTemplate(list[0]);
-			})
-			.catch(err => setTemplatesError(String(err)));
-		// Keyboard-first: land focus in the path field once the Modal has
-		// grabbed the dialog (child onMount runs before the Modal's).
-		requestAnimationFrame(() => pathInput?.focus());
-	});
-
-	/** Main repos (isWorktree=false) with their worktrees nested beneath. */
-	const mains = () => projects().filter(p => !p.isWorktree);
-	const worktreesOf = (name: string) => projects().filter(p => p.isWorktree && p.worktreeOf === name);
-	/** Worktrees whose main repo lives outside the discovery roots. */
-	const orphans = () => {
-		const claimed = new Set(mains().map(p => p.name));
-		return projects().filter(p => p.isWorktree && !claimed.has(p.worktreeOf ?? ""));
-	};
-
-	const pick = (p: ProjectEntry) => {
-		setPath(p.path);
-		setPathError(null);
-	};
-
-	const spawn = () => {
-		const cwd = path().trim();
-		if (!cwd) {
-			setPathError("Enter a project path (or pick one below)");
-			return;
-		}
-		// Comma-separated k=v list; the edge validates each label's shape and
-		// answers an error frame on a bad one. Fire-and-forget: the new
-		// session appears in the roster as spawning → ready.
-		const parsedLabels = labels()
-			.split(",")
-			.map(l => l.trim())
-			.filter(l => l !== "");
-		spawnDaemon(cwd, template(), parsedLabels.length > 0 ? parsedLabels : undefined);
-		props.onClose();
-	};
-
-	return (
-		<Modal title="Spawn daemon" onClose={props.onClose}>
-			<div class="spawn-form">
-				<label class="daemon-detail-label" for="spawn-path">
-					path
-				</label>
-				<input
-					id="spawn-path"
-					ref={pathInput}
-					class="picker-filter spawn-path"
-					placeholder="~/repos/… or absolute path"
-					value={path()}
-					onInput={e => {
-						setPath(e.currentTarget.value);
-						setPathError(null);
-					}}
-					spellcheck={false}
-				/>
-				<Show when={pathError()}>{err => <div class="msg-notice spawn-path-error">{err()}</div>}</Show>
-				<label class="daemon-detail-label" for="spawn-template">
-					template
-				</label>
-				<select
-					id="spawn-template"
-					class="spawn-template"
-					value={template()}
-					onChange={e => setTemplate(e.currentTarget.value)}
-				>
-					<Show when={templates().length === 0 && templatesError() === null}>
-						<option value="local">local</option>
-					</Show>
-					<For each={templates()}>
-						{t => <option value={t}>{t}</option>}
-					</For>
-				</select>
-				<Show when={templatesError()}>{err => <div class="msg-notice spawn-template-error">{err()}</div>}</Show>
-				<label class="daemon-detail-label" for="spawn-labels">
-					labels
-				</label>
-				<input
-					id="spawn-labels"
-					class="picker-filter spawn-labels"
-					placeholder="tag=api, env=prod"
-					value={labels()}
-					onInput={e => setLabels(e.currentTarget.value)}
-					spellcheck={false}
-				/>
-			</div>
-			<div class="picker-group-name">Projects</div>
-			<Show when={projectsError()}>
-				{err => <div class="msg-notice">{err()}</div>}
-			</Show>
-			<div class="spawn-projects">
-				<For each={mains()}>
-					{p => (
-						<div class="spawn-group">
-							<PickerRow
-								class="picker-row spawn-project"
-								classList={{ active: path() === p.path }}
-								onClick={() => pick(p)}
-								title={p.path}
-							>
-								<span class="picker-label spawn-project-name">{p.name}</span>
-								<Show when={p.branch}>
-									{b => <span class="picker-chip spawn-branch">{b()}</span>}
-								</Show>
-							</PickerRow>
-							<For each={worktreesOf(p.name)}>
-								{w => (
-									<PickerRow
-										class="picker-row spawn-project spawn-project--worktree"
-										classList={{ active: path() === w.path }}
-										onClick={() => pick(w)}
-										title={w.path}
-									>
-										<span class="picker-label spawn-project-name">{w.name}</span>
-										<span class="spawn-of" title={`worktree of ${p.name}`}>
-											of {p.name}
-										</span>
-										<Show when={w.branch}>
-											{b => <span class="picker-chip spawn-branch">{b()}</span>}
-										</Show>
-									</PickerRow>
-								)}
-							</For>
-						</div>
-					)}
-				</For>
-				<For each={orphans()}>
-					{w => (
-						<PickerRow
-							class="picker-row spawn-project spawn-project--worktree"
-							classList={{ active: path() === w.path }}
-							onClick={() => pick(w)}
-							title={w.path}
-						>
-							<span class="picker-label spawn-project-name">{w.name}</span>
-							<Show when={w.branch}>
-								{b => <span class="picker-chip spawn-branch">{b()}</span>}
-							</Show>
-						</PickerRow>
-					)}
-				</For>
-				<Show when={projects().length === 0 && !projectsError()}>
-					<div class="tool-collapsed-note">no projects discovered</div>
-				</Show>
-			</div>
-			<div class="spawn-actions">
-				<button type="button" class="spawn-btn" onClick={() => void spawn()}>
-					spawn
-				</button>
-			</div>
-		</Modal>
-	);
-};
-
 /** Left overlay: fleet session roster (click to attach/wake). Fixed to the
  *  viewport's left edge; slides in/out via the `.open` class.
- *  ALL sessions — spawned, attached, and remote alike — group under a
- *  single static "REPOS" header by owning repo (`worktreeOf ?? project`,
- *  sorted); a repo with worktree sessions renders as a label-only
- *  collapsible container with its sessions indented beneath (main
- *  checkouts first, then worktrees, roster order preserved), while repos
- *  without worktree sessions render their rows directly. Per-repo collapse
- *  state persists in localStorage. */
+ *  Registered projects render as project groups (project.name header,
+ *  main-checkout rows first, then worktrees, "+ Add worktree" action,
+ *  remove-project action). Entries without a projectId (remote/unregistered)
+ *  fall back to today's string-grouping in one trailing group.
+ *  Per-project collapse state persists in localStorage. */
 
 /** localStorage key for the roster sidebar's collapsed group headers. */
 const GROUPS_KEY = "omp.sidebarGroupsCollapsed";
@@ -598,19 +435,17 @@ function disarmDaemon(): void {
 	setArmedRow(null);
 }
 
-/** One repo group in the roster: its entries and whether it contains
- *  worktree sessions (which changes how it renders). */
+/** One repo group in the fallback (project-less) roster: its entries and
+ *  whether it contains worktree sessions (which changes how it renders). */
 type SidebarGroup = {
 	name: string;
 	entries: DaemonEntry[];
 	hasWorktrees: boolean;
 };
 
-/** Group roster entries by repo (`worktreeOf ?? project`), sorted by group
- *  name via localeCompare. Groups that contain worktree sessions
- *  stable-partition main checkouts first, then worktrees — roster order
- *  preserved within each partition. Entries without worktreeOf (plain
- *  checkouts, remote sessions) reduce to a plain per-project grouping. */
+/** Fallback grouping for roster entries WITHOUT a projectId (remote/
+ *  unregistered): group by repo (`worktreeOf ?? project`), sorted by group
+ *  name via localeCompare — the pre-project roster's exact behavior. */
 function buildGroups(entries: DaemonEntry[]): SidebarGroup[] {
 	const byRepo = new Map<string, DaemonEntry[]>();
 	for (const d of entries) {
@@ -650,7 +485,6 @@ function readCollapsedGroups(): Set<string> {
 }
 
 export const DaemonSidebar: Component = () => {
-	const [spawnOpen, setSpawnOpen] = createSignal(false);
 	const [collapsedGroups, setCollapsedGroups] = createSignal<Set<string>>(readCollapsedGroups());
 
 	/** Flip a group's collapse state and persist the updated key set. */
@@ -662,10 +496,10 @@ export const DaemonSidebar: Component = () => {
 		if (typeof localStorage !== "undefined") localStorage.setItem(GROUPS_KEY, JSON.stringify([...next]));
 	};
 
-	/** The whole roster grouped per buildGroups; entries without worktreeOf
-	 *  (plain checkouts, remote sessions) render as plain rows, repos with
-	 *  worktrees as collapsible containers. */
-	const groups = () => buildGroups(state.daemonRoster);
+	/** Project-first grouping: registered projects in registry order (zero-
+	 *  daemon projects included) + one trailing fallback group for entries
+	 *  without a projectId. */
+	const groups = () => daemonsByProject();
 
 	/** Narrow viewports (<1100px): the sidebar is a transient drawer — any
 	 *  blur or click outside slides it back shut. Desktop keeps it open
@@ -715,6 +549,74 @@ export const DaemonSidebar: Component = () => {
 		);
 	};
 
+	/** One registered-project group: collapsible header (caret + name +
+	 *  daemon count + remove-project action), main-checkout row first then
+	 *  worktree rows (daemonsByProject order), and a "+ Add worktree" action. */
+	const ProjectGroup: Component<{ project: RegisteredProject; daemons: DaemonEntry[] }> = props => {
+		const gkey = `project:${props.project.projectId}`;
+		const open = () => !collapsedGroups().has(gkey);
+		return (
+			<>
+				<div class="sidebar-group project-group">
+					<button
+						type="button"
+						class="project-group-toggle"
+						aria-expanded={open()}
+						data-open={open() ? "true" : "false"}
+						onClick={() => toggleGroup(gkey)}
+					>
+						<span class="sidebar-caret" data-open={open() ? "true" : "false"} />
+						<span class="sidebar-group-label" title={props.project.path}>
+							{props.project.name}
+						</span>
+						<span class="sidebar-group-count">{props.daemons.length}</span>
+					</button>
+					<button
+						type="button"
+						class="sidebar-icon-btn project-remove-btn"
+						title="Remove project"
+						aria-label={`Remove project ${props.project.name}`}
+						onClick={() => setState("removeProjectTarget", props.project.projectId)}
+					>
+						✕
+					</button>
+				</div>
+				<Show when={open()}>
+					<For each={props.daemons}>{d => <DaemonRow daemon={d} nested={d.worktreeOf !== undefined} />}</For>
+					<button
+						type="button"
+						class="project-add-worktree"
+						onClick={() => {
+							setState("worktreeModalProjectId", props.project.projectId);
+							setState("modal", "worktree");
+						}}
+					>
+						+ Add worktree
+					</button>
+				</Show>
+			</>
+		);
+	};
+
+	/** Trailing fallback group: entries without a projectId keep today's
+	 *  string-grouping (collapsible repo headers for worktree-holding repos). */
+	const FallbackGroup: Component<{ daemons: DaemonEntry[] }> = props => (
+		<For each={buildGroups(props.daemons)}>
+			{g =>
+				g.hasWorktrees ? (
+					<>
+						<GroupHeader label={g.name} gkey={`repo:${g.name}`} count={g.entries.length} class="sidebar-group--repo" />
+						<Show when={!collapsedGroups().has(`repo:${g.name}`)}>
+							<For each={g.entries}>{d => <DaemonRow daemon={d} nested />}</For>
+						</Show>
+					</>
+				) : (
+					<For each={g.entries}>{d => <DaemonRow daemon={d} />}</For>
+				)
+			}
+		</For>
+	);
+
 	let asideRef: HTMLElement | undefined;
 	return (
 		<aside ref={asideRef} class="sidebar" classList={{ open: state.sidebarVisible }}>
@@ -723,7 +625,7 @@ export const DaemonSidebar: Component = () => {
 				<span class="sidebar-stats">
 					{state.daemonRoster.length} daemon{state.daemonRoster.length === 1 ? "" : "s"}
 				</span>
-				<button class="sidebar-icon-btn" onClick={() => setSpawnOpen(true)} title="Spawn a daemon" aria-label="Spawn a daemon">
+				<button class="sidebar-icon-btn" onClick={() => setState("modal", "add-project")} title="Add a project" aria-label="Add a project">
 					+
 				</button>
 				<button class="sidebar-icon-btn" onClick={() => setSidebarVisible(false)} title="Hide sidebar" aria-label="Hide sidebar">
@@ -731,32 +633,22 @@ export const DaemonSidebar: Component = () => {
 				</button>
 			</div>
 			<div class="sidebar-list">
-				<Show when={state.daemonRoster.length > 0}>
+				<Show when={groups().length === 0}>
+					<div class="sidebar-empty">no projects — press + to add one</div>
+				</Show>
+				<Show when={groups().length > 0}>
 					{/* Static top-level header: single grouping for the whole
 					    roster, no caret (not collapsible), no indent. */}
-					<div class="picker-group-name sidebar-subgroup">Repos</div>
+					<div class="picker-group-name sidebar-subgroup">Projects</div>
 					<For each={groups()}>
 						{g =>
-							g.hasWorktrees ? (
-								<>
-									<GroupHeader
-										label={g.name}
-										gkey={`repo:${g.name}`}
-										count={g.entries.length}
-										class="sidebar-group--repo"
-									/>
-									<Show when={!collapsedGroups().has(`repo:${g.name}`)}>
-										<For each={g.entries}>{d => <DaemonRow daemon={d} nested />}</For>
-									</Show>
-								</>
+							g.project === null ? (
+								g.daemons.length > 0 ? <FallbackGroup daemons={g.daemons} /> : null
 							) : (
-								<For each={g.entries}>{d => <DaemonRow daemon={d} />}</For>
+								<ProjectGroup project={g.project} daemons={g.daemons} />
 							)
 						}
 					</For>
-				</Show>
-				<Show when={state.daemonRoster.length === 0}>
-					<div class="sidebar-empty">no daemons — press + to spawn one</div>
 				</Show>
 			</div>
 			{/* Global chrome moved out of the StatusBar: pet roster, debug panel, settings. */}
@@ -788,9 +680,6 @@ export const DaemonSidebar: Component = () => {
 					⚙
 				</button>
 			</div>
-			<Show when={spawnOpen()}>
-				<SpawnPicker onClose={() => setSpawnOpen(false)} />
-			</Show>
 		</aside>
 	);
 };

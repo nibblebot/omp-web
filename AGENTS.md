@@ -25,7 +25,7 @@ bun run test                   # scripts/test.ts wrapper → bun test (see Testi
 bun scripts/test.ts --bail 1   # extra args forwarded to bun test (file filters work: `bun scripts/test.ts server/omp-session.test.ts`)
 bun run build                  # vite build → dist/ (gitignored)
 bun run build:omp-session      # → dist-bin/omp-session self-contained binary (UI embedded via server/embedded-dist.ts)
-bun run fleet -- serve|sessions|projects|spawn|add|provision|stop|remove|prompt
+bun run fleet -- serve|sessions|projects|spawn|add-repo|add|provision|stop|remove|rm-project|add-worktree|rm-worktree|prompt
 bun run collab [-- --join|--stop]   # collab room CLI (TUI/CLI-only surface)
 ```
 
@@ -48,14 +48,15 @@ Ports: defaults vite **4713**, omp-session **4721**, omp-fleet **4722** (used by
 | `server/collab-*.ts` | Collab host adapter / WS relay / session port / CLI. Only WebSocket left in the daemon (non-goal of the SSE plan) |
 | `server/daemon-broker.ts` | `daemons` roster broadcast (hub-launch processes), polled every 3s while streams are live |
 | `server/embedded-dist.ts` | **Stub** (`{}`) checked in; `build:omp-session` regenerates it with `with { type: "file" }` imports and restores the stub in a `finally`. Never hand-edit beyond the stub |
-| `fleet/registry.ts` | Persistent insertion-ordered roster (`~/.omp/fleet/state.json`) |
+| `fleet/registry.ts` | Persistent insertion-ordered roster + registered `projects[]` (`~/.ompweb/fleet/state.json`, atomic tmp+rename; monotonic `pN` project ids) |
 | `fleet/supervisor.ts` | Spawns/restarts omp-session children via templates, parses `OMP_SESSION|` lines, git polling |
 | `fleet/connector.ts` | Per-daemon SSE client: status ladder, backoff, silence deadline, Last-Event-ID resume |
 | `fleet/edge.ts` | Browser-facing half: `/events` downlink, `/command` uplink, per-browser daemon proxy pipes, aggregated `daemons` frame |
-| `fleet/server.ts` | Loopback control plane `:4722`: `/ctl/*` routes, wiring, boot reconcile |
+| `fleet/server.ts` | Loopback control plane `:4722`: `/ctl/*` routes (incl. `/ctl/projects[/:id]`, `/ctl/projects/:id/worktrees`, `/ctl/worktrees/:daemonId[/delete-info]`), wiring, boot reconcile |
 | `fleet/cli.ts` | CLI over `/ctl/*` (loopback HTTP client) |
 | `fleet/spawn-parse.ts` | Template fill, `OMP_SESSION|` parsing, endpoint resolution (pure) |
 | `fleet/discovery.ts` | Project/worktree discovery, git state probing |
+| `fleet/worktrees.ts` | Managed-worktree path mapping + lifecycle (`slugifyWorktreeName`/`managedWorktreePath`, `.ompweb-repo` collision markers, `resolveBaseRef`/`createWorktree`/`listUnregisteredWorktrees`/`deleteWorktree` + guard evidence; `git branch -d` only) |
 | `fleet/selectors.ts`, `fleet/fanout.ts` | Selector grammar (`dN`, `all`, glob, `label:k=v`, `project:name`) + prompt fan-out correlation |
 | `src/state.ts` | **The entire client model**: one `createStore`; chat items, streaming, session mirror, `call()`, roster, stale-frame guards |
 | `src/components/` | Thin components: read `state` reactively, mutate only via exported store actions. No data props |
@@ -92,6 +93,8 @@ Key constants (all in `shared/protocol.ts`): `OMP_PROTO = 2`, `SSE_KEEPALIVE_MS`
 - **Zero agent state.** Fleet persists only roster metadata (endpoints, per-spawn bearer tokens, `lastSessionFile`, git branch/dirty counts) and re-derives everything else by dialing daemons.
 - **Tokens are minted fresh per spawn/restart and must NEVER be serialized** into roster frames or `/ctl/debug` (tests enforce this — `edge.test.ts` asserts `toRosterEntry` output). Same for endpoints in `/ctl/debug` snapshots.
 - `dN` ids are monotonic and never reused. Registry persists atomically (tmp+rename) on every mutation.
+- `pN` project ids are monotonic and never reused; projects are realpath-keyed and deduped on registration (a duplicate realpath returns the existing project); `removeProject` refuses while roster entries reference it and names the blockers. Projects persist in the same atomic state file as the roster, and the `registered_projects` frame must NEVER serialize tokens/endpoints (same rule as roster frames; `edge.test.ts` enforces it).
+- Managed worktrees live under the `workspaceDir` knob (flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR` > config-file `workspaceDir` key > `~/ompweb/workspaces`; the root is created lazily on first worktree, never at boot). Deleting one requires ownership (realpath under `workspaceDir`) AND a clean tree — no `--force` in v1; the optional branch delete is `git branch -d` only, never `-D`. Session transcripts live under the agent dir, never inside the worktree, so worktree deletion never touches them.
 - Status ladder is monotonic `connecting < session < resolving < ready`; `error` is terminal (only respawn refreshes). `hello_ok` gates: `OMP_PROTO` mismatch → terminal error; registered cwd vs `hello_ok.cwd` mismatch → `error cwd mismatch` (empty registered cwd → adopt hello's).
 - Endpoint resolution order (spawn): last `{event:"endpoint"}` wrapper line › template `host` + listening port › `advertise` › loopback. 30s endpoint timeout → error + kill.
 - Spawn templates: `{cwd}` `{token}` `{name}` `{labels}` `{resume}` substitution, `sh -c`, no shell escaping in `fillTemplate` (caller `shellQuote`s). `OMP_FLEET_LOCAL_TEMPLATE` replaces the `local` template command outright (dev runners).
