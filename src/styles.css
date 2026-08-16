@@ -4269,6 +4269,15 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	flex: none;
 }
 
+/* Checked-out branches aren't selectable (git refuses a second checkout);
+   aria-disabled keeps the row visible and announced but inert. */
+.worktree-row[aria-disabled="true"],
+.worktree-row[aria-disabled="true"]:hover {
+	color: var(--muted-2);
+	cursor: default;
+	background: none;
+}
+
 /* --- Close-out dialogs (DeleteWorktreeDialog / RemoveProjectDialog) --- */
 .worktree-evidence {
 	display: inline-flex;

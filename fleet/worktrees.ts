@@ -30,7 +30,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
-import type { ProjectEntry, RegisteredProject } from "../shared/protocol";
+import type { ProjectBranch, ProjectEntry, RegisteredProject } from "../shared/protocol";
 import { probeGitState, validateProjectPath } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
@@ -227,6 +227,37 @@ export async function createWorktree(
 	}
 	writeFileSync(join(dirname(target), OMPWEB_REPO_MARKER), `${project.path}\n`);
 	return { path: target, branch: opts.existingBranch };
+}
+
+/**
+ * List a registered project's LOCAL branches with their checked-out state,
+ * for the add-worktree branch picker. `git for-each-ref refs/heads` yields
+ * the short branch names (a zero-commit repo has no refs → `[]`);
+ * `git worktree list --porcelain` marks each branch currently checked out
+ * in SOME worktree (main checkout or linked) with `checkedOut: true` and
+ * that worktree's path. NEVER fetches.
+ */
+export async function listProjectBranches(mainPath: string): Promise<ProjectBranch[]> {
+	const refs = await runGit(["for-each-ref", "refs/heads", "--format=%(refname:short)"], mainPath);
+	if (refs.exitCode !== 0) {
+		throw new Error(`cannot list branches: ${refs.stderr.trim() || `git exited ${refs.exitCode}`}`);
+	}
+	const names = refs.stdout.trim() === "" ? [] : refs.stdout.trim().split("\n");
+	const worktrees = await runGit(["worktree", "list", "--porcelain"], mainPath);
+	if (worktrees.exitCode !== 0) {
+		throw new Error(`cannot list branches: ${worktrees.stderr.trim() || `git exited ${worktrees.exitCode}`}`);
+	}
+	// A branch is checked out in at most one worktree (git refuses a second
+	// checkout), so per-branch overwrite is safe.
+	const checkedOut = new Map<string, string>();
+	for (const block of parseWorktreeList(worktrees.stdout)) {
+		const name = branchOf(block.branch);
+		if (name !== undefined && block.path !== undefined) checkedOut.set(name, block.path);
+	}
+	return names.map((name) => {
+		const worktreePath = checkedOut.get(name);
+		return worktreePath === undefined ? { name, checkedOut: false } : { name, checkedOut: true, worktreePath };
+	});
 }
 
 // ---------------------------------------------------------------------------

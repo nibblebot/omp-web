@@ -4,7 +4,7 @@ import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "../shared/protocol";
-import type { ClientCommand, DaemonEntry, DaemonInfo, DaemonStatus, ImageArg, ModelInfo, AvailableSlashCommand, ProjectEntry, RegisteredProject, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "../shared/protocol";
+import type { ClientCommand, DaemonEntry, DaemonInfo, DaemonStatus, ImageArg, ModelInfo, AvailableSlashCommand, ProjectBranch, ProjectEntry, RegisteredProject, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "../shared/protocol";
 import { SSE_PING_EVENT } from "../shared/sse";
 import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
@@ -1019,6 +1019,8 @@ function teardownStream(source: EventSource): void {
 	pendingFiles = null;
 	pendingProjects?.([]);
 	pendingProjects = null;
+	pendingBranches?.resolve([]);
+	pendingBranches = null;
 	if (pendingAttach) {
 		clearTimeout(pendingAttach.timer);
 		pendingAttach.reject(new Error("Disconnected"));
@@ -1243,6 +1245,30 @@ export function listProjects(): Promise<ProjectEntry[]> {
 	postCommand({ type: "list_projects", id: crypto.randomUUID() } satisfies ClientCommand).catch(err => {
 		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
 		if (pendingProjects === resolve) pendingProjects = null;
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
+	return promise;
+}
+
+/** Latest-wins pull like listProjects, keyed by projectId: the edge answers
+ *  list_project_branches with one `project_branches` unicast frame, so a
+ *  superseded request is resolved [] immediately (its frame, if it arrives,
+ *  carries the OLD projectId and is left pending). */
+let pendingBranches: { projectId: string; resolve: (branches: ProjectBranch[]) => void } | null = null;
+
+/** List the local branches of a registered project (feeds the add-worktree
+ *  branch picker; checkedOut branches cannot be checked out again). */
+export function listProjectBranches(projectId: string): Promise<ProjectBranch[]> {
+	const { promise, resolve, reject } = Promise.withResolvers<ProjectBranch[]>();
+	if (!connected) {
+		reject(new Error("Not connected"));
+		return promise;
+	}
+	pendingBranches?.resolve([]);
+	pendingBranches = { projectId, resolve };
+	postCommand({ type: "list_project_branches", id: crypto.randomUUID(), projectId } satisfies ClientCommand).catch(err => {
+		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
+		if (pendingBranches?.resolve === resolve) pendingBranches = null;
 		reject(err instanceof Error ? err : new Error(String(err)));
 	});
 	return promise;
@@ -1915,6 +1941,15 @@ export function connect(): void {
 			case "projects":
 				pendingProjects?.(frame.projects);
 				pendingProjects = null;
+				break;
+			case "project_branches":
+				// Unicast answer to list_project_branches (fleet-scoped like
+				// projects). A frame whose projectId doesn't match the pending
+				// request belongs to a superseded one — leave it pending.
+				if (pendingBranches && pendingBranches.projectId === frame.projectId) {
+					pendingBranches.resolve(frame.branches);
+					pendingBranches = null;
+				}
 				break;
 			case "registered_projects":
 				// Phase 5: first-class project registry broadcast (fleet-scoped

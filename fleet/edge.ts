@@ -99,6 +99,7 @@ import {
 	createWorktree,
 	deleteWorktree,
 	isPathUnder,
+	listProjectBranches,
 	mergeUnregisteredWorktrees,
 	realpathOf,
 	registerWorktreeEntry,
@@ -166,6 +167,7 @@ const UNKNOWN_COMMAND_MESSAGE = "fleet edge: use spawn/stop/roster";
 const BROWSER_COMMAND_LIST = [
 	// Handled at the edge.
 	"list_projects",
+	"list_project_branches",
 	"spawn",
 	"spawn_resume",
 	"stop",
@@ -688,6 +690,15 @@ export class FleetEdge {
 			case "list_projects":
 				void this.#handleListProjects(stream);
 				break;
+			case "list_project_branches": {
+				const projectId = typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
+				if (projectId === undefined) {
+					this.#sendError(stream, "list_project_branches: missing projectId");
+					break;
+				}
+				void this.#handleListProjectBranches(stream, projectId);
+				break;
+			}
 			case "spawn": {
 				const cwd = typeof cmd.cwd === "string" && cmd.cwd !== "" ? cmd.cwd : undefined;
 				if (cwd === undefined) {
@@ -841,6 +852,24 @@ export class FleetEdge {
 				this.#registry.list().map((entry) => entry.cwd),
 			);
 			this.#sendAnswer(stream, { type: "projects", projects });
+		} catch (err) {
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	/**
+	 * list_project_branches: unicast answer with the registered project's
+	 * local branches + checked-out state, for the add-worktree branch picker.
+	 */
+	async #handleListProjectBranches(stream: BrowserStream, projectId: string): Promise<void> {
+		const project = this.#registry.projects().find((p) => p.projectId === projectId);
+		if (!project) {
+			this.#sendError(stream, `unknown project: ${projectId}`);
+			return;
+		}
+		try {
+			const branches = await listProjectBranches(project.path);
+			this.#sendAnswer(stream, { type: "project_branches", projectId, branches });
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}

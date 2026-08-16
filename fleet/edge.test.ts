@@ -2029,8 +2029,95 @@ describe("edge worktree commands", () => {
 		expect(err.error).toContain("main");
 	});
 
+	test("create_worktree attaches an existingBranch not checked out elsewhere", async () => {
+		// Success path for the picker's primary flow: existingBranch names a
+		// branch NOT checked out anywhere → the worktree attaches to it.
+		// Opens its OWN browser (the cluster's shared `browser` is assigned
+		// by an earlier test that a -t filter may skip).
+		const add = await gitIn(repoDir, ["branch", "feature2"]);
+		expect(add.exitCode).toBe(0);
+		const target = managedWorktreePath(config.workspaceDir, project.path, "From Branch");
+		const local = await openBrowser(served.port);
+		try {
+			await local.waitForFrame((f) => f.type === "roster", "roster");
+			await local.send({
+				type: "create_worktree",
+				id: "wt11",
+				projectId: project.projectId,
+				name: "From Branch",
+				existingBranch: "feature2",
+			});
+			const roster = asRoster(
+				await local.waitForFrame(
+					(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === target),
+					"roster with the existing-branch worktree",
+				),
+			);
+			const entry = roster.daemons.find((d) => d.cwd === target)!;
+			expect(entry.projectId).toBe(project.projectId);
+			expect(entry.mode).toBe("spawned");
+			expect(entry.managed).toBe(true);
+			expect(existsSync(target)).toBe(true);
+			// start:false entries carry no roster branch field; git is the
+			// ground truth that the worktree sits on the attached branch.
+			expect((await gitIn(target, ["symbolic-ref", "--short", "HEAD"])).stdout.trim()).toBe("feature2");
+		} finally {
+			local.close();
+		}
+	});
+
 	test("create_worktree with an unknown project errors", async () => {
 		await browser.send({ type: "create_worktree", id: "wt10", projectId: "p999", name: "x" });
+		const err = await browser.waitForFrame((f) => f.type === "error" && f.error.includes("unknown project"), "unknown project");
+		if (err.type !== "error") throw new Error("expected error");
+		expect(err.error).toContain("p999");
+	});
+
+	test("list_project_branches answers with branches and checked-out state", async () => {
+		// A fresh repo (main + feature checked out in a linked worktree + an
+		// unchecked third branch) so the assertions don't couple to the
+		// shared repoDir's accumulated branches.
+		const repo = join(tmp, "branch-picker-repo");
+		mkdirSync(repo, { recursive: true });
+		const init = Bun.spawn(["git", "init", "-q", "-b", "main"], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+		expect(await init.exited).toBe(0);
+		await gitIn(repo, ["config", "user.email", "test@example.com"]);
+		await gitIn(repo, ["config", "user.name", "Test"]);
+		writeFileSync(join(repo, "readme.md"), "hi\n");
+		await gitIn(repo, ["add", "."]);
+		await gitIn(repo, ["commit", "-q", "-m", "init"]);
+		const linked = join(tmp, "branch-picker-linked");
+		const add = await gitIn(repo, ["worktree", "add", "-q", "-b", "feature", linked]);
+		expect(add.exitCode).toBe(0);
+		await gitIn(repo, ["branch", "unused"]);
+		const project = await registry.addProject(repo);
+		try {
+			browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "list_project_branches", id: "br1", projectId: project.projectId });
+			const frame = await browser.waitForFrame((f) => f.type === "project_branches", "project_branches frame");
+			if (frame.type !== "project_branches") throw new Error("expected project_branches");
+			expect(frame.projectId).toBe(project.projectId);
+			const byName = new Map(frame.branches.map((b) => [b.name, b]));
+			expect(byName.get("main")).toEqual({ name: "main", checkedOut: true, worktreePath: realpathSync(repo) });
+			expect(byName.get("feature")).toEqual({ name: "feature", checkedOut: true, worktreePath: realpathSync(linked) });
+			expect(byName.get("unused")).toEqual({ name: "unused", checkedOut: false });
+			expect(frame.branches).toHaveLength(3);
+		} finally {
+			browser.close();
+			await gitIn(repo, ["worktree", "remove", "--force", linked]);
+			try {
+				registry.removeProject(project.projectId);
+			} catch {
+				// Already clean.
+			}
+		}
+	});
+
+	test("list_project_branches with an unknown project errors", async () => {
+		browser = await openBrowser(served.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		await browser.send({ type: "list_project_branches", id: "br2", projectId: "p999" });
 		const err = await browser.waitForFrame((f) => f.type === "error" && f.error.includes("unknown project"), "unknown project");
 		if (err.type !== "error") throw new Error("expected error");
 		expect(err.error).toContain("p999");

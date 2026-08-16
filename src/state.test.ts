@@ -7,6 +7,7 @@ import {
 	call,
 	connect,
 	daemonsByProject,
+	listProjectBranches,
 	pushNotice,
 	refreshSettings,
 	sendAddExistingWorktree,
@@ -938,6 +939,37 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		dispatch(attached("daemon-a"));
 		dispatch(attached("daemon-b"));
 		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({ owned: false, dirty: false, reason: "not managed" });
+	});
+
+	test("listProjectBranches resolves via a matching project_branches frame; a mismatched projectId frame does not settle it", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true
+
+		const branches = listProjectBranches("p1");
+		expect(posted).toEqual([{ type: "list_project_branches", id: expect.any(String), projectId: "p1" }]);
+
+		// A frame for a different project belongs to a superseded request and
+		// must not settle the pending promise.
+		dispatch({ type: "project_branches", projectId: "p2", branches: [{ name: "other", checkedOut: false }] });
+		let settled = false;
+		void branches.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await flushMicrotasks();
+		expect(settled).toBe(false);
+
+		// The matching projectId frame settles it with the branch list.
+		dispatch({
+			type: "project_branches",
+			projectId: "p1",
+			branches: [{ name: "main", checkedOut: true, worktreePath: "/w/main" }],
+		});
+		await expect(branches).resolves.toEqual([{ name: "main", checkedOut: true, worktreePath: "/w/main" }]);
 	});
 });
 

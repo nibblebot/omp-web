@@ -281,6 +281,16 @@ export interface ProjectEntry {
 	branch?: string;
 }
 
+/** One local branch of a registered project (project_branches frame). */
+export interface ProjectBranch {
+	/** Short branch name (refs/heads/ stripped). */
+	name: string;
+	/** True when checked out in some worktree — git refuses a second checkout. */
+	checkedOut: boolean;
+	/** Where it is checked out (main checkout or linked worktree), when checkedOut. */
+	worktreePath?: string;
+}
+
 /**
  * One first-class project registered with the fleet (registered_projects
  * frame). Projects are realpath-keyed, deduped on registration, and persist
@@ -420,7 +430,11 @@ export type ClientCommand =
 	// Guard evidence for the delete confirmation (owned/dirty/branch state);
 	// answered by the unicast worktree_delete_info frame.
 	| { type: "worktree_delete_info"; id: string; daemonId: string }
-	| { type: "list_projects"; id: string };
+	| { type: "list_projects"; id: string }
+	// Branch picker for the add-worktree flow: local branches of a
+	// registered project with checked-out state; answered by the unicast
+	// project_branches frame.
+	| { type: "list_project_branches"; id: string; projectId: string };
 
 // ---------------------------------------------------------------------------
 // Collab (TUI-mux): per-session collab host status, pushed to attached
@@ -530,6 +544,8 @@ export type ServerFrame =
 	| { type: "registered_projects"; projects: RegisteredProject[] }
 	// Unicast answer to list_projects.
 	| { type: "projects"; projects: ProjectEntry[] }
+	// Unicast answer to list_project_branches (fleet-scoped, like projects).
+	| { type: "project_branches"; projectId: string; branches: ProjectBranch[] }
 	// Unicast answer to worktree_delete_info: guard evidence for the delete
 	// confirmation (ownership, dirty counts, branch merge/push state). Never
 	// carries tokens/endpoints.
