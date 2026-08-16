@@ -230,7 +230,14 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 					</button>
 				</div>
 				<Show when={tab() === "create"}>
-					<div class="worktree-form">
+					{/* <form> so Enter in any field submits (AskDialog convention). */}
+					<form
+						class="worktree-form"
+						onSubmit={e => {
+							e.preventDefault();
+							void submitCreate();
+						}}
+					>
 						<label class="daemon-detail-label" for="worktree-name">
 							name
 						</label>
@@ -276,12 +283,12 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 							<input type="checkbox" checked={start()} onChange={e => setStart(e.currentTarget.checked)} />
 							Start a session now
 						</label>
-					</div>
-					<div class="worktree-actions">
-						<button type="button" class="worktree-btn" onClick={() => void submitCreate()}>
-							Create worktree
-						</button>
-					</div>
+						<div class="worktree-actions">
+							<button type="submit" class="worktree-btn">
+								Create worktree
+							</button>
+						</div>
+					</form>
 				</Show>
 				<Show when={tab() === "existing"}>
 					<div class="picker-group-name">Unregistered worktrees</div>
