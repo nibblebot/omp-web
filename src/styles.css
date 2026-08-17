@@ -434,8 +434,19 @@ body {
 	color: var(--error-text);
 }
 
+/* Wrap owns the jump-to-bottom button's positioning context; the scroller
+   keeps flex:1 inside it. */
+.message-list-wrap {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
 .message-list {
 	flex: 1;
+	min-height: 0;
 	overflow-y: auto;
 	padding: var(--space-6) var(--space-5) var(--space-4);
 	/* Keep the scrollbar out of the text: overlay scrollbars float over the
@@ -445,6 +456,33 @@ body {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-5);
+}
+
+/* Floating re-pin affordance: appears when the user scrolls up mid-stream.
+   Sits above the stream cards (--z-toolbar owns the in-card toolbars) with a
+   slight shadow so it reads as a separate layer. */
+.jump-to-bottom {
+	position: absolute;
+	bottom: var(--space-5);
+	right: var(--space-5);
+	z-index: var(--z-overlay);
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	background: var(--btn);
+	border: 1px solid var(--border-strong);
+	color: var(--text);
+	border-radius: var(--r-pill);
+	padding: var(--space-2) var(--space-5);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+	box-shadow: var(--shadow-1);
+}
+
+.jump-to-bottom:hover {
+	background: var(--hover);
+	box-shadow: var(--shadow-2);
 }
 
 /* Collapse-tool-cards view: toggle above the stream plus compact single-row

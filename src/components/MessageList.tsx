@@ -9,7 +9,7 @@ import { CopyButton } from "./CopyButton";
 import { ToolCard, ToolStripCard } from "./ToolCard";
 import { groupAssistantRuns, type Run } from "../tool-runs";
 import { buildUsageRow, formatDurationMs, formatUsageRow } from "../usage";
-import { ExpandIcon } from "../icons";
+import { ArrowDownIcon, ExpandIcon } from "../icons";
 
 // Elements that cannot carry text children; append the fresh span to their parent instead.
 const VOID_TAGS: Record<string, true> = { BR: true, HR: true, IMG: true, INPUT: true, WBR: true };
@@ -224,22 +224,56 @@ export const RunRow: Component<{ run: Run }> = props => {
 export const MessageList: Component = () => {
 	let container!: HTMLDivElement;
 	const [zoomed, setZoomed] = createSignal<ImageArg | null>(null);
-	// Auto-scroll only when the user is already near the bottom. The near-bottom
-	// check reads layout, so it never runs inside the streaming effect: the
-	// effect only writes, and the read is deferred to one requestAnimationFrame
-	// per frame (coalesced) plus the user's own scroll events — no forced
-	// synchronous layout on every flush.
-	let pinned = false;
+	// Sticky-bottom auto-scroll: the stream snaps to the bottom on new content
+	// until the user scrolls up, which unpins it and floats a jump-to-bottom
+	// button over the stream; scrolling back near the bottom (or clicking the
+	// button) re-pins. Starts pinned so a fresh attach/history load lands at
+	// the bottom instead of the top.
+	//
+	// Unpinning happens SYNCHRONOUSLY in the input handlers, never from scroll
+	// events: those dispatch asynchronously, so during active streaming a snap
+	// write can land before the user's scroll event is processed and the
+	// position already reads "at bottom" again — the user could never escape.
+	// Scroll events also fire for PROGRAMMATIC shifts (resize clamping,
+	// content growth), which must never unpin. So: gestures unpin (wheel-up
+	// aimed at the session, scrollbar drag, up-keys, upward touch drag);
+	// scroll events only RE-pin near the bottom, and re-snap when a
+	// programmatic shift moved a pinned viewport.
+	const PIN_DISTANCE_PX = 80;
+	let pinned = true;
 	let pinCheckRaf = 0;
+	const [jumpVisible, setJumpVisible] = createSignal(false);
+	const nearBottom = () => container.scrollHeight - container.scrollTop - container.clientHeight < PIN_DISTANCE_PX;
+	const unpin = () => {
+		// No room above → the gesture can't move the viewport; stay pinned.
+		if (container.scrollTop <= 0) return;
+		pinned = false;
+		setJumpVisible(true);
+	};
+	const applyPinState = () => {
+		if (nearBottom()) {
+			pinned = true;
+			setJumpVisible(false);
+		} else if (pinned) {
+			container.scrollTop = container.scrollHeight; // programmatic shift: re-snap
+		} else {
+			// Unpinned away from the bottom must ALWAYS show the re-pin
+			// affordance — some paths (scrollbar drag starting at the bottom)
+			// unpin without going through unpin().
+			setJumpVisible(true);
+		}
+	};
 	const schedulePinCheck = () => {
 		if (pinCheckRaf !== 0) return;
 		pinCheckRaf = requestAnimationFrame(() => {
 			pinCheckRaf = 0;
-			pinned = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+			applyPinState();
 		});
 	};
-	const onContainerScroll = () => {
-		pinned = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+	const jumpToBottom = () => {
+		pinned = true;
+		setJumpVisible(false);
+		container.scrollTop = container.scrollHeight;
 	};
 	onCleanup(() => {
 		if (pinCheckRaf !== 0) cancelAnimationFrame(pinCheckRaf);
@@ -249,6 +283,27 @@ export const MessageList: Component = () => {
 		state.live.blocks.map(b => b.text.length);
 		if (pinned) container.scrollTop = container.scrollHeight;
 		schedulePinCheck();
+	});
+	// Session switches re-pin: a fresh transcript starts at the bottom no
+	// matter where the previous session was scrolled (currentSessionId changes
+	// on every attach/switch; the effect above then owns the snap as history
+	// frames land).
+	let lastSessionId = state.currentSessionId;
+	createEffect(() => {
+		const id = state.currentSessionId;
+		if (id === lastSessionId) return;
+		lastSessionId = id;
+		pinned = true;
+		setJumpVisible(false);
+	});
+	// Window resizes change clientHeight without a scroll event; a pinned
+	// stream must re-snap or the bottom drifts out of view.
+	onMount(() => {
+		const ro = new ResizeObserver(() => {
+			if (pinned) container.scrollTop = container.scrollHeight;
+		});
+		ro.observe(container);
+		onCleanup(() => ro.disconnect());
 	});
 	// Session-first wheel scrolling. Tool bodies with their own vertical
 	// scrollbar (search results; any future capped output) otherwise trap the
@@ -263,6 +318,11 @@ export const MessageList: Component = () => {
 		// modifiers are unrelated gestures (Ctrl zoom, Shift horizontal).
 		if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
 		if (e.deltaY === 0) return; // horizontal-only wheel passes through
+		// Wheel-up that will move the SESSION unpins synchronously (see the pin
+		// comment above); wheel-down re-pins via the scroll event at the bottom.
+		const unpinOnUp = () => {
+			if (e.deltaY < 0) unpin();
+		};
 		let el = e.target as HTMLElement | null;
 		let scroller: HTMLElement | null = null;
 		while (el && el !== container) {
@@ -273,15 +333,22 @@ export const MessageList: Component = () => {
 			}
 			el = el.parentElement;
 		}
-		if (!scroller) return; // nothing captures the wheel → native session scroll
+		if (!scroller) {
+			unpinOnUp();
+			return; // nothing captures the wheel → native session scroll
+		}
 		const atBoundary =
 			e.deltaY > 0
 				? scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1
 				: scroller.scrollTop <= 0;
-		if (atBoundary) return; // native chaining moves the session
+		if (atBoundary) {
+			unpinOnUp();
+			return; // native chaining moves the session
+		}
 		const rect = scroller.getBoundingClientRect();
 		if (e.clientX >= rect.right - INNER_SCROLLBAR_PX) return; // over its scrollbar
 		e.preventDefault();
+		unpinOnUp();
 		const delta =
 			e.deltaMode === WheelEvent.DOM_DELTA_LINE
 				? e.deltaY * 16
@@ -293,8 +360,98 @@ export const MessageList: Component = () => {
 			container.scrollHeight - container.clientHeight,
 		);
 	};
-	onMount(() => container.addEventListener("wheel", onWheelRedirect, { passive: false }));
-	onCleanup(() => container.removeEventListener("wheel", onWheelRedirect));
+	// Scrollbar drags, scroll keys, and touch drags are the other unpin
+	// gestures (wheel is handled in onWheelRedirect). All unpin SYNCHRONOUSLY
+	// — waiting for the scroll event races the streaming snap writes.
+	let scrollbarGrab = false;
+	const onScrollbarMouseDown = (e: MouseEvent) => {
+		// The stable gutter keeps the scrollbar strip at the container's right
+		// edge; presses there are scrollbar grabs, not content interaction.
+		if (e.clientX >= container.getBoundingClientRect().right - INNER_SCROLLBAR_PX) {
+			scrollbarGrab = true;
+			pinned = false;
+			if (!nearBottom()) setJumpVisible(true);
+		}
+	};
+	// Settle on release: a grab that never dragged (or ended at the bottom)
+	// re-pins; a drag released mid-stream stays unpinned with the button up.
+	const onMouseUp = () => {
+		if (!scrollbarGrab) return;
+		scrollbarGrab = false;
+		applyPinState();
+	};
+	const onScrollKeyDown = (e: KeyboardEvent) => {
+		// Bubbles from focused descendants (buttons, links, details). Scroll
+		// keys are handled MANUALLY: native keyboard paging smooth-scrolls, and
+		// during the animation the position lingers near the bottom, so the
+		// deferred pin check would re-pin and the re-snap would kill the
+		// animation — the same async race the synchronous unpin exists to avoid.
+		const onInteractive = (e.target as HTMLElement).closest("button, a, input, textarea, select, summary");
+		const page = container.clientHeight;
+		switch (e.key) {
+			case "PageUp":
+				e.preventDefault();
+				unpin();
+				container.scrollTop = Math.max(0, container.scrollTop - page);
+				break;
+			case "PageDown":
+				e.preventDefault();
+				container.scrollTop += page; // scroll event re-pins near the bottom
+				break;
+			case "ArrowUp":
+				e.preventDefault();
+				unpin();
+				container.scrollTop = Math.max(0, container.scrollTop - 40);
+				break;
+			case "ArrowDown":
+				e.preventDefault();
+				container.scrollTop += 40;
+				break;
+			case "Home":
+				if (onInteractive) return;
+				e.preventDefault();
+				unpin();
+				container.scrollTop = 0;
+				break;
+			case "End":
+				if (onInteractive) return;
+				e.preventDefault();
+				container.scrollTop = container.scrollHeight;
+				break;
+			case " ":
+				// Space ACTIVATES focused buttons/links — only Shift+Space (page
+				// up) off interactive elements is ours.
+				if (onInteractive || !e.shiftKey) return;
+				e.preventDefault();
+				unpin();
+				container.scrollTop = Math.max(0, container.scrollTop - page);
+				break;
+		}
+	};
+	let lastTouchTop = 0;
+	const onTouchStart = () => {
+		lastTouchTop = container.scrollTop;
+	};
+	const onTouchMove = () => {
+		if (container.scrollTop < lastTouchTop) unpin(); // finger dragged down: content moves up
+		lastTouchTop = container.scrollTop;
+	};
+	onMount(() => {
+		container.addEventListener("wheel", onWheelRedirect, { passive: false });
+		container.addEventListener("mousedown", onScrollbarMouseDown);
+		container.addEventListener("keydown", onScrollKeyDown);
+		container.addEventListener("touchstart", onTouchStart, { passive: true });
+		container.addEventListener("touchmove", onTouchMove, { passive: true });
+		document.addEventListener("mouseup", onMouseUp);
+	});
+	onCleanup(() => {
+		container.removeEventListener("wheel", onWheelRedirect);
+		container.removeEventListener("mousedown", onScrollbarMouseDown);
+		container.removeEventListener("keydown", onScrollKeyDown);
+		container.removeEventListener("touchstart", onTouchStart);
+		container.removeEventListener("touchmove", onTouchMove);
+		document.removeEventListener("mouseup", onMouseUp);
+	});
 	// id → run, for the consolidated view. Read only from the tool/assistant
 	// branches while consolidated, so expanded/collapsed rows never re-render on appends.
 	const runOf = createMemo(() => {
@@ -348,7 +505,8 @@ export const MessageList: Component = () => {
 					</button>
 				</div>
 			</Show>
-			<div class="message-list" ref={container} onScroll={onContainerScroll}>
+			<div class="message-list-wrap">
+			<div class="message-list" ref={container} onScroll={applyPinState}>
 			<For each={state.items}>
 				{item => (
 					<Switch>
@@ -537,6 +695,14 @@ export const MessageList: Component = () => {
 				</div>
 			</Show>
 			<Show when={zoomed()}>{img => <FullImageOverlay image={img()} onClose={() => setZoomed(null)} />}</Show>
+			</div>
+			{/* Floated over the stream's lower-right while unpinned; one click
+			    re-pins and lands at the live edge. */}
+			<Show when={jumpVisible()}>
+				<button class="jump-to-bottom" onClick={jumpToBottom} title="Jump to bottom" aria-label="Jump to bottom">
+					<ArrowDownIcon /> Jump to bottom
+				</button>
+			</Show>
 			</div>
 		</>
 	);
