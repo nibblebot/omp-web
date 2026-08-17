@@ -165,7 +165,7 @@ export const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = (
 						</span>
 						{/* Row actions collapsed into a "⋯" menu at the top row's
 						    right end: hidden until row hover/focus (always visible on
-						    touch, see the pointer:coarse block in styles.css). Stop/remove
+						    touch, see the pointer:coarse block in src/styles/base.css). Stop/remove
 						    keep the two-click confirm inside the menu — the first click
 						    arms (menu stays open), the second executes and closes. */}
 						<KebabMenu

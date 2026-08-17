@@ -113,7 +113,7 @@ export function useOnboardingPipeline(onReady: () => void) {
 /**
  * Register→spawn→attach progress strip. `prefix` is the feature's CSS class
  * prefix (`project-` / `worktree-`); the markup matches the original
- * hand-rolled footers so styles.css stays untouched.
+ * hand-rolled footers so src/styles/fleet.css stays untouched.
  */
 export const PipelineProgress: Component<{
 	stage: Accessor<Stage>;

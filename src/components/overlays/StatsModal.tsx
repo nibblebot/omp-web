@@ -7,7 +7,7 @@ import { Modal } from "../shared/Modal";
 
 /** One stacked-bar segment: width proportional to the context window. The
  *  variant drives the per-category swatch (see .breakdown-seg--* in
- *  styles.css; an ordered cool-to-warm ramp, not the semantic status colors). */
+ *  src/styles/usage.css; an ordered cool-to-warm ramp, not the semantic status colors). */
 const BreakdownSegment: Component<{
 	tokens: number;
 	contextWindow: number;

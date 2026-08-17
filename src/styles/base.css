@@ -1,0 +1,107 @@
+/* Base — reset/body, visually-hidden, icon, global button/focus-visible, pointer:coarse hit-targets, badge-family geometry. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+
+* {
+	box-sizing: border-box;
+}
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font-sans);
+	font-size: var(--fs-base);
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+/* finding #P1: visually-hidden utility for the aria-live status region — kept
+ * in the layout for screen readers, clipped out of the visual/paint surface. */
+.visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+/* Base sizing for the vendored Lucide icons (src/icons.tsx): 1em so icons
+ * track the surrounding font-size exactly like the glyphs they replaced.
+ * Site classes (e.g. .daemon-worktree-icon) override width/height later. */
+.icon {
+	width: 1em;
+	height: 1em;
+	flex: none;
+	vertical-align: -0.125em;
+}
+
+button {
+	background: var(--btn);
+	border: 1px solid var(--border-strong);
+	color: var(--text);
+	border-radius: var(--r-md);
+	padding: var(--space-3) var(--space-5);
+	font: inherit;
+	cursor: pointer;
+}
+button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+button:not(:disabled) {
+	transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+button:not(:disabled):not(.active):hover {
+	background-color: var(--hover);
+}
+:focus-visible {
+	outline: var(--focus-ring);
+	outline-offset: 1px;
+}
+
+/* Touch: hit targets at least 32px tall/wide (WCAG 2.5.8 AA); fine-pointer
+   controls carry the 24px minimum at their base rules. */
+@media (pointer: coarse) {
+	/* Selectors doubled for specificity: the base rules sit later in the
+	   file and would otherwise win the cascade at equal specificity. */
+	.daemon-icon-btn.daemon-icon-btn,
+	.segment-button.segment-button,
+	.image-remove.image-remove,
+	.queue-pop.queue-pop,
+	.queue-clear.queue-clear,
+	.msg-copy-btn.msg-copy-btn,
+	.msg-branch-btn.msg-branch-btn,
+	.sidebar-icon-btn.sidebar-icon-btn {
+		min-width: 32px;
+		min-height: 32px;
+	}
+
+	/* Copy/branch actions stay visible on touch, where there is no hover. */
+	.msg-user .msg-toolbar,
+	.msg-assistant .msg-toolbar {
+		opacity: 1;
+	}
+
+	/* Sidebar row-actions "⋯" trigger stays visible on touch too. */
+	.sidebar-menu-btn.sidebar-menu-btn {
+		opacity: 1;
+		pointer-events: auto;
+	}
+
+	/* Long log lines wrap instead of truncating on touch. */
+	.debug-log-msg {
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+}
+
+/* Pill/badge family: shared geometry, per-class tone. */
+.badge,
+.exit-badge,
+.usage-status,
+.sidebar-collab-ro {
+	border-radius: var(--r-pill);
+	white-space: nowrap;
+}

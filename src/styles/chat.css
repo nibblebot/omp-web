@@ -1,0 +1,505 @@
+/* Chat — message stream, markdown (.md), run-rows, shimmer, compaction, empty-state, inline images, msg-toolbar. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+
+/* Freshly-revealed text fades in once; the span is recreated per flush, which
+   restarts this mount-triggered animation. */
+.md .fresh {
+	white-space: pre-wrap;
+	animation: fresh-in 150ms ease-out;
+}
+@keyframes fresh-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+.error-banner {
+	flex-basis: 100%;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: var(--space-4);
+	padding: var(--space-3) var(--space-4);
+	border-radius: var(--r-md);
+	background: var(--error-bg);
+	border: 1px solid var(--error-border);
+	color: var(--error-text);
+}
+/* Wrap owns the jump-to-bottom button's positioning context; the scroller
+   keeps flex:1 inside it. */
+.message-list-wrap {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.message-list {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: var(--space-6) var(--space-5) var(--space-4);
+	/* Keep the scrollbar out of the text: overlay scrollbars float over the
+	   box, and the stable gutter stops cards reflowing when the bar appears
+	   or disappears. */
+	scrollbar-gutter: stable;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+}
+/* Floating re-pin affordance: appears when the user scrolls up mid-stream.
+   Sits above the stream cards (--z-toolbar owns the in-card toolbars) with a
+   slight shadow so it reads as a separate layer. */
+.jump-to-bottom {
+	position: absolute;
+	bottom: var(--space-5);
+	right: var(--space-5);
+	z-index: var(--z-overlay);
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	background: var(--btn);
+	border: 1px solid var(--border-strong);
+	color: var(--text);
+	border-radius: var(--r-pill);
+	padding: var(--space-2) var(--space-5);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+	box-shadow: var(--shadow-1);
+}
+.jump-to-bottom:hover {
+	background: var(--hover);
+	box-shadow: var(--shadow-2);
+}
+/* Collapse-tool-cards view: toggle above the stream plus compact single-row
+   chips inline in the stream where each tool turn is. */
+.stream-toolbar {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	gap: var(--space-3);
+	/* Matches .message-list side padding so the toggle stays aligned with
+	   the card edges. */
+	padding: var(--space-2) var(--space-5) var(--space-3);
+}
+.stream-cards-toggle {
+	background: none;
+	border: 1px solid var(--border);
+	color: var(--muted-2);
+	border-radius: var(--r-pill);
+	padding: var(--space-1) var(--space-4);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.stream-cards-toggle:hover {
+	color: var(--text);
+	border-color: var(--border-strong);
+}
+.stream-cards-toggle[aria-pressed="true"] {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+	color: var(--text);
+}
+.tool-chip {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	align-self: flex-start;
+	max-width: 100%;
+	min-width: 0;
+	white-space: nowrap;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	padding: var(--space-2) var(--space-4);
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+}
+.tool-chip .tool-name {
+	color: var(--accent);
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	flex-shrink: 0;
+}
+.tool-chip .tool-status {
+	flex-shrink: 0;
+}
+.tool-chip-args {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--muted-2);
+	min-width: 0;
+}
+
+.run-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--space-2) var(--space-3);
+	align-self: flex-start;
+	max-width: 100%;
+	min-width: 0;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	padding: var(--space-2) var(--space-4);
+	font-size: var(--fs-sm);
+}
+.run-row.open {
+	border-radius: var(--r-lg);
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--space-2);
+	cursor: default;
+}
+.run-row-summary {
+	background: none;
+	border: 0;
+	padding: 0;
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-width: 0;
+	flex-wrap: wrap;
+}
+.run-row-item {
+	display: inline-flex;
+	align-items: baseline;
+	gap: var(--space-1);
+	white-space: nowrap;
+}
+.run-row-count {
+	font-family: var(--font-mono);
+	font-weight: 600;
+}
+.run-row-name {
+	color: var(--accent);
+}
+.run-row-sep {
+	color: var(--muted-3);
+}
+/* Consolidated-run meta segments (err/req/duration/turns). */
+.run-row-meta {
+	font-family: var(--font-mono);
+	color: var(--muted-2);
+	white-space: nowrap;
+}
+.run-row-meta[data-tone="err"] {
+	color: var(--error);
+}
+.run-row-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--accent);
+	animation: run-row-pulse 1s ease-in-out infinite;
+}
+@keyframes run-row-pulse {
+	50% {
+		opacity: 0.25;
+	}
+}
+.run-row-content {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	align-items: flex-start;
+	width: 100%;
+}
+.run-row .thinking-block {
+	margin: 0;
+	font-size: var(--fs-sm);
+}
+.run-row .msg-assistant {
+	margin: 0;
+}
+.msg-user {
+	align-self: flex-end;
+	background: var(--accent-dim);
+	border-radius: var(--r-xl);
+	padding: var(--space-4) var(--space-5);
+	max-width: 80%;
+	white-space: pre-wrap;
+	/* Anchors the per-message hover toolbar above the bubble. */
+	position: relative;
+}
+.msg-assistant {
+	align-self: stretch;
+	/* Anchors the per-message hover/focus toolbar above the content. */
+	position: relative;
+}
+.msg-assistant.live {
+	opacity: 0.95;
+}
+/* In-progress shimmer under the stream: a bright band sweeping across the
+   label via a moving background gradient clipped to the glyphs. Colors come
+   from theme tokens so every palette gets a legible sweep for free. */
+.live-shimmer {
+	align-self: stretch;
+	padding: var(--space-1) var(--space-5) var(--space-2);
+	/* Body-size and semibold: the working label is the turn's primary status,
+	   not a caption — matches the TUI's bold-crest shimmer emphasis. */
+	font-size: var(--fs-base);
+	font-weight: 600;
+	font-style: italic;
+}
+.shimmer-text {
+	background: linear-gradient(
+		100deg,
+		var(--muted-2) 40%,
+		var(--muted-3) 50%,
+		var(--muted-2) 60%
+	);
+	background-size: 250% 100%;
+	background-position: 100% 0;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	animation: shimmer-sweep 1.8s linear infinite;
+}
+@keyframes shimmer-sweep {
+	to {
+		background-position: -150% 0;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.shimmer-text {
+		animation: none;
+		color: var(--muted-2);
+	}
+}
+.msg-notice {
+	text-align: center;
+	color: var(--muted-2);
+	font-size: var(--fs-md);
+}
+.thinking-block {
+	color: var(--muted);
+	border-left: 2px solid var(--border);
+	padding-left: var(--space-5);
+	margin: 0;
+	font-size: var(--fs-lg);
+}
+.thinking-block summary {
+	cursor: pointer;
+	color: var(--muted-2);
+}
+
+pre {
+	margin: 0;
+	padding: var(--space-4) var(--space-5);
+	overflow-x: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: var(--font-mono);
+	font-size: var(--fs-md);
+}
+.md pre {
+	background: var(--bg-deep);
+	border-radius: var(--r-md);
+	white-space: pre;
+}
+.md code {
+	font-family: var(--font-mono);
+	font-size: var(--fs-md);
+}
+/* In-stream markdown headings ride the same ramp as the rest of the UI
+   (fs-2xl 18 / fs-xl 16 / fs-lg 14 bold) — never browser UA defaults, which
+   would swamp the session title. */
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+	font-weight: 700;
+	line-height: 1.3;
+	margin: var(--space-6) 0 var(--space-3);
+}
+.md h1 {
+	font-size: var(--fs-2xl);
+}
+.md h2 {
+	font-size: var(--fs-xl);
+}
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+	font-size: var(--fs-lg);
+}
+.md table {
+	font-size: var(--fs-md);
+	border-collapse: collapse;
+}
+.md th {
+	font-weight: 600;
+	text-align: left;
+}
+.prompt-box {
+	border-top: 1px solid var(--border);
+	padding: var(--space-4) 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+}
+
+/* --- Compaction --- */
+
+.compaction-item {
+	align-self: stretch;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	font-size: var(--fs-md);
+}
+.compaction-item summary {
+	cursor: pointer;
+	padding: var(--space-4) var(--space-5);
+	color: var(--muted-3);
+}
+
+/* --- Empty state: greeting + suggested prompts before the first message --- */
+
+.empty-state {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-6);
+	padding: var(--space-7) var(--space-5);
+	text-align: center;
+}
+.empty-state canvas {
+	image-rendering: pixelated;
+	filter: drop-shadow(var(--shadow-sprite));
+}
+.empty-greeting {
+	margin: 0;
+	font-size: 1rem;
+	color: var(--muted);
+}
+.empty-chips {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--space-3);
+}
+.empty-chip {
+	padding: var(--space-2) var(--space-5);
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	color: var(--muted-3);
+	font: inherit;
+	font-size: var(--fs-md);
+	cursor: pointer;
+	transition:
+		background var(--dur-fast) var(--ease-out),
+		color var(--dur-fast) var(--ease-out),
+		border-color var(--dur-fast) var(--ease-out);
+}
+.empty-chip:hover {
+	background: var(--hover);
+	color: var(--text);
+	border-color: var(--accent-border);
+}
+.empty-chip:focus-visible {
+	outline: var(--focus-ring);
+	outline-offset: 2px;
+}
+
+/* --- Inline images, eval/lsp/hub/ask tool cards --- */
+
+.img-scan {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-4);
+	padding: var(--space-4) var(--space-4);
+}
+.img-thumb {
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: zoom-in;
+	line-height: 0;
+}
+.img-thumb img {
+	max-width: 160px;
+	max-height: 120px;
+	border-radius: var(--r-md);
+	border: 1px solid var(--border);
+	display: block;
+}
+.img-overlay {
+	position: fixed;
+	inset: 0;
+	background: var(--backdrop);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: var(--z-lightbox);
+	cursor: zoom-out;
+}
+.img-overlay img {
+	max-width: 92vw;
+	max-height: 92vh;
+	border-radius: var(--r-lg);
+	cursor: default;
+	box-shadow: var(--shadow-2);
+}
+.msg-user-text {
+	white-space: pre-wrap;
+}
+.msg-user-images {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-4);
+	margin-top: var(--space-3);
+}
+.msg-user-images .img-thumb img {
+	max-width: 140px;
+	max-height: 110px;
+}
+/* Per-message hover/focus toolbar (user: branch + copy; assistant: copy). */
+.msg-toolbar {
+	position: absolute;
+	top: -8px;
+	right: 8px;
+	display: flex;
+	gap: var(--space-3);
+	opacity: 0;
+	transition: opacity 0.12s ease;
+	z-index: var(--z-toolbar);
+}
+.msg-user:hover .msg-toolbar,
+.msg-user:focus-within .msg-toolbar,
+.msg-assistant:hover .msg-toolbar,
+.msg-assistant:focus-within .msg-toolbar {
+	opacity: 1;
+}
+.msg-copy-btn,
+.msg-branch-btn {
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	padding: var(--space-1) var(--space-4);
+	min-width: 24px;
+	min-height: 24px;
+	cursor: pointer;
+}
+.msg-copy-btn:hover,
+.msg-branch-btn:hover {
+	background: var(--hover);
+	color: var(--text);
+}

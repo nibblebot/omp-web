@@ -1,0 +1,1301 @@
+/* Fleet — sidebar, collab rows, daemon roster, project/worktree modals, debug panel. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+
+.sidebar {
+	/* Docked left column: participates in .app-body layout, so the chat
+	   column reflows to the remaining width while the sidebar is open. */
+	flex: none;
+	width: var(--sidebar-w);
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	border-right: 1px solid var(--border);
+	background: var(--bg-deep);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	line-height: 1.4;
+}
+.sidebar:not(.open) {
+	display: none;
+}
+/* Narrow viewports: the docked column caps at 80vw so the chat stays usable. */
+@media (max-width: 720px) {
+	.sidebar {
+		width: min(var(--sidebar-w), 80vw);
+	}
+}
+/* Floating roster toggle: sticky top-left of the viewport. Roster mode only,
+   and only while the sidebar is closed (the open sidebar carries its own ×
+   at its top-right). */
+.sidebar-toggle {
+	position: fixed;
+	top: var(--space-4);
+	left: var(--space-6);
+	z-index: var(--z-overlay);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--muted-2);
+	font-size: var(--fs-lg);
+	line-height: 1;
+	cursor: pointer;
+	box-shadow: var(--shadow-1);
+}
+.sidebar-toggle:hover {
+	color: var(--text);
+	background: var(--hover);
+}
+.sidebar-toggle:focus-visible {
+	outline: var(--focus-ring);
+	outline-offset: 2px;
+}
+.sidebar-icon-btn {
+	flex: none;
+	background: none;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	padding: 0 var(--space-2);
+	min-width: 24px;
+	min-height: 24px;
+	font: inherit;
+	border-radius: var(--r-sm);
+}
+.sidebar-icon-btn:hover {
+	background: var(--btn);
+	color: var(--text);
+}
+.sidebar-list {
+	flex: 1;
+	overflow-y: auto;
+	padding: var(--space-3);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+.sidebar-foot {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-3);
+	border-top: 1px solid var(--border);
+}
+.sidebar-foot .sidebar-icon-btn.active {
+	background: var(--btn);
+	color: var(--text);
+}
+.sidebar-row {
+	display: flex;
+	align-items: flex-start;
+	flex-wrap: wrap;
+	gap: var(--space-4);
+	/* 6px all around: the status dot lands on the 12px scan line shared with
+	   project carets and the PROJECTS header text. */
+	padding: var(--space-3);
+	border-radius: var(--r-md);
+	border: 1px solid transparent;
+	cursor: pointer;
+	transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.sidebar-row > canvas {
+	flex: none;
+	margin-top: 1px;
+	border-radius: var(--r-xs);
+}
+.sidebar-row:hover {
+	background: var(--hover);
+}
+.sidebar-row.active {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+}
+.sidebar-row-main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+.sidebar-row-top {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+}
+.sidebar-row-title {
+	font-weight: 600;
+	font-size: var(--fs-sm);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sidebar-stream-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	flex: none;
+	background: var(--success);
+	box-shadow: 0 0 5px var(--success);
+}
+.sidebar-row-data {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	white-space: nowrap;
+}
+
+/* Collab controls (attached session row): share button + live panel with
+   omp join/view links and the participant list. */
+.sidebar-collab-row,
+.sidebar-collab-error,
+.sidebar-collab {
+	flex: 1 0 100%;
+}
+.sidebar-collab-row {
+	display: flex;
+}
+.sidebar-collab-btn,
+.sidebar-collab-copy {
+	background: none;
+	border: 1px solid var(--border-strong);
+	color: var(--muted-3);
+	font: inherit;
+	cursor: pointer;
+}
+.sidebar-collab-btn {
+	border-radius: var(--r-pill);
+	padding: 1px var(--space-4);
+	font-size: var(--fs-micro);
+}
+.sidebar-collab-btn:hover,
+.sidebar-collab-copy:hover {
+	background: var(--btn);
+	color: var(--text);
+	border-color: var(--accent-border);
+}
+.sidebar-collab-copy {
+	flex: none;
+	border-color: var(--border);
+	border-radius: var(--r-sm);
+	padding: 0 var(--space-3);
+	font-size: var(--fs-micro);
+	color: var(--muted);
+}
+.sidebar-collab-muted {
+	font-size: var(--fs-micro);
+	font-style: italic;
+	color: var(--muted-2);
+}
+.sidebar-collab-error {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+}
+.sidebar-collab-errtext {
+	flex: 1;
+	min-width: 0;
+	font-size: var(--fs-micro);
+	color: var(--error);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sidebar-collab {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin-top: var(--space-1);
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--bg-deep);
+	font-size: var(--fs-micro);
+}
+.sidebar-collab-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+.sidebar-collab-live {
+	font-weight: 600;
+	letter-spacing: var(--ls-micro);
+	color: var(--success);
+}
+.sidebar-collab-guests {
+	flex: none;
+	color: var(--muted-2);
+}
+.sidebar-collab-stop {
+	margin-left: auto;
+	color: var(--error);
+}
+.sidebar-collab-linkrow {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+}
+.sidebar-collab-label,
+.sidebar-collab-link {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+}
+.sidebar-collab-label {
+	flex: none;
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	color: var(--muted-2);
+}
+.sidebar-collab-link {
+	flex: 1;
+	min-width: 0;
+	color: var(--muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sidebar-collab-list {
+	margin: 0;
+	padding: var(--space-2) 0 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	border-top: 1px solid var(--border);
+}
+.sidebar-collab-list li {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	color: var(--muted-2);
+	overflow: hidden;
+}
+.sidebar-collab-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sidebar-collab-ro {
+	flex: none;
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	padding: 0 var(--space-3);
+}
+
+/* --- Session roster sidebar (fleet edge, Phase 3) --- */
+
+.daemon-row {
+	/* sidebar-row defaults to a pointer cursor; only attachable rows get one. */
+	cursor: default;
+}
+.daemon-row.clickable {
+	cursor: pointer;
+}
+/* Status dot: ready = green glow, asleep = flat grey, reconnecting = amber,
+   error = red, transitional (spawning/connecting/session/resolving) = pulsing
+   accent. Unambiguous at a glance: exactly one visual language per state. */
+.daemon-status-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex: none;
+	margin-top: var(--space-2);
+	background: var(--muted-2);
+}
+/* Worktree rows are headed by the name alone: center the dot on the top
+   row (its height is set by the 24px kebab button, not the title line). */
+.daemon-row--worktree .daemon-status-dot {
+	margin-top: var(--space-4);
+}
+.daemon-status-dot[data-status="ready"] {
+	background: var(--success);
+	box-shadow: var(--shadow-glow-success);
+}
+.daemon-status-dot[data-status="asleep"] {
+	background: var(--muted-2);
+	box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.daemon-status-dot[data-status="reconnecting"] {
+	background: var(--warning);
+	box-shadow: 0 0 6px var(--warning);
+}
+.daemon-status-dot[data-status="error"] {
+	background: var(--error);
+	box-shadow: 0 0 6px var(--error);
+}
+.daemon-status-dot[data-status="spawning"],
+.daemon-status-dot[data-status="connecting"],
+.daemon-status-dot[data-status="session"],
+.daemon-status-dot[data-status="resolving"] {
+	background: var(--accent);
+	box-shadow: 0 0 6px var(--accent);
+	animation: daemon-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes daemon-dot-pulse {
+	0%,
+	100% {
+		opacity: 0.4;
+		transform: scale(0.85);
+	}
+	50% {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+.daemon-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+}
+.daemon-chip {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	color: var(--muted);
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	padding: 0 var(--space-3);
+	white-space: nowrap;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.daemon-chip--label {
+	color: var(--muted-2);
+}
+/* --- Roster group headers: per-repo collapsible containers under the static
+   REPOS header (caret rotates when collapsed), plus rows nested under them --- */
+
+.sidebar-group {
+	background: none;
+	border: none;
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	padding: var(--space-3) var(--space-4) var(--space-1) var(--space-3);
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	cursor: pointer;
+	text-align: left;
+	border-radius: var(--r-md);
+}
+.sidebar-group:hover {
+	background: var(--hover);
+}
+.sidebar-caret {
+	flex: none;
+	color: var(--muted-2);
+	transition: transform var(--dur-fast) var(--ease-out);
+}
+button.sidebar-group[data-open="false"] .sidebar-caret {
+	transform: rotate(-90deg);
+}
+.sidebar-group-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sidebar-group-count {
+	flex: none;
+	font-size: var(--fs-micro);
+	color: var(--muted-3);
+}
+.sidebar-group--repo {
+	/* Same left edge as project groups (the PROJECTS header's text sits one
+	   notch further left at the same 12px scan line). */
+	padding-left: var(--space-3);
+}
+.picker-group-name.sidebar-subgroup {
+	/* Static REPOS header sits at the sidebar's edge (no caret, no indent);
+	   mono uppercase inherits the sidebar font. */
+	font-family: var(--font-mono);
+	padding-left: 0;
+}
+/* PROJECTS header carries the add-project + close actions right-aligned.
+   Left padding lands its text on the same 12px scan line as the project
+   carets and row status dots below. Selector doubled: the base
+   .picker-group-name.sidebar-subgroup rule would win at equal specificity. */
+.picker-group-name.sidebar-projects-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding-left: var(--space-3);
+}
+.sidebar-projects-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-1);
+}
+.daemon-row--nested {
+	/* One notch deeper than main rows: the dot sits 6px right of the 12px
+	   scan line, marking the row as a child of its project. */
+	padding-left: calc(var(--space-3) + var(--space-3));
+}
+.daemon-cwd {
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* The "⋯" row-actions menu sits at the top row's right end (where main
+   rows also carry the status text); the title's flex:1 pushes it over. */
+.sidebar-menu-wrap {
+	position: relative;
+	margin-left: auto;
+	flex: none;
+}
+/* Menu trigger: hidden until the row/group header is hovered/focused (or
+   the menu is open) on fine pointers; always visible on touch via the
+   pointer:coarse block near the top of this file. */
+.sidebar-menu-btn {
+	opacity: 0;
+	pointer-events: none;
+}
+.daemon-row:hover .sidebar-menu-btn,
+.daemon-row:focus-within .sidebar-menu-btn,
+.project-group:hover .sidebar-menu-btn,
+.project-group:focus-within .sidebar-menu-btn,
+.sidebar-menu-btn[aria-expanded="true"] {
+	opacity: 1;
+	pointer-events: auto;
+}
+/* Dropdown: compact action list anchored under the trigger. */
+.sidebar-menu {
+	position: absolute;
+	top: 100%;
+	right: 0;
+	min-width: 9rem;
+	padding: var(--space-1);
+	background: var(--panel-2);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-md);
+	z-index: var(--z-autocomplete);
+	display: flex;
+	flex-direction: column;
+}
+.sidebar-menu-item {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	background: none;
+	border: none;
+	padding: var(--space-2) var(--space-3);
+	font-size: var(--fs-sm);
+	color: var(--text);
+	text-align: left;
+	white-space: nowrap;
+	cursor: pointer;
+	border-radius: var(--r-sm);
+}
+.sidebar-menu-item:hover {
+	background: var(--hover);
+}
+/* Armed (first click of the two-click confirm) turns danger-colored until
+   the second click. */
+.sidebar-menu-item.armed {
+	color: var(--error);
+}
+.sidebar-menu-item.armed:hover {
+	color: var(--error-text);
+}
+/* Destructive close-out action: always danger-colored, not just on hover. */
+.sidebar-menu-item--danger {
+	color: var(--error);
+}
+.sidebar-menu-item--danger:hover {
+	color: var(--error-text);
+}
+/* Bare icon actions: no button chrome, just the glyph. */
+.daemon-icon-btn {
+	background: none;
+	border: none;
+	padding: 0 var(--space-1);
+	min-width: 24px;
+	min-height: 24px;
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	line-height: 1;
+	cursor: pointer;
+	flex: none;
+	border-radius: var(--r-sm);
+}
+.daemon-icon-btn:hover {
+	color: var(--text);
+}
+/* Bottom meta row: branch + diffstat cluster (changed-file count, numstat
+   +/- line counts) in compact mono. Row actions live in the "⋯" menu on
+   the top row now, so nothing is right-aligned here. */
+.daemon-git {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	flex-wrap: wrap;
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	min-width: 0;
+}
+.daemon-git-branch {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.daemon-git-dirty {
+	flex: none;
+	font-variant-numeric: tabular-nums;
+}
+/* Changed-file count: file icon + total, tight inline pair. */
+.daemon-git-dirty[data-kind="files"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	color: var(--text);
+}
+/* Numstat line counts. */
+.daemon-git-dirty[data-kind="added"] {
+	color: var(--success);
+}
+.daemon-git-dirty[data-kind="deleted"] {
+	color: var(--error);
+}
+.daemon-row-title {
+	display: inline-flex;
+	align-items: center;
+	flex: 1;
+	min-width: 0;
+}
+.daemon-row-btn {
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--muted);
+	font-size: var(--fs-micro);
+	padding: 1px var(--space-3);
+	cursor: pointer;
+	flex: none;
+}
+.daemon-row-btn:hover {
+	color: var(--text);
+	border-color: var(--accent);
+}
+.daemon-row-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+/* Detail popover (Modal): roster facts + stderr tail. */
+.daemon-detail {
+	width: min(480px, 92vw);
+}
+.daemon-detail-header {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin-bottom: var(--space-4);
+}
+.daemon-detail-header .daemon-status-dot {
+	margin-top: 0;
+}
+.daemon-detail-name {
+	flex: 1;
+	min-width: 0;
+	font-weight: 600;
+	font-size: var(--fs-lg);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.daemon-detail-close {
+	flex: none;
+	background: none;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	font: inherit;
+	font-size: var(--fs-lg);
+	padding: 0 var(--space-2);
+	border-radius: var(--r-sm);
+}
+.daemon-detail-close:hover {
+	background: var(--btn);
+	color: var(--text);
+}
+.daemon-detail-facts {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin-bottom: var(--space-5);
+}
+.daemon-detail-fact {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+	min-width: 0;
+}
+.daemon-detail-label {
+	flex: none;
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	color: var(--muted-2);
+	width: 72px;
+}
+.daemon-detail-value {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.daemon-detail-labels {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+}
+.daemon-detail-fact--error .daemon-detail-value {
+	color: var(--error-text);
+	white-space: normal;
+	word-break: break-word;
+}
+.daemon-stderr-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin-bottom: var(--space-2);
+}
+.daemon-stderr {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	line-height: 1.5;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: var(--space-3) var(--space-4);
+	max-height: 200px;
+	overflow-y: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	color: var(--muted-3);
+}
+.daemon-stderr-empty {
+	font-size: var(--fs-sm);
+	font-style: italic;
+	color: var(--muted-2);
+	padding: var(--space-2) 0;
+}
+.daemon-stderr-error {
+	margin: var(--space-2) 0 0;
+}
+/* --- Add-repo modal (AddProjectModal.tsx) --- */
+.project-form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin-bottom: var(--space-5);
+}
+.project-path {
+	margin-bottom: var(--space-2);
+}
+.project-path-error,
+.project-template-error {
+	margin: var(--space-1) 0 var(--space-2);
+	text-align: left;
+	font-size: var(--fs-sm);
+}
+.project-template {
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-sm);
+	padding: var(--space-2) var(--space-3);
+	width: 100%;
+}
+/* Collapsed advanced section (template + labels, ex-SpawnPicker). */
+.project-advanced {
+	margin: var(--space-2) 0;
+}
+.project-advanced summary {
+	cursor: pointer;
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	padding: var(--space-2) 0;
+}
+.project-advanced[open] summary {
+	margin-bottom: var(--space-3);
+}
+.project-start,
+.worktree-start {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin: var(--space-3) 0 0;
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.project-start input,
+.worktree-start input {
+	cursor: pointer;
+}
+.project-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	max-height: 40vh;
+	overflow-y: auto;
+	margin-top: var(--space-2);
+}
+.project-row {
+	align-items: center;
+	width: 100%;
+	text-align: left;
+	cursor: pointer;
+}
+.project-row-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.project-row-branch {
+	flex: none;
+}
+.project-row-registered {
+	flex: none;
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	font-style: italic;
+}
+.project-actions {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: var(--space-5);
+}
+.project-btn {
+	background: var(--accent-dim);
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	font-weight: 600;
+	padding: var(--space-2) var(--space-6);
+	cursor: pointer;
+}
+.project-btn:hover {
+	background: var(--hover);
+	border-color: var(--accent);
+}
+/* Staged pipeline progress (register → spawn → attach), shared shape. */
+.project-progress,
+.worktree-progress {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	padding: var(--space-4) 0;
+}
+.project-progress-step,
+.worktree-progress-step {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	color: var(--muted-2);
+	font-size: var(--fs-md);
+}
+.project-progress-step.current,
+.worktree-progress-step.current {
+	color: var(--text);
+	font-weight: 600;
+}
+.project-progress-step.done,
+.worktree-progress-step.done {
+	color: var(--success);
+}
+.project-progress-dot,
+.worktree-progress-dot {
+	width: 8px;
+	height: 8px;
+	flex: none;
+	border-radius: 50%;
+	background: var(--border-strong);
+}
+.project-progress-step.current .project-progress-dot,
+.worktree-progress-step.current .worktree-progress-dot {
+	background: var(--accent);
+	box-shadow: 0 0 6px var(--accent);
+	animation: daemon-dot-pulse 1.2s ease-in-out infinite;
+}
+.project-progress-step.done .project-progress-dot,
+.worktree-progress-step.done .worktree-progress-dot {
+	background: var(--success);
+}
+.project-progress-note,
+.worktree-progress-note {
+	font-size: var(--fs-sm);
+	font-style: italic;
+	color: var(--muted-2);
+}
+.project-error,
+.worktree-error {
+	margin-bottom: var(--space-4);
+	text-align: left;
+}
+/* --- Add-worktree modal (WorktreeModal.tsx) --- */
+.worktree-tabs {
+	display: flex;
+	gap: var(--space-1);
+	border-bottom: 1px solid var(--border);
+	margin-bottom: var(--space-5);
+}
+.worktree-tab {
+	background: none;
+	border: none;
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
+	font: inherit;
+	font-size: var(--fs-md);
+	color: var(--muted-2);
+	padding: var(--space-3) var(--space-4);
+	cursor: pointer;
+	margin-bottom: -1px;
+}
+.worktree-tab.active {
+	color: var(--text);
+	border-bottom-color: var(--accent);
+}
+.worktree-form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+}
+.worktree-name {
+	margin-bottom: var(--space-2);
+}
+.worktree-name-error {
+	margin: var(--space-1) 0 var(--space-2);
+	text-align: left;
+	font-size: var(--fs-sm);
+}
+.worktree-advanced {
+	margin: var(--space-2) 0;
+}
+.worktree-advanced summary {
+	cursor: pointer;
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	padding: var(--space-2) 0;
+}
+.worktree-advanced[open] summary {
+	margin-bottom: var(--space-3);
+}
+.worktree-base,
+.worktree-branch {
+	margin-bottom: var(--space-2);
+}
+.worktree-actions {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	gap: var(--space-3);
+	margin-top: var(--space-5);
+}
+.worktree-btn {
+	background: var(--accent-dim);
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	font-weight: 600;
+	padding: var(--space-2) var(--space-6);
+	cursor: pointer;
+}
+.worktree-btn:hover:not(:disabled) {
+	background: var(--hover);
+	border-color: var(--accent);
+}
+.worktree-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.worktree-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	max-height: 40vh;
+	overflow-y: auto;
+	margin-top: var(--space-2);
+}
+.worktree-row {
+	align-items: center;
+	width: 100%;
+	text-align: left;
+	cursor: pointer;
+}
+.worktree-row-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.worktree-row-branch {
+	flex: none;
+}
+/* Existing-branch dropdown (create tab): mirrors .settings-row select.
+   Checked-out branches are <option disabled> — natively greyed and
+   unselectable (git refuses a second checkout). */
+.worktree-branch-select {
+	width: 100%;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	padding: var(--space-2) var(--space-4);
+	font: inherit;
+}
+/* --- Close-out dialogs (DeleteWorktreeDialog / RemoveProjectDialog) --- */
+.worktree-evidence {
+	display: inline-flex;
+	gap: var(--space-2);
+	margin-left: var(--space-2);
+	font-variant-numeric: tabular-nums;
+}
+/* The dialog's guard evidence still uses per-kind porcelain file counts
+   (the sidebar's same class now renders diffstat: files/+lines/-lines). */
+.worktree-evidence .daemon-git-dirty[data-kind="modified"] {
+	color: var(--warning);
+}
+.worktree-evidence .daemon-git-dirty[data-kind="untracked"] {
+	color: var(--muted-3);
+}
+.worktree-evidence-path {
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--text);
+	word-break: break-all;
+}
+.worktree-branch-check {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin: 0 0 var(--space-5);
+	color: var(--text);
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.worktree-branch-check input {
+	cursor: pointer;
+}
+.worktree-branch-name {
+	font-family: var(--font-mono);
+}
+.worktree-branch-hint {
+	color: var(--muted-2);
+	font-size: var(--fs-micro);
+}
+.worktree-blockers {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
+	align-items: center;
+}
+/* --- Sidebar: project-first groups (DaemonSidebar.tsx) --- */
+/* Left padding lives entirely on the toggle so the caret lands on the 12px
+   scan line (list padding 6 + toggle padding 6). */
+.project-group {
+	display: flex;
+	align-items: center;
+	padding-left: 0;
+}
+.project-group-toggle {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	background: none;
+	border: none;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+	cursor: pointer;
+}
+button.project-group-toggle[data-open="false"] .sidebar-caret {
+	transform: rotate(-90deg);
+}
+.project-group-toggle:hover {
+	background: var(--hover);
+}
+.project-add-worktree {
+	display: block;
+	width: calc(100% - var(--space-6));
+	margin: var(--space-1) var(--space-3) var(--space-4);
+	padding: var(--space-2) var(--space-3);
+	background: none;
+	border: 1px dashed var(--border-strong);
+	border-radius: var(--r-md);
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	text-align: center;
+	cursor: pointer;
+}
+.project-add-worktree:hover {
+	color: var(--text);
+	border-color: var(--accent-border);
+	background: var(--hover);
+}
+
+/* --- Debug panel (Modal sheet variant): transport + fleet visibility --- */
+.debug-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-6);
+	padding-right: var(--space-2);
+}
+.debug-section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	min-width: 0;
+}
+.debug-section-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-4);
+}
+/* Section kicker: mono uppercase like the roster group headers, kept small
+   so the dense facts/tables dominate. */
+.debug-section-title {
+	margin: 0;
+	flex: none;
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	color: var(--muted-2);
+}
+.debug-poll-hint {
+	flex: 1;
+	font-size: var(--fs-micro);
+	color: var(--muted);
+}
+.debug-refresh {
+	flex: none;
+	background: var(--btn);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-micro);
+	padding: var(--space-1) var(--space-3);
+	cursor: pointer;
+}
+.debug-refresh:hover {
+	background: var(--hover);
+}
+.debug-refresh:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+/* Key/value facts (mirror of the daemon-detail fact rows). */
+.debug-facts {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.debug-fact {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+	min-width: 0;
+}
+.debug-label {
+	flex: none;
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	color: var(--muted-2);
+	width: 88px;
+}
+.debug-value {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Connected/disconnected pill (success/error bg+fg pairs like usage-status). */
+.debug-pill {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	border-radius: var(--r-pill);
+	padding: var(--space-1) var(--space-4);
+	white-space: nowrap;
+}
+.debug-pill[data-status="connected"] {
+	background: var(--success-bg);
+	color: var(--success);
+}
+.debug-pill[data-status="disconnected"] {
+	background: var(--error-bg);
+	color: var(--error-text);
+}
+.debug-fleet-error {
+	font-size: var(--fs-sm);
+	color: var(--error-text);
+	background: var(--error-bg);
+	border: 1px solid var(--error-border);
+	border-radius: var(--r-md);
+	padding: var(--space-2) var(--space-4);
+	align-self: flex-start;
+}
+/* Sessions table: dense mono cells, clipped with title tooltips. */
+.debug-table-wrap {
+	min-width: 0;
+	overflow-x: auto;
+}
+.debug-table {
+	border-collapse: collapse;
+	width: 100%;
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+}
+.debug-table th {
+	text-align: left;
+	font-weight: 500;
+	color: var(--muted-2);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	padding: var(--space-1) var(--space-3);
+	border-bottom: 1px solid var(--border-strong);
+	white-space: nowrap;
+}
+.debug-table td {
+	padding: var(--space-1) var(--space-3);
+	border-bottom: 1px solid var(--border);
+	color: var(--text);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 200px;
+}
+.debug-table tr:last-child td {
+	border-bottom: none;
+}
+.debug-table .debug-cell-mono {
+	max-width: 150px;
+}
+/* Per-status text colors (the sidebar's retired .daemon-row-state used the
+   same vocabulary; the status dot keeps it there). */
+.debug-status {
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+}
+.debug-status[data-status="ready"] {
+	color: var(--success);
+}
+.debug-status[data-status="spawning"],
+.debug-status[data-status="connecting"],
+.debug-status[data-status="session"],
+.debug-status[data-status="resolving"] {
+	color: var(--accent);
+}
+.debug-status[data-status="reconnecting"] {
+	color: var(--warning);
+}
+.debug-status[data-status="error"] {
+	color: var(--error-text);
+}
+/* Shared log-ring renderer (fleet + client): level-colored rows, mono. */
+.debug-log {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	line-height: 1.6;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: var(--space-2) 0;
+	max-height: 220px;
+	overflow-y: auto;
+}
+.debug-log-line {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-4);
+	padding: 0 var(--space-4);
+	white-space: nowrap;
+}
+.debug-log-time {
+	flex: none;
+	color: var(--muted-2);
+}
+/* Fixed-width level tag: info/warn/error line up in one column across rows. */
+.debug-log-level {
+	flex: none;
+	width: 5ch;
+	color: var(--muted-3);
+}
+.debug-log-line[data-level="warn"] .debug-log-level {
+	color: var(--warning);
+}
+.debug-log-line[data-level="warn"] .debug-log-msg {
+	color: var(--warning);
+}
+.debug-log-line[data-level="error"] .debug-log-level,
+.debug-log-line[data-level="error"] .debug-log-msg {
+	color: var(--error-text);
+}
+.debug-log-source {
+	flex: none;
+	color: var(--muted-2);
+}
+.debug-log-msg {
+	flex: 1;
+	min-width: 0;
+	color: var(--muted-3);
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.debug-log-empty {
+	font-size: var(--fs-sm);
+	font-style: italic;
+	color: var(--muted-2);
+	padding: var(--space-2) var(--space-4);
+}

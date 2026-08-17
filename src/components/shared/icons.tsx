@@ -1,6 +1,6 @@
 /** Inline SVG icons vendored from Lucide (https://lucide.dev, ISC license) —
  *  no icon font dependency. Strokes follow currentColor so icons tint with
- *  their surrounding text/status color; the base .icon rule (styles.css)
+ *  their surrounding text/status color; the base .icon rule (src/styles/base.css)
  *  sizes them to 1em, and a `class` prop layers site-specific overrides
  *  (e.g. .daemon-worktree-icon). */
 import type { Component, JSX } from "solid-js";
@@ -227,7 +227,7 @@ export const CornerDownRightIcon: Component<IconProps> = (props) => (
 );
 
 /** git-branch — worktree marker on daemon rows (replaces the hand-drawn
- *  3-node glyph; sized/tinted by .daemon-worktree-icon in styles.css). */
+ *  3-node glyph; sized/tinted by .daemon-worktree-icon in src/styles/fleet.css). */
 export const WorktreeIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M15 6a9 9 0 0 0-9 9V3" />

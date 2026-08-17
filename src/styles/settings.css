@@ -1,0 +1,337 @@
+/* Settings — settings panel and settings-row. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+
+/* --- Settings panel (TUI /settings parity) --- */
+.settings-panel {
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+.settings-header {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	padding-bottom: calc(var(--space-4) + var(--space-1));
+	border-bottom: 1px solid var(--border);
+}
+.settings-title {
+	margin: 0;
+	font-size: 1rem;
+	color: var(--muted-3);
+	flex: none;
+}
+.settings-search {
+	flex: 1;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	padding: var(--space-3) var(--space-4);
+	font: inherit;
+	font-size: var(--fs-md);
+}
+.settings-search:focus {
+	border-color: var(--accent-border);
+}
+.settings-close {
+	background: none;
+	border: none;
+	color: var(--muted);
+	font-size: var(--fs-base);
+	line-height: 1;
+	cursor: pointer;
+	padding: var(--space-1) var(--space-3);
+}
+.settings-close:hover {
+	color: var(--text);
+}
+/* Narrow-layout section picker: hidden on the wide layout, where the nav
+   rail takes over; mirrors the .settings-item select styling. */
+.settings-section-picker {
+	display: none;
+}
+@media (max-width: 720px) {
+	.settings-section-picker {
+		display: block;
+		padding: var(--space-3) var(--space-6);
+		border-bottom: 1px solid var(--border);
+	}
+
+	.settings-section-picker select {
+		width: 100%;
+		background: var(--bg-deep);
+		border: 1px solid var(--border);
+		border-radius: var(--r-md);
+		color: var(--text);
+		padding: var(--space-2) var(--space-4);
+		font: inherit;
+		font-size: var(--fs-md);
+	}
+}
+.settings-content {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+	align-items: stretch;
+}
+.settings-nav {
+	width: 200px;
+	flex: none;
+	border-right: 1px solid var(--border);
+	overflow-y: auto;
+	padding: var(--space-3) var(--space-4);
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	min-height: 0;
+}
+.settings-section {
+	background: none;
+	border: 1px solid transparent;
+	text-align: left;
+	font: inherit;
+	font-size: var(--fs-md);
+	color: var(--muted);
+	padding: var(--space-3) var(--space-4);
+	border-radius: var(--r-md);
+	cursor: pointer;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.settings-section:hover {
+	color: var(--text);
+}
+.settings-section.active {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+	color: var(--accent);
+	font-weight: 600;
+}
+.settings-subsection {
+	background: none;
+	border: 1px solid transparent;
+	text-align: left;
+	font: inherit;
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+	padding: var(--space-3) var(--space-4) var(--space-3) var(--space-7);
+	border-radius: var(--r-md);
+	cursor: pointer;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.settings-subsection:hover {
+	color: var(--text);
+}
+.settings-subsection.active {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+	color: var(--accent);
+}
+@media (max-width: 720px) {
+	.settings-nav {
+		display: none;
+	}
+}
+
+.settings-body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
+	padding: var(--space-3) var(--space-6);
+}
+/* Narrow-layout copy of the fleet fallback notice (the nav rail holding the
+   footnote is hidden at ≤720px); hidden on the wide layout. */
+@media (min-width: 721px) {
+	.settings-note-narrow {
+		display: none;
+	}
+}
+.settings-nav-footnote {
+	margin-top: auto;
+	padding-top: var(--space-5);
+	font-size: var(--fs-sm);
+	color: var(--muted);
+}
+.settings-note {
+	color: var(--muted);
+	text-align: center;
+	padding: var(--space-7) 0;
+}
+.settings-group-title {
+	margin: var(--space-5) 0 var(--space-3);
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	color: var(--muted-2);
+	font-weight: 600;
+}
+.settings-item {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: var(--space-5);
+	align-items: center;
+	padding: var(--space-4) 0;
+	border-bottom: 1px solid var(--border);
+}
+/* Controls pin to the right edge so rows share one alignment rail;
+   min-width: 0 lets the cell shrink instead of forcing horizontal scroll. */
+.settings-item > .settings-item-control {
+	justify-self: end;
+	min-width: 0;
+}
+.settings-item:last-child {
+	border-bottom: none;
+}
+.settings-item-label {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	font-size: var(--fs-lg);
+	color: var(--text);
+}
+.settings-item-desc {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	margin-top: var(--space-1);
+}
+.changed-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--accent);
+	flex: none;
+}
+.settings-item select,
+.settings-text input,
+.settings-limit-field input {
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	padding: var(--space-2) var(--space-4);
+	font: inherit;
+	font-size: var(--fs-md);
+	max-width: 100%;
+}
+.settings-text {
+	display: flex;
+	gap: var(--space-3);
+	align-items: center;
+	min-width: 0;
+}
+.settings-control-btn {
+	background: var(--btn);
+	border: 1px solid var(--border-strong);
+	color: var(--muted-3);
+	border-radius: var(--r-md);
+	padding: var(--space-2) var(--space-4);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.settings-control-btn:hover {
+	color: var(--text);
+	border-color: var(--accent-border);
+}
+.settings-font {
+	display: flex;
+	gap: var(--space-3);
+	align-items: center;
+}
+.settings-font-value {
+	min-width: 2ch;
+	text-align: center;
+	color: var(--muted-3);
+	font-variant-numeric: tabular-nums;
+}
+.settings-chips {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: var(--space-3);
+}
+.settings-chip-wrap {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+}
+.settings-chip {
+	background: var(--btn);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-pill);
+	color: var(--muted-3);
+	padding: var(--space-2) var(--space-4);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.settings-chip:hover {
+	color: var(--text);
+}
+.settings-chip[aria-pressed="true"] {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+	color: var(--text);
+}
+.settings-chip-move {
+	background: none;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	padding: 0 var(--space-1);
+	font-size: var(--fs-micro);
+}
+.settings-chip-move:hover {
+	color: var(--accent);
+}
+.settings-limit-inputs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-5);
+	align-items: center;
+	padding: var(--space-4) var(--space-5);
+	margin-bottom: var(--space-4);
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+}
+.settings-limit-field {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	color: var(--muted-3);
+	font-size: var(--fs-md);
+}
+.settings-limit-field input {
+	width: 80px;
+}
+
+.settings-row {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--space-6);
+	align-items: center;
+	font-size: var(--fs-lg);
+	color: var(--text);
+}
+.settings-row select {
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	padding: var(--space-2) var(--space-4);
+	font: inherit;
+}
+/* --- Tool renderers, subagents, daemons --- */
+
+.tool-header {
+	display: flex;
+	gap: var(--space-4);
+	align-items: baseline;
+	padding: var(--space-4) var(--space-5);
+	overflow: hidden;
+}

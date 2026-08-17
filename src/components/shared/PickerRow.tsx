@@ -4,7 +4,7 @@ import type { Component, JSX } from "solid-js";
  * Shared picker row: a real <button type="button"> so every picker row is
  * Tab-reachable and Enter/Space-activatable (the AskDialog precedent from
  * #32, generalized to the remaining pickers). The button-chrome reset that
- * makes these render exactly like the legacy div rows lives in styles.css
+ * makes these render exactly like the legacy div rows lives in src/styles/modals.css
  * under `button.picker-row`.
  */
 export const PickerRow: Component<PickerRowProps> = (props) => (

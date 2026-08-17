@@ -1,0 +1,282 @@
+/* Tokens — :root design tokens and data-theme palettes. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+
+:root {
+	color-scheme: dark;
+	/* Fonts: a deliberate system stack — omp-web is a self-hosted, offline-first
+	   tool and ships zero font assets, so the platform's native UI / UI-monospace
+	   faces are used as-is instead of downloading a webfont. The Linux faces are
+	   named FIRST because Chromium resolves system-ui to DejaVu Sans (its own
+	   fallback list) while Firefox goes through fontconfig (Noto Sans here) —
+	   the same CSS then renders two different faces. Naming the fontconfig
+	   default explicitly makes both engines pick the same family on Linux;
+	   macOS/Windows skip the absent Noto faces and keep their native UI fonts. */
+	--font-sans: "Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--font-mono: "Noto Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+	--bg: #0f1115;
+	--bg-deep: #0a0d12;
+	--panel: #151a22;
+	--panel-2: #1a2029;
+	--btn: #232a37;
+	--border: #262b36;
+	--border-strong: #333c4d;
+	--text: #d7dae0;
+	--hover: #232f42;
+	--accent-dim: #1f3a5f;
+	--muted: #8b93a1;
+	--muted-2: #7f8896;
+	--muted-3: #aab2c0;
+	--accent: #7cc7ff;
+	--success: #4ade80;
+	--warning: #facc15;
+	--error: #f87171;
+	--purple: #c084fc;
+	--success-bg: #14301c;
+	--success-border: #1f5c31;
+	--warning-bg: #2e2712;
+	--warning-border: #5c4a12;
+	--error-bg: #3a1d22;
+	--error-border: #7f3440;
+	--error-text: #f0a8b3;
+	--stop-bg: #4a2028;
+	--diff-add-bg: rgba(74, 222, 128, 0.09);
+	--diff-add-text: #a7f3c7;
+	--diff-del-bg: rgba(248, 113, 113, 0.09);
+	--diff-del-text: #f3b3b3;
+	--accent-border: #2d527f;
+	--backdrop: rgba(4, 6, 10, 0.65);
+
+	/* System scales: radius / spacing / elevation / motion / focus / z-order.
+	   Shared across all themes; density tweaks live here. */
+	--r-xs: 3px;
+	--r-sm: 4px;
+	--r-md: 6px;
+	--r-lg: 8px;
+	--r-xl: 10px;
+	--r-pill: 999px;
+	--space-1: 2px;
+	--space-2: 4px;
+	--space-3: 6px;
+	--space-4: 8px;
+	--space-5: 12px;
+	--space-6: 16px;
+	--space-7: 24px;
+	--sidebar-w: 240px;
+	--shadow-1: 0 1px 2px rgb(0 0 0 / 0.25);
+	--shadow-2: 0 8px 24px rgb(0 0 0 / 0.35);
+	--shadow-sprite: 0 2px 6px rgb(0 0 0 / 0.45);
+	--shadow-glow-success: 0 0 6px var(--success);
+	--dur-fast: 140ms;
+	--dur-base: 200ms;
+	--ease-out: ease-out;
+	--ease-in-out: ease-in-out;
+	--focus-ring: 2px solid var(--accent);
+	/* Type scale: stepped sizes for a real hierarchy (micro < sm < md < lg <
+	   xl < 2xl) while staying dense enough for the power-user layout. The root
+	   size is user-settable (12-18px), so every step is rem-based. The floor
+	   is 9.6px (fs-micro) — nothing functional sits below it. */
+	--fs-micro: 0.688rem;
+	--fs-sm: 0.75rem;
+	--fs-md: 0.813rem;
+	--fs-lg: 0.875rem;
+	--fs-xl: 1rem;
+	--fs-2xl: 1.143rem;
+	--fs-base: 0.875rem;
+	--ls-micro: 0.05em;
+	--z-toolbar: 2;
+	--z-autocomplete: 20;
+	--z-overlay: 30;
+	--z-sheet: 40;
+	--z-lightbox: 100;
+
+	/* Context-breakdown ramp: ordered cool-to-warm hues for the neutral
+	   per-category context bar. Deliberately NOT the semantic status tokens
+	   (success/warning/error) — these categories are facts, not statuses.
+	   Shared across themes so a category keeps its color in every palette. */
+	--breakdown-1: #6fa8dc;
+	--breakdown-2: #57b8c2;
+	--breakdown-3: #9a8fd8;
+	--breakdown-4: #d88a6f;
+	--breakdown-5: #cfa05a;
+}
+:root[data-theme="light"] {
+	color-scheme: light;
+	--bg: #f5f6f8;
+	--bg-deep: #eceef1;
+	--panel: #ffffff;
+	--panel-2: #f0f2f5;
+	--btn: #e4e7eb;
+	--border: #c9d0d8;
+	--border-strong: #aeb7c3;
+	--text: #1c2128;
+	--hover: #dce4f0;
+	--accent-dim: #cfe0f5;
+	--muted: #5a6472;
+	--muted-2: #4b5563;
+	--muted-3: #3d4756;
+	--accent: #1d4ed8;
+	--success: #15803d;
+	--warning: #92400e;
+	--error: #bf1c22;
+	--purple: #9333ea;
+	--success-bg: #dcfce7;
+	--success-border: #86efac;
+	--warning-bg: #fef3c7;
+	--warning-border: #fcd34d;
+	--error-bg: #fee2e2;
+	--error-border: #fca5a5;
+	--error-text: #991b1b;
+	--stop-bg: #fee2e2;
+	--diff-add-bg: rgba(22, 163, 74, 0.1);
+	--diff-add-text: #166534;
+	--diff-del-bg: rgba(220, 38, 38, 0.08);
+	--diff-del-text: #b91c1c;
+	--accent-border: #9db8e8;
+	--backdrop: rgba(15, 20, 30, 0.35);
+}
+:root[data-theme="catppuccin-mocha"] {
+	color-scheme: dark;
+	--bg: #1e1e2e;
+	--bg-deep: #11111b;
+	/* Cards sit on surface0 (lighter than base) so they elevate like the other
+	   themes; inset tracks reuse mantle (darker) as a recessed groove, and
+	   borders step up to surface1 so they stay visible on the lighter cards. */
+	--panel: #313244;
+	--panel-2: #181825;
+	--btn: #45475a;
+	--border: #45475a;
+	--border-strong: #585b70;
+	--text: #cdd6f4;
+	--hover: #45475a;
+	--accent-dim: rgba(137, 180, 250, 0.22);
+	/* Muted ramp shifted one step up (subtext0/subtext1) so muted-2 clears
+	   WCAG AA on the lighter surface0 cards while staying dimmer than muted. */
+	--muted: #a6adc8;
+	--muted-2: #979db6;
+	--muted-3: #bac2de;
+	--accent: #89b4fa;
+	--accent-border: rgba(137, 180, 250, 0.45);
+	--success: #a6e3a1;
+	--warning: #f9e2af;
+	--error: #f38ba8;
+	--purple: #cba6f7;
+	--success-bg: rgba(166, 227, 161, 0.12);
+	--success-border: rgba(166, 227, 161, 0.35);
+	--warning-bg: rgba(249, 226, 175, 0.1);
+	--warning-border: rgba(249, 226, 175, 0.35);
+	--error-bg: rgba(243, 139, 168, 0.12);
+	--error-border: rgba(243, 139, 168, 0.4);
+	--error-text: #f6c3d2;
+	--stop-bg: rgba(243, 139, 168, 0.12);
+	--diff-add-bg: rgba(166, 227, 161, 0.1);
+	--diff-add-text: #a6e3a1;
+	--diff-del-bg: rgba(243, 139, 168, 0.1);
+	--diff-del-text: #f38ba8;
+	--backdrop: rgba(17, 17, 27, 0.65);
+}
+:root[data-theme="catppuccin-latte"] {
+	color-scheme: light;
+	--bg: #eff1f5;
+	--bg-deep: #dce0e8;
+	/* Cards go white (lighter than base) so they elevate like the other light
+	   themes; inset tracks drop to mantle and borders soften to surface0. */
+	--panel: #ffffff;
+	--panel-2: #e6e9ef;
+	--btn: #d9dde5;
+	--border: #ccd0da;
+	--border-strong: #9ca0b0;
+	--text: #4c4f69;
+	--hover: #e1e5ed;
+	--accent-dim: #dde8fd;
+	--muted: #575a6e;
+	--muted-2: #525567;
+	--muted-3: #5b5e74;
+	--accent: #1a55d6;
+	--accent-border: rgba(30, 102, 245, 0.4);
+	--success: #256f1a;
+	--warning: #92400e;
+	--error: #c20d34;
+	--purple: #8839ef;
+	--success-bg: rgba(64, 160, 43, 0.12);
+	--success-border: rgba(64, 160, 43, 0.35);
+	--warning-bg: rgba(223, 142, 29, 0.12);
+	--warning-border: rgba(223, 142, 29, 0.35);
+	--error-bg: rgba(210, 15, 57, 0.1);
+	--error-border: rgba(210, 15, 57, 0.35);
+	--error-text: #c20d34;
+	--stop-bg: rgba(210, 15, 57, 0.1);
+	--diff-add-bg: rgba(64, 160, 43, 0.1);
+	--diff-add-text: #1f5c2a;
+	--diff-del-bg: rgba(210, 15, 57, 0.08);
+	--diff-del-text: #a6122e;
+	--backdrop: rgba(76, 79, 105, 0.35);
+}
+:root[data-theme="omp-dark"] {
+	color-scheme: dark;
+	--bg: oklch(13.5% 0.018 295);
+	--bg-deep: oklch(10.5% 0.014 295);
+	--panel: oklch(17.2% 0.022 295);
+	--panel-2: oklch(21% 0.026 295);
+	--btn: oklch(25% 0.03 295);
+	--border: oklch(100% 0 0 / 0.09);
+	--border-strong: oklch(100% 0 0 / 0.16);
+	--text: oklch(97% 0.008 90);
+	--hover: oklch(100% 0 0 / 0.08);
+	--accent-dim: oklch(70% 0.24 340 / 0.22);
+	--muted: oklch(66% 0.02 288);
+	--muted-2: oklch(62% 0.022 290);
+	--muted-3: oklch(82% 0.014 285);
+	--accent: oklch(70% 0.24 340);
+	--accent-border: oklch(70% 0.24 340 / 0.45);
+	--success: oklch(80% 0.17 165);
+	--warning: oklch(85% 0.13 90);
+	--error: oklch(68% 0.2 20);
+	--purple: oklch(72% 0.18 320);
+	--success-bg: oklch(80% 0.17 165 / 0.12);
+	--success-border: oklch(80% 0.17 165 / 0.4);
+	--warning-bg: oklch(85% 0.13 90 / 0.12);
+	--warning-border: oklch(85% 0.13 90 / 0.4);
+	--error-bg: oklch(68% 0.2 20 / 0.14);
+	--error-border: oklch(68% 0.2 20 / 0.45);
+	--error-text: oklch(78% 0.15 20);
+	--stop-bg: oklch(68% 0.2 20 / 0.14);
+	--diff-add-bg: oklch(80% 0.17 165 / 0.12);
+	--diff-add-text: oklch(84% 0.14 165);
+	--diff-del-bg: oklch(68% 0.2 20 / 0.12);
+	--diff-del-text: oklch(75% 0.16 20);
+	--backdrop: oklch(10% 0.01 295 / 0.65);
+}
+:root[data-theme="omp-light"] {
+	color-scheme: light;
+	--bg: oklch(94% 0.006 80);
+	--bg-deep: oklch(91% 0.007 80);
+	--panel: oklch(96.5% 0.005 80);
+	--panel-2: oklch(92% 0.008 80);
+	--btn: oklch(89% 0.01 82);
+	--border: oklch(22% 0.025 285 / 0.14);
+	--border-strong: oklch(22% 0.025 285 / 0.24);
+	--text: oklch(22% 0.025 285);
+	--hover: oklch(22% 0.025 285 / 0.08);
+	--accent-dim: oklch(44% 0.18 348 / 0.15);
+	--muted: oklch(47% 0.018 285);
+	--muted-2: oklch(50% 0.02 285);
+	--muted-3: oklch(42% 0.02 285);
+	--accent: oklch(44% 0.18 348);
+	--accent-border: oklch(44% 0.18 348 / 0.4);
+	--success: oklch(46% 0.15 160);
+	--warning: oklch(50% 0.13 80);
+	--error: oklch(52% 0.19 22);
+	--purple: oklch(48% 0.2 320);
+	--success-bg: oklch(55% 0.15 160 / 0.12);
+	--success-border: oklch(55% 0.15 160 / 0.35);
+	--warning-bg: oklch(62% 0.13 80 / 0.14);
+	--warning-border: oklch(62% 0.13 80 / 0.35);
+	--error-bg: oklch(52% 0.19 22 / 0.1);
+	--error-border: oklch(52% 0.19 22 / 0.35);
+	--error-text: oklch(48% 0.17 22);
+	--stop-bg: oklch(52% 0.19 22 / 0.1);
+	--diff-add-bg: oklch(55% 0.15 160 / 0.1);
+	--diff-add-text: oklch(44% 0.13 160);
+	--diff-del-bg: oklch(52% 0.19 22 / 0.08);
+	--diff-del-text: oklch(48% 0.17 22);
+	--backdrop: oklch(22% 0.025 285 / 0.35);
+}

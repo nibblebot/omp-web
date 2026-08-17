@@ -1,8 +1,8 @@
 /**
  * Design-token regression test for the merged transcripts section.
  *
- * Reads the tx section of src/styles.css (from the tx banner comment to EOF)
- * and enforces:
+ * Reads the tx section of src/tx/tx.css (from the tx banner comment to EOF)
+ * and the fleet palettes from src/styles/tokens.css, and enforces:
  * - every `var(--tx-...)` referenced inside the section is defined there
  *   (the rename .badge→.tx-badge, --bg→--tx-bg, etc. must not leave dangles)
  * - the core semantic remaps point at the intended fleet tokens
@@ -15,18 +15,19 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
+const tokensCss = readFileSync(join(import.meta.dir, "..", "styles", "tokens.css"), "utf8");
+const txCss = readFileSync(join(import.meta.dir, "tx.css"), "utf8");
 
 const TX_BANNER = "/* ── tx: transcripts view ── */";
-const bannerAt = css.indexOf(TX_BANNER);
-if (bannerAt === -1) throw new Error("tx section banner not found in src/styles.css");
-const txSection = css.slice(bannerAt);
+const bannerAt = txCss.indexOf(TX_BANNER);
+if (bannerAt === -1) throw new Error("tx section banner not found in src/tx/tx.css");
+const txSection = txCss.slice(bannerAt);
 
 /** Fleet palette block for a theme selector (default dark = `:root`). */
 function parseFleetTokens(selector: string): Record<string, string> {
 	const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const block = css.match(new RegExp(`${esc}\\s*\\{([^}]*)\\}`));
-	if (!block) throw new Error(`${selector} token block not found in src/styles.css`);
+	const block = tokensCss.match(new RegExp(`${esc}\\s*\\{([^}]*)\\}`));
+	if (!block) throw new Error(`${selector} token block not found in src/styles/tokens.css`);
 	const tokens: Record<string, string> = {};
 	for (const m of block[1]!.matchAll(/--([\w-]+):\s*([^;]+);/g)) {
 		tokens[m[1]!] = m[2]!.trim();

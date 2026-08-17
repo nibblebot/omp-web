@@ -1,0 +1,146 @@
+/* Pet — pixel-pet avatar. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+
+.pet {
+	position: absolute;
+	top: 48px;
+	right: calc(var(--sidebar-offset, 0px) + var(--space-6));
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	pointer-events: none;
+	user-select: none;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	padding: var(--space-5);
+	box-shadow: var(--shadow-1);
+}
+/* Hide button in the card's top-right corner; re-enables pointer events on
+   the otherwise click-through card. */
+.pet-hide {
+	position: absolute;
+	top: var(--space-2);
+	right: var(--space-2);
+	pointer-events: auto;
+	background: none;
+	border: none;
+	padding: var(--space-1) var(--space-3);
+	border-radius: var(--r-sm);
+	color: var(--muted-2);
+	font-size: var(--fs-md);
+	line-height: 1;
+	cursor: pointer;
+}
+.pet-hide:hover {
+	color: var(--error);
+	background: var(--hover);
+}
+.pet canvas {
+	image-rendering: pixelated;
+	filter: drop-shadow(var(--shadow-sprite));
+}
+/* Full-size primary avatar (see .pet-main-canvas). */
+.pet-main-canvas {
+	width: 64px;
+	height: 64px;
+}
+/* The primary avatar is interactive: click/Enter/Space opens the model
+   picker. Pointer events are re-enabled on the button only; the rest of the
+   card lets clicks fall through to the transcript beneath. */
+.pet-main-button {
+	display: block;
+	padding: 0;
+	background: none;
+	border: none;
+	border-radius: var(--r-sm);
+	cursor: pointer;
+	pointer-events: auto;
+}
+.pet-main-button:hover {
+	filter: brightness(1.15);
+}
+.pet-main-button:focus-visible {
+	outline: var(--focus-ring);
+	outline-offset: 2px;
+}
+.pet-roster {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: var(--space-5);
+}
+/* One role model: avatar above, name under it, role labels as one joined
+   line under the name. */
+.pet-role {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--space-2);
+}
+.pet-role-avatar {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--space-1);
+}
+.pet-role-name {
+	font-size: var(--fs-md);
+	letter-spacing: var(--ls-micro);
+	text-transform: uppercase;
+	font-weight: 700;
+	color: var(--text);
+	font-family: inherit;
+	text-align: center;
+}
+.pet-role-labels {
+	font-size: var(--fs-sm);
+	letter-spacing: var(--ls-micro);
+	text-transform: uppercase;
+	color: var(--muted-2);
+	line-height: 1.3;
+	text-align: center;
+	max-width: 96px;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+/* Secondary rows: ~80% color, slightly translucent — clearly secondary but
+   still showing the character's colors; primary keeps full color. */
+.pet-role.secondary canvas {
+	filter: grayscale(0.2) opacity(0.8) drop-shadow(var(--shadow-1));
+}
+@keyframes pet-bob {
+	0% { transform: translateY(0); }
+	50% { transform: translateY(-2px); }
+	100% { transform: translateY(0); }
+}
+.pet[data-streaming="true"] .pet-main-canvas {
+	animation: pet-bob 0.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.pet[data-streaming="true"] .pet-main-canvas {
+		animation: none;
+	}
+
+	.md .fresh,
+	.btw-cursor,
+	.active-subagents,
+	.active-daemons,
+	.daemon-status-dot,
+	.run-row-dot,
+	.msg-toolbar {
+		animation: none !important;
+		transition: none !important;
+	}
+
+	button:not(:disabled),
+	.picker-row,
+	.sidebar-row,
+	.sidebar-caret,
+	.segment-button,
+	.autocomplete-row,
+	.sidebar {
+		transition: none;
+	}
+}

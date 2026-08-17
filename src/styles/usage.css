@@ -1,0 +1,250 @@
+/* Usage — amount-bar, usage rows/panel, goal/plan/retry badges, context breakdown. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+
+/* Shared progress bar (goal budget, usage limits, sidebar context). */
+.amount-bar {
+	height: 6px;
+	border-radius: var(--r-xs);
+	background: var(--panel-2);
+	overflow: hidden;
+}
+/* Compact inline variant for the sessions sidebar context meter. */
+.amount-bar--sm {
+	display: inline-block;
+	width: 40px;
+	height: 3px;
+}
+.amount-bar-fill {
+	height: 100%;
+	background: var(--accent);
+	border-radius: var(--r-xs);
+}
+.amount-bar-pct {
+	flex: none;
+}
+.sidebar-empty {
+	color: var(--muted);
+	text-align: center;
+	padding: var(--space-5) 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Status, modes & usage
+   --------------------------------------------------------------------------- */
+
+/* Per-turn usage footer under settled assistant messages. */
+.usage-row {
+	font-family: var(--font-mono);
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-4);
+	color: var(--muted-2);
+	font-size: var(--fs-micro);
+	margin-top: var(--space-3);
+	font-variant-numeric: tabular-nums;
+}
+/* Status-bar badge buttons (goal/plan) keep their warning tint on hover. */
+.goal-badge,
+.plan-badge {
+	cursor: pointer;
+}
+.goal-badge:hover,
+.plan-badge:hover {
+	background: var(--warning-bg);
+	border-color: var(--warning-border);
+}
+/* Auto-retry countdown badge. */
+.retry-badge {
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+}
+/* Goal popover. */
+.goal-empty {
+	color: var(--muted);
+	text-align: center;
+	padding: var(--space-5) 0;
+}
+.goal-panel {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+	min-width: min(320px, 100%);
+}
+.goal-objective {
+	font-size: 1rem;
+	color: var(--text);
+}
+.goal-meta {
+	display: flex;
+	gap: var(--space-3);
+	align-items: baseline;
+	color: var(--muted-3);
+}
+.goal-budget {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.goal-actions {
+	display: flex;
+	gap: var(--space-4);
+	margin-top: var(--space-4);
+}
+.goal-empty .goal-actions {
+	margin-top: calc(var(--space-4) + var(--space-1));
+	justify-content: center;
+}
+.goal-set-input {
+	flex: 1;
+	min-width: 0;
+	padding: var(--space-2) var(--space-4);
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+}
+.goal-actions button.danger {
+	background: var(--error-bg);
+	border-color: var(--error-border);
+	color: var(--error-text);
+}
+/* Usage panel. */
+.usage-empty {
+	color: var(--muted);
+	text-align: center;
+	padding: var(--space-6) 0;
+}
+.usage-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+	min-width: min(380px, 100%);
+}
+.usage-provider h3 {
+	margin-bottom: var(--space-3);
+}
+.usage-limit {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-3) 0;
+	border-top: 1px solid var(--border);
+}
+.usage-limit-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-4);
+}
+.usage-status {
+	background: var(--btn);
+	border: 1px solid var(--border);
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+	padding: 0 var(--space-3);
+	margin-left: auto;
+}
+.usage-status[data-status="warning"] {
+	background: var(--warning-bg);
+	color: var(--warning);
+}
+.usage-status[data-status="exhausted"] {
+	background: var(--error-bg);
+	color: var(--error-text);
+}
+.usage-status[data-status="unknown"] {
+	background: var(--panel-2);
+	color: var(--muted-2);
+}
+.usage-limit-amount {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: var(--space-4);
+	font-variant-numeric: tabular-nums;
+}
+.usage-note {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}
+/* Context breakdown stacked bar. */
+.breakdown {
+	margin-top: var(--space-5);
+}
+.breakdown-bar {
+	display: flex;
+	height: 10px;
+	border-radius: var(--r-sm);
+	overflow: hidden;
+	background: var(--panel-2);
+}
+.breakdown-seg:first-child {
+	border-radius: var(--r-sm) 0 0 var(--r-sm);
+}
+.breakdown-seg:last-child {
+	border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+/* Per-category hues come from the ordered cool-to-warm --breakdown-* ramp
+   (see :root), not the semantic status tokens: "system context"/"skills" are
+   neutral facts, so warning-yellow or success-green would misread as status. */
+.breakdown-seg--system {
+	background: var(--breakdown-1);
+}
+.breakdown-seg--tools {
+	background: var(--breakdown-2);
+}
+.breakdown-seg--context {
+	background: var(--breakdown-3);
+}
+.breakdown-seg--skills {
+	background: var(--breakdown-4);
+}
+.breakdown-seg--messages {
+	background: var(--breakdown-5);
+}
+.breakdown-numbers {
+	display: flex;
+	gap: var(--space-4);
+	margin-top: var(--space-3);
+	color: var(--muted-3);
+	font-size: var(--fs-md);
+	font-variant-numeric: tabular-nums;
+}
+/* Legend under the bar: swatch + label + token count per category. */
+.breakdown-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-3) var(--space-5);
+	margin-top: var(--space-3);
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+}
+.breakdown-legend-item {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	white-space: nowrap;
+}
+.breakdown-swatch {
+	width: 8px;
+	height: 8px;
+	border-radius: var(--r-xs);
+	flex: none;
+}
+.breakdown-swatch--system {
+	background: var(--breakdown-1);
+}
+.breakdown-swatch--tools {
+	background: var(--breakdown-2);
+}
+.breakdown-swatch--context {
+	background: var(--breakdown-3);
+}
+.breakdown-swatch--skills {
+	background: var(--breakdown-4);
+}
+.breakdown-swatch--messages {
+	background: var(--breakdown-5);
+}
+.breakdown-legend-count {
+	font-variant-numeric: tabular-nums;
+	color: var(--muted-3);
+}

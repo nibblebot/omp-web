@@ -1,0 +1,406 @@
+/* Modals — modal/sheet, danger-confirm, btw panel, shortcuts, pickers, stats tables, ask dialog, session-new. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+
+.modal-backdrop {
+	position: fixed;
+	inset: 0;
+	background: var(--backdrop);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: var(--z-overlay);
+}
+.modal {
+	background: var(--panel);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-xl);
+	box-shadow: var(--shadow-2);
+	padding: var(--space-6);
+	min-width: min(320px, 92vw);
+	max-width: 640px;
+	max-height: 80vh;
+	overflow-y: auto;
+}
+/* Sheet variant: full-height side sheet anchored to the right edge; the
+   sheet's content area scrolls internally, not the page. */
+.modal-backdrop.sheet {
+	justify-content: flex-end;
+	align-items: stretch;
+	z-index: var(--z-sheet);
+}
+.modal.sheet {
+	width: min(880px, 100vw);
+	height: 100%;
+	min-width: 0;
+	max-width: none;
+	max-height: none;
+	border-radius: 0;
+	border-top: none;
+	border-right: none;
+	border-bottom: none;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+@media (max-width: 720px) {
+	.modal.sheet {
+		width: 100vw;
+		border-left: none;
+	}
+}
+.modal-title {
+	margin: 0 0 var(--space-4);
+	font-size: 1rem;
+	color: var(--muted-3);
+}
+/* Danger-confirm dialog (ConfirmDialog.tsx): Alarm Red confirm button. The
+   actions row reuses .ask-actions (flex, gap var(--space-4), flex-end);
+   geometry (radius var(--r-md), padding 6px 12px, font inherit) and the
+   140ms ease-out transition come from the global `button` rules. */
+.danger-confirm-body {
+	color: var(--muted-3);
+	margin: 0 0 var(--space-6);
+}
+button.danger-confirm-btn:not(:disabled) {
+	background: var(--error-bg);
+	border: 1px solid var(--error-border);
+	color: var(--error-text);
+	transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+button.danger-confirm-btn:not(:disabled):hover {
+	background: color-mix(in srgb, var(--error-bg), var(--error) 15%);
+}
+/* /btw side-panel sheet (Modal sheet variant). Fills the sheet;
+   the reply area scrolls internally. */
+.btw-panel {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+}
+
+.btw-question {
+	background: var(--accent-dim);
+	border-radius: var(--r-xl);
+	padding: var(--space-4) var(--space-5);
+	white-space: pre-wrap;
+}
+.btw-reply {
+	flex: 1;
+	min-height: 60px;
+	overflow-y: auto;
+}
+.btw-cursor {
+	display: inline-block;
+	width: 8px;
+	height: 1em;
+	vertical-align: -0.15em;
+	margin-left: var(--space-1);
+	background: var(--accent);
+	animation: btw-blink 1s steps(2, start) infinite;
+}
+@keyframes btw-blink {
+	to {
+		visibility: hidden;
+	}
+}
+.btw-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-4);
+}
+.btw-abort,
+.btw-close {
+	background: var(--btn);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font-size: var(--fs-md);
+	padding: var(--space-2) var(--space-5);
+	cursor: pointer;
+}
+.btw-abort:hover,
+.btw-close:hover {
+	background: var(--hover);
+}
+.shortcuts {
+	border-collapse: collapse;
+	font-size: var(--fs-lg);
+}
+.shortcuts td {
+	padding: var(--space-2) var(--space-5) var(--space-2) 0;
+}
+.shortcut-key {
+	color: var(--accent);
+	font-family: var(--font-mono);
+	white-space: nowrap;
+}
+
+.picker-filter {
+	width: 100%;
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	padding: var(--space-3) var(--space-4);
+	font: inherit;
+	margin-bottom: var(--space-4);
+}
+.picker-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	max-height: 50vh;
+	overflow-y: auto;
+	padding-bottom: var(--space-3);
+}
+.picker-group-name {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	padding: var(--space-3) var(--space-4) var(--space-1);
+}
+.picker-row {
+	display: flex;
+	gap: var(--space-4);
+	padding: var(--space-2) var(--space-4);
+	border: 1px solid transparent;
+	border-radius: var(--r-md);
+	cursor: pointer;
+	align-items: baseline;
+	transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.picker-row:hover {
+	background: var(--hover);
+}
+.picker-row.active {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+}
+/* Picker rows are real <button>s (keyboard-reachable inside the modal's
+   focus trap); strip the default button chrome so they render exactly
+   like the legacy div rows. */
+button.picker-row {
+	background: none;
+	width: 100%;
+	text-align: left;
+}
+.picker-label {
+	color: var(--text);
+	font-size: var(--fs-lg);
+}
+.picker-detail {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}
+/* Reasoning/thinking capability chip on model picker rows. */
+.picker-chip {
+	background: var(--btn);
+	color: var(--muted-3);
+	font-size: var(--fs-sm);
+	border-radius: var(--r-pill);
+	padding: 0 var(--space-3);
+	line-height: 1.6;
+	white-space: nowrap;
+}
+/* Right-aligned tabular model metadata (context window size). */
+.picker-meta {
+	margin-left: auto;
+	color: var(--muted-2);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.picker-group-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+.picker-row-close {
+	margin-left: auto;
+	align-self: center;
+	padding: 0 var(--space-3);
+	background: none;
+	border: none;
+	color: var(--muted-2);
+}
+.picker-row-close:hover {
+	color: var(--error);
+}
+/* Compact text action on role rows (clear/hide/unhide). */
+.picker-row-action {
+	margin-left: var(--space-1);
+	padding: 0 var(--space-3);
+	background: none;
+	border: none;
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}
+.picker-row-action:hover {
+	color: var(--text);
+}
+/* Collapsed "hidden roles (N)" section toggle (step 1 footer). */
+.picker-hidden-toggle {
+	margin: var(--space-2) 0;
+	padding: 0 var(--space-4);
+	background: none;
+	border: none;
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+	cursor: pointer;
+}
+.picker-hidden-toggle:hover {
+	color: var(--muted-3);
+}
+/* Wizard back navigation (step 2/3 header). */
+.picker-back {
+	padding: var(--space-1) var(--space-3);
+	background: none;
+	border: none;
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.picker-back:hover {
+	color: var(--text);
+}
+/* Footer hint / empty-state note (roles step). */
+.picker-note {
+	margin-top: var(--space-4);
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}
+.picker-note:empty {
+	margin-top: 0;
+}
+.stats-table {
+	border-collapse: collapse;
+	font-size: var(--fs-lg);
+	margin-bottom: calc(var(--space-4) + var(--space-1));
+}
+.stats-table td {
+	padding: var(--space-1) var(--space-5) var(--space-1) 0;
+}
+.stats-key {
+	color: var(--muted);
+}
+.stats-actions {
+	display: flex;
+	gap: var(--space-5);
+	align-items: center;
+	margin-bottom: var(--space-4);
+}
+.stats-subhead {
+	font-size: var(--fs-md);
+	color: var(--muted-3);
+	margin: var(--space-4) 0 var(--space-2);
+}
+.stats-tools {
+	max-height: 30vh;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.stats-tool {
+	display: flex;
+	gap: var(--space-4);
+	align-items: baseline;
+}
+
+/* --- Ask dialog (server-pushed ExtensionUIContext ui_request) --- */
+
+.ask-questions {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+	max-height: 60vh;
+	overflow-y: auto;
+}
+.ask-question {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+.ask-header {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	text-transform: uppercase;
+	letter-spacing: var(--ls-micro);
+}
+.ask-label {
+	color: var(--text);
+	font-size: var(--fs-lg);
+}
+.ask-option {
+	cursor: pointer;
+	align-items: baseline;
+}
+.ask-marker {
+	flex: none;
+	width: 1.1em;
+	color: var(--muted-2);
+}
+.ask-option.active .ask-marker {
+	color: var(--accent);
+}
+.ask-recommended {
+	padding: 0 var(--space-2);
+	border: 1px solid var(--success-border);
+	border-radius: var(--r-sm);
+	background: var(--success-bg);
+	color: var(--success);
+	font-size: var(--fs-sm);
+}
+.ask-custom {
+	margin-top: var(--space-1);
+}
+.ask-message {
+	margin: 0 0 var(--space-2);
+	color: var(--text);
+	white-space: pre-wrap;
+}
+.ask-editor {
+	width: 100%;
+	min-height: 160px;
+	padding: var(--space-3) var(--space-4);
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font-family: inherit;
+	font-size: var(--fs-lg);
+	resize: vertical;
+	box-sizing: border-box;
+}
+.ask-editor:focus {
+	border-color: var(--accent-border);
+}
+.ask-actions {
+	display: flex;
+	gap: var(--space-4);
+	justify-content: flex-end;
+	margin-top: var(--space-5);
+}
+
+/* --- SessionPicker gate mode ("New session" top item) --- */
+.session-new {
+	align-items: center;
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-md);
+	background: var(--accent-dim);
+	margin-bottom: var(--space-2);
+}
+.session-new:hover {
+	background: var(--hover);
+	border-color: var(--accent);
+}
+.session-new-label {
+	color: var(--accent);
+	font-weight: 600;
+}
