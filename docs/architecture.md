@@ -13,6 +13,43 @@ browser (Solid, one app, two modes)
 
 One web app, two modes. Standalone: the browser talks to one omp-session daemon directly. Roster: the browser talks to omp-fleet's edge, which proxies each attached browser through to the selected daemon.
 
+## Architecture diagram
+
+```mermaid
+flowchart TB
+  subgraph web["Web UI — Solid.js bundle (src/)"]
+    store["state.ts — single createStore<br/>SSE stream + call()/POST"]
+    ui["App.tsx + thin components"]
+  end
+
+  subgraph fleet["omp-fleet — registry + supervisor + edge (fleet/)"]
+    edge["edge.ts — browser SSE/POST · per-browser daemon pipes"]
+    conn["connector.ts — per-daemon SSE client (dial-in)"]
+    super["supervisor.ts — spawn/restart · parses OMP_SESSION| lines"]
+    reg["registry.ts — dN/pN roster · zero agent state"]
+  end
+
+  subgraph sdk["omp-session — session SDK wrapper (server/)"]
+    daemon["SSE /events · POST /command<br/>methods.ts dispatch · readiness gate"]
+    wrap["createAgentSession — in-process<br/>@oh-my-pi/pi-coding-agent"]
+    log[".jsonl session log — durable truth"]
+  end
+
+  model["Agent model provider"]
+
+  ui --> store
+  store -->|"POST /command — commands up"| edge
+  edge -->|"SSE /events — frames down"| store
+  edge <-->|"proxied session frames"| conn
+  conn <-->|"bearer · hello_ok/proto gate · Last-Event-ID resume"| daemon
+  super -. "spawn · endpoint · --resume" .-> daemon
+  reg --> super
+  daemon <--> wrap
+  wrap <--> model
+  wrap -.-> log
+  store <-->|"standalone mode: direct, fleet bypassed"| daemon
+```
+
 ## Layers and import discipline
 
 Strictly leaf-ward layering, verified across the tree:
