@@ -4,7 +4,7 @@ import { Modal } from "../shared/Modal";
 import { useClickableRow } from "../shared/PickerRow";
 import { SubagentDetail } from "./SubagentDetail";
 import { SubagentControls } from "./SubagentControls";
-import { SubagentRow } from "./SubagentRow";
+import { SubagentRow } from "../shared/SubagentRow";
 
 /** Read-only subagent list with per-agent transcript drill-down. */
 export const SubagentPanel: Component<{ onClose: () => void }> = (props) => {

@@ -1,6 +1,6 @@
 import { createSignal, For, Show, type Component } from "solid-js";
-import type { Run } from "../../../tool-runs";
-import { formatDurationMs } from "../../../usage";
+import type { Run } from "../../../chat/tool-runs";
+import { formatDurationMs } from "../../../usage/usage";
 import { ToolStripCard } from "../ToolCard";
 import { AssistantCard } from "./Assistant";
 

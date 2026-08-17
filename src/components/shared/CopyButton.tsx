@@ -1,5 +1,5 @@
 import { createSignal, type Component } from "solid-js";
-import { copyText } from "../../clipboard";
+import { copyText } from "../../text/clipboard";
 
 /** How long the transient "copied"/"failed" label shows before reverting to "copy". */
 export const COPY_FEEDBACK_MS = 1200;

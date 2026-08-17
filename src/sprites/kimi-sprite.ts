@@ -1,9 +1,6 @@
 /**
  * Kimi — 16-bit style pixel-art catgirl avatar.
  *
- * Sprites are 32x32 ASCII maps over a 16-color palette; render 1px = 1 canvas
- * unit and upscale via CSS (`image-rendering: pixelated`), integer scale only.
- *
  * Poses: idle/blink for at rest, work1/work2/work-blink cycled while the agent
  * is streaming, happy briefly when a stream finishes.
  */

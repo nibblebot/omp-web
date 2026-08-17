@@ -1,6 +1,6 @@
 import { For, Show, type Component } from "solid-js";
 import type { ModelRoleCatalogEntry } from "../../../shared/protocol";
-import { thinkingLevelLabel } from "../../model-options";
+import { thinkingLevelLabel } from "../../usage/model-options";
 import { call, setState, state } from "../../state";
 import { ChevronDownIcon, ChevronRightIcon } from "../shared/icons";
 import { useClickableRow } from "../shared/PickerRow";

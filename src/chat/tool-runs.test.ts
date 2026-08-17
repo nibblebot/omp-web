@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Block, ChatItem, ToolItem, ToolStatus } from "./state";
+import type { Block, ChatItem, ToolItem, ToolStatus } from "../state";
 import { groupAssistantRuns, type Run } from "./tool-runs";
 
 function tool(id: number, name: string, status: ToolStatus = "done"): ToolItem {

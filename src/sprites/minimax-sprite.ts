@@ -3,9 +3,6 @@
  * MiniMax logo (coral #ec5e41 body, MiniMax Crimson #b4393c shade, orange
  * accents) with cyan LED eyes for contrast.
  *
- * Sprites are 32x32 ASCII maps over a 16-color palette; render 1px = 1 canvas
- * unit and upscale via CSS (`image-rendering: pixelated`), integer scale only.
- *
  * Poses: idle/blink for at rest, work1/work2/work-blink cycled while the agent
  * is streaming (the antenna orb, LED eyes and core pulse between frames),
  * happy briefly when a stream finishes (arc eyes, wide smile, full glow).

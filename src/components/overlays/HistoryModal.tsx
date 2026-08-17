@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, onMount, type Component } from "solid-js";
-import { fuzzyRank } from "../../autocomplete";
-import { PromptHistory } from "../../history";
+import { fuzzyRank } from "../../prompt/autocomplete";
+import { PromptHistory } from "../../prompt/history";
 import { setPromptInsert } from "../../state";
 import { Modal } from "../shared/Modal";
 import { PickerRow } from "../shared/PickerRow";

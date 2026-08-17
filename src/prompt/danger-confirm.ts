@@ -8,7 +8,7 @@ import { createSignal } from "solid-js";
 // so pure modules (commands.ts, commands.test.ts) can drive the confirm
 // without pulling Portal into their import graph.
 
-export type DangerConfirmOpts = {
+type DangerConfirmOpts = {
 	title: string;
 	body: string;
 	confirmLabel: string;

@@ -1,4 +1,4 @@
-import type { ImageArg } from "../shared/protocol";
+import type { ImageArg } from "../../shared/protocol";
 
 /**
  * Recursively collect image payloads from a tool result, message content, or

@@ -1,5 +1,5 @@
 import { For, Show, type Component } from "solid-js";
-import { buildDiffRows } from "../../diff";
+import { buildDiffRows } from "../../text/diff";
 import { type ToolItem } from "../../state";
 import { GenericToolCard } from "./GenericToolCard";
 import { CollapsiblePre, ToolShell, WRITE_PREVIEW_LINES } from "./ToolShell";

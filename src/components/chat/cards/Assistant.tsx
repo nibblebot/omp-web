@@ -1,6 +1,6 @@
 import { For, Show, type Component } from "solid-js";
 import type { ChatItem } from "../../../state";
-import { buildUsageRow, formatUsageRow } from "../../../usage";
+import { buildUsageRow, formatUsageRow } from "../../../usage/usage";
 import { CopyButton } from "../../shared/CopyButton";
 import { Markdown } from "../../shared/Markdown";
 

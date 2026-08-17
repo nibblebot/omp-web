@@ -1,5 +1,5 @@
 import { createSignal, For, Show } from "solid-js";
-import { appearanceWebImages } from "../../settings";
+import { appearanceWebImages } from "../../prefs/settings";
 import { call, fleetSettingsActive, setNotifyEnabled, setState, state } from "../../state";
 import { MinusIcon, PlusIcon } from "../shared/icons";
 import {
@@ -9,7 +9,7 @@ import {
 	stepFontSize,
 	THEME_OPTIONS,
 	type ThemePreference,
-} from "../../theme";
+} from "../../prefs/theme";
 import type { SettingsModel } from "../../../shared/protocol";
 import { Row, SettingsRow } from "./SettingsRow";
 

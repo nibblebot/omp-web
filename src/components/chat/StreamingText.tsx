@@ -1,5 +1,5 @@
 import { createEffect, createMemo, For, type Component } from "solid-js";
-import { renderMarkdown, splitForStreaming } from "../../markdown";
+import { renderMarkdown, splitForStreaming } from "../../text/markdown";
 import { state, type Block } from "../../state";
 import { Markdown } from "../shared/Markdown";
 

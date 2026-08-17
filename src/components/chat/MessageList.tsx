@@ -4,7 +4,7 @@ import type { ImageArg } from "../../../shared/protocol";
 import { FullImageOverlay } from "../shared/ImageScan";
 import { ArrowDownIcon, ExpandIcon } from "../shared/icons";
 import { ToolCard, ToolStripCard } from "./ToolCard";
-import { groupAssistantRuns, type Run } from "../../tool-runs";
+import { groupAssistantRuns, type Run } from "../../chat/tool-runs";
 import { useStickyScroll } from "./useStickyScroll";
 import { LiveBlock } from "./StreamingText";
 import {

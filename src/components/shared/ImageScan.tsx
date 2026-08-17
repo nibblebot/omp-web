@@ -1,7 +1,7 @@
 import { For, Show, createSignal, onCleanup, onMount, type Component } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { ImageArg } from "../../../shared/protocol";
-import { imageDataUrl } from "../../images";
+import { imageDataUrl } from "../../text/images";
 
 /** Full-size overlay: Esc or backdrop click closes; focus moves into the
  *  dialog on open, is trapped on Tab, and is restored to the opener on

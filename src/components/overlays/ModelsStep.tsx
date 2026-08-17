@@ -1,6 +1,6 @@
 import { For, onMount, type Component } from "solid-js";
 import type { ModelInfo, ModelRoleCatalogEntry } from "../../../shared/protocol";
-import { formatCtx } from "../../model-options";
+import { formatCtx } from "../../usage/model-options";
 import { ArrowLeftIcon } from "../shared/icons";
 import { PickerRow } from "../shared/PickerRow";
 

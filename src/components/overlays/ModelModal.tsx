@@ -1,6 +1,6 @@
 import { createMemo, createSignal, onMount, Show, type Component } from "solid-js";
 import type { ModelInfo, ModelRoleCatalogEntry } from "../../../shared/protocol";
-import { fuzzyRank } from "../../autocomplete";
+import { fuzzyRank } from "../../prompt/autocomplete";
 import { call, setState, state } from "../../state";
 import { Modal } from "../shared/Modal";
 import { ModelsStep } from "./ModelsStep";

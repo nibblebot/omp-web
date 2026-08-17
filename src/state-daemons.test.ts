@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { isLiveDaemon } from "./state";
-import { formatDaemonUptime } from "./daemon-ui";
+import { formatDaemonUptime } from "./fleet-ui/daemon-ui";
 import type { DaemonInfo } from "../shared/protocol";
 
 function daemon(state: string): DaemonInfo {

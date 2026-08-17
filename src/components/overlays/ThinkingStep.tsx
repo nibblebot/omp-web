@@ -1,6 +1,6 @@
 import { For, type Component } from "solid-js";
 import type { ModelInfo, ModelRoleCatalogEntry } from "../../../shared/protocol";
-import { thinkingOptions } from "../../model-options";
+import { thinkingOptions } from "../../usage/model-options";
 import { ArrowLeftIcon } from "../shared/icons";
 import { PickerRow } from "../shared/PickerRow";
 

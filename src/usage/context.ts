@@ -25,9 +25,20 @@ export function getContextUsageLevel(percent: number, contextWindow: number): Co
 	return "normal";
 }
 
+/** Compact k/M magnitude for a token count ("1.2k", "128k", "1.2M"), shared by
+ *  formatTokens and formatCtx. `keepDecimals` keeps the one-decimal forms
+ *  ("1.0M", "1.5k"); without it, values round to whole numbers and trailing
+ *  ".0" is trimmed ("1M", "2k"). */
+export function formatCompactTokens(n: number, keepDecimals: boolean): string {
+	if (n >= 1_000_000) {
+		const m = (n / 1_000_000).toFixed(1);
+		return keepDecimals ? `${m}M` : `${m.replace(/\.0$/, "")}M`;
+	}
+	if (keepDecimals && n >= 1000 && n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+	return `${Math.round(n / 1000)}k`;
+}
+
 export function formatTokens(n: number): string {
-	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-	if (n >= 10_000) return `${Math.round(n / 1000)}k`;
-	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-	return String(n);
+	if (n < 1000) return String(n);
+	return formatCompactTokens(n, true);
 }

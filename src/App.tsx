@@ -1,5 +1,5 @@
 import { For, onMount, Show, type Component } from "solid-js";
-import { characterForProvider } from "./characters";
+import { characterForProvider } from "./sprites/characters";
 import { PanelLeftIcon } from "./components/shared/icons";
 import { CharacterAvatar, Modal } from "./components/shared";
 import {
@@ -37,7 +37,7 @@ import {
 	UsageModal,
 } from "./components/overlays";
 import { connect, setPromptInsert, setState, state, toggleSidebar } from "./state";
-import { initTheme } from "./theme";
+import { initTheme } from "./prefs/theme";
 import { TxBrowser } from "./tx/Browser";
 
 // Apply persisted theme/font-size before first render to avoid a dark flash.

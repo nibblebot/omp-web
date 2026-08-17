@@ -3,8 +3,8 @@ import { produce } from "solid-js/store";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { ImageArg } from "../../shared/protocol";
-import { scanImages } from "../images";
-import type { UsageLike } from "../usage";
+import { scanImages } from "../text/images";
+import type { UsageLike } from "../usage/usage";
 import {
 	setState,
 	state,

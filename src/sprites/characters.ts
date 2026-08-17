@@ -8,9 +8,9 @@
 import { DEEPSEEK_SPRITE } from "./deepseek-sprite";
 import { KIMI_SPRITE } from "./kimi-sprite";
 import { MINIMAX_SPRITE } from "./minimax-sprite";
-import { drawSprite, type PetPose, type SpriteArt } from "./sprite";
+import type { SpriteArt } from "./sprite";
 
-export interface Character {
+interface Character {
 	/** Model provider id (lowercase) that selects this character; the last
 	 *  entry is the fallback for unknown/undefined providers. */
 	provider: string;
@@ -32,13 +32,4 @@ export function characterForProvider(provider: string | undefined): Character {
 	if (!provider) return CHARACTERS[CHARACTERS.length - 1];
 	const match = CHARACTERS.find((c) => provider.toLowerCase().startsWith(c.provider));
 	return match ?? CHARACTERS[CHARACTERS.length - 1];
-}
-
-/** Paints `pose` of `character` onto a 32x32 canvas context (clears first). */
-export function drawCharacter(
-	ctx: CanvasRenderingContext2D,
-	character: Character,
-	pose: PetPose,
-): void {
-	drawSprite(ctx, character.art, pose);
 }

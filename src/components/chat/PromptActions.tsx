@@ -1,5 +1,5 @@
 import { Show, type Component } from "solid-js";
-import { dispatchInput, type InputMode } from "../../commands";
+import { dispatchInput, type InputMode } from "../../prompt/commands";
 import type { ImageArg } from "../../../shared/protocol";
 import { call, isReady, setState, state } from "../../state";
 

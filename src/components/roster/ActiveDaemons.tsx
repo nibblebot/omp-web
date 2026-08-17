@@ -3,7 +3,8 @@ import { Dynamic } from "solid-js/web";
 import { daemonsKey, type DaemonInfo } from "../../../shared/protocol";
 import { isLiveDaemon, restartDaemon, setState, state, stopDaemon } from "../../state";
 import { LoaderIcon } from "../shared/icons";
-import { DAEMON_ICON, formatDaemonUptime } from "../../daemon-ui";
+import { formatDaemonUptime } from "../../fleet-ui/daemon-ui";
+import { DAEMON_ICON } from "./daemon-icons";
 
 /** One live daemon in the strip: glyph, name, state, ready endpoint (if
     declared), meta, and kill/restart actions. */

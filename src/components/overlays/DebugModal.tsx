@@ -1,7 +1,7 @@
 import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
 import { clientId, state } from "../../state";
-import { endpointHost, fetchFleetDebug, fmtTime, type FleetDebug } from "../../fleet-debug";
-import { formatDaemonUptime } from "../../daemon-ui";
+import { endpointHost, fetchFleetDebug, fmtTime, type FleetDebug } from "../../fleet-ui/fleet-debug";
+import { formatDaemonUptime } from "../../fleet-ui/daemon-ui";
 import { Modal } from "../shared/Modal";
 import { LastFrameClock } from "./LastFrameClock";
 import { LogRing } from "./LogRing";

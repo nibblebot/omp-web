@@ -1,6 +1,6 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
-import { formatUnitAmount } from "../../usage";
+import { formatUnitAmount } from "../../usage/usage";
 import { call, setState } from "../../state";
 import { Modal } from "../shared/Modal";
 

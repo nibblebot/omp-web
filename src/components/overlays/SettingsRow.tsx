@@ -1,5 +1,5 @@
 import { createSignal, For, Show, type JSX } from "solid-js";
-import { displayOptionValue, formatItemValue } from "../../settings";
+import { displayOptionValue, formatItemValue } from "../../prefs/settings";
 import { updateSetting } from "../../state";
 import { ChevronDownIcon, ChevronUpIcon } from "../shared/icons";
 import type { SettingsItem } from "../../../shared/protocol";

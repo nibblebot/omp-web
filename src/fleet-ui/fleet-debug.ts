@@ -1,4 +1,4 @@
-import { fetchCtlDebug } from "./state";
+import { fetchCtlDebug } from "../state";
 
 // ---------------------------------------------------------------------------
 // Fleet debug contract: tolerant parsing of the /ctl/debug payload (mirror of
@@ -9,9 +9,9 @@ import { fetchCtlDebug } from "./state";
 // a notice, not a crash).
 // ---------------------------------------------------------------------------
 
-export type FleetLevel = "info" | "warn" | "error";
+type FleetLevel = "info" | "warn" | "error";
 
-export type FleetLogEntry = {
+type FleetLogEntry = {
 	ts: number;
 	level: FleetLevel;
 	source: string;
@@ -19,13 +19,13 @@ export type FleetLogEntry = {
 	daemonId?: string;
 };
 
-export type FleetConnector = {
+type FleetConnector = {
 	state: string;
 	attempts: number;
 	nextRetryInMs?: number;
 };
 
-export type FleetSession = {
+type FleetSession = {
 	daemonId?: string;
 	name?: string;
 	status?: string;
@@ -65,7 +65,7 @@ function asNumber(v: unknown): number | undefined {
 }
 
 /** Extract only the contract's fields, tolerantly; unknown fields are dropped. */
-export function normalizeFleet(raw: unknown): FleetDebug | null {
+function normalizeFleet(raw: unknown): FleetDebug | null {
 	const root = asRecord(raw);
 	if (!root) return null;
 	const fleetRec = asRecord(root.fleet);

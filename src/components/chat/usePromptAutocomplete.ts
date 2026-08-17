@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, type Accessor, type Setter } from "solid-js";
-import { currentToken, fuzzyRank, type AcToken } from "../../autocomplete";
-import { LOCAL_COMMANDS } from "../../commands";
+import { currentToken, fuzzyRank, type AcToken } from "../../prompt/autocomplete";
+import { LOCAL_COMMANDS } from "../../prompt/commands";
 import { listFiles, state } from "../../state";
 import type { AcItem } from "./Autocomplete";
 

@@ -1,6 +1,6 @@
 import { createEffect, createMemo, type Component } from "solid-js";
-import { renderMarkdown } from "../../markdown";
-import { copyText } from "../../clipboard";
+import { renderMarkdown } from "../../text/markdown";
+import { copyText } from "../../text/clipboard";
 import { COPY_FEEDBACK_MS } from "./CopyButton";
 
 /**

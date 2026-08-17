@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { CHARACTERS, characterForProvider } from "./characters";
-import { PET_POSES, SPRITE_SIZE } from "./sprite";
+import { SPRITE_SIZE } from "./sprite";
 
 describe("character sprites", () => {
 	test("every pose is a SPRITE_SIZE x SPRITE_SIZE grid with a complete, bounded palette", () => {
 		for (const character of CHARACTERS) {
 			const paletteKeys = new Set(Object.keys(character.art.palette));
 			expect(paletteKeys.size).toBeLessThanOrEqual(16);
-			for (const pose of PET_POSES) {
-				const rows = character.art.poses[pose];
+			// The six-pose set (idle/blink/work1/work2/work-blink/happy) is
+			// pinned by the exported SpriteArt.poses: Record<PetPose, string[]>
+			// type; validate the grid/palette contract for every pose.
+			for (const rows of Object.values(character.art.poses)) {
 				expect(rows).toHaveLength(SPRITE_SIZE);
 				for (const row of rows) {
 					expect(row).toHaveLength(SPRITE_SIZE);

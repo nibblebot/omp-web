@@ -1,7 +1,7 @@
 import { Dynamic } from "solid-js/web";
 import type { Component } from "solid-js";
 import type { SubagentInfo } from "../../state";
-import { BanIcon, CheckIcon, LoaderIcon, XIcon, type IconProps } from "../shared/icons";
+import { BanIcon, CheckIcon, LoaderIcon, XIcon, type IconProps } from "./icons";
 
 export const STATUS_ICON: Record<string, Component<IconProps>> = {
 	started: LoaderIcon,

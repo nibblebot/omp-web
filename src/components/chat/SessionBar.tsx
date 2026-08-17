@@ -1,5 +1,5 @@
 import { Show, type Component } from "solid-js";
-import { formatTokens, getContextUsageLevel } from "../../context";
+import { formatTokens, getContextUsageLevel } from "../../usage/context";
 import { call, setState, state } from "../../state";
 import { ArrowDownIcon, ArrowUpIcon } from "../shared/icons";
 import { Segment } from "./status-utils";

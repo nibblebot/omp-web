@@ -1,5 +1,5 @@
 import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
-import { filterSettings, type SettingsMatch } from "../../settings";
+import { filterSettings, type SettingsMatch } from "../../prefs/settings";
 import { fleetSettingsActive, refreshSettings, state } from "../../state";
 import { XIcon } from "../shared/icons";
 import { Modal } from "../shared/Modal";

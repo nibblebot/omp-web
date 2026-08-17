@@ -1,7 +1,7 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { ContextUsageBreakdown } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
-import { formatTokens } from "../../context";
+import { formatTokens } from "../../usage/context";
 import { call, setState, state } from "../../state";
 import { Modal } from "../shared/Modal";
 

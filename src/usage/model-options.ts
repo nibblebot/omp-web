@@ -1,5 +1,7 @@
+import { formatCompactTokens } from "./context";
+
 /** One row of the step-3 thinking picker. */
-export interface ThinkingOption {
+interface ThinkingOption {
 	/** Wire value passed to setModelRole's thinkingLevel arg ("" = omit entirely). */
 	value: string;
 	label: string;
@@ -39,6 +41,5 @@ export function thinkingOptions(efforts: readonly string[] | undefined): Thinkin
 /** Compact context-window label for model rows, e.g. "ctx 128k" / "ctx 1.2M". */
 export function formatCtx(tokens: number | null | undefined): string | undefined {
 	if (!tokens || tokens <= 0) return undefined;
-	if (tokens >= 1_000_000) return `ctx ${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-	return `ctx ${Math.round(tokens / 1000)}k`;
+	return `ctx ${formatCompactTokens(tokens, false)}`;
 }

@@ -1,7 +1,7 @@
 import { For, Show, type Component } from "solid-js";
 import { call, pushNotice, setState, type ChatItem } from "../../../state";
 import type { ImageArg } from "../../../../shared/protocol";
-import { imageDataUrl } from "../../../images";
+import { imageDataUrl } from "../../../text/images";
 import { CopyButton } from "../../shared/CopyButton";
 
 /** User message card: branch-from-here action, copy button, text, image thumbs. */

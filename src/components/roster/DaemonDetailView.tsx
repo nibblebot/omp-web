@@ -1,7 +1,7 @@
 import { For, Show, type Component } from "solid-js";
 import type { DaemonEntry } from "../../../shared/protocol";
-import { formatDaemonUptime } from "../../daemon-ui";
-import { DaemonLogView } from "../shared/DaemonLogView";
+import { formatDaemonUptime } from "../../fleet-ui/daemon-ui";
+import { DaemonLogView } from "./DaemonLogView";
 import { Modal } from "../shared/Modal";
 import { XIcon } from "../shared/icons";
 import type { RosterEntry } from "./DaemonRow";
@@ -9,7 +9,7 @@ import type { RosterEntry } from "./DaemonRow";
 // ---------------------------------------------------------------------------
 // Daemon detail popover: roster facts (cwd/mode/template/uptime/pid/session/
 // labels/error) plus the live stderr tail. The log lifecycle (fetch/loading/
-// error/tail/refresh) is the shared DaemonLogView primitive — the raw
+// error/tail/refresh) is the roster DaemonLogView primitive — the raw
 // /ctl/sessions/{id}/stderr fetch now lives in state's fetchDaemonStderr.
 // ---------------------------------------------------------------------------
 

@@ -10,8 +10,8 @@ import {
 	queueMethod,
 	renameDispatch,
 } from "./commands";
-import { SSE_EVENT_NAME } from "../shared/protocol";
-import type { ClientCommand, ServerFrame } from "../shared/protocol";
+import { SSE_EVENT_NAME } from "../../shared/protocol";
+import type { ClientCommand, ServerFrame } from "../../shared/protocol";
 import {
 	addBashItem,
 	appendBashChunk,
@@ -21,7 +21,7 @@ import {
 	setState,
 	state,
 	type ChatItem,
-} from "./state";
+} from "../state";
 import { cancelDangerConfirm, confirmDangerConfirm, dangerConfirm } from "./danger-confirm";
 
 describe("parseInput", () => {

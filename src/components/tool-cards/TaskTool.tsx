@@ -1,6 +1,6 @@
 import { For, Show, type Component } from "solid-js";
 import { state, type ToolItem } from "../../state";
-import { SubagentRow } from "../subagents/SubagentRow";
+import { SubagentRow } from "../shared/SubagentRow";
 import { ToolShell } from "./ToolShell";
 
 /** task tool: the agent list this tool call spawned, scoped by parentToolCallId

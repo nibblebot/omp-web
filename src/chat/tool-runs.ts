@@ -1,4 +1,4 @@
-import type { Block, ChatItem, ToolItem } from "./state";
+import type { Block, ChatItem, ToolItem } from "../state";
 
 /** One consolidated run: a maximal contiguous sequence of assistant messages
  *  and tool calls, collapsed into a single expandable transcript row. */

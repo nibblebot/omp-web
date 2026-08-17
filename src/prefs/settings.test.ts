@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { SettingsItem, SettingsModel, SettingsTab } from "../shared/protocol";
+import type { SettingsItem, SettingsModel, SettingsTab } from "../../shared/protocol";
 import {
 	appearanceWebImages,
 	displayOptionValue,

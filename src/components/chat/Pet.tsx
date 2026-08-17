@@ -8,9 +8,9 @@ import {
 	onMount,
 	type Component,
 } from "solid-js";
-import { characterForProvider, drawCharacter } from "../../characters";
-import { groupModelRoles, type RoleGroup } from "../../model-roles";
-import { SPRITE_SIZE, type PetPose } from "../../sprite";
+import { characterForProvider } from "../../sprites/characters";
+import { groupModelRoles, type RoleGroup } from "../../usage/model-roles";
+import { drawSprite, SPRITE_SIZE, type PetPose } from "../../sprites/sprite";
 import { setState, state, togglePetVisible } from "../../state";
 import { XIcon } from "../shared/icons";
 import { CharacterAvatar } from "../shared/CharacterAvatar";
@@ -29,7 +29,7 @@ const PetMainAvatar: Component<{ pose: () => PetPose }> = (props) => {
 	onMount(() => {
 		const ctx = canvas.getContext("2d")!;
 		createRenderEffect(() =>
-			drawCharacter(ctx, characterForProvider(state.model?.provider), props.pose()),
+			drawSprite(ctx, characterForProvider(state.model?.provider).art, props.pose()),
 		);
 	});
 	return (

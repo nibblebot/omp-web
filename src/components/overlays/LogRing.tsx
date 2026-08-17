@@ -1,5 +1,5 @@
 import { createEffect, createSignal, For, Show, type Component } from "solid-js";
-import { fmtTime } from "../../fleet-debug";
+import { fmtTime } from "../../fleet-ui/fleet-debug";
 
 /** Shared ring renderer for both logs: level-colored tag + source + message,
  *  newest entry last, stick-to-bottom while the reader is already at the tail. */

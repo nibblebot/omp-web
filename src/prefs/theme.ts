@@ -55,7 +55,7 @@ export function currentThemePreference(): ThemePreference {
 }
 
 /** The concrete palette currently in effect (preference resolved through the OS when set to "system"). */
-export function resolvedTheme(): ThemeId {
+function resolvedTheme(): ThemeId {
 	const pref = currentThemePreference();
 	return pref === "system"
 		? window.matchMedia("(prefers-color-scheme: light)").matches

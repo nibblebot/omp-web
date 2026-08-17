@@ -12,7 +12,7 @@
 
 export type PetPose = "idle" | "blink" | "work1" | "work2" | "work-blink" | "happy";
 
-export const PET_POSES: readonly PetPose[] = [
+const PET_POSES: readonly PetPose[] = [
 	"idle",
 	"blink",
 	"work1",

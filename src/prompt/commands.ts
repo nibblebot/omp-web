@@ -1,4 +1,4 @@
-import type { ImageArg } from "../shared/protocol";
+import type { ImageArg } from "../../shared/protocol";
 import { requestDangerConfirm } from "./danger-confirm";
 import {
 	addBashItem,
@@ -10,7 +10,7 @@ import {
 	setState,
 	state,
 	type BashResultLike,
-} from "./state";
+} from "../state";
 
 export type InputMode = "enter" | "followup";
 

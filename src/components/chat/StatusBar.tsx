@@ -1,5 +1,5 @@
 import { createEffect, createSignal, onCleanup, Show, type Component } from "solid-js";
-import { planToggle } from "../../commands";
+import { planToggle } from "../../prompt/commands";
 import { setState, state, togglePetVisible } from "../../state";
 import { InfoIcon, SettingsIcon } from "../shared/icons";
 import { Segment } from "./status-utils";

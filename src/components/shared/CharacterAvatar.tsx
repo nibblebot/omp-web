@@ -1,6 +1,6 @@
 import { createRenderEffect, onMount, type Component } from "solid-js";
-import { characterForProvider, drawCharacter } from "../../characters";
-import { SPRITE_SIZE, type PetPose } from "../../sprite";
+import { characterForProvider } from "../../sprites/characters";
+import { drawSprite, SPRITE_SIZE, type PetPose } from "../../sprites/sprite";
 
 /** Static pixel-art avatar for a session's model provider; 32x32 canvas upscaled via CSS. */
 export const CharacterAvatar: Component<{ provider?: string; pose?: PetPose; size?: number }> = (
@@ -15,7 +15,7 @@ export const CharacterAvatar: Component<{ provider?: string; pose?: PetPose; siz
 	onMount(() => {
 		const ctx = canvas.getContext("2d")!;
 		createRenderEffect(() =>
-			drawCharacter(ctx, characterForProvider(props.provider), props.pose ?? "idle"),
+			drawSprite(ctx, characterForProvider(props.provider).art, props.pose ?? "idle"),
 		);
 	});
 	return (

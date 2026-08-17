@@ -15,8 +15,8 @@ import type {
 	WebSessionState,
 } from "../shared/protocol";
 import { SSE_PING_EVENT } from "../shared/sse";
-import { scanImages } from "./images";
-import type { UsageLike } from "./usage";
+import { scanImages } from "./text/images";
+import type { UsageLike } from "./usage/usage";
 import {
 	announce,
 	appendBashChunk,
