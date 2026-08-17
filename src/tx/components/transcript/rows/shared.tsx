@@ -14,7 +14,7 @@ import {
 	systemDetail,
 } from "../../../util/entries";
 import { formatDateTime } from "../../../util/format";
-import { ChevronDownIcon } from "../../../../icons";
+import { ChevronDownIcon } from "../../../../components/shared/icons";
 import { RowStateCtx, useRowCollapse } from "../collapse";
 
 /** Stable details key for one <details> inside a row; survives remounts + page appends. */

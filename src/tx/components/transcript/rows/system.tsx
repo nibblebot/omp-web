@@ -6,7 +6,7 @@
  */
 import { For, Show } from "solid-js";
 import type { RawEntry } from "../../../api";
-import { Markdown } from "../../../../components/Markdown";
+import { Markdown } from "../../../../components/shared/Markdown";
 import {
 	compactionSummaryOf,
 	customEntryOf,

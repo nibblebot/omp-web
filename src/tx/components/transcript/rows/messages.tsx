@@ -23,8 +23,8 @@ import {
 	userText,
 } from "../../../util/entries";
 import { formatCompact, formatCost, formatDateTime, formatMs } from "../../../util/format";
-import { ChevronDownIcon, CornerDownRightIcon } from "../../../../icons";
-import { Markdown } from "../../../../components/Markdown";
+import { ChevronDownIcon, CornerDownRightIcon } from "../../../../components/shared/icons";
+import { Markdown } from "../../../../components/shared/Markdown";
 import type { PairingMaps, ToolCallInfo } from "../pairing";
 import { useRowCollapse } from "../collapse";
 import { RawJson, ToggleDetails, prettyJson, rowAriaLabel, scalar } from "./shared";

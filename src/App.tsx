@@ -1,35 +1,41 @@
 import { For, onMount, Show, type Component } from "solid-js";
 import { characterForProvider } from "./characters";
-import { PanelLeftIcon } from "./icons";
-import { ActiveSubagents } from "./components/ActiveSubagents";
-import { ActiveDaemons } from "./components/ActiveDaemons";
-import { AskDialog } from "./components/AskDialog";
-import { BranchPicker } from "./components/BranchPicker";
-import { BtwPanel } from "./components/BtwPanel";
-import { CharacterAvatar } from "./components/CharacterAvatar";
-import { DangerConfirmDialog } from "./components/ConfirmDialog";
-import { DaemonSidebar } from "./components/DaemonSidebar";
-import { AddProjectModal } from "./components/AddProjectModal";
-import { WorktreeModal } from "./components/WorktreeModal";
-import { DeleteWorktreeDialog } from "./components/DeleteWorktreeDialog";
-import { RemoveProjectDialog } from "./components/RemoveProjectDialog";
-import { DebugPanel } from "./components/DebugPanel";
-import { GoalPopover } from "./components/GoalPopover";
-import { HistorySearch } from "./components/HistorySearch";
-import { UsagePanel } from "./components/UsagePanel";
-import { LoginPanel } from "./components/LoginPanel";
-import { MessageList } from "./components/MessageList";
-import { Modal } from "./components/Modal";
-import { ModelPicker } from "./components/ModelPicker";
-import { Pet } from "./components/Pet";
-import { PromptBox } from "./components/PromptBox";
-import { QueueBar } from "./components/QueueBar";
-import { SessionPicker } from "./components/SessionPicker";
-import { SettingsPanel } from "./components/SettingsPanel";
-import { StatsPopover } from "./components/StatsPopover";
-import { SessionBar, SessionHeader, StatusBar } from "./components/StatusBar";
-import { SubagentPanel } from "./components/SubagentPanel";
-import { ThinkingPicker } from "./components/ThinkingPicker";
+import { PanelLeftIcon } from "./components/shared/icons";
+import { CharacterAvatar, Modal } from "./components/shared";
+import {
+	MessageList,
+	Pet,
+	PromptBox,
+	QueueBar,
+	SessionBar,
+	SessionHeader,
+	StatusBar,
+} from "./components/chat";
+import { ActiveSubagents, SubagentPanel } from "./components/subagents";
+import {
+	ActiveDaemons,
+	AddProjectModal,
+	DaemonSidebar,
+	DeleteWorktreeDialog,
+	RemoveProjectDialog,
+	WorktreeModal,
+} from "./components/roster";
+import {
+	AskDialog,
+	BranchModal,
+	BtwPanel,
+	DangerConfirmDialog,
+	DebugModal,
+	GoalModal,
+	HistoryModal,
+	LoginModal,
+	ModelModal,
+	SessionModal,
+	SettingsModal,
+	StatsModal,
+	ThinkingModal,
+	UsageModal,
+} from "./components/overlays";
 import { connect, setPromptInsert, setState, state, toggleSidebar } from "./state";
 import { initTheme } from "./theme";
 import { TxBrowser } from "./tx/Browser";
@@ -172,40 +178,40 @@ export const App: Component = () => {
 				</Modal>
 			</Show>
 			<Show when={state.modal === "model"}>
-				<ModelPicker onClose={() => setState("modal", null)} />
+				<ModelModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "thinking"}>
-				<ThinkingPicker onClose={() => setState("modal", null)} />
+				<ThinkingModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "stats"}>
-				<StatsPopover onClose={() => setState("modal", null)} />
+				<StatsModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "settings"}>
-				<SettingsPanel onClose={() => setState("modal", null)} />
+				<SettingsModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "subagents"}>
 				<SubagentPanel onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "sessions"}>
-				<SessionPicker onClose={() => setState("modal", null)} />
+				<SessionModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "branch"}>
-				<BranchPicker onClose={() => setState("modal", null)} />
+				<BranchModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "history"}>
-				<HistorySearch onClose={() => setState("modal", null)} />
+				<HistoryModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "login"}>
-				<LoginPanel onClose={() => setState("modal", null)} />
+				<LoginModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "goal"}>
-				<GoalPopover onClose={() => setState("modal", null)} />
+				<GoalModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "usage"}>
-				<UsagePanel onClose={() => setState("modal", null)} />
+				<UsageModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "debug"}>
-				<DebugPanel onClose={() => setState("modal", null)} />
+				<DebugModal onClose={() => setState("modal", null)} />
 			</Show>
 			<Show when={state.modal === "add-project"}>
 				<AddProjectModal onClose={() => setState("modal", null)} />

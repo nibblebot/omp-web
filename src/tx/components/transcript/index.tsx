@@ -32,7 +32,7 @@ import {
 import { createCollapseStore, RowStateCtx } from "./collapse";
 import { createPairingMaps } from "./pairing";
 import { EntryRow } from "./rows/entry-row";
-import { ArrowLeftIcon } from "../../../icons";
+import { ArrowLeftIcon } from "../../../components/shared/icons";
 
 const PAGE_SIZE = 200;
 

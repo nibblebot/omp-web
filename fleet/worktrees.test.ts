@@ -143,9 +143,7 @@ describe("managedWorktreePath", () => {
 		const dir = join(ws, "omp-web");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, ".ompweb-repo"), repoA);
-		expect(managedWorktreePath(ws, repoB, "x")).toBe(
-			join(ws, `omp-web-${sha1Prefix(repoB)}`, "x"),
-		);
+		expect(managedWorktreePath(ws, repoB, "x")).toBe(join(ws, `omp-web-${sha1Prefix(repoB)}`, "x"));
 	});
 
 	test("deterministic: the same inputs always map to the same path", () => {

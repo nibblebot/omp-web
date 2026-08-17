@@ -22,11 +22,7 @@ import {
 	state,
 	type ChatItem,
 } from "./state";
-import {
-	cancelDangerConfirm,
-	confirmDangerConfirm,
-	dangerConfirm,
-} from "./components/ConfirmDialog";
+import { cancelDangerConfirm, confirmDangerConfirm, dangerConfirm } from "./danger-confirm";
 
 describe("parseInput", () => {
 	test("plain text", () => {
@@ -436,11 +432,14 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 		expect(item()?.output).toBe("tick\n");
 	});
 
-	test("resolveBashItem appends an error marker instead of wiping streamed output", () => {
+	test("resolveBashItem appends an error marker instead of wiping streamed output", async () => {
 		setState({ items: [] });
 		const streamed = addBashItem("!sleep 60", false);
 		const empty = addBashItem("!never started", false);
 		appendBashChunk(streamed, "partial output\n");
+		// Chunks land on the rAF flush (a microtask in the test env), so drain
+		// the microtask queue before asserting the streamed text.
+		await flushMicrotasks();
 		const findBash = (id: number) =>
 			state.items.find(
 				(it): it is Extract<ChatItem, { kind: "bash" }> => it.kind === "bash" && it.id === id,

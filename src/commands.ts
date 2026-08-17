@@ -1,5 +1,5 @@
 import type { ImageArg } from "../shared/protocol";
-import { requestDangerConfirm } from "./components/ConfirmDialog";
+import { requestDangerConfirm } from "./danger-confirm";
 import {
 	addBashItem,
 	askBtw,
