@@ -4,7 +4,7 @@
  * `${projectDir}\u0000${name}`, same-projectDir preference, latest-wins
  * tie-breaks, full-replace ingest, and removal eviction. The browser-facing
  * integration (broadcast on update/open, pipe stripping, registry-removal
- * eviction broadcast) lives in edge.test.ts.
+ * eviction broadcast) lives in edge-wire.test.ts.
  */
 
 import { describe, expect, test } from "bun:test";

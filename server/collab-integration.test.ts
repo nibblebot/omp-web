@@ -15,6 +15,7 @@
  */
 
 import { afterAll, expect, test } from "bun:test";
+import { cpSync, existsSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +29,7 @@ import {
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { OMP_SESSION_PREFIX } from "../shared/protocol";
 import { parseSseUnits, SSE_PING_EVENT } from "../shared/sse";
+import { cleanupTempDirs, tempDir } from "../shared/testkit";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -146,6 +148,31 @@ let tmpDir: string | undefined;
 const webStreams: Array<{ close: () => void }> = [];
 const guestSockets: CollabSocket[] = [];
 
+/**
+ * Seed a hermetic agent dir with the real ~/.omp/agent state (minus the
+ * multi-GB regenerable caches). The collab flow runs a REAL model prompt, so
+ * the daemon needs the user's auth credentials and model selection; with
+ * PI_CODING_AGENT_DIR pointing at the seeded copy, all daemon writes land in
+ * the tmpdir (reaped by the testkit afterAll) and never touch ~/.omp. A
+ * missing real dir leaves the fresh empty dir: the prompt then fails exactly
+ * as it would when booting a real daemon with no agent state.
+ */
+function seedAgentDir(agentDir: string): void {
+	const realAgentDir = path.join(os.homedir(), ".omp", "agent");
+	if (!existsSync(realAgentDir)) return;
+	for (const entry of readdirSync(realAgentDir)) {
+		if (
+			entry === "sessions" ||
+			entry === "cache" ||
+			entry === "terminal-sessions" ||
+			entry === "skills-bak"
+		) {
+			continue;
+		}
+		cpSync(path.join(realAgentDir, entry), path.join(agentDir, entry), { recursive: true });
+	}
+}
+
 afterAll(async () => {
 	for (const stream of webStreams) stream.close();
 	for (const guest of guestSockets) guest.close();
@@ -156,8 +183,15 @@ afterAll(async () => {
 	if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 });
 
+// Reap tempDir dirs (incl. the seeded agent dir) AFTER the daemon child is
+// killed above: removing the agent dir while the server is still alive races
+// its writes, and rmSync can leave dirs behind.
+afterAll(cleanupTempDirs);
+
 test("web collab_start → guest join + prompt entry → collab_stop", async () => {
 	tmpDir = await mkdtemp(path.join(os.tmpdir(), "omp-web-collab-it-"));
+	const agentDir = tempDir("omp-session-agent-");
+	seedAgentDir(agentDir);
 	child = Bun.spawn(["bun", "server/index.ts"], {
 		cwd: repoRoot,
 		env: {
@@ -165,6 +199,7 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 			OMP_SESSION_PORT: "0",
 			OMP_SESSION_CWD: tmpDir,
 			PI_NO_TITLE: "1",
+			PI_CODING_AGENT_DIR: agentDir,
 			OMP_SESSION_COLLAB_MAX_GUESTS: "8",
 		},
 		stdout: "pipe",

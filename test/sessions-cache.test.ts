@@ -77,6 +77,7 @@ describe("sessions list cache", () => {
 	test("sequential GETs serve the same list; the disk walk runs once", async () => {
 		const start = sessionsWalkCounter.runs;
 		const res1 = await get("/ctl/stats/sessions");
+		if (!res1) throw new Error("expected response");
 		expect(res1.status).toBe(200);
 		const list1 = await sessionsOf(res1);
 		expect(list1).toHaveLength(1);
@@ -84,6 +85,7 @@ describe("sessions list cache", () => {
 		expect(sessionsWalkCounter.runs).toBe(start + 1); // one walk for the miss
 
 		const res2 = await get("/ctl/stats/sessions");
+		if (!res2) throw new Error("expected response");
 		expect(res2.status).toBe(200);
 		expect(await sessionsOf(res2)).toEqual(list1);
 		expect(sessionsWalkCounter.runs).toBe(start + 1); // cache hit — no second walk
@@ -93,6 +95,7 @@ describe("sessions list cache", () => {
 		// Ensure a fresh cache entry exists before probing staleness.
 		await Bun.sleep(SESSIONS_CACHE_TTL_MS + 150);
 		let res = await get("/ctl/stats/sessions");
+		if (!res) throw new Error("expected response");
 		let list = await sessionsOf(res);
 		const size0 = list[0]!.size;
 		const runsAfterRecompute = sessionsWalkCounter.runs;
@@ -105,6 +108,7 @@ describe("sessions list cache", () => {
 			JSON.stringify({ type: "assistant", message: { content: [] } }) + "\n",
 		);
 		res = await get("/ctl/stats/sessions");
+		if (!res) throw new Error("expected response");
 		list = await sessionsOf(res);
 		expect(sessionsWalkCounter.runs).toBe(runsAfterRecompute);
 		expect(list[0]!.size).toBe(size0);
@@ -112,6 +116,7 @@ describe("sessions list cache", () => {
 		// After TTL expiry the recompute sees the grown file.
 		await Bun.sleep(SESSIONS_CACHE_TTL_MS + 150);
 		res = await get("/ctl/stats/sessions");
+		if (!res) throw new Error("expected response");
 		list = await sessionsOf(res);
 		expect(sessionsWalkCounter.runs).toBe(runsAfterRecompute + 1);
 		expect(list[0]!.size).toBeGreaterThan(size0);
@@ -144,6 +149,7 @@ describe("sessions list cache", () => {
 
 		// Key changed (db stat now in the key) → recompute immediately, no TTL wait.
 		const res = await get("/ctl/stats/sessions");
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		const list = await sessionsOf(res);
 		expect(list).toHaveLength(1);
@@ -154,16 +160,19 @@ describe("sessions list cache", () => {
 		// Subsequent GET is a cache hit.
 		const runsBefore = sessionsWalkCounter.runs;
 		const res2 = await get("/ctl/stats/sessions");
+		if (!res2) throw new Error("expected response");
 		expect(sessionsWalkCounter.runs).toBe(runsBefore);
 		expect(await sessionsOf(res2)).toEqual(list);
 
 		// Tool filter runs per-request on the cached list (no extra walk).
 		const matching = await get("/ctl/stats/sessions?tool=edit");
+		if (!matching) throw new Error("expected response");
 		expect(matching.status).toBe(200);
 		expect(await sessionsOf(matching)).toHaveLength(1);
 		expect(sessionsWalkCounter.runs).toBe(runsBefore);
 
 		const none = await get("/ctl/stats/sessions?tool=nope");
+		if (!none) throw new Error("expected response");
 		expect(none.status).toBe(200);
 		expect(await sessionsOf(none)).toHaveLength(0);
 		expect(sessionsWalkCounter.runs).toBe(runsBefore);

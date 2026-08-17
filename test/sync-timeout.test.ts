@@ -48,12 +48,12 @@ let app: StatsApp;
 let savedPath: string | undefined;
 let savedTimeoutMs: number;
 
-const postSync = (): Promise<Response> =>
+const postSync = (): Promise<Response | null> =>
 	app.handleFetch(
 		new Request("http://localhost/ctl/stats/sync", { method: "POST" }),
 		new URL("http://localhost/ctl/stats/sync"),
 	);
-const getHealth = (): Promise<Response> =>
+const getHealth = (): Promise<Response | null> =>
 	app.handleFetch(
 		new Request("http://localhost/ctl/stats/health"),
 		new URL("http://localhost/ctl/stats/health"),
@@ -105,6 +105,7 @@ describe("POST /ctl/stats/sync — default runner", () => {
 		process.env.OMP_PIDFILE = pidfile;
 
 		const res = await postSync();
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(504);
 		expect(await res.json()).toEqual({ error: "sync timed out" });
 
@@ -128,6 +129,7 @@ describe("POST /ctl/stats/sync — default runner", () => {
 	test("missing omp binary → 503 with install hint", async () => {
 		process.env.PATH = emptyDir; // nothing named omp here
 		const res = await postSync();
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(503);
 		expect(await res.json()).toEqual({ error: SYNC_ERROR_503 });
 	});
@@ -137,6 +139,7 @@ describe("POST /ctl/stats/sync — default runner", () => {
 		process.env.PATH = `${syncBinDir}:${savedPath ?? ""}`;
 
 		const res = await postSync();
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
 			processed: number;
@@ -149,6 +152,7 @@ describe("POST /ctl/stats/sync — default runner", () => {
 
 		// The REAL stats.db gained the row (visible through the post-sync reprobe).
 		const health = await getHealth();
+		if (!health) throw new Error("expected response");
 		expect(health.status).toBe(200);
 		const h = (await health.json()) as {
 			dbCounts: { messages: number };

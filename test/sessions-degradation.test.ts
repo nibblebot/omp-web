@@ -106,8 +106,12 @@ describe("stats.db degradation", () => {
 	};
 
 	test("missing stats.db → tools 503, sessions 200 with disk-only rows", async () => {
-		await expectDbUnavailable(await get("/ctl/stats/tools"));
-		await expectDegradedSessions(await get("/ctl/stats/sessions"));
+		const tools = await get("/ctl/stats/tools");
+		if (!tools) throw new Error("expected response");
+		await expectDbUnavailable(tools);
+		const sessions = await get("/ctl/stats/sessions");
+		if (!sessions) throw new Error("expected response");
+		await expectDegradedSessions(sessions);
 	});
 
 	test("corrupt stats.db (garbage bytes) → same degradation, no 500", async () => {
@@ -116,11 +120,17 @@ describe("stats.db degradation", () => {
 			"this is definitely not a sqlite database, just garbage bytes\n".repeat(8),
 		);
 		await get("/ctl/stats/health"); // health re-probes stats.db (production reprobe path)
-		await expectDbUnavailable(await get("/ctl/stats/tools"));
-		await expectDegradedSessions(await get("/ctl/stats/sessions"));
+		const tools = await get("/ctl/stats/tools");
+		if (!tools) throw new Error("expected response");
+		await expectDbUnavailable(tools);
+		const sessions = await get("/ctl/stats/sessions");
+		if (!sessions) throw new Error("expected response");
+		await expectDegradedSessions(sessions);
 		// Tool filter is db-backed; with a broken db it is an explicit 503 —
 		// never a false "no sessions use this tool" empty list.
-		await expectDbUnavailable(await get("/ctl/stats/sessions?tool=edit"));
+		const filtered = await get("/ctl/stats/sessions?tool=edit");
+		if (!filtered) throw new Error("expected response");
+		await expectDbUnavailable(filtered);
 	});
 
 	test("schema-mismatched stats.db → same degradation, no 500", async () => {
@@ -133,9 +143,15 @@ describe("stats.db degradation", () => {
 		db.exec("CREATE TABLE other (x INTEGER)");
 		db.close();
 		await get("/ctl/stats/health"); // health re-probes stats.db (production reprobe path)
-		await expectDbUnavailable(await get("/ctl/stats/tools"));
-		await expectDegradedSessions(await get("/ctl/stats/sessions"));
-		await expectDbUnavailable(await get("/ctl/stats/sessions?tool=edit"));
+		const tools = await get("/ctl/stats/tools");
+		if (!tools) throw new Error("expected response");
+		await expectDbUnavailable(tools);
+		const sessions = await get("/ctl/stats/sessions");
+		if (!sessions) throw new Error("expected response");
+		await expectDegradedSessions(sessions);
+		const filtered = await get("/ctl/stats/sessions?tool=edit");
+		if (!filtered) throw new Error("expected response");
+		await expectDbUnavailable(filtered);
 	});
 
 	test("valid stats.db → enrichment and tools still work (no regression)", async () => {
@@ -164,6 +180,7 @@ describe("stats.db degradation", () => {
 		await get("/ctl/stats/health"); // health re-probes stats.db (production reprobe path)
 
 		const tools = await get("/ctl/stats/tools");
+		if (!tools) throw new Error("expected response");
 		expect(tools.status).toBe(200);
 		const toolsBody = (await tools.json()) as {
 			tools: Array<{ name: string; calls: number; errors: number; sessions: number }>;
@@ -172,6 +189,7 @@ describe("stats.db degradation", () => {
 		expect(toolsBody.tools[0]).toEqual({ name: "edit", calls: 1, errors: 0, sessions: 1 });
 
 		const sessions = await get("/ctl/stats/sessions");
+		if (!sessions) throw new Error("expected response");
 		expect(sessions.status).toBe(200);
 		const body = (await sessions.json()) as SessionsResponse;
 		expect(body.sessions).toHaveLength(1);
@@ -189,9 +207,11 @@ describe("stats.db degradation", () => {
 
 		// Tool filter happy path: matching tool keeps the session, non-matching gives empty.
 		const matching = await get("/ctl/stats/sessions?tool=edit");
+		if (!matching) throw new Error("expected response");
 		expect(matching.status).toBe(200);
 		expect(((await matching.json()) as SessionsResponse).sessions).toHaveLength(1);
 		const none = await get("/ctl/stats/sessions?tool=nope");
+		if (!none) throw new Error("expected response");
 		expect(none.status).toBe(200);
 		const noneBody = (await none.json()) as SessionsResponse;
 		expect(noneBody.sessions).toHaveLength(0);
@@ -213,6 +233,7 @@ describe("stats.db degradation", () => {
 			);
 		}
 		const res = await get("/ctl/stats/sessions");
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as SessionsResponse;
 		expect(body.sessions).toHaveLength(2000);

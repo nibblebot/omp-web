@@ -23,6 +23,7 @@ import {
 	type StdoutContractLine,
 } from "../shared/protocol";
 import { parseSseUnits, SSE_PING_EVENT } from "../shared/sse";
+import { cleanupTempDirs, tempDir } from "../shared/testkit";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -235,6 +236,7 @@ async function spawnSession(
 	opts: { args?: string[]; env?: Record<string, string> } = {},
 ): Promise<SessionProc> {
 	const tmp = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-"));
+	const agentDir = tempDir("omp-session-agent-");
 	const child = Bun.spawn(["bun", "server/index.ts", ...(opts.args ?? [])], {
 		cwd: repoRoot,
 		env: {
@@ -242,6 +244,7 @@ async function spawnSession(
 			OMP_SESSION_PORT: "0",
 			OMP_SESSION_CWD: tmp,
 			PI_NO_TITLE: "1",
+			PI_CODING_AGENT_DIR: agentDir,
 			...opts.env,
 		},
 		stdout: "pipe",
@@ -296,6 +299,32 @@ afterAll(async () => {
 	await Promise.all(running.map((p) => p.cleanup()));
 });
 
+// Reap tempDir dirs AFTER the daemon cleanup above: removing agent dirs while
+// a spawned daemon is still alive races its writes (rmSync can miss files the
+// daemon creates mid-walk), leaving leaked dirs.
+afterAll(cleanupTempDirs);
+
+/**
+ * Register a raw spawn (not spawned via spawnSession) so afterAll reaps the
+ * child and its tmp cwd even when the test fails mid-flight.
+ */
+function trackRawSpawn(child: Subprocess<"ignore", "pipe", "pipe">, tmp: string): void {
+	running.push({
+		child,
+		tmp,
+		port: 0,
+		firstLine: "",
+		stderrTail: () => "",
+		cleanup: async () => {
+			if (child.exitCode === null) {
+				child.kill();
+				await Promise.race([child.exited, sleep(15_000)]);
+			}
+			await rm(tmp, { recursive: true, force: true }).catch(() => {});
+		},
+	});
+}
+
 test("SIGTERM runs the graceful shutdown path (exit 0, not 143)", async () => {
 	// Regression: pi-utils' postmortem installs import-time SIGINT/SIGTERM/
 	// SIGHUP handlers that exit 130/143/129, preempting omp-session's shutdown().
@@ -313,15 +342,20 @@ test("off-loopback bind without a token is a startup hard error", async () => {
 	const tmp = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-"));
 	const child = Bun.spawn(["bun", "server/index.ts", "--host", "0.0.0.0", "--cwd", tmp], {
 		cwd: repoRoot,
-		env: { ...process.env, OMP_SESSION_PORT: "0", PI_NO_TITLE: "1" },
+		env: {
+			...process.env,
+			OMP_SESSION_PORT: "0",
+			PI_NO_TITLE: "1",
+			PI_CODING_AGENT_DIR: tempDir("omp-session-agent-"),
+		},
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	trackRawSpawn(child, tmp);
 	const code = await Promise.race([child.exited, sleep(15_000).then(() => "timeout" as const)]);
 	expect(code).not.toBe(0);
 	const err = await new Response(child.stderr).text();
 	expect(err).toContain("token");
-	await rm(tmp, { recursive: true, force: true }).catch(() => {});
 }, 30_000);
 
 test("127.* with non-numeric parts is not loopback: bind without a token is a startup hard error", async () => {
@@ -331,15 +365,20 @@ test("127.* with non-numeric parts is not loopback: bind without a token is a st
 	const tmp = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-"));
 	const child = Bun.spawn(["bun", "server/index.ts", "--host", "127.a.b.c", "--cwd", tmp], {
 		cwd: repoRoot,
-		env: { ...process.env, OMP_SESSION_PORT: "0", PI_NO_TITLE: "1" },
+		env: {
+			...process.env,
+			OMP_SESSION_PORT: "0",
+			PI_NO_TITLE: "1",
+			PI_CODING_AGENT_DIR: tempDir("omp-session-agent-"),
+		},
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	trackRawSpawn(child, tmp);
 	const code = await Promise.race([child.exited, sleep(15_000).then(() => "timeout" as const)]);
 	expect(code).not.toBe(0);
 	const err = await new Response(child.stderr).text();
 	expect(err).toContain("token");
-	await rm(tmp, { recursive: true, force: true }).catch(() => {});
 }, 30_000);
 
 test("token gate: off-loopback peers need the token; loopback stays exempt", async () => {

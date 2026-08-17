@@ -15,6 +15,7 @@
 		"format": "oxfmt",
 		"format:check": "oxfmt --check",
 		"test": "bun scripts/test.ts",
+		"bench": "bun scripts/bench-tests.ts",
 		"tx-fixture": "bun scripts/gen-tx-fixture.ts",
 		"collab": "bun server/collab-cli.ts",
 		"fleet": "bun fleet/cli.ts"

@@ -26,6 +26,7 @@ bun run format                 # oxfmt, writes in place (TS/TSX only)
 bun run format:check           # oxfmt --check, exits nonzero on unformatted files
 bun run test                   # scripts/test.ts wrapper → bun test (see Testing)
 bun scripts/test.ts --bail 1   # extra args forwarded to bun test (file filters work: `bun scripts/test.ts server/omp-session.test.ts`)
+bun run bench                  # scripts/bench-tests.ts: run [--runs N]|report [--last N]|flakes [--last N]|baseline — per-file stats (mean/sd/p50/p95/CV%, Welch t vs baseline), flake/broken classification, JSONL history in .bench/
 bun run build                  # vite build → dist/ (gitignored)
 bun run build:omp-session      # → dist-bin/omp-session self-contained binary (UI embedded via server/embedded-dist.ts)
 bun run fleet -- serve|sessions|projects|spawn|add-repo|add|provision|stop|remove|rm-project|add-worktree|rm-worktree|prompt
@@ -40,6 +41,7 @@ Ports: defaults vite **4713**, omp-session **4721**, omp-fleet **4722** (used by
 | --- | --- |
 | `shared/protocol.ts` | The wire contract (see below). **Additive-only.** `OMP_PROTO` = 2 |
 | `shared/sse.ts` | SSE framing (`encodeSseEvent`/`parseSseUnits`) + byte-bounded `SseRing` replay |
+| `shared/testkit.ts` | `tempDir(prefix)` tracked-tempdir helper — tests MUST use it instead of raw mkdtemp (registered `afterAll` removes every tracked dir) |
 | `server/index.ts` | The daemon: bootstrap, `/events` + `/command`, dispatch + resync, `/download` jail, auth, readiness gate, idle auto-exit |
 | `server/methods.ts` | `METHODS` dispatch table (57 `WebMethodName` rows) + `READ_ONLY` + `HISTORY_RELOAD` + `NOT_READY_GATED` sets |
 | `server/config.ts` | Flag/env surface (`--flag` maps 1:1 to `OMP_SESSION_*` env) |
@@ -56,6 +58,7 @@ Ports: defaults vite **4713**, omp-session **4721**, omp-fleet **4722** (used by
 | `fleet/connector.ts` | Per-daemon SSE client: status ladder, backoff, silence deadline, Last-Event-ID resume |
 | `fleet/edge.ts` | Browser-facing half: `/events` downlink, `/command` uplink, per-browser daemon proxy pipes, aggregated `daemons` frame |
 | `fleet/server.ts` | Loopback control plane `:4722`: `/ctl/*` routes (incl. `/ctl/projects[/:id]`, `/ctl/projects/:id/worktrees`, `/ctl/worktrees/:daemonId[/delete-info]`), wiring, boot reconcile |
+| `fleet/stats/` | Read-only historical transcripts/stats API (stats.db + session `.jsonl` files), mounted at `/ctl/stats/*` by `fleet/server.ts` |
 | `fleet/cli.ts` | CLI over `/ctl/*` (loopback HTTP client) |
 | `fleet/spawn-parse.ts` | Template fill, `OMP_SESSION|` parsing, endpoint resolution (pure) |
 | `fleet/discovery.ts` | Project/worktree discovery, git state probing |
@@ -63,7 +66,10 @@ Ports: defaults vite **4713**, omp-session **4721**, omp-fleet **4722** (used by
 | `fleet/selectors.ts`, `fleet/fanout.ts` | Selector grammar (`dN`, `all`, glob, `label:k=v`, `project:name`) + prompt fan-out correlation |
 | `src/state.ts` | **The entire client model**: one `createStore`; chat items, streaming, session mirror, `call()`, roster, stale-frame guards |
 | `src/components/` | Thin components: read `state` reactively, mutate only via exported store actions. No data props |
+| `src/tx/` | Typed client for the stats surface (`api` fetch helper + transcript/format utils) |
 | `scripts/dev.ts`, `scripts/test.ts`, `scripts/build-omp-session.ts` | Dev runner, test wrapper, binary build |
+| `scripts/bench-tests.ts` | Suite benchmark harness: `run`/`report`/`baseline`, JSONL history in gitignored `.bench/` |
+| `test/` | Stats-suite tests (14 files) for the `fleet/stats/` API; gitignored `test/.fixture/` auto-regenerated idempotently by `scripts/gen-tx-fixture.ts` (api.test.ts `beforeAll`) |
 | `docs/architecture.md`, `docs/position.md`, `docs/research/` | System architecture (wire contract, module map) + audit Phase 7 strategic items (findings #71–#80) + design-audit research (committed docs) |
 
 ## The wire contract (OMP_PROTO 2)
@@ -95,9 +101,9 @@ Key constants (all in `shared/protocol.ts`): `OMP_PROTO = 2`, `SSE_KEEPALIVE_MS`
 ### Fleet
 - **Zero agent state.** Fleet persists only roster metadata (endpoints, per-spawn bearer tokens, `lastSessionFile`, git branch/dirty counts) and re-derives everything else by dialing daemons.
 - **Exclusive state locks.** Fleet state and session files are pidfile-locked for the owning process's lifetime, self-healing via pid liveness: a second fleet (or a second daemon resuming the same session file) refuses to start instead of clobbering state.
-- **Tokens are minted fresh per spawn/restart and must NEVER be serialized** into roster frames or `/ctl/debug` (tests enforce this — `edge.test.ts` asserts `toRosterEntry` output). Same for endpoints in `/ctl/debug` snapshots.
+- **Tokens are minted fresh per spawn/restart and must NEVER be serialized** into roster frames or `/ctl/debug` (tests enforce this — `fleet/edge-wire.test.ts` asserts `toRosterEntry` output). Same for endpoints in `/ctl/debug` snapshots.
 - `dN` ids are monotonic and never reused. Registry persists atomically (tmp+rename) on every mutation.
-- `pN` project ids are monotonic and never reused; projects are realpath-keyed and deduped on registration (a duplicate realpath returns the existing project); `removeProject` refuses while roster entries reference it and names the blockers. Projects persist in the same atomic state file as the roster, and the `registered_projects` frame must NEVER serialize tokens/endpoints (same rule as roster frames; `edge.test.ts` enforces it).
+- `pN` project ids are monotonic and never reused; projects are realpath-keyed and deduped on registration (a duplicate realpath returns the existing project); `removeProject` refuses while roster entries reference it and names the blockers. Projects persist in the same atomic state file as the roster, and the `registered_projects` frame must NEVER serialize tokens/endpoints (same rule as roster frames; `fleet/edge-wire.test.ts` enforces it).
 - Managed worktrees live under the `workspaceDir` knob (flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR` > config-file `workspaceDir` key > `~/.ompweb/workspaces`; the root is created lazily on first worktree, never at boot). Deleting one requires ownership (realpath under `workspaceDir`) AND a clean tree — no `--force` in v1; the optional branch delete is `git branch -d` only, never `-D`. Session transcripts live under the agent dir, never inside the worktree, so worktree deletion never touches them.
 - Status ladder is monotonic `connecting < session < resolving < ready`; `error` is terminal (only respawn refreshes). `hello_ok` gates: `OMP_PROTO` mismatch → terminal error; registered cwd vs `hello_ok.cwd` mismatch → `error cwd mismatch` (empty registered cwd → adopt hello's).
 - Endpoint resolution order (spawn): last `{event:"endpoint"}` wrapper line › template `host` + listening port › `advertise` › loopback. 30s endpoint timeout → error + kill.
@@ -117,8 +123,11 @@ Key constants (all in `shared/protocol.ts`): `OMP_PROTO = 2`, `SSE_KEEPALIVE_MS`
 - Dev handle: `window.__ompState` (DEV only). No router; modals keyed off `state.modal === …`.
 
 ### Tests
-- `bun:test`, **co-located** `*.test.ts` next to source (`src/state.test.ts` ↔ `src/state.ts`, etc.). Run through `bun scripts/test.ts`, which pins `--parallel` to the machine's **physical** core count (logical-count workers oversubscribe HT/hybrid boxes and thrash the daemon-spawning suites), `--timeout 15000`, `--retry 0`. Extra args forward to `bun test`.
-- **Heavy (spawn real daemons/processes)**: `server/omp-session.test.ts`, `server/collab-integration.test.ts`, `fleet/integration.test.ts` (real fleet + 3 real omp-session daemons, serial, hermetic `PI_CODING_AGENT_DIR` → no model → prompts fail with `ok:false` by design), `fleet/supervisor.test.ts` (fake `sh` children), `fleet/server.test.ts`, `fleet/edge.test.ts`. **Light/pure**: `src/**/*.test.ts` (state tested against a `FakeEventSource` + stubbed fetch), `shared/sse.test.ts`, `fleet/spawn-parse/selectors/events/daemons-aggregator/config/discovery/registry/fanout/connector.test.ts`, `server/settings-model/collab-relay/collab-host.test.ts`.
+- `bun:test` across two trees: **co-located** `*.test.ts` next to source (`src/state.test.ts` ↔ `src/state.ts`, etc. — 50 files), plus the `test/` stats suite (14 files) covering the `fleet/stats/` API. Run through `bun scripts/test.ts`, which pins `--parallel` to the machine's **physical** core count (logical-count workers oversubscribe HT/hybrid boxes and thrash the daemon-spawning suites), `--timeout 15000`, `--retry 0`. Extra args forward to `bun test`.
+- `test/` spawns no daemons: it drives `createStatsApp` in-process behind a real `Bun.serve` on an ephemeral port (`test/helpers.ts`), and its gitignored `test/.fixture/` is regenerated idempotently via `scripts/gen-tx-fixture.ts` (api.test.ts `beforeAll`).
+- FS-touching tests MUST create scratch dirs via `tempDir()` from `shared/testkit.ts` (tracked, auto-removed by an `afterAll` hook) — never raw `mkdtempSync`, which leaks dirs on repeated runs.
+- Shared test helpers must be named `*.testkit.ts` (e.g. `fleet/server.testkit.ts`) so bun test discovery (`.test.`/`_test.`/`.spec.`/`_spec.`) never picks them up.
+- **Heavy (spawn real daemons/processes)**: `server/omp-session.test.ts`, `server/collab-integration.test.ts`, `fleet/integration.test.ts` (real fleet + 3 real omp-session daemons, serial, hermetic `PI_CODING_AGENT_DIR` → no model → prompts fail with `ok:false` by design), `fleet/supervisor.test.ts` (fake `sh` children), `fleet/server-*.test.ts`, `fleet/edge-*.test.ts`. **Light/pure**: `src/**/*.test.ts` (state tested against a `FakeEventSource` + stubbed fetch), `shared/sse.test.ts`, `fleet/spawn-parse/selectors/events/daemons-aggregator/config/discovery/registry/fanout/connector.test.ts`, `server/settings-model/collab-relay/collab-host.test.ts`.
 - Tests must not need a live model/API. Timers shrunk via connector opts / `OMP_SESSION_TEST_*` knobs. Suites must run from the repo root (`fleet/integration.test.ts` needs `server/index.ts`).
 - `server/collab-relay.test.ts` deliberately never calls `server.stop()` (Bun hangs closing sockets with close codes — verified against bun 1.3.14); don't "fix" that.
 

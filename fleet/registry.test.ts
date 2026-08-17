@@ -10,9 +10,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { cleanupTempDirs, tempDir } from "../shared/testkit";
 import { bootStatusFor, Registry } from "./registry";
 
 const tmpDirs: string[] = [];
+
+afterAll(cleanupTempDirs);
 
 function tmpStatePath(): string {
 	const dir = mkdtempSync(join(tmpdir(), "omp-session-registry-"));
@@ -269,7 +272,7 @@ describe("Registry", () => {
 describe("registered projects (Phase 2)", () => {
 	/** A real git repo in a fresh tmp dir (addProject validates the .git entry). */
 	async function makeRepo(): Promise<string> {
-		const dir = join(mkdtempSync(join(tmpdir(), "omp-web-repo-")), "repo");
+		const dir = join(tempDir("omp-web-repo-"), "repo");
 		mkdirSync(dir, { recursive: true });
 		const proc = Bun.spawn(["git", "init", "-q"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
 		expect(await proc.exited).toBe(0);
@@ -281,7 +284,7 @@ describe("registered projects (Phase 2)", () => {
 		await expect(registry.addProject(join(tmpdir(), "does-not-exist"))).rejects.toThrow(
 			"not a directory",
 		);
-		const plainDir = mkdtempSync(join(tmpdir(), "omp-web-plain-"));
+		const plainDir = tempDir("omp-web-plain-");
 		await expect(registry.addProject(plainDir)).rejects.toThrow("not a git repository");
 
 		const repoA = await makeRepo();

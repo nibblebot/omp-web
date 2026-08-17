@@ -78,27 +78,32 @@ afterAll(() => {
 describe("symlink escape containment", () => {
 	test("transcript via a FILE symlink pointing outside → 404", async () => {
 		const res = await get(`/ctl/stats/sessions/${enc("proj/escape.jsonl")}/transcript`);
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(404);
 		expect(await res.json()).toEqual({ error: "session not found" });
 	});
 
 	test("transcript via a DIR symlink pointing outside → 404", async () => {
 		const res = await get(`/ctl/stats/sessions/${enc("evil/secret.jsonl")}/transcript`);
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(404);
 	});
 
 	test("transcript behind a symlinked INTERMEDIATE dir → 404", async () => {
 		const res = await get(`/ctl/stats/sessions/${enc("proj/nested/secret.jsonl")}/transcript`);
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(404);
 	});
 
 	test("stats via a symlinked file → 404", async () => {
 		const res = await get(`/ctl/stats/sessions/${enc("proj/escape.jsonl")}/stats`);
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(404);
 	});
 
 	test("transcript on a REAL file still works → 200", async () => {
 		const res = await get(`/ctl/stats/sessions/${enc("proj/real.jsonl")}/transcript`);
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { entries: unknown[]; totalLines: number };
 		expect(body.entries.length).toBeGreaterThan(0);
@@ -107,16 +112,19 @@ describe("symlink escape containment", () => {
 
 	test("stats on a REAL file still works → 200", async () => {
 		const res = await get(`/ctl/stats/sessions/${enc("proj/real.jsonl")}/stats`);
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 	});
 
 	test("subagents via a walk-root symlink dir → 404", async () => {
 		const res = await get(`/ctl/stats/sessions/${enc("proj/leakmain.jsonl")}/subagents`);
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(404);
 	});
 
 	test("subagents walk skips symlinked children escaping the tree", async () => {
 		const res = await get(`/ctl/stats/sessions/${enc("proj/real.jsonl")}/subagents`);
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { subagents: Array<{ name: string; file: string }> };
 		expect(body.subagents.some((s) => s.name === "one.jsonl")).toBe(true);
@@ -156,8 +164,9 @@ describe("health $HOME redaction", () => {
 	test("statsDbPath and sessionsDir start with ~ when under $HOME", async () => {
 		const res = await get("/ctl/stats/health");
 		expect(res).not.toBeNull();
-		expect(res!.status).toBe(200);
-		const h = (await res!.json()) as { statsDbPath: string; sessionsDir: string };
+		if (!res) throw new Error("expected response");
+		expect(res.status).toBe(200);
+		const h = (await res.json()) as { statsDbPath: string; sessionsDir: string };
 		expect(h.sessionsDir).toBe("~" + sessionsDir.slice(homedir().length));
 		expect(h.statsDbPath).toBe("~" + cfg.statsDbPath.slice(homedir().length));
 	});

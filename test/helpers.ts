@@ -16,7 +16,7 @@ export const fixtureRoot = join(import.meta.dir, ".fixture");
 export let baseUrl = "";
 
 let app: StatsApp | null = null;
-let server: Server | null = null;
+let server: Server<undefined> | null = null;
 
 export async function startServer(): Promise<void> {
 	if (server) return;

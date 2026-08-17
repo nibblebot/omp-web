@@ -32,12 +32,12 @@ let tmpDir: string;
 let app: StatsApp;
 
 const statsDbPath = (): string => join(tmpDir, "stats.db");
-const postSync = (): Promise<Response> =>
+const postSync = (): Promise<Response | null> =>
 	app.handleFetch(
 		new Request("http://localhost/ctl/stats/sync", { method: "POST" }),
 		new URL("http://localhost/ctl/stats/sync"),
 	);
-const getHealth = (): Promise<Response> =>
+const getHealth = (): Promise<Response | null> =>
 	app.handleFetch(
 		new Request("http://localhost/ctl/stats/health"),
 		new URL("http://localhost/ctl/stats/health"),
@@ -142,6 +142,7 @@ describe("POST /ctl/stats/sync", () => {
 		mode = "success";
 
 		const res = await postSync();
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({
 			processed: 3,
@@ -155,6 +156,7 @@ describe("POST /ctl/stats/sync", () => {
 		// app's original handle (opened before the row existed) would still
 		// report 0.
 		const health = await getHealth();
+		if (!health) throw new Error("expected response");
 		expect(health.status).toBe(200);
 		const body = (await health.json()) as {
 			dbCounts: { messages: number; toolCalls: number; userMessages: number };
@@ -168,16 +170,19 @@ describe("POST /ctl/stats/sync", () => {
 		await Bun.sleep(100); // first request is mid-flight now
 
 		const second = await postSync();
+		if (!second) throw new Error("expected response");
 		expect(second.status).toBe(409);
 		expect(await second.json()).toEqual({ error: "sync already in progress" });
 
 		const firstRes = await first; // completes normally afterwards
+		if (!firstRes) throw new Error("expected response");
 		expect(firstRes.status).toBe(200);
 	});
 
 	test("runner throws SyncUnavailable → 503 with install hint", async () => {
 		mode = "unavailable";
 		const res = await postSync();
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(503);
 		expect(await res.json()).toEqual({
 			error:
@@ -188,6 +193,7 @@ describe("POST /ctl/stats/sync", () => {
 	test("runner throws SyncFailed → 502 with stderr detail", async () => {
 		mode = "failed";
 		const res = await postSync();
+		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(502);
 		expect(await res.json()).toEqual({
 			error: "omp stats failed",

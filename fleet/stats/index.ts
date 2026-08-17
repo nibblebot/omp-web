@@ -25,7 +25,7 @@ export type { StatsConfig };
 export { resolveStatsConfig };
 
 export interface StatsApp {
-	handleFetch(req: Request, url: URL): Response | Promise<Response | null>;
+	handleFetch(req: Request, url: URL): Promise<Response | null>;
 	close(): void;
 }
 

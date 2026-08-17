@@ -52,24 +52,28 @@ describe("createStatsApp multi-instance isolation", () => {
 			const healthB = await call(appB, "/ctl/stats/health");
 			expect(healthA).not.toBeNull();
 			expect(healthB).not.toBeNull();
-			const a = (await healthA!.json()) as { sessionsDir: string };
-			const b = (await healthB!.json()) as { sessionsDir: string };
+			if (!healthA) throw new Error("expected response");
+			if (!healthB) throw new Error("expected response");
+			const a = (await healthA.json()) as { sessionsDir: string };
+			const b = (await healthB.json()) as { sessionsDir: string };
 			expect(a.sessionsDir).toBe(sessionsA);
 			expect(b.sessionsDir).toBe(sessionsB);
 
 			// Transcript handlers close over their own app's cfg: A sees the file,
 			// B must 404 on the same :file param (proves no cross-app wiring).
 			const ta = await call(appA, "/ctl/stats/sessions/proj-a%2Fone.jsonl/transcript");
-			expect(ta!.status).toBe(200);
-			const body = (await ta!.json()) as { entries: unknown[] };
+			if (!ta) throw new Error("expected response");
+			expect(ta.status).toBe(200);
+			const body = (await ta.json()) as { entries: unknown[] };
 			expect(body.entries.length).toBeGreaterThanOrEqual(1);
 			const tb = await call(appB, "/ctl/stats/sessions/proj-a%2Fone.jsonl/transcript");
-			expect(tb!.status).toBe(404);
+			if (!tb) throw new Error("expected response");
+			expect(tb.status).toBe(404);
 
 			// Sessions list reflects each app's own disk.
-			const listB = (await (await call(appB, "/ctl/stats/sessions"))!.json()) as {
-				sessions: unknown[];
-			};
+			const listRes = await call(appB, "/ctl/stats/sessions");
+			if (!listRes) throw new Error("expected response");
+			const listB = (await listRes.json()) as { sessions: unknown[] };
 			expect(listB.sessions).toEqual([]);
 
 			appA.close();

@@ -3,3 +3,4 @@ dist/
 dist-bin/
 omp-session-*.html
 test/.fixture/
+.bench/

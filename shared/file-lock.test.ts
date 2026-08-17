@@ -1,12 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { acquireFileLock, LockHeldError } from "./file-lock";
+import { cleanupTempDirs, tempDir } from "./testkit";
+
+afterAll(cleanupTempDirs);
 
 function tmpLockPath(name: string): string {
-	const dir = mkdtempSync(path.join(os.tmpdir(), "omp-file-lock-"));
+	const dir = tempDir("omp-file-lock-");
 	return path.join(dir, name);
 }
 
@@ -59,7 +60,7 @@ describe("acquireFileLock", () => {
 	});
 
 	test("the parent directory is created when missing", () => {
-		const dir = mkdtempSync(path.join(os.tmpdir(), "omp-file-lock-"));
+		const dir = tempDir("omp-file-lock-");
 		const lockPath = path.join(dir, "nested", "deep", "parent.lock");
 		const lock = acquireFileLock(lockPath, "test-holder");
 		try {

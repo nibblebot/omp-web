@@ -11,12 +11,16 @@
  * /proc/cpuinfo is unavailable (non-Linux).
  *
  * Extra CLI args are forwarded to `bun test` (`bun scripts/test.ts --bail 1`).
+ *
+ * `physicalCores()` is exported for scripts/bench-tests.ts (same worker
+ * pinning); the spawn block below runs only when this file is the entry
+ * point, so importing it has no side effects.
  */
 import { readFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 
 /** Unique (physical id, core id) pairs = physical core count on Linux. */
-function physicalCores(): number {
+export function physicalCores(): number {
 	try {
 		const lines = readFileSync("/proc/cpuinfo", "utf8").split("\n");
 		const cores = new Set<string>();
@@ -36,20 +40,22 @@ function physicalCores(): number {
 	return availableParallelism();
 }
 
-const workers = Math.max(1, physicalCores());
-const child = Bun.spawn(
-	[
-		"bun",
-		"test",
-		`--parallel=${workers}`,
-		"--timeout",
-		"15000",
-		"--retry",
-		"0",
-		...process.argv.slice(2),
-	],
-	{
-		stdio: ["inherit", "inherit", "inherit"],
-	},
-);
-process.exit((await child.exited) ?? 1);
+if (import.meta.main) {
+	const workers = Math.max(1, physicalCores());
+	const child = Bun.spawn(
+		[
+			"bun",
+			"test",
+			`--parallel=${workers}`,
+			"--timeout",
+			"15000",
+			"--retry",
+			"0",
+			...process.argv.slice(2),
+		],
+		{
+			stdio: ["inherit", "inherit", "inherit"],
+		},
+	);
+	process.exit((await child.exited) ?? 1);
+}
