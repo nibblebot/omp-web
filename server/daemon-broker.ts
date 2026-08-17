@@ -1,8 +1,15 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { MODEL_ROLE_IDS, getKnownRoleIds, getRoleInfo } from "@oh-my-pi/pi-coding-agent/config/model-roles";
+import {
+	MODEL_ROLE_IDS,
+	getKnownRoleIds,
+	getRoleInfo,
+} from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { resolveModelRoleValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
-import { daemonClientForProject, type DaemonBrokerClient } from "@oh-my-pi/pi-coding-agent/launch/client";
+import {
+	daemonClientForProject,
+	type DaemonBrokerClient,
+} from "@oh-my-pi/pi-coding-agent/launch/client";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-coding-agent/launch/protocol";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
@@ -38,7 +45,11 @@ export interface DaemonBroker {
 	buildStateSnapshot(session: AgentSession): WebSessionState;
 	broadcastState(entry: SessionEntry, withStats?: boolean): Promise<void>;
 	broadcastAvailableCommands(entry: SessionEntry): Promise<void>;
-	daemonInfoWithEndpoint(client: DaemonBrokerClient, dir: string, snap: DaemonSnapshot): Promise<DaemonInfo>;
+	daemonInfoWithEndpoint(
+		client: DaemonBrokerClient,
+		dir: string,
+		snap: DaemonSnapshot,
+	): Promise<DaemonInfo>;
 	startDaemonPoll(): void;
 	stopDaemonPoll(): void;
 }
@@ -59,7 +70,9 @@ export interface ModelRoleCatalogContext {
  * unassigned roles render as "auto-selection applies" rows, and hidden roles
  * are emitted with their hidden flag for the client to filter.
  */
-export function buildModelRoleCatalog(ctx: ModelRoleCatalogContext): WebSessionState["modelRoleCatalog"] {
+export function buildModelRoleCatalog(
+	ctx: ModelRoleCatalogContext,
+): WebSessionState["modelRoleCatalog"] {
 	const { settings, availableModels, currentModel } = ctx;
 	if (availableModels.length === 0) return undefined;
 	const catalog: ModelRoleCatalogEntry[] = [];
@@ -89,7 +102,11 @@ export function buildModelRoleCatalog(ctx: ModelRoleCatalogContext): WebSessionS
 				// Surface the thinking selector only when it is baked into the
 				// role value and resolvable — the "auto" sentinel cannot
 				// round-trip through `provider/model:level`.
-				if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined && resolved.thinkingLevel !== "auto") {
+				if (
+					resolved.explicitThinkingLevel &&
+					resolved.thinkingLevel !== undefined &&
+					resolved.thinkingLevel !== "auto"
+				) {
 					entry.thinkingLevel = resolved.thinkingLevel;
 				}
 			}
@@ -104,11 +121,15 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 	function buildModelRoles(session: AgentSession): WebSessionState["modelRoles"] {
 		// Canonical built-in order, then any custom roles from settings (deduped).
 		const customRoles = Object.keys(session.settings.getModelRoles()).filter(
-			role => !(MODEL_ROLE_IDS as readonly string[]).includes(role),
+			(role) => !(MODEL_ROLE_IDS as readonly string[]).includes(role),
 		);
 		const cycle = session.getRoleModelCycle([...MODEL_ROLE_IDS, ...customRoles]);
 		if (!cycle) return undefined;
-		return cycle.models.map(entry => ({ role: entry.role, provider: entry.model.provider, id: entry.model.id }));
+		return cycle.models.map((entry) => ({
+			role: entry.role,
+			provider: entry.model.provider,
+			id: entry.model.id,
+		}));
 	}
 
 	function buildStateSnapshot(session: AgentSession): WebSessionState {
@@ -137,10 +158,12 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			queuedMessageCount: session.queuedMessageCount,
 			todoPhases: session.getTodoPhases(),
 			systemPrompt: session.systemPrompt,
-			dumpTools: session.agent.state.tools.map(tool => ({
+			dumpTools: session.agent.state.tools.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
-				parameters: isZodSchema(tool.parameters) ? zodToWireSchema(tool.parameters) : tool.parameters,
+				parameters: isZodSchema(tool.parameters)
+					? zodToWireSchema(tool.parameters)
+					: tool.parameters,
 				examples: tool.examples,
 			})),
 			contextUsage: session.getContextUsage(),
@@ -159,7 +182,10 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 	}
 
 	async function broadcastAvailableCommands(entry: SessionEntry): Promise<void> {
-		broadcastTo(entry.handle, { type: "available_commands", commands: await buildAvailableSlashCommands(entry.session) });
+		broadcastTo(entry.handle, {
+			type: "available_commands",
+			commands: await buildAvailableSlashCommands(entry.session),
+		});
 	}
 
 	const DAEMON_POLL_MS = 3000;
@@ -199,7 +225,11 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 	 * describe, broker hiccup) resolves undefined without propagating — the next
 	 * poll tick retries.
 	 */
-	async function readyEndpointFor(client: DaemonBrokerClient, dir: string, snap: DaemonSnapshot): Promise<{ port?: number; host?: string } | undefined> {
+	async function readyEndpointFor(
+		client: DaemonBrokerClient,
+		dir: string,
+		snap: DaemonSnapshot,
+	): Promise<{ port?: number; host?: string } | undefined> {
 		const key = daemonsKey({ projectDir: dir, name: snap.name });
 		const cached = readyEndpointCache.get(key);
 		if (cached?.id === snap.id) return cached;
@@ -216,7 +246,11 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 		}
 	}
 
-	async function daemonInfoWithEndpoint(client: DaemonBrokerClient, dir: string, snap: DaemonSnapshot): Promise<DaemonInfo> {
+	async function daemonInfoWithEndpoint(
+		client: DaemonBrokerClient,
+		dir: string,
+		snap: DaemonSnapshot,
+	): Promise<DaemonInfo> {
 		const info = daemonInfo(dir, snap);
 		const endpoint = await readyEndpointFor(client, dir, snap);
 		if (endpoint?.port !== undefined) {
@@ -244,7 +278,11 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			// projectDir+name so same-named daemons in different projects both
 			// reach the roster (the web client uses the same identity).
 			if (result.op === "list")
-				for (const snap of result.daemons) merged.set(daemonsKey({ projectDir: dir, name: snap.name }), await daemonInfoWithEndpoint(client, dir, snap));
+				for (const snap of result.daemons)
+					merged.set(
+						daemonsKey({ projectDir: dir, name: snap.name }),
+						await daemonInfoWithEndpoint(client, dir, snap),
+					);
 		} catch {
 			// Broker unreachable (not started / shut down): empty roster.
 		}
@@ -253,7 +291,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 		// unambiguous.
 		const dirPrefixes = [`${dir}${DAEMON_KEY_SEP}`];
 		for (const key of [...readyEndpointCache.keys()]) {
-			if (!dirPrefixes.some(prefix => key.startsWith(prefix))) readyEndpointCache.delete(key);
+			if (!dirPrefixes.some((prefix) => key.startsWith(prefix))) readyEndpointCache.delete(key);
 		}
 		broadcast({ type: "daemons", daemons: [...merged.values()] });
 	}
@@ -269,5 +307,12 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 		daemonPoll = undefined;
 	}
 
-	return { buildStateSnapshot, broadcastState, broadcastAvailableCommands, daemonInfoWithEndpoint, startDaemonPoll, stopDaemonPoll };
+	return {
+		buildStateSnapshot,
+		broadcastState,
+		broadcastAvailableCommands,
+		daemonInfoWithEndpoint,
+		startDaemonPoll,
+		stopDaemonPoll,
+	};
 }

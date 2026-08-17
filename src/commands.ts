@@ -1,6 +1,16 @@
 import type { ImageArg } from "../shared/protocol";
 import { requestDangerConfirm } from "./components/ConfirmDialog";
-import { addBashItem, askBtw, call, pushCompaction, pushNotice, resolveBashItem, setState, state, type BashResultLike } from "./state";
+import {
+	addBashItem,
+	askBtw,
+	call,
+	pushCompaction,
+	pushNotice,
+	resolveBashItem,
+	setState,
+	state,
+	type BashResultLike,
+} from "./state";
 
 export type InputMode = "enter" | "followup";
 
@@ -63,9 +73,10 @@ export function exportDispatch(args: string): { useThemes: boolean } {
 function exportSession(args: string): void {
 	const { useThemes } = exportDispatch(args);
 	void call("exportHtml", [undefined, useThemes])
-		.then(result => {
+		.then((result) => {
 			const path = (result as { path?: string } | null)?.path;
-			if (path) pushNotice("info", "Exported session HTML", `/download?path=${encodeURIComponent(path)}`);
+			if (path)
+				pushNotice("info", "Exported session HTML", `/download?path=${encodeURIComponent(path)}`);
 			else pushNotice("info", "Exported session HTML");
 		})
 		.catch(showError);
@@ -75,7 +86,9 @@ function exportSession(args: string): void {
  * `/rename <title>` renames instantly via setSessionName; bare `/rename` keeps
  * the prompt passthrough so the agent auto-titles (server-side builtin).
  */
-export function renameDispatch(args: string): { method: "setSessionName"; title: string } | { method: "prompt"; text: string } {
+export function renameDispatch(
+	args: string,
+): { method: "setSessionName"; title: string } | { method: "prompt"; text: string } {
 	const title = args.trim();
 	return title ? { method: "setSessionName", title } : { method: "prompt", text: "/rename" };
 }
@@ -92,11 +105,13 @@ export function handoffArgs(args: string): [string | undefined] {
  * to the goalRuntime relay rows; anything else (bare, unknown, or `set`
  * without an objective) opens the goal popover, which owns objective entry.
  */
-export function goalDispatch(
-	args: string,
-):
+export function goalDispatch(args: string):
 	| { kind: "popover" }
-	| { kind: "call"; method: "goalCreate" | "goalPause" | "goalResume" | "goalDrop"; args: unknown[] } {
+	| {
+			kind: "call";
+			method: "goalCreate" | "goalPause" | "goalResume" | "goalDrop";
+			args: unknown[];
+	  } {
 	const [sub, ...rest] = args.trim().split(/\s+/);
 	switch (sub) {
 		case "set":
@@ -119,8 +134,14 @@ export function goalDispatch(
  * read by the server runtime (only the CLI/tool-views mention it), so the
  * toggle passes "".
  */
-export function planDispatch(): { method: "setPlanModeState"; args: [{ enabled: boolean; planFilePath: string }] } {
-	return { method: "setPlanModeState", args: [{ enabled: !state.planModeEnabled, planFilePath: "" }] };
+export function planDispatch(): {
+	method: "setPlanModeState";
+	args: [{ enabled: boolean; planFilePath: string }];
+} {
+	return {
+		method: "setPlanModeState",
+		args: [{ enabled: !state.planModeEnabled, planFilePath: "" }],
+	};
 }
 
 /** Shared /plan toggle used by the LOCAL_COMMANDS entry and the status-bar badge. */
@@ -156,7 +177,10 @@ function freshSession(): void {
 function dumpSession(): void {
 	void (async () => {
 		try {
-			const [text, dumpPath] = await Promise.all([call("formatSessionAsText"), call("dumpLlmRequestToTmpDir")]);
+			const [text, dumpPath] = await Promise.all([
+				call("formatSessionAsText"),
+				call("dumpLlmRequestToTmpDir"),
+			]);
 			if (typeof text === "string" && text) {
 				const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
 				const a = document.createElement("a");
@@ -195,13 +219,14 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	export: exportSession,
 	retry: () =>
 		void call("retry")
-			.then(ok => {
-				if (ok === false) pushNotice("error", "Nothing to retry — no failed turn or the session is busy.");
+			.then((ok) => {
+				if (ok === false)
+					pushNotice("error", "Nothing to retry — no failed turn or the session is busy.");
 			})
 			.catch(showError),
 	fork: () =>
 		void call("fork")
-			.then(ok => {
+			.then((ok) => {
 				// HISTORY_RELOAD resync replaces the transcript; this is just the outcome.
 				if (ok === false) pushNotice("error", "Fork failed.");
 				else pushNotice("info", "Forked session.");
@@ -219,41 +244,54 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 		}
 		freshSession();
 	},
-	handoff: args =>
+	handoff: (args) =>
 		void call("handoff", handoffArgs(args))
-			.then(result => {
+			.then((result) => {
 				const r = result as { document?: string; savedPath?: string } | null | undefined;
 				// HISTORY_RELOAD resync brings in the new session's transcript.
 				if (r?.document) {
-					pushCompaction({ action: "handoff", summary: r.document, skipped: false, aborted: false, willRetry: false });
+					pushCompaction({
+						action: "handoff",
+						summary: r.document,
+						skipped: false,
+						aborted: false,
+						willRetry: false,
+					});
 				} else {
 					pushNotice("info", "Handoff complete — new session started.");
 				}
-				if (r?.savedPath) pushNotice("info", "Handoff document", `/download?path=${encodeURIComponent(r.savedPath)}`);
+				if (r?.savedPath)
+					pushNotice(
+						"info",
+						"Handoff document",
+						`/download?path=${encodeURIComponent(r.savedPath)}`,
+					);
 			})
 			.catch(showError),
 	drop: confirmDropSession,
 	dump: dumpSession,
-	rename: args => {
+	rename: (args) => {
 		const d = renameDispatch(args);
-		void (d.method === "setSessionName" ? call("setSessionName", [d.title]) : call("prompt", [d.text])).catch(showError);
+		void (
+			d.method === "setSessionName" ? call("setSessionName", [d.title]) : call("prompt", [d.text])
+		).catch(showError);
 	},
 	// Phase 9 (17.1.8): /goal and /plan are NOT ACP-intercepted, so they are
 	// web-local — never prompt passthrough (see goalDispatch/planDispatch).
-	goal: args => {
+	goal: (args) => {
 		const d = goalDispatch(args);
 		if (d.kind === "popover") setState("modal", "goal");
 		else void call(d.method, d.args).catch(showError);
 	},
 	plan: planToggle,
-	queue: args => {
+	queue: (args) => {
 		const msg = args.trim();
 		if (!msg) return;
 		void call("followUp", [msg]).catch(showError);
 	},
-	compact: args =>
+	compact: (args) =>
 		void call("compact", args ? [args] : [])
-			.then(result => {
+			.then((result) => {
 				const r = result as { summary?: string; tokensBefore?: number } | null;
 				pushCompaction({
 					action: "manual",
@@ -280,7 +318,10 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
  * falls back to prompt when idle (steer errors on an idle session);
  * `=>` follow-up queues regardless of streaming state.
  */
-export function queueMethod(steering: boolean, streaming: boolean): "prompt" | "steer" | "followUp" {
+export function queueMethod(
+	steering: boolean,
+	streaming: boolean,
+): "prompt" | "steer" | "followUp" {
 	return steering ? (streaming ? "steer" : "prompt") : "followUp";
 }
 
@@ -296,8 +337,8 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			// No timeout (0): bash_chunk frames provide liveness while the
 			// server-side command runs; abortBash is the cancellation path.
 			call("bash", [parsed.command, parsed.dimmed], 0, id)
-				.then(result => resolveBashItem(id, result as BashResultLike))
-				.catch(err => resolveBashItem(id, { error: String(err) }));
+				.then((result) => resolveBashItem(id, result as BashResultLike))
+				.catch((err) => resolveBashItem(id, { error: String(err) }));
 			return;
 		}
 		case "python": {
@@ -306,8 +347,8 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			// No timeout (0): python_chunk frames provide liveness while the
 			// server-side command runs; abortEval is the cancellation path.
 			call("python", [parsed.code, parsed.dimmed], 0, id)
-				.then(result => resolveBashItem(id, result as BashResultLike))
-				.catch(err => resolveBashItem(id, { error: String(err) }));
+				.then((result) => resolveBashItem(id, result as BashResultLike))
+				.catch((err) => resolveBashItem(id, { error: String(err) }));
 			return;
 		}
 		case "slash": {
@@ -334,7 +375,9 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			if (!trimmed && (!images || images.length === 0)) return;
 			// steer on an idle session errors server-side; Enter falls back to prompt.
 			const method = mode === "followup" ? "followUp" : state.streaming ? "steer" : "prompt";
-			void call(method, [trimmed, images && images.length > 0 ? images : undefined]).catch(showError);
+			void call(method, [trimmed, images && images.length > 0 ? images : undefined]).catch(
+				showError,
+			);
 		}
 	}
 }

@@ -15,59 +15,59 @@ import type { AppCtx, Route } from "../types";
 
 /** Replace the home-dir prefix with "~" for DISPLAY only (cfg stays intact). */
 function redactHome(p: string): string {
-  const home = homedir();
-  if (p === home) return "~";
-  if (p.startsWith(home + sep)) return "~" + p.slice(home.length);
-  return p;
+	const home = homedir();
+	if (p === home) return "~";
+	if (p.startsWith(home + sep)) return "~" + p.slice(home.length);
+	return p;
 }
 
 function healthRoute(ctx: AppCtx): Route {
-  return {
-    method: "GET",
-    pattern: /^\/ctl\/stats\/health$/,
-    handler: () => {
-      // Re-stat stats.db so health reflects rotations/appearances since the
-      // last probe (request-driven — no interval timer).
-      ctx.dbm.reprobe();
-      const db = ctx.dbm.db();
-      let statsDb: Health["statsDb"] = "missing";
-      let dbCounts: Health["dbCounts"] = null;
-      if (db) {
-        statsDb = "ok";
-        try {
-          // COUNT(*) always returns one row with a scalar `c` column.
-          const q = (sql: string): number => {
-            const row = db.query(sql).get();
-            if (row !== null && typeof row === "object" && "c" in row) return row.c as number;
-            return 0;
-          };
-          dbCounts = {
-            messages: q("SELECT COUNT(*) c FROM messages"),
-            toolCalls: q("SELECT COUNT(*) c FROM tool_calls"),
-            userMessages: q("SELECT COUNT(*) c FROM user_messages"),
-          };
-        } catch {
-          statsDb = "error";
-        }
-      }
-      const body: Health = {
-        ok: true,
-        statsDb,
-        statsDbPath: redactHome(ctx.dbm.path() ?? ctx.cfg.statsDbPath),
-        statsDbFromCopy: ctx.dbm.fromCopy(),
-        sessionsDir: redactHome(ctx.cfg.sessionsDir),
-        // Reconciled with GET /ctl/stats/sessions: sessionsCount uses the same
-        // walk the sessions list builds from (walkJsonl + isMainSession), so
-        // it always equals the number of on-disk MAIN sessions that list
-        // would show — subagent transcripts and DB-only rows are excluded.
-        sessionsCount: countMainSessions(ctx.cfg.sessionsDir),
-        dbCounts,
-      };
-      return json(body);
-    },
-  };
+	return {
+		method: "GET",
+		pattern: /^\/ctl\/stats\/health$/,
+		handler: () => {
+			// Re-stat stats.db so health reflects rotations/appearances since the
+			// last probe (request-driven — no interval timer).
+			ctx.dbm.reprobe();
+			const db = ctx.dbm.db();
+			let statsDb: Health["statsDb"] = "missing";
+			let dbCounts: Health["dbCounts"] = null;
+			if (db) {
+				statsDb = "ok";
+				try {
+					// COUNT(*) always returns one row with a scalar `c` column.
+					const q = (sql: string): number => {
+						const row = db.query(sql).get();
+						if (row !== null && typeof row === "object" && "c" in row) return row.c as number;
+						return 0;
+					};
+					dbCounts = {
+						messages: q("SELECT COUNT(*) c FROM messages"),
+						toolCalls: q("SELECT COUNT(*) c FROM tool_calls"),
+						userMessages: q("SELECT COUNT(*) c FROM user_messages"),
+					};
+				} catch {
+					statsDb = "error";
+				}
+			}
+			const body: Health = {
+				ok: true,
+				statsDb,
+				statsDbPath: redactHome(ctx.dbm.path() ?? ctx.cfg.statsDbPath),
+				statsDbFromCopy: ctx.dbm.fromCopy(),
+				sessionsDir: redactHome(ctx.cfg.sessionsDir),
+				// Reconciled with GET /ctl/stats/sessions: sessionsCount uses the same
+				// walk the sessions list builds from (walkJsonl + isMainSession), so
+				// it always equals the number of on-disk MAIN sessions that list
+				// would show — subagent transcripts and DB-only rows are excluded.
+				sessionsCount: countMainSessions(ctx.cfg.sessionsDir),
+				dbCounts,
+			};
+			return json(body);
+		},
+	};
 }
 
 export function register(ctx: AppCtx, routes: Route[]): void {
-  routes.push(healthRoute(ctx));
+	routes.push(healthRoute(ctx));
 }

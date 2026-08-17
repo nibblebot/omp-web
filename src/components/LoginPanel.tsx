@@ -1,4 +1,12 @@
-import { createEffect, createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
+import {
+	createEffect,
+	createSignal,
+	For,
+	onCleanup,
+	onMount,
+	Show,
+	type Component,
+} from "solid-js";
 import { call, sendLoginCode, setState, state } from "../state";
 import { Modal } from "./Modal";
 
@@ -9,7 +17,7 @@ type LoginProvider = { id: string; name: string; available: boolean; authenticat
  * tab the login URL when the relay unicast it (popup-blocker safe), and
  * collects manual codes for providers that prompt for one.
  */
-export const LoginPanel: Component<{ onClose: () => void }> = props => {
+export const LoginPanel: Component<{ onClose: () => void }> = (props) => {
 	const [providers, setProviders] = createSignal<LoginProvider[]>([]);
 	const [error, setError] = createSignal<string | null>(null);
 	const [inFlight, setInFlight] = createSignal<string | null>(null);
@@ -20,10 +28,10 @@ export const LoginPanel: Component<{ onClose: () => void }> = props => {
 
 	const fetchProviders = (): Promise<void> =>
 		call("getLoginProviders")
-			.then(list => {
+			.then((list) => {
 				setProviders(list as LoginProvider[]);
 			})
-			.catch(err => {
+			.catch((err) => {
 				setError(String(err));
 			});
 
@@ -55,7 +63,7 @@ export const LoginPanel: Component<{ onClose: () => void }> = props => {
 		setInFlight(p.id);
 		void call("login", [p.id], 0)
 			.then(() => fetchProviders())
-			.catch(err => setError(String(err)))
+			.catch((err) => setError(String(err)))
 			.finally(() => {
 				setState("loginUrl", null);
 				setState("loginCodeRequest", null);
@@ -78,10 +86,10 @@ export const LoginPanel: Component<{ onClose: () => void }> = props => {
 
 	return (
 		<Modal title="Login" onClose={props.onClose}>
-			<Show when={error()}>{msg => <div class="msg-notice">{msg()}</div>}</Show>
+			<Show when={error()}>{(msg) => <div class="msg-notice">{msg()}</div>}</Show>
 			<div class="picker-list">
 				<For each={providers()}>
-					{p => (
+					{(p) => (
 						<div class="picker-row">
 							<span class="picker-label">{p.name}</span>
 							{p.authenticated && <span class="picker-detail">authenticated</span>}
@@ -97,7 +105,7 @@ export const LoginPanel: Component<{ onClose: () => void }> = props => {
 				</For>
 			</div>
 			<Show when={state.loginUrl}>
-				{loginUrl => (
+				{(loginUrl) => (
 					<div class="msg-notice">
 						<a href={loginUrl().launchUrl ?? loginUrl().url} target="_blank" rel="noreferrer">
 							Open login page
@@ -107,10 +115,12 @@ export const LoginPanel: Component<{ onClose: () => void }> = props => {
 				)}
 			</Show>
 			<Show when={inFlight() !== null}>
-				<div class="msg-notice">Login in progress — closing this panel will not cancel the server-side flow.</div>
+				<div class="msg-notice">
+					Login in progress — closing this panel will not cancel the server-side flow.
+				</div>
 			</Show>
 			<Show when={state.loginCodeRequest}>
-				{req => (
+				{(req) => (
 					<div class="settings-row">
 						<span class="picker-label">{req().title}</span>
 						<input
@@ -118,8 +128,8 @@ export const LoginPanel: Component<{ onClose: () => void }> = props => {
 							aria-label={req().title}
 							placeholder={req().placeholder ?? ""}
 							value={code()}
-							onInput={e => setCode(e.currentTarget.value)}
-							onKeyDown={e => {
+							onInput={(e) => setCode(e.currentTarget.value)}
+							onKeyDown={(e) => {
 								if (e.key === "Enter") submitCode();
 							}}
 						/>

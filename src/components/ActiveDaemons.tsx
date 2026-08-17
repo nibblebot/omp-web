@@ -27,19 +27,21 @@ export function formatDaemonUptime(ms: number): string {
 
 /** One live daemon in the strip: glyph, name, state, ready endpoint (if
     declared), meta, and kill/restart actions. */
-const DaemonRow: Component<{ d: DaemonInfo }> = props => {
+const DaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 	const [busy, setBusy] = createSignal(false);
 	const meta = [
 		props.d.pid !== undefined ? `pid ${props.d.pid}` : "",
 		props.d.restartCount > 0 ? `${props.d.restartCount} restarts` : "",
 		formatDaemonUptime(Date.now() - props.d.startedAt),
-	].filter(Boolean).join(" · ");
+	]
+		.filter(Boolean)
+		.join(" · ");
 	const act = async (fn: () => Promise<DaemonInfo>) => {
 		if (busy()) return;
 		setBusy(true);
 		try {
 			const info = await fn();
-			setState("daemons", m => new Map(m).set(daemonsKey(props.d), info));
+			setState("daemons", (m) => new Map(m).set(daemonsKey(props.d), info));
 		} catch (err) {
 			setState("error", String(err));
 		} finally {
@@ -86,15 +88,11 @@ const DaemonRow: Component<{ d: DaemonInfo }> = props => {
 /** Live daemons strip above the prompt: visible only while >=1 supervised process is alive. */
 export const ActiveDaemons: Component = () => {
 	const live = () =>
-		[...state.daemons.values()]
-			.filter(isLiveDaemon)
-			.sort((a, b) => a.startedAt - b.startedAt);
+		[...state.daemons.values()].filter(isLiveDaemon).sort((a, b) => a.startedAt - b.startedAt);
 	return (
 		<Show when={live().length > 0}>
 			<div class="active-daemons">
-				<For each={live()}>
-					{d => <DaemonRow d={d} />}
-				</For>
+				<For each={live()}>{(d) => <DaemonRow d={d} />}</For>
 			</div>
 		</Show>
 	);

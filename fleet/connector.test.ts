@@ -154,7 +154,10 @@ interface FakeOptions {
 }
 
 /** Prime sequence on open: hello_ok (seq 1) → state (2) → ready (3). */
-function prime(stream: FakeStream, opts: { ready?: boolean; hello?: Record<string, unknown> } = {}): void {
+function prime(
+	stream: FakeStream,
+	opts: { ready?: boolean; hello?: Record<string, unknown> } = {},
+): void {
 	stream.write(helloFrame(opts.hello), 1);
 	stream.write(stateFrame(), 2);
 	if (opts.ready !== false) stream.write({ type: "ready", readyAt: Date.now() }, 3);
@@ -279,7 +282,11 @@ function startFake(opts: FakeOptions = {}): FakeServer {
 
 /** Connector with test-sized backoff/idle timers. */
 function makeConnector(registry: Registry, events?: ConnectorEvents): DaemonConnector {
-	return new DaemonConnector(registry, events, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
+	return new DaemonConnector(registry, events, {
+		backoffMinMs: 10,
+		backoffMaxMs: 50,
+		idleDropMs: 60_000,
+	});
 }
 
 /** SSE chunk-wrapping for the raw crash server's HTTP/1.1 chunked body. */
@@ -321,7 +328,8 @@ function startCrashServer(opts: { primeHello?: boolean } = {}) {
 					conn.handshakeDone = true;
 					connections.push(conn);
 					openTimes.push(Date.now());
-					let out = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+					let out =
+						"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
 					if (opts.primeHello) out += chunked(encodeSseEvent(SSE_EVENT_NAME, helloFrame(), 1));
 					socket.write(out);
 					// Crash: FIN mid-body without the terminating 0-chunk. The
@@ -359,11 +367,17 @@ describe("DaemonConnector", () => {
 	test("status machine: connecting → session → resolving → ready; auth header; lastSessionFile", async () => {
 		const fake = startFake({ hello: { sessionFile: "/srv/proj/hello.sess" } });
 		const registry = await loadedRegistry(tmpStatePath());
-		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-1", mode: "attached" }));
+		const entry = registry.create(
+			baseInit({ endpoint: fake.url, token: "tok-1", mode: "attached" }),
+		);
 		const statuses: string[] = [];
 		const connector = makeConnector(registry, { onStatus: (e) => statuses.push(e.status) });
 		connector.connect(entry.daemonId);
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 2000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			2000,
+			"ready",
+		);
 		expect(statuses).toEqual(["connecting", "session", "resolving", "ready"]);
 		expect(connector.isConnected(entry.daemonId)).toBe(true);
 		expect(fake.openCount).toBe(1);
@@ -378,10 +392,16 @@ describe("DaemonConnector", () => {
 	test("empty registry cwd adopts hello_ok.cwd", async () => {
 		const fake = startFake();
 		const registry = await loadedRegistry(tmpStatePath());
-		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", cwd: "", mode: "attached" }));
+		const entry = registry.create(
+			baseInit({ endpoint: fake.url, token: "tok", cwd: "", mode: "attached" }),
+		);
 		const connector = makeConnector(registry);
 		connector.connect(entry.daemonId);
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 2000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			2000,
+			"ready",
+		);
 		expect(registry.get(entry.daemonId)?.cwd).toBe(HELLO_CWD);
 		await connector.close();
 		fake.stop();
@@ -393,7 +413,12 @@ describe("DaemonConnector", () => {
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
 		const connector = makeConnector(registry);
 		connector.connect(entry.daemonId);
-		await waitFor(() => registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null, 2000, "error");
+		await waitFor(
+			() =>
+				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+			2000,
+			"error",
+		);
 		const updated = registry.get(entry.daemonId)!;
 		expect(updated.error).toContain("proto mismatch");
 		expect(updated.status).toBe("error");
@@ -409,7 +434,12 @@ describe("DaemonConnector", () => {
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
 		const connector = makeConnector(registry);
 		connector.connect(entry.daemonId);
-		await waitFor(() => registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null, 2000, "error");
+		await waitFor(
+			() =>
+				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+			2000,
+			"error",
+		);
 		const updated = registry.get(entry.daemonId)!;
 		expect(updated.error).toContain("cwd mismatch");
 		expect(updated.status).toBe("error");
@@ -430,7 +460,11 @@ describe("DaemonConnector", () => {
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
 		const connector = makeConnector(registry);
 		connector.connect(entry.daemonId);
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null), 2000, "asleep");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null),
+			2000,
+			"asleep",
+		);
 		await sleep(150);
 		expect(fake.openCount).toBe(1);
 		expect(connector.isConnected(entry.daemonId)).toBe(false);
@@ -466,7 +500,11 @@ describe("DaemonConnector", () => {
 		expect(statuses).not.toContain("asleep");
 		// The redial resumes from the reset frame's seq (drop-and-resume).
 		expect(fake.headers[1]?.["last-event-id"]).toBe(String(SSE_DELTA_SEQ_START));
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 2000, "ready after redial");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			2000,
+			"ready after redial",
+		);
 		await connector.close();
 		fake.stop();
 	});
@@ -483,7 +521,8 @@ describe("DaemonConnector", () => {
 		await waitFor(() => (crash.openCount() >= 10 ? "dialed" : null), 5000, "10 redials");
 		expect(statuses).toContain("reconnecting");
 		const gaps: number[] = [];
-		for (let i = 1; i < crash.openTimes.length; i++) gaps.push(crash.openTimes[i] - crash.openTimes[i - 1]);
+		for (let i = 1; i < crash.openTimes.length; i++)
+			gaps.push(crash.openTimes[i] - crash.openTimes[i - 1]);
 		expect(Math.max(...gaps)).toBeLessThanOrEqual(120); // 50ms cap × 1.5 jitter + slack
 		await connector.close();
 		crash.stop();
@@ -529,11 +568,19 @@ describe("DaemonConnector", () => {
 		// A generous backoff keeps the reconnecting window wide enough to read.
 		const connector = new DaemonConnector(
 			registry,
-			{ onReconnect: (daemonId, attempt, delayMs) => reconnects.push(`${daemonId}:${attempt}:${delayMs}`) },
+			{
+				onReconnect: (daemonId, attempt, delayMs) =>
+					reconnects.push(`${daemonId}:${attempt}:${delayMs}`),
+			},
 			{ backoffMinMs: 200, backoffMaxMs: 300 },
 		);
 		connector.connect(entry.daemonId);
-		await waitFor(() => (connector.snapshot()[entry.daemonId]?.state === "reconnecting" ? "reconnecting" : null), 3000, "reconnecting snapshot");
+		await waitFor(
+			() =>
+				connector.snapshot()[entry.daemonId]?.state === "reconnecting" ? "reconnecting" : null,
+			3000,
+			"reconnecting snapshot",
+		);
 		const snap = connector.snapshot()[entry.daemonId];
 		expect(snap?.attempts).toBeGreaterThanOrEqual(1);
 		expect(typeof snap?.nextRetryInMs).toBe("number");
@@ -547,11 +594,18 @@ describe("DaemonConnector", () => {
 	test("401 on /events (wrong token) → terminal error, no reconnect loop", async () => {
 		const fake = startFake({ expectedToken: "right" });
 		const registry = await loadedRegistry(tmpStatePath());
-		const entry = registry.create(baseInit({ endpoint: fake.url, token: "wrong", mode: "spawned" }));
+		const entry = registry.create(
+			baseInit({ endpoint: fake.url, token: "wrong", mode: "spawned" }),
+		);
 		let dialFailed = 0;
 		const connector = makeConnector(registry, { onDialFailed: () => dialFailed++ });
 		connector.connect(entry.daemonId);
-		await waitFor(() => registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null, 2000, "error");
+		await waitFor(
+			() =>
+				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+			2000,
+			"error",
+		);
 		const updated = registry.get(entry.daemonId)!;
 		expect(updated.error).toContain("401");
 		expect(updated.status).toBe("error");
@@ -579,10 +633,16 @@ describe("DaemonConnector", () => {
 		// Timeout: the fake never sends ready.
 		const slow = startFake({ onOpen: (_fake, stream) => prime(stream, { ready: false }) });
 		const registry2 = await loadedRegistry(tmpStatePath());
-		const entry2 = registry2.create(baseInit({ endpoint: slow.url, token: "tok", mode: "attached" }));
+		const entry2 = registry2.create(
+			baseInit({ endpoint: slow.url, token: "tok", mode: "attached" }),
+		);
 		const connector2 = makeConnector(registry2);
 		connector2.connect(entry2.daemonId);
-		await waitFor(() => (registry2.get(entry2.daemonId)?.status === "resolving" ? "resolving" : null), 2000, "resolving");
+		await waitFor(
+			() => (registry2.get(entry2.daemonId)?.status === "resolving" ? "resolving" : null),
+			2000,
+			"resolving",
+		);
 		await expect(connector2.waitReady(entry2.daemonId, 50)).rejects.toThrow(/timed out/);
 		await connector2.close();
 		slow.stop();
@@ -590,7 +650,9 @@ describe("DaemonConnector", () => {
 		// Error status rejects immediately.
 		const bad = startFake({ hello: { cwd: "/elsewhere" } });
 		const registry3 = await loadedRegistry(tmpStatePath());
-		const entry3 = registry3.create(baseInit({ endpoint: bad.url, token: "tok", mode: "attached" }));
+		const entry3 = registry3.create(
+			baseInit({ endpoint: bad.url, token: "tok", mode: "attached" }),
+		);
 		const connector3 = makeConnector(registry3);
 		connector3.connect(entry3.daemonId);
 		await expect(connector3.waitReady(entry3.daemonId, 1000)).rejects.toThrow(/cwd mismatch/);
@@ -660,7 +722,11 @@ describe("DaemonConnector", () => {
 		const fake = startFake({
 			onCommand: (_fake, stream, frame) => {
 				if ((frame as { type?: string }).type === "call") {
-					stream.send({ type: "event", sessionId: "s1", event: { type: "notice", level: "info", message: "hi" } });
+					stream.send({
+						type: "event",
+						sessionId: "s1",
+						event: { type: "notice", level: "info", message: "hi" },
+					});
 				}
 			},
 		});
@@ -674,10 +740,18 @@ describe("DaemonConnector", () => {
 		const unsub2 = connector.onFrame(entry.daemonId, (f) => seen[1].push(f.type));
 		const cmd: ClientCommand = { type: "call", id: "c1", method: "prompt", args: ["hi"] };
 		expect(connector.send(entry.daemonId, cmd)).toBe(true);
-		await waitFor(() => (seen[0].includes("event") && seen[1].includes("event") ? "both" : null), 2000, "both listeners");
+		await waitFor(
+			() => (seen[0].includes("event") && seen[1].includes("event") ? "both" : null),
+			2000,
+			"both listeners",
+		);
 		unsub1();
 		expect(connector.send(entry.daemonId, cmd)).toBe(true);
-		await waitFor(() => (seen[1].filter((t) => t === "event").length >= 2 ? "second" : null), 2000, "second event");
+		await waitFor(
+			() => (seen[1].filter((t) => t === "event").length >= 2 ? "second" : null),
+			2000,
+			"second event",
+		);
 		expect(seen[0].filter((t) => t === "event")).toHaveLength(1); // unsubscribed
 		expect(fake.received).toHaveLength(2);
 		unsub2();
@@ -689,7 +763,11 @@ describe("DaemonConnector", () => {
 		const fake = startFake();
 		const registry = await loadedRegistry(tmpStatePath());
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 50 });
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 50,
+		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 2000);
 		connector.retain(entry.daemonId);
@@ -702,7 +780,12 @@ describe("DaemonConnector", () => {
 		expect(connector.isConnected(entry.daemonId)).toBe(false);
 		// On-demand redial still works after the drop.
 		connector.connect(entry.daemonId);
-		await waitFor(() => (fake.openCount >= 2 && registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 2000, "redial ready");
+		await waitFor(
+			() =>
+				fake.openCount >= 2 && registry.get(entry.daemonId)?.status === "ready" ? "ready" : null,
+			2000,
+			"redial ready",
+		);
 		await connector.close();
 		fake.stop();
 	});
@@ -716,7 +799,11 @@ describe("DaemonConnector", () => {
 		const fake = startFake();
 		const registry = await loadedRegistry(tmpStatePath());
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 50 });
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 50,
+		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 2000);
 		// No retain()/release() pair anywhere in this test.
@@ -728,7 +815,12 @@ describe("DaemonConnector", () => {
 		expect(connector.isConnected(entry.daemonId)).toBe(false);
 		// On-demand redial still works after the drop.
 		connector.connect(entry.daemonId);
-		await waitFor(() => (fake.openCount >= 2 && registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 2000, "redial ready");
+		await waitFor(
+			() =>
+				fake.openCount >= 2 && registry.get(entry.daemonId)?.status === "ready" ? "ready" : null,
+			2000,
+			"redial ready",
+		);
 		await connector.close();
 		fake.stop();
 	});
@@ -737,7 +829,11 @@ describe("DaemonConnector", () => {
 		const fake = startFake();
 		const registry = await loadedRegistry(tmpStatePath());
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 50 });
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 50,
+		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 2000);
 		connector.retain(entry.daemonId);
@@ -780,7 +876,11 @@ describe("DaemonConnector", () => {
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok", mode: "attached" }));
 		const connector = makeConnector(registry);
 		connector.connect(entry.daemonId);
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "error" ? "error" : null), 2000, "error");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "error" ? "error" : null),
+			2000,
+			"error",
+		);
 		const cmd: ClientCommand = { type: "call", id: "c1", method: "prompt", args: ["hi"] };
 		expect(connector.send(entry.daemonId, cmd)).toBe(false);
 		await connector.close();
@@ -796,7 +896,9 @@ describe("DaemonConnector", () => {
 		await connector.waitReady(entry.daemonId, 2000);
 		expect(registry.remove(entry.daemonId)).toBe(true);
 		expect(() => connector.connect(entry.daemonId)).not.toThrow(); // unknown id: no-op
-		expect(connector.send(entry.daemonId, { type: "call", id: "x", method: "prompt", args: [] })).toBe(false);
+		expect(
+			connector.send(entry.daemonId, { type: "call", id: "x", method: "prompt", args: [] }),
+		).toBe(false);
 		await connector.close();
 		fake.stop();
 	});
@@ -810,7 +912,11 @@ describe("DaemonConnector", () => {
 		const entry = registry.create(baseInit({ endpoint: slow.url, token: "tok", mode: "attached" }));
 		const connector = makeConnector(registry);
 		connector.connect(entry.daemonId);
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "resolving" ? "resolving" : null), 2000, "resolving");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "resolving" ? "resolving" : null),
+			2000,
+			"resolving",
+		);
 		expect(connector.stateCount()).toBe(1);
 		const pending = connector.waitReady(entry.daemonId, 5_000);
 		const start = Date.now();
@@ -822,7 +928,9 @@ describe("DaemonConnector", () => {
 		// The per-daemon state (listeners, waiters, retain count) is gone.
 		expect(connector.stateCount()).toBe(0);
 		expect(connector.isConnected(entry.daemonId)).toBe(false);
-		expect(connector.send(entry.daemonId, { type: "call", id: "x", method: "prompt", args: [] })).toBe(false);
+		expect(
+			connector.send(entry.daemonId, { type: "call", id: "x", method: "prompt", args: [] }),
+		).toBe(false);
 		await connector.close();
 		slow.stop();
 	});
@@ -921,14 +1029,34 @@ describe("DaemonConnector", () => {
 			if (f.type === "event") seen.push((f.event as { message?: string }).message ?? "");
 		});
 		// Two deltas land on stream 1 (and in the daemon-side ring).
-		fake.broadcast({ type: "event", sessionId: "s1", event: { type: "notice", level: "info", message: "one" } });
-		fake.broadcast({ type: "event", sessionId: "s1", event: { type: "notice", level: "info", message: "two" } });
-		await waitFor(() => (seen.includes("one") && seen.includes("two") ? "both" : null), 2000, "both deltas");
+		fake.broadcast({
+			type: "event",
+			sessionId: "s1",
+			event: { type: "notice", level: "info", message: "one" },
+		});
+		fake.broadcast({
+			type: "event",
+			sessionId: "s1",
+			event: { type: "notice", level: "info", message: "two" },
+		});
+		await waitFor(
+			() => (seen.includes("one") && seen.includes("two") ? "both" : null),
+			2000,
+			"both deltas",
+		);
 		// Clean end → asleep; lastSeq is now 1025.
 		fake.streams[0]!.close();
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null), 2000, "asleep");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null),
+			2000,
+			"asleep",
+		);
 		// A delta emitted while no stream was open lands only in the ring.
-		fake.broadcast({ type: "event", sessionId: "s1", event: { type: "notice", level: "info", message: "three" } });
+		fake.broadcast({
+			type: "event",
+			sessionId: "s1",
+			event: { type: "notice", level: "info", message: "three" },
+		});
 		// Redial resumes from the last seen id; the server replays ring entries
 		// with seqs strictly greater than it, AFTER priming.
 		connector.connect(entry.daemonId);
@@ -952,7 +1080,11 @@ describe("DaemonConnector", () => {
 		// no delta ever arrived, so a reconnect must NOT request replay — the
 		// fresh priming already carries full current state.
 		fake.streams[0]!.close();
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null), 2000, "asleep");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null),
+			2000,
+			"asleep",
+		);
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 2000);
 		expect(fake.headers[1]?.["last-event-id"]).toBeUndefined();

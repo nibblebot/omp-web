@@ -22,7 +22,8 @@ export class PromptHistory {
 			const raw = this.storage.getItem(KEY);
 			if (raw) {
 				const parsed: unknown = JSON.parse(raw);
-				if (Array.isArray(parsed)) this.entries = parsed.filter((e): e is string => typeof e === "string");
+				if (Array.isArray(parsed))
+					this.entries = parsed.filter((e): e is string => typeof e === "string");
 			}
 		} catch {
 			this.entries = [];
@@ -49,7 +50,8 @@ export class PromptHistory {
 			return;
 		}
 		this.entries.push(trimmed);
-		if (this.entries.length > MAX_ENTRIES) this.entries.splice(0, this.entries.length - MAX_ENTRIES);
+		if (this.entries.length > MAX_ENTRIES)
+			this.entries.splice(0, this.entries.length - MAX_ENTRIES);
 		try {
 			this.storage.setItem(KEY, JSON.stringify(this.entries));
 		} catch {

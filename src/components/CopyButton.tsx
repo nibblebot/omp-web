@@ -9,17 +9,21 @@ export const COPY_FEEDBACK_MS = 1200;
  * successful copy. `text` may be an accessor so callers can resolve the
  * payload at click time (e.g. a still-streaming assistant message).
  */
-export const CopyButton: Component<{ text: string | (() => string); title?: string; class?: string }> = props => {
+export const CopyButton: Component<{
+	text: string | (() => string);
+	title?: string;
+	class?: string;
+}> = (props) => {
 	const [copied, setCopied] = createSignal(false);
 	return (
 		<button
 			class={props.class}
 			type="button"
 			title={props.title}
-			onClick={e => {
+			onClick={(e) => {
 				e.stopPropagation();
 				const text = typeof props.text === "function" ? props.text() : props.text;
-				void copyText(text).then(ok => {
+				void copyText(text).then((ok) => {
 					setCopied(ok);
 					setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
 				});

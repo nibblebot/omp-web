@@ -104,12 +104,22 @@ describe("matchSelector", () => {
 
 	describe("name glob", () => {
 		test('"*" alone matches every name', () => {
-			const entries = [entry({ name: "web" }), entry({ name: "a.b" }), entry({ name: "x?y" }), entry({ name: "" })];
+			const entries = [
+				entry({ name: "web" }),
+				entry({ name: "a.b" }),
+				entry({ name: "x?y" }),
+				entry({ name: "" }),
+			];
 			expect(matchSelector(entries, "*")).toEqual(entries);
 		});
 
 		test("* matches any run, including empty", () => {
-			const entries = [entry({ name: "fo" }), entry({ name: "foo" }), entry({ name: "f123o" }), entry({ name: "bar" })];
+			const entries = [
+				entry({ name: "fo" }),
+				entry({ name: "foo" }),
+				entry({ name: "f123o" }),
+				entry({ name: "bar" }),
+			];
 			expect(matchSelector(entries, "f*o")).toEqual([entries[0], entries[1], entries[2]]);
 		});
 

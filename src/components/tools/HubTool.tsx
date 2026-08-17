@@ -4,9 +4,15 @@ import type { ToolItem } from "../../state";
 import { CollapsiblePre, ToolShell } from "./ToolShell";
 
 /** hub tool: send/wait/poll card — peer, message preview, status. */
-export const HubTool: Component<{ item: ToolItem }> = props => {
+export const HubTool: Component<{ item: ToolItem }> = (props) => {
 	const args = () =>
-		(props.item.args as { op?: string; to?: string; from?: string; message?: string; name?: string } | null) ?? {};
+		(props.item.args as {
+			op?: string;
+			to?: string;
+			from?: string;
+			message?: string;
+			name?: string;
+		} | null) ?? {};
 	const op = () => args().op ?? "";
 	const to = () => args().to ?? "";
 	const from = () => args().from ?? "";
@@ -17,7 +23,15 @@ export const HubTool: Component<{ item: ToolItem }> = props => {
 	return (
 		<ToolShell name={<>hub {op()}</>} status={props.item.status} class="hub-tool">
 			<Show when={target()}>
-				<div class="tool-meta">{to() ? (<><ArrowRightIcon /> {target()}</>) : target()}</div>
+				<div class="tool-meta">
+					{to() ? (
+						<>
+							<ArrowRightIcon /> {target()}
+						</>
+					) : (
+						target()
+					)}
+				</div>
 			</Show>
 			<Show when={preview()}>
 				<div class="hub-message">"{preview()}"</div>

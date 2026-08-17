@@ -3,7 +3,16 @@ import { currentToken, fuzzyRank, type AcToken } from "../autocomplete";
 import { dispatchInput, LOCAL_COMMANDS, type InputMode } from "../commands";
 import { PromptHistory } from "../history";
 import type { ImageArg } from "../../shared/protocol";
-import { call, dequeueLastQueued, isReady, listFiles, promptInsert, setPromptInsert, setState, state } from "../state";
+import {
+	call,
+	dequeueLastQueued,
+	isReady,
+	listFiles,
+	promptInsert,
+	setPromptInsert,
+	setState,
+	state,
+} from "../state";
 import { XIcon } from "../icons";
 import { Autocomplete, type AcItem } from "./Autocomplete";
 
@@ -55,7 +64,7 @@ export const PromptBox: Component = () => {
 	// session's status instead of the generic "starting…".
 	const rosterHint = () => {
 		if (state.sessionMode !== "roster") return null;
-		const daemon = state.daemonRoster.find(x => x.daemonId === state.currentSessionId);
+		const daemon = state.daemonRoster.find((x) => x.daemonId === state.currentSessionId);
 		if (!daemon) return "no daemon attached — pick one in the sidebar";
 		if (daemon.status === "ready") return "attaching to daemon…";
 		return `daemon ${daemon.status}…`;
@@ -83,8 +92,8 @@ export const PromptBox: Component = () => {
 		const insert = promptInsert();
 		if (!insert) return;
 		setPromptInsert(null);
-		if (insert.text) setMessage(prev => (prev.trim() ? `${prev}\n${insert.text}` : insert.text));
-		if (insert.images?.length) setImages(prev => [...prev, ...insert.images!]);
+		if (insert.text) setMessage((prev) => (prev.trim() ? `${prev}\n${insert.text}` : insert.text));
+		if (insert.images?.length) setImages((prev) => [...prev, ...insert.images!]);
 		requestAnimationFrame(() => {
 			textarea.focus();
 			autoGrow();
@@ -95,20 +104,23 @@ export const PromptBox: Component = () => {
 		const t = token();
 		if (!t) return [];
 		if (t.mode === "file") {
-			return files().map(f => ({
+			return files().map((f) => ({
 				label: `@${f}`,
 				apply: f.includes(" ") ? `@"${f}" ` : `@${f} `,
 			}));
 		}
-		const local = Object.keys(LOCAL_COMMANDS).map(name => ({ name, detail: LOCAL_DETAILS[name] ?? "web-local" }));
+		const local = Object.keys(LOCAL_COMMANDS).map((name) => ({
+			name,
+			detail: LOCAL_DETAILS[name] ?? "web-local",
+		}));
 		const remote = state.availableCommands
-			.filter(c => !LOCAL_COMMANDS[c.name])
-			.map(c => ({ name: c.name, detail: c.description ?? c.input?.hint ?? "" }));
+			.filter((c) => !LOCAL_COMMANDS[c.name])
+			.map((c) => ({ name: c.name, detail: c.description ?? c.input?.hint ?? "" }));
 		return [...local, ...remote]
-			.map(c => ({ c, rank: fuzzyRank(t.query, c.name) }))
+			.map((c) => ({ c, rank: fuzzyRank(t.query, c.name) }))
 			.filter((x): x is { c: { name: string; detail: string }; rank: number } => x.rank !== null)
 			.sort((a, b) => a.rank - b.rank)
-			.map(x => ({ label: `/${x.c.name}`, detail: x.c.detail, apply: `/${x.c.name} ` }));
+			.map((x) => ({ label: `/${x.c.name}`, detail: x.c.detail, apply: `/${x.c.name} ` }));
 	};
 
 	const open = () => token() !== null && items().length > 0;
@@ -143,7 +155,7 @@ export const PromptBox: Component = () => {
 	};
 
 	const onPaste = (e: ClipboardEvent) => {
-		const items = [...(e.clipboardData?.items ?? [])].filter(it => it.type.startsWith("image/"));
+		const items = [...(e.clipboardData?.items ?? [])].filter((it) => it.type.startsWith("image/"));
 		if (items.length === 0) return; // non-image paste: default behavior
 		e.preventDefault();
 		for (const item of items) {
@@ -153,9 +165,9 @@ export const PromptBox: Component = () => {
 			const reader = new FileReader();
 			reader.onload = () => resolve(String(reader.result));
 			reader.readAsDataURL(file);
-			void promise.then(dataUrl => {
+			void promise.then((dataUrl) => {
 				const data = dataUrl.slice(dataUrl.indexOf(",") + 1);
-				setImages(prev => [...prev, { type: "image", data, mimeType: item.type }]);
+				setImages((prev) => [...prev, { type: "image", data, mimeType: item.type }]);
 			});
 		}
 	};
@@ -172,12 +184,12 @@ export const PromptBox: Component = () => {
 			const list = items();
 			if (e.key === "ArrowDown") {
 				e.preventDefault();
-				setSelected(i => (i + 1) % list.length);
+				setSelected((i) => (i + 1) % list.length);
 				return;
 			}
 			if (e.key === "ArrowUp") {
 				e.preventDefault();
-				setSelected(i => (i - 1 + list.length) % list.length);
+				setSelected((i) => (i - 1 + list.length) % list.length);
 				return;
 			}
 			if (e.key === "Tab") {
@@ -206,7 +218,7 @@ export const PromptBox: Component = () => {
 		if (e.key === "Escape" && state.streaming) {
 			e.preventDefault();
 			lastEsc = 0;
-			void call("abort").catch(err => setState("error", String(err)));
+			void call("abort").catch((err) => setState("error", String(err)));
 			return;
 		}
 		if (e.key === "Escape") {
@@ -237,7 +249,11 @@ export const PromptBox: Component = () => {
 			}
 			return;
 		}
-		if (e.key === "ArrowDown" && history.browsing && !el.value.slice(el.selectionEnd).includes("\n")) {
+		if (
+			e.key === "ArrowDown" &&
+			history.browsing &&
+			!el.value.slice(el.selectionEnd).includes("\n")
+		) {
 			const next = history.next();
 			if (next !== null) {
 				e.preventDefault();
@@ -255,7 +271,11 @@ export const PromptBox: Component = () => {
 						{(img, i) => (
 							<span class="image-thumb">
 								<img src={`data:${img.mimeType};base64,${img.data}`} alt="" aria-hidden="true" />
-								<button class="image-remove" aria-label="Remove image" onClick={() => setImages(prev => prev.filter((_, j) => j !== i()))}>
+								<button
+									class="image-remove"
+									aria-label="Remove image"
+									onClick={() => setImages((prev) => prev.filter((_, j) => j !== i()))}
+								>
 									<XIcon />
 								</button>
 							</span>
@@ -265,7 +285,13 @@ export const PromptBox: Component = () => {
 			)}
 			<div class="prompt-input">
 				{open() && (
-					<Autocomplete items={items()} selected={selected()} onHover={setSelected} onApply={apply} listId={listId} />
+					<Autocomplete
+						items={items()}
+						selected={selected()}
+						onHover={setSelected}
+						onApply={apply}
+						listId={listId}
+					/>
 				)}
 				<textarea
 					ref={textarea}
@@ -276,7 +302,7 @@ export const PromptBox: Component = () => {
 					aria-activedescendant={open() ? `${listId}-opt-${selected()}` : undefined}
 					aria-autocomplete="list"
 					value={message()}
-					onInput={e => {
+					onInput={(e) => {
 						setMessage(e.currentTarget.value);
 						setDismissed(false);
 						setSelected(0);
@@ -296,7 +322,10 @@ export const PromptBox: Component = () => {
 					New session
 				</button>
 				{state.streaming && (
-					<button class="stop" onClick={() => void call("abort").catch(err => setState("error", String(err)))}>
+					<button
+						class="stop"
+						onClick={() => void call("abort").catch((err) => setState("error", String(err)))}
+					>
 						Stop
 					</button>
 				)}

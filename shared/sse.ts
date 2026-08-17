@@ -21,7 +21,9 @@ import { SSE_RING_BYTES } from "./protocol";
  */
 
 /** One parsed unit from an SSE stream: either an event or a comment. */
-export type SseUnit = { kind: "event"; event: string; id: string | undefined; data: string } | { kind: "comment"; text: string };
+export type SseUnit =
+	| { kind: "event"; event: string; id: string | undefined; data: string }
+	| { kind: "comment"; text: string };
 
 /** Keepalive event name; servers emit SSE_PING_BLOCK every SSE_KEEPALIVE_MS. */
 export const SSE_PING_EVENT = "ping";

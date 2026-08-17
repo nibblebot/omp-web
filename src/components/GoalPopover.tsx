@@ -10,15 +10,18 @@ import { Modal } from "./Modal";
  * directly (goal_updated events + the post-mutation state broadcast keep the
  * state fresh).
  */
-export const GoalPopover: Component<{ onClose: () => void }> = props => {
+export const GoalPopover: Component<{ onClose: () => void }> = (props) => {
 	const goal = () => state.goalModeState?.goal;
 	const mode = () => state.goalModeState?.mode;
 	const [objective, setObjective] = createSignal("");
 
-	const goalCall = (method: "goalCreate" | "goalPause" | "goalResume" | "goalDrop", arg?: string) => {
+	const goalCall = (
+		method: "goalCreate" | "goalPause" | "goalResume" | "goalDrop",
+		arg?: string,
+	) => {
 		void call(method, arg !== undefined ? [arg] : [])
 			.then(() => setObjective(""))
-			.catch(err => setState("error", String(err)));
+			.catch((err) => setState("error", String(err)));
 	};
 
 	const submitGoal = () => {
@@ -35,7 +38,7 @@ export const GoalPopover: Component<{ onClose: () => void }> = props => {
 						No active goal. Set one below.
 						<form
 							class="goal-actions"
-							onSubmit={e => {
+							onSubmit={(e) => {
 								e.preventDefault();
 								submitGoal();
 							}}
@@ -45,7 +48,7 @@ export const GoalPopover: Component<{ onClose: () => void }> = props => {
 								aria-label="Goal objective"
 								placeholder="Goal objective…"
 								value={objective()}
-								onInput={e => setObjective(e.currentTarget.value)}
+								onInput={(e) => setObjective(e.currentTarget.value)}
 							/>
 							<button type="submit" disabled={!objective().trim()}>
 								set
@@ -54,7 +57,7 @@ export const GoalPopover: Component<{ onClose: () => void }> = props => {
 					</div>
 				}
 			>
-				{g => {
+				{(g) => {
 					const budget = g().tokenBudget;
 					const pct =
 						budget !== undefined && budget > 0 ? Math.min(100, (g().tokensUsed / budget) * 100) : 0;
@@ -77,7 +80,8 @@ export const GoalPopover: Component<{ onClose: () => void }> = props => {
 										<div class="amount-bar-fill" style={{ width: `${pct}%` }} />
 									</div>
 									<span class="picker-detail">
-										{formatTokens(g().tokensUsed)} / {formatTokens(budget!)} tokens ({pct.toFixed(0)}%)
+										{formatTokens(g().tokensUsed)} / {formatTokens(budget!)} tokens (
+										{pct.toFixed(0)}%)
 									</span>
 								</div>
 							</Show>

@@ -28,7 +28,10 @@ import {
 	rewriteEnvelopePeer,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
-import type { SessionEntry, SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import type {
+	SessionEntry,
+	SessionHeader,
+} from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import {
 	TRANSCRIPT_READ_CAP,
 	CollabHostAdapter,
@@ -63,7 +66,10 @@ function createStubRelay(options: { maxGuests?: number; orphanTtlMs?: number } =
 	const orphanTtlMs = options.orphanTtlMs ?? 60_000;
 	const rooms = new Map<string, StubRoom>();
 
-	const safeSend = (ws: ServerWebSocket<StubSocketData> | null, data: string | Uint8Array): void => {
+	const safeSend = (
+		ws: ServerWebSocket<StubSocketData> | null,
+		data: string | Uint8Array,
+	): void => {
 		if (!ws) return;
 		try {
 			ws.send(data);
@@ -128,7 +134,11 @@ function createStubRelay(options: { maxGuests?: number; orphanTtlMs?: number } =
 					safeSend(room.host, bytes);
 					return;
 				}
-				const target = new DataView(bytes.buffer, bytes.byteOffset, ENVELOPE_HEADER_LENGTH).getUint32(0, false);
+				const target = new DataView(
+					bytes.buffer,
+					bytes.byteOffset,
+					ENVELOPE_HEADER_LENGTH,
+				).getUint32(0, false);
 				if (target === 0) {
 					for (const guest of room.guests.values()) safeSend(guest, bytes);
 				} else {
@@ -194,7 +204,13 @@ const FAKE_HEADER: SessionHeader = {
 };
 
 function fakeEntry(id: string, thinkingLevel: string): SessionEntry {
-	return { type: "thinking_level_change", id, parentId: null, timestamp: FAKE_HEADER.timestamp, thinkingLevel };
+	return {
+		type: "thinking_level_change",
+		id,
+		parentId: null,
+		timestamp: FAKE_HEADER.timestamp,
+		thinkingLevel,
+	};
 }
 
 class FakePort implements CollabSessionPort {
@@ -271,7 +287,11 @@ class FakePort implements CollabSessionPort {
 		this.notices.push({ level, message, source });
 	}
 
-	async promptFromGuest(text: string, images: ImageContent[] | undefined, fromName: string): Promise<void> {
+	async promptFromGuest(
+		text: string,
+		images: ImageContent[] | undefined,
+		fromName: string,
+	): Promise<void> {
 		this.prompts.push({ text, images, fromName });
 	}
 
@@ -303,7 +323,11 @@ class FakePort implements CollabSessionPort {
 		];
 	}
 
-	async agentCmd(cmd: "chat" | "kill" | "revive", agentId: string, text: string | undefined): Promise<void> {
+	async agentCmd(
+		cmd: "chat" | "kill" | "revive",
+		agentId: string,
+		text: string | undefined,
+	): Promise<void> {
 		this.agentCmds.push({ cmd, agentId, text });
 	}
 
@@ -357,12 +381,15 @@ function parseLink(link: string) {
 	return parsed;
 }
 
-async function connectGuest(link: string, name: string): Promise<{ frames: CollabFrame[]; socket: CollabSocket }> {
+async function connectGuest(
+	link: string,
+	name: string,
+): Promise<{ frames: CollabFrame[]; socket: CollabSocket }> {
 	const parsed = parseLink(link);
 	const key = await importRoomKey(parsed.key);
 	const socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key });
 	const frames: CollabFrame[] = [];
-	socket.onFrame = frame => {
+	socket.onFrame = (frame) => {
 		frames.push(frame);
 	};
 	socket.onOpen = () => {
@@ -370,7 +397,9 @@ async function connectGuest(link: string, name: string): Promise<{ frames: Colla
 			t: "hello",
 			proto: COLLAB_PROTO,
 			name,
-			writeToken: parsed.writeToken ? Buffer.from(parsed.writeToken).toString("base64url") : undefined,
+			writeToken: parsed.writeToken
+				? Buffer.from(parsed.writeToken).toString("base64url")
+				: undefined,
 		});
 	};
 	socket.connect();
@@ -378,7 +407,7 @@ async function connectGuest(link: string, name: string): Promise<{ frames: Colla
 }
 
 async function waitForWelcome(guest: { frames: CollabFrame[] }) {
-	const welcome = await waitFor(() => guest.frames.find(f => f.t === "welcome"));
+	const welcome = await waitFor(() => guest.frames.find((f) => f.t === "welcome"));
 	if (welcome.t !== "welcome") throw new Error("expected welcome frame");
 	return welcome;
 }
@@ -400,7 +429,7 @@ describe("CollabHostAdapter", () => {
 		statuses = [];
 		adapter = new CollabHostAdapter(port, {
 			hostName: "TestHost",
-			onStatusChange: status => statuses.push(status),
+			onStatusChange: (status) => statuses.push(status),
 		});
 		await adapter.start(`ws://127.0.0.1:${relay.server.port}`);
 	});
@@ -447,18 +476,20 @@ describe("CollabHostAdapter", () => {
 			{ name: "TestHost", role: "host" },
 			{ name: "Alice", role: "guest" },
 		]);
-		expect(welcome.agents.map(a => a.kind)).toEqual(["main", "sub"]);
+		expect(welcome.agents.map((a) => a.kind)).toEqual(["main", "sub"]);
 
 		const chunks = await waitFor(() => {
-			const all = guest.frames.filter(f => f.t === "snapshot-chunk");
+			const all = guest.frames.filter((f) => f.t === "snapshot-chunk");
 			return all.length > 0 && all.at(-1)!.final ? all : undefined;
 		});
 		expect(chunks.at(-1)!.final).toBe(true);
-		const entries = chunks.flatMap(c => (c.t === "snapshot-chunk" ? c.entries : []));
-		expect(entries.map(e => e.id)).toEqual(["e1", "e2"]);
-		expect(entries.map(e => e.type)).toEqual(["thinking_level_change", "thinking_level_change"]);
+		const entries = chunks.flatMap((c) => (c.t === "snapshot-chunk" ? c.entries : []));
+		expect(entries.map((e) => e.id)).toEqual(["e1", "e2"]);
+		expect(entries.map((e) => e.type)).toEqual(["thinking_level_change", "thinking_level_change"]);
 
-		expect(port.notices.some(n => n.message.includes("Alice joined the collab session"))).toBe(true);
+		expect(port.notices.some((n) => n.message.includes("Alice joined the collab session"))).toBe(
+			true,
+		);
 		expect(adapter.participantCount).toBe(2);
 		expect(adapter.writableGuestCount).toBe(1);
 		expect(adapter.status?.participants).toEqual([
@@ -474,7 +505,11 @@ describe("CollabHostAdapter", () => {
 
 		guest.socket.send({ t: "prompt", text: "hello from collab" });
 		await waitFor(() => port.prompts[0]);
-		expect(port.prompts[0]).toEqual({ text: "hello from collab", images: undefined, fromName: "Bob" });
+		expect(port.prompts[0]).toEqual({
+			text: "hello from collab",
+			images: undefined,
+			fromName: "Bob",
+		});
 
 		const image: ImageContent = { type: "image", data: "AAAA", mimeType: "image/png" };
 		guest.socket.send({ t: "prompt", text: "with image", images: [image] });
@@ -488,11 +523,13 @@ describe("CollabHostAdapter", () => {
 
 		const welcome = await waitForWelcome(guest);
 		expect(welcome.readOnly).toBe(true);
-		expect(port.notices.some(n => n.message.includes("Viewer joined the collab session (read-only)"))).toBe(true);
+		expect(
+			port.notices.some((n) => n.message.includes("Viewer joined the collab session (read-only)")),
+		).toBe(true);
 		expect(adapter.writableGuestCount).toBe(0);
 
 		guest.socket.send({ t: "prompt", text: "nope" });
-		const err = await waitFor(() => guest.frames.find(f => f.t === "error"));
+		const err = await waitFor(() => guest.frames.find((f) => f.t === "error"));
 		if (err.t !== "error") throw new Error("expected error frame");
 		expect(err.message).toBe("prompting is disabled on a read-only link");
 		expect(port.prompts).toHaveLength(0);
@@ -507,7 +544,7 @@ describe("CollabHostAdapter", () => {
 		await waitForWelcome(guest);
 
 		port.emitEvent({ type: "notice", level: "info", message: "hi from the host" });
-		const ev = await waitFor(() => guest.frames.find(f => f.t === "event"));
+		const ev = await waitFor(() => guest.frames.find((f) => f.t === "event"));
 		if (ev.t !== "event") throw new Error("expected event frame");
 		expect(ev.event.type).toBe("notice");
 	});
@@ -530,21 +567,21 @@ describe("CollabHostAdapter", () => {
 		port.emitBus(TASK_SUBAGENT_PROGRESS_CHANNEL, progressData);
 
 		const progress = await waitFor(() =>
-			guest.frames.find(f => f.t === "bus" && f.channel === TASK_SUBAGENT_PROGRESS_CHANNEL),
+			guest.frames.find((f) => f.t === "bus" && f.channel === TASK_SUBAGENT_PROGRESS_CHANNEL),
 		);
 		if (progress.t !== "bus") throw new Error("expected bus frame");
 		expect(progress.data).toEqual(progressData);
 		expect(
-			guest.frames.filter(f => f.t === "bus" && f.channel === TASK_SUBAGENT_PROGRESS_CHANNEL),
+			guest.frames.filter((f) => f.t === "bus" && f.channel === TASK_SUBAGENT_PROGRESS_CHANNEL),
 		).toHaveLength(1);
 
 		const lifecycle = guest.frames.find(
-			f => f.t === "bus" && f.channel === TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+			(f) => f.t === "bus" && f.channel === TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 		);
 		if (!lifecycle || lifecycle.t !== "bus") throw new Error("expected lifecycle bus frame");
 		expect(lifecycle.data).toEqual(lifecycleData);
 		expect(
-			guest.frames.filter(f => f.t === "bus" && f.channel === TASK_SUBAGENT_LIFECYCLE_CHANNEL),
+			guest.frames.filter((f) => f.t === "bus" && f.channel === TASK_SUBAGENT_LIFECYCLE_CHANNEL),
 		).toHaveLength(1);
 	});
 
@@ -562,7 +599,7 @@ describe("CollabHostAdapter", () => {
 			content: "hello entry",
 			display: true,
 		});
-		const entry = await waitFor(() => guest.frames.find(f => f.t === "entry"));
+		const entry = await waitFor(() => guest.frames.find((f) => f.t === "entry"));
 		if (entry.t !== "entry") throw new Error("expected entry frame");
 		expect(entry.entry.type).toBe("custom_message");
 		expect(entry.entry.id).toBe("e3");
@@ -574,17 +611,17 @@ describe("CollabHostAdapter", () => {
 		await waitForWelcome(guest);
 
 		// The hello itself schedules a state broadcast; absorb it first.
-		await waitFor(() => guest.frames.find(f => f.t === "state"));
-		const stateCount = guest.frames.filter(f => f.t === "state").length;
+		await waitFor(() => guest.frames.find((f) => f.t === "state"));
+		const stateCount = guest.frames.filter((f) => f.t === "state").length;
 
 		// Change port state so the agent_end broadcast is not JSON-deduped.
 		port.streaming = true;
 		port.emitEvent({ type: "agent_end", messages: [] });
 		await waitFor(() => {
-			const states = guest.frames.filter(f => f.t === "state");
+			const states = guest.frames.filter((f) => f.t === "state");
 			return states.length > stateCount ? states : undefined;
 		});
-		const state = guest.frames.filter(f => f.t === "state").at(-1);
+		const state = guest.frames.filter((f) => f.t === "state").at(-1);
 		if (!state || state.t !== "state") throw new Error("expected state frame");
 		expect(state.state.participants).toEqual([
 			{ name: "TestHost", role: "host" },
@@ -602,7 +639,7 @@ describe("CollabHostAdapter", () => {
 
 		const promise = adapter.requestGuestUi({ kind: "select", title: "Pick", options: ["A", "B"] });
 		expect(promise).not.toBeNull();
-		const req = await waitFor(() => guest.frames.find(f => f.t === "ui-request"));
+		const req = await waitFor(() => guest.frames.find((f) => f.t === "ui-request"));
 		if (req.t !== "ui-request") throw new Error("expected ui-request frame");
 		expect(req.request.kind).toBe("select");
 		expect(req.request.title).toBe("Pick");
@@ -611,7 +648,9 @@ describe("CollabHostAdapter", () => {
 		guest.socket.send({ t: "ui-response", reqId: req.request.reqId, value: "B" });
 		const result = await promise!;
 		expect(result).toEqual({ kind: "answered", value: "B" });
-		await waitFor(() => guest.frames.find(f => f.t === "ui-request-end" && f.reqId === req.request.reqId));
+		await waitFor(() =>
+			guest.frames.find((f) => f.t === "ui-request-end" && f.reqId === req.request.reqId),
+		);
 	});
 
 	test("stop sends bye then clears status", async () => {
@@ -620,7 +659,7 @@ describe("CollabHostAdapter", () => {
 		await waitForWelcome(guest);
 
 		await adapter.stop("bye now");
-		const bye = await waitFor(() => guest.frames.find(f => f.t === "bye"));
+		const bye = await waitFor(() => guest.frames.find((f) => f.t === "bye"));
 		if (bye.t !== "bye") throw new Error("expected bye frame");
 		expect(bye.reason).toBe("bye now");
 
@@ -639,10 +678,14 @@ describe("CollabHostAdapter", () => {
 		port.sessionId = "session-2";
 		// The next broadcast hits the session-switch guard.
 		port.emitEvent({ type: "notice", level: "info", message: "nudge" });
-		const bye = await waitFor(() => guest.frames.find(f => f.t === "bye"));
+		const bye = await waitFor(() => guest.frames.find((f) => f.t === "bye"));
 		if (bye.t !== "bye") throw new Error("expected bye frame");
 		expect(bye.reason).toBe("session switched");
-		expect(port.notices.some(n => n.message === "Collab ended: session switched" && n.level === "warning")).toBe(true);
+		expect(
+			port.notices.some(
+				(n) => n.message === "Collab ended: session switched" && n.level === "warning",
+			),
+		).toBe(true);
 		expect(adapter.status).toBeNull();
 	});
 
@@ -653,7 +696,9 @@ describe("CollabHostAdapter", () => {
 
 		// Unknown agent → terminal "no transcript available".
 		guest.socket.send({ t: "fetch-transcript", reqId: 1, agentId: "none", fromByte: 0 });
-		const missing = await waitFor(() => guest.frames.find(f => f.t === "transcript" && f.reqId === 1));
+		const missing = await waitFor(() =>
+			guest.frames.find((f) => f.t === "transcript" && f.reqId === 1),
+		);
 		if (missing.t !== "transcript") throw new Error("expected transcript frame");
 		expect(missing.error).toBe("no transcript available");
 		expect(missing.newSize).toBe(0);
@@ -665,13 +710,17 @@ describe("CollabHostAdapter", () => {
 			await fs.writeFile(small, "line1\nline2\n");
 			port.transcriptFiles.set("main", small);
 			guest.socket.send({ t: "fetch-transcript", reqId: 2, agentId: "main", fromByte: 0 });
-			const full = await waitFor(() => guest.frames.find(f => f.t === "transcript" && f.reqId === 2));
+			const full = await waitFor(() =>
+				guest.frames.find((f) => f.t === "transcript" && f.reqId === 2),
+			);
 			if (full.t !== "transcript") throw new Error("expected transcript frame");
 			expect(full.text).toBe("line1\nline2\n");
 			expect(full.newSize).toBe(12);
 			expect(full.error).toBeUndefined();
 			guest.socket.send({ t: "fetch-transcript", reqId: 3, agentId: "main", fromByte: 12 });
-			const eof = await waitFor(() => guest.frames.find(f => f.t === "transcript" && f.reqId === 3));
+			const eof = await waitFor(() =>
+				guest.frames.find((f) => f.t === "transcript" && f.reqId === 3),
+			);
 			if (eof.t !== "transcript") throw new Error("expected transcript frame");
 			expect(eof.text).toBe("");
 			expect(eof.newSize).toBe(12);
@@ -682,7 +731,9 @@ describe("CollabHostAdapter", () => {
 			await fs.writeFile(trimmed, `line1\n${"y".repeat(TRANSCRIPT_READ_CAP)}`);
 			port.transcriptFiles.set("trim", trimmed);
 			guest.socket.send({ t: "fetch-transcript", reqId: 4, agentId: "trim", fromByte: 0 });
-			const tr = await waitFor(() => guest.frames.find(f => f.t === "transcript" && f.reqId === 4));
+			const tr = await waitFor(() =>
+				guest.frames.find((f) => f.t === "transcript" && f.reqId === 4),
+			);
 			if (tr.t !== "transcript") throw new Error("expected transcript frame");
 			expect(tr.text).toBe("line1\n");
 			expect(tr.newSize).toBe(6);
@@ -694,9 +745,13 @@ describe("CollabHostAdapter", () => {
 			await fs.writeFile(huge, `${"x".repeat(TRANSCRIPT_READ_CAP + 100)}\n`);
 			port.transcriptFiles.set("huge", huge);
 			guest.socket.send({ t: "fetch-transcript", reqId: 5, agentId: "huge", fromByte: 0 });
-			const over = await waitFor(() => guest.frames.find(f => f.t === "transcript" && f.reqId === 5));
+			const over = await waitFor(() =>
+				guest.frames.find((f) => f.t === "transcript" && f.reqId === 5),
+			);
 			if (over.t !== "transcript") throw new Error("expected transcript frame");
-			expect(over.error).toBe(`transcript entry exceeds transcript fetch cap (${TRANSCRIPT_READ_CAP} bytes)`);
+			expect(over.error).toBe(
+				`transcript entry exceeds transcript fetch cap (${TRANSCRIPT_READ_CAP} bytes)`,
+			);
 			expect(over.text).toBe("");
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
@@ -720,7 +775,7 @@ describe("CollabHostAdapter", () => {
 		guestSockets.push(viewer.socket);
 		await waitForWelcome(viewer);
 		viewer.socket.send({ t: "agent-cmd", cmd: "revive", agentId: "sub-1" });
-		const err = await waitFor(() => viewer.frames.find(f => f.t === "error"));
+		const err = await waitFor(() => viewer.frames.find((f) => f.t === "error"));
 		if (err.t !== "error") throw new Error("expected error frame");
 		expect(err.message).toBe("agent control is disabled on a read-only link");
 		expect(port.agentCmds).toHaveLength(2);

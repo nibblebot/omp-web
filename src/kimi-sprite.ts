@@ -238,4 +238,3 @@ export const KIMI_SPRITE: SpriteArt = {
 	palette: PALETTE,
 	poses: POSES,
 };
-

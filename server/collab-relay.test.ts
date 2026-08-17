@@ -35,7 +35,11 @@ function sleep(ms: number): Promise<void> {
 const servers: Server<RelaySocketData>[] = [];
 const clients: WebSocket[] = [];
 
-function startRelayServer(opts?: RelayOptions): { relay: RelayHandle; server: Server<RelaySocketData>; baseUrl: string } {
+function startRelayServer(opts?: RelayOptions): {
+	relay: RelayHandle;
+	server: Server<RelaySocketData>;
+	baseUrl: string;
+} {
 	const relay = createRelay(opts);
 	const server = Bun.serve<RelaySocketData>({
 		port: 0,
@@ -92,10 +96,14 @@ function awaitClose(ws: WebSocket, timeoutMs = 3000): Promise<{ code: number; re
 }
 
 /** Splits incoming frames into TEXT controls (parsed JSON) and binary envelopes (ArrayBuffer). */
-function collect(ws: WebSocket): { controls: Array<Record<string, unknown>>; binaries: ArrayBuffer[] } {
+function collect(ws: WebSocket): {
+	controls: Array<Record<string, unknown>>;
+	binaries: ArrayBuffer[];
+} {
 	const bag = { controls: [] as Array<Record<string, unknown>>, binaries: [] as ArrayBuffer[] };
 	ws.onmessage = (ev: MessageEvent) => {
-		if (typeof ev.data === "string") bag.controls.push(JSON.parse(ev.data) as Record<string, unknown>);
+		if (typeof ev.data === "string")
+			bag.controls.push(JSON.parse(ev.data) as Record<string, unknown>);
 		else bag.binaries.push(ev.data as ArrayBuffer);
 	};
 	return bag;
@@ -183,7 +191,10 @@ describe("collab relay", () => {
 		const bag = collect(host1);
 		const guest = openRelaySocket(base, room, "guest");
 		await awaitOpen(guest);
-		const joined = await waitFor(() => bag.controls.find((m) => m.t === "peer-joined"), "peer-joined control");
+		const joined = await waitFor(
+			() => bag.controls.find((m) => m.t === "peer-joined"),
+			"peer-joined control",
+		);
 		expect(joined).toEqual({ t: "peer-joined", peer: 1 });
 	});
 
@@ -274,7 +285,10 @@ describe("collab relay", () => {
 		const guest = openRelaySocket(base, room, "guest");
 		await awaitOpen(guest);
 
-		const joined = await waitFor(() => bag.controls.find((m) => m.t === "peer-joined"), "peer-joined control");
+		const joined = await waitFor(
+			() => bag.controls.find((m) => m.t === "peer-joined"),
+			"peer-joined control",
+		);
 		expect(joined).toEqual({ t: "peer-joined", peer: 1 });
 	});
 
@@ -321,7 +335,10 @@ describe("collab relay", () => {
 
 		// Broadcast (peer 0): both guests receive the identical envelope.
 		host.send(makeEnvelope(0, PAYLOAD_A));
-		await waitFor(() => (g1.binaries.length >= 1 && g2.binaries.length >= 1 ? true : undefined), "broadcast to both");
+		await waitFor(
+			() => (g1.binaries.length >= 1 && g2.binaries.length >= 1 ? true : undefined),
+			"broadcast to both",
+		);
 		expect(envelopePeer(g1.binaries[0])).toBe(0);
 		expect(bytesEqual(new Uint8Array(g1.binaries[0]).slice(4), PAYLOAD_A)).toBe(true);
 		expect(bytesEqual(new Uint8Array(g2.binaries[0]), new Uint8Array(g1.binaries[0]))).toBe(true);
@@ -348,7 +365,10 @@ describe("collab relay", () => {
 		await waitFor(() => bag.controls.find((m) => m.t === "peer-joined"), "peer-joined control");
 
 		guest.close();
-		const left = await waitFor(() => bag.controls.find((m) => m.t === "peer-left"), "peer-left control");
+		const left = await waitFor(
+			() => bag.controls.find((m) => m.t === "peer-left"),
+			"peer-left control",
+		);
 		expect(left).toEqual({ t: "peer-left", peer: 1 });
 	});
 
@@ -417,7 +437,10 @@ describe("collab relay", () => {
 
 		relay.closeRoom(room);
 
-		const control = await waitFor(() => bag.controls.find((m) => m.t === "room-closed"), "room-closed control");
+		const control = await waitFor(
+			() => bag.controls.find((m) => m.t === "room-closed"),
+			"room-closed control",
+		);
 		expect(control).toEqual({ t: "room-closed" });
 		const ev = await closeP;
 		expect(ev.code).toBe(4001);

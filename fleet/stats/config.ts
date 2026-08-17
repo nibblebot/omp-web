@@ -18,29 +18,29 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export interface StatsConfig {
-  configRoot: string;
-  statsDbPath: string;
-  sessionsDir: string;
+	configRoot: string;
+	statsDbPath: string;
+	sessionsDir: string;
 }
 
 export function resolveStatsConfig(
-  env: Record<string, string | undefined> = process.env,
+	env: Record<string, string | undefined> = process.env,
 ): StatsConfig {
-  const home = homedir();
-  const configRoot = env.PI_CONFIG_DIR || join(home, ".omp");
+	const home = homedir();
+	const configRoot = env.PI_CONFIG_DIR || join(home, ".omp");
 
-  let sessionsDir: string;
-  if (env.PI_CODING_AGENT_DIR) {
-    sessionsDir = join(env.PI_CODING_AGENT_DIR, "sessions");
-  } else if (env.XDG_DATA_HOME) {
-    sessionsDir = join(env.XDG_DATA_HOME, "omp", "agent", "sessions");
-  } else {
-    sessionsDir = join(configRoot, "agent", "sessions");
-  }
+	let sessionsDir: string;
+	if (env.PI_CODING_AGENT_DIR) {
+		sessionsDir = join(env.PI_CODING_AGENT_DIR, "sessions");
+	} else if (env.XDG_DATA_HOME) {
+		sessionsDir = join(env.XDG_DATA_HOME, "omp", "agent", "sessions");
+	} else {
+		sessionsDir = join(configRoot, "agent", "sessions");
+	}
 
-  return {
-    configRoot,
-    statsDbPath: join(configRoot, "stats.db"),
-    sessionsDir,
-  };
+	return {
+		configRoot,
+		statsDbPath: join(configRoot, "stats.db"),
+		sessionsDir,
+	};
 }

@@ -9,7 +9,12 @@
 
 import { describe, expect, test } from "bun:test";
 import type { DaemonInfo } from "../shared/protocol";
-import { daemonsKey, DaemonsAggregator, mergeDaemonRosters, type DaemonRosterSource } from "./daemons-aggregator";
+import {
+	daemonsKey,
+	DaemonsAggregator,
+	mergeDaemonRosters,
+	type DaemonRosterSource,
+} from "./daemons-aggregator";
 
 function info(name: string, projectDir: string, overrides: Partial<DaemonInfo> = {}): DaemonInfo {
 	return {
@@ -87,7 +92,12 @@ describe("mergeDaemonRosters", () => {
 
 	test("duplicate keys within one daemon's roster: the later entry wins", () => {
 		const merged = mergeDaemonRosters(
-			new Map([["d1", source("/a", 10, info("shared", "/a", { pid: 111 }), info("shared", "/a", { pid: 222 }))]]),
+			new Map([
+				[
+					"d1",
+					source("/a", 10, info("shared", "/a", { pid: 111 }), info("shared", "/a", { pid: 222 })),
+				],
+			]),
 		);
 		expect(merged).toHaveLength(1);
 		expect(merged[0].pid).toBe(222);
@@ -111,10 +121,20 @@ describe("DaemonsAggregator", () => {
 		const agg = new DaemonsAggregator();
 		agg.ingest("d1", [info("a", "/a"), info("b", "/a")], "/a", 10);
 		agg.ingest("d2", [info("c", "/b")], "/b", 20);
-		expect(agg.merge().map((d) => d.name).sort()).toEqual(["a", "b", "c"]);
+		expect(
+			agg
+				.merge()
+				.map((d) => d.name)
+				.sort(),
+		).toEqual(["a", "b", "c"]);
 		// d1's next frame drops "b".
 		agg.ingest("d1", [info("a", "/a")], "/a", 30);
-		expect(agg.merge().map((d) => d.name).sort()).toEqual(["a", "c"]);
+		expect(
+			agg
+				.merge()
+				.map((d) => d.name)
+				.sort(),
+		).toEqual(["a", "c"]);
 	});
 
 	test("remove evicts a daemon's cached roster", () => {

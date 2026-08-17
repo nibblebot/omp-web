@@ -235,4 +235,3 @@ export const DEEPSEEK_SPRITE: SpriteArt = {
 	palette: PALETTE,
 	poses: POSES,
 };
-

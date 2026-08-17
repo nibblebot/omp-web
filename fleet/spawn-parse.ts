@@ -103,11 +103,17 @@ export function parseContractLine(line: string): StdoutContractLine | null {
 			typeof obj.port !== "number" ||
 			typeof obj.url !== "string" ||
 			!isValidEndpointUrl(obj.url) ||
-			(obj.advertise !== undefined && (typeof obj.advertise !== "string" || !isValidEndpointUrl(obj.advertise)))
+			(obj.advertise !== undefined &&
+				(typeof obj.advertise !== "string" || !isValidEndpointUrl(obj.advertise)))
 		) {
 			return null;
 		}
-		const out: StdoutContractLine = { event: "listening", bind: obj.bind, port: obj.port, url: obj.url };
+		const out: StdoutContractLine = {
+			event: "listening",
+			bind: obj.bind,
+			port: obj.port,
+			url: obj.url,
+		};
 		if (obj.advertise !== undefined) {
 			out.advertise = obj.advertise;
 		}
@@ -140,8 +146,11 @@ export interface ResolvedEndpoint {
  * Returns `null` until at least one `listening` line has been seen
  * (endpoint-only output doesn't count).
  */
-export function resolveEndpoint(lines: StdoutContractLine[], templateHost?: string): ResolvedEndpoint | null {
-	let listening: StdoutContractLine & { event: "listening" } | null = null;
+export function resolveEndpoint(
+	lines: StdoutContractLine[],
+	templateHost?: string,
+): ResolvedEndpoint | null {
+	let listening: (StdoutContractLine & { event: "listening" }) | null = null;
 	let lastEndpoint: string | null = null;
 	for (const line of lines) {
 		if (line.event === "listening") {

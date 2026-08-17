@@ -15,7 +15,12 @@ import os from "node:os";
 import path from "node:path";
 import type { Subprocess } from "bun";
 import { generateRoomId } from "@oh-my-pi/pi-coding-agent/collab/protocol";
-import { OMP_PROTO, OMP_SESSION_PREFIX, SSE_DELTA_SEQ_START, type StdoutContractLine } from "../shared/protocol";
+import {
+	OMP_PROTO,
+	OMP_SESSION_PREFIX,
+	SSE_DELTA_SEQ_START,
+	type StdoutContractLine,
+} from "../shared/protocol";
 import { parseSseUnits, SSE_PING_EVENT } from "../shared/sse";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -57,7 +62,12 @@ function openEvents(
 	baseUrl: string,
 	opts: { headers?: Record<string, string> } = {},
 ): Promise<{ frames: Frame[]; ids: number[]; pings: number; close: () => void }> {
-	const { promise, resolve, reject } = Promise.withResolvers<{ frames: Frame[]; ids: number[]; pings: number; close: () => void }>();
+	const { promise, resolve, reject } = Promise.withResolvers<{
+		frames: Frame[];
+		ids: number[];
+		pings: number;
+		close: () => void;
+	}>();
 	const controller = new AbortController();
 	const frames: Frame[] = [];
 	const ids: number[] = [];
@@ -69,7 +79,14 @@ function openEvents(
 			const res = await fetch(url, { headers: opts.headers, signal: controller.signal });
 			if (!res.ok || !res.body) throw new Error(`GET /events returned ${res.status}`);
 			clearTimeout(timer);
-			resolve({ frames, ids, get pings() { return pings; }, close: () => controller.abort() });
+			resolve({
+				frames,
+				ids,
+				get pings() {
+					return pings;
+				},
+				close: () => controller.abort(),
+			});
 			for await (const unit of parseSseUnits(res.body)) {
 				if (unit.kind !== "event") continue;
 				// Keepalive pings are not frames (no id, empty-object data);
@@ -103,11 +120,15 @@ function commandUrlFor(baseUrl: string): string {
 function openEventsTracked(
 	baseUrl: string,
 ): Promise<{ frames: Frame[]; ended: Promise<string>; close: () => void }> {
-	const { promise, resolve } = Promise.withResolvers<{ frames: Frame[]; ended: Promise<string>; close: () => void }>();
+	const { promise, resolve } = Promise.withResolvers<{
+		frames: Frame[];
+		ended: Promise<string>;
+		close: () => void;
+	}>();
 	const controller = new AbortController();
 	const frames: Frame[] = [];
 	let settleEnd!: (kind: string) => void;
-	const ended = new Promise<string>(r => (settleEnd = r));
+	const ended = new Promise<string>((r) => (settleEnd = r));
 	const url = eventsUrlFor(baseUrl);
 	void (async () => {
 		try {
@@ -124,7 +145,11 @@ function openEventsTracked(
 			}
 			settleEnd("eof");
 		} catch (err) {
-			settleEnd(controller.signal.aborted ? "aborted" : `error:${err instanceof Error ? err.message : String(err)}`);
+			settleEnd(
+				controller.signal.aborted
+					? "aborted"
+					: `error:${err instanceof Error ? err.message : String(err)}`,
+			);
 		}
 	})();
 	return promise;
@@ -144,14 +169,20 @@ function postCommand(
 }
 
 /** The first frame of a given type, waiting for it to arrive. */
-function waitForFrame(frames: Frame[], type: string, timeoutMs: number, label: string): Promise<Frame> {
-	return waitFor(() => frames.find(f => f.type === type) ?? null, timeoutMs, label);
+function waitForFrame(
+	frames: Frame[],
+	type: string,
+	timeoutMs: number,
+	label: string,
+): Promise<Frame> {
+	return waitFor(() => frames.find((f) => f.type === type) ?? null, timeoutMs, label);
 }
 
 /** Read thinkingLevel out of a wire `state` frame (narrowed via `in`, no unchecked cast). */
 function thinkingLevelOf(frame: Frame): string | undefined {
 	const st = frame.state;
-	if (st && typeof st === "object" && "thinkingLevel" in st) return st.thinkingLevel as string | undefined;
+	if (st && typeof st === "object" && "thinkingLevel" in st)
+		return st.thinkingLevel as string | undefined;
 	return undefined;
 }
 
@@ -165,7 +196,10 @@ function parseContractLine(line: string): StdoutContractLine | null {
 }
 
 /** Read the server's stdout up to the first newline; resolves with that line. */
-async function readFirstStdoutLine(stdout: ReadableStream<Uint8Array>, timeoutMs: number): Promise<string> {
+async function readFirstStdoutLine(
+	stdout: ReadableStream<Uint8Array>,
+	timeoutMs: number,
+): Promise<string> {
 	const reader = stdout.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
@@ -174,7 +208,7 @@ async function readFirstStdoutLine(stdout: ReadableStream<Uint8Array>, timeoutMs
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) throw new Error("timed out waiting for the first stdout line");
 		const result = await Promise.race([
-			reader.read().then(r => ({ ...r, timedOut: false as const })),
+			reader.read().then((r) => ({ ...r, timedOut: false as const })),
 			sleep(remaining).then(() => ({ value: undefined, done: true, timedOut: true as const })),
 		]);
 		if (result.timedOut) throw new Error("timed out waiting for the first stdout line");
@@ -196,7 +230,9 @@ interface SessionProc {
 }
 
 /** Spawn server/index.ts on an ephemeral port with a hermetic tmp cwd. */
-async function spawnSession(opts: { args?: string[]; env?: Record<string, string> } = {}): Promise<SessionProc> {
+async function spawnSession(
+	opts: { args?: string[]; env?: Record<string, string> } = {},
+): Promise<SessionProc> {
 	const tmp = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-"));
 	const child = Bun.spawn(["bun", "server/index.ts", ...(opts.args ?? [])], {
 		cwd: repoRoot,
@@ -222,10 +258,12 @@ async function spawnSession(opts: { args?: string[]; env?: Record<string, string
 	};
 	void pumpStderr().catch(() => {});
 
-	const line = await readFirstStdoutLine(child.stdout as ReadableStream<Uint8Array>, 45_000).catch(err => {
-		child.kill();
-		throw err;
-	});
+	const line = await readFirstStdoutLine(child.stdout as ReadableStream<Uint8Array>, 45_000).catch(
+		(err) => {
+			child.kill();
+			throw err;
+		},
+	);
 	const parsed = parseContractLine(line);
 	if (!parsed || parsed.event !== "listening") {
 		child.kill();
@@ -254,7 +292,7 @@ function lanIpv4(): string | undefined {
 const running: SessionProc[] = [];
 
 afterAll(async () => {
-	await Promise.all(running.map(p => p.cleanup()));
+	await Promise.all(running.map((p) => p.cleanup()));
 });
 
 test("SIGTERM runs the graceful shutdown path (exit 0, not 143)", async () => {
@@ -263,7 +301,10 @@ test("SIGTERM runs the graceful shutdown path (exit 0, not 143)", async () => {
 	const proc = await spawnSession();
 	running.push(proc);
 	proc.child.kill("SIGTERM");
-	const code = await Promise.race([proc.child.exited, sleep(20_000).then(() => "timeout" as const)]);
+	const code = await Promise.race([
+		proc.child.exited,
+		sleep(20_000).then(() => "timeout" as const),
+	]);
 	expect(code).toBe(0);
 }, 30_000);
 
@@ -334,20 +375,31 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	expect(caseCommand.status).toBe(401);
 
 	// Lowercase scheme with the exact token still authenticates.
-	const lowerScheme = await fetch(`${base}/events`, { headers: { authorization: "bearer sekret" } });
+	const lowerScheme = await fetch(`${base}/events`, {
+		headers: { authorization: "bearer sekret" },
+	});
 	expect(lowerScheme.status).toBe(200);
 	lowerScheme.body?.cancel();
 
 	// Authorization header → the stream primes hello_ok with the daemon identity.
 	const headerStream = await openEvents(base, { headers: { authorization: "Bearer sekret" } });
-	const headerHello = await waitForFrame(headerStream.frames, "hello_ok", 10_000, "header hello_ok");
+	const headerHello = await waitForFrame(
+		headerStream.frames,
+		"hello_ok",
+		10_000,
+		"header hello_ok",
+	);
 	expect(headerHello.proto).toBe(OMP_PROTO);
 	expect(headerHello.cwd).toBe(tmp);
 	expect(headerHello.pid).toBe(child.pid);
 	expect(headerHello.name).toBe(path.basename(tmp));
 	expect(typeof headerHello.version).toBe("string");
 	// …and commands accept with 202 echoing the id.
-	const headerCmd = await postCommand(base, { type: "call", id: "c-h1", method: "getSettings", args: [] }, { headers: { authorization: "Bearer sekret" } });
+	const headerCmd = await postCommand(
+		base,
+		{ type: "call", id: "c-h1", method: "getSettings", args: [] },
+		{ headers: { authorization: "Bearer sekret" } },
+	);
 	expect(headerCmd.status).toBe(202);
 	expect((await headerCmd.json()).commandId).toBe("c-h1");
 
@@ -355,7 +407,12 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	const queryStream = await openEvents(`${base}?token=sekret`);
 	const queryHello = await waitForFrame(queryStream.frames, "hello_ok", 10_000, "query hello_ok");
 	expect(queryHello.proto).toBe(OMP_PROTO);
-	const queryCmd = await postCommand(`${base}?token=sekret`, { type: "call", id: "c-q1", method: "getSettings", args: [] });
+	const queryCmd = await postCommand(`${base}?token=sekret`, {
+		type: "call",
+		id: "c-q1",
+		method: "getSettings",
+		args: [],
+	});
 	expect(queryCmd.status).toBe(202);
 
 	// Loopback without a token still works: the priming (attached) arrives.
@@ -476,25 +533,37 @@ test("loopback /events opens with hello_ok as the FIRST event, carrying the daem
 	expect(attached.sessionId).toBe("s1");
 
 	// Malformed command bodies are rejected with 400.
-	const bad = await fetch(`http://127.0.0.1:${port}/command`, { method: "POST", body: "{not json" });
+	const bad = await fetch(`http://127.0.0.1:${port}/command`, {
+		method: "POST",
+		body: "{not json",
+	});
 	expect(bad.status).toBe(400);
 	events.close();
 	await cleanup();
 }, 30_000);
 
 test("idle auto-exit: --idle-timeout 1s exits the process via shutdown", async () => {
-	const proc = await spawnSession({ args: ["--idle-timeout", "1s"], env: { OMP_SESSION_TEST_IDLE_CHECK_MS: "250" } });
+	const proc = await spawnSession({
+		args: ["--idle-timeout", "1s"],
+		env: { OMP_SESSION_TEST_IDLE_CHECK_MS: "250" },
+	});
 	running.push(proc);
 	expect(proc.port).toBeGreaterThan(0);
 	// No streams: the first check past the 1s idle timeout finds it idle and
 	// shutdown() exits 0 (250ms check tick via the test env hook, not the 15s default).
-	const code = await Promise.race([proc.child.exited, sleep(10_000).then(() => "timeout" as const)]);
+	const code = await Promise.race([
+		proc.child.exited,
+		sleep(10_000).then(() => "timeout" as const),
+	]);
 	expect(code).toBe(0);
 	await proc.cleanup();
 }, 30_000);
 
 test("an attached /events stream suppresses idle auto-exit", async () => {
-	const proc = await spawnSession({ args: ["--idle-timeout", "1s"], env: { OMP_SESSION_TEST_IDLE_CHECK_MS: "250" } });
+	const proc = await spawnSession({
+		args: ["--idle-timeout", "1s"],
+		env: { OMP_SESSION_TEST_IDLE_CHECK_MS: "250" },
+	});
 	running.push(proc);
 	const { child, port, cleanup } = proc;
 	const events = await openEvents(`http://127.0.0.1:${port}`);
@@ -526,10 +595,15 @@ test("prompt-family calls fail with not_ready until the readiness gate clears", 
 	const attached = await waitForFrame(events.frames, "attached", 10_000, "attached frame");
 	expect(attached.sessionId).toBe("s1");
 	// The gate is still closed: prompt is rejected with not_ready, not a model error.
-	const resp = await postCommand(base, { type: "call", id: "c1", method: "prompt", args: ["hello"] });
+	const resp = await postCommand(base, {
+		type: "call",
+		id: "c1",
+		method: "prompt",
+		args: ["hello"],
+	});
 	expect(resp.status).toBe(202);
 	const notReady = await waitFor(
-		() => events.frames.find(f => f.type === "call_result" && f.id === "c1") ?? null,
+		() => events.frames.find((f) => f.type === "call_result" && f.id === "c1") ?? null,
 		10_000,
 		"not_ready call_result",
 	);
@@ -539,7 +613,7 @@ test("prompt-family calls fail with not_ready until the readiness gate clears", 
 	await waitForFrame(events.frames, "ready", 20_000, "ready frame");
 	await waitFor(
 		() => {
-			const frame = events.frames.find(f => {
+			const frame = events.frames.find((f) => {
 				if (f.type !== "state") return false;
 				const st = f.state;
 				return typeof st === "object" && st !== null && "readyAt" in st && st.readyAt !== undefined;
@@ -574,16 +648,29 @@ test("removed mux commands fall through to the unknown-command error; read-only 
 	await postCommand(base, { type: "call", id: "m6", method: "getSettings", args: [] });
 	const unknown = await waitFor<Frame[]>(
 		() => {
-			const errors = events.frames.filter(f => f.type === "error" && String(f.error).includes("Unknown command:"));
+			const errors = events.frames.filter(
+				(f) => f.type === "error" && String(f.error).includes("Unknown command:"),
+			);
 			return errors.length >= 5 ? errors : null;
 		},
 		10_000,
 		"five unknown-command errors",
 	);
-	for (const type of ["create_session", "attach", "detach", "close_session", "list_live_sessions"]) {
-		expect(unknown.some(f => String(f.error).includes(`"${type}"`))).toBe(true);
+	for (const type of [
+		"create_session",
+		"attach",
+		"detach",
+		"close_session",
+		"list_live_sessions",
+	]) {
+		expect(unknown.some((f) => String(f.error).includes(`"${type}"`))).toBe(true);
 	}
-	const probe = await waitForFrame(events.frames, "call_result", 10_000, "call_result for the probe");
+	const probe = await waitForFrame(
+		events.frames,
+		"call_result",
+		10_000,
+		"call_result for the probe",
+	);
 	expect(probe.id).toBe("m6");
 	expect(probe.ok).toBe(true);
 
@@ -591,13 +678,17 @@ test("removed mux commands fall through to the unknown-command error; read-only 
 	// Real delay: the subprocess is the only authority on what it broadcasts;
 	// fake timers cannot drive another process's event loop.
 	await sleep(1000);
-	expect(events.frames.some(f => f.type === "live_sessions")).toBe(false);
+	expect(events.frames.some((f) => f.type === "live_sessions")).toBe(false);
 
 	// Fleet-edge commands are rejected on a bare omp-session.
 	await postCommand(base, { type: "spawn", cwd: "/tmp", id: "m7" });
 	await postCommand(base, { type: "list_projects", id: "m8" });
 	await waitFor(
-		() => (events.frames.filter(f => f.type === "error" && f.error === "fleet-only command").length >= 2 ? true : null),
+		() =>
+			events.frames.filter((f) => f.type === "error" && f.error === "fleet-only command").length >=
+			2
+				? true
+				: null,
 		10_000,
 		"fleet-only errors",
 	);
@@ -620,14 +711,16 @@ test("POST /command dedups by id within the window", async () => {
 	expect(first.status).toBe(202);
 	expect(second.status).toBe(202);
 	await waitFor(
-		() => events.frames.find(f => f.type === "call_result" && f.id === "dup-cmd") ?? null,
+		() => events.frames.find((f) => f.type === "call_result" && f.id === "dup-cmd") ?? null,
 		10_000,
 		"call_result for dup-cmd",
 	);
 	// Real delay: the dedup window and answer delivery live in the subprocess;
 	// only observing real time proves the duplicate was NOT re-dispatched.
 	await sleep(1200);
-	expect(events.frames.filter(f => f.type === "call_result" && f.id === "dup-cmd").length).toBe(1);
+	expect(events.frames.filter((f) => f.type === "call_result" && f.id === "dup-cmd").length).toBe(
+		1,
+	);
 	events.close();
 	await cleanup();
 }, 30_000);
@@ -642,7 +735,15 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 	try {
 		const chunk = "x".repeat(900 * 1024);
 		const fixture = path.join(bigDir, "big.jsonl");
-		const entries = [JSON.stringify({ type: "session", version: 3, id: "big", timestamp: new Date().toISOString(), cwd: bigDir })];
+		const entries = [
+			JSON.stringify({
+				type: "session",
+				version: 3,
+				id: "big",
+				timestamp: new Date().toISOString(),
+				cwd: bigDir,
+			}),
+		];
 		for (let i = 0; i < 6; i++) {
 			entries.push(
 				JSON.stringify({
@@ -671,7 +772,7 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 		// `attached` (the pre-fix behavior), so arrival alone proves survival.
 		const historyFrames = await waitFor<Frame[]>(
 			() => {
-				const hs = events.frames.filter(f => f.type === "history");
+				const hs = events.frames.filter((f) => f.type === "history");
 				return hs.length >= 2 && hs.at(-1)?.final === true ? hs : null;
 			},
 			20_000,
@@ -685,12 +786,12 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 			expect(JSON.stringify(h).length).toBeLessThan(1024 * 1024);
 			expect(Array.isArray(h.messages)).toBe(true);
 		}
-		expect(historyFrames.slice(0, -1).every(h => h.final === false)).toBe(true);
+		expect(historyFrames.slice(0, -1).every((h) => h.final === false)).toBe(true);
 		expect(historyFrames.at(-1)?.final).toBe(true);
 
 		// Reassembling per the client contract (accumulate non-final chunks,
 		// load on final) yields the complete transcript in order.
-		const all = historyFrames.flatMap(h => h.messages as unknown[]);
+		const all = historyFrames.flatMap((h) => h.messages as unknown[]);
 		expect(all).toHaveLength(6);
 		const first = (all[0] as { content?: Array<{ type?: string; text?: unknown }> }).content?.[0];
 		expect(first?.type).toBe("text");
@@ -706,7 +807,9 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 		// (drop-and-resume) stream would never deliver.
 		const state = await waitForFrame(events.frames, "state", 10_000, "state");
 		expect((state.state as { messageCount?: number }).messageCount).toBe(6);
-		expect(events.frames.findIndex(f => f.type === "state")).toBeGreaterThan(events.frames.findIndex(f => f.type === "history"));
+		expect(events.frames.findIndex((f) => f.type === "state")).toBeGreaterThan(
+			events.frames.findIndex((f) => f.type === "history"),
+		);
 		await postCommand(base, { type: "call", id: "big-liveness", method: "getSettings", args: [] });
 		await waitForFrame(events.frames, "call_result", 10_000, "call_result after priming");
 		events.close();
@@ -743,7 +846,15 @@ test("backpressure drop is in-band: stream_reset precedes the end; the daemon st
 	try {
 		const chunk = "x".repeat(900 * 1024);
 		const fixture = path.join(bigDir, "big.jsonl");
-		const entries = [JSON.stringify({ type: "session", version: 3, id: "big", timestamp: new Date().toISOString(), cwd: bigDir })];
+		const entries = [
+			JSON.stringify({
+				type: "session",
+				version: 3,
+				id: "big",
+				timestamp: new Date().toISOString(),
+				cwd: bigDir,
+			}),
+		];
 		for (let i = 0; i < 6; i++) {
 			entries.push(
 				JSON.stringify({
@@ -767,7 +878,7 @@ test("backpressure drop is in-band: stream_reset precedes the end; the daemon st
 		// Priming completes (paced history) before the over-cap answer.
 		await waitFor<Frame[]>(
 			() => {
-				const hs = events.frames.filter(f => f.type === "history");
+				const hs = events.frames.filter((f) => f.type === "history");
 				if (hs.length === 0) return null;
 				const last = hs.at(-1)!;
 				return last.final === true || !("final" in last) ? hs : null;
@@ -829,7 +940,10 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	const deltaIdx = await waitFor(
 		() => {
 			const idx = events.ids.findIndex(
-				(id, i) => id >= SSE_DELTA_SEQ_START && events.frames[i]?.type === "state" && thinkingLevelOf(events.frames[i]) === "high",
+				(id, i) =>
+					id >= SSE_DELTA_SEQ_START &&
+					events.frames[i]?.type === "state" &&
+					thinkingLevelOf(events.frames[i]) === "high",
 			);
 			return idx >= 0 ? idx : null;
 		},
@@ -855,7 +969,7 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	// delivery — fake timers cannot drive another process (same convention as
 	// the POST-dedup and removed-mux tests above).
 	await sleep(1500);
-	expect(resumed.ids.every(id => id < SSE_DELTA_SEQ_START)).toBe(true);
+	expect(resumed.ids.every((id) => id < SSE_DELTA_SEQ_START)).toBe(true);
 	resumed.close();
 	await cleanup();
 }, 30_000);
@@ -882,7 +996,11 @@ test("a settled ui_request is never a stale dialog: resumers see end-after-reque
 	// resumer receives it either live (post-prime) or via the ring replay —
 	// and pre-fix would receive it WITHOUT any end.
 	const resumed = await openEvents(base);
-	await waitFor(() => (resumed.frames.length > 0 ? resumed.frames[0] : null), 10_000, "resumer first frame");
+	await waitFor(
+		() => (resumed.frames.length > 0 ? resumed.frames[0] : null),
+		10_000,
+		"resumer first frame",
+	);
 	await postCommand(base, { type: "test_ui_request", id: "tui0" });
 	const request = await waitForFrame(resumed.frames, "ui_request", 10_000, "ui_request on resumer");
 	expect(typeof (request as { id?: unknown }).id).toBe("string");
@@ -906,7 +1024,9 @@ test("a settled ui_request is never a stale dialog: resumers see end-after-reque
 	resumed.close();
 	const later = await openEvents(base);
 	await waitForFrame(later.frames, "ready", 10_000, "later ready");
-	expect(later.frames.some(f => f.type === "ui_request" || f.type === "ui_request_end")).toBe(false);
+	expect(later.frames.some((f) => f.type === "ui_request" || f.type === "ui_request_end")).toBe(
+		false,
+	);
 	later.close();
 	await cleanup();
 }, 30_000);

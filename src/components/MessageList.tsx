@@ -1,6 +1,25 @@
-import { createEffect, createSignal, For, Match, Show, Switch, createMemo, onCleanup, onMount, type Component } from "solid-js";
+import {
+	createEffect,
+	createSignal,
+	For,
+	Match,
+	Show,
+	Switch,
+	createMemo,
+	onCleanup,
+	onMount,
+	type Component,
+} from "solid-js";
 import { renderMarkdown, splitForStreaming } from "../markdown";
-import { call, pushNotice, setState, state, type Block, type ChatItem, type ToolItem } from "../state";
+import {
+	call,
+	pushNotice,
+	setState,
+	state,
+	type Block,
+	type ChatItem,
+	type ToolItem,
+} from "../state";
 import type { ImageArg } from "../../shared/protocol";
 import { imageDataUrl } from "../images";
 import { FullImageOverlay } from "./tools/ImageScan";
@@ -50,7 +69,7 @@ function appendFresh(root: HTMLElement, text: string): void {
 // Renders the live tail like Markdown, but when `soften` is on, the characters
 // appended since the previous frame are excluded from the markdown parse and
 // shown in a single fading span instead (re-parsed into real markdown next frame).
-const LiveTail: Component<{ text: string }> = props => {
+const LiveTail: Component<{ text: string }> = (props) => {
 	let el!: HTMLDivElement;
 	let prevLen = 0;
 	createEffect(() => {
@@ -77,13 +96,13 @@ const LiveTail: Component<{ text: string }> = props => {
 	return <div class="md" ref={el} />;
 };
 
-const LiveBlock: Component<{ block: Block }> = props => {
+const LiveBlock: Component<{ block: Block }> = (props) => {
 	// splitForStreaming is a full O(n) scan of the block text; memoize it so
 	// each text change pays for the scan once instead of once per split() read.
 	const split = createMemo(() => splitForStreaming(props.block.text, false));
 	return (
 		<>
-			<For each={split().complete}>{segment => <Markdown src={segment} />}</For>
+			<For each={split().complete}>{(segment) => <Markdown src={segment} />}</For>
 			<LiveTail text={split().tail} />
 		</>
 	);
@@ -92,9 +111,15 @@ const LiveBlock: Component<{ block: Block }> = props => {
 /** Assistant message card. With `thinking` false, thinking blocks are omitted
  *  (consumed by a consolidated run row); a card with no text blocks then
  *  renders nothing. */
-const AssistantCard: Component<{ assistant: Extract<ChatItem, { kind: "assistant" }>; thinking: boolean }> = props => {
-	const blocks = () => (props.thinking ? props.assistant.blocks : props.assistant.blocks.filter(b => b.kind !== "thinking"));
-	const text = () => blocks().filter(b => b.kind === "text");
+const AssistantCard: Component<{
+	assistant: Extract<ChatItem, { kind: "assistant" }>;
+	thinking: boolean;
+}> = (props) => {
+	const blocks = () =>
+		props.thinking
+			? props.assistant.blocks
+			: props.assistant.blocks.filter((b) => b.kind !== "thinking");
+	const text = () => blocks().filter((b) => b.kind === "text");
 	if (!props.thinking && text().length === 0) return null;
 	return (
 		<div class="msg-assistant">
@@ -103,13 +128,15 @@ const AssistantCard: Component<{ assistant: Extract<ChatItem, { kind: "assistant
 					class="msg-copy-btn"
 					title="Copy message markdown"
 					text={() => {
-						const visible = blocks().filter(b => b.kind !== "thinking");
-						return (visible.length > 0 ? visible : props.assistant.blocks).map(b => b.text).join("\n\n");
+						const visible = blocks().filter((b) => b.kind !== "thinking");
+						return (visible.length > 0 ? visible : props.assistant.blocks)
+							.map((b) => b.text)
+							.join("\n\n");
 					}}
 				/>
 			</div>
 			<For each={blocks()}>
-				{block =>
+				{(block) =>
 					block.kind === "thinking" ? (
 						<details class="thinking-block">
 							<summary>thinking</summary>
@@ -121,7 +148,7 @@ const AssistantCard: Component<{ assistant: Extract<ChatItem, { kind: "assistant
 				}
 			</For>
 			<Show when={props.assistant.usage}>
-				{u => {
+				{(u) => {
 					const row = buildUsageRow(u(), props.assistant.ttft, props.assistant.duration);
 					return row ? (
 						<div class="usage-row" title="per-turn usage">
@@ -136,7 +163,7 @@ const AssistantCard: Component<{ assistant: Extract<ChatItem, { kind: "assistant
 
 /** Consolidated view: one row per run of consecutive assistant messages and
  *  tool calls, e.g. "4 Read • 2 Glob • 1 thinking • 7 req • 3 turns". */
-export const RunRow: Component<{ run: Run }> = props => {
+export const RunRow: Component<{ run: Run }> = (props) => {
 	const open = () => {
 		void runOpenVersion();
 		return expandedRunKeys.has(props.run.key);
@@ -144,7 +171,7 @@ export const RunRow: Component<{ run: Run }> = props => {
 	const toggle = () => {
 		if (expandedRunKeys.has(props.run.key)) expandedRunKeys.delete(props.run.key);
 		else expandedRunKeys.add(props.run.key);
-		setRunOpenVersion(v => v + 1);
+		setRunOpenVersion((v) => v + 1);
 	};
 	// Per-name tool counts in first-seen order, plus a "thinking" segment when present.
 	const segments = () => {
@@ -154,7 +181,7 @@ export const RunRow: Component<{ run: Run }> = props => {
 			if (!map.has(item.name)) order.push(item.name);
 			map.set(item.name, (map.get(item.name) ?? 0) + 1);
 		}
-		const tools = order.map(name => ({ name, count: map.get(name)! }));
+		const tools = order.map((name) => ({ name, count: map.get(name)! }));
 		return props.run.thinking.length > 0
 			? [...tools, { name: "thinking", count: props.run.thinking.length }]
 			: tools;
@@ -170,7 +197,9 @@ export const RunRow: Component<{ run: Run }> = props => {
 		return m;
 	};
 	const names = () =>
-		[...props.run.tools.map(it => it.name), ...props.run.thinking.map(() => "thinking")].join(" · ");
+		[...props.run.tools.map((it) => it.name), ...props.run.thinking.map(() => "thinking")].join(
+			" · ",
+		);
 	return (
 		<div class="run-row" classList={{ open: open() }} data-running={props.run.running}>
 			<button
@@ -186,7 +215,11 @@ export const RunRow: Component<{ run: Run }> = props => {
 				<For each={segments()}>
 					{(seg, i) => (
 						<>
-							{i() > 0 && <span class="run-row-sep" aria-hidden="true">•</span>}
+							{i() > 0 && (
+								<span class="run-row-sep" aria-hidden="true">
+									•
+								</span>
+							)}
 							<span class="run-row-item">
 								<span class="run-row-count">{seg.count}</span>
 								<span class="run-row-name">{seg.name}</span>
@@ -195,10 +228,14 @@ export const RunRow: Component<{ run: Run }> = props => {
 					)}
 				</For>
 				<For each={meta()}>
-					{m => (
+					{(m) => (
 						<>
-							<span class="run-row-sep" aria-hidden="true">•</span>
-							<span class="run-row-meta" data-tone={m.tone}>{m.text}</span>
+							<span class="run-row-sep" aria-hidden="true">
+								•
+							</span>
+							<span class="run-row-meta" data-tone={m.tone}>
+								{m.text}
+							</span>
 						</>
 					)}
 				</For>
@@ -207,7 +244,7 @@ export const RunRow: Component<{ run: Run }> = props => {
 				<div class="run-row-content">
 					{/* Original stream order: assistant messages (with thinking) and tools interleaved. */}
 					<For each={props.run.items}>
-						{item =>
+						{(item) =>
 							item.kind === "tool" ? (
 								<ToolStripCard item={item} />
 							) : (
@@ -243,7 +280,8 @@ export const MessageList: Component = () => {
 	let pinned = true;
 	let pinCheckRaf = 0;
 	const [jumpVisible, setJumpVisible] = createSignal(false);
-	const nearBottom = () => container.scrollHeight - container.scrollTop - container.clientHeight < PIN_DISTANCE_PX;
+	const nearBottom = () =>
+		container.scrollHeight - container.scrollTop - container.clientHeight < PIN_DISTANCE_PX;
 	const unpin = () => {
 		// No room above → the gesture can't move the viewport; stay pinned.
 		if (container.scrollTop <= 0) return;
@@ -280,7 +318,7 @@ export const MessageList: Component = () => {
 	});
 	createEffect(() => {
 		state.items.length;
-		state.live.blocks.map(b => b.text.length);
+		state.live.blocks.map((b) => b.text.length);
 		if (pinned) container.scrollTop = container.scrollHeight;
 		schedulePinCheck();
 	});
@@ -327,7 +365,10 @@ export const MessageList: Component = () => {
 		let scroller: HTMLElement | null = null;
 		while (el && el !== container) {
 			const overflowY = getComputedStyle(el).overflowY;
-			if ((overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight + 1) {
+			if (
+				(overflowY === "auto" || overflowY === "scroll") &&
+				el.scrollHeight > el.clientHeight + 1
+			) {
 				scroller = el;
 				break;
 			}
@@ -386,7 +427,9 @@ export const MessageList: Component = () => {
 		// during the animation the position lingers near the bottom, so the
 		// deferred pin check would re-pin and the re-snap would kill the
 		// animation — the same async race the synchronous unpin exists to avoid.
-		const onInteractive = (e.target as HTMLElement).closest("button, a, input, textarea, select, summary");
+		const onInteractive = (e.target as HTMLElement).closest(
+			"button, a, input, textarea, select, summary",
+		);
 		const page = container.clientHeight;
 		switch (e.key) {
 			case "PageUp":
@@ -475,15 +518,17 @@ export const MessageList: Component = () => {
 	// and verifications): in consolidated view it pops out of the last run's
 	// row and renders as a full card after it, excluded from the expansion.
 	const lastAssistantId = createMemo(() => {
-		const assistants = state.items.filter(i => i.kind === "assistant");
+		const assistants = state.items.filter((i) => i.kind === "assistant");
 		return assistants.length > 0 ? assistants[assistants.length - 1].id : undefined;
 	});
 	return (
 		<>
-			<Show when={state.toolCardsView !== "expanded" || state.items.some(it => it.kind === "tool")}>
+			<Show
+				when={state.toolCardsView !== "expanded" || state.items.some((it) => it.kind === "tool")}
+			>
 				<div class="stream-toolbar">
 					<For each={TOOL_CARD_VIEWS}>
-						{mode => (
+						{(mode) => (
 							<button
 								class="stream-cards-toggle"
 								aria-pressed={state.toolCardsView === mode}
@@ -499,210 +544,252 @@ export const MessageList: Component = () => {
 						class="stream-cards-toggle"
 						aria-pressed={state.toolsExpanded}
 						title="Expand all tool outputs (Ctrl+O)"
-						onClick={() => setState("toolsExpanded", v => !v)}
+						onClick={() => setState("toolsExpanded", (v) => !v)}
 					>
 						<ExpandIcon /> expand
 					</button>
 				</div>
 			</Show>
 			<div class="message-list-wrap">
-			<div class="message-list" ref={container} onScroll={applyPinState}>
-			<For each={state.items}>
-				{item => (
-					<Switch>
-						<Match when={item.kind === "user" && item}>
-							{user => {
-								const images = () => user().images ?? [];
-								// Phase 11: branch-from-here. AgentMessage user
-								// payloads carry no entryId (pi-ai UserMessage has
-								// no id field), so resolve it via the branching
-								// list and match by exact text.
-								const branchFromHere = (text: string) => {
-									void call("getBranchMessages")
-										.then(msgs => {
-											const entry = (msgs as Array<{ entryId: string; text: string }>).find(m => m.text === text);
-											if (!entry) {
-												pushNotice("warning", "No branch point found for this message.");
-												return undefined;
-											}
-											return call("branch", [entry.entryId]);
-										})
-										.then(result => {
-											const r = result as { text?: string; cancelled?: boolean } | null;
-											if (!r || r.cancelled) return;
-											pushNotice("info", `branched at: ${(r.text ?? text).slice(0, 200)}`);
-										})
-										.catch(err => setState("error", String(err)));
-								};
-								return (
-									<div class="msg-user">
-										<div class="msg-toolbar">
-											<button
-												class="msg-branch-btn"
-												title="Branch from here"
-												disabled={!user().text}
-												onClick={() => branchFromHere(user().text)}
-											>
-												branch
-											</button>
-											<CopyButton
-												class="msg-copy-btn"
-												title="Copy message text"
-												text={() => user().text}
-											/>
-										</div>
-										{user().text && <div class="msg-user-text">{user().text}</div>}
-										<Show when={images().length > 0}>
-											<div class="msg-user-images">
-												<For each={images()}>
-													{img => (
-														<button class="img-thumb" type="button" onClick={() => setZoomed(img)}>
-															<img src={imageDataUrl(img)} alt={`user attached image (${img.mimeType})`} decoding="async" />
-														</button>
-													)}
-												</For>
+				<div class="message-list" ref={container} onScroll={applyPinState}>
+					<For each={state.items}>
+						{(item) => (
+							<Switch>
+								<Match when={item.kind === "user" && item}>
+									{(user) => {
+										const images = () => user().images ?? [];
+										// Phase 11: branch-from-here. AgentMessage user
+										// payloads carry no entryId (pi-ai UserMessage has
+										// no id field), so resolve it via the branching
+										// list and match by exact text.
+										const branchFromHere = (text: string) => {
+											void call("getBranchMessages")
+												.then((msgs) => {
+													const entry = (msgs as Array<{ entryId: string; text: string }>).find(
+														(m) => m.text === text,
+													);
+													if (!entry) {
+														pushNotice("warning", "No branch point found for this message.");
+														return undefined;
+													}
+													return call("branch", [entry.entryId]);
+												})
+												.then((result) => {
+													const r = result as { text?: string; cancelled?: boolean } | null;
+													if (!r || r.cancelled) return;
+													pushNotice("info", `branched at: ${(r.text ?? text).slice(0, 200)}`);
+												})
+												.catch((err) => setState("error", String(err)));
+										};
+										return (
+											<div class="msg-user">
+												<div class="msg-toolbar">
+													<button
+														class="msg-branch-btn"
+														title="Branch from here"
+														disabled={!user().text}
+														onClick={() => branchFromHere(user().text)}
+													>
+														branch
+													</button>
+													<CopyButton
+														class="msg-copy-btn"
+														title="Copy message text"
+														text={() => user().text}
+													/>
+												</div>
+												{user().text && <div class="msg-user-text">{user().text}</div>}
+												<Show when={images().length > 0}>
+													<div class="msg-user-images">
+														<For each={images()}>
+															{(img) => (
+																<button
+																	class="img-thumb"
+																	type="button"
+																	onClick={() => setZoomed(img)}
+																>
+																	<img
+																		src={imageDataUrl(img)}
+																		alt={`user attached image (${img.mimeType})`}
+																		decoding="async"
+																	/>
+																</button>
+															)}
+														</For>
+													</div>
+												</Show>
 											</div>
-										</Show>
-									</div>
-								);
-							}}
-						</Match>
-						<Match when={item.kind === "assistant" && item}>
-							{assistant => (
-								<Show
-									when={state.toolCardsView === "consolidated"}
-									fallback={<AssistantCard assistant={assistant()} thinking />}
-								>
-									{/* Consolidated: the run row owns the whole run; the text stays a message. The
+										);
+									}}
+								</Match>
+								<Match when={item.kind === "assistant" && item}>
+									{(assistant) => (
+										<Show
+											when={state.toolCardsView === "consolidated"}
+											fallback={<AssistantCard assistant={assistant()} thinking />}
+										>
+											{/* Consolidated: the run row owns the whole run; the text stays a message. The
 									    transcript's final assistant message (usually the summary) pops out and
 									    renders as a full card after the run row, excluded from its expansion. */}
-									<Show when={runOf().get(assistant().id)} keyed fallback={<AssistantCard assistant={assistant()} thinking />}>
-										{run => {
-											// Final summary: pops out of the run (only when it ends the run — a
-											// tool-calling message keeps its tools inside the row).
-											const lastPopped = run.items[run.items.length - 1]?.id === lastAssistantId();
-											if (assistant().id === lastAssistantId() && lastPopped) {
-												return <AssistantCard assistant={assistant()} thinking />;
-											}
-											if (run.key !== assistant().id) return null; // members render inside the run row
-											return run.tools.length > 0 || run.thinking.length > 0 || run.items.length > 1
-												? <RunRow run={lastPopped ? { ...run, items: run.items.slice(0, -1) } : run} />
-												: <AssistantCard assistant={assistant()} thinking />; // lone text-only turn stays a plain card
-										}}
-									</Show>
-								</Show>
-							)}
-						</Match>
-						<Match when={item.kind === "tool" && item}>
-							{tool => (
-								<Show
-									when={state.toolCardsView === "consolidated"}
-									fallback={
-										<Show when={state.toolCardsView === "expanded"} fallback={<ToolStripCard item={tool()} />}>
-											<ToolCard item={tool()} />
-										</Show>
-									}
-								>
-									{/* Consolidated: one row per run on its first member; later members render nothing. */}
-									<Show when={leadRun(tool())} keyed fallback={null}>
-										{run => <RunRow run={run} />}
-									</Show>
-								</Show>
-							)}
-						</Match>
-						<Match when={item.kind === "bash" && item}>
-						{bash => (
-							<div class="bash-card" classList={{ dimmed: bash().dimmed }}>
-								<div class="bash-header">
-									<span class="bash-cmd">{bash().lang === "python" ? ">>> " : "$ "}{bash().command}</span>
-									{bash().status === "running" ? (
-										<>
-											<span class="tool-status" data-status="running">
-												running
-											</span>
-											<button
-												class="bash-abort"
-												onClick={() => void call(bash().lang === "python" ? "abortEval" : "abortBash").catch(() => {})}
+											<Show
+												when={runOf().get(assistant().id)}
+												keyed
+												fallback={<AssistantCard assistant={assistant()} thinking />}
 											>
-												abort
-											</button>
-										</>
-									) : (
-										<span class="exit-badge" classList={{ nonzero: bash().exitCode !== 0 }}>
-											{bash().exitCode ?? "err"}
-										</span>
+												{(run) => {
+													// Final summary: pops out of the run (only when it ends the run — a
+													// tool-calling message keeps its tools inside the row).
+													const lastPopped =
+														run.items[run.items.length - 1]?.id === lastAssistantId();
+													if (assistant().id === lastAssistantId() && lastPopped) {
+														return <AssistantCard assistant={assistant()} thinking />;
+													}
+													if (run.key !== assistant().id) return null; // members render inside the run row
+													return run.tools.length > 0 ||
+														run.thinking.length > 0 ||
+														run.items.length > 1 ? (
+														<RunRow
+															run={lastPopped ? { ...run, items: run.items.slice(0, -1) } : run}
+														/>
+													) : (
+														<AssistantCard assistant={assistant()} thinking />
+													); // lone text-only turn stays a plain card
+												}}
+											</Show>
+										</Show>
 									)}
-								</div>
-								{bash().output && <pre>{bash().output}</pre>}
-								{bash().truncated && <div class="bash-truncated">(truncated)</div>}
-							</div>
+								</Match>
+								<Match when={item.kind === "tool" && item}>
+									{(tool) => (
+										<Show
+											when={state.toolCardsView === "consolidated"}
+											fallback={
+												<Show
+													when={state.toolCardsView === "expanded"}
+													fallback={<ToolStripCard item={tool()} />}
+												>
+													<ToolCard item={tool()} />
+												</Show>
+											}
+										>
+											{/* Consolidated: one row per run on its first member; later members render nothing. */}
+											<Show when={leadRun(tool())} keyed fallback={null}>
+												{(run) => <RunRow run={run} />}
+											</Show>
+										</Show>
+									)}
+								</Match>
+								<Match when={item.kind === "bash" && item}>
+									{(bash) => (
+										<div class="bash-card" classList={{ dimmed: bash().dimmed }}>
+											<div class="bash-header">
+												<span class="bash-cmd">
+													{bash().lang === "python" ? ">>> " : "$ "}
+													{bash().command}
+												</span>
+												{bash().status === "running" ? (
+													<>
+														<span class="tool-status" data-status="running">
+															running
+														</span>
+														<button
+															class="bash-abort"
+															onClick={() =>
+																void call(
+																	bash().lang === "python" ? "abortEval" : "abortBash",
+																).catch(() => {})
+															}
+														>
+															abort
+														</button>
+													</>
+												) : (
+													<span class="exit-badge" classList={{ nonzero: bash().exitCode !== 0 }}>
+														{bash().exitCode ?? "err"}
+													</span>
+												)}
+											</div>
+											{bash().output && <pre>{bash().output}</pre>}
+											{bash().truncated && <div class="bash-truncated">(truncated)</div>}
+										</div>
+									)}
+								</Match>
+								<Match when={item.kind === "compaction" && item}>
+									{(c) => (
+										<details class="compaction-item">
+											<summary>
+												compaction ({c().action})
+												{c().tokensBefore !== undefined && (
+													<span class="picker-detail"> · {c().tokensBefore} tokens before</span>
+												)}
+												{c().skipped && <span class="picker-detail"> · skipped</span>}
+												{c().aborted && <span class="picker-detail"> · aborted</span>}
+											</summary>
+											{c().errorMessage && <div class="msg-notice">{c().errorMessage}</div>}
+											{c().summary && <Markdown src={c().summary!} />}
+											{!c().summary && !c().errorMessage && (
+												<div class="tool-collapsed-note">no summary</div>
+											)}
+										</details>
+									)}
+								</Match>
+								<Match when={item.kind === "notice" && item}>
+									{(notice) => (
+										<div class="msg-notice">
+											{notice().href ? (
+												<a href={notice().href} target="_blank" rel="noreferrer">
+													{notice().message}
+												</a>
+											) : (
+												notice().message
+											)}
+										</div>
+									)}
+								</Match>
+							</Switch>
 						)}
-					</Match>
-						<Match when={item.kind === "compaction" && item}>
-						{c => (
-							<details class="compaction-item">
-								<summary>
-									compaction ({c().action})
-									{c().tokensBefore !== undefined && <span class="picker-detail"> · {c().tokensBefore} tokens before</span>}
-									{c().skipped && <span class="picker-detail"> · skipped</span>}
-									{c().aborted && <span class="picker-detail"> · aborted</span>}
-								</summary>
-								{c().errorMessage && <div class="msg-notice">{c().errorMessage}</div>}
-								{c().summary && <Markdown src={c().summary!} />}
-								{!c().summary && !c().errorMessage && <div class="tool-collapsed-note">no summary</div>}
-							</details>
-						)}
-					</Match>
-					<Match when={item.kind === "notice" && item}>
-						{notice => (
-							<div class="msg-notice">
-								{notice().href ? (
-									<a href={notice().href} target="_blank" rel="noreferrer">
-										{notice().message}
-									</a>
-								) : (
-									notice().message
-								)}
-							</div>
-						)}
-					</Match>
-					</Switch>
-				)}
-			</For>
-			<Show when={state.live.active}>
-				<div class="msg-assistant live">
-					<For each={state.live.blocks}>
-						{block =>
-							block.kind === "thinking" ? (
-								<details class="thinking-block" open>
-									<summary>thinking</summary>
-									<LiveBlock block={block} />
-								</details>
-							) : (
-								<LiveBlock block={block} />
-							)
-						}
 					</For>
-				</div>
-			</Show>
-			{/* In-progress shimmer: spans the whole agent turn (tool gaps included),
+					<Show when={state.live.active}>
+						<div class="msg-assistant live">
+							<For each={state.live.blocks}>
+								{(block) =>
+									block.kind === "thinking" ? (
+										<details class="thinking-block" open>
+											<summary>thinking</summary>
+											<LiveBlock block={block} />
+										</details>
+									) : (
+										<LiveBlock block={block} />
+									)
+								}
+							</For>
+						</div>
+					</Show>
+					{/* In-progress shimmer: spans the whole agent turn (tool gaps included),
 			    not just the live message card. Label tracks the latest tool-call
 			    intent like the TUI working message; the TUI's default phrase
 			    ("Working…") applies until the first intent lands. */}
-			<Show when={state.streaming}>
-				<div class="live-shimmer" aria-hidden="true">
-					<span class="shimmer-text">{state.workingIntent ?? "Working…"}</span>
+					<Show when={state.streaming}>
+						<div class="live-shimmer" aria-hidden="true">
+							<span class="shimmer-text">{state.workingIntent ?? "Working…"}</span>
+						</div>
+					</Show>
+					<Show when={zoomed()}>
+						{(img) => <FullImageOverlay image={img()} onClose={() => setZoomed(null)} />}
+					</Show>
 				</div>
-			</Show>
-			<Show when={zoomed()}>{img => <FullImageOverlay image={img()} onClose={() => setZoomed(null)} />}</Show>
-			</div>
-			{/* Floated over the stream's lower-right while unpinned; one click
+				{/* Floated over the stream's lower-right while unpinned; one click
 			    re-pins and lands at the live edge. */}
-			<Show when={jumpVisible()}>
-				<button class="jump-to-bottom" onClick={jumpToBottom} title="Jump to bottom" aria-label="Jump to bottom">
-					<ArrowDownIcon /> Jump to bottom
-				</button>
-			</Show>
+				<Show when={jumpVisible()}>
+					<button
+						class="jump-to-bottom"
+						onClick={jumpToBottom}
+						title="Jump to bottom"
+						aria-label="Jump to bottom"
+					>
+						<ArrowDownIcon /> Jump to bottom
+					</button>
+				</Show>
 			</div>
 		</>
 	);

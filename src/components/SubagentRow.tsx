@@ -14,7 +14,7 @@ export const STATUS_ICON: Record<string, Component<IconProps>> = {
 };
 
 /** One roster row for a subagent: status glyph, agent, description, status text. */
-export const SubagentRow: Component<{ sub: SubagentInfo }> = props => (
+export const SubagentRow: Component<{ sub: SubagentInfo }> = (props) => (
 	<div class="subagent-row">
 		<span class="subagent-glyph" data-status={props.sub.status}>
 			<Dynamic component={STATUS_ICON[props.sub.status] ?? LoaderIcon} />

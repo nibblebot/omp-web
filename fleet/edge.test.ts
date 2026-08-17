@@ -17,7 +17,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME, type RegisteredProject } from "../shared/protocol";
+import {
+	OMP_PROTO,
+	SSE_DELTA_SEQ_START,
+	SSE_EVENT_NAME,
+	type RegisteredProject,
+} from "../shared/protocol";
 import type { DaemonEntry, DaemonInfo, ServerFrame } from "../shared/protocol";
 import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK } from "../shared/sse";
 import type { FleetConfig } from "./config";
@@ -37,7 +42,11 @@ const FAKE_TOKEN = "sekret";
 const OTHER_CWD = "/tmp/other-proj";
 
 /** A wire-safe DaemonInfo (hub launch / broker roster entry) for fake emissions. */
-function daemonInfo(name: string, projectDir: string, overrides: Partial<DaemonInfo> = {}): DaemonInfo {
+function daemonInfo(
+	name: string,
+	projectDir: string,
+	overrides: Partial<DaemonInfo> = {},
+): DaemonInfo {
 	return {
 		name,
 		id: `${projectDir}/${name}`,
@@ -134,7 +143,11 @@ function startFakeSession(opts: { cwd?: string } = {}): FakeSession {
 					received.push(frame);
 					const cmd = frame as { type?: string; id?: string };
 					if (cmd.type === "call" && cmd.id !== undefined) {
-						const answer = encodeSseEvent(SSE_EVENT_NAME, { type: "call_result", id: cmd.id, ok: true, data: { echoed: frame } }, nextSeq++);
+						const answer = encodeSseEvent(
+							SSE_EVENT_NAME,
+							{ type: "call_result", id: cmd.id, ok: true, data: { echoed: frame } },
+							nextSeq++,
+						);
 						for (const write of live) write(answer);
 					}
 					return Response.json({ commandId: cmd.id ?? "" }, { status: 202 });
@@ -165,7 +178,21 @@ function startFakeSession(opts: { cwd?: string } = {}): FakeSession {
 	/** omp-session's stream priming: hello_ok FIRST (HTTP-level auth), then the attach priming. */
 	function prime(write: (block: string) => void): void {
 		let seq = 1;
-		write(encodeSseEvent(SSE_EVENT_NAME, { type: "hello_ok", proto: OMP_PROTO, name: "fake", cwd, pid: 4242, version: "0.0.0-test", sessionFile }, seq++));
+		write(
+			encodeSseEvent(
+				SSE_EVENT_NAME,
+				{
+					type: "hello_ok",
+					proto: OMP_PROTO,
+					name: "fake",
+					cwd,
+					pid: 4242,
+					version: "0.0.0-test",
+					sessionFile,
+				},
+				seq++,
+			),
+		);
 		// Phase 6 wire format: omp-session keeps the required "s1" on `attached` but
 		// no longer stamps session-scoped frames — the edge adds the daemonId.
 		write(encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: "s1" }, seq++));
@@ -182,7 +209,11 @@ function startFakeSession(opts: { cwd?: string } = {}): FakeSession {
 		streamCount: () => streams.length,
 		received,
 		emitDaemons: (entries: DaemonInfo[]) => {
-			const frame = encodeSseEvent(SSE_EVENT_NAME, { type: "daemons", daemons: entries }, nextSeq++);
+			const frame = encodeSseEvent(
+				SSE_EVENT_NAME,
+				{ type: "daemons", daemons: entries },
+				nextSeq++,
+			);
 			for (const write of live) write(frame);
 		},
 		close: () => {
@@ -240,7 +271,11 @@ function startPipeFake(opts: { heartbeatMs?: number } = {}): PipeFake {
 					const cmd = frame as { type?: string; id?: string };
 					if (cmd.type === "call" && cmd.id !== undefined) {
 						const seq = nextSeq++;
-						const block = encodeSseEvent(SSE_EVENT_NAME, { type: "call_result", id: cmd.id, ok: true, data: { echoed: frame } }, seq);
+						const block = encodeSseEvent(
+							SSE_EVENT_NAME,
+							{ type: "call_result", id: cmd.id, ok: true, data: { echoed: frame } },
+							seq,
+						);
 						ring.push({ seq, block });
 						for (const write of live) write(block);
 					}
@@ -266,11 +301,32 @@ function startPipeFake(opts: { heartbeatMs?: number } = {}): PipeFake {
 					// Full priming on EVERY open (the real daemon re-primes even
 					// for a delta resume), then ring replay for delta-era ids.
 					let seq = 1;
-					write(encodeSseEvent(SSE_EVENT_NAME, { type: "hello_ok", proto: OMP_PROTO, name: "pipe-fake", cwd: FAKE_CWD, pid: 4243, version: "0.0.0-test" }, seq++));
+					write(
+						encodeSseEvent(
+							SSE_EVENT_NAME,
+							{
+								type: "hello_ok",
+								proto: OMP_PROTO,
+								name: "pipe-fake",
+								cwd: FAKE_CWD,
+								pid: 4243,
+								version: "0.0.0-test",
+							},
+							seq++,
+						),
+					);
 					write(encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: "s1" }, seq++));
 					write(encodeSseEvent(SSE_EVENT_NAME, { type: "history", messages: [] }, seq++));
-					write(encodeSseEvent(SSE_EVENT_NAME, { type: "state", state: { ...FAKE_STATE, sessionFile: FAKE_SESSION_FILE } }, seq++));
-					write(encodeSseEvent(SSE_EVENT_NAME, { type: "available_commands", commands: [] }, seq++));
+					write(
+						encodeSseEvent(
+							SSE_EVENT_NAME,
+							{ type: "state", state: { ...FAKE_STATE, sessionFile: FAKE_SESSION_FILE } },
+							seq++,
+						),
+					);
+					write(
+						encodeSseEvent(SSE_EVENT_NAME, { type: "available_commands", commands: [] }, seq++),
+					);
 					write(encodeSseEvent(SSE_EVENT_NAME, { type: "ready", readyAt: Date.now() }, seq++));
 					const last = lastEventId === null ? NaN : Number(lastEventId);
 					if (Number.isFinite(last) && last >= SSE_DELTA_SEQ_START) {
@@ -381,12 +437,16 @@ class BrowserSocket {
 		if (this.#lastEventId !== null) headers["Last-Event-ID"] = this.#lastEventId;
 		const abort = new AbortController();
 		this.#abort = abort;
-		const res = await fetch(`http://127.0.0.1:${this.port}/events?client=${this.clientId}`, { headers, signal: abort.signal });
+		const res = await fetch(`http://127.0.0.1:${this.port}/events?client=${this.clientId}`, {
+			headers,
+			signal: abort.signal,
+		});
 		if (!res.ok || !res.body) throw new Error(`browser /events → HTTP ${res.status}`);
 		this.#readerDone = (async () => {
 			try {
 				for await (const unit of parseSseUnits(res.body!)) {
-					if (unit.kind !== "event" || unit.event !== SSE_EVENT_NAME || unit.id === undefined) continue;
+					if (unit.kind !== "event" || unit.event !== SSE_EVENT_NAME || unit.id === undefined)
+						continue;
 					this.#lastEventId = unit.id;
 					const frame = JSON.parse(unit.data) as ServerFrame;
 					this.frames.push(frame);
@@ -413,7 +473,9 @@ class BrowserSocket {
 		if (!this.#readerDone) throw new Error("browser not open");
 		await Promise.race([
 			this.#readerDone,
-			new Promise((_, reject) => setTimeout(() => reject(new Error("browser stream did not end")), timeoutMs)),
+			new Promise((_, reject) =>
+				setTimeout(() => reject(new Error("browser stream did not end")), timeoutMs),
+			),
 		]);
 	}
 
@@ -427,8 +489,14 @@ class BrowserSocket {
 		return this.open();
 	}
 
-	waitForFrame(pred: (f: ServerFrame) => boolean, what = "frame", timeoutMs = 5000): Promise<ServerFrame> {
-		return waitForEvent(this.events, (ev) => pred(ev.frame), what, timeoutMs).then((ev) => ev.frame);
+	waitForFrame(
+		pred: (f: ServerFrame) => boolean,
+		what = "frame",
+		timeoutMs = 5000,
+	): Promise<ServerFrame> {
+		return waitForEvent(this.events, (ev) => pred(ev.frame), what, timeoutMs).then(
+			(ev) => ev.frame,
+		);
 	}
 
 	waitForEvent(
@@ -454,7 +522,8 @@ function serveEdge(edge: FleetEdge): { port: number; stop(): void } {
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
-		fetch: async (req) => (await edge.handleFetch(req)) ?? new Response("not found", { status: 404 }),
+		fetch: async (req) =>
+			(await edge.handleFetch(req)) ?? new Response("not found", { status: 404 }),
 	});
 	return { port: server.port!, stop: () => server.stop(true) };
 }
@@ -501,7 +570,10 @@ async function collectReplay(
 }
 
 /** Narrow a replay entry to an event frame (type guard preserving narrowing). */
-function isEventEntry(entry: { id: number; frame: ServerFrame }): entry is { id: number; frame: ServerFrame & { type: "event" } } {
+function isEventEntry(entry: {
+	id: number;
+	frame: ServerFrame;
+}): entry is { id: number; frame: ServerFrame & { type: "event" } } {
 	return entry.frame.type === "event";
 }
 
@@ -594,7 +666,12 @@ describe("fleet edge", () => {
 		};
 		// Capture supervisor.spawn inits for the labels-passthrough tests.
 		const origSpawn = server.supervisor.spawn.bind(server.supervisor);
-		server.supervisor.spawn = async (init: { cwd: string; template?: string; name?: string; labels?: string[] }) => {
+		server.supervisor.spawn = async (init: {
+			cwd: string;
+			template?: string;
+			name?: string;
+			labels?: string[];
+		}) => {
 			spawnInits.push({ cwd: init.cwd, template: init.template, labels: init.labels });
 			spawnedByEdge = await origSpawn(init);
 			return spawnedByEdge;
@@ -629,12 +706,18 @@ describe("fleet edge", () => {
 		});
 		expect(res.status).toBe(200);
 		remoteEntry = (await res.json()) as RegistryEntry;
-		await waitFor(() => (server.registry.get(remoteEntry.daemonId)?.status === "ready" ? "ready" : null), 5000, "remote daemon ready");
+		await waitFor(
+			() => (server.registry.get(remoteEntry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"remote daemon ready",
+		);
 	});
 
 	test("roster is unicast on open and broadcast on registry change, without tokens", async () => {
 		const browser = await openBrowser(server.port);
-		const roster = asRoster(await browser.waitForFrame((f) => f.type === "roster", "initial roster"));
+		const roster = asRoster(
+			await browser.waitForFrame((f) => f.type === "roster", "initial roster"),
+		);
 		const ids = roster.daemons.map((d) => d.daemonId);
 		expect(ids).toContain(remoteEntry.daemonId);
 		expect(ids).toContain(spawnedEntry.daemonId);
@@ -649,7 +732,10 @@ describe("fleet edge", () => {
 		// A registry mutation broadcasts a fresh roster to every edge stream.
 		server.registry.update(remoteEntry.daemonId, { labels: ["env=test"] });
 		const second = asRoster(
-			await browser.waitForFrame((f) => f.type === "roster" && JSON.stringify(f).includes("env=test"), "roster broadcast"),
+			await browser.waitForFrame(
+				(f) => f.type === "roster" && JSON.stringify(f).includes("env=test"),
+				"roster broadcast",
+			),
 		);
 		const changed = second.daemons.find((d) => d.daemonId === remoteEntry.daemonId);
 		expect(changed?.labels).toContain("env=test");
@@ -658,7 +744,10 @@ describe("fleet edge", () => {
 
 	test("registered_projects primes on open and broadcasts on project registration, without tokens", async () => {
 		const browser = await openBrowser(server.port);
-		const priming = await browser.waitForFrame((f) => f.type === "registered_projects", "registered_projects priming");
+		const priming = await browser.waitForFrame(
+			(f) => f.type === "registered_projects",
+			"registered_projects priming",
+		);
 		if (priming.type !== "registered_projects") throw new Error("expected registered_projects");
 		expect(priming.projects).toEqual([]);
 
@@ -670,12 +759,18 @@ describe("fleet edge", () => {
 		const project = await server.registry.addProject(repoDir);
 		try {
 			const frame = await browser.waitForFrame(
-				(f) => f.type === "registered_projects" && f.projects.some((p) => p.projectId === project.projectId),
+				(f) =>
+					f.type === "registered_projects" &&
+					f.projects.some((p) => p.projectId === project.projectId),
 				"registered_projects broadcast",
 			);
 			if (frame.type !== "registered_projects") throw new Error("expected registered_projects");
 			expect(frame.projects).toHaveLength(1);
-			expect(frame.projects[0]).toMatchObject({ projectId: project.projectId, path: project.path, name: "registered-repo" });
+			expect(frame.projects[0]).toMatchObject({
+				projectId: project.projectId,
+				path: project.path,
+				name: "registered-repo",
+			});
 			expect(typeof frame.projects[0].addedAt).toBe("number");
 			expect(JSON.stringify(frame)).not.toContain(FAKE_TOKEN);
 		} finally {
@@ -690,13 +785,18 @@ describe("fleet edge", () => {
 		server.connector.disconnect(remoteEntry.daemonId);
 		server.connector.connect(remoteEntry.daemonId);
 		const status = await browser.waitForFrame(
-			(f) => f.type === "daemon_status" && f.daemonId === remoteEntry.daemonId && f.status === "ready",
+			(f) =>
+				f.type === "daemon_status" && f.daemonId === remoteEntry.daemonId && f.status === "ready",
 			"daemon_status ready",
 		);
 		if (status.type !== "daemon_status") throw new Error("expected daemon_status");
 		expect(status.daemonId).toBe(remoteEntry.daemonId);
 		expect(status.status).toBe("ready");
-		await waitFor(() => (server.registry.get(remoteEntry.daemonId)?.status === "ready" ? "ready" : null), 5000, "remote ready again");
+		await waitFor(
+			() => (server.registry.get(remoteEntry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"remote ready again",
+		);
 	});
 
 	test("POST /command with an unknown client id is a 400", async () => {
@@ -714,7 +814,11 @@ describe("fleet edge", () => {
 		await browser.send({ type: "list_projects" });
 		const frame = await browser.waitForFrame((f) => f.type === "projects", "projects frame");
 		if (frame.type !== "projects") throw new Error("expected projects");
-		expect(frame.projects).toContainEqual({ name: "proj", path: join(rootsDir, "proj"), isWorktree: false });
+		expect(frame.projects).toContainEqual({
+			name: "proj",
+			path: join(rootsDir, "proj"),
+			isWorktree: false,
+		});
 	});
 
 	test("spawn with a bad path answers an error frame", async () => {
@@ -734,7 +838,10 @@ describe("fleet edge", () => {
 		await browser.send({ type: "spawn", cwd: FAKE_CWD, labels: ["env=prod", "tag=api"] });
 		// The real supervisor runs underneath: wait until the child dials ready.
 		await waitFor(
-			() => (spawnedByEdge && server.registry.get(spawnedByEdge.daemonId)?.status === "ready" ? "ready" : null),
+			() =>
+				spawnedByEdge && server.registry.get(spawnedByEdge.daemonId)?.status === "ready"
+					? "ready"
+					: null,
 			4000,
 			"labeled spawn ready",
 		);
@@ -770,7 +877,10 @@ describe("fleet edge", () => {
 		spawnedByEdge = null; // the wait below must observe the NEW spawn
 		await browser.send({ type: "spawn", cwd: FAKE_CWD });
 		await waitFor(
-			() => (spawnedByEdge && server.registry.get(spawnedByEdge.daemonId)?.status === "ready" ? "ready" : null),
+			() =>
+				spawnedByEdge && server.registry.get(spawnedByEdge.daemonId)?.status === "ready"
+					? "ready"
+					: null,
 			4000,
 			"unlabeled spawn ready",
 		);
@@ -826,8 +936,14 @@ describe("fleet edge", () => {
 		pipeA = fake.streams()[before];
 		expect(pipeA.authHeader).toBe(`Bearer ${FAKE_TOKEN}`);
 		// Priming is forwarded with the sessionId rewritten to the daemonId.
-		await browserA.waitForFrame((f) => f.type === "history" && f.sessionId === remoteEntry.daemonId, "history");
-		await browserA.waitForFrame((f) => f.type === "state" && f.sessionId === remoteEntry.daemonId, "state");
+		await browserA.waitForFrame(
+			(f) => f.type === "history" && f.sessionId === remoteEntry.daemonId,
+			"history",
+		);
+		await browserA.waitForFrame(
+			(f) => f.type === "state" && f.sessionId === remoteEntry.daemonId,
+			"state",
+		);
 		await browserA.waitForFrame(
 			(f) => f.type === "available_commands" && f.sessionId === remoteEntry.daemonId,
 			"available_commands",
@@ -835,7 +951,10 @@ describe("fleet edge", () => {
 		await browserA.waitForFrame((f) => f.type === "ready", "ready");
 		// Finding #61: the proto-gated hello_ok is FORWARDED (not swallowed)
 		// so the browser's own proto check runs in roster mode too.
-		const hello = await browserA.waitForFrame((f) => f.type === "hello_ok", "hello_ok (proto-gated)");
+		const hello = await browserA.waitForFrame(
+			(f) => f.type === "hello_ok",
+			"hello_ok (proto-gated)",
+		);
 		expect((hello as { proto?: unknown }).proto).toBe(OMP_PROTO);
 		// Every forwarded session-scoped frame carries the daemonId.
 		for (const f of browserA.frames) {
@@ -845,12 +964,24 @@ describe("fleet edge", () => {
 
 	test("browser calls are forwarded verbatim and call_result routes back", async () => {
 		await browserA.send({ type: "call", id: "c1", method: "prompt", args: ["hello"] });
-		const result = await browserA.waitForFrame((f) => f.type === "call_result" && f.id === "c1", "call_result c1");
+		const result = await browserA.waitForFrame(
+			(f) => f.type === "call_result" && f.id === "c1",
+			"call_result c1",
+		);
 		if (result.type !== "call_result") throw new Error("expected call_result");
 		expect(result.ok).toBe(true);
 		// The command reached the daemon's POST /command (with no hello before it).
-		await waitFor(() => (fake.received.find((m) => (m as { id?: string }).id === "c1") ?? null), 5000, "call c1 at fake");
-		expect(fake.received.find((m) => (m as { id?: string }).id === "c1")).toEqual({ type: "call", id: "c1", method: "prompt", args: ["hello"] });
+		await waitFor(
+			() => fake.received.find((m) => (m as { id?: string }).id === "c1") ?? null,
+			5000,
+			"call c1 at fake",
+		);
+		expect(fake.received.find((m) => (m as { id?: string }).id === "c1")).toEqual({
+			type: "call",
+			id: "c1",
+			method: "prompt",
+			args: ["hello"],
+		});
 	});
 
 	test("a second browser attach gets an independent pipe and its own priming", async () => {
@@ -862,18 +993,33 @@ describe("fleet edge", () => {
 			(f) => f.type === "attached" && f.sessionId === remoteEntry.daemonId,
 			"second attached",
 		);
-		await waitFor(() => (fake.streamCount() === before + 1 ? "pipe B" : null), 5000, "pipe B stream");
+		await waitFor(
+			() => (fake.streamCount() === before + 1 ? "pipe B" : null),
+			5000,
+			"pipe B stream",
+		);
 		const pipeB = fake.streams()[before];
 		expect(pipeB).not.toBe(pipeA);
-		await browserB.waitForFrame((f) => f.type === "history" && f.sessionId === remoteEntry.daemonId, "history B");
+		await browserB.waitForFrame(
+			(f) => f.type === "history" && f.sessionId === remoteEntry.daemonId,
+			"history B",
+		);
 		// Routing is per-browser: each browser's command reaches the daemon and
 		// answers on its own stream (the daemon broadcasts; pendings dedup by id).
 		await browserA.send({ type: "call", id: "a2", method: "getQueuedMessages" });
 		await browserB.send({ type: "call", id: "b2", method: "getQueuedMessages" });
 		await browserA.waitForFrame((f) => f.type === "call_result" && f.id === "a2", "a2 result");
 		await browserB.waitForFrame((f) => f.type === "call_result" && f.id === "b2", "b2 result");
-		await waitFor(() => (fake.received.some((m) => (m as { id?: string }).id === "a2") ? "a2 at daemon" : null), 5000, "a2 at daemon");
-		await waitFor(() => (fake.received.some((m) => (m as { id?: string }).id === "b2") ? "b2 at daemon" : null), 5000, "b2 at daemon");
+		await waitFor(
+			() => (fake.received.some((m) => (m as { id?: string }).id === "a2") ? "a2 at daemon" : null),
+			5000,
+			"a2 at daemon",
+		);
+		await waitFor(
+			() => (fake.received.some((m) => (m as { id?: string }).id === "b2") ? "b2 at daemon" : null),
+			5000,
+			"b2 at daemon",
+		);
 	});
 
 	test("browser close closes the pipe and releases the connector retain", async () => {
@@ -886,7 +1032,9 @@ describe("fleet edge", () => {
 		expect(retains).toBe(2); // pipe A + pipe B
 		// The idle-drop timer (60s) has not fired: the connector socket is alive.
 		expect(server.connector.isConnected(remoteEntry.daemonId)).toBe(true);
-		expect(browserA.frames.some((f) => f.type === "error" && f.error === "daemon connection lost")).toBe(false);
+		expect(
+			browserA.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
+		).toBe(false);
 	});
 
 	test("an unattached call fails fast with an id-keyed call_result, not a bare error frame (finding #59)", async () => {
@@ -895,12 +1043,17 @@ describe("fleet edge", () => {
 		// No attach: the daemon-less forward must answer the call BY ID so the
 		// client's pending call() promise settles instead of hanging 30s.
 		await browser.send({ type: "call", id: "c-unattached", method: "prompt", args: ["hi"] });
-		const result = await browser.waitForFrame((f) => f.type === "call_result" && f.id === "c-unattached", "call_result c-unattached");
+		const result = await browser.waitForFrame(
+			(f) => f.type === "call_result" && f.id === "c-unattached",
+			"call_result c-unattached",
+		);
 		if (result.type !== "call_result") throw new Error("expected call_result");
 		expect(result.ok).toBe(false);
 		expect(result.error).toContain("not attached");
 		// No global error frame rides along for this call.
-		expect(browser.frames.some((f) => f.type === "error" && String(f.error).includes("not attached"))).toBe(false);
+		expect(
+			browser.frames.some((f) => f.type === "error" && String(f.error).includes("not attached")),
+		).toBe(false);
 	});
 
 	test("clientId rebind closes the previous live stream and broadcasts ring exactly once (finding #25)", async () => {
@@ -915,7 +1068,11 @@ describe("fleet edge", () => {
 			(f) => f.type === "attached" && f.sessionId === remoteEntry.daemonId,
 			"attached (rebind old)",
 		);
-		await waitFor(() => (fake.streamCount() === beforePipe + 1 ? "pipe" : null), 5000, "rebind pipe stream");
+		await waitFor(
+			() => (fake.streamCount() === beforePipe + 1 ? "pipe" : null),
+			5000,
+			"rebind pipe stream",
+		);
 		const oldPipe = fake.streams()[beforePipe];
 
 		// Rebind: a SECOND /events open with the SAME clientId while the old
@@ -969,10 +1126,17 @@ describe("fleet edge", () => {
 		expect(entryNow?.status).toBe("ready");
 		expect(server.connector.isConnected(spawnedEntry.daemonId)).toBe(true);
 		// The wake path produced a connector dial + this browser's pipe.
-		await waitFor(() => (fake.streamCount() === before + 2 ? "connector+pipe" : null), 5000, "connector + pipe streams");
+		await waitFor(
+			() => (fake.streamCount() === before + 2 ? "connector+pipe" : null),
+			5000,
+			"connector + pipe streams",
+		);
 		const pipeC = fake.streams()[before + 1];
 		expect(pipeC.authHeader).toBe(`Bearer ${entryNow?.token}`);
-		await browserC.waitForFrame((f) => f.type === "history" && f.sessionId === spawnedEntry.daemonId, "history C");
+		await browserC.waitForFrame(
+			(f) => f.type === "history" && f.sessionId === spawnedEntry.daemonId,
+			"history C",
+		);
 	});
 
 	test("spawn_resume then attach wakes an asleep spawned daemon exactly once", async () => {
@@ -994,11 +1158,15 @@ describe("fleet edge", () => {
 	});
 
 	test("GET /ctl/sessions/{id}/stderr returns text for spawned and 404 for remote", async () => {
-		const spawned = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions/${spawnedEntry.daemonId}/stderr`);
+		const spawned = await fetch(
+			`http://127.0.0.1:${server.port}/ctl/sessions/${spawnedEntry.daemonId}/stderr`,
+		);
 		expect(spawned.status).toBe(200);
 		const body = (await spawned.json()) as { text?: unknown };
 		expect(typeof body.text).toBe("string");
-		const remote = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions/${remoteEntry.daemonId}/stderr`);
+		const remote = await fetch(
+			`http://127.0.0.1:${server.port}/ctl/sessions/${remoteEntry.daemonId}/stderr`,
+		);
 		expect(remote.status).toBe(404);
 	});
 
@@ -1030,17 +1198,29 @@ describe("fleet edge", () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/add`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ name: "daemons-b", url: fake2.url, token: FAKE_TOKEN, cwd: OTHER_CWD }),
+			body: JSON.stringify({
+				name: "daemons-b",
+				url: fake2.url,
+				token: FAKE_TOKEN,
+				cwd: OTHER_CWD,
+			}),
 		});
 		expect(res.status).toBe(200);
 		daemonsEntryB = (await res.json()) as RegistryEntry;
-		await waitFor(() => (server.registry.get(daemonsEntryB.daemonId)?.status === "ready" ? "ready" : null), 5000, "second daemon ready");
+		await waitFor(
+			() => (server.registry.get(daemonsEntryB.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"second daemon ready",
+		);
 		// A browser to funnel the emits into the cache (update broadcasts are observable).
 		const funnel = await openBrowser(server.port);
 		await funnel.waitForFrame((f) => f.type === "roster", "roster");
 		// fake (cwd FAKE_CWD) reports its own roster; fake2 (cwd OTHER_CWD)
 		// reports its own PLUS a stale cross-cwd entry for FAKE_CWD arriving later.
-		fake.emitDaemons([daemonInfo("hub-a", FAKE_CWD, { pid: 1111 }), daemonInfo("shared", FAKE_CWD, { pid: 1112 })]);
+		fake.emitDaemons([
+			daemonInfo("hub-a", FAKE_CWD, { pid: 1111 }),
+			daemonInfo("shared", FAKE_CWD, { pid: 1112 }),
+		]);
 		fake2.emitDaemons([
 			daemonInfo("hub-b", OTHER_CWD, { pid: 2221 }),
 			daemonInfo("shared", FAKE_CWD, { pid: 2222 }),
@@ -1074,7 +1254,10 @@ describe("fleet edge", () => {
 	test("aggregated daemons: full-replace per daemon drops disappeared entries", async () => {
 		// fake2's next frame drops "only-b"; the merged frame must lose it
 		// while keeping fake2's remaining entry and fake1's roster.
-		fake2.emitDaemons([daemonInfo("hub-b", OTHER_CWD, { pid: 2221 }), daemonInfo("shared", FAKE_CWD, { pid: 2222 })]);
+		fake2.emitDaemons([
+			daemonInfo("hub-b", OTHER_CWD, { pid: 2221 }),
+			daemonInfo("shared", FAKE_CWD, { pid: 2222 }),
+		]);
 		const frame = await daemonsBrowser.waitForFrame(
 			(f) => f.type === "daemons" && !f.daemons.some((d) => d.name === "only-b"),
 			"full-replace merged frame",
@@ -1090,7 +1273,10 @@ describe("fleet edge", () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		await browser.send({ type: "attach", sessionId: remoteEntry.daemonId });
-		await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === remoteEntry.daemonId, "attached");
+		await browser.waitForFrame(
+			(f) => f.type === "attached" && f.sessionId === remoteEntry.daemonId,
+			"attached",
+		);
 		// The daemon refreshes its broker roster with a new entry; the pipe
 		// receives it too, but the browser must only see the merged broadcast.
 		fake.emitDaemons([
@@ -1129,7 +1315,11 @@ describe("fleet edge", () => {
 		// The removed daemon's tap is gone: a late frame no longer updates the cache.
 		fake2.emitDaemons([daemonInfo("zombie", OTHER_CWD, { pid: 9999 })]);
 		await sleep(50);
-		expect(daemonsBrowser.frames.some((f) => f.type === "daemons" && f.daemons.some((d) => d.name === "zombie"))).toBe(false);
+		expect(
+			daemonsBrowser.frames.some(
+				(f) => f.type === "daemons" && f.daemons.some((d) => d.name === "zombie"),
+			),
+		).toBe(false);
 	});
 
 	test("remove evicts a remote daemon and broadcasts a roster without it", async () => {
@@ -1141,7 +1331,11 @@ describe("fleet edge", () => {
 		});
 		expect(res.status).toBe(200);
 		const added = (await res.json()) as RegistryEntry;
-		await waitFor(() => (server.registry.get(added.daemonId)?.status === "ready" ? "ready" : null), 5000, "removable daemon ready");
+		await waitFor(
+			() => (server.registry.get(added.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"removable daemon ready",
+		);
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame(
 			(f) => f.type === "roster" && f.daemons.some((d) => d.daemonId === added.daemonId),
@@ -1163,7 +1357,8 @@ describe("fleet edge", () => {
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		await browser.send({ type: "remove", daemonId: "d999" });
 		const frame = await browser.waitForFrame(
-			(f) => f.type === "error" && typeof f.error === "string" && f.error.includes("unknown daemon"),
+			(f) =>
+				f.type === "error" && typeof f.error === "string" && f.error.includes("unknown daemon"),
 			"remove unknown error",
 		);
 		if (frame.type !== "error") throw new Error("expected error");
@@ -1175,7 +1370,10 @@ describe("fleet edge", () => {
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		// Neither command may be rejected as an unknown browser command.
 		await browser.send({ type: "add_project" });
-		const addErr = await browser.waitForFrame((f) => f.type === "error" && f.error === "add_project: missing path", "add_project missing path");
+		const addErr = await browser.waitForFrame(
+			(f) => f.type === "error" && f.error === "add_project: missing path",
+			"add_project missing path",
+		);
 		expect(addErr.type).toBe("error");
 		await browser.send({ type: "remove_project" });
 		const rmErr = await browser.waitForFrame(
@@ -1183,7 +1381,11 @@ describe("fleet edge", () => {
 			"remove_project missing projectId",
 		);
 		expect(rmErr.type).toBe("error");
-		expect(browser.frames.filter((f) => f.type === "error" && f.error === "fleet edge: use spawn/stop/roster")).toHaveLength(0);
+		expect(
+			browser.frames.filter(
+				(f) => f.type === "error" && f.error === "fleet edge: use spawn/stop/roster",
+			),
+		).toHaveLength(0);
 	});
 
 	test("add_project registers a project (broadcast) and dedup answers an error frame naming the existing projectId", async () => {
@@ -1195,7 +1397,9 @@ describe("fleet edge", () => {
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		await browser.send({ type: "add_project", path: repoDir });
 		const frame = await browser.waitForFrame(
-			(f) => f.type === "registered_projects" && f.projects.some((p) => p.path === realpathSync(repoDir)),
+			(f) =>
+				f.type === "registered_projects" &&
+				f.projects.some((p) => p.path === realpathSync(repoDir)),
 			"registered_projects broadcast",
 		);
 		if (frame.type !== "registered_projects") throw new Error("expected registered_projects");
@@ -1206,12 +1410,15 @@ describe("fleet edge", () => {
 		// naming the existing projectId.
 		await browser.send({ type: "add_project", path: repoDir });
 		const dup = await browser.waitForFrame(
-			(f) => f.type === "error" && typeof f.error === "string" && f.error.includes(project.projectId),
+			(f) =>
+				f.type === "error" && typeof f.error === "string" && f.error.includes(project.projectId),
 			"add_project dedup error",
 		);
 		if (dup.type !== "error") throw new Error("expected error");
 		expect(dup.error).toContain("already registered");
-		expect(server.registry.projects().filter((p) => p.path === realpathSync(repoDir))).toHaveLength(1);
+		expect(server.registry.projects().filter((p) => p.path === realpathSync(repoDir))).toHaveLength(
+			1,
+		);
 		try {
 			server.registry.removeProject(project.projectId);
 		} catch {
@@ -1228,13 +1435,21 @@ describe("fleet edge", () => {
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		const before = spawnInits.length;
 		spawnedByEdge = null; // the wait below must observe the NEW spawn
-		await browser.send({ type: "add_project", path: repoDir, start: true, template: "local", labels: ["env=prod"] });
+		await browser.send({
+			type: "add_project",
+			path: repoDir,
+			start: true,
+			template: "local",
+			labels: ["env=prod"],
+		});
 		// The spawn + projectId tag land asynchronously after the broadcast.
 		const tagged = await waitFor(
 			() => {
 				const project = server.registry.projects().find((p) => p.path === realpathSync(repoDir));
 				const entry = spawnedByEdge ? server.registry.get(spawnedByEdge.daemonId) : undefined;
-				return project && entry && entry.projectId === project.projectId ? { project, entry } : null;
+				return project && entry && entry.projectId === project.projectId
+					? { project, entry }
+					: null;
 			},
 			5000,
 			"spawned entry tagged with projectId",
@@ -1285,7 +1500,9 @@ describe("fleet edge", () => {
 			server.registry.remove(ref.daemonId);
 			await browser.send({ type: "remove_project", projectId: project.projectId });
 			await browser.waitForFrame(
-				(f) => f.type === "registered_projects" && !f.projects.some((p) => p.projectId === project.projectId),
+				(f) =>
+					f.type === "registered_projects" &&
+					!f.projects.some((p) => p.projectId === project.projectId),
 				"registered_projects after remove",
 			);
 			expect(server.registry.projects().some((p) => p.projectId === project.projectId)).toBe(false);
@@ -1399,11 +1616,31 @@ describe("edge pure helpers", () => {
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry);
-		const config: FleetConfig = { roots: [], templates: { local: { command: "true" } }, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
+		const config: FleetConfig = {
+			roots: [],
+			templates: { local: { command: "true" } },
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		// The cap fits the priming (small roster) + the ring replay, but a
 		// synchronous burst of roster broadcasts overflows it.
-		const edge = new FleetEdge({ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } }, { backpressureBytes: 4096 });
+		const edge = new FleetEdge(
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
+			{ backpressureBytes: 4096 },
+		);
 		const served = serveEdge(edge);
 		try {
 			const browser = await openBrowser(served.port);
@@ -1411,8 +1648,18 @@ describe("edge pure helpers", () => {
 			await browser.waitForFrame((f) => f.type === "roster", "priming roster");
 			// One delta the browser reads, so its Last-Event-ID lands in the
 			// delta range (≥ SSE_DELTA_SEQ_START) before the drop.
-			const x1 = registry.create({ name: "x1", cwd: "/x1", project: "x1", labels: [], mode: "remote", status: "connecting" });
-			await browser.waitForFrame((f) => f.type === "roster" && f.daemons.some((d) => d.daemonId === x1.daemonId), "first delta roster");
+			const x1 = registry.create({
+				name: "x1",
+				cwd: "/x1",
+				project: "x1",
+				labels: [],
+				mode: "remote",
+				status: "connecting",
+			});
+			await browser.waitForFrame(
+				(f) => f.type === "roster" && f.daemons.some((d) => d.daemonId === x1.daemonId),
+				"first delta roster",
+			);
 			// Overflow: a synchronous burst of roster broadcasts (constant-size
 			// blocks) far exceeds the cap while the browser is not reading —
 			// the stream must be dropped.
@@ -1425,7 +1672,10 @@ describe("edge pure helpers", () => {
 			// The replay delivers the ringed deltas (delta-era seqs) — the
 			// final burst roster — not just the fresh priming.
 			const replayed = await browser.waitForEvent(
-				(ev) => ev.frame.type === "roster" && ev.frame.daemons.some((d) => d.daemonId === x1.daemonId && d.labels.includes("v=40")) && ev.id >= SSE_DELTA_SEQ_START,
+				(ev) =>
+					ev.frame.type === "roster" &&
+					ev.frame.daemons.some((d) => d.daemonId === x1.daemonId && d.labels.includes("v=40")) &&
+					ev.id >= SSE_DELTA_SEQ_START,
 				"replayed final roster",
 			);
 			expect(replayed.frame.type).toBe("roster");
@@ -1442,7 +1692,11 @@ describe("edge pure helpers", () => {
 		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-liveness-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
 		const daemon = startPipeFake({ heartbeatMs: 30 });
 		const entry = registry.create({
 			name: "pipe-live",
@@ -1456,10 +1710,27 @@ describe("edge pure helpers", () => {
 		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 3000);
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
+		const config: FleetConfig = {
+			roots: [],
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
-			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
 		);
 		let releases = 0;
@@ -1473,28 +1744,45 @@ describe("edge pure helpers", () => {
 			const browser = await openBrowser(served.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			await browser.send({ type: "attach", sessionId: entry.daemonId });
-			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
 			// Heartbeats every 30ms keep the 200ms silence deadline fed: the
 			// pipe survives far past it — no loss frame, no teardown.
 			await sleep(600);
-			expect(browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost")).toBe(false);
+			expect(
+				browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
+			).toBe(false);
 			// Commands still round-trip through the live pipe.
 			await browser.send({ type: "call", id: "l1", method: "prompt", args: ["hi"] });
-			await browser.waitForFrame((f) => f.type === "call_result" && f.id === "l1", "call_result l1");
+			await browser.waitForFrame(
+				(f) => f.type === "call_result" && f.id === "l1",
+				"call_result l1",
+			);
 			// Silence: the daemon stops sending; the deadline trips → the pipe
 			// REDIALS (finding #4) instead of detaching: no error frame, no
 			// retain release, and the browser stays attached via the re-priming.
 			const attachedBefore = browser.frames.filter((f) => f.type === "attached").length;
 			const streamsBefore = daemon.lastEventIds().length;
 			daemon.pause();
-			await waitFor(() => (daemon.lastEventIds().length > streamsBefore ? "redial" : null), 3000, "pipe redial after silence");
+			await waitFor(
+				() => (daemon.lastEventIds().length > streamsBefore ? "redial" : null),
+				3000,
+				"pipe redial after silence",
+			);
 			// The redial's fresh priming reaches the SAME browser stream.
 			await waitFor(
-				() => (browser.frames.filter((f) => f.type === "attached").length > attachedBefore ? "re-primed" : null),
+				() =>
+					browser.frames.filter((f) => f.type === "attached").length > attachedBefore
+						? "re-primed"
+						: null,
 				3000,
 				"re-prime after redial",
 			);
-			expect(browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost")).toBe(false);
+			expect(
+				browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
+			).toBe(false);
 			expect(releases).toBe(0);
 			expect(connector.isConnected(entry.daemonId)).toBe(true);
 		} finally {
@@ -1511,11 +1799,32 @@ describe("edge pure helpers", () => {
 		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-resume-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
+		const config: FleetConfig = {
+			roots: [],
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
-			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
 		);
 		const daemon = startPipeFake({ heartbeatMs: 30 });
@@ -1534,11 +1843,17 @@ describe("edge pure helpers", () => {
 			const browser = await openBrowser(served.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			await browser.send({ type: "attach", sessionId: entry.daemonId });
-			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
 			// A delta raises the pipe's Last-Event-ID into the delta era. The
 			// connector's control stream dials first (the wake), the pipe second.
 			await browser.send({ type: "call", id: "c1", method: "prompt", args: ["hi"] });
-			await browser.waitForFrame((f) => f.type === "call_result" && f.id === "c1", "call_result c1");
+			await browser.waitForFrame(
+				(f) => f.type === "call_result" && f.id === "c1",
+				"call_result c1",
+			);
 			expect(daemon.lastEventIds().length).toBe(2); // connector stream + pipe
 			const deltaSeq = SSE_DELTA_SEQ_START; // c1's answer is the first delta
 			// Kill ONLY the pipe (index 1): the connector's control stream keeps
@@ -1546,23 +1861,41 @@ describe("edge pure helpers", () => {
 			daemon.killStream(1);
 			// A delta emitted while the pipe is DOWN must be replayed after the
 			// redial — ringed before the redial dials (backoff is 10-50ms).
-			daemon.emitDelta({ type: "event", event: { type: "notice", level: "info", message: "after-kill" } });
-			await waitFor(() => (daemon.lastEventIds().length === 3 ? "redial" : null), 3000, "pipe redial");
+			daemon.emitDelta({
+				type: "event",
+				event: { type: "notice", level: "info", message: "after-kill" },
+			});
+			await waitFor(
+				() => (daemon.lastEventIds().length === 3 ? "redial" : null),
+				3000,
+				"pipe redial",
+			);
 			// The redial resumes from the last forwarded daemon seq.
 			expect(daemon.lastEventIds()[2]).toBe(String(deltaSeq));
 			// The missed delta is replayed to the STILL-ATTACHED browser on the
 			// same stream — no loss frame, no user re-attach.
 			await browser.waitForFrame(
-				(f) => f.type === "event" && (f.event as { type?: string })?.type === "notice" && (f.event as { message?: string })?.message === "after-kill",
+				(f) =>
+					f.type === "event" &&
+					(f.event as { type?: string })?.type === "notice" &&
+					(f.event as { message?: string })?.message === "after-kill",
 				"replayed notice",
 			);
-			expect(browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost")).toBe(false);
+			expect(
+				browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
+			).toBe(false);
 			// The redial re-primed (the daemon always primes every open), so the
 			// browser got a second attached frame — attachment survived.
-			expect(browser.frames.filter((f) => f.type === "attached" && f.sessionId === entry.daemonId).length).toBeGreaterThanOrEqual(2);
+			expect(
+				browser.frames.filter((f) => f.type === "attached" && f.sessionId === entry.daemonId)
+					.length,
+			).toBeGreaterThanOrEqual(2);
 			// Subsequent frames still flow without any re-attach.
 			await browser.send({ type: "call", id: "c2", method: "prompt", args: ["again"] });
-			await browser.waitForFrame((f) => f.type === "call_result" && f.id === "c2", "call_result c2");
+			await browser.waitForFrame(
+				(f) => f.type === "call_result" && f.id === "c2",
+				"call_result c2",
+			);
 		} finally {
 			edge.close();
 			await supervisor.close();
@@ -1577,11 +1910,32 @@ describe("edge pure helpers", () => {
 		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-priming-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
+		const config: FleetConfig = {
+			roots: [],
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
-			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
 		);
 		const daemon = startPipeFake({ heartbeatMs: 30 });
@@ -1600,20 +1954,32 @@ describe("edge pure helpers", () => {
 			const browser = await openBrowser(served.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			await browser.send({ type: "attach", sessionId: entry.daemonId });
-			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
 			// The pipe has only seen priming seqs (1..k < SSE_DELTA_SEQ_START).
 			// Kill it BEFORE any delta: the redial must NOT carry Last-Event-ID
 			// and the daemon's full re-prime must reach the still-attached browser.
 			const attachedBefore = browser.frames.filter((f) => f.type === "attached").length;
 			daemon.killStream(1);
-			await waitFor(() => (daemon.lastEventIds().length === 3 ? "redial" : null), 3000, "pipe redial");
+			await waitFor(
+				() => (daemon.lastEventIds().length === 3 ? "redial" : null),
+				3000,
+				"pipe redial",
+			);
 			expect(daemon.lastEventIds()[2]).toBeNull(); // sub-delta lastSeq → no resume header
 			await waitFor(
-				() => (browser.frames.filter((f) => f.type === "attached").length > attachedBefore ? "re-primed" : null),
+				() =>
+					browser.frames.filter((f) => f.type === "attached").length > attachedBefore
+						? "re-primed"
+						: null,
 				3000,
 				"re-prime after redial",
 			);
-			expect(browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost")).toBe(false);
+			expect(
+				browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
+			).toBe(false);
 		} finally {
 			edge.close();
 			await supervisor.close();
@@ -1628,11 +1994,32 @@ describe("edge pure helpers", () => {
 		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-terminal-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
+		const config: FleetConfig = {
+			roots: [],
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
-			{ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } },
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 3 },
 		);
 		const daemon = startPipeFake({ heartbeatMs: 30 });
@@ -1657,7 +2044,10 @@ describe("edge pure helpers", () => {
 			const browser = await openBrowser(served.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			await browser.send({ type: "attach", sessionId: entry.daemonId });
-			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
 			// The daemon dies for good: every redial fails, the budget
 			// exhausts, and the browser finally sees the loss frame + release.
 			daemon.close();
@@ -1683,7 +2073,11 @@ describe("edge pure helpers", () => {
 		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-ring-filter-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
 		const daemon = startPipeFake({ heartbeatMs: 30 });
 		const entry = registry.create({
 			name: "ring-filter",
@@ -1697,40 +2091,100 @@ describe("edge pure helpers", () => {
 		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 3000);
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
+		const config: FleetConfig = {
+			roots: [],
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
-		const edge = new FleetEdge({ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } });
+		const edge = new FleetEdge({
+			registry,
+			connector,
+			supervisor,
+			config,
+			eventLog: new FleetEventLog(),
+			fleet: {
+				port: 0,
+				startedAt: Date.now(),
+				statePath: "/tmp/fleet-test-state.json",
+				configPath: null,
+			},
+		});
 		const served = serveEdge(edge);
 		try {
 			const browser = await openBrowser(served.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			await browser.send({ type: "attach", sessionId: entry.daemonId });
-			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
 			// Pipe priming is forwarded with delta-era edge seqs (hello_ok →
 			// attached → history → state → available_commands → ready); of
 			// those only state/ready are ringed. Wait for the priming history
 			// so its edge id is a stable replay floor below state.
-			const primingHistory = await browser.waitForEvent((ev) => ev.frame.type === "history", "priming history");
+			const primingHistory = await browser.waitForEvent(
+				(ev) => ev.frame.type === "history",
+				"priming history",
+			);
 			// Live emissions, oldest first: a full-transcript history broadcast,
 			// a call_result answer, a per-stream stream_reset, and a ringed
 			// event delta. All four must ARRIVE (forwarded live, never dropped).
-			daemon.emitDelta({ type: "history", messages: [{ role: "user", content: "transcript body", timestamp: 0 }], final: true });
-			daemon.emitDelta({ type: "call_result", id: "r1", ok: true, data: { huge: "y".repeat(5000) } });
+			daemon.emitDelta({
+				type: "history",
+				messages: [{ role: "user", content: "transcript body", timestamp: 0 }],
+				final: true,
+			});
+			daemon.emitDelta({
+				type: "call_result",
+				id: "r1",
+				ok: true,
+				data: { huge: "y".repeat(5000) },
+			});
 			daemon.emitDelta({ type: "stream_reset", reason: "test" });
-			daemon.emitDelta({ type: "event", event: { type: "notice", level: "info", message: "ring-me" } });
-			await browser.waitForFrame((f) => f.type === "history" && f.sessionId === entry.daemonId && Array.isArray(f.messages) && f.messages.length === 1, "live history");
-			await browser.waitForFrame((f) => f.type === "call_result" && f.id === "r1", "live call_result");
+			daemon.emitDelta({
+				type: "event",
+				event: { type: "notice", level: "info", message: "ring-me" },
+			});
+			await browser.waitForFrame(
+				(f) =>
+					f.type === "history" &&
+					f.sessionId === entry.daemonId &&
+					Array.isArray(f.messages) &&
+					f.messages.length === 1,
+				"live history",
+			);
+			await browser.waitForFrame(
+				(f) => f.type === "call_result" && f.id === "r1",
+				"live call_result",
+			);
 			await browser.waitForFrame((f) => f.type === "stream_reset", "live stream_reset");
-			await browser.waitForFrame((f) => f.type === "event" && (f.event as { message?: string })?.message === "ring-me", "live event");
+			await browser.waitForFrame(
+				(f) => f.type === "event" && (f.event as { message?: string })?.message === "ring-me",
+				"live event",
+			);
 			// Replay from just after the priming history: the ring must hold
 			// the ringed deltas (state, ready, the live event) but NOT any
 			// history/call_result/stream_reset/available_commands frame —
 			// those are re-derivable (re-attach priming / re-POST), exactly
 			// like the daemon's own ring.
-			const replay = await collectReplay(served.port, browser.clientId, primingHistory.id, (f) => f.type === "event" && (f.event as { message?: string })?.message === "ring-me");
+			const replay = await collectReplay(
+				served.port,
+				browser.clientId,
+				primingHistory.id,
+				(f) => f.type === "event" && (f.event as { message?: string })?.message === "ring-me",
+			);
 			expect(replay.some(({ frame }) => frame.type === "event")).toBe(true);
 			expect(replay.some(({ frame }) => frame.type === "state")).toBe(true); // live state deltas ARE ringed
-			const banned = ["history", "call_result", "stream_reset", "hello_ok", "attached", "available_commands"];
+			const banned = [
+				"history",
+				"call_result",
+				"stream_reset",
+				"hello_ok",
+				"attached",
+				"available_commands",
+			];
 			for (const { frame } of replay) expect(banned).not.toContain(frame.type);
 		} finally {
 			edge.close();
@@ -1746,7 +2200,11 @@ describe("edge pure helpers", () => {
 		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-ring-bytes-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 60_000 });
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
 		const daemon = startPipeFake({ heartbeatMs: 30 });
 		const entry = registry.create({
 			name: "ring-bytes",
@@ -1760,17 +2218,40 @@ describe("edge pure helpers", () => {
 		});
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 3000);
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
+		const config: FleetConfig = {
+			roots: [],
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		// Tiny per-client ring budget (~2.5 KiB): a burst of large deltas must
 		// evict the ring's head, not grow without bound.
-		const edge = new FleetEdge({ registry, connector, supervisor, config, eventLog: new FleetEventLog(), fleet: { port: 0, startedAt: Date.now(), statePath: "/tmp/fleet-test-state.json", configPath: null } }, { ringBytes: 2500 });
+		const edge = new FleetEdge(
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
+			{ ringBytes: 2500 },
+		);
 		const served = serveEdge(edge);
 		try {
 			const browser = await openBrowser(served.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
 			await browser.send({ type: "attach", sessionId: entry.daemonId });
-			await browser.waitForFrame((f) => f.type === "attached" && f.sessionId === entry.daemonId, "attached");
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
 			// Wait out the pipe priming (ready is its last frame) so the burst
 			// seqs are deterministic.
 			await browser.waitForFrame((f) => f.type === "ready", "priming ready");
@@ -1778,13 +2259,22 @@ describe("edge pure helpers", () => {
 			// of them blow well past the 2500-byte budget and evict the head.
 			const N = 20;
 			for (let i = 0; i < N; i++) {
-				daemon.emitDelta({ type: "event", event: { type: "notice", level: "info", message: `evict-${i}` + "x".repeat(600) } });
+				daemon.emitDelta({
+					type: "event",
+					event: { type: "notice", level: "info", message: `evict-${i}` + "x".repeat(600) },
+				});
 			}
 			await browser.waitForFrame(
-				(f) => f.type === "event" && ((f.event as { message?: string })?.message?.startsWith("evict-19") ?? false),
+				(f) =>
+					f.type === "event" &&
+					((f.event as { message?: string })?.message?.startsWith("evict-19") ?? false),
 				"last burst delta",
 			);
-			const firstId = browser.events.find((ev) => ev.frame.type === "event" && (ev.frame.event as { message?: string })?.message?.startsWith("evict-0"))!.id;
+			const firstId = browser.events.find(
+				(ev) =>
+					ev.frame.type === "event" &&
+					(ev.frame.event as { message?: string })?.message?.startsWith("evict-0"),
+			)!.id;
 			// Replay from just before the burst: only the byte-eviction-
 			// surviving tail replays — the newest delta is there, the oldest is
 			// gone, and the survivors are a contiguous suffix in seq order
@@ -1794,11 +2284,17 @@ describe("edge pure helpers", () => {
 				served.port,
 				browser.clientId,
 				firstId - 1,
-				(f) => f.type === "event" && ((f.event as { message?: string })?.message?.startsWith("evict-19") ?? false),
+				(f) =>
+					f.type === "event" &&
+					((f.event as { message?: string })?.message?.startsWith("evict-19") ?? false),
 			);
 			const replayEvents = replay.filter(isEventEntry);
-			expect(replayEvents.some(({ frame }) => eventMessage(frame)?.startsWith("evict-19") ?? false)).toBe(true);
-			expect(replayEvents.some(({ frame }) => eventMessage(frame)?.startsWith("evict-0") ?? false)).toBe(false);
+			expect(
+				replayEvents.some(({ frame }) => eventMessage(frame)?.startsWith("evict-19") ?? false),
+			).toBe(true);
+			expect(
+				replayEvents.some(({ frame }) => eventMessage(frame)?.startsWith("evict-0") ?? false),
+			).toBe(false);
 			const indices = replayEvents.map(({ frame }) => {
 				const m = eventMessage(frame)?.match(/^evict-(\d+)/);
 				return m ? Number(m[1]) : NaN;
@@ -1832,7 +2328,10 @@ describe("edge worktree commands", () => {
 	let project: RegisteredProject;
 	let browser: BrowserSocket;
 
-	async function gitIn(cwd: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	async function gitIn(
+		cwd: string,
+		args: string[],
+	): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 		const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
 		const [stdout, stderr] = await Promise.all([
 			Bun.readableStreamToText(proc.stdout),
@@ -1861,13 +2360,22 @@ describe("edge worktree commands", () => {
 			supervisor,
 			config,
 			eventLog: new FleetEventLog(),
-			fleet: { port: 0, startedAt: Date.now(), statePath: join(tmp, "state.json"), configPath: null },
+			fleet: {
+				port: 0,
+				startedAt: Date.now(),
+				statePath: join(tmp, "state.json"),
+				configPath: null,
+			},
 		});
 		served = serveEdge(edge);
 		// A real git repo (main checkout) to register.
 		repoDir = join(tmp, "repo");
 		mkdirSync(repoDir, { recursive: true });
-		const init = Bun.spawn(["git", "init", "-q", "-b", "main"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		const init = Bun.spawn(["git", "init", "-q", "-b", "main"], {
+			cwd: repoDir,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
 		expect(await init.exited).toBe(0);
 		await gitIn(repoDir, ["config", "user.email", "test@example.com"]);
 		await gitIn(repoDir, ["config", "user.name", "Test"]);
@@ -1889,7 +2397,12 @@ describe("edge worktree commands", () => {
 		browser = await openBrowser(served.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		const target = managedWorktreePath(config.workspaceDir, project.path, "My Branch");
-		await browser.send({ type: "create_worktree", id: "wt1", projectId: project.projectId, name: "My Branch" });
+		await browser.send({
+			type: "create_worktree",
+			id: "wt1",
+			projectId: project.projectId,
+			name: "My Branch",
+		});
 		const roster = asRoster(
 			await browser.waitForFrame(
 				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === target),
@@ -1911,7 +2424,12 @@ describe("edge worktree commands", () => {
 	test("add_worktree registers a discovered-but-unregistered worktree", async () => {
 		const outside = join(tmp, "raw-wt");
 		await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", outside]);
-		await browser.send({ type: "add_worktree", id: "wt2", projectId: project.projectId, worktreePath: outside });
+		await browser.send({
+			type: "add_worktree",
+			id: "wt2",
+			projectId: project.projectId,
+			worktreePath: outside,
+		});
 		const roster = asRoster(
 			await browser.waitForFrame(
 				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === outside),
@@ -1943,7 +2461,10 @@ describe("edge worktree commands", () => {
 		expect(JSON.stringify(frame)).not.toContain("token");
 		// Unknown daemon: an error frame, never a fabricated evidence payload.
 		await browser.send({ type: "worktree_delete_info", id: "wt4", daemonId: "d999" });
-		const err = await browser.waitForFrame((f) => f.type === "error" && f.error.includes("unknown daemon"), "unknown-daemon error");
+		const err = await browser.waitForFrame(
+			(f) => f.type === "error" && f.error.includes("unknown daemon"),
+			"unknown-daemon error",
+		);
 		if (err.type !== "error") throw new Error("expected error");
 		expect(err.error).toContain("d999");
 	});
@@ -1957,19 +2478,29 @@ describe("edge worktree commands", () => {
 		const floorId = rosters.length > 0 ? rosters[rosters.length - 1].id : 0;
 		await browser.send({ type: "delete_worktree", id: "wt5", daemonId: entry.daemonId });
 		await browser.waitForEvent(
-			(ev) => ev.id > floorId && ev.frame.type === "roster" && !ev.frame.daemons.some((d) => d.daemonId === entry.daemonId),
+			(ev) =>
+				ev.id > floorId &&
+				ev.frame.type === "roster" &&
+				!ev.frame.daemons.some((d) => d.daemonId === entry.daemonId),
 			"roster without the deleted worktree",
 		);
 		expect(registry.get(entry.daemonId)).toBeUndefined();
 		// The roster broadcast rides registry.remove, which precedes the git
 		// removal — wait for the directory to actually disappear.
 		await waitFor(() => (existsSync(target) ? null : "removed"), 5000, "worktree removed");
-		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(target);
+		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
+			target,
+		);
 	});
 
 	test("delete_worktree refuses a dirty worktree with an error frame, nothing mutated", async () => {
 		const target = managedWorktreePath(config.workspaceDir, project.path, "Dirty");
-		await browser.send({ type: "create_worktree", id: "wt6", projectId: project.projectId, name: "Dirty" });
+		await browser.send({
+			type: "create_worktree",
+			id: "wt6",
+			projectId: project.projectId,
+			name: "Dirty",
+		});
 		const roster = asRoster(
 			await browser.waitForFrame(
 				(f) => f.type === "roster" && f.daemons.some((d) => d.cwd === target),
@@ -1995,7 +2526,13 @@ describe("edge worktree commands", () => {
 		// for a NEWER roster that carries the tag.
 		const rosters = browser.events.filter((ev) => ev.frame.type === "roster");
 		const floorId = rosters.length > 0 ? rosters[rosters.length - 1].id : 0;
-		await browser.send({ type: "create_worktree", id: "wt8", projectId: project.projectId, name: "Started", start: true });
+		await browser.send({
+			type: "create_worktree",
+			id: "wt8",
+			projectId: project.projectId,
+			name: "Started",
+			start: true,
+		});
 		const tagged = await browser.waitForEvent(
 			(ev) =>
 				ev.id > floorId &&
@@ -2060,7 +2597,9 @@ describe("edge worktree commands", () => {
 			expect(existsSync(target)).toBe(true);
 			// start:false entries carry no roster branch field; git is the
 			// ground truth that the worktree sits on the attached branch.
-			expect((await gitIn(target, ["symbolic-ref", "--short", "HEAD"])).stdout.trim()).toBe("feature2");
+			expect((await gitIn(target, ["symbolic-ref", "--short", "HEAD"])).stdout.trim()).toBe(
+				"feature2",
+			);
 		} finally {
 			local.close();
 		}
@@ -2068,7 +2607,10 @@ describe("edge worktree commands", () => {
 
 	test("create_worktree with an unknown project errors", async () => {
 		await browser.send({ type: "create_worktree", id: "wt10", projectId: "p999", name: "x" });
-		const err = await browser.waitForFrame((f) => f.type === "error" && f.error.includes("unknown project"), "unknown project");
+		const err = await browser.waitForFrame(
+			(f) => f.type === "error" && f.error.includes("unknown project"),
+			"unknown project",
+		);
 		if (err.type !== "error") throw new Error("expected error");
 		expect(err.error).toContain("p999");
 	});
@@ -2079,7 +2621,11 @@ describe("edge worktree commands", () => {
 		// shared repoDir's accumulated branches.
 		const repo = join(tmp, "branch-picker-repo");
 		mkdirSync(repo, { recursive: true });
-		const init = Bun.spawn(["git", "init", "-q", "-b", "main"], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+		const init = Bun.spawn(["git", "init", "-q", "-b", "main"], {
+			cwd: repo,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
 		expect(await init.exited).toBe(0);
 		await gitIn(repo, ["config", "user.email", "test@example.com"]);
 		await gitIn(repo, ["config", "user.name", "Test"]);
@@ -2094,13 +2640,28 @@ describe("edge worktree commands", () => {
 		try {
 			browser = await openBrowser(served.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await browser.send({ type: "list_project_branches", id: "br1", projectId: project.projectId });
-			const frame = await browser.waitForFrame((f) => f.type === "project_branches", "project_branches frame");
+			await browser.send({
+				type: "list_project_branches",
+				id: "br1",
+				projectId: project.projectId,
+			});
+			const frame = await browser.waitForFrame(
+				(f) => f.type === "project_branches",
+				"project_branches frame",
+			);
 			if (frame.type !== "project_branches") throw new Error("expected project_branches");
 			expect(frame.projectId).toBe(project.projectId);
 			const byName = new Map(frame.branches.map((b) => [b.name, b]));
-			expect(byName.get("main")).toEqual({ name: "main", checkedOut: true, worktreePath: realpathSync(repo) });
-			expect(byName.get("feature")).toEqual({ name: "feature", checkedOut: true, worktreePath: realpathSync(linked) });
+			expect(byName.get("main")).toEqual({
+				name: "main",
+				checkedOut: true,
+				worktreePath: realpathSync(repo),
+			});
+			expect(byName.get("feature")).toEqual({
+				name: "feature",
+				checkedOut: true,
+				worktreePath: realpathSync(linked),
+			});
 			expect(byName.get("unused")).toEqual({ name: "unused", checkedOut: false });
 			expect(frame.branches).toHaveLength(3);
 		} finally {
@@ -2118,7 +2679,10 @@ describe("edge worktree commands", () => {
 		browser = await openBrowser(served.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		await browser.send({ type: "list_project_branches", id: "br2", projectId: "p999" });
-		const err = await browser.waitForFrame((f) => f.type === "error" && f.error.includes("unknown project"), "unknown project");
+		const err = await browser.waitForFrame(
+			(f) => f.type === "error" && f.error.includes("unknown project"),
+			"unknown project",
+		);
 		if (err.type !== "error") throw new Error("expected error");
 		expect(err.error).toContain("p999");
 	});
@@ -2130,7 +2694,13 @@ describe("edge worktree commands", () => {
 		const add = await gitIn(repoDir, ["worktree", "add", "-q", "-b", "merge-branch", wtPath]);
 		expect(add.exitCode).toBe(0);
 		const wtReal = realpathSync(wtPath);
-		const expected = { name: "merge-wt", path: wtReal, isWorktree: true, worktreeOf: project.name, branch: "merge-branch" };
+		const expected = {
+			name: "merge-wt",
+			path: wtReal,
+			isWorktree: true,
+			worktreeOf: project.name,
+			branch: "merge-branch",
+		};
 		try {
 			browser = await openBrowser(served.port);
 			await browser.waitForFrame((f) => f.type === "roster", "roster");
@@ -2141,7 +2711,9 @@ describe("edge worktree commands", () => {
 
 			// Registering a daemon on that cwd marks it managed → the row
 			// disappears. A fresh browser avoids stale projects frames.
-			const entry = await registerWorktreeEntry(registry, supervisor, project, wtReal, { start: false });
+			const entry = await registerWorktreeEntry(registry, supervisor, project, wtReal, {
+				start: false,
+			});
 			try {
 				browser.close();
 				browser = await openBrowser(served.port);
@@ -2177,7 +2749,13 @@ describe("edge worktree commands", () => {
 			if (frame.type !== "projects") throw new Error("expected projects");
 			const rows = frame.projects.filter((p) => p.path === wtReal);
 			expect(rows).toHaveLength(1);
-			expect(rows[0]).toEqual({ name: "rooted-wt", path: wtReal, isWorktree: true, worktreeOf: project.name, branch: "rooted-branch" });
+			expect(rows[0]).toEqual({
+				name: "rooted-wt",
+				path: wtReal,
+				isWorktree: true,
+				worktreeOf: project.name,
+				branch: "rooted-branch",
+			});
 		} finally {
 			config.roots = [];
 			browser.close();

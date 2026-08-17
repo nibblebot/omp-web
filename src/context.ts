@@ -8,7 +8,11 @@ const WARNING = { percent: 50, tokens: 150_000 };
 const PURPLE = { percent: 70, tokens: 270_000 };
 const ERROR = { percent: 90, tokens: 500_000 };
 
-function reaches(percent: number, window: number, threshold: { percent: number; tokens: number }): boolean {
+function reaches(
+	percent: number,
+	window: number,
+	threshold: { percent: number; tokens: number },
+): boolean {
 	if (!Number.isFinite(percent) || percent <= 0) return false;
 	if (!Number.isFinite(window) || window <= 0) return percent >= threshold.percent;
 	return percent >= Math.min(threshold.percent, (threshold.tokens / window) * 100);

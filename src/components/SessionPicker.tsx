@@ -16,7 +16,7 @@ import type { SessionListEntry } from "../../shared/protocol";
  *   the Modal's Esc-to-close, which still works outside gate mode).
  * The asleep-row wake path never opens this picker (silent --resume).
  */
-export const SessionPicker: Component<{ onClose: () => void }> = props => {
+export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 	const [filter, setFilter] = createSignal("");
 	const [sessions, setSessions] = createSignal<SessionListEntry[]>([]);
 	const [error, setError] = createSignal<string | null>(null);
@@ -41,13 +41,19 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 		onCleanup(() => document.removeEventListener("keydown", onKeyDown, true));
 		listSessions()
 			.then(setSessions)
-			.catch(err => setError(String(err)));
+			.catch((err) => setError(String(err)));
 	});
 
 	const filtered = () => {
 		const q = filter().toLowerCase();
-		const list = gateMode() ? [...sessions()].sort((a, b) => b.modifiedAt - a.modifiedAt) : sessions();
-		return q ? list.filter(s => (s.name ?? s.id).toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q)) : list;
+		const list = gateMode()
+			? [...sessions()].sort((a, b) => b.modifiedAt - a.modifiedAt)
+			: sessions();
+		return q
+			? list.filter(
+					(s) => (s.name ?? s.id).toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q),
+				)
+			: list;
 	};
 
 	const close = () => {
@@ -58,37 +64,43 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 
 	const choose = (s: SessionListEntry) => {
 		void call("switchSession", [s.path])
-			.then(result => {
+			.then((result) => {
 				if ((result as { cancelled?: boolean } | null)?.cancelled) {
 					setError("Session switch cancelled by extension");
 					return;
 				}
 				close();
 			})
-			.catch(err => setError(String(err)));
+			.catch((err) => setError(String(err)));
 	};
 
 	/** Gate-mode Esc/row action: start a fresh session on the attached daemon. */
 	const startNewSession = () => {
 		setState("sessionPickerGate", null);
-		void call("newSession").catch(err => setError(String(err)));
+		void call("newSession").catch((err) => setError(String(err)));
 		close();
 	};
 
 	return (
 		<Modal title="History" onClose={close}>
-			<div class="picker-group-name">{gateMode() ? "New session or resume" : "Resume from disk"}</div>
+			<div class="picker-group-name">
+				{gateMode() ? "New session or resume" : "Resume from disk"}
+			</div>
 			<input
 				class="picker-filter"
 				aria-label="Filter sessions"
 				placeholder="Filter by name or cwd…"
 				value={filter()}
-				onInput={e => setFilter(e.currentTarget.value)}
+				onInput={(e) => setFilter(e.currentTarget.value)}
 			/>
-			<Show when={error()}>{err => <div class="msg-notice">{err()}</div>}</Show>
+			<Show when={error()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
 			<div class="picker-list">
 				<Show when={gateMode()}>
-					<PickerRow class="picker-row session-new" onClick={startNewSession} title="Start a fresh session (no history)">
+					<PickerRow
+						class="picker-row session-new"
+						onClick={startNewSession}
+						title="Start a fresh session (no history)"
+					>
 						<span class="picker-label session-new-label">New session</span>
 						<span class="picker-detail">start fresh — no history</span>
 					</PickerRow>
@@ -102,7 +114,8 @@ export const SessionPicker: Component<{ onClose: () => void }> = props => {
 						>
 							<span class="picker-label">{s.name ?? s.id.slice(0, 8)}</span>
 							<span class="picker-detail">
-								{s.cwd || "(no cwd)"} · {s.messageCount} msgs · {new Date(s.modifiedAt).toLocaleString()}
+								{s.cwd || "(no cwd)"} · {s.messageCount} msgs ·{" "}
+								{new Date(s.modifiedAt).toLocaleString()}
 							</span>
 						</PickerRow>
 					)}

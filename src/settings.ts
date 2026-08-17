@@ -33,7 +33,7 @@ export function formatItemValue(item: SettingsItem): string {
 			return displayOptionValue(item, value);
 		case "submenu": {
 			const current = displayOptionValue(item, value);
-			const option = item.options?.find(o => o.value === current);
+			const option = item.options?.find((o) => o.value === current);
 			return option ? option.label : current;
 		}
 		case "text":
@@ -42,7 +42,7 @@ export function formatItemValue(item: SettingsItem): string {
 		case "multiselect": {
 			const selected = Array.isArray(value) ? (value as string[]) : [];
 			if (selected.length === 0) return item.ordered ? "default" : "none";
-			const labels = selected.map(v => item.options?.find(o => o.value === v)?.label ?? v);
+			const labels = selected.map((v) => item.options?.find((o) => o.value === v)?.label ?? v);
 			return labels.join(item.ordered ? " → " : ", ");
 		}
 		case "providerLimits": {
@@ -80,7 +80,9 @@ export function filterSettings(model: SettingsModel, query: string): SettingsMat
 		for (const group of tab.groups) {
 			for (const item of group.items) {
 				if (tab.id === "appearance" && !item.path.startsWith("images.")) continue;
-				const haystack = [item.label, item.description, group.name, item.path].join("\n").toLowerCase();
+				const haystack = [item.label, item.description, group.name, item.path]
+					.join("\n")
+					.toLowerCase();
 				if (haystack.includes(q)) matches.push({ tab, group, item });
 			}
 		}
@@ -93,8 +95,8 @@ export function filterSettings(model: SettingsModel, query: string): SettingsMat
  * (images.autoResize, images.blockImages), in schema order. [] when absent.
  */
 export function appearanceWebImages(model: SettingsModel): SettingsItem[] {
-	const appearance = model.tabs.find(tab => tab.id === "appearance");
-	const images = appearance?.groups.find(group => group.name === "Images");
+	const appearance = model.tabs.find((tab) => tab.id === "appearance");
+	const images = appearance?.groups.find((group) => group.name === "Images");
 	if (!images) return [];
-	return images.items.filter(item => item.path.startsWith("images."));
+	return images.items.filter((item) => item.path.startsWith("images."));
 }

@@ -86,7 +86,13 @@ import {
 	type ServerFrame,
 	type SessionScopedFrame,
 } from "../shared/protocol";
-import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK, SSE_PING_EVENT, SseRing } from "../shared/sse";
+import {
+	encodeSseEvent,
+	parseSseUnits,
+	SSE_PING_BLOCK,
+	SSE_PING_EVENT,
+	SseRing,
+} from "../shared/sse";
 import type { FleetConfig } from "./config";
 import { listProjects, validateProjectPath } from "./discovery";
 import type { DaemonConnector } from "./connector";
@@ -140,7 +146,10 @@ const LABEL_RE = /^[^=]+=.*$/;
  */
 function parseSpawnLabels(value: unknown): string[] | undefined {
 	if (value === undefined) return undefined;
-	if (!Array.isArray(value) || !value.every((label) => typeof label === "string" && LABEL_RE.test(label))) {
+	if (
+		!Array.isArray(value) ||
+		!value.every((label) => typeof label === "string" && LABEL_RE.test(label))
+	) {
 		throw new Error("spawn: labels must be an array of k=v strings");
 	}
 	return value as string[];
@@ -199,8 +208,13 @@ const BROWSER_COMMAND_LIST = [
 // `(typeof BROWSER_COMMAND_LIST)[number]` is the list's literal union only
 // because of the `as const`; with a plain annotated array it would be the
 // whole ClientCommand union and the pin would be a no-op.
-const _browserCommandAllowlistExhaustive: Record<Exclude<ClientCommand["type"], (typeof BROWSER_COMMAND_LIST)[number]>, never> = {};
-const BROWSER_COMMAND_TYPES: Record<string, true> = Object.fromEntries(BROWSER_COMMAND_LIST.map((type) => [type, true]));
+const _browserCommandAllowlistExhaustive: Record<
+	Exclude<ClientCommand["type"], (typeof BROWSER_COMMAND_LIST)[number]>,
+	never
+> = {};
+const BROWSER_COMMAND_TYPES: Record<string, true> = Object.fromEntries(
+	BROWSER_COMMAND_LIST.map((type) => [type, true]),
+);
 
 /**
  * Session-scoped frame types (protocol's SessionScopedFrame). omp-session
@@ -233,8 +247,13 @@ const SESSION_SCOPED_FRAME_LIST = [
 // browser-command allowlist — a session-scoped frame added to the union
 // without a row here would otherwise be forwarded UNSTAMPED (no daemonId),
 // which the client's stale-frame guard would drop on a daemon switch.
-const _sessionScopedFrameListExhaustive: Record<Exclude<SessionScopedFrame["type"], (typeof SESSION_SCOPED_FRAME_LIST)[number]>, never> = {};
-const SESSION_SCOPED_FRAME_TYPES: Record<string, true> = Object.fromEntries(SESSION_SCOPED_FRAME_LIST.map((type) => [type, true]));
+const _sessionScopedFrameListExhaustive: Record<
+	Exclude<SessionScopedFrame["type"], (typeof SESSION_SCOPED_FRAME_LIST)[number]>,
+	never
+> = {};
+const SESSION_SCOPED_FRAME_TYPES: Record<string, true> = Object.fromEntries(
+	SESSION_SCOPED_FRAME_LIST.map((type) => [type, true]),
+);
 
 /**
  * Daemon frame types the edge RINGS per client (finding #5). MUST mirror
@@ -597,16 +616,47 @@ export class FleetEdge {
 					// The constructor's start callback types the controller as the
 					// default/byte union; this stream is built with a default
 					// source, so the default controller is the actual runtime type.
-					stream = { controller: controller as ReadableStreamDefaultController<Uint8Array>, unreadEstimate: 0, client, pipe: null };
+					stream = {
+						controller: controller as ReadableStreamDefaultController<Uint8Array>,
+						unreadEstimate: 0,
+						client,
+						pipe: null,
+					};
 					client.stream = stream;
 					this.#browsers.add(stream);
 					this.#startKeepalive();
 					// Priming: roster + merged daemons + registered projects
 					// (seqs 1..k, k < SSE_DELTA_SEQ_START).
 					let seq = 1;
-					this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "roster", daemons: this.#registry.list().map((entry) => toRosterEntry(entry, this.#config.workspaceDir)) }, seq++));
-					this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "daemons", daemons: this.#daemonsAggregator.merge() }, seq++));
-					this.#enqueue(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "registered_projects", projects: this.#registry.projects() }, seq++));
+					this.#enqueue(
+						stream,
+						encodeSseEvent(
+							SSE_EVENT_NAME,
+							{
+								type: "roster",
+								daemons: this.#registry
+									.list()
+									.map((entry) => toRosterEntry(entry, this.#config.workspaceDir)),
+							},
+							seq++,
+						),
+					);
+					this.#enqueue(
+						stream,
+						encodeSseEvent(
+							SSE_EVENT_NAME,
+							{ type: "daemons", daemons: this.#daemonsAggregator.merge() },
+							seq++,
+						),
+					);
+					this.#enqueue(
+						stream,
+						encodeSseEvent(
+							SSE_EVENT_NAME,
+							{ type: "registered_projects", projects: this.#registry.projects() },
+							seq++,
+						),
+					);
 					// Resume: only a delta-era id (≥ SSE_DELTA_SEQ_START) replays
 					// the ring; anything below means priming carries full state.
 					const last = lastEventId === null ? NaN : Number(lastEventId);
@@ -662,7 +712,8 @@ export class FleetEdge {
 	 */
 	async #handleCommand(req: Request): Promise<Response> {
 		const clientId = req.headers.get("x-omp-client-id");
-		const client = typeof clientId === "string" && clientId !== "" ? this.#clients.get(clientId) : undefined;
+		const client =
+			typeof clientId === "string" && clientId !== "" ? this.#clients.get(clientId) : undefined;
 		const stream = client?.stream ?? null;
 		if (!stream) {
 			return json({ error: "unknown client or not connected" }, 400);
@@ -673,7 +724,12 @@ export class FleetEdge {
 		} catch {
 			return json({ error: "malformed JSON body" }, 400);
 		}
-		if (typeof raw !== "object" || raw === null || !("type" in raw) || typeof raw.type !== "string") {
+		if (
+			typeof raw !== "object" ||
+			raw === null ||
+			!("type" in raw) ||
+			typeof raw.type !== "string"
+		) {
 			return json({ error: "request body must be a JSON object with a string type" }, 400);
 		}
 		const cmd = raw as Record<string, unknown>;
@@ -691,7 +747,8 @@ export class FleetEdge {
 				void this.#handleListProjects(stream);
 				break;
 			case "list_project_branches": {
-				const projectId = typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
+				const projectId =
+					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
 				if (projectId === undefined) {
 					this.#sendError(stream, "list_project_branches: missing projectId");
 					break;
@@ -705,7 +762,8 @@ export class FleetEdge {
 					this.#sendError(stream, "spawn: missing cwd");
 					break;
 				}
-				const template = typeof cmd.template === "string" && cmd.template !== "" ? cmd.template : undefined;
+				const template =
+					typeof cmd.template === "string" && cmd.template !== "" ? cmd.template : undefined;
 				let labels: string[] | undefined;
 				try {
 					labels = parseSpawnLabels(cmd.labels);
@@ -717,7 +775,8 @@ export class FleetEdge {
 				break;
 			}
 			case "spawn_resume": {
-				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				const daemonId =
+					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
 				if (daemonId === undefined) {
 					this.#sendError(stream, "spawn_resume: missing daemonId");
 					break;
@@ -726,7 +785,8 @@ export class FleetEdge {
 				break;
 			}
 			case "stop": {
-				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				const daemonId =
+					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
 				if (daemonId === undefined) {
 					this.#sendError(stream, "stop: missing daemonId");
 					break;
@@ -735,7 +795,8 @@ export class FleetEdge {
 				break;
 			}
 			case "remove": {
-				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				const daemonId =
+					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
 				if (daemonId === undefined) {
 					this.#sendError(stream, "remove: missing daemonId");
 					break;
@@ -750,7 +811,8 @@ export class FleetEdge {
 					break;
 				}
 				const start = cmd.start === true;
-				const template = typeof cmd.template === "string" && cmd.template !== "" ? cmd.template : undefined;
+				const template =
+					typeof cmd.template === "string" && cmd.template !== "" ? cmd.template : undefined;
 				let labels: string[] | undefined;
 				try {
 					labels = parseSpawnLabels(cmd.labels);
@@ -762,7 +824,8 @@ export class FleetEdge {
 				break;
 			}
 			case "remove_project": {
-				const projectId = typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
+				const projectId =
+					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
 				if (projectId === undefined) {
 					this.#sendError(stream, "remove_project: missing projectId");
 					break;
@@ -771,7 +834,8 @@ export class FleetEdge {
 				break;
 			}
 			case "create_worktree": {
-				const projectId = typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
+				const projectId =
+					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
 				if (projectId === undefined) {
 					this.#sendError(stream, "create_worktree: missing projectId");
 					break;
@@ -781,19 +845,31 @@ export class FleetEdge {
 					this.#sendError(stream, "create_worktree: missing name");
 					break;
 				}
-				const baseRef = typeof cmd.baseRef === "string" && cmd.baseRef !== "" ? cmd.baseRef : undefined;
-				const existingBranch = typeof cmd.existingBranch === "string" && cmd.existingBranch !== "" ? cmd.existingBranch : undefined;
+				const baseRef =
+					typeof cmd.baseRef === "string" && cmd.baseRef !== "" ? cmd.baseRef : undefined;
+				const existingBranch =
+					typeof cmd.existingBranch === "string" && cmd.existingBranch !== ""
+						? cmd.existingBranch
+						: undefined;
 				const start = cmd.start === true ? true : undefined;
-				void this.#handleCreateWorktree(stream, projectId, name, { baseRef, existingBranch, start });
+				void this.#handleCreateWorktree(stream, projectId, name, {
+					baseRef,
+					existingBranch,
+					start,
+				});
 				break;
 			}
 			case "add_worktree": {
-				const projectId = typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
+				const projectId =
+					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
 				if (projectId === undefined) {
 					this.#sendError(stream, "add_worktree: missing projectId");
 					break;
 				}
-				const worktreePath = typeof cmd.worktreePath === "string" && cmd.worktreePath !== "" ? cmd.worktreePath : undefined;
+				const worktreePath =
+					typeof cmd.worktreePath === "string" && cmd.worktreePath !== ""
+						? cmd.worktreePath
+						: undefined;
 				if (worktreePath === undefined) {
 					this.#sendError(stream, "add_worktree: missing worktreePath");
 					break;
@@ -803,7 +879,8 @@ export class FleetEdge {
 				break;
 			}
 			case "delete_worktree": {
-				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				const daemonId =
+					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
 				if (daemonId === undefined) {
 					this.#sendError(stream, "delete_worktree: missing daemonId");
 					break;
@@ -813,7 +890,8 @@ export class FleetEdge {
 				break;
 			}
 			case "worktree_delete_info": {
-				const daemonId = typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				const daemonId =
+					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
 				if (daemonId === undefined) {
 					this.#sendError(stream, "worktree_delete_info: missing daemonId");
 					break;
@@ -822,7 +900,8 @@ export class FleetEdge {
 				break;
 			}
 			case "attach": {
-				const daemonId = typeof cmd.sessionId === "string" && cmd.sessionId !== "" ? cmd.sessionId : undefined;
+				const daemonId =
+					typeof cmd.sessionId === "string" && cmd.sessionId !== "" ? cmd.sessionId : undefined;
 				if (daemonId === undefined) {
 					this.#sendError(stream, "attach: missing sessionId");
 					break;
@@ -875,7 +954,12 @@ export class FleetEdge {
 		}
 	}
 
-	async #handleSpawn(stream: BrowserStream, cwd: string, template: string | undefined, labels: string[] | undefined): Promise<void> {
+	async #handleSpawn(
+		stream: BrowserStream,
+		cwd: string,
+		template: string | undefined,
+		labels: string[] | undefined,
+	): Promise<void> {
 		try {
 			const resolved = await validateProjectPath(cwd);
 			if (resolved === null) {
@@ -898,7 +982,13 @@ export class FleetEdge {
 	 * supervisor's spawn creates the entry, this tags it). Success surfaces
 	 * via the registered_projects + roster broadcasts, never a unicast.
 	 */
-	async #handleAddProject(stream: BrowserStream, path: string, start: boolean, template: string | undefined, labels: string[] | undefined): Promise<void> {
+	async #handleAddProject(
+		stream: BrowserStream,
+		path: string,
+		start: boolean,
+		template: string | undefined,
+		labels: string[] | undefined,
+	): Promise<void> {
 		try {
 			const before = this.#registry.projects();
 			let project: RegisteredProject;
@@ -919,7 +1009,10 @@ export class FleetEdge {
 					this.#registry.update(entry.daemonId, { projectId: project.projectId });
 				} catch (err) {
 					// The project stays registered; the error names the stage.
-					this.#sendError(stream, `project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+					this.#sendError(
+						stream,
+						`project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+					);
 					return;
 				}
 			}
@@ -969,11 +1062,16 @@ export class FleetEdge {
 				existingBranch: opts.existingBranch,
 			});
 		} catch (err) {
-			this.#sendError(stream, `create worktree failed: ${err instanceof Error ? err.message : String(err)}`);
+			this.#sendError(
+				stream,
+				`create worktree failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
 			return;
 		}
 		try {
-			await registerWorktreeEntry(this.#registry, this.#supervisor, project, created.path, { start: opts.start });
+			await registerWorktreeEntry(this.#registry, this.#supervisor, project, created.path, {
+				start: opts.start,
+			});
 		} catch (err) {
 			this.#sendError(stream, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -984,7 +1082,12 @@ export class FleetEdge {
 	 * the project (validated via validateUnregisteredWorktree) and optionally
 	 * spawn a daemon on it (start:true).
 	 */
-	async #handleAddWorktree(stream: BrowserStream, projectId: string, worktreePath: string, start: boolean | undefined): Promise<void> {
+	async #handleAddWorktree(
+		stream: BrowserStream,
+		projectId: string,
+		worktreePath: string,
+		start: boolean | undefined,
+	): Promise<void> {
 		const project = this.#registry.projects().find((p) => p.projectId === projectId);
 		if (!project) {
 			this.#sendError(stream, `unknown project: ${projectId}`);
@@ -992,7 +1095,11 @@ export class FleetEdge {
 		}
 		let resolved: string;
 		try {
-			resolved = await validateUnregisteredWorktree(worktreePath, project, this.#registry.list().map((e) => e.cwd));
+			resolved = await validateUnregisteredWorktree(
+				worktreePath,
+				project,
+				this.#registry.list().map((e) => e.cwd),
+			);
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 			return;
@@ -1010,7 +1117,11 @@ export class FleetEdge {
 	 * guards run BEFORE any mutation, so a refusal leaves the daemon and
 	 * roster untouched.
 	 */
-	async #handleDeleteWorktree(stream: BrowserStream, daemonId: string, deleteBranch: boolean | undefined): Promise<void> {
+	async #handleDeleteWorktree(
+		stream: BrowserStream,
+		daemonId: string,
+		deleteBranch: boolean | undefined,
+	): Promise<void> {
 		try {
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
@@ -1124,7 +1235,11 @@ export class FleetEdge {
 		}
 	}
 
-	async #handleAttach(stream: BrowserStream, daemonId: string, commandId: string | undefined): Promise<void> {
+	async #handleAttach(
+		stream: BrowserStream,
+		daemonId: string,
+		commandId: string | undefined,
+	): Promise<void> {
 		const entry = this.#registry.get(daemonId);
 		if (!entry) {
 			this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
@@ -1136,7 +1251,9 @@ export class FleetEdge {
 			await this.#wake(entry);
 			await this.#connector.waitReady(daemonId, ATTACH_WAIT_READY_MS);
 		} catch (err) {
-			this.#sendAttachOutcome(stream, commandId, { error: err instanceof Error ? err.message : String(err) });
+			this.#sendAttachOutcome(stream, commandId, {
+				error: err instanceof Error ? err.message : String(err),
+			});
 			return;
 		}
 		const current = this.#registry.get(daemonId);
@@ -1197,7 +1314,9 @@ export class FleetEdge {
 		if (!this.#browsers.has(stream)) return;
 		const endpoint = entry.endpoint;
 		if (!endpoint) {
-			this.#sendAttachOutcome(stream, commandId, { error: `daemon ${entry.daemonId} has no endpoint` });
+			this.#sendAttachOutcome(stream, commandId, {
+				error: `daemon ${entry.daemonId} has no endpoint`,
+			});
 			return;
 		}
 		const pipe: PipeState = {
@@ -1215,7 +1334,8 @@ export class FleetEdge {
 		// pipe's resume machinery owns liveness (redial with Last-Event-ID, or
 		// a terminal "daemon connection lost" error frame) — the browser is
 		// attached.
-		if (commandId !== undefined) this.#sendAttachOutcome(stream, commandId, { sessionId: entry.daemonId });
+		if (commandId !== undefined)
+			this.#sendAttachOutcome(stream, commandId, { sessionId: entry.daemonId });
 		this.#dialPipe(stream, pipe);
 	}
 
@@ -1322,7 +1442,11 @@ export class FleetEdge {
 			// Proto gate (mirrors the connector): a daemon speaking a
 			// different OMP_PROTO is not drivable — the pipe is terminal.
 			if (Number(frame.proto) !== OMP_PROTO) {
-				this.#pipeLost(stream, pipe, `proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`);
+				this.#pipeLost(
+					stream,
+					pipe,
+					`proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`,
+				);
 				return;
 			}
 			// Finding #61: the gate above proved proto === OMP_PROTO, so
@@ -1335,7 +1459,8 @@ export class FleetEdge {
 			// Broker rosters are tapped here (like the control socket) but
 			// NEVER forwarded: browsers only ever see the edge's single
 			// merged frame (#broadcastDaemons).
-			if (Array.isArray(frame.daemons)) this.#ingestDaemons(pipe.daemonId, frame.daemons as DaemonInfo[]);
+			if (Array.isArray(frame.daemons))
+				this.#ingestDaemons(pipe.daemonId, frame.daemons as DaemonInfo[]);
 			return;
 		}
 		const stamped =
@@ -1426,7 +1551,12 @@ export class FleetEdge {
 			// malformed id-less command keeps the legacy global error frame.
 			const commandId = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : undefined;
 			if (commandId !== undefined) {
-				this.#sendAnswer(stream, { type: "call_result", id: commandId, ok: false, error: "not attached" });
+				this.#sendAnswer(stream, {
+					type: "call_result",
+					id: commandId,
+					ok: false,
+					error: "not attached",
+				});
 			} else {
 				this.#sendError(stream, "not attached");
 			}
@@ -1538,9 +1668,16 @@ export class FleetEdge {
 	 * pending attach from exactly this frame); a legacy global error frame
 	 * for a malformed client that sent none.
 	 */
-	#sendAttachOutcome(stream: BrowserStream, commandId: string | undefined, outcome: { sessionId: string } | { error: string }): void {
+	#sendAttachOutcome(
+		stream: BrowserStream,
+		commandId: string | undefined,
+		outcome: { sessionId: string } | { error: string },
+	): void {
 		if (commandId === undefined) {
-			this.#sendError(stream, "error" in outcome ? outcome.error : `attached: ${outcome.sessionId}`);
+			this.#sendError(
+				stream,
+				"error" in outcome ? outcome.error : `attached: ${outcome.sessionId}`,
+			);
 			return;
 		}
 		this.#sendAnswer(
@@ -1567,14 +1704,22 @@ export class FleetEdge {
 	}
 
 	#broadcastRoster(): void {
-		this.#broadcast({ type: "roster", daemons: this.#registry.list().map((entry) => toRosterEntry(entry, this.#config.workspaceDir)) });
+		this.#broadcast({
+			type: "roster",
+			daemons: this.#registry
+				.list()
+				.map((entry) => toRosterEntry(entry, this.#config.workspaceDir)),
+		});
 	}
 
 	/** Broadcast the current registered-project set to every edge stream. */
 	#broadcastRegisteredProjects(): void {
 		// Never ringed: the frame is re-derivable from the next open's
 		// priming (which always carries the full project set).
-		this.#broadcast({ type: "registered_projects", projects: this.#registry.projects() }, { ring: false });
+		this.#broadcast(
+			{ type: "registered_projects", projects: this.#registry.projects() },
+			{ ring: false },
+		);
 	}
 
 	/**

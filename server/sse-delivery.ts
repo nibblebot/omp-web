@@ -138,7 +138,9 @@ export function terminateStream(stream: SseConsumer, reason: string): void {
 			// Last-Event-ID advances past the buffered overflow (read in order
 			// before EOF); it is never ringed — only the dying stream sees it.
 			stream.controller.enqueue(
-				sseEncoder.encode(encodeSseEvent(SSE_EVENT_NAME, { type: "stream_reset", reason }, nextDeltaSeq++)),
+				sseEncoder.encode(
+					encodeSseEvent(SSE_EVENT_NAME, { type: "stream_reset", reason }, nextDeltaSeq++),
+				),
 			);
 		} catch {
 			// Already closed or errored; detach below still cleans up.
@@ -165,7 +167,7 @@ export function terminateStream(stream: SseConsumer, reason: string): void {
 export async function enqueuePaced(stream: SseConsumer, block: string): Promise<void> {
 	while (bufferedBytes(stream) + block.length > SSE_BACKPRESSURE_BYTES - PRIMING_QUEUE_MARGIN) {
 		if (!streams.has(stream)) return; // consumer detached/cancelled
-		await new Promise<void>(resolve => setImmediate(resolve));
+		await new Promise<void>((resolve) => setImmediate(resolve));
 	}
 	enqueueTo(stream, block);
 }
@@ -181,8 +183,13 @@ function messageWithoutImages(message: AgentMessage): AgentMessage {
 	// content array — they cannot hold image blocks and pass through.
 	if (!("content" in message)) return message;
 	const content = message.content;
-	if (typeof content === "string" || !Array.isArray(content) || content.every(c => c.type !== "image")) return message;
-	return { ...message, content: content.filter(c => c.type !== "image") } as AgentMessage;
+	if (
+		typeof content === "string" ||
+		!Array.isArray(content) ||
+		content.every((c) => c.type !== "image")
+	)
+		return message;
+	return { ...message, content: content.filter((c) => c.type !== "image") } as AgentMessage;
 }
 
 /**
@@ -195,7 +202,9 @@ function messageWithoutImages(message: AgentMessage): AgentMessage {
  * blocks are stripped, then long strings are shrunk like collab replication,
  * so the stream survives regardless.
  */
-export function chunkHistory(messages: AgentMessage[]): Array<{ messages: AgentMessage[]; final?: boolean }> {
+export function chunkHistory(
+	messages: AgentMessage[],
+): Array<{ messages: AgentMessage[]; final?: boolean }> {
 	const whole = JSON.stringify({ type: "history", messages });
 	if (whole.length <= HISTORY_CHUNK_BYTES) return [{ messages }];
 	const frames: Array<{ messages: AgentMessage[]; final?: boolean }> = [];
@@ -233,9 +242,16 @@ export function chunkHistory(messages: AgentMessage[]): Array<{ messages: AgentM
  * from `nextSeq` (priming's per-stream counter or the daemon-global delta
  * counter for live broadcasts).
  */
-export async function sendHistoryPaced(stream: SseConsumer, messages: AgentMessage[], nextSeq: () => number): Promise<void> {
+export async function sendHistoryPaced(
+	stream: SseConsumer,
+	messages: AgentMessage[],
+	nextSeq: () => number,
+): Promise<void> {
 	for (const frame of chunkHistory(messages)) {
-		await enqueuePaced(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "history", ...frame }, nextSeq()));
+		await enqueuePaced(
+			stream,
+			encodeSseEvent(SSE_EVENT_NAME, { type: "history", ...frame }, nextSeq()),
+		);
 	}
 }
 
@@ -285,7 +301,10 @@ export async function broadcastHistory(entry: SessionEntry): Promise<void> {
 	for (const stream of streams) {
 		if (stream.attached !== entry.handle) continue;
 		for (const frame of frames) {
-			await enqueuePaced(stream, encodeSseEvent(SSE_EVENT_NAME, { type: "history", ...frame }, nextDeltaSeq++));
+			await enqueuePaced(
+				stream,
+				encodeSseEvent(SSE_EVENT_NAME, { type: "history", ...frame }, nextDeltaSeq++),
+			);
 		}
 	}
 }
@@ -314,7 +333,11 @@ export function detachConsumer(stream: SseConsumer, reason: string): void {
 }
 
 /** Surface operator-facing text as the existing notice event frame. */
-export function notifyEvent(entry: SessionEntry, message: string, level: "info" | "warning" | "error" = "info"): void {
+export function notifyEvent(
+	entry: SessionEntry,
+	message: string,
+	level: "info" | "warning" | "error" = "info",
+): void {
 	broadcastTo(entry.handle, { type: "event", event: { type: "notice", level, message } });
 }
 
@@ -323,7 +346,11 @@ export function notifyEvent(entry: SessionEntry, message: string, level: "info" 
 // side-channel pattern bash/python use, but those have dedicated SDK aborters.
 export const ephemeralAborts = new Map<SessionEntry, Map<number, AbortController>>();
 
-export function setEphemeralAbort(entry: SessionEntry, streamId: number, controller: AbortController): void {
+export function setEphemeralAbort(
+	entry: SessionEntry,
+	streamId: number,
+	controller: AbortController,
+): void {
 	let byStream = ephemeralAborts.get(entry);
 	if (!byStream) ephemeralAborts.set(entry, (byStream = new Map()));
 	byStream.set(streamId, controller);

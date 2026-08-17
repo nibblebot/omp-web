@@ -192,7 +192,8 @@ function correlate(
 		if (frame.type !== "event") return;
 		// Wire events are external data; narrow before reading fields.
 		const ev: unknown = frame.event;
-		if (typeof ev !== "object" || ev === null || !("type" in ev) || typeof ev.type !== "string") return;
+		if (typeof ev !== "object" || ev === null || !("type" in ev) || typeof ev.type !== "string")
+			return;
 		if (ev.type.includes("abort")) {
 			settle({ daemonId, ok: false, error: "aborted" });
 			return;

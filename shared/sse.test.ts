@@ -29,7 +29,9 @@ describe("parseSseUnits", () => {
 	test("round-trips encoded events", async () => {
 		const block = encodeSseEvent("frame", { type: "ready", readyAt: 1 }, 7);
 		const units = await collect([block]);
-		expect(units).toEqual([{ kind: "event", event: "frame", id: "7", data: '{"type":"ready","readyAt":1}' }]);
+		expect(units).toEqual([
+			{ kind: "event", event: "frame", id: "7", data: '{"type":"ready","readyAt":1}' },
+		]);
 	});
 
 	test("reassembles events split across chunks", async () => {
@@ -50,7 +52,7 @@ describe("parseSseUnits", () => {
 	});
 
 	test("joins multi-line data and tolerates CRLF", async () => {
-		const units = await collect(["event: frame\r\nid: 9\r\ndata: {\"a\":\r\ndata: 1}\r\n\r\n"]);
+		const units = await collect(['event: frame\r\nid: 9\r\ndata: {"a":\r\ndata: 1}\r\n\r\n']);
 		expect(units).toEqual([{ kind: "event", event: "frame", id: "9", data: '{"a":\n1}' }]);
 	});
 
@@ -65,13 +67,16 @@ describe("SseRing", () => {
 		const ring = new SseRing<number>(3);
 		for (let seq = 1; seq <= 5; seq++) ring.push(seq, seq * 10);
 		expect(ring.size).toBe(3);
-		expect(ring.after(0).map(e => e.seq)).toEqual([3, 4, 5]);
+		expect(ring.after(0).map((e) => e.seq)).toEqual([3, 4, 5]);
 	});
 
 	test("after returns only newer entries, oldest first", () => {
 		const ring = new SseRing<string>(10);
 		for (let seq = 10; seq <= 14; seq++) ring.push(seq, `s${seq}`);
-		expect(ring.after(12).map(e => [e.seq, e.value])).toEqual([[13, "s13"], [14, "s14"]]);
+		expect(ring.after(12).map((e) => [e.seq, e.value])).toEqual([
+			[13, "s13"],
+			[14, "s14"],
+		]);
 		expect(ring.after(14)).toEqual([]);
 	});
 
@@ -83,7 +88,7 @@ describe("SseRing", () => {
 		ring.push(4, "d".repeat(10)); // 36 > 30 → evict entry 1 (8) → 28
 		expect(ring.size).toBe(3);
 		expect(ring.bytes).toBe(28);
-		expect(ring.after(0).map(e => e.seq)).toEqual([2, 3, 4]);
+		expect(ring.after(0).map((e) => e.seq)).toEqual([2, 3, 4]);
 	});
 
 	test("a single entry larger than the whole budget still lands", () => {
@@ -91,14 +96,14 @@ describe("SseRing", () => {
 		ring.push(1, "small"); // 5
 		ring.push(2, "x".repeat(100)); // 100 > 10 → evicts entry 1, keeps the newest
 		expect(ring.size).toBe(1);
-		expect(ring.after(0).map(e => e.seq)).toEqual([2]);
+		expect(ring.after(0).map((e) => e.seq)).toEqual([2]);
 	});
 
 	test("entry cap stays a secondary bound after byte eviction", () => {
 		const ring = new SseRing<string>(3, 1_000_000);
 		for (let seq = 1; seq <= 5; seq++) ring.push(seq, `s${seq}`);
 		expect(ring.size).toBe(3);
-		expect(ring.after(0).map(e => e.seq)).toEqual([3, 4, 5]);
+		expect(ring.after(0).map((e) => e.seq)).toEqual([3, 4, 5]);
 	});
 
 	test("after() stays correct across byte eviction (replay skips evicted, keeps newer)", () => {
@@ -109,11 +114,11 @@ describe("SseRing", () => {
 		// Eviction left a gap, but after() is still correct: it returns every
 		// RINGED entry newer than the id (missing ones are re-derivable —
 		// drop-and-resume, never a corrupted tail).
-		expect(ring.after(1).map(e => e.seq)).toEqual([3]);
-		expect(ring.after(2).map(e => e.seq)).toEqual([3]);
+		expect(ring.after(1).map((e) => e.seq)).toEqual([3]);
+		expect(ring.after(2).map((e) => e.seq)).toEqual([3]);
 		ring.push(4, "d".repeat(10)); // 40 ≤ 50
-		expect(ring.after(2).map(e => e.seq)).toEqual([3, 4]);
-		expect(ring.after(3).map(e => e.seq)).toEqual([4]);
+		expect(ring.after(2).map((e) => e.seq)).toEqual([3, 4]);
+		expect(ring.after(3).map((e) => e.seq)).toEqual([4]);
 		expect(ring.after(4)).toEqual([]);
 	});
 });

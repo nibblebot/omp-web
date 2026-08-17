@@ -6,7 +6,15 @@ import {
 	formatItemValue,
 	type SettingsMatch,
 } from "../settings";
-import { call, fleetSettingsActive, refreshSettings, setNotifyEnabled, setState, state, updateSetting } from "../state";
+import {
+	call,
+	fleetSettingsActive,
+	refreshSettings,
+	setNotifyEnabled,
+	setState,
+	state,
+	updateSetting,
+} from "../state";
 import { ChevronDownIcon, ChevronUpIcon, MinusIcon, PlusIcon, XIcon } from "../icons";
 import {
 	currentFontSize,
@@ -28,7 +36,7 @@ import { Modal } from "./Modal";
  * the returned model is authoritative and settings_changed frames keep this
  * panel (and every other tab) in sync.
  */
-export const SettingsPanel: Component<{ onClose: () => void }> = props => {
+export const SettingsPanel: Component<{ onClose: () => void }> = (props) => {
 	const [query, setQuery] = createSignal("");
 	const [activeTab, setActiveTab] = createSignal<string | null>(null);
 	// Sidebar group filter: a subsection pick scopes the body to one group.
@@ -66,17 +74,17 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 	// stale pick is harmless).
 	const activeTabId = () => {
 		const picked = activeTab();
-		if (picked && clientTabs().some(t => t.id === picked)) return picked;
+		if (picked && clientTabs().some((t) => t.id === picked)) return picked;
 		return "web-ui";
 	};
 	// The schema tab backing a client tab id; null for client-local tabs.
-	const schemaTab = (id: string) => model()?.tabs.find(t => t.id === id) ?? null;
+	const schemaTab = (id: string) => model()?.tabs.find((t) => t.id === id) ?? null;
 	// Sidebar subsection names for a client tab, in display order; empty group
 	// names are skipped (the TUI/group rendering only shows h3s for named groups).
 	const tabSubsections = (id: string): string[] => {
 		if (id === "web-ui") return ["Interface", "Images"];
 		const tab = schemaTab(id);
-		return tab ? tab.groups.map(g => g.name).filter(Boolean) : [];
+		return tab ? tab.groups.map((g) => g.name).filter(Boolean) : [];
 	};
 	// The sidebar's active subsection, validated against the ACTIVE tab: a
 	// condition-gated group may vanish on model refresh, so an invalid pick
@@ -108,7 +116,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 		const byLabel = new Map<string, SettingsMatch[]>();
 		for (const match of results()) {
 			const clientId = match.tab.id === "appearance" ? "web-ui" : match.tab.id;
-			const label = tabs.find(t => t.id === clientId)?.label ?? clientId;
+			const label = tabs.find((t) => t.id === clientId)?.label ?? clientId;
 			const list = byLabel.get(label) ?? [];
 			list.push(match);
 			byLabel.set(label, list);
@@ -126,9 +134,14 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 					aria-label="Search settings"
 					placeholder="Search settings…"
 					value={query()}
-					onInput={e => setQuery(e.currentTarget.value)}
+					onInput={(e) => setQuery(e.currentTarget.value)}
 				/>
-				<button type="button" class="settings-close" aria-label="Close settings" onClick={props.onClose}>
+				<button
+					type="button"
+					class="settings-close"
+					aria-label="Close settings"
+					onClick={props.onClose}
+				>
 					<XIcon />
 				</button>
 			</div>
@@ -139,9 +152,9 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 					<select
 						aria-label="Settings section"
 						value={activeTabId()}
-						onChange={e => selectTab(e.currentTarget.value)}
+						onChange={(e) => selectTab(e.currentTarget.value)}
 					>
-						<For each={clientTabs()}>{tab => <option value={tab.id}>{tab.label}</option>}</For>
+						<For each={clientTabs()}>{(tab) => <option value={tab.id}>{tab.label}</option>}</For>
 					</select>
 				</nav>
 			</Show>
@@ -149,11 +162,12 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 				<Show when={model()}>
 					<nav class="settings-nav" aria-label="Settings sections">
 						<For each={clientTabs()}>
-							{tab => (
+							{(tab) => (
 								<>
 									<button
 										type="button"
-										class="settings-section" classList={{ active: tab.id === activeTabId() }}
+										class="settings-section"
+										classList={{ active: tab.id === activeTabId() }}
 										aria-current={tab.id === activeTabId() ? "true" : undefined}
 										onClick={() => selectTab(tab.id)}
 									>
@@ -161,10 +175,11 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 									</button>
 									<Show when={tab.id === activeTabId()}>
 										<For each={tabSubsections(tab.id)}>
-											{name => (
+											{(name) => (
 												<button
 													type="button"
-													class="settings-subsection" classList={{ active: activeGroup() === name }}
+													class="settings-subsection"
+													classList={{ active: activeGroup() === name }}
 													onClick={() => {
 														setActiveGroup(name);
 														setQuery("");
@@ -181,7 +196,9 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 						{/* Fleet fallback notice: a quiet footnote pinned to the
 						    bottom of the nav rail, not body chrome. */}
 						<Show when={fleetSettingsActive()}>
-							<div class="settings-nav-footnote">No session attached — changes save to config.yml and apply to new sessions.</div>
+							<div class="settings-nav-footnote">
+								No session attached — changes save to config.yml and apply to new sessions.
+							</div>
 						</Show>
 					</nav>
 				</Show>
@@ -189,7 +206,9 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 					{/* Narrow layout hides the nav rail, so the fleet fallback notice
 					    keeps a body copy there only (CSS-gated to ≤720px). */}
 					<Show when={fleetSettingsActive()}>
-						<div class="settings-note settings-note-narrow">No session attached — changes save to config.yml and apply to new sessions.</div>
+						<div class="settings-note settings-note-narrow">
+							No session attached — changes save to config.yml and apply to new sessions.
+						</div>
 					</Show>
 					<Show when={state.settingsLoading && !model()}>
 						<div class="settings-note">Loading settings…</div>
@@ -202,33 +221,48 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 							{([label, matches]) => (
 								<div class="settings-group">
 									<h3 class="settings-group-title">{label}</h3>
-									<For each={matches}>{match => <SettingsRow item={match.item} />}</For>
+									<For each={matches}>{(match) => <SettingsRow item={match.item} />}</For>
 								</div>
 							)}
 						</For>
 					</Show>
 					<Show when={!searching() && model()}>
-						<Show when={activeTabId() === "web-ui" && (visibleGroup() === null || visibleGroup() === "Interface")}>
+						<Show
+							when={
+								activeTabId() === "web-ui" &&
+								(visibleGroup() === null || visibleGroup() === "Interface")
+							}
+						>
 							<div class="settings-group">
 								<h3 class="settings-group-title">Interface</h3>
 								<Row label="theme preference">
 									<select
 										aria-label="theme preference"
 										value={theme()}
-										onChange={e => setThemeSignal(setTheme(e.currentTarget.value as ThemePreference))}
+										onChange={(e) =>
+											setThemeSignal(setTheme(e.currentTarget.value as ThemePreference))
+										}
 									>
-										<For each={THEME_OPTIONS}>
-											{o => <option value={o.id}>{o.label}</option>}
-										</For>
+										<For each={THEME_OPTIONS}>{(o) => <option value={o.id}>{o.label}</option>}</For>
 									</select>
 								</Row>
 								<Row label="font size">
 									<div class="settings-font">
-										<button type="button" class="settings-control-btn" aria-label="Decrease font size" onClick={() => setFontSize(stepFontSize(-1))}>
+										<button
+											type="button"
+											class="settings-control-btn"
+											aria-label="Decrease font size"
+											onClick={() => setFontSize(stepFontSize(-1))}
+										>
 											<MinusIcon />
 										</button>
 										<span class="settings-font-value">{fontSize()}</span>
-										<button type="button" class="settings-control-btn" aria-label="Increase font size" onClick={() => setFontSize(stepFontSize(1))}>
+										<button
+											type="button"
+											class="settings-control-btn"
+											aria-label="Increase font size"
+											onClick={() => setFontSize(stepFontSize(1))}
+										>
 											<PlusIcon />
 										</button>
 									</div>
@@ -238,7 +272,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 										type="checkbox"
 										aria-label="desktop notifications"
 										checked={state.notifyEnabled}
-										onChange={e => setNotifyEnabled(e.currentTarget.checked)}
+										onChange={(e) => setNotifyEnabled(e.currentTarget.checked)}
 									/>
 								</Row>
 								<Row label="reveal queue">
@@ -246,7 +280,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 										type="checkbox"
 										aria-label="reveal queue"
 										checked={state.reveal}
-										onChange={e => setState("reveal", e.currentTarget.checked)}
+										onChange={(e) => setState("reveal", e.currentTarget.checked)}
 									/>
 								</Row>
 								<Row label="soft fade">
@@ -254,7 +288,7 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 										type="checkbox"
 										aria-label="soft fade"
 										checked={state.soften}
-										onChange={e => setState("soften", e.currentTarget.checked)}
+										onChange={(e) => setState("soften", e.currentTarget.checked)}
 									/>
 								</Row>
 								{/* Session-RPC rows: no live session under the fleet fallback, so they
@@ -265,8 +299,10 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 											type="checkbox"
 											aria-label="fast mode"
 											checked={state.fastModeEnabled}
-											onChange={e =>
-												void call("setFastMode", [e.currentTarget.checked]).catch(err => setState("error", String(err)))
+											onChange={(e) =>
+												void call("setFastMode", [e.currentTarget.checked]).catch((err) =>
+													setState("error", String(err)),
+												)
 											}
 										/>
 									</Row>
@@ -275,36 +311,54 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 											type="checkbox"
 											aria-label="auto-retry"
 											checked={state.autoRetryEnabled}
-											onChange={e =>
-												void call("setAutoRetry", [e.currentTarget.checked]).catch(err => setState("error", String(err)))
+											onChange={(e) =>
+												void call("setAutoRetry", [e.currentTarget.checked]).catch((err) =>
+													setState("error", String(err)),
+												)
 											}
 										/>
 									</Row>
 									<Row label="Login providers…">
-										<button type="button" class="settings-control-btn" onClick={() => setState("modal", "login")}>
+										<button
+											type="button"
+											class="settings-control-btn"
+											onClick={() => setState("modal", "login")}
+										>
 											manage
 										</button>
 									</Row>
 								</Show>
 							</div>
 						</Show>
-						<Show when={activeTabId() === "web-ui" && (visibleGroup() === null || visibleGroup() === "Images") && appearanceWebImages(model()!).length > 0}>
+						<Show
+							when={
+								activeTabId() === "web-ui" &&
+								(visibleGroup() === null || visibleGroup() === "Images") &&
+								appearanceWebImages(model()!).length > 0
+							}
+						>
 							<div class="settings-group">
 								<h3 class="settings-group-title">Images</h3>
-								<For each={appearanceWebImages(model()!)}>{item => <SettingsRow item={item} />}</For>
+								<For each={appearanceWebImages(model()!)}>
+									{(item) => <SettingsRow item={item} />}
+								</For>
 							</div>
 						</Show>
 						<Show when={schemaTab(activeTabId())} keyed>
-							{tab => (
+							{(tab) => (
 								<>
 									<h3 class="settings-group-title">{tab.label}</h3>
-									<For each={tab.groups.filter(g => visibleGroup() === null || g.name === visibleGroup())}>
-										{group => (
+									<For
+										each={tab.groups.filter(
+											(g) => visibleGroup() === null || g.name === visibleGroup(),
+										)}
+									>
+										{(group) => (
 											<div class="settings-group">
 												<Show when={group.name}>
 													<h3 class="settings-group-title">{group.name}</h3>
 												</Show>
-												<For each={group.items}>{item => <SettingsRow item={item} />}</For>
+												<For each={group.items}>{(item) => <SettingsRow item={item} />}</For>
 											</div>
 										)}
 									</For>
@@ -319,7 +373,12 @@ export const SettingsPanel: Component<{ onClose: () => void }> = props => {
 };
 
 /** Shared row layout: label (+ changed dot) and description left, control right. */
-function Row(props: { label: string; description?: string; changed?: boolean; children: JSX.Element }) {
+function Row(props: {
+	label: string;
+	description?: string;
+	changed?: boolean;
+	children: JSX.Element;
+}) {
 	return (
 		<div class="settings-item">
 			<div>
@@ -358,7 +417,10 @@ function SettingsRow(props: { item: SettingsItem }) {
 	};
 
 	const seedLimitDrafts = () => {
-		const record = (item.value && typeof item.value === "object" ? item.value : {}) as Record<string, number>;
+		const record = (item.value && typeof item.value === "object" ? item.value : {}) as Record<
+			string,
+			number
+		>;
 		const seeded: Record<string, string> = {};
 		for (const provider of item.providers ?? []) {
 			seeded[provider] = record[provider] !== undefined ? String(record[provider]) : "";
@@ -381,16 +443,17 @@ function SettingsRow(props: { item: SettingsItem }) {
 	};
 
 	const resetLimits = () => {
-		setLimitDrafts(Object.fromEntries((item.providers ?? []).map(p => [p, ""])));
+		setLimitDrafts(Object.fromEntries((item.providers ?? []).map((p) => [p, ""])));
 		updateSetting(item.path, {});
 	};
 
 	const selected = () => (Array.isArray(item.value) ? (item.value as string[]) : []);
 	const chipOptions = () =>
-		item.options ?? (item.values ?? []).map(v => ({ value: v, label: v, description: undefined }));
+		item.options ??
+		(item.values ?? []).map((v) => ({ value: v, label: v, description: undefined }));
 	const toggleOption = (value: string) => {
 		const cur = selected();
-		const next = cur.includes(value) ? cur.filter(v => v !== value) : [...cur, value];
+		const next = cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value];
 		updateSetting(item.path, next);
 	};
 	const moveOption = (value: string, dir: -1 | 1) => {
@@ -411,7 +474,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 					type="checkbox"
 					aria-label={item.label}
 					checked={Boolean(item.value)}
-					onChange={e => updateSetting(item.path, e.currentTarget.checked)}
+					onChange={(e) => updateSetting(item.path, e.currentTarget.checked)}
 				/>
 			);
 			break;
@@ -420,9 +483,9 @@ function SettingsRow(props: { item: SettingsItem }) {
 				<select
 					aria-label={item.label}
 					value={displayOptionValue(item, item.value)}
-					onChange={e => updateSetting(item.path, e.currentTarget.value)}
+					onChange={(e) => updateSetting(item.path, e.currentTarget.value)}
 				>
-					<For each={item.values ?? []}>{v => <option value={v}>{v}</option>}</For>
+					<For each={item.values ?? []}>{(v) => <option value={v}>{v}</option>}</For>
 				</select>
 			);
 			break;
@@ -431,10 +494,10 @@ function SettingsRow(props: { item: SettingsItem }) {
 				<select
 					aria-label={item.label}
 					value={displayOptionValue(item, item.value)}
-					onChange={e => updateSetting(item.path, e.currentTarget.value)}
+					onChange={(e) => updateSetting(item.path, e.currentTarget.value)}
 				>
 					<For each={item.options ?? []}>
-						{opt => (
+						{(opt) => (
 							<option value={opt.value} title={opt.description}>
 								{opt.label}
 							</option>
@@ -451,12 +514,12 @@ function SettingsRow(props: { item: SettingsItem }) {
 						aria-label={item.label}
 						value={draft()}
 						placeholder={formatItemValue(item)}
-						onInput={e => {
+						onInput={(e) => {
 							setDraft(e.currentTarget.value);
 							setDirty(true);
 						}}
 						onBlur={commitText}
-						onKeyDown={e => {
+						onKeyDown={(e) => {
 							if (e.key === "Enter") e.currentTarget.blur();
 						}}
 					/>
@@ -464,7 +527,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 						<button
 							type="button"
 							class="settings-control-btn"
-							onClick={() => setShowSecret(v => !v)}
+							onClick={() => setShowSecret((v) => !v)}
 						>
 							{showSecret() ? "hide" : "show"}
 						</button>
@@ -476,7 +539,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 			control = (
 				<div class="settings-chips">
 					<For each={chipOptions()}>
-						{opt => {
+						{(opt) => {
 							const on = selected().includes(opt.value);
 							return (
 								<span class="settings-chip-wrap">
@@ -493,7 +556,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 											type="button"
 											class="settings-chip-move"
 											aria-label="Move up"
-											onClick={e => {
+											onClick={(e) => {
 												e.stopPropagation();
 												moveOption(opt.value, -1);
 											}}
@@ -504,7 +567,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 											type="button"
 											class="settings-chip-move"
 											aria-label="Move down"
-											onClick={e => {
+											onClick={(e) => {
 												e.stopPropagation();
 												moveOption(opt.value, 1);
 											}}
@@ -526,7 +589,7 @@ function SettingsRow(props: { item: SettingsItem }) {
 					class="settings-control-btn"
 					onClick={() => {
 						seedLimitDrafts();
-						setLimitsOpen(v => !v);
+						setLimitsOpen((v) => !v);
 					}}
 				>
 					{limitsOpen() ? "hide limits" : "set limits"}
@@ -545,14 +608,14 @@ function SettingsRow(props: { item: SettingsItem }) {
 			<Show when={item.type === "providerLimits" && limitsOpen()}>
 				<div class="settings-limit-inputs">
 					<For each={item.providers ?? []}>
-						{provider => (
+						{(provider) => (
 							<label class="settings-limit-field">
 								{provider}
 								<input
 									type="number"
 									min={0}
 									value={limitDrafts()[provider] ?? ""}
-									onInput={e => commitLimit(provider, e.currentTarget.value)}
+									onInput={(e) => commitLimit(provider, e.currentTarget.value)}
 								/>
 							</label>
 						)}

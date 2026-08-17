@@ -20,12 +20,18 @@ function item(partial: Partial<SettingsItem> & Pick<SettingsItem, "type">): Sett
 
 describe("displayOptionValue", () => {
 	test("compaction thresholds map stored -1 to 'default'", () => {
-		expect(displayOptionValue(item({ type: "submenu", path: "compaction.thresholdPercent" }), -1)).toBe("default");
-		expect(displayOptionValue(item({ type: "submenu", path: "compaction.thresholdTokens" }), -1)).toBe("default");
+		expect(
+			displayOptionValue(item({ type: "submenu", path: "compaction.thresholdPercent" }), -1),
+		).toBe("default");
+		expect(
+			displayOptionValue(item({ type: "submenu", path: "compaction.thresholdTokens" }), -1),
+		).toBe("default");
 	});
 
 	test("other values pass through", () => {
-		expect(displayOptionValue(item({ type: "submenu", path: "compaction.thresholdPercent" }), "50")).toBe("50");
+		expect(
+			displayOptionValue(item({ type: "submenu", path: "compaction.thresholdPercent" }), "50"),
+		).toBe("50");
 		expect(displayOptionValue(item({ type: "enum", path: "other.path" }), -1)).toBe("-1");
 		expect(displayOptionValue(item({ type: "enum", path: "other.path" }), 0)).toBe("0");
 	});
@@ -76,7 +82,9 @@ describe("formatItemValue", () => {
 	});
 
 	test("secret text masks with dots", () => {
-		expect(formatItemValue(item({ type: "text", secret: true, value: "hunter2" }))).toBe("••••••••");
+		expect(formatItemValue(item({ type: "text", secret: true, value: "hunter2" }))).toBe(
+			"••••••••",
+		);
 		expect(formatItemValue(item({ type: "text", secret: true, value: "" }))).toBe("");
 	});
 
@@ -95,7 +103,9 @@ describe("formatItemValue", () => {
 
 	test("multiselect empty renders none, or default when ordered", () => {
 		expect(formatItemValue(item({ type: "multiselect", value: [] }))).toBe("none");
-		expect(formatItemValue(item({ type: "multiselect", value: [], ordered: true }))).toBe("default");
+		expect(formatItemValue(item({ type: "multiselect", value: [], ordered: true }))).toBe(
+			"default",
+		);
 	});
 
 	test("ordered multiselect joins with an arrow", () => {
@@ -114,7 +124,9 @@ describe("formatItemValue", () => {
 	test("providerLimits renders Unlimited when empty, sorted entries otherwise", () => {
 		expect(formatItemValue(item({ type: "providerLimits", value: {} }))).toBe("Unlimited");
 		expect(formatItemValue(item({ type: "providerLimits", value: null }))).toBe("Unlimited");
-		expect(formatItemValue(item({ type: "providerLimits", value: { b: 1, a: 2 } }))).toBe("a: 2, b: 1");
+		expect(formatItemValue(item({ type: "providerLimits", value: { b: 1, a: 2 } }))).toBe(
+			"a: 2, b: 1",
+		);
 	});
 });
 
@@ -125,11 +137,25 @@ describe("filterSettings", () => {
 		groups: [
 			{
 				name: "",
-				items: [item({ type: "boolean", path: "ui.showTimestamps", label: "Show timestamps", description: "show time" })],
+				items: [
+					item({
+						type: "boolean",
+						path: "ui.showTimestamps",
+						label: "Show timestamps",
+						description: "show time",
+					}),
+				],
 			},
 			{
 				name: "Advanced",
-				items: [item({ type: "enum", path: "compaction.thresholdPercent", label: "Compaction percent", description: "compact at" })],
+				items: [
+					item({
+						type: "enum",
+						path: "compaction.thresholdPercent",
+						label: "Compaction percent",
+						description: "compact at",
+					}),
+				],
 			},
 		],
 	};
@@ -140,7 +166,12 @@ describe("filterSettings", () => {
 			{
 				name: "",
 				items: [
-					item({ type: "text", path: "theme.name", label: "Max Tokens", description: "cap output" }),
+					item({
+						type: "text",
+						path: "theme.name",
+						label: "Max Tokens",
+						description: "cap output",
+					}),
 					item({ type: "enum", path: "images.blockImages", label: "Block images" }),
 				],
 			},
@@ -226,14 +257,19 @@ describe("appearanceWebImages", () => {
 	};
 
 	test("appearanceWebImages returns the images.* items in schema order, never terminal.showImages", () => {
-		expect(appearanceWebImages(model).map(i => i.path)).toEqual(["images.autoResize", "images.blockImages"]);
+		expect(appearanceWebImages(model).map((i) => i.path)).toEqual([
+			"images.autoResize",
+			"images.blockImages",
+		]);
 	});
 
 	test("appearanceWebImages returns [] without an Images group or appearance tab", () => {
 		const noImages: SettingsTab = {
 			id: "appearance",
 			label: "Appearance",
-			groups: [{ name: "Theme", items: [item({ type: "enum", path: "theme.dark", label: "Dark theme" })] }],
+			groups: [
+				{ name: "Theme", items: [item({ type: "enum", path: "theme.dark", label: "Dark theme" })] },
+			],
 		};
 		expect(appearanceWebImages({ tabs: [noImages] })).toEqual([]);
 		expect(appearanceWebImages({ tabs: [tabNoAppearance] })).toEqual([]);

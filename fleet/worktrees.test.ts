@@ -38,7 +38,10 @@ function sha1Prefix(s: string): string {
 }
 
 /** One `git -C <cwd> <args>` invocation (real git; repos are local + hermetic). */
-async function git(cwd: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+async function git(
+	cwd: string,
+	args: string[],
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
 	const [stdout, stderr] = await Promise.all([
 		Bun.readableStreamToText(proc.stdout),
@@ -140,7 +143,9 @@ describe("managedWorktreePath", () => {
 		const dir = join(ws, "omp-fleet");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, ".ompweb-repo"), repoA);
-		expect(managedWorktreePath(ws, repoB, "x")).toBe(join(ws, `omp-fleet-${sha1Prefix(repoB)}`, "x"));
+		expect(managedWorktreePath(ws, repoB, "x")).toBe(
+			join(ws, `omp-fleet-${sha1Prefix(repoB)}`, "x"),
+		);
 	});
 
 	test("deterministic: the same inputs always map to the same path", () => {
@@ -188,12 +193,14 @@ describe("createWorktree", () => {
 		expect(created.baseRef).toBe("main");
 		expect(existsSync(target)).toBe(true);
 		// Ownership marker records the owning repo realpath.
-		expect(readFileSync(join(ws, repo.split("/").pop()!, ".ompweb-repo"), "utf8").trim()).toBe(repo);
+		expect(readFileSync(join(ws, repo.split("/").pop()!, ".ompweb-repo"), "utf8").trim()).toBe(
+			repo,
+		);
 		// git agrees: the worktree is listed and the branch exists at base's commit.
 		const list = (await git(repo, ["worktree", "list", "--porcelain"])).stdout;
 		expect(list).toContain(`worktree ${target}`);
 		expect(list).toContain("branch refs/heads/feature-branch");
-		expect((await gitOk(repo, ["rev-parse", "--verify", "refs/heads/feature-branch"]))).toBe(
+		expect(await gitOk(repo, ["rev-parse", "--verify", "refs/heads/feature-branch"])).toBe(
 			await gitOk(repo, ["rev-parse", "refs/heads/main"]),
 		);
 	});
@@ -203,15 +210,15 @@ describe("createWorktree", () => {
 		await makeRepo(repo);
 		const ws = tmpDir();
 		await createWorktree(projectFor(repo), "dup", { workspaceDir: ws });
-		await expect(createWorktree(projectFor(repo), "dup", { workspaceDir: ws })).rejects.toBeInstanceOf(
-			WorktreeTargetExistsError,
-		);
+		await expect(
+			createWorktree(projectFor(repo), "dup", { workspaceDir: ws }),
+		).rejects.toBeInstanceOf(WorktreeTargetExistsError);
 		// A pre-existing directory at the target also refuses.
 		const target = join(ws, repo.split("/").pop()!, "occupied");
 		mkdirSync(target, { recursive: true });
-		await expect(createWorktree(projectFor(repo), "occupied", { workspaceDir: ws })).rejects.toBeInstanceOf(
-			WorktreeTargetExistsError,
-		);
+		await expect(
+			createWorktree(projectFor(repo), "occupied", { workspaceDir: ws }),
+		).rejects.toBeInstanceOf(WorktreeTargetExistsError);
 	});
 
 	test("refuses an existing branch that is checked out elsewhere", async () => {
@@ -229,12 +236,17 @@ describe("createWorktree", () => {
 		await makeRepo(repo);
 		await gitOk(repo, ["branch", "feature"]);
 		const ws = tmpDir();
-		const created = await createWorktree(projectFor(repo), "attach-me", { workspaceDir: ws, existingBranch: "feature" });
+		const created = await createWorktree(projectFor(repo), "attach-me", {
+			workspaceDir: ws,
+			existingBranch: "feature",
+		});
 		expect(created.branch).toBe("feature");
 		expect(created.baseRef).toBeUndefined();
 		const target = join(ws, repo.split("/").pop()!, "attach-me");
 		expect(existsSync(target)).toBe(true);
-		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(`branch refs/heads/feature`);
+		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(
+			`branch refs/heads/feature`,
+		);
 	});
 
 	test("refuses an unknown existing branch", async () => {
@@ -310,7 +322,14 @@ describe("worktreeDeleteInfo", () => {
 		const info = await worktreeDeleteInfo(a.path, ws);
 		expect(info.owned).toBe(true);
 		expect(info.dirty).toBe(false);
-		expect(info.git).toEqual({ added: 0, modified: 0, deleted: 0, untracked: 0, linesAdded: 0, linesDeleted: 0 });
+		expect(info.git).toEqual({
+			added: 0,
+			modified: 0,
+			deleted: 0,
+			untracked: 0,
+			linesAdded: 0,
+			linesDeleted: 0,
+		});
 		expect(info.branch).toBe("clean");
 		expect(info.merged).toBe(true); // no commits: tip is the base's tip
 		expect(info.unpushed).toBe(false); // no upstream: unknown → false
@@ -367,7 +386,7 @@ describe("deleteWorktree", () => {
 		expect(result.branchDeleted).toBe(true);
 		expect(existsSync(a.path)).toBe(false);
 		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).not.toContain(a.path);
-		expect((await gitOk(repo, ["branch", "--list", "gone"]))).toBe("");
+		expect(await gitOk(repo, ["branch", "--list", "gone"])).toBe("");
 	});
 
 	test("refuses a dirty worktree (no --force), leaving it in place", async () => {
@@ -376,7 +395,9 @@ describe("deleteWorktree", () => {
 		const ws = tmpDir();
 		const a = await createWorktree(projectFor(repo), "keep", { workspaceDir: ws });
 		writeFileSync(join(a.path, "scratch.txt"), "new\n");
-		await expect(deleteWorktree(a.path, ws, { deleteBranch: true })).rejects.toBeInstanceOf(WorktreeDirtyError);
+		await expect(deleteWorktree(a.path, ws, { deleteBranch: true })).rejects.toBeInstanceOf(
+			WorktreeDirtyError,
+		);
 		expect(existsSync(a.path)).toBe(true);
 		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(a.path);
 	});
@@ -409,7 +430,7 @@ describe("deleteWorktree", () => {
 		expect(existsSync(a.path)).toBe(false);
 		expect(result.branch).toBe("unmerged");
 		expect(result.branchDeleted).toBe(false); // git branch -d refused (unmerged)
-		expect((await gitOk(repo, ["branch", "--list", "unmerged"]))).toBe("unmerged");
+		expect(await gitOk(repo, ["branch", "--list", "unmerged"])).toBe("unmerged");
 	});
 
 	test("a missing path is a no-op success", async () => {
@@ -428,7 +449,13 @@ describe("registerWorktreeEntry", () => {
 		const a = await createWorktree(projectFor(repo), "tagged", { workspaceDir: ws });
 		const registry = new Registry(join(tmpDir(), "state.json"));
 		await registry.load();
-		const entry = await registerWorktreeEntry(registry, {} as never, projectFor(repo, "p7"), a.path, { start: false });
+		const entry = await registerWorktreeEntry(
+			registry,
+			{} as never,
+			projectFor(repo, "p7"),
+			a.path,
+			{ start: false },
+		);
 		expect(entry.mode).toBe("spawned");
 		expect(entry.status).toBe("asleep");
 		expect(entry.cwd).toBe(a.path);

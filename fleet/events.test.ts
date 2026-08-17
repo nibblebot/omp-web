@@ -14,7 +14,11 @@ describe("FleetEventLog", () => {
 		log.add("error", "server", "request failed");
 		const list = log.list();
 		expect(list).toHaveLength(3);
-		expect(list.map((entry) => entry.message)).toEqual(["connecting", "exit code=1", "request failed"]);
+		expect(list.map((entry) => entry.message)).toEqual([
+			"connecting",
+			"exit code=1",
+			"request failed",
+		]);
 		expect(list[0]).toMatchObject({ level: "info", source: "connector", daemonId: "d1" });
 		expect(list[2]?.level).toBe("error");
 		expect(list[2]?.daemonId).toBeUndefined();

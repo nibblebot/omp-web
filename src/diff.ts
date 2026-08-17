@@ -1,9 +1,14 @@
 import { diffLines } from "diff";
 
-export type DiffRow = { type: "add" | "del" | "context"; text: string } | { type: "collapse"; count: number };
+export type DiffRow =
+	| { type: "add" | "del" | "context"; text: string }
+	| { type: "collapse"; count: number };
 
 /** Split diff parts into typed lines, dropping the trailing-newline artifact. */
-function toLines(oldText: string, newText: string): Array<{ type: "add" | "del" | "context"; text: string }> {
+function toLines(
+	oldText: string,
+	newText: string,
+): Array<{ type: "add" | "del" | "context"; text: string }> {
 	const lines: Array<{ type: "add" | "del" | "context"; text: string }> = [];
 	for (const part of diffLines(oldText, newText)) {
 		const type = part.added ? "add" : part.removed ? "del" : "context";

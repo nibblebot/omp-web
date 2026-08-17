@@ -11,24 +11,27 @@ const MAX_CHARS = 500;
 
 type AssistantContent = Extract<AgentMessage, { role: "assistant" }>["content"];
 
-const clip = (text: string): string => (text.length > MAX_CHARS ? `${text.slice(0, MAX_CHARS)}…` : text);
+const clip = (text: string): string =>
+	text.length > MAX_CHARS ? `${text.slice(0, MAX_CHARS)}…` : text;
 
 // `.content` is a string or (TextContent | ImageContent)[] across user + toolResult
 // messages in pi-ai; flatten to one string with `[image]` placeholders.
 const flattenParts = (parts: string | { type: string; text?: string }[]): string =>
 	typeof parts === "string"
 		? parts
-		: parts.map(c => (c.type === "text" ? c.text ?? "" : "[image]")).join("\n");
+		: parts.map((c) => (c.type === "text" ? (c.text ?? "") : "[image]")).join("\n");
 
-const AssistantBlocks: Component<{ content: AssistantContent }> = props => (
+const AssistantBlocks: Component<{ content: AssistantContent }> = (props) => (
 	<For each={props.content}>
-		{block => {
+		{(block) => {
 			if (block.type === "text") {
 				return <div style={{ "white-space": "pre-wrap" }}>{clip(block.text)}</div>;
 			}
 			if (block.type === "thinking") {
 				return (
-					<div class="dim-block" style={{ "white-space": "pre-wrap" }}>{clip(block.thinking)}</div>
+					<div class="dim-block" style={{ "white-space": "pre-wrap" }}>
+						{clip(block.thinking)}
+					</div>
 				);
 			}
 			if (block.type === "toolCall") {
@@ -39,7 +42,7 @@ const AssistantBlocks: Component<{ content: AssistantContent }> = props => (
 	</For>
 );
 
-const MessageView: Component<{ msg: AgentMessage }> = props => {
+const MessageView: Component<{ msg: AgentMessage }> = (props) => {
 	if (props.msg.role === "user") {
 		const content = props.msg.content as Parameters<typeof flattenParts>[0];
 		return <div class="msg-user">{clip(flattenParts(content))}</div>;
@@ -59,7 +62,7 @@ const MessageView: Component<{ msg: AgentMessage }> = props => {
 };
 
 /** Read-only transcript of one subagent, paged by session-file byte offsets. */
-const SubagentDetail: Component<{ sub: SubagentInfo; onBack: () => void }> = props => {
+const SubagentDetail: Component<{ sub: SubagentInfo; onBack: () => void }> = (props) => {
 	const [messages, setMessages] = createSignal<AgentMessage[]>([]);
 	const [fromByte, setFromByte] = createSignal(0);
 	const [nextByte, setNextByte] = createSignal(0);
@@ -74,7 +77,9 @@ const SubagentDetail: Component<{ sub: SubagentInfo; onBack: () => void }> = pro
 			const args: { subagentId: string; fromByte?: number } = { subagentId: props.sub.id };
 			if (from !== undefined) args.fromByte = from;
 			const res = (await call("getSubagentMessages", [args])) as SubagentMessagesResult;
-			setMessages(prev => (from === undefined || res.reset ? res.messages : [...prev, ...res.messages]));
+			setMessages((prev) =>
+				from === undefined || res.reset ? res.messages : [...prev, ...res.messages],
+			);
 			setFromByte(res.fromByte);
 			setNextByte(res.nextByte);
 		} catch (e) {
@@ -92,11 +97,11 @@ const SubagentDetail: Component<{ sub: SubagentInfo; onBack: () => void }> = pro
 			<button type="button" style={{ "align-self": "flex-start" }} onClick={props.onBack}>
 				<ArrowLeftIcon /> back
 			</button>
-			<For each={messages()}>{msg => <MessageView msg={msg} />}</For>
+			<For each={messages()}>{(msg) => <MessageView msg={msg} />}</For>
 			{messages().length === 0 && !loading() && !error() && (
 				<div class="tool-collapsed-note">no messages</div>
 			)}
-			<Show when={error()}>{err => <div class="msg-notice">{err()}</div>}</Show>
+			<Show when={error()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
 			<Show when={nextByte() > fromByte()}>
 				<button type="button" disabled={loading()} onClick={() => void load(nextByte())}>
 					{loading() ? "loading…" : "load newer"}
@@ -107,12 +112,13 @@ const SubagentDetail: Component<{ sub: SubagentInfo; onBack: () => void }> = pro
 };
 
 /** Steer/abort controls for a running subagent row; hidden for finished/idle/parked agents. */
-const SubagentControls: Component<{ sub: SubagentInfo }> = props => {
+const SubagentControls: Component<{ sub: SubagentInfo }> = (props) => {
 	const [confirming, setConfirming] = createSignal(false);
 	const [pending, setPending] = createSignal(false);
 	const [steerText, setSteerText] = createSignal("");
 
-	const report = (err: unknown) => pushNotice("error", err instanceof Error ? err.message : String(err));
+	const report = (err: unknown) =>
+		pushNotice("error", err instanceof Error ? err.message : String(err));
 
 	const steer = async (): Promise<void> => {
 		const text = steerText().trim();
@@ -142,7 +148,7 @@ const SubagentControls: Component<{ sub: SubagentInfo }> = props => {
 
 	// The row itself opens the transcript; controls must not bubble to it.
 	return (
-		<div class="subagent-controls" onClick={e => e.stopPropagation()}>
+		<div class="subagent-controls" onClick={(e) => e.stopPropagation()}>
 			<input
 				class="picker-filter"
 				type="text"
@@ -150,12 +156,16 @@ const SubagentControls: Component<{ sub: SubagentInfo }> = props => {
 				placeholder="steer…"
 				value={steerText()}
 				disabled={pending()}
-				onInput={e => setSteerText(e.currentTarget.value)}
-				onKeyDown={e => {
+				onInput={(e) => setSteerText(e.currentTarget.value)}
+				onKeyDown={(e) => {
 					if (e.key === "Enter") void steer();
 				}}
 			/>
-			<button type="button" disabled={pending() || !steerText().trim()} onClick={() => void steer()}>
+			<button
+				type="button"
+				disabled={pending() || !steerText().trim()}
+				onClick={() => void steer()}
+			>
 				steer
 			</button>
 			<Show
@@ -178,7 +188,7 @@ const SubagentControls: Component<{ sub: SubagentInfo }> = props => {
 };
 
 /** Read-only subagent list with per-agent transcript drill-down. */
-export const SubagentPanel: Component<{ onClose: () => void }> = props => {
+export const SubagentPanel: Component<{ onClose: () => void }> = (props) => {
 	const [selected, setSelected] = createSignal<SubagentInfo | null>(null);
 	const subs = () => [...state.subagents.values()].sort((a, b) => b.lastUpdate - a.lastUpdate);
 	return (
@@ -188,7 +198,7 @@ export const SubagentPanel: Component<{ onClose: () => void }> = props => {
 				<Modal title={`Subagents (${subs().length})`} onClose={props.onClose}>
 					<div class="subagent-list">
 						<For each={subs()}>
-							{sub => (
+							{(sub) => (
 								<div
 									class="subagent-panel-row"
 									style={{ cursor: "pointer" }}
@@ -198,9 +208,7 @@ export const SubagentPanel: Component<{ onClose: () => void }> = props => {
 									<Show when={sub.status === "started" || sub.status === "running"}>
 										<SubagentControls sub={sub} />
 									</Show>
-									<span class="subagent-time">
-										{new Date(sub.lastUpdate).toLocaleTimeString()}
-									</span>
+									<span class="subagent-time">{new Date(sub.lastUpdate).toLocaleTimeString()}</span>
 								</div>
 							)}
 						</For>
@@ -209,7 +217,7 @@ export const SubagentPanel: Component<{ onClose: () => void }> = props => {
 				</Modal>
 			}
 		>
-			{sub => (
+			{(sub) => (
 				<Modal title={sub().agent} onClose={props.onClose}>
 					<SubagentDetail sub={sub()} onBack={() => setSelected(null)} />
 				</Modal>

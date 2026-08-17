@@ -123,7 +123,9 @@ export class Registry {
 		// Tolerant read: files written before projects existed lack the keys.
 		const projects = file.projects ?? [];
 		if (!Array.isArray(projects) || projects.some((p) => typeof p?.projectId !== "string")) {
-			throw new Error(`registry state corrupt at ${this.statePath}: projects entry missing projectId`);
+			throw new Error(
+				`registry state corrupt at ${this.statePath}: projects entry missing projectId`,
+			);
 		}
 		let maxProjectIndex = 0;
 		for (const project of projects) {
@@ -151,7 +153,9 @@ export class Registry {
 		return this.entries.find((entry) => entry.daemonId === daemonId);
 	}
 
-	create(init: Omit<RegistryEntry, "daemonId" | "registeredAt" | "status"> & { status?: DaemonStatus }): RegistryEntry {
+	create(
+		init: Omit<RegistryEntry, "daemonId" | "registeredAt" | "status"> & { status?: DaemonStatus },
+	): RegistryEntry {
 		const entry: RegistryEntry = {
 			...init,
 			daemonId: `d${this.nextId++}`,
@@ -238,7 +242,9 @@ export class Registry {
 	removeProject(projectId: string): void {
 		const index = this.projectList.findIndex((project) => project.projectId === projectId);
 		if (index === -1) throw new Error(`unknown project id: ${projectId}`);
-		const blockers = this.entries.filter((entry) => entry.projectId === projectId).map((entry) => entry.daemonId);
+		const blockers = this.entries
+			.filter((entry) => entry.projectId === projectId)
+			.map((entry) => entry.daemonId);
 		if (blockers.length > 0) {
 			throw new Error(`project ${projectId} in use by daemons: ${blockers.join(", ")}`);
 		}
@@ -282,7 +288,12 @@ export class Registry {
 
 	#persist(): void {
 		mkdirSync(dirname(this.statePath), { recursive: true });
-		const payload = JSON.stringify({ nextId: this.nextId, entries: this.entries, projects: this.projectList, nextProjectId: this.nextProjectId } satisfies RegistryFile);
+		const payload = JSON.stringify({
+			nextId: this.nextId,
+			entries: this.entries,
+			projects: this.projectList,
+			nextProjectId: this.nextProjectId,
+		} satisfies RegistryFile);
 		const tmp = `${this.statePath}.tmp`;
 		writeFileSync(tmp, payload, "utf8");
 		renameSync(tmp, this.statePath);

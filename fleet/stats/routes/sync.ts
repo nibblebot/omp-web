@@ -28,8 +28,8 @@ import type { AppCtx, Route, SyncOutcome } from "../types";
 
 /** Timeout knobs — an object so tests can shrink the window without a rebuild. */
 export const syncConfig = {
-  /** how long to wait for the omp child before killing it (10 min) */
-  timeoutMs: 10 * 60 * 1000,
+	/** how long to wait for the omp child before killing it (10 min) */
+	timeoutMs: 10 * 60 * 1000,
 };
 
 /** Spawn failed because the omp binary is missing/unrunnable (ENOENT). */
@@ -41,18 +41,18 @@ export class SyncUnavailable extends Error {}
  * specific reason (vs. the generic install hint for SyncUnavailable).
  */
 export class SyncConfigError extends SyncUnavailable {
-  constructor(message: string) {
-    super(message);
-  }
+	constructor(message: string) {
+		super(message);
+	}
 }
 
 /** The omp child exited nonzero. `detail` carries the tail of its stderr. */
 export class SyncFailed extends Error {
-  readonly detail: string;
-  constructor(detail: string) {
-    super(detail);
-    this.detail = detail;
-  }
+	readonly detail: string;
+	constructor(detail: string) {
+		super(detail);
+		this.detail = detail;
+	}
 }
 
 /** The omp child was killed after exceeding syncConfig.timeoutMs. */
@@ -65,9 +65,9 @@ export class SyncTimedOut extends Error {}
  * success-if-exit-0 contract.
  */
 export function parseSummary(stdout: string): SyncOutcome {
-  const m = /Synced (\d+) new entries from (\d+) files \((\d+) total\)/.exec(stdout);
-  if (!m) return { processed: 0, files: 0, totalMessages: 0 };
-  return { processed: Number(m[1]), files: Number(m[2]), totalMessages: Number(m[3]) };
+	const m = /Synced (\d+) new entries from (\d+) files \((\d+) total\)/.exec(stdout);
+	if (!m) return { processed: 0, files: 0, totalMessages: 0 };
+	return { processed: Number(m[1]), files: Number(m[2]), totalMessages: Number(m[3]) };
 }
 
 /**
@@ -89,22 +89,22 @@ export function parseSummary(stdout: string): SyncOutcome {
  * overrides them.
  */
 export function buildSyncEnv(cfg: StatsConfig, home: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  const statsDir = dirname(cfg.statsDbPath);
-  if (cfg.statsDbPath === join(home, ".omp", "stats.db")) {
-    // Default target — let omp use its built-in default.
-    delete env.PI_CONFIG_DIR;
-    delete env.PI_PROFILE;
-  } else if (statsDir === home || statsDir.startsWith(home + sep)) {
-    env.PI_CONFIG_DIR = relative(home, statsDir);
-    delete env.PI_PROFILE;
-  } else {
-    throw new SyncConfigError(
-      "stats.db lies outside omp's config root (absolute PI_CONFIG_DIR) — omp stats cannot sync it; unset PI_CONFIG_DIR or use a home-relative config name",
-    );
-  }
-  env.PI_CODING_AGENT_DIR = dirname(cfg.sessionsDir);
-  return env;
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	const statsDir = dirname(cfg.statsDbPath);
+	if (cfg.statsDbPath === join(home, ".omp", "stats.db")) {
+		// Default target — let omp use its built-in default.
+		delete env.PI_CONFIG_DIR;
+		delete env.PI_PROFILE;
+	} else if (statsDir === home || statsDir.startsWith(home + sep)) {
+		env.PI_CONFIG_DIR = relative(home, statsDir);
+		delete env.PI_PROFILE;
+	} else {
+		throw new SyncConfigError(
+			"stats.db lies outside omp's config root (absolute PI_CONFIG_DIR) — omp stats cannot sync it; unset PI_CONFIG_DIR or use a home-relative config name",
+		);
+	}
+	env.PI_CODING_AGENT_DIR = dirname(cfg.sessionsDir);
+	return env;
 }
 
 /**
@@ -113,101 +113,97 @@ export function buildSyncEnv(cfg: StatsConfig, home: string): NodeJS.ProcessEnv 
  * or SyncTimedOut (child killed).
  */
 export async function spawnSync(env: NodeJS.ProcessEnv): Promise<SyncOutcome> {
-  let proc: Subprocess<"ignore", "pipe", "pipe">;
-  try {
-    proc = Bun.spawn(["omp", "stats", "--summary"], {
-      env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-  } catch {
-    throw new SyncUnavailable("omp binary not found");
-  }
+	let proc: Subprocess<"ignore", "pipe", "pipe">;
+	try {
+		proc = Bun.spawn(["omp", "stats", "--summary"], {
+			env,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+	} catch {
+		throw new SyncUnavailable("omp binary not found");
+	}
 
-  const aborter = new AbortController();
-  try {
-    const timeout = new Promise<never>((_, reject) => {
-      const timer = setTimeout(() => {
-        try {
-          proc.kill();
-        } catch {
-          // Child already gone — nothing to kill.
-        }
-        reject(new SyncTimedOut("sync timed out"));
-      }, syncConfig.timeoutMs);
-      // Cancel the timer when the race settles so it never dangles.
-      aborter.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
-    });
-    const { code, stdout, stderr } = await Promise.race([
-      (async () => {
-        const [stdout, stderr] = await Promise.all([
-          Bun.readableStreamToText(proc.stdout),
-          Bun.readableStreamToText(proc.stderr),
-        ]);
-        const code = await proc.exited;
-        return { code, stdout, stderr };
-      })(),
-      timeout,
-    ]);
+	const aborter = new AbortController();
+	try {
+		const timeout = new Promise<never>((_, reject) => {
+			const timer = setTimeout(() => {
+				try {
+					proc.kill();
+				} catch {
+					// Child already gone — nothing to kill.
+				}
+				reject(new SyncTimedOut("sync timed out"));
+			}, syncConfig.timeoutMs);
+			// Cancel the timer when the race settles so it never dangles.
+			aborter.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+		});
+		const { code, stdout, stderr } = await Promise.race([
+			(async () => {
+				const [stdout, stderr] = await Promise.all([
+					Bun.readableStreamToText(proc.stdout),
+					Bun.readableStreamToText(proc.stderr),
+				]);
+				const code = await proc.exited;
+				return { code, stdout, stderr };
+			})(),
+			timeout,
+		]);
 
-    if (code !== 0) throw new SyncFailed(stderr.slice(-500));
-    return parseSummary(stdout);
-  } finally {
-    aborter.abort();
-    try {
-      proc.kill();
-    } catch {
-      // Already exited.
-    }
-  }
+		if (code !== 0) throw new SyncFailed(stderr.slice(-500));
+		return parseSummary(stdout);
+	} finally {
+		aborter.abort();
+		try {
+			proc.kill();
+		} catch {
+			// Already exited.
+		}
+	}
 }
 
 /** Single-flight guard — module-scope per process (one app per process). */
 let inflight: Promise<Response> | null = null;
 
 const SYNC_ERROR_503 =
-  "omp binary not found — install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH";
+	"omp binary not found — install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH";
 
 export function register(ctx: AppCtx, routes: Route[]): void {
-  routes.push({
-    method: "POST",
-    pattern: /^\/ctl\/stats\/sync$/,
-    handler: async () => {
-      if (inflight) return errorJson("sync already in progress", 409);
+	routes.push({
+		method: "POST",
+		pattern: /^\/ctl\/stats\/sync$/,
+		handler: async () => {
+			if (inflight) return errorJson("sync already in progress", 409);
 
-      console.log("[sync] started");
-      const started = Date.now();
-      const task = (async (): Promise<Response> => {
-        try {
-          const runner =
-            ctx.syncRunner ?? (() => spawnSync(buildSyncEnv(ctx.cfg, homedir())));
-          const outcome = await runner(process.env);
-          ctx.dbm.reprobe();
-          const durationMs = Date.now() - started;
-          console.log("[sync] finished", {
-            processed: outcome.processed,
-            files: outcome.files,
-            durationMs,
-          });
-          return json({ ...outcome, durationMs });
-        } catch (err) {
-          console.log(
-            "[sync] failed",
-            err instanceof Error ? err.message : String(err),
-          );
-          if (err instanceof SyncConfigError) return errorJson(err.message, 503);
-          if (err instanceof SyncUnavailable) return errorJson(SYNC_ERROR_503, 503);
-          if (err instanceof SyncTimedOut) return errorJson("sync timed out", 504);
-          if (err instanceof SyncFailed) {
-            return json({ error: "omp stats failed", detail: err.detail }, 502);
-          }
-          throw err; // unknown — dispatch boundary turns it into JSON 500
-        } finally {
-          inflight = null;
-        }
-      })();
-      inflight = task;
-      return await task;
-    },
-  });
+			console.log("[sync] started");
+			const started = Date.now();
+			const task = (async (): Promise<Response> => {
+				try {
+					const runner = ctx.syncRunner ?? (() => spawnSync(buildSyncEnv(ctx.cfg, homedir())));
+					const outcome = await runner(process.env);
+					ctx.dbm.reprobe();
+					const durationMs = Date.now() - started;
+					console.log("[sync] finished", {
+						processed: outcome.processed,
+						files: outcome.files,
+						durationMs,
+					});
+					return json({ ...outcome, durationMs });
+				} catch (err) {
+					console.log("[sync] failed", err instanceof Error ? err.message : String(err));
+					if (err instanceof SyncConfigError) return errorJson(err.message, 503);
+					if (err instanceof SyncUnavailable) return errorJson(SYNC_ERROR_503, 503);
+					if (err instanceof SyncTimedOut) return errorJson("sync timed out", 504);
+					if (err instanceof SyncFailed) {
+						return json({ error: "omp stats failed", detail: err.detail }, 502);
+					}
+					throw err; // unknown — dispatch boundary turns it into JSON 500
+				} finally {
+					inflight = null;
+				}
+			})();
+			inflight = task;
+			return await task;
+		},
+	});
 }

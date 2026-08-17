@@ -3,15 +3,15 @@ import type { Block, ChatItem, ToolItem } from "./state";
 /** One consolidated run: a maximal contiguous sequence of assistant messages
  *  and tool calls, collapsed into a single expandable transcript row. */
 export interface Run {
-	key: number;          // id of the run's first member
+	key: number; // id of the run's first member
 	items: Array<Extract<ChatItem, { kind: "assistant" }> | ToolItem>; // members in original stream order (assistant + tool only)
-	tools: ToolItem[];    // tool calls, stream order
-	thinking: Block[];    // thinking blocks only (text blocks excluded), stream order
-	turnCount: number;    // assistant messages (== model requests)
+	tools: ToolItem[]; // tool calls, stream order
+	thinking: Block[]; // thinking blocks only (text blocks excluded), stream order
+	turnCount: number; // assistant messages (== model requests)
 	requestCount: number; // tool calls (tool requests)
-	errorCount: number;   // tool calls with status "error"
-	durationMs: number;   // Σ assistant.duration (ms); absent/NaN/negative → 0
-	running: boolean;     // any tool still "running"
+	errorCount: number; // tool calls with status "error"
+	durationMs: number; // Σ assistant.duration (ms); absent/NaN/negative → 0
+	running: boolean; // any tool still "running"
 }
 
 /**
@@ -32,7 +32,17 @@ export function groupAssistantRuns(items: ChatItem[]): Run[] {
 	let key = 0;
 	const flushPending = () => {
 		if (pending.length === 0) return;
-		runs.push({ key, items: pending, tools, thinking, turnCount, requestCount, errorCount, durationMs, running });
+		runs.push({
+			key,
+			items: pending,
+			tools,
+			thinking,
+			turnCount,
+			requestCount,
+			errorCount,
+			durationMs,
+			running,
+		});
 		pending = [];
 		tools = [];
 		thinking = [];
@@ -57,7 +67,8 @@ export function groupAssistantRuns(items: ChatItem[]): Run[] {
 		} else if (item.kind === "assistant") {
 			turnCount++;
 			const duration = item.duration;
-			if (typeof duration === "number" && Number.isFinite(duration) && duration >= 0) durationMs += duration;
+			if (typeof duration === "number" && Number.isFinite(duration) && duration >= 0)
+				durationMs += duration;
 			for (const b of item.blocks) {
 				if (b.kind === "thinking") thinking.push(b);
 			}

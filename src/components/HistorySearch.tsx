@@ -10,7 +10,7 @@ import { PickerRow } from "./PickerRow";
  * TUI overlay). Enter/click inserts the entry into the PromptBox textarea;
  * Esc closes (Modal owns Esc). Entries are newest-first.
  */
-export const HistorySearch: Component<{ onClose: () => void }> = props => {
+export const HistorySearch: Component<{ onClose: () => void }> = (props) => {
 	const [query, setQuery] = createSignal("");
 	const [selected, setSelected] = createSignal(0);
 	// Fresh instance per open so entries pushed this session are included
@@ -38,12 +38,12 @@ export const HistorySearch: Component<{ onClose: () => void }> = props => {
 		const list = filtered();
 		if (e.key === "ArrowDown") {
 			e.preventDefault();
-			setSelected(i => Math.min(i + 1, list.length - 1));
+			setSelected((i) => Math.min(i + 1, list.length - 1));
 			return;
 		}
 		if (e.key === "ArrowUp") {
 			e.preventDefault();
-			setSelected(i => Math.max(i - 1, 0));
+			setSelected((i) => Math.max(i - 1, 0));
 			return;
 		}
 		if (e.key === "Enter") {
@@ -63,7 +63,7 @@ export const HistorySearch: Component<{ onClose: () => void }> = props => {
 				aria-label="Search prompt history"
 				placeholder="Search prompt history…"
 				value={query()}
-				onInput={e => setQuery(e.currentTarget.value)}
+				onInput={(e) => setQuery(e.currentTarget.value)}
 				onKeyDown={onKeyDown}
 			/>
 			<div class="picker-list">

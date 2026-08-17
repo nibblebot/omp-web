@@ -24,7 +24,7 @@ export const QueueBar: Component = () => {
 
 	const refresh = () => {
 		void call("getQueuedMessages")
-			.then(result => setQueue(result as QueuedMessages))
+			.then((result) => setQueue(result as QueuedMessages))
 			.catch(() => setQueue(EMPTY));
 	};
 
@@ -38,8 +38,8 @@ export const QueueBar: Component = () => {
 	});
 
 	const chips = () => [
-		...queue().steering.map(text => ({ kind: "steer" as const, text })),
-		...queue().followUp.map(text => ({ kind: "follow-up" as const, text })),
+		...queue().steering.map((text) => ({ kind: "steer" as const, text })),
+		...queue().followUp.map((text) => ({ kind: "follow-up" as const, text })),
 	];
 
 	// Polite live region announcing queue fills/drains (the interactive chips
@@ -55,7 +55,7 @@ export const QueueBar: Component = () => {
 	});
 
 	const clearAll = () => {
-		void call("clearQueue").catch(err => setState("error", String(err)));
+		void call("clearQueue").catch((err) => setState("error", String(err)));
 	};
 
 	return (
@@ -63,11 +63,18 @@ export const QueueBar: Component = () => {
 			<Show when={chips().length > 0}>
 				<div class="queue-bar">
 					<For each={chips()}>
-						{chip => (
+						{(chip) => (
 							<span class="queue-chip">
-								<span class="queue-kind" classList={{ [chip.kind]: true }}>{chip.kind}</span>
+								<span class="queue-kind" classList={{ [chip.kind]: true }}>
+									{chip.kind}
+								</span>
 								<span class="queue-text">{preview(chip.text)}</span>
-								<button class="queue-pop" title="Pop back into the prompt (Alt+↑)" aria-label="Pop back into the prompt (Alt+↑)" onClick={dequeueLastQueued}>
+								<button
+									class="queue-pop"
+									title="Pop back into the prompt (Alt+↑)"
+									aria-label="Pop back into the prompt (Alt+↑)"
+									onClick={dequeueLastQueued}
+								>
 									<XIcon />
 								</button>
 							</span>

@@ -1,5 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	mkdtempSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { bootStatusFor, Registry } from "./registry";
@@ -81,10 +89,21 @@ describe("Registry", () => {
 		const statePath = tmpStatePath();
 		const registry = await loadedRegistry(statePath);
 		const a = registry.create(
-			baseInit({ name: "alpha", endpoint: "ws://10.0.0.5:9000", token: "t0", labels: ["env=prod"] }),
+			baseInit({
+				name: "alpha",
+				endpoint: "ws://10.0.0.5:9000",
+				token: "t0",
+				labels: ["env=prod"],
+			}),
 		);
 		const b = registry.create(
-			baseInit({ name: "beta", cwd: "/tmp/proj-b", project: "proj-b", mode: "attached", endpoint: "wss://remote:4721" }),
+			baseInit({
+				name: "beta",
+				cwd: "/tmp/proj-b",
+				project: "proj-b",
+				mode: "attached",
+				endpoint: "wss://remote:4721",
+			}),
 		);
 		registry.setStatus(a.daemonId, "ready");
 		registry.setStatus(b.daemonId, "error", "connect refused");
@@ -145,7 +164,10 @@ describe("Registry", () => {
 		const entry = registry.create(baseInit());
 
 		registry.setStatus(entry.daemonId, "error", "spawn failed: port busy");
-		expect(registry.get(entry.daemonId)).toMatchObject({ status: "error", error: "spawn failed: port busy" });
+		expect(registry.get(entry.daemonId)).toMatchObject({
+			status: "error",
+			error: "spawn failed: port busy",
+		});
 
 		// Any non-error transition clears the error.
 		registry.setStatus(entry.daemonId, "ready");
@@ -212,7 +234,10 @@ describe("Registry", () => {
 		writeFileSync(statePath, JSON.stringify({ nextId: "oops", entries: [] }));
 		await expect(new Registry(statePath).load()).rejects.toThrow(statePath);
 
-		writeFileSync(statePath, JSON.stringify({ nextId: 1, entries: [{ name: "missing-daemonId" }] }));
+		writeFileSync(
+			statePath,
+			JSON.stringify({ nextId: 1, entries: [{ name: "missing-daemonId" }] }),
+		);
 		await expect(new Registry(statePath).load()).rejects.toThrow(statePath);
 	});
 
@@ -223,7 +248,16 @@ describe("Registry", () => {
 			JSON.stringify({
 				nextId: 2,
 				entries: [
-					{ daemonId: "d5", name: "x", cwd: "/x", project: "x", labels: [], mode: "spawned", status: "ready", registeredAt: 1 },
+					{
+						daemonId: "d5",
+						name: "x",
+						cwd: "/x",
+						project: "x",
+						labels: [],
+						mode: "spawned",
+						status: "ready",
+						registeredAt: 1,
+					},
 				],
 			}),
 		);
@@ -244,7 +278,9 @@ describe("registered projects (Phase 2)", () => {
 
 	test("addProject validates the path and allocates p1, p2, …", async () => {
 		const registry = await loadedRegistry(tmpStatePath());
-		await expect(registry.addProject(join(tmpdir(), "does-not-exist"))).rejects.toThrow("not a directory");
+		await expect(registry.addProject(join(tmpdir(), "does-not-exist"))).rejects.toThrow(
+			"not a directory",
+		);
 		const plainDir = mkdtempSync(join(tmpdir(), "omp-fleet-plain-"));
 		await expect(registry.addProject(plainDir)).rejects.toThrow("not a git repository");
 
@@ -325,7 +361,9 @@ describe("registered projects (Phase 2)", () => {
 		registry.remove("d2");
 		expect(() => registry.removeProject(project.projectId)).not.toThrow();
 		expect(registry.projects()).toEqual([]);
-		expect(() => registry.removeProject(project.projectId)).toThrow(`unknown project id: ${project.projectId}`);
+		expect(() => registry.removeProject(project.projectId)).toThrow(
+			`unknown project id: ${project.projectId}`,
+		);
 	});
 
 	test("pN ids are monotonic across remove and reload (no reuse)", async () => {
@@ -395,7 +433,10 @@ describe("registered projects (Phase 2)", () => {
 
 	test("corrupt projects in state files throw with the path in the message", async () => {
 		const statePath = tmpStatePath();
-		writeFileSync(statePath, JSON.stringify({ nextId: 1, entries: [], projects: [{ name: "missing-projectId" }] }));
+		writeFileSync(
+			statePath,
+			JSON.stringify({ nextId: 1, entries: [], projects: [{ name: "missing-projectId" }] }),
+		);
 		await expect(new Registry(statePath).load()).rejects.toThrow(statePath);
 	});
 });
@@ -414,7 +455,14 @@ describe("bootStatusFor (#3 boot reconciliation)", () => {
 	});
 
 	test("spawned entries: every non-terminal status (incl. spawning) → asleep", () => {
-		for (const status of ["spawning", "connecting", "session", "resolving", "ready", "reconnecting"] as const) {
+		for (const status of [
+			"spawning",
+			"connecting",
+			"session",
+			"resolving",
+			"ready",
+			"reconnecting",
+		] as const) {
 			expect(bootStatusFor({ ...spawned, status })).toBe("asleep");
 		}
 	});

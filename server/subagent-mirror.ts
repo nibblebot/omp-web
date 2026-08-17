@@ -1,6 +1,9 @@
 import { stat } from "node:fs/promises";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import type { FileEntry, SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import type {
+	FileEntry,
+	SessionMessageEntry,
+} from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { parseSessionEntries } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import type {
 	AgentProgress,
@@ -46,7 +49,10 @@ function statusFromLifecycle(status: SubagentLifecyclePayload["status"]): AgentP
 }
 
 function hasSameOwner(
-	payload: Pick<SubagentLifecyclePayload | SubagentProgressPayload, "parentToolCallId" | "sessionFile">,
+	payload: Pick<
+		SubagentLifecyclePayload | SubagentProgressPayload,
+		"parentToolCallId" | "sessionFile"
+	>,
 	snapshot: SubagentSnapshot,
 ): boolean {
 	if (payload.parentToolCallId !== undefined && snapshot.parentToolCallId !== undefined) {
@@ -68,7 +74,11 @@ function addPruned(set: Set<string>, value: string, maxSize: number): void {
 	}
 }
 
-function rememberTranscriptSession(entry: SessionEntry, subagentId: string, sessionFile: string | undefined): void {
+function rememberTranscriptSession(
+	entry: SessionEntry,
+	subagentId: string,
+	sessionFile: string | undefined,
+): void {
 	if (!sessionFile) return;
 	entry.transcriptSessionFilesBySubagentId.delete(subagentId);
 	entry.transcriptSessionFilesBySubagentId.set(subagentId, sessionFile);
@@ -104,7 +114,11 @@ export function clearSubagents(entry: SessionEntry): void {
 
 // Payloads are JSON-safe snapshots; drop a frame rather than kill the relay
 // if one ever isn't serializable.
-function broadcastSubagentFrame(entry: SessionEntry, type: "subagent_lifecycle" | "subagent_progress", payload: unknown): void {
+function broadcastSubagentFrame(
+	entry: SessionEntry,
+	type: "subagent_lifecycle" | "subagent_progress",
+	payload: unknown,
+): void {
 	try {
 		broadcastTo(entry.handle, { type, payload });
 	} catch (err) {
@@ -112,7 +126,10 @@ function broadcastSubagentFrame(entry: SessionEntry, type: "subagent_lifecycle" 
 	}
 }
 
-export function handleSubagentLifecycle(entry: SessionEntry, payload: SubagentLifecyclePayload): void {
+export function handleSubagentLifecycle(
+	entry: SessionEntry,
+	payload: SubagentLifecyclePayload,
+): void {
 	const existing = entry.subagentSnapshots.get(payload.id);
 	if (existing && !hasSameOwner(payload, existing)) return;
 	if (!existing && payload.status !== "started") return;
@@ -144,7 +161,10 @@ export function handleSubagentLifecycle(entry: SessionEntry, payload: SubagentLi
 	entry.onSubagentsChange?.();
 }
 
-export function handleSubagentProgress(entry: SessionEntry, payload: SubagentProgressPayload): void {
+export function handleSubagentProgress(
+	entry: SessionEntry,
+	payload: SubagentProgressPayload,
+): void {
 	const progress = payload.progress;
 	if (entry.staleSubagentIds.has(progress.id)) return;
 	const existing = entry.subagentSnapshots.get(progress.id);
@@ -168,7 +188,10 @@ export function handleSubagentProgress(entry: SessionEntry, payload: SubagentPro
 	broadcastSubagentFrame(entry, "subagent_progress", payload);
 }
 
-export function resolveSubagentSessionFile(entry: SessionEntry, selector: { subagentId?: string; sessionFile?: string }): string {
+export function resolveSubagentSessionFile(
+	entry: SessionEntry,
+	selector: { subagentId?: string; sessionFile?: string },
+): string {
 	if (selector.subagentId) {
 		const sessionFile =
 			entry.subagentSnapshots.get(selector.subagentId)?.sessionFile ??
@@ -186,7 +209,10 @@ export function resolveSubagentSessionFile(entry: SessionEntry, selector: { suba
 }
 
 /** Port of the RPC transcript reader: byte-offset paging over the subagent's .jsonl. */
-export async function readSubagentTranscript(sessionFile: string, fromByte = 0): Promise<SubagentMessagesResult> {
+export async function readSubagentTranscript(
+	sessionFile: string,
+	fromByte = 0,
+): Promise<SubagentMessagesResult> {
 	let startByte = Number.isFinite(fromByte) ? Math.max(0, Math.trunc(fromByte)) : 0;
 	const file = Bun.file(sessionFile);
 	let size: number;
@@ -194,7 +220,14 @@ export async function readSubagentTranscript(sessionFile: string, fromByte = 0):
 		({ size } = await stat(sessionFile));
 	} catch (err) {
 		if (!isEnoent(err)) throw err;
-		return { sessionFile, fromByte: startByte, nextByte: startByte, reset: false, entries: [], messages: [] };
+		return {
+			sessionFile,
+			fromByte: startByte,
+			nextByte: startByte,
+			reset: false,
+			entries: [],
+			messages: [],
+		};
 	}
 	let reset = false;
 	if (startByte > size) {
@@ -212,6 +245,6 @@ export async function readSubagentTranscript(sessionFile: string, fromByte = 0):
 		nextByte,
 		reset,
 		entries,
-		messages: entries.filter(isSessionMessageEntry).map(entry => entry.message),
+		messages: entries.filter(isSessionMessageEntry).map((entry) => entry.message),
 	};
 }

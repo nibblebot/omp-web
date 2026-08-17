@@ -13,7 +13,7 @@ export const BtwPanel: Component = () => {
 	const btw = () => state.btw;
 	return (
 		<Show when={btw()}>
-			{b => (
+			{(b) => (
 				<Modal title="btw — side question" variant="sheet" onClose={closeBtw}>
 					<div class="btw-panel">
 						<Show when={b().question}>
@@ -28,7 +28,7 @@ export const BtwPanel: Component = () => {
 								{b().streaming && <span class="btw-cursor" aria-hidden="true" />}
 							</Show>
 						</div>
-						<Show when={b().error}>{err => <div class="msg-notice">{err()}</div>}</Show>
+						<Show when={b().error}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
 						<div class="btw-footer">
 							<Show when={b().streaming}>
 								<button type="button" class="btw-abort" onClick={closeBtw}>

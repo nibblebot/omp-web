@@ -41,7 +41,7 @@ function decorateCodeBlocks(root: HTMLElement): void {
 		btn.textContent = "copy";
 		btn.addEventListener("click", () => {
 			const text = pre.querySelector("code")?.textContent ?? pre.textContent ?? "";
-			void copyText(text).then(ok => {
+			void copyText(text).then((ok) => {
 				btn.textContent = ok ? "copied" : "failed";
 				setTimeout(() => {
 					btn.textContent = "copy";
@@ -53,7 +53,7 @@ function decorateCodeBlocks(root: HTMLElement): void {
 }
 
 // Parses only when `src` changes — frozen paragraphs parse exactly once.
-export const Markdown: Component<{ src: string }> = props => {
+export const Markdown: Component<{ src: string }> = (props) => {
 	const html = createMemo(() => renderMarkdown(props.src));
 	let el!: HTMLDivElement;
 	// Set innerHTML inside the same effect as decoration: ordering is

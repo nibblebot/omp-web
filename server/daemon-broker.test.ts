@@ -36,29 +36,38 @@ function catalog(options: { models?: Model[]; current?: Model } = {}) {
 describe("buildModelRoleCatalog", () => {
 	test("lists built-in roles in canonical order, then custom roles", () => {
 		settings.setModelRole("writer", "openai/gpt-4o");
-		const roles = catalog()!.map(entry => entry.role);
+		const roles = catalog()!.map((entry) => entry.role);
 		expect(roles).toEqual([...MODEL_ROLE_IDS, "writer"]);
 	});
 
 	test("carries the TUI tag for built-ins; custom roles fall back to name only", () => {
 		settings.setModelRole("writer", "openai/gpt-4o");
 		const entries = catalog()!;
-		expect(entries.find(entry => entry.role === "smol")).toMatchObject({ tag: "SMOL", name: "Fast" });
-		expect(entries.find(entry => entry.role === "plan")).toMatchObject({ tag: "PLAN", name: "Architect" });
-		expect(entries.find(entry => entry.role === "writer")).not.toHaveProperty("tag");
+		expect(entries.find((entry) => entry.role === "smol")).toMatchObject({
+			tag: "SMOL",
+			name: "Fast",
+		});
+		expect(entries.find((entry) => entry.role === "plan")).toMatchObject({
+			tag: "PLAN",
+			name: "Architect",
+		});
+		expect(entries.find((entry) => entry.role === "writer")).not.toHaveProperty("tag");
 	});
 
 	test("surfaces the hidden flag from modelTags", () => {
 		settings.set("modelTags", { smol: { name: "Fast", hidden: true } });
 		const entries = catalog()!;
-		expect(entries.find(entry => entry.role === "smol")).toMatchObject({ name: "Fast", hidden: true });
-		expect(entries.find(entry => entry.role === "slow")).toMatchObject({ hidden: false });
+		expect(entries.find((entry) => entry.role === "smol")).toMatchObject({
+			name: "Fast",
+			hidden: true,
+		});
+		expect(entries.find((entry) => entry.role === "slow")).toMatchObject({ hidden: false });
 	});
 
 	test("keeps hidden custom roles in the catalog with their flag", () => {
 		settings.setModelRole("writer", "openai/gpt-4o");
 		settings.set("modelTags", { writer: { name: "Writer", hidden: true } });
-		expect(catalog()!.find(entry => entry.role === "writer")).toMatchObject({
+		expect(catalog()!.find((entry) => entry.role === "writer")).toMatchObject({
 			role: "writer",
 			name: "Writer",
 			hidden: true,
@@ -73,26 +82,26 @@ describe("buildModelRoleCatalog", () => {
 		// The `:auto` sentinel cannot round-trip through role values.
 		settings.setModelRole("vision", "anthropic/claude-3-5-sonnet:auto");
 		const entries = catalog()!;
-		expect(entries.find(entry => entry.role === "smol")).toMatchObject({
+		expect(entries.find((entry) => entry.role === "smol")).toMatchObject({
 			provider: "anthropic",
 			id: "claude-3-5-sonnet",
 			thinkingLevel: "high",
 		});
-		expect(entries.find(entry => entry.role === "slow")).not.toHaveProperty("thinkingLevel");
-		expect(entries.find(entry => entry.role === "vision")).toMatchObject({
+		expect(entries.find((entry) => entry.role === "slow")).not.toHaveProperty("thinkingLevel");
+		expect(entries.find((entry) => entry.role === "vision")).toMatchObject({
 			provider: "anthropic",
 			id: "claude-3-5-sonnet",
 		});
-		expect(entries.find(entry => entry.role === "vision")).not.toHaveProperty("thinkingLevel");
+		expect(entries.find((entry) => entry.role === "vision")).not.toHaveProperty("thinkingLevel");
 	});
 
 	test("maps source to the persisted layer owning the assignment", () => {
 		settings.setModelRole("smol", "openai/gpt-4o");
 		settings.setProjectModelRole("writer", "openai/gpt-4o");
 		const entries = catalog()!;
-		expect(entries.find(entry => entry.role === "smol")?.source).toBe("global");
-		expect(entries.find(entry => entry.role === "writer")?.source).toBe("project");
-		expect(entries.find(entry => entry.role === "slow")?.source).toBe("default");
+		expect(entries.find((entry) => entry.role === "smol")?.source).toBe("global");
+		expect(entries.find((entry) => entry.role === "writer")?.source).toBe("project");
+		expect(entries.find((entry) => entry.role === "slow")?.source).toBe("default");
 	});
 
 	test("returns undefined when no models are available", () => {
@@ -101,7 +110,7 @@ describe("buildModelRoleCatalog", () => {
 
 	test("falls back to the current model for the default role when unassigned", () => {
 		const entries = catalog({ current: STUB_MODELS[0] })!;
-		expect(entries.find(entry => entry.role === "default")).toMatchObject({
+		expect(entries.find((entry) => entry.role === "default")).toMatchObject({
 			role: "default",
 			provider: "openai",
 			id: "gpt-4o",

@@ -66,7 +66,12 @@ export interface WebSessionState {
 	todoPhases: TodoPhase[];
 	/** For session dump / export (plain-text parity with /dump). */
 	systemPrompt?: string[];
-	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
+	dumpTools?: Array<{
+		name: string;
+		description: string;
+		parameters: unknown;
+		examples?: readonly ToolExample[];
+	}>;
 	/** Current context window usage. */
 	contextUsage?: ContextUsage;
 	// --- Phase 9: modes & usage parity (cheap sync getters, refreshed every broadcast) ---
@@ -114,7 +119,13 @@ export interface SettingsOption {
 	description?: string;
 }
 
-export type SettingsItemType = "boolean" | "enum" | "submenu" | "text" | "multiselect" | "providerLimits";
+export type SettingsItemType =
+	| "boolean"
+	| "enum"
+	| "submenu"
+	| "text"
+	| "multiselect"
+	| "providerLimits";
 
 export interface SettingsItem {
 	path: string;
@@ -230,7 +241,15 @@ export type StdoutContractLine =
 	| { event: "endpoint"; url: string };
 
 /** Daemon lifecycle as surfaced by omp-fleet (daemon_status frame). */
-export type DaemonStatus = "spawning" | "connecting" | "session" | "resolving" | "ready" | "asleep" | "reconnecting" | "error";
+export type DaemonStatus =
+	| "spawning"
+	| "connecting"
+	| "session"
+	| "resolving"
+	| "ready"
+	| "asleep"
+	| "reconnecting"
+	| "error";
 
 /** One daemon in the omp-fleet roster (roster frame). */
 export interface DaemonEntry {
@@ -403,7 +422,15 @@ export type ClientCommand =
 	| { type: "collab_stop"; id: string }
 	// Daemon web exposure: per-daemon logs/stop/restart, answered by unicast
 	// daemon_logs_result / daemon_control_result frames.
-	| { type: "daemon_logs"; id: string; projectDir: string; name: string; lines: number; head?: boolean; grep?: string }
+	| {
+			type: "daemon_logs";
+			id: string;
+			projectDir: string;
+			name: string;
+			lines: number;
+			head?: boolean;
+			grep?: string;
+	  }
 	| { type: "daemon_stop"; id: string; projectDir: string; name: string; timeoutMs?: number }
 	| { type: "daemon_restart"; id: string; projectDir: string; name: string }
 	// --- Fleet edge (browser → omp-fleet only; a bare omp-session rejects these) ---
@@ -416,13 +443,28 @@ export type ClientCommand =
 	// deduped — and optionally spawns a daemon on the main checkout with
 	// template/labels passthrough; answers ride the registered_projects /
 	// roster broadcasts + error frames).
-	| { type: "add_project"; id: string; path: string; start?: boolean; template?: string; labels?: string[] }
+	| {
+			type: "add_project";
+			id: string;
+			path: string;
+			start?: boolean;
+			template?: string;
+			labels?: string[];
+	  }
 	// Deregister a project; refused (error frame) while any daemon references it.
 	| { type: "remove_project"; id: string; projectId: string }
 	// Worktree lifecycle (projectId from the registered_projects frame).
 	// start:true also spawns a daemon on the worktree; progress rides the
 	// roster/daemon_status broadcasts.
-	| { type: "create_worktree"; id: string; projectId: string; name: string; baseRef?: string; existingBranch?: string; start?: boolean }
+	| {
+			type: "create_worktree";
+			id: string;
+			projectId: string;
+			name: string;
+			baseRef?: string;
+			existingBranch?: string;
+			start?: boolean;
+	  }
 	| { type: "add_worktree"; id: string; projectId: string; worktreePath: string; start?: boolean }
 	// Stop the daemon, evict it from the roster, and remove the managed
 	// worktree (owned + clean only; deleteBranch: true also `git branch -d`s).
@@ -448,7 +490,15 @@ export type CollabParticipantInfo = { name: string; role: "host" | "guest"; read
 export type CollabWireStatus =
 	| { state: "off" }
 	| { state: "starting" }
-	| { state: "live"; link: string; viewLink: string; relayUrl: string; roomId: string; participants: CollabParticipantInfo[]; maxGuests: number }
+	| {
+			state: "live";
+			link: string;
+			viewLink: string;
+			relayUrl: string;
+			roomId: string;
+			participants: CollabParticipantInfo[];
+			maxGuests: number;
+	  }
 	| { state: "error"; error: string };
 
 /**
@@ -510,7 +560,15 @@ export type ServerFrame =
 	// Project-wide daemon broker roster (hub launch processes); global broadcast.
 	| { type: "daemons"; daemons: DaemonInfo[] }
 	// Unicast answer to daemon_logs.
-	| { type: "daemon_logs_result"; id: string; ok: boolean; text?: string; cursor?: number; state?: string; error?: string }
+	| {
+			type: "daemon_logs_result";
+			id: string;
+			ok: boolean;
+			text?: string;
+			cursor?: number;
+			state?: string;
+			error?: string;
+	  }
 	// Unicast answer to daemon_stop / daemon_restart.
 	| { type: "daemon_control_result"; id: string; ok: boolean; daemon?: DaemonInfo; error?: string }
 	// Unicast answer to attach (fleet edge): settles the client's pending
@@ -526,7 +584,15 @@ export type ServerFrame =
 	// --- Daemon identity (omp-session → any /events consumer) ---
 	// FIRST event on every /events stream open (HTTP-level auth replaced the
 	// hello handshake); the attach priming follows immediately.
-	| { type: "hello_ok"; proto: number; name: string; cwd: string; pid: number; version: string; sessionFile?: string }
+	| {
+			type: "hello_ok";
+			proto: number;
+			name: string;
+			cwd: string;
+			pid: number;
+			version: string;
+			sessionFile?: string;
+	  }
 	// --- Stream lifecycle (omp-session → the one stream being dropped) ---
 	// Sent immediately before the stream ends when the SSE buffer exceeded
 	// the backpressure cap: the daemon is ALIVE and the drop is recoverable
@@ -549,7 +615,24 @@ export type ServerFrame =
 	// Unicast answer to worktree_delete_info: guard evidence for the delete
 	// confirmation (ownership, dirty counts, branch merge/push state). Never
 	// carries tokens/endpoints.
-	| { type: "worktree_delete_info"; daemonId: string; owned: boolean; dirty: boolean; git?: { added: number; modified: number; deleted: number; untracked: number; linesAdded?: number; linesDeleted?: number }; branch?: string; merged?: boolean; unpushed?: boolean; reason?: string }
+	| {
+			type: "worktree_delete_info";
+			daemonId: string;
+			owned: boolean;
+			dirty: boolean;
+			git?: {
+				added: number;
+				modified: number;
+				deleted: number;
+				untracked: number;
+				linesAdded?: number;
+				linesDeleted?: number;
+			};
+			branch?: string;
+			merged?: boolean;
+			unpushed?: boolean;
+			reason?: string;
+	  }
 	| { type: "error"; error: string };
 
 /** One supervised long-running process (hub launch / daemon broker), wire-safe. */

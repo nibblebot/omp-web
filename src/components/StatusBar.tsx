@@ -6,10 +6,11 @@ import { ArrowDownIcon, ArrowUpIcon, InfoIcon, SettingsIcon } from "../icons";
 
 const ContextSegment: Component = () => {
 	const usage = () => state.contextUsage;
-	const level = () => (usage() ? getContextUsageLevel(usage()!.percent, usage()!.contextWindow) : "normal");
+	const level = () =>
+		usage() ? getContextUsageLevel(usage()!.percent, usage()!.contextWindow) : "normal";
 	return (
 		<Show when={usage()}>
-			{u => (
+			{(u) => (
 				<span
 					class="segment context-segment"
 					data-level={level()}
@@ -36,10 +37,13 @@ const RetryBadge: Component = () => {
 	});
 	return (
 		<Show when={state.retryInfo}>
-			{r => {
+			{(r) => {
 				const remainingMs = Math.max(0, r().until - now());
 				return (
-					<span class="segment badge retry-badge" title={`auto-retry ${r().attempt}/${r().maxAttempts}`}>
+					<span
+						class="segment badge retry-badge"
+						title={`auto-retry ${r().attempt}/${r().maxAttempts}`}
+					>
 						retry {r().attempt}/{r().maxAttempts} · {(remainingMs / 1000).toFixed(1)}s
 					</span>
 				);
@@ -59,7 +63,7 @@ const Segment: Component<{
 	onClick?: () => void;
 	onContextMenu?: (e: MouseEvent) => void;
 	children: JSX.Element;
-}> = props => (
+}> = (props) => (
 	<button
 		class={props.class ? `segment segment-button ${props.class}` : "segment segment-button"}
 		classList={{ active: !!props.active }}
@@ -79,21 +83,31 @@ export const StatusBar: Component = () => {
 				<span class="segment badge">compacting…</span>
 			</Show>
 			<Show when={state.goal}>
-				{g => (
-					<Segment class="badge goal-badge" title={g().objective} onClick={() => setState("modal", "goal")}>
+				{(g) => (
+					<Segment
+						class="badge goal-badge"
+						title={g().objective}
+						onClick={() => setState("modal", "goal")}
+					>
 						goal: {g().objective.slice(0, 20)}
 					</Segment>
 				)}
 			</Show>
 			<Show when={state.planModeEnabled}>
-				<Segment class="badge plan-badge" title="Plan mode — click to toggle (/plan)" onClick={planToggle}>
+				<Segment
+					class="badge plan-badge"
+					title="Plan mode — click to toggle (/plan)"
+					onClick={planToggle}
+				>
 					plan
 				</Segment>
 			</Show>
 			<RetryBadge />
 			{/* Historical transcripts/stats browser (roster-mode-only: /ctl/stats
 			    needs a fleet process); the toggle lives in the sidebar footer. */}
-			{state.queuedMessageCount > 0 && <span class="queued-chip">queued: {state.queuedMessageCount}</span>}
+			{state.queuedMessageCount > 0 && (
+				<span class="queued-chip">queued: {state.queuedMessageCount}</span>
+			)}
 			<span class="status-spacer" />
 			<Show when={state.subagents.size > 0}>
 				<Segment onClick={() => setState("modal", "subagents")}>
@@ -114,7 +128,11 @@ export const StatusBar: Component = () => {
 				>
 					<InfoIcon />
 				</Segment>
-				<Segment onClick={() => setState("modal", "settings")} title="Settings" ariaLabel="Settings">
+				<Segment
+					onClick={() => setState("modal", "settings")}
+					title="Settings"
+					ariaLabel="Settings"
+				>
 					<SettingsIcon />
 				</Segment>
 			</Show>
@@ -139,7 +157,7 @@ export const SessionHeader: Component = () => {
 		const title = el.value.trim();
 		setEditingName(false);
 		if (title && title !== state.sessionName) {
-			void call("setSessionName", [title]).catch(err => setState("error", String(err)));
+			void call("setSessionName", [title]).catch((err) => setState("error", String(err)));
 		}
 	};
 
@@ -154,7 +172,7 @@ export const SessionHeader: Component = () => {
 						title="Rename session"
 						tabindex="0"
 						onClick={() => setEditingName(true)}
-						onKeyDown={e => {
+						onKeyDown={(e) => {
 							if (e.key === "Enter" || e.key === " ") {
 								e.preventDefault();
 								setEditingName(true);
@@ -166,11 +184,16 @@ export const SessionHeader: Component = () => {
 				}
 			>
 				<input
-					ref={el => queueMicrotask(() => { el.focus(); el.select(); })}
+					ref={(el) =>
+						queueMicrotask(() => {
+							el.focus();
+							el.select();
+						})
+					}
 					class="segment session-name-input"
 					aria-label="Session name"
 					value={state.sessionName ?? ""}
-					onKeyDown={e => {
+					onKeyDown={(e) => {
 						if (e.key === "Enter") commitName(e.currentTarget);
 						else if (e.key === "Escape") setEditingName(false);
 					}}
@@ -192,8 +215,8 @@ export const SessionBar: Component = () => (
 		</Segment>
 		<Segment
 			class="thinking-segment"
-			onClick={() => void call("cycleThinkingLevel").catch(err => setState("error", String(err)))}
-			onContextMenu={e => {
+			onClick={() => void call("cycleThinkingLevel").catch((err) => setState("error", String(err)))}
+			onContextMenu={(e) => {
 				e.preventDefault();
 				setState("modal", "thinking");
 			}}
@@ -204,9 +227,15 @@ export const SessionBar: Component = () => (
 		<span class="status-spacer" />
 		<ContextSegment />
 		<Show when={state.stats}>
-			{s => (
-				<Segment class="stats-segment" onClick={() => setState("modal", "stats")} title="Session stats">
-					${s().cost.toFixed(2)} · <ArrowUpIcon />{formatTokens(s().tokens.input)} <ArrowDownIcon />{formatTokens(s().tokens.output)}
+			{(s) => (
+				<Segment
+					class="stats-segment"
+					onClick={() => setState("modal", "stats")}
+					title="Session stats"
+				>
+					${s().cost.toFixed(2)} · <ArrowUpIcon />
+					{formatTokens(s().tokens.input)} <ArrowDownIcon />
+					{formatTokens(s().tokens.output)}
 				</Segment>
 			)}
 		</Show>

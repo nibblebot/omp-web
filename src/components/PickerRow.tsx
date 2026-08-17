@@ -7,7 +7,7 @@ import type { Component, JSX } from "solid-js";
  * makes these render exactly like the legacy div rows lives in styles.css
  * under `button.picker-row`.
  */
-export const PickerRow: Component<PickerRowProps> = props => (
+export const PickerRow: Component<PickerRowProps> = (props) => (
 	<button
 		type="button"
 		class={props.class}

@@ -1,4 +1,12 @@
-import { createEffect, createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
+import {
+	createEffect,
+	createSignal,
+	For,
+	onCleanup,
+	onMount,
+	Show,
+	type Component,
+} from "solid-js";
 import { clientId, state } from "../state";
 import { formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
@@ -46,7 +54,13 @@ type FleetSession = {
 };
 
 type FleetDebug = {
-	fleet?: { port?: number; startedAt?: number; uptimeSec?: number; statePath?: string; configPath?: string | null };
+	fleet?: {
+		port?: number;
+		startedAt?: number;
+		uptimeSec?: number;
+		statePath?: string;
+		configPath?: string | null;
+	};
 	// normalizeFleet always supplies these (absent payload fields → []).
 	sessions: FleetSession[];
 	log: FleetLogEntry[];
@@ -151,9 +165,15 @@ function endpointHost(endpoint: string): string {
 /** Shared ring renderer for both logs: level-colored tag + source + message,
  *  newest entry last, stick-to-bottom while the reader is already at the tail. */
 const LogRing: Component<{
-	entries: () => Array<{ ts: number; level: string; source: string; message: string; daemonId?: string }>;
+	entries: () => Array<{
+		ts: number;
+		level: string;
+		source: string;
+		message: string;
+		daemonId?: string;
+	}>;
 	empty: string;
-}> = props => {
+}> = (props) => {
 	const [stick, setStick] = createSignal(true);
 	let box!: HTMLDivElement;
 	const onScroll = () => {
@@ -170,7 +190,7 @@ const LogRing: Component<{
 				<div class="debug-log-empty">{props.empty}</div>
 			</Show>
 			<For each={props.entries()}>
-				{e => (
+				{(e) => (
 					<div class="debug-log-line" data-level={e.level}>
 						<span class="debug-log-time">{fmtTime(e.ts)}</span>
 						<span class="debug-log-level">{e.level}</span>
@@ -188,7 +208,7 @@ const LogRing: Component<{
 	);
 };
 
-export const DebugPanel: Component<{ onClose: () => void }> = props => {
+export const DebugPanel: Component<{ onClose: () => void }> = (props) => {
 	const [fleet, setFleet] = createSignal<FleetDebug | null>(null);
 	const [fleetError, setFleetError] = createSignal<string | null>(null);
 	const [fleetLoading, setFleetLoading] = createSignal(false);
@@ -202,7 +222,7 @@ export const DebugPanel: Component<{ onClose: () => void }> = props => {
 		fleetPolling = true;
 		setFleetLoading(true);
 		fetch("/ctl/debug")
-			.then(r => {
+			.then((r) => {
 				if (!r.ok) {
 					// 502/504: vite's /ctl proxy couldn't reach :4722 — no fleet
 					// server (single-session mode, or still booting). Expected.
@@ -214,17 +234,21 @@ export const DebugPanel: Component<{ onClose: () => void }> = props => {
 				}
 				return r.json() as Promise<unknown>;
 			})
-			.then(raw => {
+			.then((raw) => {
 				const data = normalizeFleet(raw);
 				if (data === null) throw new Error("fleet control plane answered malformed JSON");
 				setFleet(data);
 				setFleetError(null);
 			})
-			.catch(err => {
+			.catch((err) => {
 				const msg = err instanceof Error ? err.message : String(err);
 				// fetch() rejects with a TypeError when nothing listens on
 				// :4722 (single-session mode, fleet not yet up). Expected.
-				setFleetError(/failed to fetch|networkerror|fetch failed/i.test(msg) ? "fleet control plane unreachable — no fleet server on :4722" : msg);
+				setFleetError(
+					/failed to fetch|networkerror|fetch failed/i.test(msg)
+						? "fleet control plane unreachable — no fleet server on :4722"
+						: msg,
+				);
 			})
 			.finally(() => {
 				fleetPolling = false;
@@ -280,11 +304,15 @@ export const DebugPanel: Component<{ onClose: () => void }> = props => {
 						</div>
 						<div class="debug-fact">
 							<span class="debug-label">last frame</span>
-							<span class="debug-value">{secondsSinceLastFrame() === null ? "never" : `${secondsSinceLastFrame()}s ago`}</span>
+							<span class="debug-value">
+								{secondsSinceLastFrame() === null ? "never" : `${secondsSinceLastFrame()}s ago`}
+							</span>
 						</div>
 						<div class="debug-fact">
 							<span class="debug-label">reconnect</span>
-							<span class="debug-value">{state.reconnectDelay > 0 ? `${state.reconnectDelay}ms` : "none (stream open)"}</span>
+							<span class="debug-value">
+								{state.reconnectDelay > 0 ? `${state.reconnectDelay}ms` : "none (stream open)"}
+							</span>
 						</div>
 					</div>
 				</section>
@@ -293,15 +321,18 @@ export const DebugPanel: Component<{ onClose: () => void }> = props => {
 					<div class="debug-section-head">
 						<h3 class="debug-section-title">Fleet</h3>
 						<span class="debug-poll-hint">{fleetLoading() ? "polling…" : "polls every 2s"}</span>
-						<button type="button" class="debug-refresh" disabled={fleetLoading()} onClick={() => void loadFleet()}>
+						<button
+							type="button"
+							class="debug-refresh"
+							disabled={fleetLoading()}
+							onClick={() => void loadFleet()}
+						>
 							refresh
 						</button>
 					</div>
-					<Show when={fleetError()}>
-						{err => <div class="debug-fleet-error">{err()}</div>}
-					</Show>
+					<Show when={fleetError()}>{(err) => <div class="debug-fleet-error">{err()}</div>}</Show>
 					<Show when={fleet()}>
-						{f => {
+						{(f) => {
 							const fl = () => f().fleet;
 							return (
 								<>
@@ -313,12 +344,16 @@ export const DebugPanel: Component<{ onClose: () => void }> = props => {
 										<div class="debug-fact">
 											<span class="debug-label">uptime</span>
 											<span class="debug-value">
-												{fl()?.uptimeSec !== undefined ? formatDaemonUptime(fl()!.uptimeSec! * 1000) : "—"}
+												{fl()?.uptimeSec !== undefined
+													? formatDaemonUptime(fl()!.uptimeSec! * 1000)
+													: "—"}
 											</span>
 										</div>
 										<div class="debug-fact">
 											<span class="debug-label">since</span>
-											<span class="debug-value">{fl()?.startedAt !== undefined ? fmtTime(fl()!.startedAt!) : "—"}</span>
+											<span class="debug-value">
+												{fl()?.startedAt !== undefined ? fmtTime(fl()!.startedAt!) : "—"}
+											</span>
 										</div>
 										<div class="debug-fact">
 											<span class="debug-label">state</span>
@@ -349,13 +384,17 @@ export const DebugPanel: Component<{ onClose: () => void }> = props => {
 												</thead>
 												<tbody>
 													<For each={f().sessions}>
-														{s => (
+														{(s) => (
 															<tr>
 																<td class="debug-cell-name" title={s.daemonId}>
 																	{s.name ?? s.daemonId?.slice(0, 8) ?? "—"}
 																</td>
 																<td>
-																	<span class="debug-status" data-status={s.status ?? "unknown"} title={s.error ?? s.status ?? ""}>
+																	<span
+																		class="debug-status"
+																		data-status={s.status ?? "unknown"}
+																		title={s.error ?? s.status ?? ""}
+																	>
 																		{s.status ?? "—"}
 																	</span>
 																</td>
@@ -364,11 +403,17 @@ export const DebugPanel: Component<{ onClose: () => void }> = props => {
 																<td class="debug-cell-mono" title={s.endpoint}>
 																	{s.endpoint !== undefined ? endpointHost(s.endpoint) : "—"}
 																</td>
-																<td>{s.uptimeSec !== undefined ? formatDaemonUptime(s.uptimeSec * 1000) : "—"}</td>
+																<td>
+																	{s.uptimeSec !== undefined
+																		? formatDaemonUptime(s.uptimeSec * 1000)
+																		: "—"}
+																</td>
 																<td class="debug-cell-mono">
 																	{s.connector
 																		? `${s.connector.state}${s.connector.attempts > 0 ? ` (${s.connector.attempts})` : ""}${
-																				s.connector.nextRetryInMs !== undefined ? ` · ${s.connector.nextRetryInMs}ms` : ""
+																				s.connector.nextRetryInMs !== undefined
+																					? ` · ${s.connector.nextRetryInMs}ms`
+																					: ""
 																			}`
 																		: "—"}
 																</td>
@@ -393,7 +438,10 @@ export const DebugPanel: Component<{ onClose: () => void }> = props => {
 
 				<section class="debug-section">
 					<h3 class="debug-section-title">Fleet log</h3>
-					<LogRing entries={() => fleet()?.log ?? []} empty="no fleet log — control plane unreachable" />
+					<LogRing
+						entries={() => fleet()?.log ?? []}
+						empty="no fleet log — control plane unreachable"
+					/>
 				</section>
 
 				<section class="debug-section">

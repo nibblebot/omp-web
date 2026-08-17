@@ -58,7 +58,12 @@ export class DaemonsAggregator {
 	readonly #sources = new Map<string, DaemonRosterSource>();
 
 	/** Replace daemonId's roster with the latest frame (full-replace). */
-	ingest(daemonId: string, entries: DaemonInfo[], cwd: string | undefined, at: number = Date.now()): DaemonInfo[] {
+	ingest(
+		daemonId: string,
+		entries: DaemonInfo[],
+		cwd: string | undefined,
+		at: number = Date.now(),
+	): DaemonInfo[] {
 		this.#sources.set(daemonId, { cwd, at, entries });
 		return this.merge();
 	}

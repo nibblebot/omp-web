@@ -238,4 +238,3 @@ export const MINIMAX_SPRITE: SpriteArt = {
 	palette: PALETTE,
 	poses: POSES,
 };
-

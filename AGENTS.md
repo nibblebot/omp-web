@@ -10,7 +10,7 @@ Two products in one tree, sharing one Solid.js web UI and one wire contract:
 - **omp-fleet** (`fleet/`) — registry + supervisor + connector for N daemons (local children, external/remote). Re-exposes them to the same UI in **roster mode** and to CLI fan-out. Holds **zero agent state** — all truth lives in the omp-session processes and their `.jsonl` session logs.
 - **Web UI** (`src/`) — one Solid.js bundle serves both modes; mode is decided by the wire (`roster` frame ⇒ roster mode, sticky; a bare omp-session never sends it ⇒ standalone). No router.
 
-Runtime is **Bun** (`type: module`, `bun.lock` committed). No CI, no lint config, no formatter config — match existing style by hand (tabs; comments reference audit findings as `finding #N` — numbering kept from the 2026-08 audit).
+Runtime is **Bun** (`type: module`, `bun.lock` committed). No CI. Lint runs through **oxlint** (`.oxlintrc.json`; Solid rules come from `eslint-plugin-solid` loaded as an oxlint JS plugin) and formatting through **oxfmt** (`.oxfmtrc.json`: tabs, print width 100, TS/TSX only — markdown/CSS/HTML/JSON stay hand-maintained). Comments reference audit findings as `finding #N` (numbering kept from the 2026-08 audit).
 
 ## Commands
 
@@ -21,6 +21,9 @@ bun run dev:single             # standalone: omp-session (--watch) + vite (proxi
 bun run dev:server             # just the daemon, --watch
 bun run dev:web                # just vite
 bun run check:types            # tsgo -p tsconfig.json --noEmit  (tsgo = @typescript/native-preview, NOT tsc)
+bun run lint                   # oxlint (.oxlintrc.json); warnings only don't fail the run
+bun run format                 # oxfmt, writes in place (TS/TSX only)
+bun run format:check           # oxfmt --check, exits nonzero on unformatted files
 bun run test                   # scripts/test.ts wrapper → bun test (see Testing)
 bun scripts/test.ts --bail 1   # extra args forwarded to bun test (file filters work: `bun scripts/test.ts server/omp-session.test.ts`)
 bun run build                  # vite build → dist/ (gitignored)
@@ -118,8 +121,8 @@ Key constants (all in `shared/protocol.ts`): `OMP_PROTO = 2`, `SSE_KEEPALIVE_MS`
 - `server/collab-relay.test.ts` deliberately never calls `server.stop()` (Bun hangs closing sockets with close codes — verified against bun 1.3.14); don't "fix" that.
 
 ### Style
-- Tabs for indentation. `verbatimModuleSyntax` is on → `import type` discipline (no value imports of types).
-- Typecheck with `tsgo` (`bun run check:types`); the `@typescript/native-preview` version is pinned exactly.
+- Tabs for indentation (enforced by oxfmt). `verbatimModuleSyntax` is on → `import type` discipline (no value imports of types).
+- Typecheck with `tsgo` (`bun run check:types`); the `@typescript/native-preview` version is pinned exactly. NOTE: typescript-eslint/ESLint cannot run against TS 7 — that's why linting is oxlint, not ESLint.
 - Comments reference audit remediation findings as `finding #N` (numbering kept from the 2026-08 audit; the strategic items live in `docs/position.md`); keep the numbering when fixing/annotating.
 - `dist/`, `dist-bin/`, `node_modules/` are gitignored; `docs/architecture.md`, `docs/position.md`, `docs/research/` are committed docs — update, don't delete.
 

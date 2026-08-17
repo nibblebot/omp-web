@@ -43,7 +43,11 @@ describe("buildUsageRow", () => {
 
 describe("formatUsageRow", () => {
 	test("full row renders all segments", () => {
-		const row = buildUsageRow({ input: 1200, output: 340, cacheRead: 5120, cacheWrite: 80 }, 812, 4200)!;
+		const row = buildUsageRow(
+			{ input: 1200, output: 340, cacheRead: 5120, cacheWrite: 80 },
+			812,
+			4200,
+		)!;
 		expect(formatUsageRow(row)).toBe("↑1.2k ↓340 · cache 5.1k/80 · ttft 0.8s · 81 tok/s");
 	});
 

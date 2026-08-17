@@ -6,7 +6,13 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { fillTemplate, isValidEndpointUrl, parseContractLine, resolveEndpoint, shellQuote } from "./spawn-parse";
+import {
+	fillTemplate,
+	isValidEndpointUrl,
+	parseContractLine,
+	resolveEndpoint,
+	shellQuote,
+} from "./spawn-parse";
 import type { StdoutContractLine } from "../shared/protocol";
 
 // ---------------------------------------------------------------------------
@@ -115,7 +121,8 @@ describe("shellQuote", () => {
 
 describe("parseContractLine", () => {
 	test("parses a listening line", () => {
-		const line = 'OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"ws://127.0.0.1:4721"}';
+		const line =
+			'OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"ws://127.0.0.1:4721"}';
 		expect(parseContractLine(line)).toEqual({
 			event: "listening",
 			bind: "127.0.0.1",
@@ -137,15 +144,23 @@ describe("parseContractLine", () => {
 	});
 
 	test("parses an endpoint line", () => {
-		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"ws://10.0.0.5:9000"}')).toEqual({
+		expect(
+			parseContractLine('OMP_SESSION|{"event":"endpoint","url":"ws://10.0.0.5:9000"}'),
+		).toEqual({
 			event: "endpoint",
 			url: "ws://10.0.0.5:9000",
 		});
 	});
 
 	test("ignores extra fields", () => {
-		const line = 'OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":1,"url":"ws://x","extra":true}';
-		expect(parseContractLine(line)).toEqual({ event: "listening", bind: "127.0.0.1", port: 1, url: "ws://x" });
+		const line =
+			'OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":1,"url":"ws://x","extra":true}';
+		expect(parseContractLine(line)).toEqual({
+			event: "listening",
+			bind: "127.0.0.1",
+			port: 1,
+			url: "ws://x",
+		});
 	});
 
 	test("non-prefixed lines (human logs) are null", () => {
@@ -175,7 +190,7 @@ describe("parseContractLine", () => {
 
 	test("malformed JSON is null, never throws", () => {
 		expect(parseContractLine("OMP_SESSION|{not json")).toBeNull();
-		expect(parseContractLine("OMP_SESSION|{\"event\":\"listening\"")).toBeNull();
+		expect(parseContractLine('OMP_SESSION|{"event":"listening"')).toBeNull();
 		expect(parseContractLine("OMP_SESSION|")).toBeNull();
 		expect(parseContractLine("OMP_SESSION|   ")).toBeNull();
 	});
@@ -191,14 +206,30 @@ describe("parseContractLine", () => {
 		expect(parseContractLine('OMP_SESSION|{"event":42}')).toBeNull();
 		expect(parseContractLine("OMP_SESSION|{}")).toBeNull();
 		// listening missing/typo'd required fields
-		expect(parseContractLine('OMP_SESSION|{"event":"listening","port":4721,"url":"ws://x"}')).toBeNull(); // no bind
-		expect(parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","url":"ws://x"}')).toBeNull(); // no port
-		expect(parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721}')).toBeNull(); // no url
-		expect(parseContractLine('OMP_SESSION|{"event":"listening","bind":42,"port":4721,"url":"ws://x"}')).toBeNull(); // bind not string
-		expect(parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":"4721","url":"ws://x"}')).toBeNull(); // port not number
-		expect(parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":5}')).toBeNull(); // url not string
 		expect(
-			parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"ws://x","advertise":5}')
+			parseContractLine('OMP_SESSION|{"event":"listening","port":4721,"url":"ws://x"}'),
+		).toBeNull(); // no bind
+		expect(
+			parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","url":"ws://x"}'),
+		).toBeNull(); // no port
+		expect(
+			parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721}'),
+		).toBeNull(); // no url
+		expect(
+			parseContractLine('OMP_SESSION|{"event":"listening","bind":42,"port":4721,"url":"ws://x"}'),
+		).toBeNull(); // bind not string
+		expect(
+			parseContractLine(
+				'OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":"4721","url":"ws://x"}',
+			),
+		).toBeNull(); // port not number
+		expect(
+			parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":5}'),
+		).toBeNull(); // url not string
+		expect(
+			parseContractLine(
+				'OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"ws://x","advertise":5}',
+			),
 		).toBeNull(); // advertise present but not string
 		// endpoint wrong shape
 		expect(parseContractLine('OMP_SESSION|{"event":"endpoint"}')).toBeNull();
@@ -211,23 +242,41 @@ describe("parseContractLine", () => {
 		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"not a url"}')).toBeNull();
 		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"ws://"}')).toBeNull();
 		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"ws://:4721"}')).toBeNull();
-		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"http://example.com"}')).toBeNull();
+		expect(
+			parseContractLine('OMP_SESSION|{"event":"endpoint","url":"http://example.com"}'),
+		).toBeNull();
 		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":""}')).toBeNull();
 		// listening.url
-		expect(parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"garbage"}')).toBeNull();
-		expect(parseContractLine('OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"ws://"}')).toBeNull();
+		expect(
+			parseContractLine(
+				'OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"garbage"}',
+			),
+		).toBeNull();
+		expect(
+			parseContractLine(
+				'OMP_SESSION|{"event":"listening","bind":"127.0.0.1","port":4721,"url":"ws://"}',
+			),
+		).toBeNull();
 		// advertise
 		expect(
-			parseContractLine('OMP_SESSION|{"event":"listening","bind":"0.0.0.0","port":4721,"url":"ws://0.0.0.0:4721","advertise":"garbage"}')
+			parseContractLine(
+				'OMP_SESSION|{"event":"listening","bind":"0.0.0.0","port":4721,"url":"ws://0.0.0.0:4721","advertise":"garbage"}',
+			),
 		).toBeNull();
 		expect(
-			parseContractLine('OMP_SESSION|{"event":"listening","bind":"0.0.0.0","port":4721,"url":"ws://0.0.0.0:4721","advertise":"ws://"}')
+			parseContractLine(
+				'OMP_SESSION|{"event":"listening","bind":"0.0.0.0","port":4721,"url":"ws://0.0.0.0:4721","advertise":"ws://"}',
+			),
 		).toBeNull();
 		expect(
-			parseContractLine('OMP_SESSION|{"event":"listening","bind":"0.0.0.0","port":4721,"url":"ws://0.0.0.0:4721","advertise":"ftp://h"}')
+			parseContractLine(
+				'OMP_SESSION|{"event":"listening","bind":"0.0.0.0","port":4721,"url":"ws://0.0.0.0:4721","advertise":"ftp://h"}',
+			),
 		).toBeNull();
 		// valid ws/wss still parse
-		expect(parseContractLine('OMP_SESSION|{"event":"endpoint","url":"wss://omp.example.com:9443"}')).toEqual({
+		expect(
+			parseContractLine('OMP_SESSION|{"event":"endpoint","url":"wss://omp.example.com:9443"}'),
+		).toEqual({
 			event: "endpoint",
 			url: "wss://omp.example.com:9443",
 		});
@@ -275,7 +324,10 @@ describe("resolveEndpoint precedence", () => {
 	});
 
 	test("loopback tier: listening line alone → ws://127.0.0.1:<port>", () => {
-		expect(resolveEndpoint([listening(4721)])).toEqual({ url: "ws://127.0.0.1:4721", source: "loopback" });
+		expect(resolveEndpoint([listening(4721)])).toEqual({
+			url: "ws://127.0.0.1:4721",
+			source: "loopback",
+		});
 	});
 
 	test("advertise tier beats loopback", () => {
@@ -300,14 +352,21 @@ describe("resolveEndpoint precedence", () => {
 	});
 
 	test("wrapper tier beats template", () => {
-		expect(resolveEndpoint([listening(4721), endpoint("ws://10.0.0.5:9000")], "relay.local")).toEqual({
+		expect(
+			resolveEndpoint([listening(4721), endpoint("ws://10.0.0.5:9000")], "relay.local"),
+		).toEqual({
 			url: "ws://10.0.0.5:9000",
 			source: "wrapper",
 		});
 	});
 
 	test("wrapper tier beats advertise and loopback without templateHost", () => {
-		expect(resolveEndpoint([listening(4721, "ws://omp.example.com:4721"), endpoint("ws://10.0.0.5:9000")])).toEqual({
+		expect(
+			resolveEndpoint([
+				listening(4721, "ws://omp.example.com:4721"),
+				endpoint("ws://10.0.0.5:9000"),
+			]),
+		).toEqual({
 			url: "ws://10.0.0.5:9000",
 			source: "wrapper",
 		});
@@ -315,7 +374,11 @@ describe("resolveEndpoint precedence", () => {
 
 	test("wrapper: LAST endpoint line wins", () => {
 		expect(
-			resolveEndpoint([listening(4721), endpoint("ws://10.0.0.5:9000"), endpoint("ws://10.0.0.9:9001")])
+			resolveEndpoint([
+				listening(4721),
+				endpoint("ws://10.0.0.5:9000"),
+				endpoint("ws://10.0.0.9:9001"),
+			]),
 		).toEqual({ url: "ws://10.0.0.9:9001", source: "wrapper" });
 	});
 
@@ -324,7 +387,9 @@ describe("resolveEndpoint precedence", () => {
 			url: "ws://127.0.0.1:4722",
 			source: "loopback",
 		});
-		expect(resolveEndpoint([listening(4721), listening(4722, "ws://a.example")], "relay.local")).toEqual({
+		expect(
+			resolveEndpoint([listening(4721), listening(4722, "ws://a.example")], "relay.local"),
+		).toEqual({
 			url: "ws://relay.local:4722",
 			source: "template",
 		});
@@ -339,12 +404,15 @@ describe("resolveEndpoint precedence", () => {
 					{ event: "endpoint", url: "ws://late.example:2" },
 					listening(4722, "ws://adv.example:3"),
 				],
-				"template.example"
-			)
+				"template.example",
+			),
 		).toEqual({ url: "ws://late.example:2", source: "wrapper" });
 	});
 
 	test("empty templateHost string is treated as absent", () => {
-		expect(resolveEndpoint([listening(4721)], "")).toEqual({ url: "ws://127.0.0.1:4721", source: "loopback" });
+		expect(resolveEndpoint([listening(4721)], "")).toEqual({
+			url: "ws://127.0.0.1:4721",
+			source: "loopback",
+		});
 	});
 });

@@ -452,7 +452,11 @@ export class DaemonConnector {
 					// Wrong credential: terminal. No reconnect loop — a respawn
 					// (via onDialFailed) refreshes the token.
 					res.body?.cancel().catch(() => {});
-					this.#transition(entry.daemonId, "error", "unauthorized (401): daemon rejected the token");
+					this.#transition(
+						entry.daemonId,
+						"error",
+						"unauthorized (401): daemon rejected the token",
+					);
 					this.#events?.onDialFailed?.(this.#registry.get(entry.daemonId) ?? entry);
 					this.#onStreamEnded(state, { clean: false });
 					return;
@@ -512,7 +516,12 @@ export class DaemonConnector {
 			return null; // non-JSON noise
 		}
 		// Boundary validation: a frame is an object with a string discriminator.
-		if (typeof raw !== "object" || raw === null || !("type" in raw) || typeof raw.type !== "string") {
+		if (
+			typeof raw !== "object" ||
+			raw === null ||
+			!("type" in raw) ||
+			typeof raw.type !== "string"
+		) {
 			return null;
 		}
 		return raw as unknown as ServerFrame;
@@ -555,7 +564,11 @@ export class DaemonConnector {
 		// Proto gate: a daemon speaking a newer/older OMP_PROTO is not drivable;
 		// the mismatch is terminal until a compatible daemon is respawned.
 		if (hello.proto !== OMP_PROTO) {
-			this.#transition(state.daemonId, "error", `proto mismatch: daemon speaks OMP_PROTO ${hello.proto}, expected ${OMP_PROTO}`);
+			this.#transition(
+				state.daemonId,
+				"error",
+				`proto mismatch: daemon speaks OMP_PROTO ${hello.proto}, expected ${OMP_PROTO}`,
+			);
 			state.abort?.abort();
 			return;
 		}
@@ -578,7 +591,10 @@ export class DaemonConnector {
 		// Drivable only AFTER the validated hello (R8 + cwd sanity): state/ready
 		// frames that arrived early only marked sawState/sawReady — replay the
 		// furthest ladder position now that the handshake checked out.
-		this.#transitionLadder(state.daemonId, state.sawReady ? "ready" : state.sawState ? "resolving" : "session");
+		this.#transitionLadder(
+			state.daemonId,
+			state.sawReady ? "ready" : state.sawState ? "resolving" : "session",
+		);
 		this.#events?.onHello?.(state.daemonId, hello);
 	}
 
@@ -661,7 +677,12 @@ export class DaemonConnector {
 	#transitionLadder(daemonId: string, status: "session" | "resolving" | "ready"): void {
 		const current = this.#registry.get(daemonId)?.status;
 		if (current === "error") return;
-		if (current && current in LADDER_RANK && LADDER_RANK[current as keyof typeof LADDER_RANK] > LADDER_RANK[status]) return;
+		if (
+			current &&
+			current in LADDER_RANK &&
+			LADDER_RANK[current as keyof typeof LADDER_RANK] > LADDER_RANK[status]
+		)
+			return;
 		this.#transition(daemonId, status);
 	}
 

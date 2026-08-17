@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import { OMP_PROTO, SSE_EVENT_NAME } from "../shared/protocol";
-import type { ClientCommand, DaemonEntry, RegisteredProject, ServerFrame, SessionListEntry, SettingsModel, WebSessionState } from "../shared/protocol";
+import type {
+	ClientCommand,
+	DaemonEntry,
+	RegisteredProject,
+	ServerFrame,
+	SessionListEntry,
+	SettingsModel,
+	WebSessionState,
+} from "../shared/protocol";
 import {
 	announce,
 	attachSession,
@@ -69,16 +77,33 @@ function dispatchSeq(frame: ServerFrame, seq: number): void {
 	FakeEventSource.dispatch(SSE_EVENT_NAME, JSON.stringify(frame), String(seq));
 }
 
-function userMsg(text: string): { role: "user"; content: Array<{ type: "text"; text: string }>; timestamp: number } {
+function userMsg(text: string): {
+	role: "user";
+	content: Array<{ type: "text"; text: string }>;
+	timestamp: number;
+} {
 	return { role: "user", content: [{ type: "text", text }], timestamp: 0 };
 }
 
-function assistantMsg(text: string): { role: "assistant"; content: Array<{ type: "text"; text: string }> } {
+function assistantMsg(text: string): {
+	role: "assistant";
+	content: Array<{ type: "text"; text: string }>;
+} {
 	return { role: "assistant", content: [{ type: "text", text }] };
 }
 
-function toolResultMsg(toolCallId: string): { role: "toolResult"; toolCallId: string; toolName: string; content: Array<{ type: "text"; text: string }> } {
-	return { role: "toolResult", toolCallId, toolName: "bash", content: [{ type: "text", text: "out" }] };
+function toolResultMsg(toolCallId: string): {
+	role: "toolResult";
+	toolCallId: string;
+	toolName: string;
+	content: Array<{ type: "text"; text: string }>;
+} {
+	return {
+		role: "toolResult",
+		toolCallId,
+		toolName: "bash",
+		content: [{ type: "text", text: "out" }],
+	};
 }
 
 /** A completed turn as it appears in history: user prompt, assistant message with a tool call, tool result. */
@@ -87,7 +112,10 @@ function completedTurnHistory(): unknown[] {
 		userMsg("q"),
 		{
 			role: "assistant",
-			content: [{ type: "text", text: "a" }, { type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo hi" } }],
+			content: [
+				{ type: "text", text: "a" },
+				{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo hi" } },
+			],
 		},
 		toolResultMsg("t1"),
 	];
@@ -95,11 +123,21 @@ function completedTurnHistory(): unknown[] {
 
 /** The same turn re-streamed as live event deltas (what a resume replays). */
 function completedTurnEvents(): ServerFrame[] {
-	const ev = (event: unknown): ServerFrame => ({ type: "event", event } as ServerFrame);
+	const ev = (event: unknown): ServerFrame => ({ type: "event", event }) as ServerFrame;
 	return [
 		ev({ type: "message_start", message: userMsg("q") }),
-		ev({ type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "echo hi" } }),
-		ev({ type: "tool_execution_end", toolCallId: "t1", toolName: "bash", result: { output: "out" } }),
+		ev({
+			type: "tool_execution_start",
+			toolCallId: "t1",
+			toolName: "bash",
+			args: { command: "echo hi" },
+		}),
+		ev({
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "bash",
+			result: { output: "out" },
+		}),
 		ev({ type: "message_end", message: assistantMsg("a") }),
 	];
 }
@@ -125,7 +163,9 @@ beforeEach(() => {
 	FakeEventSource.handlers.clear();
 	// Browser globals the store's transport touches; the Bun test runner has none.
 	globalThis.location = { search: "" } as Location;
-	globalThis.window = { setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms) } as unknown as Window & typeof globalThis;
+	globalThis.window = {
+		setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms),
+	} as unknown as Window & typeof globalThis;
 	globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
 	globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
 		if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
@@ -186,11 +226,14 @@ describe("attached-frame handling", () => {
 
 		// A previous-session call is in flight when the switch lands.
 		const oldCall = call("getSettings");
-		expect(posted.map(c => (c.type === "call" ? c.method : c.type))).toEqual(["getSettings"]);
+		expect(posted.map((c) => (c.type === "call" ? c.method : c.type))).toEqual(["getSettings"]);
 
 		// First attach: no switch, so the pull is issued and nothing is rejected.
 		dispatch(attached("session-a"));
-		expect(posted.map(c => (c.type === "call" ? c.method : c.type))).toEqual(["getSettings", "getSubagents"]);
+		expect(posted.map((c) => (c.type === "call" ? c.method : c.type))).toEqual([
+			"getSettings",
+			"getSubagents",
+		]);
 
 		// The switch lands: the old session's calls are rejected and readiness
 		// drops (the moved cleanup block still runs).
@@ -202,8 +245,10 @@ describe("attached-frame handling", () => {
 		// A fresh getSubagents is issued AFTER the cleanup — the regression was
 		// rejectPendingCalls killing the just-registered pull (swallowed by its
 		// .catch), leaving the panel empty until a later lifecycle frame.
-		const calls = posted.filter((c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call");
-		expect(calls.map(c => c.method)).toEqual(["getSettings", "getSubagents", "getSubagents"]);
+		const calls = posted.filter(
+			(c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call",
+		);
+		expect(calls.map((c) => c.method)).toEqual(["getSettings", "getSubagents", "getSubagents"]);
 		const freshId = calls[2].id;
 
 		// Stale answers to rejected calls are ignored — the panel stays empty.
@@ -236,14 +281,20 @@ describe("replay dedup (finding #2: resume must not double-apply deltas)", () =>
 		const events = completedTurnEvents(); // user q → tool t1 (done) → assistant a
 		events.forEach((frame, i) => dispatchSeq(frame, 1024 + i));
 		expect(itemCounts()).toEqual({ user: 1, assistant: 1, tool: 1 });
-		expect(state.items.filter(it => it.kind === "tool")[0]).toMatchObject({ toolCallId: "t1", status: "done" });
+		expect(state.items.filter((it) => it.kind === "tool")[0]).toMatchObject({
+			toolCallId: "t1",
+			status: "done",
+		});
 
 		// The ring replay re-sends those exact frames (same seqs) after
 		// `ready`. Pre-guard, every item would double and a second tool card
 		// would strand running (tool_execution_end resolves the FIRST match).
 		events.forEach((frame, i) => dispatchSeq(frame, 1024 + i));
 		expect(itemCounts()).toEqual({ user: 1, assistant: 1, tool: 1 });
-		expect(state.items.filter(it => it.kind === "tool")[0]).toMatchObject({ toolCallId: "t1", status: "done" });
+		expect(state.items.filter((it) => it.kind === "tool")[0]).toMatchObject({
+			toolCallId: "t1",
+			status: "done",
+		});
 	});
 
 	test("a delta live-delivered BEFORE the history rebuild is re-applied exactly once by the replay", async () => {
@@ -345,7 +396,12 @@ describe("ui_request_end dismissal (finding #16)", () => {
 	test("a settled dialog's ui_request_end dismisses it; ends for other ids leave it open", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
-		dispatch({ type: "ui_request", id: "ui1", method: "confirm", params: { title: "t", message: "m" } });
+		dispatch({
+			type: "ui_request",
+			id: "ui1",
+			method: "confirm",
+			params: { title: "t", message: "m" },
+		});
 		expect(state.uiRequest?.id).toBe("ui1");
 		// An end for a different (already-superseded) id must not close the
 		// dialog currently shown.
@@ -376,7 +432,14 @@ describe("hello_ok proto gate (finding #61)", () => {
 		const es = FakeEventSource.instances.at(-1)!;
 		es.onopen?.();
 		expect(state.connected).toBe(true);
-		dispatch({ type: "hello_ok", proto: OMP_PROTO, name: "ok", cwd: "/x", pid: 1, version: "0.0.0" });
+		dispatch({
+			type: "hello_ok",
+			proto: OMP_PROTO,
+			name: "ok",
+			cwd: "/x",
+			pid: 1,
+			version: "0.0.0",
+		});
 		expect(state.error).toBeNull();
 		expect(state.connected).toBe(true);
 	});
@@ -386,7 +449,15 @@ describe("subagent placeholder migration (finding #30)", () => {
 	test("progress before lifecycle migrates the placeholder into the real-id entry, preserving its data", () => {
 		connect();
 		// Progress lands first: the handler creates a `progress-3` placeholder.
-		dispatch({ type: "subagent_progress", payload: { index: 3, agent: "task", task: "deploy the fleet", progress: { status: "running" } } });
+		dispatch({
+			type: "subagent_progress",
+			payload: {
+				index: 3,
+				agent: "task",
+				task: "deploy the fleet",
+				progress: { status: "running" },
+			},
+		});
 		expect(state.subagents.size).toBe(1);
 		expect(state.subagents.get("progress-3")?.status).toBe("running");
 
@@ -405,14 +476,20 @@ describe("subagent placeholder migration (finding #30)", () => {
 
 	test("later progress frames update the migrated real entry, never a placeholder", () => {
 		connect();
-		dispatch({ type: "subagent_progress", payload: { index: 2, agent: "task", task: "t", progress: { status: "running" } } });
+		dispatch({
+			type: "subagent_progress",
+			payload: { index: 2, agent: "task", task: "t", progress: { status: "running" } },
+		});
 		dispatch({ type: "subagent_lifecycle", payload: { id: "sub-9", index: 2, status: "started" } });
 		expect(state.subagents.size).toBe(1);
 		expect(state.subagents.get("sub-9")?.status).toBe("started");
 
 		// The next progress frame must find the REAL entry (same index), not
 		// resurrect the placeholder, and the strip stays at one row.
-		dispatch({ type: "subagent_progress", payload: { index: 2, task: "t2", progress: { status: "running" } } });
+		dispatch({
+			type: "subagent_progress",
+			payload: { index: 2, task: "t2", progress: { status: "running" } },
+		});
 		expect(state.subagents.size).toBe(1);
 		expect(state.subagents.get("progress-2")).toBeUndefined();
 		expect(state.subagents.get("sub-9")?.status).toBe("running");
@@ -421,11 +498,17 @@ describe("subagent placeholder migration (finding #30)", () => {
 
 	test("lifecycle-first ordering is unchanged", () => {
 		connect();
-		dispatch({ type: "subagent_lifecycle", payload: { id: "sub-1", index: 0, agent: "task", status: "started" } });
+		dispatch({
+			type: "subagent_lifecycle",
+			payload: { id: "sub-1", index: 0, agent: "task", status: "started" },
+		});
 		expect(state.subagents.size).toBe(1);
 		expect(state.subagents.get("sub-1")?.status).toBe("started");
 
-		dispatch({ type: "subagent_progress", payload: { index: 0, task: "t", progress: { status: "running" } } });
+		dispatch({
+			type: "subagent_progress",
+			payload: { index: 0, task: "t", progress: { status: "running" } },
+		});
 		expect(state.subagents.size).toBe(1);
 		expect(state.subagents.get("progress-0")).toBeUndefined();
 		expect(state.subagents.get("sub-1")?.status).toBe("running");
@@ -456,7 +539,7 @@ describe("client debug ring (transport observability)", () => {
 			es.onerror?.();
 			expect(state.connected).toBe(false);
 			expect(state.reconnectDelay).toBe(1000);
-			const messages = state.debugLog.map(e => e.message).join("\n");
+			const messages = state.debugLog.map((e) => e.message).join("\n");
 			expect(messages).toContain("stream closed");
 			expect(messages).toContain("connection lost — retrying in 1000ms");
 
@@ -522,7 +605,11 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 		globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
 			const url = String(input);
 			const { status, body } = respond(url, init);
-			requests.push({ url, method: init?.method ?? "GET", body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined });
+			requests.push({
+				url,
+				method: init?.method ?? "GET",
+				body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+			});
 			return {
 				ok: status >= 200 && status < 300,
 				status,
@@ -534,7 +621,13 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 	}
 
 	test("refreshSettings GETs /ctl/settings and stores the model (no /command POST)", async () => {
-		setState({ sessionMode: "roster", currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		setState({
+			sessionMode: "roster",
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
 		const requests = stubFetch(() => ({ status: 200, body: model }));
 
 		refreshSettings();
@@ -548,7 +641,13 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 	});
 
 	test("updateSetting POSTs /ctl/settings/set with {path, value} and stores the response model", async () => {
-		setState({ sessionMode: "roster", currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		setState({
+			sessionMode: "roster",
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
 		const requests = stubFetch(() => ({ status: 200, body: model }));
 
 		updateSetting("agent.model", "gpt-5");
@@ -563,7 +662,13 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 	});
 
 	test("a non-ok /ctl/settings/set response surfaces the server {error} message in state.error", async () => {
-		setState({ sessionMode: "roster", currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		setState({
+			sessionMode: "roster",
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
 		stubFetch(() => ({ status: 400, body: { error: "unknown setting path" } }));
 
 		updateSetting("bogus.path", 1);
@@ -574,7 +679,13 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 	});
 
 	test("a non-ok /ctl/settings response surfaces the server error and leaves the model null", async () => {
-		setState({ sessionMode: "roster", currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		setState({
+			sessionMode: "roster",
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
 		stubFetch(() => ({ status: 500, body: "boom" }));
 
 		refreshSettings();
@@ -586,7 +697,13 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 	});
 
 	test("roster mode with a session attached keeps updateSetting on the /command call path (no /ctl fetch)", async () => {
-		setState({ sessionMode: "single", currentSessionId: "", settingsModel: null, settingsLoading: false, error: null });
+		setState({
+			sessionMode: "single",
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
 		const requests = stubFetch(() => ({ status: 200, body: model }));
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true so call() posts
@@ -597,12 +714,12 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 		updateSetting("agent.model", "gpt-5");
 		await settle();
 
-		expect(requests.filter(r => r.url.startsWith("/ctl"))).toEqual([]); // no /ctl fetch in attached mode
+		expect(requests.filter((r) => r.url.startsWith("/ctl"))).toEqual([]); // no /ctl fetch in attached mode
 		// The /command uplink carries the RPC (recorded by stubFetch, since it
 		// replaced the beforeEach fetch stub that feeds `posted`).
 		const calls = requests
-			.filter(r => r.url === "/command")
-			.map(r => r.body as Extract<ClientCommand, { type: "call" }>);
+			.filter((r) => r.url === "/command")
+			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].method).toBe("setSetting");
 		expect(calls[0].args).toEqual(["agent.model", "gpt-5"]);
@@ -647,7 +764,14 @@ describe("state-frame application (model-role picker state)", () => {
 			stateFrame({
 				modelRoles: [{ role: "default", provider: "anthropic", id: "claude-sonnet-4-5" }],
 				modelRoleCatalog: [
-					{ role: "default", name: "Default", hidden: false, provider: "anthropic", id: "claude-sonnet-4-5", source: "global" },
+					{
+						role: "default",
+						name: "Default",
+						hidden: false,
+						provider: "anthropic",
+						id: "claude-sonnet-4-5",
+						source: "global",
+					},
 					{ role: "advisor", name: "Advisor", hidden: true, source: "default" },
 				],
 				modelRoleStorage: "project",
@@ -655,9 +779,18 @@ describe("state-frame application (model-role picker state)", () => {
 		);
 		// The catalog/storage ride the same applyState path as modelRoles; the
 		// frame round-trips through JSON, so expect structural equality.
-		expect(state.modelRoles).toEqual([{ role: "default", provider: "anthropic", id: "claude-sonnet-4-5" }]);
+		expect(state.modelRoles).toEqual([
+			{ role: "default", provider: "anthropic", id: "claude-sonnet-4-5" },
+		]);
 		expect(state.modelRoleCatalog).toEqual([
-			{ role: "default", name: "Default", hidden: false, provider: "anthropic", id: "claude-sonnet-4-5", source: "global" },
+			{
+				role: "default",
+				name: "Default",
+				hidden: false,
+				provider: "anthropic",
+				id: "claude-sonnet-4-5",
+				source: "global",
+			},
 			{ role: "advisor", name: "Advisor", hidden: true, source: "default" },
 		]);
 		expect(state.modelRoleStorage).toBe("project");
@@ -694,7 +827,10 @@ describe("aria-live announcements (finding #P1)", () => {
 	}
 
 	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
-	const agentEnd = (): ServerFrame => ({ type: "event", event: { type: "agent_end", messages: [] } });
+	const agentEnd = (): ServerFrame => ({
+		type: "event",
+		event: { type: "agent_end", messages: [] },
+	});
 
 	test("an agent turn starting announces only after the session is ready", () => {
 		connect();
@@ -716,22 +852,55 @@ describe("aria-live announcements (finding #P1)", () => {
 	test("a tool run starting, completing, and failing announces its kind", () => {
 		primeReady();
 		dispatchSeq(
-			{ type: "event", event: { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "echo hi" } } },
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_start",
+					toolCallId: "t1",
+					toolName: "bash",
+					args: { command: "echo hi" },
+				},
+			},
 			1024,
 		);
 		expect(state.announcement).toBe("bash started");
 		dispatchSeq(
-			{ type: "event", event: { type: "tool_execution_end", toolCallId: "t1", toolName: "bash", result: { output: "out" } } },
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_end",
+					toolCallId: "t1",
+					toolName: "bash",
+					result: { output: "out" },
+				},
+			},
 			1025,
 		);
 		expect(state.announcement).toBe("bash completed");
 		// A failed run announces "failed" (the tool output itself is never announced).
 		dispatchSeq(
-			{ type: "event", event: { type: "tool_execution_start", toolCallId: "t2", toolName: "bash", args: { command: "boom" } } },
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_start",
+					toolCallId: "t2",
+					toolName: "bash",
+					args: { command: "boom" },
+				},
+			},
 			1026,
 		);
 		dispatchSeq(
-			{ type: "event", event: { type: "tool_execution_end", toolCallId: "t2", toolName: "bash", result: { output: "" }, isError: true } },
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_end",
+					toolCallId: "t2",
+					toolName: "bash",
+					result: { output: "" },
+					isError: true,
+				},
+			},
 			1027,
 		);
 		expect(state.announcement).toBe("bash failed");
@@ -776,10 +945,19 @@ describe("workingIntent (dynamic shimmer label)", () => {
 		dispatch({ type: "ready", readyAt: 123 });
 	}
 	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
-	const agentEnd = (): ServerFrame => ({ type: "event", event: { type: "agent_end", messages: [] } });
+	const agentEnd = (): ServerFrame => ({
+		type: "event",
+		event: { type: "agent_end", messages: [] },
+	});
 	const toolStart = (toolCallId: string, extra: Record<string, unknown>): ServerFrame => ({
 		type: "event",
-		event: { type: "tool_execution_start", toolCallId, toolName: "read", args: { path: "x.ts" }, ...extra },
+		event: {
+			type: "tool_execution_start",
+			toolCallId,
+			toolName: "read",
+			args: { path: "x.ts" },
+			...extra,
+		},
 	});
 
 	test("loop-resolved intent wins; latest call's intent replaces it", () => {
@@ -795,7 +973,10 @@ describe("workingIntent (dynamic shimmer label)", () => {
 	test("falls back to the harness `i` arg when the event has no intent", () => {
 		primeReady();
 		dispatchSeq(agentStart(), 1024);
-		dispatchSeq(toolStart("t1", { args: { path: "x.ts", i: "Searching for shimmer styles" } }), 1025);
+		dispatchSeq(
+			toolStart("t1", { args: { path: "x.ts", i: "Searching for shimmer styles" } }),
+			1025,
+		);
 		expect(state.workingIntent).toBe("Searching for shimmer styles");
 	});
 
@@ -837,7 +1018,16 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 
 	/** Minimal roster entry; extra fields (projectId/worktreeOf/…) ride along. */
 	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
-		return { daemonId: id, name: id, cwd: `/repos/${id}`, project: id, labels: [], mode: "spawned", status: "ready", ...extra };
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: id,
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			...extra,
+		};
 	}
 
 	test("registered_projects populates the store and survives a session reset (fleet-scoped)", () => {
@@ -880,10 +1070,10 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		});
 
 		const groups = daemonsByProject();
-		expect(groups.map(g => g.project?.projectId ?? null)).toEqual(["p2", "p1", "p3"]);
-		expect(groups[0].daemons.map(d => d.daemonId)).toEqual(["b-main"]);
+		expect(groups.map((g) => g.project?.projectId ?? null)).toEqual(["p2", "p1", "p3"]);
+		expect(groups[0].daemons.map((d) => d.daemonId)).toEqual(["b-main"]);
 		// Main-checkout row first, then worktrees — regardless of roster order.
-		expect(groups[1].daemons.map(d => d.daemonId)).toEqual(["a-main", "a-wt"]);
+		expect(groups[1].daemons.map((d) => d.daemonId)).toEqual(["a-main", "a-wt"]);
 		expect(groups[2].daemons).toEqual([]); // zero-daemon project still renders
 	});
 
@@ -908,11 +1098,16 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		});
 
 		const groups = daemonsByProject();
-		expect(groups.map(g => g.project?.projectId ?? null)).toEqual(["p1", null]);
-		expect(groups[0].daemons.map(d => d.daemonId)).toEqual(["a-main"]);
+		expect(groups.map((g) => g.project?.projectId ?? null)).toEqual(["p1", null]);
+		expect(groups[0].daemons.map((d) => d.daemonId)).toEqual(["a-main"]);
 		// Today's string grouping: repo keys sorted via localeCompare, main
 		// checkouts before worktrees within a repo, roster order within each.
-		expect(groups[1].daemons.map(d => d.daemonId)).toEqual(["alpha", "orphan", "zeta-main", "zeta-wt"]);
+		expect(groups[1].daemons.map((d) => d.daemonId)).toEqual([
+			"alpha",
+			"orphan",
+			"zeta-main",
+			"zeta-wt",
+		]);
 	});
 
 	test("daemonsByProject with no unregistered entries emits no trailing null group", () => {
@@ -921,24 +1116,59 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		dispatch({ type: "registered_projects", projects: [p1] });
 		dispatch({ type: "roster", daemons: [daemon("a-main", { projectId: "p1" })] });
 		const groups = daemonsByProject();
-		expect(groups.map(g => g.project?.projectId ?? null)).toEqual(["p1"]);
+		expect(groups.map((g) => g.project?.projectId ?? null)).toEqual(["p1"]);
 	});
 
 	test("worktree_delete_info answers populate the daemonId-keyed evidence map (fleet-scoped)", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
-		dispatch({ type: "worktree_delete_info", daemonId: "d1", owned: true, dirty: true, git: { added: 1, modified: 0, deleted: 0, untracked: 2 }, branch: "feat", merged: false, unpushed: true });
-		dispatch({ type: "worktree_delete_info", daemonId: "d1", owned: true, dirty: false, branch: "feat", merged: true, unpushed: false });
-		dispatch({ type: "worktree_delete_info", daemonId: "d2", owned: false, dirty: false, reason: "not managed" });
+		dispatch({
+			type: "worktree_delete_info",
+			daemonId: "d1",
+			owned: true,
+			dirty: true,
+			git: { added: 1, modified: 0, deleted: 0, untracked: 2 },
+			branch: "feat",
+			merged: false,
+			unpushed: true,
+		});
+		dispatch({
+			type: "worktree_delete_info",
+			daemonId: "d1",
+			owned: true,
+			dirty: false,
+			branch: "feat",
+			merged: true,
+			unpushed: false,
+		});
+		dispatch({
+			type: "worktree_delete_info",
+			daemonId: "d2",
+			owned: false,
+			dirty: false,
+			reason: "not managed",
+		});
 
-		expect(state.worktreeDeleteInfo["d1"]).toMatchObject({ owned: true, dirty: false, merged: true }); // latest-wins
-		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({ owned: false, dirty: false, reason: "not managed" });
+		expect(state.worktreeDeleteInfo["d1"]).toMatchObject({
+			owned: true,
+			dirty: false,
+			merged: true,
+		}); // latest-wins
+		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({
+			owned: false,
+			dirty: false,
+			reason: "not managed",
+		});
 
 		// Fleet-scoped: survives the reset of a daemon switch.
 		dispatch(attached("daemon-a"));
 		dispatch(attached("daemon-b"));
-		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({ owned: false, dirty: false, reason: "not managed" });
+		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({
+			owned: false,
+			dirty: false,
+			reason: "not managed",
+		});
 	});
 
 	test("listProjectBranches resolves via a matching project_branches frame; a mismatched projectId frame does not settle it", async () => {
@@ -946,11 +1176,17 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true
 
 		const branches = listProjectBranches("p1");
-		expect(posted).toEqual([{ type: "list_project_branches", id: expect.any(String), projectId: "p1" }]);
+		expect(posted).toEqual([
+			{ type: "list_project_branches", id: expect.any(String), projectId: "p1" },
+		]);
 
 		// A frame for a different project belongs to a superseded request and
 		// must not settle the pending promise.
-		dispatch({ type: "project_branches", projectId: "p2", branches: [{ name: "other", checkedOut: false }] });
+		dispatch({
+			type: "project_branches",
+			projectId: "p2",
+			branches: [{ name: "other", checkedOut: false }],
+		});
 		let settled = false;
 		void branches.then(
 			() => {
@@ -969,7 +1205,9 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 			projectId: "p1",
 			branches: [{ name: "main", checkedOut: true, worktreePath: "/w/main" }],
 		});
-		await expect(branches).resolves.toEqual([{ name: "main", checkedOut: true, worktreePath: "/w/main" }]);
+		await expect(branches).resolves.toEqual([
+			{ name: "main", checkedOut: true, worktreePath: "/w/main" },
+		]);
 	});
 });
 
@@ -983,7 +1221,16 @@ describe("Phase 5: project/worktree command senders", () => {
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
 		sendAddProject("/repos/a", { start: true, template: "agent", labels: ["x", "y"] });
-		expect(posted).toEqual([{ type: "add_project", id: expect.any(String), path: "/repos/a", start: true, template: "agent", labels: ["x", "y"] }]);
+		expect(posted).toEqual([
+			{
+				type: "add_project",
+				id: expect.any(String),
+				path: "/repos/a",
+				start: true,
+				template: "agent",
+				labels: ["x", "y"],
+			},
+		]);
 
 		// Bare path: no optional fields on the wire.
 		posted.length = 0;
@@ -1004,13 +1251,26 @@ describe("Phase 5: project/worktree command senders", () => {
 
 		sendCreateWorktree("p1", "feature-x", { baseRef: "main", start: true });
 		expect(posted).toEqual([
-			{ type: "create_worktree", id: expect.any(String), projectId: "p1", name: "feature-x", baseRef: "main", start: true },
+			{
+				type: "create_worktree",
+				id: expect.any(String),
+				projectId: "p1",
+				name: "feature-x",
+				baseRef: "main",
+				start: true,
+			},
 		]);
 
 		posted.length = 0;
 		sendCreateWorktree("p1", "feat", { existingBranch: "feat" });
 		expect(posted).toEqual([
-			{ type: "create_worktree", id: expect.any(String), projectId: "p1", name: "feat", existingBranch: "feat" },
+			{
+				type: "create_worktree",
+				id: expect.any(String),
+				projectId: "p1",
+				name: "feat",
+				existingBranch: "feat",
+			},
 		]);
 	});
 
@@ -1019,7 +1279,13 @@ describe("Phase 5: project/worktree command senders", () => {
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		sendAddExistingWorktree("p1", "/w/feat", { start: true });
 		expect(posted).toEqual([
-			{ type: "add_worktree", id: expect.any(String), projectId: "p1", worktreePath: "/w/feat", start: true },
+			{
+				type: "add_worktree",
+				id: expect.any(String),
+				projectId: "p1",
+				worktreePath: "/w/feat",
+				start: true,
+			},
 		]);
 	});
 
@@ -1028,7 +1294,9 @@ describe("Phase 5: project/worktree command senders", () => {
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
 		sendDeleteWorktree("d1", { deleteBranch: true });
-		expect(posted).toEqual([{ type: "delete_worktree", id: expect.any(String), daemonId: "d1", deleteBranch: true }]);
+		expect(posted).toEqual([
+			{ type: "delete_worktree", id: expect.any(String), daemonId: "d1", deleteBranch: true },
+		]);
 
 		posted.length = 0;
 		sendDeleteWorktree("d1");
@@ -1039,7 +1307,9 @@ describe("Phase 5: project/worktree command senders", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		sendWorktreeDeleteInfo("d1");
-		expect(posted).toEqual([{ type: "worktree_delete_info", id: expect.any(String), daemonId: "d1" }]);
+		expect(posted).toEqual([
+			{ type: "worktree_delete_info", id: expect.any(String), daemonId: "d1" },
+		]);
 	});
 
 	test("start:false senders leave the gate untouched", () => {
@@ -1050,7 +1320,7 @@ describe("Phase 5: project/worktree command senders", () => {
 		sendCreateWorktree("p1", "feat");
 		sendAddExistingWorktree("p1", "/w/feat", { start: false });
 		expect(state.pendingSessionPicker).toBeNull();
-		expect(posted.map(c => c.type)).toEqual(["add_project", "create_worktree", "add_worktree"]);
+		expect(posted.map((c) => c.type)).toEqual(["add_project", "create_worktree", "add_worktree"]);
 		// start:false rides the wire (explicit opts pass through like spawnDaemon's)
 		// but must NOT arm the gate.
 		expect(posted[0]).toMatchObject({ type: "add_project", start: false });
@@ -1072,13 +1342,17 @@ describe("Phase 5: post-attach session-picker gate", () => {
 
 	/** The attach command posted by the most recent attachSession() call. */
 	function lastAttachCmd(): Extract<ClientCommand, { type: "attach" }> {
-		const cmd = posted.filter((c): c is Extract<ClientCommand, { type: "attach" }> => c.type === "attach").at(-1);
+		const cmd = posted
+			.filter((c): c is Extract<ClientCommand, { type: "attach" }> => c.type === "attach")
+			.at(-1);
 		if (!cmd) throw new Error("expected an attach command");
 		return cmd;
 	}
 
 	/** Commands of one type as posted, oldest first. */
-	function postedOf<T extends ClientCommand["type"]>(type: T): Array<Extract<ClientCommand, { type: T }>> {
+	function postedOf<T extends ClientCommand["type"]>(
+		type: T,
+	): Array<Extract<ClientCommand, { type: T }>> {
 		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
 	}
 
@@ -1123,7 +1397,7 @@ describe("Phase 5: post-attach session-picker gate", () => {
 		expect(state.sessionPickerGate).toBeNull();
 		expect(state.modal).toBeNull();
 		// The daemon got the same new-session RPC /new uses.
-		const newSessionCalls = postedOf("call").filter(c => c.method === "newSession");
+		const newSessionCalls = postedOf("call").filter((c) => c.method === "newSession");
 		expect(newSessionCalls).toHaveLength(1);
 	});
 
@@ -1134,7 +1408,12 @@ describe("Phase 5: post-attach session-picker gate", () => {
 		sendAddExistingWorktree("p1", "/w/feat", { start: true });
 		const attach = attachSession("d3");
 		expect(state.pendingSessionPicker).toBe("d3");
-		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: false, error: "unknown daemon: d3" });
+		dispatch({
+			type: "attach_result",
+			id: lastAttachCmd().id,
+			ok: false,
+			error: "unknown daemon: d3",
+		});
 		await expect(attach).rejects.toThrow("unknown daemon: d3");
 		expect(state.pendingSessionPicker).toBeNull();
 		expect(postedOf("list_sessions")).toHaveLength(0);
@@ -1162,7 +1441,12 @@ describe("Phase 5: post-attach session-picker gate", () => {
 
 		// The current attach settles → the gate fires for d9.
 		const attach = attachSession("d9");
-		dispatch({ type: "attach_result", id: postedOf("attach").at(-1)!.id, ok: true, sessionId: "d9" });
+		dispatch({
+			type: "attach_result",
+			id: postedOf("attach").at(-1)!.id,
+			ok: true,
+			sessionId: "d9",
+		});
 		await expect(attach).resolves.toBe("d9");
 		expect(postedOf("list_sessions")).toHaveLength(1);
 		expect(state.pendingSessionPicker).toBe("d9"); // armed until the answer

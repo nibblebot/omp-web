@@ -26,7 +26,8 @@ export const DeleteWorktreeDialog: Component = () => {
 
 	const target = () => state.deleteWorktreeTarget;
 	const info = () => (target() !== null ? state.worktreeDeleteInfo[target()!] : undefined);
-	const daemon = () => (target() !== null ? state.daemonRoster.find(d => d.daemonId === target()!) : undefined);
+	const daemon = () =>
+		target() !== null ? state.daemonRoster.find((d) => d.daemonId === target()!) : undefined;
 
 	// Fresh checkbox default per open (the sidebar row already asked for the
 	// guard evidence when it opened this dialog).
@@ -49,7 +50,7 @@ export const DeleteWorktreeDialog: Component = () => {
 			{ kind: "deleted", n: g.deleted },
 			{ kind: "untracked", n: g.untracked },
 		];
-		return kinds.filter(k => k.n > 0);
+		return kinds.filter((k) => k.n > 0);
 	};
 
 	const dirtyTotal = () => dirtyKinds().reduce((sum, k) => sum + k.n, 0);
@@ -86,7 +87,8 @@ export const DeleteWorktreeDialog: Component = () => {
 				</Show>
 				<Show when={info() !== undefined && !info()!.owned}>
 					<p class="danger-confirm-body">
-						{info()!.reason ?? "This directory is not a fleet-managed worktree — nothing to delete."}
+						{info()!.reason ??
+							"This directory is not a fleet-managed worktree — nothing to delete."}
 					</p>
 				</Show>
 				<Show when={info() !== undefined && info()!.owned && info()!.dirty}>
@@ -95,7 +97,7 @@ export const DeleteWorktreeDialog: Component = () => {
 						<Show when={dirtyKinds().length > 0}>
 							<span class="worktree-evidence">
 								<For each={dirtyKinds()}>
-									{k => (
+									{(k) => (
 										<span class="daemon-git-dirty" data-kind={k.kind}>
 											{DIRTY_GLYPHS[k.kind]}
 											{k.n}
@@ -104,7 +106,8 @@ export const DeleteWorktreeDialog: Component = () => {
 								</For>
 							</span>
 						</Show>
-						. Deleting is refused while the worktree is dirty{info()!.reason ? ` — ${info()!.reason}` : ""}.
+						. Deleting is refused while the worktree is dirty
+						{info()!.reason ? ` — ${info()!.reason}` : ""}.
 					</p>
 				</Show>
 				<Show when={info() !== undefined && info()!.owned && !info()!.dirty}>
@@ -116,16 +119,16 @@ export const DeleteWorktreeDialog: Component = () => {
 								at <span class="worktree-evidence-path">{daemon()!.cwd}</span>
 							</>
 						) : null}
-						? This stops the daemon and removes it from the roster; session transcripts survive (they live under
-						the agent dir, not the worktree).
+						? This stops the daemon and removes it from the roster; session transcripts survive
+						(they live under the agent dir, not the worktree).
 					</p>
 					<Show when={info()!.branch}>
-						{branch => (
+						{(branch) => (
 							<label class="worktree-branch-check">
 								<input
 									type="checkbox"
 									checked={effectiveDeleteBranch()}
-									onChange={e => setDeleteBranch(e.currentTarget.checked)}
+									onChange={(e) => setDeleteBranch(e.currentTarget.checked)}
 								/>
 								<span>
 									Also delete branch <span class="worktree-branch-name">{branch()}</span>
@@ -139,7 +142,12 @@ export const DeleteWorktreeDialog: Component = () => {
 					<button type="button" onClick={close}>
 						Cancel
 					</button>
-					<button type="button" class="danger-confirm-btn" disabled={!confirmable()} onClick={confirmDelete}>
+					<button
+						type="button"
+						class="danger-confirm-btn"
+						disabled={!confirmable()}
+						onClick={confirmDelete}
+					>
 						Delete worktree
 					</button>
 				</div>

@@ -11,7 +11,14 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { listProjects, parseGitStatePorcelain, parseNumstat, probeGitState, resolveWorktreeOf, validateProjectPath } from "./discovery";
+import {
+	listProjects,
+	parseGitStatePorcelain,
+	parseNumstat,
+	probeGitState,
+	resolveWorktreeOf,
+	validateProjectPath,
+} from "./discovery";
 import type { GitResult, GitRunner } from "./discovery";
 import type { ProjectEntry } from "../shared/protocol";
 
@@ -34,8 +41,19 @@ const PORCELAIN_FIXTURE = [
 /** Entries listProjects must produce from PORCELAIN_FIXTURE. */
 const FIXTURE_ENTRIES: ProjectEntry[] = [
 	{ name: "acme", path: "/srv/repos/acme", isWorktree: false, branch: "main" },
-	{ name: "acme-wt-feature", path: "/srv/repos/acme-wt-feature", isWorktree: true, worktreeOf: "acme", branch: "feature/x" },
-	{ name: "acme-wt-detached", path: "/srv/repos/acme-wt-detached", isWorktree: true, worktreeOf: "acme" },
+	{
+		name: "acme-wt-feature",
+		path: "/srv/repos/acme-wt-feature",
+		isWorktree: true,
+		worktreeOf: "acme",
+		branch: "feature/x",
+	},
+	{
+		name: "acme-wt-detached",
+		path: "/srv/repos/acme-wt-detached",
+		isWorktree: true,
+		worktreeOf: "acme",
+	},
 ];
 
 /** Porcelain for a lone repo whose main worktree is rooted at `cwd`. */
@@ -43,7 +61,12 @@ function fixtureFor(cwd: string): GitResult {
 	return {
 		exitCode: 0,
 		stderr: "",
-		stdout: [`worktree ${cwd}`, "HEAD 1111111111111111111111111111111111111111", "branch refs/heads/main", ""].join("\n"),
+		stdout: [
+			`worktree ${cwd}`,
+			"HEAD 1111111111111111111111111111111111111111",
+			"branch refs/heads/main",
+			"",
+		].join("\n"),
 	};
 }
 
@@ -106,10 +129,9 @@ describe("listProjects", () => {
 		await makeGit(join(root, "acme-wt-feature")); // .git as a file
 		await makeGit(join(root, "acme-wt-detached"));
 		const calls: GitCall[] = [];
-		const projects = await listProjects(
-			[root],
-			{ exec: fakeGit({ exitCode: 0, stdout: PORCELAIN_FIXTURE, stderr: "" }, calls) },
-		);
+		const projects = await listProjects([root], {
+			exec: fakeGit({ exitCode: 0, stdout: PORCELAIN_FIXTURE, stderr: "" }, calls),
+		});
 		expect(calls).toHaveLength(3); // one git run per discovered repo
 		for (const call of calls) expect(call.args).toEqual(["worktree", "list", "--porcelain"]);
 		expect(calls.map((c) => c.cwd).sort()).toEqual(
@@ -128,7 +150,9 @@ describe("listProjects", () => {
 				{
 					exitCode: 0,
 					stderr: "",
-					stdout: [`worktree ${repo}`, "HEAD 0000000000000000000000000000000000000000", ""].join("\n"),
+					stdout: [`worktree ${repo}`, "HEAD 0000000000000000000000000000000000000000", ""].join(
+						"\n",
+					),
 				},
 				[],
 			),
@@ -149,7 +173,12 @@ describe("listProjects", () => {
 			},
 		});
 		expect(projects).toHaveLength(2);
-		expect(projects).toContainEqual({ name: "good", path: good, isWorktree: false, branch: "main" });
+		expect(projects).toContainEqual({
+			name: "good",
+			path: good,
+			isWorktree: false,
+			branch: "main",
+		});
 		expect(projects).toContainEqual({ name: "bad", path: bad, isWorktree: false });
 	});
 
@@ -183,14 +212,26 @@ describe("listProjects", () => {
 		await makeGit(join(otherRoot, "other"));
 		const other = await listProjects([otherRoot], { exec });
 		expect(calls).toHaveLength(2);
-		expect(other).toEqual([{ name: "other", path: join(otherRoot, "other"), isWorktree: false, branch: "main" }]);
+		expect(other).toEqual([
+			{ name: "other", path: join(otherRoot, "other"), isWorktree: false, branch: "main" },
+		]);
 		// clearCache() forces a rescan that sees the new repo.
 		listProjects.clearCache();
 		const refreshed = await listProjects([root], { exec });
 		expect(calls).toHaveLength(4); // repo-a + repo-b (added above) both rescanned
 		expect(refreshed).toHaveLength(2);
-		expect(refreshed).toContainEqual({ name: "repo-a", path: join(root, "repo-a"), isWorktree: false, branch: "main" });
-		expect(refreshed).toContainEqual({ name: "repo-b", path: join(root, "repo-b"), isWorktree: false, branch: "main" });
+		expect(refreshed).toContainEqual({
+			name: "repo-a",
+			path: join(root, "repo-a"),
+			isWorktree: false,
+			branch: "main",
+		});
+		expect(refreshed).toContainEqual({
+			name: "repo-b",
+			path: join(root, "repo-b"),
+			isWorktree: false,
+			branch: "main",
+		});
 	});
 
 	test("missing roots are skipped silently and never exec git", async () => {
@@ -198,7 +239,9 @@ describe("listProjects", () => {
 		await makeGit(join(root, "only"));
 		const calls: GitCall[] = [];
 		const exec = fakeGit({ exitCode: 0, stdout: PORCELAIN_FIXTURE, stderr: "" }, calls);
-		const projects = await listProjects([join(root, "gone"), join(root, "gone", "deep"), root], { exec });
+		const projects = await listProjects([join(root, "gone"), join(root, "gone", "deep"), root], {
+			exec,
+		});
 		expect(calls).toHaveLength(1); // only the real root ran git
 		expect(projects).toEqual(FIXTURE_ENTRIES);
 	});
@@ -221,14 +264,22 @@ describe("listProjects", () => {
 		await git(["init", "-b", "main"], main);
 		await writeFile(join(main, "README.md"), "# main\n");
 		await git(["add", "."], main);
-		await git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"], main);
+		await git(
+			["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+			main,
+		);
 		await git(["worktree", "add", join(root, "wt-feature"), "-b", "feature/x"], main);
 		await git(["worktree", "add", "--detach", join(root, "wt-detached"), "HEAD"], main);
 
 		const projects = await listProjects([root]);
 		expect(projects).toHaveLength(3);
 		// The first worktree block is the main repo, so it leads the list.
-		expect(projects[0]).toEqual({ name: "main-repo", path: main, isWorktree: false, branch: "main" });
+		expect(projects[0]).toEqual({
+			name: "main-repo",
+			path: main,
+			isWorktree: false,
+			branch: "main",
+		});
 		const byPath = new Map(projects.map((p) => [p.path, p]));
 		expect(byPath.get(join(root, "wt-feature"))).toEqual({
 			name: "wt-feature",
@@ -287,7 +338,9 @@ describe("resolveWorktreeOf", () => {
 		const calls: GitCall[] = [];
 		const exec = fakeGit({ exitCode: 0, stderr: "", stdout: PORCELAIN_FIXTURE }, calls);
 		expect(await resolveWorktreeOf("/srv/repos/acme-wt-feature", { exec })).toBe("acme");
-		expect(calls).toEqual([{ args: ["worktree", "list", "--porcelain"], cwd: "/srv/repos/acme-wt-feature" }]);
+		expect(calls).toEqual([
+			{ args: ["worktree", "list", "--porcelain"], cwd: "/srv/repos/acme-wt-feature" },
+		]);
 	});
 
 	test("the main checkout itself resolves to undefined", async () => {
@@ -299,9 +352,13 @@ describe("resolveWorktreeOf", () => {
 		const throwing: GitRunner = async () => {
 			throw new Error("spawn failed");
 		};
-		expect(await resolveWorktreeOf("/srv/repos/acme-wt-feature", { exec: throwing })).toBeUndefined();
+		expect(
+			await resolveWorktreeOf("/srv/repos/acme-wt-feature", { exec: throwing }),
+		).toBeUndefined();
 		const failing = fakeGit({ exitCode: 128, stderr: "not a repo", stdout: "" }, []);
-		expect(await resolveWorktreeOf("/srv/repos/acme-wt-feature", { exec: failing })).toBeUndefined();
+		expect(
+			await resolveWorktreeOf("/srv/repos/acme-wt-feature", { exec: failing }),
+		).toBeUndefined();
 	});
 
 	test("unparseable output resolves to undefined", async () => {
@@ -316,7 +373,10 @@ describe("resolveWorktreeOf", () => {
 		await git(["init", "-b", "main"], main);
 		await writeFile(join(main, "README.md"), "# main\n");
 		await git(["add", "."], main);
-		await git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"], main);
+		await git(
+			["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+			main,
+		);
 		const wt = join(root, "wt-feature");
 		await git(["worktree", "add", wt, "-b", "feature/x"], main);
 
@@ -465,7 +525,11 @@ describe("probeGitState", () => {
 		const exec = fakeGitByArg(
 			{
 				status: { exitCode: 0, stderr: "", stdout: ["## main", "?? new.txt", ""].join("\n") },
-				diff: { exitCode: 128, stderr: "fatal: ambiguous argument 'HEAD': unknown revision", stdout: "" },
+				diff: {
+					exitCode: 128,
+					stderr: "fatal: ambiguous argument 'HEAD': unknown revision",
+					stdout: "",
+				},
 			},
 			calls,
 		);

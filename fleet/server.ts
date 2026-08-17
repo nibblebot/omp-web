@@ -240,10 +240,17 @@ export async function runSpawnHook(
 	env: Record<string, string>,
 	timeoutMs: number = HOOK_TIMEOUT_MS,
 ): Promise<{ stdout: string; stderr: string }> {
-	const child = Bun.spawn(["sh", "-c", hook], { env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
+	const child = Bun.spawn(["sh", "-c", hook], {
+		env: { ...process.env, ...env },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
 	const stdout = readAllText(child.stdout);
 	const stderr = readAllText(child.stderr);
-	const timedOut = await Promise.race([child.exited.then(() => false), sleep(timeoutMs).then(() => true)]);
+	const timedOut = await Promise.race([
+		child.exited.then(() => false),
+		sleep(timeoutMs).then(() => true),
+	]);
 	if (timedOut) {
 		child.kill("SIGKILL");
 		await child.exited.catch(() => {
@@ -291,7 +298,12 @@ function parseHookOutput(stdout: string): HookOutput {
 		throw new HttpError(502, `spawn hook stdout must be a JSON object: ${last}`);
 	}
 	const obj = parsed as Record<string, unknown>;
-	if (typeof obj.url !== "string" || obj.url === "" || typeof obj.token !== "string" || obj.token === "") {
+	if (
+		typeof obj.url !== "string" ||
+		obj.url === "" ||
+		typeof obj.token !== "string" ||
+		obj.token === ""
+	) {
 		throw new HttpError(502, "spawn hook output missing url or token");
 	}
 	try {
@@ -329,7 +341,12 @@ class FleetServerImpl implements FleetServer {
 		this.registry = registry;
 		this.config = config;
 		this.startedAt = Date.now();
-		this.fleetFacts = { port: 0, startedAt: this.startedAt, statePath: facts.statePath, configPath: facts.configPath };
+		this.fleetFacts = {
+			port: 0,
+			startedAt: this.startedAt,
+			statePath: facts.statePath,
+			configPath: facts.configPath,
+		};
 		let edge: FleetEdge | null = null;
 		this.connector = new DaemonConnector(registry, {
 			onDialFailed: (entry) => this.#onDialFailed(entry),
@@ -348,11 +365,17 @@ class FleetServerImpl implements FleetServer {
 				);
 			},
 			onReconnect: (daemonId, attempt, delayMs) => {
-				this.eventLog.add("warn", "connector", `reconnect scheduled (attempt ${attempt}, delay ${delayMs}ms)`, daemonId);
+				this.eventLog.add(
+					"warn",
+					"connector",
+					`reconnect scheduled (attempt ${attempt}, delay ${delayMs}ms)`,
+					daemonId,
+				);
 			},
 		});
 		this.supervisor = new SpawnSupervisor(registry, this.connector, config, {
-			onEvent: (level, message, daemonId) => this.eventLog.add(level, "supervisor", message, daemonId),
+			onEvent: (level, message, daemonId) =>
+				this.eventLog.add(level, "supervisor", message, daemonId),
 		});
 		edge = new FleetEdge({
 			registry,
@@ -432,7 +455,12 @@ class FleetServerImpl implements FleetServer {
 				await this.supervisor.respawn(entry);
 			} catch (err) {
 				console.error(`fleet: respawn ${entry.daemonId} failed`, err);
-				this.eventLog.add("error", "server", `respawn ${entry.daemonId} failed: ${err instanceof Error ? err.message : String(err)}`, entry.daemonId);
+				this.eventLog.add(
+					"error",
+					"server",
+					`respawn ${entry.daemonId} failed: ${err instanceof Error ? err.message : String(err)}`,
+					entry.daemonId,
+				);
 			}
 		})();
 	}
@@ -454,7 +482,12 @@ class FleetServerImpl implements FleetServer {
 			if (entry.readyAt !== undefined) patch.readyAt = undefined;
 			if (entry.pid !== undefined) patch.pid = undefined;
 			this.registry.update(entry.daemonId, patch);
-			this.eventLog.add("info", "server", `boot reconcile: ${entry.status} → ${target}`, entry.daemonId);
+			this.eventLog.add(
+				"info",
+				"server",
+				`boot reconcile: ${entry.status} → ${target}`,
+				entry.daemonId,
+			);
 			if (target === "connecting") {
 				this.connector.connect(entry.daemonId);
 			}
@@ -549,7 +582,11 @@ class FleetServerImpl implements FleetServer {
 			if (err instanceof HttpError) return json({ error: err.message }, err.status);
 			const message = err instanceof Error ? err.message : String(err);
 			console.error("fleet: control request failed", err);
-			this.eventLog.add("error", "server", `request ${req.method} ${new URL(req.url).pathname} failed: ${message}`);
+			this.eventLog.add(
+				"error",
+				"server",
+				`request ${req.method} ${new URL(req.url).pathname} failed: ${message}`,
+			);
 			return json({ error: message }, 500);
 		}
 	};
@@ -614,7 +651,10 @@ class FleetServerImpl implements FleetServer {
 			return json({ project, entry: tagged }, 201);
 		} catch (err) {
 			// The project stays registered; the 500 names the stage.
-			throw new HttpError(500, `project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+			throw new HttpError(
+				500,
+				`project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
 		}
 	}
 
@@ -745,8 +785,9 @@ class FleetServerImpl implements FleetServer {
 		if (waitMs === undefined) {
 			// Fire-and-forget: dispatch to each match without awaiting turn
 			// completion; the caller gets the target list back immediately.
-			void fanOut(this.#fanoutDeps(), matches, text, undefined)
-				.catch((err: unknown) => console.error("fleet: background prompt failed", err));
+			void fanOut(this.#fanoutDeps(), matches, text, undefined).catch((err: unknown) =>
+				console.error("fleet: background prompt failed", err),
+			);
 			return json({ submitted: matches.map((entry) => entry.daemonId) });
 		}
 		const results = await fanOut(this.#fanoutDeps(), matches, text, waitMs);
@@ -803,28 +844,48 @@ class FleetServerImpl implements FleetServer {
 				});
 			} catch (err) {
 				const status = err instanceof WorktreeTargetExistsError ? 409 : 400;
-				throw new HttpError(status, `create worktree failed: ${err instanceof Error ? err.message : String(err)}`);
+				throw new HttpError(
+					status,
+					`create worktree failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
 			}
 			let entry: RegistryEntry;
 			try {
-				entry = await registerWorktreeEntry(this.registry, this.supervisor, project, created.path, { start });
+				entry = await registerWorktreeEntry(this.registry, this.supervisor, project, created.path, {
+					start,
+				});
 			} catch (err) {
-				throw new HttpError(500, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+				throw new HttpError(
+					500,
+					`spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
 			}
-			this.eventLog.add("info", "server", `worktree created ${created.path} (${created.branch})`, entry.daemonId);
+			this.eventLog.add(
+				"info",
+				"server",
+				`worktree created ${created.path} (${created.branch})`,
+				entry.daemonId,
+			);
 			return json({ entry }, 201);
 		}
 		// Add-existing: validate it is an unregistered linked worktree of the project.
 		let resolved: string;
 		try {
-			resolved = await validateUnregisteredWorktree(worktreePath, project, this.registry.list().map((e) => e.cwd));
+			resolved = await validateUnregisteredWorktree(
+				worktreePath,
+				project,
+				this.registry.list().map((e) => e.cwd),
+			);
 		} catch (err) {
-			const status = err instanceof Error && err.message.startsWith("worktree already registered") ? 409 : 400;
+			const status =
+				err instanceof Error && err.message.startsWith("worktree already registered") ? 409 : 400;
 			throw new HttpError(status, err instanceof Error ? err.message : String(err));
 		}
 		let entry: RegistryEntry;
 		try {
-			entry = await registerWorktreeEntry(this.registry, this.supervisor, project, resolved, { start });
+			entry = await registerWorktreeEntry(this.registry, this.supervisor, project, resolved, {
+				start,
+			});
 		} catch (err) {
 			throw new HttpError(500, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -875,7 +936,8 @@ class FleetServerImpl implements FleetServer {
 		const path = entry.cwd ?? "";
 		const info = await worktreeDeleteInfo(path, this.config.workspaceDir);
 		if (!info.owned) throw new HttpError(403, info.reason ?? `not a managed worktree: ${path}`);
-		if (info.dirty) throw new HttpError(409, info.reason ?? `worktree has uncommitted changes: ${path}`);
+		if (info.dirty)
+			throw new HttpError(409, info.reason ?? `worktree has uncommitted changes: ${path}`);
 		// Stop + evict (removal-time cleanup: #24 prune drops supervisor state).
 		if (entry.mode === "spawned") {
 			await this.supervisor.prune(daemonId);
@@ -890,24 +952,44 @@ class FleetServerImpl implements FleetServer {
 		} catch (err) {
 			if (err instanceof WorktreeNotOwnedError) throw new HttpError(403, err.message);
 			if (err instanceof WorktreeDirtyError) throw new HttpError(409, err.message);
-			throw new HttpError(500, `delete worktree failed: ${err instanceof Error ? err.message : String(err)}`);
+			throw new HttpError(
+				500,
+				`delete worktree failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
 		}
-		this.eventLog.add("info", "server", `worktree deleted ${deleted.path}${deleted.branch !== undefined ? ` (${deleted.branch})` : ""}`, daemonId);
+		this.eventLog.add(
+			"info",
+			"server",
+			`worktree deleted ${deleted.path}${deleted.branch !== undefined ? ` (${deleted.branch})` : ""}`,
+			daemonId,
+		);
 		return json({ removed: daemonId, worktree: deleted });
 	}
 }
 
 export async function startFleet(
-	opts: { port?: number; statePath?: string; configPath?: string; workspaceDir?: string; settings?: FleetSettingsOptions } = {},
+	opts: {
+		port?: number;
+		statePath?: string;
+		configPath?: string;
+		workspaceDir?: string;
+		settings?: FleetSettingsOptions;
+	} = {},
 ): Promise<FleetServer> {
 	const statePath = resolveStatePath(opts.statePath);
 	const registry = new Registry(statePath);
 	await registry.load();
 	const configPath = resolveConfigPath(opts.configPath);
 	const config = await loadConfig(opts.configPath, { workspaceDir: opts.workspaceDir });
-	return new FleetServerImpl(registry, config, resolvePort(opts.port), {
-		statePath,
-		// Null when no config file exists at the resolved location (defaults apply).
-		configPath: existsSync(configPath) ? configPath : null,
-	}, opts.settings);
+	return new FleetServerImpl(
+		registry,
+		config,
+		resolvePort(opts.port),
+		{
+			statePath,
+			// Null when no config file exists at the resolved location (defaults apply).
+			configPath: existsSync(configPath) ? configPath : null,
+		},
+		opts.settings,
+	);
 }

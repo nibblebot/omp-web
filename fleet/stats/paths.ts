@@ -9,12 +9,12 @@ import { join, resolve, relative, sep, isAbsolute, normalize } from "node:path";
 
 /** Reject anything that escapes sessionsDir; return absolute path or null. */
 export function toAbs(sessionsDir: string, rel: string): string | null {
-  const r = normalize(rel);
-  if (r.startsWith("..") || isAbsolute(r) || r === "." || r === "") return null;
-  const abs = resolve(sessionsDir, r);
-  const root = resolve(sessionsDir) + sep;
-  if (abs !== resolve(sessionsDir) && !abs.startsWith(root)) return null;
-  return abs;
+	const r = normalize(rel);
+	if (r.startsWith("..") || isAbsolute(r) || r === "." || r === "") return null;
+	const abs = resolve(sessionsDir, r);
+	const root = resolve(sessionsDir) + sep;
+	if (abs !== resolve(sessionsDir) && !abs.startsWith(root)) return null;
+	return abs;
 }
 
 /**
@@ -22,16 +22,16 @@ export function toAbs(sessionsDir: string, rel: string): string | null {
  * Returns the sanitized relative path (with `/` separators) or null.
  */
 export function decodeFileParam(sessionsDir: string, raw: string): string | null {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch {
-    return null;
-  }
-  if (decoded.includes("\\")) decoded = decoded.replaceAll("\\", "/");
-  const abs = toAbs(sessionsDir, decoded);
-  if (!abs) return null;
-  return relative(sessionsDir, abs);
+	let decoded: string;
+	try {
+		decoded = decodeURIComponent(raw);
+	} catch {
+		return null;
+	}
+	if (decoded.includes("\\")) decoded = decoded.replaceAll("\\", "/");
+	const abs = toAbs(sessionsDir, decoded);
+	if (!abs) return null;
+	return relative(sessionsDir, abs);
 }
 
 /**
@@ -39,27 +39,27 @@ export function decodeFileParam(sessionsDir: string, raw: string): string | null
  * Real DBs store absolute paths; the schema comment says relative — accept both.
  */
 export function normDbFile(sessionsDir: string, f: string): string {
-  if (isAbsolute(f)) return normalize(f);
-  return resolve(sessionsDir, f);
+	if (isAbsolute(f)) return normalize(f);
+	return resolve(sessionsDir, f);
 }
 
 /** Absolute -> relative (OS separators, no leading ./). */
 export function toRel(sessionsDir: string, abs: string): string {
-  const r = relative(sessionsDir, abs);
-  return r === "" ? "" : r;
+	const r = relative(sessionsDir, abs);
+	return r === "" ? "" : r;
 }
 
 /** Human folder label: first path segment of the rel path. */
 export function folderOf(rel: string): string {
-  const i = rel.indexOf(sep);
-  return i === -1 ? rel : rel.slice(0, i);
+	const i = rel.indexOf(sep);
+	return i === -1 ? rel : rel.slice(0, i);
 }
 
 /** True when the rel path is a main-agent session: <proj>/<file>.jsonl (2 segments). */
 export function isMainSession(rel: string): boolean {
-  // Windows paths arrive with backslashes; normalize to `/` so the split is
-  // OS-independent — `proj\file.jsonl` and `proj/file.jsonl` behave the same
-  // everywhere.
-  const parts = rel.replaceAll("\\", "/").split("/");
-  return parts.length === 2 && parts[1]!.endsWith(".jsonl") && !parts[1]!.startsWith("__advisor");
+	// Windows paths arrive with backslashes; normalize to `/` so the split is
+	// OS-independent — `proj\file.jsonl` and `proj/file.jsonl` behave the same
+	// everywhere.
+	const parts = rel.replaceAll("\\", "/").split("/");
+	return parts.length === 2 && parts[1]!.endsWith(".jsonl") && !parts[1]!.startsWith("__advisor");
 }

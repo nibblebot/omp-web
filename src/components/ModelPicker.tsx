@@ -40,7 +40,7 @@ export function thinkingOptions(efforts: readonly string[] | undefined): Thinkin
 	return [
 		{ value: "inherit", label: "inherit", hint: THINKING_HINTS.inherit },
 		{ value: "off", label: "off", hint: THINKING_HINTS.off },
-		...efforts.map(e => ({ value: e, label: thinkingLevelLabel(e) })),
+		...efforts.map((e) => ({ value: e, label: thinkingLevelLabel(e) })),
 	];
 }
 
@@ -61,7 +61,7 @@ function formatCtx(tokens: number | null | undefined): string | undefined {
  * (global config vs project .omp/config.yml) and apply live when they touch
  * the session's active role.
  */
-export const ModelPicker: Component<{ onClose: () => void }> = props => {
+export const ModelPicker: Component<{ onClose: () => void }> = (props) => {
 	const [step, setStep] = createSignal<Step>("roles");
 	const [role, setRole] = createSignal<ModelRoleCatalogEntry | undefined>(undefined);
 	const [model, setModel] = createSignal<ModelInfo | undefined>(undefined);
@@ -71,8 +71,8 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 
 	onMount(() => {
 		void call("getAvailableModels")
-			.then(models => setState("availableModels", models as ModelInfo[]))
-			.catch(err => setState("error", String(err)));
+			.then((models) => setState("availableModels", models as ModelInfo[]))
+			.catch((err) => setState("error", String(err)));
 	});
 
 	// The step-2 filter mounts when the model step opens; focus it after the
@@ -87,8 +87,8 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 		entry.id !== undefined &&
 		state.model?.provider === entry.provider &&
 		state.model?.id === entry.id;
-	const roles = () => state.modelRoleCatalog?.filter(e => !e.hidden) ?? [];
-	const hiddenRoles = () => state.modelRoleCatalog?.filter(e => e.hidden) ?? [];
+	const roles = () => state.modelRoleCatalog?.filter((e) => !e.hidden) ?? [];
+	const hiddenRoles = () => state.modelRoleCatalog?.filter((e) => e.hidden) ?? [];
 
 	/** Open the model step for this role (two statements: remember + advance). */
 	const pickRole = (entry: ModelRoleCatalogEntry) => {
@@ -101,8 +101,11 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 		const r = role()!;
 		// "inherit" (and no level) means no explicit thinking baked into the
 		// role value; the wire arg is omitted entirely for it.
-		const args: unknown[] = level === undefined || level === "inherit" ? [r.role, m.provider, m.id] : [r.role, m.provider, m.id, level];
-		void call("setModelRole", args).catch(err => setState("error", String(err)));
+		const args: unknown[] =
+			level === undefined || level === "inherit"
+				? [r.role, m.provider, m.id]
+				: [r.role, m.provider, m.id, level];
+		void call("setModelRole", args).catch((err) => setState("error", String(err)));
 		props.onClose();
 	};
 
@@ -140,7 +143,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 			<Show when={step() === "roles"}>
 				<div class="picker-list">
 					<For each={roles()}>
-						{entry => (
+						{(entry) => (
 							<div
 								class="picker-row"
 								classList={{ active: isActiveRole(entry) }}
@@ -156,14 +159,18 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 								) : (
 									<span class="picker-detail">auto</span>
 								)}
-								{entry.thinkingLevel && <span class="picker-chip">{thinkingLevelLabel(entry.thinkingLevel)}</span>}
+								{entry.thinkingLevel && (
+									<span class="picker-chip">{thinkingLevelLabel(entry.thinkingLevel)}</span>
+								)}
 								{entry.provider && entry.id && (
 									<button
 										class="picker-row-action"
 										title={`Clear ${entry.tag ?? entry.name} (back to auto)`}
-										onClick={e => {
+										onClick={(e) => {
 											e.stopPropagation();
-											void call("clearModelRole", [entry.role]).catch(err => setState("error", String(err)));
+											void call("clearModelRole", [entry.role]).catch((err) =>
+												setState("error", String(err)),
+											);
 										}}
 									>
 										clear
@@ -172,9 +179,11 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 								<button
 									class="picker-row-action"
 									title={`Hide ${entry.tag ?? entry.name}`}
-									onClick={e => {
+									onClick={(e) => {
 										e.stopPropagation();
-										void call("setModelRoleHidden", [entry.role, true]).catch(err => setState("error", String(err)));
+										void call("setModelRoleHidden", [entry.role, true]).catch((err) =>
+											setState("error", String(err)),
+										);
 									}}
 								>
 									hide
@@ -188,14 +197,15 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 				</div>
 				<Show when={hiddenRoles().length > 0}>
 					<div class="picker-group-head">
-						<button class="picker-hidden-toggle" onClick={() => setShowHidden(v => !v)}>
-							{showHidden() ? <ChevronDownIcon /> : <ChevronRightIcon />} hidden roles ({hiddenRoles().length})
+						<button class="picker-hidden-toggle" onClick={() => setShowHidden((v) => !v)}>
+							{showHidden() ? <ChevronDownIcon /> : <ChevronRightIcon />} hidden roles (
+							{hiddenRoles().length})
 						</button>
 					</div>
 					<Show when={showHidden()}>
 						<div class="picker-list">
 							<For each={hiddenRoles()}>
-								{entry => (
+								{(entry) => (
 									<div class="picker-row">
 										<span class="picker-label">{entry.tag ?? entry.name}</span>
 										{entry.provider && entry.id ? (
@@ -208,7 +218,11 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 										<button
 											class="picker-row-action"
 											title={`Unhide ${entry.tag ?? entry.name}`}
-											onClick={() => void call("setModelRoleHidden", [entry.role, false]).catch(err => setState("error", String(err)))}
+											onClick={() =>
+												void call("setModelRoleHidden", [entry.role, false]).catch((err) =>
+													setState("error", String(err)),
+												)
+											}
 										>
 											unhide
 										</button>
@@ -219,7 +233,9 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 					</Show>
 				</Show>
 				<div class="picker-note">
-					{state.modelRoleStorage === "project" ? "saves to project .omp/config.yml" : "saves to global config.yml"}
+					{state.modelRoleStorage === "project"
+						? "saves to project .omp/config.yml"
+						: "saves to global config.yml"}
 				</div>
 			</Show>
 			<Show when={step() === "model"}>
@@ -234,8 +250,8 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 					aria-label="Filter models"
 					placeholder="Filter models…"
 					value={filter()}
-					onInput={e => setFilter(e.currentTarget.value)}
-					onKeyDown={e => {
+					onInput={(e) => setFilter(e.currentTarget.value)}
+					onKeyDown={(e) => {
 						if (e.key === "Enter") {
 							const first = groups()[0]?.[1][0];
 							if (first) pickModel(first);
@@ -248,7 +264,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 							<div class="picker-group">
 								<div class="picker-group-name">{provider}</div>
 								<For each={models}>
-									{m => (
+									{(m) => (
 										<PickerRow
 											class="picker-row"
 											classList={{ active: role()?.provider === m.provider && role()?.id === m.id }}
@@ -276,7 +292,7 @@ export const ModelPicker: Component<{ onClose: () => void }> = props => {
 				</div>
 				<div class="picker-list">
 					<For each={thinkingOptions(model()?.thinking?.efforts as readonly string[] | undefined)}>
-						{opt => (
+						{(opt) => (
 							<PickerRow
 								class="picker-row"
 								classList={{ active: (role()?.thinkingLevel ?? "inherit") === opt.value }}

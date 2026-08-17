@@ -30,8 +30,14 @@
  * check.
  */
 
-import { ENVELOPE_HEADER_LENGTH, rewriteEnvelopePeer } from "@oh-my-pi/pi-coding-agent/collab/protocol";
-import type { RelayControlToGuest, RelayControlToHost } from "@oh-my-pi/pi-coding-agent/collab/protocol";
+import {
+	ENVELOPE_HEADER_LENGTH,
+	rewriteEnvelopePeer,
+} from "@oh-my-pi/pi-coding-agent/collab/protocol";
+import type {
+	RelayControlToGuest,
+	RelayControlToHost,
+} from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import type { BufferSource, Server, ServerWebSocket } from "bun";
 
 /**
@@ -192,7 +198,13 @@ class CollabRelay implements RelayHandle {
 					closeSafe(ws, 4028, "too many rooms");
 					return;
 				}
-				this.#rooms.set(roomId, { host: ws, hostOrphanSince: null, guests: new Map(), nextPeerId: 1, ttlTimer: null });
+				this.#rooms.set(roomId, {
+					host: ws,
+					hostOrphanSince: null,
+					guests: new Map(),
+					nextPeerId: 1,
+					ttlTimer: null,
+				});
 				return;
 			}
 			if (room.host !== null) {
@@ -223,7 +235,10 @@ class CollabRelay implements RelayHandle {
 		const peerId = room.nextPeerId++;
 		data.peerId = peerId;
 		room.guests.set(peerId, ws);
-		sendSafe(room.host, JSON.stringify({ t: "peer-joined", peer: peerId } satisfies RelayControlToHost));
+		sendSafe(
+			room.host,
+			JSON.stringify({ t: "peer-joined", peer: peerId } satisfies RelayControlToHost),
+		);
 	}
 
 	handleMessage(ws: RelayWs, raw: string | Buffer): void {
@@ -237,7 +252,10 @@ class CollabRelay implements RelayHandle {
 		if (data.role === "host") {
 			// Only the registered host socket may broadcast.
 			if (room.host !== ws) return;
-			const target = new DataView(raw.buffer, raw.byteOffset, ENVELOPE_HEADER_LENGTH).getUint32(0, false);
+			const target = new DataView(raw.buffer, raw.byteOffset, ENVELOPE_HEADER_LENGTH).getUint32(
+				0,
+				false,
+			);
 			if (target === 0) {
 				for (const guest of room.guests.values()) sendSafe(guest, raw);
 			} else {
@@ -275,7 +293,10 @@ class CollabRelay implements RelayHandle {
 		room.guests.delete(peerId);
 		data.peerId = undefined;
 		if (room.host !== null) {
-			sendSafe(room.host, JSON.stringify({ t: "peer-left", peer: peerId } satisfies RelayControlToHost));
+			sendSafe(
+				room.host,
+				JSON.stringify({ t: "peer-left", peer: peerId } satisfies RelayControlToHost),
+			);
 		}
 	}
 

@@ -1,4 +1,13 @@
-import { For, Show, createEffect, createRenderEffect, createSignal, onCleanup, onMount, type Component } from "solid-js";
+import {
+	For,
+	Show,
+	createEffect,
+	createRenderEffect,
+	createSignal,
+	onCleanup,
+	onMount,
+	type Component,
+} from "solid-js";
 import { characterForProvider, drawCharacter } from "../characters";
 import { groupModelRoles, type RoleGroup } from "../model-roles";
 import { SPRITE_SIZE, type PetPose } from "../sprite";
@@ -15,13 +24,22 @@ const idleBlinkDelay = () => 2500 + Math.random() * 2500;
 
 /** Full-size animated avatar for the primary role. Self-contained so it draws on
  *  ITS mount (the roster row may mount after Pet's, when role state arrives). */
-const PetMainAvatar: Component<{ pose: () => PetPose }> = props => {
+const PetMainAvatar: Component<{ pose: () => PetPose }> = (props) => {
 	let canvas!: HTMLCanvasElement;
 	onMount(() => {
 		const ctx = canvas.getContext("2d")!;
-		createRenderEffect(() => drawCharacter(ctx, characterForProvider(state.model?.provider), props.pose()));
+		createRenderEffect(() =>
+			drawCharacter(ctx, characterForProvider(state.model?.provider), props.pose()),
+		);
 	});
-	return <canvas ref={el => (canvas = el)} class="pet-main-canvas" width={SPRITE_SIZE} height={SPRITE_SIZE} />;
+	return (
+		<canvas
+			ref={(el) => (canvas = el)}
+			class="pet-main-canvas"
+			width={SPRITE_SIZE}
+			height={SPRITE_SIZE}
+		/>
+	);
 };
 
 /** Animated corner pet: cycles poses by streaming state, character by model provider. */
@@ -40,12 +58,15 @@ export const Pet: Component = () => {
 	const roster = () => {
 		const groups = groupModelRoles(state.modelRoles, state.model);
 		const activeKey = state.model ? `${state.model.provider}/${state.model.id}` : undefined;
-		const primaryIndex = groups.findIndex(g => `${g.provider}/${g.id}` === activeKey);
+		const primaryIndex = groups.findIndex((g) => `${g.provider}/${g.id}` === activeKey);
 		const entries = groups.map((g, i) => ({ group: g, primary: i === primaryIndex }));
 		// The pet always renders the active model even when it is not a role
 		// (session-only model override): keep it as the leading row.
 		if (primaryIndex === -1 && state.model) {
-			entries.unshift({ group: { provider: state.model.provider, id: state.model.id, roles: [] }, primary: true });
+			entries.unshift({
+				group: { provider: state.model.provider, id: state.model.id, roles: [] },
+				primary: true,
+			});
 		}
 		return entries;
 	};
@@ -117,7 +138,7 @@ export const Pet: Component = () => {
 				</button>
 				<div class="pet-roster">
 					<For each={roster()}>
-						{e => (
+						{(e) => (
 							<div class="pet-role" classList={{ secondary: !e.primary }}>
 								<div class="pet-role-avatar">
 									{e.primary ? (

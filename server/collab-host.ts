@@ -24,8 +24,15 @@ import type {
 } from "@oh-my-pi/pi-wire";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { stripImagesFromMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
-import type { SessionEntry, SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { generateRoomKey, generateWriteToken, importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
+import type {
+	SessionEntry,
+	SessionHeader,
+} from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import {
+	generateRoomKey,
+	generateWriteToken,
+	importRoomKey,
+} from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import {
 	type AgentSnapshot,
 	COLLAB_PROTO,
@@ -140,10 +147,18 @@ export interface CollabSessionPort {
 	/** Fires when the roster may have changed */
 	subscribeAgents(cb: () => void): () => void;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
-	promptFromGuest(text: string, images: ImageContent[] | undefined, fromName: string): Promise<void>;
+	promptFromGuest(
+		text: string,
+		images: ImageContent[] | undefined,
+		fromName: string,
+	): Promise<void>;
 	abort(): Promise<void>;
 	listAgents(): CollabAgentRef[];
-	agentCmd(cmd: "chat" | "kill" | "revive", agentId: string, text: string | undefined): Promise<void>;
+	agentCmd(
+		cmd: "chat" | "kill" | "revive",
+		agentId: string,
+		text: string | undefined,
+	): Promise<void>;
 	resolveTranscriptFile(agentId: string): string | null;
 }
 
@@ -191,7 +206,10 @@ export class CollabHostAdapter {
 	#agentsUnsubscribe?: () => void;
 	#peers = new Map<number, { name: string; canWrite: boolean }>();
 	#uiReqSeq = 0;
-	#pendingUi = new Map<number, { request: CollabUiRequest; settle(result: CollabGuestUiResult): void }>();
+	#pendingUi = new Map<
+		number,
+		{ request: CollabUiRequest; settle(result: CollabGuestUiResult): void }
+	>();
 	#lastStateJson = "";
 	#stateDebounce: Timer | null = null;
 	#streamingInterval: Timer | null = null;
@@ -242,7 +260,10 @@ export class CollabHostAdapter {
 		return list;
 	}
 
-	requestGuestUi(request: CollabUiRequestDraft, signal?: AbortSignal): Promise<CollabGuestUiResult> | null {
+	requestGuestUi(
+		request: CollabUiRequestDraft,
+		signal?: AbortSignal,
+	): Promise<CollabGuestUiResult> | null {
 		if (!this.#socket || !this.#hasWritablePeers()) return null;
 		const reqId = ++this.#uiReqSeq;
 		const fullRequest: CollabUiRequest = { ...request, reqId };
@@ -298,7 +319,8 @@ export class CollabHostAdapter {
 		// never hairpins the host socket back through the network. The R14
 		// host gate requires a loopback peer or a bearer token, and the host
 		// adapter authenticates by loopback only.
-		const wsUrl = connectUrl !== undefined ? `${connectUrl.replace(/\/+$/, "")}/r/${roomId}` : parsed.wsUrl;
+		const wsUrl =
+			connectUrl !== undefined ? `${connectUrl.replace(/\/+$/, "")}/r/${roomId}` : parsed.wsUrl;
 		const socket = new CollabSocket({ wsUrl, role: "host", key });
 		this.#socket = socket;
 		this.#sessionId = this.#port.getSessionId();
@@ -312,7 +334,7 @@ export class CollabHostAdapter {
 			}
 		};
 		socket.onFrame = (frame, fromPeer) => this.#handleFrame(frame, fromPeer);
-		socket.onControl = msg => {
+		socket.onControl = (msg) => {
 			if (msg.t === "peer-left") this.#handlePeerLeft(msg.peer);
 		};
 		socket.onClose = (reason, willReconnect) => {
@@ -347,8 +369,9 @@ export class CollabHostAdapter {
 			clearTimeout(timeout);
 		}
 
-		this.#unsubscribe = this.#port.subscribe(event => {
-			if (isWireAgentEvent(event)) this.#broadcast({ t: "event", event: shrinkForReplication(event) });
+		this.#unsubscribe = this.#port.subscribe((event) => {
+			if (isWireAgentEvent(event))
+				this.#broadcast({ t: "event", event: shrinkForReplication(event) });
 			this.#onEventForState(event);
 		});
 		// Port contract: one subscribeBus call covers BOTH task channels
@@ -358,8 +381,9 @@ export class CollabHostAdapter {
 			this.#port.subscribeBus((ch, data) => this.#broadcast({ t: "bus", channel: ch, data })),
 		);
 		this.#agentsUnsubscribe = this.#port.subscribeAgents(() => this.#scheduleAgentsBroadcast());
-		this.#port.onEntryAppended(entry => {
-			if (isWireSessionEntry(entry)) this.#broadcast({ t: "entry", entry: shrinkForReplication(entry) });
+		this.#port.onEntryAppended((entry) => {
+			if (isWireSessionEntry(entry))
+				this.#broadcast({ t: "entry", entry: shrinkForReplication(entry) });
 			// Model/thinking/title changes land as entries while idle; refresh
 			// guest state promptly (debounce + JSON diff dedupe).
 			this.#scheduleStateBroadcast();
@@ -464,13 +488,24 @@ export class CollabHostAdapter {
 
 	/** Reject a mutating frame from a read-only peer with a targeted error. */
 	#rejectReadOnly(action: string, fromPeer: number): void {
-		this.#socket?.send({ t: "error", message: `${action} is disabled on a read-only link` }, fromPeer);
+		this.#socket?.send(
+			{ t: "error", message: `${action} is disabled on a read-only link` },
+			fromPeer,
+		);
 	}
 
-	#handleHello(name: string, proto: number, writeToken: string | undefined, fromPeer: number): void {
+	#handleHello(
+		name: string,
+		proto: number,
+		writeToken: string | undefined,
+		fromPeer: number,
+	): void {
 		if (proto !== COLLAB_PROTO) {
 			this.#socket?.send(
-				{ t: "error", message: `protocol mismatch: host speaks v${COLLAB_PROTO}, guest sent v${proto}` },
+				{
+					t: "error",
+					message: `protocol mismatch: host speaks v${COLLAB_PROTO}, guest sent v${proto}`,
+				},
 				fromPeer,
 			);
 			return;
@@ -571,12 +606,10 @@ export class CollabHostAdapter {
 			this.#rejectReadOnly("prompting", fromPeer);
 			return;
 		}
-		this.#port
-			.promptFromGuest(text, images, peer.name)
-			.catch(err => {
-				console.warn("collab guest prompt failed", { error: String(err) });
-				this.#socket?.send({ t: "error", message: `prompt failed: ${String(err)}` }, fromPeer);
-			});
+		this.#port.promptFromGuest(text, images, peer.name).catch((err) => {
+			console.warn("collab guest prompt failed", { error: String(err) });
+			this.#socket?.send({ t: "error", message: `prompt failed: ${String(err)}` }, fromPeer);
+		});
 	}
 
 	#handleAbort(fromPeer: number): void {
@@ -589,7 +622,7 @@ export class CollabHostAdapter {
 		void this.#port
 			.abort()
 			.then(() => this.#port.emitNotice("info", `${name} interrupted`, "collab"))
-			.catch(err => console.warn("collab guest abort failed", { error: String(err) }));
+			.catch((err) => console.warn("collab guest abort failed", { error: String(err) }));
 	}
 
 	#handlePeerLeft(peer: number): void {
@@ -612,8 +645,11 @@ export class CollabHostAdapter {
 			// The wire shape (SessionState.contextUsage) allows nulls; the local
 			// CollabSessionState intersection narrows to non-null numbers, so the
 			// contract's null fallback needs a cast to the session-side type.
-			contextUsage: (this.#port.getContextUsage() ??
-				{ tokens: null, contextWindow: null, percent: null }) as CollabSessionState["contextUsage"],
+			contextUsage: (this.#port.getContextUsage() ?? {
+				tokens: null,
+				contextWindow: null,
+				percent: null,
+			}) as CollabSessionState["contextUsage"],
 			participants: this.participants,
 		};
 	}
@@ -622,7 +658,10 @@ export class CollabHostAdapter {
 		if (!STATE_TRIGGER_EVENTS[event.type]) return;
 		this.#scheduleStateBroadcast();
 		if (event.type === "agent_start" && !this.#streamingInterval) {
-			this.#streamingInterval = setInterval(() => this.#scheduleStateBroadcast(), STREAMING_STATE_INTERVAL_MS);
+			this.#streamingInterval = setInterval(
+				() => this.#scheduleStateBroadcast(),
+				STREAMING_STATE_INTERVAL_MS,
+			);
 		} else if (event.type === "agent_end" && this.#streamingInterval) {
 			clearInterval(this.#streamingInterval);
 			this.#streamingInterval = null;
@@ -632,8 +671,11 @@ export class CollabHostAdapter {
 	#snapshotAgents(): AgentSnapshot[] {
 		return this.#port
 			.listAgents()
-			.filter((ref): ref is CollabAgentRef & { kind: "main" | "sub" } => ref.kind === "main" || ref.kind === "sub")
-			.map(ref => ({
+			.filter(
+				(ref): ref is CollabAgentRef & { kind: "main" | "sub" } =>
+					ref.kind === "main" || ref.kind === "sub",
+			)
+			.map((ref) => ({
 				id: ref.id,
 				displayName: ref.displayName,
 				kind: ref.kind,
@@ -653,7 +695,12 @@ export class CollabHostAdapter {
 		}, AGENTS_DEBOUNCE_MS);
 	}
 
-	#handleAgentCmd(cmd: "chat" | "kill" | "revive", agentId: string, text: string | undefined, fromPeer: number): void {
+	#handleAgentCmd(
+		cmd: "chat" | "kill" | "revive",
+		agentId: string,
+		text: string | undefined,
+		fromPeer: number,
+	): void {
 		if (!this.#peers.get(fromPeer)?.canWrite) {
 			this.#rejectReadOnly("agent control", fromPeer);
 			return;
@@ -662,21 +709,27 @@ export class CollabHostAdapter {
 		// no `advisor`), but reject control by id defensively — mirrors
 		// CollabHost's guard: a stale/malicious client must never chat/kill/
 		// revive a read-only advisor transcript.
-		const ref = this.#port.listAgents().find(a => a.id === agentId);
+		const ref = this.#port.listAgents().find((a) => a.id === agentId);
 		if (ref && ref.kind !== "main" && ref.kind !== "sub") {
-			this.#socket?.send({ t: "error", message: `${agentId}: advisor transcripts are read-only` }, fromPeer);
+			this.#socket?.send(
+				{ t: "error", message: `${agentId}: advisor transcripts are read-only` },
+				fromPeer,
+			);
 			return;
 		}
-		this.#port
-			.agentCmd(cmd, agentId, text)
-			.catch(err => {
-				console.warn("collab agent-cmd failed", { cmd, agentId, error: String(err) });
-				this.#socket?.send({ t: "error", message: `agent ${agentId}: ${String(err)}` }, fromPeer);
-			});
+		this.#port.agentCmd(cmd, agentId, text).catch((err) => {
+			console.warn("collab agent-cmd failed", { cmd, agentId, error: String(err) });
+			this.#socket?.send({ t: "error", message: `agent ${agentId}: ${String(err)}` }, fromPeer);
+		});
 	}
 
 	/** Incremental transcript read mirroring CollabHost's readFileIncremental contract. */
-	async #handleFetchTranscript(reqId: number, agentId: string, fromByte: number, fromPeer: number): Promise<void> {
+	async #handleFetchTranscript(
+		reqId: number,
+		agentId: string,
+		fromByte: number,
+		fromPeer: number,
+	): Promise<void> {
 		const reply = (text: string, newSize: number, error?: string) =>
 			this.#socket?.send({ t: "transcript", reqId, text, newSize, error }, fromPeer);
 		const file = this.#port.resolveTranscriptFile(agentId);

@@ -13,7 +13,7 @@ export const Autocomplete: Component<{
 	onHover: (index: number) => void;
 	onApply: (item: AcItem) => void;
 	listId: string;
-}> = props => (
+}> = (props) => (
 	<div class="autocomplete" role="listbox" id={props.listId}>
 		<For each={props.items.slice(0, Math.max(12, props.selected + 1))}>
 			{(item, i) => (
@@ -24,7 +24,7 @@ export const Autocomplete: Component<{
 					role="option"
 					aria-selected={i() === props.selected}
 					onMouseEnter={() => props.onHover(i())}
-					onMouseDown={e => {
+					onMouseDown={(e) => {
 						e.preventDefault(); // keep textarea focus
 						props.onApply(item);
 					}}

@@ -16,13 +16,15 @@ await Settings.init({ inMemory: true });
 
 const fakeSession: SettingsSession = {
 	getAvailableThinkingLevels: () => ["low", "high"],
-	getAvailableModels: () => [{ provider: "openai" }, { provider: "anthropic" }, { provider: "openai" }],
+	getAvailableModels: () => [
+		{ provider: "openai" },
+		{ provider: "anthropic" },
+		{ provider: "openai" },
+	],
 };
 
 function itemsOf(tabId: string, model: ReturnType<typeof buildSettingsModel>) {
-	return model.tabs
-		.find(tab => tab.id === tabId)!
-		.groups.flatMap(group => group.items);
+	return model.tabs.find((tab) => tab.id === tabId)!.groups.flatMap((group) => group.items);
 }
 
 describe("coerceSettingValue", () => {
@@ -44,8 +46,12 @@ describe("coerceSettingValue", () => {
 	});
 
 	test("record settings parse JSON strings and pass objects through", () => {
-		expect(coerceSettingValue("providers.maxInFlightRequests", '{"openai": 4}')).toEqual({ openai: 4 });
-		expect(coerceSettingValue("providers.maxInFlightRequests", { openai: 2, anthropic: 1 })).toEqual({
+		expect(coerceSettingValue("providers.maxInFlightRequests", '{"openai": 4}')).toEqual({
+			openai: 4,
+		});
+		expect(
+			coerceSettingValue("providers.maxInFlightRequests", { openai: 2, anthropic: 1 }),
+		).toEqual({
 			openai: 2,
 			anthropic: 1,
 		});
@@ -61,7 +67,9 @@ describe("coerceSettingValue", () => {
 	});
 
 	test("maxInFlightRequests values are validated", () => {
-		expect(coerceSettingValue("providers.maxInFlightRequests", '{"openai": 4.7}')).toEqual({ openai: 4 });
+		expect(coerceSettingValue("providers.maxInFlightRequests", '{"openai": 4.7}')).toEqual({
+			openai: 4,
+		});
 		expect(() => coerceSettingValue("providers.maxInFlightRequests", '{"openai": "4"}')).toThrow(
 			"Provider request limits must be positive numbers",
 		);
@@ -87,7 +95,10 @@ describe("coerceSettingValue", () => {
 	});
 
 	test("multiselect settings filter to string arrays", () => {
-		expect(coerceSettingValue("providers.webSearchOrder", ["google", 7, "exa"])).toEqual(["google", "exa"]);
+		expect(coerceSettingValue("providers.webSearchOrder", ["google", 7, "exa"])).toEqual([
+			"google",
+			"exa",
+		]);
 		expect(coerceSettingValue("providers.webSearchOrder", "not-an-array")).toEqual([]);
 	});
 
@@ -125,7 +136,7 @@ describe("settingChanged", () => {
 describe("buildSettingsModel", () => {
 	test("builds every schema tab with labeled, populated groups", () => {
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
-		expect(model.tabs.map(tab => tab.id)).toEqual(SETTING_TABS);
+		expect(model.tabs.map((tab) => tab.id)).toEqual(SETTING_TABS);
 		for (const tab of model.tabs) {
 			expect(tab.label.length).toBeGreaterThan(0);
 			expect(tab.groups.length).toBeGreaterThan(0);
@@ -143,7 +154,7 @@ describe("buildSettingsModel", () => {
 
 	test("theme.dark carries the available themes as options", () => {
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
-		const themeDark = itemsOf("appearance", model).find(item => item.path === "theme.dark");
+		const themeDark = itemsOf("appearance", model).find((item) => item.path === "theme.dark");
 		expect(themeDark?.type).toBe("submenu");
 		expect(themeDark?.options).toEqual([
 			{ value: "dark", label: "dark" },
@@ -153,24 +164,26 @@ describe("buildSettingsModel", () => {
 
 	test("defaultThinkingLevel prepends auto and merges session levels", () => {
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
-		const item = itemsOf("model", model).find(item => item.path === "defaultThinkingLevel");
+		const item = itemsOf("model", model).find((item) => item.path === "defaultThinkingLevel");
 		expect(item?.type).toBe("submenu");
 		expect(item?.options?.[0]).toEqual({ value: "auto", label: "auto" });
-		const values = item!.options!.map(option => option.value);
+		const values = item!.options!.map((option) => option.value);
 		expect(values).toContain("low");
 		expect(values).toContain("high");
 	});
 
 	test("providerLimits providers are sorted and de-duplicated", () => {
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
-		const item = itemsOf("providers", model).find(item => item.type === "providerLimits");
+		const item = itemsOf("providers", model).find((item) => item.type === "providerLimits");
 		expect(item?.providers).toEqual(["anthropic", "openai"]);
 	});
 
 	test("changed flags reflect the live settings singleton", () => {
 		Settings.instance.set("compaction.thresholdPercent", 80);
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
-		const item = itemsOf("context", model).find(item => item.path === "compaction.thresholdPercent");
+		const item = itemsOf("context", model).find(
+			(item) => item.path === "compaction.thresholdPercent",
+		);
 		expect(item?.value).toBe(80);
 		expect(item?.changed).toBe(true);
 		Settings.instance.set("compaction.thresholdPercent", -1);
@@ -179,7 +192,9 @@ describe("buildSettingsModel", () => {
 	test("condition-gated defs respond to live settings on every build", () => {
 		Settings.instance.set("memory.backend", "hindsight");
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
-		const hindsightItems = itemsOf("memory", model).filter(item => item.path.startsWith("hindsight."));
+		const hindsightItems = itemsOf("memory", model).filter((item) =>
+			item.path.startsWith("hindsight."),
+		);
 		expect(hindsightItems.length).toBeGreaterThan(0);
 		Settings.instance.set("memory.backend", "off");
 	});
@@ -190,11 +205,12 @@ describe("applySettingSideEffects", () => {
 		const calls: string[] = [];
 		const agent: AgentSessionLike["agent"] = {};
 		const session: AgentSessionLike = {
-			setSteeringMode: mode => void calls.push(`steering:${mode}`),
-			setFollowUpMode: mode => void calls.push(`followUp:${mode}`),
-			setInterruptMode: mode => void calls.push(`interrupt:${mode}`),
-			setAdvisorEnabled: enabled => void calls.push(`advisor:${enabled}`),
-			setThinkingLevel: (level, persist) => void calls.push(`thinking:${String(level)}:${persist === true}`),
+			setSteeringMode: (mode) => void calls.push(`steering:${mode}`),
+			setFollowUpMode: (mode) => void calls.push(`followUp:${mode}`),
+			setInterruptMode: (mode) => void calls.push(`interrupt:${mode}`),
+			setAdvisorEnabled: (enabled) => void calls.push(`advisor:${enabled}`),
+			setThinkingLevel: (level, persist) =>
+				void calls.push(`thinking:${String(level)}:${persist === true}`),
 			refreshBaseSystemPrompt: async () => void calls.push("refreshPrompt"),
 			applyMemoryBackend: async () => void calls.push("applyMemory"),
 			applyInspectImageModeChange: async () => void calls.push("applyInspectImage"),
@@ -210,12 +226,7 @@ describe("applySettingSideEffects", () => {
 		// Persist-only paths have no side effect.
 		await applySettingSideEffects(session, "compaction.enabled", true);
 
-		expect(calls).toEqual([
-			"steering:all",
-			"thinking:high:true",
-			"refreshPrompt",
-			"applyMemory",
-		]);
+		expect(calls).toEqual(["steering:all", "thinking:high:true", "refreshPrompt", "applyMemory"]);
 		expect(agent.temperature).toBe(1.5);
 		expect(agent.hideThinkingSummary).toBe(true);
 

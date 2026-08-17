@@ -1,4 +1,10 @@
-export type ThemeId = "dark" | "light" | "catppuccin-mocha" | "catppuccin-latte" | "omp-dark" | "omp-light";
+export type ThemeId =
+	| "dark"
+	| "light"
+	| "catppuccin-mocha"
+	| "catppuccin-latte"
+	| "omp-dark"
+	| "omp-light";
 export type ThemePreference = ThemeId | "system";
 
 export interface ThemeOption {
@@ -51,7 +57,11 @@ export function currentThemePreference(): ThemePreference {
 /** The concrete palette currently in effect (preference resolved through the OS when set to "system"). */
 export function resolvedTheme(): ThemeId {
 	const pref = currentThemePreference();
-	return pref === "system" ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : pref;
+	return pref === "system"
+		? window.matchMedia("(prefers-color-scheme: light)").matches
+			? "light"
+			: "dark"
+		: pref;
 }
 
 export function currentFontSize(): number {
@@ -75,7 +85,8 @@ export function stepFontSize(delta: number): number {
 /** Apply persisted theme/font-size on startup and follow OS theme changes while the preference is "system". */
 export function initTheme(): void {
 	apply(resolvedTheme(), currentFontSize());
-	window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", e => {
-		if (currentThemePreference() === "system") apply(e.matches ? "light" : "dark", currentFontSize());
+	window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", (e) => {
+		if (currentThemePreference() === "system")
+			apply(e.matches ? "light" : "dark", currentFontSize());
 	});
 }

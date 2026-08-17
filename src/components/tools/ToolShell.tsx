@@ -8,7 +8,8 @@ export const COLLAPSED_LINES = 20;
 export const WRITE_PREVIEW_LINES = 200;
 
 /** Cards stay expanded while running or when the user toggles Ctrl+O. */
-export const toolExpanded = (item: ToolItem): boolean => state.toolsExpanded || item.status === "running";
+export const toolExpanded = (item: ToolItem): boolean =>
+	state.toolsExpanded || item.status === "running";
 
 interface ToolShellProps {
 	/** Header label, rendered inside span.tool-name. */
@@ -25,7 +26,7 @@ interface ToolShellProps {
 }
 
 /** Shared tool card: header (name + status) plus a tool-specific body. */
-export const ToolShell: Component<ToolShellProps> = props => {
+export const ToolShell: Component<ToolShellProps> = (props) => {
 	// User intent for the <details> toggle. The reactive default (Ctrl+O /
 	// running status) must not re-assert the open attribute after the user
 	// has toggled a card by hand, so once a trusted toggle event fires, the
@@ -56,7 +57,7 @@ export const ToolShell: Component<ToolShellProps> = props => {
 			<details
 				class={cardClass()}
 				open={userOpen() ?? (state.toolsExpanded || props.status === "running")}
-				onToggle={e => {
+				onToggle={(e) => {
 					if (e.isTrusted) setUserOpen(e.currentTarget.open);
 				}}
 			>
@@ -86,11 +87,12 @@ interface CollapsiblePreProps {
 }
 
 /** Terminal output body with the shared "N hidden lines (Ctrl+O to expand)" tail. */
-export const CollapsiblePre: Component<CollapsiblePreProps> = props => {
+export const CollapsiblePre: Component<CollapsiblePreProps> = (props) => {
 	const max = () => props.maxLines ?? COLLAPSED_LINES;
 	const expanded = () => toolExpanded(props.item);
 	const lines = () => props.output.split("\n");
-	const shown = () => (expanded() ? lines() : props.tail ? lines().slice(-max()) : lines().slice(0, max()));
+	const shown = () =>
+		expanded() ? lines() : props.tail ? lines().slice(-max()) : lines().slice(0, max());
 	const hidden = () => Math.max(0, lines().length - max());
 	return (
 		<Show when={props.output}>

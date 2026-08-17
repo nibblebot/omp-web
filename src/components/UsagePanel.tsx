@@ -14,14 +14,17 @@ import { Modal } from "./Modal";
 export function resolveUsedFraction(limit: UsageLimit): number | undefined {
 	const a = limit.amount;
 	if (typeof a.usedFraction === "number" && Number.isFinite(a.usedFraction)) return a.usedFraction;
-	if (typeof a.used === "number" && typeof a.limit === "number" && a.limit > 0) return a.used / a.limit;
-	if (typeof a.remainingFraction === "number" && Number.isFinite(a.remainingFraction)) return 1 - a.remainingFraction;
-	if (typeof a.remaining === "number" && typeof a.limit === "number" && a.limit > 0) return 1 - a.remaining / a.limit;
+	if (typeof a.used === "number" && typeof a.limit === "number" && a.limit > 0)
+		return a.used / a.limit;
+	if (typeof a.remainingFraction === "number" && Number.isFinite(a.remainingFraction))
+		return 1 - a.remainingFraction;
+	if (typeof a.remaining === "number" && typeof a.limit === "number" && a.limit > 0)
+		return 1 - a.remaining / a.limit;
 	return undefined;
 }
 
 /** One limit row: label, window, amount (used/limit + bar), status, notes. */
-const LimitRow: Component<{ limit: UsageLimit }> = props => {
+const LimitRow: Component<{ limit: UsageLimit }> = (props) => {
 	const limit = () => props.limit;
 	const w = () => limit().window;
 	const pct = () => {
@@ -52,7 +55,7 @@ const LimitRow: Component<{ limit: UsageLimit }> = props => {
 					</span>
 				)}
 			</div>
-			{limit().notes?.map(n => (
+			{limit().notes?.map((n) => (
 				<div class="usage-note">{n}</div>
 			))}
 		</div>
@@ -64,18 +67,18 @@ const LimitRow: Component<{ limit: UsageLimit }> = props => {
  * bars, status and notes. Data comes from the READ_ONLY fetchUsageReports
  * relay row; providers without reporting resolve to the empty state.
  */
-export const UsagePanel: Component<{ onClose: () => void }> = props => {
+export const UsagePanel: Component<{ onClose: () => void }> = (props) => {
 	const [reports, setReports] = createSignal<UsageReport[] | null>(null);
 	const [loading, setLoading] = createSignal(true);
 	const [error, setError] = createSignal<string | null>(null);
 
 	onMount(() => {
 		void call("fetchUsageReports")
-			.then(result => {
+			.then((result) => {
 				setReports((result as UsageReport[] | null) ?? []);
 				setLoading(false);
 			})
-			.catch(err => {
+			.catch((err) => {
 				setError(String(err));
 				setLoading(false);
 			});
@@ -95,16 +98,19 @@ export const UsagePanel: Component<{ onClose: () => void }> = props => {
 			<Show when={!loading() && error() === null && (reports()?.length ?? 0) > 0}>
 				<div class="usage-list">
 					<For each={reports()}>
-						{report => (
+						{(report) => (
 							<section class="usage-provider">
 								<h3 class="stats-subhead">
 									{report.provider}
-									<span class="picker-detail"> fetched {new Date(report.fetchedAt).toLocaleString()}</span>
+									<span class="picker-detail">
+										{" "}
+										fetched {new Date(report.fetchedAt).toLocaleString()}
+									</span>
 								</h3>
-								{report.notes?.map(n => (
+								{report.notes?.map((n) => (
 									<div class="usage-note">{n}</div>
 								))}
-								<For each={report.limits}>{limit => <LimitRow limit={limit} />}</For>
+								<For each={report.limits}>{(limit) => <LimitRow limit={limit} />}</For>
 							</section>
 						)}
 					</For>

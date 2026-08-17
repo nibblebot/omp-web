@@ -8,11 +8,24 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME, type RegisteredProject } from "../shared/protocol";
+import {
+	OMP_PROTO,
+	SSE_DELTA_SEQ_START,
+	SSE_EVENT_NAME,
+	type RegisteredProject,
+} from "../shared/protocol";
 import { encodeSseEvent } from "../shared/sse";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
@@ -135,19 +148,54 @@ function startFakeDaemon(token: string, cwd = FAKE_CWD): FakeDaemon {
 }
 
 function prime(stream: FakeStream, cwd: string) {
-	stream.write({ type: "hello_ok", proto: OMP_PROTO, name: "fake", cwd, pid: 4242, version: "0.0.0-test", sessionFile: FAKE_SESSION_FILE }, 1);
+	stream.write(
+		{
+			type: "hello_ok",
+			proto: OMP_PROTO,
+			name: "fake",
+			cwd,
+			pid: 4242,
+			version: "0.0.0-test",
+			sessionFile: FAKE_SESSION_FILE,
+		},
+		1,
+	);
 	stream.write({ type: "state", sessionId: "s1", state: FAKE_STATE }, 2);
 	stream.write({ type: "ready", readyAt: Date.now() }, 3);
 }
 
 function answerTurn(stream: FakeStream, callId: string, nextSeq: { value: number }) {
 	stream.write({ type: "call_result", id: callId, ok: true }, nextSeq.value++);
-	stream.write({ type: "event", sessionId: "s1", event: { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "fake reply" }] } } }, nextSeq.value++);
-	stream.write({ type: "event", sessionId: "s1", event: { type: "agent_end", messages: [{ role: "assistant", content: [{ type: "text", text: "fake reply" }] }] } }, nextSeq.value++);
+	stream.write(
+		{
+			type: "event",
+			sessionId: "s1",
+			event: {
+				type: "message_end",
+				message: { role: "assistant", content: [{ type: "text", text: "fake reply" }] },
+			},
+		},
+		nextSeq.value++,
+	);
+	stream.write(
+		{
+			type: "event",
+			sessionId: "s1",
+			event: {
+				type: "agent_end",
+				messages: [{ role: "assistant", content: [{ type: "text", text: "fake reply" }] }],
+			},
+		},
+		nextSeq.value++,
+	);
 }
 
 /** Poll until `predicate` is truthy or the timeout elapses. */
-async function waitFor(predicate: () => boolean, timeoutMs = 5000, what = "condition"): Promise<void> {
+async function waitFor(
+	predicate: () => boolean,
+	timeoutMs = 5000,
+	what = "condition",
+): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		if (predicate()) return;
@@ -219,7 +267,9 @@ describe("fleet control plane", () => {
 		expect(await proc.exited).toBe(0);
 		const project = await server.registry.addProject(repoDir);
 		try {
-			const merged = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as {
+			const merged = (await (
+				await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)
+			).json()) as {
 				projects: unknown[];
 				registered: Array<{ projectId: string }>;
 			};
@@ -237,17 +287,25 @@ describe("fleet control plane", () => {
 		expect(await proc.exited).toBe(0);
 		const res = await postJson(server.port, "/ctl/projects", { path: repoDir });
 		expect(res.status).toBe(201);
-		const body = (await res.json()) as { project?: { projectId?: string; path?: string; name?: string; addedAt?: number }; entry?: unknown };
+		const body = (await res.json()) as {
+			project?: { projectId?: string; path?: string; name?: string; addedAt?: number };
+			entry?: unknown;
+		};
 		expect(body.project?.projectId).toMatch(/^p\d+$/);
 		expect(body.project?.path).toBe(realpathSync(repoDir));
 		expect(body.project?.name).toBe(basename(repoDir));
 		expect(typeof body.project?.addedAt).toBe("number");
 		expect(body.entry).toBeUndefined();
 		// The registered project shows up in GET /ctl/projects.
-		const merged = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as { registered: Array<{ projectId: string }> };
+		const merged = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as {
+			registered: Array<{ projectId: string }>;
+		};
 		expect(merged.registered.some((p) => p.projectId === body.project!.projectId)).toBe(true);
 		// Cleanup: the project has no daemons, so removal succeeds.
-		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/${body.project!.projectId}`, { method: "DELETE" });
+		const del = await fetch(
+			`http://127.0.0.1:${server.port}/ctl/projects/${body.project!.projectId}`,
+			{ method: "DELETE" },
+		);
 		expect(del.status).toBe(200);
 	});
 
@@ -268,7 +326,9 @@ describe("fleet control plane", () => {
 			expect(dupBody.error).toContain(firstBody.project.projectId);
 			expect(dupBody.project?.projectId).toBe(firstBody.project.projectId);
 			// One registration only.
-			expect(server.registry.projects().filter((p) => p.path === realpathSync(repoDir))).toHaveLength(1);
+			expect(
+				server.registry.projects().filter((p) => p.path === realpathSync(repoDir)),
+			).toHaveLength(1);
 		} finally {
 			server.registry.removeProject(firstBody.project.projectId);
 		}
@@ -303,19 +363,29 @@ describe("fleet control plane", () => {
 			projectId: body.project.projectId,
 		});
 		try {
-			const del = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/${body.project.projectId}`, { method: "DELETE" });
+			const del = await fetch(
+				`http://127.0.0.1:${server.port}/ctl/projects/${body.project.projectId}`,
+				{ method: "DELETE" },
+			);
 			expect(del.status).toBe(409);
 			const delBody = (await del.json()) as { error?: string };
 			expect(delBody.error).toContain("in use by daemons");
 			expect(delBody.error).toContain(ref.daemonId);
-			expect(server.registry.projects().some((p) => p.projectId === body.project.projectId)).toBe(true);
+			expect(server.registry.projects().some((p) => p.projectId === body.project.projectId)).toBe(
+				true,
+			);
 			// Once the daemon is gone, removal succeeds.
 			server.registry.remove(ref.daemonId);
-			const ok = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/${body.project.projectId}`, { method: "DELETE" });
+			const ok = await fetch(
+				`http://127.0.0.1:${server.port}/ctl/projects/${body.project.projectId}`,
+				{ method: "DELETE" },
+			);
 			expect(ok.status).toBe(200);
 			const okBody = (await ok.json()) as { removed?: unknown };
 			expect(okBody.removed).toBe(body.project.projectId);
-			expect(server.registry.projects().some((p) => p.projectId === body.project.projectId)).toBe(false);
+			expect(server.registry.projects().some((p) => p.projectId === body.project.projectId)).toBe(
+				false,
+			);
 		} finally {
 			server.registry.remove(ref.daemonId);
 			try {
@@ -327,7 +397,9 @@ describe("fleet control plane", () => {
 	});
 
 	test("DELETE /ctl/projects/:id 404s for an unknown project id", async () => {
-		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/p999`, { method: "DELETE" });
+		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/projects/p999`, {
+			method: "DELETE",
+		});
 		expect(del.status).toBe(404);
 		const body = (await del.json()) as { error?: string };
 		expect(body.error).toContain("unknown project id");
@@ -336,7 +408,9 @@ describe("fleet control plane", () => {
 	test("GET /ctl/settings returns the unattached settings model", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/settings`);
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as { tabs?: Array<{ id: string; label: string; groups: Array<{ items: unknown[] }> }> };
+		const body = (await res.json()) as {
+			tabs?: Array<{ id: string; label: string; groups: Array<{ items: unknown[] }> }>;
+		};
 		expect(Array.isArray(body.tabs)).toBe(true);
 		expect((body.tabs ?? []).length).toBeGreaterThan(0);
 		for (const tab of body.tabs ?? []) {
@@ -346,31 +420,46 @@ describe("fleet control plane", () => {
 	});
 
 	test("POST /ctl/settings/set persists a coerced value and returns a fresh model", async () => {
-		const res = await postJson(server.port, "/ctl/settings/set", { path: "compaction.thresholdPercent", value: "50" });
+		const res = await postJson(server.port, "/ctl/settings/set", {
+			path: "compaction.thresholdPercent",
+			value: "50",
+		});
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
-			tabs: Array<{ id: string; groups: Array<{ items: Array<{ path: string; value: unknown; changed: boolean }> }> }>;
+			tabs: Array<{
+				id: string;
+				groups: Array<{ items: Array<{ path: string; value: unknown; changed: boolean }> }>;
+			}>;
 		};
 		const item = body.tabs
-			.find(tab => tab.id === "context")
-			?.groups.flatMap(group => group.items)
-			.find(item => item.path === "compaction.thresholdPercent");
+			.find((tab) => tab.id === "context")
+			?.groups.flatMap((group) => group.items)
+			.find((item) => item.path === "compaction.thresholdPercent");
 		expect(item?.value).toBe(50);
 		expect(item?.changed).toBe(true);
 		// Restore the schema default so the shared in-memory singleton stays
 		// pristine for the rest of the file.
-		await postJson(server.port, "/ctl/settings/set", { path: "compaction.thresholdPercent", value: "default" });
+		await postJson(server.port, "/ctl/settings/set", {
+			path: "compaction.thresholdPercent",
+			value: "default",
+		});
 	});
 
 	test("POST /ctl/settings/set 400s on an unknown path", async () => {
-		const res = await postJson(server.port, "/ctl/settings/set", { path: "no.such.path", value: 1 });
+		const res = await postJson(server.port, "/ctl/settings/set", {
+			path: "no.such.path",
+			value: 1,
+		});
 		expect(res.status).toBe(400);
 		const body = (await res.json()) as { error?: string };
 		expect(body.error).toContain("Unknown setting");
 	});
 
 	test("POST /ctl/settings/set 400s on an uncoercible value", async () => {
-		const res = await postJson(server.port, "/ctl/settings/set", { path: "compaction.thresholdPercent", value: "abc" });
+		const res = await postJson(server.port, "/ctl/settings/set", {
+			path: "compaction.thresholdPercent",
+			value: "abc",
+		});
 		expect(res.status).toBe(400);
 		const body = (await res.json()) as { error?: string };
 		expect(body.error).toContain("Invalid numeric value");
@@ -396,7 +485,10 @@ describe("fleet control plane", () => {
 		expect(resName.status).toBe(400);
 		const bodyName = (await resName.json()) as { error?: string };
 		expect(bodyName.error).toContain("NUL");
-		const resLabels = await postJson(server.port, "/ctl/spawn", { cwd, labels: ["k=v", "x\u0000y"] });
+		const resLabels = await postJson(server.port, "/ctl/spawn", {
+			cwd,
+			labels: ["k=v", "x\u0000y"],
+		});
 		expect(resLabels.status).toBe(400);
 		const bodyLabels = (await resLabels.json()) as { error?: string };
 		expect(bodyLabels.error).toContain("NUL");
@@ -420,7 +512,11 @@ describe("fleet control plane", () => {
 
 	test("POST /ctl/add creates a remote entry and the connector dials with the Bearer header", async () => {
 		fake = startFakeDaemon("sekret");
-		const res = await postJson(server.port, "/ctl/add", { name: "added", url: fake.url, token: "sekret" });
+		const res = await postJson(server.port, "/ctl/add", {
+			name: "added",
+			url: fake.url,
+			token: "sekret",
+		});
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as RegistryEntry;
 		expect(body.mode).toBe("remote");
@@ -430,7 +526,11 @@ describe("fleet control plane", () => {
 		await waitFor(() => fake.seen.authHeader !== null, 5000, "fake daemon dial");
 		expect(fake.seen.authHeader).toBe("Bearer sekret");
 		// hello_ok.cwd is adopted when the entry had no cwd.
-		await waitFor(() => server.registry.get(entry.daemonId)?.status === "ready", 5000, "daemon ready");
+		await waitFor(
+			() => server.registry.get(entry.daemonId)?.status === "ready",
+			5000,
+			"daemon ready",
+		);
 		expect(server.registry.get(entry.daemonId)?.cwd).toBe(FAKE_CWD);
 	});
 
@@ -450,7 +550,13 @@ describe("fleet control plane", () => {
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as Record<string, unknown>;
 		// Fleet facts block.
-		const fleet = body.fleet as { port?: number; startedAt?: number; uptimeSec?: number; statePath?: string; configPath?: unknown };
+		const fleet = body.fleet as {
+			port?: number;
+			startedAt?: number;
+			uptimeSec?: number;
+			statePath?: string;
+			configPath?: unknown;
+		};
 		expect(fleet.port).toBe(server.port);
 		expect(typeof fleet.startedAt).toBe("number");
 		expect(fleet.uptimeSec).toBeGreaterThanOrEqual(0);
@@ -468,11 +574,22 @@ describe("fleet control plane", () => {
 		expect(found?.connector).toMatchObject({ state: "streaming", attempts: 0 });
 		// The log holds the lifecycle trail for this daemon (its status
 		// transitions landed in the ring at the connector wiring points).
-		const log = body.log as Array<{ source?: string; daemonId?: string; level?: string; message?: string }>;
+		const log = body.log as Array<{
+			source?: string;
+			daemonId?: string;
+			level?: string;
+			message?: string;
+		}>;
 		expect(Array.isArray(log)).toBe(true);
 		expect(log.length).toBeGreaterThan(0);
-		expect(log.some((event) => event.source === "connector" && event.daemonId === entry.daemonId)).toBe(true);
-		expect(log.some((event) => event.source === "server" && event.message === `added added (${fake.url})`)).toBe(true);
+		expect(
+			log.some((event) => event.source === "connector" && event.daemonId === entry.daemonId),
+		).toBe(true);
+		expect(
+			log.some(
+				(event) => event.source === "server" && event.message === `added added (${fake.url})`,
+			),
+		).toBe(true);
 		// The browser-facing payload must never leak a bearer token: no key
 		// named "token" anywhere in the JSON tree.
 		const scan = (value: unknown): void => {
@@ -493,18 +610,39 @@ describe("fleet control plane", () => {
 	});
 
 	test("POST /ctl/prompt without waitMs returns { submitted } and dispatches", async () => {
-		const res = await postJson(server.port, "/ctl/prompt", { selector: entry.daemonId, text: "ping" });
+		const res = await postJson(server.port, "/ctl/prompt", {
+			selector: entry.daemonId,
+			text: "ping",
+		});
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { submitted?: unknown };
 		expect(body.submitted).toEqual([entry.daemonId]);
 		// The background dispatch must reach the fake (prompt call observed).
-		await waitFor(() => fake.seen.calls.some((c) => (c as { type?: string; method?: string }).type === "call" && (c as { method?: string }).method === "prompt"), 5000, "prompt call on fake");
+		await waitFor(
+			() =>
+				fake.seen.calls.some(
+					(c) =>
+						(c as { type?: string; method?: string }).type === "call" &&
+						(c as { method?: string }).method === "prompt",
+				),
+			5000,
+			"prompt call on fake",
+		);
 	});
 
 	test("POST /ctl/prompt with waitMs returns PromptResult[]", async () => {
-		const res = await postJson(server.port, "/ctl/prompt", { selector: entry.daemonId, text: "hello there", waitMs: 5000 });
+		const res = await postJson(server.port, "/ctl/prompt", {
+			selector: entry.daemonId,
+			text: "hello there",
+			waitMs: 5000,
+		});
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as Array<{ daemonId?: string; ok?: boolean; text?: string; error?: string }>;
+		const body = (await res.json()) as Array<{
+			daemonId?: string;
+			ok?: boolean;
+			text?: string;
+			error?: string;
+		}>;
 		expect(body).toHaveLength(1);
 		expect(body[0]?.daemonId).toBe(entry.daemonId);
 		expect(body[0]?.ok).toBe(true);
@@ -534,10 +672,18 @@ describe("fleet control plane", () => {
 		// (and the shared `fake`) stays intact for later tests.
 		const localFake = startFakeDaemon("remove-token");
 		try {
-			const res = await postJson(server.port, "/ctl/add", { name: "removable", url: localFake.url, token: "remove-token" });
+			const res = await postJson(server.port, "/ctl/add", {
+				name: "removable",
+				url: localFake.url,
+				token: "remove-token",
+			});
 			expect(res.status).toBe(200);
 			const added = (await res.json()) as RegistryEntry;
-			await waitFor(() => server.registry.get(added.daemonId)?.status === "ready", 5000, "removable daemon ready");
+			await waitFor(
+				() => server.registry.get(added.daemonId)?.status === "ready",
+				5000,
+				"removable daemon ready",
+			);
 			// #24: the connector tracks per-daemon state for the dialed entry;
 			// removal must prune it, not leave listeners/waiters/retain counts
 			// behind a gone registry entry.
@@ -595,7 +741,12 @@ describe("POST /ctl/projects with start:true (Phase 3 spawn)", () => {
 				defaultTemplate: "test",
 			}),
 		);
-		server = await startFleet({ port: 0, statePath, configPath, settings: { registry: async () => [] } });
+		server = await startFleet({
+			port: 0,
+			statePath,
+			configPath,
+			settings: { registry: async () => [] },
+		});
 	});
 
 	afterAll(async () => {
@@ -605,26 +756,46 @@ describe("POST /ctl/projects with start:true (Phase 3 spawn)", () => {
 
 	test("start:true spawns on the project path, tags the entry's projectId, and reaches ready", async () => {
 		const repoDir = join(tmp, "repo");
-		const res = await postJson(server.port, "/ctl/projects", { path: repoDir, start: true, template: "test", labels: ["env=prod"] });
+		const res = await postJson(server.port, "/ctl/projects", {
+			path: repoDir,
+			start: true,
+			template: "test",
+			labels: ["env=prod"],
+		});
 		expect(res.status).toBe(201);
-		const body = (await res.json()) as { project: { projectId: string; path: string }; entry: RegistryEntry };
+		const body = (await res.json()) as {
+			project: { projectId: string; path: string };
+			entry: RegistryEntry;
+		};
 		expect(body.project.path).toBe(repoReal);
 		expect(body.entry.mode).toBe("spawned");
 		expect(body.entry.cwd).toBe(repoReal);
 		expect(body.entry.projectId).toBe(body.project.projectId);
 		expect(body.entry.labels).toEqual(["env=prod"]);
 		// The supervisor's spawn dialed the fake: the connector reaches ready.
-		await waitFor(() => server.registry.get(body.entry.daemonId)?.status === "ready", 5000, "spawned entry ready");
+		await waitFor(
+			() => server.registry.get(body.entry.daemonId)?.status === "ready",
+			5000,
+			"spawned entry ready",
+		);
 		expect(server.registry.get(body.entry.daemonId)?.projectId).toBe(body.project.projectId);
 	});
 
 	test("start:true with an unknown template 500s but the project stays registered", async () => {
 		const otherDir = join(tmp, "other-repo");
 		mkdirSync(otherDir, { recursive: true });
-		const proc = Bun.spawn(["git", "init", "-q"], { cwd: otherDir, stdout: "pipe", stderr: "pipe" });
+		const proc = Bun.spawn(["git", "init", "-q"], {
+			cwd: otherDir,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
 		expect(await proc.exited).toBe(0);
 		const before = server.registry.projects().length;
-		const res = await postJson(server.port, "/ctl/projects", { path: otherDir, start: true, template: "no-such-template" });
+		const res = await postJson(server.port, "/ctl/projects", {
+			path: otherDir,
+			start: true,
+			template: "no-such-template",
+		});
 		expect(res.status).toBe(500);
 		const body = (await res.json()) as { error?: string };
 		expect(body.error).toContain("spawn failed");
@@ -666,8 +837,24 @@ describe("boot reconciliation (#3)", () => {
 			readyAt: Date.now() - 60_000,
 			pid: 12345,
 		});
-		registry.create({ name: "stuck-spawning", cwd: FAKE_CWD, project: "fake-proj", labels: [], mode: "spawned", template: "test", status: "spawning" });
-		registry.create({ name: "stale-connecting", cwd: FAKE_CWD, project: "fake-proj", labels: [], mode: "spawned", template: "test", status: "connecting" });
+		registry.create({
+			name: "stuck-spawning",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+			status: "spawning",
+		});
+		registry.create({
+			name: "stale-connecting",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+			status: "connecting",
+		});
 		registry.create({
 			name: "boot-dial",
 			cwd: "",
@@ -679,8 +866,25 @@ describe("boot reconciliation (#3)", () => {
 			status: "ready",
 			readyAt: Date.now() - 120_000,
 		});
-		registry.create({ name: "stopped", cwd: "", project: "", labels: [], mode: "remote", endpoint: "ws://127.0.0.1:1", status: "asleep" });
-		registry.create({ name: "terminal-error", cwd: "", project: "", labels: [], mode: "remote", endpoint: "ws://127.0.0.1:1", status: "error", error: "unauthorized (401): daemon rejected the token" });
+		registry.create({
+			name: "stopped",
+			cwd: "",
+			project: "",
+			labels: [],
+			mode: "remote",
+			endpoint: "ws://127.0.0.1:1",
+			status: "asleep",
+		});
+		registry.create({
+			name: "terminal-error",
+			cwd: "",
+			project: "",
+			labels: [],
+			mode: "remote",
+			endpoint: "ws://127.0.0.1:1",
+			status: "error",
+			error: "unauthorized (401): daemon rejected the token",
+		});
 		server = await startFleet({ port: 0, statePath, configPath });
 	});
 
@@ -704,7 +908,11 @@ describe("boot reconciliation (#3)", () => {
 		// The boot reconcile dials immediately; the fake must see the token.
 		await waitFor(() => fake.seen.authHeader !== null, 5000, "boot dial");
 		expect(fake.seen.authHeader).toBe("Bearer boot-token");
-		await waitFor(() => server.registry.get(entry.daemonId)?.status === "ready", 5000, "re-ready after boot redial");
+		await waitFor(
+			() => server.registry.get(entry.daemonId)?.status === "ready",
+			5000,
+			"re-ready after boot redial",
+		);
 		expect(server.registry.get(entry.daemonId)?.readyAt).toBeTypeOf("number");
 	});
 
@@ -768,7 +976,10 @@ describe("POST /ctl/provision (spawn hook)", () => {
 	}
 
 	test("happy path: hook JSON → remote entry created and dialed with the Bearer token", async () => {
-		const res = await postJson(hookServer.port, "/ctl/provision", { name: "sandbox-a", labels: ["env=prod", "team=x"] });
+		const res = await postJson(hookServer.port, "/ctl/provision", {
+			name: "sandbox-a",
+			labels: ["env=prod", "team=x"],
+		});
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as RegistryEntry;
 		expect(body.mode).toBe("remote");
@@ -791,7 +1002,10 @@ describe("POST /ctl/provision (spawn hook)", () => {
 	test("uses the requested name and empty cwd when the hook output omits them", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "omp-fleet-provision-noname-"));
 		const hook = join(dir, "hook.sh");
-		writeFileSync(hook, `#!/bin/sh\nprintf '{"url":"ws://127.0.0.1:${hookFake.port}","token":"hook-token"}\\n'\n`);
+		writeFileSync(
+			hook,
+			`#!/bin/sh\nprintf '{"url":"ws://127.0.0.1:${hookFake.port}","token":"hook-token"}\\n'\n`,
+		);
 		chmodSync(hook, 0o755);
 		const cfg = join(dir, "config.json");
 		writeFileSync(cfg, JSON.stringify({ roots: [], spawnHook: hook }));
@@ -831,7 +1045,7 @@ describe("POST /ctl/provision (spawn hook)", () => {
 
 	test("502 when the hook output lacks url or token", async () => {
 		const before = hookServer.registry.list().length;
-		writeFileSync(hookPath, "#!/bin/sh\necho '{\"name\":\"x\"}'\n");
+		writeFileSync(hookPath, '#!/bin/sh\necho \'{"name":"x"}\'\n');
 		const res = await postJson(hookServer.port, "/ctl/provision", { name: "x" });
 		expect(res.status).toBe(502);
 		const body = (await res.json()) as { error?: string };
@@ -841,7 +1055,7 @@ describe("POST /ctl/provision (spawn hook)", () => {
 
 	test("502 when the hook prints a non-ws url", async () => {
 		const before = hookServer.registry.list().length;
-		writeFileSync(hookPath, "#!/bin/sh\necho '{\"url\":\"http://example.com\",\"token\":\"t\"}'\n");
+		writeFileSync(hookPath, '#!/bin/sh\necho \'{"url":"http://example.com","token":"t"}\'\n');
 		const res = await postJson(hookServer.port, "/ctl/provision", { name: "x" });
 		expect(res.status).toBe(502);
 		const body = (await res.json()) as { error?: string };
@@ -867,7 +1081,14 @@ describe("POST /ctl/provision (spawn hook)", () => {
 			logs.push(String(msg));
 		};
 		try {
-			const code = await main(["provision", "cli-sandbox", "--label", "env=test", "--port", String(hookServer.port)]);
+			const code = await main([
+				"provision",
+				"cli-sandbox",
+				"--label",
+				"env=test",
+				"--port",
+				String(hookServer.port),
+			]);
 			expect(code).toBe(0);
 		} finally {
 			console.log = originalLog;
@@ -1036,7 +1257,10 @@ describe("CLI", () => {
 });
 
 /** Read the spawned `serve` stdout until it reports its listening port. */
-async function readListeningPort(stream: ReadableStream<Uint8Array>, timeoutMs: number): Promise<number> {
+async function readListeningPort(
+	stream: ReadableStream<Uint8Array>,
+	timeoutMs: number,
+): Promise<number> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
@@ -1045,7 +1269,10 @@ async function readListeningPort(stream: ReadableStream<Uint8Array>, timeoutMs: 
 		while (Date.now() < deadline) {
 			const remaining = deadline - Date.now();
 			const timer = new Promise<null>((resolve) => setTimeout(() => resolve(null), remaining));
-			const result = (await Promise.race([reader.read(), timer])) as { value?: Uint8Array; done?: boolean } | null;
+			const result = (await Promise.race([reader.read(), timer])) as {
+				value?: Uint8Array;
+				done?: boolean;
+			} | null;
 			if (result === null || result.done) break;
 			buffer += decoder.decode(result.value, { stream: true });
 			const match = /fleet listening on 127\.0\.0\.1:(\d+)/.exec(buffer);
@@ -1079,7 +1306,10 @@ describe("worktree lifecycle routes", () => {
 	let project: RegisteredProject;
 
 	/** One `git -C <cwd> <args>` invocation against the real local repo. */
-	async function gitIn(cwd: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	async function gitIn(
+		cwd: string,
+		args: string[],
+	): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 		const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
 		const [stdout, stderr] = await Promise.all([
 			Bun.readableStreamToText(proc.stdout),
@@ -1096,7 +1326,11 @@ describe("worktree lifecycle routes", () => {
 		// A real git repo (main checkout) to register.
 		repoDir = join(tmp, "repo");
 		mkdirSync(repoDir, { recursive: true });
-		const init = Bun.spawn(["git", "init", "-q", "-b", "main"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+		const init = Bun.spawn(["git", "init", "-q", "-b", "main"], {
+			cwd: repoDir,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
 		expect(await init.exited).toBe(0);
 		await gitIn(repoDir, ["config", "user.email", "test@example.com"]);
 		await gitIn(repoDir, ["config", "user.name", "Test"]);
@@ -1107,7 +1341,11 @@ describe("worktree lifecycle routes", () => {
 		// real omp-session; the route tests stop the child themselves.
 		writeFileSync(
 			configPath,
-			JSON.stringify({ roots: [], templates: { local: { command: "sleep 30" } }, defaultTemplate: "local" }),
+			JSON.stringify({
+				roots: [],
+				templates: { local: { command: "sleep 30" } },
+				defaultTemplate: "local",
+			}),
 		);
 		server = await startFleet({ port: 0, statePath, configPath, workspaceDir });
 		project = await server.registry.addProject(repoDir);
@@ -1118,7 +1356,9 @@ describe("worktree lifecycle routes", () => {
 	});
 
 	test("POST /ctl/projects/:id/worktrees creates a managed worktree and registers the entry (start:false)", async () => {
-		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Feature Branch" });
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			name: "Feature Branch",
+		});
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as { entry?: RegistryEntry };
 		const entry = body.entry!;
@@ -1130,7 +1370,9 @@ describe("worktree lifecycle routes", () => {
 		expect(entry.cwd).toBe(target);
 		expect(existsSync(target)).toBe(true);
 		// Ownership marker records the owning repo realpath.
-		expect(readFileSync(join(workspaceDir, project.name, ".ompweb-repo"), "utf8").trim()).toBe(repoDir);
+		expect(readFileSync(join(workspaceDir, project.name, ".ompweb-repo"), "utf8").trim()).toBe(
+			repoDir,
+		);
 		// git agrees: the worktree is listed with the slug branch.
 		const list = await gitIn(repoDir, ["worktree", "list", "--porcelain"]);
 		expect(list.stdout).toContain(target);
@@ -1138,7 +1380,10 @@ describe("worktree lifecycle routes", () => {
 	});
 
 	test("POST create with start:true also spawns a daemon on the worktree", async () => {
-		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Started", start: true });
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			name: "Started",
+			start: true,
+		});
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as { entry?: RegistryEntry };
 		const entry = body.entry!;
@@ -1158,7 +1403,9 @@ describe("worktree lifecycle routes", () => {
 		const outside = join(tmp, "raw-worktree");
 		const add = await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", outside]);
 		expect(add.exitCode).toBe(0);
-		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { worktreePath: outside });
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			worktreePath: outside,
+		});
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as { entry?: RegistryEntry };
 		const entry = body.entry!;
@@ -1170,19 +1417,25 @@ describe("worktree lifecycle routes", () => {
 	});
 
 	test("POST add-existing refuses the main checkout and non-worktree paths", async () => {
-		const main = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { worktreePath: repoDir });
+		const main = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			worktreePath: repoDir,
+		});
 		expect(main.status).toBe(400);
 		const mainBody = (await main.json()) as { error?: string };
 		expect(mainBody.error).toContain("not a linked worktree");
 		const notRepo = join(tmp, "not-a-repo");
 		mkdirSync(notRepo, { recursive: true });
-		const plain = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { worktreePath: notRepo });
+		const plain = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			worktreePath: notRepo,
+		});
 		expect(plain.status).toBe(400);
 	});
 
 	test("POST add-existing refuses an already-registered worktree (409)", async () => {
 		const outside = join(tmp, "raw-worktree");
-		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { worktreePath: outside });
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			worktreePath: outside,
+		});
 		expect(res.status).toBe(409);
 		const body = (await res.json()) as { error?: string };
 		expect(body.error).toContain("already registered");
@@ -1191,7 +1444,9 @@ describe("worktree lifecycle routes", () => {
 	test("POST create 404s on an unknown project and 409s on a duplicate target", async () => {
 		const unknown = await postJson(server.port, "/ctl/projects/p999/worktrees", { name: "x" });
 		expect(unknown.status).toBe(404);
-		const dup = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Feature Branch" });
+		const dup = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			name: "Feature Branch",
+		});
 		expect(dup.status).toBe(409);
 		const dupBody = (await dup.json()) as { error?: string };
 		expect(dupBody.error).toContain("create worktree failed");
@@ -1200,9 +1455,18 @@ describe("worktree lifecycle routes", () => {
 	test("GET /ctl/worktrees/:id/delete-info returns guard evidence (never deletes)", async () => {
 		const target = join(workspaceDir, project.name, "feature-branch");
 		const entry = server.registry.list().find((e) => e.cwd === target)!;
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}/delete-info`);
+		const res = await fetch(
+			`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}/delete-info`,
+		);
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as { daemonId?: string; owned?: boolean; dirty?: boolean; branch?: string; merged?: boolean; unpushed?: boolean };
+		const body = (await res.json()) as {
+			daemonId?: string;
+			owned?: boolean;
+			dirty?: boolean;
+			branch?: string;
+			merged?: boolean;
+			unpushed?: boolean;
+		};
 		expect(body.daemonId).toBe(entry.daemonId);
 		expect(body.owned).toBe(true);
 		expect(body.dirty).toBe(false);
@@ -1217,18 +1481,27 @@ describe("worktree lifecycle routes", () => {
 	test("DELETE /ctl/worktrees/:id stops, evicts, and git-removes the worktree", async () => {
 		const target = join(workspaceDir, project.name, "feature-branch");
 		const entry = server.registry.list().find((e) => e.cwd === target)!;
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, { method: "DELETE" });
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
+			method: "DELETE",
+		});
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as { removed?: string; worktree?: { path?: string; branch?: string } };
+		const body = (await res.json()) as {
+			removed?: string;
+			worktree?: { path?: string; branch?: string };
+		};
 		expect(body.removed).toBe(entry.daemonId);
 		expect(body.worktree?.path).toBe(target);
 		expect(server.registry.get(entry.daemonId)).toBeUndefined();
 		expect(existsSync(target)).toBe(false);
-		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(target);
+		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
+			target,
+		);
 	});
 
 	test("DELETE refuses a dirty worktree with 409, leaving entry and dir intact", async () => {
-		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Dirty" });
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			name: "Dirty",
+		});
 		expect(res.status).toBe(201);
 		const entry = ((await res.json()) as { entry: RegistryEntry }).entry;
 		const target = entry.cwd;
@@ -1256,14 +1529,18 @@ describe("worktree lifecycle routes", () => {
 			mode: "spawned",
 			status: "asleep",
 		});
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${rogue.daemonId}`, { method: "DELETE" });
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${rogue.daemonId}`, {
+			method: "DELETE",
+		});
 		expect(res.status).toBe(403);
 		expect(server.registry.get(rogue.daemonId)).toBeDefined();
 		server.registry.remove(rogue.daemonId);
 	});
 
 	test("DELETE with deleteBranch:true also removes the merged branch (-d only)", async () => {
-		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Branchy" });
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			name: "Branchy",
+		});
 		expect(res.status).toBe(201);
 		const entry = ((await res.json()) as { entry: RegistryEntry }).entry;
 		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
@@ -1272,14 +1549,18 @@ describe("worktree lifecycle routes", () => {
 			body: JSON.stringify({ deleteBranch: true }),
 		});
 		expect(del.status).toBe(200);
-		const delBody = (await del.json()) as { worktree?: { branch?: string; branchDeleted?: boolean } };
+		const delBody = (await del.json()) as {
+			worktree?: { branch?: string; branchDeleted?: boolean };
+		};
 		expect(delBody.worktree?.branch).toBe("branchy");
 		expect(delBody.worktree?.branchDeleted).toBe(true);
 		expect((await gitIn(repoDir, ["branch", "--list", "branchy"])).stdout.trim()).toBe("");
 	});
 
 	test("DELETE on an unknown daemon 404s", async () => {
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/d999`, { method: "DELETE" });
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/d999`, {
+			method: "DELETE",
+		});
 		expect(res.status).toBe(404);
 	});
 
@@ -1291,7 +1572,14 @@ describe("worktree lifecycle routes", () => {
 		};
 		let code: number;
 		try {
-			code = await main(["add-worktree", project.name, "Cli Branch", "--no-start", "--port", String(server.port)]);
+			code = await main([
+				"add-worktree",
+				project.name,
+				"Cli Branch",
+				"--no-start",
+				"--port",
+				String(server.port),
+			]);
 		} finally {
 			console.log = originalLog;
 		}
@@ -1313,17 +1601,30 @@ describe("worktree lifecycle routes", () => {
 		};
 		let code: number;
 		try {
-			code = await main(["add-worktree", project.projectId, "--existing", outside, "--no-start", "--port", String(server.port)]);
+			code = await main([
+				"add-worktree",
+				project.projectId,
+				"--existing",
+				outside,
+				"--no-start",
+				"--port",
+				String(server.port),
+			]);
 		} finally {
 			console.log = originalLog;
 		}
 		expect(code).toBe(0);
 		expect(logs.join("\n")).toContain("registered worktree");
-		expect(server.registry.list().some((e) => e.cwd === outside && e.projectId === project.projectId)).toBe(true);
+		expect(
+			server.registry.list().some((e) => e.cwd === outside && e.projectId === project.projectId),
+		).toBe(true);
 	});
 
 	test("CLI rm-worktree deletes via the route (--delete-branch removes the merged branch)", async () => {
-		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, { name: "Rm Me", start: false });
+		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			name: "Rm Me",
+			start: false,
+		});
 		expect(res.status).toBe(201);
 		const entry = ((await res.json()) as { entry: RegistryEntry }).entry;
 		const target = entry.cwd;
@@ -1334,7 +1635,13 @@ describe("worktree lifecycle routes", () => {
 		};
 		let code: number;
 		try {
-			code = await main(["rm-worktree", entry.daemonId, "--delete-branch", "--port", String(server.port)]);
+			code = await main([
+				"rm-worktree",
+				entry.daemonId,
+				"--delete-branch",
+				"--port",
+				String(server.port),
+			]);
 		} finally {
 			console.log = originalLog;
 		}
@@ -1355,8 +1662,16 @@ describe("worktree lifecycle routes", () => {
 		const wtReal = realpathSync(wtPath);
 		let entry: RegistryEntry | undefined;
 		try {
-			const merged = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as {
-				projects: Array<{ name: string; path: string; isWorktree: boolean; worktreeOf?: string; branch?: string }>;
+			const merged = (await (
+				await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)
+			).json()) as {
+				projects: Array<{
+					name: string;
+					path: string;
+					isWorktree: boolean;
+					worktreeOf?: string;
+					branch?: string;
+				}>;
 			};
 			expect(merged.projects).toContainEqual({
 				name: "ctl-merge-wt",
@@ -1378,7 +1693,9 @@ describe("worktree lifecycle routes", () => {
 				mode: "spawned",
 				status: "asleep",
 			});
-			const merged2 = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as {
+			const merged2 = (await (
+				await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)
+			).json()) as {
 				projects: Array<{ path: string }>;
 			};
 			expect(merged2.projects.some((p) => p.path === wtReal)).toBe(false);

@@ -52,7 +52,11 @@ export function slugifyWorktreeName(name: string): string {
  * Basenames colliding with a different repo's directory (`.ompweb-repo`
  * marker naming another realpath) get a `-<sha1(repo)[0..4]>` suffix.
  */
-export function managedWorktreePath(workspaceDir: string, repoRealpath: string, worktreeName: string): string {
+export function managedWorktreePath(
+	workspaceDir: string,
+	repoRealpath: string,
+	worktreeName: string,
+): string {
 	let repoBasename = basename(repoRealpath);
 	const marker = join(workspaceDir, repoBasename, OMPWEB_REPO_MARKER);
 	if (existsSync(marker)) {
@@ -210,18 +214,30 @@ export async function createWorktree(
 	if (opts.existingBranch !== undefined) {
 		const want = `refs/heads/${opts.existingBranch}`;
 		const list = await runGit(["worktree", "list", "--porcelain"], project.path);
-		if (list.exitCode !== 0) throw new Error(`cannot read worktree list: ${list.stderr.trim() || `git exited ${list.exitCode}`}`);
+		if (list.exitCode !== 0)
+			throw new Error(
+				`cannot read worktree list: ${list.stderr.trim() || `git exited ${list.exitCode}`}`,
+			);
 		if (parseWorktreeList(list.stdout).some((block) => block.branch === want)) {
 			throw new WorktreeBranchCheckedOutError(opts.existingBranch);
 		}
 		const verify = await runGit(["rev-parse", "--verify", want], project.path);
 		if (verify.exitCode !== 0) throw new Error(`unknown branch: ${opts.existingBranch}`);
 		const add = await runGit(["worktree", "add", target, opts.existingBranch], project.path);
-		if (add.exitCode !== 0) throw new Error(`git worktree add failed: ${add.stderr.trim() || `git exited ${add.exitCode}`}`);
+		if (add.exitCode !== 0)
+			throw new Error(
+				`git worktree add failed: ${add.stderr.trim() || `git exited ${add.exitCode}`}`,
+			);
 	} else {
-		const baseRef = opts.baseRef !== undefined && opts.baseRef !== "" ? opts.baseRef : await resolveBaseRef(project.path);
+		const baseRef =
+			opts.baseRef !== undefined && opts.baseRef !== ""
+				? opts.baseRef
+				: await resolveBaseRef(project.path);
 		const add = await runGit(["worktree", "add", "-b", slug, target, baseRef], project.path);
-		if (add.exitCode !== 0) throw new Error(`git worktree add failed: ${add.stderr.trim() || `git exited ${add.exitCode}`}`);
+		if (add.exitCode !== 0)
+			throw new Error(
+				`git worktree add failed: ${add.stderr.trim() || `git exited ${add.exitCode}`}`,
+			);
 		writeFileSync(join(dirname(target), OMPWEB_REPO_MARKER), `${project.path}\n`);
 		return { path: target, branch: slug, baseRef };
 	}
@@ -245,7 +261,9 @@ export async function listProjectBranches(mainPath: string): Promise<ProjectBran
 	const names = refs.stdout.trim() === "" ? [] : refs.stdout.trim().split("\n");
 	const worktrees = await runGit(["worktree", "list", "--porcelain"], mainPath);
 	if (worktrees.exitCode !== 0) {
-		throw new Error(`cannot list branches: ${worktrees.stderr.trim() || `git exited ${worktrees.exitCode}`}`);
+		throw new Error(
+			`cannot list branches: ${worktrees.stderr.trim() || `git exited ${worktrees.exitCode}`}`,
+		);
 	}
 	// A branch is checked out in at most one worktree (git refuses a second
 	// checkout), so per-branch overwrite is safe.
@@ -256,7 +274,9 @@ export async function listProjectBranches(mainPath: string): Promise<ProjectBran
 	}
 	return names.map((name) => {
 		const worktreePath = checkedOut.get(name);
-		return worktreePath === undefined ? { name, checkedOut: false } : { name, checkedOut: true, worktreePath };
+		return worktreePath === undefined
+			? { name, checkedOut: false }
+			: { name, checkedOut: true, worktreePath };
 	});
 }
 
@@ -268,7 +288,10 @@ export async function listProjectBranches(mainPath: string): Promise<ProjectBran
  * The project's LINKED worktrees (main checkout excluded) whose realpath is
  * not among `registeredPaths`. Feeds the "Add existing" tab.
  */
-export async function listUnregisteredWorktrees(projectPath: string, registeredPaths: string[]): Promise<ProjectEntry[]> {
+export async function listUnregisteredWorktrees(
+	projectPath: string,
+	registeredPaths: string[],
+): Promise<ProjectEntry[]> {
 	const result = await runGit(["worktree", "list", "--porcelain"], projectPath);
 	if (result.exitCode !== 0) return [];
 	const blocks = parseWorktreeList(result.stdout);
@@ -395,12 +418,19 @@ export interface WorktreeDeleteInfo {
  * workspaceDir), dirty counts (probeGitState), and the branch's
  * merged/unpushed state vs the main repo's base ref. Never deletes anything.
  */
-export async function worktreeDeleteInfo(path: string, workspaceDir: string): Promise<WorktreeDeleteInfo> {
+export async function worktreeDeleteInfo(
+	path: string,
+	workspaceDir: string,
+): Promise<WorktreeDeleteInfo> {
 	if (path === "") return { owned: false, dirty: false, reason: "entry has no worktree path" };
 	const ws = realpathOf(workspaceDir);
 	const resolved = realpathOf(path);
 	if (!isPathUnder(resolved, ws)) {
-		return { owned: false, dirty: false, reason: "not a managed worktree (path outside workspaceDir)" };
+		return {
+			owned: false,
+			dirty: false,
+			reason: "not a managed worktree (path outside workspaceDir)",
+		};
 	}
 	if (!existsSync(resolved)) {
 		return { owned: true, dirty: false, reason: "worktree path does not exist" };
@@ -408,7 +438,8 @@ export async function worktreeDeleteInfo(path: string, workspaceDir: string): Pr
 	const state = await probeGitState(resolved);
 	const counts = state?.git;
 	const dirty =
-		counts !== undefined && (counts.added > 0 || counts.modified > 0 || counts.deleted > 0 || counts.untracked > 0);
+		counts !== undefined &&
+		(counts.added > 0 || counts.modified > 0 || counts.deleted > 0 || counts.untracked > 0);
 	const info: WorktreeDeleteInfo = { owned: true, dirty };
 	if (state !== undefined) {
 		info.git = { ...state.git };
@@ -416,7 +447,11 @@ export async function worktreeDeleteInfo(path: string, workspaceDir: string): Pr
 			info.branch = state.branch;
 			const mainPath = await mainRepoOf(resolved);
 			if (mainPath !== null && realpathOf(mainPath) !== resolved) {
-				info.merged = await branchMergedInto(mainPath, state.branch, await resolveBaseRef(mainPath));
+				info.merged = await branchMergedInto(
+					mainPath,
+					state.branch,
+					await resolveBaseRef(mainPath),
+				);
 				info.unpushed = await branchUnpushed(resolved);
 			}
 		}
@@ -426,7 +461,11 @@ export async function worktreeDeleteInfo(path: string, workspaceDir: string): Pr
 }
 
 /** True when `branch`'s tip is reachable from `baseRef` (git branch --merged). */
-async function branchMergedInto(repoPath: string, branch: string, baseRef: string): Promise<boolean> {
+async function branchMergedInto(
+	repoPath: string,
+	branch: string,
+	baseRef: string,
+): Promise<boolean> {
 	const result = await runGit(["branch", "--merged", baseRef], repoPath);
 	if (result.exitCode !== 0) return false;
 	for (const line of result.stdout.split("\n")) {
@@ -491,7 +530,10 @@ export async function deleteWorktree(
 	const state = await probeGitState(resolved);
 	if (
 		state?.git !== undefined &&
-		(state.git.added > 0 || state.git.modified > 0 || state.git.deleted > 0 || state.git.untracked > 0)
+		(state.git.added > 0 ||
+			state.git.modified > 0 ||
+			state.git.deleted > 0 ||
+			state.git.untracked > 0)
 	) {
 		throw new WorktreeDirtyError(path);
 	}
@@ -499,7 +541,9 @@ export async function deleteWorktree(
 	if (mainPath === null) throw new Error(`cannot resolve the worktree's repository: ${path}`);
 	const remove = await runGit(["worktree", "remove", resolved], mainPath);
 	if (remove.exitCode !== 0) {
-		throw new Error(`git worktree remove failed: ${remove.stderr.trim() || `git exited ${remove.exitCode}`}`);
+		throw new Error(
+			`git worktree remove failed: ${remove.stderr.trim() || `git exited ${remove.exitCode}`}`,
+		);
 	}
 	const result: DeleteWorktreeResult = { path: resolved };
 	const branch = state?.branch;

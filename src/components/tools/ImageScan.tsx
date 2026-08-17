@@ -6,7 +6,7 @@ import { imageDataUrl } from "../../images";
 /** Full-size overlay: Esc or backdrop click closes; focus moves into the
  *  dialog on open, is trapped on Tab, and is restored to the opener on
  *  close (mirrors Modal's dialog pattern). */
-export const FullImageOverlay: Component<{ image: ImageArg; onClose: () => void }> = props => {
+export const FullImageOverlay: Component<{ image: ImageArg; onClose: () => void }> = (props) => {
 	let box!: HTMLDivElement;
 	let img!: HTMLImageElement;
 	// The element that had focus before the overlay mounted; restored on close.
@@ -64,7 +64,7 @@ export const FullImageOverlay: Component<{ image: ImageArg; onClose: () => void 
 					alt={`full-size image (${props.image.mimeType})`}
 					decoding="async"
 					tabindex="0"
-					onClick={e => e.stopPropagation()}
+					onClick={(e) => e.stopPropagation()}
 				/>
 			</div>
 		</Portal>
@@ -72,14 +72,14 @@ export const FullImageOverlay: Component<{ image: ImageArg; onClose: () => void 
 };
 
 /** Inline thumbnails for tool-result images; click zooms to full size. */
-export const ImageScan: Component<{ images: ImageArg[] | undefined }> = props => {
+export const ImageScan: Component<{ images: ImageArg[] | undefined }> = (props) => {
 	const [zoomed, setZoomed] = createSignal<ImageArg | null>(null);
 	return (
 		<>
 			<Show when={props.images && props.images.length > 0}>
 				<div class="img-scan">
 					<For each={props.images}>
-						{img => (
+						{(img) => (
 							<button class="img-thumb" type="button" onClick={() => setZoomed(img)}>
 								<img src={imageDataUrl(img)} alt="tool result image" decoding="async" />
 							</button>
@@ -87,7 +87,9 @@ export const ImageScan: Component<{ images: ImageArg[] | undefined }> = props =>
 					</For>
 				</div>
 			</Show>
-			<Show when={zoomed()}>{img => <FullImageOverlay image={img()} onClose={() => setZoomed(null)} />}</Show>
+			<Show when={zoomed()}>
+				{(img) => <FullImageOverlay image={img()} onClose={() => setZoomed(null)} />}
+			</Show>
 		</>
 	);
 };

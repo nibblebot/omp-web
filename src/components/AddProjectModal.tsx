@@ -41,7 +41,7 @@ function stageIndex(stage: Stage): number {
  * (register → spawn → attach) so the session-picker gate can open after
  * attach settles.
  */
-export const AddProjectModal: Component<{ onClose: () => void }> = props => {
+export const AddProjectModal: Component<{ onClose: () => void }> = (props) => {
 	const [projects, setProjects] = createSignal<ProjectEntry[]>([]);
 	const [projectsError, setProjectsError] = createSignal<string | null>(null);
 	const [templates, setTemplates] = createSignal<string[]>([]);
@@ -62,23 +62,23 @@ export const AddProjectModal: Component<{ onClose: () => void }> = props => {
 	onMount(() => {
 		void listProjects()
 			.then(setProjects)
-			.catch(err => setProjectsError(String(err)));
+			.catch((err) => setProjectsError(String(err)));
 		void fetch("/ctl/templates")
-			.then(r => {
+			.then((r) => {
 				if (!r.ok) throw new Error(`templates fetch failed (${r.status})`);
 				return r.json() as Promise<string[]>;
 			})
-			.then(list => {
+			.then((list) => {
 				setTemplates(list);
 				if (list.length > 0 && !list.includes(template())) setTemplate(list[0]);
 			})
-			.catch(err => setTemplatesError(String(err)));
+			.catch((err) => setTemplatesError(String(err)));
 		requestAnimationFrame(() => pathInput?.focus());
 	});
 
 	/** Main checkouts only — adding a project registers a repo, not a worktree. */
-	const mains = () => projects().filter(p => !p.isWorktree);
-	const registeredPaths = () => new Set(state.registeredProjects.map(p => p.path));
+	const mains = () => projects().filter((p) => !p.isWorktree);
+	const registeredPaths = () => new Set(state.registeredProjects.map((p) => p.path));
 
 	const pick = (p: ProjectEntry) => {
 		setPath(p.path);
@@ -90,7 +90,7 @@ export const AddProjectModal: Component<{ onClose: () => void }> = props => {
 		const st = stage();
 		const ids = beforeIds;
 		if (st.kind !== "creating" || ids === null) return;
-		const fresh = state.daemonRoster.find(d => !ids.has(d.daemonId));
+		const fresh = state.daemonRoster.find((d) => !ids.has(d.daemonId));
 		if (fresh) setStage({ kind: "spawning", daemonId: fresh.daemonId });
 	});
 
@@ -107,7 +107,7 @@ export const AddProjectModal: Component<{ onClose: () => void }> = props => {
 	createEffect(() => {
 		const st = stage();
 		if (st.kind !== "spawning") return;
-		const d = state.daemonRoster.find(x => x.daemonId === st.daemonId);
+		const d = state.daemonRoster.find((x) => x.daemonId === st.daemonId);
 		if (!d) return;
 		if (d.status === "error") {
 			setStage({ kind: "error", stage: "spawning", message: d.error ?? "daemon failed to start" });
@@ -117,7 +117,13 @@ export const AddProjectModal: Component<{ onClose: () => void }> = props => {
 			setStage({ kind: "attaching", daemonId: st.daemonId });
 			void attachSession(st.daemonId)
 				.then(() => close())
-				.catch(err => setStage({ kind: "error", stage: "attaching", message: err instanceof Error ? err.message : String(err) }));
+				.catch((err) =>
+					setStage({
+						kind: "error",
+						stage: "attaching",
+						message: err instanceof Error ? err.message : String(err),
+					}),
+				);
 		}
 	});
 
@@ -136,10 +142,10 @@ export const AddProjectModal: Component<{ onClose: () => void }> = props => {
 		// answers an error frame on a bad one.
 		const parsedLabels = labels()
 			.split(",")
-			.map(l => l.trim())
-			.filter(l => l !== "");
+			.map((l) => l.trim())
+			.filter((l) => l !== "");
 		const wantStart = start();
-		beforeIds = new Set(state.daemonRoster.map(d => d.daemonId));
+		beforeIds = new Set(state.daemonRoster.map((d) => d.daemonId));
 		errorSnapshot = state.error;
 		sendAddProject(cwd, {
 			...(wantStart ? { start: true } : {}),
@@ -160,7 +166,7 @@ export const AddProjectModal: Component<{ onClose: () => void }> = props => {
 	return (
 		<Modal title="Add repo" onClose={close}>
 			<Show when={errorInfo()}>
-				{err => (
+				{(err) => (
 					<>
 						<div class="msg-notice project-error">
 							Failed while {err().stage}: {err().message}
@@ -184,13 +190,15 @@ export const AddProjectModal: Component<{ onClose: () => void }> = props => {
 						class="picker-filter project-path"
 						placeholder="~/repos/… or absolute path"
 						value={path()}
-						onInput={e => {
+						onInput={(e) => {
 							setPath(e.currentTarget.value);
 							setPathError(null);
 						}}
 						spellcheck={false}
 					/>
-					<Show when={pathError()}>{err => <div class="msg-notice project-path-error">{err()}</div>}</Show>
+					<Show when={pathError()}>
+						{(err) => <div class="msg-notice project-path-error">{err()}</div>}
+					</Show>
 					<details class="project-advanced">
 						<summary>Advanced</summary>
 						<label class="daemon-detail-label" for="project-template">
@@ -200,16 +208,16 @@ export const AddProjectModal: Component<{ onClose: () => void }> = props => {
 							id="project-template"
 							class="project-template"
 							value={template()}
-							onChange={e => setTemplate(e.currentTarget.value)}
+							onChange={(e) => setTemplate(e.currentTarget.value)}
 						>
 							<Show when={templates().length === 0 && templatesError() === null}>
 								<option value="local">local</option>
 							</Show>
-							<For each={templates()}>
-								{t => <option value={t}>{t}</option>}
-							</For>
+							<For each={templates()}>{(t) => <option value={t}>{t}</option>}</For>
 						</select>
-						<Show when={templatesError()}>{err => <div class="msg-notice project-template-error">{err()}</div>}</Show>
+						<Show when={templatesError()}>
+							{(err) => <div class="msg-notice project-template-error">{err()}</div>}
+						</Show>
 						<label class="daemon-detail-label" for="project-labels">
 							labels
 						</label>
@@ -218,22 +226,24 @@ export const AddProjectModal: Component<{ onClose: () => void }> = props => {
 							class="picker-filter project-labels"
 							placeholder="tag=api, env=prod"
 							value={labels()}
-							onInput={e => setLabels(e.currentTarget.value)}
+							onInput={(e) => setLabels(e.currentTarget.value)}
 							spellcheck={false}
 						/>
 					</details>
 					<label class="project-start">
-						<input type="checkbox" checked={start()} onChange={e => setStart(e.currentTarget.checked)} />
+						<input
+							type="checkbox"
+							checked={start()}
+							onChange={(e) => setStart(e.currentTarget.checked)}
+						/>
 						Start a session now
 					</label>
 				</div>
 				<div class="picker-group-name">Discovered projects</div>
-				<Show when={projectsError()}>
-					{err => <div class="msg-notice">{err()}</div>}
-				</Show>
+				<Show when={projectsError()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
 				<div class="project-list">
 					<For each={mains()}>
-						{p => (
+						{(p) => (
 							<PickerRow
 								class="picker-row project-row"
 								classList={{ active: path() === p.path }}
@@ -242,7 +252,7 @@ export const AddProjectModal: Component<{ onClose: () => void }> = props => {
 							>
 								<span class="picker-label project-row-name">{p.name}</span>
 								<Show when={p.branch}>
-									{b => <span class="picker-chip project-row-branch">{b()}</span>}
+									{(b) => <span class="picker-chip project-row-branch">{b()}</span>}
 								</Show>
 								<Show when={registeredPaths().has(p.path)}>
 									<span class="project-row-registered">registered</span>

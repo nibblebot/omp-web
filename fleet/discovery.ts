@@ -177,7 +177,10 @@ async function scanAll(roots: string[], exec: GitRunner): Promise<ProjectEntry[]
  * Discover projects under `roots`, each scanned ONE level deep. Cached for
  * 60s keyed by the joined roots; see clearCache().
  */
-export async function listProjects(roots: string[], options?: ListProjectsOptions): Promise<ProjectEntry[]> {
+export async function listProjects(
+	roots: string[],
+	options?: ListProjectsOptions,
+): Promise<ProjectEntry[]> {
 	const exec = options?.exec ?? runGit;
 	const key = JSON.stringify(roots);
 	const now = Date.now();
@@ -212,7 +215,10 @@ export async function validateProjectPath(p: string): Promise<string | null> {
  * cwd naming the main checkout through a symlink still counts as the main
  * checkout.
  */
-export async function resolveWorktreeOf(path: string, options?: ListProjectsOptions): Promise<string | undefined> {
+export async function resolveWorktreeOf(
+	path: string,
+	options?: ListProjectsOptions,
+): Promise<string | undefined> {
 	const exec = options?.exec ?? runGit;
 	const result = await exec(["worktree", "list", "--porcelain"], path).catch(() => null);
 	if (!result || result.exitCode !== 0) return undefined;
@@ -318,7 +324,10 @@ export function parseNumstat(stdout: string): { linesAdded: number; linesDeleted
  * repo without commits) leaves the line fields absent — never 0-by-default,
  * never fails the whole probe.
  */
-export async function probeGitState(cwd: string, options?: ListProjectsOptions): Promise<GitState | undefined> {
+export async function probeGitState(
+	cwd: string,
+	options?: ListProjectsOptions,
+): Promise<GitState | undefined> {
 	const exec = options?.exec ?? runGit;
 	const result = await exec(["status", "--porcelain=v1", "--branch"], cwd).catch(() => null);
 	if (!result || result.exitCode !== 0) return undefined;

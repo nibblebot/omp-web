@@ -4,7 +4,10 @@ import type {
 	ExtensionAskDialogResultItem,
 	ExtensionUIContext,
 } from "@oh-my-pi/pi-coding-agent";
-import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-coding-agent/collab/protocol";
+import type {
+	CollabUiRequestDraft,
+	CollabUiSelectItem,
+} from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import type { CollabHostAdapter } from "./collab-host";
 import type { SessionEntry } from "./session-entry";
 import { broadcastTo, notifyEvent, streams, type SseConsumer } from "./sse-delivery";
@@ -34,7 +37,7 @@ const COLLAB_UI_FALLTHROUGH = Symbol("collab-ui-fallthrough");
 function uiRequest(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
 	const adapter = entry.collab.adapter;
 	if (adapter?.isLive && adapter.writableGuestCount > 0) {
-		return uiRequestViaCollab(entry, method, params).then(value => {
+		return uiRequestViaCollab(entry, method, params).then((value) => {
 			if (value === COLLAB_UI_FALLTHROUGH) return webUiRequest(entry, method, params);
 			return value;
 		});
@@ -43,12 +46,17 @@ function uiRequest(entry: SessionEntry, method: string, params: unknown): Promis
 }
 
 /** The pre-existing web dialog path (one pending request per entry). */
-export function webUiRequest(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
+export function webUiRequest(
+	entry: SessionEntry,
+	method: string,
+	params: unknown,
+): Promise<unknown> {
 	const targets = new Set<SseConsumer>();
 	for (const stream of streams) {
 		if (stream.attached === entry.handle) targets.add(stream);
 	}
-	if (targets.size === 0) return Promise.reject(new Error("No connected client to answer the UI request"));
+	if (targets.size === 0)
+		return Promise.reject(new Error("No connected client to answer the UI request"));
 	const id = `ui${nextUiRequestId++}`;
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	entry.pendingUiRequests.set(id, { streams: targets, resolve, reject });
@@ -112,7 +120,10 @@ function mapUiMethodToCollab(method: string, params: unknown): CollabUiRequestDr
  * genuine guest cancel) or COLLAB_UI_FALLTHROUGH when the collab channel is
  * unavailable.
  */
-async function collabAsk(adapter: CollabHostAdapter, draft: CollabUiRequestDraft): Promise<unknown> {
+async function collabAsk(
+	adapter: CollabHostAdapter,
+	draft: CollabUiRequestDraft,
+): Promise<unknown> {
 	const request = adapter.requestGuestUi(draft);
 	if (!request) return COLLAB_UI_FALLTHROUGH;
 	const result = await request;
@@ -126,20 +137,23 @@ async function collabAsk(adapter: CollabHostAdapter, draft: CollabUiRequestDraft
  * genuine guest cancel that aborts the whole dialog; COLLAB_UI_FALLTHROUGH
  * routes back to the /events streams.
  */
-async function askDialogViaCollab(adapter: CollabHostAdapter, questions: ExtensionAskDialogQuestion[]): Promise<unknown> {
+async function askDialogViaCollab(
+	adapter: CollabHostAdapter,
+	questions: ExtensionAskDialogQuestion[],
+): Promise<unknown> {
 	const results: ExtensionAskDialogResultItem[] = [];
 	for (let index = 0; index < questions.length; index++) {
 		const q = questions[index];
 		const selected = new Set<string>();
 		let customInput: string | undefined;
-		const baseOptions: CollabUiSelectItem[] = q.options.map(o =>
+		const baseOptions: CollabUiSelectItem[] = q.options.map((o) =>
 			o.description?.trim() ? { label: o.label, description: o.description.trim() } : o.label,
 		);
 		if (q.multi) {
 			while (true) {
 				const checkedIndices = q.options
 					.map((option, i) => (selected.has(option.label) ? i : -1))
-					.filter(i => i >= 0);
+					.filter((i) => i >= 0);
 				const choice = await collabAsk(adapter, {
 					kind: "select",
 					title: q.question,
@@ -151,7 +165,11 @@ async function askDialogViaCollab(adapter: CollabHostAdapter, questions: Extensi
 				if (choice === COLLAB_UI_FALLTHROUGH || choice === undefined) return choice;
 				if (choice === "Next →") break;
 				if (choice === "Other (type your own)") {
-					const input = await collabAsk(adapter, { kind: "editor", title: q.question, prefill: "" });
+					const input = await collabAsk(adapter, {
+						kind: "editor",
+						title: q.question,
+						prefill: "",
+					});
 					if (input === COLLAB_UI_FALLTHROUGH) return input;
 					// Guest cancelled the Other editor: back to the option list.
 					if (input === undefined) continue;
@@ -170,7 +188,11 @@ async function askDialogViaCollab(adapter: CollabHostAdapter, questions: Extensi
 				});
 				if (choice === COLLAB_UI_FALLTHROUGH || choice === undefined) return choice;
 				if (choice === "Other (type your own)") {
-					const input = await collabAsk(adapter, { kind: "editor", title: q.question, prefill: "" });
+					const input = await collabAsk(adapter, {
+						kind: "editor",
+						title: q.question,
+						prefill: "",
+					});
 					if (input === COLLAB_UI_FALLTHROUGH) return input;
 					// Guest cancelled the Other editor: re-show the option list.
 					if (input === undefined) continue;
@@ -184,9 +206,9 @@ async function askDialogViaCollab(adapter: CollabHostAdapter, questions: Extensi
 		results.push({
 			id: q.id ?? String(index),
 			question: q.question,
-			options: q.options.map(o => o.label),
+			options: q.options.map((o) => o.label),
 			multi: !!q.multi,
-			selectedOptions: q.options.map(o => o.label).filter(label => selected.has(label)),
+			selectedOptions: q.options.map((o) => o.label).filter((label) => selected.has(label)),
 			customInput,
 		});
 	}
@@ -194,7 +216,11 @@ async function askDialogViaCollab(adapter: CollabHostAdapter, questions: Extensi
 }
 
 /** Dialog dispatch through a live collab adapter; COLLAB_UI_FALLTHROUGH when unanswerable there. */
-async function uiRequestViaCollab(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
+async function uiRequestViaCollab(
+	entry: SessionEntry,
+	method: string,
+	params: unknown,
+): Promise<unknown> {
 	const adapter = entry.collab.adapter;
 	if (!adapter?.isLive) return COLLAB_UI_FALLTHROUGH;
 	if (method === "askDialog") {
@@ -227,7 +253,11 @@ export function rejectEntryUiRequests(entry: SessionEntry, reason: string): void
  * closed), but a Last-Event-ID resume must replay end-after-request, not a
  * stale dialog (finding #16).
  */
-export function rejectStreamUiRequests(entry: SessionEntry, stream: SseConsumer, reason: string): void {
+export function rejectStreamUiRequests(
+	entry: SessionEntry,
+	stream: SseConsumer,
+	reason: string,
+): void {
 	for (const [id, p] of entry.pendingUiRequests) {
 		p.streams.delete(stream);
 		if (p.streams.size === 0) {
@@ -241,11 +271,16 @@ export function rejectStreamUiRequests(entry: SessionEntry, stream: SseConsumer,
 /** One context per session: dialog requests and notices route to that session's streams. */
 export function buildUiContext(entry: SessionEntry): ExtensionUIContext {
 	return {
-		select: (title, options) => uiRequest(entry, "select", { title, options }) as Promise<string | undefined>,
-		confirm: async (title, message) => Boolean(await uiRequest(entry, "confirm", { title, message })),
-		input: (title, placeholder) => uiRequest(entry, "input", { title, placeholder }) as Promise<string | undefined>,
-		editor: (title, prefill) => uiRequest(entry, "editor", { title, prefill }) as Promise<string | undefined>,
-		askDialog: questions => uiRequest(entry, "askDialog", { questions }) as Promise<ExtensionAskDialogResult | undefined>,
+		select: (title, options) =>
+			uiRequest(entry, "select", { title, options }) as Promise<string | undefined>,
+		confirm: async (title, message) =>
+			Boolean(await uiRequest(entry, "confirm", { title, message })),
+		input: (title, placeholder) =>
+			uiRequest(entry, "input", { title, placeholder }) as Promise<string | undefined>,
+		editor: (title, prefill) =>
+			uiRequest(entry, "editor", { title, prefill }) as Promise<string | undefined>,
+		askDialog: (questions) =>
+			uiRequest(entry, "askDialog", { questions }) as Promise<ExtensionAskDialogResult | undefined>,
 		notify: (message, type) => notifyEvent(entry, message, type ?? "info"),
 		// --- Terminal-only surface: no-ops in the headless web host. ---
 		onTerminalInput: () => () => {},
@@ -255,7 +290,8 @@ export function buildUiContext(entry: SessionEntry): ExtensionUIContext {
 		setFooter: () => {},
 		setHeader: () => {},
 		setTitle: () => {},
-		custom: () => Promise.reject(new Error("Custom UI components are not supported in the web host")),
+		custom: () =>
+			Promise.reject(new Error("Custom UI components are not supported in the web host")),
 		setEditorText: () => {},
 		pasteToEditor: () => {},
 		getEditorText: () => "",
@@ -264,7 +300,8 @@ export function buildUiContext(entry: SessionEntry): ExtensionUIContext {
 		theme: {} as ExtensionUIContext["theme"],
 		getAllThemes: () => Promise.resolve([]),
 		getTheme: () => Promise.resolve(undefined),
-		setTheme: () => Promise.resolve({ success: false, error: "Themes are not supported in the web host" }),
+		setTheme: () =>
+			Promise.resolve({ success: false, error: "Themes are not supported in the web host" }),
 		getToolsExpanded: () => false,
 		setToolsExpanded: () => {},
 	};

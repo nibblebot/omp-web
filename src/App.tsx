@@ -56,15 +56,22 @@ const SHORTCUTS: Array<[string, string]> = [
 
 /** First-run empty state: large character sprite, greeting, and suggested
  *  prompts that insert into the prompt box (consumed by PromptBox). */
-const SUGGESTED_PROMPTS = ["Summarize this repo", "Explain the server protocol", "List open issues"];
+const SUGGESTED_PROMPTS = [
+	"Summarize this repo",
+	"Explain the server protocol",
+	"List open issues",
+];
 
 const EmptyState: Component = () => (
 	<div class="empty-state">
 		<CharacterAvatar provider={state.model?.provider} pose="happy" size={96} />
-		<p class="empty-greeting">{characterForProvider(state.model?.provider).name} is ready. What should we work on? Ctrl+O expands tool outputs, and Ctrl+R searches prompt history.</p>
+		<p class="empty-greeting">
+			{characterForProvider(state.model?.provider).name} is ready. What should we work on? Ctrl+O
+			expands tool outputs, and Ctrl+R searches prompt history.
+		</p>
 		<div class="empty-chips">
 			<For each={SUGGESTED_PROMPTS}>
-				{text => (
+				{(text) => (
 					<button type="button" class="empty-chip" onClick={() => setPromptInsert({ text })}>
 						{text}
 					</button>
@@ -78,15 +85,15 @@ export const App: Component = () => {
 	onMount(() => {
 		connect();
 		// Ctrl+O toggles all tool cards open/closed (not while typing).
-		window.addEventListener("keydown", e => {
+		window.addEventListener("keydown", (e) => {
 			if (e.key.toLowerCase() !== "o" || !e.ctrlKey || e.shiftKey || e.altKey) return;
 			const target = e.target as HTMLElement | null;
 			if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
 			e.preventDefault();
-			setState("toolsExpanded", v => !v);
+			setState("toolsExpanded", (v) => !v);
 		});
 		// Ctrl+R opens history search (suppressed while a modal is open).
-		window.addEventListener("keydown", e => {
+		window.addEventListener("keydown", (e) => {
 			if (e.key.toLowerCase() !== "r" || !e.ctrlKey || e.shiftKey || e.altKey) return;
 			if (state.modal !== null) return;
 			e.preventDefault();
@@ -98,7 +105,9 @@ export const App: Component = () => {
 			{/* finding #P1: always-mounted aria-live region (WCAG 4.1.3). Announcements
 			    are written by state.announce() — never conditionally rendered, so
 			    screen readers register the polite region at mount. */}
-			<div role="status" aria-live="polite" class="visually-hidden">{state.announcement}</div>
+			<div role="status" aria-live="polite" class="visually-hidden">
+				{state.announcement}
+			</div>
 			<StatusBar />
 			{/* Roster toggle: sticky top-left of the viewport (roster mode,
 			    chat view), shown only while the docked sidebar is closed —

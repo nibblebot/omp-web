@@ -71,7 +71,10 @@ function expandTilde(p: string): string {
 	return p;
 }
 
-export async function loadConfig(path?: string, opts?: { workspaceDir?: string }): Promise<FleetConfig> {
+export async function loadConfig(
+	path?: string,
+	opts?: { workspaceDir?: string },
+): Promise<FleetConfig> {
 	const file = resolveConfigPath(path);
 	let config: FleetConfig;
 	if (!existsSync(file)) {

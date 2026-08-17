@@ -5,7 +5,7 @@
  * assert recompute-once-per-entries-change behavior).
  */
 declare module "solid-js/dist/solid.js" {
-  export function createSignal<T>(value?: T): [() => T, (v: T | ((p: T) => T)) => void];
-  export function createMemo<T>(fn: () => T, value?: T): () => T;
-  export function createRoot<T>(fn: (dispose: () => void) => T): T;
+	export function createSignal<T>(value?: T): [() => T, (v: T | ((p: T) => T)) => void];
+	export function createMemo<T>(fn: () => T, value?: T): () => T;
+	export function createRoot<T>(fn: (dispose: () => void) => T): T;
 }

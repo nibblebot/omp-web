@@ -1,4 +1,7 @@
-import { settings, validateProviderMaxInFlightRequests } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+	settings,
+	validateProviderMaxInFlightRequests,
+} from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	getDefault,
 	getType,
@@ -8,11 +11,23 @@ import {
 	type SettingTab,
 	TAB_METADATA,
 } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
-import { getSettingsForTab, type SettingDef } from "@oh-my-pi/pi-coding-agent/modes/components/settings-defs";
-import { setExcludedSearchProviders, setSearchProviderOrder } from "@oh-my-pi/pi-coding-agent/web/search/provider";
+import {
+	getSettingsForTab,
+	type SettingDef,
+} from "@oh-my-pi/pi-coding-agent/modes/components/settings-defs";
+import {
+	setExcludedSearchProviders,
+	setSearchProviderOrder,
+} from "@oh-my-pi/pi-coding-agent/web/search/provider";
 import { isSearchProviderId } from "@oh-my-pi/pi-coding-agent/web/search/types";
 import { setImageProviderOrder } from "@oh-my-pi/pi-coding-agent/tools/image-gen";
-import type { SettingsGroup, SettingsItem, SettingsModel, SettingsOption, SettingsTab } from "../shared/protocol";
+import type {
+	SettingsGroup,
+	SettingsItem,
+	SettingsModel,
+	SettingsOption,
+	SettingsTab,
+} from "../shared/protocol";
 
 // ---------------------------------------------------------------------------
 // Server-side settings panel (TUI /settings parity).
@@ -102,9 +117,10 @@ export function coerceSettingValue(path: string, value: unknown): unknown {
 	if (typeof currentValue === "boolean") return value === true || value === "true";
 	// Optional/credential strings start undefined (never set); the TUI's
 	// fallback stores the raw input in that case — mirror it here.
-	if (typeof currentValue === "string" || currentValue === undefined || currentValue === null) return String(value);
+	if (typeof currentValue === "string" || currentValue === undefined || currentValue === null)
+		return String(value);
 	if (Array.isArray(currentValue)) {
-		return Array.isArray(value) ? value.filter(v => typeof v === "string") : [];
+		return Array.isArray(value) ? value.filter((v) => typeof v === "string") : [];
 	}
 	throw new Error(`Unsupported setting type for ${path}`);
 }
@@ -116,7 +132,11 @@ export function coerceSettingValue(path: string, value: unknown): unknown {
  * TUI-only rendering side effects are skipped and unknown paths are rejected
  * upstream by coerceSettingValue.
  */
-export async function applySettingSideEffects(session: AgentSessionLike, path: string, value: unknown): Promise<void> {
+export async function applySettingSideEffects(
+	session: AgentSessionLike,
+	path: string,
+	value: unknown,
+): Promise<void> {
 	switch (path) {
 		case "steeringMode":
 			session.setSteeringMode(value as "all" | "one-at-a-time");
@@ -163,7 +183,7 @@ export async function applySettingSideEffects(session: AgentSessionLike, path: s
 			if (Array.isArray(value)) setExcludedSearchProviders(value.filter(isSearchProviderId));
 			break;
 		case "providers.imageOrder":
-			if (Array.isArray(value)) setImageProviderOrder(value.filter(v => typeof v === "string"));
+			if (Array.isArray(value)) setImageProviderOrder(value.filter((v) => typeof v === "string"));
 			break;
 		// All other schema paths: persist-only (settings.set already applied).
 	}
@@ -184,16 +204,16 @@ function submenuOptions(
 		const base = def.options;
 		return [
 			{ value: "auto", label: "auto" },
-			...session.getAvailableThinkingLevels().map(level => {
-				const existing = base.find(o => o.value === level);
+			...session.getAvailableThinkingLevels().map((level) => {
+				const existing = base.find((o) => o.value === level);
 				return existing ?? { value: level, label: level };
 			}),
 		];
 	}
 	if (def.path === "theme.dark" || def.path === "theme.light") {
-		return themes.map(theme => ({ value: theme, label: theme }));
+		return themes.map((theme) => ({ value: theme, label: theme }));
 	}
-	return def.options.map(o => ({ value: o.value, label: o.label, description: o.description }));
+	return def.options.map((o) => ({ value: o.value, label: o.label, description: o.description }));
 }
 
 /** Structural slice of the session the model builder needs. */
@@ -202,7 +222,12 @@ export type SettingsSession = {
 	getAvailableModels(): ReadonlyArray<{ provider: string }>;
 };
 
-function defToItem(def: SettingDef, session: SettingsSession, themes: string[], providers: string[]): SettingsItem {
+function defToItem(
+	def: SettingDef,
+	session: SettingsSession,
+	themes: string[],
+	providers: string[],
+): SettingsItem {
 	const value = settings.get(def.path);
 	const base = {
 		path: def.path,
@@ -221,13 +246,23 @@ function defToItem(def: SettingDef, session: SettingsSession, themes: string[], 
 		case "text":
 			return { ...base, type: "text", secret: def.secret };
 		case "multiselect":
-			return { ...base, type: "multiselect", options: [...def.options], ordered: def.ordered === true };
+			return {
+				...base,
+				type: "multiselect",
+				options: [...def.options],
+				ordered: def.ordered === true,
+			};
 		case "providerLimits":
 			return { ...base, type: "providerLimits", providers };
 	}
 }
 
-function buildGroups(tab: SettingTab, session: SettingsSession, themes: string[], providers: string[]): SettingsGroup[] {
+function buildGroups(
+	tab: SettingTab,
+	session: SettingsSession,
+	themes: string[],
+	providers: string[],
+): SettingsGroup[] {
 	// getSettingsForTab orders defs by TAB_GROUPS[tab] (ungrouped first, then
 	// group order), so emitting a heading on group change reproduces the TUI's
 	// section layout; groups that end up with zero visible items never appear.
@@ -259,8 +294,10 @@ function buildGroups(tab: SettingTab, session: SettingsSession, themes: string[]
 export function buildSettingsModel(session: SettingsSession, themes: string[]): SettingsModel {
 	// providerLimits lists the session's providers, sorted unique (matches the
 	// TUI's /settings provider picker).
-	const providers = [...new Set(session.getAvailableModels().map(m => m.provider))].sort((a, b) => a.localeCompare(b));
-	const tabs: SettingsTab[] = SETTING_TABS.map(tab => ({
+	const providers = [...new Set(session.getAvailableModels().map((m) => m.provider))].sort((a, b) =>
+		a.localeCompare(b),
+	);
+	const tabs: SettingsTab[] = SETTING_TABS.map((tab) => ({
 		id: tab,
 		label: TAB_METADATA[tab].label,
 		groups: buildGroups(tab, session, themes, providers),

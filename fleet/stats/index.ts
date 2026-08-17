@@ -25,38 +25,36 @@ export type { StatsConfig };
 export { resolveStatsConfig };
 
 export interface StatsApp {
-  handleFetch(req: Request, url: URL): Response | Promise<Response | null>;
-  close(): void;
+	handleFetch(req: Request, url: URL): Response | Promise<Response | null>;
+	close(): void;
 }
 
-export function createStatsApp(
-  cfg?: Partial<StatsConfig> & { syncRunner?: SyncRunner },
-): StatsApp {
-  const defaults = resolveStatsConfig();
-  const config: StatsConfig = {
-    configRoot: cfg?.configRoot ?? defaults.configRoot,
-    statsDbPath: cfg?.statsDbPath ?? defaults.statsDbPath,
-    sessionsDir: cfg?.sessionsDir ?? defaults.sessionsDir,
-  };
-  const dbm = new StatsDbManagerImpl(config.statsDbPath);
-  const ctx: AppCtx = {
-    cfg: config,
-    dbm,
-    ...(cfg?.syncRunner === undefined ? {} : { syncRunner: cfg.syncRunner }),
-  };
+export function createStatsApp(cfg?: Partial<StatsConfig> & { syncRunner?: SyncRunner }): StatsApp {
+	const defaults = resolveStatsConfig();
+	const config: StatsConfig = {
+		configRoot: cfg?.configRoot ?? defaults.configRoot,
+		statsDbPath: cfg?.statsDbPath ?? defaults.statsDbPath,
+		sessionsDir: cfg?.sessionsDir ?? defaults.sessionsDir,
+	};
+	const dbm = new StatsDbManagerImpl(config.statsDbPath);
+	const ctx: AppCtx = {
+		cfg: config,
+		dbm,
+		...(cfg?.syncRunner === undefined ? {} : { syncRunner: cfg.syncRunner }),
+	};
 
-  // Each app owns a private registry: route modules push onto the array
-  // threaded into register(), so any number of apps can coexist in one
-  // process (bare `bun test` runs every suite in a single process).
-  const routes: Route[] = [];
-  registerSessions(ctx, routes);
-  registerStats(ctx, routes);
-  registerTranscript(ctx, routes);
-  registerSync(ctx, routes);
-  registerHealth(ctx, routes);
+	// Each app owns a private registry: route modules push onto the array
+	// threaded into register(), so any number of apps can coexist in one
+	// process (bare `bun test` runs every suite in a single process).
+	const routes: Route[] = [];
+	registerSessions(ctx, routes);
+	registerStats(ctx, routes);
+	registerTranscript(ctx, routes);
+	registerSync(ctx, routes);
+	registerHealth(ctx, routes);
 
-  return {
-    handleFetch: (req, url) => dispatchRequest(req, routes, url),
-    close: () => dbm.close(),
-  };
+	return {
+		handleFetch: (req, url) => dispatchRequest(req, routes, url),
+		close: () => dbm.close(),
+	};
 }

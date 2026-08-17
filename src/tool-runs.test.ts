@@ -6,7 +6,11 @@ function tool(id: number, name: string, status: ToolStatus = "done"): ToolItem {
 	return { kind: "tool", id, toolCallId: `t${id}`, name, args: null, status, output: "" };
 }
 
-function assistant(id: number, blocks: Block[], duration?: number): Extract<ChatItem, { kind: "assistant" }> {
+function assistant(
+	id: number,
+	blocks: Block[],
+	duration?: number,
+): Extract<ChatItem, { kind: "assistant" }> {
 	return { kind: "assistant", id, blocks, ...(duration === undefined ? {} : { duration }) };
 }
 
@@ -23,11 +27,28 @@ function user(id: number): ChatItem {
 }
 
 function bash(id: number): ChatItem {
-	return { kind: "bash", id, command: "", dimmed: false, lang: "bash", status: "done", output: "", exitCode: 0, truncated: false };
+	return {
+		kind: "bash",
+		id,
+		command: "",
+		dimmed: false,
+		lang: "bash",
+		status: "done",
+		output: "",
+		exitCode: 0,
+		truncated: false,
+	};
 }
 
 function compaction(id: number): ChatItem {
-	return { kind: "compaction", id, action: "compact", skipped: false, aborted: false, willRetry: false };
+	return {
+		kind: "compaction",
+		id,
+		action: "compact",
+		skipped: false,
+		aborted: false,
+		willRetry: false,
+	};
 }
 
 function notice(id: number): ChatItem {
@@ -41,13 +62,21 @@ function run(key: number, items: Array<Extract<ChatItem, { kind: "assistant" }> 
 		key,
 		items,
 		tools: items.filter((it): it is ToolItem => it.kind === "tool"),
-		thinking: items.flatMap(it => (it.kind === "assistant" ? it.blocks.filter(b => b.kind === "thinking") : [])),
-		turnCount: items.filter(it => it.kind === "assistant").length,
-		requestCount: items.filter(it => it.kind === "tool").length,
-		errorCount: items.filter((it): it is ToolItem => it.kind === "tool" && it.status === "error").length,
+		thinking: items.flatMap((it) =>
+			it.kind === "assistant" ? it.blocks.filter((b) => b.kind === "thinking") : [],
+		),
+		turnCount: items.filter((it) => it.kind === "assistant").length,
+		requestCount: items.filter((it) => it.kind === "tool").length,
+		errorCount: items.filter((it): it is ToolItem => it.kind === "tool" && it.status === "error")
+			.length,
 		durationMs: items.reduce(
 			(sum, it) =>
-				it.kind === "assistant" && typeof it.duration === "number" && Number.isFinite(it.duration) && it.duration >= 0 ? sum + it.duration : sum,
+				it.kind === "assistant" &&
+				typeof it.duration === "number" &&
+				Number.isFinite(it.duration) &&
+				it.duration >= 0
+					? sum + it.duration
+					: sum,
 			0,
 		),
 		running: items.some((it): it is ToolItem => it.kind === "tool" && it.status === "running"),
@@ -56,7 +85,12 @@ function run(key: number, items: Array<Extract<ChatItem, { kind: "assistant" }> 
 
 describe("groupAssistantRuns", () => {
 	test("consecutive assistant turns and tools merge into one run", () => {
-		const items = [assistant(1, [thinking("hmm"), text("ok")]), tool(2, "read"), tool(3, "glob"), assistant(4, [text("done")])];
+		const items = [
+			assistant(1, [thinking("hmm"), text("ok")]),
+			tool(2, "read"),
+			tool(3, "glob"),
+			assistant(4, [text("done")]),
+		];
 		const runs = groupAssistantRuns(items);
 		expect(runs).toHaveLength(1);
 		expect(runs[0]!.key).toBe(1);
@@ -71,28 +105,47 @@ describe("groupAssistantRuns", () => {
 
 	test("a user item breaks the run", () => {
 		const items = [tool(1, "read"), user(2), assistant(3, [text("hi")])];
-		expect(groupAssistantRuns(items)).toEqual([run(1, [tool(1, "read")]), run(3, [assistant(3, [text("hi")])])]);
+		expect(groupAssistantRuns(items)).toEqual([
+			run(1, [tool(1, "read")]),
+			run(3, [assistant(3, [text("hi")])]),
+		]);
 		// breakers never join a run and never produce empty runs
-		expect(groupAssistantRuns([user(4), user(5), tool(6, "read")])).toEqual([run(6, [tool(6, "read")])]);
+		expect(groupAssistantRuns([user(4), user(5), tool(6, "read")])).toEqual([
+			run(6, [tool(6, "read")]),
+		]);
 	});
 
 	test("a bash item breaks the run", () => {
 		const items = [tool(1, "read"), bash(2), tool(3, "glob")];
-		expect(groupAssistantRuns(items)).toEqual([run(1, [tool(1, "read")]), run(3, [tool(3, "glob")])]);
+		expect(groupAssistantRuns(items)).toEqual([
+			run(1, [tool(1, "read")]),
+			run(3, [tool(3, "glob")]),
+		]);
 	});
 
 	test("a compaction item breaks the run", () => {
 		const items = [assistant(1, [text("hi")]), compaction(2), assistant(3, [text("bye")])];
-		expect(groupAssistantRuns(items)).toEqual([run(1, [assistant(1, [text("hi")])]), run(3, [assistant(3, [text("bye")])])]);
+		expect(groupAssistantRuns(items)).toEqual([
+			run(1, [assistant(1, [text("hi")])]),
+			run(3, [assistant(3, [text("bye")])]),
+		]);
 	});
 
 	test("a notice item breaks the run", () => {
 		const items = [tool(1, "read"), notice(2), tool(3, "edit")];
-		expect(groupAssistantRuns(items)).toEqual([run(1, [tool(1, "read")]), run(3, [tool(3, "edit")])]);
+		expect(groupAssistantRuns(items)).toEqual([
+			run(1, [tool(1, "read")]),
+			run(3, [tool(3, "edit")]),
+		]);
 	});
 
 	test("error and running statuses are counted", () => {
-		const items = [tool(1, "read"), tool(2, "glob", "error"), tool(3, "edit", "running"), tool(4, "bash", "error")];
+		const items = [
+			tool(1, "read"),
+			tool(2, "glob", "error"),
+			tool(3, "edit", "running"),
+			tool(4, "bash", "error"),
+		];
 		const runs = groupAssistantRuns(items);
 		expect(runs).toHaveLength(1);
 		expect(runs[0]!.requestCount).toBe(4);

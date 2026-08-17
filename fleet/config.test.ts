@@ -35,7 +35,10 @@ describe("loadConfig", () => {
 			JSON.stringify({
 				roots: ["/srv/repos"],
 				templates: {
-					docker: { command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name}", host: "docker.local" },
+					docker: {
+						command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name}",
+						host: "docker.local",
+					},
 				},
 				defaultTemplate: "docker",
 				futureOption: { nested: true },
@@ -44,7 +47,10 @@ describe("loadConfig", () => {
 		const config = await loadConfig(file);
 		expect(config.roots).toEqual(["/srv/repos"]);
 		expect(config.templates).toEqual({
-			docker: { command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name}", host: "docker.local" },
+			docker: {
+				command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name}",
+				host: "docker.local",
+			},
 		});
 		expect(config.defaultTemplate).toBe("docker");
 		expect(config.spawnHook).toBeUndefined();
@@ -89,7 +95,10 @@ describe("loadConfig", () => {
 
 	test("parses projectTemplates; absent by default", async () => {
 		const file = join(tmpDir(), "config.json");
-		writeFileSync(file, JSON.stringify({ projectTemplates: { "proj-a": "docker", "proj-b": "local" } }));
+		writeFileSync(
+			file,
+			JSON.stringify({ projectTemplates: { "proj-a": "docker", "proj-b": "local" } }),
+		);
 		const config = await loadConfig(file);
 		expect(config.projectTemplates).toEqual({ "proj-a": "docker", "proj-b": "local" });
 
@@ -123,7 +132,10 @@ describe("loadConfig", () => {
 
 			// Wins over the file's templates (and survives `local` being absent there).
 			const fromFile = await loadConfig(file);
-			expect(fromFile.templates).toEqual({ docker: { command: "docker run omp-session {cwd}", host: "docker.local" }, local: expected });
+			expect(fromFile.templates).toEqual({
+				docker: { command: "docker run omp-session {cwd}", host: "docker.local" },
+				local: expected,
+			});
 			expect(fromFile.defaultTemplate).toBe("local");
 
 			// Applies on the missing-file default path too.
@@ -155,16 +167,27 @@ describe("loadConfig", () => {
 	test("corrupt or malformed config falls back to defaults", async () => {
 		const dir = tmpDir();
 		writeFileSync(join(dir, "bad-json.json"), "{ nope");
-		expect(await loadConfig(join(dir, "bad-json.json"))).toEqual(await loadConfig(join(dir, "missing.json")));
+		expect(await loadConfig(join(dir, "bad-json.json"))).toEqual(
+			await loadConfig(join(dir, "missing.json")),
+		);
 
-		writeFileSync(join(dir, "bad-shape.json"), JSON.stringify({ roots: "nope", templates: 42, defaultTemplate: 7 }));
-		expect(await loadConfig(join(dir, "bad-shape.json"))).toEqual(await loadConfig(join(dir, "missing.json")));
+		writeFileSync(
+			join(dir, "bad-shape.json"),
+			JSON.stringify({ roots: "nope", templates: 42, defaultTemplate: 7 }),
+		);
+		expect(await loadConfig(join(dir, "bad-shape.json"))).toEqual(
+			await loadConfig(join(dir, "missing.json")),
+		);
 	});
 });
 
 describe("workspaceDir", () => {
 	/** Load with a controlled OMP_FLEET_WORKSPACE_DIR (isolated per call). */
-	async function loadWithEnv(envValue: string | undefined, file?: string, flag?: string): Promise<FleetConfig> {
+	async function loadWithEnv(
+		envValue: string | undefined,
+		file?: string,
+		flag?: string,
+	): Promise<FleetConfig> {
 		const prev = process.env.OMP_FLEET_WORKSPACE_DIR;
 		if (envValue === undefined) delete process.env.OMP_FLEET_WORKSPACE_DIR;
 		else process.env.OMP_FLEET_WORKSPACE_DIR = envValue;
@@ -210,7 +233,9 @@ describe("workspaceDir", () => {
 		writeFileSync(file, JSON.stringify({ workspaceDir: "/ws/file" }));
 		expect((await loadWithEnv("", file)).workspaceDir).toBe("/ws/file");
 
-		expect((await loadWithEnv("", join(tmpDir(), "missing.json"))).workspaceDir).toBe(join(homedir(), "ompweb", "workspaces"));
+		expect((await loadWithEnv("", join(tmpDir(), "missing.json"))).workspaceDir).toBe(
+			join(homedir(), "ompweb", "workspaces"),
+		);
 	});
 
 	test("explicit flag (--workspace-dir) wins over env and the file (~ expanded)", async () => {
@@ -218,7 +243,9 @@ describe("workspaceDir", () => {
 		writeFileSync(file, JSON.stringify({ workspaceDir: "/ws/file" }));
 
 		expect((await loadWithEnv("/ws/env", file, "/ws/flag")).workspaceDir).toBe("/ws/flag");
-		expect((await loadWithEnv(undefined, file, "~/ws/flag")).workspaceDir).toBe(join(homedir(), "ws/flag"));
+		expect((await loadWithEnv(undefined, file, "~/ws/flag")).workspaceDir).toBe(
+			join(homedir(), "ws/flag"),
+		);
 	});
 });
 

@@ -18,7 +18,11 @@ type DangerConfirmOpts = {
 // objects, and the closure must not be serialized). Calling
 // requestDangerConfirm replaces any pending confirm; the stale action is
 // dropped with it.
-const [pending, setPending] = createSignal<{ title: string; body: string; confirmLabel: string } | null>(null);
+const [pending, setPending] = createSignal<{
+	title: string;
+	body: string;
+	confirmLabel: string;
+} | null>(null);
 let pendingAction: (() => void) | undefined;
 
 /** Open the danger confirm; a pending confirm is replaced, not stacked. */
@@ -47,7 +51,7 @@ export function confirmDangerConfirm(): void {
 
 export const DangerConfirmDialog: Component = () => (
 	<Show when={dangerConfirm()} keyed>
-		{d => (
+		{(d) => (
 			<Modal title={d.title} onClose={cancelDangerConfirm}>
 				<p class="danger-confirm-body">{d.body}</p>
 				<div class="ask-actions">

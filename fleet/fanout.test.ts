@@ -214,15 +214,31 @@ function happyResponder(_fake: FakeServer, stream: FakeStream, frame: unknown): 
 			{ type: "text", text: "world" },
 		]),
 	});
-	sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Final answer" }]) });
+	sendEvent(stream, {
+		type: "message_end",
+		message: assistantMessage([{ type: "text", text: "Final answer" }]),
+	});
 	sendEvent(stream, { type: "agent_end", usage: { tokens: 42 }, messages: [] });
 }
 
 /** Build registry + connector + supervisor and one ready entry on the fake. */
-async function readyEntry(fake: FakeServer): Promise<{ deps: FanoutDeps; registry: Registry; connector: DaemonConnector; entry: RegistryEntry }> {
+async function readyEntry(fake: FakeServer): Promise<{
+	deps: FanoutDeps;
+	registry: Registry;
+	connector: DaemonConnector;
+	entry: RegistryEntry;
+}> {
 	const registry = await loadedRegistry();
-	const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50 });
-	const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
+	const connector = new DaemonConnector(registry, undefined, {
+		backoffMinMs: 10,
+		backoffMaxMs: 50,
+	});
+	const config: FleetConfig = {
+		roots: [],
+		templates: {},
+		defaultTemplate: "local",
+		workspaceDir: "/tmp/fleet-test-ws",
+	};
 	const supervisor = new SpawnSupervisor(registry, connector, config);
 	const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
 	connector.connect(entry.daemonId);
@@ -235,9 +251,19 @@ describe("promptEntry", () => {
 		const fake = startFake({ onCommand: happyResponder });
 		const { deps, connector, entry } = await readyEntry(fake);
 		const result = await promptEntry(deps, entry, "hi", 2000);
-		expect(result).toEqual({ daemonId: entry.daemonId, ok: true, text: "Final answer", usage: { tokens: 42 } });
+		expect(result).toEqual({
+			daemonId: entry.daemonId,
+			ok: true,
+			text: "Final answer",
+			usage: { tokens: 42 },
+		});
 		expect(fake.received).toHaveLength(1);
-		const call = fake.received[0] as { type?: string; id?: string; method?: string; args?: unknown[] };
+		const call = fake.received[0] as {
+			type?: string;
+			id?: string;
+			method?: string;
+			args?: unknown[];
+		};
 		expect(call.type).toBe("call");
 		expect(call.method).toBe("prompt");
 		expect(call.args).toEqual(["hi"]);
@@ -257,7 +283,10 @@ describe("promptEntry", () => {
 				if (call.type !== "call") return;
 				stream.send({ type: "call_result", id: call.id, ok: true });
 				stream.send({ type: "error", error: "another turn blew up" });
-				sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Survived" }]) });
+				sendEvent(stream, {
+					type: "message_end",
+					message: assistantMessage([{ type: "text", text: "Survived" }]),
+				});
 				sendEvent(stream, { type: "agent_end", messages: [] });
 			},
 		});
@@ -327,7 +356,11 @@ describe("promptEntry", () => {
 			onCommand: happyResponder,
 		});
 		const { deps, registry, connector, entry } = await readyEntry(fake);
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null), 2000, "asleep");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null),
+			2000,
+			"asleep",
+		);
 		const result = await promptEntry(deps, entry, "hi", 2000);
 		expect(result.ok).toBe(true);
 		expect(result.text).toBe("Final answer");
@@ -342,15 +375,28 @@ describe("promptEntry", () => {
 		// trust the stale status and fail with "daemon not connected".
 		const fake = startFake({ onCommand: happyResponder });
 		const registry = await loadedRegistry();
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50, idleDropMs: 30 });
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 30,
+		});
+		const config: FleetConfig = {
+			roots: [],
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 2000);
 		// Idle policy is armed automatically at ready (never-attached dials
 		// are dropped after idleDropMs; no retain/release pair needed).
-		await waitFor(() => (!connector.isConnected(entry.daemonId) ? "dropped" : null), 2000, "idle drop");
+		await waitFor(
+			() => (!connector.isConnected(entry.daemonId) ? "dropped" : null),
+			2000,
+			"idle drop",
+		);
 		expect(registry.get(entry.daemonId)?.status).toBe("ready"); // stale
 		const result = await promptEntry({ registry, connector, supervisor }, entry, "hi", 2000);
 		expect(result.ok).toBe(true);
@@ -365,12 +411,24 @@ describe("promptEntry", () => {
 		// waitReady rejects with the error and promptEntry reports it.
 		const fake = startFake({ helloCwd: "/elsewhere" });
 		const registry = await loadedRegistry();
-		const connector = new DaemonConnector(registry, undefined, { backoffMinMs: 10, backoffMaxMs: 50 });
-		const config: FleetConfig = { roots: [], templates: {}, defaultTemplate: "local", workspaceDir: "/tmp/fleet-test-ws" };
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+		});
+		const config: FleetConfig = {
+			roots: [],
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
 		connector.connect(entry.daemonId);
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "error" ? "error" : null), 2000, "error");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "error" ? "error" : null),
+			2000,
+			"error",
+		);
 		const result = await promptEntry({ registry, connector, supervisor }, entry, "hi", 200);
 		expect(result.ok).toBe(false);
 		expect(result.error).toContain("cwd mismatch");
@@ -395,12 +453,18 @@ describe("promptEntry", () => {
 				const n = ++callCount;
 				stream.send({ type: "call_result", id: call.id, ok: true });
 				if (n === 1) {
-					sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "First turn" }]) });
+					sendEvent(stream, {
+						type: "message_end",
+						message: assistantMessage([{ type: "text", text: "First turn" }]),
+					});
 					sendEvent(stream, { type: "agent_end", messages: [] });
 					firstTurnDone = true;
 				} else {
 					if (!firstTurnDone) secondSentBeforeFirstDone = true;
-					sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Second turn" }]) });
+					sendEvent(stream, {
+						type: "message_end",
+						message: assistantMessage([{ type: "text", text: "Second turn" }]),
+					});
 					sendEvent(stream, { type: "agent_end", messages: [] });
 				}
 			},
@@ -433,10 +497,16 @@ describe("promptEntry", () => {
 				if (call.type !== "call") return;
 				// Browser turn finishing first: message_end + agent_end with
 				// foreign text, then OUR acceptance and OUR turn.
-				sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Browser turn" }]) });
+				sendEvent(stream, {
+					type: "message_end",
+					message: assistantMessage([{ type: "text", text: "Browser turn" }]),
+				});
 				sendEvent(stream, { type: "agent_end", messages: [] });
 				stream.send({ type: "call_result", id: call.id, ok: true });
-				sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Our turn" }]) });
+				sendEvent(stream, {
+					type: "message_end",
+					message: assistantMessage([{ type: "text", text: "Our turn" }]),
+				});
 				sendEvent(stream, { type: "agent_end", messages: [] });
 			},
 		});
@@ -465,13 +535,24 @@ describe("fanOut", () => {
 				const call = frame as { type?: string; id?: string };
 				if (call.type === "call") {
 					stream.send({ type: "call_result", id: call.id, ok: true });
-					sendEvent(stream, { type: "message_end", message: assistantMessage([{ type: "text", text: "Second ok" }]) });
+					sendEvent(stream, {
+						type: "message_end",
+						message: assistantMessage([{ type: "text", text: "Second ok" }]),
+					});
 					sendEvent(stream, { type: "agent_end", messages: [] });
 				}
 			},
 		});
 		const { deps, registry, connector, entry: first } = await readyEntry(failing);
-		const second = registry.create(baseInit({ name: "proj-b", cwd: "/srv/proj", project: "proj-b", endpoint: ok.url, token: "tok-b" }));
+		const second = registry.create(
+			baseInit({
+				name: "proj-b",
+				cwd: "/srv/proj",
+				project: "proj-b",
+				endpoint: ok.url,
+				token: "tok-b",
+			}),
+		);
 		connector.connect(second.daemonId);
 		await connector.waitReady(second.daemonId, 2000);
 		const results = await fanOut(deps, [first, second], "hi", 2000);

@@ -180,7 +180,9 @@ for (let i = 0; i < args.length; i++) {
 		modeArg = arg;
 	} else {
 		console.error(`unrecognized argument: ${arg}`);
-		console.error(`usage: bun scripts/dev.ts [${Object.keys(MODES).join("|")}] [--host [addr]] [--allow-hosts [csv]]`);
+		console.error(
+			`usage: bun scripts/dev.ts [${Object.keys(MODES).join("|")}] [--host [addr]] [--allow-hosts [csv]]`,
+		);
 		process.exit(2);
 	}
 }
@@ -269,7 +271,9 @@ function checkSummary(): void {
 	log(bold("stack ready"));
 	log(
 		`${bold(`  ${"ui".padEnd(9)}http://localhost:${uiPort}  `)}${
-			fleetMode ? "(vite, HMR, proxies /events /command /ctl → fleet)" : "(vite, HMR, proxies /events /command → session)"
+			fleetMode
+				? "(vite, HMR, proxies /events /command /ctl → fleet)"
+				: "(vite, HMR, proxies /events /command → session)"
 		}`,
 	);
 	if (fleetMode) {
@@ -324,14 +328,20 @@ async function pipePrefixed(
  * Stale-line guard: a dead child's pipe can flush after a relaunch, so only
  * the process currently registered under `name` may move readiness/ports.
  */
-function stdoutHook(name: string, proc: Subprocess): ((line: string) => string | false | void) | undefined {
+function stdoutHook(
+	name: string,
+	proc: Subprocess,
+): ((line: string) => string | false | void) | undefined {
 	const current = (): boolean => procs.get(name) === proc;
 	if (name === "session") {
 		return (line) => {
 			if (!line.startsWith(OMP_SESSION_PREFIX) || !current()) return;
 			let port = 0;
 			try {
-				const parsed = JSON.parse(line.slice(OMP_SESSION_PREFIX.length)) as { event?: string; port?: number };
+				const parsed = JSON.parse(line.slice(OMP_SESSION_PREFIX.length)) as {
+					event?: string;
+					port?: number;
+				};
 				if (typeof parsed.port === "number") port = parsed.port;
 			} catch {
 				// not parseable — readiness still happened, keep the default port
@@ -394,7 +404,12 @@ const fatalPromise = (() => {
 })();
 
 function launch(child: Child): void {
-	const proc = Bun.spawn(child.cmd, { cwd: ROOT, env: { ...process.env, ...child.env }, stdout: "pipe", stderr: "pipe" });
+	const proc = Bun.spawn(child.cmd, {
+		cwd: ROOT,
+		env: { ...process.env, ...child.env },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
 	procs.set(child.name, proc);
 	states.set(child.name, { name: child.name, status: "starting", pid: proc.pid, readyOnce: false });
 	void pipePrefixed(proc.stdout, child.name, process.stdout, stdoutHook(child.name, proc));
@@ -410,11 +425,14 @@ function launch(child: Child): void {
 			// A restart re-arms the summary: it reprints once the stack is
 			// fully ready again (ports/pids from the fresh process).
 			summaryArmed = true;
-			if (Date.now() - startedAt > RESTART_RESET_AFTER_MS) restartBackoffMs = RESTART_BACKOFF_MIN_MS;
+			if (Date.now() - startedAt > RESTART_RESET_AFTER_MS)
+				restartBackoffMs = RESTART_BACKOFF_MIN_MS;
 			const delay = restartBackoffMs;
 			restartBackoffMs = Math.min(restartBackoffMs * 2, RESTART_BACKOFF_MAX_MS);
 			if (wasReady) {
-				log(`${child.name} exited (${code ?? "signal"}) — idle exit is expected; restarting in ${delay / 1000}s (the rest of the stack stays up)`);
+				log(
+					`${child.name} exited (${code ?? "signal"}) — idle exit is expected; restarting in ${delay / 1000}s (the rest of the stack stays up)`,
+				);
 				setTimeout(() => {
 					if (!shuttingDown) void restartSession();
 				}, delay);
@@ -430,7 +448,9 @@ function launch(child: Child): void {
 				fatalResolve({ name: child.name, code });
 				return;
 			}
-			log(`${child.name} exited before ready (${code ?? "signal"}) — retrying on a fresh ephemeral port (${fails}/${MAX_PREREADY_RETRIES})`);
+			log(
+				`${child.name} exited before ready (${code ?? "signal"}) — retrying on a fresh ephemeral port (${fails}/${MAX_PREREADY_RETRIES})`,
+			);
 			sessionPortArg = "0";
 			setTimeout(() => {
 				if (!shuttingDown) launch(buildChild("session"));
@@ -461,7 +481,9 @@ function launch(child: Child): void {
 /** Re-pick the child's port (vite; fleet rebinds ephemeral) and relaunch. */
 async function retryPreReady(name: string, code: number | null, attempt: number): Promise<void> {
 	if (name === "vite") ports.vite = await pickFreePort();
-	log(`${name} exited before ready (${code ?? "signal"}) — retrying on port ${name === "vite" ? ports.vite : "0 (ephemeral)"} (${attempt}/${MAX_PREREADY_RETRIES})`);
+	log(
+		`${name} exited before ready (${code ?? "signal"}) — retrying on port ${name === "vite" ? ports.vite : "0 (ephemeral)"} (${attempt}/${MAX_PREREADY_RETRIES})`,
+	);
 	if (!shuttingDown) launch(buildChild(name));
 }
 
@@ -509,8 +531,12 @@ ports.vite = await pickFreePort();
 if (modeArg !== "fleet") viteSessionPort = ports.session;
 launch(buildChild("vite"));
 
-if (host !== undefined) log(`vite listening on ${host}:${ports.vite} — the UI (and full agent control through it) is reachable from the network with no auth; trusted networks only`);
-if (allowHosts !== undefined) log(`vite allowedHosts: ${allowHosts === "*" ? "all Host headers allowed" : allowHosts}`);
+if (host !== undefined)
+	log(
+		`vite listening on ${host}:${ports.vite} — the UI (and full agent control through it) is reachable from the network with no auth; trusted networks only`,
+	);
+if (allowHosts !== undefined)
+	log(`vite allowedHosts: ${allowHosts === "*" ? "all Host headers allowed" : allowHosts}`);
 
 async function shutdown(code: number): Promise<void> {
 	if (shuttingDown) return;

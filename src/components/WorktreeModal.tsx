@@ -1,6 +1,14 @@
 import { createEffect, createSignal, For, onMount, Show, type Component } from "solid-js";
 import type { ProjectBranch, ProjectEntry } from "../../shared/protocol";
-import { attachSession, listProjectBranches, listProjects, sendAddExistingWorktree, sendCreateWorktree, setState, state } from "../state";
+import {
+	attachSession,
+	listProjectBranches,
+	listProjects,
+	sendAddExistingWorktree,
+	sendCreateWorktree,
+	setState,
+	state,
+} from "../state";
 import { Modal } from "./Modal";
 import { PickerRow } from "./PickerRow";
 
@@ -46,7 +54,7 @@ const STAGE_LABELS: Record<Tab, string[]> = {
  * session-picker gate opens after attach settles. Failure at any rung
  * surfaces the stage's error and leaves prior artifacts in place.
  */
-export const WorktreeModal: Component<{ onClose: () => void }> = props => {
+export const WorktreeModal: Component<{ onClose: () => void }> = (props) => {
 	const [tab, setTab] = createSignal<Tab>("create");
 	const [name, setName] = createSignal("");
 	const [start, setStart] = createSignal(true);
@@ -58,7 +66,9 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 	const [branches, setBranches] = createSignal<ProjectBranch[]>([]);
 	const [branchesLoading, setBranchesLoading] = createSignal(true);
 	const [branchesError, setBranchesError] = createSignal<string | null>(null);
-	const [selected, setSelected] = createSignal<{ kind: "new" } | { kind: "branch"; name: string }>({ kind: "new" });
+	const [selected, setSelected] = createSignal<{ kind: "new" } | { kind: "branch"; name: string }>({
+		kind: "new",
+	});
 	const [stage, setStage] = createSignal<Stage>({ kind: "form" });
 	let nameInput!: HTMLInputElement;
 
@@ -66,7 +76,8 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 	let beforeIds: Set<string> | null = null;
 	let errorSnapshot: string | null = null;
 
-	const project = () => state.registeredProjects.find(p => p.projectId === state.worktreeModalProjectId) ?? null;
+	const project = () =>
+		state.registeredProjects.find((p) => p.projectId === state.worktreeModalProjectId) ?? null;
 
 	/** True when an existing branch is selected (vs. creating a new one). */
 	const branchSelected = () => selected().kind === "branch";
@@ -89,7 +100,9 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 	 *  workspace — git refuses a second checkout) last and disabled;
 	 *  alphabetical within each group. */
 	const sortedBranches = () =>
-		[...branches()].sort((a, b) => Number(a.checkedOut) - Number(b.checkedOut) || a.name.localeCompare(b.name));
+		[...branches()].sort(
+			(a, b) => Number(a.checkedOut) - Number(b.checkedOut) || a.name.localeCompare(b.name),
+		);
 
 	// Existing-branch picker data: fetched on open and whenever the targeted
 	// project changes. Keyed on the projectId string, NOT the registry object
@@ -107,12 +120,12 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 		setBranchesLoading(true);
 		setBranchesError(null);
 		void listProjectBranches(projectId)
-			.then(list => {
+			.then((list) => {
 				if (state.worktreeModalProjectId !== projectId) return;
 				setBranches(list);
 				setBranchesLoading(false);
 			})
-			.catch(err => {
+			.catch((err) => {
 				if (state.worktreeModalProjectId !== projectId) return;
 				setBranchesError(String(err));
 				setBranchesLoading(false);
@@ -126,12 +139,12 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 	/** Discovery refresh for the Add-existing tab. */
 	const refreshProjects = () => {
 		void listProjects()
-			.then(list => {
+			.then((list) => {
 				setProjects(list);
 				setProjectsError(null);
 				setSelectedPath(null);
 			})
-			.catch(err => setProjectsError(String(err)));
+			.catch((err) => setProjectsError(String(err)));
 	};
 
 	/** Unregistered worktrees of the selected project: discovered linked
@@ -140,11 +153,11 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 	const unregistered = () => {
 		const proj = project();
 		if (!proj) return [];
-		const rosterCwds = state.daemonRoster.map(d => d.cwd);
-		return projects().filter(p => {
+		const rosterCwds = state.daemonRoster.map((d) => d.cwd);
+		return projects().filter((p) => {
 			if (!p.isWorktree || p.worktreeOf !== proj.name) return false;
 			const wp = p.path.endsWith("/") ? p.path.slice(0, -1) : p.path;
-			return !rosterCwds.some(c => (c.endsWith("/") ? c.slice(0, -1) : c) === wp);
+			return !rosterCwds.some((c) => (c.endsWith("/") ? c.slice(0, -1) : c) === wp);
 		});
 	};
 
@@ -153,7 +166,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 		const st = stage();
 		const ids = beforeIds;
 		if (st.kind !== "creating" || ids === null) return;
-		const fresh = state.daemonRoster.find(d => !ids.has(d.daemonId));
+		const fresh = state.daemonRoster.find((d) => !ids.has(d.daemonId));
 		if (fresh) setStage({ kind: "spawning", daemonId: fresh.daemonId });
 	});
 
@@ -170,7 +183,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 	createEffect(() => {
 		const st = stage();
 		if (st.kind !== "spawning") return;
-		const d = state.daemonRoster.find(x => x.daemonId === st.daemonId);
+		const d = state.daemonRoster.find((x) => x.daemonId === st.daemonId);
 		if (!d) return;
 		if (d.status === "error") {
 			setStage({ kind: "error", stage: "spawning", message: d.error ?? "daemon failed to start" });
@@ -180,7 +193,13 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 			setStage({ kind: "attaching", daemonId: st.daemonId });
 			void attachSession(st.daemonId)
 				.then(() => close())
-				.catch(err => setStage({ kind: "error", stage: "attaching", message: err instanceof Error ? err.message : String(err) }));
+				.catch((err) =>
+					setStage({
+						kind: "error",
+						stage: "attaching",
+						message: err instanceof Error ? err.message : String(err),
+					}),
+				);
 		}
 	});
 
@@ -224,7 +243,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 	/** Snapshot pre-command roster/error; without start the command is
 	 *  fire-and-forget (the new row appears in the sidebar) so close. */
 	const beginPipeline = () => {
-		beforeIds = new Set(state.daemonRoster.map(d => d.daemonId));
+		beforeIds = new Set(state.daemonRoster.map((d) => d.daemonId));
 		errorSnapshot = state.error;
 		if (start()) setStage({ kind: "creating" });
 		else close();
@@ -238,7 +257,8 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 	};
 	const stageNote = () => {
 		const st = stage();
-		if (st.kind === "creating") return tab() === "create" ? "creating the worktree…" : "registering the worktree…";
+		if (st.kind === "creating")
+			return tab() === "create" ? "creating the worktree…" : "registering the worktree…";
 		if (st.kind === "spawning") return "starting the daemon…";
 		return "attaching to the session…";
 	};
@@ -246,7 +266,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 	return (
 		<Modal title="Add worktree" onClose={close}>
 			<Show when={errorInfo()}>
-				{err => (
+				{(err) => (
 					<>
 						<div class="msg-notice worktree-error">
 							Failed while {err().stage}: {err().message}
@@ -292,7 +312,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 					{/* <form> so Enter in any field submits (AskDialog convention). */}
 					<form
 						class="worktree-form"
-						onSubmit={e => {
+						onSubmit={(e) => {
 							e.preventDefault();
 							void submitCreate();
 						}}
@@ -306,14 +326,16 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 							class="picker-filter worktree-name"
 							placeholder="feature/…"
 							value={nameValue()}
-							onInput={e => {
+							onInput={(e) => {
 								setName(e.currentTarget.value);
 								setNameError(null);
 							}}
 							disabled={branchSelected()}
 							spellcheck={false}
 						/>
-						<Show when={nameError()}>{err => <div class="msg-notice worktree-name-error">{err()}</div>}</Show>
+						<Show when={nameError()}>
+							{(err) => <div class="msg-notice worktree-name-error">{err()}</div>}
+						</Show>
 						<div class="picker-group-name">Branch</div>
 						<div class="worktree-list">
 							<PickerRow
@@ -327,7 +349,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 							<Show when={branchesLoading()}>
 								<div class="tool-collapsed-note">loading branches…</div>
 							</Show>
-							<Show when={branchesError()}>{err => <div class="msg-notice">{err()}</div>}</Show>
+							<Show when={branchesError()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
 							<Show when={!branchesLoading() && !branchesError() && branches().length === 0}>
 								<div class="tool-collapsed-note">no branches in this repo yet</div>
 							</Show>
@@ -336,7 +358,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 									class="worktree-branch-select"
 									aria-label="Existing branch"
 									value={selectedBranch()}
-									onChange={e => {
+									onChange={(e) => {
 										const v = e.currentTarget.value;
 										if (v !== "") setSelected({ kind: "branch", name: v });
 									}}
@@ -345,7 +367,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 										use an existing branch…
 									</option>
 									<For each={sortedBranches()}>
-										{b => (
+										{(b) => (
 											<option value={b.name} disabled={b.checkedOut}>
 												{b.checkedOut ? `${b.name} (checked out)` : b.name}
 											</option>
@@ -355,7 +377,11 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 							</Show>
 						</div>
 						<label class="worktree-start">
-							<input type="checkbox" checked={start()} onChange={e => setStart(e.currentTarget.checked)} />
+							<input
+								type="checkbox"
+								checked={start()}
+								onChange={(e) => setStart(e.currentTarget.checked)}
+							/>
 							Start a session now
 						</label>
 						<div class="worktree-actions">
@@ -367,12 +393,10 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 				</Show>
 				<Show when={tab() === "existing"}>
 					<div class="picker-group-name">Unregistered worktrees</div>
-					<Show when={projectsError()}>
-						{err => <div class="msg-notice">{err()}</div>}
-					</Show>
+					<Show when={projectsError()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
 					<div class="worktree-list">
 						<For each={unregistered()}>
-							{p => (
+							{(p) => (
 								<PickerRow
 									class="picker-row worktree-row"
 									classList={{ active: selectedPath() === p.path }}
@@ -381,7 +405,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 								>
 									<span class="picker-label worktree-row-name">{p.name}</span>
 									<Show when={p.branch}>
-										{b => <span class="picker-chip worktree-row-branch">{b()}</span>}
+										{(b) => <span class="picker-chip worktree-row-branch">{b()}</span>}
 									</Show>
 								</PickerRow>
 							)}
@@ -391,11 +415,20 @@ export const WorktreeModal: Component<{ onClose: () => void }> = props => {
 						</Show>
 					</div>
 					<label class="worktree-start">
-						<input type="checkbox" checked={start()} onChange={e => setStart(e.currentTarget.checked)} />
+						<input
+							type="checkbox"
+							checked={start()}
+							onChange={(e) => setStart(e.currentTarget.checked)}
+						/>
 						Start a session now
 					</label>
 					<div class="worktree-actions">
-						<button type="button" class="worktree-btn" disabled={selectedPath() === null} onClick={() => void submitExisting()}>
+						<button
+							type="button"
+							class="worktree-btn"
+							disabled={selectedPath() === null}
+							onClick={() => void submitExisting()}
+						>
 							Add worktree
 						</button>
 						<button type="button" class="daemon-row-btn" onClick={refreshProjects}>

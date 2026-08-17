@@ -56,7 +56,7 @@ export const AskDialog: Component = () => (
 );
 
 /** Rich multi-question form: ExtensionAskDialogSubmitResult on submit. */
-const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
+const AskForm: Component<{ id: string; questions: AskQuestion[] }> = (props) => {
 	// Per-question answer state, keyed by question index.
 	const [selected, setSelected] = createSignal<Record<number, string[]>>({});
 	const [custom, setCustom] = createSignal<Record<number, string>>({});
@@ -65,7 +65,7 @@ const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
 		const cur = selected()[qi] ?? [];
 		const next = multi
 			? cur.includes(label)
-				? cur.filter(l => l !== label)
+				? cur.filter((l) => l !== label)
 				: [...cur, label]
 			: cur.includes(label)
 				? []
@@ -73,7 +73,8 @@ const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
 		setSelected({ ...selected(), [qi]: next });
 	};
 
-	const answered = (qi: number) => (selected()[qi]?.length ?? 0) > 0 || (custom()[qi]?.trim() ?? "") !== "";
+	const answered = (qi: number) =>
+		(selected()[qi]?.length ?? 0) > 0 || (custom()[qi]?.trim() ?? "") !== "";
 	const allAnswered = () => props.questions.every((_, qi) => answered(qi));
 
 	const submit = () => {
@@ -86,7 +87,7 @@ const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
 				return {
 					id: q.id,
 					question: q.question,
-					options: q.options.map(o => o.label),
+					options: q.options.map((o) => o.label),
 					multi: q.multi ?? false,
 					selectedOptions: selected()[qi] ?? [],
 					...(customText ? { customInput: customText } : {}),
@@ -97,7 +98,7 @@ const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
 
 	return (
 		<form
-			onSubmit={e => {
+			onSubmit={(e) => {
 				e.preventDefault();
 				if (allAnswered()) submit();
 			}}
@@ -120,7 +121,19 @@ const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
 												aria-pressed={isSelected()}
 												onClick={() => toggle(qi(), opt.label, q.multi ?? false)}
 											>
-												<span class="ask-marker">{isSelected() ? (q.multi ? <SquareCheckIcon /> : <CircleDotIcon />) : q.multi ? <SquareIcon /> : <CircleIcon />}</span>
+												<span class="ask-marker">
+													{isSelected() ? (
+														q.multi ? (
+															<SquareCheckIcon />
+														) : (
+															<CircleDotIcon />
+														)
+													) : q.multi ? (
+														<SquareIcon />
+													) : (
+														<CircleIcon />
+													)}
+												</span>
 												<span class="picker-label">{opt.label}</span>
 												{oi() === q.recommended && <span class="ask-recommended">recommended</span>}
 												{opt.description && <span class="picker-detail">{opt.description}</span>}
@@ -134,7 +147,7 @@ const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
 								aria-label="Custom answer"
 								placeholder="Other…"
 								value={custom()[qi()] ?? ""}
-								onInput={e => setCustom({ ...custom(), [qi()]: e.currentTarget.value })}
+								onInput={(e) => setCustom({ ...custom(), [qi()]: e.currentTarget.value })}
 							/>
 						</div>
 					)}
@@ -153,21 +166,23 @@ const AskForm: Component<{ id: string; questions: AskQuestion[] }> = props => {
 };
 
 /** select fallback: single option list, click answers with the option label. */
-const SelectForm: Component<{ id: string; params: unknown }> = props => {
+const SelectForm: Component<{ id: string; params: unknown }> = (props) => {
 	const p = () => props.params as { title: string; options: (string | AskOption)[] };
 	const label = (o: string | AskOption) => (typeof o === "string" ? o : o.label);
 	return (
 		<Modal title={p().title} onClose={() => cancelUiRequest(props.id)}>
 			<div class="picker-list">
 				<For each={p().options ?? []}>
-					{opt => (
+					{(opt) => (
 						<button
 							type="button"
 							class="picker-row ask-option"
 							onClick={() => sendUiResponse(props.id, label(opt))}
 						>
 							<span class="picker-label">{label(opt)}</span>
-							{typeof opt !== "string" && opt.description && <span class="picker-detail">{opt.description}</span>}
+							{typeof opt !== "string" && opt.description && (
+								<span class="picker-detail">{opt.description}</span>
+							)}
 						</button>
 					)}
 				</For>
@@ -182,7 +197,7 @@ const SelectForm: Component<{ id: string; params: unknown }> = props => {
 };
 
 /** confirm fallback: OK/Cancel returning a boolean. */
-const ConfirmForm: Component<{ id: string; params: unknown }> = props => {
+const ConfirmForm: Component<{ id: string; params: unknown }> = (props) => {
 	const p = () => props.params as { title: string; message: string };
 	return (
 		<Modal title={p().title} onClose={() => cancelUiRequest(props.id)}>
@@ -200,7 +215,7 @@ const ConfirmForm: Component<{ id: string; params: unknown }> = props => {
 };
 
 /** input fallback: single-line text returning a string. */
-const InputForm: Component<{ id: string; params: unknown }> = props => {
+const InputForm: Component<{ id: string; params: unknown }> = (props) => {
 	const p = () => props.params as { title: string; placeholder?: string };
 	const [value, setValue] = createSignal("");
 	let el!: HTMLInputElement;
@@ -208,7 +223,7 @@ const InputForm: Component<{ id: string; params: unknown }> = props => {
 	return (
 		<Modal title={p().title} onClose={() => cancelUiRequest(props.id)}>
 			<form
-				onSubmit={e => {
+				onSubmit={(e) => {
 					e.preventDefault();
 					sendUiResponse(props.id, value());
 				}}
@@ -219,7 +234,7 @@ const InputForm: Component<{ id: string; params: unknown }> = props => {
 					aria-label={p().title}
 					placeholder={p().placeholder}
 					value={value()}
-					onInput={e => setValue(e.currentTarget.value)}
+					onInput={(e) => setValue(e.currentTarget.value)}
 				/>
 				<div class="ask-actions">
 					<button type="submit" class="send">
@@ -235,7 +250,7 @@ const InputForm: Component<{ id: string; params: unknown }> = props => {
 };
 
 /** editor fallback: multiline text (prefilled) returning a string. */
-const EditorForm: Component<{ id: string; params: unknown }> = props => {
+const EditorForm: Component<{ id: string; params: unknown }> = (props) => {
 	const p = () => props.params as { title: string; prefill?: string };
 	const [value, setValue] = createSignal(p().prefill ?? "");
 	let el!: HTMLTextAreaElement;
@@ -243,12 +258,18 @@ const EditorForm: Component<{ id: string; params: unknown }> = props => {
 	return (
 		<Modal title={p().title} onClose={() => cancelUiRequest(props.id)}>
 			<form
-				onSubmit={e => {
+				onSubmit={(e) => {
 					e.preventDefault();
 					sendUiResponse(props.id, value());
 				}}
 			>
-				<textarea class="ask-editor" ref={el} aria-label={p().title} value={value()} onInput={e => setValue(e.currentTarget.value)} />
+				<textarea
+					class="ask-editor"
+					ref={el}
+					aria-label={p().title}
+					value={value()}
+					onInput={(e) => setValue(e.currentTarget.value)}
+				/>
 				<div class="ask-actions">
 					<button type="submit" class="send">
 						Submit

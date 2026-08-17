@@ -18,7 +18,7 @@ export const Modal: Component<{
 	/** "sheet" anchors the dialog as a full-height right-anchored side sheet. */
 	variant?: "sheet";
 	children: JSX.Element;
-}> = props => {
+}> = (props) => {
 	let box!: HTMLDivElement;
 	const titleId = `modal-title-${++modalTitleSeq}`;
 	// The element that had focus before the modal mounted; restored on close.
@@ -77,7 +77,7 @@ export const Modal: Component<{
 					aria-label={props.title ? undefined : props.ariaLabel}
 					tabindex="-1"
 					ref={box}
-					onClick={e => e.stopPropagation()}
+					onClick={(e) => e.stopPropagation()}
 				>
 					{props.title && (
 						<h2 class="modal-title" id={titleId}>

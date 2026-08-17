@@ -11,7 +11,10 @@ export function renderMarkdown(src: string): string {
  * a live tail (re-parsed per frame). Blank lines split ONLY outside fenced
  * code blocks. When `final` is true, everything is complete.
  */
-export function splitForStreaming(src: string, final: boolean): { complete: string[]; tail: string } {
+export function splitForStreaming(
+	src: string,
+	final: boolean,
+): { complete: string[]; tail: string } {
 	if (final) return { complete: src ? [src] : [], tail: "" };
 	const lines = src.split("\n");
 	const complete: string[] = [];

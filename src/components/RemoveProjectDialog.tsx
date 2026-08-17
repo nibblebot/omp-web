@@ -18,9 +18,9 @@ export const RemoveProjectDialog: Component = () => {
 	let lastTarget: string | null = null;
 
 	const target = () => state.removeProjectTarget;
-	const project = () => state.registeredProjects.find(p => p.projectId === target());
+	const project = () => state.registeredProjects.find((p) => p.projectId === target());
 	/** Referencing daemons — the removal blockers (server names these in its refusal). */
-	const blockers = () => state.daemonRoster.filter(d => d.projectId === target());
+	const blockers = () => state.daemonRoster.filter((d) => d.projectId === target());
 
 	createEffect(() => {
 		const id = target();
@@ -63,14 +63,14 @@ export const RemoveProjectDialog: Component = () => {
 		<Show when={target() !== null && project() !== undefined}>
 			<Modal title="Remove project" onClose={close}>
 				<p class="danger-confirm-body">
-					Remove <span class="worktree-evidence-path">{project()!.name}</span> from the fleet roster? Disk contents
-					stay untouched — this only deregisters the project.
+					Remove <span class="worktree-evidence-path">{project()!.name}</span> from the fleet
+					roster? Disk contents stay untouched — this only deregisters the project.
 				</p>
 				<Show when={blockers().length > 0}>
 					<div class="worktree-blockers">
 						<span class="daemon-detail-label">referenced by</span>
 						<For each={blockers()}>
-							{d => (
+							{(d) => (
 								<span class="daemon-chip" title={d.cwd}>
 									{d.name} ({d.status})
 								</span>

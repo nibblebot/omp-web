@@ -4,7 +4,23 @@ import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "../shared/protocol";
-import type { ClientCommand, DaemonEntry, DaemonInfo, DaemonStatus, ImageArg, ModelInfo, AvailableSlashCommand, ProjectBranch, ProjectEntry, RegisteredProject, WebMethodName, WebSessionState, ServerFrame, SessionListEntry, SettingsModel } from "../shared/protocol";
+import type {
+	ClientCommand,
+	DaemonEntry,
+	DaemonInfo,
+	DaemonStatus,
+	ImageArg,
+	ModelInfo,
+	AvailableSlashCommand,
+	ProjectBranch,
+	ProjectEntry,
+	RegisteredProject,
+	WebMethodName,
+	WebSessionState,
+	ServerFrame,
+	SessionListEntry,
+	SettingsModel,
+} from "../shared/protocol";
 import { SSE_PING_EVENT } from "../shared/sse";
 import { scanImages } from "./images";
 import type { UsageLike } from "./usage";
@@ -37,8 +53,24 @@ export type CompactionItem = {
 };
 export type ChatItem =
 	| { kind: "user"; id: number; text: string; images?: ImageArg[] }
-	| { kind: "assistant"; id: number; blocks: Block[]; usage?: UsageLike; ttft?: number; duration?: number }
-	| { kind: "tool"; id: number; toolCallId: string; name: string; args: unknown; status: ToolStatus; output: string; images?: ImageArg[] }
+	| {
+			kind: "assistant";
+			id: number;
+			blocks: Block[];
+			usage?: UsageLike;
+			ttft?: number;
+			duration?: number;
+	  }
+	| {
+			kind: "tool";
+			id: number;
+			toolCallId: string;
+			name: string;
+			args: unknown;
+			status: ToolStatus;
+			output: string;
+			images?: ImageArg[];
+	  }
 	| BashItem
 	| CompactionItem
 	| { kind: "notice"; id: number; level: string; message: string; href?: string };
@@ -168,7 +200,12 @@ export const [state, setState] = createStore({
 	computerToolEnabled: false,
 	inspectImageMode: "auto" as WebSessionState["inspectImageMode"],
 	// Live auto-retry countdown (auto_retry_start/auto_retry_end events).
-	retryInfo: null as { attempt: number; maxAttempts: number; delayMs: number; until: number } | null,
+	retryInfo: null as {
+		attempt: number;
+		maxAttempts: number;
+		delayMs: number;
+		until: number;
+	} | null,
 	// --- Server-pushed extras ---
 	availableCommands: [] as AvailableSlashCommand[],
 	availableModels: [] as ModelInfo[],
@@ -218,8 +255,10 @@ export const [state, setState] = createStore({
 	// non-null makes the picker render its "New session" top item (Esc =
 	// new session). Cleared by the picker on close/new-session.
 	sessionPickerGate: null as { daemonId: string } | null,
-	sidebarVisible: typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
-	petVisible: typeof localStorage !== "undefined" ? localStorage.getItem(PET_KEY) !== "false" : true,
+	sidebarVisible:
+		typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
+	petVisible:
+		typeof localStorage !== "undefined" ? localStorage.getItem(PET_KEY) !== "false" : true,
 	// Top-level view: "chat" (live session) or "transcripts" (historical
 	// transcripts/stats browser — only meaningful in roster mode, where the
 	// /ctl/stats API exists; the StatusBar toggle gates on sessionMode).
@@ -253,7 +292,13 @@ export const [state, setState] = createStore({
 			: false,
 	// Phase 11: /btw side-panel session. streamId routes ephemeral_delta
 	// frames to this panel; the panel never appears in the transcript.
-	btw: null as null | { question: string; reply: string; streaming: boolean; streamId: number; error?: string },
+	btw: null as null | {
+		question: string;
+		reply: string;
+		streaming: boolean;
+		streamId: number;
+		error?: string;
+	},
 	// finding #P1: aria-live announcement text — rendered into the always-mounted
 	// role="status" region in App.tsx. announce() dedupes identical consecutive
 	// text so a burst of the same transition doesn't re-announce.
@@ -280,7 +325,14 @@ function extractText(value: unknown): string {
 	if (value && typeof value === "object" && "content" in value && Array.isArray(value.content)) {
 		const parts: string[] = [];
 		for (const c of value.content) {
-			if (c && typeof c === "object" && "type" in c && c.type === "text" && "text" in c && typeof c.text === "string") {
+			if (
+				c &&
+				typeof c === "object" &&
+				"type" in c &&
+				c.type === "text" &&
+				"text" in c &&
+				typeof c.text === "string"
+			) {
 				parts.push(c.text);
 			}
 		}
@@ -299,7 +351,7 @@ type AssistantContent = Extract<AgentMessage, { role: "assistant" }>["content"];
 
 function userText(content: UserContent): string {
 	if (typeof content === "string") return tabsToSpaces(content);
-	return tabsToSpaces(content.map(c => (c.type === "text" ? c.text : "[image]")).join("\n"));
+	return tabsToSpaces(content.map((c) => (c.type === "text" ? c.text : "[image]")).join("\n"));
 }
 
 /**
@@ -321,8 +373,8 @@ function lastAssistantText(): string {
 	for (let i = state.items.length - 1; i >= 0; i--) {
 		const it = state.items[i];
 		if (it.kind === "assistant") {
-			const visible = it.blocks.filter(b => b.kind !== "thinking");
-			return (visible.length > 0 ? visible : it.blocks).map(b => b.text).join("\n\n");
+			const visible = it.blocks.filter((b) => b.kind !== "thinking");
+			return (visible.length > 0 ? visible : it.blocks).map((b) => b.text).join("\n\n");
 		}
 	}
 	return "";
@@ -374,15 +426,17 @@ export function askBtw(question: string): void {
 	setState("btw", { question: q, reply: "", streaming: true, streamId });
 	// Long-running side turn: no timeout (0); the panel's stop/close aborts it.
 	void call("runEphemeralTurn", [q], 0, streamId)
-		.then(result => {
+		.then((result) => {
 			const replyText = (result as { replyText?: string } | null)?.replyText ?? "";
-			setState("btw", prev =>
+			setState("btw", (prev) =>
 				prev && prev.streamId === streamId ? { ...prev, reply: replyText, streaming: false } : prev,
 			);
 		})
-		.catch(err => {
-			setState("btw", prev =>
-				prev && prev.streamId === streamId ? { ...prev, streaming: false, error: String(err) } : prev,
+		.catch((err) => {
+			setState("btw", (prev) =>
+				prev && prev.streamId === streamId
+					? { ...prev, streaming: false, error: String(err) }
+					: prev,
 			);
 		});
 }
@@ -397,7 +451,7 @@ export function closeBtw(): void {
 }
 
 function pushItem(item: ChatItem): void {
-	setState("items", items => [...items, item]);
+	setState("items", (items) => [...items, item]);
 }
 
 export function pushNotice(level: string, message: string, href?: string): void {
@@ -431,7 +485,11 @@ function announceIfReady(text: string): void {
  *  Deliberately NOT gated on session readiness — the roster is fleet-scoped,
  *  so a roster-mode tab with no attached session still hears its daemons come
  *  up or fall over. */
-function announceDaemonStatus(prev: DaemonEntry | undefined, name: string, status: DaemonStatus): void {
+function announceDaemonStatus(
+	prev: DaemonEntry | undefined,
+	name: string,
+	status: DaemonStatus,
+): void {
 	if (!prev || prev.status === status) return;
 	if (status === "ready" || status === "error") announce(`${name} ${status}`);
 }
@@ -441,20 +499,34 @@ export function pushCompaction(item: Omit<CompactionItem, "kind" | "id">): void 
 }
 
 /** Bang-shell/python item: appears immediately as a spinner, resolved by the call. */
-export function addBashItem(command: string, dimmed: boolean, lang: "bash" | "python" = "bash"): number {
+export function addBashItem(
+	command: string,
+	dimmed: boolean,
+	lang: "bash" | "python" = "bash",
+): number {
 	const id = nextId++;
-	pushItem({ kind: "bash", id, command, dimmed, lang, status: "running", output: "", exitCode: null, truncated: false });
+	pushItem({
+		kind: "bash",
+		id,
+		command,
+		dimmed,
+		lang,
+		status: "running",
+		output: "",
+		exitCode: null,
+		truncated: false,
+	});
 	return id;
 }
 
 /** Live chunk from the server relay: append to the in-flight item's output. */
 export function appendBashChunk(id: number, text: string): void {
 	if (!text) return;
-	const index = state.items.findIndex(it => it.kind === "bash" && it.id === id);
+	const index = state.items.findIndex((it) => it.kind === "bash" && it.id === id);
 	if (index < 0) return;
 	setState(
 		"items",
-		produce(items => {
+		produce((items) => {
 			const item = items[index];
 			// Chunks only stream while running; the completion result is
 			// authoritative and replaces the buffered output wholesale.
@@ -473,11 +545,11 @@ export interface BashResultLike {
 }
 
 export function resolveBashItem(id: number, result: BashResultLike | { error: string }): void {
-	const index = state.items.findIndex(it => it.kind === "bash" && it.id === id);
+	const index = state.items.findIndex((it) => it.kind === "bash" && it.id === id);
 	if (index < 0) return;
 	setState(
 		"items",
-		produce(items => {
+		produce((items) => {
 			const item = items[index];
 			if (item?.kind !== "bash") return;
 			item.status = "done";
@@ -499,7 +571,7 @@ export function resolveBashItem(id: number, result: BashResultLike | { error: st
 }
 
 function findToolIndex(toolCallId: string): number {
-	return state.items.findIndex(it => it.kind === "tool" && it.toolCallId === toolCallId);
+	return state.items.findIndex((it) => it.kind === "tool" && it.toolCallId === toolCallId);
 }
 
 // Token deltas are buffered and applied at most once per animation frame,
@@ -554,7 +626,7 @@ function flushDeltas(): void {
 		if (state.live.blocks[index]?.kind !== d.kind) ensureLiveBlock(index, d.kind);
 		// In-place path mutation keeps block identity stable, so <For> does not
 		// recreate LiveBlock components on every frame.
-		setState("live", "blocks", index, "text", text => text + tabsToSpaces(d.text.slice(0, cut)));
+		setState("live", "blocks", index, "text", (text) => text + tabsToSpaces(d.text.slice(0, cut)));
 		if (cut >= d.text.length) pendingDeltas.delete(index);
 		else d.text = d.text.slice(cut);
 		budget -= cut;
@@ -563,7 +635,7 @@ function flushDeltas(): void {
 }
 
 function ensureLiveBlock(contentIndex: number, kind: Block["kind"]): void {
-	setState("live", "blocks", blocks => {
+	setState("live", "blocks", (blocks) => {
 		if (blocks[contentIndex]?.kind === kind) return blocks;
 		const next = blocks.slice();
 		next[contentIndex] = { kind, text: next[contentIndex]?.text ?? "" };
@@ -575,7 +647,8 @@ function assistantBlocks(content: AssistantContent): Block[] {
 	const blocks: Block[] = [];
 	for (const c of content) {
 		if (c.type === "text") blocks.push({ kind: "text", text: tabsToSpaces(c.text) });
-		else if (c.type === "thinking") blocks.push({ kind: "thinking", text: tabsToSpaces(c.thinking) });
+		else if (c.type === "thinking")
+			blocks.push({ kind: "thinking", text: tabsToSpaces(c.thinking) });
 	}
 	return blocks;
 }
@@ -584,7 +657,9 @@ function assistantBlocks(content: AssistantContent): Block[] {
  *  the loop's resolved `intent` first, then the harness-injected `i` arg
  *  (INTENT_FIELD in pi-wire — kept a literal because pi-wire isn't a client
  *  dependency). Non-strings arrive from partial JSON; ignore them. */
-function extractWorkingIntent(e: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): string | undefined {
+function extractWorkingIntent(
+	e: Extract<AgentSessionEvent, { type: "tool_execution_start" }>,
+): string | undefined {
 	const fromEvent = typeof e.intent === "string" ? e.intent.trim() : "";
 	if (fromEvent) return fromEvent;
 	const args = e.args;
@@ -701,7 +776,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 			if (index >= 0)
 				setState(
 					"items",
-					produce(items => {
+					produce((items) => {
 						const item = items[index];
 						if (item?.kind === "tool") {
 							item.output = capTail(tabsToSpaces(extractText(e.partialResult)), 8000);
@@ -717,7 +792,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 			if (index >= 0)
 				setState(
 					"items",
-					produce(items => {
+					produce((items) => {
 						const item = items[index];
 						if (item?.kind === "tool") {
 							item.status = e.isError ? "error" : "done";
@@ -749,7 +824,11 @@ export function applyEvent(e: AgentSessionEvent): void {
 			// The event carries the full GoalModeState when available; fall back
 			// to deriving a minimal active state from the goal payload.
 			if (e.state) setState("goalModeState", e.state);
-			else setState("goalModeState", e.goal ? { enabled: true, mode: "active", goal: e.goal } : undefined);
+			else
+				setState(
+					"goalModeState",
+					e.goal ? { enabled: true, mode: "active", goal: e.goal } : undefined,
+				);
 			setState("goal", e.goal ? { objective: e.goal.objective } : null);
 			break;
 		case "auto_retry_start":
@@ -845,7 +924,12 @@ export function loadHistory(messages: AgentMessage[]): void {
 	// Phase 5: reset id sequence so newly-switched sessions don't collide with
 	// leftover ids from the prior transcript.
 	nextId = 1;
-	setState({ items: [], live: { active: false, blocks: [] }, retryInfo: null, workingIntent: undefined });
+	setState({
+		items: [],
+		live: { active: false, blocks: [] },
+		retryInfo: null,
+		workingIntent: undefined,
+	});
 	for (const msg of messages) {
 		if (msg.role === "user") {
 			const images = scanImages(msg.content);
@@ -886,7 +970,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 			if (index >= 0) {
 				setState(
 					"items",
-					produce(items => {
+					produce((items) => {
 						const item = items[index];
 						if (item?.kind === "tool") {
 							item.output = output;
@@ -958,7 +1042,10 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 export const DEBUG_RING_CAP = 300;
 
 function pushDebug(level: DebugLevel, source: DebugEntry["source"], message: string): void {
-	setState("debugLog", log => [...log.slice(-(DEBUG_RING_CAP - 1)), { ts: Date.now(), level, source, message }]);
+	setState("debugLog", (log) => [
+		...log.slice(-(DEBUG_RING_CAP - 1)),
+		{ ts: Date.now(), level, source, message },
+	]);
 }
 
 // Transport (OMP_PROTO 2): EventSource downlink on GET /events (frame events),
@@ -1050,9 +1137,13 @@ export const clientId = crypto.randomUUID();
 function postCommand(cmd: ClientCommand): Promise<void> {
 	return fetch("/command", {
 		method: "POST",
-		headers: { "Content-Type": "application/json", "X-Omp-Client-Id": clientId, ...(token !== null ? { Authorization: `Bearer ${token}` } : {}) },
+		headers: {
+			"Content-Type": "application/json",
+			"X-Omp-Client-Id": clientId,
+			...(token !== null ? { Authorization: `Bearer ${token}` } : {}),
+		},
 		body: JSON.stringify(cmd),
-	}).then(res => {
+	}).then((res) => {
 		if (!res.ok) {
 			pushDebug("error", "command", `command "${cmd.type}" rejected (HTTP ${res.status})`);
 			throw new Error(`command "${cmd.type}" rejected (HTTP ${res.status})`);
@@ -1067,7 +1158,10 @@ if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__ompSta
 // call() relay: id-keyed promise map resolved by matching call_result frames.
 // ---------------------------------------------------------------------------
 let nextCallId = 1;
-const pendingCalls = new Map<string, { resolve: (data: unknown) => void; reject: (err: Error) => void; timer: number }>();
+const pendingCalls = new Map<
+	string,
+	{ resolve: (data: unknown) => void; reject: (err: Error) => void; timer: number }
+>();
 
 function rejectPendingCalls(err: Error): void {
 	for (const [id, p] of pendingCalls) {
@@ -1077,7 +1171,12 @@ function rejectPendingCalls(err: Error): void {
 	}
 }
 
-export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30_000, streamId?: number): Promise<unknown> {
+export function call(
+	method: WebMethodName,
+	args: unknown[] = [],
+	timeoutMs = 30_000,
+	streamId?: number,
+): Promise<unknown> {
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	if (!connected) {
 		reject(new Error("Not connected"));
@@ -1095,7 +1194,13 @@ export function call(method: WebMethodName, args: unknown[] = [], timeoutMs = 30
 	pendingCalls.set(id, { resolve, reject, timer });
 	// streamId tags server-side bash/python chunk frames so the client can
 	// route them to the in-flight chat item (the bash item id).
-	postCommand({ type: "call", id, method, args, ...(streamId !== undefined ? { streamId } : {}) } satisfies ClientCommand).catch(err => {
+	postCommand({
+		type: "call",
+		id,
+		method,
+		args,
+		...(streamId !== undefined ? { streamId } : {}),
+	} satisfies ClientCommand).catch((err) => {
 		pendingCalls.delete(id);
 		clearTimeout(timer);
 		reject(err instanceof Error ? err : new Error(String(err)));
@@ -1134,14 +1239,14 @@ export function refreshSettings(): void {
 	setState("settingsLoading", true);
 	const load = fleetSettingsActive()
 		? fetch("/ctl/settings")
-				.then(async res => {
+				.then(async (res) => {
 					if (!res.ok) throw await ctlError(res);
 					return (await res.json()) as SettingsModel;
 				})
-				.then(m => setState("settingsModel", m))
-		: call("getSettings").then(m => setState("settingsModel", m as SettingsModel));
+				.then((m) => setState("settingsModel", m))
+		: call("getSettings").then((m) => setState("settingsModel", m as SettingsModel));
 	load
-		.catch(err => setState("error", String(err)))
+		.catch((err) => setState("error", String(err)))
 		.finally(() => setState("settingsLoading", false));
 }
 
@@ -1153,17 +1258,17 @@ export function updateSetting(path: string, value: unknown): void {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ path, value }),
 		})
-			.then(async res => {
+			.then(async (res) => {
 				if (!res.ok) throw await ctlError(res);
 				return (await res.json()) as SettingsModel;
 			})
-			.then(m => setState("settingsModel", m))
-			.catch(err => setState("error", String(err)));
+			.then((m) => setState("settingsModel", m))
+			.catch((err) => setState("error", String(err)));
 		return;
 	}
 	call("setSetting", [path, value])
-		.then(m => setState("settingsModel", m as SettingsModel))
-		.catch(err => setState("error", String(err)));
+		.then((m) => setState("settingsModel", m as SettingsModel))
+		.catch((err) => setState("error", String(err)));
 }
 
 /** Payload delivered into the PromptBox textarea (and image tray) by QueueBar/HistorySearch. */
@@ -1181,11 +1286,11 @@ export const [promptInsert, setPromptInsert] = createSignal<PromptInsert | null>
 /** Phase 7: pop the last queued message back into the prompt (QueueBar ×, Alt+↑). */
 export function dequeueLastQueued(): void {
 	void call("popLastQueuedMessage")
-		.then(restored => {
+		.then((restored) => {
 			const msg = restored as { text: string; images?: ImageArg[] } | undefined;
 			if (msg) setPromptInsert({ text: msg.text, images: msg.images });
 		})
-		.catch(err => setState("error", String(err)));
+		.catch((err) => setState("error", String(err)));
 }
 
 // list_sessions / list_files carry no id on the wire; with a single user,
@@ -1201,11 +1306,13 @@ export function listSessions(): Promise<SessionListEntry[]> {
 	}
 	pendingSessions?.([]);
 	pendingSessions = resolve;
-	postCommand({ type: "list_sessions", id: crypto.randomUUID() } satisfies ClientCommand).catch(err => {
-		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
-		if (pendingSessions === resolve) pendingSessions = null;
-		reject(err instanceof Error ? err : new Error(String(err)));
-	});
+	postCommand({ type: "list_sessions", id: crypto.randomUUID() } satisfies ClientCommand).catch(
+		(err) => {
+			// Latest-wins: only clear the slot if a newer request hasn't claimed it.
+			if (pendingSessions === resolve) pendingSessions = null;
+			reject(err instanceof Error ? err : new Error(String(err)));
+		},
+	);
 	return promise;
 }
 
@@ -1217,7 +1324,12 @@ export function listFiles(query: string, limit?: number): Promise<string[]> {
 	}
 	pendingFiles?.([]);
 	pendingFiles = resolve;
-	postCommand({ type: "list_files", id: crypto.randomUUID(), query, limit } satisfies ClientCommand).catch(err => {
+	postCommand({
+		type: "list_files",
+		id: crypto.randomUUID(),
+		query,
+		limit,
+	} satisfies ClientCommand).catch((err) => {
 		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
 		if (pendingFiles === resolve) pendingFiles = null;
 		reject(err instanceof Error ? err : new Error(String(err)));
@@ -1242,11 +1354,13 @@ export function listProjects(): Promise<ProjectEntry[]> {
 	}
 	pendingProjects?.([]);
 	pendingProjects = resolve;
-	postCommand({ type: "list_projects", id: crypto.randomUUID() } satisfies ClientCommand).catch(err => {
-		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
-		if (pendingProjects === resolve) pendingProjects = null;
-		reject(err instanceof Error ? err : new Error(String(err)));
-	});
+	postCommand({ type: "list_projects", id: crypto.randomUUID() } satisfies ClientCommand).catch(
+		(err) => {
+			// Latest-wins: only clear the slot if a newer request hasn't claimed it.
+			if (pendingProjects === resolve) pendingProjects = null;
+			reject(err instanceof Error ? err : new Error(String(err)));
+		},
+	);
 	return promise;
 }
 
@@ -1254,7 +1368,8 @@ export function listProjects(): Promise<ProjectEntry[]> {
  *  list_project_branches with one `project_branches` unicast frame, so a
  *  superseded request is resolved [] immediately (its frame, if it arrives,
  *  carries the OLD projectId and is left pending). */
-let pendingBranches: { projectId: string; resolve: (branches: ProjectBranch[]) => void } | null = null;
+let pendingBranches: { projectId: string; resolve: (branches: ProjectBranch[]) => void } | null =
+	null;
 
 /** List the local branches of a registered project (feeds the add-worktree
  *  branch picker; checkedOut branches cannot be checked out again). */
@@ -1266,7 +1381,11 @@ export function listProjectBranches(projectId: string): Promise<ProjectBranch[]>
 	}
 	pendingBranches?.resolve([]);
 	pendingBranches = { projectId, resolve };
-	postCommand({ type: "list_project_branches", id: crypto.randomUUID(), projectId } satisfies ClientCommand).catch(err => {
+	postCommand({
+		type: "list_project_branches",
+		id: crypto.randomUUID(),
+		projectId,
+	} satisfies ClientCommand).catch((err) => {
 		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
 		if (pendingBranches?.resolve === resolve) pendingBranches = null;
 		reject(err instanceof Error ? err : new Error(String(err)));
@@ -1290,19 +1409,31 @@ export function spawnDaemon(cwd: string, template?: string, labels?: string[]): 
 /** Wake an asleep daemon (spawned → respawn --resume; attached/remote → redial). */
 export function spawnResume(daemonId: string): void {
 	if (!connected) return;
-	void postCommand({ type: "spawn_resume", id: crypto.randomUUID(), daemonId } satisfies ClientCommand).catch(() => {});
+	void postCommand({
+		type: "spawn_resume",
+		id: crypto.randomUUID(),
+		daemonId,
+	} satisfies ClientCommand).catch(() => {});
 }
 
 /** Stop a daemon (spawned → terminate child; attached/remote → drop + asleep). */
 export function stopDaemonById(daemonId: string): void {
 	if (!connected) return;
-	void postCommand({ type: "stop", id: crypto.randomUUID(), daemonId } satisfies ClientCommand).catch(() => {});
+	void postCommand({
+		type: "stop",
+		id: crypto.randomUUID(),
+		daemonId,
+	} satisfies ClientCommand).catch(() => {});
 }
 
 /** Stop a daemon AND evict it from the fleet roster (registry removal). */
 export function removeDaemonById(daemonId: string): void {
 	if (!connected) return;
-	void postCommand({ type: "remove", id: crypto.randomUUID(), daemonId } satisfies ClientCommand).catch(() => {});
+	void postCommand({
+		type: "remove",
+		id: crypto.randomUUID(),
+		daemonId,
+	} satisfies ClientCommand).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1321,7 +1452,10 @@ const PICKER_GATE_ARMED = "__picker_gate_armed__";
 /** Register a first-class project with the fleet (realpath-keyed, deduped
  *  edge-side). start:true also spawns a daemon on the main checkout and
  *  arms the post-attach picker gate. */
-export function sendAddProject(path: string, opts: { start?: boolean; template?: string; labels?: string[] } = {}): void {
+export function sendAddProject(
+	path: string,
+	opts: { start?: boolean; template?: string; labels?: string[] } = {},
+): void {
 	if (!connected) return;
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
@@ -1338,13 +1472,21 @@ export function sendAddProject(path: string, opts: { start?: boolean; template?:
  *  any daemon references it. */
 export function sendRemoveProject(projectId: string): void {
 	if (!connected) return;
-	void postCommand({ type: "remove_project", id: crypto.randomUUID(), projectId } satisfies ClientCommand).catch(() => {});
+	void postCommand({
+		type: "remove_project",
+		id: crypto.randomUUID(),
+		projectId,
+	} satisfies ClientCommand).catch(() => {});
 }
 
 /** Create a managed worktree under workspaceDir (branch = slugified name
  *  unless baseRef/existingBranch override) and optionally spawn a daemon on
  *  it (start:true arms the post-attach picker gate). */
-export function sendCreateWorktree(projectId: string, name: string, opts: { baseRef?: string; existingBranch?: string; start?: boolean } = {}): void {
+export function sendCreateWorktree(
+	projectId: string,
+	name: string,
+	opts: { baseRef?: string; existingBranch?: string; start?: boolean } = {},
+): void {
 	if (!connected) return;
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
@@ -1360,7 +1502,11 @@ export function sendCreateWorktree(projectId: string, name: string, opts: { base
 
 /** Register an existing discovered worktree of a project and optionally
  *  spawn a daemon on it (start:true arms the post-attach picker gate). */
-export function sendAddExistingWorktree(projectId: string, worktreePath: string, opts: { start?: boolean } = {}): void {
+export function sendAddExistingWorktree(
+	projectId: string,
+	worktreePath: string,
+	opts: { start?: boolean } = {},
+): void {
 	if (!connected) return;
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
@@ -1389,7 +1535,11 @@ export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: bool
  *  state.worktreeDeleteInfo[daemonId] (worktree_delete_info unicast). */
 export function sendWorktreeDeleteInfo(daemonId: string): void {
 	if (!connected) return;
-	void postCommand({ type: "worktree_delete_info", id: crypto.randomUUID(), daemonId } satisfies ClientCommand).catch(() => {});
+	void postCommand({
+		type: "worktree_delete_info",
+		id: crypto.randomUUID(),
+		daemonId,
+	} satisfies ClientCommand).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1402,11 +1552,15 @@ export function sendWorktreeDeleteInfo(daemonId: string): void {
 // (`worktreeOf ?? project`, localeCompare, main checkouts first).
 // ---------------------------------------------------------------------------
 
-export function daemonsByProject(): { project: RegisteredProject | null; daemons: DaemonEntry[] }[] {
-	const groups: { project: RegisteredProject | null; daemons: DaemonEntry[] }[] = state.registeredProjects.map(project => ({
-		project,
-		daemons: [],
-	}));
+export function daemonsByProject(): {
+	project: RegisteredProject | null;
+	daemons: DaemonEntry[];
+}[] {
+	const groups: { project: RegisteredProject | null; daemons: DaemonEntry[] }[] =
+		state.registeredProjects.map((project) => ({
+			project,
+			daemons: [],
+		}));
 	const byProjectId = new Map(state.registeredProjects.map((p, i) => [p.projectId, i]));
 	const unregistered: DaemonEntry[] = [];
 	for (const d of state.daemonRoster) {
@@ -1416,7 +1570,10 @@ export function daemonsByProject(): { project: RegisteredProject | null; daemons
 	}
 	for (const g of groups) {
 		const all = g.daemons;
-		g.daemons = [...all.filter(d => d.worktreeOf === undefined), ...all.filter(d => d.worktreeOf !== undefined)];
+		g.daemons = [
+			...all.filter((d) => d.worktreeOf === undefined),
+			...all.filter((d) => d.worktreeOf !== undefined),
+		];
 	}
 	// Trailing fallback group: replicate the retired sidebar's string grouping.
 	const byRepo = new Map<string, DaemonEntry[]>();
@@ -1429,7 +1586,10 @@ export function daemonsByProject(): { project: RegisteredProject | null; daemons
 	const fallback: DaemonEntry[] = [];
 	for (const key of [...byRepo.keys()].sort((a, b) => a.localeCompare(b))) {
 		const all = byRepo.get(key)!;
-		fallback.push(...all.filter(d => d.worktreeOf === undefined), ...all.filter(d => d.worktreeOf !== undefined));
+		fallback.push(
+			...all.filter((d) => d.worktreeOf === undefined),
+			...all.filter((d) => d.worktreeOf !== undefined),
+		);
 	}
 	if (fallback.length > 0) groups.push({ project: null, daemons: fallback });
 	return groups;
@@ -1438,7 +1598,12 @@ export function daemonsByProject(): { project: RegisteredProject | null; daemons
 export function sendLoginCode(requestId: string, code: string): void {
 	setState("loginCodeRequest", null);
 	if (!connected) return;
-	void postCommand({ type: "login_code", id: crypto.randomUUID(), requestId, code } satisfies ClientCommand).catch(() => {});
+	void postCommand({
+		type: "login_code",
+		id: crypto.randomUUID(),
+		requestId,
+		code,
+	} satisfies ClientCommand).catch(() => {});
 }
 
 // Phase 3: answer the server's ui_request (ExtensionUIContext dialogs).
@@ -1479,7 +1644,12 @@ export function abortSubagent(agentId: string): Promise<unknown> {
 // id never sends the keyed frame — the DAEMON_TIMEOUT_MS backstop settles
 // the waiter then (#31-style pending map).
 // ---------------------------------------------------------------------------
-let pendingAttach: { id: string; resolve: (sessionId: string) => void; reject: (err: Error) => void; timer: number } | null = null;
+let pendingAttach: {
+	id: string;
+	resolve: (sessionId: string) => void;
+	reject: (err: Error) => void;
+	timer: number;
+} | null = null;
 
 type AttachCmd = Extract<ClientCommand, { type: "attach" }>;
 
@@ -1506,13 +1676,14 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 					if (pendingAttach?.id === id) {
 						pendingAttach = null;
 						// The armed gate's attach failed — disarm it.
-						if (state.pendingSessionPicker === cmd.sessionId) setState("pendingSessionPicker", null);
+						if (state.pendingSessionPicker === cmd.sessionId)
+							setState("pendingSessionPicker", null);
 						reject(new Error("attach timed out"));
 					}
 				}, DAEMON_TIMEOUT_MS)
 			: 0;
 	pendingAttach = { id, resolve, reject, timer };
-	postCommand(cmd).catch(err => {
+	postCommand(cmd).catch((err) => {
 		if (pendingAttach?.id === id) {
 			clearTimeout(pendingAttach.timer);
 			pendingAttach = null;
@@ -1541,8 +1712,14 @@ export function attachSession(sessionId: string): Promise<string> {
 export type DaemonLogsResult = { text: string; cursor: number; state: string };
 
 let nextDaemonCallId = 1;
-const pendingDaemonLogs = new Map<string, { resolve: (r: DaemonLogsResult) => void; reject: (err: Error) => void; timer: number }>();
-const pendingDaemonControl = new Map<string, { resolve: (d: DaemonInfo) => void; reject: (err: Error) => void; timer: number }>();
+const pendingDaemonLogs = new Map<
+	string,
+	{ resolve: (r: DaemonLogsResult) => void; reject: (err: Error) => void; timer: number }
+>();
+const pendingDaemonControl = new Map<
+	string,
+	{ resolve: (d: DaemonInfo) => void; reject: (err: Error) => void; timer: number }
+>();
 
 function rejectPendingDaemons(err: Error): void {
 	for (const [id, p] of pendingDaemonLogs) {
@@ -1559,7 +1736,10 @@ function rejectPendingDaemons(err: Error): void {
 
 type DaemonControlCmd = Extract<ClientCommand, { type: "daemon_stop" | "daemon_restart" }>;
 type DaemonLogsCmd = Extract<ClientCommand, { type: "daemon_logs" }>;
-type DaemonPending<T> = Map<string, { resolve: (v: T) => void; reject: (err: Error) => void; timer: number }>;
+type DaemonPending<T> = Map<
+	string,
+	{ resolve: (v: T) => void; reject: (err: Error) => void; timer: number }
+>;
 
 const DAEMON_TIMEOUT_MS = 30_000;
 
@@ -1600,7 +1780,7 @@ export function requestDaemonLogs(
 		...(opts.grep !== undefined ? { grep: opts.grep } : {}),
 	};
 	const { id, timer } = registerDaemonPending<DaemonLogsResult>(resolve, reject, pendingDaemonLogs);
-	postCommand({ ...cmd, id } satisfies ClientCommand).catch(err => {
+	postCommand({ ...cmd, id } satisfies ClientCommand).catch((err) => {
 		pendingDaemonLogs.delete(id);
 		clearTimeout(timer);
 		reject(err instanceof Error ? err : new Error(String(err)));
@@ -1615,9 +1795,13 @@ export function stopDaemon(projectDir: string, name: string): Promise<DaemonInfo
 		reject(new Error("Not connected"));
 		return promise;
 	}
-	const cmd: Omit<Extract<ClientCommand, { type: "daemon_stop" }>, "id"> = { type: "daemon_stop", projectDir, name };
+	const cmd: Omit<Extract<ClientCommand, { type: "daemon_stop" }>, "id"> = {
+		type: "daemon_stop",
+		projectDir,
+		name,
+	};
 	const { id, timer } = registerDaemonPending<DaemonInfo>(resolve, reject, pendingDaemonControl);
-	postCommand({ ...cmd, id } satisfies ClientCommand).catch(err => {
+	postCommand({ ...cmd, id } satisfies ClientCommand).catch((err) => {
 		pendingDaemonControl.delete(id);
 		clearTimeout(timer);
 		reject(err instanceof Error ? err : new Error(String(err)));
@@ -1632,9 +1816,13 @@ export function restartDaemon(projectDir: string, name: string): Promise<DaemonI
 		reject(new Error("Not connected"));
 		return promise;
 	}
-	const cmd: Omit<Extract<ClientCommand, { type: "daemon_restart" }>, "id"> = { type: "daemon_restart", projectDir, name };
+	const cmd: Omit<Extract<ClientCommand, { type: "daemon_restart" }>, "id"> = {
+		type: "daemon_restart",
+		projectDir,
+		name,
+	};
 	const { id, timer } = registerDaemonPending<DaemonInfo>(resolve, reject, pendingDaemonControl);
-	postCommand({ ...cmd, id } satisfies ClientCommand).catch(err => {
+	postCommand({ ...cmd, id } satisfies ClientCommand).catch((err) => {
 		pendingDaemonControl.delete(id);
 		clearTimeout(timer);
 		reject(err instanceof Error ? err : new Error(String(err)));
@@ -1717,9 +1905,10 @@ export function connect(): void {
 		// "not attached" until the browser picks a daemon. The attached handler
 		// pulls getSubagents. On a roster-mode RECONNECT the edge has no attach
 		// memory — re-attach to the daemon we were viewing.
-		if (state.sessionMode === "roster" && state.currentSessionId) void attachSession(state.currentSessionId).catch(() => {});
+		if (state.sessionMode === "roster" && state.currentSessionId)
+			void attachSession(state.currentSessionId).catch(() => {});
 	};
-	source.addEventListener(SSE_EVENT_NAME, ev => {
+	source.addEventListener(SSE_EVENT_NAME, (ev) => {
 		armSilenceTimer(); // any downlink activity means the peer is alive
 		setState("lastFrameAt", Date.now());
 		const frame = JSON.parse(String((ev as MessageEvent).data)) as ServerFrame;
@@ -1764,7 +1953,7 @@ export function connect(): void {
 			// switch, roster re-attach after reconnect) — calls are answered only
 			// once attached, so this is the earliest safe point.
 			void call("getSubagents")
-				.then(subs => {
+				.then((subs) => {
 					const next = new Map<string, SubagentInfo>();
 					for (const s of subs as SubagentInfo[]) if (s.id) next.set(s.id, s);
 					setState("subagents", next);
@@ -1778,7 +1967,12 @@ export function connect(): void {
 		// always pass — there is nothing to mismatch. attach_result is a unicast
 		// answer whose sessionId is the ATTACHED daemonId (finding #28) and must
 		// pass too — id-matching against pendingAttach handles staleness.
-		if (frame.type !== "attach_result" && "sessionId" in frame && frame.sessionId !== state.currentSessionId) return;
+		if (
+			frame.type !== "attach_result" &&
+			"sessionId" in frame &&
+			frame.sessionId !== state.currentSessionId
+		)
+			return;
 		// Replay-dedup guard (finding #2): a delta live-delivered during the
 		// paced prime is re-sent verbatim by the ring replay. Its seq was seen
 		// on this connection already, so the second copy is the replay — drop
@@ -1797,11 +1991,15 @@ export function connect(): void {
 					pendingHistory = null;
 					loadHistory(frame.messages);
 				} else if (frame.final) {
-					const all = pendingHistory === null ? frame.messages : pendingHistory.concat(frame.messages);
+					const all =
+						pendingHistory === null ? frame.messages : pendingHistory.concat(frame.messages);
 					pendingHistory = null;
 					loadHistory(all);
 				} else {
-					pendingHistory = pendingHistory === null ? frame.messages.slice() : pendingHistory.concat(frame.messages);
+					pendingHistory =
+						pendingHistory === null
+							? frame.messages.slice()
+							: pendingHistory.concat(frame.messages);
 				}
 				break;
 			}
@@ -1827,7 +2025,7 @@ export function connect(): void {
 				// Phase 11: /btw side-panel stream; route by streamId, ignore
 				// stale frames from a superseded question.
 				if (state.btw?.streaming && frame.id === state.btw.streamId) {
-					setState("btw", "reply", reply => reply + frame.text);
+					setState("btw", "reply", (reply) => reply + frame.text);
 				}
 				break;
 			}
@@ -1855,7 +2053,10 @@ export function connect(): void {
 					// its sessions to decide new-vs-resume; the sessions answer
 					// clears the gate (the flag stays set until then).
 					if (state.pendingSessionPicker === frame.sessionId) {
-						void postCommand({ type: "list_sessions", id: crypto.randomUUID() } satisfies ClientCommand).catch(() => {});
+						void postCommand({
+							type: "list_sessions",
+							id: crypto.randomUUID(),
+						} satisfies ClientCommand).catch(() => {});
 					} else if (state.pendingSessionPicker !== null) {
 						// An armed gate settled against a DIFFERENT daemon: the
 						// onboarding attach was superseded — disarm so it can't
@@ -1889,12 +2090,17 @@ export function connect(): void {
 						setState("modal", "sessions");
 					} else {
 						// Same path /new uses to start a new session.
-						void call("newSession").catch(err => setState("error", String(err)));
+						void call("newSession").catch((err) => setState("error", String(err)));
 					}
 				}
 				break;
 			case "daemons":
-				setState("daemons", new Map((frame.daemons as DaemonInfo[] | undefined ?? []).map(d => [daemonsKey(d), d])));
+				setState(
+					"daemons",
+					new Map(
+						((frame.daemons as DaemonInfo[] | undefined) ?? []).map((d) => [daemonsKey(d), d]),
+					),
+				);
 				break;
 			case "roster": {
 				// finding #P1: diff the replacement roster against what we had —
@@ -1902,7 +2108,11 @@ export function connect(): void {
 				// ready/error announce.
 				const rosterBefore = state.daemonRoster;
 				for (const entry of frame.daemons) {
-					announceDaemonStatus(rosterBefore.find(d => d.daemonId === entry.daemonId), entry.name, entry.status);
+					announceDaemonStatus(
+						rosterBefore.find((d) => d.daemonId === entry.daemonId),
+						entry.name,
+						entry.status,
+					);
 				}
 				// The fleet edge sent its daemon roster — this tab is in
 				// roster mode (sidebar swaps to the session list). The attached
@@ -1914,20 +2124,28 @@ export function connect(): void {
 				// those fields, so they flow through wholesale with the array.
 				setState("daemonRoster", frame.daemons);
 				setState("sessionMode", "roster");
-				pushDebug("info", "roster", `roster frame: ${frame.daemons.length} daemon${frame.daemons.length === 1 ? "" : "s"}`);
+				pushDebug(
+					"info",
+					"roster",
+					`roster frame: ${frame.daemons.length} daemon${frame.daemons.length === 1 ? "" : "s"}`,
+				);
 				break;
 			}
 			case "daemon_status": {
 				// finding #P1: announce the transition to a terminal rung
 				// (ready/error) before patching the entry in place.
-				const daemonBefore = state.daemonRoster.find(d => d.daemonId === frame.daemonId);
+				const daemonBefore = state.daemonRoster.find((d) => d.daemonId === frame.daemonId);
 				announceDaemonStatus(daemonBefore, daemonBefore?.name ?? frame.daemonId, frame.status);
 				// Patch the matching roster entry in place; the error field
 				// clears unless the frame carries a fresh one.
-				setState("daemonRoster", roster =>
-					roster.map(d =>
+				setState("daemonRoster", (roster) =>
+					roster.map((d) =>
 						d.daemonId === frame.daemonId
-							? { ...d, status: frame.status, ...(frame.error !== undefined ? { error: frame.error } : { error: undefined }) }
+							? {
+									...d,
+									status: frame.status,
+									...(frame.error !== undefined ? { error: frame.error } : { error: undefined }),
+								}
 							: d,
 					),
 				);
@@ -1961,14 +2179,19 @@ export function connect(): void {
 				// Phase 5: unicast guard evidence for the delete-worktree
 				// confirm, keyed by daemonId (latest-wins like the frames
 				// above; fleet-scoped).
-				setState("worktreeDeleteInfo", prev => ({ ...prev, [frame.daemonId]: frame }));
+				setState("worktreeDeleteInfo", (prev) => ({ ...prev, [frame.daemonId]: frame }));
 				break;
 			case "daemon_logs_result": {
 				const pending = pendingDaemonLogs.get(frame.id);
 				if (!pending) break; // unknown id (timed out or stale): ignore
 				pendingDaemonLogs.delete(frame.id);
 				clearTimeout(pending.timer);
-				if (frame.ok && frame.text !== undefined && frame.cursor !== undefined && frame.state !== undefined) {
+				if (
+					frame.ok &&
+					frame.text !== undefined &&
+					frame.cursor !== undefined &&
+					frame.state !== undefined
+				) {
 					pending.resolve({ text: frame.text, cursor: frame.cursor, state: frame.state });
 				} else {
 					pending.reject(new Error(frame.error ?? "daemon logs failed"));
@@ -1991,7 +2214,7 @@ export function connect(): void {
 			case "subagent_lifecycle": {
 				const p = frame.payload as Partial<SubagentInfo> | undefined;
 				if (!p?.id) break;
-				setState("subagents", prev => {
+				setState("subagents", (prev) => {
 					const next = new Map(prev);
 					const existing = next.get(p.id as string);
 					// Finding #30: progress frames can arrive BEFORE the lifecycle
@@ -2010,18 +2233,27 @@ export function connect(): void {
 						task: existing?.task ?? placeholder?.task,
 						status: p.status ?? placeholder?.status ?? "started",
 						lastUpdate: Date.now(),
-						parentToolCallId: p.parentToolCallId ?? existing?.parentToolCallId ?? placeholder?.parentToolCallId,
+						parentToolCallId:
+							p.parentToolCallId ?? existing?.parentToolCallId ?? placeholder?.parentToolCallId,
 					});
 					return next;
 				});
 				break;
 			}
 			case "subagent_progress": {
-				const p = frame.payload as { index?: number; agent?: string; task?: string; progress?: { status?: string }; parentToolCallId?: string } | undefined;
+				const p = frame.payload as
+					| {
+							index?: number;
+							agent?: string;
+							task?: string;
+							progress?: { status?: string };
+							parentToolCallId?: string;
+					  }
+					| undefined;
 				if (p?.index === undefined) break;
-				setState("subagents", prev => {
+				setState("subagents", (prev) => {
 					const next = new Map(prev);
-					let key = [...next.keys()].find(k => next.get(k)?.index === p.index);
+					let key = [...next.keys()].find((k) => next.get(k)?.index === p.index);
 					if (!key) {
 						key = `progress-${p.index}`;
 						next.set(key, {
@@ -2050,10 +2282,18 @@ export function connect(): void {
 			case "login_url":
 				// No window.open here: async WS frames lack user activation and the
 				// popup would be blocked. LoginPanel owns the tab handoff.
-				setState("loginUrl", { url: frame.url, launchUrl: frame.launchUrl, instructions: frame.instructions });
+				setState("loginUrl", {
+					url: frame.url,
+					launchUrl: frame.launchUrl,
+					instructions: frame.instructions,
+				});
 				break;
 			case "login_code_request":
-				setState("loginCodeRequest", { requestId: frame.requestId, title: frame.title, placeholder: frame.placeholder });
+				setState("loginCodeRequest", {
+					requestId: frame.requestId,
+					title: frame.title,
+					placeholder: frame.placeholder,
+				});
 				break;
 			case "ui_request":
 				// Replace-with-warning: a second dialog supersedes the open one.
@@ -2097,8 +2337,15 @@ export function connect(): void {
 				// reconnect (the backoff loop in onerror would otherwise hot-loop
 				// against an undrivable daemon).
 				if (frame.proto !== OMP_PROTO) {
-					setState("error", `proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`);
-					pushDebug("error", "transport", `proto mismatch: daemon speaks ${String(frame.proto)}, expected ${OMP_PROTO}`);
+					setState(
+						"error",
+						`proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`,
+					);
+					pushDebug(
+						"error",
+						"transport",
+						`proto mismatch: daemon speaks ${String(frame.proto)}, expected ${OMP_PROTO}`,
+					);
 					teardownStream(source);
 					return;
 				}

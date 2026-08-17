@@ -32,7 +32,12 @@ function usage(): string {
 }
 
 function parseArgs(argv: string[]): Options | null {
-	const opts: Options = { port: Number(process.env.OMP_SESSION_PORT ?? 4721), join: false, view: false, stop: false };
+	const opts: Options = {
+		port: Number(process.env.OMP_SESSION_PORT ?? 4721),
+		join: false,
+		view: false,
+		stop: false,
+	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		switch (arg) {
@@ -70,7 +75,10 @@ function parseArgs(argv: string[]): Options | null {
  * collector as they arrive. Loopback is R14-exempt, so no token is needed.
  */
 function openEvents(port: number): Promise<{ close: () => void; frames: FrameCollector }> {
-	const { promise, resolve, reject } = Promise.withResolvers<{ close: () => void; frames: FrameCollector }>();
+	const { promise, resolve, reject } = Promise.withResolvers<{
+		close: () => void;
+		frames: FrameCollector;
+	}>();
 	const controller = new AbortController();
 	const frames: FrameCollector = { statuses: [], errors: [] };
 	const timer = setTimeout(() => {
@@ -175,11 +183,13 @@ async function main(): Promise<number> {
 		try {
 			await waitUntil(
 				() => {
-					if (frames.statuses.some(s => s.state === "live" || s.state === "starting")) sawActive = true;
+					if (frames.statuses.some((s) => s.state === "live" || s.state === "starting"))
+						sawActive = true;
 					const error = frames.errors.length > errorBase ? frames.errors.at(-1) : undefined;
 					if (error?.includes("collab is not active")) return true;
-					if (frames.statuses.some(s => s.state === "off" && sawActive)) return true;
-					if (error && !error.includes("collab is not active")) throw new Error(`collab_stop failed: ${error}`);
+					if (frames.statuses.some((s) => s.state === "off" && sawActive)) return true;
+					if (error && !error.includes("collab is not active"))
+						throw new Error(`collab_stop failed: ${error}`);
 					return false;
 				},
 				10_000,
@@ -190,7 +200,8 @@ async function main(): Promise<number> {
 			close();
 			return 1;
 		}
-		if (frames.errors.slice(errorBase).some(e => e.includes("collab is not active"))) console.log("collab is not active");
+		if (frames.errors.slice(errorBase).some((e) => e.includes("collab is not active")))
+			console.log("collab is not active");
 		else console.log("collab stopped");
 		close();
 		return 0;
@@ -225,7 +236,11 @@ async function main(): Promise<number> {
 	return 0;
 }
 
-async function waitUntil(cond: () => boolean, timeoutMs: number, fail: () => Error): Promise<boolean> {
+async function waitUntil(
+	cond: () => boolean,
+	timeoutMs: number,
+	fail: () => Error,
+): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		if (cond()) return true;

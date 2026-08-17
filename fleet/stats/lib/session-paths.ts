@@ -14,21 +14,21 @@ import { join, sep } from "node:path";
 const rootCache = new Map<string, string | null>();
 
 export function sessionsRootReal(sessionsDir: string): string | null {
-  if (rootCache.has(sessionsDir)) return rootCache.get(sessionsDir)!;
-  let real: string;
-  try {
-    real = realpathSync.native(sessionsDir);
-  } catch {
-    rootCache.set(sessionsDir, null);
-    return null;
-  }
-  rootCache.set(sessionsDir, real);
-  return real;
+	if (rootCache.has(sessionsDir)) return rootCache.get(sessionsDir)!;
+	let real: string;
+	try {
+		real = realpathSync.native(sessionsDir);
+	} catch {
+		rootCache.set(sessionsDir, null);
+		return null;
+	}
+	rootCache.set(sessionsDir, real);
+	return real;
 }
 
 /** True when `real` is `root` itself or strictly beneath it. */
 export function isInsideRoot(root: string, real: string): boolean {
-  return real === root || real.startsWith(root + sep);
+	return real === root || real.startsWith(root + sep);
 }
 
 /**
@@ -38,14 +38,14 @@ export function isInsideRoot(root: string, real: string): boolean {
  * intermediate directory). Callers decide how to map null to a response.
  */
 export function resolveContained(sessionsDir: string, rel: string): string | null {
-  const root = sessionsRootReal(sessionsDir);
-  if (root === null) return null;
-  const abs = join(sessionsDir, rel);
-  let real: string;
-  try {
-    real = realpathSync.native(abs);
-  } catch {
-    return null;
-  }
-  return isInsideRoot(root, real) ? abs : null;
+	const root = sessionsRootReal(sessionsDir);
+	if (root === null) return null;
+	const abs = join(sessionsDir, rel);
+	let real: string;
+	try {
+		real = realpathSync.native(abs);
+	} catch {
+		return null;
+	}
+	return isInsideRoot(root, real) ? abs : null;
 }

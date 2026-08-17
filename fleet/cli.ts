@@ -84,7 +84,8 @@ function parseArgs(argv: string[]): ParsedArgs {
 			if (eq >= 0) {
 				if (BOOLEAN_FLAGS.has(name)) {
 					const value = arg.slice(eq + 1);
-					if (value !== "true" && value !== "false") throw new CliError(`invalid value for --${name}: ${value}`);
+					if (value !== "true" && value !== "false")
+						throw new CliError(`invalid value for --${name}: ${value}`);
 					put(name, value === "true");
 					continue;
 				}
@@ -204,7 +205,9 @@ async function ctl(port: number, path: string, init?: RequestInit): Promise<unkn
 	}
 	if (!res.ok) {
 		const message =
-			body !== null && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+			body !== null &&
+			typeof body === "object" &&
+			typeof (body as { error?: unknown }).error === "string"
 				? (body as { error: string }).error
 				: `HTTP ${res.status}`;
 		throw new CliError(`fleet error (${res.status}): ${message}`);
@@ -213,15 +216,26 @@ async function ctl(port: number, path: string, init?: RequestInit): Promise<unkn
 }
 
 function renderTable(headers: string[], rows: string[][]): string {
-	const widths = headers.map((header, i) => Math.max(header.length, ...rows.map((row) => row[i]?.length ?? 0)));
-	const format = (cells: string[]) => cells.map((cell, i) => cell.padEnd(widths[i])).join("  ").trimEnd();
+	const widths = headers.map((header, i) =>
+		Math.max(header.length, ...rows.map((row) => row[i]?.length ?? 0)),
+	);
+	const format = (cells: string[]) =>
+		cells
+			.map((cell, i) => cell.padEnd(widths[i]))
+			.join("  ")
+			.trimEnd();
 	return [format(headers), ...rows.map(format)].join("\n");
 }
 
 function isDaemonRow(value: unknown): value is DaemonRow {
 	if (typeof value !== "object" || value === null) return false;
 	const row = value as Record<string, unknown>;
-	return typeof row.daemonId === "string" && typeof row.name === "string" && typeof row.mode === "string" && typeof row.status === "string";
+	return (
+		typeof row.daemonId === "string" &&
+		typeof row.name === "string" &&
+		typeof row.mode === "string" &&
+		typeof row.status === "string"
+	);
 }
 
 async function serveCmd(port: number, workspaceDir?: string): Promise<number> {
@@ -236,13 +250,17 @@ async function serveCmd(port: number, workspaceDir?: string): Promise<number> {
 	const byStatus = new Map<string, number>();
 	for (const entry of restored) byStatus.set(entry.status, (byStatus.get(entry.status) ?? 0) + 1);
 	const statusSummary = [...byStatus.entries()].map(([status, n]) => `${status}: ${n}`).join(", ");
-	console.log(`fleet restored ${restored.length} session${restored.length === 1 ? "" : "s"}${statusSummary !== "" ? ` (${statusSummary})` : ""}`);
+	console.log(
+		`fleet restored ${restored.length} session${restored.length === 1 ? "" : "s"}${statusSummary !== "" ? ` (${statusSummary})` : ""}`,
+	);
 	// Lifecycle events print as one human line per transition, enriched with
 	// the live registry facts the message alone doesn't carry (status,
 	// endpoint, pid).
 	server.eventLog.onEntry = (entry) => {
 		const daemon = entry.daemonId !== undefined ? server.registry.get(entry.daemonId) : undefined;
-		const parts = [entry.daemonId, daemon?.name, entry.message].filter((part): part is string => part !== undefined && part !== "");
+		const parts = [entry.daemonId, daemon?.name, entry.message].filter(
+			(part): part is string => part !== undefined && part !== "",
+		);
 		let line = `fleet: ${parts.join(" ")}`;
 		if (daemon) {
 			// Connector transitions carry the status as the message itself;
@@ -277,7 +295,15 @@ async function sessionsCmd(port: number): Promise<number> {
 	if (!Array.isArray(body)) throw new CliError("unexpected sessions response");
 	const rows = (body as unknown[])
 		.filter(isDaemonRow)
-		.map((entry) => [entry.daemonId, entry.name, entry.mode, entry.status, entry.project, entry.cwd ?? "", (entry.labels ?? []).join(",")]);
+		.map((entry) => [
+			entry.daemonId,
+			entry.name,
+			entry.mode,
+			entry.status,
+			entry.project,
+			entry.cwd ?? "",
+			(entry.labels ?? []).join(","),
+		]);
 	console.log(renderTable(["id", "name", "mode", "status", "project", "cwd", "labels"], rows));
 	return 0;
 }
@@ -285,14 +311,24 @@ async function sessionsCmd(port: number): Promise<number> {
 async function projectsCmd(port: number): Promise<number> {
 	const body = (await ctl(port, "/ctl/projects")) as { projects?: unknown; registered?: unknown };
 	if (!Array.isArray(body.projects)) throw new CliError("unexpected projects response");
-	const rows = (body.projects as ProjectRow[]).map((p) => [p.name, p.path, p.branch ?? "", p.worktreeOf ?? ""]);
+	const rows = (body.projects as ProjectRow[]).map((p) => [
+		p.name,
+		p.path,
+		p.branch ?? "",
+		p.worktreeOf ?? "",
+	]);
 	console.log(renderTable(["name", "path", "branch", "worktreeOf"], rows));
 	return 0;
 }
 
-async function spawnCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
+async function spawnCmd(
+	positionals: string[],
+	flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
 	const cwd = positionals[0];
-	if (cwd === undefined) throw new CliError("usage: omp-fleet spawn <path> [--template t] [--name n] [--label k=v]…");
+	if (cwd === undefined)
+		throw new CliError("usage: omp-fleet spawn <path> [--template t] [--name n] [--label k=v]…");
 	const body = (await ctl(port, "/ctl/spawn", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -303,14 +339,22 @@ async function spawnCmd(positionals: string[], flags: Map<string, FlagValue>, po
 			labels: labelList(flags),
 		}),
 	})) as Record<string, unknown>;
-	console.log(`spawned ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`);
+	console.log(
+		`spawned ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`,
+	);
 	return 0;
 }
 
-async function addRepoCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
+async function addRepoCmd(
+	positionals: string[],
+	flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
 	const path = positionals[0];
 	if (path === undefined) {
-		throw new CliError("usage: omp-fleet add-repo <path> [--start] [--template t] [--labels k=v,...]");
+		throw new CliError(
+			"usage: omp-fleet add-repo <path> [--start] [--template t] [--labels k=v,...]",
+		);
 	}
 	const body = (await ctl(port, "/ctl/projects", {
 		method: "POST",
@@ -332,7 +376,11 @@ async function addRepoCmd(positionals: string[], flags: Map<string, FlagValue>, 
 	return 0;
 }
 
-async function rmProjectCmd(positionals: string[], _flags: Map<string, FlagValue>, port: number): Promise<number> {
+async function rmProjectCmd(
+	positionals: string[],
+	_flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
 	const selector = positionals[0];
 	if (selector === undefined) {
 		throw new CliError("usage: omp-fleet rm-project <selector> (projectId, realpath, or basename)");
@@ -340,27 +388,43 @@ async function rmProjectCmd(positionals: string[], _flags: Map<string, FlagValue
 	// Resolve the selector client-side against the registered set: exact
 	// projectId, exact realpath (or the selector's own realpath, so a
 	// symlink/relative path still matches), or basename.
-	const body = (await ctl(port, "/ctl/projects")) as { registered?: Array<{ projectId: string; path: string; name: string }> };
+	const body = (await ctl(port, "/ctl/projects")) as {
+		registered?: Array<{ projectId: string; path: string; name: string }>;
+	};
 	if (!Array.isArray(body.registered)) throw new CliError("unexpected projects response");
 	const resolved = realpathOrNull(selector);
 	const match = body.registered.find(
-		(p) => p.projectId === selector || p.path === selector || p.name === selector || (resolved !== null && p.path === resolved),
+		(p) =>
+			p.projectId === selector ||
+			p.path === selector ||
+			p.name === selector ||
+			(resolved !== null && p.path === resolved),
 	);
-	if (match === undefined) throw new CliError(`no registered project matches selector: ${selector}`);
-	const out = (await ctl(port, `/ctl/projects/${match.projectId}`, { method: "DELETE" })) as { removed?: unknown };
+	if (match === undefined)
+		throw new CliError(`no registered project matches selector: ${selector}`);
+	const out = (await ctl(port, `/ctl/projects/${match.projectId}`, { method: "DELETE" })) as {
+		removed?: unknown;
+	};
 	console.log(`removed project ${String(out.removed)}`);
 	return 0;
 }
 
 /** Resolve a project selector (projectId, realpath, or basename) to its id. */
 async function resolveProjectId(port: number, selector: string): Promise<string> {
-	const body = (await ctl(port, "/ctl/projects")) as { registered?: Array<{ projectId: string; path: string; name: string }> };
+	const body = (await ctl(port, "/ctl/projects")) as {
+		registered?: Array<{ projectId: string; path: string; name: string }>;
+	};
 	if (!Array.isArray(body.registered)) throw new CliError("unexpected projects response");
 	const resolved = realpathOrNull(selector);
 	const match = body.registered.find(
-		(p) => p.projectId === selector || p.path === selector || p.name === selector || (resolved !== null && p.path === resolved),
+		(p) =>
+			p.projectId === selector ||
+			p.path === selector ||
+			p.name === selector ||
+			(resolved !== null && p.path === resolved),
 	);
-	if (match === undefined) throw new CliError(`no registered project matches selector: ${selector}`);
+	if (match === undefined)
+		throw new CliError(`no registered project matches selector: ${selector}`);
 	return match.projectId;
 }
 
@@ -370,7 +434,11 @@ async function resolveProjectId(port: number, selector: string): Promise<string>
  * (--no-start disables); the server registers the roster entry and spawns
  * only when start is true.
  */
-async function addWorktreeCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
+async function addWorktreeCmd(
+	positionals: string[],
+	flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
 	const project = positionals[0];
 	const name = positionals[1];
 	const existing = flagString(flags, "existing");
@@ -396,17 +464,26 @@ async function addWorktreeCmd(positionals: string[], flags: Map<string, FlagValu
 	const entry = body.entry ?? {};
 	const where = String(entry.cwd ?? existing ?? name);
 	if (existing !== undefined) {
-		console.log(`registered worktree ${where} (${String(entry.daemonId ?? "?")})${start ? ` — status ${String(entry.status ?? "?")}` : " — not started"}`);
+		console.log(
+			`registered worktree ${where} (${String(entry.daemonId ?? "?")})${start ? ` — status ${String(entry.status ?? "?")}` : " — not started"}`,
+		);
 	} else {
-		console.log(`created worktree ${where} (${String(entry.daemonId ?? "?")})${start ? ` — status ${String(entry.status ?? "?")}` : " — not started"}`);
+		console.log(
+			`created worktree ${where} (${String(entry.daemonId ?? "?")})${start ? ` — status ${String(entry.status ?? "?")}` : " — not started"}`,
+		);
 	}
 	return 0;
 }
 
 /** rm-worktree <daemon-id> [--delete-branch]: stop + evict + git worktree remove. */
-async function rmWorktreeCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
+async function rmWorktreeCmd(
+	positionals: string[],
+	flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
 	const daemonId = positionals[0];
-	if (daemonId === undefined) throw new CliError("usage: omp-fleet rm-worktree <daemon-id> [--delete-branch]");
+	if (daemonId === undefined)
+		throw new CliError("usage: omp-fleet rm-worktree <daemon-id> [--delete-branch]");
 	const deleteBranch = flagBoolean(flags, "delete-branch");
 	const body = (await ctl(port, `/ctl/worktrees/${encodeURIComponent(daemonId)}`, {
 		method: "DELETE",
@@ -414,12 +491,21 @@ async function rmWorktreeCmd(positionals: string[], flags: Map<string, FlagValue
 		body: JSON.stringify(deleteBranch === true ? { deleteBranch: true } : {}),
 	})) as { removed?: unknown; worktree?: { path?: string; branch?: string } };
 	const wt = body.worktree ?? {};
-	const parts = [String(wt.path ?? ""), wt.branch !== undefined ? `branch ${wt.branch}` : ""].filter((part) => part !== "");
-	console.log(`removed worktree daemon ${String(body.removed ?? daemonId)}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`);
+	const parts = [
+		String(wt.path ?? ""),
+		wt.branch !== undefined ? `branch ${wt.branch}` : "",
+	].filter((part) => part !== "");
+	console.log(
+		`removed worktree daemon ${String(body.removed ?? daemonId)}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`,
+	);
 	return 0;
 }
 
-async function addCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
+async function addCmd(
+	positionals: string[],
+	flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
 	const name = positionals[0];
 	const url = positionals[1];
 	const token = flagString(flags, "token");
@@ -437,11 +523,17 @@ async function addCmd(positionals: string[], flags: Map<string, FlagValue>, port
 			cwd: flagString(flags, "cwd"),
 		}),
 	})) as Record<string, unknown>;
-	console.log(`added ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`);
+	console.log(
+		`added ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`,
+	);
 	return 0;
 }
 
-async function provisionCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
+async function provisionCmd(
+	positionals: string[],
+	flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
 	const name = positionals[0];
 	if (name === undefined) {
 		throw new CliError("usage: omp-fleet provision <name> [--label k=v]…");
@@ -454,11 +546,17 @@ async function provisionCmd(positionals: string[], flags: Map<string, FlagValue>
 			labels: labelList(flags),
 		}),
 	})) as Record<string, unknown>;
-	console.log(`provisioned ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`);
+	console.log(
+		`provisioned ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`,
+	);
 	return 0;
 }
 
-async function stopCmd(positionals: string[], _flags: Map<string, FlagValue>, port: number): Promise<number> {
+async function stopCmd(
+	positionals: string[],
+	_flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
 	const selector = positionals[0];
 	if (selector === undefined) throw new CliError("usage: omp-fleet stop <selector>");
 	const body = (await ctl(port, "/ctl/stop", {
@@ -471,7 +569,11 @@ async function stopCmd(positionals: string[], _flags: Map<string, FlagValue>, po
 	return 0;
 }
 
-async function removeCmd(positionals: string[], _flags: Map<string, FlagValue>, port: number): Promise<number> {
+async function removeCmd(
+	positionals: string[],
+	_flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
 	const selector = positionals[0];
 	if (selector === undefined) throw new CliError("usage: omp-fleet remove <selector>");
 	const body = (await ctl(port, "/ctl/remove", {
@@ -491,7 +593,11 @@ interface PromptResultRow {
 	error?: string;
 }
 
-async function promptCmd(positionals: string[], flags: Map<string, FlagValue>, port: number): Promise<number> {
+async function promptCmd(
+	positionals: string[],
+	flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
 	const selector = positionals[0];
 	const text = positionals.slice(1).join(" ");
 	if (selector === undefined || text === "") {
@@ -500,7 +606,9 @@ async function promptCmd(positionals: string[], flags: Map<string, FlagValue>, p
 	const waitValue = flags.get("wait");
 	const waitMs = flagNumber(flags, "wait");
 	if (waitValue !== undefined && waitMs === undefined) {
-		throw new CliError("usage: prompt <selector> <text> [--wait <ms>] — --wait requires a millisecond value");
+		throw new CliError(
+			"usage: prompt <selector> <text> [--wait <ms>] — --wait requires a millisecond value",
+		);
 	}
 	if (waitMs === undefined) {
 		// Fire-and-forget: server dispatches without awaiting the turn.

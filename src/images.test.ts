@@ -10,10 +10,7 @@ describe("scanImages", () => {
 
 	test("walks nested arrays and objects (eval/computer result content)", () => {
 		const result = {
-			content: [
-				{ type: "text", text: "display image:" },
-				img,
-			],
+			content: [{ type: "text", text: "display image:" }, img],
 			details: { cells: [{ outputs: [img, { type: "text", text: "x" }] }] },
 		};
 		expect(scanImages(result)).toEqual([img, img]);
@@ -25,7 +22,15 @@ describe("scanImages", () => {
 	});
 
 	test("ignores file-path screenshots (no base64 data)", () => {
-		expect(scanImages({ dest: "/tmp/shot.png", mimeType: "image/png", bytes: 10, width: 100, height: 50 })).toEqual([]);
+		expect(
+			scanImages({
+				dest: "/tmp/shot.png",
+				mimeType: "image/png",
+				bytes: 10,
+				width: 100,
+				height: 50,
+			}),
+		).toEqual([]);
 	});
 
 	test("ignores non-image junk and scalars", () => {

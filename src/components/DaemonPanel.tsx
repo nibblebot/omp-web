@@ -22,7 +22,11 @@ const LOG_LINES = 200;
  * (requestDaemonLogs), restart + two-click-confirm stop. Esc/backdrop close
  * through the shared Modal; no proxy — the link is the raw loopback shortcut.
  */
-export const DaemonPanel: Component<{ daemon: DaemonInfo; daemonKey: string; onClose: () => void }> = props => {
+export const DaemonPanel: Component<{
+	daemon: DaemonInfo;
+	daemonKey: string;
+	onClose: () => void;
+}> = (props) => {
 	const [logText, setLogText] = createSignal("");
 	const [logError, setLogError] = createSignal<string | null>(null);
 	const [logsLoading, setLogsLoading] = createSignal(false);
@@ -46,8 +50,8 @@ export const DaemonPanel: Component<{ daemon: DaemonInfo; daemonKey: string; onC
 		// here must not turn the roster broadcast into a log-refetch dependency.
 		const daemon = untrack(d);
 		requestDaemonLogs(daemon.projectDir, daemon.name, { lines: LOG_LINES, head })
-			.then(result => setLogText(result.text))
-			.catch(err => setLogError(String(err)))
+			.then((result) => setLogText(result.text))
+			.catch((err) => setLogError(String(err)))
 			.finally(() => setLogsLoading(false));
 	};
 
@@ -67,7 +71,7 @@ export const DaemonPanel: Component<{ daemon: DaemonInfo; daemonKey: string; onC
 		const daemon = d();
 		restartDaemon(daemon.projectDir, daemon.name)
 			.then(() => loadLogs(!tail()))
-			.catch(err => setControlError(String(err)))
+			.catch((err) => setControlError(String(err)))
 			.finally(() => setControlBusy(null));
 	};
 
@@ -76,7 +80,7 @@ export const DaemonPanel: Component<{ daemon: DaemonInfo; daemonKey: string; onC
 		setControlError(null);
 		const daemon = d();
 		stopDaemon(daemon.projectDir, daemon.name)
-			.catch(err => setControlError(String(err)))
+			.catch((err) => setControlError(String(err)))
 			.finally(() => {
 				setControlBusy(null);
 				setConfirmStop(false);
@@ -91,7 +95,12 @@ export const DaemonPanel: Component<{ daemon: DaemonInfo; daemonKey: string; onC
 				</span>
 				<span class="daemon-name">{d().name}</span>
 				<span class="daemon-state">{d().state}</span>
-				<button type="button" class="daemon-panel-close" aria-label="Close daemon panel" onClick={props.onClose}>
+				<button
+					type="button"
+					class="daemon-panel-close"
+					aria-label="Close daemon panel"
+					onClick={props.onClose}
+				>
 					<XIcon />
 				</button>
 			</div>
@@ -118,8 +127,14 @@ export const DaemonPanel: Component<{ daemon: DaemonInfo; daemonKey: string; onC
 				</Show>
 			</div>
 			<Show when={linkUrl()}>
-				{url => (
-					<a class="daemon-link-chip" href={url()} target="_blank" rel="noreferrer" title="declared port">
+				{(url) => (
+					<a
+						class="daemon-link-chip"
+						href={url()}
+						target="_blank"
+						rel="noreferrer"
+						title="declared port"
+					>
 						{url()}
 					</a>
 				)}
@@ -127,23 +142,33 @@ export const DaemonPanel: Component<{ daemon: DaemonInfo; daemonKey: string; onC
 			<div class="daemon-log-head">
 				<span class="daemon-log-title">logs</span>
 				<label class="daemon-tail-toggle">
-					<input type="checkbox" checked={tail()} onChange={e => setTail(e.currentTarget.checked)} />
+					<input
+						type="checkbox"
+						checked={tail()}
+						onChange={(e) => setTail(e.currentTarget.checked)}
+					/>
 					tail
 				</label>
 				<button type="button" disabled={logsLoading()} onClick={() => void loadLogs(!tail())}>
 					{logsLoading() ? "loading…" : "refresh"}
 				</button>
 			</div>
-			<Show when={logError()}>{err => <div class="msg-notice daemon-log-error">{err()}</div>}</Show>
+			<Show when={logError()}>
+				{(err) => <div class="msg-notice daemon-log-error">{err()}</div>}
+			</Show>
 			<Show when={logError() === null}>
 				<Show
 					when={logText() !== ""}
-					fallback={<div class="daemon-log-empty">{logsLoading() ? "loading logs…" : "no output"}</div>}
+					fallback={
+						<div class="daemon-log-empty">{logsLoading() ? "loading logs…" : "no output"}</div>
+					}
 				>
 					<pre class="daemon-log">{logText()}</pre>
 				</Show>
 			</Show>
-			<Show when={controlError()}>{err => <div class="msg-notice daemon-control-error">{err()}</div>}</Show>
+			<Show when={controlError()}>
+				{(err) => <div class="msg-notice daemon-control-error">{err()}</div>}
+			</Show>
 			<div class="daemon-control-row">
 				<button type="button" disabled={controlBusy() !== null} onClick={() => void doRestart()}>
 					{controlBusy() === "restart" ? "restarting…" : "restart"}
@@ -151,15 +176,29 @@ export const DaemonPanel: Component<{ daemon: DaemonInfo; daemonKey: string; onC
 				<Show
 					when={confirmStop()}
 					fallback={
-						<button type="button" class="danger" disabled={controlBusy() !== null} onClick={() => setConfirmStop(true)}>
+						<button
+							type="button"
+							class="danger"
+							disabled={controlBusy() !== null}
+							onClick={() => setConfirmStop(true)}
+						>
 							stop
 						</button>
 					}
 				>
-					<button type="button" class="danger" disabled={controlBusy() !== null} onClick={() => void doStop()}>
+					<button
+						type="button"
+						class="danger"
+						disabled={controlBusy() !== null}
+						onClick={() => void doStop()}
+					>
 						{controlBusy() === "stop" ? "stopping…" : "confirm stop?"}
 					</button>
-					<button type="button" disabled={controlBusy() !== null} onClick={() => setConfirmStop(false)}>
+					<button
+						type="button"
+						disabled={controlBusy() !== null}
+						onClick={() => setConfirmStop(false)}
+					>
 						cancel
 					</button>
 				</Show>

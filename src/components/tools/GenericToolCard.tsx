@@ -4,7 +4,7 @@ import { ImageScan } from "./ImageScan";
 import { ToolShell } from "./ToolShell";
 
 // Deliberately generic: one <details>/<pre> card for every unrecognized tool.
-export const GenericToolCard: Component<{ item: ToolItem }> = props => (
+export const GenericToolCard: Component<{ item: ToolItem }> = (props) => (
 	<ToolShell
 		name={props.item.name}
 		status={props.item.status}

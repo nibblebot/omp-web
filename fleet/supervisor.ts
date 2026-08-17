@@ -27,7 +27,13 @@ import { basename } from "node:path";
 import type { Subprocess } from "bun";
 import type { StdoutContractLine } from "../shared/protocol";
 import type { FleetConfig, SpawnTemplate } from "./config";
-import { fillTemplate, isValidEndpointUrl, parseContractLine, resolveEndpoint, shellQuote } from "./spawn-parse";
+import {
+	fillTemplate,
+	isValidEndpointUrl,
+	parseContractLine,
+	resolveEndpoint,
+	shellQuote,
+} from "./spawn-parse";
 import type { DaemonConnector } from "./connector";
 import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
 import type { GitRunner } from "./discovery";
@@ -112,7 +118,10 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Stream lines from a child stdout pipe, calling onLine per newline-delimited line. */
-function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: string) => void): Promise<void> {
+function readLines(
+	stream: ReadableStream<Uint8Array>,
+	onLine: (line: string) => void,
+): Promise<void> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
@@ -136,7 +145,10 @@ function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: string) =>
 }
 
 /** Stream decoded chunks from a child stderr pipe into the ring buffer. */
-function readChunks(stream: ReadableStream<Uint8Array>, onChunk: (chunk: string) => void): Promise<void> {
+function readChunks(
+	stream: ReadableStream<Uint8Array>,
+	onChunk: (chunk: string) => void,
+): Promise<void> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
 	const pump = async (): Promise<void> => {
@@ -207,9 +219,15 @@ export class SpawnSupervisor {
 	 * name (worktreeOf) so the roster can group it; a main checkout or an
 	 * unresolvable cwd stays untagged.
 	 */
-	async spawn(init: { cwd: string; template?: string; name?: string; labels?: string[] }): Promise<RegistryEntry> {
+	async spawn(init: {
+		cwd: string;
+		template?: string;
+		name?: string;
+		labels?: string[];
+	}): Promise<RegistryEntry> {
 		const project = basename(init.cwd);
-		const templateName = init.template ?? this.#config.projectTemplates?.[project] ?? this.#config.defaultTemplate;
+		const templateName =
+			init.template ?? this.#config.projectTemplates?.[project] ?? this.#config.defaultTemplate;
 		const template = this.#config.templates[templateName];
 		if (!template) throw new Error(`unknown spawn template: ${templateName}`);
 		const worktreeOf = await resolveWorktreeOf(init.cwd);
@@ -256,7 +274,11 @@ export class SpawnSupervisor {
 	}
 
 	/** The respawn body, run under respawn()'s per-daemon coalescing guard. */
-	async #respawnNow(state: ChildState, current: RegistryEntry, template: SpawnTemplate): Promise<void> {
+	async #respawnNow(
+		state: ChildState,
+		current: RegistryEntry,
+		template: SpawnTemplate,
+	): Promise<void> {
 		if (state.restartTimer) {
 			clearTimeout(state.restartTimer);
 			state.restartTimer = null;
@@ -270,7 +292,11 @@ export class SpawnSupervisor {
 			await this.#terminate(state.child, RESP_AWN_KILL_GRACE_MS);
 			state.child = null;
 		}
-		this.#onEvent?.("info", `respawn${current.lastSessionFile ? " (--resume)" : ""}`, current.daemonId);
+		this.#onEvent?.(
+			"info",
+			`respawn${current.lastSessionFile ? " (--resume)" : ""}`,
+			current.daemonId,
+		);
 		this.#launch(this.#registry.get(current.daemonId) ?? current, template, { resume: true });
 	}
 
@@ -325,7 +351,9 @@ export class SpawnSupervisor {
 	snapshot(): Record<string, { pid?: number; restarts: number; endpoint?: string }> {
 		const out: Record<string, { pid?: number; restarts: number; endpoint?: string }> = {};
 		for (const [daemonId, state] of this.#children) {
-			const info: { pid?: number; restarts: number; endpoint?: string } = { restarts: state.restarts };
+			const info: { pid?: number; restarts: number; endpoint?: string } = {
+				restarts: state.restarts,
+			};
 			if (state.child) info.pid = state.child.pid;
 			const endpoint = this.#registry.get(daemonId)?.endpoint;
 			if (endpoint !== undefined) info.endpoint = endpoint;
@@ -480,7 +508,8 @@ export class SpawnSupervisor {
 		// and lands in `sh -c` — shell-quote each one so it can never break
 		// out into command execution (CVE-style injection defense).
 		const labelsArg = (entry.labels ?? []).map((label) => `--label ${shellQuote(label)}`).join(" ");
-		const resumeArg = opts.resume && entry.lastSessionFile ? `--resume ${shellQuote(entry.lastSessionFile)}` : "";
+		const resumeArg =
+			opts.resume && entry.lastSessionFile ? `--resume ${shellQuote(entry.lastSessionFile)}` : "";
 		const command = fillTemplate(template.command, {
 			cwd: shellQuote(entry.cwd),
 			token: shellQuote(token),
@@ -581,7 +610,12 @@ export class SpawnSupervisor {
 		}
 		// Idle auto-exit: a daemon that reached ready and whose socket was
 		// dropped (connector idle policy) exiting cleanly goes dormant.
-		if (entry.status === "ready" && !this.#connector.isConnected(state.daemonId) && exitCode === 0 && signalCode === null) {
+		if (
+			entry.status === "ready" &&
+			!this.#connector.isConnected(state.daemonId) &&
+			exitCode === 0 &&
+			signalCode === null
+		) {
 			this.#registry.setStatus(state.daemonId, "asleep");
 			this.#onEvent?.("info", `${exit} clean idle → asleep`, state.daemonId);
 			return;
@@ -592,7 +626,11 @@ export class SpawnSupervisor {
 				"error",
 				`child exited ${state.restarts + 1} times (${this.#restartMax} restarts allowed)`,
 			);
-			this.#onEvent?.("error", `${exit} — restart budget exhausted (${this.#restartMax} restarts allowed)`, state.daemonId);
+			this.#onEvent?.(
+				"error",
+				`${exit} — restart budget exhausted (${this.#restartMax} restarts allowed)`,
+				state.daemonId,
+			);
 			return;
 		}
 		const attempt = state.restarts++;
@@ -604,19 +642,30 @@ export class SpawnSupervisor {
 			if (!current) return;
 			const template = this.#config.templates[current.template ?? ""];
 			if (!template) {
-				this.#registry.setStatus(state.daemonId, "error", `unknown spawn template: ${current.template}`);
+				this.#registry.setStatus(
+					state.daemonId,
+					"error",
+					`unknown spawn template: ${current.template}`,
+				);
 				return;
 			}
 			this.#launch(current, template, { resume: true });
 		}, delay);
-		this.#onEvent?.("warn", `${exit} — restart ${attempt + 1}/${this.#restartMax} in ${delay}ms`, state.daemonId);
+		this.#onEvent?.(
+			"warn",
+			`${exit} — restart ${attempt + 1}/${this.#restartMax} in ${delay}ms`,
+			state.daemonId,
+		);
 	}
 
 	/** SIGTERM, then SIGKILL after graceMs; resolves once the child has exited. */
 	async #terminate(child: Child, graceMs: number): Promise<void> {
 		if (child.exitCode !== null) return;
 		child.kill();
-		const exited = await Promise.race([child.exited.then(() => true), sleep(graceMs).then(() => false)]);
+		const exited = await Promise.race([
+			child.exited.then(() => true),
+			sleep(graceMs).then(() => false),
+		]);
 		if (!exited) {
 			child.kill("SIGKILL");
 			await child.exited.catch(() => {

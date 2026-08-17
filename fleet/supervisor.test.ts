@@ -60,7 +60,10 @@ interface FakeServer {
 }
 
 /** Fake omp-session daemon: primes hello_ok (hello.cwd) → state → ready on every dial. */
-function startFake(hello: { cwd: string; sessionFile: string }, opts?: { closeAfterMs?: number }): FakeServer {
+function startFake(
+	hello: { cwd: string; sessionFile: string },
+	opts?: { closeAfterMs?: number },
+): FakeServer {
 	const encoder = new TextEncoder();
 	const fake: FakeServer = {
 		server: null as unknown as Server<undefined>,
@@ -92,7 +95,11 @@ function startFake(hello: { cwd: string; sessionFile: string }, opts?: { closeAf
 				closeRecorded = true;
 				fake.serverCloses++;
 			};
-			const write = (controller: ReadableStreamDefaultController<Uint8Array>, frame: unknown, seq: number): void => {
+			const write = (
+				controller: ReadableStreamDefaultController<Uint8Array>,
+				frame: unknown,
+				seq: number,
+			): void => {
 				controller.enqueue(encoder.encode(encodeSseEvent(SSE_EVENT_NAME, frame, seq)));
 			};
 			const body = new ReadableStream<Uint8Array>({
@@ -158,19 +165,22 @@ async function loadedRegistry(): Promise<Registry> {
  * stderr lines, then either exits 1 (fail) or prints the OMP_SESSION| listening
  * line for `port` and idles.
  */
-function writeChildScript(dir: string, port: number, argsFile: string, opts: { fail?: boolean; pidFile?: string; stderrLines?: string[] } = {}): string {
+function writeChildScript(
+	dir: string,
+	port: number,
+	argsFile: string,
+	opts: { fail?: boolean; pidFile?: string; stderrLines?: string[] } = {},
+): string {
 	const script = join(dir, "child.sh");
-	const lines = [
-		"#!/bin/sh",
-		'trap "exit 0" TERM INT',
-		`echo "$@" >> ${argsFile}`,
-	];
+	const lines = ["#!/bin/sh", 'trap "exit 0" TERM INT', `echo "$@" >> ${argsFile}`];
 	if (opts.pidFile) lines.push(`echo $$ > ${opts.pidFile}`);
 	for (const line of opts.stderrLines ?? []) lines.push(`echo ${JSON.stringify(line)} >&2`);
 	if (opts.fail) {
 		lines.push("exit 1");
 	} else {
-		lines.push(`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${port},"url":"ws://127.0.0.1:${port}"}'`);
+		lines.push(
+			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${port},"url":"ws://127.0.0.1:${port}"}'`,
+		);
 		// Idle loop. The tick must stay short: dash defers an untrapped SIGTERM
 		// until the running `sleep` returns, so the supervisor's stop()/close()
 		// teardown (SIGTERM, 5s grace) costs one tick per child — sleep 1 makes
@@ -193,7 +203,11 @@ function makeConfig(script: string): FleetConfig {
 }
 
 /** Two-template config for resolution-order tests: default "test", override "other". */
-function makeTierConfig(scriptDefault: string, scriptOverride: string, projectTemplates?: Record<string, string>): FleetConfig {
+function makeTierConfig(
+	scriptDefault: string,
+	scriptOverride: string,
+	projectTemplates?: Record<string, string>,
+): FleetConfig {
 	return {
 		roots: [],
 		templates: {
@@ -235,7 +249,8 @@ function fakeGitPhases(phases: [GitResult, GitResult][]): { exec: GitRunner; cal
 /** Run a real git command, throwing on failure. */
 function gitSync(args: string[], cwd: string): void {
 	const proc = Bun.spawnSync(["git", "-C", cwd, ...args]);
-	if (proc.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed (${proc.exitCode}): ${proc.stderr.toString()}`);
+	if (proc.exitCode !== 0)
+		throw new Error(`git ${args.join(" ")} failed (${proc.exitCode}): ${proc.stderr.toString()}`);
 }
 
 /** Real git repo: main checkout + one linked worktree, both under `dir`. */
@@ -246,7 +261,10 @@ function makeWorktreeRepo(dir: string): { main: string; wt: string } {
 	gitSync(["init", "-b", "main"], main);
 	writeFileSync(join(main, "README.md"), "# main\n");
 	gitSync(["add", "."], main);
-	gitSync(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"], main);
+	gitSync(
+		["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+		main,
+	);
 	gitSync(["worktree", "add", wt, "-b", "feature/x"], main);
 	return { main, wt };
 }
@@ -259,7 +277,9 @@ describe("SpawnSupervisor", () => {
 		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 0 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 0,
+		});
 
 		const wtEntry = await supervisor.spawn({ cwd: wt });
 		expect(wtEntry.worktreeOf).toBe("main-repo");
@@ -276,8 +296,20 @@ describe("SpawnSupervisor", () => {
 		const { main, wt } = makeWorktreeRepo(projectDir);
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), { restartMax: 0 });
-		const spawned = registry.create({ name: "wt", cwd: wt, project: basename(wt), labels: [], mode: "spawned", template: "test" });
+		const supervisor = new SpawnSupervisor(
+			registry,
+			connector,
+			makeConfig("/nonexistent-child.sh"),
+			{ restartMax: 0 },
+		);
+		const spawned = registry.create({
+			name: "wt",
+			cwd: wt,
+			project: basename(wt),
+			labels: [],
+			mode: "spawned",
+			template: "test",
+		});
 		// A remote entry pointing at a local worktree path must stay untagged:
 		// its cwd lives on another host.
 		const remote = registry.create({
@@ -288,7 +320,14 @@ describe("SpawnSupervisor", () => {
 			mode: "remote",
 			endpoint: "ws://127.0.0.1:1",
 		});
-		const mainEntry = registry.create({ name: "m", cwd: main, project: "main-repo", labels: [], mode: "spawned", template: "test" });
+		const mainEntry = registry.create({
+			name: "m",
+			cwd: main,
+			project: "main-repo",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+		});
 
 		await supervisor.backfillWorktrees();
 		expect(registry.get(spawned.daemonId)!.worktreeOf).toBe("main-repo");
@@ -302,16 +341,24 @@ describe("SpawnSupervisor", () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile, { pidFile: join(projectDir, "pid.txt") });
+		const script = writeChildScript(projectDir, fake.port, argsFile, {
+			pidFile: join(projectDir, "pid.txt"),
+		});
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir, labels: ["env=prod"] });
 		expect(entry.mode).toBe("spawned");
 		expect(entry.project).toBe(basename(projectDir));
 		expect(entry.status).toBe("spawning");
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		const updated = registry.get(entry.daemonId)!;
 		expect(updated.endpoint).toBe(`ws://127.0.0.1:${fake.port}`);
 		expect(updated.lastSessionFile).toBe("/srv/proj/sess.jsonl");
@@ -334,10 +381,16 @@ describe("SpawnSupervisor", () => {
 		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		const snap = supervisor.snapshot()[entry.daemonId];
 		expect(snap).toBeDefined();
 		expect(snap?.restarts).toBe(0);
@@ -361,7 +414,12 @@ describe("SpawnSupervisor", () => {
 		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null), 10_000, "error status");
+		await waitFor(
+			() =>
+				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+			10_000,
+			"error status",
+		);
 		const snap = supervisor.snapshot()[entry.daemonId];
 		expect(snap).toBeDefined();
 		expect(snap?.restarts).toBe(1); // one restart consumed before the cap hit
@@ -386,11 +444,30 @@ describe("SpawnSupervisor", () => {
 		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null), 10_000, "error status");
-		expect(events.some((event) => event.daemonId === entry.daemonId && event.message.startsWith("spawn template="))).toBe(true);
-		expect(events.some((event) => event.daemonId === entry.daemonId && event.message.startsWith("exit code=1"))).toBe(true);
-		expect(events.some((event) => event.level === "warn" && event.message.includes("restart 1/1"))).toBe(true);
-		expect(events.some((event) => event.level === "error" && event.message.includes("restart budget exhausted"))).toBe(true);
+		await waitFor(
+			() =>
+				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+			10_000,
+			"error status",
+		);
+		expect(
+			events.some(
+				(event) => event.daemonId === entry.daemonId && event.message.startsWith("spawn template="),
+			),
+		).toBe(true);
+		expect(
+			events.some(
+				(event) => event.daemonId === entry.daemonId && event.message.startsWith("exit code=1"),
+			),
+		).toBe(true);
+		expect(
+			events.some((event) => event.level === "warn" && event.message.includes("restart 1/1")),
+		).toBe(true);
+		expect(
+			events.some(
+				(event) => event.level === "error" && event.message.includes("restart budget exhausted"),
+			),
+		).toBe(true);
 
 		await supervisor.close();
 		await connector.close();
@@ -409,7 +486,11 @@ describe("SpawnSupervisor", () => {
 		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		// lastSessionFile was adopted from hello_ok, so the respawn resumes.
 		const firstToken = registry.get(entry.daemonId)!.token;
 		await supervisor.respawn(registry.get(entry.daemonId)!);
@@ -423,10 +504,27 @@ describe("SpawnSupervisor", () => {
 		);
 		await supervisor.prune(entry.daemonId);
 		// Give the killed child's exit handler a beat to land.
-		await waitFor(() => (events.some((event) => event.message.startsWith("exit code=") && event.message.includes("(replaced)")) ? "replaced-exit" : null), 3000, "replaced exit event");
-		expect(events.some((event) => event.daemonId === entry.daemonId && event.message.startsWith("respawn"))).toBe(true);
-		expect(events.some((event) => event.daemonId === entry.daemonId && event.message === "stop")).toBe(true);
-		expect(events.some((event) => event.daemonId === entry.daemonId && event.message === "prune")).toBe(true);
+		await waitFor(
+			() =>
+				events.some(
+					(event) => event.message.startsWith("exit code=") && event.message.includes("(replaced)"),
+				)
+					? "replaced-exit"
+					: null,
+			3000,
+			"replaced exit event",
+		);
+		expect(
+			events.some(
+				(event) => event.daemonId === entry.daemonId && event.message.startsWith("respawn"),
+			),
+		).toBe(true);
+		expect(
+			events.some((event) => event.daemonId === entry.daemonId && event.message === "stop"),
+		).toBe(true);
+		expect(
+			events.some((event) => event.daemonId === entry.daemonId && event.message === "prune"),
+		).toBe(true);
 
 		await supervisor.close();
 		await connector.close();
@@ -440,10 +538,16 @@ describe("SpawnSupervisor", () => {
 		const script = writeChildScript(projectDir, fake.port, argsFile);
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		const firstToken = registry.get(entry.daemonId)!.token;
 
 		await supervisor.respawn(registry.get(entry.daemonId)!);
@@ -452,7 +556,9 @@ describe("SpawnSupervisor", () => {
 		await waitFor(
 			() => {
 				const current = registry.get(entry.daemonId)!;
-				return fake.openCount >= 2 && current.status === "ready" && current.token !== firstToken ? "ready" : null;
+				return fake.openCount >= 2 && current.status === "ready" && current.token !== firstToken
+					? "ready"
+					: null;
 			},
 			8000,
 			"respawned ready",
@@ -478,14 +584,20 @@ describe("SpawnSupervisor", () => {
 		const script = writeChildScript(projectDir, fake.port, argsFile);
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
 
 		const pwn = join(projectDir, "pwned");
 		const entry = await supervisor.spawn({
 			cwd: projectDir,
 			labels: [`k=$(touch ${pwn})`, "q='quoted'", "sp ace"],
 		});
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		const line = readFileSync(argsFile, "utf8").split("\n")[0];
 		// The payloads arrived as literal argv text (sh stripped the outer
 		// quoting); none of the metacharacters was executed.
@@ -508,16 +620,23 @@ describe("SpawnSupervisor", () => {
 		const fake = startFake({ cwd: weirdCwd, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
 		const script = join(projectDir, "child.sh");
-		writeFileSync(script, [
-			"#!/bin/sh",
-			'trap "exit 0" TERM INT',
-			`printf '%s\\0' "$@" > '${argsFile}'`,
-			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
-			"while :; do sleep 0.05; done",
-		].join("\n") + "\n");
+		writeFileSync(
+			script,
+			[
+				"#!/bin/sh",
+				'trap "exit 0" TERM INT',
+				`printf '%s\\0' "$@" > '${argsFile}'`,
+				`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
+				"while :; do sleep 0.05; done",
+			].join("\n") + "\n",
+		);
 		const config: FleetConfig = {
 			roots: [],
-			templates: { test: { command: `sh ${script} --cwd {cwd} --token {token} --name {name} {labels} {resume}` } },
+			templates: {
+				test: {
+					command: `sh ${script} --cwd {cwd} --token {token} --name {name} {labels} {resume}`,
+				},
+			},
 			defaultTemplate: "test",
 			workspaceDir: "/tmp/fleet-test-ws",
 		};
@@ -527,8 +646,16 @@ describe("SpawnSupervisor", () => {
 
 		const trickyName = "na'me $(nope) `nope` with spaces\nand a newline";
 		const pwn = join(projectDir, "pwned");
-		const entry = await supervisor.spawn({ cwd: weirdCwd, name: trickyName, labels: [`k=$(touch ${pwn})`] });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		const entry = await supervisor.spawn({
+			cwd: weirdCwd,
+			name: trickyName,
+			labels: [`k=$(touch ${pwn})`],
+		});
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 
 		// NUL-delimited "$@" dump (printf '%s\0' "$@"): each hostile value
 		// survived shell parsing as a single literal argument — even the
@@ -555,20 +682,29 @@ describe("SpawnSupervisor", () => {
 		const argsFile = join(projectDir, "args.txt");
 		const pidsFile = join(projectDir, "pids.txt");
 		const script = join(projectDir, "child.sh");
-		writeFileSync(script, [
-			"#!/bin/sh",
-			'trap "exit 0" TERM INT',
-			`echo $$ >> '${pidsFile}'`,
-			`echo "$@" >> '${argsFile}'`,
-			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
-			"while :; do sleep 0.05; done",
-		].join("\n") + "\n");
+		writeFileSync(
+			script,
+			[
+				"#!/bin/sh",
+				'trap "exit 0" TERM INT',
+				`echo $$ >> '${pidsFile}'`,
+				`echo "$@" >> '${argsFile}'`,
+				`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
+				"while :; do sleep 0.05; done",
+			].join("\n") + "\n",
+		);
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 
 		// Two overlapping respawns (no await between the calls): both must
 		// coalesce onto ONE launch — exactly one replacement child, and the
@@ -591,7 +727,10 @@ describe("SpawnSupervisor", () => {
 		const lines = readFileSync(argsFile, "utf8").trim().split("\n");
 		expect(lines).toHaveLength(2);
 		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl");
-		const pids = readFileSync(pidsFile, "utf8").trim().split("\n").map((l) => Number.parseInt(l, 10));
+		const pids = readFileSync(pidsFile, "utf8")
+			.trim()
+			.split("\n")
+			.map((l) => Number.parseInt(l, 10));
 		expect(pids).toHaveLength(2);
 
 		// stop() kills the tracked (only) child; the pre-respawn child was
@@ -620,10 +759,17 @@ describe("SpawnSupervisor", () => {
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
 		// restartMax 1: initial child + exactly one restart, then error.
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 1 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 1,
+		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null), 10_000, "error status");
+		await waitFor(
+			() =>
+				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+			10_000,
+			"error status",
+		);
 		const updated = registry.get(entry.daemonId)!;
 		expect(updated.error).toContain("exited");
 		const lines = readFileSync(argsFile, "utf8").trim().split("\n");
@@ -656,7 +802,12 @@ describe("SpawnSupervisor", () => {
 		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null), 10_000, "error status");
+		await waitFor(
+			() =>
+				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+			10_000,
+			"error status",
+		);
 		const updated = registry.get(entry.daemonId)!;
 		expect(updated.error).toContain("exited");
 		// Initial launch + 5 restarts; the 6th exit exceeds the consecutive cap.
@@ -671,24 +822,30 @@ describe("SpawnSupervisor", () => {
 		// The fake closes each /events stream shortly after priming (dormant),
 		// so every relaunch dials fresh and produces a NEW ready transition —
 		// exactly what a real daemon process (which dies with the child) does.
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" }, { closeAfterMs: 200 });
+		const fake = startFake(
+			{ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" },
+			{ closeAfterMs: 200 },
+		);
 		const argsFile = join(projectDir, "args.txt");
 		const counterFile = join(projectDir, "counter.txt");
 		const script = join(projectDir, "child.sh");
-		writeFileSync(script, [
-			"#!/bin/sh",
-			'trap "exit 0" TERM INT',
-			`n=$(cat '${counterFile}' 2>/dev/null || echo 0)`,
-			"n=$((n + 1))",
-			`echo "$n" > '${counterFile}'`,
-			`echo "$@" >> '${argsFile}'`,
-			// Odd launches crash before printing anything; even launches
-			// resolve an endpoint (reaching ready), then crash after a beat.
-			"if [ $((n % 2)) -eq 1 ]; then exit 1; fi",
-			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
-			"sleep 0.6",
-			"exit 1",
-		].join("\n") + "\n");
+		writeFileSync(
+			script,
+			[
+				"#!/bin/sh",
+				'trap "exit 0" TERM INT',
+				`n=$(cat '${counterFile}' 2>/dev/null || echo 0)`,
+				"n=$((n + 1))",
+				`echo "$n" > '${counterFile}'`,
+				`echo "$@" >> '${argsFile}'`,
+				// Odd launches crash before printing anything; even launches
+				// resolve an endpoint (reaching ready), then crash after a beat.
+				"if [ $((n % 2)) -eq 1 ]; then exit 1; fi",
+				`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
+				"sleep 0.6",
+				"exit 1",
+			].join("\n") + "\n",
+		);
 		const registry = await loadedRegistry();
 		let supervisor: SpawnSupervisor;
 		const connector = new DaemonConnector(
@@ -707,13 +864,19 @@ describe("SpawnSupervisor", () => {
 		// old LIFETIME budget this would hit the 5-restart cap; the ready
 		// transitions reset it, so the daemon keeps restarting instead of
 		// erroring.
-		await waitFor(() => {
-			try {
-				return readFileSync(argsFile, "utf8").trim().split("\n").length >= 6 ? "six-launches" : null;
-			} catch {
-				return null; // the child may not have written the file yet
-			}
-		}, 15_000, "six child launches");
+		await waitFor(
+			() => {
+				try {
+					return readFileSync(argsFile, "utf8").trim().split("\n").length >= 6
+						? "six-launches"
+						: null;
+				} catch {
+					return null; // the child may not have written the file yet
+				}
+			},
+			15_000,
+			"six child launches",
+		);
 		const current = registry.get(entry.daemonId)!;
 		expect(current.status).not.toBe("error");
 		expect(current.error).toBeUndefined();
@@ -744,7 +907,8 @@ describe("SpawnSupervisor", () => {
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
 		const updated = await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null),
+			() =>
+				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
 			5000,
 			"error status",
 		);
@@ -753,14 +917,18 @@ describe("SpawnSupervisor", () => {
 		// The child is dead — not left running behind a wedged pump — and the
 		// connector never touched it.
 		const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-		await waitFor(() => {
-			try {
-				process.kill(pid, 0);
-				return null;
-			} catch {
-				return "dead";
-			}
-		}, 2000, "child death");
+		await waitFor(
+			() => {
+				try {
+					process.kill(pid, 0);
+					return null;
+				} catch {
+					return "dead";
+				}
+			},
+			2000,
+			"child death",
+		);
 		expect(connector.isConnected(entry.daemonId)).toBe(false);
 		expect(registry.get(entry.daemonId)!.status).toBe("error");
 
@@ -773,22 +941,31 @@ describe("SpawnSupervisor", () => {
 		const projectDir = tmpPath("omp-session-sup-garbage-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const script = join(projectDir, "child.sh");
-		writeFileSync(script, [
-			"#!/bin/sh",
-			'trap "exit 0" TERM INT',
-			// The malformed wrapper endpoint line must not throw inside the
-			// supervisor's read loop: it is dropped at parse time and the
-			// following valid listening line resolves normally.
-			`printf 'OMP_SESSION|%s\\n' '{"event":"endpoint","url":"garbage"}'`,
-			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
-			"while :; do sleep 0.05; done",
-		].join("\n") + "\n");
+		writeFileSync(
+			script,
+			[
+				"#!/bin/sh",
+				'trap "exit 0" TERM INT',
+				// The malformed wrapper endpoint line must not throw inside the
+				// supervisor's read loop: it is dropped at parse time and the
+				// following valid listening line resolves normally.
+				`printf 'OMP_SESSION|%s\\n' '{"event":"endpoint","url":"garbage"}'`,
+				`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
+				"while :; do sleep 0.05; done",
+			].join("\n") + "\n",
+		);
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		const updated = registry.get(entry.daemonId)!;
 		expect(updated.endpoint).toBe(`ws://127.0.0.1:${fake.port}`);
 		expect(updated.status).toBe("ready");
@@ -803,34 +980,45 @@ describe("SpawnSupervisor", () => {
 		const argsFile = join(projectDir, "args.txt");
 		const pidFile = join(projectDir, "pid.txt");
 		const script = join(projectDir, "child.sh");
-		writeFileSync(script, [
-			"#!/bin/sh",
-			'trap "exit 0" TERM INT',
-			`echo $$ > '${pidFile}'`,
-			`echo "$@" >> '${argsFile}'`,
-			`printf 'OMP_SESSION|%s\\n' '{"event":"endpoint","url":"garbage"}'`,
-			"while :; do sleep 0.05; done",
-		].join("\n") + "\n");
+		writeFileSync(
+			script,
+			[
+				"#!/bin/sh",
+				'trap "exit 0" TERM INT',
+				`echo $$ > '${pidFile}'`,
+				`echo "$@" >> '${argsFile}'`,
+				`printf 'OMP_SESSION|%s\\n' '{"event":"endpoint","url":"garbage"}'`,
+				"while :; do sleep 0.05; done",
+			].join("\n") + "\n",
+		);
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2, endpointTimeoutMs: 1000 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+			endpointTimeoutMs: 1000,
+		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
 		const updated = await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null),
+			() =>
+				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
 			5000,
 			"error status",
 		);
 		expect(updated.error).toContain("endpoint timeout");
 		const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-		await waitFor(() => {
-			try {
-				process.kill(pid, 0);
-				return null;
-			} catch {
-				return "dead";
-			}
-		}, 2000, "child death");
+		await waitFor(
+			() => {
+				try {
+					process.kill(pid, 0);
+					return null;
+				} catch {
+					return "dead";
+				}
+			},
+			2000,
+			"child death",
+		);
 		expect(connector.isConnected(entry.daemonId)).toBe(false);
 
 		await supervisor.close();
@@ -845,10 +1033,16 @@ describe("SpawnSupervisor", () => {
 		const script = writeChildScript(projectDir, fake.port, argsFile, { pidFile });
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
 		expect(pid).toBeGreaterThan(0);
 
@@ -876,18 +1070,24 @@ describe("SpawnSupervisor", () => {
 		const script = writeChildScript(projectDir, fake.port, argsFile, { fail: true });
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 5 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 5,
+		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
 		// The first child exits ~instantly and schedules a restart at ≥500ms;
 		// stop() within that window must cancel it.
-		await waitFor(() => {
-			try {
-				return readFileSync(argsFile, "utf8").trim().split("\n").length >= 1 ? "spawned" : null;
-			} catch {
-				return null; // the child may not have written the file yet
-			}
-		}, 2000, "first child");
+		await waitFor(
+			() => {
+				try {
+					return readFileSync(argsFile, "utf8").trim().split("\n").length >= 1 ? "spawned" : null;
+				} catch {
+					return null; // the child may not have written the file yet
+				}
+			},
+			2000,
+			"first child",
+		);
 		await supervisor.stop(entry.daemonId);
 		expect(registry.get(entry.daemonId)?.status).toBe("asleep");
 		await sleep(2200); // the 1s-min backoff would have fired by now if not cancelled
@@ -902,13 +1102,21 @@ describe("SpawnSupervisor", () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile, { stderrLines: ["boom-one", "boom-two"] });
+		const script = writeChildScript(projectDir, fake.port, argsFile, {
+			stderrLines: ["boom-one", "boom-two"],
+		});
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		const tail = supervisor.stderrTail(entry.daemonId);
 		expect(tail).toContain("boom-one");
 		expect(tail).toContain("boom-two");
@@ -916,9 +1124,15 @@ describe("SpawnSupervisor", () => {
 		await supervisor.stop(entry.daemonId);
 
 		// A small ring keeps only the tail.
-		const supervisor2 = new SpawnSupervisor(registry, connector, makeConfig(script), { stderrRingBytes: 8 });
+		const supervisor2 = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			stderrRingBytes: 8,
+		});
 		const entry2 = await supervisor2.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry2.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready 2");
+		await waitFor(
+			() => (registry.get(entry2.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready 2",
+		);
 		const smallTail = supervisor2.stderrTail(entry2.daemonId);
 		expect(smallTail.length).toBeLessThanOrEqual(8);
 		expect(smallTail.endsWith("two\n")).toBe(true);
@@ -932,12 +1146,18 @@ describe("SpawnSupervisor", () => {
 		const projectDir = tmpPath("omp-session-sup-prune-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile, { stderrLines: ["prune-boom"] });
+		const script = writeChildScript(projectDir, fake.port, argsFile, {
+			stderrLines: ["prune-boom"],
+		});
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
 		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script));
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		// The stderr ring is populated while the child lives.
 		expect(supervisor.stderrTail(entry.daemonId)).toContain("prune-boom");
 		// prune() = stop + drop the ChildState: the ring (up to 64KB per
@@ -960,7 +1180,9 @@ describe("SpawnSupervisor", () => {
 		const connector = makeConnector(registry);
 		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {});
 		const before = registry.list().length;
-		await expect(supervisor.spawn({ cwd: projectDir, template: "nope" })).rejects.toThrow(/unknown spawn template/);
+		await expect(supervisor.spawn({ cwd: projectDir, template: "nope" })).rejects.toThrow(
+			/unknown spawn template/,
+		);
 		expect(registry.list()).toHaveLength(before);
 		await supervisor.close();
 		await connector.close();
@@ -975,15 +1197,30 @@ describe("SpawnSupervisor", () => {
 		mkdirSync(join(projectDir, "tpl-default"), { recursive: true });
 		mkdirSync(join(projectDir, "tpl-override"), { recursive: true });
 		const scriptDefault = writeChildScript(join(projectDir, "tpl-default"), fake.port, argsDefault);
-		const scriptOverride = writeChildScript(join(projectDir, "tpl-override"), fake.port, argsOverride);
+		const scriptOverride = writeChildScript(
+			join(projectDir, "tpl-override"),
+			fake.port,
+			argsOverride,
+		);
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeTierConfig(scriptDefault, scriptOverride, { [basename(projectDir)]: "other" }), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(
+			registry,
+			connector,
+			makeTierConfig(scriptDefault, scriptOverride, { [basename(projectDir)]: "other" }),
+			{ restartMax: 2 },
+		);
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		expect(registry.get(entry.daemonId)?.template).toBe("other");
-		expect(readFileSync(argsOverride, "utf8").split("\n")[0]).toContain(registry.get(entry.daemonId)!.token!);
+		expect(readFileSync(argsOverride, "utf8").split("\n")[0]).toContain(
+			registry.get(entry.daemonId)!.token!,
+		);
 		// The default-template child must never have launched.
 		expect(existsSync(argsDefault)).toBe(false);
 
@@ -1000,15 +1237,30 @@ describe("SpawnSupervisor", () => {
 		mkdirSync(join(projectDir, "tpl-default"), { recursive: true });
 		mkdirSync(join(projectDir, "tpl-override"), { recursive: true });
 		const scriptDefault = writeChildScript(join(projectDir, "tpl-default"), fake.port, argsDefault);
-		const scriptOverride = writeChildScript(join(projectDir, "tpl-override"), fake.port, argsOverride);
+		const scriptOverride = writeChildScript(
+			join(projectDir, "tpl-override"),
+			fake.port,
+			argsOverride,
+		);
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeTierConfig(scriptDefault, scriptOverride, { [basename(projectDir)]: "other" }), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(
+			registry,
+			connector,
+			makeTierConfig(scriptDefault, scriptOverride, { [basename(projectDir)]: "other" }),
+			{ restartMax: 2 },
+		);
 
 		const entry = await supervisor.spawn({ cwd: projectDir, template: "test" });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		expect(registry.get(entry.daemonId)?.template).toBe("test");
-		expect(readFileSync(argsDefault, "utf8").split("\n")[0]).toContain(registry.get(entry.daemonId)!.token!);
+		expect(readFileSync(argsDefault, "utf8").split("\n")[0]).toContain(
+			registry.get(entry.daemonId)!.token!,
+		);
 		expect(existsSync(argsOverride)).toBe(false);
 
 		await supervisor.close();
@@ -1024,16 +1276,31 @@ describe("SpawnSupervisor", () => {
 		mkdirSync(join(projectDir, "tpl-default"), { recursive: true });
 		mkdirSync(join(projectDir, "tpl-override"), { recursive: true });
 		const scriptDefault = writeChildScript(join(projectDir, "tpl-default"), fake.port, argsDefault);
-		const scriptOverride = writeChildScript(join(projectDir, "tpl-override"), fake.port, argsOverride);
+		const scriptOverride = writeChildScript(
+			join(projectDir, "tpl-override"),
+			fake.port,
+			argsOverride,
+		);
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
 		// The override key deliberately does not match this project's basename.
-		const supervisor = new SpawnSupervisor(registry, connector, makeTierConfig(scriptDefault, scriptOverride, { "some-other-project": "other" }), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(
+			registry,
+			connector,
+			makeTierConfig(scriptDefault, scriptOverride, { "some-other-project": "other" }),
+			{ restartMax: 2 },
+		);
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null), 5000, "ready");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
 		expect(registry.get(entry.daemonId)?.template).toBe("test");
-		expect(readFileSync(argsDefault, "utf8").split("\n")[0]).toContain(registry.get(entry.daemonId)!.token!);
+		expect(readFileSync(argsDefault, "utf8").split("\n")[0]).toContain(
+			registry.get(entry.daemonId)!.token!,
+		);
 		expect(existsSync(argsOverride)).toBe(false);
 
 		await supervisor.close();
@@ -1046,9 +1313,16 @@ describe("SpawnSupervisor", () => {
 		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt"));
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeTierConfig(script, script, { [basename(projectDir)]: "nope" }), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(
+			registry,
+			connector,
+			makeTierConfig(script, script, { [basename(projectDir)]: "nope" }),
+			{ restartMax: 2 },
+		);
 		const before = registry.list().length;
-		await expect(supervisor.spawn({ cwd: projectDir })).rejects.toThrow(/unknown spawn template: nope/);
+		await expect(supervisor.spawn({ cwd: projectDir })).rejects.toThrow(
+			/unknown spawn template: nope/,
+		);
 		expect(registry.list()).toHaveLength(before);
 		await supervisor.close();
 		await connector.close();
@@ -1057,10 +1331,19 @@ describe("SpawnSupervisor", () => {
 
 describe("git-state polling", () => {
 	/** Supervisor with a config whose child would fail: polling tests never spawn. */
-	async function pollSupervisor(): Promise<{ registry: Registry; connector: DaemonConnector; supervisor: SpawnSupervisor }> {
+	async function pollSupervisor(): Promise<{
+		registry: Registry;
+		connector: DaemonConnector;
+		supervisor: SpawnSupervisor;
+	}> {
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), { restartMax: 0 });
+		const supervisor = new SpawnSupervisor(
+			registry,
+			connector,
+			makeConfig("/nonexistent-child.sh"),
+			{ restartMax: 0 },
+		);
 		return { registry, connector, supervisor };
 	}
 
@@ -1076,8 +1359,22 @@ describe("git-state polling", () => {
 		});
 		// Same cwd as the local entry: if the poll ever probed the remote
 		// entry the fake exec would see its cwd too.
-		registry.create({ name: "r", cwd: "/srv/repos/acme", project: "acme", labels: [], mode: "remote", endpoint: "ws://127.0.0.1:1" });
-		registry.create({ name: "e", cwd: "", project: "", labels: [], mode: "attached", endpoint: "ws://127.0.0.1:2" });
+		registry.create({
+			name: "r",
+			cwd: "/srv/repos/acme",
+			project: "acme",
+			labels: [],
+			mode: "remote",
+			endpoint: "ws://127.0.0.1:1",
+		});
+		registry.create({
+			name: "e",
+			cwd: "",
+			project: "",
+			labels: [],
+			mode: "attached",
+			endpoint: "ws://127.0.0.1:2",
+		});
 		let onChange = 0;
 		registry.onChange = () => {
 			onChange++;
@@ -1092,7 +1389,11 @@ describe("git-state polling", () => {
 		]);
 		supervisor.startGitStatePolling({ exec, intervalMs: 25 });
 
-		await waitFor(() => (registry.get(local.daemonId)?.git !== undefined ? "probed" : null), 5000, "first probe");
+		await waitFor(
+			() => (registry.get(local.daemonId)?.git !== undefined ? "probed" : null),
+			5000,
+			"first probe",
+		);
 		// Several more ticks with an unchanged state: no registry update, no
 		// roster broadcast (every update fires onChange).
 		await waitFor(() => (calls.length >= 4 ? "ticks" : null), 5000, "multiple ticks");
@@ -1106,7 +1407,9 @@ describe("git-state polling", () => {
 		for (const call of calls) {
 			expect(call.cwd).toBe("/srv/repos/acme");
 			expect(call.args).toEqual(
-				call.args[0] === "status" ? ["status", "--porcelain=v1", "--branch"] : ["diff", "--numstat", "HEAD", "--"],
+				call.args[0] === "status"
+					? ["status", "--porcelain=v1", "--branch"]
+					: ["diff", "--numstat", "HEAD", "--"],
 			);
 		}
 		expect(registry.get("d2")?.worktreeOf).toBeUndefined();
@@ -1122,7 +1425,12 @@ describe("git-state polling", () => {
 		const registry = new Registry(statePath);
 		await registry.load();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), { restartMax: 0 });
+		const supervisor = new SpawnSupervisor(
+			registry,
+			connector,
+			makeConfig("/nonexistent-child.sh"),
+			{ restartMax: 0 },
+		);
 		const local = registry.create({
 			name: "l",
 			cwd: "/srv/repos/acme",
@@ -1154,7 +1462,11 @@ describe("git-state polling", () => {
 		]);
 		supervisor.startGitStatePolling({ exec, intervalMs: 25 });
 
-		await waitFor(() => (registry.get(local.daemonId)?.branch !== undefined ? "clean" : null), 5000, "clean state");
+		await waitFor(
+			() => (registry.get(local.daemonId)?.branch !== undefined ? "clean" : null),
+			5000,
+			"clean state",
+		);
 		expect(registry.get(local.daemonId)!.git).toEqual({
 			added: 0,
 			modified: 0,
@@ -1163,7 +1475,11 @@ describe("git-state polling", () => {
 			linesAdded: 0,
 			linesDeleted: 0,
 		});
-		await waitFor(() => (registry.get(local.daemonId)?.git?.untracked === 1 ? "dirty" : null), 5000, "dirty state");
+		await waitFor(
+			() => (registry.get(local.daemonId)?.git?.untracked === 1 ? "dirty" : null),
+			5000,
+			"dirty state",
+		);
 		expect(onChange).toBe(2);
 		// Steady state: further ticks change nothing.
 		const changedAt = calls.length;
@@ -1172,10 +1488,16 @@ describe("git-state polling", () => {
 		// The polled fields persist (registry persists every update) and
 		// reload cleanly (old state files without them load too).
 		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
-		expect(onDisk.entries[0]).toMatchObject({ branch: "main", git: { added: 0, modified: 0, deleted: 0, untracked: 1 } });
+		expect(onDisk.entries[0]).toMatchObject({
+			branch: "main",
+			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
+		});
 		const reloaded = new Registry(statePath);
 		await reloaded.load();
-		expect(reloaded.get(local.daemonId)).toMatchObject({ branch: "main", git: { added: 0, modified: 0, deleted: 0, untracked: 1 } });
+		expect(reloaded.get(local.daemonId)).toMatchObject({
+			branch: "main",
+			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
+		});
 
 		await supervisor.close();
 		await connector.close();
@@ -1212,13 +1534,25 @@ describe("git-state polling", () => {
 		]);
 		supervisor.startGitStatePolling({ exec, intervalMs: 250 });
 
-		await waitFor(() => (registry.get(local.daemonId)?.git?.modified === 1 ? "set" : null), 5000, "state set");
-		await waitFor(() => (registry.get(local.daemonId)?.git === undefined ? "cleared" : null), 5000, "state cleared");
+		await waitFor(
+			() => (registry.get(local.daemonId)?.git?.modified === 1 ? "set" : null),
+			5000,
+			"state set",
+		);
+		await waitFor(
+			() => (registry.get(local.daemonId)?.git === undefined ? "cleared" : null),
+			5000,
+			"state cleared",
+		);
 		expect(registry.get(local.daemonId)!.branch).toBeUndefined();
 		expect(onChange).toBe(2); // set, then clear
 		// Repeated failures must not re-update (nothing stale left to clear).
 		const clearedAt = calls.length;
-		await waitFor(() => (calls.length >= clearedAt + 3 ? "more ticks" : null), 5000, "more failure ticks");
+		await waitFor(
+			() => (calls.length >= clearedAt + 3 ? "more ticks" : null),
+			5000,
+			"more failure ticks",
+		);
 		expect(onChange).toBe(2);
 
 		await supervisor.close();
@@ -1231,7 +1565,9 @@ describe("git-state polling", () => {
 		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
-		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), { restartMax: 2 });
+		const supervisor = new SpawnSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
 
 		const stdout = ["## main", "?? new.txt", ""].join("\n");
 		const { exec, calls } = fakeGitPhases([
@@ -1244,7 +1580,11 @@ describe("git-state polling", () => {
 		// exists, so only the spawn() one-off can probe in this window.
 		supervisor.startGitStatePolling({ exec, intervalMs: 60_000 });
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(() => (registry.get(entry.daemonId)?.git !== undefined ? "probed" : null), 5000, "one-off probe");
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.git !== undefined ? "probed" : null),
+			5000,
+			"one-off probe",
+		);
 		expect(registry.get(entry.daemonId)).toMatchObject({
 			branch: "main",
 			git: { added: 0, modified: 0, deleted: 0, untracked: 1, linesAdded: 7, linesDeleted: 4 },

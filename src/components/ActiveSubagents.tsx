@@ -11,7 +11,7 @@ export const ActiveSubagents: Component = () => {
 		<Show when={active().length > 0}>
 			<div class="active-subagents">
 				<For each={active()}>
-					{sub => (
+					{(sub) => (
 						<div
 							class="active-subagent-row"
 							{...useClickableRow(() => setState("modal", "subagents"))}

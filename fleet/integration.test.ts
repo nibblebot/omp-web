@@ -175,8 +175,27 @@ describe("fleet integration — real omp-session daemons", () => {
 	}
 
 	/** Launch `bun server/index.ts` ourselves and parse its OMP_SESSION| listening line. */
-	async function spawnExternal(cwd: string, token: string, name: string, extraArgs: string[]): Promise<ExtDaemon> {
-		const command = [`PI_CODING_AGENT_DIR=${join(tmp, "agent-" + name)}`, "PI_AUTH_NO_BORROW=1", "bun", "server/index.ts", "--cwd", cwd, "--port", "0", "--token", token, "--name", name, ...extraArgs].join(" ");
+	async function spawnExternal(
+		cwd: string,
+		token: string,
+		name: string,
+		extraArgs: string[],
+	): Promise<ExtDaemon> {
+		const command = [
+			`PI_CODING_AGENT_DIR=${join(tmp, "agent-" + name)}`,
+			"PI_AUTH_NO_BORROW=1",
+			"bun",
+			"server/index.ts",
+			"--cwd",
+			cwd,
+			"--port",
+			"0",
+			"--token",
+			token,
+			"--name",
+			name,
+			...extraArgs,
+		].join(" ");
 		const child = Bun.spawn(["sh", "-c", command], { stdout: "pipe", stderr: "pipe" });
 		const reader = child.stdout.getReader();
 		const decoder = new TextDecoder();
@@ -204,7 +223,9 @@ describe("fleet integration — real omp-session daemons", () => {
 			} catch {
 				// already gone
 			}
-			throw new Error(`external omp-session ${name} printed no OMP_SESSION| listening line within 30s`);
+			throw new Error(
+				`external omp-session ${name} printed no OMP_SESSION| listening line within 30s`,
+			);
 		}
 		return { child: child as unknown as ExtDaemon["child"], url };
 	}
@@ -238,13 +259,20 @@ describe("fleet integration — real omp-session daemons", () => {
 		SHORTIDLE_TEMPLATE = `OMP_SESSION_TEST_IDLE_CHECK_MS=500 ${hermeticEnv} bun server/index.ts --cwd {cwd} --port 0 --token {token} --name {name} --idle-timeout 2s {labels} {resume}`;
 		const projectsRoot = join(tmp, "projects");
 		mkdirSync(projectsRoot, { recursive: true });
-		projDirs = [join(projectsRoot, "proj-a"), join(projectsRoot, "proj-b"), join(projectsRoot, "proj-c")];
+		projDirs = [
+			join(projectsRoot, "proj-a"),
+			join(projectsRoot, "proj-b"),
+			join(projectsRoot, "proj-c"),
+		];
 		for (const dir of projDirs) mkdirSync(dir, { recursive: true });
 		writeFileSync(
 			configPath,
 			JSON.stringify({
 				roots: [projectsRoot],
-				templates: { local: { command: LOCAL_TEMPLATE }, shortidle: { command: SHORTIDLE_TEMPLATE } },
+				templates: {
+					local: { command: LOCAL_TEMPLATE },
+					shortidle: { command: SHORTIDLE_TEMPLATE },
+				},
 				defaultTemplate: "local",
 			}),
 		);
@@ -299,7 +327,8 @@ describe("fleet integration — real omp-session daemons", () => {
 	});
 
 	test("spawns three real daemons; all reach ready through the status ladder", async () => {
-		const mk = (cwd: string, name: string, labels?: string[]) => postJson("/ctl/spawn", { cwd, name, labels });
+		const mk = (cwd: string, name: string, labels?: string[]) =>
+			postJson("/ctl/spawn", { cwd, name, labels });
 		const [r1, r2, r3] = await Promise.all([
 			mk(projDirs[0], "d-one", ["env=integration"]),
 			mk(projDirs[1], "d-two"),
@@ -342,7 +371,9 @@ describe("fleet integration — real omp-session daemons", () => {
 		// timeout. The seam under test is /ctl/prompt → fan-out → daemon
 		// dispatch + per-daemon serialization + timeout error. waitMs is short:
 		// a no-model prompt can never settle any other way.
-		const results = await Promise.all([d1, d2, d3].map((entry) => ctlPrompt(entry.daemonId, 5_000)));
+		const results = await Promise.all(
+			[d1, d2, d3].map((entry) => ctlPrompt(entry.daemonId, 5_000)),
+		);
 		for (const result of results) {
 			expect(result.ok).toBe(false);
 			expect(result.error).toBeTruthy();
@@ -363,7 +394,12 @@ describe("fleet integration — real omp-session daemons", () => {
 			// Already gone; the waits below still prove the recovery path.
 		}
 		// The connector must surface the crash before the supervisor relaunches.
-		const reconnecting = await waitForEntry(d2.daemonId, (e) => e.status === "reconnecting", 30_000, "report reconnecting");
+		const reconnecting = await waitForEntry(
+			d2.daemonId,
+			(e) => e.status === "reconnecting",
+			30_000,
+			"report reconnecting",
+		);
 		expect(reconnecting.seen).toContain("reconnecting");
 		// Then the supervisor restarts the child (fresh token, new pid) and it returns to ready.
 		const recovered = await waitForEntry(
@@ -386,11 +422,20 @@ describe("fleet integration — real omp-session daemons", () => {
 	test("add an externally launched omp-session and drive it (turn errors, no live model)", async () => {
 		ext = await spawnExternal(projDirs[1], "ext-token-123", "ext-drive", ["--idle-timeout", "0"]);
 		trackedPids.add(ext.child.pid);
-		const res = await postJson("/ctl/add", { name: "ext-drive", url: ext.url, token: "ext-token-123" });
+		const res = await postJson("/ctl/add", {
+			name: "ext-drive",
+			url: ext.url,
+			token: "ext-token-123",
+		});
 		expect(res.status).toBe(200);
 		extEntry = (await res.json()) as RegistryEntry;
 		expect(extEntry.mode).toBe("remote");
-		const ready = await waitForEntry(extEntry.daemonId, (e) => e.status === "ready", 60_000, "become ready");
+		const ready = await waitForEntry(
+			extEntry.daemonId,
+			(e) => e.status === "ready",
+			60_000,
+			"become ready",
+		);
 		// hello_ok.cwd is adopted for `add`ed entries without a registered cwd.
 		expect(ready.entry.cwd).toBe(projDirs[1]);
 		// Driving proof: the call round-trips to the daemon and its deterministic
@@ -404,17 +449,31 @@ describe("fleet integration — real omp-session daemons", () => {
 	}, 90_000);
 
 	test("short-idle daemon: disconnect → idle exit → asleep (session file retained)", async () => {
-		const res = await postJson("/ctl/spawn", { cwd: projDirs[2], name: "d-four", template: "shortidle" });
+		const res = await postJson("/ctl/spawn", {
+			cwd: projDirs[2],
+			name: "d-four",
+			template: "shortidle",
+		});
 		expect(res.status).toBe(200);
 		d4 = (await res.json()) as RegistryEntry;
-		const ready = await waitForEntry(d4.daemonId, (e) => e.status === "ready", 60_000, "become ready");
+		const ready = await waitForEntry(
+			d4.daemonId,
+			(e) => e.status === "ready",
+			60_000,
+			"become ready",
+		);
 		const sessionBefore = ready.entry.lastSessionFile;
 		expect(sessionBefore).toBeTruthy();
 		trackedPids.add(ready.entry.pid!);
 		// Drop the fleet's socket; omp-session's idle timer only fires with NO
 		// attached clients (2s idle + 500ms check tick → clean exit within ~2.5s).
 		server.connector.disconnect(d4.daemonId);
-		const asleep = await waitForEntry(d4.daemonId, (e) => e.status === "asleep", 30_000, "go asleep after idle exit");
+		const asleep = await waitForEntry(
+			d4.daemonId,
+			(e) => e.status === "asleep",
+			30_000,
+			"go asleep after idle exit",
+		);
 		// Asleep keeps cwd + lastSessionFile for the respawn-on-demand rule.
 		expect(asleep.entry.cwd).toBe(projDirs[2]);
 		expect(asleep.entry.lastSessionFile).toBe(sessionBefore);
@@ -438,7 +497,9 @@ describe("fleet integration — real omp-session daemons", () => {
 		expect(after.lastSessionFile).toBe(sessionBefore);
 		// Disk evidence: state.json keeps the same lastSessionFile through the respawn.
 		const disk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
-		expect(disk.entries.find((e) => e.daemonId === d4.daemonId)?.lastSessionFile).toBe(sessionBefore);
+		expect(disk.entries.find((e) => e.daemonId === d4.daemonId)?.lastSessionFile).toBe(
+			sessionBefore,
+		);
 		// Accounting: exactly 5 prompts issued across the suite (all error-out).
 		expect(promptCount).toBe(5);
 	}, 90_000);

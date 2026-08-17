@@ -1,6 +1,9 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { createAgentSession, type ModelRegistry, type Settings } from "@oh-my-pi/pi-coding-agent";
-import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "@oh-my-pi/pi-coding-agent/collab/protocol";
+import {
+	COLLAB_PROMPT_MESSAGE_TYPE,
+	type CollabPromptDetails,
+} from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -75,22 +78,26 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			getThinkingLevel: () => session.thinkingLevel,
 			getContextUsage: () => session.getContextUsage(),
 			snapshot: () => session.sessionManager.snapshotForReplication(),
-			subscribe: cb => session.subscribe(cb),
+			subscribe: (cb) => session.subscribe(cb),
 			// Single slot; the adapter restores it (with null) on teardown.
-			onEntryAppended: cb => {
+			onEntryAppended: (cb) => {
 				session.sessionManager.onEntryAppended = cb ?? undefined;
 			},
 			// Both task channels: the same EventBus traffic the subagent mirror taps.
-			subscribeBus: cb => {
+			subscribeBus: (cb) => {
 				const unsubs = [
-					entry.eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data => cb(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data)),
-					entry.eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, data => cb(TASK_SUBAGENT_PROGRESS_CHANNEL, data)),
+					entry.eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, (data) =>
+						cb(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data),
+					),
+					entry.eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, (data) =>
+						cb(TASK_SUBAGENT_PROGRESS_CHANNEL, data),
+					),
 				];
 				return () => {
 					for (const unsub of unsubs) unsub();
 				};
 			},
-			subscribeAgents: cb => {
+			subscribeAgents: (cb) => {
 				const unsubRegistry = entry.agentRegistry.onChange(() => cb());
 				entry.onSubagentsChange = cb;
 				return () => {
@@ -147,7 +154,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 					if (agentId === MAIN_AGENT_ID) {
 						// Fire-and-forget: prompt resolves at turn end; failures are
 						// logged (the adapter targets its own error frames).
-						void session.prompt(text ?? "", { streamingBehavior: "steer" }).catch(err => {
+						void session.prompt(text ?? "", { streamingBehavior: "steer" }).catch((err) => {
 							console.error("collab guest prompt failed:", err);
 						});
 					} else {
@@ -164,10 +171,12 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 				if (agentId === MAIN_AGENT_ID) throw new Error("no such agent");
 				await AgentLifecycleManager.global().ensureLive(agentId);
 			},
-			resolveTranscriptFile: agentId =>
+			resolveTranscriptFile: (agentId) =>
 				agentId === MAIN_AGENT_ID
 					? (session.sessionFile ?? null)
-					: (entry.transcriptSessionFilesBySubagentId.get(agentId) ?? entry.subagentSnapshots.get(agentId)?.sessionFile ?? null),
+					: (entry.transcriptSessionFilesBySubagentId.get(agentId) ??
+						entry.subagentSnapshots.get(agentId)?.sessionFile ??
+						null),
 		};
 	}
 
@@ -195,7 +204,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			sessionManager: session.sessionManager,
 			settings: session.settings,
 			cwd: session.sessionManager.getCwd(),
-			output: text => notifyEvent(entry, text),
+			output: (text) => notifyEvent(entry, text),
 			refreshCommands: () => deps.broker.broadcastAvailableCommands(entry),
 			// No plugin-state reloader is wired in the web host; re-advertising the
 			// command list is the observable part of the reload.
@@ -209,15 +218,15 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		const { session, eventBus } = entry;
 		// session.subscribe covers the entire AgentSessionEvent union — the same
 		// frames the RPC child emitted onSessionEvent.
-		session.subscribe(event => {
+		session.subscribe((event) => {
 			broadcastTo(entry.handle, { type: "event", event });
 			// Tokens/cost/context/queue counts all change at turn end.
 			if (event.type === "agent_end") void deps.broker.broadcastState(entry, true).catch(() => {});
 		});
-		eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data => {
+		eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, (data) => {
 			handleSubagentLifecycle(entry, data as SubagentLifecyclePayload);
 		});
-		eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, data => {
+		eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, (data) => {
 			handleSubagentProgress(entry, data as SubagentProgressPayload);
 		});
 	}
@@ -261,7 +270,9 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 	// Fire-and-forget: prompt resolves at turn end, so awaiting it would block
 	// the relay. Failures surface as an error frame.
 	function fireAndForgetPrompt(entry: SessionEntry, text: string, images: Images): void {
-		entry.session.prompt(text, { images }).catch(err => broadcast({ type: "error", error: String(err) }));
+		entry.session
+			.prompt(text, { images })
+			.catch((err) => broadcast({ type: "error", error: String(err) }));
 		maybeGenerateTitle(entry, text);
 	}
 
@@ -274,7 +285,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		if (sessionManager.getSessionName() || Bun.env.PI_NO_TITLE) return;
 		entry.session
 			.generateTitle(text)
-			.then(async title => {
+			.then(async (title) => {
 				if (title && !sessionManager.getSessionName()) {
 					await sessionManager.setSessionName(title, "auto");
 				}
@@ -283,7 +294,11 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 	}
 
 	/** Runs builtin / commands (/export, /compact, …); returns true when the input was consumed. */
-	async function runBuiltinSlashCommand(entry: SessionEntry, text: string, images: Images): Promise<boolean> {
+	async function runBuiltinSlashCommand(
+		entry: SessionEntry,
+		text: string,
+		images: Images,
+	): Promise<boolean> {
 		const builtinResult = await executeAcpBuiltinSlashCommand(text, entry.slashRuntime);
 		if (builtinResult === false) return false;
 		if ("prompt" in builtinResult) fireAndForgetPrompt(entry, builtinResult.prompt, images);
@@ -296,8 +311,13 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 	 * private registry — that one only ever holds "Main". The per-session allowlist is the lifecycle
 	 * mirror: an id absent from subagentSnapshots belongs to another session (or no session) and is rejected.
 	 */
-	function liveSubagentSession(entry: SessionEntry, agentId: string, op: "steer" | "abort"): AgentSession {
-		if (!entry.subagentSnapshots.has(agentId)) throw new Error(`Cannot ${op} agent ${agentId}: no such agent`);
+	function liveSubagentSession(
+		entry: SessionEntry,
+		agentId: string,
+		op: "steer" | "abort",
+	): AgentSession {
+		if (!entry.subagentSnapshots.has(agentId))
+			throw new Error(`Cannot ${op} agent ${agentId}: no such agent`);
 		const ref = AgentRegistry.global().get(agentId);
 		if (!ref) throw new Error(`Cannot ${op} agent ${agentId}: no such agent`);
 		if (ref.status !== "running" || !ref.session) {
@@ -312,12 +332,14 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 	 * running. Jobless registrations (pre-job spawn, idle/parked zombies) die via abort + lifecycle release.
 	 */
 	async function abortSubagent(entry: SessionEntry, agentId: string): Promise<void> {
-		if (!entry.subagentSnapshots.has(agentId)) throw new Error(`Cannot abort agent ${agentId}: no such agent`);
+		if (!entry.subagentSnapshots.has(agentId))
+			throw new Error(`Cannot abort agent ${agentId}: no such agent`);
 		const manager = entry.session.asyncJobManager;
 		const job = manager?.getJob(agentId);
 		if (job) {
 			if (job.status === "running") {
-				if (!manager!.cancel(agentId)) throw new Error(`Cannot abort agent ${agentId}: job already settled`);
+				if (!manager!.cancel(agentId))
+					throw new Error(`Cannot abort agent ${agentId}: job already settled`);
 				return;
 			}
 			// Settled job row: fall through to the registration kill (rows outlive

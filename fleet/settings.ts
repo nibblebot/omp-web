@@ -16,7 +16,11 @@ import type { SettingPath } from "@oh-my-pi/pi-coding-agent/config/settings-sche
 import { getAvailableThemes } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import type { SettingsModel } from "../shared/protocol";
-import { buildSettingsModel, coerceSettingValue, type SettingsSession } from "../server/settings-model";
+import {
+	buildSettingsModel,
+	coerceSettingValue,
+	type SettingsSession,
+} from "../server/settings-model";
 
 /** The unattached settings surface the fleet control plane exposes. */
 export interface FleetSettings {

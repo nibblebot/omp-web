@@ -14,14 +14,7 @@
  * test/sync.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveStatsConfig } from "../fleet/stats/config";
@@ -29,7 +22,7 @@ import { createStatsApp, type StatsApp } from "../fleet/stats/index";
 import { syncConfig } from "../fleet/stats/routes/sync";
 
 const SYNC_ERROR_503 =
-  "omp binary not found — install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH";
+	"omp binary not found — install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH";
 
 /** Fake omp that mimics pi-utils' quirk: stats.db = join(homedir(), PI_CONFIG_DIR, "stats.db"). */
 const FAKE_OMP = `#!/usr/bin/env bun
@@ -56,115 +49,115 @@ let savedPath: string | undefined;
 let savedTimeoutMs: number;
 
 const postSync = (): Promise<Response> =>
-  app.handleFetch(
-    new Request("http://localhost/ctl/stats/sync", { method: "POST" }),
-    new URL("http://localhost/ctl/stats/sync"),
-  );
+	app.handleFetch(
+		new Request("http://localhost/ctl/stats/sync", { method: "POST" }),
+		new URL("http://localhost/ctl/stats/sync"),
+	);
 const getHealth = (): Promise<Response> =>
-  app.handleFetch(
-    new Request("http://localhost/ctl/stats/health"),
-    new URL("http://localhost/ctl/stats/health"),
-  );
+	app.handleFetch(
+		new Request("http://localhost/ctl/stats/health"),
+		new URL("http://localhost/ctl/stats/health"),
+	);
 
 beforeAll(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "sync-timeout-"));
-  binDir = join(tmpDir, "bin");
-  syncBinDir = join(tmpDir, "syncbin");
-  emptyDir = join(tmpDir, "empty");
-  mkdirSync(binDir);
-  mkdirSync(syncBinDir);
-  mkdirSync(emptyDir);
+	tmpDir = mkdtempSync(join(tmpdir(), "sync-timeout-"));
+	binDir = join(tmpDir, "bin");
+	syncBinDir = join(tmpDir, "syncbin");
+	emptyDir = join(tmpDir, "empty");
+	mkdirSync(binDir);
+	mkdirSync(syncBinDir);
+	mkdirSync(emptyDir);
 
-  // Sleeping omp: writes its pid to $OMP_PIDFILE, then sleeps long past any
-  // realistic test window so only the timeout kill can end it.
-  writeFileSync(join(binDir, "omp"), '#!/bin/sh\necho $$ > "$OMP_PIDFILE"\nsleep 30\n', {
-    mode: 0o755,
-  });
-  writeFileSync(join(syncBinDir, "omp"), FAKE_OMP, { mode: 0o755 });
+	// Sleeping omp: writes its pid to $OMP_PIDFILE, then sleeps long past any
+	// realistic test window so only the timeout kill can end it.
+	writeFileSync(join(binDir, "omp"), '#!/bin/sh\necho $$ > "$OMP_PIDFILE"\nsleep 30\n', {
+		mode: 0o755,
+	});
+	writeFileSync(join(syncBinDir, "omp"), FAKE_OMP, { mode: 0o755 });
 
-  // stats.db under $HOME (absolute config root → buildSyncEnv case 2).
-  homeTmp = mkdtempSync(join(homedir(), ".sync-b-"));
-  const cfg = resolveStatsConfig({
-    PI_CONFIG_DIR: homeTmp,
-    PI_CODING_AGENT_DIR: join(homeTmp, "agent"),
-  });
-  app = createStatsApp(cfg); // no syncRunner → default spawn path
+	// stats.db under $HOME (absolute config root → buildSyncEnv case 2).
+	homeTmp = mkdtempSync(join(homedir(), ".sync-b-"));
+	const cfg = resolveStatsConfig({
+		PI_CONFIG_DIR: homeTmp,
+		PI_CODING_AGENT_DIR: join(homeTmp, "agent"),
+	});
+	app = createStatsApp(cfg); // no syncRunner → default spawn path
 
-  savedPath = process.env.PATH;
-  savedTimeoutMs = syncConfig.timeoutMs;
+	savedPath = process.env.PATH;
+	savedTimeoutMs = syncConfig.timeoutMs;
 });
 
 afterAll(() => {
-  app.close();
-  if (savedPath === undefined) delete process.env.PATH;
-  else process.env.PATH = savedPath;
-  delete process.env.OMP_PIDFILE;
-  syncConfig.timeoutMs = savedTimeoutMs;
-  rmSync(tmpDir, { recursive: true, force: true });
-  rmSync(homeTmp, { recursive: true, force: true });
+	app.close();
+	if (savedPath === undefined) delete process.env.PATH;
+	else process.env.PATH = savedPath;
+	delete process.env.OMP_PIDFILE;
+	syncConfig.timeoutMs = savedTimeoutMs;
+	rmSync(tmpDir, { recursive: true, force: true });
+	rmSync(homeTmp, { recursive: true, force: true });
 });
 
 describe("POST /ctl/stats/sync — default runner", () => {
-  test("times out: kills the omp child and returns 504", async () => {
-    syncConfig.timeoutMs = 400;
-    const pidfile = join(tmpDir, "omp.pid");
-    process.env.PATH = `${binDir}:${savedPath ?? ""}`;
-    process.env.OMP_PIDFILE = pidfile;
+	test("times out: kills the omp child and returns 504", async () => {
+		syncConfig.timeoutMs = 400;
+		const pidfile = join(tmpDir, "omp.pid");
+		process.env.PATH = `${binDir}:${savedPath ?? ""}`;
+		process.env.OMP_PIDFILE = pidfile;
 
-    const res = await postSync();
-    expect(res.status).toBe(504);
-    expect(await res.json()).toEqual({ error: "sync timed out" });
+		const res = await postSync();
+		expect(res.status).toBe(504);
+		expect(await res.json()).toEqual({ error: "sync timed out" });
 
-    // The child was killed — its pid must be gone (allow a moment to reap).
-    const pid = Number(readFileSync(pidfile, "utf8").trim());
-    expect(Number.isInteger(pid) && pid > 0).toBe(true);
-    const deadline = Date.now() + 2000;
-    let gone = false;
-    while (Date.now() < deadline) {
-      try {
-        process.kill(pid, 0);
-        await Bun.sleep(50);
-      } catch {
-        gone = true;
-        break;
-      }
-    }
-    expect(gone).toBe(true);
-  });
+		// The child was killed — its pid must be gone (allow a moment to reap).
+		const pid = Number(readFileSync(pidfile, "utf8").trim());
+		expect(Number.isInteger(pid) && pid > 0).toBe(true);
+		const deadline = Date.now() + 2000;
+		let gone = false;
+		while (Date.now() < deadline) {
+			try {
+				process.kill(pid, 0);
+				await Bun.sleep(50);
+			} catch {
+				gone = true;
+				break;
+			}
+		}
+		expect(gone).toBe(true);
+	});
 
-  test("missing omp binary → 503 with install hint", async () => {
-    process.env.PATH = emptyDir; // nothing named omp here
-    const res = await postSync();
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: SYNC_ERROR_503 });
-  });
+	test("missing omp binary → 503 with install hint", async () => {
+		process.env.PATH = emptyDir; // nothing named omp here
+		const res = await postSync();
+		expect(res.status).toBe(503);
+		expect(await res.json()).toEqual({ error: SYNC_ERROR_503 });
+	});
 
-  test("absolute config root under $HOME: sync lands in the real stats.db, never a $HOME-nested copy", async () => {
-    syncConfig.timeoutMs = 5000; // generous — the fake omp is a bun script
-    process.env.PATH = `${syncBinDir}:${savedPath ?? ""}`;
+	test("absolute config root under $HOME: sync lands in the real stats.db, never a $HOME-nested copy", async () => {
+		syncConfig.timeoutMs = 5000; // generous — the fake omp is a bun script
+		process.env.PATH = `${syncBinDir}:${savedPath ?? ""}`;
 
-    const res = await postSync();
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      processed: number;
-      files: number;
-      totalMessages: number;
-      durationMs: number;
-    };
-    expect(body).toMatchObject({ processed: 1, files: 1, totalMessages: 1 });
-    expect(typeof body.durationMs).toBe("number");
+		const res = await postSync();
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			processed: number;
+			files: number;
+			totalMessages: number;
+			durationMs: number;
+		};
+		expect(body).toMatchObject({ processed: 1, files: 1, totalMessages: 1 });
+		expect(typeof body.durationMs).toBe("number");
 
-    // The REAL stats.db gained the row (visible through the post-sync reprobe).
-    const health = await getHealth();
-    expect(health.status).toBe(200);
-    const h = (await health.json()) as {
-      dbCounts: { messages: number };
-    };
-    expect(h.dbCounts.messages).toBe(1);
+		// The REAL stats.db gained the row (visible through the post-sync reprobe).
+		const health = await getHealth();
+		expect(health.status).toBe(200);
+		const h = (await health.json()) as {
+			dbCounts: { messages: number };
+		};
+		expect(h.dbCounts.messages).toBe(1);
 
-    // The old-bug location — join(homedir(), <absolute statsDbPath>) — must
-    // NOT exist: the child got the home-relative NAME, not the literal path.
-    const nested = join(homedir(), homeTmp.replace(/^\//, ""), "stats.db");
-    expect(existsSync(nested)).toBe(false);
-  });
+		// The old-bug location — join(homedir(), <absolute statsDbPath>) — must
+		// NOT exist: the child got the home-relative NAME, not the literal path.
+		const nested = join(homedir(), homeTmp.replace(/^\//, ""), "stats.db");
+		expect(existsSync(nested)).toBe(false);
+	});
 });

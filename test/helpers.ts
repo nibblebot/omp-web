@@ -19,41 +19,41 @@ let app: StatsApp | null = null;
 let server: Server | null = null;
 
 export async function startServer(): Promise<void> {
-  if (server) return;
-  app = createStatsApp({
-    configRoot: fixtureRoot,
-    statsDbPath: join(fixtureRoot, "stats.db"),
-    sessionsDir: join(fixtureRoot, "agent", "sessions"),
-  });
-  server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0, // ephemeral — no fixed port to collide with
-    fetch: async (req) => {
-      const url = new URL(req.url);
-      if (url.pathname.startsWith("/ctl/stats")) {
-        const r = await app!.handleFetch(req, url);
-        if (r !== null) return r;
-      }
-      // Anything the stats app does not own is the fleet control plane's
-      // 404 — mirrored here so HTTP-level tests stay end-to-end.
-      return new Response(JSON.stringify({ error: "not found" }), {
-        status: 404,
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  baseUrl = `http://127.0.0.1:${server.port}`;
+	if (server) return;
+	app = createStatsApp({
+		configRoot: fixtureRoot,
+		statsDbPath: join(fixtureRoot, "stats.db"),
+		sessionsDir: join(fixtureRoot, "agent", "sessions"),
+	});
+	server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0, // ephemeral — no fixed port to collide with
+		fetch: async (req) => {
+			const url = new URL(req.url);
+			if (url.pathname.startsWith("/ctl/stats")) {
+				const r = await app!.handleFetch(req, url);
+				if (r !== null) return r;
+			}
+			// Anything the stats app does not own is the fleet control plane's
+			// 404 — mirrored here so HTTP-level tests stay end-to-end.
+			return new Response(JSON.stringify({ error: "not found" }), {
+				status: 404,
+				headers: { "content-type": "application/json" },
+			});
+		},
+	});
+	baseUrl = `http://127.0.0.1:${server.port}`;
 }
 
 export async function stopServer(): Promise<void> {
-  const s = server;
-  server = null;
-  if (s) s.stop(true);
-  const a = app;
-  app = null;
-  if (a) a.close();
+	const s = server;
+	server = null;
+	if (s) s.stop(true);
+	const a = app;
+	app = null;
+	if (a) a.close();
 }
 
 export async function api(path: string): Promise<Response> {
-  return fetch(`${baseUrl}${path}`);
+	return fetch(`${baseUrl}${path}`);
 }

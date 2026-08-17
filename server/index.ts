@@ -73,7 +73,9 @@ try {
 }
 // Non-loopback bind without a token is a startup hard error (R14).
 if (!isLoopbackHost(config.host) && !config.token) {
-	console.error(`omp-session: refusing to bind non-loopback address "${config.host}" without a token; pass --token or set OMP_SESSION_TOKEN`);
+	console.error(
+		`omp-session: refusing to bind non-loopback address "${config.host}" without a token; pass --token or set OMP_SESSION_TOKEN`,
+	);
 	process.exit(1);
 }
 // TUI default global config directory (~/.omp/agent; sdk.ts documents the same).
@@ -107,7 +109,7 @@ function markActivity(): void {
  * connect-implies-attached invariant holds even for streams that race boot.
  */
 let resolveBootReady: () => void = () => {};
-const bootReady = new Promise<void>(resolve => {
+const bootReady = new Promise<void>((resolve) => {
 	resolveBootReady = resolve;
 });
 
@@ -120,7 +122,9 @@ function sleep(ms: number): Promise<void> {
 /** omp-session version for hello_ok: package.json next to server/ when resolvable, else "dev". */
 async function resolveVersion(): Promise<string> {
 	try {
-		const pkg = (await Bun.file(path.join(import.meta.dir, "..", "package.json")).json()) as { version?: unknown };
+		const pkg = (await Bun.file(path.join(import.meta.dir, "..", "package.json")).json()) as {
+			version?: unknown;
+		};
 		return typeof pkg.version === "string" && pkg.version.length > 0 ? pkg.version : "dev";
 	} catch {
 		return "dev";
@@ -156,7 +160,14 @@ const relay: RelayHandle = createRelay({
 // ---------------------------------------------------------------------------
 
 const daemonBroker = createDaemonBroker({ config, getReadyAt: () => readyAt });
-const collabSession = createCollabSession({ config, agentDir, authStorage, modelRegistry, settings, broker: daemonBroker });
+const collabSession = createCollabSession({
+	config,
+	agentDir,
+	authStorage,
+	modelRegistry,
+	settings,
+	broker: daemonBroker,
+});
 const {
 	methods: METHODS,
 	readOnly: READ_ONLY,
@@ -213,29 +224,56 @@ async function primeConsumer(
 	const snapshotSeq = snapshotDeltaSeq();
 	consumer.attached = entry.handle;
 	let seq = 1;
-	enqueueTo(consumer, encodeSseEvent(SSE_EVENT_NAME, {
-		type: "hello_ok",
-		proto: OMP_PROTO,
-		name: config.name,
-		cwd: config.cwd,
-		pid: process.pid,
-		version,
-		...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
-	}, seq++));
-	enqueueTo(consumer, encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: BOOT_HANDLE }, seq++));
+	enqueueTo(
+		consumer,
+		encodeSseEvent(
+			SSE_EVENT_NAME,
+			{
+				type: "hello_ok",
+				proto: OMP_PROTO,
+				name: config.name,
+				cwd: config.cwd,
+				pid: process.pid,
+				version,
+				...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
+			},
+			seq++,
+		),
+	);
+	enqueueTo(
+		consumer,
+		encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: BOOT_HANDLE }, seq++),
+	);
 	await sendHistoryPaced(consumer, entry.session.messages, () => seq++);
-	await enqueuePaced(consumer, encodeSseEvent(SSE_EVENT_NAME, {
-		type: "state",
-		state: daemonBroker.buildStateSnapshot(entry.session),
-		stats: entry.session.getSessionStats(),
-	}, seq++));
+	await enqueuePaced(
+		consumer,
+		encodeSseEvent(
+			SSE_EVENT_NAME,
+			{
+				type: "state",
+				state: daemonBroker.buildStateSnapshot(entry.session),
+				stats: entry.session.getSessionStats(),
+			},
+			seq++,
+		),
+	);
 	// Current collab status, so a client attaching to a live room sees it immediately.
-	await enqueuePaced(consumer, encodeSseEvent(SSE_EVENT_NAME, {
-		type: "collab_status",
-		status: collabSession.toWireStatus(entry.collab.adapter?.status ?? null),
-	}, seq++));
+	await enqueuePaced(
+		consumer,
+		encodeSseEvent(
+			SSE_EVENT_NAME,
+			{
+				type: "collab_status",
+				status: collabSession.toWireStatus(entry.collab.adapter?.status ?? null),
+			},
+			seq++,
+		),
+	);
 	if (commands !== null) {
-		await enqueuePaced(consumer, encodeSseEvent(SSE_EVENT_NAME, { type: "available_commands", commands }, seq++));
+		await enqueuePaced(
+			consumer,
+			encodeSseEvent(SSE_EVENT_NAME, { type: "available_commands", commands }, seq++),
+		);
 	}
 	// Late attachers get `ready` appended to the priming sequence (R8).
 	if (readyAt !== null) {
@@ -248,7 +286,10 @@ async function primeConsumer(
 	// (fresh client, or a drop mid-prime) means priming carries full state up
 	// to the snapshot — the floor is just the snapshot mark, and deltas that
 	// arrived during the paced prime still replay exactly once.
-	const resumeFrom = Number.isFinite(last) && last >= SSE_DELTA_SEQ_START ? Math.max(last, snapshotSeq - 1) : snapshotSeq - 1;
+	const resumeFrom =
+		Number.isFinite(last) && last >= SSE_DELTA_SEQ_START
+			? Math.max(last, snapshotSeq - 1)
+			: snapshotSeq - 1;
 	const replay = ringAfter(resumeFrom);
 	// The ring keeps only the last SSE_RING_CAP deltas and evicts from the
 	// head; a first entry above resumeFrom+1 means entries the client still
@@ -283,7 +324,7 @@ async function openEventsResponse(req: Request): Promise<Response> {
 	let consumer: SseConsumer | undefined;
 	const stream = new ReadableStream<Uint8Array>(
 		{
-			start: controller => {
+			start: (controller) => {
 				// The constructor's start callback types the controller as the
 				// default/byte union; this stream is built with a default
 				// source, so the default controller is the actual runtime type.
@@ -303,7 +344,7 @@ async function openEventsResponse(req: Request): Promise<Response> {
 				// attached are enqueued synchronously above any await; only the
 				// history chunking paces (large transcripts drain between
 				// chunks).
-				void primeConsumer(c, entry, commands, lastEventId).catch(err => {
+				void primeConsumer(c, entry, commands, lastEventId).catch((err) => {
 					console.error("Failed to prime /events stream:", err);
 				});
 			},
@@ -312,7 +353,7 @@ async function openEventsResponse(req: Request): Promise<Response> {
 				if (consumer) detachConsumer(consumer, "stream closed");
 			},
 		},
-		{ highWaterMark: SSE_BACKPRESSURE_BYTES, size: chunk => chunk?.byteLength ?? 0 },
+		{ highWaterMark: SSE_BACKPRESSURE_BYTES, size: (chunk) => chunk?.byteLength ?? 0 },
 	);
 	return new Response(stream, {
 		headers: {
@@ -330,7 +371,7 @@ async function openEventsResponse(req: Request): Promise<Response> {
 let nextLoginRequestId = 1;
 
 async function loginWithCallbacks(entry: SessionEntry, providerId: string): Promise<unknown> {
-	const knownProvider = getOAuthProviders().find(p => p.id === providerId);
+	const knownProvider = getOAuthProviders().find((p) => p.id === providerId);
 	if (!knownProvider) throw new Error(`Unknown OAuth provider: ${providerId}`);
 	// Track whether onAuth has fired. Providers that require interactive input
 	// before a browser URL cannot be satisfied by the web UI; after onAuth,
@@ -341,12 +382,17 @@ async function loginWithCallbacks(entry: SessionEntry, providerId: string): Prom
 	const promptStreams = new Set(streams);
 	try {
 		await authStorage.login(providerId as Parameters<AuthStorage["login"]>[0], {
-			onAuth: info => {
+			onAuth: (info) => {
 				authEmitted = true;
-				broadcastAnswer({ type: "login_url", url: info.url, launchUrl: info.launchUrl, instructions: info.instructions });
+				broadcastAnswer({
+					type: "login_url",
+					url: info.url,
+					launchUrl: info.launchUrl,
+					instructions: info.instructions,
+				});
 			},
-			onProgress: message => notifyEvent(entry, message),
-			onPrompt: prompt => {
+			onProgress: (message) => notifyEvent(entry, message),
+			onPrompt: (prompt) => {
 				if (!authEmitted) {
 					return Promise.reject(
 						new Error(
@@ -358,7 +404,12 @@ async function loginWithCallbacks(entry: SessionEntry, providerId: string): Prom
 				const requestId = `lr${nextLoginRequestId++}`;
 				const { promise, resolve, reject } = Promise.withResolvers<string>();
 				pendingCodeInputs.set(requestId, { streams: promptStreams, resolve, reject });
-				broadcastAnswer({ type: "login_code_request", requestId, title: prompt.message, placeholder: prompt.placeholder });
+				broadcastAnswer({
+					type: "login_code_request",
+					requestId,
+					title: prompt.message,
+					placeholder: prompt.placeholder,
+				});
 				return promise;
 			},
 		});
@@ -402,7 +453,7 @@ async function listFiles(query: string, limit: number): Promise<string[]> {
 	};
 	await walk(config.cwd, "");
 	const q = query.toLowerCase();
-	return entries.filter(f => f.toLowerCase().includes(q)).slice(0, limit);
+	return entries.filter((f) => f.toLowerCase().includes(q)).slice(0, limit);
 }
 
 /**
@@ -451,7 +502,10 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 		if (config.uiRequestTestHook && (cmd as { type?: string }).type === "test_ui_request") {
 			const entry = attachedEntry();
 			if (!entry) throw new Error("Not attached to a session");
-			void webUiRequest(entry, "confirm", { title: "test dialog", message: "finding #16 regression" }).catch(err => {
+			void webUiRequest(entry, "confirm", {
+				title: "test dialog",
+				message: "finding #16 regression",
+			}).catch((err) => {
 				broadcast({ type: "error", error: `test_ui_request failed: ${String(err)}` });
 			});
 			return;
@@ -475,7 +529,8 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				const resync = async () => {
 					try {
 						if (HISTORY_RELOAD[cmd.method]) await broadcastHistory(entry);
-						if (HISTORY_RELOAD[cmd.method] || !READ_ONLY[cmd.method]) await daemonBroker.broadcastState(entry);
+						if (HISTORY_RELOAD[cmd.method] || !READ_ONLY[cmd.method])
+							await daemonBroker.broadcastState(entry);
 					} catch (err) {
 						console.error("Post-mutation resync failed:", err);
 						broadcast({ type: "error", error: `resync failed: ${String(err)}` });
@@ -521,7 +576,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				// sessions, even when this project has none (issue #3099).
 				const infos = await SessionManager.list(config.cwd);
 				const sessionsList: SessionListEntry[] = infos
-					.map(i => ({
+					.map((i) => ({
 						path: i.path,
 						id: i.id,
 						name: i.title,
@@ -556,7 +611,11 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				broadcastTo(entry.handle, { type: "collab_status", status: { state: "starting" } });
 				const adapter = new CollabHostAdapter(collabSession.buildCollabPort(entry), {
 					hostName: config.collabHostname ?? (os.userInfo().username || "web"),
-					onStatusChange: status => broadcastTo(entry.handle, { type: "collab_status", status: collabSession.toWireStatus(status) }),
+					onStatusChange: (status) =>
+						broadcastTo(entry.handle, {
+							type: "collab_status",
+							status: collabSession.toWireStatus(status),
+						}),
 				});
 				try {
 					// Join links advertise collabUrl (or localhost); the host
@@ -567,7 +626,10 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					await adapter.start(relayBaseUrl(), `ws://localhost:${server.port}`);
 					entry.collab.adapter = adapter;
 				} catch (err) {
-					broadcastTo(entry.handle, { type: "collab_status", status: { state: "error", error: String(err) } });
+					broadcastTo(entry.handle, {
+						type: "collab_status",
+						status: { state: "error", error: String(err) },
+					});
 				} finally {
 					entry.collab.starting = false;
 				}
@@ -601,20 +663,50 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 						timeoutMs: 30_000,
 					});
 					if (result.op !== "logs") throw new Error("unexpected daemon broker response");
-					broadcastAnswer({ type: "daemon_logs_result", id: cmd.id, ok: true, text: result.text, cursor: result.cursor, state: result.state });
+					broadcastAnswer({
+						type: "daemon_logs_result",
+						id: cmd.id,
+						ok: true,
+						text: result.text,
+						cursor: result.cursor,
+						state: result.state,
+					});
 				} catch (err) {
-					broadcastAnswer({ type: "daemon_logs_result", id: cmd.id, ok: false, error: String(err) });
+					broadcastAnswer({
+						type: "daemon_logs_result",
+						id: cmd.id,
+						ok: false,
+						error: String(err),
+					});
 				}
 				break;
 			}
 			case "daemon_stop": {
 				try {
 					const client = await daemonClientForProject(cmd.projectDir);
-					const result = await client.request({ op: "stop", name: cmd.name, timeoutMs: cmd.timeoutMs ?? 10_000 });
+					const result = await client.request({
+						op: "stop",
+						name: cmd.name,
+						timeoutMs: cmd.timeoutMs ?? 10_000,
+					});
 					if (result.op !== "stop") throw new Error("unexpected daemon broker response");
-					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonBroker.daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
+					broadcastAnswer({
+						type: "daemon_control_result",
+						id: cmd.id,
+						ok: true,
+						daemon: await daemonBroker.daemonInfoWithEndpoint(
+							client,
+							cmd.projectDir,
+							result.daemon,
+						),
+					});
 				} catch (err) {
-					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
+					broadcastAnswer({
+						type: "daemon_control_result",
+						id: cmd.id,
+						ok: false,
+						error: String(err),
+					});
 				}
 				break;
 			}
@@ -623,9 +715,23 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					const client = await daemonClientForProject(cmd.projectDir);
 					const result = await client.request({ op: "restart", name: cmd.name });
 					if (result.op !== "restart") throw new Error("unexpected daemon broker response");
-					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: true, daemon: await daemonBroker.daemonInfoWithEndpoint(client, cmd.projectDir, result.daemon) });
+					broadcastAnswer({
+						type: "daemon_control_result",
+						id: cmd.id,
+						ok: true,
+						daemon: await daemonBroker.daemonInfoWithEndpoint(
+							client,
+							cmd.projectDir,
+							result.daemon,
+						),
+					});
 				} catch (err) {
-					broadcastAnswer({ type: "daemon_control_result", id: cmd.id, ok: false, error: String(err) });
+					broadcastAnswer({
+						type: "daemon_control_result",
+						id: cmd.id,
+						ok: false,
+						error: String(err),
+					});
 				}
 				break;
 			}
@@ -662,7 +768,7 @@ async function canonicalRoots(): Promise<string[]> {
 }
 
 function isInside(resolved: string, roots: string[]): boolean {
-	return roots.some(root => {
+	return roots.some((root) => {
 		const rel = path.relative(root, resolved);
 		return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 	});
@@ -796,13 +902,14 @@ const server = Bun.serve<RelaySocketData>({
 				return Response.json({ commandId: cmd.id }, { status: 202 });
 			}
 			// Fire-and-forget accept: answers ride the /events stream only.
-			void handleCommand(cmd).catch(err => console.error("command dispatch failed:", err));
+			void handleCommand(cmd).catch((err) => console.error("command dispatch failed:", err));
 			return Response.json({ commandId: cmd.id }, { status: 202 });
 		}
 		// /download and static: off-loopback requests require the token too when
 		// one is set (Authorization header or ?token= — downloads are plain fetch).
 		const loopback = isLoopbackIp(srv.requestIP(req)?.address);
-		if (!loopback && config.token && !bearerOk(req)) return new Response("Unauthorized", { status: 401 });
+		if (!loopback && config.token && !bearerOk(req))
+			return new Response("Unauthorized", { status: 401 });
 		if (url.pathname === "/download") {
 			const requested = url.searchParams.get("path");
 			if (!requested) return new Response("Missing path", { status: 400 });
@@ -817,7 +924,8 @@ const server = Bun.serve<RelaySocketData>({
 			if (!canonical) return new Response("Not found", { status: 404 });
 			const fileStat = await stat(canonical).catch(() => null);
 			if (!fileStat?.isFile()) return new Response("Not found", { status: 404 });
-			if (!isInside(canonical, await canonicalRoots())) return new Response("Forbidden", { status: 403 });
+			if (!isInside(canonical, await canonicalRoots()))
+				return new Response("Forbidden", { status: 403 });
 			return new Response(Bun.file(canonical));
 		}
 		// Static: disk dist/ first (today's behavior), then EMBEDDED_DIST (R15).
@@ -828,7 +936,9 @@ const server = Bun.serve<RelaySocketData>({
 			const key = url.pathname === "/" ? "/index.html" : url.pathname;
 			const embedded = EMBEDDED_DIST[key];
 			if (embedded) {
-				return new Response(Bun.file(embedded), { headers: { "content-type": contentTypeForPath(key) } });
+				return new Response(Bun.file(embedded), {
+					headers: { "content-type": contentTypeForPath(key) },
+				});
 			}
 			return new Response("Not found", { status: 404 });
 		}
@@ -919,7 +1029,9 @@ if (config.resume) {
 			clearSubagents(bootEntry);
 			await daemonBroker.broadcastAvailableCommands(bootEntry);
 		} else {
-			console.error(`omp-session: --resume ${config.resume}: session switch returned false; starting fresh`);
+			console.error(
+				`omp-session: --resume ${config.resume}: session switch returned false; starting fresh`,
+			);
 		}
 	} catch (err) {
 		console.error(`omp-session: --resume ${config.resume} failed (${String(err)}); starting fresh`);

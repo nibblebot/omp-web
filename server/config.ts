@@ -54,7 +54,8 @@ export interface SessionConfig {
 /** Parse a duration string: `90s`, `30m`, `1h`, or a bare number = milliseconds. */
 export function parseDuration(raw: string): number {
 	const match = /^(\d+)(ms|s|m|h)?$/.exec(raw.trim());
-	if (!match) throw new Error(`invalid duration "${raw}" (expected e.g. 90s, 30m, 1h, or bare milliseconds)`);
+	if (!match)
+		throw new Error(`invalid duration "${raw}" (expected e.g. 90s, 30m, 1h, or bare milliseconds)`);
 	const n = Number(match[1]);
 	switch (match[2]) {
 		case "s":
@@ -78,7 +79,7 @@ export function isLoopbackHost(host: string): boolean {
 	if (h === "localhost" || h === "::1") return true;
 	const v4 = h.startsWith("::ffff:") ? h.slice(7) : h;
 	const parts = v4.split(".");
-	return parts.length === 4 && parts.every(p => /^\d+$/.test(p)) && Number(parts[0]) === 127;
+	return parts.length === 4 && parts.every((p) => /^\d+$/.test(p)) && Number(parts[0]) === 127;
 }
 
 /**
@@ -95,7 +96,8 @@ export function parseConfig(argv: string[]): SessionConfig {
 		const eq = body.indexOf("=");
 		const key = eq >= 0 ? body.slice(0, eq) : body;
 		let value = eq >= 0 ? body.slice(eq + 1) : undefined;
-		if (value === undefined && i + 1 < argv.length && !argv[i + 1].startsWith("--")) value = argv[++i];
+		if (value === undefined && i + 1 < argv.length && !argv[i + 1].startsWith("--"))
+			value = argv[++i];
 		const list = flags.get(key) ?? [];
 		list.push(value ?? "");
 		flags.set(key, list);
@@ -112,14 +114,16 @@ export function parseConfig(argv: string[]): SessionConfig {
 
 	const host = flag("host") ?? Bun.env.OMP_SESSION_HOST ?? "127.0.0.1";
 
-	const idleTimeoutMs = parseDuration(flag("idle-timeout") ?? Bun.env.OMP_SESSION_IDLE_TIMEOUT ?? "30m");
+	const idleTimeoutMs = parseDuration(
+		flag("idle-timeout") ?? Bun.env.OMP_SESSION_IDLE_TIMEOUT ?? "30m",
+	);
 
 	const labels = [
 		...(flags.get("label") ?? []),
 		...(Bun.env.OMP_SESSION_LABELS ?? "")
 			.split(",")
-			.map(s => s.trim())
-			.filter(s => s.length > 0),
+			.map((s) => s.trim())
+			.filter((s) => s.length > 0),
 	];
 
 	return {

@@ -12,8 +12,21 @@ import {
 } from "./commands";
 import { SSE_EVENT_NAME } from "../shared/protocol";
 import type { ClientCommand, ServerFrame } from "../shared/protocol";
-import { addBashItem, appendBashChunk, call, connect, resolveBashItem, setState, state, type ChatItem } from "./state";
-import { cancelDangerConfirm, confirmDangerConfirm, dangerConfirm } from "./components/ConfirmDialog";
+import {
+	addBashItem,
+	appendBashChunk,
+	call,
+	connect,
+	resolveBashItem,
+	setState,
+	state,
+	type ChatItem,
+} from "./state";
+import {
+	cancelDangerConfirm,
+	confirmDangerConfirm,
+	dangerConfirm,
+} from "./components/ConfirmDialog";
 
 describe("parseInput", () => {
 	test("plain text", () => {
@@ -26,12 +39,24 @@ describe("parseInput", () => {
 	});
 
 	test("python-shell, normal and excluded", () => {
-		expect(parseInput("$print(2+2)")).toEqual({ kind: "python", code: "print(2+2)", dimmed: false });
-		expect(parseInput("$$print('secret')")).toEqual({ kind: "python", code: "print('secret')", dimmed: true });
+		expect(parseInput("$print(2+2)")).toEqual({
+			kind: "python",
+			code: "print(2+2)",
+			dimmed: false,
+		});
+		expect(parseInput("$$print('secret')")).toEqual({
+			kind: "python",
+			code: "print('secret')",
+			dimmed: true,
+		});
 	});
 
 	test("$$ is not $ with an extra $; both trim surrounding space", () => {
-		expect(parseInput("$ print(2+2)")).toEqual({ kind: "python", code: "print(2+2)", dimmed: false });
+		expect(parseInput("$ print(2+2)")).toEqual({
+			kind: "python",
+			code: "print(2+2)",
+			dimmed: false,
+		});
 		expect(parseInput("$$  print(1)")).toEqual({ kind: "python", code: "print(1)", dimmed: true });
 	});
 
@@ -41,7 +66,11 @@ describe("parseInput", () => {
 	});
 
 	test("slash with and without args", () => {
-		expect(parseInput("/compact focus on api")).toEqual({ kind: "slash", name: "compact", args: "focus on api" });
+		expect(parseInput("/compact focus on api")).toEqual({
+			kind: "slash",
+			name: "compact",
+			args: "focus on api",
+		});
 		expect(parseInput("/new")).toEqual({ kind: "slash", name: "new", args: "" });
 	});
 
@@ -57,11 +86,19 @@ describe("parseInput", () => {
 
 describe("queue shorthand", () => {
 	test("-> forces steer-queue, prefix stripped", () => {
-		expect(parseInput("-> fix the typo")).toEqual({ kind: "queue", steering: true, text: "fix the typo" });
+		expect(parseInput("-> fix the typo")).toEqual({
+			kind: "queue",
+			steering: true,
+			text: "fix the typo",
+		});
 	});
 
 	test("=> forces follow-up queue, prefix stripped", () => {
-		expect(parseInput("=> after this, summarize")).toEqual({ kind: "queue", steering: false, text: "after this, summarize" });
+		expect(parseInput("=> after this, summarize")).toEqual({
+			kind: "queue",
+			steering: false,
+			text: "after this, summarize",
+		});
 	});
 
 	test("prefixes without a trailing space stay plain text", () => {
@@ -100,7 +137,10 @@ describe("LOCAL_COMMANDS table", () => {
 describe("session command parsing", () => {
 	test("/rename with a title renames directly, no LLM round-trip", () => {
 		expect(renameDispatch("My Session")).toEqual({ method: "setSessionName", title: "My Session" });
-		expect(renameDispatch("  padded title  ")).toEqual({ method: "setSessionName", title: "padded title" });
+		expect(renameDispatch("  padded title  ")).toEqual({
+			method: "setSessionName",
+			title: "padded title",
+		});
 	});
 
 	test("bare /rename keeps the agent auto-title passthrough", () => {
@@ -132,8 +172,16 @@ describe("goal/plan local commands", () => {
 	});
 
 	test("/goal subcommands route to goalRuntime relay rows", () => {
-		expect(goalDispatch("set implement the API")).toEqual({ kind: "call", method: "goalCreate", args: ["implement the API"] });
-		expect(goalDispatch("set   padded   objective  ")).toEqual({ kind: "call", method: "goalCreate", args: ["padded objective"] });
+		expect(goalDispatch("set implement the API")).toEqual({
+			kind: "call",
+			method: "goalCreate",
+			args: ["implement the API"],
+		});
+		expect(goalDispatch("set   padded   objective  ")).toEqual({
+			kind: "call",
+			method: "goalCreate",
+			args: ["padded objective"],
+		});
 		expect(goalDispatch("pause")).toEqual({ kind: "call", method: "goalPause", args: [] });
 		expect(goalDispatch("resume")).toEqual({ kind: "call", method: "goalResume", args: [] });
 		expect(goalDispatch("drop")).toEqual({ kind: "call", method: "goalDrop", args: [] });
@@ -167,7 +215,11 @@ describe("Phase 11 web-plus commands", () => {
 			args: "what does this function do",
 		});
 		// parseInput keeps the trailing space verbatim (dispatchInput trims).
-		expect(parseInput("/BTW  explain  main() ")).toEqual({ kind: "slash", name: "btw", args: "explain  main() " });
+		expect(parseInput("/BTW  explain  main() ")).toEqual({
+			kind: "slash",
+			name: "btw",
+			args: "explain  main() ",
+		});
 	});
 
 	test("LOCAL_COMMANDS covers the Phase 11 set", () => {
@@ -296,11 +348,17 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 		expect(es).toBeDefined();
 		es!.onopen?.(); // connected = true; without this call() fails fast
 		dispatchInput(input, undefined, "enter");
-		const postedCall = posted.find((c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call" && c.method === method);
+		const postedCall = posted.find(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === method,
+		);
 		expect(postedCall).toBeDefined();
 		expect(postedCall!.streamId).toBeDefined();
 		const itemId = postedCall!.streamId!;
-		const item = () => state.items.find((it): it is Extract<ChatItem, { kind: "bash" }> => it.kind === "bash" && it.id === itemId);
+		const item = () =>
+			state.items.find(
+				(it): it is Extract<ChatItem, { kind: "bash" }> => it.kind === "bash" && it.id === itemId,
+			);
 		return { call: postedCall!, itemId, item };
 	}
 
@@ -359,8 +417,14 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 		// The UI's abort button posts abortBash as its own command.
 		const abortPromise = call("abortBash");
 		await flushMicrotasks();
-		expect(posted.map(c => (c.type === "call" ? c.method : c.type))).toEqual(["bash", "abortBash"]);
-		const abortCall = posted.find((c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call" && c.method === "abortBash")!;
+		expect(posted.map((c) => (c.type === "call" ? c.method : c.type))).toEqual([
+			"bash",
+			"abortBash",
+		]);
+		const abortCall = posted.find(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === "abortBash",
+		)!;
 
 		// The server answers the ORIGINAL call with the cancelled result.
 		dispatch(callResult(bashCall.id, { output: "tick\n", exitCode: 1, cancelled: true }));
@@ -377,7 +441,10 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 		const streamed = addBashItem("!sleep 60", false);
 		const empty = addBashItem("!never started", false);
 		appendBashChunk(streamed, "partial output\n");
-		const findBash = (id: number) => state.items.find((it): it is Extract<ChatItem, { kind: "bash" }> => it.kind === "bash" && it.id === id);
+		const findBash = (id: number) =>
+			state.items.find(
+				(it): it is Extract<ChatItem, { kind: "bash" }> => it.kind === "bash" && it.id === id,
+			);
 
 		expect(findBash(streamed)?.output).toBe("partial output\n");
 		resolveBashItem(streamed, { error: 'call "bash" timed out' });
@@ -388,7 +455,11 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 			exitCode: null,
 			output: 'partial output\n[error] call "bash" timed out',
 		});
-		expect(findBash(empty)).toMatchObject({ status: "done", exitCode: null, output: "[error] Not connected" });
+		expect(findBash(empty)).toMatchObject({
+			status: "done",
+			exitCode: null,
+			output: "[error] Not connected",
+		});
 	});
 });
 
@@ -409,7 +480,10 @@ describe("danger confirm guards (P1 hardening)", () => {
 	};
 
 	const postedMethod = (method: string) =>
-		posted.filter((c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call" && c.method === method);
+		posted.filter(
+			(c): c is Extract<ClientCommand, { type: "call" }> =>
+				c.type === "call" && c.method === method,
+		);
 
 	// Lightest transcript: one minimal user item.
 	const seedItem = () => setState({ items: [{ kind: "user", id: 1, text: "hi" }] });
@@ -424,7 +498,10 @@ describe("danger confirm guards (P1 hardening)", () => {
 		seedItem();
 		dispatchInput("/new", undefined, "enter");
 		await flushMicrotasks();
-		expect(dangerConfirm()).toMatchObject({ title: "Start a new session", confirmLabel: "New session" });
+		expect(dangerConfirm()).toMatchObject({
+			title: "Start a new session",
+			confirmLabel: "New session",
+		});
 		expect(postedMethod("newSession")).toEqual([]);
 
 		confirmDangerConfirm();
@@ -446,7 +523,10 @@ describe("danger confirm guards (P1 hardening)", () => {
 		seedItem();
 		dispatchInput("/drop", undefined, "enter");
 		await flushMicrotasks();
-		expect(dangerConfirm()).toMatchObject({ title: "Drop this session", confirmLabel: "Drop session" });
+		expect(dangerConfirm()).toMatchObject({
+			title: "Drop this session",
+			confirmLabel: "Drop session",
+		});
 		expect(postedMethod("newSession")).toEqual([]);
 
 		confirmDangerConfirm();
@@ -460,7 +540,10 @@ describe("danger confirm guards (P1 hardening)", () => {
 		setState("streaming", true);
 		dispatchInput("/fresh", undefined, "enter");
 		await flushMicrotasks();
-		expect(dangerConfirm()).toMatchObject({ title: "Reset provider state", confirmLabel: "Reset state" });
+		expect(dangerConfirm()).toMatchObject({
+			title: "Reset provider state",
+			confirmLabel: "Reset state",
+		});
 		expect(postedMethod("freshSession")).toEqual([]);
 
 		confirmDangerConfirm();

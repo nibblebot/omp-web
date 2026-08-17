@@ -1,10 +1,40 @@
-import { createEffect, createSignal, For, onCleanup, Show, untrack, type Component } from "solid-js";
+import {
+	createEffect,
+	createSignal,
+	For,
+	onCleanup,
+	Show,
+	untrack,
+	type Component,
+} from "solid-js";
 import type { DaemonEntry, DaemonStatus, RegisteredProject } from "../../shared/protocol";
-import { attachSession, daemonsByProject, removeDaemonById, sendWorktreeDeleteInfo, setSidebarVisible, setState, spawnResume, state, stopDaemonById, togglePetVisible } from "../state";
+import {
+	attachSession,
+	daemonsByProject,
+	removeDaemonById,
+	sendWorktreeDeleteInfo,
+	setSidebarVisible,
+	setState,
+	spawnResume,
+	state,
+	stopDaemonById,
+	togglePetVisible,
+} from "../state";
 import { formatDaemonUptime } from "./ActiveDaemons";
 import { Modal } from "./Modal";
 import { useClickableRow } from "./PickerRow";
-import { ChevronDownIcon, DotsIcon, FileIcon, InfoIcon, PanelLeftIcon, PlusIcon, SettingsIcon, StopIcon, TrashIcon, XIcon } from "../icons";
+import {
+	ChevronDownIcon,
+	DotsIcon,
+	FileIcon,
+	InfoIcon,
+	PanelLeftIcon,
+	PlusIcon,
+	SettingsIcon,
+	StopIcon,
+	TrashIcon,
+	XIcon,
+} from "../icons";
 
 // ---------------------------------------------------------------------------
 // Fleet-edge roster sidebar (Phase 5). Rendered by App.tsx only in
@@ -55,7 +85,7 @@ const STATUS_TITLE: Record<DaemonStatus, string> = {
 	error: "error — see details",
 };
 
-const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props => {
+const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = (props) => {
 	const [detailOpen, setDetailOpen] = createSignal(false);
 	// Activating = wake-attach in flight for this row's daemon. Read from the
 	// module-level set, NOT a component signal: daemon_status/roster frames
@@ -96,7 +126,8 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 	const linesAdded = (): number | undefined => d().git?.linesAdded;
 	const linesDeleted = (): number | undefined => d().git?.linesDeleted;
 	/** True when any diffstat group will render. */
-	const hasGitStats = () => filesChanged() > 0 || (linesAdded() ?? 0) > 0 || (linesDeleted() ?? 0) > 0;
+	const hasGitStats = () =>
+		filesChanged() > 0 || (linesAdded() ?? 0) > 0 || (linesDeleted() ?? 0) > 0;
 	/** "1 file" / "3 files" — English plural for the diffstat titles. */
 	const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -104,19 +135,19 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 		if (activating()) return;
 		const daemon = d();
 		if (daemon.status === "ready") {
-			void attachSession(daemon.daemonId).catch(err => setState("error", String(err)));
+			void attachSession(daemon.daemonId).catch((err) => setState("error", String(err)));
 		} else if (daemon.status === "asleep") {
 			// Wake then attach: the edge wakes first and answers the attach
 			// once the session is ready — send both immediately, the edge
 			// serializes them. Activate the row NOW (active highlight + waking
 			// pulse) rather than when the proxied attached frame lands.
 			const id = daemon.daemonId;
-			setActivatingIds(prev => new Set(prev).add(id));
+			setActivatingIds((prev) => new Set(prev).add(id));
 			spawnResume(id);
 			attachSession(id)
-				.catch(err => setState("error", String(err)))
+				.catch((err) => setState("error", String(err)))
 				.finally(() =>
-					setActivatingIds(prev => {
+					setActivatingIds((prev) => {
 						const next = new Set(prev);
 						next.delete(id);
 						return next;
@@ -141,14 +172,26 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 		<>
 			<div
 				class="sidebar-row daemon-row"
-				classList={{ active: isAttached() || activating(), clickable: clickable() && !activating(), "daemon-row--nested": props.nested === true, "daemon-row--worktree": isWorktree() }}
+				classList={{
+					active: isAttached() || activating(),
+					clickable: clickable() && !activating(),
+					"daemon-row--nested": props.nested === true,
+					"daemon-row--worktree": isWorktree(),
+				}}
 				{...useClickableRow(rowClick, clickable())}
 				title={waking() ? "waking — session starting…" : (STATUS_TITLE[d().status] ?? d().status)}
 			>
-				<span class="daemon-status-dot" data-status={waking() ? "resolving" : d().status} title={d().status} />
+				<span
+					class="daemon-status-dot"
+					data-status={waking() ? "resolving" : d().status}
+					title={d().status}
+				/>
 				<div class="sidebar-row-main">
 					<div class="sidebar-row-top">
-						<span class="sidebar-row-title daemon-row-title" title={isWorktree() ? (d().branch ?? d().name) : d().name}>
+						<span
+							class="sidebar-row-title daemon-row-title"
+							title={isWorktree() ? (d().branch ?? d().name) : d().name}
+						>
 							{isWorktree() ? (d().branch ?? d().name) : d().name}
 						</span>
 						{/* Row actions collapsed into a "⋯" menu at the top row's
@@ -164,7 +207,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 								aria-label="Row actions"
 								aria-haspopup="menu"
 								aria-expanded={menuOpen()}
-								onClick={e => {
+								onClick={(e) => {
 									e.stopPropagation();
 									setMenuOpenId(menuOpen() ? null : d().daemonId);
 								}}
@@ -179,7 +222,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 										class="sidebar-menu-item"
 										classList={{ armed: armedStop() }}
 										title={armedStop() ? "Second click confirms" : undefined}
-										onClick={e => {
+										onClick={(e) => {
 											e.stopPropagation();
 											if (armedStop()) doStop();
 											else armDaemon(d().daemonId, "stop");
@@ -198,7 +241,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 												? "Second click confirms"
 												: "Removes the daemon from the roster (stops it first)"
 										}
-										onClick={e => {
+										onClick={(e) => {
 											e.stopPropagation();
 											if (armedRemove()) doRemove();
 											else armDaemon(d().daemonId, "remove");
@@ -211,7 +254,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 										type="button"
 										role="menuitem"
 										class="sidebar-menu-item"
-										onClick={e => {
+										onClick={(e) => {
 											e.stopPropagation();
 											setMenuOpenId(null);
 											setDetailOpen(true);
@@ -229,7 +272,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 											role="menuitem"
 											class="sidebar-menu-item sidebar-menu-item--danger"
 											title="Stops the daemon and removes the worktree (guard checks first)"
-											onClick={e => {
+											onClick={(e) => {
 												e.stopPropagation();
 												setMenuOpenId(null);
 												sendWorktreeDeleteInfo(d().daemonId);
@@ -250,7 +293,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 								{d().project}
 							</span>
 							<For each={d().labels}>
-								{l => (
+								{(l) => (
 									<span class="daemon-chip daemon-chip--label" title={`label ${l}`}>
 										{l}
 									</span>
@@ -274,23 +317,35 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 								</span>
 							</Show>
 							<Show when={filesChanged()}>
-								{n => (
-									<span class="daemon-git-dirty" data-kind="files" title={`${plural(n(), "file")} changed`}>
+								{(n) => (
+									<span
+										class="daemon-git-dirty"
+										data-kind="files"
+										title={`${plural(n(), "file")} changed`}
+									>
 										<FileIcon />
 										{n()}
 									</span>
 								)}
 							</Show>
 							<Show when={linesAdded()}>
-								{n => (
-									<span class="daemon-git-dirty" data-kind="added" title={`${plural(n(), "line")} added`}>
+								{(n) => (
+									<span
+										class="daemon-git-dirty"
+										data-kind="added"
+										title={`${plural(n(), "line")} added`}
+									>
 										+{n()}
 									</span>
 								)}
 							</Show>
 							<Show when={linesDeleted()}>
-								{n => (
-									<span class="daemon-git-dirty" data-kind="deleted" title={`${plural(n(), "line")} deleted`}>
+								{(n) => (
+									<span
+										class="daemon-git-dirty"
+										data-kind="deleted"
+										title={`${plural(n(), "line")} deleted`}
+									>
 										-{n()}
 									</span>
 								)}
@@ -307,7 +362,7 @@ const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = props =>
 };
 
 /** Detail popover: roster facts + live stderr tail from /ctl/sessions/{id}/stderr. */
-const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = props => {
+const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = (props) => {
 	const [stderrText, setStderrText] = createSignal<string | null>(null);
 	const [stderrError, setStderrError] = createSignal<string | null>(null);
 	const [stderrLoading, setStderrLoading] = createSignal(false);
@@ -321,14 +376,18 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 		// reading it here must not turn broadcasts into refetch triggers.
 		const daemonId = untrack(d).daemonId;
 		fetch(`/ctl/sessions/${encodeURIComponent(daemonId)}/stderr`)
-			.then(r => {
+			.then((r) => {
 				if (!r.ok) {
-					throw new Error(r.status === 404 ? "not a spawned daemon — no stderr captured" : `stderr fetch failed (${r.status})`);
+					throw new Error(
+						r.status === 404
+							? "not a spawned daemon — no stderr captured"
+							: `stderr fetch failed (${r.status})`,
+					);
 				}
 				return r.json() as Promise<{ text: string }>;
 			})
-			.then(data => setStderrText(data.text))
-			.catch(err => setStderrError(err instanceof Error ? err.message : String(err)))
+			.then((data) => setStderrText(data.text))
+			.catch((err) => setStderrError(err instanceof Error ? err.message : String(err)))
 			.finally(() => setStderrLoading(false));
 	};
 
@@ -344,7 +403,12 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 			<div class="daemon-detail-header">
 				<span class="daemon-status-dot" data-status={d().status} title={d().status} />
 				<span class="daemon-detail-name">{d().name}</span>
-				<button type="button" class="daemon-detail-close" aria-label="Close daemon details" onClick={props.onClose}>
+				<button
+					type="button"
+					class="daemon-detail-close"
+					aria-label="Close daemon details"
+					onClick={props.onClose}
+				>
 					<XIcon />
 				</button>
 			</div>
@@ -360,7 +424,7 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 					<span class="daemon-detail-value">{d().mode}</span>
 				</div>
 				<Show when={(d() as RosterEntry).template}>
-					{name => (
+					{(name) => (
 						<div class="daemon-detail-fact">
 							<span class="daemon-detail-label">template</span>
 							<span class="daemon-detail-value">{name()}</span>
@@ -380,7 +444,7 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 					</div>
 				</Show>
 				<Show when={d().lastSessionFile}>
-					{file => (
+					{(file) => (
 						<div class="daemon-detail-fact">
 							<span class="daemon-detail-label">session</span>
 							<span class="daemon-detail-value" title={file()}>
@@ -394,13 +458,13 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 						<span class="daemon-detail-label">labels</span>
 						<span class="daemon-detail-value daemon-detail-labels">
 							<For each={d().labels}>
-								{l => <span class="daemon-chip daemon-chip--label">{l}</span>}
+								{(l) => <span class="daemon-chip daemon-chip--label">{l}</span>}
 							</For>
 						</span>
 					</div>
 				</Show>
 				<Show when={d().error}>
-					{err => (
+					{(err) => (
 						<div class="daemon-detail-fact daemon-detail-fact--error">
 							<span class="daemon-detail-label">error</span>
 							<span class="daemon-detail-value">{err()}</span>
@@ -410,7 +474,12 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 			</div>
 			<div class="daemon-stderr-head">
 				<span class="daemon-detail-label">stderr</span>
-				<button type="button" class="daemon-row-btn" disabled={stderrLoading()} onClick={() => void loadStderr()}>
+				<button
+					type="button"
+					class="daemon-row-btn"
+					disabled={stderrLoading()}
+					onClick={() => void loadStderr()}
+				>
 					{stderrLoading() ? "loading…" : "refresh"}
 				</button>
 			</div>
@@ -418,10 +487,12 @@ const DaemonDetail: Component<{ daemon: DaemonEntry; onClose: () => void }> = pr
 				<div class="daemon-stderr-empty">loading stderr…</div>
 			</Show>
 			<Show when={!stderrLoading() && stderrText() !== null}>
-				<pre class="daemon-stderr">{stderrText() === "" ? "(no stderr output yet)" : stderrText()}</pre>
+				<pre class="daemon-stderr">
+					{stderrText() === "" ? "(no stderr output yet)" : stderrText()}
+				</pre>
 			</Show>
 			<Show when={stderrError()}>
-				{err => <div class="msg-notice daemon-stderr-error">{err()}</div>}
+				{(err) => <div class="msg-notice daemon-stderr-error">{err()}</div>}
 			</Show>
 		</Modal>
 	);
@@ -522,14 +593,17 @@ function buildGroups(entries: DaemonEntry[]): SidebarGroup[] {
 	}
 	return [...byRepo.keys()]
 		.sort((a, b) => a.localeCompare(b))
-		.map(name => {
+		.map((name) => {
 			const all = byRepo.get(name)!;
-			const hasWorktrees = all.some(d => d.worktreeOf !== undefined);
+			const hasWorktrees = all.some((d) => d.worktreeOf !== undefined);
 			return {
 				name,
 				hasWorktrees,
 				entries: hasWorktrees
-					? [...all.filter(d => d.worktreeOf === undefined), ...all.filter(d => d.worktreeOf !== undefined)]
+					? [
+							...all.filter((d) => d.worktreeOf === undefined),
+							...all.filter((d) => d.worktreeOf !== undefined),
+						]
 					: all,
 			};
 		});
@@ -559,7 +633,8 @@ export const DaemonSidebar: Component = () => {
 		if (next.has(key)) next.delete(key);
 		else next.add(key);
 		setCollapsedGroups(next);
-		if (typeof localStorage !== "undefined") localStorage.setItem(GROUPS_KEY, JSON.stringify([...next]));
+		if (typeof localStorage !== "undefined")
+			localStorage.setItem(GROUPS_KEY, JSON.stringify([...next]));
 	};
 
 	/** Project-first grouping: registered projects in registry order (zero-
@@ -575,7 +650,9 @@ export const DaemonSidebar: Component = () => {
 
 	/** Collapsible caret group header; the caret glyph and its rotation come
 	 *  from CSS via the data-open attribute. gkey names the collapse slot. */
-	const GroupHeader: Component<{ label: string; gkey: string; count: number; class?: string }> = props => {
+	const GroupHeader: Component<{ label: string; gkey: string; count: number; class?: string }> = (
+		props,
+	) => {
 		const open = () => !collapsedGroups().has(props.gkey);
 		return (
 			<button
@@ -596,7 +673,9 @@ export const DaemonSidebar: Component = () => {
 	 *  hover-revealed "⋯" menu carrying Delete project), main-checkout row
 	 *  first then worktree rows (daemonsByProject order), and a "+ Add
 	 *  worktree" action. */
-	const ProjectGroup: Component<{ project: RegisteredProject; daemons: DaemonEntry[] }> = props => {
+	const ProjectGroup: Component<{ project: RegisteredProject; daemons: DaemonEntry[] }> = (
+		props,
+	) => {
 		const gkey = `project:${props.project.projectId}`;
 		const open = () => !collapsedGroups().has(gkey);
 		const menuOpen = () => menuOpenId() === gkey;
@@ -624,7 +703,7 @@ export const DaemonSidebar: Component = () => {
 							aria-label={`Project actions for ${props.project.name}`}
 							aria-haspopup="menu"
 							aria-expanded={menuOpen()}
-							onClick={e => {
+							onClick={(e) => {
 								e.stopPropagation();
 								setMenuOpenId(menuOpen() ? null : gkey);
 							}}
@@ -638,7 +717,7 @@ export const DaemonSidebar: Component = () => {
 									role="menuitem"
 									class="sidebar-menu-item sidebar-menu-item--danger"
 									title="Deregisters the project (never touches disk)"
-									onClick={e => {
+									onClick={(e) => {
 										e.stopPropagation();
 										setMenuOpenId(null);
 										setState("removeProjectTarget", props.project.projectId);
@@ -652,7 +731,9 @@ export const DaemonSidebar: Component = () => {
 					</div>
 				</div>
 				<Show when={open()}>
-					<For each={props.daemons}>{d => <DaemonRow daemon={d} nested={d.worktreeOf !== undefined} />}</For>
+					<For each={props.daemons}>
+						{(d) => <DaemonRow daemon={d} nested={d.worktreeOf !== undefined} />}
+					</For>
 					<button
 						type="button"
 						class="project-add-worktree"
@@ -670,18 +751,23 @@ export const DaemonSidebar: Component = () => {
 
 	/** Trailing fallback group: entries without a projectId keep today's
 	 *  string-grouping (collapsible repo headers for worktree-holding repos). */
-	const FallbackGroup: Component<{ daemons: DaemonEntry[] }> = props => (
+	const FallbackGroup: Component<{ daemons: DaemonEntry[] }> = (props) => (
 		<For each={buildGroups(props.daemons)}>
-			{g =>
+			{(g) =>
 				g.hasWorktrees ? (
 					<>
-						<GroupHeader label={g.name} gkey={`repo:${g.name}`} count={g.entries.length} class="sidebar-group--repo" />
+						<GroupHeader
+							label={g.name}
+							gkey={`repo:${g.name}`}
+							count={g.entries.length}
+							class="sidebar-group--repo"
+						/>
 						<Show when={!collapsedGroups().has(`repo:${g.name}`)}>
-							<For each={g.entries}>{d => <DaemonRow daemon={d} nested />}</For>
+							<For each={g.entries}>{(d) => <DaemonRow daemon={d} nested />}</For>
 						</Show>
 					</>
 				) : (
-					<For each={g.entries}>{d => <DaemonRow daemon={d} />}</For>
+					<For each={g.entries}>{(d) => <DaemonRow daemon={d} />}</For>
 				)
 			}
 		</For>
@@ -697,10 +783,20 @@ export const DaemonSidebar: Component = () => {
 				<div class="picker-group-name sidebar-subgroup sidebar-projects-head">
 					Projects
 					<span class="sidebar-projects-actions">
-						<button class="sidebar-icon-btn" onClick={() => setState("modal", "add-project")} title="Add a project" aria-label="Add a project">
+						<button
+							class="sidebar-icon-btn"
+							onClick={() => setState("modal", "add-project")}
+							title="Add a project"
+							aria-label="Add a project"
+						>
 							<PlusIcon />
 						</button>
-						<button class="sidebar-icon-btn" onClick={() => setSidebarVisible(false)} title="Close sidebar" aria-label="Close sidebar">
+						<button
+							class="sidebar-icon-btn"
+							onClick={() => setSidebarVisible(false)}
+							title="Close sidebar"
+							aria-label="Close sidebar"
+						>
 							<XIcon />
 						</button>
 					</span>
@@ -710,9 +806,11 @@ export const DaemonSidebar: Component = () => {
 				</Show>
 				<Show when={groups().length > 0}>
 					<For each={groups()}>
-						{g =>
+						{(g) =>
 							g.project === null ? (
-								g.daemons.length > 0 ? <FallbackGroup daemons={g.daemons} /> : null
+								g.daemons.length > 0 ? (
+									<FallbackGroup daemons={g.daemons} />
+								) : null
 							) : (
 								<ProjectGroup project={g.project} daemons={g.daemons} />
 							)
@@ -726,7 +824,7 @@ export const DaemonSidebar: Component = () => {
 				<button
 					class="sidebar-icon-btn"
 					classList={{ active: state.view === "transcripts" }}
-					onClick={() => setState("view", v => (v === "transcripts" ? "chat" : "transcripts"))}
+					onClick={() => setState("view", (v) => (v === "transcripts" ? "chat" : "transcripts"))}
 					title="Transcripts"
 					aria-label="Transcripts"
 				>

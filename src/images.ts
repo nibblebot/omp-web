@@ -18,7 +18,10 @@ export function scanImages(value: unknown, out: ImageArg[] = []): ImageArg[] {
 		out.push({ type: "image", data: obj.data, mimeType: obj.mimeType });
 		return out;
 	}
-	if ((obj.type === "computer_screenshot" || obj.type === "screenshot") && typeof obj.image_url === "string") {
+	if (
+		(obj.type === "computer_screenshot" || obj.type === "screenshot") &&
+		typeof obj.image_url === "string"
+	) {
 		const m = /^data:([^;,]+);base64,(.+)$/s.exec(obj.image_url);
 		if (m) out.push({ type: "image", data: m[2], mimeType: m[1] });
 		return out;
