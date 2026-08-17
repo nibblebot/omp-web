@@ -45,6 +45,7 @@ import { basename, join } from "node:path";
 import type { RegisteredProject } from "../shared/protocol";
 import type { FleetConfig } from "./config";
 import { loadConfig, resolveConfigPath } from "./config";
+import { acquireFileLock, type FileLock } from "../shared/file-lock";
 import type { RegistryEntry } from "./registry";
 import { bootStatusFor, Registry } from "./registry";
 import { listProjects, validateProjectPath } from "./discovery";
@@ -72,7 +73,7 @@ import {
 } from "./worktrees";
 
 const DEFAULT_PORT = 4722;
-const DEFAULT_STATE_PATH = join(homedir(), ".ompweb", "fleet", "state.json");
+const DEFAULT_STATE_PATH = join(homedir(), ".ompweb", "fleet-state.json");
 
 /**
  * Historical transcripts/stats API (read-only stats.db + session files),
@@ -328,6 +329,8 @@ class FleetServerImpl implements FleetServer {
 	readonly eventLog = new FleetEventLog();
 	readonly startedAt: number;
 	readonly fleetFacts: FleetFacts;
+	/** State-file lock: taken in startFleet, released in close(). */
+	readonly lock: FileLock;
 
 	readonly #server: Server<undefined>;
 
@@ -336,10 +339,12 @@ class FleetServerImpl implements FleetServer {
 		config: FleetConfig,
 		port: number,
 		facts: { statePath: string; configPath: string | null },
+		lock: FileLock,
 		settingsOptions?: FleetSettingsOptions,
 	) {
 		this.registry = registry;
 		this.config = config;
+		this.lock = lock;
 		this.startedAt = Date.now();
 		this.fleetFacts = {
 			port: 0,
@@ -439,6 +444,9 @@ class FleetServerImpl implements FleetServer {
 		} catch (err) {
 			errors.push(err);
 		}
+		// Release the state lock last: another fleet may start on this state
+		// path once everything above is torn down. release() never throws.
+		this.lock.release();
 		if (errors.length > 0) throw errors[0];
 	}
 
@@ -977,19 +985,30 @@ export async function startFleet(
 	} = {},
 ): Promise<FleetServer> {
 	const statePath = resolveStatePath(opts.statePath);
-	const registry = new Registry(statePath);
-	await registry.load();
-	const configPath = resolveConfigPath(opts.configPath);
-	const config = await loadConfig(opts.configPath, { workspaceDir: opts.workspaceDir });
-	return new FleetServerImpl(
-		registry,
-		config,
-		resolvePort(opts.port),
-		{
-			statePath,
-			// Null when no config file exists at the resolved location (defaults apply).
-			configPath: existsSync(configPath) ? configPath : null,
-		},
-		opts.settings,
-	);
+	// One fleet per state file: the O_EXCL pidfile lock fails loudly when a
+	// second fleet starts against the same state (no clobbering writes).
+	// The lock is handed to the server and released in close(); any failure
+	// below releases it before rethrowing.
+	const lock = acquireFileLock(`${statePath}.lock`, "omp-fleet");
+	try {
+		const registry = new Registry(statePath);
+		await registry.load();
+		const configPath = resolveConfigPath(opts.configPath);
+		const config = await loadConfig(opts.configPath, { workspaceDir: opts.workspaceDir });
+		return new FleetServerImpl(
+			registry,
+			config,
+			resolvePort(opts.port),
+			{
+				statePath,
+				// Null when no config file exists at the resolved location (defaults apply).
+				configPath: existsSync(configPath) ? configPath : null,
+			},
+			lock,
+			opts.settings,
+		);
+	} catch (err) {
+		lock.release();
+		throw err;
+	}
 }

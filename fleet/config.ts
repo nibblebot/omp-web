@@ -10,7 +10,7 @@
  * command outright (dev runners point it at the source entry when the
  * production binary isn't built). `workspaceDir` (root for managed
  * worktrees) resolves flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR`
- * > config-file `workspaceDir` key > `~/ompweb/workspaces`. A leading `~` is
+ * > config-file `workspaceDir` key > `~/.ompweb/workspaces`. A leading `~` is
  * expanded to `os.homedir()` in paths.
  */
 
@@ -40,7 +40,7 @@ export interface FleetConfig {
 	/**
 	 * Root for managed worktrees (created lazily on first worktree, never at
 	 * boot). Flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR` >
-	 * config-file `workspaceDir` key > `~/ompweb/workspaces` (~ expanded).
+	 * config-file `workspaceDir` key > `~/.ompweb/workspaces` (~ expanded).
 	 */
 	workspaceDir: string;
 }
@@ -55,12 +55,17 @@ export const DEFAULT_LOCAL_TEMPLATE: SpawnTemplate = {
 	command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
 };
 
+/** Default managed-worktree root under the consolidated home data dir. */
+export function defaultWorkspaceDir(): string {
+	return expandTilde("~/.ompweb/workspaces");
+}
+
 function defaultConfig(): FleetConfig {
 	return {
 		roots: [expandTilde("~/repos")],
 		templates: { local: { ...DEFAULT_LOCAL_TEMPLATE } },
 		defaultTemplate: "local",
-		workspaceDir: expandTilde("~/ompweb/workspaces"),
+		workspaceDir: defaultWorkspaceDir(),
 	};
 }
 

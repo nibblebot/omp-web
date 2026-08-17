@@ -51,7 +51,7 @@ Ports: defaults vite **4713**, omp-session **4721**, omp-fleet **4722** (used by
 | `server/collab-*.ts` | Collab host adapter / WS relay / session port / CLI. Only WebSocket left in the daemon (non-goal of the SSE plan) |
 | `server/daemon-broker.ts` | `daemons` roster broadcast (hub-launch processes), polled every 3s while streams are live |
 | `server/embedded-dist.ts` | **Stub** (`{}`) checked in; `build:omp-session` regenerates it with `with { type: "file" }` imports and restores the stub in a `finally`. Never hand-edit beyond the stub |
-| `fleet/registry.ts` | Persistent insertion-ordered roster + registered `projects[]` (`~/.ompweb/fleet/state.json`, atomic tmp+rename; monotonic `pN` project ids) |
+| `fleet/registry.ts` | Persistent insertion-ordered roster + registered `projects[]` (`~/.ompweb/fleet-state.json`, atomic tmp+rename; monotonic `pN` project ids) |
 | `fleet/supervisor.ts` | Spawns/restarts omp-session children via templates, parses `OMP_SESSION|` lines, git polling |
 | `fleet/connector.ts` | Per-daemon SSE client: status ladder, backoff, silence deadline, Last-Event-ID resume |
 | `fleet/edge.ts` | Browser-facing half: `/events` downlink, `/command` uplink, per-browser daemon proxy pipes, aggregated `daemons` frame |
@@ -94,10 +94,11 @@ Key constants (all in `shared/protocol.ts`): `OMP_PROTO = 2`, `SSE_KEEPALIVE_MS`
 
 ### Fleet
 - **Zero agent state.** Fleet persists only roster metadata (endpoints, per-spawn bearer tokens, `lastSessionFile`, git branch/dirty counts) and re-derives everything else by dialing daemons.
+- **Exclusive state locks.** Fleet state and session files are pidfile-locked for the owning process's lifetime, self-healing via pid liveness: a second fleet (or a second daemon resuming the same session file) refuses to start instead of clobbering state.
 - **Tokens are minted fresh per spawn/restart and must NEVER be serialized** into roster frames or `/ctl/debug` (tests enforce this — `edge.test.ts` asserts `toRosterEntry` output). Same for endpoints in `/ctl/debug` snapshots.
 - `dN` ids are monotonic and never reused. Registry persists atomically (tmp+rename) on every mutation.
 - `pN` project ids are monotonic and never reused; projects are realpath-keyed and deduped on registration (a duplicate realpath returns the existing project); `removeProject` refuses while roster entries reference it and names the blockers. Projects persist in the same atomic state file as the roster, and the `registered_projects` frame must NEVER serialize tokens/endpoints (same rule as roster frames; `edge.test.ts` enforces it).
-- Managed worktrees live under the `workspaceDir` knob (flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR` > config-file `workspaceDir` key > `~/ompweb/workspaces`; the root is created lazily on first worktree, never at boot). Deleting one requires ownership (realpath under `workspaceDir`) AND a clean tree — no `--force` in v1; the optional branch delete is `git branch -d` only, never `-D`. Session transcripts live under the agent dir, never inside the worktree, so worktree deletion never touches them.
+- Managed worktrees live under the `workspaceDir` knob (flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR` > config-file `workspaceDir` key > `~/.ompweb/workspaces`; the root is created lazily on first worktree, never at boot). Deleting one requires ownership (realpath under `workspaceDir`) AND a clean tree — no `--force` in v1; the optional branch delete is `git branch -d` only, never `-D`. Session transcripts live under the agent dir, never inside the worktree, so worktree deletion never touches them.
 - Status ladder is monotonic `connecting < session < resolving < ready`; `error` is terminal (only respawn refreshes). `hello_ok` gates: `OMP_PROTO` mismatch → terminal error; registered cwd vs `hello_ok.cwd` mismatch → `error cwd mismatch` (empty registered cwd → adopt hello's).
 - Endpoint resolution order (spawn): last `{event:"endpoint"}` wrapper line › template `host` + listening port › `advertise` › loopback. 30s endpoint timeout → error + kill.
 - Spawn templates: `{cwd}` `{token}` `{name}` `{labels}` `{resume}` substitution, `sh -c`, no shell escaping in `fillTemplate` (caller `shellQuote`s). `OMP_FLEET_LOCAL_TEMPLATE` replaces the `local` template command outright (dev runners).

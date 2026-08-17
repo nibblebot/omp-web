@@ -29,7 +29,7 @@ Prerequisite: [Bun](https://bun.sh). Then `bun install` once.
 bun run dev   # vite (HMR; /events + /command + /download proxied to the fleet edge) + omp-fleet
 ```
 
-Ports are chosen at runtime (backends bind ephemeral ports, vite gets a probe-picked port with retries on collision), so parallel worktrees can each run `bun run dev` — the runner prints the stack summary with the actual URLs. Open the printed UI URL, click a `ready` row to attach. UI edits hot-reload in roster mode too. Sidebar spawns work out of the box: `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so the default `local` template runs `bun server/index.ts` from the checkout (spawned daemons are not `--watch`ed; restart them to pick up server edits).
+Ports are chosen at runtime (backends bind ephemeral ports, vite gets a probe-picked port with retries on collision) and the runner prints the stack summary with the actual URLs — but two `bun run dev` in different worktrees now conflict on the shared default state (the second exits with the lock error): intended, it prevents registry clobbering; separate fleets need a distinct `OMP_FLEET_STATE`/`--port 0` combo. Open the printed UI URL, click a `ready` row to attach. UI edits hot-reload in roster mode too. Sidebar spawns work out of the box: `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so the default `local` template runs `bun server/index.ts` from the checkout (spawned daemons are not `--watch`ed; restart them to pick up server edits).
 
 ### Dev mode — standalone omp-session (single-session UI)
 
@@ -71,15 +71,17 @@ Readiness: after the SDK session exists and provider/model/auth resolution compl
 
 ## omp-fleet
 
-Registry + SSE clients + proxy + fan-out. Config `~/.omp/fleet/config.json`, state `~/.ompweb/fleet/state.json` (remote entries persist `endpoint + token + labels`; spawned entries persist template + cwd + last session file; registered projects persist in the same file — the roster survives a fleet restart). **The state file moved:** pre-move fleets left `~/.omp/fleet/state.json` orphaned in place — it is never read and never migrated; the new state file starts empty.
+Registry + SSE clients + proxy + fan-out. Config `~/.omp/fleet/config.json`, state `~/.ompweb/fleet-state.json` (remote entries persist `endpoint + token + labels`; spawned entries persist template + cwd + last session file; registered projects persist in the same file — the roster survives a fleet restart). Managed worktrees live under `~/.ompweb/workspaces` (flag/env/config-overridable, created lazily on first worktree). The pre-consolidation locations (`~/.ompweb/fleet/state.json`, `~/ompweb/workspaces`) are not read and not migrated — move any data by hand if present.
+
+**State locking:** the fleet takes an exclusive lock on `<state file>.lock` for its lifetime — a second fleet (or a second `bun run dev`) fails fast with `fleet already running (pid N) — state locked at <path>` instead of clobbering state; an omp-session takes an exclusive lock on `<sessionFile>.lock` for its lifetime — a second daemon resuming the same session file exits with `omp-session: session file <file> is locked by another omp-session (pid N)`. Locks are pidfiles that self-heal: a lock left by a dead process is broken automatically on the next start. The webui is stateless (served by fleet or omp-session), so these two locks cover it.
 
 ### Config surface
 
 | Flag / env | Default | Meaning |
 | --- | --- | --- |
 | `--port` / `OMP_FLEET_PORT` | `4722` | Control-plane port (`0` = ephemeral) |
-| `--workspace-dir` / `OMP_FLEET_WORKSPACE_DIR` | `~/ompweb/workspaces` | Root for managed worktrees (created on first worktree, not at boot) |
-| `OMP_FLEET_STATE` | `~/.ompweb/fleet/state.json` | Registry state file (env only) |
+| `--workspace-dir` / `OMP_FLEET_WORKSPACE_DIR` | `~/.ompweb/workspaces` | Root for managed worktrees (created on first worktree, not at boot) |
+| `OMP_FLEET_STATE` | `~/.ompweb/fleet-state.json` | Registry state file (env only) |
 | `OMP_FLEET_CONFIG` | `~/.omp/fleet/config.json` | Config file (env only; explicit path wins) |
 | `OMP_FLEET_SPAWN_HOOK` | — | Provision-hook command (env only; wins over the config file) |
 | `OMP_FLEET_LOCAL_TEMPLATE` | — | Replaces the `local` spawn-template command (dev runners) |

@@ -3,7 +3,7 @@
  *
  * Managed worktrees live under the `workspaceDir` config knob (env
  * `OMP_FLEET_WORKSPACE_DIR`, flag `--workspace-dir`, default
- * `~/ompweb/workspaces`), one directory per repo basename, with the worktree
+ * `~/.ompweb/workspaces`), one directory per repo basename, with the worktree
  * name slugged underneath:
  *
  *   <workspaceDir>/<repo-basename>/<slug(name)>

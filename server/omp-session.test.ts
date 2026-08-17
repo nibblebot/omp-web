@@ -10,6 +10,7 @@
  */
 
 import { afterAll, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1030,3 +1031,114 @@ test("a settled ui_request is never a stale dialog: resumers see end-after-reque
 	later.close();
 	await cleanup();
 }, 30_000);
+
+// ---------------------------------------------------------------------------
+// Session-file locking: a second daemon on the same --resume file fails loudly
+// (exit 1) while the holder is alive, and a crash-left stale lock is broken so
+// the same file starts again. The fixture lives OUTSIDE the daemons' tmp cwds
+// so daemon cleanup never deletes it mid-test.
+// ---------------------------------------------------------------------------
+
+/** Build a minimal valid resumed session file; returns its dir and absolute path. */
+async function writeResumeFixture(): Promise<{ dir: string; fixture: string }> {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "omp-session-lock-fixture-"));
+	const fixture = path.join(dir, "session.jsonl");
+	const entries = [
+		JSON.stringify({
+			type: "session",
+			version: 3,
+			id: "lock-fixture",
+			timestamp: new Date().toISOString(),
+			cwd: dir,
+		}),
+		JSON.stringify({
+			type: "message",
+			id: "m0",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: { role: "user", content: [{ type: "text", text: "lock fixture" }] },
+		}),
+	];
+	await writeFile(fixture, entries.join("\n") + "\n");
+	return { dir, fixture };
+}
+
+/** Wait for a spawned daemon to exit; asserts the exact exit code (137 = SIGKILL). */
+async function expectExitCode(
+	child: Subprocess<"ignore", "pipe", "pipe">,
+	code: number,
+): Promise<void> {
+	const actual = await Promise.race([child.exited, sleep(15_000).then(() => "timeout" as const)]);
+	expect(actual).toBe(code);
+}
+
+test("a second omp-session on the same --resume file exits 1 with a locked-session error", async () => {
+	const { dir, fixture } = await writeResumeFixture();
+	try {
+		const a = await spawnSession({ args: ["--resume", fixture] });
+		running.push(a);
+		const base = `http://127.0.0.1:${a.port}`;
+		const events = await openEvents(base);
+		await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
+		await waitForFrame(events.frames, "ready", 10_000, "ready");
+		events.close();
+		// The live holder owns the lock file, stamped with its pid.
+		expect(existsSync(`${fixture}.lock`)).toBe(true);
+		expect((JSON.parse(readFileSync(`${fixture}.lock`, "utf8")) as { pid: number }).pid).toBe(
+			a.child.pid,
+		);
+
+		// Daemon B on the same absolute --resume fails at the lock: exit 1 and
+		// the documented stderr message.
+		const b = await spawnSession({ args: ["--resume", fixture] });
+		running.push(b);
+		await expectExitCode(b.child, 1);
+		const stderr = await waitFor(
+			() => (b.stderrTail().includes("locked by another omp-session") ? b.stderrTail() : null),
+			10_000,
+			"locked-session stderr message",
+		);
+		expect(stderr).toContain(`session file ${fixture} is locked by another omp-session`);
+		expect(stderr).toMatch(/pid \d+/);
+
+		// Graceful shutdown releases the lock.
+		await a.cleanup();
+		expect(existsSync(`${fixture}.lock`)).toBe(false);
+	} finally {
+		await rm(dir, { recursive: true, force: true }).catch(() => {});
+	}
+}, 60_000);
+
+test("a crashed omp-session's stale lock is broken: the same --resume starts again", async () => {
+	const { dir, fixture } = await writeResumeFixture();
+	try {
+		const a = await spawnSession({ args: ["--resume", fixture] });
+		running.push(a);
+		const base = `http://127.0.0.1:${a.port}`;
+		const events = await openEvents(base);
+		await waitForFrame(events.frames, "hello_ok", 10_000, "hello_ok");
+		await waitForFrame(events.frames, "ready", 10_000, "ready");
+		events.close();
+
+		// Crash: SIGKILL skips shutdown, so the lock file survives with a dead
+		// pid (awaiting exited reaps the child, so kill(pid, 0) sees ESRCH).
+		a.child.kill("SIGKILL");
+		await expectExitCode(a.child, 137);
+		expect(existsSync(`${fixture}.lock`)).toBe(true);
+
+		// The stale lock must be broken: B boots on the same file.
+		const b = await spawnSession({ args: ["--resume", fixture] });
+		running.push(b);
+		const bBase = `http://127.0.0.1:${b.port}`;
+		const bEvents = await openEvents(bBase);
+		await waitForFrame(bEvents.frames, "hello_ok", 10_000, "hello_ok");
+		await waitForFrame(bEvents.frames, "ready", 10_000, "ready");
+		bEvents.close();
+		expect((JSON.parse(readFileSync(`${fixture}.lock`, "utf8")) as { pid: number }).pid).toBe(
+			b.child.pid,
+		);
+		await b.cleanup();
+	} finally {
+		await rm(dir, { recursive: true, force: true }).catch(() => {});
+	}
+}, 60_000);

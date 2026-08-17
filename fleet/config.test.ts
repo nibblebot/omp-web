@@ -25,7 +25,7 @@ describe("loadConfig", () => {
 		expect(config.templates).toEqual({ local: DEFAULT_LOCAL_TEMPLATE });
 		expect(config.defaultTemplate).toBe("local");
 		expect(config.spawnHook).toBeUndefined();
-		expect(config.workspaceDir).toBe(join(homedir(), "ompweb", "workspaces"));
+		expect(config.workspaceDir).toBe(join(homedir(), ".ompweb", "workspaces"));
 	});
 
 	test("shallow-merges the file over defaults, tolerating unknown fields", async () => {
@@ -199,9 +199,9 @@ describe("workspaceDir", () => {
 		}
 	}
 
-	test("defaults to ~/ompweb/workspaces (expanded)", async () => {
+	test("defaults to ~/.ompweb/workspaces (expanded)", async () => {
 		const config = await loadWithEnv(undefined, join(tmpDir(), "missing.json"));
-		expect(config.workspaceDir).toBe(join(homedir(), "ompweb", "workspaces"));
+		expect(config.workspaceDir).toBe(join(homedir(), ".ompweb", "workspaces"));
 	});
 
 	test("config-file workspaceDir key is honored (~ expanded)", async () => {
@@ -217,7 +217,7 @@ describe("workspaceDir", () => {
 		const file = join(tmpDir(), "config.json");
 		writeFileSync(file, JSON.stringify({ workspaceDir: 42 }));
 		const config = await loadWithEnv(undefined, file);
-		expect(config.workspaceDir).toBe(join(homedir(), "ompweb", "workspaces"));
+		expect(config.workspaceDir).toBe(join(homedir(), ".ompweb", "workspaces"));
 	});
 
 	test("env OMP_FLEET_WORKSPACE_DIR wins over the config file (~ expanded)", async () => {
@@ -234,7 +234,7 @@ describe("workspaceDir", () => {
 		expect((await loadWithEnv("", file)).workspaceDir).toBe("/ws/file");
 
 		expect((await loadWithEnv("", join(tmpDir(), "missing.json"))).workspaceDir).toBe(
-			join(homedir(), "ompweb", "workspaces"),
+			join(homedir(), ".ompweb", "workspaces"),
 		);
 	});
 

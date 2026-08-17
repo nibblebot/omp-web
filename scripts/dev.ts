@@ -467,6 +467,14 @@ function launch(child: Child): void {
 			// Retry on a fresh port before declaring the stack broken.
 			const fails = (preReadyFails.get(child.name) ?? 0) + 1;
 			preReadyFails.set(child.name, fails);
+			// Fleet exit 77 = deterministic lock conflict (another fleet holds
+			// the state file) — retrying cannot fix it, so fail immediately.
+			if (child.name === "fleet" && code === 77) {
+				log(`${child.name} exited before ready (77) — state lock held by another fleet`);
+				if (st !== undefined) st.status = "exited";
+				fatalResolve({ name: child.name, code });
+				return;
+			}
 			if (fails <= MAX_PREREADY_RETRIES) {
 				void retryPreReady(child.name, code, fails);
 				return;

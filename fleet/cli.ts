@@ -21,12 +21,13 @@
  *
  * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722.
  * Managed-worktree root: `--workspace-dir` flag, else OMP_FLEET_WORKSPACE_DIR,
- * else the config-file `workspaceDir` key, else `~/ompweb/workspaces`.
+ * else the config-file `workspaceDir` key, else `~/.ompweb/workspaces`.
  * A refused connection prints "fleet not running — start it:
  * omp-fleet serve" and exits 1.
  */
 
 import { realpathSync } from "node:fs";
+import { LockHeldError } from "../shared/file-lock";
 import { startFleet } from "./server";
 
 const DEFAULT_PORT = 4722;
@@ -239,7 +240,18 @@ function isDaemonRow(value: unknown): value is DaemonRow {
 }
 
 async function serveCmd(port: number, workspaceDir?: string): Promise<number> {
-	const server = await startFleet({ port, workspaceDir });
+	// A second fleet on the same state file is a deterministic conflict, not
+	// a retryable failure: report the live holder and exit 77.
+	const server = await startFleet({ port, workspaceDir }).catch((err: unknown) => {
+		if (err instanceof LockHeldError) {
+			console.error(
+				`fleet already running (pid ${err.holderPid}) — state locked at ${err.lockPath}`,
+			);
+			return null;
+		}
+		throw err;
+	});
+	if (server === null) return 77;
 	// Startup banner: where the fleet listens, where its state/config live,
 	// and what a previous fleet run left behind (boot statuses). The first
 	// line keeps its exact shape — scripts parse the port out of it.
@@ -655,7 +667,7 @@ commands:
 
 options:
   --port <n>           control plane port (default 4722, env OMP_FLEET_PORT)
-  --workspace-dir <d>  managed worktree root (default ~/ompweb/workspaces,
+  --workspace-dir <d>  managed worktree root (default ~/.ompweb/workspaces,
                        env OMP_FLEET_WORKSPACE_DIR)`;
 
 export async function main(argv: string[]): Promise<number> {

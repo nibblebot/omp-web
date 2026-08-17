@@ -22,6 +22,8 @@ import {
 	type StdoutContractLine,
 } from "../shared/protocol";
 import { encodeSseEvent } from "../shared/sse";
+import { acquireFileLock, LockHeldError } from "../shared/file-lock";
+import type { FileLock } from "../shared/file-lock";
 import { isLoopbackHost, parseConfig, type SessionConfig } from "./config";
 import { EMBEDDED_DIST } from "./embedded-dist";
 import { CollabHostAdapter } from "./collab-host";
@@ -993,6 +995,43 @@ process.on("SIGTERM", () => void shutdown());
 process.on("SIGHUP", () => void shutdown());
 
 // ---------------------------------------------------------------------------
+// Session-file locking: a second omp-session on the same session file fails
+// loudly (exit 1) instead of racing the holder and clobbering state. The
+// --resume file is locked before the boot session exists; the live session
+// file is locked right after createSession (a no-op when it duplicates the
+// resume lock, or when the session is in-memory and has no file). All locks
+// are released in shutdown().
+// ---------------------------------------------------------------------------
+
+const sessionLocks: FileLock[] = [];
+const heldSessionLockPaths = new Set<string>();
+
+/**
+ * Acquire a lock on `file` (path + ".lock") unless it is already held by this
+ * process. A live holder exits with the documented "locked by another
+ * omp-session" error; a signal racing boot takes the shutdown exit path.
+ */
+function acquireSessionLock(file: string | undefined): void {
+	if (!file || heldSessionLockPaths.has(file)) return;
+	try {
+		const lock = acquireFileLock(`${file}.lock`, `omp-session ${config.name}`);
+		heldSessionLockPaths.add(file);
+		sessionLocks.push(lock);
+	} catch (err) {
+		// A signal during boot runs shutdown() concurrently; that shutdown is
+		// the exit path, not this lock failure.
+		if (shuttingDown) process.exit(0);
+		if (err instanceof LockHeldError) {
+			console.error(
+				`omp-session: session file ${file} is locked by another omp-session (pid ${err.holderPid})`,
+			);
+			process.exit(1);
+		}
+		throw err;
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Boot (R8): fresh session (or --resume switch, R3), then the readiness gate
 // clears in the background once provider/model/auth resolution completes.
 // ---------------------------------------------------------------------------
@@ -1012,6 +1051,11 @@ async function bootReadiness(entry: SessionEntry): Promise<void> {
 }
 
 let bootSession: SessionEntry;
+// Lock the --resume session file before the boot session exists so a second
+// omp-session pointed at the same file fails loudly instead of racing it.
+// Only absolute paths are locked here; the live file (which may be identical)
+// is locked right after createSession below.
+if (config.resume && path.isAbsolute(config.resume)) acquireSessionLock(config.resume);
 try {
 	bootSession = await collabSession.createSession(config.cwd);
 } catch (err) {
@@ -1022,6 +1066,9 @@ try {
 	process.exit(1);
 }
 bootEntry = bootSession;
+// Lock the live session file (no-op when it duplicates the --resume lock, or
+// when the session is in-memory and sessionFile is undefined).
+acquireSessionLock(bootSession.session.sessionFile);
 if (config.resume) {
 	try {
 		const ok = await bootEntry.session.switchSession(config.resume);
@@ -1089,6 +1136,9 @@ async function shutdown(): Promise<void> {
 	if (idleTimer) clearInterval(idleTimer);
 	if (bootEntry) await closeSession(bootEntry, "server shutting down");
 	server.stop();
+	// Release session-file locks before the SDK postmortem cleanup runs so a
+	// crash-free exit never leaves a live lock behind.
+	for (const lock of sessionLocks) lock.release();
 	// Run the SDK's registered postmortem cleanup callbacks (browser/pty/MCP
 	// teardown etc.) without exiting — the exit is ours below.
 	await postmortemCleanup().catch(() => {});
