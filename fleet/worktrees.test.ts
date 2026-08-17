@@ -24,7 +24,7 @@ import {
 const tmpDirs: string[] = [];
 
 function tmpDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "omp-fleet-worktrees-"));
+	const dir = mkdtempSync(join(tmpdir(), "omp-web-worktrees-"));
 	tmpDirs.push(dir);
 	return dir;
 }
@@ -117,46 +117,46 @@ describe("slugifyWorktreeName", () => {
 describe("managedWorktreePath", () => {
 	test("composes <workspaceDir>/<repo-basename>/<slug(name)>", () => {
 		const ws = tmpDir();
-		expect(managedWorktreePath(ws, "/home/u/src/omp-fleet", "Feature Branch")).toBe(
-			join(ws, "omp-fleet", "feature-branch"),
+		expect(managedWorktreePath(ws, "/home/u/src/omp-web", "Feature Branch")).toBe(
+			join(ws, "omp-web", "feature-branch"),
 		);
 	});
 
 	test("no suffix when no marker exists", () => {
 		const ws = tmpDir();
-		expect(managedWorktreePath(ws, "/home/u/src/omp-fleet", "x")).toBe(join(ws, "omp-fleet", "x"));
+		expect(managedWorktreePath(ws, "/home/u/src/omp-web", "x")).toBe(join(ws, "omp-web", "x"));
 	});
 
 	test("no suffix when the marker names the same repo realpath", () => {
 		const ws = tmpDir();
-		const repo = "/home/u/src/omp-fleet";
-		const dir = join(ws, "omp-fleet");
+		const repo = "/home/u/src/omp-web";
+		const dir = join(ws, "omp-web");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, ".ompweb-repo"), `${repo}\n`);
-		expect(managedWorktreePath(ws, repo, "x")).toBe(join(ws, "omp-fleet", "x"));
+		expect(managedWorktreePath(ws, repo, "x")).toBe(join(ws, "omp-web", "x"));
 	});
 
 	test("suffixes the basename with a sha1 prefix when a different repo owns the directory", () => {
 		const ws = tmpDir();
-		const repoA = "/home/u/src/omp-fleet";
-		const repoB = "/home/v/src/omp-fleet";
-		const dir = join(ws, "omp-fleet");
+		const repoA = "/home/u/src/omp-web";
+		const repoB = "/home/v/src/omp-web";
+		const dir = join(ws, "omp-web");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, ".ompweb-repo"), repoA);
 		expect(managedWorktreePath(ws, repoB, "x")).toBe(
-			join(ws, `omp-fleet-${sha1Prefix(repoB)}`, "x"),
+			join(ws, `omp-web-${sha1Prefix(repoB)}`, "x"),
 		);
 	});
 
 	test("deterministic: the same inputs always map to the same path", () => {
 		const ws = tmpDir();
-		const repoA = "/home/u/src/omp-fleet";
-		const repoB = "/home/v/src/omp-fleet";
-		const dir = join(ws, "omp-fleet");
+		const repoA = "/home/u/src/omp-web";
+		const repoB = "/home/v/src/omp-web";
+		const dir = join(ws, "omp-web");
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, ".ompweb-repo"), repoA);
 		const first = managedWorktreePath(ws, repoB, "My Branch");
-		expect(first).toBe(join(ws, `omp-fleet-${sha1Prefix(repoB)}`, "my-branch"));
+		expect(first).toBe(join(ws, `omp-web-${sha1Prefix(repoB)}`, "my-branch"));
 		expect(managedWorktreePath(ws, repoB, "My Branch")).toBe(first);
 	});
 });

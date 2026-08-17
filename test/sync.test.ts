@@ -229,10 +229,10 @@ describe("buildSyncEnv", () => {
 		process.env.PI_PROFILE = "stale";
 		try {
 			const out = buildSyncEnv(
-				baseCfg(join(HOME, "repos/omp-fleet/test/.fixture", "stats.db")),
+				baseCfg(join(HOME, "repos/omp-web/test/.fixture", "stats.db")),
 				HOME,
 			);
-			expect(out.PI_CONFIG_DIR).toBe("repos/omp-fleet/test/.fixture");
+			expect(out.PI_CONFIG_DIR).toBe("repos/omp-web/test/.fixture");
 			expect("PI_PROFILE" in out).toBe(false);
 			expect(out.PI_CODING_AGENT_DIR).toBe("/home/u/repos/app/agent");
 		} finally {

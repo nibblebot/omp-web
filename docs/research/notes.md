@@ -158,7 +158,7 @@ Gaps (from the plan):
 
 ---
 
-# In omp-fleet, not in the omp TUI
+# In omp-web, not in the omp TUI
 
 - **Roster / multi-daemon supervision** — spawn, stop, remove, restart N omp-session daemons; monotonic status ladder (spawning → connecting → session → resolving → ready; asleep; error); idle auto-exit → `asleep` → respawn with `--resume`
 - **Project & worktree discovery** — multi-root scan parsing `git worktree list --porcelain` (main vs linked worktree, branch), git branch/dirty counts; powers the spawn picker

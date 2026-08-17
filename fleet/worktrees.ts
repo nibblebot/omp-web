@@ -10,7 +10,7 @@
  *
  * When a directory under workspaceDir with the same basename already belongs
  * to a DIFFERENT repo realpath, the basename is suffixed with the first 4 hex
- * chars of the sha1 of the repo realpath (`omp-fleet-a1b2` style). Ownership
+ * chars of the sha1 of the repo realpath (`omp-web-a1b2` style). Ownership
  * is recorded in a `<basename>/.ompweb-repo` marker file containing the
  * owning repo's realpath; the worktree-creation flow writes it, these helpers
  * only read it. Both helpers are pure/deterministic: the same inputs map to

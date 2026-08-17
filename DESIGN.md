@@ -1,5 +1,5 @@
 ---
-name: omp-fleet
+name: omp-web
 description: Mission-control web UI for supervising parallel omp agent daemons
 colors:
   bg: "#0f1115"
@@ -125,7 +125,7 @@ components:
     padding: "8px 12px"
 ---
 
-# Design System: omp-fleet
+# Design System: omp-web
 
 ## Overview
 

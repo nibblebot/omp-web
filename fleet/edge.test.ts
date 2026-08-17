@@ -611,7 +611,7 @@ describe("fleet edge", () => {
 	let daemonsBrowser: BrowserSocket;
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		rootsDir = join(tmp, "roots");
@@ -1187,9 +1187,9 @@ describe("fleet edge", () => {
 		const root = await fetch(`http://127.0.0.1:${server.port}/`);
 		expect(root.status).toBe(200);
 		expect(root.headers.get("content-type") ?? "").toContain("text/html");
-		const probe = await fetch(`http://127.0.0.1:${server.port}/__omp_fleet_placeholder_probe__`);
+		const probe = await fetch(`http://127.0.0.1:${server.port}/__omp_web_placeholder_probe__`);
 		expect(probe.status).toBe(200);
-		expect(await probe.text()).toContain("omp-fleet");
+		expect(await probe.text()).toContain("omp-web");
 	});
 
 	test("aggregated daemons: merge across daemons with same-projectDir preference", async () => {
@@ -1574,7 +1574,7 @@ describe("edge pure helpers", () => {
 	});
 
 	test("toRosterEntry sets managed only for cwds realpath-under the workspaceDir", () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-managed-"));
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-managed-"));
 		const ws = join(tmp, "workspaces");
 		const inside = join(ws, "repo", "feature");
 		mkdirSync(inside, { recursive: true });
@@ -1612,7 +1612,7 @@ describe("edge pure helpers", () => {
 	});
 
 	test("backpressure: overflow drops the browser stream; Last-Event-ID resume replays the ring", async () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-bp-"));
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-bp-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry);
@@ -1689,7 +1689,7 @@ describe("edge pure helpers", () => {
 	});
 
 	test("pipe liveness: a responsive daemon pipe stays up; a silent one redials without detaching the browser", async () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-liveness-"));
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-pipe-liveness-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry, undefined, {
@@ -1796,7 +1796,7 @@ describe("edge pure helpers", () => {
 	});
 
 	test("pipe resume: a mid-stream kill redials with Last-Event-ID and the browser stays attached", async () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-resume-"));
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-pipe-resume-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry, undefined, {
@@ -1907,7 +1907,7 @@ describe("edge pure helpers", () => {
 	});
 
 	test("pipe resume: a kill during priming redials WITHOUT Last-Event-ID and re-primes", async () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-priming-"));
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-pipe-priming-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry, undefined, {
@@ -1991,7 +1991,7 @@ describe("edge pure helpers", () => {
 	});
 
 	test("pipe terminal: redial budget exhaustion surfaces the loss frame", async () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-pipe-terminal-"));
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-pipe-terminal-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry, undefined, {
@@ -2070,7 +2070,7 @@ describe("edge pure helpers", () => {
 	});
 
 	test("edge rings only delta frames: history/call_result/stream_reset forward live but never replay (finding #5)", async () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-ring-filter-"));
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-ring-filter-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry, undefined, {
@@ -2197,7 +2197,7 @@ describe("edge pure helpers", () => {
 	});
 
 	test("byte-bound ring eviction drops the oldest deltas; replay after eviction still works (finding #5)", async () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-ring-bytes-"));
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-ring-bytes-"));
 		const registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		const connector = new DaemonConnector(registry, undefined, {
@@ -2341,7 +2341,7 @@ describe("edge worktree commands", () => {
 	}
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-edge-wt-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-wt-"));
 		registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
 		connector = new DaemonConnector(registry);

@@ -291,11 +291,11 @@ const PLACEHOLDER_HTML = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>omp-fleet</title>
+    <title>omp-web</title>
   </head>
   <body style="background:#0d1117;color:#e6edf3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;display:grid;place-items:center;min-height:100vh;margin:0">
     <main style="text-align:center">
-      <h1>omp-fleet</h1>
+      <h1>omp-web</h1>
       <p>The aggregate UI has not been built into <code>dist/</code> yet.</p>
     </main>
   </body>

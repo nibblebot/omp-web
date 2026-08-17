@@ -1,6 +1,6 @@
 > **⚠️ Pre-alpha.** This is personal infrastructure with sharp edges: expect breaking protocol changes, rough UI corners, and the occasional wedged daemon. It is provided **as-is, with no warranty of any kind** — don't run it on anything you can't afford to restart, and don't expose it to a network you don't trust.
 
-# omp-session + omp-fleet
+# omp-web
 
 **omp-session** is a single-session agent daemon for [`@oh-my-pi/pi-coding-agent`](https://www.npmjs.com/package/@oh-my-pi/pi-coding-agent): one process, one project directory (bound at spawn, immutable), one live agent session, served to a Solid.js web UI over SSE + POST commands. The agent runs in-process via the SDK (`createAgentSession`) — there is no child process and no JSON-RPC hop.
 

@@ -247,7 +247,7 @@ describe("fleet integration — real omp-session daemons", () => {
 				"integration tests must run from the repo root: bun test fleet/integration.test.ts",
 			);
 		}
-		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-integration-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-web-integration-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		// Hermetic per-daemon agent dir ({name} expands per daemon in the fleet

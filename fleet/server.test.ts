@@ -221,7 +221,7 @@ describe("fleet control plane", () => {
 	let entry: RegistryEntry;
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-test-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-web-test-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		const rootsDir = join(tmp, "roots");
@@ -716,7 +716,7 @@ describe("POST /ctl/projects with start:true (Phase 3 spawn)", () => {
 	let repoReal: string;
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-add-repo-spawn-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-web-add-repo-spawn-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		// The spawn fixture: the fake omp-session reports the spawned cwd in
@@ -816,7 +816,7 @@ describe("boot reconciliation (#3)", () => {
 	let fake: FakeDaemon;
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-boot-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-web-boot-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		writeFileSync(configPath, JSON.stringify({ roots: [] }));
@@ -941,7 +941,7 @@ describe("POST /ctl/provision (spawn hook)", () => {
 	let hookFake: FakeDaemon;
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-provision-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-web-provision-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		envFile = join(tmp, "hook-env.txt");
@@ -1000,7 +1000,7 @@ describe("POST /ctl/provision (spawn hook)", () => {
 	});
 
 	test("uses the requested name and empty cwd when the hook output omits them", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "omp-fleet-provision-noname-"));
+		const dir = mkdtempSync(join(tmpdir(), "omp-web-provision-noname-"));
 		const hook = join(dir, "hook.sh");
 		writeFileSync(
 			hook,
@@ -1112,7 +1112,7 @@ describe("CLI", () => {
 	let seeded: RegistryEntry;
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-cli-test-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-web-cli-test-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		const rootsDir = join(tmp, "roots");
@@ -1173,7 +1173,7 @@ describe("CLI", () => {
 		} finally {
 			console.error = originalError;
 		}
-		expect(errors.join("\n")).toContain("fleet not running — start it: omp-fleet serve");
+		expect(errors.join("\n")).toContain("fleet not running — start it: omp-web serve");
 	});
 
 	test("usage no longer advertises the removed --fan-out flag (audit #26)", async () => {
@@ -1319,7 +1319,7 @@ describe("worktree lifecycle routes", () => {
 	}
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-fleet-wt-routes-"));
+		tmp = mkdtempSync(join(tmpdir(), "omp-web-wt-routes-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		workspaceDir = join(tmp, "workspaces");
