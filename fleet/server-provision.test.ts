@@ -48,10 +48,7 @@ describe("POST /ctl/provision (spawn hook)", () => {
 		writeHappyHook();
 		// `sh -c <path>` needs the exec bit; rewrites below keep the mode.
 		chmodSync(hookPath, 0o755);
-		hookServer = await startTestFleet(
-			{ statePath, configPath },
-			{ roots: [], spawnHook: hookPath },
-		);
+		hookServer = await startTestFleet({ statePath, configPath }, { spawnHook: hookPath });
 	});
 
 	afterAll(async () => {
@@ -107,7 +104,7 @@ describe("POST /ctl/provision (spawn hook)", () => {
 			`#!/bin/sh\nprintf '{"url":"ws://127.0.0.1:${hookFake.port}","token":"hook-token"}\n'\n`,
 		);
 		chmodSync(hook, 0o755);
-		writeFileSync(cfg, JSON.stringify({ roots: [], spawnHook: hook }));
+		writeFileSync(cfg, JSON.stringify({ spawnHook: hook }));
 		const srv = await startFleet({ port: 0, statePath, configPath: cfg });
 		try {
 			const res = await postJson(srv.port, "/ctl/provision", { name: "requested-name" });

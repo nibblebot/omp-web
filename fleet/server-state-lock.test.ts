@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { LockHeldError } from "../shared/file-lock";
 import { startFleet } from "./server";
@@ -29,9 +29,7 @@ describe("fleet state lock", () => {
 
 	beforeAll(() => {
 		({ tmp, statePath, configPath } = fleetPaths());
-		const rootsDir = join(tmp, "roots");
-		mkdirSync(rootsDir, { recursive: true });
-		writeFileSync(configPath, JSON.stringify({ roots: [rootsDir] }));
+		writeFileSync(configPath, JSON.stringify({}));
 	});
 
 	afterAll(() => {

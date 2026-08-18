@@ -234,7 +234,6 @@ async function readyEntry(fake: FakeServer): Promise<{
 		backoffMaxMs: 50,
 	});
 	const config: FleetConfig = {
-		roots: [],
 		templates: {},
 		defaultTemplate: "local",
 		workspaceDir: "/tmp/fleet-test-ws",
@@ -381,7 +380,6 @@ describe("promptEntry", () => {
 			idleDropMs: 30,
 		});
 		const config: FleetConfig = {
-			roots: [],
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
@@ -416,7 +414,6 @@ describe("promptEntry", () => {
 			backoffMaxMs: 50,
 		});
 		const config: FleetConfig = {
-			roots: [],
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",

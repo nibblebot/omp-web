@@ -55,7 +55,6 @@ describe("POST /ctl/projects with start:true (Phase 3 spawn)", () => {
 		server = await startTestFleet(
 			{ statePath, configPath },
 			{
-				roots: [],
 				templates: { test: { command: ompSessionPrintfCommand(fake.port) } },
 				defaultTemplate: "test",
 			},
@@ -114,5 +113,23 @@ describe("POST /ctl/projects with start:true (Phase 3 spawn)", () => {
 		// No daemon entry was created for the failed spawn.
 		const project = server.registry.projects().find((p) => p.path === realpathSync(otherDir));
 		expect(server.registry.list().some((e) => e.projectId === project?.projectId)).toBe(false);
+	});
+
+	test("POST /ctl/spawn on a registered project's main checkout stamps the entry's projectId", async () => {
+		const project = server.registry.projects().find((p) => p.path === repoReal)!;
+		const res = await postJson(server.port, "/ctl/spawn", { cwd: repoReal, template: "test" });
+		expect(res.status).toBe(200);
+		const entry = (await res.json()) as RegistryEntry;
+		// The response carries the stamped entry; the registry agrees.
+		expect(entry.daemonId).toBeTruthy();
+		expect(entry.projectId).toBe(project.projectId);
+		expect(server.registry.get(entry.daemonId)?.projectId).toBe(project.projectId);
+		// The project's other daemons (the start:true one) are untouched.
+		expect(
+			server.registry
+				.list()
+				.filter((e) => e.projectId === project.projectId)
+				.every((e) => e.cwd === repoReal),
+		).toBe(true);
 	});
 });

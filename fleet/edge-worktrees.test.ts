@@ -60,7 +60,6 @@ describe("edge worktree commands", () => {
 		// The "local" template idles so a start:true spawn never reaches a
 		// real omp-session; the tests stop the child themselves.
 		config = {
-			roots: [],
 			templates: { local: { command: "sleep 30" } },
 			defaultTemplate: "local",
 			workspaceDir: join(tmp, "workspaces"),
@@ -400,8 +399,8 @@ describe("edge worktree commands", () => {
 	});
 
 	test("list_projects lists a registered project's unmanaged linked worktrees and drops roster cwds", async () => {
-		// A linked worktree OUTSIDE the discovery roots (roots are [] here):
-		// only the registry-backed merge can surface it.
+		// A linked worktree of the registered project: only the
+		// registry-backed merge surfaces it (there is no root scanning).
 		const wtPath = join(tmp, "merge-wt");
 		const add = await gitIn(repoDir, ["worktree", "add", "-q", "-b", "merge-branch", wtPath]);
 		expect(add.exitCode).toBe(0);
@@ -438,38 +437,6 @@ describe("edge worktree commands", () => {
 				registry.remove(entry.daemonId);
 			}
 		} finally {
-			browser.close();
-			await gitIn(repoDir, ["worktree", "remove", "--force", wtReal]);
-		}
-	});
-
-	test("list_projects dedupes a worktree that is also under a discovery root", async () => {
-		// The worktree sits directly under a discovery root, so the scan
-		// reports it too; the merge must not list it twice (discovery wins).
-		const root = join(tmp, "discovery-root");
-		mkdirSync(root, { recursive: true });
-		const wtPath = join(root, "rooted-wt");
-		const add = await gitIn(repoDir, ["worktree", "add", "-q", "-b", "rooted-branch", wtPath]);
-		expect(add.exitCode).toBe(0);
-		const wtReal = realpathSync(wtPath);
-		config.roots = [root];
-		try {
-			browser = await openBrowser(served.port);
-			await browser.waitForFrame((f) => f.type === "roster", "roster");
-			await browser.send({ type: "list_projects" });
-			const frame = await browser.waitForFrame((f) => f.type === "projects", "projects frame");
-			if (frame.type !== "projects") throw new Error("expected projects");
-			const rows = frame.projects.filter((p) => p.path === wtReal);
-			expect(rows).toHaveLength(1);
-			expect(rows[0]).toEqual({
-				name: "rooted-wt",
-				path: wtReal,
-				isWorktree: true,
-				worktreeOf: project.name,
-				branch: "rooted-branch",
-			});
-		} finally {
-			config.roots = [];
 			browser.close();
 			await gitIn(repoDir, ["worktree", "remove", "--force", wtReal]);
 		}

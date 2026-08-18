@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_LOCAL_TEMPLATE, loadConfig, type FleetConfig } from "./config";
+import { DEFAULT_LOCAL_TEMPLATE, loadConfig, resolveConfigPath, type FleetConfig } from "./config";
 
 const tmpDirs: string[] = [];
 
@@ -16,16 +16,13 @@ afterAll(() => {
 	for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
 });
 
-const DEFAULT_ROOTS = [join(homedir(), "repos")];
-
 describe("loadConfig", () => {
 	test("defaults when the file is missing", async () => {
 		const config = await loadConfig(join(tmpDir(), "nope.json"));
-		expect(config.roots).toEqual(DEFAULT_ROOTS);
 		expect(config.templates).toEqual({ local: DEFAULT_LOCAL_TEMPLATE });
 		expect(config.defaultTemplate).toBe("local");
 		expect(config.spawnHook).toBeUndefined();
-		expect(config.workspaceDir).toBe(join(homedir(), ".ompweb", "workspaces"));
+		expect(config.workspaceDir).toBe(join(homedir(), ".omp-web", "workspaces"));
 	});
 
 	test("shallow-merges the file over defaults, tolerating unknown fields", async () => {
@@ -33,7 +30,6 @@ describe("loadConfig", () => {
 		writeFileSync(
 			file,
 			JSON.stringify({
-				roots: ["/srv/repos"],
 				templates: {
 					docker: {
 						command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name}",
@@ -45,7 +41,6 @@ describe("loadConfig", () => {
 			}),
 		);
 		const config = await loadConfig(file);
-		expect(config.roots).toEqual(["/srv/repos"]);
 		expect(config.templates).toEqual({
 			docker: {
 				command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name}",
@@ -58,35 +53,38 @@ describe("loadConfig", () => {
 
 	test("partial file keeps defaults for the rest", async () => {
 		const file = join(tmpDir(), "config.json");
-		writeFileSync(file, JSON.stringify({ roots: ["/x"] }));
+		writeFileSync(file, JSON.stringify({ defaultTemplate: "docker" }));
 		const config = await loadConfig(file);
-		expect(config.roots).toEqual(["/x"]);
+		expect(config.defaultTemplate).toBe("docker");
 		expect(config.templates).toEqual({ local: DEFAULT_LOCAL_TEMPLATE });
-		expect(config.defaultTemplate).toBe("local");
 	});
 
-	test("expands ~ in roots", async () => {
+	test("a legacy roots key is ignored (configs written before its removal still load)", async () => {
 		const file = join(tmpDir(), "config.json");
-		writeFileSync(file, JSON.stringify({ roots: ["~", "~/work", "/abs/path"] }));
+		writeFileSync(file, JSON.stringify({ roots: ["~", "~/work"], defaultTemplate: "local" }));
 		const config = await loadConfig(file);
-		expect(config.roots).toEqual([homedir(), join(homedir(), "work"), "/abs/path"]);
+		expect("roots" in config).toBe(false);
+		expect(config.defaultTemplate).toBe("local");
 	});
 
 	test("OMP_FLEET_CONFIG is honored; an explicit path wins over it", async () => {
 		const dir = tmpDir();
 		const envFile = join(dir, "env.json");
-		writeFileSync(envFile, JSON.stringify({ roots: ["/from-env"], defaultTemplate: "remote" }));
+		writeFileSync(
+			envFile,
+			JSON.stringify({ workspaceDir: "/from-env", defaultTemplate: "remote" }),
+		);
 		const explicitFile = join(dir, "explicit.json");
-		writeFileSync(explicitFile, JSON.stringify({ roots: ["/from-explicit"] }));
+		writeFileSync(explicitFile, JSON.stringify({ workspaceDir: "/from-explicit" }));
 		const prev = process.env.OMP_FLEET_CONFIG;
 		process.env.OMP_FLEET_CONFIG = envFile;
 		try {
 			const fromEnv = await loadConfig();
-			expect(fromEnv.roots).toEqual(["/from-env"]);
+			expect(fromEnv.workspaceDir).toBe("/from-env");
 			expect(fromEnv.defaultTemplate).toBe("remote");
 
 			const fromExplicit = await loadConfig(explicitFile);
-			expect(fromExplicit.roots).toEqual(["/from-explicit"]);
+			expect(fromExplicit.workspaceDir).toBe("/from-explicit");
 		} finally {
 			if (prev === undefined) delete process.env.OMP_FLEET_CONFIG;
 			else process.env.OMP_FLEET_CONFIG = prev;
@@ -199,9 +197,9 @@ describe("workspaceDir", () => {
 		}
 	}
 
-	test("defaults to ~/.ompweb/workspaces (expanded)", async () => {
+	test("defaults to ~/.omp-web/workspaces (expanded)", async () => {
 		const config = await loadWithEnv(undefined, join(tmpDir(), "missing.json"));
-		expect(config.workspaceDir).toBe(join(homedir(), ".ompweb", "workspaces"));
+		expect(config.workspaceDir).toBe(join(homedir(), ".omp-web", "workspaces"));
 	});
 
 	test("config-file workspaceDir key is honored (~ expanded)", async () => {
@@ -217,7 +215,7 @@ describe("workspaceDir", () => {
 		const file = join(tmpDir(), "config.json");
 		writeFileSync(file, JSON.stringify({ workspaceDir: 42 }));
 		const config = await loadWithEnv(undefined, file);
-		expect(config.workspaceDir).toBe(join(homedir(), ".ompweb", "workspaces"));
+		expect(config.workspaceDir).toBe(join(homedir(), ".omp-web", "workspaces"));
 	});
 
 	test("env OMP_FLEET_WORKSPACE_DIR wins over the config file (~ expanded)", async () => {
@@ -234,7 +232,7 @@ describe("workspaceDir", () => {
 		expect((await loadWithEnv("", file)).workspaceDir).toBe("/ws/file");
 
 		expect((await loadWithEnv("", join(tmpDir(), "missing.json"))).workspaceDir).toBe(
-			join(homedir(), ".ompweb", "workspaces"),
+			join(homedir(), ".omp-web", "workspaces"),
 		);
 	});
 
@@ -252,7 +250,34 @@ describe("workspaceDir", () => {
 describe("DEFAULT_LOCAL_TEMPLATE", () => {
 	test("matches the contract command string", () => {
 		expect(DEFAULT_LOCAL_TEMPLATE).toEqual({
-			command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
+			command:
+				"omp-web session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
 		});
+	});
+});
+
+describe("resolveConfigPath", () => {
+	test("defaults to ~/.omp-web/config.json (no explicit path, no env)", () => {
+		const prev = process.env.OMP_FLEET_CONFIG;
+		delete process.env.OMP_FLEET_CONFIG;
+		try {
+			expect(resolveConfigPath()).toBe(join(homedir(), ".omp-web", "config.json"));
+		} finally {
+			if (prev === undefined) delete process.env.OMP_FLEET_CONFIG;
+			else process.env.OMP_FLEET_CONFIG = prev;
+		}
+	});
+
+	test("env OMP_FLEET_CONFIG wins over the default; explicit wins over env", () => {
+		const prev = process.env.OMP_FLEET_CONFIG;
+		process.env.OMP_FLEET_CONFIG = "~/from-env.json";
+		try {
+			expect(resolveConfigPath()).toBe(join(homedir(), "from-env.json"));
+			expect(resolveConfigPath("/explicit.json")).toBe("/explicit.json");
+			expect(resolveConfigPath("~/explicit.json")).toBe(join(homedir(), "explicit.json"));
+		} finally {
+			if (prev === undefined) delete process.env.OMP_FLEET_CONFIG;
+			else process.env.OMP_FLEET_CONFIG = prev;
+		}
 	});
 });

@@ -7,7 +7,7 @@
  * State is a JSON file
  * `{ "nextId": number, "entries": RegistryEntry[], "projects"?: RegisteredProject[], "nextProjectId"?: number }` —
  * the path is injectable for tests; the fleet server resolves
- * `OMP_FLEET_STATE` / `~/.ompweb/fleet-state.json` and passes it
+ * `OMP_FLEET_STATE` / `~/.omp-web/fleet-state.json` and passes it
  * in. Files written before projects existed lack the two new keys and load
  * fine (projects start empty, the counter at 1). Every mutation is persisted
  * atomically (write a sibling tmp file, then rename over the real one)

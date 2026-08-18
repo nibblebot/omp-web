@@ -18,3 +18,117 @@
 @import "./styles/fleet.css";
 @import "./styles/usage.css";
 @import "./tx/tx.css";
+
+/* --- Directory picker (DirPicker.tsx) — kept here (not in a domain file)
+   because the Phase 6 onboarding plan scopes its styles to this file. Rules
+   mirror the .project-* and .worktree-* modal idioms in fleet.css. --- */
+.dirpick {
+	display: flex;
+	flex-direction: column;
+}
+.dirpick-crumbs {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-1);
+	margin-bottom: var(--space-2);
+}
+.dirpick-crumb {
+	background: none;
+	border: none;
+	border-radius: var(--r-sm);
+	color: var(--accent);
+	font: inherit;
+	font-size: var(--fs-sm);
+	padding: 0 var(--space-1);
+	cursor: pointer;
+}
+.dirpick-crumb:hover:not(:disabled) {
+	color: var(--text);
+}
+.dirpick-crumb.current {
+	color: var(--text);
+	cursor: default;
+}
+.dirpick-sep {
+	color: var(--muted-3);
+	font-size: var(--fs-sm);
+}
+.dirpick-refresh {
+	flex: none;
+	margin-left: auto;
+}
+.dirpick-manual {
+	margin-bottom: var(--space-2);
+}
+.dirpick-manual-input {
+	width: 100%;
+}
+.dirpick-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	max-height: 40vh;
+	overflow-y: auto;
+	margin-top: var(--space-2);
+}
+.dirpick-row {
+	align-items: center;
+	width: 100%;
+	text-align: left;
+	cursor: pointer;
+}
+.dirpick-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.dirpick-git {
+	flex: none;
+}
+.dirpick-error {
+	margin: var(--space-2) 0 0;
+	text-align: left;
+	font-size: var(--fs-sm);
+}
+.dirpick-footer {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: var(--space-4);
+}
+.dirpick-select {
+	background: var(--accent-dim);
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font: inherit;
+	font-weight: 600;
+	padding: var(--space-2) var(--space-6);
+	cursor: pointer;
+}
+.dirpick-select:hover:not(:disabled) {
+	background: var(--hover);
+	border-color: var(--accent);
+}
+.dirpick-select:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+/* Path line shown under an embedded picker once a directory is chosen. */
+.dirpick-chosen {
+	font-size: var(--fs-sm);
+	color: var(--muted);
+	margin-top: var(--space-2);
+	word-break: break-all;
+}
+/* "or pick a directory…" affordance under the unregistered-worktree list. */
+.dirpick-toggle {
+	margin-top: var(--space-3);
+}
+/* Disabled state for the Add-repo submit (DirPicker hasGit gate). */
+.project-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}

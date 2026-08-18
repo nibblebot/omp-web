@@ -268,7 +268,6 @@ describe("fleet integration — real omp-session daemons", () => {
 		writeFileSync(
 			configPath,
 			JSON.stringify({
-				roots: [projectsRoot],
 				templates: {
 					local: { command: LOCAL_TEMPLATE },
 					shortidle: { command: SHORTIDLE_TEMPLATE },

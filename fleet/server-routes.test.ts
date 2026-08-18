@@ -42,11 +42,11 @@ describe("fleet control plane", () => {
 
 	beforeAll(async () => {
 		({ tmp, statePath, configPath } = fleetPaths());
-		const rootsDir = join(tmp, "roots");
-		mkdirSync(rootsDir, { recursive: true });
+		// Plain cwd usable by the spawn tests (no discovery roots exist).
+		mkdirSync(join(tmp, "spawn-cwd"), { recursive: true });
 		server = await startTestFleet(
 			{ statePath, configPath },
-			{ roots: [rootsDir] },
+			{},
 			// Stub the settings provider registry: the default lazily opens
 			// the real ~/.omp auth DB, and these tests must not touch it.
 			{ settings: { registry: async () => [] } },
@@ -66,7 +66,7 @@ describe("fleet control plane", () => {
 		expect(body).toHaveLength(0);
 	});
 
-	test("GET /ctl/projects returns the discovered scan merged with registered projects", async () => {
+	test("GET /ctl/projects returns registered projects and their unregistered worktrees", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/projects`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { projects?: unknown; registered?: unknown };
@@ -75,8 +75,9 @@ describe("fleet control plane", () => {
 		expect(Array.isArray(body.registered)).toBe(true);
 		expect(body.registered).toHaveLength(0);
 
-		// A registered project (real git repo) appears in `registered`
-		// alongside the still-empty ephemeral discovery scan.
+		// A registered project (real git repo) appears in `registered`;
+		// `projects` stays empty — it lists only unregistered linked
+		// worktrees now that root scanning is gone.
 		const repoDir = join(tmp, "registered-repo");
 		mkdirSync(repoDir, { recursive: true });
 		await gitInit(repoDir);
@@ -292,7 +293,7 @@ describe("fleet control plane", () => {
 	});
 
 	test("POST /ctl/spawn 400s when name/labels contain NUL", async () => {
-		const cwd = join(tmp, "roots");
+		const cwd = join(tmp, "spawn-cwd");
 		const resName = await postJson(server.port, "/ctl/spawn", { cwd, name: "a\u0000b" });
 		expect(resName.status).toBe(400);
 		const bodyName = (await resName.json()) as { error?: string };

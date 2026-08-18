@@ -37,7 +37,7 @@ describe("boot reconciliation (#3)", () => {
 
 	beforeAll(async () => {
 		({ tmp, statePath, configPath } = fleetPaths());
-		writeFileSync(configPath, JSON.stringify({ roots: [] }));
+		writeFileSync(configPath, JSON.stringify({}));
 		fake = startFakeDaemon("boot-token");
 		// Seed the registry exactly as a previous fleet process would have
 		// left it: stale non-terminal statuses (children/sockets died with

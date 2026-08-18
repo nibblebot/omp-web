@@ -132,7 +132,7 @@ describe("managedWorktreePath", () => {
 		const repo = "/home/u/src/omp-web";
 		const dir = join(ws, "omp-web");
 		mkdirSync(dir, { recursive: true });
-		writeFileSync(join(dir, ".ompweb-repo"), `${repo}\n`);
+		writeFileSync(join(dir, ".omp-web-repo"), `${repo}\n`);
 		expect(managedWorktreePath(ws, repo, "x")).toBe(join(ws, "omp-web", "x"));
 	});
 
@@ -142,7 +142,7 @@ describe("managedWorktreePath", () => {
 		const repoB = "/home/v/src/omp-web";
 		const dir = join(ws, "omp-web");
 		mkdirSync(dir, { recursive: true });
-		writeFileSync(join(dir, ".ompweb-repo"), repoA);
+		writeFileSync(join(dir, ".omp-web-repo"), repoA);
 		expect(managedWorktreePath(ws, repoB, "x")).toBe(join(ws, `omp-web-${sha1Prefix(repoB)}`, "x"));
 	});
 
@@ -152,7 +152,7 @@ describe("managedWorktreePath", () => {
 		const repoB = "/home/v/src/omp-web";
 		const dir = join(ws, "omp-web");
 		mkdirSync(dir, { recursive: true });
-		writeFileSync(join(dir, ".ompweb-repo"), repoA);
+		writeFileSync(join(dir, ".omp-web-repo"), repoA);
 		const first = managedWorktreePath(ws, repoB, "My Branch");
 		expect(first).toBe(join(ws, `omp-web-${sha1Prefix(repoB)}`, "my-branch"));
 		expect(managedWorktreePath(ws, repoB, "My Branch")).toBe(first);
@@ -191,7 +191,7 @@ describe("createWorktree", () => {
 		expect(created.baseRef).toBe("main");
 		expect(existsSync(target)).toBe(true);
 		// Ownership marker records the owning repo realpath.
-		expect(readFileSync(join(ws, repo.split("/").pop()!, ".ompweb-repo"), "utf8").trim()).toBe(
+		expect(readFileSync(join(ws, repo.split("/").pop()!, ".omp-web-repo"), "utf8").trim()).toBe(
 			repo,
 		);
 		// git agrees: the worktree is listed and the branch exists at base's commit.

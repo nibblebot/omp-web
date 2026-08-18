@@ -41,7 +41,7 @@ describe("fleet edge", () => {
 	let tmp: string;
 	let statePath: string;
 	let configPath: string;
-	let rootsDir: string;
+	let browseDir: string;
 	let server: FleetServer;
 	let fake: FakeSession;
 	let remoteEntry: RegistryEntry;
@@ -64,11 +64,12 @@ describe("fleet edge", () => {
 		tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-"));
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
-		rootsDir = join(tmp, "roots");
-		mkdirSync(rootsDir, { recursive: true });
-		// A fake repo (git is not needed: an unreadable .git degrades to a
-		// plain entry, which is exactly what list_projects must return).
-		mkdirSync(join(rootsDir, "proj", ".git"), { recursive: true });
+		// Browse fixture for GET /ctl/fs/browse: one plain child, one with a
+		// .git entry, one dot-dir (skipped in listings).
+		browseDir = join(tmp, "browse");
+		mkdirSync(join(browseDir, "child"), { recursive: true });
+		mkdirSync(join(browseDir, "repo", ".git"), { recursive: true });
+		mkdirSync(join(browseDir, ".hidden"), { recursive: true });
 		// The spawn fixture: the fake omp-session's hello_ok.cwd is FAKE_CWD, and
 		// the connector rejects a cwd mismatch — so edge spawns must use it.
 		mkdirSync(FAKE_CWD, { recursive: true });
@@ -76,7 +77,6 @@ describe("fleet edge", () => {
 		writeFileSync(
 			configPath,
 			JSON.stringify({
-				roots: [rootsDir],
 				templates: {
 					local: {
 						command: `printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}' && while :; do sleep 0.05; done`,
@@ -143,6 +143,42 @@ describe("fleet edge", () => {
 		expect(body).toEqual(["local"]);
 	});
 
+	test("GET /ctl/fs/browse lists subdirectories per the picker contract", async () => {
+		const res = await fetch(
+			`http://127.0.0.1:${server.port}/ctl/fs/browse?path=${encodeURIComponent(browseDir)}`,
+		);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			path: string;
+			parent: string | null;
+			dirs: Array<{ name: string; path: string; hasGit: boolean }>;
+			truncated: boolean;
+		};
+		expect(body.path).toBe(realpathSync(browseDir));
+		expect(body.parent).toBe(realpathSync(tmp));
+		expect(body.truncated).toBe(false);
+		// Dot-dir skipped; name-sorted; .git dir flags hasGit.
+		expect(body.dirs).toEqual([
+			{ name: "child", path: join(realpathSync(browseDir), "child"), hasGit: false },
+			{ name: "repo", path: join(realpathSync(browseDir), "repo"), hasGit: true },
+		]);
+	});
+
+	test("GET /ctl/fs/browse 400s for a missing or non-directory path", async () => {
+		const missing = await fetch(
+			`http://127.0.0.1:${server.port}/ctl/fs/browse?path=${encodeURIComponent(join(tmp, "gone"))}`,
+		);
+		expect(missing.status).toBe(400);
+		const missingBody = (await missing.json()) as { error?: string };
+		expect(missingBody.error).toContain("no such directory");
+		const file = await fetch(
+			`http://127.0.0.1:${server.port}/ctl/fs/browse?path=${encodeURIComponent(configPath)}`,
+		);
+		expect(file.status).toBe(400);
+		const fileBody = (await file.json()) as { error?: string };
+		expect(fileBody.error).toContain("not a directory");
+	});
+
 	test("GET /ctl/sessions/{id}/stderr 404s for unknown daemons", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions/d999/stderr`);
 		expect(res.status).toBe(404);
@@ -200,6 +236,9 @@ describe("fleet edge", () => {
 		);
 		if (priming.type !== "registered_projects") throw new Error("expected registered_projects");
 		expect(priming.projects).toEqual([]);
+		// Phase 4: the frame carries the resolved fleet config path (the
+		// test fleet boots with a real config file, so it is the path).
+		expect(priming.configPath).toBe(configPath);
 
 		// Register a real git repo: the open browser gets a live broadcast.
 		const repoDir = join(tmp, "registered-repo");
@@ -216,6 +255,7 @@ describe("fleet edge", () => {
 			);
 			if (frame.type !== "registered_projects") throw new Error("expected registered_projects");
 			expect(frame.projects).toHaveLength(1);
+			expect(frame.configPath).toBe(configPath);
 			expect(frame.projects[0]).toMatchObject({
 				projectId: project.projectId,
 				path: project.path,
@@ -264,11 +304,9 @@ describe("fleet edge", () => {
 		await browser.send({ type: "list_projects" });
 		const frame = await browser.waitForFrame((f) => f.type === "projects", "projects frame");
 		if (frame.type !== "projects") throw new Error("expected projects");
-		expect(frame.projects).toContainEqual({
-			name: "proj",
-			path: join(rootsDir, "proj"),
-			isWorktree: false,
-		});
+		// No root scanning and no registered projects here: the frame is an
+		// empty list (registered projects surface via registered_projects).
+		expect(frame.projects).toEqual([]);
 	});
 
 	test("spawn with a bad path answers an error frame", async () => {

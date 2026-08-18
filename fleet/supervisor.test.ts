@@ -213,7 +213,6 @@ function writeChildScript(
 /** Spawn template that fills {token} {labels} {resume} as argv for the fake child. */
 function makeConfig(script: string): FleetConfig {
 	return {
-		roots: [],
 		templates: { test: { command: `sh ${script} {token} {labels} {resume}` } },
 		defaultTemplate: "test",
 		workspaceDir: "/tmp/fleet-test-ws",
@@ -227,7 +226,6 @@ function makeTierConfig(
 	projectTemplates?: Record<string, string>,
 ): FleetConfig {
 	return {
-		roots: [],
 		templates: {
 			test: { command: `sh ${scriptDefault} {token} {labels} {resume}` },
 			other: { command: `sh ${scriptOverride} {token} {labels} {resume}` },
@@ -631,7 +629,6 @@ describe("SpawnSupervisor", () => {
 			].join("\n") + "\n",
 		);
 		const config: FleetConfig = {
-			roots: [],
 			templates: {
 				test: {
 					command: `sh ${script} --cwd {cwd} --token {token} --name {name} {labels} {resume}`,
@@ -879,7 +876,6 @@ describe("SpawnSupervisor", () => {
 		// endpoint is rejected BEFORE the connector dials (the old behavior
 		// threw inside new URL() and wedged the stdout pump).
 		const config: FleetConfig = {
-			roots: [],
 			templates: { test: { command: `sh ${script} {token} {labels} {resume}`, host: "bad host" } },
 			defaultTemplate: "test",
 			workspaceDir: "/tmp/fleet-test-ws",

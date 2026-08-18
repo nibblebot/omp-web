@@ -68,7 +68,7 @@ describe("worktree lifecycle routes", () => {
 		// real omp-session; the route tests stop the child themselves.
 		server = await startTestFleet(
 			{ statePath, configPath },
-			{ roots: [], templates: { local: { command: "sleep 30" } }, defaultTemplate: "local" },
+			{ templates: { local: { command: "sleep 30" } }, defaultTemplate: "local" },
 			{ workspaceDir },
 		);
 		project = await server.registry.addProject(repoDir);
@@ -93,7 +93,7 @@ describe("worktree lifecycle routes", () => {
 		expect(entry.cwd).toBe(target);
 		expect(existsSync(target)).toBe(true);
 		// Ownership marker records the owning repo realpath.
-		expect(readFileSync(join(workspaceDir, project.name, ".ompweb-repo"), "utf8").trim()).toBe(
+		expect(readFileSync(join(workspaceDir, project.name, ".omp-web-repo"), "utf8").trim()).toBe(
 			repoDir,
 		);
 		// git agrees: the worktree is listed with the slug branch.
@@ -117,6 +117,20 @@ describe("worktree lifecycle routes", () => {
 		expect(entry.cwd).toBe(target);
 		expect(existsSync(target)).toBe(true);
 		// The spawned child idles (`sleep 30`); stop it so the suite ends clean.
+		await server.supervisor.stop(entry.daemonId);
+	});
+
+	test("POST /ctl/spawn on a registered project's linked worktree stamps the entry's projectId", async () => {
+		const target = join(workspaceDir, project.name, "started");
+		expect(existsSync(target)).toBe(true);
+		const res = await postJson(server.port, "/ctl/spawn", { cwd: target });
+		expect(res.status).toBe(200);
+		const entry = (await res.json()) as RegistryEntry;
+		expect(entry.daemonId).toBeTruthy();
+		// The cwd is NOT the main checkout, but it belongs to the project's
+		// worktree set — the stamp still attaches it to the project group.
+		expect(entry.projectId).toBe(project.projectId);
+		expect(server.registry.get(entry.daemonId)?.projectId).toBe(project.projectId);
 		await server.supervisor.stop(entry.daemonId);
 	});
 
@@ -377,8 +391,8 @@ describe("worktree lifecycle routes", () => {
 	});
 
 	test("GET /ctl/projects merges a registered project's unregistered linked worktrees and drops roster cwds", async () => {
-		// A linked worktree OUTSIDE the discovery roots (roots are [] here):
-		// only the registry-backed merge can surface it.
+		// A linked worktree reachable ONLY via the registered project (no
+		// root scanning exists): the registry-backed merge must surface it.
 		const wtPath = join(tmp, "ctl-merge-wt");
 		const add = await gitIn(repoDir, ["worktree", "add", "-q", "-b", "merge-feat", wtPath]);
 		expect(add.exitCode).toBe(0);

@@ -40,15 +40,14 @@
 
 import type { Server } from "bun";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { RegisteredProject } from "../shared/protocol";
 import type { FleetConfig } from "./config";
-import { loadConfig, resolveConfigPath } from "./config";
+import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { acquireFileLock, type FileLock } from "../shared/file-lock";
 import type { RegistryEntry } from "./registry";
 import { bootStatusFor, Registry } from "./registry";
-import { listProjects, validateProjectPath } from "./discovery";
+import { validateProjectPath } from "./discovery";
 import { matchSelector } from "./selectors";
 import { DaemonConnector } from "./connector";
 import { SpawnSupervisor } from "./supervisor";
@@ -63,6 +62,7 @@ import {
 	createWorktree,
 	deleteWorktree,
 	mergeUnregisteredWorktrees,
+	projectIdForCwd,
 	registerWorktreeEntry,
 	validateUnregisteredWorktree,
 	worktreeDeleteInfo,
@@ -73,7 +73,6 @@ import {
 } from "./worktrees";
 
 const DEFAULT_PORT = 4722;
-const DEFAULT_STATE_PATH = join(homedir(), ".ompweb", "fleet-state.json");
 
 /**
  * Historical transcripts/stats API (read-only stats.db + session files),
@@ -95,18 +94,14 @@ export interface FleetServer {
 	close(): Promise<void>;
 }
 
-/** Expand a leading `~` / `~/` to os.homedir(); other paths pass through. */
-function expandTilde(p: string): string {
-	if (p === "~") return homedir();
-	if (p.startsWith("~/")) return join(homedir(), p.slice(2));
-	return p;
-}
-
-function resolveStatePath(explicit?: string): string {
+function resolveStatePath(explicit?: string, configPath?: string): string {
 	if (explicit !== undefined && explicit !== "") return expandTilde(explicit);
 	const env = process.env.OMP_FLEET_STATE;
 	if (env !== undefined && env !== "") return expandTilde(env);
-	return DEFAULT_STATE_PATH;
+	// Default: the state file lives NEXT TO the config file — the first-run
+	// data-home choice moves config + state + workspaces together. With no
+	// config that is the default data home (~/.omp-web), the historic path.
+	return join(dirname(configPath ?? resolveConfigPath()), "fleet-state.json");
 }
 
 function resolvePort(explicit?: number): number {
@@ -529,14 +524,11 @@ class FleetServerImpl implements FleetServer {
 					case "/ctl/sessions":
 						return json(this.registry.list());
 					case "/ctl/projects": {
-						// Discovery stays ephemeral + read-only; the registered
-						// set is merged alongside so clients see both. Each
-						// registered project also contributes its unregistered
-						// linked worktrees (deduped by realpath, roster cwds
-						// excluded) so clients see them even when the main
-						// checkout is outside the discovery roots.
+						// The registered set is the only project source (no root
+						// scanning). Each registered project also contributes its
+						// unregistered linked worktrees (deduped by realpath,
+						// roster cwds excluded).
 						const projects = await mergeUnregisteredWorktrees(
-							await listProjects(this.config.roots),
 							this.registry.projects(),
 							this.registry.list().map((entry) => entry.cwd),
 						);
@@ -617,7 +609,12 @@ class FleetServerImpl implements FleetServer {
 		const resolved = await validateProjectPath(cwd);
 		if (resolved === null) throw new HttpError(400, `not a directory: ${cwd}`);
 		const entry = await this.supervisor.spawn({ cwd: resolved, template, name, labels });
-		return json(entry);
+		// A cwd belonging to a registered project (main checkout or a linked
+		// worktree) tags the entry with that projectId so the roster groups it
+		// under the project. Unregistered paths stay untagged (fallback group).
+		const projectId = await projectIdForCwd(this.registry.projects(), resolved);
+		if (projectId !== undefined) this.registry.update(entry.daemonId, { projectId });
+		return json(this.registry.get(entry.daemonId) ?? entry);
 	}
 
 	/**
@@ -984,7 +981,9 @@ export async function startFleet(
 		settings?: FleetSettingsOptions;
 	} = {},
 ): Promise<FleetServer> {
-	const statePath = resolveStatePath(opts.statePath);
+	const configPath = resolveConfigPath(opts.configPath);
+	const config = await loadConfig(opts.configPath, { workspaceDir: opts.workspaceDir });
+	const statePath = resolveStatePath(opts.statePath, configPath);
 	// One fleet per state file: the O_EXCL pidfile lock fails loudly when a
 	// second fleet starts against the same state (no clobbering writes).
 	// The lock is handed to the server and released in close(); any failure
@@ -993,8 +992,6 @@ export async function startFleet(
 	try {
 		const registry = new Registry(statePath);
 		await registry.load();
-		const configPath = resolveConfigPath(opts.configPath);
-		const config = await loadConfig(opts.configPath, { workspaceDir: opts.workspaceDir });
 		return new FleetServerImpl(
 			registry,
 			config,

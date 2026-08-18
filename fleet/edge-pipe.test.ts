@@ -39,7 +39,6 @@ describe("edge pipe liveness and replay", () => {
 		await registry.load();
 		const connector = new DaemonConnector(registry);
 		const config: FleetConfig = {
-			roots: [],
 			templates: { local: { command: "true" } },
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
@@ -133,7 +132,6 @@ describe("edge pipe liveness and replay", () => {
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 3000);
 		const config: FleetConfig = {
-			roots: [],
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
@@ -227,7 +225,6 @@ describe("edge pipe liveness and replay", () => {
 			idleDropMs: 60_000,
 		});
 		const config: FleetConfig = {
-			roots: [],
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
@@ -338,7 +335,6 @@ describe("edge pipe liveness and replay", () => {
 			idleDropMs: 60_000,
 		});
 		const config: FleetConfig = {
-			roots: [],
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
@@ -422,7 +418,6 @@ describe("edge pipe liveness and replay", () => {
 			idleDropMs: 60_000,
 		});
 		const config: FleetConfig = {
-			roots: [],
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
@@ -514,7 +509,6 @@ describe("edge pipe liveness and replay", () => {
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 3000);
 		const config: FleetConfig = {
-			roots: [],
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
@@ -641,7 +635,6 @@ describe("edge pipe liveness and replay", () => {
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 3000);
 		const config: FleetConfig = {
-			roots: [],
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",

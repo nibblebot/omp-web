@@ -93,8 +93,10 @@ import {
 	SSE_PING_EVENT,
 	SseRing,
 } from "../shared/sse";
+import { EMBEDDED_DIST } from "../server/embedded-dist";
 import type { FleetConfig } from "./config";
-import { listProjects, validateProjectPath } from "./discovery";
+import { validateProjectPath } from "./discovery";
+import { BrowseError, browseDirectories } from "./fs-browse";
 import type { DaemonConnector } from "./connector";
 import { backoffDelay, daemonHttpBase } from "./connector";
 import { DaemonsAggregator } from "./daemons-aggregator";
@@ -107,6 +109,7 @@ import {
 	isPathUnder,
 	listProjectBranches,
 	mergeUnregisteredWorktrees,
+	projectIdForCwd,
 	realpathOf,
 	registerWorktreeEntry,
 	validateUnregisteredWorktree,
@@ -525,6 +528,14 @@ export class FleetEdge {
 			if (path === "/ctl/templates") {
 				return json(Object.keys(this.#config.templates));
 			}
+			if (path === "/ctl/fs/browse") {
+				try {
+					return json(await browseDirectories(url.searchParams.get("path") ?? undefined));
+				} catch (err) {
+					if (err instanceof BrowseError) return json({ error: err.message }, 400);
+					throw err;
+				}
+			}
 			const stderrMatch = STDERR_ROUTE.exec(path);
 			if (stderrMatch) {
 				return this.#handleStderr(stderrMatch[1]);
@@ -653,7 +664,11 @@ export class FleetEdge {
 						stream,
 						encodeSseEvent(
 							SSE_EVENT_NAME,
-							{ type: "registered_projects", projects: this.#registry.projects() },
+							{
+								type: "registered_projects",
+								projects: this.#registry.projects(),
+								configPath: this.#fleet.configPath,
+							},
 							seq++,
 						),
 					);
@@ -925,8 +940,10 @@ export class FleetEdge {
 
 	async #handleListProjects(stream: BrowserStream): Promise<void> {
 		try {
+			// No root scanning: projects are the registered set's unregistered
+			// linked worktrees (roster cwds excluded). The registered mains ride
+			// the separate registered_projects frame.
 			const projects = await mergeUnregisteredWorktrees(
-				await listProjects(this.#config.roots),
 				this.#registry.projects(),
 				this.#registry.list().map((entry) => entry.cwd),
 			);
@@ -966,8 +983,14 @@ export class FleetEdge {
 				this.#sendError(stream, `not a directory: ${cwd}`);
 				return;
 			}
-			// Progress surfaces via roster/daemon_status broadcasts.
-			await this.#supervisor.spawn({ cwd: resolved, template, labels });
+			// Progress surfaces via roster/daemon_status broadcasts. A cwd
+			// belonging to a registered project (main checkout or a linked
+			// worktree) is tagged with that projectId so the roster groups the
+			// daemon under the project; unregistered paths stay untagged
+			// (fallback group).
+			const entry = await this.#supervisor.spawn({ cwd: resolved, template, labels });
+			const projectId = await projectIdForCwd(this.#registry.projects(), resolved);
+			if (projectId !== undefined) this.#registry.update(entry.daemonId, { projectId });
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
@@ -1717,7 +1740,11 @@ export class FleetEdge {
 		// Never ringed: the frame is re-derivable from the next open's
 		// priming (which always carries the full project set).
 		this.#broadcast(
-			{ type: "registered_projects", projects: this.#registry.projects() },
+			{
+				type: "registered_projects",
+				projects: this.#registry.projects(),
+				configPath: this.#fleet.configPath,
+			},
 			{ ring: false },
 		);
 	}
@@ -1884,11 +1911,19 @@ export class FleetEdge {
 		};
 	}
 
-	/** Static dist/ from the process cwd, with a tiny placeholder fallback. */
+	/** Static dist/ from the process cwd, then the embedded bundle (R15), then a tiny placeholder. */
 	async #serveStatic(pathname: string): Promise<Response> {
 		const file = Bun.file(pathname === "/" ? "dist/index.html" : `dist${pathname}`);
 		if (await file.exists()) {
 			return new Response(file);
+		}
+		// Installed-bundle path: no on-disk dist/ next to an arbitrary cwd, so
+		// serve the assets embedded by build:omp-web. Keys mirror the daemon's
+		// lookup in server/index.ts ("/" → "/index.html"); content-type is
+		// inferred from the file extension, same as the disk branch above.
+		const embedded = EMBEDDED_DIST[pathname === "/" ? "/index.html" : pathname];
+		if (embedded) {
+			return new Response(Bun.file(embedded));
 		}
 		return new Response(PLACEHOLDER_HTML, {
 			status: 200,

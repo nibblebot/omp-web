@@ -10,6 +10,7 @@ import {
 } from "../../state";
 import { Modal } from "../shared/Modal";
 import { PickerRow } from "../shared/PickerRow";
+import { DirPicker } from "./DirPicker";
 import { PipelineProgress, useOnboardingPipeline } from "./onboarding";
 
 type Tab = "create" | "existing";
@@ -25,7 +26,8 @@ const STAGE_LABELS: Record<Tab, string[]> = {
  * project. Two tabs — Create new (name input on top, a "+ New branch" row,
  * then an existing-branch dropdown — checked-out branches last and disabled;
  * no freeform ref entry, no advanced section) and Add existing (discovered-but-unregistered worktrees
- * of the project). "Start a session now" (default ON) spawns a daemon on
+ * of the project, plus an "or pick a directory" DirPicker affordance that feeds
+ * the same submit path). "Start a session now" (default ON) spawns a daemon on
  * the worktree; the modal tracks register → spawn → attach so the
  * session-picker gate opens after attach settles. Failure at any rung
  * surfaces the stage's error and leaves prior artifacts in place.
@@ -35,6 +37,9 @@ export const WorktreeModal: Component<{ onClose: () => void }> = (props) => {
 	const [name, setName] = createSignal("");
 	const [start, setStart] = createSignal(true);
 	const [selectedPath, setSelectedPath] = createSignal<string | null>(null);
+	/** Add-existing tab: the embedded DirPicker is hidden behind an "or pick a
+	 *  directory" affordance until asked for. */
+	const [browsing, setBrowsing] = createSignal(false);
 	const [nameError, setNameError] = createSignal<string | null>(null);
 	const [projects, setProjects] = createSignal<ProjectEntry[]>([]);
 	const [projectsError, setProjectsError] = createSignal<string | null>(null);
@@ -343,6 +348,34 @@ export const WorktreeModal: Component<{ onClose: () => void }> = (props) => {
 							<div class="tool-collapsed-note">no unregistered worktrees</div>
 						</Show>
 					</div>
+					<Show
+						when={browsing()}
+						fallback={
+							<button
+								type="button"
+								class="daemon-row-btn dirpick-toggle"
+								onClick={() => setBrowsing(true)}
+							>
+								or pick a directory…
+							</button>
+						}
+					>
+						<DirPicker
+							onSelect={(p) => {
+								// Same submit path as a listed entry: sendAddExistingWorktree
+								// with the picked path.
+								setSelectedPath(p);
+								setBrowsing(false);
+							}}
+						/>
+					</Show>
+					{/* A picker-chosen path matches no listed row — echo it so the
+					    selection stays visible once the picker folds away. */}
+					<Show
+						when={selectedPath() !== null && !unregistered().some((p) => p.path === selectedPath())}
+					>
+						<div class="dirpick-chosen">Selected: {selectedPath()}</div>
+					</Show>
 					<label class="worktree-start">
 						<input
 							type="checkbox"

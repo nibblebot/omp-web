@@ -1,6 +1,6 @@
 /**
- * Fleet configuration: discovery roots, spawn templates, and the
- * default template, loaded from `~/.omp/fleet/config.json`.
+ * Fleet configuration: spawn templates and the default template, loaded
+ * from `~/.omp-web/config.json`.
  *
  * Resolution order: an explicit `path` argument wins, then env
  * `OMP_FLEET_CONFIG`, then the default location. A missing file yields
@@ -10,7 +10,7 @@
  * command outright (dev runners point it at the source entry when the
  * production binary isn't built). `workspaceDir` (root for managed
  * worktrees) resolves flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR`
- * > config-file `workspaceDir` key > `~/.ompweb/workspaces`. A leading `~` is
+ * > config-file `workspaceDir` key > `~/.omp-web/workspaces`. A leading `~` is
  * expanded to `os.homedir()` in paths.
  */
 
@@ -26,8 +26,6 @@ export interface SpawnTemplate {
 }
 
 export interface FleetConfig {
-	/** Discovery roots; default `["~/repos"]` (~ expanded). */
-	roots: string[];
 	templates: Record<string, SpawnTemplate>;
 	defaultTemplate: string;
 	/**
@@ -40,7 +38,7 @@ export interface FleetConfig {
 	/**
 	 * Root for managed worktrees (created lazily on first worktree, never at
 	 * boot). Flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR` >
-	 * config-file `workspaceDir` key > `~/.ompweb/workspaces` (~ expanded).
+	 * config-file `workspaceDir` key > `~/.omp-web/workspaces` (~ expanded).
 	 */
 	workspaceDir: string;
 }
@@ -52,17 +50,16 @@ export interface FleetConfig {
  * the other placeholders are filled from the registry entry at spawn time.
  */
 export const DEFAULT_LOCAL_TEMPLATE: SpawnTemplate = {
-	command: "omp-session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
+	command: "omp-web session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
 };
 
 /** Default managed-worktree root under the consolidated home data dir. */
 export function defaultWorkspaceDir(): string {
-	return expandTilde("~/.ompweb/workspaces");
+	return expandTilde("~/.omp-web/workspaces");
 }
 
 function defaultConfig(): FleetConfig {
 	return {
-		roots: [expandTilde("~/repos")],
 		templates: { local: { ...DEFAULT_LOCAL_TEMPLATE } },
 		defaultTemplate: "local",
 		workspaceDir: defaultWorkspaceDir(),
@@ -70,7 +67,7 @@ function defaultConfig(): FleetConfig {
 }
 
 /** Expand a leading `~` / `~/` to os.homedir(); other paths pass through. */
-function expandTilde(p: string): string {
+export function expandTilde(p: string): string {
 	if (p === "~") return homedir();
 	if (p.startsWith("~/")) return join(homedir(), p.slice(2));
 	return p;
@@ -113,7 +110,7 @@ export function resolveConfigPath(explicit?: string): string {
 	if (explicit !== undefined) return expandTilde(explicit);
 	const env = process.env.OMP_FLEET_CONFIG;
 	if (env !== undefined && env !== "") return expandTilde(env);
-	return join(homedir(), ".omp", "fleet", "config.json");
+	return join(homedir(), ".omp-web", "config.json");
 }
 
 /** Shallow-merge the parsed file over the defaults; malformed/unknown fields fall back. */
@@ -121,9 +118,6 @@ function mergeConfig(raw: unknown): FleetConfig {
 	const config = defaultConfig();
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return config;
 	const file = raw as Record<string, unknown>;
-	if (Array.isArray(file.roots) && file.roots.every((root) => typeof root === "string")) {
-		config.roots = (file.roots as string[]).map(expandTilde);
-	}
 	if (isTemplateMap(file.templates)) {
 		config.templates = file.templates;
 	}

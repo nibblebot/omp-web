@@ -3,7 +3,7 @@
  *
  * Managed worktrees live under the `workspaceDir` config knob (env
  * `OMP_FLEET_WORKSPACE_DIR`, flag `--workspace-dir`, default
- * `~/.ompweb/workspaces`), one directory per repo basename, with the worktree
+ * `~/.omp-web/workspaces`), one directory per repo basename, with the worktree
  * name slugged underneath:
  *
  *   <workspaceDir>/<repo-basename>/<slug(name)>
@@ -11,7 +11,7 @@
  * When a directory under workspaceDir with the same basename already belongs
  * to a DIFFERENT repo realpath, the basename is suffixed with the first 4 hex
  * chars of the sha1 of the repo realpath (`omp-web-a1b2` style). Ownership
- * is recorded in a `<basename>/.ompweb-repo` marker file containing the
+ * is recorded in a `<basename>/.omp-web-repo` marker file containing the
  * owning repo's realpath; the worktree-creation flow writes it, these helpers
  * only read it. Both helpers are pure/deterministic: the same inputs map to
  * the same path (sync fs checks allowed).
@@ -36,7 +36,7 @@ import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
 
 /** Marker file recording the repo realpath that owns a workspaceDir entry. */
-const OMPWEB_REPO_MARKER = ".ompweb-repo";
+const OMP_WEB_REPO_MARKER = ".omp-web-repo";
 
 /** Lowercase a worktree name; runs of non-alphanumerics become `-`, edges trimmed. */
 export function slugifyWorktreeName(name: string): string {
@@ -49,7 +49,7 @@ export function slugifyWorktreeName(name: string): string {
 
 /**
  * Map a repo realpath + worktree name to its managed path under workspaceDir.
- * Basenames colliding with a different repo's directory (`.ompweb-repo`
+ * Basenames colliding with a different repo's directory (`.omp-web-repo`
  * marker naming another realpath) get a `-<sha1(repo)[0..4]>` suffix.
  */
 export function managedWorktreePath(
@@ -58,7 +58,7 @@ export function managedWorktreePath(
 	worktreeName: string,
 ): string {
 	let repoBasename = basename(repoRealpath);
-	const marker = join(workspaceDir, repoBasename, OMPWEB_REPO_MARKER);
+	const marker = join(workspaceDir, repoBasename, OMP_WEB_REPO_MARKER);
 	if (existsSync(marker)) {
 		const owner = readFileSync(marker, "utf8").trim();
 		if (owner !== repoRealpath) {
@@ -197,7 +197,7 @@ export interface CreateWorktreeResult {
  * workspaceDir. The workspaceDir + repo directory are created lazily HERE
  * (first worktree creation). Refuses when the target path already exists,
  * when an existing branch is checked out in another worktree, or when git
- * rejects the operation (unknown branch/base). Writes the `.ompweb-repo`
+ * rejects the operation (unknown branch/base). Writes the `.omp-web-repo`
  * ownership marker after a successful add. Returns `{ path, branch, baseRef }`.
  */
 export async function createWorktree(
@@ -238,10 +238,10 @@ export async function createWorktree(
 			throw new Error(
 				`git worktree add failed: ${add.stderr.trim() || `git exited ${add.exitCode}`}`,
 			);
-		writeFileSync(join(dirname(target), OMPWEB_REPO_MARKER), `${project.path}\n`);
+		writeFileSync(join(dirname(target), OMP_WEB_REPO_MARKER), `${project.path}\n`);
 		return { path: target, branch: slug, baseRef };
 	}
-	writeFileSync(join(dirname(target), OMPWEB_REPO_MARKER), `${project.path}\n`);
+	writeFileSync(join(dirname(target), OMP_WEB_REPO_MARKER), `${project.path}\n`);
 	return { path: target, branch: opts.existingBranch };
 }
 
@@ -315,24 +315,20 @@ export async function listUnregisteredWorktrees(
 }
 
 /**
- * Merge each registered project's unregistered linked worktrees into a
- * discovery scan. Shared by the edge's list_projects answer and GET
- * /ctl/projects so both surfaces list the same rows: a registered project
- * whose main checkout is OUTSIDE the discovery roots still contributes its
- * unmanaged worktrees. Rows are deduped by realpath against the discovery
- * rows (discovery wins on conflict — a worktree under a discovery root is
- * not listed twice) and against worktrees added by earlier projects; roster
- * cwds are excluded per project (a daemon on that worktree means it is
+ * List each registered project's unregistered linked worktrees. Shared by
+ * the edge's list_projects answer and GET /ctl/projects so both surfaces
+ * list the same rows. Rows are deduped by realpath across projects (a
+ * worktree reachable from two registered mains lists once); roster cwds
+ * are excluded per project (a daemon on that worktree means it is
  * managed). Per-project git failures degrade to [] like
  * listUnregisteredWorktrees, so a project that stopped being a repo is
  * skipped silently.
  */
 export async function mergeUnregisteredWorktrees(
-	discovered: ProjectEntry[],
 	projects: RegisteredProject[],
 	rosterCwds: string[],
 ): Promise<ProjectEntry[]> {
-	const out = [...discovered];
+	const out: ProjectEntry[] = [];
 	const seen = new Set(out.map((entry) => realpathOf(entry.path)));
 	for (const project of projects) {
 		const worktrees = await listUnregisteredWorktrees(project.path, rosterCwds);
@@ -365,6 +361,27 @@ export async function isLinkedWorktreeOf(path: string, mainRepoPath: string): Pr
 	if (main === null) return false;
 	const mainResolved = realpathOf(main);
 	return realpathOf(path) !== mainResolved && mainResolved === realpathOf(mainRepoPath);
+}
+
+/**
+ * The registered project owning `cwd` — its main checkout, or one of its
+ * linked worktrees — or undefined when no registered project matches.
+ * Realpath-compared; a bare spawn on an unregistered path stays untagged
+ * (the roster's fallback group shows it). Used to stamp projectId on
+ * spawns that arrive with just a cwd (the sidebar start action, /ctl/spawn).
+ */
+export async function projectIdForCwd(
+	projects: RegisteredProject[],
+	cwd: string,
+): Promise<string | undefined> {
+	const resolved = realpathOf(cwd);
+	for (const project of projects) {
+		if (realpathOf(project.path) === resolved) return project.projectId;
+	}
+	for (const project of projects) {
+		if (await isLinkedWorktreeOf(resolved, project.path)) return project.projectId;
+	}
+	return undefined;
 }
 
 /**
