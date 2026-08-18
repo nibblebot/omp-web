@@ -33,6 +33,7 @@ import {
 	SettingsModal,
 	StatsModal,
 	ThinkingModal,
+	Toasts,
 	UsageModal,
 } from "./components/overlays";
 import { connect, setPromptInsert, setState, state, toggleSidebar } from "./state";
@@ -220,6 +221,7 @@ export const App: Component = () => {
 			<DangerConfirmDialog />
 			<DeleteWorktreeDialog />
 			<RemoveProjectDialog />
+			<Toasts />
 		</div>
 	);
 };

@@ -328,6 +328,12 @@ class FleetServerImpl implements FleetServer {
 	readonly lock: FileLock;
 
 	readonly #server: Server<undefined>;
+	/**
+	 * daemonIds mid-eviction for a poll-detected, vanished worktree. The
+	 * supervisor can fire per poll tick; the first report wins and the set
+	 * is cleared when the eviction settles.
+	 */
+	readonly #evictingWorktrees = new Set<string>();
 
 	constructor(
 		registry: Registry,
@@ -376,6 +382,7 @@ class FleetServerImpl implements FleetServer {
 		this.supervisor = new SpawnSupervisor(registry, this.connector, config, {
 			onEvent: (level, message, daemonId) =>
 				this.eventLog.add(level, "supervisor", message, daemonId),
+			onWorktreeRemoved: (entry) => void this.#onWorktreeVanished(entry),
 		});
 		edge = new FleetEdge({
 			registry,
@@ -755,6 +762,48 @@ class FleetServerImpl implements FleetServer {
 			stopped.push(entry.daemonId);
 		}
 		return json({ stopped });
+	}
+
+	/**
+	 * A poll-detected, on-disk worktree removal: the daemon's cwd vanished
+	 * between git-state poll ticks (git worktree remove run outside the
+	 * fleet). Mirror #handleRemove's eviction — prune/drop + registry.remove
+	 * (the roster broadcast rides registry.onChange automatically) — then
+	 * announce ONE worktree_removed toast. Never fired for UI-initiated
+	 * delete_worktree/remove paths, which evict directly and must not toast.
+	 */
+	async #onWorktreeVanished(entry: RegistryEntry): Promise<void> {
+		// Dedup: consecutive poll ticks can report the same vanished worktree
+		// before the eviction settles, and a concurrent UI delete_worktree/
+		// remove may have already evicted the entry (presence check below).
+		if (this.#evictingWorktrees.has(entry.daemonId)) return;
+		if (!this.registry.get(entry.daemonId)) return;
+		this.#evictingWorktrees.add(entry.daemonId);
+		try {
+			if (entry.mode === "spawned") {
+				await this.supervisor.prune(entry.daemonId);
+			} else {
+				this.connector.drop(entry.daemonId);
+			}
+			this.registry.remove(entry.daemonId);
+			this.eventLog.add(
+				"info",
+				"server",
+				`worktree vanished on disk: ${entry.cwd}`,
+				entry.daemonId,
+			);
+			// `this.edge` is assigned AFTER the supervisor in the constructor,
+			// but this hook can only fire during git-state polling, which
+			// starts after the edge assignment — optional chaining guards any
+			// earlier synchronous trigger regardless.
+			this.edge?.announceWorktreeRemoved({
+				daemonId: entry.daemonId,
+				name: entry.name,
+				cwd: entry.cwd,
+			});
+		} finally {
+			this.#evictingWorktrees.delete(entry.daemonId);
+		}
 	}
 
 	async #handleRemove(req: Request): Promise<Response> {

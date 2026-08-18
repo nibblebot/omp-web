@@ -6,10 +6,11 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RegisteredProject } from "../shared/protocol";
 import { main } from "./cli";
+import { openBrowser } from "./edge.testkit";
 import type { RegistryEntry } from "./registry";
 import type { FleetServer } from "./server";
 import {
@@ -441,4 +442,72 @@ describe("worktree lifecycle routes", () => {
 			await gitIn(repoDir, ["worktree", "remove", "--force", wtReal]);
 		}
 	});
+
+	test(
+		"a worktree removed on disk is poll-evicted and announces exactly one worktree_removed frame",
+		async () => {
+			const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+				name: "Vanishing",
+			});
+			expect(res.status).toBe(201);
+			const entry = ((await res.json()) as { entry: RegistryEntry }).entry;
+			expect(entry.worktreeOf).toBe(project.name);
+			expect(existsSync(entry.cwd)).toBe(true);
+
+			// Browser stream open BEFORE the dir vanishes (the toast must land).
+			const browser = await openBrowser(server.port);
+			// Simulate `git worktree remove` run OUTSIDE the fleet: only the
+			// directory disappears — the fleet sees it on the next git-state
+			// poll (default 10s interval).
+			rmSync(entry.cwd, { recursive: true, force: true });
+
+			// The next poll probes the vanished cwd, fails, and evicts:
+			// registry.remove (roster broadcast rides onChange) + one unringed
+			// worktree_removed toast.
+			const frame = await browser.waitForFrame(
+				(f) => f.type === "worktree_removed",
+				"worktree_removed frame",
+				15_000,
+			);
+			if (frame.type !== "worktree_removed") throw new Error("expected worktree_removed");
+			expect(frame).toMatchObject({
+				type: "worktree_removed",
+				daemonId: entry.daemonId,
+				name: entry.name,
+				path: entry.cwd,
+			});
+			// Evicted from the roster (the broadcast dropped the entry first).
+			expect(server.registry.get(entry.daemonId)).toBeUndefined();
+			const roster = browser.frames.find(
+				(f) => f.type === "roster" && !f.daemons.some((d) => d.daemonId === entry.daemonId),
+			);
+			expect(roster).toBeDefined();
+			// Exactly one toast per eviction: the entry is gone, so later polls
+			// cannot re-fire.
+			expect(browser.frames.filter((f) => f.type === "worktree_removed")).toHaveLength(1);
+			browser.close();
+
+			// UI-initiated deletion never emits the frame: delete another
+			// worktree through the route with a fresh browser attached.
+			const uiRes = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+				name: "Ui Delete",
+			});
+			expect(uiRes.status).toBe(201);
+			const uiEntry = ((await uiRes.json()) as { entry: RegistryEntry }).entry;
+			const uiBrowser = await openBrowser(server.port);
+			const del = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${uiEntry.daemonId}`, {
+				method: "DELETE",
+			});
+			expect(del.status).toBe(200);
+			// The route evicts synchronously; wait for its roster broadcast,
+			// then pin that no toast rode along.
+			await uiBrowser.waitForFrame(
+				(f) => f.type === "roster" && !f.daemons.some((d) => d.daemonId === uiEntry.daemonId),
+				"roster without UI-deleted entry",
+			);
+			expect(uiBrowser.frames.filter((f) => f.type === "worktree_removed")).toHaveLength(0);
+			uiBrowser.close();
+		},
+		{ timeout: 20_000 },
+	);
 });

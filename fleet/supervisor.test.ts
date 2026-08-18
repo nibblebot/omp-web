@@ -1267,7 +1267,7 @@ describe("SpawnSupervisor", () => {
 
 describe("git-state polling", () => {
 	/** Supervisor with a config whose child would fail: polling tests never spawn. */
-	async function pollSupervisor(): Promise<{
+	async function pollSupervisor(opts?: ConstructorParameters<typeof SpawnSupervisor>[3]): Promise<{
 		registry: Registry;
 		connector: DaemonConnector;
 		supervisor: SpawnSupervisor;
@@ -1276,6 +1276,7 @@ describe("git-state polling", () => {
 		const connector = makeConnector(registry);
 		const supervisor = makeSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), {
 			restartMax: 0,
+			...(opts ?? {}),
 		});
 		return { registry, connector, supervisor };
 	}
@@ -1511,5 +1512,140 @@ describe("git-state polling", () => {
 			git: { added: 0, modified: 0, deleted: 0, untracked: 1, linesAdded: 7, linesDeleted: 4 },
 		});
 		expect(calls).toHaveLength(2); // status + numstat for the one-off probe
+	});
+
+	test("a vanished tagged worktree fires onWorktreeRemoved and never clears branch/git", async () => {
+		const ghost = join(tmpPath("omp-session-sup-vanished-"), "gone-worktree");
+		const fired: RegistryEntry[] = [];
+		const { registry, supervisor } = await pollSupervisor({
+			onWorktreeRemoved: (entry) => fired.push(entry),
+		});
+		// A TAGGED worktree entry (the detection gate: worktreeOf set) whose
+		// cwd does NOT exist on disk — e.g. `git worktree remove` run outside
+		// the fleet. Branch/git preset so the test can pin that the hook path
+		// returns WITHOUT the stale-field clearing.
+		const entry = registry.create({
+			name: "wt",
+			cwd: ghost,
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+			worktreeOf: "acme",
+			branch: "main",
+		});
+		// Every probe fails (the dir is gone) — the injected exec never
+		// touches the disk, so the FAILURE comes from the fake; existsSync
+		// decides the gate.
+		const { exec } = fakeGitPhases([
+			[
+				{ exitCode: 128, stderr: "fatal: not a git repository", stdout: "" },
+				{ exitCode: 128, stderr: "fatal: not a git repository", stdout: "" },
+			],
+		]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 250 });
+
+		await waitFor(() => (fired.length > 0 ? "fired" : null), 5000, "worktree-removed hook");
+		expect(fired[0]).toMatchObject({
+			daemonId: entry.daemonId,
+			name: "wt",
+			cwd: ghost,
+			worktreeOf: "acme",
+			mode: "spawned",
+		});
+		// Detection only: the supervisor itself never removes the entry, and
+		// the hook path returned BEFORE the branch/git clearing.
+		expect(registry.get(entry.daemonId)).toBeDefined();
+		expect(registry.get(entry.daemonId)?.branch).toBe("main");
+		// Simulate the server's eviction (prune/drop + registry.remove): with
+		// the entry gone, later poll ticks must NOT re-fire — the hook is at
+		// most meaningful once per entry. The polls keep ticking (250ms) but
+		// the roster no longer contains the entry, so nothing is probed.
+		registry.remove(entry.daemonId);
+		await sleep(400); // well past the next interval tick
+		expect(fired).toHaveLength(1);
+	});
+
+	test("a probe failure with the cwd still present keeps the clear path and never fires onWorktreeRemoved", async () => {
+		// A REAL directory on disk (tmpPath creates it); the fake exec fails,
+		// but existsSync sees the dir present — transient git failure, no
+		// eviction: branch/git are cleared exactly as before.
+		const cwd = tmpPath("omp-session-sup-present-");
+		const fired: RegistryEntry[] = [];
+		const { registry, supervisor } = await pollSupervisor({
+			onWorktreeRemoved: (entry) => fired.push(entry),
+		});
+		const entry = registry.create({
+			name: "wt",
+			cwd,
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+			worktreeOf: "acme",
+		});
+		let onChange = 0;
+		registry.onChange = () => {
+			onChange++;
+		};
+		// First pass: dirty state. Then the repo is unreadable (nonzero
+		// exit) — dir still on disk, so this is the classic clear path.
+		const { exec, calls } = fakeGitPhases([
+			[
+				{ exitCode: 0, stderr: "", stdout: ["## main", " M x", ""].join("\n") },
+				{ exitCode: 0, stderr: "", stdout: "5\t1\tx\n" },
+			],
+			[
+				{ exitCode: 128, stderr: "fatal: not a git repository", stdout: "" },
+				{ exitCode: 128, stderr: "fatal: not a git repository", stdout: "" },
+			],
+		]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 250 });
+
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.git?.modified === 1 ? "set" : null),
+			5000,
+			"state set",
+		);
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.git === undefined ? "cleared" : null),
+			5000,
+			"state cleared",
+		);
+		expect(registry.get(entry.daemonId)!.branch).toBeUndefined();
+		expect(onChange).toBe(2); // set, then clear
+		expect(fired).toHaveLength(0);
+		// The entry stays (no eviction without a vanished cwd).
+		expect(registry.get(entry.daemonId)).toBeDefined();
+	});
+
+	test("a vanished cwd on an UNTAGGED entry never fires onWorktreeRemoved", async () => {
+		const ghost = join(tmpPath("omp-session-sup-untagged-"), "gone");
+		const fired: RegistryEntry[] = [];
+		const { registry, supervisor } = await pollSupervisor({
+			onWorktreeRemoved: (entry) => fired.push(entry),
+		});
+		// No worktreeOf: a main checkout or untagged spawn. Such entries are
+		// NEVER auto-evicted — only tagged linked worktrees qualify.
+		registry.create({
+			name: "main",
+			cwd: ghost,
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+		});
+		const { exec, calls } = fakeGitPhases([
+			[
+				{ exitCode: 128, stderr: "fatal: not a git repository", stdout: "" },
+				{ exitCode: 128, stderr: "fatal: not a git repository", stdout: "" },
+			],
+		]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 25 });
+
+		const startedAt = calls.length;
+		await waitFor(() => (calls.length >= startedAt + 2 ? "ticks" : null), 5000, "poll ticks");
+		expect(fired).toHaveLength(0);
+		expect(registry.list().length).toBe(1); // still registered
 	});
 });

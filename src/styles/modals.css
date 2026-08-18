@@ -410,3 +410,58 @@ button.picker-row {
 	color: var(--accent);
 	font-weight: 600;
 }
+
+/* --- Toast stack (Toasts.tsx): fleet/app-scoped ephemeral notifications ---
+   Fixed bottom-right, above modals (--z-overlay + 1); cards match the
+   modal/dialog surfaces (panel / border-strong / shadow-2). Gaps and
+   padding come from the --space-* scale; the dismiss button keeps the
+   global button chrome + :focus-visible ring (base.css) with only
+   geometry overrides here. */
+.toast-list {
+	position: fixed;
+	right: var(--space-6);
+	bottom: var(--space-6);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	z-index: calc(var(--z-overlay) + 1);
+	max-width: min(420px, calc(100vw - 2 * var(--space-6)));
+}
+.toast {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--space-4);
+	background: var(--panel);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-lg);
+	box-shadow: var(--shadow-2);
+	padding: var(--space-4) var(--space-5);
+	color: var(--text);
+	font-size: var(--fs-base);
+	line-height: 1.4;
+}
+/* Long unbroken paths wrap instead of blowing the card width (a path is
+   already left-truncated in the frame handler; this is the final guard). */
+.toast-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	word-break: break-word;
+}
+.toast-dismiss {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.5rem;
+	height: 1.5rem;
+	padding: 0;
+	border-radius: var(--r-sm);
+	background: transparent;
+	border-color: transparent;
+	color: var(--muted);
+	cursor: pointer;
+}
+.toast-dismiss:hover {
+	background: var(--hover);
+	color: var(--text);
+}

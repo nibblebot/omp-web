@@ -182,6 +182,10 @@ beforeEach(() => {
 		lastFrameAt: 0,
 		reconnectDelay: 0,
 		announcement: "",
+		// Toasts are fleet/app-scoped ephemeral UI state; reset for isolation
+		// like the fleet-scoped collections above (and their dismiss timers
+		// only ever remove their own id, so a stale timer is a no-op).
+		toasts: [],
 		// Transcript items are per-session view state; without a reset a test
 		// that attached (no switch → no resetSessionView) leaks its items into
 		// the next test.
@@ -1535,5 +1539,70 @@ describe("Phase 5: post-attach session-picker gate", () => {
 		// A switch to yet another daemon disarms it.
 		dispatch(attached("daemon-c"));
 		expect(state.pendingSessionPicker).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// worktree_removed: poll-detected on-disk worktree removal (the fleet evicted
+// the daemon and broadcasts). One toast per eviction + an aria-live announce;
+// fleet-edge-only like registered_projects, so no session guard is applied.
+// ---------------------------------------------------------------------------
+describe("worktree_removed (on-disk removal toast)", () => {
+	/** A fully primed stream: attached + empty history. */
+	function prime(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+	}
+
+	test("a worktree_removed frame appends one toast (name + path) and announces it", () => {
+		prime();
+		dispatch({
+			type: "worktree_removed",
+			daemonId: "d1",
+			name: "feat-x",
+			path: "/repos/proj/worktrees/feat-x",
+		} as ServerFrame);
+		const expected = "Worktree removed on disk: feat-x (/repos/proj/worktrees/feat-x)";
+		expect(state.toasts).toHaveLength(1);
+		expect(state.toasts[0].text).toBe(expected);
+		expect(state.announcement).toBe(expected);
+	});
+
+	test("a second eviction appends a second toast (one toast per eviction)", () => {
+		prime();
+		dispatch({
+			type: "worktree_removed",
+			daemonId: "d1",
+			name: "feat-x",
+			path: "/repos/proj/worktrees/feat-x",
+		} as ServerFrame);
+		dispatch({
+			type: "worktree_removed",
+			daemonId: "d2",
+			name: "feat-y",
+			path: "/repos/proj/worktrees/feat-y",
+		} as ServerFrame);
+		expect(state.toasts.map((t) => t.text)).toEqual([
+			"Worktree removed on disk: feat-x (/repos/proj/worktrees/feat-x)",
+			"Worktree removed on disk: feat-y (/repos/proj/worktrees/feat-y)",
+		]);
+	});
+
+	test("a long path is truncated from the left with an ellipsis (text stays under 120 chars)", () => {
+		prime();
+		const longPath = `/repos/proj/worktrees/feat-${"segment/".repeat(20)}tail`;
+		dispatch({
+			type: "worktree_removed",
+			daemonId: "d1",
+			name: "feat",
+			path: longPath,
+		} as ServerFrame);
+		const text = state.toasts[0].text;
+		expect(text.length).toBeLessThanOrEqual(120);
+		expect(text.startsWith("Worktree removed on disk: feat (")).toBe(true);
+		expect(text.endsWith(")")).toBe(true);
+		expect(text).toContain("…");
+		expect(text).toContain("tail"); // the informative basename tail survives
 	});
 });

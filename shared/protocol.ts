@@ -615,6 +615,14 @@ export type ServerFrame =
 			projects: RegisteredProject[];
 			configPath?: string | null;
 	  }
+	// Global broadcast: a poll-detected, on-disk worktree removal (the
+	// daemon's cwd vanished between git-state poll ticks). Ringed so a
+	// Last-Event-ID resume within the reclaim window still delivers the
+	// toast once (client-side ring dedup guards the replay). Fleet-edge-only
+	// (a bare omp-session never sends it) and never carries tokens/endpoints
+	// — just daemonId + display name + the vanished path. Never sent for
+	// UI-initiated delete_worktree/remove.
+	| { type: "worktree_removed"; daemonId: string; name: string; path: string }
 	// Unicast answer to list_projects.
 	| { type: "projects"; projects: ProjectEntry[] }
 	// Unicast answer to list_project_branches (fleet-scoped, like projects).

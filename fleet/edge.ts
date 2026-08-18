@@ -561,6 +561,23 @@ export class FleetEdge {
 		this.#broadcast(frame);
 	}
 
+	/**
+	 * Global broadcast: a poll-detected, on-disk worktree removal (the
+	 * daemon's cwd vanished between git-state poll ticks). Ringed (default)
+	 * so a browser whose stream was down at emit time still gets the toast
+	 * once via Last-Event-ID resume — the client's per-prime-window
+	 * seenFrameSeqs dedups the replay. Never sent for UI-initiated
+	 * delete_worktree/remove.
+	 */
+	announceWorktreeRemoved(entry: { daemonId: string; name: string; cwd: string }): void {
+		this.#broadcast({
+			type: "worktree_removed",
+			daemonId: entry.daemonId,
+			name: entry.name,
+			path: entry.cwd,
+		});
+	}
+
 	/** Detach broadcast wiring and close every browser stream + pipe. */
 	close(): void {
 		if (this.#registry.onChange === this.#onRegistryChange) {

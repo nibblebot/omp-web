@@ -23,6 +23,7 @@
  * never probed with local git (their cwd is on another host).
  */
 
+import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import type { Subprocess } from "bun";
 import type { StdoutContractLine } from "../shared/protocol";
@@ -179,6 +180,15 @@ export class SpawnSupervisor {
 	#gitExec: GitRunner | undefined;
 	/** Lifecycle-event hook (server.ts wires it to the fleet event ring). */
 	#onEvent: ((level: FleetLogLevel, message: string, daemonId?: string) => void) | undefined;
+	/**
+	 * Worktree-vanished hook: fired during git-state polling when a tagged
+	 * worktree's cwd no longer exists on disk (probe failed AND the
+	 * directory is gone). Detection only — eviction orchestration
+	 * (prune/drop, registry.remove, roster broadcast, toast) is the caller's
+	 * job. At most meaningful once per entry: the server dedups in-flight
+	 * evictions and the entry is gone from the registry after the first.
+	 */
+	#onWorktreeRemoved: ((entry: RegistryEntry) => void) | undefined;
 
 	constructor(
 		registry: Registry,
@@ -192,6 +202,14 @@ export class SpawnSupervisor {
 			backoffMaxMs?: number;
 			/** Fired on spawn/endpoint/exit/stop/respawn/prune lifecycle transitions. */
 			onEvent?: (level: FleetLogLevel, message: string, daemonId?: string) => void;
+			/**
+			 * Fired during git-state polling when a tagged worktree's cwd
+			 * vanished on disk (probe failed AND the directory no longer
+			 * exists). Detection only — eviction orchestration (prune/drop,
+			 * registry.remove, roster broadcast, toast) is the caller's job.
+			 * At most meaningful once per entry (the server dedups).
+			 */
+			onWorktreeRemoved?: (entry: RegistryEntry) => void;
 		},
 	) {
 		this.#registry = registry;
@@ -203,6 +221,7 @@ export class SpawnSupervisor {
 		this.#backoffMinMs = opts?.backoffMinMs ?? RESTART_BACKOFF_MIN_MS;
 		this.#backoffMaxMs = opts?.backoffMaxMs ?? RESTART_BACKOFF_MAX_MS;
 		this.#onEvent = opts?.onEvent;
+		this.#onWorktreeRemoved = opts?.onWorktreeRemoved;
 	}
 
 	/**
@@ -448,9 +467,18 @@ export class SpawnSupervisor {
 		const current = this.#registry.get(entry.daemonId);
 		if (!current) return; // removed while probing
 		if (result === undefined) {
-			// Probe failure (spawn error / nonzero exit / unparseable): clear
-			// stale fields only when previously set, so a never-probed entry
-			// doesn't churn the registry with a no-op broadcast.
+			// Probe failure (spawn error / nonzero exit / unparseable). The repo
+			// may be gone: a TAGGED worktree whose cwd no longer exists on disk
+			// is being evicted (e.g. `git worktree remove` outside the fleet) —
+			// report it and return WITHOUT clearing branch/git; the server
+			// orchestrates the eviction. A probe failure with the directory
+			// still present keeps today's behavior (clear stale fields below).
+			if (current.worktreeOf !== undefined && !existsSync(current.cwd)) {
+				this.#onWorktreeRemoved?.(current);
+				return;
+			}
+			// Clear stale fields only when previously set, so a never-probed
+			// entry doesn't churn the registry with a no-op broadcast.
 			if (current.branch !== undefined || current.git !== undefined) {
 				this.#registry.update(current.daemonId, { branch: undefined, git: undefined });
 			}

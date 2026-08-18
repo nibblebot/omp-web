@@ -37,6 +37,7 @@ import {
 import { cancelUiRequest } from "./store/modals";
 import { resetPendingProjects, settleProjectBranches, settleProjects } from "./store/projects";
 import { resetPendingSessionsFiles, settleFiles, settleSessions } from "./store/roster";
+import { dismissToast, pushToast } from "./store/toasts";
 import {
 	attachSession,
 	call,
@@ -337,6 +338,9 @@ export const [state, setState] = createStore({
 	// role="status" region in App.tsx. announce() dedupes identical consecutive
 	// text so a burst of the same transition doesn't re-announce.
 	announcement: "",
+	// Fleet/app-scoped ephemeral notifications (worktree_removed on-disk
+	// eviction toasts); survives session resets like daemonRoster.
+	toasts: [] as { id: number; text: string }[],
 });
 
 /** Payload delivered into the PromptBox textarea (and image tray) by QueueBar/HistorySearch. */
@@ -363,6 +367,18 @@ function announceDaemonStatus(
 ): void {
 	if (!prev || prev.status === status) return;
 	if (status === "ready" || status === "error") announce(`${name} ${status}`);
+}
+
+/** Toast text for a poll-detected on-disk worktree removal: name + path,
+ *  capped near 120 chars with a long path truncated from the left (an
+ *  ellipsis keeps the informative basename tail). */
+function worktreeRemovedToastText(name: string, path: string): string {
+	const MAX_TOAST_TEXT = 120;
+	const prefix = `Worktree removed on disk: ${name} (`;
+	const maxPathLen = Math.max(1, MAX_TOAST_TEXT - prefix.length - 1); // -1: closing paren
+	const shownPath =
+		path.length <= maxPathLen ? path : `…${path.slice(-Math.max(0, maxPathLen - 1))}`;
+	return `${prefix}${shownPath})`;
 }
 
 // ---------------------------------------------------------------------------
@@ -943,6 +959,18 @@ export function connect(): void {
 				// above; fleet-scoped).
 				setState("worktreeDeleteInfo", (prev) => ({ ...prev, [frame.daemonId]: frame }));
 				break;
+			case "worktree_removed": {
+				// The fleet detected a worktree's directory vanished on disk and
+				// evicted its daemon — one toast per eviction plus an aria-live
+				// announcement (same text, reusing the finding #P1 announce
+				// helper). Broadcast, fleet-edge-only like registered_projects:
+				// no session guard (a bare omp-session never sends it), and
+				// UI-initiated delete_worktree/remove never produce this frame.
+				const text = worktreeRemovedToastText(frame.name, frame.path);
+				pushToast(text);
+				announce(text);
+				break;
+			}
 			case "daemon_logs_result": {
 				const pending = pendingDaemonLogs.get(frame.id);
 				if (!pending) break; // unknown id (timed out or stale): ignore
@@ -1189,4 +1217,5 @@ export {
 } from "./store/transport";
 export { steerSubagent, abortSubagent } from "./store/subagents";
 export { askBtw, closeBtw } from "./store/btw";
+export { dismissToast, pushToast } from "./store/toasts";
 export { announce, appendBashChunk, applyEvent, cancelUiRequest, attachSession, call, clientId };

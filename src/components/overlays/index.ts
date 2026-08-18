@@ -14,4 +14,5 @@ export { SettingsRow } from "./SettingsRow";
 export { WebUiSettings } from "./WebUiSettings";
 export { StatsModal } from "./StatsModal";
 export { ThinkingModal } from "./ThinkingModal";
+export { Toasts } from "./Toasts";
 export { UsageModal } from "./UsageModal";
