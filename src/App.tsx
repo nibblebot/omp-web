@@ -36,7 +36,7 @@ import {
 	Toasts,
 	UsageModal,
 } from "./components/overlays";
-import { connect, setPromptInsert, setState, state, toggleSidebar } from "./state";
+import { connect, hasLiveSession, setPromptInsert, setState, state, toggleSidebar } from "./state";
 import { initTheme } from "./prefs/theme";
 import { TxBrowser } from "./tx/Browser";
 
@@ -84,6 +84,16 @@ const EmptyState: Component = () => (
 				)}
 			</For>
 		</div>
+	</div>
+);
+
+/** Roster mode with no live session (the attached daemon was stopped,
+ *  removed, or never picked): a quiet centered hint replaces the whole chat
+ *  column — header/stream/composer all belong to a session that is gone. */
+const NoActiveSessionPane: Component = () => (
+	<div class="roster-empty-pane">
+		<p class="roster-empty-title">No active session</p>
+		<p class="roster-empty-hint">Pick a daemon from the sidebar to start a session.</p>
 	</div>
 );
 
@@ -143,21 +153,33 @@ export const App: Component = () => {
 					<TxBrowser />
 				</Show>
 				<Show when={state.view === "chat"}>
-					<main class="app-main">
-						{/* Session identity (name/rename) at the left edge above the stream. */}
-						<SessionHeader />
-						<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyState />}>
-							<MessageList />
-						</Show>
-						<QueueBar />
-						<div class="active-strips">
-							<ActiveSubagents />
-							<ActiveDaemons />
-						</div>
-						{/* Session-send config bar (model/thinking/stats), glued to the composer. */}
-						<SessionBar />
-						<PromptBox />
-					</main>
+					{/* Roster mode with no live session (stopped/removed daemon, or none
+					    picked yet): the empty pane replaces the chat column. Standalone
+					    mode is never gated — hasLiveSession() is true outside roster. */}
+					<Show
+						when={state.sessionMode === "roster" && !hasLiveSession()}
+						fallback={
+							<main class="app-main">
+								{/* Session identity (name/rename) at the left edge above the stream. */}
+								<SessionHeader />
+								<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyState />}>
+									<MessageList />
+								</Show>
+								<QueueBar />
+								<div class="active-strips">
+									<ActiveSubagents />
+									<ActiveDaemons />
+								</div>
+								{/* Session-send config bar (model/thinking/stats), glued to the composer. */}
+								<SessionBar />
+								<PromptBox />
+							</main>
+						}
+					>
+						<main class="app-main">
+							<NoActiveSessionPane />
+						</main>
+					</Show>
 				</Show>
 			</div>
 			<Show when={state.modal === "help"}>

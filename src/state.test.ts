@@ -15,6 +15,7 @@ import {
 	call,
 	connect,
 	daemonsByProject,
+	hasLiveSession,
 	listProjectBranches,
 	pushNotice,
 	refreshSettings,
@@ -1604,5 +1605,142 @@ describe("worktree_removed (on-disk removal toast)", () => {
 		expect(text.endsWith(")")).toBe(true);
 		expect(text).toContain("…");
 		expect(text).toContain("tail"); // the informative basename tail survives
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Roster truth vs. the attached chat column: a roster/daemon_status frame
+// marking the attached daemon dead (asleep/error) or removing it clears the
+// session view, but MUST NOT fire while that daemon's attach is in flight
+// (a freshly waking daemon reads as "asleep" in lagging roster frames).
+// ---------------------------------------------------------------------------
+describe("attached session reconciliation against roster truth", () => {
+	/** Minimal roster entry; status/extra fields ride along. */
+	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: id,
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			...extra,
+		};
+	}
+
+	/** Connect + attach to a daemon with an empty-transcript prime in place. */
+	function attachAndPrime(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+		dispatchSeq({ type: "history", messages: [userMsg("q"), assistantMsg("a")] } as ServerFrame, 3);
+		setState("readyAt", 123);
+	}
+
+	test("a roster frame marking the attached daemon asleep clears the session view (roster survives)", () => {
+		attachAndPrime();
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.readyAt).toBe(123);
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readyAt).toBeUndefined();
+		expect(state.items).toEqual([]);
+		// Fleet-scoped roster data survives the session clear.
+		expect(state.sessionMode).toBe("roster");
+		expect(state.daemonRoster.map((d) => d.daemonId)).toEqual(["daemon-a"]);
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("a roster frame keeping the attached daemon ready does NOT clear", () => {
+		attachAndPrime();
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
+
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.readyAt).toBe(123);
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+		expect(hasLiveSession()).toBe(true);
+	});
+
+	test("removing the attached entry from the roster clears the session view", () => {
+		attachAndPrime();
+
+		dispatch({ type: "roster", daemons: [] });
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readyAt).toBeUndefined();
+		expect(state.items).toEqual([]);
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("a daemon_status asleep frame for the attached daemon clears the session view", () => {
+		attachAndPrime();
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
+
+		dispatch({ type: "daemon_status", daemonId: "daemon-a", status: "asleep" });
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readyAt).toBeUndefined();
+		expect(state.items).toEqual([]);
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("RACE: a lagging 'asleep' roster frame does not clear while the attach is in flight", async () => {
+		attachAndPrime();
+		// The proxied attached frame already set currentSessionId, but the
+		// id-keyed attach_result has not settled yet (finding #28: priming
+		// rides the daemon pipe, which may be mid-redial) — the wake-attach
+		// is still in flight, so the lagging roster must not clear.
+		const attach = attachSession("daemon-a");
+		const cmd = posted.at(-1);
+		if (!cmd || cmd.type !== "attach") throw new Error("expected an attach command");
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+		expect(hasLiveSession()).toBe(true);
+
+		// Once the attach settles, the same asleep roster frame IS truth.
+		dispatch({ type: "attach_result", id: cmd.id, ok: true, sessionId: "daemon-a" });
+		await expect(attach).resolves.toBe("daemon-a");
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		expect(state.currentSessionId).toBe("");
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("the in-flight guard only protects the attach target (a different dead daemon clears)", async () => {
+		attachAndPrime();
+		// Attaching to daemon-b must not shield a daemon-a that died.
+		const attach = attachSession("daemon-b");
+		const cmd = posted.at(-1);
+		if (!cmd || cmd.type !== "attach") throw new Error("expected an attach command");
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		expect(state.currentSessionId).toBe("");
+
+		dispatch({ type: "attach_result", id: cmd.id, ok: true, sessionId: "daemon-b" });
+		await expect(attach).resolves.toBe("daemon-b");
+	});
+
+	test("hasLiveSession: transitional statuses are live; standalone is never gated", () => {
+		attachAndPrime();
+		// A transitional wake status is never dead.
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "connecting" })] });
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(hasLiveSession()).toBe(true);
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "error" })] });
+		expect(state.currentSessionId).toBe("");
+		expect(hasLiveSession()).toBe(false);
+
+		// Standalone mode: no roster gating even with a dead-looking entry.
+		setState("sessionMode", "single");
+		setState("currentSessionId", "local-session");
+		setState("daemonRoster", [daemon("local-session", { status: "asleep" })]);
+		expect(hasLiveSession()).toBe(true);
 	});
 });

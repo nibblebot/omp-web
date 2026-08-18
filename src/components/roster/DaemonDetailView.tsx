@@ -17,6 +17,15 @@ export const DaemonDetailView: Component<{ daemon: DaemonEntry; onClose: () => v
 	props,
 ) => {
 	const d = () => props.daemon;
+	// Live-process facts (uptime/pid) mean nothing once the daemon is asleep or
+	// errored — and stale entries from older edges may still carry pid/readyAt
+	// from the last run — so render them defensively off status, not field
+	// presence. The roster entry's status is the single source of truth.
+	const alive = () =>
+		d().status === "ready" ||
+		d().status === "connecting" ||
+		d().status === "session" ||
+		d().status === "resolving";
 	return (
 		<Modal class="daemon-detail" aria-label={`Daemon ${d().name}`} onClose={props.onClose}>
 			<div class="daemon-detail-header">
@@ -50,13 +59,13 @@ export const DaemonDetailView: Component<{ daemon: DaemonEntry; onClose: () => v
 						</div>
 					)}
 				</Show>
-				<Show when={d().uptime !== undefined}>
+				<Show when={alive() && d().uptime !== undefined}>
 					<div class="daemon-detail-fact">
 						<span class="daemon-detail-label">uptime</span>
 						<span class="daemon-detail-value">{formatDaemonUptime((d().uptime ?? 0) * 1000)}</span>
 					</div>
 				</Show>
-				<Show when={d().pid !== undefined}>
+				<Show when={alive() && d().pid !== undefined}>
 					<div class="daemon-detail-fact">
 						<span class="daemon-detail-label">pid</span>
 						<span class="daemon-detail-value">{d().pid}</span>

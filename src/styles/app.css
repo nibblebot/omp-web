@@ -163,3 +163,25 @@
 	margin: 0 auto;
 	min-width: 0;
 }
+/* Roster mode, no live attached session (daemon stopped/removed or never
+   picked): the chat column is replaced by a quiet centered hint. */
+.roster-empty-pane {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-3);
+	padding: var(--space-7) var(--space-5);
+	text-align: center;
+}
+.roster-empty-title {
+	margin: 0;
+	font-size: var(--fs-lg);
+	color: var(--muted-2);
+}
+.roster-empty-hint {
+	margin: 0;
+	font-size: var(--fs-md);
+	color: var(--muted);
+}

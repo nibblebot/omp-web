@@ -213,7 +213,15 @@ describe("fleet edge", () => {
 			expect(d).not.toHaveProperty("endpoint");
 			expect(d).not.toHaveProperty("registeredAt");
 			expect(d).not.toHaveProperty("template");
-			expect(typeof d.uptime).toBe("number");
+			// Alive daemons carry an uptime; asleep ones must not (no pid,
+			// no uptime growing since a dead process's readyAt).
+			if (d.status === "asleep") {
+				expect(d.uptime).toBeUndefined();
+				expect(d.pid).toBeUndefined();
+				expect(d.readyAt).toBeUndefined();
+			} else {
+				expect(typeof d.uptime).toBe("number");
+			}
 		}
 		// A registry mutation broadcasts a fresh roster to every edge stream.
 		server.registry.update(remoteEntry.daemonId, { labels: ["env=test"] });
@@ -853,6 +861,124 @@ describe("fleet edge", () => {
 		expect(frame.error).toContain("unknown daemon");
 	});
 
+	test("stop of a spawned entry broadcasts an asleep roster entry with no pid/uptime and closes the attached pipe", async () => {
+		// A fresh spawned entry that LOOKS alive (pid + readyAt) so the stop
+		// broadcast provably strips the liveness facts. The shared fixtures
+		// stay untouched — later tests keep relying on them.
+		const stopMe = server.registry.create({
+			name: "stop-me",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "spawned",
+			template: "local",
+			status: "ready",
+			pid: 4242,
+			readyAt: Date.now() - 60_000,
+			endpoint: fake.url,
+			token: FAKE_TOKEN,
+		});
+		// Pre-connect so the attach only opens the browser's pipe (like the
+		// remoteEntry fixture) instead of a connector dial on top of it.
+		server.connector.connect(stopMe.daemonId);
+		await waitFor(
+			() => (server.connector.isConnected(stopMe.daemonId) ? "connected" : null),
+			5000,
+			"stop-me connected",
+		);
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		const before = fake.streamCount();
+		await browser.send({ type: "attach", sessionId: stopMe.daemonId });
+		await browser.waitForFrame(
+			(f) => f.type === "attached" && f.sessionId === stopMe.daemonId,
+			"attached (stop-me)",
+		);
+		await waitFor(() => (fake.streamCount() === before + 1 ? "pipe" : null), 5000, "pipe stream");
+		const stopPipe = fake.streams()[before];
+		expect(stopPipe.authHeader).toBe(`Bearer ${FAKE_TOKEN}`);
+		// The registry entry really does look alive when the stop is issued.
+		const regBefore = server.registry.get(stopMe.daemonId)!;
+		expect(regBefore.status).toBe("ready");
+		expect(regBefore.pid).toBe(4242);
+		expect(regBefore.readyAt).toBeTypeOf("number");
+
+		await browser.send({ type: "stop", daemonId: stopMe.daemonId });
+		const roster = asRoster(
+			await browser.waitForFrame(
+				(f) =>
+					f.type === "roster" &&
+					f.daemons.some((d) => d.daemonId === stopMe.daemonId && d.status === "asleep"),
+				"asleep roster",
+			),
+		);
+		const entry = roster.daemons.find((d) => d.daemonId === stopMe.daemonId)!;
+		expect(entry.status).toBe("asleep");
+		expect(entry.pid).toBeUndefined();
+		expect(entry.uptime).toBeUndefined();
+		expect(entry.readyAt).toBeUndefined();
+		// The registry truth matches the broadcast: no stale liveness facts.
+		const reg = server.registry.get(stopMe.daemonId)!;
+		expect(reg.status).toBe("asleep");
+		expect(reg.pid).toBeUndefined();
+		expect(reg.readyAt).toBeUndefined();
+		// The browser's pipe to the stopped daemon is closed at stop time — no
+		// redial against the dead endpoint, no phantom "daemon connection lost".
+		await waitFor(() => (stopPipe.closed ? "pipe closed" : null), 5000, "pipe closed on stop");
+		await sleep(100);
+		expect(
+			browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
+		).toBe(false);
+	});
+
+	test("stop surfaces the error frame but still flips the entry to asleep when the terminate fails", async () => {
+		const stopMe2 = server.registry.create({
+			name: "stop-me-2",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "spawned",
+			template: "local",
+			status: "ready",
+			pid: 4321,
+			readyAt: Date.now() - 30_000,
+		});
+		const origStop = server.supervisor.stop.bind(server.supervisor);
+		server.supervisor.stop = async () => {
+			throw new Error("stop boom");
+		};
+		try {
+			const browser = await openBrowser(server.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "stop", daemonId: stopMe2.daemonId });
+			const error = await browser.waitForFrame(
+				(f) => f.type === "error" && String(f.error).includes("stop boom"),
+				"stop error frame",
+			);
+			expect(error.type).toBe("error");
+			// The entry must not stay "ready" forever: the status flip happens
+			// even on terminate failure, and the broadcast carries no pid/uptime.
+			const roster = asRoster(
+				await browser.waitForFrame(
+					(f) =>
+						f.type === "roster" &&
+						f.daemons.some((d) => d.daemonId === stopMe2.daemonId && d.status === "asleep"),
+					"asleep roster after failed stop",
+				),
+			);
+			const entry = roster.daemons.find((d) => d.daemonId === stopMe2.daemonId)!;
+			expect(entry.status).toBe("asleep");
+			expect(entry.pid).toBeUndefined();
+			expect(entry.uptime).toBeUndefined();
+			const reg = server.registry.get(stopMe2.daemonId)!;
+			expect(reg.status).toBe("asleep");
+			expect(reg.pid).toBeUndefined();
+			expect(reg.readyAt).toBeUndefined();
+		} finally {
+			server.supervisor.stop = origStop;
+		}
+	});
+
 	test("browser allowlist accepts add_project and remove_project (their own validation errors, not the allowlist rejection)", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
@@ -931,9 +1057,7 @@ describe("fleet edge", () => {
 		);
 		// The dedup answered an error and registered nothing: the roster
 		// still holds exactly the first add_project's default workspace.
-		expect(
-			server.registry.list().filter((e) => e.cwd === realpathSync(repoDir)),
-		).toHaveLength(1);
+		expect(server.registry.list().filter((e) => e.cwd === realpathSync(repoDir))).toHaveLength(1);
 		try {
 			server.registry.removeProject(project.projectId);
 		} catch {
@@ -1062,8 +1186,20 @@ describe("edge pure helpers", () => {
 		expect(roster).not.toHaveProperty("endpoint");
 		expect(roster).not.toHaveProperty("registeredAt");
 		expect(roster).not.toHaveProperty("template");
-		// Never-ready entries fall back to registeredAt.
-		const neverReady = toRosterEntry({ ...entry, readyAt: undefined, status: "asleep" });
+		// An asleep daemon has no live process: the roster must not carry a
+		// pid or an uptime growing since registeredAt for a dead daemon.
+		const asleep = toRosterEntry({ ...entry, readyAt: undefined, status: "asleep" });
+		expect(asleep.uptime).toBeUndefined();
+		expect(asleep.pid).toBeUndefined();
+		expect(asleep.readyAt).toBeUndefined();
+		// ... and the registry entry's stale liveness facts are skipped even
+		// when still set (a pure-function guard alongside setStatus's clear).
+		const asleepStale = toRosterEntry({ ...entry, status: "asleep" });
+		expect(asleepStale.uptime).toBeUndefined();
+		expect(asleepStale.pid).toBeUndefined();
+		expect(asleepStale.readyAt).toBeUndefined();
+		// Never-ready but alive entries still fall back to registeredAt.
+		const neverReady = toRosterEntry({ ...entry, readyAt: undefined, status: "connecting" });
 		expect(neverReady.uptime).toBeGreaterThanOrEqual(199);
 		expect(neverReady.uptime).toBeLessThanOrEqual(201);
 	});

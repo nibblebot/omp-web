@@ -42,6 +42,7 @@ import {
 	attachSession,
 	call,
 	clientId,
+	pendingAttachTarget,
 	pendingCalls,
 	pendingDaemonControl,
 	pendingDaemonLogs,
@@ -650,6 +651,29 @@ export function daemonsByProject(): {
 	return groups;
 }
 
+/** Roster statuses that mean the daemon is definitively not serving a
+ *  session: the attached chat column must yield to the empty pane. */
+const DEAD_DAEMON_STATUSES = new Set<DaemonStatus>(["asleep", "error"]);
+
+/** True when the roster entry is missing or its status is terminal-dead.
+ *  Transitional statuses ("connecting"/"session"/"resolving") and "ready"
+ *  are NEVER dead — a waking daemon passes through them. */
+export function isDaemonDead(entry: DaemonEntry | undefined): boolean {
+	return entry === undefined || DEAD_DAEMON_STATUSES.has(entry.status);
+}
+
+/** True when this tab has a live attached session to render. Roster mode:
+ *  the attached entry must exist and not be dead; a daemon with an attach in
+ *  flight counts as live (the roster lags a wake). Standalone mode is always
+ *  live — the roster empty pane is gated on sessionMode in App. */
+export function hasLiveSession(): boolean {
+	if (state.sessionMode !== "roster") return true;
+	if (state.currentSessionId === "") return false;
+	const entry = state.daemonRoster.find((d) => d.daemonId === state.currentSessionId);
+	if (!isDaemonDead(entry)) return true;
+	return pendingAttachTarget() === state.currentSessionId;
+}
+
 /** Per-session UI state dropped when attaching to a different session. */
 function resetSessionView(): void {
 	clearPendingDeltas();
@@ -673,6 +697,29 @@ function resetSessionView(): void {
 		uiRequest: null,
 		btw: null,
 	});
+}
+
+/** Roster truth wins over the attached chat column: after a roster or
+ *  daemon_status update, if the daemon we are attached to is missing or
+ *  terminal-dead (asleep/error), drop the session view. The roster itself
+ *  is fleet-scoped and survives. Race guard: the clear MUST NOT fire while
+ *  an attach to that daemon is in flight — a freshly waking daemon reads as
+ *  "asleep" in lagging roster frames right after wake-attach; the entry and
+ *  in-flight state are re-checked against the POST-frame roster here. */
+function reconcileAttachedSession(): void {
+	if (state.sessionMode !== "roster") return;
+	const id = state.currentSessionId;
+	if (id === "") return;
+	if (pendingAttachTarget() === id) return;
+	if (!isDaemonDead(state.daemonRoster.find((d) => d.daemonId === id))) return;
+	setState("currentSessionId", "");
+	setState("readyAt", undefined);
+	resetSessionView();
+	pushDebug(
+		"info",
+		"roster",
+		`attached daemon ${id.slice(0, 8)} is gone or asleep; session cleared`,
+	);
 }
 
 let backoff = 1000;
@@ -901,6 +948,10 @@ export function connect(): void {
 				// those fields, so they flow through wholesale with the array.
 				setState("daemonRoster", frame.daemons);
 				setState("sessionMode", "roster");
+				// Roster truth wins over the attached chat: if the daemon we were
+				// attached to vanished or went asleep, drop the session view (the
+				// roster itself is fleet-scoped and survives).
+				reconcileAttachedSession();
 				pushDebug(
 					"info",
 					"roster",
@@ -931,6 +982,9 @@ export function connect(): void {
 					"roster",
 					`daemon ${frame.daemonId.slice(0, 8)} → ${frame.status}${frame.error !== undefined ? `: ${frame.error}` : ""}`,
 				);
+				// Same reconcile as the roster frame: the attached daemon just
+				// went asleep/error — clear the session view (race-guarded).
+				reconcileAttachedSession();
 				break;
 			}
 			case "projects":

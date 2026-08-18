@@ -189,6 +189,15 @@ export class Registry {
 		} else {
 			delete entry.error;
 		}
+		// An asleep daemon has no live process: stale liveness facts must not
+		// leak into the roster (no pid, no uptime growing since readyAt). The
+		// registry is the roster truth, so clearing here covers every stop path
+		// (edge stop, supervisor stop, idle exit, ctl stop) in one place — the
+		// same invariant the boot downgrade in server.ts enforces explicitly.
+		if (status === "asleep") {
+			delete entry.pid;
+			delete entry.readyAt;
+		}
 		this.#mutated();
 	}
 
@@ -260,7 +269,9 @@ export class Registry {
 			(entry) => entry.projectId === projectId && !isPlaceholder(entry),
 		);
 		if (blockers.length > 0) {
-			throw new Error(`project ${projectId} in use by daemons: ${blockers.map((entry) => entry.daemonId).join(", ")}`);
+			throw new Error(
+				`project ${projectId} in use by daemons: ${blockers.map((entry) => entry.daemonId).join(", ")}`,
+			);
 		}
 		for (let i = this.entries.length - 1; i >= 0; i--) {
 			const entry = this.entries[i];

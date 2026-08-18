@@ -1,5 +1,5 @@
-import { createEffect, createSignal, Show, type JSX } from "solid-js";
-import { fetchDaemonStderr } from "../../state";
+import { createEffect, createMemo, createSignal, Show, type JSX } from "solid-js";
+import { fetchDaemonStderr, state } from "../../state";
 
 /** Fetch/loading/error/tail/refresh lifecycle for a daemon's captured stderr,
  *  extracted verbatim from DaemonSidebar's DaemonDetail. Refetches when
@@ -16,6 +16,21 @@ export function DaemonLogView(props: {
 	const [text, setText] = createSignal<string | null>(null);
 	const [error, setError] = createSignal<string | null>(null);
 	const [loading, setLoading] = createSignal(false);
+
+	// The roster entry is the status source of truth — read it reactively so a
+	// stop/wake broadcast flips the "historical tail" note without a refetch
+	// (the daemonId is stable across roster broadcasts, unlike the entry
+	// object; an asleep/errored daemon's tail is the capture from its last
+	// run, not a live stream).
+	const entry = createMemo(() => state.daemonRoster.find((d) => d.daemonId === props.daemonId));
+	const dead = () => {
+		const status = entry()?.status;
+		return status === "asleep" || status === "error";
+	};
+	const note = () =>
+		entry()?.status === "error"
+			? "daemon errored — captured log from last run"
+			: "daemon asleep — captured log from last run";
 
 	const load = () => {
 		setLoading(true);
@@ -47,6 +62,9 @@ export function DaemonLogView(props: {
 					{loading() ? "loading…" : "refresh"}
 				</button>
 			</div>
+			<Show when={dead()}>
+				<div class="daemon-stderr-note">{note()}</div>
+			</Show>
 			<Show when={loading()}>
 				<div class="daemon-stderr-empty">loading stderr…</div>
 			</Show>

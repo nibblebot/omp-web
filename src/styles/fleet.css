@@ -723,6 +723,12 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .daemon-stderr-error {
 	margin: var(--space-2) 0 0;
 }
+.daemon-stderr-note {
+	font-size: var(--fs-micro);
+	font-style: italic;
+	color: var(--muted-2);
+	margin-bottom: var(--space-2);
+}
 /* --- Add-repo modal (AddProjectModal.tsx) --- */
 .project-form {
 	display: flex;

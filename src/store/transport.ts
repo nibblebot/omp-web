@@ -137,6 +137,8 @@ export function call(
 // ---------------------------------------------------------------------------
 let pendingAttach: {
 	id: string;
+	/** The roster daemonId this attach targets (race guard for session clearing). */
+	sessionId: string;
 	resolve: (sessionId: string) => void;
 	reject: (err: Error) => void;
 	timer: number;
@@ -173,7 +175,7 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 					}
 				}, DAEMON_TIMEOUT_MS)
 			: 0;
-	pendingAttach = { id, resolve, reject, timer };
+	pendingAttach = { id, sessionId: cmd.sessionId, resolve, reject, timer };
 	postCommand(cmd).catch((err) => {
 		if (pendingAttach?.id === id) {
 			clearTimeout(pendingAttach.timer);
@@ -189,6 +191,14 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 /** Attach this tab to a daemon in the roster; resolves with its handle. */
 export function attachSession(sessionId: string): Promise<string> {
 	return requestAttach({ type: "attach", id: crypto.randomUUID(), sessionId });
+}
+
+/** The roster daemonId of the in-flight attach, or null when idle. Used as
+ *  the race guard for session clearing: a freshly waking daemon reads as
+ *  "asleep" in lagging roster frames right after the user clicks wake-attach,
+ *  so the clear must not fire while its attach is still settling. */
+export function pendingAttachTarget(): string | null {
+	return pendingAttach?.sessionId ?? null;
 }
 
 /** Reject the in-flight attach waiter (stream teardown in state.ts). */

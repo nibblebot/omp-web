@@ -400,7 +400,6 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
  * worktree deletion.
  */
 export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): DaemonEntry {
-	const uptimeBase = entry.readyAt ?? entry.registeredAt;
 	const roster: DaemonEntry = {
 		daemonId: entry.daemonId,
 		name: entry.name,
@@ -409,7 +408,16 @@ export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): Daem
 		labels: [...entry.labels],
 		mode: entry.mode,
 		status: entry.status,
-		uptime: Math.max(0, Math.floor((Date.now() - uptimeBase) / 1000)),
+		// An asleep daemon has no live process: omit the uptime rather than let
+		// the registeredAt fallback show a growing uptime for a dead daemon.
+		...(entry.status === "asleep"
+			? {}
+			: {
+					uptime: Math.max(
+						0,
+						Math.floor((Date.now() - (entry.readyAt ?? entry.registeredAt)) / 1000),
+					),
+				}),
 	};
 	if (entry.worktreeOf !== undefined) roster.worktreeOf = entry.worktreeOf;
 	if (entry.projectId !== undefined) roster.projectId = entry.projectId;
@@ -419,8 +427,13 @@ export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): Daem
 	if (entry.branch !== undefined) roster.branch = entry.branch;
 	if (entry.git !== undefined) roster.git = { ...entry.git };
 	if (entry.lastSessionFile !== undefined) roster.lastSessionFile = entry.lastSessionFile;
-	if (entry.readyAt !== undefined) roster.readyAt = entry.readyAt;
-	if (entry.pid !== undefined) roster.pid = entry.pid;
+	// Liveness facts are meaningless for an asleep daemon; keep them off the
+	// roster even if the registry entry transiently carries stale ones (e.g.
+	// mid-respawn, when the supervisor writes the pid before the child readies).
+	if (entry.status !== "asleep") {
+		if (entry.readyAt !== undefined) roster.readyAt = entry.readyAt;
+		if (entry.pid !== undefined) roster.pid = entry.pid;
+	}
 	if (entry.error !== undefined) roster.error = entry.error;
 	return roster;
 }
@@ -1244,8 +1257,22 @@ export class FleetEdge {
 				this.#sendError(stream, `unknown daemon: ${daemonId}`);
 				return;
 			}
+			// A browser attached to the stopped daemon must not keep a live pipe:
+			// its redial would only fail against the dead endpoint and surface a
+			// phantom "daemon connection lost" error (mirrors #handleRemove).
+			for (const s of this.#browsers) {
+				if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
+			}
 			if (entry.mode === "spawned") {
-				await this.#supervisor.stop(daemonId);
+				try {
+					await this.#supervisor.stop(daemonId);
+				} catch (err) {
+					// Error-safe stop: a failed terminate must not leave the entry
+					// "ready" forever — the daemon is being stopped regardless, so
+					// flip the status before surfacing the error.
+					this.#registry.setStatus(daemonId, "asleep");
+					throw err;
+				}
 			} else {
 				this.#connector.disconnect(daemonId);
 				this.#registry.setStatus(daemonId, "asleep");
