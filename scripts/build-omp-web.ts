@@ -3,12 +3,11 @@
  * build (`bun run build`) — produce the installable omp-web bundle
  * (dist-bundle/cli.js).
  *
- * Mirrors scripts/build-omp-session.ts's UI-embed pipeline (vite build →
- * regenerate server/embedded-dist.ts → restore the stub in a finally), then
- * bundles the cli/omp-web.ts dispatcher with bun build (NOT --compile): all
- * @oh-my-pi/* packages stay external because `bun install -g` installs them
- * as real dependencies next to the bundle — hence no pi-natives embed and no
- * legacyPiModulesStub here (those exist only for the self-contained binary).
+ * UI-embed pipeline: vite build → regenerate server/embedded-dist.ts →
+ * restore the stub in a finally. Then the cli/omp-web.ts dispatcher is
+ * bundled with bun build (NOT --compile): all @oh-my-pi/* packages stay
+ * external because `bun install -g` installs them as real dependencies
+ * next to the bundle — hence no pi-natives embed.
  * The package version is stamped in via define so `--version` works from an
  * arbitrary cwd without a path-based package.json lookup.
  */

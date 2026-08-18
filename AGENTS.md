@@ -6,7 +6,7 @@ Orientation for agents working in this repo. Read before editing. README.md is t
 
 Two products in one tree, sharing one Solid.js web UI and one wire contract:
 
-- **omp-session** (`server/`) — single-session agent daemon. One process, one project dir (bound at spawn, immutable), one live agent session via the `@oh-my-pi/pi-coding-agent` SDK **in-process** (`createAgentSession` — no child process, no JSON-RPC hop). Serves the full standalone UI over SSE + POST. Builds to a self-contained binary.
+- **omp-session** (`server/`) — single-session agent daemon. One process, one project dir (bound at spawn, immutable), one live agent session via the `@oh-my-pi/pi-coding-agent` SDK **in-process** (`createAgentSession` — no child process, no JSON-RPC hop). Serves the full standalone UI over SSE + POST.
 - **omp-fleet** (`fleet/`) — registry + supervisor + connector for N daemons (local children, external/remote). Re-exposes them to the same UI in **roster mode** and to CLI fan-out. Holds **zero agent state** — all truth lives in the omp-session processes and their `.jsonl` session logs.
 - **Web UI** (`src/`) — one Solid.js bundle serves both modes; mode is decided by the wire (`roster` frame ⇒ roster mode, sticky; a bare omp-session never sends it ⇒ standalone). No router.
 
@@ -29,7 +29,6 @@ bun scripts/test.ts --bail 1   # extra args forwarded to bun test (file filters 
 bun run bench                  # scripts/bench-tests.ts: run [--runs N]|report [--last N]|flakes [--last N]|baseline — per-file stats (mean/sd/p50/p95/CV%, Welch t vs baseline), flake/broken classification, JSONL history in .bench/
 bun run build                  # → dist-bundle/cli.js installable bundle (vite build → regenerate server/embedded-dist.ts → bun build, dist/ + @oh-my-pi/* external; shebang verified)
 bun run build:web              # vite build → dist/ (gitignored; the UI half of `build`)
-bun run build:omp-session      # → dist-bin/omp-session self-contained binary (UI embedded via server/embedded-dist.ts)
 bun scripts/test-onboard.ts    # OFFLINE distribution+onboarding E2E: pack → poisoned-store pinned install → first-run config → bare serve → spawn → update round-trip (exit 0 = green)
 bun run fleet -- serve|sessions|projects|spawn|add-repo|add|provision|stop|remove|rm-project|add-worktree|rm-worktree|prompt
 bun run collab [-- --join|--stop]   # collab room CLI (TUI/CLI-only surface)
@@ -55,7 +54,7 @@ Ports: defaults vite **4713**, omp-session **4721**, omp-fleet **4722** (used by
 | `server/ui-context.ts` | ExtensionUIContext dialogs → `ui_request`/`ui_response` frames |
 | `server/collab-*.ts` | Collab host adapter / WS relay / session port / CLI. Only WebSocket left in the daemon (non-goal of the SSE plan) |
 | `server/daemon-broker.ts` | `daemons` roster broadcast (hub-launch processes), polled every 3s while streams are live |
-| `server/embedded-dist.ts` | **Stub** (`{}`) checked in; `build:omp-session` regenerates it with `with { type: "file" }` imports and restores the stub in a `finally`. Never hand-edit beyond the stub |
+| `server/embedded-dist.ts` | **Stub** (`{}`) checked in; `bun run build` (`scripts/build-omp-web.ts`) regenerates it with `with { type: "file" }` imports and restores the stub in a `finally`. Never hand-edit beyond the stub |
 | `fleet/registry.ts` | Persistent insertion-ordered roster + registered `projects[]` (`~/.omp-web/fleet-state.json`, atomic tmp+rename; monotonic `pN` project ids) |
 | `fleet/supervisor.ts` | Spawns/restarts omp-session children via templates, parses `OMP_SESSION|` lines, git polling |
 | `fleet/connector.ts` | Per-daemon SSE client: status ladder, backoff, silence deadline, Last-Event-ID resume |
@@ -71,7 +70,7 @@ Ports: defaults vite **4713**, omp-session **4721**, omp-fleet **4722** (used by
 | `src/state.ts` | **The entire client model**: one `createStore`; chat items, streaming, session mirror, `call()`, roster, stale-frame guards |
 | `src/components/` | Thin components: read `state` reactively, mutate only via exported store actions. No data props |
 | `src/tx/` | Typed client for the stats surface (`api` fetch helper + transcript/format utils); also co-locates `tx.css`, the transcripts-view stylesheet |
-|`scripts/dev.ts`, `scripts/test.ts`, `scripts/build-omp-session.ts`|Dev runner, test wrapper, binary build|
+|`scripts/dev.ts`, `scripts/test.ts`|Dev runner, test wrapper|
 |`scripts/build-omp-web.ts`, `scripts/test-onboard.ts`|Installable-bundle build (dist-bundle/cli.js, embedded-dist regenerate+restore) + offline distribution/onboarding E2E (Phase 5 gate)|
 |`scripts/install-omp-web.ts`|Pinned installer: `bun add <tarball>` into `<prefix>/install/` (default `~/.omp-web`; its own node_modules = exact `@oh-my-pi/*` pins) + bin symlink; NOT `bun install -g` (flat shared store inherits the omp CLI's SDK version → skew → runtime breakage; `--prefix`/`--bin-dir` for tests). The prefix holds the CLI CODE; the DATA home is chosen independently at first run|
 | `scripts/bench-tests.ts` | Suite benchmark harness: `run`/`report`/`baseline`, JSONL history in gitignored `.bench/` |
@@ -145,7 +144,7 @@ Key constants (all in `shared/protocol.ts`): `OMP_PROTO = 2`, `SSE_KEEPALIVE_MS`
 - Tabs for indentation (enforced by oxfmt). `verbatimModuleSyntax` is on → `import type` discipline (no value imports of types).
 - Typecheck with `tsgo` (`bun run check:types`); the `@typescript/native-preview` version is pinned exactly. NOTE: typescript-eslint/ESLint cannot run against TS 7 — that's why linting is oxlint, not ESLint.
 - Comments reference audit remediation findings as `finding #N` (numbering kept from the 2026-08 audit; the strategic items live in `docs/position.md`); keep the numbering when fixing/annotating.
-- `dist/`, `dist-bin/`, `node_modules/` are gitignored; `docs/architecture.md`, `docs/position.md`, `docs/research/` are committed docs — update, don't delete.
+- `dist/`, `node_modules/` are gitignored; `docs/architecture.md`, `docs/position.md`, `docs/research/` are committed docs — update, don't delete.
 
 ## Editing workflows
 

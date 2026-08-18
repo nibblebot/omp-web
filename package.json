@@ -16,7 +16,6 @@
 		"dev:web": "vite",
 		"build": "bun scripts/build-omp-web.ts",
 		"build:web": "vite build",
-		"build:omp-session": "bun scripts/build-omp-session.ts",
 		"install:omp-web": "bun scripts/install-omp-web.ts",
 		"start": "bun server/index.ts",
 		"check:types": "tsgo -p tsconfig.json --noEmit",

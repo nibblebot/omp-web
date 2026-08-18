@@ -3,7 +3,7 @@
 	"plugins": ["typescript", "unicorn", "oxc"],
 	"jsPlugins": ["eslint-plugin-solid"],
 	"env": { "browser": true, "builtin": true },
-	"ignorePatterns": ["dist/", "dist-bin/", "node_modules/", "docs/"],
+	"ignorePatterns": ["dist/", "node_modules/", "docs/"],
 	"rules": {
 		"solid/components-return-once": "warn",
 		"solid/event-handlers": "error",

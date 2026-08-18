@@ -14,7 +14,7 @@ Solo operator running parallel agents: one developer spawning, supervising, and 
 
 Two coupled products sharing one Solid.js web UI:
 
-- **omp-session** — a single-session agent daemon for `@oh-my-pi/pi-coding-agent`: one process, one bound project directory, one live agent session (in-process SDK, no child process, no JSON-RPC hop), served to the web UI over SSE + POST. Ships as a self-contained binary; disposable — disk `.jsonl` logs make respawn/`--resume` lossless.
+- **omp-session** — a single-session agent daemon for `@oh-my-pi/pi-coding-agent`: one process, one bound project directory, one live agent session (in-process SDK, no child process, no JSON-RPC hop), served to the web UI over SSE + POST. Runs via the installed omp-web bundle (`omp-web session`); disposable — disk `.jsonl` logs make respawn/`--resume` lossless.
 - **omp-fleet** — the registry of N daemons: spawns and supervises local children from command templates, attaches external daemons, dials remote sandboxes, and re-exposes them to the same UI (roster mode) and to non-interactive drivers (CLI fan-out prompting). Holds zero SDK state.
 
 Success means the operator can watch, steer, and fan out across many agent sessions from one browser surface without losing a session to process death.

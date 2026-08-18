@@ -23,9 +23,9 @@ Install mechanism (from this machine + `node_modules/@oh-my-pi/pi-coding-agent`)
 Repo facts (pre-change state):
 
 - `package.json`: `private:true`, no `version`, no `bin`; no git remote, no tags, no CI.
-- Only the session daemon has a binary build (`scripts/build-omp-session.ts` → `dist-bin/omp-session`, embeds `dist/` + pi-natives). The fleet runs from source only.
-- Default spawn template is verbatim `omp-session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}` (`fleet/config.ts:54`) via `sh -c` with inherited env — assumes a binary on PATH.
-- Fleet edge serves `dist/` from **process cwd** (`fleet/edge.ts:1888`) — breaks when a global entrypoint runs from an arbitrary cwd; the compiled session binary is immune (embedded dist).
+- The self-contained session-daemon binary build is retired; distribution is the installable bundle (`bun run build` → `dist-bundle/cli.js` via `scripts/install-omp-web.ts`).
+- Default spawn template is verbatim `omp-web session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}` (`fleet/config.ts:53`, `DEFAULT_LOCAL_TEMPLATE`) via `sh -c` with inherited env — no binary on PATH is assumed.
+- Fleet edge serves the UI from the `EMBEDDED_DIST` fallback (`fleet/edge.ts:1924`) — embedded dist, not a compiled binary — which is what makes arbitrary-cwd serving work.
 - Fleet config `~/.omp/fleet/config.json`: read-only load, **nothing writes it**, shallow-merge, unknown keys tolerated (so removing `roots` needs no migration — legacy files keep loading).
 - State `~/.omp-web/fleet-state.json` + O_EXCL pidfile lock (second fleet exits 77); workspaces `~/.omp-web/workspaces` (lazy); session files lock per-file (exit 1).
 - Worktree adoption machinery already exists: `listUnregisteredWorktrees` finds linked worktrees **anywhere on disk** via `git worktree list` (`fleet/worktrees.ts:291`); `POST /ctl/projects/:id/worktrees {worktreePath, start}` adopts them. Deletion is guarded to realpaths under `workspaceDir` — adopted external worktrees are evict-only (403). Dedupe is realpath-keyed → 409 at both edges; batch flows must tolerate it.
@@ -109,7 +109,7 @@ The gate: **everything works locally before anything is published anywhere.**
 ## Open decisions
 
 - **GitHub owner/repo**: user's call at Phase 6; everything before that is name-agnostic (`OMP_WEB_UPDATE_URL` + local tarballs).
-- **Fate of `build:omp-session`** (compile binary): keep as a standalone artifact or retire once the bundle ships.
+- **Resolved** — the standalone session-daemon binary build was retired once the installable bundle shipped; distribution is the bundle only.
 - **npm publish**: explicitly deferred until the GitHub repo + first release exist; the product may stay GitHub-tarball-only.
 
 ## Risks & constraints
