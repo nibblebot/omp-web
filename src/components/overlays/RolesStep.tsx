@@ -2,6 +2,7 @@ import { For, Show, type Component } from "solid-js";
 import type { ModelRoleCatalogEntry } from "../../../shared/protocol";
 import { thinkingLevelLabel } from "../../usage/model-options";
 import { call, setState, state } from "../../state";
+import { CharacterAvatar } from "../shared/CharacterAvatar";
 import { ChevronDownIcon, ChevronRightIcon } from "../shared/icons";
 import { useClickableRow } from "../shared/PickerRow";
 
@@ -39,6 +40,14 @@ export const RolesStep: Component<{
 							{...useClickableRow(() => props.onPickRole(entry))}
 							title={`${entry.tag ?? entry.name} — pick a model`}
 						>
+							<Show when={entry.provider && entry.id}>
+								<CharacterAvatar
+									class="picker-avatar"
+									provider={entry.provider}
+									id={entry.id}
+									size={32}
+								/>
+							</Show>
 							<span class="picker-label">{entry.tag ?? entry.name}</span>
 							{entry.provider && entry.id ? (
 								<span class="picker-meta">
@@ -95,6 +104,14 @@ export const RolesStep: Component<{
 						<For each={hiddenRoles()}>
 							{(entry) => (
 								<div class="picker-row">
+									<Show when={entry.provider && entry.id}>
+										<CharacterAvatar
+											class="picker-avatar"
+											provider={entry.provider}
+											id={entry.id}
+											size={32}
+										/>
+									</Show>
 									<span class="picker-label">{entry.tag ?? entry.name}</span>
 									{entry.provider && entry.id ? (
 										<span class="picker-meta">

@@ -1,11 +1,11 @@
 import type { Component } from "solid-js";
-import { setState, state, togglePetVisible } from "../../state";
+import { setState, state } from "../../state";
 import { InfoIcon, PanelLeftIcon, SettingsIcon } from "../shared/icons";
 
 // ---------------------------------------------------------------------------
-// Sidebar footer: global chrome (transcripts browser, pet roster, debug
-// panel, settings). In roster chat these live here instead of the StatusBar
-// header — StatusBar hides its pet/debug/settings segments while the sidebar
+// Sidebar footer: global chrome (transcripts browser, debug panel,
+// settings). In roster chat these live here instead of the StatusBar
+// header — StatusBar hides its debug/settings segments while the sidebar
 // is present (`state.sessionMode !== "roster" || state.view !== "chat"`), so
 // the two renderings never coexist.
 // ---------------------------------------------------------------------------
@@ -20,15 +20,6 @@ export const SidebarFooter: Component = () => (
 			aria-label="Transcripts"
 		>
 			<PanelLeftIcon /> tx
-		</button>
-		<button
-			class="sidebar-icon-btn"
-			classList={{ active: state.petVisible }}
-			onClick={togglePetVisible}
-			title="Show/hide pet roster"
-			aria-label="Show/hide pet roster"
-		>
-			pet
 		</button>
 		<button
 			class="sidebar-icon-btn"

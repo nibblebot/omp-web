@@ -190,6 +190,12 @@ button.picker-row {
 	color: var(--text);
 	font-size: var(--fs-lg);
 }
+/* Pixel-art character for the role's assigned model (model-role wizard rows).
+   The row is baseline-aligned for text, so the canvas must center itself. */
+.picker-avatar {
+	align-self: center;
+	flex: none;
+}
 .picker-detail {
 	color: var(--muted-2);
 	font-size: var(--fs-sm);

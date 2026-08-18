@@ -182,9 +182,6 @@ export type WorktreeDeleteInfo = Extract<ServerFrame, { type: "worktree_delete_i
 /** localStorage key for the roster sidebar visibility toggle. */
 const SIDEBAR_KEY = "omp.sidebarVisible";
 
-/** localStorage key for the pet roster visibility toggle. */
-const PET_KEY = "omp.petVisible";
-
 /** localStorage key for the Phase 11 desktop-notifications toggle. */
 const NOTIFY_KEY = "omp.notifyEnabled";
 
@@ -296,8 +293,6 @@ export const [state, setState] = createStore({
 	sessionPickerGate: null as { daemonId: string } | null,
 	sidebarVisible:
 		typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
-	petVisible:
-		typeof localStorage !== "undefined" ? localStorage.getItem(PET_KEY) !== "false" : true,
 	// Top-level view: "chat" (live session) or "transcripts" (historical
 	// transcripts/stats browser — only meaningful in roster mode, where the
 	// /ctl/stats API exists; the StatusBar toggle gates on sessionMode).
@@ -1166,14 +1161,7 @@ export {
 	promptInsert,
 	setPromptInsert,
 } from "./store/chat";
-export {
-	listSessions,
-	listFiles,
-	setSidebarVisible,
-	toggleSidebar,
-	setPetVisible,
-	togglePetVisible,
-} from "./store/roster";
+export { listSessions, listFiles, setSidebarVisible, toggleSidebar } from "./store/roster";
 export {
 	listProjects,
 	listProjectBranches,

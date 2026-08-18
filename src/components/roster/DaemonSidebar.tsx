@@ -54,8 +54,8 @@ export const DaemonSidebar: Component = () => {
 				</div>
 				<SidebarGroups groups={groups()} />
 			</div>
-			{/* Global chrome moved out of the StatusBar: transcripts browser, pet
-			    roster, debug panel, settings. */}
+			{/* Global chrome moved out of the StatusBar: transcripts browser,
+			    debug panel, settings. */}
 			<SidebarFooter />
 		</aside>
 	);

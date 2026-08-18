@@ -4,7 +4,6 @@ import { PanelLeftIcon } from "./components/shared/icons";
 import { CharacterAvatar, Modal } from "./components/shared";
 import {
 	MessageList,
-	Pet,
 	PromptBox,
 	QueueBar,
 	SessionBar,
@@ -160,9 +159,6 @@ export const App: Component = () => {
 					</main>
 				</Show>
 			</div>
-			<Show when={state.petVisible}>
-				<Pet />
-			</Show>
 			<Show when={state.modal === "help"}>
 				<Modal title="Shortcuts" onClose={() => setState("modal", null)}>
 					<table class="shortcuts">

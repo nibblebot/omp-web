@@ -50,4 +50,12 @@ describe("characterForProvider", () => {
 	test('falls back to kimi for an unknown provider like "openai"', () => {
 		expect(characterForProvider("openai").provider).toBe("kimi");
 	});
+
+	test("falls back to the model id for gateway providers", () => {
+		expect(characterForProvider("opencode-go", "deepseek-v4-flash").provider).toBe("deepseek");
+	});
+
+	test("provider match wins over the model id", () => {
+		expect(characterForProvider("minimax-code", "deepseek-v4-flash").provider).toBe("minimax");
+	});
 });

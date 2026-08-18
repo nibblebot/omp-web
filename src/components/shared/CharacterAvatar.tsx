@@ -2,10 +2,15 @@ import { createRenderEffect, onMount, type Component } from "solid-js";
 import { characterForProvider } from "../../sprites/characters";
 import { drawSprite, SPRITE_SIZE, type PetPose } from "../../sprites/sprite";
 
-/** Static pixel-art avatar for a session's model provider; 32x32 canvas upscaled via CSS. */
-export const CharacterAvatar: Component<{ provider?: string; pose?: PetPose; size?: number }> = (
-	props,
-) => {
+/** Static pixel-art avatar for a session's model; 32x32 canvas upscaled via CSS.
+ *  `id` disambiguates gateway providers (characterForProvider falls back to it). */
+export const CharacterAvatar: Component<{
+	provider?: string;
+	id?: string;
+	pose?: PetPose;
+	size?: number;
+	class?: string;
+}> = (props) => {
 	const size = props.size ?? 16;
 	let canvas!: HTMLCanvasElement;
 	// Render effect (PetMainAvatar precedent): the canvas ref is only assigned
@@ -15,12 +20,13 @@ export const CharacterAvatar: Component<{ provider?: string; pose?: PetPose; siz
 	onMount(() => {
 		const ctx = canvas.getContext("2d")!;
 		createRenderEffect(() =>
-			drawSprite(ctx, characterForProvider(props.provider).art, props.pose ?? "idle"),
+			drawSprite(ctx, characterForProvider(props.provider, props.id).art, props.pose ?? "idle"),
 		);
 	});
 	return (
 		<canvas
 			ref={(el) => (canvas = el)}
+			class={props.class}
 			width={SPRITE_SIZE}
 			height={SPRITE_SIZE}
 			style={{ width: `${size}px`, height: `${size}px`, "image-rendering": "pixelated" }}

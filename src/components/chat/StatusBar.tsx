@@ -1,6 +1,6 @@
 import { createEffect, createSignal, onCleanup, Show, type Component } from "solid-js";
 import { planToggle } from "../../prompt/commands";
-import { setState, state, togglePetVisible } from "../../state";
+import { setState, state } from "../../state";
 import { InfoIcon, SettingsIcon } from "../shared/icons";
 import { Segment } from "./status-utils";
 
@@ -70,12 +70,9 @@ export const StatusBar: Component = () => {
 					subagents ({state.subagents.size})
 				</Segment>
 			</Show>
-			{/* pet/debug/settings live in the DaemonSidebar footer in roster chat;
+			{/* debug/settings live in the DaemonSidebar footer in roster chat;
 			    keep them in the header where no sidebar exists (standalone, Tx view). */}
 			<Show when={state.sessionMode !== "roster" || state.view !== "chat"}>
-				<Segment active={state.petVisible} onClick={togglePetVisible} title="Show/hide pet roster">
-					pet
-				</Segment>
 				<Segment
 					active={state.modal === "debug"}
 					onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}

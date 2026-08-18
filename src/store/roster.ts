@@ -5,16 +5,13 @@ import { isConnected, postCommand } from "./transport";
 /**
  * Fleet-roster domain (Phase 3 store facade split): session/file listing
  * (latest-wins pulls answered by unicast frames) and the persisted roster
- * sidebar / pet-roster visibility toggles. The roster mirror itself
+ * sidebar visibility toggle. The roster mirror itself
  * (daemonsByProject, roster frame handling, daemon status announcements)
  * stays in state.ts alongside the mux.
  */
 
 /** localStorage key for the roster sidebar visibility toggle. */
 const SIDEBAR_KEY = "omp.sidebarVisible";
-
-/** localStorage key for the pet roster visibility toggle. */
-const PET_KEY = "omp.petVisible";
 
 // list_sessions / list_files carry no id on the wire; with a single user,
 // latest-wins correlation is sufficient (a superseded request resolves empty.
@@ -88,14 +85,4 @@ export function setSidebarVisible(visible: boolean): void {
 
 export function toggleSidebar(): void {
 	setSidebarVisible(!state.sidebarVisible);
-}
-
-/** Persisted pet-roster visibility (status-bar segment + card ×). */
-export function setPetVisible(visible: boolean): void {
-	if (typeof localStorage !== "undefined") localStorage.setItem(PET_KEY, String(visible));
-	setState("petVisible", visible);
-}
-
-export function togglePetVisible(): void {
-	setPetVisible(!state.petVisible);
 }
