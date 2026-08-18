@@ -376,10 +376,13 @@ export function restartDaemon(projectDir: string, name: string): Promise<DaemonI
  *  proxy answers and the fetch() network rejection; `statusError` maps any
  *  other non-2xx status to the endpoint's message. Resolves with the raw
  *  Response (the caller parses the body). */
-async function ctlFetch(
+export async function ctlFetch(
 	path: string,
 	unreachable: string,
 	statusError: (status: number) => string,
+	/** When set, non-2xx bodies carry the edge's reason ({ error }) — read it
+	 *  and return the message to throw instead of the status-only fallback. */
+	readError?: (res: Response) => Promise<string>,
 ): Promise<Response> {
 	let res: Response;
 	try {
@@ -393,7 +396,10 @@ async function ctlFetch(
 	// 502/504: vite's /ctl proxy couldn't reach :4722 — no fleet server
 	// (single-session mode, or still booting). Expected.
 	if (res.status === 502 || res.status === 504) throw new Error(unreachable);
-	if (!res.ok) throw new Error(statusError(res.status));
+	if (!res.ok) {
+		if (readError) throw new Error(await readError(res));
+		throw new Error(statusError(res.status));
+	}
 	return res;
 }
 

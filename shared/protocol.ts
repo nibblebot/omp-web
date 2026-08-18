@@ -607,7 +607,14 @@ export type ServerFrame =
 	// registry's project set changes (same trigger as the roster broadcast)
 	// AND during new-stream priming (near the roster frame), so project
 	// groups with zero daemons still render. Never carries tokens/endpoints.
-	| { type: "registered_projects"; projects: RegisteredProject[] }
+	// `configPath` (additive, Phase 4) is the resolved fleet config path —
+	// null when no config file exists (defaults apply); the roster's
+	// first-run signal. Older edges omit it; clients treat it as null.
+	| {
+			type: "registered_projects";
+			projects: RegisteredProject[];
+			configPath?: string | null;
+	  }
 	// Unicast answer to list_projects.
 	| { type: "projects"; projects: ProjectEntry[] }
 	// Unicast answer to list_project_branches (fleet-scoped, like projects).

@@ -85,7 +85,8 @@ button:not(:disabled):not(.active):hover {
 	}
 
 	/* Sidebar row-actions "⋯" trigger stays visible on touch too. */
-	.sidebar-menu-btn.sidebar-menu-btn {
+	.sidebar-menu-btn.sidebar-menu-btn,
+	.project-start.project-start {
 		opacity: 1;
 		pointer-events: auto;
 	}

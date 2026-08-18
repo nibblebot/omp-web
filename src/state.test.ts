@@ -192,6 +192,7 @@ beforeEach(() => {
 		// (roster frames / picker-gate tests otherwise leak into each other).
 		daemonRoster: [],
 		registeredProjects: [],
+		fleetConfigPath: null,
 		worktreeDeleteInfo: {},
 		pendingSessionPicker: null,
 		sessionPickerGate: null,
@@ -1052,6 +1053,40 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		dispatch({ type: "registered_projects", projects: [p1, p2] });
 		dispatch({ type: "registered_projects", projects: [p2] }); // p1 deregistered
 		expect(state.registeredProjects).toEqual([p2]);
+	});
+
+	test("registered_projects carries the fleet config path (additive; missing = null, fleet-scoped)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		// Older edges omit configPath entirely: the store must read null.
+		dispatch({ type: "registered_projects", projects: [p1] });
+		expect(state.fleetConfigPath).toBeNull();
+
+		// A config-carrying frame sets it (resolved config path, not null).
+		dispatch({
+			type: "registered_projects",
+			projects: [p2],
+			configPath: "/home/u/.omp-web/config.json",
+		});
+		expect(state.fleetConfigPath).toBe("/home/u/.omp-web/config.json");
+
+		// An explicit null (defaults apply — no config file) is honored.
+		dispatch({ type: "registered_projects", projects: [p3], configPath: null });
+		expect(state.fleetConfigPath).toBeNull();
+
+		// Fleet-scoped like the projects: a session switch (resetSessionView)
+		// must not wipe it — the first-run signal lives until config exists.
+		dispatch({
+			type: "registered_projects",
+			projects: [p1],
+			configPath: "/home/u/.omp-web/config.json",
+		});
+		dispatch(attached("daemon-a"));
+		dispatch(attached("daemon-b")); // switch → resetSessionView
+		expect(state.currentSessionId).toBe("daemon-b");
+		expect(state.registeredProjects).toEqual([p1]);
+		expect(state.fleetConfigPath).toBe("/home/u/.omp-web/config.json");
 	});
 
 	test("daemonsByProject: registry order, zero-daemon projects present, main-checkout rows first", () => {

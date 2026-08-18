@@ -1,6 +1,6 @@
 import type { ClientCommand, ProjectBranch, ProjectEntry } from "../../shared/protocol";
 import { setState } from "../state";
-import { isConnected, postCommand } from "./transport";
+import { ctlFetch, isConnected, postCommand } from "./transport";
 
 /**
  * Projects/onboarding domain (Phase 3 store facade split): fleet-edge
@@ -235,4 +235,48 @@ export function sendWorktreeDeleteInfo(daemonId: string): void {
 		id: crypto.randomUUID(),
 		daemonId,
 	} satisfies ClientCommand).catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: /ctl/fs/browse — the fleet edge's directory listing behind the
+// onboarding directory pickers (DirPicker). Raw GET like the ctl fetchers in
+// transport.ts, but living here with the onboarding domain.
+// ---------------------------------------------------------------------------
+
+export interface FsBrowseDir {
+	name: string;
+	path: string;
+	hasGit: boolean;
+}
+
+/** 200 answer of GET /ctl/fs/browse (fleet edge contract). */
+export interface FsBrowseResult {
+	/** Realpath-canonicalized absolute path actually listed. */
+	path: string;
+	/** Null at the filesystem root. */
+	parent: string | null;
+	/** Subdirectories only, name-sorted; dot-directories are never listed. */
+	dirs: FsBrowseDir[];
+	/** True when the listing was capped at 500 entries. */
+	truncated: boolean;
+}
+
+/** GET /ctl/fs/browse?path=… — subdirectory listing for the onboarding dir
+ *  pickers. `path` may be absolute, "~", or "~/rel" (all expanded edge-side);
+ *  omitted → the fleet host's home directory. 400 answers carry the edge's
+ *  reason as { error } — surfaced verbatim (missing dir, not-a-directory,
+ *  unreadable). */
+export async function fetchFsBrowse(path?: string): Promise<FsBrowseResult> {
+	const url =
+		path === undefined ? "/ctl/fs/browse" : `/ctl/fs/browse?${new URLSearchParams({ path })}`;
+	const res = await ctlFetch(
+		url,
+		"fleet control plane unreachable — no fleet server on :4722",
+		(s) => `directory browse failed (${s})`,
+		async (r) => {
+			const body = (await r.json().catch(() => null)) as { error?: unknown } | null;
+			return typeof body?.error === "string" ? body.error : `directory browse failed (${r.status})`;
+		},
+	);
+	return (await res.json()) as FsBrowseResult;
 }

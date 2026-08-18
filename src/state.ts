@@ -277,6 +277,11 @@ export const [state, setState] = createStore({
 	// fleet-scoped like daemonRoster — survives session resets, and
 	// zero-daemon projects still render).
 	registeredProjects: [] as RegisteredProject[],
+	// Phase 4: resolved fleet config path from the registered_projects frame
+	// (null = defaults, no config file). Fleet-scoped like the projects
+	// above — survives session resets. Together with an empty project
+	// registry and empty daemon roster it is the roster's first-run signal.
+	fleetConfigPath: null as string | null,
 	// Phase 5: delete-worktree guard evidence (worktree_delete_info unicast),
 	// keyed by daemonId.
 	worktreeDeleteInfo: {} as Record<string, WorktreeDeleteInfo>,
@@ -931,6 +936,11 @@ export function connect(): void {
 				// like the roster — survives session resets; zero-daemon
 				// projects still render via daemonsByProject).
 				setState("registeredProjects", frame.projects);
+				// Phase 4: the resolved fleet config path rides the same frame
+				// (additive — older edges omit it, so missing = null). Also
+				// fleet-scoped: resetSessionView must not wipe it (it is the
+				// first-run signal until a config file exists).
+				setState("fleetConfigPath", frame.configPath ?? null);
 				break;
 			case "worktree_delete_info":
 				// Phase 5: unicast guard evidence for the delete-worktree

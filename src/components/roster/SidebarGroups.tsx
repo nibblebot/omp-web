@@ -1,8 +1,9 @@
 import { createMemo, createSignal, For, Show, type Component } from "solid-js";
 import type { DaemonEntry, RegisteredProject } from "../../../shared/protocol";
-import { setState } from "../../state";
+import { setState, state } from "../../state";
+import { spawnDaemon } from "../../store/projects";
 import { KebabMenu } from "../shared/KebabMenu";
-import { ChevronDownIcon, TrashIcon } from "../shared/icons";
+import { ChevronDownIcon, ChevronRightIcon, PlusIcon, TrashIcon } from "../shared/icons";
 import { DaemonRow, menuOpenId, setMenuOpenId } from "./DaemonRow";
 
 // ---------------------------------------------------------------------------
@@ -75,8 +76,40 @@ export type SidebarGroupsData = {
 	daemons: DaemonEntry[];
 }[];
 
+/** Phase 4 first-run empty state: replaces the one-line hint while the
+ *  fleet has no config file, no registered projects, and no daemons.
+ *  Step 1 is the primary add-project action (same modal the PROJECTS
+ *  header "+" opens); steps 2-3 are short hints. */
+const FirstRunPanel: Component = () => (
+	<div class="firstrun">
+		<p class="firstrun-title">Welcome to omp-web</p>
+		<ol class="firstrun-steps">
+			<li>
+				<button type="button" class="firstrun-cta" onClick={() => setState("modal", "add-project")}>
+					<PlusIcon />
+					Add your first project
+				</button>
+			</li>
+			<li>
+				Prefer the terminal? Just run <code>omp-web</code> — it offers to configure the data home on
+				first run.
+			</li>
+			<li>Sessions appear here once a project exists.</li>
+		</ol>
+	</div>
+);
+
 export const SidebarGroups: Component<{ groups: SidebarGroupsData }> = (props) => {
 	const [collapsedGroups, setCollapsedGroups] = createSignal<Set<string>>(readCollapsedGroups());
+
+	/** Phase 4 first-run gate: no fleet config file + no registered
+	 *  projects + no daemons. While it holds, the roster renders the
+	 *  first-run panel instead of the plain empty hint; any of the three
+	 *  appearing flips back to the normal roster. */
+	const firstRun = () =>
+		state.fleetConfigPath === null &&
+		state.registeredProjects.length === 0 &&
+		state.daemons.size === 0;
 
 	/** Flip a group's collapse state and persist the updated key set. */
 	const toggleGroup = (key: string) => {
@@ -122,6 +155,12 @@ export const SidebarGroups: Component<{ groups: SidebarGroupsData }> = (props) =
 		// when THIS project's key changes, so other groups' toggles don't
 		// re-render this header.
 		const menuOpen = createMemo(() => menuOpenId() === gkey);
+		// A main-checkout daemon exists when any row is untagged (worktreeOf
+		// is set only for linked-worktree cwds — supervisor resolveWorktreeOf;
+		// main checkouts stay undefined). The start action spawns on the main
+		// checkout, so it hides once a main daemon exists in ANY status
+		// (spawning → … → asleep → ready).
+		const hasMain = () => props.daemons.some((d) => d.worktreeOf === undefined);
 		return (
 			<>
 				<div class="sidebar-group project-group">
@@ -137,6 +176,17 @@ export const SidebarGroups: Component<{ groups: SidebarGroupsData }> = (props) =
 							{props.project.name}
 						</span>
 					</button>
+					<Show when={!hasMain()}>
+						<button
+							type="button"
+							class="sidebar-icon-btn project-start"
+							title={`Start a session in ${props.project.name}`}
+							aria-label={`Start a session in ${props.project.name}`}
+							onClick={() => spawnDaemon(props.project.path)}
+						>
+							<ChevronRightIcon />
+						</button>
+					</Show>
 					<KebabMenu
 						label={`Project actions for ${props.project.name}`}
 						open={menuOpen()}
@@ -203,7 +253,12 @@ export const SidebarGroups: Component<{ groups: SidebarGroupsData }> = (props) =
 	return (
 		<>
 			<Show when={props.groups.length === 0}>
-				<div class="sidebar-empty">no projects — press + to add one</div>
+				<Show
+					when={firstRun()}
+					fallback={<div class="sidebar-empty">no projects — press + to add one</div>}
+				>
+					<FirstRunPanel />
+				</Show>
 			</Show>
 			<Show when={props.groups.length > 0}>
 				<For each={props.groups}>

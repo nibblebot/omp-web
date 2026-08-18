@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "./cli";
 import { Registry, type RegistryEntry } from "./registry";
@@ -31,9 +31,7 @@ describe("CLI", () => {
 
 	beforeAll(async () => {
 		({ tmp, statePath, configPath } = fleetPaths());
-		const rootsDir = join(tmp, "roots");
-		mkdirSync(rootsDir, { recursive: true });
-		writeFileSync(configPath, JSON.stringify({ roots: [rootsDir] }));
+		writeFileSync(configPath, JSON.stringify({}));
 		// Seed the registry directly so `sessions` has a row to print.
 		const registry = new Registry(statePath);
 		await registry.load();
