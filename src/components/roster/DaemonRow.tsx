@@ -12,13 +12,17 @@ import {
 import { ConfirmButton } from "../shared/ConfirmButton";
 import { KebabMenu } from "../shared/KebabMenu";
 import { useClickableRow } from "../shared/PickerRow";
-import { FileIcon, InfoIcon, StopIcon, TrashIcon, XIcon } from "../shared/icons";
+import { FileIcon, InfoIcon, RootIcon, StopIcon, TrashIcon, XIcon } from "../shared/icons";
 import { DaemonDetailView } from "./DaemonDetailView";
 
 // ---------------------------------------------------------------------------
 // One fleet-roster row: status dot, branch/project chips, git diffstat, and a
 // hover-revealed "⋯" actions menu (details, two-click stop/remove, delete
 // worktree). Ready rows attach on click, asleep rows wake-then-attach.
+// Two distilled profiles exist beside the full one: worktree rows (nested,
+// branch as title) and root rows (a project group's main checkout — root
+// glyph + branch as title, no project chip or cwd line; the group header
+// already names the project and the path lives in the tooltip/details).
 // ---------------------------------------------------------------------------
 
 /** Roster entries may carry a template name plus per-repo git facts
@@ -64,7 +68,14 @@ export const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
  *  mid-wake; per-row component signals would not survive. */
 const [activatingIds, setActivatingIds] = createSignal<ReadonlySet<string>>(new Set());
 
-export const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = (props) => {
+export const DaemonRow: Component<{
+	daemon: DaemonEntry;
+	nested?: boolean;
+	/** Rendered inside a registered-project group (SidebarGroups ProjectGroup):
+	 *  the group header carries the project name, so an untagged row here is
+	 *  the main worktree and distills to the root profile. */
+	inProjectGroup?: boolean;
+}> = (props) => {
 	const [detailOpen, setDetailOpen] = createSignal(false);
 	const d = () => props.daemon as RosterEntry;
 
@@ -80,6 +91,10 @@ export const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = (
 	// dirs — the branch (or name fallback) becomes the title and the project
 	// chip + cwd path are dropped so the row never shows the directory.
 	const isWorktree = () => d().worktreeOf !== undefined;
+	// Root rows are a project group's MAIN worktree: the header already names
+	// the project, so the row distills to a root glyph + branch-as-title (the
+	// worktree profile, unindented) and drops the project chip + cwd line.
+	const isRoot = () => props.inProjectGroup === true && !isWorktree();
 	const isAttached = () => d().daemonId === state.currentSessionId;
 	const clickable = () => d().status === "ready" || d().status === "asleep";
 	/** Loading phase: activating but the daemon isn't ready yet. Renders with
@@ -146,6 +161,7 @@ export const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = (
 					clickable: clickable() && !activating(),
 					"daemon-row--nested": props.nested === true,
 					"daemon-row--worktree": isWorktree(),
+					"daemon-row--root": isRoot(),
 				}}
 				{...useClickableRow(rowClick, clickable())}
 				title={waking() ? "waking — session starting…" : (STATUS_TITLE[d().status] ?? d().status)}
@@ -159,9 +175,21 @@ export const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = (
 					<div class="sidebar-row-top">
 						<span
 							class="sidebar-row-title daemon-row-title"
-							title={isWorktree() ? (d().branch ?? d().name) : d().name}
+							title={
+								isRoot()
+									? `main worktree — ${d().cwd}`
+									: isWorktree()
+										? (d().branch ?? d().name)
+										: d().name
+							}
 						>
-							{isWorktree() ? (d().branch ?? d().name) : d().name}
+							{/* Root glyph marks the group's main worktree; the title
+						    stays the branch so a main checkout on a feature branch
+						    reads correctly. */}
+							<Show when={isRoot()}>
+								<RootIcon class="daemon-root-icon" />
+							</Show>
+							{isWorktree() || isRoot() ? (d().branch ?? d().name) : d().name}
 						</span>
 						{/* Row actions collapsed into a "⋯" menu at the top row's
 						    right end: hidden until row hover/focus (always visible on
@@ -225,7 +253,7 @@ export const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = (
 							</Show>
 						</KebabMenu>
 					</div>
-					<Show when={!isWorktree()}>
+					<Show when={!isWorktree() && !isRoot()}>
 						<div class="daemon-chips">
 							<span class="daemon-chip" title={d().cwd}>
 								{d().project}
@@ -242,14 +270,28 @@ export const DaemonRow: Component<{ daemon: DaemonEntry; nested?: boolean }> = (
 							{d().cwd}
 						</div>
 					</Show>
-					{/* Bottom meta row: branch (non-worktree rows only — worktree
-					    rows already show it as the title) and the diffstat cluster
-					    (changed-file count + numstat +/- line counts when probed).
-					    Row actions live in the "⋯" menu on the top row. Rendered
-					    only when there is git info to show. */}
-					<Show when={(!isWorktree() && d().branch !== undefined) || hasGitStats()}>
+					{/* Root rows drop the project chip + cwd (the group header and
+					    title tooltip carry them) but keep label chips — labels are
+					    fleet-selector state the header knows nothing about. */}
+					<Show when={isRoot() && d().labels.length > 0}>
+						<div class="daemon-chips">
+							<For each={d().labels}>
+								{(l) => (
+									<span class="daemon-chip daemon-chip--label" title={`label ${l}`}>
+										{l}
+									</span>
+								)}
+							</For>
+						</div>
+					</Show>
+					{/* Bottom meta row: branch (full-profile rows only — worktree
+					    and root rows already show it as the title) and the diffstat
+					    cluster (changed-file count + numstat +/- line counts when
+					    probed). Row actions live in the "⋯" menu on the top row.
+					    Rendered only when there is git info to show. */}
+					<Show when={(!isWorktree() && !isRoot() && d().branch !== undefined) || hasGitStats()}>
 						<div class="daemon-git">
-							<Show when={!isWorktree() && d().branch !== undefined}>
+							<Show when={!isWorktree() && !isRoot() && d().branch !== undefined}>
 								<span class="daemon-git-branch" title={d().cwd}>
 									{d().branch}
 								</span>

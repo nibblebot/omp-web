@@ -236,6 +236,16 @@ export const WorktreeIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
+/** house — main-worktree marker on project-group root rows (the checkout
+ *  the project was registered from; linked worktrees nest beneath it).
+ *  Sized/tinted by .daemon-root-icon in src/styles/fleet.css. */
+export const RootIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+		<path d="M9 22V12h6v10" />
+	</Svg>
+);
+
 /** trash-2 — destructive delete affordance (⌫). */
 export const TrashIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>

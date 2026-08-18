@@ -209,7 +209,7 @@ export const SidebarGroups: Component<{ groups: SidebarGroupsData }> = (props) =
 				</div>
 				<Show when={open()}>
 					<For each={props.daemons}>
-						{(d) => <DaemonRow daemon={d} nested={d.worktreeOf !== undefined} />}
+						{(d) => <DaemonRow daemon={d} nested={d.worktreeOf !== undefined} inProjectGroup />}
 					</For>
 					<button
 						type="button"

@@ -320,6 +320,17 @@
 .daemon-row--worktree .daemon-status-dot {
 	margin-top: var(--space-4);
 }
+/* Root rows (a project group's main worktree) share the worktree profile —
+   single-line unless labels/diffstat render — so the dot aligns the same. */
+.daemon-row--root .daemon-status-dot {
+	margin-top: var(--space-4);
+}
+/* House glyph before a root row's branch title: muted, optically centered
+   against the 1em icon box. */
+.daemon-root-icon {
+	color: var(--muted-2);
+	margin-right: var(--space-1);
+}
 .daemon-status-dot[data-status="ready"] {
 	background: var(--success);
 	box-shadow: var(--shadow-glow-success);
