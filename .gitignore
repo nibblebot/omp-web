@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-bin/
+dist-bundle/
+*.tgz
 omp-session-*.html
 test/.fixture/
 .bench/
