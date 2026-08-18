@@ -201,15 +201,19 @@ export const DaemonRow: Component<{
 							open={menuOpen()}
 							onOpenChange={(v) => setMenuOpenId(v ? d().daemonId : null)}
 						>
-							<ConfirmButton
-								role="menuitem"
-								class="sidebar-menu-item"
-								label="Stop daemon"
-								confirmLabel="Confirm stop"
-								onConfirm={() => doStop()}
-							>
-								<StopIcon />
-							</ConfirmButton>
+							{/* An asleep daemon has no live process — "Stop" is
+							    meaningless there; Remove covers roster cleanup. */}
+							<Show when={d().status !== "asleep"}>
+								<ConfirmButton
+									role="menuitem"
+									class="sidebar-menu-item"
+									label="Stop daemon"
+									confirmLabel="Confirm stop"
+									onConfirm={() => doStop()}
+								>
+									<StopIcon />
+								</ConfirmButton>
+							</Show>
 							<ConfirmButton
 								role="menuitem"
 								class="sidebar-menu-item"
