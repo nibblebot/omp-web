@@ -34,14 +34,45 @@
  * contract/banner line); vite gets a probe-picked port with --strictPort. A
  * pre-ready exit (lost port race, startup crash) is retried on a fresh port,
  * bounded, before being declared fatal.
+ *
+ * State: the dev fleet's state file — and therefore its pidfile lock, which
+ * rides `<state>.lock` — is scoped per worktree OUTSIDE the repo: a stable
+ * `<slug>-<hash8>` of the worktree realpath under `<data home>/dev-fleets/`
+ * (data home = config dir, so the first-run data-home choice moves it too).
+ * N worktrees running `bun run dev` plus the user's real fleet on
+ * `<data home>/fleet-state.json` all coexist; nothing is written into the
+ * repo. Config AND the managed-worktree root stay shared: the lock guards
+ * only the state file — workspaces coordinate at path level (`.omp-web-repo`
+ * markers, existing-target refusal, git's own no-double-checkout), so every
+ * fleet sees and manages the same worktrees. A second `bun run dev` in the
+ * SAME worktree still correctly fails on the lock (exit 77). Orphaned
+ * dev-fleets dirs from deleted worktrees are inert and safe to remove by
+ * hand once their dev stack is stopped (no auto-GC).
  */
 
 import type { Subprocess } from "bun";
+import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { createServer } from "node:net";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { resolveConfigPath } from "../fleet/config";
+import { slugifyWorktreeName } from "../fleet/worktrees";
 import { OMP_SESSION_PREFIX } from "../shared/protocol";
 
 const ROOT = join(import.meta.dir, "..");
+/**
+ * Per-worktree dev fleet data (state + its pidfile lock), outside the repo:
+ * `<data home>/dev-fleets/<slug>-<hash8>/` where slug is the worktree
+ * basename and hash8 the sha256 of its realpath. Deterministic per worktree
+ * (dev restarts reuse the same fleet), distinct across worktrees. Only the
+ * STATE is scoped — the managed-worktree root deliberately stays shared.
+ */
+const DEV_FLEET_DIR = (() => {
+	const real = realpathSync(ROOT);
+	const hash = createHash("sha256").update(real).digest("hex").slice(0, 8);
+	const slug = slugifyWorktreeName(basename(real)) || "worktree";
+	return join(dirname(resolveConfigPath()), "dev-fleets", `${slug}-${hash}`);
+})();
 /** Fallbacks for readiness that arrives without a parseable port. */
 const VITE_PORT_DEFAULT = 4713;
 const SESSION_PORT_DEFAULT = 4721;
@@ -124,6 +155,13 @@ function buildChild(name: string): Child {
 			// cwd, and the repo isn't necessarily it).
 			cmd: ["bun", "fleet/cli.ts", "serve", "--port", "0"],
 			env: {
+				// State (and its `.lock`) scoped per worktree under the data home:
+				// parallel worktrees' dev fleets — and the user's real fleet on
+				// <data home>/fleet-state.json — never contend on one state file,
+				// and nothing is written into the repo. Config and the managed-
+				// worktree root stay SHARED (the lock guards only state; workspaces
+				// coordinate at path level).
+				OMP_FLEET_STATE: join(DEV_FLEET_DIR, "fleet-state.json"),
 				OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "server", "index.ts")} --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`,
 			},
 		};
@@ -279,6 +317,9 @@ function checkSummary(): void {
 	if (fleetMode) {
 		const fleetPort = states.get("fleet")?.port ?? ports.fleet;
 		log(`${bold(`  ${"fleet".padEnd(9)}http://127.0.0.1:${fleetPort}  `)}(control plane + edge)`);
+		log(
+			`${bold(`  ${"state".padEnd(9)}${join(DEV_FLEET_DIR, "fleet-state.json")}  `)}(worktree-scoped)`,
+		);
 		log("  no session attached — spawn/add one from the roster sidebar");
 	} else {
 		const sessionPort = states.get("session")?.port ?? ports.session;
@@ -467,8 +508,9 @@ function launch(child: Child): void {
 			// Retry on a fresh port before declaring the stack broken.
 			const fails = (preReadyFails.get(child.name) ?? 0) + 1;
 			preReadyFails.set(child.name, fails);
-			// Fleet exit 77 = deterministic lock conflict (another fleet holds
-			// the state file) — retrying cannot fix it, so fail immediately.
+			// Fleet exit 77 = deterministic lock conflict (another fleet holds the
+			// state file — e.g. a second `bun run dev` in the SAME worktree) —
+			// retrying cannot fix it, so fail immediately.
 			if (child.name === "fleet" && code === 77) {
 				log(`${child.name} exited before ready (77) — state lock held by another fleet`);
 				if (st !== undefined) st.status = "exited";
