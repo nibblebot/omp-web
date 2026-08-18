@@ -2,15 +2,17 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { RegisteredProject } from "../shared/protocol";
-import { Registry } from "./registry";
+import { Registry, type RegistryEntry } from "./registry";
+import type { SpawnSupervisor } from "./supervisor";
 import {
 	createWorktree,
 	deleteWorktree,
 	isLinkedWorktreeOf,
 	listUnregisteredWorktrees,
 	managedWorktreePath,
+	registerProjectMainEntry,
 	registerWorktreeEntry,
 	resolveBaseRef,
 	slugifyWorktreeName,
@@ -449,7 +451,7 @@ describe("registerWorktreeEntry", () => {
 		await registry.load();
 		const entry = await registerWorktreeEntry(
 			registry,
-			{} as never,
+			{ resolveTemplateName: () => "test" } as unknown as SpawnSupervisor,
 			projectFor(repo, "p7"),
 			a.path,
 			{ start: false },
@@ -459,6 +461,158 @@ describe("registerWorktreeEntry", () => {
 		expect(entry.cwd).toBe(a.path);
 		expect(entry.projectId).toBe("p7");
 		expect(entry.worktreeOf).toBe(repo.split("/").pop()!);
+		// The resolved template name is stored like spawn() stores it —
+		// respawn() keys off entry.template.
+		expect(entry.template).toBe("test");
 		expect(registry.get(entry.daemonId)).toBeDefined();
+	});
+});
+
+describe("registerProjectMainEntry", () => {
+	test("start:false creates an asleep main-checkout entry with the exact field shape", async () => {
+		const repo = tmpDir();
+		await makeRepo(repo);
+		const registry = new Registry(join(tmpDir(), "state.json"));
+		await registry.load();
+		const entry = await registerProjectMainEntry(
+			registry,
+			{ resolveTemplateName: () => "test" } as unknown as SpawnSupervisor,
+			projectFor(repo, "p7"),
+			{ start: false },
+		);
+		expect(entry).toMatchObject({
+			name: repo.split("/").pop(),
+			cwd: repo,
+			project: repo.split("/").pop(),
+			projectId: "p7",
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+		});
+		// NO worktreeOf: the main checkout is the repo itself and stays
+		// untagged (SidebarGroups' hasMain depends on it) — unlike a
+		// registered worktree, which carries the owning repo's name.
+		expect(entry.worktreeOf).toBeUndefined();
+		// The resolved template name is always stored (respawn keys off it).
+		expect(entry.template).toBe("test");
+		expect(registry.get(entry.daemonId)).toBeDefined();
+	});
+
+	test("start:false stores template/labels on the asleep entry when given", async () => {
+		const repo = tmpDir();
+		await makeRepo(repo);
+		const registry = new Registry(join(tmpDir(), "state.json"));
+		await registry.load();
+		const entry = await registerProjectMainEntry(
+			registry,
+			{
+				resolveTemplateName: (_cwd: string, explicit?: string) => explicit ?? "test",
+			} as unknown as SpawnSupervisor,
+			projectFor(repo, "p7"),
+			{ start: false, template: "local", labels: ["env=prod"] },
+		);
+		expect(entry.template).toBe("local");
+		expect(entry.labels).toEqual(["env=prod"]);
+		expect(entry.status).toBe("asleep");
+	});
+
+	test("start:false rejects an unknown explicit template at registration (the entry would be unwakeable)", async () => {
+		const repo = tmpDir();
+		await makeRepo(repo);
+		const registry = new Registry(join(tmpDir(), "state.json"));
+		await registry.load();
+		const supervisor = {
+			resolveTemplateName: (_cwd: string, explicit?: string) => {
+				if (explicit === "bogus") throw new Error(`unknown spawn template: ${explicit}`);
+				return explicit ?? "test";
+			},
+		} as unknown as SpawnSupervisor;
+		await expect(
+			registerProjectMainEntry(registry, supervisor, projectFor(repo, "p7"), {
+				start: false,
+				template: "bogus",
+			}),
+		).rejects.toThrow("unknown spawn template: bogus");
+		expect(registry.list()).toHaveLength(0);
+	});
+
+	test("dedup: a pre-existing entry on the same cwd is reused and tagged, never duplicated", async () => {
+		const repo = tmpDir();
+		await makeRepo(repo);
+		const registry = new Registry(join(tmpDir(), "state.json"));
+		await registry.load();
+		const existing = registry.create({
+			name: "pre",
+			cwd: repo,
+			project: "pre",
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+		});
+		expect(existing.projectId).toBeUndefined();
+		const entry = await registerProjectMainEntry(registry, {} as never, projectFor(repo, "p7"), {
+			start: false,
+		});
+		expect(entry.daemonId).toBe(existing.daemonId);
+		expect(registry.list()).toHaveLength(1);
+		expect(registry.get(existing.daemonId)?.projectId).toBe("p7");
+	});
+
+	test("dedup + start:true on an asleep pre-existing entry respawns it instead of spawning a second row", async () => {
+		const repo = tmpDir();
+		await makeRepo(repo);
+		const registry = new Registry(join(tmpDir(), "state.json"));
+		await registry.load();
+		const existing = registry.create({
+			name: "pre",
+			cwd: repo,
+			project: "pre",
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+			projectId: "p7",
+		});
+		let respawnedId: string | undefined;
+		const supervisor = {
+			respawn: async (entry: RegistryEntry) => {
+				respawnedId = entry.daemonId;
+			},
+		} as unknown as SpawnSupervisor;
+		const entry = await registerProjectMainEntry(registry, supervisor, projectFor(repo, "p7"), {
+			start: true,
+		});
+		expect(respawnedId).toBe(existing.daemonId);
+		expect(entry.daemonId).toBe(existing.daemonId);
+		expect(registry.list()).toHaveLength(1);
+	});
+
+	test("start:true spawns the main checkout with template/labels and tags the fresh entry", async () => {
+		const repo = tmpDir();
+		await makeRepo(repo);
+		const registry = new Registry(join(tmpDir(), "state.json"));
+		await registry.load();
+		let spawnInit: { cwd: string; template?: string; labels?: string[] } | undefined;
+		const supervisor = {
+			spawn: async (init: { cwd: string; template?: string; labels?: string[] }) => {
+				spawnInit = init;
+				return registry.create({
+					name: basename(init.cwd),
+					cwd: init.cwd,
+					project: basename(init.cwd),
+					labels: init.labels ?? [],
+					mode: "spawned",
+					...(init.template !== undefined ? { template: init.template } : {}),
+				});
+			},
+		} as unknown as SpawnSupervisor;
+		const entry = await registerProjectMainEntry(registry, supervisor, projectFor(repo, "p7"), {
+			start: true,
+			template: "local",
+			labels: ["env=prod"],
+		});
+		expect(spawnInit).toEqual({ cwd: repo, template: "local", labels: ["env=prod"] });
+		expect(entry.projectId).toBe("p7");
+		expect(registry.get(entry.daemonId)?.projectId).toBe("p7");
+		expect(registry.list()).toHaveLength(1);
 	});
 });

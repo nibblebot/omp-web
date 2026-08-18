@@ -100,6 +100,7 @@ describe("fleet control plane", () => {
 		const repoDir = join(tmp, "ctl-add-project-repo");
 		mkdirSync(repoDir, { recursive: true });
 		await gitInit(repoDir);
+		const rosterBefore = server.registry.list();
 		const res = await postJson(server.port, "/ctl/projects", { path: repoDir });
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as {
@@ -111,17 +112,39 @@ describe("fleet control plane", () => {
 		expect(body.project?.name).toBe(basename(repoDir));
 		expect(typeof body.project?.addedAt).toBe("number");
 		expect(body.entry).toBeUndefined();
+		// The default workspace is auto-registered: exactly one new roster
+		// entry for the repo's main checkout, asleep and tagged with the
+		// project (no worktreeOf — main checkouts stay untagged).
+		const roster = server.registry.list();
+		expect(roster).toHaveLength(rosterBefore.length + 1);
+		const main = roster.find((e) => e.cwd === realpathSync(repoDir));
+		expect(main).toBeDefined();
+		expect(main!).toMatchObject({
+			name: basename(repoDir),
+			cwd: realpathSync(repoDir),
+			project: basename(repoDir),
+			projectId: body.project!.projectId,
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+		});
+		expect(main!.worktreeOf).toBeUndefined();
+		expect(main!.lastSessionFile).toBeUndefined();
+		expect(main!.endpoint).toBeUndefined();
 		// The registered project shows up in GET /ctl/projects.
 		const merged = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as {
 			registered: Array<{ projectId: string }>;
 		};
 		expect(merged.registered.some((p) => p.projectId === body.project!.projectId)).toBe(true);
-		// Cleanup: the project has no daemons, so removal succeeds.
+		// Cleanup: the never-started default workspace is a provably-empty
+		// placeholder, so removeProject drops it with the project and the
+		// DELETE stays a straight 200.
 		const del = await fetch(
 			`http://127.0.0.1:${server.port}/ctl/projects/${body.project!.projectId}`,
 			{ method: "DELETE" },
 		);
 		expect(del.status).toBe(200);
+		expect(server.registry.list()).toHaveLength(rosterBefore.length);
 	});
 
 	test("POST /ctl/projects dedupes an already-registered realpath to 409 with the existing project", async () => {
@@ -142,6 +165,11 @@ describe("fleet control plane", () => {
 			// One registration only.
 			expect(
 				server.registry.projects().filter((p) => p.path === realpathSync(repoDir)),
+			).toHaveLength(1);
+			// The deduped POST creates NO second default workspace: the roster
+			// still holds exactly the first POST's main-checkout entry.
+			expect(
+				server.registry.list().filter((e) => e.cwd === realpathSync(repoDir)),
 			).toHaveLength(1);
 		} finally {
 			server.registry.removeProject(firstBody.project.projectId);
@@ -164,7 +192,9 @@ describe("fleet control plane", () => {
 		const res = await postJson(server.port, "/ctl/projects", { path: repoDir });
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as { project: { projectId: string } };
-		// A daemon referencing the project blocks removal (no cascade).
+		// A daemon referencing the project blocks removal (no cascade). This
+		// entry is NOT a provably-empty placeholder: a real session file
+		// means it has transcripts, so it must block.
 		const ref = server.registry.create({
 			name: "ref",
 			cwd: realpathSync(repoDir),
@@ -173,6 +203,7 @@ describe("fleet control plane", () => {
 			mode: "spawned",
 			template: "test",
 			status: "asleep",
+			lastSessionFile: join(tmp, "ref-session.json"),
 			projectId: body.project.projectId,
 		});
 		try {

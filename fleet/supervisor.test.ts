@@ -579,6 +579,45 @@ describe("SpawnSupervisor", () => {
 		expect(fake.openCount).toBeGreaterThanOrEqual(2);
 	});
 
+	test("respawn of a template-less asleep entry falls back to spawn's resolution and heals the entry", async () => {
+		// Regression: entries registered asleep without a template (the auto
+		// default workspace, unstarted worktrees, or pre-fix state files) must
+		// be wakeable — respawn used to key off entry.template only and throw
+		// "unknown spawn template: undefined", wedging the row asleep.
+		const projectDir = tmpPath("omp-session-sup-notpl-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const argsFile = join(projectDir, "args.txt");
+		const script = writeChildScript(projectDir, fake.port, argsFile);
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
+
+		const entry = registry.create({
+			name: "placeholder",
+			cwd: projectDir,
+			project: "placeholder",
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+		});
+		expect(entry.template).toBeUndefined();
+
+		await supervisor.respawn(entry);
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			8000,
+			"respawned ready",
+		);
+		const updated = registry.get(entry.daemonId)!;
+		expect(updated.template).toBe("test"); // healed with the resolved name
+		const lines = readFileSync(argsFile, "utf8").trim().split("\n");
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toBe(updated.token!); // no lastSessionFile → fresh start, no --resume
+		expect(lines[0]).not.toContain("--resume");
+	});
+
 	test("spawn shell-quotes label/name values — a $(touch) payload stays inert", async () => {
 		const projectDir = tmpPath("omp-session-sup-quote-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
@@ -1262,6 +1301,86 @@ describe("SpawnSupervisor", () => {
 			/unknown spawn template: nope/,
 		);
 		expect(registry.list()).toHaveLength(before);
+	});
+
+	test("resolveTemplateName: explicit → projectTemplates[basename(cwd)] → defaultTemplate; unknown names reject", async () => {
+		const projectDir = tmpPath("omp-session-sup-proj-");
+		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt")); // path only; no child runs
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = makeSupervisor(
+			registry,
+			connector,
+			makeTierConfig(script, script, { [basename(projectDir)]: "other" }),
+			{ restartMax: 0 },
+		);
+		// projectTemplates[basename(cwd)] wins over the default.
+		expect(supervisor.resolveTemplateName(projectDir)).toBe("other");
+		// Explicit wins over everything.
+		expect(supervisor.resolveTemplateName(projectDir, "test")).toBe("test");
+		// A cwd without an override falls back to defaultTemplate.
+		expect(supervisor.resolveTemplateName("/somewhere/else")).toBe("test");
+		// An unknown explicit name rejects.
+		expect(() => supervisor.resolveTemplateName(projectDir, "nope")).toThrow(
+			"unknown spawn template: nope",
+		);
+		// An unknown name resolved via the default tier rejects too.
+		const missingDefault: FleetConfig = {
+			templates: { test: { command: "sh /nonexistent " } },
+			defaultTemplate: "missing",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
+		const supervisor2 = makeSupervisor(registry, connector, missingDefault, { restartMax: 0 });
+		expect(() => supervisor2.resolveTemplateName("/x")).toThrow("unknown spawn template: missing");
+	});
+
+	test("respawn of a template-less asleep entry resolves projectTemplates/defaultTemplate (asleep default workspaces are wakeable)", async () => {
+		const projectDir = tmpPath("omp-session-sup-proj-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const argsDefault = join(projectDir, "args-default.txt");
+		const argsOverride = join(projectDir, "args-override.txt");
+		// Separate dirs: writeChildScript uses a fixed `child.sh` name per dir.
+		mkdirSync(join(projectDir, "tpl-default"), { recursive: true });
+		mkdirSync(join(projectDir, "tpl-override"), { recursive: true });
+		const scriptDefault = writeChildScript(join(projectDir, "tpl-default"), fake.port, argsDefault);
+		const scriptOverride = writeChildScript(join(projectDir, "tpl-override"), fake.port, argsOverride);
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		// The project has a per-repo override; a template-less entry must
+		// resolve it exactly like spawn() would.
+		const supervisor = makeSupervisor(
+			registry,
+			connector,
+			makeTierConfig(scriptDefault, scriptOverride, { [basename(projectDir)]: "other" }),
+			{ restartMax: 2 },
+		);
+		// An asleep default-workspace row persisted WITHOUT a template (a
+		// state file written before entries stored the resolved name).
+		const asleep = registry.create({
+			name: basename(projectDir),
+			cwd: projectDir,
+			project: basename(projectDir),
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+		});
+		expect(asleep.template).toBeUndefined();
+
+		await supervisor.respawn(asleep);
+		await waitFor(
+			() => {
+				const current = registry.get(asleep.daemonId)!;
+				return current.status === "ready" ? "ready" : null;
+			},
+			8000,
+			"respawned ready",
+		);
+		// The OVERRIDE template's child ran (its args file exists), never
+		// the default's — the fallback resolved projectTemplates.
+		expect(readFileSync(argsOverride, "utf8").trim().split("\n")).toHaveLength(1);
+		expect(existsSync(argsDefault)).toBe(false);
+		// The resolved name was healed onto the entry for later respawns.
+		expect(registry.get(asleep.daemonId)?.template).toBe("other");
 	});
 });
 

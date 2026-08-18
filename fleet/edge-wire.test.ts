@@ -894,6 +894,28 @@ describe("fleet edge", () => {
 		const project = frame.projects.find((p) => p.path === realpathSync(repoDir))!;
 		expect(project).toMatchObject({ path: realpathSync(repoDir), name: "edge-add-project-repo" });
 		expect(project.projectId).toMatch(/^p\d+$/);
+		// The default workspace is auto-registered: a roster broadcast shows
+		// the asleep main-checkout entry, tagged with the project id and
+		// with NO worktreeOf (main checkouts stay untagged — they are the
+		// repo itself, never a managed worktree).
+		const rosterFrame = await browser.waitForFrame(
+			(f) =>
+				f.type === "roster" &&
+				f.daemons.some(
+					(d) =>
+						d.projectId === project.projectId &&
+						d.cwd === realpathSync(repoDir) &&
+						d.status === "asleep",
+				),
+			"roster broadcast with default workspace",
+		);
+		const main = asRoster(rosterFrame).daemons.find((d) => d.projectId === project.projectId);
+		expect(main).toBeDefined();
+		expect(main!.cwd).toBe(realpathSync(repoDir));
+		expect(main!.mode).toBe("spawned");
+		expect(main!.status).toBe("asleep");
+		expect(main!.worktreeOf).toBeUndefined();
+		expect(main!.lastSessionFile).toBeUndefined();
 		// Dedup: registering the same realpath again answers an error frame
 		// naming the existing projectId.
 		await browser.send({ type: "add_project", path: repoDir });
@@ -907,6 +929,11 @@ describe("fleet edge", () => {
 		expect(server.registry.projects().filter((p) => p.path === realpathSync(repoDir))).toHaveLength(
 			1,
 		);
+		// The dedup answered an error and registered nothing: the roster
+		// still holds exactly the first add_project's default workspace.
+		expect(
+			server.registry.list().filter((e) => e.cwd === realpathSync(repoDir)),
+		).toHaveLength(1);
 		try {
 			server.registry.removeProject(project.projectId);
 		} catch {
@@ -962,6 +989,8 @@ describe("fleet edge", () => {
 		const proc = Bun.spawn(["git", "init", "-q"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
 		expect(await proc.exited).toBe(0);
 		const project = await server.registry.addProject(repoDir);
+		// Not a provably-empty placeholder: a real session file means this
+		// entry has transcripts, so remove_project must block on it.
 		const ref = server.registry.create({
 			name: "ref",
 			cwd: realpathSync(repoDir),
@@ -970,6 +999,7 @@ describe("fleet edge", () => {
 			mode: "spawned",
 			template: "local",
 			status: "asleep",
+			lastSessionFile: join(tmp, "rm-session.json"),
 			projectId: project.projectId,
 		});
 		try {

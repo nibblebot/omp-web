@@ -63,6 +63,7 @@ import {
 	deleteWorktree,
 	mergeUnregisteredWorktrees,
 	projectIdForCwd,
+	registerProjectMainEntry,
 	registerWorktreeEntry,
 	validateUnregisteredWorktree,
 	worktreeDeleteInfo,
@@ -630,11 +631,16 @@ class FleetServerImpl implements FleetServer {
 	 * and dedups). A path that is not an existing directory or git repo is
 	 * the registry's validation error surfaced as 400; a realpath that is
 	 * already registered dedups to the EXISTING project → 409 carrying it.
-	 * With `start: true` the main checkout is spawned via the supervisor
-	 * (template/labels passthrough) and the fresh entry is tagged with the
-	 * projectId. Staged: registration happens first, so a failed spawn
-	 * reports 500 (stage named in the message) but the project stays
-	 * registered. Returns 201 { project, entry? }.
+	 * The project's default workspace — a roster entry for the repo's main
+	 * checkout mapped to the repo CWD, never a managed worktree — is
+	 * registered via registerProjectMainEntry:
+	 *   - start:true → the main checkout is spawned (template/labels
+	 *     passthrough) and the fresh entry is tagged + returned as `entry`;
+	 *   - otherwise → the entry is created asleep (surfacing purely via the
+	 *     roster broadcast, wakeable via spawn_resume/attach).
+	 * Staged: registration happens first, so a failed spawn reports 500
+	 * (stage named in the message) but the project stays registered.
+	 * Returns 201 { project, entry? }.
 	 */
 	async #handleAddProject(req: Request): Promise<Response> {
 		const body = await readJson(req);
@@ -656,11 +662,15 @@ class FleetServerImpl implements FleetServer {
 		if (before.some((p) => p.projectId === project.projectId)) {
 			return json({ error: `project already registered: ${project.projectId}`, project }, 409);
 		}
-		if (!start) return json({ project }, 201);
 		try {
-			const entry = await this.supervisor.spawn({ cwd: project.path, template, labels });
-			const tagged = this.registry.update(entry.daemonId, { projectId: project.projectId });
-			return json({ project, entry: tagged }, 201);
+			const entry = await registerProjectMainEntry(this.registry, this.supervisor, project, {
+				start,
+				template,
+				labels,
+			});
+			// `entry` only when spawned: an asleep default workspace surfaces
+			// purely via the roster broadcast.
+			return json({ project, ...(start ? { entry } : {}) }, 201);
 		} catch (err) {
 			// The project stays registered; the 500 names the stage.
 			throw new HttpError(
@@ -672,8 +682,10 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * DELETE /ctl/projects/:projectId: deregister a project (never touches
-	 * disk). 409 when roster entries still reference it — the message names
-	 * the blocking daemon ids (registry.removeProject). Unknown ids → 404.
+	 * disk); the never-started default workspace (a provably-empty roster
+	 * placeholder) is dropped with it. 409 when real roster entries still
+	 * reference it — the message names the blocking daemon ids
+	 * (registry.removeProject). Unknown ids → 404.
 	 */
 	async #handleRemoveProject(projectId: string): Promise<Response> {
 		try {

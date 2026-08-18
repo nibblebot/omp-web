@@ -235,18 +235,36 @@ export class Registry {
 	}
 
 	/**
-	 * Remove a registered project. Throws with the referencing daemon ids in
-	 * the message while ANY roster entry still references it (callers
-	 * surface the blockers); never touches disk. Unknown ids also throw.
+	 * Remove a registered project. Referencing roster entries that are NOT
+	 * provably-empty placeholders block removal — the error names their
+	 * daemon ids (callers surface the blockers); never touches disk.
+	 * Placeholder entries — mode "spawned", status "asleep", no
+	 * lastSessionFile, no endpoint: the auto-registered default workspace of
+	 * a project that never started, so the roster row is their only state —
+	 * are implicitly dropped with the project, no two-step removal needed.
+	 * Unknown ids also throw.
 	 */
 	removeProject(projectId: string): void {
 		const index = this.projectList.findIndex((project) => project.projectId === projectId);
 		if (index === -1) throw new Error(`unknown project id: ${projectId}`);
-		const blockers = this.entries
-			.filter((entry) => entry.projectId === projectId)
-			.map((entry) => entry.daemonId);
+		// Partition referencing entries: real blockers (anything that ever
+		// ran, is spawning/ready/error, or is remote/attached) refuse the
+		// removal wholesale; placeholders are dropped in the same mutation
+		// as the project (and only then — a refused removal leaves them).
+		const isPlaceholder = (entry: RegistryEntry): boolean =>
+			entry.mode === "spawned" &&
+			entry.status === "asleep" &&
+			entry.lastSessionFile === undefined &&
+			entry.endpoint === undefined;
+		const blockers = this.entries.filter(
+			(entry) => entry.projectId === projectId && !isPlaceholder(entry),
+		);
 		if (blockers.length > 0) {
-			throw new Error(`project ${projectId} in use by daemons: ${blockers.join(", ")}`);
+			throw new Error(`project ${projectId} in use by daemons: ${blockers.map((entry) => entry.daemonId).join(", ")}`);
+		}
+		for (let i = this.entries.length - 1; i >= 0; i--) {
+			const entry = this.entries[i];
+			if (entry.projectId === projectId && isPlaceholder(entry)) this.entries.splice(i, 1);
 		}
 		this.projectList.splice(index, 1);
 		this.#mutated();

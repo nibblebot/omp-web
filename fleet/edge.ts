@@ -111,6 +111,7 @@ import {
 	mergeUnregisteredWorktrees,
 	projectIdForCwd,
 	realpathOf,
+	registerProjectMainEntry,
 	registerWorktreeEntry,
 	validateUnregisteredWorktree,
 	worktreeDeleteInfo,
@@ -1016,10 +1017,12 @@ export class FleetEdge {
 	/**
 	 * add_project: register the project's realpath (registry.addProject
 	 * validates + dedups). A dedup answers an error frame naming the
-	 * existing projectId. With start:true the main checkout is spawned via
-	 * the supervisor (template/labels passthrough) and the fresh entry is
-	 * tagged with the projectId (registry.update post-spawn — the
-	 * supervisor's spawn creates the entry, this tags it). Success surfaces
+	 * existing projectId. The project's default workspace — a roster entry
+	 * for the repo's main checkout mapped to the repo CWD, never a managed
+	 * worktree — is registered via registerProjectMainEntry: with start:true
+	 * the main checkout is spawned (template/labels passthrough) and the
+	 * fresh entry is tagged with the projectId; without it the entry is
+	 * created asleep (wakeable via spawn_resume/attach). Success surfaces
 	 * via the registered_projects + roster broadcasts, never a unicast.
 	 */
 	async #handleAddProject(
@@ -1043,18 +1046,19 @@ export class FleetEdge {
 				this.#sendError(stream, `project already registered: ${project.projectId}`);
 				return;
 			}
-			if (start) {
-				try {
-					const entry = await this.#supervisor.spawn({ cwd: project.path, template, labels });
-					this.#registry.update(entry.daemonId, { projectId: project.projectId });
-				} catch (err) {
-					// The project stays registered; the error names the stage.
-					this.#sendError(
-						stream,
-						`project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`,
-					);
-					return;
-				}
+			try {
+				await registerProjectMainEntry(this.#registry, this.#supervisor, project, {
+					start,
+					template,
+					labels,
+				});
+			} catch (err) {
+				// The project stays registered; the error names the stage.
+				this.#sendError(
+					stream,
+					`project ${project.projectId} registered, spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
+				return;
 			}
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
@@ -1062,9 +1066,11 @@ export class FleetEdge {
 	}
 
 	/**
-	 * remove_project: deregister a project (never touches disk). While any
-	 * roster entry references it, registry.removeProject throws and the
-	 * error frame names the blocking daemon ids.
+	 * remove_project: deregister a project (never touches disk); the
+	 * never-started default workspace (a provably-empty roster placeholder)
+	 * is dropped with it. While any REAL roster entry (something that ever
+	 * ran or is remote/attached) references it, registry.removeProject
+	 * throws and the error frame names the blocking daemon ids.
 	 */
 	async #handleRemoveProject(stream: BrowserStream, projectId: string): Promise<void> {
 		try {

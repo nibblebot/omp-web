@@ -369,6 +369,53 @@ describe("registered projects (Phase 2)", () => {
 		);
 	});
 
+	test("removeProject implicitly drops provably-empty placeholder entries (never-started default workspaces)", async () => {
+		const registry = await loadedRegistry(tmpStatePath());
+		const project = await registry.addProject(await makeRepo());
+		// The auto-registered default workspace: spawned + asleep, no
+		// lastSessionFile, no endpoint — the roster row is its only state.
+		registry.create(baseInit({ projectId: project.projectId, status: "asleep" }));
+		registry.removeProject(project.projectId);
+		expect(registry.projects()).toEqual([]);
+		// The placeholder went with the project — no manual two-step removal.
+		expect(registry.list()).toEqual([]);
+		// Other placeholder-shaped entries (any cwd) are untouched.
+		expect(registry.create(baseInit({ status: "asleep" })).status).toBe("asleep");
+	});
+
+	test("removeProject drops placeholders with the project but still blocks on any real referencing daemon", async () => {
+		const registry = await loadedRegistry(tmpStatePath());
+		const project = await registry.addProject(await makeRepo());
+		const placeholder = registry.create(baseInit({ projectId: project.projectId, status: "asleep" }));
+		const live = registry.create(baseInit({ projectId: project.projectId, status: "ready" }));
+		// A real daemon (status "ready") blocks; only its id is named, and
+		// the refused removal leaves the placeholder in place.
+		expect(() => registry.removeProject(project.projectId)).toThrow(
+			`project ${project.projectId} in use by daemons: ${live.daemonId}`,
+		);
+		expect(registry.get(placeholder.daemonId)).toBeDefined();
+		expect(registry.projects()).toHaveLength(1);
+		// An asleep entry WITH a lastSessionFile has transcripts — not a
+		// placeholder, so it blocks too.
+		const withSession = registry.create(
+			baseInit({
+				projectId: project.projectId,
+				status: "asleep",
+				lastSessionFile: "/tmp/proj-a/.omp/session.json",
+			}),
+		);
+		registry.remove(live.daemonId);
+		expect(() => registry.removeProject(project.projectId)).toThrow(
+			`project ${project.projectId} in use by daemons: ${withSession.daemonId}`,
+		);
+		// With every real blocker gone, the removal drops the placeholder
+		// and the project together.
+		registry.remove(withSession.daemonId);
+		registry.removeProject(project.projectId);
+		expect(registry.projects()).toEqual([]);
+		expect(registry.list()).toEqual([]);
+	});
+
 	test("pN ids are monotonic across remove and reload (no reuse)", async () => {
 		const statePath = tmpStatePath();
 		const registry = await loadedRegistry(statePath);

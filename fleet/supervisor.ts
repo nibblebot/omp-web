@@ -225,6 +225,21 @@ export class SpawnSupervisor {
 	}
 
 	/**
+	 * Resolve the template NAME for a cwd: explicit →
+	 * `projectTemplates[basename(cwd)]` → `defaultTemplate`; throws when the
+	 * resolved name is not in `templates` (spawn rejects before any entry is
+	 * created). Stored on the entry so respawn() finds the same template.
+	 */
+	resolveTemplateName(cwd: string, explicit?: string): string {
+		const name =
+			explicit ?? this.#config.projectTemplates?.[basename(cwd)] ?? this.#config.defaultTemplate;
+		if (this.#config.templates[name] === undefined) {
+			throw new Error(`unknown spawn template: ${name}`);
+		}
+		return name;
+	}
+
+	/**
 	 * Create a spawned entry, launch its child, and return the entry. The
 	 * connector dial happens asynchronously once the child's listening line
 	 * resolves an endpoint.
@@ -245,10 +260,8 @@ export class SpawnSupervisor {
 		labels?: string[];
 	}): Promise<RegistryEntry> {
 		const project = basename(init.cwd);
-		const templateName =
-			init.template ?? this.#config.projectTemplates?.[project] ?? this.#config.defaultTemplate;
+		const templateName = this.resolveTemplateName(init.cwd, init.template);
 		const template = this.#config.templates[templateName];
-		if (!template) throw new Error(`unknown spawn template: ${templateName}`);
 		const worktreeOf = await resolveWorktreeOf(init.cwd);
 		const entry = this.#registry.create({
 			name: init.name ?? project,
@@ -277,8 +290,16 @@ export class SpawnSupervisor {
 		if (current.mode !== "spawned") {
 			throw new Error(`daemon ${current.daemonId} is not spawned (mode ${current.mode})`);
 		}
-		const template = this.#config.templates[current.template ?? ""];
-		if (!template) throw new Error(`unknown spawn template: ${current.template}`);
+		// Fallback for template-less entries (registered asleep, or state
+		// files written before entries stored the resolved name): resolve the
+		// same name spawn() would for the cwd.
+		const templateName = current.template ?? this.resolveTemplateName(current.cwd);
+		const template = this.#config.templates[templateName];
+		if (!template) throw new Error(`unknown spawn template: ${templateName}`);
+		// Heal the persisted entry so later respawns skip the fallback.
+		if (current.template === undefined) {
+			this.#registry.update(current.daemonId, { template: templateName });
+		}
 		const state = this.#ensure(current.daemonId);
 		if (state.respawnInFlight) return state.respawnInFlight;
 		const inFlight = this.#respawnNow(state, current, template);

@@ -602,7 +602,9 @@ export async function registerWorktreeEntry(
 	}
 	// Mirror supervisor.spawn's field shape (name/project = worktree
 	// basename) so a started and an unstarted worktree render identically
-	// except status; worktreeOf carries the owning project's name.
+	// except status; worktreeOf carries the owning project's name. The
+	// resolved template NAME is stored like spawn() stores it — respawn()
+	// keys off entry.template.
 	return registry.create({
 		name: basename(worktreePath),
 		cwd: worktreePath,
@@ -612,5 +614,59 @@ export async function registerWorktreeEntry(
 		labels: [],
 		mode: "spawned",
 		status: "asleep",
+		template: supervisor.resolveTemplateName(worktreePath),
+	});
+}
+
+/**
+ * Register the DEFAULT WORKSPACE of a freshly registered project: a roster
+ * entry for the repo's main checkout, mapped to the repo CWD. The main
+ * checkout is the repo itself — this never creates anything under
+ * workspaceDir. With opts.start the main checkout is spawned via the
+ * supervisor (template/labels passthrough) and the fresh entry is tagged
+ * with the projectId; otherwise it is registered asleep (mode "spawned")
+ * and wakeable via spawn_resume/attach — a respawn with no lastSessionFile
+ * is a fresh start. Shared by the /ctl route and the edge command handler.
+ */
+export async function registerProjectMainEntry(
+	registry: Registry,
+	supervisor: SpawnSupervisor,
+	project: RegisteredProject,
+	opts: { start?: boolean; template?: string; labels?: string[] },
+): Promise<RegistryEntry> {
+	// Dedup: an entry already mapped to this repo's realpath IS the default
+	// workspace — reuse it, never create a second row for the same checkout.
+	const existing = registry.list().find((entry) => realpathOf(entry.cwd) === project.path);
+	if (existing !== undefined) {
+		if (existing.projectId === undefined) {
+			registry.update(existing.daemonId, { projectId: project.projectId });
+		}
+		if (opts.start && existing.status === "asleep") {
+			await supervisor.respawn(existing);
+		}
+		return registry.get(existing.daemonId) ?? existing;
+	}
+	if (opts.start) {
+		// supervisor.spawn creates the entry (resolveWorktreeOf leaves main
+		// checkouts untagged) and launches the child; tag the project id
+		// right after.
+		const entry = await supervisor.spawn({ cwd: project.path, template: opts.template, labels: opts.labels });
+		registry.update(entry.daemonId, { projectId: project.projectId });
+		return registry.get(entry.daemonId) ?? entry;
+	}
+	// Mirror supervisor.spawn's field shape for the main checkout (name and
+	// project = the repo name) so a started and an unstarted default
+	// workspace render identically except status — including the resolved
+	// template NAME (respawn keys off entry.template). NO worktreeOf: main
+	// checkouts stay untagged — SidebarGroups' hasMain depends on that.
+	return registry.create({
+		name: project.name,
+		cwd: project.path,
+		project: project.name,
+		projectId: project.projectId,
+		labels: opts.labels ?? [],
+		mode: "spawned",
+		status: "asleep",
+		template: supervisor.resolveTemplateName(project.path, opts.template),
 	});
 }
