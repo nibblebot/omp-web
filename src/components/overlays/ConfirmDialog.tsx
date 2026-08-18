@@ -1,5 +1,9 @@
 import { Show, type Component } from "solid-js";
-import { cancelDangerConfirm, confirmDangerConfirm, dangerConfirm } from "../../prompt/danger-confirm";
+import {
+	cancelDangerConfirm,
+	confirmDangerConfirm,
+	dangerConfirm,
+} from "../../prompt/danger-confirm";
 import { Modal } from "../shared/Modal";
 
 // Danger-confirm dialog (P1 hardening): replaces the native window.confirm

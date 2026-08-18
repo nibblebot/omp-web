@@ -12,5 +12,5 @@
 		"skipLibCheck": true,
 		"verbatimModuleSyntax": true
 	},
-	"include": ["shared", "src", "server", "fleet", "scripts", "test"]
+	"include": ["shared", "src", "server", "fleet", "cli", "scripts", "test"]
 }

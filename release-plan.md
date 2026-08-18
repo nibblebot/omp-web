@@ -1,17 +1,17 @@
 # omp-web — release & onboarding plan
 
-2026-08-17. Scope: distribution (production bundle, bun-bin symlink, `omp-web update`) and first-run onboarding (default dirs, first repo, workspaces from existing worktrees). Provider onboarding and model roles are assumed already done via the TUI — out of scope here.
+2026-08-17. Scope: distribution (production bundle, bun-bin symlink, `omp-web update`) and first-run onboarding (data-home config via the serve TTY offer; projects/worktrees via the UI directory picker). Provider onboarding and model roles are assumed already done via the TUI — out of scope here.
 
 **For the executing session**: prior agent-built work for Phases 1–2 sits in `stash@{0}` (see Implementation status). Start with `git stash pop`, verify/complete the Phase-1 backend, then proceed in phase order. Sequencing constraint: everything is tested **locally** (sandboxed `HOME`/`BUN_INSTALL`, local tarball, local manifest fixture) before any GitHub release; **no npm publish until the GitHub repo exists and a GitHub release is done**.
 
 ## Locked decisions (user-directed)
 
-1. **No bun single-executable.** Copy the `@oh-my-pi/pi-coding-agent` install mechanism: single-file JS bundle + `bin` field + `bun install -g`, which auto-creates the symlink in bun's global bin dir.
-2. **One entrypoint: `omp-web`.** It dispatches everything (fleet serve, session daemon, fleet subcommands, setup, update).
-3. **Nothing under `~/.omp`.** Fleet config moves from `~/.omp/fleet/config.json` to `~/.ompweb/` (the SDK's `~/.omp/agent`, owned by the TUI-onboarded pi stack, is untouched).
+1. **No bun single-executable.** Copy the `@oh-my-pi/pi-coding-agent` install mechanism: single-file JS bundle + `bin` field. **SUPERSEDED on install mechanism** (user-directed): `bun install -g` was abandoned for the flat shared-store skew (see Implementation status) — the installer (`scripts/install-omp-web.ts`) runs `bun add <tarball>` in `~/.omp-web/install/` for its own pinned `@oh-my-pi/*` node_modules, then symlinks `~/.bun/bin/omp-web` (the `bin` field still drives the symlink).
+2. **One entrypoint: `omp-web`.** It dispatches everything (bare `omp-web` = fleet serve, session daemon, fleet subcommands, update). The first-run data-home confirmation lives in `serve` itself (TTY offer) — there is no separate `setup` command.
+3. **Nothing under `~/.omp`.** Fleet config moves from `~/.omp/fleet/config.json` to `~/.omp-web/` (the SDK's `~/.omp/agent`, owned by the TUI-onboarded pi stack, is untouched).
 4. **No "repos" dir concept.** `roots`/discovery-scanning is removed entirely; no default repos directory. Every project is added by picking a directory in a file picker.
-5. **Update via release version, GitHub-first**: the release channel is GitHub Releases (tarball assets + a manifest file); `omp-web update` checks the latest release and re-installs via `bun install -g <tarball>`. Same shape as oh-my-pi's npm-mode self-update, different source of truth.
-6. **No npm until GitHub is done.** Nothing is published to any npm registry until the GitHub repo is set up AND a GitHub release exists. Install/symlink/setup/serve/spawn/update are all proven locally first (Phase 5 is the gate).
+5. **Update via release version, GitHub-first**: the release channel is GitHub Releases (tarball assets + a manifest file); `omp-web update` checks the latest release and re-installs in the pinned dir (`bun remove omp-web` + `bun add <tarball>`). Same shape as oh-my-pi's npm-mode self-update, different source of truth.
+6. **No npm until GitHub is done.** Nothing is published to any npm registry until the GitHub repo is set up AND a GitHub release exists. Install/symlink/serve/spawn/update are all proven locally first (Phase 5 is the gate).
 
 ## Ground truth (verified)
 
@@ -27,7 +27,7 @@ Repo facts (pre-change state):
 - Default spawn template is verbatim `omp-session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}` (`fleet/config.ts:54`) via `sh -c` with inherited env — assumes a binary on PATH.
 - Fleet edge serves `dist/` from **process cwd** (`fleet/edge.ts:1888`) — breaks when a global entrypoint runs from an arbitrary cwd; the compiled session binary is immune (embedded dist).
 - Fleet config `~/.omp/fleet/config.json`: read-only load, **nothing writes it**, shallow-merge, unknown keys tolerated (so removing `roots` needs no migration — legacy files keep loading).
-- State `~/.ompweb/fleet-state.json` + O_EXCL pidfile lock (second fleet exits 77); workspaces `~/.ompweb/workspaces` (lazy); session files lock per-file (exit 1).
+- State `~/.omp-web/fleet-state.json` + O_EXCL pidfile lock (second fleet exits 77); workspaces `~/.omp-web/workspaces` (lazy); session files lock per-file (exit 1).
 - Worktree adoption machinery already exists: `listUnregisteredWorktrees` finds linked worktrees **anywhere on disk** via `git worktree list` (`fleet/worktrees.ts:291`); `POST /ctl/projects/:id/worktrees {worktreePath, start}` adopts them. Deletion is guarded to realpaths under `workspaceDir` — adopted external worktrees are evict-only (403). Dedupe is realpath-keyed → 409 at both edges; batch flows must tolerate it.
 - No first-run detection anywhere; `fleetFacts.configPath === null` (`fleet/server.ts:1004`) + empty roster are observable — enough to derive first-run without a marker file.
 - `validateProjectPath` (`fleet/discovery.ts:202`) does not expand `~` — a literal tilde 400s today; AddProjectModal's `"~/repos/…"` placeholder misleads.
@@ -35,9 +35,9 @@ Repo facts (pre-change state):
 
 ## Implementation status
 
-Work below was implemented by agents, then stashed per user request: **`stash@{0}`** ("onboarding impl (dir-picker, omp-web entrypoint+bundle, fs-browse backend-unverified)"). Recover with `git stash pop` (or `git stash show -p` to inspect). Repo tree is clean; all todos open.
+**Phases 1–5 are implemented, verified, and in the working tree** (stash `stash@{0}` was popped and completed; the repo is uncommitted — Phase 6 is the only remaining user action). Full gate green: 883 tests across 71 files, `check:types`, `lint` (warnings only), `format:check`, and the offline E2E (`bun scripts/test-onboard.ts` — bare `omp-web` walk, 0.1.0→0.2.0). UI verified in a browser (roster mode): first-run panel, add-project picker, G4 start-session. **Per user request:** there is no `setup` command — bare `omp-web` serves, and the first-run data-home confirmation is the serve TTY offer (Phases 3–5 text below reflects the final shape).
 
-### Phase 1 — directory picker & roots removal
+### Phase 1 — directory picker & roots removal — DONE
 
 Contract (frozen):
 
@@ -55,19 +55,19 @@ Status:
 
 - [x] `src/fleet-ui/dir-picker.ts` + 11 unit tests (stubbed fetch; navigation/up/error/race/truncated) — green
 - [x] `src/components/roster/DirPicker.tsx` (breadcrumb, manual `~` input, git badge, select-current footer) + AddProjectModal/WorktreeModal rewiring + `dirpick-*` styles — sibling src suites green (65 tests)
-- [ ] `fleet/fs-browse.ts` + `/ctl/fs/browse` edge route + roots removal in `fleet/{config,discovery,server,edge,worktrees}.ts` and ~15 fleet test files — **implemented but UNVERIFIED** (agent cancelled mid-flight; draft is in the stash, tests not run)
+- [x] `fleet/fs-browse.ts` + `/ctl/fs/browse` edge route + roots removal in `fleet/{config,discovery,server,edge,worktrees}.ts` and ~15 fleet test files — **verified** (full fleet + src suites green: 623 tests); `expandTilde` exported from `fleet/config.ts` and reused by fs-browse + `validateProjectPath`
 
 ### Phase 2 — bundle & install — DONE (in stash)
 
-- [x] `package.json`: `"version": "0.1.0"`, `"bin": {"omp-web": "dist-bundle/cli.js"}`, `build:omp-web` script
+- [x] `package.json`: `"version": "0.1.0"`, `"bin": {"omp-web": "dist-bundle/cli.js"}`, `build` script (the installable bundle; `build:web` = vite-only)
 - [x] `cli/omp-web.ts` dispatcher: `serve` + 13 fleet verbs → `fleet/cli.ts` main; `session` → argv-munge + dynamic import of `server/index.ts`; `--version`; usage→stderr/exit 1; nothing on stdout before delegation. 5 classification tests green
 - [x] `scripts/build-omp-web.ts`: vite build → regenerate `server/embedded-dist.ts` (values anchored via `new URL(f, import.meta.url).pathname` so `Bun.file` works from any cwd) → restore stub in `finally` → `Bun.build` target=bun, minify, `@oh-my-pi/*` external, version stamped via define → `dist-bundle/cli.js` (shebang verified; `dist-bundle/` gitignored)
 - [x] `fleet/edge.ts`: EMBEDDED_DIST fallback between disk-miss and placeholder (dev disk-first preserved)
 - [x] Verified: `--version` → `0.1.0` from /tmp; `session --port 0` prints `OMP_SESSION|…listening`; `serve --port 0` banner exact + real index.html served from cwd=/tmp; `sessions` output byte-identical to `bun fleet/cli.ts sessions`
-- [ ] Actual global install + symlink verification — needs **no** release channel: `bun pm pack` → `omp-web-0.1.0.tgz`, then `bun install -g /abs/omp-web-0.1.0.tgz` in a sandboxed `HOME`/`BUN_INSTALL`; assert `$BUN_INSTALL/bin/omp-web` symlinks into the global store and runs (smoke here, full walk in Phase 5)
-- [ ] Change `DEFAULT_LOCAL_TEMPLATE` to `omp-web session --cwd {cwd} …` (deferred one-liner in `fleet/config.ts` — makes installed-mode spawns hit the single entrypoint; dev unaffected via `OMP_FLEET_LOCAL_TEMPLATE`)
+- [x] Pinned install + symlink verification: `bun pm pack` → `omp-web-0.1.0.tgz` (now ~193 KB — `package.json` gained a `files: ["dist-bundle/"]` field; bun pm pack otherwise ships src/tests/docs) → `scripts/install-omp-web.ts` (bun add into `~/.omp-web/install/`, bin symlink). **`bun install -g` was abandoned**: the flat global store shares `@oh-my-pi/*` with the omp CLI and keeps its version (17.3.5) instead of the tarball's pin (17.1.8) → the bundle crashes at runtime (`zodToWireSchema` missing — reproduced on the real machine). The pinned dir gives omp-web its own exact-version node_modules; the E2E poisons the store with 17.3.5 and asserts `--version` still works. Runs from an arbitrary cwd (asserted in the Phase 5 E2E).
+- [x] `DEFAULT_LOCAL_TEMPLATE` is now `omp-web session --cwd {cwd} …` (`fleet/config.ts`; contract test updated) — installed-mode spawns hit the single entrypoint; dev unaffected via `OMP_FLEET_LOCAL_TEMPLATE`
 
-### Phase 3 — `omp-web update` — NOT STARTED
+### Phase 3 — `omp-web update` — DONE
 
 Channel: **GitHub Releases** (npm deferred — Locked decision 6). Mechanism mirrors `update-cli.ts`'s npm mode with a different source of truth:
 
@@ -78,28 +78,26 @@ Channel: **GitHub Releases** (npm deferred — Locked decision 6). Mechanism mir
   ```
   `tarball` resolves against the same `…/releases/latest/download/` base. A `--version x.y.z` pin swaps the base for `…/releases/download/v<x.y.z>/` — which requires the asset naming convention `omp-web-<version>.tgz` + `release-manifest.json` on **every** release (Phase 6 enforces it in `scripts/release.ts`).
 - Env override `OMP_WEB_UPDATE_URL` repoints the check at any base URL (incl. an `http://127.0.0.1:<port>/` fixture) — the local E2E uses this; tests never hit GitHub.
-- Current version from the dispatcher's resolution (extract to `cli/version.ts`: define stamp → `../package.json` → `"dev"`); `"dev"` refuses (update applies to installs) unless `--force --version`.
-- **Apply**: download tarball to temp, verify sha256 against the manifest, then `bun install -g <verified-local-tarball>` — bun swaps the `~/.bun/bin/omp-web` symlink itself (verify the re-link in E2E). Local tiny semver compare; no new deps.
+- Current version from `cli/version.ts` (define stamp → `../package.json` → `"dev"`); `"dev"` refuses (update applies to installs) unless `--force --version`.
+- **Apply**: download tarball to temp, verify sha256 against the manifest, then `bun remove omp-web` + `bun add <verified-local-tarball>` in the PINNED install dir (derived from `import.meta.url`: `<install>/node_modules/omp-web/dist-bundle/cli.js` → `<install>`; not-an-install → error) — a same-name path-tarball install alone trips bun 1.3.14's dependency-loop check (`--force` does not bypass; verified in the E2E), so update removes first. The installed package.json version is read back and must match the manifest. Local tiny semver compare; no new deps. `--check` prints the manifest version; result lines on stdout, `omp-web:` failures on stderr.
 - Post-update: probe `127.0.0.1:4722/ctl/sessions` (1s) → advisory "fleet running on old version — restart"; running daemons refresh naturally via idle-exit + respawn.
 - **Later, optional**: once GitHub releases are live, an npm publish can be added; update then prefers the npm registry (`--registry` pinned across check+install, `--no-cache` — oh-my-pi #1686) with the GitHub manifest as fallback. Not part of v1.
 
-### Phase 4 — first-run setup — NOT STARTED
+Status: `cli/version.ts` + `cli/update.ts` (main/applyUpdate/parseManifest/resolveBase/compareVersions/sha256Of) + 21 unit tests (fixture Bun.serve; install step stubbed) — green. `OMP_WEB_UPDATE_URL` is the channel until Phase 6 (absent → exit 1 "no update channel configured").
 
-- [ ] Move fleet config default `~/.omp/fleet/config.json` → `~/.ompweb/config.json` (`resolveConfigPath`; explicit-arg/`OMP_FLEET_CONFIG` chain unchanged). Setup wizard becomes the only writer of the file (read-modify-write; unknown keys tolerated = forward-compat).
-- [ ] `omp-web setup` (auto-offered when `serve` sees no config on a TTY; explicit otherwise):
-  1. **Dirs** — data home (state + workspaces, default `~/.ompweb`), workspaces dir, config path; writes `config.json` (`workspaceDir` key only; no `roots`).
-  2. **First repo** — directory picked via the Phase-1 picker backend (no default repos dir; manual entry honors `~`); wizard then boots fleet in-process and `POST /ctl/projects {path, start:true}`.
-  3. **Existing worktrees** — lists the project's linked worktrees (`git worktree list`, anywhere on disk), multi-select adopt → `POST …/worktrees {worktreePath, start:false}` each; 409-tolerant; one line of copy: adopted worktrees outside the workspaces dir can be spawned but never git-removed via fleet.
-  4. Prints the UI URL; stays running as `serve`. Subsequent runs: plain `omp-web serve`.
-- [ ] UI first-run empty state (replaces one-line sidebar hint; keyed off no-config + empty roster — expose `configPath` in an edge frame) + start-session-on-registered-project action (G4) + freeform path in WorktreeModal (G5, superseded if picker lands there in Phase 1).
+### Phase 4 — first-run setup — DONE
 
-### Phase 5 — local verification & docs — NOT STARTED
+- [x] Fleet config default `~/.omp/fleet/config.json` → `~/.omp-web/config.json` (`resolveConfigPath`; explicit-arg/`OMP_FLEET_CONFIG` chain unchanged; no legacy fallback — nothing shipped). Setup wizard is the only writer of the file (unknown keys tolerated = forward-compat).
+- [x] No separate `setup` command (removed per user request): bare `omp-web` routes to fleet serve (`cli/omp-web.ts` injects `serve` for an empty argv), and the first-run offer lives in `serveCmd` (`fleet/cli.ts` — `shouldOfferSetup` + TTY prompt). The offer FIRST verifies the omp stack via `fleet/omp-check.ts` (lazy SDK import — the fleet stays SDK-free: `omp` binary on PATH/`~/.bun/bin`, auth-usable providers via `ModelRegistry.getApiKeyForProvider`, default-role model from `settings.modelRoles.default`) and prints the omp-standard config advice when anything is missing ("run `omp`, set up a provider + default model in /settings, or `omp login`") — then one prompt, `Data home directory [~/.omp-web]: ` (Enter = default, an alternate path with `~/` expansion overrides, `n` declines), creates the data + workspaces dirs, writes `config.json` (`workspaceDir` key only; no `roots`) via the shared `writeConfigFile`, then boots. The offer is TTY-only, so its status lines/prompts/confirmations print to stdout normally (non-interactive spawners that parse the banner never reach it); errors go to stderr. Projects and worktrees are added from the UI's directory picker afterwards.
+- [x] UI first-run empty state (replaces one-line sidebar hint; keyed off `fleetConfigPath === null` + empty roster — `configPath` rides the `registered_projects` edge frame, additive) + start-session-on-registered-project action (G4: `spawnDaemon(project.path)`; the fleet stamps `projectId` on cwd-spawns via `projectIdForCwd` so the roster groups them — G5 was superseded by the Phase-1 picker in WorktreeModal).
+
+### Phase 5 — local verification & docs — DONE
 
 The gate: **everything works locally before anything is published anywhere.**
 
-- [ ] **Local E2E, fully offline** (heavy suite or `scripts/test-onboard.ts`): sandboxed `HOME` + `BUN_INSTALL` via tempDir(); `bun pm pack` → install the v0.1.0 tarball with `bun install -g <path>`; assert `$BUN_INSTALL/bin/omp-web` symlinks into the global store; walk the CLI end-to-end: `--version` → `setup` (dirs → first repo by directory path → existing-worktree adoption) → `serve` (banner intact + real UI served from an arbitrary cwd) → spawn a session on the registered project → **update round-trip**: fixture `Bun.serve` hosting a manifest + v0.2.0 tarball, `OMP_WEB_UPDATE_URL` pointed at it, run `omp-web update`, assert the symlink target flipped and `omp-web --version` prints 0.2.0.
-- [ ] Full gate: `bun run check:types`, `bun run lint`, `bun run format:check`, `bun run test`.
-- [ ] README (install/update/setup) + AGENTS.md (entrypoint, bundle, config path, picker route).
+- [x] **Local E2E, fully offline** (`scripts/test-onboard.ts`): sandboxed `HOME` + `BUN_INSTALL`; `bun pm pack` → POISON the sandbox store with `@oh-my-pi/pi-ai@17.3.5` (the skew that broke `bun install -g`), then install the v0.1.0 tarball via `scripts/install-omp-web.ts`; assert the bin symlinks into the pinned dir, the pinned pi-ai is 17.1.8, and `--version` works despite the poisoned store; walk the CLI end-to-end: `--version` → first-run config written (the TTY offer's write, done directly — offer is TTY-gated) → **bare `omp-web`** from an arbitrary cwd (banner intact + real embedded UI, then the repo registered + worktree adopted over the loopback API — the UI picker's path) → spawn a session on the registered project (reaches ready, cwd matches, tagged with the projectId) → **update round-trip**: fixture `Bun.serve` hosting a manifest + a rebuilt v0.2.0 tarball, `OMP_WEB_UPDATE_URL` pointed at it, run `omp-web update`, assert the pinned-dir re-install + `omp-web --version` prints 0.2.0. **All assertions pass.**
+- [x] Full gate: `bun run check:types` (clean), `bun run lint` (warnings only — pre-existing, don't fail), `bun run format:check` (green; the stash's unformatted files + 2 pre-existing drift files were oxfmt'd), `bun run test` (883 pass / 0 fail, 71 files).
+- [x] README (install/update, bare `omp-web` = serve + first-run offer, config path, dir-picker add-repo, roadmap) + AGENTS.md (cli/ entrypoint, bundle + test-onboard scripts, config path, fs/browse + projectIdForCwd invariants, first-run UI).
 
 ### Phase 6 — GitHub release — NOT STARTED (user action; only after Phase 5 passes)
 
@@ -116,10 +114,10 @@ The gate: **everything works locally before anything is published anywhere.**
 
 ## Risks & constraints
 
-- stdout contracts are load-bearing: fleet banner line 1 `fleet listening on 127.0.0.1:<port>`; session `OMP_SESSION|{...}` lines; all logs to stderr. Dispatcher/setup/update must not pollute stdout before delegation.
+- stdout contracts are load-bearing: fleet banner line 1 `fleet listening on 127.0.0.1:<port>`; session `OMP_SESSION|{...}` lines; all logs to stderr. Dispatcher/update must not pollute stdout before delegation; the first-run offer's prompts and result lines go to stderr for the same reason.
 - State locks: one fleet per state file (exit 77), session files locked per-file (exit 1). Setup writes config before boot and does repo/worktree registration over loopback HTTP after boot — never writes state directly.
-- `bun install -g` transitive `optionalDependencies` drift (oh-my-pi #1686): if natives ever become our direct optional deps, pin them in the update args like omp does.
+- The global bun store is FLAT and shared with the omp CLI: it holds one `@oh-my-pi/*` version (omp's), so `bun install -g <tarball>` yields a version-skewed bundle (reproduced: `zodToWireSchema` missing). The pinned-dir install (scripts/install-omp-web.ts) is the fix; `omp-web update` must keep using it (derives the dir from `import.meta.url`).
 - Bundle asset paths must stay `import.meta.url`-anchored (cwd-independence); dev keeps disk-first serving with the stub `{}` embedded dist.
-- Adopt ≠ own: worktrees adopted from outside the workspaces dir are evict-only (403 on delete) — communicate in setup + UI.
-- Tarball installs carry no registry integrity metadata — sha256 verification against the manifest is **our** job before `bun install -g`; check and install must resolve against the same manifest/base URL (the oh-my-pi #1686 mirror-lag lesson applies to any future npm mode: one pinned registry across check+install, `--no-cache`).
+- Adopt ≠ own: worktrees adopted from outside the workspaces dir are evict-only (403 on delete) — communicated in the UI.
+- Tarball installs carry no registry integrity metadata — sha256 verification against the manifest is **our** job before `bun add`; check and install must resolve against the same manifest/base URL (the oh-my-pi #1686 mirror-lag lesson applies to any future npm mode: one pinned registry across check+install, `--no-cache`).
 - `releases/latest/download/<asset>` always redirects to the newest release — never attach the manifest to drafts/prereleases, or `update` will offer them.

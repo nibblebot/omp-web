@@ -22,7 +22,7 @@
 #     remote box) contains no knowledge of any other daemon's token or of
 #     the fleet's internals. omp-session enforces it: a non-loopback bind
 #     without a token is a startup hard error.
-#   * The fleet stores the token in ~/.ompweb/fleet-state.json
+#   * The fleet stores the token in ~/.omp-web/fleet-state.json
 #     (chmod 600); keep that file private.
 #   * The JSON is the last stdout line — never print the token anywhere else.
 set -euo pipefail

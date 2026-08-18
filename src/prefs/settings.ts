@@ -1,4 +1,9 @@
-import type { SettingsGroup, SettingsItem, SettingsModel, SettingsTab } from "../../shared/protocol";
+import type {
+	SettingsGroup,
+	SettingsItem,
+	SettingsModel,
+	SettingsTab,
+} from "../../shared/protocol";
 
 /**
  * Pure display helpers for the settings panel (TUI /settings parity). No

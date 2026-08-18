@@ -12,14 +12,7 @@
 
 export type PetPose = "idle" | "blink" | "work1" | "work2" | "work-blink" | "happy";
 
-const PET_POSES: readonly PetPose[] = [
-	"idle",
-	"blink",
-	"work1",
-	"work2",
-	"work-blink",
-	"happy",
-];
+const PET_POSES: readonly PetPose[] = ["idle", "blink", "work1", "work2", "work-blink", "happy"];
 
 export const SPRITE_SIZE = 32;
 
