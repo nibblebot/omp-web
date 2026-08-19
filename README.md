@@ -2,6 +2,9 @@
 
 omp-web is a **web UI for running multiple oh-my-pi sessions, across all your projects and worktrees** — one installed command, one browser UI, N agent sessions.
 
+<img id="omp-web-demo" src="docs/screenshots/omp-web-demo.gif" alt="omp-web UI demo" width="720">
+
+
 - **Fleet Mode** (`omp-web`) — starts the fleet (registry + supervisor + UI server); the browser talks to the fleet, manages project and worktree state, and proxies you through to any daemon. 
 - **Single Session Mode** (`omp-web session`) — the browser talks to one session daemon directly; the daemon serves the full single-session UI.
 - **Sessions run as separate processes** — one project directory each, bound at spawn. A daemon hosts one live agent session in-process via the SDK — no child-process JSON-RPC hop — and serves the UI over SSE + POST.
