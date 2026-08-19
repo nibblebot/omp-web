@@ -62,6 +62,14 @@ omp-web --version             # verify: prints <version>
 omp-web # start the fleet: registry + supervisor + UI
 ```
 
+## Self-update
+
+```sh
+omp-web update                # check the release channel and reinstall the latest
+omp-web update --check        # just report the newest version
+omp-web update --version x.y.z   # pin a specific release
+```
+
 ### Advanced
 
 ```sh
@@ -76,13 +84,6 @@ omp-web rm-project <selector> | rm-worktree <daemon-id> [--delete-branch]
 omp-web prompt <selector> <text> [--wait <ms>]
 ```
 
-## Self-update
-
-```sh
-omp-web update                # check the release channel and reinstall the latest
-omp-web update --check        # just report the newest version
-omp-web update --version x.y.z   # pin a specific release
-```
 
 ## Configuration and State
 
@@ -90,30 +91,10 @@ omp-web update --version x.y.z   # pin a specific release
 - `config.json` (defaults, written only by the first-run offer)
 - `fleet-state.json` (roster + registered projects, atomic writes, exclusive pidfile lock)
 - `workspaces/` (managed worktrees, created lazily). Chosen at first run; config, state, and workspaces always live together under it.
-- `<prefix>/install/` — the CLI code (default `~/.omp-web/install/`), independent of the data home.
-
-## Environment variables
-Fleet env overrides: `OMP_FLEET_PORT` (default 4722), `OMP_FLEET_STATE`, `OMP_FLEET_CONFIG`, `OMP_FLEET_WORKSPACE_DIR`, `OMP_FLEET_LOCAL_TEMPLATE` (dev). Daemon flags (`--cwd`, `--port`, `--host`, `--token`, `--resume`, `--idle-timeout`, …) map 1:1 to `OMP_SESSION_*` env vars.
-
-## Behavior worth knowing
-
-- **State locking.** One fleet per state file (a second `omp-web` exits 77); one daemon per session file (exit 1). Locks are pidfiles that self-heal after crashes.
-- **Idle auto-exit.** Daemons shut down after 30m idle (no clients, no running agent); the fleet marks them `asleep` and respawns them on demand with `--resume`.
-- **Health.** Daemons are restarted on-failure with bounded backoff; a dropped connection shows `reconnecting` and browsers re-attach on return. `OMP_PROTO` (2) gates fleet↔daemon drift.
-- **Managed worktrees** can only be git-removed by omp-web if they live under `~/.omp-web/workspaces` and are clean — no `--force`, branch delete is `git branch -d` only. Adopted external worktrees are evict-only.
 
 ## Develop
 
 ```sh
 bun install
-bun run dev           # roster mode: vite (HMR) + fleet — ports chosen per run
-bun run dev:single    # standalone: daemon (--watch) + vite — ports chosen per run
-bun run dev:server    # just the daemon (--watch); bun run dev:web = just vite
-bun run check:types   # tsgo (NOT tsc)
-bun run lint          # oxlint (warnings don't fail)
-bun run format        # oxfmt (TS/TSX only)
-bun run test          # full suite; add a file filter: bun scripts/test.ts <file>
-bun scripts/test-onboard.ts   # offline distribution E2E (install → serve → spawn → update)
+bun dev      # roster mode: vite (HMR) + fleet — ports chosen per run
 ```
-
-Dev spawns are wired to the checkout via `OMP_FLEET_LOCAL_TEMPLATE` — no build needed for day-to-day work. Dev fleets scope their state per worktree (dev-fleets/<slug>-<hash8>/), so `bun run dev` in different worktrees coexists; same-worktree devs share the state lock.
