@@ -184,6 +184,10 @@ beforeEach(() => {
 		lastFrameAt: 0,
 		reconnectDelay: 0,
 		announcement: "",
+		// Transcript pin mirror + unviewed-answer flag (useStickyScroll /
+		// agent_end in store/chat.ts); reset for isolation.
+		chatPinned: true,
+		answerUnviewed: false,
 		// Toasts are fleet/app-scoped ephemeral UI state; reset for isolation
 		// like the fleet-scoped collections above (and their dismiss timers
 		// only ever remove their own id, so a stale timer is a no-op).
@@ -821,6 +825,40 @@ describe("state-frame application (model-role picker state)", () => {
 		expect(state.modelRoleCatalog).toBeUndefined();
 		expect(state.modelRoleStorage).toBeUndefined();
 		expect(state.modelRoles).toBeUndefined();
+	});
+});
+
+describe("answerUnviewed (turn ended below the viewport)", () => {
+	/** A fully primed stream: attached, empty history, readiness gate cleared. */
+	function primeReady(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+		dispatchSeq({ type: "history", messages: [] }, 3);
+		dispatch({ type: "ready", readyAt: 123 });
+	}
+	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+	const agentEnd = (): ServerFrame => ({
+		type: "event",
+		event: { type: "agent_end", messages: [] },
+	});
+
+	test("agent_end while the transcript is pinned → not flagged (the answer was in view)", () => {
+		primeReady(); // chatPinned defaults true
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(agentEnd(), 1025);
+		expect(state.streaming).toBe(false);
+		expect(state.answerUnviewed).toBe(false);
+	});
+
+	test("agent_end while scrolled up → flagged; the next turn start clears it", () => {
+		primeReady();
+		setState("chatPinned", false); // user is scrolled up (useStickyScroll mirror)
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(agentEnd(), 1025);
+		expect(state.answerUnviewed).toBe(true);
+		dispatchSeq(agentStart(), 1026);
+		expect(state.answerUnviewed).toBe(false);
 	});
 });
 

@@ -1,5 +1,5 @@
 import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
-import { state } from "../../state";
+import { setState, state } from "../../state";
 
 // Right-edge hit zone treated as an inner scroller's own scrollbar: wheel
 // there (or Alt+wheel anywhere over it) scrolls the inner area, not the session.
@@ -38,17 +38,26 @@ export function useStickyScroll(): {
 	let pinned = true;
 	let pinCheckRaf = 0;
 	const [jumpVisible, setJumpVisible] = createSignal(false);
+	// Mirror pin state into the store: agent_end (src/store/chat.ts) reads
+	// chatPinned to decide whether the finished answer was viewed (unviewed →
+	// the roster's yellow unreviewed dot), and every re-pin clears the flag.
+	// The local var stays for the synchronous reads inside the handlers.
+	const setPinned = (p: boolean) => {
+		pinned = p;
+		setState("chatPinned", p);
+		if (p) setState("answerUnviewed", false);
+	};
 	const nearBottom = () =>
 		container.scrollHeight - container.scrollTop - container.clientHeight < PIN_DISTANCE_PX;
 	const unpin = () => {
 		// No room above → the gesture can't move the viewport; stay pinned.
 		if (container.scrollTop <= 0) return;
-		pinned = false;
+		setPinned(false);
 		setJumpVisible(true);
 	};
 	const applyPinState = () => {
 		if (nearBottom()) {
-			pinned = true;
+			setPinned(true);
 			setJumpVisible(false);
 		} else if (pinned) {
 			container.scrollTop = container.scrollHeight; // programmatic shift: re-snap
@@ -67,7 +76,7 @@ export function useStickyScroll(): {
 		});
 	};
 	const jumpToBottom = () => {
-		pinned = true;
+		setPinned(true);
 		setJumpVisible(false);
 		container.scrollTop = container.scrollHeight;
 	};
@@ -92,7 +101,7 @@ export function useStickyScroll(): {
 		const id = state.currentSessionId;
 		if (id === lastSessionId) return;
 		lastSessionId = id;
-		pinned = true;
+		setPinned(true);
 		setJumpVisible(false);
 	});
 	// Window resizes change clientHeight without a scroll event; a pinned

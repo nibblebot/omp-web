@@ -53,7 +53,7 @@ export type RosterEntry = DaemonEntry & {
 
 /** Activity-dot tooltips (sessionActivity state → copy). Only the four
  *  non-idle states render a dot: blocked → red, in_progress → spinning
- *  green, unread → light blue, unreviewed → yellow. Idle renders nothing. */
+ *  green, unreviewed → yellow, unread → light blue. Idle renders nothing. */
 const ACTIVITY_TITLE: Record<SessionActivity, string> = {
 	in_progress: "in progress",
 	blocked: "blocked — waiting for your input",
@@ -113,39 +113,26 @@ export const DaemonRow: Component<{
 	// worktree profile, unindented) and drops the project chip + cwd line.
 	const isRoot = () => props.inProjectGroup === true && !isWorktree();
 	const isAttached = () => d().daemonId === state.currentSessionId;
-	/** Attached session's last user/assistant boundary: an assistant item sits
-	 *  last, so the agent finished a turn the user has not answered yet. Skips
-	 *  trailing tool/notice/compaction items — they belong to the same unan-
-	 *  swered turn. Only meaningful for the attached session (other rows have
-	 *  no live chat; the helper falls back to git dirtiness for them). */
-	const unreviewed = createMemo(() => {
-		const items = state.items;
-		for (let i = items.length - 1; i >= 0; i--) {
-			const kind = items[i]!.kind;
-			if (kind === "user") return false;
-			if (kind === "assistant") return true;
-		}
-		return false;
-	});
 	/** Activity dot for THIS row, derived from the attached session's live
-	 *  signals (state.streaming / state.uiRequest / last-answer-unreviewed)
-	 *  plus the edge's per-daemon realtime activity (state.daemonActivity —
-	 *  detached rows now get live blocked/in-progress via daemon_activity
-	 *  frames when the edge broadcasts them), the probed git dirtiness
-	 *  (detached rows without a remote signal only) and the client-side unread
-	 *  set (detached rows marked when a turn's end is observed or the user
-	 *  switches away — see src/fleet-ui/unread.ts). Memoized so only signal
-	 *  flips re-render the row — the store reads inside track
-	 *  state.streaming/state.uiRequest/state.daemonActivity/state.items
-	 *  individually, and idle→dirty refires when the roster broadcast replaces
-	 *  the entry. Only ready rows get a dot (sessionActivity returns null
-	 *  otherwise). */
+	 *  signals (state.streaming / state.uiRequest / state.answerUnviewed —
+	 *  the finished answer sitting below the scrolled-up viewport) plus the
+	 *  edge's per-daemon realtime activity (state.daemonActivity — detached
+	 *  rows get live blocked/in-progress via daemon_activity frames when the
+	 *  edge broadcasts them) and the client-side unread set (detached rows
+	 *  marked when a turn's end is observed or the user switches away — see
+	 *  src/fleet-ui/unread.ts). Git dirtiness deliberately does NOT feed the
+	 *  dot — uncommitted changes are the diffstat chips, a separate display.
+	 *  Memoized so only signal flips re-render the row — the store reads
+	 *  inside track state.streaming/state.uiRequest/state.answerUnviewed/
+	 *  state.daemonActivity individually, and a roster broadcast replacing
+	 *  the entry refires the memo. Only ready rows get a dot (sessionActivity
+	 *  returns null otherwise). */
 	const activity = createMemo(() =>
 		sessionActivity(d(), {
 			attached: isAttached(),
 			streaming: state.streaming,
 			uiPending: state.uiRequest !== null,
-			unreviewed: unreviewed(),
+			unreviewed: state.answerUnviewed,
 			// Signal read inside the memo: per-row reactivity off the unread set.
 			unread: unreadIds().has(d().daemonId),
 			// Store read inside the memo = per-row reactivity: undefined for the
@@ -192,6 +179,9 @@ export const DaemonRow: Component<{
 		if (activating()) return;
 		const daemon = d();
 		if (daemon.status === "ready") {
+			// Already the attached session: clicking its row is a no-op (a
+			// redundant attach round-trip would also reset the chat view).
+			if (daemon.daemonId === state.currentSessionId) return;
 			void attachSession(daemon.daemonId).catch((err) => setState("error", String(err)));
 		} else if (daemon.status === "asleep") {
 			// Wake then attach: the edge wakes first and answers the attach
@@ -235,7 +225,13 @@ export const DaemonRow: Component<{
 					"daemon-row--root": isRoot(),
 				}}
 				{...useClickableRow(rowClick, clickable())}
-				title={waking() ? "waking — session starting…" : (STATUS_TITLE[d().status] ?? d().status)}
+				title={
+					waking()
+						? "waking — session starting…"
+						: isAttached()
+							? "active session"
+							: (STATUS_TITLE[d().status] ?? d().status)
+				}
 			>
 				<span
 					class="daemon-status-dot"

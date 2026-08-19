@@ -473,6 +473,9 @@ export function applyEvent(e: AgentSessionEvent): void {
 		case "agent_start":
 			setState("streaming", true);
 			setState("workingIntent", undefined);
+			// A new turn supersedes any unviewed-answer flag from the previous
+			// one (the dot reads in_progress for the duration regardless).
+			setState("answerUnviewed", false);
 			// finding #P1: the agent turn became audible — announce the flip.
 			announceIfReady("agent started");
 			break;
@@ -483,6 +486,10 @@ export function applyEvent(e: AgentSessionEvent): void {
 			setState("streaming", false);
 			setState("live", "active", false);
 			setState("workingIntent", undefined);
+			// Turn finished below the viewport (user is scrolled up): flag the
+			// answer as unviewed so the roster row shows the yellow unreviewed
+			// dot until the user scrolls to the live edge.
+			if (!state.chatPinned) setState("answerUnviewed", true);
 			// finding #P1: turn ended (streamed text itself is never announced).
 			announceIfReady("agent finished");
 			// Phase 11: desktop notification while the tab is hidden (OSC parity).

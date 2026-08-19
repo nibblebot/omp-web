@@ -197,6 +197,18 @@ export const [state, setState] = createStore({
 	live: { active: false, blocks: [] as Block[], rev: 0 },
 	// --- WebSessionState mirror (verbatim; see protocol state frames) ---
 	streaming: false,
+	// Transcript scroll pin, mirrored from useStickyScroll: true while the
+	// viewport sits at the live edge. Read at turn end to decide
+	// answerUnviewed. Defaults true (a fresh attach lands pinned at the
+	// bottom); the hook keeps it in sync from its pin mutations.
+	chatPinned: true,
+	// A turn ENDED while the transcript was scrolled away from the live edge
+	// (agent_end, src/store/chat.ts) — the finished answer sits below the
+	// viewport, unviewed. Cleared when the user re-pins (scrolls to the
+	// bottom / jump button), when a new turn starts, or on session switch
+	// (all in useStickyScroll / applyEvent). Feeds the attached roster row's
+	// yellow "unreviewed" dot (src/fleet-ui/session-activity.ts).
+	answerUnviewed: false,
 	// TUI-parity dynamic working label (interactive-mode's setWorkingMessage):
 	// the latest tool-call intent ("Reading config files…"), undefined = the
 	// default phrase. Session-scoped; cleared on turn end and transcript resets.

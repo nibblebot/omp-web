@@ -370,6 +370,8 @@
 	background: var(--accent);
 	box-shadow: 0 0 6px var(--accent);
 }
+/* Yellow unreviewed dot: attached session whose turn ended while the
+   transcript was scrolled away from the live edge (answer not yet viewed). */
 .daemon-status-dot[data-activity="unreviewed"] {
 	background: var(--warning);
 	box-shadow: none;
