@@ -2,7 +2,7 @@ import { createSignal, For, Show, type Component } from "solid-js";
 import type { Run } from "../../../chat/tool-runs";
 import { formatDurationMs } from "../../../usage/usage";
 import { ToolStripCard } from "../ToolCard";
-import { AssistantCard } from "./Assistant";
+import { Markdown } from "../../shared/Markdown";
 
 // Expanded run keys, module-level so they survive row re-renders while a run
 // grows (same pattern as DaemonSidebar's activatingIds).
@@ -14,8 +14,9 @@ export function pruneRunOpen(validKeys: ReadonlySet<number>): void {
 	for (const k of expandedRunKeys) if (!validKeys.has(k)) expandedRunKeys.delete(k);
 }
 
-/** Consolidated view: one row per run of consecutive assistant messages and
- *  tool calls, e.g. "4 Read • 2 Glob • 1 thinking • 7 req • 3 turns". */
+/** Consolidated view: one row per run of consecutive tool calls, with thinking
+ *  blocks folded from preceding consumed assistant messages, e.g.
+ *  "4 Read • 2 Glob • 1 thinking • 7 req". */
 export const RunRow: Component<{ run: Run }> = (props) => {
 	const open = () => {
 		void runOpenVersion();
@@ -95,16 +96,16 @@ export const RunRow: Component<{ run: Run }> = (props) => {
 			</button>
 			<Show when={open()}>
 				<div class="run-row-content">
-					{/* Original stream order: assistant messages (with thinking) and tools interleaved. */}
-					<For each={props.run.items}>
-						{(item) =>
-							item.kind === "tool" ? (
-								<ToolStripCard item={item} />
-							) : (
-								<AssistantCard assistant={item} thinking />
-							)
-						}
+					{/* Folded thinking first: consumed assistant messages always precede the run's tools. */}
+					<For each={props.run.thinking}>
+						{(block) => (
+							<details class="thinking-block">
+								<summary>thinking</summary>
+								<Markdown src={block.text} />
+							</details>
+						)}
 					</For>
+					<For each={props.run.tools}>{(item) => <ToolStripCard item={item} />}</For>
 				</div>
 			</Show>
 		</div>

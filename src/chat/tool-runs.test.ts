@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Block, ChatItem, ToolItem, ToolStatus } from "../state";
-import { groupAssistantRuns, type Run } from "./tool-runs";
+import { groupToolRuns, type Run } from "./tool-runs";
 
 function tool(id: number, name: string, status: ToolStatus = "done"): ToolItem {
 	return { kind: "tool", id, toolCallId: `t${id}`, name, args: null, status, output: "" };
@@ -55,164 +55,200 @@ function notice(id: number): ChatItem {
 	return { kind: "notice", id, level: "info", message: "" };
 }
 
-/** Expected run, derived from the ordered member sequence so assertions pin
- *  stream order and the aggregated counters in one place. */
-function run(key: number, items: Array<Extract<ChatItem, { kind: "assistant" }> | ToolItem>): Run {
+/** Expected run. Only tools are members; folded-in assistant data is passed via
+ *  opts so assertions pin consumption direction and the aggregated counters. */
+function run(
+	key: number,
+	tools: ToolItem[],
+	opts: {
+		thinking?: Block[];
+		consumedAssistantIds?: number[];
+		turnCount?: number;
+		durationMs?: number;
+	} = {},
+): Run {
 	return {
 		key,
-		items,
-		tools: items.filter((it): it is ToolItem => it.kind === "tool"),
-		thinking: items.flatMap((it) =>
-			it.kind === "assistant" ? it.blocks.filter((b) => b.kind === "thinking") : [],
-		),
-		turnCount: items.filter((it) => it.kind === "assistant").length,
-		requestCount: items.filter((it) => it.kind === "tool").length,
-		errorCount: items.filter((it): it is ToolItem => it.kind === "tool" && it.status === "error")
-			.length,
-		durationMs: items.reduce(
-			(sum, it) =>
-				it.kind === "assistant" &&
-				typeof it.duration === "number" &&
-				Number.isFinite(it.duration) &&
-				it.duration >= 0
-					? sum + it.duration
-					: sum,
-			0,
-		),
-		running: items.some((it): it is ToolItem => it.kind === "tool" && it.status === "running"),
+		tools,
+		thinking: opts.thinking ?? [],
+		consumedAssistantIds: opts.consumedAssistantIds ?? [],
+		turnCount: opts.turnCount ?? 0,
+		requestCount: tools.filter((t) => t.kind === "tool").length,
+		errorCount: tools.filter((t) => t.status === "error").length,
+		durationMs: opts.durationMs ?? 0,
+		running: tools.some((t) => t.status === "running"),
 	};
 }
 
-describe("groupAssistantRuns", () => {
-	test("consecutive assistant turns and tools merge into one run", () => {
-		const items = [
-			assistant(1, [thinking("hmm"), text("ok")]),
-			tool(2, "read"),
-			tool(3, "glob"),
-			assistant(4, [text("done")]),
-		];
-		const runs = groupAssistantRuns(items);
-		expect(runs).toHaveLength(1);
+describe("groupToolRuns", () => {
+	test("contiguous tools merge into one run; key is the first tool id", () => {
+		const items = [tool(1, "read"), tool(2, "glob"), tool(3, "edit")];
+		const runs = groupToolRuns(items);
+		expect(runs).toEqual([run(1, items)]);
 		expect(runs[0]!.key).toBe(1);
-		expect(runs[0]!.items).toEqual(items);
-		expect(runs[0]!.thinking).toEqual([thinking("hmm")]);
-		expect(runs[0]!.turnCount).toBe(2);
-		expect(runs[0]!.requestCount).toBe(2);
-		expect(runs[0]!.errorCount).toBe(0);
-		expect(runs[0]!.running).toBe(false);
+		expect(runs[0]!.consumedAssistantIds).toEqual([]);
+		expect(runs[0]!.turnCount).toBe(0);
 		expect(runs[0]!.durationMs).toBe(0);
 	});
 
-	test("a user item breaks the run", () => {
-		const items = [tool(1, "read"), user(2), assistant(3, [text("hi")])];
-		expect(groupAssistantRuns(items)).toEqual([
+	test("a user item breaks a run and a fresh suffix belongs to the next run", () => {
+		// assistant(3) after the user must be consumed by tool(4), NOT folded into run[1]
+		const items = [tool(1, "read"), user(2), assistant(3, [thinking("h")]), tool(4, "glob")];
+		expect(groupToolRuns(items)).toEqual([
 			run(1, [tool(1, "read")]),
-			run(3, [assistant(3, [text("hi")])]),
+			run(4, [tool(4, "glob")], {
+				thinking: [thinking("h")],
+				consumedAssistantIds: [3],
+				turnCount: 1,
+			}),
 		]);
-		// breakers never join a run and never produce empty runs
-		expect(groupAssistantRuns([user(4), user(5), tool(6, "read")])).toEqual([
-			run(6, [tool(6, "read")]),
-		]);
+	});
+
+	test("a breaker clears a stale assistant suffix so it is never consumed", () => {
+		// assistant(1) precedes the user, so the breaker must drop it entirely
+		const items = [assistant(1, [thinking("h")]), user(2), tool(3, "read")];
+		const runs = groupToolRuns(items);
+		expect(runs).toEqual([run(3, [tool(3, "read")])]);
+		expect(runs[0]!.thinking).toEqual([]);
+		expect(runs[0]!.consumedAssistantIds).toEqual([]);
+		expect(runs[0]!.turnCount).toBe(0);
 	});
 
 	test("a bash item breaks the run", () => {
 		const items = [tool(1, "read"), bash(2), tool(3, "glob")];
-		expect(groupAssistantRuns(items)).toEqual([
-			run(1, [tool(1, "read")]),
-			run(3, [tool(3, "glob")]),
-		]);
+		expect(groupToolRuns(items)).toEqual([run(1, [tool(1, "read")]), run(3, [tool(3, "glob")])]);
 	});
 
 	test("a compaction item breaks the run", () => {
-		const items = [assistant(1, [text("hi")]), compaction(2), assistant(3, [text("bye")])];
-		expect(groupAssistantRuns(items)).toEqual([
-			run(1, [assistant(1, [text("hi")])]),
-			run(3, [assistant(3, [text("bye")])]),
-		]);
+		const items = [tool(1, "read"), compaction(2), tool(3, "glob")];
+		expect(groupToolRuns(items)).toEqual([run(1, [tool(1, "read")]), run(3, [tool(3, "glob")])]);
 	});
 
 	test("a notice item breaks the run", () => {
-		const items = [tool(1, "read"), notice(2), tool(3, "edit")];
-		expect(groupAssistantRuns(items)).toEqual([
-			run(1, [tool(1, "read")]),
-			run(3, [tool(3, "edit")]),
-		]);
+		const items = [tool(1, "read"), notice(2), tool(3, "glob")];
+		expect(groupToolRuns(items)).toEqual([run(1, [tool(1, "read")]), run(3, [tool(3, "glob")])]);
 	});
 
-	test("error and running statuses are counted", () => {
+	test("a thinking-bearing suffix is consumed: thinking folded, ids, turns, durations summed", () => {
+		const items = [
+			assistant(1, [thinking("a"), text("x")], 1200),
+			assistant(2, [thinking("b")], NaN),
+			assistant(3, [text("no-thinking")], -100),
+			assistant(4, [thinking("c")]),
+			assistant(5, [thinking("d"), text("y")], 3400),
+			tool(6, "read"),
+			tool(7, "glob"),
+		];
+		const runs = groupToolRuns(items);
+		expect(runs).toHaveLength(1);
+		expect(runs[0]).toEqual(
+			run(6, [tool(6, "read"), tool(7, "glob")], {
+				thinking: [thinking("a"), thinking("b"), thinking("c"), thinking("d")],
+				consumedAssistantIds: [1, 2, 3, 4, 5],
+				turnCount: 5,
+				durationMs: 4600, // NaN, negative, and missing contribute 0
+			}),
+		);
+	});
+
+	test("a thinking-less suffix before tools is NOT consumed", () => {
+		const items = [assistant(1, [text("hi")], 500), tool(2, "read")];
+		const runs = groupToolRuns(items);
+		expect(runs).toEqual([run(2, [tool(2, "read")])]);
+		expect(runs[0]!.thinking).toEqual([]);
+		expect(runs[0]!.consumedAssistantIds).toEqual([]);
+		expect(runs[0]!.turnCount).toBe(0);
+		expect(runs[0]!.durationMs).toBe(0);
+	});
+
+	test("assistant with thinking but no following tools yields no run", () => {
+		expect(groupToolRuns([assistant(1, [thinking("h")])])).toEqual([]);
+		expect(groupToolRuns([assistant(1, [thinking("h")]), assistant(2, [thinking("g")])])).toEqual(
+			[],
+		);
+	});
+
+	test("a trailing assistant after a run is never consumed", () => {
+		const items = [tool(1, "read"), assistant(2, [thinking("h")], 500)];
+		const runs = groupToolRuns(items);
+		expect(runs).toEqual([run(1, [tool(1, "read")])]);
+		expect(runs[0]!.thinking).toEqual([]);
+		expect(runs[0]!.consumedAssistantIds).toEqual([]);
+		expect(runs[0]!.turnCount).toBe(0);
+		expect(runs[0]!.durationMs).toBe(0);
+	});
+
+	test("tool,tool,assistant(thinking+text),tool -> two runs, second consumes the assistant", () => {
+		const items = [
+			tool(1, "read"),
+			tool(2, "glob"),
+			assistant(3, [thinking("h"), text("payload")]),
+			tool(4, "edit"),
+		];
+		const runs = groupToolRuns(items);
+		expect(runs).toEqual([
+			run(1, [tool(1, "read"), tool(2, "glob")]),
+			run(4, [tool(4, "edit")], {
+				thinking: [thinking("h")],
+				consumedAssistantIds: [3],
+				turnCount: 1,
+			}),
+		]);
+		expect(runs[1]!.thinking).toEqual([thinking("h")]); // text never enters the run
+		expect(runs[1]!.thinking).not.toContain(text("payload"));
+	});
+
+	test("text blocks never enter thinking; multiple thinking blocks keep stream order", () => {
+		const items = [assistant(1, [thinking("b"), text("v"), thinking("a")]), tool(2, "read")];
+		const runs = groupToolRuns(items);
+		expect(runs[0]!.thinking).toEqual([thinking("b"), thinking("a")]);
+		expect(runs[0]!.thinking).not.toContain(text("v"));
+	});
+
+	test("error and running statuses are counted; a done tool never counts as err", () => {
 		const items = [
 			tool(1, "read"),
 			tool(2, "glob", "error"),
 			tool(3, "edit", "running"),
 			tool(4, "bash", "error"),
 		];
-		const runs = groupAssistantRuns(items);
-		expect(runs).toHaveLength(1);
+		const runs = groupToolRuns(items);
+		expect(runs).toEqual([run(1, items)]);
 		expect(runs[0]!.requestCount).toBe(4);
-		expect(runs[0]!.errorCount).toBe(2); // the "done" tool never counts as err
+		expect(runs[0]!.errorCount).toBe(2);
 		expect(runs[0]!.running).toBe(true);
-		expect(runs[0]!.tools).toEqual(items);
 	});
 
-	test("duration sums assistant durations; missing, negative, and NaN contribute zero", () => {
-		const items = [
-			assistant(1, [text("a")], 1200),
-			assistant(2, [text("b")]),
-			assistant(3, [text("c")], 3400),
-			assistant(4, [text("d")], -100),
-			assistant(5, [text("e")], NaN),
-		];
-		const runs = groupAssistantRuns(items);
-		expect(runs).toHaveLength(1);
-		expect(runs[0]!.durationMs).toBe(4600);
-	});
-
-	test("a tools-only run has durationMs 0", () => {
-		expect(groupAssistantRuns([tool(1, "read")])[0]!.durationMs).toBe(0);
-	});
-
-	test("thinking keeps block order and text blocks never count", () => {
-		const runs = groupAssistantRuns([assistant(1, [thinking("a"), text("v"), thinking("b")])]);
-		expect(runs).toHaveLength(1);
-		expect(runs[0]!.thinking).toEqual([thinking("a"), thinking("b")]);
-	});
-
-	test("a lone text-only assistant is a run of one", () => {
-		const a = assistant(1, [text("hi")]);
-		const runs = groupAssistantRuns([a]);
-		expect(runs).toEqual([run(1, [a])]);
-		expect(runs[0]!.turnCount).toBe(1);
-		expect(runs[0]!.requestCount).toBe(0);
-	});
-
-	test("a thinking-less assistant stays in the run", () => {
-		const items = [tool(1, "read"), assistant(2, [text("ok")]), tool(3, "edit")];
-		expect(groupAssistantRuns(items)).toEqual([run(1, items)]);
-	});
-
-	test("a tools-only run is allowed defensively", () => {
-		const runs = groupAssistantRuns([tool(1, "read")]);
-		expect(runs).toEqual([run(1, [tool(1, "read")])]);
-		expect(runs[0]!.turnCount).toBe(0);
-		expect(runs[0]!.requestCount).toBe(1);
+	test("lone assistant input yields no runs", () => {
+		expect(groupToolRuns([assistant(1, [text("hi")])])).toEqual([]);
+		expect(groupToolRuns([assistant(1, [thinking("h")])])).toEqual([]);
 	});
 
 	test("empty input yields no runs", () => {
-		expect(groupAssistantRuns([])).toEqual([]);
+		expect(groupToolRuns([])).toEqual([]);
 	});
 
-	test("a multi-turn loop merges into one run, keeping stream order", () => {
+	test("multiple runs each consume only their own immediately-preceding suffix", () => {
 		const items = [
-			assistant(1, [thinking("one"), text("go")]),
+			assistant(1, [thinking("one")], 100),
 			tool(2, "read"),
-			tool(3, "glob"),
-			assistant(4, [thinking("two"), text("next")]),
-			tool(5, "edit"),
+			user(3),
+			assistant(4, [thinking("two")], 200),
+			tool(5, "glob"),
 		];
-		const runs = groupAssistantRuns(items);
-		expect(runs).toEqual([run(1, items)]);
-		expect(runs[0]!.thinking).toEqual([thinking("one"), thinking("two")]);
-		expect(runs[0]!.turnCount).toBe(2);
-		expect(runs[0]!.requestCount).toBe(3);
+		expect(groupToolRuns(items)).toEqual([
+			run(2, [tool(2, "read")], {
+				thinking: [thinking("one")],
+				consumedAssistantIds: [1],
+				turnCount: 1,
+				durationMs: 100,
+			}),
+			run(5, [tool(5, "glob")], {
+				thinking: [thinking("two")],
+				consumedAssistantIds: [4],
+				turnCount: 1,
+				durationMs: 200,
+			}),
+		]);
 	});
 });

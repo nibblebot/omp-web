@@ -4,7 +4,7 @@ import type { ImageArg } from "../../../shared/protocol";
 import { FullImageOverlay } from "../shared/ImageScan";
 import { ArrowDownIcon, ExpandIcon } from "../shared/icons";
 import { ToolCard, ToolStripCard } from "./ToolCard";
-import { groupAssistantRuns, type Run } from "../../chat/tool-runs";
+import { groupToolRuns, type Run } from "../../chat/tool-runs";
 import { useStickyScroll } from "./useStickyScroll";
 import { LiveBlock } from "./StreamingText";
 import {
@@ -26,32 +26,28 @@ export const MessageList: Component = () => {
 	const showToolbar = createMemo(
 		() => state.toolCardsView !== "expanded" || state.items.some((it) => it.kind === "tool"),
 	);
-	// id → run, for the consolidated view; read only in the tool/assistant
+	// Consolidated view: every tool id → its run, plus the set of assistant ids
+	// whose thinking was folded into a run. Read only in the tool/assistant
 	// branches while consolidated, so expanded/collapsed rows never re-render on appends.
 	const runOf = createMemo(() => {
 		const m = new Map<number, Run>();
+		const consumedIds = new Set<number>();
 		const keys: number[] = [];
-		for (const run of groupAssistantRuns(state.items)) {
+		for (const run of groupToolRuns(state.items)) {
 			keys.push(run.key);
-			for (const item of run.items) m.set(item.id, run);
+			for (const t of run.tools) m.set(t.id, run);
+			for (const id of run.consumedAssistantIds) consumedIds.add(id);
 		}
 		// Drop expanded-run keys that no longer exist (session switches reset ids).
 		pruneRunOpen(new Set(keys));
-		return m;
+		return { m, consumedIds };
 	});
 	// The run an item leads (its first member), or null — the consolidated view
 	// renders one row per run on the first member's slot.
 	const leadRun = (item: ToolItem) => {
-		const run = runOf().get(item.id);
+		const run = runOf().m.get(item.id);
 		return run && run.key === item.id ? run : null;
 	};
-	// The transcript's final assistant message (usually the summary of changes
-	// and verifications): in consolidated view it pops out of the last run's
-	// row and renders as a full card after it, excluded from the expansion.
-	const lastAssistantId = createMemo(() => {
-		const assistants = state.items.filter((i) => i.kind === "assistant");
-		return assistants.length > 0 ? assistants[assistants.length - 1].id : undefined;
-	});
 	return (
 		<>
 			<Show when={showToolbar()}>
@@ -93,34 +89,13 @@ export const MessageList: Component = () => {
 											when={state.toolCardsView === "consolidated"}
 											fallback={<AssistantCard assistant={assistant()} thinking />}
 										>
-											{/* Consolidated: the run row owns the whole run; the text stays a message. The
-									    transcript's final assistant message (usually the summary) pops out and
-									    renders as a full card after the run row, excluded from its expansion. */}
-											<Show
-												when={runOf().get(assistant().id)}
-												keyed
-												fallback={<AssistantCard assistant={assistant()} thinking />}
-											>
-												{(run) => {
-													// Final summary: pops out of the run (only when it ends the run — a
-													// tool-calling message keeps its tools inside the row).
-													const lastPopped =
-														run.items[run.items.length - 1]?.id === lastAssistantId();
-													if (assistant().id === lastAssistantId() && lastPopped) {
-														return <AssistantCard assistant={assistant()} thinking />;
-													}
-													if (run.key !== assistant().id) return null; // members render inside the run row
-													return run.tools.length > 0 ||
-														run.thinking.length > 0 ||
-														run.items.length > 1 ? (
-														<RunRow
-															run={lastPopped ? { ...run, items: run.items.slice(0, -1) } : run}
-														/>
-													) : (
-														<AssistantCard assistant={assistant()} thinking />
-													); // lone text-only turn stays a plain card
-												}}
-											</Show>
+											{/* Consolidated: assistant messages are never folded into a run row — they
+								    always render as cards. Thinking is hidden only when a following tool run
+								    consumed it (it's shown inside the run row). */}
+											<AssistantCard
+												assistant={assistant()}
+												thinking={!runOf().consumedIds.has(assistant().id)}
+											/>
 										</Show>
 									)}
 								</Match>
