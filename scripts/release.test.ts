@@ -5,7 +5,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFileSync, renameSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
 	changelogSection,
@@ -20,6 +20,7 @@ import {
 	parseGitLog,
 	parseReleaseArgs,
 	prependChangelog,
+	stagedProblems,
 	validateCoverage,
 	validateTarball,
 } from "./release";
@@ -337,7 +338,7 @@ describe("parseReleaseArgs", () => {
 		const r = parseReleaseArgs([]);
 		expect(r.ok).toBe(true);
 		if (r.ok) {
-			expect(r.args).toEqual({ dryRun: false, yes: false, noLlm: false });
+			expect(r.args).toEqual({ dryRun: false, yes: false, noLlm: false, stage: false, go: false });
 		}
 	});
 
@@ -387,5 +388,93 @@ describe("parseReleaseArgs", () => {
 			expect(r.args.yes).toBe(true);
 			expect(r.args.dryRun).toBe(true);
 		}
+	});
+
+	test("--stage and --go parse", () => {
+		const stage = parseReleaseArgs(["0.2.0", "--stage"]);
+		expect(stage.ok).toBe(true);
+		if (stage.ok) expect(stage.args.stage).toBe(true);
+		const go = parseReleaseArgs(["--go"]);
+		expect(go.ok).toBe(true);
+		if (go.ok) expect(go.args.go).toBe(true);
+	});
+
+	test("--stage and --go are mutually exclusive", () => {
+		const r = parseReleaseArgs(["--stage", "--go"]);
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.error).toContain("mutually exclusive");
+	});
+
+	test("--go rejects a version and generation flags", () => {
+		for (const argv of [
+			["--go", "0.2.0"],
+			["--go", "--no-llm"],
+			["--go", "--notes-file", "notes.md"],
+		]) {
+			const r = parseReleaseArgs(argv);
+			expect(r.ok).toBe(false);
+			if (!r.ok) expect(r.error).toContain("--go publishes");
+		}
+	});
+});
+
+describe("stagedProblems", () => {
+	const MANIFEST = (sha: string) =>
+		JSON.stringify({ version: "0.1.0", tarball: "omp-web-0.1.0.tgz", sha256: sha }, null, "\t") +
+		"\n";
+	const CHANGELOG = "# Changelog\n\n## v0.1.0 — 2026-08-19\n\n### Features\n- thing\n";
+
+	async function makeStagedDir(): Promise<string> {
+		const dir = tempDir("release-staged-");
+		const tgz = await makeFixtureTgz(dir);
+		const sha = shaOf(readFileSync(tgz));
+		writeFileSync(join(dir, "release-manifest.json"), MANIFEST(sha));
+		writeFileSync(join(dir, "notes.md"), "manual notes\n");
+		return dir;
+	}
+
+	test("accepts a complete valid staged dir", async () => {
+		const dir = await makeStagedDir();
+		expect(await stagedProblems(dir, "0.1.0", CHANGELOG)).toEqual([]);
+	});
+
+	test("reports a manifest version mismatch", async () => {
+		const dir = await makeStagedDir();
+		const sha = shaOf(readFileSync(join(dir, "omp-web-0.1.0.tgz")));
+		writeFileSync(
+			join(dir, "release-manifest.json"),
+			JSON.stringify({ version: "9.9.9", tarball: "omp-web-0.1.0.tgz", sha256: sha }),
+		);
+		const problems = await stagedProblems(dir, "0.1.0", CHANGELOG);
+		expect(problems.some((p) => p.includes("manifest version 9.9.9 != package.json 0.1.0"))).toBe(
+			true,
+		);
+	});
+
+	test("reports a missing notes artifact", async () => {
+		const dir = await makeStagedDir();
+		rmSync(join(dir, "notes.md"));
+		const problems = await stagedProblems(dir, "0.1.0", CHANGELOG);
+		expect(problems.some((p) => p.includes("staged notes missing"))).toBe(true);
+	});
+
+	test("reports a missing manifest", async () => {
+		const dir = await makeStagedDir();
+		rmSync(join(dir, "release-manifest.json"));
+		const problems = await stagedProblems(dir, "0.1.0", CHANGELOG);
+		expect(problems.some((p) => p.includes("staged manifest missing"))).toBe(true);
+	});
+
+	test("reports a changelog lacking the version section", async () => {
+		const dir = await makeStagedDir();
+		const problems = await stagedProblems(dir, "0.1.0", "# Changelog\n\n## v0.0.1 — old\n");
+		expect(problems.some((p) => p.includes("CHANGELOG.md lacks the v0.1.0 section"))).toBe(true);
+	});
+
+	test("reports a sha256 mismatch through the manifest", async () => {
+		const dir = await makeStagedDir();
+		writeFileSync(join(dir, "release-manifest.json"), MANIFEST("0".repeat(64)));
+		const problems = await stagedProblems(dir, "0.1.0", CHANGELOG);
+		expect(problems.some((p) => p.includes("sha256 mismatch"))).toBe(true);
 	});
 });

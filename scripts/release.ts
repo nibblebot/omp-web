@@ -10,7 +10,7 @@
  * degrades to the deterministic fallback on any failure.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import * as readline from "node:readline/promises";
 import { compareVersions, sha256Of } from "../cli/update";
 
@@ -58,7 +58,7 @@ const COMMIT_CLASSES: Record<CommitClass, true> = {
 };
 
 const USAGE =
-	"usage: bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm] [--notes-file <path>]";
+	"usage: bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm] [--notes-file <path>] [--stage | --go]";
 
 /** Parsed CLI surface for the release orchestrator. */
 export interface ReleaseArgs {
@@ -69,13 +69,17 @@ export interface ReleaseArgs {
 	noLlm: boolean;
 	/** Manual release notes for gh (markdown file); else the changelog section. */
 	notesFile?: string;
+	/** Generate + validate everything, then stop before publishing (review mode). */
+	stage: boolean;
+	/** Publish a previously staged release (no generation). */
+	go: boolean;
 }
 
 /** Pure argv parsing: flags, one optional positional version. */
 export function parseReleaseArgs(
 	argv: string[],
 ): { ok: true; args: ReleaseArgs } | { ok: false; error: string } {
-	const args: ReleaseArgs = { dryRun: false, yes: false, noLlm: false };
+	const args: ReleaseArgs = { dryRun: false, yes: false, noLlm: false, stage: false, go: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--dry-run") {
@@ -96,10 +100,33 @@ export function parseReleaseArgs(
 			args.notesFile = value;
 			continue;
 		}
+		if (arg === "--stage") {
+			args.stage = true;
+			continue;
+		}
+		if (arg === "--go") {
+			args.go = true;
+			continue;
+		}
 		if (arg.startsWith("-") || args.version !== undefined) {
 			return { ok: false, error: `unknown flag: ${arg}` };
 		}
 		args.version = arg;
+	}
+	if (args.stage && args.go) return { ok: false, error: "--stage and --go are mutually exclusive" };
+	if (args.go) {
+		if (args.version !== undefined)
+			return { ok: false, error: "--go publishes the staged release; pass no version" };
+		if (args.noLlm)
+			return {
+				ok: false,
+				error: "--go publishes the staged release; it does not generate a changelog",
+			};
+		if (args.notesFile !== undefined)
+			return {
+				ok: false,
+				error: "--go publishes the staged release; edit dist-release/notes.md to change the notes",
+			};
 	}
 	return { ok: true, args };
 }
@@ -368,11 +395,286 @@ function buildChangelog(
 	return changelogSection(version, date, draft?.overview ?? null, finalGroups);
 }
 
+/** Clean tree, with a hint when a staged release is present. */
+async function checkCleanTree(): Promise<void> {
+	const porcelain = await run(["git", "status", "--porcelain"]);
+	const dirty = porcelain.stdout.toString().trim();
+	if (dirty === "") {
+		console.log("release: ok clean working tree");
+		return;
+	}
+	const lines = dirty.split("\n").filter(Boolean);
+	const stagedOnly = lines.every((l) => l === " M package.json" || l === " M CHANGELOG.md");
+	const hint = stagedOnly
+		? "\n(staged release present — run `bun scripts/release.ts --go` to publish, or `git restore package.json CHANGELOG.md` to discard)"
+		: "";
+	fail(`working tree not clean:\n${dirty}${hint}`);
+}
+
+async function checkBranchMain(): Promise<void> {
+	const branch = (await run(["git", "branch", "--show-current"])).stdout.toString().trim();
+	if (branch !== "main") fail(`not on branch main (on ${branch})`);
+	console.log("release: ok on branch main");
+}
+
+async function checkGhAuth(): Promise<void> {
+	const auth = await run(["gh", "auth", "status"]);
+	if (auth.status !== 0) fail(`gh auth status failed (exit ${auth.status})${tail(auth.stderr)}`);
+	console.log("release: ok gh authenticated");
+}
+
+async function checkOrigin(): Promise<void> {
+	const remotes = (await run(["git", "remote"])).stdout
+		.toString()
+		.split("\n")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+	if (!remotes.includes("origin")) fail(`no origin remote (have: ${remotes.join(", ") || "none"})`);
+	console.log("release: ok origin remote present");
+}
+
+/** Tag absent locally and on origin (ls-remote failure = remote unreachable). */
+async function checkTagAbsent(tag: string): Promise<void> {
+	const localTag = await run(["git", "tag", "-l", tag]);
+	if (localTag.stdout.toString().trim() === tag) fail(`tag ${tag} already exists locally`);
+	console.log(`release: ok tag ${tag} absent locally`);
+	const remoteTag = await run(["git", "ls-remote", "origin", `refs/tags/${tag}`]);
+	if (remoteTag.status !== 0) {
+		fail(
+			`git ls-remote origin failed (remote must exist and be reachable)${tail(remoteTag.stderr)}`,
+		);
+	}
+	if (remoteTag.stdout.toString().trim() !== "") fail(`tag ${tag} already exists on origin`);
+	console.log(`release: ok tag ${tag} absent on origin`);
+}
+
+/**
+ * Problems with a staged release dir (empty = valid): the manifest must exist
+ * and match the version, the notes artifact must exist, the tarball must pass
+ * validateTarball against the manifest sha256, and CHANGELOG.md must carry the
+ * version's section. Pure FS checks — no git/gh/network.
+ */
+export async function stagedProblems(
+	dir: string,
+	version: string,
+	changelog: string,
+): Promise<string[]> {
+	const problems: string[] = [];
+	const manifestPath = join(dir, MANIFEST_NAME);
+	const tarballPath = join(dir, `omp-web-${version}.tgz`);
+	const notesPath = join(dir, "notes.md");
+	if (!existsSync(manifestPath)) problems.push(`staged manifest missing: ${manifestPath}`);
+	if (!existsSync(notesPath)) problems.push(`staged notes missing: ${notesPath}`);
+	if (existsSync(manifestPath)) {
+		let manifest: { version?: unknown; tarball?: unknown; sha256?: unknown };
+		try {
+			manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as typeof manifest;
+		} catch {
+			problems.push(`staged manifest not parseable: ${manifestPath}`);
+			return problems;
+		}
+		if (manifest.version !== version) {
+			problems.push(`manifest version ${String(manifest.version)} != package.json ${version}`);
+		}
+		if (manifest.tarball !== `omp-web-${version}.tgz`) {
+			problems.push(`manifest tarball ${String(manifest.tarball)} != omp-web-${version}.tgz`);
+		}
+		if (typeof manifest.sha256 !== "string") {
+			problems.push("manifest has no sha256");
+		} else {
+			problems.push(...(await validateTarball(tarballPath, version, manifest.sha256)));
+		}
+	}
+	if (!changelog.includes(`## v${version} —`)) {
+		problems.push(`CHANGELOG.md lacks the v${version} section`);
+	}
+	return problems;
+}
+
+/** git add package.json + CHANGELOG.md, commit "release: <tag>", tag, push. */
+async function commitTagPush(tag: string): Promise<void> {
+	const addRes = await run(["git", "add", "package.json", "CHANGELOG.md"]);
+	if (addRes.status !== 0) fail(`git add failed (exit ${addRes.status})${tail(addRes.stderr)}`);
+	const commitRes = await run(["git", "commit", "-m", `release: ${tag}`]);
+	if (commitRes.status !== 0)
+		fail(`git commit failed (exit ${commitRes.status})${tail(commitRes.stderr)}`);
+	console.log("release: ok committed");
+	const tagRes = await run(["git", "tag", tag]);
+	if (tagRes.status !== 0) fail(`git tag failed (exit ${tagRes.status})${tail(tagRes.stderr)}`);
+	console.log(`release: ok tagged ${tag}`);
+	const pushRes = await run(["git", "push", "origin", "main", "--follow-tags"]);
+	if (pushRes.status !== 0) fail(`git push failed (exit ${pushRes.status})${tail(pushRes.stderr)}`);
+	console.log("release: ok pushed to origin main");
+}
+
+/** gh release create: full, published, non-draft/non-prerelease, both assets. */
+async function createRelease(tag: string, version: string, notesContent?: string): Promise<void> {
+	// With notesContent the changelog/manual notes are written fresh; without
+	// (--go) the staged notes.md artifact is used as-is.
+	if (notesContent !== undefined) writeFileSync(`${ARTIFACT_DIR}notes.md`, notesContent);
+	console.log("release: running gh release create");
+	const relRes = await run([
+		"gh",
+		"release",
+		"create",
+		tag,
+		`${ARTIFACT_DIR}omp-web-${version}.tgz`,
+		`${ARTIFACT_DIR}${MANIFEST_NAME}`,
+		"--repo",
+		GITHUB_REPO,
+		"--title",
+		tag,
+		"--notes-file",
+		`${ARTIFACT_DIR}notes.md`,
+	]);
+	if (relRes.status !== 0)
+		fail(`gh release create failed (exit ${relRes.status})${tail(relRes.stderr)}`);
+	console.log("release: ok release created");
+}
+
+/**
+ * Verify the stable latest-download channel reports the new version, then
+ * cross-check the downloadable tarball's sha256 (bounded: 12 x 5s).
+ */
+async function verifyChannel(version: string): Promise<void> {
+	let verified = false;
+	let lastErr = "unknown error";
+	for (let attempt = 1; attempt <= 12 && !verified; attempt++) {
+		const manifestRes = await run(["curl", "-fsSL", `${GITHUB_RELEASES_BASE}/${MANIFEST_NAME}`]);
+		if (manifestRes.status === 0) {
+			try {
+				const remoteManifest = JSON.parse(manifestRes.stdout.toString()) as {
+					version?: string;
+					tarball?: string;
+					sha256?: string;
+				};
+				if (remoteManifest.version === version) {
+					const tarballRes = await run([
+						"curl",
+						"-fsSL",
+						`${GITHUB_RELEASES_BASE}/${remoteManifest.tarball ?? `omp-web-${version}.tgz`}`,
+					]);
+					if (tarballRes.status === 0) {
+						const downloadedSha = sha256Of(tarballRes.stdout);
+						if (downloadedSha === remoteManifest.sha256) {
+							console.log(
+								`release: ok verified manifest + tarball on releases/latest (sha256 ${downloadedSha})`,
+							);
+							verified = true;
+						} else {
+							lastErr = `downloaded tarball sha256 ${downloadedSha} != manifest ${remoteManifest.sha256}`;
+						}
+					} else {
+						lastErr = `tarball download failed (exit ${tarballRes.status}): ${tarballRes.stderr.toString().trim()}`;
+					}
+				} else {
+					lastErr = `manifest reports ${remoteManifest.version}, waiting for ${version}`;
+				}
+			} catch {
+				lastErr = `manifest not parseable: ${manifestRes.stdout.toString().slice(0, 200)}`;
+			}
+		} else {
+			lastErr = `curl manifest failed (exit ${manifestRes.status}): ${manifestRes.stderr.toString().trim()}`;
+		}
+		if (!verified && attempt < 12) {
+			console.log(`release: verify attempt ${attempt} failed (${lastErr}); retrying in 5s`);
+			await Bun.sleep(5000);
+		}
+	}
+	if (!verified) fail(`release verification failed after 12 attempts: ${lastErr}`);
+}
+
+/**
+ * Publish a staged release (--go): verify the staged state (package.json
+ * version, CHANGELOG.md section, dist-release artifacts), then commit/tag/
+ * push and create the GitHub release from the staged artifacts. No
+ * generation, no gates — the --stage run already validated everything.
+ */
+async function publishStaged(opts: { yes: boolean; dryRun: boolean }): Promise<void> {
+	await checkBranchMain();
+	await checkGhAuth();
+	await checkOrigin();
+
+	const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
+	const version = pkg.version;
+	if (!isValidSemver(version)) fail(`staged package.json version ${version} is not plain x.y.z`);
+	const tag = `v${version}`;
+
+	// The tree must carry exactly the staged changes (package.json may be
+	// unmodified on the first release when the version is unchanged).
+	const porcelain = await run(["git", "status", "--porcelain"]);
+	const lines = porcelain.stdout.toString().trim().split("\n").filter(Boolean);
+	const allowed = new Set([" M package.json", " M CHANGELOG.md"]);
+	const bad = lines.filter((l) => !allowed.has(l));
+	if (!lines.some((l) => l === " M CHANGELOG.md")) {
+		fail("no staged CHANGELOG.md — run `bun scripts/release.ts <version> --stage` first");
+	}
+	if (bad.length > 0) {
+		fail(
+			`unexpected working-tree changes (a staged release only touches package.json + CHANGELOG.md):\n${bad.join("\n")}`,
+		);
+	}
+	console.log("release: ok staged tree (package.json + CHANGELOG.md)");
+
+	const problems = await stagedProblems(
+		ARTIFACT_DIR,
+		version,
+		readFileSync("CHANGELOG.md", "utf8"),
+	);
+	if (problems.length > 0) {
+		fail(`staged release invalid:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
+	}
+	console.log("release: ok staged artifacts validated");
+
+	await checkTagAbsent(tag);
+
+	if (opts.dryRun) {
+		console.log("release: ---- dry run (nothing will be written or pushed) ----");
+		console.log(`release: repo: ${GITHUB_REPO}`);
+		console.log(`release: tag: ${tag} (staged)`);
+		console.log(
+			`release: artifacts: ${ARTIFACT_DIR}omp-web-${version}.tgz, ${ARTIFACT_DIR}${MANIFEST_NAME}, ${ARTIFACT_DIR}notes.md`,
+		);
+		console.log("release: commands that would run:");
+		for (const cmd of [
+			"git add package.json CHANGELOG.md",
+			`git commit -m "release: ${tag}"`,
+			`git tag ${tag}`,
+			"git push origin main --follow-tags",
+			`gh release create ${tag} ${ARTIFACT_DIR}omp-web-${version}.tgz ${ARTIFACT_DIR}${MANIFEST_NAME} --repo ${GITHUB_REPO} --title "${tag}" --notes-file ${ARTIFACT_DIR}notes.md`,
+		]) {
+			console.log(`release:   ${cmd}`);
+		}
+		console.log("release: dry run complete; nothing changed");
+		return;
+	}
+
+	if (!opts.yes) {
+		if (!process.stdin.isTTY) fail("refusing to release without a TTY; pass --yes");
+		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+		const answer = await rl.question(`release: publish staged ${tag} on ${GITHUB_REPO}? [y/N] `);
+		rl.close();
+		if (!/^y(?:es)?$/i.test(answer.trim())) {
+			console.log("release: aborted");
+			process.exitCode = 1;
+			return;
+		}
+	}
+
+	await commitTagPush(tag);
+	await createRelease(tag, version);
+	await verifyChannel(version);
+	console.log("release: done");
+	console.log(`release: tag ${tag}`);
+	console.log(`release: release https://github.com/${GITHUB_REPO}/releases/tag/${tag}`);
+}
+
 /**
  * Release orchestrator: preconditions -> commit review -> version -> gate ->
- * changelog -> (dry-run | confirm) -> version write -> build/pack -> manifest
- * -> validate -> commit/tag/push -> gh release -> verify. Never returns a
- * failing state silently: every failure path sets process.exitCode = 1.
+ * changelog -> (dry-run | confirm | stage) -> version write -> build/pack ->
+ * manifest -> validate -> commit/tag/push -> gh release -> verify. Never
+ * returns a failing state silently: every failure path sets process.exitCode
+ * = 1.
  */
 async function release(argv: string[]): Promise<void> {
 	const parsed = parseReleaseArgs(argv);
@@ -381,7 +683,11 @@ async function release(argv: string[]): Promise<void> {
 		process.exitCode = 1;
 		return;
 	}
-	const { version: versionArg, dryRun, yes, noLlm, notesFile } = parsed.args;
+	const { version: versionArg, dryRun, yes, noLlm, notesFile, stage, go } = parsed.args;
+	if (go) {
+		await publishStaged({ yes, dryRun });
+		return;
+	}
 	// Manual notes must exist and be readable before anything else runs.
 	let manualNotes: string | null = null;
 	if (notesFile !== undefined) {
@@ -391,24 +697,10 @@ async function release(argv: string[]): Promise<void> {
 	}
 
 	// 1. Preconditions.
-	const porcelain = await run(["git", "status", "--porcelain"]);
-	if (porcelain.stdout.toString().trim() !== "") {
-		fail(`working tree not clean:\n${porcelain.stdout.toString().trim()}`);
-	}
-	console.log("release: ok clean working tree");
-	const branch = (await run(["git", "branch", "--show-current"])).stdout.toString().trim();
-	if (branch !== "main") fail(`not on branch main (on ${branch})`);
-	console.log("release: ok on branch main");
-	const auth = await run(["gh", "auth", "status"]);
-	if (auth.status !== 0) fail(`gh auth status failed (exit ${auth.status})${tail(auth.stderr)}`);
-	console.log("release: ok gh authenticated");
-	const remotes = (await run(["git", "remote"])).stdout
-		.toString()
-		.split("\n")
-		.map((s) => s.trim())
-		.filter((s) => s.length > 0);
-	if (!remotes.includes("origin")) fail(`no origin remote (have: ${remotes.join(", ") || "none"})`);
-	console.log("release: ok origin remote present");
+	await checkCleanTree();
+	await checkBranchMain();
+	await checkGhAuth();
+	await checkOrigin();
 
 	const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
 	const current = pkg.version;
@@ -469,17 +761,7 @@ async function release(argv: string[]): Promise<void> {
 
 	// Tag absence (local + remote; ls-remote failure = remote unreachable -> fail).
 	const tag = `v${version}`;
-	const localTag = await run(["git", "tag", "-l", tag]);
-	if (localTag.stdout.toString().trim() === tag) fail(`tag ${tag} already exists locally`);
-	console.log(`release: ok tag ${tag} absent locally`);
-	const remoteTag = await run(["git", "ls-remote", "origin", `refs/tags/${tag}`]);
-	if (remoteTag.status !== 0) {
-		fail(
-			`git ls-remote origin failed (remote must exist and be reachable)${tail(remoteTag.stderr)}`,
-		);
-	}
-	if (remoteTag.stdout.toString().trim() !== "") fail(`tag ${tag} already exists on origin`);
-	console.log(`release: ok tag ${tag} absent on origin`);
+	await checkTagAbsent(tag);
 
 	// 4. Gate (skipped in --dry-run; dry-run only previews the plan).
 	// build:web runs before test: the daemon suite asserts static UI serving
@@ -562,12 +844,17 @@ async function release(argv: string[]): Promise<void> {
 			`gh release create ${tag} ${ARTIFACT_DIR}omp-web-${version}.tgz ${ARTIFACT_DIR}${MANIFEST_NAME} --repo ${GITHUB_REPO} --title "${tag}" --notes-file ${ARTIFACT_DIR}notes.md`,
 		];
 		for (const cmd of planned) console.log(`release:   ${cmd}`);
+		console.log(
+			"release: two-phase: append --stage to generate + validate and stop (review), then publish with --go",
+		);
 		console.log("release: dry run complete; nothing changed");
 		return;
 	}
 
-	// 7. Confirm.
-	if (!yes) {
+	// 7. Confirm (skipped in stage mode — it stops after validation).
+	if (stage) {
+		console.log("release: staged mode — skipping publish confirm (stops after validation)");
+	} else if (!yes) {
 		if (!process.stdin.isTTY) fail("refusing to release without a TTY; pass --yes");
 		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 		const answer = await rl.question(
@@ -621,88 +908,22 @@ async function release(argv: string[]): Promise<void> {
 	}
 	console.log("release: ok tarball validated");
 
-	// 12. Commit/tag/push.
-	const addRes = await run(["git", "add", "package.json", "CHANGELOG.md"]);
-	if (addRes.status !== 0) fail(`git add failed (exit ${addRes.status})${tail(addRes.stderr)}`);
-	const commitRes = await run(["git", "commit", "-m", `release: ${tag}`]);
-	if (commitRes.status !== 0)
-		fail(`git commit failed (exit ${commitRes.status})${tail(commitRes.stderr)}`);
-	console.log("release: ok committed");
-	const tagRes = await run(["git", "tag", tag]);
-	if (tagRes.status !== 0) fail(`git tag failed (exit ${tagRes.status})${tail(tagRes.stderr)}`);
-	console.log(`release: ok tagged ${tag}`);
-	const pushRes = await run(["git", "push", "origin", "main", "--follow-tags"]);
-	if (pushRes.status !== 0) fail(`git push failed (exit ${pushRes.status})${tail(pushRes.stderr)}`);
-	console.log("release: ok pushed to origin main");
-
-	// 13. Release (always a full, published, non-draft/non-prerelease release).
-	writeFileSync(`${ARTIFACT_DIR}notes.md`, manualNotes ?? section);
-	console.log("release: running gh release create");
-	const relRes = await run([
-		"gh",
-		"release",
-		"create",
-		tag,
-		tarballPath,
-		`${ARTIFACT_DIR}${MANIFEST_NAME}`,
-		"--repo",
-		GITHUB_REPO,
-		"--title",
-		tag,
-		"--notes-file",
-		`${ARTIFACT_DIR}notes.md`,
-	]);
-	if (relRes.status !== 0)
-		fail(`gh release create failed (exit ${relRes.status})${tail(relRes.stderr)}`);
-	console.log("release: ok release created");
-
-	// 14. Verify the stable latest-download channel reports the new version,
-	// then cross-check the downloadable tarball's sha256 (bounded: 12 x 5s).
-	let verified = false;
-	let lastErr = "unknown error";
-	for (let attempt = 1; attempt <= 12 && !verified; attempt++) {
-		const manifestRes = await run(["curl", "-fsSL", `${GITHUB_RELEASES_BASE}/${MANIFEST_NAME}`]);
-		if (manifestRes.status === 0) {
-			try {
-				const remoteManifest = JSON.parse(manifestRes.stdout.toString()) as {
-					version?: string;
-					tarball?: string;
-					sha256?: string;
-				};
-				if (remoteManifest.version === version) {
-					const tarballRes = await run([
-						"curl",
-						"-fsSL",
-						`${GITHUB_RELEASES_BASE}/${remoteManifest.tarball ?? tarballName}`,
-					]);
-					if (tarballRes.status === 0) {
-						const downloadedSha = sha256Of(tarballRes.stdout);
-						if (downloadedSha === remoteManifest.sha256) {
-							console.log(
-								`release: ok verified manifest + tarball on releases/latest (sha256 ${downloadedSha})`,
-							);
-							verified = true;
-						} else {
-							lastErr = `downloaded tarball sha256 ${downloadedSha} != manifest ${remoteManifest.sha256}`;
-						}
-					} else {
-						lastErr = `tarball download failed (exit ${tarballRes.status}): ${tarballRes.stderr.toString().trim()}`;
-					}
-				} else {
-					lastErr = `manifest reports ${remoteManifest.version}, waiting for ${version}`;
-				}
-			} catch {
-				lastErr = `manifest not parseable: ${manifestRes.stdout.toString().slice(0, 200)}`;
-			}
-		} else {
-			lastErr = `curl manifest failed (exit ${manifestRes.status}): ${manifestRes.stderr.toString().trim()}`;
-		}
-		if (!verified && attempt < 12) {
-			console.log(`release: verify attempt ${attempt} failed (${lastErr}); retrying in 5s`);
-			await Bun.sleep(5000);
-		}
+	// 11b. Stage mode: write the notes artifact and stop before publishing.
+	if (stage) {
+		writeFileSync(`${ARTIFACT_DIR}notes.md`, manualNotes ?? section);
+		console.log("release: ---- staged (nothing published) ----");
+		console.log(`release: tag ${tag} ready; artifacts in ${ARTIFACT_DIR}`);
+		console.log(
+			`release: review: CHANGELOG.md, ${ARTIFACT_DIR}omp-web-${version}.tgz, ${ARTIFACT_DIR}${MANIFEST_NAME}, ${ARTIFACT_DIR}notes.md`,
+		);
+		console.log("release: publish with: bun scripts/release.ts --go [--yes]");
+		return;
 	}
-	if (!verified) fail(`release verification failed after 12 attempts: ${lastErr}`);
+
+	// 12-14. Commit/tag/push, gh release, verify the live channel.
+	await commitTagPush(tag);
+	await createRelease(tag, version, manualNotes ?? section);
+	await verifyChannel(version);
 
 	console.log("release: done");
 	console.log(`release: tag ${tag}`);
