@@ -264,7 +264,27 @@ function buildOverviewPrompt(
 	return lines.join("\n");
 }
 
-/** Parse and shape-validate one chunk's JSON output; null on any mismatch. */
+/**
+ * One bullet per source line with an intact commit link. Model line breaks
+ * (JSON `\n` escapes) would otherwise split a bullet across CHANGELOG lines;
+ * whitespace collapse fixes wrapped prose, and the trailing commit link is
+ * rebuilt from its hash because a wrap can split mid-URL, which collapse
+ * alone cannot repair.
+ */
+function normalizeBullet(bullet: string): string {
+	const collapsed = bullet.replace(/\s+/g, " ").trim();
+	const hashMatch = collapsed.match(/[0-9a-f]{7,40}/);
+	if (hashMatch === null) return collapsed;
+	const linkStart = collapsed.lastIndexOf("([", hashMatch.index);
+	if (linkStart === -1) return collapsed;
+	const prose = collapsed.slice(0, linkStart).trimEnd();
+	return `${prose} ([${hashMatch[0]}](${COMMIT_LINK_BASE}${hashMatch[0]}))`;
+}
+
+/**
+ * Parse and shape-validate one chunk's JSON output; null on any mismatch.
+ * Every bullet is normalized to one line (see normalizeBullet).
+ */
 function parseGroupDraft(text: string): { cls: CommitClass; bullets: string[] } | null {
 	const body = extractJsonObject(text);
 	if (body === null) return null;
@@ -279,7 +299,7 @@ function parseGroupDraft(text: string): { cls: CommitClass; bullets: string[] } 
 	const obj = parsed as Record<string, unknown>;
 	if (typeof obj.cls !== "string" || COMMIT_CLASSES[obj.cls] !== true) return null;
 	if (!Array.isArray(obj.bullets) || !obj.bullets.every((b) => typeof b === "string")) return null;
-	return { cls: obj.cls as CommitClass, bullets: obj.bullets as string[] };
+	return { cls: obj.cls as CommitClass, bullets: (obj.bullets as string[]).map(normalizeBullet) };
 }
 
 /** Parse and shape-validate the overview JSON output; null on any mismatch. */
@@ -296,8 +316,10 @@ function parseOverview(text: string): string | null {
 	// JSON.parse output — shape-validated field by field below.
 	const obj = parsed as Record<string, unknown>;
 	if (typeof obj.overview !== "string") return null;
+	// Collapse model line breaks: the overview is one paragraph in the file.
+	const overview = obj.overview.replace(/\s+/g, " ").trim();
 	// An empty overview means "could not summarize" → omit the paragraph.
-	return obj.overview.trim() === "" ? null : obj.overview;
+	return overview === "" ? null : overview;
 }
 
 /**

@@ -150,6 +150,50 @@ describe("summarizeChangelog with a fake spawn", () => {
 		expect(draft?.groups).toHaveLength(2);
 	});
 
+	test("collapses model line breaks: one bullet per line with an intact link", async () => {
+		const { spawn, calls } = fakeSpawn();
+		// JSON.stringify of a string containing real newlines reproduces the
+		// `\n` escapes a wrapping model emits inside bullet strings.
+		const wrapped = JSON.stringify({
+			cls: "feat",
+			bullets: [
+				"Switch between sessions\nseamlessly. ([a1b2c3d4](https://github.com/nibblebot/omp-web/commit/\na1b2c3d4))",
+				"Pick from custom\nthemes. ([e5f6a7b8](https://github.com/nibblebot/omp-web/commit/e5f6a7b8))",
+			],
+		});
+		const wrappedSpawn: SpawnFn = async (args, prompt) => {
+			calls.push({ args, prompt });
+			if (prompt.includes('"overview"')) return { stdout: OVERVIEW_JSON, code: 0 };
+			if (prompt.includes("### Features")) return { stdout: wrapped, code: 0 };
+			return { stdout: FIX_GROUP_JSON, code: 0 };
+		};
+		const draft = await summarizeChangelog(INPUT, { spawn: wrappedSpawn });
+		expect(draft?.groups).toHaveLength(2);
+		const bullets = draft?.groups.find((g) => g.cls === "feat")?.bullets ?? [];
+		expect(bullets).toEqual([
+			`Switch between sessions seamlessly. ([a1b2c3d4](${COMMIT_LINK_BASE}a1b2c3d4))`,
+			`Pick from custom themes. ([e5f6a7b8](${COMMIT_LINK_BASE}e5f6a7b8))`,
+		]);
+		expect(bullets.join("\n")).not.toContain("\n\n");
+		expect(bullets.join("\n")).not.toContain("commit/ ");
+	});
+
+	test("collapses model line breaks in the overview", async () => {
+		const { spawn, calls } = fakeSpawn();
+		const wrappedOverview = JSON.stringify({
+			overview: "This release adds session switching\nand custom themes, and fixes the\nidle-timeout crash.",
+		});
+		const wrappedSpawn: SpawnFn = async (args, prompt) => {
+			calls.push({ args, prompt });
+			if (prompt.includes('"overview"')) return { stdout: wrappedOverview, code: 0 };
+			if (prompt.includes("### Features")) return { stdout: FEAT_GROUP_JSON, code: 0 };
+			return { stdout: FIX_GROUP_JSON, code: 0 };
+		};
+		const draft = await summarizeChangelog(INPUT, { spawn: wrappedSpawn });
+		expect(draft?.overview).toBe(OVERVIEW);
+		expect(draft?.overview).not.toContain("\n");
+	});
+
 	test("maps an empty overview to null (paragraph omitted)", async () => {
 		const { spawn } = fakeSpawn({ overviewJson: '{"overview": ""}' });
 		const draft = await summarizeChangelog(INPUT, { spawn });
