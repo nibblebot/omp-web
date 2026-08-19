@@ -181,7 +181,8 @@ describe("summarizeChangelog with a fake spawn", () => {
 	test("collapses model line breaks in the overview", async () => {
 		const { spawn, calls } = fakeSpawn();
 		const wrappedOverview = JSON.stringify({
-			overview: "This release adds session switching\nand custom themes, and fixes the\nidle-timeout crash.",
+			overview:
+				"This release adds session switching\nand custom themes, and fixes the\nidle-timeout crash.",
 		});
 		const wrappedSpawn: SpawnFn = async (args, prompt) => {
 			calls.push({ args, prompt });
