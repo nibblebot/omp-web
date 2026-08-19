@@ -650,7 +650,11 @@ export async function registerProjectMainEntry(
 		// supervisor.spawn creates the entry (resolveWorktreeOf leaves main
 		// checkouts untagged) and launches the child; tag the project id
 		// right after.
-		const entry = await supervisor.spawn({ cwd: project.path, template: opts.template, labels: opts.labels });
+		const entry = await supervisor.spawn({
+			cwd: project.path,
+			template: opts.template,
+			labels: opts.labels,
+		});
 		registry.update(entry.daemonId, { projectId: project.projectId });
 		return registry.get(entry.daemonId) ?? entry;
 	}

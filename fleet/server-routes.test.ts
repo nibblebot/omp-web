@@ -168,9 +168,7 @@ describe("fleet control plane", () => {
 			).toHaveLength(1);
 			// The deduped POST creates NO second default workspace: the roster
 			// still holds exactly the first POST's main-checkout entry.
-			expect(
-				server.registry.list().filter((e) => e.cwd === realpathSync(repoDir)),
-			).toHaveLength(1);
+			expect(server.registry.list().filter((e) => e.cwd === realpathSync(repoDir))).toHaveLength(1);
 		} finally {
 			server.registry.removeProject(firstBody.project.projectId);
 		}

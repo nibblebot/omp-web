@@ -386,7 +386,9 @@ describe("registered projects (Phase 2)", () => {
 	test("removeProject drops placeholders with the project but still blocks on any real referencing daemon", async () => {
 		const registry = await loadedRegistry(tmpStatePath());
 		const project = await registry.addProject(await makeRepo());
-		const placeholder = registry.create(baseInit({ projectId: project.projectId, status: "asleep" }));
+		const placeholder = registry.create(
+			baseInit({ projectId: project.projectId, status: "asleep" }),
+		);
 		const live = registry.create(baseInit({ projectId: project.projectId, status: "ready" }));
 		// A real daemon (status "ready") blocks; only its id is named, and
 		// the refused removal leaves the placeholder in place.
