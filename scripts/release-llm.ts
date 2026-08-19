@@ -1,15 +1,23 @@
 /**
  * LLM-assisted changelog summarizer for the release machinery (release-plan.md
- * step 3, "Changelog (LLM-assisted, deterministic structure)").
+ * section 3). Deterministic structure, LLM prose: the caller groups commits
+ * by class; this module runs one prompt per bounded chunk of commits, plus a
+ * final bounded turn for the release overview, and returns a ChangelogDraft.
  *
- * One-turn SDK session over the grouped commit list → a release overview
- * paragraph + polished per-commit bullets. Best-effort by design: every
- * failure path returns null and the caller falls back to the deterministic
- * skeleton (raw subjects, no overview). Never throws.
- *
- * The SDK is imported LAZILY inside the bootstrap — this module's top level
- * imports only node: builtins, so loading the script never pulls the agent
- * stack (the same lazy-import philosophy as fleet/omp-check.ts).
+ * Contracts:
+ * - NEVER throws — every failure path (missing SDK/auth/model, timeout,
+ *   prompt rejection, malformed output) returns null so the caller can fall
+ *   back to the deterministic changelog. A chunk whose output fails to parse
+ *   is skipped (the caller's per-group coverage validation then falls back
+ *   for that group); a chunk timeout aborts the whole LLM path (a stuck
+ *   model would only keep timing out).
+ * - The SDK is imported LAZILY inside the bootstrap (mirrors
+ *   fleet/omp-check.ts): this module's top level imports only node: builtins,
+ *   so the deterministic path loads and its tests pass with no SDK present.
+ * - Chunking exists because a single turn cannot reliably emit one polished
+ *   bullet per commit for hundreds of commits (long structured JSON output
+ *   degrades or times out); per-commit latency is ~7s on the default model,
+ *   so chunk size is bounded.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -35,14 +43,14 @@ export interface SummarizeInput {
 export interface SummarizeOptions {
 	/** Override the omp agent config directory. */
 	agentDir?: string;
-	/** Per-turn wall-clock budget; default 120s. */
+	/** Per-turn wall-clock budget; default 240s (a chunk of ~15 commits runs ~2min). */
 	timeoutMs?: number;
 	/**
 	 * Test seam: replaces the real SDK bootstrap entirely (no SDK import, no
 	 * auth storage, no settings). Receives the bootstrap deps object and must
 	 * return a `{ session: { prompt(text): Promise<unknown>; destroy?() } }`
-	 * shaped object. `prompt` should resolve to the final assistant text (a
-	 * string) — the seam has no event subscription, so text is taken from the
+	 * shaped object. `prompt` should resolve to the assistant text (a string)
+	 * — the seam has no event subscription, so text is taken from the
 	 * resolved value.
 	 */
 	sessionFactory?: (deps: unknown) => Promise<unknown>;
@@ -55,7 +63,8 @@ const COMMIT_CLASSES: Record<string, true> = {
 	fix: true,
 	other: true,
 };
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 240_000;
+const CHUNK_SIZE = 15;
 const COMMIT_LINK_BASE = "https://github.com/nibblebot/omp-web/commit/";
 
 /** Minimal session surface the rest of this module drives. */
@@ -95,6 +104,7 @@ export async function summarizeChangelog(
 	try {
 		cwd = mkdtempSync(join(tmpdir(), "omp-web-release-"));
 		const agentDir = opts?.agentDir ?? process.env.OMP_WEB_RELEASE_AGENT_DIR ?? defaultAgentDir();
+		const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		let session: SessionLike;
 		if (opts?.sessionFactory) {
 			const deps: BootstrapDeps = {
@@ -111,9 +121,51 @@ export async function summarizeChangelog(
 		} else {
 			session = await bootstrapSession(cwd, agentDir);
 		}
-		const text = await runTurn(session, buildPrompt(input), opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-		if (text === null) return null;
-		return parseDraft(text);
+		try {
+			// One prompt per bounded chunk, one group at a time.
+			const drafts: { cls: CommitClass; bullets: string[] }[] = [];
+			for (const group of input.groups) {
+				for (let i = 0; i < group.commits.length; i += CHUNK_SIZE) {
+					const chunk = group.commits.slice(i, i + CHUNK_SIZE);
+					const text = await runTurn(
+						session,
+						buildGroupPrompt(input.version, group.cls, group.heading, chunk),
+						timeoutMs,
+					);
+					if (text === null) return null; // timeout: a stuck model stays stuck
+					const parsed = parseGroupDraft(text);
+					if (parsed === null) continue; // malformed output: skip chunk, caller falls back per group
+					drafts.push(parsed);
+				}
+			}
+			if (drafts.length === 0) return null;
+			// Merge chunk drafts per class: the caller matches draft groups by
+			// cls (validateCoverage), so one class must be one entry.
+			const merged = new Map<CommitClass, string[]>();
+			for (const draft of drafts) {
+				const existing = merged.get(draft.cls) ?? [];
+				existing.push(...draft.bullets);
+				merged.set(draft.cls, existing);
+			}
+			const draftGroups: { cls: CommitClass; bullets: string[] }[] = [...merged.entries()].map(
+				([cls, bullets]) => ({ cls, bullets }),
+			);
+			const overviewText = await runTurn(
+				session,
+				buildOverviewPrompt(input.version, draftGroups),
+				timeoutMs,
+			);
+			const overview = overviewText === null ? null : parseOverview(overviewText);
+			return { overview, groups: draftGroups };
+		} finally {
+			if (typeof session.destroy === "function") {
+				try {
+					await session.destroy();
+				} catch {
+					// Never-throw contract: teardown failures are not results.
+				}
+			}
+		}
 	} catch {
 		return null;
 	} finally {
@@ -208,34 +260,61 @@ function normalizeFactorySession(created: unknown): SessionLike {
 }
 
 /**
- * Deterministic prompt: fixed instruction block (version embedded), the
- * grouped commit list as `### <heading>` + `- <hash> <subject>`, then the
- * strict single-JSON-object output contract.
+ * Deterministic prompt for one chunk of one group: fixed instruction block
+ * (version embedded), the chunk's commits as `### <heading>` +
+ * `- <hash> <subject>`, then the strict single-JSON-object output contract.
  */
-function buildPrompt(input: SummarizeInput): string {
+function buildGroupPrompt(
+	version: string,
+	cls: CommitClass,
+	heading: string,
+	commits: { hash: string; subject: string }[],
+): string {
 	const lines: string[] = [
-		`You are writing the changelog for omp-web ${input.version}.`,
+		`You are writing the changelog for omp-web ${version}.`,
 		"Rewrite each commit below as a polished, user-facing release-note bullet:",
-		"- One bullet per commit, in its group, ending with that commit's hash link.",
+		"- One bullet per commit, ending with that commit's hash link.",
 		"- Imperative voice, at most 20 words per bullet, plain prose.",
 		"- Keep every commit; never invent or drop commits.",
 		"",
 		"Commits to summarize:",
+		`### ${heading}`,
 	];
-	for (const group of input.groups) {
-		lines.push(`### ${group.heading}`);
-		for (const commit of group.commits) {
-			lines.push(`- ${commit.hash} ${commit.subject}`);
-		}
-	}
+	for (const commit of commits) lines.push(`- ${commit.hash} ${commit.subject}`);
 	lines.push(
 		"",
 		"Output ONLY a single JSON object — no prose, no markdown, no code fences — in this shape:",
-		`{ "overview": "<1-3 sentence release summary>", "groups": [{ "cls": "feat", "bullets": ` +
-			`["<bullet> ([<hash>](${COMMIT_LINK_BASE}<hash>))"] }] }`,
-		'- "cls" must be one of: "breaking", "feat", "fix", "other".',
+		`{ "cls": "${cls}", "bullets": ["<bullet> ([<hash>](${COMMIT_LINK_BASE}<hash>))"] }`,
 		"- Every bullet must end with its commit hash link " + `([<hash>](${COMMIT_LINK_BASE}<hash>)).`,
-		'- "overview" may be an empty string only if you cannot summarize; never invent commits.',
+		`- "cls" must be exactly "${cls}".`,
+	);
+	return lines.join("\n");
+}
+
+/**
+ * Deterministic prompt for the release overview: the polished per-group
+ * bullet lists (bounded to the first two bullets per group to keep the turn
+ * cheap), asking for a 1-3 sentence summary.
+ */
+function buildOverviewPrompt(
+	version: string,
+	drafts: { cls: CommitClass; bullets: string[] }[],
+): string {
+	const lines: string[] = [
+		`You are writing the release summary for omp-web ${version}.`,
+		"Here are the changelog sections (first bullets shown):",
+	];
+	for (const draft of drafts) {
+		lines.push(`### ${draft.cls} (${draft.bullets.length} changes)`);
+		for (const bullet of draft.bullets.slice(0, 2)) lines.push(`- ${bullet}`);
+	}
+	lines.push(
+		"",
+		"Write a 1-3 sentence user-facing overview of this release. " +
+			"Never invent details not present above.",
+		"Output ONLY a single JSON object — no prose, no markdown — in this shape:",
+		'{ "overview": "<1-3 sentence release summary>" }',
+		'"overview" may be an empty string only if you cannot summarize.',
 	);
 	return lines.join("\n");
 }
@@ -243,7 +322,8 @@ function buildPrompt(input: SummarizeInput): string {
 /**
  * One turn: race prompt() against the timeout while collecting the final
  * assistant text from events. Resolves the assistant text, or null on
- * timeout/rejection/no text. Always destroys the session.
+ * timeout/rejection/no text. Does NOT destroy the session — the caller owns
+ * teardown across the multi-turn run.
  */
 async function runTurn(
 	session: SessionLike,
@@ -274,13 +354,6 @@ async function runTurn(
 		return capturedText;
 	} finally {
 		unsubscribe?.();
-		if (typeof session.destroy === "function") {
-			try {
-				await session.destroy();
-			} catch {
-				// Never-throw contract: teardown failures are not results.
-			}
-		}
 	}
 }
 
@@ -324,8 +397,26 @@ function assistantTextFromMessages(messages: unknown[]): string | null {
 	return null;
 }
 
-/** Parse and shape-validate the model's JSON output; null on any mismatch. */
-function parseDraft(text: string): ChangelogDraft | null {
+/** Parse and shape-validate one chunk's JSON output; null on any mismatch. */
+function parseGroupDraft(text: string): { cls: CommitClass; bullets: string[] } | null {
+	const body = extractJsonObject(text);
+	if (body === null) return null;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(body);
+	} catch {
+		return null;
+	}
+	if (!isObject(parsed) || Array.isArray(parsed)) return null;
+	// JSON.parse output — shape-validated field by field below.
+	const obj = parsed as Record<string, unknown>;
+	if (typeof obj.cls !== "string" || COMMIT_CLASSES[obj.cls] !== true) return null;
+	if (!Array.isArray(obj.bullets) || !obj.bullets.every((b) => typeof b === "string")) return null;
+	return { cls: obj.cls as CommitClass, bullets: obj.bullets as string[] };
+}
+
+/** Parse and shape-validate the overview JSON output; null on any mismatch. */
+function parseOverview(text: string): string | null {
 	const body = extractJsonObject(text);
 	if (body === null) return null;
 	let parsed: unknown;
@@ -338,22 +429,8 @@ function parseDraft(text: string): ChangelogDraft | null {
 	// JSON.parse output — shape-validated field by field below.
 	const obj = parsed as Record<string, unknown>;
 	if (typeof obj.overview !== "string") return null;
-	if (!Array.isArray(obj.groups)) return null;
-	const groups: ChangelogDraft["groups"] = [];
-	for (const group of obj.groups) {
-		if (!isObject(group) || Array.isArray(group)) return null;
-		const g = group as Record<string, unknown>;
-		if (typeof g.cls !== "string" || COMMIT_CLASSES[g.cls] !== true) return null;
-		if (!Array.isArray(g.bullets) || !g.bullets.every((b) => typeof b === "string")) return null;
-		const cls = g.cls as CommitClass;
-		const bullets = g.bullets as string[];
-		groups.push({ cls, bullets });
-	}
-	return {
-		// An empty overview means "could not summarize" → omit the paragraph.
-		overview: obj.overview.trim() === "" ? null : obj.overview,
-		groups,
-	};
+	// An empty overview means "could not summarize" → omit the paragraph.
+	return obj.overview.trim() === "" ? null : obj.overview;
 }
 
 /**
