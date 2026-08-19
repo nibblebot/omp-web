@@ -60,6 +60,12 @@ describe("fleet edge", () => {
 	let daemonsEntryB: RegistryEntry;
 	let daemonsBrowser: BrowserSocket;
 
+	// Hermetic against the dev-runner override: loadConfig lets
+	// OMP_FLEET_LOCAL_TEMPLATE replace the `local` template, and a shell that
+	// ran `bun run dev` carries it — spawns would launch the real daemon
+	// instead of the printf fake below. Deleted for the suite's lifetime.
+	const savedLocalTemplate = process.env.OMP_FLEET_LOCAL_TEMPLATE;
+	delete process.env.OMP_FLEET_LOCAL_TEMPLATE;
 	beforeAll(async () => {
 		tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-"));
 		statePath = join(tmp, "state.json");

@@ -46,6 +46,18 @@ import { parseContractLine } from "./spawn-parse";
 
 const PROMPT_TEXT = "Reply with exactly: PONG";
 
+// Provider API keys in the SHELL env (a dev machine exports e.g.
+// KIMI_API_KEY) would hand spawned daemons a live model and break the
+// no-model determinism below — Bun.spawn children inherit the ORIGINAL
+// process env, not runtime process.env mutations, so the scrub rides the
+// command line: `env -u KEY …` per exported *_API_KEY / *_AUTH_TOKEN,
+// computed once at module load.
+const PROVIDER_ENV_KEYS = Object.keys(process.env).filter(
+	(k) => k.endsWith("_API_KEY") || k.endsWith("_AUTH_TOKEN"),
+);
+const PROVIDER_ENV_SCRUB_ARGV = ["env", ...PROVIDER_ENV_KEYS.flatMap((k) => ["-u", k])];
+const PROVIDER_ENV_SCRUB_STR = PROVIDER_ENV_SCRUB_ARGV.join(" ");
+
 /**
  * Model determinism: every daemon spawns with PI_CODING_AGENT_DIR pointed at
  * a fresh empty directory inside the suite's tmp root (plus PI_AUTH_NO_BORROW=1
@@ -99,6 +111,8 @@ describe("fleet integration — real omp-session daemons", () => {
 	let configPath: string;
 	let projDirs: string[];
 	let server!: FleetServer;
+	// Saved OMP_FLEET_* env for afterAll restore (see beforeAll scrub).
+	let savedFleetEnv: Record<string, string | undefined> = {};
 	let d1!: RegistryEntry;
 	let d2!: RegistryEntry;
 	let d3!: RegistryEntry;
@@ -182,6 +196,7 @@ describe("fleet integration — real omp-session daemons", () => {
 		extraArgs: string[],
 	): Promise<ExtDaemon> {
 		const command = [
+			...PROVIDER_ENV_SCRUB_ARGV,
 			`PI_CODING_AGENT_DIR=${join(tmp, "agent-" + name)}`,
 			"PI_AUTH_NO_BORROW=1",
 			"bun",
@@ -252,7 +267,10 @@ describe("fleet integration — real omp-session daemons", () => {
 		configPath = join(tmp, "config.json");
 		// Hermetic per-daemon agent dir ({name} expands per daemon in the fleet
 		// templates): no auth, no model cache → every prompt errors (no model).
-		const hermeticEnv = `PI_CODING_AGENT_DIR=${join(tmp, "agent-{name}")} PI_AUTH_NO_BORROW=1`;
+		// PROVIDER_ENV_SCRUB_STR strips shell-exported provider keys the same
+		// way (see module scope) — without it a dev machine's KIMI_API_KEY et al
+		// would give every daemon a live model and turns would SUCCEED.
+		const hermeticEnv = `${PROVIDER_ENV_SCRUB_STR} PI_CODING_AGENT_DIR=${join(tmp, "agent-{name}")} PI_AUTH_NO_BORROW=1`;
 		LOCAL_TEMPLATE = `${hermeticEnv} bun server/index.ts --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`;
 		// Short-idle variant additionally pins the test-only idle-check knob
 		// (500ms tick; default 15s) so the R11 lifecycle runs in seconds.
@@ -275,10 +293,28 @@ describe("fleet integration — real omp-session daemons", () => {
 				defaultTemplate: "local",
 			}),
 		);
+		// Hermetic against the dev-runner override: startFleet -> loadConfig lets
+		// OMP_FLEET_LOCAL_TEMPLATE replace the config file's `local` template
+		// outright (config.ts), and a shell that ran `bun run dev` carries it —
+		// daemons would spawn with the plain dev template (no hermetic env
+		// prefix), land on the REAL agent dir, get a live model, and turns would
+		// SUCCEED, racing the 5s waitMs (flaky ok:true). Deleted for the suite's
+		// lifetime; restored in afterAll.
+		savedFleetEnv = {};
+		for (const key of Object.keys(process.env)) {
+			if (key.startsWith("OMP_FLEET_")) {
+				savedFleetEnv[key] = process.env[key];
+				delete process.env[key];
+			}
+		}
 		server = await startFleet({ port: 0, statePath, configPath });
 	});
 
 	afterAll(async () => {
+		for (const [key, value] of Object.entries(savedFleetEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
 		// Collect every pid we know about BEFORE the HTTP server goes away.
 		const pids = new Set<number>(trackedPids);
 		if (server !== undefined) {

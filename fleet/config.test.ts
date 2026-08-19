@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,19 @@ afterAll(() => {
 });
 
 describe("loadConfig", () => {
+	// Hermetic against the dev-runner override: loadConfig lets
+	// OMP_FLEET_LOCAL_TEMPLATE replace the local template outright, and a
+	// shell that ran `bun run dev` carries it — every template assertion
+	// below would see the override instead of the file/default.
+	const savedLocalTemplate = process.env.OMP_FLEET_LOCAL_TEMPLATE;
+	beforeAll(() => {
+		delete process.env.OMP_FLEET_LOCAL_TEMPLATE;
+	});
+	afterAll(() => {
+		if (savedLocalTemplate === undefined) delete process.env.OMP_FLEET_LOCAL_TEMPLATE;
+		else process.env.OMP_FLEET_LOCAL_TEMPLATE = savedLocalTemplate;
+	});
+
 	test("defaults when the file is missing", async () => {
 		const config = await loadConfig(join(tmpDir(), "nope.json"));
 		expect(config.templates).toEqual({ local: DEFAULT_LOCAL_TEMPLATE });

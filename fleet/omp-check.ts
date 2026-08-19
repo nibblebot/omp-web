@@ -54,17 +54,25 @@ export async function checkOmpSetup(agentDir?: string): Promise<OmpSetupStatus> 
 		const registry = new ModelRegistry(authStorage);
 		await registry.awaitBackgroundRefresh();
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
-		// Providers that could actually authenticate a prompt today.
+		// Providers that could actually authenticate a prompt today. The SDK's
+		// getApiKeyForProvider is ASYNC in current releases — awaiting via
+		// Promise.resolve also tolerates sync versions. A resolved key (or the
+		// kNoAuth sentinel for keyless providers) counts as usable; undefined
+		// means the provider cannot authenticate. (Before the await this filter
+		// compared a PROMISE to undefined — always true — and reported every
+		// available provider as authenticated.)
 		const models = registry.getAvailable();
-		const providers = [...new Set(models.map((m) => m.provider))]
-			.filter((provider) => {
+		const candidates = [...new Set(models.map((m) => m.provider))].sort();
+		const usable = await Promise.all(
+			candidates.map(async (provider) => {
 				try {
-					return registry.getApiKeyForProvider(provider) !== undefined;
+					return (await Promise.resolve(registry.getApiKeyForProvider(provider))) !== undefined;
 				} catch {
 					return false;
 				}
-			})
-			.sort();
+			}),
+		);
+		const providers = candidates.filter((_, i) => usable[i]);
 		// The default-role model selection (the omp TUI /models writes this).
 		const roles = settings.get("modelRoles");
 		const defaultSelector = (roles as Record<string, unknown> | undefined)?.default;

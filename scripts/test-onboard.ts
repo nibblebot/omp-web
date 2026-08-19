@@ -79,8 +79,23 @@ function check(name: string, cond: boolean, detail = ""): void {
 }
 
 function sandboxEnv(extra: Record<string, string> = {}): Record<string, string> {
+	// Strip the product's own env knobs from the inherited shell: a dev
+	// shell's OMP_FLEET_STATE points the sandboxed fleet at the developer's
+	// real (locked) state file, and OMP_FLEET_LOCAL_TEMPLATE would replace the
+	// installed bundle's spawn template with the source entry — defeating the
+	// installed-mode assertions. Script-provided knobs ride `extra` (applied
+	// after the scrub, so they survive).
+	const inherited = Object.fromEntries(
+		Object.entries(process.env).filter(
+			(entry): entry is [string, string] =>
+				typeof entry[1] === "string" &&
+				!entry[0].startsWith("OMP_FLEET_") &&
+				!entry[0].startsWith("OMP_SESSION_") &&
+				!entry[0].startsWith("OMP_WEB_"),
+		),
+	);
 	return {
-		...process.env,
+		...inherited,
 		HOME: home,
 		BUN_INSTALL: bunInstall,
 		PATH: `${binDir}:${process.env.PATH ?? ""}`,

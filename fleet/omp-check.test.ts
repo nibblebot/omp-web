@@ -62,12 +62,16 @@ describe("resolveOmpBinary", () => {
 });
 
 describe("checkOmpSetup (sandboxed empty agent dir)", () => {
-	test("reports no providers and no default model without crashing", async () => {
+	test("never crashes; settings sandbox holds (no default model)", async () => {
 		const dir = tempDir("omp-check");
 		const status = await checkOmpSetup(dir);
 		expect(status.error).toBeNull();
 		expect(Array.isArray(status.providers)).toBe(true);
-		expect(status.providers).toHaveLength(0);
+		// providers CANNOT be asserted empty: the SDK's auth discovery reads the
+		// host agent dir's .env regardless of the agentDir override, so a dev
+		// machine's keys (e.g. moonshot via ~/.omp/agent/.env) leak into the
+		// probe. Settings.loadReadOnly DOES honor the sandbox, so no default
+		// model is the deterministic half of this fixture.
 		expect(status.defaultModel).toBeNull();
 		expect(typeof status.ompInstalled).toBe("boolean");
 	});
