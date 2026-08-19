@@ -41,21 +41,21 @@ colors:
   breakdown-5: "#cfa05a"
 typography:
   body:
-    fontFamily: "system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif"
+    fontFamily: "\"Noto Sans\", system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 400
     lineHeight: 1.5
   mono:
-    fontFamily: "ui-monospace, \"SF Mono\", Menlo, Consolas, \"Liberation Mono\", monospace"
+    fontFamily: "\"Noto Sans Mono\", ui-monospace, \"SF Mono\", Menlo, Consolas, \"Liberation Mono\", monospace"
     fontSize: "0.813rem"
     fontWeight: 400
   title:
-    fontFamily: "system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif"
+    fontFamily: "\"Noto Sans\", system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 600
     lineHeight: 1.5
   label:
-    fontFamily: "system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif"
+    fontFamily: "\"Noto Sans\", system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif"
     fontSize: "0.75rem"
     fontWeight: 600
     letterSpacing: "0.05em"
@@ -144,7 +144,7 @@ Confirmed anti-references: chat-app cosplay (rounded messenger bubbles, avatar p
 - Flat-by-default surfaces; 1px borders do the structural work
 - One accent, used rarely; status speaks in a semantic trio (bg + border + text)
 - Zero font assets — system sans + system mono only
-- Single 140ms ease-out motion vocabulary; six small keyframes; full `prefers-reduced-motion` teardown
+- Single 140ms ease-out motion vocabulary; six small keyframes; motion gated behind `prefers-reduced-motion` where animated
 
 ## Colors
 
@@ -185,8 +185,8 @@ Six palettes share one semantic contract (~40 slots) and one set of scales; them
 
 ## Typography
 
-**Body Font:** system-ui stack (`system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`)
-**Mono Font:** system mono stack (`ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace`)
+**Body Font:** system stack (`"Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`)
+**Mono Font:** system stack (`"Noto Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace`)
 **Display Font:** none — there is no display face and no marketing headline in this UI.
 
 **Character:** the console speaks in two voices — sans for the operator's prose, mono for machine truth (commands, diffs, paths, daemon metadata, the sidebar roster). Both are zero-asset system stacks: the app ships no font files, by doctrine.
@@ -208,24 +208,24 @@ The root font size is user-settable (12–18px, `/settings` parity); every scale
 
 ## Layout
 
-One centered console column, maximum 820px, full viewport height, 16px side padding — the chat thread is the room. In roster mode a 240px sidebar docks on the **right** (`--sidebar-w`), listing daemons grouped by repo; it takes layout space on desktop and becomes a fixed overlay sheet (`width: min(240px, 80vw)`, shadow-2) at ≤720px.
+One centered console column, maximum 820px, full viewport height, 16px side padding — the chat thread is the room. In roster mode a 240px sidebar docks on the **left** (`--sidebar-w`), listing daemons grouped by repo; it takes layout space on desktop and narrows to `width: min(240px, 80vw)` at ≤720px.
 
-Overlays have two geometries: the centered **modal** (min 320px, max 640px, max 80vh) for dialogs, and the right-docked **sheet** (`min(880px, 100vw)`, full height, square outer corners) for working panels — settings, subagents, debug. Sheets go full-viewport at ≤720px, where settings also swaps its nav rail for a tab bar.
+Overlays have two geometries: the centered **modal** (min 320px, max 640px, max 80vh) for dialogs, and the right-docked **sheet** (`min(880px, 100vw)`, full height, square outer corners) for working panels — settings, subagents, debug. Sheets go full-viewport at ≤720px, where settings also swaps its nav rail for a section-picker select.
 
-Rhythm is a 2/4/6/8/12/16/24px spacing scale; cards pad at 8–16px, sections separate at 16–24px. The single breakpoint is 720px. `prefers-reduced-motion: reduce` strips every animation and transition (see Elevation & Depth for what remains).
+Rhythm is a 2/4/6/8/12/16/24px spacing scale; cards pad at 8–16px, sections separate at 16–24px. The shell breakpoint is 720px; the transcripts view adds a 480px breakpoint. `prefers-reduced-motion: reduce` gates animated elements (see Elevation & Depth for what remains).
 
 ## Elevation & Depth
 
 Flat by doctrine. Resting surfaces — cards, chips, sidebar, composer — have zero shadow; structure comes from 1px hairlines and the bg → panel → panel-2 tonal steps. Shadow means one of two things: something is floating above the console, or a status light is lit.
 
 ### Shadow Vocabulary
-- **Overlay lift** (`0 8px 24px rgb(0 0 0 / 0.35)`): modals, the lightbox image, the mobile sidebar sheet. The only structural shadow.
-- **Card kiss** (`0 1px 2px rgb(0 0 0 / 0.25)`): exactly one resting card — the pet. A quirk, not a precedent.
+- **Overlay lift** (`0 8px 24px rgb(0 0 0 / 0.35)`): modals, the lightbox image. The only structural shadow.
+- **Card kiss** (`0 1px 2px rgb(0 0 0 / 0.25)`): `--shadow-1` is reserved for floating action chips (jump-to-bottom, sidebar toggle); the sprite uses its own `--shadow-sprite`. Quirks, not precedent.
 - **Sprite shadow** (`0 2px 6px rgb(0 0 0 / 0.45)`, as `drop-shadow`): canvas sprites only.
 - **Status glows** (`0 0 5–6px <status color>`): streaming/ready/reconnecting/error/transitional dots. Glow is a lamp, not elevation.
 
 ### Named Rules
-**The Flat-By-Default Rule.** Surfaces are flat at rest. Shadow appears only on overlays (`--shadow-2`) or as a status glow. Adding a resting-state shadow to a card is a defect.
+**The Flat-By-Default Rule.** Surfaces are flat at rest. Shadow appears only on overlays (`--shadow-2`, which also covers toasts and the jump-to-bottom hover) or as a status glow. Adding a resting-state shadow to a card is a defect.
 
 ## Shapes
 
@@ -253,7 +253,7 @@ Quiet controls that wake on hover; one primary action per view.
 - **Status dots:** 8px circles (6–7px for nested/secondary), Faint Readout at idle. The roster ladder: ready = Go Green + glow, transitional (spawning/connecting/session/resolving) = Signal Blue + glow + 1.2s pulse, reconnecting = Standby Amber + glow, error = Alarm Red + glow, asleep = Faint Readout with an inset hairline ring
 
 ### Cards / Containers
-- **Tool cards:** Instrument Panel fill, 1px Hairline, 8px radius, 0.857rem text; header pads 8px 12px. Every tool render roots at this shell
+- **Tool cards:** Instrument Panel fill, 1px Hairline, 8px radius, 0.813rem text; header pads 8px 12px. Every tool render roots at this shell
 - **Message bubbles:** user messages float right in Signal Wash (10px radius, max-width 80%); assistant messages are edge-to-edge — no bubble, no card, by design
 - **Code/log wells:** Console Well fill, 6px radius, mono
 - **Thinking blocks:** no card at all — a 2px Hairline left rail plus Muted Readout text
@@ -266,7 +266,7 @@ Quiet controls that wake on hover; one primary action per view.
 
 ### Navigation
 - **Daemon sidebar:** Console Well fill, left hairline, mono 0.75rem; rows are 6px-radius ghosts with a transparent border that fills Hover Wash on hover and Signal Wash + Signal Edge when active; group headers are uppercase tracked labels with a rotating caret; per-row git metadata in micro mono with added/modified/deleted/untracked color coding
-- **Settings:** desktop nav rail swaps to a tab bar at ≤720px; both use the same ghost-row language
+- **Settings:** desktop nav rail swaps to a section-picker select at ≤720px; both use the same ghost-row language
 - **Modals:** Instrument Panel, Hairline Strong border, 10px radius, 16px padding, overlay-lift shadow over the Backdrop scrim; sheets drop radius and keep only their inner border
 
 ### Signature: the roster row
@@ -278,7 +278,7 @@ The daemon roster row is the product in miniature: status dot (the ladder above)
 - **Do** build every surface from the semantic tokens (`var(--bg)`, `var(--panel)`, …) so all six themes stay coherent; themes override colors only.
 - **Do** express status as the full trio (bg + border + text) — queued, ready, error, and diff states all follow it.
 - **Do** keep motion at 140ms ease-out (the single transition vocabulary) and gate anything animated behind `prefers-reduced-motion`.
-- **Do** set machine truth in the mono stack at 0.857rem or smaller; the roster lives at 0.75rem/1.4.
+- **Do** set machine truth in the mono stack at 0.813rem or smaller; the roster lives at 0.75rem/1.4.
 - **Do** let assistant output run edge-to-edge; reserve bubbles for the operator's own messages.
 - **Do** reach for the pill + hairline + trio pattern for any new chip, badge, or status.
 

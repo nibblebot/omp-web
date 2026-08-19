@@ -29,7 +29,7 @@ Two simultaneous differentiators, both user-confirmed:
 ## Operating Context
 
 - The operator runs `bun run dev` (fleet roster, vite :4713 + fleet :4722) or `bun run dev:single` (standalone daemon :4721).
-- Daemons are spawned from user-editable command templates (`~/.omp/fleet/config.json`); remote daemons reached via ssh `-L`, tailnet, or direct.
+- Daemons are spawned from user-editable command templates (`~/.omp-web/config.json`); remote daemons reached via ssh `-L`, tailnet, or direct.
 - Remote sessions are dial-in only: omp-fleet initiates every connection; sandbox images know nothing of the outside world. (Documented security model — factual behavior, not currently pinned as an inviolable constraint; see Capabilities and Constraints.)
 - Collab rooms exist but are CLI/TUI-only; there is deliberately no collab surface in the web UI.
 
@@ -37,7 +37,7 @@ Two simultaneous differentiators, both user-confirmed:
 
 - One app, two modes: standalone (single-session UI, no sidebar) and roster (fleet sidebar, repo-grouped daemon rows, per-row branch + dirty counts, status dots).
 - Wire protocol: SSE + POST only on the agent path; `shared/protocol.ts` is the shared contract, additive changes only, `OMP_PROTO` (currently 2) gates drift.
-- Stack: Bun runtime, Solid.js 1.9, Vite, TypeScript. No compiled omp-fleet binary yet (runs from a checkout; audit #75).
+- Stack: Bun runtime, Solid.js 1.9, Vite, TypeScript. The fleet ships inside the `dist-bundle/cli.js` bundle; there is no separate compiled omp-fleet binary yet (audit #75 open).
 - **Constraints: none pinned for now** (user answer, 2026-08-13). The documented security model (loopback-trusted UI, bearer token off-loopback, dial-in-only remotes, `/download` realpath jail) is factual current behavior but was explicitly not elevated to a binding constraint.
 - Open strategic decisions (audit Phase 7): multi-user/auth (#74), fan-out prompting in the roster UI (#73), fleet binary (#75), remote TLS story (#78), mobile/companion surface (#77).
 

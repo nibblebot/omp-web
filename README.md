@@ -1,15 +1,23 @@
 # omp-web
 
-omp-web is a **web UI for running multiple oh-my-pi sessions, across all your projects and worktrees** — one installed command, one browser UI, N agent sessions.
+omp-web is a **web UI for running multiple oh-my-pi sessions, across all your repos and worktrees** — one installed command, one browser UI, N agent sessions.
 
 <img id="omp-web-demo" src="docs/screenshots/omp-web-demo.gif" alt="omp-web UI demo" width="720">
 
+## Features
 
-- **Fleet Mode** (`omp-web`) — starts the fleet (registry + supervisor + UI server); the browser talks to the fleet, manages project and worktree state, and proxies you through to any daemon. 
+- **Multiple Repos, Multiple Worktrees, Multiple Sessions, one UI.** Start, monitor, and chat with one agent daemon per worktree across every repo.
+- **A full web UI, not a terminal wrapper.** Live-streamed responses, rendered markdown and diffs, tool output, slash commands, prompt history and autocomplete, per-session context/usage meters, and a transcripts/stats view.
+- **Manage Repos and Worktrees from the UI** Register projects (deduped by realpath), create or adopt managed worktrees, and delete them safely — clean-tree-only, `git branch -d`, no `--force`.
+- **CLI for automation** Spawn, stop, remove, inspect, and fan a prompt out to many daemons from the terminal — the same fleet the browser talks to.
+- **Self-updating** `omp-web update` checks the release channel and reinstalls the latest version in one command.
+- **Self-healing** Idle daemons exit after 30 minutes and are respawned on demand; crashed daemons restart with bounded backoff; dropped connections show `reconnecting` and browsers re-attach automatically.
+
+## Runtime Modes
+
+- **Fleet Mode** (`omp-web`) — starts the fleet (registry + supervisor + UI server); the browser talks to the fleet, manages repos and worktree state, and proxies you through to any daemon. 
 - **Single Session Mode** (`omp-web session`) — the browser talks to one session daemon directly; the daemon serves the full single-session UI.
-- **Sessions run as separate processes** — one project directory each, bound at spawn. A daemon hosts one live agent session in-process via the SDK — no child-process JSON-RPC hop — and serves the UI over SSE + POST.
-- **The fleet holds zero agent state.** It registers/restarts daemons, proxies the browser to them, and persists only roster metadata; all agent truth lives in the daemon processes and their `.jsonl` session logs.
-- **Manage multiple repos and worktrees** — added through the UI and persisted to file system.
+- **Sessions run as separate processes** — one worktree directory each, bound at spawn. A daemon hosts one live agent session in-process via the SDK — no child-process JSON-RPC hop — and serves the UI over SSE + POST.
 
 ## Architecture
 
@@ -20,7 +28,7 @@ flowchart TB
   model["Model provider"]
   log["session .jsonl — durable truth"]
 
-  subgraph daemons["agent daemons<br/>one per project (1..N)"]
+  subgraph daemons["agent daemons<br/>one per worktree (1..N)"]
     daemon1["<b>omp-web session</b> <br/>omp SDK daemon"]
     dots["…"]
   end
@@ -65,7 +73,7 @@ omp-web add-worktree <project> <name> [--no-start]      # create a managed workt
 omp-web add-worktree <project> --existing <path>        # adopt an existing one
 omp-web stop <selector> | remove <selector>
 omp-web rm-project <selector> | rm-worktree <daemon-id> [--delete-branch]
-omp-web prompt <selector> <text> [--wait <ms>] [--fan-out]
+omp-web prompt <selector> <text> [--wait <ms>]
 ```
 
 ## Self-update
@@ -108,4 +116,4 @@ bun run test          # full suite; add a file filter: bun scripts/test.ts <file
 bun scripts/test-onboard.ts   # offline distribution E2E (install → serve → spawn → update)
 ```
 
-Dev spawns are wired to the checkout via `OMP_FLEET_LOCAL_TEMPLATE` — no build needed for day-to-day work. Two `bun run dev` in different worktrees conflict on the shared state lock by design; separate fleets need a distinct `OMP_FLEET_STATE`.
+Dev spawns are wired to the checkout via `OMP_FLEET_LOCAL_TEMPLATE` — no build needed for day-to-day work. Dev fleets scope their state per worktree (dev-fleets/<slug>-<hash8>/), so `bun run dev` in different worktrees coexists; same-worktree devs share the state lock.
