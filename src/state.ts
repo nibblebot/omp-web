@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "../shared/protocol";
 import type {
 	AvailableSlashCommand,
@@ -15,6 +15,7 @@ import type {
 	WebSessionState,
 } from "../shared/protocol";
 import { SSE_PING_EVENT } from "../shared/sse";
+import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
 import { scanImages } from "./text/images";
 import type { UsageLike } from "./usage/usage";
 import {
@@ -272,6 +273,11 @@ export const [state, setState] = createStore({
 	// fleet-scoped, not session-scoped). Entries carry projectId/managed
 	// (Phase 5: project-first grouping + managed-worktree eligibility).
 	daemonRoster: [] as DaemonEntry[],
+	// Per-daemon realtime activity (streaming / blocked) fed by the edge's
+	// additive fleet-scoped `daemon_activity` frames (derived from each ready
+	// daemon's tapped stream). Survives resetSessionView / session switches
+	// like daemonRoster; pruned on roster frames for ids that left the fleet.
+	daemonActivity: {} as Record<string, { streaming: boolean; blocked: boolean }>,
 	// Phase 5: first-class registered projects (registered_projects frame;
 	// fleet-scoped like daemonRoster — survives session resets, and
 	// zero-daemon projects still render).
@@ -763,7 +769,19 @@ export function connect(): void {
 		if (frame.type === "attached") {
 			pushDebug("info", "transport", `attached ${frame.sessionId}`);
 			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
+			// Capture the previous session BEFORE the switch overwrites the id:
+			// state.streaming still reflects the prior session here (it is only
+			// overwritten by the next state frame; resetSessionView never touches
+			// it). Switching away MID-STREAM means the abandoned turn's end will
+			// never be observed on this tab (the edge streams live frames only for
+			// the attached daemon) — mark it unread. Attaching the target renders
+			// it read.
+			const prevSessionId = state.currentSessionId;
+			const prevStreaming = state.streaming;
 			setState("currentSessionId", frame.sessionId);
+			if (prevSessionId !== "" && prevSessionId !== frame.sessionId && prevStreaming)
+				markUnread(prevSessionId);
+			clearUnread(frame.sessionId);
 			// Every attach re-primes history from scratch: drop any in-flight
 			// chunked-series accumulation from the previous attach/session.
 			pendingHistory = null;
@@ -947,6 +965,23 @@ export function connect(): void {
 				// grouping + managed-worktree eligibility) — DaemonEntry owns
 				// those fields, so they flow through wholesale with the array.
 				setState("daemonRoster", frame.daemons);
+				// Removed daemons never reuse ids, but don't let the set grow unbounded.
+				pruneUnread(new Set(frame.daemons.map((d) => d.daemonId)));
+				// Same for daemonActivity: drop entries whose id left the roster.
+				// setState MERGES plain-object values, so a shrunken record would
+				// never delete keys — reconcile diffs to the pruned record instead.
+				// Skip it when nothing dropped (no useless store notification).
+				{
+					const kept = new Set(frame.daemons.map((d) => d.daemonId));
+					const current = state.daemonActivity;
+					let dropped = false;
+					const next: Record<string, { streaming: boolean; blocked: boolean }> = {};
+					for (const id of Object.keys(current)) {
+						if (kept.has(id)) next[id] = current[id]!;
+						else dropped = true;
+					}
+					if (dropped) setState("daemonActivity", reconcile(next));
+				}
 				setState("sessionMode", "roster");
 				// Roster truth wins over the attached chat: if the daemon we were
 				// attached to vanished or went asleep, drop the session view (the
@@ -957,6 +992,31 @@ export function connect(): void {
 					"roster",
 					`roster frame: ${frame.daemons.length} daemon${frame.daemons.length === 1 ? "" : "s"}`,
 				);
+				break;
+			}
+			case "daemon_activity": {
+				// Edge-generated, fleet-scoped realtime activity for ANY ready daemon.
+				// It carries no sessionId, so it sails past the stale-frame guard above
+				// untouched (per-daemon, not per-attachment) and applies regardless of
+				// which daemon this tab is attached to.
+				// Snapshot the boolean BEFORE setState: state.daemonActivity[...] is a
+				// live store proxy, so reading prev.streaming after the set would see
+				// the NEW value and the completion edge would never fire.
+				const wasStreaming = state.daemonActivity[frame.daemonId]?.streaming === true;
+				setState("daemonActivity", frame.daemonId, {
+					streaming: frame.streaming,
+					blocked: frame.blocked,
+				});
+				// Unread-on-completion: a detached turn's END is now observable in
+				// realtime — this is the original unread semantic (in_progress → idle
+				// while unfocused) that the old switch-away-only mark could not cover.
+				// Skip the attached daemon (its live signals are on-screen anyway). The
+				// switch-away-mid-stream mark in the `attached` handler stays as
+				// belt-and-suspenders for edges/old fleets that never send this frame;
+				// the precedence in session-activity hides it while the daemon still
+				// streams (remote live truth beats the unread latch).
+				if (wasStreaming && !frame.streaming && frame.daemonId !== state.currentSessionId)
+					markUnread(frame.daemonId);
 				break;
 			}
 			case "daemon_status": {

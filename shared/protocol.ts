@@ -285,6 +285,9 @@ export interface DaemonEntry {
 	mode: "spawned" | "attached" | "remote";
 	status: DaemonStatus;
 	lastSessionFile?: string;
+	/** Title of the daemon's last session file (source: fleet edge roster, probed from the
+	 *  lastSessionFile JSONL title slot; older edges omit it; never probed for remote entries). */
+	sessionTitle?: string;
 	readyAt?: number;
 	uptime?: number;
 	pid?: number;
@@ -603,6 +606,19 @@ export type ServerFrame =
 	// Global broadcast + unicast answer; the roster-mode sidebar's source.
 	| { type: "roster"; daemons: DaemonEntry[] }
 	| { type: "daemon_status"; daemonId: string; status: DaemonStatus; error?: string }
+	// Edge-generated, fleet-scoped realtime activity for a ready daemon
+	// (streaming / dialog-blocked). Derived by the fleet edge from the tapped
+	// daemon frame stream and broadcast ONLY on change; primed once per known
+	// daemon when a browser stream opens. Never carries a sessionId (it is
+	// per-daemon, not per-attachment), never persisted, and never carries
+	// tokens/endpoints — daemons never send it, so the edge's pipe forwarder
+	// strips it like `daemons` broker rosters.
+	| {
+			type: "daemon_activity";
+			daemonId: string;
+			streaming: boolean;
+			blocked: boolean;
+	  }
 	// Global broadcast: first-class registered projects. Sent when the
 	// registry's project set changes (same trigger as the roster broadcast)
 	// AND during new-stream priming (near the roster frame), so project

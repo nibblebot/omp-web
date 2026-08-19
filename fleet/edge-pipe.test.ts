@@ -450,6 +450,17 @@ describe("edge pipe liveness and replay", () => {
 			token: FAKE_TOKEN,
 			status: "connecting",
 		});
+		// Retain/release must BALANCE: the browser attach retains once (the
+		// pipe) and the browser-gated activity watch retains once more when
+		// the daemon reaches ready; on terminal death both release (pipe
+		// loss + watch reconcile as the status leaves ready). Asserting a
+		// literal 1 would freeze the pre-watch world.
+		let retains = 0;
+		const origRetain = connector.retain.bind(connector);
+		connector.retain = (daemonId: string) => {
+			retains++;
+			origRetain(daemonId);
+		};
 		let releases = 0;
 		const origRelease = connector.release.bind(connector);
 		connector.release = (daemonId: string) => {
@@ -475,7 +486,13 @@ describe("edge pipe liveness and replay", () => {
 			);
 			expect(lost.type).toBe("error");
 			await waitFor(() => (releases >= 1 ? "released" : null), 3000, "pipe retain released");
-			expect(releases).toBe(1);
+			await waitFor(
+				() => (releases === retains ? "balanced" : null),
+				3000,
+				"retain/release balance",
+			);
+			expect(releases).toBe(retains);
+			expect(releases).toBeGreaterThanOrEqual(1);
 		} finally {
 			edge.close();
 			await supervisor.close();

@@ -9,7 +9,15 @@
  */
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Server } from "bun";
@@ -20,6 +28,7 @@ import { DaemonConnector } from "./connector";
 import type { GitResult, GitRunner } from "./discovery";
 import { Registry, type RegistryEntry } from "./registry";
 import { SpawnSupervisor } from "./supervisor";
+import { cleanupTempDirs, tempDir } from "../shared/testkit";
 
 const tmpDirs: string[] = [];
 
@@ -32,6 +41,8 @@ function tmpPath(prefix: string): string {
 afterAll(() => {
 	for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
 });
+
+afterAll(cleanupTempDirs);
 
 // Every fixture a test creates is tracked here so teardown runs even when a
 // test fails mid-body (body-end `await connector.close(); fake.stop();`
@@ -1343,7 +1354,11 @@ describe("SpawnSupervisor", () => {
 		mkdirSync(join(projectDir, "tpl-default"), { recursive: true });
 		mkdirSync(join(projectDir, "tpl-override"), { recursive: true });
 		const scriptDefault = writeChildScript(join(projectDir, "tpl-default"), fake.port, argsDefault);
-		const scriptOverride = writeChildScript(join(projectDir, "tpl-override"), fake.port, argsOverride);
+		const scriptOverride = writeChildScript(
+			join(projectDir, "tpl-override"),
+			fake.port,
+			argsOverride,
+		);
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
 		// The project has a per-repo override; a template-less entry must
@@ -1545,6 +1560,79 @@ describe("git-state polling", () => {
 			branch: "main",
 			git: { added: 0, modified: 0, deleted: 0, untracked: 1 },
 		});
+	});
+
+	test("git-poll probe fills sessionTitle from the last session file and clears it when the file is gone", async () => {
+		const statePath = join(tmpPath("omp-session-sup-title-"), "state.json");
+		const registry = new Registry(statePath);
+		await registry.load();
+		const connector = makeConnector(registry);
+		const supervisor = makeSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), {
+			restartMax: 0,
+		});
+		// Real session file with the fixed-256-byte title slot + header.
+		const sessionDir = tempDir("omp-session-sup-titlefile-");
+		const sessionFile = join(sessionDir, "session.jsonl");
+		const titleLine = (title: string): string => {
+			const json = JSON.stringify({ type: "title", title });
+			if (json.length > 256) throw new Error("test title too long for the slot");
+			return json.padEnd(256, " ") + "\n";
+		};
+		writeFileSync(
+			sessionFile,
+			titleLine("The dashboard title") +
+				JSON.stringify({ type: "session", id: "s1", cwd: "/srv/repos/acme" }) +
+				"\n",
+		);
+		const local = registry.create({
+			name: "l",
+			cwd: "/srv/repos/acme",
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+			lastSessionFile: sessionFile,
+		});
+		let onChange = 0;
+		registry.onChange = () => {
+			onChange++;
+		};
+
+		const { exec, calls } = fakeGitPhases([
+			[
+				{ exitCode: 0, stderr: "", stdout: "## main\n" },
+				{ exitCode: 0, stderr: "", stdout: "" },
+			],
+		]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 25 });
+
+		await waitFor(
+			() =>
+				registry.get(local.daemonId)?.sessionTitle === "The dashboard title" ? "filled" : null,
+			5000,
+			"sessionTitle filled",
+		);
+		// Two broadcasts: the git probe's branch fill (undefined → "main") and
+		// the session-title fill — steady-state ticks change nothing.
+		expect(onChange).toBe(2);
+		const filledAt = calls.length;
+		await waitFor(
+			() => (calls.length >= filledAt + 3 ? "more ticks" : null),
+			5000,
+			"steady-state ticks",
+		);
+		expect(onChange).toBe(2); // no churn on unchanged titles
+		// The title persists with the other entry fields.
+		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
+		expect(onDisk.entries[0].sessionTitle).toBe("The dashboard title");
+
+		unlinkSync(sessionFile);
+		await waitFor(
+			() => (registry.get(local.daemonId)?.sessionTitle === undefined ? "cleared" : null),
+			5000,
+			"sessionTitle cleared",
+		);
+		expect(onChange).toBe(3); // branch fill, title fill, title clear — nothing else
 	});
 
 	test("a probe failure clears previously-set fields, once", async () => {

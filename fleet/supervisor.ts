@@ -20,7 +20,10 @@
  *
  * Git-state polling (startGitStatePolling) keeps every local registry
  * entry's branch + dirty counts fresh for the roster; remote entries are
- * never probed with local git (their cwd is on another host).
+ * never probed with local git (their cwd is on another host). The same poll
+ * derives the entry's last-session-file title (sessionTitle) for the roster
+ * — remote entries are never probed for it either (their session files live
+ * on another host).
  */
 
 import { existsSync } from "node:fs";
@@ -38,6 +41,7 @@ import {
 import type { DaemonConnector } from "./connector";
 import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
 import type { GitRunner } from "./discovery";
+import { readSessionTitle } from "./session-title";
 import type { Registry, RegistryEntry } from "./registry";
 import type { FleetLogLevel } from "./events";
 
@@ -507,6 +511,26 @@ export class SpawnSupervisor {
 		}
 		if (current.branch !== result.branch || !sameGitState(current.git, result.git)) {
 			this.#registry.update(current.daemonId, { branch: result.branch, git: result.git });
+		}
+		await this.#probeSessionTitle(this.#registry.get(entry.daemonId) ?? entry);
+	}
+
+	/**
+	 * Probe one entry's last-session-file title and reconcile the registry.
+	 * Remote entries are never probed (their session files live on another
+	 * host) and neither are entries without a lastSessionFile — same rule as
+	 * the git probe's empty-cwd skip. An update happens only when the title
+	 * actually differs (a no-change keeps the registry quiet: no onChange,
+	 * no roster broadcast); a file that became unreadable/untitled clears a
+	 * previously-set title. The reader never throws.
+	 */
+	async #probeSessionTitle(entry: RegistryEntry): Promise<void> {
+		if (entry.mode === "remote" || entry.cwd === "" || !entry.lastSessionFile) return;
+		const title = await readSessionTitle(entry.lastSessionFile);
+		const current = this.#registry.get(entry.daemonId);
+		if (!current) return; // removed while probing
+		if (current.sessionTitle !== title) {
+			this.#registry.update(current.daemonId, { sessionTitle: title });
 		}
 	}
 

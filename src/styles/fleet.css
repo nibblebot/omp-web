@@ -355,6 +355,39 @@
 	box-shadow: 0 0 6px var(--accent);
 	animation: daemon-dot-pulse 1.2s ease-in-out infinite;
 }
+/* Activity cases repaint the LEFT status dot (single dot, no separate
+   badge): presence of any colored dot means alive. These override the green
+   ready dot — same specificity, later in the cascade wins. A stopped
+   (asleep) row keeps the plain grey dot (no data-activity), and ready+idle
+   keeps green. */
+.daemon-status-dot[data-activity="blocked"] {
+	background: var(--error);
+	box-shadow: 0 0 6px var(--error);
+}
+/* Light-blue unread dot (--accent is the theme's light blue): marked client-
+   side when the user switches away from an in-progress attached session. */
+.daemon-status-dot[data-activity="unread"] {
+	background: var(--accent);
+	box-shadow: 0 0 6px var(--accent);
+}
+.daemon-status-dot[data-activity="unreviewed"] {
+	background: var(--warning);
+	box-shadow: none;
+}
+.daemon-status-dot[data-activity="in_progress"] {
+	background: none;
+	width: 10px;
+	height: 10px;
+	border: 2px solid transparent;
+	border-top-color: var(--success);
+	box-shadow: none;
+	animation: daemon-activity-spin 0.9s linear infinite;
+}
+@keyframes daemon-activity-spin {
+	to {
+		transform: rotate(1turn);
+	}
+}
 @keyframes daemon-dot-pulse {
 	0%,
 	100% {
@@ -598,6 +631,17 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	align-items: center;
 	flex: 1;
 	min-width: 0;
+}
+/* Last-session title under the row's top line (probed by the fleet edge
+   from the session file's JSONL title slot): a muted micro line mirroring
+   the cwd meta line, truncated to one line with the full string on the
+   tooltip. */
+.daemon-session-title {
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .daemon-row-btn {
 	background: none;

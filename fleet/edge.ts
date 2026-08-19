@@ -55,6 +55,16 @@
  *     SSE_BACKPRESSURE_BYTES) is terminated (drop-and-resume): the browser
  *     reconnects with Last-Event-ID and the edge replays its ring. One slow
  *     browser never stalls the daemon stream or other browsers.
+ *   - Real-time daemon activity: the control-socket tap derives per-daemon
+ *     {streaming, blocked} from state / ui_request / ui_request_end and
+ *     broadcasts an edge-generated {type:"daemon_activity"} frame ONLY on
+ *     change (never ringed — re-derivable from the next open's priming).
+ *     While ≥1 browser stream is open, every READY daemon is retained +
+ *     dialed so its activity stays live — which counts as an attached
+ *     client and SUSPENDS those daemons' idle auto-exit until the last
+ *     browser disconnects (then release → 60s idle-drop resumes). See
+ *     docs/architecture.md. daemon_activity is stripped from proxy pipes
+ *     like `daemons` broker rosters.
  *   - Aggregated daemons: every daemon connection (the connector's control
  *     stream and each proxy pipe) is tapped for {type:"daemons"} broker
  *     rosters. The latest roster per daemonId is cached (full-replace),
@@ -123,6 +133,22 @@ const ATTACH_WAIT_READY_MS = 60_000;
 
 /** Reclaim grace for a disconnected browser's ring (Last-Event-ID resume window). */
 const CLIENT_RECLAIM_MS = 60_000;
+
+/**
+ * Per-daemon realtime activity, derived by the edge from the raw tapped
+ * daemon frames (state → isStreaming; ui_request / ui_request_end → the
+ * open-dialog set that drives `blocked`). Starts UNKNOWN per daemon
+ * (`known: false`, nothing derived) until the first derivable frame
+ * arrives. Never carries tokens/endpoints.
+ */
+interface DaemonActivity {
+	/** True once at least one derivable frame has been observed (unknown→known is itself a change). */
+	known: boolean;
+	streaming: boolean;
+	blocked: boolean;
+	/** ui_request ids currently open on the daemon; `blocked` = size > 0. */
+	openDialogIds: Set<string>;
+}
 
 /**
  * Proxy-pipe redial backoff bounds (finding #4). The pipe mirrors the
@@ -427,6 +453,7 @@ export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): Daem
 	if (entry.branch !== undefined) roster.branch = entry.branch;
 	if (entry.git !== undefined) roster.git = { ...entry.git };
 	if (entry.lastSessionFile !== undefined) roster.lastSessionFile = entry.lastSessionFile;
+	if (entry.sessionTitle !== undefined) roster.sessionTitle = entry.sessionTitle;
 	// Liveness facts are meaningless for an asleep daemon; keep them off the
 	// roster even if the registry entry transiently carries stale ones (e.g.
 	// mid-respawn, when the supervisor writes the pid before the child readies).
@@ -463,6 +490,10 @@ export class FleetEdge {
 	readonly #daemonsAggregator = new DaemonsAggregator();
 	/** Control-socket taps per daemonId (unsubscribe fns), reconciled on registry change. */
 	readonly #daemonTaps = new Map<string, () => void>();
+	/** Per-daemon realtime activity, derived in the control-socket tap (browser-gated). */
+	readonly #daemonActivity = new Map<string, DaemonActivity>();
+	/** Ready daemons the edge holds via connector.retain() while ≥1 browser stream is open. */
+	readonly #watchedReady = new Set<string>();
 	/** Keepalive ping events on every open browser stream every SSE_KEEPALIVE_MS. */
 	#keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -477,6 +508,9 @@ export class FleetEdge {
 		// New daemons get a daemons-frame tap; removed ones lose it and their
 		// cached rosters are evicted (broadcast so browsers drop the entries).
 		this.#reconcileDaemonTaps();
+		// Ready daemons that just went live (or just left live) re-pin their
+		// retain/dial while browsers are open; leavers are released exactly once.
+		this.#reconcileActivityRetention();
 		this.#broadcastRoster();
 	};
 
@@ -602,6 +636,8 @@ export class FleetEdge {
 		}
 		for (const unsubscribe of this.#daemonTaps.values()) unsubscribe();
 		this.#daemonTaps.clear();
+		// Edge teardown: release anything the browser-gated watch still holds.
+		this.#stopActivityWatch();
 		this.#stopKeepalive();
 		for (const client of this.#clients.values()) {
 			if (client.gcTimer) clearTimeout(client.gcTimer);
@@ -703,12 +739,37 @@ export class FleetEdge {
 							seq++,
 						),
 					);
+					// Real-time activity priming: one daemon_activity frame per READY
+					// daemon with KNOWN derived activity (unknown ones are omitted —
+					// their first derivable frame broadcasts live right after the
+					// dial below). Edge-local seq, like the rest of the priming group.
+					for (const [daemonId, activity] of this.#daemonActivity) {
+						if (!activity.known) continue;
+						if (this.#registry.get(daemonId)?.status !== "ready") continue;
+						this.#enqueue(
+							stream,
+							encodeSseEvent(
+								SSE_EVENT_NAME,
+								{
+									type: "daemon_activity",
+									daemonId,
+									streaming: activity.streaming,
+									blocked: activity.blocked,
+								},
+								seq++,
+							),
+						);
+					}
 					// Resume: only a delta-era id (≥ SSE_DELTA_SEQ_START) replays
 					// the ring; anything below means priming carries full state.
 					const last = lastEventId === null ? NaN : Number(lastEventId);
 					if (Number.isFinite(last) && last >= SSE_DELTA_SEQ_START) {
 						for (const { value } of client.ring.after(last)) this.#enqueue(stream, value);
 					}
+					// This is now ≥1 open browser stream: retain + dial every ready
+					// daemon so its realtime activity stays live (and its idle
+					// auto-exit is suspended until the last browser disconnects).
+					this.#ensureActivityWatch();
 				},
 				cancel: () => {
 					// The browser went away: close its pipe + release; the
@@ -1536,6 +1597,12 @@ export class FleetEdge {
 				this.#ingestDaemons(pipe.daemonId, frame.daemons as DaemonInfo[]);
 			return;
 		}
+		if (frame.type === "daemon_activity") {
+			// daemon_activity is edge-generated and fleet-scoped: daemons never
+			// send it, but strip it like `daemons` broker rosters if one ever
+			// does — the edge owns the only activity frame browsers see.
+			return;
+		}
 		const stamped =
 			SESSION_SCOPED_FRAME_TYPES[String(frame.type)] === true || frame.type === "attached"
 				? { ...frame, sessionId: pipe.daemonId }
@@ -1818,7 +1885,12 @@ export class FleetEdge {
 		} catch {
 			// Already closed/cancelled.
 		}
-		if (this.#browsers.size === 0) this.#stopKeepalive();
+		if (this.#browsers.size === 0) {
+			this.#stopKeepalive();
+			// Last browser gone: release every retained ready daemon so the
+			// connector's idle-drop re-arms and each daemon's idle auto-exit resumes.
+			this.#stopActivityWatch();
+		}
 	}
 
 	/** The browser's stream ended (client cancel): close pipe + release; keep the ring for resume. */
@@ -1829,7 +1901,10 @@ export class FleetEdge {
 		// superseded by a rebind must not null the client's NEW stream.
 		if (stream.client.stream === stream) stream.client.stream = null;
 		this.#armClientReclaim(stream.client);
-		if (this.#browsers.size === 0) this.#stopKeepalive();
+		if (this.#browsers.size === 0) {
+			this.#stopKeepalive();
+			this.#stopActivityWatch();
+		}
 	}
 
 	/** After a disconnect the client's ring is kept for a grace period, then reclaimed. */
@@ -1875,6 +1950,8 @@ export class FleetEdge {
 			unsubscribe();
 			this.#daemonTaps.delete(daemonId);
 			this.#daemonsAggregator.remove(daemonId);
+			// A removed daemon's activity is gone too — never primed, never broadcast.
+			this.#daemonActivity.delete(daemonId);
 			evicted = true;
 		}
 		for (const entry of this.#registry.list()) {
@@ -1882,12 +1959,147 @@ export class FleetEdge {
 			this.#daemonTaps.set(
 				entry.daemonId,
 				this.#connector.onFrame(entry.daemonId, (frame) => {
-					if (frame.type !== "daemons" || !Array.isArray(frame.daemons)) return;
-					this.#ingestDaemons(entry.daemonId, frame.daemons);
+					// Derive realtime activity from the RAW daemon frames — the tap
+					// sees them BEFORE the edge stamps sessionId on proxy pipes, and
+					// never reads daemon_activity back (daemons never send it; the
+					// pipe forwarder strips it like `daemons` broker rosters).
+					switch (frame.type) {
+						case "daemons":
+							if (Array.isArray(frame.daemons)) this.#ingestDaemons(entry.daemonId, frame.daemons);
+							break;
+						case "state":
+							this.#setActivity(entry.daemonId, { streaming: frame.state?.isStreaming === true });
+							break;
+						case "ui_request": {
+							const activity = this.#ensureActivity(entry.daemonId);
+							if (activity.openDialogIds.has(frame.id)) break; // replay of the same open
+							activity.openDialogIds.add(frame.id);
+							this.#setActivity(entry.daemonId, { blocked: true });
+							break;
+						}
+						case "ui_request_end": {
+							const activity = this.#daemonActivity.get(entry.daemonId);
+							if (activity && activity.openDialogIds.delete(frame.id)) {
+								this.#setActivity(entry.daemonId, { blocked: activity.openDialogIds.size > 0 });
+							}
+							break;
+						}
+						default:
+							break;
+					}
 				}),
 			);
 		}
 		if (evicted) this.#broadcastDaemons();
+	}
+
+	/** Get-or-create a daemon's activity state (starts UNKNOWN). */
+	#ensureActivity(daemonId: string): DaemonActivity {
+		let activity = this.#daemonActivity.get(daemonId);
+		if (!activity) {
+			activity = { known: false, streaming: false, blocked: false, openDialogIds: new Set() };
+			this.#daemonActivity.set(daemonId, activity);
+		}
+		return activity;
+	}
+
+	/**
+	 * Merge one dimension of a daemon's activity and broadcast ONLY on an
+	 * actual change (unknown→known counts as a change so the first derivable
+	 * frame always surfaces). Not broadcast on removal — the roster status
+	 * change dominates the row client-side.
+	 */
+	#setActivity(daemonId: string, patch: { streaming?: boolean; blocked?: boolean }): void {
+		const activity = this.#ensureActivity(daemonId);
+		const changed =
+			!activity.known ||
+			(patch.streaming !== undefined && patch.streaming !== activity.streaming) ||
+			(patch.blocked !== undefined && patch.blocked !== activity.blocked);
+		if (patch.streaming !== undefined) activity.streaming = patch.streaming;
+		if (patch.blocked !== undefined) activity.blocked = patch.blocked;
+		activity.known = true;
+		if (!changed) return;
+		this.#broadcastActivity(daemonId);
+	}
+
+	/**
+	 * Broadcast one daemon_activity frame to every edge stream. NEVER ringed
+	 * (like registered_projects): the frame is re-derivable from the next
+	 * open's priming, and a ring replay after priming would regress the
+	 * client to a stale value.
+	 */
+	#broadcastActivity(daemonId: string): void {
+		const activity = this.#daemonActivity.get(daemonId);
+		if (!activity) return;
+		// A removed daemon's tap is gone, but be defensive: never broadcast
+		// activity for an id the edge no longer manages.
+		if (!this.#registry.get(daemonId)) return;
+		this.#broadcast(
+			{
+				type: "daemon_activity",
+				daemonId,
+				streaming: activity.streaming,
+				blocked: activity.blocked,
+			},
+			{ ring: false },
+		);
+	}
+
+	/**
+	 * Browser-gated retain-all: while ≥1 browser /events stream is open, every
+	 * READY registry daemon keeps a LIVE connector stream (retained so the
+	 * idle-drop is suspended, dialed so frames flow) so its realtime activity
+	 * stays derivable. Never dials non-ready entries — dialing an asleep
+	 * spawned daemon would redial-loop it into `reconnecting`. connect() is a
+	 * no-op when a stream is already open or a dial is in flight.
+	 */
+	#ensureActivityWatch(): void {
+		if (this.#browsers.size === 0) return;
+		for (const entry of this.#registry.list()) {
+			if (entry.status !== "ready") continue;
+			if (!this.#watchedReady.has(entry.daemonId)) {
+				this.#watchedReady.add(entry.daemonId);
+				this.#connector.retain(entry.daemonId);
+			}
+			this.#connector.connect(entry.daemonId);
+		}
+	}
+
+	/**
+	 * Release + forget every retained ready daemon. connector.release() re-arms
+	 * the idle-drop at zero subscribers, so each daemon's own idle auto-exit
+	 * timer resumes — the deliberate accepted consequence of browser-gated
+	 * retention (see docs/architecture.md).
+	 */
+	#stopActivityWatch(): void {
+		for (const daemonId of this.#watchedReady) this.#connector.release(daemonId);
+		this.#watchedReady.clear();
+	}
+
+	/**
+	 * Reconcile the browser-gated retain set against the CURRENT registry
+	 * (ready = the live set): release+forget entries that left ready
+	 * (asleep/error/removed), retain+dial entries that newly reached ready.
+	 * Each daemon is released exactly once and never leaks. No-op while no
+	 * browser is open (a stream close already released everything).
+	 */
+	#reconcileActivityRetention(): void {
+		if (this.#browsers.size === 0) {
+			this.#stopActivityWatch();
+			return;
+		}
+		const current = new Set(
+			this.#registry
+				.list()
+				.filter((entry) => entry.status === "ready")
+				.map((entry) => entry.daemonId),
+		);
+		for (const daemonId of [...this.#watchedReady]) {
+			if (current.has(daemonId)) continue;
+			this.#watchedReady.delete(daemonId);
+			this.#connector.release(daemonId);
+		}
+		this.#ensureActivityWatch();
 	}
 
 	/** Cache a daemon's latest broker roster and broadcast the merged frame. */

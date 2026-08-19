@@ -1,5 +1,7 @@
 import { createMemo, createSignal, For, Show, type Component } from "solid-js";
 import type { DaemonEntry, DaemonStatus } from "../../../shared/protocol";
+import { sessionActivity, type SessionActivity } from "../../fleet-ui/session-activity";
+import { unreadIds } from "../../fleet-ui/unread";
 import {
 	attachSession,
 	removeDaemonById,
@@ -25,12 +27,16 @@ import { DaemonDetailView } from "./DaemonDetailView";
 // already names the project and the path lives in the tooltip/details).
 // ---------------------------------------------------------------------------
 
-/** Roster entries may carry a template name plus per-repo git facts
- *  (branch + porcelain counts + numstat line counts) that the fleet edge
- *  may serialize; protocol.ts DaemonEntry is frozen so read all of them
- *  tolerantly. */
+/** Roster entries may carry a template name, the last-session title, and
+ *  per-repo git facts (branch + porcelain counts + numstat line counts)
+ *  that the fleet edge may serialize; protocol.ts DaemonEntry is frozen so
+ *  read all of them tolerantly. */
 export type RosterEntry = DaemonEntry & {
 	template?: string;
+	/** Title of the daemon's last session file (probed by the fleet edge's
+	 *  git-state poll from the lastSessionFile JSONL title slot; absent for
+	 *  remote entries and older edges). */
+	sessionTitle?: string;
 	/** Current branch of the session cwd; absent for detached/non-git/remote/unprobed. */
 	branch?: string;
 	/** Porcelain file counts, plus numstat line counts when the edge probed
@@ -43,6 +49,17 @@ export type RosterEntry = DaemonEntry & {
 		linesAdded?: number;
 		linesDeleted?: number;
 	};
+};
+
+/** Activity-dot tooltips (sessionActivity state → copy). Only the four
+ *  non-idle states render a dot: blocked → red, in_progress → spinning
+ *  green, unread → light blue, unreviewed → yellow. Idle renders nothing. */
+const ACTIVITY_TITLE: Record<SessionActivity, string> = {
+	in_progress: "in progress",
+	blocked: "blocked — waiting for your input",
+	unread: "unread — finished while viewing another session",
+	unreviewed: "done — not reviewed yet",
+	idle: "idle",
 };
 
 const STATUS_TITLE: Record<DaemonStatus, string> = {
@@ -96,6 +113,60 @@ export const DaemonRow: Component<{
 	// worktree profile, unindented) and drops the project chip + cwd line.
 	const isRoot = () => props.inProjectGroup === true && !isWorktree();
 	const isAttached = () => d().daemonId === state.currentSessionId;
+	/** Attached session's last user/assistant boundary: an assistant item sits
+	 *  last, so the agent finished a turn the user has not answered yet. Skips
+	 *  trailing tool/notice/compaction items — they belong to the same unan-
+	 *  swered turn. Only meaningful for the attached session (other rows have
+	 *  no live chat; the helper falls back to git dirtiness for them). */
+	const unreviewed = createMemo(() => {
+		const items = state.items;
+		for (let i = items.length - 1; i >= 0; i--) {
+			const kind = items[i]!.kind;
+			if (kind === "user") return false;
+			if (kind === "assistant") return true;
+		}
+		return false;
+	});
+	/** Activity dot for THIS row, derived from the attached session's live
+	 *  signals (state.streaming / state.uiRequest / last-answer-unreviewed)
+	 *  plus the edge's per-daemon realtime activity (state.daemonActivity —
+	 *  detached rows now get live blocked/in-progress via daemon_activity
+	 *  frames when the edge broadcasts them), the probed git dirtiness
+	 *  (detached rows without a remote signal only) and the client-side unread
+	 *  set (detached rows marked when a turn's end is observed or the user
+	 *  switches away — see src/fleet-ui/unread.ts). Memoized so only signal
+	 *  flips re-render the row — the store reads inside track
+	 *  state.streaming/state.uiRequest/state.daemonActivity/state.items
+	 *  individually, and idle→dirty refires when the roster broadcast replaces
+	 *  the entry. Only ready rows get a dot (sessionActivity returns null
+	 *  otherwise). */
+	const activity = createMemo(() =>
+		sessionActivity(d(), {
+			attached: isAttached(),
+			streaming: state.streaming,
+			uiPending: state.uiRequest !== null,
+			unreviewed: unreviewed(),
+			// Signal read inside the memo: per-row reactivity off the unread set.
+			unread: unreadIds().has(d().daemonId),
+			// Store read inside the memo = per-row reactivity: undefined for the
+			// attached row, old edges, and daemons whose stream is down.
+			remote: state.daemonActivity[d().daemonId],
+		}),
+	);
+	/** Only the non-idle activity states repaint the LEFT status dot. Idle
+	 *  keeps the plain status dot (green for a live ready row). */
+	const activityDot = createMemo(() => {
+		const a = activity();
+		return a && a !== "idle" ? a : undefined;
+	});
+	/** Copy for the active dot (undefined when idle — the dot keeps the plain
+	 *  status color then). A separate memo so TS narrows the non-idle value
+	 *  for the ACTIVITY_TITLE index instead of re-calling the getter in JSX. */
+	const activityTitle = createMemo(() => {
+		const a = activityDot();
+		return a ? ACTIVITY_TITLE[a] : undefined;
+	});
+
 	const clickable = () => d().status === "ready" || d().status === "asleep";
 	/** Loading phase: activating but the daemon isn't ready yet. Renders with
 	 *  the pulsing transitional ("resolving") visual vocabulary. */
@@ -169,7 +240,10 @@ export const DaemonRow: Component<{
 				<span
 					class="daemon-status-dot"
 					data-status={waking() ? "resolving" : d().status}
-					title={d().status}
+					data-activity={activityDot()}
+					role="status"
+					aria-label={activityTitle() ?? d().status}
+					title={activityTitle() ?? d().status}
 				/>
 				<div class="sidebar-row-main">
 					<div class="sidebar-row-top">
@@ -257,6 +331,17 @@ export const DaemonRow: Component<{
 							</Show>
 						</KebabMenu>
 					</div>
+					{/* Last-session title (probed by the fleet edge from the session
+					    file's JSONL title slot; the worktree row is the motivating
+					    case). Shows on every profile that carries it; the line
+					    truncates and the tooltip exposes the full string. */}
+					<Show when={d().sessionTitle}>
+						{(title) => (
+							<div class="daemon-session-title" title={title()}>
+								{title()}
+							</div>
+						)}
+					</Show>
 					<Show when={!isWorktree() && !isRoot()}>
 						<div class="daemon-chips">
 							<span class="daemon-chip" title={d().cwd}>

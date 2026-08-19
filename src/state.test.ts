@@ -9,6 +9,7 @@ import type {
 	SettingsModel,
 	WebSessionState,
 } from "../shared/protocol";
+import { pruneUnread, unreadIds } from "./fleet-ui/unread";
 import {
 	announce,
 	attachSession,
@@ -196,6 +197,7 @@ beforeEach(() => {
 		// Phase 5 fleet-scoped + modal state: reset for isolation like the rest
 		// (roster frames / picker-gate tests otherwise leak into each other).
 		daemonRoster: [],
+		daemonActivity: {},
 		registeredProjects: [],
 		fleetConfigPath: null,
 		worktreeDeleteInfo: {},
@@ -1742,5 +1744,164 @@ describe("attached session reconciliation against roster truth", () => {
 		setState("currentSessionId", "local-session");
 		setState("daemonRoster", [daemon("local-session", { status: "asleep" })]);
 		expect(hasLiveSession()).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Unread-dot tracking: a session abandoned mid-stream (its turn's end will
+// never be observed on this tab) is marked unread at switch-away time; the
+// row is cleared on attach; dead roster entries are pruned. All client-side.
+// ---------------------------------------------------------------------------
+describe("unread-dot tracking", () => {
+	/** Minimal roster entry (mirrors the reconciliation describe). */
+	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: id,
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			...extra,
+		};
+	}
+
+	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+
+	beforeEach(() => {
+		// Module-level unread state must not leak between tests.
+		pruneUnread(new Set());
+	});
+
+	test("switching away mid-stream marks the abandoned session unread", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+		dispatchSeq(agentStart(), 1024); // driver state.streaming → true
+		expect(state.streaming).toBe(true);
+
+		dispatch(attached("daemon-b"));
+
+		expect(unreadIds().has("daemon-a")).toBe(true);
+		expect(unreadIds().has("daemon-b")).toBe(false);
+	});
+
+	test("switching away while NOT streaming leaves the session read", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+
+		dispatch(attached("daemon-b"));
+
+		expect(unreadIds().has("daemon-a")).toBe(false);
+		expect(unreadIds().has("daemon-b")).toBe(false);
+	});
+
+	test("attaching to a marked session clears its unread dot", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+		dispatchSeq(agentStart(), 1024);
+		dispatch(attached("daemon-b"));
+		expect(unreadIds().has("daemon-a")).toBe(true);
+
+		dispatch(attached("daemon-a"));
+
+		expect(unreadIds().has("daemon-a")).toBe(false);
+	});
+
+	test("a roster frame prunes unread ids for daemons that left", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+		dispatchSeq(agentStart(), 1024);
+		dispatch(attached("daemon-b"));
+		expect(unreadIds().has("daemon-a")).toBe(true);
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-b")] });
+
+		expect(unreadIds().has("daemon-a")).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// daemon_activity: the fleet edge's realtime per-daemon stream (streaming /
+// blocked) for EVERY ready daemon, delivered as additive fleet-scoped frames.
+// It carries no sessionId, so it passes the stale-frame guard untouched. Fed
+// into state.daemonActivity and pruned on roster frames like unread; a
+// detached daemon's observed streaming flip true→false marks it unread.
+// ---------------------------------------------------------------------------
+describe("daemon_activity frames", () => {
+	/** Minimal roster entry (mirrors the unread/reconciliation describes). */
+	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: id,
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			...extra,
+		};
+	}
+
+	beforeEach(() => {
+		// Module-level unread state must not leak between tests.
+		pruneUnread(new Set());
+	});
+
+	test("stores per-daemon activity; an identical repeat is idempotent", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		expect(state.daemonActivity["d2"]).toEqual({ streaming: true, blocked: false });
+
+		// Same values again → no change.
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		expect(state.daemonActivity["d2"]).toEqual({ streaming: true, blocked: false });
+
+		// A later frame for the same daemon updates both fields.
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: true });
+		expect(state.daemonActivity["d2"]).toEqual({ streaming: false, blocked: true });
+	});
+
+	test("a detached daemon's streaming flip true→false marks it unread", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		expect(unreadIds().has("d2")).toBe(false);
+
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+		expect(unreadIds().has("d2")).toBe(true);
+	});
+
+	test("the ATTACHED daemon's turn end is NOT marked unread", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("d2")); // currentSessionId = d2
+
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+
+		expect(unreadIds().has("d2")).toBe(false);
+	});
+
+	test("a roster frame without d2 prunes its daemonActivity entry", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+
+		dispatch({ type: "roster", daemons: [daemon("d1")] });
+
+		expect(state.daemonActivity["d2"]).toBeUndefined();
+
+		// An id still on the roster survives a later roster frame (no flush).
+		dispatch({ type: "daemon_activity", daemonId: "d1", streaming: true, blocked: false });
+		dispatch({ type: "roster", daemons: [daemon("d1")] });
+		expect(state.daemonActivity["d1"]).toEqual({ streaming: true, blocked: false });
 	});
 });

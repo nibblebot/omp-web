@@ -1227,6 +1227,28 @@ describe("edge pure helpers", () => {
 		expect(bare).not.toHaveProperty("git");
 	});
 
+	test("toRosterEntry serializes sessionTitle when present, omits when absent", () => {
+		const entry: RegistryEntry = {
+			daemonId: "d4",
+			name: "n",
+			cwd: "/srv/repos/acme-wt-feature",
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			sessionTitle: "Fix the fleet sidebar",
+			registeredAt: Date.now(),
+		};
+		expect(toRosterEntry(entry).sessionTitle).toBe("Fix the fleet sidebar");
+		// Untouched by serialization: token/endpoint stay off the roster.
+		const secretish = toRosterEntry({ ...entry, token: "tok", endpoint: "ws://x:1" });
+		expect(secretish).not.toHaveProperty("token");
+		expect(secretish).not.toHaveProperty("endpoint");
+		// A cleared title (probe found nothing) must serialize without the key.
+		const cleared = toRosterEntry({ ...entry, sessionTitle: undefined });
+		expect(cleared).not.toHaveProperty("sessionTitle");
+	});
+
 	test("toRosterEntry sets managed only for cwds realpath-under the workspaceDir", () => {
 		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-managed-"));
 		const ws = join(tmp, "workspaces");

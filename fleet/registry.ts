@@ -35,6 +35,8 @@ export interface RegistryEntry extends DaemonEntry {
 		linesAdded?: number;
 		linesDeleted?: number;
 	};
+	/** Title of the daemon's last session file; set by the supervisor's git-state polling probe. */
+	sessionTitle?: string;
 	/** Remote/attached: the ws(s)://host:port as registered. */
 	endpoint?: string;
 	/** Bearer token for dial-in (R14). */
