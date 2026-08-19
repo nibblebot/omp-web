@@ -209,10 +209,16 @@ export function isNewerVersion(v: string, current: string): boolean {
 	return compareVersions(v, current) > 0;
 }
 
-/** Parse `git log --format=%H%x1f%s%x1f%b%x1e` output (entries \x1e, fields \x1f). */
+/**
+ * Parse `git log --format=%H%x1f%s%x1f%b%x1e` output (entries \x1e, fields
+ * \x1f). Git appends `\n` after every `\x1e` record separator, so each entry
+ * after the first leads with a newline — strip it, or it lands inside the
+ * hash and splits the commit link in changelog bullets.
+ */
 export function parseGitLog(raw: string): CommitInfo[] {
 	return raw
 		.split("\x1e")
+		.map((entry) => entry.replace(/^\n+/, ""))
 		.filter((entry) => entry.length > 0)
 		.map((entry) => {
 			const [hash, subject, body = ""] = entry.split("\x1f");

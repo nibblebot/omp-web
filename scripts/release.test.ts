@@ -169,10 +169,12 @@ describe("isNewerVersion", () => {
 
 describe("parseGitLog", () => {
 	test("multiline body, empty body, multiple commits", () => {
+		// Real `git log --format=%H%x1f%s%x1f%b%x1e` appends a newline after
+		// every \x1e record separator; entries 2+ must parse cleanly.
 		const raw =
-			"abc1234\x1ffeat: add thing\x1fBody line 1\nBody line 2\x1e" +
-			"def5678\x1ffix: bug\x1e" +
-			"0beef00\x1fchore: empty body\x1f\x1e";
+			"abc1234\x1ffeat: add thing\x1fBody line 1\nBody line 2\x1e\n" +
+			"def5678\x1ffix: bug\x1e\n" +
+			"0beef00\x1fchore: empty body\x1f\x1e\n";
 		const commits = parseGitLog(raw);
 		expect(commits).toHaveLength(3);
 		expect(commits[0]).toEqual({
