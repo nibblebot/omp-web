@@ -18,6 +18,7 @@ import {
 	makeManifest,
 	nextVersion,
 	parseGitLog,
+	parseReleaseArgs,
 	prependChangelog,
 	validateCoverage,
 	validateTarball,
@@ -328,5 +329,63 @@ describe("validateTarball", () => {
 		const tgz = await makeFixtureTgz(dir);
 		const problems = await validateTarball(tgz, "0.1.0", "0".repeat(64));
 		expect(problems.some((p) => p.includes("sha256 mismatch"))).toBe(true);
+	});
+});
+
+describe("parseReleaseArgs", () => {
+	test("defaults: no flags, no version", () => {
+		const r = parseReleaseArgs([]);
+		expect(r.ok).toBe(true);
+		if (r.ok) {
+			expect(r.args).toEqual({ dryRun: false, yes: false, noLlm: false });
+		}
+	});
+
+	test("positional version + all flags", () => {
+		const r = parseReleaseArgs(["0.1.0", "--dry-run", "--yes", "--no-llm"]);
+		expect(r.ok).toBe(true);
+		if (r.ok) {
+			expect(r.args.version).toBe("0.1.0");
+			expect(r.args.dryRun).toBe(true);
+			expect(r.args.yes).toBe(true);
+			expect(r.args.noLlm).toBe(true);
+		}
+	});
+
+	test("--notes-file consumes the next arg", () => {
+		const r = parseReleaseArgs(["0.2.0", "--notes-file", "notes/0.2.0.md"]);
+		expect(r.ok).toBe(true);
+		if (r.ok) {
+			expect(r.args.notesFile).toBe("notes/0.2.0.md");
+			expect(r.args.version).toBe("0.2.0");
+		}
+	});
+
+	test("--notes-file without a value is an error", () => {
+		const r = parseReleaseArgs(["--notes-file"]);
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.error).toContain("requires a path");
+	});
+
+	test("unknown flag is an error", () => {
+		const r = parseReleaseArgs(["--bogus"]);
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.error).toContain("--bogus");
+	});
+
+	test("a second positional is an error", () => {
+		const r = parseReleaseArgs(["0.1.0", "0.2.0"]);
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.error).toContain("0.2.0");
+	});
+
+	test("flag order is free and version may come last", () => {
+		const r = parseReleaseArgs(["--yes", "0.1.0", "--dry-run"]);
+		expect(r.ok).toBe(true);
+		if (r.ok) {
+			expect(r.args.version).toBe("0.1.0");
+			expect(r.args.yes).toBe(true);
+			expect(r.args.dryRun).toBe(true);
+		}
 	});
 });

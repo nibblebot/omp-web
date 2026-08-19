@@ -47,7 +47,7 @@ Must land **before** v0.1.0: without it, first-release installs ship with no cha
 
 ### 3. `scripts/release.ts` — build this
 
-One command: `bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm]`. No version arg → **compute the bump** from commit classification. `<x.y.z>` → explicit version (overrides the computed bump). `--dry-run` → run everything through the changelog step, print the plan, touch nothing. Steps, failing fast in order:
+One command: `bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm] [--notes-file <path>]`. No version arg → **compute the bump** from commit classification. `<x.y.z>` → explicit version (overrides the computed bump). `--dry-run` → run everything through the changelog step, print the plan, touch nothing. `--notes-file <path>` → use a hand-written markdown file as the GitHub release notes instead of the changelog section (the changelog is still generated, committed to `CHANGELOG.md`, and used everywhere else; the flag only replaces what `gh release create --notes-file` gets). Steps, failing fast in order:
 
 1. **Preconditions**: clean working tree; on the default branch (`main`); `gh` CLI present and authed; tag `v<x.y.z>` does not already exist (local or remote); version is valid semver and (except for the first release) greater than `package.json` version.
 2. **Review commits since previous release** (deterministic): `git log <prev-tag>..HEAD` (no prev tag → all commits). Classify each commit: `!`/`BREAKING CHANGE:` → breaking; `feat:`/`feat(scope):` → feat; `fix:` → fix; everything else (`docs:`, `chore:`, `refactor:`, `test:`, compound `fleet+ui:`, `ui:`, untyped subjects) → other. Print the classification table.
@@ -61,14 +61,14 @@ One command: `bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm]`. 
 7. **Version + build + pack**: write `<x.y.z>` into `package.json`; `bun run build` → `bun pm pack` → `omp-web-<x.y.z>.tgz`.
 8. **Manifest + validate**: sha256 the tarball → `release-manifest.json` (schema above). Validate the packaged release: tarball name matches convention; contains `package/dist-bundle/cli.js`; first line is the `#!/usr/bin/env bun` shebang; the version stamp appears in the bundle; manifest sha256 matches the computed one. Artifacts move to `dist-release/` (gitignored).
 9. **Commit + tag + push**: `git commit -am "release: v<x.y.z>"` (package.json + CHANGELOG.md), `git tag v<x.y.z>`, `git push origin main --follow-tags`.
-10. **Release**: `gh release create v<x.y.z> dist-release/omp-web-<x.y.z>.tgz dist-release/release-manifest.json --title "v<x.y.z>" --notes-file <changelog section>` — always a full, published (non-draft, non-prerelease) release.
+10. **Release**: `gh release create v<x.y.z> dist-release/omp-web-<x.y.z>.tgz dist-release/release-manifest.json --title "v<x.y.z>" --notes-file <changelog section | --notes-file manual notes>` — always a full, published (non-draft, non-prerelease) release.
 11. **Verify**: retry `curl -fsSL …/releases/latest/download/release-manifest.json` until it reports the just-uploaded version (latest-resolution can lag; bounded backoff ≤ 60s); cross-check the returned sha256 against the local manifest; confirm the tarball downloads.
 
 Tests: `scripts/release.test.ts` — pure deterministic core only (classification, bump computation, changelog skeleton/formatting, manifest generation, validation, precondition checks, dry-run output). The LLM path is exercised as degrade-only in unit tests (fake session factory returning null/throw → fallback). The script is idempotent-safe only up to the tag step — once the tag is pushed, re-running must refuse at precondition 1.
 
 ### 4. First release: v0.1.0
 
-- [ ] `bun scripts/release.ts 0.1.0 --yes` — tags `v0.1.0`, creates the release with both assets, creates `CHANGELOG.md`.
+- [ ] `bun scripts/release.ts 0.1.0 --yes --notes-file <path>` — tags `v0.1.0`, creates the release with both assets, creates `CHANGELOG.md`. Hand-written release notes (recommended for the first release — a curated summary reads better than the auto changelog); the changelog section remains the `CHANGELOG.md` entry.
 - [ ] Sanity: curl the manifest URL; confirm the tarball downloads; sha256 matches.
 
 ### 5. Live channel check (the real E2E)

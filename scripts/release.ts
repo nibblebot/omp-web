@@ -57,7 +57,52 @@ const COMMIT_CLASSES: Record<CommitClass, true> = {
 	other: true,
 };
 
-const USAGE = "usage: bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm]";
+const USAGE =
+	"usage: bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm] [--notes-file <path>]";
+
+/** Parsed CLI surface for the release orchestrator. */
+export interface ReleaseArgs {
+	/** Explicit version (positional); else computed from the commit classes. */
+	version?: string;
+	dryRun: boolean;
+	yes: boolean;
+	noLlm: boolean;
+	/** Manual release notes for gh (markdown file); else the changelog section. */
+	notesFile?: string;
+}
+
+/** Pure argv parsing: flags, one optional positional version. */
+export function parseReleaseArgs(
+	argv: string[],
+): { ok: true; args: ReleaseArgs } | { ok: false; error: string } {
+	const args: ReleaseArgs = { dryRun: false, yes: false, noLlm: false };
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === "--dry-run") {
+			args.dryRun = true;
+			continue;
+		}
+		if (arg === "--yes") {
+			args.yes = true;
+			continue;
+		}
+		if (arg === "--no-llm") {
+			args.noLlm = true;
+			continue;
+		}
+		if (arg === "--notes-file") {
+			const value = argv[++i];
+			if (value === undefined) return { ok: false, error: "--notes-file requires a path argument" };
+			args.notesFile = value;
+			continue;
+		}
+		if (arg.startsWith("-") || args.version !== undefined) {
+			return { ok: false, error: `unknown flag: ${arg}` };
+		}
+		args.version = arg;
+	}
+	return { ok: true, args };
+}
 
 /**
  * Classify a commit subject/body (conventional-commits prefixes). A breaking
@@ -330,29 +375,19 @@ function buildChangelog(
  * failing state silently: every failure path sets process.exitCode = 1.
  */
 async function release(argv: string[]): Promise<void> {
-	let versionArg: string | undefined;
-	let dryRun = false;
-	let yes = false;
-	let noLlm = false;
-	for (const arg of argv) {
-		if (arg === "--dry-run") {
-			dryRun = true;
-			continue;
-		}
-		if (arg === "--yes") {
-			yes = true;
-			continue;
-		}
-		if (arg === "--no-llm") {
-			noLlm = true;
-			continue;
-		}
-		if (arg.startsWith("-") || versionArg !== undefined) {
-			console.error(`${USAGE}\nrelease: unknown flag: ${arg}`);
-			process.exitCode = 1;
-			return;
-		}
-		versionArg = arg;
+	const parsed = parseReleaseArgs(argv);
+	if (!parsed.ok) {
+		console.error(`${USAGE}\nrelease: ${parsed.error}`);
+		process.exitCode = 1;
+		return;
+	}
+	const { version: versionArg, dryRun, yes, noLlm, notesFile } = parsed.args;
+	// Manual notes must exist and be readable before anything else runs.
+	let manualNotes: string | null = null;
+	if (notesFile !== undefined) {
+		if (!existsSync(notesFile)) fail(`notes file not found: ${notesFile}`);
+		manualNotes = readFileSync(notesFile, "utf8");
+		console.log(`release: ok manual release notes loaded (${manualNotes.length} chars)`);
 	}
 
 	// 1. Preconditions.
@@ -504,6 +539,11 @@ async function release(argv: string[]): Promise<void> {
 		);
 		console.log(`release: commits: ${commits.length} since ${prevTag ?? "the beginning"}`);
 		console.log(`release: classification: ${countParts.join(", ")}`);
+		console.log(
+			manualNotes !== null
+				? `release: release notes: manual (${notesFile}, ${manualNotes.length} chars)`
+				: "release: release notes: changelog section",
+		);
 		console.log("release: changelog:");
 		console.log(section.replace(/^/gm, "  "));
 		console.log(`release: artifacts: ${artifactNames.join(", ")}`);
@@ -596,7 +636,7 @@ async function release(argv: string[]): Promise<void> {
 	console.log("release: ok pushed to origin main");
 
 	// 13. Release (always a full, published, non-draft/non-prerelease release).
-	writeFileSync(`${ARTIFACT_DIR}notes.md`, section);
+	writeFileSync(`${ARTIFACT_DIR}notes.md`, manualNotes ?? section);
 	console.log("release: running gh release create");
 	const relRes = await run([
 		"gh",
