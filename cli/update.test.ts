@@ -4,6 +4,7 @@ import { cleanupTempDirs } from "../shared/testkit";
 import {
 	applyUpdate,
 	compareVersions,
+	GITHUB_RELEASES_BASE,
 	main,
 	parseManifest,
 	resolveBase,
@@ -334,14 +335,25 @@ describe("main", () => {
 		};
 	}
 
-	test("with no channel configured, prints the env hint to stderr and exits 1", async () => {
+	test("with no channel env, falls back to the GitHub releases base", async () => {
+		const calls: string[] = [];
+		const origFetch = globalThis.fetch;
+		globalThis.fetch = (async (input: unknown) => {
+			calls.push(String(input));
+			return new Response(
+				JSON.stringify({ version: "0.2.0", tarball: "omp-web-0.2.0.tgz", sha256: "deadbeef" }),
+				{ status: 200 },
+			);
+		}) as typeof fetch;
 		const c = captureConsole();
 		try {
 			const code = await withEnv(undefined, () => main(["--check"]));
-			expect(code).toBe(1);
-			expect(c.err.join("\n")).toContain("no update channel configured (set OMP_WEB_UPDATE_URL)");
-			expect(c.out).toHaveLength(0);
+			expect(code).toBe(0);
+			expect(calls).toEqual([`${GITHUB_RELEASES_BASE}/release-manifest.json`]);
+			expect(c.out).toEqual(["0.2.0"]);
+			expect(c.err).toHaveLength(0);
 		} finally {
+			globalThis.fetch = origFetch;
 			c.restore();
 		}
 	});

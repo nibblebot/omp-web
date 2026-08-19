@@ -22,6 +22,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveVersion } from "./version";
 
+/** Default update channel: the stable GitHub Releases asset base. The env
+ *  var stays as an override (local E2E + tests use it). */
+export const GITHUB_RELEASES_BASE = "https://github.com/nibblebot/omp-web/releases/latest/download";
+
 /** Typed failure from the update pipeline; `code` lets callers branch. */
 export class UpdateError extends Error {
 	readonly code: string;
@@ -304,12 +308,7 @@ export async function main(argv: string[]): Promise<number> {
 			return 1;
 		}
 	}
-	const envBase = process.env.OMP_WEB_UPDATE_URL;
-	if (!envBase) {
-		// Phase 6 replaces this env-only channel with the GitHub base constant.
-		console.error("omp-web: no update channel configured (set OMP_WEB_UPDATE_URL)");
-		return 1;
-	}
+	const envBase = process.env.OMP_WEB_UPDATE_URL ?? GITHUB_RELEASES_BASE;
 	const current = await resolveVersion();
 	if (current === "dev" && !(force && pin !== undefined)) {
 		console.error(
