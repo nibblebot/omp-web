@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # provider-skeleton.sh — provision-hook skeleton (fleet/examples).
 #
-# Wired up as config.spawnHook in ~/.omp/fleet/config.json:
+# Wired up as config.spawnHook in ~/.omp-web/config.json:
 #   { "spawnHook": "/path/to/omp-web/fleet/examples/provider-skeleton.sh" }
 # (or OMP_FLEET_SPAWN_HOOK). The fleet runs it via `sh -c`
 # with a 60s deadline and env:

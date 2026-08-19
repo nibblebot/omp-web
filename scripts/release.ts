@@ -6,13 +6,14 @@
  * The deterministic core (commit classification, version bumping, changelog
  * skeleton, manifest generation, tarball validation) is exported for unit
  * tests; `main` wires it to git/gh/bun. The LLM changelog summarizer
- * (./release-llm) is dynamic-imported ONLY inside the release flow and
- * degrades to the deterministic fallback on any failure.
+ * (./release-llm) is imported statically and degrades to the
+ * deterministic fallback on any failure.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import * as readline from "node:readline/promises";
 import { compareVersions, sha256Of } from "../cli/update";
+import { summarizeChangelog } from "./release-llm";
 
 export const GITHUB_REPO = "nibblebot/omp-web";
 export const GITHUB_RELEASES_BASE = "https://github.com/nibblebot/omp-web/releases/latest/download";
@@ -800,22 +801,14 @@ async function release(argv: string[]): Promise<void> {
 	let draft: ChangelogDraft | null = null;
 	let llmUsed = false;
 	if (!noLlm) {
-		// Dynamic import (not static): ./release-llm is the sibling slice's
-		// optional module — it may not exist yet, and tests of this file must
-		// pass without it. Static import would fail the module graph at load.
-		const mod = (await import("./release-llm").catch(() => null)) as {
-			summarizeChangelog?: (input: unknown, opts?: unknown) => Promise<unknown>;
-		} | null;
-		if (mod?.summarizeChangelog !== undefined) {
-			try {
-				const result = await mod.summarizeChangelog({ version, groups }, {});
-				draft = normalizeDraft(result);
-				llmUsed = draft !== null;
-			} catch (err) {
-				console.error(
-					`release: warning: LLM changelog unavailable (${err instanceof Error ? err.message : String(err)}); falling back`,
-				);
-			}
+		try {
+			const result = await summarizeChangelog({ version, groups }, {});
+			draft = normalizeDraft(result);
+			llmUsed = draft !== null;
+		} catch (err) {
+			console.error(
+				`release: warning: LLM changelog unavailable (${err instanceof Error ? err.message : String(err)}); falling back`,
+			);
 		}
 	}
 	if (noLlm) console.log("release: changelog: deterministic fallback (--no-llm)");
