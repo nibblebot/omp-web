@@ -590,6 +590,47 @@ describe("SpawnSupervisor", () => {
 		expect(fake.openCount).toBeGreaterThanOrEqual(2);
 	});
 
+	test("respawn with an explicit resumeFile resumes THAT file, not lastSessionFile", async () => {
+		const projectDir = tmpPath("omp-session-sup-resumefile-");
+		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
+		const argsFile = join(projectDir, "args.txt");
+		const script = writeChildScript(projectDir, fake.port, argsFile);
+		const registry = await loadedRegistry();
+		const connector = makeConnector(registry);
+		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 2,
+		});
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await waitFor(
+			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
+			5000,
+			"ready",
+		);
+		const firstToken = registry.get(entry.daemonId)!.token;
+
+		// Dropdown-picked session: the SUPERVISOR takes the file verbatim (the
+		// edge validates membership); this test proves the argv actually carries
+		// the chosen path rather than the entry's lastSessionFile.
+		await supervisor.respawn(registry.get(entry.daemonId)!, {
+			resumeFile: "/chosen/other-session.jsonl",
+		});
+		await waitFor(
+			() => {
+				const current = registry.get(entry.daemonId)!;
+				return fake.openCount >= 2 && current.status === "ready" && current.token !== firstToken
+					? "ready"
+					: null;
+			},
+			8000,
+			"respawned ready",
+		);
+		const lines = readFileSync(argsFile, "utf8").trim().split("\n");
+		expect(lines).toHaveLength(2);
+		expect(lines[1]).toContain("--resume /chosen/other-session.jsonl");
+		expect(lines[1]).not.toContain("/srv/proj/sess.jsonl");
+	});
+
 	test("respawn of a template-less asleep entry falls back to spawn's resolution and heals the entry", async () => {
 		// Regression: entries registered asleep without a template (the auto
 		// default workspace, unstarted worktrees, or pre-fix state files) must
@@ -1633,6 +1674,77 @@ describe("git-state polling", () => {
 			"sessionTitle cleared",
 		);
 		expect(onChange).toBe(3); // branch fill, title fill, title clear — nothing else
+	});
+
+	test("probe flags a new/empty session (sessionEmpty) and clears it when a title appears", async () => {
+		const statePath = join(tmpPath("omp-session-sup-empty-"), "state.json");
+		const registry = new Registry(statePath);
+		await registry.load();
+		const connector = makeConnector(registry);
+		const supervisor = makeSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), {
+			restartMax: 0,
+		});
+		// A fresh session: header present, NO title slot, NO messages.
+		const sessionDir = tempDir("omp-session-sup-emptyfile-");
+		const sessionFile = join(sessionDir, "session.jsonl");
+		writeFileSync(
+			sessionFile,
+			JSON.stringify({ type: "session", id: "s1", cwd: "/srv/repos/acme" }) + "\n",
+		);
+		const local = registry.create({
+			name: "l",
+			cwd: "/srv/repos/acme",
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			template: "test",
+			lastSessionFile: sessionFile,
+		});
+		let onChange = 0;
+		registry.onChange = () => {
+			onChange++;
+		};
+
+		const { exec, calls } = fakeGitPhases([
+			[
+				{ exitCode: 0, stderr: "", stdout: "## main\n" },
+				{ exitCode: 0, stderr: "", stdout: "" },
+			],
+		]);
+		supervisor.startGitStatePolling({ exec, intervalMs: 25 });
+
+		await waitFor(
+			() => (registry.get(local.daemonId)?.sessionEmpty === true ? "empty" : null),
+			5000,
+			"sessionEmpty flagged",
+		);
+		// Untitled+empty: title stays undefined, empty flag true. Two
+		// broadcasts total (branch fill + the empty flag) — no title churn.
+		expect(registry.get(local.daemonId)?.sessionTitle).toBeUndefined();
+		expect(onChange).toBe(2);
+		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
+		expect(onDisk.entries[0].sessionEmpty).toBe(true);
+
+		// A title appears on the same file: the empty flag clears in ONE
+		// update (the title fill), never a separate broadcast.
+		const titleLine = (title: string): string => {
+			const json = JSON.stringify({ type: "title", title });
+			if (json.length > 256) throw new Error("test title too long for the slot");
+			return json.padEnd(256, " ") + "\n";
+		};
+		writeFileSync(
+			sessionFile,
+			titleLine("Now titled") +
+				JSON.stringify({ type: "session", id: "s1", cwd: "/srv/repos/acme" }) +
+				"\n",
+		);
+		await waitFor(
+			() => (registry.get(local.daemonId)?.sessionTitle === "Now titled" ? "titled" : null),
+			5000,
+			"title filled",
+		);
+		expect(registry.get(local.daemonId)?.sessionEmpty).toBeUndefined();
+		expect(onChange).toBe(3); // branch fill, empty flag, title+clear-empty — one each
 	});
 
 	test("a probe failure clears previously-set fields, once", async () => {

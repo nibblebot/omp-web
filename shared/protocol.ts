@@ -288,6 +288,10 @@ export interface DaemonEntry {
 	/** Title of the daemon's last session file (source: fleet edge roster, probed from the
 	 *  lastSessionFile JSONL title slot; older edges omit it; never probed for remote entries). */
 	sessionTitle?: string;
+	/** True when the daemon's current/last session file has no messages (a new/empty
+	 *  session); fleet-probed like sessionTitle; older edges omit it; never probed for
+	 *  remote entries. */
+	sessionEmpty?: boolean;
 	readyAt?: number;
 	uptime?: number;
 	pid?: number;
@@ -438,8 +442,15 @@ export type ClientCommand =
 	| { type: "daemon_restart"; id: string; projectDir: string; name: string }
 	// --- Fleet edge (browser → omp-fleet only; a bare omp-session rejects these) ---
 	| { type: "spawn"; id: string; cwd: string; template?: string; labels?: string[] }
-	| { type: "spawn_resume"; id: string; daemonId: string }
+	// Resume this exact session file instead of the daemon's lastSessionFile;
+	// omitted = resume the last session (today's behavior). The fleet edge
+	// validates it against the daemon's worktree session listing.
+	| { type: "spawn_resume"; id: string; daemonId: string; sessionFile?: string }
 	| { type: "stop"; id: string; daemonId: string }
+	// Fleet edge only: list sessions in a daemon's worktree (fleet-edge handled,
+	// answered with a unicast `daemon_sessions` frame — a bare omp-session
+	// rejects it like the other fleet-only commands).
+	| { type: "list_daemon_sessions"; id: string; daemonId: string }
 	// Stop the daemon AND evict it from the roster (registry removal).
 	| { type: "remove"; id: string; daemonId: string }
 	// First-class project registration (add_project registers the realpath —
@@ -549,6 +560,9 @@ export type ServerFrame =
 	| (SessionScopedFrame & { sessionId?: string })
 	// Unicast answer to list_sessions.
 	| { type: "sessions"; sessions: SessionListEntry[] }
+	// Unicast answer to list_daemon_sessions (the fleet edge answers it directly;
+	// NOT ringed — lost answers are re-POSTed like projects).
+	| { type: "daemon_sessions"; daemonId: string; sessions: SessionListEntry[] }
 	// Unicast answer to list_files.
 	| { type: "files"; files: string[] }
 	// Unicast: OAuth URL to open (during a login call).

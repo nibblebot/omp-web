@@ -110,6 +110,7 @@ import { BrowseError, browseDirectories } from "./fs-browse";
 import type { DaemonConnector } from "./connector";
 import { backoffDelay, daemonHttpBase } from "./connector";
 import { DaemonsAggregator } from "./daemons-aggregator";
+import { listDaemonSessions } from "./daemon-sessions";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
 import type { FleetEventLog, FleetFacts } from "./events";
@@ -133,6 +134,9 @@ const ATTACH_WAIT_READY_MS = 60_000;
 
 /** Reclaim grace for a disconnected browser's ring (Last-Event-ID resume window). */
 const CLIENT_RECLAIM_MS = 60_000;
+
+/** Roster-dropdown listing size: the last N sessions of a daemon's worktree. */
+const DROPDOWN_SESSION_LIMIT = 10;
 
 /**
  * Per-daemon realtime activity, derived by the edge from the raw tapped
@@ -207,6 +211,7 @@ const BROWSER_COMMAND_LIST = [
 	// Handled at the edge.
 	"list_projects",
 	"list_project_branches",
+	"list_daemon_sessions",
 	"spawn",
 	"spawn_resume",
 	"stop",
@@ -454,6 +459,9 @@ export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): Daem
 	if (entry.git !== undefined) roster.git = { ...entry.git };
 	if (entry.lastSessionFile !== undefined) roster.lastSessionFile = entry.lastSessionFile;
 	if (entry.sessionTitle !== undefined) roster.sessionTitle = entry.sessionTitle;
+	// The empty flag is meaningful only when true; a false/undefined is the same,
+	// so it stays off the wire (mirrors the title-cleared rule above).
+	if (entry.sessionEmpty === true) roster.sessionEmpty = true;
 	// Liveness facts are meaningless for an asleep daemon; keep them off the
 	// roster even if the registry entry transiently carries stale ones (e.g.
 	// mid-respawn, when the supervisor writes the pid before the child readies).
@@ -853,6 +861,16 @@ export class FleetEdge {
 			case "list_projects":
 				void this.#handleListProjects(stream);
 				break;
+			case "list_daemon_sessions": {
+				const daemonId =
+					typeof cmd.daemonId === "string" && cmd.daemonId !== "" ? cmd.daemonId : undefined;
+				if (daemonId === undefined) {
+					this.#sendError(stream, "list_daemon_sessions: missing daemonId");
+					break;
+				}
+				void this.#handleListDaemonSessions(stream, daemonId);
+				break;
+			}
 			case "list_project_branches": {
 				const projectId =
 					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
@@ -888,7 +906,11 @@ export class FleetEdge {
 					this.#sendError(stream, "spawn_resume: missing daemonId");
 					break;
 				}
-				void this.#handleSpawnResume(stream, daemonId);
+				const sessionFile =
+					typeof cmd.sessionFile === "string" && cmd.sessionFile !== ""
+						? cmd.sessionFile
+						: undefined;
+				void this.#handleSpawnResume(stream, daemonId, sessionFile);
 				break;
 			}
 			case "stop": {
@@ -1040,6 +1062,25 @@ export class FleetEdge {
 				this.#registry.list().map((entry) => entry.cwd),
 			);
 			this.#sendAnswer(stream, { type: "projects", projects });
+		} catch (err) {
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	/**
+	 * Answer a roster-dropdown request: the last sessions of one daemon's
+	 * worktree, newest-first (the edge lists from disk so asleep/never-started
+	 * daemons answer too — no live process needed). Unknown daemon → error.
+	 */
+	async #handleListDaemonSessions(stream: BrowserStream, daemonId: string): Promise<void> {
+		try {
+			const entry = this.#registry.get(daemonId);
+			if (!entry) {
+				this.#sendError(stream, `unknown daemon: ${daemonId}`);
+				return;
+			}
+			const sessions = await listDaemonSessions(entry.cwd ?? "", DROPDOWN_SESSION_LIMIT);
+			this.#sendAnswer(stream, { type: "daemon_sessions", daemonId, sessions });
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
@@ -1294,7 +1335,11 @@ export class FleetEdge {
 		}
 	}
 
-	async #handleSpawnResume(stream: BrowserStream, daemonId: string): Promise<void> {
+	async #handleSpawnResume(
+		stream: BrowserStream,
+		daemonId: string,
+		sessionFile?: string,
+	): Promise<void> {
 		try {
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
@@ -1305,7 +1350,20 @@ export class FleetEdge {
 				this.#sendError(stream, `daemon ${daemonId} is not asleep (status ${entry.status})`);
 				return;
 			}
-			await this.#wake(entry);
+			// A dropdown-picked session must belong to this worktree's session
+			// listing — never let an arbitrary path reach --resume.
+			let resumeFile: string | undefined;
+			if (sessionFile !== undefined) {
+				const listed = await listDaemonSessions(entry.cwd ?? "", DROPDOWN_SESSION_LIMIT);
+				const resolved = realpathOf(sessionFile);
+				const ok = listed.some((s) => realpathOf(s.path) === resolved);
+				if (!ok) {
+					this.#sendError(stream, `session file not in this worktree: ${sessionFile}`);
+					return;
+				}
+				resumeFile = sessionFile;
+			}
+			await this.#wake(entry, resumeFile);
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
@@ -1414,14 +1472,17 @@ export class FleetEdge {
 	 * back-to-back; a second wake (from the attach) while the first is in
 	 * flight must not respawn the child again, it just awaits ready.
 	 */
-	async #wake(entry: RegistryEntry): Promise<void> {
+	async #wake(entry: RegistryEntry, resumeFile?: string): Promise<void> {
 		const daemonId = entry.daemonId;
 		if (entry.status !== "asleep" && this.#connector.isConnected(daemonId)) return;
 		if (this.#waking.has(daemonId)) return;
 		this.#waking.add(daemonId);
 		try {
 			if (entry.mode === "spawned" && entry.status === "asleep") {
-				await this.#supervisor.respawn(entry);
+				await this.#supervisor.respawn(
+					entry,
+					resumeFile && resumeFile.trim() !== "" ? { resumeFile } : undefined,
+				);
 			} else {
 				this.#connector.connect(daemonId);
 			}

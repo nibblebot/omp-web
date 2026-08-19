@@ -30,6 +30,8 @@ import {
 	spawnResume,
 	state,
 	updateSetting,
+	requestDaemonSessions,
+	resumeDaemonSession,
 	type SubagentInfo,
 } from "./state";
 
@@ -1941,5 +1943,137 @@ describe("daemon_activity frames", () => {
 		dispatch({ type: "daemon_activity", daemonId: "d1", streaming: true, blocked: false });
 		dispatch({ type: "roster", daemons: [daemon("d1")] });
 		expect(state.daemonActivity["d1"]).toEqual({ streaming: true, blocked: false });
+	});
+});
+
+describe("roster session dropdown", () => {
+	/** Minimal roster entry with a worktree cwd. */
+	function rosterDaemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: "x",
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			...extra,
+		};
+	}
+
+	/** Commands of one type as posted, oldest first. */
+	function postedOf<T extends ClientCommand["type"]>(
+		type: T,
+	): Array<Extract<ClientCommand, { type: T }>> {
+		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
+	}
+
+	const se = (id: string): SessionListEntry => ({
+		path: `/sessions/${id}.jsonl`,
+		id,
+		cwd: "/repos/d9",
+		name: id,
+		messageCount: 1,
+		modifiedAt: 1,
+	});
+
+	test("daemon_sessions frame settles the per-daemon dropdown request", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const pending = requestDaemonSessions("d9");
+		expect(postedOf("list_daemon_sessions")).toEqual([
+			{ type: "list_daemon_sessions", id: expect.any(String), daemonId: "d9" },
+		]);
+
+		// A frame for a DIFFERENT daemon must not settle it.
+		dispatch({ type: "daemon_sessions", daemonId: "other", sessions: [se("x")] });
+		dispatch({ type: "daemon_sessions", daemonId: "d9", sessions: [se("a"), se("b")] });
+		await expect(pending).resolves.toEqual([se("a"), se("b")]);
+	});
+
+	test("resumeDaemonSession wakes an asleep daemon with the chosen session then attaches", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", {
+				status: "asleep",
+				lastSessionFile: "/sessions/current.jsonl",
+			}),
+		]);
+
+		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		expect(postedOf("spawn_resume")).toEqual([
+			{
+				type: "spawn_resume",
+				id: expect.any(String),
+				daemonId: "d9",
+				sessionFile: "/sessions/picked.jsonl",
+			},
+		]);
+		expect(postedOf("attach")).toHaveLength(1);
+	});
+
+	test("resumeDaemonSession retries a switch swept by its own attach's supersession, never banners", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		// Attached to d1; resume a session on a DIFFERENT ready daemon (d9) —
+		// the switch lands in-flight while the d9 attach's `attached` frame
+		// sweeps pending calls with "session switched".
+		setState("currentSessionId", "d1");
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		await Promise.resolve();
+		await Promise.resolve();
+		// The first switchSession is in flight when the proxied attached frame
+		// switches the session → rejectPendingCalls sweeps it.
+		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(1);
+		dispatch(attached("d9"));
+		await Promise.resolve();
+		await Promise.resolve();
+		// The superseded switch retries ONCE against the now-current daemon.
+		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(2);
+		expect(state.error).toBeNull(); // the supersession is never a banner
+	});
+
+	test("resumeDaemonSession on a ready detached daemon attaches first, then switches to the picked session", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		expect(postedOf("attach")).toHaveLength(1);
+		// The switch is issued only AFTER the attach settles.
+		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(postedOf("call").filter((c) => c.method === "switchSession")).toEqual([
+			{
+				type: "call",
+				id: expect.any(String),
+				method: "switchSession",
+				args: ["/sessions/picked.jsonl"],
+			},
+		]);
+		expect(state.error).toBeNull();
+	});
+
+	test("resumeDaemonSession to the already-current session on a ready daemon only attaches", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		resumeDaemonSession("d9", "/sessions/current.jsonl");
+		expect(postedOf("attach")).toHaveLength(1);
+		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
 	});
 });

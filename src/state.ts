@@ -37,7 +37,12 @@ import {
 } from "./store/chat";
 import { cancelUiRequest } from "./store/modals";
 import { resetPendingProjects, settleProjectBranches, settleProjects } from "./store/projects";
-import { resetPendingSessionsFiles, settleFiles, settleSessions } from "./store/roster";
+import {
+	resetPendingSessionsFiles,
+	settleDaemonSessions,
+	settleFiles,
+	settleSessions,
+} from "./store/roster";
 import { dismissToast, pushToast } from "./store/toasts";
 import {
 	attachSession,
@@ -948,6 +953,11 @@ export function connect(): void {
 					}
 				}
 				break;
+			case "daemon_sessions":
+				// Unicast answer to the roster dropdown's list_daemon_sessions
+				// (fleet-scoped: settle keyed by daemonId, no session guards).
+				settleDaemonSessions(frame.daemonId, frame.sessions);
+				break;
 			case "daemons":
 				setState(
 					"daemons",
@@ -1315,7 +1325,14 @@ export {
 	promptInsert,
 	setPromptInsert,
 } from "./store/chat";
-export { listSessions, listFiles, setSidebarVisible, toggleSidebar } from "./store/roster";
+export {
+	listSessions,
+	listFiles,
+	requestDaemonSessions,
+	resumeDaemonSession,
+	setSidebarVisible,
+	toggleSidebar,
+} from "./store/roster";
 export {
 	listProjects,
 	listProjectBranches,

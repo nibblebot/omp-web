@@ -323,6 +323,50 @@ describe("fleet edge", () => {
 		expect(frame.projects).toEqual([]);
 	});
 
+	test("list_daemon_sessions answers a per-daemon sessions frame (asleep daemon included)", async () => {
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		await browser.send({
+			type: "list_daemon_sessions",
+			id: "ls1",
+			daemonId: spawnedEntry.daemonId,
+		});
+		const frame = await browser.waitForFrame(
+			(f) => f.type === "daemon_sessions",
+			"daemon_sessions frame",
+		);
+		if (frame.type !== "daemon_sessions") throw new Error("expected daemon_sessions");
+		// The asleep spawned entry answers from disk — no live process needed.
+		expect(frame.daemonId).toBe(spawnedEntry.daemonId);
+		expect(Array.isArray(frame.sessions)).toBe(true);
+	});
+
+	test("list_daemon_sessions rejects an unknown daemon", async () => {
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		await browser.send({ type: "list_daemon_sessions", id: "ls2", daemonId: "d-ghost" });
+		const frame = await browser.waitForFrame((f) => f.type === "error", "error frame");
+		if (frame.type !== "error") throw new Error("expected error");
+		expect(frame.error).toContain("unknown daemon");
+	});
+
+	test("spawn_resume with a session file outside the worktree is refused", async () => {
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		// A path that can never appear in the worktree's session listing.
+		await browser.send({
+			type: "spawn_resume",
+			id: "sr1",
+			daemonId: spawnedEntry.daemonId,
+			sessionFile: "/etc/passwd",
+		});
+		const frame = await browser.waitForFrame((f) => f.type === "error", "error frame");
+		if (frame.type !== "error") throw new Error("expected error");
+		expect(frame.error).toContain("not in this worktree");
+		// Refused: the daemon stays asleep.
+		expect(server.registry.get(spawnedEntry.daemonId)?.status).toBe("asleep");
+	});
+
 	test("spawn with a bad path answers an error frame", async () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
@@ -1253,6 +1297,24 @@ describe("edge pure helpers", () => {
 		// A cleared title (probe found nothing) must serialize without the key.
 		const cleared = toRosterEntry({ ...entry, sessionTitle: undefined });
 		expect(cleared).not.toHaveProperty("sessionTitle");
+	});
+
+	test("toRosterEntry serializes sessionEmpty only when true", () => {
+		const base: RegistryEntry = {
+			daemonId: "d4b",
+			name: "n",
+			cwd: "/srv/repos/acme-wt-feature",
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			registeredAt: Date.now(),
+		};
+		const empty = toRosterEntry({ ...base, sessionEmpty: true });
+		expect(empty.sessionEmpty).toBe(true);
+		// Untitled+not-empty and absent both serialize without the key.
+		expect(toRosterEntry({ ...base, sessionEmpty: false })).not.toHaveProperty("sessionEmpty");
+		expect(toRosterEntry(base)).not.toHaveProperty("sessionEmpty");
 	});
 
 	test("toRosterEntry sets managed only for cwds realpath-under the workspaceDir", () => {

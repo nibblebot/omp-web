@@ -298,8 +298,12 @@
 /* --- Session roster sidebar (fleet edge, Phase 3) --- */
 
 .daemon-row {
-	/* sidebar-row defaults to a pointer cursor; only attachable rows get one. */
+	/* sidebar-row defaults to a pointer cursor; the whole row is a resume
+	   target and the session-title line a separate dropdown trigger. */
 	cursor: default;
+	/* Containing block for the row-anchored session dropdown (editorial: no
+	   other absolutely-positioned child depends on it). */
+	position: relative;
 }
 .daemon-row.clickable {
 	cursor: pointer;
@@ -543,6 +547,56 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	display: flex;
 	flex-direction: column;
 }
+/* Session dropdown (the roster row's last-10-sessions resume picker): a
+   wider panel anchored to the bottom of the whole row, styled like the kebab
+   menu but spanning the row width. The row is the containing block via
+   `position: relative` on .daemon-row (merged into the rule above). */
+.daemon-session-menu {
+	position: absolute;
+	top: calc(100% + var(--space-1));
+	left: var(--space-3);
+	right: var(--space-3);
+	max-width: 40rem;
+	padding: var(--space-1);
+	background: var(--panel-2);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-md);
+	z-index: var(--z-autocomplete);
+	display: flex;
+	flex-direction: column;
+}
+.daemon-session-menu-hint {
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	padding: var(--space-1) var(--space-3);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.daemon-session-note {
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+	padding: var(--space-2) var(--space-3);
+}
+/* Each dropdown entry: the friendly name plus a right-aligned relative time;
+   the current session is highlighted like an active picker row. */
+.daemon-session-item {
+	justify-content: space-between;
+	gap: var(--space-3);
+	white-space: nowrap;
+}
+.daemon-session-item.active {
+	background: var(--hover);
+	box-shadow: inset 2px 0 0 var(--accent);
+}
+.daemon-session-item-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.daemon-session-item-time {
+	flex: none;
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+}
 .sidebar-menu-item {
 	display: flex;
 	align-items: center;
@@ -644,6 +698,16 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+/* The session-title line is the row's dropdown trigger; the pointer cursor
+   and hover brightening hint the click-to-open affordance (ready/asleep
+   rows only). Keyboard activation comes from useClickableRow's role=button. */
+.daemon-session-title--clickable {
+	cursor: pointer;
+}
+.daemon-session-title--clickable:hover,
+.daemon-session-title--clickable:focus-visible {
+	color: var(--text);
 }
 .daemon-row-btn {
 	background: none;

@@ -89,6 +89,16 @@ export function rejectPendingCalls(err: Error): void {
 	}
 }
 
+/**
+ * True when a rejected call was superseded by a session/daemon switch — the
+ * in-flight call's result is stale by design (state.ts rejects pending calls
+ * with this message when an `attached` frame lands for another session).
+ * Switching sessions is expected control flow, NEVER a user-facing error.
+ */
+export function isSessionSwitchSupersession(err: unknown): boolean {
+	return (err instanceof Error ? err.message : String(err)) === "session switched";
+}
+
 export function call(
 	method: WebMethodName,
 	args: unknown[] = [],

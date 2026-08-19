@@ -41,7 +41,7 @@ import {
 import type { DaemonConnector } from "./connector";
 import { probeGitState as probeGit, resolveWorktreeOf } from "./discovery";
 import type { GitRunner } from "./discovery";
-import { readSessionTitle } from "./session-title";
+import { readSessionInfo } from "./session-title";
 import type { Registry, RegistryEntry } from "./registry";
 import type { FleetLogLevel } from "./events";
 
@@ -289,7 +289,7 @@ export class SpawnSupervisor {
 	 * is never launched twice and an orphan is never left behind. A failed
 	 * respawn drops the slot so a later call can retry.
 	 */
-	async respawn(entry: RegistryEntry): Promise<void> {
+	async respawn(entry: RegistryEntry, opts?: { resumeFile?: string }): Promise<void> {
 		const current = this.#registry.get(entry.daemonId) ?? entry;
 		if (current.mode !== "spawned") {
 			throw new Error(`daemon ${current.daemonId} is not spawned (mode ${current.mode})`);
@@ -306,7 +306,7 @@ export class SpawnSupervisor {
 		}
 		const state = this.#ensure(current.daemonId);
 		if (state.respawnInFlight) return state.respawnInFlight;
-		const inFlight = this.#respawnNow(state, current, template);
+		const inFlight = this.#respawnNow(state, current, template, opts?.resumeFile);
 		state.respawnInFlight = inFlight;
 		try {
 			await inFlight;
@@ -322,6 +322,7 @@ export class SpawnSupervisor {
 		state: ChildState,
 		current: RegistryEntry,
 		template: SpawnTemplate,
+		resumeFile?: string,
 	): Promise<void> {
 		if (state.restartTimer) {
 			clearTimeout(state.restartTimer);
@@ -336,12 +337,13 @@ export class SpawnSupervisor {
 			await this.#terminate(state.child, RESP_AWN_KILL_GRACE_MS);
 			state.child = null;
 		}
-		this.#onEvent?.(
-			"info",
-			`respawn${current.lastSessionFile ? " (--resume)" : ""}`,
-			current.daemonId,
-		);
-		this.#launch(this.#registry.get(current.daemonId) ?? current, template, { resume: true });
+		const resumeFileLabel =
+			resumeFile && resumeFile.trim() !== "" ? resumeFile : current.lastSessionFile;
+		this.#onEvent?.("info", `respawn${resumeFileLabel ? " (--resume)" : ""}`, current.daemonId);
+		this.#launch(this.#registry.get(current.daemonId) ?? current, template, {
+			resume: true,
+			resumeFile,
+		});
 	}
 
 	/**
@@ -512,25 +514,33 @@ export class SpawnSupervisor {
 		if (current.branch !== result.branch || !sameGitState(current.git, result.git)) {
 			this.#registry.update(current.daemonId, { branch: result.branch, git: result.git });
 		}
-		await this.#probeSessionTitle(this.#registry.get(entry.daemonId) ?? entry);
+		await this.#probeSessionInfo(this.#registry.get(entry.daemonId) ?? entry);
 	}
 
 	/**
-	 * Probe one entry's last-session-file title and reconcile the registry.
-	 * Remote entries are never probed (their session files live on another
-	 * host) and neither are entries without a lastSessionFile — same rule as
-	 * the git probe's empty-cwd skip. An update happens only when the title
-	 * actually differs (a no-change keeps the registry quiet: no onChange,
-	 * no roster broadcast); a file that became unreadable/untitled clears a
-	 * previously-set title. The reader never throws.
+	 * Probe one entry's last-session-file title and emptiness (a new/empty
+	 * session renders "New session" in the roster) and reconcile the
+	 * registry. Remote entries are never probed (their session files live on
+	 * another host) and neither are entries without a lastSessionFile — same
+	 * rule as the git probe's empty-cwd skip. One registry.update happens
+	 * only when title OR empty actually differs (a no-change keeps the
+	 * registry quiet: no onChange, no roster broadcast); a file that became
+	 * unreadable/untitled clears a previously-set title. sessionEmpty only
+	 * carries meaning for untitled files — a titled session is never labeled
+	 * "New session", so a title appearing clears a stale empty flag in the
+	 * same update. The reader never throws.
 	 */
-	async #probeSessionTitle(entry: RegistryEntry): Promise<void> {
+	async #probeSessionInfo(entry: RegistryEntry): Promise<void> {
 		if (entry.mode === "remote" || entry.cwd === "" || !entry.lastSessionFile) return;
-		const title = await readSessionTitle(entry.lastSessionFile);
+		const { title, empty } = await readSessionInfo(entry.lastSessionFile);
 		const current = this.#registry.get(entry.daemonId);
 		if (!current) return; // removed while probing
-		if (current.sessionTitle !== title) {
-			this.#registry.update(current.daemonId, { sessionTitle: title });
+		const wantEmpty = title === undefined && empty ? true : undefined;
+		if (current.sessionTitle !== title || current.sessionEmpty !== wantEmpty) {
+			this.#registry.update(current.daemonId, {
+				sessionTitle: title,
+				sessionEmpty: wantEmpty,
+			});
 		}
 	}
 
@@ -568,7 +578,11 @@ export class SpawnSupervisor {
 	}
 
 	/** Spawn one child for the entry with a fresh token and wire up the pipes. */
-	#launch(entry: RegistryEntry, template: SpawnTemplate, opts: { resume: boolean }): void {
+	#launch(
+		entry: RegistryEntry,
+		template: SpawnTemplate,
+		opts: { resume: boolean; resumeFile?: string },
+	): void {
 		const daemonId = entry.daemonId;
 		const state = this.#ensure(daemonId);
 		state.manualRespawn = false;
@@ -581,8 +595,12 @@ export class SpawnSupervisor {
 		// and lands in `sh -c` — shell-quote each one so it can never break
 		// out into command execution (CVE-style injection defense).
 		const labelsArg = (entry.labels ?? []).map((label) => `--label ${shellQuote(label)}`).join(" ");
-		const resumeArg =
-			opts.resume && entry.lastSessionFile ? `--resume ${shellQuote(entry.lastSessionFile)}` : "";
+		// R3: resume = --resume <file>. default to the entry's last session file;
+		// opts.resumeFile overrides it for a dropdown-picked session (the edge
+		// validates it belongs to the worktree before it ever gets here).
+		const resumeFile =
+			opts.resumeFile && opts.resumeFile.trim() !== "" ? opts.resumeFile : entry.lastSessionFile;
+		const resumeArg = opts.resume && resumeFile ? `--resume ${shellQuote(resumeFile)}` : "";
 		const command = fillTemplate(template.command, {
 			cwd: shellQuote(entry.cwd),
 			token: shellQuote(token),

@@ -8,7 +8,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "../shared/testkit";
-import { readSessionTitle } from "./session-title";
+import { readSessionInfo, readSessionTitle } from "./session-title";
 
 afterAll(cleanupTempDirs);
 
@@ -95,5 +95,59 @@ describe("readSessionTitle", () => {
 		writeFileSync(path, titleLine("Huge") + headerLine() + "x".repeat(5 * 1024 * 1024) + "\n");
 
 		await expect(readSessionTitle(path)).resolves.toBe("Huge");
+	}, 5000);
+});
+
+describe("readSessionInfo", () => {
+	const msgLine = (): string =>
+		JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }) + "\n";
+
+	test("missing files are empty with no title (never cached)", async () => {
+		const dir = tempDir("omp-session-info-");
+		const path = join(dir, "gone.jsonl");
+
+		await expect(readSessionInfo(path)).resolves.toEqual({ title: undefined, empty: true });
+		writeFileSync(path, titleLine("Back"));
+		await expect(readSessionInfo(path)).resolves.toEqual({ title: "Back", empty: true });
+	});
+
+	test("untitled header-only files are empty (new session)", async () => {
+		const dir = tempDir("omp-session-info-");
+		const path = join(dir, "empty.jsonl");
+		writeFileSync(path, titleLine("") + headerLine());
+
+		await expect(readSessionInfo(path)).resolves.toEqual({ title: undefined, empty: true });
+	});
+
+	test("untitled files with a message are NOT empty", async () => {
+		const dir = tempDir("omp-session-info-");
+		const path = join(dir, "real.jsonl");
+		writeFileSync(path, titleLine("") + headerLine() + msgLine());
+
+		await expect(readSessionInfo(path)).resolves.toEqual({ title: undefined, empty: false });
+	});
+
+	test("titled files report their file truth for emptiness independently", async () => {
+		const dir = tempDir("omp-session-info-");
+		const emptyPath = join(dir, "titled-empty.jsonl");
+		writeFileSync(emptyPath, titleLine("Slow start") + headerLine());
+		await expect(readSessionInfo(emptyPath)).resolves.toEqual({
+			title: "Slow start",
+			empty: true,
+		});
+
+		const realPath = join(dir, "titled-real.jsonl");
+		writeFileSync(realPath, titleLine("Done") + headerLine() + msgLine());
+		await expect(readSessionInfo(realPath)).resolves.toEqual({ title: "Done", empty: false });
+	});
+
+	test("a large file with no marker in the head is never labeled empty", async () => {
+		const dir = tempDir("omp-session-info-");
+		const path = join(dir, "big.jsonl");
+		// Messages only far past the 8KiB head (e.g. a giant first message
+		// that starts beyond the head window) → safe default: NOT empty.
+		writeFileSync(path, titleLine("") + headerLine() + "y".repeat(10 * 1024 * 1024) + "\n");
+
+		await expect(readSessionInfo(path)).resolves.toEqual({ title: undefined, empty: false });
 	}, 5000);
 });
