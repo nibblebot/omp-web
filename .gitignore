@@ -5,3 +5,4 @@ dist-bundle/
 omp-session-*.html
 test/.fixture/
 .bench/
+dist-release/
