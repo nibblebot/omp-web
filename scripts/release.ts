@@ -168,6 +168,22 @@ export function computeBump(groups: Group[]): "major" | "minor" | "patch" {
 	return "patch";
 }
 
+/**
+ * Policy: while the project is at 0.x.y, breaking changes bump minor, never
+ * major (semver pre-1.0 convention — 0.x stays 0.x until 1.0 is a deliberate
+ * decision, taken only via an explicit version arg). Returns the bump
+ * unchanged once the major is ≥ 1.
+ */
+export function appliedBump(
+	current: string,
+	bump: "major" | "minor" | "patch",
+): "major" | "minor" | "patch" {
+	if (bump === "major" && isValidSemver(current) && Number(current.split(".")[0]) === 0) {
+		return "minor";
+	}
+	return bump;
+}
+
 /** Strict plain x.y.z semver (no prerelease/build segments). */
 export function isValidSemver(v: string): boolean {
 	return /^\d+\.\d+\.\d+$/.test(v);
@@ -735,7 +751,8 @@ async function release(argv: string[]): Promise<void> {
 	countParts.push(`${counts.feat} feat`, `${counts.fix} fix`, `${counts.other} other`);
 	console.log(`release: classification: ${countParts.join(", ")}`);
 
-	// 3. Version: explicit arg wins; else first release keeps current; else bump.
+	// 3. Version: explicit arg wins; else first release keeps current; else bump
+	// (major clamps to minor while at 0.x — see appliedBump).
 	let version: string;
 	let bump: "major" | "minor" | "patch";
 	if (versionArg !== undefined) {
@@ -754,7 +771,7 @@ async function release(argv: string[]): Promise<void> {
 		bump = computeBump(groups);
 		console.log(`release: first release, keeping v${current}`);
 	} else {
-		bump = computeBump(groups);
+		bump = appliedBump(current, computeBump(groups));
 		version = nextVersion(current, bump);
 		console.log(`release: computed v${current} -> v${version} (${bump}: ${countParts.join(", ")})`);
 	}

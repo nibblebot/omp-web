@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, renameSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
+	appliedBump,
 	changelogSection,
 	classifyCommit,
 	computeBump,
@@ -121,6 +122,27 @@ describe("nextVersion", () => {
 		expect(() => nextVersion("1.2.3-beta.1", "patch")).toThrow();
 		expect(() => nextVersion("v0.1.0", "patch")).toThrow();
 		expect(() => nextVersion("", "patch")).toThrow();
+	});
+});
+
+describe("appliedBump", () => {
+	test("major clamps to minor while at 0.x.y", () => {
+		expect(appliedBump("0.1.0", "major")).toBe("minor");
+		expect(appliedBump("0.9.9", "major")).toBe("minor");
+	});
+
+	test("minor and patch pass through unchanged at 0.x.y", () => {
+		expect(appliedBump("0.1.0", "minor")).toBe("minor");
+		expect(appliedBump("0.1.0", "patch")).toBe("patch");
+	});
+
+	test("major stays major once the project is at 1.x+", () => {
+		expect(appliedBump("1.0.0", "major")).toBe("major");
+		expect(appliedBump("2.3.4", "major")).toBe("major");
+	});
+
+	test("invalid current falls through unchanged", () => {
+		expect(appliedBump("nope", "major")).toBe("major");
 	});
 });
 
