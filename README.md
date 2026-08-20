@@ -97,6 +97,16 @@ bun install
 bun dev      # roster mode: vite (HMR) + fleet — ports chosen per run
 ```
 
+In a linked worktree, `bun dev` forks the dev fleet state from the main
+worktree (copy-once, like a git fork), so the worktree's roster boots with the
+main worktree's sessions/projects instead of empty; later runs keep the
+diverged fork — delete the worktree's dev state file
+(`~/.omp-web/dev-fleets/<worktree>-<hash8>/fleet-state.json`) to re-fork.
+`--state-from <path>` forks from an explicit state file or directory; running
+`bun dev` in the main worktree itself never self-seeds. `--fresh` skips all
+seeding and starts on a clean state (removes the worktree's existing dev
+state, so the roster boots empty); the next plain `bun dev` forks again.
+
 ### Advanced
 
 ```sh

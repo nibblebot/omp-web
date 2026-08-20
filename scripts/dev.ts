@@ -12,6 +12,22 @@
  *                        No auth on the UI: trusted networks only.
  *   --allow-hosts [csv]  vite allowedHosts: bare = allow every Host header (tailscale
  *                        domains etc.), or a comma-separated allowlist.
+ *   --state-from <path>  fleet mode only: fork another fleet's state (a fleet-state.json
+ *                        file, or its directory) into this worktree's dev fleet dir —
+ *                        like forking it, so the dev UI boots with that roster/projects
+ *                        instead of an empty one. Fork-once: only copied when this
+ *                        worktree's dev state does not exist yet; later runs keep the
+ *                        diverged fork (delete the dev state file to re-fork).
+ *
+ * Default in fleet mode: when this worktree is a linked git worktree of another
+ * checkout, the dev fleet state is forked from that MAIN worktree's dev state
+ * (same fork-once semantics) — so a worktree's dev UI boots with the main
+ * roster/projects instead of an empty one. Running in the main worktree itself
+ * (or with --state-from) never self-seeds.
+ *   --fresh               fleet mode only: start on a FRESH state — removes the
+ *                        worktree's existing dev fleet state (if any) and skips
+ *                        the fork entirely, so the roster boots empty. Mutually
+ *                        exclusive with --state-from.
  *
  * Output model: every child's stdout/stderr is forwarded line-by-line with a
  * colored, fixed-width [name] prefix ([vite   ] [fleet  ] [session]); the
@@ -52,10 +68,11 @@
 
 import type { Subprocess } from "bun";
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:net";
-import { basename, dirname, join } from "node:path";
-import { resolveConfigPath } from "../fleet/config";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import { expandTilde, resolveConfigPath } from "../fleet/config";
 import { slugifyWorktreeName } from "../fleet/worktrees";
 import { OMP_SESSION_PREFIX } from "../shared/protocol";
 
@@ -73,6 +90,93 @@ const DEV_FLEET_DIR = (() => {
 	const slug = slugifyWorktreeName(basename(real)) || "worktree";
 	return join(dirname(resolveConfigPath()), "dev-fleets", `${slug}-${hash}`);
 })();
+/**
+ * Fork-once seed: copy a source fleet-state.json into this worktree's dev
+ * fleet dir when the dev state does not exist yet (a fresh fork). The source
+ * may be a fleet-state.json file or its directory. Later runs keep the
+ * diverged fork — like a git fork, the copy never re-syncs. When the dev
+ * state already exists it is left untouched and no source is required. The
+ * copy is read-only (we never mutate the source), and stale pids/liveness in
+ * the fork are downgraded by the fleet's own boot reconcile. A bogus source
+ * fails fast BEFORE the stack launches.
+ *
+ * When `source` is undefined (no explicit --state-from), the default in fleet
+ * mode is the MAIN worktree's dev state: the sibling worktree whose
+ * common-git-dir is the same repo (hash of that checkout's realpath — the
+ * same formula DEV_FLEET_DIR uses). Running in the main worktree itself
+ * yields its own path, which is skipped (a worktree never self-seeds — its
+ * dev state already is the data). No main dev state yet → nothing to fork.
+ */
+function seedFleetState(source: string | undefined): void {
+	const target = join(DEV_FLEET_DIR, "fleet-state.json");
+	if (existsSync(target)) {
+		// Fork already diverged — keep it (never re-sync). Logged so a user
+		// with a small existing dev state isn't silently served stale data
+		// when they expected a fresh fork.
+		if (source !== undefined) log("fleet state exists — keeping the diverged fork (delete it to re-fork)");
+		return;
+	}
+	// Default source in fleet mode: the main worktree's dev state.
+	let from = source ?? mainWorktreeDevState();
+	if (from === undefined) return;
+	if (source !== undefined) {
+		// Explicit source: accept a fleet-state.json file or a directory
+		// holding one (e.g. another worktree's dev-fleets/<slug>-<hash8>/ or
+		// the data home); anything else fails fast before the stack launches.
+		const st = statSync(source, { throwIfNoEntry: false });
+		if (st?.isDirectory()) from = join(source, "fleet-state.json");
+		else if (st === undefined) throw new Error(`--state-from: not a file or directory: ${source}`);
+	}
+	mkdirSync(DEV_FLEET_DIR, { recursive: true });
+	if (!existsSync(from)) {
+		if (source !== undefined)
+			throw new Error(`--state-from: no fleet-state.json at ${from}`);
+		return; // no main dev state yet — fresh empty state, nothing to fork
+	}
+	// Validate parseable JSON with the registry's shape before copying —
+	// a corrupt state would abort the fleet at boot, after the stack launched.
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(from, "utf8"));
+	} catch (err) {
+		throw new Error(`--state-from: unreadable state file ${from}: ${(err as Error).message}`);
+	}
+	if (typeof parsed !== "object" || parsed === null) {
+		throw new Error(`--state-from: ${from} is not a fleet-state.json (expected an object)`);
+	}
+	if (!("nextId" in parsed) || typeof parsed.nextId !== "number" || !("entries" in parsed) || !Array.isArray(parsed.entries)) {
+		throw new Error(`--state-from: ${from} is not a fleet-state.json (missing nextId/entries)`);
+	}
+	copyFileSync(from, target);
+	log(`forked fleet state from ${from}`);
+}
+
+/**
+ * The MAIN worktree's dev state path (fleet mode default source), or
+ * undefined when there is no sibling main checkout to fork from. A linked
+ * worktree's git common dir is the main checkout's .git; the main checkout
+ * itself has a common dir equal to its own .git — a self-path is skipped.
+ */
+function mainWorktreeDevState(): string | undefined {
+	let common;
+	try {
+		common = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: ROOT })
+			.toString()
+			.trim();
+	} catch {
+		return undefined; // not a git checkout — no main worktree to fork
+	}
+	if (common === "" || common === ".") return undefined;
+	// git-common-dir is absolute for linked worktrees (the main checkout's
+	// .git path), relative for a plain repo — normalize, then resolve up from
+	// the .git dir to the main checkout root.
+	const mainRoot = realpathSync(join(isAbsolute(common) ? common : join(ROOT, common), ".."));
+	if (realpathSync(ROOT) === mainRoot) return undefined; // we ARE the main worktree
+	const hash = createHash("sha256").update(mainRoot).digest("hex").slice(0, 8);
+	const slug = slugifyWorktreeName(basename(mainRoot)) || "worktree";
+	return join(dirname(resolveConfigPath()), "dev-fleets", `${slug}-${hash}`, "fleet-state.json");
+}
+
 /** Fallbacks for readiness that arrives without a parseable port. */
 const VITE_PORT_DEFAULT = 4713;
 const SESSION_PORT_DEFAULT = 4721;
@@ -192,6 +296,8 @@ const args = process.argv.slice(2);
 let modeArg = "session";
 let host: string | undefined;
 let allowHosts: string | undefined;
+let stateFrom: string | undefined;
+let fresh = false;
 for (let i = 0; i < args.length; i++) {
 	const arg = args[i];
 	if (arg === "--host") {
@@ -214,12 +320,24 @@ for (let i = 0; i < args.length; i++) {
 		}
 	} else if (arg.startsWith("--allow-hosts=")) {
 		allowHosts = arg.slice("--allow-hosts=".length);
+	} else if (arg === "--state-from") {
+		const next = args[i + 1];
+		if (next === undefined || next.startsWith("--")) {
+			console.error("--state-from requires a path argument");
+			process.exit(2);
+		}
+		stateFrom = expandTilde(next);
+		i++;
+	} else if (arg.startsWith("--state-from=")) {
+		stateFrom = expandTilde(arg.slice("--state-from=".length));
+	} else if (arg === "--fresh") {
+		fresh = true;
 	} else if (MODES[arg] !== undefined && modeArg === "session") {
 		modeArg = arg;
 	} else {
 		console.error(`unrecognized argument: ${arg}`);
 		console.error(
-			`usage: bun scripts/dev.ts [${Object.keys(MODES).join("|")}] [--host [addr]] [--allow-hosts [csv]]`,
+			`usage: bun scripts/dev.ts [${Object.keys(MODES).join("|")}] [--host [addr]] [--allow-hosts [csv]] [--state-from <path>] [--fresh]`,
 		);
 		process.exit(2);
 	}
@@ -227,6 +345,18 @@ for (let i = 0; i < args.length; i++) {
 const mode = MODES[modeArg];
 if (mode === undefined) {
 	console.error(`usage: bun scripts/dev.ts [${Object.keys(MODES).join("|")}] [--host [addr]]`);
+	process.exit(2);
+}
+if (stateFrom !== undefined && modeArg !== "fleet") {
+	console.error("--state-from only applies in fleet mode (roster) — use `bun run dev`");
+	process.exit(2);
+}
+if (fresh && modeArg !== "fleet") {
+	console.error("--fresh only applies in fleet mode (roster) — use `bun run dev`");
+	process.exit(2);
+}
+if (fresh && stateFrom !== undefined) {
+	console.error("--fresh and --state-from are mutually exclusive (fresh skips seeding)");
 	process.exit(2);
 }
 
@@ -254,6 +384,22 @@ function bold(s: string): string {
 
 function log(message: string): void {
 	process.stdout.write(`${prefix("dev")} ${message}\n`);
+}
+
+// Seed before ANY child launches: a --state-from copy (or the default
+// main-worktree fork) happens at most once, and a bogus source must fail
+// before the stack starts (never after). --fresh instead starts clean: the
+// worktree's existing dev state is removed so the fleet boots EMPTY (the
+// .lock is left to the fleet's own acquire — stale locks self-heal, a live
+// fleet still fails exit 77) and no seeding runs.
+if (fresh) {
+	const existing = join(DEV_FLEET_DIR, "fleet-state.json");
+	if (existsSync(existing)) {
+		rmSync(existing);
+		log("removed existing dev fleet state — fresh start");
+	}
+} else {
+	seedFleetState(stateFrom);
 }
 
 // ---------------------------------------------------------------------------
