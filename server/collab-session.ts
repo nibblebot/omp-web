@@ -55,6 +55,8 @@ export interface CollabSession {
 	abortSubagent(entry: SessionEntry, agentId: string): Promise<void>;
 	fireAndForgetPrompt(entry: SessionEntry, text: string, images: Images): void;
 	runBuiltinSlashCommand(entry: SessionEntry, text: string, images: Images): Promise<boolean>;
+	/** Test seam: wire a session's event stream to its broadcast/state-resync. */
+	wireSession(entry: SessionEntry): void;
 }
 
 export function createCollabSession(deps: CollabSessionDeps): CollabSession {
@@ -222,6 +224,27 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			broadcastTo(entry.handle, { type: "event", event });
 			// Tokens/cost/context/queue counts all change at turn end.
 			if (event.type === "agent_end") void deps.broker.broadcastState(entry, true).catch(() => {});
+			// A queued steer is consumed (dequeued) the moment the loop injects
+			// it, but nothing else broadcasts state at that point — the steer
+			// POST's post-mutation broadcast fired at queue time and agent_end
+			// is still far off. Without this refresh, state.queuedMessageCount
+			// (and the QueueBar chips it refetches) stays stale: the delivered
+			// message lands in the transcript while its chip lingers until the
+			// next state broadcast. Only USER-attributed steers need this:
+			// agent-authored steers (advisor/prewalk/IRC asides) never surface
+			// as chips (getQueuedMessages filters isUserQueuedMessage), so
+			// refreshing for them would be a needless broadcast per injection.
+			// The queue is already drained at this point (the loop dequeues
+			// before emitting message_start), so the broadcast simply carries
+			// the post-delivery count the client's QueueBar refetch needs.
+			if (
+				event.type === "message_start" &&
+				event.message.role === "user" &&
+				event.message.steering === true &&
+				event.message.attribution === "user"
+			) {
+				void deps.broker.broadcastState(entry).catch(() => {});
+			}
 		});
 		eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, (data) => {
 			handleSubagentLifecycle(entry, data as SubagentLifecyclePayload);
@@ -361,5 +384,6 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		abortSubagent,
 		fireAndForgetPrompt,
 		runBuiltinSlashCommand,
+		wireSession,
 	};
 }
