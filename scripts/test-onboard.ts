@@ -2,10 +2,11 @@
 /**
  * test-onboard — OFFLINE end-to-end walk of the omp-web distribution + onboarding path.
  *
- * Phase 5 gate (release-plan.md): everything proven locally before anything is
- * published. Runs in a sandboxed HOME + BUN_INSTALL with a local `bun pm pack`
- * tarball and a local manifest fixture — no network beyond the dependency
- * registry for `bun add` / the poison install, no GitHub, no npm publish.
+ * Phase 5 gate (docs/release.md "Remaining actions"): everything proven
+ * locally before anything is published. Runs in a sandboxed HOME +
+ * BUN_INSTALL with a local `bun pm pack` tarball and a local manifest
+ * fixture — no network beyond the dependency registry for `bun add` / the
+ * poison install, no GitHub, no npm publish.
  *
  * Walk:
  *   1. bun run build → bun pm pack → omp-web-<version>.tgz
@@ -54,12 +55,20 @@ const bunInstall = join(sandbox, "bun");
 const binDir = join(bunInstall, "bin");
 const bin = join(binDir, "omp-web");
 const dataHome = join(home, ".omp-web");
+// Fresh HOME + BUN_INSTALL for the install.sh step: the curl-pipe installer
+// must work standalone (its own data home + its own bun bin link), not
+// piggyback the pinned-install sandbox above.
+const instHome = join(sandbox, "home-installer");
+const instDataHome = join(instHome, ".omp-web");
+const instBunInstall = join(sandbox, "bun-installer");
+const instBin = join(instBunInstall, "bin", "omp-web");
 const fixture = join(sandbox, "fixture");
 const repoDir = join(sandbox, "repo");
 const wtDir = join(sandbox, "wt");
 const serveCwd = join(sandbox, "serve-cwd");
 const OMP_PORT = 48271; // fixed test port; the state lock is per-sandbox
 const UPDATE_PORT = 48272;
+const INSTALLER_PORT = 48273;
 
 let failures = 0;
 let fatal: string | null = null;
@@ -271,6 +280,83 @@ try {
 		r.code === 0 && r.stdout.trim() === v1,
 		r.stdout.trim(),
 	);
+
+	// 2b. install.sh (bun-only, curl-pipe style): a FRESH HOME + BUN_INSTALL
+	// + data home. The fixture server hosts the release assets at the
+	// download-URL shape install.sh hits; the script must resolve "latest"
+	// from the GitHub API (real network is off-limits here — the sandboxed
+	// OMP_WEB_INSTALL_DIR / OMP_WEB_INSTALLER_API / OMP_WEB_DOWNLOAD_BASE
+	// fixtures cover it), verify the sha256 from the release manifest,
+	// bun-add into its own pinned dir, and symlink the bin. No tarball or
+	// downloads beyond the fixture. This is exactly what a user running the
+	// one-liner gets.
+	// ---------------------------------------------------------------------------
+	console.log("== 2b. install.sh ==");
+	mkdirp(instHome);
+	writeFileSync(join(instHome, ".gitconfig"), `[user]\n\tname = e2e\n\temail = e2e@test\n`);
+	mkdirp(fixture);
+	copyFileSync(tgz, join(fixture, `omp-web-${v1}.tgz`));
+	writeFileSync(
+		join(fixture, "release-manifest.json"),
+		JSON.stringify(
+			{
+				version: v1,
+				tarball: `omp-web-${v1}.tgz`,
+				sha256: createHash("sha256").update(readFileSync(tgz)).digest("hex"),
+			},
+			null,
+			2,
+		),
+	);
+	fixtureServer = Bun.serve({
+		port: INSTALLER_PORT,
+		fetch(req) {
+			const url = new URL(req.url);
+			// The GitHub API shape install.sh hits for "latest": tag_name in
+			// a releases/latest JSON body.
+			if (url.pathname === "/repos/nibblebot/omp-web/releases/latest") {
+				return Response.json({ tag_name: `v${v1}` });
+			}
+			const name = basename(url.pathname);
+			const file =
+				name === "release-manifest.json" || name === `omp-web-${v1}.tgz` ? join(fixture, name) : "";
+			if (file !== "" && existsSync(file)) return new Response(readFileSync(file));
+			return new Response("not found", { status: 404 });
+		},
+	});
+	const installerServer = fixtureServer;
+	const installerEnv = {
+		...sandboxEnv(),
+		HOME: instHome,
+		BUN_INSTALL: instBunInstall,
+		OMP_WEB_INSTALL_DIR: instDataHome,
+		OMP_WEB_INSTALLER_API: `http://127.0.0.1:${INSTALLER_PORT}`,
+		OMP_WEB_DOWNLOAD_BASE: `http://127.0.0.1:${INSTALLER_PORT}/dl`,
+	};
+	// install.sh's own bun is whatever the host has; the sandbox redirects
+	// only the pieces the script controls.
+	r = await run(
+		"install.sh (fresh HOME + data home)",
+		["sh", join(ROOT, "scripts", "install.sh")],
+		{ env: installerEnv, timeoutMs: 180_000 },
+	);
+	check("install.sh succeeds", r.code === 0, r.stderr.slice(-400));
+	check("install.sh bin exists", existsSync(instBin), "");
+	const instLink = existsSync(instBin) ? realpathSync(instBin) : "";
+	check(
+		"install.sh bin symlinks into its pinned install dir",
+		instLink === join(instDataHome, "install", "node_modules", "omp-web", "dist-bundle", "cli.js"),
+		instLink,
+	);
+	r = await run("install.sh --version", [instBin, "--version"]);
+	check("install.sh --version prints v1", r.code === 0 && r.stdout.trim() === v1, r.stdout.trim());
+	r = await run(
+		"install.sh reinstall is idempotent (same version)",
+		["sh", join(ROOT, "scripts", "install.sh")],
+		{ env: installerEnv, timeoutMs: 180_000 },
+	);
+	check("install.sh reinstall succeeds", r.code === 0, r.stderr.slice(-400));
+	installerServer.stop();
 
 	// 3. Fixture repo + linked worktree
 	// ---------------------------------------------------------------------------

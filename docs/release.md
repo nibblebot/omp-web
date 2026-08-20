@@ -1,17 +1,6 @@
-# omp-web — release plan
+# omp-web — releases & distribution
 
-2026-08-19 (rev 2). Scope: first GitHub push (`nibblebot/omp-web`), first version tag, the release channel decision, and the release-script machinery. All distribution/install/update machinery is already built and locally verified (offline E2E gate green); this plan is everything from "repo exists on GitHub" onward.
-
-Rev 2 changes (from 2026-08-18): the release script now does **semantic version bumping from commit classification** and **LLM-assisted changelog + release-notes generation** (deterministic structure, LLM prose, deterministic fallback), maintains a committed `CHANGELOG.md`, and adds a `--dry-run` preview + interactive confirm before tagging. Current-state facts re-verified 2026-08-19.
-
-## Current state (verified)
-
-- Repo has 112 commits, **no remote, no tags**. Branches: `main` and `release` are identical (both `f8ed102`); `sidebar` is 1 commit ahead (dev branch, not part of this release). Working tree is on `release` — the push target is `main`.
-- `gh` CLI present, authed as **nibblebot** (keyring), git protocol ssh. `github.com/nibblebot/omp-web` **does not exist yet** (GraphQL: repository not found).
-- `package.json`: `version: 0.1.0`, `private: true`, `bin: {omp-web: dist-bundle/cli.js}`, `files: [dist-bundle/]`. Git identity is the local placeholder `omp-web <omp-web@local>` — fine for the release commit, but the user should set a real identity if they want the GitHub-author trail. No LICENSE file (public repo without one = all-rights-reserved; acceptable, flag only).
-- Build: `bun run build` → `dist-bundle/cli.js` (single-file bundle, `@oh-my-pi/*` external, version define-stamped, shebang verified). Pack: `bun pm pack` → `omp-web-<version>.tgz` in the repo root (verified working on bun 1.3.14). `*.tgz` is gitignored.
-- Install: `scripts/install-omp-web.ts` — `bun add <tarball>` into `<prefix>/install/` (default `~/.omp-web`, pinned own node_modules) + bin symlink. NOT `bun install -g` (flat shared store skews `@oh-my-pi/*` against the omp CLI — reproduced crash).
-- Update: `cli/update.ts` — `omp-web update [--check] [--force] [--version x.y.z]`, manifest + sha256 + pinned-dir re-install machinery done, but the channel base is **env-only today**: `OMP_WEB_UPDATE_URL` unset → exit 1 "no update channel configured" (in `main()`, near the end of the file). Step 2 lands the GitHub constant.
+Durable documentation for the distribution and update channel and the release orchestrator (`scripts/release.ts`), extracted from the former `release-plan.md` (removed). The release channel contract, the update-channel contract, and the release-script spec below are load-bearing: the release script and `omp-web update` implement them, and manual releases must not violate them.
 
 ## Release channel: GitHub Releases
 
@@ -20,7 +9,7 @@ GitHub Releases is the distribution and update channel, period:
 - `omp-web update` is built for it (manifest + tarball assets, `releases/latest/download/…`, sha256 verify, pinned-dir re-install).
 - Install from GitHub needs no registry: `bun add https://github.com/nibblebot/omp-web/releases/download/v<x>/omp-web-<x>.tgz` (or the install script pointed at the tarball). `private: true` stays.
 
-## Update-channel contract (load-bearing, already implemented)
+## Update-channel contract (load-bearing, implemented)
 
 - Manifest asset at the stable URL `https://github.com/nibblebot/omp-web/releases/latest/download/release-manifest.json`:
   ```json
@@ -29,23 +18,9 @@ GitHub Releases is the distribution and update channel, period:
 - `tarball` resolves against the same `…/releases/latest/download/` base; `--version x.y.z` swaps the base to `…/releases/download/v<x.y.z>/` → **every** release must attach `omp-web-<version>.tgz` + `release-manifest.json` with exactly these names.
 - sha256 verification against the manifest happens before `bun add` (tarball installs carry no registry integrity metadata — it's our job).
 - `releases/latest/download/<asset>` always redirects to the newest release: **never attach the manifest to drafts or prereleases**, or `update` will offer them.
+- `cli/update.ts` defaults the channel to `GITHUB_RELEASES_BASE` (`https://github.com/nibblebot/omp-web/releases/latest/download`); `OMP_WEB_UPDATE_URL` overrides it (the local E2E and tests use the override).
 
-## Steps
-
-### 1. Push to GitHub — user-confirmed action
-
-- [ ] `gh repo create nibblebot/omp-web --public --source . --remote origin --push` after checking out `main` (or `--private` if the user prefers; asset downloads from a private repo require auth, so public is the path of least resistance for `update`). Repo name/visibility confirmed with the user before executing.
-- [ ] Verify `git ls-remote origin` + `gh repo view nibblebot/omp-web`.
-
-### 2. Default the update channel to GitHub — `cli/update.ts`
-
-Must land **before** v0.1.0: without it, first-release installs ship with no channel and can never self-update.
-
-- [ ] Replace the env-only lookup in `main()` with `const base = process.env.OMP_WEB_UPDATE_URL ?? GITHUB_RELEASES_BASE`, where `GITHUB_RELEASES_BASE = "https://github.com/nibblebot/omp-web/releases/latest/download"`. Env stays as override (the local E2E + tests use it). Delete the "Phase 6 replaces…" comments and the "no update channel configured" exit.
-- [ ] `cli/update.test.ts`: case asserting the GitHub base is used when the env var is unset (existing env-override cases keep passing).
-- [ ] `bun scripts/test.ts cli/update.test.ts` + `bun run check:types`.
-
-### 3. `scripts/release.ts` — build this
+## Release orchestrator — `scripts/release.ts`
 
 One command: `bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm] [--notes-file <path>] [--stage | --go]`. No version arg → **compute the bump** from commit classification. `<x.y.z>` → explicit version (overrides the computed bump). `--dry-run` → run everything through the changelog step, print the plan, touch nothing. `--notes-file <path>` → use a hand-written markdown file as the GitHub release notes instead of the changelog section (the changelog is still generated, committed to `CHANGELOG.md`, and used everywhere else; the flag only replaces what `gh release create --notes-file` gets).
 
@@ -71,21 +46,6 @@ One command: `bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm] [-
 
 Tests: `scripts/release.test.ts` — pure deterministic core only (classification, bump computation, changelog skeleton/formatting, manifest generation, validation, precondition checks, dry-run output). The LLM path is exercised as degrade-only in unit tests (fake session factory returning null/throw → fallback). The script is idempotent-safe only up to the tag step — once the tag is pushed, re-running must refuse at precondition 1.
 
-### 4. First release: v0.1.0
-
-- [ ] `bun scripts/release.ts 0.1.0 --yes --notes-file <path>` — tags `v0.1.0`, creates the release with both assets, creates `CHANGELOG.md`. Hand-written release notes (recommended for the first release — a curated summary reads better than the auto changelog); the changelog section remains the `CHANGELOG.md` entry.
-- [ ] Sanity: curl the manifest URL; confirm the tarball downloads; sha256 matches.
-
-### 5. Live channel check (the real E2E)
-
-- [ ] Install v0.1.0 from the release tarball URL via the install script (sandboxed `HOME`/`BUN_INSTALL`, same shape as `scripts/test-onboard.ts` but against the real channel).
-- [ ] `bun scripts/release.ts` (no arg — exercises the auto-bump path) → 0.2.0 second release.
-- [ ] `omp-web update` (no `OMP_WEB_UPDATE_URL` — exercises the step-2 GitHub default) in the sandbox → assert re-install + `omp-web --version` prints `0.2.0`. Also `omp-web update --version 0.1.0` against the pinned-tag URL path.
-
-### 6. Deferred
-
-- [ ] CI — none today; the release script's local gate is the quality bar for now.
-
 ## Risks & constraints (release-relevant)
 
 - Asset naming convention is a hard contract: `--version x.y.z` constructs `omp-web-<x.y.z>.tgz` URLs blindly. The release script enforces it; manual releases must not.
@@ -96,3 +56,12 @@ Tests: `scripts/release.test.ts` — pure deterministic core only (classificatio
 - LLM changelog is best-effort by design: the deterministic skeleton + per-group fallback guarantee a valid changelog even with no model/auth/network. Never block a release on the LLM.
 - Commit classification is prefix-based and imperfect (compound prefixes like `fleet+ui:` classify as `other` → patch). The classification table is printed and the target version is confirmed before tagging; explicit version arg overrides.
 - Git identity is the local placeholder (`omp-web <omp-web@local>`) — release commits carry it until the user sets a real identity. No LICENSE in a public repo = all-rights-reserved; revisit if that matters.
+
+## Remaining actions (carried over from the removed release plan)
+
+Step 2 (default the update channel to GitHub) is done — `cli/update.ts` now defaults to `GITHUB_RELEASES_BASE` and `cli/update.test.ts` asserts the fallback. Still open:
+
+- [ ] **Push to GitHub** — `gh repo create nibblebot/omp-web --public --source . --remote origin --push` from `main` (or `--private` if preferred; asset downloads from a private repo require auth, so public is the path of least resistance for `update`). Repo name/visibility to be confirmed with the user before executing. Verify `git ls-remote origin` + `gh repo view nibblebot/omp-web`.
+- [ ] **First release v0.1.0** — `bun scripts/release.ts 0.1.0 --yes --notes-file <path>`: tags `v0.1.0`, creates the release with both assets, creates `CHANGELOG.md`. Hand-written release notes recommended for the first release (a curated summary reads better than the auto changelog); the changelog section remains the `CHANGELOG.md` entry. Sanity: curl the manifest URL; confirm the tarball downloads; sha256 matches.
+- [ ] **Live channel check (the real E2E)** — install v0.1.0 from the release tarball URL via the install script (sandboxed `HOME`/`BUN_INSTALL`, same shape as `scripts/test-onboard.ts` but against the real channel); verify the one-liner `curl -fsSL …/scripts/install.sh | sh` on a machine without bun installs bun, then omp-web, and `omp-web --version` prints 0.1.0; `bun scripts/release.ts` (no arg — exercises the auto-bump path) → 0.2.0 second release; `omp-web update` (no `OMP_WEB_UPDATE_URL` — exercises the GitHub default) in the sandbox → assert re-install + `omp-web --version` prints `0.2.0`; also `omp-web update --version 0.1.0` against the pinned-tag URL path.
+- [ ] **CI (deferred)** — none today; the release script's local gate is the quality bar for now.

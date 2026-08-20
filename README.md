@@ -49,6 +49,19 @@ Deep dive: [`docs/architecture.md`](docs/architecture.md) — wire contract, mod
 ## Install
 
 ```sh
+# One-liner (bun-only; installs bun >= 1.3.14 if missing):
+curl -fsSL https://raw.githubusercontent.com/nibblebot/omp-web/main/scripts/install.sh | sh
+```
+
+The installer downloads the latest release tarball, verifies its sha256 against the release manifest, and installs it into a pinned project dir (`~/.omp-web/install/`) with a `~/.bun/bin/omp-web` symlink — then `omp-web update` keeps it current. Verify:
+
+```sh
+omp-web --version
+```
+
+Manual install from this repo (build → pack → install):
+
+```sh
 git clone <this-repo> && cd omp-web
 bun install
 bun run install:omp-web       # build → pack → install into ~/.omp-web/install/
@@ -70,21 +83,6 @@ omp-web update --check        # just report the newest version
 omp-web update --version x.y.z   # pin a specific release
 ```
 
-### Advanced
-
-```sh
-omp-web session [options]            # run a single-session agent daemon
-omp-web sessions | projects          # roster / registered projects
-omp-web spawn <path>                 # start a daemon on a directory
-omp-web add-repo <path> [--start]    # register a project (deduped on realpath)
-omp-web add-worktree <project> <name> [--no-start]      # create a managed worktree
-omp-web add-worktree <project> --existing <path>        # adopt an existing one
-omp-web stop <selector> | remove <selector>
-omp-web rm-project <selector> | rm-worktree <daemon-id> [--delete-branch]
-omp-web prompt <selector> <text> [--wait <ms>]
-```
-
-
 ## Configuration and State
 
 - Default data directory: `~/.omp-web/` 
@@ -97,4 +95,18 @@ omp-web prompt <selector> <text> [--wait <ms>]
 ```sh
 bun install
 bun dev      # roster mode: vite (HMR) + fleet — ports chosen per run
+```
+
+### Advanced
+
+```sh
+omp-web session [options]            # run a single-session agent daemon
+omp-web sessions | projects          # roster / registered projects
+omp-web spawn <path>                 # start a daemon on a directory
+omp-web add-repo <path> [--start]    # register a project (deduped on realpath)
+omp-web add-worktree <project> <name> [--no-start]      # create a managed worktree
+omp-web add-worktree <project> --existing <path>        # adopt an existing one
+omp-web stop <selector> | remove <selector>
+omp-web rm-project <selector> | rm-worktree <daemon-id> [--delete-branch]
+omp-web prompt <selector> <text> [--wait <ms>]
 ```

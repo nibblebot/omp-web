@@ -1,8 +1,9 @@
 /**
- * LLM-assisted changelog summarizer for the release machinery (release-plan.md
- * section 3). Deterministic structure, LLM prose: the caller groups commits
- * by class; this module runs one prompt per bounded chunk of commits, plus a
- * final bounded turn for the release overview, and returns a ChangelogDraft.
+ * LLM-assisted changelog summarizer for the release machinery (docs/release.md,
+ * "Release orchestrator" step 5). Deterministic structure, LLM prose: the
+ * caller groups commits by class; this module runs one prompt per bounded
+ * chunk of commits, plus a final bounded turn for the release overview, and
+ * returns a ChangelogDraft.
  *
  * Contracts:
  * - NEVER throws — every failure path (missing omp binary, non-zero exit,

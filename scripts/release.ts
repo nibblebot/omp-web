@@ -1,5 +1,5 @@
 /**
- * omp-web release orchestrator (release-plan.md section 3).
+ * omp-web release orchestrator (docs/release.md, "Release orchestrator").
  *
  * One command: `bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm]`.
  *

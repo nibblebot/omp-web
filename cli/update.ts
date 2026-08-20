@@ -1,5 +1,5 @@
 /**
- * `omp-web update` — Phase 3 of release-plan.md.
+ * `omp-web update` — self-update from the release channel (docs/release.md).
  *
  * Release channel: GitHub Releases. The stable latest-release base is
  * `https://github.com/<owner>/<repo>/releases/latest/download`; the GitHub
