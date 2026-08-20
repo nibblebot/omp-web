@@ -246,12 +246,31 @@ describe("changelogSection", () => {
 			"## v0.2.0 — 2026-08-19\n\nA release.\n\n### Features\n- b\n",
 		);
 	});
+
+	test("every bullet renders as one markdown list item", () => {
+		const groups = [
+			{
+				heading: "Features",
+				// Mixed inputs: already-bulleted, marker-less, star-prefixed,
+				// and blank — all must normalize to a single `- ` bullet.
+				bullets: ["already bulleted", "* star bullet", "- plus a marker", "", "  "],
+			},
+		];
+		expect(changelogSection("0.2.0", "2026-08-19", null, groups)).toBe(
+			"## v0.2.0 — 2026-08-19\n" +
+				"\n" +
+				"### Features\n" +
+				"- already bulleted\n" +
+				"- star bullet\n" +
+				"- plus a marker\n",
+		);
+	});
 });
 
 describe("fallbackBullets + validateCoverage", () => {
 	test("fallbackBullets format", () => {
 		expect(fallbackBullets([commit("abc1234", "feat: add x")])).toEqual([
-			"feat: add x ([abc1234](https://github.com/nibblebot/omp-web/commit/abc1234))",
+			"- feat: add x ([abc1234](https://github.com/nibblebot/omp-web/commit/abc1234))",
 		]);
 	});
 

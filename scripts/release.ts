@@ -226,9 +226,9 @@ export function parseGitLog(raw: string): CommitInfo[] {
 		});
 }
 
-/** Deterministic changelog bullets: `<subject> ([<hash>](<COMMIT_URL><hash>))`. */
+/** Deterministic changelog bullets: `- <subject> ([<hash>](<COMMIT_URL><hash>))`. */
 export function fallbackBullets(commits: { hash: string; subject: string }[]): string[] {
-	return commits.map((c) => `${c.subject} ([${c.hash}](${COMMIT_URL}${c.hash}))`);
+	return commits.map((c) => `- ${c.subject} ([${c.hash}](${COMMIT_URL}${c.hash}))`);
 }
 
 /**
@@ -254,6 +254,11 @@ export function validateCoverage(
  * `## v<version> — <date>`, blank, overview paragraph (omitted when null),
  * then per group `### <heading>` + bullets, blank between groups, trailing
  * newline.
+ *
+ * Every bullet is normalized to a markdown list item: a stray leading
+ * `-`/`*`/`+` marker (e.g. a model that already bulleted its output) is
+ * stripped, empty lines are dropped, and the `- ` prefix is applied so each
+ * commit renders as its own bullet.
  */
 export function changelogSection(
 	version: string,
@@ -263,7 +268,13 @@ export function changelogSection(
 ): string {
 	const parts: string[] = [`## v${version} — ${date}`];
 	if (overview !== null) parts.push("", overview);
-	for (const group of groups) parts.push("", `### ${group.heading}`, ...group.bullets);
+	for (const group of groups) {
+		parts.push("", `### ${group.heading}`);
+		for (const bullet of group.bullets) {
+			const line = bullet.trim().replace(/^[-*+]\s+/, "");
+			if (line.length > 0) parts.push(`- ${line}`);
+		}
+	}
 	return parts.join("\n") + "\n";
 }
 
