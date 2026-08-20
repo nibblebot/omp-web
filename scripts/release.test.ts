@@ -21,6 +21,7 @@ import {
 	parseGitLog,
 	parseReleaseArgs,
 	prependChangelog,
+	releaseTreeProblem,
 	stagedProblems,
 	validateCoverage,
 	validateTarball,
@@ -519,5 +520,32 @@ describe("stagedProblems", () => {
 		writeFileSync(join(dir, "release-manifest.json"), MANIFEST("0".repeat(64)));
 		const problems = await stagedProblems(dir, "0.1.0", CHANGELOG);
 		expect(problems.some((p) => p.includes("sha256 mismatch"))).toBe(true);
+	});
+});
+
+describe("releaseTreeProblem", () => {
+	const stagedAdd = "A  CHANGELOG.md\n";
+	const stagedModify = " M package.json\n M CHANGELOG.md\n";
+
+	test("accepts a first-release tree: staged CHANGELOG.md add only", () => {
+		expect(releaseTreeProblem(stagedAdd)).toBeNull();
+	});
+
+	test("accepts a later-release tree: modified package.json + CHANGELOG.md", () => {
+		expect(releaseTreeProblem(stagedModify)).toBeNull();
+	});
+
+	test("accepts the unstaged first-release variant (CHANGELOG.md add, dirty)", () => {
+		expect(releaseTreeProblem("A? CHANGELOG.md\n")).toBeNull();
+	});
+
+	test("rejects a tree with no CHANGELOG.md", () => {
+		const problem = releaseTreeProblem(" M package.json\n");
+		expect(problem).toContain("no staged CHANGELOG.md");
+	});
+
+	test("rejects any unexpected working-tree change", () => {
+		const problem = releaseTreeProblem(" M package.json\n M CHANGELOG.md\n M src/state.ts\n");
+		expect(problem).toContain("src/state.ts");
 	});
 });

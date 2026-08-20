@@ -429,6 +429,39 @@ function buildChangelog(
 	return changelogSection(version, date, draft?.overview ?? null, finalGroups);
 }
 
+/**
+ * The porcelain entries a staged release may legitimately leave: package.json
+ * and CHANGELOG.md, each either modified (` M`/`M `) or, on the first release
+ * (when both files are created/rewritten rather than edited), an added file
+ * (`A ` staged / `A?` unstaged). Everything else is an unexpected change.
+ */
+const RELEASE_TOUCHED: Record<string, true> = {
+	" M package.json": true,
+	"M  package.json": true,
+	" M CHANGELOG.md": true,
+	"M  CHANGELOG.md": true,
+	"A  CHANGELOG.md": true,
+	"A? CHANGELOG.md": true,
+};
+
+/**
+ * Validate the working-tree state a staged release leaves behind: exactly
+ * package.json (optional — the first release may not bump it) and
+ * CHANGELOG.md present, no other changes. Returns a failure message or null
+ * when the tree is a valid staged release. Pure: porcelain input, no git.
+ */
+export function releaseTreeProblem(porcelain: string): string | null {
+	const lines = porcelain.split("\n").filter(Boolean);
+	const bad = lines.filter((l) => !(l in RELEASE_TOUCHED));
+	if (bad.length > 0) {
+		return `unexpected working-tree changes (a staged release only touches package.json + CHANGELOG.md):\n${bad.join("\n")}`;
+	}
+	if (!lines.some((l) => l.endsWith("CHANGELOG.md"))) {
+		return "no staged CHANGELOG.md — run `bun scripts/release.ts <version> --stage` first";
+	}
+	return null;
+}
+
 /** Clean tree, with a hint when a staged release is present. */
 async function checkCleanTree(): Promise<void> {
 	const porcelain = await run(["git", "status", "--porcelain"]);
@@ -438,7 +471,7 @@ async function checkCleanTree(): Promise<void> {
 		return;
 	}
 	const lines = dirty.split("\n").filter(Boolean);
-	const stagedOnly = lines.every((l) => l === " M package.json" || l === " M CHANGELOG.md");
+	const stagedOnly = lines.every((l) => l in RELEASE_TOUCHED);
 	const hint = stagedOnly
 		? "\n(staged release present — run `bun scripts/release.ts --go` to publish, or `git restore package.json CHANGELOG.md` to discard)"
 		: "";
@@ -635,19 +668,12 @@ async function publishStaged(opts: { yes: boolean; dryRun: boolean }): Promise<v
 	const tag = `v${version}`;
 
 	// The tree must carry exactly the staged changes (package.json may be
-	// unmodified on the first release when the version is unchanged).
+	// unmodified on the first release when the version is unchanged, and
+	// CHANGELOG.md is created on the first release, so porcelain shows it as
+	// a staged add `A ` rather than ` M`).
 	const porcelain = await run(["git", "status", "--porcelain"]);
-	const lines = porcelain.stdout.toString().trim().split("\n").filter(Boolean);
-	const allowed = new Set([" M package.json", " M CHANGELOG.md"]);
-	const bad = lines.filter((l) => !allowed.has(l));
-	if (!lines.some((l) => l === " M CHANGELOG.md")) {
-		fail("no staged CHANGELOG.md — run `bun scripts/release.ts <version> --stage` first");
-	}
-	if (bad.length > 0) {
-		fail(
-			`unexpected working-tree changes (a staged release only touches package.json + CHANGELOG.md):\n${bad.join("\n")}`,
-		);
-	}
+	const treeProblem = releaseTreeProblem(porcelain.stdout.toString());
+	if (treeProblem !== null) fail(treeProblem);
 	console.log("release: ok staged tree (package.json + CHANGELOG.md)");
 
 	const problems = await stagedProblems(
