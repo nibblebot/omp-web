@@ -1,3 +1,15 @@
+## v0.1.1 — 2026-08-20
+
+This release fixes two chat issues: pinned chat streams now stay pinned through any content change, and the queued-steer chip is cleared once the steer is delivered. It also improves reliability by replacing a flaky queued-steer end-to-end test with hermetic coverage, and anchors the pinned install directory as its own bun project.
+
+### Bug fixes
+- fix(chat): re-pin a pinned stream on ANY content change via content ResizeObserver ([a364b3eaad8e14a3e9b4acfa9ea7906719636c20](https://github.com/nibblebot/omp-web/commit/a364b3eaad8e14a3e9b4acfa9ea7906719636c20))
+- fix(server): clear queued-steer chip when the steer is delivered ([dc53303d3ae3351a5bccd009d24fabbb00f3622b](https://github.com/nibblebot/omp-web/commit/dc53303d3ae3351a5bccd009d24fabbb00f3622b))
+
+### Maintenance & other
+- test(server): drop flaky queued-steer e2e; hermetic wireSession suite covers the fix ([1ff7e3a5367ec0a428aa766277b9456834b55987](https://github.com/nibblebot/omp-web/commit/1ff7e3a5367ec0a428aa766277b9456834b55987))
+- install: anchor pinned install dir as its own bun project ([1774e9cf23d7a79f64475a7d1f3b659c27f5d8d6](https://github.com/nibblebot/omp-web/commit/1774e9cf23d7a79f64475a7d1f3b659c27f5d8d6))
+
 ## v0.1.0 — 2026-08-20
 
 ### Breaking changes
