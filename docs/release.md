@@ -55,7 +55,7 @@ Tests: `scripts/release.test.ts` — pure deterministic core only (classificatio
 - `package.json` version is the single source of truth; `cli/version.ts` reads it (define stamp in the bundle). The release script is the only thing that bumps it.
 - LLM changelog is best-effort by design: the deterministic skeleton + per-group fallback guarantee a valid changelog even with no model/auth/network. Never block a release on the LLM.
 - Commit classification is prefix-based and imperfect (compound prefixes like `fleet+ui:` classify as `other` → patch). The classification table is printed and the target version is confirmed before tagging; explicit version arg overrides.
-- Git identity is the local placeholder (`omp-web <omp-web@local>`) — release commits carry it until the user sets a real identity. No LICENSE in a public repo = all-rights-reserved; revisit if that matters.
+- Git identity is the local placeholder (`omp-web <omp-web@local>`) — release commits carry it until the user sets a real identity. Repo is MIT-licensed (`LICENSE`).
 
 ## Remaining actions (carried over from the removed release plan)
 
