@@ -194,6 +194,14 @@ install_via_bun() {
 	fi
 
 	mkdir -p "$INSTALL_DIR/install"
+	# Anchor the install dir as its own bun project: `bun add` with no local
+	# package.json walks UP to the nearest project root — an ancestor of the
+	# install dir (a repo under ~, $HOME, or a --prefix nested in a project) —
+	# and attaches there, dropping node_modules into it. A successful add
+	# writes a package.json of its own, so only a fresh dir needs the anchor.
+	if [ ! -f "$INSTALL_DIR/install/package.json" ]; then
+		printf '%s\n' '{"name":"omp-web-install","private":true}' > "$INSTALL_DIR/install/package.json"
+	fi
 	(cd "$INSTALL_DIR/install" && bun remove "$PACKAGE" >/dev/null 2>&1 || true)
 	if ! (cd "$INSTALL_DIR/install" && bun add "$WORK/${PACKAGE}.tgz"); then
 		echo "Failed to install $PACKAGE"

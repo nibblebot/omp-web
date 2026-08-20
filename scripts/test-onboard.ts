@@ -281,6 +281,38 @@ try {
 		r.stdout.trim(),
 	);
 
+	// Anchor a poisoned ANCESTOR project: with no package.json of its own,
+	// `bun add` walks UP from the install dir and attaches to the nearest
+	// project root, silently installing node_modules into it.
+	// The install dir's own anchor must prevent that.
+	const ancestorPkg = join(sandbox, "package.json");
+	const ancestorMarker = JSON.stringify({ name: "onboard-ancestor", private: true });
+	writeFileSync(ancestorPkg, ancestorMarker);
+	r = await run(
+		"install:omp-web (poisoned ancestor project)",
+		["bun", "scripts/install-omp-web.ts", tgz, "--prefix", dataHome],
+		{ timeoutMs: 180_000 },
+	);
+	check("reinstall succeeds with poisoned ancestor", r.code === 0, r.stderr.slice(-300));
+	check(
+		"ancestor package.json untouched (no walk-up attach)",
+		readFileSync(ancestorPkg, "utf8") === ancestorMarker,
+		readFileSync(ancestorPkg, "utf8"),
+	);
+	check(
+		"no node_modules in the ancestor project",
+		!existsSync(join(sandbox, "node_modules")),
+		"found ancestor node_modules",
+	);
+	check(
+		"install dir package.json exists after install",
+		existsSync(join(dataHome, "install", "package.json")),
+		"",
+	);
+	// Keep the poisoned ancestor around: the update round-trip (step 7) runs
+	// `bun remove`/`bun add` in the same pinned dir, and must also stay
+	// anchored instead of attaching to it.
+
 	// 2b. install.sh (bun-only, curl-pipe style): a FRESH HOME + BUN_INSTALL
 	// + data home. The fixture server hosts the release assets at the
 	// download-URL shape install.sh hits; the script must resolve "latest"
@@ -356,6 +388,16 @@ try {
 		{ env: installerEnv, timeoutMs: 180_000 },
 	);
 	check("install.sh reinstall succeeds", r.code === 0, r.stderr.slice(-400));
+	check(
+		"install.sh ancestor package.json untouched",
+		readFileSync(ancestorPkg, "utf8") === ancestorMarker,
+		readFileSync(ancestorPkg, "utf8"),
+	);
+	check(
+		"no node_modules in the ancestor project (install.sh)",
+		!existsSync(join(sandbox, "node_modules")),
+		"found ancestor node_modules",
+	);
 	installerServer.stop();
 
 	// 3. Fixture repo + linked worktree
@@ -575,6 +617,18 @@ try {
 	);
 	r = await run("--version after update", [bin, "--version"]);
 	check(`--version prints ${v2}`, r.code === 0 && r.stdout.trim() === v2, r.stdout.trim());
+	// The update path runs bun remove/add in the pinned dir — must not walk
+	// up into the poisoned ancestor.
+	check(
+		"update ancestor package.json untouched",
+		readFileSync(ancestorPkg, "utf8") === ancestorMarker,
+		readFileSync(ancestorPkg, "utf8"),
+	);
+	check(
+		"no node_modules in the ancestor project (update)",
+		!existsSync(join(sandbox, "node_modules")),
+		"found ancestor node_modules",
+	);
 } catch (err) {
 	fatal = err instanceof Error ? err.message : String(err);
 } finally {

@@ -16,7 +16,7 @@
  * prefix.
  */
 import { createHash } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -237,6 +237,12 @@ async function realInstall(tarballPath: string): Promise<number> {
 		);
 		return 1;
 	}
+	// Anchor the install dir as a bun project so `bun remove`/`bun add` never
+	// walk UP to an ancestor package.json (a repo or $HOME that owns one) and
+	// attach there — the install dir has no package.json of its own unless a
+	// successful add wrote one.
+	if (!existsSync(join(installDir, "package.json")))
+		writeFileSync(join(installDir, "package.json"), '{"name":"omp-web-install","private":true}\n');
 	const remove = Bun.spawn(["bun", "remove", "omp-web"], {
 		cwd: installDir,
 		stdout: "inherit",

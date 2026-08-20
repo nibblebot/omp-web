@@ -28,7 +28,7 @@
  * and installs the freshly produced omp-web-<version>.tgz.
  */
 
-import { existsSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -85,7 +85,15 @@ const binPath = join(binDir, "omp-web");
 // 1. Install (or upgrade) the tarball into the dedicated project dir. A
 //    same-name path-tarball re-add trips bun's dependency-loop check, so
 //    upgrades remove first (tolerating "nothing installed").
+//
+//    The install dir must be a bun project of its own: `bun add` with no
+//    local package.json walks UP to the nearest project root, so without
+//    this the first install would attach to the nearest ancestor of the
+//    install dir (a repo under ~, $HOME, or a --prefix nested in a project)
+//    and drop node_modules there.
 mkdirSync(installDir, { recursive: true });
+if (!existsSync(join(installDir, "package.json")))
+	writeFileSync(join(installDir, "package.json"), '{"name":"omp-web-install","private":true}\n');
 const remove = Bun.spawn(["bun", "remove", "omp-web"], { cwd: installDir });
 const removeCode = (await remove.exited) ?? 1;
 if (removeCode !== 0 && removeCode !== 1) fail(`bun remove failed (exit ${removeCode})`);
