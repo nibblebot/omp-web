@@ -59,16 +59,6 @@ The installer downloads the latest release tarball, verifies its sha256 against 
 omp-web --version
 ```
 
-Manual install from this repo (build → pack → install):
-
-```sh
-git clone <this-repo> && cd omp-web
-bun install
-bun run install:omp-web       # build → pack → install into ~/.omp-web/install/
-omp-web --version             # verify: prints <version>
-```
-
-
 ## Usage
 
 ```sh
@@ -107,7 +97,7 @@ diverged fork — delete the worktree's dev state file
 seeding and starts on a clean state (removes the worktree's existing dev
 state, so the roster boots empty); the next plain `bun dev` forks again.
 
-### Advanced
+## Advanced
 
 ```sh
 omp-web session [options]            # run a single-session agent daemon
@@ -119,4 +109,15 @@ omp-web add-worktree <project> --existing <path>        # adopt an existing one
 omp-web stop <selector> | remove <selector>
 omp-web rm-project <selector> | rm-worktree <daemon-id> [--delete-branch]
 omp-web prompt <selector> <text> [--wait <ms>]
+```
+
+## Manual install
+
+Install from this repo (build → pack → install):
+
+```sh
+git clone <this-repo> && cd omp-web
+bun install
+bun run install:omp-web       # build → pack → install into ~/.omp-web/install/
+omp-web --version             # verify: prints <version>
 ```
