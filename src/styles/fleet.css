@@ -17,10 +17,50 @@
 .sidebar:not(.open) {
 	display: none;
 }
-/* Narrow viewports: the docked column caps at 80vw so the chat stays usable. */
+/* Narrow viewports: the sidebar stops participating in .app-body layout and
+   becomes a fixed slide-out overlay — docking it would push the chat column
+   off-screen. Closed state slides off-canvas instead of display:none so the
+   transform transition can run. */
+.sidebar-scrim {
+	display: none;
+}
 @media (max-width: 720px) {
 	.sidebar {
+		position: fixed;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		z-index: calc(var(--z-overlay) + 1);
 		width: min(var(--sidebar-w), 80vw);
+		box-shadow: var(--shadow-1);
+		transform: translateX(0);
+		transition:
+			transform var(--dur-base) var(--ease-out),
+			visibility 0s;
+	}
+	.sidebar:not(.open) {
+		display: flex;
+		visibility: hidden;
+		transform: translateX(-105%);
+		transition:
+			transform var(--dur-base) var(--ease-out),
+			visibility 0s var(--dur-base);
+	}
+	.sidebar-scrim {
+		display: block;
+		position: fixed;
+		inset: 0;
+		z-index: var(--z-overlay);
+		background: var(--backdrop);
+		border: none;
+		padding: 0;
+		cursor: default;
+	}
+}
+@media (max-width: 720px) and (prefers-reduced-motion: reduce) {
+	.sidebar,
+	.sidebar:not(.open) {
+		transition: none;
 	}
 }
 /* Floating roster toggle: sticky top-left of the viewport. Roster mode only,

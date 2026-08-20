@@ -317,7 +317,14 @@ export const [state, setState] = createStore({
 	// new session). Cleared by the picker on close/new-session.
 	sessionPickerGate: null as { daemonId: string } | null,
 	sidebarVisible:
-		typeof localStorage !== "undefined" ? localStorage.getItem(SIDEBAR_KEY) !== "false" : true,
+		typeof localStorage !== "undefined"
+			? // First run on a narrow viewport starts closed: the sidebar is a
+				// slide-out overlay there, not a docked column (fleet.css).
+				(localStorage.getItem(SIDEBAR_KEY) ??
+					(typeof matchMedia !== "undefined" && matchMedia("(max-width: 720px)").matches
+						? "false"
+						: "true")) !== "false"
+			: true,
 	// Top-level view: "chat" (live session) or "transcripts" (historical
 	// transcripts/stats browser — only meaningful in roster mode, where the
 	// /ctl/stats API exists; the StatusBar toggle gates on sessionMode).

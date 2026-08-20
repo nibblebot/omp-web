@@ -36,7 +36,15 @@ import {
 	Toasts,
 	UsageModal,
 } from "./components/overlays";
-import { connect, hasLiveSession, setPromptInsert, setState, state, toggleSidebar } from "./state";
+import {
+	connect,
+	hasLiveSession,
+	setPromptInsert,
+	setSidebarVisible,
+	setState,
+	state,
+	toggleSidebar,
+} from "./state";
 import { initTheme } from "./prefs/theme";
 import { TxBrowser } from "./tx/Browser";
 
@@ -148,6 +156,18 @@ export const App: Component = () => {
 				    toggle now lives in its footer. */}
 				<Show when={state.sessionMode === "roster"}>
 					<DaemonSidebar />
+					{/* Narrow-viewport slide-out: tapping outside the overlay sidebar
+					    closes it. Hidden by CSS on wide layouts, where the sidebar
+					    docks instead of overlaying. */}
+					<Show when={state.sidebarVisible}>
+						<button
+							type="button"
+							class="sidebar-scrim"
+							tabindex={-1}
+							onClick={() => setSidebarVisible(false)}
+							aria-label="Close sidebar"
+						/>
+					</Show>
 				</Show>
 				<Show when={state.view === "transcripts"}>
 					<TxBrowser />
