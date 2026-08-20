@@ -21,7 +21,7 @@ omp-web has full control of the omp agent by using the SDK compared with other G
 
 ## Runtime Modes
 
-- **Fleet Mode** (`omp-web`) — starts the fleet (registry + supervisor + UI server); the browser talks to the fleet, manages repos and worktree state, and proxies you through to any daemon. 
+- **Fleet Mode** (`omp-web`) — starts the fleet (registry + supervisor + UI server); the browser talks to the fleet, manages repos and worktree state, and proxies you through to any daemon.
 - **Single Session Mode** (`omp-web session`) — the browser talks to one session daemon directly; the daemon serves the full single-session UI.
 - **Sessions run as separate processes** — one worktree directory each, bound at spawn. A daemon hosts one live agent session in-process via the SDK — no child-process JSON-RPC hop — and serves the UI over SSE + POST.
 
@@ -34,7 +34,7 @@ flowchart TB
   model["Model provider"]
   log["session .jsonl — durable truth"]
 
-  subgraph daemons["agent daemons<br/>one per worktree (1..N)"]
+  subgraph daemons["agent daemons"]
     daemon1["<b>omp-web session</b> <br/>omp SDK daemon"]
     dots["…"]
   end
@@ -59,7 +59,9 @@ Deep dive: [`docs/architecture.md`](docs/architecture.md) — wire contract, mod
 curl -fsSL https://raw.githubusercontent.com/nibblebot/omp-web/main/scripts/install.sh | sh
 ```
 
-The installer downloads the latest release tarball, verifies its sha256 against the release manifest, and installs it into a pinned project dir (`~/.omp-web/install/`) with a `~/.bun/bin/omp-web` symlink — then `omp-web update` keeps it current. Verify:
+The installer downloads the latest release tarball, verifies its sha256 against the release manifest, and installs it into a pinned project dir (`~/.omp-web/install/`) with a `~/.bun/bin/omp-web` symlink — then `omp-web update` keeps it current.
+
+## Verify:
 
 ```sh
 omp-web --version
@@ -68,20 +70,20 @@ omp-web --version
 ## Usage
 
 ```sh
-omp-web # start the fleet: registry + supervisor + UI
+omp-web                         # start the fleet: registry + supervisor + UI
 ```
 
 ## Self-update
 
 ```sh
-omp-web update                # check the release channel and reinstall the latest
-omp-web update --check        # just report the newest version
-omp-web update --version x.y.z   # pin a specific release
+omp-web update                  # check the release channel and reinstall the latest
+omp-web update --check          # just report the newest version
+omp-web update --version x.y.z  # pin a specific release
 ```
 
 ## Configuration and State
 
-- Default data directory: `~/.omp-web/` 
+- Default data directory: `~/.omp-web/`
 - `config.json` (defaults, written only by the first-run offer)
 - `fleet-state.json` (roster + registered projects, atomic writes, exclusive pidfile lock)
 - `workspaces/` (managed worktrees, created lazily). Chosen at first run; config, state, and workspaces always live together under it.
