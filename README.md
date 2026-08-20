@@ -2,12 +2,18 @@
 
 omp-web is a **web UI for running multiple oh-my-pi sessions, across all your repos and worktrees** — one installed command, one browser UI, N agent sessions.
 
+omp-web has full control of the omp agent by using the SDK compared with other GUIs which use the RPC (which has no daemon control and limited subagent control).
+
 <img id="omp-web-demo" src="docs/screenshots/omp-web-demo.gif" alt="omp-web UI demo" width="720">
+
+
+> **⚠ Early-stage software.** omp-web is under active development and has sharp edges. Expect breaking changes between releases — the wire protocol, config/state formats, and UI are not yet stable. Session transcripts are durable `.jsonl` files, but the surrounding tooling (fleet state, config, managed worktrees) is still evolving; don't treat this as production data storage yet. Report issues and rough spots as you find them.
 
 ## Features
 
 - **Multiple Repos, Multiple Worktrees, Multiple Sessions, one UI.** Start, monitor, and chat with one agent daemon per worktree across every repo.
 - **A full web UI, not a terminal wrapper.** Live-streamed responses, rendered markdown and diffs, tool output, slash commands, prompt history and autocomplete, per-session context/usage meters, and a transcripts/stats view.
+- **Custom wire protocol to support full SDK control** A significant advantage versus RPC based clients.
 - **Manage Repos and Worktrees from the UI** Register projects (deduped by realpath), create or adopt managed worktrees, and delete them safely — clean-tree-only, `git branch -d`, no `--force`.
 - **CLI for automation** Spawn, stop, remove, inspect, and fan a prompt out to many daemons from the terminal — the same fleet the browser talks to.
 - **Self-updating** `omp-web update` checks the release channel and reinstalls the latest version in one command.
