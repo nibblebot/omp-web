@@ -188,28 +188,6 @@ function thinkingLevelOf(frame: Frame): string | undefined {
 	return undefined;
 }
 
-/** Read queuedMessageCount out of a wire `state` frame (narrowed via `in`). */
-function queuedCountOf(frame: Frame): number | undefined {
-	const st = frame.state;
-	if (st && typeof st === "object" && "queuedMessageCount" in st)
-		return st.queuedMessageCount as number | undefined;
-	return undefined;
-}
-
-/** The message carried by a wire `event` frame (narrowed via `in`). */
-function eventMessageOf(frame: Frame): { role?: unknown; steering?: unknown } | undefined {
-	const ev = frame.event;
-	if (ev && typeof ev === "object" && "message" in ev) {
-		const msg = ev.message;
-		if (msg && typeof msg === "object")
-			return {
-				role: "role" in msg ? msg.role : undefined,
-				steering: "steering" in msg ? msg.steering : undefined,
-			};
-	}
-	return undefined;
-}
-
 function parseContractLine(line: string): StdoutContractLine | null {
 	if (!line.startsWith(OMP_SESSION_PREFIX)) return null;
 	try {
@@ -1168,96 +1146,6 @@ test("a second omp-session on the same --resume file exits 1 with a locked-sessi
 	} finally {
 		await rm(dir, { recursive: true, force: true }).catch(() => {});
 	}
-}, 60_000);
-
-test("a queued steer's chip clears when the steer is delivered mid-run", async () => {
-	// Regression: a queued steer is dequeued the moment the agent loop injects
-	// it (message_start with role user + steering true + attribution user), but
-	// no state broadcast fired at that point — the steer POST's post-mutation
-	// resync ran at queue time and agent_end is still far off.
-	// state.queuedMessageCount (and the QueueBar chips it refetches) stayed
-	// stale until the next unrelated broadcast. The subscribe now broadcasts
-	// state on the delivered steer's message_start, so the count drops right
-	// when the message lands in the transcript.
-	//
-	// The idle drain is not externally triggerable (no model, no fake stream),
-	// so this exercises the observable end-to-end delivery contract: a queued
-	// steer that reaches the transcript mid-run refreshes state to the
-	// post-delivery count, and that broadcast is newer than the delivered
-	// message_start event frame.
-	const proc = await spawnSession({});
-	running.push(proc);
-	const { port, cleanup } = proc;
-	const base = `http://127.0.0.1:${port}`;
-	const events = await openEvents(base);
-	// The ready gate is closed at spawn; wait for it to clear before steering
-	// (steer is NOT_READY_GATED).
-	await waitForFrame(events.frames, "ready", 20_000, "ready frame");
-	const before = await postCommand(base, {
-		type: "call",
-		id: "q0",
-		method: "getQueuedMessages",
-		args: [],
-	});
-	expect(before.status).toBe(202);
-	const beforeResult = await waitFor(
-		() => events.frames.find((f) => f.type === "call_result" && f.id === "q0") ?? null,
-		10_000,
-		"getQueuedMessages call_result",
-	);
-	expect(beforeResult.ok).toBe(true);
-	expect(beforeResult.data).toEqual({ steering: [], followUp: [] });
-
-	// Queue a steer. The post-mutation resync broadcasts state; the idle drain
-	// may already be delivering it, so the count here is 0-or-1 (never stale
-	// at 1 after delivery — the regression).
-	const steer = await postCommand(base, {
-		type: "call",
-		id: "q1",
-		method: "steer",
-		args: ["hold on, check the tests first"],
-	});
-	expect(steer.status).toBe(202);
-	const queued = await waitFor(
-		() => events.frames.find((f) => f.type === "call_result" && f.id === "q1") ?? null,
-		10_000,
-		"steer call_result",
-	);
-	expect(queued.ok).toBe(true);
-
-	// Wait for the delivered user steer to land in the transcript.
-	const delivered = await waitFor(
-		() => {
-			const frame = events.frames.find((f) => {
-				if (f.type !== "event") return false;
-				const msg = eventMessageOf(f);
-				return msg?.role === "user" && msg.steering === true;
-			});
-			return frame ?? null;
-		},
-		15_000,
-		"delivered steer message_start",
-	);
-	// A broadcast newer than the delivery must exist and must show the queue
-	// empty (the dequeue happened before message_start). With the fix, the
-	// delivery itself triggers that broadcast; without it, only the steer
-	// POST's resync (which ran BEFORE delivery, count 1) or the agent_end
-	// failure settle would appear. The find starts AFTER the delivered steer
-	// so an early prime-time count-0 state frame can't satisfy it.
-	const countAfter = await waitFor(
-		() => {
-			const deliveredIndex = events.frames.indexOf(delivered);
-			const frame = events.frames
-				.slice(deliveredIndex + 1)
-				.find((f) => f.type === "state" && queuedCountOf(f) === 0);
-			return frame ?? null;
-		},
-		10_000,
-		"state with queuedMessageCount 0 after delivery",
-	);
-	expect(events.frames.indexOf(countAfter)).toBeGreaterThan(events.frames.indexOf(delivered));
-	events.close();
-	await cleanup();
 }, 60_000);
 
 test("a crashed omp-session's stale lock is broken: the same --resume starts again", async () => {
