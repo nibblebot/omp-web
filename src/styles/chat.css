@@ -44,6 +44,10 @@
 	   box, and the stable gutter stops cards reflowing when the bar appears
 	   or disappears. */
 	scrollbar-gutter: stable;
+}
+/* Observed by useStickyScroll's content ResizeObserver: owns the row layout
+   so its border-box tracks every growth/shrink source in the stream. */
+.message-list-content {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-5);

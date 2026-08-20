@@ -10,15 +10,10 @@ const INNER_SCROLLBAR_PX = 14;
 // bottom hit; small enough that a mid-stream scroll-up escapes cleanly.
 const RE_PIN_DISTANCE_PX = 80;
 
-// Broadcast on the stream when DOM-only content lands after the reactive
-// flush (LiveTail's 160ms soften re-parse), so a pinned viewport re-snaps —
-// the store signals (items.length / live.rev) don't cover DOM-only mutations.
-export const CONTENT_CHANGED_EVENT = "omp:content-changed";
-
 /**
  * Imperative pin/unpin/gesture machinery for the message stream. Hands back
- * the container ref, the jump-to-bottom visibility signal, and the jump
- * button's click.
+ * the container + content refs, the jump-to-bottom visibility signal, and the
+ * jump button's click.
  *
  * Pin state is owned ENTIRELY by synchronous gesture handlers — scroll events
  * never touch it. Up-gestures (wheel-up, scrollbar grab, upward touch drag,
@@ -32,26 +27,33 @@ export const CONTENT_CHANGED_EVENT = "omp:content-changed";
  *    yanked back by the next event. Escape is irrevocable until the user
  *    gestures down into the band.
  * 2. Content growth can't move an unpinned viewport — snaps run only while
- *    pinned, so a pinned stream follows the live edge (the rAF deferral
- *    below) and an escaped one stays exactly where the user left it.
+ *    pinned, so a pinned stream follows the live edge and an escaped one
+ *    stays exactly where the user left it.
  *
- * While pinned, every content change re-snaps to the live edge — deferred
- * past layout (rAF) so LiveBlock/LiveTail DOM writes have landed (Solid
- * effects run after render but BEFORE child effects like LiveTail's
- * innerHTML write — a synchronous snap reads a stale scrollHeight and lands
- * short), plus a delegated broadcast for LiveTail's setTimeout re-parse, a
- * capture-phase `load` listener for image decodes, and a ResizeObserver for
- * window/font reflows. Starts pinned so a fresh attach/history load lands at
- * the bottom.
+ * While pinned, a ResizeObserver pair re-snaps the viewport to the live edge.
+ * Observing the CONTENT element catches every growth source with one
+ * mechanism: reveal-paced live text (each rAF flush grows the tail),
+ * streamed tool/bash output (in-place item mutations that never change
+ * items.length), toolCardsView mode switches (expanded/collapsed/
+ * consolidated), Ctrl+O expand-all, consolidated run-row toggles, image
+ * decodes, font reflows, LiveTail's 160ms soften re-parse. Observing the
+ * CONTAINER catches viewport resizes (window/sidebar) that change
+ * clientHeight without touching content. RO callbacks run after layout,
+ * before paint, so a synchronous snap lands in the same frame as the change
+ * (a store-signal effect would fire BEFORE child effects like LiveTail's
+ * innerHTML write and read a stale scrollHeight); scrollTop writes can't feed
+ * back because neither observed box changes size. Starts pinned so a fresh
+ * attach/history load lands at the bottom.
  */
 export function useStickyScroll(): {
 	containerRef: (el: HTMLDivElement) => void;
+	contentRef: (el: HTMLDivElement) => void;
 	jumpVisible: () => boolean;
 	jumpToBottom: () => void;
 } {
 	let container!: HTMLDivElement;
+	let content!: HTMLDivElement;
 	let pinned = true;
-	let snapRaf = 0;
 	let rePinRaf = 0;
 	const [jumpVisible, setJumpVisible] = createSignal(false);
 	// Mirror pin state into the store: agent_end (src/store/chat.ts) reads
@@ -92,16 +94,6 @@ export function useStickyScroll(): {
 	const snapToBottom = () => {
 		container.scrollTop = container.scrollHeight;
 	};
-	// Snap on the next animation frame, after the current reactive flush has
-	// laid out (see the module comment). rAF also coalesces the ≤60/s stream
-	// flushes into one write per frame.
-	const scheduleSnap = () => {
-		if (snapRaf !== 0) return;
-		snapRaf = requestAnimationFrame(() => {
-			snapRaf = 0;
-			if (pinned) snapToBottom();
-		});
-	};
 	// Wheel-down is a continuous gesture: re-check the band on the frame
 	// AFTER the browser applies each tick, so a single tick that jumps from
 	// just-outside to inside the band still re-pins.
@@ -118,19 +110,7 @@ export function useStickyScroll(): {
 		snapToBottom();
 	};
 	onCleanup(() => {
-		if (snapRaf !== 0) cancelAnimationFrame(snapRaf);
 		if (rePinRaf !== 0) cancelAnimationFrame(rePinRaf);
-	});
-	// Stream growth: every store-level content mutation re-snaps while pinned.
-	createEffect(() => {
-		// Subscribe to the content-change signals (values unused on purpose —
-		// tracking is the point; scheduleSnap does the work).
-		void state.items.length;
-		// live.rev is bumped on every live-block mutation; subscribing to it
-		// (instead of mapping block text lengths per flush) avoids allocating
-		// a lengths array on every rAF flush.
-		void state.live.rev;
-		scheduleSnap();
 	});
 	// Session switches re-pin: a fresh transcript starts at the bottom no
 	// matter where the previous session was scrolled (currentSessionId changes
@@ -292,18 +272,18 @@ export function useStickyScroll(): {
 		lastTouchTop = container.scrollTop;
 	};
 	onMount(() => {
-		// Window resizes / font reflows change clientHeight without a scroll
-		// event; a pinned stream must re-snap or the bottom drifts out of view.
+		// The single re-snap mechanism (see the module comment): content
+		// observation covers every growth/shrink source — streamed text, tool
+		// output, mode switches, run-row toggles, image decodes, soften
+		// re-parses; container observation covers viewport resizes that change
+		// clientHeight without a content change. Snapping synchronously in the
+		// callback (post-layout, pre-paint) lands in the same frame; a pinned
+		// stream can never drift, and an unpinned one is never touched.
 		const ro = new ResizeObserver(() => {
 			if (pinned) snapToBottom();
 		});
 		ro.observe(container);
-		// Image loads (data-URL decodes) change layout AFTER the reactive
-		// flush; capture-phase `load` catches them for a re-snap.
-		container.addEventListener("load", scheduleSnap, true);
-		// DOM-only content mutations (LiveTail's soften re-parse) broadcast
-		// their own re-snap request.
-		container.addEventListener(CONTENT_CHANGED_EVENT, scheduleSnap);
+		ro.observe(content);
 		container.addEventListener("wheel", onWheelRedirect, { passive: false });
 		container.addEventListener("mousedown", onScrollbarMouseDown);
 		container.addEventListener("keydown", onScrollKeyDown);
@@ -312,8 +292,6 @@ export function useStickyScroll(): {
 		document.addEventListener("mouseup", onMouseUp);
 		onCleanup(() => {
 			ro.disconnect();
-			container.removeEventListener("load", scheduleSnap, true);
-			container.removeEventListener(CONTENT_CHANGED_EVENT, scheduleSnap);
 			container.removeEventListener("wheel", onWheelRedirect);
 			container.removeEventListener("mousedown", onScrollbarMouseDown);
 			container.removeEventListener("keydown", onScrollKeyDown);
@@ -325,6 +303,9 @@ export function useStickyScroll(): {
 	return {
 		containerRef: (el: HTMLDivElement) => {
 			container = el;
+		},
+		contentRef: (el: HTMLDivElement) => {
+			content = el;
 		},
 		jumpVisible,
 		jumpToBottom,
