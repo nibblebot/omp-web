@@ -69,7 +69,15 @@
 import type { Subprocess } from "bun";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	statSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { expandTilde, resolveConfigPath } from "../fleet/config";
@@ -113,7 +121,8 @@ function seedFleetState(source: string | undefined): void {
 		// Fork already diverged — keep it (never re-sync). Logged so a user
 		// with a small existing dev state isn't silently served stale data
 		// when they expected a fresh fork.
-		if (source !== undefined) log("fleet state exists — keeping the diverged fork (delete it to re-fork)");
+		if (source !== undefined)
+			log("fleet state exists — keeping the diverged fork (delete it to re-fork)");
 		return;
 	}
 	// Default source in fleet mode: the main worktree's dev state.
@@ -129,8 +138,7 @@ function seedFleetState(source: string | undefined): void {
 	}
 	mkdirSync(DEV_FLEET_DIR, { recursive: true });
 	if (!existsSync(from)) {
-		if (source !== undefined)
-			throw new Error(`--state-from: no fleet-state.json at ${from}`);
+		if (source !== undefined) throw new Error(`--state-from: no fleet-state.json at ${from}`);
 		return; // no main dev state yet — fresh empty state, nothing to fork
 	}
 	// Validate parseable JSON with the registry's shape before copying —
@@ -144,7 +152,12 @@ function seedFleetState(source: string | undefined): void {
 	if (typeof parsed !== "object" || parsed === null) {
 		throw new Error(`--state-from: ${from} is not a fleet-state.json (expected an object)`);
 	}
-	if (!("nextId" in parsed) || typeof parsed.nextId !== "number" || !("entries" in parsed) || !Array.isArray(parsed.entries)) {
+	if (
+		!("nextId" in parsed) ||
+		typeof parsed.nextId !== "number" ||
+		!("entries" in parsed) ||
+		!Array.isArray(parsed.entries)
+	) {
 		throw new Error(`--state-from: ${from} is not a fleet-state.json (missing nextId/entries)`);
 	}
 	copyFileSync(from, target);
