@@ -21,7 +21,7 @@ const TOOL_CARD_VIEWS = ["expanded", "collapsed", "consolidated"] as const;
 
 export const MessageList: Component = () => {
 	const [zoomed, setZoomed] = createSignal<ImageArg | null>(null);
-	const { containerRef, jumpVisible, jumpToBottom, applyPinState } = useStickyScroll();
+	const { containerRef, jumpVisible, jumpToBottom } = useStickyScroll();
 	// Memoized so the items scan runs on items/toolCardsView changes, not every render.
 	const showToolbar = createMemo(
 		() => state.toolCardsView !== "expanded" || state.items.some((it) => it.kind === "tool"),
@@ -76,7 +76,7 @@ export const MessageList: Component = () => {
 				</div>
 			</Show>
 			<div class="message-list-wrap">
-				<div class="message-list" ref={containerRef} onScroll={applyPinState}>
+				<div class="message-list" ref={containerRef}>
 					<For each={state.items}>
 						{(item) => (
 							<Switch>
@@ -169,7 +169,7 @@ export const MessageList: Component = () => {
 						title="Jump to bottom"
 						aria-label="Jump to bottom"
 					>
-						<ArrowDownIcon /> Jump to bottom
+						<ArrowDownIcon />
 					</button>
 				</Show>
 			</div>

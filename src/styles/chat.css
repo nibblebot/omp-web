@@ -58,12 +58,13 @@
 	z-index: var(--z-overlay);
 	display: flex;
 	align-items: center;
+	justify-content: center;
 	gap: var(--space-2);
 	background: var(--btn);
 	border: 1px solid var(--border-strong);
 	color: var(--text);
 	border-radius: var(--r-pill);
-	padding: var(--space-2) var(--space-5);
+	padding: var(--space-2);
 	font: inherit;
 	font-size: var(--fs-sm);
 	cursor: pointer;

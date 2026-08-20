@@ -2,6 +2,7 @@ import { createEffect, createMemo, For, type Component } from "solid-js";
 import { renderMarkdown, splitForStreaming } from "../../text/markdown";
 import { state, type Block } from "../../state";
 import { Markdown } from "../shared/Markdown";
+import { CONTENT_CHANGED_EVENT } from "./useStickyScroll";
 
 // Elements that cannot carry text children; append the fresh span to their parent instead.
 const VOID_TAGS: Record<string, true> = { BR: true, HR: true, IMG: true, INPUT: true, WBR: true };
@@ -47,7 +48,13 @@ const LiveTail: Component<{ text: string }> = (props) => {
 		// has played, re-parse the full text so raw syntax never lingers when
 		// the stream pauses. Skipped if a newer render happened meanwhile.
 		setTimeout(() => {
-			if (el.isConnected && prevLen === text.length) el.innerHTML = renderMarkdown(text);
+			if (el.isConnected && prevLen === text.length) {
+				el.innerHTML = renderMarkdown(text);
+				// DOM-only height change the reactive flush can't see: re-snap
+				// a pinned stream. Delegated so the sticky-scroll hook stays
+				// decoupled from markdown rendering.
+				el.dispatchEvent(new Event(CONTENT_CHANGED_EVENT, { bubbles: true }));
+			}
 		}, 160);
 	});
 	return <div class="md" ref={el} />;
