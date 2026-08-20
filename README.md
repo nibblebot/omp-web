@@ -4,7 +4,7 @@ omp-web is a **web UI for running multiple oh-my-pi sessions, across all your re
 
 omp-web has full control of the omp agent by using the SDK compared with other GUIs which use the RPC (which has no daemon control and limited subagent control).
 
-<img id="omp-web-demo" src="docs/screenshots/omp-web-demo.gif" alt="omp-web UI demo" width="720">
+<img id="omp-web-demo" src="docs/screenshots/omp-web-demo.gif" alt="omp-web UI demo" width="800">
 
 
 > **⚠ Early-stage software.** omp-web is under active development and has sharp edges. Expect breaking changes between releases — the wire protocol, config/state formats, and UI are not yet stable. Session transcripts are durable `.jsonl` files, but the surrounding tooling (fleet state, config, managed worktrees) is still evolving; don't treat this as production data storage yet. Report issues and rough spots as you find them.
