@@ -231,7 +231,7 @@ describe("changelogSection", () => {
 			{ heading: "Bug fixes", bullets: [`- fix y ([def5678](${url("def5678")}))`] },
 		];
 		expect(changelogSection("0.2.0", "2026-08-19", null, groups)).toBe(
-			"## v0.2.0 — 2026-08-19\n" +
+			"## v0.2.0, 2026-08-19\n" +
 				"\n" +
 				"### Features\n" +
 				`- add x ([abc1234](${url("abc1234")}))\n` +
@@ -244,7 +244,7 @@ describe("changelogSection", () => {
 	test("exact format with overview", () => {
 		const groups = [{ heading: "Features", bullets: ["- b"] }];
 		expect(changelogSection("0.2.0", "2026-08-19", "A release.", groups)).toBe(
-			"## v0.2.0 — 2026-08-19\n\nA release.\n\n### Features\n- b\n",
+			"## v0.2.0, 2026-08-19\n\nA release.\n\n### Features\n- b\n",
 		);
 	});
 
@@ -253,12 +253,12 @@ describe("changelogSection", () => {
 			{
 				heading: "Features",
 				// Mixed inputs: already-bulleted, marker-less, star-prefixed,
-				// and blank — all must normalize to a single `- ` bullet.
+				// and blank. All must normalize to a single `- ` bullet.
 				bullets: ["already bulleted", "* star bullet", "- plus a marker", "", "  "],
 			},
 		];
 		expect(changelogSection("0.2.0", "2026-08-19", null, groups)).toBe(
-			"## v0.2.0 — 2026-08-19\n" +
+			"## v0.2.0, 2026-08-19\n" +
 				"\n" +
 				"### Features\n" +
 				"- already bulleted\n" +
@@ -317,15 +317,15 @@ describe("fallbackBullets + validateCoverage", () => {
 
 describe("prependChangelog", () => {
 	test("existing content preserved below the new section", () => {
-		const section = "## v0.2.0 — 2026-08-19\n\n### Features\n- b1\n";
-		const existing = "\n\n## v0.1.0 — 2026-08-01\n\nOld content.\n\n";
+		const section = "## v0.2.0, 2026-08-19\n\n### Features\n- b1\n";
+		const existing = "\n\n## v0.1.0, 2026-08-01\n\nOld content.\n\n";
 		expect(prependChangelog(existing, section)).toBe(
-			"## v0.2.0 — 2026-08-19\n\n### Features\n- b1\n\n## v0.1.0 — 2026-08-01\n\nOld content.\n",
+			"## v0.2.0, 2026-08-19\n\n### Features\n- b1\n\n## v0.1.0, 2026-08-01\n\nOld content.\n",
 		);
 	});
 
 	test("empty existing returns the section unchanged", () => {
-		const section = "## v0.2.0 — 2026-08-19\n\n### Features\n- b1\n";
+		const section = "## v0.2.0, 2026-08-19\n\n### Features\n- b1\n";
 		expect(prependChangelog("", section)).toBe(section);
 	});
 });
@@ -466,7 +466,7 @@ describe("stagedProblems", () => {
 	const MANIFEST = (sha: string) =>
 		JSON.stringify({ version: "0.1.0", tarball: "omp-web-0.1.0.tgz", sha256: sha }, null, "\t") +
 		"\n";
-	const CHANGELOG = "# Changelog\n\n## v0.1.0 — 2026-08-19\n\n### Features\n- thing\n";
+	const CHANGELOG = "# Changelog\n\n## v0.1.0, 2026-08-19\n\n### Features\n- thing\n";
 
 	async function makeStagedDir(): Promise<string> {
 		const dir = tempDir("release-staged-");
@@ -511,7 +511,7 @@ describe("stagedProblems", () => {
 
 	test("reports a changelog lacking the version section", async () => {
 		const dir = await makeStagedDir();
-		const problems = await stagedProblems(dir, "0.1.0", "# Changelog\n\n## v0.0.1 — old\n");
+		const problems = await stagedProblems(dir, "0.1.0", "# Changelog\n\n## v0.0.1, old\n");
 		expect(problems.some((p) => p.includes("CHANGELOG.md lacks the v0.1.0 section"))).toBe(true);
 	});
 

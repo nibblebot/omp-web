@@ -131,9 +131,9 @@ components:
 
 **Creative North Star: "The Mission Control Console"**
 
-One operator, many agents. This UI is the flight-ops room for a fleet of disposable agent daemons: calm, watchful, exact. The screen's job is supervision, not conversation — surfaces recede so that status (dots, pills, chips, streamed text) can carry the signal. Nothing competes with the readouts; the interface trusts the operator to watch, and earns that trust by never crying wolf.
+One operator, many agents. This UI is the flight-ops room for a fleet of disposable agent daemons: calm, watchful, exact. The screen's job is supervision, not conversation. Surfaces recede so that status (dots, pills, chips, streamed text) can carry the signal. Nothing competes with the readouts; the interface trusts the operator to watch, and earns that trust by never crying wolf.
 
-Density follows the terminal, not the chat app: compact 2–24px spacing rhythm, machine truth set in monospace, labels in small tracked caps, controls that sit quiet until hovered. Depth is nearly absent by doctrine — structure comes from 1px hairlines and tonal panel steps, and shadow appears only when something floats above the console (a modal, a sheet, the lightbox) or when a status light glows.
+Density follows the terminal, not the chat app: compact 2–24px spacing rhythm, machine truth set in monospace, labels in small tracked caps, controls that sit quiet until hovered. Depth is nearly absent by doctrine: structure comes from 1px hairlines and tonal panel steps, and shadow appears only when something floats above the console (a modal, a sheet, the lightbox) or when a status light glows.
 
 The palette is a dark instrument panel first: near-black blue-gray surfaces, a softened white readout, and a single Signal Blue accent used with deliberate rarity. Five alternate palettes (light, Catppuccin Mocha/Latte, omp dark/light) rebalance the same semantic slots; the omp pair expresses them in OKLCH.
 
@@ -143,7 +143,7 @@ Confirmed anti-references: chat-app cosplay (rounded messenger bubbles, avatar p
 - Dark-first instrument panel; five alternate themes overriding only color tokens
 - Flat-by-default surfaces; 1px borders do the structural work
 - One accent, used rarely; status speaks in a semantic trio (bg + border + text)
-- Zero font assets — system sans + system mono only
+- Zero font assets: system sans + system mono only
 - Single 140ms ease-out motion vocabulary; six small keyframes; motion gated behind `prefers-reduced-motion` where animated
 
 ## Colors
@@ -157,17 +157,17 @@ The palette is a night-shift console: cool near-black surfaces, softened-white t
 
 ### Neutral
 - **Deep Console** (`#0f1115`): the app background; the room the instruments sit in.
-- **Console Well** (`#0a0d12`): sunken areas — terminal/code surfaces, the sidebar, settings wells.
-- **Instrument Panel** (`#151a22`): resting cards — tool cards, queue chips, modals, the composer.
+- **Console Well** (`#0a0d12`): sunken areas: terminal/code surfaces, the sidebar, settings wells.
+- **Instrument Panel** (`#151a22`): resting cards: tool cards, queue chips, modals, the composer.
 - **Panel Raised** (`#1a2029`): popovers (autocomplete), inset groups, secondary chips.
 - **Control Surface** (`#232a37`): resting fill of buttons and small chips.
 - **Hairline** (`#262b36`) and **Hairline Strong** (`#333c4d`): structural borders; the strong variant edges buttons, modals, and emphasized fields.
 - **Readout White** (`#d7dae0`): primary text.
-- **Muted Readout** (`#8b93a1`), **Faint Readout** (`#7f8896`), **Bright Muted** (`#aab2c0`): the secondary-text ladder — metadata, idle dots, hover targets; bright-muted sits above muted for emphasized secondary labels (titles, stats).
+- **Muted Readout** (`#8b93a1`), **Faint Readout** (`#7f8896`), **Bright Muted** (`#aab2c0`): the secondary-text ladder: metadata, idle dots, hover targets; bright-muted sits above muted for emphasized secondary labels (titles, stats).
 - **Hover Wash** (`#232f42`): universal hover fill.
 - **Backdrop** (`rgba(4, 6, 10, 0.65)`): modal/sheet/lightbox scrim.
 
-### Status (semantic trios — always bg + border + text together)
+### Status (semantic trios: always bg + border + text together)
 - **Go Green** (`#4ade80` / `#14301c` / `#1f5c31`): ready daemons, streaming dots, clean exits, recommended options.
 - **Standby Amber** (`#facc15` / `#2e2712` / `#5c4a12`): queued prompts, reconnecting daemons, running subagents, warning badges.
 - **Alarm Red** (`#f87171` / `#3a1d22` / `#7f3440`, text `#f0a8b3`): errors, failed states, stop/danger surfaces (`#4a2028` stop fill), disconnect pills.
@@ -179,7 +179,7 @@ The palette is a night-shift console: cool near-black surfaces, softened-white t
 Six palettes share one semantic contract (~40 slots) and one set of scales; themes override colors only, never radius/spacing/type. The default `:root` is the dark console above; `light`, `catppuccin-mocha`, `catppuccin-latte` restate it in hex/rgba; `omp-dark` / `omp-light` restate it in OKLCH with a magenta signal (`oklch(70% 0.24 340)` dark, `oklch(44% 0.18 348)` light). Per-theme values live in `.impeccable/design.json` → `extensions.themes`. `index.html` resolves `data-theme` before first paint (persisted choice → `prefers-color-scheme` → dark).
 
 ### Named Rules
-**The One Voice Rule.** The accent appears on ≤10% of any screen — focus rings, the active selection, one primary action. If everything signals, nothing does.
+**The One Voice Rule.** The accent appears on ≤10% of any screen: focus rings, the active selection, one primary action. If everything signals, nothing does.
 
 **The Semantic Trio Rule.** A status is never a bare color. Every status surface ships background + border + text from the same trio; bare hue-on-neutral status fills are a defect.
 
@@ -187,19 +187,19 @@ Six palettes share one semantic contract (~40 slots) and one set of scales; them
 
 **Body Font:** system stack (`"Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`)
 **Mono Font:** system stack (`"Noto Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace`)
-**Display Font:** none — there is no display face and no marketing headline in this UI.
+**Display Font:** none: there is no display face and no marketing headline in this UI.
 
-**Character:** the console speaks in two voices — sans for the operator's prose, mono for machine truth (commands, diffs, paths, daemon metadata, the sidebar roster). Both are zero-asset system stacks: the app ships no font files, by doctrine.
+**Character:** the console speaks in two voices: sans for the operator's prose, mono for machine truth (commands, diffs, paths, daemon metadata, the sidebar roster). Both are zero-asset system stacks: the app ships no font files, by doctrine.
 
 The root font size is user-settable (12–18px, `/settings` parity); every scale step below is rem-based and rides that dial.
 
 ### Hierarchy
-- **Heading** (700, 1rem/1.143rem, 1.3): in-stream markdown h1/h2 and tx section titles — the only type allowed above body size, capped at 16px so it never swamps the session title.
-- **Title** (600, 0.875rem, 1.5): modal titles, sidebar section titles, row titles. The highest chrome type is deliberately small — hierarchy comes from weight and color, not size.
+- **Heading** (700, 1rem/1.143rem, 1.3): in-stream markdown h1/h2 and tx section titles: the only type allowed above body size, capped at 16px so it never swamps the session title.
+- **Title** (600, 0.875rem, 1.5): modal titles, sidebar section titles, row titles. The highest chrome type is deliberately small: hierarchy comes from weight and color, not size.
 - **Body** (400, 0.875rem, 1.5): chat prose, markdown, settings copy.
 - **Mono** (400, 0.813rem): code, terminals, diffs, daemon rows, picker metadata (`line-height: 1.4` in the roster).
 - **Label** (600, 0.75rem, +0.05em tracking, uppercase): section headers, queue kinds, group headers, usage statuses.
-- **Micro** (400, 0.688rem): git dirty counts, debug pills, nested-row metadata — the floor; nothing functional renders below 9.6px.
+- **Micro** (400, 0.688rem): git dirty counts, debug pills, nested-row metadata: the floor; nothing functional renders below 9.6px.
 
 ### Named Rules
 **The Zero-Asset Rule.** No webfonts, ever. If a glyph can't come from the system stack, the design is wrong, not the stack.
@@ -208,15 +208,15 @@ The root font size is user-settable (12–18px, `/settings` parity); every scale
 
 ## Layout
 
-One centered console column, maximum 820px, full viewport height, 16px side padding — the chat thread is the room. In roster mode a 240px sidebar docks on the **left** (`--sidebar-w`), listing daemons grouped by repo; it takes layout space on desktop and narrows to `width: min(240px, 80vw)` at ≤720px.
+One centered console column, maximum 820px, full viewport height, 16px side padding: the chat thread is the room. In roster mode a 240px sidebar docks on the **left** (`--sidebar-w`), listing daemons grouped by repo; it takes layout space on desktop and narrows to `width: min(240px, 80vw)` at ≤720px.
 
-Overlays have two geometries: the centered **modal** (min 320px, max 640px, max 80vh) for dialogs, and the right-docked **sheet** (`min(880px, 100vw)`, full height, square outer corners) for working panels — settings, subagents, debug. Sheets go full-viewport at ≤720px, where settings also swaps its nav rail for a section-picker select.
+Overlays have two geometries: the centered **modal** (min 320px, max 640px, max 80vh) for dialogs, and the right-docked **sheet** (`min(880px, 100vw)`, full height, square outer corners) for working panels: settings, subagents, debug. Sheets go full-viewport at ≤720px, where settings also swaps its nav rail for a section-picker select.
 
 Rhythm is a 2/4/6/8/12/16/24px spacing scale; cards pad at 8–16px, sections separate at 16–24px. The shell breakpoint is 720px; the transcripts view adds a 480px breakpoint. `prefers-reduced-motion: reduce` gates animated elements (see Elevation & Depth for what remains).
 
 ## Elevation & Depth
 
-Flat by doctrine. Resting surfaces — cards, chips, sidebar, composer — have zero shadow; structure comes from 1px hairlines and the bg → panel → panel-2 tonal steps. Shadow means one of two things: something is floating above the console, or a status light is lit.
+Flat by doctrine. Resting surfaces: cards, chips, sidebar, composer: have zero shadow; structure comes from 1px hairlines and the bg → panel → panel-2 tonal steps. Shadow means one of two things: something is floating above the console, or a status light is lit.
 
 ### Shadow Vocabulary
 - **Overlay lift** (`0 8px 24px rgb(0 0 0 / 0.35)`): modals, the lightbox image. The only structural shadow.
@@ -229,7 +229,7 @@ Flat by doctrine. Resting surfaces — cards, chips, sidebar, composer — have 
 
 ## Shapes
 
-The form language is the instrument bezel: small, honest radii over hard structure. Controls and inputs curve gently at 6px; cards and popovers at 8px; message bubbles and modals at 10px; code and log wells at 6px. The pill (999px) is reserved for the chip/badge family — queue chips, status pills, toggles — and for the 6–8px status dots that are the system's signature atoms.
+The form language is the instrument bezel: small, honest radii over hard structure. Controls and inputs curve gently at 6px; cards and popovers at 8px; message bubbles and modals at 10px; code and log wells at 6px. The pill (999px) is reserved for the chip/badge family: queue chips, status pills, toggles, and for the 6–8px status dots that are the system's signature atoms.
 
 Borders are structural, always 1px, always a hairline token; the "asleep" daemon dot even fakes its border as an inset shadow to stay 8px round. Sheets break the radius language deliberately: full-height panels get square outer corners (`border-radius: 0`) because they are the edge of the console, not a card on it.
 
@@ -254,14 +254,14 @@ Quiet controls that wake on hover; one primary action per view.
 
 ### Cards / Containers
 - **Tool cards:** Instrument Panel fill, 1px Hairline, 8px radius, 0.813rem text; header pads 8px 12px. Every tool render roots at this shell
-- **Message bubbles:** user messages float right in Signal Wash (10px radius, max-width 80%); assistant messages are edge-to-edge — no bubble, no card, by design
+- **Message bubbles:** user messages float right in Signal Wash (10px radius, max-width 80%); assistant messages are edge-to-edge: no bubble, no card, by design
 - **Code/log wells:** Console Well fill, 6px radius, mono
-- **Thinking blocks:** no card at all — a 2px Hairline left rail plus Muted Readout text
+- **Thinking blocks:** no card at all: a 2px Hairline left rail plus Muted Readout text
 
 ### Inputs / Fields
 - **Style:** Console Well fill, 1px Hairline, 6px radius, 4px 8px padding (search/history variants use Panel fill, 8px radius)
 - **Composer:** Instrument Panel fill, 8px radius, 8px 12px padding, `field-sizing: content` up to 40vh
-- **Focus:** one global ring — 2px Signal Blue outline, 1px offset; search-style fields opt out to a Signal Edge border swap instead
+- **Focus:** one global ring: 2px Signal Blue outline, 1px offset; search-style fields opt out to a Signal Edge border swap instead
 - **Error/disabled:** no dedicated input error skin; errors surface as banners and pills in the status trio
 
 ### Navigation
@@ -270,13 +270,13 @@ Quiet controls that wake on hover; one primary action per view.
 - **Modals:** Instrument Panel, Hairline Strong border, 10px radius, 16px padding, overlay-lift shadow over the Backdrop scrim; sheets drop radius and keep only their inner border
 
 ### Signature: the roster row
-The daemon roster row is the product in miniature: status dot (the ladder above) + mono title + micro metadata (cwd, branch, dirty counts) + ghost icon actions that arm red before they kill. If a new surface can't express its state in this vocabulary, the vocabulary should grow a rung — not a new system.
+The daemon roster row is the product in miniature: status dot (the ladder above) + mono title + micro metadata (cwd, branch, dirty counts) + ghost icon actions that arm red before they kill. If a new surface can't express its state in this vocabulary, the vocabulary should grow a rung: not a new system.
 
 ## Do's and Don'ts
 
 ### Do:
 - **Do** build every surface from the semantic tokens (`var(--bg)`, `var(--panel)`, …) so all six themes stay coherent; themes override colors only.
-- **Do** express status as the full trio (bg + border + text) — queued, ready, error, and diff states all follow it.
+- **Do** express status as the full trio (bg + border + text): queued, ready, error, and diff states all follow it.
 - **Do** keep motion at 140ms ease-out (the single transition vocabulary) and gate anything animated behind `prefers-reduced-motion`.
 - **Do** set machine truth in the mono stack at 0.813rem or smaller; the roster lives at 0.75rem/1.4.
 - **Do** let assistant output run edge-to-edge; reserve bubbles for the operator's own messages.
@@ -288,4 +288,4 @@ The daemon roster row is the product in miniature: status dot (the ladder above)
 - **Don't** chat-app the surface: no avatar pairs, no messenger bubble symmetry, no emoji-forward empty states.
 - **Don't** load a webfont or hard-code a font family outside the two system stacks (The Zero-Asset Rule).
 - **Don't** invent one-off colors, radii, or spacing outside the token scales; extend the scale or reuse a rung.
-- **Don't** use the breakdown data-viz ramp for status, or status hues in charts — the ramps are deliberately disjoint.
+- **Don't** use the breakdown data-viz ramp for status, or status hues in charts: the ramps are deliberately disjoint.

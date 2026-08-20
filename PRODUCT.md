@@ -14,23 +14,23 @@ Solo operator running parallel agents: one developer spawning, supervising, and 
 
 Two coupled products sharing one Solid.js web UI:
 
-- **omp-session** — a single-session agent daemon for `@oh-my-pi/pi-coding-agent`: one process, one bound project directory, one live agent session (in-process SDK, no child process, no JSON-RPC hop), served to the web UI over SSE + POST. Runs via the installed omp-web bundle (`omp-web session`); disposable — disk `.jsonl` logs make respawn/`--resume` lossless.
-- **omp-fleet** — the registry of N daemons: spawns and supervises local children from command templates, attaches external daemons, dials remote sandboxes, and re-exposes them to the same UI (roster mode) and to non-interactive drivers (CLI fan-out prompting). Holds zero SDK state.
+- **omp-session**: a single-session agent daemon for `@oh-my-pi/pi-coding-agent`: one process, one bound project directory, one live agent session (in-process SDK, no child process, no JSON-RPC hop), served to the web UI over SSE + POST. Runs via the installed omp-web bundle (`omp-web session`); disposable: disk `.jsonl` logs make respawn/`--resume` lossless.
+- **omp-fleet**: the registry of N daemons: spawns and supervises local children from command templates, attaches external daemons, dials remote sandboxes, and re-exposes them to the same UI (roster mode) and to non-interactive drivers (CLI fan-out prompting). Holds zero SDK state.
 
 Success means the operator can watch, steer, and fan out across many agent sessions from one browser surface without losing a session to process death.
 
 ## Positioning
 
-Two simultaneous differentiators, both user-confirmed:
+Two differentiators, both user-confirmed:
 
-1. **Fleet ops moat** — single binary, in-process SDK, dial-in-only sandboxes, disposable daemons. Self-hosted fleet operations that incumbent chat surfaces don't play in (audit #72).
-2. **Full web UI parity with the TUI** — settings panel at `/settings` parity, steering, queue chips, rich tool cards, subagent roster, session resume/branch/fork/handoff — the browser surface is not a reduced companion.
+1. **Fleet ops moat**: single binary, in-process SDK, dial-in-only sandboxes, disposable daemons. Self-hosted fleet operations that incumbent chat surfaces don't play in (audit #72).
+2. **Full web UI parity with the TUI**: settings panel at `/settings` parity, steering, queue chips, rich tool cards, subagent roster, session resume/branch/fork/handoff. The browser surface is not a reduced companion.
 
 ## Operating Context
 
 - The operator runs `bun run dev` (fleet roster, vite :4713 + fleet :4722) or `bun run dev:single` (standalone daemon :4721).
 - Daemons are spawned from user-editable command templates (`~/.omp-web/config.json`); remote daemons reached via ssh `-L`, tailnet, or direct.
-- Remote sessions are dial-in only: omp-fleet initiates every connection; sandbox images know nothing of the outside world. (Documented security model — factual behavior, not currently pinned as an inviolable constraint; see Capabilities and Constraints.)
+- Remote sessions are dial-in only: omp-fleet initiates every connection; sandbox images know nothing of the outside world. (Documented security model: factual behavior, not currently pinned as an inviolable constraint; see Capabilities and Constraints.)
 - Collab rooms exist but are CLI/TUI-only; there is deliberately no collab surface in the web UI.
 
 ## Capabilities and Constraints
@@ -48,15 +48,15 @@ Two simultaneous differentiators, both user-confirmed:
 
 ## Evidence on Hand
 
-- `README.md` — full architecture, security model, config surface, roadmap.
-- `docs/position.md` (2026-08-13) — audit Phase 7 strategic items (findings #71–#80). The full report (`audit.html`) was removed 2026-08-13 and the remediation plan (`audit-plan.md`) archived 2026-08-15; remediation history survives as `finding #N` comments in code. This directory (`omp-fleet.design-audit`) is the design-audit worktree.
-- `fleet/examples/` — copy-pasteable spawn template examples (ssh-remote, docker, provider-skeleton).
+- `README.md`: full architecture, security model, config surface, roadmap.
+- `docs/position.md` (2026-08-13): audit Phase 7 strategic items (findings #71–#80). The full report (`audit.html`) was removed 2026-08-13 and the remediation plan (`audit-plan.md`) archived 2026-08-15; remediation history survives as `finding #N` comments in code. This directory (`omp-fleet.design-audit`) is the design-audit worktree.
+- `fleet/examples/`: copy-pasteable spawn template examples (ssh-remote, docker, provider-skeleton).
 - No testimonials, customers, benchmarks, or marketing claims exist; future work must not fabricate them.
 
 ## Product Principles
 
-1. **One operator, many agents** — every surface decision optimizes for supervising N concurrent sessions, not one conversation.
-2. **Fleet operations are the moat** — spawn, attach, dial-in, respawn, fan-out; the chat surface is table stakes.
-3. **Parity, not companion** — the web UI matches TUI capability; reduced surfaces are regressions.
-4. **Disposability** — daemons die and resume from `.jsonl`; no UI state may assume process permanence.
-5. **Additive wire contract** — protocol evolves by addition; breaking the handshake is a versioned, deliberate event.
+1. **One operator, many agents**: every surface decision optimizes for supervising N concurrent sessions, not one conversation.
+2. **Fleet operations are the moat**: spawn, attach, dial-in, respawn, fan-out; the chat surface is table stakes.
+3. **Parity, not companion**: the web UI matches TUI capability; reduced surfaces are regressions.
+4. **Disposability**: daemons die and resume from `.jsonl`; no UI state may assume process permanence.
+5. **Additive wire contract**: protocol evolves by addition; breaking the handshake is a versioned, deliberate event.

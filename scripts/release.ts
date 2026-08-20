@@ -171,7 +171,7 @@ export function computeBump(groups: Group[]): "major" | "minor" | "patch" {
 
 /**
  * Policy: while the project is at 0.x.y, breaking changes bump minor, never
- * major (semver pre-1.0 convention — 0.x stays 0.x until 1.0 is a deliberate
+ * major (semver pre-1.0 convention: 0.x stays 0.x until 1.0 is a deliberate
  * decision, taken only via an explicit version arg). Returns the bump
  * unchanged once the major is ≥ 1.
  */
@@ -212,7 +212,7 @@ export function isNewerVersion(v: string, current: string): boolean {
 /**
  * Parse `git log --format=%H%x1f%s%x1f%b%x1e` output (entries \x1e, fields
  * \x1f). Git appends `\n` after every `\x1e` record separator, so each entry
- * after the first leads with a newline — strip it, or it lands inside the
+ * after the first leads with a newline. Strip it, or it lands inside the
  * hash and splits the commit link in changelog bullets.
  */
 export function parseGitLog(raw: string): CommitInfo[] {
@@ -251,7 +251,7 @@ export function validateCoverage(
 
 /**
  * Exact changelog section format (asserted verbatim in tests):
- * `## v<version> — <date>`, blank, overview paragraph (omitted when null),
+ * `## v<version>, <date>`, blank, overview paragraph (omitted when null),
  * then per group `### <heading>` + bullets, blank between groups, trailing
  * newline.
  *
@@ -266,7 +266,7 @@ export function changelogSection(
 	overview: string | null,
 	groups: { heading: string; bullets: string[] }[],
 ): string {
-	const parts: string[] = [`## v${version} — ${date}`];
+	const parts: string[] = [`## v${version}, ${date}`];
 	if (overview !== null) parts.push("", overview);
 	for (const group of groups) {
 		parts.push("", `### ${group.heading}`);
@@ -446,7 +446,7 @@ const RELEASE_TOUCHED: Record<string, true> = {
 
 /**
  * Validate the working-tree state a staged release leaves behind: exactly
- * package.json (optional — the first release may not bump it) and
+ * package.json (optional; the first release may not bump it) and
  * CHANGELOG.md present, no other changes. Returns a failure message or null
  * when the tree is a valid staged release. Pure: porcelain input, no git.
  */
@@ -457,7 +457,7 @@ export function releaseTreeProblem(porcelain: string): string | null {
 		return `unexpected working-tree changes (a staged release only touches package.json + CHANGELOG.md):\n${bad.join("\n")}`;
 	}
 	if (!lines.some((l) => l.endsWith("CHANGELOG.md"))) {
-		return "no staged CHANGELOG.md — run `bun scripts/release.ts <version> --stage` first";
+		return "no staged CHANGELOG.md; run `bun scripts/release.ts <version> --stage` first";
 	}
 	return null;
 }
@@ -473,7 +473,7 @@ async function checkCleanTree(): Promise<void> {
 	const lines = dirty.split("\n").filter(Boolean);
 	const stagedOnly = lines.every((l) => l in RELEASE_TOUCHED);
 	const hint = stagedOnly
-		? "\n(staged release present — run `bun scripts/release.ts --go` to publish, or `git restore package.json CHANGELOG.md` to discard)"
+		? "\n(staged release present; run `bun scripts/release.ts --go` to publish, or `git restore package.json CHANGELOG.md` to discard)"
 		: "";
 	fail(`working tree not clean:\n${dirty}${hint}`);
 }
@@ -519,7 +519,7 @@ async function checkTagAbsent(tag: string): Promise<void> {
  * Problems with a staged release dir (empty = valid): the manifest must exist
  * and match the version, the notes artifact must exist, the tarball must pass
  * validateTarball against the manifest sha256, and CHANGELOG.md must carry the
- * version's section. Pure FS checks — no git/gh/network.
+ * version's section. Pure FS checks; no git/gh/network.
  */
 export async function stagedProblems(
 	dir: string,
@@ -552,7 +552,7 @@ export async function stagedProblems(
 			problems.push(...(await validateTarball(tarballPath, version, manifest.sha256)));
 		}
 	}
-	if (!changelog.includes(`## v${version} —`)) {
+	if (!changelog.includes(`## v${version},`)) {
 		problems.push(`CHANGELOG.md lacks the v${version} section`);
 	}
 	return problems;
@@ -655,7 +655,7 @@ async function verifyChannel(version: string): Promise<void> {
  * Publish a staged release (--go): verify the staged state (package.json
  * version, CHANGELOG.md section, dist-release artifacts), then commit/tag/
  * push and create the GitHub release from the staged artifacts. No
- * generation, no gates — the --stage run already validated everything.
+ * generation, no gates; the --stage run already validated everything.
  */
 async function publishStaged(opts: { yes: boolean; dryRun: boolean }): Promise<void> {
 	await checkBranchMain();
@@ -796,7 +796,7 @@ async function release(argv: string[]): Promise<void> {
 	console.log(`release: classification: ${countParts.join(", ")}`);
 
 	// 3. Version: explicit arg wins; else first release keeps current; else bump
-	// (major clamps to minor while at 0.x — see appliedBump).
+	// (major clamps to minor while at 0.x; see appliedBump).
 	let version: string;
 	let bump: "major" | "minor" | "patch";
 	if (versionArg !== undefined) {
@@ -904,9 +904,9 @@ async function release(argv: string[]): Promise<void> {
 		return;
 	}
 
-	// 7. Confirm (skipped in stage mode — it stops after validation).
+	// 7. Confirm (skipped in stage mode; it stops after validation).
 	if (stage) {
-		console.log("release: staged mode — skipping publish confirm (stops after validation)");
+		console.log("release: staged mode: skipping publish confirm (stops after validation)");
 	} else if (!yes) {
 		if (!process.stdin.isTTY) fail("refusing to release without a TTY; pass --yes");
 		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });

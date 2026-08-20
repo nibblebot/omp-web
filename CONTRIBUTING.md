@@ -10,13 +10,13 @@ Thanks for wanting to help with omp-web! Bug reports, feature ideas, and pull re
 
 ## Pull requests
 
-- Keep changes focused — one logical change per PR. If you're planning something large, open an issue first to discuss it.
+- Keep changes focused, one logical change per PR. If you're planning something large, open an issue first to discuss it.
 - Run the checks before submitting:
   - `bun run check:types`
   - `bun run format:check`
   - `bun run test`
 - New behavior needs tests. Changes to the wire protocol or the release machinery must follow the conventions in `AGENTS.md`.
-- Follow the existing code style (tabs, oxfmt formatting — `bun run format` applies it).
+- Follow the existing code style (tabs, oxfmt formatting, applied by `bun run format`).
 
 ## First-time setup
 
