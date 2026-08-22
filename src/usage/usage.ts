@@ -1,3 +1,4 @@
+import type { UsageLimit } from "@oh-my-pi/pi-ai";
 import { formatTokens } from "./context";
 
 /**
@@ -90,4 +91,23 @@ export function formatUnitAmount(amount: { used?: number; limit?: number; unit: 
 	const used = v(amount.used);
 	const suffix = amount.unit === "percent" && amount.used !== undefined ? "%" : "";
 	return amount.limit !== undefined ? `${used} / ${v(amount.limit)}${suffix}` : `${used}${suffix}`;
+}
+
+/**
+ * Fraction of a limit used (0..1), or undefined when the report gives no
+ * usable ratio. Local copy of pi-ai's resolveUsedFraction — a runtime value
+ * import from @oh-my-pi/pi-ai pulls the package's non-JS assets into the
+ * vite dep graph and breaks the optimizer (documented plan constraint:
+ * type-only imports only).
+ */
+export function resolveUsedFraction(limit: UsageLimit): number | undefined {
+	const a = limit.amount;
+	if (typeof a.usedFraction === "number" && Number.isFinite(a.usedFraction)) return a.usedFraction;
+	if (typeof a.used === "number" && typeof a.limit === "number" && a.limit > 0)
+		return a.used / a.limit;
+	if (typeof a.remainingFraction === "number" && Number.isFinite(a.remainingFraction))
+		return 1 - a.remainingFraction;
+	if (typeof a.remaining === "number" && typeof a.limit === "number" && a.limit > 0)
+		return 1 - a.remaining / a.limit;
+	return undefined;
 }

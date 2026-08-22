@@ -1,27 +1,8 @@
-import { createSignal, For, onMount, Show, type Component } from "solid-js";
-import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
-import { formatUnitAmount } from "../../usage/usage";
-import { call, setState } from "../../state";
+import { For, onMount, Show, type Component } from "solid-js";
+import type { UsageLimit } from "@oh-my-pi/pi-ai";
+import { formatUnitAmount, resolveUsedFraction } from "../../usage/usage";
+import { refreshUsageReports, state } from "../../state";
 import { Modal } from "../shared/Modal";
-
-/**
- * Fraction of a limit used (0..1), or undefined when the report gives no
- * usable ratio. Local copy of pi-ai's resolveUsedFraction — a runtime value
- * import from @oh-my-pi/pi-ai pulls the package's non-JS assets into the
- * vite dep graph and breaks the optimizer (documented plan constraint:
- * type-only imports only).
- */
-export function resolveUsedFraction(limit: UsageLimit): number | undefined {
-	const a = limit.amount;
-	if (typeof a.usedFraction === "number" && Number.isFinite(a.usedFraction)) return a.usedFraction;
-	if (typeof a.used === "number" && typeof a.limit === "number" && a.limit > 0)
-		return a.used / a.limit;
-	if (typeof a.remainingFraction === "number" && Number.isFinite(a.remainingFraction))
-		return 1 - a.remainingFraction;
-	if (typeof a.remaining === "number" && typeof a.limit === "number" && a.limit > 0)
-		return 1 - a.remaining / a.limit;
-	return undefined;
-}
 
 /** One limit row: label, window, amount (used/limit + bar), status, notes. */
 const LimitRow: Component<{ limit: UsageLimit }> = (props) => {
@@ -68,36 +49,32 @@ const LimitRow: Component<{ limit: UsageLimit }> = (props) => {
  * relay row; providers without reporting resolve to the empty state.
  */
 export const UsageModal: Component<{ onClose: () => void }> = (props) => {
-	const [reports, setReports] = createSignal<UsageReport[] | null>(null);
-	const [loading, setLoading] = createSignal(true);
-	const [error, setError] = createSignal<string | null>(null);
-
-	onMount(() => {
-		void call("fetchUsageReports")
-			.then((result) => {
-				setReports((result as UsageReport[] | null) ?? []);
-				setLoading(false);
-			})
-			.catch((err) => {
-				setError(String(err));
-				setLoading(false);
-			});
-	});
+	onMount(() => refreshUsageReports());
 
 	return (
 		<Modal title="Usage reports" onClose={props.onClose}>
-			<Show when={loading()}>
+			<Show when={state.usageLoading}>
 				<span class="usage-empty">Loading usage reports…</span>
 			</Show>
-			<Show when={!loading() && error() !== null}>
-				<div class="usage-empty">Failed to load usage: {error()}</div>
+			<Show when={!state.usageLoading && state.usageError !== null}>
+				<div class="usage-empty">Failed to load usage: {state.usageError}</div>
 			</Show>
-			<Show when={!loading() && error() === null && (reports()?.length ?? 0) === 0}>
+			<Show
+				when={
+					!state.usageLoading &&
+					state.usageError === null &&
+					(state.usageReports?.length ?? 0) === 0
+				}
+			>
 				<div class="usage-empty">No usage reporting for the active provider.</div>
 			</Show>
-			<Show when={!loading() && error() === null && (reports()?.length ?? 0) > 0}>
+			<Show
+				when={
+					!state.usageLoading && state.usageError === null && (state.usageReports?.length ?? 0) > 0
+				}
+			>
 				<div class="usage-list">
-					<For each={reports()}>
+					<For each={state.usageReports}>
 						{(report) => (
 							<section class="usage-provider">
 								<h3 class="stats-subhead">

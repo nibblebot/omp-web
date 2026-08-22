@@ -1,6 +1,13 @@
 import { createSignal, For, Show } from "solid-js";
 import { appearanceWebImages } from "../../prefs/settings";
-import { call, fleetSettingsActive, setNotifyEnabled, setState, state } from "../../state";
+import {
+	call,
+	fleetSettingsActive,
+	setNotifyEnabled,
+	setSidebarUsage,
+	setState,
+	state,
+} from "../../state";
 import { MinusIcon, PlusIcon } from "../shared/icons";
 import {
 	currentFontSize,
@@ -17,7 +24,10 @@ import { Row, SettingsRow } from "./SettingsRow";
  * "Web UI" section body. Three state sources with intentionally separate
  * update paths (never merged):
  * - client-local (localStorage-backed): theme preference + font size, via
- *   theme.ts; the local signals are seeded from the persisted values;
+ *   theme.ts; the local signals are seeded from the persisted values. The
+ *   usage-in-sidebar visibility toggle is also localStorage-backed
+ *   ("omp.sidebarUsage") but flows through the store facade
+ *   (state.sidebarUsage / setSidebarUsage), not a local signal;
  * - server model (refreshSettings/updateSetting): the Images group's
  *   images.* items, rendered through SettingsRow;
  * - session-scoped: the reveal/soften store toggles and the fast-mode /
@@ -90,6 +100,14 @@ export function WebUiSettings(props: { model: SettingsModel; visibleGroup: strin
 							aria-label="soft fade"
 							checked={state.soften}
 							onChange={(e) => setState("soften", e.currentTarget.checked)}
+						/>
+					</Row>
+					<Row label="usage in sidebar">
+						<input
+							type="checkbox"
+							aria-label="usage in sidebar"
+							checked={state.sidebarUsage}
+							onChange={(e) => setSidebarUsage(e.currentTarget.checked)}
 						/>
 					</Row>
 					{/* Session-RPC rows: no live session under the fleet fallback, so they

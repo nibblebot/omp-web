@@ -1,8 +1,9 @@
-import type { Component } from "solid-js";
+import { Show, type Component } from "solid-js";
 import { daemonsByProject, setSidebarVisible, setState, state } from "../../state";
 import { PlusIcon, XIcon } from "../shared/icons";
 import { SidebarFooter } from "./SidebarFooter";
 import { SidebarGroups } from "./SidebarGroups";
+import { SidebarUsage } from "./SidebarUsage";
 
 // ---------------------------------------------------------------------------
 // Fleet-edge roster sidebar (Phase 5). Rendered by App.tsx only in
@@ -54,6 +55,11 @@ export const DaemonSidebar: Component = () => {
 				</div>
 				<SidebarGroups groups={groups()} />
 			</div>
+			{/* Setting-gated condensed usage panel: docked between the roster
+			    list and the footer chrome. */}
+			<Show when={state.sidebarUsage}>
+				<SidebarUsage />
+			</Show>
 			{/* Global chrome moved out of the StatusBar: transcripts browser,
 			    debug panel, settings. */}
 			<SidebarFooter />

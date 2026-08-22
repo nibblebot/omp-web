@@ -129,6 +129,71 @@
 	background: var(--btn);
 	color: var(--text);
 }
+/* Condensed usage panel docked between the roster list and the footer
+   (SidebarUsage.tsx, gated by the "usage in sidebar" setting). */
+.sidebar-usage {
+	flex: none;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-3);
+	border-top: 1px solid var(--border);
+	max-height: 40%;
+	overflow-y: auto;
+}
+.sidebar-usage-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-2);
+}
+.sidebar-usage-title {
+	color: var(--muted);
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+.sidebar-usage-empty {
+	color: var(--muted);
+	font-size: var(--fs-micro);
+}
+.sidebar-usage-provider {
+	color: var(--muted);
+	font-size: var(--fs-micro);
+	margin-top: var(--space-1);
+}
+.sidebar-usage-row {
+	display: grid;
+	grid-template-columns: 1fr auto;
+	align-items: center;
+	column-gap: var(--space-3);
+	row-gap: var(--space-1);
+	font-size: var(--fs-micro);
+}
+.sidebar-usage-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sidebar-usage-window {
+	color: var(--muted);
+}
+.sidebar-usage-pct {
+	color: var(--muted);
+	flex: none;
+}
+.sidebar-usage-bar {
+	grid-column: 1 / -1;
+	height: 3px;
+	border-radius: var(--r-xs);
+	background: var(--border);
+	overflow: hidden;
+}
+.sidebar-usage-bar-fill {
+	height: 100%;
+	background: var(--accent);
+	border-radius: var(--r-xs);
+}
 .sidebar-row {
 	display: flex;
 	align-items: flex-start;

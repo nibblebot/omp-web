@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
+import type { UsageReport } from "@oh-my-pi/pi-ai";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "../shared/protocol";
 import type {
@@ -193,6 +194,9 @@ const SIDEBAR_KEY = "omp.sidebarVisible";
 /** localStorage key for the Phase 11 desktop-notifications toggle. */
 const NOTIFY_KEY = "omp.notifyEnabled";
 
+/** localStorage key for the Phase 12 roster-sidebar usage widget toggle. */
+const USAGE_SIDEBAR_KEY = "omp.sidebarUsage";
+
 export const [state, setState] = createStore({
 	items: [] as ChatItem[],
 	// rev: monotonic content version of live.blocks, bumped on every live
@@ -356,6 +360,17 @@ export const [state, setState] = createStore({
 		typeof localStorage !== "undefined" && typeof Notification !== "undefined"
 			? localStorage.getItem(NOTIFY_KEY) === "true"
 			: false,
+	// Phase 12: condensed usage panel pinned above the roster footer buttons
+	// (persisted toggle; data rides the one-shot fetchUsageReports relay).
+	sidebarUsage:
+		typeof localStorage !== "undefined"
+			? localStorage.getItem(USAGE_SIDEBAR_KEY) === "true"
+			: false,
+	// Phase 12: fetchUsageReports mirror — null = never fetched; [] = fetched
+	// but no reporting. Single-flight via usageLoading (refreshUsageReports).
+	usageReports: null as UsageReport[] | null,
+	usageLoading: false as boolean,
+	usageError: null as string | null,
 	// Phase 11: /btw side-panel session. streamId routes ephemeral_delta
 	// frames to this panel; the panel never appears in the transcript.
 	btw: null as null | {
@@ -1356,6 +1371,7 @@ export {
 } from "./store/projects";
 export { sendLoginCode, sendUiResponse } from "./store/modals";
 export { refreshSettings, updateSetting } from "./store/settings";
+export { refreshUsageReports, setSidebarUsage } from "./store/usage";
 export {
 	DEBUG_RING_CAP,
 	fetchCtlDebug,
