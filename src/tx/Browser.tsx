@@ -1,7 +1,10 @@
 import { Show, createEffect, createResource, createSignal, onCleanup } from "solid-js";
 import { api, type Health } from "./api";
-import { SessionDetail } from "./components/SessionDetail";
-import { SessionList } from "./components/SessionList";
+import { ModeSwitch } from "../components/shared";
+import { XIcon } from "../components/shared/icons";
+import { setTxSidebarVisible, state } from "../state";
+import { TranscriptDetail } from "./components/TranscriptDetail";
+import { TranscriptList } from "./components/TranscriptList";
 import { decodeFileFromHash, encodePathSegments } from "./util/format";
 
 type Route = { view: "list" } | { view: "session"; file: string };
@@ -51,25 +54,58 @@ export function TxBrowser() {
 		window.location.hash = `#/s/${encodePathSegments(f)}`;
 	};
 
+	// Missing-file fallback (TranscriptList observes the loaded sessions):
+	// clearing the hash fires hashchange, the route becomes the list, and
+	// nothing stays selected.
+	const handleMissingFile = () => {
+		if (window.location.hash !== "") window.location.hash = "";
+	};
+
 	return (
 		<div class="tx-app">
-			<aside class="tx-sidebar">
-				<SessionList
+			<aside class="tx-sidebar" classList={{ open: state.txSidebarVisible }}>
+				{/* Top chrome: Work/Analysis mode switch flush left, sidebar
+				    close flush right. Mirrors the roster sidebar mode row. */}
+				<div class="tx-sidebar-mode-row">
+					<ModeSwitch />
+					<button
+						class="sidebar-icon-btn"
+						onClick={() => setTxSidebarVisible(false)}
+						title="Close sidebar"
+						aria-label="Close sidebar"
+					>
+						<XIcon />
+					</button>
+				</div>
+				<TranscriptList
 					selectedFile={file()}
 					onOpen={navigate}
+					onMissingFile={handleMissingFile}
 					health={healthSafe}
 					syncTick={syncTick}
 					onSynced={bumpSync}
 				/>
 			</aside>
+			{/* Narrow-viewport slide-out: tapping outside the overlay sidebar
+			    closes it. Same .sidebar-scrim pattern as the roster (App.tsx);
+			    CSS shows it only at <=720px. */}
+			<Show when={state.txSidebarVisible}>
+				<button
+					type="button"
+					class="sidebar-scrim"
+					tabindex={-1}
+					onClick={() => setTxSidebarVisible(false)}
+					aria-label="Close sidebar"
+				/>
+			</Show>
 			<main class="tx-main">
 				<HealthBanner health={healthSafe} onSynced={bumpSync} />
 				<Show when={file()} keyed>
-					{(f) => <SessionDetail file={f} syncTick={syncTick} onSynced={bumpSync} />}
+					{(f) => <TranscriptDetail file={f} syncTick={syncTick} onSynced={bumpSync} />}
 				</Show>
 				<Show when={!file()}>
 					<div class="tx-empty-state">
-						<h2>Session Viewer</h2>
+						<h2>Transcripts</h2>
 						<p>Browse every omp agent session: analytics, transcripts, and subagents.</p>
 						<p class="muted">Select a session from the sidebar to begin.</p>
 					</div>

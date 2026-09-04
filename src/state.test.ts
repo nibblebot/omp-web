@@ -17,6 +17,7 @@ import {
 	connect,
 	daemonsByProject,
 	hasLiveSession,
+	initialView,
 	listProjectBranches,
 	pushNotice,
 	refreshSettings,
@@ -27,6 +28,8 @@ import {
 	sendRemoveProject,
 	sendWorktreeDeleteInfo,
 	setState,
+	setTxSidebarVisible,
+	setView,
 	spawnResume,
 	state,
 	updateSetting,
@@ -213,6 +216,11 @@ beforeEach(() => {
 		deleteWorktreeTarget: null,
 		removeProjectTarget: null,
 		modal: null,
+		// Top-level view mode + its UI flags (setView / setTxSidebarVisible /
+		// workUnviewed); reset for isolation.
+		view: "work",
+		workUnviewed: false,
+		txSidebarVisible: true,
 	});
 });
 
@@ -223,12 +231,16 @@ const originalLocation = globalThis.location;
 const originalWindow = globalThis.window;
 const originalEventSource = globalThis.EventSource;
 const originalFetch = globalThis.fetch;
+const originalLocalStorage = globalThis.localStorage;
+const originalHistory = globalThis.history;
 
 afterEach(() => {
 	globalThis.location = originalLocation;
 	globalThis.window = originalWindow;
 	globalThis.EventSource = originalEventSource;
 	globalThis.fetch = originalFetch;
+	globalThis.localStorage = originalLocalStorage;
+	globalThis.history = originalHistory;
 });
 
 describe("attached-frame handling", () => {
@@ -861,6 +873,147 @@ describe("answerUnviewed (turn ended below the viewport)", () => {
 		expect(state.answerUnviewed).toBe(true);
 		dispatchSeq(agentStart(), 1026);
 		expect(state.answerUnviewed).toBe(false);
+	});
+});
+
+describe("workUnviewed (a turn ended while in Analysis)", () => {
+	/** A fully primed stream: attached, empty history, readiness gate cleared. */
+	function primeReady(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+		dispatchSeq({ type: "history", messages: [] }, 3);
+		dispatch({ type: "ready", readyAt: 123 });
+	}
+	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+	const agentEnd = (): ServerFrame => ({
+		type: "event",
+		event: { type: "agent_end", messages: [] },
+	});
+
+	test("agent_end while the view is work → not flagged", () => {
+		primeReady(); // view defaults work
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(agentEnd(), 1025);
+		expect(state.workUnviewed).toBe(false);
+	});
+
+	test("agent_end while the view is analysis → flagged; setView(work) clears it", () => {
+		setView("analysis");
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(agentEnd(), 1025);
+		expect(state.workUnviewed).toBe(true);
+
+		setView("work");
+		expect(state.workUnviewed).toBe(false);
+		// Staying in analysis keeps the flag (only entering work clears it).
+		setState("workUnviewed", true);
+		setView("analysis");
+		expect(state.workUnviewed).toBe(true);
+	});
+
+	test("a detached daemon's streaming flip true→false while in analysis → flagged", () => {
+		// Prime the connected transport without an attached session so d2 is
+		// detached; then switch to analysis.
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setView("analysis");
+
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		expect(state.workUnviewed).toBe(false);
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+		expect(state.workUnviewed).toBe(true);
+
+		// A detached daemon ending while in work never flags.
+		setView("work");
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+		expect(state.workUnviewed).toBe(false);
+	});
+
+	test("the ATTACHED daemon's turn end is not workUnviewed either", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("d2")); // currentSessionId = d2
+		setView("analysis");
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+		expect(state.workUnviewed).toBe(false);
+	});
+});
+
+describe("setView persistence and hash handling", () => {
+	/** In-memory localStorage double; set before connect/store re-init. */
+	function stubStorage(): void {
+		const store = new Map<string, string>();
+		globalThis.localStorage = {
+			getItem: (k: string) => store.get(k) ?? null,
+			setItem: (k: string, v: string) => void store.set(k, v),
+			removeItem: (k: string) => void store.delete(k),
+		} as unknown as Storage;
+	}
+
+	test("setView persists omp.view; setTxSidebarVisible persists its own key", () => {
+		stubStorage();
+		setView("analysis");
+		expect(globalThis.localStorage.getItem("omp.view")).toBe("analysis");
+		setTxSidebarVisible(false);
+		expect(globalThis.localStorage.getItem("omp.txSidebarVisible")).toBe("false");
+	});
+
+	test("entering work clears the hash via history.replaceState and the workUnviewed dot", () => {
+		stubStorage();
+		globalThis.history = {
+			replaceState: vi.fn(),
+		} as unknown as typeof history;
+		globalThis.location = { hash: "#/s/x", pathname: "/app", search: "?a=1" } as Location;
+		setState("workUnviewed", true);
+		setView("analysis");
+		setView("work");
+		expect(history.replaceState).toHaveBeenCalledWith(null, "", "/app?a=1");
+		expect(state.workUnviewed).toBe(false);
+	});
+
+	test("entering analysis keeps the hash untouched", () => {
+		stubStorage();
+		const replaceState = vi.fn();
+		globalThis.history = { replaceState } as unknown as typeof history;
+		globalThis.location = { hash: "", pathname: "/app", search: "" } as Location;
+		setView("analysis");
+		expect(replaceState).not.toHaveBeenCalled();
+	});
+
+	test("defaults: txSidebarVisible true, view work, dot false", () => {
+		stubStorage();
+		expect(state.txSidebarVisible).toBe(true);
+		expect(state.view).toBe("work");
+		expect(state.workUnviewed).toBe(false);
+	});
+});
+
+describe("initialView (boot view resolution)", () => {
+	test("legacy values migrate: chat → work, transcripts → analysis", () => {
+		expect(initialView("chat", "")).toBe("work");
+		expect(initialView("transcripts", "")).toBe("analysis");
+	});
+
+	test("unknown/null persist values fall back to work; current values pass through", () => {
+		expect(initialView("analysis", "")).toBe("analysis");
+		expect(initialView("work", "")).toBe("work");
+		expect(initialView(null, "")).toBe("work");
+		expect(initialView("bogus", "")).toBe("work");
+		expect(initialView("", "")).toBe("work");
+	});
+
+	test("a #/s/<file> hash deep-links into analysis even when work is persisted", () => {
+		expect(initialView("work", "#/s/abc.jsonl")).toBe("analysis");
+		expect(initialView("work", "#s/abc.jsonl")).toBe("analysis");
+	});
+
+	test("a non-/s/ hash falls through to the persisted value", () => {
+		expect(initialView("analysis", "#/settings")).toBe("analysis");
+		expect(initialView("work", "#/settings")).toBe("work");
 	});
 });
 

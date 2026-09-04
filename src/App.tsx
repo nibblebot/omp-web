@@ -1,4 +1,4 @@
-import { For, onMount, Show, type Component } from "solid-js";
+import { For, createEffect, createSignal, onMount, Show, type Component } from "solid-js";
 import { characterForProvider } from "./sprites/characters";
 import { PanelLeftIcon } from "./components/shared/icons";
 import { CharacterAvatar, Modal } from "./components/shared";
@@ -42,6 +42,7 @@ import {
 	setPromptInsert,
 	setSidebarVisible,
 	setState,
+	setTxSidebarVisible,
 	state,
 	toggleSidebar,
 } from "./state";
@@ -124,6 +125,12 @@ export const App: Component = () => {
 			setState("modal", "history");
 		});
 	});
+	// Sticky Analysis keep-alive flag: the first entry into Analysis mounts
+	// TxBrowser; later Work/Analysis swaps only toggle its host's display.
+	const [analysisOpened, setAnalysisOpened] = createSignal(false);
+	createEffect(() => {
+		if (state.view === "analysis") setAnalysisOpened(true);
+	});
 	return (
 		<div class="app">
 			{/* finding #P1: always-mounted aria-live region (WCAG 4.1.3). Announcements
@@ -134,27 +141,34 @@ export const App: Component = () => {
 			</div>
 			<StatusBar />
 			{/* Roster toggle: sticky top-left of the viewport (roster mode,
-			    chat view), shown only while the docked sidebar is closed —
-			    the open sidebar carries its own close button top-right. */}
-			<Show when={state.sessionMode === "roster" && state.view === "chat" && !state.sidebarVisible}>
+			    either view), shown only while the current mode's docked
+			    sidebar is closed — the open sidebar carries its own close
+			    button top-right. Each mode collapses independently. */}
+			<Show
+				when={
+					state.sessionMode === "roster" &&
+					((state.view === "work" && !state.sidebarVisible) ||
+						(state.view === "analysis" && !state.txSidebarVisible))
+				}
+			>
 				<button
 					type="button"
 					id="sidebar-toggle"
 					class="sidebar-toggle"
-					onClick={toggleSidebar}
-					title="Open roster sidebar"
-					aria-label="Open roster sidebar"
-					aria-expanded={state.sidebarVisible}
+					onClick={() => (state.view === "work" ? toggleSidebar() : setTxSidebarVisible(true))}
+					title={state.view === "work" ? "Open roster sidebar" : "Open transcripts sidebar"}
+					aria-label={state.view === "work" ? "Open roster sidebar" : "Open transcripts sidebar"}
+					aria-expanded={state.view === "work" ? state.sidebarVisible : state.txSidebarVisible}
 				>
 					<PanelLeftIcon />
 				</button>
 			</Show>
 			<div class="app-body">
-				{/* Roster mode (fleet edge): the docked fleet roster sidebar; single
-				    mode has no sidebar at all. First child so it docks LEFT, and
-				    mounted in every view (not just chat) because the transcripts
-				    toggle now lives in its footer. */}
-				<Show when={state.sessionMode === "roster"}>
+				{/* Work mode (roster + fleet edge): the docked roster sidebar.
+				    Mounted only in Work; the two-pane swap with Analysis — which
+				    brings its own transcript sidebar inside TxBrowser. Single mode
+				    has no sidebar at all. First child so it docks LEFT. */}
+				<Show when={state.sessionMode === "roster" && state.view === "work"}>
 					<DaemonSidebar />
 					{/* Narrow-viewport slide-out: tapping outside the overlay sidebar
 					    closes it. Hidden by CSS on wide layouts, where the sidebar
@@ -169,10 +183,18 @@ export const App: Component = () => {
 						/>
 					</Show>
 				</Show>
-				<Show when={state.view === "transcripts"}>
-					<TxBrowser />
+				{/* Analysis mode (roster only; /ctl/stats needs a fleet process):
+				    the transcript sidebar + detail pane. Standalone never renders
+				    it, even if omp.view persisted "analysis". Keep-alive: once
+				    opened, TxBrowser stays mounted and only hides (display:none), so
+				    the sidebar list, scroll, search, project filter, and selected
+				    transcript all survive mode switches. */}
+				<Show when={state.sessionMode === "roster" && analysisOpened()}>
+					<div class="tx-keepalive" classList={{ hidden: state.view !== "analysis" }}>
+						<TxBrowser />
+					</div>
 				</Show>
-				<Show when={state.view === "chat"}>
+				<Show when={state.view === "work" || state.sessionMode !== "roster"}>
 					{/* Roster mode with no live session (stopped/removed daemon, or none
 					    picked yet): the empty pane replaces the chat column. Standalone
 					    mode is never gated — hasLiveSession() is true outside roster. */}

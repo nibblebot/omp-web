@@ -60,7 +60,7 @@ export const StatusBar: Component = () => {
 			</Show>
 			<RetryBadge />
 			{/* Historical transcripts/stats browser (roster-mode-only: /ctl/stats
-			    needs a fleet process); the toggle lives in the sidebar footer. */}
+			    needs a fleet process); the mode buttons live in the sidebars. */}
 			{state.queuedMessageCount > 0 && (
 				<span class="queued-chip">queued: {state.queuedMessageCount}</span>
 			)}
@@ -70,9 +70,10 @@ export const StatusBar: Component = () => {
 					subagents ({state.subagents.size})
 				</Segment>
 			</Show>
-			{/* debug/settings live in the DaemonSidebar footer in roster chat;
-			    keep them in the header where no sidebar exists (standalone, Tx view). */}
-			<Show when={state.sessionMode !== "roster" || state.view !== "chat"}>
+			{/* debug/settings live in the DaemonSidebar footer in roster Work;
+			    keep them in the header where no sidebar exists (standalone,
+			    Analysis view). */}
+			<Show when={state.sessionMode !== "roster" || state.view !== "work"}>
 				<Segment
 					active={state.modal === "debug"}
 					onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}

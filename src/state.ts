@@ -197,6 +197,26 @@ const NOTIFY_KEY = "omp.notifyEnabled";
 /** localStorage key for the Phase 12 roster-sidebar usage widget toggle. */
 const USAGE_SIDEBAR_KEY = "omp.sidebarUsage";
 
+/** localStorage key for the persisted Work/Analysis top-level view. */
+const VIEW_KEY = "omp.view";
+
+/** localStorage key for the transcripts (Analysis) sidebar visibility toggle. */
+const TX_SIDEBAR_KEY = "omp.txSidebarVisible";
+
+/**
+ * Resolve the initial Work/Analysis view (exported pure helper, unit-tested
+ * in src/state.test.ts). A #/s/<file> hash deep-links into Analysis at that
+ * transcript regardless of the persisted value; otherwise the persisted
+ * value migrates silently to the new vocabulary ("chat" maps to "work",
+ * "transcripts" maps to "analysis"), with anything unknown or absent
+ * defaulting to Work.
+ */
+export function initialView(persisted: string | null, hash: string): "work" | "analysis" {
+	if (/^#\/?s\/.+/.test(hash)) return "analysis";
+	if (persisted === "analysis" || persisted === "transcripts") return "analysis";
+	return "work";
+}
+
 export const [state, setState] = createStore({
 	items: [] as ChatItem[],
 	// rev: monotonic content version of live.blocks, bumped on every live
@@ -329,10 +349,25 @@ export const [state, setState] = createStore({
 						? "false"
 						: "true")) !== "false"
 			: true,
-	// Top-level view: "chat" (live session) or "transcripts" (historical
-	// transcripts/stats browser — only meaningful in roster mode, where the
-	// /ctl/stats API exists; the StatusBar toggle gates on sessionMode).
-	view: "chat" as "chat" | "transcripts",
+	// Per-mode sidebar collapse for Analysis (the transcripts sidebar):
+	// persisted mirror of the roster sidebarVisible toggle above, separate
+	// key, same action shape. Defaults open.
+	txSidebarVisible:
+		typeof localStorage !== "undefined" ? localStorage.getItem(TX_SIDEBAR_KEY) !== "false" : true,
+	// Top-level view: "work" (roster sidebar + live conversation) or
+	// "analysis" (transcript sidebar + historical transcripts browser, only
+	// meaningful in roster mode, where the /ctl/stats API exists). Persisted
+	// in omp.view with silent migration; a boot-time #/s/<file> hash
+	// deep-links into Analysis (initialView above).
+	view: initialView(
+		typeof localStorage !== "undefined" ? localStorage.getItem(VIEW_KEY) : null,
+		typeof location !== "undefined" ? location.hash : "",
+	),
+	// Work-button activity dot: a turn ENDED while the tab was in Analysis
+	// (agent_end in src/store/chat.ts for the attached session, detached
+	// daemon_activity flips in the /events handler below). Ephemeral like
+	// answerUnviewed; cleared only by setView("work").
+	workUnviewed: false,
 	// Phase 6: in-flight OAuth login prompts (unicast frames).
 	loginUrl: null as { url: string; launchUrl?: string; instructions?: string } | null,
 	loginCodeRequest: null as { requestId: string; title: string; placeholder?: string } | null,
@@ -1059,8 +1094,12 @@ export function connect(): void {
 				// belt-and-suspenders for edges/old fleets that never send this frame;
 				// the precedence in session-activity hides it while the daemon still
 				// streams (remote live truth beats the unread latch).
-				if (wasStreaming && !frame.streaming && frame.daemonId !== state.currentSessionId)
+				if (wasStreaming && !frame.streaming && frame.daemonId !== state.currentSessionId) {
 					markUnread(frame.daemonId);
+					// Work-dot: the turn ended while this tab sits in Analysis;
+					// setView("work") clears it.
+					if (state.view === "analysis") setState("workUnviewed", true);
+				}
 				break;
 			}
 			case "daemon_status": {
@@ -1353,6 +1392,8 @@ export {
 	requestDaemonSessions,
 	resumeDaemonSession,
 	setSidebarVisible,
+	setTxSidebarVisible,
+	setView,
 	toggleSidebar,
 } from "./store/roster";
 export {

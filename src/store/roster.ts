@@ -19,6 +19,12 @@ import {
 /** localStorage key for the roster sidebar visibility toggle. */
 const SIDEBAR_KEY = "omp.sidebarVisible";
 
+/** localStorage key for the persisted Work/Analysis top-level view. */
+const VIEW_KEY = "omp.view";
+
+/** localStorage key for the transcripts (Analysis) sidebar visibility toggle. */
+const TX_SIDEBAR_KEY = "omp.txSidebarVisible";
+
 // list_sessions / list_files carry no id on the wire; with a single user,
 // latest-wins correlation is sufficient (a superseded request resolves empty.
 let pendingSessions: ((sessions: SessionListEntry[]) => void) | null = null;
@@ -201,4 +207,27 @@ export function setSidebarVisible(visible: boolean): void {
 
 export function toggleSidebar(): void {
 	setSidebarVisible(!state.sidebarVisible);
+}
+
+/**
+ * Top-level Work/Analysis view. Persists omp.view; entering Work also
+ * clears the #/s/<file> deep-link hash (Analysis owns it while active) and
+ * the Work-button dot (workUnviewed).
+ */
+export function setView(view: "work" | "analysis"): void {
+	if (typeof localStorage !== "undefined") localStorage.setItem(VIEW_KEY, view);
+	setState("view", view);
+	if (view === "work") {
+		// Clear the transcript deep-link hash without firing a hashchange
+		// event; Analysis re-owns the hash on its next selection.
+		if (typeof history !== "undefined" && typeof location !== "undefined")
+			history.replaceState(null, "", location.pathname + location.search);
+		setState("workUnviewed", false);
+	}
+}
+
+/** Persisted transcripts-sidebar visibility (Analysis mode's own toggle). */
+export function setTxSidebarVisible(visible: boolean): void {
+	if (typeof localStorage !== "undefined") localStorage.setItem(TX_SIDEBAR_KEY, String(visible));
+	setState("txSidebarVisible", visible);
 }

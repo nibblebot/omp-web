@@ -1,5 +1,6 @@
 import { Show, type Component } from "solid-js";
 import { daemonsByProject, setSidebarVisible, setState, state } from "../../state";
+import { ModeSwitch } from "../shared";
 import { PlusIcon, XIcon } from "../shared/icons";
 import { SidebarFooter } from "./SidebarFooter";
 import { SidebarGroups } from "./SidebarGroups";
@@ -16,7 +17,8 @@ import { SidebarUsage } from "./SidebarUsage";
 // header "+" opens the Add-repo modal (the retired SpawnPicker's template/
 // labels fields live in its advanced section). Row interactions live in
 // DaemonRow/DaemonDetailView; collapse state persists per project in
-// localStorage (SidebarGroups).
+// localStorage (SidebarGroups). A pinned mode row (ModeSwitch plus the
+// sidebar close button) tops the column above the Projects header.
 // ---------------------------------------------------------------------------
 
 export const DaemonSidebar: Component = () => {
@@ -27,11 +29,25 @@ export const DaemonSidebar: Component = () => {
 
 	return (
 		<aside class="sidebar" classList={{ open: state.sidebarVisible }}>
+			{/* Top chrome: Work/Analysis mode switch flush left, sidebar close
+			    flush right. Pinned above the scrolling roster so both stay
+			    reachable; the Projects header below keeps the add action. */}
+			<div class="sidebar-mode-row">
+				<ModeSwitch />
+				<button
+					class="sidebar-icon-btn"
+					onClick={() => setSidebarVisible(false)}
+					title="Close sidebar"
+					aria-label="Close sidebar"
+				>
+					<XIcon />
+				</button>
+			</div>
 			<div class="sidebar-list">
 				{/* Static top-level header: single grouping for the whole roster,
 				    no caret (not collapsible), no indent; carries the add-project
-				    action and the sidebar close button (top-right). Always rendered
-				    so the empty-state hint has a referent. */}
+				    action (top-right). Always rendered so the empty-state hint
+				    has a referent. */}
 				<div class="picker-group-name sidebar-subgroup sidebar-projects-head">
 					Projects
 					<span class="sidebar-projects-actions">
@@ -43,14 +59,6 @@ export const DaemonSidebar: Component = () => {
 						>
 							<PlusIcon />
 						</button>
-						<button
-							class="sidebar-icon-btn"
-							onClick={() => setSidebarVisible(false)}
-							title="Close sidebar"
-							aria-label="Close sidebar"
-						>
-							<XIcon />
-						</button>
 					</span>
 				</div>
 				<SidebarGroups groups={groups()} />
@@ -60,8 +68,8 @@ export const DaemonSidebar: Component = () => {
 			<Show when={state.sidebarUsage}>
 				<SidebarUsage />
 			</Show>
-			{/* Global chrome moved out of the StatusBar: transcripts browser,
-			    debug panel, settings. */}
+			{/* Global chrome moved out of the StatusBar: debug panel and
+			    settings (the view mode switch lives in the mode row above). */}
 			<SidebarFooter />
 		</aside>
 	);

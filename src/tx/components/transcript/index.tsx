@@ -218,7 +218,7 @@ export function TranscriptView(props: TranscriptProps) {
 		});
 	});
 
-	/** The transcript may sit in a CSS-hidden tab (SessionDetail keeps tabs mounted). */
+	/** The transcript may sit in a CSS-hidden tab (TranscriptDetail keeps tabs mounted). */
 	const transcriptVisible = () => {
 		const el = listRef;
 		return el !== undefined && el.getBoundingClientRect().height > 0;

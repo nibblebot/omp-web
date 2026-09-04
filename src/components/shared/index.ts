@@ -6,6 +6,7 @@ export { DialogActions } from "./DialogActions";
 export { FullImageOverlay, ImageScan } from "./ImageScan";
 export { KebabMenu } from "./KebabMenu";
 export { Markdown } from "./Markdown";
+export { ModeSwitch } from "./ModeSwitch";
 export { Modal } from "./Modal";
 export { PickerRow, useClickableRow } from "./PickerRow";
 export type { ClickableRowProps } from "./PickerRow";

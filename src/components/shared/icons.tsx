@@ -256,3 +256,21 @@ export const TrashIcon: Component<IconProps> = (props) => (
 		<line x1="14" x2="14" y1="11" y2="17" />
 	</Svg>
 );
+
+/** terminal — Work mode glyph (the live-conversation surface, ▸_). */
+export const TerminalIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<polyline points="4 17 10 11 4 5" />
+		<line x1="12" x2="20" y1="19" y2="19" />
+	</Svg>
+);
+
+/** bar-chart-3 — Analysis mode glyph (the transcripts/stats surface). */
+export const BarChart3Icon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M3 3v18h18" />
+		<path d="M18 17V9" />
+		<path d="M13 17V5" />
+		<path d="M8 17v-3" />
+	</Svg>
+);

@@ -16,6 +16,12 @@
 	gap: var(--space-5);
 	padding: var(--space-4) 0;
 	border-bottom: 1px solid var(--border);
+	/* Single-row height held constant: with no visible segments (roster Work)
+	   the bar would collapse to padding-only and the sidebar's top edge would
+	   jump when switching Work/Analysis. 41px = 2x8px padding + 24px segment
+	   buttons + 1px border; wrapping may still grow it. */
+	min-height: 41px;
+	box-sizing: border-box;
 	font-size: var(--fs-md);
 	color: var(--muted);
 	flex-wrap: wrap;
@@ -153,6 +159,15 @@
 	display: flex;
 	flex: 1;
 	min-height: 0;
+}
+/* Analysis keep-alive host (App.tsx): transparent in the flex row while
+   visible, display:none while in Work — TxBrowser stays mounted so the
+   transcript sidebar's list/scroll/search/selection survive mode switches. */
+.tx-keepalive {
+	display: contents;
+}
+.tx-keepalive.hidden {
+	display: none;
 }
 .app-main {
 	display: flex;

@@ -109,6 +109,47 @@
 	background: var(--btn);
 	color: var(--text);
 }
+/* Pinned top chrome of the roster sidebar: the Work/Analysis mode switch
+   flush left (ModeSwitch.tsx) with the sidebar close button flush right.
+   Sits above the scrolling roster list and the Projects header. */
+.sidebar-mode-row {
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-3) 0;
+}
+/* Work/Analysis segmented pair: the buttons share the .sidebar-icon-btn
+   base so hit targets, radius, and hover stay consistent; the pair reads
+   as grouped controls with the active side accented against the muted
+   inactive one. */
+.mode-switch {
+	display: flex;
+	align-items: center;
+	gap: var(--space-1);
+}
+.mode-switch .sidebar-icon-btn {
+	position: relative; /* scopes the activity dot to the Work button */
+	color: var(--muted-2);
+}
+.mode-switch .sidebar-icon-btn.active {
+	background: var(--btn);
+	color: var(--accent);
+}
+/* Light-blue activity dot on the Work button, shown while a turn ends in
+   Analysis (state.workUnviewed). Same accent language as the roster's
+   unread status dots: --accent is the theme's light blue. */
+.mode-switch-dot {
+	position: absolute;
+	top: 0;
+	right: 0;
+	width: 6px;
+	height: 6px;
+	background: var(--accent);
+	box-shadow: 0 0 6px var(--accent);
+	border-radius: 50%;
+}
 .sidebar-list {
 	flex: 1;
 	overflow-y: auto;

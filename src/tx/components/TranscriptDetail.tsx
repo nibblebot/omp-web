@@ -5,30 +5,30 @@ import { AnalyticsView } from "./AnalyticsView";
 import { TranscriptView } from "./transcript";
 import { SubagentsView } from "./SubagentsView";
 
-type Tab = "analytics" | "transcript" | "subagents";
+type Tab = "overview" | "transcript" | "subagents";
 
 const TABS: { id: Tab; label: string }[] = [
-	{ id: "analytics", label: "Analytics" },
+	{ id: "overview", label: "Overview" },
 	{ id: "transcript", label: "Transcript" },
 	{ id: "subagents", label: "Subagents" },
 ];
 
-interface SessionDetailProps {
+interface TranscriptDetailProps {
 	file: string;
-	/** bumped after a stats sync so analytics data refetches */
+	/** bumped after a stats sync so overview data refetches */
 	syncTick: () => number;
 	/** called after a successful stats sync */
 	onSynced: () => void;
 }
 
 /**
- * Session detail: header + Analytics | Transcript | Subagents tabs.
+ * Transcript detail: header + Overview | Transcript | Subagents tabs.
  * Tabs stay mounted (CSS-hidden) so loaded transcript pages survive tab switches.
  */
-export function SessionDetail(props: SessionDetailProps) {
+export function TranscriptDetail(props: TranscriptDetailProps) {
 	const file = () => props.file;
 
-	const [tab, setTab] = createSignal<Tab>("analytics");
+	const [tab, setTab] = createSignal<Tab>("overview");
 	/** Transcript tool filter — shared: analytics table rows set it, transcript applies it. */
 	const [toolFilter, setToolFilter] = createSignal<string | null>(null);
 	/** When set, the Transcript tab shows this subagent file's transcript instead. */
@@ -125,7 +125,7 @@ export function SessionDetail(props: SessionDetailProps) {
 						<span class="kv err-kv">stats unavailable</span>
 					</Show>
 				</div>
-				<nav class="tabs" role="tablist" aria-label="Session views">
+				<nav class="tabs" role="tablist" aria-label="Transcript views">
 					{TABS.map((t, i) => (
 						<button
 							type="button"
@@ -146,10 +146,10 @@ export function SessionDetail(props: SessionDetailProps) {
 			</header>
 
 			<section
-				classList={{ "tab-pane": true, hidden: tab() !== "analytics" }}
+				classList={{ "tab-pane": true, hidden: tab() !== "overview" }}
 				role="tabpanel"
-				id="tab-panel-analytics"
-				aria-labelledby="tab-analytics"
+				id="tab-panel-overview"
+				aria-labelledby="tab-overview"
 			>
 				<AnalyticsView
 					stats={() => mainStatsSafe()}

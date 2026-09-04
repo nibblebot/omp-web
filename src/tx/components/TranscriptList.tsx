@@ -1,10 +1,23 @@
-import { For, Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
+import {
+	For,
+	Show,
+	createEffect,
+	createMemo,
+	createResource,
+	createSignal,
+	on,
+	onCleanup,
+} from "solid-js";
 import { api, ApiError, type Health, type SessionSummary } from "../api";
 import { basename, formatCompact, formatCost, timeAgo } from "../util/format";
+import { shouldFallbackMissingFile } from "../util/missing-file";
+import { groupSessionsByProject } from "../util/project-groups";
 
-interface SessionListProps {
+interface TranscriptListProps {
 	selectedFile: string | null;
 	onOpen: (file: string) => void;
+	/** Deep-linked selected file is missing: clear the route back to the list. */
+	onMissingFile?: (file: string) => void;
 	health: () => Health | undefined;
 	/** bumped after a stats sync so the session list refetches */
 	syncTick: () => number;
@@ -12,7 +25,7 @@ interface SessionListProps {
 	onSynced: () => void;
 }
 
-export function SessionList(props: SessionListProps) {
+export function TranscriptList(props: TranscriptListProps) {
 	// Debounced search input → server-side `q` filter.
 	const [qInput, setQInput] = createSignal("");
 	const [q, setQ] = createSignal("");
@@ -31,11 +44,47 @@ export function SessionList(props: SessionListProps) {
 		async (key) => api.sessions(key.split("\u0000")[0]),
 	);
 
-	const sessions = () => (sessionsRes.error ? [] : (sessionsRes()?.sessions ?? []));
-	const listTotal = () => sessionsRes()?.total ?? 0;
-	const listTruncated = () => sessionsRes()?.truncated ?? false;
+	// Render from .latest (the last SUCCESSFUL response): a refetch — sync
+	// tick or search — keeps the previous list on screen and updates it in
+	// place when the new data lands, instead of wiping to a loading state.
+	const sessions = () => sessionsRes.latest?.sessions ?? [];
+
 	const [syncing, setSyncing] = createSignal(false);
 	const [syncError, setSyncError] = createSignal<string | null>(null);
+
+	// Project groups: sessions keep the server's recent-first order inside
+	// their group; group order follows each group's most-recent member
+	// (earliest position in the server list wins).
+	const groups = createMemo(() => groupSessionsByProject(sessions()));
+	const [project, setProject] = createSignal("");
+	/** Groups after the client-side project filter (composes with search). */
+	const visibleGroups = () => {
+		const selected = project();
+		return selected === "" ? groups() : groups().filter((g) => g.key === selected);
+	};
+	/** Search or project filter active: an empty list means "no match", not "none yet". */
+	const narrowed = () => q() !== "" || project() !== "";
+	/** Count badge mirrors the rendered rows (group totals after the filter). */
+	const visibleTotal = () => visibleGroups().reduce((n, g) => n + g.sessions.length, 0);
+
+	// Deep-link fallback: when the loaded, untruncated, unfiltered sessions
+	// response proves the selected file is missing, route back to the list.
+	createEffect(() => {
+		const file = props.selectedFile;
+		if (file === null) return;
+		if (
+			shouldFallbackMissingFile({
+				selectedFile: file,
+				sessions: sessions(),
+				loading: sessionsRes.loading,
+				errored: !!sessionsRes.error,
+				truncated: sessionsRes.latest?.truncated ?? false,
+				hasQuery: q() !== "",
+			})
+		) {
+			props.onMissingFile?.(file);
+		}
+	});
 
 	const runSync = async () => {
 		if (syncing()) return;
@@ -56,13 +105,25 @@ export function SessionList(props: SessionListProps) {
 	return (
 		<div class="sidebar-inner">
 			<header class="tx-sidebar-header">
-				<span class="brand">Session Viewer</span>
+				<span class="brand">Transcripts</span>
 				<div class="header-right">
 					<span class="count">
-						{sessionsRes.loading && sessions().length === 0 ? "…" : sessions().length}
+						{sessionsRes.loading && visibleGroups().length === 0 ? "…" : visibleTotal()}
 					</span>
 				</div>
 			</header>
+
+			<div class="project-filter-wrap">
+				<select
+					class="project-filter"
+					value={project()}
+					onChange={(e) => setProject(e.currentTarget.value)}
+					aria-label="Filter by project"
+				>
+					<option value="">All projects</option>
+					<For each={groups()}>{(g) => <option value={g.key}>{g.label}</option>}</For>
+				</select>
+			</div>
 
 			<div class="search-wrap">
 				<input
@@ -76,23 +137,37 @@ export function SessionList(props: SessionListProps) {
 
 			<div class="session-list">
 				<Show
-					when={sessionsRes.error}
+					when={sessions().length === 0 ? sessionsRes.error : undefined}
 					keyed
 					fallback={
 						<Show
-							when={sessionsRes.loading}
+							when={sessionsRes.loading && sessions().length === 0}
 							fallback={
 								<Show
-									when={sessions().length > 0}
-									fallback={<div class="list-hint">No sessions match.</div>}
+									when={visibleGroups().length > 0}
+									fallback={
+										<div class="list-hint">
+											{narrowed() ? "No sessions match." : "No sessions yet"}
+										</div>
+									}
 								>
-									<For each={sessions()}>
-										{(s) => (
-											<SessionRow
-												session={s}
-												selected={s.file === props.selectedFile}
-												onOpen={props.onOpen}
-											/>
+									<For each={visibleGroups()}>
+										{(group) => (
+											<div class="session-group">
+												{/* Per-group sticky header: sticks while this group
+												    scrolls, releases at its own bottom edge. Rendered
+												    even for a single group (uniform look). */}
+												<div class="session-group-head">{group.label}</div>
+												<For each={group.sessions}>
+													{(s) => (
+														<TranscriptRow
+															session={s}
+															selected={s.file === props.selectedFile}
+															onOpen={props.onOpen}
+														/>
+													)}
+												</For>
+											</div>
 										)}
 									</For>
 								</Show>
@@ -114,10 +189,15 @@ export function SessionList(props: SessionListProps) {
 				</Show>
 			</div>
 
-			<Show when={listTruncated()}>
+			<Show when={sessionsRes.latest?.truncated}>
 				<div class="list-hint truncate-note">
-					showing first {sessions().length} of {listTotal()} sessions
+					showing first {sessions().length} of {sessionsRes.latest?.total ?? 0} sessions
 				</div>
+			</Show>
+			{/* A failed refetch (sync or search) with data on screen keeps the
+			    previous list; the failure is a note, not a panel swap. */}
+			<Show when={sessionsRes.error && sessions().length > 0}>
+				<div class="list-hint">Refresh failed. Showing the previous list.</div>
 			</Show>
 			<footer class="sidebar-footer">
 				<div class="foot-line foot-sync">
@@ -164,7 +244,7 @@ export function SessionList(props: SessionListProps) {
 	);
 }
 
-function SessionRow(props: {
+function TranscriptRow(props: {
 	session: SessionSummary;
 	selected: boolean;
 	onOpen: (file: string) => void;

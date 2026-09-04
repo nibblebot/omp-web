@@ -490,6 +490,9 @@ export function applyEvent(e: AgentSessionEvent): void {
 			// answer as unviewed so the roster row shows the yellow unreviewed
 			// dot until the user scrolls to the live edge.
 			if (!state.chatPinned) setState("answerUnviewed", true);
+			// Work-mode dot: the turn ended while the user is in Analysis; the
+			// Work button lights up until setView("work") clears it.
+			if (state.view === "analysis") setState("workUnviewed", true);
 			// finding #P1: turn ended (streamed text itself is never announced).
 			announceIfReady("agent finished");
 			// Phase 11: desktop notification while the tab is hidden (OSC parity).
