@@ -801,6 +801,24 @@ function contentTypeForPath(pathname: string): string {
 	return EMBEDDED_CONTENT_TYPES[path.extname(pathname).toLowerCase()] ?? "application/octet-stream";
 }
 
+/** Final static fallback, mirroring the fleet edge: dist/ is gitignored in a
+ *  dev checkout and the checked-in embedded-dist stub is empty until the R15
+ *  build regenerates it, so the daemon still answers 200 with a pointer page
+ *  instead of a bare 404. */
+const PLACEHOLDER_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>omp-web</title>
+  </head>
+  <body style="background:#0d1117;color:#e6edf3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;display:grid;place-items:center;min-height:100vh;margin:0">
+    <main style="text-align:center">
+      <h1>omp-web</h1>
+      <p>The UI has not been built into <code>dist/</code> yet.</p>
+    </main>
+  </body>
+</html>`;
+
 /**
  * Authorization header check: the scheme is case-insensitive (`bearer`/
  * `Bearer`), but the token value is compared EXACTLY — consistent with the
@@ -942,7 +960,12 @@ const server = Bun.serve<RelaySocketData>({
 					headers: { "content-type": contentTypeForPath(key) },
 				});
 			}
-			return new Response("Not found", { status: 404 });
+			// Last resort, mirroring the fleet edge: dev checkouts have neither
+			// dist/ nor an embedded bundle; serve the placeholder, not a 404.
+			return new Response(PLACEHOLDER_HTML, {
+				status: 200,
+				headers: { "content-type": "text/html; charset=utf-8" },
+			});
 		}
 		return new Response(file);
 	},
