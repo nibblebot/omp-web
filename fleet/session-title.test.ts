@@ -82,8 +82,13 @@ describe("readSessionTitle", () => {
 		await expect(readSessionTitle(path)).resolves.toBe("First");
 
 		// A real modification bumps the mtime: the stale entry is bypassed
-		// and the new title is read from disk.
+		// and the new title is read from disk. writeFileSync alone can land
+		// within the same timestamp tick as the restored mtime above on
+		// coarse-granularity filesystems, so pin an explicitly newer mtime:
+		// what invalidates the cache is the changed mtime, not the write.
 		writeFileSync(path, second);
+		const bumped = (original.mtimeMs + 5_000) / 1000;
+		utimesSync(path, bumped, bumped);
 		await expect(readSessionTitle(path)).resolves.toBe("Second");
 	});
 

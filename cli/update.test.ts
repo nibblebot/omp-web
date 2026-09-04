@@ -11,6 +11,7 @@ import {
 	sha256Of,
 	UpdateError,
 } from "./update";
+import { resolveVersion } from "./version";
 
 afterAll(cleanupTempDirs);
 
@@ -373,19 +374,23 @@ describe("main", () => {
 	});
 
 	test("--check reports up to date when the manifest is not newer", async () => {
+		// resolveVersion() reads package.json in dev; track it instead of
+		// pinning a literal that goes stale on every version bump.
+		const current = await resolveVersion();
 		const { sha } = tarballFixture();
 		const { base, stop } = await serveFixture((req) => {
 			if (new URL(req.url).pathname === "/release-manifest.json") {
-				return Response.json({ version: "0.1.0", tarball: "omp-web-0.1.0.tgz", sha256: sha });
+				return Response.json({ version: current, tarball: "omp-web.tgz", sha256: sha });
 			}
 			return undefined;
 		});
 		const c = captureConsole();
 		try {
-			// resolveVersion() reads package.json → 0.1.0, equal to the manifest.
+			// Manifest not newer than the running version means up to date; the
+			// message formats opts.current (update.ts), not the manifest.
 			const code = await withEnv(base, () => main(["--check"]));
 			expect(code).toBe(0);
-			expect(c.out).toEqual(["omp-web is up to date (0.1.0)"]);
+			expect(c.out).toEqual([`omp-web is up to date (${current})`]);
 		} finally {
 			c.restore();
 			await stop();
