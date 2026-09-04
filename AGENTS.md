@@ -135,6 +135,7 @@ Key constants (all in `shared/protocol.ts`): `OMP_PROTO = 2`, `SSE_KEEPALIVE_MS`
 
 ### Tests
 - `bun:test` across two trees: **co-located** `*.test.ts` next to source (`src/state.test.ts` ↔ `src/state.ts`, etc., 58 files), plus the `test/` stats suite (14 files) covering the `fleet/stats/` API. Run through `bun scripts/test.ts`, which pins `--parallel` to the machine's **physical** core count (logical-count workers oversubscribe HT/hybrid boxes and thrash the daemon-spawning suites), `--timeout 15000`, `--retry 0`. Extra args forward to `bun test`.
+- Suite output goes to a log file, never a truncated pipe: `bun run test > /tmp/omp-test.log 2>&1`, then read failures back from the log. Piping to `tail`/`head` hides the failing tests above the summary and forces a full re-run to see them.
 - `test/` spawns no daemons: it drives `createStatsApp` in-process behind a real `Bun.serve` on an ephemeral port (`test/helpers.ts`), and its gitignored `test/.fixture/` is regenerated idempotently via `scripts/gen-tx-fixture.ts` (api.test.ts `beforeAll`).
 - FS-touching tests MUST create scratch dirs via `tempDir()` from `shared/testkit.ts` (tracked, auto-removed by an `afterAll` hook), never raw `mkdtempSync`, which leaks dirs on repeated runs.
 - Shared test helpers must be named `*.testkit.ts` (e.g. `fleet/server.testkit.ts`) so bun test discovery (`.test.`/`_test.`/`.spec.`/`_spec.`) never picks them up.
