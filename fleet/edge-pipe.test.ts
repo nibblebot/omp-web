@@ -43,10 +43,15 @@ describe("edge pipe liveness and replay", () => {
 			templates: { local: { command: "true" } },
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
-		// The cap fits the priming (small roster) + the ring replay, but a
-		// synchronous burst of roster broadcasts overflows it.
+		// Sizing rule, not a pinned byte count: the cap must be smaller than
+		// the 40-frame synchronous burst (overflow must trigger) yet larger
+		// than priming + the ring-replay tail after the drop (the resumed
+		// stream's replay is enqueued synchronously, so an over-small cap
+		// re-drops it mid-replay). Roster frames grow as additive fields are
+		// added to DaemonEntry; keep the burst:cap ratio wide.
 		const edge = new FleetEdge(
 			{
 				registry,
@@ -59,9 +64,10 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
-			{ backpressureBytes: 4096 },
+			{ backpressureBytes: 8_192 },
 		);
 		const served = serveEdge(edge);
 		try {
@@ -136,6 +142,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
@@ -150,6 +157,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
@@ -229,6 +237,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
@@ -243,6 +252,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
@@ -339,6 +349,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
@@ -353,6 +364,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
@@ -422,6 +434,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
@@ -436,6 +449,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 3 },
@@ -530,6 +544,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge({
@@ -543,6 +558,7 @@ describe("edge pipe liveness and replay", () => {
 				startedAt: Date.now(),
 				statePath: "/tmp/fleet-test-state.json",
 				configPath: null,
+				bind: "127.0.0.1",
 			},
 		});
 		const served = serveEdge(edge);
@@ -604,6 +620,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
@@ -618,6 +635,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
@@ -710,6 +728,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
@@ -724,6 +743,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
@@ -798,6 +818,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
@@ -812,6 +833,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
@@ -889,6 +911,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
@@ -903,6 +926,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
@@ -993,6 +1017,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
@@ -1007,6 +1032,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
@@ -1096,6 +1122,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge(
@@ -1110,6 +1137,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 400, pipeBackoffMaxMs: 800, pipeMaxRedials: 8 },
@@ -1189,6 +1217,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const edge = new FleetEdge({
@@ -1202,6 +1231,7 @@ describe("edge pipe liveness and replay", () => {
 				startedAt: Date.now(),
 				statePath: "/tmp/fleet-test-state.json",
 				configPath: null,
+				bind: "127.0.0.1",
 			},
 		});
 		const served = serveEdge(edge);
@@ -1315,6 +1345,7 @@ describe("edge pipe liveness and replay", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		// Tiny per-client ring budget (~2.5 KiB): a burst of large deltas must
@@ -1331,6 +1362,7 @@ describe("edge pipe liveness and replay", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ ringBytes: 2500 },

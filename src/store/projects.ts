@@ -195,6 +195,41 @@ export function sendCreateWorktree(
 	} satisfies ClientCommand).catch(() => {});
 }
 
+/** Create a managed clone workspace of a registered project (P8.1; frozen
+ *  clone-contracts ledger "Browser and CLI workspace creation"). The fleet
+ *  lifecycle service prepares the workspace (pin + verify source at
+ *  `revision`, independent object store), runs it under the selected
+ *  provider profile, and broadcasts preparation/runtime/callback/ready
+ *  lifecycle stages on the roster entry. `source` has at most one member —
+ *  local path or remote URL; omitted = the registered project's local path.
+ *  `start:true` also arms the post-attach picker gate like the worktree
+ *  senders above. */
+export function sendCreateClone(
+	projectId: string,
+	name: string,
+	opts: {
+		profileId: string;
+		source?: { local?: string; remote?: string };
+		revision?: string;
+		branch?: string;
+		start?: boolean;
+	},
+): void {
+	if (!isConnected()) return;
+	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
+	void postCommand({
+		type: "create_clone",
+		id: crypto.randomUUID(),
+		projectId,
+		name,
+		profileId: opts.profileId,
+		...(opts.source !== undefined ? { source: opts.source } : {}),
+		...(opts.revision !== undefined ? { revision: opts.revision } : {}),
+		...(opts.branch !== undefined ? { branch: opts.branch } : {}),
+		...(opts.start !== undefined ? { start: opts.start } : {}),
+	} satisfies ClientCommand).catch(() => {});
+}
+
 /** Register an existing discovered worktree of a project and optionally
  *  spawn a daemon on it (start:true arms the post-attach picker gate). */
 export function sendAddExistingWorktree(

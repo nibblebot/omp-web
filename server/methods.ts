@@ -19,6 +19,7 @@ import type { CollabSession, Images } from "./collab-session";
 import type { DaemonBroker } from "./daemon-broker";
 import type { SessionEntry } from "./session-entry";
 import { applySettingSideEffects, buildSettingsModel, coerceSettingValue } from "./settings-model";
+import { resolveSessionMainFile, MaterializeSessionError } from "./session-materialize";
 import {
 	broadcastTo,
 	clearEphemeralAbort,
@@ -74,6 +75,18 @@ export interface WebMethodsDeps {
 	authStorage: AuthStorage;
 	collab: CollabSession;
 	broker: DaemonBroker;
+	/** P8.9 wake: materialize a session's stored transcripts from the fleet
+	 * log store into the agent sessions dir (wired by server/index.ts). */
+	materializeSession: (
+		entry: SessionEntry,
+		args: { sessionId?: string },
+	) => Promise<{ files: number; bytes: number } | { alreadyPresent: true }>;
+	/** Agent sessions root the daemon writes into (boot-time constant). */
+	sessionsDir: string;
+	/** True when a fleet callback pair is active (clone workspaces). A live
+	 * pair is the ONLY way a bare session id can be resolved against the
+	 * fleet store; without it, switchSession keeps its path semantics. */
+	hasCallbackPair: () => boolean;
 }
 
 export interface WebMethods {
@@ -146,7 +159,17 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			return { cancelled: !ok };
 		}
 		if (kind === "switchSession") {
-			const ok = await session.switchSession(arg as string);
+			// P8.4/P8.9: a READY clone's dropdown sends the session ID (the
+			// fleet store key — path=id=sessionId), not a file path. The SDK
+			// switchSession treats a non-existent path as "start fresh at
+			// that path", which is the "only New session" defect. Resolve a
+			// bare id (slash-free, non-.jsonl, not an existing file) against
+			// the fleet store FIRST: materialize-if-cold via the callback
+			// pair, then switch to the resolved main JSONL. Only when a pair
+			// is active; direct/worktree daemons pass real paths and keep
+			// the SDK path semantics unchanged.
+			const target = await resolveSwitchSessionTarget(entry, arg);
+			const ok = await session.switchSession(target);
 			if (ok) {
 				clearSubagents(entry);
 				await deps.broker.broadcastAvailableCommands(entry);
@@ -159,6 +182,49 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			await deps.broker.broadcastAvailableCommands(entry);
 		}
 		return { text: result.selectedText, cancelled: result.cancelled };
+	}
+
+	/**
+	 * Resolve a switchSession argument to a real main JSONL path. Real
+	 * .jsonl file paths (worktree/direct dropdown picks, TUI) pass through
+	 * unchanged. A bare session id is resolved only when a fleet callback
+	 * pair is active (clone workspaces): materialize the session's stored
+	 * transcripts if cold, then locate its main file under the sessions
+	 * root. A store miss surfaces as typed `unavailable` (the membership
+	 * rejection — never a silent fresh session).
+	 */
+	async function resolveSwitchSessionTarget(
+		entry: SessionEntry,
+		arg: string | undefined,
+	): Promise<string> {
+		const raw = arg ?? "";
+		if (raw === "") {
+			throw new Error("switchSession requires a session file path or session id");
+		}
+		const looksLikePath =
+			raw.includes("/") ||
+			raw.includes("\\") ||
+			raw.endsWith(".jsonl") ||
+			raw.startsWith(".") ||
+			raw.startsWith("-");
+		if (looksLikePath || !deps.hasCallbackPair()) {
+			// Real path (worktree/direct) or no store to resolve against:
+			// keep the SDK's path semantics.
+			return raw;
+		}
+		// A bare id: verify membership against the local tree OR the fleet
+		// store, materializing when cold. materializeSession throws typed
+		// `unavailable` when the fleet lacks the session (the membership
+		// boundary); a warm volume makes it a no-op.
+		await deps.materializeSession(entry, { sessionId: raw });
+		const mainFile = resolveSessionMainFile(deps.sessionsDir, raw);
+		if (mainFile === null) {
+			throw new MaterializeSessionError(
+				"unavailable",
+				`session ${raw} has no transcript on this workspace or in the fleet store`,
+			);
+		}
+		return mainFile;
 	}
 
 	const METHODS: Record<
@@ -569,6 +635,13 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		subagentAbort: async (entry, a) => {
 			await deps.collab.abortSubagent(entry, a[0] as string);
 		},
+		// P8.9 wake: materialize a cold/missing session's stored lineage from
+		// the fleet log store into the agent sessions dir, then return so the
+		// caller can resume. Rows that need the fleet pair + agent dir are
+		// injected by server/index.ts after boot (this row is a proxy for the
+		// real implementation, see server/session-materialize.ts).
+		materializeSession: (entry, a) =>
+			deps.materializeSession(entry, a[0] as { sessionId?: string }),
 	};
 
 	return {

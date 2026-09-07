@@ -158,6 +158,13 @@
   flex-direction: column;
   min-height: 0;
   width: 100%;
+  /* P8.5: the sidebar now stacks the fleet-local Transcripts list above the
+     Fleet-store section. A content basis (.sidebar-inner is huge) claims the
+     whole column and squeezes .stored-list-wrap to nothing below the fold.
+     1 1 0 splits the space deterministically: the local list is the flexible
+     upper region that scrolls internally (.session-list has the scroll),
+     leaving room for the capped stored section beneath. */
+  flex: 1 1 0;
 }
 /* Title row mirrors the roster's PROJECTS header (mono uppercase label at
    the same 12px scan line, no separator) so the two sidebars share one
@@ -456,6 +463,13 @@
   padding: 1px 5px;
   border-radius: 3px;
 }
+/* Fleet-store coverage line (P8.6): neutral info chip, not a warning. */
+.health-banner.store-line {
+  background: var(--tx-bg-panel);
+  border-color: var(--tx-border);
+  color: var(--tx-text-dim);
+  margin-bottom: 8px;
+}
 .banner-error {
   color: var(--tx-text);
   font-size: var(--tx-fs-base);
@@ -497,6 +511,12 @@
   flex-wrap: wrap;
   margin-top: 6px;
   font-size: var(--tx-fs-md);
+}
+/* Detail-header coverage chips row (fleet-store surface). */
+.head-tags {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
 }
 .kv {
   color: var(--tx-text-dim);
@@ -1630,4 +1650,254 @@
   .sys-toggle .tx-caret {
     transition: transform 100ms ease;
   }
+}
+
+/* ---------- fleet log-store surface (P8.5/P8.6) ---------- */
+/* StoredList lives beneath TranscriptList in the sidebar: the local list
+   (.sidebar-inner, flex:1 1 0) is the flexible upper region that scrolls
+   internally; this section is the capped (45%) lower region whose own
+   .stored-list scrolls. Both coexist in the sidebar column. */
+.stored-list-wrap {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 45%;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--tx-border);
+}
+.stored-list-wrap .session-list.stored-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.stored-workspace-head .row-time {
+  color: var(--tx-text-dim);
+  font-family: var(--tx-mono);
+}
+.stored-sessions {
+  border-left: 2px solid var(--tx-border);
+  margin-left: 14px;
+}
+.stored-sessions .session-row {
+  border-bottom-color: transparent;
+}
+.stored-sessions .session-row.selected {
+  box-shadow: inset 2px 0 0 var(--tx-accent);
+}
+.stored-resume-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px 6px;
+}
+.stored-resume-row .btn {
+  flex: none;
+}
+.stored-foot .foot-label {
+  color: var(--tx-ok);
+}
+/* Coverage chips (P8.6). */
+.tag-store {
+  background: color-mix(in srgb, var(--tx-accent) 14%, transparent);
+  color: var(--tx-accent);
+  border: 1px solid color-mix(in srgb, var(--tx-accent) 40%, transparent);
+}
+.tag-store-subtle {
+  background: var(--tx-bg-raised);
+  color: var(--tx-text-dim);
+  border: 1px dashed var(--tx-border);
+}
+/* Unavailable rows/states: missing stored assets render as explicit
+   unavailable, never a clickable download/transcript link. */
+.tx-unavailable {
+  background: var(--tx-warn-bg);
+  border: 1px solid var(--tx-warn);
+  color: var(--tx-warn);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 10px 0;
+  font-size: var(--tx-fs-base);
+}
+.tx-unavailable-inline {
+  color: var(--tx-warn);
+  font-size: var(--tx-fs-sm);
+  font-style: italic;
+}
+button.stored-file-row:disabled,
+button.stored-file-row.unavailable {
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+.stored-file-row.unavailable .stored-file-name {
+  text-decoration: line-through;
+  text-decoration-color: var(--tx-text-faint);
+}
+/* Stored detail: file list + transcript pane. */
+.stored-files {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 14px 0 18px;
+}
+.stored-file-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stored-group-title {
+  font-size: var(--tx-fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tx-text-dim);
+  margin: 0 0 4px;
+}
+.stored-file-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.stored-file-row:hover {
+  background: var(--tx-bg-hover);
+}
+.stored-file-row.selected {
+  background: var(--tx-bg-selected);
+  border-color: var(--tx-accent-dim);
+}
+.stored-file-row:focus-visible {
+  outline: 2px solid var(--tx-accent);
+  outline-offset: -1px;
+}
+.stored-file-name {
+  font-family: var(--tx-mono);
+  font-size: var(--tx-fs-md);
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+.stored-file-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: none;
+  color: var(--tx-text-dim);
+  font-size: var(--tx-fs-md);
+  font-variant-numeric: tabular-nums;
+}
+.stored-file-eof {
+  color: var(--tx-text-faint);
+  font-size: var(--tx-fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.stored-orphan-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--tx-warn-bg);
+  border: 1px solid var(--tx-warn);
+  color: var(--tx-warn);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: var(--tx-fs-base);
+}
+.stored-orphan-banner .btn {
+  flex: none;
+}
+.stored-tag {
+  color: var(--tx-accent);
+}
+/* Raw bytes view (format=raw, application/x-ndjson). */
+.stored-transcript {
+  margin-top: 6px;
+}
+.stored-file-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.stored-raw {
+  border: 1px solid var(--tx-border);
+  border-radius: 6px;
+  background: var(--tx-bg);
+  max-height: 70vh;
+  overflow: auto;
+}
+.stored-raw-pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--tx-mono);
+  font-size: var(--tx-fs-sm);
+  line-height: 1.5;
+  color: var(--tx-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.stored-raw-cap-note {
+  margin-top: 8px;
+  padding: 6px 0 2px;
+  border-top: 1px dashed var(--tx-border);
+  color: var(--tx-text-faint);
+  font-size: var(--tx-fs-sm);
+  font-family: var(--tx-sans);
+}
+/* Resume-onto-fresh-clone dialog. */
+.resume-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 420px;
+  max-width: 560px;
+}
+.resume-warn {
+  margin: 0;
+  font-size: var(--tx-fs-base);
+  line-height: 1.5;
+}
+.resume-facts {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: var(--tx-fs-md);
+}
+.resume-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--tx-text-dim);
+  font-size: var(--tx-fs-sm);
+}
+.resume-field select {
+  background: var(--tx-bg-raised);
+  color: var(--tx-text);
+  border: 1px solid var(--tx-border);
+  border-radius: 5px;
+  padding: 5px 8px;
+  font-size: var(--tx-fs-base);
+  font-family: var(--tx-sans);
+  max-width: 100%;
+}
+.resume-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.resume-ok {
+  color: var(--tx-ok);
+  font-size: var(--tx-fs-base);
 }

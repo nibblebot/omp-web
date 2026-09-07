@@ -1,6 +1,7 @@
 import type { SettingsModel } from "../../shared/protocol";
-import { fleetSettingsActive, setState } from "../state";
+import { fleetSettingsActive, setState, state } from "../state";
 import { call } from "./transport";
+import { authedFetch } from "./auth";
 
 /**
  * Settings domain (Phase 3 store facade split): TUI /settings parity. The
@@ -46,7 +47,8 @@ export function refreshSettings(): void {
 /** Send one setting; the fresh model returned is authoritative, apply it. */
 export function updateSetting(path: string, value: unknown): void {
 	if (fleetSettingsActive()) {
-		fetch("/ctl/settings/set", {
+		const doFetch = state.authStatus !== "disabled" ? authedFetch : fetch;
+		doFetch("/ctl/settings/set", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ path, value }),

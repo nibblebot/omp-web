@@ -257,6 +257,34 @@ try {
 				"EMBEDDED_DIST: Record<string, string> = {}",
 			),
 	);
+	// P9.1: the build ships the provider executables and the reproducible
+	// session-runtime image definition next to cli.js. package `files` =
+	// ["dist-bundle/"], so the tarball carries the whole tree; the source
+	// tree here is the pre-pack proof.
+	const bwrapProvider = join(ROOT, "dist-bundle", "providers", "bwrap-provider.js");
+	check(
+		"build ships the bwrap provider executable",
+		r.code === 0 && existsSync(bwrapProvider),
+		bwrapProvider,
+	);
+	check(
+		"build ships the kubernetes provider executable",
+		r.code === 0 && existsSync(join(ROOT, "dist-bundle", "providers", "kubernetes-provider.js")),
+		join(ROOT, "dist-bundle", "providers", "kubernetes-provider.js"),
+	);
+	check(
+		"provider bundle keeps its bun shebang",
+		r.code === 0 &&
+			existsSync(bwrapProvider) &&
+			readFileSync(bwrapProvider, "utf8").startsWith("#!/usr/bin/env bun"),
+	);
+	check(
+		"build ships the runtime image definition",
+		r.code === 0 &&
+			existsSync(join(ROOT, "dist-bundle", "image", "Containerfile")) &&
+			existsSync(join(ROOT, "dist-bundle", "image", "entrypoint.sh")),
+		join(ROOT, "dist-bundle", "image"),
+	);
 
 	const pack = await run("bun pm pack", ["bun", "pm", "pack"]);
 	tgz = join(ROOT, `omp-web-${v1}.tgz`);
@@ -305,6 +333,30 @@ try {
 				"utf8",
 			),
 		).version === "18.2.6",
+	);
+	// P9.1 installed-tree resolution: the provider executables + image
+	// definition must survive pack + pinned install next to cli.js, and the
+	// installed provider must actually run (shebang + exec bit intact), since
+	// the fleet spawns `<executable> <op>` directly.
+	const installedBundle = join(dataHome, "install", "node_modules", "omp-web", "dist-bundle");
+	const installedBwrap = join(installedBundle, "providers", "bwrap-provider.js");
+	check("installed package ships the bwrap provider", existsSync(installedBwrap), installedBwrap);
+	check(
+		"installed package ships the kubernetes provider",
+		existsSync(join(installedBundle, "providers", "kubernetes-provider.js")),
+		join(installedBundle, "providers", "kubernetes-provider.js"),
+	);
+	check(
+		"installed package ships the runtime image definition",
+		existsSync(join(installedBundle, "image", "Containerfile")) &&
+			existsSync(join(installedBundle, "image", "entrypoint.sh")),
+		join(installedBundle, "image"),
+	);
+	r = await run("installed bwrap provider executes", [installedBwrap], {});
+	check(
+		"installed bwrap provider runs (no-op usage error, exit 1)",
+		r.code === 1 && r.stderr.includes("bwrap-provider"),
+		`code ${r.code}: ${r.stderr.slice(-200)}`,
 	);
 	r = await run("--version", [bin, "--version"]);
 	check(
@@ -476,6 +528,8 @@ try {
 	// ---------------------------------------------------------------------------
 	console.log("== 3. fixture repo ==");
 	const gitEnv = {
+		// Sandbox base (PATH etc.) plus git identity isolation; a bare env
+		// without PATH makes Bun.spawn unable to locate the git binary.
 		...sandboxEnv(),
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_AUTHOR_NAME: "e2e",

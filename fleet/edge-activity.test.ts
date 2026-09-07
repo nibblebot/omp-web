@@ -66,6 +66,7 @@ describe("edge realtime daemon activity (browser-gated retain-all)", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		// Count retain/release so the tests assert the lifecycle (exactly-once).
@@ -93,6 +94,7 @@ describe("edge realtime daemon activity (browser-gated retain-all)", () => {
 					startedAt: Date.now(),
 					statePath: "/tmp/fleet-test-state.json",
 					configPath: null,
+					bind: "127.0.0.1",
 				},
 			},
 			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },

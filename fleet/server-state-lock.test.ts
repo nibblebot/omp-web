@@ -11,7 +11,12 @@ import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { LockHeldError } from "../shared/file-lock";
 import { startFleet } from "./server";
-import { cleanupTempDirs, fleetPaths, pinSettingsInMemory } from "./server.testkit";
+import {
+	cleanupTempDirs,
+	fleetPaths,
+	hermeticStatsConfig,
+	pinSettingsInMemory,
+} from "./server.testkit";
 
 // bun 1.3.14 attributes afterAll hooks registered in imported modules to the
 // first importer only; register cleanup in this file's own module scope.
@@ -45,6 +50,7 @@ describe("fleet state lock", () => {
 			port: 0,
 			statePath,
 			configPath,
+			statsConfig: hermeticStatsConfig(statePath),
 			// Stub the settings provider registry like the main suite so the
 			// real ~/.omp auth DB is never opened.
 			settings: { registry: async () => [] },

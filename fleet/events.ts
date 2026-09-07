@@ -33,6 +33,8 @@ export interface FleetFacts {
 	statePath: string;
 	/** Resolved config path, or null when no config file exists (defaults). */
 	configPath: string | null;
+	/** Resolved bind address (what Bun.serve actually bound). */
+	bind: string;
 }
 
 const DEFAULT_CAP = 500;

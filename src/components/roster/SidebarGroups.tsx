@@ -157,10 +157,13 @@ export const SidebarGroups: Component<{ groups: SidebarGroupsData }> = (props) =
 		const menuOpen = createMemo(() => menuOpenId() === gkey);
 		// A main-checkout daemon exists when any row is untagged (worktreeOf
 		// is set only for linked-worktree cwds, per supervisor resolveWorktreeOf;
-		// main checkouts stay undefined). The start action spawns on the main
-		// checkout, so it hides once a main daemon exists in ANY status
-		// (spawning → … → asleep → ready).
-		const hasMain = () => props.daemons.some((d) => d.worktreeOf === undefined);
+		// main checkouts stay undefined) AND is not a clone (P8.1: clones are
+		// independent workspaces, workspaceKind "clone", never the main
+		// checkout). The start action spawns on the main checkout, so it
+		// hides once a main daemon exists in ANY status (spawning → … →
+		// asleep → ready).
+		const hasMain = () =>
+			props.daemons.some((d) => d.worktreeOf === undefined && d.workspaceKind !== "clone");
 		return (
 			<>
 				<div class="sidebar-group project-group">
@@ -214,12 +217,13 @@ export const SidebarGroups: Component<{ groups: SidebarGroupsData }> = (props) =
 					<button
 						type="button"
 						class="project-add-worktree"
+						title="Add a worktree, a clone workspace, or an existing worktree"
 						onClick={() => {
-							setState("worktreeModalProjectId", props.project.projectId);
-							setState("modal", "worktree");
+							setState("workspaceModalProjectId", props.project.projectId);
+							setState("modal", "workspace");
 						}}
 					>
-						+ Add worktree
+						+ Add workspace
 					</button>
 				</Show>
 			</>

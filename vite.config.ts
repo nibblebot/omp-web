@@ -37,6 +37,9 @@ export default defineConfig({
 			"/command": { target: `http://localhost:${fleetPort}` },
 			// Fleet control plane: same edge port.
 			"/ctl": { target: `http://localhost:${fleetPort}` },
+			// Browser-auth surface (P2.4): same-origin sign-in must reach the
+			// fleet under HMR too, or the login modal can never work in dev.
+			"/auth": { target: `http://localhost:${fleetPort}` },
 		},
 	},
 });

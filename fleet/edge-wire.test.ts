@@ -31,6 +31,7 @@ import {
 	type FakeStreamSeen,
 	cleanupTempDirs,
 } from "./edge.testkit";
+import { hermeticStatsConfig } from "./server.testkit";
 
 afterAll(cleanupTempDirs);
 
@@ -113,7 +114,12 @@ describe("fleet edge", () => {
 			template: "local",
 			status: "asleep",
 		});
-		server = await startFleet({ port: 0, statePath, configPath });
+		server = await startFleet({
+			port: 0,
+			statePath,
+			configPath,
+			statsConfig: hermeticStatsConfig(statePath),
+		});
 		// Count supervisor.respawn calls across the wake tests (real impl runs underneath).
 		const origRespawn = server.supervisor.respawn.bind(server.supervisor);
 		server.supervisor.respawn = async (entry: RegistryEntry) => {

@@ -11,7 +11,13 @@ import { join } from "node:path";
 import { main } from "./cli";
 import { Registry, type RegistryEntry } from "./registry";
 import { startFleet, type FleetServer } from "./server";
-import { FAKE_CWD, cleanupTempDirs, fleetPaths, pinSettingsInMemory } from "./server.testkit";
+import {
+	FAKE_CWD,
+	cleanupTempDirs,
+	fleetPaths,
+	hermeticStatsConfig,
+	pinSettingsInMemory,
+} from "./server.testkit";
 
 // bun 1.3.14 attributes afterAll hooks registered in imported modules to the
 // first importer only; register cleanup in this file's own module scope.
@@ -45,7 +51,12 @@ describe("CLI", () => {
 			token: "t",
 			status: "asleep",
 		});
-		server = await startFleet({ port: 0, statePath, configPath });
+		server = await startFleet({
+			port: 0,
+			statePath,
+			configPath,
+			statsConfig: hermeticStatsConfig(statePath),
+		});
 	});
 
 	afterAll(async () => {
@@ -105,6 +116,11 @@ describe("CLI", () => {
 		const output = logs.join("\n");
 		expect(output).not.toContain("--fan-out");
 		expect(output).toContain("prompt <selector> <text> [--wait <ms>]");
+		// P2.3 trusted-proxy flag is documented with its precedence + the
+		// fail-closed default (forwarded headers from unlisted peers ignored).
+		expect(output).toContain("--trusted-proxy <ip-or-cidr>");
+		expect(output).toContain("OMP_FLEET_TRUSTED_PROXY");
+		expect(output).toContain("never trusted by default");
 	});
 
 	test("a flag value starting with '-' errors instead of being silently dropped (audit #26)", async () => {

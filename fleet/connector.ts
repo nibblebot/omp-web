@@ -166,6 +166,12 @@ export class DaemonConnector {
 	 * and dials now.
 	 */
 	connect(daemonId: string): void {
+		// P3.4 boundary: clone-kind entries NEVER get a fleet-dialed control
+		// socket — their daemon reaches the fleet over the callback pair, so
+		// there is no inbound endpoint to dial and no idle-drop authority for
+		// the connector to hold. The lifecycle service owns their liveness.
+		const kind = this.#registry.get(daemonId)?.workspace?.kind;
+		if (kind === "clone") return;
 		const entry = this.#registry.get(daemonId);
 		if (!entry) return;
 		const state = this.#ensure(daemonId);

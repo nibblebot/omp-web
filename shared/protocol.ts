@@ -276,6 +276,41 @@ export type DaemonStatus =
 	| "reconnecting"
 	| "error";
 
+// --- Clone workspace identity (P1, additive): workspace/daemon lifecycle
+// facts the fleet edge surfaces on the roster. OMP_PROTO stays 2 — these are
+// optional DaemonEntry additions, never shape changes.
+
+/** How a workspace's checkout was produced (clone-contracts ledger). */
+export type WorkspaceKind = "worktree" | "clone" | "direct";
+
+/** Fleet-side desired state of a workspace (clone-contracts ledger). */
+export type DesiredState = "running" | "stopped";
+
+/** Provider-managed workspace lifecycle: preparation → runtime → callback → ready; failed is terminal. */
+export type LifecycleStage = "preparation" | "runtime" | "callback" | "ready" | "failed";
+
+/**
+ * Secret-free capability view of a fleet provider profile (frozen contract,
+ * docs/clone-contracts.md "Browser and CLI workspace creation"). Safe to
+ * cross trust boundaries: never carries the executable, image/namespace
+ * details, or secret reference VALUES — only their names. Lifted from
+ * fleet/provider-profile.ts (which re-exports this type) so browser/CLI
+ * consumers import the single wire source from shared/protocol.ts.
+ */
+export interface PublicProviderProfile {
+	/** Profile id (the config map key). */
+	id: string;
+	provider: "bwrap" | "kubernetes";
+	/** Declared resource limits, when any. */
+	resources?: { cpu?: string; memory?: string };
+	/** Sandbox network mode (bwrap): "host" | "isolated"; absent = isolated default. */
+	network?: "host" | "isolated";
+	/** Declared storage class name, when any. */
+	storageClassName?: string;
+	/** Secret reference names only — values never appear here. */
+	secretRefNames?: string[];
+}
+
 /** One daemon in the omp-fleet roster (roster frame). */
 export interface DaemonEntry {
 	daemonId: string;
@@ -321,6 +356,17 @@ export interface DaemonEntry {
 	uptime?: number;
 	pid?: number;
 	error?: string;
+	// --- Clone workspace identity (P1, additive; older edges omit these) ---
+	/** How the daemon's checkout was produced (source: fleet edge roster; absent for legacy entries). */
+	workspaceKind?: WorkspaceKind;
+	/** Fleet-side desired state of the daemon's workspace (source: fleet edge roster; absent = legacy). */
+	desiredState?: DesiredState;
+	/** Provider profile the daemon's workspace runs under (source: fleet edge roster; absent = unmanaged/legacy). */
+	providerProfileId?: string;
+	/** Provider lifecycle stage of the daemon's workspace (source: fleet edge roster; absent = legacy/local daemon). */
+	lifecycleStage?: LifecycleStage;
+	/** Last workspace lifecycle failure detail (source: fleet edge roster; present only after a failed stage). */
+	lifecycleError?: string;
 }
 
 /** One discovered project for the spawn picker (projects frame). */
@@ -429,7 +475,8 @@ export type WebMethodName =
 	| "getSubagents"
 	| "getSubagentMessages"
 	| "subagentSteer"
-	| "subagentAbort";
+	| "subagentAbort"
+	| "materializeSession";
 
 // Client → server (POST /command bodies; one command per request, 202 accept).
 // Routing is by STREAM ATTACHMENT: on omp-session an /events stream is attached
@@ -506,6 +553,23 @@ export type ClientCommand =
 			start?: boolean;
 	  }
 	| { type: "add_worktree"; id: string; projectId: string; worktreePath: string; start?: boolean }
+	// Clone workspace creation (frozen contract, docs/clone-contracts.md
+	// "Browser and CLI workspace creation"): an independent provider-managed
+	// clone of a registered project. A supplied `source` carries exactly one
+	// of local/remote; an omitted source uses the registered project's own
+	// path. `revision` is the clone pin vocabulary (worktrees keep
+	// `baseRef`); the resolved commit persists as pinnedRevision.
+	| {
+			type: "create_clone";
+			id: string;
+			projectId: string;
+			name: string;
+			profileId: string;
+			source?: { local?: string; remote?: string };
+			revision?: string;
+			branch?: string;
+			start?: boolean;
+	  }
 	// Stop the daemon, evict it from the roster, and remove the managed
 	// worktree (owned + clean only; deleteBranch: true also `git branch -d`s).
 	| { type: "delete_worktree"; id: string; daemonId: string; deleteBranch?: boolean }
@@ -670,6 +734,13 @@ export type ServerFrame =
 			type: "registered_projects";
 			projects: RegisteredProject[];
 			configPath?: string | null;
+			/**
+			 * Boot-static secret-free provider-profile catalog (frozen
+			 * contract, additive). Absent from older fleets — clients treat
+			 * it as an empty catalog. Never carries secret values or
+			 * executable internals.
+			 */
+			providerProfiles?: PublicProviderProfile[];
 	  }
 	// Global broadcast: a poll-detected, on-disk worktree removal (the
 	// daemon's cwd vanished between git-state poll ticks). Ringed so a

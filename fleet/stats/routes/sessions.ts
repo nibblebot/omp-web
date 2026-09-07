@@ -12,6 +12,7 @@ import { relative, join } from "node:path";
 import { json, errorJson } from "../http";
 import { loadJsonl } from "../lib/jsonl";
 import { walkJsonl } from "../lib/sessions-index";
+import { readStoredHead, storeFileKey } from "../lib/store-index";
 import type { AppCtx, Route } from "../types";
 import type { SessionSummary } from "../../../shared/stats-types";
 import { normDbFile, isMainSession, folderOf } from "../paths";
@@ -238,9 +239,10 @@ function sessionsRoute(ctx: AppCtx): Route {
 }
 
 /**
- * Full disk walk + db enrichment. Degrades to disk-only rows (metrics
- * zeroed, synced:false) on any stats.db trouble; db failure must never 500
- * this endpoint. Walk count is exposed for tests asserting cache behavior.
+ * Full disk walk + db enrichment + fleet-store coverage (P8.6). Degrades to
+ * disk-only rows (metrics zeroed, synced:false) on any stats.db trouble; db
+ * failure must never 500 this endpoint. Walk count is exposed for tests
+ * asserting cache behavior.
  */
 async function computeSessionsList(ctx: AppCtx): Promise<SessionSummary[]> {
 	const { cfg } = ctx;
@@ -389,6 +391,75 @@ async function computeSessionsList(ctx: AppCtx): Promise<SessionSummary[]> {
 					s.userChars = r.chars ?? 0;
 				}
 			}
+		}
+	}
+
+	// 3. Fleet log-store coverage (P8.6): store-only sessions surface as
+	// rows with origin "fleet-store"; sessions that also exist on disk are
+	// deduplicated by stable session identity (the store sessionId ↔ a
+	// fleet-local header id) — the local row carries the `stored` annotation
+	// instead of duplicating. Unstreamed remote history is simply absent.
+	if (cfg.stored !== undefined) {
+		try {
+			const store = cfg.stored.store;
+			const storedById = new Map<string, SessionSummary>();
+			for (const abs of byAbs.keys()) {
+				const s = byAbs.get(abs)!;
+				if (s.id !== null && s.id.length > 0 && storedById.has(s.id)) continue;
+				if (s.id !== null && s.id.length > 0) storedById.set(s.id, s);
+			}
+			for (const ws of store.listStoredWorkspaces()) {
+				for (const session of ws.sessions) {
+					const mainRel = session.mainRelpath;
+					const head = mainRel
+						? readStoredHead(store, ws.workspaceId, session.sessionId, mainRel)
+						: null;
+					const id = head?.id ?? null;
+					const local = id !== null && id.length > 0 ? storedById.get(id) : undefined;
+					const orphaned = cfg.stored.provenance?.(ws.workspaceId) === undefined;
+					const storedMeta = {
+						workspaceId: ws.workspaceId,
+						sessionId: session.sessionId,
+						mainRelpath: mainRel ?? "",
+						readOnly: ws.readOnly,
+						orphaned,
+					};
+					if (local !== undefined) {
+						local.origin = "fleet-local";
+						local.stored = storedMeta;
+						continue;
+					}
+					const key = `stored:${ws.workspaceId}/${session.sessionId}`;
+					if (byAbs.has(key)) continue;
+					const row: SessionSummary = {
+						file: storeFileKey(session, mainRel),
+						folder: ws.workspaceId,
+						title: head?.title ?? null,
+						id: head?.id ?? session.sessionId,
+						cwd: head?.cwd ?? null,
+						firstTs: head?.firstTs ?? null,
+						lastTs: head?.lastTs ?? null,
+						turns: 0,
+						toolCalls: 0,
+						totalTokens: 0,
+						totalCost: 0,
+						errorTurns: 0,
+						modelCount: 0,
+						userMessages: 0,
+						userChars: 0,
+						synced: false,
+						onDisk: false,
+						size: head?.bytes ?? session.bytes,
+						mtimeMs: session.mtimeMs,
+						origin: "fleet-store",
+						stored: storedMeta,
+					};
+					byAbs.set(key, row);
+				}
+			}
+		} catch (err) {
+			// Store trouble must never 500 the session list; degrade silently.
+			console.error("[stats-store] sessions: fleet store coverage failed", { error: err });
 		}
 	}
 

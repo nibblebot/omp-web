@@ -41,6 +41,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startFleet, type FleetServer } from "./server";
+import { hermeticStatsConfig } from "./server.testkit";
 import type { RegistryEntry } from "./registry";
 import { parseContractLine } from "./spawn-parse";
 
@@ -307,7 +308,12 @@ describe("fleet integration: real omp-session daemons", () => {
 				delete process.env[key];
 			}
 		}
-		server = await startFleet({ port: 0, statePath, configPath });
+		server = await startFleet({
+			port: 0,
+			statePath,
+			configPath,
+			statsConfig: hermeticStatsConfig(statePath),
+		});
 	});
 
 	afterAll(async () => {

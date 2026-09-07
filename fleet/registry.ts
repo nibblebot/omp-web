@@ -19,8 +19,137 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { DaemonEntry, DaemonStatus, RegisteredProject } from "../shared/protocol";
+import type {
+	DaemonEntry,
+	DaemonStatus,
+	DesiredState,
+	RegisteredProject,
+	WorkspaceKind,
+} from "../shared/protocol";
 import { validateProjectPath } from "./discovery";
+
+/**
+ * Workspace identity unions, re-exported for fleet/registry consumers. The
+ * canonical definitions live in shared/protocol.ts — the shared leaf that
+ * already feeds DaemonEntry/RegisteredProject to this file. Defining them
+ * here instead would make the wire types (or this file's importers) depend
+ * on a fleet-internal module; re-exporting keeps one source and the
+ * registry-facing export surface.
+ */
+export type { WorkspaceKind, DesiredState };
+
+/**
+ * Deletion-gate error codes: the frozen ledger vocabulary
+ * (docs/clone-contracts.md "Typed errors").
+ */
+export type DeletionErrorCode =
+	| "invalid_request"
+	| "invalid_identity"
+	| "unauthorized"
+	| "forbidden"
+	| "unavailable"
+	| "conflict"
+	| "generation_obsolete"
+	| "writer_active"
+	| "archive_pending"
+	| "archive_conflict"
+	| "provider_failed"
+	| "retryable";
+
+/** Typed deletion-gate failure persisted on the workspace record. */
+export interface DeletionGateError {
+	code: DeletionErrorCode;
+	message: string;
+	/** Store path the failure names (a session subtree or stream file), when applicable. */
+	path?: string;
+}
+
+/**
+ * Per-entry verify-at-deletion state (P7.3). Absent = never deleted.
+ *
+ * Lifecycle: a delete request enters "deleting" (gate in flight; the roster
+ * identity is NEVER removed early — cleanup state remains until the whole
+ * transition finishes and survives fleet restart). A failed gate persists
+ * "delete-pending-retry" with the typed error; the workspace, its volume,
+ * and its (still writable) store are all retained, and a retry re-enters
+ * "deleting". On success the store flips read-only, provider resources are
+ * deleted, and only then does the roster entry transition away (removal by
+ * the caller — a "deleted" entry is a removed identity whose verified store
+ * is served view-only by Retention).
+ */
+export interface WorkspaceDeletion {
+	/** "deleting" (gate in flight) | "delete-pending-retry" (blocked; retry by deleting again). */
+	state: "deleting" | "delete-pending-retry";
+	/** Epoch ms of the delete request that entered the current state. */
+	requestedAt: number;
+	/** Why the gate blocked (present on "delete-pending-retry"). */
+	error?: DeletionGateError;
+	/** Provider resources still present after a partial post-verification provider deletion (retry-able; never a full-volume promise). */
+	remainingResources?: string[];
+}
+
+/**
+ * Registry-level marker for a workspace deleted WITHOUT a passed
+ * verification gate whose log-store subtree survives. Persisted separately
+ * from the roster entry because the legacy removal paths drop the identity:
+ * the marker is what Retention reports after the entry is gone. Cleared only
+ * by the explicit manual purge.
+ */
+export interface StoreOrphanMarker {
+	/** Epoch ms when the marker was persisted. */
+	at: number;
+	/** Why the workspace was deleted without verification. */
+	reason?: string;
+	/**
+	 * Clone provenance retained for P8.10 resume-onto-fresh-clone: the
+	 * workspace record's source + pinnedRevision, captured at removal. The
+	 * roster identity is dropped on deletion, so this is the ONLY place the
+	 * provenance survives for an orphaned clone workspace.
+	 */
+	provenance?: { source?: { local?: string; remote?: string }; pinnedRevision?: string };
+}
+
+/**
+ * Persisted callback-enrollment binding (restart survival): ONLY the
+ * SHA-256 hex digest of the 256-bit enrollment credential plus its
+ * generation — the raw credential is never persisted. Fleet-private like
+ * the rest of the workspace record: never serialized into roster frames,
+ * registered_projects frames, or /ctl/debug.
+ */
+export interface WorkspaceEnrollment {
+	/** SHA-256 hex digest of the enrollment credential. */
+	credentialHash: string;
+	generation: number;
+}
+
+/**
+ * Fleet-private workspace lifecycle record riding RegistryEntry. The whole
+ * record — including the opaque `providerHandle` and the deletion state —
+ * is fleet-private: never serialize it into roster frames,
+ * registered_projects frames, or /ctl/debug; the edge maps the public
+ * projection explicitly.
+ */
+export interface WorkspaceRecord {
+	kind: WorkspaceKind;
+	projectId: string;
+	/** Clone sources. */
+	source?: { local?: string; remote?: string };
+	/** Resolved commit, pinned once. */
+	pinnedRevision?: string;
+	/** Derived from the workspace name (clone workspaces). */
+	branch?: string;
+	/** Clone workspaces only. */
+	profileId?: string;
+	desiredState: DesiredState;
+	/** Absent = unmanaged. */
+	authorizedGeneration?: number;
+	/** Private, opaque provider-owned state. */
+	providerHandle?: unknown;
+	/** Verify-at-deletion state (P7.3). Absent = never deleted. */
+	deletion?: WorkspaceDeletion;
+	/** Persisted callback enrollment (digest only). Absent = not enrolled. */
+	enrollment?: WorkspaceEnrollment;
+}
 
 /** A roster entry: DaemonEntry plus fleet-side registration data. */
 export interface RegistryEntry extends DaemonEntry {
@@ -47,6 +176,12 @@ export interface RegistryEntry extends DaemonEntry {
 	/** Spawned entries: the template name they were spawned from. */
 	template?: string;
 	registeredAt: number;
+	/**
+	 * Fleet-private P1 workspace record: lifecycle, provider handle,
+	 * cleanup/archive state. Never serialized into roster frames,
+	 * registered_projects frames, or /ctl/debug.
+	 */
+	workspace?: WorkspaceRecord;
 }
 
 /** On-disk shape of state.json. */
@@ -57,6 +192,12 @@ interface RegistryFile {
 	projects?: RegisteredProject[];
 	/** Next `pN` project id; absent in files written before Phase 2. */
 	nextProjectId?: number;
+	/**
+	 * Registry-level markers for workspaces deleted without a passed
+	 * verification gate (P7.3/P7.5); absent in files written before the
+	 * markers existed. Keyed by workspaceId.
+	 */
+	storeOrphans?: Record<string, StoreOrphanMarker>;
 }
 
 /**
@@ -81,6 +222,25 @@ export function bootStatusFor(entry: Pick<RegistryEntry, "mode" | "status">): Da
 	return "connecting"; // dial-in: nothing to respawn, so redial immediately
 }
 
+/**
+ * Legacy-inference base workspace record for entries persisted before P1.
+ * Contract rule: managed or worktreeOf → "worktree"; every other mode
+ * (spawned without worktreeOf, remote, attached) → "direct". desiredState
+ * is "running" — a legacy entry is a live roster row. projectId comes from
+ * the entry's registered-project link ("" when absent, e.g. remote
+ * entries). In-memory only: load() stamps it and the entry's next mutation
+ * persists it — no rewrite at boot.
+ */
+function inferWorkspaceRecord(
+	entry: Pick<RegistryEntry, "managed" | "worktreeOf" | "projectId">,
+): WorkspaceRecord {
+	return {
+		kind: entry.managed || entry.worktreeOf !== undefined ? "worktree" : "direct",
+		projectId: entry.projectId ?? "",
+		desiredState: "running",
+	};
+}
+
 export class Registry {
 	/** Fired after every mutation (not on load); set by the edge server for roster broadcasts. */
 	onChange: (() => void) | null = null;
@@ -99,6 +259,8 @@ export class Registry {
 	/** Registered projects in insertion order (public API: projects()). */
 	private projectList: RegisteredProject[] = [];
 	private nextProjectId = 1;
+	/** Deleted-without-verification markers keyed by workspaceId (P7.5). */
+	private storeOrphanList: Record<string, StoreOrphanMarker> = {};
 
 	constructor(statePath: string) {
 		this.statePath = statePath;
@@ -111,6 +273,7 @@ export class Registry {
 			this.nextId = 1;
 			this.projectList = [];
 			this.nextProjectId = 1;
+			this.storeOrphanList = {};
 			return;
 		}
 		const file = this.#readFile();
@@ -125,6 +288,13 @@ export class Registry {
 		this.entries = [...file.entries];
 		// Never reuse ids: floor the counter above the highest id on disk.
 		this.nextId = Math.max(file.nextId, maxIndex + 1);
+		// Lazy workspace migration (P1): entries persisted before workspace
+		// records existed get an in-memory record here; it persists on the
+		// entry's next mutation, never at boot.
+		for (const entry of this.entries) {
+			if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
+		}
+
 		// Tolerant read: files written before projects existed lack the keys.
 		const projects = file.projects ?? [];
 		if (!Array.isArray(projects) || projects.some((p) => typeof p?.projectId !== "string")) {
@@ -142,6 +312,30 @@ export class Registry {
 		// (missing key = 1), then the max-index floor applies.
 		const rawNextProjectId = typeof file.nextProjectId === "number" ? file.nextProjectId : 1;
 		this.nextProjectId = Math.max(rawNextProjectId, maxProjectIndex + 1);
+		// Tolerant read of deletion-without-verification markers (absent in
+		// files written before P7.5). Entries whose workspace record claims a
+		// non-verified deletion also reconcile to the orphan list on their
+		// next mutation (never at boot, matching the P1 lazy-migration rule).
+		this.storeOrphanList = {};
+		if (file.storeOrphans !== undefined) {
+			if (
+				typeof file.storeOrphans !== "object" ||
+				file.storeOrphans === null ||
+				Array.isArray(file.storeOrphans)
+			) {
+				throw new Error(
+					`registry state corrupt at ${this.statePath}: storeOrphans must be an object`,
+				);
+			}
+			for (const [workspaceId, marker] of Object.entries(file.storeOrphans)) {
+				if (marker === null || typeof marker !== "object" || typeof marker.at !== "number") {
+					throw new Error(
+						`registry state corrupt at ${this.statePath}: storeOrphans entry ${workspaceId} missing at`,
+					);
+				}
+				this.storeOrphanList[workspaceId] = marker;
+			}
+		}
 	}
 
 	/** Atomic persist (tmp + rename). Mutations persist internally; this is the public API. */
@@ -167,6 +361,10 @@ export class Registry {
 			registeredAt: Date.now(),
 			status: init.status ?? "spawning",
 		};
+		// create() is a mutation, so it stamps the legacy-inferred record when
+		// init omits one — in-memory state then matches what a reload would
+		// produce (load() inference covers files written before P1).
+		if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
 		this.entries.push(entry);
 		this.#mutated();
 		return entry;
@@ -178,6 +376,147 @@ export class Registry {
 		this.entries[index] = entry;
 		this.#mutated();
 		return entry;
+	}
+
+	/**
+	 * Replaces the fleet-private workspace record and persists. Throws on an
+	 * unknown daemon id.
+	 */
+	setWorkspace(daemonId: string, record: WorkspaceRecord): RegistryEntry {
+		const entry = this.#require(daemonId);
+		entry.workspace = record;
+		this.#mutated();
+		return entry;
+	}
+
+	/**
+	 * Shallow-merges `patch` into the workspace record and persists —
+	 * top-level keys replace wholesale (deletion/providerHandle are not
+	 * deep-merged; use the dedicated deletion accessors for deletion-state
+	 * transitions). Entries without a persisted record get the legacy-
+	 * inferred base first. Throws on an unknown daemon id.
+	 */
+	updateWorkspace(daemonId: string, patch: Partial<WorkspaceRecord>): RegistryEntry {
+		const entry = this.#require(daemonId);
+		entry.workspace = { ...(entry.workspace ?? inferWorkspaceRecord(entry)), ...patch };
+		this.#mutated();
+		return entry;
+	}
+
+	/**
+	 * Replaces the deletion state on the workspace record and persists. The
+	 * roster identity is never removed by deletion: the record stays on the
+	 * entry so Retention/state survive restart. Throws on an unknown daemon
+	 * id or an entry without a workspace record.
+	 */
+	setWorkspaceDeletion(daemonId: string, deletion: WorkspaceDeletion): RegistryEntry {
+		const entry = this.#require(daemonId);
+		const workspace = entry.workspace ?? inferWorkspaceRecord(entry);
+		entry.workspace = { ...workspace, deletion };
+		this.#mutated();
+		return entry;
+	}
+
+	/**
+	 * Replaces the persisted callback-enrollment binding on the workspace
+	 * record and persists. The binding carries ONLY the SHA-256 hex digest
+	 * of the credential (never the raw credential) so a fleet restart can
+	 * re-enroll the transport without re-issuing. Throws on an unknown
+	 * daemon id.
+	 */
+	setWorkspaceEnrollment(daemonId: string, enrollment: WorkspaceEnrollment): RegistryEntry {
+		const entry = this.#require(daemonId);
+		const workspace = entry.workspace ?? inferWorkspaceRecord(entry);
+		entry.workspace = { ...workspace, enrollment };
+		this.#mutated();
+		return entry;
+	}
+
+	/**
+	 * Clears the persisted callback-enrollment binding and persists. When
+	 * `generation` is given, clears ONLY a binding at that generation — a
+	 * stale-generation revocation must not wipe a newer binding. Returns
+	 * whether a binding was cleared; throws on an unknown daemon id.
+	 */
+	clearWorkspaceEnrollment(daemonId: string, generation?: number): boolean {
+		const entry = this.#require(daemonId);
+		const workspace = entry.workspace;
+		if (workspace?.enrollment === undefined) return false;
+		if (generation !== undefined && workspace.enrollment.generation !== generation) {
+			return false;
+		}
+		const next = { ...workspace };
+		delete next.enrollment;
+		entry.workspace = next;
+		this.#mutated();
+		return true;
+	}
+
+	/**
+	 * Persisted callback-enrollment bindings, one per workspace holding one
+	 * (defensive copies) — the boot re-enrollment supply for the transport.
+	 */
+	workspaceEnrollments(): Array<{ workspaceId: string; enrollment: WorkspaceEnrollment }> {
+		const out: Array<{ workspaceId: string; enrollment: WorkspaceEnrollment }> = [];
+		for (const entry of this.entries) {
+			const enrollment = entry.workspace?.enrollment;
+			if (enrollment !== undefined) {
+				out.push({ workspaceId: entry.daemonId, enrollment: { ...enrollment } });
+			}
+		}
+		return out;
+	}
+
+	/** Recorded store-orphan markers (deleted without verification), keyed by workspaceId. */
+	storeOrphans(): Record<string, StoreOrphanMarker> {
+		return { ...this.storeOrphanList };
+	}
+
+	/**
+	 * Persist a store-orphan marker (P7.5: a workspace deleted without a
+	 * passed verification gate whose log-store subtree survives). Idempotent
+	 * for an existing marker. Cleared only by {@link clearStoreOrphan}.
+	 */
+	markStoreOrphan(workspaceId: string, reason?: string): void {
+		this.storeOrphanList[workspaceId] = {
+			at: Date.now(),
+			...(reason ? { reason } : {}),
+			...(this.#captureOrphanProvenance(workspaceId) ?? {}),
+		};
+		this.#mutated();
+	}
+
+	/**
+	 * Capture source + pinnedRevision from the workspace record about to be
+	 * removed (P8.10: resume-onto-fresh-clone for orphaned clone
+	 * workspaces). Returns undefined when the entry is gone or has no usable
+	 * provenance. Exactly-one-source and pinnedRevision validity are
+	 * enforced by the resume-clone route, not here — this only mirrors what
+	 * the record carried at removal time.
+	 */
+	#captureOrphanProvenance(
+		workspaceId: string,
+	): { provenance: NonNullable<StoreOrphanMarker["provenance"]> } | undefined {
+		const entry = this.get(workspaceId);
+		const record = entry?.workspace;
+		const source = record?.source;
+		const sourcePresent =
+			source !== undefined && (source.local !== undefined || source.remote !== undefined);
+		if (!sourcePresent && record?.pinnedRevision === undefined) return undefined;
+		return {
+			provenance: {
+				...(source?.local !== undefined || source?.remote !== undefined ? { source } : {}),
+				...(record?.pinnedRevision !== undefined ? { pinnedRevision: record.pinnedRevision } : {}),
+			},
+		};
+	}
+
+	/** Remove the store-orphan marker (explicit manual purge only). */
+	clearStoreOrphan(workspaceId: string): boolean {
+		if (!(workspaceId in this.storeOrphanList)) return false;
+		delete this.storeOrphanList[workspaceId];
+		this.#mutated();
+		return true;
 	}
 
 	/**
@@ -265,7 +604,15 @@ export class Registry {
 		// ran, is spawning/ready/error, or is remote/attached) refuse the
 		// removal wholesale; placeholders are dropped in the same mutation
 		// as the project (and only then; a refused removal leaves them).
+		// A placeholder is a never-started DEFAULT workspace only: spawned
+		// and asleep, no lastSessionFile, no endpoint. A clone workspace is
+		// NEVER a placeholder: its cwd is a managed volume under the fleet
+		// workspaceDir with preparation/provider state, so it must block
+		// project removal until it is deleted through the verified gate
+		// (P7.3/P7.5); silently dropping it would orphan the volume and
+		// bypass the gate.
 		const isPlaceholder = (entry: RegistryEntry): boolean =>
+			entry.workspace?.kind !== "clone" &&
 			entry.mode === "spawned" &&
 			entry.status === "asleep" &&
 			entry.lastSessionFile === undefined &&
@@ -327,6 +674,9 @@ export class Registry {
 			entries: this.entries,
 			projects: this.projectList,
 			nextProjectId: this.nextProjectId,
+			...(Object.keys(this.storeOrphanList).length > 0
+				? { storeOrphans: this.storeOrphanList }
+				: {}),
 		} satisfies RegistryFile);
 		const tmp = `${this.statePath}.tmp`;
 		writeFileSync(tmp, payload, "utf8");

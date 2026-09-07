@@ -571,6 +571,80 @@
 .daemon-chip--label {
 	color: var(--muted-2);
 }
+/* P8.1: clone rows carry a kind chip (accent-tinted) and the workspace's
+   provider-profile chip (like a label, but the fleet catalog entry id). */
+.daemon-chip--kind {
+	color: var(--accent);
+	border-color: var(--accent);
+}
+.daemon-chip--profile {
+	color: var(--muted-2);
+}
+/* P8.1: provider lifecycle progress on clone rows (preparation → runtime →
+   callback; a failed stage shows its error + Retry in place of the label). */
+.daemon-stage {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	font-size: var(--fs-micro);
+	font-style: italic;
+	color: var(--muted-2);
+	padding: var(--space-2) 0 0;
+}
+.daemon-stage-label {
+	animation: daemon-dot-pulse 1.2s ease-in-out infinite;
+}
+.daemon-stage--failed {
+	color: var(--error-text);
+	font-style: normal;
+	align-items: flex-start;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.daemon-stage-error {
+	word-break: break-word;
+}
+.daemon-stage-retry {
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-micro);
+	padding: var(--space-1) var(--space-3);
+	cursor: pointer;
+}
+.daemon-stage-retry:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+/* P8.1: the Clone tab's segmented source-mode selector (default project
+   checkout / local path / remote URL). */
+.workspace-source-modes {
+	display: flex;
+	gap: var(--space-1);
+	margin-bottom: var(--space-2);
+}
+.workspace-source-mode {
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--muted-2);
+	font: inherit;
+	font-size: var(--fs-sm);
+	padding: var(--space-2) var(--space-3);
+	cursor: pointer;
+}
+.workspace-source-mode.active {
+	color: var(--text);
+	border-color: var(--accent);
+}
+.workspace-source-input {
+	margin-bottom: var(--space-2);
+}
+.workspace-profile-select {
+	margin-bottom: var(--space-3);
+}
 /* --- Roster group headers: per-repo collapsible containers under the static
    REPOS header (caret rotates when collapsed), plus rows nested under them --- */
 
@@ -1142,7 +1216,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	margin-bottom: var(--space-4);
 	text-align: left;
 }
-/* --- Add-worktree modal (WorktreeModal.tsx) --- */
+/* --- Add-workspace modal (WorkspaceModal.tsx: Worktree/Clone/Add existing) --- */
 .worktree-tabs {
 	display: flex;
 	gap: var(--space-1);
@@ -1257,7 +1331,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	padding: var(--space-2) var(--space-4);
 	font: inherit;
 }
-/* --- Close-out dialogs (DeleteWorktreeDialog / RemoveProjectDialog) --- */
+/* --- Close-out dialogs (DeleteWorkspaceDialog / RemoveProjectDialog) --- */
 .worktree-evidence {
 	display: inline-flex;
 	gap: var(--space-2);

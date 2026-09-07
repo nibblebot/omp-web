@@ -7,8 +7,9 @@
  * `omp-web` symlink in the bun bin dir; the bundle is `dist-bundle/cli.js`.
  * Routes:
  *
- *   omp-web (bare) | omp-web serve|sessions|projects|spawn|add-repo|add|
- *           provision|stop|remove|rm-project|add-worktree|rm-worktree|prompt
+ *   omp-web (bare) | omp-web serve|sessions|projects|profiles|spawn|
+ *           add-repo|add|provision|add-clone|start|stop|remove|rm-project|
+ *           add-worktree|rm-worktree|prompt
  *                                     → fleet control-plane CLI (fleet/cli.ts;
  *                                       bare = serve)
  *   omp-web session [options]         → the omp-session daemon (server/index.ts;
@@ -31,10 +32,13 @@ const FLEET_SUBCOMMANDS: Record<string, true> = {
 	serve: true,
 	sessions: true,
 	projects: true,
+	profiles: true,
 	spawn: true,
 	"add-repo": true,
 	add: true,
 	provision: true,
+	"add-clone": true,
+	start: true,
 	stop: true,
 	remove: true,
 	"rm-project": true,
@@ -62,7 +66,8 @@ const USAGE = `usage: omp-web [serve] [options] | omp-web <command> [options]
   (bare) | serve               start the fleet (registry + supervisor + edge);
                                first run with no config on a TTY offers setup
   sessions | projects          list roster entries / adoptable worktrees
-  spawn | add-repo | add | provision | stop | remove
+  profiles                     list provider profiles
+  spawn | add-repo | add | provision | add-clone | start | stop | remove
   rm-project | add-worktree | rm-worktree | prompt
                                fleet control plane (see: omp-web <command> --help)
   session [options]            run one agent session daemon (no web UI)
