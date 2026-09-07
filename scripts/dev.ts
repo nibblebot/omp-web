@@ -3,7 +3,9 @@
  * dev: one-command dev runner.
  *
  *   bun run dev          vite (:4713 HMR, /events + /command proxied to the omp-fleet
- *                        edge) + omp-fleet serve (:4722). NO session is started or
+ *                        edge) + omp-fleet serve (:4722) + an optional auth broker
+ *                        (adopted when one already runs, else spawned) that clone
+ *                        sandboxes borrow credentials from. NO session is started or
  *                        attached; spawn/add one from the roster UI when you want one.
  *
  *   --host [addr]        bind vite to addr (default 0.0.0.0) for LAN access; the fleet
@@ -75,6 +77,7 @@ import {
 import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { expandTilde, resolveConfigPath } from "../fleet/config";
+import { resolveOmpBinary } from "../fleet/omp-check";
 import { slugifyWorktreeName } from "../fleet/worktrees";
 
 const ROOT = join(import.meta.dir, "..");
@@ -196,6 +199,33 @@ const VITE_PORT_DEFAULT = 4713;
  * declared fatal.
  */
 const ports = { vite: VITE_PORT_DEFAULT, fleet: 4722 };
+/**
+ * Auth broker: clone sandboxes have no credential store of their own, so they
+ * borrow the operator's from a broker when OMP_AUTH_BROKER_URL/TOKEN are in the
+ * provider env (profile secretRefs `env:` references). The dev stack ADOPTS an
+ * already-running broker that answers an authenticated probe on the default
+ * bind (the credential store is global: one broker serves every worktree),
+ * else spawns `omp auth-broker serve` itself and exports the pair into
+ * process.env BEFORE the fleet child launches (children inherit it;
+ * resolveProfileSecrets reads it at clone spawn). The broker is OPTIONAL:
+ * missing omp CLI, token failure, or startup retries exhausted degrade to a
+ * warning and a brokerless stack (clones run unauthenticated), never a fatal
+ * exit. There is no idle-exit to disable: the broker's `idleTimeout` is
+ * Bun.serve's per-connection socket timeout, not a process lifetime.
+ */
+const BROKER_DEFAULT_PORT = 8765;
+/**
+ * Broker restart backoff: doubles per ready-exit and resets after a healthy
+ * uptime, so a crash loop settles at the cap instead of hot-looping.
+ */
+const BROKER_BACKOFF_MIN_MS = 1_000;
+const BROKER_BACKOFF_MAX_MS = 30_000;
+const BROKER_RESET_AFTER_MS = 60_000;
+let brokerBackoffMs = BROKER_BACKOFF_MIN_MS;
+let brokerUrl: string | undefined;
+let brokerPort = BROKER_DEFAULT_PORT;
+/** Resolved lazily by ensureBroker; buildChild("broker") reads it. */
+let ompBin: string | undefined;
 /** Consecutive pre-ready exits per child; reset on ready. */
 const preReadyFails = new Map<string, number>();
 const MAX_PREREADY_RETRIES = 5;
@@ -211,6 +241,16 @@ function pickFreePort(): Promise<number> {
 		const port = typeof addr === "object" && addr !== null ? addr.port : 0;
 		srv.close(() => (port > 0 ? resolve(port) : reject(new Error("no ephemeral port"))));
 	});
+	return promise;
+}
+
+/** True when 127.0.0.1:port is bindable right now. */
+function isPortFree(port: number): Promise<boolean> {
+	const { promise, resolve } = Promise.withResolvers<boolean>();
+	const srv = createServer();
+	srv.unref();
+	srv.once("error", () => resolve(false));
+	srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(true)));
 	return promise;
 }
 
@@ -251,6 +291,15 @@ function buildChild(name: string): Child {
 				OMP_FLEET_STATE: join(DEV_FLEET_DIR, "fleet-state.json"),
 				OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "server", "index.ts")} --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`,
 			},
+		};
+	}
+	if (name === "broker") {
+		// Same port across restarts: the URL was baked into the fleet's env at
+		// launch and cannot be updated mid-run, so a rebound broker must answer
+		// where the fleet already points.
+		return {
+			name,
+			cmd: [ompBin ?? "omp", "auth-broker", "serve", "--bind", `127.0.0.1:${brokerPort}`],
 		};
 	}
 	// vite: launched last, once the fleet port is known; its proxy targets are
@@ -332,7 +381,7 @@ let shuttingDown = false;
 // ---------------------------------------------------------------------------
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const CHILD_COLORS: Record<string, number> = { vite: 36, fleet: 35, dev: 32 };
+const CHILD_COLORS: Record<string, number> = { vite: 36, fleet: 35, broker: 34, dev: 32 };
 const useColor = process.stdout.isTTY === true && !("NO_COLOR" in process.env);
 
 function prefix(name: string): string {
@@ -422,6 +471,10 @@ function checkSummary(): void {
 			"(vite, HMR, proxies /events /command /ctl → fleet)",
 	);
 	log(`${bold(`  ${"fleet".padEnd(9)}http://127.0.0.1:${fleetPort}  `)}(control plane + edge)`);
+	if (brokerUrl !== undefined)
+		log(
+			`${bold(`  ${"broker".padEnd(9)}${brokerUrl}  `)}(auth broker${states.get("broker")?.readyOnce === true ? "" : ", adopted, not managed by this stack"}; clone secretRefs borrow credentials)`,
+		);
 	log(
 		`${bold(`  ${"state".padEnd(9)}${join(DEV_FLEET_DIR, "fleet-state.json")}  `)}(worktree-scoped)`,
 	);
@@ -491,6 +544,19 @@ function stdoutHook(
 			}
 		};
 	}
+	if (name === "broker") {
+		return (line) => {
+			if (!current()) return;
+			// JSON log line on stdout: {"message":"auth-broker listening","url":…}
+			const m = line.match(
+				/"message":"auth-broker listening","url":"(http:\/\/127\.0\.0\.1:(\d+))"/,
+			);
+			if (m) {
+				brokerUrl = m[1];
+				markReady("broker", Number(m[2]), `auth broker on ${m[1]}`);
+			}
+		};
+	}
 	return undefined;
 }
 
@@ -501,6 +567,13 @@ let fatalResolve: (result: { name: string; code: number | null }) => void;
 const fatalPromise = (() => {
 	const { promise, resolve } = Promise.withResolvers<{ name: string; code: number | null }>();
 	fatalResolve = resolve;
+	return promise;
+})();
+/** Resolves when the broker's startup retries are exhausted (ensureBroker races it). */
+let brokerGiveUpResolve: () => void;
+const brokerGiveUpPromise = (() => {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	brokerGiveUpResolve = resolve;
 	return promise;
 })();
 
@@ -515,6 +588,43 @@ function launch(child: Child): void {
 	states.set(child.name, { name: child.name, status: "starting", pid: proc.pid, readyOnce: false });
 	void pipePrefixed(proc.stdout, child.name, process.stdout, stdoutHook(child.name, proc));
 	void pipePrefixed(proc.stderr, child.name, process.stderr);
+	if (child.name === "broker") {
+		// The broker is an OPTIONAL sidecar: its exit must never take the stack
+		// down. Relaunch it on the same port (the URL was baked into the fleet's
+		// env at launch and cannot change mid-run) with a bounded backoff. A
+		// deliberate remove-then-kill (give-up path) leaves procs pointing
+		// elsewhere, so this returns before scheduling a restart.
+		const startedAt = Date.now();
+		void proc.exited.then((code) => {
+			if (shuttingDown || procs.get(child.name) !== proc) return;
+			procs.delete(child.name);
+			const st = states.get(child.name);
+			if (st?.readyOnce !== true) {
+				// Pre-ready exit: bound the attempts, then run brokerless for good.
+				const fails = (preReadyFails.get("broker") ?? 0) + 1;
+				preReadyFails.set("broker", fails);
+				if (fails > MAX_PREREADY_RETRIES) {
+					log(
+						`broker failed ${fails} startup attempts, continuing WITHOUT it (clones run unauthenticated)`,
+					);
+					if (st !== undefined) st.status = "exited";
+					brokerGiveUpResolve();
+					return;
+				}
+			}
+			if (st !== undefined) st.status = "starting";
+			if (Date.now() - startedAt > BROKER_RESET_AFTER_MS) brokerBackoffMs = BROKER_BACKOFF_MIN_MS;
+			const delay = brokerBackoffMs;
+			brokerBackoffMs = Math.min(brokerBackoffMs * 2, BROKER_BACKOFF_MAX_MS);
+			log(
+				`broker exited (${code ?? "signal"}), restarting in ${delay / 1000}s on the same port (the rest of the stack stays up)`,
+			);
+			setTimeout(() => {
+				if (!shuttingDown) launch(buildChild("broker"));
+			}, delay);
+		});
+		return;
+	}
 	void proc.exited.then((code) => {
 		if (shuttingDown) return;
 		if (procs.get(child.name) !== proc) return; // superseded by a pre-ready retry
@@ -560,6 +670,96 @@ log(
 	"starting omp-fleet + vite HMR (ports chosen at startup). Spawn/add a session from the sidebar",
 );
 
+/**
+ * Authenticated broker probe: 200 on /v1/snapshot with OUR token means a
+ * broker serving this operator's credential store already listens (another
+ * worktree's dev stack, a systemd unit) and can be adopted. 401/closed means
+ * a foreign occupant or nothing, so spawn our own.
+ */
+async function probeBroker(url: string, token: string): Promise<boolean> {
+	try {
+		const res = await fetch(`${url}/v1/snapshot`, {
+			headers: { authorization: `Bearer ${token}` },
+			signal: AbortSignal.timeout(2_000),
+		});
+		return res.ok;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Read-or-create the broker bearer via the CLI (`omp auth-broker token` is
+ * idempotent: prints the existing token, creating ~/.omp/auth-broker.token
+ * 0600 on first run). Never logs the token itself.
+ */
+async function brokerToken(bin: string): Promise<string | undefined> {
+	try {
+		const proc = Bun.spawn([bin, "auth-broker", "token"], { stdout: "pipe", stderr: "pipe" });
+		const out = await new Response(proc.stdout).text();
+		const code = await proc.exited;
+		const token = out.trim().split("\n").at(-1)?.trim();
+		return code === 0 && token !== undefined && token.length > 0 ? token : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Fleet-mode boot step: make an auth broker available and export
+ * OMP_AUTH_BROKER_URL/TOKEN into process.env BEFORE the fleet child launches
+ * (children inherit it; provider secretRefs `env:` references resolve from
+ * it). Adopt-first, spawn-else; every failure degrades to a brokerless stack
+ * with a warning.
+ */
+async function ensureBroker(): Promise<void> {
+	const bin = resolveOmpBinary();
+	if (bin === null) {
+		log("auth broker: omp CLI not found, continuing WITHOUT it (clones run unauthenticated)");
+		return;
+	}
+	ompBin = bin;
+	const token = await brokerToken(bin);
+	if (token === undefined) {
+		log("auth broker: could not read/create the bearer token, continuing WITHOUT it");
+		return;
+	}
+	const defaultUrl = `http://127.0.0.1:${BROKER_DEFAULT_PORT}`;
+	if (await probeBroker(defaultUrl, token)) {
+		brokerUrl = defaultUrl;
+		process.env.OMP_AUTH_BROKER_URL = brokerUrl;
+		process.env.OMP_AUTH_BROKER_TOKEN = token;
+		log(`auth broker: adopted the running broker at ${brokerUrl}`);
+		return;
+	}
+	if (!(await isPortFree(BROKER_DEFAULT_PORT))) brokerPort = await pickFreePort();
+	launch(buildChild("broker"));
+	const settled = await Promise.race([
+		waitReady("broker").then(() => "ready" as const),
+		brokerGiveUpPromise.then(() => "gaveup" as const),
+		new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 15_000)),
+	]);
+	if (settled === "ready" && brokerUrl !== undefined) {
+		process.env.OMP_AUTH_BROKER_URL = brokerUrl;
+		process.env.OMP_AUTH_BROKER_TOKEN = token;
+		log(
+			`auth broker: serving at ${brokerUrl}, OMP_AUTH_BROKER_URL/TOKEN exported for clone secretRefs`,
+		);
+		return;
+	}
+	if (settled === "timeout") {
+		// A silent hang (never ready, no retry exhaustion): remove-then-kill so
+		// the exited handler schedules no restart, then carry on without a broker.
+		log("auth broker: no readiness after 15s, continuing WITHOUT it (clones run unauthenticated)");
+		const proc = procs.get("broker");
+		if (proc !== undefined) {
+			procs.delete("broker");
+			proc.kill();
+		}
+	}
+}
+
+await ensureBroker();
 launch(buildChild("fleet"));
 const boot = await Promise.race([waitReady("fleet").then(() => null), fatalPromise]);
 if (boot !== null) {
