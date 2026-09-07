@@ -81,6 +81,7 @@ import {
 import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { expandTilde, resolveConfigPath } from "../fleet/config";
+import { resolveOmpBinary } from "../fleet/omp-check";
 import { slugifyWorktreeName } from "../fleet/worktrees";
 import { OMP_SESSION_PREFIX } from "../shared/protocol";
 
@@ -204,6 +205,26 @@ const SESSION_PORT_DEFAULT = 4721;
  * a fresh port (bounded) before being declared fatal.
  */
 const ports = { vite: VITE_PORT_DEFAULT, session: SESSION_PORT_DEFAULT, fleet: 4722 };
+/**
+ * Auth broker (fleet mode only): clone sandboxes have no credential store of
+ * their own; they borrow the operator's from a broker when
+ * OMP_AUTH_BROKER_URL/TOKEN are in the provider env (profile secretRefs
+ * `env:` references). The dev stack ADOPTS an already-running broker that
+ * answers an authenticated probe on the default bind (the credential store
+ * is global — one broker serves every worktree), else spawns
+ * `omp auth-broker serve` itself and exports the pair into process.env
+ * BEFORE the fleet child launches (children inherit it; resolveProfileSecrets
+ * reads it at clone spawn). The broker is OPTIONAL: missing omp CLI, token
+ * failure, or startup retries exhausted degrade to a warning and a brokerless
+ * stack (clones run unauthenticated), never a fatal exit. There is no
+ * idle-exit to disable: the broker's `idleTimeout` is Bun.serve's per-
+ * connection socket timeout, not a process lifetime.
+ */
+const BROKER_DEFAULT_PORT = 8765;
+let brokerUrl: string | undefined;
+let brokerPort = BROKER_DEFAULT_PORT;
+/** Resolved lazily by ensureBroker; buildChild("broker") reads it. */
+let ompBin: string | undefined;
 /** `--port` value for the NEXT session launch; "0" = ephemeral. */
 let sessionPortArg = "0";
 /** Session port vite's proxy was configured with; undefined until vite's first launch. */
@@ -249,7 +270,7 @@ const MODES: Record<string, { children: string[]; open: string }> = {
 	},
 	fleet: {
 		children: ["fleet", "vite"],
-		open: "roster: omp-fleet + vite HMR (ports chosen at startup) — spawn/add a session from the sidebar",
+		open: "roster: omp-fleet + auth broker + vite HMR (ports chosen at startup) — spawn/add a session from the sidebar",
 	},
 };
 
@@ -281,6 +302,15 @@ function buildChild(name: string): Child {
 				OMP_FLEET_STATE: join(DEV_FLEET_DIR, "fleet-state.json"),
 				OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "server", "index.ts")} --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`,
 			},
+		};
+	}
+	if (name === "broker") {
+		// Same port across restarts: the URL was baked into the fleet's env at
+		// launch and cannot be updated mid-run, so a rebound broker must answer
+		// where the fleet already points.
+		return {
+			name,
+			cmd: [ompBin ?? "omp", "auth-broker", "serve", "--bind", `127.0.0.1:${brokerPort}`],
 		};
 	}
 	// vite: launched last, once the backend ports are known — its proxy targets
@@ -381,7 +411,13 @@ let shuttingDown = false;
 // ---------------------------------------------------------------------------
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const CHILD_COLORS: Record<string, number> = { vite: 36, fleet: 35, session: 33, dev: 32 };
+const CHILD_COLORS: Record<string, number> = {
+	vite: 36,
+	fleet: 35,
+	session: 33,
+	broker: 34,
+	dev: 32,
+};
 const useColor = process.stdout.isTTY === true && !("NO_COLOR" in process.env);
 
 function prefix(name: string): string {
@@ -476,6 +512,10 @@ function checkSummary(): void {
 	if (fleetMode) {
 		const fleetPort = states.get("fleet")?.port ?? ports.fleet;
 		log(`${bold(`  ${"fleet".padEnd(9)}http://127.0.0.1:${fleetPort}  `)}(control plane + edge)`);
+		if (brokerUrl !== undefined)
+			log(
+				`${bold(`  ${"broker".padEnd(9)}${brokerUrl}  `)}(auth broker${states.get("broker")?.readyOnce === true ? "" : " — adopted, not managed by this stack"}; clone secretRefs borrow credentials)`,
+			);
 		log(
 			`${bold(`  ${"state".padEnd(9)}${join(DEV_FLEET_DIR, "fleet-state.json")}  `)}(worktree-scoped)`,
 		);
@@ -576,6 +616,19 @@ function stdoutHook(
 			}
 		};
 	}
+	if (name === "broker") {
+		return (line) => {
+			if (!current()) return;
+			// JSON log line on stdout: {"message":"auth-broker listening","url":…}
+			const m = line.match(
+				/"message":"auth-broker listening","url":"(http:\/\/127\.0\.0\.1:(\d+))"/,
+			);
+			if (m) {
+				brokerUrl = m[1];
+				markReady("broker", Number(m[2]), `auth broker on ${m[1]}`);
+			}
+		};
+	}
 	return undefined;
 }
 
@@ -586,7 +639,7 @@ function stdoutHook(
  * A vite/fleet exit means the dev environment is actually broken and stays
  * fatal (first exit wins, everything comes down).
  */
-const RESTARTABLE: Record<string, true> = { session: true };
+const RESTARTABLE: Record<string, true> = { session: true, broker: true };
 const RESTART_BACKOFF_MIN_MS = 1_000;
 const RESTART_BACKOFF_MAX_MS = 30_000;
 /** Uptime after which the restart backoff resets (a crash loop keeps it capped). */
@@ -600,6 +653,13 @@ let fatalResolve: (result: { name: string; code: number | null }) => void;
 const fatalPromise = (() => {
 	const { promise, resolve } = Promise.withResolvers<{ name: string; code: number | null }>();
 	fatalResolve = resolve;
+	return promise;
+})();
+/** Resolves when the broker's startup retries are exhausted (ensureBroker races it). */
+let brokerGiveUpResolve: () => void;
+const brokerGiveUpPromise = (() => {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	brokerGiveUpResolve = resolve;
 	return promise;
 })();
 
@@ -617,8 +677,11 @@ function launch(child: Child): void {
 	if (RESTARTABLE[child.name] === true) {
 		const startedAt = Date.now();
 		void proc.exited.then((code) => {
-			if (procs.get(child.name) === proc) procs.delete(child.name);
-			if (shuttingDown) return;
+			// wasCurrent=false: intentionally removed before the kill (broker
+			// give-up) — its exit must not schedule a restart.
+			const wasCurrent = procs.get(child.name) === proc;
+			if (wasCurrent) procs.delete(child.name);
+			if (shuttingDown || !wasCurrent) return;
 			const st = states.get(child.name);
 			const wasReady = st?.readyOnce === true;
 			if (st !== undefined) st.status = "restarting";
@@ -630,6 +693,15 @@ function launch(child: Child): void {
 			const delay = restartBackoffMs;
 			restartBackoffMs = Math.min(restartBackoffMs * 2, RESTART_BACKOFF_MAX_MS);
 			if (wasReady) {
+				if (child.name === "broker") {
+					log(
+						`broker exited (${code ?? "signal"}) — restarting in ${delay / 1000}s on the same port (the rest of the stack stays up)`,
+					);
+					setTimeout(() => {
+						if (!shuttingDown) launch(buildChild("broker"));
+					}, delay);
+					return;
+				}
 				log(
 					`${child.name} exited (${code ?? "signal"}) — idle exit is expected; restarting in ${delay / 1000}s (the rest of the stack stays up)`,
 				);
@@ -639,21 +711,31 @@ function launch(child: Child): void {
 				return;
 			}
 			// Pre-ready exit: lost the probe-bind race or a startup crash. Retry
-			// on a fresh ephemeral port; only exhaust into fatal after a bounded
-			// number of attempts (a real crash loop must still take the stack down).
+			// (session on a fresh ephemeral port, broker on its fixed port — the
+			// fleet env already carries its URL); only exhaust after a bounded
+			// number of attempts. Exhaustion is fatal for the session but only a
+			// warning for the broker (optional service — the stack runs on).
 			const fails = (preReadyFails.get(child.name) ?? 0) + 1;
 			preReadyFails.set(child.name, fails);
 			if (fails > MAX_PREREADY_RETRIES) {
+				if (child.name === "broker") {
+					log(
+						`broker failed ${fails} startup attempts — continuing WITHOUT it (clones run unauthenticated)`,
+					);
+					if (st !== undefined) st.status = "exited";
+					brokerGiveUpResolve();
+					return;
+				}
 				log(`${child.name} failed ${fails} startup attempts — giving up`);
 				fatalResolve({ name: child.name, code });
 				return;
 			}
 			log(
-				`${child.name} exited before ready (${code ?? "signal"}) — retrying on a fresh ephemeral port (${fails}/${MAX_PREREADY_RETRIES})`,
+				`${child.name} exited before ready (${code ?? "signal"}) — retrying${child.name === "session" ? " on a fresh ephemeral port" : ""} (${fails}/${MAX_PREREADY_RETRIES})`,
 			);
-			sessionPortArg = "0";
+			if (child.name === "session") sessionPortArg = "0";
 			setTimeout(() => {
-				if (!shuttingDown) launch(buildChild("session"));
+				if (!shuttingDown) launch(buildChild(child.name));
 			}, delay);
 		});
 		return;
@@ -722,6 +804,94 @@ async function relaunchVite(): Promise<void> {
 	summaryArmed = true;
 	launch(buildChild("vite"));
 }
+/**
+ * Authenticated broker probe: 200 on /v1/snapshot with OUR token means a
+ * broker serving this operator's credential store already listens (another
+ * worktree's dev stack, a systemd unit) and can be adopted. 401/closed means
+ * a foreign occupant or nothing — spawn our own.
+ */
+async function probeBroker(url: string, token: string): Promise<boolean> {
+	try {
+		const res = await fetch(`${url}/v1/snapshot`, {
+			headers: { authorization: `Bearer ${token}` },
+			signal: AbortSignal.timeout(2_000),
+		});
+		return res.ok;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Read-or-create the broker bearer via the CLI (`omp auth-broker token` is
+ * idempotent: prints the existing token, creating ~/.omp/auth-broker.token
+ * 0600 on first run). Never logs the token itself.
+ */
+async function brokerToken(bin: string): Promise<string | undefined> {
+	try {
+		const proc = Bun.spawn([bin, "auth-broker", "token"], { stdout: "pipe", stderr: "pipe" });
+		const out = await new Response(proc.stdout).text();
+		const code = await proc.exited;
+		const token = out.trim().split("\n").at(-1)?.trim();
+		return code === 0 && token !== undefined && token.length > 0 ? token : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Fleet-mode boot step: make an auth broker available and export
+ * OMP_AUTH_BROKER_URL/TOKEN into process.env BEFORE the fleet child launches
+ * (children inherit it; provider secretRefs `env:` references resolve from
+ * it). Adopt-first, spawn-else; every failure degrades to a brokerless stack
+ * with a warning.
+ */
+async function ensureBroker(): Promise<void> {
+	const bin = resolveOmpBinary();
+	if (bin === null) {
+		log("auth broker: omp CLI not found — continuing WITHOUT it (clones run unauthenticated)");
+		return;
+	}
+	ompBin = bin;
+	const token = await brokerToken(bin);
+	if (token === undefined) {
+		log("auth broker: could not read/create the bearer token — continuing WITHOUT it");
+		return;
+	}
+	const defaultUrl = `http://127.0.0.1:${BROKER_DEFAULT_PORT}`;
+	if (await probeBroker(defaultUrl, token)) {
+		brokerUrl = defaultUrl;
+		process.env.OMP_AUTH_BROKER_URL = brokerUrl;
+		process.env.OMP_AUTH_BROKER_TOKEN = token;
+		log(`auth broker: adopted the running broker at ${brokerUrl}`);
+		return;
+	}
+	if (!(await isPortFree(BROKER_DEFAULT_PORT))) brokerPort = await pickFreePort();
+	launch(buildChild("broker"));
+	const settled = await Promise.race([
+		waitReady("broker").then(() => "ready" as const),
+		brokerGiveUpPromise.then(() => "gaveup" as const),
+		new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 15_000)),
+	]);
+	if (settled === "ready" && brokerUrl !== undefined) {
+		process.env.OMP_AUTH_BROKER_URL = brokerUrl;
+		process.env.OMP_AUTH_BROKER_TOKEN = token;
+		log(
+			`auth broker: serving at ${brokerUrl} — OMP_AUTH_BROKER_URL/TOKEN exported for clone secretRefs`,
+		);
+		return;
+	}
+	if (settled === "timeout") {
+		// Give-up via retries resolves brokerGiveUpPromise; a silent hang does
+		// not. Remove-then-kill so the exited handler schedules no restart.
+		log("auth broker: no readiness after 15s — continuing WITHOUT it (clones run unauthenticated)");
+		const proc = procs.get("broker");
+		if (proc !== undefined) {
+			procs.delete("broker");
+			proc.kill();
+		}
+	}
+}
 
 // Backend first (ephemeral bind — cannot collide), vite once the proxy target
 // port is known. A fatal resolution during this await = startup retries
@@ -729,6 +899,7 @@ async function relaunchVite(): Promise<void> {
 log(`mode: ${modeArg} — ${mode.open}`);
 
 const backend = modeArg === "fleet" ? "fleet" : "session";
+if (modeArg === "fleet") await ensureBroker();
 launch(buildChild(backend));
 const boot = await Promise.race([waitReady(backend).then(() => null), fatalPromise]);
 if (boot !== null) {
