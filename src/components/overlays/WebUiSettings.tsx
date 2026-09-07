@@ -1,5 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import { appearanceWebImages } from "../../prefs/settings";
+import { authSnapshot, signOut } from "../../store/auth";
 import {
 	call,
 	fleetSettingsActive,
@@ -147,6 +148,22 @@ export function WebUiSettings(props: { model: SettingsModel; visibleGroup: strin
 							</button>
 						</Row>
 					</Show>
+				</div>
+			</Show>
+			<Show when={authSnapshot().status === "signedIn"}>
+				<div class="settings-group">
+					<h3 class="settings-group-title">Session</h3>
+					<Row label="sign out">
+						<button
+							type="button"
+							class="settings-control-btn"
+							onClick={() => {
+								void signOut().catch(() => undefined);
+							}}
+						>
+							sign out
+						</button>
+					</Row>
 				</div>
 			</Show>
 			<Show

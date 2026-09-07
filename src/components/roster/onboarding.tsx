@@ -66,16 +66,48 @@ export function useOnboardingPipeline(onReady: () => void) {
 		}
 	});
 
-	/** spawning → ready (attach) / error (daemon_status error frame). */
+	/** A tracked entry failed: clone lifecycle failures surface as
+	 *  lifecycleStage "failed" with the typed lifecycleError (preparation/
+	 *  runtime/callback rung), local daemons as daemon.status "error". Either
+	 *  parks the pipeline on the ERROR rung with an in-place message instead
+	 *  of pulsing forever. */
 	createEffect(() => {
 		const st = stage();
-		if (st.kind !== "spawning") return;
+		if (st.kind !== "spawning" && st.kind !== "attaching") return;
 		const d = state.daemonRoster.find((x) => x.daemonId === st.daemonId);
 		if (!d) return;
 		if (d.status === "error") {
 			setStage({ kind: "error", stage: "spawning", message: d.error ?? "daemon failed to start" });
 			return;
 		}
+		if (d.lifecycleStage === "failed") {
+			const lifecycleMessage = d.lifecycleError;
+			// A lifecycle failure may arrive without a text (older edges); fall
+			// back to the daemon error or a plain description.
+			setStage({
+				kind: "error",
+				stage: "spawning",
+				message:
+					(lifecycleMessage !== undefined && lifecycleMessage !== null
+						? lifecycleMessage
+						: d.error) ?? "workspace failed to start",
+			});
+			return;
+		}
+		// Late global error frame (post-roster failure broadcast): park the
+		// pipeline so the in-place notice shows the typed error.
+		if (errorSnapshot !== null && state.error !== null && state.error !== errorSnapshot) {
+			setStage({ kind: "error", stage: "spawning", message: state.error });
+		}
+	});
+
+	/** spawning → ready (attach). */
+	createEffect(() => {
+		const st = stage();
+		if (st.kind !== "spawning") return;
+		const d = state.daemonRoster.find((x) => x.daemonId === st.daemonId);
+		if (!d) return;
+		if (d.status === "error" || d.lifecycleStage === "failed") return; // handled above
 		if (d.status === "ready") {
 			setStage({ kind: "attaching", daemonId: st.daemonId });
 			void attachSession(st.daemonId)
@@ -107,7 +139,16 @@ export function useOnboardingPipeline(onReady: () => void) {
 		return st.kind === "error" ? st : null;
 	};
 
-	return { stage, begin, busy, errorInfo };
+	/** Back to the form from an error rung: edits may be retried (the prior
+	 *  artifacts are left in place — e.g. a failed preparation keeps its
+	 *  prepared volume). Clears the error snapshot so a stale global error
+	 *  frame cannot re-trigger the error rung. */
+	const reset = () => {
+		errorSnapshot = null;
+		setStage({ kind: "form" });
+	};
+
+	return { stage, begin, busy, errorInfo, reset };
 }
 
 /**

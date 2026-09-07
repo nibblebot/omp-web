@@ -15,10 +15,11 @@ import {
 	ActiveDaemons,
 	AddProjectModal,
 	DaemonSidebar,
-	DeleteWorktreeDialog,
+	DeleteWorkspaceDialog,
 	RemoveProjectDialog,
-	WorktreeModal,
+	WorkspaceModal,
 } from "./components/roster";
+import { SignInModal } from "./components/SignInModal";
 import {
 	AskDialog,
 	BranchModal,
@@ -37,8 +38,10 @@ import {
 	UsageModal,
 } from "./components/overlays";
 import {
+	bootAuth,
 	connect,
 	hasLiveSession,
+	initAuth,
 	setPromptInsert,
 	setSidebarVisible,
 	setState,
@@ -109,6 +112,10 @@ const NoActiveSessionPane: Component = () => (
 export const App: Component = () => {
 	onMount(() => {
 		connect();
+		// Browser-auth: mirror auth snapshots into state + open the sign-in
+		// modal on signedOut; then probe the session (404 → disabled).
+		initAuth();
+		bootAuth();
 		// Ctrl+O toggles all tool cards open/closed (not while typing).
 		window.addEventListener("keydown", (e) => {
 			if (e.key.toLowerCase() !== "o" || !e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -277,13 +284,16 @@ export const App: Component = () => {
 			<Show when={state.modal === "add-project"}>
 				<AddProjectModal onClose={() => setState("modal", null)} />
 			</Show>
-			<Show when={state.modal === "worktree"}>
-				<WorktreeModal onClose={() => setState("modal", null)} />
+			<Show when={state.modal === "workspace"}>
+				<WorkspaceModal onClose={() => setState("modal", null)} />
+			</Show>
+			<Show when={state.modal === "sign-in"}>
+				<SignInModal onClose={() => setState("modal", null)} />
 			</Show>
 			<AskDialog />
 			<BtwPanel />
 			<DangerConfirmDialog />
-			<DeleteWorktreeDialog />
+			<DeleteWorkspaceDialog />
 			<RemoveProjectDialog />
 			<Toasts />
 		</div>

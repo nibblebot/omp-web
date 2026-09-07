@@ -4,13 +4,20 @@
  * `serve` runs the control plane in-process (foreground). Every other
  * subcommand is a thin loopback HTTP client against the control plane:
  *
- *   omp-fleet serve [--port n] [--workspace-dir d]
+ *   omp-fleet serve [--port n] [--workspace-dir d] [--bind addr]
+ *                     [--browser-access-token t] [--browser-origin o]
+ *                     [--trusted-proxy ip-or-cidr]…
  *   omp-fleet sessions [--port n]
  *   omp-fleet projects [--port n]
+ *   omp-fleet profiles [--port n]
  *   omp-fleet spawn <path> [--template t] [--name n] [--label k=v]…
  *   omp-fleet add-repo <path> [--start] [--template t] [--labels k=v,...]
  *   omp-fleet add <name> <url> --token <t> [--label k=v]… [--cwd c]
  *   omp-fleet provision <name> [--label k=v]…
+ *   omp-fleet add-clone <project> <name> --profile <id>
+ *                        [--local path | --remote url] [--revision rev]
+ *                        [--branch b] [--no-start]
+ *   omp-fleet start <selector>
  *   omp-fleet stop <selector>
  *   omp-fleet remove <selector>
  *   omp-fleet rm-project <selector>
@@ -22,6 +29,10 @@
  * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722.
  * Managed-worktree root: `--workspace-dir` flag, else OMP_FLEET_WORKSPACE_DIR,
  * else the config-file `workspaceDir` key, else `~/.omp-web/workspaces`.
+ * Bind address / browser auth: `--bind`, `--browser-access-token`,
+ * `--browser-origin`, and `--trusted-proxy` flags, else OMP_FLEET_BIND /
+ * OMP_FLEET_BROWSER_TOKEN / OMP_FLEET_BROWSER_ORIGIN / (OMP_FLEET_TRUSTED_PROXY
+ * csv), else the config-file keys (see fleet/config.ts).
  * A refused connection prints "fleet not running — start it:
  * omp-fleet serve" and exits 1.
  */
@@ -29,8 +40,9 @@
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { LockHeldError } from "../shared/file-lock";
-import { expandTilde, resolveConfigPath } from "./config";
+import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { startFleet, type FleetServer } from "./server";
+import { runProfilePreflight } from "../runtime/preflight";
 
 const DEFAULT_PORT = 4722;
 const NOT_RUNNING_MESSAGE = "fleet not running — start it: omp-fleet serve";
@@ -52,6 +64,16 @@ interface ProjectRow {
 	worktreeOf?: string;
 }
 
+/** Wire shape of GET /ctl/profiles entries (PublicProviderProfile; secret-free). */
+interface ProfileRow {
+	id: string;
+	provider: string;
+	resources?: { cpu?: string; memory?: string };
+	network?: string;
+	storageClassName?: string;
+	secretRefNames?: string[];
+}
+
 /** A user-facing CLI failure (bad flags, refused connection, server error). */
 class CliError extends Error {}
 
@@ -62,7 +84,7 @@ interface ParsedArgs {
 }
 
 /** Flags that repeat and accumulate (each occurrence appends). */
-const MULTI_FLAGS = new Set(["label"]);
+const MULTI_FLAGS = new Set(["label", "trusted-proxy"]);
 
 /** Flags that are bare booleans: presence = true (never consume a value); `--flag=true|false` also accepted. */
 const BOOLEAN_FLAGS = new Set(["start", "no-start", "delete-branch"]);
@@ -145,6 +167,13 @@ function flagNumber(flags: Map<string, FlagValue>, name: string): number | undef
 
 function labelList(flags: Map<string, FlagValue>): string[] | undefined {
 	const value = flags.get("label");
+	return Array.isArray(value) ? value : undefined;
+}
+
+/** Every `--trusted-proxy` occurrence (repeatable); each value may itself be
+ *  comma-splittable — loadConfig splits occurrences, mirroring `label`. */
+function trustedProxyList(flags: Map<string, FlagValue>): string[] | undefined {
+	const value = flags.get("trusted-proxy");
 	return Array.isArray(value) ? value : undefined;
 }
 
@@ -319,7 +348,16 @@ export function readLine(prompt: string): Promise<string> {
 	});
 }
 
-async function serveCmd(port: number, workspaceDir?: string): Promise<number> {
+async function serveCmd(
+	port: number,
+	workspaceDir?: string,
+	serveOpts?: {
+		bind?: string;
+		browserAccessToken?: string;
+		browserOrigin?: string;
+		trustedProxy?: string[];
+	},
+): Promise<number> {
 	// First-run auto-offer: no config file + an interactive terminal → verify
 	// the omp stack (installed / provider / default model), then ask whether
 	// to configure omp-web before booting.
@@ -356,17 +394,20 @@ async function serveCmd(port: number, workspaceDir?: string): Promise<number> {
 	}
 	// A second fleet on the same state file is a deterministic conflict, not
 	// a retryable failure: report the live holder and exit 77.
-	const server = await startFleet({ port, workspaceDir, configPath: offerConfigPath }).catch(
-		(err: unknown) => {
-			if (err instanceof LockHeldError) {
-				console.error(
-					`fleet already running (pid ${err.holderPid}) — state locked at ${err.lockPath}`,
-				);
-				return null;
-			}
-			throw err;
-		},
-	);
+	const server = await startFleet({
+		port,
+		workspaceDir,
+		configPath: offerConfigPath,
+		...serveOpts,
+	}).catch((err: unknown) => {
+		if (err instanceof LockHeldError) {
+			console.error(
+				`fleet already running (pid ${err.holderPid}) — state locked at ${err.lockPath}`,
+			);
+			return null;
+		}
+		throw err;
+	});
 	if (server === null) return 77;
 	return serveLoop(server);
 }
@@ -381,7 +422,7 @@ export async function serveLoop(server: FleetServer): Promise<number> {
 	// Startup banner: where the fleet listens, where its state/config live,
 	// and what a previous fleet run left behind (boot statuses). The first
 	// line keeps its exact shape — scripts parse the port out of it.
-	console.log(`fleet listening on 127.0.0.1:${server.port}`);
+	console.log(`fleet listening on ${server.fleetFacts.bind}:${server.port}`);
 	console.log(`fleet state: ${server.fleetFacts.statePath}`);
 	console.log(`fleet config: ${server.fleetFacts.configPath ?? "(defaults)"}`);
 	const restored = server.registry.list();
@@ -459,6 +500,30 @@ async function projectsCmd(port: number): Promise<number> {
 		p.worktreeOf ?? "",
 	]);
 	console.log(renderTable(["name", "path", "branch", "worktreeOf"], rows));
+	return 0;
+}
+
+/** profiles: GET /ctl/profiles — the secret-free provider profile catalog. */
+async function profilesCmd(port: number): Promise<number> {
+	const body = (await ctl(port, "/ctl/profiles")) as { profiles?: unknown };
+	if (!Array.isArray(body.profiles)) throw new CliError("unexpected profiles response");
+	const profiles = body.profiles as ProfileRow[];
+	if (profiles.length === 0) {
+		console.log("no provider profiles configured (set providerProfiles in the fleet config)");
+		return 0;
+	}
+	const rows = profiles.map((p) => [
+		p.id,
+		p.provider,
+		p.resources?.cpu ?? "",
+		p.resources?.memory ?? "",
+		p.storageClassName ?? "",
+		(p.secretRefNames ?? []).join(","),
+		p.network ?? "",
+	]);
+	console.log(
+		renderTable(["id", "provider", "cpu", "memory", "storage", "secrets", "network"], rows),
+	);
 	return 0;
 }
 
@@ -616,7 +681,103 @@ async function addWorktreeCmd(
 	return 0;
 }
 
-/** rm-worktree <daemon-id> [--delete-branch]: stop + evict + git worktree remove. */
+/**
+ * add-clone <project> <name> --profile <id> [--local path | --remote url]
+ * [--revision rev] [--branch b] [--no-start]: create an independent clone
+ * workspace via POST /ctl/clones (P8.7). The source has exactly one member
+ * when given; an omitted source defaults server-side to the registered
+ * project's local path. Clone revision input is `revision` (never baseRef).
+ * start defaults to ON (--no-start disables), mirroring add-worktree.
+ */
+async function addCloneCmd(
+	positionals: string[],
+	flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
+	const project = positionals[0];
+	const name = positionals[1];
+	const profileId = flagString(flags, "profile");
+	const local = flagString(flags, "local");
+	const remote = flagString(flags, "remote");
+	if (
+		project === undefined ||
+		name === undefined ||
+		profileId === undefined ||
+		(local !== undefined && remote !== undefined)
+	) {
+		throw new CliError(
+			"usage: omp-fleet add-clone <project> <name> --profile <id>\n" +
+				"       [--local path | --remote url] [--revision rev] [--branch b] [--no-start]",
+		);
+	}
+	const projectId = await resolveProjectId(port, project);
+	const start = flagBoolean(flags, "start") ?? !(flags.get("no-start") === true);
+	const source = local !== undefined ? { local } : remote !== undefined ? { remote } : undefined;
+	const body = (await ctl(port, "/ctl/clones", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			projectId,
+			name,
+			profileId,
+			...(source !== undefined ? { source } : {}),
+			revision: flagString(flags, "revision"),
+			branch: flagString(flags, "branch"),
+			start,
+		}),
+	})) as { entry?: { daemonId?: string; cwd?: string; status?: string; lifecycleStage?: string } };
+	const entry = body.entry ?? {};
+	const where = String(entry.cwd ?? name);
+	const stage = entry.lifecycleStage !== undefined ? ` ${entry.lifecycleStage}` : "";
+	console.log(
+		`created clone ${where} (${String(entry.daemonId ?? "?")})${start ? ` — status ${String(entry.status ?? "?")}${stage}` : " — not started"}`,
+	);
+	return 0;
+}
+
+/**
+ * preflight --profile <id>: local (no control-plane RPC) production-profile
+ * preflight (P5.6). Loads the config file exactly like `serve` (env
+ * OMP_FLEET_CONFIG honored), runs the runtime/preflight battery against the
+ * profile, prints one line per check with remediation on failures, and
+ * exits non-zero when any check fails. Additive: profile configs are
+ * optional, so a fleet with none is untouched.
+ */
+async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
+	const profileId = flagString(flags, "profile");
+	if (profileId === undefined) {
+		throw new CliError("usage: omp-fleet preflight --profile <id>");
+	}
+	const configPath = resolveConfigPath();
+	const config = await loadConfig(configPath);
+	const profile = config.providerProfiles?.[profileId];
+	if (profile === undefined) {
+		throw new CliError(
+			`no provider profile "${profileId}" in ${configPath} — configure providerProfiles."${profileId}" first`,
+		);
+	}
+	const dataHome = dirname(configPath);
+	const result = await runProfilePreflight(profile, {
+		workspaceRoot: config.workspaceDir,
+		logsRoot: join(dataHome, "logs"),
+		// The bwrap provider is not yet wired into a live fleet serve in this
+		// lane (P6); a callback URL is only reachability-class-checked once
+		// the fleet has one to pass.
+	});
+	const lines: string[] = [`profile ${profile.id}: ${result.ok ? "ready" : "NOT ready"}`];
+	for (const check of result.checks) {
+		lines.push(`  [${check.ok ? "ok" : "FAIL"}] ${check.name}: ${check.detail}`);
+		if (!check.ok && check.remediation !== undefined) {
+			lines.push(`      fix: ${check.remediation}`);
+		}
+	}
+	console.log(lines.join("\n"));
+	return result.ok ? 0 : 1;
+}
+
+/** rm-worktree <daemon-id> [--delete-branch]: stop + evict + git worktree
+ *  remove (worktree kind), or the verify-at-deletion gate for clone
+ *  workspaces (same DELETE route; the server dispatches by kind). */
 async function rmWorktreeCmd(
 	positionals: string[],
 	flags: Map<string, FlagValue>,
@@ -630,15 +791,17 @@ async function rmWorktreeCmd(
 		method: "DELETE",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(deleteBranch === true ? { deleteBranch: true } : {}),
-	})) as { removed?: unknown; worktree?: { path?: string; branch?: string } };
+	})) as { removed?: unknown; worktree?: { path?: string; branch?: string }; verified?: unknown[] };
 	const wt = body.worktree ?? {};
 	const parts = [
 		String(wt.path ?? ""),
 		wt.branch !== undefined ? `branch ${wt.branch}` : "",
 	].filter((part) => part !== "");
-	console.log(
-		`removed worktree daemon ${String(body.removed ?? daemonId)}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`,
-	);
+	const removedLabel =
+		body.verified !== undefined
+			? `removed clone workspace daemon ${String(body.removed ?? daemonId)} (verified ${(body.verified as unknown[]).length} session${(body.verified as unknown[]).length === 1 ? "" : "s"})`
+			: `removed worktree daemon ${String(body.removed ?? daemonId)}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
+	console.log(removedLabel);
 	return 0;
 }
 
@@ -689,6 +852,44 @@ async function provisionCmd(
 	})) as Record<string, unknown>;
 	console.log(
 		`provisioned ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`,
+	);
+	return 0;
+}
+
+/**
+ * start <selector>: fleet-side ensure-running for a clone workspace
+ * (POST /ctl/start, server alias of /ctl/wake; P6.1). The route accepts a
+ * daemon id only, so the selector (id or exact roster name) is resolved
+ * client-side against /ctl/sessions first. The server refuses non-clone
+ * entries — direct/template sessions keep /ctl/spawn.
+ */
+async function startCmd(
+	positionals: string[],
+	_flags: Map<string, FlagValue>,
+	port: number,
+): Promise<number> {
+	const selector = positionals[0];
+	if (selector === undefined) throw new CliError("usage: omp-fleet start <selector>");
+	const roster = await ctl(port, "/ctl/sessions");
+	if (!Array.isArray(roster)) throw new CliError("unexpected sessions response");
+	const matches = (roster as unknown[])
+		.filter(isDaemonRow)
+		.filter((row) => row.daemonId === selector || row.name === selector);
+	if (matches.length === 0) {
+		throw new CliError(`no session matches selector: ${selector}`);
+	}
+	const first = matches[0];
+	if (matches.some((row) => row.daemonId !== first.daemonId)) {
+		throw new CliError(`selector ${selector} matches multiple daemons — use a daemon id`);
+	}
+	const body = (await ctl(port, "/ctl/start", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ daemonId: first.daemonId }),
+	})) as { observed?: string; pid?: number };
+	console.log(
+		`started ${first.daemonId} — observed ${String(body.observed ?? "?")}` +
+			(body.pid !== undefined ? ` (pid ${body.pid})` : ""),
 	);
 	return 0;
 }
@@ -782,13 +983,18 @@ commands:
   serve                        run the control plane (loopback HTTP)
   sessions                     list sessions
   projects                     list discovered projects
+  profiles                     list provider profiles (secret-free catalog)
   spawn <path> [--template t] [--name n] [--label k=v]…
   add-repo <path> [--start] [--template t] [--labels k=v,...]
   add <name> <url> --token <t> [--label k=v]… [--cwd c]
   provision <name> [--label k=v]…
+  add-clone <project> <name> --profile <id> [--local path | --remote url]
+                               [--revision rev] [--branch b] [--no-start]
+  start <selector>             ensure a clone workspace is running (wake)
   stop <selector>
   remove <selector>
   rm-project <selector>
+  preflight --profile <id>
   add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]
   add-worktree <project> --existing <path> [--no-start]
   rm-worktree <daemon-id> [--delete-branch]
@@ -797,7 +1003,20 @@ commands:
 options:
   --port <n>           control plane port (default 4722, env OMP_FLEET_PORT)
   --workspace-dir <d>  managed worktree root (default ~/.omp-web/workspaces,
-                       env OMP_FLEET_WORKSPACE_DIR)`;
+                       env OMP_FLEET_WORKSPACE_DIR)
+  --bind <addr>        control plane + browser edge bind address (default
+                       127.0.0.1, env OMP_FLEET_BIND)
+  --browser-access-token <t>
+                       browser-auth operator token; stored only as its
+                       sha-256 digest (env OMP_FLEET_BROWSER_TOKEN)
+  --browser-origin <o> browser origin admitted for mutations alongside the
+                       loopback-dev exception (env OMP_FLEET_BROWSER_ORIGIN)
+  --trusted-proxy <ip-or-cidr>
+                       trusted reverse proxy whose X-Forwarded-For / -Proto
+                       headers are honored (repeatable; env
+                       OMP_FLEET_TRUSTED_PROXY csv, config trustedProxies
+                       key); forwarded headers are ignored from any other
+                       peer — never trusted by default`;
 
 export async function main(argv: string[]): Promise<number> {
 	try {
@@ -812,11 +1031,18 @@ export async function main(argv: string[]): Promise<number> {
 				console.log(USAGE);
 				return 0;
 			case "serve":
-				return await serveCmd(port, flagString(flags, "workspace-dir"));
+				return await serveCmd(port, flagString(flags, "workspace-dir"), {
+					bind: flagString(flags, "bind"),
+					browserAccessToken: flagString(flags, "browser-access-token"),
+					browserOrigin: flagString(flags, "browser-origin"),
+					trustedProxy: trustedProxyList(flags),
+				});
 			case "sessions":
 				return await sessionsCmd(port);
 			case "projects":
 				return await projectsCmd(port);
+			case "profiles":
+				return await profilesCmd(port);
 			case "spawn":
 				return await spawnCmd(rest, flags, port);
 			case "add-repo":
@@ -825,12 +1051,20 @@ export async function main(argv: string[]): Promise<number> {
 				return await addCmd(rest, flags, port);
 			case "provision":
 				return await provisionCmd(rest, flags, port);
+			case "add-clone":
+				return await addCloneCmd(rest, flags, port);
+			case "start":
+				return await startCmd(rest, flags, port);
 			case "stop":
 				return await stopCmd(rest, flags, port);
 			case "remove":
 				return await removeCmd(rest, flags, port);
 			case "rm-project":
 				return await rmProjectCmd(rest, flags, port);
+			case "preflight":
+				// Local verb: no control plane needed, but resolvePort stays
+				// consistent with every other invocation.
+				return await preflightCmd(flags);
 			case "add-worktree":
 				return await addWorktreeCmd(rest, flags, port);
 			case "rm-worktree":

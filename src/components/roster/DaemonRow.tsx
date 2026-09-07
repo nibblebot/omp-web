@@ -8,11 +8,17 @@ import {
 	Show,
 	type Component,
 } from "solid-js";
-import type { DaemonEntry, DaemonStatus, SessionListEntry } from "../../../shared/protocol";
+import type {
+	DaemonEntry,
+	DaemonStatus,
+	LifecycleStage,
+	SessionListEntry,
+} from "../../../shared/protocol";
 import { sessionActivity, type SessionActivity } from "../../fleet-ui/session-activity";
 import { unreadIds } from "../../fleet-ui/unread";
 import {
 	attachSession,
+	call,
 	removeDaemonById,
 	requestDaemonSessions,
 	resumeDaemonSession,
@@ -25,7 +31,15 @@ import {
 import { ConfirmButton } from "../shared/ConfirmButton";
 import { KebabMenu } from "../shared/KebabMenu";
 import { useClickableRow } from "../shared/PickerRow";
-import { FileIcon, InfoIcon, RootIcon, StopIcon, TrashIcon, XIcon } from "../shared/icons";
+import {
+	ChevronRightIcon,
+	FileIcon,
+	InfoIcon,
+	RootIcon,
+	StopIcon,
+	TrashIcon,
+	XIcon,
+} from "../shared/icons";
 import { DaemonDetailView } from "./DaemonDetailView";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +96,16 @@ const STATUS_TITLE: Record<DaemonStatus, string> = {
 	asleep: "asleep — click to wake and attach",
 	reconnecting: "reconnecting…",
 	error: "error — see details",
+};
+
+/** Provider lifecycle stage copy for clone rows (P8.1; only stages that need
+ *  row presence render — "ready" is implied by the ready status dot). */
+const LIFECYCLE_LABEL: Record<NonNullable<RosterEntry["lifecycleStage"]>, string> = {
+	preparation: "preparing workspace",
+	runtime: "starting runtime",
+	callback: "connecting channel",
+	ready: "ready",
+	failed: "failed",
 };
 
 /** Which row's "⋯" actions menu is open, if any. Module-level for the same
@@ -153,10 +177,26 @@ export const DaemonRow: Component<{
 	// dirs — the branch (or name fallback) becomes the title and the project
 	// chip + cwd path are dropped so the row never shows the directory.
 	const isWorktree = () => d().worktreeOf !== undefined;
+	// Provider-run clone workspaces (P8.1): independent checkouts that must
+	// NOT read as the project's main checkout (which would put a root glyph
+	// on them and hide the group's Start action).
+	const isClone = () => d().workspaceKind === "clone";
+	/** The clone's fleet profile record, when the catalog still has it. */
+	const cloneProfile = () =>
+		isClone() && d().providerProfileId !== undefined
+			? state.providerProfiles.find((p) => p.id === d().providerProfileId)
+			: undefined;
 	// Root rows are a project group's MAIN worktree: the header already names
 	// the project, so the row distills to a root glyph + branch-as-title (the
 	// worktree profile, unindented) and drops the project chip + cwd line.
-	const isRoot = () => props.inProjectGroup === true && !isWorktree();
+	// Clones are siblings of the main checkout — never root rows.
+	const isRoot = () => props.inProjectGroup === true && !isWorktree() && !isClone();
+	/** Non-ready provider lifecycle stage for clone rows, else undefined —
+	 *  Show narrows the child callback to the stage STRING (never `true`). */
+	const activeStage = (): Exclude<LifecycleStage, "ready"> | undefined => {
+		const st = d().lifecycleStage;
+		return isClone() && st !== undefined && st !== "ready" ? st : undefined;
+	};
 	const isAttached = () => d().daemonId === state.currentSessionId;
 	/** Activity dot for THIS row, derived from the attached session's live
 	 *  signals (state.streaming / state.uiRequest / state.answerUnviewed —
@@ -289,6 +329,7 @@ export const DaemonRow: Component<{
 					"daemon-row--nested": props.nested === true,
 					"daemon-row--worktree": isWorktree(),
 					"daemon-row--root": isRoot(),
+					"daemon-row--clone": isClone(),
 				}}
 				{...useClickableRow(rowClick, clickable())}
 				title={
@@ -343,28 +384,92 @@ export const DaemonRow: Component<{
 							}}
 						>
 							{/* An asleep daemon has no live process — "Stop" is
-							    meaningless there; Remove covers roster cleanup. */}
+							    meaningless there; Remove covers roster cleanup
+							    (clones delete through the verified gate instead).
+							    Asleep clones get an explicit wake/start item — the
+							    backend routes the same wake command through the
+							    lifecycle service. */}
+							<Show when={isClone() && d().status === "asleep"}>
+								<button
+									type="button"
+									role="menuitem"
+									class="sidebar-menu-item"
+									title="Starts the clone workspace (checkout and session logs are preserved)"
+									onClick={() => {
+										setMenuOpenId(null);
+										spawnResume(d().daemonId);
+									}}
+								>
+									<ChevronRightIcon />
+									Start workspace
+								</button>
+							</Show>
 							<Show when={d().status !== "asleep"}>
 								<ConfirmButton
 									role="menuitem"
 									class="sidebar-menu-item"
-									label="Stop daemon"
+									label={isClone() ? "Stop workspace" : "Stop daemon"}
 									confirmLabel="Confirm stop"
+									title={
+										isClone()
+											? "Stops the clone's compute — checkout and session logs are preserved"
+											: "Stops the daemon"
+									}
 									onConfirm={() => doStop()}
 								>
 									<StopIcon />
 								</ConfirmButton>
 							</Show>
-							<ConfirmButton
-								role="menuitem"
-								class="sidebar-menu-item"
-								label="Remove daemon"
-								confirmLabel="Confirm remove"
-								title="Removes the daemon from the roster (stops it first)"
-								onConfirm={() => doRemove()}
-							>
-								<XIcon />
-							</ConfirmButton>
+							{/* Clones are managed workspaces: removing them from the
+							    roster must never bypass the verified-delete gate, and
+							    ordinary stop and stopping the CURRENT WORK are separate
+							    actions. Stop-current-work needs the live session pipe,
+							    so it exists only for the attached row (the chat Stop
+							    button is its always-visible twin); the delete dialog
+							    tells the operator to stop active work first when the
+							    gate refuses. */}
+							<Show when={isClone()}>
+								<Show when={isAttached()}>
+									<button
+										type="button"
+										role="menuitem"
+										class="sidebar-menu-item"
+										title="Interrupts the running turn — the workspace keeps running"
+										onClick={() => {
+											setMenuOpenId(null);
+											void call("abort").catch((err) => setState("error", String(err)));
+										}}
+									>
+										<StopIcon />
+										Stop current work
+									</button>
+								</Show>
+								<button
+									type="button"
+									role="menuitem"
+									class="sidebar-menu-item sidebar-menu-item--danger"
+									title="Verified delete: refuses active work, verifies the fleet transcript store, then removes compute, storage, and the checkout"
+									onClick={() => {
+										setMenuOpenId(null);
+										setState("deleteWorkspaceTarget", d().daemonId);
+									}}
+								>
+									<TrashIcon />
+									Delete workspace…
+								</button>
+							</Show>
+							<Show when={!isClone()}>
+								<ConfirmButton
+									role="menuitem"
+									class="sidebar-menu-item"
+									label="Remove daemon"
+									confirmLabel="Confirm remove"
+									title="Removes the daemon from the roster (stops it first)"
+									onConfirm={() => doRemove()}
+								>
+									<XIcon />
+								</ConfirmButton>
+							</Show>
 							<button
 								type="button"
 								role="menuitem"
@@ -389,7 +494,7 @@ export const DaemonRow: Component<{
 									onClick={() => {
 										setMenuOpenId(null);
 										sendWorktreeDeleteInfo(d().daemonId);
-										setState("deleteWorktreeTarget", d().daemonId);
+										setState("deleteWorkspaceTarget", d().daemonId);
 									}}
 								>
 									<TrashIcon />
@@ -425,6 +530,21 @@ export const DaemonRow: Component<{
 					</Show>
 					<Show when={!isWorktree() && !isRoot()}>
 						<div class="daemon-chips">
+							<Show when={isClone()}>
+								<span class="daemon-chip daemon-chip--kind" title="Provider-run clone workspace">
+									clone
+								</span>
+							</Show>
+							<Show when={cloneProfile()}>
+								{(p) => (
+									<span
+										class="daemon-chip daemon-chip--profile"
+										title={`profile ${p().id} (${p().provider})`}
+									>
+										{p().id}
+									</span>
+								)}
+							</Show>
 							<span class="daemon-chip" title={d().cwd}>
 								{d().project}
 							</span>
@@ -439,6 +559,43 @@ export const DaemonRow: Component<{
 						<div class="daemon-cwd" title={d().cwd}>
 							{d().cwd}
 						</div>
+					</Show>
+					{/* Provider lifecycle progress (P8.1): preparation → runtime →
+					    callback → ready, shown while a clone workspace is being
+					    created/recovered; "ready" renders nothing extra (the status
+					    dot already says it). A failed stage is actionable: the
+					    lifecycle error text plus a Retry that re-issues the wake
+					    command the backend routes to the lifecycle service.
+					    activeStage() gates the Show, so the callback narrows to
+					    the stage string, not `true`. */}
+					<Show when={activeStage()}>
+						{(stage) => (
+							<div
+								class="daemon-stage"
+								classList={{ "daemon-stage--failed": stage() === "failed" }}
+								role="status"
+							>
+								<Show when={stage() === "failed"}>
+									<span class="daemon-stage-error">
+										{d().lifecycleError ?? "workspace lifecycle failed"}
+									</span>
+									<button
+										type="button"
+										class="daemon-stage-retry"
+										title="Retry the workspace start (backend admission applies)"
+										onClick={(e) => {
+											e.stopPropagation();
+											spawnResume(d().daemonId);
+										}}
+									>
+										Retry
+									</button>
+								</Show>
+								<Show when={stage() !== "failed"}>
+									<span class="daemon-stage-label">{LIFECYCLE_LABEL[stage()]}…</span>
+								</Show>
+							</div>
+						)}
 					</Show>
 					{/* Root rows drop the project chip + cwd (the group header and
 					    title tooltip carry them) but keep label chips — labels are

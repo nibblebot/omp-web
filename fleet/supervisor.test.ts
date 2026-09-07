@@ -227,6 +227,7 @@ function makeConfig(script: string): FleetConfig {
 		templates: { test: { command: `sh ${script} {token} {labels} {resume}` } },
 		defaultTemplate: "test",
 		workspaceDir: "/tmp/fleet-test-ws",
+		bind: "127.0.0.1",
 	};
 }
 
@@ -243,6 +244,7 @@ function makeTierConfig(
 		},
 		defaultTemplate: "test",
 		workspaceDir: "/tmp/fleet-test-ws",
+		bind: "127.0.0.1",
 		...(projectTemplates !== undefined ? { projectTemplates } : {}),
 	};
 }
@@ -727,6 +729,7 @@ describe("SpawnSupervisor", () => {
 			},
 			defaultTemplate: "test",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const registry = await loadedRegistry();
 		const connector = makeConnector(registry);
@@ -970,6 +973,7 @@ describe("SpawnSupervisor", () => {
 			templates: { test: { command: `sh ${script} {token} {labels} {resume}`, host: "bad host" } },
 			defaultTemplate: "test",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = makeSupervisor(registry, connector, config, { restartMax: 2 });
 
@@ -1381,6 +1385,7 @@ describe("SpawnSupervisor", () => {
 			templates: { test: { command: "sh /nonexistent " } },
 			defaultTemplate: "missing",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor2 = makeSupervisor(registry, connector, missingDefault, { restartMax: 0 });
 		expect(() => supervisor2.resolveTemplateName("/x")).toThrow("unknown spawn template: missing");

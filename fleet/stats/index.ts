@@ -35,6 +35,14 @@ export function createStatsApp(cfg?: Partial<StatsConfig> & { syncRunner?: SyncR
 		configRoot: cfg?.configRoot ?? defaults.configRoot,
 		statsDbPath: cfg?.statsDbPath ?? defaults.statsDbPath,
 		sessionsDir: cfg?.sessionsDir ?? defaults.sessionsDir,
+		...(cfg?.stored
+			? {
+					stored: {
+						store: cfg.stored.store,
+						...(cfg.stored.provenance ? { provenance: cfg.stored.provenance } : {}),
+					},
+				}
+			: {}),
 	};
 	const dbm = new StatsDbManagerImpl(config.statsDbPath);
 	const ctx: AppCtx = {

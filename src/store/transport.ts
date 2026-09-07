@@ -1,6 +1,7 @@
 import type { ClientCommand, DaemonInfo, ServerFrame, WebMethodName } from "../../shared/protocol";
 import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
 import { setState, state } from "../state";
+import { authedFetch } from "./auth";
 
 /**
  * Transport domain (Phase 3 store facade split): the RPC/relay layer —
@@ -56,7 +57,14 @@ export const clientId = crypto.randomUUID();
  * caller's pending promise settles instead of hanging until timeout.
  */
 export function postCommand(cmd: ClientCommand): Promise<void> {
-	return fetch("/command", {
+	// Browser auth (P2.4): with a server-side session (signedIn/signedOut/
+	// unknown) the /command uplink rides authedFetch — the session cookie is
+	// the credential and a 401 transitions to signedOut (sign-in modal). When
+	// auth is DISABLED the path stays a plain fetch: byte-identical behavior
+	// to before this integration, no probe, no CSRF.
+	const authOn = state.authStatus !== "disabled";
+	const doFetch = authOn ? authedFetch : fetch;
+	return doFetch("/command", {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",

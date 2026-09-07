@@ -5,20 +5,47 @@ import { XIcon } from "../components/shared/icons";
 import { setTxSidebarVisible, state } from "../state";
 import { TranscriptDetail } from "./components/TranscriptDetail";
 import { TranscriptList } from "./components/TranscriptList";
-import { decodeFileFromHash, encodePathSegments } from "./util/format";
+import { StoredList } from "./components/StoredList";
+import { StoredDetail } from "./components/StoredDetail";
+import { ResumeCloneDialog } from "./components/ResumeCloneDialog";
+import { decodeFileFromHash, encodePathSegments, formatBytes } from "./util/format";
+type Route =
+	| { view: "list" }
+	| { view: "session"; file: string }
+	| { view: "stored"; workspaceId: string; sessionId: string };
 
-type Route = { view: "list" } | { view: "session"; file: string };
+/** Decode a single individually-encoded path segment; null on malformed input. */
+function decodeSegment(encoded: string): string | null {
+	try {
+		return decodeURIComponent(encoded);
+	} catch {
+		return null;
+	}
+}
 
 /** Parse `#/s/<encoded-file>` (segments individually encoded, `/` separators literal). */
 function parseHash(): Route {
 	const raw = window.location.hash.replace(/^#\/?/, "");
 	if (raw === "" || raw === "/") return { view: "list" };
 	const parts = raw.split("/");
-	if (parts[0] !== "s") return { view: "list" };
-	const encoded = parts.slice(1).join("/");
-	if (encoded === "") return { view: "list" };
-	const file = decodeFileFromHash(encoded);
-	return file !== null ? { view: "session", file } : { view: "list" };
+	if (parts[0] === "s") {
+		const encoded = parts.slice(1).join("/");
+		if (encoded === "") return { view: "list" };
+		const file = decodeFileFromHash(encoded);
+		return file !== null ? { view: "session", file } : { view: "list" };
+	}
+	// #/stored/<workspaceId>/<sessionId> — each exactly one safe segment.
+	if (parts[0] === "stored") {
+		if (parts.length !== 3) return { view: "list" };
+		const wsEncoded = parts[1];
+		const sidEncoded = parts[2];
+		if (wsEncoded === "" || sidEncoded === "") return { view: "list" };
+		const workspaceId = decodeSegment(wsEncoded);
+		const sessionId = decodeSegment(sidEncoded);
+		if (workspaceId === null || sessionId === null) return { view: "list" };
+		return { view: "stored", workspaceId, sessionId };
+	}
+	return { view: "list" };
 }
 
 /**
@@ -45,6 +72,10 @@ export function TxBrowser() {
 	/** An errored Solid resource throws when read — check .error first. */
 	const healthSafe = () => (health.error ? undefined : health());
 
+	const storedRoute = () => {
+		const r = route();
+		return r.view === "stored" ? r : null;
+	};
 	const file = () => {
 		const r = route();
 		return r.view === "session" ? r.file : null;
@@ -52,6 +83,12 @@ export function TxBrowser() {
 
 	const navigate = (f: string) => {
 		window.location.hash = `#/s/${encodePathSegments(f)}`;
+	};
+
+	const navigateStored = (workspaceId: string, sessionId: string) => {
+		window.location.hash = `#/stored/${encodePathSegments(workspaceId)}/${encodePathSegments(
+			sessionId,
+		)}`;
 	};
 
 	// Missing-file fallback (TranscriptList observes the loaded sessions):
@@ -80,10 +117,19 @@ export function TxBrowser() {
 				<TranscriptList
 					selectedFile={file()}
 					onOpen={navigate}
+					onOpenStored={navigateStored}
 					onMissingFile={handleMissingFile}
 					health={healthSafe}
 					syncTick={syncTick}
 					onSynced={bumpSync}
+				/>
+				{/* Fleet log-store browsing (P8.5) sits beneath the local
+				    transcript list in the same scroll surface. */}
+				<StoredList
+					selectedWorkspaceId={storedRoute()?.workspaceId ?? null}
+					selectedSessionId={storedRoute()?.sessionId ?? null}
+					onOpenSession={navigateStored}
+					syncTick={syncTick}
 				/>
 			</aside>
 			{/* Narrow-viewport slide-out: tapping outside the overlay sidebar
@@ -100,10 +146,13 @@ export function TxBrowser() {
 			</Show>
 			<main class="tx-main">
 				<HealthBanner health={healthSafe} onSynced={bumpSync} />
+				<Show when={storedRoute()} keyed>
+					{(r) => <StoredDetail workspaceId={r.workspaceId} sessionId={r.sessionId} />}
+				</Show>
 				<Show when={file()} keyed>
 					{(f) => <TranscriptDetail file={f} syncTick={syncTick} onSynced={bumpSync} />}
 				</Show>
-				<Show when={!file()}>
+				<Show when={!file() && !storedRoute()}>
 					<div class="tx-empty-state">
 						<h2>Transcripts</h2>
 						<p>Browse every omp agent session: analytics, transcripts, and subagents.</p>
@@ -111,6 +160,7 @@ export function TxBrowser() {
 					</div>
 				</Show>
 			</main>
+			<ResumeCloneDialog />
 		</div>
 	);
 }
@@ -134,45 +184,64 @@ function HealthBanner(props: { health: () => Health | undefined; onSynced: () =>
 
 	return (
 		<Show when={props.health()} fallback={null}>
-			{(h) =>
-				h().statsDb !== "ok" ? (
-					<div
-						classList={{
-							"health-banner": true,
-							warn: h().statsDb === "missing",
-							error: h().statsDb === "error",
-						}}
-					>
-						<Show
-							when={h().statsDb === "missing"}
-							fallback={
-								<span class="banner-msg">
-									stats.db could not be opened at <code>{h().statsDbPath}</code>
-								</span>
-							}
-						>
-							<span class="banner-msg">
-								stats.db not found — run <code>omp stats</code> once to build the index
-							</span>
-						</Show>
-						<button
-							type="button"
-							class="btn btn-small"
-							disabled={syncing()}
-							onClick={() => void runSync()}
-						>
-							{syncing() ? "Syncing…" : "Sync now"}
-						</button>
-						<Show when={syncError()}>
-							{(e) => (
-								<span class="banner-error" role="alert">
-									Sync failed: {e()}
-								</span>
+			{(h) => {
+				const fleetStore = () => {
+					const hh = h();
+					return hh.fleetStore !== undefined && hh.statsDb === "ok" ? hh.fleetStore : undefined;
+				};
+				return (
+					<>
+						<Show when={fleetStore()} keyed>
+							{(fs) => (
+								<div class="health-banner store-line">
+									<span class="banner-msg">
+										fleet store: {fs.workspaces} {fs.workspaces === 1 ? "workspace" : "workspaces"}{" "}
+										· {fs.sessions} {fs.sessions === 1 ? "session" : "sessions"} ·{" "}
+										{formatBytes(fs.bytes)}
+									</span>
+								</div>
 							)}
 						</Show>
-					</div>
-				) : null
-			}
+						<Show when={h().statsDb !== "ok"} fallback={null}>
+							<div
+								classList={{
+									"health-banner": true,
+									warn: h().statsDb === "missing",
+									error: h().statsDb === "error",
+								}}
+							>
+								<Show
+									when={h().statsDb === "missing"}
+									fallback={
+										<span class="banner-msg">
+											stats.db could not be opened at <code>{h().statsDbPath}</code>
+										</span>
+									}
+								>
+									<span class="banner-msg">
+										stats.db not found — run <code>omp stats</code> once to build the index
+									</span>
+								</Show>
+								<button
+									type="button"
+									class="btn btn-small"
+									disabled={syncing()}
+									onClick={() => void runSync()}
+								>
+									{syncing() ? "Syncing…" : "Sync now"}
+								</button>
+								<Show when={syncError()}>
+									{(e) => (
+										<span class="banner-error" role="alert">
+											Sync failed: {e()}
+										</span>
+									)}
+								</Show>
+							</div>
+						</Show>
+					</>
+				);
+			}}
 		</Show>
 	);
 }

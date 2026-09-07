@@ -237,6 +237,7 @@ async function readyEntry(fake: FakeServer): Promise<{
 		templates: {},
 		defaultTemplate: "local",
 		workspaceDir: "/tmp/fleet-test-ws",
+		bind: "127.0.0.1",
 	};
 	const supervisor = new SpawnSupervisor(registry, connector, config);
 	const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
@@ -383,6 +384,7 @@ describe("promptEntry", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));
@@ -417,6 +419,7 @@ describe("promptEntry", () => {
 			templates: {},
 			defaultTemplate: "local",
 			workspaceDir: "/tmp/fleet-test-ws",
+			bind: "127.0.0.1",
 		};
 		const supervisor = new SpawnSupervisor(registry, connector, config);
 		const entry = registry.create(baseInit({ endpoint: fake.url, token: "tok-a" }));

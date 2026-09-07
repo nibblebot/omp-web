@@ -1,25 +1,48 @@
 #!/usr/bin/env bun
 /**
  * build (`bun run build`) — produce the installable omp-web bundle
- * (dist-bundle/cli.js).
+ * (dist-bundle/cli.js + dist-bundle/providers/* + dist-bundle/image/*).
  *
  * UI-embed pipeline: vite build → regenerate server/embedded-dist.ts →
  * restore the stub in a finally. Then the cli/omp-web.ts dispatcher is
  * bundled with bun build (NOT --compile): all @oh-my-pi/* packages stay
  * external because `bun install -g` installs them as real dependencies
- * next to the bundle — hence no pi-natives embed.
+ * next to the bundle — hence no pi-natives embed. The provider executables
+ * (runtime/providers/*.ts) get the same single-file treatment into
+ * dist-bundle/providers/ with shebang + exec bit preserved — the installed
+ * fleet spawns them directly. The reproducible session-runtime image
+ * definition (runtime/image/) is copied verbatim into dist-bundle/image/.
  * The package version is stamped in via define so `--version` works from an
  * arbitrary cwd without a path-based package.json lookup.
  */
 
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+	chmodSync,
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 
 const STUB = `export const EMBEDDED_DIST: Record<string, string> = {};\n`;
 const ROOT = join(import.meta.dir, "..");
 const EMBEDDED_DIST_FILE = join(ROOT, "server", "embedded-dist.ts");
 const DIST_DIR = join(ROOT, "dist");
 const OUTFILE = join(ROOT, "dist-bundle", "cli.js");
+const PROVIDERS_DIR = join(ROOT, "dist-bundle", "providers");
+/** Provider executables (P9.1): key = shipped filename, value = source entry. */
+const PROVIDER_SOURCES: Record<string, string> = {
+	"bwrap-provider.js": join(ROOT, "runtime", "providers", "bwrap-provider.ts"),
+	"kubernetes-provider.js": join(ROOT, "runtime", "providers", "kubernetes-provider.ts"),
+};
+/** Reproducible session-runtime image definition, shipped verbatim. */
+const IMAGE_SRC = join(ROOT, "runtime", "image");
+const IMAGE_DST = join(ROOT, "dist-bundle", "image");
 
 /** Recursively list file paths under `dir`, slash-normalized, relative to `base`. */
 function listFiles(dir: string, base: string): string[] {
@@ -36,6 +59,15 @@ function listFiles(dir: string, base: string): string[] {
 			);
 	}
 	return out;
+}
+
+/** Copy every file under `src` into `dst`, preserving the relative layout. */
+function copyDir(src: string, dst: string): void {
+	for (const rel of listFiles(src, src)) {
+		const to = join(dst, rel);
+		mkdirSync(dirname(to), { recursive: true });
+		copyFileSync(join(src, rel), to);
+	}
 }
 
 /** Build the temporary embedded-dist.ts module for the current dist/ contents. */
@@ -108,7 +140,53 @@ try {
 	if (head !== "#!/usr/bin/env bun") {
 		throw new Error(`bundle lost its shebang (got ${JSON.stringify(head)}…)`);
 	}
+	// 5. Provider executables (P9.1): one single-file bundle per provider,
+	//    shipped next to cli.js. The installed fleet runs these files
+	//    directly (`<executable> <op>` with one JSON request on stdin), so
+	//    both the shebang AND the exec bit are hard contracts. Missing
+	//    sources fail the build loudly — a package silently missing a
+	//    provider is not an installable product.
+	mkdirSync(PROVIDERS_DIR, { recursive: true });
+	for (const source of Object.values(PROVIDER_SOURCES)) {
+		if (!existsSync(source)) {
+			throw new Error(
+				`provider entrypoint missing: ${source} — the provider lane must land it before the build gate`,
+			);
+		}
+	}
+	const providerBuild = await Bun.build({
+		entrypoints: Object.values(PROVIDER_SOURCES),
+		outdir: PROVIDERS_DIR,
+		minify: true,
+		target: "bun",
+		external: ["@oh-my-pi/*"],
+	});
+	if (!providerBuild.success) {
+		throw new Error(providerBuild.logs.map((log) => log.message).join("\n"));
+	}
+	for (const output of providerBuild.outputs) {
+		chmodSync(output.path, 0o755);
+		const providerHead = readFileSync(output.path, "utf8").slice(0, 18);
+		if (providerHead !== "#!/usr/bin/env bun") {
+			throw new Error(`provider bundle lost its shebang (got ${JSON.stringify(providerHead)}…)`);
+		}
+	}
+	// 6. Reproducible session-runtime image definition (P9.1): ship the
+	//    Containerfile + entrypoint verbatim under dist-bundle/image/. The
+	//    image build consumes the repo root as its context, so the shipped
+	//    copy stays byte-identical to runtime/image/.
+	if (!existsSync(join(IMAGE_SRC, "Containerfile"))) {
+		throw new Error(
+			`runtime image definition missing under ${IMAGE_SRC} — the Kubernetes lane must land it before the build gate`,
+		);
+	}
+	copyDir(IMAGE_SRC, IMAGE_DST);
 	console.log(`built ${OUTFILE}`);
+	console.log(
+		`shipped providers + image: ${Object.keys(PROVIDER_SOURCES)
+			.map((name) => join("dist-bundle", "providers", name))
+			.join(", ")}; dist-bundle/image/`,
+	);
 } finally {
 	// embedded-dist.ts stays a stub in the tree; it exists only for the build.
 	writeFileSync(EMBEDDED_DIST_FILE, STUB);

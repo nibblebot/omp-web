@@ -1,29 +1,62 @@
 # omp-web
 
-omp-web is a **web UI for running multiple oh-my-pi sessions, across all your repos and worktrees**: one installed command, one browser UI, N agent sessions.
+omp-web is a **web UI for running multiple oh-my-pi sessions, across all your repos, worktrees, and independent clone workspaces**: one installed command, one browser UI, N agent sessions.
 
 Because it drives the agent through the SDK instead of the RPC, omp-web has full daemon and subagent control; RPC-based GUIs don't.
 
 <img id="omp-web-demo" src="docs/screenshots/omp-web-demo.gif" alt="omp-web UI demo" width="800">
 
 
-> **⚠ Early-stage software.** omp-web is under active development and has sharp edges. Expect breaking changes between releases: the wire protocol, config/state formats, and UI are not yet stable. Session transcripts are durable `.jsonl` files, but the surrounding tooling (fleet state, config, managed worktrees) is still evolving; don't treat this as production data storage yet. Report issues and rough spots as you find them.
+> **⚠ Early-stage software.** omp-web is under active development and has sharp edges. Expect breaking changes between releases: the wire protocol, config/state formats, and UI are not yet stable. Session transcripts are durable `.jsonl` files and the fleet mirrors them continuously, but the surrounding tooling (fleet state, config, managed worktrees, clone workspaces and their provider profiles) is still evolving; don't treat this as production data storage yet. Report issues and rough spots as you find them.
 
 ## Features
 
-- **Multiple Repos, Multiple Worktrees, Multiple Sessions, one UI.** Start, monitor, and chat with one agent daemon per worktree across every repo.
+- **Multiple Repos, Worktrees, and Clones, one UI.** Start, monitor, and chat with one agent daemon per worktree or per independent clone workspace across every repo.
 - **A full web UI, not a terminal wrapper.** Live-streamed responses, rendered markdown and diffs, tool output, slash commands, prompt history and autocomplete, per-session context/usage meters, and a transcripts/stats view.
 - **Custom wire protocol for full SDK control.** The SSE + POST contract carries the full SDK surface, including daemon and subagent control the RPC doesn't expose.
-- **Manage repos and worktrees from the UI.** Register projects (deduped by realpath), create or adopt managed worktrees, and delete them safely: clean-tree-only, `git branch -d`, no `--force`.
+- **Manage repos, worktrees, and clones from the UI.** Register projects (deduped by realpath); create or adopt managed worktrees; or create independent clone workspaces through a declared provider profile (sandboxed bwrap or Kubernetes). Managed worktrees delete safely: clean-tree-only, `git branch -d`, no `--force`. Clone workspaces delete only through the verified-deletion gate (see [`docs/architecture.md`](docs/architecture.md)); remove and worktree delete both route through that same gate for clone entries.
 - **CLI for automation.** Spawn, stop, remove, inspect, and fan a prompt out to many daemons from the terminal, the same fleet the browser talks to.
 - **Self-updating.** `omp-web update` checks the release channel and reinstalls the latest version in one command.
-- **Self-healing.** Idle daemons exit after 30 minutes and are respawned on demand; crashed daemons restart with bounded backoff; dropped connections show `reconnecting` and browsers re-attach automatically.
+- **Self-healing.** Idle daemons exit after 30 minutes and are respawned on demand; crashed daemons restart with bounded backoff; dropped connections show `reconnecting` and browsers re-attach automatically. Clone workspaces add an explicit stop/wake lifecycle: stop preserves the workspace volume and session logs, wake re-provisions compute and resumes the last session (cold volumes materialize the transcript from the fleet store first).
 
 ## Runtime modes
 
-- **Fleet Mode** (`omp-web`): starts the fleet (registry + supervisor + UI server); the browser talks to the fleet, manages repos and worktree state, and proxies you through to any daemon.
+- **Fleet Mode** (`omp-web`): starts the fleet (registry + supervisor + UI server); the browser talks to the fleet, manages repos, worktrees, and clone workspaces, and proxies you through to any daemon.
 - **Single Session Mode** (`omp-web session`): the browser talks to one session daemon directly; the daemon serves the full single-session UI.
 - **Sessions run as separate processes**: one worktree directory each, bound at spawn. A daemon hosts one live agent session in-process via the SDK (no child-process JSON-RPC hop) and serves the UI over SSE + POST.
+
+## Clone workspaces
+
+Beyond local worktrees, omp-web can create **clone workspaces** managed by an
+external provider (sandboxed `bwrap`, or Kubernetes) declared in
+`~/.omp-web/config.json` under `providerProfiles`. A clone workspace runs in
+its own volume (`.checkout/` working clone with an independent object store,
+`.home/` private writable home whose `agent/sessions` tree holds the
+transcripts) with the session daemon inside, dialing the fleet over the
+outbound callback pair. Profiles carry operator-declared limits and secret
+references (names only cross trust boundaries). `omp-web preflight --profile
+<id>` validates a profile's executable, tools, secret references, and
+callback reachability before workspaces use it. The required streaming
+gateway/proxy and cluster prerequisites are operator setup, not something
+omp-web provisions; see [`docs/architecture.md`](docs/architecture.md) and
+[`runtime/image/README.md`](runtime/image/README.md).
+
+Clone workspace notes:
+
+- **Stop and wake.** `stop` keeps the checkout and the session logs. `wake` re-provisions compute and resumes the last session; a cold volume (or missing transcript) is materialized byte-identical from the fleet store before the resume path runs, and an explicit session pick on a ready clone switches to that real session rather than booting fresh.
+- **Deletion is verified.** Deleting a clone workspace runs the verify-at-deletion gate (quiesce, Git guard, store completeness, read-only flip) before any provider or volume deletion; a blocked deletion keeps the workspace, volume, and logs.
+- **Session logs are not the workspace.** Transcripts never contain working-tree files; uncommitted work in a clone is not recoverable from them.
+- **Runtime distribution.** The fleet ships the provider executables and a reproducible session-runtime image definition; provider runtimes must be installed and preflighted per host. Isolation limits are honest ones: bwrap and Kubernetes sandboxes share the host kernel, and model/tool credentials reach the sandbox as environment values that a sandboxed process can read. See the security section in [`docs/architecture.md`](docs/architecture.md).
+
+> **Status of runtime claims.** omp-web does not yet claim production-grade
+> proof for the clone runtime: real Kubernetes lifecycle evidence (no operator
+> cluster) and production same-origin TLS gateway + streaming-proxy
+> failure/recovery evidence (not provisioned) are pending operator setup, as
+> are the multi-runtime/fairness load dimensions. The streaming callback path
+> itself works over explicit loopback HTTP (developer default) with HTTPS
+> required elsewhere, and clone workspaces need a real provider profile: the
+> default fleet has none, so clone routes fail with a typed `unavailable`
+> until one is configured.
 
 ## Architecture
 
@@ -84,9 +117,10 @@ omp-web update --version x.y.z  # pin a specific release
 ## Configuration and State
 
 - Default data directory: `~/.omp-web/`
-- `config.json` (defaults, written only by the first-run offer)
-- `fleet-state.json` (roster + registered projects, atomic writes, exclusive pidfile lock)
+- `config.json` (fleet config; defaults are loaded read-only, and the file is written only by the first-run offer and by operator edits). Keys include `templates` (spawn command templates), `workspaceDir` (managed worktrees root), `bind`, `browserAccessToken` (stored only as its sha-256 digest), `browserOrigin`, `trustedProxies`, and `providerProfiles` (clone provider profiles; see Clone workspaces). Env `OMP_FLEET_CONFIG` selects a different config file; flags such as `--bind`/`--browser-access-token` and env `OMP_FLEET_BIND`/`OMP_FLEET_BROWSER_TOKEN` override the file keys.
+- `fleet-state.json` (roster + registered projects + clone workspace records, atomic writes, exclusive pidfile lock)
 - `workspaces/` (managed worktrees, created lazily). Chosen at first run; config, state, and workspaces always live together under it.
+- `logs/` under the fleet state dir (the fleet log store): a durable mirror of the session lineage logs streamed by every managed daemon. Store layout is `logs/<workspaceId>/<sessionId>/<relpath>` plus a per-session `index.json`. Retention is explicit and manual: nothing is garbage-collected automatically. A workspace deleted without passing the verification gate leaves its store subtree as an orphan, listed by `GET /ctl/logs/orphans` and removed only by `POST /ctl/logs/purge {workspaceId}`; verified (read-only) store data is kept unless the operator purges it manually. Read-only history browsing never wakes compute; a deleted workspace's sessions are view-only, and resuming one onto a fresh clone is the explicit `POST /ctl/workspaces/:id/resume-clone` action.
 
 ## Develop
 
@@ -109,11 +143,14 @@ state, so the roster boots empty); the next plain `bun dev` forks again.
 
 ```sh
 omp-web session [options]            # run a single-session agent daemon
-omp-web sessions | projects          # roster / registered projects
+omp-web sessions | projects | profiles   # roster / projects / provider profiles
 omp-web spawn <path>                 # start a daemon on a directory
 omp-web add-repo <path> [--start]    # register a project (deduped on realpath)
 omp-web add-worktree <project> <name> [--no-start]      # create a managed worktree
 omp-web add-worktree <project> --existing <path>        # adopt an existing one
+omp-web add-clone <project> <name> --profile <id> [--local <path> | --remote <url>] [--revision <rev>] [--branch <b>] [--no-start]
+omp-web preflight --profile <id>     # validate a provider profile locally
+omp-web start <daemon-id>            # wake a stopped clone workspace
 omp-web stop <selector> | remove <selector>
 omp-web rm-project <selector> | rm-worktree <daemon-id> [--delete-branch]
 omp-web prompt <selector> <text> [--wait <ms>]

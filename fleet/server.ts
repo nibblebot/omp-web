@@ -18,9 +18,29 @@
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
  *   POST /ctl/remove   {selector}                  → { removed: string[] }
  *   POST /ctl/prompt   {selector, text, waitMs?}   → PromptResult[] | { submitted: string[] }
- *   POST /ctl/settings/set {path, value}           -> SettingsModel (400 bad path/value)
+ * POST /ctl/settings/set {path, value}           -> SettingsModel (400 bad path/value)
  *   POST /ctl/projects/:id/worktrees               -> create or add-existing worktree -> 201 { entry }
- *   DELETE /ctl/worktrees/:daemonId {deleteBranch?} -> stop -> remove entry -> git worktree remove
+ *   DELETE /ctl/worktrees/:daemonId {deleteBranch?} -> worktree: stop -> remove entry -> git worktree remove
+ *                    (clone workspace: verify-at-deletion gate, P7.3/P7.5)
+ *   GET  /ctl/logs/orphans                         -> orphaned log-store subtrees (P7.6)
+ *   POST /ctl/logs/purge {workspaceId}             -> explicit manual purge (P7.6)
+ *   POST /ctl/workspaces/:id/resume-clone {sessionId, profileId?} -> fresh clone
+ *                    at the pinned commit + transcript materialization + resume (P8.10)
+ *
+ * Browser auth (P2.2/P2.3, optional): when an operator access token is
+ * configured (OMP_FLEET_BROWSER_TOKEN / --browser-access-token /
+ * config browserAccessToken), the same Bun.serve additionally mounts:
+ *
+ *   POST /auth/login    {accessToken}  → Set-Cookie omp_session + {csrfToken, expiresAt}
+ *   POST /auth/logout                  → revoke the session cookie
+ *   GET  /auth/session                 → { sessionIdHash, csrfToken, expiresAt } | 401
+ *
+ * Non-loopback peers must then hold a live browser session for /ctl/* and the
+ * edge browser routes; mutations additionally need X-Omp-Csrf + an allowed
+ * Origin. Loopback peers stay exempt (the CLI precedent, R14). With no token
+ * configured every route behaves exactly as before. /callback/* is NEVER
+ * gated by browser auth: the DaemonTransportRegistry authenticates it with
+ * the workspace enrollment credentials (P3.3, mounted first for that prefix).
  *
  * /ctl/provision runs config.spawnHook via `sh -c` with env OMP_HOOK_NAME /
  * OMP_HOOK_LABELS and a 60s deadline; the hook's last non-empty stdout line
@@ -39,25 +59,54 @@
  */
 
 import type { Server } from "bun";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { RegisteredProject } from "../shared/protocol";
+import type { RegisteredProject, PublicProviderProfile } from "../shared/protocol";
 import type { FleetConfig } from "./config";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
+import { toPublicProfile } from "./provider-profile";
+import { isLoopbackHost } from "../server/config";
 import { acquireFileLock, type FileLock } from "../shared/file-lock";
-import type { RegistryEntry } from "./registry";
+import type { DeletionGateError, RegistryEntry } from "./registry";
 import { bootStatusFor, Registry } from "./registry";
 import { validateProjectPath } from "./discovery";
 import { matchSelector } from "./selectors";
 import { DaemonConnector } from "./connector";
 import { SpawnSupervisor } from "./supervisor";
 import { isValidEndpointUrl } from "./spawn-parse";
+import { isPathUnder, realpathOf } from "./worktrees";
 import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
 import { FleetEdge } from "./edge";
 import { FleetEventLog, type FleetFacts } from "./events";
 import { createFleetSettings, type FleetSettings, type FleetSettingsOptions } from "./settings";
 import { createStatsApp } from "./stats/index";
+import type { StatsConfig } from "./stats/config";
+import { BrowserAuthStore, clearSessionCookie } from "./browser-auth";
+import { DaemonTransportRegistry } from "./daemon-transport";
+import { FleetAuthGate, isLoopbackBind, peerIsLoopback, BrowserAuthError } from "./fleet-auth-gate";
+import { compileTrustedProxies } from "./trusted-proxy";
+import { CALLBACK_TRANSPORT_STREAM_ID, type CallbackEnvelope } from "../shared/callback-protocol";
+import { FleetLogStore, LogStoreError, type LogChunk, type LogIngestResult } from "./log-store";
+import { createStoredApp, type StoredApp } from "./stored-sessions";
+import { verifyWorkspaceLogs, type VerifyResult } from "../runtime/verify-store";
+import { prepareWorkspace } from "../runtime/prepare-workspace";
+import { runProviderOp } from "../runtime/provider-exec";
+import type {
+	ProviderHandle,
+	ProviderProfile,
+	ProviderRequest,
+	ProviderResponse,
+} from "../shared/provider-protocol";
+import { ENROLLMENT_KEY_BYTES } from "../shared/callback-protocol";
+import { createHash, randomBytes } from "node:crypto";
+import {
+	CloneLifecycleError,
+	type CloneCreateInput,
+	WorkspaceLifecycle,
+} from "./workspace-lifecycle";
+import { CloneControlApi, lifecycleStatus } from "./clone-control";
+import { materializeMissingSessionFiles, WakeMaterializeError } from "./wake-materialize";
 import {
 	createWorktree,
 	deleteWorktree,
@@ -75,12 +124,53 @@ import {
 
 const DEFAULT_PORT = 4722;
 
+// P3.8 fleet log-store ack batching (docs/clone-contracts.md "Session log
+// streaming"): log_ack controls ride the reserved transport stream once per
+// batch. Batches flush when the accumulated-chunk budget is hit or the
+// time budget elapses, whichever comes first — a high-churn session acking
+// every 64 chunks bounds control chatter to ~16/s, and a quiet tail still
+// acks within a second of each durable append.
+const LOG_ACK_FLUSH_MS = 1_000;
+const LOG_ACK_BATCH_MAX = 64;
+
+/**
+ * Post-verification provider/storage deletion hook (P7.5 step 4). P5
+ * providers implement this; the local-clone default removes the workspace
+ * volume after the store flipped read-only. Never removes the store, and the
+ * roster removal happens AFTER this resolves (or is left delete-pending-
+ * retry with remainingResources when it partially fails).
+ */
+export interface WorkspaceResourceDeleter {
+	/** Delete the provider volume for a verified workspace; throws to leave remainingResources recorded. */
+	deleteWorkspaceResources(workspaceId: string, entry: RegistryEntry): Promise<void>;
+}
+
+/**
+ * Resume-onto-fresh-clone provider hook (P8.10). P5 providers implement
+ * spawn; the DEFAULT fleet has NO clone provider yet, so the hook is absent
+ * and the resume-clone route fails typed `unavailable` (never a fake spawn).
+ */
+export interface CloneResumeSpawner {
+	/**
+	 * Spawn the daemon for a freshly provisioned clone volume at
+	 * `workspaceRoot` with a callback pair to the fleet, resuming
+	 * `sessionId`. `volumeRoot` is the prepared workspace volume (contains
+	 * `.checkout/`, `.home/`, `.omp-workspace-init.json`).
+	 */
+	spawnCloneResume(opts: {
+		workspaceId: string;
+		generation: number;
+		volumeRoot: string;
+		sessionId: string;
+	}): Promise<{ endpoint?: string }>;
+}
+
 /**
  * Historical transcripts/stats API (read-only stats.db + session files),
- * mounted under /ctl/stats. One instance per process, created at boot from
- * process env; close() releases its stats.db handle on fleet shutdown.
+ * mounted under /ctl/stats by the control plane. One instance per FleetServer,
+ * created inside the constructor (it can then receive the log store); closed
+ * in close(). The module-level singleton this replaced could not.
  */
-const statsApp = createStatsApp();
 
 /** Control plane as consumed by the CLI (and, in Phase 3, the edge server). */
 export interface FleetServer {
@@ -93,6 +183,19 @@ export interface FleetServer {
 	/** Fleet-wide facts (port/startedAt/state paths) for the banner + /ctl/debug. */
 	fleetFacts: FleetFacts;
 	close(): Promise<void>;
+}
+
+/**
+ * Secret-free provider-profile catalog (P1.3): the boot-static config's
+ * providerProfiles projected through toPublicProfile, published to the
+ * browser on the registered_projects frame and served by GET /ctl/profiles.
+ * Absent/empty config → empty catalog (never a failure); values/executables
+ * never cross this boundary.
+ */
+export function publicProfileCatalog(config: {
+	providerProfiles?: Record<string, ProviderProfile>;
+}): PublicProviderProfile[] {
+	return Object.values(config.providerProfiles ?? {}).map((profile) => toPublicProfile(profile));
 }
 
 function resolveStatePath(explicit?: string, configPath?: string): string {
@@ -189,7 +292,8 @@ function optionalWaitMs(body: Record<string, unknown>): number | undefined {
 const PROJECT_WORKTREES_ROUTE = /^\/ctl\/projects\/([^/]+)\/worktrees$/;
 const WORKTREE_DELETE_ROUTE = /^\/ctl\/worktrees\/([^/]+)$/;
 const WORKTREE_INFO_ROUTE = /^\/ctl\/worktrees\/([^/]+)\/delete-info$/;
-
+/** P8.10 resume-onto-fresh-clone: POST /ctl/workspaces/:id/resume-clone. */
+const WORKSPACE_RESUME_CLONE_ROUTE = /^\/ctl\/workspaces\/([^/]+)\/resume-clone$/;
 /**
  * Reject endpoints that are not ws:// or wss:// URLs. The check itself lives
  * in spawn-parse.ts (isValidEndpointUrl) — shared with the supervisor's
@@ -199,6 +303,35 @@ const WORKTREE_INFO_ROUTE = /^\/ctl\/worktrees\/([^/]+)\/delete-info$/;
 function validateEndpointUrl(raw: string): void {
 	if (!isValidEndpointUrl(raw)) {
 		throw new HttpError(400, `url must be ws:// or wss://: ${raw}`);
+	}
+}
+
+/**
+ * Local clone volume deleter (P7.5): removes the workspace's own volume —
+ * the checkout and session data — under the fleet workspaceDir root. Only
+ * ever called AFTER the store verification gate passed and the store flipped
+ * read-only; the roster removal follows this call. Never touches the fleet
+ * log store (Retention owns it) and never removes anything outside the
+ * managed root.
+ */
+class LocalCloneResourceDeleter implements WorkspaceResourceDeleter {
+	private readonly workspaceRoot: string;
+	constructor(workspaceDir: string) {
+		this.workspaceRoot = workspaceDir;
+	}
+	async deleteWorkspaceResources(workspaceId: string, entry: RegistryEntry): Promise<void> {
+		const cwd = entry.cwd ?? "";
+		if (cwd === "") return; // No volume to remove (a placeholder).
+		const realRoot = realpathOf(this.workspaceRoot);
+		const realCwd = realpathOf(cwd);
+		if (!isPathUnder(realCwd, realRoot)) {
+			throw new Error(
+				`refusing to delete clone volume outside workspaceDir: ${cwd} (workspace ${workspaceId})`,
+			);
+		}
+		// The volume is the workspace root itself: .checkout + .home + the
+		// init marker live under it. Remove it as a unit.
+		rmSync(realCwd, { recursive: true, force: true });
 	}
 }
 
@@ -325,10 +458,49 @@ class FleetServerImpl implements FleetServer {
 	readonly eventLog = new FleetEventLog();
 	readonly startedAt: number;
 	readonly fleetFacts: FleetFacts;
+	/** Optional P2.2/P2.3 browser-session auth; null when disabled (no token
+	 *  configured). Loopback peer exemptions + CSRF/origin live behind this. */
+	readonly authGate: FleetAuthGate | null;
+	/** Optional P3.3 callback enrollment for roster daemons (mirrors the
+	 *  daemon-half enrollment the fleet supervisor will hand out in P5). */
+	readonly transport: DaemonTransportRegistry;
+	/** P3.8 fleet log store; null when the logs dir is not writable at boot.
+	 *  Loaded after the state lock is held; closed only in close(). */
+	readonly logStore: FleetLogStore | null;
+	/** P7.5 post-verification provider/storage deletion hook. The default
+	 *  removes a local clone's volume; P5 providers inject their own. */
+	readonly resourceDeleter: WorkspaceResourceDeleter;
+	/** P8.10 resume-onto-fresh-clone provider spawner; absent = the route
+	 *  fails typed `unavailable` (P5 providers inject their own). */
+	readonly cloneResumeSpawner: CloneResumeSpawner | null;
+	/** P6/P7 clone lifecycle owner (single create/ensure/stop/delete authority). */
+	readonly lifecycle: WorkspaceLifecycle;
+	/** P1/P8 clones control API (route layer over the lifecycle service). */
+	readonly cloneApi: CloneControlApi;
 	/** State-file lock: taken in startFleet, released in close(). */
 	readonly lock: FileLock;
 
+	/** Per-workspace log_ack batching: chunks acked since the last flush. */
+	readonly #logAckChunks = new Map<string, Map<string, number>>();
+	/** Per-workspace flush timer; one timer per workspace with pending acks. */
+	readonly #logAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Per-workspace transport tap unsubscribe; cleared in close(). */
+	readonly #logTaps = new Map<string, () => void>();
+	/** Historical transcripts/stats API (P8.6): per-instance stats app,
+	 *  constructed in the constructor so it can receive the log store when it
+	 *  loads; closed in close(). */
+	readonly #statsApp: ReturnType<typeof createStatsApp>;
+	/** Stored-sessions read API (P8.5): mounted under /ctl/stored once the
+	 *  fleet log store loads; null when the store is unavailable. Read-only,
+	 *  never wakes compute. */
+	readonly storedApp: StoredApp | null = null;
+
 	readonly #server: Server<undefined>;
+	/** Boot-time sha-256 digest of the operator browser-access token (the
+	 *  store adopts it on first login; the login route verifies against it).
+	 *  Empty when auth is disabled (never used). */
+	readonly #expectedTokenHash: string;
+
 	/**
 	 * daemonIds mid-eviction for a poll-detected, vanished worktree. The
 	 * supervisor can fire per poll tick; the first report wins and the set
@@ -343,17 +515,119 @@ class FleetServerImpl implements FleetServer {
 		facts: { statePath: string; configPath: string | null },
 		lock: FileLock,
 		settingsOptions?: FleetSettingsOptions,
+		resourceDeleter?: WorkspaceResourceDeleter,
+		cloneResumeSpawner?: CloneResumeSpawner | null,
+		statsConfig?: Pick<StatsConfig, "statsDbPath" | "sessionsDir">,
 	) {
 		this.registry = registry;
 		this.config = config;
 		this.lock = lock;
+		this.resourceDeleter = resourceDeleter ?? new LocalCloneResourceDeleter(config.workspaceDir);
+		this.cloneResumeSpawner = cloneResumeSpawner ?? null;
 		this.startedAt = Date.now();
 		this.fleetFacts = {
 			port: 0,
 			startedAt: this.startedAt,
 			statePath: facts.statePath,
 			configPath: facts.configPath,
+			bind: config.bind,
 		};
+		this.transport = new DaemonTransportRegistry();
+		// P3.8 fleet log store: loaded under the state lock (the state dir is
+		// this fleet's alone) so restarts rebuild in-memory offset state from
+		// the durable index before any daemon pair streams. A boot-time logs
+		// dir that cannot be created/made writable is logged and disables log
+		// streaming for this process — it must not take the whole fleet down.
+		let logStore: FleetLogStore | null = null;
+		try {
+			logStore = FleetLogStore.load(join(dirname(facts.statePath), "logs"));
+		} catch (err) {
+			console.error(
+				`fleet: log store unavailable at ${join(dirname(facts.statePath), "logs")}: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+		this.logStore = logStore;
+		// P8.5/P8.6 stored-sessions + stats store coverage: BOTH consume the
+		// same secret-free provenance resolver over live registry records
+		// (never tokens/endpoints). Built only when the log store loaded;
+		// absent store → storedApp null and stats stays fleet-local-only.
+		const storedProvenance = (
+			workspaceId: string,
+		):
+			| {
+					projectId: string;
+					kind: "clone" | "worktree" | "direct";
+					profileId?: string;
+					branch?: string;
+					pinnedRevision?: string;
+					source?: { local?: string; remote?: string };
+			  }
+			| undefined => {
+			const entry = registry.get(workspaceId);
+			const record = entry?.workspace;
+			if (record === undefined) return undefined;
+			return {
+				projectId: record.projectId,
+				kind: record.kind,
+				...(record.profileId !== undefined ? { profileId: record.profileId } : {}),
+				...(record.branch !== undefined ? { branch: record.branch } : {}),
+				...(record.pinnedRevision !== undefined ? { pinnedRevision: record.pinnedRevision } : {}),
+				...(record.source !== undefined ? { source: record.source } : {}),
+			};
+		};
+		if (logStore !== null) {
+			this.storedApp = createStoredApp({
+				store: logStore,
+				provenance: storedProvenance,
+			});
+			// P8.6: stats mounts the SAME store so /ctl/stats/health reports
+			// fleetStore coverage and sessions carry origin/stored labels +
+			// dedup. Without this the store stays invisible to stats.
+			this.#statsApp = createStatsApp({
+				...statsConfig,
+				stored: { store: logStore, provenance: storedProvenance },
+			});
+		} else {
+			this.#statsApp = createStatsApp(statsConfig);
+		}
+		// Boot re-enrollment: enrollments are NOT memory-only. Every roster
+		// entry whose workspace record persists a callback-enrollment binding
+		// (digest + generation only) is re-enrolled before anything else
+		// acts on the roster, so a fleet restart accepts daemon redials with
+		// their original credential — the raw credential never survives the
+		// process, only its sha-256 digest.
+		for (const { workspaceId, enrollment } of this.registry.workspaceEnrollments()) {
+			this.transport.enrollPersisted(workspaceId, enrollment.generation, enrollment.credentialHash);
+		}
+		// Browser auth: hash-only store next to the state file. loopbackDev is
+		// ON only when the bind is a loopback address (the explicit dev cookie
+		// exception — never inferred for a public bind).
+		const loopbackDev = isLoopbackBind(config.bind);
+		this.#expectedTokenHash = config.browserAccessTokenHash ?? "";
+		const authEnabled = config.browserAccessTokenHash !== undefined;
+		// Compiled trusted-proxy rules for the gate. loadConfig already
+		// rejects malformed literals, but config objects constructed directly
+		// (tests) could carry one; an invalid literal NEVER matches (fail
+		// closed), and reaching here at all means the value was a raw config
+		// — drop-and-warn rather than silently trusting a subset.
+		const { rules: trustedProxyRules, invalid: invalidProxies } = compileTrustedProxies(
+			config.trustedProxies ?? [],
+		);
+		for (const literal of invalidProxies) {
+			console.error(`fleet: config: dropped invalid trusted proxy literal "${literal}"`);
+		}
+		this.authGate = authEnabled
+			? new FleetAuthGate({
+					enabled: true,
+					loopbackDev,
+					store: new BrowserAuthStore(join(dirname(facts.statePath), "browser-auth.json"), {
+						loopbackDev,
+						configuredTokenHash: config.browserAccessTokenHash,
+					}),
+					browserOrigin: config.browserOrigin,
+					trustedProxies: trustedProxyRules,
+				})
+			: null;
 		let edge: FleetEdge | null = null;
 		this.connector = new DaemonConnector(registry, {
 			onDialFailed: (entry) => this.#onDialFailed(entry),
@@ -385,6 +659,31 @@ class FleetServerImpl implements FleetServer {
 				this.eventLog.add(level, "supervisor", message, daemonId),
 			onWorktreeRemoved: (entry) => void this.#onWorktreeVanished(entry),
 		});
+		// P6/P7 lifecycle owner: the single create/ensure/stop/delete
+		// authority for provider-managed clone workspaces, shared by the
+		// control-plane routes and the edge command dispatch. Constructed
+		// BEFORE the edge (the edge takes it as a hook object); its deps are
+		// registry/config/transport/eventLog/resourceDeleter + injected
+		// log-tap attach and callback-URL provider — no edge dependency.
+		this.lifecycle = new WorkspaceLifecycle({
+			registry,
+			config: { workspaceDir: config.workspaceDir, providerProfiles: config.providerProfiles },
+			transport: this.transport,
+			logStore: this.logStore,
+			resourceDeleter: this.resourceDeleter,
+			eventLog: this.eventLog,
+			attachLogTap: (workspaceId) => this.#attachLogStoreTap(workspaceId),
+			callbackUrl: () => this.#callbackUrl(),
+		});
+		this.cloneApi = new CloneControlApi({
+			lifecycle: this.lifecycle,
+			registry,
+			config: { providerProfiles: config.providerProfiles },
+			eventLog: this.eventLog,
+		});
+		// Historical transcripts/stats API (P8.6): per-instance, constructed
+		// with the log store (fleetStore coverage) once the store loads in the
+		// block above — never a bare store-less app.
 		edge = new FleetEdge({
 			registry,
 			connector: this.connector,
@@ -392,6 +691,10 @@ class FleetServerImpl implements FleetServer {
 			config,
 			eventLog: this.eventLog,
 			fleet: this.fleetFacts,
+			transport: this.transport,
+			lifecycle: this.lifecycle,
+			logStore: this.logStore ?? undefined,
+			providerProfiles: publicProfileCatalog(config),
 		});
 		this.edge = edge;
 		// Unattached settings service (roster-mode /ctl/settings): lazy
@@ -409,21 +712,48 @@ class FleetServerImpl implements FleetServer {
 		// the timer via supervisor.close().
 		this.supervisor.startGitStatePolling();
 		this.#server = Bun.serve({
-			hostname: "127.0.0.1", // loopback-only control API + browser edge (Phase 3)
+			hostname: config.bind,
 			port,
 			// SSE responses are long-lived and quiet between 15s keepalive
 			// pings; Bun's default 10s fetch idleTimeout would kill them.
 			idleTimeout: 0,
-			fetch: (req) => this.#fetch(req),
+			fetch: (req, srv) => this.#fetch(req, srv.requestIP(req)?.address),
 		});
 		this.port = this.#server.port!;
 		this.fleetFacts.port = this.port;
+		// P6.3: provider-managed clone workspaces reconcile SEPARATELY — their
+		// compute survived the restart (it is not an in-memory child), so the
+		// legacy boot downgrade above must never touch them. Runs AFTER the
+		// port binds so checkout callbacks dial a real address. Inspect-
+		// before-act: reattach live sandboxes, recreate desired-running ones,
+		// leave desired-stopped ones alone. Fire-and-forget; failures log.
+		void this.lifecycle.reconcile();
+		// P8.9 wake materialization: the transport serves stored session
+		// bytes over the bulk channel from this store.
+		if (this.logStore !== null) {
+			this.transport.setMaterializeStore(this.logStore);
+			// Log taps ride the daemon callback pairs. Enrollment is the tap's
+			// gate (the transport authenticates every envelope against it).
+			// Boot enrollments above include persisted re-enrollments (a fleet
+			// restart accepts daemon redials with their original credential),
+			// so the static attach below covers every tap the fleet will ever
+			// need; runtime attach on enrollment is added with P5.
+			for (const workspaceId of this.transport.enrolledWorkspaceIds()) {
+				this.#attachLogStoreTap(workspaceId);
+			}
+		}
 	}
 
 	async close(): Promise<void> {
 		const errors: unknown[] = [];
 		try {
 			this.edge.close();
+		} catch (err) {
+			errors.push(err);
+		}
+		this.#closeLogStoreWiring();
+		try {
+			this.transport.close();
 		} catch (err) {
 			errors.push(err);
 		}
@@ -443,7 +773,12 @@ class FleetServerImpl implements FleetServer {
 			errors.push(err);
 		}
 		try {
-			statsApp.close();
+			this.lifecycle.close();
+		} catch (err) {
+			errors.push(err);
+		}
+		try {
+			this.#statsApp.close();
 		} catch (err) {
 			errors.push(err);
 		}
@@ -451,6 +786,165 @@ class FleetServerImpl implements FleetServer {
 		// path once everything above is torn down. release() never throws.
 		this.lock.release();
 		if (errors.length > 0) throw errors[0];
+	}
+
+	// --- fleet log store (P3.8; docs/clone-contracts.md "Fleet log store") ---
+
+	/**
+	 * Per-workspace log-frame tap: durability-append daemon log chunks and
+	 * ack via batched transport controls. Attached at startup for every
+	 * enrolled workspace (transport enrollments are never revoked at
+	 * runtime today, so the static attach covers the live fleet). Unknown
+	 * workspaces never reach here: the transport gates every envelope by
+	 * enrollment. Also fire-and-forget (a slow disk must not stall the
+	 * daemon connection pump); the daemon's ring window absorbs slack and
+	 * its acked-offset resume point is only ever advanced by acked chunks.
+	 */
+	#attachLogStoreTap(workspaceId: string): void {
+		if (this.#logTaps.has(workspaceId)) return;
+		const store = this.logStore;
+		if (store === null) return;
+		const unsubscribe = this.transport.onDaemonEnvelope(workspaceId, (envelope) => {
+			this.#onLogEnvelope(store, workspaceId, envelope);
+		});
+		this.#logTaps.set(workspaceId, unsubscribe);
+	}
+
+	/**
+	 * One daemon callback envelope on a log-tapped workspace. Frame chunks
+	 * append to the store; a `control` envelope carrying the additive
+	 * workspace-side session-deletion notice (P7.6) purges that session's
+	 * fleet copy — the workspace wins. Read-only workspaces refuse the purge
+	 * (their verified store is Retention's; explicit purgeWorkspace is the
+	 * manual path).
+	 */
+	#onLogEnvelope(store: FleetLogStore, workspaceId: string, envelope: CallbackEnvelope): void {
+		if (envelope.kind === "control") {
+			const payload = envelope.payload as { type?: unknown; sessionId?: unknown };
+			if (payload?.type === "session_deleted") {
+				const sessionId = payload.sessionId;
+				if (typeof sessionId !== "string" || sessionId.length === 0) return;
+				try {
+					store.purgeSession(workspaceId, sessionId);
+				} catch {
+					// Read-only (verified) or invalid id: the workspace's
+					// verified state wins; nothing to surface.
+				}
+			}
+			return;
+		}
+		if (envelope.kind !== "frame") return;
+		const streamId = envelope.streamId;
+		if (!streamId.startsWith("logs/")) return;
+		const rest = streamId.slice("logs/".length);
+		const slash = rest.indexOf("/");
+		if (slash <= 0) return; // Malformed; nothing to append.
+		const sessionId = rest.slice(0, slash);
+		const relpath = rest.slice(slash + 1);
+		if (relpath.length === 0) return;
+		let result: LogIngestResult;
+		try {
+			result = store.ingest(workspaceId, sessionId, relpath, envelope.payload as LogChunk);
+		} catch (err) {
+			// Read-only (verified), invalid ids/paths, or a malformed chunk:
+			// the workspace's verified state wins; nothing to ack. A truly
+			// unexpected store failure (disk) is surfaced once per workspace.
+			if (err instanceof LogStoreError && err.code !== "read_only") {
+				console.error(`fleet: log store rejected ${streamId} (${err.code}): ${err.message}`);
+			}
+			return;
+		}
+		if (result.status === "acked") {
+			const pending = this.#pendingLogAcks(workspaceId);
+			pending.set(streamId, result.offset);
+			this.#armLogAckFlush(workspaceId);
+			if (pending.size >= LOG_ACK_BATCH_MAX) this.#flushLogAcks(workspaceId);
+		} else if (result.status === "gap") {
+			// The daemon owns repair: it re-streams [from, to) once this
+			// lands. Sent immediately — the gap is a stall, not chatter.
+			// The envelope's streamId names the AFFECTED log stream (the
+			// daemon half's handleControl requires it: controls on the
+			// reserved transport stream carry the target in the payload or
+			// the envelope, and a missing target is an invalid_request — a
+			// mid-file hole would otherwise gap-lock permanently).
+			void this.transport
+				.sendToDaemon(workspaceId, {
+					streamId,
+					kind: "control",
+					payload: { type: "log_gap", from: result.from, to: result.to },
+				})
+				.then(
+					() => {
+						// Sent; the daemon repairs.
+					},
+					() => {
+						// No live pair; the daemon's ring/continuity check
+						// will re-raise the same gap after reconnect.
+					},
+				);
+		}
+		// duplicate / obsolete: post-reconnect re-send below the acked
+		// offset, or a stale generation — nothing to do.
+	}
+
+	/** Pending log_ack offsets per stream, flushed when a flush lands. */
+	#pendingLogAcks(workspaceId: string): Map<string, number> {
+		let pending = this.#logAckChunks.get(workspaceId);
+		if (pending === undefined) {
+			pending = new Map();
+			this.#logAckChunks.set(workspaceId, pending);
+		}
+		return pending;
+	}
+
+	#armLogAckFlush(workspaceId: string): void {
+		if (this.#logAckTimers.has(workspaceId)) return;
+		const timer = setTimeout(() => {
+			this.#flushLogAcks(workspaceId);
+		}, LOG_ACK_FLUSH_MS);
+		this.#logAckTimers.set(workspaceId, timer);
+	}
+
+	/**
+	 * Send one batched control envelope to the daemon with every pending
+	 * acked offset, then clear the batch. Never throws.
+	 */
+	#flushLogAcks(workspaceId: string): void {
+		const timer = this.#logAckTimers.get(workspaceId);
+		if (timer !== undefined) {
+			clearTimeout(timer);
+			this.#logAckTimers.delete(workspaceId);
+		}
+		const pending = this.#logAckChunks.get(workspaceId);
+		if (pending === undefined || pending.size === 0) return;
+		this.#logAckChunks.delete(workspaceId);
+		const offsets: Record<string, number> = {};
+		for (const [streamId, offset] of pending) offsets[streamId] = offset;
+		void this.transport
+			.sendToDaemon(workspaceId, {
+				streamId: CALLBACK_TRANSPORT_STREAM_ID,
+				kind: "control",
+				payload: { type: "log_ack", offsets },
+			})
+			.then(
+				() => {
+					// Sent; nothing further to do.
+				},
+				() => {
+					// No live down half (reconnect in progress): the batch is
+					// dropped — the daemon re-streams from its last acked
+					// offset once the pair is live again, so nothing is lost.
+				},
+			);
+	}
+
+	/** Cancel pending log-ack flush timers and detach all taps (close()). */
+	#closeLogStoreWiring(): void {
+		for (const timer of this.#logAckTimers.values()) clearTimeout(timer);
+		this.#logAckTimers.clear();
+		this.#logAckChunks.clear();
+		for (const unsubscribe of this.#logTaps.values()) unsubscribe();
+		this.#logTaps.clear();
 	}
 
 	#onDialFailed(entry: RegistryEntry): void {
@@ -487,6 +981,11 @@ class FleetServerImpl implements FleetServer {
 	 */
 	#reconcileBootStatuses(): void {
 		for (const entry of this.registry.list()) {
+			// P6.3: provider-managed clone entries are NOT stale in-memory
+			// children — their sandbox compute survived the restart. Never
+			// downgrade them here; #reconcileCloneWorkspaces inspects and
+			// reattaches/recreates them by durable provider identity.
+			if (entry.workspace?.kind === "clone") continue;
 			const target = bootStatusFor(entry);
 			if (target === null) continue;
 			const patch: Partial<RegistryEntry> = { status: target };
@@ -505,11 +1004,127 @@ class FleetServerImpl implements FleetServer {
 		}
 	}
 
-	#fanoutDeps(): FanoutDeps {
-		return { registry: this.registry, connector: this.connector, supervisor: this.supervisor };
+	/**
+	 * POST /ctl/start {daemonId} (alias POST /ctl/wake) — the fleet-side
+	 * ensure-running entry point for CLONE workspaces (P6.1). Direct/template
+	 * spawns keep their existing path (/ctl/spawn + supervisor); this route
+	 * only ever runs provider-managed clone entries. On success the workspace
+	 * record rides: fresh enrollment (credential persistence for the callback
+	 * pair), provider handle, and desiredState "running". A missing or
+	 * untyped profile is a typed `unavailable` — never a fake spawn.
+	 */
+	async #handleStart(req: Request): Promise<Response> {
+		const body = await readJson(req);
+		const daemonId = requireString(body, "daemonId");
+		const entry = this.registry.get(daemonId);
+		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
+		if (entry.workspace?.kind !== "clone") {
+			throw new HttpError(
+				400,
+				`daemon ${daemonId} is not a clone workspace (kind ${entry.workspace?.kind ?? "legacy"}); ` +
+					"start a worktree/direct session through /ctl/spawn",
+			);
+		}
+		// P6.1: the single lifecycle owner. Never HTTP-self-fetch; resolves
+		// when the provider confirms compute running + enrollment persisted;
+		// callback→ready rides the roster (lifecycleStage broadcasts).
+		// Typed lifecycle failures map onto the same frozen HTTP statuses
+		// as create/remove/delete (an uncertain-predecessor conflict is a
+		// 409, never an untyped 500).
+		try {
+			await this.lifecycle.ensureCloneRunning(daemonId);
+		} catch (err) {
+			if (err instanceof CloneLifecycleError) {
+				throw new HttpError(lifecycleStatus(err.code), err.message);
+			}
+			throw new HttpError(
+				500,
+				`clone start failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+		const current = this.registry.get(daemonId);
+		return json({
+			daemonId,
+			observed: "running",
+			...(current?.workspace?.authorizedGeneration !== undefined
+				? { generation: current.workspace.authorizedGeneration }
+				: {}),
+			...(current?.workspace?.providerHandle !== undefined
+				? { handle: current.workspace.providerHandle }
+				: {}),
+		});
 	}
 
-	#fetch = async (req: Request): Promise<Response> => {
+	#fanoutDeps(): FanoutDeps {
+		// P6.1 fanout trigger: prompt/wake for clones goes through the same
+		// lifecycle owner (Transport's FanoutDeps contract: transport +
+		// lifecycle are optional, direct/worktree use connector/supervisor).
+		return {
+			registry: this.registry,
+			connector: this.connector,
+			supervisor: this.supervisor,
+			transport: this.transport,
+			lifecycle: this.lifecycle,
+		};
+	}
+
+	/** Fleet callback base URL the sandbox daemon dials for the pair. */
+	#callbackUrl(): string {
+		// Explicit operator override wins; otherwise derive from the fleet's
+		// own bind+port (loopback http for a loopback bind, which the daemon
+		// accepts under OMP_SESSION_CALLBACK_ALLOW_HTTP=1).
+		const explicit = process.env.OMP_FLEET_CALLBACK_URL;
+		if (explicit !== undefined && explicit !== "") return explicit.replace(/\/+$/, "");
+		return `http://${this.config.bind}:${this.port}`;
+	}
+
+	#fetch = async (req: Request, remoteAddress?: string | null): Promise<Response> => {
+		const url0 = new URL(req.url);
+		const path0 = url0.pathname;
+		// /callback/* is the transport's, mounted BEFORE everything else and
+		// NEVER gated by browser auth: the registry authenticates with the
+		// workspace enrollment credentials (the callback pair from the fleet's
+		// host daemon in this pass; daemon-session pairs in P5).
+		if (path0.startsWith("/callback")) {
+			const transportHandled = await this.transport.handleFetch(req);
+			if (transportHandled !== null) return transportHandled;
+		}
+		// Browser auth: /auth/* is public (the login/session/logout surface),
+		// mounted BEFORE the browser-session gate so the client can always
+		// probe. Disabled (no token configured) → the session route still
+		// answers 404 and everything below behaves exactly as before.
+		if (path0.startsWith("/auth/")) return await this.#handleAuth(req);
+		// Everything remaining is protected when browser auth is enabled:
+		// the edge's browser routes (/events, /command, /ctl/*, static) AND
+		// the control-plane /ctl/* routes. Non-loopback clients must hold a
+		// live browser session; mutations additionally need the X-Omp-Csrf
+		// header and an allowed Origin. Loopback clients (CLI + local UI
+		// dev) are exempt — the R14 precedent, so fleet/cli.ts keeps
+		// working. The client is the socket peer unless the peer is a
+		// configured trusted proxy, whose X-Forwarded-For first hop wins
+		// (P2.3); forwarded headers from any untrusted peer are ignored, so
+		// a non-loopback deployment behind an unlisted proxy still requires
+		// a session.
+		if (this.authGate !== null) {
+			// Data routes (/events, /command, /ctl/*) and every mutation are
+			// gated. The static UI shell stays public: it carries no data, and
+			// the client must boot to reach /auth/login at all. A fresh browser
+			// loads the shell, probes /auth/session (404 disabled / 401
+			// signed-out), and signs in from there.
+			const isDataRoute = path0 === "/events" || path0 === "/command" || path0.startsWith("/ctl");
+			const isMutation = req.method !== "GET" && req.method !== "HEAD";
+			if (isDataRoute || isMutation) {
+				const client = this.authGate.clientAddress(req, remoteAddress);
+				if (!peerIsLoopback(client)) {
+					const session = this.authGate.authenticate(req, client);
+					if (session === null) return json({ error: "unauthorized" }, 401);
+					if (req.method !== "GET" && req.method !== "HEAD") {
+						if (!this.authGate.requireCsrf(req, session)) return json({ error: "forbidden" }, 403);
+						if (!this.authGate.checkOrigin(req)) return json({ error: "forbidden" }, 403);
+					}
+				}
+			}
+		}
 		// Edge routes first: /events (SSE), /command (POST), the /ctl routes,
 		// and static dist. null = not an edge route.
 		const edgeHandled = await this.edge.handleFetch(req);
@@ -521,8 +1136,12 @@ class FleetServerImpl implements FleetServer {
 			// (statsApp returns null for unowned paths — the control-plane
 			// switch below owns the 404/405 for those).
 			if (path.startsWith("/ctl/stats")) {
-				const statsHandled = await statsApp.handleFetch(req, url);
+				const statsHandled = await this.#statsApp.handleFetch(req, url);
 				if (statsHandled !== null) return statsHandled;
+			}
+			if (path.startsWith("/ctl/stored") && this.storedApp !== null) {
+				const storedHandled = await this.storedApp.handleFetch(req, url);
+				if (storedHandled !== null) return storedHandled;
 			}
 			if (req.method === "GET") {
 				// Delete-confirmation evidence for one worktree daemon.
@@ -531,6 +1150,9 @@ class FleetServerImpl implements FleetServer {
 				switch (path) {
 					case "/ctl/sessions":
 						return json(this.registry.list());
+					case "/ctl/profiles":
+						// P1.3: secret-free provider-profile catalog for CLI/browser.
+						return json(this.cloneApi.profiles());
 					case "/ctl/projects": {
 						// The registered set is the only project source (no root
 						// scanning). Each registered project also contributes its
@@ -547,6 +1169,11 @@ class FleetServerImpl implements FleetServer {
 						// service lazily initializes the process-global
 						// Settings singleton + ModelRegistry — no session.
 						return json(await this.fleetSettings.getModel());
+					case "/ctl/logs/orphans":
+						// P7.6: log-store subtrees with no live roster identity
+						// (deleted-without-verification workspaces) — never
+						// auto-GC'd; explicit POST /ctl/logs/purge removes them.
+						return json(await this.#handleLogOrphans());
 					default:
 						return json({ error: "not found" }, 404);
 				}
@@ -559,12 +1186,22 @@ class FleetServerImpl implements FleetServer {
 				switch (path) {
 					case "/ctl/projects":
 						return await this.#handleAddProject(req);
+					case "/ctl/clones":
+						// P1.3/P8: create a clone workspace (frozen contract).
+						// Validate the payload, then delegate ENTIRELY to the
+						// lifecycle service — the same create the edge uses.
+						return await this.#handleCreateClone(req);
 					case "/ctl/spawn":
 						return await this.#handleSpawn(req);
 					case "/ctl/add":
 						return await this.#handleAdd(req);
 					case "/ctl/provision":
 						return await this.#handleProvision(req);
+					// P6.1 clone lifecycle: ensure-running / wake for a
+					// provider-managed clone workspace (P8 UI rides later).
+					case "/ctl/start":
+					case "/ctl/wake":
+						return await this.#handleStart(req);
 					case "/ctl/stop":
 						return await this.#handleStop(req);
 					case "/ctl/remove":
@@ -573,16 +1210,62 @@ class FleetServerImpl implements FleetServer {
 						return await this.#handlePrompt(req);
 					case "/ctl/settings/set":
 						return await this.#handleSettingsSet(req);
-					default:
+					case "/ctl/logs/purge":
+						// P7.6 explicit manual purge of orphaned (or verified
+						// read-only) workspace logs. Never automatic.
+						return await this.#handleLogPurge(req);
+					case "/ctl/auth/revoke-all":
+						// P2.2 browser-session lifecycle: revoke every session,
+						// then clear the cookie. Mutations inherit the
+						// session + CSRF + origin gate (GET-only would be
+						// a no-op — this is a mutation).
+						if (this.authGate === null) break;
+						this.authGate.revokeAll();
+						return new Response(JSON.stringify({ ok: true }), {
+							headers: {
+								"content-type": "application/json",
+								"set-cookie": clearSessionCookie(isLoopbackBind(this.config.bind)),
+							},
+						});
+					case "/ctl/auth/rotate-token": {
+						// P2.2: rotate the operator access token (hash in,
+						// sessions revoked, cookie cleared).
+						if (this.authGate === null) break;
+						const authBody = await readJson(req);
+						const accessToken =
+							typeof authBody.accessToken === "string" ? authBody.accessToken : "";
+						if (accessToken === "") {
+							throw new HttpError(400, "missing or invalid field: accessToken");
+						}
+						const hash = createHash("sha256").update(accessToken, "utf8").digest("hex");
+						this.authGate.rotateAccessToken(hash);
+						return new Response(JSON.stringify({ ok: true }), {
+							headers: {
+								"content-type": "application/json",
+								"set-cookie": clearSessionCookie(isLoopbackBind(this.config.bind)),
+							},
+						});
+					}
+					default: {
+						const resumeCloneMatch = WORKSPACE_RESUME_CLONE_ROUTE.exec(path);
+						if (resumeCloneMatch) {
+							return await this.#handleResumeClone(req, resumeCloneMatch[1]);
+						}
 						return json({ error: "not found" }, 404);
+					}
 				}
 			}
 			if (req.method === "DELETE") {
 				const projectMatch = /^\/ctl\/projects\/([^/]+)$/.exec(path);
 				if (projectMatch) return await this.#handleRemoveProject(projectMatch[1]);
-				// Worktree deletion: stop daemon -> remove entry -> git worktree remove.
+				// DELETE /ctl/worktrees/:daemonId. Worktree workspaces keep the
+				// legacy path (stop → remove entry → git worktree remove)
+				// UNCHANGED. Clone workspaces run the verify-at-deletion gate
+				// (P7.3/P7.5) — admission refusal on active work, writer
+				// quiesce, fleet-store verification, read-only flip, provider
+				// deletion, THEN roster removal.
 				const worktreeMatch = WORKTREE_DELETE_ROUTE.exec(path);
-				if (worktreeMatch) return await this.#handleDeleteWorktree(req, worktreeMatch[1]);
+				if (worktreeMatch) return await this.#handleDeleteWorkspace(req, worktreeMatch[1]);
 				return json({ error: "not found" }, 404);
 			}
 			return json({ error: "method not allowed" }, 405);
@@ -598,6 +1281,101 @@ class FleetServerImpl implements FleetServer {
 			return json({ error: message }, 500);
 		}
 	};
+
+	async #handleAuth(req: Request): Promise<Response> {
+		// /auth/* is PUBLIC by design (it IS the login surface) — mounted
+		// before the browser-session gate. With auth disabled every /auth/*
+		// route answers 404 so clients probe the disabled state.
+		if (this.authGate === null) return json({ error: "not found" }, 404);
+		const url = new URL(req.url);
+		const path = url.pathname;
+		const gate = this.authGate;
+		switch (`${req.method} ${path}`) {
+			case "POST /auth/login": {
+				let body: Record<string, unknown>;
+				try {
+					body = await readJson(req);
+				} catch (err) {
+					if (err instanceof HttpError) return json({ error: err.message }, 400);
+					throw err;
+				}
+				const accessToken = typeof body.accessToken === "string" ? body.accessToken : "";
+				if (accessToken === "") {
+					return json({ error: "missing or invalid field: accessToken" }, 400);
+				}
+				try {
+					const login = gate.login(accessToken, this.#expectedTokenHash);
+					return new Response(
+						JSON.stringify(gate.sessionBody(login.sessionId, login.csrfToken, login.expiresAt)),
+						{
+							status: 200,
+							headers: {
+								"content-type": "application/json",
+								"set-cookie": login.setCookie,
+							},
+						},
+					);
+				} catch (err) {
+					if (err instanceof BrowserAuthError) {
+						const status = err.code === "unauthorized" ? 401 : 400;
+						return json({ error: { code: err.code, message: err.message } }, status);
+					}
+					throw err;
+				}
+			}
+			case "POST /auth/logout": {
+				const sessionId = gate.sessionCookie(req);
+				if (sessionId !== null) gate.logout(sessionId);
+				return new Response(JSON.stringify({ ok: true }), {
+					headers: {
+						"content-type": "application/json",
+						"set-cookie": clearSessionCookie(isLoopbackBind(this.config.bind)),
+					},
+				});
+			}
+			case "GET /auth/session": {
+				const resolved = gate.resolveSession(req);
+				if (resolved === null) {
+					return json({ error: { code: "unauthorized", message: "no session" } }, 401);
+				}
+				const { session, csrfToken } = resolved;
+				return json(gate.sessionBody(session.sessionIdHash, csrfToken, session.expiresAt));
+			}
+			default:
+				return json({ error: "not found" }, 404);
+		}
+	}
+	/** P2.2/P2.3: parse + validate the create_clone payload, then delegate
+	 *  entirely to the lifecycle service (the SAME create the edge uses).
+	 *  Never performs HTTP self-fetch; no duplicate lifecycle exists. */
+	async #handleCreateClone(req: Request): Promise<Response> {
+		const body = await readJson(req);
+		// Shape-check the payload as CloneCreateInput (the frozen contract).
+		const input: CloneCreateInput = {
+			projectId: typeof body["projectId"] === "string" ? body["projectId"] : "",
+			name: typeof body["name"] === "string" ? body["name"] : "",
+			profileId: typeof body["profileId"] === "string" ? body["profileId"] : "",
+			source:
+				typeof body["source"] === "object" && body["source"] !== null
+					? (body["source"] as { local?: string; remote?: string })
+					: undefined,
+			revision: typeof body["revision"] === "string" ? body["revision"] : undefined,
+			branch: typeof body["branch"] === "string" ? body["branch"] : undefined,
+			start: typeof body["start"] === "boolean" ? body["start"] : undefined,
+		};
+		try {
+			return await this.cloneApi.createClone(input);
+		} catch (err) {
+			if (err instanceof HttpError) throw err;
+			if (err instanceof CloneLifecycleError) {
+				throw new HttpError(lifecycleStatus(err.code), err.message);
+			}
+			throw new HttpError(
+				500,
+				`clone creation failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	}
 
 	async #handleSpawn(req: Request): Promise<Response> {
 		const body = await readJson(req);
@@ -764,7 +1542,12 @@ class FleetServerImpl implements FleetServer {
 		if (matches.length === 0) throw new HttpError(404, `no daemon matches selector: ${selector}`);
 		const stopped: string[] = [];
 		for (const entry of matches) {
-			if (entry.mode === "spawned") {
+			if (entry.workspace?.kind === "clone") {
+				// P6.5: provider-owned clone — proof-bearing provider stop via
+				// the single lifecycle owner (desiredState stopped, status
+				// asleep, enrollment revoked). Never the legacy paths.
+				await this.lifecycle.stopClone(entry.daemonId);
+			} else if (entry.mode === "spawned") {
 				await this.supervisor.stop(entry.daemonId);
 			} else {
 				this.connector.disconnect(entry.daemonId);
@@ -785,6 +1568,11 @@ class FleetServerImpl implements FleetServer {
 	 * delete_worktree/remove paths, which evict directly and must not toast.
 	 */
 	async #onWorktreeVanished(entry: RegistryEntry): Promise<void> {
+		// P6.3/P7: a clone workspace's compute is provider-owned and its
+		// volume never vanishes under it (unlike a git worktree); the
+		// lifecycle + boot reconcile own clone eviction. Never route a clone
+		// through this legacy worktree-eviction path.
+		if (entry.workspace?.kind === "clone") return;
 		// Dedup: consecutive poll ticks can report the same vanished worktree
 		// before the eviction settles, and a concurrent UI delete_worktree/
 		// remove may have already evicted the entry (presence check below).
@@ -797,6 +1585,7 @@ class FleetServerImpl implements FleetServer {
 			} else {
 				this.connector.drop(entry.daemonId);
 			}
+			this.#markStoreOrphanIfStored(entry);
 			this.registry.remove(entry.daemonId);
 			this.eventLog.add(
 				"info",
@@ -818,27 +1607,71 @@ class FleetServerImpl implements FleetServer {
 		}
 	}
 
+	/**
+	 * P7.6 orphan provenance: when a roster identity is removed WITHOUT a
+	 * passed verification gate but its fleet log-store subtree survives,
+	 * persist a storeOrphan marker so Retention can distinguish
+	 * deleted-without-verification logs (manual purge only) from verified
+	 * read-only history. Never fired for the verified clone-delete path (the
+	 * store flips read-only instead); the log store itself is never touched.
+	 */
+	#markStoreOrphanIfStored(entry: RegistryEntry): void {
+		const store = this.logStore;
+		if (store === null) return;
+		const workspaceId = entry.daemonId;
+		if (store.isReadOnly(workspaceId)) return; // Verified; not an orphan.
+		// Only mark when a subtree actually exists (a store with no data has
+		// nothing to retain).
+		if (!existsSync(join(store.rootDir, workspaceId))) return;
+		if (this.registry.storeOrphans()[workspaceId] !== undefined) return;
+		const gate = entry.workspace?.deletion;
+		this.registry.markStoreOrphan(
+			workspaceId,
+			gate?.state === "delete-pending-retry"
+				? `removed while deletion was pending retry (${gate.error?.code ?? "retryable"}); logs kept as orphaned`
+				: "removed without deletion verification; logs kept as orphaned",
+		);
+	}
+
 	async #handleRemove(req: Request): Promise<Response> {
 		const body = await readJson(req);
 		const selector = requireString(body, "selector");
 		const matches = matchSelector(this.registry.list(), selector);
 		if (matches.length === 0) throw new HttpError(404, `no daemon matches selector: ${selector}`);
 		const removed: string[] = [];
+		let verified: string[] = [];
 		for (const entry of matches) {
-			// #24: prune/drop the per-daemon supervisor/connector state so a
-			// removed daemon leaks nothing (stderr ring, listeners, waiters,
-			// retain counts) and pending waitReady() waiters reject
-			// immediately instead of hanging until their timeout.
-			if (entry.mode === "spawned") {
-				await this.supervisor.prune(entry.daemonId);
+			if (entry.workspace?.kind === "clone") {
+				// P7.5: clone-safe remove MUST route through the SAME verified
+				// gate as DELETE — no kind-blind roster eviction can bypass
+				// it. The lifecycle owner runs the whole gate (admission →
+				// quiesce → Git guard → store verification → read-only flip →
+				// provider deletion → volume deletion → roster removal).
+				try {
+					const result = await this.lifecycle.deleteClone(entry.daemonId);
+					verified.push(...result.verified);
+				} catch (err) {
+					if (err instanceof CloneLifecycleError) {
+						throw new HttpError(lifecycleStatus(err.code), err.message);
+					}
+					throw err;
+				}
 			} else {
-				this.connector.drop(entry.daemonId);
+				// Legacy direct/worktree eviction (unchanged): #24 prune/drop
+				// the per-daemon supervisor/connector state so a removed
+				// daemon leaks nothing (stderr ring, listeners, waiters).
+				if (entry.mode === "spawned") {
+					await this.supervisor.prune(entry.daemonId);
+				} else {
+					this.connector.drop(entry.daemonId);
+				}
+				this.#markStoreOrphanIfStored(entry);
+				this.registry.remove(entry.daemonId);
 			}
-			this.registry.remove(entry.daemonId);
 			this.eventLog.add("info", "server", "removed", entry.daemonId);
 			removed.push(entry.daemonId);
 		}
-		return json({ removed });
+		return json({ removed, ...(verified.length > 0 ? { verified } : {}) });
 	}
 
 	async #handlePrompt(req: Request): Promise<Response> {
@@ -971,6 +1804,238 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
+	 * DELETE /ctl/worktrees/:daemonId. Routes by workspace kind:
+	 *   - kind "clone" → the verify-at-deletion gate (P7.3/P7.5);
+	 *   - everything else (worktree/direct/legacy) → the unchanged legacy
+	 *     worktree delete path (stop → evict → git worktree remove).
+	 */
+	async #handleDeleteWorkspace(req: Request, daemonId: string): Promise<Response> {
+		const entry = this.registry.get(daemonId);
+		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
+		if (entry.workspace?.kind === "clone") {
+			// P7.3/P7.5: the clone verify-at-deletion gate lives in the ONE
+			// lifecycle owner (admission → quiesce with proven stop → Git
+			// guard → store verification against the volume → read-only
+			// flip → provider deletion → volume deletion → roster removal).
+			// The worktree/direct path below is unchanged.
+			try {
+				const result = await this.lifecycle.deleteClone(daemonId);
+				return json(result);
+			} catch (err) {
+				if (err instanceof CloneLifecycleError) {
+					throw new HttpError(lifecycleStatus(err.code), err.message);
+				}
+				throw err;
+			}
+		}
+		return await this.#handleDeleteWorktree(req, daemonId);
+	}
+
+	/**
+	 * P7.6: log-store subtrees with no live roster identity (and no
+	 *  delete-pending-retry workspace). Retention-governed: never auto-GC'd. */
+	async #handleLogOrphans(): Promise<unknown> {
+		const store = this.logStore;
+		if (store === null) return { orphans: [] };
+		const live = new Set(this.registry.list().map((entry) => entry.daemonId));
+		const orphans = store.listOrphans([...live]);
+		// Orphaned workspaces carry a registry-level storeOrphan marker
+		// (deleted without verification); surface it with the listing.
+		const marked = this.registry.storeOrphans();
+		return {
+			orphans: orphans.map((orphan) => ({
+				...orphan,
+				storeOrphan: orphan.workspaceId in marked,
+			})),
+		};
+	}
+
+	/** P7.6 explicit manual purge (never automatic). Removes one workspace's
+	 *  stored logs (orphaned or verified read-only) and its storeOrphan
+	 *  marker. A live, non-read-only workspace is refused — its store is
+	 *  still being written. */
+	async #handleLogPurge(req: Request): Promise<Response> {
+		const store = this.logStore;
+		if (store === null) throw new HttpError(503, "fleet log store unavailable");
+		const body = await readJson(req);
+		const workspaceId = requireString(body, "workspaceId");
+		const liveEntry = this.registry.get(workspaceId);
+		if (liveEntry && !store.isReadOnly(workspaceId)) {
+			throw new HttpError(
+				409,
+				`workspace ${workspaceId} is live and its store is still writable; purge only applies to orphaned or verified read-only logs`,
+			);
+		}
+		const result = store.purgeWorkspace(workspaceId);
+		if (this.registry.storeOrphans()[workspaceId] !== undefined) {
+			this.registry.clearStoreOrphan(workspaceId);
+		}
+		return json({ purged: workspaceId, sessions: result.sessions });
+	}
+
+	/**
+	 * POST /ctl/workspaces/:id/resume-clone (P8.10): the explicit
+	 * "resume onto fresh clone" action for an ORPHANED (deleted-workspace)
+	 * session. Resolves the workspace's clone provenance — source +
+	 * pinnedRevision, retained on the store-orphan marker at removal —
+	 * provisions a fresh volume at the pinned commit via
+	 * runtime/prepare-workspace.ts (which NEVER substitutes an upstream
+	 * commit: an unresolvable source/pin is a typed failure), materializes
+	 * the requested session's stored transcripts into the volume's agent
+	 * sessions dir, then spawns the daemon with callback flags + --resume
+	 * via the injected provider hook.
+	 *
+	 * Typed failures reuse the frozen vocabulary: 400 `invalid_request` for
+	 * a live workspace or malformed input, 404 when no orphaned session/
+	 * provenance exists, 409 when the store has no transcripts for the
+	 * session, and 503 `unavailable` when the clone source/pin is
+	 * unresolvable, the log store is absent, or no clone provider hook
+	 * exists (P5-blocked — never a fake spawn).
+	 */
+	async #handleResumeClone(req: Request, workspaceId: string): Promise<Response> {
+		const body = await readJson(req);
+		const sessionId = requireString(body, "sessionId");
+		if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sessionId)) {
+			throw new HttpError(400, `invalid field: sessionId (${sessionId})`);
+		}
+		const optionalProfileId = optionalString(body, "profileId");
+
+		const store = this.logStore;
+		if (store === null) throw new HttpError(503, "fleet log store unavailable");
+
+		// The workspace must be GONE (orphaned). A live workspace wakes via
+		// the daemon's own materialize path, never this route.
+		const liveEntry = this.registry.get(workspaceId);
+		if (liveEntry !== undefined) {
+			throw new HttpError(
+				409,
+				`workspace ${workspaceId} is still registered; resume-onto-fresh-clone applies only to deleted workspaces`,
+			);
+		}
+		const orphan = this.registry.storeOrphans()[workspaceId];
+		const provenance = orphan?.provenance;
+		const source = provenance?.source;
+		const pinnedRevision = provenance?.pinnedRevision;
+		const sourceOk =
+			source !== undefined && (source.local !== undefined || source.remote !== undefined);
+		if (
+			orphan === undefined ||
+			!sourceOk ||
+			typeof pinnedRevision !== "string" ||
+			pinnedRevision.length === 0
+		) {
+			throw new HttpError(
+				404,
+				`no resumable clone provenance for workspace ${workspaceId} (the source or pinned commit was not retained)`,
+			);
+		}
+
+		// The requested session must have stored transcripts (the fleet store
+		// is the only source — never upstream substitution). Validated store
+		// path API — never raw path construction.
+		if (store.storedSessionDir(workspaceId, sessionId) === null) {
+			throw new HttpError(
+				409,
+				`no stored transcripts for session ${sessionId} in workspace ${workspaceId}`,
+			);
+		}
+
+		// P5 gate: without a clone provider the spawn cannot happen. Fail
+		// typed `unavailable` rather than faking a spawn.
+		const spawner = this.cloneResumeSpawner;
+		if (spawner === null) {
+			throw new HttpError(
+				503,
+				"resume-onto-fresh-clone is unavailable: no clone provider is configured (P5)",
+			);
+		}
+
+		// Provision the fresh volume at the pinned commit. prepareWorkspace
+		// enforces the pin: an unresolvable source/commit is a typed
+		// failure, never a silent upstream substitution.
+		const volumeRoot = join(this.config.workspaceDir, workspaceId);
+		let prepared;
+		try {
+			prepared = await prepareWorkspace({
+				workspaceId,
+				workspaceRoot: volumeRoot,
+				source,
+				revision: pinnedRevision,
+			});
+		} catch (err) {
+			throw new HttpError(
+				503,
+				`clone preparation failed for workspace ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+
+		// Materialize the requested session's transcripts into the fresh
+		// volume's agent sessions dir (`.home/agent/sessions`), exactly the
+		// tree the daemon's tailer will stream. Use the store directly: the
+		// fresh daemon has no callback pair YET (the pair is established at
+		// spawn below), so materialization is a fleet-local copy.
+		// (The daemon-side /callback/bulk materialize path covers LIVE
+		// workspaces; resume-onto-fresh-clone materializes fleet-side before
+		// the daemon exists.) The fill is fill-missing-only (the fresh
+		// volume has nothing, so every stored file is written) and validates
+		// relpaths with the frozen manifest predicate + isPathUnder.
+		const sessionsDir = join(volumeRoot, ".home", "agent", "sessions");
+		let materialized = 0;
+		try {
+			const outcome = materializeMissingSessionFiles({
+				store,
+				workspaceId,
+				sessionId,
+				sessionsDir,
+			});
+			materialized = outcome.written;
+		} catch (err) {
+			if (err instanceof HttpError) throw err;
+			if (err instanceof WakeMaterializeError) {
+				const message = `transcript materialization failed for session ${sessionId}: ${err.message}`;
+				if (err.code === "unavailable") {
+					throw new HttpError(409, message);
+				}
+				throw new HttpError(500, message);
+			}
+			throw new HttpError(
+				500,
+				`transcript materialization failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+		if (materialized === 0) {
+			throw new HttpError(
+				409,
+				`no stored transcripts for session ${sessionId} in workspace ${workspaceId}`,
+			);
+		}
+
+		// Spawn the daemon (callback pair + --resume). The provider hook
+		// owns the daemon launch; a failure is a typed provider failure.
+		try {
+			await spawner.spawnCloneResume({
+				workspaceId,
+				generation: 1,
+				volumeRoot,
+				sessionId,
+			});
+		} catch (err) {
+			throw new HttpError(
+				503,
+				`daemon spawn failed for workspace ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+		void optionalProfileId;
+		return json({
+			resumed: workspaceId,
+			sessionId,
+			provisioned: true,
+			materializedFiles: materialized,
+			checkoutDir: prepared.checkoutDir,
+		});
+	}
+
+	/**
 	 * DELETE /ctl/worktrees/:daemonId {deleteBranch?}: stop the daemon,
 	 * evict it from the roster, then git-remove the managed worktree (and
 	 * optionally `git branch -d` it). The ownership + dirty guards run
@@ -1039,11 +2104,26 @@ export async function startFleet(
 		statePath?: string;
 		configPath?: string;
 		workspaceDir?: string;
+		bind?: string;
+		browserAccessToken?: string;
+		browserOrigin?: string;
+		/** CLI `--trusted-proxy` literals (repeatable/csv); forwarded headers
+		 *  honored only from these proxies. */
+		trustedProxy?: string[];
 		settings?: FleetSettingsOptions;
+		/** Test seam: hermetic stats.db/sessions locations. Production leaves
+		 *  this unset so stats resolves the operator defaults ($PI_CONFIG_DIR). */
+		statsConfig?: Pick<StatsConfig, "statsDbPath" | "sessionsDir">;
 	} = {},
 ): Promise<FleetServer> {
 	const configPath = resolveConfigPath(opts.configPath);
-	const config = await loadConfig(opts.configPath, { workspaceDir: opts.workspaceDir });
+	const config = await loadConfig(opts.configPath, {
+		workspaceDir: opts.workspaceDir,
+		bind: opts.bind,
+		browserAccessToken: opts.browserAccessToken,
+		browserOrigin: opts.browserOrigin,
+		trustedProxy: opts.trustedProxy,
+	});
 	const statePath = resolveStatePath(opts.statePath, configPath);
 	// One fleet per state file: the O_EXCL pidfile lock fails loudly when a
 	// second fleet starts against the same state (no clobbering writes).
@@ -1053,6 +2133,16 @@ export async function startFleet(
 	try {
 		const registry = new Registry(statePath);
 		await registry.load();
+		// Browser auth + non-loopback binds: opening the bind address must
+		// never create an unauthenticated control plane (P2.3). A
+		// non-loopback bind without browser auth configured is a startup
+		// error, mirroring the daemon's R14 rule.
+		if (!isLoopbackHost(config.bind) && config.browserAccessTokenHash === undefined) {
+			throw new Error(
+				`refusing to bind non-loopback address "${config.bind}" without browser auth; ` +
+					"set OMP_FLEET_BROWSER_TOKEN (or --browser-access-token / config browserAccessToken)",
+			);
+		}
 		return new FleetServerImpl(
 			registry,
 			config,
@@ -1064,6 +2154,9 @@ export async function startFleet(
 			},
 			lock,
 			opts.settings,
+			undefined,
+			null,
+			opts.statsConfig,
 		);
 	} catch (err) {
 		lock.release();

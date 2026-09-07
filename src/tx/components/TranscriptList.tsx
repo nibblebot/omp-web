@@ -9,13 +9,15 @@ import {
 	onCleanup,
 } from "solid-js";
 import { api, ApiError, type Health, type SessionSummary } from "../api";
-import { basename, formatCompact, formatCost, timeAgo } from "../util/format";
+import { basename, formatBytes, formatCompact, formatCost, timeAgo } from "../util/format";
 import { shouldFallbackMissingFile } from "../util/missing-file";
 import { groupSessionsByProject } from "../util/project-groups";
 
 interface TranscriptListProps {
 	selectedFile: string | null;
 	onOpen: (file: string) => void;
+	/** Open a fleet-store-origin row in the stored detail route (P8.6). */
+	onOpenStored: (workspaceId: string, sessionId: string) => void;
 	/** Deep-linked selected file is missing: clear the route back to the list. */
 	onMissingFile?: (file: string) => void;
 	health: () => Health | undefined;
@@ -164,6 +166,7 @@ export function TranscriptList(props: TranscriptListProps) {
 															session={s}
 															selected={s.file === props.selectedFile}
 															onOpen={props.onOpen}
+															onOpenStored={props.onOpenStored}
 														/>
 													)}
 												</For>
@@ -236,6 +239,20 @@ export function TranscriptList(props: TranscriptListProps) {
 								<span class="foot-label">sessions</span>
 								<span class="foot-value">{h().sessionsCount}</span>
 							</div>
+							{/* Fleet log-store coverage (P8.6): shown only when the
+							    store is mounted. The server omits unstreamed remote
+							    history — nothing is fabricated. */}
+							<Show when={h().fleetStore}>
+								{(fs) => (
+									<div class="foot-line">
+										<span class="foot-label">store</span>
+										<span class="foot-value">
+											{fs().workspaces} ws · {fs().sessions}{" "}
+											{fs().sessions === 1 ? "session" : "sessions"} · {formatBytes(fs().bytes)}
+										</span>
+									</div>
+								)}
+							</Show>
 						</>
 					)}
 				</Show>
@@ -248,25 +265,40 @@ function TranscriptRow(props: {
 	session: SessionSummary;
 	selected: boolean;
 	onOpen: (file: string) => void;
+	onOpenStored: (workspaceId: string, sessionId: string) => void;
 }) {
 	const s = () => props.session;
+	// A fleet-store row's `file` is a display key only — opening it goes to
+	// the STORED detail route (the /ctl/stored read surface), never to the
+	// /ctl/stats detail.
+	const isStore = () => s().origin === "fleet-store";
+	const open = () => {
+		if (isStore()) {
+			const st = s().stored;
+			if (st) {
+				props.onOpenStored(st.workspaceId, st.sessionId);
+				return;
+			}
+		}
+		props.onOpen(s().file);
+	};
 	return (
 		<button
 			type="button"
 			classList={{
 				"session-row": true,
 				selected: props.selected,
-				unsynced: !s().synced,
-				missing: !s().onDisk,
+				unsynced: !s().synced && !isStore(),
+				missing: !s().onDisk && !isStore(),
 			}}
 			aria-current={props.selected ? "true" : undefined}
-			onClick={() => props.onOpen(s().file)}
+			onClick={open}
 			title={s().file}
 		>
 			<div class="row-top">
 				<span class="row-title">{s().title ?? basename(s().file)}</span>
 				<span class="row-time">
-					{s().synced ? timeAgo(s().lastTs ?? s().firstTs) : "not synced"}
+					{s().synced || isStore() ? timeAgo(s().lastTs ?? s().firstTs) : "not synced"}
 				</span>
 			</div>
 			<div class="row-folder">{s().folder}</div>
@@ -282,13 +314,23 @@ function TranscriptRow(props: {
 				<span>{formatCost(s().totalCost)}</span>
 			</div>
 			<div class="row-tags">
+				{/* Coverage labels (P8.6). */}
+				<Show when={isStore()}>
+					<span class="tag tag-store">fleet-stored</span>
+					<Show when={s().stored?.readOnly}>
+						<span class="tag tag-muted">view only</span>
+					</Show>
+				</Show>
+				<Show when={s().origin === "fleet-local" && s().stored !== undefined}>
+					<span class="tag tag-store-subtle">also in store</span>
+				</Show>
 				<Show when={s().errorTurns > 0}>
 					<span class="tag tag-err">{s().errorTurns} err</span>
 				</Show>
-				<Show when={!s().synced}>
+				<Show when={!s().synced && !isStore()}>
 					<span class="tag tag-warn">not indexed</span>
 				</Show>
-				<Show when={!s().onDisk}>
+				<Show when={!s().onDisk && !isStore()}>
 					<span class="tag tag-muted">missing</span>
 				</Show>
 			</div>

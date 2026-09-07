@@ -63,6 +63,7 @@ describe("edge worktree commands", () => {
 			templates: { local: { command: "sleep 30" } },
 			defaultTemplate: "local",
 			workspaceDir: join(tmp, "workspaces"),
+			bind: "127.0.0.1",
 		};
 		supervisor = new SpawnSupervisor(registry, connector, config);
 		edge = new FleetEdge({
@@ -76,6 +77,7 @@ describe("edge worktree commands", () => {
 				startedAt: Date.now(),
 				statePath: join(tmp, "state.json"),
 				configPath: null,
+				bind: "127.0.0.1",
 			},
 		});
 		served = serveEdge(edge);

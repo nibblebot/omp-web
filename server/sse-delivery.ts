@@ -97,6 +97,12 @@ const RING_DELTAS: Record<string, true> = {
 	error: true,
 };
 
+/** True when `type` names a ringed delta frame (the callback virtual-stream
+ *  replay ring mirrors the direct SSE ring semantics exactly). */
+export function isRingedDeltaType(type: string): boolean {
+	return RING_DELTAS[type] === true;
+}
+
 /** Bytes currently buffered on a stream (the queue is byte-sized via the stream's queuing strategy). */
 function bufferedBytes(stream: SseConsumer): number {
 	const desired = stream.controller.desiredSize;
@@ -261,6 +267,7 @@ export function broadcast(frame: ServerFrame): void {
 	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
 	ring.push(seq, block);
 	for (const stream of streams) enqueueTo(stream, block);
+	tapFrame(frame);
 }
 
 /**
@@ -272,6 +279,7 @@ export function broadcastAnswer(frame: ServerFrame): void {
 	const seq = nextDeltaSeq++;
 	const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
 	for (const stream of streams) enqueueTo(stream, block);
+	tapFrame(frame);
 }
 
 /**
@@ -287,6 +295,7 @@ export function broadcastTo(handle: string, frame: SessionScopedFrame): void {
 	for (const stream of streams) {
 		if (stream.attached === handle) enqueueTo(stream, block);
 	}
+	tapFrame(frame);
 }
 
 /**
@@ -391,6 +400,26 @@ export function setOnStreamsEmpty(fn: () => void): void {
 let onConsumerDetached: (stream: SseConsumer, reason: string) => void = () => {};
 export function setOnConsumerDetached(fn: (stream: SseConsumer, reason: string) => void): void {
 	onConsumerDetached = fn;
+}
+
+// Callback mirror tap (P3.4): registered by server/index.ts when a callback
+// pair exists. Every broadcastTo/broadcastAnswer/broadcast frame is handed to
+// the tap VERBATIM (payload only — seq/stream stamping is the transport's),
+// so the fleet derives activity + fanout correlation exactly like the direct
+// control-socket tap. The tap never throws into the delivery path.
+let onFrameTap: ((frame: ServerFrame | SessionScopedFrame) => void) | null = null;
+export function setOnFrameTap(
+	fn: ((frame: ServerFrame | SessionScopedFrame) => void) | null,
+): void {
+	onFrameTap = fn;
+}
+function tapFrame(frame: ServerFrame | SessionScopedFrame): void {
+	if (onFrameTap === null) return;
+	try {
+		onFrameTap(frame);
+	} catch {
+		// Listener failures never break delivery.
+	}
 }
 
 /** Snapshot the delta high-water mark BEFORE priming (the replay floor). */

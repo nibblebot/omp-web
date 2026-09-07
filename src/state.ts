@@ -10,6 +10,7 @@ import type {
 	DaemonStatus,
 	ImageArg,
 	ModelInfo,
+	PublicProviderProfile,
 	RegisteredProject,
 	ServerFrame,
 	SettingsModel,
@@ -38,6 +39,7 @@ import {
 } from "./store/chat";
 import { cancelUiRequest } from "./store/modals";
 import { resetPendingProjects, settleProjectBranches, settleProjects } from "./store/projects";
+import { checkSession, subscribeAuth, type AuthStatus, type AuthSnapshot } from "./store/auth";
 import {
 	resetPendingSessionsFiles,
 	settleDaemonSessions,
@@ -180,9 +182,13 @@ export type ModalName =
 	| "goal"
 	| "usage"
 	| "debug"
-	// Phase 5: project/worktree onboarding (add-repo modal + two-tab worktree modal).
+	// Phase 5 + P8.1: project/worktree onboarding. The worktree-only modal
+	// became the unified Add-workspace modal (Worktree/Clone/Add existing).
 	| "add-project"
-	| "worktree";
+	| "workspace"
+	// Browser-auth sign-in surface (P2.4; opened by the auth subscription on
+	// signedOut, exactly like the store/modals contract wires it).
+	| "sign-in";
 
 /** Unicast answer to sendWorktreeDeleteInfo: guard evidence for the
  *  delete-worktree confirm dialog (ownership, dirty counts, branch state). */
@@ -212,7 +218,10 @@ const TX_SIDEBAR_KEY = "omp.txSidebarVisible";
  * defaulting to Work.
  */
 export function initialView(persisted: string | null, hash: string): "work" | "analysis" {
-	if (/^#\/?s\/.+/.test(hash)) return "analysis";
+	// Live-session deep link (#/s/<file>) and P8.5 fleet-stored deep link
+	// (#/stored/<workspaceId>/<sessionId>) both boot into the Analysis view,
+	// overriding the persisted Work/Analysis choice.
+	if (/^#\/?(s|stored)\/.+/.test(hash)) return "analysis";
 	if (persisted === "analysis" || persisted === "transcripts") return "analysis";
 	return "work";
 }
@@ -288,12 +297,19 @@ export const [state, setState] = createStore({
 	goal: null as { objective: string } | null,
 	subagents: new Map<string, SubagentInfo>(),
 	connected: false,
+	// Browser-auth state (P2.4): mirrored from src/store/auth.ts by
+	// subscribeAuth. "unknown" until the first session probe; "disabled"
+	// (fleet/daemon without browser auth) behaves exactly as before this
+	// integration. signedOut opens the sign-in modal.
+	authStatus: "unknown" as "unknown" | "signedOut" | "signedIn" | "disabled",
+	authExpiresAt: undefined as number | undefined,
 	modal: null as ModalName | null,
-	// Phase 5 modal payloads (components read these; set alongside modal):
-	// which project the worktree modal targets (both tabs).
-	worktreeModalProjectId: null as string | null,
-	// daemonId the delete-worktree confirm dialog targets.
-	deleteWorktreeTarget: null as string | null,
+	// Phase 5 + P8.1 modal payloads (components read these; set alongside
+	// modal): which project the Add-workspace modal targets (all tabs).
+	workspaceModalProjectId: null as string | null,
+	// daemonId the delete-workspace confirm dialog targets (worktree guard
+	// evidence or clone verified-delete).
+	deleteWorkspaceTarget: null as string | null,
 	// projectId the remove-project confirm targets.
 	removeProjectTarget: null as string | null,
 	toolsExpanded: false,
@@ -323,6 +339,11 @@ export const [state, setState] = createStore({
 	// fleet-scoped like daemonRoster — survives session resets, and
 	// zero-daemon projects still render).
 	registeredProjects: [] as RegisteredProject[],
+	// P8.1: secret-free provider profile catalog (clone-contracts ledger:
+	// optional registered_projects.providerProfiles; older fleets omit it →
+	// []). Fleet-scoped like registeredProjects and boot-static — a fleet
+	// restart/reload re-sends it, so a session reset must not clear it.
+	providerProfiles: [] as PublicProviderProfile[],
 	// Phase 4: resolved fleet config path from the registered_projects frame
 	// (null = defaults, no config file). Fleet-scoped like the projects
 	// above — survives session resets. Together with an empty project
@@ -331,10 +352,11 @@ export const [state, setState] = createStore({
 	// Phase 5: delete-worktree guard evidence (worktree_delete_info unicast),
 	// keyed by daemonId.
 	worktreeDeleteInfo: {} as Record<string, WorktreeDeleteInfo>,
-	// Phase 5: post-attach session-picker gate. Holds the daemonId awaiting
-	// the new-vs-resume decision (armed by start:true onboarding senders,
-	// stamped with the real daemonId when the attach fires, cleared by the
-	// sessions answer / attach failure / daemon switch). Fleet-scoped.
+	// Phase 5 + P8.1: post-attach session-picker gate. Holds the daemonId
+	// awaiting the new-vs-resume decision (armed by start:true onboarding
+	// senders — add project / create worktree / create clone — stamped with
+	// the real daemonId when the attach fires, cleared by the sessions
+	// answer / attach failure / daemon switch). Fleet-scoped.
 	pendingSessionPicker: null as string | null,
 	// Phase 5: SessionPicker context when opened from the onboarding gate —
 	// non-null makes the picker render its "New session" top item (Esc =
@@ -804,6 +826,39 @@ function reconcileAttachedSession(): void {
 
 let backoff = 1000;
 
+/** Wire the browser-auth module into the store: mirror snapshots into the
+ *  state fields and open the sign-in modal on signedOut. The module's own
+ *  statuses ('unknown' | 'signedOut' | 'signedIn') map 1:1; the 'disabled'
+ *  state is the STATE layer's addition (the auth module has no server-side
+ *  auth to probe when /auth/session answers 404 — see bootAuth). */
+export function initAuth(): () => void {
+	const unsubscribe = subscribeAuth((snap: AuthSnapshot) => {
+		setState("authStatus", snap.status);
+		setState("authExpiresAt", snap.expiresAt);
+		if (snap.status === "signedOut") setState("modal", "sign-in");
+	});
+	return unsubscribe;
+}
+
+/** Boot-time probe. checkSession() answers 401 → the server HAS auth and the
+ *  module moves to signedOut (modal opens); a 404 (no /auth/session route on
+ *  the server) → auth is disabled: the state layer marks 'disabled' and every
+ *  existing path keeps behaving exactly as before. */
+export function bootAuth(): void {
+	void checkSession().catch((err: unknown) => {
+		const status = (err as { status?: number })?.status ?? 0;
+		if (status === 404) {
+			setState("authStatus", "disabled");
+		} else {
+			pushDebug(
+				"error",
+				"transport",
+				`auth session probe failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	});
+}
+
 export function connect(): void {
 	// Browser-only transport: without EventSource there is nothing to dial.
 	// (A bun test worker has neither EventSource nor location — a silence
@@ -1144,6 +1199,9 @@ export function connect(): void {
 				// like the roster — survives session resets; zero-daemon
 				// projects still render via daemonsByProject).
 				setState("registeredProjects", frame.projects);
+				// P8.1: secret-free provider profile catalog rides the same
+				// frame (additive — older edges omit it, so missing = []).
+				setState("providerProfiles", frame.providerProfiles ?? []);
 				// Phase 4: the resolved fleet config path rides the same frame
 				// (additive — older edges omit it, so missing = null). Also
 				// fleet-scoped: resetSessionView must not wipe it (it is the
@@ -1406,11 +1464,13 @@ export {
 	sendAddProject,
 	sendRemoveProject,
 	sendCreateWorktree,
+	sendCreateClone,
 	sendAddExistingWorktree,
 	sendDeleteWorktree,
 	sendWorktreeDeleteInfo,
 } from "./store/projects";
 export { sendLoginCode, sendUiResponse } from "./store/modals";
+export { checkSession, signIn, signOut } from "./store/auth";
 export { refreshSettings, updateSetting } from "./store/settings";
 export { refreshUsageReports, setSidebarUsage } from "./store/usage";
 export {

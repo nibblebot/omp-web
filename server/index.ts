@@ -26,6 +26,13 @@ import { acquireFileLock, LockHeldError } from "../shared/file-lock";
 import type { FileLock } from "../shared/file-lock";
 import { isLoopbackHost, parseConfig, type SessionConfig } from "./config";
 import { EMBEDDED_DIST } from "./embedded-dist";
+import { FleetCallback, type FleetCallbackStatus } from "./fleet-callback";
+import { SessionLogTailer } from "./log-tailer";
+import {
+	MaterializeSessionError,
+	materializeSessionToDir,
+	sessionTreeExists,
+} from "./session-materialize";
 import { CollabHostAdapter } from "./collab-host";
 import { createRelay, type RelayHandle, type RelaySocketData } from "./collab-relay";
 import { createCollabSession } from "./collab-session";
@@ -55,6 +62,18 @@ import {
 } from "./sse-delivery";
 import { clearSubagents } from "./subagent-mirror";
 import { rejectEntryUiRequests, rejectStreamUiRequests, webUiRequest } from "./ui-context";
+import { callbackError } from "../shared/callback-protocol";
+import type { CallbackEnvelope } from "../shared/callback-protocol";
+import { createDaemonControl, type DaemonControl } from "./daemon-control";
+import {
+	boundaryAcked,
+	collectGitEvidence,
+	enumerateLineageManifest,
+	finalizeTailerBoundary,
+	verifyLineageStructure,
+} from "./quiesce-evidence";
+import { flushAllWriters } from "./writer-flush";
+import { setOnFrameTap } from "./sse-delivery";
 
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
@@ -80,8 +99,29 @@ if (!isLoopbackHost(config.host) && !config.token) {
 	);
 	process.exit(1);
 }
+// Callback transport (P3.2): the flags that define a callback pair must
+// arrive together — a partial set is a visible startup error, never a silent
+// partial pair (a pair without its enrollment credential would dial and
+// 401 forever; a URL without a workspace binds nothing). callbackProxy and
+// callbackAllowHttp are optional refinements of an already-complete pair.
+const callbackPairFields = [
+	["callbackUrl", config.callbackUrl !== undefined],
+	["callbackWorkspace", config.callbackWorkspace !== undefined],
+	["callbackGeneration", config.callbackGeneration !== undefined],
+	["callbackToken", config.callbackToken !== undefined],
+] as const;
+const missingCallback = callbackPairFields.filter(([, present]) => !present).map(([name]) => name);
+if (missingCallback.length > 0 && missingCallback.length < callbackPairFields.length) {
+	console.error(
+		"omp-session: callback transport flags must be provided together",
+		`missing: ${missingCallback.join(", ")}`,
+	);
+	process.exit(1);
+}
+
 // TUI default global config directory (~/.omp/agent; sdk.ts documents the same).
 const agentDir = getAgentDir();
+const sessionsDir = path.join(agentDir, "sessions");
 const authStorage = await discoverAuthStorage(agentDir);
 const modelRegistry = new ModelRegistry(authStorage);
 const settings = await Settings.init({ cwd: config.cwd, agentDir });
@@ -103,6 +143,11 @@ let shuttingDown = false;
 
 function markActivity(): void {
 	lastActivityAt = Date.now();
+}
+
+/** Narrow an unknown value to a plain object (down-traffic control payloads). */
+function isObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -177,7 +222,15 @@ const {
 	historyReload: HISTORY_RELOAD,
 	getInFlightBash,
 	getInFlightPython,
-} = createWebMethods({ settings, authStorage, collab: collabSession, broker: daemonBroker });
+} = createWebMethods({
+	settings,
+	authStorage,
+	collab: collabSession,
+	broker: daemonBroker,
+	materializeSession,
+	sessionsDir,
+	hasCallbackPair: () => fleetCallback !== null,
+});
 setOnStreamsEmpty(() => daemonBroker.stopDaemonPoll());
 setOnConsumerDetached((stream, reason) => {
 	// A UI request dies only when every stream it was shown to is gone.
@@ -921,6 +974,21 @@ const server = Bun.serve<RelaySocketData>({
 			if (commandSeenRecently(cmd.id)) {
 				return Response.json({ commandId: cmd.id }, { status: 202 });
 			}
+			// Quiesce admission barrier (P7.3): once deletion quiesce begins,
+			// every new command is rejected with an explicit typed failure —
+			// never silently dropped, never queued past the gate.
+			if (daemonControl !== null && daemonControl.status().admissionBarrier) {
+				return Response.json(
+					{
+						commandId: cmd.id,
+						error: {
+							code: "writer_active",
+							message: "command rejected: quiesce admission barrier",
+						},
+					},
+					{ status: 409 },
+				);
+			}
 			// Fire-and-forget accept: answers ride the /events stream only.
 			void handleCommand(cmd).catch((err) => console.error("command dispatch failed:", err));
 			return Response.json({ commandId: cmd.id }, { status: 202 });
@@ -1074,6 +1142,69 @@ async function bootReadiness(entry: SessionEntry): Promise<void> {
 }
 
 let bootSession: SessionEntry;
+/** Callback transport pair to the fleet (P3.2); started after the boot
+ *  session exists, stopped in shutdown(). Null = no callback flags. */
+let fleetCallback: FleetCallback | null = null;
+/** Session-lineage log tailer (P3.7), streamed over the callback pair.
+ *  Constructed with the callback (never without it); started after the
+ *  pair starts, stopped before it stops in shutdown(). Null = no callback
+ *  flags / tailer failed to construct. */
+let logTailer: SessionLogTailer | null = null;
+/**
+ * Callback control broker (P3.3/P3.5/P4.5): per-browser virtual streams,
+ * command routing, control mirror, and the quiesce state machine. Created
+ * only when the callback pair exists; null otherwise.
+ */
+let daemonControl: DaemonControl | null = null;
+
+/**
+ * P8.9 wake: materialize a session's stored transcripts from the fleet log
+ * store into the agent sessions dir when the transcript is cold/missing, so
+ * the caller can resume it. Returns `{ alreadyPresent: true }` when the
+ * session tree exists locally (warm — no transfer needed) and throws a typed
+ * error when materialization is impossible (no ready callback pair, or the
+ * fleet lacks the session).
+ */
+async function materializeSession(
+	_entry: SessionEntry,
+	args: { sessionId?: string },
+): Promise<{ files: number; bytes: number } | { alreadyPresent: true }> {
+	const sessionId = typeof args?.sessionId === "string" ? args.sessionId : "";
+	if (sessionId.length === 0) {
+		throw new MaterializeSessionError("invalid_request", "materializeSession requires a sessionId");
+	}
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sessionId)) {
+		throw new MaterializeSessionError("invalid_request", `unsafe sessionId: ${sessionId}`);
+	}
+	// Warm: the session tree is already present locally — nothing to do.
+	if (sessionTreeExists(sessionsDir, sessionId)) {
+		return { alreadyPresent: true };
+	}
+	const callback = fleetCallback;
+	if (callback === null) {
+		throw new MaterializeSessionError(
+			"unavailable",
+			"materialization unavailable: no callback pair is active",
+		);
+	}
+	try {
+		const result = await materializeSessionToDir(sessionsDir, sessionId, callback);
+		// A materialized session should be resumable; surface the outcome.
+		return result;
+	} catch (error) {
+		if (error instanceof MaterializeSessionError) throw error;
+		if (error instanceof Error) {
+			const code = (error as Error & { code?: unknown }).code;
+			if (code === "unavailable" || code === "invalid_request" || code === "retryable") {
+				throw new MaterializeSessionError(
+					code as "unavailable" | "invalid_request" | "retryable",
+					error.message,
+				);
+			}
+		}
+		throw new MaterializeSessionError("unavailable", `materialization failed: ${String(error)}`);
+	}
+}
 // Lock the --resume session file before the boot session exists so a second
 // omp-session pointed at the same file fails loudly instead of racing it.
 // Only absolute paths are locked here; the live file (which may be identical)
@@ -1109,6 +1240,228 @@ if (config.resume) {
 }
 resolveBootReady();
 void bootReadiness(bootEntry);
+
+// ---------------------------------------------------------------------------
+// Callback transport (P3.2): with all four callback flags set, dial the
+// fleet's callback pair. The daemon drives the pair (POST /callback/up +
+// GET /callback/down); the HTTP/SSE listener above stays fully functional —
+// the callback is additive, not a replacement, in this pass. Started AFTER
+// the boot session + readiness resolve so the pair speaks for a live
+// workspace. start() resolves when the fleet's pair_ready lands; readiness
+// and failures log to stderr (stdout is reserved for OMP_SESSION| lines).
+// ---------------------------------------------------------------------------
+if (config.callbackUrl !== undefined) {
+	// Down-traffic router: log controls (log_ack/log_gap) apply to the
+	// tailer; stream_open/close, quiesce_begin and every kind:"command"
+	// envelope go to the control broker. Reads the mutable bindings at
+	// invocation (constructed before FleetCallback below).
+	const routeDown = (envelope: CallbackEnvelope): void => {
+		if (envelope.kind === "control") {
+			const payload = envelope.payload;
+			const type = isObject(payload) ? payload.type : "";
+			if (type === "log_ack" || type === "log_gap") {
+				logTailer?.handleControl(envelope.streamId, envelope.payload);
+				return;
+			}
+		}
+		daemonControl?.handleEnvelope(envelope);
+	};
+
+	const callbackSend = (
+		streamId: string,
+		kind: CallbackEnvelope["kind"],
+		payload: unknown,
+		onEmittedSeq?: (seq: number) => void,
+	): ReturnType<FleetCallback["send"]> => {
+		const callback = fleetCallback;
+		if (callback === null) return "stopped";
+		return callback.send({
+			streamId,
+			kind,
+			payload,
+			...(onEmittedSeq !== undefined ? { onEmittedSeq } : {}),
+		});
+	};
+
+	fleetCallback = new FleetCallback(
+		{
+			url: config.callbackUrl,
+			workspaceId: config.callbackWorkspace!,
+			generation: config.callbackGeneration!,
+			token: config.callbackToken,
+			...(config.callbackProxy !== undefined ? { proxy: config.callbackProxy } : {}),
+			...(config.callbackAllowHttp ? { allowHttp: true } : {}),
+		},
+		{
+			onStatus: (status: FleetCallbackStatus) => {
+				console.error(
+					`omp-session: callback pair ${status.state} (workspace ${status.workspaceId} gen ${status.generation}${status.connectionId !== null ? `, connection ${status.connectionId}` : ""})`,
+				);
+			},
+			onError: (error, context) => {
+				console.error(
+					`omp-session: callback ${context.phase} failed: ${error.code} ${error.message}`,
+				);
+			},
+			onEnvelope: (envelope) => routeDown(envelope),
+			onControl: (envelope) => routeDown(envelope),
+		},
+	);
+	// P3.7 session log tailing: the SDK's per-project sessions layout is a
+	// cwd-encoded subdir under the agent's sessions root — main JSONL at
+	// `<sessionsRoot>/<encoded-cwd>/`, its artifact subtree alongside — so
+	// the tailer watches the sessions ROOT (matching the manifest traversal
+	// in runtime/export-sessions.ts) and resolves each session's project
+	// dir there. Constructed with the pair before start() so no window
+	// exists where frames could emit before this handler is live. A missing
+	// agent dir is not fatal here: the tailer logs the failure and keeps
+	// polling until the dir appears.
+	try {
+		logTailer = new SessionLogTailer({
+			sessionsDir,
+			send: (streamId, payload) => callbackSend(streamId, "frame", payload),
+		});
+	} catch (err) {
+		console.error(
+			`omp-session: log tailer unavailable (${err instanceof Error ? err.message : String(err)}); session logs will not stream`,
+		);
+	}
+	// Control broker (P3.3/P3.5/P4.5): mounted after the tailer so log
+	// controls are routed first; broker handles stream_open/close, quiesce,
+	// and command dispatch over the pair. Command answers flow through the
+	// broadcast mirror (the frame tap), so handleCommand resolves undefined
+	// and the tap forwards the answer frames.
+	daemonControl = createDaemonControl({
+		getEntry: () =>
+			bootEntry === null
+				? undefined
+				: { disposeQuiesce: () => closeSession(bootEntry!, "quiesce") },
+		handleCommand: async (command: unknown) => {
+			await handleCommand(command as ClientCommand);
+			return undefined; // Answers flow through the broadcast mirror tap.
+		},
+		flushWriters: () =>
+			flushAllWriters({
+				entry: bootEntry!,
+				registry: bootEntry!.agentRegistry,
+				mainSessionFile: bootEntry!.session.sessionFile ?? null,
+			}),
+		finalizeTailer: async () => {
+			if (logTailer === null) {
+				throw callbackError("unavailable", "log tailer unavailable for quiesce");
+			}
+			return finalizeTailerBoundary(logTailer);
+		},
+		waitForAckedBoundary: async (boundary, timeoutMs) => {
+			const deadline = Date.now() + timeoutMs;
+			const { promise, resolve, reject } = Promise.withResolvers<void>();
+			const poll = (): void => {
+				if (logTailer !== null) {
+					const acked = logTailer.ackedOffsets();
+					if (boundaryAcked(boundary, acked)) {
+						resolve();
+						return;
+					}
+				}
+				if (Date.now() > deadline) {
+					reject(
+						callbackError(
+							"retryable",
+							"timed out waiting for fleet log_acks to cover the flush boundary",
+						),
+					);
+					return;
+				}
+				setTimeout(poll, 200);
+			};
+			poll();
+			return promise;
+		},
+		verifyLineage: async () => {
+			verifyLineageStructure(sessionsDir);
+			const files = enumerateLineageManifest(sessionsDir);
+			let resolvedCommit = "";
+			try {
+				const proc = Bun.spawn(["git", "-C", config.cwd, "rev-parse", "HEAD"], {
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				resolvedCommit = new TextDecoder()
+					.decode(await new Response(proc.stdout).arrayBuffer())
+					.trim();
+			} catch {
+				resolvedCommit = "";
+			}
+			return {
+				manifestFiles: files,
+				provenance: {
+					workspaceId: config.callbackWorkspace!,
+					workspaceName: config.name,
+					resolvedCommit,
+					generatedAt: Date.now(),
+				},
+			};
+		},
+		collectGitEvidence: async () => {
+			const result = await collectGitEvidence(config.cwd);
+			if (!result.ok) {
+				return {
+					ok: false,
+					error: { code: result.error!.code, message: result.error!.message },
+				};
+			}
+			return { ok: true, git: result.evidence };
+		},
+		primeStream: (streamId) => {
+			// Re-prime burst: the same frame set the direct SSE priming sends.
+			const entry = bootEntry;
+			if (entry === null) {
+				console.error(`omp-session: cannot prime ${streamId}: no boot session`);
+				return;
+			}
+			const ctl = daemonControl;
+			if (ctl === null) return;
+			const publish = (frame: Record<string, unknown>): void => ctl.publish(streamId, frame);
+			publish({
+				type: "hello_ok",
+				proto: OMP_PROTO,
+				name: config.name,
+				cwd: config.cwd,
+				pid: process.pid,
+				version,
+				...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
+			});
+			publish({ type: "attached", sessionId: BOOT_HANDLE });
+			publish({
+				type: "state",
+				state: daemonBroker.buildStateSnapshot(entry.session),
+				stats: entry.session.getSessionStats(),
+			});
+			publish({
+				type: "collab_status",
+				status: collabSession.toWireStatus(entry.collab.adapter?.status ?? null),
+			});
+			if (readyAt !== null) publish({ type: "ready", readyAt });
+		},
+		send: callbackSend,
+		pairLive: () => fleetCallback !== null && fleetCallback.status().state === "ready",
+		mainSessionFile: null,
+	});
+	// Register the mirror tap: every broadcast/broadcastAnswer/broadcastTo
+	// frame is forwarded verbatim — to the "control" stream (fleet activity +
+	// fanout correlation) AND every open browser stream (ringed deltas ring
+	// for reconnect replay). Tap must never throw into delivery.
+	setOnFrameTap((frame) => {
+		const ctl = daemonControl;
+		if (ctl !== null) ctl.mirror(frame as Record<string, unknown>);
+	});
+	// Once the pair is ready (fleet pair_ready observed) start streaming
+	// session logs over it; tailer start() is sync (initial scan + watcher).
+	void fleetCallback.start().then(() => {
+		logTailer?.start();
+		daemonControl?.onPairChange();
+	});
+}
 
 // ---------------------------------------------------------------------------
 // Idle auto-exit (R11): a 15s tick (default; the OMP_SESSION_TEST_IDLE_CHECK_MS
@@ -1157,6 +1510,11 @@ async function shutdown(): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	if (idleTimer) clearInterval(idleTimer);
+	// Stop the log tailer BEFORE the callback pair so no chunk frames queue
+	// into a half-torn transport, then stop the pair (its own stop is sync).
+	if (logTailer !== null) logTailer.stop();
+	if (daemonControl !== null) daemonControl.stop();
+	if (fleetCallback !== null) fleetCallback.stop();
 	if (bootEntry) await closeSession(bootEntry, "server shutting down");
 	server.stop();
 	// Release session-file locks before the SDK postmortem cleanup runs so a

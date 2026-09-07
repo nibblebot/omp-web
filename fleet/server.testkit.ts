@@ -12,7 +12,7 @@
 
 import { expect } from "bun:test";
 import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
 import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../shared/protocol";
 import { encodeSseEvent } from "../shared/sse";
@@ -243,12 +243,28 @@ export function fleetPaths(prefix = "omp-web-test-"): FleetPaths {
 	return { tmp, statePath: join(tmp, "state.json"), configPath: join(tmp, "config.json") };
 }
 
+/**
+ * Hermetic stats config for suites that call `startFleet` directly (bypassing
+ * startTestFleet). Without it, createStatsApp falls back to the operator's
+ * real $PI_CONFIG_DIR/stats.db (default ~/.omp/stats.db) and real sessions
+ * dir, making suites environment-dependent and touching operator state.
+ */
+export function hermeticStatsConfig(statePath: string): {
+	statsDbPath: string;
+	sessionsDir: string;
+} {
+	const dir = dirname(statePath);
+	return { statsDbPath: join(dir, "stats.db"), sessionsDir: join(dir, "agent-sessions") };
+}
+
 type FleetExtra = Omit<Parameters<typeof startFleet>[0], "port" | "statePath" | "configPath">;
 
 /**
  * Boot a test fleet on ephemeral port 0 against the given paths: writes
  * `config` to configPath, then starts the fleet. `extra` merges into the
  * startFleet options (port/statePath/configPath are owned by this helper).
+ * Stats defaults to the hermetic per-fleet locations; `extra.statsConfig`
+ * overrides.
  */
 export async function startTestFleet(
 	paths: Pick<FleetPaths, "statePath" | "configPath">,
@@ -260,6 +276,7 @@ export async function startTestFleet(
 		port: 0,
 		statePath: paths.statePath,
 		configPath: paths.configPath,
+		statsConfig: hermeticStatsConfig(paths.statePath),
 		...extra,
 	});
 }

@@ -13,6 +13,7 @@ import {
 	FAKE_CWD,
 	cleanupTempDirs,
 	fleetPaths,
+	hermeticStatsConfig,
 	startFakeDaemon,
 	waitFor,
 	type FakeDaemon,
@@ -103,7 +104,12 @@ describe("boot reconciliation (#3)", () => {
 			status: "error",
 			error: "unauthorized (401): daemon rejected the token",
 		});
-		server = await startFleet({ port: 0, statePath, configPath });
+		server = await startFleet({
+			port: 0,
+			statePath,
+			configPath,
+			statsConfig: hermeticStatsConfig(statePath),
+		});
 	});
 
 	afterAll(async () => {

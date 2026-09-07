@@ -80,6 +80,7 @@
  * toRosterEntry).
  */
 
+import { randomUUID } from "node:crypto";
 import {
 	OMP_PROTO,
 	SSE_BACKPRESSURE_BYTES,
@@ -92,6 +93,7 @@ import {
 	type ClientCommand,
 	type DaemonEntry,
 	type DaemonInfo,
+	type PublicProviderProfile,
 	type RegisteredProject,
 	type ServerFrame,
 	type SessionScopedFrame,
@@ -104,13 +106,20 @@ import {
 	SseRing,
 } from "../shared/sse";
 import { EMBEDDED_DIST } from "../server/embedded-dist";
+import { CALLBACK_CONTROL_STREAM_ID } from "../shared/callback-protocol";
+import type { CallbackEnvelope } from "../shared/callback-protocol";
 import type { FleetConfig } from "./config";
 import { validateProjectPath } from "./discovery";
 import { BrowseError, browseDirectories } from "./fs-browse";
 import type { DaemonConnector } from "./connector";
 import { backoffDelay, daemonHttpBase } from "./connector";
 import { DaemonsAggregator } from "./daemons-aggregator";
-import { listDaemonSessions } from "./daemon-sessions";
+import type { DaemonTransportRegistry, VirtualStreamSink } from "./daemon-transport";
+import {
+	listCloneDaemonSessions,
+	listDaemonSessions,
+	type CloneSessionStore,
+} from "./daemon-sessions";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
 import type { FleetEventLog, FleetFacts } from "./events";
@@ -190,6 +199,8 @@ function parseSpawnLabels(value: unknown): string[] | undefined {
 }
 
 const STDERR_ROUTE = /^\/ctl\/sessions\/([^/]+)\/stderr$/;
+/** Fleet-proxied session-file download (P3.4): clone files ride the callback bulk channel; direct daemons proxy their /download endpoint. */
+const DOWNLOAD_ROUTE = /^\/ctl\/sessions\/([^/]+)\/download$/;
 
 /**
  * Error frame for any browser command outside the allowlist. Phase 6: the
@@ -216,6 +227,8 @@ const BROWSER_COMMAND_LIST = [
 	"spawn_resume",
 	"stop",
 	"remove",
+	// Clone creation (P8.1): handled at the edge via the injected lifecycle hooks.
+	"create_clone",
 	"add_project",
 	"remove_project",
 	"attach",
@@ -336,6 +349,51 @@ const PLACEHOLDER_HTML = `<!doctype html>
   </body>
 </html>`;
 
+/**
+ * Clone lifecycle service injected into the edge (P6/P7 boundary). The edge
+ * NEVER stops/removes/deletes a clone workspace through the supervisor,
+ * connector, git worktree guards, or registry.remove directly — every clone
+ * lifecycle mutation goes through these hooks so the provider lifecycle,
+ * admission, and the verify-at-deletion gate cannot be bypassed from the
+ * browser surface. All methods throw typed errors whose messages are safe
+ * to surface in an error frame. Implemented by fleet/workspace-lifecycle.ts
+ * (structural conformance — the edge holds no import on it).
+ */
+export interface EdgeLifecycleHooks {
+	/** Create + optionally start a clone workspace (P1/P8.1); the roster broadcast carries the result. */
+	createClone(input: CreateCloneInput): Promise<RegistryEntry>;
+	/**
+	 * Start + wake: resolves once the provider confirms compute running and
+	 * enrollment is persisted; pair readiness rides the lifecycleStage roster
+	 * broadcasts (runtime → callback → ready). Idempotent; safe to call for
+	 * both start and wake.
+	 *
+	 * `resumeSessionId` (optional) is the store-validated session id from a
+	 * dropdown pick; the lifecycle materializes cold transcripts and resumes
+	 * that session on wake. Omitted = plain wake (lifecycle resumes the
+	 * newest session, or boots fresh when none exists).
+	 */
+	ensureCloneRunning(daemonId: string, opts?: { resumeSessionId?: string }): Promise<void>;
+	/** Ordinary stop: proof-bearing provider stop, desiredState stopped, data retained. */
+	stopClone(daemonId: string): Promise<void>;
+	/** Verified delete (P7 gate): refuses active work, verifies the fleet store, then deletes provider resources. */
+	deleteClone(daemonId: string): Promise<{ verified: string[] }>;
+	/** Clone-safe roster remove: routes through the SAME verified gate as deleteClone. */
+	removeClone(daemonId: string): Promise<void>;
+}
+
+/** Frozen create_clone command payload (docs/clone-contracts.md, "Browser and CLI workspace creation"). */
+export interface CreateCloneInput {
+	projectId: string;
+	name: string;
+	profileId: string;
+	/** Exactly one member when given; omitted = the registered project's local path. */
+	source?: { local?: string; remote?: string };
+	revision?: string;
+	branch?: string;
+	start?: boolean;
+}
+
 /** The live machinery the edge coordinates. */
 export interface EdgeDeps {
 	registry: Registry;
@@ -346,6 +404,19 @@ export interface EdgeDeps {
 	eventLog: FleetEventLog;
 	/** Fleet-wide facts (port/startedAt/state paths) surfaced by /ctl/debug. */
 	fleet: FleetFacts;
+	/**
+	 * Callback transport (P3): present whenever the fleet enrolled daemons
+	 * can dial back. Clone-kind attach/commands/downloads ride it; direct and
+	 * worktree daemons never touch it. Absent (legacy/test construction) =
+	 * clone rows report typed unavailability instead of dialing.
+	 */
+	transport?: DaemonTransportRegistry;
+	/** Clone lifecycle service (create/start/wake/stop/remove/delete). Absent = clone commands answer typed unavailability. */
+	lifecycle?: EdgeLifecycleHooks;
+	/** Boot-static secret-free provider catalog (P1.3), published on registered_projects. Omitted entirely when not configured. */
+	providerProfiles?: PublicProviderProfile[];
+	/** Fleet transcript store (P3.8) for clone session listing/resume membership. Absent = clone rows list no sessions. */
+	logStore?: CloneSessionStore;
 }
 
 /**
@@ -377,12 +448,17 @@ interface BrowserStream {
 	unreadEstimate: number;
 	/** The client this stream belongs to (ring/seq live there). */
 	client: BrowserClient;
-	/** This browser's dedicated daemon pipe (attach). */
+	/** This browser's dedicated daemon channel: a direct proxy pipe (worktree/direct)
+	 * or a callback virtual stream (clone, P3.4). Null while unattached. */
 	pipe: PipeState | null;
 }
 
-/** One proxy pipe: a browser's dedicated /events stream to a daemon. */
-interface PipeState {
+/**
+ * One proxy pipe: a browser's dedicated direct /events stream to a daemon
+ * (direct/worktree daemons — the legacy transport, unchanged).
+ */
+interface DirectPipeState {
+	mode: "direct";
 	daemonId: string;
 	/** AbortController for the daemon /events fetch — the pipe handle. */
 	abort: AbortController;
@@ -398,6 +474,38 @@ interface PipeState {
 	redialAttempt: number;
 	/** Pending redial (jittered backoff); cleared on intentional teardown/terminal loss. */
 	reconnectTimer: ReturnType<typeof setTimeout> | null;
+}
+
+/**
+ * One callback virtual stream: a browser's dedicated "browser/<connId>" pair
+ * to a clone daemon (P3.4 — no inbound dial ever exists for these). The
+ * daemon primes + replays per stream; the edge only forwards envelopes and
+ * re-sends stream_open after every pair replacement. Never redials: pair
+ * liveness is the transport's job; a dropped pair surfaces as a
+ * "daemon connection lost" error frame exactly like a terminal direct pipe.
+ */
+interface CallbackPipeState {
+	mode: "callback";
+	daemonId: string;
+	/** Edge-chosen browser connection id — the "browser/<connId>" stream's suffix. */
+	connId: string;
+	/** Intentional teardown (browser close / re-attach / clone stopped/removed). */
+	closed: boolean;
+	/** Last daemon envelope seq consumed on this stream (stream_open.lastSeq). */
+	lastSeq: number;
+	/** The pair connectionId this stream was primed against; a change re-primes from 0. */
+	pairConnectionId: string | null;
+	/** Unbind the transport virtual stream; idempotent, safe after close(). */
+	detach: () => void;
+	/** Unsubscribe the pair-change observer; idempotent, safe after close(). */
+	unsubscribePair: () => void;
+}
+
+type PipeState = DirectPipeState | CallbackPipeState;
+
+/** Narrow: this browser channel is a direct proxy pipe (direct/worktree daemons). */
+function isDirectPipe(pipe: PipeState | null): pipe is DirectPipeState {
+	return pipe !== null && pipe.mode === "direct";
 }
 
 function newClient(clientId: string | null, ringBytes: number): BrowserClient {
@@ -429,6 +537,18 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
  * fleet managed-worktree root) computes `managed`: true when the entry's cwd
  * realpath is under it — the roster signal the close-out UI uses to offer
  * worktree deletion.
+ *
+ * P1.4 clone-workspace projection: the roster surfaces the PUBLIC subset of
+ * the fleet-private WorkspaceRecord — kind→workspaceKind,
+ * desiredState→desiredState, profileId→providerProfileId — plus the
+ * ephemeral lifecycle liveness facts (lifecycleStage/lifecycleError, the
+ * same liveness class as status/pid/readyAt). The record's private
+ * remainder (providerHandle, cleanup/archive state, clone sources) NEVER
+ * crosses this boundary, exactly as RegistryEntry's token/endpoint/template
+ * never do: roster frames and registered_projects frames stay free of
+ * tokens, private endpoints, provider handles, and secret material. Any
+ * future workspace field must be mapped here explicitly (or added to the
+ * RegisteredProject shape) before it can appear on the wire.
  */
 export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): DaemonEntry {
 	const roster: DaemonEntry = {
@@ -470,6 +590,19 @@ export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): Daem
 		if (entry.pid !== undefined) roster.pid = entry.pid;
 	}
 	if (entry.error !== undefined) roster.error = entry.error;
+	// Clone workspace projection (P1.4): pass through the PUBLIC workspace
+	// fields only — kind/desiredState/profileId from the fleet-private record
+	// (legacy entries carry an in-memory inferred workspace after load), and
+	// the ephemeral lifecycle liveness facts straight off the entry. The
+	// record's providerHandle and everything else private stays off the wire.
+	const workspace = entry.workspace;
+	if (workspace !== undefined) {
+		roster.workspaceKind = workspace.kind;
+		roster.desiredState = workspace.desiredState;
+		if (workspace.profileId !== undefined) roster.providerProfileId = workspace.profileId;
+	}
+	if (entry.lifecycleStage !== undefined) roster.lifecycleStage = entry.lifecycleStage;
+	if (entry.lifecycleError !== undefined) roster.lifecycleError = entry.lifecycleError;
 	return roster;
 }
 
@@ -480,6 +613,14 @@ export class FleetEdge {
 	readonly #config: FleetConfig;
 	readonly #eventLog: FleetEventLog;
 	readonly #fleet: FleetFacts;
+	/** Callback transport (P3): clone attach/commands/downloads ride it; undefined = clone rows answer typed unavailability. */
+	readonly #transport: DaemonTransportRegistry | undefined;
+	/** Clone lifecycle service (P6/P7): every clone mutation goes through it, never a kind-blind edge path. */
+	readonly #lifecycle: EdgeLifecycleHooks | undefined;
+	/** Boot-static secret-free provider catalog, published on registered_projects (P1.3). */
+	readonly #providerProfiles: PublicProviderProfile[] | undefined;
+	/** Fleet transcript store for clone session listing/resume membership (P3.8). */
+	readonly #logStore: CloneSessionStore | undefined;
 	readonly #backpressureBytes: number;
 	/** Per-client ring byte budget (default SSE_RING_BYTES; finding #5). */
 	readonly #ringBytes: number;
@@ -550,6 +691,10 @@ export class FleetEdge {
 		this.#config = deps.config;
 		this.#eventLog = deps.eventLog;
 		this.#fleet = deps.fleet;
+		this.#transport = deps.transport;
+		this.#lifecycle = deps.lifecycle;
+		this.#providerProfiles = deps.providerProfiles;
+		this.#logStore = deps.logStore;
 		this.#backpressureBytes = opts?.backpressureBytes ?? SSE_BACKPRESSURE_BYTES;
 		this.#ringBytes = opts?.ringBytes ?? SSE_RING_BYTES;
 		this.#silenceDeadlineMs = opts?.silenceDeadlineMs ?? SSE_SILENCE_DEADLINE_MS;
@@ -595,6 +740,10 @@ export class FleetEdge {
 			const stderrMatch = STDERR_ROUTE.exec(path);
 			if (stderrMatch) {
 				return this.#handleStderr(stderrMatch[1]);
+			}
+			const downloadMatch = DOWNLOAD_ROUTE.exec(path);
+			if (downloadMatch) {
+				return await this.#handleDownload(req, downloadMatch[1]);
 			}
 			if (path === "/ctl/debug") {
 				return json(this.#debugSnapshot());
@@ -743,6 +892,12 @@ export class FleetEdge {
 								type: "registered_projects",
 								projects: this.#registry.projects(),
 								configPath: this.#fleet.configPath,
+								// P1.3/P8: the boot-static secret-free profile
+								// catalog; omitted entirely when not configured
+								// (older fleets imply an empty catalog).
+								...(this.#providerProfiles !== undefined
+									? { providerProfiles: this.#providerProfiles }
+									: {}),
 							},
 							seq++,
 						),
@@ -962,6 +1117,62 @@ export class FleetEdge {
 				void this.#handleRemoveProject(stream, projectId);
 				break;
 			}
+			case "create_clone": {
+				// Frozen contract (docs/clone-contracts.md): projectId/name/
+				// profileId required; source (when given) has exactly one of
+				// local/remote; revision/branch/start optional.
+				const projectId =
+					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
+				if (projectId === undefined) {
+					this.#sendError(stream, "create_clone: missing projectId");
+					break;
+				}
+				const name = typeof cmd.name === "string" && cmd.name !== "" ? cmd.name : undefined;
+				if (name === undefined) {
+					this.#sendError(stream, "create_clone: missing name");
+					break;
+				}
+				const profileId =
+					typeof cmd.profileId === "string" && cmd.profileId !== "" ? cmd.profileId : undefined;
+				if (profileId === undefined) {
+					this.#sendError(stream, "create_clone: missing profileId");
+					break;
+				}
+				const sourceRaw = cmd.source;
+				let source: { local?: string; remote?: string } | undefined;
+				if (sourceRaw !== undefined) {
+					if (typeof sourceRaw !== "object" || sourceRaw === null || Array.isArray(sourceRaw)) {
+						this.#sendError(stream, "create_clone: source must be an object");
+						break;
+					}
+					// Exactly one non-empty member. Read through a checked
+					// narrowing: absent/empty members are treated as unset.
+					const sourceFields = sourceRaw as Record<string, unknown>;
+					const hasLocal = typeof sourceFields.local === "string" && sourceFields.local !== "";
+					const hasRemote = typeof sourceFields.remote === "string" && sourceFields.remote !== "";
+					if (hasLocal === hasRemote) {
+						this.#sendError(stream, "create_clone: source must set exactly one of local or remote");
+						break;
+					}
+					source = hasLocal
+						? { local: sourceFields.local as string }
+						: { remote: sourceFields.remote as string };
+				}
+				const revision =
+					typeof cmd.revision === "string" && cmd.revision !== "" ? cmd.revision : undefined;
+				const branch = typeof cmd.branch === "string" && cmd.branch !== "" ? cmd.branch : undefined;
+				const start = cmd.start === true ? true : undefined;
+				void this.#handleCreateClone(stream, {
+					projectId,
+					name,
+					profileId,
+					...(source !== undefined ? { source } : {}),
+					...(revision !== undefined ? { revision } : {}),
+					...(branch !== undefined ? { branch } : {}),
+					...(start !== undefined ? { start } : {}),
+				});
+				break;
+			}
 			case "create_worktree": {
 				const projectId =
 					typeof cmd.projectId === "string" && cmd.projectId !== "" ? cmd.projectId : undefined;
@@ -1079,7 +1290,14 @@ export class FleetEdge {
 				this.#sendError(stream, `unknown daemon: ${daemonId}`);
 				return;
 			}
-			const sessions = await listDaemonSessions(entry.cwd ?? "", DROPDOWN_SESSION_LIMIT);
+			// Clone sessions list from the fleet transcript store (P8.4 — the
+			// owning daemon's session dir lives in the provider volume, never
+			// a fleet-local cwd); direct/worktree list from disk so asleep/
+			// never-started daemons answer too. Empty list when no store.
+			const sessions =
+				entry.workspace?.kind === "clone"
+					? await listCloneDaemonSessions(this.#logStore, daemonId, DROPDOWN_SESSION_LIMIT)
+					: await listDaemonSessions(entry.cwd ?? "", DROPDOWN_SESSION_LIMIT);
 			this.#sendAnswer(stream, { type: "daemon_sessions", daemonId, sessions });
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
@@ -1239,6 +1457,28 @@ export class FleetEdge {
 	}
 
 	/**
+	 * create_clone: delegate entirely to the injected lifecycle service (the
+	 * SAME create the POST /ctl/clones control-plane route uses — no HTTP
+	 * self-proxy, no second lifecycle implementation). Progress + the new
+	 * roster entry ride the roster/daemon_status/lifecycleStage broadcasts;
+	 * with start:true the lifecycle also ensures the provider compute and
+	 * callback pair, so the client's attach follows the same wake path as any
+	 * stopped clone. Typed failures surface as an error frame with a
+	 * user-safe message.
+	 */
+	async #handleCreateClone(stream: BrowserStream, input: CreateCloneInput): Promise<void> {
+		if (!this.#lifecycle) {
+			this.#sendError(stream, "create_clone is unavailable: no lifecycle service wired");
+			return;
+		}
+		try {
+			await this.#lifecycle.createClone(input);
+		} catch (err) {
+			this.#sendError(stream, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	/**
 	 * add_worktree: register a discovered-but-unregistered linked worktree of
 	 * the project (validated via validateUnregisteredWorktree) and optionally
 	 * spawn a daemon on it (start:true).
@@ -1289,6 +1529,21 @@ export class FleetEdge {
 				this.#sendError(stream, `unknown daemon: ${daemonId}`);
 				return;
 			}
+			if (entry.workspace?.kind === "clone") {
+				// Clone delete is the lifecycle's verified P7 gate (admission,
+				// quiesce, store verification, read-only flip, provider
+				// deletion) — NEVER the git-worktree guards below: they reason
+				// about a fleet-local cwd that a clone volume does not have.
+				if (!this.#lifecycle) {
+					this.#sendError(stream, "clone delete is unavailable: no lifecycle service wired");
+					return;
+				}
+				await this.#lifecycle.deleteClone(daemonId);
+				for (const s of this.#browsers) {
+					if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
+				}
+				return;
+			}
 			const path = entry.cwd ?? "";
 			const info = await worktreeDeleteInfo(path, this.#config.workspaceDir);
 			if (!info.owned) {
@@ -1328,6 +1583,16 @@ export class FleetEdge {
 				this.#sendError(stream, `unknown daemon: ${daemonId}`);
 				return;
 			}
+			if (entry.workspace?.kind === "clone") {
+				// Clone guard evidence is the lifecycleStage/lifecycleError on
+				// the roster entry (the fleet-private WorkspaceDeletion state
+				// never crosses this boundary) — not git-worktree guard facts.
+				this.#sendError(
+					stream,
+					"clone deletion guard evidence rides lifecycleStage/lifecycleError",
+				);
+				return;
+			}
 			const info = await worktreeDeleteInfo(entry.cwd ?? "", this.#config.workspaceDir);
 			this.#sendAnswer(stream, { type: "worktree_delete_info", daemonId, ...info });
 		} catch (err) {
@@ -1350,18 +1615,34 @@ export class FleetEdge {
 				this.#sendError(stream, `daemon ${daemonId} is not asleep (status ${entry.status})`);
 				return;
 			}
-			// A dropdown-picked session must belong to this worktree's session
-			// listing — never let an arbitrary path reach --resume.
+			// A dropdown-picked session must belong to this workspace's session
+			// listing — never let an arbitrary path/id reach resume. Clones
+			// validate against the fleet store's sessionId (the store key is
+			// the SDK session id — P8.4), never a fleet-local cwd.
 			let resumeFile: string | undefined;
 			if (sessionFile !== undefined) {
-				const listed = await listDaemonSessions(entry.cwd ?? "", DROPDOWN_SESSION_LIMIT);
-				const resolved = realpathOf(sessionFile);
-				const ok = listed.some((s) => realpathOf(s.path) === resolved);
-				if (!ok) {
-					this.#sendError(stream, `session file not in this worktree: ${sessionFile}`);
-					return;
+				if (entry.workspace?.kind === "clone") {
+					const listed = await listCloneDaemonSessions(
+						this.#logStore,
+						daemonId,
+						DROPDOWN_SESSION_LIMIT,
+					);
+					const ok = listed.some((s) => s.id === sessionFile || s.path === sessionFile);
+					if (!ok) {
+						this.#sendError(stream, `session not in this clone's fleet store: ${sessionFile}`);
+						return;
+					}
+					resumeFile = sessionFile;
+				} else {
+					const listed = await listDaemonSessions(entry.cwd ?? "", DROPDOWN_SESSION_LIMIT);
+					const resolved = realpathOf(sessionFile);
+					const ok = listed.some((s) => realpathOf(s.path) === resolved);
+					if (!ok) {
+						this.#sendError(stream, `session file not in this worktree: ${sessionFile}`);
+						return;
+					}
+					resumeFile = sessionFile;
 				}
-				resumeFile = sessionFile;
 			}
 			await this.#wake(entry, resumeFile);
 		} catch (err) {
@@ -1374,6 +1655,21 @@ export class FleetEdge {
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
 				this.#sendError(stream, `unknown daemon: ${daemonId}`);
+				return;
+			}
+			if (entry.workspace?.kind === "clone") {
+				// Clone stop is the lifecycle's proof-bearing provider stop —
+				// NEVER the supervisor/connector paths (they do not manage
+				// provider compute). Channel teardown happens first so no
+				// browser keeps a callback stream against a stopping daemon.
+				for (const s of this.#browsers) {
+					if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
+				}
+				if (!this.#lifecycle) {
+					this.#sendError(stream, "clone stop is unavailable: no lifecycle service wired");
+					return;
+				}
+				await this.#lifecycle.stopClone(daemonId);
 				return;
 			}
 			// A browser attached to the stopped daemon must not keep a live pipe:
@@ -1406,6 +1702,22 @@ export class FleetEdge {
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
 				this.#sendError(stream, `unknown daemon: ${daemonId}`);
+				return;
+			}
+			if (entry.workspace?.kind === "clone") {
+				// Clone remove routes through the SAME verified deletion gate
+				// as delete (P7) — never registry.remove: dropping the roster
+				// identity without verification would orphan or lose the
+				// volume/store silently. Browsers detach only AFTER the gate
+				// passes, so a gate refusal keeps live attachments intact.
+				if (!this.#lifecycle) {
+					this.#sendError(stream, "clone remove is unavailable: no lifecycle service wired");
+					return;
+				}
+				await this.#lifecycle.removeClone(daemonId);
+				for (const s of this.#browsers) {
+					if (s.pipe?.daemonId === daemonId) this.#closePipe(s);
+				}
 				return;
 			}
 			// A browser attached to the removed daemon must not keep a live pipe.
@@ -1441,7 +1753,14 @@ export class FleetEdge {
 		this.#closePipe(stream);
 		try {
 			await this.#wake(entry);
-			await this.#connector.waitReady(daemonId, ATTACH_WAIT_READY_MS);
+			// Clone attach readiness is the callback pair's, not the connector's:
+			// ensureCloneRunning resolved at provider-running + enrollment (the
+			// pair dials in right after) and #openCallbackPipe primes via
+			// onPairChange — a connector waitReady would hang against a daemon
+			// that has no control socket at all.
+			if (entry.workspace?.kind !== "clone") {
+				await this.#connector.waitReady(daemonId, ATTACH_WAIT_READY_MS);
+			}
 		} catch (err) {
 			this.#sendAttachOutcome(stream, commandId, {
 				error: err instanceof Error ? err.message : String(err),
@@ -1449,13 +1768,14 @@ export class FleetEdge {
 			return;
 		}
 		const current = this.#registry.get(daemonId);
-		if (!current?.endpoint) {
+		if (current?.workspace?.kind !== "clone" && !current?.endpoint) {
 			this.#sendAttachOutcome(stream, commandId, { error: `daemon ${daemonId} has no endpoint` });
 			return;
 		}
-		// #openPipe answers the attach: ok once the dial is underway (the
-		// pipe's resume machinery keeps the attachment alive across drops), or
-		// a keyed failure when the dial cannot start.
+		// #openPipe answers the attach: ok once the channel is underway (the
+		// direct pipe's resume machinery keeps the attachment alive across
+		// drops; the callback stream re-primes on pair replacement), or a
+		// keyed failure when it cannot start.
 		this.#openPipe(stream, current, commandId);
 	}
 
@@ -1464,16 +1784,36 @@ export class FleetEdge {
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Wake a daemon whose control socket is down: asleep spawned entries are
-	 * respawned (--resume); everything else — asleep remote entries AND
-	 * "ready" entries whose socket was idle-dropped behind the stale status —
-	 * just needs a redial (far cheaper than killing a healthy child).
-	 * Serialized per daemon — the roster UI sends spawn_resume and attach
-	 * back-to-back; a second wake (from the attach) while the first is in
-	 * flight must not respawn the child again, it just awaits ready.
+	 * Wake a daemon whose control channel is down. Clone-kind entries go
+	 * through the lifecycle ensure (provider compute + enrollment; pair
+	 * readiness rides the lifecycleStage roster broadcasts and the transport
+	 * onPairChange stream_open re-send — never awaited here). Direct/worktree
+	 * entries keep the legacy wake: asleep spawned → respawn (--resume),
+	 * everything else with a stale socket → redial. Serialized per daemon —
+	 * the roster UI sends spawn_resume and attach back-to-back; a second wake
+	 * while the first is in flight must not respawn/ensure again.
 	 */
 	async #wake(entry: RegistryEntry, resumeFile?: string): Promise<void> {
 		const daemonId = entry.daemonId;
+		if (entry.workspace?.kind === "clone") {
+			if (this.#transport?.pairStatus(daemonId).paired === true) return;
+			if (this.#lifecycle === undefined || this.#transport === undefined) {
+				throw new Error("clone wake is unavailable: no lifecycle/transport wired");
+			}
+			if (this.#waking.has(daemonId)) return;
+			this.#waking.add(daemonId);
+			try {
+				await this.#lifecycle.ensureCloneRunning(
+					daemonId,
+					resumeFile && resumeFile.trim() !== "" ? { resumeSessionId: resumeFile } : undefined,
+				);
+			} finally {
+				// Clone wakes settle on resolve — ensureCloneRunning is
+				// idempotent, so a back-to-back wake is safe either way.
+				this.#waking.delete(daemonId);
+			}
+			return;
+		}
 		if (entry.status !== "asleep" && this.#connector.isConnected(daemonId)) return;
 		if (this.#waking.has(daemonId)) return;
 		this.#waking.add(daemonId);
@@ -1496,10 +1836,12 @@ export class FleetEdge {
 	}
 
 	/**
-	 * Open this browser's dedicated daemon /events stream (Authorization +
-	 * consume). The attach is answered here: ok once the dial is underway
-	 * (the resume machinery keeps the pipe attached across drops), or a
-	 * keyed failure when the dial cannot start (finding #28).
+	 * Open this browser's dedicated daemon channel and answer the attach:
+	 * ok once the channel is underway — the direct pipe's resume machinery
+	 * keeps the attachment alive across drops, and the callback virtual
+	 * stream re-primes on every pair replacement (finding #28). Direct daemons
+	 * dial their endpoint; clone daemons bind a callback virtual stream — no
+	 * inbound dial exists for them (P3.4).
 	 */
 	#openPipe(stream: BrowserStream, entry: RegistryEntry, commandId?: string): void {
 		// A racing attach may have replaced stream.pipe while we waited; never leak it.
@@ -1507,6 +1849,10 @@ export class FleetEdge {
 		// The browser may have closed while waitReady was pending; don't open
 		// a pipe nobody will close (its retain would pin the connector socket).
 		if (!this.#browsers.has(stream)) return;
+		if (entry.workspace?.kind === "clone") {
+			this.#openCallbackPipe(stream, entry, commandId);
+			return;
+		}
 		const endpoint = entry.endpoint;
 		if (!endpoint) {
 			this.#sendAttachOutcome(stream, commandId, {
@@ -1514,7 +1860,8 @@ export class FleetEdge {
 			});
 			return;
 		}
-		const pipe: PipeState = {
+		const pipe: DirectPipeState = {
+			mode: "direct",
 			daemonId: entry.daemonId,
 			abort: new AbortController(),
 			retained: false,
@@ -1535,6 +1882,132 @@ export class FleetEdge {
 	}
 
 	/**
+	 * Bind a browser's attach to a clone daemon's callback virtual stream
+	 * ("browser/<connId>", P3.4). The daemon primes + replays per stream: the
+	 * edge sends stream_open on bind and after every pair replacement, then
+	 * forwards the daemon's frame envelopes verbatim (priming included) to
+	 * this browser. Slow browsers are dropped (drop-and-resume, direct-pipe
+	 * parity — the transport's 4 MiB stream queue bound fires the sink's
+	 * onBackpressure). A torn-down pair surfaces as the same terminal
+	 * "daemon connection lost" error frame a direct pipe emits after its
+	 * redial budget exhausts; the edge never redials or queues for clones.
+	 */
+	#openCallbackPipe(stream: BrowserStream, entry: RegistryEntry, commandId?: string): void {
+		const daemonId = entry.daemonId;
+		const transport = this.#transport;
+		if (!transport) {
+			this.#sendAttachOutcome(stream, commandId, {
+				error: `clone ${daemonId} attach is unavailable: no callback transport wired`,
+			});
+			return;
+		}
+		const connId = randomUUID();
+		const streamId = `browser/${connId}`;
+		const pipe: CallbackPipeState = {
+			mode: "callback",
+			daemonId,
+			connId,
+			closed: false,
+			lastSeq: 0,
+			pairConnectionId: null,
+			detach: () => {},
+			unsubscribePair: () => {},
+		};
+		const unsubscribePair = transport.onPairChange(daemonId, () => {
+			if (stream.pipe !== pipe || pipe.closed) return;
+			this.#sendStreamOpen(pipe);
+		});
+		pipe.unsubscribePair = unsubscribePair;
+		pipe.detach = () => transport.detachVirtualStream(daemonId, streamId);
+		stream.pipe = pipe;
+		// Attach accepted: the stream is bound below, and from here the
+		// transport owns pair liveness (stream_open re-sends on pair change) —
+		// the browser is attached. Progress rides the lifecycleStage roster
+		// broadcasts; attach_result mirrors the direct pipe's dial-underway ok.
+		if (commandId !== undefined)
+			this.#sendAttachOutcome(stream, commandId, { sessionId: daemonId });
+		const sink: VirtualStreamSink = {
+			deliver: (envelope) => {
+				if (stream.pipe !== pipe || pipe.closed) return;
+				this.#onCallbackEnvelope(stream, pipe, envelope);
+			},
+			onBackpressure: () => {
+				// Transport dropped an envelope on this stream's full 4 MiB
+				// queue: drop-and-resume (direct-pipe parity). The ring + the
+				// client's Last-Event-ID resume close the gap.
+				if (stream.pipe === pipe && !pipe.closed) this.#dropBrowser(stream);
+			},
+		};
+		transport.attachVirtualStream(daemonId, streamId, sink);
+		if (stream.pipe !== pipe || pipe.closed) {
+			pipe.detach();
+			pipe.unsubscribePair();
+			return;
+		}
+		// Pair already live at bind: prime now; onPairChange handles later
+		// replacements (and the very first pair-ready when ensure returned
+		// before the daemon dialed).
+		if (transport.pairStatus(daemonId).paired) this.#sendStreamOpen(pipe);
+	}
+
+	/** Send stream_open on this browser's callback stream (prime / re-prime).
+	 * lastSeq is omitted on pair replacement — the per-connection daemon seq
+	 * space restarts, so the daemon re-primes from its ring head. */
+	#sendStreamOpen(pipe: CallbackPipeState): void {
+		const transport = this.#transport;
+		if (!transport || pipe.closed) return;
+		const status = transport.pairStatus(pipe.daemonId);
+		if (!status.paired || status.connectionId === null) return;
+		if (pipe.pairConnectionId !== status.connectionId) {
+			// New pair: its seq space is fresh — never send a stale lastSeq.
+			pipe.pairConnectionId = status.connectionId;
+			pipe.lastSeq = 0;
+		}
+		transport
+			.sendToDaemon(pipe.daemonId, {
+				streamId: `browser/${pipe.connId}`,
+				kind: "control",
+				payload: {
+					type: "stream_open",
+					...(pipe.lastSeq > 0 ? { lastSeq: pipe.lastSeq } : {}),
+				},
+			})
+			.catch(() => {
+				// No live pair / send failure: onPairChange re-sends once the
+				// pair is (re)established. Never queues or retries blindly.
+			});
+	}
+
+	/** Route one callback envelope from a browser's clone stream: frame
+	 * envelopes forward verbatim (daemon priming + deltas); stream_resync
+	 * controls surface as a stream_reset so the client re-primes; ack /
+	 * command / heartbeat are ignored (receipt-only, wrong-direction, or
+	 * transport liveness). */
+	#onCallbackEnvelope(
+		stream: BrowserStream,
+		pipe: CallbackPipeState,
+		envelope: CallbackEnvelope,
+	): void {
+		if (envelope.kind !== "frame" && envelope.kind !== "control") return;
+		if (Number.isFinite(envelope.seq) && envelope.seq > pipe.lastSeq) pipe.lastSeq = envelope.seq;
+		if (envelope.kind === "control") {
+			const payload = envelope.payload;
+			if (typeof payload === "object" && payload !== null && "type" in payload) {
+				if (payload.type === "stream_resync") {
+					// The daemon dropped frames on ITS outbound buffer and pushes a
+					// fresh snapshot after this marker — mirror the direct pipe's
+					// stream_reset so the client re-primes (never a silent gap).
+					this.#sendDelta(stream, { type: "stream_reset" });
+				}
+			}
+			return;
+		}
+		const payload = envelope.payload;
+		if (typeof payload !== "object" || payload === null) return;
+		this.#onPipeFrame(stream, pipe, payload as Record<string, unknown>);
+	}
+
+	/**
 	 * One /events dial (initial or redial). Superseded-dial guard: a fetch
 	 * that resolved after a newer dial/drop is aborted and ignored. A redial
 	 * carries Last-Event-ID = the last forwarded daemon seq — delta-era only
@@ -1542,7 +2015,7 @@ export class FleetEdge {
 	 * priming re-derives current state anyway. 401 (wrong credential) and
 	 * proto mismatch are terminal, like the connector.
 	 */
-	#dialPipe(stream: BrowserStream, pipe: PipeState): void {
+	#dialPipe(stream: BrowserStream, pipe: DirectPipeState): void {
 		const entry = this.#registry.get(pipe.daemonId);
 		const endpoint = entry?.endpoint;
 		if (!endpoint) {
@@ -1587,7 +2060,7 @@ export class FleetEdge {
 			});
 	}
 
-	async #consumePipe(stream: BrowserStream, pipe: PipeState, res: Response): Promise<void> {
+	async #consumePipe(stream: BrowserStream, pipe: DirectPipeState, res: Response): Promise<void> {
 		try {
 			for await (const unit of parseSseUnits(res.body!)) {
 				if (stream.pipe !== pipe || pipe.closed) return; // superseded or dropped
@@ -1614,34 +2087,56 @@ export class FleetEdge {
 	}
 
 	/**
-	 * Forward a session frame: proto-gate then forward hello_ok (finding
-	 * #61 — the browser's own gate needs it in roster mode), tap and strip
-	 * per-daemon broker rosters; STAMP sessionId = daemonId on every
-	 * session-scoped frame (omp-session no longer sends one) and on
-	 * `attached` (its required "s1" must read as the daemonId through the
-	 * edge). Global frames pass unchanged. Every forwarded frame is an
-	 * edge-local delta for this browser (a fresh seq; RINGED only for the
-	 * daemon's delta types — see #sendDelta — recoverable via Last-Event-ID;
-	 * unringed priming/answer frames are re-derived on re-attach).
+	 * Forward a session frame from this browser's attached daemon channel:
+	 * proto-gate then forward hello_ok (finding #61 — the browser's own gate
+	 * needs it in roster mode), tap and strip per-daemon broker rosters;
+	 * STAMP sessionId = daemonId on every session-scoped frame (omp-session
+	 * no longer sends one) and on `attached` (its required "s1" must read as
+	 * the daemonId through the edge). Global frames pass unchanged. Every
+	 * forwarded frame is an edge-local delta for this browser (a fresh seq;
+	 * RINGED only for the daemon's delta types — see #sendDelta —
+	 * recoverable via Last-Event-ID; unringed priming/answer frames are
+	 * re-derived on re-attach). Direct pipes pass a raw SSE data string
+	 * (parsed here); callback streams pass the already-parsed frame object
+	 * (the envelope payload is verbatim JSON). Shared by both transports so
+	 * session semantics stay identical.
 	 */
-	#onPipeFrame(stream: BrowserStream, pipe: PipeState, data: string): void {
+	#onPipeFrame(
+		stream: BrowserStream,
+		pipe: PipeState,
+		data: string | Record<string, unknown>,
+	): void {
 		let raw: unknown;
-		try {
-			raw = JSON.parse(data);
-		} catch {
-			return; // non-JSON noise
+		if (typeof data === "string") {
+			try {
+				raw = JSON.parse(data);
+			} catch {
+				return; // non-JSON noise
+			}
+		} else {
+			raw = data;
 		}
 		if (typeof raw !== "object" || raw === null) return;
 		const frame = raw as Record<string, unknown>;
 		if (frame.type === "hello_ok") {
 			// Proto gate (mirrors the connector): a daemon speaking a
-			// different OMP_PROTO is not drivable — the pipe is terminal.
+			// different OMP_PROTO is not drivable — the channel is terminal.
 			if (Number(frame.proto) !== OMP_PROTO) {
-				this.#pipeLost(
-					stream,
-					pipe,
-					`proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`,
-				);
+				if (isDirectPipe(pipe)) {
+					this.#pipeLost(
+						stream,
+						pipe,
+						`proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`,
+					);
+				} else {
+					// Callback channel: the transport owns the pair; surface the
+					// terminal error to the browser and detach this stream.
+					this.#callbackLost(
+						stream,
+						pipe,
+						`proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`,
+					);
+				}
 				return;
 			}
 			// Finding #61: the gate above proved proto === OMP_PROTO, so
@@ -1677,9 +2172,11 @@ export class FleetEdge {
 	 * attached. The stale silence timer dies with the ended stream — a fresh
 	 * dial arms its own — so a late fire can't abort the redial. Only a
 	 * terminal outcome — budget exhausted, or the redial being impossible —
-	 * falls through to #pipeLost (finding #4).
+	 * falls through to #pipeLost (finding #4). Callback pipes never redial:
+	 * the transport owns pair liveness (P3.4), so this is unreachable for
+	 * them by construction.
 	 */
-	#pipeEnded(stream: BrowserStream, pipe: PipeState): void {
+	#pipeEnded(stream: BrowserStream, pipe: DirectPipeState): void {
 		if (pipe.closed) return; // intentional teardown already handled
 		if (stream.pipe !== pipe) return; // superseded by a newer pipe
 		this.#clearPipeSilence(pipe);
@@ -1691,7 +2188,7 @@ export class FleetEdge {
 	}
 
 	/** Jittered bounded backoff, connector-style; the budget resets on any live unit. */
-	#schedulePipeRedial(stream: BrowserStream, pipe: PipeState): void {
+	#schedulePipeRedial(stream: BrowserStream, pipe: DirectPipeState): void {
 		if (pipe.reconnectTimer) return;
 		const attempt = pipe.redialAttempt++;
 		const delay = backoffDelay(attempt, this.#pipeBackoffMinMs, this.#pipeBackoffMaxMs);
@@ -1703,7 +2200,11 @@ export class FleetEdge {
 	}
 
 	/** The pipe is gone for good (budget exhausted / 401 / proto mismatch / redial impossible): release + report lost. */
-	#pipeLost(stream: BrowserStream, pipe: PipeState, message = "daemon connection lost"): void {
+	#pipeLost(
+		stream: BrowserStream,
+		pipe: DirectPipeState,
+		message = "daemon connection lost",
+	): void {
 		if (pipe.closed) return; // intentional teardown already released
 		pipe.closed = true;
 		this.#clearPipeSilence(pipe);
@@ -1716,40 +2217,76 @@ export class FleetEdge {
 		this.#sendError(stream, message);
 	}
 
-	/** Intentional pipe teardown (browser close / re-attach / removal): release + abort. */
+	/** A callback channel is gone for good: detach the stream and report lost. */
+	#callbackLost(
+		stream: BrowserStream,
+		pipe: CallbackPipeState,
+		message = "daemon connection lost",
+	): void {
+		if (pipe.closed) return; // intentional teardown already released
+		pipe.closed = true;
+		if (stream.pipe === pipe) stream.pipe = null;
+		pipe.detach();
+		pipe.unsubscribePair();
+		this.#sendError(stream, message);
+	}
+
+	/** Intentional pipe teardown (browser close / re-attach / removal): release + abort (direct) or detach (callback). */
 	#closePipe(stream: BrowserStream): void {
 		const pipe = stream.pipe;
 		if (!pipe) return;
 		stream.pipe = null;
 		pipe.closed = true;
-		this.#clearPipeSilence(pipe);
-		if (pipe.reconnectTimer) {
-			clearTimeout(pipe.reconnectTimer);
-			pipe.reconnectTimer = null;
+		if (isDirectPipe(pipe)) {
+			this.#clearPipeSilence(pipe);
+			if (pipe.reconnectTimer) {
+				clearTimeout(pipe.reconnectTimer);
+				pipe.reconnectTimer = null;
+			}
+			this.#releaseRetain(pipe);
+			try {
+				pipe.abort.abort();
+			} catch {
+				// Ignore; the pipe is already gone.
+			}
+			return;
 		}
-		this.#releaseRetain(pipe);
-		try {
-			pipe.abort.abort();
-		} catch {
-			// Ignore; the pipe is already gone.
-		}
+		// Callback: tell the daemon the stream closed, then unbind. Best
+		// effort — a missing pair (stop/delete already tore it down) makes
+		// sendToDaemon throw, which is fine: the detach below is the
+		// authority, and the daemon GCs orphan streams itself.
+		this.#transport
+			?.sendToDaemon(pipe.daemonId, {
+				streamId: `browser/${pipe.connId}`,
+				kind: "control",
+				payload: { type: "stream_close" },
+			})
+			.catch(() => {});
+		pipe.detach();
+		pipe.unsubscribePair();
 	}
 
-	#releaseRetain(pipe: PipeState): void {
+	#releaseRetain(pipe: DirectPipeState): void {
 		if (!pipe.retained) return;
 		pipe.retained = false;
 		this.#connector.release(pipe.daemonId);
 	}
 
-	/** Forward a non-edge command verbatim to the attached daemon's POST /command. */
+	/**
+	 * Forward a non-edge command to the attached daemon: direct daemons get
+	 * POST /command (fire-and-forget accept; answers ride the pipe's /events
+	 * stream); clone daemons get a kind:"command" envelope on their callback
+	 * stream (same POST /command body; answers ride the stream's frame
+	 * envelopes — P3.4). A missing/unattached channel fails fast BY ID
+	 * (finding #59: the client correlates call() promises only with
+	 * call_result, so a bare error frame would leave the promise hanging
+	 * until its 30s timeout). No offline queue: a callback send failure
+	 * answers the same typed not-attached error.
+	 */
 	#forwardCommand(stream: BrowserStream, cmd: Record<string, unknown>): void {
 		const pipe = stream.pipe;
 		const entry = pipe ? this.#registry.get(pipe.daemonId) : undefined;
-		if (!pipe || !entry?.endpoint) {
-			// Finding #59: an unattached call must fail fast BY ID — the client
-			// correlates call() promises only with call_result, so a bare error
-			// frame would leave the promise hanging until its 30s timeout. A
-			// malformed id-less command keeps the legacy global error frame.
+		const failNotAttached = (): void => {
 			const commandId = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : undefined;
 			if (commandId !== undefined) {
 				this.#sendAnswer(stream, {
@@ -1761,22 +2298,42 @@ export class FleetEdge {
 			} else {
 				this.#sendError(stream, "not attached");
 			}
+		};
+		if (isDirectPipe(pipe)) {
+			if (!entry?.endpoint) {
+				failNotAttached();
+				return;
+			}
+			// Fire-and-forget accept: answers ride the pipe's /events stream (and
+			// thus this browser's). A dropped POST is recovered by the browser's
+			// pending-map timeout + re-send; the daemon dedups by command id.
+			fetch(daemonHttpBase(entry.endpoint) + "/command", {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${entry.token ?? ""}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify(cmd),
+			}).catch(() => {
+				// Ignore: the pipe's silence deadline owns daemon liveness.
+			});
 			return;
 		}
-		// Fire-and-forget accept: answers ride the pipe's /events stream (and
-		// thus this browser's). A dropped POST is recovered by the browser's
-		// pending-map timeout + re-send; the daemon dedups by command id.
-		fetch(daemonHttpBase(entry.endpoint) + "/command", {
-			method: "POST",
-			headers: { Authorization: `Bearer ${entry.token ?? ""}`, "Content-Type": "application/json" },
-			body: JSON.stringify(cmd),
-		}).catch(() => {
-			// Ignore: the pipe's silence deadline owns daemon liveness.
-		});
+		if (pipe?.mode !== "callback") {
+			failNotAttached();
+			return;
+		}
+		this.#transport
+			?.sendToDaemon(pipe.daemonId, {
+				streamId: `browser/${pipe.connId}`,
+				kind: "command",
+				payload: cmd,
+			})
+			.catch(failNotAttached);
 	}
 
 	/** Reset the pipe's silence deadline; every SSE unit (event or comment) re-arms it. */
-	#armPipeSilence(pipe: PipeState): void {
+	#armPipeSilence(pipe: DirectPipeState): void {
 		this.#clearPipeSilence(pipe);
 		pipe.silenceTimer = setTimeout(() => {
 			pipe.silenceTimer = null;
@@ -1786,7 +2343,7 @@ export class FleetEdge {
 		}, this.#silenceDeadlineMs);
 	}
 
-	#clearPipeSilence(pipe: PipeState): void {
+	#clearPipeSilence(pipe: DirectPipeState): void {
 		if (pipe.silenceTimer) {
 			clearTimeout(pipe.silenceTimer);
 			pipe.silenceTimer = null;
@@ -1922,6 +2479,9 @@ export class FleetEdge {
 				type: "registered_projects",
 				projects: this.#registry.projects(),
 				configPath: this.#fleet.configPath,
+				...(this.#providerProfiles !== undefined
+					? { providerProfiles: this.#providerProfiles }
+					: {}),
 			},
 			{ ring: false },
 		);
@@ -1999,9 +2559,12 @@ export class FleetEdge {
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Keep a control-socket tap on every registered daemon and drop taps for
-	 * removed ones (evicting their cached rosters). Idempotent; runs on
-	 * every registry change and once at construction.
+	 * Keep a frame tap on every registered daemon and drop taps for removed
+	 * ones (evicting their cached rosters). Direct/worktree daemons are
+	 * tapped on their connector control socket; clone daemons on the
+	 * callback pair's mirrored "control" stream (the daemon broadcasts the
+	 * same session frames there — P3.4). Idempotent; runs on every registry
+	 * change and once at construction.
 	 */
 	#reconcileDaemonTaps(): void {
 		const live = new Set(this.#registry.list().map((entry) => entry.daemonId));
@@ -2017,39 +2580,59 @@ export class FleetEdge {
 		}
 		for (const entry of this.#registry.list()) {
 			if (this.#daemonTaps.has(entry.daemonId)) continue;
-			this.#daemonTaps.set(
-				entry.daemonId,
-				this.#connector.onFrame(entry.daemonId, (frame) => {
-					// Derive realtime activity from the RAW daemon frames — the tap
-					// sees them BEFORE the edge stamps sessionId on proxy pipes, and
-					// never reads daemon_activity back (daemons never send it; the
-					// pipe forwarder strips it like `daemons` broker rosters).
-					switch (frame.type) {
-						case "daemons":
-							if (Array.isArray(frame.daemons)) this.#ingestDaemons(entry.daemonId, frame.daemons);
-							break;
-						case "state":
-							this.#setActivity(entry.daemonId, { streaming: frame.state?.isStreaming === true });
-							break;
-						case "ui_request": {
-							const activity = this.#ensureActivity(entry.daemonId);
-							if (activity.openDialogIds.has(frame.id)) break; // replay of the same open
-							activity.openDialogIds.add(frame.id);
-							this.#setActivity(entry.daemonId, { blocked: true });
-							break;
-						}
-						case "ui_request_end": {
-							const activity = this.#daemonActivity.get(entry.daemonId);
-							if (activity && activity.openDialogIds.delete(frame.id)) {
-								this.#setActivity(entry.daemonId, { blocked: activity.openDialogIds.size > 0 });
-							}
-							break;
-						}
-						default:
-							break;
+			const handleFrame = (frame: ServerFrame): void => {
+				// Derive realtime activity from the RAW daemon frames — the tap
+				// sees them BEFORE the edge stamps sessionId on proxy pipes, and
+				// never reads daemon_activity back (daemons never send it; the
+				// pipe forwarder strips it like `daemons` broker rosters).
+				switch (frame.type) {
+					case "daemons":
+						if (Array.isArray(frame.daemons)) this.#ingestDaemons(entry.daemonId, frame.daemons);
+						break;
+					case "state":
+						this.#setActivity(entry.daemonId, {
+							streaming: frame.state?.isStreaming === true,
+						});
+						break;
+					case "ui_request": {
+						const activity = this.#ensureActivity(entry.daemonId);
+						if (activity.openDialogIds.has(frame.id)) break; // replay of the same open
+						activity.openDialogIds.add(frame.id);
+						this.#setActivity(entry.daemonId, { blocked: true });
+						break;
 					}
-				}),
-			);
+					case "ui_request_end": {
+						const activity = this.#daemonActivity.get(entry.daemonId);
+						if (activity && activity.openDialogIds.delete(frame.id)) {
+							this.#setActivity(entry.daemonId, {
+								blocked: activity.openDialogIds.size > 0,
+							});
+						}
+						break;
+					}
+					default:
+						break;
+				}
+			};
+			if (entry.workspace?.kind === "clone" && this.#transport) {
+				// Clone taps subscribe to the daemon's mirrored broadcast
+				// stream. The composite unsubscribe tears down both the
+				// envelope tap and its activity broadcast on eviction.
+				const transport = this.#transport;
+				this.#daemonTaps.set(
+					entry.daemonId,
+					transport.onDaemonEnvelope(entry.daemonId, (envelope) => {
+						if (envelope.kind !== "frame" || envelope.streamId !== CALLBACK_CONTROL_STREAM_ID)
+							return;
+						const payload = envelope.payload;
+						if (typeof payload === "object" && payload !== null) {
+							handleFrame(payload as ServerFrame);
+						}
+					}),
+				);
+				continue;
+			}
+			this.#daemonTaps.set(entry.daemonId, this.#connector.onFrame(entry.daemonId, handleFrame));
 		}
 		if (evicted) this.#broadcastDaemons();
 	}
@@ -2107,6 +2690,39 @@ export class FleetEdge {
 	}
 
 	/**
+	 * Delete-gate admission signal (P7.3): the derived realtime activity of
+	 * one daemon. UNKNOWN (known:false) until the first derivable frame — a
+	 * daemon with no observed activity cannot be proven idle, so callers
+	 * refuse deletion while it is live. `live` reports whether the daemon's
+	 * transport channel is currently up: the connector socket for direct/
+	 * worktree daemons, the callback pair for clones (P3.4 — the fleet
+	 * cannot observe a clone's accepted work any other way). Read-only:
+	 * never mutates.
+	 */
+	daemonActivity(daemonId: string): {
+		streaming: boolean;
+		blocked: boolean;
+		known: boolean;
+		live: boolean;
+	} {
+		const entry = this.#registry.get(daemonId);
+		const live =
+			entry !== undefined
+				? entry.workspace?.kind === "clone"
+					? (this.#transport?.pairStatus(daemonId).paired ?? false)
+					: this.#connector.isConnected(daemonId)
+				: false;
+		const activity = this.#daemonActivity.get(daemonId);
+		if (!activity) return { streaming: false, blocked: false, known: false, live };
+		return {
+			streaming: activity.streaming,
+			blocked: activity.blocked,
+			known: activity.known,
+			live,
+		};
+	}
+
+	/**
 	 * Browser-gated retain-all: while ≥1 browser /events stream is open, every
 	 * READY registry daemon keeps a LIVE connector stream (retained so the
 	 * idle-drop is suspended, dialed so frames flow) so its realtime activity
@@ -2118,6 +2734,9 @@ export class FleetEdge {
 		if (this.#browsers.size === 0) return;
 		for (const entry of this.#registry.list()) {
 			if (entry.status !== "ready") continue;
+			// Clone liveness is the callback pair's (P3.4): the connector
+			// neither retains nor dials them — nothing to suspend or dial.
+			if (entry.workspace?.kind === "clone") continue;
 			if (!this.#watchedReady.has(entry.daemonId)) {
 				this.#watchedReady.add(entry.daemonId);
 				this.#connector.retain(entry.daemonId);
@@ -2152,7 +2771,7 @@ export class FleetEdge {
 		const current = new Set(
 			this.#registry
 				.list()
-				.filter((entry) => entry.status === "ready")
+				.filter((entry) => entry.status === "ready" && entry.workspace?.kind !== "clone")
 				.map((entry) => entry.daemonId),
 		);
 		for (const daemonId of [...this.#watchedReady]) {
@@ -2193,10 +2812,88 @@ export class FleetEdge {
 	}
 
 	/**
+	 * GET /ctl/sessions/{id}/download?path=…: session-file download through
+	 * the daemon's mode-appropriate transport (P3.4). Direct/worktree daemons
+	 * proxy their HTTP /download endpoint (bearer, same realpath jail);
+	 * clone daemons get a fleet-issued capture bulk correlation and a
+	 * download_bulk command on the transport control stream — the daemon
+	 * streams the file back over POST /callback/bulk (multi-part under the
+	 * 64 MiB aggregate cap) with no inbound dial. Both paths ride the
+	 * server-level auth gate (BrowserAuth) and never touch the fleet's own
+	 * filesystem. Unknown daemon → 404; missing transport → 503; a failed
+	 * or capped transfer → 502 with the typed reason.
+	 */
+	async #handleDownload(req: Request, daemonId: string): Promise<Response> {
+		const entry = this.#registry.get(daemonId);
+		if (!entry) return json({ error: "not found" }, 404);
+		const path = new URL(req.url).searchParams.get("path");
+		if (typeof path !== "string" || path === "") {
+			return json({ error: "download requires a ?path=" }, 400);
+		}
+		if (entry.workspace?.kind === "clone") {
+			const transport = this.#transport;
+			if (!transport) {
+				return json({ error: "download unavailable: no callback transport wired" }, 503);
+			}
+			const correlation = transport.createBulkCorrelation(daemonId, { capture: true });
+			try {
+				await transport.sendToDaemon(daemonId, {
+					streamId: CALLBACK_CONTROL_STREAM_ID,
+					kind: "command",
+					payload: { type: "download_bulk", correlationId: correlation.correlationId, path },
+				});
+			} catch {
+				return json(
+					{ error: `download unavailable: clone ${daemonId} has no live callback pair` },
+					503,
+				);
+			}
+			const result = await correlation.done;
+			if (result.state !== "received" || result.data === undefined) {
+				return json({ error: `download failed: ${result.error ?? "transfer aborted"}` }, 502);
+			}
+			const name = path.split("/").pop() ?? "download";
+			return new Response(result.data, {
+				status: 200,
+				headers: {
+					"content-type": "application/octet-stream",
+					"content-disposition": `attachment; filename="${name.replace(/["\r\n]/g, "_")}"`,
+					"content-length": String(result.data.byteLength),
+				},
+			});
+		}
+		const endpoint = entry.endpoint;
+		if (!endpoint) return json({ error: "not found" }, 404);
+		const headers: Record<string, string> = {};
+		if (entry.token) headers.Authorization = `Bearer ${entry.token}`;
+		const upstream = await fetch(
+			daemonHttpBase(endpoint) + "/download?path=" + encodeURIComponent(path),
+			{ headers },
+		);
+		if (!upstream.ok || !upstream.body) {
+			return json({ error: `download failed: upstream ${upstream.status}` }, 502);
+		}
+		return new Response(upstream.body, {
+			status: 200,
+			headers: {
+				// The daemon's own content-disposition (safe basename) wins
+				// when present; everything else is re-labeled octet-stream.
+				"content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
+				...(upstream.headers.get("content-disposition")
+					? { "content-disposition": upstream.headers.get("content-disposition")! }
+					: {}),
+			},
+		});
+	}
+
+	/**
 	 * GET /ctl/debug: loopback developer introspection. Endpoint URLs and
 	 * ports are exposed on purpose (they are the point of the feature);
 	 * bearer tokens are NEVER — nothing from the registry's token field
-	 * reaches this payload.
+	 * reaches this payload. The fleet-private WorkspaceRecord is likewise
+	 * never serialized here: providerHandle, cleanup/archive state, and
+	 * clone sources stay off this snapshot (the mapping above lists only
+	 * public liveness fields, never entry.workspace).
 	 */
 	#debugSnapshot(): Record<string, unknown> {
 		const connectorSnap = this.#connector.snapshot();

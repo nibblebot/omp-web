@@ -14,6 +14,7 @@ import { runSpawnHook, startFleet, type FleetServer } from "./server";
 import {
 	cleanupTempDirs,
 	fleetPaths,
+	hermeticStatsConfig,
 	postJson,
 	startFakeDaemon,
 	startTestFleet,
@@ -105,7 +106,12 @@ describe("POST /ctl/provision (spawn hook)", () => {
 		);
 		chmodSync(hook, 0o755);
 		writeFileSync(cfg, JSON.stringify({ spawnHook: hook }));
-		const srv = await startFleet({ port: 0, statePath, configPath: cfg });
+		const srv = await startFleet({
+			port: 0,
+			statePath,
+			configPath: cfg,
+			statsConfig: hermeticStatsConfig(statePath),
+		});
 		try {
 			const res = await postJson(srv.port, "/ctl/provision", { name: "requested-name" });
 			expect(res.status).toBe(200);

@@ -175,6 +175,73 @@ describe("loadConfig", () => {
 		}
 	});
 
+	test("bind: explicit flag (--bind) wins over env OMP_FLEET_BIND", async () => {
+		const prev = process.env.OMP_FLEET_BIND;
+		process.env.OMP_FLEET_BIND = "10.0.0.1";
+		try {
+			const fromFlag = await loadConfig(join(tmpDir(), "missing.json"), { bind: "0.0.0.0" });
+			expect(fromFlag.bind).toBe("0.0.0.0");
+		} finally {
+			if (prev === undefined) delete process.env.OMP_FLEET_BIND;
+			else process.env.OMP_FLEET_BIND = prev;
+		}
+	});
+
+	test("trustedProxies: config key, absent by default", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(file, JSON.stringify({ trustedProxies: ["203.0.113.9", "10.0.0.0/8"] }));
+		const config = await loadConfig(file);
+		expect(config.trustedProxies).toEqual(["203.0.113.9", "10.0.0.0/8"]);
+
+		const defaults = await loadConfig(join(tmpDir(), "missing.json"));
+		expect(defaults.trustedProxies).toBeUndefined();
+	});
+
+	test("trustedProxies: env csv wins over the config-file key", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(file, JSON.stringify({ trustedProxies: ["203.0.113.9"] }));
+		const prev = process.env.OMP_FLEET_TRUSTED_PROXY;
+		process.env.OMP_FLEET_TRUSTED_PROXY = "10.0.0.1, 10.0.1.0/24";
+		try {
+			const config = await loadConfig(file);
+			expect(config.trustedProxies).toEqual(["10.0.0.1", "10.0.1.0/24"]);
+		} finally {
+			if (prev === undefined) delete process.env.OMP_FLEET_TRUSTED_PROXY;
+			else process.env.OMP_FLEET_TRUSTED_PROXY = prev;
+		}
+	});
+
+	test("trustedProxies: explicit flag wins over env and the file", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(file, JSON.stringify({ trustedProxies: ["203.0.113.9"] }));
+		const prev = process.env.OMP_FLEET_TRUSTED_PROXY;
+		process.env.OMP_FLEET_TRUSTED_PROXY = "10.0.0.1";
+		try {
+			const config = await loadConfig(file, { trustedProxy: ["198.51.100.7", "10.1.0.0/16"] });
+			expect(config.trustedProxies).toEqual(["198.51.100.7", "10.1.0.0/16"]);
+		} finally {
+			if (prev === undefined) delete process.env.OMP_FLEET_TRUSTED_PROXY;
+			else process.env.OMP_FLEET_TRUSTED_PROXY = prev;
+		}
+	});
+
+	test("trustedProxies: flag occurrences are comma-splittable", async () => {
+		const config = await loadConfig(join(tmpDir(), "missing.json"), {
+			trustedProxy: ["10.0.0.1, 10.0.1.0/24", "203.0.113.9"],
+		});
+		expect(config.trustedProxies).toEqual(["10.0.0.1", "10.0.1.0/24", "203.0.113.9"]);
+	});
+
+	test("trustedProxies: an unresolvable literal is a hard load error", async () => {
+		const file = join(tmpDir(), "config.json");
+		writeFileSync(file, JSON.stringify({ trustedProxies: ["203.0.113.9", "not-an-ip"] }));
+		await expect(loadConfig(file)).rejects.toThrow(/not-an-ip/);
+		// A bare token config (no path/env/flag) also validates.
+		await expect(
+			loadConfig(join(tmpDir(), "missing.json"), { trustedProxy: ["10.0.0.0/33"] }),
+		).rejects.toThrow(/10\.0\.0\.0\/33/);
+	});
+
 	test("corrupt or malformed config falls back to defaults", async () => {
 		const dir = tmpDir();
 		writeFileSync(join(dir, "bad-json.json"), "{ nope");
@@ -182,13 +249,18 @@ describe("loadConfig", () => {
 			await loadConfig(join(dir, "missing.json")),
 		);
 
-		writeFileSync(
-			join(dir, "bad-shape.json"),
-			JSON.stringify({ roots: "nope", templates: 42, defaultTemplate: 7 }),
-		);
+		writeFileSync(join(dir, "bad-shape.json"), JSON.stringify({ roots: "nope", templates: 42 }));
 		expect(await loadConfig(join(dir, "bad-shape.json"))).toEqual(
 			await loadConfig(join(dir, "missing.json")),
 		);
+		// An unknown-field tolerant load must not throw when an otherwise
+		// valid config carries a malformed trustedProxies key (a security
+		// misconfiguration, but not a reason to refuse startup).
+		writeFileSync(
+			join(dir, "bad-proxy.json"),
+			JSON.stringify({ trustedProxies: { "203.0.113.9": true } }),
+		);
+		expect((await loadConfig(join(dir, "bad-proxy.json"))).trustedProxies).toBeUndefined();
 	});
 });
 
@@ -237,6 +309,15 @@ describe("workspaceDir", () => {
 
 		expect((await loadWithEnv("/ws/env", file)).workspaceDir).toBe("/ws/env");
 		expect((await loadWithEnv("~/ws/env", file)).workspaceDir).toBe(join(homedir(), "ws/env"));
+	});
+
+	test("env OMP_FLEET_WORKSPACE_DIR applies with NO config file (regression: mergeConfig-only env died on the defaultConfig path)", async () => {
+		expect((await loadWithEnv("/ws/env", join(tmpDir(), "missing.json"))).workspaceDir).toBe(
+			"/ws/env",
+		);
+		expect((await loadWithEnv("~/ws/env", join(tmpDir(), "missing.json"))).workspaceDir).toBe(
+			join(homedir(), "ws/env"),
+		);
 	});
 
 	test("empty env value is ignored (file/default apply)", async () => {

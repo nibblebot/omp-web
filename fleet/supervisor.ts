@@ -700,7 +700,18 @@ export class SpawnSupervisor {
 			return;
 		}
 		// Idle auto-exit: a daemon that reached ready and whose socket was
-		// dropped (connector idle policy) exiting cleanly goes dormant.
+		// dropped (connector idle policy) exiting cleanly goes dormant. P6.4:
+		// the fleet is the SOLE idle-stop authority for provider-managed clone
+		// workspaces — their compute is not a child of this supervisor, so no
+		// legacy idle path (or any other) may stop them.
+		if (entry.workspace?.kind === "clone") {
+			// A clone workspace's child is provider-owned; if it exited, the
+			// provider has already reconciled it — do not race it with this
+			// supervisor's restart budget. The desired state + reconciliation
+			// decide the next step.
+			this.#onEvent?.("info", `${exit} (clone workspace; provider-managed)`, state.daemonId);
+			return;
+		}
 		if (
 			entry.status === "ready" &&
 			!this.#connector.isConnected(state.daemonId) &&

@@ -49,6 +49,26 @@ export interface SessionConfig {
 	collabMaxRooms: number;
 	collabHostname?: string;
 	collabUrl?: string;
+	/**
+	 * Callback transport (P3.2): fleet callback pair base URL, e.g.
+	 * https://fleet.example.com. HTTPS required; HTTP only with
+	 * --callback-allow-http AND a loopback host (isLoopbackHost).
+	 */
+	callbackUrl?: string;
+	/** Roster daemonId the callback pair is bound to; required with --callback-url. */
+	callbackWorkspace?: string;
+	/** Authorized generation for the pair (defaults to 1 when --callback-url is set). */
+	callbackGeneration?: number;
+	/** Enrollment credential, presented as Authorization: Bearer on both halves. */
+	callbackToken?: string;
+	/**
+	 * Explicit streaming proxy URL for the callback pair. Absent = direct.
+	 * Only http/https proxies are supported; anything else is a startup error
+	 * — there is no silent fallback to a direct connection.
+	 */
+	callbackProxy?: string;
+	/** Explicit loopback HTTP exception; honored only for loopback callback URL hosts. */
+	callbackAllowHttp: boolean;
 }
 
 /** Parse a duration string: `90s`, `30m`, `1h`, or a bare number = milliseconds. */
@@ -126,6 +146,74 @@ export function parseConfig(argv: string[]): SessionConfig {
 			.filter((s) => s.length > 0),
 	];
 
+	// Callback transport (P3.2, docs/clone-contracts.md "Callback transport").
+	// Enforcement lives here so a bad setup is a visible startup error instead
+	// of a runtime surprise: HTTPS always, HTTP only behind an explicit
+	// --callback-allow-http for a loopback host; an explicit proxy must be
+	// http/https — never silently ignored, never fallen back from.
+	const callbackAllowHttp =
+		flags.has("callback-allow-http") || Bun.env.OMP_SESSION_CALLBACK_ALLOW_HTTP === "1";
+	const callbackUrlRaw = flag("callback-url") ?? Bun.env.OMP_SESSION_CALLBACK_URL;
+	let callbackUrl: string | undefined;
+	if (callbackUrlRaw !== undefined) {
+		let parsed: URL;
+		try {
+			parsed = new URL(callbackUrlRaw);
+		} catch {
+			throw new Error(`invalid --callback-url "${callbackUrlRaw}" (not a URL)`);
+		}
+		if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+			throw new Error(
+				`invalid --callback-url "${callbackUrlRaw}" (${parsed.protocol} is not http/https)`,
+			);
+		}
+		if (parsed.protocol === "http:") {
+			if (!callbackAllowHttp) {
+				throw new Error(
+					`--callback-url refuses http "${callbackUrlRaw}" (https required; --callback-allow-http only opens loopback HTTP)`,
+				);
+			}
+			if (!isLoopbackHost(parsed.hostname)) {
+				throw new Error(
+					`--callback-allow-http only honors loopback hosts, got "${parsed.hostname}"`,
+				);
+			}
+		}
+		callbackUrl = parsed.toString();
+	}
+	const callbackWorkspace = flag("callback-workspace") ?? Bun.env.OMP_SESSION_CALLBACK_WORKSPACE;
+	if (callbackUrl !== undefined && callbackWorkspace === undefined) {
+		throw new Error("--callback-url requires --callback-workspace (the pair is workspace-bound)");
+	}
+	const callbackGenerationRaw =
+		flag("callback-generation") ?? Bun.env.OMP_SESSION_CALLBACK_GENERATION;
+	let callbackGeneration: number | undefined;
+	if (callbackGenerationRaw !== undefined) {
+		callbackGeneration = Number(callbackGenerationRaw);
+		if (!Number.isInteger(callbackGeneration) || callbackGeneration < 1) {
+			throw new Error(
+				`invalid --callback-generation "${callbackGenerationRaw}" (positive integer)`,
+			);
+		}
+	} else if (callbackUrl !== undefined) {
+		callbackGeneration = 1; // authorizedGeneration starts at 1
+	}
+	const callbackProxyRaw = flag("callback-proxy") ?? Bun.env.OMP_SESSION_CALLBACK_PROXY;
+	let callbackProxy: string | undefined;
+	if (callbackProxyRaw !== undefined) {
+		let parsed: URL;
+		try {
+			parsed = new URL(callbackProxyRaw);
+		} catch {
+			throw new Error(`invalid --callback-proxy "${callbackProxyRaw}" (not a URL)`);
+		}
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+			throw new Error(
+				`unsupported --callback-proxy scheme "${parsed.protocol}" (${callbackProxyRaw}); only http/https proxies are supported and there is no direct fallback`,
+			);
+		}
+		callbackProxy = parsed.toString();
+	}
 	return {
 		cwd,
 		port,
@@ -145,5 +233,11 @@ export function parseConfig(argv: string[]): SessionConfig {
 		collabMaxRooms: Math.max(1, Number(Bun.env.OMP_SESSION_COLLAB_MAX_ROOMS ?? 256) || 256),
 		collabHostname: Bun.env.OMP_SESSION_COLLAB_HOSTNAME,
 		collabUrl: Bun.env.OMP_SESSION_COLLAB_URL,
+		callbackUrl,
+		callbackWorkspace,
+		callbackGeneration,
+		callbackToken: flag("callback-token") ?? Bun.env.OMP_SESSION_CALLBACK_TOKEN,
+		callbackProxy,
+		callbackAllowHttp,
 	};
 }

@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { sep } from "node:path";
 import { json } from "../http";
 import { countMainSessions } from "../lib/sessions-index";
+import { storeCoverage } from "../lib/store-index";
 import type { Health } from "../../../shared/stats-types";
 import type { AppCtx, Route } from "../types";
 
@@ -62,6 +63,8 @@ function healthRoute(ctx: AppCtx): Route {
 				// would show — subagent transcripts and DB-only rows are excluded.
 				sessionsCount: countMainSessions(ctx.cfg.sessionsDir),
 				dbCounts,
+				// P8.6: fleet-store coverage (excluded from sessionsCount above).
+				...(ctx.cfg.stored ? { fleetStore: storeCoverage(ctx.cfg.stored.store) ?? undefined } : {}),
 			};
 			return json(body);
 		},

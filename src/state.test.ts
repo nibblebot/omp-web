@@ -208,12 +208,13 @@ beforeEach(() => {
 		daemonRoster: [],
 		daemonActivity: {},
 		registeredProjects: [],
+		providerProfiles: [],
 		fleetConfigPath: null,
 		worktreeDeleteInfo: {},
 		pendingSessionPicker: null,
 		sessionPickerGate: null,
-		worktreeModalProjectId: null,
-		deleteWorktreeTarget: null,
+		workspaceModalProjectId: null,
+		deleteWorkspaceTarget: null,
 		removeProjectTarget: null,
 		modal: null,
 		// Top-level view mode + its UI flags (setView / setTxSidebarVisible /
@@ -1009,6 +1010,11 @@ describe("initialView (boot view resolution)", () => {
 	test("a #/s/<file> hash deep-links into analysis even when work is persisted", () => {
 		expect(initialView("work", "#/s/abc.jsonl")).toBe("analysis");
 		expect(initialView("work", "#s/abc.jsonl")).toBe("analysis");
+	});
+
+	test("a #/stored/<workspaceId>/<sessionId> hash deep-links into analysis (P8.5)", () => {
+		expect(initialView("work", "#/stored/d7/sess-1")).toBe("analysis");
+		expect(initialView("work", "#stored/d7/sess-1")).toBe("analysis");
 	});
 
 	test("a non-/s/ hash falls through to the persisted value", () => {

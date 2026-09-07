@@ -34,6 +34,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { CALLBACK_CONTROL_STREAM_ID } from "../shared/callback-protocol";
 import type { ClientCommand, ServerFrame } from "../shared/protocol";
 import type { Registry, RegistryEntry } from "./registry";
 import type { DaemonConnector } from "./connector";
@@ -47,10 +48,37 @@ export interface PromptResult {
 	error?: string;
 }
 
+/**
+ * Minimal transport/lifecycle surfaces the fan-out needs for clone entries
+ * (structural conformance — the server wires the real DaemonTransportRegistry
+ * and WorkspaceLifecycle; fan-out never imports them to avoid a cycle).
+ */
+export interface FanoutTransport {
+	pairStatus(workspaceId: string): { paired: boolean };
+	onPairChange(workspaceId: string, cb: (status: { paired: boolean }) => void): () => void;
+	sendToDaemon(
+		workspaceId: string,
+		draft: { streamId: string; kind: "command"; payload: unknown },
+	): Promise<unknown>;
+	onDaemonEnvelope(
+		workspaceId: string,
+		cb: (envelope: { kind: string; streamId: string; payload: unknown }) => void,
+	): () => void;
+}
+
+export interface FanoutCloneLifecycle {
+	/** Resolves at provider-running + enrollment persisted; safe for wake. */
+	ensureCloneRunning(daemonId: string): Promise<void>;
+}
+
 export interface FanoutDeps {
 	registry: Registry;
 	connector: DaemonConnector;
 	supervisor: SpawnSupervisor;
+	/** Callback transport (P3): present only when the fleet serves clone workspaces. */
+	transport?: FanoutTransport;
+	/** Clone lifecycle service: wake clones before prompting them. */
+	lifecycle?: FanoutCloneLifecycle;
 }
 
 const DEFAULT_WAIT_MS = 120_000;
@@ -74,9 +102,17 @@ export async function promptEntry(
 	const daemonId = entry.daemonId;
 	const previous = promptQueues.get(daemonId) ?? Promise.resolve();
 	const run = async (): Promise<PromptResult> => {
+		const current = deps.registry.get(daemonId) ?? entry;
+		if (current.workspace?.kind === "clone") {
+			// Clone fan-out rides the callback pair (P3.4/P6.1): wake through
+			// the lifecycle ensure (never the supervisor/connector — provider
+			// compute has no fleet child or dialable socket), then send the
+			// prompt as a kind:"command" envelope on the transport control
+			// stream and correlate the answer frames the daemon mirrors there.
+			return await promptCloneEntry(deps, current, text, waitMs);
+		}
 		deps.connector.retain(daemonId);
 		try {
-			const current = deps.registry.get(daemonId) ?? entry;
 			try {
 				// Wake on demand. A spawned entry that is asleep/error/reconnecting
 				// is relaunched (--resume); anything whose socket is merely gone
@@ -119,6 +155,83 @@ export async function promptEntry(
 	return turn;
 }
 
+/**
+ * Fan out one prompt to a clone workspace over its callback pair. Wakes via
+ * the lifecycle ensure when the pair is down, waits for the pair (bounded —
+ * ensureCloneRunning resolves at provider-running, the daemon dials right
+ * after), then sends kind:"command" on the transport control stream and
+ * correlates the daemon's mirrored frames (P3.4). No offline queue and no
+ * blind retry: a missing transport/lifecycle or an unpairable workspace
+ * answers a typed failure immediately.
+ */
+async function promptCloneEntry(
+	deps: FanoutDeps,
+	entry: RegistryEntry,
+	text: string,
+	waitMs?: number,
+): Promise<PromptResult> {
+	const daemonId = entry.daemonId;
+	const transport = deps.transport;
+	const lifecycle = deps.lifecycle;
+	if (!transport) {
+		return { daemonId, ok: false, error: "clone prompt is unavailable: no callback transport" };
+	}
+	if (!lifecycle) {
+		return { daemonId, ok: false, error: "clone prompt is unavailable: no lifecycle service" };
+	}
+	try {
+		if (!transport.pairStatus(daemonId).paired) {
+			await lifecycle.ensureCloneRunning(daemonId);
+			await waitForPair(transport, daemonId, DEFAULT_WAIT_READY_MS);
+		}
+	} catch (err) {
+		return { daemonId, ok: false, error: (err as Error).message };
+	}
+	const id = randomUUID();
+	const cmd: ClientCommand = { type: "call", id, method: "prompt", args: [text] };
+	const correlation = correlate(deps, daemonId, id, waitMs, (cb) =>
+		transport.onDaemonEnvelope(daemonId, (envelope) => {
+			if (envelope.kind !== "frame" || envelope.streamId !== CALLBACK_CONTROL_STREAM_ID) return;
+			const payload = envelope.payload;
+			if (typeof payload === "object" && payload !== null) cb(payload as ServerFrame);
+		}),
+	);
+	try {
+		await transport.sendToDaemon(daemonId, {
+			streamId: CALLBACK_CONTROL_STREAM_ID,
+			kind: "command",
+			payload: cmd,
+		});
+	} catch {
+		correlation.cancel();
+		return { daemonId, ok: false, error: "daemon not connected" };
+	}
+	return await correlation.promise;
+}
+
+/** Wait for the workspace's callback pair to come up (bounded by waitMs). */
+function waitForPair(transport: FanoutTransport, daemonId: string, waitMs: number): Promise<void> {
+	const { promise, resolve, reject } = Promise.withResolvers<void>();
+	const timer = setTimeout(() => {
+		unsubscribe();
+		reject(new Error(`clone ${daemonId} callback pair not ready within ${waitMs} ms`));
+	}, waitMs);
+	const unsubscribe = transport.onPairChange(daemonId, (status) => {
+		if (!status.paired) return;
+		clearTimeout(timer);
+		unsubscribe();
+		resolve();
+	});
+	// Check once after subscribing — the pair may have come up between the
+	// ensure resolution and the subscription above.
+	if (transport.pairStatus(daemonId).paired) {
+		clearTimeout(timer);
+		unsubscribe();
+		resolve();
+	}
+	return promise;
+}
+
 export async function fanOut(
 	deps: FanoutDeps,
 	entries: RegistryEntry[],
@@ -134,30 +247,33 @@ export async function fanOut(
  * timeout. Returns the result promise plus a cancel() that detaches without
  * settling (used when send() fails after subscribing).
  *
- * The control stream carries every concurrent turn on the daemon, so
- * correlation is gated on the `call_result` for our call id: until it
- * confirms acceptance (ok:true) or rejection (ok:false), all turn frames are
- * ignored — a browser-driven turn's agent_end or abort can never settle our
- * promise. Broadcast `{type:"error"}` frames carry no call id and are never
- * fatal; our own call failures arrive as id-matched `call_result{ok:false}`.
+ * Direct entries subscribe to the connector's control stream, which carries
+ * every concurrent turn on the daemon, so correlation is gated on the
+ * `call_result` for our call id: until it confirms acceptance (ok:true) or
+ * rejection (ok:false), all turn frames are ignored — a browser-driven
+ * turn's agent_end or abort can never settle our promise. Broadcast
+ * `{type:"error"}` frames carry no call id and are never fatal; our own call
+ * failures arrive as id-matched `call_result{ok:false}`. Clone entries pass
+ * a transport mirror subscription filtered to the control stream; the frame
+ * semantics are identical (the daemon broadcasts the same session frames
+ * there — P3.4).
  */
 function correlate(
 	deps: FanoutDeps,
 	daemonId: string,
 	callId: string,
 	waitMs?: number,
+	subscribe?: (cb: (frame: ServerFrame) => void) => () => void,
 ): { promise: Promise<PromptResult>; cancel: () => void } {
 	const { promise, resolve } = Promise.withResolvers<PromptResult>();
 	let settled = false;
 	let accepted = false;
 	let lastText: string | undefined;
 	let usage: unknown;
+	let unsubscribe: () => void = () => {};
 	const timeoutMs = waitMs ?? DEFAULT_WAIT_MS;
 	const timer = setTimeout(() => settle({ daemonId, ok: false, error: "timeout" }), timeoutMs);
-	const unsubscribe = deps.connector.onFrame(daemonId, (frame) => {
-		if (settled) return;
-		handleFrame(frame);
-	});
+	unsubscribe = (subscribe ?? ((cb) => deps.connector.onFrame(daemonId, cb)))(handleFrame);
 	const cancel = (): void => {
 		if (settled) return;
 		settled = true;
