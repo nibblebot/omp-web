@@ -14,7 +14,7 @@ import { ExportError, type ManifestFileKind } from "../shared/archive-manifest";
 // Workspace session-tree planning + structural verification
 // (runtime/export-sessions.ts).
 //
-// Post-09-05-amendment role (docs/clone-contracts.md, clone-plan.md P4.4-P4.6,
+// Post-09-05-amendment role (docs/clone-contracts.md, docs/clone-plan.md P4.4-P4.6,
 // P7.1-P7.2): the sealed export/archive-copy pipeline is DEAD. This module
 // keeps only what the verify-at-deletion gate and the daemon's own quiesce
 // path need:
