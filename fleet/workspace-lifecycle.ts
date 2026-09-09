@@ -8,7 +8,7 @@
  *
  * Frozen contracts: docs/clone-contracts.md ("Browser and CLI workspace
  * creation", "Provider operation protocol", "Fleet log store", "Retention",
- * "Wake", "Typed errors") and clone-plan.md P6/P7.
+ * "Wake", "Typed errors") and docs/clone-plan.md P6/P7.
  *
  * Ownership rules this service enforces:
  * - One lifecycle implementation. HTTP handlers and edge commands call

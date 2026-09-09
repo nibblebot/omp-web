@@ -90,7 +90,7 @@ Ports: defaults vite **4713**, omp-session **4721**, omp-fleet **4722** (used by
 | `test/` | Stats-suite tests (14 files) for the `fleet/stats/` API; gitignored `test/.fixture/` auto-regenerated idempotently by `scripts/gen-tx-fixture.ts` (api.test.ts `beforeAll`) |
 | `docs/astro.config.mjs`, `docs/src/content/docs/` | Astro/Starlight documentation site, published from the `docs` branch by `.github/workflows/docs.yml` at `https://nibblebot.github.io/omp-web/` with base `/omp-web/`; generated `docs/dist/` is gitignored |
 | `docs/architecture.md`, `docs/release.md` | System architecture (wire contract, module map, managed clone workspaces) + release and update channel contracts, release-script spec (committed docs) |
-| `docs/clone-contracts.md` | Frozen clone-workspace contract ledger (identities, callback pair, log store, wake materialization, retention, provider profiles; committed docs: update, don't delete; approved design, not implementation claims) |
+| `docs/clone-contracts.md`, `docs/clone-design.md`, `docs/clone-plan.md`, `docs/clone-summary.md` | The frozen clone-contract ledger (identities, callback pair, log store, wake materialization, retention, provider profiles) plus the approved clone-workspace design (normative intent), its phased execution/evidence tracker (P0–P9), and a short summary; committed docs, update, don't delete; clone-contracts.md is approved design, not implementation claims, and source comments cite the trio by phase id, so keep the phase numbering stable |
 
 ## The wire contract (OMP_PROTO 2)
 

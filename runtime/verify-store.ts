@@ -31,7 +31,7 @@ import {
 // Verify-at-deletion gate (P7.1/P7.2 core) — runtime/verify-store.ts.
 //
 // Frozen contract (docs/clone-contracts.md "Fleet log store"/"Typed errors";
-// clone-design.md "Workspace deletion: verify-at-deletion contract"):
+// docs/clone-design.md "Workspace deletion: verify-at-deletion contract"):
 //
 //   verifyWorkspaceLogs({ logsRoot, workspaceId }) →
 //     { ok: true; sessions: VerifiedSession[] }
