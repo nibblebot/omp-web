@@ -1,44 +1,25 @@
 #!/usr/bin/env bun
 /**
- * dev-kubernetes — repeatable bring-up of the HOST side of the Kubernetes
- * worker lifecycle, so the operator can drive real clones through the real UI.
+ * dev-kubernetes — bring up the HOST side of the Kubernetes worker lifecycle
+ * so the operator can drive real clones through the real UI.
  *
- * This script owns everything that must exist BEFORE the long-lived dev
- * processes start, and nothing that runs forever:
+ * It owns the cluster, namespace, and `OMP_KUBE_BIN` wrapper; the base and
+ * CA-trusting derived session-runtime images; the throwaway gateway TLS and
+ * gateway source; and the seed Git project with a `git://` bare remote. It
+ * never starts a long-lived process: the gateway, fleet, UI, and `git daemon`
+ * belong to the operator's `hub` process table, and the exact environment
+ * they need is written to `<dev-root>/env.json` and printed at the end.
  *
- *   cluster   one named minikube profile (docker driver) with an isolated
- *             MINIKUBE_HOME / KUBECONFIG, the namespace, the temporary
- *             OMP_KUBE_BIN wrapper, and the node's conditional FORWARD repair
- *   image     the session-runtime image built from `dist-bundle/image/`,
- *             loaded into the profile, plus a DERIVED image that trusts a
- *             throwaway CA (the clone Pod must trust the gateway's TLS
- *             certificate) and runs as 10001:10001
- *   gateway   the temporary CA + server certificate for the address a Pod
- *             proves it can dial back to, and the dev gateway's own source
- *             (`gateway.ts`) and config
- *   seed      a small Git project with a real bare remote served over
- *             `git://` by `git daemon` (a kubernetes clone requires a remote
- *             source the Pod can fetch; a fleet-host path is not reachable)
- *
- * The three (four, counting `git daemon`) long-lived processes are started by
- * the harness, not here: the operator's `hub` process table owns them. The
- * resolved facts and the exact environment they need are written to
- * `<dev-root>/env.json` and printed at the end.
- *
- * Re-runnable: every step is existence-checked, so a second run is a no-op
- * plus the read-only observations (node Ready, images present, reach probe).
+ * Re-runnable: every step is existence-checked, so a second run is a no-op.
  *
  * Usage:
  *   bun scripts/dev-kubernetes.ts                 bring up / reconcile
- *   bun scripts/dev-kubernetes.ts --check         verify only; never builds
+ *   bun scripts/dev-kubernetes.ts --check         verify only; never writes
  *   bun scripts/dev-kubernetes.ts --probe-gateway throwaway-Pod gateway dial
  *   bun scripts/dev-kubernetes.ts --help
  *
- * `--check` still runs the Pod-reachability probe (it creates and removes one
- * throwaway Pod); pass `--no-probe` to skip even that.
- *
- * Techniques and constants mirror `scripts/test-kubernetes-minikube.ts` (the
- * disposable acceptance walk), which is the proven bring-up for this host.
+ * `--check` still runs the Pod-reachability probe (one throwaway Pod, created
+ * and removed); pass `--no-probe` to skip even that.
  */
 
 import {
@@ -48,6 +29,7 @@ import {
 	readFileSync,
 	readdirSync,
 	realpathSync,
+	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
@@ -94,6 +76,9 @@ const CLUSTER_READY_TIMEOUT_MS = 300_000;
 const BUILD_TIMEOUT_MS = 900_000;
 const POLL_TIMEOUT_MS = 120_000;
 const PROBE_TIMEOUT_MS = 300_000;
+const PORT_PROBE_TIMEOUT_MS = 5_000;
+/** Renew the gateway certificate once it is within this window of expiry. */
+const CERT_RENEWAL_WINDOW_S = 7 * 24 * 60 * 60;
 
 // ---------------------------------------------------------------------------
 // Paths under the dev root
@@ -111,6 +96,7 @@ const paths = {
 	gitRoot: join(DEV_ROOT, "git"),
 	tls: join(DEV_ROOT, "tls"),
 	derivedContext: join(DEV_ROOT, "derived-image"),
+	imageStamp: join(DEV_ROOT, "image-stamp.json"),
 	manifests: join(DEV_ROOT, "manifests"),
 	config: join(DEV_ROOT, "config.json"),
 	state: join(DEV_ROOT, "fleet-state.json"),
@@ -202,6 +188,29 @@ function resolveTool(name: string): string | null {
 	} catch {
 		return null;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Generated files
+// ---------------------------------------------------------------------------
+
+/**
+ * Reconcile mode writes `content`. `--check` must not mutate anything, so it
+ * reports missing or stale content instead (byte-exact; these files are all
+ * deterministic functions of the resolved facts).
+ */
+function installFile(path: string, content: string, mode?: number): void {
+	if (CHECK_ONLY) {
+		if (!existsSync(path) || readFileSync(path, "utf8") !== content) {
+			die(`${path} is missing or stale; re-run without --check to reconcile`);
+		}
+		if (mode !== undefined && (statSync(path).mode & 0o777) !== mode) {
+			die(`${path} has the wrong permissions; re-run without --check to reconcile`);
+		}
+		return;
+	}
+	writeFileSync(path, content);
+	if (mode !== undefined) chmodSync(path, mode);
 }
 
 // ---------------------------------------------------------------------------
@@ -415,9 +424,11 @@ async function ensureBundle(): Promise<void> {
  * failure, never a start.
  */
 async function ensureCluster(): Promise<string> {
-	mkdirSync(paths.minikubeHome, { recursive: true });
-	mkdirSync(paths.bin, { recursive: true });
-	writeKubeWrapper();
+	if (!CHECK_ONLY) {
+		mkdirSync(paths.minikubeHome, { recursive: true });
+		mkdirSync(paths.bin, { recursive: true });
+	}
+	installKubeWrapper();
 
 	const status = await minikube(["status", "--format", "{{.Host}}"], 120_000);
 	const running = status.code === 0 && status.stdout.includes("Running");
@@ -450,12 +461,24 @@ async function ensureCluster(): Promise<string> {
 		{ timeoutMs: CLUSTER_READY_TIMEOUT_MS, intervalMs: 2_000 },
 	);
 
-	const createNs = await kube(["create", "namespace", NAMESPACE]);
-	if (createNs.code !== 0 && !createNs.stderr.includes("AlreadyExists")) {
-		die(`creating namespace ${NAMESPACE} failed: ${createNs.stderr.slice(-300)}`);
+	const existingNs = await kube([
+		"get",
+		"namespace",
+		NAMESPACE,
+		"--ignore-not-found",
+		"-o",
+		"name",
+	]);
+	if (existingNs.stdout.trim() === "") {
+		if (CHECK_ONLY) die(`namespace ${NAMESPACE} is missing`);
+		const createNs = await kube(["create", "namespace", NAMESPACE]);
+		if (createNs.code !== 0) {
+			die(`creating namespace ${NAMESPACE} failed: ${createNs.stderr.slice(-300)}`);
+		}
+		log(`created namespace ${NAMESPACE}`);
+	} else {
+		log(`namespace ${NAMESPACE} exists`);
 	}
-	if (createNs.code === 0) log(`created namespace ${NAMESPACE}`);
-	else log(`namespace ${NAMESPACE} already exists`);
 
 	const context = (await kube(["config", "current-context"])).stdout.trim();
 	if (context === "") die("the isolated kubeconfig has no current context");
@@ -465,10 +488,10 @@ async function ensureCluster(): Promise<string> {
 /**
  * The temporary `OMP_KUBE_BIN` wrapper: this host has NO ambient kubectl, so
  * every provider/preflight invocation must go through
- * `minikube -p <profile> kubectl --`. The cluster-side selectors are baked in
- * so the wrapper is self-sufficient even for a spawn that passes no env.
+ * `minikube -p <profile> kubectl --`. The cluster selectors are baked in so
+ * the wrapper is self-sufficient even for a spawn that passes no env.
  */
-function writeKubeWrapper(): void {
+function installKubeWrapper(): void {
 	const script =
 		`#!/bin/sh\n` +
 		`MINIKUBE_HOME=${shellQuote(paths.minikubeHome)} ` +
@@ -476,8 +499,7 @@ function writeKubeWrapper(): void {
 		`DOCKER_HOST=${shellQuote(tools.dockerHost)} ` +
 		`MINIKUBE_IN_STYLE=false ` +
 		`exec ${shellQuote(tools.minikube)} -p ${shellQuote(PROFILE)} kubectl -- "$@"\n`;
-	writeFileSync(paths.kubeBin, script);
-	chmodSync(paths.kubeBin, 0o755);
+	installFile(paths.kubeBin, script, 0o755);
 }
 
 async function storageClassName(): Promise<string> {
@@ -507,65 +529,117 @@ async function storageClassName(): Promise<string> {
 // Images
 // ---------------------------------------------------------------------------
 
+/**
+ * A deterministic digest of each image's build inputs, written beside the dev
+ * root. The fixed tags alone would keep a stale image whenever the runtime
+ * bundle or the throwaway CA changed under the same tag.
+ */
+interface ImageStamp {
+	base: string;
+	derived: string;
+}
+
+function readImageStamp(): ImageStamp {
+	const empty: ImageStamp = { base: "", derived: "" };
+	if (!existsSync(paths.imageStamp)) return empty;
+	try {
+		const record = asRecord(JSON.parse(readFileSync(paths.imageStamp, "utf8")));
+		return { base: textOf(nested(record, "base")), derived: textOf(nested(record, "derived")) };
+	} catch {
+		return empty;
+	}
+}
+
+function writeImageStamp(stamp: ImageStamp): void {
+	writeFileSync(paths.imageStamp, `${JSON.stringify(stamp, null, 2)}\n`);
+}
+
+/** Deterministic content digest of a tree: relative path + bytes, sorted. */
+function treeDigest(dir: string): string {
+	const hash = new Bun.CryptoHasher("sha256");
+	for (const file of walkFiles(dir).sort()) {
+		hash.update(file.slice(dir.length + 1));
+		hash.update("\0");
+		hash.update(readFileSync(file));
+		hash.update("\0");
+	}
+	return hash.digest("hex");
+}
+
+/** The base image build context is its own complete input set. */
+function baseImageDigest(): string {
+	return treeDigest(join(REPO_ROOT, "dist-bundle", "image"));
+}
+
+/** Throwaway CA bytes; empty until the TLS material is generated. */
+function caDigest(): string {
+	const ca = join(paths.tls, "ca.crt");
+	return existsSync(ca)
+		? new Bun.CryptoHasher("sha256").update(readFileSync(ca)).digest("hex")
+		: "";
+}
+
+function derivedImageDigest(base: string): string {
+	const hash = new Bun.CryptoHasher("sha256");
+	hash.update(base);
+	hash.update("\0");
+	hash.update(caDigest());
+	return hash.digest("hex");
+}
+
 async function imagePresentInProfile(tag: string): Promise<boolean> {
 	const listed = await minikube(["image", "ls"], 180_000);
 	return listed.stdout.includes(tag);
 }
 
-async function imagePresentInDocker(tag: string): Promise<boolean> {
-	const inspected = await runCommand([tools.docker, "image", "inspect", tag], {
-		env: clusterEnv(),
-		timeoutMs: 60_000,
-	});
-	return inspected.code === 0;
-}
-
-async function ensureBaseImage(): Promise<void> {
-	if (await imagePresentInProfile(BASE_IMAGE)) {
-		log(`base image ${BASE_IMAGE} is loaded in the profile`);
-		return;
+async function ensureBaseImage(): Promise<string> {
+	const digest = baseImageDigest();
+	if (readImageStamp().base === digest && (await imagePresentInProfile(BASE_IMAGE))) {
+		log(`base image ${BASE_IMAGE} is current`);
+		return digest;
 	}
-	if (CHECK_ONLY) die(`base image ${BASE_IMAGE} is not loaded in the profile`);
-	if (!(await imagePresentInDocker(BASE_IMAGE))) {
-		log(`building ${BASE_IMAGE} from dist-bundle/image/`);
-		const built = await runCommand(
-			[
-				tools.docker,
-				"build",
-				"--file",
-				join(REPO_ROOT, "dist-bundle", "image", "Containerfile"),
-				"--tag",
-				BASE_IMAGE,
-				join(REPO_ROOT, "dist-bundle", "image"),
-			],
-			{ env: clusterEnv(), timeoutMs: BUILD_TIMEOUT_MS },
-		);
-		if (built.code !== 0) die(`image build failed: ${built.stderr.slice(-600)}`);
+	if (CHECK_ONLY) {
+		die(`base image ${BASE_IMAGE} is missing or stale; re-run without --check to rebuild`);
 	}
+	log(`building ${BASE_IMAGE} from dist-bundle/image/`);
+	const built = await runCommand(
+		[
+			tools.docker,
+			"build",
+			"--file",
+			join(REPO_ROOT, "dist-bundle", "image", "Containerfile"),
+			"--tag",
+			BASE_IMAGE,
+			join(REPO_ROOT, "dist-bundle", "image"),
+		],
+		{ env: clusterEnv(), timeoutMs: BUILD_TIMEOUT_MS },
+	);
+	if (built.code !== 0) die(`image build failed: ${built.stderr.slice(-600)}`);
 	const loaded = await minikube(["image", "load", BASE_IMAGE], BUILD_TIMEOUT_MS);
 	if (loaded.code !== 0) die(`minikube image load failed: ${loaded.stderr.slice(-400)}`);
+	writeImageStamp({ ...readImageStamp(), base: digest });
 	log(`loaded ${BASE_IMAGE} into the profile`);
+	return digest;
 }
 
-async function ensureDerivedImage(): Promise<void> {
-	if (await imagePresentInProfile(CA_IMAGE)) {
-		log(`derived image ${CA_IMAGE} is loaded in the profile`);
+async function ensureDerivedImage(base: string): Promise<void> {
+	const digest = derivedImageDigest(base);
+	if (readImageStamp().derived === digest && (await imagePresentInProfile(CA_IMAGE))) {
+		log(`derived image ${CA_IMAGE} is current`);
 		return;
 	}
-	if (CHECK_ONLY) die(`derived image ${CA_IMAGE} is not loaded in the profile`);
-	if (!(await imagePresentInDocker(CA_IMAGE))) {
-		log(`building ${CA_IMAGE} (trusts the throwaway CA, runs as ${RUNTIME_UID})`);
-		const built = await runCommand(
-			[tools.docker, "build", "--tag", CA_IMAGE, paths.derivedContext],
-			{
-				env: clusterEnv(),
-				timeoutMs: BUILD_TIMEOUT_MS,
-			},
-		);
-		if (built.code !== 0) die(`derived image build failed: ${built.stderr.slice(-600)}`);
+	if (CHECK_ONLY) {
+		die(`derived image ${CA_IMAGE} is missing or stale; re-run without --check to rebuild`);
 	}
+	log(`building ${CA_IMAGE} (trusts the throwaway CA, runs as ${RUNTIME_UID})`);
+	const built = await runCommand([tools.docker, "build", "--tag", CA_IMAGE, paths.derivedContext], {
+		env: clusterEnv(),
+		timeoutMs: BUILD_TIMEOUT_MS,
+	});
+	if (built.code !== 0) die(`derived image build failed: ${built.stderr.slice(-600)}`);
 	const loaded = await minikube(["image", "load", CA_IMAGE], BUILD_TIMEOUT_MS);
 	if (loaded.code !== 0) die(`minikube image load failed: ${loaded.stderr.slice(-400)}`);
+	writeImageStamp({ ...readImageStamp(), derived: digest });
 	log(`loaded ${CA_IMAGE} into the profile`);
 }
 
@@ -709,11 +783,9 @@ async function probeReachFromPod(
 }
 
 /**
- * Restore Pod egress in the cluster node when the FORWARD policy is the
- * problem. kicbase ships Docker 29, whose dockerd leaves the node's FORWARD
- * policy at DROP; minikube masks that unit for containerd, so the DROP
- * outlives boot and every forwarded Pod packet dies. Idempotent: the rule is
- * only inserted when `iptables -C` does not already find it.
+ * Restore Pod egress when the node's FORWARD policy is DROP (kicbase's
+ * dockerd can leave it there, and every forwarded Pod packet then dies).
+ * Idempotent: the rule is inserted only when `iptables -C` does not find it.
  */
 async function repairNodeForwarding(subnet: string): Promise<string | null> {
 	const policy = await minikube(["ssh", "--", "sudo", "iptables", "-S", "FORWARD"], 120_000);
@@ -723,9 +795,7 @@ async function repairNodeForwarding(subnet: string): Promise<string | null> {
 	);
 	if (hasRule.code === 0) return null;
 	if (policy.code !== 0 || !policy.stdout.includes("-P FORWARD DROP")) return null;
-	log(
-		`node drops forwarded Pod traffic (FORWARD policy DROP, kicbase's stopped dockerd); allowing ${subnet}`,
-	);
+	log(`node drops forwarded Pod traffic (FORWARD policy DROP); allowing ${subnet}`);
 	const repair = await minikube(
 		["ssh", "--", "sudo", "iptables", "-I", "FORWARD", "1", "-s", subnet, "-j", "ACCEPT"],
 		120_000,
@@ -807,7 +877,12 @@ async function runToolPod(
 		}),
 	);
 	const create = await kube(["create", "-f", manifestPath]);
-	if (create.code !== 0) die(`creating probe Pod ${name} failed: ${create.stderr.slice(-300)}`);
+	if (create.code !== 0) {
+		removeManifest(manifestPath);
+		die(`creating probe Pod ${name} failed: ${create.stderr.slice(-300)}`);
+	}
+	let output: string | null = null;
+	let failure: string | null = null;
 	try {
 		const phase = await waitFor(
 			`probe Pod ${name} to finish`,
@@ -828,15 +903,28 @@ async function runToolPod(
 			{ timeoutMs: PROBE_TIMEOUT_MS, intervalMs: 1_500 },
 		);
 		const logs = await kube(["logs", name, "-n", NAMESPACE], 60_000);
-		if (phase !== "Succeeded") {
-			die(`probe Pod ${name} ended ${phase}: ${logs.stdout.slice(-400)}`);
-		}
-		return logs.stdout;
+		if (phase === "Succeeded") output = logs.stdout;
+		else failure = `probe Pod ${name} ended ${phase}: ${logs.stdout.slice(-400)}`;
+	} catch (error) {
+		failure = `probe Pod ${name} failed: ${error instanceof Error ? error.message : String(error)}`;
 	} finally {
+		// `die` exits the process, so the removal must happen here, not in a
+		// caller: a failed probe may not leak its Pod.
 		await kube(
 			["delete", "pod", name, "-n", NAMESPACE, "--ignore-not-found", "--wait=false"],
 			60_000,
 		);
+		removeManifest(manifestPath);
+	}
+	if (failure !== null) die(failure);
+	return output ?? "";
+}
+
+function removeManifest(manifestPath: string): void {
+	try {
+		rmSync(manifestPath, { force: true });
+	} catch {
+		// Best effort: a leftover manifest is a clue, not a resource.
 	}
 }
 
@@ -844,7 +932,11 @@ async function runToolPod(
 // TLS + derived image context
 // ---------------------------------------------------------------------------
 
-/** Whether the server certificate's SAN already covers `address`. */
+/**
+ * Whether the gateway certificate covers `address` and stays valid beyond the
+ * renewal window. SAN text alone would happily reuse the 30-day certificate
+ * after it expired.
+ */
 async function certificateCovers(address: string): Promise<boolean> {
 	const certPath = join(paths.tls, "server.crt");
 	const keyPath = join(paths.tls, "server.key");
@@ -853,7 +945,12 @@ async function certificateCovers(address: string): Promise<boolean> {
 		[tools.openssl, "x509", "-in", certPath, "-noout", "-ext", "subjectAltName"],
 		{ timeoutMs: 60_000 },
 	);
-	return san.code === 0 && san.stdout.includes(`IP Address:${address}`);
+	if (san.code !== 0 || !san.stdout.includes(`IP Address:${address}`)) return false;
+	const valid = await runCommand(
+		[tools.openssl, "x509", "-in", certPath, "-noout", "-checkend", String(CERT_RENEWAL_WINDOW_S)],
+		{ timeoutMs: 60_000 },
+	);
+	return valid.code === 0;
 }
 
 /**
@@ -863,10 +960,10 @@ async function certificateCovers(address: string): Promise<boolean> {
  */
 async function ensureCertificates(address: string): Promise<void> {
 	if (await certificateCovers(address)) {
-		log(`gateway certificate already covers ${address}`);
+		log(`gateway certificate covers ${address} and is not near expiry`);
 		return;
 	}
-	if (CHECK_ONLY) die(`TLS material is missing or does not cover ${address}`);
+	if (CHECK_ONLY) die(`TLS material is missing, near expiry, or does not cover ${address}`);
 	log(`generating a throwaway CA + gateway certificate for ${address}`);
 	mkdirSync(paths.tls, { recursive: true });
 	const caKey = join(paths.tls, "ca.key");
@@ -968,32 +1065,32 @@ interface SeedFacts {
 
 /**
  * Two commits on `main` in the work repo (the registered seed project), a bare
- * `seed.git` beside it, and an `origin` that points at the `git://` URL Pods
- * will fetch. A kubernetes clone REQUIRES a remote source: a fleet-host path
- * is not reachable from inside the Pod. Idempotent: an existing repo keeps its
- * history, only the remote URL and the bare mirror are reconciled.
+ * `seed.git` beside it, and an `origin` pointing at the `git://` URL Pods will
+ * fetch: a kubernetes clone requires a remote the Pod can reach. Idempotent:
+ * an existing repo keeps its history; only the remote URL and the bare mirror
+ * are reconciled.
  */
 async function ensureSeedRepo(address: string): Promise<SeedFacts> {
-	mkdirSync(paths.seedProject, { recursive: true });
-	mkdirSync(paths.gitRoot, { recursive: true });
+	if (!CHECK_ONLY) {
+		mkdirSync(paths.seedProject, { recursive: true });
+		mkdirSync(paths.gitRoot, { recursive: true });
+	}
 	const bare = join(paths.gitRoot, "seed.git");
 	const gitUrl = `git://${address}:${GIT_PORT}/seed.git`;
 	const branch = "main";
-	// The dev host has no git identity configured; commits here are throwaway
-	// fixture data, so the identity is supplied per command, never written to
-	// any gitconfig.
-	const gitEnv = {
-		...clusterEnv(),
-		GIT_AUTHOR_NAME: "omp-dev",
-		GIT_AUTHOR_EMAIL: "dev@omp.test",
-		GIT_COMMITTER_NAME: "omp-dev",
-		GIT_COMMITTER_EMAIL: "dev@omp.test",
-	};
+	// Fixture commits carry the operator's real Git identity from the existing
+	// gitconfig; a missing identity must fail the run, never be invented here.
 	const git = (args: readonly string[]) =>
-		runCommand([tools.git, ...args], { env: gitEnv, timeoutMs: 120_000 });
+		runCommand([tools.git, ...args], { env: clusterEnv(), timeoutMs: 120_000 });
 
 	if (!existsSync(join(paths.seedProject, ".git"))) {
 		if (CHECK_ONLY) die(`seed project ${paths.seedProject} is missing`);
+		for (const key of ["user.name", "user.email"]) {
+			const configured = await git(["config", "--get", key]);
+			if (configured.code !== 0 || configured.stdout.trim() === "") {
+				die(`Git ${key} is not configured; set it before creating dev fixture commits`);
+			}
+		}
 		log(`creating the seed project at ${paths.seedProject}`);
 		writeFileSync(
 			join(paths.seedProject, "README.md"),
@@ -1021,10 +1118,16 @@ async function ensureSeedRepo(address: string): Promise<SeedFacts> {
 	const hasOrigin = await git(["-C", paths.seedProject, "remote", "get-url", "origin"]);
 	if (hasOrigin.code === 0) {
 		if (hasOrigin.stdout.trim() !== gitUrl) {
+			if (CHECK_ONLY) {
+				die(
+					`seed project origin is "${hasOrigin.stdout.trim()}", expected ${gitUrl}; re-run without --check`,
+				);
+			}
 			const setUrl = await git(["-C", paths.seedProject, "remote", "set-url", "origin", gitUrl]);
 			if (setUrl.code !== 0) die(`git remote set-url failed: ${setUrl.stderr.slice(-300)}`);
 		}
 	} else {
+		if (CHECK_ONLY) die(`seed project ${paths.seedProject} has no origin remote`);
 		const addRemote = await git(["-C", paths.seedProject, "remote", "add", "origin", gitUrl]);
 		if (addRemote.code !== 0) die(`git remote add failed: ${addRemote.stderr.slice(-300)}`);
 	}
@@ -1034,13 +1137,22 @@ async function ensureSeedRepo(address: string): Promise<SeedFacts> {
 		const initBare = await git(["init", "--bare", `--initial-branch=${branch}`, bare]);
 		if (initBare.code !== 0) die(`git init --bare failed: ${initBare.stderr.slice(-300)}`);
 	}
-	const push = await git(["-C", paths.seedProject, "push", bare, `${branch}:${branch}`]);
-	if (push.code !== 0) die(`pushing the seed to ${bare} failed: ${push.stderr.slice(-300)}`);
-	const setHead = await git(["-C", bare, "symbolic-ref", "HEAD", `refs/heads/${branch}`]);
-	if (setHead.code !== 0) die(`setting the bare HEAD failed: ${setHead.stderr.slice(-300)}`);
+
 	const head = await git(["-C", paths.seedProject, "rev-parse", "HEAD"]);
 	const commit = head.stdout.trim();
 	if (!/^[0-9a-f]{40}$/.test(commit)) die(`seed commit does not resolve: ${commit}`);
+
+	if (CHECK_ONLY) {
+		const bareHead = await git(["-C", bare, "rev-parse", `refs/heads/${branch}`]);
+		if (bareHead.code !== 0 || bareHead.stdout.trim() !== commit) {
+			die(`bare seed repo ${bare} is missing or stale; re-run without --check to republish`);
+		}
+	} else {
+		const push = await git(["-C", paths.seedProject, "push", bare, `${branch}:${branch}`]);
+		if (push.code !== 0) die(`pushing the seed to ${bare} failed: ${push.stderr.slice(-300)}`);
+		const setHead = await git(["-C", bare, "symbolic-ref", "HEAD", `refs/heads/${branch}`]);
+		if (setHead.code !== 0) die(`setting the bare HEAD failed: ${setHead.stderr.slice(-300)}`);
+	}
 
 	// Host-side proof that the advertised URL is not just a string: it works
 	// only once `git daemon` runs, so a failure here is only reported.
@@ -1083,7 +1195,7 @@ async function ensureSandboxRuntime(): Promise<void> {
 	chmodSync(paths.runtimeBin, 0o755);
 }
 
-function writeConfig(namespace: string, context: string, storageClass: string): void {
+function installConfig(namespace: string, context: string, storageClass: string): void {
 	const config = {
 		workspaceDir: paths.workspaces,
 		providerProfiles: {
@@ -1091,10 +1203,8 @@ function writeConfig(namespace: string, context: string, storageClass: string): 
 				id: "bwrap",
 				provider: "bwrap",
 				executable: join(REPO_ROOT, "dist-bundle", "providers", "bwrap-provider.js"),
-				// The sandbox executes the runtime binary as argv[0], and the
-				// denylist forbids binding anything under the operator home —
-				// where the operator's bun lives. This is the dev-root copy
-				// (see ensureSandboxRuntime), bound read-only.
+				// The sandbox executes the runtime binary as argv[0]; the dev-root
+				// copy keeps it out of the operator home, which the denylist refuses.
 				tools: [paths.runtimeBin],
 				network: "host",
 			},
@@ -1111,27 +1221,24 @@ function writeConfig(namespace: string, context: string, storageClass: string): 
 			},
 		},
 	};
-	writeFileSync(paths.config, `${JSON.stringify(config, null, 2)}\n`);
+	installFile(paths.config, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 /**
  * The dev callback gateway: a streaming HTTPS proxy in front of the fleet's
  * callback routes, bound to the wildcard so a Pod can reach the measured
- * address. The allowlist is EXACTLY the three documented pairs; every other
- * method, path, or query is rejected locally, and `idleTimeout: 0` keeps the
- * long-lived streaming halves alive (Bun's 10s default would kill whichever
- * half is quiet; their only traffic is a 15s heartbeat).
+ * address. Only the three documented method/path pairs are forwarded; the
+ * halves are long-lived and quiet apart from a heartbeat, so the idle timeout
+ * is disabled.
  */
-function writeGateway(): void {
+function installGateway(): void {
 	const source = `#!/usr/bin/env bun
 /**
  * Dev callback gateway (generated by scripts/dev-kubernetes.ts).
  *
  * Streaming HTTPS proxy in front of the fleet's callback routes. The allowlist
- * is the frozen one from docs/clone-contracts.md: POST /callback/up,
- * GET /callback/down, POST /callback/bulk/<id> where <id> is one unescaped
- * [A-Za-z0-9_-]+ segment. Everything else is rejected locally, before the
- * fleet sees it.
+ * is frozen to POST /callback/up, GET /callback/down, and
+ * POST /callback/bulk/<id> ([A-Za-z0-9_-]+); everything else is rejected here.
  */
 import { readFileSync } from "node:fs";
 
@@ -1192,11 +1299,11 @@ const server = Bun.serve({
 
 console.log("omp-dev gateway listening on ${BIND_ADDRESS}:" + server.port + " -> 127.0.0.1:" + fleetPort);
 `;
-	writeFileSync(paths.gateway, source);
+	installFile(paths.gateway, source);
 }
 
 /** A convenience stop script for the four long-lived dev processes. */
-function writeStopScript(): void {
+function installStopScript(): void {
 	const source = `#!/bin/sh
 # Stops the omp-web Kubernetes dev processes (generated by
 # scripts/dev-kubernetes.ts). Pair it with \`stop.sh --cluster\` to also
@@ -1225,8 +1332,7 @@ if [ "\${1:-}" = "--cluster" ]; then
   DOCKER_HOST=${shellQuote(tools.dockerHost)} ${shellQuote(tools.docker)} volume rm ${PROFILE} || true
 fi
 `;
-	writeFileSync(paths.stop, source);
-	chmodSync(paths.stop, 0o755);
+	installFile(paths.stop, source, 0o755);
 }
 
 interface DevFacts {
@@ -1268,7 +1374,14 @@ function gatewayEnv(): Record<string, string> {
 	};
 }
 
-function writeEnvFile(facts: DevFacts, env: Record<string, string>): void {
+/** The probe's human-readable reach detail is an observation, not config. */
+function withoutReachDetail(payload: object): Record<string, unknown> {
+	const rest = { ...(payload as Record<string, unknown>) };
+	delete rest.reachDetail;
+	return rest;
+}
+
+function installEnvFile(facts: DevFacts, env: Record<string, string>): void {
 	const payload = {
 		generatedBy: "scripts/dev-kubernetes.ts",
 		repoRoot: REPO_ROOT,
@@ -1302,6 +1415,19 @@ function writeEnvFile(facts: DevFacts, env: Record<string, string>): void {
 		fleetEnv: env,
 		gatewayEnv: gatewayEnv(),
 	};
+	if (CHECK_ONLY) {
+		let stored: string | null = null;
+		try {
+			const existing = asRecord(JSON.parse(readFileSync(paths.env, "utf8")));
+			stored = existing === null ? null : JSON.stringify(withoutReachDetail(existing), null, 2);
+		} catch {
+			stored = null;
+		}
+		if (stored === null || stored !== JSON.stringify(withoutReachDetail(payload), null, 2)) {
+			die(`${paths.env} is missing or stale; re-run without --check to reconcile`);
+		}
+		return;
+	}
 	writeFileSync(paths.env, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
@@ -1357,11 +1483,19 @@ async function probeGatewayFromPod(address: string): Promise<void> {
 function portAnswers(port: number): Promise<boolean> {
 	const { promise, resolve } = Promise.withResolvers<boolean>();
 	const client = connect({ host: "127.0.0.1", port });
+	const deadline = setTimeout(() => {
+		client.destroy();
+		resolve(false);
+	}, PORT_PROBE_TIMEOUT_MS);
 	client.on("connect", () => {
+		clearTimeout(deadline);
 		client.destroy();
 		resolve(true);
 	});
-	client.on("error", () => resolve(false));
+	client.on("error", () => {
+		clearTimeout(deadline);
+		resolve(false);
+	});
 	return promise;
 }
 
@@ -1420,7 +1554,7 @@ async function main(): Promise<void> {
 				"usage: bun scripts/dev-kubernetes.ts [--check] [--probe-gateway] [--no-probe]",
 				"",
 				"  (default)         bring up / reconcile the cluster-side dev infrastructure",
-				"  --check           verify existing infrastructure only; never builds or starts",
+				"  --check           verify existing infrastructure only; never writes",
 				"  --probe-gateway   dial the running dev gateway from a throwaway Pod",
 				"  --no-probe        skip the Pod-reachability probe",
 				`  OMP_DEV_KUBE_ROOT overrides the dev root (default ${tmpdir()}/omp-dev-kube)`,
@@ -1430,8 +1564,10 @@ async function main(): Promise<void> {
 	}
 
 	const startedAt = Date.now();
-	mkdirSync(paths.root, { recursive: true });
-	mkdirSync(paths.workspaces, { recursive: true });
+	if (!CHECK_ONLY) {
+		mkdirSync(paths.root, { recursive: true });
+		mkdirSync(paths.workspaces, { recursive: true });
+	}
 	resolveTools();
 	tools.dockerHost = await resolveDockerEndpoint();
 	log(`dev root ${paths.root}`);
@@ -1441,7 +1577,7 @@ async function main(): Promise<void> {
 
 	const context = await ensureCluster();
 	const storageClass = await storageClassName();
-	await ensureBaseImage();
+	const baseImage = await ensureBaseImage();
 
 	let reach: ReachProbe = { address: "", detail: "not probed", podCidr: "" };
 	if (!NO_PROBE) {
@@ -1465,13 +1601,13 @@ async function main(): Promise<void> {
 	log(`Pod-reachable address ${reach.address}`);
 
 	await ensureCertificates(reach.address);
-	await ensureDerivedImage();
+	await ensureDerivedImage(baseImage);
 	await ensureSandboxRuntime();
 	const seed = await ensureSeedRepo(reach.address);
 
-	writeConfig(NAMESPACE, context, storageClass);
-	writeGateway();
-	writeStopScript();
+	installConfig(NAMESPACE, context, storageClass);
+	installGateway();
+	installStopScript();
 
 	const facts: DevFacts = {
 		namespace: NAMESPACE,
@@ -1483,7 +1619,7 @@ async function main(): Promise<void> {
 		seedCommit: seed.commit,
 		reachDetail: reach.detail,
 	};
-	writeEnvFile(facts, fleetEnv(facts));
+	installEnvFile(facts, fleetEnv(facts));
 
 	if (PROBE_GATEWAY) {
 		await probeGatewayFromPod(reach.address);

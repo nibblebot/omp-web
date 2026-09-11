@@ -1,5 +1,4 @@
-import { open, realpath, stat, type FileHandle } from "node:fs/promises";
-import path from "node:path";
+import { open, type FileHandle } from "node:fs/promises";
 import {
 	BULK_MAX_BYTES,
 	callbackError,
@@ -16,88 +15,67 @@ import type {
 	DownloadBulkFailedControl,
 	FlushBoundary,
 	QuiesceCloneResultControl,
+	QuiesceEvidence,
 	QuiesceWriterEntry,
 	StreamResyncControl,
 } from "../shared/callback-protocol";
 import type { ManifestFile } from "../shared/archive-manifest";
 import { validateKubernetesSource } from "../shared/provider-protocol";
 import { validateWorkspaceRef } from "../runtime/prepare-workspace";
+import { resolveJailedFile, type JailedFileResolution } from "./download-jail";
 import { serializeQuiesceEvidence } from "./quiesce-evidence";
 import type { ReachableWriterFlushReport, WriterFlushResult } from "./writer-flush";
 import { isRingedDeltaType } from "./sse-delivery";
 
 /**
- * Daemon control broker: virtual streams + quiesce over the callback pair
- * (P3.3/P3.5/P4.5/P6/P7; Transport/Lifecycle 2026-09-06 contracts).
+ * Daemon control broker: the daemon half of the callback pair — per-browser
+ * virtual streams plus the quiesce controls the fleet drives.
  *
- * The daemon dials the callback pair; the fleet manages per-browser virtual
- * streams and down-half controls. This module owns the daemon half:
- *
- * - Browser streams: per `browser/<connId>` replay ring of emitted frame
- *   envelopes. stream_open (lastSeq = replay floor) replays ring frames with
- *   wire seq > lastSeq (ring HIT — never a re-prime); a floor below the
- *   ring's eviction frontier (ring MISS) flips stream_resync followed
- *   by a full re-prime burst — never a silent partial replay; a caught-up
- *   floor replays nothing and does not re-prime. An outbound buffer drop
- *   also flips stream_resync. stream_close drops the stream. Each pair
- *   replacement (onPairChange) clears every still-open stream's ring — the
- *   per-connection wire seq space restarts — and re-primes it fresh
- *   instead of streaming into the void.
- * - Command routing: kind:"command" payloads on a browser/control stream are
- *   acked (command_ack receipt) then dispatched through the mounted
- *   handleCommand; answers (call_result/unicast) flow as frames on the same
- *   stream. Dedup is the daemon's existing 60 s / 64-entry window — a
- *   duplicate is acked but not re-dispatched.
- * - Control mirror: every session-scoped frame the direct /events path
- *   broadcasts is mirrored as a kind:"frame" envelope on streamId "control"
- *   (payload verbatim) while the pair lives, so the fleet derives activity +
- *   fanout correlation exactly like the direct control-socket tap.
- * - Clone download (P3.4): a `download_bulk` command (fleet/edge.ts rides it
- *   as kind:"command" on the reserved control stream; the acceptance harness
- *   as kind:"control" on a browser virtual stream) validates the
- *   authenticated envelope against the daemon's own pair identity, resolves
- *   its path through the SAME realpath jail HTTP /download enforces
- *   ({@link resolveJailedFile}), and streams the file back over the existing
- *   multi-part bulk channel (FleetCallback.requestBulkUploadParts) in bounded
- *   4 MiB parts — the file is never read whole. Accepted commands are acked;
- *   every failure answers with a typed download_bulk_failed control naming
- *   the path and never carrying file contents.
- * - Quiesce (P4.5/P7.3): transport-stream {type:"quiesce_begin", requestId}
- *   raises the admission barrier (every new command is rejected with an
- *   explicit writer_active ack), runs the fail-closed writer gate, explicitly
- *   flushes every reachable SessionManager, disposes the session cascade,
- *   finalizes the tailer (torn tails verbatim + per-stream eof) and WAITS for
- *   the fleet's log_acks to cover the final flush boundary, structurally
- *   verifies every declared JSONL, collects Git evidence with writers
- *   stopped, then answers {type:"quiesce_result"} on the transport stream.
- * - Quiesce clone (P3.5, Kubernetes only): transport-stream
- *   {type:"quiesce_clone"} validates the authenticated envelope identity and
- *   the fleet-supplied source/pin/branch, runs the same fail-closed flush,
- *   dispose, tailer-finalize, and fleet-ack sequence, then collects a
- *   QuiesceEvidence document and uploads it as one JSON document
- *   under the control's correlationId through the daemon half's bulk upload.
- *   Command admission stays closed after disposal until the Pod terminates,
- *   and the outcome plus its serialized document are cached by requestId for
- *   the daemon's lifetime: a duplicate replays it without re-collecting, and a
- *   duplicate carrying a fresh fleet capture correlation re-uploads the SAME
- *   document under that correlation (the fleet opens a new single-use capture
- *   per attempt and ignores a result whose correlationId differs).
+ * - Browser streams: per `browser/<connId>` replay ring (10k entries / 4 MiB).
+ *   stream_open (lastSeq = replay floor) replays retained frames with wire seq
+ *   > lastSeq (HIT — never a re-prime); a floor below the ring's eviction
+ *   frontier is a MISS → stream_resync + ring clear + full re-prime (never a
+ *   silent partial replay); a caught-up floor replays nothing. An outbound
+ *   buffer drop also flips stream_resync. A pair replacement clears every ring
+ *   and re-primes it: the per-connection wire seq space restarts.
+ * - Command routing: kind:"command" payloads are acked (command_ack receipt)
+ *   then dispatched through the mounted handleCommand; answers flow back as
+ *   kind:"frame". Duplicate commands are acked but not re-dispatched.
+ * - Control mirror: every session-scoped broadcast is mirrored verbatim to
+ *   streamId "control" and every open browser stream while the pair lives.
+ * - Clone download (P3.4): a `download_bulk` command resolves its path through
+ *   the SAME realpath jail HTTP /download enforces ({@link resolveJailedFile})
+ *   and streams the file over the multi-part bulk channel in bounded 4 MiB
+ *   parts — never read whole. Acceptance/failure is acked; every failure also
+ *   emits a typed download_bulk_failed control naming the path and never
+ *   carrying file contents.
+ * - Quiesce: transport-stream {type:"quiesce_begin"} raises the admission
+ *   barrier (new commands get an explicit writer_active ack), runs the
+ *   fail-closed writer flush, disposes the session cascade, finalizes the
+ *   tailer, waits for the fleet's log_acks over the final boundary, verifies
+ *   lineage, collects Git evidence with writers stopped, then answers
+ *   quiesce_result. Any legacy quiesce outcome resumes admission.
+ * - Quiesce clone (Kubernetes only): {type:"quiesce_clone"} validates the
+ *   envelope identity and the fleet's source/pin/branch, runs the same
+ *   fail-closed flush → dispose → finalize → ack sequence, then uploads one
+ *   QuiesceEvidence document under the control's correlationId. Command
+ *   admission stays CLOSED once accepted — including on failure — until the Pod
+ *   terminates. The outcome and its exact document are cached by requestId for
+ *   the daemon's lifetime: a duplicate replays without re-collecting, and a
+ *   duplicate with a fresh capture correlation re-uploads the SAME bytes.
  *
  * Every control received is acknowledged kind:"ack" on the same stream with
  * the original type + requestId and ok:true/false; nothing is silently
- * discarded.
+ * discarded. A failed ack carries its reason only in the nested
+ * ControlAckPayload.error, never as top-level fields.
  */
 
 // ── deps ───────────────────────────────────────────────────────────────────
 
 export interface LineageVerification {
 	manifestFiles: unknown[];
-	provenance: {
-		workspaceId: string;
-		workspaceName: string;
-		resolvedCommit: string;
-		generatedAt: number;
-	};
+	/** The canonical evidence provenance (shared/callback-protocol), never a local duplicate. */
+	provenance: QuiesceEvidence["provenance"];
 }
 
 export interface GitEvidenceResult {
@@ -268,89 +246,6 @@ const QUIESCE_CLONE_TIMEOUT_MS = 30_000;
  * neither side ever buffers a whole file.
  */
 const DOWNLOAD_BULK_PART_BYTES = 4 * 1024 * 1024;
-
-// ── /download jail (one implementation, two callers) ───────────────────────
-
-/**
- * Canonicalize jail roots: the realpath of both sides closes symlink escapes
- * a lexical prefix check would miss. Shared verbatim by the HTTP /download
- * route (server/index.ts) and the download_bulk command so both enforce
- * exactly one jail; an unresolvable root falls back to its literal path.
- */
-export async function canonicalJailRoots(roots: readonly string[]): Promise<string[]> {
-	const out: string[] = [];
-	for (const root of roots) out.push(await realpath(root).catch(() => root));
-	return out;
-}
-
-/** True when a canonical path lives strictly inside one canonical root. */
-function isInsideJail(resolved: string, roots: readonly string[]): boolean {
-	return roots.some((root) => {
-		const rel = path.relative(root, resolved);
-		return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-	});
-}
-
-/** Resolution outcome of {@link resolveJailedFile}. */
-export type JailedFileResolution =
-	| { ok: true; canonical: string; size: number }
-	| {
-			ok: false;
-			/** HTTP /download's own classification: 404 "Not found" vs 403 "Forbidden". */
-			reason: "missing" | "forbidden";
-			/** Typed code for the download_bulk failure control. */
-			code: CallbackErrorCode;
-			/** Names the path; never carries file contents. */
-			message: string;
-	  };
-
-/**
- * Resolve one requested download path under the HTTP /download rules:
- * absolute paths are used as-is, relative paths resolve against `cwd` with a
- * fallback to the process cwd (where bare-filename exports land); the
- * canonical target must be a regular file strictly inside `roots`. One
- * implementation for GET /download and the download_bulk command, so a
- * weaker second check can never drift in.
- */
-export async function resolveJailedFile(input: {
-	requested: string;
-	cwd: string;
-	roots: readonly string[];
-}): Promise<JailedFileResolution> {
-	const requested = input.requested;
-	let canonical = await realpath(
-		path.isAbsolute(requested) ? requested : path.resolve(input.cwd, requested),
-	).catch(() => null);
-	if (canonical === null && !path.isAbsolute(requested)) {
-		canonical = await realpath(path.resolve(process.cwd(), requested)).catch(() => null);
-	}
-	if (canonical === null) {
-		return {
-			ok: false,
-			reason: "missing",
-			code: "invalid_request",
-			message: `download path does not exist: ${requested}`,
-		};
-	}
-	const fileStat = await stat(canonical).catch(() => null);
-	if (fileStat === null || !fileStat.isFile()) {
-		return {
-			ok: false,
-			reason: "missing",
-			code: "invalid_request",
-			message: `download path is not a regular file: ${canonical}`,
-		};
-	}
-	if (!isInsideJail(canonical, input.roots)) {
-		return {
-			ok: false,
-			reason: "forbidden",
-			code: "forbidden",
-			message: `download path is outside the permitted roots: ${canonical}`,
-		};
-	}
-	return { ok: true, canonical, size: fileStat.size };
-}
 
 /**
  * Adapt the legacy {@link WriterFlushResult} into a full per-writer report so
@@ -782,20 +677,9 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		const requestId = typeof payload.requestId === "string" ? payload.requestId : undefined;
 		const correlationId =
 			typeof payload.correlationId === "string" ? payload.correlationId : undefined;
-		// The fleet's quiesce_clone reader settles an ack failure from the
-		// TOP-LEVEL code/message; every other control reader uses the nested
-		// ControlAckPayload error. Carry both so the typed code survives
-		// either reader without inventing a second ack vocabulary.
-		const reject = (code: CallbackErrorCode, message: string): void => {
-			emit(streamId, "ack", {
-				type: "quiesce_clone",
-				...(requestId !== undefined ? { requestId } : {}),
-				ok: false,
-				code,
-				message,
-				error: { code, message },
-			});
-		};
+		/** Typed rejection on the canonical ControlAckPayload (nested error only). */
+		const reject = (code: CallbackErrorCode, message: string): void =>
+			ack(streamId, "quiesce_clone", requestId, false, code, message);
 		const cloneDeps = deps.quiesceClone;
 		if (cloneDeps === undefined) {
 			reject("invalid_request", "quiesce_clone is not supported by this workspace");
@@ -1069,24 +953,18 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	};
 
 	/**
-	 * Typed download_bulk receipt on the caller's own stream. The acceptance
-	 * reader settles its gap reason from the TOP-LEVEL code/message; every
-	 * other control reader uses the nested ControlAckPayload error. Carry both
-	 * — the same dual shape the quiesce_clone reject uses — without inventing
-	 * a second ack vocabulary. A transfer that fails after acceptance is
-	 * reported by its download_bulk_failed control instead (the fleet's real
-	 * reader settles on the correlation), so a single receipt is emitted.
+	 * Typed download_bulk receipt on the caller's own stream (canonical
+	 * ControlAckPayload: failure reason only in the nested error). A transfer
+	 * that fails after acceptance is reported by its download_bulk_failed
+	 * control instead — the fleet settles the correlation on that — so a
+	 * single receipt is emitted.
 	 */
 	const downloadBulkAck = (
 		streamId: string,
 		code: CallbackErrorCode | undefined,
 		message: string | undefined,
 	): void => {
-		emit(streamId, "ack", {
-			type: "download_bulk",
-			ok: code === undefined,
-			...(code === undefined ? {} : { code, message, error: { code, message } }),
-		});
+		ack(streamId, "download_bulk", undefined, code === undefined, code, message);
 	};
 
 	/**

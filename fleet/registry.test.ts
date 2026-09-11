@@ -560,25 +560,11 @@ describe("workspace provider records (P5.3)", () => {
 		});
 
 		const reloaded = await loadedRegistry(statePath);
-		const workspace = reloaded.get(entry.daemonId)?.workspace;
-		expect(workspace).toEqual(registry.get(entry.daemonId)?.workspace);
-		expect(workspace?.providerKind).toBe("kubernetes");
-		expect(workspace?.kubernetes).toEqual({
-			resourceIdentity: IDENTITY,
-			context: "ctx-1",
-			namespace: "ns-1",
-			namespaceUid: "ns-uid-1",
-		});
-		expect(workspace?.sourcePinDigest).toBe("d".repeat(64));
-		expect(workspace?.lastAttemptedGeneration).toBe(7);
-		expect(workspace?.deletion?.receipt).toEqual({
-			requestId: "req-1",
-			correlationId: "corr-1",
-			generation: 5,
-			podUid: "pod-uid-1",
-			pvcUid: "pvc-uid-1",
-			state: "invalid",
-		});
+		// Whole-record reload equality: the new provider fields, the pinned
+		// source digest, and the stop/delete evidence receipt all round-trip.
+		expect(reloaded.get(entry.daemonId)?.workspace).toEqual(
+			registry.get(entry.daemonId)?.workspace,
+		);
 	});
 
 	test("an old state file without the new workspace fields loads unchanged and stays without them", async () => {

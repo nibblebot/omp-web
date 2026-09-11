@@ -1,55 +1,23 @@
 /**
- * Daemon control broker replay regression (P3.10): per-browser virtual
- * stream_open ring-hit replay vs ring-miss re-prime. The observed defect:
- * openStream's ring-miss guard was logically unreachable (`live > 0 &&
- * replay.length === 0 && newest > lastSeq` cannot fire — the newest live
- * entry itself satisfies `seq > lastSeq`, so ringAfter never returns empty
- * while a newer entry exists). Consequences:
- *
- *   - A reconnect floor at or below the EVICTED ring head silently
- *     partial-replayed the retained tail — entries between the floor and
- *     the head were lost with no stream_resync (never a partial replay
- *     violated).
- *   - A caught-up ring hit (existing stream, floor >= newest) fell through
- *     to `deps.primeStream(...)` — a re-prime where the client already had
- *     everything (P3.10: "ring hit replays; only a miss re-primes").
- *
- * Fix: track the ring eviction frontier (`evictedSeq`, the highest wire seq
- * dropped from the head). A floor BELOW the frontier is a MISS →
- * stream_resync + ring clear + full re-prime (never a partial tail). A
- * floor at or above the frontier replays retained entries newer than it
- * (HIT). A caught-up HIT replays nothing and does NOT re-prime. Only a
- * brand-new stream primes fresh. A pair replacement clears every stream's
- * ring (per-connection seq spaces restart) and re-primes it fresh.
- *
- * Pure unit: createDaemonControl with a stub deps whose send() assigns
- * synthetic wire seqs (like the real transport) and records every emit.
- *
- * The second half covers the Kubernetes `quiesce_clone` branch (P3.5): the
- * authenticated-envelope identity gate, the typed admission failures, the
- * single evidence upload under the correlation, the requestId-cached replay
- * (re-uploading the cached document when the duplicate carries a fresh fleet
- * capture correlation), and the permanent command-admission closure after a
- * clone.
- *
- * The third covers the clone-download lane (`download_bulk`, P3.4): the same
- * authenticated-envelope gate, the shared /download realpath jail (canonical
- * check, symlink escape, missing file, bulk cap), bounded 4 MiB multi-part
- * streaming of the exact bytes, the typed ack, and the typed
- * download_bulk_failed control on every failure.
+ * Daemon control broker tests: stream_open ring-hit replay vs ring-miss
+ * re-prime (P3.10); the Kubernetes quiesce_clone branch (P3.5: typed
+ * admission, single evidence upload, requestId-cached replay, permanent
+ * admission closure); and the clone-download lane (P3.4: the shared
+ * /download realpath jail, bounded 4 MiB multi-part streaming, and the typed
+ * ack + download_bulk_failed control on failure).
  */
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	canonicalJailRoots,
 	createDaemonControl,
 	type DaemonControl,
 	type DaemonControlDeps,
 	type DaemonDownloadBulkDeps,
 	type DaemonQuiesceCloneDeps,
 } from "./daemon-control";
+import { canonicalJailRoots } from "./download-jail";
 import {
 	parseQuiesceEvidence,
 	type CallbackEnvelope,
@@ -361,6 +329,21 @@ function cloneEnvelope(
 	};
 }
 
+/** A command envelope on the reserved control stream (handleCommand path). */
+function commandEnvelope(payload: Record<string, unknown>): CallbackEnvelope {
+	return {
+		version: 1,
+		workspaceId: "w1",
+		generation: 1,
+		connectionId: "conn",
+		streamId: "control",
+		seq: 0,
+		kind: "command",
+		payload,
+		at: Date.now(),
+	};
+}
+
 interface CloneHarness extends Harness {
 	/** One entry per reachable-writer flush attempt (must stay empty when admission fails). */
 	flushCalls: number[];
@@ -374,6 +357,8 @@ interface CloneHarnessOptions {
 	uploadError?: string;
 	/** Fail only the FIRST bulk upload with this message, so a replay succeeds. */
 	failFirstUpload?: string;
+	/** Command dispatch spy: proves a closed admission never reaches the handler. */
+	handleCommand?: DaemonControlDeps["handleCommand"];
 }
 
 /** A harness wired for Kubernetes quiesce_clone with a healthy stub cluster. */
@@ -423,6 +408,7 @@ function makeCloneHarness(options: CloneHarnessOptions = {}): CloneHarness {
 			}),
 			collectGitEvidence:
 				options.collectGitEvidence ?? (async () => ({ ok: true, git: CLEAN_GIT })),
+			handleCommand: options.handleCommand ?? (async () => undefined),
 			quiesceClone,
 		},
 		uploads,
@@ -454,30 +440,42 @@ const cloneAcks = (sent: Sent[]): Sent[] =>
 	sent.filter((s) => s.kind === "ack" && typeOf(s.payload) === "quiesce_clone");
 
 interface AckFields {
+	/**
+	 * True only when the payload explicitly declares ok:false. A receipt-only
+	 * CommandAckPayload carries no `ok` at all, so a falsy check would mistake
+	 * a receipt for a rejection.
+	 */
+	rejected: boolean;
 	ok: boolean;
 	code: string | undefined;
 	message: string | undefined;
+	/** The ClientCommand id carried by a receipt-only command_ack. */
+	id: string | undefined;
 }
 
-/** Narrow a control ack payload (top-level typed code, else the nested error). */
+/**
+ * Narrow a control ack payload. Failures carry their reason ONLY in the
+ * canonical nested ControlAckPayload.error; a top-level code/message is never
+ * read, so a regression to the removed workaround fails these assertions.
+ */
 function ackFields(payload: unknown): AckFields {
 	if (typeof payload !== "object" || payload === null) {
-		return { ok: false, code: undefined, message: undefined };
+		return { rejected: false, ok: false, code: undefined, message: undefined, id: undefined };
 	}
 	const ok = "ok" in payload && payload.ok === true;
-	const topCode = "code" in payload && typeof payload.code === "string" ? payload.code : undefined;
-	const topMessage =
-		"message" in payload && typeof payload.message === "string" ? payload.message : undefined;
-	if (topCode !== undefined) return { ok, code: topCode, message: topMessage };
+	const rejected = "ok" in payload && payload.ok === false;
+	const id = "id" in payload && typeof payload.id === "string" ? payload.id : undefined;
 	if ("error" in payload && typeof payload.error === "object" && payload.error !== null) {
 		const error = payload.error;
 		return {
+			rejected,
 			ok,
+			id,
 			code: "code" in error && typeof error.code === "string" ? error.code : undefined,
 			message: "message" in error && typeof error.message === "string" ? error.message : undefined,
 		};
 	}
-	return { ok, code: topCode, message: topMessage };
+	return { rejected, ok, id, code: undefined, message: undefined };
 }
 
 interface ResultFields {
@@ -746,6 +744,102 @@ describe("daemon-control quiesce_clone (P3.5)", () => {
 		expect(ack.ok).toBe(false);
 		expect(ack.code).toBe("conflict");
 		expect(control.status().admissionClosed).toBe(true);
+	});
+
+	test("a successful clone leaves admission closed: a later command is rejected and never dispatched", async () => {
+		const dispatched: unknown[] = [];
+		const { control, sent } = makeCloneHarness({
+			handleCommand: async (command) => {
+				dispatched.push(command);
+				return undefined;
+			},
+		});
+		control.handleEnvelope(cloneEnvelope());
+		await settleClone(control);
+		expect(control.status().admissionClosed).toBe(true);
+		expect(control.status().admissionBarrier).toBe(true);
+
+		const before = sent.length;
+		control.handleEnvelope(
+			commandEnvelope({ type: "call", id: "cmd-1", method: "prompt", args: ["hello"] }),
+		);
+		const acks = sent.slice(before).filter((s) => s.kind === "ack");
+		// Wire contract: the id-keyed receipt (no `ok`) precedes the explicit
+		// typed rejection, and only the rejection declares ok:false.
+		const fields = acks.map((s) => ackFields(s.payload));
+		expect(fields).toHaveLength(2);
+		expect(typeOf(acks[0]!.payload)).toBe("command_ack");
+		expect(fields[0]!.id).toBe("cmd-1");
+		expect(fields[0]!.rejected).toBe(false);
+		const rejections = fields.filter((f) => f.rejected);
+		expect(rejections).toHaveLength(1);
+		expect(rejections[0]!.code).toBe("writer_active");
+		// Disposal happened; the closed admission never reaches the dispatcher.
+		expect(dispatched).toHaveLength(0);
+	});
+
+	test("a FAILED clone also keeps admission closed on later commands", async () => {
+		const dispatched: unknown[] = [];
+		const { control, sent } = makeCloneHarness({
+			collectGitEvidence: async () => ({
+				ok: false,
+				error: { code: "conflict", message: "working tree is dirty" },
+			}),
+			handleCommand: async (command) => {
+				dispatched.push(command);
+				return undefined;
+			},
+		});
+		control.handleEnvelope(cloneEnvelope());
+		await settleClone(control);
+		expect(control.status().lastQuiesceClone?.ok).toBe(false);
+		expect(control.status().admissionClosed).toBe(true);
+		expect(control.status().admissionBarrier).toBe(true);
+
+		const before = sent.length;
+		control.handleEnvelope(
+			commandEnvelope({ type: "call", id: "cmd-2", method: "prompt", args: ["hello"] }),
+		);
+		const acks = sent.slice(before).filter((s) => s.kind === "ack");
+		// Receipt first (id-keyed, no `ok`), then the ok:false writer_active
+		// rejection: the same contract the successful-clone case asserts.
+		const fields = acks.map((s) => ackFields(s.payload));
+		expect(fields).toHaveLength(2);
+		expect(fields[0]!.id).toBe("cmd-2");
+		expect(fields[0]!.rejected).toBe(false);
+		const rejections = fields.filter((f) => f.rejected);
+		expect(rejections).toHaveLength(1);
+		expect(rejections[0]!.code).toBe("writer_active");
+		expect(dispatched).toHaveLength(0);
+	});
+
+	test("a cached replay keeps admission closed; a fresh requestId after closure is conflict", async () => {
+		const { control, sent, uploads } = makeCloneHarness();
+		control.handleEnvelope(cloneEnvelope());
+		await settleClone(control);
+
+		// Same requestId with a fresh capture correlation: replay, no re-collection.
+		control.handleEnvelope(cloneEnvelope({}, cloneRequest({ correlationId: "corr-2" })));
+		await settleUntil(() => cloneResults(sent).length === 2, "quiesce_clone replay never settled");
+		expect(resultFields(cloneResults(sent)[1]!.payload).ok).toBe(true);
+		expect(uploads).toHaveLength(2);
+		expect(control.status().admissionBarrier).toBe(true);
+
+		// A brand-new requestId is a new quiesce attempt: conflict, never a reopen.
+		control.handleEnvelope(cloneEnvelope({}, cloneRequest({ requestId: "req-9" })));
+		const ack = ackFields(cloneAcks(sent).at(-1)!.payload);
+		expect(ack.ok).toBe(false);
+		expect(ack.code).toBe("conflict");
+		expect(control.status().admissionClosed).toBe(true);
+	});
+
+	test("a rejected clone ack carries its reason only in the nested error", () => {
+		const { control, sent } = makeCloneHarness();
+		control.handleEnvelope(cloneEnvelope({ workspaceId: "other" }));
+		const payload = cloneAcks(sent)[0]!.payload as Record<string, unknown>;
+		expect(Object.keys(payload).sort()).toEqual(["error", "ok", "requestId", "type"]);
+		expect(payload).not.toHaveProperty("code");
+		expect(payload).not.toHaveProperty("message");
 	});
 
 	test("invalid sourceRemote/pinnedRevision/branch are rejected before any flush or upload", () => {
@@ -1117,6 +1211,28 @@ describe("daemon-control download_bulk (P3.4)", () => {
 			// The receipt was already accepted; the failure control is what
 			// fails the correlation.
 			expect(ackFields(downloadAcks(sent)[0]!.payload).ok).toBe(true);
+		} finally {
+			await fixture.cleanup();
+		}
+	});
+
+	test("a rejected download ack is canonical: nested error only, correlation on the failure control", async () => {
+		const fixture = await tempDownloadFixture();
+		try {
+			const missing = join(fixture.root, "nope.jsonl");
+			const { control, sent, failed } = makeDownloadHarness(fixture.root);
+			control.handleEnvelope(downloadEnvelope(missing));
+			await failed;
+
+			const payload = downloadAcks(sent)[0]!.payload as Record<string, unknown>;
+			expect(Object.keys(payload).sort()).toEqual(["error", "ok", "type"]);
+			expect(payload).not.toHaveProperty("code");
+			expect(payload).not.toHaveProperty("message");
+			// The failure control names the request's correlation (what the
+			// fleet matches to fail the open capture) and never the file body.
+			const failure = failureFields(downloadFailures(sent)[0]!.payload);
+			expect(failure.correlationId).toBe("corr-1");
+			expect(failure.code).toBe("invalid_request");
 		} finally {
 			await fixture.cleanup();
 		}

@@ -1,4 +1,9 @@
-# Complete the Kubernetes worker lifecycle
+# Kubernetes worker lifecycle implementation record
+
+This completed implementation plan is retained for context, not as current setup
+instructions. [clone-contracts.md](clone-contracts.md) defines the current
+contracts; [clone-plan.md](clone-plan.md) records execution and verification
+evidence, including the Debian image required by the SDK's glibc native addon.
 
 ## Context
 
@@ -122,7 +127,7 @@ Implement the stages in order. Update affected callers and focused tests within 
 
 4. Bound Kubernetes operations in one shared timeout helper in `runtime/provider-exec.ts`. Parse wait overrides as integers from 1 through 300,000 ms. Give inspect 240,000 ms; ensure its ensure and stop waits plus 240,000 ms; stop its stop wait plus 240,000 ms; delete twice its delete wait plus 240,000 ms. Pass an additional 5,000 ms to the outer invoker for process termination. Every API call and poll uses the remaining operation deadline, capped at 60,000 ms per call. Bound pin resolution at 60,000 ms, quiesce at 30,000 ms, callback readiness at 60,000 ms, and restoration at 120,000 ms. Await terminated child processes.
 
-5. Pin both image stages to `oven/bun:1.4.2-alpine`, matching the inspected development runtime. Include Git, OpenSSH, CA certificates, and tini. Use explicit directory copies for `server/`, `shared/`, and `runtime/`. Build `dist-bundle/image/` as a complete context containing these directories, `package.json`, `bun.lock`, the Containerfile, and entrypoint files. Copy `server/embedded-dist.ts` after the build restores its stub.
+5. Pin both image stages to `oven/bun:1.4.2-debian`, matching the inspected development runtime and the SDK's glibc native addon. Include Git, OpenSSH, CA certificates, and tini. Use explicit directory copies for `server/`, `shared/`, and `runtime/`. Build `dist-bundle/image/` as a complete context containing these directories, `package.json`, `bun.lock`, the Containerfile, and entrypoint files. Copy `server/embedded-dist.ts` after the build restores its stub.
 
 6. Add `fleet/examples/kubernetes.json`. Update `README.md`, `runtime/image/README.md`, and `docs/clone-contracts.md` with the bundled provider path, explicit context, namespace, image, resources, storage, Secret references, and HTTPS gateway. Show the separate host and Pod credential setup and the preflight, automatic `add-clone`, stop, start, and remove commands. Define the gateway allowlist as POST `/callback/up`, GET `/callback/down`, and POST `/callback/bulk/<id>`. Match the raw path; `<id>` is one unescaped `[A-Za-z0-9_-]+` segment. Reject other methods, paths, and queries.
 

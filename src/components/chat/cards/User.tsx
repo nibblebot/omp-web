@@ -1,10 +1,12 @@
 import { For, Show, type Component } from "solid-js";
-import { call, pushNotice, setState, type ChatItem } from "../../../state";
+import { call, hasLiveSession, pushNotice, setState, type ChatItem } from "../../../state";
 import type { ImageArg } from "../../../../shared/protocol";
 import { imageDataUrl } from "../../../text/images";
 import { CopyButton } from "../../shared/CopyButton";
 
-/** User message card: branch-from-here action, copy button, text, image thumbs. */
+/** User message card: branch-from-here action (live sessions only), copy
+ *  button, text, image thumbs. Read-only retained transcripts keep copy/zoom
+ *  but must not offer the mutating branch RPC. */
 export const UserCard: Component<{
 	user: Extract<ChatItem, { kind: "user" }>;
 	onZoom: (img: ImageArg) => void;
@@ -35,14 +37,16 @@ export const UserCard: Component<{
 	return (
 		<div class="msg-user">
 			<div class="msg-toolbar">
-				<button
-					class="msg-branch-btn"
-					title="Branch from here"
-					disabled={!props.user.text}
-					onClick={() => branchFromHere(props.user.text)}
-				>
-					branch
-				</button>
+				<Show when={hasLiveSession()}>
+					<button
+						class="msg-branch-btn"
+						title="Branch from here"
+						disabled={!props.user.text}
+						onClick={() => branchFromHere(props.user.text)}
+					>
+						branch
+					</button>
+				</Show>
 				<CopyButton class="msg-copy-btn" title="Copy message text" text={() => props.user.text} />
 			</div>
 			{props.user.text && <div class="msg-user-text">{props.user.text}</div>}

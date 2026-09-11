@@ -1,81 +1,8 @@
-/**
- * Clone-workspace deletion lifecycle tests (clone-plan P7.3/P7.5 —
- * DeletionSafetyTests). Deterministic failure-transition regressions over
- * the real fleet control plane (loopback HTTP) with a real git clone source
- * and a scripted fixture provider executable that keeps DURABLE operation
- * records (`<stateDir>/ops.jsonl`, appended on every provider request). No
- * test depends on error wording or source text — every assertion is an
- * observable retention / refusal / retry / no-double-writer contract:
- *
- *  1. live-writer refusal + no bypass: deleting a desired-running clone is
- *     refused and a second delete attempt through the same gate is refused
- *     again — the roster entry, the volume, and the enrollment survive and
- *     the provider never sees a delete;
- *  2. serialized concurrent deletes: parallel deletes of a stopped,
- *     verified workspace complete exactly one destroy (one entry removal,
- *     one provider delete) — the loser is refused, never a double delete;
- *  3. incomplete store retains registry/volume: an interrupted (never
- *     fully acked) workspace's delete is blocked with everything retained
- *     and a durable delete-pending-retry state;
- *  4. verified store, provider-delete failure → accurate retry state, then
- *     a successful retry: after the read-only flip a failing provider
- *     delete leaves delete-pending-retry + remainingResources and keeps the
- *     entry + volume + verified store; a retry (even after a fleet restart
- *     on the same state) completes exactly one destroy;
- *  5. clone-source validation (replaces the old wording-pinning validator
- *     test): a valid local-only source and a valid remote-only (file://)
- *     source both clone successfully and materialize a real volume, while
- *     an invalid source (both members set, or a wrongly typed member) is
- *     refused with a 400 and creates no workspace;
- *  6. kubernetes admission: a local source, an invalid remote (file:, no
- *     repository path, scp syntax), and a missing/invalid branch are all
- *     refused invalid_request before any provider call;
- *  7. kubernetes binding stability: a changed persisted binding (a mutated
- *     namespace uid, or a provider observing a different namespace uid) is
- *     refused conflict with the record and desired state untouched;
- *  8. provider error mapping: a timeout becomes retryable and an internal
- *     failure provider_failed on the lifecycle error;
- *  9. per-workspace serialization: two concurrent lifecycle operations
- *     reach the provider in call order through its durable request log;
- * 10. attempted-generation reuse: a failed launch keeps its attempt and
- *     handoff so the retry reuses that generation and credential, while a
- *     replacement after a proven stop uses a larger generation;
- * 11. kubernetes delete gate: final evidence is collected BEFORE the
- *     provider stop, the pending receipt's request id is the one handed to
- *     the collector, and an invalid receipt blocks with the workspace,
- *     volume, and store all retained;
- * 12. failed ahead attempt: evidence is collected while the attempt's
- *     callback pair is still enrolled, then the provider is fenced at the
- *     ATTEMPTED generation for both the stop and the delete; a rejected
- *     attempt replays its persisted request id;
- * 13. provider invocation budget: an operation held past runProviderOp's
- *     30 s default still completes (the fleet applies the computed waits);
- * 14. boot reconciliation of attempted generations: an attempted-only
- *     record is inspected and fenced rather than skipped, and an ahead
- *     attempt is never reattached at the stale authorized generation (it is
- *     fenced when desired stopped and retried when desired running);
- * 15. post-verification recovery: a provider-delete failure resumes at
- *     cleanup without re-running the pre-stop handshake and refuses
- *     clear-deletion, while a pre-verification rejection stays clearable;
- * 16. deletion edge cases: an empty but VERIFIED receipt authorizes a
- *     kubernetes clone with no fleet-readable volume, an interrupted
- *     deletion keeps its replay id + remaining resources across boot, and a
- *     live workspace errored by the readiness probe is still refused;
- * 17. stop-time evidence: an explicit stop persists the validated receipt
- *     for its generation (durably), a delete whose Pod is gone adopts it
- *     instead of failing closed, a receipt bound to an older generation is
- *     never reused, a stop whose collection failed still stops and reports
- *     THAT failure at delete, and a workspace with no evidence at all still
- *     fails closed.
- *
- * Fixtures reuse fleet/server.testkit's fleetPaths/startTestFleet (real
- * startFleet on ephemeral ports, state under a tracked temp dir). The
- * kubernetes cases in the second half drive WorkspaceLifecycle directly so
- * the delete gate's evidence collector can be injected. Git identity comes
- * only from the operator's gitconfig — never overridden.
- */
+// Real control plane + durable provider logs prove deletion failure transitions
+// preserve data and retryable state (clone-plan P7.3/P7.5).
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	existsSync,
@@ -83,21 +10,20 @@ import {
 	readFileSync,
 	readdirSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { CALLBACK_ENV_FILE } from "../runtime/callback-env";
 import { PROVIDER_OP_TIMEOUT_MS_DEFAULT } from "../runtime/provider-exec";
+import { canonicalJson, type ArchiveManifest, type ManifestFile } from "../shared/archive-manifest";
 import {
 	computeSourcePinDigest,
 	OMP_PROVIDER_PROTO,
 	type KubernetesBinding,
 } from "../shared/provider-protocol";
-import {
-	CloneQuiesceError,
-	type CloneQuiesceReceipt,
-	type CloneQuiesceRequest,
-} from "./clone-quiesce";
+import { CloneQuiesceError, type CloneQuiesceReceipt } from "./clone-quiesce";
+import type { CloneQuiesceRequest } from "./clone-quiesce-receipt";
 import { DaemonTransportRegistry, type PairStatus } from "./daemon-transport";
 import { FleetEventLog } from "./events";
 import { FleetLogStore } from "./log-store";
@@ -115,6 +41,7 @@ import {
 	waitFor,
 } from "./server.testkit";
 import { CloneLifecycleError, WorkspaceLifecycle } from "./workspace-lifecycle";
+import { verifyVolumeAgainstStore } from "./workspace-volume-verification";
 
 // bun 1.3.14 attributes afterAll hooks registered in imported modules to the
 // first importer only; register cleanup in this file's own module scope.
@@ -372,10 +299,13 @@ function volumePaths(workspaceDir: string, daemonId: string): { root: string; se
 }
 
 /**
- * Seed a structurally valid, offset-contiguous session in BOTH the fleet
- * log store (logs/<workspaceId>/<sessionId>) and the workspace volume
- * (`.home/agent/sessions/<sessionId>`), with the index's ackedOffset
- * optionally short of the stored bytes.
+ * Seed a structurally valid, offset-contiguous session in BOTH the fleet log
+ * store (logs/<workspaceId>/<sessionId>, file relpath `<sessionId>.jsonl`) and
+ * the workspace volume (`.home/agent/sessions/<sessionId>.jsonl`, the frozen
+ * depth-1 layout), with the index's ackedOffset optionally short of the stored
+ * bytes. The store's stream relpath IS the sessions-dir-relative path the
+ * daemon streamed, so both sides must use the same layout for the delete
+ * gate's volume ↔ store cross-check to compare like with like.
  */
 function seedSession(
 	logsDir: string,
@@ -402,9 +332,9 @@ function seedSession(
 			},
 		}),
 	);
-	const volumeDir = join(volumePaths(workspaceDir, daemonId).sessions, SESSION_ID);
-	mkdirSync(volumeDir, { recursive: true });
-	writeFileSync(join(volumeDir, `${SESSION_ID}.jsonl`), bytes);
+	const sessionsDir = volumePaths(workspaceDir, daemonId).sessions;
+	mkdirSync(sessionsDir, { recursive: true });
+	writeFileSync(join(sessionsDir, `${SESSION_ID}.jsonl`), bytes);
 }
 
 interface FleetFixture {
@@ -474,7 +404,11 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				const start = await postJson(server.port, "/ctl/start", { daemonId });
 				expect(start.status).toBe(200);
 				const running = server.registry.get(daemonId)!;
-				expect(running.status).toBe("ready");
+				// Provider-running publishes the transitional session rung +
+				// callback stage: NOTHING has validated hello_ok/ready, so
+				// readiness (status "ready", stage "ready") may not appear yet.
+				expect(running.status).toBe("session");
+				expect(running.lifecycleStage).toBe("callback");
 				expect(running.workspace?.desiredState).toBe("running");
 				expect(running.workspace?.enrollment?.generation).toBe(1);
 
@@ -490,7 +424,8 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				// Everything retained: roster entry present, volume present,
 				// no provider delete op, still enrolled at gen 1.
 				const after = server.registry.get(daemonId)!;
-				expect(after.status).toBe("ready");
+				expect(after.status).toBe("session");
+				expect(after.lifecycleStage).toBe("callback");
 				expect(after.workspace?.desiredState).toBe("running");
 				expect(after.workspace?.enrollment?.generation).toBe(1);
 				expect(after.workspace?.deletion).toBeUndefined();
@@ -705,6 +640,216 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 		},
 		{ timeout: 25_000 },
 	);
+});
+
+// ---------------------------------------------------------------------------
+// Volume ↔ store completeness cross-check (fleet/workspace-volume-verification)
+//
+// The delete gate's volume side must use the SAME canonical planner the
+// daemon's quiesce path uses: main files at depth 1 (`<sid>.jsonl`) and depth 2
+// (`<proj>/<sid>.jsonl`), artifact subtrees under `<main minus .jsonl>/`, and
+// unrelated on-disk content (a main's `.lock`, stray root files, project dirs
+// with no declared main) excluded from the comparison. The store manifest is
+// built here in exactly the shape runtime/verify-store.ts emits (`path` = the
+// streamed sessions-dir-relative relpath, `sessionId` = the lineage key), so
+// each layout is proven file-for-file against the volume.
+// ---------------------------------------------------------------------------
+
+describe("volume ↔ store completeness cross-check", () => {
+	/** A fresh volume root with an existing sessions dir. */
+	function freshVolume(prefix: string): { volumeRoot: string; sessions: string } {
+		const volumeRoot = join(fleetPaths(prefix).tmp, "volume");
+		const sessions = join(volumeRoot, ".home", "agent", "sessions");
+		mkdirSync(sessions, { recursive: true });
+		return { volumeRoot, sessions };
+	}
+
+	/** Write one volume file, creating its parent directories. */
+	function writeVolume(sessions: string, relpath: string, bytes: string): void {
+		const absolute = join(sessions, relpath);
+		mkdirSync(dirname(absolute), { recursive: true });
+		writeFileSync(absolute, bytes);
+	}
+
+	/** One store manifest entry, exactly as verify-store emits it. */
+	function storedFile(
+		sessionId: string,
+		path: string,
+		bytes: string,
+		kind: ManifestFile["kind"],
+		parentPath?: string,
+	): ManifestFile {
+		return {
+			path,
+			size: Buffer.byteLength(bytes, "utf8"),
+			sha256: createHash("sha256").update(bytes).digest("hex"),
+			kind,
+			sessionId,
+			...(parentPath !== undefined ? { parentPath } : {}),
+		};
+	}
+
+	function manifest(workspaceId: string, files: ManifestFile[]): ArchiveManifest {
+		return {
+			provenance: {
+				projectId: "p1",
+				workspaceId,
+				workspaceName: workspaceId,
+				resolvedCommit: "a".repeat(40),
+				generatedAt: "2026-01-01T00:00:00.000Z",
+			},
+			files,
+		};
+	}
+
+	test("flat main with an artifact subtree and a main .lock compares file-for-file", async () => {
+		const { volumeRoot, sessions } = freshVolume("omp-volume-flat-");
+		const main = transcriptJsonl();
+		const sub = '{"type":"session","id":"sub"}\n';
+		const meta = "meta-bytes";
+		writeVolume(sessions, `${SESSION_ID}.jsonl`, main);
+		writeVolume(sessions, `${SESSION_ID}/sub.jsonl`, sub);
+		writeVolume(sessions, `${SESSION_ID}/nested/deep/blob.bin`, meta);
+		// A resumed main is locked as `<main>.jsonl.lock` beside the main: it is
+		// not a lineage file and is never streamed, so it must not enter the
+		// comparison (the canonical planner excludes it).
+		writeVolume(sessions, `${SESSION_ID}.jsonl.lock`, "{}");
+
+		const result = await verifyVolumeAgainstStore({
+			daemonId: "d1",
+			volumeRoot,
+			storeManifest: manifest("d1", [
+				storedFile(SESSION_ID, `${SESSION_ID}.jsonl`, main, "main"),
+				storedFile(SESSION_ID, `${SESSION_ID}/sub.jsonl`, sub, "subagent", `${SESSION_ID}.jsonl`),
+				storedFile(
+					SESSION_ID,
+					`${SESSION_ID}/nested/deep/blob.bin`,
+					meta,
+					"metadata",
+					`${SESSION_ID}.jsonl`,
+				),
+			]),
+			receipt: undefined,
+			everStarted: true,
+		});
+		expect(result).toEqual({ ok: true });
+	});
+
+	test("project-dir main (depth 2) with its sibling artifact dir compares by full relpath", async () => {
+		const { volumeRoot, sessions } = freshVolume("omp-volume-project-");
+		const main = transcriptJsonl();
+		const advisor = '{"type":"session","id":"adv"}\n';
+		writeVolume(sessions, `proj-x/${SESSION_ID}.jsonl`, main);
+		writeVolume(sessions, `proj-x/${SESSION_ID}/__advisor.jsonl`, advisor);
+		// The locked depth-2 main's sibling lock.
+		writeVolume(sessions, `proj-x/${SESSION_ID}.jsonl.lock`, "{}");
+
+		const result = await verifyVolumeAgainstStore({
+			daemonId: "d2",
+			volumeRoot,
+			storeManifest: manifest("d2", [
+				storedFile(SESSION_ID, `proj-x/${SESSION_ID}.jsonl`, main, "main"),
+				storedFile(
+					SESSION_ID,
+					`proj-x/${SESSION_ID}/__advisor.jsonl`,
+					advisor,
+					"advisor",
+					`proj-x/${SESSION_ID}.jsonl`,
+				),
+			]),
+			receipt: undefined,
+			everStarted: true,
+		});
+		expect(result).toEqual({ ok: true });
+	});
+
+	test("a flat main the store never received blocks deletion (an empty store never trivially passes)", async () => {
+		const { volumeRoot, sessions } = freshVolume("omp-volume-empty-store-");
+		writeVolume(sessions, `${SESSION_ID}.jsonl`, transcriptJsonl());
+
+		// No manifest at all: the store verification produced nothing, so the
+		// volume's own main proves nothing was streamed.
+		const noManifest = await verifyVolumeAgainstStore({
+			daemonId: "d3",
+			volumeRoot,
+			storeManifest: undefined,
+			receipt: undefined,
+			everStarted: true,
+		});
+		expect(noManifest.ok).toBe(false);
+		if (!noManifest.ok) expect(noManifest.message).toContain("no manifest");
+
+		// An empty manifest is the same story: the volume file is missing.
+		const emptyStore = await verifyVolumeAgainstStore({
+			daemonId: "d3",
+			volumeRoot,
+			storeManifest: manifest("d3", []),
+			receipt: undefined,
+			everStarted: true,
+		});
+		expect(emptyStore.ok).toBe(false);
+		if (!emptyStore.ok) expect(emptyStore.message).toContain("missing from the fleet store");
+	});
+
+	test("a rewritten volume byte blocks deletion", async () => {
+		const { volumeRoot, sessions } = freshVolume("omp-volume-rewrite-");
+		const main = transcriptJsonl();
+		// Same length, different bytes: only the content hash can catch it.
+		const drifted = main.replace('"hi"', '"yo"');
+		writeVolume(sessions, `${SESSION_ID}.jsonl`, drifted);
+
+		const result = await verifyVolumeAgainstStore({
+			daemonId: "d4",
+			volumeRoot,
+			storeManifest: manifest("d4", [storedFile(SESSION_ID, `${SESSION_ID}.jsonl`, main, "main")]),
+			receipt: undefined,
+			everStarted: true,
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.message).toContain("differs from its stored bytes");
+	});
+
+	test("a volume artifact the store never received blocks deletion", async () => {
+		const { volumeRoot, sessions } = freshVolume("omp-volume-unstreamed-");
+		const main = transcriptJsonl();
+		writeVolume(sessions, `${SESSION_ID}.jsonl`, main);
+		writeVolume(sessions, `${SESSION_ID}/unstreamed.jsonl`, '{"a":1}\n');
+
+		const result = await verifyVolumeAgainstStore({
+			daemonId: "d6",
+			volumeRoot,
+			storeManifest: manifest("d6", [storedFile(SESSION_ID, `${SESSION_ID}.jsonl`, main, "main")]),
+			receipt: undefined,
+			everStarted: true,
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.message).toContain("missing from the fleet store");
+	});
+
+	test("an unenumerable sessions tree fails closed instead of proving empty", async () => {
+		const { volumeRoot, sessions } = freshVolume("omp-volume-refused-");
+		writeVolume(sessions, `${SESSION_ID}.jsonl`, transcriptJsonl());
+		// A symlinked artifact is exactly what the canonical planner refuses:
+		// the tree can no longer be enumerated, so completeness is unprovable
+		// even though every regular file matches the store. (A symlink is used
+		// rather than permissions because these tests may run as root.)
+		const link = join(sessions, SESSION_ID, "escape.jsonl");
+		mkdirSync(dirname(link), { recursive: true });
+		symlinkSync(join(sessions, `${SESSION_ID}.jsonl`), link);
+
+		const result = await verifyVolumeAgainstStore({
+			daemonId: "d5",
+			volumeRoot,
+			storeManifest: manifest("d5", [
+				storedFile(SESSION_ID, `${SESSION_ID}.jsonl`, transcriptJsonl(), "main"),
+				storedFile(SESSION_ID, `${SESSION_ID}/escape.jsonl`, "", "subagent"),
+			]),
+			receipt: undefined,
+			everStarted: true,
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.message).toContain("cannot verify the session tree");
+	});
 });
 
 describe("clone source validation over /ctl/clones (P1.3)", () => {
@@ -957,32 +1102,62 @@ function seedKubernetesClone(fx: KubeFixture): RegistryEntry {
 	return fx.registry.update(created.daemonId, { cwd: volumeRoot });
 }
 
-/**
- * Minimal quiesce receipt the delete gate accepts. The gate reads only the
- * validated `git` verdict, the resource binding it is compared against
- * (generation/claim/namespace), and the receipt's presence (the HEAVY evidence
- * document is the real validator's business, exercised by
- * fleet/clone-quiesce.test.ts), so this fixture stubs the parts the gate never
- * inspects. The request id echoes the caller's persisted one.
- */
+/** A typed empty-lineage receipt; collector validation has its own suite. */
 function gateReceipt(request: CloneQuiesceRequest): CloneQuiesceReceipt {
 	const requestId = request.requestId ?? "rq-fixture";
 	const correlationId = "corr-fixture";
-	const receipt = {
+	const now = Date.now();
+	const source = {
+		remote: request.sourceRemote,
+		revision: request.pinnedRevision,
+		branch: request.branch,
+	};
+	const evidence: CloneQuiesceReceipt["evidence"] = {
 		requestId,
-		correlationId,
-		workspaceId: request.workspaceId,
-		generation: request.generation,
-		podUid: request.podUid,
-		pvcUid: request.pvcUid,
-		namespaceUid: request.namespaceUid,
-		git: { status: "clean" as const },
-	} as unknown as CloneQuiesceReceipt["receipt"];
+		mainSessionRelpath: null,
+		boundary: {},
+		manifestFiles: [],
+		provenance: {
+			workspaceId: request.workspaceId,
+			workspaceName: request.workspaceName ?? request.workspaceId,
+			resolvedCommit: request.pinnedRevision,
+			generatedAt: now,
+		},
+		writers: { main: "flushed", descendants: [], advisors: "inactive" },
+		git: {
+			status: "clean",
+			head: request.pinnedRevision,
+			branch: request.branch,
+			stashes: 0,
+			remote: { name: "origin", url: request.sourceRemote },
+			refs: [
+				{
+					name: `refs/heads/${request.branch}`,
+					tip: request.pinnedRevision,
+					preserved: true,
+				},
+			],
+		},
+	};
 	return {
 		requestId,
 		correlationId,
-		evidence: {} as CloneQuiesceReceipt["evidence"],
-		receipt,
+		evidence,
+		receipt: {
+			...evidence,
+			correlationId,
+			workspaceId: request.workspaceId,
+			generation: request.generation,
+			resourceIdentity: request.binding!.resourceIdentity,
+			podUid: request.podUid,
+			pvcUid: request.pvcUid,
+			namespaceUid: request.namespaceUid,
+			source,
+			sourcePinDigest: computeSourcePinDigest(source.remote, source.revision, source.branch),
+			resolvedCommit: evidence.provenance.resolvedCommit,
+			digest: createHash("sha256").update(canonicalJson(evidence)).digest("hex"),
+			verifiedAt: now,
+		},
 	};
 }
 
@@ -1511,12 +1686,15 @@ describe("kubernetes boot reconciliation of attempted generations (stage 2)", ()
 		await fx.lifecycle.reconcile();
 
 		// The retry authorized the attempt's own generation and reused its
-		// credential; the record is consistent again.
+		// credential; the record is consistent again. The sandbox is running,
+		// but nothing validated the daemon: the transitional session rung +
+		// callback stage persist, never readiness.
 		const after = fx.registry.get(entry.daemonId)!;
 		expect(after.workspace?.authorizedGeneration).toBe(2);
 		expect(after.workspace?.lastAttemptedGeneration).toBe(2);
 		expect(after.workspace?.desiredState).toBe("running");
-		expect(after.status).toBe("ready");
+		expect(after.status).toBe("session");
+		expect(after.lifecycleStage).toBe("callback");
 	});
 });
 
@@ -1861,13 +2039,12 @@ describe("clone pair liveness after ready (S1)", () => {
 				await fx.lifecycle.ensureCloneRunning(daemonId);
 				expect(fx.registry.get(daemonId)!.lifecycleStage).toBe("callback");
 
-				// The daemon's pair dials: the watcher flips the stage ready.
+				// The daemon's pair dials and the readiness owner validates
+				// hello_ok/ready. The readiness owner is the ONLY writer of
+				// stage "ready" — the liveness watcher never promotes on a pair
+				// observation — so this test acts as the owner here.
 				fx.transport.setPaired(true);
-				await waitFor(
-					() => fx.registry.get(daemonId)?.lifecycleStage === "ready",
-					5_000,
-					"pair ready transition",
-				);
+				fx.registry.update(daemonId, { lifecycleStage: "ready" });
 
 				// The worker is gone (sandbox missing) and the pair is lost.
 				setScenario(fx.providerDir, { runningWhileLive: false });
@@ -1908,12 +2085,10 @@ describe("clone pair liveness after ready (S1)", () => {
 				const entry = seedKubernetesClone(fx);
 				const daemonId = entry.daemonId;
 				await fx.lifecycle.ensureCloneRunning(daemonId);
+				// The pair dials and the readiness owner validates it (the only
+				// writer of stage "ready"; the watcher only demotes).
 				fx.transport.setPaired(true);
-				await waitFor(
-					() => fx.registry.get(daemonId)?.lifecycleStage === "ready",
-					5_000,
-					"pair ready transition",
-				);
+				fx.registry.update(daemonId, { lifecycleStage: "ready" });
 
 				await fx.lifecycle.stopClone(daemonId);
 				const stopped = fx.registry.get(daemonId)!;
@@ -1941,5 +2116,205 @@ describe("clone pair liveness after ready (S1)", () => {
 			}
 		},
 		{ timeout: 45_000 },
+	);
+});
+
+// ---------------------------------------------------------------------------
+// Lifecycle boundary regressions (review findings): deletion admission is
+// re-read inside the queued gate turn; stop evidence is durable BEFORE the
+// daemon is asked; a quiesced generation is never reattached; an implicit
+// assets-only wake fails typed; and a restart reattachment stays watched.
+// ---------------------------------------------------------------------------
+
+describe("clone lifecycle boundary regressions", () => {
+	test(
+		"a delete queued behind a wake re-checks admission and refuses the now-live workspace",
+		async () => {
+			const fx = await bootKubernetes({
+				scenario: { runningWhileLive: true },
+				collect: async (request) => gateReceipt(request),
+			});
+			try {
+				const entry = seedKubernetesClone(fx);
+				const daemonId = entry.daemonId;
+
+				// The wake is queued first; the delete's admission decision is
+				// made before that wake authorizes (the record is still
+				// stopped), so the gate MUST re-check inside its own queued
+				// turn — a stale pre-queue read would stop and destroy the
+				// workspace the wake just made live.
+				const wake = fx.lifecycle.ensureCloneRunning(daemonId);
+				const del = fx.lifecycle.deleteClone(daemonId);
+				const settled = await Promise.allSettled([wake, del]);
+				const wakeResult = settled[0];
+				const delResult = settled[1];
+				expect(wakeResult?.status).toBe("fulfilled");
+				if (delResult?.status !== "rejected") {
+					throw new Error("expected the delete to be refused");
+				}
+				expect(delResult.reason).toBeInstanceOf(CloneLifecycleError);
+				expect((delResult.reason as CloneLifecycleError).code).toBe("writer_active");
+
+				const after = fx.registry.get(daemonId)!;
+				expect(after.workspace?.desiredState).toBe("running");
+				expect(after.workspace?.enrollment?.generation).toBe(1);
+				expect(after.workspace?.deletion).toBeUndefined();
+				expect(existsSync(join(fx.workspaceDir, daemonId))).toBe(true);
+				const ops = readOps(join(fx.workspaceDir, KUBE_STATE_REL, "ops.jsonl"));
+				expect(ops.filter((record) => record.op === "stop")).toHaveLength(0);
+				expect(ops.filter((record) => record.op === "delete")).toHaveLength(0);
+				expect(fx.collected).toEqual([]);
+			} finally {
+				fx.lifecycle.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"stop-time evidence is persisted pending BEFORE the collector is asked",
+		async () => {
+			const snapshots: Array<{ state?: string; requestId?: string }> = [];
+			let reloadedState: string | undefined;
+			let fx!: KubeFixture;
+			fx = await bootKubernetes({
+				collect: async (request) => {
+					const live = fx.registry.get(request.workspaceId)?.workspace?.lastEvidence;
+					snapshots.push({ state: live?.state, requestId: live?.requestId });
+					// Durability: a fresh registry load (a fleet restart) must
+					// already carry the pending id the daemon caches its
+					// outcome under.
+					const reloaded = new Registry(fx.statePath);
+					await reloaded.load();
+					reloadedState = reloaded.get(request.workspaceId)?.workspace?.lastEvidence?.state;
+					return gateReceipt(request);
+				},
+			});
+			try {
+				const entry = seedKubernetesClone(fx);
+				await fx.lifecycle.ensureCloneRunning(entry.daemonId);
+				await fx.lifecycle.stopClone(entry.daemonId);
+
+				expect(snapshots).toHaveLength(1);
+				expect(snapshots[0]?.state).toBe("pending");
+				expect(snapshots[0]?.requestId).toBeDefined();
+				expect(reloadedState).toBe("pending");
+
+				const evidence = fx.registry.get(entry.daemonId)!.workspace?.lastEvidence;
+				expect(evidence?.state).toBe("verified");
+				expect(evidence?.requestId).toBe(snapshots[0]?.requestId);
+			} finally {
+				fx.lifecycle.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a generation whose stop evidence quiesced it is proven stopped and replaced, never reattached",
+		async () => {
+			const fx = await bootKubernetes({
+				scenario: { runningWhileLive: true, stopObserved: "running" },
+				collect: async (request) => gateReceipt(request),
+			});
+			try {
+				const entry = seedKubernetesClone(fx);
+				await fx.lifecycle.ensureCloneRunning(entry.daemonId);
+
+				// The stop collects evidence (permanently closing the daemon's
+				// command admission) but the provider cannot prove termination.
+				const stopErr = await lifecycleError(fx.lifecycle.stopClone(entry.daemonId));
+				expect(stopErr.code).toBe("conflict");
+				const quiesced = fx.registry.get(entry.daemonId)!;
+				expect(quiesced.workspace?.lastEvidence?.state).toBe("verified");
+				expect(quiesced.workspace?.lastEvidence?.generation).toBe(1);
+				expect(quiesced.workspace?.authorizedGeneration).toBe(1);
+
+				// The provider now proves the stop, so a replacement may proceed.
+				setScenario(fx.providerDir, { stopObserved: "stopped" });
+				await fx.lifecycle.ensureCloneRunning(entry.daemonId);
+
+				const after = fx.registry.get(entry.daemonId)!;
+				// A same-generation reattach would surface the quiesced daemon
+				// ready while it rejects every command; the fix proves
+				// generation 1 stopped and authorizes generation 2.
+				expect(after.workspace?.authorizedGeneration).toBe(2);
+				const ops = readOps(join(fx.workspaceDir, KUBE_STATE_REL, "ops.jsonl"));
+				expect(ops.filter((record) => record.op === "stop").at(-1)?.generation).toBe(1);
+				expect(ops.filter((record) => record.op === "ensure-running").at(-1)?.generation).toBe(2);
+			} finally {
+				fx.lifecycle.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"an implicit wake of an assets-only store fails typed instead of booting fresh",
+		async () => {
+			const fx = await bootKubernetes();
+			try {
+				const entry = seedKubernetesClone(fx);
+				// The workspace ran before (so the implicit wake selects a
+				// target), but the store holds only an asset for that session:
+				// prior history exists and nothing is resumable.
+				fx.registry.updateWorkspace(entry.daemonId, {
+					authorizedGeneration: 1,
+					desiredState: "stopped",
+				});
+				mkdirSync(join(fx.logsDir, entry.daemonId, "s-assets"), { recursive: true });
+				writeFileSync(join(fx.logsDir, entry.daemonId, "s-assets", "artifact.log"), "asset\n");
+
+				const err = await lifecycleError(fx.lifecycle.ensureCloneRunning(entry.daemonId));
+				expect(err.code).toBe("unavailable");
+				// No compute started: no ensure-running was sent and no
+				// generation was authorized.
+				const ops = readOps(join(fx.workspaceDir, KUBE_STATE_REL, "ops.jsonl"));
+				expect(ops.filter((record) => record.op === "ensure-running")).toHaveLength(0);
+				const after = fx.registry.get(entry.daemonId)!;
+				expect(after.workspace?.authorizedGeneration).toBe(1);
+				expect(after.workspace?.desiredState).toBe("stopped");
+			} finally {
+				fx.lifecycle.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a restart-reattached clone stays armed for liveness and is demoted when the sandbox dies",
+		async () => {
+			const fx = await bootKubernetes({ scenario: { runningWhileLive: true } });
+			try {
+				const entry = seedKubernetesClone(fx);
+				await fx.lifecycle.ensureCloneRunning(entry.daemonId);
+				// Simulate a fleet restart: timers die, the record persists.
+				fx.lifecycle.close();
+
+				await fx.lifecycle.reconcile();
+				const reattached = fx.registry.get(entry.daemonId)!;
+				expect(reattached.workspace?.authorizedGeneration).toBe(1); // no bump
+				// Readiness is the readiness owner's; the reattach publishes the
+				// transitional session rung + callback stage instead of
+				// pair-promoting readiness itself.
+				expect(reattached.status).toBe("session");
+				expect(reattached.lifecycleStage).toBe("callback");
+
+				// The sandbox dies with the pair lost: the liveness watcher the
+				// reattach armed must demote it.
+				setScenario(fx.providerDir, { runningWhileLive: false });
+				await waitFor(
+					() => fx.registry.get(entry.daemonId)?.status === "error",
+					20_000,
+					"reattached clone liveness demotion",
+				);
+				const after = fx.registry.get(entry.daemonId)!;
+				expect(after.lifecycleStage).toBe("failed");
+				expect(after.workspace?.desiredState).toBe("running");
+			} finally {
+				fx.lifecycle.close();
+			}
+		},
+		{ timeout: 40_000 },
 	);
 });

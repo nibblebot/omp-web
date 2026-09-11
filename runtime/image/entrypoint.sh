@@ -14,11 +14,10 @@
 #   (source.local is rejected by the provider: a fleet-host path cannot be
 #   reached from inside the cluster.)
 #
-# Preparation runs on EVERY pod start: a new volume is cloned and stamped
-# with the verified .omp-workspace-init.json, while an already initialized
-# volume only has its marker checked against the pod env, so a pod
-# replacement keeps the existing checkout, its later commits, and working
-# files. A corrupt or mismatched marker fails here, before the daemon starts.
+# Preparation runs on EVERY pod start: new volumes are cloned and stamped,
+# initialized volumes are validated from their marker alone so later commits
+# and working files survive pod replacement, and any unusable marker fails
+# closed before the daemon starts.
 # The fleet's callback enrollment rides OMP_SESSION_CALLBACK_* pod env;
 # daemon stdout/stderr go to the pod log.
 set -eu
@@ -94,11 +93,8 @@ fi
 PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/agent}"
 mkdir -p "$OMP_WORKSPACE_ROOT" "$HOME" "$PI_CODING_AGENT_DIR"
 
-# prepare-inpod.ts initializes a new volume through prepareWorkspace,
-# validates an already initialized volume's marker without resetting its
-# checkout, and rejects a corrupt or mismatched marker. The verified marker
-# is written last, so retries reuse the persisted pin instead of resolving it
-# again.
+# prepare-inpod.ts performs that preparation; the verified marker is written
+# last, so retries reuse the persisted pin instead of resolving it again.
 bun /opt/omp-web/runtime/image/prepare-inpod.ts
 
 # Sessions never idle out on their own: the fleet is the sole idle-stop

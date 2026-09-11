@@ -14,6 +14,7 @@ import type {
 	RegisteredProject,
 	ServerFrame,
 	SettingsModel,
+	WebMethodName,
 	WebSessionState,
 } from "../shared/protocol";
 import { SSE_PING_EVENT } from "../shared/sse";
@@ -266,6 +267,12 @@ export const [state, setState] = createStore({
 	// to (distinct from sessionId above, the agent's own id, which changes on
 	// switchSession). Session-scoped frames for any other handle are dropped.
 	currentSessionId: "",
+	// Retained read-only identity: when an attached CLONE's worker goes away
+	// (stopped pod, unreachable cluster, failed pod), its transcript stays on
+	// screen under this id while currentSessionId is CLEARED, so no reconnect
+	// auto-attach or session RPC can implicitly wake the dead worker. Reset by
+	// the next real `attached` frame and by any session reset.
+	readOnlySessionId: null as string | null,
 	sessionFile: undefined as string | undefined,
 	contextUsage: undefined as WebSessionState["contextUsage"],
 	queuedMessageCount: 0,
@@ -688,16 +695,21 @@ function teardownStream(source: EventSource): void {
 	// Phase 5: a dead stream cannot complete the onboarding flow — disarm the
 	// picker gate and drop any picker context.
 	rejectPendingAttach(new Error("Disconnected"));
+	// A stranded explicit switch must not hang: release it (the caller
+	// re-checks the attachment and skips a switch that never primed).
+	for (const waiters of attachPrimeWaiters.values()) for (const resolve of waiters) resolve();
+	attachPrimeWaiters.clear();
 	setState("pendingSessionPicker", null);
 	setState("sessionPickerGate", null);
 	rejectPendingDaemons(new Error("Disconnected"));
 }
 
-/** Roster mode with no daemon ever attached this tab; once attached, settings
- *  go through the session RPC for per-session option lists and live side
- *  effects. */
+/** Roster mode with no WRITABLE attached session: a tab that never attached,
+ *  or one whose retained clone transcript is read-only. Settings then go
+ *  through the fleet /ctl endpoints; once a live session is attached they use
+ *  the session RPC for per-session option lists and live side effects. */
 export function fleetSettingsActive(): boolean {
-	return state.sessionMode === "roster" && state.currentSessionId === "";
+	return state.sessionMode === "roster" && !hasLiveSession();
 }
 
 // ---------------------------------------------------------------------------
@@ -766,14 +778,58 @@ export function isDaemonDead(entry: DaemonEntry | undefined): boolean {
 
 /** True when this tab has a live attached session to render. Roster mode:
  *  the attached entry must exist and not be dead; a daemon with an attach in
- *  flight counts as live (the roster lags a wake). Standalone mode is always
- *  live — the roster empty pane is gated on sessionMode in App. */
+ *  flight counts as live (the roster lags a wake). A CLONE is the exception:
+ *  its transitional rungs also carry a stale readyAt after its worker goes
+ *  away, so ONLY a fresh `ready` is writable — an in-flight attach lifts the
+ *  gate for non-clones alone (clones are only ever attached once ready).
+ *  Standalone mode is always live — the roster empty pane is gated on
+ *  sessionMode in App. */
 export function hasLiveSession(): boolean {
 	if (state.sessionMode !== "roster") return true;
 	if (state.currentSessionId === "") return false;
 	const entry = state.daemonRoster.find((d) => d.daemonId === state.currentSessionId);
+	if (entry?.workspaceKind === "clone") return entry.status === "ready";
 	if (!isDaemonDead(entry)) return true;
 	return pendingAttachTarget() === state.currentSessionId;
+}
+
+/** Session RPCs that stay valid without a live attached session — app/auth and
+ *  fleet-scoped relays the store issues from any screen. Every other method
+ *  targets the attached worker. */
+const SESSION_FREE_METHODS: Partial<Record<WebMethodName, true>> = {
+	fetchUsageReports: true,
+	getLoginProviders: true,
+	login: true,
+};
+
+/** Admission guard for the central call() relay. A retained clone transcript
+ *  (readOnlySessionId) or an attached clone still on a non-ready rung is
+ *  READ-ONLY: its session calls would mutate/probe a worker that is not
+ *  serving, so they are refused centrally instead of relying on every
+ *  callsite to hide its affordance. Standalone and genuinely-unattached
+ *  roster tabs keep the old behavior (fleet/app RPCs must still work). */
+export function sessionRpcAllowed(method: WebMethodName): boolean {
+	if (state.sessionMode !== "roster") return true;
+	if (state.currentSessionId === "" && state.readOnlySessionId === null) return true;
+	return hasLiveSession() || SESSION_FREE_METHODS[method] === true;
+}
+
+/** Waiters for a daemon's attach prime (its proxied `attached` frame). An
+ *  explicit session switch whose admission gate refuses the current
+ *  (retained/transitional) attachment waits here until the NEW attachment is
+ *  live, instead of posting the switch into a refused gate. */
+const attachPrimeWaiters = new Map<string, Array<() => void>>();
+
+/** Resolve once this tab is attached to `daemonId` (immediately when it
+ *  already is). Settled by the `attached` handler and by stream teardown, so
+ *  a disconnect cannot strand the waiter. */
+export function awaitAttachPrime(daemonId: string): Promise<void> {
+	if (state.currentSessionId === daemonId) return Promise.resolve();
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const waiters = attachPrimeWaiters.get(daemonId);
+	if (waiters !== undefined) waiters.push(resolve);
+	else attachPrimeWaiters.set(daemonId, [resolve]);
+	return promise;
 }
 
 /** Per-session UI state dropped when attaching to a different session. */
@@ -785,6 +841,7 @@ function resetSessionView(): void {
 		items: [],
 		live: { active: false, blocks: [], rev: 0 },
 		subagents: new Map<string, SubagentInfo>(),
+		readOnlySessionId: null,
 		stats: null,
 		goal: null,
 		goalModeState: undefined,
@@ -811,10 +868,11 @@ function resetSessionView(): void {
  *
  *  A managed CLONE whose worker is gone is the exception: its lineage is
  *  durable in the fleet store, so the last-known transcript stays on screen
- *  READ-ONLY instead of being thrown away (App renders ReadOnlySessionPane
- *  whenever hasLiveSession() is false; the composer is gone either way).
- *  Nothing is writable without a live session, and a respawn flips the entry
- *  back to ready, which restores the normal chat column. */
+ *  READ-ONLY. The identity moves to readOnlySessionId and currentSessionId is
+ *  CLEARED, so a reconnect's auto-attach (and every session RPC) can no
+ *  longer wake the dead worker. Nothing is writable without a live session;
+ *  when a fresh worker is ready the user re-opens the row, and the next
+ *  `attached` frame drops the retained identity. */
 function reconcileAttachedSession(): void {
 	if (state.sessionMode !== "roster") return;
 	const id = state.currentSessionId;
@@ -825,6 +883,9 @@ function reconcileAttachedSession(): void {
 	// Keep only when there is a transcript left to read; an empty session has
 	// nothing to preserve and keeps the old clear-and-show-empty behavior.
 	if (entry?.workspaceKind === "clone" && (state.items.length > 0 || state.live.active)) {
+		setState("readOnlySessionId", id);
+		setState("currentSessionId", "");
+		setState("readyAt", undefined);
 		pushDebug(
 			"info",
 			"roster",
@@ -905,8 +966,11 @@ export function connect(): void {
 		// No boot-time calls: a roster-mode edge answers every call with
 		// "not attached" until the browser picks a daemon. The attached handler
 		// pulls getSubagents. On a roster-mode RECONNECT the edge has no attach
-		// memory — re-attach to the daemon we were viewing.
-		if (state.sessionMode === "roster" && state.currentSessionId)
+		// memory — re-attach to the daemon we were viewing. A retained read-only
+		// clone (currentSessionId cleared) or a clone still transitioning
+		// (hasLiveSession false) is NOT re-attached: that would wake a worker
+		// the user only asked to read.
+		if (state.sessionMode === "roster" && hasLiveSession())
 			void attachSession(state.currentSessionId).catch(() => {});
 	};
 	source.addEventListener(SSE_EVENT_NAME, (ev) => {
@@ -915,7 +979,6 @@ export function connect(): void {
 		const frame = JSON.parse(String((ev as MessageEvent).data)) as ServerFrame;
 		if (frame.type === "attached") {
 			pushDebug("info", "transport", `attached ${frame.sessionId}`);
-			const switched = state.currentSessionId !== "" && state.currentSessionId !== frame.sessionId;
 			// Capture the previous session BEFORE the switch overwrites the id:
 			// state.streaming still reflects the prior session here (it is only
 			// overwritten by the next state frame; resetSessionView never touches
@@ -925,7 +988,27 @@ export function connect(): void {
 			// it read.
 			const prevSessionId = state.currentSessionId;
 			const prevStreaming = state.streaming;
+			// A real attach ends any retained read-only identity. Attaching a
+			// DIFFERENT daemon than the retained history is a switch too, even
+			// though currentSessionId was cleared when that history was retained
+			// (id-less switch would leak the old items into the new session).
+			const retained = state.readOnlySessionId;
+			const switched =
+				(prevSessionId !== "" && prevSessionId !== frame.sessionId) ||
+				(retained !== null && retained !== frame.sessionId);
 			setState("currentSessionId", frame.sessionId);
+			setState("readOnlySessionId", null);
+			// A fresh attach re-arms the readiness gate: drop any readyAt the
+			// retained/previous attachment carried. The proxied priming (or a
+			// stamped state frame) re-delivers `ready` for the new attachment.
+			setState("readyAt", undefined);
+			// Release explicit switches waiting for this attach to become live
+			// (openDaemonSession's admission-gated switch ordering).
+			const primed = attachPrimeWaiters.get(frame.sessionId);
+			if (primed !== undefined) {
+				attachPrimeWaiters.delete(frame.sessionId);
+				for (const resolve of primed) resolve();
+			}
 			if (prevSessionId !== "" && prevSessionId !== frame.sessionId && prevStreaming)
 				markUnread(prevSessionId);
 			clearUnread(frame.sessionId);
@@ -949,11 +1032,6 @@ export function connect(): void {
 				// fresh call too (and resetSessionView wipes its populated result).
 				rejectPendingCalls(new Error("session switched"));
 				resetSessionView();
-				// Phase 3 daemon switch: drop readiness too. The edge only pipes
-				// daemons that passed waitReady, so the proxied priming re-delivers
-				// `ready` immediately; until then the composer stays gated and the
-				// roster hint shows the session's status.
-				setState("readyAt", undefined);
 				// Phase 5: a switch to a DIFFERENT daemon disarms the picker gate
 				// (the onboarding attach to the gate's own daemon is a switch too —
 				// that one is kept so the sessions answer can still open the
@@ -1465,9 +1543,9 @@ export {
 export {
 	listSessions,
 	listFiles,
+	openDaemonSession,
 	openStoredHistory,
 	requestDaemonSessions,
-	resumeDaemonSession,
 	setSidebarVisible,
 	setTxSidebarVisible,
 	setView,

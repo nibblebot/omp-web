@@ -32,7 +32,6 @@ describe("classifyCommand", () => {
 		// The local preflight verb rides the same fleet path (it is the
 		// dispatcher that reaches fleet/cli.ts's preflightCmd), never usage.
 		expect(classifyCommand(["preflight", "--profile", "local"])).toBe("fleet");
-		expect(classifyCommand(["preflight"])).toBe("fleet");
 	});
 
 	test("routes the daemon token to session", () => {

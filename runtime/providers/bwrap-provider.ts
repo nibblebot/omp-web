@@ -235,19 +235,6 @@ async function waitForLiveRecord(
 }
 
 // ---------------------------------------------------------------------------
-// Callback enrollment handoff (fleet-written, provider-read)
-// ---------------------------------------------------------------------------
-
-/**
- * The handoff reader is consolidated in runtime/callback-env.ts, shared with
- * the Kubernetes provider and the fleet lifecycle: one implementation of the
- * allowlist, the 0600/atomic write, and the workspace/generation identity
- * checks (P5.5). An absent handoff yields an empty env (a stop-only
- * management spawn must not require enrollment); a stale, malformed, or
- * disallowed one fails the operation before any supervisor spawn.
- */
-
-// ---------------------------------------------------------------------------
 // Handle (opaque, stable per workspace+generation)
 // ---------------------------------------------------------------------------
 
@@ -449,9 +436,10 @@ async function runSupervisor(stateDir: string): Promise<number> {
 			runtimeArgs: spec.runtimeArgs,
 			bwrapBin: spec.bwrapBin,
 			denyRoots: deriveDenyRoots(process.env),
-			// The fleet-written callback enrollment rides only the env
-			// allowlist path — never the request JSON (P5.5).
-			env: { ...process.env, ...spec.callbackEnv },
+			env: process.env,
+			// Validated handoff enrollment (never the request JSON). The
+			// required-resume flag is not ambient, so it can only arrive here.
+			callbackEnv: spec.callbackEnv,
 			// The provider's secret refs resolved to concrete values (only
 			// key names ride the sidecar; values live in this process env).
 			secretEnv: secretEnvFromKeys(spec.secretEnvKeys),
@@ -676,7 +664,9 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 		rmSync(join(stateDir, SUPERVISE_ERR_FILE), { force: true });
 
 		// Read + validate the fleet's callback enrollment handoff BEFORE
-		// spawning: a stale enrollment must never start a generation.
+		// spawning: a stale enrollment must never start a generation, and an
+		// absent handoff yields an empty env (a stop-only management spawn
+		// works without enrollment).
 		let callbackEnv: Record<string, string>;
 		try {
 			callbackEnv = readCallbackEnvFile(stateDir, { workspaceId, generation })?.env ?? {};

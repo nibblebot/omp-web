@@ -39,6 +39,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { isIPv6 } from "node:net";
 import { join } from "node:path";
 
 const utf8 = new TextEncoder();
@@ -125,6 +126,18 @@ const PATH_SEGMENT_RE = /^[^\s?#\\:]+$/;
 const KUBERNETES_SOURCE_MAX_CHARS = 4096;
 
 /**
+ * Validate a `:`-prefixed port tail against the URL port grammar; the caller
+ * rejects the source on any failure. Shared by the bracketed (IPv6) and
+ * plain host branches so both apply the same 1..65535 bound.
+ */
+function parsePortTail(tail: string, reject: (why: string) => never): void {
+	const portRaw = tail.slice(1);
+	if (!PORT_RE.test(portRaw)) reject("has an invalid port");
+	const port = Number(portRaw);
+	if (port < 1 || port > 65535) reject("has an out-of-range port");
+}
+
+/**
  * Validate a Kubernetes clone source: an absolute `git:`, `https:`, or
  * `ssh:` URL naming a host and a repository path. An SSH username is
  * allowed; passwords, any other URL userinfo, whitespace, query strings,
@@ -177,16 +190,20 @@ export function validateKubernetesSource(value: unknown): string {
 		const close = hostPort.indexOf("]");
 		if (close < 0) reject("has an unterminated IPv6 host");
 		const tail = hostPort.slice(close + 1);
-		if (tail !== "" && !tail.startsWith(":")) reject("has an invalid host");
-		hostPort = hostPort.slice(1, close);
+		if (tail !== "") {
+			if (!tail.startsWith(":")) reject("has an invalid host");
+			parsePortTail(tail, reject);
+		}
+		const literal = hostPort.slice(1, close);
+		if (!isIPv6(literal)) {
+			reject(`has an invalid host ${JSON.stringify(hostPort.slice(0, close + 1))}`);
+		}
+		hostPort = literal;
 	} else {
 		const colon = hostPort.lastIndexOf(":");
 		if (colon >= 0) {
-			const portRaw = hostPort.slice(colon + 1);
+			parsePortTail(hostPort.slice(colon), reject);
 			hostPort = hostPort.slice(0, colon);
-			if (!PORT_RE.test(portRaw)) reject("has an invalid port");
-			const port = Number(portRaw);
-			if (port < 1 || port > 65535) reject("has an out-of-range port");
 		}
 		if (hostPort.length === 0 || hostPort.length > HOST_MAX_CHARS || !HOST_RE.test(hostPort)) {
 			reject(`has an invalid host ${JSON.stringify(hostPort)}`);

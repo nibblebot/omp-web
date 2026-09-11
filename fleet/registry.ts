@@ -28,7 +28,7 @@ import type {
 } from "../shared/protocol";
 import type { KubernetesBinding } from "../shared/provider-protocol";
 import { validateProjectPath } from "./discovery";
-import type { ValidatedQuiesceReceipt } from "./clone-quiesce";
+import type { ValidatedQuiesceReceipt } from "./clone-quiesce-receipt";
 
 /**
  * Workspace identity unions, re-exported for fleet/registry consumers. The

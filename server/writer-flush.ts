@@ -5,19 +5,13 @@ import type { QuiesceWriterEntry } from "../shared/callback-protocol";
 import type { CallbackErrorCode } from "../shared/callback-protocol";
 
 /**
- * All-writer flush capture (P4.5; RuntimeMap P0.3 finding). The SDK's
- * AgentSession.dispose and AgentLifecycleManager.release swallow descendant
- * and advisor-recorder close failures (allSettled / try-catch in the pinned
- * 17.1.8 sources), so dispose resolution alone is NOT all-writer flush
- * evidence. Before ANY dispose, this captures every reachable live writer —
- * the boot session's own SessionManager plus every registered sub/advisor
- * ref with a live AgentSession — and calls flush() on each. A latched
- * SessionPersistenceIndeterminateError (or any rejected flush) is a hard
- * block, surfaced typed.
- *
- * Writers that the SDK already released (parked/aborted refs with null
- * sessions) are recorded as parked/disposed and covered by the structural
- * read verification of the on-disk JSONL afterwards.
+ * All-writer flush capture (P4.5). The SDK's dispose/release swallow
+ * descendant and advisor-recorder close failures (allSettled / try-catch in
+ * the pinned 17.1.8 sources), so dispose resolution alone is NOT flush
+ * evidence: before ANY dispose this captures and flushes every reachable live
+ * writer, failing closed on a live writer or any rejected flush. Writers the
+ * SDK already released (null sessions) are recorded parked/disposed and
+ * covered by the structural JSONL read verification afterwards.
  */
 
 /** A registry-visible agent ref with its live session (if any). */
@@ -39,7 +33,11 @@ export interface WriterFlushResult {
 	note?: string;
 }
 
-/** Per-writer flush state reported by {@link flushReachableWriters}. */
+/**
+ * Per-writer flush state: the public entry of
+ * {@link flushReachableWriters} and the internal per-writer attempt shape
+ * both reports are built from.
+ */
 export interface ReachableWriterState {
 	id: string;
 	kind: "main" | "sub" | "advisor";
@@ -67,6 +65,15 @@ export interface ReachableWriterFlushReport {
 /** Registry id of the boot (main) writer; every other ref is a descendant. */
 const MAIN_WRITER_ID = "s1";
 
+/** Operator-facing notes; identical across both flush reports (P4.5). */
+const MAIN_FLUSH_BLOCKED =
+	"main flush rejected or persistence indeterminate — deletion blocked (P4.5)";
+const DESCENDANT_FLUSH_BLOCKED =
+	"descendant flush rejected or persistence indeterminate — deletion blocked (P4.5)";
+const ADVISOR_FLUSH_BLOCKED = "advisor recorder catch-up unresolved — deletion blocked";
+const DISPOSE_CEILING_NOTE =
+	"SDK 17.1.8 ceiling: dispose suppresses descendant/advisor errors; flush here is the explicit evidence, and structural read verification of every declared JSONL runs after dispose.";
+
 /** Capture the writer surface of one session entry. */
 export function captureWriters(
 	entry: SessionEntry,
@@ -86,20 +93,11 @@ export function captureWriters(
 	return { main: entry.session, descendants };
 }
 
-/** One writer's internal flush attempt (a `failed` state carries its error). */
-interface WriterFlushAttempt {
-	id: string;
-	kind: "main" | "sub" | "advisor";
-	sessionFile: string | null;
-	state: "flushed" | "parked" | "disposed" | "failed";
-	error?: string;
-}
-
 /** Internal statement of one full writer-surface flush. */
 interface WriterFlushSurface {
 	ok: boolean;
-	main: WriterFlushAttempt;
-	descendants: WriterFlushAttempt[];
+	main: ReachableWriterState;
+	descendants: ReachableWriterState[];
 	advisors: "caught_up" | "inactive";
 	error?: string;
 	note?: string;
@@ -136,8 +134,8 @@ export async function flushAllWriters(input: {
 
 /**
  * Flush every reachable writer and report one entry per writer, including the
- * main writer and any writer whose flush rejected. The same fail-closed gates
- * as {@link flushAllWriters} apply (`ok:false` on a live writer or any flush
+ * main writer and any writer whose flush rejected. Fail-closed exactly as
+ * {@link flushAllWriters} (`ok:false` on a live writer or any flush
  * rejection), but every descendant is attempted so a failure is reported per
  * writer instead of short-circuiting. This is the report the Kubernetes
  * quiesce_clone evidence is built from.
@@ -176,7 +174,7 @@ async function flushWriterSurface(
 ): Promise<WriterFlushSurface> {
 	const { entry, registry, mainSessionFile } = input;
 	const { main, descendants } = captureWriters(entry, registry, mainSessionFile);
-	const mainAttempt: WriterFlushAttempt = {
+	const mainAttempt: ReachableWriterState = {
 		id: MAIN_WRITER_ID,
 		kind: "main",
 		sessionFile: mainSessionFile,
@@ -215,11 +213,11 @@ async function flushWriterSurface(
 			descendants: [],
 			advisors: "inactive",
 			error: `main session flush failed: ${flushMain.error}`,
-			note: "main flush rejected or persistence indeterminate — deletion blocked (P4.5)",
+			note: MAIN_FLUSH_BLOCKED,
 		};
 	}
 
-	const attempts: WriterFlushAttempt[] = [];
+	const attempts: ReachableWriterState[] = [];
 	let firstFailure: string | undefined;
 	for (const ref of descendants) {
 		if (ref.session !== null) {
@@ -232,7 +230,7 @@ async function flushWriterSurface(
 						descendants: attempts,
 						advisors: "inactive",
 						error: `descendant ${ref.id} flush failed: ${flushed.error}`,
-						note: "descendant flush rejected or persistence indeterminate — deletion blocked (P4.5)",
+						note: DESCENDANT_FLUSH_BLOCKED,
 					};
 				}
 				attempts.push({
@@ -267,7 +265,7 @@ async function flushWriterSurface(
 			descendants: attempts,
 			advisors: "inactive",
 			error: firstFailure,
-			note: "descendant flush rejected or persistence indeterminate — deletion blocked (P4.5)",
+			note: DESCENDANT_FLUSH_BLOCKED,
 		};
 	}
 
@@ -279,7 +277,7 @@ async function flushWriterSurface(
 			descendants: attempts,
 			advisors: advisorState.state,
 			error: `advisor catch-up barrier failed: ${advisorState.error}`,
-			note: "advisor recorder catch-up unresolved — deletion blocked",
+			note: ADVISOR_FLUSH_BLOCKED,
 		};
 	}
 	return {
@@ -287,7 +285,7 @@ async function flushWriterSurface(
 		main: mainAttempt,
 		descendants: attempts,
 		advisors: advisorState.state,
-		note: "SDK 17.1.8 ceiling: dispose suppresses descendant/advisor errors; flush here is the explicit evidence, and structural read verification of every declared JSONL runs after dispose.",
+		note: DISPOSE_CEILING_NOTE,
 	};
 }
 

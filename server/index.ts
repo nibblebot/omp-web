@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -65,21 +65,21 @@ import { clearSubagents } from "./subagent-mirror";
 import { rejectEntryUiRequests, rejectStreamUiRequests, webUiRequest } from "./ui-context";
 import { callbackError } from "../shared/callback-protocol";
 import type { CallbackEnvelope } from "../shared/callback-protocol";
-import {
-	canonicalJailRoots,
-	createDaemonControl,
-	resolveJailedFile,
-	type DaemonControl,
-} from "./daemon-control";
+import { createDaemonControl, type DaemonControl } from "./daemon-control";
+import { canonicalJailRoots, resolveJailedFile } from "./download-jail";
 import {
 	boundaryAcked,
-	captureGitCredentialSettings,
-	collectGitEvidence,
 	enumerateLineageManifest,
 	finalizeTailerBoundary,
 	mainSessionRelpathFor,
 	verifyLineageStructure,
 } from "./quiesce-evidence";
+import { captureGitCredentialSettings, collectGitEvidence } from "./git-preservation";
+import {
+	clearStaleResumeLock,
+	resolveManagedResumeTarget,
+	restoreResumeTarget,
+} from "./resume-bootstrap";
 import { flushAllWriters, flushReachableWriters } from "./writer-flush";
 import { setOnFrameTap } from "./sse-delivery";
 
@@ -148,6 +148,15 @@ let lastActivityAt = Date.now();
 let idleTimer: ReturnType<typeof setInterval> | undefined;
 /** Set once shutdown begins (signal or idle-exit); also read by the boot catch. */
 let shuttingDown = false;
+/**
+ * Resolves once shutdown()'s graceful teardown has finished, immediately
+ * before it exits the process. A boot stage that a signal interrupts awaits
+ * this instead of racing the established exit path with its own exit code.
+ */
+let resolveShutdownDone: () => void = () => {};
+const shutdownDone = new Promise<void>((resolve) => {
+	resolveShutdownDone = resolve;
+});
 
 function markActivity(): void {
 	lastActivityAt = Date.now();
@@ -818,7 +827,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 // boundary on this unauthenticated server: the canonical (realpath) target
 // must live inside the system temp dir, the agent cwd (where bare-filename
 // exports land), the server's process cwd, or a live session file's
-// directory. The jail itself lives in daemon-control.ts (canonicalJailRoots /
+// directory. The jail itself lives in download-jail.ts (canonicalJailRoots /
 // resolveJailedFile): GET /download and the daemon's own download_bulk
 // command enforce exactly one implementation, so the two can never drift.
 async function downloadJailRoots(): Promise<string[]> {
@@ -1520,100 +1529,62 @@ if (config.callbackUrl !== undefined) {
 // clears ONLY the selected target's stale lock, locks it, switches into it,
 // and only then opens readiness; any failure exits BEFORE readiness, because
 // a fresh boot would silently lose the session the fleet asked to continue.
+// Containment, stale-lock removal, and the deadline-bounded transfer live in
+// resume-bootstrap.ts; this file keeps the boot order.
 // ---------------------------------------------------------------------------
 
-/** Restore budgets (P5.4): 60s for callback readiness, 120s for the transfer. */
-const PAIR_READY_TIMEOUT_MS = 60_000;
-const RESTORE_TIMEOUT_MS = 120_000;
-
 /**
- * Bound one restore step: a dead fleet or a stalled bulk transfer must fail
- * the resume instead of leaving the Pod hanging before readiness.
+ * A required resume that cannot be satisfied must never fall back to a fresh
+ * boot. A signal during the resume runs shutdown() concurrently, and that
+ * shutdown owns the exit path: an interrupted boot stage yields to it instead
+ * of racing it with its own exit code.
  */
-async function withDeadline<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-	let timer: Timer | undefined;
-	const expiry = new Promise<never>((_resolve, reject) => {
-		timer = setTimeout(
-			() => reject(new MaterializeSessionError("unavailable", message)),
-			timeoutMs,
-		);
-	});
-	try {
-		return await Promise.race([work, expiry]);
-	} finally {
-		clearTimeout(timer);
+async function failRequiredResume(reason: string): Promise<never> {
+	if (shuttingDown) {
+		await shutdownDone;
+		process.exit(0);
 	}
-}
-
-/**
- * Restore the resume target's stored subtree over the authenticated pair
- * (P5 wake). The pair must be READY first (the bulk pull is daemon-initiated);
- * the transfer itself is the existing materializeSessionToDir. Throws a typed
- * MaterializeSessionError when the pair never comes up, the transfer fails,
- * or the restored subtree holds no main transcript.
- */
-async function restoreResumeTarget(sessionId: string): Promise<void> {
-	const callback = fleetCallback;
-	if (callback === null) {
-		throw new MaterializeSessionError(
-			"unavailable",
-			"no callback pair is configured to restore the resume target",
-		);
-	}
-	if (callbackStart === null) callbackStart = callback.start();
-	await withDeadline(
-		callbackStart,
-		PAIR_READY_TIMEOUT_MS,
-		"the callback pair did not become ready in time to restore the resume target",
-	);
-	await withDeadline(
-		materializeSessionToDir(sessionsDir, sessionId, callback),
-		RESTORE_TIMEOUT_MS,
-		`restoring session ${sessionId} exceeded ${RESTORE_TIMEOUT_MS}ms`,
-	);
-	if (resolveSessionMainFile(sessionsDir, sessionId) === null) {
-		throw new MaterializeSessionError(
-			"unavailable",
-			`the store restored no main transcript for session ${sessionId}`,
-		);
-	}
+	console.error(`omp-session: ${reason}; exiting before readiness`);
+	process.exit(1);
 }
 
 // Restore the handed target BEFORE the lock and the switch: the handed main
 // file may be missing (wake of a stopped clone, or a deliberate removal from
 // the retained volume), and the fleet log store is the only source. Only a
-// target under this daemon's sessions root carries a store identity to pull;
-// a resume path outside it is the operator's own file, so it is never
-// rewritten here and the switch below handles it exactly as before.
-if (
-	config.resume !== undefined &&
-	path.isAbsolute(config.resume) &&
-	config.resume.startsWith(`${sessionsDir}${path.sep}`)
-) {
-	const resumeBase = path.basename(config.resume);
-	const resumeStem = resumeBase.endsWith(".jsonl") ? resumeBase.slice(0, -".jsonl".length) : "";
-	const resumeSessionId = /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resumeStem) ? resumeStem : null;
-	if (config.resumeRequired) {
-		// Remove ONLY the selected target's stale lock. The fleet armed the
-		// required lane after proving the predecessor terminated, and a
-		// namespace-relative pid from a dead sandbox can still look alive to
-		// the generic liveness probe. No other lock is ever touched.
+// target proven inside this daemon's real sessions root carries a store
+// identity to pull; an outside, traversing, or symlinked path is the
+// operator's own file, untouched here and handled by the switch below exactly
+// as before.
+const resumeTarget =
+	config.resume !== undefined ? resolveManagedResumeTarget(sessionsDir, config.resume) : null;
+if (resumeTarget !== null) {
+	// Remove ONLY the selected target's stale lock. The fleet armed the
+	// required lane after proving the predecessor terminated, and a
+	// namespace-relative pid from a dead sandbox can still look alive to the
+	// generic liveness probe. No other lock is ever touched.
+	if (config.resumeRequired) clearStaleResumeLock(resumeTarget);
+	if (resolveSessionMainFile(sessionsDir, resumeTarget.sessionId) === null) {
 		try {
-			unlinkSync(`${config.resume}.lock`);
-		} catch {
-			// Absent or already cleared.
-		}
-	}
-	if (resumeSessionId !== null && resolveSessionMainFile(sessionsDir, resumeSessionId) === null) {
-		try {
-			await restoreResumeTarget(resumeSessionId);
+			const callback = fleetCallback;
+			if (callback === null) {
+				throw new MaterializeSessionError(
+					"unavailable",
+					"no callback pair is configured to restore the resume target",
+				);
+			}
+			// The pair start is shared: the normal lane below reuses this promise.
+			if (callbackStart === null) callbackStart = callback.start();
+			const pairReady = callbackStart;
+			await restoreResumeTarget({
+				sessionsDir,
+				target: resumeTarget,
+				transport: callback,
+				pairReady,
+			});
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
 			if (config.resumeRequired) {
-				console.error(
-					`omp-session: required resume of ${config.resume} failed (${detail}); exiting before readiness`,
-				);
-				process.exit(1);
+				await failRequiredResume(`required resume of ${config.resume} failed (${detail})`);
 			}
 			console.error(
 				`omp-session: --resume ${config.resume} could not be restored (${detail}); starting fresh`,
@@ -1623,14 +1594,17 @@ if (
 }
 // A signal during the restore runs shutdown() concurrently; that shutdown is
 // the exit path, not a boot failure.
-if (shuttingDown) process.exit(0);
+if (shuttingDown) {
+	await shutdownDone;
+	process.exit(0);
+}
 
 // Required resume never falls back to a fresh boot: the restore above is the
 // only sanctioned way to produce a target that is not on disk, and
 // switchSession() accepts an absent file by starting a NEW session at that
-// path, so an unusable target must exit before the lock and readiness
-// (finding #6). Parse-time admission already refuses an armed lane with no
-// target at all; this refuses one whose target is not on disk.
+// path, so an unusable target must exit before the lock and readiness.
+// Parse-time admission already refuses an armed lane with no target at all;
+// this refuses one whose target is not on disk.
 if (config.resumeRequired && (config.resume === undefined || !existsSync(config.resume))) {
 	console.error(
 		`omp-session: required resume target ${config.resume ?? "(none)"} is missing; exiting before readiness instead of booting fresh`,
@@ -1648,7 +1622,10 @@ try {
 } catch (err) {
 	// A signal during boot runs shutdown() concurrently; the torn-down SDK
 	// state fails createSession — that is the shutdown, not a boot failure.
-	if (shuttingDown) process.exit(0);
+	if (shuttingDown) {
+		await shutdownDone;
+		process.exit(0);
+	}
 	console.error("Failed to start agent session:", err);
 	process.exit(1);
 }
@@ -1663,10 +1640,9 @@ if (config.resume) {
 			clearSubagents(bootEntry);
 			await daemonBroker.broadcastAvailableCommands(bootEntry);
 		} else if (config.resumeRequired) {
-			console.error(
-				`omp-session: required resume of ${config.resume} failed (session switch returned false); exiting before readiness`,
+			await failRequiredResume(
+				`required resume of ${config.resume} failed (session switch returned false)`,
 			);
-			process.exit(1);
 		} else {
 			console.error(
 				`omp-session: --resume ${config.resume}: session switch returned false; starting fresh`,
@@ -1674,10 +1650,7 @@ if (config.resume) {
 		}
 	} catch (err) {
 		if (config.resumeRequired) {
-			console.error(
-				`omp-session: required resume of ${config.resume} failed (${String(err)}); exiting before readiness`,
-			);
-			process.exit(1);
+			await failRequiredResume(`required resume of ${config.resume} failed (${String(err)})`);
 		}
 		console.error(`omp-session: --resume ${config.resume} failed (${String(err)}); starting fresh`);
 	}
@@ -1737,23 +1710,32 @@ function relayBaseUrl(): string {
 }
 
 // Graceful shutdown: dispose the boot session via closeSession (beginDispose
-// is the sync admission barrier; dispose is idempotent), then exit.
+// is the sync admission barrier; dispose is idempotent), then exit. Teardown
+// runs under try/finally so a throwing step can never strand a boot stage that
+// is parked on shutdownDone (an interrupted required resume awaits it).
 async function shutdown(): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
-	if (idleTimer) clearInterval(idleTimer);
-	// Stop the log tailer BEFORE the callback pair so no chunk frames queue
-	// into a half-torn transport, then stop the pair (its own stop is sync).
-	if (logTailer !== null) logTailer.stop();
-	if (daemonControl !== null) daemonControl.stop();
-	if (fleetCallback !== null) fleetCallback.stop();
-	if (bootEntry) await closeSession(bootEntry, "server shutting down");
-	server.stop();
-	// Release session-file locks before the SDK postmortem cleanup runs so a
-	// crash-free exit never leaves a live lock behind.
-	for (const lock of sessionLocks) lock.release();
-	// Run the SDK's registered postmortem cleanup callbacks (browser/pty/MCP
-	// teardown etc.) without exiting — the exit is ours below.
-	await postmortemCleanup().catch(() => {});
-	process.exit(0);
+	clearInterval(idleTimer);
+	try {
+		// Stop the log tailer BEFORE the callback pair so no chunk frames queue
+		// into a half-torn transport, then stop the pair (its own stop is sync).
+		if (logTailer !== null) logTailer.stop();
+		if (daemonControl !== null) daemonControl.stop();
+		if (fleetCallback !== null) fleetCallback.stop();
+		if (bootEntry) await closeSession(bootEntry, "server shutting down");
+		server.stop();
+		// Release session-file locks before the SDK postmortem cleanup runs so a
+		// crash-free exit never leaves a live lock behind.
+		for (const lock of sessionLocks) lock.release();
+		// Run the SDK's registered postmortem cleanup callbacks (browser/pty/MCP
+		// teardown etc.) without exiting — the exit is ours below.
+		await postmortemCleanup().catch(() => {});
+	} catch (err) {
+		console.error("omp-session: shutdown teardown failed:", err);
+	} finally {
+		// Release any boot stage parked on the interrupted resume, then exit.
+		resolveShutdownDone();
+		process.exit(0);
+	}
 }

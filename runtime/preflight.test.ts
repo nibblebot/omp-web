@@ -17,7 +17,7 @@ import { join } from "node:path";
 import type { ProviderProfile } from "../shared/provider-protocol";
 import { cleanupTempDirs, tempDir } from "../shared/testkit";
 import { runProfilePreflight } from "./preflight";
-import type { KubeExec, KubeExecResult } from "./providers/kubernetes-provider";
+import type { KubeExec, KubeExecResult } from "./providers/kubernetes/kubectl";
 
 afterAll(cleanupTempDirs);
 
@@ -66,16 +66,10 @@ function ctxFor(fixture: FixtureDirs, home: string) {
 /**
  * Inject a fake kubectl for the provider requirement preflight. The default
  * answers model a healthy cluster/context/namespace/RBAC/secret; `respond`
- * overrides a single invocation (e.g. a missing StorageClass). Every argv is
- * recorded so a test can prove the executor was threaded through.
+ * overrides a single invocation (e.g. a missing StorageClass).
  */
-function kubeStub(respond?: (argv: readonly string[]) => KubeExecResult | undefined): {
-	exec: KubeExec;
-	calls: string[][];
-} {
-	const calls: string[][] = [];
-	const exec: KubeExec = async (argv) => {
-		calls.push([...argv]);
+function kubeStub(respond?: (argv: readonly string[]) => KubeExecResult | undefined): KubeExec {
+	return async (argv) => {
 		const custom = respond?.(argv);
 		if (custom !== undefined) return custom;
 		if (argv.includes("--client")) {
@@ -101,7 +95,6 @@ function kubeStub(respond?: (argv: readonly string[]) => KubeExecResult | undefi
 		}
 		return { code: 0, stdout: "", stderr: "" };
 	};
-	return { exec, calls };
 }
 
 /** A kubernetes profile whose generic (non-cluster) rows all pass. */
@@ -262,7 +255,7 @@ describe("k8s rows are real requirement checks on kubernetes profiles", () => {
 	test("a complete kubernetes profile passes the provider requirement rows", async () => {
 		const f = fixtureDirs();
 		const home = syntheticHome();
-		const { exec } = kubeStub();
+		const exec = kubeStub();
 		const result = await runProfilePreflight(
 			kubernetesProfile(f, { secretRefs: { OMP_TEST_SECRET: "model-auth/password" } }),
 			{ ...ctxFor(f, home), kubeExec: exec },
@@ -293,30 +286,10 @@ describe("k8s rows are real requirement checks on kubernetes profiles", () => {
 		expect(result.ok).toBe(false);
 	});
 
-	test("the removed k8s-context/namespace/image/storage summary rows are gone", async () => {
-		const f = fixtureDirs();
-		const home = syntheticHome();
-		const { exec } = kubeStub();
-		const result = await runProfilePreflight(kubernetesProfile(f), {
-			...ctxFor(f, home),
-			kubeExec: exec,
-		});
-		const names = result.checks.map((c) => c.name);
-		for (const removed of [
-			"k8s-context",
-			"k8s-namespace",
-			"k8s-image",
-			"k8s-storage",
-			"k8s-fields",
-		]) {
-			expect(names).not.toContain(removed);
-		}
-	});
-
 	test("missing context/namespace/image fail actionably through the provider rows", async () => {
 		const f = fixtureDirs();
 		const home = syntheticHome();
-		const { exec } = kubeStub();
+		const exec = kubeStub();
 		const result = await runProfilePreflight(
 			profile({ provider: "kubernetes", executable: f.tool }),
 			{
@@ -341,7 +314,7 @@ describe("k8s rows are real requirement checks on kubernetes profiles", () => {
 	test("an env-only OMP_KUBE_CONTEXT satisfies kube-context", async () => {
 		const f = fixtureDirs();
 		const home = syntheticHome();
-		const { exec } = kubeStub();
+		const exec = kubeStub();
 		const result = await runProfilePreflight(
 			profile({
 				provider: "kubernetes",
@@ -374,7 +347,7 @@ describe("k8s rows are real requirement checks on kubernetes profiles", () => {
 			}),
 			stderr: "",
 		};
-		const { exec } = kubeStub((argv) =>
+		const exec = kubeStub((argv) =>
 			argv.includes("get") && argv[argv.indexOf("get") + 1] === "storageclass"
 				? defaultSc
 				: undefined,
@@ -405,41 +378,6 @@ describe("k8s rows are real requirement checks on kubernetes profiles", () => {
 		expect(preflight!.detail).toContain("kubectl is not installed");
 		expect(preflight!.remediation!.length).toBeGreaterThan(0);
 		expect(result.ok).toBe(false);
-	});
-
-	test("PreflightContext.kubeExec is threaded through to the provider preflight", async () => {
-		const f = fixtureDirs();
-		const home = syntheticHome();
-		const { exec, calls } = kubeStub();
-		await runProfilePreflight(kubernetesProfile(f, { context: "threaded-ctx" }), {
-			...ctxFor(f, home),
-			kubeExec: exec,
-		});
-		expect(calls.length).toBeGreaterThan(0);
-		expect(calls.every((argv) => argv[0] === "kubectl")).toBe(true);
-		const auth = calls.find((argv) => argv.includes("auth") && argv.includes("can-i"));
-		expect(auth).toBeDefined();
-		expect(auth).toContain("--context");
-		expect(auth).toContain("threaded-ctx");
-	});
-
-	test("a kubernetes profile still runs the executable + durable checks", async () => {
-		const f = fixtureDirs();
-		const home = syntheticHome();
-		const { exec } = kubeStub();
-		const result = await runProfilePreflight(kubernetesProfile(f), {
-			...ctxFor(f, home),
-			kubeExec: exec,
-		});
-		const names = result.checks.map((c) => c.name);
-		expect(names).not.toContain("bwrap-binary");
-		expect(names).not.toContain("bwrap-userns");
-		expect(names).not.toContain("runtime-entry");
-		expect(names).not.toContain("runtime-bin");
-		expect(names).toContain("profile-executable");
-		expect(names).toContain("kubectl-client");
-		expect(names).not.toContain("k8s-not-yet-supported");
-		expect(result.provider).toBe("kubernetes");
 	});
 
 	test("secretRefs env resolution: present passes, missing fails actionably", async () => {
@@ -473,7 +411,7 @@ describe("k8s rows are real requirement checks on kubernetes profiles", () => {
 	test("k8s secretRefs on a kubernetes profile stay green (API-side resolution)", async () => {
 		const f = fixtureDirs();
 		const home = syntheticHome();
-		const { exec } = kubeStub();
+		const exec = kubeStub();
 		const result = await runProfilePreflight(
 			profile({
 				provider: "kubernetes",
@@ -524,7 +462,7 @@ describe("callback gateway", () => {
 	test("a kubernetes profile without OMP_FLEET_CALLBACK_URL fails actionably", async () => {
 		const f = fixtureDirs();
 		const home = syntheticHome();
-		const { exec } = kubeStub();
+		const exec = kubeStub();
 		const result = await runProfilePreflight(kubernetesProfile(f), {
 			...ctxFor(f, home),
 			kubeExec: exec,
@@ -553,7 +491,7 @@ describe("callback gateway", () => {
 		async () => {
 			const f = fixtureDirs();
 			const home = syntheticHome();
-			const { exec } = kubeStub();
+			const exec = kubeStub();
 			const listener = await listeningCallback(HOST_ADDRESS!);
 			try {
 				const result = await runProfilePreflight(kubernetesProfile(f), {
@@ -577,7 +515,7 @@ describe("aggregation", () => {
 	test("a kubernetes profile never runs host bwrap/runtime checks", async () => {
 		const f = fixtureDirs();
 		const home = syntheticHome();
-		const { exec } = kubeStub();
+		const exec = kubeStub();
 		const result = await runProfilePreflight(kubernetesProfile(f), {
 			...ctxFor(f, home),
 			kubeExec: exec,

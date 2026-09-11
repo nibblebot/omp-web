@@ -3,12 +3,22 @@
  * describe): the /ctl/* routes exercised over loopback HTTP against a real
  * DaemonConnector + the shared fake omp-session daemon (see server.testkit).
  * No real omp-session children are spawned.
+ *
+ * The final describe is unit-level: it drives the clone readiness state
+ * machine (fleet/clone-readiness.ts) through a controllable fake transport,
+ * asserting the validated-hello_ok ready transition, the daemon-side
+ * stream_close, deferred authorization, and stale-generation handling.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { RegistryEntry } from "./registry";
+import type { CallbackEnvelope } from "../shared/callback-protocol";
+import { tempDir } from "../shared/testkit";
+import { CloneReadiness, type CloneReadinessTransport } from "./clone-readiness";
+import type { PairStatus } from "./daemon-transport";
+import { FleetEventLog } from "./events";
+import { Registry, type RegistryEntry, type WorkspaceRecord } from "./registry";
 import type { FleetServer } from "./server";
 import {
 	FAKE_CWD,
@@ -671,7 +681,7 @@ function kubernetesWorkspaceRecord(
 	};
 }
 
-describe("clone projections and provider-kind cleanup", () => {
+describe("clone public projections", () => {
 	let tmp: string;
 	let workspaceDir: string;
 	let repoDir: string;
@@ -803,6 +813,14 @@ describe("clone projections and provider-kind cleanup", () => {
 		expectNoPrivateWorkspaceKeys(startBody);
 		// The record does hold the handle the route withholds.
 		expect(server.registry.get(started)!.workspace!.providerHandle).toBe("handle-1");
+		// The provider reported running, but nothing validated the daemon: the
+		// lifecycle publishes the TRANSITIONAL session rung + callback stage and
+		// never "ready" on either readiness field. Readiness belongs to the
+		// readiness owner's validated probe alone — a callback-only ready
+		// window (or a pre-validated ready) is exactly what this guards.
+		const startedEntry = server.registry.get(started)!;
+		expect(startedEntry.status).toBe("session");
+		expect(startedEntry.lifecycleStage).toBe("callback");
 
 		const woken = await createClone("wake-handle");
 		const wakeRes = await postJson(server.port, "/ctl/wake", { daemonId: woken });
@@ -812,192 +830,229 @@ describe("clone projections and provider-kind cleanup", () => {
 		expectNoPrivateWorkspaceKeys(wakeBody);
 		expect(server.registry.get(woken)!.workspace!.providerHandle).toBe("handle-1");
 	});
+});
 
-	test("cleanup of a kubernetes workspace removes only the provider state dirs", async () => {
-		const identity = "2".repeat(32);
-		const entry = server.registry.create({
-			name: "kube-cleanup",
-			cwd: "",
-			project: basename(repoDir),
-			projectId,
-			labels: [],
-			mode: "spawned",
-			template: "test",
-			status: "asleep",
-			workspace: kubernetesWorkspaceRecord(projectId, identity),
+/**
+ * Clone readiness state machine (fleet/clone-readiness.ts): the probe owns the
+ * `ready` transition, closes the daemon-side stream on every path, retries a
+ * pair observed before authorization without expiring, and never labels a
+ * superseded generation ready. A controllable fake transport drives each frame
+ * deterministically — no real daemon, no timers beyond the explicit waits.
+ */
+function makeReadinessHarness(): {
+	transport: CloneReadinessTransport;
+	events: string[];
+	openStreams: string[];
+	deliver(streamId: string, payload: Record<string, unknown>): void;
+	/** Re-fire the pair listeners (a pair re-established after a drop). */
+	pairChange(): void;
+} {
+	const pairListeners = new Map<string, Set<(status: PairStatus) => void>>();
+	const streams = new Map<string, { deliver(envelope: CallbackEnvelope): void | Promise<void> }>();
+	const events: string[] = [];
+	const openStreams: string[] = [];
+	const statusFor = (workspaceId: string): PairStatus => ({
+		workspaceId,
+		enrolled: true,
+		authorizedGeneration: 1,
+		paired: true,
+		connectionId: "conn-1",
+		replayDepth: 0,
+		lastEnvelopeAt: null,
+		lastDownSendAt: null,
+		envelopesReceived: 0,
+		upBytesIn: 0,
+		streams: [],
+	});
+	const transport: CloneReadinessTransport = {
+		onPairChange(workspaceId, cb) {
+			let set = pairListeners.get(workspaceId);
+			if (set === undefined) {
+				set = new Set();
+				pairListeners.set(workspaceId, set);
+			}
+			set.add(cb);
+			return () => set.delete(cb);
+		},
+		pairStatus: (workspaceId) => statusFor(workspaceId),
+		attachVirtualStream(_workspaceId, streamId, sink) {
+			streams.set(streamId, sink);
+		},
+		detachVirtualStream(_workspaceId, streamId) {
+			if (streams.delete(streamId)) events.push(`detach:${streamId}`);
+		},
+		async sendToDaemon(_workspaceId, draft) {
+			const payload = draft.payload as { type?: unknown } | undefined;
+			const type = typeof payload?.type === "string" ? payload.type : "";
+			const streamId = String(draft.streamId);
+			if (type === "stream_open") openStreams.push(streamId);
+			events.push(`${type}:${streamId}`);
+			return { streamId } as CallbackEnvelope;
+		},
+	};
+	return {
+		transport,
+		events,
+		openStreams,
+		deliver(streamId, payload) {
+			const sink = streams.get(streamId);
+			if (sink === undefined) throw new Error(`no attached stream ${streamId}`);
+			sink.deliver({ kind: "frame", streamId, payload } as unknown as CallbackEnvelope);
+		},
+		pairChange() {
+			for (const [workspaceId, listeners] of pairListeners) {
+				for (const cb of [...listeners]) cb(statusFor(workspaceId));
+			}
+		},
+	};
+}
+
+function seedClone(
+	registry: Registry,
+	workspaceDir: string,
+	overrides: Partial<WorkspaceRecord> = {},
+): RegistryEntry {
+	const entry = registry.create({
+		name: "clone",
+		cwd: "",
+		project: "proj",
+		projectId: "p1",
+		labels: [],
+		mode: "spawned",
+		status: "spawning",
+		workspace: {
+			kind: "clone",
+			projectId: "p1",
+			desiredState: "running",
+			profileId: "local",
+			providerKind: "bwrap",
+			authorizedGeneration: 1,
+			...overrides,
+		},
+	});
+	return registry.update(entry.daemonId, { cwd: join(workspaceDir, entry.daemonId) });
+}
+
+function helloReady(entry: RegistryEntry): Array<Record<string, unknown>> {
+	return [
+		{
+			type: "hello_ok",
+			cwd: join(entry.cwd, ".checkout"),
+			sessionFile: join(entry.cwd, "s.jsonl"),
+		},
+		{ type: "ready" },
+	];
+}
+
+describe("clone readiness probe lifecycle", () => {
+	function setup() {
+		const workspaceDir = join(tempDir("omp-readiness-"), "workspaces");
+		mkdirSync(workspaceDir, { recursive: true });
+		const registry = new Registry(join(workspaceDir, "state.json"));
+		const harness = makeReadinessHarness();
+		const readiness = new CloneReadiness({
+			registry,
+			transport: harness.transport,
+			eventLog: new FleetEventLog(),
+			workspaceDir,
 		});
-		const stateDir = join(workspaceDir, ".kubernetes", identity);
-		const legacyStateDir = join(workspaceDir, ".provider-state", entry.daemonId);
-		const localVolume = join(workspaceDir, entry.daemonId);
-		mkdirSync(stateDir, { recursive: true });
-		writeFileSync(join(stateDir, "provider.json"), "{}\n");
-		mkdirSync(legacyStateDir, { recursive: true });
-		writeFileSync(join(legacyStateDir, "ops.jsonl"), "\n");
-		mkdirSync(localVolume, { recursive: true });
-		writeFileSync(join(localVolume, "keep.txt"), "keep\n");
+		return { workspaceDir, registry, harness, readiness };
+	}
 
-		await server.resourceDeleter.deleteWorkspaceResources(
-			entry.daemonId,
-			server.registry.get(entry.daemonId)!,
-		);
-
-		expect(existsSync(stateDir)).toBe(false);
-		expect(existsSync(legacyStateDir)).toBe(false);
-		// The guarded local-volume branch was NOT taken: a kubernetes
-		// workspace's volume is the PVC the provider already deleted.
-		expect(existsSync(join(localVolume, "keep.txt"))).toBe(true);
+	test("validates hello_ok+ready and closes the daemon stream before local detach", async () => {
+		const { workspaceDir, registry, harness, readiness } = setup();
+		const entry = seedClone(registry, workspaceDir);
+		readiness.watch(entry.daemonId);
+		await waitFor(() => harness.openStreams.length === 1, 2000, "stream_open");
+		// A live pair alone is never readiness: the probe is still awaiting
+		// frames, so NEITHER readiness field (status, lifecycleStage) may say
+		// ready yet.
+		expect(registry.get(entry.daemonId)?.status).not.toBe("ready");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).not.toBe("ready");
+		const streamId = harness.openStreams[0]!;
+		// A lone `ready` frame is not readiness either — only the hello_ok+ready
+		// pair is (an early-primed daemon must not promote).
+		harness.deliver(streamId, { type: "ready" });
+		expect(registry.get(entry.daemonId)?.status).not.toBe("ready");
+		for (const frame of helloReady(entry)) harness.deliver(streamId, frame);
+		await waitFor(() => registry.get(entry.daemonId)?.status === "ready", 2000, "ready");
+		await waitFor(() => harness.events.includes(`detach:${streamId}`), 2000, "detach");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).toBe("ready");
+		expect(registry.get(entry.daemonId)?.lifecycleError).toBeUndefined();
+		expect(harness.events).toEqual([
+			`stream_open:${streamId}`,
+			`stream_close:${streamId}`,
+			`detach:${streamId}`,
+		]);
+		readiness.close();
 	});
 
-	test("cleanup of a bwrap workspace removes the guarded local volume", async () => {
-		const entry = server.registry.create({
-			name: "bwrap-cleanup",
-			cwd: "",
-			project: basename(repoDir),
-			projectId,
-			labels: [],
-			mode: "spawned",
-			template: "test",
-			status: "asleep",
-			workspace: {
-				kind: "clone",
-				projectId,
-				desiredState: "stopped",
-				profileId: "local",
-				providerKind: "bwrap",
-				source: { local: realpathSync(repoDir) },
-				pinnedRevision: "a".repeat(40),
-				branch: "workspace/bwrap-cleanup",
-			},
-		});
-		const volume = join(workspaceDir, entry.daemonId);
-		mkdirSync(join(volume, ".checkout"), { recursive: true });
-		writeFileSync(join(volume, ".checkout", "readme.md"), "hello\n");
-		server.registry.update(entry.daemonId, { cwd: volume });
-		// Provider state that is NOT this workspace's: a bwrap cleanup must
-		// leave the kubernetes state root alone.
-		const kubeState = join(workspaceDir, ".kubernetes", "3".repeat(32));
-		mkdirSync(kubeState, { recursive: true });
-		writeFileSync(join(kubeState, "keep.json"), "{}\n");
-
-		await server.resourceDeleter.deleteWorkspaceResources(
-			entry.daemonId,
-			server.registry.get(entry.daemonId)!,
-		);
-
-		expect(existsSync(volume)).toBe(false);
-		expect(existsSync(join(kubeState, "keep.json"))).toBe(true);
+	test("a conclusive cwd mismatch fails the clone instead of promoting it", async () => {
+		const { workspaceDir, registry, harness, readiness } = setup();
+		const entry = seedClone(registry, workspaceDir);
+		readiness.watch(entry.daemonId);
+		await waitFor(() => harness.openStreams.length === 1, 2000, "stream_open");
+		const streamId = harness.openStreams[0]!;
+		harness.deliver(streamId, { type: "hello_ok", cwd: "/elsewhere", sessionFile: "" });
+		harness.deliver(streamId, { type: "ready" });
+		await waitFor(() => registry.get(entry.daemonId)?.status === "error", 2000, "error");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).toBe("failed");
+		expect(registry.get(entry.daemonId)?.lifecycleError).toContain("does not match");
+		// The conclusive failure survives a pair (re)establishment: the pair
+		// event re-probes, and with no validated frames arriving that probe
+		// never promotes — it certainly never erases the mismatch.
+		harness.pairChange();
+		await waitFor(() => harness.openStreams.length === 2, 2000, "reprobe stream_open");
+		expect(registry.get(entry.daemonId)?.status).toBe("error");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).toBe("failed");
+		expect(registry.get(entry.daemonId)?.lifecycleError).toContain("does not match");
+		readiness.close();
 	});
 
-	test("a legacy record with no provider kind keeps the guarded local-volume path", async () => {
-		const entry = server.registry.create({
-			name: "legacy-cleanup",
-			cwd: "",
-			project: basename(repoDir),
-			projectId,
-			labels: [],
-			mode: "spawned",
-			template: "test",
-			status: "asleep",
-			workspace: {
-				kind: "clone",
-				projectId,
-				desiredState: "stopped",
-				profileId: "local",
-			},
-		});
-		const volume = join(workspaceDir, entry.daemonId);
-		mkdirSync(join(volume, ".home"), { recursive: true });
-		writeFileSync(join(volume, ".home", "sentinel"), "x\n");
-		server.registry.update(entry.daemonId, { cwd: volume });
-
-		await server.resourceDeleter.deleteWorkspaceResources(
-			entry.daemonId,
-			server.registry.get(entry.daemonId)!,
-		);
-
-		expect(existsSync(volume)).toBe(false);
+	test("a pair observed before authorization is probed when onRuntimeRunning fires", async () => {
+		const { workspaceDir, registry, harness, readiness } = setup();
+		const entry = seedClone(registry, workspaceDir, { authorizedGeneration: undefined });
+		readiness.watch(entry.daemonId);
+		// Not authorized: check() returns before starting any probe (no timer).
+		expect(harness.openStreams).toHaveLength(0);
+		registry.updateWorkspace(entry.daemonId, { authorizedGeneration: 1 });
+		readiness.onRuntimeRunning(entry.daemonId);
+		await waitFor(() => harness.openStreams.length === 1, 2000, "stream_open after auth");
+		const streamId = harness.openStreams[0]!;
+		for (const frame of helloReady(entry)) harness.deliver(streamId, frame);
+		await waitFor(() => registry.get(entry.daemonId)?.status === "ready", 2000, "ready");
+		readiness.close();
 	});
 
-	test("the local-volume path refuses a volume outside the workspace root", async () => {
-		const outside = join(tmp, "outside-volume");
-		mkdirSync(outside, { recursive: true });
-		writeFileSync(join(outside, "keep.txt"), "keep\n");
-		const entry = server.registry.create({
-			name: "outside-cleanup",
-			cwd: outside,
-			project: basename(repoDir),
-			projectId,
-			labels: [],
-			mode: "spawned",
-			template: "test",
-			status: "asleep",
-			workspace: {
-				kind: "clone",
-				projectId,
-				desiredState: "stopped",
-				profileId: "local",
-				providerKind: "bwrap",
-			},
-		});
-
-		await expect(
-			server.resourceDeleter.deleteWorkspaceResources(
-				entry.daemonId,
-				server.registry.get(entry.daemonId)!,
-			),
-		).rejects.toThrow();
-		expect(existsSync(join(outside, "keep.txt"))).toBe(true);
+	test("a probe superseded by a newer generation is not labeled ready", async () => {
+		const { workspaceDir, registry, harness, readiness } = setup();
+		const entry = seedClone(registry, workspaceDir);
+		readiness.watch(entry.daemonId);
+		await waitFor(() => harness.openStreams.length === 1, 2000, "first stream_open");
+		const staleStream = harness.openStreams[0]!;
+		// A new launch is authorized while the first probe is in flight.
+		registry.updateWorkspace(entry.daemonId, { authorizedGeneration: 2 });
+		for (const frame of helloReady(entry)) harness.deliver(staleStream, frame);
+		await waitFor(() => harness.openStreams.length === 2, 2000, "second stream_open");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).not.toBe("ready");
+		expect(registry.get(entry.daemonId)?.status).not.toBe("ready");
+		const freshStream = harness.openStreams[1]!;
+		for (const frame of helloReady(entry)) harness.deliver(freshStream, frame);
+		await waitFor(() => registry.get(entry.daemonId)?.status === "ready", 2000, "ready");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).toBe("ready");
+		readiness.close();
 	});
 
-	test("the kubernetes path refuses a state path outside the workspace root", async () => {
-		const outsideState = join(tmp, "outside-state");
-		mkdirSync(outsideState, { recursive: true });
-		writeFileSync(join(outsideState, "keep.txt"), "keep\n");
-		// A corrupted record whose identity escapes the managed root.
-		const entry = server.registry.create({
-			name: "escaping-cleanup",
-			cwd: "",
-			project: basename(repoDir),
-			projectId,
-			labels: [],
-			mode: "spawned",
-			template: "test",
-			status: "asleep",
-			workspace: kubernetesWorkspaceRecord(projectId, "../../outside-state"),
-		});
-
-		await expect(
-			server.resourceDeleter.deleteWorkspaceResources(
-				entry.daemonId,
-				server.registry.get(entry.daemonId)!,
-			),
-		).rejects.toThrow();
-		expect(existsSync(join(outsideState, "keep.txt"))).toBe(true);
-	});
-
-	test("a placeholder workspace with no volume is a no-op cleanup", async () => {
-		const entry = server.registry.create({
-			name: "placeholder-cleanup",
-			cwd: "",
-			project: basename(repoDir),
-			projectId,
-			labels: [],
-			mode: "spawned",
-			template: "test",
-			status: "asleep",
-			workspace: {
-				kind: "clone",
-				projectId,
-				desiredState: "stopped",
-				profileId: "local",
-				providerKind: "bwrap",
-			},
-		});
-		await expect(
-			server.resourceDeleter.deleteWorkspaceResources(
-				entry.daemonId,
-				server.registry.get(entry.daemonId)!,
-			),
-		).resolves.toBeUndefined();
+	test("onRuntimeStopped cancels an in-flight probe without promoting it", async () => {
+		const { workspaceDir, registry, harness, readiness } = setup();
+		const entry = seedClone(registry, workspaceDir);
+		readiness.watch(entry.daemonId);
+		await waitFor(() => harness.openStreams.length === 1, 2000, "stream_open");
+		const streamId = harness.openStreams[0]!;
+		readiness.onRuntimeStopped(entry.daemonId);
+		await waitFor(() => harness.events.includes(`detach:${streamId}`), 2000, "cancel detach");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).not.toBe("ready");
+		expect(registry.get(entry.daemonId)?.status).not.toBe("ready");
+		readiness.close();
 	});
 });

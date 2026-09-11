@@ -48,6 +48,14 @@ export const MATERIALIZE_REQUEST_MAX_BYTES = 64 * 1024;
  */
 export const MATERIALIZE_CHUNK_RAW_BYTES = 512 * 1024;
 
+/**
+ * Restore budget for one wake materialization (daemon bulk restore and the
+ * fleet readiness allowance that waits for it share this base). The readiness
+ * allowance adds its own prime window on top; the daemon-side restore uses
+ * exactly this deadline.
+ */
+export const WAKE_MATERIALIZE_TIMEOUT_MS = 120_000;
+
 /** Resume point for a transcript larger than one 64 MiB transfer. */
 export interface MaterializeCursor {
 	/** Relpath (sessions-root-relative, POSIX) of the file to resume at. */

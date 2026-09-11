@@ -174,6 +174,26 @@ function digestEqual(a: Uint8Array, b: Uint8Array): boolean {
 	return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** Parse a daemon's typed `download_bulk_failed` control payload (P3.4).
+ * Null for anything else, so every other control keeps its own consumer. */
+function parseDownloadBulkFailure(
+	payload: unknown,
+): { correlationId: string; code: string; message: string } | null {
+	if (typeof payload !== "object" || payload === null) return null;
+	const control = payload as Record<string, unknown>;
+	if (control.type !== "download_bulk_failed") return null;
+	if (typeof control.correlationId !== "string" || control.correlationId.length === 0) return null;
+	const error = (
+		typeof control.error === "object" && control.error !== null ? control.error : {}
+	) as Record<string, unknown>;
+	const code = typeof error.code === "string" && error.code.length > 0 ? error.code : "unavailable";
+	const message =
+		typeof error.message === "string" && error.message.length > 0
+			? error.message
+			: "download failed";
+	return { correlationId: control.correlationId, code, message };
+}
+
 const enrollmentKey = (workspaceId: string, generation: number): string =>
 	`${workspaceId}\u0000${generation}`;
 
@@ -289,6 +309,10 @@ interface BulkRecord {
 	chunks: Uint8Array[];
 	/** Next expected x-omp-bulk-part number (0-based, strictly sequential). */
 	nextPart: number;
+	/** True while a POST owns the receive loop (one in-flight part at a time). */
+	uploading: boolean;
+	/** In-flight part body reader; aborted when the record leaves "open". */
+	activeReader: ReadableStreamDefaultReader<Uint8Array> | null;
 	resolve: (result: BulkResult) => void;
 }
 
@@ -746,6 +770,7 @@ export class DaemonTransportRegistry {
 
 	#dispatchUpEnvelope(conn: UpConnection, envelope: CallbackEnvelope): void {
 		if (envelope.kind === "heartbeat") return; // transport liveness only
+		this.#consumeBulkFailure(conn, envelope);
 		for (const tap of this.#taps.get(conn.workspaceId) ?? []) {
 			try {
 				tap(envelope);
@@ -756,6 +781,23 @@ export class DaemonTransportRegistry {
 		const stream = this.#virtualStreams.get(conn.workspaceId)?.get(envelope.streamId);
 		if (stream) this.#enqueueVirtual(stream, envelope);
 		// No sink for this streamId: dropped by design (bounded transport).
+	}
+
+	/**
+	 * Fail a fleet-issued capture correlation promptly when the daemon reports
+	 * its clone download dead (`download_bulk_failed`, P3.4) — missing,
+	 * forbidden, oversized, or an upload that broke mid-transfer. Ownership is
+	 * the authenticated up connection: a control naming another workspace's (or
+	 * an unknown/settled) correlation is ignored, never cross-workspace
+	 * cancellation. Without this the download requester would wait out the
+	 * 10-minute bulk TTL for a failure the daemon already knows.
+	 */
+	#consumeBulkFailure(conn: UpConnection, envelope: CallbackEnvelope): void {
+		const failure = parseDownloadBulkFailure(envelope.payload);
+		if (failure === null) return;
+		const record = this.#bulk.get(failure.correlationId);
+		if (!record || record.workspaceId !== conn.workspaceId) return;
+		this.#failBulk(record, record.bytes, `${failure.code}: ${failure.message}`);
 	}
 
 	/** Emit the single pair_ready control once BOTH halves of a connectionId
@@ -1123,6 +1165,8 @@ export class DaemonTransportRegistry {
 			capture: opts?.capture === true,
 			chunks: [],
 			nextPart: 0,
+			uploading: false,
+			activeReader: null,
 			resolve,
 		});
 		return { correlationId, done };
@@ -1132,8 +1176,11 @@ export class DaemonTransportRegistry {
 	 * Release an in-flight bulk correlation without failing the transport.
 	 * The id stops accepting parts, its buffered capture bytes are dropped,
 	 * and an `open` correlation settles `done` as `failed`; a settled one is
-	 * simply forgotten. The id becomes unknown, so a late part-POST is
-	 * rejected typed `invalid_request` exactly like any single-use id.
+	 * simply forgotten. An in-flight part POST is fenced out with it: its
+	 * body reader is aborted so a stalled upload releases the handler at
+	 * once, no late chunk is retained, and its request settles typed non-200
+	 * instead of a 200 receipt. The id becomes unknown, so a late part-POST
+	 * is rejected typed `invalid_request` exactly like any single-use id.
 	 * Idempotent and total: an unknown, settled, or already-cancelled id is a
 	 * no-op, and the call never throws. The quiesce lane calls it on timeout
 	 * and on shutdown (fleet/clone-quiesce.ts; close()).
@@ -1145,7 +1192,7 @@ export class DaemonTransportRegistry {
 		this.#bulk.delete(correlationId);
 		if (record.state !== "open") return;
 		record.state = "failed";
-		record.chunks = [];
+		this.#releaseBulkUpload(record);
 		record.resolve({
 			correlationId: record.correlationId,
 			workspaceId: record.workspaceId,
@@ -1169,6 +1216,28 @@ export class DaemonTransportRegistry {
 				`bulk correlation ${correlationId} is already ${record.state}`,
 			);
 		}
+		// One open correlation admits exactly ONE in-flight part POST: two
+		// concurrent POSTs would each observe the same nextPart and advance it
+		// twice (overlapping bytes, a cap that can be bypassed), so a second
+		// POST arriving while one owns the receive loop is refused.
+		if (record.uploading) {
+			throw callbackError(
+				"conflict",
+				`bulk correlation ${correlationId} already has an upload in flight`,
+			);
+		}
+		record.uploading = true;
+		try {
+			return await this.#receiveBulk(req, record, correlationId);
+		} finally {
+			record.uploading = false;
+		}
+	}
+
+	/** One part POST against an admitted open record: sequence-check, read the
+	 * part under the aggregate cap, then keep the correlation open for the next
+	 * part or settle it. */
+	async #receiveBulk(req: Request, record: BulkRecord, correlationId: string): Promise<Response> {
 		if (req.body === null) {
 			this.#failBulk(record, record.bytes, "bulk upload had no body");
 			throw callbackError("invalid_request", "bulk upload requires a body");
@@ -1201,9 +1270,20 @@ export class DaemonTransportRegistry {
 		let partBytes = 0;
 		try {
 			const reader = req.body.getReader();
+			record.activeReader = reader;
 			for (;;) {
 				const { done, value } = await reader.read();
 				if (done) break;
+				// Fence: the record was released under this read (cancelled, or
+				// expired by the TTL sweep). The late chunk is never buffered
+				// and the transfer is never completed.
+				if (record.state !== "open") {
+					void reader.cancel().catch(() => {});
+					throw callbackError(
+						"invalid_request",
+						`bulk correlation ${correlationId} was released before the transfer completed`,
+					);
+				}
 				partBytes += value.byteLength;
 				if (record.bytes + partBytes > BULK_MAX_BYTES) {
 					void reader.cancel().catch(() => {});
@@ -1223,6 +1303,16 @@ export class DaemonTransportRegistry {
 			if (isCallbackError(error)) throw error;
 			this.#failBulk(record, record.bytes + partBytes, "bulk upload aborted");
 			throw callbackError("unavailable", "bulk upload connection aborted", { cause: error });
+		} finally {
+			record.activeReader = null;
+		}
+		// EOF on a released record (cancelled under the read): a 200 receipt
+		// must never resurrect a correlation the consumer already dropped.
+		if (record.state !== "open") {
+			throw callbackError(
+				"invalid_request",
+				`bulk correlation ${correlationId} was released before the transfer completed`,
+			);
 		}
 		record.bytes += partBytes;
 		record.nextPart += 1;
@@ -1384,10 +1474,21 @@ export class DaemonTransportRegistry {
 		return Buffer.from(merged).toString("utf8");
 	}
 
+	/** Release a record that left "open": abort its in-flight part body reader
+	 * (a stalled upload must not retain the handler) and drop buffered capture
+	 * chunks — a failed or cancelled transfer never serves bytes. */
+	#releaseBulkUpload(record: BulkRecord): void {
+		const reader = record.activeReader;
+		record.activeReader = null;
+		if (reader !== null) void reader.cancel().catch(() => {});
+		record.chunks = [];
+	}
+
 	#failBulk(record: BulkRecord, bytes: number, error: string): void {
 		if (record.state !== "open") return;
 		record.state = "failed";
 		record.bytes = bytes;
+		this.#releaseBulkUpload(record);
 		record.resolve({
 			correlationId: record.correlationId,
 			workspaceId: record.workspaceId,

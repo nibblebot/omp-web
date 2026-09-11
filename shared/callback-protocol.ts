@@ -301,6 +301,156 @@ function parseFlushBoundary(value: unknown): FlushBoundary | null {
 	return boundary;
 }
 
+/** Writer census entry: every field required, every enum closed. */
+function parseQuiesceWriterEntry(
+	value: unknown,
+	index: number,
+	reject: (why: string) => never,
+): QuiesceWriterEntry {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		reject(`writers.descendants[${index}] must be an object`);
+	}
+	const entry = value as Record<string, unknown>;
+	const id = entry["id"];
+	if (typeof id !== "string" || id.length === 0) {
+		reject(`writers.descendants[${index}].id is missing`);
+	}
+	const kind = entry["kind"];
+	if (kind !== "main" && kind !== "sub" && kind !== "advisor") {
+		reject(`writers.descendants[${index}].kind must be "main", "sub", or "advisor"`);
+	}
+	const sessionFile = entry["sessionFile"];
+	if (sessionFile !== null && typeof sessionFile !== "string") {
+		reject(`writers.descendants[${index}].sessionFile must be null or a string`);
+	}
+	const state = entry["state"];
+	if (state !== "flushed" && state !== "parked" && state !== "disposed") {
+		reject(`writers.descendants[${index}].state must be "flushed", "parked", or "disposed"`);
+	}
+	return { id, kind, sessionFile, state };
+}
+
+function parseGitDirtyCounts(
+	value: unknown,
+	reject: (why: string) => never,
+): NonNullable<CloneGitEvidence["dirty"]> {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		reject("git.dirty must be an object");
+	}
+	const counts = value as Record<string, unknown>;
+	const dirty = { added: 0, modified: 0, deleted: 0, untracked: 0 };
+	for (const field of ["added", "modified", "deleted", "untracked"] as const) {
+		const count = counts[field];
+		if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
+			reject(`git.dirty.${field} must be a non-negative integer`);
+		}
+		dirty[field] = count;
+	}
+	return dirty;
+}
+
+function parseGitRemote(
+	value: unknown,
+	reject: (why: string) => never,
+): { name: string; url: string } | null {
+	if (value === null) return null;
+	if (typeof value !== "object" || Array.isArray(value)) {
+		reject("git.remote must be null or an object");
+	}
+	const remote = value as Record<string, unknown>;
+	const name = remote["name"];
+	const url = remote["url"];
+	if (typeof name !== "string" || name.length === 0) reject("git.remote.name is missing");
+	if (typeof url !== "string" || url.length === 0) reject("git.remote.url is missing");
+	return { name, url };
+}
+
+function parseGitRefs(
+	value: unknown,
+	reject: (why: string) => never,
+): NonNullable<CloneGitEvidence["refs"]> {
+	if (!Array.isArray(value)) reject("git.refs must be an array");
+	return value.map((entry, index) => {
+		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+			reject(`git.refs[${index}] must be an object`);
+		}
+		const ref = entry as Record<string, unknown>;
+		const name = ref["name"];
+		const tip = ref["tip"];
+		const preserved = ref["preserved"];
+		if (typeof name !== "string" || name.length === 0) reject(`git.refs[${index}].name is missing`);
+		if (typeof tip !== "string" || tip.length === 0) reject(`git.refs[${index}].tip is missing`);
+		if (typeof preserved !== "boolean") reject(`git.refs[${index}].preserved must be a boolean`);
+		return { name, tip, preserved };
+	});
+}
+
+/**
+ * Parse a `CloneGitEvidence` document. Every optional field is type-checked
+ * (a malformed value is a typed parse failure, never a crash at the delete
+ * decision), and the state-dependent proof the delete gate reads is REQUIRED:
+ * a clean checkout must carry a stashes count, the remote binding, and the
+ * ref-preservation census; a dirty checkout must carry typed dirty counts, a
+ * stashes count, and the remote binding. An omitted proof can therefore never
+ * authorize deletion.
+ */
+function parseCloneGitEvidence(value: unknown, reject: (why: string) => never): CloneGitEvidence {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		reject("git must be an object");
+	}
+	const git = value as Record<string, unknown>;
+	const status = git["status"];
+	if (status !== "clean" && status !== "dirty" && status !== "unknown") {
+		reject('git.status must be "clean", "dirty", or "unknown"');
+	}
+	const evidence: CloneGitEvidence = { status };
+	const head = git["head"];
+	if (head !== undefined) {
+		if (typeof head !== "string" || head.length === 0) {
+			reject("git.head must be a non-empty string");
+		}
+		evidence.head = head;
+	}
+	const branch = git["branch"];
+	if (branch !== undefined) {
+		if (branch !== null && typeof branch !== "string") {
+			reject("git.branch must be a string or null");
+		}
+		evidence.branch = branch;
+	}
+	const unknownReason = git["unknownReason"];
+	if (unknownReason !== undefined) {
+		if (typeof unknownReason !== "string" || unknownReason.length === 0) {
+			reject("git.unknownReason must be a non-empty string");
+		}
+		evidence.unknownReason = unknownReason;
+	}
+	if (git["dirty"] !== undefined) evidence.dirty = parseGitDirtyCounts(git["dirty"], reject);
+	const stashes = git["stashes"];
+	if (stashes !== undefined) {
+		if (typeof stashes !== "number" || !Number.isSafeInteger(stashes) || stashes < 0) {
+			reject("git.stashes must be a non-negative integer");
+		}
+		evidence.stashes = stashes;
+	}
+	if (git["remote"] !== undefined) evidence.remote = parseGitRemote(git["remote"], reject);
+	if (git["refs"] !== undefined) evidence.refs = parseGitRefs(git["refs"], reject);
+	if (status === "dirty") {
+		for (const field of ["dirty", "stashes", "remote"] as const) {
+			if (evidence[field] === undefined) {
+				reject(`git.${field} is required when git.status is "dirty"`);
+			}
+		}
+	} else if (status === "clean") {
+		for (const field of ["stashes", "remote", "refs"] as const) {
+			if (evidence[field] === undefined) {
+				reject(`git.${field} is required when git.status is "clean"`);
+			}
+		}
+	}
+	return evidence;
+}
+
 const MANIFEST_FILE_KINDS: readonly ManifestFileKind[] = [
 	"main",
 	"subagent",
@@ -310,9 +460,10 @@ const MANIFEST_FILE_KINDS: readonly ManifestFileKind[] = [
 
 /**
  * Parse an untrusted {@link QuiesceEvidence} document (byte-bound, strict).
- * Throws CallbackError("invalid_request") on any structural problem; the
- * fleet's semantic cross-checks against its own store live in
- * fleet/clone-quiesce.ts.
+ * Throws CallbackError("invalid_request") on any structural problem, including
+ * a writer census entry or a state-dependent Git proof that is incomplete or
+ * malformed; the fleet's semantic cross-checks against its own store live in
+ * fleet/clone-quiesce-receipt.ts.
  */
 export function parseQuiesceEvidence(raw: string): QuiesceEvidence {
 	const reject: (why: string) => never = (why) => {
@@ -409,16 +560,12 @@ export function parseQuiesceEvidence(raw: string): QuiesceEvidence {
 	}
 	const descendants = writers["descendants"];
 	if (!Array.isArray(descendants)) reject("writers.descendants must be an array");
+	const writerEntries = descendants.map((entry, index) =>
+		parseQuiesceWriterEntry(entry, index, reject),
+	);
 	const note = writers["note"];
 	if (note !== undefined && typeof note !== "string") reject("writers.note must be a string");
-	const gitRaw = record["git"];
-	if (typeof gitRaw !== "object" || gitRaw === null || Array.isArray(gitRaw)) {
-		reject("git must be an object");
-	}
-	const git = gitRaw as Record<string, unknown>;
-	if (git["status"] !== "clean" && git["status"] !== "dirty" && git["status"] !== "unknown") {
-		reject('git.status must be "clean", "dirty", or "unknown"');
-	}
+	const git = parseCloneGitEvidence(record["git"], reject);
 	return {
 		requestId,
 		mainSessionRelpath: mainRaw as string | null,
@@ -432,11 +579,11 @@ export function parseQuiesceEvidence(raw: string): QuiesceEvidence {
 		},
 		writers: {
 			main: "flushed",
-			descendants: descendants as QuiesceWriterEntry[],
+			descendants: writerEntries,
 			advisors: writers["advisors"] as "caught_up" | "inactive",
 			...(note !== undefined ? { note } : {}),
 		},
-		git: git as unknown as CloneGitEvidence,
+		git,
 	};
 }
 

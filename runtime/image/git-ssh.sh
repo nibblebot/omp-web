@@ -1,18 +1,16 @@
 #!/bin/sh
 # Image-owned SSH transport for in-pod Git (P5.4). Git invokes this script as
 # GIT_SSH_COMMAND, so it receives OpenSSH's own argv
-# (`git-ssh.sh [-o ...] <user@host> <command>`).
+# (`git-ssh.sh [-o ...] <user@host> <command>`). No credential is baked into
+# the image: the pinned identity and host key arrive only as pod env from
+# profile Secret references, are written to 0600 temp files, and are removed
+# on every exit path.
 #
-# No host credential is baked into the image. The operator's pinned identity
-# arrives as OMP_GIT_SSH_PRIVATE_KEY and OMP_GIT_SSH_KNOWN_HOSTS pod env from
-# profile Secret references; both are expanded into private temporary files
-# (mode 0600, umask 077) and removed on every exit path.
-#
-# Fixed OpenSSH policy: -F /dev/null (ignore every host and user SSH config),
-# BatchMode=yes and IdentitiesOnly=yes (the pinned identity is the only
-# candidate and nothing can prompt; the pod has no terminal), and
-# StrictHostKeyChecking=yes against the pinned known-hosts file, so an
-# unexpected host key fails the Git operation instead of being accepted.
+# -F /dev/null, BatchMode=yes, and IdentitiesOnly=yes make the pinned key the
+# only candidate and prevent prompts (the pod has no terminal).
+# GlobalKnownHostsFile=/dev/null with the secret-backed UserKnownHostsFile
+# makes that file the exclusive host-key authority, so an unexpected host key
+# fails the Git operation.
 set -eu
 
 if [ -z "${OMP_GIT_SSH_PRIVATE_KEY:-}" ] || [ -z "${OMP_GIT_SSH_KNOWN_HOSTS:-}" ]; then
@@ -40,6 +38,7 @@ ssh -F /dev/null \
 	-o BatchMode=yes \
 	-o IdentitiesOnly=yes \
 	-o StrictHostKeyChecking=yes \
+	-o GlobalKnownHostsFile=/dev/null \
 	-o UserKnownHostsFile="$known_hosts" \
 	-i "$key" \
 	"$@"

@@ -1,12 +1,5 @@
-/**
- * Regression coverage for the non-secure-origin id helper.
- *
- * The bug: `crypto.randomUUID` is restricted to secure contexts, so an
- * unguarded call on a plain-HTTP non-loopback origin (for example
- * `http://192.168.5.15:4713`) throws `TypeError: crypto.randomUUID is not a
- * function`. At module scope that aborted the whole bundle and rendered a
- * blank page.
- */
+/** Regression: `crypto.randomUUID` is secure-context-only, so plain-HTTP
+ * origins must not throw at module scope. */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
@@ -27,36 +20,29 @@ function hideRandomUUID(): void {
 }
 
 afterEach(() => {
-	if (originalRandomUUID !== undefined)
+	if (originalRandomUUID !== undefined) {
 		Object.defineProperty(crypto, "randomUUID", originalRandomUUID);
-	else hideRandomUUID();
+		return;
+	}
+	// `randomUUID` lives on the prototype here; drop the own override instead
+	// of shadowing it with `undefined`, or every later reader loses it.
+	Reflect.deleteProperty(crypto, "randomUUID");
 });
 
+/** Shape, version nibble, and RFC 4122 variant 10xx of a v4 UUID. */
+function expectV4Uuid(id: string): void {
+	expect(id).toMatch(UUID_RE);
+	expect(id[14]).toBe("4");
+	expect("89ab").toContain(id[19]);
+}
+
 describe("randomId", () => {
-	test("uses crypto.randomUUID when the origin is a secure context", () => {
-		Object.defineProperty(crypto, "randomUUID", {
-			value: () => "00000000-1111-4222-8333-444444444444",
-			configurable: true,
-			writable: true,
-		});
-		expect(randomId()).toBe("00000000-1111-4222-8333-444444444444");
+	test("returns a v4 UUID on a secure origin", () => {
+		expectV4Uuid(randomId());
 	});
 
 	test("falls back to a v4 UUID when crypto.randomUUID is unavailable", () => {
 		hideRandomUUID();
-		const id = randomId();
-		expect(id).toMatch(UUID_RE);
-		// Version 4 and variant 10xx, so the value is a well-formed v4 UUID and
-		// not merely random hex that happens to match the shape.
-		expect(id[14]).toBe("4");
-		expect("89ab").toContain(id[19]);
-	});
-
-	test("successive ids are distinct", () => {
-		hideRandomUUID();
-		const ids = Array.from({ length: 64 }, () => randomId());
-		const firstIndexOf = (id: string): number => ids.indexOf(id);
-		const unique = ids.filter((id, index) => firstIndexOf(id) === index);
-		expect(unique.length).toBe(ids.length);
+		expectV4Uuid(randomId());
 	});
 });

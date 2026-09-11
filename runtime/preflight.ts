@@ -13,8 +13,8 @@
  *  - callback URL reachability CLASS-CHECK from the FLEET HOST (DNS + TCP
  *    only; no bytes are ever written, so no credential or request can leak);
  *    optional for bwrap (no gateway required), REQUIRED for a kubernetes
- *    profile, which admits only the HTTPS origin the daemon itself accepts
- *    (server/config.ts parseKubernetesCallbackUrl) and cannot admit the
+ *    profile, which admits only an origin the shared Kubernetes origin
+ *    validator accepts (`shared/callback-url.ts`) and cannot admit the
  *    loopback HTTP URL `serve` derives when none is configured;
  *  - durable state dirs writable (workspace root + logs root; a missing dir
  *    passes when its parent is writable — those dirs are created lazily on
@@ -24,11 +24,10 @@
  *    message (the same denylist the argv builder enforces at request time,
  *    P5.5);
  *  - kubernetes profiles run the provider's own requirement preflight
- *    (`preflightKubernetesProfile`: explicit context, API reachability,
- *    namespace access, Pod/PVC get/create/delete rights, StorageClass,
- *    Secret key names, image) in process, alongside the executable, callback,
- *    and durable-directory checks; an executor that cannot run becomes a
- *    failed row with remediation instead of an exception;
+ *    (`providers/kubernetes/preflight.ts`) in process, alongside the
+ *    executable, callback, and durable-directory checks; an executor that
+ *    cannot run becomes a failed row with remediation instead of an
+ *    exception;
  *  - k8s-only fields on a bwrap profile stay informational: on the bwrap
  *    provider they are inert, and preflight must distinguish an inert
  *    declaration from an unsafe promise.
@@ -45,7 +44,7 @@ import { connect } from "node:net";
 import { lookup } from "node:dns/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ProviderProfile } from "../shared/provider-protocol";
-import { parseKubernetesCallbackUrl } from "../server/config";
+import { parseKubernetesCallbackOrigin } from "../shared/callback-url";
 import {
 	DeniedBindError,
 	assertAllowedSource,
@@ -53,7 +52,8 @@ import {
 	defaultRuntimeLaunch,
 	deriveDenyRoots,
 } from "./bwrap-args";
-import { preflightKubernetesProfile, type KubeExec } from "./providers/kubernetes-provider";
+import type { KubeExec } from "./providers/kubernetes/kubectl";
+import { preflightKubernetesProfile } from "./providers/kubernetes/preflight";
 
 // ---------------------------------------------------------------------------
 // Typed report
@@ -372,18 +372,15 @@ const KUBE_CALLBACK_REMEDIATION =
 	`(bare origin; no credentials, loopback or unspecified address, path, query, or fragment)`;
 
 /**
- * DNS + TCP class-check with a hard deadline, run from the FLEET HOST. It
- * proves the callback endpoint is reachable from this host only; a Kubernetes
- * pod reaches it through the cluster network and gateway policy, which is
- * verified by the pod itself at enrollment. Nothing is ever written to the
- * socket, so no credential or request can leak.
+ * DNS + TCP class-check with a hard deadline, run from the FLEET HOST: it
+ * proves host reachability only (a Pod reaches the gateway through the
+ * cluster network, verified by the Pod itself at enrollment). Nothing is ever
+ * written to the socket, so no credential or request can leak.
  *
- * A kubernetes profile admits exactly the URL the daemon's own startup
- * admission accepts (`server/config.ts` parseKubernetesCallbackUrl), so a URL
- * the Pod would refuse can never pass preflight first. The URL is therefore
- * required for that lane: with none configured `serve` derives a loopback
- * HTTP callback URL, and every kubernetes clone would fail admission with no
- * fleet-host-side signal, so the omission itself is a failed row.
+ * A kubernetes profile admits only what the shared Kubernetes origin
+ * validator returns, and requires the URL at all: with none configured
+ * `serve` derives a loopback HTTP callback URL that admission rejects, so the
+ * omission itself is a failed row instead of a fleet-host-side silence.
  */
 async function checkCallback(
 	profile: ProviderProfile,
@@ -410,7 +407,7 @@ async function checkCallback(
 	let url: URL;
 	if (profile.provider === "kubernetes") {
 		try {
-			url = new URL(parseKubernetesCallbackUrl(urlRaw));
+			url = new URL(parseKubernetesCallbackOrigin(urlRaw));
 		} catch (err) {
 			return {
 				name: "callback-url",
@@ -674,14 +671,11 @@ async function checkProfileSecrets(
 }
 
 /**
- * Kubernetes requirement rows: the provider's own preflight
- * (`preflightKubernetesProfile`, P5.6) run in process against the real
- * cluster API with the same executor the provider uses. It owns the
- * checks for explicit context, API reachability, namespace access, Pod/PVC
- * get/create/delete rights, the StorageClass, the referenced Secret key
- * names, and the image, and its rows already carry specific remediation. An
- * executor that throws (kubectl missing, unspawnable API client) becomes a
- * failed row here instead of escaping the report.
+ * Kubernetes requirement rows: the provider's own requirement preflight
+ * (`providers/kubernetes/preflight.ts`) run in process with the same executor
+ * the provider uses; its rows already carry specific remediation. An executor
+ * that throws (kubectl missing, unspawnable API client) becomes a failed row
+ * here instead of escaping the report.
  */
 async function providerRequirementChecks(
 	profile: ProviderProfile,

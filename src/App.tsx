@@ -110,31 +110,25 @@ const NoActiveSessionPane: Component = () => (
 	</div>
 );
 
-/** The clone workspace behind the attached session, when there is one. */
-function attachedCloneId(): string | undefined {
-	const id = state.currentSessionId;
-	if (id === null) return undefined;
-	return state.daemonRoster.find((d) => d.daemonId === id && d.workspaceKind === "clone")?.daemonId;
-}
-
 /**
  * Roster mode where the attached worker is gone but its transcript is still in
  * memory (the pod shut down, the cluster became unreachable, the session was
  * stopped): keep showing that history READ-ONLY instead of throwing it away.
  * Read-only by construction: no composer, no queue, no send config, and no
- * rename affordance (the plain title replaces SessionHeader). A clone can open
- * the full-fidelity copy from the fleet store, which needs no live worker.
+ * rename affordance. The retained clone identity (state.readOnlySessionId)
+ * offers the full-fidelity copy from the fleet store, which needs no worker.
  */
 const ReadOnlySessionPane: Component = () => (
 	<main class="app-main">
 		<div class="session-header">
-			<h1 class="segment session-name" style={{ margin: "0" }}>
+			<h1 class="segment session-name session-readonly-title">
 				{state.sessionName ?? state.sessionId.slice(0, 8)}
 			</h1>
 		</div>
-		<div class="readonly-strip" role="status">
+		<div class="session-readonly-strip" role="status">
 			<span>worker not connected — history is read-only</span>
-			<Show when={attachedCloneId()} keyed>
+			{/* Retained clone id, else the still-attached transitional clone. */}
+			<Show when={state.readOnlySessionId ?? (state.currentSessionId || null)} keyed>
 				{(id) => (
 					<button type="button" class="btn btn-small" onClick={() => void openStoredHistory(id)}>
 						Open stored history

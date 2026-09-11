@@ -3,10 +3,12 @@
  * pure disk read over FleetLogStore — never touches a daemon, the SDK, or
  * compute, so browsing fleet-stored history can never wake a workspace.
  *
- * Layering: imports only fleet/log-store.ts, shared/stats-types.ts, node
- * builtins and ./ — never server/ or src/. Reuses the stats app's route
- * registry convention (Route + dispatchRequest + json/errorJson) so the
- * fleet control plane can mount it with one line beside /ctl/stats.
+ * Layering: imports only fleet/log-store.ts, fleet/roster-projection.ts (a
+ * type), shared/stats-types.ts, node builtins and ./ — never server/ or src/.
+ * Reuses the stats app's route registry convention (Route + dispatchRequest +
+ * json/errorJson) so the fleet control plane can mount it with one line beside
+ * /ctl/stats. The stored-head reader (title/cwd enrichment) is exported here so
+ * the roster projection parses heads with the same convention.
  *
  * Route contract (frozen with Lifecycle + Frontend):
  *   GET /ctl/stored/workspaces
@@ -24,6 +26,7 @@
 import { json, errorJson, dispatchRequest } from "./stats/http";
 import type { Route } from "./stats/types";
 import type { FleetLogStore, StoredFileInfo, StoredSessionInfo } from "./log-store";
+import type { CloneHistoryInfo } from "./roster-projection";
 import type {
 	StoredFileKind,
 	StoredSessionDetail,
@@ -194,13 +197,18 @@ function detailRow(
 // ---------------------------------------------------------------------------
 
 /** Structural store subset the head reader needs (FleetLogStore satisfies it). */
-export interface StoredHeadStore {
+export interface StoredSessionHeadStore {
 	readStoredPrefix(
 		workspaceId: string,
 		sessionId: string,
 		relpath: string,
 		maxBytes: number,
 	): Buffer | null;
+}
+
+/** Structural store subset the clone-history projection needs (FleetLogStore satisfies it). */
+export interface StoredSessionHistoryStore extends StoredSessionHeadStore {
+	listStoredSessions(workspaceId: string): StoredSessionInfo[];
 }
 
 /** Head read bound: the fixed 256 B title slot + header + a few records. */
@@ -211,8 +219,8 @@ const HEAD_READ_BYTES = 64 * 1024;
  * so roster-facing callers (the clone title projection) parse heads with the
  * SAME convention as `/ctl/stored/*` rather than a second one.
  */
-export function headOf(
-	store: StoredHeadStore,
+export function readStoredSessionHead(
+	store: StoredSessionHeadStore,
 	workspaceId: string,
 	sessionId: string,
 	relpath: string,
@@ -262,6 +270,44 @@ export function headOf(
 		// Header id mismatch: still a real stored file; surface the head.
 	}
 	return { title, cwd, id, firstTs, lastTs };
+}
+
+/**
+ * Derive a clone row's stored-history title/emptiness from the fleet log store.
+ * The store is the same read model `/ctl/stored/sessions` serves (join key =
+ * the clone's workspaceId), and the head is parsed with
+ * {@link readStoredSessionHead} so the roster title matches the
+ * dropdown/transcript surface. Never throws: a missing/unreadable store,
+ * workspace, session, or head degrades to `{ empty: true }` — the row shows a
+ * plain "New session" instead of failing the roster broadcast.
+ *
+ * Cost: one `listStoredSessions` (readdir of `logs/<workspaceId>` + a
+ * per-session subtree stat walk) plus one bounded 64 KiB head read, so callers
+ * that run per broadcast MUST cache (the edge memoizes + invalidates on
+ * FleetLogStore.onStoredChange).
+ */
+export function cloneStoredHistory(
+	store: StoredSessionHistoryStore | undefined,
+	workspaceId: string,
+): CloneHistoryInfo {
+	if (store === undefined) return { empty: true };
+	try {
+		const sessions = store.listStoredSessions(workspaceId);
+		// Newest stored session wins — the same newest-first order the
+		// dropdown lists its rows in.
+		let newest: StoredSessionInfo | undefined;
+		for (const session of sessions) {
+			if (newest === undefined || session.mtimeMs > newest.mtimeMs) newest = session;
+		}
+		const relpath = newest?.mainRelpath;
+		if (newest === undefined || relpath === undefined) return { empty: true };
+		const title = readStoredSessionHead(store, workspaceId, newest.sessionId, relpath)?.title;
+		return typeof title === "string" && title.length > 0
+			? { title, empty: false }
+			: { empty: true };
+	} catch {
+		return { empty: true };
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +480,7 @@ function sessionsRoute(deps: StoredAppDeps): Route {
 				const s = sessions[i]!;
 				const mainRel = s.mainRelpath;
 				if (mainRel === undefined) continue;
-				const head = headOf(deps.store, s.workspaceId, s.sessionId, mainRel);
+				const head = readStoredSessionHead(deps.store, s.workspaceId, s.sessionId, mainRel);
 				if (head === null) continue;
 				s.title = head.title;
 				s.cwd = head.cwd;

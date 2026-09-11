@@ -17,9 +17,12 @@
  *      pinned pi-ai is 17.1.8, and `omp-web --version` prints the version
  *      despite the poisoned store. Both installed provider executables are
  *      then executed: each rejects a request written against another
- *      `providerProto` version and answers a valid one with providerProto 2.
- *      The kubernetes probe pins OMP_KUBE_BIN at a nonexistent binary, so
- *      the walk stays offline.
+ *      `providerProto` version (typed invalid_request) and answers a valid
+ *      inspect whose envelope the shared parser accepts — bwrap reports the
+ *      fresh workspace `missing`, kubernetes (pinned at a nonexistent
+ *      OMP_KUBE_BIN) fails typed `unavailable`. Every envelope is parsed
+ *      through parseProviderResponse, so a version-only or wrong-shape
+ *      response fails the check. The walk stays offline.
  *   3. fixture repo (git init + commit) with one linked worktree
  *   4. first-run config written to ~/.omp-web/config.json (the serve offer's
  *      TTY-gated write, done directly here — workspaceDir only)
@@ -47,6 +50,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Subprocess } from "bun";
+import { parseProviderResponse, type ProviderResponse } from "../shared/provider-protocol";
 
 const ROOT = join(import.meta.dir, "..");
 const KEEP = process.argv.includes("--keep");
@@ -96,15 +100,19 @@ function sandboxEnv(extra: Record<string, string> = {}): Record<string, string> 
 	// shell's OMP_FLEET_STATE points the sandboxed fleet at the developer's
 	// real (locked) state file, and OMP_FLEET_LOCAL_TEMPLATE would replace the
 	// installed bundle's spawn template with the source entry — defeating the
-	// installed-mode assertions. Script-provided knobs ride `extra` (applied
-	// after the scrub, so they survive).
+	// installed-mode assertions. OMP_KUBE_* wait overrides are fail-closed
+	// (a present non-integer value is a typed invalid_request), so an inherited
+	// dev-shell typo would masquerade as an installed-provider failure.
+	// Script-provided knobs ride `extra` (applied after the scrub, so they
+	// survive).
 	const inherited = Object.fromEntries(
 		Object.entries(process.env).filter(
 			(entry): entry is [string, string] =>
 				typeof entry[1] === "string" &&
 				!entry[0].startsWith("OMP_FLEET_") &&
 				!entry[0].startsWith("OMP_SESSION_") &&
-				!entry[0].startsWith("OMP_WEB_"),
+				!entry[0].startsWith("OMP_WEB_") &&
+				!entry[0].startsWith("OMP_KUBE_"),
 		),
 	);
 	return {
@@ -150,11 +158,8 @@ interface ProviderRun {
 	code: number;
 	stdout: string;
 	stderr: string;
-	response: {
-		ok?: unknown;
-		providerProto?: unknown;
-		error?: { code?: unknown; message?: unknown };
-	} | null;
+	/** Version-validated envelope; null when stdout is not a provider response. */
+	response: ProviderResponse | null;
 	/** One-line detail for `check` (the envelope or the raw streams). */
 	detail: string;
 }
@@ -187,16 +192,22 @@ async function runProvider(
 	]);
 	clearTimeout(timer);
 	const code = (await proc.exited) as number;
-	let response: ProviderRun["response"] = null;
+	// Parse through the shared validator: a version-only, wrong-shape, or
+	// non-versioned envelope throws, so `response === null` is the gate's
+	// signal that the installed executable did not answer the protocol.
+	let response: ProviderResponse | null = null;
+	let parseError: string | null = null;
 	try {
-		response = JSON.parse(stdout.trim()) as ProviderRun["response"];
-	} catch {}
+		response = parseProviderResponse(stdout.trim());
+	} catch (err) {
+		parseError = err instanceof Error ? err.message : String(err);
+	}
 	return {
 		code,
 		stdout,
 		stderr,
 		response,
-		detail: `${name}: exit ${code}; stdout ${stdout.trim().slice(0, 240)}; stderr ${stderr.trim().slice(-160)}`,
+		detail: `${name}: exit ${code}; stdout ${stdout.trim().slice(0, 240)}; stderr ${stderr.trim().slice(-160)}${parseError !== null ? `; ${parseError}` : ""}`,
 	};
 }
 
@@ -425,11 +436,11 @@ try {
 
 	// 2c. installed provider protocol (OMP_PROVIDER_PROTO = 2): BOTH shipped
 	// executables must reject a request written against another protocol
-	// version and answer a valid request with a versioned envelope. The
-	// kubernetes probe pins OMP_KUBE_BIN at a nonexistent binary so the
-	// offline walk never touches a real cluster; its envelope is still a
-	// versioned provider response (unavailable), which is all this phase
-	// asserts.
+	// version and answer a valid inspect. Every stdout is parsed with the
+	// shared validator, so a version-only, wrong-shape, or non-versioned
+	// envelope fails the check. The kubernetes probe pins OMP_KUBE_BIN at a
+	// nonexistent binary so the offline walk never touches a real cluster:
+	// its valid inspect is the typed `unavailable` failure.
 	const providerStateDir = join(sandbox, "provider-state");
 	const providerRequest = (
 		kind: "bwrap" | "kubernetes",
@@ -488,13 +499,12 @@ try {
 			providerRequest(kind),
 			providerEnv,
 		);
-		const missingEnvelope = missingProto.response;
 		check(
 			`installed ${kind} provider rejects a request without providerProto`,
 			missingProto.code === 0 &&
-				missingEnvelope !== null &&
-				missingEnvelope.ok === false &&
-				missingEnvelope.error?.code === "invalid_request",
+				missingProto.response !== null &&
+				missingProto.response.ok === false &&
+				missingProto.response.error.code === "invalid_request",
 			missingProto.detail,
 		);
 		const wrongProto = await runProvider(
@@ -504,13 +514,12 @@ try {
 			providerRequest(kind, 1),
 			providerEnv,
 		);
-		const wrongEnvelope = wrongProto.response;
 		check(
 			`installed ${kind} provider rejects providerProto 1`,
 			wrongProto.code === 0 &&
-				wrongEnvelope !== null &&
-				wrongEnvelope.ok === false &&
-				wrongEnvelope.error?.code === "invalid_request",
+				wrongProto.response !== null &&
+				wrongProto.response.ok === false &&
+				wrongProto.response.error.code === "invalid_request",
 			wrongProto.detail,
 		);
 		const valid = await runProvider(
@@ -520,11 +529,28 @@ try {
 			providerRequest(kind, 2),
 			providerEnv,
 		);
-		check(
-			`installed ${kind} provider answers a valid request with providerProto 2`,
-			valid.code === 0 && valid.response?.providerProto === 2,
-			valid.detail,
-		);
+		const validEnvelope = valid.response;
+		if (kind === "bwrap") {
+			// A fresh stateDir: the answer must be a real observation, not a
+			// version-only echo (which the validator rejects outright).
+			check(
+				"installed bwrap provider inspect reports the fresh workspace as missing",
+				valid.code === 0 &&
+					validEnvelope !== null &&
+					validEnvelope.ok === true &&
+					validEnvelope.observed === "missing",
+				valid.detail,
+			);
+		} else {
+			check(
+				"installed kubernetes provider inspect fails typed unavailable offline",
+				valid.code === 0 &&
+					validEnvelope !== null &&
+					validEnvelope.ok === false &&
+					validEnvelope.error.code === "unavailable",
+				valid.detail,
+			);
+		}
 	}
 	r = await run("--version", [bin, "--version"]);
 	check(

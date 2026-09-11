@@ -28,22 +28,20 @@
  * - Stop preserves checkout and session logs; only the verified gate
  *   deletes. Idle handling stays fleet-owned (P6.4): this service never
  *   stops compute on its own; explicit stop/wake are the only transitions.
+ * - Readiness is NEVER written here. A provider-reported running generation
+ *   publishes the transitional status "session" with lifecycleStage
+ *   "callback" (plus the liveness watch and the readiness hook); the
+ *   readiness owner (fleet/clone-readiness.ts) is the ONLY writer of status
+ *   "ready" / stage "ready", and only after a validated hello_ok+ready.
+ *   This bounded liveness watcher only ever DEMOTES.
  *
  * The fleet server injects everything external (registry, config, callback
  * transport, log store, resource deleter, event ring, log-tap attach, and
  * the callback base URL); this module has no HTTP surface of its own.
  */
 
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import {
-	existsSync,
-	mkdtempSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	unlinkSync,
-} from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
@@ -61,7 +59,8 @@ import type { FleetConfig } from "./config";
 import type { DaemonTransportRegistry } from "./daemon-transport";
 import type { FleetLogStore } from "./log-store";
 import type { FleetEventLog } from "./events";
-import type { WorkspaceResourceDeleter } from "./server";
+import type { WorkspaceResourceDeleter } from "./workspace-resources";
+import { verifyVolumeAgainstStore } from "./workspace-volume-verification";
 import {
 	computeSourcePinDigest,
 	newResourceIdentity,
@@ -76,8 +75,12 @@ import {
 	type ProviderResponse,
 } from "../shared/provider-protocol";
 import { acquireFileLock, LockHeldError, type FileLock } from "../shared/file-lock";
-import { providerOpTimeouts, runProviderOp, type ProviderOpWaits } from "../runtime/provider-exec";
-import { parseKubernetesCallbackUrl } from "../server/config";
+import { runProviderOp } from "../runtime/provider-exec";
+import {
+	kubernetesOpTimeouts,
+	readKubernetesWaits,
+} from "../runtime/providers/kubernetes/timeouts";
+import { parseKubernetesCallbackOrigin } from "../shared/callback-url";
 import {
 	deriveWorkspaceBranch,
 	PrepareWorkspaceError,
@@ -85,29 +88,24 @@ import {
 	readWorkspaceInitMarker,
 	resolveWorkspacePin,
 	validateWorkspaceRef,
+	type WorkspaceInitMarker,
 } from "../runtime/prepare-workspace";
 import { verifyWorkspaceLogs } from "../runtime/verify-store";
 import { seedSandboxBaseline } from "../runtime/sandbox-baseline";
-import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "../runtime/export-sessions";
-import { RESERVED_SECRET_ENV_KEYS } from "../runtime/bwrap-args";
+import { RESERVED_SECRET_ENV_KEYS, KUBERNETES_RESERVED_ENV_KEYS } from "../runtime/sandbox-env";
 import {
 	readCallbackEnvFile,
 	writeCallbackEnvFile,
 	type CallbackEnvRecord,
 } from "../runtime/callback-env";
-import {
-	CloneQuiesceError,
-	receiptAllowsDelete,
-	type CloneQuiesceRequest,
-	type CloneQuiesceReceipt,
-} from "./clone-quiesce";
+import { CloneQuiesceError, type CloneQuiesceReceipt } from "./clone-quiesce";
+import { receiptAllowsDelete, type CloneQuiesceRequest } from "./clone-quiesce-receipt";
 import {
 	WakeMaterializeError,
 	materializeMissingSessionFiles,
 	pickNewestSessionId,
 	resolveMainSessionFile,
 } from "./wake-materialize";
-import type { ArchiveManifest } from "../shared/archive-manifest";
 import { isNormalizedPosixRelativePath } from "../shared/archive-manifest";
 
 // ---------------------------------------------------------------------------
@@ -122,28 +120,6 @@ const KUBERNETES_WORKSPACE_ROOT = "/workspace";
  * fleet-host volume path.
  */
 const KUBERNETES_SESSIONS_ROOT = `${KUBERNETES_WORKSPACE_ROOT}/.home/agent/sessions`;
-/**
- * Env names the kubernetes provider owns on the Pod. A profile secretRef may
- * never shadow one (it would duplicate a container env entry and could
- * override the callback pair or the workspace identity).
- */
-const KUBERNETES_RESERVED_ENV_KEYS: readonly string[] = [
-	"OMP_WORKSPACE_ID",
-	"OMP_WORKSPACE_GENERATION",
-	"OMP_WORKSPACE_TOKEN",
-	"OMP_WORKSPACE_ROOT",
-	"OMP_WORKSPACE_DIR",
-	"OMP_PROVIDER_PROTO",
-	"OMP_PREP_SOURCE_REMOTE",
-	"OMP_PREP_REVISION",
-	"OMP_PREP_BRANCH",
-	"OMP_SESSION_RESUME_REQUIRED",
-	"HOME",
-	"PATH",
-	"LANG",
-	"TERM",
-	"PI_CODING_AGENT_DIR",
-];
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // ---------------------------------------------------------------------------
@@ -235,6 +211,20 @@ export interface WorkspaceLifecycleDeps {
 	 * receipt collected), so bwrap-only wiring is unaffected.
 	 */
 	collectCloneEvidence?: (request: CloneQuiesceRequest) => Promise<CloneQuiesceReceipt>;
+	/**
+	 * Fired after a running generation is AUTHORIZED and persisted (a
+	 * successful ensure-running, or a reattach of a live same-generation
+	 * resource). The readiness owner validates hello_ok/ready from here — the
+	 * lifecycle itself never promotes a pair to ready.
+	 */
+	onRuntimeRunning?(workspaceId: string): void;
+	/**
+	 * Fired after compute is PROVEN stopped: a successful explicit stop, the
+	 * delete gate's stop proof / final removal, or boot reconciliation
+	 * fencing a stray attempt. Lets the readiness owner cancel a pending
+	 * probe for a workspace that is no longer live.
+	 */
+	onRuntimeStopped?(workspaceId: string): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,96 +306,6 @@ async function runGit(
 	return await runCommand(["git", "-C", cwd, ...args], opts);
 }
 
-/** sha256 hex of a file read via a bounded chunk stream. */
-async function sha256File(absolute: string): Promise<string> {
-	const hash = createHash("sha256");
-	const file = Bun.file(absolute);
-	const stream = file.stream();
-	const reader = stream.getReader();
-	const chunk = new Uint8Array(256 * 1024);
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		let offset = 0;
-		while (offset < value.length) {
-			const take = Math.min(chunk.length, value.length - offset);
-			hash.update(value.subarray(offset, offset + take));
-			offset += take;
-		}
-	}
-	return hash.digest("hex");
-}
-
-/** One volume file the completeness cross-check compares against the store. */
-interface VolumeFile {
-	sessionId: string;
-	/** POSIX relpath inside the session dir (manifest rules). */
-	relpath: string;
-	size: number;
-}
-
-/**
- * Walk one volume session dir for regular files (no traversal, no symlinks),
- * mirroring the manifest relpath rules, bounded like the export gate.
- */
-function walkSessionDir(
-	sessionDir: string,
-	sessionId: string,
-	state: { files: number; bytes: number },
-	out: VolumeFile[],
-): void {
-	let entries;
-	try {
-		entries = readdirSync(sessionDir, { withFileTypes: true });
-	} catch {
-		return; // Missing/unreadable session dir: nothing to enumerate.
-	}
-	for (const dent of entries) {
-		const absolute = join(sessionDir, dent.name);
-		let stats: ReturnType<typeof statSync>;
-		try {
-			stats = statSync(absolute);
-		} catch {
-			continue;
-		}
-		if (stats.isSymbolicLink()) continue; // Reject symlinks (P7.2).
-		if (stats.isDirectory()) {
-			walkSessionDir(absolute, sessionId, state, out);
-			continue;
-		}
-		if (!stats.isFile()) continue; // Sockets/fifos are rejected.
-		if (state.files >= MAX_EXPORT_FILES || state.bytes + stats.size > MAX_EXPORT_BYTES) {
-			continue; // Bound exceeded; the gate below reports the shortfall.
-		}
-		const rel = relativePosix(sessionDir, absolute);
-		if (rel.length === 0 || !isNormalizedPosixRelativePath(rel)) continue;
-		state.files += 1;
-		state.bytes += stats.size;
-		out.push({ sessionId, relpath: rel, size: stats.size });
-	}
-}
-
-/** Read one directory's entries (missing/unreadable → []). */
-function listDir(dir: string): Array<{ name: string; isDirectory(): boolean }> {
-	try {
-		return readdirSync(dir, { withFileTypes: true }) as unknown as Array<{
-			name: string;
-			isDirectory(): boolean;
-		}>;
-	} catch {
-		return [];
-	}
-}
-
-function relativePosix(fromDir: string, absolute: string): string {
-	const rel = absolute
-		.slice(fromDir.length)
-		.replace(/^[/\\]+/, "")
-		.split("\\")
-		.join("/");
-	return rel;
-}
-
 /**
  * The generation an operation must fence: the newest ATTEMPTED generation
  * whenever it is ahead of the authorized one (a failed launch created, or
@@ -419,35 +319,6 @@ function fencedGeneration(record: WorkspaceRecord | undefined): number | undefin
 	const attempted = record?.lastAttemptedGeneration;
 	if (attempted !== undefined && attempted > (authorized ?? 0)) return attempted;
 	return authorized ?? attempted;
-}
-
-/**
- * Kubernetes wait defaults (ms), mirroring runtime/providers/kubernetes-provider.ts
- * (`ENSURE_WAIT_MS_DEFAULT`/`STOP_WAIT_MS_DEFAULT`/`DELETE_WAIT_MS_DEFAULT`,
- * which are private there). The fleet computes the provider's own invocation
- * budget from the SAME env knobs the provider reads: without them a cold pull
- * or a deletion the provider legitimately allows would be killed fleet-side at
- * the default provider-op timeout.
- */
-const KUBE_ENSURE_WAIT_MS_DEFAULT = 120_000;
-const KUBE_STOP_WAIT_MS_DEFAULT = 60_000;
-const KUBE_DELETE_WAIT_MS_DEFAULT = 60_000;
-
-/** One wait override from the env, parsed exactly like the provider does. */
-function envWaitMs(name: string, fallback: number): number {
-	const raw = process.env[name];
-	if (raw === undefined) return fallback;
-	const parsed = Number.parseInt(raw, 10);
-	return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-/** The provider waits this fleet invocation must budget for. */
-function kubernetesProviderWaits(): ProviderOpWaits {
-	return {
-		ensureWaitMs: envWaitMs("OMP_KUBE_ENSURE_WAIT_MS", KUBE_ENSURE_WAIT_MS_DEFAULT),
-		stopWaitMs: envWaitMs("OMP_KUBE_STOP_WAIT_MS", KUBE_STOP_WAIT_MS_DEFAULT),
-		deleteWaitMs: envWaitMs("OMP_KUBE_DELETE_WAIT_MS", KUBE_DELETE_WAIT_MS_DEFAULT),
-	};
 }
 
 /**
@@ -506,12 +377,13 @@ function preparesVolumeProviderSide(
 }
 
 /**
- * Post-ready pair-loss poll cadence (ms). Once the pair has been observed
- * live, the watcher keeps a slower watch: a sandbox whose worker disappears
- * AFTER readiness (nothing else would re-inspect it) is probed at most once
- * per interval and demoted, never left presented as live. 5 s is slow enough
- * that a healthy live pair costs nothing (the live branch never inspects) and
- * a lost pair is detected promptly.
+ * Post-ready pair-loss poll cadence (ms). Once readiness has been VALIDATED
+ * (lifecycleStage "ready", written by the readiness owner), the watcher keeps
+ * a slower watch: a sandbox whose worker disappears AFTER readiness (nothing
+ * else would re-inspect it) is probed at most once per interval and demoted,
+ * never left presented as live. 5 s is slow enough that a healthy live pair
+ * costs nothing (the live branch never inspects) and a lost pair is detected
+ * promptly.
  */
 const PAIR_POST_READY_POLL_MS = 5_000;
 
@@ -536,7 +408,7 @@ export class WorkspaceLifecycle {
 	 * (cross-process), acquired inside {@link #runCloneOp}.
 	 */
 	readonly #queues = new Map<string, Promise<void>>();
-	/** Bounded pair-readiness watchers (setTimeout id per workspace). */
+	/** Bounded liveness watchers (setTimeout id per workspace). */
 	readonly #pairWatchers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	constructor(deps: WorkspaceLifecycleDeps) {
@@ -843,8 +715,9 @@ export class WorkspaceLifecycle {
 	/**
 	 * Start/wake: ensure-running. Resolves when the provider confirms the
 	 * compute is running and the enrollment is persisted; never blocks on
-	 * pair readiness (callback → ready rides the roster via the bounded
-	 * pair watcher). Rejects with typed errors otherwise.
+	 * callback readiness (the readiness owner validates hello_ok/ready and
+	 * marks readiness; the bounded liveness watcher only demotes). Rejects
+	 * with typed errors otherwise.
 	 *
 	 * P8.9 wake resume: `resumeSessionId` names the session this wake
 	 * should boot into (the edge pre-validates it against the fleet store
@@ -934,6 +807,7 @@ export class WorkspaceLifecycle {
 				`clone ${daemonId} stopped (gen ${generation ?? "never-started"})`,
 				daemonId,
 			);
+			this.#deps.onRuntimeStopped?.(daemonId);
 		});
 	}
 
@@ -1020,6 +894,9 @@ export class WorkspaceLifecycle {
 		for (const entry of this.#deps.registry.list()) {
 			if (entry.workspace?.kind !== "clone") continue;
 			const record = entry.workspace;
+			if (record.providerKind === undefined) {
+				continue; // Identity unresolved (retained unavailable); never probed.
+			}
 			if (record.providerKind === "kubernetes" && record.kubernetes === undefined) {
 				continue; // Unavailable identity: retained for manual recovery.
 			}
@@ -1098,26 +975,76 @@ export class WorkspaceLifecycle {
 				continue;
 			}
 			const volumeRoot = join(this.#deps.config.workspaceDir, daemonId);
-			let hasVerifiedMarker = false;
+			let marker: WorkspaceInitMarker | null;
 			try {
-				hasVerifiedMarker = (await readWorkspaceInitMarker(volumeRoot)) !== null;
+				marker = await readWorkspaceInitMarker(volumeRoot);
 			} catch (err) {
 				this.#log(
 					"warn",
 					`clone boot reconcile: cannot read the preparation marker for ${daemonId}: ${err instanceof Error ? err.message : String(err)}`,
 					daemonId,
 				);
+				this.#markIdentityUnavailable(
+					entry,
+					"legacy workspace preparation marker is unreadable; its compute and storage are retained for manual recovery",
+				);
 				continue;
 			}
-			if (hasVerifiedMarker) {
+			if (this.#legacyMarkerMatchesRecord(marker, record, daemonId)) {
 				this.#deps.registry.updateWorkspace(daemonId, { providerKind: "bwrap" });
 				this.#log(
 					"info",
 					`clone boot reconcile: ${daemonId} inferred providerKind bwrap from its verified preparation marker`,
 					daemonId,
 				);
+				continue;
 			}
+			// An absent marker, or one whose workspace id/source/branch/pinned
+			// commit does not match this record, is never proof of identity:
+			// retaining the record unavailable (and skipping its provider) is
+			// the only safe outcome — the volume may belong to another
+			// workspace or may never have been prepared.
+			this.#markIdentityUnavailable(
+				entry,
+				"legacy workspace has no verified preparation marker matching its persisted identity; its compute and storage are retained for manual recovery",
+			);
 		}
+	}
+
+	/**
+	 * True only when a legacy record's verified preparation marker names the
+	 * SAME workspace identity: id, source, branch, and pinned commit must all
+	 * match. A marker copied from another workspace (or a record whose
+	 * provenance was lost) is never accepted as proof of provider identity.
+	 */
+	#legacyMarkerMatchesRecord(
+		marker: WorkspaceInitMarker | null,
+		record: WorkspaceRecord,
+		daemonId: string,
+	): boolean {
+		if (marker === null) return false;
+		const source = record.source;
+		if (
+			source === undefined ||
+			record.branch === undefined ||
+			record.pinnedRevision === undefined
+		) {
+			return false;
+		}
+		const sourceMatches =
+			source.local !== undefined
+				? source.remote === undefined &&
+					marker.source.local === source.local &&
+					marker.source.remote === undefined
+				: source.remote !== undefined &&
+					marker.source.local === undefined &&
+					marker.source.remote === source.remote;
+		return (
+			marker.workspaceId === daemonId &&
+			marker.branch === record.branch &&
+			marker.resolvedCommit === record.pinnedRevision &&
+			sourceMatches
+		);
 	}
 
 	/** One entry's inspect/reattach/ensure pass (runs under the op queue). */
@@ -1125,6 +1052,7 @@ export class WorkspaceLifecycle {
 		const entry = this.#deps.registry.get(daemonId);
 		if (entry?.workspace?.kind !== "clone") return;
 		const record = entry.workspace;
+		if (record.providerKind === undefined) return; // Identity unresolved: never probed.
 		if (record.providerKind === "kubernetes" && record.kubernetes === undefined) return;
 		if (
 			record.providerHandle === undefined &&
@@ -1162,10 +1090,15 @@ export class WorkspaceLifecycle {
 				await this.#reconcileAttempt(daemonId, attempted);
 				return;
 			}
-			// Reattach: same generation, refresh handle, surface liveness.
+			// Reattach: same generation, refresh handle, publish the
+			// provider-observed running state (matching #ensure). Readiness is
+			// NOT this path's to write — the readiness owner validates
+			// hello_ok/ready — so #publishRuntimeRunning writes the transitional
+			// rung + callback stage, arms the liveness watcher, and fires the
+			// running hook; a clone reattached after a fleet restart is
+			// monitored exactly like one that was freshly ensured.
 			this.#deps.registry.updateWorkspace(daemonId, { providerHandle: response.handle });
-			this.#deps.registry.setStatus(daemonId, "ready");
-			this.#setStage(daemonId, "ready");
+			this.#publishRuntimeRunning(daemonId);
 			this.#log("info", `clone boot reconcile: ${daemonId} reattached (running)`, daemonId);
 			return;
 		}
@@ -1250,6 +1183,7 @@ export class WorkspaceLifecycle {
 				lifecycleStage: undefined,
 				lifecycleError: undefined,
 			});
+			this.#deps.onRuntimeStopped?.(daemonId);
 			this.#log(
 				"info",
 				`clone boot reconcile: ${daemonId} stopped its unmanaged in-flight attempt (gen ${attempt})`,
@@ -1308,9 +1242,11 @@ export class WorkspaceLifecycle {
 	 * failure leaves a retryable record of the attempt; a failure KEEPS that
 	 * generation and the original handoff (never revoking the credential a
 	 * live or partially created resource may already hold). On success:
-	 * provider handle, authorized generation, desiredState running, status
-	 * ready persist; lifecycleStage advances runtime → callback (pair watcher
-	 * → ready).
+	 * provider handle, authorized generation, desiredState running, and the
+	 * TRANSITIONAL status "session" persist; lifecycleStage advances
+	 * runtime → callback, and the readiness owner promotes callback → ready
+	 * after a validated hello_ok/ready (this service never promotes on a pair
+	 * observation and never writes "ready" itself).
 	 */
 	async #ensure(
 		entry: RegistryEntry,
@@ -1374,13 +1310,15 @@ export class WorkspaceLifecycle {
 			// so the retry reuses the credential the attempt may already have
 			// handed to a live or partially created resource.
 			reuseToken = this.#recoverCallbackToken(entry, inFlightGen);
-			if (reuseToken !== undefined) {
+			if (reuseToken !== undefined && !this.#generationWasQuiesced(record, inFlightGen)) {
 				generation = inFlightGen;
 				reattaching = inspect !== null && inspect.observed === "running";
 			} else if (inspect !== null && inspect.observed === "running") {
-				// A live attempt with no recoverable credential: replacing it
-				// would put two writers on one volume, so prove the
-				// predecessor terminated first, then use a LARGER generation.
+				// A live attempt with no recoverable credential, or one whose
+				// daemon stop evidence already quiesced: replacing it would
+				// put two writers on one volume (or reattach a daemon that
+				// rejects every command), so prove the predecessor terminated
+				// first, then use a LARGER generation.
 				const stop = await this.#runCloneOp(daemonId, "stop", handle, inFlightGen);
 				if (stop.observed === "running") {
 					throw new CloneLifecycleError(
@@ -1394,9 +1332,14 @@ export class WorkspaceLifecycle {
 			}
 		} else if (inspect !== null && inspect.observed === "running" && currentGen !== undefined) {
 			// Reattach path. If the persisted binding matches this
-			// generation AND the state-file token is recoverable, reuse it —
-			// the daemon's live pair keeps its original credential.
-			if (record.enrollment !== undefined && record.enrollment.generation === currentGen) {
+			// generation, the state-file token is recoverable, and no stop
+			// evidence has quiesced the daemon, reuse it — the daemon's live
+			// pair keeps its original credential.
+			if (
+				record.enrollment !== undefined &&
+				record.enrollment.generation === currentGen &&
+				!this.#generationWasQuiesced(record, currentGen)
+			) {
 				reuseToken = this.#recoverCallbackToken(entry, currentGen);
 			}
 			if (reuseToken !== undefined) {
@@ -1479,11 +1422,14 @@ export class WorkspaceLifecycle {
 			desiredState: "running",
 		});
 		if (response.observed === "running") {
-			this.#deps.registry.setStatus(daemonId, "ready");
-			this.#setStage(daemonId, "callback");
-			// Bounded pair-readiness watcher: callback → ready when the
-			// daemon's pair is observed live (never blocks the caller).
-			this.#armPairWatcher(daemonId);
+			// The sandbox is live, but the daemon's hello_ok/ready has NOT been
+			// validated: publish the transitional session rung + callback
+			// stage (never "ready" — that would be a callback-only ready
+			// window) and let the readiness owner promote. The bounded liveness
+			// watcher only demotes a sandbox the provider no longer reports
+			// running, and the running hook re-probes a pair that dialed before
+			// this launch was authorized.
+			this.#publishRuntimeRunning(daemonId);
 		}
 		this.#log(
 			"info",
@@ -1544,41 +1490,31 @@ export class WorkspaceLifecycle {
 			);
 		}
 
-		// Reconcile a persisted "deleting" from a crashed previous fleet,
-		// preserving any cleanup state it had durably recorded.
-		let entry = this.#deps.registry.get(daemonId) ?? entry0;
-		const previous = entry.workspace?.deletion;
-		if (previous?.state === "deleting") {
-			this.#deps.registry.setWorkspaceDeletion(daemonId, {
-				state: "delete-pending-retry",
-				requestedAt: previous.requestedAt,
-				error: {
-					code: "retryable",
-					message: "deletion was interrupted before verification completed; retry the delete",
-				},
-				...(previous.remainingResources !== undefined
-					? { remainingResources: previous.remainingResources }
-					: {}),
-				...(previous.receipt !== undefined ? { receipt: previous.receipt } : {}),
-			});
-			entry = this.#deps.registry.get(daemonId) ?? entry;
+		this.#deleting.add(daemonId);
+		try {
+			return await this.#enqueue(daemonId, () => this.#runDeleteGate(daemonId));
+		} finally {
+			this.#deleting.delete(daemonId);
 		}
+	}
 
-		// Admission. For clones, "active work" is not derivable fleet-side: a
-		// running desired state, a live enrollment, or a live callback pair
-		// may carry accepted work — refuse with an actionable message instead
-		// of risking mid-turn deletion. Presentation status is deliberately
-		// NOT consulted: a readiness probe can set a still-running,
-		// still-paired clone to "error" without stopping its provider, and
-		// that workspace must not slip past this gate.
-		//
-		// An exception: an enrollment/pair at a generation that was ATTEMPTED
-		// but never AUTHORIZED is a failed launch. No work can have been
-		// accepted against it, and the gate itself owns fencing that
-		// generation (stop + delete); refusing it would make the very clone
-		// whose Pod is still live undeletable, because stopping it first
-		// destroys the callback pair the evidence handshake needs.
-		const record = entry.workspace;
+	/**
+	 * Admission for a clone delete. For clones, "active work" is not derivable
+	 * fleet-side: a running desired state, a live enrollment, or a live
+	 * callback pair may carry accepted work — refuse with an actionable
+	 * message instead of risking mid-turn deletion. Presentation status is
+	 * deliberately NOT consulted: a readiness probe can set a still-running,
+	 * still-paired clone to "error" without stopping its provider, and that
+	 * workspace must not slip past this gate.
+	 *
+	 * An exception: an enrollment/pair at a generation that was ATTEMPTED but
+	 * never AUTHORIZED is a failed launch. No work can have been accepted
+	 * against it, and the gate itself owns fencing that generation (stop +
+	 * delete); refusing it would make the very clone whose Pod is still live
+	 * undeletable, because stopping it first destroys the callback pair the
+	 * evidence handshake needs.
+	 */
+	#assertDeleteAdmissible(daemonId: string, record: WorkspaceRecord | undefined): void {
 		const pair = this.#deps.transport.pairStatus(daemonId);
 		const failedLaunch =
 			record?.lastAttemptedGeneration !== undefined &&
@@ -1595,21 +1531,42 @@ export class WorkspaceLifecycle {
 				`workspace ${daemonId} is live with unobservable activity; stop current work (explicit stop) before deleting`,
 			);
 		}
-
-		this.#deleting.add(daemonId);
-		try {
-			return await this.#enqueue(daemonId, () => this.#gate(daemonId));
-		} finally {
-			this.#deleting.delete(daemonId);
-		}
 	}
 
-	/** The gate body (runs under the #deleting serialization). */
-	async #gate(daemonId: string): Promise<{ removed: string; verified: string[] }> {
+	/**
+	 * The gate body (runs under the #deleting serialization). Admission is
+	 * re-read HERE, in the queued turn: deciding before the delete is queued
+	 * can be stale by the time the gate runs — a concurrent wake that this
+	 * delete queued behind may have authorized a running generation, and a
+	 * pre-queue "stopped" read would let the gate stop and destroy the newly
+	 * live workspace instead of refusing it.
+	 */
+	async #runDeleteGate(daemonId: string): Promise<{ removed: string; verified: string[] }> {
 		const { registry, logStore, eventLog } = this.#deps;
 		const requestedAt = Date.now();
 		let entry = this.#require(daemonId);
-		const previous = entry.workspace?.deletion;
+
+		// Reconcile a persisted "deleting" from a crashed previous fleet,
+		// preserving any cleanup state it had durably recorded.
+		let previous = entry.workspace?.deletion;
+		if (previous?.state === "deleting") {
+			registry.setWorkspaceDeletion(daemonId, {
+				state: "delete-pending-retry",
+				requestedAt: previous.requestedAt,
+				error: {
+					code: "retryable",
+					message: "deletion was interrupted before verification completed; retry the delete",
+				},
+				...(previous.remainingResources !== undefined
+					? { remainingResources: previous.remainingResources }
+					: {}),
+				...(previous.receipt !== undefined ? { receipt: previous.receipt } : {}),
+			});
+			entry = registry.get(daemonId) ?? entry;
+			previous = entry.workspace?.deletion;
+		}
+
+		this.#assertDeleteAdmissible(daemonId, entry.workspace);
 
 		// Durable "deleting" before ANY destructive step (P7.3/P7.5:
 		// registry identity is never removed early; cleanup state survives
@@ -1809,7 +1766,18 @@ export class WorkspaceLifecycle {
 		// Independent completeness cross-check (never infer completeness
 		// from an empty store): the workspace volume's own session tree must
 		// be byte-identical to the verified store.
-		const volumeCheck = await this.#verifyVolumeAgainstStore(daemonId, verify.manifest, receipt);
+		const currentEntry = registry.get(daemonId) ?? entry;
+		const currentRecord = currentEntry.workspace;
+		const volumeCheck = await verifyVolumeAgainstStore({
+			daemonId,
+			volumeRoot: currentEntry.cwd ?? join(this.#deps.config.workspaceDir, daemonId),
+			storeManifest: verify.manifest,
+			receipt,
+			everStarted:
+				currentRecord?.authorizedGeneration !== undefined ||
+				currentRecord?.providerHandle !== undefined ||
+				currentRecord?.enrollment !== undefined,
+		});
 		if (!volumeCheck.ok) {
 			const error: DeletionGateError = {
 				code: "archive_conflict",
@@ -1901,6 +1869,7 @@ export class WorkspaceLifecycle {
 		// Retention's). No orphan marker — verification passed.
 		registry.remove(daemonId);
 		eventLog.add("info", "server", `workspace ${daemonId} deleted (verified)`, daemonId);
+		this.#deps.onRuntimeStopped?.(daemonId);
 		return { removed: daemonId, verified: verify.sessions.map((s) => s.sessionId) };
 	}
 
@@ -2008,117 +1977,6 @@ export class WorkspaceLifecycle {
 		}
 	}
 
-	/**
-	 * Independent completeness check: the workspace volume's own session
-	 * tree (`.home/agent/sessions`) must be byte-identical to the verified
-	 * store. This is what makes an empty store FAIL deletion when sessions
-	 * actually existed on the volume. A volume the fleet cannot read
-	 * (kubernetes PVCs) has no tree to compare, so a VALIDATED quiesce
-	 * `receipt` is the completeness authority there, including its valid
-	 * empty-manifest case.
-	 */
-	async #verifyVolumeAgainstStore(
-		daemonId: string,
-		storeManifest: ArchiveManifest | undefined,
-		receipt: CloneDeletionReceipt | undefined,
-	): Promise<{ ok: true } | { ok: false; message: string }> {
-		const entry = this.#require(daemonId);
-		const record = entry.workspace;
-		const volumeRoot = entry.cwd ?? join(this.#deps.config.workspaceDir, daemonId);
-		const sessionsDir = join(volumeRoot, ".home", "agent", "sessions");
-		const everStarted =
-			record?.authorizedGeneration !== undefined ||
-			record?.providerHandle !== undefined ||
-			record?.enrollment !== undefined;
-
-		// The volume is fleet-readable when its root exists.
-		const volumePresent = existsSync(volumeRoot);
-		const files: VolumeFile[] = [];
-		let bounded = true;
-		if (volumePresent && existsSync(sessionsDir)) {
-			const state = { files: 0, bytes: 0 };
-			const rootEntries = listDir(sessionsDir);
-			for (const dir of rootEntries) {
-				if (!dir.isDirectory()) continue;
-				const sid = dir.name;
-				if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sid)) continue;
-				walkSessionDir(join(sessionsDir, sid), sid, state, files);
-			}
-			if (state.files >= MAX_EXPORT_FILES || state.bytes > MAX_EXPORT_BYTES) {
-				bounded = false;
-			}
-		}
-
-		if (!volumePresent) {
-			// A kubernetes volume is not fleet-readable, so there is no
-			// volume-side tree to compare: the validated quiesce receipt is
-			// the completeness authority there, INCLUDING its valid empty
-			// case (a clone that started but never produced a session
-			// legitimately has no volume tree and no store sessions).
-			if (receipt?.state === "verified" && receipt.validated !== undefined) {
-				return { ok: true };
-			}
-			if (everStarted && storeManifest === undefined) {
-				// Store verified (storeManifest is present only on ok:true
-				// with provenance) — if the store really has zero sessions
-				// AND we cannot read the volume, completeness is unprovable.
-				// (storeManifest undefined on a non-ok result is handled by
-				// the caller; here it means ok + no manifest is impossible.)
-				return {
-					ok: false,
-					message: `cannot verify store completeness for ${daemonId}: volume is not fleet-readable and the store has no sessions to compare`,
-				};
-			}
-			return { ok: true }; // k8s volume with verified stored sessions, or never started.
-		}
-		if (!bounded) {
-			return {
-				ok: false,
-				message: `session tree for ${daemonId} exceeds verification bounds (${MAX_EXPORT_FILES} files / ${MAX_EXPORT_BYTES} bytes); deletion blocked`,
-			};
-		}
-		if (files.length === 0) {
-			return { ok: true }; // Nothing on the volume to compare; store empty is provably complete.
-		}
-		if (storeManifest === undefined) {
-			return {
-				ok: false,
-				message: `workspace ${daemonId} has ${files.length} session file(s) on its volume but the store verification produced no manifest`,
-			};
-		}
-		// Index the store manifest by (sessionId, path).
-		const stored = new Map<string, { size: number; sha256: string }>();
-		for (const file of storeManifest.files) {
-			stored.set(`${file.sessionId}/${file.path}`, { size: file.size, sha256: file.sha256 });
-		}
-		// Every volume file must exist byte-identically in the store.
-		for (const file of files) {
-			const key = `${file.sessionId}/${file.relpath}`;
-			const side = stored.get(key);
-			if (side === undefined) {
-				return {
-					ok: false,
-					message: `workspace ${daemonId} session ${file.sessionId} file ${file.relpath} (${file.size} bytes) is missing from the fleet store; deletion blocked (logs were not fully streamed)`,
-				};
-			}
-			if (side.size !== file.size) {
-				return {
-					ok: false,
-					message: `workspace ${daemonId} session ${file.sessionId} file ${file.relpath} is truncated in the fleet store (${side.size}/${file.size} bytes); deletion blocked`,
-				};
-			}
-			const absolute = join(volumeRoot, ".home", "agent", "sessions", file.sessionId, file.relpath);
-			const sha = await sha256File(absolute);
-			if (sha !== side.sha256) {
-				return {
-					ok: false,
-					message: `workspace ${daemonId} session ${file.sessionId} file ${file.relpath} differs from its stored bytes; deletion blocked (rewrite not re-streamed)`,
-				};
-			}
-		}
-		return { ok: true };
-	}
-
 	// ------------------------------------------------------------------
 	// Provider invocation / paths / enrollment handoff
 	// ------------------------------------------------------------------
@@ -2177,6 +2035,26 @@ export class WorkspaceLifecycle {
 		return typeof entry.workspace?.providerHandle === "string"
 			? entry.workspace.providerHandle
 			: undefined;
+	}
+
+	/**
+	 * True when a quiesce handshake was attempted for this exact generation.
+	 * A `lastEvidence` record keyed to it means the daemon's command admission
+	 * may already be permanently closed (the stop's stop evidence collection
+	 * runs before the provider stop, so a failed stop leaves the marker
+	 * behind). Such a generation must be PROVEN stopped before any reattach or
+	 * replacement; resuming it would reattach a daemon that rejects every
+	 * command and surface it ready.
+	 */
+	#generationWasQuiesced(
+		record: WorkspaceRecord | undefined,
+		generation: number | undefined,
+	): boolean {
+		return (
+			generation !== undefined &&
+			record?.providerKind === "kubernetes" &&
+			record.lastEvidence?.generation === generation
+		);
 	}
 
 	/**
@@ -2277,13 +2155,30 @@ export class WorkspaceLifecycle {
 		let response: ProviderResponse;
 		try {
 			// The provider budgets its own waits (a 120 s Pod readiness, a 60 s
-			// stop, 60 s per deleted object). The invocation must cover the
-			// same waits, or the fleet kills a cold pull or deletion the
-			// provider itself would have completed within its documented
-			// budget (P5.4).
-			response = await runProviderOp(profile.executable, request, {
-				timeoutMs: providerOpTimeouts(kubernetesProviderWaits())[op].invocationTimeoutMs,
-			});
+			// stop, 60 s per deleted object). A kubernetes invocation must
+			// cover the same waits, or the fleet kills a cold pull or
+			// deletion the provider itself would have completed within its
+			// documented budget (P5.4). A bwrap op has no such waits and
+			// keeps runProviderOp's 30 s default — giving it a Kubernetes
+			// budget would turn a hung bwrap op into a multi-minute stall.
+			let budget: number | undefined;
+			if (profile.provider === "kubernetes") {
+				try {
+					budget = kubernetesOpTimeouts(readKubernetesWaits())[op].invocationTimeoutMs;
+				} catch (err) {
+					// A malformed OMP_KUBE_* wait override is a configuration
+					// error, never a silent fallback to a wrong budget.
+					throw new CloneLifecycleError(
+						"invalid_request",
+						`cannot compute the kubernetes provider budget for ${daemonId}: ${err instanceof Error ? err.message : String(err)}`,
+					);
+				}
+			}
+			response = await runProviderOp(
+				profile.executable,
+				request,
+				budget === undefined ? undefined : { timeoutMs: budget },
+			);
 		} finally {
 			lock.release();
 		}
@@ -2293,7 +2188,7 @@ export class WorkspaceLifecycle {
 				`provider ${op} failed for ${daemonId} (${response.error.code}): ${response.error.message}`,
 			);
 		}
-		this.#confirmBinding(entry, response);
+		this.#confirmBinding(entry, response, op);
 		return response;
 	}
 
@@ -2302,11 +2197,23 @@ export class WorkspaceLifecycle {
 	 * The fleet never re-derives it (the provider treats the binding as
 	 * authoritative); a mismatch means the namespace was replaced underneath
 	 * the workspace, which is a conflict, never a silent re-anchor.
+	 *
+	 * A kubernetes request whose ok response carries no observation is
+	 * rejected outright: the persisted binding proves this is a Kubernetes
+	 * operation, so the observation is the ONLY evidence the response touches
+	 * the workspace's namespace/Pod/PVC. Accepting it would let a provider
+	 * authorize a generation without proving object identity.
 	 */
-	#confirmBinding(entry: RegistryEntry, response: ProviderOkResponse): void {
+	#confirmBinding(entry: RegistryEntry, response: ProviderOkResponse, op: string): void {
 		const binding = entry.workspace?.kubernetes;
+		if (binding === undefined) return;
 		const observed = response.kubernetes;
-		if (binding === undefined || observed === undefined) return;
+		if (observed === undefined) {
+			throw new CloneLifecycleError(
+				"unavailable",
+				`provider ${op} for ${entry.daemonId} returned no kubernetes observation; refusing an unverified response`,
+			);
+		}
 		if (binding.namespaceUid !== observed.namespaceUid) {
 			throw new CloneLifecycleError(
 				"conflict",
@@ -2404,6 +2311,24 @@ export class WorkspaceLifecycle {
 		// A retry of an interrupted handshake reuses the persisted request id:
 		// the daemon caches its outcome under that id and replays it.
 		const requestId = samePod && prior !== undefined ? prior.requestId : randomUUID();
+
+		// Persist the ATTEMPT before the request leaves the fleet. The daemon
+		// permanently closes command admission and caches its outcome under
+		// this request id, so a fleet crash after the daemon acks but before
+		// collect() returns must leave the id (and the generation it names)
+		// durable: otherwise a restart generates a new id the already-quiesced
+		// daemon rejects, and a later delete fails closed with no admissible
+		// receipt. The record also marks this generation as quiesced, so a
+		// subsequent ensure can never reattach the daemon it describes.
+		registry.updateWorkspace(daemonId, {
+			lastEvidence: {
+				requestId,
+				generation,
+				podUid: observed.podUid,
+				pvcUid: observed.pvcUid,
+				state: "pending",
+			},
+		});
 
 		try {
 			const collected = await collect({
@@ -2745,10 +2670,8 @@ export class WorkspaceLifecycle {
 				? explicit
 				: opts.firstStart && !everStarted
 					? undefined
-					: (pickNewestSessionId({
-							sessionsDir,
-							...(store !== null ? { store, workspaceId: daemonId } : {}),
-						}) ?? this.#sessionIdFromFile(entry.lastSessionFile));
+					: (this.#pickImplicitSession(sessionsDir, store, daemonId) ??
+						this.#sessionIdFromFile(entry.lastSessionFile));
 		if (target === undefined) return undefined; // Nothing to resume: fresh boot.
 
 		if (store !== null) {
@@ -2790,13 +2713,14 @@ export class WorkspaceLifecycle {
 
 		const mainFile = resolveMainSessionFile(sessionsDir, target);
 		if (mainFile === null) {
-			if (explicit !== undefined) {
-				throw new CloneLifecycleError(
-					"unavailable",
-					`cannot resume session ${target} for ${daemonId}: no transcript on the volume or in the fleet store`,
-				);
-			}
-			return undefined; // Implicit target vanished; boot fresh.
+			// A target WAS selected (explicit, recorded, or from the volume ∪
+			// store), so the workspace has prior history: booting fresh here
+			// would silently abandon it. Fail typed instead — for implicit and
+			// explicit targets alike.
+			throw new CloneLifecycleError(
+				"unavailable",
+				`cannot resume session ${target} for ${daemonId}: no transcript on the volume or in the fleet store`,
+			);
 		}
 		// Stale-lock cleanup (P8.9 boot-resume): the daemon locks the resumed
 		// session file (`<file>.lock`) with its PID. A prior sandbox lifetime
@@ -2838,11 +2762,7 @@ export class WorkspaceLifecycle {
 					? undefined
 					: (this.#sessionIdFromFile(recorded) ??
 						(store !== null
-							? pickNewestSessionId({
-									sessionsDir: KUBERNETES_SESSIONS_ROOT,
-									store,
-									workspaceId: daemonId,
-								})
+							? this.#pickImplicitSession(KUBERNETES_SESSIONS_ROOT, store, daemonId)
 							: undefined));
 		if (target === undefined) return undefined; // No previous session identity: fresh boot.
 
@@ -2870,15 +2790,42 @@ export class WorkspaceLifecycle {
 			}
 		}
 		if (inPodMain === undefined) {
-			if (explicit !== undefined) {
-				throw new CloneLifecycleError(
-					"unavailable",
-					`cannot resume session ${target} for ${daemonId}: no stored transcript and no recorded in-pod main file`,
-				);
-			}
-			return undefined; // Implicit target has no recoverable transcript; boot fresh.
+			// A target WAS selected, so prior history exists: never silently
+			// start fresh. Fail typed for implicit and explicit wakes alike.
+			throw new CloneLifecycleError(
+				"unavailable",
+				`cannot resume session ${target} for ${daemonId}: no stored transcript and no recorded in-pod main file`,
+			);
 		}
 		return { OMP_SESSION_RESUME: inPodMain, OMP_SESSION_RESUME_REQUIRED: "1" };
+	}
+
+	/**
+	 * Implicit-target selection for a wake with no explicit session id: the
+	 * newest session across the volume ∪ store. The shared selector throws a
+	 * typed `unavailable` when prior history exists but nothing is resumable
+	 * (an assets-only tree), which must surface as a lifecycle `unavailable` —
+	 * never `provider_failed`, and never a silent fresh boot.
+	 */
+	#pickImplicitSession(
+		sessionsDir: string,
+		store: FleetLogStore | null,
+		daemonId: string,
+	): string | undefined {
+		try {
+			return pickNewestSessionId({
+				sessionsDir,
+				...(store !== null ? { store, workspaceId: daemonId } : {}),
+			});
+		} catch (err) {
+			if (err instanceof WakeMaterializeError) {
+				throw new CloneLifecycleError(
+					err.code === "invalid_request" ? "invalid_request" : "unavailable",
+					`cannot select a session to resume for ${daemonId}: ${err.message}`,
+				);
+			}
+			throw err;
+		}
 	}
 
 	/** Session id from a recorded session-file path (`<stem>.jsonl`), when safe. */
@@ -2969,36 +2916,66 @@ export class WorkspaceLifecycle {
 	}
 
 	/**
-	 * Bounded callback→ready watcher: polls the transport pair status at 1s
-	 * intervals and writes lifecycleStage "ready" once the daemon's pair is
-	 * observed live. Never blocks callers; stops when the workspace leaves
-	 * desired-running.
+	 * A provider-reported RUNNING generation (a successful ensure-running, or
+	 * a boot reattach of a live same-generation resource). The sandbox exists,
+	 * but the daemon's hello_ok/ready has NOT been validated, so readiness has
+	 * exactly ONE authority — the readiness owner's probe — and this publishes
+	 * the lowest non-dead ladder rung ("session") together with the "callback"
+	 * stage. It then arms the bounded liveness watcher (which only ever
+	 * DEMOTES a sandbox the provider no longer reports running) and fires the
+	 * running hook so a pair that dialed before its launch was authorized is
+	 * probed the instant authorization persists.
+	 *
+	 * Nothing on this path may publish "ready": a pair observation is not
+	 * readiness, and a pre-validated ready would also erase a conclusive probe
+	 * failure (cwd/session mismatch) that has not yet been observed.
+	 */
+	#publishRuntimeRunning(daemonId: string): void {
+		this.#deps.registry.setStatus(daemonId, "session");
+		this.#setStage(daemonId, "callback");
+		this.#armPairWatcher(daemonId);
+		this.#deps.onRuntimeRunning?.(daemonId);
+	}
+
+	/**
+	 * Bounded liveness watcher: polls the transport pair status and re-inspects
+	 * the provider so a sandbox that dies (or never dials) is demoted instead
+	 * of presented as live forever. Never blocks callers; stops when the
+	 * workspace leaves desired-running.
+	 *
+	 * READINESS IS NOT THIS WATCHER'S: stage "ready" is written by the
+	 * readiness owner only, after a validated hello_ok/ready. This watcher
+	 * never promotes on a pair observation — a pair can be live before the
+	 * daemon's cwd/session is validated, and promoting there would also
+	 * overwrite a conclusive probe failure. It only DEMOTES.
 	 *
 	 * A provider that reported `observed: running` can still die before its
 	 * callback pair dials (or never dial at all). The watcher therefore
 	 * periodically re-inspects the provider: a sandbox that is no longer
 	 * running surfaces as status "error" + lifecycleStage "failed" with the
 	 * typed message (never an eternal "callback" stage over a dead pid), and
-	 * the polling stops. A live-but-slow sandbox keeps polling — the stage
-	 * flips to "ready" the moment the pair establishes. There is no silent
-	 * timeout that leaves the stage stuck.
+	 * the polling stops. A live-but-slow sandbox keeps polling.
 	 *
-	 * S1 post-ready liveness: the watcher does NOT retire at ready. A sandbox
-	 * can die (or its worker be evicted) AFTER the pair established, and no
-	 * other code path notices — the roster would present the row as live
-	 * forever. After the ready transition the watcher switches to a slower
-	 * {@link PAIR_POST_READY_POLL_MS} poll that never re-inspects while the
-	 * pair is live; when the pair is lost it re-inspects the provider (at most
-	 * once per interval) and demotes a non-running sandbox to the same
-	 * failed/error vocabulary as the pre-ready branch. A deliberate stop ends
-	 * the watch immediately (desiredState guard + explicit disarm), so a
-	 * stopped workspace can never be relabeled a crash.
+	 * Pre-ready budget: a daemon may legitimately hold a LIVE pair for the
+	 * whole restore allowance (WAKE_MATERIALIZE_TIMEOUT_MS + the prime
+	 * allowance — CLONE_READINESS_TIMEOUT_MS, owned by fleet/clone-readiness.ts)
+	 * without priming hello_ok/ready. There is therefore NO wall-clock
+	 * pre-ready timeout here: while the pair is live the watcher only polls and
+	 * never inspects — the readiness owner owns validation and its own bounded
+	 * timeout. The pre-ready inspect cadence is armed solely for a pair that is
+	 * NOT live (the sandbox died or never dialed), and even then it demotes only
+	 * on a provider observation that the sandbox is not running.
+	 *
+	 * S1 post-ready liveness: once the stage IS "ready", a pair loss is
+	 * re-inspected at the slower {@link PAIR_POST_READY_POLL_MS} cadence (at
+	 * most once per interval) and a non-running sandbox is demoted to the same
+	 * failed/error vocabulary. A deliberate stop ends the watch immediately
+	 * (desiredState guard + explicit disarm), so a stopped workspace can never
+	 * be relabeled a crash.
 	 */
 	#armPairWatcher(daemonId: string): void {
 		if (this.#pairWatchers.has(daemonId)) return;
 		let attempts = 0;
-		/** The pair was observed live at least once (post-ready watch armed). */
-		let ready = false;
 		const tick = async (): Promise<void> => {
 			const current = this.#deps.registry.get(daemonId);
 			if (!current || current.workspace?.desiredState !== "running") {
@@ -3006,21 +2983,23 @@ export class WorkspaceLifecycle {
 				return;
 			}
 			const pair = this.#deps.transport.pairStatus(daemonId);
-			if (pair.paired && pair.enrolled) {
-				if (!ready) {
-					this.#setStage(daemonId, "ready");
-					ready = true;
-				}
-				// Live pair: never re-inspect. Keep a slower poll so a later
-				// pair loss is noticed; reset the pre-ready budget so a pair
-				// that flapped before ready still gets its full inspect cadence.
-				attempts = 0;
-				this.#schedulePairTick(daemonId, PAIR_POST_READY_POLL_MS, tick);
-				return;
-			}
+			const pairLive = pair.paired && pair.enrolled;
+			// Readiness belongs to the readiness owner ALONE: stage "ready" is
+			// written only after a validated hello_ok/ready. A pair observation
+			// is never promoted here (it can precede validation, and promoting
+			// on it would overwrite a probe's conclusive failure).
+			const ready = current.lifecycleStage === "ready";
 			if (ready) {
-				// The pair established, then went away. Bounded to one inspect
-				// per poll interval (this branch only runs from that cadence).
+				if (pairLive) {
+					// Validated and live: never re-inspect. Keep the slower poll
+					// so a later pair loss is noticed.
+					attempts = 0;
+					this.#schedulePairTick(daemonId, PAIR_POST_READY_POLL_MS, tick);
+					return;
+				}
+				// The pair was validated live, then went away. Bounded to one
+				// inspect per poll interval (this branch only runs from that
+				// cadence).
 				try {
 					const inspect = await this.#runCloneOp(daemonId, "inspect", this.#handleOf(current));
 					// Re-read AFTER the probe: a deliberate stop that landed
@@ -3055,6 +3034,14 @@ export class WorkspaceLifecycle {
 					// next interval retries. A genuinely dead sandbox reports
 					// observed != running (handled above).
 				}
+				this.#schedulePairTick(daemonId, PAIR_POST_READY_POLL_MS, tick);
+				return;
+			}
+			// Not validated ready yet. While the pair is live there is nothing
+			// to inspect (validation is the readiness owner's job); keep the
+			// slower poll so a later loss is noticed.
+			if (pairLive) {
+				attempts = 0;
 				this.#schedulePairTick(daemonId, PAIR_POST_READY_POLL_MS, tick);
 				return;
 			}
@@ -3195,10 +3182,10 @@ export class WorkspaceLifecycle {
 		}
 		const callbackUrl = this.#deps.callbackUrl();
 		try {
-			// The authoritative daemon-side parser: a kubernetes Pod can only
-			// dial a bare HTTPS origin (no credentials, no loopback or
-			// unspecified host, no path/query/fragment).
-			parseKubernetesCallbackUrl(callbackUrl);
+			// The authoritative shared parser: a kubernetes Pod can only dial
+			// a bare HTTPS origin (no credentials, no loopback or unspecified
+			// host, no path/query/fragment).
+			parseKubernetesCallbackOrigin(callbackUrl);
 		} catch (err) {
 			throw new CloneLifecycleError(
 				"invalid_request",

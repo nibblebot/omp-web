@@ -9,11 +9,12 @@
  * one JSON request on stdin and one JSON response on stdout; exit 0 when a
  * response was produced (the `ok` flag classifies the outcome). stderr is a
  * human log the fleet never parses. Every envelope carries `providerProto`;
- * every successful kubernetes response also carries
+ * every kubernetes response also carries
  * `kubernetes: {namespaceUid, podUid, pvcUid}` (null = object absent, and the
  * namespace uid the operation actually observed).
  *
- * Resource model (one workspace = one Pod + one PVC, nothing else):
+ * Resource model (one workspace = one Pod + one PVC + an optional baseline
+ * ConfigMap, nothing else):
  * - Both object names are exactly `omp-ws-<resourceIdentity>`
  *   (`KubernetesBinding.resourceIdentity`, 32 lowercase hex chars generated
  *   once by the fleet), so restart rediscovery needs no listing and two
@@ -25,12 +26,12 @@
  *   (frozen "Preparation layout"). Stop retains the claim; replacement
  *   reuses it; initialization runs only when the verified init marker is
  *   absent (new workspace), enforced by the image entrypoint.
- * - A single Pod mounts the claim at /workspace and runs the session
- *   daemon with `restartPolicy: "Never"` so identity is never masked by a
- *   kubelet restart. No Service/Ingress is created: the daemon dials the
- *   fleet callback pair outbound (P5.3: no inbound pod service required).
- * - No cluster mutation beyond these two namespaced objects, ever. The
- *   provider never creates namespaces, RBAC, StorageClasses, Secrets, or
+ * - A single Pod mounts the claim at /workspace and runs the session daemon
+ *   with `restartPolicy: "Never"` so identity is never masked by a kubelet
+ *   restart. No Service/Ingress is created: the daemon dials the fleet
+ *   callback pair outbound (P5.3: no inbound pod service required).
+ * - No cluster mutation beyond these namespaced objects, ever. The provider
+ *   never creates namespaces, RBAC, StorageClasses, Secrets, or
  *   NetworkPolicies.
  *
  * Durable identity (never PID-only; the pod has no host pid):
@@ -39,10 +40,13 @@
  *   workspaceToken, namespace, namespaceUid, resourceIdentity, podName,
  *   pvcName, podUid, pvcUid, sourceRemote, revision, branch,
  *   sourcePinDigest, callbackDigest, createdAt, startedAt?, stoppedAt?}.
- *   `workspaceToken` is the API-side analogue of bwrap's argv token.
- * - ONE ownership validator (`ownershipReason`) is shared by all four
- *   operations: managed-by / part-of labels, the workspace-id annotation, the
- *   full profile-id annotation plus its label, the resource-id label, the
+ *   `workspaceToken` is the API-side analogue of bwrap's argv token. The
+ *   `pvcUid` fence is retained across generations (the claim outlives the Pod
+ *   that first mounted it), so it is read from the record regardless of the
+ *   requested generation.
+ * - ONE ownership validator (`ownershipReason`, resources.ts) is shared by all
+ *   four operations: managed-by / part-of labels, the workspace-id annotation,
+ *   the full profile-id annotation plus its label, the resource-id label, the
  *   namespace-uid annotation against the binding, the object's own API uid
  *   when the record pins one, and (for Pods) the exact positive-decimal
  *   generation label and the provider launch token. A foreign or
@@ -57,20 +61,14 @@
  * - Source pin: `sourcePinDigest` = lowercase sha256 of UTF-8
  *   `JSON.stringify([source.remote, revision, branch])` is stamped on both
  *   objects and compared against the request tuple and the provider record,
- *   so a retained volume can never silently serve a different pin. The
- *   volume-resident preparation marker (`.omp-workspace-init.json`) is
- *   validated in-pod by prepare-workspace/prepare-inpod after the PVC is
- *   mounted; the provider validates the same tuple (workspace, source, pin,
- *   branch) from the request and from Kubernetes metadata, because the claim
- *   is not mounted on the fleet host and no shared marker reader is exported.
- * - `stop` deletes the pod and PROVES the requested generation terminated
- *   by polling the API until the pod is gone; an uncertain predecessor is
+ *   so a retained volume can never silently serve a different pin.
+ * - `stop` deletes the pod and PROVES the requested generation terminated by
+ *   polling the API until the pod is gone; an uncertain predecessor is
  *   `conflict` (retryable). The PVC is retained. Stop works with no callback
  *   handoff: ownership comes from the resource binding and the launch record.
- * - `delete` validates every present object before the FIRST deletion,
- *   deletes with a fresh-GET uid barrier (kubectl has no portable uid
- *   precondition flag), waits for absence, and leaves the stateDir for the
- *   fleet to remove after confirmed deletion (P3.7).
+ * - `delete` validates every present object before the FIRST deletion, deletes
+ *   through an API uid-preconditioned DELETE, waits for absence, and leaves the
+ *   stateDir for the fleet to remove after confirmed deletion (P3.7).
  * - Every operation takes the hardened per-workspace `acquireFileLock`
  *   (shared/file-lock.ts) and waits, bounded, for a peer that holds it rather
  *   than declaring conflict immediately.
@@ -81,19 +79,13 @@
  *   `profile.namespace` when present.
  * - image: `profile.image`, required.
  * - resources/storage: `profile.resources {cpu, memory}` (applied as both
- *   requests and limits → Guaranteed QoS), `profile.storage {class, size}`
- *   (class optional = cluster default; size defaults to 10 Gi).
+ *   requests and limits → Guaranteed QoS), `profile.storage {class, size}`.
  * - model/tool credentials: `profile.secretRefs` maps ENV name →
- *   `<secretName>/<key>`, injected as native `secretKeyRef` env. Secrets
- *   must pre-exist; they are verified by preflight, never created.
+ *   `<secretName>/<key>`, injected as native `secretKeyRef` env; reserved
+ *   names are refused before any cluster call (see config.ts).
  * - callback enrollment: the fleet-written `callback-env.json` handoff is
- *   injected as pod env.
- * - in-pod preparation: the fleet resolves the pin and passes it through the
- *   request fields `source.remote`/`revision`/`branch`; the provider injects
- *   them as OMP_PREP_* env and the image entrypoint initializes a NEW
- *   workspace volume once (verified marker), so replacement pods never
- *   re-clone or re-resolve. `source.local` is a fleet-host path and is
- *   rejected for kubernetes profiles.
+ *   injected as pod env; management operations tolerate an absent or unusable
+ *   credential and never trust an identity mismatch.
  *
  * Missing prerequisites fail `unavailable`/`invalid_request` with
  * actionable remediation. There is no auto-install, no RBAC/namespace
@@ -103,32 +95,59 @@
  * path reads, no self-respawn. `kubectl` argv arrays only, never a shell.
  */
 
-import type { Subprocess } from "bun";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { acquireFileLock, LockHeldError } from "../../shared/file-lock";
 import type { FileLock } from "../../shared/file-lock";
 import {
-	computeSourcePinDigest,
 	OMP_PROVIDER_PROTO,
 	ProviderProtocolError,
 	parseProviderRequest,
-	RESOURCE_IDENTITY_RE,
-	validateKubernetesSource,
-	type KubernetesBinding,
 	type KubernetesObserved,
 	type ProviderObserved,
-	type ProviderProfile,
 	type ProviderRequest,
 	type ProviderResponse,
 } from "../../shared/provider-protocol";
 import type { ProviderErrorCode } from "../../shared/provider-protocol";
 import { CALLBACK_ENV_FILE, readCallbackEnvFile } from "../callback-env";
 import type { CallbackEnvRecord } from "../callback-env";
-import { RESERVED_SECRET_ENV_KEYS } from "../bwrap-args";
-import { PrepareWorkspaceError, validateWorkspaceRef } from "../prepare-workspace";
-import type { PreflightCheck, PreflightResult } from "../preflight";
+import { resolveConfig } from "./kubernetes/config";
+import type { KubernetesConfig } from "./kubernetes/config";
+import {
+	ANN_CALLBACK_DIGEST,
+	ANN_WORKSPACE_TOKEN,
+	baselineConfigMapName,
+	buildBaselineConfigMapManifest,
+	buildPodManifest,
+	buildPvcManifest,
+	objectIdentity,
+	objectMeta,
+	ownershipReason,
+	podPhase,
+	podStartTime,
+	pvcMeta,
+	type KubernetesObjectIdentity,
+	type WorkspaceOwnership,
+} from "./kubernetes/resources";
+import {
+	defaultKubeExec,
+	delay,
+	KubeCallError,
+	KubePreconditionError,
+	kubeCreate,
+	kubeDelete,
+	kubeGet,
+	kubeNamespaceUid,
+	observeObjects,
+	POLL_INTERVAL_MS,
+	waitGone,
+	waitPodRunning,
+	type KubeExec,
+	type ObservedObjects,
+	type PodRunningWait,
+} from "./kubernetes/kubectl";
+import { readKubernetesWaits } from "./kubernetes/timeouts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -153,542 +172,6 @@ const CALLBACK_REQUIRED_ENV_KEYS = [
 	CALLBACK_TOKEN_ENV_KEY,
 ] as const;
 
-/** Exact positive decimal generation label ("01", "1x", "+1", "1.0" rejected). */
-const GENERATION_LABEL_RE = /^[1-9][0-9]*$/;
-
-/** In-pod workspace volume layout (frozen "Preparation layout"). */
-const POD_WORKSPACE_ROOT = "/workspace";
-const POD_CHECKOUT_DIR = `${POD_WORKSPACE_ROOT}/.checkout`;
-const POD_HOME_DIR = `${POD_WORKSPACE_ROOT}/.home`;
-
-/**
- * Sanitized agent-behavior baseline delivery (P5.5). The fleet ships the
- * documents in the request; they are materialized as a ConfigMap mounted
- * read-only here, and the image's in-pod preparation seeds
- * `.home/agent/{config.yml,models.yml}` from it before the daemon starts.
- * The mount is a delivery channel for the seed, never runtime config: the
- * sandbox reads the copies under its own home.
- */
-const POD_BASELINE_DIR = "/opt/omp-web/baseline";
-/** Env key the in-pod seed reads (runtime/sandbox-baseline.ts source override). */
-const BASELINE_CONFIG_ENV_KEY = "OMP_SANDBOX_BASELINE_CONFIG";
-/** ConfigMap name suffix; the object is workspace-scoped like the Pod/PVC. */
-const BASELINE_CONFIGMAP_SUFFIX = "-baseline";
-/** ConfigMap data keys, which become the file names under {@link POD_BASELINE_DIR}. */
-const BASELINE_CONFIG_KEY = "config.yml";
-const BASELINE_MODELS_KEY = "models.yml";
-
-const DEFAULT_STORAGE_SIZE = "10Gi";
-/** Runtime uid/gid the pod runs as (the PVC's fsGroup). */
-const RUNTIME_UID = 10001;
-
-/** Env key for the image-owned SSH wrapper (runtime/image/git-ssh.sh). */
-const GIT_SSH_COMMAND_ENV_KEY = "GIT_SSH_COMMAND";
-/** Absolute wrapper path inside the session-runtime image (see the Containerfile). */
-const POD_GIT_SSH_COMMAND = "/opt/omp-web/runtime/image/git-ssh.sh";
-
-/** Kubectl per-call API timeout (flag) and spawn-level kill budget. */
-const KUBE_REQUEST_TIMEOUT = "15s";
-const KUBE_EXEC_KILL_MS = 60_000;
-/** kubectl payload cap; provider protocol envelopes stay capped separately. */
-const KUBE_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
-
-/** Wait budgets (env-tunable; pods can pull images on cold nodes). */
-const ENSURE_WAIT_MS_DEFAULT = 120_000;
-const STOP_WAIT_MS_DEFAULT = 60_000;
-const DELETE_WAIT_MS_DEFAULT = 60_000;
-const POLL_INTERVAL_MS = 500;
-/** How long an operation waits for a peer that holds the workspace lock. */
-const LOCK_WAIT_MS_DEFAULT = 30_000;
-
-function envMs(name: string, fallback: number): number {
-	const raw = process.env[name];
-	if (raw === undefined) return fallback;
-	const parsed = Number.parseInt(raw, 10);
-	return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-// Label/annotation vocabulary. Every object the provider creates carries
-// the managed-by label; the provider refuses to mutate or delete any
-// object that does not carry the whole identity below.
-const LABEL_MANAGED_BY = "app.kubernetes.io/managed-by";
-const LABEL_PART_OF = "app.kubernetes.io/part-of";
-const LABEL_PROFILE = "omp-web.omp.dev/profile-id";
-const LABEL_GENERATION = "omp-web.omp.dev/generation";
-const LABEL_RESOURCE_ID = "omp-web.omp.dev/resource-id";
-const ANN_WORKSPACE_ID = "omp-web.omp.dev/workspace-id";
-const ANN_WORKSPACE_TOKEN = "omp-web.omp.dev/workspace-token";
-const ANN_PROFILE_ID = "omp-web.omp.dev/profile-id";
-const ANN_NAMESPACE_UID = "omp-web.omp.dev/namespace-uid";
-const ANN_CALLBACK_DIGEST = "omp-web.omp.dev/callback-credential-digest";
-const ANN_SOURCE_PIN_DIGEST = "omp-web.omp.dev/source-pin-digest";
-const MANAGED_BY_VALUE = "omp-web";
-const PART_OF_VALUE = "omp-web-clones";
-
-// ---------------------------------------------------------------------------
-// kubectl execution boundary (injectable for offline contract tests)
-// ---------------------------------------------------------------------------
-
-export interface KubeExecResult {
-	code: number;
-	stdout: string;
-	stderr: string;
-}
-
-/** One kubectl invocation: explicit argv, optional stdin manifest. */
-export type KubeExec = (argv: readonly string[], input?: string) => Promise<KubeExecResult>;
-
-/** Resolve after `ms` milliseconds (withResolvers; no executor nesting). */
-function delay(ms: number): Promise<void> {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	setTimeout(resolve, ms);
-	return promise;
-}
-
-/** Collect one piped child stream up to maxBytes, decoding as UTF-8. */
-async function collectPipe(pipe: ReadableStream<Uint8Array>, maxBytes: number): Promise<string> {
-	const reader = pipe.getReader();
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	let overflow = false;
-	try {
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			if (value === undefined) continue;
-			if (!overflow) {
-				if (total + value.byteLength > maxBytes) {
-					overflow = true;
-					chunks.push(value.subarray(0, maxBytes - total));
-				} else {
-					chunks.push(value);
-				}
-			}
-			total += value.byteLength;
-		}
-	} finally {
-		reader.releaseLock();
-	}
-	const merged = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0));
-	let offset = 0;
-	for (const chunk of chunks) {
-		merged.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	let text = new TextDecoder().decode(merged);
-	if (overflow) text += "\n[kubernetes-provider: output truncated]\n";
-	return text;
-}
-
-/**
- * Default kubectl runner: explicit argv array (never a shell), piped
- * stdin/stdout/stderr, byte-capped output, and a hard kill budget so a
- * wedged API connection cannot hang the one-shot invocation forever.
- */
-async function defaultKubeExec(argv: readonly string[], input?: string): Promise<KubeExecResult> {
-	let proc: Subprocess<"ignore" | "pipe", "pipe", "pipe">;
-	try {
-		proc = Bun.spawn<"ignore" | "pipe", "pipe", "pipe">([...argv], {
-			stdin: input === undefined ? "ignore" : "pipe",
-			stdout: "pipe",
-			stderr: "pipe",
-			env: process.env,
-		});
-	} catch (cause) {
-		const message = cause instanceof Error ? cause.message : String(cause);
-		const result: KubeExecResult = { code: 127, stdout: "", stderr: message };
-		throw new KubeCallError(`cannot spawn ${argv[0] ?? "kubectl"}: ${message}`, result);
-	}
-	if (input !== undefined && proc.stdin !== undefined) {
-		proc.stdin.write(input);
-		proc.stdin.end();
-	}
-	const stdoutP = collectPipe(proc.stdout as ReadableStream<Uint8Array>, KUBE_OUTPUT_MAX_BYTES);
-	const stderrP = collectPipe(proc.stderr as ReadableStream<Uint8Array>, KUBE_OUTPUT_MAX_BYTES);
-	const deadline = Date.now() + KUBE_EXEC_KILL_MS;
-	let timedOut = false;
-	for (;;) {
-		const remaining = deadline - Date.now();
-		if (remaining <= 0) {
-			timedOut = true;
-			proc.kill();
-			break;
-		}
-		const { promise: settledP, resolve: settle } = Promise.withResolvers<{ code: number } | null>();
-		proc.exited.then(
-			(code) => settle({ code }),
-			() => settle(null),
-		);
-		setTimeout(() => settle(null), remaining);
-		const settled = await settledP;
-		if (settled !== null) break;
-	}
-	const code = await proc.exited;
-	const [stdout, stderrRaw] = await Promise.all([stdoutP, stderrP]);
-	const stderr = timedOut ? `${stderrRaw}\nkubernetes-provider: exec timeout`.trim() : stderrRaw;
-	return { code: timedOut ? -1 : code, stdout, stderr };
-}
-
-/** Thrown when a kubectl invocation itself fails (mapped per-op). */
-class KubeCallError extends Error {
-	constructor(
-		message: string,
-		readonly result: KubeExecResult,
-	) {
-		super(message);
-	}
-}
-
-/**
- * Thrown when the object's API uid moved between the validation GET and the
- * deletion: we never delete a replacement object we did not validate.
- */
-class KubePreconditionError extends Error {}
-
-// ---------------------------------------------------------------------------
-// Configuration resolution (operator-explicit; no ambient discovery)
-// ---------------------------------------------------------------------------
-
-interface KubernetesConfig {
-	kubectlBin: string;
-	/** Explicit kubeconfig context from the persisted binding. */
-	context: string;
-	/** Namespace from the persisted binding. */
-	namespace: string;
-	/** Namespace API uid from the persisted binding (never re-resolved). */
-	namespaceUid: string;
-	/** Fleet-generated resource identity (32 lowercase hex). */
-	resourceIdentity: string;
-	/** Deterministic Pod/PVC name: `omp-ws-<resourceIdentity>`. */
-	resourceName: string;
-	image: string;
-	resources?: { cpu?: string; memory?: string };
-	storageClass?: string;
-	storageSize: string;
-	secretRefs: Record<string, { secretName: string; secretKey: string; envName: string }>;
-	/** Validated clone remote (`request.source.remote`). */
-	sourceRemote: string;
-	/** Pinned full commit (fleet-resolved once). */
-	revision: string;
-	/** Branch created at the pin. */
-	branch: string;
-	/** sha256 of the [sourceRemote, revision, branch] tuple. */
-	sourcePinDigest: string;
-}
-
-const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-/** `<secretName>/<key>`: DNS-1123 subdomain name + k8s secret key charset. */
-const SECRET_REF_PARSE_RE = /^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)\/([-._A-Za-z0-9]+)$/;
-
-function parseSecretRefs(
-	secretRefs: Record<string, string> | undefined,
-): Record<string, { secretName: string; secretKey: string; envName: string }> {
-	const out: KubernetesConfig["secretRefs"] = {};
-	for (const [envName, ref] of Object.entries(secretRefs ?? {})) {
-		if (!ENV_NAME_RE.test(envName)) {
-			throw ProviderProtocolError.invalidRequest(
-				`profile.secretRefs key ${JSON.stringify(envName)} is not a valid environment variable name`,
-			);
-		}
-		// Reserved names carry the provider's own launch, preparation,
-		// callback, home, path, and protocol values; a secret reference must
-		// never shadow one (P5.5). Validated here, before any API call. The
-		// image-owned SSH wrapper entry is reserved for the same reason.
-		if (envName === GIT_SSH_COMMAND_ENV_KEY || RESERVED_SECRET_ENV_KEYS.includes(envName)) {
-			throw ProviderProtocolError.invalidRequest(
-				`profile.secretRefs.${envName} would shadow a reserved environment name the provider injects; rename the secret reference and consume it under an application-specific variable`,
-			);
-		}
-		const match = SECRET_REF_PARSE_RE.exec(ref);
-		if (match === null) {
-			throw ProviderProtocolError.invalidRequest(
-				`profile.secretRefs.${envName} must be "<secretName>/<key>" within the profile namespace, got ${JSON.stringify(ref)}`,
-			);
-		}
-		// Group 1 is the full secret name, group 3 the key (group 2 is the
-		// inner capture of the name pattern).
-		out[envName] = { secretName: match[1], secretKey: match[3], envName };
-	}
-	return out;
-}
-
-/** The deterministic Pod/PVC name: exactly `omp-ws-<resourceIdentity>`. */
-function resourceNameFor(binding: KubernetesBinding): string {
-	if (!RESOURCE_IDENTITY_RE.test(binding.resourceIdentity)) {
-		throw ProviderProtocolError.invalidRequest(
-			`request.kubernetes.resourceIdentity must be 32 lowercase hex characters, got ${JSON.stringify(binding.resourceIdentity)}`,
-		);
-	}
-	return `omp-ws-${binding.resourceIdentity}`;
-}
-
-/**
- * Refuse a branch the shared ref grammar rejects, in the provider's own error
- * vocabulary. `validateWorkspaceRef` (P4.1) is the single source of truth for
- * git-ref syntax: admission and preparation call it, so this provider calls it
- * too instead of carrying a second, drifting grammar. The branch names the
- * workspace volume's checkout ref, so an unusable one must be refused before
- * any kubectl call.
- */
-function assertBranchRef(branch: string): void {
-	try {
-		validateWorkspaceRef(branch);
-	} catch (cause) {
-		if (cause instanceof PrepareWorkspaceError && cause.code === "invalid_request") {
-			throw ProviderProtocolError.invalidRequest(
-				`request.branch ${JSON.stringify(branch)} is not a usable git ref name`,
-				{ cause },
-			);
-		}
-		throw cause;
-	}
-}
-
-/**
- * Resolve the effective configuration, failing BEFORE any cluster call.
- * The persisted binding is authoritative for context/namespace/namespaceUid
- * and for the Pod/PVC name; a profile (or a request) that disagrees with it
- * is a conflict, never a silent re-resolution.
- */
-function resolveConfig(
-	request: ProviderRequest,
-	env: Record<string, string | undefined> = process.env,
-): KubernetesConfig {
-	const profile = request.profile;
-	if (profile.provider !== "kubernetes") {
-		throw ProviderProtocolError.invalidRequest(
-			`profile ${profile.id} is a ${profile.provider} profile, not kubernetes`,
-		);
-	}
-	const binding = request.kubernetes;
-	if (binding === undefined) {
-		throw ProviderProtocolError.invalidRequest(
-			`kubernetes profile ${profile.id} requires request.kubernetes (the persisted resource binding); re-register the workspace to resolve it`,
-		);
-	}
-	if (profile.namespace !== undefined && profile.namespace !== binding.namespace) {
-		throw new ProviderProtocolError(
-			"conflict",
-			`profile namespaces ${JSON.stringify(profile.namespace)} but the workspace is bound to ${JSON.stringify(binding.namespace)}; the binding is fixed at registration`,
-		);
-	}
-	if (profile.context !== undefined && profile.context !== binding.context) {
-		throw new ProviderProtocolError(
-			"conflict",
-			`profile context ${JSON.stringify(profile.context)} but the workspace is bound to ${JSON.stringify(binding.context)}; the binding is fixed at registration`,
-		);
-	}
-	if (binding.namespaceUid.trim() === "") {
-		throw ProviderProtocolError.invalidRequest(
-			"request.kubernetes.namespaceUid must be the namespace's API uid captured at registration",
-		);
-	}
-	if (profile.image === undefined || profile.image.trim() === "") {
-		throw ProviderProtocolError.invalidRequest(
-			`kubernetes profile ${profile.id} requires an image (the session-runtime image)`,
-		);
-	}
-	if (request.source?.local !== undefined) {
-		throw ProviderProtocolError.invalidRequest(
-			"source.local is a fleet-host filesystem path and cannot initialize a kubernetes volume; use source.remote for kubernetes profiles",
-		);
-	}
-	const remote = request.source?.remote;
-	if (remote === undefined) {
-		throw ProviderProtocolError.invalidRequest(
-			`kubernetes profile ${profile.id} requires source.remote: the in-pod volume can only be initialized from a remote clone source`,
-		);
-	}
-	const sourceRemote = validateKubernetesSource(remote);
-	if (request.revision === undefined) {
-		throw ProviderProtocolError.invalidRequest(
-			"kubernetes operations require the resolved revision (the full commit pinned by the fleet); resolve the pin before invoking the provider",
-		);
-	}
-	if (request.branch === undefined) {
-		throw ProviderProtocolError.invalidRequest(
-			"kubernetes operations require the workspace branch created at the pinned revision",
-		);
-	}
-	assertBranchRef(request.branch);
-	return {
-		kubectlBin: env.OMP_KUBE_BIN ?? "kubectl",
-		context: binding.context,
-		namespace: binding.namespace,
-		namespaceUid: binding.namespaceUid,
-		resourceIdentity: binding.resourceIdentity,
-		resourceName: resourceNameFor(binding),
-		image: profile.image,
-		resources: profile.resources,
-		storageClass: profile.storage?.class,
-		storageSize: profile.storage?.size ?? DEFAULT_STORAGE_SIZE,
-		secretRefs: parseSecretRefs(profile.secretRefs),
-		sourceRemote,
-		revision: request.revision,
-		branch: request.branch,
-		sourcePinDigest: computeSourcePinDigest(sourceRemote, request.revision, request.branch),
-	};
-}
-
-// ---------------------------------------------------------------------------
-// Naming helpers
-// ---------------------------------------------------------------------------
-
-const DNS1123_MAX = 63;
-
-/**
- * DNS-1123 label value for the profile id (the label charset is narrower than
- * the annotation's): sanitize to a label, truncate to 63, then trim the
- * hyphens truncation may have exposed (a label may not end in "-").
- */
-function profileLabel(profileId: string): string {
-	const sanitized = profileId
-		.toLowerCase()
-		.replace(/[^a-z0-9-]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return sanitized.slice(0, DNS1123_MAX).replace(/-+$/g, "") || "profile";
-}
-
-// ---------------------------------------------------------------------------
-// Identity helpers (ONE ownership validator, all four operations)
-// ---------------------------------------------------------------------------
-
-interface ObjectMeta {
-	uid: string;
-	deletionTimestamp: string | null;
-	labels: Record<string, string>;
-	annotations: Record<string, string>;
-}
-
-/** Values an object's metadata must carry before this workspace may touch it. */
-interface WorkspaceOwnership {
-	workspaceId: string;
-	profileId: string;
-	resourceIdentity: string;
-	namespaceUid: string;
-	sourcePinDigest: string;
-	/** Launch token recorded for the requested generation, when known. */
-	providerToken?: string;
-	/** Callback credential digest recorded/enrolled for the generation. */
-	callbackDigest?: string;
-}
-
-/** Everything the provider stamps onto a Pod/PVC (see {@link buildPvcManifest}). */
-export interface KubernetesObjectIdentity {
-	workspaceId: string;
-	profileId: string;
-	resourceIdentity: string;
-	namespaceUid: string;
-	sourcePinDigest: string;
-	workspaceToken: string;
-	callbackDigest: string;
-}
-
-/**
- * The SINGLE ownership validator (P5.3 step 5), used by all four operations.
- * Returns null when the object is this workspace's own object for the
- * requested tuple; otherwise the human clause explaining why it is NOT (the
- * caller turns it into a refusal). A foreign object is never mutated or
- * deleted.
- *
- * `opts.generation` fences Pods to one generation; `opts.objectUid` pins the
- * object's own API uid when the provider record carries one. Pods must always
- * carry the launch token annotation, an exact positive-decimal generation
- * label, and the callback credential digest annotation.
- */
-function ownershipReason(
-	kind: "pod" | "persistentvolumeclaim" | "configmap",
-	meta: ObjectMeta,
-	identity: WorkspaceOwnership,
-	opts?: { generation?: number; objectUid?: string | null },
-): string | null {
-	const { labels, annotations } = meta;
-	if (labels[LABEL_MANAGED_BY] !== MANAGED_BY_VALUE) {
-		return `does not carry ${LABEL_MANAGED_BY}=${MANAGED_BY_VALUE}`;
-	}
-	if (labels[LABEL_PART_OF] !== PART_OF_VALUE) {
-		return `does not carry ${LABEL_PART_OF}=${PART_OF_VALUE}`;
-	}
-	if (annotations[ANN_WORKSPACE_ID] !== identity.workspaceId) {
-		return `does not carry ${ANN_WORKSPACE_ID} for this workspace`;
-	}
-	if (annotations[ANN_PROFILE_ID] !== identity.profileId) {
-		return `does not carry ${ANN_PROFILE_ID}=${JSON.stringify(identity.profileId)}`;
-	}
-	if (labels[LABEL_PROFILE] !== profileLabel(identity.profileId)) {
-		return `does not carry ${LABEL_PROFILE}=${JSON.stringify(profileLabel(identity.profileId))}`;
-	}
-	if (labels[LABEL_RESOURCE_ID] !== identity.resourceIdentity) {
-		return `does not carry ${LABEL_RESOURCE_ID}=${JSON.stringify(identity.resourceIdentity)}`;
-	}
-	if (annotations[ANN_NAMESPACE_UID] !== identity.namespaceUid) {
-		return `was created against namespace uid ${JSON.stringify(annotations[ANN_NAMESPACE_UID] ?? null)}, not the bound ${JSON.stringify(identity.namespaceUid)}`;
-	}
-	if (annotations[ANN_SOURCE_PIN_DIGEST] !== identity.sourcePinDigest) {
-		return `was created against a different source/pin/branch tuple (${ANN_SOURCE_PIN_DIGEST} mismatch)`;
-	}
-	if (opts?.objectUid !== undefined && opts.objectUid !== null && meta.uid !== opts.objectUid) {
-		return `carries API uid ${JSON.stringify(meta.uid)}, not the recorded ${JSON.stringify(opts.objectUid)}`;
-	}
-	if (kind === "pod") {
-		const token = annotations[ANN_WORKSPACE_TOKEN];
-		if (typeof token !== "string" || token === "") {
-			return `does not carry ${ANN_WORKSPACE_TOKEN}`;
-		}
-		if (identity.providerToken !== undefined && token !== identity.providerToken) {
-			return "carries a different provider launch token than the recorded identity";
-		}
-		const rawGeneration = labels[LABEL_GENERATION];
-		if (rawGeneration === undefined || !GENERATION_LABEL_RE.test(rawGeneration)) {
-			return `does not carry an exact positive-decimal ${LABEL_GENERATION} label (got ${JSON.stringify(rawGeneration ?? null)})`;
-		}
-		if (opts?.generation !== undefined && Number(rawGeneration) !== opts.generation) {
-			return `runs under generation ${rawGeneration} but generation ${opts.generation} was requested`;
-		}
-		const digest = annotations[ANN_CALLBACK_DIGEST];
-		if (typeof digest !== "string" || digest === "") {
-			return `does not carry ${ANN_CALLBACK_DIGEST}`;
-		}
-		if (identity.callbackDigest !== undefined && digest !== identity.callbackDigest) {
-			return "carries a callback credential digest that does not match the enrolled handoff";
-		}
-	}
-	return null;
-}
-
-/** Uniform refusal for an object this workspace may not touch. */
-function refuseObject(
-	cfg: KubernetesConfig,
-	kind: "pod" | "persistentvolumeclaim" | "configmap",
-	name: string,
-	reason: string,
-	what: string,
-): ProviderResponse {
-	const noun = kind === "pod" ? "pod" : kind === "configmap" ? "configmap" : "claim";
-	return err(
-		"conflict",
-		`${noun} ${cfg.namespace}/${name} failed the workspace identity check: it ${reason}; refusing to ${what} it. If it belongs to another generation of this workspace, stop that generation first. Inspect it manually: kubectl --context <ctx> -n ${cfg.namespace} describe ${kind} ${name}`,
-		false,
-	);
-}
-
-/** Build the complete identity stamped onto (and read back from) an object. */
-function objectIdentity(
-	ownership: WorkspaceOwnership,
-	workspaceToken: string,
-	callbackDigest: string,
-): KubernetesObjectIdentity {
-	return {
-		workspaceId: ownership.workspaceId,
-		profileId: ownership.profileId,
-		resourceIdentity: ownership.resourceIdentity,
-		namespaceUid: ownership.namespaceUid,
-		sourcePinDigest: ownership.sourcePinDigest,
-		workspaceToken,
-		callbackDigest,
-	};
-}
-
 // ---------------------------------------------------------------------------
 // Identity record (stateDir/provider.k8s.json)
 // ---------------------------------------------------------------------------
@@ -705,7 +188,11 @@ interface KubernetesLaunchRecord {
 	pvcName: string;
 	/** API uid of the Pod this record is anchored to (null until observed). */
 	podUid: string | null;
-	/** API uid of the claim observed alongside the Pod (null until observed). */
+	/**
+	 * API uid of the claim observed alongside the Pod (null until observed).
+	 * The claim outlives a Pod generation, so this fence is compared
+	 * independently of the record's generation.
+	 */
 	pvcUid: string | null;
 	sourceRemote: string;
 	revision: string;
@@ -821,7 +308,7 @@ function recordMismatch(
 }
 
 // ---------------------------------------------------------------------------
-// Callback enrollment handoff (runtime/callback-env.ts, shared with bwrap)
+// Callback enrollment handoff (runtime/callback-env.ts)
 // ---------------------------------------------------------------------------
 
 interface CallbackHandoff {
@@ -850,8 +337,9 @@ function callbackCredentialDigest(token: string): string | null {
 /**
  * Read the fleet's callback enrollment handoff. A launch requires it (identity
  * and generation checked; a stale enrollment must never start a generation);
- * a management operation treats an absent or other-generation handoff as "no
- * enrollment evidence" so stop/delete keep working with no handoff at all.
+ * a management operation treats an absent, other-generation, or unusable
+ * handoff as "no enrollment evidence" — never an identity mismatch — so
+ * stop/delete keep working when only a credential is broken.
  */
 function readHandoff(
 	stateDir: string,
@@ -899,6 +387,7 @@ function readHandoff(
 	}
 	const token = env[CALLBACK_TOKEN_ENV_KEY];
 	if (token === undefined) {
+		if (!required) return null;
 		throw new ProviderProtocolError(
 			"unavailable",
 			`${CALLBACK_ENV_FILE} carries no ${CALLBACK_TOKEN_ENV_KEY}: a kubernetes launch requires the enrolled callback credential`,
@@ -906,6 +395,7 @@ function readHandoff(
 	}
 	const digest = callbackCredentialDigest(token);
 	if (digest === null) {
+		if (!required) return null;
 		throw new ProviderProtocolError(
 			"unavailable",
 			`${CALLBACK_ENV_FILE}.${CALLBACK_TOKEN_ENV_KEY} is not a usable 256-bit credential (64-char hex or base64 of 32 bytes)`,
@@ -933,505 +423,6 @@ function expectedCallbackDigest(
 		);
 	}
 	return enrolled ?? recorded;
-}
-
-// ---------------------------------------------------------------------------
-// kubectl helpers (every call carries --context; the ambient context is
-// never consulted or mutated)
-// ---------------------------------------------------------------------------
-
-function kubeArgs(cfg: KubernetesConfig, rest: readonly string[]): string[] {
-	return [
-		cfg.kubectlBin,
-		"--context",
-		cfg.context,
-		`--request-timeout=${KUBE_REQUEST_TIMEOUT}`,
-		...rest,
-	];
-}
-
-/** GET one object as JSON; null when absent (--ignore-not-found). */
-async function kubeGet(
-	exec: KubeExec,
-	cfg: KubernetesConfig,
-	kind: string,
-	name: string,
-	opts?: { namespaced?: boolean },
-): Promise<Record<string, unknown> | null> {
-	const namespaced = opts?.namespaced ?? true;
-	const argv = kubeArgs(cfg, [
-		"get",
-		kind,
-		name,
-		...(namespaced ? ["-n", cfg.namespace] : []),
-		"--ignore-not-found",
-		"-o",
-		"json",
-	]);
-	const result = await exec(argv);
-	if (result.code !== 0) {
-		throw new KubeCallError(
-			`kubectl get ${kind}/${name} failed: ${result.stderr.trim() || `exit ${result.code}`}`,
-			result,
-		);
-	}
-	const text = result.stdout.trim();
-	if (text === "") return null;
-	return JSON.parse(text) as Record<string, unknown>;
-}
-
-/** CREATE one object from a manifest on stdin (never apply: no adopting or patching foreign objects). */
-async function kubeCreate(
-	exec: KubeExec,
-	cfg: KubernetesConfig,
-	manifest: Record<string, unknown>,
-	what: string,
-): Promise<void> {
-	const result = await exec(
-		kubeArgs(cfg, ["create", "-n", cfg.namespace, "-f", "-"]),
-		`${JSON.stringify(manifest)}\n`,
-	);
-	if (result.code !== 0) {
-		throw new KubeCallError(
-			`kubectl create ${what} failed: ${result.stderr.trim() || `exit ${result.code}`}`,
-			result,
-		);
-	}
-}
-
-/**
- * DELETE one object without blocking, after re-confirming its API uid.
- *
- * kubectl has no portable `--uid`/`--resourceVersion` precondition flag for
- * `delete` across the supported version range, so the provider cannot hand the
- * API an atomic precondition. It therefore re-GETs the object immediately
- * before the delete and refuses when the uid moved: a replacement object
- * created between validation and this call is never removed by us. The window
- * between this GET and the DELETE is the residual race, documented here rather
- * than hidden. Absent objects are success; plain `--wait=false` delete, never
- * `--force`.
- */
-async function kubeDelete(
-	exec: KubeExec,
-	cfg: KubernetesConfig,
-	kind: string,
-	name: string,
-	what: string,
-	expectedUid: string,
-): Promise<void> {
-	if (expectedUid === "") {
-		throw new KubePreconditionError(
-			`refusing to delete ${what}: the validated object carries no API uid`,
-		);
-	}
-	const current = await kubeGet(exec, cfg, kind, name);
-	if (current === null) return;
-	const uid = objectMeta(current).uid;
-	if (uid !== expectedUid) {
-		throw new KubePreconditionError(
-			`refusing to delete ${what}: its API uid changed (${expectedUid} -> ${uid || "none"}) after validation`,
-		);
-	}
-	const result = await exec(
-		kubeArgs(cfg, ["delete", kind, name, "-n", cfg.namespace, "--wait=false"]),
-	);
-	if (result.code !== 0) {
-		if (/NotFound|not found/i.test(result.stderr)) return;
-		throw new KubeCallError(
-			`kubectl delete ${what} failed: ${result.stderr.trim() || `exit ${result.code}`}`,
-			result,
-		);
-	}
-}
-
-/** API uid of the bound namespace, or null when it no longer exists. */
-async function kubeNamespaceUid(exec: KubeExec, cfg: KubernetesConfig): Promise<string | null> {
-	const namespace = await kubeGet(exec, cfg, "namespace", cfg.namespace, { namespaced: false });
-	if (namespace === null) return null;
-	const uid = objectMeta(namespace).uid;
-	return uid === "" ? null : uid;
-}
-
-// ---------------------------------------------------------------------------
-// Object inspection (plain-record navigation, no schema dependency)
-// ---------------------------------------------------------------------------
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: null;
-}
-
-function objectMeta(object: Record<string, unknown>): ObjectMeta {
-	const metadata = asRecord(object.metadata) ?? {};
-	return {
-		uid: typeof metadata.uid === "string" ? metadata.uid : "",
-		deletionTimestamp:
-			typeof metadata.deletionTimestamp === "string" ? metadata.deletionTimestamp : null,
-		labels: (asRecord(metadata.labels) ?? {}) as Record<string, string>,
-		annotations: (asRecord(metadata.annotations) ?? {}) as Record<string, string>,
-	};
-}
-
-function podPhase(pod: Record<string, unknown>): string {
-	const status = asRecord(pod.status);
-	return typeof status?.phase === "string" ? status.phase : "Unknown";
-}
-
-function podStartTime(pod: Record<string, unknown>): number | undefined {
-	const status = asRecord(pod.status);
-	if (typeof status?.startTime !== "string") return undefined;
-	const ms = Date.parse(status.startTime);
-	return Number.isNaN(ms) ? undefined : ms;
-}
-
-/** First waiting/terminated container reason, for actionable failures. */
-function podContainerReason(pod: Record<string, unknown>): string | null {
-	const status = asRecord(pod.status);
-	const list = status?.containerStatuses;
-	if (!Array.isArray(list)) return null;
-	for (const entry of list) {
-		const state = asRecord(asRecord(entry)?.state);
-		const waiting = asRecord(state?.waiting);
-		if (typeof waiting?.reason === "string") return waiting.reason;
-		const terminated = asRecord(state?.terminated);
-		if (typeof terminated?.reason === "string") return terminated.reason;
-	}
-	return null;
-}
-
-function pvcMeta(pvc: Record<string, unknown>): ObjectMeta & {
-	storageClassName: string | undefined;
-	size: string | undefined;
-	accessModes: string[];
-} {
-	const spec = asRecord(pvc.spec) ?? {};
-	const resources = asRecord(spec.resources) ?? {};
-	const requests = asRecord(resources.requests) ?? {};
-	const accessModes = Array.isArray(spec.accessModes)
-		? spec.accessModes.filter((m): m is string => typeof m === "string")
-		: [];
-	return {
-		...objectMeta(pvc),
-		storageClassName: typeof spec.storageClassName === "string" ? spec.storageClassName : undefined,
-		size: typeof requests.storage === "string" ? requests.storage : undefined,
-		accessModes,
-	};
-}
-
-/** One observed workspace: both objects plus the live namespace uid. */
-interface ObservedObjects {
-	namespaceUid: string | null;
-	pod: Record<string, unknown> | null;
-	pvc: Record<string, unknown> | null;
-}
-
-/** GET the Pod, the PVC, and the bound namespace's uid. */
-async function observeObjects(exec: KubeExec, cfg: KubernetesConfig): Promise<ObservedObjects> {
-	const pod = await kubeGet(exec, cfg, "pod", cfg.resourceName);
-	const pvc = await kubeGet(exec, cfg, "persistentvolumeclaim", cfg.resourceName);
-	const namespaceUid = await kubeNamespaceUid(exec, cfg);
-	return { namespaceUid, pod, pvc };
-}
-
-/** Protocol observation: object API uids by kind, null when absent. */
-function observed(
-	namespaceUid: string,
-	pod: Record<string, unknown> | null,
-	pvc: Record<string, unknown> | null,
-): KubernetesObserved {
-	const podUid = pod === null ? "" : objectMeta(pod).uid;
-	const pvcUid = pvc === null ? "" : objectMeta(pvc).uid;
-	return {
-		namespaceUid,
-		podUid: podUid === "" ? null : podUid,
-		pvcUid: pvcUid === "" ? null : pvcUid,
-	};
-}
-
-// ---------------------------------------------------------------------------
-// Manifest builders (pure; unit-testable without a cluster)
-// ---------------------------------------------------------------------------
-
-function identityLabels(
-	workspaceId: string,
-	profileId: string,
-	resourceIdentity: string,
-	generation?: number,
-): Record<string, string> {
-	const labels: Record<string, string> = {
-		[LABEL_MANAGED_BY]: MANAGED_BY_VALUE,
-		[LABEL_PART_OF]: PART_OF_VALUE,
-		[LABEL_RESOURCE_ID]: resourceIdentity,
-		[LABEL_PROFILE]: profileLabel(profileId),
-	};
-	// The generation label is Pod-only: a retained claim outlives the
-	// generation that created it, and a stale value would be misleading.
-	if (generation !== undefined) labels[LABEL_GENERATION] = String(generation);
-	return labels;
-}
-
-function identityAnnotations(identity: KubernetesObjectIdentity): Record<string, string> {
-	return {
-		[ANN_WORKSPACE_ID]: identity.workspaceId,
-		[ANN_PROFILE_ID]: identity.profileId,
-		[ANN_NAMESPACE_UID]: identity.namespaceUid,
-		[ANN_WORKSPACE_TOKEN]: identity.workspaceToken,
-		[ANN_CALLBACK_DIGEST]: identity.callbackDigest,
-		[ANN_SOURCE_PIN_DIGEST]: identity.sourcePinDigest,
-	};
-}
-
-/** The per-workspace persistent claim (retained across stop/replacement). */
-export function buildPvcManifest(
-	cfg: KubernetesConfig,
-	identity: KubernetesObjectIdentity,
-): Record<string, unknown> {
-	const spec: Record<string, unknown> = {
-		accessModes: ["ReadWriteOnce"],
-		volumeMode: "Filesystem",
-		resources: { requests: { storage: cfg.storageSize } },
-	};
-	if (cfg.storageClass !== undefined) spec.storageClassName = cfg.storageClass;
-	return {
-		apiVersion: "v1",
-		kind: "PersistentVolumeClaim",
-		metadata: {
-			name: cfg.resourceName,
-			namespace: cfg.namespace,
-			labels: identityLabels(identity.workspaceId, identity.profileId, identity.resourceIdentity),
-			annotations: identityAnnotations(identity),
-		},
-		spec,
-	};
-}
-
-/**
- * The workspace pod: single container, no inbound service, restartPolicy
- * Never, service-account token unmounted (P5.5: no Kubernetes credentials
- * inside agent execution), hardened securityContext, PVC at /workspace
- * plus an emptyDir /tmp for the read-only root filesystem.
- */
-export function buildPodManifest(
-	cfg: KubernetesConfig,
-	request: ProviderRequest,
-	identity: KubernetesObjectIdentity,
-	callbackEnv: Record<string, string>,
-): Record<string, unknown> {
-	const { workspaceId, generation } = request;
-
-	const env: Record<string, unknown>[] = [
-		{ name: "OMP_WORKSPACE_ID", value: workspaceId },
-		{ name: "OMP_WORKSPACE_GENERATION", value: String(generation) },
-		{ name: "OMP_WORKSPACE_TOKEN", value: identity.workspaceToken },
-		{ name: "OMP_PROVIDER_PROTO", value: String(OMP_PROVIDER_PROTO) },
-		{ name: "OMP_WORKSPACE_ROOT", value: POD_WORKSPACE_ROOT },
-		{ name: "OMP_WORKSPACE_DIR", value: POD_CHECKOUT_DIR },
-		{ name: "HOME", value: POD_HOME_DIR },
-		{ name: "PI_CODING_AGENT_DIR", value: `${POD_HOME_DIR}/agent` },
-		{ name: "PATH", value: "/usr/local/bin:/usr/bin:/bin" },
-		{ name: "LANG", value: "C.UTF-8" },
-		{ name: "TERM", value: "xterm-256color" },
-		// Image-owned SSH wrapper: pins the operator's Git identity for
-		// in-pod preparation and network probes (P3.5). Reserved, so a
-		// profile secretRef can never replace it (see parseSecretRefs).
-		{ name: GIT_SSH_COMMAND_ENV_KEY, value: POD_GIT_SSH_COMMAND },
-	];
-
-	// In-pod preparation input: ALWAYS all three fields (the image entrypoint
-	// requires them on every pod start, and the resolved config proves they
-	// are present before any cluster call). An initialized volume never
-	// re-clones: prepare-workspace validates the existing marker instead.
-	env.push({ name: "OMP_PREP_SOURCE_REMOTE", value: cfg.sourceRemote });
-	env.push({ name: "OMP_PREP_REVISION", value: cfg.revision });
-	env.push({ name: "OMP_PREP_BRANCH", value: cfg.branch });
-
-	// Callback enrollment handoff (generation-scoped; carries the raw
-	// credential into the pod env only).
-	for (const [key, value] of Object.entries(callbackEnv)) {
-		env.push({ name: key, value });
-	}
-
-	// Sanitized baseline: point the in-pod seed at the mounted documents.
-	// Absent baseline → no mount and no env, so a volume with no operator
-	// config to seed stays unseeded exactly as before.
-	const baseline = request.baseline;
-	if (baseline !== undefined) {
-		env.push({
-			name: BASELINE_CONFIG_ENV_KEY,
-			value: `${POD_BASELINE_DIR}/${BASELINE_CONFIG_KEY}`,
-		});
-	}
-
-	// Model/tool credentials via native secret references only.
-	for (const ref of Object.values(cfg.secretRefs)) {
-		env.push({
-			name: ref.envName,
-			valueFrom: { secretKeyRef: { name: ref.secretName, key: ref.secretKey } },
-		});
-	}
-
-	const resources: Record<string, unknown> = {};
-	if (cfg.resources?.cpu !== undefined || cfg.resources?.memory !== undefined) {
-		const quantities: Record<string, string> = {};
-		if (cfg.resources.cpu !== undefined) quantities.cpu = cfg.resources.cpu;
-		if (cfg.resources.memory !== undefined) quantities.memory = cfg.resources.memory;
-		// Identical requests/limits → Guaranteed QoS: a stateful single
-		// writer must not be the node's first eviction candidate.
-		resources.requests = quantities;
-		resources.limits = quantities;
-	}
-
-	const container: Record<string, unknown> = {
-		name: "session",
-		image: cfg.image,
-		imagePullPolicy: "IfNotPresent",
-		env,
-		resources,
-		securityContext: {
-			runAsNonRoot: true,
-			runAsUser: RUNTIME_UID,
-			runAsGroup: RUNTIME_UID,
-			allowPrivilegeEscalation: false,
-			readOnlyRootFilesystem: true,
-			capabilities: { drop: ["ALL"] },
-		},
-		volumeMounts: [
-			{ name: "workspace", mountPath: POD_WORKSPACE_ROOT },
-			{ name: "tmp", mountPath: "/tmp" },
-			...(baseline !== undefined
-				? [{ name: "baseline", mountPath: POD_BASELINE_DIR, readOnly: true }]
-				: []),
-		],
-	};
-
-	return {
-		apiVersion: "v1",
-		kind: "Pod",
-		metadata: {
-			name: cfg.resourceName,
-			namespace: cfg.namespace,
-			labels: identityLabels(
-				workspaceId,
-				identity.profileId,
-				identity.resourceIdentity,
-				generation,
-			),
-			annotations: identityAnnotations(identity),
-		},
-		spec: {
-			restartPolicy: "Never",
-			automountServiceAccountToken: false,
-			enableServiceLinks: false,
-			terminationGracePeriodSeconds: 15,
-			securityContext: {
-				runAsNonRoot: true,
-				runAsUser: RUNTIME_UID,
-				runAsGroup: RUNTIME_UID,
-				fsGroup: RUNTIME_UID,
-				seccompProfile: { type: "RuntimeDefault" },
-			},
-			containers: [container],
-			volumes: [
-				{
-					name: "workspace",
-					persistentVolumeClaim: { claimName: cfg.resourceName, readOnly: false },
-				},
-				{ name: "tmp", emptyDir: {} },
-				...(baseline !== undefined
-					? [
-							{
-								name: "baseline",
-								configMap: { name: baselineConfigMapName(cfg), optional: false },
-							},
-						]
-					: []),
-			],
-		},
-	};
-}
-
-/** ConfigMap name holding this workspace's sanitized baseline documents. */
-function baselineConfigMapName(cfg: KubernetesConfig): string {
-	return `${cfg.resourceName}${BASELINE_CONFIGMAP_SUFFIX}`;
-}
-
-/**
- * The baseline ConfigMap: `data` keys become the file names under
- * {@link POD_BASELINE_DIR}. It carries the same identity labels/annotations
- * as the Pod and PVC, so it is attributable to exactly this workspace
- * generation, and only allowlisted, credential-free documents ever land here
- * (the fleet sanitized them; the provider copies them verbatim).
- */
-export function buildBaselineConfigMapManifest(
-	cfg: KubernetesConfig,
-	request: ProviderRequest,
-	identity: KubernetesObjectIdentity,
-): Record<string, unknown> {
-	const baseline = request.baseline;
-	if (baseline === undefined) {
-		throw new Error("baseline ConfigMap manifest requires a request baseline");
-	}
-	const { workspaceId, generation } = request;
-	return {
-		apiVersion: "v1",
-		kind: "ConfigMap",
-		metadata: {
-			name: baselineConfigMapName(cfg),
-			namespace: cfg.namespace,
-			labels: identityLabels(
-				workspaceId,
-				identity.profileId,
-				identity.resourceIdentity,
-				generation,
-			),
-			annotations: identityAnnotations(identity),
-		},
-		data: {
-			[BASELINE_CONFIG_KEY]: baseline.configYaml,
-			...(baseline.modelsYaml !== undefined ? { [BASELINE_MODELS_KEY]: baseline.modelsYaml } : {}),
-		},
-	};
-}
-
-/**
- * Refresh the baseline ConfigMap immediately before a Pod that mounts it is
- * created. The object is workspace-scoped (one name per workspace, like the
- * Pod), so a previous generation's copy must be replaced rather than reused:
- * the operator's agent config may have changed since. The old object is
- * deleted through the uid-preconditioned path and the new one created right
- * after, so the name is only ever briefly absent, and only while the pod that
- * would mount it does not exist yet (ensure-running reaches here solely to
- * create one).
- */
-async function ensureBaselineConfigMap(
-	exec: KubeExec,
-	cfg: KubernetesConfig,
-	request: ProviderRequest,
-	identity: KubernetesObjectIdentity,
-	ownership: WorkspaceOwnership,
-): Promise<void> {
-	if (request.baseline === undefined) return;
-	const name = baselineConfigMapName(cfg);
-	const existing = await kubeGet(exec, cfg, "configmap", name);
-	if (existing !== null) {
-		// Same identity discipline as the Pod and PVC: an object on this
-		// workspace's deterministic name that is not provably ours is never
-		// replaced, so a name collision cannot destroy someone else's data.
-		const reason = ownershipReason("configmap", objectMeta(existing), ownership);
-		if (reason !== null) {
-			throw new KubePreconditionError(
-				`configmap ${cfg.namespace}/${name} failed the workspace identity check: it ${reason}; refusing to replace it. Inspect it manually: kubectl --context <ctx> -n ${cfg.namespace} describe configmap ${name}`,
-			);
-		}
-		await kubeDelete(exec, cfg, "configmap", name, `configmap ${name}`, objectMeta(existing).uid);
-	}
-	await kubeCreate(
-		exec,
-		cfg,
-		buildBaselineConfigMapManifest(cfg, request, identity),
-		`configmap ${name}`,
-	);
 }
 
 // ---------------------------------------------------------------------------
@@ -1464,6 +455,64 @@ function err(
 		providerProto: OMP_PROVIDER_PROTO,
 		error: { code, message, retryable },
 	};
+}
+
+/** Protocol observation: object API uids by kind, null when absent. */
+function observed(
+	namespaceUid: string,
+	pod: Record<string, unknown> | null,
+	pvc: Record<string, unknown> | null,
+): KubernetesObserved {
+	const podUid = pod === null ? "" : objectMeta(pod).uid;
+	const pvcUid = pvc === null ? "" : objectMeta(pvc).uid;
+	return {
+		namespaceUid,
+		podUid: podUid === "" ? null : podUid,
+		pvcUid: pvcUid === "" ? null : pvcUid,
+	};
+}
+
+/** Uniform refusal for an object this workspace may not touch. */
+function refuseObject(
+	cfg: KubernetesConfig,
+	kind: "pod" | "persistentvolumeclaim" | "configmap",
+	name: string,
+	reason: string,
+	what: string,
+): ProviderResponse {
+	const noun = kind === "pod" ? "pod" : kind === "configmap" ? "configmap" : "claim";
+	return err(
+		"conflict",
+		`${noun} ${cfg.namespace}/${name} failed the workspace identity check: it ${reason}; refusing to ${what} it. If it belongs to another generation of this workspace, stop that generation first. Inspect it manually: kubectl --context <ctx> -n ${cfg.namespace} describe ${kind} ${name}`,
+		false,
+	);
+}
+
+/**
+ * Final namespace fence shared by every operation that reports an outcome
+ * after touching objects: a namespace deleted or replaced mid-operation must
+ * surface as a conflict, never a stale success.
+ */
+function namespaceReplaced(
+	cfg: KubernetesConfig,
+	observedUid: string | null,
+	what: string,
+): ProviderResponse | null {
+	if (observedUid === null) {
+		return err(
+			"conflict",
+			`the bound namespace ${cfg.namespace} disappeared during ${what} (pinned uid ${cfg.namespaceUid}); the resources are retained for inspection`,
+			false,
+		);
+	}
+	if (observedUid !== cfg.namespaceUid) {
+		return err(
+			"conflict",
+			`namespace ${cfg.namespace} was replaced during ${what} (uid ${cfg.namespaceUid} -> ${observedUid}); the resources are retained for inspection`,
+			false,
+		);
+	}
+	return null;
 }
 
 /** Map a kubectl-level or protocol failure to the typed vocabulary. */
@@ -1508,50 +557,54 @@ function kubeFailure(cause: unknown, what: string): ProviderResponse {
 	return err("internal", `${what}: ${String(cause)}`, false);
 }
 
-/** Poll until `probe` reports done or the budget elapses. */
-async function pollUntil(budgetMs: number, probe: () => Promise<boolean>): Promise<boolean> {
-	const deadline = Date.now() + budgetMs;
-	for (;;) {
-		if (await probe()) return true;
-		if (Date.now() >= deadline) return false;
-		await delay(POLL_INTERVAL_MS);
+/**
+ * Refresh the baseline ConfigMap immediately before a Pod that mounts it is
+ * created. The object is workspace-scoped (one name per workspace, like the
+ * Pod), so a previous generation's copy must be replaced rather than reused:
+ * the operator's agent config may have changed since. The old object is
+ * deleted through the uid-preconditioned path, its absence is PROVEN before
+ * the replacement is created (a finalizer keeps deletion asynchronous, and the
+ * API rejects a duplicate CREATE), and only then is the new one created.
+ */
+async function ensureBaselineConfigMap(
+	exec: KubeExec,
+	cfg: KubernetesConfig,
+	request: ProviderRequest,
+	identity: KubernetesObjectIdentity,
+	ownership: WorkspaceOwnership,
+	waitMs: number,
+): Promise<void> {
+	if (request.baseline === undefined) return;
+	const name = baselineConfigMapName(cfg);
+	const existing = await kubeGet(exec, cfg, "configmap", name);
+	if (existing !== null) {
+		// Same identity discipline as the Pod and PVC: an object on this
+		// workspace's deterministic name that is not provably ours is never
+		// replaced, so a name collision cannot destroy someone else's data.
+		const reason = ownershipReason("configmap", objectMeta(existing), ownership);
+		if (reason !== null) {
+			throw new KubePreconditionError(
+				`configmap ${cfg.namespace}/${name} failed the workspace identity check: it ${reason}; refusing to replace it. Inspect it manually: kubectl --context <ctx> -n ${cfg.namespace} describe configmap ${name}`,
+			);
+		}
+		await kubeDelete(exec, cfg, "configmap", name, `configmap ${name}`, objectMeta(existing).uid);
+		if (!(await waitGone(exec, cfg, "configmap", name, waitMs))) {
+			throw new KubePreconditionError(
+				`configmap ${name} did not disappear within ${waitMs}ms (finalizers?); retry ensure-running`,
+			);
+		}
 	}
+	await kubeCreate(
+		exec,
+		cfg,
+		buildBaselineConfigMapManifest(cfg, request, identity),
+		`configmap ${name}`,
+	);
 }
 
-/** Wait until the named object is gone from the API (404), bounded. */
-async function waitGone(
-	exec: KubeExec,
-	cfg: KubernetesConfig,
-	kind: string,
-	name: string,
-	budgetMs: number,
-): Promise<boolean> {
-	return pollUntil(budgetMs, async () => (await kubeGet(exec, cfg, kind, name)) === null);
-}
-
-/** Outcome of waiting for a pod to reach Running. */
-export interface PodRunningWait {
-	running: boolean;
-	phase: string;
-	reason: string | null;
-}
-
-/** Wait until the pod is Running, bounded. Returns phase detail for errors. */
-async function waitPodRunning(
-	exec: KubeExec,
-	cfg: KubernetesConfig,
-	name: string,
-	budgetMs: number,
-): Promise<PodRunningWait> {
-	let last: Record<string, unknown> | null = null;
-	const done = await pollUntil(budgetMs, async () => {
-		last = await kubeGet(exec, cfg, "pod", name);
-		if (last === null) return false;
-		return podPhase(last) === "Running";
-	});
-	const phase = last === null ? "Missing" : podPhase(last);
-	return { running: done, phase, reason: last === null ? null : podContainerReason(last) };
-}
+// ---------------------------------------------------------------------------
+// Workspace lock
+// ---------------------------------------------------------------------------
 
 /**
  * Take the hardened per-workspace lock, waiting (bounded) for a peer that
@@ -1605,10 +658,7 @@ function defaultDeps(): OpDeps {
 	return {
 		exec: defaultKubeExec,
 		env: process.env,
-		ensureWaitMs: envMs("OMP_KUBE_ENSURE_WAIT_MS", ENSURE_WAIT_MS_DEFAULT),
-		stopWaitMs: envMs("OMP_KUBE_STOP_WAIT_MS", STOP_WAIT_MS_DEFAULT),
-		deleteWaitMs: envMs("OMP_KUBE_DELETE_WAIT_MS", DELETE_WAIT_MS_DEFAULT),
-		lockWaitMs: envMs("OMP_KUBE_LOCK_WAIT_MS", LOCK_WAIT_MS_DEFAULT),
+		...readKubernetesWaits(process.env),
 	};
 }
 
@@ -1623,6 +673,8 @@ interface OpContext {
 	record: KubernetesLaunchRecord | null;
 	/** The record's state for the requested generation, when it describes it. */
 	recorded: KubernetesLaunchRecord | null;
+	/** Claim uid fenced across generations (the claim outlives a Pod). */
+	recordedPvcUid: string | null;
 	/** Callback handoff; non-null only for a launch (or a matching handoff). */
 	handoff: CallbackHandoff | null;
 }
@@ -1737,6 +789,7 @@ async function withOpContext(
 			handle,
 			record,
 			recorded: recordForGeneration(record, request.generation),
+			recordedPvcUid: record?.pvcUid ?? null,
 			handoff,
 		});
 	} catch (cause) {
@@ -1787,7 +840,7 @@ async function peerRunningResponse(
 		}
 		if (
 			ownershipReason("persistentvolumeclaim", pvcMeta(pvc), ownership, {
-				objectUid: recorded.pvcUid,
+				objectUid: record?.pvcUid ?? null,
 			}) !== null
 		) {
 			return null;
@@ -1797,10 +850,8 @@ async function peerRunningResponse(
 		if (phase !== "Running") {
 			// Owned objects, no container yet: the peer's launch is mid-flight,
 			// so the workspace is not running. A failure envelope persists
-			// nothing (the fleet's ensure persists the handle and the
-			// authorized generation only on an ok response) and sends the next
-			// attempt through the ordinary inspect-first path, which adopts or
-			// replaces this very Pod instead of creating a second one.
+			// nothing and sends the next attempt through the ordinary
+			// inspect-first path, which adopts or replaces this very Pod.
 			return err(
 				"unavailable",
 				`another provider operation for ${request.workspaceId} holds the workspace lock and its pod ${cfg.namespace}/${cfg.resourceName} is still ${phase} (no container has run); retry ensure-running once that launch settles`,
@@ -1824,6 +875,10 @@ interface LaunchInputs {
 	callbackDigest: string;
 	/** Previous record, for createdAt continuity. */
 	record: KubernetesLaunchRecord | null;
+	/** API uid of the Pod this launch is anchored to, when one was observed. */
+	podUid: string | null;
+	/** API uid of the claim that must be mounted (validated or just created). */
+	pvcUid: string | null;
 }
 
 /** Observed uids persisted alongside a launch. */
@@ -1877,7 +932,7 @@ async function opEnsureRunning(
 ): Promise<ProviderResponse> {
 	const request = rawRequest;
 	return withOpContext(request, deps, { requireHandoff: true, peerProbe: true }, async (ctx) => {
-		const { cfg, recorded } = ctx;
+		const { cfg, recorded, recordedPvcUid } = ctx;
 		const podName = cfg.resourceName;
 
 		let pod: Record<string, unknown> | null;
@@ -1906,7 +961,7 @@ async function opEnsureRunning(
 				);
 			}
 			const claimReason = ownershipReason("persistentvolumeclaim", pvcMeta(pvc), ctx.ownership, {
-				objectUid: recorded?.pvcUid ?? null,
+				objectUid: recordedPvcUid,
 			});
 			if (claimReason !== null) {
 				return refuseObject(cfg, "persistentvolumeclaim", podName, claimReason, "attach");
@@ -1922,7 +977,13 @@ async function opEnsureRunning(
 			const token = recorded?.workspaceToken ?? meta.annotations[ANN_WORKSPACE_TOKEN] ?? "";
 			const callbackDigest =
 				recorded?.callbackDigest ?? meta.annotations[ANN_CALLBACK_DIGEST] ?? "";
-			const launch: LaunchInputs = { workspaceToken: token, callbackDigest, record: ctx.record };
+			const launch: LaunchInputs = {
+				workspaceToken: token,
+				callbackDigest,
+				record: ctx.record,
+				podUid: meta.uid === "" ? null : meta.uid,
+				pvcUid: objectMeta(pvc).uid === "" ? null : objectMeta(pvc).uid,
+			};
 			const phase = podPhase(pod);
 
 			if (phase === "Failed" || phase === "Succeeded") {
@@ -1960,8 +1021,8 @@ async function opEnsureRunning(
 			// Pending or Running: anchor the record to the observed identity,
 			// then wait for Running within the budget (image pulls are slow).
 			const anchored = launchRecord(request, cfg, launch, {
-				podUid: meta.uid === "" ? null : meta.uid,
-				pvcUid: objectMeta(pvc).uid === "" ? null : objectMeta(pvc).uid,
+				podUid: launch.podUid,
+				pvcUid: launch.pvcUid,
 				...(podStartTime(pod) !== undefined ? { startedAt: podStartTime(pod) } : {}),
 			});
 			writeRecord(request.stateDir, anchored);
@@ -2005,12 +1066,12 @@ async function opEnsureRunning(
 				false,
 			);
 		}
-		const launch: LaunchInputs = { workspaceToken: token, callbackDigest, record: ctx.record };
 
+		let pvcUid: string | null;
 		if (pvc !== null) {
 			const claim = pvcMeta(pvc);
 			const reason = ownershipReason("persistentvolumeclaim", claim, ctx.ownership, {
-				objectUid: recorded?.pvcUid ?? null,
+				objectUid: recordedPvcUid,
 			});
 			if (reason !== null) {
 				return refuseObject(cfg, "persistentvolumeclaim", podName, reason, "attach");
@@ -2045,9 +1106,11 @@ async function opEnsureRunning(
 					false,
 				);
 			}
+			pvcUid = claim.uid === "" ? null : claim.uid;
 		} else {
+			let created: Record<string, unknown> | null;
 			try {
-				await kubeCreate(
+				created = await kubeCreate(
 					deps.exec,
 					cfg,
 					buildPvcManifest(cfg, objectIdentity(ctx.ownership, token, callbackDigest)),
@@ -2056,16 +1119,27 @@ async function opEnsureRunning(
 			} catch (cause) {
 				return kubeFailure(cause, "ensure-running");
 			}
+			const createdUid = created === null ? "" : objectMeta(created).uid;
+			pvcUid = createdUid === "" ? null : createdUid;
 		}
 
+		const launch: LaunchInputs = {
+			workspaceToken: token,
+			callbackDigest,
+			record: ctx.record,
+			podUid: null,
+			pvcUid,
+		};
 		return await createPodAndWait(ctx, deps, launch);
 	});
 }
 
 /**
  * Create the workspace pod and wait for Running; shared by every ensure path.
- * The record is written as soon as the Pod's uid is observed, so a crash
- * between create and Running still leaves a re-anchorable identity.
+ * The record is written as soon as the Pod's uid is observed and carries the
+ * validated/created claim uid, so a crash or a stuck Pending Pod between create
+ * and Running still leaves a fully re-anchorable identity (a lost claim uid
+ * would let a retry adopt a same-named replacement claim).
  */
 async function createPodAndWait(
 	ctx: OpContext,
@@ -2079,7 +1153,14 @@ async function createPodAndWait(
 	try {
 		// The mounted objects must exist before the Pod that references them,
 		// or the kubelet cannot start the container.
-		await ensureBaselineConfigMap(deps.exec, cfg, request, identity, ctx.ownership);
+		await ensureBaselineConfigMap(
+			deps.exec,
+			cfg,
+			request,
+			identity,
+			ctx.ownership,
+			deps.stopWaitMs,
+		);
 		await kubeCreate(
 			deps.exec,
 			cfg,
@@ -2092,9 +1173,10 @@ async function createPodAndWait(
 
 	const created = await kubeGet(deps.exec, cfg, "pod", podName);
 	const uid = created === null ? "" : objectMeta(created).uid;
+	launch.podUid = uid === "" ? null : uid;
 	writeRecord(
 		request.stateDir,
-		launchRecord(request, cfg, launch, { podUid: uid === "" ? null : uid, pvcUid: null }),
+		launchRecord(request, cfg, launch, { podUid: launch.podUid, pvcUid: launch.pvcUid }),
 	);
 
 	let waited: PodRunningWait;
@@ -2115,10 +1197,12 @@ async function createPodAndWait(
 }
 
 /**
- * Finish a running ensure: re-observe both objects, recheck the bound
- * namespace uid (a namespace deleted and recreated while the operation ran is
- * a conflict, never a silent success, and the observed resources are retained
- * for inspection), persist the observed uids, and report the observation.
+ * Finish a running ensure: re-observe both objects, re-run the ownership
+ * validator against the exact launch uids, require the claim to remain
+ * present, recheck the bound namespace uid, persist the observed uids, and
+ * report. An object replaced during the readiness wait (or a replaced
+ * namespace) is a conflict, never a silent success: the record must never
+ * acquire an identity the launch did not validate.
  */
 async function reportRunning(
 	ctx: OpContext,
@@ -2132,20 +1216,8 @@ async function reportRunning(
 	} catch (cause) {
 		return kubeFailure(cause, "ensure-running");
 	}
-	if (objects.namespaceUid === null) {
-		return err(
-			"conflict",
-			`the bound namespace ${cfg.namespace} disappeared during ensure-running (pinned uid ${cfg.namespaceUid}); the resources are retained for inspection`,
-			false,
-		);
-	}
-	if (objects.namespaceUid !== cfg.namespaceUid) {
-		return err(
-			"conflict",
-			`namespace ${cfg.namespace} was replaced during ensure-running (uid ${cfg.namespaceUid} -> ${objects.namespaceUid}); the resources are retained for inspection`,
-			false,
-		);
-	}
+	const namespaceFailure = namespaceReplaced(cfg, objects.namespaceUid, "ensure-running");
+	if (namespaceFailure !== null) return namespaceFailure;
 	if (objects.pod === null) {
 		return err(
 			"unavailable",
@@ -2157,14 +1229,39 @@ async function reportRunning(
 	if (meta.uid === "") {
 		return err("internal", `pod ${cfg.namespace}/${cfg.resourceName} carries no API uid`, false);
 	}
+	const podReason = ownershipReason("pod", meta, ctx.ownership, {
+		generation: request.generation,
+		objectUid: launch.podUid,
+	});
+	if (podReason !== null) {
+		return refuseObject(cfg, "pod", cfg.resourceName, podReason, "adopt");
+	}
+	if (objects.pvc === null) {
+		return err(
+			"conflict",
+			`pod ${cfg.namespace}/${cfg.resourceName} exists without its claim ${cfg.resourceName}; the volume identity is broken`,
+			false,
+		);
+	}
+	const claimReason = ownershipReason(
+		"persistentvolumeclaim",
+		pvcMeta(objects.pvc),
+		ctx.ownership,
+		{
+			objectUid: launch.pvcUid,
+		},
+	);
+	if (claimReason !== null) {
+		return refuseObject(cfg, "persistentvolumeclaim", cfg.resourceName, claimReason, "attach");
+	}
 	const startedAt = podStartTime(objects.pod) ?? launch.record?.startedAt;
 	const record = launchRecord(request, cfg, launch, {
 		podUid: meta.uid,
-		pvcUid: objects.pvc === null ? null : objectMeta(objects.pvc).uid || null,
+		pvcUid: objectMeta(objects.pvc).uid || null,
 		...(startedAt !== undefined ? { startedAt } : {}),
 	});
 	writeRecord(request.stateDir, record);
-	return ok(handle, "running", observed(objects.namespaceUid, objects.pod, objects.pvc), {
+	return ok(handle, "running", observed(objects.namespaceUid as string, objects.pod, objects.pvc), {
 		startedAt: record.startedAt,
 	});
 }
@@ -2178,13 +1275,16 @@ async function reportRunning(
 async function opInspect(rawRequest: ProviderRequest, deps: OpDeps): Promise<ProviderResponse> {
 	const request = rawRequest;
 	return withOpContext(request, deps, { requireHandoff: false }, async (ctx) => {
-		const { cfg, handle, recorded } = ctx;
+		const { cfg, handle, recorded, recordedPvcUid } = ctx;
 		let objects: ObservedObjects;
 		try {
 			objects = await observeObjects(deps.exec, cfg);
 		} catch (cause) {
 			return kubeFailure(cause, "inspect");
 		}
+		const namespaceFailure = namespaceReplaced(cfg, objects.namespaceUid, "inspect");
+		if (namespaceFailure !== null) return namespaceFailure;
+		const namespaceUid = objects.namespaceUid as string;
 
 		if (objects.pod !== null) {
 			const meta = objectMeta(objects.pod);
@@ -2205,57 +1305,55 @@ async function opInspect(rawRequest: ProviderRequest, deps: OpDeps): Promise<Pro
 				"persistentvolumeclaim",
 				pvcMeta(objects.pvc),
 				ctx.ownership,
-				{
-					objectUid: recorded?.pvcUid ?? null,
-				},
+				{ objectUid: recordedPvcUid },
 			);
 			if (claimReason !== null) {
 				return refuseObject(cfg, "persistentvolumeclaim", cfg.resourceName, claimReason, "inspect");
 			}
 			const phase = podPhase(objects.pod);
 			if (meta.deletionTimestamp === null && (phase === "Running" || phase === "Pending")) {
-				return ok(handle, "running", observed(cfg.namespaceUid, objects.pod, objects.pvc), {
+				return ok(handle, "running", observed(namespaceUid, objects.pod, objects.pvc), {
 					startedAt: podStartTime(objects.pod) ?? recorded?.startedAt,
 				});
 			}
-			return ok(handle, "stopped", observed(cfg.namespaceUid, objects.pod, objects.pvc), {
+			return ok(handle, "stopped", observed(namespaceUid, objects.pod, objects.pvc), {
 				startedAt: recorded?.startedAt,
 			});
 		}
 
 		if (objects.pvc !== null) {
 			const reason = ownershipReason("persistentvolumeclaim", pvcMeta(objects.pvc), ctx.ownership, {
-				objectUid: recorded?.pvcUid ?? null,
+				objectUid: recordedPvcUid,
 			});
 			if (reason !== null) {
 				return refuseObject(cfg, "persistentvolumeclaim", cfg.resourceName, reason, "inspect");
 			}
 			// Compute gone, storage retained.
-			return ok(handle, "stopped", observed(cfg.namespaceUid, null, objects.pvc), {
+			return ok(handle, "stopped", observed(namespaceUid, null, objects.pvc), {
 				startedAt: recorded?.startedAt,
 			});
 		}
 
 		if (ctx.record !== null) {
 			// Compute gone and storage gone, but the launch identity remains.
-			return ok(handle, "stopped", observed(cfg.namespaceUid, null, null), {
+			return ok(handle, "stopped", observed(namespaceUid, null, null), {
 				startedAt: recorded?.startedAt,
 			});
 		}
-		return ok(handle, "missing", observed(cfg.namespaceUid, null, null));
+		return ok(handle, "missing", observed(namespaceUid, null, null));
 	});
 }
 
 /**
- * stop: validate and delete the requested Pod, prove its absence, and retain
- * the claim (and the launch record). Pod absence is success. Ownership comes
- * from the binding plus the launch record, so stop works with no callback
- * handoff at all.
+ * stop: validate and delete the requested Pod, prove its absence, recheck the
+ * bound namespace, and retain the claim (and the launch record). Pod absence is
+ * success. Ownership comes from the binding plus the launch record, so stop
+ * works with no callback handoff at all.
  */
 async function opStop(rawRequest: ProviderRequest, deps: OpDeps): Promise<ProviderResponse> {
 	const request = rawRequest;
 	return withOpContext(request, deps, { requireHandoff: false }, async (ctx) => {
-		const { cfg, handle, recorded } = ctx;
+		const { cfg, handle, recorded, recordedPvcUid } = ctx;
 		const podName = cfg.resourceName;
 
 		let pod: Record<string, unknown> | null;
@@ -2274,9 +1372,17 @@ async function opStop(rawRequest: ProviderRequest, deps: OpDeps): Promise<Provid
 			const claimOwned =
 				pvc !== null &&
 				ownershipReason("persistentvolumeclaim", pvcMeta(pvc), ctx.ownership, {
-					objectUid: recorded?.pvcUid ?? null,
+					objectUid: recordedPvcUid,
 				}) === null;
-			return ok(handle, "stopped", observed(cfg.namespaceUid, null, claimOwned ? pvc : null));
+			let namespaceUid: string | null;
+			try {
+				namespaceUid = await kubeNamespaceUid(deps.exec, cfg);
+			} catch (cause) {
+				return kubeFailure(cause, "stop");
+			}
+			const namespaceFailure = namespaceReplaced(cfg, namespaceUid, "stop");
+			if (namespaceFailure !== null) return namespaceFailure;
+			return ok(handle, "stopped", observed(namespaceUid as string, null, claimOwned ? pvc : null));
 		}
 
 		const meta = objectMeta(pod);
@@ -2289,7 +1395,7 @@ async function opStop(rawRequest: ProviderRequest, deps: OpDeps): Promise<Provid
 		}
 		if (pvc !== null) {
 			const claimReason = ownershipReason("persistentvolumeclaim", pvcMeta(pvc), ctx.ownership, {
-				objectUid: recorded?.pvcUid ?? null,
+				objectUid: recordedPvcUid,
 			});
 			if (claimReason !== null) {
 				return refuseObject(cfg, "persistentvolumeclaim", podName, claimReason, "stop");
@@ -2320,22 +1426,30 @@ async function opStop(rawRequest: ProviderRequest, deps: OpDeps): Promise<Provid
 		if (ctx.record !== null) {
 			writeRecord(request.stateDir, { ...ctx.record, stoppedAt: Date.now() });
 		}
-		return ok(handle, "stopped", observed(cfg.namespaceUid, null, pvc));
+		let namespaceUid: string | null;
+		try {
+			namespaceUid = await kubeNamespaceUid(deps.exec, cfg);
+		} catch (cause) {
+			return kubeFailure(cause, "stop");
+		}
+		const namespaceFailure = namespaceReplaced(cfg, namespaceUid, "stop");
+		if (namespaceFailure !== null) return namespaceFailure;
+		return ok(handle, "stopped", observed(namespaceUid as string, null, pvc));
 	});
 }
 
 /**
  * delete: every PRESENT object is validated before the first deletion, each
- * deletion goes through the fresh-GET uid barrier, and absence is proven before
- * success. Repeated deletion succeeds once both objects are absent. The
- * stateDir (and the lock this operation holds) is left in place: the fleet
- * removes provider state after it confirms the deletion (P3.7), so removing it
- * here would race the lock's own release.
+ * deletion goes through the API uid precondition, and absence is proven before
+ * success. Repeated deletion succeeds once every object is absent, and the
+ * bound namespace is re-observed before the success is reported. The stateDir
+ * (and the lock this operation holds) is left in place: the fleet removes
+ * provider state after it confirms the deletion (P3.7).
  */
 async function opDelete(rawRequest: ProviderRequest, deps: OpDeps): Promise<ProviderResponse> {
 	const request = rawRequest;
 	return withOpContext(request, deps, { requireHandoff: false }, async (ctx) => {
-		const { cfg, handle, recorded } = ctx;
+		const { cfg, handle, recorded, recordedPvcUid } = ctx;
 		const podName = cfg.resourceName;
 
 		let pod: Record<string, unknown> | null;
@@ -2349,9 +1463,18 @@ async function opDelete(rawRequest: ProviderRequest, deps: OpDeps): Promise<Prov
 			return kubeFailure(cause, "delete");
 		}
 
+		let namespaceUid: string | null;
+		try {
+			namespaceUid = await kubeNamespaceUid(deps.exec, cfg);
+		} catch (cause) {
+			return kubeFailure(cause, "delete");
+		}
+		const namespaceFailure = namespaceReplaced(cfg, namespaceUid, "delete");
+		if (namespaceFailure !== null) return namespaceFailure;
+
 		if (pod === null && pvc === null && baseline === null) {
 			// Every object is already absent: the requested state is reached.
-			return ok(handle, "missing", observed(cfg.namespaceUid, null, null));
+			return ok(handle, "missing", observed(namespaceUid as string, null, null));
 		}
 
 		// Validate EVERY present object BEFORE the first deletion.
@@ -2384,7 +1507,7 @@ async function opDelete(rawRequest: ProviderRequest, deps: OpDeps): Promise<Prov
 		if (pvc !== null) {
 			const claim = pvcMeta(pvc);
 			const reason = ownershipReason("persistentvolumeclaim", claim, ctx.ownership, {
-				objectUid: recorded?.pvcUid ?? null,
+				objectUid: recordedPvcUid,
 			});
 			if (reason !== null) {
 				return refuseObject(cfg, "persistentvolumeclaim", podName, reason, "delete");
@@ -2445,343 +1568,16 @@ async function opDelete(rawRequest: ProviderRequest, deps: OpDeps): Promise<Prov
 			return kubeFailure(cause, "delete");
 		}
 
-		return ok(handle, "missing", observed(cfg.namespaceUid, null, null));
-	});
-}
-
-// ---------------------------------------------------------------------------
-// Preflight (P5.6): actionable, no installs, no object creation
-// ---------------------------------------------------------------------------
-
-/** Parse `kubectl get storageclass -o json` into its items, best effort. */
-function storageClassItems(stdout: string): Record<string, unknown>[] | null {
-	try {
-		const parsed = JSON.parse(stdout) as Record<string, unknown>;
-		if (!Array.isArray(parsed.items)) return null;
-		return parsed.items.filter((item): item is Record<string, unknown> => asRecord(item) !== null);
-	} catch {
-		return null;
-	}
-}
-
-/** True when a StorageClass carries either default-class annotation. */
-function isDefaultStorageClass(item: Record<string, unknown>): boolean {
-	const annotations = asRecord(asRecord(item.metadata)?.annotations) ?? {};
-	const defaults = [
-		"storageclass.kubernetes.io/is-default-class",
-		"storageclass.beta.kubernetes.io/is-default-class",
-	];
-	return defaults.some((key) => annotations[key] === "true");
-}
-
-/**
- * Production-profile preflight for a kubernetes profile. Every check that
- * can fail carries an actionable remediation; all checks run (cluster-
- * dependent checks report their dependency failure rather than being
- * skipped silently). Nothing is installed, created, or mutated: the only
- * API traffic is reads plus `auth can-i` access reviews, all of it from the
- * fleet host (the provider preflight never creates a Pod to probe from).
- *
- * Wired into runtime/preflight.ts by the Runtime owner; exported here so
- * the wiring is one function call.
- */
-export async function preflightKubernetesProfile(
-	profile: ProviderProfile,
-	opts?: { exec?: KubeExec; env?: Record<string, string | undefined> },
-): Promise<PreflightResult> {
-	const exec = opts?.exec ?? defaultKubeExec;
-	const env = opts?.env ?? process.env;
-	const checks: PreflightCheck[] = [];
-
-	// 1. kubectl client binary (no API traffic).
-	let clientVersion: string | null = null;
-	{
-		const result = await exec([env.OMP_KUBE_BIN ?? "kubectl", "version", "--client", "-o", "json"]);
-		if (result.code === 0) {
-			try {
-				const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
-				const client = asRecord(parsed.clientVersion);
-				clientVersion = typeof client?.gitVersion === "string" ? client.gitVersion : "unknown";
-				checks.push({
-					name: "kubectl-client",
-					ok: true,
-					detail: `kubectl client ${clientVersion}`,
-				});
-			} catch {
-				checks.push({
-					name: "kubectl-client",
-					ok: false,
-					detail: "kubectl version --client returned unparseable output",
-					remediation: "install a kubectl >= 1.27 build or set OMP_KUBE_BIN",
-				});
-			}
-		} else {
-			checks.push({
-				name: "kubectl-client",
-				ok: false,
-				detail: `kubectl version --client failed: ${result.stderr.trim() || `exit ${result.code}`}`,
-				remediation: "install kubectl (>= 1.27) on the fleet host or set OMP_KUBE_BIN",
-			});
-		}
-	}
-
-	// 2. Explicit context (the ambient current-context is never used).
-	const context = profile.context ?? env.OMP_KUBE_CONTEXT;
-	if (context === undefined || context.trim() === "") {
-		checks.push({
-			name: "kube-context",
-			ok: false,
-			detail: "no explicit API context configured",
-			remediation: `set providerProfiles.${profile.id}.context (or export OMP_KUBE_CONTEXT); the ambient kubectl current-context is never used implicitly`,
-		});
-	} else {
-		checks.push({ name: "kube-context", ok: true, detail: `context ${context}` });
-	}
-
-	const clusterReady = clientVersion !== null && context !== undefined && context.trim() !== "";
-	const bin = env.OMP_KUBE_BIN ?? "kubectl";
-	const base =
-		context === undefined
-			? [bin]
-			: [bin, "--context", context, `--request-timeout=${KUBE_REQUEST_TIMEOUT}`];
-	const skipped = (name: string, what: string): PreflightCheck => ({
-		name,
-		ok: false,
-		detail: `${what} could not be checked: no usable kubectl client/context`,
-		remediation: "fix kubectl-client and kube-context above first",
-	});
-
-	// 3. API reachability.
-	let apiReady = false;
-	if (clusterReady) {
-		const result = await exec([...base, "version", "--request-timeout=5s"]);
-		if (result.code === 0) {
-			apiReady = true;
-			checks.push({ name: "kube-api", ok: true, detail: `API reachable via context ${context}` });
-		} else {
-			checks.push({
-				name: "kube-api",
-				ok: false,
-				detail: `API not reachable via context ${context}: ${result.stderr.trim() || `exit ${result.code}`}`,
-				remediation:
-					"check the kubeconfig credentials and network path for this context; the provider never switches contexts",
-			});
-		}
-	} else {
-		checks.push(skipped("kube-api", "API reachability"));
-	}
-
-	// 4. Namespace (operator-prepared).
-	const namespace = profile.namespace;
-	let namespaceReady = false;
-	if (!apiReady) {
-		checks.push(skipped("kube-namespace", "namespace existence"));
-	} else if (namespace === undefined || namespace.trim() === "") {
-		checks.push({
-			name: "kube-namespace",
-			ok: false,
-			detail: "profile has no namespace",
-			remediation: `set providerProfiles.${profile.id}.namespace to an operator-prepared namespace`,
-		});
-	} else {
-		const result = await exec([...base, "get", "namespace", namespace, "-o", "name"]);
-		namespaceReady = result.code === 0;
-		checks.push(
-			result.code === 0
-				? { name: "kube-namespace", ok: true, detail: `namespace ${namespace} exists` }
-				: {
-						name: "kube-namespace",
-						ok: false,
-						detail: `namespace ${namespace}: ${result.stderr.trim() || `exit ${result.code}`}`,
-						remediation: `ask the operator to create namespace ${namespace} and grant the profile's RBAC within it; the provider never creates namespaces`,
-					},
-		);
-	}
-
-	// 5. Narrow RBAC: exactly the verbs the provider uses, nothing broader.
-	if (apiReady && namespaceReady && namespace !== undefined) {
-		for (const [verb, resource] of [
-			["get", "pods"],
-			["create", "pods"],
-			["delete", "pods"],
-			["get", "persistentvolumeclaims"],
-			["create", "persistentvolumeclaims"],
-			["delete", "persistentvolumeclaims"],
-			// The sanitized baseline is delivered as a workspace-scoped
-			// ConfigMap, so the profile needs the same three verbs on it.
-			["get", "configmaps"],
-			["create", "configmaps"],
-			["delete", "configmaps"],
-		] as const) {
-			const result = await exec([
-				...base,
-				"auth",
-				"can-i",
-				verb,
-				resource,
-				"-n",
-				namespace,
-				"--quiet",
-			]);
-			checks.push(
-				result.code === 0
-					? {
-							name: `kube-rbac-${verb}-${resource}`,
-							ok: true,
-							detail: `can ${verb} ${resource} in ${namespace}`,
-						}
-					: {
-							name: `kube-rbac-${verb}-${resource}`,
-							ok: false,
-							detail: `cannot ${verb} ${resource} in namespace ${namespace}`,
-							remediation: `grant the context's identity ${verb} on ${resource} in namespace ${namespace} (namespace-scoped Role; no cluster-wide grant is needed)`,
-						},
-			);
-		}
-	} else {
-		checks.push(skipped("kube-rbac", "RBAC verbs"));
-	}
-
-	// 6. Storage: the pinned StorageClass must exist; when the profile omits a
-	//    class the cluster must offer exactly one default (an unset
-	//    storageClassName is only usable when a default backs it).
-	if (profile.storage?.class !== undefined) {
-		if (!apiReady) {
-			checks.push(skipped("kube-storageclass", "StorageClass existence"));
-		} else {
-			const storageClass = profile.storage.class;
-			const result = await exec([...base, "get", "storageclass", storageClass, "-o", "name"]);
-			checks.push(
-				result.code === 0
-					? { name: "kube-storageclass", ok: true, detail: `StorageClass ${storageClass} exists` }
-					: {
-							name: "kube-storageclass",
-							ok: false,
-							detail: `StorageClass ${storageClass}: ${result.stderr.trim() || `exit ${result.code}`}`,
-							remediation: `ask the operator to provision StorageClass ${storageClass} or change providerProfiles.${profile.id}.storage.class; the provider never creates storage classes`,
-						},
-			);
-		}
-	} else if (!apiReady) {
-		checks.push(skipped("kube-default-storageclass", "the default StorageClass"));
-	} else {
-		const result = await exec([...base, "get", "storageclass", "-o", "json"]);
-		const items = result.code === 0 ? storageClassItems(result.stdout) : null;
-		if (items === null) {
-			checks.push({
-				name: "kube-default-storageclass",
-				ok: false,
-				detail: `could not list StorageClasses: ${result.stderr.trim() || `exit ${result.code}`}`,
-				remediation: `grant the context's identity get on storageclasses, or pin providerProfiles.${profile.id}.storage.class`,
-			});
-		} else {
-			const defaults = items.filter(isDefaultStorageClass);
-			checks.push(
-				defaults.length === 1
-					? {
-							name: "kube-default-storageclass",
-							ok: true,
-							detail: `default StorageClass ${String(asRecord(defaults[0]?.metadata)?.name ?? "unknown")} backs an omitted storage.class`,
-						}
-					: {
-							name: "kube-default-storageclass",
-							ok: false,
-							detail:
-								defaults.length === 0
-									? "the profile omits storage.class and the cluster has no default StorageClass"
-									: `the profile omits storage.class and the cluster has ${defaults.length} default StorageClasses (ambiguous)`,
-							remediation: `pin providerProfiles.${profile.id}.storage.class, or ask the operator to mark exactly one StorageClass default (storageclass.kubernetes.io/is-default-class=true)`,
-						},
-			);
-		}
-	}
-
-	// 7. Secret references must resolve (name + key) before first launch.
-	let secretRefs: KubernetesConfig["secretRefs"] = {};
-	try {
-		secretRefs = parseSecretRefs(profile.secretRefs);
-	} catch (cause) {
-		checks.push({
-			name: "kube-secretrefs",
-			ok: false,
-			detail: String(cause instanceof Error ? cause.message : cause),
-			remediation: `fix providerProfiles.${profile.id}.secretRefs entries to "<secretName>/<key>"`,
-		});
-	}
-	for (const ref of Object.values(secretRefs)) {
-		if (!apiReady || !namespaceReady || namespace === undefined) {
-			checks.push(skipped(`kube-secret-${ref.envName}`, `secret ${ref.secretName}`));
-			continue;
-		}
-		const result = await exec([
-			...base,
-			"get",
-			"secret",
-			ref.secretName,
-			"-n",
-			namespace,
-			"-o",
-			"json",
-		]);
-		if (result.code !== 0) {
-			checks.push({
-				name: `kube-secret-${ref.envName}`,
-				ok: false,
-				detail: `secret ${ref.secretName}: ${result.stderr.trim() || `exit ${result.code}`}`,
-				remediation: `ask the operator to create secret ${ref.secretName} in namespace ${namespace} with key ${ref.secretKey}; the provider never creates secrets`,
-			});
-			continue;
-		}
+		let finalNamespaceUid: string | null;
 		try {
-			const secret = JSON.parse(result.stdout) as Record<string, unknown>;
-			const data = asRecord(secret.data) ?? {};
-			checks.push(
-				Object.hasOwn(data, ref.secretKey)
-					? {
-							name: `kube-secret-${ref.envName}`,
-							ok: true,
-							detail: `secret ${ref.secretName} key ${ref.secretKey} resolves for env ${ref.envName}`,
-						}
-					: {
-							name: `kube-secret-${ref.envName}`,
-							ok: false,
-							detail: `secret ${ref.secretName} exists but has no key ${ref.secretKey}`,
-							remediation: `add key ${ref.secretKey} to secret ${ref.secretName} in namespace ${namespace}`,
-						},
-			);
-		} catch {
-			checks.push({
-				name: `kube-secret-${ref.envName}`,
-				ok: false,
-				detail: `secret ${ref.secretName} returned unparseable JSON`,
-				remediation: "inspect the API response for the secret manually",
-			});
+			finalNamespaceUid = await kubeNamespaceUid(deps.exec, cfg);
+		} catch (cause) {
+			return kubeFailure(cause, "delete");
 		}
-	}
-
-	// 8. Image: declared; pullability is observed at first pod start
-	//    (ImagePullBackOff surfaces as an actionable ensure-running failure).
-	if (profile.image === undefined || profile.image.trim() === "") {
-		checks.push({
-			name: "kube-image",
-			ok: false,
-			detail: "profile has no image",
-			remediation: `set providerProfiles.${profile.id}.image to the session-runtime image (see runtime/image/Containerfile)`,
-		});
-	} else {
-		checks.push({
-			name: "kube-image",
-			ok: true,
-			detail: `image ${profile.image}; pullability is verified at first pod start, ensure the cluster can pull this reference (imagePullSecrets are namespace-scoped and operator-managed)`,
-		});
-	}
-
-	return {
-		ok: checks.every((check) => check.ok),
-		profileId: profile.id,
-		provider: "kubernetes",
-		checks,
-	};
+		const finalNamespaceFailure = namespaceReplaced(cfg, finalNamespaceUid, "delete");
+		if (finalNamespaceFailure !== null) return finalNamespaceFailure;
+		return ok(handle, "missing", observed(finalNamespaceUid as string, null, null));
+	});
 }
 
 // ---------------------------------------------------------------------------

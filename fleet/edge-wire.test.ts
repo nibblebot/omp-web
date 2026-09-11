@@ -8,14 +8,21 @@
  * and the worktree commands in edge-worktrees.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OMP_PROTO } from "../shared/protocol";
+import { OMP_PROTO, type ServerFrame } from "../shared/protocol";
 import { tempDir } from "../shared/testkit";
-import { cloneStoredHistory, shouldDropFrame, toRosterEntry } from "./edge";
-import { FleetLogStore } from "./log-store";
+import type { FleetConfig } from "./config";
+import { DaemonConnector } from "./connector";
+import { FleetEdge, shouldDropFrame, type EdgeLogStore } from "./edge";
+import { FleetEventLog } from "./events";
+import { cloneStoredHistory } from "./stored-sessions";
+import { toRosterEntry } from "./roster-projection";
+import { FleetLogStore, type StoredSessionInfo } from "./log-store";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
+import { SpawnSupervisor } from "./supervisor";
 import { startFleet, type FleetServer } from "./server";
 import {
 	FAKE_CWD,
@@ -25,6 +32,7 @@ import {
 	BrowserSocket,
 	daemonInfo,
 	openBrowser,
+	serveEdge,
 	sleep,
 	startFakeSession,
 	waitFor,
@@ -1472,7 +1480,7 @@ describe("edge pure helpers", () => {
 			},
 		};
 
-		const roster = toRosterEntry(cloneEntry, undefined, (id) => cloneStoredHistory(store, id));
+		const roster = toRosterEntry(cloneEntry, undefined, cloneStoredHistory(store, workspaceId));
 		expect(roster.sessionTitle).toBe("Fix the fleet sidebar");
 		// A titled session is not "empty"; the flag stays off the wire.
 		expect(roster).not.toHaveProperty("sessionEmpty");
@@ -1481,12 +1489,12 @@ describe("edge pure helpers", () => {
 
 		// A clone with no stored sessions reads as an empty ("New session") row.
 		const emptyEntry: RegistryEntry = { ...cloneEntry, daemonId: "dclone2" };
-		const emptyRoster = toRosterEntry(emptyEntry, undefined, (id) => cloneStoredHistory(store, id));
+		const emptyRoster = toRosterEntry(emptyEntry, undefined, cloneStoredHistory(store, "dclone2"));
 		expect(emptyRoster).not.toHaveProperty("sessionTitle");
 		expect(emptyRoster.sessionEmpty).toBe(true);
 
 		// An absent/unreadable store degrades to empty instead of throwing.
-		const noStore = toRosterEntry(emptyEntry, undefined, (id) => cloneStoredHistory(undefined, id));
+		const noStore = toRosterEntry(emptyEntry, undefined, cloneStoredHistory(undefined, "dclone2"));
 		expect(noStore).not.toHaveProperty("sessionTitle");
 		expect(noStore.sessionEmpty).toBe(true);
 	});
@@ -1498,5 +1506,164 @@ describe("edge pure helpers", () => {
 		expect(shouldDropFrame(cap + 1, cap)).toBe(true);
 		expect(shouldDropFrame(1024, 1024)).toBe(false);
 		expect(shouldDropFrame(1025, 1024)).toBe(true);
+	});
+});
+
+/**
+ * Edge store fixture for the clone-title live-refresh regression: one stored
+ * session whose head title the test sets, plus the synchronous onStoredChange
+ * fan-out the production FleetLogStore exposes. `store(null)` models a session
+ * stored with no title yet (a brand-new session).
+ */
+class CloneHistoryStore implements EdgeLogStore {
+	/** Head title of the newest stored session; null = stored but untitled. */
+	title: string | null = null;
+	#stored = false;
+	readonly #listeners = new Set<(workspaceId: string) => void>();
+
+	constructor(readonly workspaceId: string) {}
+
+	listStoredSessions(workspaceId: string): StoredSessionInfo[] {
+		if (!this.#stored || workspaceId !== this.workspaceId) return [];
+		return [
+			{
+				workspaceId,
+				sessionId: "s1",
+				files: [],
+				bytes: 8,
+				ackedBytes: 8,
+				missingAssets: 0,
+				mainRelpath: "s1.jsonl",
+				mtimeMs: 1,
+			},
+		];
+	}
+
+	readStoredPrefix(): Buffer | null {
+		if (!this.#stored) return null;
+		return Buffer.from(
+			`${JSON.stringify({ type: "title", v: 1, title: this.title ?? "", pad: "" })}\n` +
+				`${JSON.stringify({ type: "session", id: "uuid-minted", sessionId: "s1", ts: 1 })}\n`,
+			"utf8",
+		);
+	}
+
+	onStoredChange(listener: (workspaceId: string) => void): () => void {
+		this.#listeners.add(listener);
+		return () => {
+			this.#listeners.delete(listener);
+		};
+	}
+
+	/** Store/replace the newest session's head title, notifying like ingest. */
+	store(title: string | null): void {
+		this.#stored = true;
+		this.title = title;
+		this.#emit();
+	}
+
+	/** Fire the change hook without changing stored data (e.g. a message append). */
+	notifyUnchanged(): void {
+		this.#emit();
+	}
+
+	#emit(): void {
+		for (const listener of this.#listeners) listener(this.workspaceId);
+	}
+}
+
+describe("edge clone-history live refresh", () => {
+	test("a store change refreshes an open browser's clone row without a registry mutation", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-clone-live-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry);
+		const config: FleetConfig = {
+			templates: { local: { command: "true" } },
+			defaultTemplate: "local",
+			workspaceDir: join(tmp, "workspaces"),
+			bind: "127.0.0.1",
+		};
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const clone = registry.create({
+			name: "clone-a",
+			cwd: join(tmp, "workspaces", "dclone1"),
+			project: "acme",
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+			workspace: { kind: "clone", projectId: "p1", desiredState: "stopped" },
+		});
+		const store = new CloneHistoryStore(clone.daemonId);
+		const edge = new FleetEdge({
+			registry,
+			connector,
+			supervisor,
+			config,
+			eventLog: new FleetEventLog(),
+			fleet: {
+				port: 0,
+				startedAt: Date.now(),
+				statePath: join(tmp, "state.json"),
+				configPath: null,
+				bind: "127.0.0.1",
+			},
+			logStore: store,
+		});
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			const rowOf = (frame: ServerFrame) =>
+				frame.type === "roster"
+					? frame.daemons.find((d) => d.daemonId === clone.daemonId)
+					: undefined;
+
+			// Priming: no stored session yet → the row reads "New session".
+			await browser.waitForEvent(
+				(ev) => rowOf(ev.frame)?.sessionEmpty === true,
+				"priming empty clone row",
+			);
+
+			// A titled session is stored. No registry mutation happens, so only
+			// the store-change subscription can deliver it to the open browser.
+			store.store("Fix the fleet sidebar");
+			const titled = await browser.waitForEvent(
+				(ev) => rowOf(ev.frame)?.sessionTitle === "Fix the fleet sidebar",
+				"stored title reaches the open roster",
+			);
+			expect(rowOf(titled.frame)).not.toHaveProperty("sessionEmpty");
+
+			// A brand-new session (no title yet) becomes the newest: the row must
+			// clear the old title rather than keep showing it.
+			store.store(null);
+			const cleared = await browser.waitForEvent(
+				(ev) =>
+					ev.id > titled.id &&
+					rowOf(ev.frame)?.sessionTitle === undefined &&
+					rowOf(ev.frame)?.sessionEmpty === true,
+				"new untitled session clears the stale title",
+			);
+			expect(rowOf(cleared.frame)).not.toHaveProperty("sessionTitle");
+
+			// Its title then lands on the same row.
+			store.store("Second session");
+			await browser.waitForEvent(
+				(ev) => rowOf(ev.frame)?.sessionTitle === "Second session",
+				"next stored title reaches the row",
+			);
+
+			// A store event that changes neither title nor emptiness (a message
+			// append) must not re-broadcast the row.
+			const before = browser.frames.filter((f) => f.type === "roster").length;
+			store.notifyUnchanged();
+			await sleep(800); // > the store-change coalescing window
+			expect(browser.frames.filter((f) => f.type === "roster").length).toBe(before);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
 	});
 });

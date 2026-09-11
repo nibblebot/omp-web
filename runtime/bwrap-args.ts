@@ -23,6 +23,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { OMP_PROVIDER_PROTO, type ProviderProfile } from "../shared/provider-protocol";
+import { CALLBACK_ENV_KEYS, ENV_ALLOW_KEYS, RESERVED_SECRET_ENV_KEYS } from "./sandbox-env";
 
 /**
  * Thrown when a requested bind source resolves inside a forbidden root
@@ -99,6 +100,13 @@ export interface BwrapArgsInput {
 	 */
 	env?: Record<string, string | undefined>;
 	/**
+	 * Validated callback handoff (fleet-written `callback-env.json`, read and
+	 * validated by runtime/callback-env.ts). The ONLY source for handoff-owned
+	 * names such as `OMP_SESSION_RESUME_REQUIRED`; overrides an ambient value
+	 * of any allowlisted handoff name.
+	 */
+	callbackEnv?: Record<string, string>;
+	/**
 	 * Selected model credentials resolved from `profile.secretRefs` by the
 	 * provider (P5.5). Values merge AFTER the ambient allowlist — they are
 	 * the ONLY source for keys outside the allowlist and cannot override any
@@ -130,61 +138,6 @@ export const ENV_DENY_KEYS: readonly string[] = [
 	"OMP_FLEET_STATE",
 	"XDG_RUNTIME_DIR",
 	"DBUS_SESSION_BUS_ADDRESS",
-];
-
-/**
- * Env keys a sandboxed omp-session needs (callback flags, locale). This is
- * the ONLY ambient-env passthrough: anything absent here cannot enter the
- * sandbox from the operator environment. Credential-shaped keys
- * (PI_AUTH_*, PI_PROFILE, PI_CONFIG_DIR) were intentionally REMOVED — they
- * are model credentials and enter only via `profile.secretRefs`.
- */
-export const ENV_ALLOW_KEYS: readonly string[] = [
-	"HOME",
-	"PATH",
-	"TERM",
-	"LANG",
-	"LC_ALL",
-	"LC_CTYPE",
-	"TZ",
-	"NO_COLOR",
-	"OMP_SESSION",
-	"OMP_SESSION_LISTEN",
-	"OMP_SESSION_ENDPOINT",
-	"OMP_SESSION_CALLBACK_URL",
-	"OMP_SESSION_CALLBACK_WORKSPACE",
-	"OMP_SESSION_CALLBACK_GENERATION",
-	"OMP_SESSION_CALLBACK_TOKEN",
-	"OMP_SESSION_CALLBACK_PROXY",
-	"OMP_SESSION_CALLBACK_ALLOW_HTTP",
-	// P8.9 wake-resume: fleet-written absolute main-session path; the daemon
-	// resumes it at boot (server/config.ts reads OMP_SESSION_RESUME). Rides
-	// the callback-env handoff, never the ambient environment.
-	"OMP_SESSION_RESUME",
-	// Wake-resume with a required session: a missing target fails the boot
-	// instead of silently starting a fresh session.
-	"OMP_SESSION_RESUME_REQUIRED",
-	"OMP_WORKSPACE_ID",
-	"OMP_WORKSPACE_DIR",
-	"OMP_WORKSPACE_GENERATION",
-	"OMP_PROVIDER_PROTO",
-	"OMP_AGENT_DIR",
-	"PI_EXPORT",
-	"PI_SESSION_ID",
-];
-
-/** Keys with a fixed sandbox meaning that a secretRef may never override. */
-export const RESERVED_SECRET_ENV_KEYS: readonly string[] = [
-	...ENV_ALLOW_KEYS,
-	// Env-name shape guard is applied on top; these are the callback/user
-	// credential keys that must only ever enter via `callback-env.json` or
-	// explicit secretRefs (see provider), never via the request JSON.
-	"OMP_SESSION_CALLBACK_URL",
-	"OMP_SESSION_CALLBACK_WORKSPACE",
-	"OMP_SESSION_CALLBACK_GENERATION",
-	"OMP_SESSION_CALLBACK_TOKEN",
-	"OMP_SESSION_CALLBACK_PROXY",
-	"OMP_SESSION_CALLBACK_ALLOW_HTTP",
 ];
 
 const DEFAULT_PATH = "/run/current-system/sw/bin:/usr/bin:/bin";
@@ -479,9 +432,9 @@ function isContained(candidate: string, root: string): boolean {
  * - P5.7 network knob: `network` mode swaps ONLY the netns share (`--share-net`
  *   after `--unshare-all` re-shares the host network namespace) while
  *   pid/user/ipc isolation stays intact; absent `network` = isolated.
- * - Env: ambient allowlist copy + builder-set values + secretEnv (merged
- *   last, so model credentials from secretRefs are the only non-allowlisted
- *   keys and cannot override any allowlisted one).
+ * - Env: ambient allowlist copy + validated callback handoff + builder-set
+ *   values + secretEnv (merged last, so model credentials from secretRefs are
+ *   the only non-allowlisted keys and cannot override any allowlisted one).
  */
 export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 	const { workspaceDir, homeDir, profile, workspaceToken } = input;
@@ -512,6 +465,19 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 				throw new Error(
 					`secretEnv.${key} must be a non-empty string of at most ${SECRET_ENV_MAX_CHARS} chars`,
 				);
+			}
+		}
+	}
+
+	// Callback handoff values bypass the ambient allowlist by design (the
+	// REQUIRED resume flag is not ambient), so shape-check them here too.
+	if (input.callbackEnv !== undefined) {
+		for (const [key, value] of Object.entries(input.callbackEnv)) {
+			if (!CALLBACK_ENV_KEYS.includes(key)) {
+				throw new Error(`callbackEnv key ${key} is not a callback-handoff env name`);
+			}
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error(`callbackEnv.${key} must be a non-empty string`);
 			}
 		}
 	}
@@ -608,6 +574,12 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 	);
 
 	const env = allowedEnv(input.env ?? process.env, ENV_ALLOW_KEYS);
+	// Handoff-owned names never come from the operator environment: the
+	// allowlist excludes OMP_SESSION_RESUME_REQUIRED, and the validated
+	// handoff overrides any ambient value of an allowlisted handoff name.
+	if (input.callbackEnv !== undefined) {
+		for (const [key, value] of Object.entries(input.callbackEnv)) env[key] = value;
+	}
 	env.HOME = homeDir;
 	if (env.PATH === undefined) env.PATH = DEFAULT_PATH;
 	env.PI_CODING_AGENT_DIR = join(homeDir, "agent");

@@ -29,8 +29,15 @@
  * Main-transcript rule (P5 wake): "is restoration needed" is answered by the
  * session's MAIN file, never by the existence of its tree. An assets-only
  * tree cannot be resumed. The fill proceeds when the volume holds the main
- * (assets may be cold) or the store holds one (the main is restored); it
- * throws typed `unavailable` when both sides hold no main.
+ * (assets may be cold) or the store holds a stored, non-empty one (the main
+ * is restored); every path that ends without a real main on the volume throws
+ * typed `unavailable`. A volume that already holds the main needs no store
+ * lineage at all — a storeless workspace succeeds with zero writes, and a
+ * missing lineage is rejected only when the volume lacks the main too. The
+ * implicit-wake selector applies the same rule to stored listings (a stored
+ * non-empty main, not the session directory) and throws `unavailable` when
+ * prior history exists but nothing is resumable, so a wake never boots fresh
+ * silently over a session it cannot restore.
  *
  * Safety: every relpath is validated with the frozen manifest predicate
  * (isNormalizedPosixRelativePath — no `..`, no absolute, no `.` segments)
@@ -62,6 +69,28 @@ export class WakeMaterializeError extends Error {
 	}
 }
 
+/**
+ * One stored file as far as wake decisions care: its relpath and durable
+ * availability. `bytes` is the on-disk size when the listing reports it; 0 is
+ * an empty file (readStored refuses it), undefined is unknown (treated as
+ * non-empty).
+ */
+export interface WakeMaterializeStoreFile {
+	relpath: string;
+	status: "stored" | "missing";
+	bytes?: number;
+}
+
+/**
+ * One stored session row: identity, latest file mtime, and — when the store
+ * reports it — the file listing that proves a resumable main exists.
+ */
+export interface WakeMaterializeStoreSession {
+	sessionId: string;
+	mtimeMs: number;
+	files?: readonly WakeMaterializeStoreFile[];
+}
+
 /** Structural subset of the store's read surface (never imports log-store). */
 export interface WakeMaterializeStore {
 	storedLineage(
@@ -69,14 +98,11 @@ export interface WakeMaterializeStore {
 		sessionId: string,
 	): {
 		sessionId: string;
-		files: Array<{
-			relpath: string;
-			status: "stored" | "missing";
-		}>;
+		files: WakeMaterializeStoreFile[];
 		mainRelpath?: string;
 	} | null;
 	readStored(workspaceId: string, sessionId: string, relpath: string): Buffer | null;
-	listStoredSessions?(workspaceId: string): Array<{ sessionId: string; mtimeMs: number }>;
+	listStoredSessions?(workspaceId: string): readonly WakeMaterializeStoreSession[];
 }
 
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -106,6 +132,26 @@ function localFileExists(sessionsDir: string, relpath: string): boolean {
 	}
 }
 
+/**
+ * Relpath of a stored main transcript that can actually be resumed: its
+ * relpath is the session's main under the frozen layout, its status is
+ * "stored", and its size is not zero (readStored refuses empty files, so an
+ * empty main is not resumable). Null when the listing holds no such main —
+ * an assets-only or empty-main lineage never counts.
+ */
+function storedMainRelpath(
+	files: readonly WakeMaterializeStoreFile[] | undefined,
+	sessionId: string,
+): string | null {
+	if (files === undefined) return null;
+	return findSessionMainRelpath(
+		files
+			.filter((file) => file.status === "stored" && file.bytes !== 0)
+			.map((file) => file.relpath),
+		sessionId,
+	);
+}
+
 export interface MaterializeSessionOutcome {
 	/** Files written from the store (0 when the tree was already warm). */
 	written: number;
@@ -117,10 +163,14 @@ export interface MaterializeSessionOutcome {
 
 /**
  * Fill cold/missing stored lineage files of one session into the volume
- * sessions dir. Never overwrites an existing local file. Returns the write
- * counts and whether the main file is present. Throws WakeMaterializeError
- * for an unknown session (`unavailable`) or a hostile stored relpath
- * (`invalid_request`, aborting the fill).
+ * sessions dir. Never overwrites an existing local file. A volume that
+ * already holds the session's main file succeeds with zero writes even when
+ * the store has no lineage (no restoration is needed). Every other path that
+ * ends without a real main transcript on the volume throws typed
+ * `unavailable` — a fill that cannot be resumed never reports success.
+ * Also throws for an unknown session with no warm volume main
+ * (`unavailable`) or a hostile stored relpath (`invalid_request`, aborting
+ * the fill).
  */
 export function materializeMissingSessionFiles(opts: {
 	store: WakeMaterializeStore;
@@ -132,8 +182,13 @@ export function materializeMissingSessionFiles(opts: {
 	assertSessionId(workspaceId);
 	assertSessionId(sessionId);
 	requireSessionsDir(sessionsDir);
+	// Volume side first: a warm volume holds the resumable main by itself and
+	// needs no store lineage at all, so a storeless workspace must not be
+	// rejected for having nothing to restore (zero-write success).
+	const volumeMain = resolveMainSessionFile(sessionsDir, sessionId);
 	const lineage = store.storedLineage(workspaceId, sessionId);
 	if (lineage === null || lineage.files.length === 0) {
+		if (volumeMain !== null) return { written: 0, bytes: 0, mainPresent: true };
 		throw new WakeMaterializeError(
 			"unavailable",
 			`no stored transcripts for session ${sessionId} in workspace ${workspaceId}`,
@@ -141,15 +196,11 @@ export function materializeMissingSessionFiles(opts: {
 	}
 	// Main-transcript availability (P5 wake): restoration is needed only when
 	// the VOLUME lacks the session's main file, and it is possible only when
-	// the store holds one. An assets-only fill over a volume that already has
-	// its main stays valid; a volume with no main and a store with no main is
-	// not resumable, so refuse instead of silently restoring assets that can
-	// never be opened.
-	const volumeMain = resolveMainSessionFile(sessionsDir, sessionId);
-	const storeMain = findSessionMainRelpath(
-		lineage.files.filter((file) => file.status === "stored").map((file) => file.relpath),
-		sessionId,
-	);
+	// the store holds a resumable one. An assets-only fill over a volume that
+	// already has its main stays valid; a volume with no main and a store with
+	// no resumable main is not resumable, so refuse instead of silently
+	// restoring assets that can never be opened.
+	const storeMain = storedMainRelpath(lineage.files, sessionId);
 	if (volumeMain === null && storeMain === null) {
 		throw new WakeMaterializeError(
 			"unavailable",
@@ -181,8 +232,16 @@ export function materializeMissingSessionFiles(opts: {
 
 	// Post-fill truth (P5 wake): the outcome reports whether the volume now
 	// holds the session's main file ITSELF, not whether the store's lineage
-	// named one (a "missing"-status store entry must not report a warm main).
+	// named one (a "missing"-status or empty store entry must not report a
+	// warm main). A fill that ends without a real main is not resumable, so
+	// every caller gets a typed refusal instead of a false flag to interpret.
 	const mainPresent = resolveMainSessionFile(sessionsDir, sessionId) !== null;
+	if (!mainPresent) {
+		throw new WakeMaterializeError(
+			"unavailable",
+			`no main transcript for session ${sessionId} in workspace ${workspaceId} after materializing ${written} file(s)`,
+		);
+	}
 	return { written, bytes, mainPresent };
 }
 
@@ -227,11 +286,15 @@ export function resolveMainSessionFile(sessionsDir: string, sessionId: string): 
 }
 
 /**
- * Pick the newest session id for an implicit wake: the union of the volume
- * session tree (main files at depth ≤ 2, newest mtime) and the store
- * listing (when supplied), newest mtime wins. Returns undefined when no
- * session exists anywhere (the wake then boots fresh — correct for a
- * never-started clone).
+ * Pick the newest RESUMABLE session id for an implicit wake: the union of the
+ * volume session tree (main files at depth ≤ 2, newest mtime) and the store
+ * listing (when supplied). A stored session only counts when its listing
+ * proves a stored, non-empty main — an assets-only or empty-main lineage
+ * never outranks an older resumable history (directory presence is not
+ * availability). Returns undefined only when no history exists anywhere (the
+ * wake then boots fresh — correct for a never-started clone). Prior history
+ * with no resumable main throws typed `unavailable`: a wake must never boot
+ * fresh silently over a session it cannot restore.
  */
 export function pickNewestSessionId(opts: {
 	sessionsDir: string;
@@ -280,10 +343,30 @@ export function pickNewestSessionId(opts: {
 		scanDir(child); // Depth 2: project mains.
 	}
 
+	let storedSessions: readonly WakeMaterializeStoreSession[] = [];
 	if (store !== undefined && workspaceId !== undefined && store.listStoredSessions !== undefined) {
-		for (const session of store.listStoredSessions(workspaceId)) {
-			consider(session.sessionId, session.mtimeMs);
+		storedSessions = store.listStoredSessions(workspaceId);
+		for (const session of storedSessions) {
+			// Usability is the stored MAIN, not the session directory: an
+			// assets-only or empty-main lineage must not outrank an older
+			// resumable one (and a store that reports no file listing is
+			// trusted as before).
+			const usable =
+				session.files === undefined
+					? true
+					: storedMainRelpath(session.files, session.sessionId) !== null;
+			if (usable) consider(session.sessionId, session.mtimeMs);
 		}
 	}
-	return best?.id;
+	if (best !== undefined) return best.id;
+	// Absence vs unusable history: no session anywhere is a legitimate fresh
+	// boot; stored history with no resumable main is not — surface it typed so
+	// a wake never silently discards the prior session.
+	if (storedSessions.length > 0) {
+		throw new WakeMaterializeError(
+			"unavailable",
+			`stored history for workspace ${workspaceId ?? ""} has no resumable main transcript`,
+		);
+	}
+	return undefined;
 }

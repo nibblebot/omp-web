@@ -75,7 +75,7 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server, Subprocess } from "bun";
 
-import type { BulkCorrelation, DaemonTransportRegistry } from "../fleet/daemon-transport";
+import type { DaemonTransportRegistry } from "../fleet/daemon-transport";
 import { FleetLogStore } from "../fleet/log-store";
 import { startFleet, type FleetServer } from "../fleet/server";
 import {
@@ -84,6 +84,27 @@ import {
 	CALLBACK_UP_PATH,
 	type CallbackEnvelope,
 } from "../shared/callback-protocol";
+import {
+	Acceptance,
+	BlockedError,
+	messageOf,
+	redact,
+	restoreEnv,
+	sanitize,
+	scriptEnv,
+	setEnv,
+	SIGNAL_EXIT,
+	unsetEnv,
+} from "./acceptance/harness";
+import {
+	boundedCommand,
+	carryHostGitIdentity,
+	type CommandResult,
+	fetchJson,
+	type JsonResponse,
+	resolveTool,
+	waitFor,
+} from "./acceptance/process";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -141,60 +162,16 @@ const SUBPROCESS_TIMEOUT_MS = 180_000;
 const POLL_TIMEOUT_MS = 120_000;
 const PAIR_TIMEOUT_MS = 300_000;
 const STOP_TIMEOUT_MS = 300_000;
+/** Hard deadline for one control-plane request: an accepted-but-stalled
+ *  lifecycle handler must fail its phase, never hang the walk (and with it any
+ *  polling deadline that called into it). */
+const CTL_TIMEOUT_MS = 300_000;
+/** Hard deadline for the required bulk download (parts stream over the pair). */
+const BULK_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 // ---------------------------------------------------------------------------
-// Diagnostics hygiene
+// Environment pinning
 // ---------------------------------------------------------------------------
-
-/** Paths/literals replaced with a placeholder before anything is printed. */
-const REDACTIONS: { needle: string; label: string }[] = [];
-
-function redact(value: string, label: string): string {
-	if (value !== "") REDACTIONS.push({ needle: value, label });
-	return value;
-}
-
-function sanitize(text: string): string {
-	let out = text;
-	for (const { needle, label } of REDACTIONS) out = out.split(needle).join(`<${label}>`);
-	return out;
-}
-
-function messageOf(cause: unknown): string {
-	return cause instanceof Error ? cause.message : String(cause);
-}
-
-// ---------------------------------------------------------------------------
-// Environment control (captured before any mutation, restored by cleanup)
-// ---------------------------------------------------------------------------
-
-const originalEnv = new Map<string, string | undefined>();
-
-function setEnv(key: string, value: string): void {
-	if (!originalEnv.has(key)) originalEnv.set(key, process.env[key]);
-	process.env[key] = value;
-}
-
-function unsetEnv(key: string): void {
-	if (!originalEnv.has(key)) originalEnv.set(key, process.env[key]);
-	delete process.env[key];
-}
-
-function restoreEnv(): void {
-	for (const [key, value] of originalEnv) {
-		if (value === undefined) delete process.env[key];
-		else process.env[key] = value;
-	}
-}
-
-/** The current (sandboxed) environment with no `undefined` values. */
-function scriptEnv(): Record<string, string> {
-	const env: Record<string, string> = {};
-	for (const [key, value] of Object.entries(process.env)) {
-		if (value !== undefined) env[key] = value;
-	}
-	return env;
-}
 
 /**
  * Pin the walk's environment for real by re-execing this script once.
@@ -221,6 +198,10 @@ async function reexecWithPinnedEnvironment(): Promise<void> {
 		stdout: "inherit",
 		stderr: "inherit",
 	});
+	// The re-exec child owns the temp root from here on: disarm the parent's
+	// cleanup owner so a late parent signal or exit can only forward to the
+	// child, never race the child's own teardown of the same resources.
+	acceptance.cleanup.disown();
 	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
 		process.on(signal, () => child.kill(signal));
 	}
@@ -229,60 +210,8 @@ async function reexecWithPinnedEnvironment(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Bounded command / polling helpers
+// Ports
 // ---------------------------------------------------------------------------
-
-interface CommandResult {
-	code: number;
-	stdout: string;
-	stderr: string;
-	timedOut: boolean;
-}
-
-async function runCommand(
-	cmd: readonly string[],
-	opts: { cwd?: string; env?: Record<string, string>; timeoutMs?: number } = {},
-): Promise<CommandResult> {
-	const timeoutMs = opts.timeoutMs ?? SUBPROCESS_TIMEOUT_MS;
-	const proc = Bun.spawn([...cmd], {
-		cwd: opts.cwd,
-		env: opts.env ?? scriptEnv(),
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	let timedOut = false;
-	const termTimer = setTimeout(() => {
-		timedOut = true;
-		proc.kill("SIGTERM");
-		setTimeout(() => proc.kill("SIGKILL"), 1_000);
-	}, timeoutMs);
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-		proc.exited,
-	]);
-	clearTimeout(termTimer);
-	return { code: exitCode ?? -1, stdout, stderr, timedOut };
-}
-
-async function waitFor<T>(
-	what: string,
-	probe: () => T | null | Promise<T | null>,
-	opts: { timeoutMs?: number; intervalMs?: number } = {},
-): Promise<T> {
-	const timeoutMs = opts.timeoutMs ?? POLL_TIMEOUT_MS;
-	const intervalMs = opts.intervalMs ?? 250;
-	const deadline = Date.now() + timeoutMs;
-	for (;;) {
-		const value = await probe();
-		if (value !== null) return value;
-		if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`);
-		const { promise, resolve } = Promise.withResolvers<void>();
-		setTimeout(resolve, intervalMs);
-		await promise;
-	}
-}
 
 /** An unused TCP port on the wildcard address (bounded bind + close). */
 async function reservePort(): Promise<number> {
@@ -302,18 +231,6 @@ async function reservePort(): Promise<number> {
 	server.close(() => closed.resolve());
 	await closed.promise;
 	return port;
-}
-
-/** Absolute, executable, realpath-resolved tool path (or null). */
-function resolveTool(name: string): string | null {
-	const found = Bun.which(name);
-	if (found === null) return null;
-	try {
-		const real = realpathSync(found);
-		return existsSync(real) ? real : null;
-	} catch {
-		return null;
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -345,131 +262,11 @@ function textOf(value: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// Single cleanup owner (identical pattern in scripts/test-bwrap-lifecycle.ts)
+// Shared acceptance scaffolding (scripts/acceptance/)
 // ---------------------------------------------------------------------------
 
-type SignalName = "SIGINT" | "SIGTERM" | "SIGHUP";
-
-const SIGNAL_EXIT: Record<SignalName, number> = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
-
-/** A phase-tagged, caller-visible failure; the only thing that blocks a run. */
-class BlockedError extends Error {
-	constructor(
-		readonly phase: Phase,
-		detail: string,
-	) {
-		super(detail);
-	}
-}
-
-interface CleanupStep {
-	readonly name: string;
-	run(): Promise<void> | void;
-}
-
-/**
- * The single cleanup owner. `install()` runs BEFORE any resource exists and
- * wires SIGINT/SIGTERM/SIGHUP; every teardown step is registered here and runs
- * exactly once, in reverse registration order, from both the normal exit path
- * and the signal path.
- */
-class CleanupOwner {
-	#steps: CleanupStep[] = [];
-	#installed = false;
-	#drained: Promise<boolean> | null = null;
-	#failures: string[] = [];
-	#signal: SignalName | null = null;
-
-	add(name: string, run: () => Promise<void> | void): void {
-		this.#steps.push({ name, run });
-	}
-
-	install(): void {
-		if (this.#installed) return;
-		this.#installed = true;
-		for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-			process.on(signal, () => {
-				this.#signal ??= signal;
-				void this.run().then((ok) => process.exit(ok ? SIGNAL_EXIT[signal] : 1));
-			});
-		}
-	}
-
-	get interrupted(): SignalName | null {
-		return this.#signal;
-	}
-
-	get failures(): readonly string[] {
-		return this.#failures;
-	}
-
-	/** Idempotent: the first caller drains; every other caller awaits that run. */
-	run(): Promise<boolean> {
-		this.#drained ??= this.#drain();
-		return this.#drained;
-	}
-
-	async #drain(): Promise<boolean> {
-		for (const step of [...this.#steps].reverse()) {
-			try {
-				await step.run();
-			} catch (cause) {
-				this.#failures.push(`${step.name}: ${sanitize(messageOf(cause))}`);
-			}
-		}
-		return this.#failures.length === 0;
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Acceptance harness
-// ---------------------------------------------------------------------------
-
-class Acceptance {
-	readonly cleanup = new CleanupOwner();
-	#phase: Phase = "prerequisite";
-	#pending: string[] = [];
-
-	enter(phase: Phase): void {
-		this.#phase = phase;
-	}
-
-	get phase(): Phase {
-		return this.#phase;
-	}
-
-	check(name: string, ok: boolean, detail = ""): void {
-		if (ok) {
-			console.log(`ok   ${name}`);
-			return;
-		}
-		const line = detail === "" ? name : `${name} — ${detail}`;
-		this.#pending.push(line);
-		console.error(`FAIL ${sanitize(line)}`);
-	}
-
-	/** Record a check and stop the phase immediately when it failed. */
-	require(name: string, ok: boolean, detail = ""): void {
-		this.check(name, ok, detail);
-		if (!ok) throw new BlockedError(this.#phase, detail === "" ? name : `${name}: ${detail}`);
-	}
-
-	/** Return `value` when present; block the current phase otherwise. */
-	expect<T>(value: T | null | undefined, detail: string): T {
-		if (value === null || value === undefined) {
-			throw new BlockedError(this.#phase, detail);
-		}
-		return value;
-	}
-
-	/** Throw once per phase when any check in it failed. */
-	settle(): void {
-		if (this.#pending.length === 0) return;
-		throw new BlockedError(this.#phase, this.#pending.splice(0).join("; "));
-	}
-}
-
-const acceptance = new Acceptance();
+const runCommand = boundedCommand(SUBPROCESS_TIMEOUT_MS);
+const acceptance = new Acceptance<Phase>("prerequisite");
 
 // ---------------------------------------------------------------------------
 // Phase 1: prerequisite — temp root + environment pinning
@@ -482,23 +279,25 @@ const acceptance = new Acceptance();
  */
 const BOOTSTRAPPED = (process.env.OMP_ACCEPTANCE_BOOTSTRAP ?? "") !== "";
 
-const sandboxRoot = (() => {
-	const inherited = process.env.OMP_ACCEPTANCE_ROOT ?? "";
-	if (inherited !== "") return redact(inherited, "tmp-root");
-	return redact(mkdtempSync(join(tmpdir(), "omp-kube-acceptance-")), "tmp-root");
-})();
-
-if (BOOTSTRAPPED) {
-	// Only the process that runs the walk owns the single cleanup owner: the
-	// bootstrap parent's whole job is forwarding signals and the exit status.
-	acceptance.cleanup.install();
-	// Registered FIRST so the LIFO drain removes it LAST, after every other
-	// resource has been released.
-	acceptance.cleanup.add("remove temporary root", () => {
-		if (!KEEP) rmSync(sandboxRoot, { recursive: true, force: true });
-		else console.log(`sandbox kept at ${sandboxRoot}`);
-	});
-}
+// The single cleanup owner exists BEFORE the temp root does, in BOTH the
+// bootstrap parent and its re-exec child: a prerequisite failure or a signal
+// before the re-exec must still remove the root the parent already minted. The
+// parent hands this root to the child (CleanupOwner.disown) once the re-exec
+// owns it.
+acceptance.cleanup.install();
+let sandboxRoot = "";
+// Registered FIRST so the LIFO drain removes it LAST, after every other
+// resource has been released.
+acceptance.cleanup.add("remove temporary root", () => {
+	if (sandboxRoot === "") return;
+	if (!KEEP) rmSync(sandboxRoot, { recursive: true, force: true });
+	else console.log(`sandbox kept at ${sandboxRoot}`);
+});
+const inheritedRoot = process.env.OMP_ACCEPTANCE_ROOT ?? "";
+sandboxRoot = redact(
+	inheritedRoot !== "" ? inheritedRoot : mkdtempSync(join(tmpdir(), "omp-kube-acceptance-")),
+	"tmp-root",
+);
 
 const sandboxHome = join(sandboxRoot, "home");
 const minikubeHome = join(sandboxRoot, "minikube-home");
@@ -660,10 +459,19 @@ async function phasePrerequisite(): Promise<void> {
 	mkdirSync(workspaceDir, { recursive: true });
 	mkdirSync(seedProjectDir, { recursive: true });
 	mkdirSync(gitRoot, { recursive: true });
-	writeFileSync(
-		gitConfigPath,
-		"[user]\n\tname = kube-acceptance\n\temail = kube@acceptance.test\n",
-	);
+	// The re-exec child inherits an environment whose HOME/GIT_CONFIG_GLOBAL
+	// already hide the operator's config, so the bootstrap parent (whose env is
+	// still the operator's) copies the operator's REAL Git identity into the
+	// isolated config. No identity is invented, and a host without one blocks
+	// here rather than committing under a fabricated author.
+	if (!BOOTSTRAPPED) {
+		const gitIdentity = await carryHostGitIdentity(gitBin, gitConfigPath);
+		acceptance.require(
+			"the operator's global Git identity is configured",
+			gitIdentity !== null,
+			"set user.name and user.email in your global git config",
+		);
+	}
 	setEnv("HOME", sandboxHome);
 	setEnv("MINIKUBE_HOME", minikubeHome);
 	setEnv("MINIKUBE_IN_STYLE", "false");
@@ -716,6 +524,16 @@ async function phasePrerequisite(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Cleanup result checking
+// ---------------------------------------------------------------------------
+
+/** Docker/minikube's idempotent "already gone" outcomes are cleanup success. */
+function absentOutcome(result: CommandResult, needles: readonly string[]): boolean {
+	const text = `${result.stdout}\n${result.stderr}`.toLowerCase();
+	return needles.some((needle) => text.includes(needle.toLowerCase()));
+}
+
+// ---------------------------------------------------------------------------
 // Phase 2: cluster
 // ---------------------------------------------------------------------------
 
@@ -736,22 +554,42 @@ async function kubeJson(args: readonly string[], timeoutMs = KUBE_TIMEOUT_MS): P
 async function phaseCluster(): Promise<void> {
 	// Registered BEFORE the profile exists so a partially created cluster is
 	// still removed; LIFO ordering makes this run LAST, after the namespace.
+	// Every owned resource is checked: a nonzero deletion is a cleanup failure
+	// (the run must not certify cleanup while the profile/container/volume
+	// survives), and each later command still runs.
 	acceptance.cleanup.add("delete minikube profile", async () => {
+		const failures: string[] = [];
 		// `--interactive` is a `start` flag only: `minikube delete
 		// --interactive=false` fails with "unknown flag" and leaves the
 		// profile's named volume (the kicbase /var/lib/docker, ~2 GB) behind on
 		// every run.
-		await runCommand([minikubeBin, "delete", "-p", profile], {
+		const deleted = await runCommand([minikubeBin, "delete", "-p", profile], {
 			timeoutMs: CLUSTER_TIMEOUT_MS,
 		});
+		if (deleted.code !== 0 && !absentOutcome(deleted, ["not found", "does not exist"])) {
+			failures.push(
+				`minikube delete -p ${profile}: ${deleted.stderr.slice(-300) || deleted.stdout.slice(-300)}`,
+			);
+		}
 		// Under rootless Docker `minikube delete` can drop the profile and the
 		// kubeconfig entry while leaving the kicbase container running, which
 		// then starves the next run of memory. The container is named after the
 		// profile, so remove it explicitly; already-gone is success.
-		await runCommand([dockerBin, "rm", "-f", profile], { timeoutMs: 120_000 });
+		const container = await runCommand([dockerBin, "rm", "-f", profile], { timeoutMs: 120_000 });
+		if (container.code !== 0 && !absentOutcome(container, ["No such container"])) {
+			failures.push(
+				`docker rm -f ${profile}: ${container.stderr.slice(-300) || container.stdout.slice(-300)}`,
+			);
+		}
 		// The same goes for the profile's data volume: remove it explicitly so
 		// no orphaned cluster volume can starve a later run of disk.
-		await runCommand([dockerBin, "volume", "rm", profile], { timeoutMs: 120_000 });
+		const volume = await runCommand([dockerBin, "volume", "rm", profile], { timeoutMs: 120_000 });
+		if (volume.code !== 0 && !absentOutcome(volume, ["No such volume"])) {
+			failures.push(
+				`docker volume rm ${profile}: ${volume.stderr.slice(-300) || volume.stdout.slice(-300)}`,
+			);
+		}
+		if (failures.length > 0) throw new Error(failures.join("; "));
 	});
 
 	const start = await runCommand(
@@ -800,7 +638,29 @@ async function phaseCluster(): Promise<void> {
 		createNs.stderr.slice(-300),
 	);
 	acceptance.cleanup.add("delete namespace", async () => {
-		await kube(["delete", "namespace", namespace, "--ignore-not-found", "--wait=false"], 120_000);
+		const deleted = await kube(
+			["delete", "namespace", namespace, "--ignore-not-found", "--wait=false"],
+			120_000,
+		);
+		if (deleted.code !== 0) {
+			throw new Error(
+				`kubectl delete namespace ${namespace} failed (${deleted.code}): ${deleted.stderr.slice(-300)}`,
+			);
+		}
+	});
+	// Owned tool Pods are deleted before the namespace that hosts them; the step
+	// attempts every pod and reports each failure, so one stuck pod cannot hide
+	// another (or leave the namespace undeletable silently).
+	acceptance.cleanup.add("delete tool pods", async () => {
+		const failures: string[] = [];
+		for (const name of [...toolPods]) {
+			try {
+				await deleteToolPod(name);
+			} catch (cause) {
+				failures.push(messageOf(cause));
+			}
+		}
+		if (failures.length > 0) throw new Error(failures.join("; "));
 	});
 
 	await waitFor(
@@ -1133,6 +993,20 @@ const GATEWAY_REJECTED_BODY = "acceptance-gateway-rejected";
  */
 async function ensureBaseImage(): Promise<void> {
 	if (baseImageLoaded) return;
+	// Register each tag before building: partial creation needs cleanup, and one
+	// absent tag must not mask failure to remove the other.
+	for (const image of [baseImage, caImage]) {
+		acceptance.cleanup.add(`remove image tag ${image}`, async () => {
+			const removed = await runCommand([dockerBin, "image", "rm", "--force", image], {
+				timeoutMs: 120_000,
+			});
+			if (removed.code !== 0 && !absentOutcome(removed, ["No such image"])) {
+				throw new Error(
+					`docker image rm ${image} failed (${removed.code}): ${removed.stderr.slice(-300)}`,
+				);
+			}
+		});
+	}
 	// The shipped image definition is a Containerfile at the context root;
 	// `docker build` defaults to `Dockerfile`, so name it explicitly.
 	const build = await runCommand(
@@ -1278,11 +1152,6 @@ async function phaseImage(): Promise<void> {
 		deriveLoad.code === 0,
 		deriveLoad.stderr.slice(-400),
 	);
-	acceptance.cleanup.add("remove image tags", async () => {
-		await runCommand([dockerBin, "image", "rm", "--force", baseImage, caImage], {
-			timeoutMs: 120_000,
-		});
-	});
 
 	const gateway = Bun.serve({
 		hostname: BIND_ADDRESS,
@@ -1720,11 +1589,16 @@ async function podLogs(name: string): Promise<string> {
 }
 
 async function deleteToolPod(name: string): Promise<void> {
-	toolPods.delete(name);
-	await kube(
+	const deleted = await kube(
 		["delete", "pod", name, "-n", namespace, "--ignore-not-found", "--wait=false"],
 		60_000,
 	);
+	if (deleted.code !== 0) {
+		throw new Error(
+			`kubectl delete pod ${name} failed (${deleted.code}): ${deleted.stderr.slice(-300)}`,
+		);
+	}
+	toolPods.delete(name);
 }
 
 /** sha256 of one file inside a PVC, or "MISSING" when the file is absent. */
@@ -1804,28 +1678,16 @@ async function phasePreflight(): Promise<void> {
 // Fleet HTTP helpers
 // ---------------------------------------------------------------------------
 
-interface CtlResponse {
-	status: number;
-	body: unknown;
-}
-
-async function ctl(path: string, init?: { method?: string; body?: unknown }): Promise<CtlResponse> {
+async function ctl(
+	path: string,
+	init?: { method?: string; body?: unknown },
+): Promise<JsonResponse> {
 	if (fleet === null) throw new Error("fleet is not running");
-	const res = await fetch(`http://127.0.0.1:${fleet.port}${path}`, {
-		method: init?.method ?? "GET",
-		headers: init?.body !== undefined ? { "content-type": "application/json" } : undefined,
-		body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
-	});
-	const text = await res.text();
-	let body: unknown = null;
-	if (text !== "") {
-		try {
-			body = JSON.parse(text);
-		} catch {
-			body = text;
-		}
+	try {
+		return await fetchJson(`http://127.0.0.1:${fleet.port}${path}`, init, CTL_TIMEOUT_MS);
+	} catch (cause) {
+		throw new BlockedError(acceptance.phase, `control request ${path}: ${messageOf(cause)}`);
 	}
-	return { status: res.status, body };
 }
 
 function rowsOf(body: unknown): unknown[] {
@@ -1991,7 +1853,7 @@ async function waitForCallbackPair(
  * workspace's daemon has dialed would leave it undeletable. Every stop whose
  * evidence a later removal depends on goes through here.
  */
-async function stopWithLivePair(daemonId: string, what: string): Promise<CtlResponse> {
+async function stopWithLivePair(daemonId: string, what: string): Promise<JsonResponse> {
 	const pods = await workspacePods(daemonId);
 	const podName = textOf(nested(pods[0], "metadata", "name"));
 	if (podName === "") {
@@ -2466,19 +2328,18 @@ async function phaseStream(): Promise<void> {
 /**
  * The plan's "download a real file through bulk" step: a fleet-issued capture
  * bulk correlation plus the `download_bulk` control the edge issues for clone
- * downloads (fleet/edge.ts). The daemon has no handler for that control yet —
- * its control broker acks an unknown control with `invalid_request` and the
- * capture correlation only expires 10 minutes later — so this reports the gap
- * from that typed ack (bounded, never a 10-minute hang) instead of blocking the
- * walk, and returns the real bytes the day the daemon implements the control.
+ * downloads (fleet/edge.ts). The transfer is REQUIRED — the caller compares the
+ * returned bytes to the durable store — so a rejection, a failed transfer, or a
+ * silent deadline blocks the wake phase, and an abandoned correlation is
+ * released instead of lingering until its capture expires.
  */
-async function bulkDownloadOrGap(
+async function downloadBulk(
 	daemonId: string,
 	path: string,
 	sessionId: string,
-): Promise<{ kind: "bytes"; data: Uint8Array } | { kind: "gap"; reason: string }> {
+): Promise<Uint8Array> {
 	const transport = currentTransport();
-	const correlation: BulkCorrelation = transport.createBulkCorrelation(daemonId, { capture: true });
+	const correlation = transport.createBulkCorrelation(daemonId, { capture: true });
 	const streamId = `browser/${randomUUID()}`;
 	const frames: CallbackEnvelope[] = [];
 	transport.attachVirtualStream(daemonId, streamId, {
@@ -2486,6 +2347,7 @@ async function bulkDownloadOrGap(
 			frames.push(envelope);
 		},
 	});
+	let received = false;
 	try {
 		await transport.sendToDaemon(daemonId, {
 			streamId,
@@ -2498,7 +2360,7 @@ async function bulkDownloadOrGap(
 			},
 		});
 		const settled = correlation.done.then((bulk) => ({ bulk }));
-		const deadline = Date.now() + 30_000;
+		const deadline = Date.now() + BULK_DOWNLOAD_TIMEOUT_MS;
 		for (;;) {
 			const raced = await Promise.race([
 				settled,
@@ -2507,30 +2369,39 @@ async function bulkDownloadOrGap(
 			if (raced !== null) {
 				const { bulk } = raced;
 				if (bulk.state !== "received" || bulk.data === undefined) {
-					throw new Error(`bulk transfer for ${path} failed: ${bulk.state} ${bulk.error ?? ""}`);
+					throw new BlockedError(
+						acceptance.phase,
+						`bulk download of ${path} failed (${bulk.state}): ${bulk.error ?? "no bytes"}`,
+					);
 				}
-				return { kind: "bytes", data: bulk.data };
+				received = true;
+				return bulk.data;
 			}
 			for (const envelope of frames) {
 				const payload = envelope.payload as {
 					type?: string;
 					ok?: unknown;
-					message?: unknown;
+					error?: { message?: unknown };
 				} | null;
 				if (payload?.type !== "download_bulk" || payload.ok !== false) continue;
-				return {
-					kind: "gap",
-					reason:
-						typeof payload.message === "string"
-							? payload.message
-							: "the daemon rejected the bulk-download control",
-				};
+				const message =
+					typeof payload.error?.message === "string"
+						? payload.error.message
+						: "the daemon rejected the bulk-download control";
+				throw new BlockedError(
+					acceptance.phase,
+					`bulk download of ${path} was rejected: ${message}`,
+				);
 			}
 			if (Date.now() >= deadline) {
-				return { kind: "gap", reason: "no bulk transfer and no rejection within 30 s" };
+				throw new BlockedError(
+					acceptance.phase,
+					`bulk download of ${path} produced no bytes within ${BULK_DOWNLOAD_TIMEOUT_MS} ms`,
+				);
 			}
 		}
 	} finally {
+		if (!received) transport.cancelBulkCorrelation(correlation.correlationId);
 		transport.detachVirtualStream(daemonId, streamId);
 	}
 }
@@ -2548,29 +2419,16 @@ async function phaseWake(): Promise<void> {
 		`clone-b stored bytes are unreadable (${mainRelpath})`,
 	);
 
-	const bulk = await bulkDownloadOrGap(
+	const bulkBytes = await downloadBulk(
 		cloneB,
 		`${POD_HOME_DIR}/agent/sessions/${mainRelpath}`,
 		session.sessionId,
 	);
-	let bulkGapReason: string | null = null;
-	if (bulk.kind === "bytes") {
-		acceptance.check(
-			"bulk download returns the real transcript bytes",
-			Buffer.from(bulk.data).equals(storedBytes),
-			`${bulk.data.length} vs ${storedBytes.length}`,
-		);
-	} else {
-		// A REPORTED GAP, not a silent pass: the plan's bulk-download step
-		// cannot run until the daemon implements the `download_bulk` control
-		// (fleet/edge.ts issues it; the daemon acks it as an unknown control).
-		// The real-file proof it would supply is taken below, from the PVC
-		// itself, once the stop has quiesced the daemon and the fleet has acked
-		// the final flush boundary — the point at which the store provably
-		// holds every byte of the transcript.
-		bulkGapReason = bulk.reason;
-		console.log(`gap  bulk download is unavailable: ${bulk.reason}`);
-	}
+	acceptance.check(
+		"bulk download returns the real transcript bytes",
+		Buffer.from(bulkBytes).equals(storedBytes),
+		`${bulkBytes.length} vs ${storedBytes.length}`,
+	);
 
 	const row = await sessionRow(cloneB);
 	acceptance.check(
@@ -2610,31 +2468,29 @@ async function phaseWake(): Promise<void> {
 		stoppedPvcs.length === 1 && textOf(nested(stoppedPvcs[0], "metadata", "uid")) === cloneBPvcUid,
 		JSON.stringify(stoppedPvcs.map((pvc) => nested(pvc, "metadata", "uid"))),
 	);
-	if (bulkGapReason !== null) {
-		// The stop above quiesced the daemon (flush + dispose + tailer
-		// finalize) and waited for the fleet's acks over the final flush
-		// boundary, so the store now provably holds every byte of this
-		// transcript: the PVC's own file is the real-file proof the missing
-		// bulk download would have supplied.
-		const post = storedSessions(cloneB);
-		const postSession =
-			post.sessions.find((candidate) => candidate.sessionId === session.sessionId) ??
-			post.sessions[0];
-		const postBytes =
-			postSession === undefined
-				? undefined
-				: post.store.readStored(cloneB, postSession.sessionId, postSession.mainRelpath ?? "");
-		const volumeHash = await sha256InVolume(cloneB, mainRelpath);
-		const storedHash =
-			postBytes === null || postBytes === undefined
-				? ""
-				: createHash("sha256").update(postBytes).digest("hex");
-		acceptance.check(
-			"the workspace's own transcript bytes match the stored stream",
-			storedHash !== "" && volumeHash === storedHash,
-			`${volumeHash} vs ${storedHash}`,
-		);
-	}
+	// Separate durability assertion, never a substitute for the bulk transfer:
+	// the stop above quiesced the daemon (flush + dispose + tailer finalize) and
+	// waited for the fleet's acks over the final flush boundary, so the store
+	// now provably holds every byte of this transcript and the PVC's own file
+	// must hash to the bytes the store streamed.
+	const post = storedSessions(cloneB);
+	const postSession =
+		post.sessions.find((candidate) => candidate.sessionId === session.sessionId) ??
+		post.sessions[0];
+	const postBytes =
+		postSession === undefined
+			? undefined
+			: post.store.readStored(cloneB, postSession.sessionId, postSession.mainRelpath ?? "");
+	const volumeHash = await sha256InVolume(cloneB, mainRelpath);
+	const storedHash =
+		postBytes === null || postBytes === undefined
+			? ""
+			: createHash("sha256").update(postBytes).digest("hex");
+	acceptance.check(
+		"the workspace's own transcript bytes match the stored stream",
+		storedHash !== "" && volumeHash === storedHash,
+		`${volumeHash} vs ${storedHash}`,
+	);
 
 	const woken = await ctl("/ctl/wake", { method: "POST", body: { daemonId: cloneB } });
 	acceptance.check(
@@ -2822,6 +2678,31 @@ async function phaseWake(): Promise<void> {
 // Phase 9: delete — preserve the change and run the verified gate
 // ---------------------------------------------------------------------------
 
+// Author on the host so the Pod never receives operator Git identity or credentials.
+async function preserveChangeOnHost(): Promise<string> {
+	// Byte-identical to the probe's `echo dirty > acceptance-dirty.txt`.
+	writeFileSync(join(seedProjectDir, "acceptance-dirty.txt"), "dirty\n");
+	const steps: [string, string[]][] = [
+		["the preserved change is staged", ["-C", seedProjectDir, "add", "acceptance-dirty.txt"]],
+		[
+			"the preserved change is committed",
+			["-C", seedProjectDir, "commit", "-m", "acceptance dirty change"],
+		],
+		[
+			"the preserved commit is pushed to the fixture remote",
+			["-C", seedProjectDir, "push", "origin", "acceptance"],
+		],
+	];
+	for (const [what, args] of steps) {
+		const result = await runCommand([gitBin, ...args]);
+		acceptance.require(what, result.code === 0, result.stderr.slice(-300));
+	}
+	const head = await runCommand([gitBin, "-C", seedProjectDir, "rev-parse", "HEAD"]);
+	const commit = head.stdout.trim();
+	acceptance.require("the preserved commit resolves", /^[0-9a-f]{40}$/.test(commit), commit);
+	return commit;
+}
+
 async function phaseDelete(): Promise<void> {
 	// The dirty refusal above left a REJECTED deletion attempt. The documented
 	// remedy is to clear it, wake the workspace to preserve its change, stop
@@ -2851,43 +2732,59 @@ async function phaseDelete(): Promise<void> {
 		dirtyPresent.includes("dirty"),
 		dirtyPresent.trim(),
 	);
-	const committed = await runToolPod(
-		`omp-acc-commit-${randomUUID().slice(0, 6)}`,
+	const preservedCommit = await preserveChangeOnHost();
+	const podPreservation = await runToolPod(
+		`omp-acc-preserve-${randomUUID().slice(0, 6)}`,
 		pvcNameFor(cloneB),
 		[
 			"sh",
 			"-c",
 			[
-				`git -C ${POD_CHECKOUT_DIR} -c user.email=acceptance@test -c user.name=acceptance add -A`,
-				`git -C ${POD_CHECKOUT_DIR} -c user.email=acceptance@test -c user.name=acceptance commit -m "acceptance dirty change" >/dev/null`,
-				// "Preserved" is a REMOTE fact for the delete contract: the
-				// receipt's Git evidence proves every local tip is contained
-				// by an advertised remote ref, so the change must be pushed.
-				`echo PRESERVED=$(git -C ${POD_CHECKOUT_DIR} rev-parse HEAD)`,
-				`git -C ${POD_CHECKOUT_DIR} push -q origin HEAD:refs/heads/acceptance`,
-				// The quiesce evidence is bound to the workspace's PINNED
-				// revision (the fleet's receipt validator refuses evidence
-				// resolving another commit), so the checkout returns to the pin
-				// once the commit is safe on the remote. Nothing is lost: the
-				// change rides the remote branch asserted below.
-				`git -C ${POD_CHECKOUT_DIR} reset --hard ${commitId}`,
-				`test -z "$(git -C ${POD_CHECKOUT_DIR} status --porcelain)" && echo CHECKOUT-CLEAN || echo CHECKOUT-DIRTY`,
+				`git -C ${POD_CHECKOUT_DIR} fetch -q origin acceptance`,
+				`test "$(git -C ${POD_CHECKOUT_DIR} hash-object acceptance-dirty.txt)" = "$(git -C ${POD_CHECKOUT_DIR} rev-parse FETCH_HEAD:acceptance-dirty.txt)"`,
+				`git -C ${POD_CHECKOUT_DIR} reset --hard ${preservedCommit}`,
+				`git -C ${POD_CHECKOUT_DIR} rev-parse HEAD`,
+				`test -z "$(git -C ${POD_CHECKOUT_DIR} status --porcelain)" && echo CHECKOUT-CLEAN`,
 			].join(" && "),
 		],
 	);
 	acceptance.check(
-		"the change is preserved as a pushed commit (checkout back at the pin)",
-		committed.includes("CHECKOUT-CLEAN"),
-		committed.trim().slice(-300),
+		"the Pod adopts the byte-identical preserved commit",
+		podPreservation.includes(preservedCommit) && podPreservation.includes("CHECKOUT-CLEAN"),
+		podPreservation.trim().slice(-300),
 	);
-	const preservedCommit = /PRESERVED=([0-9a-f]{40})/.exec(committed)?.[1] ?? "";
+	const stopped = await stopWithLivePair(cloneB, "the preserved-commit wake");
+	acceptance.require(
+		"the advanced checkout stops with valid evidence",
+		stopped.status === 200,
+		JSON.stringify(stopped.body),
+	);
+	const woken = await ctl("/ctl/wake", { method: "POST", body: { daemonId: cloneB } });
+	acceptance.require(
+		"the advanced checkout wakes",
+		woken.status === 200,
+		JSON.stringify(woken.body),
+	);
+	await waitFor(
+		"the advanced checkout to reach ready",
+		async () => (nested(await sessionRow(cloneB), "status") === "ready" ? true : null),
+		{ timeoutMs: PAIR_TIMEOUT_MS, intervalMs: 2_000 },
+	);
+	const headAfterWake = await runToolPod(
+		`omp-acc-head-${randomUUID().slice(0, 6)}`,
+		pvcNameFor(cloneB),
+		["git", "-C", POD_CHECKOUT_DIR, "rev-parse", "HEAD"],
+	);
+	acceptance.check(
+		"wake preserves the later committed checkout",
+		headAfterWake.trim() === preservedCommit,
+		`${headAfterWake.trim()} vs ${preservedCommit}`,
+	);
 	const advertised = await runCommand([gitBin, "ls-remote", gitUrl, "refs/heads/acceptance"]);
 	acceptance.check(
 		"the preserved commit is advertised by the source remote",
-		preservedCommit !== "" && advertised.stdout.includes(preservedCommit),
-		`${preservedCommit === "" ? "(no commit reported)" : preservedCommit} vs ${
-			advertised.stdout.trim() || advertised.stderr.trim()
-		}`,
+		advertised.stdout.includes(preservedCommit),
+		`${preservedCommit} vs ${advertised.stdout.trim() || advertised.stderr.trim()}`,
 	);
 
 	// The store view the removal must prove it verified (the gate reports
@@ -2939,11 +2836,6 @@ async function phaseDelete(): Promise<void> {
 // Driver
 // ---------------------------------------------------------------------------
 
-async function phaseCleanup(): Promise<void> {
-	// Deleting the current entry is safe while iterating a Set.
-	for (const name of toolPods) await deleteToolPod(name);
-}
-
 async function main(): Promise<never> {
 	let blocked: BlockedError | null = null;
 	try {
@@ -2970,11 +2862,9 @@ async function main(): Promise<never> {
 			cause instanceof BlockedError ? cause : new BlockedError(acceptance.phase, messageOf(cause));
 	} finally {
 		acceptance.enter("cleanup");
-		try {
-			await phaseCleanup();
-		} catch (cause) {
-			blocked ??= new BlockedError("cleanup", messageOf(cause));
-		}
+		// The cleanup owner runs every teardown step (tool Pods included) in
+		// reverse registration order and records each failure, so one failed
+		// deletion can neither hide another nor certify a dirty run.
 		if (!(await acceptance.cleanup.run())) {
 			console.error("FAIL cleanup");
 			for (const failure of acceptance.cleanup.failures) console.error(`  ${failure}`);

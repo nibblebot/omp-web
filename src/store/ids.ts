@@ -1,20 +1,11 @@
 /**
- * Client-side id generation, safe on non-secure origins.
+ * Client-side correlation id, safe on non-secure origins.
  *
- * WHY this exists instead of calling `crypto.randomUUID()` directly:
- * `randomUUID` is defined only in a SECURE CONTEXT. Chrome treats `localhost`
- * and `127.0.0.1` as secure, but a plain-HTTP origin reached by any other
- * host, an IP address such as `http://192.168.5.15:4713`, is NOT one. There
- * `crypto.randomUUID` is `undefined`, so an unguarded call throws
- * `TypeError: crypto.randomUUID is not a function`. At module scope (the
- * page-scoped `clientId`) that aborts the whole bundle during evaluation and
- * the UI renders a blank page.
- *
- * `crypto.getRandomValues` is NOT restricted to secure contexts, so a
- * standards-shaped v4 UUID can be built from it wherever `randomUUID` is
- * missing. Ids here are correlation tokens (command dedup, attach routing,
- * the page-scoped client id), never secrets, so a locally generated v4 UUID
- * is all that is required. Same fallback discipline as `src/text/clipboard.ts`.
+ * `crypto.randomUUID` is secure-context-only: a plain-HTTP origin such as
+ * `http://192.168.5.15:4713` has none, and an unguarded call at module scope
+ * aborts the whole bundle. `crypto.getRandomValues` is not restricted, so the
+ * fallback builds the same v4 UUID. These ids are correlation tokens (command
+ * dedup, attach routing, the page-scoped client id), never secrets.
  */
 
 /** One RFC 4122 version 4 UUID, derived from `getRandomValues`. */

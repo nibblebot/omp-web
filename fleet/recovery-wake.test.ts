@@ -27,6 +27,14 @@
  *  6. resume-onto-fresh-clone route keeps 404 (no provenance) / 409 (live
  *     workspace or no transcripts) / 503 (no provider hook, P5) after the
  *     shared-helper refactor.
+ *  7. Stored-main availability (P5 wake review): a warm volume with no store
+ *     lineage succeeds with zero writes; a fill that ends without a real
+ *     main is typed `unavailable` even when assets were written; a newer
+ *     assets-only/empty-main lineage never outranks an older resumable one
+ *     (using the accurate file mtime); history with no usable main is typed
+ *     `unavailable` instead of a silent fresh boot, while genuine absence
+ *     still returns undefined. FleetLogStore.onStoredChange notifies after
+ *     durable ingest/purge only.
  *
  * Provider fakes speak OMP_PROVIDER_PROTO = 2: they abort unless the request
  * carries `providerProto` (and, for kubernetes, the resource binding), and
@@ -241,6 +249,183 @@ describe("fleet/wake-materialize", () => {
 		utimesSync(join(sessions, "proj", `${s2}.jsonl`), new Date(), new Date());
 		const pick = pickNewestSessionId({ sessionsDir: sessions });
 		expect(pick).toBe(s2);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Stored-main availability: warm-without-lineage, unusable-history refusal,
+// and newest-usable selection (P5 wake review).
+// ---------------------------------------------------------------------------
+
+describe("fleet/wake-materialize stored-main availability", () => {
+	test("warm volume with NO store lineage succeeds with zero writes", () => {
+		const paths = fleetPaths("omp-wake-warm-nolineage-");
+		const store = new FleetLogStore({ rootDir: join(paths.tmp, "logs") });
+		const volume = join(paths.tmp, "volume", ".home", "agent", "sessions");
+		mkdirSync(volume, { recursive: true });
+		const body = sessionBody(SESSION);
+		writeFileSync(join(volume, MAIN_RELPATH), body);
+
+		const out = materializeMissingSessionFiles({
+			store,
+			workspaceId: WS,
+			sessionId: SESSION,
+			sessionsDir: volume,
+		});
+		// No restoration needed and nothing to restore from: success, no writes.
+		expect(out).toEqual({ written: 0, bytes: 0, mainPresent: true });
+		expect(readFileSync(join(volume, MAIN_RELPATH), "utf8")).toBe(body);
+	});
+
+	test("cold completion with no real main throws unavailable even if assets wrote", () => {
+		const paths = fleetPaths("omp-wake-phantom-main-");
+		// A lineage that CLAIMS a stored non-empty main but cannot produce its
+		// bytes (the store/read disagreement the post-fill check defends).
+		const phantom = {
+			storedLineage: (_w: string, _s: string) => ({
+				sessionId: SESSION,
+				files: [
+					{ relpath: MAIN_RELPATH, status: "stored" as const, bytes: 10 },
+					{ relpath: "artifact.log", status: "stored" as const, bytes: 6 },
+				],
+				mainRelpath: MAIN_RELPATH,
+			}),
+			readStored: (_w: string, _s: string, rel: string) =>
+				rel === MAIN_RELPATH ? null : Buffer.from("asset\n", "utf8"),
+		};
+		const volume = join(paths.tmp, "volume", "sessions");
+		mkdirSync(volume, { recursive: true });
+
+		let code: string | undefined;
+		try {
+			materializeMissingSessionFiles({
+				store: phantom,
+				workspaceId: WS,
+				sessionId: SESSION,
+				sessionsDir: volume,
+			});
+		} catch (err) {
+			code = err instanceof WakeMaterializeError ? err.code : undefined;
+		}
+		expect(code).toBe("unavailable");
+		// The asset WAS written before the refusal; no main landed, so the
+		// caller never sees a false resumable success.
+		expect(existsSync(join(volume, "artifact.log"))).toBe(true);
+		expect(resolveMainSessionFile(volume, SESSION)).toBeNull();
+	});
+
+	test("empty indexed main plus a stored asset is refused (assets cannot fake a main)", () => {
+		const paths = fleetPaths("omp-wake-empty-main-");
+		const store = new FleetLogStore({ rootDir: join(paths.tmp, "logs") });
+		ingestAcked(store, WS, SESSION, MAIN_RELPATH, chunkAt(0, 1, "", true));
+		ingestAcked(store, WS, SESSION, "artifact.log", chunkAt(0, 1, "asset\n", true));
+		const volume = join(paths.tmp, "volume", "sessions");
+		mkdirSync(volume, { recursive: true });
+
+		let code: string | undefined;
+		try {
+			materializeMissingSessionFiles({
+				store,
+				workspaceId: WS,
+				sessionId: SESSION,
+				sessionsDir: volume,
+			});
+		} catch (err) {
+			code = err instanceof WakeMaterializeError ? err.code : undefined;
+		}
+		expect(code).toBe("unavailable");
+		expect(resolveMainSessionFile(volume, SESSION)).toBeNull();
+	});
+
+	test("newer unusable stored lineage never outranks older resumable history", () => {
+		const paths = fleetPaths("omp-wake-newest-usable-");
+		const rootDir = join(paths.tmp, "logs");
+		const store = new FleetLogStore({ rootDir });
+		const OLD = "20260901T0000_old";
+		const NEW_ASSETS = "20260902T0000_assets";
+		const NEW_EMPTY = "20260903T0000_empty";
+		ingestAcked(store, WS, OLD, `${OLD}.jsonl`, chunkAt(0, 1, sessionBody(OLD), true));
+		// Newer lineage with an asset but no main file at all.
+		ingestAcked(store, WS, NEW_ASSETS, "artifact.log", chunkAt(0, 1, "asset\n", true));
+		// Newest lineage whose indexed main is empty (not resumable).
+		ingestAcked(store, WS, NEW_EMPTY, `${NEW_EMPTY}.jsonl`, chunkAt(0, 1, "", true));
+
+		const older = new Date(Date.now() - 60_000);
+		const newer = new Date(Date.now() + 60_000);
+		utimesSync(join(rootDir, WS, OLD, `${OLD}.jsonl`), older, older);
+		utimesSync(join(rootDir, WS, NEW_ASSETS, "artifact.log"), newer, newer);
+		utimesSync(join(rootDir, WS, NEW_EMPTY, `${NEW_EMPTY}.jsonl`), newer, newer);
+
+		// Store-only selection uses the accurate latest FILE mtime, not the
+		// directory mtime (which the later ingests would have made newest).
+		const lineage = store.storedLineage(WS, OLD);
+		expect(lineage).not.toBeNull();
+		expect(Math.abs((lineage?.mtimeMs ?? 0) - older.getTime())).toBeLessThan(5);
+
+		const volume = join(paths.tmp, "volume", "sessions");
+		mkdirSync(volume, { recursive: true });
+		expect(pickNewestSessionId({ sessionsDir: volume, store, workspaceId: WS })).toBe(OLD);
+
+		// A warm volume main stays a candidate even when the store history is
+		// entirely unusable.
+		const VOL = "20260904T0000_volume";
+		const volumeMain = join(volume, `${VOL}.jsonl`);
+		writeFileSync(volumeMain, sessionBody(VOL));
+		expect(pickNewestSessionId({ sessionsDir: volume, store, workspaceId: WS })).toBe(VOL);
+	});
+
+	test("history with no usable main throws unavailable; genuine absence stays fresh", () => {
+		const paths = fleetPaths("omp-wake-unusable-history-");
+		const store = new FleetLogStore({ rootDir: join(paths.tmp, "logs") });
+		ingestAcked(store, WS, SESSION, "artifact.log", chunkAt(0, 1, "asset\n", true));
+		const volume = join(paths.tmp, "volume", "sessions");
+		mkdirSync(volume, { recursive: true });
+
+		let code: string | undefined;
+		try {
+			pickNewestSessionId({ sessionsDir: volume, store, workspaceId: WS });
+		} catch (err) {
+			code = err instanceof WakeMaterializeError ? err.code : undefined;
+		}
+		expect(code).toBe("unavailable");
+
+		// No history anywhere: a never-started clone boots fresh (undefined).
+		const empty = new FleetLogStore({ rootDir: join(paths.tmp, "logs-empty") });
+		expect(
+			pickNewestSessionId({ sessionsDir: volume, store: empty, workspaceId: WS }),
+		).toBeUndefined();
+		expect(pickNewestSessionId({ sessionsDir: volume })).toBeUndefined();
+	});
+});
+
+describe("FleetLogStore.onStoredChange", () => {
+	test("notifies after durable ingest/purge, isolates listener errors, unsubscribes", () => {
+		const paths = fleetPaths("omp-wake-stored-change-");
+		const store = new FleetLogStore({ rootDir: join(paths.tmp, "logs") });
+		const seen: string[] = [];
+		const off = store.onStoredChange((ws) => {
+			seen.push(ws);
+			throw new Error("listener must not break the store");
+		});
+
+		const body = sessionBody(SESSION);
+		ingestAcked(store, WS, SESSION, MAIN_RELPATH, chunkAt(0, 1, body, true));
+		expect(seen).toEqual([WS]);
+
+		// A no-op resend changes no stored bytes: no notification.
+		expect(store.ingest(WS, SESSION, MAIN_RELPATH, chunkAt(0, 1, body, true)).status).toBe(
+			"duplicate",
+		);
+		expect(seen).toEqual([WS]);
+
+		expect(store.purgeSession(WS, SESSION)).toBe(true);
+		expect(seen).toEqual([WS, WS]);
+		expect(store.purgeSession(WS, SESSION)).toBe(false); // Nothing removed.
+		expect(seen).toEqual([WS, WS]);
+
+		off();
+		ingestAcked(store, WS, SESSION, MAIN_RELPATH, chunkAt(0, 1, body, true));
+		expect(seen).toEqual([WS, WS]);
 	});
 });
 

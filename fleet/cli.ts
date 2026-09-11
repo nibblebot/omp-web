@@ -757,17 +757,15 @@ async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 		);
 	}
 	const dataHome = dirname(configPath);
-	// Pass the fleet environment (Kube context/secret/key env the checks
-	// consult) plus the configured callback gateway from
-	// OMP_FLEET_CALLBACK_URL, exactly as a live `serve` would see them. An
+	// `serve` strips trailing slashes from OMP_FLEET_CALLBACK_URL before it
+	// hands the origin to a workspace (#callbackUrl), so preflight must check
+	// that same normalized value rather than the raw env value. An
 	// absent/empty value leaves the callback check at "not configured"
 	// (a bwrap fleet has no gateway to reach).
-	const env = process.env;
-	const callbackUrl = env.OMP_FLEET_CALLBACK_URL;
+	const callbackUrl = process.env.OMP_FLEET_CALLBACK_URL?.replace(/\/+$/, "");
 	const result = await runProfilePreflight(profile, {
 		workspaceRoot: config.workspaceDir,
 		logsRoot: join(dataHome, "logs"),
-		env,
 		...(callbackUrl !== undefined && callbackUrl !== "" ? { callbackUrl } : {}),
 	});
 	const lines: string[] = [`profile ${profile.id}: ${result.ok ? "ready" : "NOT ready"}`];

@@ -37,91 +37,6 @@ import {
 /** Default op timeout when the caller does not pick one. */
 export const PROVIDER_OP_TIMEOUT_MS_DEFAULT = 30_000;
 
-/** Largest accepted wait override (ms): five minutes. */
-export const PROVIDER_WAIT_MS_MAX = 300_000;
-
-/**
- * Fixed headroom (ms) added on top of the waits one operation can consume,
- * covering the Kubernetes API calls, polling, and bookkeeping that are not
- * themselves waits.
- */
-export const PROVIDER_OP_HEADROOM_MS = 240_000;
-
-/**
- * Extra outer budget (ms) handed to {@link runProviderOp} on top of the
- * child's own operation budget, so process termination (SIGTERM, then the
- * SIGKILL escalation grace period) finishes inside the invocation that
- * started the child instead of racing it.
- */
-export const PROVIDER_OP_TERMINATION_MS = 5_000;
-
-/** Wait overrides one workspace's provider operations run under. */
-export interface ProviderOpWaits {
-	/** Pod-readiness budget for `ensure-running`. */
-	ensureWaitMs: number;
-	/** Pod-absence budget for `ensure-running` (replacement) and `stop`. */
-	stopWaitMs: number;
-	/** Per-object absence budget for `delete` (Pod, then PVC). */
-	deleteWaitMs: number;
-}
-
-/** Bounded child operation budget plus the outer invoker timeout covering it. */
-export interface ProviderOpTimeout {
-	/** Operation budget the provider itself runs under. */
-	childTimeoutMs: number;
-	/** `runProviderOp` wall-clock timeout: `childTimeoutMs` plus the termination grace. */
-	invocationTimeoutMs: number;
-}
-
-/**
- * Clamp one caller-supplied wait override to an integer in
- * [1, PROVIDER_WAIT_MS_MAX]. A non-finite value is a configuration error
- * (`invalid_request`): silently defaulting it would hide a broken override.
- */
-function clampProviderWaitMs(value: number, field: string): number {
-	if (!Number.isFinite(value)) {
-		throw new ProviderProtocolError(
-			"invalid_request",
-			`${field} must be a finite number of milliseconds, got ${String(value)}`,
-		);
-	}
-	const integer = Math.trunc(value);
-	return Math.min(Math.max(integer, 1), PROVIDER_WAIT_MS_MAX);
-}
-
-/**
- * Bounded operation timeouts for one set of wait overrides (P5.4).
- *
- * Wait overrides are clamped to integers in [1, PROVIDER_WAIT_MS_MAX] so a
- * misconfigured fleet can neither disable an operation deadline nor stall
- * one indefinitely. Each op's child budget is the sum of the waits it may
- * consume plus fixed headroom for the API calls and polling around them:
- *
- * - `inspect`: headroom (it waits on nothing);
- * - `ensure-running`: ensure wait + stop wait (replacement) + headroom;
- * - `stop`: stop wait + headroom;
- * - `delete`: 2 * delete wait (Pod, then PVC) + headroom.
- *
- * The outer invoker timeout adds {@link PROVIDER_OP_TERMINATION_MS}, so a
- * provider that overruns its own budget is still killed and reaped within
- * the invocation that started it.
- */
-export function providerOpTimeouts(waits: ProviderOpWaits): Record<ProviderOp, ProviderOpTimeout> {
-	const ensureWaitMs = clampProviderWaitMs(waits.ensureWaitMs, "ensureWaitMs");
-	const stopWaitMs = clampProviderWaitMs(waits.stopWaitMs, "stopWaitMs");
-	const deleteWaitMs = clampProviderWaitMs(waits.deleteWaitMs, "deleteWaitMs");
-	const op = (childTimeoutMs: number): ProviderOpTimeout => ({
-		childTimeoutMs,
-		invocationTimeoutMs: childTimeoutMs + PROVIDER_OP_TERMINATION_MS,
-	});
-	return {
-		inspect: op(PROVIDER_OP_HEADROOM_MS),
-		"ensure-running": op(ensureWaitMs + stopWaitMs + PROVIDER_OP_HEADROOM_MS),
-		stop: op(stopWaitMs + PROVIDER_OP_HEADROOM_MS),
-		delete: op(2 * deleteWaitMs + PROVIDER_OP_HEADROOM_MS),
-	};
-}
-
 export interface RunProviderOpOptions {
 	/** Wall-clock budget for the whole invocation; must be a positive integer. */
 	timeoutMs?: number;
@@ -216,6 +131,30 @@ async function collectPipe(
 }
 
 /**
+ * The successful response shape is profile-dependent: a kubernetes provider
+ * must report the objects it observed (the fleet's namespace-replacement and
+ * owner checks read them), and a bwrap provider must not (it never sees the
+ * cluster). Enforced after parsing so a success envelope can never bypass the
+ * caller's observation check.
+ */
+function requireProfileObservation(request: ProviderRequest, response: ProviderResponse): void {
+	if (!response.ok) return;
+	if (request.profile.provider === "kubernetes") {
+		if (response.kubernetes === undefined) {
+			throw ProviderProtocolError.internal(
+				`kubernetes provider reported ${request.op} success without a kubernetes observation`,
+			);
+		}
+		return;
+	}
+	if (response.kubernetes !== undefined) {
+		throw ProviderProtocolError.internal(
+			`${request.profile.provider} provider reported a kubernetes observation for ${request.op}`,
+		);
+	}
+}
+
+/**
  * Run one provider operation to completion: spawn `<executable> <op>`, write
  * the validated request JSON to stdin, collect bounded stdout/stderr, and
  * return the validated response envelope.
@@ -226,7 +165,9 @@ async function collectPipe(
  * - `timeout` (retryable) — no response within `timeoutMs`; the child is
  *   SIGTERM-killed and SIGKILL-escalated after a grace period;
  * - `internal` — output exceeded the 1 MiB cap, the provider exited non-zero
- *   without a trustworthy envelope, or the response envelope is malformed;
+ *   without a trustworthy envelope, the response envelope is malformed, or a
+ *   success envelope violates its profile's observation shape (kubernetes
+ *   without an observation, bwrap with one);
  * - a provider envelope's own code when the provider exited non-zero but
  *   still produced a valid `ok:false` envelope.
  *
@@ -409,7 +350,9 @@ export async function runProviderOp(
 		}
 
 		try {
-			return parseProviderResponse(stdout);
+			const response = parseProviderResponse(stdout);
+			requireProfileObservation(validated, response);
+			return response;
 		} catch (err) {
 			throw new ProviderOpError({
 				code: "internal",

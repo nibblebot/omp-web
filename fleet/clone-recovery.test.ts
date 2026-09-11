@@ -44,7 +44,7 @@
  */
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FleetServer } from "./server";
 import type { FleetPaths } from "./server.testkit";
@@ -489,27 +489,29 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				// FLEET RESTART: same statePath, fresh process. Boot reconcile
 				// inspects; the sandbox is running → reattach at gen 1 with the
 				// persisted credential — never a bump, never a re-ensure.
+				const inspectsBefore = providerOps(workspaceDir, daemonId).filter(
+					(o) => o.op === "inspect",
+				).length;
 				await server.close();
 				const server2 = await rebootBwrapFleet(fleet, "reattach-running");
 				try {
-					// Boot reconcile is fire-and-forget: the persisted status is
-					// ALREADY "ready" (clone entries skip the boot downgrade), so
-					// wait for the reconcile's reattach side-effect — the stage
-					// flips to "ready" (from the persisted value) only after the
-					// provider inspect confirms the sandbox is live.
+					// Boot reconcile is fire-and-forget: wait for its reattach
+					// side-effect (a provider inspect). Readiness belongs to the
+					// readiness owner, so the reattachment no longer writes
+					// lifecycleStage "ready" itself.
 					await waitFor(
-						() => {
-							const ops = providerOps(workspaceDir, daemonId);
-							return (
-								ops.some((o) => o.op === "inspect") &&
-								server2.registry.get(daemonId)?.lifecycleStage === "ready"
-							);
-						},
+						() =>
+							providerOps(workspaceDir, daemonId).filter((o) => o.op === "inspect").length >
+							inspectsBefore,
 						5_000,
 						"reconcile reattach after restart",
 					);
 					entry = server2.registry.get(daemonId)!;
-					expect(entry.status).toBe("ready");
+					// Reattach publishes the transitional session rung + the
+					// callback stage: readiness belongs to the readiness owner,
+					// so no lifecycle path writes either ready field.
+					expect(entry.status).toBe("session");
+					expect(entry.lifecycleStage).toBe("callback");
 					expect(entry.workspace?.authorizedGeneration).toBe(1); // NO bump
 					expect(entry.workspace?.desiredState).toBe("running");
 					expect(entry.workspace?.enrollment?.generation).toBe(1); // persisted cred reused
@@ -563,7 +565,10 @@ describe("clone recovery: restart durable boundaries + races", () => {
 					expect(entry.workspace?.authorizedGeneration).toBe(2);
 					expect(entry.workspace?.enrollment?.generation).toBe(2);
 					expect(entry.workspace?.desiredState).toBe("running");
-					expect(entry.status).toBe("ready");
+					// The recreated sandbox is running but unvalidated: the
+					// transitional session rung, never readiness.
+					expect(entry.status).toBe("session");
+					expect(entry.lifecycleStage).toBe("callback");
 					// Exactly TWO ensures total (gen 1 pre-restart, gen 2 post) and
 					// the gen-2 ensure request carried generation 2 — never the
 					// stale gen 1 (the fencing regression Main observed).
@@ -591,13 +596,17 @@ describe("clone recovery: restart durable boundaries + races", () => {
 			try {
 				const daemonId = await createClone(server, repoDir, "uncertain");
 				// Manually persist a gen-1 authorized state (as a previous fleet
-				// would have): the provider now answers inspect with conflict.
+				// would have, mid-launch): the provider now answers inspect
+				// with conflict. The lifecycle's own provider-running rung is
+				// the transitional session + callback stage — readiness is
+				// never a lifecycle write.
 				server.registry.updateWorkspace(daemonId, {
 					desiredState: "running",
 					authorizedGeneration: 1,
 					providerHandle: "h-1",
 				});
-				server.registry.setStatus(daemonId, "ready");
+				server.registry.setStatus(daemonId, "session");
+				server.registry.update(daemonId, { lifecycleStage: "callback" });
 				// Start/wake must refuse: the inspect conflict means the
 				// predecessor's termination is uncertain — no new writer may be
 				// admitted (P6.2).
@@ -625,7 +634,10 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				const start = await postJson(server.port, "/ctl/start", { daemonId });
 				expect(start.status).toBe(200);
 				let entry = server.registry.get(daemonId)!;
-				expect(entry.status).toBe("ready");
+				// Provider-running is never readiness: the clone sits on the
+				// transitional session rung + callback stage until a validated
+				// hello_ok/ready promotes it (and this fake never dials).
+				expect(entry.status).toBe("session");
 				expect(entry.lifecycleStage).toBe("callback");
 				// The sandbox is dead (later inspects report stopped): the
 				// watchdog (~10s inspect cadence) must flip to failed/error.
@@ -721,8 +733,14 @@ describe("kubernetes restart rediscovery", () => {
 				// FLEET RESTART on the same statePath + provider state dir.
 				await fleet.close();
 				await fleet.boot();
+				// Wait for the reattach side-effect (a fresh provider inspect).
+				// Readiness belongs to the readiness owner, so a reattachment no
+				// longer writes lifecycleStage "ready" itself.
 				await waitFor(
-					() => fleet.server.registry.get(daemonId)?.lifecycleStage === "ready",
+					() =>
+						readOps(stateDir)
+							.slice(opsBefore.length)
+							.some((op) => op.op === "inspect"),
 					5_000,
 					"kubernetes reattach after restart",
 				);
@@ -736,7 +754,10 @@ describe("kubernetes restart rediscovery", () => {
 				expect(resourcesAfter.podUid).toBe(resourcesBefore.podUid);
 				expect(resourcesAfter.pvcUid).toBe(resourcesBefore.pvcUid);
 				const entryAfter = fleet.server.registry.get(daemonId)!;
-				expect(entryAfter.status).toBe("ready");
+				// The reattach published the transitional session rung + the
+				// callback stage — readiness is the readiness owner's.
+				expect(entryAfter.status).toBe("session");
+				expect(entryAfter.lifecycleStage).toBe("callback");
 				expect(entryAfter.workspace?.authorizedGeneration).toBe(1); // NO bump
 				expect(entryAfter.workspace?.kubernetes).toEqual(binding);
 				expect(entryAfter.workspace?.providerHandle).toBe(`pod:${resourcesBefore.podUid}`);
@@ -921,6 +942,104 @@ describe("clone volume retention", () => {
 					expect(server2.registry.get(daemonId)!.workspace?.providerKind).toBe("bwrap");
 					// Inference never touched the prepared volume.
 					expect(existsSync(join(volumeRoot, ".checkout", ".git"))).toBe(true);
+				} finally {
+					await server2.close();
+				}
+			} finally {
+				await server.close().catch(() => {
+					// Already closed for the restart above.
+				});
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a legacy record whose verified marker is absent is retained unavailable and never probed",
+		async () => {
+			const fleet = await bootFleet("reattach-running");
+			const { server, workspaceDir, repoDir } = fleet;
+			try {
+				const daemonId = await createClone(server, repoDir, "legacy-no-marker");
+				// Started, so the record carries compute history: without the
+				// marker check, boot reconcile would fall through and invoke
+				// the provider against an unverified volume.
+				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				expect(start.status).toBe(200);
+				const volumeRoot = join(workspaceDir, daemonId);
+				const markerPath = join(volumeRoot, ".omp-workspace-init.json");
+				expect(existsSync(markerPath)).toBe(true);
+				const inspectsBefore = providerOps(workspaceDir, daemonId).filter(
+					(o) => o.op === "inspect",
+				).length;
+
+				await server.close();
+				rmSync(markerPath);
+				stripWorkspaceField(fleet.paths.statePath, daemonId, "providerKind");
+				const server2 = await rebootBwrapFleet(fleet, "reattach-running");
+				try {
+					await waitFor(
+						() => server2.registry.get(daemonId)?.status === "error",
+						5_000,
+						"legacy unavailable marking",
+					);
+					const entry = server2.registry.get(daemonId)!;
+					expect(entry.workspace?.providerKind).toBeUndefined();
+					expect(entry.lifecycleStage).toBe("failed");
+					// Compute and storage retained for manual recovery, and the
+					// provider was never invoked for this record.
+					expect(existsSync(volumeRoot)).toBe(true);
+					expect(providerOps(workspaceDir, daemonId).filter((o) => o.op === "inspect").length).toBe(
+						inspectsBefore,
+					);
+				} finally {
+					await server2.close();
+				}
+			} finally {
+				await server.close().catch(() => {
+					// Already closed for the restart above.
+				});
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a legacy record whose marker names another workspace is retained unavailable and never probed",
+		async () => {
+			const fleet = await bootFleet("reattach-running");
+			const { server, workspaceDir, repoDir } = fleet;
+			try {
+				const daemonId = await createClone(server, repoDir, "legacy-foreign-marker");
+				const start = await postJson(server.port, "/ctl/start", { daemonId });
+				expect(start.status).toBe(200);
+				const volumeRoot = join(workspaceDir, daemonId);
+				const markerPath = join(volumeRoot, ".omp-workspace-init.json");
+				const inspectsBefore = providerOps(workspaceDir, daemonId).filter(
+					(o) => o.op === "inspect",
+				).length;
+
+				// A structurally valid marker copied from ANOTHER workspace: it
+				// must never be accepted as this record's identity proof.
+				await server.close();
+				const marker = JSON.parse(readFileSync(markerPath, "utf8")) as { workspaceId: string };
+				marker.workspaceId = "d999-foreign";
+				writeFileSync(markerPath, JSON.stringify(marker));
+				stripWorkspaceField(fleet.paths.statePath, daemonId, "providerKind");
+				const server2 = await rebootBwrapFleet(fleet, "reattach-running");
+				try {
+					await waitFor(
+						() => server2.registry.get(daemonId)?.status === "error",
+						5_000,
+						"foreign marker unavailable marking",
+					);
+					const entry = server2.registry.get(daemonId)!;
+					expect(entry.workspace?.providerKind).toBeUndefined();
+					expect(entry.lifecycleStage).toBe("failed");
+					expect(existsSync(volumeRoot)).toBe(true);
+					expect(providerOps(workspaceDir, daemonId).filter((o) => o.op === "inspect").length).toBe(
+						inspectsBefore,
+					);
 				} finally {
 					await server2.close();
 				}

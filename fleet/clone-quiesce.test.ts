@@ -1,10 +1,10 @@
 /**
- * Fleet-side quiesce owner (fleet/clone-quiesce.ts) unit tests: the control
- * round trip, the bulk capture, and the receipt-validation gate, driven
- * against a STUB transport and a REAL temp FleetLogStore. Every case asserts
- * an observable outcome (typed CloneQuiesceError code/stage, accepted vs
- * refused receipt, released correlation) and fails when the corresponding
- * guard is removed.
+ * Fleet-side quiesce tests (fleet/clone-quiesce.ts handshake + capture and
+ * fleet/clone-quiesce-receipt.ts receipt validation): the control round trip,
+ * the bulk capture, and the receipt-validation gate, driven against a STUB
+ * transport and a REAL temp FleetLogStore. Every case asserts an observable
+ * outcome (typed CloneQuiesceError code/stage, accepted vs refused receipt,
+ * released correlation) and fails when the corresponding guard is removed.
  *
  * No daemon child, no live pair, no model: the stub answers (or withholds)
  * the `quiesce_clone_result` control and the evidence upload, so the fleet
@@ -31,11 +31,13 @@ import {
 	CloneQuiesceError,
 	QUIESCE_REQUEST_ID_MAX_CHARS,
 	quiesceClone,
+	type CloneQuiesceReceipt,
+} from "./clone-quiesce";
+import {
 	receiptAllowsDelete,
 	validateQuiesceReceipt,
-	type CloneQuiesceReceipt,
 	type CloneQuiesceRequest,
-} from "./clone-quiesce";
+} from "./clone-quiesce-receipt";
 
 // bun 1.3.14 attributes afterAll hooks registered in imported modules to the
 // first importer only; register cleanup in this file's own module scope.
@@ -258,6 +260,12 @@ interface StubBehaviour {
 	stampRequestId?: boolean;
 	/** Error payload for ack:"error". */
 	ackError?: { code: string; message: string };
+	/**
+	 * When set, the daemon rejects the CONTROL itself with a kind:"ack"
+	 * `quiesce_clone` payload whose typed error nests under `error`
+	 * (ControlAckPayload), instead of answering the result control.
+	 */
+	ackReject?: { code: string; message: string };
 	/** Reject sendToDaemon instead of delivering anything. */
 	sendThrows?: boolean;
 	/** Drop the callback pair instead of delivering anything. */
@@ -323,25 +331,38 @@ class StubTransport {
 		// The daemon answers synchronously: the fleet subscribes before it
 		// sends, so settling here exercises the same ordering as a live pair.
 		if (behaviour.ack !== "none") {
-			this.emit(workspaceId, {
-				...envelope,
-				kind: "control",
-				payload:
-					behaviour.ack === "ok"
-						? {
-								type: "quiesce_clone_result",
-								requestId: payload.requestId,
-								correlationId: payload.correlationId,
-								ok: true,
-							}
-						: {
-								type: "quiesce_clone_result",
-								requestId: payload.requestId,
-								correlationId: payload.correlationId,
-								ok: false,
-								error: behaviour.ackError ?? { code: "conflict", message: "no" },
-							},
-			});
+			if (behaviour.ackReject !== undefined) {
+				this.emit(workspaceId, {
+					...envelope,
+					kind: "ack",
+					payload: {
+						type: "quiesce_clone",
+						requestId: payload.requestId,
+						ok: false,
+						error: behaviour.ackReject,
+					},
+				});
+			} else {
+				this.emit(workspaceId, {
+					...envelope,
+					kind: "control",
+					payload:
+						behaviour.ack === "ok"
+							? {
+									type: "quiesce_clone_result",
+									requestId: payload.requestId,
+									correlationId: payload.correlationId,
+									ok: true,
+								}
+							: {
+									type: "quiesce_clone_result",
+									requestId: payload.requestId,
+									correlationId: payload.correlationId,
+									ok: false,
+									error: behaviour.ackError ?? { code: "conflict", message: "no" },
+								},
+				});
+			}
 		}
 		const correlationId = String(payload.correlationId ?? "");
 		if (behaviour.upload === "received") {
@@ -522,6 +543,29 @@ describe("CloneQuiesce handshake", () => {
 			ack: "error",
 			upload: "none",
 			ackError: { code: "writer_active", message: "a writer is still active" },
+		});
+		const quiesce = new CloneQuiesce({
+			transport: stub as unknown as DaemonTransportRegistry,
+			logStore: seededStore().store,
+		});
+		const err = await quiesce.collect(requestFor()).then(
+			() => null,
+			(error: unknown) => error,
+		);
+		expect(err).toBeInstanceOf(CloneQuiesceError);
+		const typed = err as CloneQuiesceError;
+		expect(typed.stage).toBe("request");
+		expect(typed.code).toBe("writer_active");
+		expect(stub.released).toHaveLength(1);
+	});
+
+	test("an ack rejection settles from the nested ControlAckPayload error", async () => {
+		// The control itself was rejected: the daemon answers kind:"ack" with
+		// the typed error nested under `error` (never top-level).
+		const stub = new StubTransport({
+			ack: "ok",
+			upload: "none",
+			ackReject: { code: "writer_active", message: "a writer is still active" },
 		});
 		const quiesce = new CloneQuiesce({
 			transport: stub as unknown as DaemonTransportRegistry,
@@ -960,7 +1004,22 @@ describe("CloneQuiesce receipt validation", () => {
 		expect(receiptAllowsDelete(outcome.receipt!.receipt)).toEqual({ ok: true });
 	});
 
-	test("a receipt resolving a different commit than the workspace is refused", async () => {
+	test("a preserved checkout beyond its initialization pin permits deletion", async () => {
+		const seeded = seededStore();
+		const evidence = evidenceFor(seeded);
+		const head = "f".repeat(40);
+		evidence.provenance.resolvedCommit = head;
+		evidence.git = cleanGit({
+			head,
+			refs: [{ name: `refs/heads/${BRANCH}`, tip: head, preserved: true }],
+		});
+		const outcome = await collectWith(seeded.store, evidence);
+		expect(outcome.ok).toBe(true);
+		expect(receiptAllowsDelete(outcome.receipt!.receipt)).toEqual({ ok: true });
+		expect(outcome.receipt!.receipt.source.revision).toBe(PINNED_REVISION);
+	});
+
+	test("snapshot provenance from another checkout HEAD is refused", async () => {
 		const seeded = seededStore();
 		const evidence = evidenceFor(seeded, {
 			provenance: {
@@ -1041,15 +1100,18 @@ describe("CloneQuiesce receipt validation", () => {
 		expect(result.code).toBe("conflict");
 	});
 
-	test("a receipt whose writer census disagrees with the stored advisor transcript is refused", async () => {
+	test("an inactive advisor barrier with a retained advisor transcript is accepted", async () => {
+		// `writers.advisors: "inactive"` describes the live barrier at quiesce,
+		// not whether an advisor ever wrote. A transcript left by an earlier
+		// advisor is verified structurally against the manifest, so it must
+		// keep the receipt valid instead of making deletion impossible.
 		const seeded = seededStore({ advisor: true });
 		const evidence = evidenceFor(seeded, {
 			writers: { main: "flushed", descendants: [], advisors: "inactive" },
 		});
 		const outcome = await collectWith(seeded.store, evidence);
-		expect(outcome.ok).toBe(false);
-		expect(outcome.error?.stage).toBe("validation");
-		expect(outcome.error?.code).toBe("conflict");
+		expect(outcome.ok).toBe(true);
+		expect(receiptAllowsDelete(outcome.receipt!.receipt)).toEqual({ ok: true });
 	});
 
 	test("an advisor transcript with a caught-up census is accepted", async () => {
@@ -1132,6 +1194,67 @@ describe("CloneQuiesce receipt validation", () => {
 		);
 		expect(outcome.ok).toBe(false);
 		expect(outcome.error?.code).toBe("conflict");
+	});
+
+	test("a clean Git object without the stash/ref proof is refused as malformed", async () => {
+		const seeded = seededStore();
+		const outcome = await collectWith(
+			seeded.store,
+			evidenceFor(seeded, {
+				git: { status: "clean", remote: { name: "origin", url: SOURCE_REMOTE } },
+			}),
+		);
+		expect(outcome.ok).toBe(false);
+		expect(outcome.error?.stage).toBe("evidence");
+		expect(outcome.error?.code).toBe("invalid_request");
+	});
+
+	test("a malformed Git field is a typed parse failure, never a delete-decision crash", async () => {
+		const seeded = seededStore();
+		const malformed = [
+			cleanGit({ refs: "bad" as unknown as CloneGitEvidence["refs"] }),
+			cleanGit({ stashes: "1" as unknown as number }),
+			cleanGit({ remote: { name: "origin" } as unknown as CloneGitEvidence["remote"] }),
+			cleanGit({
+				refs: [
+					{ name: "refs/heads/x", tip: PINNED_REVISION } as unknown as {
+						name: string;
+						tip: string;
+						preserved: boolean;
+					},
+				],
+			}),
+			cleanGit({ status: "dirty" }),
+		];
+		for (const git of malformed) {
+			const outcome = await collectWith(seeded.store, evidenceFor(seeded, { git }));
+			expect(outcome.ok).toBe(false);
+			expect(outcome.error?.stage).toBe("evidence");
+			expect(outcome.error?.code).toBe("invalid_request");
+		}
+	});
+
+	test("a clean receipt missing checkout or stash/ref proof never authorizes deletion", async () => {
+		const seeded = seededStore();
+		for (const git of [
+			cleanGit({ head: undefined }),
+			cleanGit({ stashes: undefined }),
+			cleanGit({ refs: undefined }),
+		]) {
+			const result = await validateQuiesceReceipt({
+				evidence: evidenceFor(seeded, { git }),
+				requestId: REQUEST_ID,
+				correlationId: CORRELATION_ID,
+				request: requestFor(),
+				store: seeded.store,
+			});
+			expect(result.ok).toBe(true);
+			if (!result.ok) throw new Error("expected the receipt to be recorded");
+			const verdict = receiptAllowsDelete(result.receipt);
+			expect(verdict.ok).toBe(false);
+			if (verdict.ok) throw new Error("expected deletion to be refused");
+			expect(verdict.code).toBe("archive_conflict");
+		}
 	});
 
 	test("every refused receipt still releases its bulk correlation", async () => {

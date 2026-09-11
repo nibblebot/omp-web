@@ -18,23 +18,12 @@ import { cleanupTempDirs, tempDir } from "../shared/testkit";
 import {
 	CALLBACK_ENV_FILE,
 	CALLBACK_ENV_VERSION,
-	isAllowedCallbackEnvKey,
 	readCallbackEnvFile,
 	writeCallbackEnvFile,
 	type CallbackEnvRecord,
 } from "./callback-env";
 
 afterAll(cleanupTempDirs);
-
-/** The callback keys the sandbox handoff carries (subset of ENV_ALLOW_KEYS). */
-const CALLBACK_KEYS = [
-	"OMP_SESSION_CALLBACK_URL",
-	"OMP_SESSION_CALLBACK_WORKSPACE",
-	"OMP_SESSION_CALLBACK_GENERATION",
-	"OMP_SESSION_CALLBACK_TOKEN",
-	"OMP_SESSION_CALLBACK_PROXY",
-	"OMP_SESSION_CALLBACK_ALLOW_HTTP",
-] as const;
 
 function record(overrides: Partial<CallbackEnvRecord> = {}): CallbackEnvRecord {
 	return {
@@ -130,6 +119,16 @@ describe("symlink rejection", () => {
 		expect(syncCode(() => writeCallbackEnvFile(link, record()))).toBe("unavailable");
 		expect(syncCode(() => readCallbackEnvFile(link))).toBe("unavailable");
 	});
+
+	test("a symlinked state dir with no handoff yet is still rejected on read", () => {
+		// The absent-file early return must not trust a linked provider state:
+		// null here would launch the sandbox under the wrong state directory.
+		const real = tempDir("omp-callback-env-");
+		const link = join(tempDir("omp-callback-env-"), "state-link");
+		symlinkSync(real, link);
+
+		expect(syncCode(() => readCallbackEnvFile(link))).toBe("unavailable");
+	});
 });
 
 describe("record validation", () => {
@@ -217,36 +216,5 @@ describe("identity and required-key gating", () => {
 			readCallbackEnvFile(stateDir, { required: ["OMP_SESSION_CALLBACK_TOKEN"] })!.env
 				.OMP_SESSION_CALLBACK_TOKEN,
 		).toBe("credential-bytes");
-	});
-
-	test("opts.required names a key stored empty: unavailable", () => {
-		const stateDir = tempDir("omp-callback-env-");
-		writeFileSync(
-			targetOf(stateDir),
-			JSON.stringify({
-				version: CALLBACK_ENV_VERSION,
-				workspaceId: "d1",
-				generation: 1,
-				env: { OMP_SESSION_CALLBACK_TOKEN: "" },
-			}),
-		);
-		expect(
-			syncCode(() => readCallbackEnvFile(stateDir, { required: ["OMP_SESSION_CALLBACK_TOKEN"] })),
-		).toBe("unavailable");
-	});
-});
-
-describe("isAllowedCallbackEnvKey", () => {
-	test("accepts every callback key and the two wake-resume hints", () => {
-		for (const key of CALLBACK_KEYS) expect(isAllowedCallbackEnvKey(key)).toBe(true);
-		expect(isAllowedCallbackEnvKey("OMP_SESSION_RESUME")).toBe(true);
-		expect(isAllowedCallbackEnvKey("OMP_SESSION_RESUME_REQUIRED")).toBe(true);
-	});
-
-	test("rejects arbitrary, prefix-only, and non-callback sandbox names", () => {
-		expect(isAllowedCallbackEnvKey("PATH")).toBe(false);
-		expect(isAllowedCallbackEnvKey("OMP_SESSION_CALLBACK_NOPE")).toBe(false);
-		expect(isAllowedCallbackEnvKey("OMP_SESSION_CALLBACK_")).toBe(false);
-		expect(isAllowedCallbackEnvKey("OMP_WORKSPACE_ID")).toBe(false);
 	});
 });

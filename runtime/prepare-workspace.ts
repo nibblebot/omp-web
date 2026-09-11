@@ -19,9 +19,17 @@
  * mutates git identity or config — the operator's own git config applies.
  */
 
-import { closeSync, existsSync, fsyncSync, openSync, renameSync, writeSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	fsyncSync,
+	openSync,
+	renameSync,
+	writeSync,
+	type Stats,
+} from "node:fs";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type { Subprocess } from "bun";
 import { seedSandboxBaseline, type BaselineSeedResult } from "./sandbox-baseline";
@@ -338,8 +346,22 @@ function asWorkspaceSource(value: unknown): WorkspaceSource | null {
 type MarkerRead =
 	| { state: "absent" }
 	| { state: "corrupt" }
+	| { state: "unreadable"; reason: string }
 	| { state: "pin"; pin: WorkspacePin }
 	| { state: "marker"; marker: WorkspaceInitMarker };
+
+/** Errno code of a thrown fs error, or "" when absent. */
+function fsErrorCode(err: unknown): string {
+	return typeof err === "object" && err !== null && "code" in err && typeof err.code === "string"
+		? err.code
+		: "";
+}
+
+/** Actionable reason for an fs error: its errno code, else its text. */
+function fsErrorReason(err: unknown): string {
+	const code = fsErrorCode(err);
+	return code === "" ? String(err) : code;
+}
 
 /**
  * Reads the init marker. A file with pin fields but no `initializedAt`/
@@ -347,11 +369,23 @@ type MarkerRead =
  * unparseable or shape-invalid is `corrupt` (never silently reset).
  */
 async function readMarker(markerPath: string): Promise<MarkerRead> {
+	// Only `lstat` ENOENT proves the path is genuinely missing. Everything
+	// else is `unreadable`, including a symlink (even dangling), a directory,
+	// and any failure to read a path whose presence was confirmed — no
+	// caller may treat those as an empty volume and re-clone over it.
+	let stats: Stats;
+	try {
+		stats = await lstat(markerPath);
+	} catch (err) {
+		if (fsErrorCode(err) === "ENOENT") return { state: "absent" };
+		return { state: "unreadable", reason: fsErrorReason(err) };
+	}
+	if (!stats.isFile()) return { state: "unreadable", reason: "not a regular file" };
 	let raw: string;
 	try {
 		raw = await readFile(markerPath, "utf8");
-	} catch {
-		return { state: "absent" };
+	} catch (err) {
+		return { state: "unreadable", reason: fsErrorReason(err) };
 	}
 	let value: unknown;
 	try {
@@ -406,12 +440,14 @@ async function readMarker(markerPath: string): Promise<MarkerRead> {
 export async function readWorkspaceInitMarker(
 	workspaceRoot: string,
 ): Promise<WorkspaceInitMarker | null> {
-	const read = await readMarker(join(workspaceRoot, MARKER_NAME));
+	const markerPath = join(workspaceRoot, MARKER_NAME);
+	const read = await readMarker(markerPath);
 	if (read.state === "marker") return read.marker;
 	if (read.state === "absent" || read.state === "pin") return null;
+	const detail = read.state === "unreadable" ? `cannot be read (${read.reason})` : "is unparseable";
 	throw new PrepareWorkspaceError(
 		"conflict",
-		`${join(workspaceRoot, MARKER_NAME)} exists but is unparseable; refusing to reset this workspace volume. Repair or remove the marker manually`,
+		`${markerPath} exists but ${detail}; refusing to reset this workspace volume. Repair or remove the marker manually`,
 	);
 }
 
@@ -831,6 +867,15 @@ export async function prepareWorkspace(
 	}
 
 	const read = await readMarker(markerPath);
+
+	if (read.state === "unreadable") {
+		// A present marker that cannot be read may be the only record of an
+		// initialized volume: never treat it as absent and re-clone.
+		throw new PrepareWorkspaceError(
+			"conflict",
+			`${markerPath} exists but cannot be read (${read.reason}); refusing to reset this workspace volume. Repair or remove the marker manually`,
+		);
+	}
 
 	if (read.state === "corrupt") {
 		// Unknown state with an existing checkout must not be destroyed.

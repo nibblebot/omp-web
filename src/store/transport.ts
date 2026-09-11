@@ -1,6 +1,6 @@
 import type { ClientCommand, DaemonInfo, ServerFrame, WebMethodName } from "../../shared/protocol";
 import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
-import { setState, state } from "../state";
+import { sessionRpcAllowed, setState, state } from "../state";
 import { authedFetch } from "./auth";
 import { randomId } from "./ids";
 
@@ -117,6 +117,14 @@ export function call(
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	if (!connected) {
 		reject(new Error("Not connected"));
+		return promise;
+	}
+	// Read-only admission: a retained clone transcript or a clone still on a
+	// non-ready rung must not have session RPCs dispatched at it (branch,
+	// abort, switch, …). Central so every callsite can keep its own affordance
+	// logic; fleet/app-scoped relays stay exempt (see sessionRpcAllowed).
+	if (!sessionRpcAllowed(method)) {
+		reject(new Error("session is read-only"));
 		return promise;
 	}
 	const id = `c${nextCallId++}`;

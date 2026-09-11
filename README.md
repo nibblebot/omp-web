@@ -42,63 +42,31 @@ references to Secrets in the profile namespace. `omp-web preflight --profile
 callback reachability before workspaces use it. The required HTTPS streaming
 gateway and cluster prerequisites are operator setup, not something omp-web
 provisions; see [`docs/architecture.md`](docs/architecture.md) and
-[`runtime/image/README.md`](runtime/image/README.md). A ready-to-edit
-Kubernetes profile ships as
-[`fleet/examples/kubernetes.json`](fleet/examples/kubernetes.json).
+[`runtime/image/README.md`](runtime/image/README.md).
 
 ### Kubernetes profiles
 
-- **Bundled provider and image context.** The installed package ships both
-  provider executables next to the CLI (`dist-bundle/providers/`; under the
-  default pinned install that is
-  `~/.omp-web/install/node_modules/omp-web/dist-bundle/providers/`), so a
-  `kubernetes` profile can point `executable` at
-  `~/.omp-web/install/node_modules/omp-web/dist-bundle/providers/kubernetes-provider.js`
-  instead of a source checkout. `dist-bundle/image/` is a complete container
-  build context (the Containerfile, the entrypoint files, `package.json`,
-  `bun.lock`, and the explicit `server/`, `shared/` and `runtime/` trees):
-  `docker build -f dist-bundle/image/Containerfile -t omp-web-session:<tag> dist-bundle/image`.
-- **Explicit cluster facts.** A Kubernetes profile names its `context` (a
-  kubeconfig context; the ambient current-context is never used),
-  `namespace`, `image`, `resources` (`cpu`/`memory`), `storage`
-  (`class`/`size`; leave `class` out only when exactly one StorageClass is
-  cluster default) and `secretRefs`. The Pod and PVC are named from a
-  per-workspace resource identity the fleet generates once and persists on
-  the workspace record; both objects carry it, so a fleet restart rediscovers
-  the same resources instead of creating new ones.
-- **HTTPS gateway.** In-pod daemons dial out, so the fleet's callback origin
-  must be HTTPS and reachable from the cluster (for example
-  `OMP_FLEET_CALLBACK_URL=https://omp.example.com omp-web serve`). The
-  gateway in front of the fleet forwards exactly `POST /callback/up`,
-  `GET /callback/down` and `POST /callback/bulk/<id>` (raw path match; `<id>`
-  is one `[A-Za-z0-9_-]+` segment) and rejects every other method, path, or
-  query. The fleet's `--trusted-proxy` list admits the gateway's forwarded
-  headers.
-- **Host and Pod credentials are separate.** The fleet host needs the
-  kubeconfig plus RBAC for the profile context (`get|create|delete` on pods
-  and persistentvolumeclaims in the namespace) and the Git credential used to
-  resolve the pin and prepare the volume. The Pod gets only what `secretRefs`
-  injects: model/tool API keys, and for SSH clone sources the
-  `OMP_GIT_SSH_PRIVATE_KEY` / `OMP_GIT_SSH_KNOWN_HOSTS` pair the image's
-  `git-ssh.sh` consumes. No host credential, fleet credential, or cluster
-  service-account token is mounted into the Pod.
-- **Commands.** `omp-web preflight --profile <id>` prints one row per check
-  with remediation and exits non-zero when any fails. `omp-web add-clone
-  <project> <name> --profile <id> --remote <git-url> --branch <branch>`
-  registers the workspace and starts it automatically (`--no-start` defers
-  it); `omp-web stop <selector>` deletes the Pod and keeps the PVC and the
-  session logs; `omp-web start <selector>` wakes it and resumes the last
-  session; `omp-web remove <selector>` runs the verified-deletion gate
-  (quiesce, Git guard, store verification) before the Pod, the PVC, and the
-  roster entry are removed. A blocked deletion keeps everything and stays
-  retryable.
+A Kubernetes profile names its cluster facts (`context`, `namespace`,
+`image`, `resources`, `storage`, `secretRefs`) in `providerProfiles`. The
+installed package ships the provider executable (`dist-bundle/providers/`)
+and a complete session-runtime image build context (`dist-bundle/image/`);
+building the image, namespace RBAC, the HTTPS callback gateway, and the
+host/Pod credential split are operator setup documented once in
+[`runtime/image/README.md`](runtime/image/README.md). A ready-to-edit profile
+lives in the source checkout at
+[`fleet/examples/kubernetes.json`](fleet/examples/kubernetes.json) (source
+only; the installed package does not include `fleet/`).
+
+`omp-web preflight --profile <id>` validates a profile before use, and
+`add-clone`, `stop`, `start`, and `remove` drive the same clone lifecycle and
+verified-deletion gate as any other clone.
 
 Clone workspace notes:
 
 - **Stop and wake.** `stop` keeps the checkout and the session logs. `wake` re-provisions compute and resumes the last session; a cold volume (or missing transcript) is materialized byte-identical from the fleet store before the resume path runs, and an explicit session pick on a ready clone switches to that real session rather than booting fresh.
 - **Deletion is verified.** Deleting a clone workspace runs the verify-at-deletion gate (quiesce, Git guard, store completeness, read-only flip) before any provider or volume deletion; a blocked deletion keeps the workspace, volume, and logs.
 - **Session logs are not the workspace.** Transcripts never contain working-tree files; uncommitted work in a clone is not recoverable from them.
-- **Runtime distribution.** The fleet ships both provider executables (`dist-bundle/providers/`) and a complete session-runtime image build context (`dist-bundle/image/`); provider runtimes must be installed and preflighted per host. Isolation limits are honest ones: bwrap and Kubernetes sandboxes share the host kernel, and model/tool credentials reach the sandbox as environment values that a sandboxed process can read. See the security section in [`docs/architecture.md`](docs/architecture.md).
+- **Runtime distribution.** Provider runtimes ship with the package (`dist-bundle/`) but must be installed and preflighted per host. Isolation limits are honest ones: bwrap and Kubernetes sandboxes share the host kernel, and model/tool credentials reach the sandbox as environment values that a sandboxed process can read. See the security section in [`docs/architecture.md`](docs/architecture.md).
 
 > **Status of runtime claims.** omp-web does not yet claim production-grade
 > proof for the clone runtime: real Kubernetes lifecycle evidence (no operator

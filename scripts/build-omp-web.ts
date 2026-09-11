@@ -47,11 +47,10 @@ const IMAGE_SRC = join(ROOT, "runtime", "image");
 /** Complete image build context shipped under dist-bundle/image/ (P5.6). */
 const IMAGE_DST = join(ROOT, "dist-bundle", "image");
 /**
- * Trees every image context carries verbatim. The Containerfile COPYs them
- * from the context root, so one missing tree is an unbuildable image — the
- * build fails loudly here instead of shipping a context the cluster rejects.
- * `runtime/` includes `runtime/image/` itself (the Containerfile's
- * entrypoint files), so the shipped context is exactly what is built.
+ * Trees every image context carries verbatim (`runtime/` includes the
+ * Containerfile's own `runtime/image/`). A missing tree is an unbuildable
+ * image, so the build fails loudly instead of shipping a context the cluster
+ * rejects.
  */
 const IMAGE_CONTEXT_DIRS = ["server", "shared", "runtime"] as const;
 /** Manifest + lockfile the deps stage resolves; copied from the repo root. */
@@ -205,13 +204,9 @@ try {
 	writeFileSync(EMBEDDED_DIST_FILE, STUB);
 }
 
-// 6. Complete session-runtime image build context (P5.6): dist-bundle/image/
-//    is what `docker build dist-bundle/image` consumes, so it carries the
-//    whole context root the Containerfile COPYs — the explicit server/,
-//    shared/ and runtime/ trees (runtime/image/ holds the Containerfile and
-//    entrypoint files), the root package.json + bun.lock the deps stage
-//    installs, and the Containerfile itself. Assembled here, after the
-//    finally restored server/embedded-dist.ts, so the stub is what ships.
+// 6. Complete image build context (dist-bundle/image/): the context root the
+//    Containerfile COPYs, assembled after the finally restored the
+//    embedded-dist stub so the stub is what ships.
 if (!existsSync(join(IMAGE_SRC, "Containerfile"))) {
 	throw new Error(
 		`runtime image definition missing under ${IMAGE_SRC} — the Kubernetes lane must land it before the build gate`,

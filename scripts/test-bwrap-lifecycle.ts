@@ -49,6 +49,25 @@ import type { DaemonTransportRegistry } from "../fleet/daemon-transport";
 import { FleetLogStore } from "../fleet/log-store";
 import { startFleet, type FleetServer } from "../fleet/server";
 import type { CallbackEnvelope } from "../shared/callback-protocol";
+import {
+	Acceptance,
+	BlockedError,
+	messageOf,
+	redact,
+	restoreEnv,
+	sanitize,
+	setEnv,
+	SIGNAL_EXIT,
+	unsetEnv,
+} from "./acceptance/harness";
+import {
+	boundedCommand,
+	carryHostGitIdentity,
+	fetchJson,
+	type JsonResponse,
+	resolveTool,
+	waitFor,
+} from "./acceptance/process";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -64,257 +83,19 @@ const SUBPROCESS_TIMEOUT_MS = 120_000;
 const POLL_TIMEOUT_MS = 120_000;
 const PAIR_TIMEOUT_MS = 180_000;
 const STOP_TIMEOUT_MS = 180_000;
+/** Hard deadline for one control-plane request: an accepted-but-stalled
+ *  lifecycle handler must fail its phase, never hang the walk (and with it any
+ *  polling deadline that called into it). */
+const CTL_TIMEOUT_MS = 180_000;
 
 type Phase = "prerequisite" | "preflight" | "spawn" | "stream" | "wake" | "delete" | "cleanup";
 
 // ---------------------------------------------------------------------------
-// Diagnostics hygiene
+// Shared acceptance scaffolding (scripts/acceptance/)
 // ---------------------------------------------------------------------------
 
-/** Paths/literals replaced with a placeholder before anything is printed. */
-const REDACTIONS: { needle: string; label: string }[] = [];
-
-function redact(value: string, label: string): string {
-	if (value !== "") REDACTIONS.push({ needle: value, label });
-	return value;
-}
-
-function sanitize(text: string): string {
-	let out = text;
-	for (const { needle, label } of REDACTIONS) out = out.split(needle).join(`<${label}>`);
-	return out;
-}
-
-function messageOf(cause: unknown): string {
-	return cause instanceof Error ? cause.message : String(cause);
-}
-
-// ---------------------------------------------------------------------------
-// Environment control (captured before any mutation, restored by cleanup)
-// ---------------------------------------------------------------------------
-
-const originalEnv = new Map<string, string | undefined>();
-
-function setEnv(key: string, value: string): void {
-	if (!originalEnv.has(key)) originalEnv.set(key, process.env[key]);
-	process.env[key] = value;
-}
-
-function unsetEnv(key: string): void {
-	if (!originalEnv.has(key)) originalEnv.set(key, process.env[key]);
-	delete process.env[key];
-}
-
-function restoreEnv(): void {
-	for (const [key, value] of originalEnv) {
-		if (value === undefined) delete process.env[key];
-		else process.env[key] = value;
-	}
-}
-
-/** The current (sandboxed) environment with no `undefined` values. */
-function scriptEnv(): Record<string, string> {
-	const env: Record<string, string> = {};
-	for (const [key, value] of Object.entries(process.env)) {
-		if (value !== undefined) env[key] = value;
-	}
-	return env;
-}
-
-// ---------------------------------------------------------------------------
-// Bounded command / polling helpers
-// ---------------------------------------------------------------------------
-
-interface CommandResult {
-	code: number;
-	stdout: string;
-	stderr: string;
-	timedOut: boolean;
-}
-
-async function runCommand(
-	cmd: readonly string[],
-	opts: { cwd?: string; env?: Record<string, string>; timeoutMs?: number } = {},
-): Promise<CommandResult> {
-	const timeoutMs = opts.timeoutMs ?? SUBPROCESS_TIMEOUT_MS;
-	const proc = Bun.spawn([...cmd], {
-		cwd: opts.cwd,
-		env: opts.env ?? scriptEnv(),
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	let timedOut = false;
-	const termTimer = setTimeout(() => {
-		timedOut = true;
-		proc.kill("SIGTERM");
-		setTimeout(() => proc.kill("SIGKILL"), 1_000);
-	}, timeoutMs);
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-		proc.exited,
-	]);
-	clearTimeout(termTimer);
-	return { code: exitCode ?? -1, stdout, stderr, timedOut };
-}
-
-async function waitFor<T>(
-	what: string,
-	probe: () => T | null | Promise<T | null>,
-	opts: { timeoutMs?: number; intervalMs?: number } = {},
-): Promise<T> {
-	const timeoutMs = opts.timeoutMs ?? POLL_TIMEOUT_MS;
-	const intervalMs = opts.intervalMs ?? 250;
-	const deadline = Date.now() + timeoutMs;
-	for (;;) {
-		const value = await probe();
-		if (value !== null) return value;
-		if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`);
-		const { promise, resolve } = Promise.withResolvers<void>();
-		setTimeout(resolve, intervalMs);
-		await promise;
-	}
-}
-
-/** Absolute, executable, realpath-resolved tool path (or null). */
-function resolveTool(name: string): string | null {
-	const found = Bun.which(name);
-	if (found === null) return null;
-	try {
-		const real = realpathSync(found);
-		return existsSync(real) ? real : null;
-	} catch {
-		return null;
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Single cleanup owner (identical pattern in scripts/test-kubernetes-minikube.ts)
-// ---------------------------------------------------------------------------
-
-type SignalName = "SIGINT" | "SIGTERM" | "SIGHUP";
-
-const SIGNAL_EXIT: Record<SignalName, number> = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
-
-/** A phase-tagged, caller-visible failure; the only thing that blocks a run. */
-class BlockedError extends Error {
-	constructor(
-		readonly phase: Phase,
-		detail: string,
-	) {
-		super(detail);
-	}
-}
-
-interface CleanupStep {
-	readonly name: string;
-	run(): Promise<void> | void;
-}
-
-/**
- * The single cleanup owner. `install()` runs BEFORE any resource exists and
- * wires SIGINT/SIGTERM/SIGHUP; every teardown step is registered here and runs
- * exactly once, in reverse registration order, from both the normal exit path
- * and the signal path.
- */
-class CleanupOwner {
-	#steps: CleanupStep[] = [];
-	#installed = false;
-	#drained: Promise<boolean> | null = null;
-	#failures: string[] = [];
-	#signal: SignalName | null = null;
-
-	add(name: string, run: () => Promise<void> | void): void {
-		this.#steps.push({ name, run });
-	}
-
-	install(): void {
-		if (this.#installed) return;
-		this.#installed = true;
-		for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-			process.on(signal, () => {
-				this.#signal ??= signal;
-				void this.run().then((ok) => process.exit(ok ? SIGNAL_EXIT[signal] : 1));
-			});
-		}
-	}
-
-	get interrupted(): SignalName | null {
-		return this.#signal;
-	}
-
-	get failures(): readonly string[] {
-		return this.#failures;
-	}
-
-	/** Idempotent: the first caller drains; every other caller awaits that run. */
-	run(): Promise<boolean> {
-		this.#drained ??= this.#drain();
-		return this.#drained;
-	}
-
-	async #drain(): Promise<boolean> {
-		for (const step of [...this.#steps].reverse()) {
-			try {
-				await step.run();
-			} catch (cause) {
-				this.#failures.push(`${step.name}: ${sanitize(messageOf(cause))}`);
-			}
-		}
-		return this.#failures.length === 0;
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Acceptance harness
-// ---------------------------------------------------------------------------
-
-class Acceptance {
-	readonly cleanup = new CleanupOwner();
-	#phase: Phase = "prerequisite";
-	#pending: string[] = [];
-
-	enter(phase: Phase): void {
-		this.#phase = phase;
-	}
-
-	get phase(): Phase {
-		return this.#phase;
-	}
-
-	check(name: string, ok: boolean, detail = ""): void {
-		if (ok) {
-			console.log(`ok   ${name}`);
-			return;
-		}
-		const line = detail === "" ? name : `${name} — ${detail}`;
-		this.#pending.push(line);
-		console.error(`FAIL ${sanitize(line)}`);
-	}
-
-	/** Record a check and stop the phase immediately when it failed. */
-	require(name: string, ok: boolean, detail = ""): void {
-		this.check(name, ok, detail);
-		if (!ok) throw new BlockedError(this.#phase, detail === "" ? name : `${name}: ${detail}`);
-	}
-
-	/** Return `value` when present; block the current phase otherwise. */
-	expect<T>(value: T | null | undefined, detail: string): T {
-		if (value === null || value === undefined) {
-			throw new BlockedError(this.#phase, detail);
-		}
-		return value;
-	}
-
-	/** Throw once per phase when any check in it failed. */
-	settle(): void {
-		if (this.#pending.length === 0) return;
-		throw new BlockedError(this.#phase, this.#pending.splice(0).join("; "));
-	}
-}
-
-const acceptance = new Acceptance();
+const runCommand = boundedCommand(SUBPROCESS_TIMEOUT_MS);
+const acceptance = new Acceptance<Phase>("prerequisite");
 
 // ---------------------------------------------------------------------------
 // Fleet HTTP helpers
@@ -322,28 +103,16 @@ const acceptance = new Acceptance();
 
 let fleet: FleetServer | null = null;
 
-interface CtlResponse {
-	status: number;
-	body: unknown;
-}
-
-async function ctl(path: string, init?: { method?: string; body?: unknown }): Promise<CtlResponse> {
+async function ctl(
+	path: string,
+	init?: { method?: string; body?: unknown },
+): Promise<JsonResponse> {
 	if (fleet === null) throw new Error("fleet is not running");
-	const res = await fetch(`http://127.0.0.1:${fleet.port}${path}`, {
-		method: init?.method ?? "GET",
-		headers: init?.body !== undefined ? { "content-type": "application/json" } : undefined,
-		body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
-	});
-	const text = await res.text();
-	let body: unknown = null;
-	if (text !== "") {
-		try {
-			body = JSON.parse(text);
-		} catch {
-			body = text;
-		}
+	try {
+		return await fetchJson(`http://127.0.0.1:${fleet.port}${path}`, init, CTL_TIMEOUT_MS);
+	} catch (cause) {
+		throw new BlockedError(acceptance.phase, `control request ${path}: ${messageOf(cause)}`);
 	}
-	return { status: res.status, body };
 }
 
 interface SessionRow {
@@ -441,9 +210,15 @@ async function phasePrerequisite(): Promise<void> {
 	mkdirSync(sandboxHome, { recursive: true });
 	mkdirSync(workspaceDir, { recursive: true });
 	mkdirSync(projectDir, { recursive: true });
-	writeFileSync(
-		gitConfigPath,
-		"[user]\n\tname = bwrap-acceptance\n\temail = bwrap@acceptance.test\n",
+	// The hermetic HOME would hide the operator's Git config, so the isolated
+	// one carries the operator's REAL identity (never an invented one), and a
+	// host with no configured identity blocks here instead of committing under
+	// a fabricated author.
+	const gitIdentity = await carryHostGitIdentity(gitBin, gitConfigPath);
+	acceptance.require(
+		"the operator's global Git identity is configured",
+		gitIdentity !== null,
+		"set user.name and user.email in your global git config",
 	);
 
 	setEnv("HOME", sandboxHome);

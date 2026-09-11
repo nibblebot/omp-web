@@ -8,7 +8,14 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { YAML } from "bun";
 import { cleanupTempDirs, tempDir } from "../shared/testkit";
@@ -327,20 +334,13 @@ temperature: 0.4
 // Branch-name validation (admission + preparation share this entry point)
 // ---------------------------------------------------------------------------
 
-/** Typed ledger code carried by a thrown error, or "" when none is present. */
-function errorCode(err: unknown): string {
-	if (typeof err === "object" && err !== null && "code" in err && typeof err.code === "string") {
-		return err.code;
-	}
-	return "";
-}
-
-/** The typed ledger code a rejected promise carries (never returns). */
-async function rejectionCode(fn: () => Promise<unknown>): Promise<string> {
+/** The ledger code carried by a rejected call; fails if it resolves or throws an untyped error. */
+async function rejectionCode(fn: () => unknown): Promise<string> {
 	try {
 		await fn();
 	} catch (err) {
-		return errorCode(err);
+		if (err instanceof PrepareWorkspaceError) return err.code;
+		throw err;
 	}
 	throw new Error("expected the call to reject");
 }
@@ -352,7 +352,7 @@ describe("validateWorkspaceRef", () => {
 		}
 	});
 
-	test("rejects empty, dashed, dotted, and otherwise malformed components", () => {
+	test("rejects empty, dashed, dotted, and otherwise malformed components", async () => {
 		const invalid = [
 			"",
 			"-x",
@@ -367,12 +367,7 @@ describe("validateWorkspaceRef", () => {
 			"a^b",
 		];
 		for (const ref of invalid) {
-			expect(() => validateWorkspaceRef(ref)).toThrow(PrepareWorkspaceError);
-			try {
-				validateWorkspaceRef(ref);
-			} catch (err) {
-				expect(errorCode(err)).toBe("invalid_request");
-			}
+			expect(await rejectionCode(() => validateWorkspaceRef(ref))).toBe("invalid_request");
 		}
 	});
 });
@@ -453,6 +448,36 @@ describe("readWorkspaceInitMarker", () => {
 		);
 		expect(await rejectionCode(() => readWorkspaceInitMarker(badCommit))).toBe("conflict");
 	});
+
+	test("a present but unreadable marker entry is conflict, never absent", async () => {
+		// A dangling symlink would report ENOENT if followed, but the entry
+		// exists: it must not look like an uninitialized volume.
+		const dangling = tempDir("omp-prep-dangling-");
+		symlinkSync("missing-target", join(dangling, MARKER_NAME));
+		expect(await rejectionCode(() => readWorkspaceInitMarker(dangling))).toBe("conflict");
+
+		// A symlink is never treated as the marker, even when it resolves to a
+		// valid marker body.
+		const linked = tempDir("omp-prep-linked-");
+		writeFileSync(
+			join(linked, "elsewhere.json"),
+			JSON.stringify({
+				workspaceId: "d1",
+				source: { local: "/x" },
+				resolvedCommit: "0".repeat(40),
+				branch: "main",
+				initializedAt: 1,
+				prepVersion: WORKSPACE_PREP_VERSION,
+			}),
+		);
+		symlinkSync("elsewhere.json", join(linked, MARKER_NAME));
+		expect(await rejectionCode(() => readWorkspaceInitMarker(linked))).toBe("conflict");
+
+		// A directory in the marker's place is not a marker either.
+		const directory = tempDir("omp-prep-dirmarker-");
+		mkdirSync(join(directory, MARKER_NAME));
+		expect(await rejectionCode(() => readWorkspaceInitMarker(directory))).toBe("conflict");
+	});
 });
 
 describe("initialized-checkout preservation", () => {
@@ -494,4 +519,35 @@ describe("initialized-checkout preservation", () => {
 		expect(existsSync(join(checkout, "dirty.txt"))).toBe(true);
 		expect(readFileSync(join(checkout, "dirty.txt"), "utf8")).toBe("dirty\n");
 	});
+
+	test.skipIf(process.getuid?.() === 0)(
+		"an unreadable marker fails closed and preserves later commits and dirty files",
+		async () => {
+			const source = await makeRepo(tempDir("omp-prep-src-"));
+			const volumeRoot = tempDir("omp-prep-vol-");
+			const first = await prepareQuiet(volumeRoot, source);
+			const checkout = join(volumeRoot, ".checkout");
+			const markerPath = join(volumeRoot, MARKER_NAME);
+
+			writeFileSync(join(checkout, "later.txt"), "later\n");
+			await git(checkout, ["add", "."]);
+			await git(checkout, ["commit", "-q", "-m", "later"]);
+			const later = await git(checkout, ["rev-parse", "HEAD"]);
+			expect(later).not.toBe(first.marker.resolvedCommit);
+			writeFileSync(join(checkout, "dirty.txt"), "dirty\n");
+
+			// A marker the runtime user cannot read must never look absent: the
+			// restart gate fails closed instead of re-cloning and wiping the
+			// later commit and working file.
+			chmodSync(markerPath, 0o000);
+			try {
+				expect(await rejectionCode(() => readWorkspaceInitMarker(volumeRoot))).toBe("conflict");
+				expect(await git(checkout, ["rev-parse", "HEAD"])).toBe(later);
+				expect(readFileSync(join(checkout, "dirty.txt"), "utf8")).toBe("dirty\n");
+			} finally {
+				chmodSync(markerPath, 0o600);
+			}
+			expect(await readWorkspaceInitMarker(volumeRoot)).toEqual(first.marker);
+		},
+	);
 });

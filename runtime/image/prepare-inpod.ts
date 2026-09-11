@@ -4,19 +4,17 @@
  * fleet's own prepareWorkspace so clone semantics are identical across
  * providers.
  *
- * A volume with no verified marker (empty, or left pinned by an interrupted
- * first preparation) is initialized through prepareWorkspace. A volume that
- * is already initialized only has its marker read and validated: workspace,
- * source, pin, and branch must match the pod env exactly, and the checkout is
- * never touched, so later commits and working files survive a pod
- * replacement. A corrupt or mismatched marker fails here, before the daemon.
+ * An uninitialized volume (empty, or left pinned by an interrupted first
+ * preparation) is initialized through prepareWorkspace. An initialized volume
+ * only has its marker validated against the pod env — workspace, source, pin,
+ * branch — and the checkout is never touched, so later commits and working
+ * files survive pod replacement. Any other marker state fails closed here,
+ * before the daemon.
  *
  * Env contract (set by the pod spec; see kubernetes-provider.ts):
  *   OMP_WORKSPACE_ID, OMP_PREP_SOURCE_REMOTE, OMP_PREP_REVISION,
- *   OMP_PREP_BRANCH (all required).
- *
- * Fails with the frozen vocabulary to stderr + exit code; the provider
- * surfaces pod termination reasons actionably on ensure-running.
+ *   OMP_PREP_BRANCH (all required). Failures use the frozen vocabulary on
+ *   stderr + exit code; the provider surfaces them on ensure-running.
  */
 import {
 	PrepareWorkspaceError,

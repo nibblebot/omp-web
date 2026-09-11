@@ -47,8 +47,6 @@ RUN apt-get update \
 WORKDIR /opt/omp-web
 COPY --from=deps /opt/omp-web/node_modules ./node_modules
 COPY package.json bun.lock ./
-# Explicit directory copies: the daemon entry, the frozen shared protocol
-# modules, and the runtime preparation/preflight/entrypoint code.
 COPY server/ ./server/
 COPY shared/ ./shared/
 COPY runtime/ ./runtime/

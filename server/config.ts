@@ -61,10 +61,13 @@ export interface SessionConfig {
 	collabUrl?: string;
 	/**
 	 * Callback transport (P3.2): fleet callback pair base URL, e.g.
-	 * https://fleet.example.com. HTTPS required and admitted as a bare origin
-	 * (parseKubernetesCallbackUrl: no credentials, loopback or unspecified
-	 * host, path, query, or fragment); HTTP only with --callback-allow-http
-	 * AND a loopback host (isLoopbackHost).
+	 * https://fleet.example.com. HTTPS required for any host; HTTP only with
+	 * --callback-allow-http AND a loopback host (isLoopbackHost). Both schemes
+	 * admit a bare origin only — the daemon appends /callback/up,
+	 * /callback/down, and /callback/bulk/<id> to it and identity/credentials
+	 * ride request headers, so a URL credential, path, query, or fragment is a
+	 * startup error. The stricter Pod-reachable HTTPS origin check is the
+	 * Kubernetes lane's (shared/callback-url.ts, applied at handoff/preflight).
 	 */
 	callbackUrl?: string;
 	/** Roster daemonId the callback pair is bound to; required with --callback-url. */
@@ -112,88 +115,6 @@ export function isLoopbackHost(host: string): boolean {
 	const v4 = h.startsWith("::ffff:") ? h.slice(7) : h;
 	const parts = v4.split(".");
 	return parts.length === 4 && parts.every((p) => /^\d+$/.test(p)) && Number(parts[0]) === 127;
-}
-
-/** Unspecified bind addresses: never a dialable fleet host. */
-const UNSPECIFIED_HOSTS: Record<string, true> = {
-	"0.0.0.0": true,
-	"::": true,
-	"0:0:0:0:0:0:0:0": true,
-};
-
-/**
- * Strict callback-URL admission for the Kubernetes lane (P5.4): the fleet
- * hands this origin to a Pod, so it must be a bare HTTPS origin. Rejects
- * credentials (they would land in Pod environment), loopback and unspecified
- * hosts (a Pod cannot reach the operator's loopback), any non-root path,
- * queries, and fragments. Explicit ports are validated; the returned origin
- * is normalized (no trailing slash, default port dropped).
- *
- * One validator for every consumer: the daemon's own startup admission
- * (parseConfig), the fleet's handoff writer, and preflight all call this, so a
- * URL the daemon would refuse can never be written into a Pod spec first.
- */
-export function parseKubernetesCallbackUrl(value: string): string {
-	const raw = typeof value === "string" ? value.trim() : "";
-	if (raw.length === 0) {
-		throw new Error(
-			'callback url is empty (expected an https origin, e.g. "https://fleet.example.com")',
-		);
-	}
-	let parsed: URL;
-	try {
-		parsed = new URL(raw);
-	} catch {
-		throw new Error(
-			`invalid callback url "${value}" (not an absolute URL; expected an https origin, e.g. "https://fleet.example.com")`,
-		);
-	}
-	if (parsed.protocol !== "https:") {
-		throw new Error(
-			`invalid callback url "${value}" (scheme "${parsed.protocol.replace(":", "") || "none"}" is not https; the Kubernetes callback endpoint must be an HTTPS origin)`,
-		);
-	}
-	if (parsed.username !== "" || parsed.password !== "") {
-		throw new Error(
-			`invalid callback url "${value}" carries credentials; the enrollment credential travels in the protected handoff, never in the URL`,
-		);
-	}
-	if (parsed.pathname !== "" && parsed.pathname !== "/") {
-		throw new Error(
-			`invalid callback url "${value}" has path "${parsed.pathname}"; pass the bare origin (the callback routes /callback/up and /callback/down are appended by the daemon)`,
-		);
-	}
-	if (parsed.search !== "") {
-		throw new Error(
-			`invalid callback url "${value}" has a query string; pass the bare origin (identity rides request headers, never the URL)`,
-		);
-	}
-	if (parsed.hash !== "") {
-		throw new Error(`invalid callback url "${value}" has a fragment; pass the bare origin`);
-	}
-	const host = parsed.hostname.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
-	if (host.length === 0) {
-		throw new Error(`invalid callback url "${value}" has no host; expected an https origin`);
-	}
-	if (isLoopbackHost(host)) {
-		throw new Error(
-			`invalid callback url "${value}" uses loopback host "${host}", which a Pod cannot reach; use the fleet host's Pod-reachable HTTPS address`,
-		);
-	}
-	if (UNSPECIFIED_HOSTS[host] === true) {
-		throw new Error(
-			`invalid callback url "${value}" uses unspecified address "${host}"; use the fleet host's Pod-reachable HTTPS address`,
-		);
-	}
-	if (parsed.port !== "") {
-		const port = Number(parsed.port);
-		if (!Number.isInteger(port) || port < 1 || port > 65535) {
-			throw new Error(
-				`invalid callback url "${value}" has invalid port "${parsed.port}" (1-65535)`,
-			);
-		}
-	}
-	return parsed.origin;
 }
 
 /**
@@ -272,6 +193,30 @@ export function parseConfig(argv: string[]): SessionConfig {
 				`invalid --callback-url "${callbackUrlRaw}" (${parsed.protocol} is not http/https)`,
 			);
 		}
+		// Transport-generic safety, both schemes: the daemon appends
+		// /callback/up, /callback/down, and /callback/bulk/<id> to this base,
+		// and identity/credentials ride request headers. The Pod-reachable
+		// HTTPS origin policy is Kubernetes-only (shared/callback-url.ts),
+		// applied at handoff/preflight — a host-network bwrap daemon may
+		// legitimately dial a loopback HTTPS URL here.
+		if (parsed.username !== "" || parsed.password !== "") {
+			throw new Error(
+				`invalid --callback-url "${callbackUrlRaw}" carries credentials; the enrollment credential travels in headers, never in the URL`,
+			);
+		}
+		if (parsed.pathname !== "" && parsed.pathname !== "/") {
+			throw new Error(
+				`invalid --callback-url "${callbackUrlRaw}" has path "${parsed.pathname}"; pass the bare origin (the callback routes are appended by the daemon)`,
+			);
+		}
+		if (parsed.search !== "" || parsed.hash !== "") {
+			throw new Error(
+				`invalid --callback-url "${callbackUrlRaw}" has a query string or fragment; pass the bare origin`,
+			);
+		}
+		if (parsed.hostname === "") {
+			throw new Error(`invalid --callback-url "${callbackUrlRaw}" has no host`);
+		}
 		if (parsed.protocol === "http:") {
 			if (!callbackAllowHttp) {
 				throw new Error(
@@ -283,15 +228,8 @@ export function parseConfig(argv: string[]): SessionConfig {
 					`--callback-allow-http only honors loopback hosts, got "${parsed.hostname}"`,
 				);
 			}
-			callbackUrl = parsed.toString();
-		} else {
-			// HTTPS admission is the strict origin check the Kubernetes lane
-			// shares with handoff validation and preflight (P5.4): credentials,
-			// loopback/unspecified hosts, paths, queries, and fragments are all
-			// refused here too, so a startup never accepts a URL the provider
-			// (or a Pod) cannot dial.
-			callbackUrl = parseKubernetesCallbackUrl(callbackUrlRaw);
 		}
+		callbackUrl = parsed.toString();
 	}
 	const callbackWorkspace = flag("callback-workspace") ?? Bun.env.OMP_SESSION_CALLBACK_WORKSPACE;
 	if (callbackUrl !== undefined && callbackWorkspace === undefined) {

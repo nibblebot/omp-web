@@ -1,36 +1,33 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
 	CALLBACK_ERROR_CODES,
 	CALLBACK_TRANSPORT_STREAM_ID,
 	isCallbackError,
 	parseQuiesceEvidence,
 	type CallbackErrorCode,
-	type CloneGitEvidence,
-	type FlushBoundary,
 	type QuiesceCloneControl,
 	type QuiesceEvidence,
 } from "../shared/callback-protocol";
-import { canonicalJson, type ArchiveManifest, type ManifestFile } from "../shared/archive-manifest";
-import {
-	RESOURCE_IDENTITY_RE,
-	computeSourcePinDigest,
-	type KubernetesBinding,
-} from "../shared/provider-protocol";
-import { verifyWorkspaceLogs } from "../runtime/verify-store";
-import type { LineageVerification } from "../server/daemon-control";
+import { RESOURCE_IDENTITY_RE } from "../shared/provider-protocol";
 import type { BulkCorrelation, BulkResult, DaemonTransportRegistry } from "./daemon-transport";
 import type { FleetEventLog } from "./events";
-import type { FleetLogStore, StoredStreamEvidence } from "./log-store";
+import {
+	validateQuiesceReceipt,
+	type CloneQuiesceRequest,
+	type ValidatedQuiesceReceipt,
+} from "./clone-quiesce-receipt";
+import type { FleetLogStore } from "./log-store";
 
 /**
- * Fleet-side owner of the `quiesce_clone` handshake (KUBERNETES_WORKER_
- * LIFECYCLE_PLAN.md stage 3.1/3.3/3.6): the request, its timeout, and the
- * receipt validation. Nothing quiesce-related is re-implemented here: the
- * daemon half (server/daemon-control.ts `createDaemonControl`) does the
- * writer flush, dispose, tailer finalize, structural verification, and Git
- * collection, and answers with a `quiesce_clone_result` control carrying the
- * evidence as a bulk upload. This module only requests that, bounds it, and
- * proves the result against the fleet's own store.
+ * Fleet-side owner of the `quiesce_clone` handshake (clone-plan P7.3/P7.5;
+ * contracts: docs/clone-contracts.md "Fleet log store" and "Typed errors"):
+ * the request, its timeout, the bulk capture, and the composition of the two.
+ * Nothing quiesce-related is re-implemented here: the daemon half
+ * (server/daemon-control.ts `createDaemonControl`) does the writer flush,
+ * dispose, tailer finalize, structural verification, and Git collection, and
+ * answers with a `quiesce_clone_result` control carrying the evidence as a
+ * bulk upload. This module only requests that, bounds it, and hands the
+ * result to the receipt leaf.
  *
  * Public API (fleet/workspace-lifecycle.ts consumes it through
  * `WorkspaceLifecycleDeps.collectCloneEvidence`; fleet/server.ts constructs
@@ -38,12 +35,14 @@ import type { FleetLogStore, StoredStreamEvidence } from "./log-store";
  *
  *   class CloneQuiesce            constructed from { transport, logStore, eventLog }
  *     .collect(request)           send + wait + capture + validate, one step
- *   requestQuiesceClone(input)    send the control, await the typed receipt (30 s)
+ *   requestQuiesceClone(input)    send the control, await the typed result (30 s)
  *   collectQuiesceEvidence(input) await the captured upload, parse it (30 s; always
  *                                 releases the capture, including on timeout)
  *   quiesceClone(input)           open capture -> request -> collect, composing both
- *   validateQuiesceReceipt(input) check a parsed receipt against the store + bindings
- *   receiptAllowsDelete(receipt)  the delete-vs-stop decision (clean Git only)
+ *
+ * The receipt validation and delete-vs-stop decision live in
+ * fleet/clone-quiesce-receipt.ts, which this module calls but does not
+ * re-export.
  *
  * Wire shape: `{type:"quiesce_clone", requestId, correlationId, sourceRemote,
  * pinnedRevision, branch}` on the reserved transport stream, acknowledged by
@@ -73,9 +72,6 @@ export const QUIESCE_REQUEST_ID_MAX_CHARS = 128;
 const QUIESCE_REQUEST_TYPE = "quiesce_clone";
 const QUIESCE_RESULT_TYPE = "quiesce_clone_result";
 
-/** Largest safe `Date` input (ms); `new Date(x).toISOString()` throws above it. */
-const MAX_DATE_MS = 8_640_000_000_000_000;
-
 /** Narrow an untrusted wire code onto the frozen ledger vocabulary. */
 function ledgerCode(value: unknown): CallbackErrorCode {
 	return typeof value === "string" && (CALLBACK_ERROR_CODES as readonly string[]).includes(value)
@@ -84,21 +80,20 @@ function ledgerCode(value: unknown): CallbackErrorCode {
 }
 
 /**
- * Split a tailer stream id `logs/<sessionId>/<relpath>` into its store key.
- * Mirrors the fleet log tap exactly (fleet/server.ts #onLogEnvelope: the
- * session id is one slash-free segment, the relpath is everything after the
- * first slash); anything else is null.
+ * The nested typed error a control ack or control result carries
+ * (`ControlAckPayload.error`, `QuiesceCloneResultControl.error`). Null when
+ * the payload has no usable typed error.
  */
-function parseLogStreamId(streamId: string): { sessionId: string; relpath: string } | null {
-	const prefix = "logs/";
-	if (!streamId.startsWith(prefix)) return null;
-	const rest = streamId.slice(prefix.length);
-	const slash = rest.indexOf("/");
-	if (slash <= 0) return null;
-	const sessionId = rest.slice(0, slash);
-	const relpath = rest.slice(slash + 1);
-	if (relpath.length === 0) return null;
-	return { sessionId, relpath };
+function controlError(
+	payload: Record<string, unknown>,
+): { code: CallbackErrorCode; message: string | undefined } | null {
+	const raw = payload["error"];
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+	const error = raw as Record<string, unknown>;
+	return {
+		code: ledgerCode(error["code"]),
+		message: typeof error["message"] === "string" ? error["message"] : undefined,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -129,11 +124,11 @@ export class CloneQuiesceError extends Error {
 	}
 }
 
-export type QuiesceCloneAckResult =
+export type QuiesceCloneRequestResult =
 	| { ok: true; requestId: string; correlationId: string }
 	| { ok: false; code: CallbackErrorCode; message: string };
 
-export interface QuiesceCloneAckInput {
+export interface QuiesceCloneRequestInput {
 	transport: DaemonTransportRegistry;
 	workspaceId: string;
 	generation: number;
@@ -146,13 +141,14 @@ export interface QuiesceCloneAckInput {
 
 /**
  * Send `quiesce_clone` on the reserved transport stream and wait up to
- * `timeoutMs` (default 30 s) for the daemon's matching receipt.
+ * `timeoutMs` (default 30 s) for the daemon's matching result.
  *
  * Settles on the FIRST of:
  *  - `kind:"control"` / `quiesce_clone_result` with our requestId and
- *    correlationId (ok:true, or ok:false with the daemon's typed error);
+ *    correlationId (ok:true, or ok:false with the daemon's nested typed error);
  *  - `kind:"ack"` carrying our control identity with ok:false (the control
- *    itself was rejected, so no result is coming);
+ *    itself was rejected, so no result is coming; the typed error is the
+ *    nested `ControlAckPayload.error`);
  *  - the callback pair dropping (`paired:false`) or `sendToDaemon` failing
  *    (`unavailable`);
  *  - the timeout (`retryable`).
@@ -162,8 +158,8 @@ export interface QuiesceCloneAckInput {
  * release it with `cancelBulkCorrelation` (quiesceClone does so).
  */
 export async function requestQuiesceClone(
-	input: QuiesceCloneAckInput,
-): Promise<QuiesceCloneAckResult> {
+	input: QuiesceCloneRequestInput,
+): Promise<QuiesceCloneRequestResult> {
 	const { transport, workspaceId, generation, requestId, correlationId, source } = input;
 	if (
 		workspaceId.length === 0 ||
@@ -183,9 +179,9 @@ export async function requestQuiesceClone(
 		};
 	}
 	const timeoutMs = input.timeoutMs ?? QUIESCE_CLONE_TIMEOUT_MS;
-	const { promise: settled, resolve } = Promise.withResolvers<QuiesceCloneAckResult>();
+	const { promise: settled, resolve } = Promise.withResolvers<QuiesceCloneRequestResult>();
 	let done = false;
-	const settle = (result: QuiesceCloneAckResult): void => {
+	const settle = (result: QuiesceCloneRequestResult): void => {
 		if (done) return;
 		done = true;
 		resolve(result);
@@ -203,18 +199,11 @@ export async function requestQuiesceClone(
 				settle({ ok: true, requestId, correlationId });
 				return;
 			}
-			const rawError = payload.error;
-			const error =
-				typeof rawError === "object" && rawError !== null && !Array.isArray(rawError)
-					? (rawError as Record<string, unknown>)
-					: null;
+			const error = controlError(payload);
 			settle({
 				ok: false,
-				code: error === null ? "provider_failed" : ledgerCode(error.code),
-				message:
-					error !== null && typeof error.message === "string"
-						? error.message
-						: `daemon rejected quiesce_clone ${requestId}`,
+				code: error?.code ?? "provider_failed",
+				message: error?.message ?? `daemon rejected quiesce_clone ${requestId}`,
 			});
 			return;
 		}
@@ -222,13 +211,11 @@ export async function requestQuiesceClone(
 		if (payload.type !== QUIESCE_REQUEST_TYPE) return;
 		if (payload.requestId !== requestId) return;
 		if (payload.ok === true) return; // Receipt only; the result control is authoritative.
+		const error = controlError(payload);
 		settle({
 			ok: false,
-			code: ledgerCode(payload.code),
-			message:
-				typeof payload.message === "string"
-					? payload.message
-					: `daemon rejected quiesce_clone ${requestId}`,
+			code: error?.code ?? "provider_failed",
+			message: error?.message ?? `daemon rejected quiesce_clone ${requestId}`,
 		});
 	});
 	const unsubscribePair = transport.onPairChange(workspaceId, (status) => {
@@ -428,7 +415,7 @@ export async function quiesceClone(input: QuiesceCloneInput): Promise<QuiesceClo
 	const requestId = supplied ?? randomUUID();
 	const capture = input.transport.createBulkCorrelation(input.workspaceId, { capture: true });
 	const correlationId = capture.correlationId;
-	const ack = await requestQuiesceClone({
+	const result = await requestQuiesceClone({
 		transport: input.transport,
 		workspaceId: input.workspaceId,
 		generation: input.generation,
@@ -437,13 +424,13 @@ export async function quiesceClone(input: QuiesceCloneInput): Promise<QuiesceClo
 		source: input.source,
 		...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
 	});
-	if (!ack.ok) {
+	if (!result.ok) {
 		input.transport.cancelBulkCorrelation(correlationId);
 		return {
 			ok: false,
 			stage: "request",
-			code: ack.code,
-			message: ack.message,
+			code: result.code,
+			message: result.message,
 			requestId,
 			correlationId,
 		};
@@ -469,486 +456,16 @@ export async function quiesceClone(input: QuiesceCloneInput): Promise<QuiesceClo
 }
 
 // ---------------------------------------------------------------------------
-// Receipt validation
+// Collector return
 // ---------------------------------------------------------------------------
 
-/** Fleet-side view of one quiesce request; the shapes Main froze for the
- * collector, plus the additive binding/provenance fields validation needs. */
-export interface CloneQuiesceRequest {
-	workspaceId: string;
-	generation: number;
-	podUid: string | null;
-	pvcUid: string | null;
-	namespaceUid: string;
-	sourceRemote: string;
-	pinnedRevision: string;
-	branch: string;
-	/**
-	 * Kubernetes resource binding (shared/provider-protocol.ts KubernetesBinding),
-	 * i.e. the record's persisted `kubernetes`. REQUIRED at runtime: the receipt
-	 * is bound to its resourceIdentity, context, and namespace.
-	 */
-	binding?: KubernetesBinding;
-	/** Registry project id for the receipt manifest provenance; falls back to workspaceId. */
-	projectId?: string;
-	/**
-	 * The exact requestId a previous attempt persisted for this workspace, so
-	 * a retry replays the daemon's cached quiesce outcome. Generated when
-	 * absent; a malformed value fails typed before any daemon work.
-	 */
-	requestId?: string;
-	/** Roster workspace name for the receipt manifest provenance; falls back to workspaceId. */
-	workspaceName?: string;
-	/** Main transcript relpaths the workspace volume holds. Omit when the volume is not fleet-readable. */
-	volumeMainRelpaths?: readonly string[];
-}
-
-/**
- * A validated quiesce receipt: the evidence plus the identity it is bound to.
- * Persist this (or its digest) before provider stop so a later attempt can
- * compare a fresh observation against the same Pod/PVC/namespace facts.
- */
-export interface ValidatedQuiesceReceipt {
-	requestId: string;
-	correlationId: string;
-	workspaceId: string;
-	generation: number;
-	resourceIdentity: string;
-	namespaceUid: string;
-	podUid: string | null;
-	pvcUid: string | null;
-	source: QuiesceCloneSource;
-	/** `computeSourcePinDigest(source)`: compare against the record's persisted digest. */
-	sourcePinDigest: string;
-	resolvedCommit: string;
-	mainSessionRelpath: string | null;
-	boundary: FlushBoundary;
-	/** The evidence manifest, proven byte-equal (size/sha256/kind/sessionId/parentPath) to the store. */
-	manifestFiles: ManifestFile[];
-	/**
-	 * Daemon provenance. This is the same shape `createDaemonControl`'s quiesce
-	 * path emits (server/daemon-control.ts LineageVerification), reused rather
-	 * than redeclared.
-	 */
-	provenance: LineageVerification["provenance"];
-	writers: QuiesceEvidence["writers"];
-	git: CloneGitEvidence;
-	/** sha256 (lowercase hex) of the canonical evidence document; identifies this receipt. */
-	digest: string;
-	verifiedAt: number;
-}
-
+/** A collected quiesce: the request identity, the raw evidence document, and
+ * the store-verified receipt to persist before invoking provider stop. */
 export interface CloneQuiesceReceipt {
 	requestId: string;
 	evidence: QuiesceEvidence;
 	correlationId: string;
-	/** The store-verified receipt to persist before invoking provider stop. */
 	receipt: ValidatedQuiesceReceipt;
-}
-
-export interface QuiesceReceiptInput {
-	/** The parsed evidence document (collectQuiesceEvidence output). */
-	evidence: QuiesceEvidence;
-	requestId: string;
-	correlationId: string;
-	request: CloneQuiesceRequest;
-	store: FleetLogStore;
-}
-
-export type QuiesceReceiptResult =
-	| { ok: true; receipt: ValidatedQuiesceReceipt }
-	| { ok: false; code: CallbackErrorCode; message: string; path?: string };
-
-/**
- * Writer census check. `parseQuiesceEvidence` only proves the field is an
- * array, so every descendant entry is shape-checked here, along with the two
- * invariants the store can corroborate: advisors must have been caught up
- * when the store holds advisor transcripts, and writer ids must be unique (a
- * repeated id is a corrupted census, not a real double).
- */
-function checkWriterEvidence(
-	writers: QuiesceEvidence["writers"],
-	manifestFiles: readonly ManifestFile[],
-): { ok: true } | { ok: false; message: string } {
-	if (writers.main !== "flushed") {
-		return { ok: false, message: `writers.main must be "flushed", got ${String(writers.main)}` };
-	}
-	if (writers.advisors !== "caught_up" && writers.advisors !== "inactive") {
-		return {
-			ok: false,
-			message: `writers.advisors must be "caught_up" or "inactive", got ${String(writers.advisors)}`,
-		};
-	}
-	const rawEntries: readonly unknown[] = writers.descendants;
-	const ids = new Set<string>();
-	for (let index = 0; index < rawEntries.length; index++) {
-		const raw = rawEntries[index];
-		if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-			return { ok: false, message: `writers.descendants[${index}] must be an object` };
-		}
-		const entry = raw as Record<string, unknown>;
-		if (typeof entry.id !== "string" || entry.id.length === 0) {
-			return { ok: false, message: `writers.descendants[${index}].id is missing` };
-		}
-		if (entry.kind !== "main" && entry.kind !== "sub" && entry.kind !== "advisor") {
-			return {
-				ok: false,
-				message: `writers.descendants[${index}].kind must be "main", "sub", or "advisor"`,
-			};
-		}
-		if (entry.sessionFile !== null && typeof entry.sessionFile !== "string") {
-			return {
-				ok: false,
-				message: `writers.descendants[${index}].sessionFile must be null or a string`,
-			};
-		}
-		if (entry.state !== "flushed" && entry.state !== "parked" && entry.state !== "disposed") {
-			return {
-				ok: false,
-				message: `writers.descendants[${index}].state must be "flushed", "parked", or "disposed"`,
-			};
-		}
-		if (ids.has(entry.id)) {
-			return { ok: false, message: `writers.descendants repeats writer id ${entry.id}` };
-		}
-		ids.add(entry.id);
-	}
-	const advisorFiles = manifestFiles.filter((file) => file.kind === "advisor");
-	if (advisorFiles.length > 0 && writers.advisors === "inactive") {
-		return {
-			ok: false,
-			message: `the store holds ${advisorFiles.length} advisor transcript(s) but writers.advisors is "inactive"`,
-		};
-	}
-	return { ok: true };
-}
-
-/**
- * Validate a parsed receipt against the fleet's own state (plan stage 3.6):
- *
- *  - the exact store file set, with hashes, sizes, kinds, session ids, and
- *    parent paths, proven by `verifyWorkspaceLogs` with the evidence manifest
- *    as the expected one (which also re-runs offset-contiguity and structural
- *    JSONL verification);
- *  - every per-stream generation/offset/eof: the evidence's FlushBoundary and
- *    the store's indices must name exactly the same `logs/<sessionId>/<relpath>`
- *    streams at the same generation, durable offset, and eof (the fleet log
- *    tap's mapping, and the store's own covered set, both checked);
- *  - the writer census (see checkWriterEvidence);
- *  - `mainSessionRelpath` identifies exactly one manifest entry, or is null
- *    only when neither the store nor (when supplied) the workspace volume
- *    holds a main transcript;
- *  - the receipt binds to the workspace resource identity, generation,
- *    namespace UID, PVC UID, the supplied source tuple, and the resolved pin.
- */
-export async function validateQuiesceReceipt(
-	input: QuiesceReceiptInput,
-): Promise<QuiesceReceiptResult> {
-	const { evidence, request, store } = input;
-	const fail = (code: CallbackErrorCode, message: string, path?: string): QuiesceReceiptResult =>
-		path === undefined ? { ok: false, code, message } : { ok: false, code, message, path };
-
-	const binding = request.binding;
-	if (binding === undefined) {
-		return fail(
-			"invalid_request",
-			`quiesce receipt for ${request.workspaceId} requires the Kubernetes resource binding`,
-		);
-	}
-	if (!RESOURCE_IDENTITY_RE.test(binding.resourceIdentity)) {
-		return fail(
-			"invalid_request",
-			`resourceIdentity must be 32 lowercase hex characters, got ${binding.resourceIdentity}`,
-		);
-	}
-	if (binding.context.length === 0 || binding.namespace.length === 0) {
-		return fail("invalid_request", "the Kubernetes binding is missing its context or namespace");
-	}
-	if (binding.namespaceUid !== request.namespaceUid) {
-		return fail(
-			"conflict",
-			`binding namespace UID ${binding.namespaceUid} does not match the request's ${request.namespaceUid}`,
-		);
-	}
-	if (!Number.isSafeInteger(request.generation) || request.generation < 1) {
-		return fail(
-			"invalid_request",
-			`generation must be a positive integer, got ${request.generation}`,
-		);
-	}
-	if (evidence.requestId !== input.requestId) {
-		return fail(
-			"conflict",
-			`evidence requestId ${evidence.requestId} does not match the quiesce request ${input.requestId}`,
-		);
-	}
-	if (evidence.provenance.workspaceId !== request.workspaceId) {
-		return fail(
-			"conflict",
-			`evidence targets workspace ${evidence.provenance.workspaceId}, not ${request.workspaceId}`,
-		);
-	}
-	if (evidence.provenance.resolvedCommit !== request.pinnedRevision) {
-		return fail(
-			"conflict",
-			`evidence resolves commit ${evidence.provenance.resolvedCommit} but the workspace is pinned at ${request.pinnedRevision}`,
-		);
-	}
-	const generatedAt = evidence.provenance.generatedAt;
-	if (!Number.isFinite(generatedAt) || generatedAt < 0 || generatedAt > MAX_DATE_MS) {
-		return fail(
-			"invalid_request",
-			`evidence provenance.generatedAt is not a usable epoch-ms value: ${String(generatedAt)}`,
-		);
-	}
-
-	const writers = checkWriterEvidence(evidence.writers, evidence.manifestFiles);
-	if (!writers.ok) return fail("conflict", `writer evidence is invalid: ${writers.message}`);
-
-	const streams = store.storedStreamEvidence(request.workspaceId);
-	const streamById = new Map<string, StoredStreamEvidence>(
-		streams.map((stream) => [stream.streamId, stream]),
-	);
-	const boundary: FlushBoundary = evidence.boundary;
-	const manifestKeys = new Set(
-		evidence.manifestFiles.map((file) => `${file.sessionId}/${file.path}`),
-	);
-
-	// Exact store bytes: every declared file present with equal size/sha256/
-	// kind/sessionId/parentPath, and no store file outside the declared set.
-	const expectedManifest: ArchiveManifest = {
-		provenance: {
-			projectId: request.projectId ?? request.workspaceId,
-			workspaceId: request.workspaceId,
-			workspaceName: request.workspaceName ?? request.workspaceId,
-			source: { remote: request.sourceRemote },
-			resolvedCommit: request.pinnedRevision,
-			generatedAt: new Date(generatedAt).toISOString(),
-		},
-		files: evidence.manifestFiles,
-	};
-	let verify;
-	try {
-		verify = await verifyWorkspaceLogs({
-			logsRoot: store.rootDir,
-			workspaceId: request.workspaceId,
-			expectedManifest,
-		});
-	} catch (error) {
-		return fail(
-			"unavailable",
-			`cannot verify the fleet store for ${request.workspaceId}: ${error instanceof Error ? error.message : String(error)}`,
-		);
-	}
-	if (!verify.ok) {
-		return fail(
-			verify.code === "conflict" ? "archive_conflict" : verify.code,
-			`the fleet store does not match the receipt for ${request.workspaceId}: ${verify.message}`,
-			verify.path,
-		);
-	}
-	if (verify.manifest === undefined) {
-		// No logs/<workspaceId> subtree exists at all: verifyWorkspaceLogs has
-		// nothing to compare against, so the receipt must declare nothing.
-		if (
-			evidence.manifestFiles.length > 0 ||
-			Object.keys(boundary).length > 0 ||
-			streams.length > 0
-		) {
-			return fail(
-				"archive_conflict",
-				`the fleet store holds no subtree for ${request.workspaceId} but the receipt declares ${evidence.manifestFiles.length} file(s)`,
-			);
-		}
-	}
-
-	// Per-stream generation/offset/eof: the boundary and the store must name
-	// exactly the same streams, and every boundary stream must be a manifest
-	// entry under the fleet log tap's `logs/<sessionId>/<relpath>` mapping.
-	for (const streamId of Object.keys(boundary)) {
-		const parsed = parseLogStreamId(streamId);
-		if (parsed === null) {
-			return fail(
-				"conflict",
-				`the boundary names a malformed log stream id: ${streamId}`,
-				streamId,
-			);
-		}
-		const stored = streamById.get(streamId);
-		if (stored === undefined) {
-			return fail("conflict", `boundary stream ${streamId} is not in the fleet store`, streamId);
-		}
-		const entry = boundary[streamId];
-		if (stored.generation !== entry.generation) {
-			return fail(
-				"conflict",
-				`store generation for ${streamId} is ${stored.generation}, the boundary says ${entry.generation}`,
-				streamId,
-			);
-		}
-		if (stored.ackedBytes !== entry.offset) {
-			return fail(
-				"conflict",
-				`store durable offset for ${streamId} is ${stored.ackedBytes}, the boundary says ${entry.offset}`,
-				streamId,
-			);
-		}
-		if (!stored.eof) {
-			return fail("conflict", `store stream ${streamId} has no final eof marker`, streamId);
-		}
-		if (!manifestKeys.has(`${parsed.sessionId}/${parsed.relpath}`)) {
-			return fail("conflict", `boundary stream ${streamId} has no manifest entry`, streamId);
-		}
-	}
-	for (const stream of streams) {
-		if (!(stream.streamId in boundary)) {
-			return fail(
-				"conflict",
-				`the fleet store holds ${stream.streamId}, which the boundary does not cover`,
-				stream.streamId,
-			);
-		}
-		if (!manifestKeys.has(`${stream.sessionId}/${stream.relpath}`)) {
-			return fail(
-				"conflict",
-				`stored stream ${stream.streamId} has no manifest entry`,
-				stream.streamId,
-			);
-		}
-	}
-
-	// The main transcript, or a justified null (nothing anywhere).
-	const mainRelpath = evidence.mainSessionRelpath;
-	if (mainRelpath !== null) {
-		const matches = evidence.manifestFiles.filter((file) => file.path === mainRelpath);
-		if (matches.length !== 1) {
-			return fail(
-				"conflict",
-				`mainSessionRelpath ${mainRelpath} identifies ${matches.length} manifest entries; expected exactly one`,
-			);
-		}
-		if (matches[0].kind !== "main") {
-			return fail(
-				"conflict",
-				`mainSessionRelpath ${mainRelpath} names a ${matches[0].kind} file, not a main transcript`,
-			);
-		}
-	} else {
-		const storedMain = evidence.manifestFiles.find((file) => file.kind === "main");
-		if (storedMain !== undefined) {
-			return fail(
-				"conflict",
-				`the receipt declares no main transcript but the store holds ${storedMain.path}`,
-			);
-		}
-		const volumeMains = request.volumeMainRelpaths;
-		if (volumeMains !== undefined && volumeMains.length > 0) {
-			return fail(
-				"conflict",
-				`the receipt declares no main transcript but the workspace volume holds ${volumeMains.length} main transcript(s)`,
-			);
-		}
-	}
-
-	// Git evidence is bound to the supplied source; a clean or dirty checkout
-	// must still report that remote. "unknown" is accepted here (it blocks
-	// deletion through receiptAllowsDelete, but the receipt is still recorded).
-	const git = evidence.git;
-	if (git.status !== "clean" && git.status !== "dirty" && git.status !== "unknown") {
-		return fail("invalid_request", `git.status is invalid: ${String(git.status)}`);
-	}
-	if (git.status !== "unknown") {
-		if (git.remote === undefined || git.remote === null) {
-			return fail(
-				"conflict",
-				`git evidence reports no configured remote; the workspace source is ${request.sourceRemote}`,
-			);
-		}
-		if (git.remote.url !== request.sourceRemote) {
-			return fail(
-				"conflict",
-				`git evidence remote ${git.remote.url} does not match the workspace source ${request.sourceRemote}`,
-			);
-		}
-	}
-
-	const source: QuiesceCloneSource = {
-		remote: request.sourceRemote,
-		revision: request.pinnedRevision,
-		branch: request.branch,
-	};
-	const receipt: ValidatedQuiesceReceipt = {
-		requestId: evidence.requestId,
-		correlationId: input.correlationId,
-		workspaceId: request.workspaceId,
-		generation: request.generation,
-		resourceIdentity: binding.resourceIdentity,
-		namespaceUid: request.namespaceUid,
-		podUid: request.podUid,
-		pvcUid: request.pvcUid,
-		source,
-		sourcePinDigest: computeSourcePinDigest(source.remote, source.revision, source.branch),
-		resolvedCommit: evidence.provenance.resolvedCommit,
-		mainSessionRelpath: mainRelpath,
-		boundary,
-		manifestFiles: evidence.manifestFiles,
-		provenance: evidence.provenance,
-		writers: evidence.writers,
-		git,
-		digest: createHash("sha256").update(canonicalJson(evidence)).digest("hex"),
-		verifiedAt: Date.now(),
-	};
-	return { ok: true, receipt };
-}
-
-/**
- * Delete-vs-stop decision over a validated receipt (plan stage 3.6): deletion
- * requires clean Git evidence (no dirt, no stashes, every local ref preserved
- * on the remote) on top of the verified store. Anything else keeps the
- * receipt for the ordinary stop path, which retains storage.
- */
-export function receiptAllowsDelete(
-	receipt: ValidatedQuiesceReceipt,
-): { ok: true } | { ok: false; code: CallbackErrorCode; reason: string } {
-	const git = receipt.git;
-	if (git.status === "unknown") {
-		return {
-			ok: false,
-			code: "archive_conflict",
-			reason: `git evidence is unknown (${git.unknownReason ?? "no reason given"}); deletion is blocked`,
-		};
-	}
-	if (git.status === "dirty") {
-		const dirty = git.dirty;
-		const counts =
-			dirty === undefined
-				? "uncommitted changes"
-				: `${dirty.added} added, ${dirty.modified} modified, ${dirty.deleted} deleted, ${dirty.untracked} untracked`;
-		return {
-			ok: false,
-			code: "conflict",
-			reason: `the checkout is dirty (${counts}); stop preserves the PVC, deletion does not`,
-		};
-	}
-	if ((git.stashes ?? 0) > 0) {
-		return {
-			ok: false,
-			code: "conflict",
-			reason: `the checkout holds ${git.stashes} stash(es)`,
-		};
-	}
-	const unpreserved = (git.refs ?? []).filter((ref) => !ref.preserved);
-	if (unpreserved.length > 0) {
-		return {
-			ok: false,
-			code: "conflict",
-			reason: `${unpreserved.length} local ref(s) are not preserved on the remote: ${unpreserved
-				.slice(0, 5)
-				.map((ref) => ref.name)
-				.join(", ")}`,
-		};
-	}
-	return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -1015,8 +532,8 @@ export class CloneQuiesce {
 		}
 		const store = this.#deps.logStore;
 		if (store === null) {
-			// quiesceClone already released the capture; keep the release explicit.
-			this.#deps.transport.cancelBulkCorrelation(outcome.correlationId);
+			// quiesceClone already released the capture on the success path
+			// (collectQuiesceEvidence releases in its finally).
 			throw new CloneQuiesceError(
 				"unavailable",
 				`the fleet log store is unavailable; the receipt for ${request.workspaceId} cannot be verified`,

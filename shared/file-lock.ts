@@ -1,53 +1,61 @@
+import { dlopen, FFIType, toArrayBuffer, type Pointer } from "bun:ffi";
 import { randomBytes } from "node:crypto";
 import {
 	closeSync,
+	existsSync,
+	fsyncSync,
 	linkSync,
 	mkdirSync,
 	openSync,
 	readFileSync,
-	renameSync,
 	unlinkSync,
-	writeSync,
+	writeFileSync,
 } from "node:fs";
 import path from "node:path";
 
 // ---------------------------------------------------------------------------
-// File locks via O_EXCL pidfiles.
+// Cross-process pidfile locks.
 //
-// WHY O_EXCL and not flock: Bun has no flock (no fs.flock, no FileHandle.lock),
-// so a portable in-process advisory lock is impossible. Instead we create the
-// lock file with O_CREAT|O_EXCL ("wx"): the atomic create wins the lock.
+// Ownership is the tuple {pid, procStartTime, token}, where procStartTime is
+// /proc/<pid>/stat field 22 (clock ticks since boot) and token is 16 random
+// bytes held only by the creating process. A pid alone is not identity: pids
+// are reused, and a process that crashed holding the lock must not be confused
+// with a live holder that reused its pid. Only provable staleness breaks a
+// lock: a pid the kernel reports gone (kill ESRCH), or a readable start time
+// that differs from the recorded one (pid reuse). An unreadable start time
+// (masked procfs, a peer in another PID namespace) proves nothing, and neither
+// do a recorded start time /proc cannot produce, or unreadable or garbage
+// contents: those are all BUSY and never broken, because a file we cannot
+// attribute might belong to a live holder mid-write. The acquiring process
+// refuses to record ownership at all when its own start time cannot be read,
+// so the old `?? 0` fallback is never written again.
 //
-// Owner identity is the tuple {pid, procStartTime, token}, where
-// procStartTime is /proc/<pid>/stat field 22 (clock ticks since boot) and
-// token is 16 random bytes held only by the creating process. A pid alone is
-// not identity: pids are reused, and a process that crashed holding the lock
-// must not be confused with a live holder that reused its pid. Only provable
-// staleness breaks a lock: a pid the kernel reports gone (kill ESRCH), or a
-// readable start time that differs from the recorded one (pid reuse). An
-// unreadable start time (masked procfs, a peer in another PID namespace)
-// proves nothing, and neither do a recorded start time /proc cannot produce,
-// or unreadable or garbage contents: those are all BUSY and never broken,
-// because a file we cannot attribute might belong to a live holder mid-write.
-// The acquiring process refuses to record ownership at all when its own start
-// time cannot be read, so the old `?? 0` fallback is never written again.
+// Every pidfile mutation is serialized by an exclusive advisory lock on a
+// stable sibling `<lockPath>.guard` inode (libc flock(2) through Bun FFI; Bun
+// has no fs-level advisory-lock API). The guard is created once and NEVER
+// unlinked: removing it would let the next opener lock a fresh inode while a
+// peer still holds the old one, putting two processes back in the pidfile at
+// once. The kernel drops the lock when its holder dies, so a crash mid-
+// transaction cannot strand it the way a lock *file* sentinel would.
 //
-// Stale recovery is a single atomic rename to `<lockPath>.stale.<token>`,
-// then a re-read of the renamed artifact to confirm it still carries the
-// stale identity that was judged, then an unlink of that artifact and a fresh
-// O_EXCL create. The re-read matters: a competing recoverer can install a
-// fresh live lock between our stale read and our rename, and a rename by path
-// would hand that live lock to two owners. A mismatched artifact is instead
-// restored (by link, which never clobbers a lock that appeared meanwhile) and
-// reported as its live owner; the recoverer then creates nothing. Otherwise
-// exactly one recoverer wins the rename; the loser sees ENOENT and retries
-// the create, where it observes the winner's live record and reports BUSY.
-// The state directory it lives in is removed only by the fleet, after the
-// provider has released the lock and exited.
+// An acquisition prewrites a complete, fsynced owner record to a unique
+// sibling `<lockPath>.new.<token>` file. Then, under the guard, it reads the
+// pidfile and either installs that fully written record with link(2) (which
+// fails atomically with EEXIST where rename(2) would clobber a record that
+// appeared meanwhile) or reports the live owner. No code path ever writes the
+// pidfile in place, so a crash can never leave a partial record that parses as
+// unreadable ownership and stays BUSY forever; a breaker that dies after
+// removing a stale record simply leaves no pidfile, which the next acquire
+// installs over.
 //
-// release() re-reads the file and unlinks ONLY when the parsed token is our
-// own, so an owner that lost the lock to a stale-breaker can never delete
-// the replacement owner's file.
+// release() re-reads the pidfile under the guard and unlinks ONLY when the
+// parsed token is its own, so an owner that lost the lock to a stale-breaker
+// can never delete the replacement owner's file.
+//
+// A peer running a pre-guard build does not take this guard. It still refuses
+// a live pidfile (the record parses and is busy), but two such peers can race
+// a stale takeover exactly as before; restart old processes instead of running
+// both builds against one state directory.
 // ---------------------------------------------------------------------------
 
 export class LockHeldError extends Error {
@@ -85,6 +93,110 @@ const LOCK_FILE_MODE = 0o600;
 /** Unknown owner (unreadable contents) has no pid to report. */
 const UNKNOWN_PID = -1;
 
+/** flock(2) LOCK_EX, and the EINTR errno a blocking call may return. */
+const LOCK_EX = 2;
+const EINTR = 4;
+
+const FLOCK_DEF = { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 } as const;
+const ERRNO_DEF = { args: [], returns: FFIType.ptr } as const;
+
+type Flock = (fd: number, operation: number) => number;
+
+interface Libc {
+	readonly flock: Flock;
+	readonly errno: () => number;
+}
+
+let libc: Libc | null = null;
+
+/**
+ * Read libc's thread-local errno through its accessor. The FFI return type is
+ * `Pointer | bigint | null`, but libc guarantees a non-NULL pointer: a NULL
+ * here means libc broke that contract, so fail loudly rather than synthesize
+ * an errno that could mask a real flock failure.
+ */
+function readErrno(pointer: Pointer | bigint | null): number {
+	if (pointer === null) throw new Error("libc errno accessor returned a null pointer");
+	return new Int32Array(toArrayBuffer(pointer, 0, 4))[0];
+}
+
+/**
+ * Resolve libc's flock(2) and errno accessor. Loaded lazily so an unsupported
+ * platform fails loudly at the first lock operation instead of silently
+ * mutating the pidfile unserialized.
+ */
+function loadLibc(): Libc {
+	if (libc !== null) return libc;
+	if (process.platform === "darwin") {
+		const { symbols } = dlopen("libSystem.B.dylib", { flock: FLOCK_DEF, __error: ERRNO_DEF });
+		libc = {
+			flock: symbols.flock,
+			errno: () => readErrno(symbols.__error()),
+		};
+		return libc;
+	}
+	if (process.platform === "linux") {
+		let last: unknown = null;
+		// glibc ships libc.so.6; musl keeps the bare soname.
+		for (const name of ["libc.so.6", "libc.so"]) {
+			try {
+				const { symbols } = dlopen(name, { flock: FLOCK_DEF, __errno_location: ERRNO_DEF });
+				libc = {
+					flock: symbols.flock,
+					errno: () => readErrno(symbols.__errno_location()),
+				};
+				return libc;
+			} catch (err) {
+				last = err;
+			}
+		}
+		throw new Error(
+			`file locks need flock(2) from libc: ${last instanceof Error ? last.message : String(last)}`,
+		);
+	}
+	throw new Error(`file locks need flock(2); unsupported platform ${process.platform}`);
+}
+
+/** Exclusive blocking flock, retried through signal interruption only. */
+function flockExclusive(fd: number, guardPath: string): void {
+	const { flock, errno } = loadLibc();
+	for (;;) {
+		if (flock(fd, LOCK_EX) === 0) return;
+		const code = errno();
+		if (code !== EINTR) throw new Error(`flock(${guardPath}, LOCK_EX) failed: errno ${code}`);
+	}
+}
+
+/**
+ * Run `body` while holding the exclusive guard for `lockPath`. The guard is a
+ * stable sibling inode, so this serializes every pidfile mutation on this path
+ * across processes; close(2) releases the advisory lock and the kernel does it
+ * for a dead holder, so the guard is never left locked.
+ */
+function withGuard<T>(lockPath: string, body: () => T): T {
+	const guardPath = `${lockPath}.guard`;
+	let fd: number;
+	try {
+		fd = openSync(guardPath, "a", LOCK_FILE_MODE);
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		// Delete can remove the provider stateDir — guard and pidfile together —
+		// while the lock is still held. With the directory gone no pidfile can
+		// exist, so the release body has nothing to unlink; run it unguarded
+		// rather than throwing. Any other open failure is real.
+		if ((code === "ENOENT" || code === "ENOTDIR") && !existsSync(path.dirname(lockPath))) {
+			return body();
+		}
+		throw err;
+	}
+	try {
+		flockExclusive(fd, guardPath);
+		return body();
+	} finally {
+		closeSync(fd);
+	}
+}
+
 /**
  * Read `/proc/<pid>/stat` field 22 (starttime, clock ticks since boot).
  * Returns null when the file is unreadable or carries no start time. Null
@@ -113,17 +225,10 @@ function procStartTime(pid: number): number | null {
 }
 
 /**
- * Parse the lock file's owner record. Returns null when the file is missing,
- * unreadable, or does not carry the full identity tuple. Callers treat that
- * as BUSY, never as a stale leftover.
+ * Parse an owner record. Returns null when the bytes are not a complete
+ * identity tuple; callers treat that as BUSY, never as a stale leftover.
  */
-function readLockOwner(lockPath: string): LockFileContents | null {
-	let raw: string;
-	try {
-		raw = readFileSync(lockPath, "utf8");
-	} catch {
-		return null;
-	}
+function parseLockOwner(raw: string): LockFileContents | null {
 	let value: unknown;
 	try {
 		value = JSON.parse(raw) as unknown;
@@ -146,6 +251,25 @@ function readLockOwner(lockPath: string): LockFileContents | null {
 		name: record.name,
 		token: record.token,
 	};
+}
+
+/** What the lock file at a path currently says. */
+type LockRead =
+	| { readonly kind: "missing" }
+	| { readonly kind: "unreadable" }
+	| { readonly kind: "owner"; readonly owner: LockFileContents };
+
+function readLock(lockPath: string): LockRead {
+	let raw: string;
+	try {
+		raw = readFileSync(lockPath, "utf8");
+	} catch (err) {
+		return (err as NodeJS.ErrnoException).code === "ENOENT"
+			? { kind: "missing" }
+			: { kind: "unreadable" };
+	}
+	const owner = parseLockOwner(raw);
+	return owner === null ? { kind: "unreadable" } : { kind: "owner", owner };
 }
 
 /**
@@ -171,75 +295,43 @@ function holderIsLive(owner: LockFileContents): boolean {
 	return live === owner.procStartTime;
 }
 
-/**
- * Put a renamed-away record back at `lockPath` without clobbering a lock that
- * appeared meanwhile: link(2) fails atomically with EEXIST where rename(2)
- * would silently overwrite. Best-effort; a failed restore leaves the record
- * inert at `broken`, which is still better than deleting a live owner's file.
- */
-function restoreLock(broken: string, lockPath: string): void {
+/** Write a complete owner record to a private candidate path (never the lock). */
+function writeCandidate(candidate: string, payload: string): void {
+	const fd = openSync(candidate, "wx", LOCK_FILE_MODE);
 	try {
-		linkSync(broken, lockPath);
-	} catch {
-		return;
-	}
-	try {
-		unlinkSync(broken);
-	} catch {
-		// Best-effort: the same record stays reachable by both names.
+		// writeFileSync(2) writes the whole buffer before returning (no short
+		// write can publish a partial pidfile); the follow-up fsync puts the
+		// bytes on disk before the record can become visible at lockPath, so a
+		// crash cannot leave a truncated record that parses as BUSY forever.
+		writeFileSync(fd, payload);
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
 	}
 }
 
-/** What breaking a stale lock concluded. */
-type StaleBreak =
-	/** The stale record was renamed aside, verified, and removed. */
-	| { readonly outcome: "broken" }
-	/** Another recoverer renamed the lock first: retry the create. */
-	| { readonly outcome: "lost" }
-	/** The renamed record was not the stale one: a live owner holds it. */
-	| { readonly outcome: "foreign"; readonly owner: LockFileContents | null };
-
 /**
- * Break a stale lock: atomically rename it aside, then VERIFY the renamed
- * artifact still carries the stale identity that was judged. Any recoverer
- * can install a fresh live lock between our stale read and this rename, and
- * renaming that live record away would leave two owners; a mismatch is
- * therefore restored and reported as the live owner, and the caller never
- * creates its own lock over it. Only a verified stale artifact is removed.
+ * Install the prewritten record at `lockPath` without clobbering: link(2)
+ * fails atomically with EEXIST where rename(2) would silently overwrite a
+ * record that appeared meanwhile. Returns false when the path is occupied.
  */
-function breakStaleLock(lockPath: string, observed: LockFileContents, token: string): StaleBreak {
-	const broken = `${lockPath}.stale.${token}`;
+function installLock(candidate: string, lockPath: string): boolean {
 	try {
-		renameSync(lockPath, broken);
+		linkSync(candidate, lockPath);
+		return true;
 	} catch (err) {
-		if ((err as NodeJS.ErrnoException).code === "ENOENT") return { outcome: "lost" };
+		if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
 		throw err;
 	}
-	const renamed = readLockOwner(broken);
-	if (
-		renamed !== null &&
-		renamed.pid === observed.pid &&
-		renamed.procStartTime === observed.procStartTime &&
-		renamed.token === observed.token
-	) {
-		try {
-			unlinkSync(broken);
-		} catch {
-			// Best-effort: the renamed artifact is inert even if it lingers.
-		}
-		return { outcome: "broken" };
-	}
-	restoreLock(broken, lockPath);
-	return { outcome: "foreign", owner: renamed };
 }
 
 /**
  * Try to take the lock at `lockPath`, throwing {@link LockHeldError} when a
- * live holder owns it. A provably stale holder is broken and retried, up to
- * MAX_ATTEMPTS; ownership that cannot be proven stale is reported as busy and
- * never broken. The acquiring process itself must be able to read its own
- * start time: writing the old `?? 0` fallback would record an identity that
- * no reader can ever verify, so that failure is loud instead.
+ * live holder owns it. A provably stale holder is replaced under the guard;
+ * ownership that cannot be proven stale is reported as busy and never broken.
+ * The acquiring process itself must be able to read its own start time:
+ * writing the old `?? 0` fallback would record an identity that no reader can
+ * ever verify, so that failure is loud instead.
  */
 export function acquireFileLock(lockPath: string, holder: string): FileLock {
 	const ownStartTime = procStartTime(process.pid);
@@ -249,6 +341,17 @@ export function acquireFileLock(lockPath: string, holder: string): FileLock {
 		);
 	}
 	mkdirSync(path.dirname(lockPath), { recursive: true });
+	// Advisory peek: a lock that is already live (or unattributable) costs one
+	// read and no candidate write, since callers poll it while a peer runs a
+	// long operation. The guard re-reads and decides for real below.
+	const peek = readLock(lockPath);
+	if (peek.kind === "unreadable") {
+		// Unattributable ownership: busy, never breakable.
+		throw new LockHeldError(lockPath, UNKNOWN_PID, "unknown");
+	}
+	if (peek.kind === "owner" && holderIsLive(peek.owner)) {
+		throw new LockHeldError(lockPath, peek.owner.pid, peek.owner.name);
+	}
 	const token = randomBytes(LOCK_TOKEN_BYTES).toString("hex");
 	const contents: LockFileContents = {
 		pid: process.pid,
@@ -256,58 +359,55 @@ export function acquireFileLock(lockPath: string, holder: string): FileLock {
 		name: holder,
 		token,
 	};
-	const payload = `${JSON.stringify(contents)}\n`;
-
-	for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-		let fd: number;
-		try {
-			fd = openSync(lockPath, "wx", LOCK_FILE_MODE);
-		} catch (err) {
-			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-			const owner = readLockOwner(lockPath);
-			if (owner === null) {
-				// Unattributable ownership: busy, never breakable.
-				throw new LockHeldError(lockPath, UNKNOWN_PID, "unknown");
-			}
-			if (holderIsLive(owner)) throw new LockHeldError(lockPath, owner.pid, owner.name);
-			const broken = breakStaleLock(lockPath, owner, token);
-			if (broken.outcome === "foreign") {
-				// The artifact we renamed was not the record we judged stale:
-				// a competing recoverer had already installed its live lock.
-				// It was put back, and this acquire creates nothing.
-				throw new LockHeldError(
-					lockPath,
-					broken.owner?.pid ?? UNKNOWN_PID,
-					broken.owner?.name ?? "unknown",
-				);
-			}
-			continue;
-		}
-		try {
-			writeSync(fd, payload);
-		} catch (writeErr) {
-			closeSync(fd);
-			try {
-				unlinkSync(lockPath);
-			} catch {
-				// Best-effort cleanup of a partially written lock.
-			}
-			throw writeErr;
-		}
-		closeSync(fd);
-		return {
-			path: lockPath,
-			release(): void {
-				const owner = readLockOwner(lockPath);
-				if (owner === null || owner.token !== token) return; // Gone or replaced: never the replacement's file.
-				try {
-					unlinkSync(lockPath);
-				} catch {
-					// Already gone; release is idempotent.
+	const candidate = `${lockPath}.new.${token}`;
+	try {
+		writeCandidate(candidate, `${JSON.stringify(contents)}\n`);
+		return withGuard(lockPath, () => {
+			for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+				const read = readLock(lockPath);
+				if (read.kind === "unreadable") {
+					// Unattributable ownership: busy, never breakable.
+					throw new LockHeldError(lockPath, UNKNOWN_PID, "unknown");
 				}
-			},
-		};
+				if (read.kind === "owner") {
+					if (holderIsLive(read.owner)) {
+						throw new LockHeldError(lockPath, read.owner.pid, read.owner.name);
+					}
+					// Provably stale, and the guard excludes every peer mutation:
+					// removing it and installing ours is one transaction.
+					try {
+						unlinkSync(lockPath);
+					} catch (err) {
+						if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+					}
+				}
+				if (installLock(candidate, lockPath)) {
+					return {
+						path: lockPath,
+						release(): void {
+							withGuard(lockPath, () => {
+								const current = readLock(lockPath);
+								if (current.kind !== "owner" || current.owner.token !== token) {
+									return; // Gone or replaced: never the replacement's file.
+								}
+								try {
+									unlinkSync(lockPath);
+								} catch {
+									// Already gone; release is idempotent.
+								}
+							});
+						},
+					};
+				}
+			}
+			// A non-cooperating writer kept recreating the path under our guard.
+			throw new LockHeldError(lockPath, UNKNOWN_PID, "unknown");
+		});
+	} finally {
+		try {
+			unlinkSync(candidate);
+		} catch {
+			// Installed (link left the record at lockPath) or never created.
+		}
 	}
-	// Every attempt spent its stale break without a verified win of the create.
-	throw new LockHeldError(lockPath, UNKNOWN_PID, "unknown");
 }

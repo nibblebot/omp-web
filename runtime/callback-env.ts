@@ -10,12 +10,12 @@ import {
 	renameSync,
 	statSync,
 	unlinkSync,
-	writeSync,
+	writeFileSync,
 } from "node:fs";
 import type { Stats } from "node:fs";
 import { join, resolve } from "node:path";
 import { ProviderProtocolError } from "../shared/provider-protocol";
-import { ENV_ALLOW_KEYS } from "./bwrap-args";
+import { CALLBACK_ENV_KEYS } from "./sandbox-env";
 
 // ---------------------------------------------------------------------------
 // Callback-env handoff (`<stateDir>/callback-env.json`).
@@ -23,19 +23,9 @@ import { ENV_ALLOW_KEYS } from "./bwrap-args";
 // The fleet writes this file before invoking a provider; the provider reads
 // it back to build the sandbox/pod environment (callback URL, workspace,
 // generation, credential, resume hint). Both directions go through this
-// module so the wire shape, the allowlist, and the filesystem discipline
-// cannot drift between the fleet and the two providers (stage 2 item 2).
-//
-// Write: build the payload, create `<file>.tmp.<random>` with O_EXCL mode
-// 0600, write, fsync the file, rename it over the target, then fsync the
-// parent directory. The rename is the publish point, so a reader never sees
-// a partially written handoff.
-//
-// Rejections: symlinked target or state directory, non-directory state dir,
-// oversized payload (64 KiB), disallowed env key, non-positive-integer
-// generation, and identity mismatches. Record problems are
-// `invalid_request`; on-disk or filesystem problems are `unavailable`; a
-// record for another workspace/generation is `conflict`.
+// module so the wire shape and the filesystem discipline cannot drift
+// between the fleet and the two providers; the env allowlist itself is
+// runtime/sandbox-env.ts (CALLBACK_ENV_KEYS).
 // ---------------------------------------------------------------------------
 
 /** Handoff file name under the provider's per-workspace state directory. */
@@ -60,22 +50,6 @@ export interface CallbackEnvRecord {
 	env: Record<string, string>;
 }
 
-const CALLBACK_ENV_PREFIX = "OMP_SESSION_CALLBACK_";
-const RESUME_ENV_KEY = "OMP_SESSION_RESUME";
-const RESUME_REQUIRED_ENV_KEY = "OMP_SESSION_RESUME_REQUIRED";
-
-/**
- * Callback env allowlist: `OMP_SESSION_CALLBACK_*` keys from the shared
- * sandbox allowlist, plus the two wake-resume hints the fleet writes.
- */
-export function isAllowedCallbackEnvKey(key: string): boolean {
-	return (
-		key === RESUME_ENV_KEY ||
-		key === RESUME_REQUIRED_ENV_KEY ||
-		(key.startsWith(CALLBACK_ENV_PREFIX) && ENV_ALLOW_KEYS.includes(key))
-	);
-}
-
 /**
  * Validate a callback env map. Returns the normalized copy, or the reason it
  * was rejected, so the writer and reader can map it to their own error code.
@@ -86,7 +60,7 @@ function parseCallbackEnv(value: unknown): { env: Record<string, string> } | { e
 	}
 	const env: Record<string, string> = {};
 	for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-		if (!isAllowedCallbackEnvKey(key)) return { error: `env key ${key} is not allowlisted` };
+		if (!CALLBACK_ENV_KEYS.includes(key)) return { error: `env key ${key} is not allowlisted` };
 		if (typeof entry !== "string" || entry.length === 0) {
 			return { error: `env.${key} must be a non-empty string` };
 		}
@@ -172,6 +146,15 @@ function assertReplaceableTarget(target: string): void {
 	}
 }
 
+/** Best-effort discard of an unpublished temporary handoff. */
+function discardTempFile(tmp: string): void {
+	try {
+		unlinkSync(tmp);
+	} catch {
+		// The temporary file is inert even if it lingers.
+	}
+}
+
 /** Validate a record and return its canonical encoded form (with newline). */
 function encodeCallbackEnvRecord(record: CallbackEnvRecord): string {
 	if (record.version !== CALLBACK_ENV_VERSION) {
@@ -228,26 +211,20 @@ export function writeCallbackEnvFile(stateDir: string, record: CallbackEnvRecord
 		);
 	}
 	try {
-		writeSync(fd, payload);
+		// writeFileSync (not writeSync) so a short write is completed before
+		// fsync; a truncated temp file must never be renamed over the handoff.
+		writeFileSync(fd, payload);
 		fsyncSync(fd);
 	} catch (cause) {
 		closeSync(fd);
-		try {
-			unlinkSync(tmp);
-		} catch {
-			// Best-effort: the temporary file is inert even if it lingers.
-		}
+		discardTempFile(tmp);
 		throw ProviderProtocolError.unavailable(`cannot write ${CALLBACK_ENV_FILE}`, { cause });
 	}
 	closeSync(fd);
 	try {
 		renameSync(tmp, target);
 	} catch (cause) {
-		try {
-			unlinkSync(tmp);
-		} catch {
-			// Best-effort, as above.
-		}
+		discardTempFile(tmp);
 		throw ProviderProtocolError.unavailable(`cannot replace ${CALLBACK_ENV_FILE}`, { cause });
 	}
 	// fsync the parent so the rename itself survives a crash.
@@ -279,7 +256,14 @@ export function readCallbackEnvFile(
 ): CallbackEnvRecord | null {
 	const target = join(stateDir, CALLBACK_ENV_FILE);
 	const stats = lstatOrNull(target);
-	if (stats === null) return null;
+	if (stats === null) {
+		// The handoff is absent. Validate an EXISTING state directory before
+		// trusting that absence: a symlinked provider state must be refused
+		// even before any handoff is published, while a state directory that
+		// genuinely does not exist stays "no handoff".
+		if (lstatOrNull(stateDir) !== null) assertStateDirectory(stateDir, false);
+		return null;
+	}
 	if (stats.isSymbolicLink()) {
 		throw ProviderProtocolError.unavailable(`${CALLBACK_ENV_FILE} must not be a symlink`);
 	}

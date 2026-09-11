@@ -44,12 +44,41 @@ interface WorkspaceRecord {
   authorizedGeneration?: number;    // absent = unmanaged
   providerHandle?: unknown;         // private, opaque
   enrollment?: WorkspaceEnrollment; // callback credential digest + generation
-  cleanup?: CleanupRecord;          // archive/delete state machine state;
-                                    //   SUPERSEDED: deletion verification state (see Fleet log store)
-  archiveReceipt?: ArchiveReceipt;  // durable acceptance receipt;
-                                    //   SUPERSEDED: verify-at-deletion has no receipts
+  deletion?: WorkspaceDeletion;     // verify-at-deletion state (P7.3); absent = never deleted
+  lastEvidence?: CloneDeletionReceipt; // stop-time quiesce receipt (kubernetes only)
+}
+
+interface WorkspaceDeletion {
+  state: "deleting" | "delete-pending-retry";  // "deleting" = gate in flight
+  requestedAt: number;              // epoch ms of the delete request
+  error?: DeletionGateError;        // present on "delete-pending-retry"
+  remainingResources?: string[];    // provider resources left after partial deletion
+  receipt?: CloneDeletionReceipt;   // kubernetes deletion evidence binding
+}
+
+interface CloneDeletionReceipt {
+  requestId: string;                // recorded BEFORE the request is sent
+  correlationId?: string;           // bulk correlation, once collected
+  generation: number;
+  podUid: string | null;            // null = no Pod observed
+  pvcUid: string | null;            // null = no claim observed
+  state: "pending" | "verified" | "invalid";
+  validated?: ValidatedQuiesceReceipt;  // present when state === "verified"
+  error?: DeletionGateError;        // present when state === "invalid"
+}
+
+interface DeletionGateError {
+  code: string;                     // frozen deletion-gate error vocabulary
+  message: string;
+  path?: string;                    // store path the failure names, when applicable
 }
 ```
+
+Historical (SUPERSEDED, no longer part of the current record): `cleanup?:
+CleanupRecord` and `archiveReceipt?: ArchiveReceipt` belonged to the
+archive/export pipeline the verify-at-deletion amendment replaced; neither is
+written or read today. `deletion` carries the deletion state machine state
+and `lastEvidence` the stop-time receipt.
 
 Legacy inference at load: `managed || worktreeOf !== undefined` → `worktree`;
 `mode === "spawned"` without `worktreeOf` → `direct`; `remote`/`attached` →
@@ -92,10 +121,12 @@ profiles, delegates the cluster requirement rows to
 `preflightKubernetesProfile` rather than keeping a parallel set of summary
 rows. The Kubernetes rows are: `kubectl-client`, `kube-context`,
 `kube-api`, `kube-namespace`, `kube-rbac-<verb>-<resource>` (get, create, and
-delete on pods and persistentvolumeclaims), `kube-storageclass`,
+delete on pods, persistentvolumeclaims, and configmaps), `kube-storageclass`,
 `kube-default-storageclass` (required when the profile pins no class),
 `kube-secretrefs` (map shape), `kube-secret-<envName>` (one row per
-referenced secret name and key), and `kube-image`. Callback reachability is
+referenced secret name and key), and `kube-image`. `kube-image` checks only
+that the profile declares a non-empty image; pullability is admitted at the
+first Pod start. Callback reachability is
 labelled as reachability from the fleet HOST, not from inside the cluster.
 Every failing row carries remediation naming the operator action, and the
 `k8s-fields` row is bwrap-only, since a Kubernetes profile's fields are
@@ -377,14 +408,24 @@ interface QuiesceEvidence {       // one JSON document, uploaded over bulk
   `correlationId` (`createBulkCorrelation(workspaceId, { capture: true })` and
   `FleetCallback.requestBulkUploadParts`), bounded at 16 MiB inside the
   64 MiB bulk cap; abandoned captures are released with
-  `cancelBulkCorrelation` on timeout and shutdown. Before sending the
-  request the fleet persists the receipt binding `{requestId, generation,
-  podUid, pvcUid, state}` on the workspace deletion state (`state` is
-  `pending`, `verified`, or `invalid`), and it stores the validated receipt
-  only after collection and validation both succeed, before invoking
-  provider stop.
+  `cancelBulkCorrelation` on timeout and shutdown. Every collection persists
+  its receipt binding `{requestId, generation, podUid, pvcUid, state}`
+  BEFORE the request leaves the fleet (`state` is `pending`, `verified`, or
+  `invalid`): a delete-time collection writes it to `deletion.receipt`, and
+  the stop-time collection (Kubernetes only, the last chance while the daemon
+  is alive) writes it to `lastEvidence`. A crash between the daemon's
+  acknowledgement and the terminal write therefore still leaves the request
+  id on disk, so restart replays that same id instead of sending a new one,
+  which the daemon would reject as already quiesced. The receipt transitions
+  to `verified` or `invalid` only after collection and validation return, and
+  the validated receipt is stored before invoking provider stop.
 - Every evidence field is required and `manifestFiles` is `ManifestFile[]`,
   so a receipt can never be validated against a partial proof.
+- `provenance.resolvedCommit` records the checkout HEAD at quiesce and must
+  match the Git evidence, not the initialization pin. Preserved commits may
+  advance the checkout. The original `pinnedRevision` remains bound in the
+  receipt's source tuple and resource digest, and both the pin and every
+  local ref must be preserved on the supplied remote before deletion.
 - `collectGitEvidence` uses the stored source URL and the pin supplied by
   the fleet: it reads the checkout's raw origin with includes disabled and
   compares it to that URL before any network access, then probes from a
@@ -490,7 +531,7 @@ interface ProviderRequest {
 	op: "ensure-running" | "inspect" | "stop" | "delete";
 	workspaceId: string;
 	generation: number;         // positive; the authorized generation
-	workspaceDir: string;       // the checkout directory
+	workspaceDir: string;       // fleet-side workspace volume root; for kubernetes the fleet host holds no checkout (the PVC mounts at /workspace, the in-pod checkout is /workspace/.checkout)
 	homeDir: string;            // private writable home
 	profile: ProviderProfile;   // fleet config profile; secretRefs by NAME only
 	handle?: string;            // opaque provider-namespaced handle
@@ -548,8 +589,11 @@ generation and the provider launch token). A bwrap request carrying
 `kubernetes` is rejected. A successful Kubernetes response carries the
 observed uids, so the fleet can detect a namespace, Pod, or claim replaced
 underneath a live workspace. `resourceIdentity` is generated once by the
-fleet and never changes: `<workspaceDir>/.kubernetes/<resourceIdentity>/`
-holds provider state and `omp-ws-<resourceIdentity>` names the Pod and PVC.
+fleet and never changes: on the fleet host `<workspaceDir>/.kubernetes/<resourceIdentity>/`
+holds provider state (a fleet-side path only, never mounted into the Pod),
+`omp-ws-<resourceIdentity>` names the Pod and PVC, and inside the Pod the PVC
+mounts at `/workspace` with the checkout at `/workspace/.checkout` and the
+private home at `/workspace/.home`.
 
 Source-pin digest: lowercase SHA-256 of the UTF-8
 `JSON.stringify([source.remote, revision, branch])`. The fleet computes it
@@ -638,10 +682,12 @@ Identity and supervision (never PID-only):
   replacement must not start until the generation's termination is proven.
 - `delete` removes provider state and runs only after `stop`; it reports
   `observed: "missing"`. Kubernetes deletes the Pod, the PVC, and the
-  baseline ConfigMap with Kubernetes UID preconditions, waits for absence,
-  and removes provider state only after confirmed deletion; repeated deletion
-  succeeds once all three objects are absent, and partial progress is
-  persisted so a retry is idempotent.
+  baseline ConfigMap with atomic `DeleteOptions.preconditions.uid` requests
+  built from each observed object's uid, never a fresh GET followed by a
+  name-only delete (which could remove a replacement object created between
+  the two calls). It then waits for absence and removes provider state only
+  after confirmed deletion; repeated deletion succeeds once all three objects
+  are absent, and partial progress is persisted so a retry is idempotent.
 
 Safety rules (P5.5, never negotiable):
 

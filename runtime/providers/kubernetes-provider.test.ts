@@ -36,8 +36,9 @@ import {
 import { cleanupTempDirs, tempDir } from "../../shared/testkit";
 import { CALLBACK_ENV_FILE, writeCallbackEnvFile } from "../callback-env";
 import type { PreflightCheck, PreflightResult } from "../preflight";
-import { preflightKubernetesProfile, runOp } from "./kubernetes-provider";
-import type { KubeExec, KubeExecResult } from "./kubernetes-provider";
+import { preflightKubernetesProfile } from "./kubernetes/preflight";
+import { runOp } from "./kubernetes-provider";
+import type { KubeExec, KubeExecResult } from "./kubernetes/kubectl";
 
 // ---------------------------------------------------------------------------
 // Fixture constants
@@ -118,6 +119,20 @@ function kubeFail(stderr: string): KubeExecResult {
 	return { code: 1, stdout: "", stderr };
 }
 
+function alreadyExists(kind: string, name: string): KubeExecResult {
+	return kubeFail(
+		`Error from server (AlreadyExists): ${kind.toLowerCase()}s ${JSON.stringify(name)} already exists`,
+	);
+}
+
+/** The API's `DeleteOptions.preconditions.uid` check, as the server enforces it. */
+function uidPrecondition(currentUid: string, expectedUid: string | null): KubeExecResult | null {
+	if (expectedUid === null || expectedUid === currentUid) return null;
+	return kubeFail(
+		`Error from server (Conflict): Precondition failed: UID ${JSON.stringify(expectedUid)} does not match ${JSON.stringify(currentUid)}`,
+	);
+}
+
 interface FakeCall {
 	bin: string;
 	context: string | null;
@@ -134,6 +149,8 @@ interface FakePod {
 	containerReason: string | null;
 	/** The exact manifest the provider POSTed, for render assertions. */
 	manifest: Record<string, unknown>;
+	/** A DELETE was acknowledged but the object is still terminating. */
+	deleting?: boolean;
 }
 
 interface FakePvc {
@@ -145,6 +162,7 @@ interface FakePvc {
 	size: string | undefined;
 	accessModes: string[];
 	manifest: Record<string, unknown>;
+	deleting?: boolean;
 }
 
 interface FakeConfigMap {
@@ -154,19 +172,22 @@ interface FakeConfigMap {
 	annotations: Record<string, string>;
 	data: Record<string, string>;
 	manifest: Record<string, unknown>;
+	deleting?: boolean;
 }
 
 function configMapObject(cm: FakeConfigMap, namespace: string): Record<string, unknown> {
+	const metadata: Record<string, unknown> = {
+		name: cm.name,
+		namespace,
+		uid: cm.uid,
+		labels: cm.labels,
+		annotations: cm.annotations,
+	};
+	if (cm.deleting === true) metadata["deletionTimestamp"] = POD_START_TIME;
 	return {
 		apiVersion: "v1",
 		kind: "ConfigMap",
-		metadata: {
-			name: cm.name,
-			namespace,
-			uid: cm.uid,
-			labels: cm.labels,
-			annotations: cm.annotations,
-		},
+		metadata,
 		data: cm.data,
 	};
 }
@@ -180,16 +201,18 @@ function podObject(pod: FakePod, namespace: string): Record<string, unknown> {
 				: { name: "session", state: { waiting: { reason: pod.containerReason } } },
 		];
 	}
+	const metadata: Record<string, unknown> = {
+		name: pod.name,
+		namespace,
+		uid: pod.uid,
+		labels: pod.labels,
+		annotations: pod.annotations,
+	};
+	if (pod.deleting === true) metadata["deletionTimestamp"] = POD_START_TIME;
 	return {
 		apiVersion: "v1",
 		kind: "Pod",
-		metadata: {
-			name: pod.name,
-			namespace,
-			uid: pod.uid,
-			labels: pod.labels,
-			annotations: pod.annotations,
-		},
+		metadata,
 		status,
 	};
 }
@@ -201,16 +224,18 @@ function pvcObject(pvc: FakePvc, namespace: string): Record<string, unknown> {
 		resources: { requests: { storage: pvc.size } },
 	};
 	if (pvc.storageClassName !== undefined) spec.storageClassName = pvc.storageClassName;
+	const metadata: Record<string, unknown> = {
+		name: pvc.name,
+		namespace,
+		uid: pvc.uid,
+		labels: pvc.labels,
+		annotations: pvc.annotations,
+	};
+	if (pvc.deleting === true) metadata["deletionTimestamp"] = POD_START_TIME;
 	return {
 		apiVersion: "v1",
 		kind: "PersistentVolumeClaim",
-		metadata: {
-			name: pvc.name,
-			namespace,
-			uid: pvc.uid,
-			labels: pvc.labels,
-			annotations: pvc.annotations,
-		},
+		metadata,
 		spec,
 	};
 }
@@ -245,6 +270,12 @@ class FakeCluster {
 	 */
 	settlePendingPods = true;
 	podCreates = 0;
+	/** Kinds whose DELETE is acknowledged but completes on the next GET. */
+	readonly holdDeletes = new Set<string>();
+	/** Fires immediately before a DELETE is evaluated. */
+	onBeforeDelete: ((kind: string, name: string) => void) | null = null;
+	/** Fires before the namespace is read (to model a mid-operation replace). */
+	onNamespaceRead: (() => void) | null = null;
 	private uidSeq = 0;
 
 	constructor() {
@@ -274,17 +305,18 @@ class FakeCluster {
 		return podObject(snapshot, NAMESPACE);
 	}
 
-	create(manifest: Record<string, unknown>): void {
+	create(manifest: Record<string, unknown>): KubeExecResult {
 		const kind = String(manifest["kind"] ?? "");
-		this.createdKinds.push(kind);
 		const metadata = asRecord(manifest["metadata"]);
 		const spec = asRecord(manifest["spec"]);
 		const name = String(metadata["name"] ?? "");
 		const labels = asStringMap(metadata["labels"]);
 		const annotations = asStringMap(metadata["annotations"]);
 		if (kind === "Pod") {
+			if (this.pods.has(name)) return alreadyExists(kind, name);
+			this.createdKinds.push(kind);
 			this.podCreates += 1;
-			this.pods.set(name, {
+			const pod: FakePod = {
 				name,
 				uid: this.nextUid("pod"),
 				phase: this.createPodPhase ?? "Pending",
@@ -292,12 +324,15 @@ class FakeCluster {
 				annotations,
 				containerReason: this.createPodReason,
 				manifest,
-			});
-			return;
+			};
+			this.pods.set(name, pod);
+			return kubeJson(podObject(pod, NAMESPACE));
 		}
 		if (kind === "PersistentVolumeClaim") {
+			if (this.pvcs.has(name)) return alreadyExists(kind, name);
+			this.createdKinds.push(kind);
 			const requests = asRecord(asRecord(spec["resources"])["requests"]);
-			this.pvcs.set(name, {
+			const pvc: FakePvc = {
 				name,
 				uid: this.nextUid("pvc"),
 				labels,
@@ -309,52 +344,71 @@ class FakeCluster {
 					? spec["accessModes"].filter((mode): mode is string => typeof mode === "string")
 					: [],
 				manifest,
-			});
-			return;
+			};
+			this.pvcs.set(name, pvc);
+			return kubeJson(pvcObject(pvc, NAMESPACE));
 		}
 		if (kind === "ConfigMap") {
+			if (this.configMaps.has(name)) return alreadyExists(kind, name);
+			this.createdKinds.push(kind);
 			const data: Record<string, string> = {};
 			for (const [key, entry] of Object.entries(asRecord(manifest["data"]))) {
 				if (typeof entry === "string") data[key] = entry;
 			}
-			this.configMaps.set(name, {
+			const cm: FakeConfigMap = {
 				name,
 				uid: this.nextUid("configmap"),
 				labels,
 				annotations,
 				data,
 				manifest,
-			});
+			};
+			this.configMaps.set(name, cm);
+			return kubeJson(configMapObject(cm, NAMESPACE));
 		}
+		return kubeFail(`unsupported create ${kind}`);
 	}
 
-	delete(kind: string, name: string): KubeExecResult {
+	delete(kind: string, name: string, expectedUid: string | null): KubeExecResult {
+		this.onBeforeDelete?.(kind, name);
 		if (kind === "pod") {
-			if (!this.pods.has(name)) {
+			const pod = this.pods.get(name);
+			if (pod === undefined) {
 				return kubeFail(`Error from server (NotFound): pods ${JSON.stringify(name)} not found`);
 			}
-			this.pods.delete(name);
+			const precondition = uidPrecondition(pod.uid, expectedUid);
+			if (precondition !== null) return precondition;
 			this.deletedKinds.push(kind);
+			if (this.holdDeletes.has(kind)) pod.deleting = true;
+			else this.pods.delete(name);
 			return kubeOk();
 		}
 		if (kind === "persistentvolumeclaim") {
-			if (!this.pvcs.has(name)) {
+			const pvc = this.pvcs.get(name);
+			if (pvc === undefined) {
 				return kubeFail(
 					`Error from server (NotFound): persistentvolumeclaims ${JSON.stringify(name)} not found`,
 				);
 			}
-			this.pvcs.delete(name);
+			const precondition = uidPrecondition(pvc.uid, expectedUid);
+			if (precondition !== null) return precondition;
 			this.deletedKinds.push(kind);
+			if (this.holdDeletes.has(kind)) pvc.deleting = true;
+			else this.pvcs.delete(name);
 			return kubeOk();
 		}
 		if (kind === "configmap") {
-			if (!this.configMaps.has(name)) {
+			const cm = this.configMaps.get(name);
+			if (cm === undefined) {
 				return kubeFail(
 					`Error from server (NotFound): configmaps ${JSON.stringify(name)} not found`,
 				);
 			}
-			this.configMaps.delete(name);
+			const precondition = uidPrecondition(cm.uid, expectedUid);
+			if (precondition !== null) return precondition;
 			this.deletedKinds.push(kind);
+			if (this.holdDeletes.has(kind)) cm.deleting = true;
+			else this.configMaps.delete(name);
 			return kubeOk();
 		}
 		return kubeFail(`unsupported delete ${kind}`);
@@ -393,9 +447,14 @@ function makeExec(cluster: FakeCluster): KubeExec {
 		let fromStdin = false;
 		let clientOnly = false;
 		let ignoreNotFound = false;
+		let rawPath: string | null = null;
 		const positional: string[] = [];
 		for (let i = 0; i < rest.length; i++) {
 			const arg = rest[i] as string;
+			if (arg.startsWith("--raw=")) {
+				rawPath = arg.slice("--raw=".length);
+				continue;
+			}
 			if (arg === "-n" || arg === "--namespace") {
 				namespace = rest[++i] as string;
 				continue;
@@ -439,6 +498,7 @@ function makeExec(cluster: FakeCluster): KubeExec {
 		}
 
 		if (verb === "get" && kind === "namespace") {
+			cluster.onNamespaceRead?.();
 			const uid = cluster.namespaces.get(name as string);
 			if (uid === undefined) {
 				if (ignoreNotFound) return kubeOk();
@@ -486,22 +546,56 @@ function makeExec(cluster: FakeCluster): KubeExec {
 		}
 		if (verb === "get" && kind === "pod") {
 			const pod = cluster.pods.get(name as string);
-			return pod === undefined ? kubeOk() : kubeJson(cluster.readPod(pod));
+			if (pod === undefined) return kubeOk();
+			const object = cluster.readPod(pod);
+			if (pod.deleting === true) cluster.pods.delete(pod.name);
+			return kubeJson(object);
 		}
 		if (verb === "get" && kind === "persistentvolumeclaim") {
 			const pvc = cluster.pvcs.get(name as string);
-			return pvc === undefined ? kubeOk() : kubeJson(pvcObject(pvc, namespace ?? NAMESPACE));
+			if (pvc === undefined) return kubeOk();
+			const object = pvcObject(pvc, namespace ?? NAMESPACE);
+			if (pvc.deleting === true) cluster.pvcs.delete(name as string);
+			return kubeJson(object);
 		}
 		if (verb === "get" && kind === "configmap") {
 			const cm = cluster.configMaps.get(name as string);
-			return cm === undefined ? kubeOk() : kubeJson(configMapObject(cm, namespace ?? NAMESPACE));
+			if (cm === undefined) return kubeOk();
+			const object = configMapObject(cm, namespace ?? NAMESPACE);
+			if (cm.deleting === true) cluster.configMaps.delete(name as string);
+			return kubeJson(object);
 		}
 		if (verb === "create") {
 			if (!fromStdin || input === undefined) return kubeFail("create requires -f -");
-			cluster.create(JSON.parse(input) as Record<string, unknown>);
-			return kubeOk();
+			return cluster.create(JSON.parse(input) as Record<string, unknown>);
 		}
-		if (verb === "delete") return cluster.delete(kind ?? "", name ?? "");
+		if (verb === "delete") {
+			if (rawPath === null) return kubeFail("delete requires --raw");
+			const segments = rawPath.split("/");
+			const pathNamespace = segments[4] ?? "";
+			const plural = segments[5] ?? "";
+			const objectName = segments[6] ?? "";
+			const deleteKind =
+				plural === "pods"
+					? "pod"
+					: plural === "persistentvolumeclaims"
+						? "persistentvolumeclaim"
+						: plural === "configmaps"
+							? "configmap"
+							: "";
+			if (deleteKind === "") return kubeFail(`unsupported raw delete ${rawPath}`);
+			if (pathNamespace !== NAMESPACE) {
+				return kubeFail(
+					`Error from server (NotFound): namespaces ${JSON.stringify(pathNamespace)} not found`,
+				);
+			}
+			let expectedUid: string | null = null;
+			if (input !== undefined) {
+				const body = JSON.parse(input) as { preconditions?: { uid?: unknown } };
+				if (typeof body.preconditions?.uid === "string") expectedUid = body.preconditions.uid;
+			}
+			return cluster.delete(deleteKind, objectName, expectedUid);
+		}
 		return kubeFail(`unsupported kubectl invocation: ${positional.join(" ")}`);
 	};
 }
@@ -847,6 +941,10 @@ describe("pre-mutation validation", () => {
 			"https://user:pass@git.example.com/team/repo.git",
 			"https://git.example.com/team/repo.git?ref=main",
 			"ssh://git@git.example.com:99999/team/repo.git",
+			"ssh://[]/repo",
+			"https://[not-an-ipv6]:garbage/repo",
+			"ssh://[::1]:70000/repo",
+			"https://[::1]:/repo",
 		];
 		h.writeHandoff();
 		for (const remote of invalid) {
@@ -863,6 +961,15 @@ describe("pre-mutation validation", () => {
 			await h.run("ensure-running", {
 				source: { remote: "ssh://git@git.example.com/team/repo.git" },
 			}),
+			"running",
+		);
+		expect(response.kubernetes?.podUid).toBe(podOf(h.cluster).uid);
+	});
+
+	test("accepts a bracketed IPv6 host with a port", async () => {
+		h.writeHandoff();
+		const response = expectOk(
+			await h.run("ensure-running", { source: { remote: "ssh://[::1]:2222/team/repo.git" } }),
 			"running",
 		);
 		expect(response.kubernetes?.podUid).toBe(podOf(h.cluster).uid);
@@ -916,6 +1023,16 @@ describe("pre-mutation validation", () => {
 			"OMP_WORKSPACE_DIR",
 			"OMP_SESSION_CALLBACK_TOKEN",
 			"GIT_SSH_COMMAND",
+			// Provider-owned Pod inputs: a shadowing secretRef would let a
+			// Secret replace the fleet-pinned preparation tuple or the launch
+			// token the daemon matches.
+			"OMP_WORKSPACE_TOKEN",
+			"OMP_WORKSPACE_ROOT",
+			"OMP_PREP_SOURCE_REMOTE",
+			"OMP_PREP_REVISION",
+			"OMP_PREP_BRANCH",
+			"PI_CODING_AGENT_DIR",
+			"OMP_SANDBOX_BASELINE_CONFIG",
 		];
 		for (const envName of reserved) {
 			const profile = kubernetesProfile({
@@ -1252,6 +1369,62 @@ describe("lifecycle", () => {
 		expect(h.cluster.pods.size).toBe(0);
 		expect(h.cluster.pvcs.size).toBe(0);
 	});
+
+	test("retains the claim uid when a replacement pod never starts", async () => {
+		h.writeHandoff();
+		await h.run("ensure-running");
+		expectOk(await h.run("stop"), "stopped");
+
+		// The replacement Pod stays Pending through the readiness budget: the
+		// launch is unavailable, but the claim uid must already be durable.
+		h.cluster.settlePendingPods = false;
+		expectFailure(
+			await h.run("ensure-running", {}, { ensureWaitMs: 50 }),
+			"unavailable",
+			true,
+			/retry ensure-running to adopt it/,
+		);
+		// Someone replaced the claim (same name and metadata) while the launch
+		// was stuck; the recorded uid still fences it on the next attempt.
+		const claim = pvcOf(h.cluster);
+		h.cluster.pvcs.set(RESOURCE_NAME, { ...claim, uid: "uid-replaced-pvc" });
+
+		h.cluster.settlePendingPods = true;
+		expectFailure(await h.run("ensure-running"), "conflict", false, /recorded/);
+		expect(h.cluster.pods.size).toBe(1);
+		expect(h.cluster.pvcs.size).toBe(1);
+	});
+
+	test("management operations tolerate an unusable callback credential", async () => {
+		h.writeHandoff();
+		await h.run("ensure-running");
+
+		// Same workspace/generation, credential missing: identity is intact,
+		// so inspect/stop must still work.
+		h.writeRawHandoff({
+			version: 1,
+			workspaceId: WORKSPACE_ID,
+			generation: 1,
+			env: {
+				OMP_SESSION_CALLBACK_URL: CALLBACK_URL,
+				OMP_SESSION_CALLBACK_WORKSPACE: WORKSPACE_ID,
+				OMP_SESSION_CALLBACK_GENERATION: "1",
+			},
+		});
+		expectOk(await h.run("inspect"), "running");
+		expectOk(await h.run("stop"), "stopped");
+
+		// A malformed credential must not block the retained claim's teardown.
+		h.writeRawHandoff({
+			version: 1,
+			workspaceId: WORKSPACE_ID,
+			generation: 1,
+			env: { ...h.handoffEnv(), OMP_SESSION_CALLBACK_TOKEN: "not-a-credential" },
+		});
+		expectOk(await h.run("delete"), "missing");
+		expect(h.cluster.pods.size).toBe(0);
+		expect(h.cluster.pvcs.size).toBe(0);
+	});
 });
 
 describe("concurrency and the workspace lock", () => {
@@ -1464,6 +1637,88 @@ describe("ownership fences", () => {
 		expectFailure(await h.run("ensure-running"), "conflict", false, /does not carry/);
 		expect(h.cluster.deletedKinds).toEqual([]);
 	});
+
+	test("refuses to delete a replacement whose API uid moved after validation", async () => {
+		h.writeHandoff();
+		await h.run("ensure-running");
+		// The validated Pod is swapped for a same-named replacement between the
+		// ownership read and the DELETE; the API uid precondition must refuse it.
+		h.cluster.onBeforeDelete = (kind) => {
+			if (kind === "pod") podOf(h.cluster).uid = "uid-replacement-pod";
+		};
+		expectFailure(await h.run("stop"), "conflict", false, /uid precondition/);
+		expect(podOf(h.cluster).uid).toBe("uid-replacement-pod");
+		expect(h.cluster.deletedKinds).toEqual([]);
+	});
+
+	test("fences a retained claim whose uid changed across generations", async () => {
+		h.writeHandoff();
+		const running = expectOk(await h.run("ensure-running"), "running");
+		expectOk(await h.run("stop"), "stopped");
+
+		// The claim outlives the Pod, so the recorded uid fences the NEXT
+		// generation too: a same-named replacement must not be attached.
+		const claim = pvcOf(h.cluster);
+		h.cluster.pvcs.set(RESOURCE_NAME, { ...claim, uid: "uid-replaced-pvc" });
+		h.writeHandoff({ generation: 2 });
+
+		expectFailure(await h.run("ensure-running", { generation: 2 }), "conflict", false, /recorded/);
+		expect(h.cluster.podCreates).toBe(1);
+		expect(running.kubernetes?.pvcUid).toBe(claim.uid);
+	});
+
+	test("refuses a claim replaced after the pod reports Running", async () => {
+		h.writeHandoff();
+		h.cluster.onPodRunning = () => {
+			const claim = pvcOf(h.cluster);
+			h.cluster.pvcs.set(RESOURCE_NAME, { ...claim, uid: "uid-swapped-pvc" });
+		};
+		expectFailure(await h.run("ensure-running"), "conflict", false, /workspace identity check/);
+		expect(pvcOf(h.cluster).uid).toBe("uid-swapped-pvc");
+	});
+
+	test("refuses a foreign pod observed at the final running check", async () => {
+		h.writeHandoff();
+		h.cluster.onPodRunning = () => {
+			podOf(h.cluster).labels[LABEL_MANAGED_BY] = "someone-else";
+		};
+		expectFailure(await h.run("ensure-running"), "conflict", false, /refusing to adopt/);
+		expect(podOf(h.cluster).labels[LABEL_MANAGED_BY]).toBe("someone-else");
+	});
+
+	test("inspect conflicts when the namespace is replaced mid-operation", async () => {
+		h.writeHandoff();
+		await h.run("ensure-running");
+		// Second read: withOpContext's initial check, then the operation's own.
+		let reads = 0;
+		h.cluster.onNamespaceRead = () => {
+			reads += 1;
+			if (reads === 2) h.cluster.namespaces.set(NAMESPACE, REPLACED_NAMESPACE_UID);
+		};
+		expectFailure(await h.run("inspect"), "conflict", false, /replaced during inspect/);
+	});
+
+	test("stop conflicts when the namespace is replaced mid-operation", async () => {
+		h.writeHandoff();
+		await h.run("ensure-running");
+		let reads = 0;
+		h.cluster.onNamespaceRead = () => {
+			reads += 1;
+			if (reads === 2) h.cluster.namespaces.set(NAMESPACE, REPLACED_NAMESPACE_UID);
+		};
+		expectFailure(await h.run("stop"), "conflict", false, /replaced during stop/);
+	});
+
+	test("delete conflicts when the namespace is replaced mid-operation", async () => {
+		h.writeHandoff();
+		await h.run("ensure-running");
+		let reads = 0;
+		h.cluster.onNamespaceRead = () => {
+			reads += 1;
+			if (reads === 2) h.cluster.namespaces.set(NAMESPACE, REPLACED_NAMESPACE_UID);
+		};
+		expectFailure(await h.run("delete"), "conflict", false, /replaced during delete/);
+	});
 });
 
 describe("pod manifest", () => {
@@ -1656,6 +1911,24 @@ describe("baseline delivery", () => {
 		const response = await h.run("delete");
 		expectOk(response, "missing");
 		expect(h.cluster.deletedKinds).toEqual(["pod", "persistentvolumeclaim"]);
+	});
+
+	test("waits out an asynchronous ConfigMap delete before recreating it", async () => {
+		h.writeHandoff();
+		await h.run("ensure-running", { baseline: BASELINE });
+		expectOk(await h.run("stop"), "stopped");
+
+		// The DELETE is acknowledged but the object survives one read (a
+		// finalizer): the replacement Pod must wait for absence rather than
+		// hitting AlreadyExists on the create.
+		h.cluster.holdDeletes.add("configmap");
+		const response = expectOk(await h.run("ensure-running", { baseline: BASELINE }), "running");
+		expect(response.kubernetes?.podUid).toBe(podOf(h.cluster).uid);
+		expect(h.cluster.createdKinds.filter((kind) => kind === "ConfigMap")).toHaveLength(2);
+		expect(h.cluster.configMaps.get(BASELINE_CM_NAME)?.data).toEqual({
+			"config.yml": BASELINE_CONFIG_YAML,
+			"models.yml": BASELINE_MODELS_YAML,
+		});
 	});
 });
 
