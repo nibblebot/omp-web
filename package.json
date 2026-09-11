@@ -23,6 +23,8 @@
 		"format": "oxfmt",
 		"format:check": "oxfmt --check",
 		"test": "bun scripts/test.ts",
+		"test:bwrap:acceptance": "bun scripts/test-bwrap-lifecycle.ts",
+		"test:kubernetes:minikube": "bun scripts/test-kubernetes-minikube.ts",
 		"bench": "bun scripts/bench-tests.ts",
 		"tx-fixture": "bun scripts/gen-tx-fixture.ts",
 		"collab": "bun server/collab-cli.ts",

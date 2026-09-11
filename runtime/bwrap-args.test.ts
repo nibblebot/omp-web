@@ -14,6 +14,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ProviderProfile } from "../shared/provider-protocol";
+import { OMP_PROVIDER_PROTO } from "../shared/provider-protocol";
 import {
 	DeniedBindError,
 	assertAllowedSource,
@@ -403,7 +404,7 @@ describe("buildBwrapArgv", () => {
 		expect(env.LANG).toBe("en_US.UTF-8");
 		expect(env.HOME).toBe(home);
 		expect(env.PI_CODING_AGENT_DIR).toBe(join(home, "agent"));
-		expect(env.OMP_PROVIDER_PROTO).toBe("1");
+		expect(env.OMP_PROVIDER_PROTO).toBe(String(OMP_PROVIDER_PROTO));
 	});
 
 	test("OMP_SESSION_CALLBACK_* enrollment keys pass the allowlist", () => {
@@ -432,6 +433,47 @@ describe("buildBwrapArgv", () => {
 		expect(env.OMP_SESSION_CALLBACK_TOKEN).toBe("secret-256-bit-enrollment");
 		expect(env.OMP_SESSION_CALLBACK_PROXY).toBe("http://proxy:3128");
 		expect(env.OMP_SESSION_CALLBACK_ALLOW_HTTP).toBe("1");
+	});
+
+	test("ambient resume-required is dropped; the validated handoff supplies it", () => {
+		const ws = tempRoot("bwrap-ws-");
+		const home = tempRoot("bwrap-home-");
+		const profile = baseProfile([]);
+		const base = {
+			workspaceDir: ws,
+			homeDir: home,
+			profile,
+			workspaceToken: "tok",
+			runtimeBin: "/usr/bin/bun",
+			runtimeEntry: "/usr/bin/bun",
+		};
+		const resumePath = "/workspace/.home/agent/sessions/s1/main.jsonl";
+
+		// The provider process may itself export the required-resume flag (for
+		// example through an operator shell). As an ambient allowlist key it
+		// would force every sandbox to resume a target that may not exist,
+		// failing startup, so it is handoff-only.
+		const ambient = buildBwrapArgv({
+			...base,
+			env: { OMP_SESSION_RESUME: resumePath, OMP_SESSION_RESUME_REQUIRED: "1" },
+		}).env;
+		expect(ambient.OMP_SESSION_RESUME).toBe(resumePath);
+		expect(ambient.OMP_SESSION_RESUME_REQUIRED).toBeUndefined();
+
+		// callbackEnv carries the values validated from the handoff file.
+		const handoff = buildBwrapArgv({
+			...base,
+			env: {},
+			callbackEnv: { OMP_SESSION_RESUME: resumePath, OMP_SESSION_RESUME_REQUIRED: "1" },
+		}).env;
+		expect(handoff.OMP_SESSION_RESUME).toBe(resumePath);
+		expect(handoff.OMP_SESSION_RESUME_REQUIRED).toBe("1");
+
+		// Handoff-only must not un-reserve the key: a profile secretRef still
+		// cannot shadow it.
+		expect(() =>
+			buildBwrapArgv({ ...base, env: {}, secretEnv: { OMP_SESSION_RESUME_REQUIRED: "0" } }),
+		).toThrow();
 	});
 
 	test("stale non-SESSION callback keys never pass the allowlist", () => {

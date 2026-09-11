@@ -181,11 +181,19 @@ function WorkspaceRow(props: {
 				</div>
 				<div class="row-tags">
 					<span class="tag tag-store">fleet-stored</span>
-					<Show when={w().viewOnly}>
+					{/* `orphaned` is the "no live roster entry owns this" flag
+					    (deleted workspace); `viewOnly` is true for every stored
+					    surface by construction, so it can never mean "deleted". */}
+					<Show when={w().orphaned}>
 						<span class="tag tag-warn">deleted workspace — view only</span>
 					</Show>
-					<Show when={w().readOnly && !w().viewOnly}>
-						<span class="tag tag-muted">read only</span>
+					<Show when={!w().orphaned}>
+						<span
+							class="tag tag-muted"
+							title="History is read-only: it is a stored copy of the worker's own logs"
+						>
+							read only
+						</span>
 					</Show>
 				</div>
 			</button>

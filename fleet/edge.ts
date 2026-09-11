@@ -77,7 +77,7 @@
  *     tiny placeholder page when the file is missing.
  *
  * Roster serialization never leaks tokens/endpoints to browsers (see
- * toRosterEntry).
+ * roster-projection.ts).
  */
 
 import { randomUUID } from "node:crypto";
@@ -115,18 +115,15 @@ import type { DaemonConnector } from "./connector";
 import { backoffDelay, daemonHttpBase } from "./connector";
 import { DaemonsAggregator } from "./daemons-aggregator";
 import type { DaemonTransportRegistry, VirtualStreamSink } from "./daemon-transport";
-import {
-	listCloneDaemonSessions,
-	listDaemonSessions,
-	type CloneSessionStore,
-} from "./daemon-sessions";
+import { listCloneDaemonSessions, listDaemonSessions } from "./daemon-sessions";
+import { cloneStoredHistory, type StoredSessionHistoryStore } from "./stored-sessions";
+import { toRosterEntry, type CloneHistoryInfo } from "./roster-projection";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
 import type { FleetEventLog, FleetFacts } from "./events";
 import {
 	createWorktree,
 	deleteWorktree,
-	isPathUnder,
 	listProjectBranches,
 	mergeUnregisteredWorktrees,
 	projectIdForCwd,
@@ -146,6 +143,25 @@ const CLIENT_RECLAIM_MS = 60_000;
 
 /** Roster-dropdown listing size: the last N sessions of a daemon's worktree. */
 const DROPDOWN_SESSION_LIMIT = 10;
+
+/**
+ * Roster enrichment TTL (S2). The clone stored-history read walks the log
+ * store; the roster projects on every broadcast, so the result is memoized for
+ * this window. Store changes invalidate the affected clone and refresh the row
+ * promptly (see STORED_CHANGE_DEBOUNCE_MS), so this window only bounds the cost
+ * of UNRELATED broadcasts (status flips, activity) — it is not the mechanism
+ * that makes a fresh title appear.
+ */
+const CLONE_HISTORY_TTL_MS = 30_000;
+
+/**
+ * Coalescing window for store-change-driven roster refreshes (S2). A streamed
+ * session writes many stored records per second; each store change marks its
+ * clone dirty and schedules ONE refresh at most this far ahead, so a burst
+ * costs one store walk per clone per window — never a walk (or a broadcast)
+ * per record. Event-triggered only: there is no periodic poll.
+ */
+const STORED_CHANGE_DEBOUNCE_MS = 250;
 
 /**
  * Per-daemon realtime activity, derived by the edge from the raw tapped
@@ -415,8 +431,8 @@ export interface EdgeDeps {
 	lifecycle?: EdgeLifecycleHooks;
 	/** Boot-static secret-free provider catalog (P1.3), published on registered_projects. Omitted entirely when not configured. */
 	providerProfiles?: PublicProviderProfile[];
-	/** Fleet transcript store (P3.8) for clone session listing/resume membership. Absent = clone rows list no sessions. */
-	logStore?: CloneSessionStore;
+	/** Fleet transcript store (P3.8) for clone session listing/resume membership and the clone roster title projection. Absent = clone rows list no sessions. */
+	logStore?: EdgeLogStore;
 }
 
 /**
@@ -531,79 +547,14 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
 }
 
 /**
- * Roster serialization: the DaemonEntry fields of a registry entry (never
- * token/endpoint/template/registeredAt) plus a live uptime in seconds since
- * readyAt (or registeredAt when never ready) and pid. `workspaceDir` (the
- * fleet managed-worktree root) computes `managed`: true when the entry's cwd
- * realpath is under it — the roster signal the close-out UI uses to offer
- * worktree deletion.
- *
- * P1.4 clone-workspace projection: the roster surfaces the PUBLIC subset of
- * the fleet-private WorkspaceRecord — kind→workspaceKind,
- * desiredState→desiredState, profileId→providerProfileId — plus the
- * ephemeral lifecycle liveness facts (lifecycleStage/lifecycleError, the
- * same liveness class as status/pid/readyAt). The record's private
- * remainder (providerHandle, cleanup/archive state, clone sources) NEVER
- * crosses this boundary, exactly as RegistryEntry's token/endpoint/template
- * never do: roster frames and registered_projects frames stay free of
- * tokens, private endpoints, provider handles, and secret material. Any
- * future workspace field must be mapped here explicitly (or added to the
- * RegisteredProject shape) before it can appear on the wire.
+ * Fleet store view the edge needs: the clone session listing, the bounded
+ * stored-head read behind the roster title projection, and the store-change
+ * subscription that keeps those titles live (production FleetLogStore). The
+ * hook is REQUIRED so a store that cannot report changes cannot be wired in and
+ * silently leave a clone row stale.
  */
-export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): DaemonEntry {
-	const roster: DaemonEntry = {
-		daemonId: entry.daemonId,
-		name: entry.name,
-		cwd: entry.cwd,
-		project: entry.project,
-		labels: [...entry.labels],
-		mode: entry.mode,
-		status: entry.status,
-		// An asleep daemon has no live process: omit the uptime rather than let
-		// the registeredAt fallback show a growing uptime for a dead daemon.
-		...(entry.status === "asleep"
-			? {}
-			: {
-					uptime: Math.max(
-						0,
-						Math.floor((Date.now() - (entry.readyAt ?? entry.registeredAt)) / 1000),
-					),
-				}),
-	};
-	if (entry.worktreeOf !== undefined) roster.worktreeOf = entry.worktreeOf;
-	if (entry.projectId !== undefined) roster.projectId = entry.projectId;
-	if (workspaceDir !== undefined && workspaceDir !== "" && entry.cwd !== "") {
-		if (isPathUnder(realpathOf(entry.cwd), realpathOf(workspaceDir))) roster.managed = true;
-	}
-	if (entry.branch !== undefined) roster.branch = entry.branch;
-	if (entry.git !== undefined) roster.git = { ...entry.git };
-	if (entry.lastSessionFile !== undefined) roster.lastSessionFile = entry.lastSessionFile;
-	if (entry.sessionTitle !== undefined) roster.sessionTitle = entry.sessionTitle;
-	// The empty flag is meaningful only when true; a false/undefined is the same,
-	// so it stays off the wire (mirrors the title-cleared rule above).
-	if (entry.sessionEmpty === true) roster.sessionEmpty = true;
-	// Liveness facts are meaningless for an asleep daemon; keep them off the
-	// roster even if the registry entry transiently carries stale ones (e.g.
-	// mid-respawn, when the supervisor writes the pid before the child readies).
-	if (entry.status !== "asleep") {
-		if (entry.readyAt !== undefined) roster.readyAt = entry.readyAt;
-		if (entry.pid !== undefined) roster.pid = entry.pid;
-	}
-	if (entry.error !== undefined) roster.error = entry.error;
-	// Clone workspace projection (P1.4): pass through the PUBLIC workspace
-	// fields only — kind/desiredState/profileId from the fleet-private record
-	// (legacy entries carry an in-memory inferred workspace after load), and
-	// the ephemeral lifecycle liveness facts straight off the entry. The
-	// record's providerHandle and everything else private stays off the wire.
-	const workspace = entry.workspace;
-	if (workspace !== undefined) {
-		roster.workspaceKind = workspace.kind;
-		roster.desiredState = workspace.desiredState;
-		if (workspace.profileId !== undefined) roster.providerProfileId = workspace.profileId;
-	}
-	if (entry.lifecycleStage !== undefined) roster.lifecycleStage = entry.lifecycleStage;
-	if (entry.lifecycleError !== undefined) roster.lifecycleError = entry.lifecycleError;
-	return roster;
+export interface EdgeLogStore extends StoredSessionHistoryStore {
+	onStoredChange(listener: (workspaceId: string) => void): () => void;
 }
 
 export class FleetEdge {
@@ -619,8 +570,16 @@ export class FleetEdge {
 	readonly #lifecycle: EdgeLifecycleHooks | undefined;
 	/** Boot-static secret-free provider catalog, published on registered_projects (P1.3). */
 	readonly #providerProfiles: PublicProviderProfile[] | undefined;
-	/** Fleet transcript store for clone session listing/resume membership (P3.8). */
-	readonly #logStore: CloneSessionStore | undefined;
+	/** Fleet transcript store for clone session listing/resume membership (P3.8) and the store-change roster refresh (S2). */
+	readonly #logStore: EdgeLogStore | undefined;
+	/** TTL cache backing the clone stored-history roster titles (S2). */
+	readonly #cloneHistory = new Map<string, { at: number; info: CloneHistoryInfo }>();
+	/** Unsubscribe fn for FleetLogStore.onStoredChange; null while unwired/closed. */
+	#storedUnsubscribe: (() => void) | null = null;
+	/** Clone workspaces whose stored history changed since the last coalesced refresh. */
+	readonly #storedDirty = new Set<string>();
+	/** Pending coalesced roster refresh; null when no store change is queued (no periodic timer). */
+	#storedTimer: Timer | null = null;
 	readonly #backpressureBytes: number;
 	/** Per-client ring byte budget (default SSE_RING_BYTES; finding #5). */
 	readonly #ringBytes: number;
@@ -668,6 +627,54 @@ export class FleetEdge {
 		this.#broadcastRegisteredProjects();
 	};
 
+	/**
+	 * FleetLogStore change (S2): a clone's stored history content moved, so its
+	 * roster title/emptiness may have. Mark the clone dirty and coalesce ONE
+	 * refresh — never project here (a streamed session feeds many records per
+	 * second) and never broadcast unless the derived title/empty actually
+	 * changed. Non-clone workspaces are not roster-enriched, so they are
+	 * ignored.
+	 */
+	readonly #onStoredChange = (workspaceId: string): void => {
+		if (this.#registry.get(workspaceId)?.workspace?.kind !== "clone") return;
+		this.#storedDirty.add(workspaceId);
+		if (this.#storedTimer !== null) return;
+		this.#storedTimer = setTimeout(this.#flushStoredHistory, STORED_CHANGE_DEBOUNCE_MS);
+		this.#storedTimer.unref();
+	};
+
+	/**
+	 * Refresh the dirty clones' memoized stored history and broadcast the roster
+	 * once, ONLY when a row's title/emptiness actually changed (a streamed
+	 * record usually does not change either, and an unchanged row must not
+	 * re-broadcast). Runs at most once per STORED_CHANGE_DEBOUNCE_MS and never
+	 * on a timer of its own.
+	 */
+	readonly #flushStoredHistory = (): void => {
+		this.#storedTimer = null;
+		if (this.#storedDirty.size === 0) return;
+		const dirty = [...this.#storedDirty];
+		this.#storedDirty.clear();
+		let changed = false;
+		for (const workspaceId of dirty) {
+			if (this.#registry.get(workspaceId)?.workspace?.kind !== "clone") continue;
+			const info = cloneStoredHistory(this.#logStore, workspaceId);
+			const cached = this.#cloneHistory.get(workspaceId);
+			if (
+				cached !== undefined &&
+				cached.info.title === info.title &&
+				cached.info.empty === info.empty
+			) {
+				// Same row: refresh the memo window, broadcast nothing.
+				cached.at = Date.now();
+				continue;
+			}
+			this.#cloneHistory.set(workspaceId, { at: Date.now(), info });
+			changed = true;
+		}
+		if (changed) this.#broadcastRoster();
+	};
+
 	constructor(
 		deps: EdgeDeps,
 		opts?: {
@@ -695,6 +702,9 @@ export class FleetEdge {
 		this.#lifecycle = deps.lifecycle;
 		this.#providerProfiles = deps.providerProfiles;
 		this.#logStore = deps.logStore;
+		// Clone roster titles follow the stored history (S2): the store reports
+		// every durable change, so its memoized rows are invalidated promptly.
+		this.#storedUnsubscribe = this.#logStore?.onStoredChange(this.#onStoredChange) ?? null;
 		this.#backpressureBytes = opts?.backpressureBytes ?? SSE_BACKPRESSURE_BYTES;
 		this.#ringBytes = opts?.ringBytes ?? SSE_RING_BYTES;
 		this.#silenceDeadlineMs = opts?.silenceDeadlineMs ?? SSE_SILENCE_DEADLINE_MS;
@@ -793,6 +803,18 @@ export class FleetEdge {
 		}
 		for (const unsubscribe of this.#daemonTaps.values()) unsubscribe();
 		this.#daemonTaps.clear();
+		// Store-change wiring (S2) is ours: drop the listener and any pending
+		// coalesced refresh so a torn-down edge never broadcasts.
+		if (this.#storedUnsubscribe !== null) {
+			this.#storedUnsubscribe();
+			this.#storedUnsubscribe = null;
+		}
+		if (this.#storedTimer !== null) {
+			clearTimeout(this.#storedTimer);
+			this.#storedTimer = null;
+		}
+		this.#storedDirty.clear();
+		this.#cloneHistory.clear();
 		// Edge teardown: release anything the browser-gated watch still holds.
 		this.#stopActivityWatch();
 		this.#stopKeepalive();
@@ -869,9 +891,7 @@ export class FleetEdge {
 							SSE_EVENT_NAME,
 							{
 								type: "roster",
-								daemons: this.#registry
-									.list()
-									.map((entry) => toRosterEntry(entry, this.#config.workspaceDir)),
+								daemons: this.#rosterEntries(),
 							},
 							seq++,
 						),
@@ -2464,10 +2484,46 @@ export class FleetEdge {
 	#broadcastRoster(): void {
 		this.#broadcast({
 			type: "roster",
-			daemons: this.#registry
-				.list()
-				.map((entry) => toRosterEntry(entry, this.#config.workspaceDir)),
+			daemons: this.#rosterEntries(),
 		});
+	}
+
+	/**
+	 * Clone stored-history value for the roster projection (S2). Memoized for
+	 * {@link CLONE_HISTORY_TTL_MS}: the projection runs on EVERY roster
+	 * broadcast (registry change, activity, status flips) while the read behind
+	 * `cloneStoredHistory` walks `logs/<workspaceId>` and stats each session
+	 * subtree. Store changes bypass the window through
+	 * {@link #flushStoredHistory}; the TTL only caps unrelated broadcasts.
+	 * Display enrichment only — the registry stays the truth.
+	 */
+	readonly #cloneHistoryFor = (daemonId: string): CloneHistoryInfo => {
+		const now = Date.now();
+		const cached = this.#cloneHistory.get(daemonId);
+		if (cached !== undefined && now - cached.at < CLONE_HISTORY_TTL_MS) return cached.info;
+		const info = cloneStoredHistory(this.#logStore, daemonId);
+		this.#cloneHistory.set(daemonId, { at: now, info });
+		return info;
+	};
+
+	/** Roster projection: registry entries + clone stored-history enrichment. */
+	#rosterEntries(): DaemonEntry[] {
+		// Drop cache keys for clones that left the roster so the TTL map tracks
+		// the live roster, not process history.
+		for (const key of this.#cloneHistory.keys()) {
+			if (this.#registry.get(key) === undefined) this.#cloneHistory.delete(key);
+		}
+		const now = Date.now();
+		return this.#registry.list().map((entry) =>
+			toRosterEntry(
+				entry,
+				this.#config.workspaceDir,
+				// Only clones project from the store; other kinds keep their
+				// supervisor-probed title/empty fields.
+				entry.workspace?.kind === "clone" ? this.#cloneHistoryFor(entry.daemonId) : undefined,
+				now,
+			),
+		);
 	}
 
 	/** Broadcast the current registered-project set to every edge stream. */

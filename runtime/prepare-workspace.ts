@@ -19,9 +19,17 @@
  * mutates git identity or config — the operator's own git config applies.
  */
 
-import { closeSync, existsSync, fsyncSync, openSync, renameSync, writeSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	fsyncSync,
+	openSync,
+	renameSync,
+	writeSync,
+	type Stats,
+} from "node:fs";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type { Subprocess } from "bun";
 import { seedSandboxBaseline, type BaselineSeedResult } from "./sandbox-baseline";
@@ -149,16 +157,37 @@ export function deriveWorkspaceBranch(workspaceId: string): string {
 	return derived === "" || derived === "head" ? "workspace" : derived;
 }
 
-/** Validates a caller-supplied branch name (single ref name, no traversal). */
-function validateBranch(branch: string): string {
-	if (
-		!/^[A-Za-z0-9._/-]+$/.test(branch) ||
+/** Git ref characters outside this set are rejected outright by git. */
+const REF_CHARS_RE = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * Validates one branch/ref name against the `git check-ref-format --branch`
+ * rules the fleet depends on, and returns it unchanged. This is the single
+ * reference-validation entry point: admission calls it before registering a
+ * Kubernetes clone and preparation calls it before persisting a marker, so
+ * both reject exactly the same names.
+ *
+ * Rejected: an empty name, characters outside `[A-Za-z0-9._/-]`, a leading
+ * `-`, `..` anywhere, and any component that is empty (`foo//bar`), starts
+ * with `.` (`foo/.bar`), ends with `.` (`foo.`), or ends with `.lock`
+ * (`foo.lock/bar`).
+ */
+export function validateWorkspaceRef(branch: string): string {
+	const invalid =
+		branch === "" ||
+		!REF_CHARS_RE.test(branch) ||
 		branch.startsWith("-") ||
-		branch.startsWith(".") ||
 		branch.includes("..") ||
-		branch.endsWith("/") ||
-		branch.endsWith(".lock")
-	) {
+		branch
+			.split("/")
+			.some(
+				(component) =>
+					component === "" ||
+					component.startsWith(".") ||
+					component.endsWith(".") ||
+					component.endsWith(".lock"),
+			);
+	if (invalid) {
 		throw new PrepareWorkspaceError(
 			"invalid_request",
 			`invalid branch name: ${JSON.stringify(branch)}`,
@@ -317,8 +346,22 @@ function asWorkspaceSource(value: unknown): WorkspaceSource | null {
 type MarkerRead =
 	| { state: "absent" }
 	| { state: "corrupt" }
+	| { state: "unreadable"; reason: string }
 	| { state: "pin"; pin: WorkspacePin }
 	| { state: "marker"; marker: WorkspaceInitMarker };
+
+/** Errno code of a thrown fs error, or "" when absent. */
+function fsErrorCode(err: unknown): string {
+	return typeof err === "object" && err !== null && "code" in err && typeof err.code === "string"
+		? err.code
+		: "";
+}
+
+/** Actionable reason for an fs error: its errno code, else its text. */
+function fsErrorReason(err: unknown): string {
+	const code = fsErrorCode(err);
+	return code === "" ? String(err) : code;
+}
 
 /**
  * Reads the init marker. A file with pin fields but no `initializedAt`/
@@ -326,11 +369,23 @@ type MarkerRead =
  * unparseable or shape-invalid is `corrupt` (never silently reset).
  */
 async function readMarker(markerPath: string): Promise<MarkerRead> {
+	// Only `lstat` ENOENT proves the path is genuinely missing. Everything
+	// else is `unreadable`, including a symlink (even dangling), a directory,
+	// and any failure to read a path whose presence was confirmed — no
+	// caller may treat those as an empty volume and re-clone over it.
+	let stats: Stats;
+	try {
+		stats = await lstat(markerPath);
+	} catch (err) {
+		if (fsErrorCode(err) === "ENOENT") return { state: "absent" };
+		return { state: "unreadable", reason: fsErrorReason(err) };
+	}
+	if (!stats.isFile()) return { state: "unreadable", reason: "not a regular file" };
 	let raw: string;
 	try {
 		raw = await readFile(markerPath, "utf8");
-	} catch {
-		return { state: "absent" };
+	} catch (err) {
+		return { state: "unreadable", reason: fsErrorReason(err) };
 	}
 	let value: unknown;
 	try {
@@ -371,6 +426,29 @@ async function readMarker(markerPath: string): Promise<MarkerRead> {
 		state: "marker",
 		marker: { workspaceId, source, resolvedCommit, branch, initializedAt, prepVersion },
 	};
+}
+
+/**
+ * Reads the verified init marker under `workspaceRoot` WITHOUT touching the
+ * checkout, for provider-side (in-pod) callers. `null` means nothing verified
+ * yet: either no marker at all or the pin left by an interrupted first
+ * preparation, both of which `prepareWorkspace` resumes. A marker that is
+ * present but unreadable throws `conflict`: an already initialized volume is
+ * never silently re-cloned over (its later commits and working files must
+ * survive), so the caller must repair or remove the marker manually.
+ */
+export async function readWorkspaceInitMarker(
+	workspaceRoot: string,
+): Promise<WorkspaceInitMarker | null> {
+	const markerPath = join(workspaceRoot, MARKER_NAME);
+	const read = await readMarker(markerPath);
+	if (read.state === "marker") return read.marker;
+	if (read.state === "absent" || read.state === "pin") return null;
+	const detail = read.state === "unreadable" ? `cannot be read (${read.reason})` : "is unparseable";
+	throw new PrepareWorkspaceError(
+		"conflict",
+		`${markerPath} exists but ${detail}; refusing to reset this workspace volume. Repair or remove the marker manually`,
+	);
 }
 
 /** Human-readable source for messages. */
@@ -539,7 +617,9 @@ async function resolvePin(
 				`local source ${src} does not offer ${revision ?? "HEAD"} to pin: ${lastLine(probe.stderr || probe.stdout)}`,
 			);
 		}
-		return probe.stdout.trim();
+		// git prints lowercase hex; normalize anyway so the persisted pin is
+		// byte-identical to the marker's COMMIT_RE-validated form.
+		return probe.stdout.trim().toLowerCase();
 	}
 	const remote = sourceLocation(source);
 	const listing = await runGit(["ls-remote", remote], workspaceRoot, signal);
@@ -550,7 +630,7 @@ async function resolvePin(
 			`remote source ${remote} is unreachable: ${lastLine(listing.stderr || listing.stdout)}`,
 		);
 	}
-	return pickRemoteCommit(parseLsRemote(listing.stdout), remote, revision);
+	return pickRemoteCommit(parseLsRemote(listing.stdout), remote, revision).toLowerCase();
 }
 
 /**
@@ -700,10 +780,13 @@ export interface ResolveWorkspacePinOptions {
  * Resolve a requested revision (or the source HEAD) to a full commit id
  * WITHOUT modifying anything: local sources `rev-parse --verify
  * <rev>^{commit}`, remote sources resolve against advertised refs only and
- * refuse an unoffered commit. This is the fleet-owned pin resolution —
- * the k8s provider never resolves; `createClone` calls this ONCE for every
- * profile and persists the full commit as `pinnedRevision` before any
- * provider-side init, so in-pod preparation always reuses the same pin.
+ * refuse an unoffered commit. This is the fleet-owned pin resolution, the
+ * single reference-validation and pin-resolution entry point:
+ *  - `createClone` calls it ONCE for every profile and persists the full
+ *    lowercase commit as `pinnedRevision` before any provider-side init, so
+ *    in-pod preparation always reuses the same pin;
+ *  - `prepareWorkspace` calls it for the first preparation of a volume;
+ *  - the k8s provider never resolves.
  *
  * Throws {@link PrepareWorkspaceError} with the frozen ledger codes
  * (`invalid_request` for malformed revisions, `unavailable` when the source
@@ -756,8 +839,8 @@ export async function prepareWorkspace(
 	const source = normalizeSource(options.source);
 	const branch =
 		options.branch === undefined
-			? deriveWorkspaceBranch(workspaceId)
-			: validateBranch(options.branch);
+			? validateWorkspaceRef(deriveWorkspaceBranch(workspaceId))
+			: validateWorkspaceRef(options.branch);
 	const revision = normalizeRevision(options.revision);
 	const workspaceRoot = options.workspaceRoot;
 	const markerPath = join(workspaceRoot, MARKER_NAME);
@@ -784,6 +867,15 @@ export async function prepareWorkspace(
 	}
 
 	const read = await readMarker(markerPath);
+
+	if (read.state === "unreadable") {
+		// A present marker that cannot be read may be the only record of an
+		// initialized volume: never treat it as absent and re-clone.
+		throw new PrepareWorkspaceError(
+			"conflict",
+			`${markerPath} exists but cannot be read (${read.reason}); refusing to reset this workspace volume. Repair or remove the marker manually`,
+		);
+	}
 
 	if (read.state === "corrupt") {
 		// Unknown state with an existing checkout must not be destroyed.
@@ -839,7 +931,12 @@ export async function prepareWorkspace(
 		pin = read.pin.resolvedCommit;
 		await assertPinSatisfiesRevision(source, pin, revision, workspaceRoot, options.signal);
 	} else {
-		pin = await resolvePin(source, revision, workspaceRoot, options.signal);
+		// One resolution, through the exported fleet entry point, of the full
+		// lowercase commit id persisted below before anything is cloned.
+		pin = await resolveWorkspacePin(source, revision, {
+			cwd: workspaceRoot,
+			signal: options.signal,
+		});
 	}
 
 	// The source must still offer the pin before anything is cloned.

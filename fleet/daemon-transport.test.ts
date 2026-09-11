@@ -3,7 +3,9 @@
  * REAL DaemonTransportRegistry: either-half close vs pair observation,
  * reconnect/renewal resume inside the replay ring without duplicate
  * acceptance, stale/revoked-generation rejection, bounded + isolated virtual
- * streams, bounded down delivery, and bulk multi-part sequencing. Every
+ * streams, bounded down delivery, and bulk multi-part sequencing (including
+ * cancellation release, per-record upload serialization, and correlated
+ * download-failure controls). Every
  * scenario drives the actual registry over real loopback HTTP with controlled
  * daemon halves (one long-lived NDJSON up POST + one long-lived SSE down GET)
  * — no mock transport, no source assertions. Each test owns its
@@ -35,6 +37,7 @@ import {
 	BULK_FINAL_HEADER,
 	BULK_PART_HEADER,
 	CALLBACK_BULK_PATH_PREFIX,
+	CALLBACK_CONTROL_STREAM_ID,
 	CALLBACK_DOWN_PATH,
 	CALLBACK_UP_PATH,
 	encodeNdjsonLine,
@@ -295,6 +298,96 @@ function openSlowDown(
 			}
 		},
 	};
+}
+
+/** Bulk POST to one correlation, with the part-sequence headers the lane reads. */
+function postBulkPart(
+	fixture: Fixture,
+	correlationId: string,
+	headers: Record<string, string>,
+	body: string | ReadableStream<Uint8Array>,
+	part?: number,
+	final?: boolean,
+): Promise<Response> {
+	return fetch(`${fixture.url}${CALLBACK_BULK_PATH_PREFIX}${correlationId}`, {
+		method: "POST",
+		headers: {
+			...headers,
+			...(part !== undefined ? { [BULK_PART_HEADER]: String(part) } : {}),
+			...(final !== undefined ? { [BULK_FINAL_HEADER]: final ? "1" : "0" } : {}),
+		},
+		body,
+	});
+}
+
+/** A bulk part body the test drives. `early` is handed over on the request
+ * pump's first read; `delivered` resolves once that chunk is on the wire and
+ * the next read is outstanding (the receive loop's parked point). chunk/close
+ * append late bytes after a cancel. */
+interface StalledBulkBody {
+	body: ReadableStream<Uint8Array>;
+	started: Promise<void>;
+	delivered: Promise<void>;
+	chunk(text: string): void;
+	close(): void;
+}
+
+function stalledBulkBody(early: string): StalledBulkBody {
+	const encoder = new TextEncoder();
+	let controller!: ReadableStreamDefaultController<Uint8Array>;
+	let reads = 0;
+	const first = Promise.withResolvers<void>();
+	const next = Promise.withResolvers<void>();
+	const gate = Promise.withResolvers<void>();
+	// highWaterMark 0: pull fires only for an outstanding read, so the pull
+	// count tracks how many chunks the request has actually taken.
+	const body = new ReadableStream<Uint8Array>(
+		{
+			start: (c) => {
+				controller = c;
+			},
+			pull: () => {
+				reads += 1;
+				if (reads === 1) {
+					first.resolve();
+					controller.enqueue(encoder.encode(early));
+					return;
+				}
+				next.resolve();
+				return gate.promise;
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+	return {
+		body,
+		started: first.promise,
+		delivered: next.promise,
+		chunk: (text) => {
+			try {
+				controller.enqueue(encoder.encode(text));
+			} catch {
+				// The request was aborted; nothing is left to append to.
+			}
+		},
+		close: () => {
+			try {
+				controller.close();
+			} catch {
+				// Already ended by the abort.
+			}
+		},
+	};
+}
+
+/** Fail the test if `promise` does not settle within `ms` (promptness bound). */
+function within<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+	return Promise.race([
+		promise,
+		sleep(ms).then(() => {
+			throw new Error(`timed out waiting for ${label} (${ms}ms)`);
+		}),
+	]);
 }
 
 describe("daemon transport controlled pairs", () => {
@@ -872,6 +965,164 @@ describe("daemon transport controlled pairs", () => {
 			expect(seqs.every((s) => s <= sentSeqs.at(-1)!)).toBe(true);
 			redial.drop();
 		} finally {
+			fixture.stop();
+		}
+	});
+
+	test("cancelling a correlation aborts a stalled capture upload: no 200 receipt and no late bytes", async () => {
+		const fixture = serve(new DaemonTransportRegistry());
+		const ws = "ws-bulk-cancel-live";
+		const cred = randomBytes(32).toString("hex");
+		fixture.registry.enrollWorkspace(ws, 1, cred);
+		const H = wireHeaders(ws, 1, randomUUID(), cred);
+		try {
+			const capture = fixture.registry.createBulkCorrelation(ws, { capture: true });
+			const stalled = stalledBulkBody("early ");
+			const post = postBulkPart(fixture, capture.correlationId, H, stalled.body, 0, true);
+			// The request pump is running and its second read is outstanding,
+			// so the receive loop owns this record and is parked on the body.
+			await within(stalled.started, 2000, "capture POST pump started");
+			await within(stalled.delivered, 2000, "first capture chunk delivered");
+			// Settle: the loopback handler must have admitted the request and
+			// parked on the body before the cancel lands (the cancel must race
+			// an OWNED receive loop, not an unarrived request).
+			await sleep(50);
+
+			// The quiesce/lifecycle timeout releases the capture while its body
+			// is still open: done settles failed at once, not at the 10m TTL.
+			fixture.registry.cancelBulkCorrelation(capture.correlationId);
+			const result = await within(capture.done, 2000, "cancelled correlation settles");
+			expect(result.state).toBe("failed");
+			expect(result.data).toBeUndefined();
+			expect(result.bytes).toBe(0);
+
+			// A late chunk after the cancel must not resurrect the upload: the
+			// request either settles typed non-200, fenced as released (never
+			// the unknown-id rejection of a request the loop never owned), or
+			// the aborted socket drops it — never a 200 receipt.
+			stalled.chunk("late");
+			stalled.close();
+			const response = await post.catch(() => null);
+			if (response !== null) {
+				expect(response.status).not.toBe(200);
+				const body = (await response.json()) as { message?: unknown };
+				expect(String(body.message ?? "")).toMatch(/released|cancelled|aborted/);
+			}
+		} finally {
+			fixture.stop();
+		}
+	});
+
+	test("a concurrent part POST cannot join an in-flight upload and bypass the part offsets", async () => {
+		const fixture = serve(new DaemonTransportRegistry());
+		const ws = "ws-bulk-serialized";
+		const cred = randomBytes(32).toString("hex");
+		fixture.registry.enrollWorkspace(ws, 1, cred);
+		const H = wireHeaders(ws, 1, randomUUID(), cred);
+		try {
+			const capture = fixture.registry.createBulkCorrelation(ws, { capture: true });
+			const stalled = stalledBulkBody("first");
+			const admitted = postBulkPart(fixture, capture.correlationId, H, stalled.body, 0, true);
+			await within(stalled.started, 2000, "admitted part POST started");
+			await within(stalled.delivered, 2000, "admitted part chunk delivered");
+			// Settle: the admitted POST must own the record before the racing
+			// POST arrives, or the race would test nothing.
+			await sleep(50);
+
+			// A second part 0 would observe the same nextPart the admitted POST
+			// holds; it must be refused rather than opened as a second receive
+			// loop over the same record.
+			const racing = await postBulkPart(fixture, capture.correlationId, H, "second", 0, true);
+			expect(racing.status).toBe(409);
+			expect(await racing.json()).toMatchObject({ error: "conflict" });
+
+			// The admitted POST still completes alone with exactly its bytes.
+			stalled.close();
+			const response = await admitted;
+			expect(response.status).toBe(200);
+			const result = await within(capture.done, 2000, "single-owner transfer settles");
+			expect(result.state).toBe("received");
+			expect(result.bytes).toBe("first".length);
+			expect(Buffer.from(result.data as Uint8Array).toString("utf8")).toBe("first");
+		} finally {
+			fixture.stop();
+		}
+	});
+
+	test("a daemon download_bulk_failed control settles its own workspace's capture promptly and never crosses workspaces", async () => {
+		const fixture = serve(new DaemonTransportRegistry());
+		const ws = "ws-download-fail";
+		const wsOther = "ws-download-fail-other";
+		const cred = randomBytes(32).toString("hex");
+		fixture.registry.enrollWorkspace(ws, 1, cred);
+		fixture.registry.enrollWorkspace(wsOther, 1, cred);
+		const up = openUp(fixture, ws, 1, randomUUID(), cred);
+		const seen: CallbackEnvelope[] = [];
+		const unsubscribe = fixture.registry.onDaemonEnvelope(ws, (env) => seen.push(env));
+		try {
+			// A control naming ANOTHER workspace's capture is ignored: ownership
+			// is the authenticated up connection, never the payload.
+			const foreign = fixture.registry.createBulkCorrelation(wsOther, { capture: true });
+			up.push(CALLBACK_CONTROL_STREAM_ID, "control", {
+				type: "download_bulk_failed",
+				correlationId: foreign.correlationId,
+				error: { code: "not_found", message: "not yours to fail" },
+			});
+			// The tap runs after the bulk-failure consumer, so observing the
+			// control proves it was already dispatched (and ignored).
+			await waitFor(
+				() => (seen.length > 0 ? true : undefined),
+				2000,
+				"foreign failure control dispatched",
+			);
+			const foreignPost = await postBulkPart(
+				fixture,
+				foreign.correlationId,
+				wireHeaders(wsOther, 1, randomUUID(), cred),
+				"legit",
+				0,
+				true,
+			);
+			expect(foreignPost.status).toBe(200);
+			const foreignResult = await within(foreign.done, 2000, "foreign capture settles received");
+			expect(foreignResult.state).toBe("received");
+
+			// The owning workspace's failure control settles its capture with
+			// the daemon's typed reason, immediately — no 10-minute TTL wait.
+			const capture = fixture.registry.createBulkCorrelation(ws, { capture: true });
+			up.push(CALLBACK_CONTROL_STREAM_ID, "control", {
+				type: "download_bulk_failed",
+				correlationId: capture.correlationId,
+				error: { code: "not_found", message: "download of /missing failed: no such file" },
+			});
+			const result = await within(capture.done, 2000, "correlated failure settles promptly");
+			expect(result.state).toBe("failed");
+			expect(result.data).toBeUndefined();
+			expect(result.error).toContain("not_found");
+			expect(result.error).toContain("no such file");
+
+			// Unknown and malformed controls are inert (no cross-cancel, no
+			// throw): a later correlated failure still lands typed.
+			up.push(CALLBACK_CONTROL_STREAM_ID, "control", {
+				type: "download_bulk_failed",
+				correlationId: "no-such-correlation",
+				error: { code: "not_found", message: "ignored" },
+			});
+			up.push(CALLBACK_CONTROL_STREAM_ID, "control", { type: "download_bulk_failed" });
+			const last = fixture.registry.createBulkCorrelation(ws, { capture: true });
+			up.push(CALLBACK_CONTROL_STREAM_ID, "control", {
+				type: "download_bulk_failed",
+				correlationId: last.correlationId,
+				error: { code: "unavailable", message: "bulk upload broke mid-transfer" },
+			});
+			const lastResult = await within(last.done, 2000, "malformed controls are inert");
+			expect(lastResult.state).toBe("failed");
+			expect(lastResult.error).toContain("unavailable");
+			expect(lastResult.error).toContain("bulk upload broke mid-transfer");
+
+			expect((await up.end()).status).toBe(200);
+		} finally {
+			unsubscribe();
 			fixture.stop();
 		}
 	});

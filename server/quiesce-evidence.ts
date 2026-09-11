@@ -1,18 +1,19 @@
 import { createHash } from "node:crypto";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { callbackError } from "../shared/callback-protocol";
-import type { CallbackErrorCode } from "../shared/callback-protocol";
-import type { CloneGitEvidence, FlushBoundary } from "../shared/callback-protocol";
+import { join, relative, sep } from "node:path";
+import { callbackError, QUIESCE_EVIDENCE_MAX_BYTES } from "../shared/callback-protocol";
+import type { CloneGitEvidence, FlushBoundary, QuiesceEvidence } from "../shared/callback-protocol";
 import type { ManifestFile, ManifestFileKind } from "../shared/archive-manifest";
 import { planSessionExport, verifyJsonlStructure } from "../runtime/export-sessions";
+import type { SessionExportPlan } from "../runtime/export-sessions";
 import type { SessionLogTailer } from "./log-tailer";
 
 /**
- * Daemon-side quiesce evidence helpers (P4.5/P7.4). All functions are
- * synchronous I/O on the canonical agent sessions tree + checkout git state —
- * invoked only after the writer admission barrier is up and the session
- * cascade is disposed, so no writer can mutate the tree mid-verification.
+ * Daemon-side quiesce evidence helpers (P4.5/P3.5). All functions are
+ * synchronous I/O on the canonical agent sessions tree — invoked only after
+ * the writer admission barrier is up and the session cascade is disposed, so
+ * no writer can mutate the tree mid-verification. Git evidence lives in
+ * ./git-preservation.
  */
 
 /** Stat + sha256 one lineage file for the manifest. */
@@ -120,208 +121,63 @@ export function boundaryAcked(
 	return true;
 }
 
-// ── Git evidence (P7.4) ─────────────────────────────────────────────────────
+// ── Quiesce evidence document (P3.5) ────────────────────────────────────────
 
-interface GitResult {
-	exitCode: number;
-	stdout: string;
-	stderr: string;
-}
-
-async function runGit(args: string[], cwd: string): Promise<GitResult> {
-	try {
-		const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
-		const [stdout, stderr] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-		]);
-		const exitCode = await proc.exited;
-		return { exitCode, stdout, stderr };
-	} catch (cause) {
-		return {
-			exitCode: -1,
-			stdout: "",
-			stderr: cause instanceof Error ? cause.message : String(cause),
-		};
-	}
-}
-
-function parsePorcelain(stdout: string): {
-	added: number;
-	modified: number;
-	deleted: number;
-	untracked: number;
-} {
-	let added = 0;
-	let modified = 0;
-	let deleted = 0;
-	let untracked = 0;
-	for (const line of stdout.split("\n")) {
-		if (line.length === 0) continue;
-		const x = line[0] ?? " ";
-		const y = line[1] ?? " ";
-		if (x === "?" || y === "?") untracked++;
-		else if (x === "A" || y === "A") added++;
-		else if (x === "D" || y === "D") deleted++;
-		else if (x !== " " || y !== " ") modified++;
-	}
-	return { added, modified, deleted, untracked };
+/** Inputs for the single JSON document uploaded over the bulk channel. */
+export interface QuiesceEvidenceParts {
+	requestId: string;
+	/** POSIX relpath of the main transcript; null only when none exists anywhere. */
+	mainSessionRelpath: string | null;
+	boundary: FlushBoundary;
+	manifestFiles: ManifestFile[];
+	provenance: QuiesceEvidence["provenance"];
+	writers: QuiesceEvidence["writers"];
+	git: CloneGitEvidence;
 }
 
 /**
- * Collect final Git evidence with writers stopped. Fails closed: any probe
- * failure (git missing, not a repo, fetch failure, remote unreachable)
- * returns ok:false with a ledger `conflict` code — deletion is blocked and
- * the workspace + volume + fleet store are retained.
+ * Assemble and serialize the evidence document, enforcing the document bound
+ * (16 MiB), which is itself below the bulk channel's 64 MiB cap. A document
+ * over the bound is a typed invalid_request, never a truncated upload.
  */
-export async function collectGitEvidence(checkoutDir: string): Promise<{
-	ok: boolean;
-	evidence?: CloneGitEvidence;
-	error?: { code: CallbackErrorCode; message: string };
-}> {
-	const fail = (
-		message: string,
-	): { ok: false; error: { code: CallbackErrorCode; message: string } } => ({
-		ok: false,
-		error: { code: "conflict", message },
-	});
-	try {
-		const head = await runGit(["rev-parse", "HEAD"], checkoutDir);
-		if (head.exitCode !== 0)
-			return fail(`cannot resolve HEAD: ${head.stderr.trim() || `git exited ${head.exitCode}`}`);
-		const branchResult = await runGit(["symbolic-ref", "--short", "HEAD"], checkoutDir);
-		const branch =
-			branchResult.exitCode === 0 && branchResult.stdout.trim().length > 0
-				? branchResult.stdout.trim()
-				: null;
-
-		const status = await runGit(["status", "--porcelain=v1"], checkoutDir);
-		if (status.exitCode !== 0)
-			return fail(`git status failed: ${status.stderr.trim() || `git exited ${status.exitCode}`}`);
-		const dirtyCounts = parsePorcelain(status.stdout);
-		const stashResult = await runGit(["stash", "list"], checkoutDir);
-		const stashes =
-			stashResult.exitCode === 0
-				? stashResult.stdout
-						.trim()
-						.split("\n")
-						.filter((l) => l.length > 0).length
-				: 0;
-
-		const remoteResult = await runGit(["remote", "-v"], checkoutDir);
-		let remote: { name: string; url: string } | null = null;
-		for (const line of remoteResult.stdout.split("\n")) {
-			const m = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/.exec(line);
-			if (m && m[3] === "fetch") {
-				remote = { name: m[1]!, url: m[2]! };
-				break;
-			}
-		}
-
-		const dirty =
-			dirtyCounts.added > 0 ||
-			dirtyCounts.modified > 0 ||
-			dirtyCounts.deleted > 0 ||
-			dirtyCounts.untracked > 0;
-		const refResult = await runGit(
-			["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags"],
-			checkoutDir,
+export function serializeQuiesceEvidence(parts: QuiesceEvidenceParts): string {
+	const evidence: QuiesceEvidence = { ...parts };
+	const document = JSON.stringify(evidence);
+	const bytes = Buffer.byteLength(document, "utf8");
+	if (bytes > QUIESCE_EVIDENCE_MAX_BYTES) {
+		throw callbackError(
+			"invalid_request",
+			`quiesce evidence is ${bytes} bytes, over the ${QUIESCE_EVIDENCE_MAX_BYTES}-byte document bound (bulk cap is 64 MiB)`,
 		);
-		if (refResult.exitCode !== 0) return fail(`cannot list refs: ${refResult.stderr.trim()}`);
-		const localRefs: Array<{ name: string; tip: string }> = [];
-		for (const line of refResult.stdout.split("\n")) {
-			const sp = line.indexOf(" ");
-			if (sp < 0) continue;
-			localRefs.push({ name: line.slice(0, sp), tip: line.slice(sp + 1).trim() });
-		}
-
-		if (dirty || stashes > 0) {
-			return {
-				ok: true,
-				evidence: {
-					status: "dirty",
-					head: head.stdout.trim(),
-					branch,
-					dirty: dirtyCounts,
-					stashes,
-					remote,
-				},
-			};
-		}
-		if (remote === null) {
-			if (localRefs.some((r) => r.name.startsWith("refs/heads/"))) {
-				return fail("no configured remote: local branch history cannot be verified preserved");
-			}
-			// No branches (fresh unborn/empty checkout) and no remote: nothing
-			// to preserve; clean is provable.
-			return {
-				ok: true,
-				evidence: {
-					status: "clean",
-					head: head.stdout.trim(),
-					branch,
-					dirty: dirtyCounts,
-					stashes: 0,
-					remote: null,
-					refs: [],
-				},
-			};
-		}
-
-		// Preservation on the configured remote: fetch, then prove every local
-		// tip is an ancestor of its remote counterpart (nothing unpushed).
-		const fetch = await runGit(["fetch", remote.name], checkoutDir);
-		if (fetch.exitCode !== 0)
-			return fail(
-				`cannot fetch ${remote.name}: ${fetch.stderr.trim() || `git exited ${fetch.exitCode}`}`,
-			);
-		const preserved: Array<{ name: string; tip: string; preserved: boolean }> = [];
-		for (const ref of localRefs) {
-			const candidate = ref.name.startsWith("refs/heads/")
-				? `refs/remotes/${remote.name}/${ref.name.slice("refs/heads/".length)}`
-				: `refs/remotes/${remote.name}/tags/${ref.name.slice("refs/tags/".length)}`;
-			const remoteRef = await runGit(
-				["rev-parse", "--verify", `${candidate}^{commit}`],
-				checkoutDir,
-			);
-			if (remoteRef.exitCode !== 0) {
-				preserved.push({ name: ref.name, tip: ref.tip, preserved: false });
-				continue;
-			}
-			const ancestor = await runGit(
-				["merge-base", "--is-ancestor", ref.tip, remoteRef.stdout.trim()],
-				checkoutDir,
-			);
-			preserved.push({ name: ref.name, tip: ref.tip, preserved: ancestor.exitCode === 0 });
-		}
-		const unpreserved = preserved.filter((p) => !p.preserved);
-		if (unpreserved.length > 0) {
-			return {
-				ok: true,
-				evidence: {
-					status: "dirty",
-					head: head.stdout.trim(),
-					branch,
-					dirty: dirtyCounts,
-					stashes,
-					remote,
-					refs: preserved,
-				},
-			};
-		}
-		return {
-			ok: true,
-			evidence: {
-				status: "clean",
-				head: head.stdout.trim(),
-				branch,
-				dirty: dirtyCounts,
-				stashes,
-				remote,
-				refs: preserved,
-			},
-		};
-	} catch (cause) {
-		return fail(cause instanceof Error ? cause.message : String(cause));
 	}
+	return document;
+}
+
+/**
+ * POSIX relpath of the boot main transcript under the agent sessions dir, or
+ * null only when the volume holds no main transcript at all. `mainSessionFile`
+ * is the boot session's absolute file (null before it is known); when it names
+ * a declared main that path wins, otherwise the planner's single/lowest-sorted
+ * main is used so a materialized main is never reported as absent.
+ */
+export function mainSessionRelpathFor(
+	sessionsDir: string,
+	mainSessionFile: string | null,
+): string | null {
+	let plan: SessionExportPlan;
+	try {
+		plan = planSessionExport(sessionsDir);
+	} catch {
+		return null;
+	}
+	const mains = [...plan.mainSessions.keys()].sort();
+	if (mains.length === 0) return null;
+	if (mainSessionFile !== null) {
+		const rel = relative(sessionsDir, mainSessionFile);
+		const normalized = rel.split(sep).join("/");
+		if (!rel.startsWith("..") && !rel.startsWith(sep) && plan.mainSessions.has(normalized)) {
+			return normalized;
+		}
+	}
+	return mains[0]!;
 }

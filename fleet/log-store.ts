@@ -196,6 +196,26 @@ export interface StoredWorkspaceInfo {
 	readOnly: boolean;
 }
 
+/**
+ * Read-only durable state of one stored log stream, keyed by the frozen
+ * tailer id `logs/<sessionId>/<relpath>`. This is the store-side half of the
+ * quiesce receipt check: the daemon's final flush boundary (FlushBoundary)
+ * must name exactly these streams at exactly these generations/offsets.
+ */
+export interface StoredStreamEvidence {
+	/** `logs/<sessionId>/<relpath>` — the daemon tailer's stream id. */
+	streamId: string;
+	sessionId: string;
+	/** POSIX relpath inside the session subtree. */
+	relpath: string;
+	/** Last chunk generation applied; an atomic rewrite bumps it. */
+	generation: number;
+	/** Durable append offset recorded in the sidecar (equals the file's size). */
+	ackedBytes: number;
+	/** True when the daemon's final chunk for this stream carried eof. */
+	eof: boolean;
+}
+
 const INDEX_NAME = "index.json";
 const TMP_SUFFIX = ".tmp";
 /**
@@ -520,6 +540,8 @@ export class FleetLogStore {
 
 	#sessions = new Map<string, Map<string, SessionState>>();
 	#readOnly = new Set<string>();
+	/** Durable-change subscribers (onStoredChange); process-local, unordered. */
+	#storedChangeListeners = new Set<(workspaceId: string) => void>();
 
 	constructor(options: { rootDir: string }) {
 		this.rootDir = options.rootDir;
@@ -562,6 +584,9 @@ export class FleetLogStore {
 		const session = this.#ensureSession(workspaceId, sessionId);
 		const file = join(session.dir, cleanRelpath);
 
+		// Set when this ingest durably changed stored bytes (generation
+		// truncate or append), so subscribers are notified exactly once.
+		let mutated = false;
 		let stream = session.streams.get(cleanRelpath);
 		if (!stream) {
 			stream = { generation: chunk.generation, ackedOffset: 0, eof: false };
@@ -577,6 +602,7 @@ export class FleetLogStore {
 			stream.ackedOffset = 0;
 			stream.eof = false;
 			this.#persistIndex(session);
+			mutated = true;
 		}
 
 		// The live file is authoritative for the durable length; heals any
@@ -595,6 +621,7 @@ export class FleetLogStore {
 		if (existed && diskSize !== stream.ackedOffset) stream.ackedOffset = diskSize;
 
 		if (chunk.offset > stream.ackedOffset) {
+			if (mutated) this.#notifyStoredChange(workspaceId);
 			return { status: "gap", from: stream.ackedOffset, to: chunk.offset };
 		}
 		if (chunk.offset < stream.ackedOffset) {
@@ -605,7 +632,10 @@ export class FleetLogStore {
 			// ackedOffset. Same generation means the same file identity, so the
 			// suffix is exactly the file's continuation and is appended.
 			const skip = stream.ackedOffset - chunk.offset;
-			if (bytes.length <= skip) return { status: "duplicate" };
+			if (bytes.length <= skip) {
+				if (mutated) this.#notifyStoredChange(workspaceId);
+				return { status: "duplicate" };
+			}
 			bytes = Buffer.from(bytes.subarray(skip));
 		}
 
@@ -623,6 +653,7 @@ export class FleetLogStore {
 		stream.ackedOffset = chunkEnd;
 		stream.eof = chunk.eof;
 		this.#persistIndex(session);
+		this.#notifyStoredChange(workspaceId);
 		return { status: "acked", offset: stream.ackedOffset };
 	}
 
@@ -660,6 +691,34 @@ export class FleetLogStore {
 	}
 
 	/**
+	 * Subscribe to durable stored-data changes for one workspace: fired after
+	 * an ingest that changed stored bytes (append or generation truncate) and
+	 * after a purge that removed a session/workspace subtree. Returns an
+	 * unsubscribe function. Listeners run synchronously in the mutation's
+	 * critical section, after the bytes and index are durable; a listener
+	 * error is isolated so it can never fail an already-durable ingest. The
+	 * store does no polling or metadata scanning for this — consumers
+	 * (FleetProjection) own debouncing/coalescing and re-reading.
+	 */
+	onStoredChange(listener: (workspaceId: string) => void): () => void {
+		this.#storedChangeListeners.add(listener);
+		return () => {
+			this.#storedChangeListeners.delete(listener);
+		};
+	}
+
+	/** Notify subscribers; a throwing listener must not break the store. */
+	#notifyStoredChange(workspaceId: string): void {
+		for (const listener of [...this.#storedChangeListeners]) {
+			try {
+				listener(workspaceId);
+			} catch {
+				// Listener isolation: the durable mutation already succeeded.
+			}
+		}
+	}
+
+	/**
 	 * Removes one session's log subtree (workspace-wins: the workspace deleted
 	 * the session, the fleet copy follows). Returns false when nothing was
 	 * stored. Refuses read-only workspaces; explicit purgeWorkspace is the
@@ -681,6 +740,7 @@ export class FleetLogStore {
 			fsyncDir(join(this.rootDir, workspaceId));
 		}
 		this.#sessions.get(workspaceId)?.delete(sessionId);
+		if (existed) this.#notifyStoredChange(workspaceId);
 		return existed;
 	}
 
@@ -692,7 +752,8 @@ export class FleetLogStore {
 		assertSafeComponent(workspaceId, "workspaceId");
 		const wsDir = join(this.rootDir, workspaceId);
 		let sessions = 0;
-		if (existsSync(wsDir)) {
+		const existed = existsSync(wsDir);
+		if (existed) {
 			sessions = readdirSync(wsDir, { withFileTypes: true }).filter((entry) =>
 				entry.isDirectory(),
 			).length;
@@ -701,6 +762,7 @@ export class FleetLogStore {
 		}
 		this.#sessions.delete(workspaceId);
 		this.#readOnly.delete(workspaceId);
+		if (existed) this.#notifyStoredChange(workspaceId);
 		return { sessions };
 	}
 
@@ -876,6 +938,14 @@ export class FleetLogStore {
 		}> = [];
 		const indexed = new Set<string>();
 		const mainRels: string[] = [];
+		// Latest FILE mtime under the subtree (recursive), matching the
+		// StoredSessionInfo contract: a directory mtime does not move on
+		// append, so newest-session selection must not trust it. Accumulated
+		// from the stats this walk already performs — no extra scan.
+		let mtimeMs = 0;
+		const noteMtime = (ms: number): void => {
+			if (ms > mtimeMs) mtimeMs = ms;
+		};
 
 		const push = (
 			relpath: string,
@@ -901,6 +971,7 @@ export class FleetLogStore {
 					if (st.isFile()) {
 						size = st.size;
 						onDisk = true;
+						noteMtime(st.mtimeMs);
 					}
 				} catch {
 					// Missing on disk; the indexed entry stays visible as "missing".
@@ -920,7 +991,7 @@ export class FleetLogStore {
 		// Files on disk with no in-memory index entry (unloaded store, or a
 		// crash between append and index). Read-only listing shows them; it
 		// never adopts or repairs.
-		this.#collectStoredFiles(dir, "", sessionId, indexed, push);
+		this.#collectStoredFiles(dir, "", sessionId, indexed, push, noteMtime);
 
 		if (raw.length === 0) return null;
 		const fileInfo: StoredFileInfo[] = raw.map((f) => ({
@@ -937,13 +1008,6 @@ export class FleetLogStore {
 		const ackedBytes = sorted.reduce((sum, f) => (f.ackedBytes > 0 ? sum + f.ackedBytes : sum), 0);
 		const missingAssets = sorted.filter((f) => f.status === "missing").length;
 		const main = sorted.find((f) => f.kind === "main");
-		let mtimeMs = 0;
-		try {
-			const st = statSync(dir);
-			if (st.isDirectory()) mtimeMs = st.mtimeMs;
-		} catch {
-			// Directory vanished between the guard and now.
-		}
 		return {
 			workspaceId,
 			sessionId,
@@ -954,6 +1018,36 @@ export class FleetLogStore {
 			...(main ? { mainRelpath: main.relpath } : {}),
 			mtimeMs,
 		};
+	}
+
+	/**
+	 * Read-only durable stream state for one workspace: one entry per indexed
+	 * stream, keyed by the frozen tailer id `logs/<sessionId>/<relpath>`
+	 * (fleet/server.ts #onLogEnvelope splits the same way). The quiesce
+	 * receipt validator (fleet/clone-quiesce.ts) proves the store reached the
+	 * daemon's final flush boundary against this. Never mutates, never
+	 * repairs, never flips read-only state; an unloaded or unknown workspace
+	 * returns [].
+	 */
+	storedStreamEvidence(workspaceId: string): StoredStreamEvidence[] {
+		if (!assertSafeComponentOrNull(workspaceId)) return [];
+		const sessions = this.#sessions.get(workspaceId);
+		if (sessions === undefined) return [];
+		const out: StoredStreamEvidence[] = [];
+		for (const session of sessions.values()) {
+			for (const relpath of [...session.streams.keys()].sort()) {
+				const stream = session.streams.get(relpath)!;
+				out.push({
+					streamId: `logs/${session.sessionId}/${relpath}`,
+					sessionId: session.sessionId,
+					relpath,
+					generation: stream.generation,
+					ackedBytes: stream.ackedOffset,
+					eof: stream.eof,
+				});
+			}
+		}
+		return out;
 	}
 
 	/** Recursive file walk of the session dir, excluding the sidecar and tmp files. */
@@ -970,6 +1064,7 @@ export class FleetLogStore {
 			kind: StoredFileKind,
 			status: StoredFileStatus,
 		) => void,
+		noteMtime: (mtimeMs: number) => void,
 	): void {
 		const abs = prefix ? join(dir, prefix) : dir;
 		let entries: Dirent[];
@@ -989,10 +1084,11 @@ export class FleetLogStore {
 				continue;
 			}
 			if (st.isDirectory()) {
-				this.#collectStoredFiles(dir, relpath, sessionId, indexed, push);
+				this.#collectStoredFiles(dir, relpath, sessionId, indexed, push, noteMtime);
 				continue;
 			}
 			if (!st.isFile() || indexed.has(relpath)) continue;
+			noteMtime(st.mtimeMs);
 			push(
 				relpath,
 				st.size,

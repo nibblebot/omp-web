@@ -20,6 +20,7 @@ describe("classifyCommand", () => {
 			"add-worktree",
 			"rm-worktree",
 			"prompt",
+			"preflight",
 		]) {
 			expect(classifyCommand([verb])).toBe("fleet");
 		}
@@ -28,6 +29,9 @@ describe("classifyCommand", () => {
 	test("keeps trailing args with the fleet verb", () => {
 		expect(classifyCommand(["serve", "--port", "0"])).toBe("fleet");
 		expect(classifyCommand(["sessions", "--port", "4722"])).toBe("fleet");
+		// The local preflight verb rides the same fleet path (it is the
+		// dispatcher that reaches fleet/cli.ts's preflightCmd), never usage.
+		expect(classifyCommand(["preflight", "--profile", "local"])).toBe("fleet");
 	});
 
 	test("routes the daemon token to session", () => {

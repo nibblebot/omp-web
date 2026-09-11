@@ -33,10 +33,12 @@ import {
 	spawnResume,
 	state,
 	updateSetting,
+	openDaemonSession,
+	openStoredHistory,
 	requestDaemonSessions,
-	resumeDaemonSession,
 	type SubagentInfo,
 } from "./state";
+import { resetPendingSessionsFiles } from "./store/roster";
 
 // ---------------------------------------------------------------------------
 // Minimal /events transport double. connect() registers its SSE handler on a
@@ -180,6 +182,7 @@ beforeEach(() => {
 	}) as unknown as typeof fetch;
 	setState({
 		currentSessionId: "",
+		readOnlySessionId: null,
 		sessionMode: "single",
 		connected: false,
 		readyAt: undefined,
@@ -736,7 +739,22 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true so call() posts
 		// Flip to the attached roster state AFTER the stream opens, so the
 		// onopen auto-attach (roster + session) doesn't muddy the posted list.
-		setState({ sessionMode: "roster", currentSessionId: "daemon-a" });
+		// A ready roster entry makes hasLiveSession() true → session RPC path.
+		setState({
+			sessionMode: "roster",
+			currentSessionId: "daemon-a",
+			daemonRoster: [
+				{
+					daemonId: "daemon-a",
+					name: "daemon-a",
+					cwd: "/repos/daemon-a",
+					project: "x",
+					labels: [],
+					mode: "spawned",
+					status: "ready",
+				},
+			],
+		});
 
 		updateSetting("agent.model", "gpt-5");
 		await settle();
@@ -1878,6 +1896,171 @@ describe("attached session reconciliation against roster truth", () => {
 		expect(hasLiveSession()).toBe(false);
 	});
 
+	test("a dead CLONE keeps its transcript on screen read-only instead of clearing", () => {
+		attachAndPrime();
+
+		// The pod is gone (stopped, or the cluster became unreachable): the
+		// transcript stays visible READ-ONLY under readOnlySessionId, while the
+		// live attachment is cleared so nothing can implicitly wake it.
+		dispatch({
+			type: "roster",
+			daemons: [daemon("daemon-a", { status: "asleep", workspaceKind: "clone" })],
+		});
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readOnlySessionId).toBe("daemon-a");
+		expect(state.readyAt).toBeUndefined();
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("a dead clone with an empty transcript still clears (nothing to preserve)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+
+		dispatch({
+			type: "roster",
+			daemons: [daemon("daemon-a", { status: "error", workspaceKind: "clone" })],
+		});
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readOnlySessionId).toBeNull();
+		expect(state.items).toEqual([]);
+	});
+
+	test("a dead NON-clone daemon still clears even with a transcript", () => {
+		attachAndPrime();
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readOnlySessionId).toBeNull();
+		expect(state.items).toEqual([]);
+	});
+
+	test("a retained read-only clone survives an SSE reconnect without waking", async () => {
+		attachAndPrime();
+		dispatch({
+			type: "roster",
+			daemons: [daemon("daemon-a", { status: "asleep", workspaceKind: "clone" })],
+		});
+		expect(state.readOnlySessionId).toBe("daemon-a");
+
+		posted.length = 0;
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		await flushMicrotasks();
+
+		// The reconnect must NOT re-attach (a fleet attach would wake the pod).
+		expect(posted.filter((c) => c.type === "attach")).toEqual([]);
+		expect(state.readOnlySessionId).toBe("daemon-a");
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+	});
+
+	test("stale readiness cannot restore the retained clone's interactive state", () => {
+		attachAndPrime();
+		dispatch({
+			type: "roster",
+			daemons: [daemon("daemon-a", { status: "asleep", workspaceKind: "clone" })],
+		});
+		expect(state.readyAt).toBeUndefined();
+
+		// The replacement reports ready while its callback is still warming:
+		// the retained history must not become writable off a stale readyAt.
+		dispatch({
+			type: "roster",
+			daemons: [daemon("daemon-a", { status: "ready", workspaceKind: "clone" })],
+		});
+		dispatch({ type: "daemon_status", daemonId: "daemon-a", status: "ready" });
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readyAt).toBeUndefined();
+		expect(state.readOnlySessionId).toBe("daemon-a");
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("every non-ready clone rung is read-only (non-clone transitions unchanged)", () => {
+		/** Attach to a CLONE at `ready` with a transcript, then push `status`. */
+		function primeClone(): void {
+			setState({
+				currentSessionId: "",
+				readOnlySessionId: null,
+				sessionMode: "single",
+				readyAt: undefined,
+				items: [],
+				daemonRoster: [],
+			});
+			connect();
+			FakeEventSource.instances.at(-1)!.onopen?.();
+			dispatch({
+				type: "roster",
+				daemons: [daemon("c1", { status: "ready", workspaceKind: "clone" })],
+			});
+			dispatch(attached("c1"));
+			dispatchSeq({ type: "history", messages: [userMsg("q")] } as ServerFrame, 3);
+			setState("readyAt", 123);
+		}
+
+		for (const status of [
+			"spawning",
+			"connecting",
+			"session",
+			"resolving",
+			"reconnecting",
+		] as const) {
+			primeClone();
+			dispatch({ type: "roster", daemons: [daemon("c1", { status, workspaceKind: "clone" })] });
+			// Transitional clones keep the attachment (chat auto-restores at a
+			// fresh ready) but are not writable until then.
+			expect(state.currentSessionId).toBe("c1");
+			expect(hasLiveSession()).toBe(false);
+		}
+
+		// A non-clone transitional entry is still live (old behavior).
+		primeClone();
+		dispatch({ type: "roster", daemons: [daemon("c1", { status: "reconnecting" })] });
+		expect(hasLiveSession()).toBe(true);
+	});
+
+	test("a retained clone refuses session RPCs centrally; fleet relays still pass", async () => {
+		attachAndPrime();
+		dispatch({
+			type: "roster",
+			daemons: [daemon("daemon-a", { status: "error", workspaceKind: "clone" })],
+		});
+
+		const refused = call("branch", ["e1"]);
+		await expect(refused).rejects.toThrow("read-only");
+		expect(posted.filter((c) => c.type === "call" && c.method === "branch")).toEqual([]);
+
+		// The app-scoped relay is still admitted from the read-only view.
+		const usage = call("fetchUsageReports");
+		const cmd = posted.find((c) => c.type === "call" && c.method === "fetchUsageReports");
+		if (!cmd || cmd.type !== "call") throw new Error("expected the relay to dispatch");
+		dispatch(callResult(cmd.id, []));
+		await expect(usage).resolves.toEqual([]);
+	});
+
+	test("standalone mode is never gated by the read-only admission guard", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		// Standalone: the roster fields look dead/retained but there is one
+		// implicitly-attached session, so session RPCs must still dispatch.
+		setState({
+			sessionMode: "single",
+			currentSessionId: "x",
+			readOnlySessionId: "y",
+			daemonRoster: [],
+		});
+
+		const branch = call("branch", ["e1"]);
+		const cmd = posted.find((c) => c.type === "call" && c.method === "branch");
+		if (!cmd || cmd.type !== "call") throw new Error("expected branch to dispatch");
+		dispatch(callResult(cmd.id, []));
+		await expect(branch).resolves.toEqual([]);
+	});
+
 	test("a daemon_status asleep frame for the attached daemon clears the session view", () => {
 		attachAndPrime();
 		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
@@ -2151,7 +2334,7 @@ describe("roster session dropdown", () => {
 		await expect(pending).resolves.toEqual([se("a"), se("b")]);
 	});
 
-	test("resumeDaemonSession wakes an asleep daemon with the chosen session then attaches", async () => {
+	test("openDaemonSession wakes an asleep worktree with the chosen session then attaches", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
@@ -2161,7 +2344,7 @@ describe("roster session dropdown", () => {
 			}),
 		]);
 
-		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		openDaemonSession("d9", se("picked"));
 		expect(postedOf("spawn_resume")).toEqual([
 			{
 				type: "spawn_resume",
@@ -2173,7 +2356,7 @@ describe("roster session dropdown", () => {
 		expect(postedOf("attach")).toHaveLength(1);
 	});
 
-	test("resumeDaemonSession retries a switch swept by its own attach's supersession, never banners", async () => {
+	test("openDaemonSession retries a switch swept by its own attach's supersession, never banners", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		// Attached to d1; resume a session on a DIFFERENT ready daemon (d9) —
@@ -2184,7 +2367,7 @@ describe("roster session dropdown", () => {
 			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
-		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		openDaemonSession("d9", se("picked"));
 		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
 		await Promise.resolve();
 		await Promise.resolve();
@@ -2199,14 +2382,14 @@ describe("roster session dropdown", () => {
 		expect(state.error).toBeNull(); // the supersession is never a banner
 	});
 
-	test("resumeDaemonSession on a ready detached daemon attaches first, then switches to the picked session", async () => {
+	test("openDaemonSession on a ready detached daemon attaches first, then switches to the picked session", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
-		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		void openDaemonSession("d9", se("picked"));
 		expect(postedOf("attach")).toHaveLength(1);
 		// The switch is issued only AFTER the attach settles.
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
@@ -2224,15 +2407,272 @@ describe("roster session dropdown", () => {
 		expect(state.error).toBeNull();
 	});
 
-	test("resumeDaemonSession to the already-current session on a ready daemon only attaches", async () => {
+	test("openDaemonSession to the already-current session on a ready daemon only attaches", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		setState("daemonRoster", [
 			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
 		]);
 
-		resumeDaemonSession("d9", "/sessions/current.jsonl");
+		void openDaemonSession("d9", se("current"));
 		expect(postedOf("attach")).toHaveLength(1);
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
+	});
+});
+
+/**
+ * openStoredHistory is the read path for a worker that cannot be connected to
+ * (stopped pod, unreachable cluster, lost callback pair). The load-bearing
+ * property is that READS NEVER WAKE COMPUTE: it must resolve the session from
+ * the fleet store listing and open the stored route without ever issuing an
+ * attach / spawn_resume / session switch.
+ */
+describe("openStoredHistory (read-only worker history)", () => {
+	/** Commands that would touch (or start) the worker itself. */
+	function workerCommands(): ClientCommand[] {
+		return posted.filter(
+			(c) =>
+				c.type === "attach" ||
+				c.type === "spawn_resume" ||
+				(c.type === "call" && ["switchSession", "prompt"].includes(c.method)),
+		);
+	}
+
+	function storedSessions(daemonId: string, sessions: SessionListEntry[]): void {
+		dispatch({ type: "daemon_sessions", daemonId, sessions });
+	}
+
+	const entry = (id: string, modifiedAt: number): SessionListEntry => ({
+		path: id,
+		id,
+		cwd: "",
+		modifiedAt,
+		messageCount: 0,
+	});
+
+	test("opens the newest stored session without touching the worker", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+
+		const pending = openStoredHistory("d7");
+		// The listing rides the existing unicast command (store-backed for
+		// clones), answered with a newest-first list.
+		storedSessions("d7", [entry("newest", 20), entry("older", 10)]);
+		await pending;
+
+		expect(globalThis.location.hash).toBe("#/stored/d7/newest");
+		expect(state.view).toBe("analysis");
+		expect(workerCommands()).toEqual([]);
+	});
+
+	test("an explicit session id skips the listing entirely", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+
+		await openStoredHistory("d7", "chosen");
+
+		expect(globalThis.location.hash).toBe("#/stored/d7/chosen");
+		expect(state.view).toBe("analysis");
+		expect(posted).toEqual([]);
+		expect(workerCommands()).toEqual([]);
+	});
+
+	test("reports a workspace with no stored history instead of navigating", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+		setState({ view: "work", error: null });
+
+		const pending = openStoredHistory("d7");
+		storedSessions("d7", []);
+		await pending;
+
+		expect(state.error).toMatch(/no stored history/);
+		expect(globalThis.location.hash).toBe("");
+		expect(state.view).toBe("work");
+		expect(workerCommands()).toEqual([]);
+	});
+
+	test("latest-wins: a slow lookup for an older click never overwrites a newer one", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+
+		const first = openStoredHistory("d1");
+		const second = openStoredHistory("d2");
+		// The NEWER click (d2) answers first; the stale d1 listing lands after.
+		storedSessions("d2", [entry("newest-2", 20)]);
+		storedSessions("d1", [entry("newest-1", 20)]);
+		await Promise.all([first, second]);
+
+		expect(globalThis.location.hash).toBe("#/stored/d2/newest-2");
+	});
+
+	test("a same-daemon lookup coalesces onto one listing command", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+
+		const first = openStoredHistory("d7");
+		const second = openStoredHistory("d7");
+		expect(posted.filter((c) => c.type === "list_daemon_sessions")).toHaveLength(1);
+
+		storedSessions("d7", [entry("newest", 20)]);
+		await Promise.all([first, second]);
+
+		expect(globalThis.location.hash).toBe("#/stored/d7/newest");
+	});
+
+	test("a disconnect while listing is a cancellation, not a no-history error", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+		setState({ view: "work", error: null });
+
+		const pending = openStoredHistory("d7");
+		resetPendingSessionsFiles(); // stream teardown settles the slot
+		await pending;
+
+		expect(state.error).toBeNull();
+		expect(globalThis.location.hash).toBe("");
+		expect(state.view).toBe("work");
+		expect(workerCommands()).toEqual([]);
+	});
+});
+
+/**
+ * openDaemonSession is the single roster open action (row click + dropdown
+ * pick). Its load-bearing rule: a clone that is not `ready` is history-only
+ * (READ NEVER WAKES), and a superseded call never commits.
+ */
+describe("openDaemonSession (read-only clone routing)", () => {
+	function cloneDaemon(id: string, status: DaemonEntry["status"]): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: "x",
+			labels: [],
+			mode: "spawned",
+			status,
+			workspaceKind: "clone",
+		};
+	}
+	const entry = (id: string): SessionListEntry => ({
+		path: `/sessions/${id}.jsonl`,
+		id,
+		cwd: "",
+		modifiedAt: 1,
+		messageCount: 0,
+	});
+
+	test("every non-ready clone status opens stored history without waking", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+
+		for (const status of [
+			"asleep",
+			"error",
+			"spawning",
+			"connecting",
+			"session",
+			"resolving",
+			"reconnecting",
+		] as const) {
+			posted.length = 0;
+			globalThis.location.hash = "";
+			setState({ daemonRoster: [cloneDaemon("c1", status)], error: null });
+
+			await openDaemonSession("c1", entry("s1"));
+
+			expect(globalThis.location.hash).toBe("#/stored/c1/s1");
+			expect(posted.filter((c) => c.type === "attach" || c.type === "spawn_resume")).toEqual([]);
+		}
+	});
+
+	test("a ready clone attach failure (still latest) falls back to its stored lineage", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+		setState("daemonRoster", [cloneDaemon("c1", "ready")]);
+
+		const pending = openDaemonSession("c1", entry("s1"));
+		const attach = posted.find((c) => c.type === "attach");
+		if (!attach || attach.type !== "attach") throw new Error("expected an attach command");
+		dispatch({ type: "attach_result", id: attach.id, ok: false, error: "pod gone" });
+		await pending;
+
+		expect(globalThis.location.hash).toBe("#/stored/c1/s1");
+	});
+
+	test("a failed attach is ignored once a newer navigation superseded it", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+		setState("daemonRoster", [cloneDaemon("c1", "ready")]);
+
+		const pending = openDaemonSession("c1", entry("s1"));
+		const attach = posted.find((c) => c.type === "attach");
+		if (!attach || attach.type !== "attach") throw new Error("expected an attach command");
+		// A newer click wins before the stale attach settles.
+		await openStoredHistory("c2", "s2");
+		dispatch({ type: "attach_result", id: attach.id, ok: false, error: "pod gone" });
+		await pending;
+
+		expect(globalThis.location.hash).toBe("#/stored/c2/s2");
+		expect(posted.filter((c) => c.type === "attach")).toHaveLength(1);
+	});
+
+	test("a non-clone (worktree) attach failure still rejects", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [{ ...cloneDaemon("w1", "ready"), workspaceKind: undefined }]);
+
+		const pending = openDaemonSession("w1");
+		const attach = posted.find((c) => c.type === "attach");
+		if (!attach || attach.type !== "attach") throw new Error("expected an attach command");
+		dispatch({ type: "attach_result", id: attach.id, ok: false, error: "nope" });
+		await expect(pending).rejects.toThrow("nope");
+	});
+
+	test("an admission-refused switch waits for the new attach to prime", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		// The retained history is still on screen (read-only), so the session
+		// admission gate refuses a switch until the new attach is live. The
+		// explicit pick must WAIT for that prime rather than banner.
+		setState({
+			sessionMode: "roster",
+			currentSessionId: "",
+			readOnlySessionId: "c0",
+			daemonRoster: [
+				{
+					...cloneDaemon("d9", "ready"),
+					workspaceKind: undefined,
+					lastSessionFile: "/sessions/current.jsonl",
+				},
+			],
+		});
+
+		const pending = openDaemonSession("d9", entry("picked"));
+		const attach = posted.find((c) => c.type === "attach");
+		if (!attach || attach.type !== "attach") throw new Error("expected an attach command");
+		dispatch({ type: "attach_result", id: attach.id, ok: true, sessionId: "d9" });
+		await Promise.resolve();
+		await Promise.resolve();
+		// Not dispatched yet: the new attachment has not primed.
+		expect(posted.filter((c) => c.type === "call" && c.method === "switchSession")).toHaveLength(0);
+
+		dispatch(attached("d9"));
+		await Promise.resolve();
+		await Promise.resolve();
+		const switches = posted.filter((c) => c.type === "call" && c.method === "switchSession");
+		expect(switches).toHaveLength(1);
+		expect(state.error).toBeNull();
+		dispatch(callResult(switches[0].id, undefined));
+		await pending;
 	});
 });

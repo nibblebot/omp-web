@@ -1,48 +1,38 @@
 /**
- * Daemon-side wake materialization (P8.9; docs/clone-contracts.md "Wake").
- * When a session transcript is cold or missing in the agent dir and a fleet
- * callback pair is active, the daemon requests the stored lineage bytes from
- * the fleet log store over the bulk channel and writes them into the agent
- * sessions layout BEFORE the existing resume path runs.
+ * Daemon-side wake materialization (P8.9; docs/clone-contracts.md "Wake"):
+ * pull a cold session's stored lineage over the bulk channel and write it into
+ * the agent sessions root before the resume path runs. Only the session's MAIN
+ * transcript (resolveSessionMainFile) makes a session warm; an assets-only
+ * store cannot be resumed and is reported `unavailable`.
  *
- * Layout contract: the fleet log store mirrors the AGENT SESSIONS ROOT
- * byte-for-byte under `logs/<workspaceId>/<sessionId>/<relpath>`; each
- * received file is written to `<sessionsDir>/<relpath>`, recreating the SDK
- * project dir that owns the session on demand. The restored tree is exactly
- * what the SessionLogTailer streams (its sessionKey = the relpath of the
- * session's main file minus `.jsonl`).
+ * Invariants:
+ * - Fill-missing only: an existing volume file is never rewritten. The fleet
+ *   store can lag the live volume, whose descendant/advisor/asset bytes may
+ *   hold a newer unacknowledged tail.
+ * - All-or-nothing: completed files are staged (fsynced, size + sha256
+ *   verified) and linked into place only after the whole transfer, and only
+ *   when the committed result holds a genuine regular non-empty main; on any
+ *   failure every file this call linked is rolled back and every temp removed.
+ * - No escape: each relpath's existing components are lstat-checked (no
+ *   symlinked root/parent/leaf), temps open O_EXCL|O_NOFOLLOW, and commits use
+ *   link(2), which cannot replace an existing target. This bounds — it does not
+ *   promise immunity to — a hostile same-uid process racing those checks.
  *
- * Transfer model: one request/response pair is one 64 MiB correlation.
- * Larger session subtrees split across sequential correlations; only the
- * final file of a transfer may straddle the boundary. A straddled file is
- * accumulated in a same-dir temp file across transfers and committed only
- * when its declared size is reached, so memory stays bounded regardless of
- * file size. Every file record carries the FULL-file sha256; the daemon
- * re-hashes the accumulated bytes at completion and verifies size + digest
- * BEFORE the temp is renamed over the target. Files are fsynced before
- * rename; parents are fsynced on first creation.
- *
- * Safety: every received relpath is validated with the frozen manifest
- * predicate (isNormalizedPosixRelativePath — no `..`, no absolute, no `.`
- * segments) and the resolved target must stay inside the sessions dir BEFORE
- * any file is opened. Any hostile or malformed record aborts the WHOLE
- * materialization with nothing committed and all temps removed.
- *
- * Typed failures reuse the frozen vocabulary only: `unavailable` when there
- * is no ready callback pair or the fleet lacks the session; `invalid_request`
- * for malformed wire records (hostile relpaths, size/sha mismatch, chunk
- * gaps); `retryable` passes through for transport hiccups. No new error
- * names.
+ * Typed failures reuse the frozen vocabulary only: `unavailable` (no pair or
+ * store, IO failure, no genuine main), `invalid_request` (hostile relpath or
+ * symlinked path, size/sha mismatch, chunk gaps), `retryable` passthrough.
  */
 import { createHash } from "node:crypto";
 import {
 	closeSync,
+	constants,
 	fsyncSync,
+	linkSync,
+	lstatSync,
 	mkdirSync,
 	openSync,
 	readSync,
 	readdirSync,
-	renameSync,
 	rmSync,
 	statSync,
 	writeSync,
@@ -86,6 +76,29 @@ interface PendingFile {
 	written: number;
 	tempPath: string;
 	targetPath: string;
+	/** True once the O_EXCL create has seeded the temp. */
+	started: boolean;
+}
+
+/** Result of validating one relpath and probing its resolved target. */
+interface TargetProbe {
+	targetPath: string;
+	/** True when the leaf already exists as a regular file (never clobbered). */
+	existsAsFile: boolean;
+}
+
+/** Inode identity of a file this call linked, used to roll back only our own. */
+interface LinkedFile {
+	path: string;
+	dev: number;
+	ino: number;
+}
+
+interface CommitOutcome {
+	files: number;
+	bytes: number;
+	/** Every file this commit linked, for rollback on a later failure. */
+	linked: LinkedFile[];
 }
 
 const TEMP_PREFIX = ".omp-materialize-";
@@ -95,11 +108,29 @@ function invalid(message: string, relpath?: string): MaterializeSessionError {
 	return new MaterializeSessionError("invalid_request", message, relpath);
 }
 
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/** True when `error` carries the frozen callback error vocabulary. */
+function isFrozenErrorCode(value: unknown): value is MaterializeSessionErrorCode {
+	return value === "unavailable" || value === "invalid_request" || value === "retryable";
+}
+
+/** Best-effort removal shared by the abort path, the commit skip and rollback. */
+function removeTemp(path: string): void {
+	try {
+		rmSync(path, { force: true });
+	} catch {
+		// Best effort: a leaked temp beats failing a transfer that succeeded.
+	}
+}
+
 /**
- * Request, verify and commit one materialized session subtree. All sequential
- * correlations must succeed before every declared file is committed; a
- * hostile or malformed record aborts with nothing committed and temps
- * removed. Returns the committed file/byte counts.
+ * Request, verify and commit one materialized session subtree. Existing volume
+ * files are preserved; a hostile, malformed or broken transfer aborts with
+ * nothing committed; a commit that does not yield a genuine main is rolled
+ * back. Returns the committed file/byte counts.
  */
 export async function materializeSessionToDir(
 	sessionsDir: string,
@@ -113,11 +144,14 @@ export async function materializeSessionToDir(
 		throw new MaterializeSessionError("invalid_request", "requires a sessionId");
 	}
 	mkdirSync(sessionsDir, { recursive: true });
-	const realSessionsDir = resolveRealDir(sessionsDir);
+	const sessionsRoot = requireSessionsRoot(sessionsDir);
 
+	// Files receiving bytes but not yet complete (the single transfer
+	// straddle); completed + hash-verified files awaiting commit; and volume
+	// files preserved untouched.
 	const pending = new Map<string, PendingFile>();
-	let committed = 0;
-	let bytesReceived = 0;
+	const staged = new Map<string, PendingFile>();
+	const skipped = new Set<string>();
 	let cursor: { path: string; offset: number } | undefined;
 	try {
 		for (;;) {
@@ -143,9 +177,14 @@ export async function materializeSessionToDir(
 					`materialization returned an empty transfer for session ${sessionId}`,
 				);
 			}
-			const outcome = applyTransfer(realSessionsDir, result.records, sessionId, pending);
-			committed += outcome.committed;
-			bytesReceived += outcome.bytesReceived;
+			const outcome = applyTransfer(
+				sessionsRoot,
+				result.records,
+				sessionId,
+				pending,
+				staged,
+				skipped,
+			);
 			if (!outcome.more) break;
 			if (outcome.cursor === undefined) {
 				throw new MaterializeSessionError(
@@ -155,44 +194,47 @@ export async function materializeSessionToDir(
 			}
 			cursor = outcome.cursor;
 		}
-		return { files: committed, bytes: bytesReceived };
-	} finally {
-		for (const file of pending.values()) {
-			try {
-				rmSync(file.tempPath, { force: true });
-			} catch {
-				// Best effort cleanup.
-			}
+		const commit = commitStagedFiles(sessionsRoot, staged);
+		// Success is a genuine main on the volume, not merely a staged byte
+		// stream: an assets-only (or wrong-layout) transfer must leave nothing.
+		if (resolveSessionMainFile(sessionsRoot, sessionId) === null) {
+			rollbackLinked(commit.linked);
+			throw new MaterializeSessionError(
+				"unavailable",
+				`materialization restored no regular non-empty main transcript for session ${sessionId}`,
+			);
 		}
+		return { files: commit.files, bytes: commit.bytes };
+	} finally {
+		for (const file of [...pending.values(), ...staged.values()]) removeTemp(file.tempPath);
 	}
 }
 
 interface TransferOutcome {
-	committed: number;
-	/** Chunk payload bytes applied in this transfer. */
-	bytesReceived: number;
 	more: boolean;
 	cursor: { path: string; offset: number } | undefined;
 }
 
 /**
- * Validate and apply ONE transfer's records against the pending map.
- * File declarations validate relpaths before any write; chunks append to the
- * declared file's temp with per-transfer offset contiguity; a file reaching
- * its declared size is fsynced, re-hashed, verified and renamed into place.
+ * Validate and apply ONE transfer: declarations validate every relpath/target
+ * (and skip existing volume files) before any write; chunks append with
+ * per-transfer offset contiguity; a file reaching its declared size is
+ * fsynced, re-hashed, verified and moved to `staged`, never linked yet.
  */
 function applyTransfer(
-	realSessionsDir: string,
+	sessionsRoot: string,
 	records: MaterializeRecord[],
 	expectedSessionId: string,
 	pending: Map<string, PendingFile>,
+	staged: Map<string, PendingFile>,
+	skipped: Set<string>,
 ): TransferOutcome {
 	// Pass 1: file declarations (validate before any byte hits disk).
 	let sawLead = false;
 	for (const record of records) {
 		if (record.type !== "file") continue;
-		assertSafeRelpath(record.relpath, realSessionsDir);
-		const existing = pending.get(record.relpath);
+		const probe = assertSafeTarget(record.relpath, sessionsRoot);
+		const existing = pending.get(record.relpath) ?? staged.get(record.relpath);
 		if (existing !== undefined) {
 			if (existing.size !== record.size || existing.sha256 !== record.sha256) {
 				throw invalid(`file ${record.relpath} re-declared with a different size/sha256`);
@@ -202,31 +244,34 @@ function applyTransfer(
 					`file ${record.relpath} re-declared at offset ${record.offset}, expected ${existing.written}`,
 				);
 			}
-		} else {
-			if (record.offset !== 0) {
-				throw invalid(
-					`file ${record.relpath} declared at offset ${record.offset} with no prior transfers`,
-				);
-			}
-			const targetPath = join(realSessionsDir, record.relpath);
-			const tempName = `${TEMP_PREFIX}${process.pid}-${record.relpath.replace(/\//g, "_")}.tmp`;
-			pending.set(record.relpath, {
-				relpath: record.relpath,
-				size: record.size,
-				sha256: record.sha256,
-				kind: record.kind,
-				written: 0,
-				tempPath: join(dirname(targetPath), tempName),
-				targetPath,
-			});
+			continue;
 		}
+		if (skipped.has(record.relpath)) continue;
+		if (probe.existsAsFile) {
+			// Fill-missing only: the volume copy may be newer than the store.
+			skipped.add(record.relpath);
+			continue;
+		}
+		if (record.offset !== 0) {
+			throw invalid(
+				`file ${record.relpath} declared at offset ${record.offset} with no prior transfers`,
+			);
+		}
+		const tempName = `${TEMP_PREFIX}${process.pid}-${record.relpath.replace(/\//g, "_")}.tmp`;
+		pending.set(record.relpath, {
+			relpath: record.relpath,
+			size: record.size,
+			sha256: record.sha256,
+			kind: record.kind,
+			written: 0,
+			tempPath: join(dirname(probe.targetPath), tempName),
+			targetPath: probe.targetPath,
+			started: false,
+		});
 	}
 
 	let more = false;
 	let endCursor: { path: string; offset: number } | undefined;
-	const committedRelpaths: string[] = [];
-	let bytesReceived = 0;
-
 	try {
 		for (const record of records) {
 			switch (record.type) {
@@ -243,9 +288,9 @@ function applyTransfer(
 					break; // Pass 1 handled declarations.
 				case "chunk": {
 					if (!sawLead) throw invalid("chunk arrived before the session lead record");
+					if (skipped.has(record.relpath)) break; // Preserved file: ignore its bytes.
 					const file = pending.get(record.relpath);
 					if (file === undefined) throw invalid(`chunk for undeclared file ${record.relpath}`);
-					bytesReceived += Buffer.byteLength(record.data, "base64");
 					appendChunk(file, record);
 					break;
 				}
@@ -258,17 +303,15 @@ function applyTransfer(
 		}
 	} catch (error) {
 		if (error instanceof MaterializeSessionError) throw error;
-		throw error instanceof Error
-			? new MaterializeSessionError("unavailable", error.message)
-			: new MaterializeSessionError("unavailable", String(error));
+		throw new MaterializeSessionError("unavailable", errorMessage(error));
 	}
 
-	// Commit every pending file that reached its declared size.
+	// Stage (never commit) every pending file that reached its declared size.
 	for (const [relpath, file] of [...pending]) {
 		if (file.written !== file.size) continue;
-		commitPendingFile(file);
+		verifyPendingFile(file);
 		pending.delete(relpath);
-		committedRelpaths.push(relpath);
+		staged.set(relpath, file);
 	}
 
 	// A leftover pending file must be the single straddle the end cursor names.
@@ -287,7 +330,7 @@ function applyTransfer(
 		}
 	}
 
-	return { committed: committedRelpaths.length, bytesReceived, more, cursor: endCursor };
+	return { more, cursor: endCursor };
 }
 
 function appendChunk(file: PendingFile, chunk: MaterializeChunkRecord): void {
@@ -302,7 +345,13 @@ function appendChunk(file: PendingFile, chunk: MaterializeChunkRecord): void {
 		throw invalid(`chunk overruns declared size for ${file.relpath}`, file.relpath);
 	}
 	mkdirSync(dirname(file.tempPath), { recursive: true });
-	const fd = openSync(file.tempPath, "a");
+	// O_EXCL seeds the temp once (a pre-existing/symlinked temp fails loudly);
+	// later appends never create or follow one.
+	const flags = file.started
+		? constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW
+		: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
+	const fd = openSync(file.tempPath, flags);
+	file.started = true;
 	try {
 		let offset = 0;
 		while (offset < data.length) {
@@ -316,8 +365,8 @@ function appendChunk(file: PendingFile, chunk: MaterializeChunkRecord): void {
 	file.written += data.length;
 }
 
-/** Fsync + re-hash + verify + rename the completed temp into place. */
-function commitPendingFile(file: PendingFile): void {
+/** Fsync + re-hash + verify the completed temp (staged, not yet linked). */
+function verifyPendingFile(file: PendingFile): void {
 	const fd = openSync(file.tempPath, "r");
 	try {
 		fsyncSync(fd);
@@ -331,8 +380,87 @@ function commitPendingFile(file: PendingFile): void {
 	if (sha256FileSync(file.tempPath) !== file.sha256) {
 		throw invalid(`sha256 mismatch for ${file.relpath}`, file.relpath);
 	}
-	renameSync(file.tempPath, file.targetPath);
-	fsyncDir(dirname(file.targetPath));
+}
+
+/**
+ * Link every staged temp into place. A target re-checked as an existing regular
+ * file — or one that appears as a regular file (EEXIST) — is preserved; an
+ * unsafe target/parent or any other link failure is typed and propagates after
+ * the files this call already linked are rolled back.
+ */
+function commitStagedFiles(sessionsRoot: string, staged: Map<string, PendingFile>): CommitOutcome {
+	const linked: LinkedFile[] = [];
+	let files = 0;
+	let bytes = 0;
+	try {
+		for (const file of staged.values()) {
+			const probe = assertSafeTarget(file.relpath, sessionsRoot);
+			if (probe.existsAsFile) {
+				removeTemp(file.tempPath);
+				continue;
+			}
+			try {
+				linkSync(file.tempPath, file.targetPath);
+			} catch (error) {
+				if (
+					!(
+						typeof error === "object" &&
+						error !== null &&
+						"code" in error &&
+						error.code === "EEXIST"
+					)
+				) {
+					throw linkError(error, file.relpath);
+				}
+				// link(2) lost the race: preserve only a genuine regular file.
+				const appeared = assertSafeTarget(file.relpath, sessionsRoot);
+				if (!appeared.existsAsFile) {
+					throw invalid(
+						`materialization target appeared but is not a regular file: ${file.relpath}`,
+						file.relpath,
+					);
+				}
+				removeTemp(file.tempPath);
+				continue;
+			}
+			const stats = lstatSync(file.tempPath);
+			linked.push({ path: file.targetPath, dev: stats.dev, ino: stats.ino });
+			removeTemp(file.tempPath);
+			fsyncDir(dirname(file.targetPath));
+			files += 1;
+			bytes += file.size;
+		}
+	} catch (error) {
+		rollbackLinked(linked);
+		throw error;
+	}
+	return { files, bytes, linked };
+}
+
+/** Unlink only files this call linked: a replacement keeps its inode, so it survives. */
+function rollbackLinked(linked: LinkedFile[]): void {
+	for (const entry of linked) {
+		let stats;
+		try {
+			stats = lstatSync(entry.path);
+		} catch {
+			continue;
+		}
+		if (stats.dev === entry.dev && stats.ino === entry.ino) removeTemp(entry.path);
+	}
+}
+
+/** Map a link(2) failure onto the typed vocabulary (IO conditions are unavailable). */
+function linkError(error: unknown, relpath: string): MaterializeSessionError {
+	if (error instanceof MaterializeSessionError) return error;
+	if (error instanceof Error && "code" in error && isFrozenErrorCode(error.code)) {
+		return new MaterializeSessionError(error.code, error.message, relpath);
+	}
+	return new MaterializeSessionError(
+		"unavailable",
+		`materialization link failed for ${relpath}: ${errorMessage(error)}`,
+		relpath,
+	);
 }
 
 /** Streaming sync sha256 over a file (bounded memory). */
@@ -354,29 +482,72 @@ function sha256FileSync(absolutePath: string): string {
 	return hash.digest("hex");
 }
 
-/** Resolve the deepest existing ancestor of `dir` as a real absolute path. */
-function resolveRealDir(dir: string): string {
-	let current = dir;
-	for (;;) {
-		try {
-			const stats = statSync(current);
-			return stats.isDirectory() ? current : dirname(current);
-		} catch {
-			const parent = dirname(current);
-			if (parent === current) return current;
-			current = parent;
-		}
+/** Refuse a symlinked/non-directory sessions root (it would redirect writes). */
+function requireSessionsRoot(sessionsDir: string): string {
+	let stats;
+	try {
+		stats = lstatSync(sessionsDir);
+	} catch (error) {
+		throw new MaterializeSessionError(
+			"unavailable",
+			`sessions dir is unavailable: ${errorMessage(error)}`,
+		);
 	}
+	if (stats.isSymbolicLink() || !stats.isDirectory()) {
+		throw invalid(`refusing a non-directory sessions root: ${sessionsDir}`);
+	}
+	return sessionsDir;
 }
 
-function assertSafeRelpath(relpath: string, realSessionsDir: string): void {
+/**
+ * Validate a wire relpath and its resolved target before any write: reject a
+ * hostile relpath; every existing component must be a real directory and an
+ * existing leaf a regular file (a symlinked parent/leaf could redirect a
+ * write outside the root). Returns whether the leaf already exists as a file.
+ */
+function assertSafeTarget(relpath: string, sessionsRoot: string): TargetProbe {
 	if (typeof relpath !== "string" || !isNormalizedPosixRelativePath(relpath)) {
 		throw invalid(`refused an unsafe relpath: ${JSON.stringify(relpath)}`, relpath);
 	}
-	const resolved = join(realSessionsDir, relpath);
-	if (!isInside(realSessionsDir, resolved)) {
+	const targetPath = join(sessionsRoot, relpath);
+	if (!isInside(sessionsRoot, targetPath)) {
 		throw invalid(`relpath escapes the sessions dir: ${JSON.stringify(relpath)}`, relpath);
 	}
+	const parts = relpath.split("/");
+	let current = sessionsRoot;
+	for (let i = 0; i < parts.length; i += 1) {
+		current = join(current, parts[i]!);
+		const leaf = i === parts.length - 1;
+		let stats;
+		try {
+			stats = lstatSync(current);
+		} catch (error) {
+			if (
+				typeof error === "object" &&
+				error !== null &&
+				"code" in error &&
+				error.code === "ENOENT"
+			) {
+				return { targetPath, existsAsFile: false };
+			}
+			throw invalid(
+				`cannot inspect materialization target ${relpath}: ${errorMessage(error)}`,
+				relpath,
+			);
+		}
+		if (leaf) {
+			if (stats.isSymbolicLink()) throw invalid(`refused a symlinked target: ${relpath}`, relpath);
+			if (!stats.isFile()) {
+				throw invalid(`materialization target is not a regular file: ${relpath}`, relpath);
+			}
+			return { targetPath, existsAsFile: true };
+		}
+		if (stats.isSymbolicLink()) throw invalid(`refused a symlinked parent of ${relpath}`, relpath);
+		if (!stats.isDirectory()) {
+			throw invalid(`materialization parent is not a directory: ${relpath}`, relpath);
+		}
+	}
+	return { targetPath, existsAsFile: false };
 }
 
 function isInside(root: string, candidate: string): boolean {
@@ -401,9 +572,8 @@ function fsyncDir(dir: string): void {
 function transferError(error: unknown, sessionId: string): MaterializeSessionError {
 	if (error instanceof MaterializeSessionError) return error;
 	if (error instanceof Error) {
-		const code = (error as Error & { code?: unknown }).code;
-		if (code === "unavailable" || code === "invalid_request" || code === "retryable") {
-			return new MaterializeSessionError(code as MaterializeSessionErrorCode, error.message);
+		if ("code" in error && isFrozenErrorCode(error.code)) {
+			return new MaterializeSessionError(error.code, error.message);
 		}
 		return new MaterializeSessionError(
 			"unavailable",
@@ -416,40 +586,29 @@ function transferError(error: unknown, sessionId: string): MaterializeSessionErr
 	);
 }
 
-/** True when the sessions tree already has ANY file for this session (main
- * file or artifact dir) — the daemon skips materialization when warm. */
-export function sessionTreeExists(sessionsDir: string, sessionId: string): boolean {
-	const probes = [join(sessionsDir, `${sessionId}.jsonl`), join(sessionsDir, sessionId)];
-	let entries;
-	try {
-		entries = readdirSync(sessionsDir, { withFileTypes: true });
-	} catch {
-		return probes.some(probeExists);
-	}
-	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
-		probes.push(join(sessionsDir, entry.name, `${sessionId}.jsonl`));
-		probes.push(join(sessionsDir, entry.name, sessionId));
-	}
-	return probes.some(probeExists);
-}
-
 /**
- * Resolve the absolute main-session JSONL of `sessionId` under a sessions
- * dir: `<sessionId>.jsonl` at depth 1 or `<proj>/<sessionId>.jsonl` at
- * depth 2 (the frozen layout; bounded scan, no traversal — mirrors the
- * fleet-side resolver in fleet/wake-materialize.ts so both halves agree).
- * Returns null when the session's main file is cold/missing.
+ * Resolve the absolute main-session JSONL of `sessionId` under a sessions dir:
+ * `<sessionId>.jsonl` at depth 1 or `<proj>/<sessionId>.jsonl` at depth 2 (the
+ * frozen layout). Only a real, regular, non-empty file counts — a symlinked
+ * root, project dir or main is never warm proof. Returns null when cold.
  */
 export function resolveSessionMainFile(sessionsDir: string, sessionId: string): string | null {
 	if (typeof sessionsDir !== "string" || sessionsDir.length === 0) return null;
 	if (typeof sessionId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sessionId)) {
 		return null;
 	}
+	let rootStats;
+	try {
+		rootStats = lstatSync(sessionsDir);
+	} catch {
+		return null;
+	}
+	if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return null;
 	const probe = (dir: string): string | null => {
 		const candidate = join(dir, `${sessionId}.jsonl`);
 		try {
-			return statSync(candidate).isFile() ? candidate : null;
+			const stats = lstatSync(candidate);
+			return stats.isFile() && stats.size > 0 ? candidate : null;
 		} catch {
 			return null;
 		}
@@ -463,18 +622,10 @@ export function resolveSessionMainFile(sessionsDir: string, sessionId: string): 
 		return null;
 	}
 	for (const entry of entries) {
+		// A symlinked project dir is never an ancestor for warm proof.
 		if (!entry.isDirectory()) continue;
 		const found = probe(join(sessionsDir, entry.name));
 		if (found !== null) return found;
 	}
 	return null;
-}
-
-function probeExists(absolute: string): boolean {
-	try {
-		const stats = statSync(absolute);
-		return stats.isFile() || stats.isDirectory();
-	} catch {
-		return false;
-	}
 }

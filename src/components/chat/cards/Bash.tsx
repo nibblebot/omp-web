@@ -1,7 +1,10 @@
-import type { Component } from "solid-js";
-import { call, type ChatItem } from "../../../state";
+import { Show, type Component } from "solid-js";
+import { call, hasLiveSession, type ChatItem } from "../../../state";
 
-/** Terminal card: prompt line, running/exit status, output, truncation note. */
+/** Terminal card: prompt line, running/exit status, output, truncation note.
+ *  The abort affordance is a worker mutation, so it exists only while the
+ *  attached session is live (a retained read-only transcript shows the status
+ *  without offering abort). */
 export const BashCard: Component<{ item: Extract<ChatItem, { kind: "bash" }> }> = (props) => {
 	const bash = () => props.item;
 	return (
@@ -16,14 +19,16 @@ export const BashCard: Component<{ item: Extract<ChatItem, { kind: "bash" }> }> 
 						<span class="tool-status" data-status="running">
 							running
 						</span>
-						<button
-							class="bash-abort"
-							onClick={() =>
-								void call(bash().lang === "python" ? "abortEval" : "abortBash").catch(() => {})
-							}
-						>
-							abort
-						</button>
+						<Show when={hasLiveSession()}>
+							<button
+								class="bash-abort"
+								onClick={() =>
+									void call(bash().lang === "python" ? "abortEval" : "abortBash").catch(() => {})
+								}
+							>
+								abort
+							</button>
+						</Show>
 					</>
 				) : (
 					<span class="exit-badge" classList={{ nonzero: bash().exitCode !== 0 }}>

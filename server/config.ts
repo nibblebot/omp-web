@@ -18,6 +18,16 @@ export interface SessionConfig {
 	token?: string;
 	/** Session file to switchSession() into at boot (R3); failure warns on stderr and starts fresh. */
 	resume?: string;
+	/**
+	 * Required resume (P5 wake): the resume target is mandatory, so parseConfig
+	 * refuses this switch without one, and a resume that cannot be satisfied
+	 * (no transcript on disk and none restorable from the fleet log store, or a
+	 * failed session switch) exits before readiness instead of booting a fresh
+	 * session. Set from --resume-required / OMP_SESSION_RESUME_REQUIRED=1 by
+	 * the fleet only after the predecessor was proven terminated, so a fresh
+	 * boot would silently lose the session.
+	 */
+	resumeRequired: boolean;
 	/** Idle auto-exit (R11); 0 disables. */
 	idleTimeoutMs: number;
 	/** Registry display name (defaults to the cwd basename). */
@@ -51,8 +61,13 @@ export interface SessionConfig {
 	collabUrl?: string;
 	/**
 	 * Callback transport (P3.2): fleet callback pair base URL, e.g.
-	 * https://fleet.example.com. HTTPS required; HTTP only with
-	 * --callback-allow-http AND a loopback host (isLoopbackHost).
+	 * https://fleet.example.com. HTTPS required for any host; HTTP only with
+	 * --callback-allow-http AND a loopback host (isLoopbackHost). Both schemes
+	 * admit a bare origin only — the daemon appends /callback/up,
+	 * /callback/down, and /callback/bulk/<id> to it and identity/credentials
+	 * ride request headers, so a URL credential, path, query, or fragment is a
+	 * startup error. The stricter Pod-reachable HTTPS origin check is the
+	 * Kubernetes lane's (shared/callback-url.ts, applied at handoff/preflight).
 	 */
 	callbackUrl?: string;
 	/** Roster daemonId the callback pair is bound to; required with --callback-url. */
@@ -100,6 +115,17 @@ export function isLoopbackHost(host: string): boolean {
 	const v4 = h.startsWith("::ffff:") ? h.slice(7) : h;
 	const parts = v4.split(".");
 	return parts.length === 4 && parts.every((p) => /^\d+$/.test(p)) && Number(parts[0]) === 127;
+}
+
+/**
+ * Required-resume switch (P5 wake): a bare `--resume-required` and a `1`/`true`
+ * value (flag or `OMP_SESSION_RESUME_REQUIRED`) enable it; an absent flag or
+ * any other value leaves it off, so a stray value never arms a hard failure.
+ */
+function parseResumeRequired(raw: string | undefined): boolean {
+	if (raw === undefined) return false;
+	const value = raw.trim().toLowerCase();
+	return value === "" || value === "1" || value === "true";
 }
 
 /**
@@ -167,6 +193,30 @@ export function parseConfig(argv: string[]): SessionConfig {
 				`invalid --callback-url "${callbackUrlRaw}" (${parsed.protocol} is not http/https)`,
 			);
 		}
+		// Transport-generic safety, both schemes: the daemon appends
+		// /callback/up, /callback/down, and /callback/bulk/<id> to this base,
+		// and identity/credentials ride request headers. The Pod-reachable
+		// HTTPS origin policy is Kubernetes-only (shared/callback-url.ts),
+		// applied at handoff/preflight — a host-network bwrap daemon may
+		// legitimately dial a loopback HTTPS URL here.
+		if (parsed.username !== "" || parsed.password !== "") {
+			throw new Error(
+				`invalid --callback-url "${callbackUrlRaw}" carries credentials; the enrollment credential travels in headers, never in the URL`,
+			);
+		}
+		if (parsed.pathname !== "" && parsed.pathname !== "/") {
+			throw new Error(
+				`invalid --callback-url "${callbackUrlRaw}" has path "${parsed.pathname}"; pass the bare origin (the callback routes are appended by the daemon)`,
+			);
+		}
+		if (parsed.search !== "" || parsed.hash !== "") {
+			throw new Error(
+				`invalid --callback-url "${callbackUrlRaw}" has a query string or fragment; pass the bare origin`,
+			);
+		}
+		if (parsed.hostname === "") {
+			throw new Error(`invalid --callback-url "${callbackUrlRaw}" has no host`);
+		}
 		if (parsed.protocol === "http:") {
 			if (!callbackAllowHttp) {
 				throw new Error(
@@ -214,13 +264,27 @@ export function parseConfig(argv: string[]): SessionConfig {
 		}
 		callbackProxy = parsed.toString();
 	}
+	// Required resume can never be satisfied without a target, so arming it
+	// with no --resume/OMP_SESSION_RESUME would boot a fresh session and lose
+	// the one the fleet asked to continue (finding #6). Fail closed at parse
+	// time: the caller prints this to stderr and exits 1.
+	const resume = flag("resume") ?? Bun.env.OMP_SESSION_RESUME;
+	const resumeRequired = parseResumeRequired(
+		flag("resume-required") ?? Bun.env.OMP_SESSION_RESUME_REQUIRED,
+	);
+	if (resumeRequired && (resume === undefined || resume.trim() === "")) {
+		throw new Error(
+			"--resume-required needs a resume target (--resume or OMP_SESSION_RESUME); refusing to boot a fresh session",
+		);
+	}
 	return {
 		cwd,
 		port,
 		host,
 		advertise: flag("advertise") ?? Bun.env.OMP_SESSION_ADVERTISE,
 		token: flag("token") ?? Bun.env.OMP_SESSION_TOKEN,
-		resume: flag("resume") ?? Bun.env.OMP_SESSION_RESUME,
+		resume,
+		resumeRequired,
 		idleTimeoutMs,
 		name: flag("name") ?? Bun.env.OMP_SESSION_NAME ?? path.basename(cwd),
 		labels,

@@ -36,15 +36,49 @@ interface WorkspaceRecord {
   pinnedRevision?: string;          // resolved commit, pinned once
   branch?: string;                  // derived from workspace name
   profileId?: string;               // clone workspaces only
+  providerKind?: "bwrap" | "kubernetes";  // persisted provider selection
+  kubernetes?: KubernetesBinding;   // resource identity + context/namespace/uid
+  sourcePinDigest?: string;         // sha256 of [remote, revision, branch]
+  lastAttemptedGeneration?: number; // launch attempt that may need adopting
   desiredState: DesiredState;       // absent = legacy (not persisted)
   authorizedGeneration?: number;    // absent = unmanaged
   providerHandle?: unknown;         // private, opaque
-  cleanup?: CleanupRecord;          // archive/delete state machine state;
-                                    //   SUPERSEDED: deletion verification state (see Fleet log store)
-  archiveReceipt?: ArchiveReceipt;  // durable acceptance receipt;
-                                    //   SUPERSEDED: verify-at-deletion has no receipts
+  enrollment?: WorkspaceEnrollment; // callback credential digest + generation
+  deletion?: WorkspaceDeletion;     // verify-at-deletion state (P7.3); absent = never deleted
+  lastEvidence?: CloneDeletionReceipt; // stop-time quiesce receipt (kubernetes only)
+}
+
+interface WorkspaceDeletion {
+  state: "deleting" | "delete-pending-retry";  // "deleting" = gate in flight
+  requestedAt: number;              // epoch ms of the delete request
+  error?: DeletionGateError;        // present on "delete-pending-retry"
+  remainingResources?: string[];    // provider resources left after partial deletion
+  receipt?: CloneDeletionReceipt;   // kubernetes deletion evidence binding
+}
+
+interface CloneDeletionReceipt {
+  requestId: string;                // recorded BEFORE the request is sent
+  correlationId?: string;           // bulk correlation, once collected
+  generation: number;
+  podUid: string | null;            // null = no Pod observed
+  pvcUid: string | null;            // null = no claim observed
+  state: "pending" | "verified" | "invalid";
+  validated?: ValidatedQuiesceReceipt;  // present when state === "verified"
+  error?: DeletionGateError;        // present when state === "invalid"
+}
+
+interface DeletionGateError {
+  code: string;                     // frozen deletion-gate error vocabulary
+  message: string;
+  path?: string;                    // store path the failure names, when applicable
 }
 ```
+
+Historical (SUPERSEDED, no longer part of the current record): `cleanup?:
+CleanupRecord` and `archiveReceipt?: ArchiveReceipt` belonged to the
+archive/export pipeline the verify-at-deletion amendment replaced; neither is
+written or read today. `deletion` carries the deletion state machine state
+and `lastEvidence` the stop-time receipt.
 
 Legacy inference at load: `managed || worktreeOf !== undefined` → `worktree`;
 `mode === "spawned"` without `worktreeOf` → `direct`; `remote`/`attached` →
@@ -64,6 +98,7 @@ interface ProviderProfile {
   secretRefs?: Record<string, string>;  // name → external secret reference
   image?: string;             // k8s only
   namespace?: string;         // k8s only
+  context?: string;           // k8s only: explicit kubeconfig context (never ambient)
   network?: "host" | "isolated";  // bwrap netns share (P5.7): absent =
                                   //   "isolated" (fresh netns; callback URL must
                                   //   be HTTPS-routable from inside). "host" =
@@ -76,6 +111,26 @@ interface ProviderProfile {
 Validation rejects unknown providers, missing executable, and non-absolute
 storage/secret shapes. Public capability view drops `secretRefs` values
 (names only), executable internals, and resource handles.
+
+## Preflight rows (`omp-web preflight --profile <id>`)
+
+`runProfilePreflight` runs the host-generic rows for every profile
+(executable, callback reachability, durable directories, profile tools,
+denied-bind roots, resolvable secret references) and, for Kubernetes
+profiles, delegates the cluster requirement rows to
+`preflightKubernetesProfile` rather than keeping a parallel set of summary
+rows. The Kubernetes rows are: `kubectl-client`, `kube-context`,
+`kube-api`, `kube-namespace`, `kube-rbac-<verb>-<resource>` (get, create, and
+delete on pods, persistentvolumeclaims, and configmaps), `kube-storageclass`,
+`kube-default-storageclass` (required when the profile pins no class),
+`kube-secretrefs` (map shape), `kube-secret-<envName>` (one row per
+referenced secret name and key), and `kube-image`. `kube-image` checks only
+that the profile declares a non-empty image; pullability is admitted at the
+first Pod start. Callback reachability is
+labelled as reachability from the fleet HOST, not from inside the cluster.
+Every failing row carries remediation naming the operator action, and the
+`k8s-fields` row is bwrap-only, since a Kubernetes profile's fields are
+checked by the rows above.
 
 ## Browser and CLI workspace creation (2026-09-06)
 
@@ -154,6 +209,26 @@ interface CallbackEnvelope {
   fire-and-forget (the fleet reads the body to completion; no mid-life
   response).
 - HTTPS required except explicitly allowed loopback HTTP.
+
+## Callback gateway allowlist
+
+An HTTPS gateway or reverse proxy in front of the fleet exposes exactly the
+three daemon-facing callback routes, and nothing else:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/callback/up` | NDJSON envelope upload |
+| GET | `/callback/down` | SSE downlink |
+| POST | `/callback/bulk/<id>` | bulk transfer under one correlation id |
+
+The gateway matches the RAW request path: no percent-decoding, no
+trailing-slash folding, and no normalization before the comparison. `<id>`
+is exactly one unescaped `[A-Za-z0-9_-]+` segment (never empty, never
+containing a slash, never a second segment). Every other method, every other
+path, and any request carrying a query string is rejected at the gateway and
+never reaches the fleet. This allowlist covers the daemon callback surface
+only; browser, CLI, and admin routes are separate and follow the operator's
+own auth policy.
 
 ## Session log streaming
 
@@ -273,6 +348,106 @@ interface LogStoreIndex {
   `logs/<workspaceId>/` subtree becomes read-only; no further appends, the
   workspace is gone, and Retention governs its life.
 
+## Quiesce and evidence collection (`quiesce_clone`)
+
+Kubernetes workspaces collect their final evidence over the callback pair
+instead of the `quiesce_begin`/`quiesce_result` exchange: the fleet has
+already proved predecessor termination and supplies the source facts the
+daemon must not re-derive. `fleet/clone-quiesce.ts` owns the fleet-side
+request, timeout, and receipt validation; `server/quiesce-evidence.ts` owns
+the daemon-side document.
+
+```ts
+interface QuiesceCloneControl {   // fleet → daemon, kind "control", streamId "transport"
+	type: "quiesce_clone";
+	requestId: string;
+	correlationId: string;        // bulk correlation the evidence document rides
+	sourceRemote: string;
+	pinnedRevision: string;
+	branch: string;
+}
+
+type QuiesceCloneResultControl = {   // daemon → fleet, same stream
+	type: "quiesce_clone_result";
+	requestId: string;
+	correlationId: string;
+} & ({ ok: true } | { ok: false; error: { code: CallbackErrorCode; message: string } });
+
+interface QuiesceEvidence {       // one JSON document, uploaded over bulk
+	requestId: string;
+	/** POSIX relpath of the main transcript under the agent sessions dir; null only when neither the volume nor the store holds one. */
+	mainSessionRelpath: string | null;
+	boundary: FlushBoundary;
+	manifestFiles: ManifestFile[];
+	provenance: {
+		workspaceId: string;
+		workspaceName: string;
+		resolvedCommit: string;
+		generatedAt: number;
+	};
+	writers: {
+		main: "flushed";
+		descendants: QuiesceWriterEntry[];
+		advisors: "caught_up" | "inactive";
+		note?: string;
+	};
+	git: CloneGitEvidence;
+}
+```
+
+- The request rides the existing transport stream and is acknowledged with
+  `ControlAckPayload`; unsupported controls return the existing typed error.
+  The authenticated envelope's workspace, generation, and connection fields
+  are checked before the Kubernetes-specific branch runs.
+- Stop admission closes, every reachable writer flushes, the session
+  disposes, the tailer finalizes, and the fleet's acknowledgements land
+  before evidence is collected. Admission stays closed after disposal until
+  the Pod terminates. The outcome is cached by request ID for the lifetime
+  of that daemon.
+- The document is transferred as one bulk upload under the control's
+  `correlationId` (`createBulkCorrelation(workspaceId, { capture: true })` and
+  `FleetCallback.requestBulkUploadParts`), bounded at 16 MiB inside the
+  64 MiB bulk cap; abandoned captures are released with
+  `cancelBulkCorrelation` on timeout and shutdown. Every collection persists
+  its receipt binding `{requestId, generation, podUid, pvcUid, state}`
+  BEFORE the request leaves the fleet (`state` is `pending`, `verified`, or
+  `invalid`): a delete-time collection writes it to `deletion.receipt`, and
+  the stop-time collection (Kubernetes only, the last chance while the daemon
+  is alive) writes it to `lastEvidence`. A crash between the daemon's
+  acknowledgement and the terminal write therefore still leaves the request
+  id on disk, so restart replays that same id instead of sending a new one,
+  which the daemon would reject as already quiesced. The receipt transitions
+  to `verified` or `invalid` only after collection and validation return, and
+  the validated receipt is stored before invoking provider stop.
+- Every evidence field is required and `manifestFiles` is `ManifestFile[]`,
+  so a receipt can never be validated against a partial proof.
+- `provenance.resolvedCommit` records the checkout HEAD at quiesce and must
+  match the Git evidence, not the initialization pin. Preserved commits may
+  advance the checkout. The original `pinnedRevision` remains bound in the
+  receipt's source tuple and resource digest, and both the pin and every
+  local ref must be preserved on the supplied remote before deletion.
+- `collectGitEvidence` uses the stored source URL and the pin supplied by
+  the fleet: it reads the checkout's raw origin with includes disabled and
+  compares it to that URL before any network access, then probes from a
+  temporary bare repository with the credential settings captured at
+  startup, imports local heads and tags, fetches the supplied remote, and
+  proves every local tip is preserved by its advertised refs (detached HEAD
+  and annotated tags included; a newly created branch at the preserved pin
+  passes). Any failed Git or stash probe yields unknown evidence and blocks
+  deletion.
+- The receipt is validated against the exact fleet store file set (hashes,
+  sizes, writer results, and per-stream generation/offset/eof boundaries
+  from the `logs/<sessionId>/<relpath>` mapping), the main path must
+  identify one manifest entry, and the receipt binds to the workspace
+  resource ID, generation, namespace UID, and PVC UID. After a fleet
+  restart the same Pod UID is rechecked before cached evidence is requested
+  through a fresh bulk correlation; a changed Pod or incomplete proof
+  invalidates the receipt.
+- Dirty Git evidence permits ordinary stop and preserves the claim. Missing
+  evidence causes stop to retain storage and report the verification
+  failure. Delete requires a stopped workspace, a matching valid receipt,
+  clean Git evidence, and a verified store.
+
 ## Retention
 
 - Workspace deleted without verification (the completeness gate failed or
@@ -308,7 +483,10 @@ Any session is wakeable, whether its workspace is alive or deleted.
 - Standing fact: session logs are not the workspace. Transcripts do not
   contain working-tree files; wake restores conversation state only.
 
-## Provider executable contract (`OMP_PROVIDER_PROTO = 1`)
+## Provider executable contract (`OMP_PROVIDER_PROTO = 1`) (SUPERSEDED)
+
+Draft retained for history: the implicit version and the exit-code taxonomy
+below were replaced by the versioned JSON protocol that follows.
 
 Executable invoked as `<executable> <operation>` with one JSON request on
 stdin, one JSON response on stdout, stderr human log. Operations:
@@ -323,11 +501,12 @@ fleet restart by durable identity, never by PID alone.
 ## Provider operation protocol (frozen contract)
 
 > Supersedes the "Provider executable contract (`OMP_PROVIDER_PROTO = 1`)"
-> draft above. The binding request/response shapes, exit semantics, error
-> vocabulary, identity/supervision rules, and safety rules are below;
-> implementations live in `shared/provider-protocol.ts` (types, validation,
-> response parsing, pidfile identity helpers) and `runtime/provider-exec.ts`
-> (fleet-side invocation).
+> draft above. `OMP_PROVIDER_PROTO = 2`: the binding request/response
+> shapes, the version gate, exit semantics, error vocabulary,
+> identity/supervision rules, and safety rules are below; implementations
+> live in `shared/provider-protocol.ts` (types, validation, response parsing,
+> pidfile identity helpers) and `runtime/provider-exec.ts` (fleet-side
+> invocation).
 
 Invocation: the fleet runs `<executable> <op>` with exactly one JSON request
 on stdin (≤ 1 MiB), exactly one JSON response on stdout, and stderr as a
@@ -337,27 +516,111 @@ the outcome. A non-zero exit means no trustworthy response; the fleet treats
 it as an `internal` failure carrying the exit code and stderr. Spawning uses
 explicit argv arrays, never a shell.
 
+Version gate: `providerProto` rides BOTH directions. A request whose
+`providerProto` is missing or different from `OMP_PROVIDER_PROTO` is
+rejected before any operation is dispatched, and a response whose
+`providerProto` differs is a malformed response the fleet refuses. The
+version is one constant: changing it updates both provider entrypoints, the
+invoker, the environment values, and the fixtures together.
+
 Request (`op` is repeated in argv and in the request):
 
 ```ts
 interface ProviderRequest {
+	providerProto: 2;           // must equal OMP_PROVIDER_PROTO
 	op: "ensure-running" | "inspect" | "stop" | "delete";
 	workspaceId: string;
 	generation: number;         // positive; the authorized generation
-	workspaceDir: string;       // the checkout directory
+	workspaceDir: string;       // fleet-side workspace volume root; for kubernetes the fleet host holds no checkout (the PVC mounts at /workspace, the in-pod checkout is /workspace/.checkout)
 	homeDir: string;            // private writable home
 	profile: ProviderProfile;   // fleet config profile; secretRefs by NAME only
 	handle?: string;            // opaque provider-namespaced handle
 	stateDir: string;           // provider-private per-workspace supervision dir
+	kubernetes?: KubernetesBinding;  // required on kubernetes profiles, rejected on bwrap
+	source?: { local?: string; remote?: string };  // exactly one member when present
+	revision?: string;          // pinned full commit, fleet-resolved once
+	branch?: string;            // branch created at the pin
+	baseline?: { configYaml: string; modelsYaml?: string };  // sanitized sandbox baseline (see below)
 }
 ```
+
+Sandbox baseline delivery (P5.5): a fleet-side prepared volume (bwrap)
+receives the sanitized agent-behavior config directly from
+`prepareWorkspace`, which runs on the fleet host and can read the operator's
+agent dir. A provider-side prepared volume (kubernetes) is prepared in-pod,
+where that dir does not exist, so the fleet runs the SAME seed authority
+(`runtime/sandbox-baseline.ts`) and ships its two documents in `baseline`.
+The provider materializes them as a workspace-scoped ConfigMap mounted
+read-only at `/opt/omp-web/baseline` and points the in-pod seed at it with
+`OMP_SANDBOX_BASELINE_CONFIG`; the image then seeds
+`.home/agent/{config.yml,models.yml}` exactly as the bwrap path does,
+including the `modelRoles` filter against the profile's `secretRefs` env
+names, which the fleet applies before shipping. The documents are allowlisted,
+credential-free, and bounded (256 KiB each); the field is a config channel,
+never a credential channel (`secretRefs` remains the only one), and profiles
+that prepare fleet-side omit it. The ConfigMap is created before the Pod that
+mounts it, replaced (never reused) when a Pod is recreated, refused when a
+foreign object squats the deterministic name, and deleted with the Pod and
+claim. `delete` reports `observed: "missing"` only once Pod, claim, and
+ConfigMap are all absent; a volume from a pre-baseline generation still
+deletes cleanly.
+
+Kubernetes binding (request) and observation (successful response):
+
+```ts
+interface KubernetesBinding {
+	resourceIdentity: string;  // 16 random bytes as 32 lowercase hex characters
+	context: string;           // operator-explicit context; never the ambient current-context
+	namespace: string;         // operator-prepared namespace
+	namespaceUid: string;      // namespace API uid, captured at registration
+}
+
+interface KubernetesObserved {
+	namespaceUid: string;
+	podUid: string | null;     // null = the object is absent
+	pvcUid: string | null;
+}
+```
+
+Every Kubernetes operation requires the binding and validates each object it
+touches against it (managed-by, workspace, full profile id, resource id,
+namespace uid, object uid; Pods additionally the exact positive decimal
+generation and the provider launch token). A bwrap request carrying
+`kubernetes` is rejected. A successful Kubernetes response carries the
+observed uids, so the fleet can detect a namespace, Pod, or claim replaced
+underneath a live workspace. `resourceIdentity` is generated once by the
+fleet and never changes: on the fleet host `<workspaceDir>/.kubernetes/<resourceIdentity>/`
+holds provider state (a fleet-side path only, never mounted into the Pod),
+`omp-ws-<resourceIdentity>` names the Pod and PVC, and inside the Pod the PVC
+mounts at `/workspace` with the checkout at `/workspace/.checkout` and the
+private home at `/workspace/.home`.
+
+Source-pin digest: lowercase SHA-256 of the UTF-8
+`JSON.stringify([source.remote, revision, branch])`. The fleet computes it
+and the provider stores it on the Pod and PVC under the existing
+`omp-web.omp.dev/` annotation prefix; the fleet compares the request tuple
+with provider state and the digest with the Kubernetes metadata before
+reusing or adopting resources, and validates the full preparation marker
+after the claim is mounted.
 
 Response:
 
 ```ts
 type ProviderResponse =
-	| { ok: true; handle: string; observed: "running" | "stopped" | "missing"; pid?: number; startedAt?: number }
-	| { ok: false; error: { code: "invalid_request" | "unavailable" | "conflict" | "internal"; message: string; retryable: boolean } };
+	| {
+		ok: true;
+		providerProto: 2;
+		handle: string;
+		observed: "running" | "stopped" | "missing";
+		kubernetes?: KubernetesObserved;
+		pid?: number;
+		startedAt?: number;
+	}
+	| {
+		ok: false;
+		providerProto: 2;
+		error: { code: "invalid_request" | "unavailable" | "conflict" | "internal" | "timeout"; message: string; retryable: boolean };
+	};
 ```
 
 - Error vocabulary is the frozen ledger vocabulary; the fleet adds `timeout`
@@ -366,6 +629,16 @@ type ProviderResponse =
   means a writer is active or a predecessor's termination is uncertain,
   the fleet blocks replacement until resolved. `retryable` on a provider
   envelope is the provider's explicit verdict and is honored as-is.
+  Provider codes map to lifecycle codes: invalid input and conflicts keep
+  their codes, unavailable dependencies become `unavailable`, timeouts
+  become `retryable`, and internal failures become `provider_failed`.
+- Callback credential digest: the lowercase SHA-256 of the DECODED callback
+  enrollment credential bytes. The fleet persists it with its generation on
+  the workspace record and on the Pod annotation, and compares it with the
+  handoff before reusing or adopting a Pod; the raw credential lives only in
+  the protected handoff and the Pod environment, and fleet responses and
+  logs carry the digest instead. The provider launch token keeps its own
+  record and Pod annotation slot, separate from this digest.
 - `handle` is opaque and provider-namespaced, never inspected fleet-side and
   never crossing trust boundaries. The same workspace+generation always
   yields the same handle after restart.
@@ -381,19 +654,40 @@ Identity and supervision (never PID-only):
   `procStartTime` is `/proc/<pid>/stat` field 22 read at launch and
   `workspaceToken` is an opaque launch token embedded in the workspace
   process argv.
-- Liveness = the pid is alive AND its `/proc/<pid>/stat` field 22 equals the
-  recorded `procStartTime` AND `/proc/<pid>/cmdline` still contains the
-  `workspaceToken`. A reused PID never matches.
+- Kubernetes workspaces record the same identity in
+  `<stateDir>/provider.k8s.json`: `{version, workspaceId, generation,
+  workspaceToken, namespace, namespaceUid, resourceIdentity, podName,
+  pvcName, podUid, pvcUid, sourceRemote, revision, branch, sourcePinDigest,
+  callbackDigest, createdAt, startedAt?, stoppedAt?}`. The launch token there
+  is the API-side analogue of bwrap's argv token (it also rides the Pod
+  annotation), and `callbackDigest` is the callback credential digest
+  described above.
+- Liveness (bwrap) = the pid is alive AND its `/proc/<pid>/stat` field 22
+  equals the recorded `procStartTime` AND `/proc/<pid>/cmdline` still
+  contains the `workspaceToken`. A reused PID never matches.
+- Kubernetes liveness is API-side: the Pod exists carrying the bound
+  resource identity, the namespace uid, the full profile id, and the
+  recorded launch token, at the exact positive decimal generation. One
+  ownership validator backs all four operations.
 - `ensure-running` is idempotent: it rediscovers the running resource by the
-  durable identity above (stateDir + pidfile + handle), never by blind
-  creation, and returns the same handle the fleet already holds.
+  durable identity above (stateDir + pidfile + handle; Kubernetes adds the
+  bound object names, identity labels/annotations, and an API uid re-anchor),
+  never by blind creation, and returns the same handle the fleet already
+  holds. A recheck of the namespace uid before returning turns a namespace
+  replaced mid-operation into `conflict` with the observed resources retained.
 - `stop` must PROVE the requested generation terminated before reporting
   `observed: "stopped"`: the recorded identity no longer matches a live
-  process (or the process is gone) for that generation. PID-only checks are
-  forbidden; an uncertain predecessor is `conflict`, and later replacement
-  must not start until the generation's termination is proven.
+  process (bwrap), or the Pod is absent from the API (Kubernetes). PID-only
+  checks are forbidden; an uncertain predecessor is `conflict`, and later
+  replacement must not start until the generation's termination is proven.
 - `delete` removes provider state and runs only after `stop`; it reports
-  `observed: "missing"`.
+  `observed: "missing"`. Kubernetes deletes the Pod, the PVC, and the
+  baseline ConfigMap with atomic `DeleteOptions.preconditions.uid` requests
+  built from each observed object's uid, never a fresh GET followed by a
+  name-only delete (which could remove a replacement object created between
+  the two calls). It then waits for absence and removes provider state only
+  after confirmed deletion; repeated deletion succeeds once all three objects
+  are absent, and partial progress is persisted so a retry is idempotent.
 
 Safety rules (P5.5, never negotiable):
 

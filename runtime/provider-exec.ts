@@ -131,6 +131,30 @@ async function collectPipe(
 }
 
 /**
+ * The successful response shape is profile-dependent: a kubernetes provider
+ * must report the objects it observed (the fleet's namespace-replacement and
+ * owner checks read them), and a bwrap provider must not (it never sees the
+ * cluster). Enforced after parsing so a success envelope can never bypass the
+ * caller's observation check.
+ */
+function requireProfileObservation(request: ProviderRequest, response: ProviderResponse): void {
+	if (!response.ok) return;
+	if (request.profile.provider === "kubernetes") {
+		if (response.kubernetes === undefined) {
+			throw ProviderProtocolError.internal(
+				`kubernetes provider reported ${request.op} success without a kubernetes observation`,
+			);
+		}
+		return;
+	}
+	if (response.kubernetes !== undefined) {
+		throw ProviderProtocolError.internal(
+			`${request.profile.provider} provider reported a kubernetes observation for ${request.op}`,
+		);
+	}
+}
+
+/**
  * Run one provider operation to completion: spawn `<executable> <op>`, write
  * the validated request JSON to stdin, collect bounded stdout/stderr, and
  * return the validated response envelope.
@@ -141,7 +165,9 @@ async function collectPipe(
  * - `timeout` (retryable) — no response within `timeoutMs`; the child is
  *   SIGTERM-killed and SIGKILL-escalated after a grace period;
  * - `internal` — output exceeded the 1 MiB cap, the provider exited non-zero
- *   without a trustworthy envelope, or the response envelope is malformed;
+ *   without a trustworthy envelope, the response envelope is malformed, or a
+ *   success envelope violates its profile's observation shape (kubernetes
+ *   without an observation, bwrap with one);
  * - a provider envelope's own code when the provider exited non-zero but
  *   still produced a valid `ok:false` envelope.
  *
@@ -324,7 +350,9 @@ export async function runProviderOp(
 		}
 
 		try {
-			return parseProviderResponse(stdout);
+			const response = parseProviderResponse(stdout);
+			requireProfileObservation(validated, response);
+			return response;
 		} catch (err) {
 			throw new ProviderOpError({
 				code: "internal",

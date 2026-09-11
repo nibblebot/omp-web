@@ -757,12 +757,16 @@ async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 		);
 	}
 	const dataHome = dirname(configPath);
+	// `serve` strips trailing slashes from OMP_FLEET_CALLBACK_URL before it
+	// hands the origin to a workspace (#callbackUrl), so preflight must check
+	// that same normalized value rather than the raw env value. An
+	// absent/empty value leaves the callback check at "not configured"
+	// (a bwrap fleet has no gateway to reach).
+	const callbackUrl = process.env.OMP_FLEET_CALLBACK_URL?.replace(/\/+$/, "");
 	const result = await runProfilePreflight(profile, {
 		workspaceRoot: config.workspaceDir,
 		logsRoot: join(dataHome, "logs"),
-		// The bwrap provider is not yet wired into a live fleet serve in this
-		// lane (P6); a callback URL is only reachability-class-checked once
-		// the fleet has one to pass.
+		...(callbackUrl !== undefined && callbackUrl !== "" ? { callbackUrl } : {}),
 	});
 	const lines: string[] = [`profile ${profile.id}: ${result.ok ? "ready" : "NOT ready"}`];
 	for (const check of result.checks) {

@@ -3,12 +3,22 @@
  * describe): the /ctl/* routes exercised over loopback HTTP against a real
  * DaemonConnector + the shared fake omp-session daemon (see server.testkit).
  * No real omp-session children are spawned.
+ *
+ * The final describe is unit-level: it drives the clone readiness state
+ * machine (fleet/clone-readiness.ts) through a controllable fake transport,
+ * asserting the validated-hello_ok ready transition, the daemon-side
+ * stream_close, deferred authorization, and stale-generation handling.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, realpathSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { RegistryEntry } from "./registry";
+import type { CallbackEnvelope } from "../shared/callback-protocol";
+import { tempDir } from "../shared/testkit";
+import { CloneReadiness, type CloneReadinessTransport } from "./clone-readiness";
+import type { PairStatus } from "./daemon-transport";
+import { FleetEventLog } from "./events";
+import { Registry, type RegistryEntry, type WorkspaceRecord } from "./registry";
 import type { FleetServer } from "./server";
 import {
 	FAKE_CWD,
@@ -546,5 +556,503 @@ describe("fleet control plane", () => {
 	test("unknown route 404s", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/nope`);
 		expect(res.status).toBe(404);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Clone projections + delete-time provider-kind dispatch
+// ---------------------------------------------------------------------------
+
+/** `git -C <cwd> <args>` (throws on failure). */
+async function git(cwd: string, args: string[]): Promise<string> {
+	const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
+	const [stdout, stderr, code] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
+	if (code !== 0) throw new Error(`git ${args.join(" ")} failed (${code}): ${stderr}`);
+	return stdout.trim();
+}
+
+/** Real local repo with one commit on main (repo-local identity only). */
+async function makeRepo(dir: string): Promise<void> {
+	mkdirSync(dir, { recursive: true });
+	await gitInit(dir, "-b", "main");
+	await git(dir, ["config", "user.email", "test@example.com"]);
+	await git(dir, ["config", "user.name", "Test"]);
+	writeFileSync(join(dir, "readme.md"), "hello\n");
+	await git(dir, ["add", "."]);
+	await git(dir, ["commit", "-q", "-m", "init"]);
+}
+
+/**
+ * Scripted fixture provider speaking OMP_PROVIDER_PROTO = 2 (`<exe> <op>`,
+ * one JSON request on stdin, one JSON envelope on stdout). Every request is
+ * appended to `<stateDir>/ops.jsonl`; ensure reports running, inspect/stop
+ * report stopped, delete reports missing.
+ */
+function writeFakeProvider(dir: string): string {
+	const executable = join(dir, "fake-provider.js");
+	mkdirSync(dir, { recursive: true });
+	const script = `#!/usr/bin/env bun
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+const op = process.argv[2];
+const req = JSON.parse(readFileSync(0, "utf8"));
+mkdirSync(req.stateDir, { recursive: true });
+appendFileSync(join(req.stateDir, "ops.jsonl"), JSON.stringify({ op, generation: req.generation }) + "\\n");
+const ok = (observed) => JSON.stringify({ ok: true, providerProto: 2, handle: req.handle ?? "handle-1", observed, pid: 4242 });
+const err = (code, message) => JSON.stringify({ ok: false, providerProto: 2, error: { code, message, retryable: false } });
+if (op === "ensure-running") console.log(ok("running"));
+else if (op === "inspect") console.log(ok("stopped"));
+else if (op === "stop") console.log(ok("stopped"));
+else if (op === "delete") console.log(ok("missing"));
+else console.log(err("invalid_request", "unknown provider op"));
+`;
+	writeFileSync(executable, script);
+	chmodSync(executable, 0o755);
+	return executable;
+}
+
+/** Fleet-private workspace-record keys that must never cross a route boundary. */
+const PRIVATE_WORKSPACE_KEYS = [
+	"kubernetes",
+	"source",
+	"providerHandle",
+	"enrollment",
+	"deletion",
+	"sourcePinDigest",
+	"lastAttemptedGeneration",
+	"workspace",
+];
+
+/** Assert no fleet-private workspace key exists anywhere in a JSON tree. */
+function expectNoPrivateWorkspaceKeys(value: unknown): void {
+	if (Array.isArray(value)) {
+		for (const item of value) expectNoPrivateWorkspaceKeys(item);
+		return;
+	}
+	if (typeof value !== "object" || value === null) return;
+	for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+		expect(PRIVATE_WORKSPACE_KEYS).not.toContain(key);
+		expectNoPrivateWorkspaceKeys(nested);
+	}
+}
+
+const PUBLIC_WORKSPACE_KEYS = [
+	"branch",
+	"desiredState",
+	"kind",
+	"pinnedRevision",
+	"profileId",
+	"projectId",
+];
+
+/** The full private record a kubernetes clone persists (never real here). */
+function kubernetesWorkspaceRecord(
+	projectId: string,
+	resourceIdentity: string,
+): RegistryEntry["workspace"] {
+	return {
+		kind: "clone",
+		projectId,
+		desiredState: "stopped",
+		profileId: "k8s",
+		providerKind: "kubernetes",
+		kubernetes: {
+			resourceIdentity,
+			context: "minikube",
+			namespace: "omp",
+			namespaceUid: "namespace-uid-1",
+		},
+		source: { remote: "https://example.test/acme/repo.git" },
+		pinnedRevision: "a".repeat(40),
+		branch: "workspace/kube",
+		sourcePinDigest: "b".repeat(64),
+		lastAttemptedGeneration: 3,
+		providerHandle: "k8s-handle",
+		enrollment: { credentialHash: "c".repeat(64), generation: 3 },
+		deletion: {
+			state: "delete-pending-retry",
+			requestedAt: 1,
+			error: { code: "conflict", message: "dirty checkout" },
+		},
+	};
+}
+
+describe("clone public projections", () => {
+	let tmp: string;
+	let workspaceDir: string;
+	let repoDir: string;
+	let projectId: string;
+	let server: FleetServer;
+
+	beforeAll(async () => {
+		const paths = fleetPaths("omp-web-routes-clones-");
+		tmp = paths.tmp;
+		workspaceDir = join(tmp, "workspaces");
+		mkdirSync(workspaceDir, { recursive: true });
+		repoDir = join(tmp, "repo");
+		await makeRepo(repoDir);
+		const provider = writeFakeProvider(join(tmp, "provider"));
+		server = await startTestFleet(
+			{ statePath: paths.statePath, configPath: paths.configPath },
+			{
+				workspaceDir,
+				providerProfiles: {
+					local: { id: "local", provider: "bwrap", executable: provider, tools: [] },
+				},
+			},
+			{ workspaceDir },
+		);
+		projectId = (await server.registry.addProject(repoDir)).projectId;
+	});
+
+	afterAll(async () => {
+		if (server !== undefined) await server.close();
+	});
+
+	/** Create a stopped bwrap clone through the public route. */
+	async function createClone(name: string): Promise<string> {
+		const res = await postJson(server.port, "/ctl/clones", {
+			projectId,
+			name,
+			profileId: "local",
+			start: false,
+		});
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { entry: { daemonId: string } };
+		return body.entry.daemonId;
+	}
+
+	test("POST /ctl/clones returns the public entry projection only", async () => {
+		const res = await postJson(server.port, "/ctl/clones", {
+			projectId,
+			name: "public-entry",
+			profileId: "local",
+			start: false,
+		});
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { entry: Record<string, unknown> };
+		const entry = body.entry;
+		// The public facts the CLI/UI consume.
+		expect(entry.workspaceKind).toBe("clone");
+		expect(entry.desiredState).toBe("stopped");
+		expect(entry.providerProfileId).toBe("local");
+		expect(entry.projectId).toBe(projectId);
+		// The fleet-private record never rides the response: not under a
+		// `workspace` key, not flattened, not under any other name.
+		expect(entry).not.toHaveProperty("workspace");
+		expectNoPrivateWorkspaceKeys(body);
+		// The persisted record behind it really does carry those fields.
+		const raw = server.registry.get(String(entry.daemonId))!.workspace!;
+		expect(raw.providerKind).toBe("bwrap");
+		expect(raw.source).toEqual({ local: realpathSync(repoDir) });
+		expect(raw.pinnedRevision).toBeDefined();
+		expect(typeof raw.branch).toBe("string");
+	});
+
+	test("GET /ctl/sessions exposes only the public workspace projection", async () => {
+		const daemonId = await createClone("projected");
+		const started = await postJson(server.port, "/ctl/start", { daemonId });
+		expect(started.status).toBe(200);
+		const raw = server.registry.get(daemonId)!.workspace!;
+		// Preconditions: the live record carries private facts to drop.
+		expect(raw.providerHandle).toBe("handle-1");
+		expect(raw.enrollment?.generation).toBe(1);
+		expect(raw.lastAttemptedGeneration).toBe(1);
+		expect(raw.source).toBeDefined();
+
+		const k8s = server.registry.create({
+			name: "kube-projected",
+			cwd: "",
+			project: basename(repoDir),
+			projectId,
+			labels: [],
+			mode: "spawned",
+			template: "test",
+			status: "asleep",
+			workspace: kubernetesWorkspaceRecord(projectId, "1".repeat(32)),
+		});
+
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as Array<{
+			daemonId: string;
+			workspace?: Record<string, unknown>;
+		}>;
+		const projected = body.find((entry) => entry.daemonId === daemonId);
+		expect(projected?.workspace).toBeDefined();
+		expect(Object.keys(projected!.workspace!).sort()).toEqual(PUBLIC_WORKSPACE_KEYS);
+		expect(projected!.workspace).toMatchObject({
+			kind: "clone",
+			projectId,
+			profileId: "local",
+			desiredState: "running",
+			pinnedRevision: raw.pinnedRevision,
+			branch: raw.branch,
+		});
+		// A kubernetes record's binding, pin digest, enrollment, and deletion
+		// state are fleet-private even though the record persists them.
+		const kubeEntry = body.find((entry) => entry.daemonId === k8s.daemonId);
+		expect(kubeEntry?.workspace).toBeDefined();
+		expect(Object.keys(kubeEntry!.workspace!).sort()).toEqual(PUBLIC_WORKSPACE_KEYS);
+		expect(server.registry.get(k8s.daemonId)!.workspace!.kubernetes).toBeDefined();
+		// The projected objects carry no private remainder at any depth.
+		expectNoPrivateWorkspaceKeys(projected!.workspace);
+		expectNoPrivateWorkspaceKeys(kubeEntry!.workspace);
+	});
+
+	test("POST /ctl/start and /ctl/wake never return the provider handle", async () => {
+		const started = await createClone("start-handle");
+		const startRes = await postJson(server.port, "/ctl/start", { daemonId: started });
+		expect(startRes.status).toBe(200);
+		const startBody: Record<string, unknown> = await startRes.json();
+		expect(startBody).toEqual({ daemonId: started, observed: "running", generation: 1 });
+		expectNoPrivateWorkspaceKeys(startBody);
+		// The record does hold the handle the route withholds.
+		expect(server.registry.get(started)!.workspace!.providerHandle).toBe("handle-1");
+		// The provider reported running, but nothing validated the daemon: the
+		// lifecycle publishes the TRANSITIONAL session rung + callback stage and
+		// never "ready" on either readiness field. Readiness belongs to the
+		// readiness owner's validated probe alone — a callback-only ready
+		// window (or a pre-validated ready) is exactly what this guards.
+		const startedEntry = server.registry.get(started)!;
+		expect(startedEntry.status).toBe("session");
+		expect(startedEntry.lifecycleStage).toBe("callback");
+
+		const woken = await createClone("wake-handle");
+		const wakeRes = await postJson(server.port, "/ctl/wake", { daemonId: woken });
+		expect(wakeRes.status).toBe(200);
+		const wakeBody: Record<string, unknown> = await wakeRes.json();
+		expect(wakeBody).toEqual({ daemonId: woken, observed: "running", generation: 1 });
+		expectNoPrivateWorkspaceKeys(wakeBody);
+		expect(server.registry.get(woken)!.workspace!.providerHandle).toBe("handle-1");
+	});
+});
+
+/**
+ * Clone readiness state machine (fleet/clone-readiness.ts): the probe owns the
+ * `ready` transition, closes the daemon-side stream on every path, retries a
+ * pair observed before authorization without expiring, and never labels a
+ * superseded generation ready. A controllable fake transport drives each frame
+ * deterministically — no real daemon, no timers beyond the explicit waits.
+ */
+function makeReadinessHarness(): {
+	transport: CloneReadinessTransport;
+	events: string[];
+	openStreams: string[];
+	deliver(streamId: string, payload: Record<string, unknown>): void;
+	/** Re-fire the pair listeners (a pair re-established after a drop). */
+	pairChange(): void;
+} {
+	const pairListeners = new Map<string, Set<(status: PairStatus) => void>>();
+	const streams = new Map<string, { deliver(envelope: CallbackEnvelope): void | Promise<void> }>();
+	const events: string[] = [];
+	const openStreams: string[] = [];
+	const statusFor = (workspaceId: string): PairStatus => ({
+		workspaceId,
+		enrolled: true,
+		authorizedGeneration: 1,
+		paired: true,
+		connectionId: "conn-1",
+		replayDepth: 0,
+		lastEnvelopeAt: null,
+		lastDownSendAt: null,
+		envelopesReceived: 0,
+		upBytesIn: 0,
+		streams: [],
+	});
+	const transport: CloneReadinessTransport = {
+		onPairChange(workspaceId, cb) {
+			let set = pairListeners.get(workspaceId);
+			if (set === undefined) {
+				set = new Set();
+				pairListeners.set(workspaceId, set);
+			}
+			set.add(cb);
+			return () => set.delete(cb);
+		},
+		pairStatus: (workspaceId) => statusFor(workspaceId),
+		attachVirtualStream(_workspaceId, streamId, sink) {
+			streams.set(streamId, sink);
+		},
+		detachVirtualStream(_workspaceId, streamId) {
+			if (streams.delete(streamId)) events.push(`detach:${streamId}`);
+		},
+		async sendToDaemon(_workspaceId, draft) {
+			const payload = draft.payload as { type?: unknown } | undefined;
+			const type = typeof payload?.type === "string" ? payload.type : "";
+			const streamId = String(draft.streamId);
+			if (type === "stream_open") openStreams.push(streamId);
+			events.push(`${type}:${streamId}`);
+			return { streamId } as CallbackEnvelope;
+		},
+	};
+	return {
+		transport,
+		events,
+		openStreams,
+		deliver(streamId, payload) {
+			const sink = streams.get(streamId);
+			if (sink === undefined) throw new Error(`no attached stream ${streamId}`);
+			sink.deliver({ kind: "frame", streamId, payload } as unknown as CallbackEnvelope);
+		},
+		pairChange() {
+			for (const [workspaceId, listeners] of pairListeners) {
+				for (const cb of [...listeners]) cb(statusFor(workspaceId));
+			}
+		},
+	};
+}
+
+function seedClone(
+	registry: Registry,
+	workspaceDir: string,
+	overrides: Partial<WorkspaceRecord> = {},
+): RegistryEntry {
+	const entry = registry.create({
+		name: "clone",
+		cwd: "",
+		project: "proj",
+		projectId: "p1",
+		labels: [],
+		mode: "spawned",
+		status: "spawning",
+		workspace: {
+			kind: "clone",
+			projectId: "p1",
+			desiredState: "running",
+			profileId: "local",
+			providerKind: "bwrap",
+			authorizedGeneration: 1,
+			...overrides,
+		},
+	});
+	return registry.update(entry.daemonId, { cwd: join(workspaceDir, entry.daemonId) });
+}
+
+function helloReady(entry: RegistryEntry): Array<Record<string, unknown>> {
+	return [
+		{
+			type: "hello_ok",
+			cwd: join(entry.cwd, ".checkout"),
+			sessionFile: join(entry.cwd, "s.jsonl"),
+		},
+		{ type: "ready" },
+	];
+}
+
+describe("clone readiness probe lifecycle", () => {
+	function setup() {
+		const workspaceDir = join(tempDir("omp-readiness-"), "workspaces");
+		mkdirSync(workspaceDir, { recursive: true });
+		const registry = new Registry(join(workspaceDir, "state.json"));
+		const harness = makeReadinessHarness();
+		const readiness = new CloneReadiness({
+			registry,
+			transport: harness.transport,
+			eventLog: new FleetEventLog(),
+			workspaceDir,
+		});
+		return { workspaceDir, registry, harness, readiness };
+	}
+
+	test("validates hello_ok+ready and closes the daemon stream before local detach", async () => {
+		const { workspaceDir, registry, harness, readiness } = setup();
+		const entry = seedClone(registry, workspaceDir);
+		readiness.watch(entry.daemonId);
+		await waitFor(() => harness.openStreams.length === 1, 2000, "stream_open");
+		// A live pair alone is never readiness: the probe is still awaiting
+		// frames, so NEITHER readiness field (status, lifecycleStage) may say
+		// ready yet.
+		expect(registry.get(entry.daemonId)?.status).not.toBe("ready");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).not.toBe("ready");
+		const streamId = harness.openStreams[0]!;
+		// A lone `ready` frame is not readiness either — only the hello_ok+ready
+		// pair is (an early-primed daemon must not promote).
+		harness.deliver(streamId, { type: "ready" });
+		expect(registry.get(entry.daemonId)?.status).not.toBe("ready");
+		for (const frame of helloReady(entry)) harness.deliver(streamId, frame);
+		await waitFor(() => registry.get(entry.daemonId)?.status === "ready", 2000, "ready");
+		await waitFor(() => harness.events.includes(`detach:${streamId}`), 2000, "detach");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).toBe("ready");
+		expect(registry.get(entry.daemonId)?.lifecycleError).toBeUndefined();
+		expect(harness.events).toEqual([
+			`stream_open:${streamId}`,
+			`stream_close:${streamId}`,
+			`detach:${streamId}`,
+		]);
+		readiness.close();
+	});
+
+	test("a conclusive cwd mismatch fails the clone instead of promoting it", async () => {
+		const { workspaceDir, registry, harness, readiness } = setup();
+		const entry = seedClone(registry, workspaceDir);
+		readiness.watch(entry.daemonId);
+		await waitFor(() => harness.openStreams.length === 1, 2000, "stream_open");
+		const streamId = harness.openStreams[0]!;
+		harness.deliver(streamId, { type: "hello_ok", cwd: "/elsewhere", sessionFile: "" });
+		harness.deliver(streamId, { type: "ready" });
+		await waitFor(() => registry.get(entry.daemonId)?.status === "error", 2000, "error");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).toBe("failed");
+		expect(registry.get(entry.daemonId)?.lifecycleError).toContain("does not match");
+		// The conclusive failure survives a pair (re)establishment: the pair
+		// event re-probes, and with no validated frames arriving that probe
+		// never promotes — it certainly never erases the mismatch.
+		harness.pairChange();
+		await waitFor(() => harness.openStreams.length === 2, 2000, "reprobe stream_open");
+		expect(registry.get(entry.daemonId)?.status).toBe("error");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).toBe("failed");
+		expect(registry.get(entry.daemonId)?.lifecycleError).toContain("does not match");
+		readiness.close();
+	});
+
+	test("a pair observed before authorization is probed when onRuntimeRunning fires", async () => {
+		const { workspaceDir, registry, harness, readiness } = setup();
+		const entry = seedClone(registry, workspaceDir, { authorizedGeneration: undefined });
+		readiness.watch(entry.daemonId);
+		// Not authorized: check() returns before starting any probe (no timer).
+		expect(harness.openStreams).toHaveLength(0);
+		registry.updateWorkspace(entry.daemonId, { authorizedGeneration: 1 });
+		readiness.onRuntimeRunning(entry.daemonId);
+		await waitFor(() => harness.openStreams.length === 1, 2000, "stream_open after auth");
+		const streamId = harness.openStreams[0]!;
+		for (const frame of helloReady(entry)) harness.deliver(streamId, frame);
+		await waitFor(() => registry.get(entry.daemonId)?.status === "ready", 2000, "ready");
+		readiness.close();
+	});
+
+	test("a probe superseded by a newer generation is not labeled ready", async () => {
+		const { workspaceDir, registry, harness, readiness } = setup();
+		const entry = seedClone(registry, workspaceDir);
+		readiness.watch(entry.daemonId);
+		await waitFor(() => harness.openStreams.length === 1, 2000, "first stream_open");
+		const staleStream = harness.openStreams[0]!;
+		// A new launch is authorized while the first probe is in flight.
+		registry.updateWorkspace(entry.daemonId, { authorizedGeneration: 2 });
+		for (const frame of helloReady(entry)) harness.deliver(staleStream, frame);
+		await waitFor(() => harness.openStreams.length === 2, 2000, "second stream_open");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).not.toBe("ready");
+		expect(registry.get(entry.daemonId)?.status).not.toBe("ready");
+		const freshStream = harness.openStreams[1]!;
+		for (const frame of helloReady(entry)) harness.deliver(freshStream, frame);
+		await waitFor(() => registry.get(entry.daemonId)?.status === "ready", 2000, "ready");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).toBe("ready");
+		readiness.close();
+	});
+
+	test("onRuntimeStopped cancels an in-flight probe without promoting it", async () => {
+		const { workspaceDir, registry, harness, readiness } = setup();
+		const entry = seedClone(registry, workspaceDir);
+		readiness.watch(entry.daemonId);
+		await waitFor(() => harness.openStreams.length === 1, 2000, "stream_open");
+		const streamId = harness.openStreams[0]!;
+		readiness.onRuntimeStopped(entry.daemonId);
+		await waitFor(() => harness.events.includes(`detach:${streamId}`), 2000, "cancel detach");
+		expect(registry.get(entry.daemonId)?.lifecycleStage).not.toBe("ready");
+		expect(registry.get(entry.daemonId)?.status).not.toBe("ready");
+		readiness.close();
 	});
 });

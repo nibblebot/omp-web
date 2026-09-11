@@ -1,5 +1,6 @@
 import type { ClientCommand, ProjectBranch, ProjectEntry } from "../../shared/protocol";
 import { setState } from "../state";
+import { randomId } from "./ids";
 import { ctlFetch, isConnected, postCommand } from "./transport";
 
 /**
@@ -56,13 +57,11 @@ export function listProjects(): Promise<ProjectEntry[]> {
 	}
 	pendingProjects?.([]);
 	pendingProjects = resolve;
-	postCommand({ type: "list_projects", id: crypto.randomUUID() } satisfies ClientCommand).catch(
-		(err) => {
-			// Latest-wins: only clear the slot if a newer request hasn't claimed it.
-			if (pendingProjects === resolve) pendingProjects = null;
-			reject(err instanceof Error ? err : new Error(String(err)));
-		},
-	);
+	postCommand({ type: "list_projects", id: randomId() } satisfies ClientCommand).catch((err) => {
+		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
+		if (pendingProjects === resolve) pendingProjects = null;
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
@@ -78,7 +77,7 @@ export function listProjectBranches(projectId: string): Promise<ProjectBranch[]>
 	pendingBranches = { projectId, resolve };
 	postCommand({
 		type: "list_project_branches",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		projectId,
 	} satisfies ClientCommand).catch((err) => {
 		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
@@ -94,7 +93,7 @@ export function spawnDaemon(cwd: string, template?: string, labels?: string[]): 
 	if (!isConnected()) return;
 	void postCommand({
 		type: "spawn",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		cwd,
 		...(template !== undefined ? { template } : {}),
 		...(labels !== undefined ? { labels } : {}),
@@ -106,7 +105,7 @@ export function spawnResume(daemonId: string): void {
 	if (!isConnected()) return;
 	void postCommand({
 		type: "spawn_resume",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		daemonId,
 	} satisfies ClientCommand).catch(() => {});
 }
@@ -116,7 +115,7 @@ export function stopDaemonById(daemonId: string): void {
 	if (!isConnected()) return;
 	void postCommand({
 		type: "stop",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		daemonId,
 	} satisfies ClientCommand).catch(() => {});
 }
@@ -126,7 +125,7 @@ export function removeDaemonById(daemonId: string): void {
 	if (!isConnected()) return;
 	void postCommand({
 		type: "remove",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		daemonId,
 	} satisfies ClientCommand).catch(() => {});
 }
@@ -155,7 +154,7 @@ export function sendAddProject(
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
 		type: "add_project",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		path,
 		...(opts.start !== undefined ? { start: opts.start } : {}),
 		...(opts.template !== undefined ? { template: opts.template } : {}),
@@ -169,7 +168,7 @@ export function sendRemoveProject(projectId: string): void {
 	if (!isConnected()) return;
 	void postCommand({
 		type: "remove_project",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		projectId,
 	} satisfies ClientCommand).catch(() => {});
 }
@@ -186,7 +185,7 @@ export function sendCreateWorktree(
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
 		type: "create_worktree",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		projectId,
 		name,
 		...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
@@ -219,7 +218,7 @@ export function sendCreateClone(
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
 		type: "create_clone",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		projectId,
 		name,
 		profileId: opts.profileId,
@@ -241,7 +240,7 @@ export function sendAddExistingWorktree(
 	if (opts.start === true) setState("pendingSessionPicker", PICKER_GATE_ARMED);
 	void postCommand({
 		type: "add_worktree",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		projectId,
 		worktreePath,
 		...(opts.start !== undefined ? { start: opts.start } : {}),
@@ -255,7 +254,7 @@ export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: bool
 	if (!isConnected()) return;
 	void postCommand({
 		type: "delete_worktree",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		daemonId,
 		...(opts.deleteBranch !== undefined ? { deleteBranch: opts.deleteBranch } : {}),
 	} satisfies ClientCommand).catch(() => {});
@@ -267,7 +266,7 @@ export function sendWorktreeDeleteInfo(daemonId: string): void {
 	if (!isConnected()) return;
 	void postCommand({
 		type: "worktree_delete_info",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		daemonId,
 	} satisfies ClientCommand).catch(() => {});
 }

@@ -1,31 +1,16 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import {
-	mkdtempSync,
-	mkdirSync,
-	readFileSync,
-	readdirSync,
-	rmSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cleanupTempDirs, tempDir } from "../shared/testkit";
+import type { WorkspaceRecord } from "./registry";
 import { bootStatusFor, Registry } from "./registry";
-
-const tmpDirs: string[] = [];
 
 afterAll(cleanupTempDirs);
 
 function tmpStatePath(): string {
-	const dir = mkdtempSync(join(tmpdir(), "omp-session-registry-"));
-	tmpDirs.push(dir);
-	return join(dir, "state.json");
+	return join(tempDir("omp-session-registry-"), "state.json");
 }
-
-afterAll(() => {
-	for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
-});
 
 type CreateInit = Parameters<Registry["create"]>[0];
 
@@ -526,5 +511,118 @@ describe("bootStatusFor (#3 boot reconciliation)", () => {
 			expect(bootStatusFor({ ...remote, status })).toBe("connecting");
 			expect(bootStatusFor({ ...attached, status })).toBe("connecting");
 		}
+	});
+});
+
+describe("workspace provider records (P5.3)", () => {
+	const IDENTITY = "0123456789abcdef0123456789abcdef";
+
+	test("providerKind, kubernetes binding, sourcePinDigest, lastAttemptedGeneration, and the deletion receipt round-trip through save/load", async () => {
+		const statePath = tmpStatePath();
+		const registry = await loadedRegistry(statePath);
+		const entry = registry.create(
+			baseInit({
+				workspace: {
+					kind: "clone",
+					projectId: "p1",
+					source: { remote: "ssh://git@example.test/org/repo.git" },
+					branch: "main",
+					profileId: "kube",
+					providerKind: "kubernetes",
+					kubernetes: {
+						resourceIdentity: IDENTITY,
+						context: "ctx-1",
+						namespace: "ns-1",
+						namespaceUid: "ns-uid-1",
+					},
+					sourcePinDigest: "d".repeat(64),
+					lastAttemptedGeneration: 7,
+					desiredState: "stopped",
+					authorizedGeneration: 5,
+					providerHandle: "handler-1",
+					enrollment: { credentialHash: "e".repeat(64), generation: 5 },
+				},
+			}),
+		);
+		registry.setWorkspaceDeletion(entry.daemonId, {
+			state: "delete-pending-retry",
+			requestedAt: 1_700_000_000_000,
+			error: { code: "conflict", message: "namespace uid changed", path: entry.daemonId },
+			remainingResources: [`omp-ws-${IDENTITY}`],
+			receipt: {
+				requestId: "req-1",
+				correlationId: "corr-1",
+				generation: 5,
+				podUid: "pod-uid-1",
+				pvcUid: "pvc-uid-1",
+				state: "invalid",
+			},
+		});
+
+		const reloaded = await loadedRegistry(statePath);
+		// Whole-record reload equality: the new provider fields, the pinned
+		// source digest, and the stop/delete evidence receipt all round-trip.
+		expect(reloaded.get(entry.daemonId)?.workspace).toEqual(
+			registry.get(entry.daemonId)?.workspace,
+		);
+	});
+
+	test("an old state file without the new workspace fields loads unchanged and stays without them", async () => {
+		const statePath = tmpStatePath();
+		const legacyWorkspace: WorkspaceRecord = {
+			kind: "clone",
+			projectId: "p1",
+			source: { local: "/srv/repo" },
+			branch: "main",
+			profileId: "local",
+			desiredState: "stopped",
+			pinnedRevision: "abc123",
+		};
+		writeFileSync(
+			statePath,
+			JSON.stringify({
+				nextId: 2,
+				entries: [
+					{
+						daemonId: "d1",
+						name: "legacy",
+						cwd: "/srv/volumes/d1",
+						project: "repo",
+						labels: [],
+						mode: "spawned",
+						status: "asleep",
+						registeredAt: 1,
+						workspace: legacyWorkspace,
+					},
+				],
+			}),
+		);
+
+		const registry = await loadedRegistry(statePath);
+		expect(registry.get("d1")?.workspace).toEqual(legacyWorkspace);
+		// The new optional fields are absent, never synthesized on load.
+		expect(registry.get("d1")?.workspace?.providerKind).toBeUndefined();
+		expect(registry.get("d1")?.workspace?.kubernetes).toBeUndefined();
+		expect(registry.get("d1")?.workspace?.sourcePinDigest).toBeUndefined();
+		expect(registry.get("d1")?.workspace?.lastAttemptedGeneration).toBeUndefined();
+
+		// A later mutation of a legacy field persists the record without
+		// inventing any of the new keys.
+		registry.updateWorkspace("d1", { desiredState: "running" });
+		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as {
+			entries: Array<{ workspace: Record<string, unknown> }>;
+		};
+		expect(onDisk.entries[0]!.workspace).toEqual({ ...legacyWorkspace, desiredState: "running" });
+		expect(Object.keys(onDisk.entries[0]!.workspace).sort()).toEqual(
+			[
+				"branch",
+				"desiredState",
+				"kind",
+				"pinnedRevision",
+				"profileId",
+				"projectId",
+				"source",
+			].sort(),
+		);
 	});
 });

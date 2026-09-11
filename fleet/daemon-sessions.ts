@@ -23,7 +23,9 @@ import type { SessionListEntry } from "../shared/protocol";
  * SDK SessionManager listing. The edge injects the fleet's FleetLogStore via
  * this STRUCTURAL subset so this module never imports the fleet log-store
  * implementation (it stays a fleet/transport-boundary leaf). FleetLogStore's
- * `listStoredSessions(workspaceId)` satisfies it exactly.
+ * `listStoredSessions(workspaceId)` satisfies it exactly. Listing only:
+ * consumers that also read stored bytes compose the head-read surface
+ * (stored-sessions' head reader) rather than widening this contract.
  */
 export interface CloneSessionStore {
 	listStoredSessions(workspaceId: string): StoredSessionInfo[];

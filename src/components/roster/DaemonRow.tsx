@@ -19,9 +19,10 @@ import { unreadIds } from "../../fleet-ui/unread";
 import {
 	attachSession,
 	call,
+	openDaemonSession,
+	openStoredHistory,
 	removeDaemonById,
 	requestDaemonSessions,
-	resumeDaemonSession,
 	sendWorktreeDeleteInfo,
 	setState,
 	spawnResume,
@@ -45,7 +46,9 @@ import { DaemonDetailView } from "./DaemonDetailView";
 // ---------------------------------------------------------------------------
 // One fleet-roster row: status dot, branch/project chips, git diffstat, and a
 // hover-revealed "⋯" actions menu (details, two-click stop/remove, delete
-// worktree). Ready rows attach on click, asleep rows wake-then-attach.
+// worktree). Ready rows attach on click; asleep non-clone rows wake-then-attach;
+// a clone in any other status opens its fleet-stored history read-only, never
+// waking compute to read it.
 // Two distilled profiles exist beside the full one: worktree rows (nested,
 // branch as title) and root rows (a project group's main checkout — root
 // glyph + branch as title, no project chip or cwd line; the group header
@@ -239,7 +242,13 @@ export const DaemonRow: Component<{
 		return a ? ACTIVITY_TITLE[a] : undefined;
 	});
 
-	const clickable = () => d().status === "ready" || d().status === "asleep";
+	// One availability predicate drives both the row and its session-title
+	// trigger: ready rows attach, asleep non-clone rows wake, and EVERY clone
+	// status is interactive — a ready clone attaches while any other status
+	// (asleep, failed, mid-transition) opens the fleet-stored transcript
+	// read-only. Waking a stopped clone is an explicit menu action, never a
+	// side effect of reading.
+	const clickable = () => isClone() || d().status === "ready" || d().status === "asleep";
 	/** Loading phase: activating but the daemon isn't ready yet. Renders with
 	 *  the pulsing transitional ("resolving") visual vocabulary. */
 	const waking = () => activating() && d().status !== "ready";
@@ -260,12 +269,10 @@ export const DaemonRow: Component<{
 	/** "1 file" / "3 files" — English plural for the diffstat titles. */
 	const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-	// Clicking the row CARD (anything but the session-title line) resumes the
-	// daemon's current session: ready rows attach; stopped (asleep) rows wake
-	// (respawn --resume lastSessionFile) then attach — no dead space, the whole
-	// card is the resume target. The session-title line is the dropdown trigger
-	// (sessionTitleClick below); clicking an open dropdown's own entry resumes
-	// that session.
+	// Clicking the row CARD (anything but the session-title line): ready rows
+	// attach (the action owns its own clone fallback), a non-ready clone shows
+	// its stored transcript, and an asleep non-clone wakes then attaches. The
+	// session-title line is the dropdown trigger (sessionTitleClick below).
 	const rowClick = () => {
 		if (activating()) return;
 		// Clicking the card is a resume action — close any open dropdown (the
@@ -276,7 +283,13 @@ export const DaemonRow: Component<{
 			// Already the attached session: clicking its card is a no-op (a
 			// redundant attach round-trip would also reset the chat view).
 			if (daemon.daemonId === state.currentSessionId) return;
-			void attachSession(daemon.daemonId).catch((err) => setState("error", String(err)));
+			// The action owns the clone stored-history fallback; a non-clone
+			// attach failure still surfaces as the usual error banner.
+			void openDaemonSession(daemon.daemonId).catch((err) => setState("error", String(err)));
+		} else if (isClone()) {
+			// Not ready (stopped, failed, or unreachable): show the stored
+			// transcript read-only. Never wake compute to read.
+			void openStoredHistory(daemon.daemonId);
 		} else if (daemon.status === "asleep") {
 			// Wake then attach: the edge wakes first and answers the attach
 			// once the session is ready — send both immediately, the edge
@@ -297,11 +310,12 @@ export const DaemonRow: Component<{
 		}
 	};
 
-	/** Toggle this row's session dropdown (the session-title line only). */
+	/** Toggle this row's session dropdown (the session-title line only); the
+	 *  dropdown routes non-ready clones to stored history. */
 	const sessionTitleClick = () => {
 		if (activating()) return;
 		const daemon = d();
-		if (daemon.status !== "ready" && daemon.status !== "asleep") return;
+		if (!clickable()) return;
 		// The kebab menu closes so the two popups never stack; the card's
 		// resume handler is suppressed by the title's stopPropagation.
 		setMenuOpenId(null);
@@ -335,9 +349,11 @@ export const DaemonRow: Component<{
 				title={
 					waking()
 						? "waking — session starting…"
-						: isAttached()
-							? "active session"
-							: (STATUS_TITLE[d().status] ?? d().status)
+						: isClone() && d().status !== "ready"
+							? `${d().status} — view stored history (read-only)`
+							: isAttached()
+								? "active session"
+								: (STATUS_TITLE[d().status] ?? d().status)
 				}
 			>
 				<span
@@ -507,9 +523,10 @@ export const DaemonRow: Component<{
 					    file's JSONL title slot; the worktree row is the motivating
 					    case). An empty/new session has no title and renders "New
 					    session" instead. The line is also the row's dropdown trigger:
-					    clicking it opens the last-10-sessions resume picker (ready/
-					    asleep rows only). Shows on every profile that carries it; the
-					    line truncates and the tooltip exposes the full string. */}
+					    clicking it opens the last-10-sessions picker on every
+					    clickable profile (see the shared clickable() predicate).
+					    Shows on every profile that carries it; the line truncates
+					    and the tooltip exposes the full string. */}
 					<Show when={sessionTitleText()}>
 						{(title) => (
 							<div
@@ -662,7 +679,8 @@ export const DaemonRow: Component<{
 				</div>
 				{/* Session dropdown (last-10 in this worktree, newest-first); opens on
 				    row click and is anchored to the row. Clicking an entry resumes
-				    that session. Absent for non-clickable (transitional/error) rows. */}
+				    that session. Absent for non-clickable rows (non-clone
+				    transitional/error). */}
 				<Show when={sessionsOpen()}>
 					<DaemonSessionsDropdown daemon={d()} onClose={() => setSessionsOpenId(null)} />
 				</Show>
@@ -678,9 +696,10 @@ export const DaemonRow: Component<{
 // Session dropdown (DaemonSessionsDropdown): the worktree's last-10 sessions,
 // newest-first, anchored to the row. Fetch happens on mount through the fleet
 // edge (list_daemon_sessions) — asleep/never-started daemons answer from disk
-// too, no live process needed. Clicking an entry resumes that session: asleep
-// rows wake with spawn_resume carrying the file, ready rows attach (if not
-// already) and switchSession to it.
+// too, no live process needed. Clicking an entry resumes that session through
+// openDaemonSession: an asleep non-clone wakes then attaches, a ready row
+// attaches (if not already) then switches. A clone whose worker is not ready
+// has nothing to resume — its picks open the fleet-stored transcript read-only.
 // ---------------------------------------------------------------------------
 
 /** Relative time ("2m ago") for the dropdown rows — SessionModal-style. */
@@ -713,24 +732,35 @@ const DaemonSessionsDropdown: Component<{
 			? state.sessionFile
 			: props.daemon.lastSessionFile;
 
-	const resume = (path: string) => {
+	/** A clone whose worker is not ready has no session to resume: every pick
+	 *  opens the fleet-stored transcript read-only instead (a stopped pod or
+	 *  an unreachable cluster cannot be dialed). */
+	const storedOnly = () =>
+		props.daemon.workspaceKind === "clone" && props.daemon.status !== "ready";
+
+	const resume = (session: SessionListEntry) => {
 		const id = props.daemon.daemonId;
+		if (storedOnly()) {
+			props.onClose();
+			void openStoredHistory(id, session.id);
+			return;
+		}
 		const wasAsleep = props.daemon.status === "asleep";
-		// Wake pulse for an asleep row (mirrors the old row-click wake): set
-		// the activating id before the resume, clear when the attach settles.
+		// Wake pulse for an asleep row (mirrors the row-click wake): set the
+		// activating id before the resume, clear when it settles.
 		if (wasAsleep) setActivatingIds((prev) => new Set(prev).add(id));
-		const pending = resumeDaemonSession(id, path);
+		// openDaemonSession owns the clone fallback; a non-clone failure still
+		// surfaces as the usual error banner.
+		const pending = openDaemonSession(id, session).catch((err) => setState("error", String(err)));
 		props.onClose();
 		if (wasAsleep) {
-			Promise.resolve(pending)
-				.catch(() => {})
-				.finally(() =>
-					setActivatingIds((prev) => {
-						const next = new Set(prev);
-						next.delete(id);
-						return next;
-					}),
-				);
+			void pending.finally(() =>
+				setActivatingIds((prev) => {
+					const next = new Set(prev);
+					next.delete(id);
+					return next;
+				}),
+			);
 		}
 	};
 
@@ -744,7 +774,9 @@ const DaemonSessionsDropdown: Component<{
 				<div class="daemon-session-note">no sessions yet</div>
 			) : (
 				<>
-					<div class="daemon-session-menu-hint">resume a session</div>
+					<div class="daemon-session-menu-hint">
+						{storedOnly() ? "view stored history (read-only)" : "resume a session"}
+					</div>
 					<For each={sessions()}>
 						{(s) => (
 							<button
@@ -753,7 +785,7 @@ const DaemonSessionsDropdown: Component<{
 								class="sidebar-menu-item daemon-session-item"
 								classList={{ active: currentFile === s.path }}
 								title={s.cwd}
-								onClick={() => resume(s.path)}
+								onClick={() => resume(s)}
 							>
 								<span class="daemon-session-item-name">{s.name ?? s.id.slice(0, 8)}</span>
 								<span class="daemon-session-item-time">{formatTimeAgo(s.modifiedAt)}</span>

@@ -200,3 +200,25 @@
 	font-size: var(--fs-md);
 	color: var(--muted);
 }
+
+/* Read-only session view: the attached worker is gone (pod stopped, cluster
+   unreachable) but its transcript is still worth reading. Marked explicitly so
+   the missing composer never reads as a UI bug, and so the read-only contract
+   stays visible. Wraps at narrow widths so the stored-history button never
+   squeezes the label. */
+.session-readonly-title {
+	margin: 0;
+}
+.session-readonly-strip {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--space-4);
+	margin-bottom: var(--space-3);
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--panel-2);
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}

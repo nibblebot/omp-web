@@ -34,19 +34,39 @@ its own volume (`.checkout/` working clone with an independent object store,
 `.home/` private writable home whose `agent/sessions` tree holds the
 transcripts) with the session daemon inside, dialing the fleet over the
 outbound callback pair. Profiles carry operator-declared limits and secret
-references (names only cross trust boundaries). `omp-web preflight --profile
+references (names only cross trust boundaries): a `bwrap` profile's
+`secretRefs` values are `env:NAME` references resolved from the fleet host's
+environment, while a `kubernetes` profile's are `<secretName>/<key>`
+references to Secrets in the profile namespace. `omp-web preflight --profile
 <id>` validates a profile's executable, tools, secret references, and
-callback reachability before workspaces use it. The required streaming
-gateway/proxy and cluster prerequisites are operator setup, not something
-omp-web provisions; see [`docs/architecture.md`](docs/architecture.md) and
+callback reachability before workspaces use it. The required HTTPS streaming
+gateway and cluster prerequisites are operator setup, not something omp-web
+provisions; see [`docs/architecture.md`](docs/architecture.md) and
 [`runtime/image/README.md`](runtime/image/README.md).
+
+### Kubernetes profiles
+
+A Kubernetes profile names its cluster facts (`context`, `namespace`,
+`image`, `resources`, `storage`, `secretRefs`) in `providerProfiles`. The
+installed package ships the provider executable (`dist-bundle/providers/`)
+and a complete session-runtime image build context (`dist-bundle/image/`);
+building the image, namespace RBAC, the HTTPS callback gateway, and the
+host/Pod credential split are operator setup documented once in
+[`runtime/image/README.md`](runtime/image/README.md). A ready-to-edit profile
+lives in the source checkout at
+[`fleet/examples/kubernetes.json`](fleet/examples/kubernetes.json) (source
+only; the installed package does not include `fleet/`).
+
+`omp-web preflight --profile <id>` validates a profile before use, and
+`add-clone`, `stop`, `start`, and `remove` drive the same clone lifecycle and
+verified-deletion gate as any other clone.
 
 Clone workspace notes:
 
 - **Stop and wake.** `stop` keeps the checkout and the session logs. `wake` re-provisions compute and resumes the last session; a cold volume (or missing transcript) is materialized byte-identical from the fleet store before the resume path runs, and an explicit session pick on a ready clone switches to that real session rather than booting fresh.
 - **Deletion is verified.** Deleting a clone workspace runs the verify-at-deletion gate (quiesce, Git guard, store completeness, read-only flip) before any provider or volume deletion; a blocked deletion keeps the workspace, volume, and logs.
 - **Session logs are not the workspace.** Transcripts never contain working-tree files; uncommitted work in a clone is not recoverable from them.
-- **Runtime distribution.** The fleet ships the provider executables and a reproducible session-runtime image definition; provider runtimes must be installed and preflighted per host. Isolation limits are honest ones: bwrap and Kubernetes sandboxes share the host kernel, and model/tool credentials reach the sandbox as environment values that a sandboxed process can read. See the security section in [`docs/architecture.md`](docs/architecture.md).
+- **Runtime distribution.** Provider runtimes ship with the package (`dist-bundle/`) but must be installed and preflighted per host. Isolation limits are honest ones: bwrap and Kubernetes sandboxes share the host kernel, and model/tool credentials reach the sandbox as environment values that a sandboxed process can read. See the security section in [`docs/architecture.md`](docs/architecture.md).
 
 > **Status of runtime claims.** omp-web does not yet claim production-grade
 > proof for the clone runtime: real Kubernetes lifecycle evidence (no operator
