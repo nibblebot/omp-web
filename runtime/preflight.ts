@@ -10,8 +10,12 @@
  *  - profile executable present + executable bit;
  *  - runtime entry (the sandboxed omp-session entry) + runtime binary (bun)
  *    resolvable;
- *  - callback URL reachability CLASS-CHECK (DNS + TCP only; no bytes are
- *    ever written, so no credential or request can leak) when configured;
+ *  - callback URL reachability CLASS-CHECK from the FLEET HOST (DNS + TCP
+ *    only; no bytes are ever written, so no credential or request can leak);
+ *    optional for bwrap (no gateway required), REQUIRED for a kubernetes
+ *    profile, which admits only the HTTPS origin the daemon itself accepts
+ *    (server/config.ts parseKubernetesCallbackUrl) and cannot admit the
+ *    loopback HTTP URL `serve` derives when none is configured;
  *  - durable state dirs writable (workspace root + logs root; a missing dir
  *    passes when its parent is writable — those dirs are created lazily on
  *    demand, so a preflight must not require them to pre-exist);
@@ -19,8 +23,13 @@
  *    a profile requesting a denied bind fails HERE with an actionable
  *    message (the same denylist the argv builder enforces at request time,
  *    P5.5);
- *  - k8s-only fields (storage class/size, image, namespace, secretRefs) are
- *    reported as NOT-YET-SUPPORTED (P5.3) rather than failed: on the bwrap
+ *  - kubernetes profiles run the provider's own requirement preflight
+ *    (`preflightKubernetesProfile`: explicit context, API reachability,
+ *    namespace access, Pod/PVC get/create/delete rights, StorageClass,
+ *    Secret key names, image) in process, alongside the executable, callback,
+ *    and durable-directory checks; an executor that cannot run becomes a
+ *    failed row with remediation instead of an exception;
+ *  - k8s-only fields on a bwrap profile stay informational: on the bwrap
  *    provider they are inert, and preflight must distinguish an inert
  *    declaration from an unsafe promise.
  *
@@ -36,6 +45,7 @@ import { connect } from "node:net";
 import { lookup } from "node:dns/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ProviderProfile } from "../shared/provider-protocol";
+import { parseKubernetesCallbackUrl } from "../server/config";
 import {
 	DeniedBindError,
 	assertAllowedSource,
@@ -43,6 +53,7 @@ import {
 	defaultRuntimeLaunch,
 	deriveDenyRoots,
 } from "./bwrap-args";
+import { preflightKubernetesProfile, type KubeExec } from "./providers/kubernetes-provider";
 
 // ---------------------------------------------------------------------------
 // Typed report
@@ -81,10 +92,19 @@ export interface PreflightContext {
 	/** bwrap binary; provider default ("bwrap" on PATH) when omitted. */
 	bwrapBin?: string;
 	/**
-	 * Callback URL to class-check (DNS + TCP only, never a request). When
-	 * omitted the callback check reports "not configured" and passes.
+	 * Callback URL to class-check (DNS + TCP only, never a request). Optional
+	 * for a bwrap profile: when omitted the check reports "not configured" and
+	 * passes. A kubernetes profile requires it, because absent means `serve`
+	 * derives a loopback HTTP URL that the Pod-reachable-HTTPS admission
+	 * rejects, so the omission is a failed row with remediation. The check
+	 * runs from the FLEET HOST, so it proves host reachability only.
 	 */
 	callbackUrl?: string;
+	/**
+	 * Kubernetes executor for the provider requirement preflight. Defaults to
+	 * spawning `kubectl`; tests and the installed CLI inject an executor.
+	 */
+	kubeExec?: KubeExec;
 	/** Operator environment for deny-root derivation; defaults to process.env. */
 	env?: Record<string, string | undefined>;
 }
@@ -343,11 +363,44 @@ async function checkRuntimeBin(ctx: PreflightContext): Promise<PreflightCheck> {
 	return { name: "runtime-bin", ok: true, detail: bin };
 }
 
-/** DNS + TCP class-check with a hard deadline. Nothing is ever written to
- *  the socket, so no credential or request can leak. */
-async function checkCallback(ctx: PreflightContext): Promise<PreflightCheck> {
+/**
+ * Remediation shared by every kubernetes callback-gateway failure: the one
+ * thing an operator can set to make the lane admit a clone.
+ */
+const KUBE_CALLBACK_REMEDIATION =
+	`set OMP_FLEET_CALLBACK_URL to the fleet host's Pod-reachable HTTPS origin ` +
+	`(bare origin; no credentials, loopback or unspecified address, path, query, or fragment)`;
+
+/**
+ * DNS + TCP class-check with a hard deadline, run from the FLEET HOST. It
+ * proves the callback endpoint is reachable from this host only; a Kubernetes
+ * pod reaches it through the cluster network and gateway policy, which is
+ * verified by the pod itself at enrollment. Nothing is ever written to the
+ * socket, so no credential or request can leak.
+ *
+ * A kubernetes profile admits exactly the URL the daemon's own startup
+ * admission accepts (`server/config.ts` parseKubernetesCallbackUrl), so a URL
+ * the Pod would refuse can never pass preflight first. The URL is therefore
+ * required for that lane: with none configured `serve` derives a loopback
+ * HTTP callback URL, and every kubernetes clone would fail admission with no
+ * fleet-host-side signal, so the omission itself is a failed row.
+ */
+async function checkCallback(
+	profile: ProviderProfile,
+	ctx: PreflightContext,
+): Promise<PreflightCheck> {
 	const urlRaw = ctx.callbackUrl;
 	if (urlRaw === undefined) {
+		if (profile.provider === "kubernetes") {
+			return {
+				name: "callback-url",
+				ok: false,
+				detail:
+					"no callback gateway configured (OMP_FLEET_CALLBACK_URL is unset); a kubernetes " +
+					"clone hands this origin to its Pod and admission requires a Pod-reachable HTTPS origin",
+				remediation: KUBE_CALLBACK_REMEDIATION,
+			};
+		}
 		return {
 			name: "callback-url",
 			ok: true,
@@ -355,31 +408,44 @@ async function checkCallback(ctx: PreflightContext): Promise<PreflightCheck> {
 		};
 	}
 	let url: URL;
-	try {
-		url = new URL(urlRaw);
-	} catch {
-		return {
-			name: "callback-url",
-			ok: false,
-			detail: `callback URL is not a URL: ${urlRaw}`,
-			remediation: `fix the callback URL (expected http:// or https://)`,
-		};
-	}
-	if (url.protocol !== "http:" && url.protocol !== "https:") {
-		return {
-			name: "callback-url",
-			ok: false,
-			detail: `callback URL uses ${url.protocol}// (not http/https)`,
-			remediation: `serve the callback over http:// or https://`,
-		};
-	}
-	if (url.hostname === "") {
-		return {
-			name: "callback-url",
-			ok: false,
-			detail: `callback URL has no host: ${urlRaw}`,
-			remediation: `include a hostname in the callback URL`,
-		};
+	if (profile.provider === "kubernetes") {
+		try {
+			url = new URL(parseKubernetesCallbackUrl(urlRaw));
+		} catch (err) {
+			return {
+				name: "callback-url",
+				ok: false,
+				detail: `callback URL rejected for the kubernetes lane: ${errMessage(err)}`,
+				remediation: KUBE_CALLBACK_REMEDIATION,
+			};
+		}
+	} else {
+		try {
+			url = new URL(urlRaw);
+		} catch {
+			return {
+				name: "callback-url",
+				ok: false,
+				detail: `callback URL is not a URL: ${urlRaw}`,
+				remediation: `fix the callback URL (expected http:// or https://)`,
+			};
+		}
+		if (url.protocol !== "http:" && url.protocol !== "https:") {
+			return {
+				name: "callback-url",
+				ok: false,
+				detail: `callback URL uses ${url.protocol}// (not http/https)`,
+				remediation: `serve the callback over http:// or https://`,
+			};
+		}
+		if (url.hostname === "") {
+			return {
+				name: "callback-url",
+				ok: false,
+				detail: `callback URL has no host: ${urlRaw}`,
+				remediation: `include a hostname in the callback URL`,
+			};
+		}
 	}
 	let port: number;
 	try {
@@ -412,16 +478,16 @@ async function checkCallback(ctx: PreflightContext): Promise<PreflightCheck> {
 		return {
 			name: "callback-url",
 			ok: false,
-			detail: `DNS lookup failed for ${url.hostname}: ${errMessage(err)}`,
-			remediation: `check that ${url.hostname} resolves (fix the callback URL or DNS)`,
+			detail: `DNS lookup from the fleet host failed for ${url.hostname}: ${errMessage(err)}`,
+			remediation: `check that ${url.hostname} resolves from the fleet host (fix the callback URL or DNS)`,
 		};
 	}
 	if (addresses.length === 0) {
 		return {
 			name: "callback-url",
 			ok: false,
-			detail: `DNS returned no addresses for ${url.hostname}`,
-			remediation: `check that ${url.hostname} has an A/AAAA record`,
+			detail: `DNS from the fleet host returned no addresses for ${url.hostname}`,
+			remediation: `check that ${url.hostname} has an A/AAAA record resolvable from the fleet host`,
 		};
 	}
 
@@ -443,16 +509,16 @@ async function checkCallback(ctx: PreflightContext): Promise<PreflightCheck> {
 			return {
 				name: "callback-url",
 				ok: true,
-				detail: `reachable: ${url.hostname}:${port} (TCP connect to ${address} succeeded; no request sent)`,
+				detail: `reachable from the fleet host: ${url.hostname}:${port} (TCP connect to ${address} succeeded; no request sent)`,
 			};
 		}
 	}
 	return {
 		name: "callback-url",
 		ok: false,
-		detail: `TCP connect failed for ${url.hostname}:${port} (tried ${addresses.join(", ")})`,
+		detail: `TCP connect from the fleet host failed for ${url.hostname}:${port} (tried ${addresses.join(", ")})`,
 		remediation:
-			`the callback server must be reachable from the daemon host: start it (fleet serve on the ` +
+			`the callback server must be reachable from the fleet host: start it (fleet serve on the ` +
 			`reachable bind), open firewall port ${port}, or fix the callback URL`,
 	};
 }
@@ -608,50 +674,39 @@ async function checkProfileSecrets(
 }
 
 /**
- * Kubernetes provider rows (P5.3, P5.6): operator-explicit context,
- * namespace, image, and storage. These become hard failures — a kubernetes
- * profile without an explicit context must never silently use the ambient
- * current-context.
+ * Kubernetes requirement rows: the provider's own preflight
+ * (`preflightKubernetesProfile`, P5.6) run in process against the real
+ * cluster API with the same executor the provider uses. It owns the
+ * checks for explicit context, API reachability, namespace access, Pod/PVC
+ * get/create/delete rights, the StorageClass, the referenced Secret key
+ * names, and the image, and its rows already carry specific remediation. An
+ * executor that throws (kubectl missing, unspawnable API client) becomes a
+ * failed row here instead of escaping the report.
  */
-async function checkKubernetesProvider(
+async function providerRequirementChecks(
 	profile: ProviderProfile,
 	ctx: PreflightContext,
 ): Promise<PreflightCheck[]> {
 	if (profile.provider !== "kubernetes") return [];
-	const context = profile.context ?? ctx.env?.OMP_KUBE_CONTEXT;
-	const rows: PreflightCheck[] = [
-		{
-			name: "k8s-context",
-			ok: context !== undefined && context !== "",
-			detail: context !== undefined && context !== "" ? context : "no context configured",
-			remediation:
-				"set providerProfiles.<id>.context or OMP_KUBE_CONTEXT; the provider never " +
-				"falls back to the ambient current-context",
-		},
-		{
-			name: "k8s-namespace",
-			ok: profile.namespace !== undefined && profile.namespace !== "",
-			detail: profile.namespace ?? "not configured",
-			remediation: "set providerProfiles.<id>.namespace (the operator-approved namespace)",
-		},
-		{
-			name: "k8s-image",
-			ok: profile.image !== undefined && profile.image !== "",
-			detail: profile.image ?? "not configured",
-			remediation: "set providerProfiles.<id>.image (the session runtime image)",
-		},
-	];
-	if (profile.storage !== undefined) {
-		const storage = profile.storage;
-		const parts = [`class ${storage.class ?? "(default)"}`];
-		if (storage.size !== undefined) parts.push(`size ${storage.size}`);
-		rows.push({
-			name: "k8s-storage",
-			ok: true,
-			detail: `${parts.join(", ")} (allocated via PVC; verify capacity before launch)`,
+	try {
+		const result = await preflightKubernetesProfile(profile, {
+			exec: ctx.kubeExec,
+			env: ctx.env ?? process.env,
 		});
+		return result.checks;
+	} catch (err) {
+		return [
+			{
+				name: "kube-preflight",
+				ok: false,
+				detail: `kubernetes requirement preflight could not run: ${errMessage(err)}`,
+				remediation:
+					`install kubectl (>= 1.27) on the fleet host, or set OMP_KUBE_BIN to an absolute ` +
+					`kubectl path the fleet user can execute, then re-run ` +
+					`\`omp-web preflight --profile ${profile.id}\``,
+			},
+		];
 	}
-	return rows;
 }
 
 /** k8s-only fields on a non-kubernetes profile: informational only. */
@@ -686,9 +741,11 @@ function checkStrayK8sFields(profile: ProviderProfile): PreflightCheck {
 
 /**
  * Run the full preflight battery for a profile. Never throws for a check
- * outcome — failures are rows; only an internal bug throws. Kubernetes
- * profiles run the host-generic checks plus the real API-requirement rows
- * (context/namespace/image/storage), never a not-yet-supported placeholder.
+ * outcome: failures are rows; only an internal bug throws. Kubernetes
+ * profiles run the host-generic checks alongside the provider's own
+ * requirement preflight (context, API, namespace, RBAC, StorageClass,
+ * Secret keys, image); the former k8s summary rows are gone, so there is
+ * exactly one owner per requirement.
  */
 export async function runProfilePreflight(
 	profile: ProviderProfile,
@@ -709,13 +766,16 @@ export async function runProfilePreflight(
 	const checks: PreflightCheck[] = [
 		...hostChecks,
 		await checkExecutable(profile),
-		await checkCallback(ctx),
+		await checkCallback(profile, ctx),
 		...(await checkDurableDirs(ctx)),
 		await checkProfileTools(profile),
 		await checkDeniedBinds(profile, ctx),
 		await checkProfileSecrets(profile, ctx),
-		...(await checkKubernetesProvider(profile, ctx)),
-		checkStrayK8sFields(profile),
+		...(await providerRequirementChecks(profile, ctx)),
+		// k8s-only fields are informational on the providers where they are
+		// inert; a kubernetes profile's fields are checked by the provider
+		// preflight above, so the stray-fields row is bwrap-only.
+		...(profile.provider === "kubernetes" ? [] : [checkStrayK8sFields(profile)]),
 	];
 	return {
 		ok: checks.every((check) => check.ok),

@@ -1128,6 +1128,33 @@ export class DaemonTransportRegistry {
 		return { correlationId, done };
 	}
 
+	/**
+	 * Release an in-flight bulk correlation without failing the transport.
+	 * The id stops accepting parts, its buffered capture bytes are dropped,
+	 * and an `open` correlation settles `done` as `failed`; a settled one is
+	 * simply forgotten. The id becomes unknown, so a late part-POST is
+	 * rejected typed `invalid_request` exactly like any single-use id.
+	 * Idempotent and total: an unknown, settled, or already-cancelled id is a
+	 * no-op, and the call never throws. The quiesce lane calls it on timeout
+	 * and on shutdown (fleet/clone-quiesce.ts; close()).
+	 */
+	cancelBulkCorrelation(correlationId: string): void {
+		if (typeof correlationId !== "string" || correlationId.length === 0) return;
+		const record = this.#bulk.get(correlationId);
+		if (record === undefined) return;
+		this.#bulk.delete(correlationId);
+		if (record.state !== "open") return;
+		record.state = "failed";
+		record.chunks = [];
+		record.resolve({
+			correlationId: record.correlationId,
+			workspaceId: record.workspaceId,
+			state: "failed",
+			bytes: record.bytes,
+			error: "bulk correlation cancelled",
+		});
+	}
+
 	async #handleBulk(req: Request, correlationId: string): Promise<Response> {
 		const auth = this.#authenticate(req);
 		const record = this.#bulk.get(correlationId);
@@ -1486,17 +1513,16 @@ export class DaemonTransportRegistry {
 		conn.reader?.cancel().catch(() => {});
 	}
 
-	/** Tear everything down (fleet shutdown / tests). Open bulk correlations
-	 * settle failed; live pairs close; rings and enrollments are cleared. */
+	/** Tear everything down (fleet shutdown / tests). Bulk correlations are
+	 * released through cancelBulkCorrelation (capture bytes dropped, open
+	 * ones settling failed); live pairs close; rings and enrollments clear. */
 	close(): void {
 		clearInterval(this.#sweepTimer);
 		for (const conn of [...this.#upConnections]) this.#killUp(conn);
 		for (const conn of [...this.#downConnections.values()]) this.#teardownDown(conn);
-		for (const record of this.#bulk.values())
-			this.#failBulk(record, record.bytes, "transport closed");
+		for (const correlationId of [...this.#bulk.keys()]) this.cancelBulkCorrelation(correlationId);
 		this.#upConnections.clear();
 		this.#rings.clear();
-		this.#bulk.clear();
 		this.#virtualStreams.clear();
 		this.#taps.clear();
 		this.#pumps.clear();

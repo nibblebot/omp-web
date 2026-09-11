@@ -1,15 +1,15 @@
 /**
- * Unit tests for pure helpers in fleet/cli.ts (the first-run config offer and
- * its config-file writer). The serve + sessions behavior lives in
- * server-cli.test.ts.
+ * Unit tests for pure helpers in fleet/cli.ts (the first-run config offer,
+ * its config-file writer, and the local preflight verb's config/profile
+ * selection). The serve + sessions behavior lives in server-cli.test.ts.
  */
 
-import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "../shared/testkit";
-import { resolveBaseDirs, shouldOfferSetup, writeConfigFile } from "./cli";
+import { main, resolveBaseDirs, shouldOfferSetup, writeConfigFile } from "./cli";
 
 afterAll(cleanupTempDirs);
 
@@ -57,5 +57,63 @@ describe("writeConfigFile", () => {
 		expect(existsSync(configPath)).toBe(true);
 		const parsed = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
 		expect(parsed).toEqual({ workspaceDir });
+	});
+});
+
+describe("preflight command", () => {
+	test("refuses an invocation without --profile", async () => {
+		const stderr = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			expect(await main(["preflight"])).toBe(1);
+			expect(stderr.mock.calls.flat().map(String).join(" ")).toContain("--profile");
+		} finally {
+			stderr.mockRestore();
+		}
+	});
+
+	test("selects the profile from OMP_FLEET_CONFIG and runs its report", async () => {
+		const dir = tempDir("cli-preflight");
+		const workspaceDir = join(dir, "workspaces");
+		mkdirSync(workspaceDir, { recursive: true });
+		const executable = join(dir, "provider.js");
+		writeFileSync(executable, "#!/usr/bin/env bun\n");
+		chmodSync(executable, 0o755);
+		const configPath = join(dir, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				workspaceDir,
+				providerProfiles: {
+					probe: { provider: "bwrap", executable, tools: [] },
+				},
+			}),
+		);
+		const savedConfig = process.env.OMP_FLEET_CONFIG;
+		process.env.OMP_FLEET_CONFIG = configPath;
+		const stdout = spyOn(console, "log").mockImplementation(() => {});
+		const stderr = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			// The local verb never dials the control plane: it loads the config
+			// named by the env var, resolves the profile, and prints the report.
+			const code = await main(["preflight", "--profile", "probe"]);
+			expect([0, 1]).toContain(code);
+			const report = stdout.mock.calls.flat().map(String).join("\n");
+			expect(report).toMatch(/^profile probe: (ready|NOT ready)$/m);
+			expect(report).toMatch(/^ {2}\[(ok|FAIL)\] /m);
+			expect(stderr.mock.calls.flat().map(String).join(" ")).toBe("");
+
+			// An unconfigured id names the profile and the config it looked in.
+			stdout.mockClear();
+			expect(await main(["preflight", "--profile", "nope"])).toBe(1);
+			const message = stderr.mock.calls.flat().map(String).join(" ");
+			expect(message).toContain("nope");
+			expect(message).toContain(configPath);
+			expect(stdout.mock.calls.flat().map(String).join("")).toBe("");
+		} finally {
+			stderr.mockRestore();
+			stdout.mockRestore();
+			if (savedConfig === undefined) delete process.env.OMP_FLEET_CONFIG;
+			else process.env.OMP_FLEET_CONFIG = savedConfig;
+		}
 	});
 });

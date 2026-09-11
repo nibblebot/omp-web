@@ -42,6 +42,7 @@ import {
 	connect,
 	hasLiveSession,
 	initAuth,
+	openStoredHistory,
 	setPromptInsert,
 	setSidebarVisible,
 	setState,
@@ -107,6 +108,42 @@ const NoActiveSessionPane: Component = () => (
 		<p class="roster-empty-title">No active session</p>
 		<p class="roster-empty-hint">Pick a daemon from the sidebar to start a session.</p>
 	</div>
+);
+
+/** The clone workspace behind the attached session, when there is one. */
+function attachedCloneId(): string | undefined {
+	const id = state.currentSessionId;
+	if (id === null) return undefined;
+	return state.daemonRoster.find((d) => d.daemonId === id && d.workspaceKind === "clone")?.daemonId;
+}
+
+/**
+ * Roster mode where the attached worker is gone but its transcript is still in
+ * memory (the pod shut down, the cluster became unreachable, the session was
+ * stopped): keep showing that history READ-ONLY instead of throwing it away.
+ * Read-only by construction: no composer, no queue, no send config, and no
+ * rename affordance (the plain title replaces SessionHeader). A clone can open
+ * the full-fidelity copy from the fleet store, which needs no live worker.
+ */
+const ReadOnlySessionPane: Component = () => (
+	<main class="app-main">
+		<div class="session-header">
+			<h1 class="segment session-name" style={{ margin: "0" }}>
+				{state.sessionName ?? state.sessionId.slice(0, 8)}
+			</h1>
+		</div>
+		<div class="readonly-strip" role="status">
+			<span>worker not connected — history is read-only</span>
+			<Show when={attachedCloneId()} keyed>
+				{(id) => (
+					<button type="button" class="btn btn-small" onClick={() => void openStoredHistory(id)}>
+						Open stored history
+					</button>
+				)}
+			</Show>
+		</div>
+		<MessageList />
+	</main>
 );
 
 export const App: Component = () => {
@@ -202,8 +239,11 @@ export const App: Component = () => {
 					</div>
 				</Show>
 				<Show when={state.view === "work" || state.sessionMode !== "roster"}>
-					{/* Roster mode with no live session (stopped/removed daemon, or none
-					    picked yet): the empty pane replaces the chat column. Standalone
+					{/* Roster mode: a live session renders the interactive chat; a
+					    session whose worker is gone keeps its last-known transcript
+					    visible but READ-ONLY (constraint: an unreachable worker's
+					    history is readable, never writable); only a session that has
+					    no transcript at all falls back to the empty pane. Standalone
 					    mode is never gated — hasLiveSession() is true outside roster. */}
 					<Show
 						when={state.sessionMode === "roster" && !hasLiveSession()}
@@ -225,9 +265,16 @@ export const App: Component = () => {
 							</main>
 						}
 					>
-						<main class="app-main">
-							<NoActiveSessionPane />
-						</main>
+						<Show
+							when={state.items.length > 0 || state.live.active}
+							fallback={
+								<main class="app-main">
+									<NoActiveSessionPane />
+								</main>
+							}
+						>
+							<ReadOnlySessionPane />
+						</Show>
 					</Show>
 				</Show>
 			</div>

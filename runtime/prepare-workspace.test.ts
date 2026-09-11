@@ -13,7 +13,10 @@ import { join } from "node:path";
 import { YAML } from "bun";
 import { cleanupTempDirs, tempDir } from "../shared/testkit";
 import {
+	PrepareWorkspaceError,
 	prepareWorkspace,
+	readWorkspaceInitMarker,
+	validateWorkspaceRef,
 	WORKSPACE_PREP_VERSION,
 	type PrepareWorkspaceResult,
 } from "./prepare-workspace";
@@ -317,5 +320,178 @@ temperature: 0.4
 		expect(existsSync(join(volumeRoot, ".home", "agent", "config.yml"))).toBe(false);
 		expect(second.baselineSeed?.seeded).toBe(false);
 		expect(second.baselineSeed?.reason).toBe("no-source");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Branch-name validation (admission + preparation share this entry point)
+// ---------------------------------------------------------------------------
+
+/** Typed ledger code carried by a thrown error, or "" when none is present. */
+function errorCode(err: unknown): string {
+	if (typeof err === "object" && err !== null && "code" in err && typeof err.code === "string") {
+		return err.code;
+	}
+	return "";
+}
+
+/** The typed ledger code a rejected promise carries (never returns). */
+async function rejectionCode(fn: () => Promise<unknown>): Promise<string> {
+	try {
+		await fn();
+	} catch (err) {
+		return errorCode(err);
+	}
+	throw new Error("expected the call to reject");
+}
+
+describe("validateWorkspaceRef", () => {
+	test("accepts git check-ref-format valid branch names and returns them unchanged", () => {
+		for (const ref of ["main", "acceptance", "release/1.0", "feature.x", "a_b-c/d.e"]) {
+			expect(validateWorkspaceRef(ref)).toBe(ref);
+		}
+	});
+
+	test("rejects empty, dashed, dotted, and otherwise malformed components", () => {
+		const invalid = [
+			"",
+			"-x",
+			"..",
+			"foo//bar",
+			"foo/.bar",
+			"foo.",
+			"a.lock",
+			"foo.lock/bar",
+			"a b",
+			"a~b",
+			"a^b",
+		];
+		for (const ref of invalid) {
+			expect(() => validateWorkspaceRef(ref)).toThrow(PrepareWorkspaceError);
+			try {
+				validateWorkspaceRef(ref);
+			} catch (err) {
+				expect(errorCode(err)).toBe("invalid_request");
+			}
+		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Init-marker reading (the provider-side / in-pod preparation entry point)
+// ---------------------------------------------------------------------------
+
+/**
+ * Prepare a fresh volume under a scrubbed operator-baseline env: the empty
+ * fixture HOME/agent dirs guarantee the baseline seed reports no-source, so
+ * these cases exercise the marker and checkout behavior only.
+ */
+async function prepareQuiet(
+	workspaceRoot: string,
+	source: string,
+	workspaceId = "d9",
+): Promise<PrepareWorkspaceResult> {
+	const saved = captureEnv([
+		"OMP_SANDBOX_BASELINE_CONFIG",
+		"PI_CODING_AGENT_DIR",
+		"XDG_DATA_HOME",
+		"HOME",
+	]);
+	delete process.env.OMP_SANDBOX_BASELINE_CONFIG;
+	process.env.PI_CODING_AGENT_DIR = tempDir("omp-prep-agent-");
+	process.env.XDG_DATA_HOME = tempDir("omp-prep-xdg-");
+	process.env.HOME = tempDir("omp-prep-home-");
+	try {
+		return await prepareWorkspace({ workspaceId, workspaceRoot, source: { local: source } });
+	} finally {
+		restoreEnv(saved);
+	}
+}
+
+const MARKER_NAME = ".omp-workspace-init.json";
+
+describe("readWorkspaceInitMarker", () => {
+	test("null on an uninitialized root: absent marker or a pre-clone pin", async () => {
+		expect(await readWorkspaceInitMarker(tempDir("omp-prep-empty-"))).toBeNull();
+
+		// A pin left by an interrupted first preparation is not a verified
+		// marker: the caller resumes through prepareWorkspace.
+		const pinned = tempDir("omp-prep-pinned-");
+		writeFileSync(
+			join(pinned, MARKER_NAME),
+			JSON.stringify({
+				workspaceId: "d1",
+				source: { local: "/src" },
+				resolvedCommit: "0".repeat(40),
+				branch: "main",
+			}),
+		);
+		expect(await readWorkspaceInitMarker(pinned)).toBeNull();
+	});
+
+	test("returns the persisted verified marker on an initialized root", async () => {
+		const source = await makeRepo(tempDir("omp-prep-src-"));
+		const volumeRoot = tempDir("omp-prep-vol-");
+		const result = await prepareQuiet(volumeRoot, source);
+		expect(await readWorkspaceInitMarker(volumeRoot)).toEqual(result.marker);
+	});
+
+	test("a corrupt or shape-invalid marker is conflict, never a silent reset", async () => {
+		const corruptJson = tempDir("omp-prep-corrupt-");
+		writeFileSync(join(corruptJson, MARKER_NAME), "{ not json");
+		expect(await rejectionCode(() => readWorkspaceInitMarker(corruptJson))).toBe("conflict");
+
+		const badCommit = tempDir("omp-prep-corrupt-");
+		writeFileSync(
+			join(badCommit, MARKER_NAME),
+			JSON.stringify({
+				workspaceId: "d1",
+				source: { local: "/x" },
+				resolvedCommit: "not-a-commit",
+				branch: "main",
+			}),
+		);
+		expect(await rejectionCode(() => readWorkspaceInitMarker(badCommit))).toBe("conflict");
+	});
+});
+
+describe("initialized-checkout preservation", () => {
+	test("re-preparation of a valid workspace is a no-op that keeps working files", async () => {
+		const source = await makeRepo(tempDir("omp-prep-src-"));
+		const volumeRoot = tempDir("omp-prep-vol-");
+		const first = await prepareQuiet(volumeRoot, source);
+
+		const dirty = join(volumeRoot, ".checkout", "scratch.txt");
+		writeFileSync(dirty, "uncommitted work\n");
+
+		const second = await prepareQuiet(volumeRoot, source);
+		expect(second.marker).toEqual(first.marker);
+		expect(readFileSync(dirty, "utf8")).toBe("uncommitted work\n");
+	});
+
+	test("the in-pod preparation reader never resets an initialized checkout: later commits and dirty files survive", async () => {
+		const source = await makeRepo(tempDir("omp-prep-src-"));
+		const volumeRoot = tempDir("omp-prep-vol-");
+		const first = await prepareQuiet(volumeRoot, source);
+		const checkout = join(volumeRoot, ".checkout");
+
+		// A session committed on top of the pin and left a working file behind.
+		writeFileSync(join(checkout, "later.txt"), "later\n");
+		await git(checkout, ["add", "."]);
+		await git(checkout, ["commit", "-q", "-m", "later"]);
+		const later = await git(checkout, ["rev-parse", "HEAD"]);
+		expect(later).not.toBe(first.marker.resolvedCommit);
+		writeFileSync(join(checkout, "dirty.txt"), "dirty\n");
+
+		// The in-pod restart path (readWorkspaceInitMarker) returns the
+		// persisted identity WITHOUT touching the checkout: the marker still
+		// names the original pin, and the later commit and working file are
+		// both still there. prepareWorkspace itself is the empty-volume
+		// initializer, not this path (its validity check is HEAD == pin).
+		const marker = await readWorkspaceInitMarker(volumeRoot);
+		expect(marker).toEqual(first.marker);
+		expect(await git(checkout, ["rev-parse", "HEAD"])).toBe(later);
+		expect(existsSync(join(checkout, "dirty.txt"))).toBe(true);
+		expect(readFileSync(join(checkout, "dirty.txt"), "utf8")).toBe("dirty\n");
 	});
 });

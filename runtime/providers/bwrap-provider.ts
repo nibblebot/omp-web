@@ -39,12 +39,12 @@ import {
 	readdirSync,
 	renameSync,
 	rmSync,
-	statSync,
 	writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, normalize } from "node:path";
 import {
+	OMP_PROVIDER_PROTO,
 	ProviderProtocolError,
 	parseProviderRequest,
 	type ProviderObserved,
@@ -54,12 +54,12 @@ import {
 import type { ProviderErrorCode } from "../../shared/provider-protocol";
 import { acquireFileLock } from "../../shared/file-lock";
 import {
-	ENV_ALLOW_KEYS,
 	buildBwrapArgv,
 	defaultRuntimeLaunch,
 	deriveDenyRoots,
 	type RuntimeLaunch,
 } from "../bwrap-args";
+import { readCallbackEnvFile } from "../callback-env";
 
 /** The provider's own pidfile record (superset of the shared identity shape). */
 interface LaunchRecord {
@@ -92,9 +92,6 @@ function secretEnvFromKeys(keys: readonly string[]): Record<string, string> {
 const PID_FILE = "provider.pid.json";
 const SUPERVISE_FILE = "supervise.json";
 const SUPERVISE_ERR_FILE = "supervise.err";
-/** Fleet-written callback enrollment handoff (0600), read before a spawn. */
-const CALLBACK_ENV_FILE = "callback-env.json";
-const CALLBACK_ENV_VERSION = 1;
 /** How long ensure-running waits for the supervisor to write the pidfile. */
 const PIDFILE_WAIT_MS = 10_000;
 /** Descendant-walk poll budget for the sandboxed command pid. */
@@ -241,110 +238,14 @@ async function waitForLiveRecord(
 // Callback enrollment handoff (fleet-written, provider-read)
 // ---------------------------------------------------------------------------
 
-/** Env key prefix the fleet may hand over for the sandbox callback pair. */
-const CALLBACK_ENV_PREFIX = "OMP_SESSION_CALLBACK_";
-/** P8.9 wake-resume: a fleet-written absolute main-session path (not under
- *  the CALLBACK_ prefix, but allowlisted and daemon-consumed at boot). */
-const RESUME_ENV_KEY = "OMP_SESSION_RESUME";
-
-function isCallbackEnvKey(key: string): boolean {
-	// The callback pair's enrollment keys OR the wake-resume hint — both gated
-	// by ENV_ALLOW_KEYS membership so nothing outside the allowlist can ride
-	// the handoff file (P5.5).
-	return (
-		key === RESUME_ENV_KEY || (key.startsWith(CALLBACK_ENV_PREFIX) && ENV_ALLOW_KEYS.includes(key))
-	);
-}
-
 /**
- * Read the fleet's callback enrollment handoff (`<stateDir>/callback-env.json`,
- * written 0600 before ensure-running). Returns the env entries to inject into
- * the sandbox, or null when the file is absent (a spawn without callback
- * flags is still allowed — stop-only management must not break).
- *
- * Strictness (P5.5): only known `OMP_SESSION_CALLBACK_*` keys pass; values
- * are bounded non-empty strings; the file's workspaceId and generation must
- * equal the request's — a new generation must never start under a stale
- * enrollment. Corrupt files throw `unavailable` (the fleet rewrites and
- * retries); identity mismatches throw `conflict`.
+ * The handoff reader is consolidated in runtime/callback-env.ts, shared with
+ * the Kubernetes provider and the fleet lifecycle: one implementation of the
+ * allowlist, the 0600/atomic write, and the workspace/generation identity
+ * checks (P5.5). An absent handoff yields an empty env (a stop-only
+ * management spawn must not require enrollment); a stale, malformed, or
+ * disallowed one fails the operation before any supervisor spawn.
  */
-function readCallbackEnv(
-	stateDir: string,
-	workspaceId: string,
-	generation: number,
-): Record<string, string> | null {
-	const file = join(stateDir, CALLBACK_ENV_FILE);
-	let raw: string;
-	try {
-		raw = readFileSync(file, "utf8");
-	} catch {
-		return null; // absent (or unreadable): spawn without callback env
-	}
-	try {
-		const mode = statSync(file).mode & 0o777;
-		if ((mode & 0o077) !== 0) {
-			console.error(
-				`bwrap-provider: ${CALLBACK_ENV_FILE} is mode ${mode.toString(8)}, expected 0600`,
-			);
-		}
-	} catch {
-		// Stat raced a rewrite; the content parse below is authoritative.
-	}
-	let value: unknown;
-	try {
-		value = JSON.parse(raw);
-	} catch (cause) {
-		throw ProviderProtocolError.unavailable(`${CALLBACK_ENV_FILE} is not valid JSON`, { cause });
-	}
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw ProviderProtocolError.unavailable(`${CALLBACK_ENV_FILE} must be a JSON object`);
-	}
-	const record = value as Record<string, unknown>;
-	if (record.version !== CALLBACK_ENV_VERSION) {
-		throw ProviderProtocolError.unavailable(
-			`${CALLBACK_ENV_FILE} has unsupported version ${JSON.stringify(record.version)}`,
-		);
-	}
-	if (typeof record.workspaceId !== "string" || typeof record.generation !== "number") {
-		throw ProviderProtocolError.unavailable(
-			`${CALLBACK_ENV_FILE} is missing workspaceId/generation`,
-		);
-	}
-	if (record.workspaceId !== workspaceId) {
-		throw new ProviderProtocolError(
-			"conflict",
-			`${CALLBACK_ENV_FILE} targets workspace ${record.workspaceId}, requested ${workspaceId}`,
-		);
-	}
-	if (record.generation !== generation) {
-		throw new ProviderProtocolError(
-			"conflict",
-			`${CALLBACK_ENV_FILE} targets generation ${record.generation}, requested ${generation}; a new generation must not start under a stale enrollment`,
-		);
-	}
-	const rawEnv = record.env;
-	if (typeof rawEnv !== "object" || rawEnv === null || Array.isArray(rawEnv)) {
-		throw ProviderProtocolError.unavailable(`${CALLBACK_ENV_FILE}.env must be an object`);
-	}
-	const env: Record<string, string> = {};
-	for (const [key, entry] of Object.entries(rawEnv as Record<string, unknown>)) {
-		if (!isCallbackEnvKey(key)) {
-			throw ProviderProtocolError.unavailable(
-				`${CALLBACK_ENV_FILE}.env.${key} is not an allowed callback env key`,
-			);
-		}
-		if (typeof entry !== "string" || entry.length === 0) {
-			throw ProviderProtocolError.unavailable(
-				`${CALLBACK_ENV_FILE}.env.${key} must be a non-empty string`,
-			);
-		}
-		if (entry.length > 4096) {
-			throw ProviderProtocolError.unavailable(`${CALLBACK_ENV_FILE}.env.${key} exceeds 4096 bytes`);
-		}
-		env[key] = entry;
-	}
-	return env;
-}
 
 // ---------------------------------------------------------------------------
 // Handle (opaque, stable per workspace+generation)
@@ -356,12 +257,17 @@ function handleFor(workspaceId: string, generation: number, record: LaunchRecord
 	return `bwrap:${workspaceId}:${generation}:${record.pid}:${record.procStartTime}`;
 }
 
+/**
+ * Every envelope carries `providerProto` (P5.1); bwrap is not a Kubernetes
+ * provider, so it never emits `kubernetes`. The shared validator rejects a
+ * request that carries one before any op runs.
+ */
 function ok(
 	handle: string,
 	observed: ProviderObserved,
 	extra?: { pid?: number; startedAt?: number },
 ): ProviderResponse {
-	return { ok: true, handle, observed, ...extra };
+	return { ok: true, providerProto: OMP_PROVIDER_PROTO, handle, observed, ...extra };
 }
 
 function err(
@@ -369,7 +275,11 @@ function err(
 	message: string,
 	retryable: boolean,
 ): ProviderResponse {
-	return { ok: false, error: { code, message, retryable } };
+	return {
+		ok: false,
+		providerProto: OMP_PROVIDER_PROTO,
+		error: { code, message, retryable },
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -769,11 +679,11 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 		// spawning: a stale enrollment must never start a generation.
 		let callbackEnv: Record<string, string>;
 		try {
-			callbackEnv = readCallbackEnv(stateDir, workspaceId, generation) ?? {};
+			callbackEnv = readCallbackEnvFile(stateDir, { workspaceId, generation })?.env ?? {};
 		} catch (cause) {
 			if (cause instanceof ProviderProtocolError) {
-				// readCallbackEnv throws unavailable/conflict only; timeout is
-				// mapped defensively (the fleet owns that code).
+				// readCallbackEnvFile throws unavailable/conflict only; timeout
+				// is mapped defensively (the fleet owns that code).
 				const code = cause.code === "timeout" ? "internal" : cause.code;
 				return err(code, cause.message, cause.retryable);
 			}
@@ -901,11 +811,13 @@ async function main(): Promise<number> {
 		if (cause instanceof ProviderProtocolError) {
 			response = {
 				ok: false,
+				providerProto: OMP_PROVIDER_PROTO,
 				error: { code: cause.code, message: cause.message, retryable: cause.retryable },
 			};
 		} else {
 			response = {
 				ok: false,
+				providerProto: OMP_PROVIDER_PROTO,
 				error: { code: "internal", message: `provider failed: ${String(cause)}`, retryable: false },
 			};
 		}

@@ -3,7 +3,10 @@
  * When a session transcript is cold or missing in the agent dir and a fleet
  * callback pair is active, the daemon requests the stored lineage bytes from
  * the fleet log store over the bulk channel and writes them into the agent
- * sessions layout BEFORE the existing resume path runs.
+ * sessions layout BEFORE the existing resume path runs. The trigger is the
+ * session's MAIN transcript (resolveSessionMainFile), never the mere
+ * existence of its tree: an assets-only tree cannot be resumed, and a
+ * transfer that restores no main file is typed `unavailable`.
  *
  * Layout contract: the fleet log store mirrors the AGENT SESSIONS ROOT
  * byte-for-byte under `logs/<workspaceId>/<sessionId>/<relpath>`; each
@@ -29,7 +32,8 @@
  * materialization with nothing committed and all temps removed.
  *
  * Typed failures reuse the frozen vocabulary only: `unavailable` when there
- * is no ready callback pair or the fleet lacks the session; `invalid_request`
+ * is no ready callback pair, the fleet lacks the session, or the committed
+ * transfer holds no main transcript; `invalid_request`
  * for malformed wire records (hostile relpaths, size/sha mismatch, chunk
  * gaps); `retryable` passes through for transport hiccups. No new error
  * names.
@@ -154,6 +158,16 @@ export async function materializeSessionToDir(
 				);
 			}
 			cursor = outcome.cursor;
+		}
+		// A restore that leaves no MAIN transcript is not a restore (P5 wake):
+		// an assets-only transfer can never be resumed, so report the history
+		// as unavailable instead of a successful assets commit. The main file
+		// itself is the acceptance check, never the session tree.
+		if (resolveSessionMainFile(sessionsDir, sessionId) === null) {
+			throw new MaterializeSessionError(
+				"unavailable",
+				`materialization restored no main transcript for session ${sessionId}; the store holds assets only`,
+			);
 		}
 		return { files: committed, bytes: bytesReceived };
 	} finally {
@@ -416,24 +430,6 @@ function transferError(error: unknown, sessionId: string): MaterializeSessionErr
 	);
 }
 
-/** True when the sessions tree already has ANY file for this session (main
- * file or artifact dir) — the daemon skips materialization when warm. */
-export function sessionTreeExists(sessionsDir: string, sessionId: string): boolean {
-	const probes = [join(sessionsDir, `${sessionId}.jsonl`), join(sessionsDir, sessionId)];
-	let entries;
-	try {
-		entries = readdirSync(sessionsDir, { withFileTypes: true });
-	} catch {
-		return probes.some(probeExists);
-	}
-	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
-		probes.push(join(sessionsDir, entry.name, `${sessionId}.jsonl`));
-		probes.push(join(sessionsDir, entry.name, sessionId));
-	}
-	return probes.some(probeExists);
-}
-
 /**
  * Resolve the absolute main-session JSONL of `sessionId` under a sessions
  * dir: `<sessionId>.jsonl` at depth 1 or `<proj>/<sessionId>.jsonl` at
@@ -468,13 +464,4 @@ export function resolveSessionMainFile(sessionsDir: string, sessionId: string): 
 		if (found !== null) return found;
 	}
 	return null;
-}
-
-function probeExists(absolute: string): boolean {
-	try {
-		const stats = statSync(absolute);
-		return stats.isFile() || stats.isDirectory();
-	} catch {
-		return false;
-	}
 }

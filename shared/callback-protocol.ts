@@ -1,3 +1,5 @@
+import type { ManifestFile, ManifestFileKind } from "./archive-manifest";
+import { isNormalizedPosixRelativePath } from "./archive-manifest";
 import { encodeSseEvent, parseSseUnits, SSE_PING_EVENT } from "./sse";
 
 /**
@@ -213,6 +215,229 @@ export interface QuiesceResultControl {
 	git?: CloneGitEvidence;
 	/** Present on ok:false. */
 	error?: { code: CallbackErrorCode; message: string; path?: string };
+}
+
+/**
+ * fleet→daemon, kind "control", streamId "transport": collect final evidence
+ * for a Kubernetes-managed workspace and upload it as one {@link
+ * QuiesceEvidence} JSON document over the bulk channel under `correlationId`.
+ * Unlike `quiesce_begin`, the fleet already proved predecessor termination and
+ * supplies the source facts the daemon must not re-derive.
+ */
+export interface QuiesceCloneControl {
+	type: "quiesce_clone";
+	requestId: string;
+	/** Bulk correlation the evidence document is uploaded under. */
+	correlationId: string;
+	sourceRemote: string;
+	pinnedRevision: string;
+	branch: string;
+}
+
+/**
+ * daemon→fleet, kind "control", streamId "transport": receipt for a
+ * `quiesce_clone`. `ok:true` means the evidence document was fully uploaded;
+ * the fleet still validates it against its own store before it authorizes
+ * deletion.
+ */
+export type QuiesceCloneResultControl = {
+	type: "quiesce_clone_result";
+	requestId: string;
+	correlationId: string;
+} & ({ ok: true } | { ok: false; error: { code: CallbackErrorCode; message: string } });
+
+/**
+ * The single evidence document a daemon uploads for a `quiesce_clone`. Every
+ * field is required, so a receipt can never be validated against a partial
+ * proof: `mainSessionRelpath` is null only when neither the workspace volume
+ * nor the fleet store holds a main transcript.
+ */
+export interface QuiesceEvidence {
+	requestId: string;
+	/** POSIX relpath of the main transcript under the agent sessions dir; null = none anywhere. */
+	mainSessionRelpath: string | null;
+	boundary: FlushBoundary;
+	manifestFiles: ManifestFile[];
+	provenance: {
+		workspaceId: string;
+		workspaceName: string;
+		resolvedCommit: string;
+		generatedAt: number;
+	};
+	writers: {
+		main: "flushed";
+		descendants: QuiesceWriterEntry[];
+		advisors: "caught_up" | "inactive";
+		note?: string;
+	};
+	git: CloneGitEvidence;
+}
+
+/** Bound on the uploaded evidence document (16 MiB; bulk transfer caps at 64 MiB). */
+export const QUIESCE_EVIDENCE_MAX_BYTES = 16 * 1024 * 1024;
+
+/** Parse a `FlushBoundary`: every entry carries a finite offset, generation, and eof:true. */
+function parseFlushBoundary(value: unknown): FlushBoundary | null {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+	const boundary: FlushBoundary = {};
+	for (const [streamId, entry] of Object.entries(value as Record<string, unknown>)) {
+		if (streamId.length === 0 || typeof entry !== "object" || entry === null) return null;
+		const record = entry as Record<string, unknown>;
+		const offset = record["offset"];
+		const generation = record["generation"];
+		if (
+			typeof offset !== "number" ||
+			!Number.isSafeInteger(offset) ||
+			offset < 0 ||
+			typeof generation !== "number" ||
+			!Number.isSafeInteger(generation) ||
+			generation < 0 ||
+			record["eof"] !== true
+		) {
+			return null;
+		}
+		boundary[streamId] = { offset, generation, eof: true };
+	}
+	return boundary;
+}
+
+const MANIFEST_FILE_KINDS: readonly ManifestFileKind[] = [
+	"main",
+	"subagent",
+	"advisor",
+	"metadata",
+];
+
+/**
+ * Parse an untrusted {@link QuiesceEvidence} document (byte-bound, strict).
+ * Throws CallbackError("invalid_request") on any structural problem; the
+ * fleet's semantic cross-checks against its own store live in
+ * fleet/clone-quiesce.ts.
+ */
+export function parseQuiesceEvidence(raw: string): QuiesceEvidence {
+	const reject: (why: string) => never = (why) => {
+		throw new CallbackError("invalid_request", `quiesce evidence: ${why}`);
+	};
+	if (Buffer.byteLength(raw, "utf8") > QUIESCE_EVIDENCE_MAX_BYTES) {
+		reject(`exceeds ${QUIESCE_EVIDENCE_MAX_BYTES} bytes`);
+	}
+	let value: unknown;
+	try {
+		value = JSON.parse(raw) as unknown;
+	} catch (cause) {
+		reject(`is not valid JSON (${cause instanceof Error ? cause.message : String(cause)})`);
+	}
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		reject("must be an object");
+	const record = value as Record<string, unknown>;
+	const requestId = record["requestId"];
+	if (typeof requestId !== "string" || requestId.length === 0) reject("requestId is missing");
+	const mainRaw = record["mainSessionRelpath"];
+	if (
+		mainRaw !== null &&
+		(typeof mainRaw !== "string" || !isNormalizedPosixRelativePath(mainRaw))
+	) {
+		reject("mainSessionRelpath must be null or a normalized POSIX relpath");
+	}
+	const boundary = parseFlushBoundary(record["boundary"]) ?? reject("boundary is missing");
+	const filesRaw = record["manifestFiles"];
+	if (!Array.isArray(filesRaw)) reject("manifestFiles must be an array");
+	const manifestFiles = (filesRaw as unknown[]).map((entry, index) => {
+		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+			reject(`manifestFiles[${index}] must be an object`);
+		}
+		const file = entry as Record<string, unknown>;
+		const path = file["path"];
+		if (typeof path !== "string" || !isNormalizedPosixRelativePath(path)) {
+			reject(`manifestFiles[${index}].path must be a normalized POSIX relpath`);
+		}
+		const size = file["size"];
+		if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
+			reject(`manifestFiles[${index}].size must be a non-negative integer`);
+		}
+		const sha256 = file["sha256"];
+		if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) {
+			reject(`manifestFiles[${index}].sha256 must be lowercase hex sha256`);
+		}
+		const kind = file["kind"];
+		if (typeof kind !== "string" || !MANIFEST_FILE_KINDS.includes(kind as ManifestFileKind)) {
+			reject(`manifestFiles[${index}].kind must be one of ${MANIFEST_FILE_KINDS.join("|")}`);
+		}
+		const sessionId = file["sessionId"];
+		if (typeof sessionId !== "string" || sessionId.length === 0) {
+			reject(`manifestFiles[${index}].sessionId is missing`);
+		}
+		const parentPath = file["parentPath"];
+		if (
+			parentPath !== undefined &&
+			(typeof parentPath !== "string" || !isNormalizedPosixRelativePath(parentPath))
+		) {
+			reject(`manifestFiles[${index}].parentPath must be a normalized POSIX relpath`);
+		}
+		return {
+			path,
+			size,
+			sha256,
+			kind: kind as ManifestFileKind,
+			sessionId,
+			...(parentPath !== undefined ? { parentPath } : {}),
+		} satisfies ManifestFile;
+	});
+	const provenanceRaw = record["provenance"];
+	if (typeof provenanceRaw !== "object" || provenanceRaw === null || Array.isArray(provenanceRaw)) {
+		reject("provenance must be an object");
+	}
+	const provenance = provenanceRaw as Record<string, unknown>;
+	for (const field of ["workspaceId", "workspaceName", "resolvedCommit"] as const) {
+		const fieldValue = provenance[field];
+		if (typeof fieldValue !== "string" || fieldValue.length === 0) {
+			reject(`provenance.${field} is missing`);
+		}
+	}
+	const generatedAt = provenance["generatedAt"];
+	if (typeof generatedAt !== "number" || !Number.isFinite(generatedAt) || generatedAt < 0) {
+		reject("provenance.generatedAt must be a non-negative number");
+	}
+	const writersRaw = record["writers"];
+	if (typeof writersRaw !== "object" || writersRaw === null || Array.isArray(writersRaw)) {
+		reject("writers must be an object");
+	}
+	const writers = writersRaw as Record<string, unknown>;
+	if (writers["main"] !== "flushed") reject('writers.main must be "flushed"');
+	if (writers["advisors"] !== "caught_up" && writers["advisors"] !== "inactive") {
+		reject('writers.advisors must be "caught_up" or "inactive"');
+	}
+	const descendants = writers["descendants"];
+	if (!Array.isArray(descendants)) reject("writers.descendants must be an array");
+	const note = writers["note"];
+	if (note !== undefined && typeof note !== "string") reject("writers.note must be a string");
+	const gitRaw = record["git"];
+	if (typeof gitRaw !== "object" || gitRaw === null || Array.isArray(gitRaw)) {
+		reject("git must be an object");
+	}
+	const git = gitRaw as Record<string, unknown>;
+	if (git["status"] !== "clean" && git["status"] !== "dirty" && git["status"] !== "unknown") {
+		reject('git.status must be "clean", "dirty", or "unknown"');
+	}
+	return {
+		requestId,
+		mainSessionRelpath: mainRaw as string | null,
+		boundary,
+		manifestFiles,
+		provenance: {
+			workspaceId: provenance["workspaceId"] as string,
+			workspaceName: provenance["workspaceName"] as string,
+			resolvedCommit: provenance["resolvedCommit"] as string,
+			generatedAt,
+		},
+		writers: {
+			main: "flushed",
+			descendants: descendants as QuiesceWriterEntry[],
+			advisors: writers["advisors"] as "caught_up" | "inactive",
+			...(note !== undefined ? { note } : {}),
+		},
+		git: git as unknown as CloneGitEvidence,
+	};
 }
 
 /** Serialized envelope cap: one NDJSON record / one SSE data payload (1 MiB). */

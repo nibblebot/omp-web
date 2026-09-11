@@ -7,7 +7,7 @@
  *
  *   omp-web (bare) | omp-web serve|sessions|projects|profiles|spawn|
  *           add-repo|add|provision|add-clone|start|stop|remove|rm-project|
- *           add-worktree|rm-worktree|prompt
+ *           add-worktree|rm-worktree|prompt|preflight
  *                                     → fleet control-plane CLI (fleet/cli.ts;
  *                                       bare = serve)
  *   omp-web session [options]         → the omp-session daemon (server/index.ts;
@@ -42,6 +42,7 @@ const FLEET_SUBCOMMANDS: Record<string, true> = {
 	"add-worktree": true,
 	"rm-worktree": true,
 	prompt: true,
+	preflight: true,
 };
 
 /** Where argv routes the process. */
@@ -65,7 +66,7 @@ const USAGE = `usage: omp-web [serve] [options] | omp-web <command> [options]
   sessions | projects | profiles
                                list registered daemons / projects / profiles
   spawn | add-repo | add | provision | add-clone | start | stop | remove
-  rm-project | add-worktree | rm-worktree | prompt
+  rm-project | add-worktree | rm-worktree | prompt | preflight
                                fleet control plane (see: omp-web <command> --help)
   session [options]            run a single-session agent daemon
   update [--check] [--force] [--version x.y.z]

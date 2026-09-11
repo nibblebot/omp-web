@@ -1,10 +1,13 @@
-# Session runtime image (P5.4) — the containerized omp-session daemon for the
+# Session runtime image (P5.4): the containerized omp-session daemon for the
 # kubernetes provider (runtime/providers/kubernetes-provider.ts).
 #
-# Build from the repo root (the COPY sources are context-relative):
-#   docker build -f runtime/image/Containerfile -t <image> .
-# The same lockfile/build inputs the fleet host uses, so the image and the
-# host runtime agree on dependency versions.
+# Build from the packaged image context produced by `bun run build`
+# (dist-bundle/image/), which carries package.json, bun.lock, this
+# Containerfile, the entrypoint files, and the server/, shared/, runtime/
+# source directories:
+#   docker build -f dist-bundle/image/Containerfile -t <image> dist-bundle/image
+# The context is complete on its own, so the image build never reads the repo
+# root, and the lockfile/dependency inputs match the fleet host exactly.
 #
 # Runtime contract (frozen, see runtime/providers/kubernetes-provider.ts and
 # fleet/workspace-lifecycle.ts):
@@ -15,39 +18,55 @@
 #     entry the bwrap provider runs fleet-side (server/index.ts) so behavior
 #     matches across providers.
 #   - No secret material is baked in: model/tool credentials arrive as
-#     secretKeyRef env (profile.secretRefs) and the fleet callback
-#     enrollment arrives as pod env from callback-env.json. Kubernetes
-#     credentials (service-account tokens) are not mounted.
+#     secretKeyRef env (profile.secretRefs), the fleet callback enrollment
+#     arrives as pod env from callback-env.json, and Git SSH identities arrive
+#     as pod env consumed by runtime/image/git-ssh.sh. Kubernetes credentials
+#     (service-account tokens) are not mounted.
 #   - The container is unprivileged: read-only rootfs, no capabilities,
 #     runAsUser 10001, /workspace + /tmp writable. The PVC is chowned to
 #     10001 at first start (prep user), which requires a fsGroup-capable
 #     StorageClass or an operator-owned hostPath chown.
 
 # --- deps stage: resolve the exact lockfile, no devDependencies -----------
-FROM oven/bun:1.2-alpine AS deps
+# The base is the DEBIAN (glibc) flavour, not `-alpine` (musl): the daemon
+# imports the agent SDK, whose prebuilt native addon ships glibc builds only
+# (`@oh-my-pi/pi-natives-linux-<arch>`, DT_NEEDED libm.so.6). A musl runtime
+# cannot load it — Bun refuses with "linked against glibc … this Bun build
+# uses musl" — and the daemon dies at import, before it ever dials the fleet.
+# The resolver and the loader must therefore agree on glibc.
+FROM oven/bun:1.4.2-debian AS deps
 WORKDIR /opt/omp-web
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production && bun pm cache rm
 
-# --- runtime stage: lean image with git + tini ----------------------------
-FROM oven/bun:1.2-alpine
-RUN apk add --no-cache --update git ca-certificates tini \
- && rm -rf /var/cache/apk/*
+# --- runtime stage: lean image with git/openssh + tini --------------------
+FROM oven/bun:1.4.2-debian
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git openssh-client ca-certificates tini \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/omp-web
 COPY --from=deps /opt/omp-web/node_modules ./node_modules
-# Repo sources the daemon + preparation import (fleet bwrap parity: the entry
-# is server/index.ts; runtime + shared are the only imports it makes).
-COPY package.json server/ shared/ runtime/ ./
+COPY package.json bun.lock ./
+# Explicit directory copies: the daemon entry, the frozen shared protocol
+# modules, and the runtime preparation/preflight/entrypoint code.
+COPY server/ ./server/
+COPY shared/ ./shared/
+COPY runtime/ ./runtime/
 
 # Isolated private home: populated at first start under the PVC.
 ENV OMP_WORKSPACE_ROOT=/workspace \
     PATH=/usr/local/bin:/usr/bin:/bin \
     LANG=C.UTF-8
 
-RUN addgroup -S -g 10001 omp && adduser -S -D -H -u 10001 -G omp omp \
+# /usr/sbin is intentionally absent from PATH below, so name the account
+# tools absolutely (Debian ships groupadd/useradd there too).
+RUN /usr/sbin/groupadd --gid 10001 omp \
+ && /usr/sbin/useradd --uid 10001 --gid 10001 --home-dir /home/omp --no-create-home \
+     --shell /usr/sbin/nologin omp \
  && mkdir -p /workspace /home/omp \
  && chown -R omp:omp /workspace /home/omp /opt/omp-web \
- && chmod 0555 /opt/omp-web/server /opt/omp-web/runtime /opt/omp-web/runtime/image
+ && chmod 0555 /opt/omp-web/server /opt/omp-web/shared /opt/omp-web/runtime /opt/omp-web/runtime/image \
+ && chmod 0555 /opt/omp-web/runtime/image/entrypoint.sh /opt/omp-web/runtime/image/git-ssh.sh
 
 USER 10001:10001
-ENTRYPOINT ["/sbin/tini", "--", "/opt/omp-web/runtime/image/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/omp-web/runtime/image/entrypoint.sh"]

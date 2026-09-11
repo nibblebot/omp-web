@@ -39,6 +39,34 @@ export interface WriterFlushResult {
 	note?: string;
 }
 
+/** Per-writer flush state reported by {@link flushReachableWriters}. */
+export interface ReachableWriterState {
+	id: string;
+	kind: "main" | "sub" | "advisor";
+	sessionFile: string | null;
+	state: "flushed" | "parked" | "disposed" | "failed";
+	/** Present when the writer's explicit flush rejected (state "failed"). */
+	error?: string;
+}
+
+/**
+ * Full per-writer flush report for the Kubernetes quiesce branch, which must
+ * persist one evidence entry per reachable writer (main first) rather than a
+ * bare descendant list. `ok` stays fail-closed: false when the main writer is
+ * busy or any reachable writer's flush rejected.
+ */
+export interface ReachableWriterFlushReport {
+	ok: boolean;
+	/** One entry per reachable writer, main first, in registry capture order. */
+	writers: ReachableWriterState[];
+	advisors: "caught_up" | "inactive";
+	error?: string;
+	note?: string;
+}
+
+/** Registry id of the boot (main) writer; every other ref is a descendant. */
+const MAIN_WRITER_ID = "s1";
+
 /** Capture the writer surface of one session entry. */
 export function captureWriters(
 	entry: SessionEntry,
@@ -47,7 +75,7 @@ export function captureWriters(
 ): { main: AgentSession; descendants: WriterRef[] } {
 	const refs = registry.list();
 	const descendants: WriterRef[] = refs
-		.filter((ref) => ref.id !== "s1" && (ref.kind === "sub" || ref.kind === "advisor"))
+		.filter((ref) => ref.id !== MAIN_WRITER_ID && (ref.kind === "sub" || ref.kind === "advisor"))
 		.map((ref) => ({
 			id: ref.id,
 			kind: ref.kind,
@@ -56,6 +84,25 @@ export function captureWriters(
 			status: ref.status,
 		}));
 	return { main: entry.session, descendants };
+}
+
+/** One writer's internal flush attempt (a `failed` state carries its error). */
+interface WriterFlushAttempt {
+	id: string;
+	kind: "main" | "sub" | "advisor";
+	sessionFile: string | null;
+	state: "flushed" | "parked" | "disposed" | "failed";
+	error?: string;
+}
+
+/** Internal statement of one full writer-surface flush. */
+interface WriterFlushSurface {
+	ok: boolean;
+	main: WriterFlushAttempt;
+	descendants: WriterFlushAttempt[];
+	advisors: "caught_up" | "inactive";
+	error?: string;
+	note?: string;
 }
 
 /**
@@ -70,30 +117,89 @@ export async function flushAllWriters(input: {
 	registry: AgentRegistry;
 	mainSessionFile: string | null;
 }): Promise<WriterFlushResult> {
+	const surface = await flushWriterSurface(input, false);
+	return {
+		ok: surface.ok,
+		descendants: surface.descendants
+			.filter((attempt) => attempt.state !== "failed")
+			.map((attempt) => ({
+				id: attempt.id,
+				kind: attempt.kind,
+				sessionFile: attempt.sessionFile,
+				state: attempt.state as QuiesceWriterEntry["state"],
+			})),
+		advisors: surface.advisors,
+		...(surface.error !== undefined ? { error: surface.error } : {}),
+		...(surface.note !== undefined ? { note: surface.note } : {}),
+	};
+}
+
+/**
+ * Flush every reachable writer and report one entry per writer, including the
+ * main writer and any writer whose flush rejected. The same fail-closed gates
+ * as {@link flushAllWriters} apply (`ok:false` on a live writer or any flush
+ * rejection), but every descendant is attempted so a failure is reported per
+ * writer instead of short-circuiting. This is the report the Kubernetes
+ * quiesce_clone evidence is built from.
+ */
+export async function flushReachableWriters(input: {
+	entry: SessionEntry;
+	registry: AgentRegistry;
+	mainSessionFile: string | null;
+}): Promise<ReachableWriterFlushReport> {
+	const surface = await flushWriterSurface(input, true);
+	return {
+		ok: surface.ok,
+		writers: [surface.main, ...surface.descendants].map((attempt) => ({
+			id: attempt.id,
+			kind: attempt.kind,
+			sessionFile: attempt.sessionFile,
+			state: attempt.state,
+			...(attempt.error !== undefined ? { error: attempt.error } : {}),
+		})),
+		advisors: surface.advisors,
+		...(surface.error !== undefined ? { error: surface.error } : {}),
+		...(surface.note !== undefined ? { note: surface.note } : {}),
+	};
+}
+
+/**
+ * Shared core for both public flush functions. `continueOnWriterError` is
+ * false for {@link flushAllWriters} (stop at the first descendant rejection,
+ * exactly as before) and true for {@link flushReachableWriters} (attempt
+ * every descendant and report each). Precondition guards and the advisor
+ * catch-up barrier are identical in both modes.
+ */
+async function flushWriterSurface(
+	input: { entry: SessionEntry; registry: AgentRegistry; mainSessionFile: string | null },
+	continueOnWriterError: boolean,
+): Promise<WriterFlushSurface> {
 	const { entry, registry, mainSessionFile } = input;
 	const { main, descendants } = captureWriters(entry, registry, mainSessionFile);
+	const mainAttempt: WriterFlushAttempt = {
+		id: MAIN_WRITER_ID,
+		kind: "main",
+		sessionFile: mainSessionFile,
+		state: "flushed",
+	};
+	const failBeforeFlush = (error: string): WriterFlushSurface => ({
+		ok: false,
+		main: { ...mainAttempt, state: "failed" },
+		descendants: [],
+		advisors: "inactive",
+		error,
+	});
 
 	// Precondition gate: no live writer may remain (P7.3 "refuse active
 	// work"). The main session's own busy state is the primary signal.
 	if (main.isStreaming || main.queuedMessageCount > 0) {
-		return {
-			ok: false,
-			descendants: [],
-			advisors: "inactive",
-			error: "main session is streaming or has queued messages",
-		};
+		return failBeforeFlush("main session is streaming or has queued messages");
 	}
-	// mainSessionFile is reserved for the structural-verification pass that
-	// runs after dispose (the main JSONL path is derived from the sessions
-	// tree, not this handle).
 	for (const ref of descendants) {
 		if (ref.status === "running" || ref.status === "idle") {
-			return {
-				ok: false,
-				descendants: [],
-				advisors: "inactive",
-				error: `descendant writer ${ref.id} (${ref.kind}) is still live (${ref.status})`,
-			};
+			return failBeforeFlush(
+				`descendant writer ${ref.id} (${ref.kind}) is still live (${ref.status})`,
+			);
 		}
 	}
 
@@ -105,28 +211,48 @@ export async function flushAllWriters(input: {
 	if (!flushMain.ok) {
 		return {
 			ok: false,
+			main: { ...mainAttempt, state: "failed", error: flushMain.error },
 			descendants: [],
 			advisors: "inactive",
 			error: `main session flush failed: ${flushMain.error}`,
 			note: "main flush rejected or persistence indeterminate — deletion blocked (P4.5)",
 		};
 	}
-	const states: QuiesceWriterEntry[] = [];
+
+	const attempts: WriterFlushAttempt[] = [];
+	let firstFailure: string | undefined;
 	for (const ref of descendants) {
 		if (ref.session !== null) {
 			const flushed = await flushSession(ref.session);
 			if (!flushed.ok) {
-				return {
-					ok: false,
-					descendants: states,
-					advisors: "inactive",
-					error: `descendant ${ref.id} flush failed: ${flushed.error}`,
-					note: "descendant flush rejected or persistence indeterminate — deletion blocked (P4.5)",
-				};
+				if (!continueOnWriterError) {
+					return {
+						ok: false,
+						main: mainAttempt,
+						descendants: attempts,
+						advisors: "inactive",
+						error: `descendant ${ref.id} flush failed: ${flushed.error}`,
+						note: "descendant flush rejected or persistence indeterminate — deletion blocked (P4.5)",
+					};
+				}
+				attempts.push({
+					id: ref.id,
+					kind: ref.kind,
+					sessionFile: ref.sessionFile,
+					state: "failed",
+					error: flushed.error,
+				});
+				firstFailure ??= `descendant ${ref.id} flush failed: ${flushed.error}`;
+				continue;
 			}
-			states.push({ id: ref.id, kind: ref.kind, sessionFile: ref.sessionFile, state: "flushed" });
+			attempts.push({
+				id: ref.id,
+				kind: ref.kind,
+				sessionFile: ref.sessionFile,
+				state: "flushed",
+			});
 		} else {
-			states.push({
+			attempts.push({
 				id: ref.id,
 				kind: ref.kind,
 				sessionFile: ref.sessionFile,
@@ -134,12 +260,23 @@ export async function flushAllWriters(input: {
 			});
 		}
 	}
+	if (firstFailure !== undefined) {
+		return {
+			ok: false,
+			main: mainAttempt,
+			descendants: attempts,
+			advisors: "inactive",
+			error: firstFailure,
+			note: "descendant flush rejected or persistence indeterminate — deletion blocked (P4.5)",
+		};
+	}
 
 	const advisorState = await advisorCaughtUp(main);
 	if (!advisorState.ok) {
 		return {
 			ok: false,
-			descendants: states,
+			main: mainAttempt,
+			descendants: attempts,
 			advisors: advisorState.state,
 			error: `advisor catch-up barrier failed: ${advisorState.error}`,
 			note: "advisor recorder catch-up unresolved — deletion blocked",
@@ -147,7 +284,8 @@ export async function flushAllWriters(input: {
 	}
 	return {
 		ok: true,
-		descendants: states,
+		main: mainAttempt,
+		descendants: attempts,
 		advisors: advisorState.state,
 		note: "SDK 17.1.8 ceiling: dispose suppresses descendant/advisor errors; flush here is the explicit evidence, and structural read verification of every declared JSONL runs after dispose.",
 	};

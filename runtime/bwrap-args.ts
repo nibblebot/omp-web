@@ -22,7 +22,7 @@
 
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
-import type { ProviderProfile } from "../shared/provider-protocol";
+import { OMP_PROVIDER_PROTO, type ProviderProfile } from "../shared/provider-protocol";
 
 /**
  * Thrown when a requested bind source resolves inside a forbidden root
@@ -161,6 +161,9 @@ export const ENV_ALLOW_KEYS: readonly string[] = [
 	// resumes it at boot (server/config.ts reads OMP_SESSION_RESUME). Rides
 	// the callback-env handoff, never the ambient environment.
 	"OMP_SESSION_RESUME",
+	// Wake-resume with a required session: a missing target fails the boot
+	// instead of silently starting a fresh session.
+	"OMP_SESSION_RESUME_REQUIRED",
 	"OMP_WORKSPACE_ID",
 	"OMP_WORKSPACE_DIR",
 	"OMP_WORKSPACE_GENERATION",
@@ -447,7 +450,11 @@ export function defaultRuntimeLaunch(env?: Record<string, string | undefined>): 
 	}
 	// Fall back to the shallowest dev path so preflight reports it missing
 	// actionably when neither layout is present.
-	return { entry: devCandidates[0], bin: environment.OMP_RUNTIME_BIN ?? process.execPath, args: [] };
+	return {
+		entry: devCandidates[0],
+		bin: environment.OMP_RUNTIME_BIN ?? process.execPath,
+		args: [],
+	};
 }
 
 function isContained(candidate: string, root: string): boolean {
@@ -604,7 +611,7 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 	env.HOME = homeDir;
 	if (env.PATH === undefined) env.PATH = DEFAULT_PATH;
 	env.PI_CODING_AGENT_DIR = join(homeDir, "agent");
-	env.OMP_PROVIDER_PROTO = "1";
+	env.OMP_PROVIDER_PROTO = String(OMP_PROVIDER_PROTO);
 	env.OMP_WORKSPACE_DIR = workspaceDir;
 	if (input.secretEnv !== undefined) {
 		// Merged last by construction; RESERVED_SECRET_ENV_KEYS was enforced

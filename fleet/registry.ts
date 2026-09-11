@@ -26,7 +26,9 @@ import type {
 	RegisteredProject,
 	WorkspaceKind,
 } from "../shared/protocol";
+import type { KubernetesBinding } from "../shared/provider-protocol";
 import { validateProjectPath } from "./discovery";
+import type { ValidatedQuiesceReceipt } from "./clone-quiesce";
 
 /**
  * Workspace identity unions, re-exported for fleet/registry consumers. The
@@ -65,6 +67,30 @@ export interface DeletionGateError {
 }
 
 /**
+ * Quiesce-evidence receipt binding persisted with a deletion attempt
+ * (Kubernetes final-evidence collection). The request id is recorded before
+ * the request is sent so a fleet restart can ask the daemon to replay its
+ * cached outcome; the validated receipt is stored only after collection and
+ * validation both succeed.
+ */
+export interface CloneDeletionReceipt {
+	requestId: string;
+	/** Bulk correlation the evidence was captured under, once collected. */
+	correlationId?: string;
+	generation: number;
+	/** Pod uid the receipt is bound to (null when no Pod was observed). */
+	podUid: string | null;
+	/** PVC uid the receipt is bound to (null when no claim was observed). */
+	pvcUid: string | null;
+	/** "pending" (request sent) | "verified" (validated) | "invalid" (rejected). */
+	state: "pending" | "verified" | "invalid";
+	/** Validated quiesce receipt (present when state === "verified"). */
+	validated?: ValidatedQuiesceReceipt;
+	/** Why collection/validation failed (present when state === "invalid"). */
+	error?: DeletionGateError;
+}
+
+/**
  * Per-entry verify-at-deletion state (P7.3). Absent = never deleted.
  *
  * Lifecycle: a delete request enters "deleting" (gate in flight; the roster
@@ -86,6 +112,8 @@ export interface WorkspaceDeletion {
 	error?: DeletionGateError;
 	/** Provider resources still present after a partial post-verification provider deletion (retry-able; never a full-volume promise). */
 	remainingResources?: string[];
+	/** Quiesce-evidence receipt binding for a Kubernetes deletion attempt. */
+	receipt?: CloneDeletionReceipt;
 }
 
 /**
@@ -140,6 +168,22 @@ export interface WorkspaceRecord {
 	branch?: string;
 	/** Clone workspaces only. */
 	profileId?: string;
+	/**
+	 * Provider that owns this workspace's compute. Absent on records
+	 * persisted before the provider kind was captured; startup
+	 * reconciliation infers it from the verification marker or the profile.
+	 */
+	providerKind?: "bwrap" | "kubernetes";
+	/**
+	 * Kubernetes resource binding, persisted at registration; present iff
+	 * `providerKind === "kubernetes"`. Fleet-private like the rest of the
+	 * record — never serialized into roster frames.
+	 */
+	kubernetes?: KubernetesBinding;
+	/** Lowercase sha256 of JSON.stringify([source.remote, revision, branch]); kubernetes only. */
+	sourcePinDigest?: string;
+	/** Generation whose launch was last ATTEMPTED (may exceed authorizedGeneration after a failed launch). */
+	lastAttemptedGeneration?: number;
 	desiredState: DesiredState;
 	/** Absent = unmanaged. */
 	authorizedGeneration?: number;
@@ -147,6 +191,16 @@ export interface WorkspaceRecord {
 	providerHandle?: unknown;
 	/** Verify-at-deletion state (P7.3). Absent = never deleted. */
 	deletion?: WorkspaceDeletion;
+	/**
+	 * Last quiesce-evidence receipt collected for this workspace (Kubernetes
+	 * only), persisted by an explicit stop while the daemon was still alive.
+	 * A stop is the only chance to gather it: the Pod is gone afterwards, so
+	 * a later delete can only reuse what was verified here. Bound to the
+	 * generation/claim/namespace it was collected for, so a wake (which bumps
+	 * the generation) or a replaced claim/PVC never reuses a stale receipt.
+	 * Fleet-private like the rest of the record.
+	 */
+	lastEvidence?: CloneDeletionReceipt;
 	/** Persisted callback enrollment (digest only). Absent = not enrolled. */
 	enrollment?: WorkspaceEnrollment;
 }

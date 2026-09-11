@@ -120,6 +120,7 @@ import {
 	listDaemonSessions,
 	type CloneSessionStore,
 } from "./daemon-sessions";
+import { headOf } from "./stored-sessions";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
 import type { FleetEventLog, FleetFacts } from "./events";
@@ -146,6 +147,15 @@ const CLIENT_RECLAIM_MS = 60_000;
 
 /** Roster-dropdown listing size: the last N sessions of a daemon's worktree. */
 const DROPDOWN_SESSION_LIMIT = 10;
+
+/**
+ * Roster enrichment TTL (S2). The clone stored-history read walks the log
+ * store; the roster projects on every broadcast, so the result is memoized for
+ * this window. Short enough that a just-stored session's title appears
+ * promptly, long enough that a burst of roster broadcasts costs one store walk
+ * per clone per window.
+ */
+const CLONE_HISTORY_TTL_MS = 30_000;
 
 /**
  * Per-daemon realtime activity, derived by the edge from the raw tapped
@@ -531,6 +541,56 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
 }
 
 /**
+ * Roster-facing clone stored-history summary (S2): the title shown on the row
+ * and whether the row must read as empty.
+ */
+export interface CloneHistoryInfo {
+	/** Stored-history session title; undefined when none is derivable. */
+	title?: string;
+	/** True when the row must read as empty ("New session") — no title. */
+	empty: boolean;
+}
+
+/**
+ * Derive a clone row's stored-history title/emptiness from the fleet log store.
+ * The store is the same read model `/ctl/stored/sessions` serves (join key =
+ * the entry's daemonId), and the head is parsed with `stored-sessions.headOf`
+ * so the roster title matches the dropdown/transcript surface. Never throws: a
+ * missing/unreadable store, workspace, session, or head degrades to
+ * `{ empty: true }` — the row shows a plain "New session" instead of failing
+ * the roster broadcast.
+ *
+ * Cost: one `listStoredSessions` (readdir of `logs/<workspaceId>` + a
+ * per-session subtree stat walk) plus one bounded 64 KiB head read. That is
+ * affordable for every roster broadcast ONLY because FleetEdge memoizes the
+ * result for a short TTL (see #cloneHistoryFor); a caller that runs per
+ * broadcast MUST cache.
+ */
+export function cloneStoredHistory(
+	store: CloneSessionStore | undefined,
+	workspaceId: string,
+): CloneHistoryInfo {
+	if (store === undefined) return { empty: true };
+	try {
+		const sessions = store.listStoredSessions(workspaceId);
+		// Newest stored session wins — the same newest-first order the
+		// dropdown lists its rows in.
+		let newest: (typeof sessions)[number] | undefined;
+		for (const session of sessions) {
+			if (newest === undefined || session.mtimeMs > newest.mtimeMs) newest = session;
+		}
+		const relpath = newest?.mainRelpath;
+		if (newest === undefined || relpath === undefined) return { empty: true };
+		const title = headOf(store, workspaceId, newest.sessionId, relpath)?.title;
+		return typeof title === "string" && title.length > 0
+			? { title, empty: false }
+			: { empty: true };
+	} catch {
+		return { empty: true };
+	}
+}
+
+/**
  * Roster serialization: the DaemonEntry fields of a registry entry (never
  * token/endpoint/template/registeredAt) plus a live uptime in seconds since
  * readyAt (or registeredAt when never ready) and pid. `workspaceDir` (the
@@ -549,8 +609,20 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
  * tokens, private endpoints, provider handles, and secret material. Any
  * future workspace field must be mapped here explicitly (or added to the
  * RegisteredProject shape) before it can appear on the wire.
+ *
+ * S2: clone rows carry no probed `lastSessionFile` (its absence is
+ * load-bearing elsewhere), so their sessionTitle/sessionEmpty cannot come from
+ * the supervisor probe. `cloneHistory` (when supplied) resolves them from the
+ * fleet log store for clone entries; a resolved title overrides the row and a
+ * resolved empty flag keeps the client's "New session" affordance. No new wire
+ * field is introduced — the existing sessionTitle/sessionEmpty fields are
+ * reused.
  */
-export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): DaemonEntry {
+export function toRosterEntry(
+	entry: RegistryEntry,
+	workspaceDir?: string,
+	cloneHistory?: (daemonId: string) => CloneHistoryInfo | undefined,
+): DaemonEntry {
 	const roster: DaemonEntry = {
 		daemonId: entry.daemonId,
 		name: entry.name,
@@ -601,6 +673,20 @@ export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): Daem
 		roster.desiredState = workspace.desiredState;
 		if (workspace.profileId !== undefined) roster.providerProfileId = workspace.profileId;
 	}
+	// S2: a clone's title/emptiness come from its fleet-stored history, not
+	// from a probed lastSessionFile (which clones never persist). The resolver
+	// always answers for clones (an absent store degrades to empty), so a clone
+	// row is authoritative: a resolved title/empty replaces whatever the entry
+	// carried. Non-clone entries keep the supervisor-probed fields above.
+	if (workspace?.kind === "clone" && cloneHistory !== undefined) {
+		const history = cloneHistory(entry.daemonId);
+		if (history !== undefined) {
+			if (history.title !== undefined) roster.sessionTitle = history.title;
+			else delete roster.sessionTitle;
+			if (history.empty) roster.sessionEmpty = true;
+			else delete roster.sessionEmpty;
+		}
+	}
 	if (entry.lifecycleStage !== undefined) roster.lifecycleStage = entry.lifecycleStage;
 	if (entry.lifecycleError !== undefined) roster.lifecycleError = entry.lifecycleError;
 	return roster;
@@ -621,6 +707,8 @@ export class FleetEdge {
 	readonly #providerProfiles: PublicProviderProfile[] | undefined;
 	/** Fleet transcript store for clone session listing/resume membership (P3.8). */
 	readonly #logStore: CloneSessionStore | undefined;
+	/** TTL cache backing the clone stored-history roster titles (S2). */
+	readonly #cloneHistory = new Map<string, { at: number; info: CloneHistoryInfo }>();
 	readonly #backpressureBytes: number;
 	/** Per-client ring byte budget (default SSE_RING_BYTES; finding #5). */
 	readonly #ringBytes: number;
@@ -869,9 +957,7 @@ export class FleetEdge {
 							SSE_EVENT_NAME,
 							{
 								type: "roster",
-								daemons: this.#registry
-									.list()
-									.map((entry) => toRosterEntry(entry, this.#config.workspaceDir)),
+								daemons: this.#rosterEntries(),
 							},
 							seq++,
 						),
@@ -2464,10 +2550,38 @@ export class FleetEdge {
 	#broadcastRoster(): void {
 		this.#broadcast({
 			type: "roster",
-			daemons: this.#registry
-				.list()
-				.map((entry) => toRosterEntry(entry, this.#config.workspaceDir)),
+			daemons: this.#rosterEntries(),
 		});
+	}
+
+	/**
+	 * Clone stored-history resolver for the roster projection (S2). Memoized
+	 * for {@link CLONE_HISTORY_TTL_MS}: the projection runs on EVERY roster
+	 * broadcast (registry change, activity, status flips) while the read behind
+	 * `cloneStoredHistory` walks `logs/<workspaceId>` and stats each session
+	 * subtree. Without the cache a busy fleet would re-walk the store many
+	 * times per second; with it each clone costs at most one walk per TTL
+	 * window. Display enrichment only — the registry stays the truth.
+	 */
+	readonly #cloneHistoryFor = (daemonId: string): CloneHistoryInfo => {
+		const now = Date.now();
+		const cached = this.#cloneHistory.get(daemonId);
+		if (cached !== undefined && now - cached.at < CLONE_HISTORY_TTL_MS) return cached.info;
+		const info = cloneStoredHistory(this.#logStore, daemonId);
+		this.#cloneHistory.set(daemonId, { at: now, info });
+		return info;
+	};
+
+	/** Roster projection: registry entries + clone stored-history enrichment. */
+	#rosterEntries(): DaemonEntry[] {
+		// Drop cache keys for clones that left the roster so the TTL map tracks
+		// the live roster, not process history.
+		for (const key of this.#cloneHistory.keys()) {
+			if (this.#registry.get(key) === undefined) this.#cloneHistory.delete(key);
+		}
+		return this.#registry
+			.list()
+			.map((entry) => toRosterEntry(entry, this.#config.workspaceDir, this.#cloneHistoryFor));
 	}
 
 	/** Broadcast the current registered-project set to every edge stream. */

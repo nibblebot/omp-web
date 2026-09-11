@@ -149,16 +149,37 @@ export function deriveWorkspaceBranch(workspaceId: string): string {
 	return derived === "" || derived === "head" ? "workspace" : derived;
 }
 
-/** Validates a caller-supplied branch name (single ref name, no traversal). */
-function validateBranch(branch: string): string {
-	if (
-		!/^[A-Za-z0-9._/-]+$/.test(branch) ||
+/** Git ref characters outside this set are rejected outright by git. */
+const REF_CHARS_RE = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * Validates one branch/ref name against the `git check-ref-format --branch`
+ * rules the fleet depends on, and returns it unchanged. This is the single
+ * reference-validation entry point: admission calls it before registering a
+ * Kubernetes clone and preparation calls it before persisting a marker, so
+ * both reject exactly the same names.
+ *
+ * Rejected: an empty name, characters outside `[A-Za-z0-9._/-]`, a leading
+ * `-`, `..` anywhere, and any component that is empty (`foo//bar`), starts
+ * with `.` (`foo/.bar`), ends with `.` (`foo.`), or ends with `.lock`
+ * (`foo.lock/bar`).
+ */
+export function validateWorkspaceRef(branch: string): string {
+	const invalid =
+		branch === "" ||
+		!REF_CHARS_RE.test(branch) ||
 		branch.startsWith("-") ||
-		branch.startsWith(".") ||
 		branch.includes("..") ||
-		branch.endsWith("/") ||
-		branch.endsWith(".lock")
-	) {
+		branch
+			.split("/")
+			.some(
+				(component) =>
+					component === "" ||
+					component.startsWith(".") ||
+					component.endsWith(".") ||
+					component.endsWith(".lock"),
+			);
+	if (invalid) {
 		throw new PrepareWorkspaceError(
 			"invalid_request",
 			`invalid branch name: ${JSON.stringify(branch)}`,
@@ -373,6 +394,27 @@ async function readMarker(markerPath: string): Promise<MarkerRead> {
 	};
 }
 
+/**
+ * Reads the verified init marker under `workspaceRoot` WITHOUT touching the
+ * checkout, for provider-side (in-pod) callers. `null` means nothing verified
+ * yet: either no marker at all or the pin left by an interrupted first
+ * preparation, both of which `prepareWorkspace` resumes. A marker that is
+ * present but unreadable throws `conflict`: an already initialized volume is
+ * never silently re-cloned over (its later commits and working files must
+ * survive), so the caller must repair or remove the marker manually.
+ */
+export async function readWorkspaceInitMarker(
+	workspaceRoot: string,
+): Promise<WorkspaceInitMarker | null> {
+	const read = await readMarker(join(workspaceRoot, MARKER_NAME));
+	if (read.state === "marker") return read.marker;
+	if (read.state === "absent" || read.state === "pin") return null;
+	throw new PrepareWorkspaceError(
+		"conflict",
+		`${join(workspaceRoot, MARKER_NAME)} exists but is unparseable; refusing to reset this workspace volume. Repair or remove the marker manually`,
+	);
+}
+
 /** Human-readable source for messages. */
 function describeSource(source: WorkspaceSource): string {
 	return source.local !== undefined ? `local ${source.local}` : `remote ${source.remote}`;
@@ -539,7 +581,9 @@ async function resolvePin(
 				`local source ${src} does not offer ${revision ?? "HEAD"} to pin: ${lastLine(probe.stderr || probe.stdout)}`,
 			);
 		}
-		return probe.stdout.trim();
+		// git prints lowercase hex; normalize anyway so the persisted pin is
+		// byte-identical to the marker's COMMIT_RE-validated form.
+		return probe.stdout.trim().toLowerCase();
 	}
 	const remote = sourceLocation(source);
 	const listing = await runGit(["ls-remote", remote], workspaceRoot, signal);
@@ -550,7 +594,7 @@ async function resolvePin(
 			`remote source ${remote} is unreachable: ${lastLine(listing.stderr || listing.stdout)}`,
 		);
 	}
-	return pickRemoteCommit(parseLsRemote(listing.stdout), remote, revision);
+	return pickRemoteCommit(parseLsRemote(listing.stdout), remote, revision).toLowerCase();
 }
 
 /**
@@ -700,10 +744,13 @@ export interface ResolveWorkspacePinOptions {
  * Resolve a requested revision (or the source HEAD) to a full commit id
  * WITHOUT modifying anything: local sources `rev-parse --verify
  * <rev>^{commit}`, remote sources resolve against advertised refs only and
- * refuse an unoffered commit. This is the fleet-owned pin resolution —
- * the k8s provider never resolves; `createClone` calls this ONCE for every
- * profile and persists the full commit as `pinnedRevision` before any
- * provider-side init, so in-pod preparation always reuses the same pin.
+ * refuse an unoffered commit. This is the fleet-owned pin resolution, the
+ * single reference-validation and pin-resolution entry point:
+ *  - `createClone` calls it ONCE for every profile and persists the full
+ *    lowercase commit as `pinnedRevision` before any provider-side init, so
+ *    in-pod preparation always reuses the same pin;
+ *  - `prepareWorkspace` calls it for the first preparation of a volume;
+ *  - the k8s provider never resolves.
  *
  * Throws {@link PrepareWorkspaceError} with the frozen ledger codes
  * (`invalid_request` for malformed revisions, `unavailable` when the source
@@ -756,8 +803,8 @@ export async function prepareWorkspace(
 	const source = normalizeSource(options.source);
 	const branch =
 		options.branch === undefined
-			? deriveWorkspaceBranch(workspaceId)
-			: validateBranch(options.branch);
+			? validateWorkspaceRef(deriveWorkspaceBranch(workspaceId))
+			: validateWorkspaceRef(options.branch);
 	const revision = normalizeRevision(options.revision);
 	const workspaceRoot = options.workspaceRoot;
 	const markerPath = join(workspaceRoot, MARKER_NAME);
@@ -839,7 +886,12 @@ export async function prepareWorkspace(
 		pin = read.pin.resolvedCommit;
 		await assertPinSatisfiesRevision(source, pin, revision, workspaceRoot, options.signal);
 	} else {
-		pin = await resolvePin(source, revision, workspaceRoot, options.signal);
+		// One resolution, through the exported fleet entry point, of the full
+		// lowercase commit id persisted below before anything is cloned.
+		pin = await resolveWorkspacePin(source, revision, {
+			cwd: workspaceRoot,
+			signal: options.signal,
+		});
 	}
 
 	// The source must still offer the pin before anything is cloned.

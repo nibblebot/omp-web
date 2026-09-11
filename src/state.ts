@@ -807,13 +807,31 @@ function resetSessionView(): void {
  *  is fleet-scoped and survives. Race guard: the clear MUST NOT fire while
  *  an attach to that daemon is in flight — a freshly waking daemon reads as
  *  "asleep" in lagging roster frames right after wake-attach; the entry and
- *  in-flight state are re-checked against the POST-frame roster here. */
+ *  in-flight state are re-checked against the POST-frame roster here.
+ *
+ *  A managed CLONE whose worker is gone is the exception: its lineage is
+ *  durable in the fleet store, so the last-known transcript stays on screen
+ *  READ-ONLY instead of being thrown away (App renders ReadOnlySessionPane
+ *  whenever hasLiveSession() is false; the composer is gone either way).
+ *  Nothing is writable without a live session, and a respawn flips the entry
+ *  back to ready, which restores the normal chat column. */
 function reconcileAttachedSession(): void {
 	if (state.sessionMode !== "roster") return;
 	const id = state.currentSessionId;
 	if (id === "") return;
 	if (pendingAttachTarget() === id) return;
-	if (!isDaemonDead(state.daemonRoster.find((d) => d.daemonId === id))) return;
+	const entry = state.daemonRoster.find((d) => d.daemonId === id);
+	if (!isDaemonDead(entry)) return;
+	// Keep only when there is a transcript left to read; an empty session has
+	// nothing to preserve and keeps the old clear-and-show-empty behavior.
+	if (entry?.workspaceKind === "clone" && (state.items.length > 0 || state.live.active)) {
+		pushDebug(
+			"info",
+			"roster",
+			`attached clone ${id.slice(0, 8)} is gone; keeping its history read-only`,
+		);
+		return;
+	}
 	setState("currentSessionId", "");
 	setState("readyAt", undefined);
 	resetSessionView();
@@ -1447,6 +1465,7 @@ export {
 export {
 	listSessions,
 	listFiles,
+	openStoredHistory,
 	requestDaemonSessions,
 	resumeDaemonSession,
 	setSidebarVisible,

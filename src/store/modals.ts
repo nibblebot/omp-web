@@ -1,5 +1,6 @@
 import type { ClientCommand } from "../../shared/protocol";
 import { setState, state } from "../state";
+import { randomId } from "./ids";
 import { isConnected, postCommand } from "./transport";
 
 /**
@@ -14,7 +15,7 @@ export function sendLoginCode(requestId: string, code: string): void {
 	if (!isConnected()) return;
 	void postCommand({
 		type: "login_code",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		requestId,
 		code,
 	} satisfies ClientCommand).catch(() => {});

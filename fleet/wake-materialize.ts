@@ -26,6 +26,12 @@
  * the daemon's tailer re-streams any local tail once booted. Only truly
  * cold/missing files are filled from the store.
  *
+ * Main-transcript rule (P5 wake): "is restoration needed" is answered by the
+ * session's MAIN file, never by the existence of its tree. An assets-only
+ * tree cannot be resumed. The fill proceeds when the volume holds the main
+ * (assets may be cold) or the store holds one (the main is restored); it
+ * throws typed `unavailable` when both sides hold no main.
+ *
  * Safety: every relpath is validated with the frozen manifest predicate
  * (isNormalizedPosixRelativePath — no `..`, no absolute, no `.` segments)
  * and the resolved target must stay inside the sessions dir (isPathUnder,
@@ -40,6 +46,7 @@
 import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { isNormalizedPosixRelativePath } from "../shared/archive-manifest";
+import { findSessionMainRelpath } from "../shared/wake-materialize";
 import { isPathUnder } from "./worktrees";
 
 export type WakeMaterializeErrorCode = "invalid_request" | "unavailable";
@@ -132,6 +139,23 @@ export function materializeMissingSessionFiles(opts: {
 			`no stored transcripts for session ${sessionId} in workspace ${workspaceId}`,
 		);
 	}
+	// Main-transcript availability (P5 wake): restoration is needed only when
+	// the VOLUME lacks the session's main file, and it is possible only when
+	// the store holds one. An assets-only fill over a volume that already has
+	// its main stays valid; a volume with no main and a store with no main is
+	// not resumable, so refuse instead of silently restoring assets that can
+	// never be opened.
+	const volumeMain = resolveMainSessionFile(sessionsDir, sessionId);
+	const storeMain = findSessionMainRelpath(
+		lineage.files.filter((file) => file.status === "stored").map((file) => file.relpath),
+		sessionId,
+	);
+	if (volumeMain === null && storeMain === null) {
+		throw new WakeMaterializeError(
+			"unavailable",
+			`no main transcript for session ${sessionId} in workspace ${workspaceId}: neither the volume nor the store holds ${sessionId}.jsonl`,
+		);
+	}
 	mkdirSync(sessionsDir, { recursive: true });
 
 	let written = 0;
@@ -155,8 +179,10 @@ export function materializeMissingSessionFiles(opts: {
 		bytes += data.length;
 	}
 
-	const mainPresent =
-		lineage.mainRelpath !== undefined && localFileExists(sessionsDir, lineage.mainRelpath);
+	// Post-fill truth (P5 wake): the outcome reports whether the volume now
+	// holds the session's main file ITSELF, not whether the store's lineage
+	// named one (a "missing"-status store entry must not report a warm main).
+	const mainPresent = resolveMainSessionFile(sessionsDir, sessionId) !== null;
 	return { written, bytes, mainPresent };
 }
 

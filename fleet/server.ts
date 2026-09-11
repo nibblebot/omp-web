@@ -26,6 +26,8 @@
  *   POST /ctl/logs/purge {workspaceId}             -> explicit manual purge (P7.6)
  *   POST /ctl/workspaces/:id/resume-clone {sessionId, profileId?} -> fresh clone
  *                    at the pinned commit + transcript materialization + resume (P8.10)
+ *   POST /ctl/workspaces/:id/clear-deletion -> clear a rejected delete so the
+ *                    workspace can be woken, preserved, stopped, and retried (P7.3)
  *
  * Browser auth (P2.2/P2.3, optional): when an operator access token is
  * configured (OMP_FLEET_BROWSER_TOKEN / --browser-access-token /
@@ -67,7 +69,7 @@ import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { toPublicProfile } from "./provider-profile";
 import { isLoopbackHost } from "../server/config";
 import { acquireFileLock, type FileLock } from "../shared/file-lock";
-import type { DeletionGateError, RegistryEntry } from "./registry";
+import type { DeletionGateError, RegistryEntry, WorkspaceRecord } from "./registry";
 import { bootStatusFor, Registry } from "./registry";
 import { validateProjectPath } from "./discovery";
 import { matchSelector } from "./selectors";
@@ -106,6 +108,8 @@ import {
 	WorkspaceLifecycle,
 } from "./workspace-lifecycle";
 import { CloneControlApi, lifecycleStatus } from "./clone-control";
+import { CloneQuiesce, type CloneQuiesceRequest, type CloneQuiesceReceipt } from "./clone-quiesce";
+import { readCallbackEnvFile } from "../runtime/callback-env";
 import { materializeMissingSessionFiles, WakeMaterializeError } from "./wake-materialize";
 import {
 	createWorktree,
@@ -132,6 +136,13 @@ const DEFAULT_PORT = 4722;
 // acks within a second of each durable append.
 const LOG_ACK_FLUSH_MS = 1_000;
 const LOG_ACK_BATCH_MAX = 64;
+
+/** Bounded clone readiness probe (stage 4 item 4: callback readiness 60 s). */
+const CLONE_READINESS_TIMEOUT_MS = 60_000;
+/** Retry cadence for a pair observed before its launch is authorized (the
+ *  daemon commonly dials while kubernetes ensure-running still waits on the
+ *  Pod, and the authorization persists only after the provider returns). */
+const CLONE_READINESS_RETRY_MS = 1_000;
 
 /**
  * Post-verification provider/storage deletion hook (P7.5 step 4). P5
@@ -182,6 +193,10 @@ export interface FleetServer {
 	eventLog: FleetEventLog;
 	/** Fleet-wide facts (port/startedAt/state paths) for the banner + /ctl/debug. */
 	fleetFacts: FleetFacts;
+	/** Clone-workspace lifecycle authority (P5-P7); exposed for the control plane and tests. */
+	lifecycle: WorkspaceLifecycle;
+	/** Post-verification volume/provider-state deleter, dispatched by persisted provider kind. */
+	resourceDeleter: WorkspaceResourceDeleter;
 	close(): Promise<void>;
 }
 
@@ -295,6 +310,13 @@ const WORKTREE_INFO_ROUTE = /^\/ctl\/worktrees\/([^/]+)\/delete-info$/;
 /** P8.10 resume-onto-fresh-clone: POST /ctl/workspaces/:id/resume-clone. */
 const WORKSPACE_RESUME_CLONE_ROUTE = /^\/ctl\/workspaces\/([^/]+)\/resume-clone$/;
 /**
+ * P7.3 recovery: POST /ctl/workspaces/:id/clear-deletion clears a REJECTED
+ * deletion attempt (delete-pending-retry) so the operator can wake the
+ * workspace, preserve changes, stop, and retry the delete. Wake and delete
+ * stay quarantined until this explicit action.
+ */
+const WORKSPACE_CLEAR_DELETION_ROUTE = /^\/ctl\/workspaces\/([^/]+)\/clear-deletion$/;
+/**
  * Reject endpoints that are not ws:// or wss:// URLs. The check itself lives
  * in spawn-parse.ts (isValidEndpointUrl) — shared with the supervisor's
  * resolved-endpoint guard and parseContractLine so every URL that reaches
@@ -335,8 +357,94 @@ class LocalCloneResourceDeleter implements WorkspaceResourceDeleter {
 	}
 }
 
+/**
+ * Delete-time resource cleanup, dispatched by the workspace's PERSISTED
+ * provider kind (stage 3 item 7):
+ *   - bwrap (and every legacy record with no explicit kind) keeps the
+ *     guarded local-volume path above;
+ *   - kubernetes removes the fleet's private provider state only. The Pod
+ *     and PVC themselves were already deleted by the lifecycle's provider
+ *     delete op (UID-preconditioned, absence-waited) BEFORE this hook runs;
+ *     this hook must never touch the PVC-backed volume.
+ */
+class ProviderKindResourceDeleter implements WorkspaceResourceDeleter {
+	private readonly workspaceRoot: string;
+	private readonly local: LocalCloneResourceDeleter;
+	constructor(workspaceDir: string) {
+		this.workspaceRoot = workspaceDir;
+		this.local = new LocalCloneResourceDeleter(workspaceDir);
+	}
+
+	async deleteWorkspaceResources(workspaceId: string, entry: RegistryEntry): Promise<void> {
+		// Dispatch on the PERSISTED identity: an explicit kubernetes kind, or
+		// any record carrying a Kubernetes resource binding (both mean the
+		// volume is a PVC owned by the provider, never a local directory).
+		if (entry.workspace?.providerKind === "kubernetes" || entry.workspace?.kubernetes) {
+			this.#deleteKubernetesProviderState(workspaceId, entry);
+			return;
+		}
+		await this.local.deleteWorkspaceResources(workspaceId, entry);
+	}
+
+	/**
+	 * Remove the per-resource provider state directory the fleet owns
+	 * (`<workspaceDir>/.kubernetes/<resourceIdentity>/`, plus the legacy
+	 * `<workspaceDir>/.provider-state/<daemonId>/` layout). Every candidate
+	 * is realpath-checked against the managed root before removal; a state
+	 * path outside it is refused, never deleted.
+	 */
+	#deleteKubernetesProviderState(workspaceId: string, entry: RegistryEntry): void {
+		const realRoot = realpathOf(this.workspaceRoot);
+		const candidates: string[] = [];
+		const identity = entry.workspace?.kubernetes?.resourceIdentity;
+		if (typeof identity === "string" && identity !== "") {
+			candidates.push(join(this.workspaceRoot, ".kubernetes", identity));
+		}
+		candidates.push(join(this.workspaceRoot, ".provider-state", workspaceId));
+		for (const candidate of candidates) {
+			if (!existsSync(candidate)) continue;
+			const real = realpathOf(candidate);
+			if (!isPathUnder(real, realRoot)) {
+				throw new Error(
+					`refusing to delete provider state outside workspaceDir: ${candidate} (workspace ${workspaceId})`,
+				);
+			}
+			rmSync(real, { recursive: true, force: true });
+		}
+	}
+}
+
 /** Default spawn-hook deadline (contract: 60s). */
 const HOOK_TIMEOUT_MS = 60_000;
+
+/**
+ * Session identity from a main-session path: the `.jsonl` stem (the
+ * slash-free lineage key). The fleet and the Pod see the same session under
+ * different absolute paths, so readiness compares identities, never paths.
+ */
+function sessionIdOf(sessionPath: string): string {
+	const base = basename(sessionPath);
+	return base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
+}
+
+/**
+ * Public projection of the fleet-private {@link WorkspaceRecord} for the
+ * /ctl roster: only the fields the CLI/UI/acceptance scripts rely on
+ * (kind, projectId, profileId, desiredState, pinned revision, branch). The
+ * private remainder — the Kubernetes binding, clone source, provider handle,
+ * enrollment credential digest, deletion receipts, source pin digest, and
+ * attempted generation — never crosses a route boundary.
+ */
+function toPublicWorkspaceRecord(record: WorkspaceRecord): WorkspaceRecord {
+	return {
+		kind: record.kind,
+		projectId: record.projectId,
+		desiredState: record.desiredState,
+		...(record.profileId !== undefined ? { profileId: record.profileId } : {}),
+		...(record.pinnedRevision !== undefined ? { pinnedRevision: record.pinnedRevision } : {}),
+		...(record.branch !== undefined ? { branch: record.branch } : {}),
+	};
+}
 
 function sleep(ms: number): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
@@ -448,7 +556,7 @@ function parseHookOutput(stdout: string): HookOutput {
 }
 
 class FleetServerImpl implements FleetServer {
-	readonly port: number;
+	port!: number;
 	readonly registry: Registry;
 	readonly connector: DaemonConnector;
 	readonly supervisor: SpawnSupervisor;
@@ -486,6 +594,26 @@ class FleetServerImpl implements FleetServer {
 	readonly #logAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	/** Per-workspace transport tap unsubscribe; cleared in close(). */
 	readonly #logTaps = new Map<string, () => void>();
+	/** Per-workspace readiness (pair-change) listener unsubscribe; close(). */
+	readonly #readinessListeners = new Map<string, () => void>();
+	/** Workspaces with a readiness probe in flight (one probe at a time). */
+	readonly #readinessInFlight = new Set<string>();
+	/** Workspaces whose pair dialed before the launch was authorized, with
+	 *  the retention deadline for the bounded retry that probes once the
+	 *  provider returns (`#armReadinessRetry`). */
+	readonly #readinessRetryTimers = new Map<
+		string,
+		{ timer: ReturnType<typeof setTimeout>; until: number }
+	>();
+	/** Launch-time session expectations (workspace → the boot session the
+	 *  fleet's callback handoff required), recorded per attempt and consumed
+	 *  by the first successful readiness probe. Never re-applied to later
+	 *  reconnects or restarts, where the daemon's boot is already history. */
+	readonly #bootSessionExpectations = new Map<string, { generation: number; sessionId: string }>();
+	/** Monotonic suffix forcing a fresh prime per readiness probe (the daemon
+	 *  only primes a brand-new browser stream; re-opening an existing one
+	 *  replays instead of re-priming). */
+	#readinessSeq = 0;
 	/** Historical transcripts/stats API (P8.6): per-instance stats app,
 	 *  constructed in the constructor so it can receive the log store when it
 	 *  loads; closed in close(). */
@@ -495,7 +623,12 @@ class FleetServerImpl implements FleetServer {
 	 *  never wakes compute. */
 	readonly storedApp: StoredApp | null = null;
 
-	readonly #server: Server<undefined>;
+	/** Port requested at construction; Bun.serve binds it in boot(). */
+	readonly #requestedPort: number;
+	/** Set only after the whole boot body succeeds; boot() is idempotent. */
+	#booted = false;
+
+	#server!: Server<undefined>;
 	/** Boot-time sha-256 digest of the operator browser-access token (the
 	 *  store adopts it on first login; the login route verifies against it).
 	 *  Empty when auth is disabled (never used). */
@@ -522,7 +655,8 @@ class FleetServerImpl implements FleetServer {
 		this.registry = registry;
 		this.config = config;
 		this.lock = lock;
-		this.resourceDeleter = resourceDeleter ?? new LocalCloneResourceDeleter(config.workspaceDir);
+		this.#requestedPort = port;
+		this.resourceDeleter = resourceDeleter ?? new ProviderKindResourceDeleter(config.workspaceDir);
 		this.cloneResumeSpawner = cloneResumeSpawner ?? null;
 		this.startedAt = Date.now();
 		this.fleetFacts = {
@@ -590,15 +724,6 @@ class FleetServerImpl implements FleetServer {
 		} else {
 			this.#statsApp = createStatsApp(statsConfig);
 		}
-		// Boot re-enrollment: enrollments are NOT memory-only. Every roster
-		// entry whose workspace record persists a callback-enrollment binding
-		// (digest + generation only) is re-enrolled before anything else
-		// acts on the roster, so a fleet restart accepts daemon redials with
-		// their original credential — the raw credential never survives the
-		// process, only its sha-256 digest.
-		for (const { workspaceId, enrollment } of this.registry.workspaceEnrollments()) {
-			this.transport.enrollPersisted(workspaceId, enrollment.generation, enrollment.credentialHash);
-		}
 		// Browser auth: hash-only store next to the state file. loopbackDev is
 		// ON only when the bind is a loopback address (the explicit dev cookie
 		// exception — never inferred for a public bind).
@@ -659,12 +784,22 @@ class FleetServerImpl implements FleetServer {
 				this.eventLog.add(level, "supervisor", message, daemonId),
 			onWorktreeRemoved: (entry) => void this.#onWorktreeVanished(entry),
 		});
+		// Stage 3: the clone delete gate's evidence step. This collector owns
+		// the fleet-side quiesce request/timeout and validates the returned
+		// receipt against the fleet store; the lifecycle gate invokes it with
+		// the frozen request shape and persists the receipt before provider
+		// stop. Nothing here bypasses or reorders the existing gate stages.
+		const cloneQuiesce = new CloneQuiesce({
+			transport: this.transport,
+			logStore: this.logStore,
+			eventLog: this.eventLog,
+		});
 		// P6/P7 lifecycle owner: the single create/ensure/stop/delete
 		// authority for provider-managed clone workspaces, shared by the
 		// control-plane routes and the edge command dispatch. Constructed
 		// BEFORE the edge (the edge takes it as a hook object); its deps are
 		// registry/config/transport/eventLog/resourceDeleter + injected
-		// log-tap attach and callback-URL provider — no edge dependency.
+		// log-tap attach, callback-URL provider, and the evidence collector.
 		this.lifecycle = new WorkspaceLifecycle({
 			registry,
 			config: { workspaceDir: config.workspaceDir, providerProfiles: config.providerProfiles },
@@ -674,6 +809,8 @@ class FleetServerImpl implements FleetServer {
 			eventLog: this.eventLog,
 			attachLogTap: (workspaceId) => this.#attachLogStoreTap(workspaceId),
 			callbackUrl: () => this.#callbackUrl(),
+			collectCloneEvidence: (request: CloneQuiesceRequest): Promise<CloneQuiesceReceipt> =>
+				cloneQuiesce.collect(request),
 		});
 		this.cloneApi = new CloneControlApi({
 			lifecycle: this.lifecycle,
@@ -711,9 +848,50 @@ class FleetServerImpl implements FleetServer {
 		// Keep branch + dirty counts fresh for local entries; close() clears
 		// the timer via supervisor.close().
 		this.supervisor.startGitStatePolling();
+	}
+
+	/**
+	 * Finish boot (startFleet awaits this before returning): reconcile the
+	 * persisted provider identities, re-enroll persisted callback
+	 * credentials, register the callback consumers, then bind the HTTP
+	 * routes. Split out of the constructor because identity reconciliation
+	 * is async and MUST complete before any enrollment or lifecycle request
+	 * is accepted (stage 1 item 4), while the callback consumers must exist
+	 * before the routes that can reach them bind (stage 2 item 7).
+	 */
+	async boot(): Promise<void> {
+		if (this.#booted) return;
+		// Stage 1 item 4: resolve legacy bwrap records from their verified
+		// local preparation marker and mark Kubernetes records without a
+		// persisted resource binding as unavailable BEFORE callbacks enroll
+		// or any lifecycle request is accepted. Idempotent; never deletes
+		// provider resources.
+		await this.lifecycle.reconcileIdentities();
+		// Boot re-enrollment: enrollments are NOT memory-only. Every roster
+		// entry whose workspace record persists a callback-enrollment binding
+		// (digest + generation only) is re-enrolled before anything else
+		// acts on the roster, so a fleet restart accepts daemon redials with
+		// their original credential — the raw credential never survives the
+		// process, only its sha-256 digest.
+		for (const { workspaceId, enrollment } of this.registry.workspaceEnrollments()) {
+			this.transport.enrollPersisted(workspaceId, enrollment.generation, enrollment.credentialHash);
+		}
+		// Register the callback CONSUMERS before the HTTP server binds the
+		// fleet callback routes (stage 2 item 7): the log-store tap and the
+		// internal readiness control listener must exist before any Pod can
+		// reach /callback/*, or a redial that lands the instant the routes
+		// bind would stream into the void. The enrollments above cover every
+		// pair the fleet will accept; runtime attach on enrollment is wired
+		// through #attachLogStoreTap.
+		if (this.logStore !== null) {
+			this.transport.setMaterializeStore(this.logStore);
+		}
+		for (const workspaceId of this.transport.enrolledWorkspaceIds()) {
+			this.#attachLogStoreTap(workspaceId);
+		}
 		this.#server = Bun.serve({
-			hostname: config.bind,
-			port,
+			hostname: this.config.bind,
+			port: this.#requestedPort,
 			// SSE responses are long-lived and quiet between 15s keepalive
 			// pings; Bun's default 10s fetch idleTimeout would kill them.
 			idleTimeout: 0,
@@ -728,20 +906,7 @@ class FleetServerImpl implements FleetServer {
 		// before-act: reattach live sandboxes, recreate desired-running ones,
 		// leave desired-stopped ones alone. Fire-and-forget; failures log.
 		void this.lifecycle.reconcile();
-		// P8.9 wake materialization: the transport serves stored session
-		// bytes over the bulk channel from this store.
-		if (this.logStore !== null) {
-			this.transport.setMaterializeStore(this.logStore);
-			// Log taps ride the daemon callback pairs. Enrollment is the tap's
-			// gate (the transport authenticates every envelope against it).
-			// Boot enrollments above include persisted re-enrollments (a fleet
-			// restart accepts daemon redials with their original credential),
-			// so the static attach below covers every tap the fleet will ever
-			// need; runtime attach on enrollment is added with P5.
-			for (const workspaceId of this.transport.enrolledWorkspaceIds()) {
-				this.#attachLogStoreTap(workspaceId);
-			}
-		}
+		this.#booted = true;
 	}
 
 	async close(): Promise<void> {
@@ -801,6 +966,14 @@ class FleetServerImpl implements FleetServer {
 	 * its acked-offset resume point is only ever advanced by acked chunks.
 	 */
 	#attachLogStoreTap(workspaceId: string): void {
+		// Enrollment is the one notification every fresh pair passes through
+		// (boot re-enrollment and runtime enrollment both land here): the
+		// readiness control listener rides it, independent of the store.
+		this.#watchCloneReadiness(workspaceId);
+		// #ensure calls this hook on every attempt, right after writing the
+		// callback handoff and before the provider runs: the one place the
+		// launch-time resume expectation can be captured.
+		this.#recordLaunchSessionExpectation(workspaceId);
 		if (this.#logTaps.has(workspaceId)) return;
 		const store = this.logStore;
 		if (store === null) return;
@@ -808,6 +981,341 @@ class FleetServerImpl implements FleetServer {
 			this.#onLogEnvelope(store, workspaceId, envelope);
 		});
 		this.#logTaps.set(workspaceId, unsubscribe);
+	}
+
+	// --- clone readiness (stage 2 item 7) ---------------------------------
+
+	/**
+	 * Register the internal readiness control listener for a clone
+	 * workspace: on every authenticated pair (re)establishment — including a
+	 * surviving Pod reconnecting after a fleet restart — re-run the probe.
+	 * Idempotent per workspace; a pair already live at registration is
+	 * probed immediately.
+	 */
+	#watchCloneReadiness(workspaceId: string): void {
+		if (this.#readinessListeners.has(workspaceId)) return;
+		const entry = this.registry.get(workspaceId);
+		if (entry?.workspace?.kind !== "clone") return;
+		const unsubscribe = this.transport.onPairChange(workspaceId, (status) => {
+			if (status.paired && status.enrolled) void this.#checkCloneReadiness(workspaceId);
+		});
+		this.#readinessListeners.set(workspaceId, unsubscribe);
+		const status = this.transport.pairStatus(workspaceId);
+		if (status.paired && status.enrolled) void this.#checkCloneReadiness(workspaceId);
+	}
+
+	/**
+	 * Fleet readiness: the authenticated pair (paired + enrolled) PLUS the
+	 * daemon's own `hello_ok` and `ready` frames on an internal virtual
+	 * stream, with the daemon's cwd matching the fleet's expected runtime
+	 * cwd and — when the launch handoff required a boot session — the
+	 * daemon's session file identifying that same session. A conclusive
+	 * mismatch downgrades a pair-only "ready"; an inconclusive probe (pair
+	 * vanished mid-probe) leaves the stage alone.
+	 *
+	 * A pair change alone is not proof the launch is authorized: kubernetes
+	 * ensure-running waits on Pod readiness, so the daemon commonly dials
+	 * while `authorizedGeneration` is still unpersisted. That event is
+	 * deferred (bounded) rather than dropped, so the probe still validates
+	 * cwd and the boot session once the provider returns.
+	 */
+	async #checkCloneReadiness(workspaceId: string): Promise<void> {
+		if (this.#readinessInFlight.has(workspaceId)) return;
+		const entry = this.registry.get(workspaceId);
+		if (entry?.workspace?.kind !== "clone") return;
+		if (
+			entry.workspace.desiredState !== "running" ||
+			entry.workspace.authorizedGeneration === undefined
+		) {
+			this.#armReadinessRetry(workspaceId);
+			return;
+		}
+		this.#clearReadinessRetry(workspaceId);
+		this.#readinessInFlight.add(workspaceId);
+		const generation = entry.workspace.authorizedGeneration;
+		const streamId = `browser/readiness-${++this.#readinessSeq}`;
+		try {
+			const outcome = await this.#probeCloneReadiness(entry, streamId);
+			if (outcome.ok) {
+				this.#consumeBootSessionExpectation(workspaceId, generation);
+				this.eventLog.add(
+					"info",
+					"server",
+					`clone ${workspaceId} readiness confirmed (${outcome.detail})`,
+					workspaceId,
+				);
+				return;
+			}
+			if (!outcome.conclusive) {
+				this.eventLog.add(
+					"info",
+					"server",
+					`clone ${workspaceId} readiness inconclusive: ${outcome.message}`,
+					workspaceId,
+				);
+				return;
+			}
+			this.registry.update(workspaceId, {
+				lifecycleStage: "failed",
+				lifecycleError: outcome.message,
+			});
+			this.registry.setStatus(workspaceId, "error", outcome.message);
+			this.eventLog.add(
+				"warn",
+				"server",
+				`clone ${workspaceId} readiness failed: ${outcome.message}`,
+				workspaceId,
+			);
+		} finally {
+			this.#readinessInFlight.delete(workspaceId);
+		}
+	}
+
+	/**
+	 * Bounded retry for a pair observed before its launch is authorized:
+	 * re-check at CLONE_READINESS_RETRY_MS and probe the moment
+	 * `authorizedGeneration` + desired-running land. Stops when the
+	 * workspace leaves the roster, the pair drops (its own pair change
+	 * re-requests a probe), or the readiness budget elapses. Never blocks a
+	 * caller; the timer is unref'd like the probe's own bound.
+	 */
+	#armReadinessRetry(workspaceId: string, until = Date.now() + CLONE_READINESS_TIMEOUT_MS): void {
+		if (this.#readinessRetryTimers.has(workspaceId)) return;
+		const timer = setTimeout(() => {
+			this.#readinessRetryTimers.delete(workspaceId);
+			const current = this.registry.get(workspaceId);
+			if (current?.workspace?.kind !== "clone") return;
+			const pair = this.transport.pairStatus(workspaceId);
+			if (!pair.paired || !pair.enrolled) return;
+			if (
+				current.workspace.desiredState === "running" &&
+				current.workspace.authorizedGeneration !== undefined
+			) {
+				void this.#checkCloneReadiness(workspaceId);
+				return;
+			}
+			if (Date.now() >= until) return;
+			this.#armReadinessRetry(workspaceId, until);
+		}, CLONE_READINESS_RETRY_MS);
+		timer.unref();
+		this.#readinessRetryTimers.set(workspaceId, { timer, until });
+	}
+
+	/** Cancel a deferred readiness retry (the probe is running, or close()). */
+	#clearReadinessRetry(workspaceId: string): void {
+		const pending = this.#readinessRetryTimers.get(workspaceId);
+		if (pending === undefined) return;
+		clearTimeout(pending.timer);
+		this.#readinessRetryTimers.delete(workspaceId);
+	}
+
+	/**
+	 * Capture the launch-time session expectation from the callback handoff
+	 * `#ensure` just wrote (this hook runs on every attempt, before the
+	 * provider call). Only an in-flight attempt — one ahead of the last
+	 * authorized generation — carries a fresh resume hint: a reattach, and a
+	 * boot re-enrollment of an already-running daemon, rewrite the handoff
+	 * without one. The expectation is dropped once a probe validates it, so
+	 * it is never re-applied after the daemon legitimately switches
+	 * sessions.
+	 */
+	#recordLaunchSessionExpectation(workspaceId: string): void {
+		const entry = this.registry.get(workspaceId);
+		const record = entry?.workspace;
+		if (entry === undefined || record?.kind !== "clone") return;
+		const attempted = record.lastAttemptedGeneration;
+		if (attempted === undefined) return;
+		const authorized = record.authorizedGeneration;
+		if (authorized !== undefined && authorized >= attempted) return;
+		let resume: unknown;
+		try {
+			resume = readCallbackEnvFile(this.#cloneStateDir(entry), {
+				workspaceId,
+				generation: attempted,
+			})?.env?.OMP_SESSION_RESUME;
+		} catch {
+			// Unreadable/absent handoff: no launch expectation to record.
+			this.#bootSessionExpectations.delete(workspaceId);
+			return;
+		}
+		if (typeof resume !== "string" || resume === "") {
+			this.#bootSessionExpectations.delete(workspaceId);
+			return;
+		}
+		this.#bootSessionExpectations.set(workspaceId, {
+			generation: attempted,
+			sessionId: sessionIdOf(resume),
+		});
+	}
+
+	/** Consume a satisfied launch expectation: the daemon booted into the
+	 *  required session, so later reconnects must not re-apply the hint. */
+	#consumeBootSessionExpectation(workspaceId: string, generation: number): void {
+		const expectation = this.#bootSessionExpectations.get(workspaceId);
+		if (expectation?.generation === generation) this.#bootSessionExpectations.delete(workspaceId);
+	}
+
+	/**
+	 * One bounded probe: attach a fresh internal virtual stream, ask the
+	 * daemon to open it (the daemon primes hello_ok/attached/state/
+	 * collab_status/ready on a NEW browser stream), and await the hello_ok +
+	 * ready pair. The stream is detached and every timer cleared on all
+	 * paths.
+	 */
+	async #probeCloneReadiness(
+		entry: RegistryEntry,
+		streamId: string,
+	): Promise<{ ok: true; detail: string } | { ok: false; conclusive: boolean; message: string }> {
+		const workspaceId = entry.daemonId;
+		const expectedCwd = this.#expectedRuntimeCwd(entry);
+		const requestedSession = this.#requestedSessionId(entry);
+		let settle!: (
+			result: { ok: true; detail: string } | { ok: false; conclusive: boolean; message: string },
+		) => void;
+		const result = new Promise<
+			{ ok: true; detail: string } | { ok: false; conclusive: boolean; message: string }
+		>((resolve) => {
+			settle = resolve;
+		});
+		let sawHello = false;
+		let sawReady = false;
+		let observedCwd = "";
+		let observedSession = "";
+		const unsubscribe = this.transport.onDaemonEnvelope(workspaceId, (envelope) => {
+			if (envelope.kind !== "frame" || envelope.streamId !== streamId) return;
+			if (typeof envelope.payload !== "object" || envelope.payload === null) return;
+			const payload = envelope.payload as Record<string, unknown>;
+			const type = typeof payload.type === "string" ? payload.type : "";
+			if (type === "hello_ok") {
+				sawHello = true;
+				observedCwd = typeof payload.cwd === "string" ? payload.cwd : "";
+				observedSession = typeof payload.sessionFile === "string" ? payload.sessionFile : "";
+				if (expectedCwd !== null && observedCwd !== "" && observedCwd !== expectedCwd) {
+					settle({
+						ok: false,
+						conclusive: true,
+						message: `daemon cwd ${observedCwd} does not match the expected ${expectedCwd}`,
+					});
+					return;
+				}
+				if (requestedSession !== null) {
+					if (observedSession === "" || sessionIdOf(observedSession) !== requestedSession) {
+						settle({
+							ok: false,
+							conclusive: true,
+							message: `daemon session ${observedSession === "" ? "(none)" : observedSession} does not identify the requested session ${requestedSession}`,
+						});
+						return;
+					}
+				}
+			} else if (type === "ready") {
+				sawReady = true;
+			}
+			if (sawHello && sawReady) {
+				settle({
+					ok: true,
+					detail: `cwd ${observedCwd === "" ? "(unchecked)" : observedCwd}, session ${observedSession === "" ? "(none requested)" : observedSession}`,
+				});
+			}
+		});
+		this.transport.attachVirtualStream(workspaceId, streamId, { deliver: () => {} });
+		// A pair that drops after the stream-open send can never answer the
+		// probe. Settle INCONCLUSIVE from the pair event itself (rather than
+		// letting the timer report a conclusive timeout), so the reconnect's
+		// own pair change runs a fresh probe instead of the clone being
+		// downgraded to error for a transport hiccup.
+		const unsubscribePair = this.transport.onPairChange(workspaceId, (status) => {
+			if (status.paired && status.enrolled) return;
+			settle({
+				ok: false,
+				conclusive: false,
+				message: "pair dropped during the readiness probe",
+			});
+		});
+		const timer = setTimeout(() => {
+			// Belt and braces: a pair already down at the deadline is
+			// inconclusive even if its change event was missed.
+			const pair = this.transport.pairStatus(workspaceId);
+			if (!pair.paired || !pair.enrolled) {
+				settle({
+					ok: false,
+					conclusive: false,
+					message: "pair unavailable at the readiness probe timeout",
+				});
+				return;
+			}
+			settle({
+				ok: false,
+				conclusive: true,
+				message: `readiness probe timed out after ${CLONE_READINESS_TIMEOUT_MS}ms (hello_ok=${sawHello}, ready=${sawReady})`,
+			});
+		}, CLONE_READINESS_TIMEOUT_MS);
+		timer.unref();
+		try {
+			await this.transport.sendToDaemon(workspaceId, {
+				streamId,
+				kind: "control",
+				payload: { type: "stream_open" },
+			});
+			return await result;
+		} catch (err) {
+			// The pair teardown raced the probe: nothing to conclude.
+			return {
+				ok: false,
+				conclusive: false,
+				message: `pair unavailable during the readiness probe: ${err instanceof Error ? err.message : String(err)}`,
+			};
+		} finally {
+			clearTimeout(timer);
+			unsubscribe();
+			unsubscribePair();
+			this.transport.detachVirtualStream(workspaceId, streamId);
+		}
+	}
+
+	/**
+	 * Runtime cwd the daemon must report in hello_ok, derived from the
+	 * persisted provider kind (no stored field exists):
+	 *   - kubernetes: the Pod's in-pod checkout, fixed by the image
+	 *     entrypoint (`OMP_WORKSPACE_DIR` = /workspace/.checkout);
+	 *   - bwrap/legacy: the fleet volume's checkout,
+	 *     <workspaceDir>/<daemonId>/.checkout.
+	 * Null when the fleet path is unknown (empty cwd): inconclusive, skipped.
+	 */
+	#expectedRuntimeCwd(entry: RegistryEntry): string | null {
+		if (entry.workspace?.providerKind === "kubernetes" || entry.workspace?.kubernetes) {
+			return "/workspace/.checkout";
+		}
+		const cwd = entry.cwd ?? "";
+		if (cwd === "") return null;
+		return join(cwd, ".checkout");
+	}
+
+	/**
+	 * The session the fleet's launch handoff required the daemon to BOOT
+	 * into, or null when the current generation carries no pending
+	 * expectation (a fresh start with no wake target, a boot already
+	 * validated by an earlier probe, or an already-running daemon the fleet
+	 * reattached). Null skips the session comparison: a hint that described
+	 * a past boot must never fail a daemon that has since switched sessions.
+	 */
+	#requestedSessionId(entry: RegistryEntry): string | null {
+		const expectation = this.#bootSessionExpectations.get(entry.daemonId);
+		if (expectation === undefined) return null;
+		if (entry.workspace?.authorizedGeneration !== expectation.generation) return null;
+		return expectation.sessionId;
+	}
+
+	/**
+	 * Fleet-side provider state dir for a clone workspace, mirroring the
+	 * lifecycle layout: kubernetes by resource identity, bwrap by daemon id.
+	 */
+	#cloneStateDir(entry: RegistryEntry): string {
+		const identity = entry.workspace?.kubernetes?.resourceIdentity;
+		if (typeof identity === "string" && identity !== "") {
+			return join(this.config.workspaceDir, ".kubernetes", identity);
+		}
+		return join(this.config.workspaceDir, ".provider-state", entry.daemonId);
 	}
 
 	/**
@@ -938,13 +1446,20 @@ class FleetServerImpl implements FleetServer {
 			);
 	}
 
-	/** Cancel pending log-ack flush timers and detach all taps (close()). */
+	/** Cancel pending log-ack flush timers and detach all taps + readiness
+	 *  listeners (close()). */
 	#closeLogStoreWiring(): void {
 		for (const timer of this.#logAckTimers.values()) clearTimeout(timer);
 		this.#logAckTimers.clear();
 		this.#logAckChunks.clear();
 		for (const unsubscribe of this.#logTaps.values()) unsubscribe();
 		this.#logTaps.clear();
+		for (const unsubscribe of this.#readinessListeners.values()) unsubscribe();
+		this.#readinessListeners.clear();
+		this.#readinessInFlight.clear();
+		for (const pending of this.#readinessRetryTimers.values()) clearTimeout(pending.timer);
+		this.#readinessRetryTimers.clear();
+		this.#bootSessionExpectations.clear();
 	}
 
 	#onDialFailed(entry: RegistryEntry): void {
@@ -1043,14 +1558,13 @@ class FleetServerImpl implements FleetServer {
 			);
 		}
 		const current = this.registry.get(daemonId);
+		// Public projection only: the provider handle, binding, enrollment
+		// and clone source are fleet-private and never cross this route.
 		return json({
 			daemonId,
 			observed: "running",
 			...(current?.workspace?.authorizedGeneration !== undefined
 				? { generation: current.workspace.authorizedGeneration }
-				: {}),
-			...(current?.workspace?.providerHandle !== undefined
-				? { handle: current.workspace.providerHandle }
 				: {}),
 		});
 	}
@@ -1149,7 +1663,19 @@ class FleetServerImpl implements FleetServer {
 				if (infoMatch) return await this.#handleWorktreeDeleteInfo(infoMatch[1]);
 				switch (path) {
 					case "/ctl/sessions":
-						return json(this.registry.list());
+						// Public roster projection: the fleet-private workspace
+						// record (provider handle, Kubernetes binding, clone
+						// source, enrollment, deletion receipts) never crosses
+						// this route; only the roster-safe fields do.
+						return json(
+							this.registry
+								.list()
+								.map((entry) =>
+									entry.workspace !== undefined
+										? { ...entry, workspace: toPublicWorkspaceRecord(entry.workspace) }
+										: entry,
+								),
+						);
 					case "/ctl/profiles":
 						// P1.3: secret-free provider-profile catalog for CLI/browser.
 						return json(this.cloneApi.profiles());
@@ -1250,6 +1776,10 @@ class FleetServerImpl implements FleetServer {
 						const resumeCloneMatch = WORKSPACE_RESUME_CLONE_ROUTE.exec(path);
 						if (resumeCloneMatch) {
 							return await this.#handleResumeClone(req, resumeCloneMatch[1]);
+						}
+						const clearDeletionMatch = WORKSPACE_CLEAR_DELETION_ROUTE.exec(path);
+						if (clearDeletionMatch) {
+							return await this.#handleClearRejectedDeletion(clearDeletionMatch[1]);
 						}
 						return json({ error: "not found" }, 404);
 					}
@@ -1874,6 +2404,32 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
+	 * POST /ctl/workspaces/:id/clear-deletion: the explicit operator recovery
+	 * from a rejected delete gate. A `delete-pending-retry` workspace is
+	 * quarantined (wake and delete both refuse) until this clears it; after
+	 * clearing, the operator can wake, preserve changes, stop, and retry the
+	 * delete. Only clone workspaces have a deletion gate.
+	 */
+	async #handleClearRejectedDeletion(daemonId: string): Promise<Response> {
+		const entry = this.registry.get(daemonId);
+		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
+		if (entry.workspace?.kind !== "clone") {
+			throw new HttpError(
+				400,
+				`daemon ${daemonId} has no clone deletion gate (kind ${entry.workspace?.kind ?? "legacy"})`,
+			);
+		}
+		try {
+			return json({ daemonId, cleared: this.lifecycle.clearRejectedDeletion(daemonId) });
+		} catch (err) {
+			if (err instanceof CloneLifecycleError) {
+				throw new HttpError(lifecycleStatus(err.code), err.message);
+			}
+			throw err;
+		}
+	}
+
+	/**
 	 * POST /ctl/workspaces/:id/resume-clone (P8.10): the explicit
 	 * "resume onto fresh clone" action for an ORPHANED (deleted-workspace)
 	 * session. Resolves the workspace's clone provenance — source +
@@ -2143,7 +2699,7 @@ export async function startFleet(
 					"set OMP_FLEET_BROWSER_TOKEN (or --browser-access-token / config browserAccessToken)",
 			);
 		}
-		return new FleetServerImpl(
+		const server = new FleetServerImpl(
 			registry,
 			config,
 			resolvePort(opts.port),
@@ -2158,6 +2714,11 @@ export async function startFleet(
 			null,
 			opts.statsConfig,
 		);
+		// Identity reconciliation + callback enrollment + listener
+		// registration must all complete before the HTTP routes bind
+		// (stages 1 item 4 and 2 item 7); a boot failure releases the lock.
+		await server.boot();
+		return server;
 	} catch (err) {
 		lock.release();
 		throw err;

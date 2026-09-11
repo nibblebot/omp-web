@@ -14,6 +14,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ProviderProfile } from "../shared/provider-protocol";
+import { OMP_PROVIDER_PROTO } from "../shared/provider-protocol";
 import {
 	DeniedBindError,
 	assertAllowedSource,
@@ -403,7 +404,7 @@ describe("buildBwrapArgv", () => {
 		expect(env.LANG).toBe("en_US.UTF-8");
 		expect(env.HOME).toBe(home);
 		expect(env.PI_CODING_AGENT_DIR).toBe(join(home, "agent"));
-		expect(env.OMP_PROVIDER_PROTO).toBe("1");
+		expect(env.OMP_PROVIDER_PROTO).toBe(String(OMP_PROVIDER_PROTO));
 	});
 
 	test("OMP_SESSION_CALLBACK_* enrollment keys pass the allowlist", () => {

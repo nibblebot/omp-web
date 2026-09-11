@@ -18,6 +18,16 @@ export interface SessionConfig {
 	token?: string;
 	/** Session file to switchSession() into at boot (R3); failure warns on stderr and starts fresh. */
 	resume?: string;
+	/**
+	 * Required resume (P5 wake): the resume target is mandatory, so parseConfig
+	 * refuses this switch without one, and a resume that cannot be satisfied
+	 * (no transcript on disk and none restorable from the fleet log store, or a
+	 * failed session switch) exits before readiness instead of booting a fresh
+	 * session. Set from --resume-required / OMP_SESSION_RESUME_REQUIRED=1 by
+	 * the fleet only after the predecessor was proven terminated, so a fresh
+	 * boot would silently lose the session.
+	 */
+	resumeRequired: boolean;
 	/** Idle auto-exit (R11); 0 disables. */
 	idleTimeoutMs: number;
 	/** Registry display name (defaults to the cwd basename). */
@@ -51,8 +61,10 @@ export interface SessionConfig {
 	collabUrl?: string;
 	/**
 	 * Callback transport (P3.2): fleet callback pair base URL, e.g.
-	 * https://fleet.example.com. HTTPS required; HTTP only with
-	 * --callback-allow-http AND a loopback host (isLoopbackHost).
+	 * https://fleet.example.com. HTTPS required and admitted as a bare origin
+	 * (parseKubernetesCallbackUrl: no credentials, loopback or unspecified
+	 * host, path, query, or fragment); HTTP only with --callback-allow-http
+	 * AND a loopback host (isLoopbackHost).
 	 */
 	callbackUrl?: string;
 	/** Roster daemonId the callback pair is bound to; required with --callback-url. */
@@ -100,6 +112,99 @@ export function isLoopbackHost(host: string): boolean {
 	const v4 = h.startsWith("::ffff:") ? h.slice(7) : h;
 	const parts = v4.split(".");
 	return parts.length === 4 && parts.every((p) => /^\d+$/.test(p)) && Number(parts[0]) === 127;
+}
+
+/** Unspecified bind addresses: never a dialable fleet host. */
+const UNSPECIFIED_HOSTS: Record<string, true> = {
+	"0.0.0.0": true,
+	"::": true,
+	"0:0:0:0:0:0:0:0": true,
+};
+
+/**
+ * Strict callback-URL admission for the Kubernetes lane (P5.4): the fleet
+ * hands this origin to a Pod, so it must be a bare HTTPS origin. Rejects
+ * credentials (they would land in Pod environment), loopback and unspecified
+ * hosts (a Pod cannot reach the operator's loopback), any non-root path,
+ * queries, and fragments. Explicit ports are validated; the returned origin
+ * is normalized (no trailing slash, default port dropped).
+ *
+ * One validator for every consumer: the daemon's own startup admission
+ * (parseConfig), the fleet's handoff writer, and preflight all call this, so a
+ * URL the daemon would refuse can never be written into a Pod spec first.
+ */
+export function parseKubernetesCallbackUrl(value: string): string {
+	const raw = typeof value === "string" ? value.trim() : "";
+	if (raw.length === 0) {
+		throw new Error(
+			'callback url is empty (expected an https origin, e.g. "https://fleet.example.com")',
+		);
+	}
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		throw new Error(
+			`invalid callback url "${value}" (not an absolute URL; expected an https origin, e.g. "https://fleet.example.com")`,
+		);
+	}
+	if (parsed.protocol !== "https:") {
+		throw new Error(
+			`invalid callback url "${value}" (scheme "${parsed.protocol.replace(":", "") || "none"}" is not https; the Kubernetes callback endpoint must be an HTTPS origin)`,
+		);
+	}
+	if (parsed.username !== "" || parsed.password !== "") {
+		throw new Error(
+			`invalid callback url "${value}" carries credentials; the enrollment credential travels in the protected handoff, never in the URL`,
+		);
+	}
+	if (parsed.pathname !== "" && parsed.pathname !== "/") {
+		throw new Error(
+			`invalid callback url "${value}" has path "${parsed.pathname}"; pass the bare origin (the callback routes /callback/up and /callback/down are appended by the daemon)`,
+		);
+	}
+	if (parsed.search !== "") {
+		throw new Error(
+			`invalid callback url "${value}" has a query string; pass the bare origin (identity rides request headers, never the URL)`,
+		);
+	}
+	if (parsed.hash !== "") {
+		throw new Error(`invalid callback url "${value}" has a fragment; pass the bare origin`);
+	}
+	const host = parsed.hostname.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+	if (host.length === 0) {
+		throw new Error(`invalid callback url "${value}" has no host; expected an https origin`);
+	}
+	if (isLoopbackHost(host)) {
+		throw new Error(
+			`invalid callback url "${value}" uses loopback host "${host}", which a Pod cannot reach; use the fleet host's Pod-reachable HTTPS address`,
+		);
+	}
+	if (UNSPECIFIED_HOSTS[host] === true) {
+		throw new Error(
+			`invalid callback url "${value}" uses unspecified address "${host}"; use the fleet host's Pod-reachable HTTPS address`,
+		);
+	}
+	if (parsed.port !== "") {
+		const port = Number(parsed.port);
+		if (!Number.isInteger(port) || port < 1 || port > 65535) {
+			throw new Error(
+				`invalid callback url "${value}" has invalid port "${parsed.port}" (1-65535)`,
+			);
+		}
+	}
+	return parsed.origin;
+}
+
+/**
+ * Required-resume switch (P5 wake): a bare `--resume-required` and a `1`/`true`
+ * value (flag or `OMP_SESSION_RESUME_REQUIRED`) enable it; an absent flag or
+ * any other value leaves it off, so a stray value never arms a hard failure.
+ */
+function parseResumeRequired(raw: string | undefined): boolean {
+	if (raw === undefined) return false;
+	const value = raw.trim().toLowerCase();
+	return value === "" || value === "1" || value === "true";
 }
 
 /**
@@ -178,8 +283,15 @@ export function parseConfig(argv: string[]): SessionConfig {
 					`--callback-allow-http only honors loopback hosts, got "${parsed.hostname}"`,
 				);
 			}
+			callbackUrl = parsed.toString();
+		} else {
+			// HTTPS admission is the strict origin check the Kubernetes lane
+			// shares with handoff validation and preflight (P5.4): credentials,
+			// loopback/unspecified hosts, paths, queries, and fragments are all
+			// refused here too, so a startup never accepts a URL the provider
+			// (or a Pod) cannot dial.
+			callbackUrl = parseKubernetesCallbackUrl(callbackUrlRaw);
 		}
-		callbackUrl = parsed.toString();
 	}
 	const callbackWorkspace = flag("callback-workspace") ?? Bun.env.OMP_SESSION_CALLBACK_WORKSPACE;
 	if (callbackUrl !== undefined && callbackWorkspace === undefined) {
@@ -214,13 +326,27 @@ export function parseConfig(argv: string[]): SessionConfig {
 		}
 		callbackProxy = parsed.toString();
 	}
+	// Required resume can never be satisfied without a target, so arming it
+	// with no --resume/OMP_SESSION_RESUME would boot a fresh session and lose
+	// the one the fleet asked to continue (finding #6). Fail closed at parse
+	// time: the caller prints this to stderr and exits 1.
+	const resume = flag("resume") ?? Bun.env.OMP_SESSION_RESUME;
+	const resumeRequired = parseResumeRequired(
+		flag("resume-required") ?? Bun.env.OMP_SESSION_RESUME_REQUIRED,
+	);
+	if (resumeRequired && (resume === undefined || resume.trim() === "")) {
+		throw new Error(
+			"--resume-required needs a resume target (--resume or OMP_SESSION_RESUME); refusing to boot a fresh session",
+		);
+	}
 	return {
 		cwd,
 		port,
 		host,
 		advertise: flag("advertise") ?? Bun.env.OMP_SESSION_ADVERTISE,
 		token: flag("token") ?? Bun.env.OMP_SESSION_TOKEN,
-		resume: flag("resume") ?? Bun.env.OMP_SESSION_RESUME,
+		resume,
+		resumeRequired,
 		idleTimeoutMs,
 		name: flag("name") ?? Bun.env.OMP_SESSION_NAME ?? path.basename(cwd),
 		labels,

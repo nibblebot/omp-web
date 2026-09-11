@@ -27,6 +27,7 @@ import type { Registry } from "./registry";
 import type { PublicProviderProfile } from "../shared/protocol";
 import type { ProviderProfile } from "./provider-profile";
 import { toPublicProfile } from "./provider-profile";
+import { toRosterEntry } from "./edge";
 import {
 	CloneLifecycleError,
 	type WorkspaceLifecycle,
@@ -63,6 +64,7 @@ export function lifecycleStatus(code: CloneLifecycleError["code"]): number {
 		case "forbidden":
 			return 403;
 		case "conflict":
+		case "generation_obsolete":
 		case "writer_active":
 		case "archive_pending":
 		case "archive_conflict":
@@ -112,11 +114,14 @@ export class CloneControlApi {
 		return { profiles: Object.values(this.#publicProfiles) };
 	}
 
-	/** POST /ctl/clones (frozen contract). Returns 201 {entry: DaemonEntry}. */
+	/** POST /ctl/clones (frozen contract). Returns 201 {entry: DaemonEntry}.
+	 *  The response is the PUBLIC roster projection: the fleet-private
+	 *  workspace record (provider handle, binding, enrollment, deletion
+	 *  state, clone source) never crosses the route boundary. */
 	async createClone(body: CloneCreateInput): Promise<Response> {
 		const entry = await this.#lifecycle.createClone(body);
 		this.#eventLog.add("info", "server", `clone created ${entry.daemonId}`, entry.daemonId);
-		return json({ entry }, 201);
+		return json({ entry: toRosterEntry(entry) }, 201);
 	}
 
 	/** POST /ctl/start|wake {daemonId}: clone-only ensure-running. */
@@ -126,12 +131,14 @@ export class CloneControlApi {
 		}
 		// ensureCloneRunning is a service-level ensure; resolve synchronously.
 		await this.#lifecycle.ensureCloneRunning(body.daemonId);
+		// Public projection only: never the provider handle or any other
+		// fleet-private workspace field.
 		const entry = this.#registry.get(body.daemonId);
 		return json({
 			daemonId: body.daemonId,
 			observed: "running",
-			...(entry?.workspace?.providerHandle !== undefined
-				? { handle: entry.workspace.providerHandle }
+			...(entry?.workspace?.authorizedGeneration !== undefined
+				? { generation: entry.workspace.authorizedGeneration }
 				: {}),
 		});
 	}

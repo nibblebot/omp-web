@@ -193,9 +193,26 @@ function detailRow(
 // Display enrichment from stored JSONL heads (title/cwd/timestamps)
 // ---------------------------------------------------------------------------
 
-/** Title slot (line 1) + session header (line 2) of a stored JSONL file. */
-function headOf(
-	store: FleetLogStore,
+/** Structural store subset the head reader needs (FleetLogStore satisfies it). */
+export interface StoredHeadStore {
+	readStoredPrefix(
+		workspaceId: string,
+		sessionId: string,
+		relpath: string,
+		maxBytes: number,
+	): Buffer | null;
+}
+
+/** Head read bound: the fixed 256 B title slot + header + a few records. */
+const HEAD_READ_BYTES = 64 * 1024;
+
+/**
+ * Title slot (line 1) + session header (line 2) of a stored JSONL file. Export
+ * so roster-facing callers (the clone title projection) parse heads with the
+ * SAME convention as `/ctl/stored/*` rather than a second one.
+ */
+export function headOf(
+	store: StoredHeadStore,
 	workspaceId: string,
 	sessionId: string,
 	relpath: string,
@@ -206,13 +223,13 @@ function headOf(
 	firstTs: number | null;
 	lastTs: number | null;
 } | null {
-	const bytes = store.readStored(workspaceId, sessionId, relpath);
+	// Bounded prefix read: the fixed 256 B title slot precedes the header; a
+	// few records are enough — never parse or load the whole transcript.
+	const bytes = store.readStoredPrefix(workspaceId, sessionId, relpath, HEAD_READ_BYTES);
 	if (bytes === null) return null;
-	// The fixed 256 B title slot precedes the header; read up to the first
-	// few newline-terminated records without parsing the whole file.
 	let text: string;
 	try {
-		text = bytes.subarray(0, Math.min(bytes.length, 64 * 1024)).toString("utf8");
+		text = bytes.toString("utf8");
 	} catch {
 		return null;
 	}

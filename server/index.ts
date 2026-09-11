@@ -1,4 +1,5 @@
-import { readdir, realpath, stat } from "node:fs/promises";
+import { existsSync, unlinkSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
@@ -31,7 +32,7 @@ import { SessionLogTailer } from "./log-tailer";
 import {
 	MaterializeSessionError,
 	materializeSessionToDir,
-	sessionTreeExists,
+	resolveSessionMainFile,
 } from "./session-materialize";
 import { CollabHostAdapter } from "./collab-host";
 import { createRelay, type RelayHandle, type RelaySocketData } from "./collab-relay";
@@ -64,15 +65,22 @@ import { clearSubagents } from "./subagent-mirror";
 import { rejectEntryUiRequests, rejectStreamUiRequests, webUiRequest } from "./ui-context";
 import { callbackError } from "../shared/callback-protocol";
 import type { CallbackEnvelope } from "../shared/callback-protocol";
-import { createDaemonControl, type DaemonControl } from "./daemon-control";
+import {
+	canonicalJailRoots,
+	createDaemonControl,
+	resolveJailedFile,
+	type DaemonControl,
+} from "./daemon-control";
 import {
 	boundaryAcked,
+	captureGitCredentialSettings,
 	collectGitEvidence,
 	enumerateLineageManifest,
 	finalizeTailerBoundary,
+	mainSessionRelpathFor,
 	verifyLineageStructure,
 } from "./quiesce-evidence";
-import { flushAllWriters } from "./writer-flush";
+import { flushAllWriters, flushReachableWriters } from "./writer-flush";
 import { setOnFrameTap } from "./sse-delivery";
 
 // ---------------------------------------------------------------------------
@@ -809,24 +817,15 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 // /download streams a server-side file (used by /export). The only trust
 // boundary on this unauthenticated server: the canonical (realpath) target
 // must live inside the system temp dir, the agent cwd (where bare-filename
-// exports land), or a live session file's directory. Canonicalizing both
-// sides closes symlink escapes that a lexical prefix check would miss.
-async function canonicalRoots(): Promise<string[]> {
+// exports land), the server's process cwd, or a live session file's
+// directory. The jail itself lives in daemon-control.ts (canonicalJailRoots /
+// resolveJailedFile): GET /download and the daemon's own download_bulk
+// command enforce exactly one implementation, so the two can never drift.
+async function downloadJailRoots(): Promise<string[]> {
 	const roots = [os.tmpdir(), config.cwd, process.cwd()];
 	const sessionFile = bootEntry?.session.sessionFile;
 	if (sessionFile) roots.push(path.dirname(sessionFile));
-	const out: string[] = [];
-	for (const root of roots) {
-		out.push(await realpath(root).catch(() => root));
-	}
-	return out;
-}
-
-function isInside(resolved: string, roots: string[]): boolean {
-	return roots.some((root) => {
-		const rel = path.relative(root, resolved);
-		return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-	});
+	return canonicalJailRoots(roots);
 }
 
 /** Content-type by extension for embedded static assets (R15). */
@@ -1001,20 +1000,17 @@ const server = Bun.serve<RelaySocketData>({
 		if (url.pathname === "/download") {
 			const requested = url.searchParams.get("path");
 			if (!requested) return new Response("Missing path", { status: 400 });
-			// Relative export paths are written by the agent into its cwd (or the
-			// server's process cwd when the session dir lives there); absolute
-			// paths are used as-is.
-			const resolved = path.isAbsolute(requested) ? requested : path.resolve(config.cwd, requested);
-			let canonical = await realpath(resolved).catch(() => null);
-			if (!canonical && !path.isAbsolute(requested)) {
-				canonical = await realpath(path.resolve(process.cwd(), requested)).catch(() => null);
+			const target = await resolveJailedFile({
+				requested,
+				cwd: config.cwd,
+				roots: await downloadJailRoots(),
+			});
+			if (!target.ok) {
+				return target.reason === "forbidden"
+					? new Response("Forbidden", { status: 403 })
+					: new Response("Not found", { status: 404 });
 			}
-			if (!canonical) return new Response("Not found", { status: 404 });
-			const fileStat = await stat(canonical).catch(() => null);
-			if (!fileStat?.isFile()) return new Response("Not found", { status: 404 });
-			if (!isInside(canonical, await canonicalRoots()))
-				return new Response("Forbidden", { status: 403 });
-			return new Response(Bun.file(canonical));
+			return new Response(Bun.file(target.canonical));
 		}
 		// Static: disk dist/ first (today's behavior), then EMBEDDED_DIST (R15).
 		const file = Bun.file(url.pathname === "/" ? "dist/index.html" : `dist${url.pathname}`);
@@ -1142,8 +1138,9 @@ async function bootReadiness(entry: SessionEntry): Promise<void> {
 }
 
 let bootSession: SessionEntry;
-/** Callback transport pair to the fleet (P3.2); started after the boot
- *  session exists, stopped in shutdown(). Null = no callback flags. */
+/** Callback transport pair to the fleet (P3.2); constructed before the boot
+ *  session so a required resume can restore over it, started at most once,
+ *  stopped in shutdown(). Null = no callback flags. */
 let fleetCallback: FleetCallback | null = null;
 /** Session-lineage log tailer (P3.7), streamed over the callback pair.
  *  Constructed with the callback (never without it); started after the
@@ -1159,11 +1156,15 @@ let daemonControl: DaemonControl | null = null;
 
 /**
  * P8.9 wake: materialize a session's stored transcripts from the fleet log
- * store into the agent sessions dir when the transcript is cold/missing, so
- * the caller can resume it. Returns `{ alreadyPresent: true }` when the
- * session tree exists locally (warm — no transfer needed) and throws a typed
- * error when materialization is impossible (no ready callback pair, or the
- * fleet lacks the session).
+ * store into the agent sessions dir when the session is cold/missing, so the
+ * caller can resume it. Returns `{ alreadyPresent: true }` when the session's
+ * MAIN transcript is already local (warm — no transfer needed) and throws a
+ * typed error when materialization is impossible (no ready callback pair, the
+ * fleet lacks the session, or the transfer restored no main file).
+ *
+ * The warm test is the main file ITSELF, never the session tree: an
+ * assets-only tree cannot be resumed, so a missing main must be restored even
+ * when its artifact dir is present.
  */
 async function materializeSession(
 	_entry: SessionEntry,
@@ -1176,8 +1177,8 @@ async function materializeSession(
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sessionId)) {
 		throw new MaterializeSessionError("invalid_request", `unsafe sessionId: ${sessionId}`);
 	}
-	// Warm: the session tree is already present locally — nothing to do.
-	if (sessionTreeExists(sessionsDir, sessionId)) {
+	// Warm: the session's main file is already local, so nothing to do.
+	if (resolveSessionMainFile(sessionsDir, sessionId) !== null) {
 		return { alreadyPresent: true };
 	}
 	const callback = fleetCallback;
@@ -1205,51 +1206,43 @@ async function materializeSession(
 		throw new MaterializeSessionError("unavailable", `materialization failed: ${String(error)}`);
 	}
 }
-// Lock the --resume session file before the boot session exists so a second
-// omp-session pointed at the same file fails loudly instead of racing it.
-// Only absolute paths are locked here; the live file (which may be identical)
-// is locked right after createSession below.
-if (config.resume && path.isAbsolute(config.resume)) acquireSessionLock(config.resume);
-try {
-	bootSession = await collabSession.createSession(config.cwd);
-} catch (err) {
-	// A signal during boot runs shutdown() concurrently; the torn-down SDK
-	// state fails createSession — that is the shutdown, not a boot failure.
-	if (shuttingDown) process.exit(0);
-	console.error("Failed to start agent session:", err);
-	process.exit(1);
-}
-bootEntry = bootSession;
-// Lock the live session file (no-op when it duplicates the --resume lock, or
-// when the session is in-memory and sessionFile is undefined).
-acquireSessionLock(bootSession.session.sessionFile);
-if (config.resume) {
-	try {
-		const ok = await bootEntry.session.switchSession(config.resume);
-		if (ok) {
-			clearSubagents(bootEntry);
-			await daemonBroker.broadcastAvailableCommands(bootEntry);
-		} else {
-			console.error(
-				`omp-session: --resume ${config.resume}: session switch returned false; starting fresh`,
-			);
-		}
-	} catch (err) {
-		console.error(`omp-session: --resume ${config.resume} failed (${String(err)}); starting fresh`);
-	}
-}
-resolveBootReady();
-void bootReadiness(bootEntry);
-
 // ---------------------------------------------------------------------------
 // Callback transport (P3.2): with all four callback flags set, dial the
 // fleet's callback pair. The daemon drives the pair (POST /callback/up +
 // GET /callback/down); the HTTP/SSE listener above stays fully functional —
-// the callback is additive, not a replacement, in this pass. Started AFTER
-// the boot session + readiness resolve so the pair speaks for a live
-// workspace. start() resolves when the fleet's pair_ready lands; readiness
-// and failures log to stderr (stdout is reserved for OMP_SESSION| lines).
+// the callback is additive, not a replacement, in this pass. Constructed
+// BEFORE the boot session exists so a REQUIRED resume can restore its stored
+// transcripts over the authenticated pair (P5 wake); the pair is started at
+// most once through startCallbackPair() — the required-resume path awaits it
+// before restoring, the normal path fires it right after the boot session
+// exists so the tailer never streams for a workspace that does not exist yet.
+// start() resolves when the fleet's pair_ready lands; readiness and failures
+// log to stderr (stdout is reserved for OMP_SESSION| lines).
 // ---------------------------------------------------------------------------
+
+/**
+ * The pair's shared start promise: the pair is established at most once and
+ * resolves when READY. It never rejects on a fleet outage (FleetCallback
+ * retries internally), so a caller that needs the pair live ahead of boot
+ * bounds the await with its own deadline.
+ */
+let callbackStart: Promise<void> | null = null;
+
+/**
+ * Operator Git credential settings captured BEFORE any workspace code runs
+ * (P5.4). The quiesce Git probes must reconstruct exactly the environment the
+ * daemon booted with, never a value a workspace process could have changed.
+ */
+const gitCredentialSettings = captureGitCredentialSettings();
+
+/**
+ * Kubernetes lane marker (P5 wake): the image sets OMP_WORKSPACE_ROOT
+ * (runtime/image/Containerfile) for every pod, and neither host lane (bwrap,
+ * plain worktrees) can pass it through the sandbox allowlist. A quiesce_clone
+ * control is supported on exactly this lane.
+ */
+const kubernetesWorkspaceRuntime = Bun.env.OMP_WORKSPACE_ROOT !== undefined;
+
 if (config.callbackUrl !== undefined) {
 	// Down-traffic router: log controls (log_ack/log_gap) apply to the
 	// tailer; stream_open/close, quiesce_begin and every kind:"command"
@@ -1402,12 +1395,21 @@ if (config.callbackUrl !== undefined) {
 				},
 			};
 		},
-		collectGitEvidence: async () => {
-			const result = await collectGitEvidence(config.cwd);
-			if (!result.ok) {
+		collectGitEvidence: async (input) => {
+			const result = await collectGitEvidence(config.cwd, {
+				...(input !== undefined
+					? {
+							sourceRemote: input.sourceRemote,
+							pinnedRevision: input.pinnedRevision,
+							branch: input.branch,
+						}
+					: {}),
+				credentials: gitCredentialSettings,
+			});
+			if (!result.ok || result.evidence === undefined) {
 				return {
 					ok: false,
-					error: { code: result.error!.code, message: result.error!.message },
+					error: result.error ?? { code: "conflict", message: "git evidence unavailable" },
 				};
 			}
 			return { ok: true, git: result.evidence };
@@ -1446,6 +1448,57 @@ if (config.callbackUrl !== undefined) {
 		send: callbackSend,
 		pairLive: () => fleetCallback !== null && fleetCallback.status().state === "ready",
 		mainSessionFile: null,
+		// Clone downloads (P3.4): GET /ctl/sessions/{id}/download on a clone
+		// daemon issues download_bulk over this pair. The lane reuses the
+		// HTTP /download jail (downloadJailRoots) and the same multi-part bulk
+		// channel the quiesce evidence upload uses; the pair exists whenever
+		// this branch runs. identity() reads the mutable pair binding at call
+		// time, exactly like quiesceClone below.
+		downloadBulk: {
+			identity: () => ({
+				workspaceId: config.callbackWorkspace!,
+				generation: config.callbackGeneration!,
+				connectionId: fleetCallback?.status().connectionId ?? null,
+			}),
+			jailRoots: () => downloadJailRoots(),
+			cwd: () => config.cwd,
+			uploadParts: (input) => fleetCallback!.requestBulkUploadParts(input),
+		},
+		// Kubernetes quiesce_clone (P5.4): present only on the image lane, so a
+		// control on any other workspace is rejected typed, never half-run.
+		// identity() reads the mutable pair binding at call time (the pair is
+		// constructed above but started later); the rest resolves the live boot
+		// session, which is the only session this daemon can quiesce.
+		...(kubernetesWorkspaceRuntime
+			? {
+					quiesceClone: {
+						identity: () => ({
+							workspaceId: config.callbackWorkspace!,
+							generation: config.callbackGeneration!,
+							connectionId: fleetCallback?.status().connectionId ?? null,
+						}),
+						mainSessionRelpath: () =>
+							mainSessionRelpathFor(sessionsDir, bootEntry?.session.sessionFile ?? null),
+						flushReachableWriters: () =>
+							flushReachableWriters({
+								entry: bootEntry!,
+								registry: bootEntry!.agentRegistry,
+								mainSessionFile: bootEntry!.session.sessionFile ?? null,
+							}),
+						uploadEvidence: async (correlationId, document) => {
+							const body = new TextEncoder().encode(document);
+							const partSize = 4 * 1024 * 1024;
+							await fleetCallback!.requestBulkUploadParts({
+								correlationId,
+								totalBytes: body.length,
+								partSize,
+								readPart: async (part, size) =>
+									body.subarray(part * partSize, part * partSize + size),
+							});
+						},
+					},
+				}
+			: {}),
 	});
 	// Register the mirror tap: every broadcast/broadcastAnswer/broadcastTo
 	// frame is forwarded verbatim — to the "control" stream (fleet activity +
@@ -1455,9 +1508,188 @@ if (config.callbackUrl !== undefined) {
 		const ctl = daemonControl;
 		if (ctl !== null) ctl.mirror(frame as Record<string, unknown>);
 	});
-	// Once the pair is ready (fleet pair_ready observed) start streaming
-	// session logs over it; tailer start() is sync (initial scan + watcher).
-	void fleetCallback.start().then(() => {
+}
+
+// ---------------------------------------------------------------------------
+// Boot (R8): fresh session (or --resume switch, R3), then the readiness gate
+// clears in the background once provider/model/auth resolution completes.
+//
+// Required resume (P5 wake): the fleet hands an absolute target and arms
+// --resume-required only after proving the predecessor terminated. That lane
+// restores the target's stored transcripts over the authenticated pair,
+// clears ONLY the selected target's stale lock, locks it, switches into it,
+// and only then opens readiness; any failure exits BEFORE readiness, because
+// a fresh boot would silently lose the session the fleet asked to continue.
+// ---------------------------------------------------------------------------
+
+/** Restore budgets (P5.4): 60s for callback readiness, 120s for the transfer. */
+const PAIR_READY_TIMEOUT_MS = 60_000;
+const RESTORE_TIMEOUT_MS = 120_000;
+
+/**
+ * Bound one restore step: a dead fleet or a stalled bulk transfer must fail
+ * the resume instead of leaving the Pod hanging before readiness.
+ */
+async function withDeadline<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+	let timer: Timer | undefined;
+	const expiry = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(
+			() => reject(new MaterializeSessionError("unavailable", message)),
+			timeoutMs,
+		);
+	});
+	try {
+		return await Promise.race([work, expiry]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * Restore the resume target's stored subtree over the authenticated pair
+ * (P5 wake). The pair must be READY first (the bulk pull is daemon-initiated);
+ * the transfer itself is the existing materializeSessionToDir. Throws a typed
+ * MaterializeSessionError when the pair never comes up, the transfer fails,
+ * or the restored subtree holds no main transcript.
+ */
+async function restoreResumeTarget(sessionId: string): Promise<void> {
+	const callback = fleetCallback;
+	if (callback === null) {
+		throw new MaterializeSessionError(
+			"unavailable",
+			"no callback pair is configured to restore the resume target",
+		);
+	}
+	if (callbackStart === null) callbackStart = callback.start();
+	await withDeadline(
+		callbackStart,
+		PAIR_READY_TIMEOUT_MS,
+		"the callback pair did not become ready in time to restore the resume target",
+	);
+	await withDeadline(
+		materializeSessionToDir(sessionsDir, sessionId, callback),
+		RESTORE_TIMEOUT_MS,
+		`restoring session ${sessionId} exceeded ${RESTORE_TIMEOUT_MS}ms`,
+	);
+	if (resolveSessionMainFile(sessionsDir, sessionId) === null) {
+		throw new MaterializeSessionError(
+			"unavailable",
+			`the store restored no main transcript for session ${sessionId}`,
+		);
+	}
+}
+
+// Restore the handed target BEFORE the lock and the switch: the handed main
+// file may be missing (wake of a stopped clone, or a deliberate removal from
+// the retained volume), and the fleet log store is the only source. Only a
+// target under this daemon's sessions root carries a store identity to pull;
+// a resume path outside it is the operator's own file, so it is never
+// rewritten here and the switch below handles it exactly as before.
+if (
+	config.resume !== undefined &&
+	path.isAbsolute(config.resume) &&
+	config.resume.startsWith(`${sessionsDir}${path.sep}`)
+) {
+	const resumeBase = path.basename(config.resume);
+	const resumeStem = resumeBase.endsWith(".jsonl") ? resumeBase.slice(0, -".jsonl".length) : "";
+	const resumeSessionId = /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(resumeStem) ? resumeStem : null;
+	if (config.resumeRequired) {
+		// Remove ONLY the selected target's stale lock. The fleet armed the
+		// required lane after proving the predecessor terminated, and a
+		// namespace-relative pid from a dead sandbox can still look alive to
+		// the generic liveness probe. No other lock is ever touched.
+		try {
+			unlinkSync(`${config.resume}.lock`);
+		} catch {
+			// Absent or already cleared.
+		}
+	}
+	if (resumeSessionId !== null && resolveSessionMainFile(sessionsDir, resumeSessionId) === null) {
+		try {
+			await restoreResumeTarget(resumeSessionId);
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			if (config.resumeRequired) {
+				console.error(
+					`omp-session: required resume of ${config.resume} failed (${detail}); exiting before readiness`,
+				);
+				process.exit(1);
+			}
+			console.error(
+				`omp-session: --resume ${config.resume} could not be restored (${detail}); starting fresh`,
+			);
+		}
+	}
+}
+// A signal during the restore runs shutdown() concurrently; that shutdown is
+// the exit path, not a boot failure.
+if (shuttingDown) process.exit(0);
+
+// Required resume never falls back to a fresh boot: the restore above is the
+// only sanctioned way to produce a target that is not on disk, and
+// switchSession() accepts an absent file by starting a NEW session at that
+// path, so an unusable target must exit before the lock and readiness
+// (finding #6). Parse-time admission already refuses an armed lane with no
+// target at all; this refuses one whose target is not on disk.
+if (config.resumeRequired && (config.resume === undefined || !existsSync(config.resume))) {
+	console.error(
+		`omp-session: required resume target ${config.resume ?? "(none)"} is missing; exiting before readiness instead of booting fresh`,
+	);
+	process.exit(1);
+}
+
+// Lock the --resume session file before the boot session exists so a second
+// omp-session pointed at the same file fails loudly instead of racing it.
+// Only absolute paths are locked here; the live file (which may be identical)
+// is locked right after createSession below.
+if (config.resume && path.isAbsolute(config.resume)) acquireSessionLock(config.resume);
+try {
+	bootSession = await collabSession.createSession(config.cwd);
+} catch (err) {
+	// A signal during boot runs shutdown() concurrently; the torn-down SDK
+	// state fails createSession — that is the shutdown, not a boot failure.
+	if (shuttingDown) process.exit(0);
+	console.error("Failed to start agent session:", err);
+	process.exit(1);
+}
+bootEntry = bootSession;
+// Lock the live session file (no-op when it duplicates the --resume lock, or
+// when the session is in-memory and sessionFile is undefined).
+acquireSessionLock(bootSession.session.sessionFile);
+if (config.resume) {
+	try {
+		const ok = await bootEntry.session.switchSession(config.resume);
+		if (ok) {
+			clearSubagents(bootEntry);
+			await daemonBroker.broadcastAvailableCommands(bootEntry);
+		} else if (config.resumeRequired) {
+			console.error(
+				`omp-session: required resume of ${config.resume} failed (session switch returned false); exiting before readiness`,
+			);
+			process.exit(1);
+		} else {
+			console.error(
+				`omp-session: --resume ${config.resume}: session switch returned false; starting fresh`,
+			);
+		}
+	} catch (err) {
+		if (config.resumeRequired) {
+			console.error(
+				`omp-session: required resume of ${config.resume} failed (${String(err)}); exiting before readiness`,
+			);
+			process.exit(1);
+		}
+		console.error(`omp-session: --resume ${config.resume} failed (${String(err)}); starting fresh`);
+	}
+}
+resolveBootReady();
+void bootReadiness(bootEntry);
+// Pair startup (P3.2): with a live boot session in place, establish the pair
+// (reusing the promise a required resume already awaited) and start streaming
+// session logs over it once it is ready; tailer start() is sync.
+if (config.callbackUrl !== undefined) {
+	if (callbackStart === null) callbackStart = fleetCallback!.start();
+	void callbackStart.then(() => {
 		logTailer?.start();
 		daemonControl?.onPairChange();
 	});

@@ -452,3 +452,44 @@ export function emitMaterializeTransfer(
 	push({ type: "end", more: false });
 	return records;
 }
+
+// ---------------------------------------------------------------------------
+// Main-transcript layout (P5 wake): both halves must agree on which relpath
+// is the resumable trunk of a session. The sessions root holds mains at depth
+// 1 (`<sessionId>.jsonl`) or depth 2 (`<proj>/<sessionId>.jsonl`); assets live
+// under the sibling `<sessionId>/` dir or beside a depth-2 main, so they never
+// match. Restoration decisions ("is a MAIN transcript available?") use these
+// predicates rather than "does the session tree exist" - an assets-only tree
+// cannot be resumed.
+// ---------------------------------------------------------------------------
+
+/**
+ * True when `relpath` (POSIX, sessions-root-relative) is the main transcript
+ * of `sessionId` under the frozen depth-1/depth-2 layout.
+ */
+export function isSessionMainRelpath(relpath: string, sessionId: string): boolean {
+	if (sessionId.length === 0) return false;
+	const parts = relpath.split("/");
+	if (parts.length === 0 || parts.length > 2) return false;
+	if (parts.some((part) => part.length === 0)) return false;
+	return parts[parts.length - 1] === `${sessionId}.jsonl`;
+}
+
+/**
+ * The main transcript of `sessionId` among sessions-root-relative relpaths
+ * (a store lineage listing or a directory walk), preferring the depth-1 copy
+ * when both layouts are present. Null when the set holds no main for the
+ * session.
+ */
+export function findSessionMainRelpath(
+	relpaths: readonly string[],
+	sessionId: string,
+): string | null {
+	let depthTwo: string | null = null;
+	for (const relpath of relpaths) {
+		if (!isSessionMainRelpath(relpath, sessionId)) continue;
+		if (!relpath.includes("/")) return relpath;
+		depthTwo ??= relpath;
+	}
+	return depthTwo;
+}

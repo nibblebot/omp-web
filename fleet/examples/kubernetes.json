@@ -1,0 +1,28 @@
+{
+	"_comment": "Example Kubernetes clone-workspace provider profile. Merge providerProfiles into ~/.omp-web/config.json, or point OMP_FLEET_CONFIG at an edited copy of this file. providerProfiles.<id> keys: provider, executable, tools, resources, storage, secretRefs, image, namespace, context (see fleet/provider-profile.ts); `tools` is the required list of absolute HOST tool paths a bwrap profile ro-binds, and stays empty here because a kubernetes pod runs git/openssh from the image. SETUP (all operator-owned; omp-web provisions no cluster): 1) build the session-runtime image from the shipped build context and push or load it where the profile namespace can pull it: `bun run build`, then `docker build -f dist-bundle/image/Containerfile -t omp-web-session:1.4.2 dist-bundle/image` (in a source checkout, `docker build -f runtime/image/Containerfile -t omp-web-session:1.4.2 .` also works). 2) create namespace `omp-web` and the StorageClass named in storage.class (omit storage.class to use the single cluster default; preflight requires exactly one default when the profile pins none). 3) create the Secrets referenced by secretRefs in that namespace; each value is `<secretName>/<key>` and no secret value ever lives in this file. 4) point your kubeconfig at the cluster and use that context NAME below in context; the provider never falls back to the ambient current-context. 5) start the fleet with the operator's HTTPS callback origin: `OMP_FLEET_CALLBACK_URL=https://omp.example.com omp-web serve`. Then `omp-web preflight --profile kubernetes` checks the kubectl client, context, API reachability, namespace, pods/persistentvolumeclaims/configmaps get|create|delete RBAC, the StorageClass and the referenced Secret keys. LIFECYCLE: `omp-web add-clone <project> clone-a --profile kubernetes --remote <git-url> --branch <branch>` registers and starts automatically (add-clone defaults to start ON; add `--no-start` to defer); `omp-web stop <selector>` deletes the pod and keeps the PVC; `omp-web start <selector>` wakes it and resumes the last session; `omp-web remove <selector>` runs the verified-deletion gate (quiesce, Git guard, store verification) before the pod and PVC are deleted. GATEWAY: the HTTPS origin in front of the fleet must forward ONLY `POST /callback/up`, `GET /callback/down` and `POST /callback/bulk/<id>`, matching the raw path; `<id>` is exactly one unescaped `[A-Za-z0-9_-]+` segment. Reject every other method, path and query at the gateway. CREDENTIALS ARE SEPARATE: the fleet HOST needs the kubeconfig/RBAC and the Git credential used to resolve the pin and prepare the volume; the POD gets only what secretRefs injects (model API keys, and for SSH clone sources the OMP_GIT_SSH_PRIVATE_KEY / OMP_GIT_SSH_KNOWN_HOSTS pair consumed by the image's git-ssh.sh). The callback enrollment credential is minted per generation by the fleet and never appears in this file.",
+	"workspaceDir": "~/.omp-web/workspaces",
+	"providerProfiles": {
+		"kubernetes": {
+			"provider": "kubernetes",
+			"executable": "~/.omp-web/install/node_modules/omp-web/dist-bundle/providers/kubernetes-provider.js",
+			"tools": [],
+			"context": "minikube",
+			"namespace": "omp-web",
+			"image": "omp-web-session:1.4.2",
+			"resources": {
+				"cpu": "2",
+				"memory": "4Gi"
+			},
+			"storage": {
+				"class": "standard",
+				"size": "20Gi"
+			},
+			"secretRefs": {
+				"ANTHROPIC_API_KEY": "omp-agent-secrets/anthropic-api-key",
+				"OPENAI_API_KEY": "omp-agent-secrets/openai-api-key",
+				"OMP_GIT_SSH_PRIVATE_KEY": "omp-git-credentials/ssh-private-key",
+				"OMP_GIT_SSH_KNOWN_HOSTS": "omp-git-credentials/known-hosts"
+			}
+		}
+	}
+}

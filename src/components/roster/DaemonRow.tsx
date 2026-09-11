@@ -19,6 +19,7 @@ import { unreadIds } from "../../fleet-ui/unread";
 import {
 	attachSession,
 	call,
+	openStoredHistory,
 	removeDaemonById,
 	requestDaemonSessions,
 	resumeDaemonSession,
@@ -239,7 +240,13 @@ export const DaemonRow: Component<{
 		return a ? ACTIVITY_TITLE[a] : undefined;
 	});
 
-	const clickable = () => d().status === "ready" || d().status === "asleep";
+	// Ready rows attach; a clone whose worker is not live (asleep or failed)
+	// opens its fleet-stored history read-only, so a stopped pod or an
+	// unreachable cluster still has a click-through to the transcript. Waking
+	// a stopped clone is an explicit menu action, never a side effect of
+	// reading (the root/worktree rows keep their resume-on-click behavior).
+	const clickable = () =>
+		d().status === "ready" || d().status === "asleep" || (isClone() && d().status === "error");
 	/** Loading phase: activating but the daemon isn't ready yet. Renders with
 	 *  the pulsing transitional ("resolving") visual vocabulary. */
 	const waking = () => activating() && d().status !== "ready";
@@ -276,7 +283,17 @@ export const DaemonRow: Component<{
 			// Already the attached session: clicking its card is a no-op (a
 			// redundant attach round-trip would also reset the chat view).
 			if (daemon.daemonId === state.currentSessionId) return;
-			void attachSession(daemon.daemonId).catch((err) => setState("error", String(err)));
+			void attachSession(daemon.daemonId).catch((err) => {
+				setState("error", String(err));
+				// A clone that died after its last roster update cannot attach.
+				// The fleet store still holds its lineage, so fall back to the
+				// read-only history instead of a dead end.
+				if (isClone()) void openStoredHistory(daemon.daemonId);
+			});
+		} else if (isClone()) {
+			// Not live (stopped, failed, or unreachable): show the stored
+			// transcript read-only. Never wake compute to read.
+			void openStoredHistory(daemon.daemonId);
 		} else if (daemon.status === "asleep") {
 			// Wake then attach: the edge wakes first and answers the attach
 			// once the session is ready — send both immediately, the edge
@@ -713,13 +730,29 @@ const DaemonSessionsDropdown: Component<{
 			? state.sessionFile
 			: props.daemon.lastSessionFile;
 
-	const resume = (path: string) => {
+	/** A failed clone has no session to resume: its row opens the stored
+	 *  transcript read-only instead (the pod is gone and cannot be dialed). */
+	const storedOnly = () =>
+		props.daemon.workspaceKind === "clone" && props.daemon.status === "error";
+
+	const resume = (session: SessionListEntry) => {
 		const id = props.daemon.daemonId;
+		if (storedOnly()) {
+			props.onClose();
+			void openStoredHistory(id, session.id);
+			return;
+		}
 		const wasAsleep = props.daemon.status === "asleep";
 		// Wake pulse for an asleep row (mirrors the old row-click wake): set
 		// the activating id before the resume, clear when the attach settles.
 		if (wasAsleep) setActivatingIds((prev) => new Set(prev).add(id));
-		const pending = resumeDaemonSession(id, path);
+		const pending = resumeDaemonSession(id, session.path).catch((err) => {
+			setState("error", String(err));
+			// The worker went away between the roster update and this pick
+			// (pod reaped, cluster unreachable): the stored lineage is still
+			// readable, so land there read-only rather than on a dead session.
+			if (props.daemon.workspaceKind === "clone") void openStoredHistory(id, session.id);
+		});
 		props.onClose();
 		if (wasAsleep) {
 			Promise.resolve(pending)
@@ -744,7 +777,9 @@ const DaemonSessionsDropdown: Component<{
 				<div class="daemon-session-note">no sessions yet</div>
 			) : (
 				<>
-					<div class="daemon-session-menu-hint">resume a session</div>
+					<div class="daemon-session-menu-hint">
+						{storedOnly() ? "view stored history (read-only)" : "resume a session"}
+					</div>
 					<For each={sessions()}>
 						{(s) => (
 							<button
@@ -753,7 +788,7 @@ const DaemonSessionsDropdown: Component<{
 								class="sidebar-menu-item daemon-session-item"
 								classList={{ active: currentFile === s.path }}
 								title={s.cwd}
-								onClick={() => resume(s.path)}
+								onClick={() => resume(s)}
 							>
 								<span class="daemon-session-item-name">{s.name ?? s.id.slice(0, 8)}</span>
 								<span class="daemon-session-item-time">{formatTimeAgo(s.modifiedAt)}</span>

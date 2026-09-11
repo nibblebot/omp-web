@@ -196,6 +196,26 @@ export interface StoredWorkspaceInfo {
 	readOnly: boolean;
 }
 
+/**
+ * Read-only durable state of one stored log stream, keyed by the frozen
+ * tailer id `logs/<sessionId>/<relpath>`. This is the store-side half of the
+ * quiesce receipt check: the daemon's final flush boundary (FlushBoundary)
+ * must name exactly these streams at exactly these generations/offsets.
+ */
+export interface StoredStreamEvidence {
+	/** `logs/<sessionId>/<relpath>` — the daemon tailer's stream id. */
+	streamId: string;
+	sessionId: string;
+	/** POSIX relpath inside the session subtree. */
+	relpath: string;
+	/** Last chunk generation applied; an atomic rewrite bumps it. */
+	generation: number;
+	/** Durable append offset recorded in the sidecar (equals the file's size). */
+	ackedBytes: number;
+	/** True when the daemon's final chunk for this stream carried eof. */
+	eof: boolean;
+}
+
 const INDEX_NAME = "index.json";
 const TMP_SUFFIX = ".tmp";
 /**
@@ -954,6 +974,36 @@ export class FleetLogStore {
 			...(main ? { mainRelpath: main.relpath } : {}),
 			mtimeMs,
 		};
+	}
+
+	/**
+	 * Read-only durable stream state for one workspace: one entry per indexed
+	 * stream, keyed by the frozen tailer id `logs/<sessionId>/<relpath>`
+	 * (fleet/server.ts #onLogEnvelope splits the same way). The quiesce
+	 * receipt validator (fleet/clone-quiesce.ts) proves the store reached the
+	 * daemon's final flush boundary against this. Never mutates, never
+	 * repairs, never flips read-only state; an unloaded or unknown workspace
+	 * returns [].
+	 */
+	storedStreamEvidence(workspaceId: string): StoredStreamEvidence[] {
+		if (!assertSafeComponentOrNull(workspaceId)) return [];
+		const sessions = this.#sessions.get(workspaceId);
+		if (sessions === undefined) return [];
+		const out: StoredStreamEvidence[] = [];
+		for (const session of sessions.values()) {
+			for (const relpath of [...session.streams.keys()].sort()) {
+				const stream = session.streams.get(relpath)!;
+				out.push({
+					streamId: `logs/${session.sessionId}/${relpath}`,
+					sessionId: session.sessionId,
+					relpath,
+					generation: stream.generation,
+					ackedBytes: stream.ackedOffset,
+					eof: stream.eof,
+				});
+			}
+		}
+		return out;
 	}
 
 	/** Recursive file walk of the session dir, excluding the sidecar and tmp files. */

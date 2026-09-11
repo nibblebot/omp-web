@@ -2,6 +2,7 @@ import type { ClientCommand, DaemonInfo, ServerFrame, WebMethodName } from "../.
 import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
 import { setState, state } from "../state";
 import { authedFetch } from "./auth";
+import { randomId } from "./ids";
 
 /**
  * Transport domain (Phase 3 store facade split): the RPC/relay layer —
@@ -49,7 +50,7 @@ export function setTransportToken(value: string | null): void {
  *  stream and POST /command to route anonymous commands to the owning browser
  *  stream (a bare omp-session ignores both). Shown (truncated) in the Debug
  *  panel; not a secret — it already rides the query string and headers. */
-export const clientId = crypto.randomUUID();
+export const clientId = randomId();
 
 /**
  * Uplink: POST one ClientCommand to /command (202 fire-and-forget accept —
@@ -208,7 +209,7 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 
 /** Attach this tab to a daemon in the roster; resolves with its handle. */
 export function attachSession(sessionId: string): Promise<string> {
-	return requestAttach({ type: "attach", id: crypto.randomUUID(), sessionId });
+	return requestAttach({ type: "attach", id: randomId(), sessionId });
 }
 
 /** The roster daemonId of the in-flight attach, or null when idle. Used as
@@ -247,7 +248,7 @@ export function settleAttachResult(frame: Extract<ServerFrame, { type: "attach_r
 		if (state.pendingSessionPicker === frame.sessionId) {
 			void postCommand({
 				type: "list_sessions",
-				id: crypto.randomUUID(),
+				id: randomId(),
 			} satisfies ClientCommand).catch(() => {});
 		} else if (state.pendingSessionPicker !== null) {
 			// An armed gate settled against a DIFFERENT daemon: the

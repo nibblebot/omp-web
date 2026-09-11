@@ -1,5 +1,6 @@
 import type { ClientCommand, SessionListEntry } from "../../shared/protocol";
 import { setState, state } from "../state";
+import { randomId } from "./ids";
 import {
 	attachSession,
 	call,
@@ -78,7 +79,7 @@ export function requestDaemonSessions(daemonId: string): Promise<SessionListEntr
 	}
 	pendingDaemonSessions.get(daemonId)?.([]); // supersede an older request
 	pendingDaemonSessions.set(daemonId, resolve);
-	postCommand({ type: "list_daemon_sessions", id: crypto.randomUUID(), daemonId }).catch(() => {
+	postCommand({ type: "list_daemon_sessions", id: randomId(), daemonId }).catch(() => {
 		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
 		if (pendingDaemonSessions.get(daemonId) === resolve) {
 			pendingDaemonSessions.delete(daemonId);
@@ -105,9 +106,7 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
 	if (back?.status === "asleep") {
 		// Wake then attach (mirrors the old asleep-row click): the edge wakes
 		// first and answers the attach once the session is ready.
-		postCommand({ type: "spawn_resume", id: crypto.randomUUID(), daemonId, sessionFile }).catch(
-			() => {},
-		);
+		postCommand({ type: "spawn_resume", id: randomId(), daemonId, sessionFile }).catch(() => {});
 		if (state.currentSessionId === daemonId) return Promise.resolve();
 		return attachSession(daemonId).then(
 			() => undefined,
@@ -160,6 +159,36 @@ function switchSessionRetry(daemonId: string, sessionFile: string): Promise<void
 		});
 }
 
+/**
+ * Open a clone workspace's fleet-stored history READ-ONLY (Analysis view).
+ *
+ * This is the read path for a worker that cannot be connected to: a stopped
+ * pod, an unreachable cluster, or a lost callback pair. The bytes come from
+ * the fleet log store (the daemon's streamed lineage), so the view never
+ * wakes compute and has no mutation affordances. `sessionId` defaults to the
+ * workspace's newest stored session.
+ *
+ * Read-only is the whole point: never route this through attach/resume, or a
+ * mere look at history starts a pod.
+ */
+export async function openStoredHistory(daemonId: string, sessionId?: string): Promise<void> {
+	let target = sessionId;
+	if (target === undefined) {
+		const sessions = await requestDaemonSessions(daemonId);
+		target = sessions[0]?.id;
+	}
+	if (target === undefined) {
+		setState("error", `no stored history for ${daemonId} yet`);
+		return;
+	}
+	// Hash first: TxBrowser parses it when it mounts and listens for
+	// hashchange once mounted, so the deep link lands either way.
+	if (typeof location !== "undefined") {
+		location.hash = `#/stored/${encodeURIComponent(daemonId)}/${encodeURIComponent(target)}`;
+	}
+	setView("analysis");
+}
+
 export function listSessions(): Promise<SessionListEntry[]> {
 	const { promise, resolve, reject } = Promise.withResolvers<SessionListEntry[]>();
 	if (!isConnected()) {
@@ -168,13 +197,11 @@ export function listSessions(): Promise<SessionListEntry[]> {
 	}
 	pendingSessions?.([]);
 	pendingSessions = resolve;
-	postCommand({ type: "list_sessions", id: crypto.randomUUID() } satisfies ClientCommand).catch(
-		(err) => {
-			// Latest-wins: only clear the slot if a newer request hasn't claimed it.
-			if (pendingSessions === resolve) pendingSessions = null;
-			reject(err instanceof Error ? err : new Error(String(err)));
-		},
-	);
+	postCommand({ type: "list_sessions", id: randomId() } satisfies ClientCommand).catch((err) => {
+		// Latest-wins: only clear the slot if a newer request hasn't claimed it.
+		if (pendingSessions === resolve) pendingSessions = null;
+		reject(err instanceof Error ? err : new Error(String(err)));
+	});
 	return promise;
 }
 
@@ -188,7 +215,7 @@ export function listFiles(query: string, limit?: number): Promise<string[]> {
 	pendingFiles = resolve;
 	postCommand({
 		type: "list_files",
-		id: crypto.randomUUID(),
+		id: randomId(),
 		query,
 		limit,
 	} satisfies ClientCommand).catch((err) => {

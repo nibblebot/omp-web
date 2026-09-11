@@ -33,6 +33,7 @@ import {
 	spawnResume,
 	state,
 	updateSetting,
+	openStoredHistory,
 	requestDaemonSessions,
 	resumeDaemonSession,
 	type SubagentInfo,
@@ -1878,6 +1879,45 @@ describe("attached session reconciliation against roster truth", () => {
 		expect(hasLiveSession()).toBe(false);
 	});
 
+	test("a dead CLONE keeps its transcript on screen read-only instead of clearing", () => {
+		attachAndPrime();
+
+		// The pod is gone (stopped, or the cluster became unreachable): the
+		// transcript stays visible because the fleet store still holds the
+		// same lineage, and nothing is writable without a live session.
+		dispatch({
+			type: "roster",
+			daemons: [daemon("daemon-a", { status: "asleep", workspaceKind: "clone" })],
+		});
+
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("a dead clone with an empty transcript still clears (nothing to preserve)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+
+		dispatch({
+			type: "roster",
+			daemons: [daemon("daemon-a", { status: "error", workspaceKind: "clone" })],
+		});
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.items).toEqual([]);
+	});
+
+	test("a dead NON-clone daemon still clears even with a transcript", () => {
+		attachAndPrime();
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.items).toEqual([]);
+	});
+
 	test("a daemon_status asleep frame for the attached daemon clears the session view", () => {
 		attachAndPrime();
 		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
@@ -2234,5 +2274,81 @@ describe("roster session dropdown", () => {
 		resumeDaemonSession("d9", "/sessions/current.jsonl");
 		expect(postedOf("attach")).toHaveLength(1);
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
+	});
+});
+
+/**
+ * openStoredHistory is the read path for a worker that cannot be connected to
+ * (stopped pod, unreachable cluster, lost callback pair). The load-bearing
+ * property is that READS NEVER WAKE COMPUTE: it must resolve the session from
+ * the fleet store listing and open the stored route without ever issuing an
+ * attach / spawn_resume / session switch.
+ */
+describe("openStoredHistory (read-only worker history)", () => {
+	/** Commands that would touch (or start) the worker itself. */
+	function workerCommands(): ClientCommand[] {
+		return posted.filter(
+			(c) =>
+				c.type === "attach" ||
+				c.type === "spawn_resume" ||
+				(c.type === "call" && ["switchSession", "prompt"].includes(c.method)),
+		);
+	}
+
+	function storedSessions(daemonId: string, sessions: SessionListEntry[]): void {
+		dispatch({ type: "daemon_sessions", daemonId, sessions });
+	}
+
+	const entry = (id: string, modifiedAt: number): SessionListEntry => ({
+		path: id,
+		id,
+		cwd: "",
+		modifiedAt,
+		messageCount: 0,
+	});
+
+	test("opens the newest stored session without touching the worker", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+
+		const pending = openStoredHistory("d7");
+		// The listing rides the existing unicast command (store-backed for
+		// clones), answered with a newest-first list.
+		storedSessions("d7", [entry("newest", 20), entry("older", 10)]);
+		await pending;
+
+		expect(globalThis.location.hash).toBe("#/stored/d7/newest");
+		expect(state.view).toBe("analysis");
+		expect(workerCommands()).toEqual([]);
+	});
+
+	test("an explicit session id skips the listing entirely", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+
+		await openStoredHistory("d7", "chosen");
+
+		expect(globalThis.location.hash).toBe("#/stored/d7/chosen");
+		expect(state.view).toBe("analysis");
+		expect(posted).toEqual([]);
+		expect(workerCommands()).toEqual([]);
+	});
+
+	test("reports a workspace with no stored history instead of navigating", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		globalThis.location = { search: "", hash: "" } as unknown as Location;
+		setState({ view: "work", error: null });
+
+		const pending = openStoredHistory("d7");
+		storedSessions("d7", []);
+		await pending;
+
+		expect(state.error).toMatch(/no stored history/);
+		expect(globalThis.location.hash).toBe("");
+		expect(state.view).toBe("work");
+		expect(workerCommands()).toEqual([]);
 	});
 });

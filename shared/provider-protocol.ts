@@ -1,9 +1,15 @@
 /**
- * Provider operation protocol (OMP_PROVIDER_PROTO = 1) — the frozen contract
+ * Provider operation protocol (OMP_PROVIDER_PROTO = 2) — the frozen contract
  * for fleet-side clone-workspace sandbox providers (P5.1). Encoding, request
  * shape, response shape, identity/supervision rules and the error vocabulary
  * are fixed by docs/clone-contracts.md ("Provider operation protocol (frozen
  * contract)") and supersede the earlier "Provider executable contract" draft.
+ *
+ * v2 adds `providerProto` (present and equal on both directions, rejected
+ * before dispatch otherwise) and the Kubernetes resource binding: a
+ * Kubernetes request carries `kubernetes` (the namespace identity its
+ * resources are bound to) and a successful Kubernetes response carries
+ * `kubernetes` (the namespace/pod/PVC API uids it observed).
  *
  * Invocation: the fleet runs `<executable> <op>` with exactly one JSON
  * request on stdin and exactly one JSON response on stdout; stderr is a
@@ -31,13 +37,14 @@
  * process spawning. Spawning lives in runtime/provider-exec.ts.
  */
 
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const utf8 = new TextEncoder();
 
 /** Provider protocol version; the fleet pins it before invoking any provider. */
-export const OMP_PROVIDER_PROTO = 1;
+export const OMP_PROVIDER_PROTO = 2;
 
 /** Serialized request/response cap: one JSON document per invocation (1 MiB). */
 export const PROVIDER_JSON_MAX_BYTES = 1024 * 1024;
@@ -61,6 +68,184 @@ export type ProviderObserved = "running" | "stopped" | "missing";
  * and bounded; absent only until the provider has created the resource.
  */
 export type ProviderHandle = string;
+
+/**
+ * Kubernetes resource binding (P5.3): the durable namespace identity a
+ * workspace's Pod/PVC live in, fixed once at registration and never
+ * re-resolved implicitly. `resourceIdentity` is 16 random bytes as lowercase
+ * hex, generated once by the fleet; the Pod name, the PVC name and the
+ * provider's private state directory all derive from it, so it must never
+ * change for a workspace.
+ */
+export interface KubernetesBinding {
+	/** 32 lowercase hex characters (see {@link newResourceIdentity}). */
+	resourceIdentity: string;
+	/** Operator-explicit kubeconfig context; never the ambient current-context. */
+	context: string;
+	/** Operator-prepared namespace the workspace's resources live in. */
+	namespace: string;
+	/** API uid of that namespace, captured at registration. */
+	namespaceUid: string;
+}
+
+/**
+ * Kubernetes objects one operation observed, by API uid. `null` means the
+ * object is absent. The namespace uid is always reported so the fleet can
+ * detect a namespace replaced underneath a live workspace.
+ */
+export interface KubernetesObserved {
+	namespaceUid: string;
+	podUid: string | null;
+	pvcUid: string | null;
+}
+
+/** Resource-identity width: 16 random bytes, lowercase hex. */
+export const RESOURCE_IDENTITY_BYTES = 16;
+
+/** Resource-identity shape: 32 lowercase hex characters. */
+export const RESOURCE_IDENTITY_RE = /^[0-9a-f]{32}$/;
+
+const NAMESPACE_UID_MAX_CHARS = 128;
+
+/**
+ * Generate a fresh resource identity: 16 random bytes as lowercase hex. The
+ * Pod name, PVC name and provider state directory all derive from it, so the
+ * fleet persists the result and reuses it verbatim forever after.
+ */
+export function newResourceIdentity(): string {
+	return randomBytes(RESOURCE_IDENTITY_BYTES).toString("hex");
+}
+
+const KUBERNETES_SOURCE_SCHEMES = ["git", "https", "ssh"] as const;
+const SSH_USERNAME_RE = /^[A-Za-z0-9._~-]+$/;
+const HOST_RE = /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/;
+const HOST_MAX_CHARS = 253;
+const PORT_RE = /^[0-9]{1,5}$/;
+const PATH_SEGMENT_RE = /^[^\s?#\\:]+$/;
+const KUBERNETES_SOURCE_MAX_CHARS = 4096;
+
+/**
+ * Validate a Kubernetes clone source: an absolute `git:`, `https:`, or
+ * `ssh:` URL naming a host and a repository path. An SSH username is
+ * allowed; passwords, any other URL userinfo, whitespace, query strings,
+ * fragments, backslashes, local paths, `file:` URLs, and option/helper
+ * syntax are rejected.
+ *
+ * Returns the validated source text unchanged — it is preserved verbatim for
+ * pin resolution and for the workspace's source-pin digest. Throws
+ * ProviderProtocolError("invalid_request").
+ */
+export function validateKubernetesSource(value: unknown): string {
+	const reject = (why: string): never => {
+		throw ProviderProtocolError.invalidRequest(`invalid kubernetes source: ${why}`);
+	};
+	if (typeof value !== "string" || value.length === 0) reject("must be a non-empty string");
+	const source = value as string;
+	if (source.length > KUBERNETES_SOURCE_MAX_CHARS) {
+		reject(`exceeds ${KUBERNETES_SOURCE_MAX_CHARS} characters`);
+	}
+	if (source.includes("\0")) reject("must not contain NUL");
+	if (/\s/.test(source)) reject("must not contain whitespace");
+	if (source.includes("\\")) reject("must not contain backslashes");
+	if (source.includes("?") || source.includes("#")) reject("must not carry a query or fragment");
+	const separator = source.indexOf("://");
+	if (separator <= 0) reject("must be an absolute git://, https://, or ssh:// URL");
+	const scheme = source.slice(0, separator).toLowerCase();
+	if (!(KUBERNETES_SOURCE_SCHEMES as readonly string[]).includes(scheme)) {
+		reject(
+			`unsupported scheme ${JSON.stringify(scheme)}; only git://, https://, and ssh:// are allowed`,
+		);
+	}
+	const rest = source.slice(separator + 3);
+	const slash = rest.indexOf("/");
+	const authority = slash < 0 ? rest : rest.slice(0, slash);
+	const pathPart = slash < 0 ? "" : rest.slice(slash);
+	if (authority.length === 0) reject("must name a host");
+	if (pathPart.length <= 1) reject("must include a repository path");
+	const at = authority.lastIndexOf("@");
+	let hostPort = authority;
+	if (at >= 0) {
+		const userinfo = authority.slice(0, at);
+		hostPort = authority.slice(at + 1);
+		if (scheme !== "ssh") reject("only ssh:// sources may carry a username");
+		if (userinfo.includes(":")) reject("must not carry a password");
+		if (userinfo.length === 0 || !SSH_USERNAME_RE.test(userinfo)) {
+			reject("has an invalid SSH username");
+		}
+	}
+	if (hostPort.startsWith("[")) {
+		const close = hostPort.indexOf("]");
+		if (close < 0) reject("has an unterminated IPv6 host");
+		const tail = hostPort.slice(close + 1);
+		if (tail !== "" && !tail.startsWith(":")) reject("has an invalid host");
+		hostPort = hostPort.slice(1, close);
+	} else {
+		const colon = hostPort.lastIndexOf(":");
+		if (colon >= 0) {
+			const portRaw = hostPort.slice(colon + 1);
+			hostPort = hostPort.slice(0, colon);
+			if (!PORT_RE.test(portRaw)) reject("has an invalid port");
+			const port = Number(portRaw);
+			if (port < 1 || port > 65535) reject("has an out-of-range port");
+		}
+		if (hostPort.length === 0 || hostPort.length > HOST_MAX_CHARS || !HOST_RE.test(hostPort)) {
+			reject(`has an invalid host ${JSON.stringify(hostPort)}`);
+		}
+		if (hostPort.includes("..")) reject("has an invalid host");
+	}
+	for (const segment of pathPart.slice(1).split("/")) {
+		if (segment.length === 0) reject("must not contain empty path segments");
+		if (segment === "." || segment === "..") reject("must not contain relative path segments");
+		if (!PATH_SEGMENT_RE.test(segment)) {
+			reject(`has an invalid path segment ${JSON.stringify(segment)}`);
+		}
+	}
+	return source;
+}
+
+/**
+ * Provider error codes spelled in the fleet lifecycle vocabulary: invalid
+ * input and conflicts keep their codes, an unavailable dependency is
+ * `unavailable`, a timeout is `retryable`, and an internal failure is
+ * `provider_failed`.
+ */
+export type ProviderLifecycleErrorCode =
+	| "invalid_request"
+	| "conflict"
+	| "unavailable"
+	| "retryable"
+	| "provider_failed";
+
+export function providerErrorToLifecycleCode(code: ProviderErrorCode): ProviderLifecycleErrorCode {
+	switch (code) {
+		case "invalid_request":
+			return "invalid_request";
+		case "conflict":
+			return "conflict";
+		case "unavailable":
+			return "unavailable";
+		case "timeout":
+			return "retryable";
+		default:
+			return "provider_failed";
+	}
+}
+
+/**
+ * Source-pin digest: lowercase SHA-256 of the UTF-8 JSON tuple
+ * `[source.remote, revision, branch]`. Stored on the Pod and PVC (annotation)
+ * and compared against the request tuple + provider state so a workspace's
+ * checkout can never silently change pin underneath a retained volume.
+ */
+export function computeSourcePinDigest(
+	sourceRemote: string,
+	revision: string,
+	branch: string,
+): string {
+	return createHash("sha256")
+		.update(JSON.stringify([sourceRemote, revision, branch]), "utf8")
+		.digest("hex");
+}
 
 /**
  * Typed error vocabulary for provider operations, reusing the frozen ledger
@@ -100,6 +285,7 @@ export interface ProviderProfile {
 
 /** Fixed request field key set (steers `Object.keys` allowlist, see below). */
 const PROVIDER_REQUEST_KEYS = [
+	"providerProto",
 	"op",
 	"workspaceId",
 	"generation",
@@ -108,9 +294,22 @@ const PROVIDER_REQUEST_KEYS = [
 	"profile",
 	"handle",
 	"stateDir",
+	"kubernetes",
 	"source",
 	"revision",
 	"branch",
+	"baseline",
+] as const;
+
+/** Sanitized-baseline document key set (see {@link ProviderBaseline}). */
+const PROVIDER_BASELINE_KEYS = ["configYaml", "modelsYaml"] as const;
+
+/** Kubernetes resource-binding key set (see {@link KubernetesBinding}). */
+const KUBERNETES_BINDING_KEYS = [
+	"resourceIdentity",
+	"context",
+	"namespace",
+	"namespaceUid",
 ] as const;
 
 const PROVIDER_PROFILE_KEYS = [
@@ -146,6 +345,30 @@ const SECRET_REF_RE = /^[A-Za-z0-9._~:/@+-]+$/;
 const HANDLE_MAX_BYTES = 4096;
 /** Reference bound: external secret references are short names. */
 const SECRET_REF_MAX_CHARS = 512;
+/**
+ * Single-document bound for baseline YAML. The sanitized config is a few
+ * hundred bytes in practice; a custom-provider `models.yml` is the only
+ * document that grows, and both stay far below the 1 MiB request cap.
+ */
+const BASELINE_DOC_MAX_CHARS = 256 * 1024;
+
+/**
+ * Sanitized sandbox baseline documents (P5.5) for profiles that prepare
+ * their volume in-pod: the fleet runs the single seed authority
+ * (runtime/sandbox-baseline.ts) and ships its output so a provider that
+ * cannot see the operator's agent dir still boots the sandbox with the same
+ * agent-behavior config as a fleet-side prepared (bwrap) volume.
+ *
+ * Untrusted-input discipline: both documents are already allowlist-filtered
+ * and credential-free, and the provider treats them as opaque bytes. They are
+ * NEVER a channel for credentials — `secretRefs` is the only credential path.
+ */
+export interface ProviderBaseline {
+	/** Sanitized `config.yml` document (allowlisted keys, roles pre-filtered). */
+	configYaml: string;
+	/** Sanitized `models.yml` document, when the operator defines one. */
+	modelsYaml?: string;
+}
 
 /** The per-workspace identity record in the provider's private `stateDir`. */
 export interface ProviderPidFile {
@@ -209,6 +432,8 @@ export function isProviderProtocolError(value: unknown): value is ProviderProtoc
 
 /** One provider operation request (frozen contract). */
 export interface ProviderRequest {
+	/** Protocol version this request was written against; must equal OMP_PROVIDER_PROTO. */
+	providerProto: number;
 	op: ProviderOp;
 	workspaceId: string;
 	/** Desired runtime generation: positive integer, monotonic, never reused. */
@@ -223,6 +448,12 @@ export interface ProviderRequest {
 	/** Provider-private per-workspace supervision directory. */
 	stateDir: string;
 	/**
+	 * Kubernetes resource binding: required for every kubernetes-profile
+	 * operation, rejected on bwrap profiles. The provider validates every
+	 * object it touches against it.
+	 */
+	kubernetes?: KubernetesBinding;
+	/**
 	 * Clone source (exactly one member), additive for provider-side volume
 	 * initialization (kubernetes in-pod PVC init); bwrap clones are prepared
 	 * fleet-side and ignore it. `local` is a fleet-host filesystem path and is
@@ -233,6 +464,13 @@ export interface ProviderRequest {
 	revision?: string;
 	/** The workspace branch created at the pin. */
 	branch?: string;
+	/**
+	 * Sanitized sandbox baseline documents; the fleet supplies them for
+	 * profiles that prepare their volume provider-side (kubernetes), which
+	 * cannot read the operator's agent dir themselves. Fleet-side prepared
+	 * profiles (bwrap) already seeded their volume and omit it.
+	 */
+	baseline?: ProviderBaseline;
 }
 
 interface ValidateProviderOptions {
@@ -393,6 +631,30 @@ function parseProfile(value: unknown, where: string): ProviderProfile {
 	};
 }
 
+/** Parse a Kubernetes resource binding through the strict allowlist. */
+function parseKubernetesBinding(value: unknown, where: string): KubernetesBinding {
+	if (!isPlainRecord(value)) {
+		throw ProviderProtocolError.invalidRequest(
+			`invalid provider request: ${where} must be an object`,
+		);
+	}
+	rejectUnknownKeys(value, KUBERNETES_BINDING_KEYS, where);
+	const resourceIdentity = requireString(value, "resourceIdentity", where);
+	if (!RESOURCE_IDENTITY_RE.test(resourceIdentity)) {
+		throw ProviderProtocolError.invalidRequest(
+			`invalid provider request: ${where}.resourceIdentity must be 32 lowercase hex characters`,
+		);
+	}
+	return {
+		resourceIdentity,
+		context: requireString(value, "context", where, { maxChars: 512 }),
+		namespace: requireString(value, "namespace", where, { maxChars: 253 }),
+		namespaceUid: requireString(value, "namespaceUid", where, {
+			maxChars: NAMESPACE_UID_MAX_CHARS,
+		}),
+	};
+}
+
 /**
  * Validate an untrusted value as a provider request and return it narrowed.
  * Strict key allowlists at every level (unknown fields are rejected, so
@@ -407,6 +669,12 @@ export function validateProviderRequest(value: unknown): ProviderRequest {
 		throw ProviderProtocolError.invalidRequest("invalid provider request: expected an object");
 	}
 	rejectUnknownKeys(value, PROVIDER_REQUEST_KEYS, "provider request");
+	const providerProto = value["providerProto"];
+	if (providerProto !== OMP_PROVIDER_PROTO) {
+		throw ProviderProtocolError.invalidRequest(
+			`invalid provider request: providerProto must be ${OMP_PROVIDER_PROTO}, got ${JSON.stringify(providerProto)}; a request written against another protocol version is never dispatched`,
+		);
+	}
 	const op = value["op"];
 	if (typeof op !== "string" || !PROVIDER_OPS.includes(op as ProviderOp)) {
 		throw ProviderProtocolError.invalidRequest(
@@ -447,7 +715,13 @@ export function validateProviderRequest(value: unknown): ProviderRequest {
 			);
 		}
 	}
+	const kubernetesRaw = value["kubernetes"];
+	let kubernetes: KubernetesBinding | undefined;
+	if (kubernetesRaw !== undefined) {
+		kubernetes = parseKubernetesBinding(kubernetesRaw, "provider request.kubernetes");
+	}
 	const request: ProviderRequest = {
+		providerProto: OMP_PROVIDER_PROTO,
 		op: op as ProviderOp,
 		workspaceId: requireString(value, "workspaceId", "provider request"),
 		generation,
@@ -456,12 +730,39 @@ export function validateProviderRequest(value: unknown): ProviderRequest {
 		profile: parseProfile(value["profile"], "provider request.profile"),
 		stateDir: requireString(value, "stateDir", "provider request"),
 	};
+	if (kubernetes !== undefined) request.kubernetes = kubernetes;
+	if (kubernetes !== undefined && request.profile.provider !== "kubernetes") {
+		throw ProviderProtocolError.invalidRequest(
+			"invalid provider request: kubernetes is only meaningful on a kubernetes profile",
+		);
+	}
+	if (request.profile.provider === "kubernetes" && kubernetes === undefined) {
+		throw ProviderProtocolError.invalidRequest(
+			"invalid provider request: a kubernetes profile requires the kubernetes resource binding",
+		);
+	}
 	if (handle !== undefined) request.handle = handle;
 	if (source !== undefined) request.source = source;
 	const revision = optionalString(value, "revision", "provider request", { maxChars: 512 });
 	if (revision !== undefined) request.revision = revision;
 	const branch = optionalString(value, "branch", "provider request", { maxChars: 512 });
 	if (branch !== undefined) request.branch = branch;
+	const baselineRaw = value["baseline"];
+	if (baselineRaw !== undefined) {
+		if (!isPlainRecord(baselineRaw)) {
+			throw ProviderProtocolError.invalidRequest(
+				"invalid provider request: baseline must be an object",
+			);
+		}
+		rejectUnknownKeys(baselineRaw, PROVIDER_BASELINE_KEYS, "provider request.baseline");
+		const configYaml = requireString(baselineRaw, "configYaml", "provider request.baseline", {
+			maxChars: BASELINE_DOC_MAX_CHARS,
+		});
+		const modelsYaml = optionalString(baselineRaw, "modelsYaml", "provider request.baseline", {
+			maxChars: BASELINE_DOC_MAX_CHARS,
+		});
+		request.baseline = { configYaml, ...(modelsYaml !== undefined ? { modelsYaml } : {}) };
+	}
 	return request;
 }
 
@@ -493,17 +794,36 @@ export function parseProviderRequest(raw: string, opts?: ValidateProviderOptions
 // ---------------------------------------------------------------------------
 
 /** Provider response envelope keys (unknown keys rejected, see below). */
-const PROVIDER_OK_KEYS = ["ok", "handle", "observed", "pid", "startedAt"] as const;
-const PROVIDER_ERROR_KEYS = ["ok", "error"] as const;
+const PROVIDER_OK_KEYS = [
+	"ok",
+	"providerProto",
+	"handle",
+	"observed",
+	"kubernetes",
+	"pid",
+	"startedAt",
+] as const;
+const PROVIDER_ERROR_KEYS = ["ok", "providerProto", "error"] as const;
 const PROVIDER_ERROR_OBJECT_KEYS = ["code", "message", "retryable"] as const;
+
+/** Kubernetes observation key set (see {@link KubernetesObserved}). */
+const KUBERNETES_OBSERVED_KEYS = ["namespaceUid", "podUid", "pvcUid"] as const;
 
 /** Successful operation envelope. */
 export interface ProviderOkResponse {
 	ok: true;
+	/** Protocol version this response was written against; must equal OMP_PROVIDER_PROTO. */
+	providerProto: number;
 	/** Opaque provider-namespaced handle; equals the request's handle when one was carried. */
 	handle: ProviderHandle;
 	/** Runtime observation; `running` implies a live resource for the current generation. */
 	observed: ProviderObserved;
+	/**
+	 * Kubernetes objects observed by this operation, by API uid. Present on
+	 * every successful kubernetes-profile response (the fleet cross-checks it
+	 * against the binding it sent).
+	 */
+	kubernetes?: KubernetesObserved;
 	/** Live process pid, when the resource runs a process the provider can name. */
 	pid?: number;
 	/** Epoch ms when a live process was last (re)started. */
@@ -513,6 +833,8 @@ export interface ProviderOkResponse {
 /** Typed failure envelope: the invocation succeeded, the operation failed. */
 export interface ProviderErrorResponse {
 	ok: false;
+	/** Protocol version this response was written against; must equal OMP_PROVIDER_PROTO. */
+	providerProto: number;
 	error: {
 		code: ProviderErrorCode;
 		message: string;
@@ -541,6 +863,7 @@ function parseOkResponse(value: Record<string, unknown>): ProviderOkResponse {
 			'provider response: observed must be "running", "stopped", or "missing"',
 		);
 	}
+	const kubernetes = parseKubernetesObserved(value["kubernetes"]);
 	const pid = value["pid"];
 	if (pid !== undefined && (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid < 1)) {
 		throw ProviderProtocolError.invalidRequest(
@@ -556,12 +879,45 @@ function parseOkResponse(value: Record<string, unknown>): ProviderOkResponse {
 			"provider response: startedAt must be a non-negative number",
 		);
 	}
-	return {
+	const response: ProviderOkResponse = {
 		ok: true,
+		providerProto: OMP_PROVIDER_PROTO,
 		handle: requireStringField(value, "handle", "provider response"),
 		observed,
 		pid,
 		startedAt,
+	};
+	if (kubernetes !== undefined) response.kubernetes = kubernetes;
+	return response;
+}
+
+/** Parse a nullable bounded string field (`null` = absent object). */
+function nullableStringField(
+	value: Record<string, unknown>,
+	field: string,
+	where: string,
+): string | null {
+	const raw = value[field];
+	if (raw === null) return null;
+	if (typeof raw !== "string" || raw.length === 0 || raw.length > 128 || raw.includes("\0")) {
+		throw ProviderProtocolError.invalidRequest(
+			`invalid provider response: ${where}.${field} must be a bounded non-empty string or null`,
+		);
+	}
+	return raw;
+}
+
+/** Parse an optional Kubernetes observation object; undefined when absent. */
+function parseKubernetesObserved(value: unknown): KubernetesObserved | undefined {
+	if (value === undefined) return undefined;
+	if (!isPlainRecord(value)) {
+		throw ProviderProtocolError.invalidRequest("provider response: kubernetes must be an object");
+	}
+	rejectUnknownKeys(value, KUBERNETES_OBSERVED_KEYS, "provider response.kubernetes");
+	return {
+		namespaceUid: requireStringField(value, "namespaceUid", "provider response.kubernetes"),
+		podUid: nullableStringField(value, "podUid", "provider response.kubernetes"),
+		pvcUid: nullableStringField(value, "pvcUid", "provider response.kubernetes"),
 	};
 }
 
@@ -585,6 +941,7 @@ function parseErrorResponse(value: Record<string, unknown>): ProviderErrorRespon
 	}
 	return {
 		ok: false,
+		providerProto: OMP_PROVIDER_PROTO,
 		error: {
 			code: code as ProviderErrorCode,
 			message: requireStringField(error, "message", "provider response.error"),
@@ -608,6 +965,11 @@ export function parseProviderResponse(
 	const value = parseWithByteBound(raw, maxBytes, "provider response");
 	if (!isPlainRecord(value)) {
 		throw ProviderProtocolError.invalidRequest("provider response: expected an object");
+	}
+	if (value["providerProto"] !== OMP_PROVIDER_PROTO) {
+		throw ProviderProtocolError.invalidRequest(
+			`provider response: providerProto must be ${OMP_PROVIDER_PROTO}, got ${JSON.stringify(value["providerProto"])}`,
+		);
 	}
 	rejectUnknownKeys(
 		value,

@@ -15,7 +15,11 @@
  *      then install the tarball into a dedicated pinned dir
  *      (scripts/install-omp-web.ts); assert the symlink points there, the
  *      pinned pi-ai is 17.1.8, and `omp-web --version` prints the version
- *      despite the poisoned store
+ *      despite the poisoned store. Both installed provider executables are
+ *      then executed: each rejects a request written against another
+ *      `providerProto` version and answers a valid one with providerProto 2.
+ *      The kubernetes probe pins OMP_KUBE_BIN at a nonexistent binary, so
+ *      the walk stays offline.
  *   3. fixture repo (git init + commit) with one linked worktree
  *   4. first-run config written to ~/.omp-web/config.json (the serve offer's
  *      TTY-gated write, done directly here — workspaceDir only)
@@ -141,6 +145,61 @@ async function sleep(ms: number): Promise<void> {
 	await new Promise((r) => setTimeout(r, ms));
 }
 
+/** One provider invocation: exit code, raw streams, and the parsed envelope. */
+interface ProviderRun {
+	code: number;
+	stdout: string;
+	stderr: string;
+	response: {
+		ok?: unknown;
+		providerProto?: unknown;
+		error?: { code?: unknown; message?: unknown };
+	} | null;
+	/** One-line detail for `check` (the envelope or the raw streams). */
+	detail: string;
+}
+
+/**
+ * Invoke an installed provider executable exactly the way the fleet does:
+ * `<executable> <op>` with one JSON request on stdin and one JSON response
+ * on stdout (stderr is a human log). Offline — the caller supplies a
+ * `stateDir` under the sandbox and, for kubernetes, an `OMP_KUBE_BIN` that
+ * cannot reach a cluster.
+ */
+async function runProvider(
+	name: string,
+	executable: string,
+	op: string,
+	request: unknown,
+	env: Record<string, string> = {},
+): Promise<ProviderRun> {
+	const proc = Bun.spawn([executable, op], {
+		cwd: ROOT,
+		env: { ...sandboxEnv(), ...env },
+		stdin: Buffer.from(JSON.stringify(request), "utf8"),
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const timer = setTimeout(() => proc.kill(), 30_000);
+	const [stdout, stderr] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+	]);
+	clearTimeout(timer);
+	const code = (await proc.exited) as number;
+	let response: ProviderRun["response"] = null;
+	try {
+		response = JSON.parse(stdout.trim()) as ProviderRun["response"];
+	} catch {}
+	return {
+		code,
+		stdout,
+		stderr,
+		response,
+		detail: `${name}: exit ${code}; stdout ${stdout.trim().slice(0, 240)}; stderr ${stderr.trim().slice(-160)}`,
+	};
+}
+
 async function fetchJson(
 	url: string,
 	init?: RequestInit,
@@ -247,12 +306,39 @@ try {
 			existsSync(bwrapProvider) &&
 			readFileSync(bwrapProvider, "utf8").startsWith("#!/usr/bin/env bun"),
 	);
+	// P5.6: dist-bundle/image/ is a COMPLETE container build context —
+	// `docker build dist-bundle/image` consumes it directly, so it must
+	// carry the root Containerfile and entrypoint files, the manifest +
+	// lockfile the deps stage installs, and the explicit server/, shared/
+	// and runtime/ trees (runtime/image/ keeps the Containerfile's own
+	// entrypoints).
+	const imageContext = join(ROOT, "dist-bundle", "image");
+	const imageContextMembers = [
+		"Containerfile",
+		"entrypoint.sh",
+		"package.json",
+		"bun.lock",
+		join("server", "index.ts"),
+		join("shared", "provider-protocol.ts"),
+		join("runtime", "image", "entrypoint.sh"),
+		join("runtime", "image", "git-ssh.sh"),
+		join("runtime", "image", "prepare-inpod.ts"),
+	];
+	const missingContextMembers = imageContextMembers.filter(
+		(rel) => !existsSync(join(imageContext, rel)),
+	);
 	check(
-		"build ships the runtime image definition",
+		"build ships a complete image build context",
+		r.code === 0 && missingContextMembers.length === 0,
+		`${imageContext}: missing ${missingContextMembers.join(", ")}`,
+	);
+	check(
+		"image context ships the restored embedded-dist stub",
 		r.code === 0 &&
-			existsSync(join(ROOT, "dist-bundle", "image", "Containerfile")) &&
-			existsSync(join(ROOT, "dist-bundle", "image", "entrypoint.sh")),
-		join(ROOT, "dist-bundle", "image"),
+			existsSync(join(imageContext, "server", "embedded-dist.ts")) &&
+			readFileSync(join(imageContext, "server", "embedded-dist.ts"), "utf8").includes(
+				"EMBEDDED_DIST: Record<string, string> = {}",
+			),
 	);
 
 	const pack = await run("bun pm pack", ["bun", "pm", "pack"]);
@@ -302,23 +388,27 @@ try {
 			),
 		).version === "17.1.8",
 	);
-	// P9.1 installed-tree resolution: the provider executables + image
-	// definition must survive pack + pinned install next to cli.js, and the
-	// installed provider must actually run (shebang + exec bit intact) —
-	// the fleet spawns `<executable> <op>` directly.
+	// P9.1/P5.6 installed-tree resolution: both provider executables and the
+	// complete image build context must survive pack + pinned install next to
+	// cli.js, and each installed provider must actually run (shebang + exec
+	// bit intact) — the fleet spawns `<executable> <op>` directly.
 	const installedBundle = join(dataHome, "install", "node_modules", "omp-web", "dist-bundle");
 	const installedBwrap = join(installedBundle, "providers", "bwrap-provider.js");
+	const installedKube = join(installedBundle, "providers", "kubernetes-provider.js");
 	check("installed package ships the bwrap provider", existsSync(installedBwrap), installedBwrap);
 	check(
 		"installed package ships the kubernetes provider",
-		existsSync(join(installedBundle, "providers", "kubernetes-provider.js")),
-		join(installedBundle, "providers", "kubernetes-provider.js"),
+		existsSync(installedKube),
+		installedKube,
+	);
+	const installedImageContext = join(installedBundle, "image");
+	const missingInstalledMembers = imageContextMembers.filter(
+		(rel) => !existsSync(join(installedImageContext, rel)),
 	);
 	check(
-		"installed package ships the runtime image definition",
-		existsSync(join(installedBundle, "image", "Containerfile")) &&
-			existsSync(join(installedBundle, "image", "entrypoint.sh")),
-		join(installedBundle, "image"),
+		"installed package ships the complete image build context",
+		missingInstalledMembers.length === 0,
+		`${installedImageContext}: missing ${missingInstalledMembers.join(", ")}`,
 	);
 	r = await run("installed bwrap provider executes", [installedBwrap], {});
 	check(
@@ -326,6 +416,116 @@ try {
 		r.code === 1 && r.stderr.includes("bwrap-provider"),
 		`code ${r.code}: ${r.stderr.slice(-200)}`,
 	);
+	r = await run("installed kubernetes provider executes", [installedKube], {});
+	check(
+		"installed kubernetes provider runs (no-op usage error, exit 1)",
+		r.code === 1 && r.stderr.includes("kubernetes-provider"),
+		`code ${r.code}: ${r.stderr.slice(-200)}`,
+	);
+
+	// 2c. installed provider protocol (OMP_PROVIDER_PROTO = 2): BOTH shipped
+	// executables must reject a request written against another protocol
+	// version and answer a valid request with a versioned envelope. The
+	// kubernetes probe pins OMP_KUBE_BIN at a nonexistent binary so the
+	// offline walk never touches a real cluster; its envelope is still a
+	// versioned provider response (unavailable), which is all this phase
+	// asserts.
+	const providerStateDir = join(sandbox, "provider-state");
+	const providerRequest = (
+		kind: "bwrap" | "kubernetes",
+		providerProto?: number,
+	): Record<string, unknown> => {
+		const request: Record<string, unknown> = {
+			op: "inspect",
+			workspaceId: "w-onboard",
+			generation: 1,
+			workspaceDir: join(sandbox, "provider-ws"),
+			homeDir: join(sandbox, "provider-home"),
+			stateDir: join(providerStateDir, kind),
+			profile:
+				kind === "bwrap"
+					? {
+							id: "onboard-bwrap",
+							provider: "bwrap",
+							executable: installedBwrap,
+							tools: ["git"],
+						}
+					: {
+							id: "onboard-kube",
+							provider: "kubernetes",
+							executable: installedKube,
+							tools: ["git"],
+							context: "onboard-context",
+							namespace: "onboard-namespace",
+							image: "omp-web-session:onboard",
+						},
+		};
+		if (kind === "kubernetes") {
+			// A kubernetes request is only well formed with the resource
+			// binding AND a remote source (in-pod volume initialization).
+			request.kubernetes = {
+				resourceIdentity: "0123456789abcdef0123456789abcdef",
+				context: "onboard-context",
+				namespace: "onboard-namespace",
+				namespaceUid: "onboard-namespace-uid",
+			};
+			request.source = { remote: "https://example.invalid/omp/onboard.git" };
+			request.revision = "0123456789abcdef0123456789abcdef01234567";
+			request.branch = "onboard";
+		}
+		if (providerProto !== undefined) request.providerProto = providerProto;
+		return request;
+	};
+	const providerEnv = { OMP_KUBE_BIN: join(sandbox, "no-such-kubectl") };
+	for (const [kind, executable] of [
+		["bwrap", installedBwrap],
+		["kubernetes", installedKube],
+	] as const) {
+		const missingProto = await runProvider(
+			`installed ${kind} provider (request without providerProto)`,
+			executable,
+			"inspect",
+			providerRequest(kind),
+			providerEnv,
+		);
+		const missingEnvelope = missingProto.response;
+		check(
+			`installed ${kind} provider rejects a request without providerProto`,
+			missingProto.code === 0 &&
+				missingEnvelope !== null &&
+				missingEnvelope.ok === false &&
+				missingEnvelope.error?.code === "invalid_request",
+			missingProto.detail,
+		);
+		const wrongProto = await runProvider(
+			`installed ${kind} provider (providerProto 1)`,
+			executable,
+			"inspect",
+			providerRequest(kind, 1),
+			providerEnv,
+		);
+		const wrongEnvelope = wrongProto.response;
+		check(
+			`installed ${kind} provider rejects providerProto 1`,
+			wrongProto.code === 0 &&
+				wrongEnvelope !== null &&
+				wrongEnvelope.ok === false &&
+				wrongEnvelope.error?.code === "invalid_request",
+			wrongProto.detail,
+		);
+		const valid = await runProvider(
+			`installed ${kind} provider (providerProto 2)`,
+			executable,
+			"inspect",
+			providerRequest(kind, 2),
+			providerEnv,
+		);
+		check(
+			`installed ${kind} provider answers a valid request with providerProto 2`,
+			valid.code === 0 && valid.response?.providerProto === 2,
+			valid.detail,
+		);
+	}
 	r = await run("--version", [bin, "--version"]);
 	check(
 		`--version prints ${v1} despite the poisoned store`,

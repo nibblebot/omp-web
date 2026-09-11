@@ -8,11 +8,12 @@
  * and the worktree commands in edge-worktrees.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OMP_PROTO } from "../shared/protocol";
-import { shouldDropFrame, toRosterEntry } from "./edge";
+import { tempDir } from "../shared/testkit";
+import { cloneStoredHistory, shouldDropFrame, toRosterEntry } from "./edge";
+import { FleetLogStore } from "./log-store";
 import type { RegistryEntry } from "./registry";
 import { Registry } from "./registry";
 import { startFleet, type FleetServer } from "./server";
@@ -68,7 +69,7 @@ describe("fleet edge", () => {
 	const savedLocalTemplate = process.env.OMP_FLEET_LOCAL_TEMPLATE;
 	delete process.env.OMP_FLEET_LOCAL_TEMPLATE;
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-"));
+		tmp = tempDir("omp-web-edge-");
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
 		// Browse fixture for GET /ctl/fs/browse: one plain child, one with a
@@ -145,7 +146,6 @@ describe("fleet edge", () => {
 		if (server !== undefined) await server.close();
 		if (fake !== undefined) fake.close();
 		if (fake2 !== undefined) fake2.close();
-		rmSync(tmp, { recursive: true, force: true });
 	});
 
 	test("GET /ctl/templates returns the config template names", async () => {
@@ -1324,7 +1324,7 @@ describe("edge pure helpers", () => {
 	});
 
 	test("toRosterEntry sets managed only for cwds realpath-under the workspaceDir", () => {
-		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-managed-"));
+		const tmp = tempDir("omp-web-edge-managed-");
 		const ws = join(tmp, "workspaces");
 		const inside = join(ws, "repo", "feature");
 		mkdirSync(inside, { recursive: true });
@@ -1349,7 +1349,146 @@ describe("edge pure helpers", () => {
 		expect(toRosterEntry({ ...base, cwd: inside })).not.toHaveProperty("managed");
 		// Empty cwd (remote-style entries) never carry it either.
 		expect(toRosterEntry(base, ws)).not.toHaveProperty("managed");
-		rmSync(tmp, { recursive: true, force: true });
+	});
+
+	test("toRosterEntry projects only the public workspace fields and never the private record", () => {
+		const entry: RegistryEntry = {
+			daemonId: "d10",
+			name: "clone-a",
+			cwd: "/srv/workspaces/d10",
+			project: "acme",
+			projectId: "p1",
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+			registeredAt: Date.now(),
+			lifecycleStage: "callback",
+			workspace: {
+				kind: "clone",
+				projectId: "p1",
+				desiredState: "running",
+				profileId: "local",
+				branch: "workspace/clone-a",
+				pinnedRevision: "a".repeat(40),
+				providerKind: "kubernetes",
+				kubernetes: {
+					resourceIdentity: "0".repeat(32),
+					context: "minikube",
+					namespace: "omp",
+					namespaceUid: "ns-uid",
+				},
+				source: { remote: "https://example.test/acme/repo.git" },
+				sourcePinDigest: "b".repeat(64),
+				lastAttemptedGeneration: 2,
+				providerHandle: "opaque-provider-handle",
+				enrollment: { credentialHash: "c".repeat(64), generation: 2 },
+				deletion: {
+					state: "delete-pending-retry",
+					requestedAt: 1,
+					error: { code: "conflict", message: "dirty checkout" },
+				},
+			},
+		};
+		const roster = toRosterEntry(entry);
+		// The public subset crosses the wire.
+		expect(roster.workspaceKind).toBe("clone");
+		expect(roster.desiredState).toBe("running");
+		expect(roster.providerProfileId).toBe("local");
+		expect(roster.lifecycleStage).toBe("callback");
+		expect(roster).not.toHaveProperty("workspace");
+		// The fleet-private remainder never does: no private key anywhere in
+		// the serialized frame, and no private VALUE smuggled under another key.
+		const privateKeys = [
+			"providerHandle",
+			"kubernetes",
+			"source",
+			"sourcePinDigest",
+			"lastAttemptedGeneration",
+			"enrollment",
+			"deletion",
+			"workspace",
+		];
+		const scan = (value: unknown): void => {
+			if (Array.isArray(value)) return value.forEach(scan);
+			if (typeof value === "object" && value !== null) {
+				for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+					expect(privateKeys).not.toContain(key);
+					scan(val);
+				}
+			}
+		};
+		scan(roster);
+		const serialized = JSON.stringify(roster);
+		expect(serialized).not.toContain("opaque-provider-handle");
+		expect(serialized).not.toContain("c".repeat(64));
+		expect(serialized).not.toContain("0".repeat(32));
+		expect(serialized).not.toContain("ns-uid");
+	});
+
+	test("clone roster rows carry their fleet-stored history title, or read empty", () => {
+		const tmp = tempDir("omp-web-clone-history-");
+		const store = FleetLogStore.load(join(tmp, "logs"));
+		const workspaceId = "dclone1";
+		const sessionDir = join(tmp, "logs", workspaceId, "s1");
+		mkdirSync(sessionDir, { recursive: true });
+		// The daemon's streamed lineage layout: title slot, session header,
+		// one message record (all newline-terminated).
+		const jsonl = `${JSON.stringify({
+			type: "title",
+			v: 1,
+			title: "Fix the fleet sidebar",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			pad: "",
+		})}\n${JSON.stringify({ type: "session", id: "uuid-minted", sessionId: "s1", ts: 1 })}\n${JSON.stringify(
+			{ type: "message", message: { role: "assistant", content: [] }, ts: 2 },
+		)}\n`;
+		writeFileSync(join(sessionDir, "s1.jsonl"), jsonl);
+		writeFileSync(
+			join(sessionDir, "index.json"),
+			JSON.stringify({
+				version: 1,
+				workspaceId,
+				sessionId: "s1",
+				streams: {
+					"s1.jsonl": { generation: 1, ackedOffset: Buffer.byteLength(jsonl, "utf8"), eof: true },
+				},
+			}),
+		);
+
+		const cloneEntry: RegistryEntry = {
+			daemonId: workspaceId,
+			name: "clone-a",
+			cwd: "/srv/workspaces/dclone1",
+			project: "acme",
+			projectId: "p1",
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+			registeredAt: Date.now(),
+			workspace: {
+				kind: "clone",
+				projectId: "p1",
+				desiredState: "stopped",
+			},
+		};
+
+		const roster = toRosterEntry(cloneEntry, undefined, (id) => cloneStoredHistory(store, id));
+		expect(roster.sessionTitle).toBe("Fix the fleet sidebar");
+		// A titled session is not "empty"; the flag stays off the wire.
+		expect(roster).not.toHaveProperty("sessionEmpty");
+		// lastSessionFile is never fabricated for clones.
+		expect(roster).not.toHaveProperty("lastSessionFile");
+
+		// A clone with no stored sessions reads as an empty ("New session") row.
+		const emptyEntry: RegistryEntry = { ...cloneEntry, daemonId: "dclone2" };
+		const emptyRoster = toRosterEntry(emptyEntry, undefined, (id) => cloneStoredHistory(store, id));
+		expect(emptyRoster).not.toHaveProperty("sessionTitle");
+		expect(emptyRoster.sessionEmpty).toBe(true);
+
+		// An absent/unreadable store degrades to empty instead of throwing.
+		const noStore = toRosterEntry(emptyEntry, undefined, (id) => cloneStoredHistory(undefined, id));
+		expect(noStore).not.toHaveProperty("sessionTitle");
+		expect(noStore.sessionEmpty).toBe(true);
 	});
 
 	test("shouldDropFrame guards the cap boundary", () => {

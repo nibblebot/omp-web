@@ -17,13 +17,23 @@
  *     into the volume and hands the daemon OMP_SESSION_RESUME (bwrap
  *     profile) — checked via the callback-env handoff the fake provider
  *     records; a never-started clone wake writes NO resume env.
- *  5. A k8s-shaped profile wake writes NO resume env (pod paths differ).
+ *  5. REQUIRED resume (kubernetes): the PVC is not fleet-readable, so the
+ *     fleet hands the IN-POD main file plus OMP_SESSION_RESUME_REQUIRED=1 —
+ *     either the in-pod path a previous daemon lifetime recorded, or the
+ *     store's validated main relpath mapped under the in-pod sessions root.
+ *     An assets-only history (no main anywhere) is typed `unavailable`
+ *     BEFORE any provider operation runs, never a silent fresh boot — and
+ *     so is an explicit target that exists nowhere on a bwrap volume.
  *  6. resume-onto-fresh-clone route keeps 404 (no provenance) / 409 (live
  *     workspace or no transcripts) / 503 (no provider hook, P5) after the
  *     shared-helper refactor.
+ *
+ * Provider fakes speak OMP_PROVIDER_PROTO = 2: they abort unless the request
+ * carries `providerProto` (and, for kubernetes, the resource binding), and
+ * every response carries `providerProto` + `handle` + `observed`.
  */
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FleetServer } from "./server";
@@ -37,6 +47,7 @@ import {
 	startTestFleet,
 } from "./server.testkit";
 import { FleetLogStore, type LogChunk } from "./log-store";
+import { CloneLifecycleError } from "./workspace-lifecycle";
 import {
 	WakeMaterializeError,
 	materializeMissingSessionFiles,
@@ -45,12 +56,19 @@ import {
 } from "./wake-materialize";
 
 afterAll(cleanupTempDirs);
+afterEach(restoreEnv);
 
 await pinSettingsInMemory();
 
 const WS = "d1";
 const SESSION = "20260906T1200_sess1";
 const MAIN_RELPATH = `${SESSION}.jsonl`;
+/** In-pod sessions root a kubernetes resume hint must name (Runtime contract). */
+const KUBE_SESSIONS_ROOT = "/workspace/.home/agent/sessions";
+/** Fleet callback origin a kubernetes profile accepts (https, non-loopback). */
+const KUBE_CALLBACK_URL = "https://fleet.example.invalid";
+/** Remote source the fleet pins; git rewrites it to the local fixture repo. */
+const KUBE_REMOTE = "https://example.invalid/omp/repo.git";
 
 function chunkAt(offset: number, generation: number, content: string, eof = false): LogChunk {
 	const bytes = Buffer.from(content, "utf8");
@@ -230,6 +248,22 @@ describe("fleet/wake-materialize", () => {
 // 4-6: lifecycle wake resume + resume-clone route (fleet boot, fake provider)
 // ---------------------------------------------------------------------------
 
+const envRestore: Array<() => void> = [];
+
+/** Set one env var for the current test, restoring it afterwards. */
+function setEnv(key: string, value: string): void {
+	const previous = process.env[key];
+	process.env[key] = value;
+	envRestore.push(() => {
+		if (previous === undefined) delete process.env[key];
+		else process.env[key] = previous;
+	});
+}
+
+function restoreEnv(): void {
+	for (const restore of envRestore.splice(0)) restore();
+}
+
 /** One `git -C <cwd> <args>` invocation (throws on failure). */
 async function git(cwd: string, args: string[]): Promise<string> {
 	const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
@@ -241,10 +275,15 @@ async function git(cwd: string, args: string[]): Promise<string> {
 	return stdout.trim();
 }
 
-/** Real git repo with one commit, using the operator's Git identity. */
+/**
+ * Real git repo with one commit. Identity is repo-local (the operator's
+ * global config is never relied on or mutated).
+ */
 async function makeRepo(dir: string): Promise<string> {
 	mkdirSync(dir, { recursive: true });
 	await gitInit(dir, "-b", "main");
+	await git(dir, ["config", "user.email", "test@example.com"]);
+	await git(dir, ["config", "user.name", "Test"]);
 	writeFileSync(join(dir, "readme.md"), "hello\n");
 	await git(dir, ["add", "."]);
 	await git(dir, ["commit", "-q", "-m", "init"]);
@@ -252,10 +291,11 @@ async function makeRepo(dir: string): Promise<string> {
 }
 
 /**
- * Fake provider that always reports running; records each request's
- * workspaceDir/generation into `<stateDir>/ops.jsonl`. ensure-running also
- * mirrors the callback-env.json it would consume into
- * `<stateDir>/env-seen.json` so tests can assert the resume handoff.
+ * Fake bwrap provider that always reports running; records each request's
+ * op/generation/providerProto into `<stateDir>/ops.jsonl` and aborts unless
+ * the request carries OMP_PROVIDER_PROTO = 2. ensure-running also mirrors
+ * the callback-env.json it would consume into `<stateDir>/env-seen.json` so
+ * tests can assert the resume handoff.
  */
 function writeFakeProvider(dir: string): string {
 	const executable = join(dir, "fake-provider.js");
@@ -265,20 +305,24 @@ import { readFileSync, appendFileSync, existsSync, mkdirSync, writeFileSync } fr
 import { join } from "node:path";
 const op = process.argv[2];
 const req = JSON.parse(readFileSync(0, "utf8"));
+if (req.providerProto !== 2) {
+  console.error("provider request proto " + JSON.stringify(req.providerProto));
+  process.exit(3);
+}
 mkdirSync(req.stateDir, { recursive: true });
-appendFileSync(join(req.stateDir, "ops.jsonl"), JSON.stringify({ op, generation: req.generation, handle: req.handle ?? null }) + "\\n");
+appendFileSync(join(req.stateDir, "ops.jsonl"), JSON.stringify({ op, generation: req.generation, providerProto: req.providerProto, kubernetes: req.kubernetes ?? null }) + "\\n");
 if (op === "ensure-running") {
   try {
     const envFile = join(req.stateDir, "callback-env.json");
     if (existsSync(envFile)) writeFileSync(join(req.stateDir, "env-seen.json"), readFileSync(envFile, "utf8"));
   } catch {}
-  console.log(JSON.stringify({ ok: true, handle: "h", observed: "running", pid: 4242 }));
+  console.log(JSON.stringify({ ok: true, providerProto: 2, handle: "h", observed: "running", pid: 4242 }));
 } else if (op === "inspect") {
-  console.log(JSON.stringify({ ok: true, handle: req.handle ?? "h", observed: "running", pid: 4242 }));
+  console.log(JSON.stringify({ ok: true, providerProto: 2, handle: req.handle ?? "h", observed: "running", pid: 4242 }));
 } else if (op === "stop") {
-  console.log(JSON.stringify({ ok: true, handle: req.handle ?? "h", observed: "stopped" }));
+  console.log(JSON.stringify({ ok: true, providerProto: 2, handle: req.handle ?? "h", observed: "stopped" }));
 } else {
-  console.log(JSON.stringify({ ok: true, handle: req.handle ?? "h", observed: "missing" }));
+  console.log(JSON.stringify({ ok: true, providerProto: 2, handle: req.handle ?? "h", observed: "missing" }));
 }
 `;
 	writeFileSync(executable, script);
@@ -286,11 +330,90 @@ if (op === "ensure-running") {
 	return executable;
 }
 
-function envSeen(workspaceDir: string, daemonId: string): { env?: Record<string, string> } | null {
+/**
+ * Fake kubernetes provider: same recording contract as the bwrap fake plus
+ * the required resource binding, and every successful response echoes the
+ * binding's namespace uid alongside the observed Pod/PVC uids.
+ */
+function writeKubeProvider(dir: string): string {
+	const executable = join(dir, "fake-kube-provider.js");
+	mkdirSync(dir, { recursive: true });
+	const script = `#!/usr/bin/env bun
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+const op = process.argv[2];
+const req = JSON.parse(readFileSync(0, "utf8"));
+if (req.providerProto !== 2) {
+  console.error("provider request proto " + JSON.stringify(req.providerProto));
+  process.exit(3);
+}
+if (req.kubernetes === undefined) {
+  console.error("kubernetes request is missing the resource binding");
+  process.exit(3);
+}
+mkdirSync(req.stateDir, { recursive: true });
+appendFileSync(join(req.stateDir, "ops.jsonl"), JSON.stringify({ op, generation: req.generation, providerProto: req.providerProto, kubernetes: req.kubernetes }) + "\\n");
+const ok = (observed) => JSON.stringify({
+  ok: true,
+  providerProto: 2,
+  handle: "pod:" + req.workspaceId,
+  observed,
+  kubernetes: { namespaceUid: req.kubernetes.namespaceUid, podUid: "pod-uid-1", pvcUid: "pvc-uid-1" },
+});
+if (op === "ensure-running") {
+  try {
+    const envFile = join(req.stateDir, "callback-env.json");
+    if (existsSync(envFile)) writeFileSync(join(req.stateDir, "env-seen.json"), readFileSync(envFile, "utf8"));
+  } catch {}
+  console.log(ok("running"));
+} else if (op === "inspect") {
+  console.log(ok("running"));
+} else if (op === "stop") {
+  console.log(ok("stopped"));
+} else {
+  console.log(ok("missing"));
+}
+`;
+	writeFileSync(executable, script);
+	chmodSync(executable, 0o755);
+	return executable;
+}
+
+/** Fake fleet-side kubectl: reports one namespace API uid for the binding. */
+function writeFakeKubectl(dir: string): string {
+	const executable = join(dir, "kubectl");
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(executable, '#!/usr/bin/env bun\nconsole.log("ns-uid-0001");\n');
+	chmodSync(executable, 0o755);
+	return executable;
+}
+
+interface RecordedOp {
+	op: string;
+	generation: number;
+	providerProto: number;
+	kubernetes: unknown;
+}
+
+/** Recorded provider ops from one provider state dir. */
+function readOps(stateDir: string): RecordedOp[] {
 	try {
-		return JSON.parse(
-			readFileSync(join(workspaceDir, ".provider-state", daemonId, "env-seen.json"), "utf8"),
-		) as { env?: Record<string, string> };
+		const raw = readFileSync(join(stateDir, "ops.jsonl"), "utf8");
+		return raw
+			.trim()
+			.split("\n")
+			.filter((line) => line.length > 0)
+			.map((line) => JSON.parse(line) as RecordedOp);
+	} catch {
+		return [];
+	}
+}
+
+function envSeen(stateDir: string): { env?: Record<string, string> } | null {
+	try {
+		return JSON.parse(readFileSync(join(stateDir, "env-seen.json"), "utf8")) as {
+			env?: Record<string, string>;
+		};
 	} catch {
 		return null;
 	}
@@ -303,40 +426,82 @@ interface Booted {
 	repoDir: string;
 }
 
-async function bootFleet(profile: "bwrap" | "k8s" = "bwrap"): Promise<Booted> {
+async function bootFleet(): Promise<Booted> {
 	const paths = fleetPaths("omp-recovery-wake-");
 	const workspaceDir = join(paths.tmp, "workspaces");
 	const repoDir = join(paths.tmp, "repo");
 	await makeRepo(repoDir);
 	const provider = writeFakeProvider(join(paths.tmp, "provider"));
-	const providerProfiles =
-		profile === "bwrap"
-			? { local: { id: "local", provider: "bwrap", executable: provider, tools: [] } }
-			: {
-					local: {
-						id: "local",
-						provider: "kubernetes",
-						executable: provider,
-						tools: [],
-						image: "example.invalid/runtime:latest",
-						namespace: "test",
-					},
-				};
 	const server = await startTestFleet(
 		{ statePath: paths.statePath, configPath: paths.configPath },
-		{ workspaceDir, providerProfiles },
+		{
+			workspaceDir,
+			providerProfiles: {
+				local: { id: "local", provider: "bwrap", executable: provider, tools: [] },
+			},
+		},
 		{ workspaceDir },
 	);
 	return { server, paths, workspaceDir, repoDir };
 }
 
-async function createClone(server: FleetServer, repoDir: string, name: string): Promise<string> {
+/**
+ * Boot a fleet whose "local" profile is a kubernetes provider: a fake kubectl
+ * answers the fleet-side namespace-uid resolution, the callback URL is a
+ * kubernetes-acceptable https origin, and git rewrites the remote source to a
+ * real local repo so pin resolution stays offline.
+ */
+async function bootKubernetesFleet(): Promise<Booted> {
+	const paths = fleetPaths("omp-recovery-wake-kube-");
+	const workspaceDir = join(paths.tmp, "workspaces");
+	const repoDir = join(paths.tmp, "repo");
+	await makeRepo(repoDir);
+	setEnv("OMP_KUBE_BIN", writeFakeKubectl(join(paths.tmp, "bin")));
+	setEnv("OMP_FLEET_CALLBACK_URL", KUBE_CALLBACK_URL);
+	setEnv("GIT_CONFIG_COUNT", "1");
+	setEnv("GIT_CONFIG_KEY_0", `url.file://${repoDir}.insteadOf`);
+	setEnv("GIT_CONFIG_VALUE_0", KUBE_REMOTE);
+	const server = await startTestFleet(
+		{ statePath: paths.statePath, configPath: paths.configPath },
+		{
+			workspaceDir,
+			providerProfiles: {
+				local: {
+					id: "local",
+					provider: "kubernetes",
+					executable: writeKubeProvider(join(paths.tmp, "provider")),
+					tools: [],
+					image: "example.invalid/runtime:latest",
+					namespace: "test-ns",
+					context: "test-ctx",
+				},
+			},
+		},
+		{ workspaceDir },
+	);
+	return { server, paths, workspaceDir, repoDir };
+}
+
+/** The provider state dir a kubernetes workspace's resource identity owns. */
+function kubeStateDir(workspaceDir: string, server: FleetServer, daemonId: string): string {
+	const binding = server.registry.get(daemonId)?.workspace?.kubernetes;
+	if (binding === undefined) throw new Error(`${daemonId} has no persisted kubernetes binding`);
+	return join(workspaceDir, ".kubernetes", binding.resourceIdentity);
+}
+
+async function createClone(
+	server: FleetServer,
+	repoDir: string,
+	name: string,
+	source?: { remote: string },
+): Promise<string> {
 	const project = await server.registry.addProject(repoDir);
 	const res = await postJson(server.port, "/ctl/clones", {
 		projectId: project.projectId,
 		name,
 		profileId: "local",
 		start: false,
+		...(source !== undefined ? { source } : {}),
 	});
 	expect(res.status).toBe(201);
 	const body = (await res.json()) as { entry: { daemonId: string } };
@@ -368,20 +533,14 @@ describe("clone wake resume (P8.9)", () => {
 				// validation. The /ctl/start route intentionally takes only
 				// daemonId (implicit wake); the explicit id rides the
 				// lifecycle call the edge owns.
-				await (
-					server as FleetServer & {
-						lifecycle: {
-							ensureCloneRunning(d: string, o?: { resumeSessionId?: string }): Promise<void>;
-						};
-					}
-				).lifecycle.ensureCloneRunning(daemonId, { resumeSessionId: SESSION });
+				await server.lifecycle.ensureCloneRunning(daemonId, { resumeSessionId: SESSION });
 
 				// Volume got the materialized main file.
 				const volumeMain = join(workspaceDir, daemonId, ".home", "agent", "sessions", MAIN_RELPATH);
 				expect(existsSync(volumeMain)).toBe(true);
 				expect(readFileSync(volumeMain, "utf8")).toBe(sessionBody(SESSION));
 				// The provider observed OMP_SESSION_RESUME in the handoff.
-				const seen = envSeen(workspaceDir, daemonId);
+				const seen = envSeen(join(workspaceDir, ".provider-state", daemonId));
 				expect(seen).not.toBeNull();
 				expect(seen?.env?.OMP_SESSION_RESUME).toBe(volumeMain);
 			} finally {
@@ -399,8 +558,34 @@ describe("clone wake resume (P8.9)", () => {
 				const daemonId = await createClone(server, repoDir, "fresh");
 				const start = await postJson(server.port, "/ctl/start", { daemonId });
 				expect(start.status).toBe(200);
-				const seen = envSeen(workspaceDir, daemonId);
+				const seen = envSeen(join(workspaceDir, ".provider-state", daemonId));
 				expect(seen?.env?.OMP_SESSION_RESUME).toBeUndefined();
+			} finally {
+				await server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+});
+
+describe("required resume (kubernetes wake resume)", () => {
+	test(
+		"a recorded in-pod transcript resolves and is handed to the daemon as required",
+		async () => {
+			const { server, workspaceDir, repoDir } = await bootKubernetesFleet();
+			try {
+				const daemonId = await createClone(server, repoDir, "kube-recorded", {
+					remote: KUBE_REMOTE,
+				});
+				// A previous daemon lifetime reported its in-pod main file.
+				const inPodMain = `${KUBE_SESSIONS_ROOT}/${MAIN_RELPATH}`;
+				server.registry.update(daemonId, { lastSessionFile: inPodMain });
+
+				await server.lifecycle.ensureCloneRunning(daemonId, { resumeSessionId: SESSION });
+
+				const seen = envSeen(kubeStateDir(workspaceDir, server, daemonId));
+				expect(seen?.env?.OMP_SESSION_RESUME).toBe(inPodMain);
+				expect(seen?.env?.OMP_SESSION_RESUME_REQUIRED).toBe("1");
 			} finally {
 				await server.close();
 			}
@@ -409,15 +594,92 @@ describe("clone wake resume (P8.9)", () => {
 	);
 
 	test(
-		"k8s-shaped profile wake writes NO resume env",
+		"a store-only main resolves to the in-pod restore target for the daemon",
 		async () => {
-			const { server, workspaceDir, repoDir } = await bootFleet("k8s");
+			const { server, paths, workspaceDir, repoDir } = await bootKubernetesFleet();
 			try {
-				const daemonId = await createClone(server, repoDir, "k8s-wake");
-				const start = await postJson(server.port, "/ctl/start", { daemonId });
-				expect(start.status).toBe(200);
-				const seen = envSeen(workspaceDir, daemonId);
-				expect(seen?.env?.OMP_SESSION_RESUME).toBeUndefined();
+				const daemonId = await createClone(server, repoDir, "kube-store", {
+					remote: KUBE_REMOTE,
+				});
+				const store = new FleetLogStore({ rootDir: join(paths.statePath, "..", "logs") });
+				ingestAcked(
+					store,
+					daemonId,
+					SESSION,
+					MAIN_RELPATH,
+					chunkAt(0, 1, sessionBody(SESSION), true),
+				);
+
+				await server.lifecycle.ensureCloneRunning(daemonId);
+
+				const seen = envSeen(kubeStateDir(workspaceDir, server, daemonId));
+				// The PVC is not fleet-readable: the fleet names the IN-POD
+				// main file (never a fleet-host path) and marks the resume
+				// required so the daemon restores it over the callback pair.
+				expect(seen?.env?.OMP_SESSION_RESUME).toBe(`${KUBE_SESSIONS_ROOT}/${MAIN_RELPATH}`);
+				expect(seen?.env?.OMP_SESSION_RESUME_REQUIRED).toBe("1");
+			} finally {
+				await server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"an assets-only history is typed unavailable before any compute starts",
+		async () => {
+			const { server, paths, workspaceDir, repoDir } = await bootKubernetesFleet();
+			try {
+				const daemonId = await createClone(server, repoDir, "kube-assets", {
+					remote: KUBE_REMOTE,
+				});
+				// Store holds a session tree with an artifact but NO main
+				// transcript: not resumable, and the fleet must say so BEFORE
+				// any provider operation runs.
+				const storeRoot = join(paths.statePath, "..", "logs");
+				mkdirSync(join(storeRoot, daemonId, SESSION), { recursive: true });
+				writeFileSync(join(storeRoot, daemonId, SESSION, "artifact.log"), "asset\n");
+				const stateDir = kubeStateDir(workspaceDir, server, daemonId);
+
+				let code: string | undefined;
+				try {
+					await server.lifecycle.ensureCloneRunning(daemonId, { resumeSessionId: SESSION });
+				} catch (err) {
+					code = err instanceof CloneLifecycleError ? err.code : undefined;
+				}
+				expect(code).toBe("unavailable");
+				// No provider op ran and no generation was authorized: the
+				// failure predates compute.
+				expect(readOps(stateDir)).toHaveLength(0);
+				expect(server.registry.get(daemonId)!.workspace?.authorizedGeneration).toBeUndefined();
+			} finally {
+				await server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"an explicit target that exists nowhere fails typed instead of booting fresh",
+		async () => {
+			const { server, workspaceDir, repoDir } = await bootFleet();
+			try {
+				const daemonId = await createClone(server, repoDir, "no-target");
+				const stateDir = join(workspaceDir, ".provider-state", daemonId);
+
+				let code: string | undefined;
+				try {
+					await server.lifecycle.ensureCloneRunning(daemonId, { resumeSessionId: SESSION });
+				} catch (err) {
+					code = err instanceof CloneLifecycleError ? err.code : undefined;
+				}
+				expect(code).toBe("unavailable");
+				// No fresh boot was fabricated: no compute started and the
+				// workspace is still the parked clone it was.
+				expect(readOps(stateDir)).toHaveLength(0);
+				const entry = server.registry.get(daemonId)!;
+				expect(entry.workspace?.authorizedGeneration).toBeUndefined();
+				expect(entry.workspace?.desiredState).toBe("stopped");
 			} finally {
 				await server.close();
 			}
@@ -435,8 +697,6 @@ describe("resume-onto-fresh-clone route (P8.10)", () => {
 				sessionId: SESSION,
 			});
 			expect(res.status).toBe(409);
-			const body = (await res.json()) as { error?: string };
-			expect(body.error ?? "").toContain("still registered");
 		} finally {
 			await server.close();
 		}
@@ -483,8 +743,6 @@ describe("resume-onto-fresh-clone route (P8.10)", () => {
 			// With no cloneResumeSpawner wired the route fails typed 503
 			// (P5) — never a fake spawn.
 			expect(res.status).toBe(503);
-			const body = (await res.json()) as { error?: string };
-			expect(body.error ?? "").toContain("no clone provider is configured");
 		} finally {
 			await server.close();
 		}

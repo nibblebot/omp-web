@@ -27,6 +27,17 @@ import type { SessionListEntry } from "../shared/protocol";
  */
 export interface CloneSessionStore {
 	listStoredSessions(workspaceId: string): StoredSessionInfo[];
+	/**
+	 * Bounded read of a stored file's prefix (missing/unsafe → null). The
+	 * roster title projection reads only the JSONL head this way; FleetLogStore
+	 * satisfies it exactly.
+	 */
+	readStoredPrefix(
+		workspaceId: string,
+		sessionId: string,
+		relpath: string,
+		maxBytes: number,
+	): Buffer | null;
 }
 
 /** Read-only per-session store row (structural subset of log-store's StoredSessionInfo). */

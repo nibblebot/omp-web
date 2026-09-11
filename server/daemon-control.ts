@@ -1,17 +1,29 @@
-import { callbackError } from "../shared/callback-protocol";
+import { open, realpath, stat, type FileHandle } from "node:fs/promises";
+import path from "node:path";
+import {
+	BULK_MAX_BYTES,
+	callbackError,
+	CALLBACK_CONTROL_STREAM_ID,
+	CALLBACK_TRANSPORT_STREAM_ID,
+} from "../shared/callback-protocol";
 import type {
 	CallbackEnvelope,
 	CallbackErrorCode,
 	CallbackKind,
-} from "../shared/callback-protocol";
-import type {
+	CloneGitEvidence,
 	CommandAckPayload,
 	ControlAckPayload,
+	DownloadBulkFailedControl,
 	FlushBoundary,
+	QuiesceCloneResultControl,
 	QuiesceWriterEntry,
 	StreamResyncControl,
 } from "../shared/callback-protocol";
-import type { WriterFlushResult } from "./writer-flush";
+import type { ManifestFile } from "../shared/archive-manifest";
+import { validateKubernetesSource } from "../shared/provider-protocol";
+import { validateWorkspaceRef } from "../runtime/prepare-workspace";
+import { serializeQuiesceEvidence } from "./quiesce-evidence";
+import type { ReachableWriterFlushReport, WriterFlushResult } from "./writer-flush";
 import { isRingedDeltaType } from "./sse-delivery";
 
 /**
@@ -40,6 +52,16 @@ import { isRingedDeltaType } from "./sse-delivery";
  *   broadcasts is mirrored as a kind:"frame" envelope on streamId "control"
  *   (payload verbatim) while the pair lives, so the fleet derives activity +
  *   fanout correlation exactly like the direct control-socket tap.
+ * - Clone download (P3.4): a `download_bulk` command (fleet/edge.ts rides it
+ *   as kind:"command" on the reserved control stream; the acceptance harness
+ *   as kind:"control" on a browser virtual stream) validates the
+ *   authenticated envelope against the daemon's own pair identity, resolves
+ *   its path through the SAME realpath jail HTTP /download enforces
+ *   ({@link resolveJailedFile}), and streams the file back over the existing
+ *   multi-part bulk channel (FleetCallback.requestBulkUploadParts) in bounded
+ *   4 MiB parts — the file is never read whole. Accepted commands are acked;
+ *   every failure answers with a typed download_bulk_failed control naming
+ *   the path and never carrying file contents.
  * - Quiesce (P4.5/P7.3): transport-stream {type:"quiesce_begin", requestId}
  *   raises the admission barrier (every new command is rejected with an
  *   explicit writer_active ack), runs the fail-closed writer gate, explicitly
@@ -48,6 +70,18 @@ import { isRingedDeltaType } from "./sse-delivery";
  *   the fleet's log_acks to cover the final flush boundary, structurally
  *   verifies every declared JSONL, collects Git evidence with writers
  *   stopped, then answers {type:"quiesce_result"} on the transport stream.
+ * - Quiesce clone (P3.5, Kubernetes only): transport-stream
+ *   {type:"quiesce_clone"} validates the authenticated envelope identity and
+ *   the fleet-supplied source/pin/branch, runs the same fail-closed flush,
+ *   dispose, tailer-finalize, and fleet-ack sequence, then collects a
+ *   QuiesceEvidence document and uploads it as one JSON document
+ *   under the control's correlationId through the daemon half's bulk upload.
+ *   Command admission stays closed after disposal until the Pod terminates,
+ *   and the outcome plus its serialized document are cached by requestId for
+ *   the daemon's lifetime: a duplicate replays it without re-collecting, and a
+ *   duplicate carrying a fresh fleet capture correlation re-uploads the SAME
+ *   document under that correlation (the fleet opens a new single-use capture
+ *   per attempt and ignores a result whose correlationId differs).
  *
  * Every control received is acknowledged kind:"ack" on the same stream with
  * the original type + requestId and ok:true/false; nothing is silently
@@ -68,8 +102,78 @@ export interface LineageVerification {
 
 export interface GitEvidenceResult {
 	ok: boolean;
-	git?: unknown;
+	git?: CloneGitEvidence;
 	error?: { code: string; message: string };
+}
+
+/** Fleet-supplied facts for the Kubernetes quiesce_clone Git probe. */
+export interface QuiesceCloneGitInput {
+	/** Stored source URL; the checkout's raw origin is compared against it. */
+	sourceRemote: string;
+	/** Preserved pin (full lowercase commit id) that must be on the source. */
+	pinnedRevision: string;
+	/** Branch the checkout was prepared on. */
+	branch: string;
+}
+
+/**
+ * Kubernetes quiesce_clone support for the daemon half: the extra evidence the
+ * branch gathers beyond the shared quiesce deps, plus the bulk upload the
+ * daemon half performs under the fleet's correlation id. Absent on a
+ * non-Kubernetes workspace, where a quiesce_clone control is rejected typed.
+ */
+export interface DaemonQuiesceCloneDeps {
+	/** The daemon's own authenticated pair identity; the control envelope must match it. */
+	identity: () => { workspaceId: string; generation: number; connectionId: string | null };
+	/** POSIX relpath of the main transcript under the sessions dir, or null when none exists. */
+	mainSessionRelpath: () => string | null;
+	/**
+	 * Upload the serialized evidence document under `correlationId`; throws on
+	 * failure. A duplicate quiesce_clone replays through here with the fleet's
+	 * fresh capture correlation, so it must re-send the given bytes under the
+	 * given correlation rather than assume the document went through once.
+	 */
+	uploadEvidence: (correlationId: string, document: string) => Promise<void>;
+	/**
+	 * Preferred fail-closed flush that reports every reachable writer (main
+	 * first, including a failed one). Falls back to `flushWriters` when not
+	 * wired, so a minimal daemon still runs the branch.
+	 */
+	flushReachableWriters?: () => Promise<ReachableWriterFlushReport>;
+}
+
+/**
+ * Clone-download support for the daemon half (fleet/edge.ts
+ * GET /ctl/sessions/{id}/download): the `download_bulk` command streams a
+ * server-side file back over the pair's bulk channel under a fleet-issued
+ * capture correlation. The path jail is the HTTP /download jail shared
+ * verbatim through {@link resolveJailedFile}; the transfer is the same
+ * FleetCallback.requestBulkUploadParts the quiesce evidence upload uses.
+ * Absent only on a daemon with no bulk channel, where the command is
+ * answered with the typed unsupported error.
+ */
+export interface DaemonDownloadBulkDeps {
+	/** The daemon's own authenticated pair identity; the command envelope must match it. */
+	identity: () => { workspaceId: string; generation: number; connectionId: string | null };
+	/**
+	 * Canonical jail roots — the same set HTTP /download enforces (system temp
+	 * dir, agent cwd, process cwd, a live session file's directory).
+	 */
+	jailRoots: () => Promise<string[]>;
+	/** Base a relative path resolves against, exactly like HTTP /download (`config.cwd`). */
+	cwd: () => string;
+	/**
+	 * Stream exactly `totalBytes` under `correlationId` as strictly-sequential
+	 * parts of at most `partSize` bytes, pulling each part through `readPart`
+	 * (FleetCallback.requestBulkUploadParts). Throws on any failure; the
+	 * caller reports it as a typed download_bulk_failed control.
+	 */
+	uploadParts: (input: {
+		correlationId: string;
+		totalBytes: number;
+		partSize: number;
+		readPart: (part: number, size: number) => Promise<Uint8Array>;
+	}) => Promise<void>;
 }
 
 /** Outcome of the explicit all-writer flush at quiesce. */
@@ -86,8 +190,24 @@ export interface DaemonControlDeps {
 	waitForAckedBoundary: (boundary: FlushBoundary, timeoutMs: number) => Promise<void>;
 	/** Structural verification of every declared JSONL + manifest files/provenance. */
 	verifyLineage: () => Promise<LineageVerification>;
-	/** Git evidence with writers stopped; must fail closed on any probe failure. */
-	collectGitEvidence: () => Promise<GitEvidenceResult>;
+	/**
+	 * Git evidence with writers stopped; must fail closed on any probe failure.
+	 * `input` is supplied by the Kubernetes quiesce_clone branch (stored
+	 * source/pin/branch); the legacy quiesce path calls it bare.
+	 */
+	collectGitEvidence: (input?: QuiesceCloneGitInput) => Promise<GitEvidenceResult>;
+	/**
+	 * Kubernetes quiesce_clone support. Absent on a non-Kubernetes workspace:
+	 * a quiesce_clone control is then rejected with the typed unsupported
+	 * error, never silently ignored.
+	 */
+	quiesceClone?: DaemonQuiesceCloneDeps;
+	/**
+	 * Clone-download lane. Absent on a daemon with no bulk channel: a
+	 * download_bulk command is then answered with the typed unsupported
+	 * error, never silently discarded.
+	 */
+	downloadBulk?: DaemonDownloadBulkDeps;
 	/** Re-prime burst for one stream: the same frames the direct SSE prime sends. */
 	primeStream: (streamId: string) => void;
 	/** Send leg to the callback pair (the transport stamps identity/seq). */
@@ -128,14 +248,141 @@ interface BrowserStream {
 export interface DaemonControlStatus {
 	quiescing: boolean;
 	admissionBarrier: boolean;
+	/** Command admission latched closed by a quiesce_clone; it never reopens. */
+	admissionClosed: boolean;
 	streams: Array<{ streamId: string; lastSeq: number; ringEntries: number; ringBytes: number }>;
 	lastQuiesce: { requestId: string; ok: boolean; at: number; error?: string } | null;
+	lastQuiesceClone: { requestId: string; ok: boolean; at: number; error?: string } | null;
 }
 
 /** Per-browser replay ring: 10k entries / 4 MiB, byte-first eviction. */
 const RING_CAP = 10_000;
 const RING_MAX_BYTES = 4 * 1024 * 1024;
 const QUIESCE_DEFAULT_TIMEOUT_MS = 30_000;
+/** Kubernetes quiesce_clone bound (P3.5 stage-4 budget: 30 s). */
+const QUIESCE_CLONE_TIMEOUT_MS = 30_000;
+
+/**
+ * Clone-download part size: at most 4 MiB per POST /callback/bulk part —
+ * the quiesce evidence upload's sizing and the FleetCallback default, so
+ * neither side ever buffers a whole file.
+ */
+const DOWNLOAD_BULK_PART_BYTES = 4 * 1024 * 1024;
+
+// ── /download jail (one implementation, two callers) ───────────────────────
+
+/**
+ * Canonicalize jail roots: the realpath of both sides closes symlink escapes
+ * a lexical prefix check would miss. Shared verbatim by the HTTP /download
+ * route (server/index.ts) and the download_bulk command so both enforce
+ * exactly one jail; an unresolvable root falls back to its literal path.
+ */
+export async function canonicalJailRoots(roots: readonly string[]): Promise<string[]> {
+	const out: string[] = [];
+	for (const root of roots) out.push(await realpath(root).catch(() => root));
+	return out;
+}
+
+/** True when a canonical path lives strictly inside one canonical root. */
+function isInsideJail(resolved: string, roots: readonly string[]): boolean {
+	return roots.some((root) => {
+		const rel = path.relative(root, resolved);
+		return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+	});
+}
+
+/** Resolution outcome of {@link resolveJailedFile}. */
+export type JailedFileResolution =
+	| { ok: true; canonical: string; size: number }
+	| {
+			ok: false;
+			/** HTTP /download's own classification: 404 "Not found" vs 403 "Forbidden". */
+			reason: "missing" | "forbidden";
+			/** Typed code for the download_bulk failure control. */
+			code: CallbackErrorCode;
+			/** Names the path; never carries file contents. */
+			message: string;
+	  };
+
+/**
+ * Resolve one requested download path under the HTTP /download rules:
+ * absolute paths are used as-is, relative paths resolve against `cwd` with a
+ * fallback to the process cwd (where bare-filename exports land); the
+ * canonical target must be a regular file strictly inside `roots`. One
+ * implementation for GET /download and the download_bulk command, so a
+ * weaker second check can never drift in.
+ */
+export async function resolveJailedFile(input: {
+	requested: string;
+	cwd: string;
+	roots: readonly string[];
+}): Promise<JailedFileResolution> {
+	const requested = input.requested;
+	let canonical = await realpath(
+		path.isAbsolute(requested) ? requested : path.resolve(input.cwd, requested),
+	).catch(() => null);
+	if (canonical === null && !path.isAbsolute(requested)) {
+		canonical = await realpath(path.resolve(process.cwd(), requested)).catch(() => null);
+	}
+	if (canonical === null) {
+		return {
+			ok: false,
+			reason: "missing",
+			code: "invalid_request",
+			message: `download path does not exist: ${requested}`,
+		};
+	}
+	const fileStat = await stat(canonical).catch(() => null);
+	if (fileStat === null || !fileStat.isFile()) {
+		return {
+			ok: false,
+			reason: "missing",
+			code: "invalid_request",
+			message: `download path is not a regular file: ${canonical}`,
+		};
+	}
+	if (!isInsideJail(canonical, input.roots)) {
+		return {
+			ok: false,
+			reason: "forbidden",
+			code: "forbidden",
+			message: `download path is outside the permitted roots: ${canonical}`,
+		};
+	}
+	return { ok: true, canonical, size: fileStat.size };
+}
+
+/**
+ * Adapt the legacy {@link WriterFlushResult} into a full per-writer report so
+ * the Kubernetes branch has one shape whether or not `flushReachableWriters`
+ * is wired. On failure the main writer is reported failed; the branch refuses
+ * before reading writer states in that case.
+ */
+function writerFlushReport(
+	result: WriterFlushResult,
+	mainSessionFile: string | null,
+): ReachableWriterFlushReport {
+	return {
+		ok: result.ok,
+		writers: [
+			{
+				id: "s1",
+				kind: "main",
+				sessionFile: mainSessionFile,
+				state: result.ok ? "flushed" : "failed",
+			},
+			...result.descendants.map((writer) => ({
+				id: writer.id,
+				kind: writer.kind,
+				sessionFile: writer.sessionFile,
+				state: writer.state,
+			})),
+		],
+		advisors: result.advisors,
+		...(result.error !== undefined ? { error: result.error } : {}),
+		...(result.note !== undefined ? { note: result.note } : {}),
+	};
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -163,11 +410,31 @@ function ledgerCode(value: unknown): CallbackErrorCode {
 	}
 }
 
+/**
+ * Cached quiesce_clone outcome keyed by requestId for the daemon's lifetime.
+ * The serialized evidence document rides along so a replay under a fresh
+ * fleet capture correlation re-uploads the SAME bytes; nothing is
+ * re-collected (no second flush, dispose, lineage, or Git probe).
+ */
+interface QuiesceCloneCacheEntry {
+	result: QuiesceCloneResultControl;
+	/**
+	 * The exact document that was uploaded, present whenever the evidence pass
+	 * assembled one (even if the first upload itself failed): a replay is the
+	 * retry for that transfer, never for the collection.
+	 */
+	document?: string;
+}
+
 export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	const streams = new Map<string, BrowserStream>();
 	let quiescing = false;
 	let admissionBarrier = false;
+	let admissionClosed = false;
 	let lastQuiesce: DaemonControlStatus["lastQuiesce"] = null;
+	let lastQuiesceClone: DaemonControlStatus["lastQuiesceClone"] = null;
+	/** Kubernetes quiesce_clone outcomes + their evidence, cached by requestId for the daemon's lifetime. */
+	const quiesceCloneOutcomes = new Map<string, QuiesceCloneCacheEntry>();
 	let stopped = false;
 
 	/**
@@ -328,6 +595,12 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 					typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined,
 				);
 				break;
+			case "quiesce_clone":
+				beginQuiesceClone(envelope, payload);
+				break;
+			case "download_bulk":
+				beginDownloadBulk(envelope, payload);
+				break;
 			default:
 				ack(
 					envelope.streamId,
@@ -343,6 +616,14 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 
 	const handleCommand = (envelope: CallbackEnvelope): void => {
 		const command = envelope.payload;
+		// The clone-download lane is not a ClientCommand: fleet/edge.ts rides
+		// download_bulk as kind:"command" on the reserved control stream, so
+		// intercept it here instead of handing it to the session command
+		// dispatcher (which would answer "Unknown command").
+		if (isObject(command) && command.type === "download_bulk") {
+			beginDownloadBulk(envelope, command);
+			return;
+		}
 		const id = isObject(command) && typeof command.id === "string" ? command.id : undefined;
 		if (id !== undefined) {
 			const receipt: CommandAckPayload = { type: "command_ack", id };
@@ -377,6 +658,17 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	};
 
 	const beginQuiesce = (requestId: string | undefined, timeoutMs: number | undefined): void => {
+		if (admissionClosed) {
+			ack(
+				"transport",
+				"quiesce_begin",
+				requestId,
+				false,
+				"conflict",
+				"command admission is permanently closed",
+			);
+			return;
+		}
 		if (requestId === undefined) {
 			ack(
 				"transport",
@@ -475,6 +767,471 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		admissionBarrier = false; // Resume normal operation on any outcome.
 	};
 
+	/**
+	 * Kubernetes quiesce_clone admission (P3.5): validate the authenticated
+	 * envelope against the daemon's own pair identity, validate the
+	 * fleet-supplied source/pin/branch, then latch command admission closed
+	 * for the rest of the Pod's life and run the evidence pass. Rejected
+	 * controls get the explicit typed ack; nothing is silently discarded.
+	 */
+	const beginQuiesceClone = (
+		envelope: CallbackEnvelope,
+		payload: Record<string, unknown>,
+	): void => {
+		const streamId = envelope.streamId;
+		const requestId = typeof payload.requestId === "string" ? payload.requestId : undefined;
+		const correlationId =
+			typeof payload.correlationId === "string" ? payload.correlationId : undefined;
+		// The fleet's quiesce_clone reader settles an ack failure from the
+		// TOP-LEVEL code/message; every other control reader uses the nested
+		// ControlAckPayload error. Carry both so the typed code survives
+		// either reader without inventing a second ack vocabulary.
+		const reject = (code: CallbackErrorCode, message: string): void => {
+			emit(streamId, "ack", {
+				type: "quiesce_clone",
+				...(requestId !== undefined ? { requestId } : {}),
+				ok: false,
+				code,
+				message,
+				error: { code, message },
+			});
+		};
+		const cloneDeps = deps.quiesceClone;
+		if (cloneDeps === undefined) {
+			reject("invalid_request", "quiesce_clone is not supported by this workspace");
+			return;
+		}
+		if (streamId !== CALLBACK_TRANSPORT_STREAM_ID) {
+			reject("invalid_request", `quiesce_clone must ride the transport stream, got "${streamId}"`);
+			return;
+		}
+		if (requestId === undefined || requestId.length === 0) {
+			reject("invalid_request", "quiesce_clone requires requestId");
+			return;
+		}
+		if (correlationId === undefined || correlationId.length === 0) {
+			reject("invalid_request", "quiesce_clone requires correlationId");
+			return;
+		}
+		let identity: { workspaceId: string; generation: number; connectionId: string | null };
+		try {
+			identity = cloneDeps.identity();
+		} catch (cause) {
+			reject("unavailable", cause instanceof Error ? cause.message : String(cause));
+			return;
+		}
+		if (envelope.workspaceId !== identity.workspaceId) {
+			reject("invalid_identity", "quiesce_clone workspace does not match the authenticated pair");
+			return;
+		}
+		if (envelope.generation !== identity.generation) {
+			reject("generation_obsolete", "quiesce_clone generation does not match the authorized pair");
+			return;
+		}
+		if (identity.connectionId !== null && envelope.connectionId !== identity.connectionId) {
+			reject("invalid_request", "quiesce_clone connection does not match the live pair");
+			return;
+		}
+		// Duplicate requestId: replay the cached outcome, never re-collect. The
+		// evidence was uploaded once at collection time, but the fleet opens a
+		// fresh single-use capture correlation per attempt, so a replay under a
+		// DIFFERENT correlation re-uploads the cached document under it and
+		// answers with it (see replayQuiesceClone).
+		const cached = quiesceCloneOutcomes.get(requestId);
+		if (cached !== undefined) {
+			ack(streamId, "quiesce_clone", requestId, true);
+			void replayQuiesceClone(streamId, requestId, correlationId, cached);
+			return;
+		}
+		if (admissionClosed) {
+			reject("conflict", "workspace already quiesced; command admission is permanently closed");
+			return;
+		}
+		if (quiescing) {
+			reject("conflict", "quiesce already in progress");
+			return;
+		}
+		let sourceRemote: string;
+		try {
+			sourceRemote = validateKubernetesSource(payload.sourceRemote);
+		} catch (cause) {
+			reject(
+				"invalid_request",
+				cause instanceof Error ? cause.message : "quiesce_clone sourceRemote is invalid",
+			);
+			return;
+		}
+		const pinnedRevision =
+			typeof payload.pinnedRevision === "string" ? payload.pinnedRevision.trim().toLowerCase() : "";
+		if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(pinnedRevision)) {
+			reject("invalid_request", "quiesce_clone pinnedRevision must be a full lowercase commit id");
+			return;
+		}
+		let branch: string;
+		try {
+			branch = validateWorkspaceRef(typeof payload.branch === "string" ? payload.branch : "");
+		} catch (cause) {
+			reject(
+				"invalid_request",
+				cause instanceof Error ? cause.message : "quiesce_clone branch is invalid",
+			);
+			return;
+		}
+		// Stop admission checks passed: close command admission for good. It
+		// stays closed after disposal until the Pod terminates.
+		quiescing = true;
+		admissionBarrier = true;
+		admissionClosed = true;
+		ack(streamId, "quiesce_clone", requestId, true);
+		void runQuiesceClone({ requestId, correlationId, sourceRemote, pinnedRevision, branch });
+	};
+
+	const runQuiesceClone = async (request: {
+		requestId: string;
+		correlationId: string;
+		sourceRemote: string;
+		pinnedRevision: string;
+		branch: string;
+	}): Promise<void> => {
+		let result: QuiesceCloneResultControl = {
+			type: "quiesce_clone_result",
+			requestId: request.requestId,
+			correlationId: request.correlationId,
+			ok: false,
+			error: { code: "unavailable", message: "quiesce_clone did not complete" },
+		};
+		// The one document this request ever assembles; cached with the outcome
+		// so a replay can re-upload the same bytes under its own correlation.
+		let document: string | undefined;
+		try {
+			const cloneDeps = deps.quiesceClone!;
+			const entry = deps.getEntry();
+			if (entry === undefined) {
+				throw callbackError("writer_active", "no attached session to quiesce");
+			}
+			// 1. Flush every reachable writer, with per-writer results.
+			const flush =
+				cloneDeps.flushReachableWriters !== undefined
+					? await cloneDeps.flushReachableWriters()
+					: writerFlushReport(await deps.flushWriters(), deps.mainSessionFile);
+			if (!flush.ok) {
+				throw callbackError("unavailable", flush.error ?? "writer flush failed");
+			}
+			const mainWriter = flush.writers.find((writer) => writer.kind === "main");
+			if (mainWriter === undefined || mainWriter.state !== "flushed") {
+				throw callbackError("unavailable", "main writer flush was not proven");
+			}
+			const descendants: QuiesceWriterEntry[] = flush.writers
+				.filter((writer) => writer.kind !== "main")
+				.map((writer) => ({
+					id: writer.id,
+					kind: writer.kind,
+					sessionFile: writer.sessionFile,
+					state:
+						writer.state === "disposed"
+							? "disposed"
+							: writer.state === "parked"
+								? "parked"
+								: "flushed",
+				}));
+			// 2. Dispose the session cascade.
+			await entry.disposeQuiesce();
+			// 3. Finalize the tailer, then wait for the fleet's log_acks.
+			const boundary = await deps.finalizeTailer();
+			await deps.waitForAckedBoundary(boundary, QUIESCE_CLONE_TIMEOUT_MS);
+			// 4. Structural lineage + manifest, writers stopped.
+			const lineage = await deps.verifyLineage();
+			// 5. Git evidence against the fleet-supplied source/pin/branch.
+			const git = await deps.collectGitEvidence({
+				sourceRemote: request.sourceRemote,
+				pinnedRevision: request.pinnedRevision,
+				branch: request.branch,
+			});
+			if (!git.ok || git.git === undefined) {
+				throw callbackError("conflict", git.error?.message ?? "git evidence unavailable");
+			}
+			// 6. Assemble, bound, and upload the single evidence document.
+			document = serializeQuiesceEvidence({
+				requestId: request.requestId,
+				mainSessionRelpath: cloneDeps.mainSessionRelpath(),
+				boundary,
+				manifestFiles: lineage.manifestFiles as ManifestFile[],
+				provenance: lineage.provenance,
+				writers: {
+					main: "flushed",
+					descendants,
+					advisors: flush.advisors,
+					...(flush.note !== undefined ? { note: flush.note } : {}),
+				},
+				git: git.git,
+			});
+			await cloneDeps.uploadEvidence(request.correlationId, document);
+			result = {
+				type: "quiesce_clone_result",
+				requestId: request.requestId,
+				correlationId: request.correlationId,
+				ok: true,
+			};
+		} catch (cause) {
+			const error = cause instanceof Error ? cause : new Error(String(cause));
+			result = {
+				type: "quiesce_clone_result",
+				requestId: request.requestId,
+				correlationId: request.correlationId,
+				ok: false,
+				error: {
+					code:
+						isObject(cause) && typeof cause.code === "string"
+							? ledgerCode(cause.code)
+							: "unavailable",
+					message: error.message,
+				},
+			};
+		}
+		// Cached by requestId for the daemon's lifetime: a duplicate control
+		// replays this outcome without re-collecting anything, re-uploading the
+		// cached document when it carries a fresh capture correlation.
+		quiesceCloneOutcomes.set(request.requestId, {
+			result,
+			...(document !== undefined ? { document } : {}),
+		});
+		emit("transport", "control", result);
+		lastQuiesceClone = {
+			requestId: request.requestId,
+			ok: result.ok,
+			at: Date.now(),
+			...(result.ok ? {} : { error: result.error.message }),
+		};
+		lastQuiesce = {
+			requestId: request.requestId,
+			ok: result.ok,
+			at: Date.now(),
+			...(result.ok ? {} : { error: result.error.message }),
+		};
+		quiescing = false;
+		// admissionBarrier stays true: command admission remains closed after
+		// disposal until the Pod terminates.
+	};
+
+	/**
+	 * Replay a cached quiesce_clone outcome for a duplicate requestId.
+	 *
+	 * The evidence pass ran exactly once: no flush, dispose, lineage or Git
+	 * probe happens here. The document was uploaded once, but the fleet opens a
+	 * fresh single-use capture correlation per attempt and ignores a result
+	 * whose correlationId differs, so a replay under a DIFFERENT correlation
+	 * re-uploads the cached bytes under that correlation and answers with it;
+	 * a replay repeating the original correlation needs no transfer (the bytes
+	 * are already in the fleet's channel) and replays the receipt verbatim. A
+	 * cached failure before document assembly replays its typed error under the
+	 * current correlation, and a replay upload failure answers ok:false so the
+	 * fleet retries instead of waiting out its evidence timeout.
+	 */
+	const replayQuiesceClone = async (
+		streamId: string,
+		requestId: string,
+		correlationId: string,
+		cached: QuiesceCloneCacheEntry,
+	): Promise<void> => {
+		const document = cached.document;
+		if (document === undefined) {
+			const result: QuiesceCloneResultControl = { ...cached.result, correlationId };
+			emit(streamId, "control", result);
+			return;
+		}
+		if (cached.result.correlationId === correlationId) {
+			emit(streamId, "control", cached.result);
+			return;
+		}
+		try {
+			await deps.quiesceClone!.uploadEvidence(correlationId, document);
+			emit(streamId, "control", {
+				type: "quiesce_clone_result",
+				requestId,
+				correlationId,
+				ok: true,
+			} satisfies QuiesceCloneResultControl);
+		} catch (cause) {
+			emit(streamId, "control", {
+				type: "quiesce_clone_result",
+				requestId,
+				correlationId,
+				ok: false,
+				error: {
+					code:
+						isObject(cause) && typeof cause.code === "string"
+							? ledgerCode(cause.code)
+							: "unavailable",
+					message: cause instanceof Error ? cause.message : String(cause),
+				},
+			} satisfies QuiesceCloneResultControl);
+		}
+	};
+
+	/**
+	 * Typed download_bulk receipt on the caller's own stream. The acceptance
+	 * reader settles its gap reason from the TOP-LEVEL code/message; every
+	 * other control reader uses the nested ControlAckPayload error. Carry both
+	 * — the same dual shape the quiesce_clone reject uses — without inventing
+	 * a second ack vocabulary. A transfer that fails after acceptance is
+	 * reported by its download_bulk_failed control instead (the fleet's real
+	 * reader settles on the correlation), so a single receipt is emitted.
+	 */
+	const downloadBulkAck = (
+		streamId: string,
+		code: CallbackErrorCode | undefined,
+		message: string | undefined,
+	): void => {
+		emit(streamId, "ack", {
+			type: "download_bulk",
+			ok: code === undefined,
+			...(code === undefined ? {} : { code, message, error: { code, message } }),
+		});
+	};
+
+	/**
+	 * Clone-download admission (P3.4): validate the authenticated envelope
+	 * against the daemon's own pair identity, then hand the path to the
+	 * transfer. Every rejection is answered typed on the envelope's own
+	 * stream; a correlationId named by a mismatched envelope is NOT ours to
+	 * fail, so no failure control is emitted for it. The optional sessionId is
+	 * informational only: the HTTP /download rule set this lane mirrors is
+	 * jail-based, with no per-session scoping.
+	 */
+	const beginDownloadBulk = (
+		envelope: CallbackEnvelope,
+		payload: Record<string, unknown>,
+	): void => {
+		const streamId = envelope.streamId;
+		const correlationId =
+			typeof payload.correlationId === "string" ? payload.correlationId : undefined;
+		const requested = typeof payload.path === "string" ? payload.path : undefined;
+		const reject = (code: CallbackErrorCode, message: string): void =>
+			downloadBulkAck(streamId, code, message);
+		const bulk = deps.downloadBulk;
+		if (bulk === undefined) {
+			reject("invalid_request", "download_bulk is not supported by this daemon");
+			return;
+		}
+		if (correlationId === undefined || correlationId.length === 0) {
+			reject("invalid_request", "download_bulk requires correlationId");
+			return;
+		}
+		if (requested === undefined || requested.length === 0) {
+			reject("invalid_request", "download_bulk requires path");
+			return;
+		}
+		let identity: { workspaceId: string; generation: number; connectionId: string | null };
+		try {
+			identity = bulk.identity();
+		} catch (cause) {
+			reject("unavailable", cause instanceof Error ? cause.message : String(cause));
+			return;
+		}
+		if (envelope.workspaceId !== identity.workspaceId) {
+			reject("invalid_identity", "download_bulk workspace does not match the authenticated pair");
+			return;
+		}
+		if (envelope.generation !== identity.generation) {
+			reject("generation_obsolete", "download_bulk generation does not match the authorized pair");
+			return;
+		}
+		if (identity.connectionId !== null && envelope.connectionId !== identity.connectionId) {
+			reject("invalid_request", "download_bulk connection does not match the live pair");
+			return;
+		}
+		void runDownloadBulk(streamId, correlationId, requested);
+	};
+
+	/**
+	 * Stream one jailed file to the fleet under `correlationId`. Resolution is
+	 * whole-or-nothing (a path outside the jail is never partially read), the
+	 * aggregate stays under the ledger's 64 MiB bulk cap, and reads are bounded
+	 * to one 4 MiB part at a time through a single open handle.
+	 */
+	const runDownloadBulk = async (
+		streamId: string,
+		correlationId: string,
+		requested: string,
+	): Promise<void> => {
+		const bulk = deps.downloadBulk!;
+		/** Fail the whole correlation with a typed, path-naming (content-free) reason. */
+		const fail = (code: CallbackErrorCode, message: string): void => {
+			emit(CALLBACK_CONTROL_STREAM_ID, "control", {
+				type: "download_bulk_failed",
+				correlationId,
+				error: { code, message },
+			} satisfies DownloadBulkFailedControl);
+		};
+		let resolution: JailedFileResolution;
+		try {
+			resolution = await resolveJailedFile({
+				requested,
+				cwd: bulk.cwd(),
+				roots: await bulk.jailRoots(),
+			});
+		} catch (cause) {
+			const error = cause instanceof Error ? cause : new Error(String(cause));
+			const code =
+				isObject(cause) && typeof cause.code === "string" ? ledgerCode(cause.code) : "unavailable";
+			downloadBulkAck(streamId, code, `download of ${requested} failed: ${error.message}`);
+			fail(code, `download of ${requested} failed: ${error.message}`);
+			return;
+		}
+		if (!resolution.ok) {
+			downloadBulkAck(streamId, resolution.code, resolution.message);
+			fail(resolution.code, resolution.message);
+			return;
+		}
+		const canonical = resolution.canonical;
+		const totalBytes = resolution.size;
+		if (totalBytes > BULK_MAX_BYTES) {
+			const message = `download of ${canonical} is ${totalBytes} bytes, over the ${BULK_MAX_BYTES}-byte bulk cap`;
+			downloadBulkAck(streamId, "invalid_request", message);
+			fail("invalid_request", message);
+			return;
+		}
+		// Accepted: the target resolved inside the jail. Receipt before the
+		// transfer so a long upload never withholds the acknowledgment.
+		downloadBulkAck(streamId, undefined, undefined);
+		let file: FileHandle;
+		try {
+			file = await open(canonical, "r");
+		} catch (cause) {
+			const error = cause instanceof Error ? cause : new Error(String(cause));
+			fail("unavailable", `cannot read ${canonical}: ${error.message}`);
+			return;
+		}
+		const partSize = DOWNLOAD_BULK_PART_BYTES;
+		try {
+			await bulk.uploadParts({
+				correlationId,
+				totalBytes,
+				partSize,
+				readPart: async (part, size) => {
+					// One bounded buffer per part via a positional read: the file
+					// is never slurped to compute a part.
+					const buffer = new Uint8Array(size);
+					const { bytesRead } = await file.read(buffer, 0, size, part * partSize);
+					if (bytesRead !== size) {
+						throw callbackError(
+							"unavailable",
+							`download of ${canonical} ended after ${part * partSize + bytesRead} of ${totalBytes} bytes`,
+						);
+					}
+					return buffer;
+				},
+			});
+		} catch (cause) {
+			const error = cause instanceof Error ? cause : new Error(String(cause));
+			const code =
+				isObject(cause) && typeof cause.code === "string" ? ledgerCode(cause.code) : "unavailable";
+			fail(code, `bulk upload of ${canonical} failed: ${error.message}`);
+		} finally {
+			await file.close().catch(() => {});
+		}
+	};
+
 	const mirror = (frame: Record<string, unknown>): void => {
 		if (stopped || !deps.pairLive()) return;
 		// Session-scoped frame: forward verbatim to the fleet's activity
@@ -494,6 +1251,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	const status = (): DaemonControlStatus => ({
 		quiescing,
 		admissionBarrier,
+		admissionClosed,
 		streams: [...streams.values()].map((s) => ({
 			streamId: s.streamId,
 			lastSeq: s.lastSeq,
@@ -501,6 +1259,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			ringBytes: s.bytes,
 		})),
 		lastQuiesce,
+		lastQuiesceClone,
 	});
 
 	return {
@@ -530,7 +1289,9 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		publish: (streamId, frame) => emit(streamId, "frame", frame),
 		beginQuiesce,
 		abort: () => {
-			if (!quiescing) return;
+			// A Kubernetes quiesce_clone closes admission for the Pod's whole
+			// life: an abort must never reopen it.
+			if (!quiescing || admissionClosed) return;
 			quiescing = false;
 			admissionBarrier = false;
 		},

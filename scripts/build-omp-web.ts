@@ -10,10 +10,12 @@
  * next to the bundle — hence no pi-natives embed. The provider executables
  * (runtime/providers/*.ts) get the same single-file treatment into
  * dist-bundle/providers/ with shebang + exec bit preserved — the installed
- * fleet spawns them directly. The reproducible session-runtime image
- * definition (runtime/image/) is copied verbatim into dist-bundle/image/.
- * The package version is stamped in via define so `--version` works from an
- * arbitrary cwd without a path-based package.json lookup.
+ * fleet spawns them directly. dist-bundle/image/ is a COMPLETE container
+ * build context (Containerfile + entrypoint files + the root
+ * package.json/bun.lock + the explicit server/, shared/ and runtime/ trees),
+ * assembled only after the embedded-dist stub has been restored so the stub
+ * is what ships. The package version is stamped in via define so `--version`
+ * works from an arbitrary cwd without a path-based package.json lookup.
  */
 
 import {
@@ -40,9 +42,28 @@ const PROVIDER_SOURCES: Record<string, string> = {
 	"bwrap-provider.js": join(ROOT, "runtime", "providers", "bwrap-provider.ts"),
 	"kubernetes-provider.js": join(ROOT, "runtime", "providers", "kubernetes-provider.ts"),
 };
-/** Reproducible session-runtime image definition, shipped verbatim. */
+/** Session-runtime image definition source (Containerfile + entrypoint files). */
 const IMAGE_SRC = join(ROOT, "runtime", "image");
+/** Complete image build context shipped under dist-bundle/image/ (P5.6). */
 const IMAGE_DST = join(ROOT, "dist-bundle", "image");
+/**
+ * Trees every image context carries verbatim. The Containerfile COPYs them
+ * from the context root, so one missing tree is an unbuildable image — the
+ * build fails loudly here instead of shipping a context the cluster rejects.
+ * `runtime/` includes `runtime/image/` itself (the Containerfile's
+ * entrypoint files), so the shipped context is exactly what is built.
+ */
+const IMAGE_CONTEXT_DIRS = ["server", "shared", "runtime"] as const;
+/** Manifest + lockfile the deps stage resolves; copied from the repo root. */
+const IMAGE_CONTEXT_FILES = ["package.json", "bun.lock"] as const;
+/**
+ * Entrypoint files the context root also carries verbatim. The Containerfile
+ * consumes them from `runtime/image/` (they ride the runtime/ tree above);
+ * the root copies keep the context self-describing and satisfy operators and
+ * the Kubernetes acceptance harness that build `docker build <context>`
+ * directly.
+ */
+const IMAGE_CONTEXT_ENTRYPOINTS = ["entrypoint.sh", "prepare-inpod.ts", "git-ssh.sh"] as const;
 
 /** Recursively list file paths under `dir`, slash-normalized, relative to `base`. */
 function listFiles(dir: string, base: string): string[] {
@@ -61,9 +82,17 @@ function listFiles(dir: string, base: string): string[] {
 	return out;
 }
 
+/**
+ * Files the image context never carries: the context is source that ships in
+ * the container, and a test file would otherwise be both dead weight and a
+ * stray `bun test` discovery target out of its repo-relative import depth.
+ */
+const IMAGE_CONTEXT_SKIP_RE = /\.test(-raw)?\.ts$|\.testkit\.ts$/;
+
 /** Copy every file under `src` into `dst`, preserving the relative layout. */
-function copyDir(src: string, dst: string): void {
+function copyDir(src: string, dst: string, skip?: (relpath: string) => boolean): void {
 	for (const rel of listFiles(src, src)) {
+		if (skip?.(rel) === true) continue;
 		const to = join(dst, rel);
 		mkdirSync(dirname(to), { recursive: true });
 		copyFileSync(join(src, rel), to);
@@ -171,23 +200,59 @@ try {
 			throw new Error(`provider bundle lost its shebang (got ${JSON.stringify(providerHead)}…)`);
 		}
 	}
-	// 6. Reproducible session-runtime image definition (P9.1): ship the
-	//    Containerfile + entrypoint verbatim under dist-bundle/image/. The
-	//    image build consumes the repo root as its context, so the shipped
-	//    copy stays byte-identical to runtime/image/.
-	if (!existsSync(join(IMAGE_SRC, "Containerfile"))) {
-		throw new Error(
-			`runtime image definition missing under ${IMAGE_SRC} — the Kubernetes lane must land it before the build gate`,
-		);
-	}
-	copyDir(IMAGE_SRC, IMAGE_DST);
-	console.log(`built ${OUTFILE}`);
-	console.log(
-		`shipped providers + image: ${Object.keys(PROVIDER_SOURCES)
-			.map((name) => join("dist-bundle", "providers", name))
-			.join(", ")}; dist-bundle/image/`,
-	);
 } finally {
 	// embedded-dist.ts stays a stub in the tree; it exists only for the build.
 	writeFileSync(EMBEDDED_DIST_FILE, STUB);
 }
+
+// 6. Complete session-runtime image build context (P5.6): dist-bundle/image/
+//    is what `docker build dist-bundle/image` consumes, so it carries the
+//    whole context root the Containerfile COPYs — the explicit server/,
+//    shared/ and runtime/ trees (runtime/image/ holds the Containerfile and
+//    entrypoint files), the root package.json + bun.lock the deps stage
+//    installs, and the Containerfile itself. Assembled here, after the
+//    finally restored server/embedded-dist.ts, so the stub is what ships.
+if (!existsSync(join(IMAGE_SRC, "Containerfile"))) {
+	throw new Error(
+		`runtime image definition missing under ${IMAGE_SRC} — the Kubernetes lane must land it before the build gate`,
+	);
+}
+for (const dir of IMAGE_CONTEXT_DIRS) {
+	if (!existsSync(join(ROOT, dir))) {
+		throw new Error(`image build context is missing the ${dir}/ tree at ${join(ROOT, dir)}`);
+	}
+}
+for (const file of IMAGE_CONTEXT_FILES) {
+	if (!existsSync(join(ROOT, file))) {
+		throw new Error(`image build context is missing ${file} at ${join(ROOT, file)}`);
+	}
+}
+for (const file of IMAGE_CONTEXT_ENTRYPOINTS) {
+	if (!existsSync(join(IMAGE_SRC, file))) {
+		throw new Error(`runtime image entrypoint missing: ${join(IMAGE_SRC, file)}`);
+	}
+}
+rmSync(IMAGE_DST, { recursive: true, force: true });
+mkdirSync(IMAGE_DST, { recursive: true });
+copyFileSync(join(IMAGE_SRC, "Containerfile"), join(IMAGE_DST, "Containerfile"));
+for (const dir of IMAGE_CONTEXT_DIRS) {
+	copyDir(join(ROOT, dir), join(IMAGE_DST, dir), (rel) => IMAGE_CONTEXT_SKIP_RE.test(rel));
+}
+for (const file of IMAGE_CONTEXT_FILES) {
+	copyFileSync(join(ROOT, file), join(IMAGE_DST, file));
+}
+for (const file of IMAGE_CONTEXT_ENTRYPOINTS) {
+	const target = join(IMAGE_DST, file);
+	copyFileSync(join(IMAGE_SRC, file), target);
+	// The entrypoint scripts are exec'd in the image; the context copy keeps
+	// the same mode so an operator building from the context sees them runnable.
+	chmodSync(target, 0o755);
+}
+console.log(`built ${OUTFILE}`);
+console.log(
+	`shipped providers + image context: ${Object.keys(PROVIDER_SOURCES)
+		.map((name) => join("dist-bundle", "providers", name))
+		.join(
+			", ",
+		)}; dist-bundle/image/ = Containerfile + ${[...IMAGE_CONTEXT_ENTRYPOINTS, ...IMAGE_CONTEXT_FILES].join(" + ")} + ${IMAGE_CONTEXT_DIRS.map((dir) => `${dir}/`).join(" ")}`,
+);
