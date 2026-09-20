@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: ""
+labels:
+  - feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Please search existing issues before submitting.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the limitation or workflow difficulty you are experiencing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would you like to happen?
+      description: Describe the desired outcome. Implementation ideas are welcome but not required.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: How do you handle this today, if at all?
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add examples, screenshots, links, or related Discord discussion.

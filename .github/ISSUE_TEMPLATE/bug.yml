@@ -1,0 +1,58 @@
+name: Bug report
+description: Report something that is not working as expected
+title: ""
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please search existing issues before submitting.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe what you did, what happened, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How can we reproduce it?
+      description: Provide the smallest reliable sequence of steps.
+      placeholder: |
+        1. Run ...
+        2. Open ...
+        3. See ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: omp-web version
+      description: Run `omp-web --version`, or provide the commit if running from source.
+      placeholder: "Example: 0.4.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include your OS, Bun version, installation method, and whether you use fleet or single-session mode.
+      placeholder: |
+        OS: NixOS 26.11
+        Bun: 1.3.14
+        Install: release installer
+        Mode: fleet
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Add relevant output, logs, screenshots, or recordings. Remove secrets first.
