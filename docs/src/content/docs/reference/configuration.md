@@ -123,7 +123,7 @@ Because `templates` replaces the default map, repeat the `local` entry when you 
 }
 ```
 
-See [Run a remote session daemon over SSH](/advanced/ssh/) for remote template shapes and [Run session daemons in Docker](/advanced/docker/) for a container wrapper that publishes a host port and reports it with an `endpoint` line.
+See [Run a remote session daemon over SSH](/advanced/ssh/) for remote template shapes.
 
 ## defaultTemplate and projectTemplates
 
@@ -140,7 +140,7 @@ A resolved name that is not a key in `templates` fails the spawn with `unknown s
 ```json
 {
   "projectTemplates": {
-    "omp-web": "docker"
+    "omp-web": "ssh-remote"
   }
 }
 ```
@@ -213,22 +213,19 @@ The fleet startup banner reports which file is in use: `fleet config: <path>`, o
 
 ## Full example
 
-A file that keeps the default local template, adds two integration templates, pins one project to a template, and configures a spawn hook:
+A file that keeps the default local template, adds a remote template, pins one project to it, and configures a spawn hook:
 
 ```json
 {
   "workspaceDir": "~/.omp-web/workspaces",
   "defaultTemplate": "local",
   "projectTemplates": {
-    "omp-web": "docker"
+    "omp-web": "ssh-remote"
   },
   "spawnHook": "~/providers/sandbox.sh",
   "templates": {
     "local": {
       "command": "omp-web session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}"
-    },
-    "docker": {
-      "command": "/opt/omp-web/docker-omp-session.sh {cwd} {token} {name} {labels} {resume}"
     },
     "ssh-remote": {
       "host": "box.example.com",
@@ -265,6 +262,6 @@ A file that keeps the default local template, adds two integration templates, pi
 - [First run](/getting-started/first-run/) covers the setup offer that creates the file.
 - [Configure spawn templates](/configuration/spawn-templates/) walks through writing a template.
 - [Integrate a custom provider](/advanced/custom-provider/) owns the spawn hook contract.
-- [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/) use templates from this file.
+- [Run a remote session daemon over SSH](/advanced/ssh/) uses a template from this file.
 - [Environment variables and precedence](/reference/environment/) lists every variable the product reads.
 - [Troubleshooting](/operations/troubleshooting/) covers failed spawns and fleet startup problems.

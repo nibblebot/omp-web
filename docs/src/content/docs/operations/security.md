@@ -72,18 +72,18 @@ Expected result: the session daemon answers only with the exact token, and a tok
 
 ## Remote connectivity is dial-in
 
-The fleet always opens the connection to the session daemon. Session daemons never dial out to the fleet and never learn the fleet's address, its state file, or any other session daemon's credentials. This holds for SSH, Docker, and custom provision providers:
+The fleet always opens the connection to the session daemon. Session daemons never dial out to the fleet and never learn the fleet's address, its state file, or any other session daemon's credentials. This holds for SSH and custom provision providers:
 
 - A remote or sandboxed environment needs no route back to the fleet and can deny outbound traffic entirely.
 - The token minted for a session daemon gates only that session daemon. A sandbox that leaks it exposes one working directory, not the fleet.
-- Endpoint URLs must be `ws://` or `wss://` (the transport underneath is plain HTTP SSE; the scheme is normalized). omp-web ships no TLS termination and no certificates, so if traffic crosses a network you do not trust, carry it inside SSH, a tailnet, or a TLS endpoint you operate. See [Run a session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/).
+- Endpoint URLs must be `ws://` or `wss://` (the transport underneath is plain HTTP SSE; the scheme is normalized). omp-web ships no TLS termination and no certificates, so if traffic crosses a network you do not trust, carry it inside SSH, a tailnet, or a TLS endpoint you operate. See [Run a session daemon over SSH](/advanced/ssh/).
 
 ## Spawn tokens are minted fresh
 
 For session daemons the fleet starts, the supervisor mints a new bearer token for every spawn attempt: 32 random bytes, base64url encoded (43 characters). Restarts and respawns mint again, so the previous token dies with the old process.
 
 - Persistence: the current token for each entry lives in the fleet state file, not in a keychain. Protect that file (see [Filesystem protection](#filesystem-protection)).
-- Visibility on the host: the token is substituted into the spawn template command, so it is part of the spawned command line and is visible to process listings on the fleet host (and in container metadata such as `docker inspect`) for as long as the process runs. Anyone who can inspect processes or the container runtime on that host can read it.
+- Visibility on the host: the token is substituted into the spawn template command, so it is part of the spawned command line and is visible to process listings on the fleet host for as long as the process runs. Anyone who can inspect processes on that host can read it.
 - Rotation: stop a fleet-managed session daemon and wake it to mint a fresh token. For a standalone session daemon, restart it with a new `--token`. A remote registration that stored the old token keeps failing with 401 until you correct it, which is the intended fail-closed behavior.
 
 ## What the browser can and cannot see
@@ -174,7 +174,6 @@ Left to you:
 
 - [Networking and browser access](/operations/networking/)
 - [Run a session daemon over SSH](/advanced/ssh/)
-- [Run session daemons in Docker](/advanced/docker/)
 - [Data and state management](/configuration/data-and-state/)
 - [Files and directories](/reference/files/)
 - [Updates](/operations/updates/)

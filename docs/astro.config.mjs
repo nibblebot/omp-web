@@ -122,7 +122,6 @@ export default defineConfig({
 					label: "Remote and Advanced",
 					items: [
 						{ label: "Run a remote session daemon over SSH", slug: "advanced/ssh" },
-						{ label: "Run session daemons in Docker", slug: "advanced/docker" },
 						{ label: "Integrate a custom provider", slug: "advanced/custom-provider" },
 						{ label: "Collaboration rooms", slug: "advanced/collaboration" },
 						{ label: "Single-session deployments", slug: "advanced/single-session-deployments" },

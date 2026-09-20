@@ -5,7 +5,7 @@ description: Provision session daemons on your own infrastructure with a spawn h
 
 A provider wrapper is a script the fleet runs to start a session daemon somewhere the built-in spawn templates do not cover, then report a reachable endpoint and the token that gates it. The whole handshake is one JSON object on the last line of the wrapper's stdout.
 
-If the SSH or Docker path already fits, use those guides instead. A custom provider is for topologies such as a cloud VM, a scheduler, or a sandbox service that needs its own API call.
+If the SSH path already fits, use that guide instead. A custom provider is for topologies such as a cloud VM, a scheduler, or a sandbox service that needs its own API call.
 
 ## Prerequisites
 
@@ -123,7 +123,7 @@ omp-web provision sandbox
 
 The command prints the new session daemon's id and its initial status, and the fleet sidebar shows the entry under the project derived from `cwd`. The entry leaves `connecting` once the handshake and its cwd check pass, and reaches `ready` when the session daemon finishes resolving its provider and model; you can then prompt it like any other session daemon.
 
-To replace the example's local session daemon with a remote one, replace only the start block: run the session daemon over SSH, in a container, or through your provider's API, and keep the JSON handshake unchanged. The endpoint you report must be reachable from the fleet host. See [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/) for those two setups.
+To replace the example's local session daemon with a remote one, replace only the start block: run the session daemon over SSH, in a container, or through your provider's API, and keep the JSON handshake unchanged. The endpoint you report must be reachable from the fleet host. See [Run a remote session daemon over SSH](/advanced/ssh/) for that setup.
 
 ## How the fleet supervises a provisioned session daemon
 
@@ -181,7 +181,6 @@ For connection-status meanings across the roster, see [The fleet sidebar](/fleet
 ## Related pages
 
 - [Run a remote session daemon over SSH](/advanced/ssh/)
-- [Run session daemons in Docker](/advanced/docker/)
 - [Configure spawn templates](/configuration/spawn-templates/)
 - [Security model](/operations/security/)
 - [CLI overview](/cli/overview/)

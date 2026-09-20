@@ -29,7 +29,7 @@ Start with [What is omp-web?](/getting-started/overview/) for the product model,
 - [Analysis and usage](/analysis/): context and cost, provider limits, transcripts, analytics, and subagents.
 - [Configuration](/configuration/): settings ownership, models and auth, web preferences, data, and spawn templates.
 - [CLI and automation](/cli/): fleet commands, selectors, fan-out prompting, and standalone sessions.
-- [Remote and advanced](/advanced/): SSH, Docker, custom providers, collaboration, and architecture.
+- [Remote and advanced](/advanced/): SSH, custom providers, collaboration, and architecture.
 - [Operations](/operations/): networking, security, updates, lifecycle recovery, diagnostics, and troubleshooting.
 - [Reference](/reference/): canonical tables for commands, configuration, environment, files, and terminology.
 - [Project](/project/): changelog, contributing, release process, and design.

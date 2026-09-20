@@ -78,7 +78,7 @@ The fleet never discovers session daemons by scanning. To let a fleet dial a ses
 omp-web add app-box ws://app-box.example.com:4721 --token "$TOKEN" --cwd /srv/app
 ```
 
-The entry appears as a remote row, and the fleet reconnects to it as needed. See [Operate session daemons](/cli/session-daemon-operations/), [Local and remote sessions](/concepts/local-and-remote/), and the worked examples in [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/).
+The entry appears as a remote row, and the fleet reconnects to it as needed. See [Operate session daemons](/cli/session-daemon-operations/), [Local and remote sessions](/concepts/local-and-remote/), and the worked example in [Run a remote session daemon over SSH](/advanced/ssh/).
 
 ## Related
 

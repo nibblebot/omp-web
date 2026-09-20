@@ -48,12 +48,12 @@ omp-web add review-box ws://review-box.example.com:4721 --token "$TOKEN" --cwd /
 ```
 
 - The fleet records the entry as `remote` and connects out to the given URL. The remote environment never connects back to the fleet; the fleet is always the dialing side. See [Local and remote sessions](/concepts/local-and-remote/).
-- Endpoint URLs are `ws://` or `wss://` shaped, which is the fleet's dial contract; another scheme is rejected. A session daemon that sits behind a port forward should be started with a matching `--advertise` value, or wrapped so its contract line names the reachable address. See [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/).
+- Endpoint URLs are `ws://` or `wss://` shaped, which is the fleet's dial contract; another scheme is rejected. A session daemon that sits behind a port forward should be started with a matching `--advertise` value, or wrapped so its contract line names the reachable address. See [Run a remote session daemon over SSH](/advanced/ssh/).
 - `--token <t>` supplies the bearer credential the fleet presents. A session daemon that binds a non-loopback address requires a token, so pass the same value the remote session daemon was started with.
 - `--cwd <dir>` records the checkout path for display and grouping context. It does not make the fleet manage or probe that directory, and remote rows are not stamped with a registered project id, so they appear in the ungrouped set of the sidebar.
 - `--label k=v` may repeat, exactly as with `spawn`.
 
-Worked SSH and Docker setups are covered in [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/).
+A worked SSH setup is covered in [Run a remote session daemon over SSH](/advanced/ssh/).
 
 ## Start a session daemon through a hook
 

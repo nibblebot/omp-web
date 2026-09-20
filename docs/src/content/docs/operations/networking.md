@@ -166,7 +166,7 @@ For a session daemon the fleet starts from a spawn template, the reachable endpo
 
 If no usable `listening` line appears within 30 seconds, the spawn fails with `endpoint timeout: no OMP_SESSION| listening line within 30s` and the child is killed. If the resolved URL is not a `ws://` or `wss://` URL, the spawn fails with `invalid endpoint from child: <url>`.
 
-The remote template shapes combine these pieces: an SSH template sets the template `host` to the SSH target and starts the session daemon with `--host 0.0.0.0 --token {token}`, while a container wrapper publishes a host port and prints an `endpoint` line for it. See [Run a session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/).
+The remote template shapes combine these pieces: an SSH template sets the template `host` to the SSH target and starts the session daemon with `--host 0.0.0.0 --token {token}`, while a wrapper can publish a port and print an `endpoint` line for it. See [Run a session daemon over SSH](/advanced/ssh/).
 
 ### Register an already running session daemon
 
@@ -224,7 +224,6 @@ Left to the deployment:
 - [Security model](/operations/security/): trust boundaries, token lifecycle, and filesystem protection.
 - [Local and remote sessions](/concepts/local-and-remote/): the dial-in model in context.
 - [Run a session daemon over SSH](/advanced/ssh/)
-- [Run session daemons in Docker](/advanced/docker/)
 - [Process lifecycle and recovery](/operations/lifecycle-and-recovery/): sleep, wake, and reconnect behavior.
 - [Debug panel and diagnostics](/operations/diagnostics/): where to read child stderr and connection state.
 - [Troubleshooting](/operations/troubleshooting/): the full symptom list.

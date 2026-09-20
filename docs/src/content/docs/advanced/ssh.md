@@ -254,6 +254,5 @@ Then use the surfaces that carry the row's details:
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/)
 - [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/)
 - [Operate session daemons from the CLI](/cli/session-daemon-operations/)
-- [Run session daemons in Docker](/advanced/docker/)
 - [Security model](/operations/security/)
 - [Troubleshooting](/operations/troubleshooting/)
