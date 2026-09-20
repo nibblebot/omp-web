@@ -21,31 +21,10 @@ Because it drives the agent through the SDK instead of the RPC, omp-web has full
 
 ## Runtime modes
 
-- **Fleet Mode** (`omp-web`): starts the fleet (registry + supervisor + UI server); the browser talks to the fleet, manages repos and worktree state, and proxies you through to any daemon.
-- **Single Session Mode** (`omp-web session`): the browser talks to one session daemon directly; the daemon serves the full single-session UI.
-- **Sessions run as separate processes**: one worktree directory each, bound at spawn. A daemon hosts one live agent session in-process via the SDK (no child-process JSON-RPC hop) and serves the UI over SSE + POST.
+- **Fleet mode** (bare `omp-web`): the fleet, a registry and supervisor, spawns and supervises one session daemon per worktree, serves the web UI, and proxies the browser through to whichever session daemon you select.
+- **Single-session mode** (`omp-web session`): one session daemon for one directory serves the browser directly, with no fleet sidebar.
 
-## Architecture
-
-```mermaid
-flowchart TB
-  browser["Web UI (Solid.js)"]
-  fleet["<b>omp-web</b> <br/>serves web UI, registry, supervisor, proxy"]
-  model["Model provider"]
-  log["session .jsonl, durable truth"]
-
-  subgraph daemons["agent daemons"]
-    daemon1["<b>omp-web session</b> <br/>omp SDK daemon"]
-    dots["…"]
-  end
-
-  browser <-->|"SSE + POST"| fleet
-  fleet <-->|"proxied SSE + POST"| daemons
-  daemons <--> model
-  daemons -.-> log
-```
-
-Deep dive into [`docs/architecture.md`](docs/architecture.md): wire contract, module map, security model.
+Session daemons are disposable processes; the durable truth is the session `.jsonl` transcript on disk.
 
 ## Requirements
 
@@ -61,32 +40,23 @@ curl -fsSL https://raw.githubusercontent.com/nibblebot/omp-web/main/scripts/inst
 
 The installer downloads the latest release tarball, verifies its sha256 against the release manifest, and installs it into a pinned project dir (`~/.omp-web/install/`) with a `~/.bun/bin/omp-web` symlink. Then `omp-web update` keeps it current.
 
-## Verify:
+## Verify
 
 ```sh
 omp-web --version
 ```
 
-## Usage
+## Documentation
 
-```sh
-omp-web                         # start the fleet: registry + supervisor + UI
-```
+Full user documentation lives under [`docs/src/content/docs/`](docs/src/content/docs/) and builds as a Starlight site (`bun install && bun run dev:docs`).
 
-## Self-update
-
-```sh
-omp-web update                  # check the release channel and reinstall the latest
-omp-web update --check          # just report the newest version
-omp-web update --version x.y.z  # pin a specific release
-```
-
-## Configuration and State
-
-- Default data directory: `~/.omp-web/`
-- `config.json` (defaults, written only by the first-run offer)
-- `fleet-state.json` (roster + registered projects, atomic writes, exclusive pidfile lock)
-- `workspaces/` (managed worktrees, created lazily). Chosen at first run; config, state, and workspaces always live together under it.
+- [What is omp-web?](docs/src/content/docs/getting-started/overview.md) and [Installation](docs/src/content/docs/getting-started/installation.md): the product model and prerequisites.
+- [First run](docs/src/content/docs/getting-started/first-run.md) and [Start your first session](docs/src/content/docs/getting-started/start-first-session.md): from an empty fleet to your first prompt.
+- [Core concepts](docs/src/content/docs/concepts/projects-worktrees-session-daemons-sessions.md): projects, worktrees, session daemons, and sessions.
+- [Fleet management](docs/src/content/docs/fleet/sidebar.md) and [Analysis](docs/src/content/docs/analysis/transcripts.md): the roster and the historical browser.
+- [CLI commands and flags](docs/src/content/docs/reference/cli.md), [Configuration schema](docs/src/content/docs/reference/configuration.md), [Environment variables](docs/src/content/docs/reference/environment.md), and [Files and directories](docs/src/content/docs/reference/files.md): the canonical references.
+- [Troubleshooting](docs/src/content/docs/operations/troubleshooting.md) and [Security model](docs/src/content/docs/operations/security.md): failure handling and trust boundaries.
+- [System architecture](docs/architecture.md): wire contract, module map, and process boundaries for contributors.
 
 ## Develop
 
@@ -95,29 +65,9 @@ bun install
 bun dev      # roster mode: vite (HMR) + fleet, ports chosen per run
 ```
 
-In a linked worktree, `bun dev` forks the dev fleet state from the main
-worktree (copy-once, like a git fork), so the worktree's roster boots with the
-main worktree's sessions/projects instead of empty; later runs keep the
-diverged fork. Delete the worktree's dev state file
-(`~/.omp-web/dev-fleets/<worktree>-<hash8>/fleet-state.json`) to re-fork.
-`--state-from <path>` forks from an explicit state file or directory; running
-`bun dev` in the main worktree itself never self-seeds. `--fresh` skips all
-seeding and starts on a clean state (removes the worktree's existing dev
-state, so the roster boots empty); the next plain `bun dev` forks again.
+In a linked worktree, `bun dev` forks the dev fleet state from the main worktree (copy-once, like a git fork), so the worktree's roster boots with the main worktree's sessions/projects instead of empty; later runs keep the diverged fork. `--state-from <path>` forks from an explicit state file or directory, and `--fresh` skips seeding and starts on a clean state.
 
-## Advanced
-
-```sh
-omp-web session [options]            # run a single-session agent daemon
-omp-web sessions | projects          # roster / registered projects
-omp-web spawn <path>                 # start a daemon on a directory
-omp-web add-repo <path> [--start]    # register a project (deduped on realpath)
-omp-web add-worktree <project> <name> [--no-start]      # create a managed worktree
-omp-web add-worktree <project> --existing <path>        # adopt an existing one
-omp-web stop <selector> | remove <selector>
-omp-web rm-project <selector> | rm-worktree <daemon-id> [--delete-branch]
-omp-web prompt <selector> <text> [--wait <ms>]
-```
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the checks before a pull request and [`AGENTS.md`](AGENTS.md) for the full engineering map.
 
 ## Manual install
 

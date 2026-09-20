@@ -24,8 +24,8 @@
 #     the sandbox holds any other daemon's token or fleet credentials.
 #   * The token is visible via `docker inspect` to anyone who can reach the
 #     Docker socket, and in the host process list briefly (single-operator
-#     v1 tradeoff, documented in README Phase 6). Restrict Docker socket
-#     access accordingly.
+#     v1 tradeoff, documented in docs/src/content/docs/operations/security.md).
+#     Restrict Docker socket access accordingly.
 set -euo pipefail
 
 CWD="$1"

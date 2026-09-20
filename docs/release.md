@@ -59,7 +59,9 @@ Tests: `scripts/release.test.ts`: pure deterministic core only (classification, 
 
 ## Remaining actions (carried over from the removed release plan)
 
-Step 2 (default the update channel to GitHub) is done. `cli/update.ts` now defaults to `GITHUB_RELEASES_BASE` and `cli/update.test.ts` asserts the fallback. Still open:
+Historical record. These items predate the shipped releases: the repository is public and v0.1.0 plus v0.1.1 are tagged with `CHANGELOG.md` and the live manifest in place, so treat the list below as history rather than pending work. Two items are not evidenced by an artifact: the live-channel end-to-end check left no recorded result, and CI remains deferred (`.github/` holds issue templates only, and `AGENTS.md` still states there is no CI). The current release workflow is documented in `docs/src/content/docs/project/release.md` and implemented by `scripts/release.ts`.
+
+Step 2 (default the update channel to GitHub) is done. `cli/update.ts` now defaults to `GITHUB_RELEASES_BASE` and `cli/update.test.ts` asserts the fallback. Originally still open:
 
 - [ ] **Push to GitHub**: `gh repo create nibblebot/omp-web --public --source . --remote origin --push` from `main` (or `--private` if preferred; asset downloads from a private repo require auth, so public is the path of least resistance for `update`). Repo name/visibility to be confirmed with the user before executing. Verify `git ls-remote origin` + `gh repo view nibblebot/omp-web`.
 - [ ] **First release v0.1.0**: `bun scripts/release.ts 0.1.0 --yes --notes-file <path>`: tags `v0.1.0`, creates the release with both assets, creates `CHANGELOG.md`. Hand-written release notes recommended for the first release (a curated summary reads better than the auto changelog); the changelog section remains the `CHANGELOG.md` entry. Sanity: curl the manifest URL; confirm the tarball downloads; sha256 matches.

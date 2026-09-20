@@ -1,6 +1,6 @@
 /**
  * Pure parse/format helpers for the fleet's session-spawn surface
- * (README.md §Spawn templates). No subprocess, no live sessions — the spawn
+ * (docs/src/content/docs/reference/configuration.md). No subprocess, no live sessions — the spawn
  * SUPERVISOR imports from here.
  *
  * Wire contract:

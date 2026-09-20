@@ -1,6 +1,6 @@
 # omp-web: System architecture
 
-Overall architecture for omp-session + omp-fleet. Product positioning lives in [`position.md`](position.md); per-command usage is in the [README](../README.md).
+Overall architecture for omp-session + omp-fleet. Product positioning lives in [`PRODUCT.md`](../PRODUCT.md); per-command usage is in the [README](../README.md); user-facing documentation lives under [`docs/src/content/docs/`](src/content/docs/).
 
 ## Topology
 

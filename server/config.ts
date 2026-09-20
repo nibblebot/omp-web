@@ -1,7 +1,7 @@
 import path from "node:path";
 
 /**
- * omp-session config surface (README.md §Config surface). Flags map 1:1 to
+ * omp-session config surface (docs/src/content/docs/reference/environment.md). Flags map 1:1 to
  * env vars (`OMP_SESSION_*` only).
  */
 

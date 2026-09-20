@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.astro/
 dist-bundle/
 *.tgz
 omp-session-*.html

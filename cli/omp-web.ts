@@ -2,8 +2,10 @@
 /**
  * omp-web — single installed entrypoint (Phase 2 packaging).
  *
- * Installed via `bun install -g` as the bundled `dist-bundle/cli.js`; bun
- * links it to `~/.bun/bin/omp-web` from the package `bin` field. Routes:
+ * Installed from the release tarball into a pinned project dir
+ * (`scripts/install-omp-web.ts`, default `~/.omp-web/install/`) with an
+ * `omp-web` symlink in the bun bin dir; the bundle is `dist-bundle/cli.js`.
+ * Routes:
  *
  *   omp-web (bare) | omp-web serve|sessions|projects|spawn|add-repo|add|
  *           provision|stop|remove|rm-project|add-worktree|rm-worktree|prompt
@@ -58,7 +60,7 @@ const USAGE = `usage: omp-web [serve] [options] | omp-web <command> [options]
 
   (bare) | serve               start the fleet (registry + supervisor + edge);
                                first run with no config on a TTY offers setup
-  sessions | projects          list registered daemons / projects
+  sessions | projects          list roster entries / adoptable worktrees
   spawn | add-repo | add | provision | stop | remove
   rm-project | add-worktree | rm-worktree | prompt
                                fleet control plane (see: omp-web <command> --help)
