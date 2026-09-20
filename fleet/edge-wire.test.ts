@@ -496,7 +496,7 @@ describe("fleet edge", () => {
 		);
 		await browserA.waitForFrame((f) => f.type === "ready", "ready");
 		// Finding #61: the proto-gated hello_ok is FORWARDED (not swallowed)
-		// so the browser's own proto check runs in roster mode too.
+		// so the browser's own proto check runs on the edge stream too.
 		const hello = await browserA.waitForFrame(
 			(f) => f.type === "hello_ok",
 			"hello_ok (proto-gated)",

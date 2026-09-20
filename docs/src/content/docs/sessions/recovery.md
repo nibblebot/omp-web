@@ -56,12 +56,12 @@ When a context is too tangled to compact well, `/handoff [focus]` generates a ha
 
 The browser stream reconnects by itself. A brief drop is retried natively and the replay resumes from the last event the browser saw; a terminal close is retried with a 1s to 8s backoff ladder. While the stream is down the status bar shows `disconnected`, and the composer waits until the session reports ready again. Reconnection does not lose the session: it lives in the session daemon, not in the tab.
 
-What happens to the session daemon while you are away depends on the mode:
+What happens to the session daemon while you are away depends on how it was started:
 
 - A running turn keeps running in the session daemon whether or not a browser is attached. Idle auto-exit only fires when the session is otherwise idle: nothing streaming, nothing queued, no shell or Python call in flight, no open dialog, and no attached client.
-- In fleet mode, a session daemon that exited appears `asleep` in the roster. Selecting the row wakes it and resumes the recorded session; see [Session daemon operations](/fleet/session-daemon-operations/) and [Roster status](/fleet/roster-status/).
-- A crashed session daemon in fleet mode is restarted under supervision. Transcripts are durable, so the resumed session keeps its messages even when the process did not survive.
-- In single-session mode there is no supervisor to restart the process after a crash; start the session daemon again and resume the transcript from the picker.
+- A session daemon that exited appears `asleep` in the roster. Selecting the row wakes it and resumes the recorded session; see [Session daemon operations](/fleet/session-daemon-operations/) and [Roster status](/fleet/roster-status/).
+- A fleet-managed session daemon that crashes is restarted under supervision. Transcripts are durable, so the resumed session keeps its messages even when the process did not survive.
+- A session daemon you started by hand has no supervisor to restart the process after a crash; start it again and resume the transcript from the picker.
 
 Undelivered queued messages are not part of the transcript and do not survive a session daemon exit. Everything that was delivered is in the transcript.
 
@@ -69,7 +69,7 @@ Undelivered queued messages are not part of the transcript and do not survive a 
 
 - The status bar banner carries the last error raised by a call.
 - The Debug panel records transport lifecycle events, reconnect delays, and frame activity. It is available from the status bar when the fleet sidebar is not showing its own footer controls.
-- Session daemon stderr and logs are reachable from the roster in fleet mode; see [Diagnostics](/operations/diagnostics/).
+- Session daemon stderr and logs are reachable from the roster; see [Diagnostics](/operations/diagnostics/).
 - [Troubleshooting](/operations/troubleshooting/) maps symptoms such as a stuck `resolving` row, an unauthorized remote connection, or a stale statistics database to their causes.
 
 ## Failure cases

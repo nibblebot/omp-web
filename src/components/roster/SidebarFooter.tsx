@@ -3,12 +3,12 @@ import { setState, state } from "../../state";
 import { InfoIcon, SettingsIcon } from "../shared/icons";
 
 // ---------------------------------------------------------------------------
-// Sidebar footer: global chrome (debug panel, settings). In roster work
+// Sidebar footer: global chrome (debug panel, settings). In the Work view
 // these live here instead of the StatusBar header. StatusBar hides its
 // debug/settings segments while the sidebar is present
-// (`state.sessionMode !== "roster" || state.view !== "work"`), so the two
-// renderings never coexist. View mode switching (Work/Analysis) moved out
-// of this footer onto the ModeSwitch row atop the sidebar.
+// (`state.view !== "work"`), so the two renderings never coexist. View mode
+// switching (Work/Analysis) moved out of this footer onto the ModeSwitch row
+// atop the sidebar.
 // ---------------------------------------------------------------------------
 
 export const SidebarFooter: Component = () => (

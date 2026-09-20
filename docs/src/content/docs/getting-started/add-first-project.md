@@ -5,7 +5,7 @@ description: Register a Git repository with the omp-web fleet from the browser, 
 
 Registering a project tells the fleet which Git repository it may run session daemons in. Registration stores metadata only. It does not copy, move, or modify the repository, and it does not create a worktree.
 
-The project roster lives in the fleet sidebar, which is part of fleet mode. Single-session mode (`omp-web session`) has no roster: the browser talks directly to one session daemon.
+The project roster lives in the fleet sidebar: the fleet serves the browser UI and holds the registry, so registering a project is a fleet operation.
 
 ## Before you start
 

@@ -23,7 +23,7 @@ Current product constraints bound what the interface may assume. These are limit
 - Multi-user access is not implemented. It is an open strategic question in PRODUCT.md, not a current audience.
 - There is no browser collaboration surface. Collaboration rooms are operated through the CLI or TUI.
 - Browser fan-out prompting is not implemented. Fan-out is a CLI capability.
-- Analysis views are available in fleet mode only. A standalone session deployment has no fleet sidebar and no Analysis.
+- Analysis views need the fleet's statistics service, which every deployment now has.
 - Remote access is user-managed, for example over SSH forwarding or a private network. Remote TLS management is not part of the product.
 
 A design direction that only makes sense once one of these exists is out of scope until PRODUCT.md says otherwise.
@@ -79,6 +79,6 @@ The same directory holds dated critique snapshots under `.impeccable/critique/`.
 2. Build from existing tokens and the component vocabulary. If a value is missing, extend the shared scale instead of hardcoding a one-off.
 3. When a token, theme, or scale rung changes, update `src/styles/tokens.css`, DESIGN.md, and `.impeccable/design.json` together.
 4. Keep themes to color-only overrides.
-5. Verify UI changes in the running app (`bun run dev` for roster mode, `bun run dev:single` for standalone), including the 720px breakpoint and reduced-motion behavior.
+5. Verify UI changes in the running app (`bun run dev`), including the 720px breakpoint and reduced-motion behavior.
 
 The [project section overview](/project/) lists the other maintainer pages.

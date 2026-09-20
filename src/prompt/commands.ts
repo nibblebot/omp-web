@@ -75,8 +75,7 @@ function exportSession(args: string): void {
 	void call("exportHtml", [undefined, useThemes])
 		.then((result) => {
 			const path = (result as { path?: string } | null)?.path;
-			if (path)
-				pushNotice("info", "Exported session HTML", `/download?path=${encodeURIComponent(path)}`);
+			if (path) pushNotice("info", `Exported session HTML to ${path}`);
 			else pushNotice("info", "Exported session HTML");
 		})
 		.catch(showError);
@@ -173,7 +172,9 @@ function freshSession(): void {
 		.catch(showError);
 }
 
-/** `/dump`: transcript downloads client-side; the LLM-request JSON downloads via /download. */
+/** `/dump`: transcript downloads client-side; the LLM-request JSON is written
+ *  to a temp file on the machine running the session daemon, and the notice
+ *  names that path. */
 function dumpSession(): void {
 	void (async () => {
 		try {
@@ -192,7 +193,7 @@ function dumpSession(): void {
 				pushNotice("info", "Transcript is empty, nothing to download.");
 			}
 			if (typeof dumpPath === "string" && dumpPath) {
-				pushNotice("info", "LLM request dump", `/download?path=${encodeURIComponent(dumpPath)}`);
+				pushNotice("info", `LLM request dump written to ${dumpPath}`);
 			} else {
 				pushNotice("info", "No LLM request dump available yet.");
 			}
@@ -260,12 +261,7 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 				} else {
 					pushNotice("info", "Handoff complete. New session started.");
 				}
-				if (r?.savedPath)
-					pushNotice(
-						"info",
-						"Handoff document",
-						`/download?path=${encodeURIComponent(r.savedPath)}`,
-					);
+				if (r?.savedPath) pushNotice("info", `Handoff document written to ${r.savedPath}`);
 			})
 			.catch(showError),
 	drop: confirmDropSession,

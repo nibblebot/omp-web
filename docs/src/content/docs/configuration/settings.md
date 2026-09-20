@@ -20,7 +20,7 @@ The Settings panel is the browser counterpart of the Oh My Pi `/settings` screen
 Two entry points open it:
 
 - The Settings segment in the status bar.
-- The gear button in the fleet sidebar footer (fleet mode).
+- The gear button in the fleet sidebar footer.
 
 The panel opens as a full-screen sheet with a search box, a section list, and the section body.
 
@@ -48,9 +48,9 @@ Items can be conditionally hidden: a settings item whose schema condition does n
 
 The panel has two save paths, chosen by whether the browser is attached to a session daemon.
 
-**With a session attached** (single-session mode, or fleet mode with an attached row), rows call the session's settings RPCs. The session daemon coerces the value against the schema, applies it to the live session, persists it, and returns a fresh settings model, which becomes the panel's source of truth. Live side effects run where a setting has one: steering and follow-up modes, interrupt mode, the advisor toggle, the default thinking level, personality, memory backend, sampling values, image inspection mode, and provider search ordering all take effect in the running session immediately. Every other attached browser tab stays in sync because the session daemon broadcasts a `settings_changed` frame.
+**With a session attached**, rows call the session's settings RPCs. The session daemon coerces the value against the schema, applies it to the live session, persists it, and returns a fresh settings model, which becomes the panel's source of truth. Live side effects run where a setting has one: steering and follow-up modes, interrupt mode, the advisor toggle, the default thinking level, personality, memory backend, sampling values, image inspection mode, and provider search ordering all take effect in the running session immediately. Every other attached browser tab stays in sync because the session daemon broadcasts a `settings_changed` frame.
 
-**With no session attached** (fleet mode only), the panel is served by the fleet's own settings service. Edits are still validated against the schema and persisted, but no live session receives side effects, because there is none. The panel says so: changes save to `config.yml` and apply to new sessions. The next session daemon a project starts picks the values up when it boots.
+**With no session attached**, the panel is served by the fleet's own settings service. Edits are still validated against the schema and persisted, but no live session receives side effects, because there is none. The panel says so: changes save to `config.yml` and apply to new sessions. The next session daemon a project starts picks the values up when it boots.
 
 A session daemon resolves its settings from the agent configuration files, not from the browser:
 

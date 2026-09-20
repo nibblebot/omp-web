@@ -14,10 +14,10 @@ Most of them are edited under Settings > Web UI > Interface. A few are toggled b
 | Theme preference | The palette: `system`, `dark`, `light`, `catppuccin mocha`, `catppuccin latte`, `omp dark`, or `omp light`. With `system`, the interface follows the operating system and switches live when the system theme changes. | `system` |
 | Font size | The root font size, from 12 to 18 pixels in steps of one, scaling the whole interface. | 15 |
 | Desktop notifications | Whether the browser raises desktop notifications for completed turns and error notices while the tab is hidden. | off |
-| Usage in sidebar | The provider usage panel above the roster footer (fleet mode). The data is a one-shot refresh, never polled, so repeated opens are cheap. See [Provider usage limits](/analysis/provider-usage/). | off |
+| Usage in sidebar | The provider usage panel above the roster footer. The data is a one-shot refresh, never polled, so repeated opens are cheap. See [Provider usage limits](/analysis/provider-usage/). | off |
 | Sidebar visibility | Whether the fleet sidebar column is open. First run on a narrow viewport (720px or less) starts closed because the sidebar is an overlay there; otherwise it starts open. | viewport dependent |
-| Analysis sidebar visibility | Whether the transcripts sidebar is open in the Analysis view (fleet mode only). | open |
-| Work or Analysis view | Which top-level view the fleet UI restores on load. The Analysis view is fleet mode only. | Work |
+| Analysis sidebar visibility | Whether the transcripts sidebar is open in the Analysis view. | open |
+| Work or Analysis view | Which top-level view the fleet UI restores on load. | Work |
 | Collapsed roster groups | Which project groups and fallback repository headers are collapsed. Groups otherwise start open. | all open |
 | Prompt history | The prompt history ring used by composer recall and history search. | empty |
 
@@ -53,7 +53,7 @@ Three rows appear in Web UI only while a session is attached, and they act on th
 - **Fast mode** and **auto-retry** command the running session daemon. They reset when the session daemon process ends, so a resumed session starts with the defaults again.
 - **Login providers…** opens provider authentication, which is explained in [Models and provider authentication](/configuration/models-and-auth/).
 
-In fleet mode with no session attached, these rows are hidden, because there is no live process to command. The same section shows the Images group, but those items are schema-backed agent settings that persist to `config.yml`, not browser preferences. See [Settings overview](/configuration/settings/).
+With no session attached, these rows are hidden, because there is no live process to command. The same section shows the Images group, but those items are schema-backed agent settings that persist to `config.yml`, not browser preferences. See [Settings overview](/configuration/settings/).
 
 ## Persistence and reset behavior
 

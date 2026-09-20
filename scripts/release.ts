@@ -825,8 +825,8 @@ async function release(argv: string[]): Promise<void> {
 	await checkTagAbsent(tag);
 
 	// 4. Gate (skipped in --dry-run; dry-run only previews the plan).
-	// build:web runs before test: the daemon suite asserts static UI serving
-	// at /, which needs dist/ (gitignored; absent on fresh worktrees).
+	// build:web runs before test as a fast sanity gate that the UI bundle
+	// still compiles; the suite itself needs no built dist/.
 	if (!dryRun) {
 		for (const cmd of ["check:types", "format:check", "build:web", "test"]) {
 			console.log(`release: running bun run ${cmd}`);

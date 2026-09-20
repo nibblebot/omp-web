@@ -5,7 +5,7 @@ description: "Use the Analysis view to search, filter, and read every stored ses
 
 The Analysis view is the historical browser for stored sessions. It lists every main-agent transcript in the fleet host's sessions directory, opens one at a time, and renders the raw conversation from disk. Session transcripts are durable: they outlive the session daemons that wrote them, so this view keeps working for checkouts and processes that no longer exist. The model behind that durability is described in [Session persistence](/concepts/session-persistence/).
 
-The Analysis view is fleet mode only. Single-session mode has no Work/Analysis switch and no transcripts sidebar.
+The Analysis view is part of the fleet-served UI, reached with the Work/Analysis switch, and it replaces the roster column with its own transcripts sidebar.
 
 ## Entering Analysis
 

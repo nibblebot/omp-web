@@ -42,12 +42,12 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Include your OS, Bun version, installation method, and whether you use fleet or single-session mode.
+      description: Include your OS, Bun version, how you installed omp-web, and whether the affected session daemon runs locally or on a remote host.
       placeholder: |
         OS: NixOS 26.11
         Bun: 1.3.14
         Install: release installer
-        Mode: fleet
+        Session daemon: local
     validations:
       required: true
 

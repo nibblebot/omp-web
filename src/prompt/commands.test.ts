@@ -314,7 +314,6 @@ beforeEach(() => {
 	}) as unknown as typeof fetch;
 	setState({
 		currentSessionId: "",
-		sessionMode: "single",
 		connected: false,
 		readyAt: undefined,
 		subagents: new Map(),

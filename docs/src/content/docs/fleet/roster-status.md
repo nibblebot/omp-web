@@ -5,7 +5,7 @@ description: "Read the status dot and activity dot on a roster row: what each se
 
 Every roster row carries two independent signals. The **status dot** at the left of the row describes the session daemon itself: whether it is starting, connected, ready, asleep, or broken. The **activity dot** describes what the live conversation is doing, and it appears only on ready rows. This page explains both, what causes each state, and what to do about the states that need action. For the visual layout of the roster, see [The fleet sidebar](/fleet/sidebar/).
 
-The status and activity dots exist only in fleet mode. Single-session mode has no roster and no rows, and the Analysis view replaces the roster sidebar with its own transcripts sidebar.
+The status and activity dots belong to the roster. The Analysis view replaces the roster sidebar with its own transcripts sidebar, so the dots are visible while the Work view shows the roster column.
 
 ## The status ladder
 

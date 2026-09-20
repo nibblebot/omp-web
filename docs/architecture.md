@@ -5,13 +5,13 @@ Overall architecture for omp-session + omp-fleet. Product positioning lives in [
 ## Topology
 
 ```
-browser (Solid, one app, two modes)
-   ⇄ SSE/POST ⇄ omp-session (standalone: full single-session UI)
-   ⇄ SSE/POST ⇄ omp-fleet (roster mode) ⇄ per-browser proxied SSE/POST ⇄ omp-session …
-                                      ⇄ control SSE/POST ⇄ omp-session …  (remote: ssh -L / tailnet / direct)
+browser (Solid, one app, served by the fleet)
+   ⇄ SSE/POST ⇄ omp-fleet (registry + supervisor + edge, serves the UI)
+                  ⇄ per-browser proxied SSE/POST ⇄ omp-session …  (local children, or remote: ssh -L / tailnet / direct)
+                  ⇄ control SSE/POST ⇄ omp-session …             (dial-in, idle-drop control sockets)
 ```
 
-One web app, two modes. Standalone: the browser talks to one omp-session daemon directly. Roster: the browser talks to omp-fleet's edge, which proxies each attached browser through to the selected daemon.
+One web app, and the fleet is its only server. The browser talks to omp-fleet's edge, which proxies each attached browser through to the selected session daemon. A session daemon serves the wire API only (no HTML); pointed at one directly, the client sets `state.fleetRequired` and shows the fleet-required notice.
 
 ## Architecture diagram
 
@@ -23,7 +23,7 @@ flowchart TB
   end
 
   subgraph fleet["omp-fleet, registry + supervisor + edge (fleet/)"]
-    edge["edge.ts, browser SSE/POST · per-browser daemon pipes"]
+    edge["edge.ts, serves dist/ + the UI bundle · browser SSE/POST · per-browser daemon pipes"]
     conn["connector.ts, per-daemon SSE client (dial-in)"]
     super["supervisor.ts, spawn/restart · parses OMP_SESSION| lines"]
     reg["registry.ts, dN/pN roster · zero agent state"]
@@ -47,7 +47,6 @@ flowchart TB
   daemon <--> wrap
   wrap <--> model
   wrap -.-> log
-  store <-->|"standalone mode: direct, fleet bypassed"| daemon
 ```
 
 ## Layers and import discipline
@@ -56,15 +55,15 @@ Strictly leaf-ward layering, verified across the tree:
 
 - **`shared/`**: the leaf: `protocol.ts` (wire contract) and `sse.ts` (SSE codec + ring). Imports nothing in the repo.
 - **`server/`**: the omp-session daemon. Imports from `shared/` only.
-- **`fleet/`**: the omp-fleet supervisor/registry/edge. Imports from `shared/`; from `server/` only two deliberate exceptions: `edge.ts` pulls `EMBEDDED_DIST` from `server/embedded-dist` to serve the embedded UI bundle, and `settings.ts` imports types from `server/settings-model` to reuse the shared settings metadata.
+- **`fleet/`**: the omp-fleet supervisor/registry/edge. Imports from `shared/`; from `server/` exactly one deliberate exception: `settings.ts` imports types from `server/settings-model` to reuse the shared settings metadata. `EMBEDDED_DIST` moved out of `server/` into `fleet/embedded-dist.ts` (same module), so `edge.ts` now pulls it from inside `fleet/` to serve the embedded UI bundle.
 - **`src/`**: the Solid browser client. Imports from `shared/` only; imports neither backend layer.
 
-fleet↔session coupling is exactly one wire-contract file plus one SSE codec, with `OMP_PROTO` gating drift at hello; the two deliberate `server/` imports above are the only cross-seam exceptions.
+fleet↔session coupling is exactly one wire-contract file plus one SSE codec, with `OMP_PROTO` gating drift at hello; the single deliberate `server/` import above is the only cross-seam exception.
 
 ## The wire contract (`shared/protocol.ts`, OMP_PROTO 2)
 
 - **Transport:** `GET /events` (SSE, server→client, all frames) + `POST /command` (client→server, one `ClientCommand` per request, `202` accept). Answers ride the SSE stream only: one answer channel. No WebSocket on the agent-driving path; WS remains solely on the collab relay.
-- **Priming sequence** on every `/events` open: `hello_ok` → `attached` → `history` → `state` → `collab_status` → `available_commands` → `ready`. Connect implies attached.
+- **Priming sequence** on every daemon `/events` open: `hello_ok` → `attached` → `history` → `state` → `collab_status` → `available_commands` → `ready`. Connect implies attached. The fleet edge's own browser streams prime with `roster` + merged `daemons` + `registered_projects` (+ `daemon_activity` for ready daemons) and then proxy the attached daemon's priming down the per-browser pipe.
 - **Resume:** daemon-global monotonic delta seqs; a bounded ring (10k entries) replays deltas past `Last-Event-ID`. Priming is fresh and current, so stale clients skip replay. Consumers dedup by id (`call_result` resolves only a pending call).
 - **Keepalive:** id-less `ping` events (never advancing resume counters); consumers treat >2× the ping interval of silence as a dead peer and reconnect.
 - **Backpressure:** a stream whose enqueue would exceed 4 MiB is terminated with an error: drop-and-resume, the consumer redials with `Last-Event-ID` and the ring covers the gap.
@@ -81,7 +80,7 @@ One process, one bound cwd (immutable), one live in-process SDK session (`create
 
 Module map (split along the seams identified in the 2026-08 audit):
 
-- `index.ts`: boot, HTTP routing, dispatch wiring, readiness gate, idle auto-exit, signal/shutdown, static UI serving (`embedded-dist.ts`), bearer auth (R14: loopback exempt, off-loopback hard-requires `--token`), `/download` realpath jail.
+- `index.ts`: boot, HTTP routing (`/events`, `/command`, the collab WS relay, `/download`; every other path 404s, the daemon serves no web UI), dispatch wiring, readiness gate, idle auto-exit, signal/shutdown, bearer auth (R14: loopback exempt, off-loopback hard-requires `--token`), `/download` realpath jail.
 - `methods.ts`: the `WebMethodName` dispatch table.
 - `sse-delivery.ts`: stream registry, ring, broadcast, backpressure termination, chunked history priming (512 KiB frames; each message degrades only above a 1 MiB replication ceiling, images first, then string/array clipping).
 - `ui-context.ts`: `ui_request`/`ui_response`/`ui_request_end` dialog relay (ExtensionUIContext), incl. collab fallthrough.
@@ -110,7 +109,7 @@ Holds the registry of N daemons and zero SDK state: all agent truth lives in the
 
 ## Browser client (`src/`)
 
-One Solid app. `state.ts` is the store: chat items, streaming, session-state mirror, roster state, `call()` helper over POST, reconnect with backoff, and a stale-frame guard keyed on the stamped `sessionId` so frames from a previously attached daemon are never applied to the current view. `App.tsx` holds exactly one mode branch (the DaemonSidebar); everything else (subagent drill-down, settings, export, pickers, login, `/btw`, goal, usage) works identically in both modes.
+One Solid app, served only by the fleet edge. `state.ts` is the store: chat items, streaming, session-state mirror, roster state, `call()` helper over POST, reconnect with backoff, and a stale-frame guard keyed on the stamped `sessionId` so frames from a previously attached daemon are never applied to the current view. A page that receives an `attached` or `hello_ok` frame before any `roster` frame on this connection sets `state.fleetRequired` and renders the fleet-required notice instead of the shell; `App.tsx` then mounts the shell with the DaemonSidebar and everything else (subagent drill-down, settings, export, pickers, login, `/btw`, goal, usage) hangs off it.
 
 ## State ownership
 
@@ -121,7 +120,7 @@ The SDK session and its `.jsonl` log are the single agent truth. The fleet regis
 - **Dial-in only:** omp-fleet initiates every connection; omp-session never dials out and has no `--fleet` flag. A sandbox image knows nothing of the external world; egress may be denied entirely.
 - **Per-daemon bearer tokens** minted at spawn; a leaked token gates that one daemon only. Loopback exempt; off-loopback requires the token plus a secure transport (ssh `-L`, tailnet, or own TLS).
 - **Roster hygiene:** tokens/endpoints/templates never serialize into roster frames.
-- **Egress:** `/download` is realpath-jailed to the bound cwd + tmpdir + session dirs: the only file-egress path; `list_files` never escapes the cwd.
+- **Egress:** `/download` is realpath-jailed to the bound cwd + tmpdir + session dirs: the only file-egress path; `list_files` never escapes the cwd. The fleet edge does not proxy `/download`, so in the fleet UI an export link never resolves from the browser: it names a path on the host running the session daemon, and you retrieve the file there.
 
 ## Collab (the WebSocket exception)
 

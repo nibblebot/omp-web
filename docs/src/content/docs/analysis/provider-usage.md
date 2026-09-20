@@ -18,7 +18,7 @@ The request is a one-shot read, never a poll:
 
 ## The Usage reports modal
 
-Open the modal from the **usage reports** button in the [Session stats modal](/analysis/context-tokens-cost/), which is reached with `/usage`, `/context`, or `/tools`. The modal works in both fleet and single-session mode, because it reads from the attached session daemon.
+Open the modal from the **usage reports** button in the [Session stats modal](/analysis/context-tokens-cost/), which is reached with `/usage`, `/context`, or `/tools`. The modal reads from the attached session daemon.
 
 Each provider gets a section:
 
@@ -52,7 +52,7 @@ Amount strings, notes, and reset timestamps stay in the modal. A limit with no u
 
 The panel header carries the title `Usage` and a refresh button. Its states are `Loading usage…`, `No usage reporting`, and `Failed to load usage`, the last one exposing the full error message as a tooltip.
 
-The panel exists only in fleet mode, because it is docked into the fleet sidebar, and only while the Work view is showing. The modal is the way to read provider limits in single-session mode. For the sidebar itself, see [The fleet sidebar](/fleet/sidebar/).
+The panel is docked into the fleet sidebar, so it shows only while the Work view is active. For the sidebar itself, see [The fleet sidebar](/fleet/sidebar/).
 
 ## Related
 

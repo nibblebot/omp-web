@@ -5,7 +5,7 @@ import { fetchCtlDebug } from "../state";
 // the fleet control-plane contract). Unknown/absent fields degrade to an em
 // dash instead of throwing on a half-landed payload. Pure logic, no JSX. The
 // fetch itself goes through the shared fetchCtlDebug() state action, which
-// owns the unreachable/HTTP error vocabulary (single-session mode renders as
+// owns the unreachable/HTTP error vocabulary (an unreachable fleet renders as
 // a notice, not a crash).
 // ---------------------------------------------------------------------------
 

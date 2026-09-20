@@ -253,7 +253,7 @@ try {
 	check(
 		"embedded-dist restored to stub",
 		r.code === 0 &&
-			readFileSync(join(ROOT, "server", "embedded-dist.ts"), "utf8").includes(
+			readFileSync(join(ROOT, "fleet", "embedded-dist.ts"), "utf8").includes(
 				"EMBEDDED_DIST: Record<string, string> = {}",
 			),
 	);

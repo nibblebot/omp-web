@@ -7,18 +7,18 @@ import { SidebarGroups } from "./SidebarGroups";
 import { SidebarUsage } from "./SidebarUsage";
 
 // ---------------------------------------------------------------------------
-// Fleet-edge roster sidebar (Phase 5). Rendered by App.tsx only in
-// roster mode. Shell: derives the project-first group list (daemonsByProject)
-// and composes the group rendering (SidebarGroups) with the global chrome
-// footer (SidebarFooter). Registered projects group their daemons as the
-// main-checkout row first, then worktrees; each group carries "+ Add worktree"
-// and a remove-project action. Entries WITHOUT a projectId (remote/
-// unregistered) fall back to string-grouping in one trailing group. The
-// header "+" opens the Add-repo modal (the retired SpawnPicker's template/
-// labels fields live in its advanced section). Row interactions live in
-// DaemonRow/DaemonDetailView; collapse state persists per project in
-// localStorage (SidebarGroups). A pinned mode row (ModeSwitch plus the
-// sidebar close button) tops the column above the Projects header.
+// Fleet-edge roster sidebar (Phase 5). Rendered by App.tsx whenever
+// `state.view === "work"` (the fleet is the only web UI runtime). Shell:
+// derives the project-first group list (daemonsByProject) and composes the
+// group rendering (SidebarGroups) with the global chrome footer (SidebarFooter).
+// Registered projects group their daemons as the main-checkout row first, then
+// worktrees; each group carries "+ Add worktree" and a remove-project action.
+// Entries WITHOUT a projectId (remote/unregistered) fall back to string-grouping
+// in one trailing group. The header "+" opens the Add-repo modal (the retired
+// SpawnPicker's template/labels fields live in its advanced section). Row
+// interactions live in DaemonRow/DaemonDetailView; collapse state persists per
+// project in localStorage (SidebarGroups). A pinned mode row (ModeSwitch plus
+// the sidebar close button) tops the column above the Projects header.
 // ---------------------------------------------------------------------------
 
 export const DaemonSidebar: Component = () => {

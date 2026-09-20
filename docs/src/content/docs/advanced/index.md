@@ -20,7 +20,4 @@ Collaboration rooms are hosted and joined through the CLI or TUI. omp-web curren
 - [Run a remote session daemon over SSH](/advanced/ssh/) wires a session daemon on another host through a tunnel or a direct dial.
 - [Integrate a custom provider](/advanced/custom-provider/) enrolls session daemons through the provisioning hook.
 - [Collaboration rooms](/advanced/collaboration/) hosts and joins CLI/TUI collaboration rooms.
-- [Single-session deployments](/advanced/single-session-deployments/) runs one session daemon for one directory without a fleet.
 - [Architecture overview](/advanced/architecture/) maps the runtime products, topology, and boundaries for contributors.
-
-For the simpler direct-browser deployment, [What is omp-web?](/getting-started/overview/#single-session-mode) introduces single-session mode.

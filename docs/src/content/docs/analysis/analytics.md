@@ -3,7 +3,7 @@ title: Session analytics
 description: "Read per-session tool counts, timing, latency percentiles, token totals, cost, and error turns in the Overview tab, and know which numbers come from stats.db."
 ---
 
-The Overview tab of a session detail summarizes one stored session: how many tool calls it made, how long they ran, the slowest call, the per-turn latency, token totals, cost, and error turns. It is the Analysis view's per-session report, available in fleet mode only, alongside [Browse historical transcripts](/analysis/transcripts/) and [Subagent activity and transcripts](/analysis/subagents/).
+The Overview tab of a session detail summarizes one stored session: how many tool calls it made, how long they ran, the slowest call, the per-turn latency, token totals, cost, and error turns. It is the Analysis view's per-session report, alongside [Browse historical transcripts](/analysis/transcripts/) and [Subagent activity and transcripts](/analysis/subagents/).
 
 Analytics mixes two sources on purpose, and the tab labels which one produced each figure.
 

@@ -1,16 +1,12 @@
 import { defineConfig } from "vite";
 import solidPlugin from "vite-plugin-solid";
 
-// OMP_DEV_FLEET=1 (set by `bun run dev`): proxy /events + /command + /download to the
-// omp-fleet edge instead of a standalone omp-session, so the roster UI runs
-// under HMR. Either way /ctl goes to the fleet control plane.
-// Ports come from OMP_DEV_FLEET_PORT / OMP_DEV_SESSION_PORT (scripts/dev.ts
-// picks them per-run so parallel worktrees don't collide); the fixed defaults
-// keep `bun run dev:web` against manually started backends working.
-const fleet = process.env.OMP_DEV_FLEET === "1";
+// Dev HMR proxy: /events + /command go to the omp-fleet edge (it serves the
+// roster UI and proxies each session's wire API), and /ctl to the fleet
+// control plane on the same port. OMP_DEV_FLEET_PORT is picked per-run by
+// scripts/dev.ts so parallel worktrees don't collide; the fixed default keeps
+// `bun run dev:web` against a manually started `bun run fleet serve` working.
 const fleetPort = process.env.OMP_DEV_FLEET_PORT ?? "4722";
-const sessionPort = process.env.OMP_DEV_SESSION_PORT ?? "4721";
-const sessionTarget = fleet ? `localhost:${fleetPort}` : `localhost:${sessionPort}`;
 
 // OMP_DEV_ALLOW_HOSTS (set by `--allow-hosts`): "1"/"true"/"*" allows every
 // Host header (e.g. tailscale domains); anything else is a comma-separated
@@ -34,10 +30,12 @@ export default defineConfig({
 		proxy: {
 			// /events is a long-lived SSE stream: http-proxy pipes it through (no ws: true);
 			// X-Accel-Buffering asks intermediaries not to buffer the response.
-			"/events": { target: `http://${sessionTarget}`, headers: { "X-Accel-Buffering": "no" } },
-			"/command": { target: `http://${sessionTarget}` },
-			"/download": { target: `http://${sessionTarget}` },
-			// Roster-mode control API (omp-fleet edge). Dev against `omp-fleet serve`.
+			"/events": {
+				target: `http://localhost:${fleetPort}`,
+				headers: { "X-Accel-Buffering": "no" },
+			},
+			"/command": { target: `http://localhost:${fleetPort}` },
+			// Fleet control plane: same edge port.
 			"/ctl": { target: `http://localhost:${fleetPort}` },
 		},
 	},

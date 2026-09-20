@@ -3,7 +3,7 @@
  * build (`bun run build`) produces the installable omp-web bundle
  * (dist-bundle/cli.js).
  *
- * UI-embed pipeline: vite build → regenerate server/embedded-dist.ts →
+ * UI-embed pipeline: vite build → regenerate fleet/embedded-dist.ts →
  * restore the stub in a finally. Then the cli/omp-web.ts dispatcher is
  * bundled with bun build (NOT --compile): all @oh-my-pi/* packages stay
  * external because `bun install -g` installs them as real dependencies
@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 const STUB = `export const EMBEDDED_DIST: Record<string, string> = {};\n`;
 const ROOT = join(import.meta.dir, "..");
-const EMBEDDED_DIST_FILE = join(ROOT, "server", "embedded-dist.ts");
+const EMBEDDED_DIST_FILE = join(ROOT, "fleet", "embedded-dist.ts");
 const DIST_DIR = join(ROOT, "dist");
 const OUTFILE = join(ROOT, "dist-bundle", "cli.js");
 
@@ -38,7 +38,7 @@ function listFiles(dir: string, base: string): string[] {
 	return out;
 }
 
-/** Build the temporary embedded-dist.ts module for the current dist/ contents. */
+/** Build the temporary fleet/embedded-dist.ts module for the current dist/ contents. */
 function generateEmbeddedDist(): string {
 	const files = listFiles(DIST_DIR, DIST_DIR)
 		.filter((f) => !f.startsWith("."))
@@ -77,7 +77,7 @@ if (version === null) {
 try {
 	// 1. UI bundle (vite owns dist/ and wipes it).
 	await Bun.$`bunx vite build`.cwd(ROOT);
-	// 2. Regenerate the embedded-asset module for both edge.ts and server/index.ts.
+	// 2. Regenerate the embedded-asset module for the fleet edge, its only consumer.
 	writeFileSync(EMBEDDED_DIST_FILE, generateEmbeddedDist());
 	// 3. Bundle the dispatcher. Bun preserves the entrypoint shebang; verified
 	//    below rather than assumed.
@@ -110,6 +110,6 @@ try {
 	}
 	console.log(`built ${OUTFILE}`);
 } finally {
-	// embedded-dist.ts stays a stub in the tree; it exists only for the build.
+	// fleet/embedded-dist.ts stays a stub in the tree; it exists only for the build.
 	writeFileSync(EMBEDDED_DIST_FILE, STUB);
 }

@@ -394,7 +394,7 @@ class FleetServerImpl implements FleetServer {
 			fleet: this.fleetFacts,
 		});
 		this.edge = edge;
-		// Unattached settings service (roster-mode /ctl/settings): lazy
+		// Unattached settings service (the fleet control plane's /ctl/settings): lazy
 		// Settings.init + ModelRegistry, no live session required. Injectable
 		// provider source for tests (must not open the real auth DB).
 		this.fleetSettings = createFleetSettings(settingsOptions);
@@ -543,9 +543,9 @@ class FleetServerImpl implements FleetServer {
 						return json({ projects, registered: this.registry.projects() });
 					}
 					case "/ctl/settings":
-						// Unattached settings model (roster mode): the fleet
-						// service lazily initializes the process-global
-						// Settings singleton + ModelRegistry, no session.
+						// Unattached settings model: the fleet service lazily
+						// initializes the process-global Settings singleton +
+						// ModelRegistry, no session.
 						return json(await this.fleetSettings.getModel());
 					default:
 						return json({ error: "not found" }, 404);

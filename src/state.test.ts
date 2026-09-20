@@ -180,7 +180,7 @@ beforeEach(() => {
 	}) as unknown as typeof fetch;
 	setState({
 		currentSessionId: "",
-		sessionMode: "single",
+		fleetRequired: false,
 		connected: false,
 		readyAt: undefined,
 		subagents: new Map(),
@@ -615,7 +615,7 @@ describe("client debug ring (transport observability)", () => {
 	});
 });
 
-describe("fleet settings fallback (roster mode, no daemon attached)", () => {
+describe("fleet settings fallback (no daemon attached)", () => {
 	const model: SettingsModel = { tabs: [] };
 
 	/** Drain the async fetch/.then/.finally chain (each hop is one microtask). */
@@ -648,7 +648,6 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 
 	test("refreshSettings GETs /ctl/settings and stores the model (no /command POST)", async () => {
 		setState({
-			sessionMode: "roster",
 			currentSessionId: "",
 			settingsModel: null,
 			settingsLoading: false,
@@ -668,7 +667,6 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 
 	test("updateSetting POSTs /ctl/settings/set with {path, value} and stores the response model", async () => {
 		setState({
-			sessionMode: "roster",
 			currentSessionId: "",
 			settingsModel: null,
 			settingsLoading: false,
@@ -689,7 +687,6 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 
 	test("a non-ok /ctl/settings/set response surfaces the server {error} message in state.error", async () => {
 		setState({
-			sessionMode: "roster",
 			currentSessionId: "",
 			settingsModel: null,
 			settingsLoading: false,
@@ -706,7 +703,6 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 
 	test("a non-ok /ctl/settings response surfaces the server error and leaves the model null", async () => {
 		setState({
-			sessionMode: "roster",
 			currentSessionId: "",
 			settingsModel: null,
 			settingsLoading: false,
@@ -722,9 +718,8 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 		expect(state.settingsLoading).toBe(false);
 	});
 
-	test("roster mode with a session attached keeps updateSetting on the /command call path (no /ctl fetch)", async () => {
+	test("with a session attached, updateSetting stays on the /command call path (no /ctl fetch)", async () => {
 		setState({
-			sessionMode: "single",
 			currentSessionId: "",
 			settingsModel: null,
 			settingsLoading: false,
@@ -733,14 +728,14 @@ describe("fleet settings fallback (roster mode, no daemon attached)", () => {
 		const requests = stubFetch(() => ({ status: 200, body: model }));
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true so call() posts
-		// Flip to the attached roster state AFTER the stream opens, so the
-		// onopen auto-attach (roster + session) doesn't muddy the posted list.
-		setState({ sessionMode: "roster", currentSessionId: "daemon-a" });
+		// Flip to an attached state AFTER the stream opens, so the onopen
+		// auto-attach doesn't muddy the posted list.
+		setState({ currentSessionId: "daemon-a" });
 
 		updateSetting("agent.model", "gpt-5");
 		await settle();
 
-		expect(requests.filter((r) => r.url.startsWith("/ctl"))).toEqual([]); // no /ctl fetch in attached mode
+		expect(requests.filter((r) => r.url.startsWith("/ctl"))).toEqual([]); // no /ctl fetch while attached
 		// The /command uplink carries the RPC (recorded by stubFetch, since it
 		// replaced the beforeEach fetch stub that feeds `posted`).
 		const calls = requests
@@ -1845,7 +1840,6 @@ describe("attached session reconciliation against roster truth", () => {
 		expect(state.readyAt).toBeUndefined();
 		expect(state.items).toEqual([]);
 		// Fleet-scoped roster data survives the session clear.
-		expect(state.sessionMode).toBe("roster");
 		expect(state.daemonRoster.map((d) => d.daemonId)).toEqual(["daemon-a"]);
 		expect(hasLiveSession()).toBe(false);
 	});
@@ -1921,7 +1915,7 @@ describe("attached session reconciliation against roster truth", () => {
 		await expect(attach).resolves.toBe("daemon-b");
 	});
 
-	test("hasLiveSession: transitional statuses are live; standalone is never gated", () => {
+	test("hasLiveSession: transitional wake statuses stay live, terminal-dead statuses gate the pane", () => {
 		attachAndPrime();
 		// A transitional wake status is never dead.
 		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "connecting" })] });
@@ -1931,12 +1925,43 @@ describe("attached session reconciliation against roster truth", () => {
 		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "error" })] });
 		expect(state.currentSessionId).toBe("");
 		expect(hasLiveSession()).toBe(false);
+	});
+});
 
-		// Standalone mode: no roster gating even with a dead-looking entry.
-		setState("sessionMode", "single");
-		setState("currentSessionId", "local-session");
-		setState("daemonRoster", [daemon("local-session", { status: "asleep" })]);
-		expect(hasLiveSession()).toBe(true);
+// ---------------------------------------------------------------------------
+// Fleet edge detection: the roster frame is what tells the client its /events
+// peer is the fleet edge, which primes it FIRST on every stream open. A bare
+// session daemon never sends one, so an attached/hello_ok frame arriving
+// before any roster frame gates the whole UI behind the fleet-required notice.
+// ---------------------------------------------------------------------------
+describe("fleet-required gate (peer is not the fleet edge)", () => {
+	test("a roster frame before the attach keeps the UI ungated", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({ type: "roster", daemons: [] });
+		dispatch(attached("daemon-a"));
+		expect(state.fleetRequired).toBe(false);
+	});
+
+	test("an attach before any roster frame gates the UI", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+		expect(state.fleetRequired).toBe(true);
+	});
+
+	test("a hello_ok before any roster frame gates the UI", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({
+			type: "hello_ok",
+			proto: OMP_PROTO,
+			name: "s",
+			cwd: "/x",
+			pid: 1,
+			version: "0.0.0",
+		});
+		expect(state.fleetRequired).toBe(true);
 	});
 });
 

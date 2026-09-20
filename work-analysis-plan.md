@@ -1,7 +1,7 @@
 # Work / Analysis mode switcher: implementation plan
 
 Status: implemented 2026-09-04 (waves 1-3 landed; verified wide/narrow in browser).
-Scope: roster mode only. Standalone (bare omp-session) is unchanged, no buttons rendered.
+Scope: the roster UI only. (Historical note: the plan predates the removal of the direct daemon UI; the fleet-served UI is now the only runtime, so the Work/Analysis switcher renders unconditionally.)
 
 ## Summary
 

@@ -1,6 +1,6 @@
 ---
 title: CLI overview
-description: "Use the installed omp-web command to start the fleet, run a single session daemon, and drive the same fleet operations the browser UI exposes."
+description: "Use the installed omp-web command to start the fleet, run one session daemon, and drive the same fleet operations the browser UI exposes."
 ---
 
 `omp-web` is the installed entrypoint for both the browser experience and the terminal. The verbs in this section operate the same fleet, registry, and session daemons the browser talks to, so a shell script, a CI job, and the fleet sidebar all see one roster.
@@ -34,7 +34,7 @@ The fleet binds loopback only, so these commands must run on the same machine as
 | Stop or remove roster entries | `omp-web stop <selector>`, `omp-web remove <selector>` | [Operate session daemons](/cli/session-daemon-operations/) |
 | Prompt several session daemons at once | `omp-web prompt <selector> <text>` | [Fan-out prompting](/cli/fanout/) |
 | Address a set of session daemons | selectors | [Select multiple session daemons](/cli/selectors/) |
-| Run one session daemon | `omp-web session [options]` | [Run a standalone session daemon](/cli/standalone/) |
+| Run one session daemon | `omp-web session [options]` | [Run a session daemon](/cli/session-daemon/) |
 | Print or change the version | `omp-web --version`, `omp-web update` | [Updates](/operations/updates/) |
 
 Every command signature and flag lives in [CLI commands and flags](/reference/cli/).
@@ -69,11 +69,11 @@ A control-plane error covers validation failures, nonexistent paths, unknown sel
 
 The one asymmetric case is an awaited fan-out: `prompt --wait` exits 0 as soon as it has printed every target's block, so scripts that need failure detection must read the blocks rather than the exit status. [Fan-out prompting](/cli/fanout/) describes the block format.
 
-## Mode restrictions
+## What the CLI does not cover
 
-- The fleet verbs require fleet mode with a running fleet. [Single-session mode](/concepts/runtime-modes/) is one browser connected directly to one session daemon, with no roster for these verbs to read or change.
-- `omp-web session` is the single-session runtime. It never reads the fleet registry, and it serves exactly one live session. See [Run a standalone session daemon](/cli/standalone/).
-- Analysis views, the fleet sidebar, and project and worktree management are browser surfaces; the CLI reports roster and discovered worktree rows and applies registration changes.
+- The fleet verbs require a running fleet. Every verb except `serve` and `session` is a request to the fleet's control plane, so there is nothing for them to read or change until `omp-web` is running.
+- `omp-web session` starts one session daemon: one bound directory, one live session, no registry. It never reads the fleet registry, and it serves no roster surfaces. See [Run a session daemon](/cli/session-daemon/).
+- Analysis views, the fleet sidebar, and project and worktree management are browser surfaces of the fleet-served UI; the CLI reports roster and discovered worktree rows and applies registration changes.
 - Collaboration rooms are operated outside the browser UI; they are not part of these fleet verbs. See [Collaboration rooms](/advanced/collaboration/).
 
 ## Related
@@ -82,5 +82,5 @@ The one asymmetric case is an awaited fan-out: `prompt --wait` exits 0 as soon a
 - [Operate session daemons](/cli/session-daemon-operations/)
 - [Select multiple session daemons](/cli/selectors/)
 - [Fan-out prompting](/cli/fanout/)
-- [Run a standalone session daemon](/cli/standalone/)
+- [Run a session daemon](/cli/session-daemon/)
 - [CLI commands and flags](/reference/cli/)

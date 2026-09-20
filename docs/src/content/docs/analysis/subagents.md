@@ -14,11 +14,11 @@ While a session is attached, live subagent state updates in the running conversa
 - A `task` tool card in the transcript lists the agents spawned by that call.
 - The Subagents modal lists every known subagent, most recently updated first, with the agent name, its description or task, its status, and a local timestamp. Agents that are started or running gain steer and abort controls. Selecting a row opens a read-only transcript of that agent, paged as you scroll, with a back action to return to the list.
 
-This live view is session-scoped and in-memory. It works in both fleet and single-session mode whenever a session is attached, it reflects the current session daemon only, and it disappears when that session daemon stops or the live session is replaced. Nothing in it is read from disk.
+This live view is session-scoped and in-memory. It works whenever a session is attached, it reflects the current session daemon only, and it disappears when that session daemon stops or the live session is replaced. Nothing in it is read from disk.
 
 ## Historical subagent transcripts
 
-The durable record appears in the Analysis view, which is fleet mode only. Select a session and open its **Subagents** tab. The tab lists the transcript files recorded for that session:
+The durable record appears in the Analysis view. Select a session and open its **Subagents** tab. The tab lists the transcript files recorded for that session:
 
 - The list is built from the session's directory on disk. For a main transcript at `<project>/<name>.jsonl`, every `.jsonl` file under `<project>/<name>/` is listed, including nested directories.
 - The advisor transcript, named `__advisor.jsonl`, sits in the same directory and is listed like any other file.

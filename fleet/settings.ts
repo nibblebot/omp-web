@@ -1,5 +1,5 @@
 /**
- * Unattached-fleet settings service (roster-mode /ctl/settings).
+ * Unattached-fleet settings service (the fleet control plane's /ctl/settings).
  *
  * The session-scoped getSettings/setSetting RPCs need a live AgentSession
  * and fail unattached ("Settings unavailable"). This service backs the
@@ -104,7 +104,7 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 		// Schema-driven coercion mirrors the TUI's #setSettingValue; throws
 		// on unknown paths / uncoercible values (the route maps those to 400).
 		const coerced = coerceSettingValue(path, value);
-		// Persist-only: no live session exists in roster mode, so
+		// Persist-only: no live session exists on the unattached settings surface, so
 		// applySettingSideEffects (session setters, prompt refresh, memory
 		// backend, …) is deliberately skipped; the side effects replay when
 		// a session next boots from the same config, making the merged-view +

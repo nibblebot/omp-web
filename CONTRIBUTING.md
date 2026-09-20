@@ -22,8 +22,7 @@ Thanks for wanting to help with omp-web! Bug reports, feature ideas, and pull re
 
 ```sh
 bun install        # install dependencies
-bun run dev        # roster mode (fleet + UI)
-bun run dev:single # standalone mode (single daemon + UI)
+bun run dev        # vite (HMR) + fleet, ports chosen per run
 ```
 
 See `AGENTS.md` for the full engineering map: repo layout, the wire contract, invariants, and verification workflow.

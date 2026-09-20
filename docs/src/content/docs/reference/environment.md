@@ -3,7 +3,7 @@ title: Environment variables
 description: Canonical reference for the environment variables that the fleet, session daemons, agent runtime, and installer read, including defaults, precedence, and error behavior.
 ---
 
-omp-web reads environment variables in several separate processes: the fleet (fleet mode), each session daemon, the embedded Oh My Pi agent runtime inside those session daemons, and the install and update commands. This page is the canonical list. Each section names the owning process, the runtime modes it applies to, the accepted shape, and the exact precedence chain.
+omp-web reads environment variables in several separate processes: the fleet, each session daemon, the embedded Oh My Pi agent runtime inside those session daemons, and the install and update commands. This page is the canonical list. Each section names the owning process, the accepted shape, and the exact precedence chain.
 
 Rules that hold everywhere:
 
@@ -14,7 +14,7 @@ Rules that hold everywhere:
 
 ## Fleet
 
-Applies to fleet mode: the `omp-web` process that prints the startup banner, serves the browser UI, owns the loopback control plane, and spawns session daemons. The other fleet commands (`sessions`, `spawn`, `stop`, `prompt`, and so on) are loopback clients of that control plane and resolve the same port variable.
+Applies to the fleet process: the `omp-web` process that prints the startup banner, serves the browser UI, owns the loopback control plane, and spawns session daemons. The other fleet commands (`sessions`, `spawn`, `stop`, `prompt`, and so on) are loopback clients of that control plane and resolve the same port variable.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -51,11 +51,11 @@ The last non-empty stdout line must be a JSON object with a `url` (a `ws://` or 
 
 ## Session daemon
 
-Applies to both runtime modes: a standalone session daemon started with `omp-web session`, and a session daemon spawned by the fleet. Each knob has a matching flag, and the flag wins over the variable.
+Applies to every session daemon: one started directly with `omp-web session`, and one spawned by the fleet. Each knob has a matching flag, and the flag wins over the variable.
 
 | Variable | Flag | Default | Effect |
 | --- | --- | --- | --- |
-| `OMP_SESSION_CWD` | `--cwd` | current directory | Project directory bound to the session daemon for its lifetime. The binding is immutable; file access and the served UI are scoped to it. |
+| `OMP_SESSION_CWD` | `--cwd` | current directory | Project directory bound to the session daemon for its lifetime. The binding is immutable; file access and the wire API are scoped to it. |
 | `OMP_SESSION_PORT` | `--port` | `4721` | Listen port. `0` binds an ephemeral port, and the real port is reported on stdout in the `OMP_SESSION\|` line. |
 | `OMP_SESSION_HOST` | `--host` | `127.0.0.1` | Bind address. A non-loopback bind without a token is a startup error. |
 | `OMP_SESSION_IDLE_TIMEOUT` | `--idle-timeout` | `30m` | Idle auto-exit timeout. `0` disables it. Accepts a bare number of milliseconds, or a `ms`, `s`, `m`, or `h` suffix (`90s`, `30m`, `1h`). |
@@ -99,7 +99,7 @@ Collaboration rooms are hosted and joined through the CLI or TUI; omp-web has no
 
 ## Agent runtime and session transcripts
 
-These variables configure the embedded Oh My Pi agent runtime. Session daemons load that runtime in process, so each session daemon's environment is the runtime's environment. In fleet mode, the statistics surfaces read the same names from the fleet process at boot.
+These variables configure the embedded Oh My Pi agent runtime. Session daemons load that runtime in process, so each session daemon's environment is the runtime's environment. The fleet's statistics surfaces read the same names from the fleet process at boot.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -136,9 +136,7 @@ Everything below is internal to development, tests, and release tooling. It is l
 
 | Variable | Used by | Effect |
 | --- | --- | --- |
-| `OMP_DEV_FLEET` | `vite.config.ts` | `1` makes the development web server proxy `/events`, `/command`, and `/download` to the fleet edge instead of a standalone session daemon. |
-| `OMP_DEV_FLEET_PORT` | `vite.config.ts` | Fleet edge port for the development proxy. Default `4722`. |
-| `OMP_DEV_SESSION_PORT` | `vite.config.ts` | Standalone session daemon port for the development proxy. Default `4721`. |
+| `OMP_DEV_FLEET_PORT` | `vite.config.ts` | Fleet edge port that the development Vite proxy targets for `/events`, `/command`, and `/ctl`. Default `4722`; `scripts/dev.ts` sets it per run. |
 | `OMP_DEV_ALLOW_HOSTS` | `vite.config.ts` | `1`, `true`, or `*` allows every Host header; anything else is a comma-separated allowlist. Set by `bun scripts/dev.ts --allow-hosts`. |
 | `OMP_SESSION_TEST_READY_DELAY_MS` | session daemon tests | Delays the readiness gate by the given number of milliseconds after provider, model, and authentication resolution completes. |
 | `OMP_SESSION_TEST_IDLE_CHECK_MS` | session daemon tests | Idle auto-exit check interval in milliseconds. Default `15000`. |

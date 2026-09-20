@@ -11,7 +11,7 @@ The repository documents remain authoritative. This page summarizes and links; i
 
 Search the existing issues before opening a bug report. The issue templates in [`.github/ISSUE_TEMPLATE/`](https://github.com/nibblebot/omp-web/tree/main/.github/ISSUE_TEMPLATE) ask for:
 
-- **Bug report**: what you did, what happened, what you expected, the smallest reliable reproduction, the omp-web version (`omp-web --version`, or the commit when running from source), and your environment (OS, Bun version, install method, fleet or single-session mode). Logs and screenshots are optional; remove secrets first.
+- **Bug report**: what you did, what happened, what you expected, the smallest reliable reproduction, the omp-web version (`omp-web --version`, or the commit when running from source), and your environment (OS, Bun version, install method). Logs and screenshots are optional; remove secrets first.
 - **Feature request**: the problem it would solve, the outcome you want, and any alternatives or workarounds you use today.
 
 If you are planning something large, open an issue to discuss it before writing the code.
@@ -26,11 +26,10 @@ Prerequisites are the same as a normal install: [Bun](https://bun.sh) and a conf
 git clone https://github.com/nibblebot/omp-web
 cd omp-web
 bun install        # install dependencies
-bun run dev        # roster mode: fleet + UI
-bun run dev:single # standalone mode: one session daemon + UI
+bun run dev        # vite (HMR) + the fleet, the only runtime of the UI
 ```
 
-Both runners choose ports per run, so several checkouts can run side by side. `bun run dev` also scopes its fleet state per worktree under the data home, so a development fleet coexists with your installed fleet instead of clobbering its roster. `bun run dev:server` runs just the session daemon and `bun run dev:web` just the Vite UI when you want the two halves separately.
+The runner chooses ports per run, so several checkouts can run side by side. `bun run dev` also scopes its fleet state per worktree under the data home, so a development fleet coexists with your installed fleet instead of clobbering its roster. `bun run dev:server` runs just the session daemon and `bun run dev:web` just the Vite UI when you want the two halves separately.
 
 ## Checks before a pull request
 

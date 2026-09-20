@@ -12,7 +12,8 @@
  *                                     → fleet control-plane CLI (fleet/cli.ts;
  *                                       bare = serve)
  *   omp-web session [options]         → the omp-session daemon (server/index.ts;
- *                                       the dynamic import IS the daemon)
+ *                                       the dynamic import IS the daemon; wire
+ *                                       API only, no web UI)
  *   omp-web update [options]          → self-update from the release channel
  *                                       (cli/update.ts)
  *   omp-web --version | version       → print version, exit 0
@@ -64,7 +65,7 @@ const USAGE = `usage: omp-web [serve] [options] | omp-web <command> [options]
   spawn | add-repo | add | provision | stop | remove
   rm-project | add-worktree | rm-worktree | prompt
                                fleet control plane (see: omp-web <command> --help)
-  session [options]            run a single-session agent daemon
+  session [options]            run one agent session daemon (no web UI)
   update [--check] [--force] [--version x.y.z]
                                self-update from the release channel
   --version | version          print version

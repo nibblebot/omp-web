@@ -49,7 +49,7 @@ bun run build:web
 bun run test
 ```
 
-`build:web` runs before `test` because the session daemon suite asserts static UI serving at `/`, which needs a built `dist/`; that directory is gitignored and absent on a fresh worktree. `bun run lint` is deliberately not a gate, because lint warnings do not fail the repository's lint run. The gate is skipped entirely by `--dry-run`.
+`build:web` runs before `test` as a fast sanity gate that the UI bundle still compiles; the gate order is unchanged. The suite no longer needs a built `dist/`, and the session daemon serves no UI. `bun run lint` is deliberately not a gate, because lint warnings do not fail the repository's lint run. The gate is skipped entirely by `--dry-run`.
 
 ## Version selection
 

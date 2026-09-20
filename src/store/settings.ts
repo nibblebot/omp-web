@@ -24,9 +24,9 @@ async function ctlError(res: Response): Promise<string> {
 // ---------------------------------------------------------------------------
 // Settings model (TUI /settings parity). getSettings/setSetting return a
 // fresh authoritative model each time; settings_changed frames keep every
-// tab's settings panel in sync. With no daemon attached in roster mode the
-// /ctl settings endpoints back the panel instead (config.yml writes apply to
-// new sessions); the session RPC resumes once a session is attached.
+// tab's settings panel in sync. With no daemon attached the /ctl settings
+// endpoints back the panel instead (config.yml writes apply to new
+// sessions); the session RPC resumes once a session is attached.
 // ---------------------------------------------------------------------------
 export function refreshSettings(): void {
 	setState("settingsLoading", true);

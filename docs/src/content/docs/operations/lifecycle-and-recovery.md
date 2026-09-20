@@ -15,14 +15,14 @@ The two rules behind everything here:
 | Process | Started by | Owns | Ends on |
 | --- | --- | --- | --- |
 | Fleet (`omp-web`, `omp-web serve`) | You, in a terminal | The loopback control plane, the browser edge, the roster state file and its lock, the spawned session daemon children, and the connector sockets | `Ctrl+C` or `SIGTERM` (exit 0), or a crash |
-| Session daemon (`omp-session`, launched as `omp-web session`) | The fleet through a spawn template, or you manually for single-session mode and remote hosts | One bound working directory, one live session, its session file lock, and its idle timer | An idle auto-exit, an explicit stop, a crash, or shutdown of its supervising fleet |
+| Session daemon (`omp-session`, launched as `omp-web session`) | The fleet through a spawn template, or you manually for remote hosts | One bound working directory, one live session, its session file lock, and its idle timer | An idle auto-exit, an explicit stop, a crash, or shutdown of its supervising fleet |
 | Remote session daemon | Whatever runs on the remote host (a shell, an SSH session, a container entrypoint) | The same state on that host | Outside the fleet's control |
-| Browser tab | You | No process. It holds one SSE stream (to the fleet, or directly to a session daemon in single-session mode) and its actions are requests to the fleet | Tab close or navigation |
+| Browser tab | You | No process. It holds one SSE stream to the fleet, and its actions are requests to the fleet | Tab close or navigation |
 
 Ownership has three practical consequences:
 
 - Exactly one fleet process may write a given roster state file, and exactly one session daemon may own a given transcript at a time. Both rules are enforced by pidfile locks, described under [Locks](#locks).
-- Row actions are requests to the fleet, not direct signals. In fleet mode the browser never signals a process itself, and in single-session mode there is no supervisor to do it for you.
+- Row actions are requests to the fleet, not direct signals. The browser never signals a process itself; the fleet owns the processes it spawned, and a session daemon run outside the fleet has no row to act on.
 - A forced end of the fleet (a `SIGKILL`, a host crash, or any abrupt process death) skips orderly shutdown, so locally spawned session daemons can outlive it. Prefer `Ctrl+C` or `omp-web stop <selector>`; see [Recover after a force-killed fleet](#recover-after-a-force-killed-fleet).
 
 ## Normal stop, sleep, and wake
@@ -125,7 +125,7 @@ The browser holds one long-lived SSE stream. Reconnection is automatic in three 
 - A terminally closed stream is retried by the client at 1 second, 2 seconds, 4 seconds, and up to 8 seconds; the delay resets the moment a stream opens again. No unit of data (frame, keepalive, or comment) for 30 seconds forces an immediate reconnect with no backoff, because a silent but open stream is treated as a dead peer.
 - A stream the consumer cannot keep up with is ended in-band by the producer instead of being allowed to stall. The consumer resumes from the last event id; this is a slow reader, not a dead session daemon.
 
-Fleet mode adds one step: after a reconnect, the browser re-attaches to the session daemon it was viewing. Attaching to an `asleep` row wakes it, so a session daemon that slept while the tab was backgrounded comes back when the page reconnects. Readiness is per connection and the composer stays gated until the new stream reports `ready`. When a browser stream disconnects, the fleet edge keeps its replay ring for about 60 seconds; a browser that returns within that window resumes, and one that returns later re-attaches and re-primes from scratch.
+After a reconnect, the browser re-attaches to the session daemon it was viewing. Attaching to an `asleep` row wakes it, so a session daemon that slept while the tab was backgrounded comes back when the page reconnects. Readiness is per connection and the composer stays gated until the new stream reports `ready`. When a browser stream disconnects, the fleet edge keeps its replay ring for about 60 seconds; a browser that returns within that window resumes, and one that returns later re-attaches and re-primes from scratch.
 
 Two conditions are terminal and will not recover by waiting:
 
@@ -183,13 +183,13 @@ If the fleet process was killed in a way that skipped shutdown, local session da
 
 The message `omp-session: session file <file> is locked by another omp-session (pid <pid>)` identifies the owner. Keep one owner per transcript: either stop the session daemon named by the pid, or resume a different session from the row's session dropdown instead of the locked one. Locks from dead processes clear themselves on the next start, so a lock error always means a live holder, not leftover files.
 
-### Recover a single-session deployment
+### Recover a session daemon you started yourself
 
-`omp-web session` has no supervisor and no roster. If the process exits, nothing restarts it, and the browser keeps retrying the stream until it returns.
+A session daemon run by hand, for example on a remote host the fleet dials in, has no supervisor and no roster row. If the process exits, nothing restarts it, and the fleet keeps redialing its endpoint until it returns.
 
 1. Check the terminal output for the exit cause, including the idle exit line.
-2. Restart it in the same working directory: `omp-web session --cwd <dir>`. Add `--resume <file>` (or pick a session in the UI after attach) to continue a specific transcript.
-3. If the process must stay up unattended, start it with `--idle-timeout 0` or stop relying on idle exit, and supervise it with your own process manager or its host's container restart policy.
+2. Restart it in the same working directory: `omp-web session --cwd <dir>`. Add `--resume <file>` to continue a specific transcript. A fleet entry that points at the endpoint reconnects on its own once the session daemon answers again.
+3. If the process must stay up unattended, start it with `--idle-timeout 0` or supervise it with your own process manager or its host's container restart policy.
 4. The same lock rules apply: a second `omp-web session` on a held transcript refuses to start until the first process exits.
 
 ### Move or reset the data home

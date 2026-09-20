@@ -91,8 +91,8 @@ export async function loadConfig(
 		}
 		config = raw === undefined ? defaultConfig() : mergeConfig(raw);
 	}
-	// Env wins over every file source (scripts/dev.ts fleet mode sets this so
-	// sidebar spawns run the source entry, not the unbuilt production binary).
+	// Env wins over every file source (the dev runner sets this so sidebar
+	// spawns run the source entry, not the unbuilt production binary).
 	const localCommand = process.env.OMP_FLEET_LOCAL_TEMPLATE;
 	if (localCommand !== undefined && localCommand !== "") {
 		config.templates = { ...config.templates, local: { command: localCommand } };

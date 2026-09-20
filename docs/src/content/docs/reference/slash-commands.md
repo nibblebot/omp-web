@@ -15,10 +15,10 @@ This page is the canonical table. [Prompting the agent](/sessions/prompting/) ex
 - The whole message is the command. There is no chaining, no quoting syntax, and no way to pass one command's output to another.
 - The follow-up modifier (Ctrl+Enter, or Cmd+Enter on macOS) does not change slash dispatch. A submitted slash command always runs as a command; the modifier only changes how plain text is sent.
 
-## Runtime mode and readiness
+## Scope and readiness
 
-- Slash commands work the same in fleet mode and single-session mode. Every command targets the attached session; none of them manage the fleet, projects, worktrees, or session daemons. Use the sidebar for those operations.
-- In fleet mode with no session attached, the conversation column is replaced by the session picker prompt, so there is no composer to type into.
+- Slash commands work the same everywhere in the fleet-served UI. Every command targets the attached session; none of them manage the fleet, projects, worktrees, or session daemons. Use the sidebar for those operations.
+- With no session attached, the conversation column is replaced by the session picker prompt, so there is no composer to type into.
 - The composer refuses input until the attached session daemon reports ready. Until then the Send button is disabled, Enter is ignored, and the ready pill explains the wait.
 - If a prompt-family call arrives early anyway, the session daemon rejects it with `not_ready`. The gated methods are `prompt`, `steer`, `followUp`, `abortAndPrompt`, and the side turn behind `/btw`.
 - A command that fails puts a message in the status bar error banner, which you can dismiss. Successful commands report through the transcript: a notice line, a card, or a panel.
@@ -32,12 +32,12 @@ This page is the canonical table. [Prompting the agent](/sessions/prompting/) ex
 | `/resume` | none | Opens the History picker, which lists session files on disk for the attached directory (`list_sessions`). | Picking an entry switches the attached session daemon to that session and resyncs the transcript. |
 | `/tree`, `/branch` | none | Opens the Branch session picker over earlier user messages (`getBranchMessages`). | Picking a message branches from it, closes the picker, and posts a `branched at: ...` notice. An extension can cancel, which is reported in the picker. |
 | `/btw` | question (optional) | Opens the side-question panel. With a question it starts a side turn (`runEphemeralTurn`) that never enters the transcript. | The reply streams into the panel; stop or close aborts a streaming reply. Bare `/btw` opens the panel with a usage hint. |
-| `/export` | `--themes` (optional) | Exports the session to HTML (`exportHtml`). `--themes` carries the active web theme into the export; any other argument is ignored. | A transcript notice links the file through the session daemon's `/download` route. |
+| `/export` | `--themes` (optional) | Exports the session to HTML (`exportHtml`). `--themes` carries the active web theme into the export; any other argument is ignored. | A transcript notice names the exported file's path on the session daemon's host. |
 | `/retry` | none | Retries the last failed assistant turn when the session is idle (`retry`). | The retried turn streams. If there is no failed turn or the session is busy, a notice says there is nothing to retry. |
 | `/fork` | none | Forks the session history in place (`fork`). | The transcript resyncs and a notice reports `Forked session.` or `Fork failed.` |
 | `/fresh` | none | Resets provider state and keeps the transcript (`freshSession`). | Confirmation first while a turn is streaming. On success a notice reports the reset and the transcript is unchanged. |
-| `/handoff` | focus (optional) | Starts a new session carrying a summary document; the focus text becomes the handoff instructions (`handoff`). | The transcript resyncs, a `compaction (handoff)` card shows the document, and a notice links the saved document when the session daemon wrote one. |
-| `/dump` | none | Downloads the transcript as plain text and requests a dump of the last LLM request (`formatSessionAsText`, `dumpLlmRequestToTmpDir`). | `transcript.txt` downloads in the browser; notices cover an empty transcript and link the LLM request dump when one exists. |
+| `/handoff` | focus (optional) | Starts a new session carrying a summary document; the focus text becomes the handoff instructions (`handoff`). | The transcript resyncs, a `compaction (handoff)` card shows the document, and a notice names the saved document's path when the session daemon wrote one. |
+| `/dump` | none | Downloads the transcript as plain text and requests a dump of the last LLM request (`formatSessionAsText`, `dumpLlmRequestToTmpDir`). | `transcript.txt` downloads in the browser; notices cover an empty transcript and name the LLM request dump's path when one exists. |
 | `/rename` | title (optional) | With a title, sets the session name immediately (`setSessionName`), with no model turn. Bare, forwards `/rename` to the agent. | The new title appears in session listings. Bare `/rename` is answered by the agent-side builtin with its usage message in a notice. |
 | `/goal` | `set <objective>`, `pause`, `resume`, `drop`, or none | Creates, pauses, resumes, or drops the session goal. Bare, unknown subcommands, and `set` with no objective open the Goal panel. | The goal badge in the status bar and the Goal panel update from session state. Creating a goal while one is active is refused. |
 | `/plan` | none | Toggles plan mode (`setPlanModeState`). | The plan badge in the status bar turns on or off. |
@@ -75,8 +75,8 @@ Cancel, Escape, and the backdrop close a confirmation without running the action
 
 ## Files produced by commands
 
-- The transcript download from `/dump` is assembled in the browser, so it works in either mode.
-- `/export`, and the LLM request dump from `/dump`, link a server-side file through the session daemon's `/download` route. That route belongs to the session daemon, so the link resolves in single-session mode, where the browser is connected to that daemon. In fleet mode the browser's origin is the fleet edge, which serves the roster UI and does not expose the session daemon's `/download` route.
+- The transcript download from `/dump` is assembled in the browser, so it saves straight to your machine.
+- `/export` and the LLM request dump from `/dump` write server-side files on the machine that runs the session daemon, and their notices name those paths. The browser never resolves the session daemon's `/download` route, because the browser's origin is the fleet, which does not proxy it; retrieve the files on that host. See [Export and download sessions](/sessions/export/).
 
 ## Commands the web UI does not handle
 

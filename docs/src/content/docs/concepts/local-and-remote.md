@@ -3,7 +3,7 @@ title: Local and remote sessions
 description: "How session daemons join a fleet: spawned locally as supervised child processes, or dialed in as remote endpoints with their own tokens and their own host."
 ---
 
-A fleet can supervise session daemons in two places. A **local session daemon** is a child process the fleet starts on its own machine. A **remote session daemon** runs wherever you like, and the fleet connects to it over the network. Both speak the same contract, both serve the same session experience in the browser, and the roster row looks the same until you read the details.
+A fleet can supervise session daemons in two places. A **local session daemon** is a child process the fleet starts on its own machine. A **remote session daemon** runs wherever you like, and the fleet connects to it over the network. Both speak the same contract, the fleet serves the same session experience for either, and the roster row looks the same until you read the details.
 
 The distinction matters because ownership follows the process. The fleet can restart, stop, and probe a process it started; for one it merely dials, it can only connect, disconnect, and report what the session daemon says about itself.
 
@@ -103,7 +103,7 @@ An endpoint that answers with the wrong token is reported as an authorization fa
 
 ## Related
 
-- [Fleet and single-session modes](/concepts/runtime-modes/) for how the fleet serves a browser in front of these session daemons.
+- [What is omp-web?](/getting-started/overview/) for how the fleet serves the browser in front of these session daemons.
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/) for the states a remote row passes through and how a wake redials it.
 - [Session persistence](/concepts/session-persistence/) for what is stored on the fleet host and what stays on the remote one.
 - [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/) for operating rows in the UI.

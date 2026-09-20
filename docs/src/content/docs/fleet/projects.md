@@ -5,7 +5,7 @@ description: "Add a Git repository to the fleet, understand the main-checkout ro
 
 A project is a Git repository registered with the fleet. Registration stores metadata only: it records the repository's canonical path and gives it a stable id such as `p1`. It never copies, moves, or modifies repository files, and it never creates a worktree. See [Projects, worktrees, session daemons, and sessions](/concepts/projects-worktrees-session-daemons-sessions/) for how a project relates to its checkouts.
 
-Registering and removing projects is a fleet-mode browser workflow. Single-session mode has no project list and no fleet sidebar; see [Fleet and single-session modes](/concepts/runtime-modes/).
+Registering and removing projects happens in the fleet sidebar, which is the browser's only route to the fleet.
 
 ## Register a repository
 

@@ -3,7 +3,7 @@ title: Debug panel and diagnostics
 description: Open the Debug panel, read its connection, fleet, and log sections, and collect diagnostic data for a bug report without leaking secrets.
 ---
 
-The Debug panel is the browser-side view of the connection loops behind omp-web: the `/events` stream between this browser tab and the fleet edge or session daemon, and the loopback control plane of the fleet. When something misbehaves, the panel shows what the browser believes and what the fleet believes at the same moment, which is exactly the evidence a bug report needs.
+The Debug panel is the browser-side view of the connection loops behind omp-web: the `/events` stream between this browser tab and the fleet edge, and the loopback control plane of the fleet. When something misbehaves, the panel shows what the browser believes and what the fleet believes at the same moment, which is exactly the evidence a bug report needs.
 
 Use [Troubleshooting](/operations/troubleshooting/) when you know the symptom and want a repair. Use this page when you need to read the panel in detail or package a report. Both views describe the same facts; the panel is the source, troubleshooting is the symptom index.
 
@@ -11,8 +11,8 @@ Use [Troubleshooting](/operations/troubleshooting/) when you know the symptom an
 
 There are two ways in:
 
-- In fleet mode with the Work view active, use **Debug** in the footer of the [fleet sidebar](/fleet/sidebar/), next to **Settings** and after the optional usage panel. Its hover text names the panel as the transport and fleet visibility view.
-- Everywhere else, including single-session mode and the Analysis view, the same button sits in the top status bar. See the [Interface tour](/getting-started/interface-tour/) for the surrounding chrome.
+- With the Work view active, use **Debug** in the footer of the [fleet sidebar](/fleet/sidebar/), next to **Settings** and after the optional usage panel. Its hover text names the panel as the transport and fleet visibility view.
+- Everywhere else, including the Analysis view, the same button sits in the top status bar. See the [Interface tour](/getting-started/interface-tour/) for the surrounding chrome.
 
 The panel opens as a sheet over the app and closes with its close control or Escape. It is read-only: it changes no fleet state. The one exception is the **refresh** button, which re-fetches the fleet section immediately.
 
@@ -23,7 +23,6 @@ The first section describes this browser tab and its downlink. A healthy tab rea
 | Field | What it shows | Reading it |
 | --- | --- | --- |
 | `state` | A `connected` or `disconnected` pill. | `connected` means the tab's event stream is open. `disconnected` appears while a retry is pending. |
-| `mode` | `single` or `roster`. | Which runtime the stream established. A bare session daemon never sends a roster frame, so single-session mode reads `single`. |
 | `session` | The attached session id, truncated to 8 characters. A dash when nothing is attached. | Hover the value for the full id. |
 | `client` | This tab's client id, truncated to 8 characters. | Generated fresh on every page load, so each tab carries a different one. Include it when a report concerns one specific tab or a multi-tab setup. |
 | `last frame` | Seconds since the last frame or keepalive ping on the stream, or `never`. | The server pings every 15 seconds, so a healthy connected tab stays in single digits. `never` means no downlink activity arrived since the panel opened. |
@@ -35,7 +34,7 @@ Any field the client cannot read renders as a dash.
 
 This section is fed by the fleet control plane at `/ctl/debug`. The panel fetches it once on open and then polls every 2 seconds while it stays open. The header shows `polling…` while a fetch is in flight and otherwise states the cadence; **refresh** forces an extra fetch. A failed poll keeps the last successful payload on screen and shows the error above it.
 
-In single-session mode, and while a fleet is still booting, the fetch cannot reach a fleet control plane. The panel shows that notice, which is expected and harmless; the connection facts above still describe the live stream.
+While the fleet is still booting or unreachable, the fetch cannot reach the fleet control plane. The panel shows that notice, which is expected and harmless; the connection facts above still describe the live stream.
 
 When a fleet payload is present, the facts block reports:
 
@@ -151,14 +150,14 @@ For a session daemon the fleet spawned, open the row's `⋯` menu in the sidebar
 - The tail is a rolling in-memory buffer, not a log file. It is lost when the entry is removed or the fleet stops.
 - For an asleep or errored row, the popover labels the text as the capture from the last run, because no live process is writing. A row that the fleet does not own, such as a remote or attached entry, has no captured stderr at all and the popover says so.
 
-A session daemon you started yourself, including `omp-web session`, writes to the terminal that launched it. That terminal holds the full output, not a 64 KB tail, so prefer it over the popover when you have it.
+A session daemon you started by hand writes to the terminal that launched it. That terminal holds the full output, not a 64 KB tail, so prefer it over the popover when you have it.
 
 ## Collect a bug report
 
 Work through this checklist and the bug report template fills itself in: it asks for the same items, in the same order, as what happened, how to reproduce it, the version, the environment, and logs or screenshots.
 
 1. Reproduce the problem and write down the smallest reliable sequence of steps, with what you expected and what happened instead.
-2. Record the environment. Run `omp-web --version`, or note the commit when running from source. Note your OS and distribution, the Bun version from `bun --version`, how omp-web was installed, and whether you are in fleet mode or single-session mode. Add whether the affected session daemon is local or remote.
+2. Record the environment. Run `omp-web --version`, or note the commit when running from source. Note your OS and distribution, the Bun version from `bun --version`, how omp-web was installed, and whether the affected session daemon is local or remote.
 3. Open the Debug panel and copy its five groups: the connection facts, the fleet facts, the session rows (name or daemon id, status, mode, pid, connector state with attempt count), the fleet log, and the client transport entries. Do this before reloading the page or restarting the browser, because the client log lives only in the tab. If the fleet section shows a fetch notice, copy that text too.
 4. Capture the raw fleet payload while the problem is still visible:
 

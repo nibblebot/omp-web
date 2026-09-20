@@ -19,10 +19,9 @@ Because it drives the agent through the SDK instead of the RPC, omp-web has full
 - **Self-updating.** `omp-web update` checks the release channel and reinstalls the latest version in one command.
 - **Self-healing.** Idle daemons exit after 30 minutes and are respawned on demand; crashed daemons restart with bounded backoff; dropped connections show `reconnecting` and browsers re-attach automatically.
 
-## Runtime modes
+## Runtime
 
-- **Fleet mode** (bare `omp-web`): the fleet, a registry and supervisor, spawns and supervises one session daemon per worktree, serves the web UI, and proxies the browser through to whichever session daemon you select.
-- **Single-session mode** (`omp-web session`): one session daemon for one directory serves the browser directly, with no fleet sidebar.
+`omp-web` (bare, or `omp-web serve`) runs the fleet: registry, supervisor, and the web UI it serves on one loopback port, proxying the browser through to whichever session daemon you select. `omp-web session` runs one session daemon (one process, one bound directory, one live agent session, wire API only, no web UI): the fleet spawns these by default with a local template, and you run one by hand on a remote host for the fleet to dial in.
 
 Session daemons are disposable processes; the durable truth is the session `.jsonl` transcript on disk.
 
@@ -62,7 +61,7 @@ Full user documentation lives under [`docs/src/content/docs/`](docs/src/content/
 
 ```sh
 bun install
-bun dev      # roster mode: vite (HMR) + fleet, ports chosen per run
+bun dev      # vite (HMR) + fleet, ports chosen per run
 ```
 
 In a linked worktree, `bun dev` forks the dev fleet state from the main worktree (copy-once, like a git fork), so the worktree's roster boots with the main worktree's sessions/projects instead of empty; later runs keep the diverged fork. `--state-from <path>` forks from an explicit state file or directory, and `--fresh` skips seeding and starts on a clean state.

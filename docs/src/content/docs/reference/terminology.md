@@ -14,7 +14,7 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 | Project and worktree | A project is the fleet's registration of a repository. A worktree is one directory that repository owns. |
 | Session daemon and session | The session daemon is the disposable process. The session is the conversation it hosts, recorded in a durable transcript. |
 | Fleet and roster | The fleet is the process that supervises session daemons. The roster is the list of those session daemons in the sidebar. |
-| Fleet mode and single-session mode | Fleet mode serves the roster and proxies to many session daemons. Single-session mode talks to exactly one. |
+| The fleet and a session daemon | The fleet serves the web UI and supervises session daemons. A session daemon runs one live session for one bound directory and serves the wire API only. |
 | Ready and attached | Ready is a session daemon status. Attached describes this browser tab, which holds one session daemon at a time. |
 | Wake and attach | Waking starts an asleep session daemon and then attaches. Attaching alone binds a browser tab to a session daemon that is already ready. |
 | Branch, fork, and handoff | Branch starts a new transcript from an earlier message. Fork copies the current session in full. Handoff summarizes into a new session. |
@@ -24,7 +24,7 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 
 **Advisor**. A reviewer agent that watches a session's turns and can inject advice notes into the conversation. It is configured in the omp agent (the `advisor.enabled` setting, plus optional `WATCHDOG.yml` advisor entries), and omp-web can assign its model through the built-in model role named Advisor. Advisor transcripts appear with the session's subagent transcripts in Analysis.
 
-**Analysis**. The top-level view that browses historical work instead of the live chat: a session list, then Overview (analytics), Transcript, and Subagents tabs for the selected session, plus the Sync stats DB action. Analysis is fleet mode only, because it reads through the fleet's statistics service. Single-session mode never shows it. See [Analysis and usage](/analysis/) for the full view set.
+**Analysis**. The top-level view that browses historical work instead of the live chat: a session list, then Overview (analytics), Transcript, and Subagents tabs for the selected session, plus the Sync stats DB action. Analysis reads through the fleet's statistics service, which every deployment has. See [Analysis and usage](/analysis/) for the full view set.
 
 **Attached**. Describes a browser tab bound to one session daemon, receiving its live frames and sending prompts to it. Clicking a ready roster row attaches; waking an asleep row starts the session daemon first and then attaches. Each tab holds one attached session daemon at a time, so attaching to a different row moves the chat column to that session.
 
@@ -42,9 +42,7 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 
 **Fan-out**. Sending one prompt to many session daemons at once from the command line, selected with a selector, for example `omp-web prompt 'project:app' "Summarize the open work."`. Each session daemon runs the prompt as its own turn. Fan-out is a CLI feature; the browser sends prompts to the attached session only.
 
-**Fleet**. The registry, supervisor, and proxy for session daemons, run by bare `omp-web` (the same as `omp-web serve`). It tracks projects and session daemons, spawns and stops local child processes, dials remote session daemons, and proxies the browser to the attached session daemon. It holds no agent state; models, credentials, and conversations live in the session daemons and their transcripts.
-
-**Fleet mode**. The multi-project browser experience served by `omp-web`. The fleet serves the UI, project groups and their session daemons appear in the sidebar, and Analysis is available. This is the normal mode; [Start your first session](/getting-started/start-first-session/) covers the first run.
+**Fleet**. The registry, supervisor, and proxy for session daemons, run by bare `omp-web` (the same as `omp-web serve`). It tracks projects and session daemons, spawns and stops local child processes, dials remote session daemons, and serves the web UI. The browser only ever talks to the fleet, which proxies it through to the attached session daemon. The fleet holds no agent state; models, credentials, and conversations live in the session daemons and their transcripts.
 
 **Follow-up**. A message queued to run after the current turn finishes, instead of interrupting it. Contrast with steering. Queue chips in the composer show what is waiting.
 
@@ -86,7 +84,7 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 
 **Resume**. Continuing a session from its transcript. Waking an asleep row resumes its last session file, or starts a fresh session when the row has none; the per-row session picker resumes one of the worktree's recent sessions. A transcript can be open in only one session daemon at a time, so a second session daemon aimed at a file that is already in use refuses to start. See [Troubleshooting](/operations/troubleshooting/) for a blocked start.
 
-**Roster**. The fleet's list of session daemons, one row per session daemon, grouped by project. The sidebar shows the roster, and source and protocol references call the fleet-backed experience roster mode. Each row carries the bound directory, status, session title, and Git state, and clicking it attaches or wakes the session daemon. See [The fleet sidebar](/fleet/sidebar/).
+**Roster**. The fleet's list of session daemons, one row per session daemon, grouped by project. The sidebar shows the roster. Each row carries the bound directory, status, session title, and Git state, and clicking it attaches or wakes the session daemon. See [The fleet sidebar](/fleet/sidebar/).
 
 **Roster status**. The lifecycle state shown for a session daemon row. The ladder is:
 
@@ -107,13 +105,11 @@ After a fleet restart, locally spawned rows read as asleep because their child p
 
 **Session**. One agent conversation: the live message list, queue, model selection, and tool state hosted by a session daemon, persisted as a JSONL transcript and resumable later. A session daemon hosts one live session at a time, and actions such as starting a new session or resuming another replace that one session rather than adding a second.
 
-**Session daemon**. One `omp-session` process bound to one project or worktree directory at start and for its whole life. It serves the web UI, runs the agent in process, and hosts one live session. Session daemons are disposable: stopping one, or letting it exit after its idle timeout, loses nothing durable. One roster row corresponds to one session daemon, and parallel work means several of them. See [Session daemon lifecycle](/concepts/session-daemon-lifecycle/).
+**Session daemon**. One `omp-session` process bound to one project or worktree directory at start and for its whole life. It runs the agent in process, hosts one live session, and serves the wire API; it serves no web UI, because the fleet is the only server of the UI. Session daemons are disposable: stopping one, or letting it exit after its idle timeout, loses nothing durable. One roster row corresponds to one session daemon, and parallel work means several of them. See [Session daemon lifecycle](/concepts/session-daemon-lifecycle/).
 
 **Session file**. The JSONL file that holds one session transcript, stored under the agent session directory rather than inside the worktree. The file is the durable record, so worktree deletion never touches it.
 
 **Session title**. The short generated name for a session, shown on roster rows and in the session picker. It is derived from the conversation and can be set manually.
-
-**Single-session mode**. The mode started by `omp-web session`, in which the browser talks directly to one session daemon and that session daemon serves the full session UI. There is no fleet sidebar, no project or worktree management, and no Analysis. Use it when one directory and one session daemon are all you need.
 
 **Spawn**. Creating a session daemon on a directory, either from a project or worktree row in the UI or through `omp-web spawn <path>` on the command line. The fleet fills a spawn template with the directory, name, labels, token, and resume file, then supervises the resulting process. The session daemon's default name is the directory basename.
 
@@ -143,7 +139,7 @@ After a fleet restart, locally spawned rows read as asleep because their child p
 
 **Wake**. Starting an asleep session daemon and attaching to it. Local rows respawn on their bound directory and resume their last session when they have one; remote rows are dialed again.
 
-**Work**. One of the two top-level views, alongside Analysis, and the live chat one: the roster sidebar plus the attached session's stream and composer. It is the default view in fleet mode, and the only view in single-session mode.
+**Work**. One of the two top-level views, alongside Analysis, and the live chat one: the roster sidebar plus the attached session's stream and composer. It is the default top-level view.
 
 **Workspace directory**. The root under which managed worktrees are created, `~/.omp-web/workspaces` by default. It resolves with `--workspace-dir` winning over the `OMP_FLEET_WORKSPACE_DIR` environment variable, then the `workspaceDir` configuration key, then the default, and the directory is created lazily on the first managed worktree.
 

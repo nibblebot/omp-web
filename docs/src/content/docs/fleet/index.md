@@ -3,7 +3,7 @@ title: Fleet management
 description: Organize projects and worktrees, then operate their session daemons.
 ---
 
-Fleet mode is the normal omp-web experience for supervising work across multiple repositories and Git worktrees. The fleet stores roster metadata and process configuration. Durable agent state remains in session transcripts.
+The fleet is the normal omp-web experience for supervising work across multiple repositories and Git worktrees. It stores roster metadata and process configuration, and it serves the web UI. Durable agent state remains in session transcripts.
 
 ## Browser workflow
 

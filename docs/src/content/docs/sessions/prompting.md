@@ -11,11 +11,10 @@ This page assumes an attached, ready session. If the composer refuses input, see
 
 The composer accepts input only while the attached session daemon reports ready. Until then, Enter is ignored and the Send button is disabled; the disabled button explains why with `Not connected`, `The attached session is not ready yet…`, or `The agent is still starting…`.
 
-The pill next to the buttons tracks startup:
+The pill next to the buttons tracks startup and attach:
 
-- In single-session mode it reads `starting…` while the agent resolves a provider and model.
-- In fleet mode it describes the attach state instead, for example `attaching to daemon…` or `daemon <status>…`.
-- In fleet mode with no session attached at all, the conversation column is replaced by a prompt to pick a session daemon in the sidebar.
+- It describes the attach state, for example `attaching to daemon…` or `daemon <status>…`, once the fleet knows about the session.
+- With no session attached at all, the conversation column is replaced by a prompt to pick a session daemon in the sidebar.
 
 ## Send a normal prompt
 

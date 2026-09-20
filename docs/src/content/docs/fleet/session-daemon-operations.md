@@ -5,7 +5,7 @@ description: "Operate the session daemon behind a roster row: start or wake it, 
 
 Every roster row represents one session daemon: one `omp-session` process bound to one project or worktree directory. This page covers the row operations that start, stop, wake, and remove that process, plus what the fleet does on its own when a session daemon goes idle or crashes. See [The fleet sidebar](/fleet/sidebar/) for the row layout and [Understand roster status](/fleet/roster-status/) for the status and activity indicators.
 
-These operations are fleet-mode browser operations. Single-session mode (`omp-web session`) has no roster: the browser talks directly to one session daemon, and stopping it means stopping that process. See [Fleet and single-session modes](/concepts/runtime-modes/).
+Every operation here goes through the fleet, which owns the roster and the spawned processes. A session daemon run by hand outside the fleet has no row; stop it by stopping that process.
 
 ## Start a session daemon
 
@@ -92,7 +92,7 @@ Restarting omp-fleet does not lose roster data, but it does lose every child pro
 
 - The CLI has no dedicated wake or resume command. `omp-web prompt <selector> <text>` wakes asleep targets on demand before prompting: a spawned row is respawned with `--resume`, and a remote row is redialed.
 - `omp-web sessions` lists the roster from the terminal, including each row's status and working directory, which is useful when the browser is closed.
-- Starting a standalone session daemon without a fleet is a different mode entirely; see [Run a standalone session daemon](/cli/standalone/).
+- A session daemon can also be run by hand instead of spawned by the fleet, for a remote host or a one-off process; see [Run a session daemon](/cli/session-daemon/).
 
 ## Related
 

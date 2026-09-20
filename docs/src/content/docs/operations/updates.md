@@ -86,7 +86,7 @@ Replacing files under the pinned install has no effect on processes that are alr
 - When the fleet control plane answers on the default loopback port `127.0.0.1:4722`, `omp-web update` appends a line telling you the running fleet predates this install and should be restarted. The probe uses that default port only, so a fleet started on another port is not detected; restart it by hand.
 - Restart the fleet from the terminal that runs it: Ctrl+C (or SIGTERM) stops the fleet cleanly, which terminates its spawned session daemons (SIGTERM, then SIGKILL after 5 seconds) and keeps their registry entries. Starting `omp-web` again brings up the new fleet, and session daemons spawned or woken afterwards run the new build; a respawn with a recorded session file resumes it with `--resume`.
 - If the fleet was killed with SIGKILL it cannot stop its children. After the new fleet is up, stop the leftover rows you want off the old build (`omp-web stop <selector>`) and wake them again so they respawn from the new install.
-- Session daemons you started yourself, in single-session mode, or registered on another host through SSH or a container are not children of the fleet; the fleet dials in to their endpoints. They are not stopped or updated by the fleet restart; restart them on their host to move them to the new build.
+- Session daemons you started yourself, or registered on another host through SSH or a container, are not children of the fleet; the fleet dials in to their endpoints. They are not stopped or updated by the fleet restart; restart them on their host to move them to the new build.
 - The browser tab shows `reconnecting` while the fleet is down and reattaches once the new fleet answers.
 
 ## Protocol compatibility

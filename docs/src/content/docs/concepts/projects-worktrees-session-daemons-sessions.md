@@ -37,8 +37,8 @@ Read the tree from the bottom up: sessions are the durable record, session daemo
 
 A session daemon takes one working directory when it starts and keeps it for its entire life.
 
-- In single-session mode it serves the directory you started it from by default.
-- In fleet mode the directory comes from the project or worktree row, and the fleet verifies the directory the process reports against the row that started it.
+- A session daemon started by the fleet takes its directory from the project or worktree row, and the fleet verifies the directory the process reports against the row that started it.
+- A session daemon you start yourself serves the directory you started it from, the current directory unless `--cwd` names another. See [Run a session daemon](/cli/session-daemon/).
 - There is no operation that repoints a running session daemon at another checkout.
 
 Because the directory is fixed:
@@ -72,21 +72,6 @@ omp-fleet is a registry, a supervisor, and a proxy. It tracks which projects and
 - The registry mirrors only the facts needed to operate a row: the bound directory, the last session file, and readiness. Restarting the fleet loses no agent state because the fleet never held any.
 - After a fleet restart, locally spawned rows are asleep because their child processes are gone with the fleet; waking a row respawns it with its transcript. Remote rows are dialed again.
 - Removing a project removes only the registration. Repository files are untouched, deleting a managed worktree is a separate guarded action, and removal is refused while session daemons still reference the project.
-
-## Fleet mode and single-session mode
-
-The four levels work the same way in both modes. What differs is who the browser talks to and how many session daemons exist.
-
-| | Fleet mode | Single-session mode |
-| --- | --- | --- |
-| Command | `omp-web` (the same as `omp-web serve`) | `omp-web session` |
-| Browser talks to | omp-fleet, which proxies to the selected session daemon | one session daemon directly |
-| UI served by | the fleet | the session daemon |
-| Session daemons | many: spawned, supervised, dialed, and woken on demand | exactly one |
-| Fleet sidebar | yes | no |
-| Analysis surfaces | available | not available |
-
-Single-session mode is the same session experience without the fleet: one directory, one session daemon, no roster. Use it when you work in a single repository and do not need supervision across worktrees. Fleet mode is the normal path once you run more than one session daemon; see [Start your first session](/getting-started/start-first-session/).
 
 ## Related pages
 

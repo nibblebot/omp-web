@@ -1,6 +1,6 @@
 ---
 title: Core concepts
-description: Understand omp-web runtime modes, ownership boundaries, persistence, and lifecycle.
+description: Understand the omp-web ownership model, persistence, and lifecycle.
 ---
 
 omp-web separates durable conversations from the processes that serve them. Understanding that distinction makes session recovery, worktree management, and fleet status predictable.
@@ -13,7 +13,6 @@ The central rule is simple: a session daemon is a replaceable process bound to o
 
 ## In this section
 
-- [Fleet and single-session modes](/concepts/runtime-modes/) compares the two ways to run omp-web and states which features each mode has.
 - [Projects, worktrees, session daemons, and sessions](/concepts/projects-worktrees-session-daemons-sessions/) defines the four-level model and the concurrency it enables.
 - [Session persistence](/concepts/session-persistence/) separates durable state from disposable processes and shows what survives each kind of restart.
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/) walks every status a session daemon passes through, including sleep, reconnection, and error.

@@ -1,6 +1,6 @@
 ---
 title: Interface tour
-description: Walk through the omp-web Work and Analysis views, the fleet sidebar, transcript, composer, queue, model strip, settings, Debug panel, and single-session limits.
+description: Walk through the omp-web Work and Analysis views, the fleet sidebar, transcript, composer, queue, model strip, settings, and Debug panel.
 ---
 
 omp-web puts one live agent conversation at the center, with the fleet roster at
@@ -18,11 +18,11 @@ Two icon buttons at the top of each sidebar switch the top-level view:
 - **Work** is the live workspace: fleet sidebar, transcript, composer.
 - **Analysis** browses historical transcripts, session analytics, and subagent transcripts.
 
-Analysis reads the fleet statistics API, so it is available in fleet mode only.
+Analysis reads the fleet statistics API, so it is served by the fleet itself.
 Each view remembers its own sidebar state, and a turn that finishes while you
 are in Analysis lights a small dot on the Work button until you return.
 
-When no session daemon is attached in fleet mode, the chat column is replaced
+When no session daemon is attached, the chat column is replaced
 by a short message that points you at the sidebar. Attach a session daemon and
 the full surface below appears.
 
@@ -108,8 +108,8 @@ retry, the queue count, subagents, a disconnected pill, and a dismissible
 error banner. Goal, plan, and subagents are clickable.
 
 **Settings** opens as a full-height sheet from the sidebar footer in Work, or
-from the status bar wherever the roster sidebar is absent (single-session mode
-and the Analysis view). It has a search field, a Web UI section for browser
+from the status bar wherever the roster sidebar is absent (the Analysis view).
+It has a search field, a Web UI section for browser
 preferences such as theme, font size, notifications, and sidebar usage, plus
 provider and schema-backed agent settings. With no session attached, the
 sheet notes that changes save to `config.yml` and apply to new sessions.
@@ -146,19 +146,6 @@ button.
 On a narrow viewport the sidebar slides over the content instead. Tapping the
 dimmed area outside it closes it, and the first load on a narrow viewport
 starts with the roster sidebar closed so the conversation has room.
-
-## Single-session limits
-
-`omp-web session` connects the browser straight to one session daemon without
-a fleet process. In that mode:
-
-- Work is the only view.
-- There is no fleet sidebar and no Analysis view. The session UI fills the
-  page, and Debug and Settings stay in the status bar.
-- One session daemon hosts one live session at a time.
-
-Run fleet mode and attach separate session daemons when you want parallel work
-across projects and worktrees.
 
 ## Where to go next
 

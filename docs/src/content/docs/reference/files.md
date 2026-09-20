@@ -3,19 +3,19 @@ title: Files and directories
 description: Canonical locations for the installed omp-web code, the data home, fleet configuration and state, managed worktrees, session transcripts and locks, the statistics database, and browser-local settings.
 ---
 
-omp-web touches several separate trees with different owners: the installer and updater own the installed code, the fleet owns a data home, session daemons write session transcripts through the Oh My Pi agent runtime, the Analysis views read a statistics database that the `omp` CLI maintains, and the browser holds interface preferences in `localStorage`. This page is the canonical list of those locations: exact defaults, who writes them, the runtime modes they apply to, and what deleting them costs.
+omp-web touches several separate trees with different owners: the installer and updater own the installed code, the fleet owns a data home, session daemons write session transcripts through the Oh My Pi agent runtime, the Analysis views read a statistics database that the `omp` CLI maintains, and the browser holds interface preferences in `localStorage`. This page is the canonical list of those locations: exact defaults, who writes them, and what deleting them costs.
 
 Only a few locations are configurable. Each section states its precedence chain, and the [environment reference](/reference/environment/) owns the full variable list. Commands here use the installed `omp-web` command.
 
-## Scope and runtime modes
+## Scope
 
 | Location group | Applies to |
 | --- | --- |
-| Installed code and the `omp-web` command link | all modes |
-| Data home, fleet config, fleet state and lock, managed worktrees | fleet mode |
-| Session transcripts, transcript locks, session artifacts | fleet mode and single-session mode |
-| Statistics database and the sessions tree the Analysis views read | fleet mode |
-| Browser-local preferences | all modes, stored per browser origin |
+| Installed code and the `omp-web` command link | every install |
+| Data home, fleet config, fleet state and lock, managed worktrees | the fleet |
+| Session transcripts, transcript locks, session artifacts | the fleet and the session daemons it drives |
+| Statistics database and the sessions tree the Analysis views read | the fleet-served Analysis views |
+| Browser-local preferences | the browser, stored per origin |
 | Build and development outputs | source checkouts |
 
 ## Locations at a glance
@@ -119,7 +119,7 @@ See [Create and adopt worktrees](/fleet/worktrees/) and [Safely delete managed w
 
 ## Session transcripts and locks
 
-Transcripts are Oh My Pi agent data, written by the agent runtime inside a session daemon. Both runtime modes produce them.
+Transcripts are Oh My Pi agent data, written by the agent runtime inside a session daemon, whether the fleet spawned it or you started it by hand.
 
 | Location | Resolution |
 | --- | --- |
@@ -179,7 +179,7 @@ The composer and the agent runtime create a few files during normal use:
 | Transcript text download | your browser's download location, named `transcript.txt` | the `/dump` command |
 | Project-scoped agent settings | `<project>/.omp/config.yml` | the omp stack when you save project-scoped roles |
 
-For a session daemon spawned by the fleet, the process working directory is inherited from the fleet process; for `omp-web session`, it is the directory you started the command from. The browser fetches server-side artifacts back through the session daemon's download route, which serves only files under the system temp directory, the bound directory, the session daemon's process working directory, or the live session file's directory. Off-loopback downloads require the bearer token, like the rest of the wire.
+For a session daemon spawned by the fleet, the process working directory is inherited from the fleet process; for `omp-web session`, it is the directory you started the command from. The session daemon's download route serves only files under the system temp directory, the bound directory, the session daemon's process working directory, or the live session file's directory, and the fleet does not proxy it, so the browser never fetches these files. The export and dump notices name the path on the session daemon's host, where you retrieve the file. Off-loopback downloads require the bearer token, like the rest of the wire.
 
 ## Browser-local storage
 
@@ -194,8 +194,8 @@ Interface preferences are stored in the browser's `localStorage` for the site or
 | `omp.sidebarGroupsCollapsed` | JSON array of collapsed group keys | empty, all groups open | roster group collapse state |
 | `omp.sidebarUsage` | `true` or `false` | `false` | usage panel above the roster footer |
 | `omp.notifyEnabled` | `true` or `false` | `false` | desktop notifications |
-| `omp.view` | `work` or `analysis` | `work` | top-level view, fleet mode |
-| `omp.txSidebarVisible` | `true` or `false` | `true` | Analysis sidebar visibility, fleet mode |
+| `omp.view` | `work` or `analysis` | `work` | top-level view |
+| `omp.txSidebarVisible` | `true` or `false` | `true` | Analysis sidebar visibility |
 
 - Preferences are keyed by origin. The same fleet opened on another port or hostname is another origin and starts from defaults.
 - Corrupt or out-of-range values fall back to defaults: an unrecognized theme resolves to `system`, a font size outside the range resolves to 15, a malformed collapsed-groups list opens all groups, and unparsable prompt history starts empty.
@@ -210,9 +210,9 @@ These paths exist only in a source checkout and are all gitignored. None of them
 
 | Path | Contents | Produced by |
 | --- | --- | --- |
-| `dist/` | the built web UI; a source-checkout session daemon serves it from disk before falling back to its embedded copy | `bun run build:web` or `bun run build` |
+| `dist/` | the built web UI; the fleet serves it from disk before falling back to its embedded copy | `bun run build:web` or `bun run build` |
 | `dist-bundle/` | the installable bundle `cli.js` plus the copied UI assets | `bun run build` |
-| `server/embedded-dist.ts` | a stub in the tree; a build replaces it with the embedded asset map and restores the stub when it finishes | `bun run build` |
+| `fleet/embedded-dist.ts` | a stub in the tree; a build replaces it with the embedded asset map and restores the stub when it finishes | `bun run build` |
 | `dist-release/` | release staging: `omp-web-<version>.tgz`, `release-manifest.json`, and `notes.md` | the release script |
 | `omp-web-<version>.tgz` in the repository root | the packed tarball, moved into `dist-release/` during a release | `bun pm pack` |
 | `.bench/` | `history.jsonl` benchmark records and the `baseline` pointer | `bun run bench` |

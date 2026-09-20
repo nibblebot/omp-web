@@ -51,7 +51,7 @@ Every session file is locked for the lifetime of the session daemon that owns it
 A fleet control command with nothing listening on the loopback control port exits 1 and reports `fleet not running` along with the low-level start command, `omp-fleet serve`. In the browser, the Debug panel reports that the fleet control plane is unreachable when no fleet answers on port 4722.
 
 - Start `omp-web` with no arguments. That runs the fleet, the supervisor, and the web UI; it is the same as `omp-web serve`.
-- In single-session mode the browser talks directly to one session daemon, so the Debug panel's fleet notice is expected and harmless.
+- The fleet serves the browser UI, so a Debug panel notice about an unreachable control plane means the `/ctl/debug` fetch failed or the fleet is still booting, not a separate runtime; the connection facts still describe the live stream.
 - If a fleet should be running, check the terminal that started it and confirm its control port (4722 unless configured otherwise).
 
 ## Session daemon stuck resolving
@@ -81,10 +81,10 @@ An entry whose pinned working directory differs from the directory reported by t
 
 A session daemon that is reachable off loopback requires its bearer token. A missing or wrong token returns HTTP 401 (`Unauthorized`); the fleet records `unauthorized (401): daemon rejected the token` and stops redialing. Starting a session daemon manually off loopback without a token is refused outright.
 
-- Fleet-managed connections attach the token automatically. For a direct browser URL to a remote session daemon, include the exact `?token=<token>` value; tokens are case-sensitive.
+- Fleet-managed connections attach the token automatically. A direct API client includes the exact `Authorization: Bearer` header or `?token=<token>` value; tokens are case-sensitive.
 - For a fleet-managed session daemon, stop it and wake it so the fleet mints a fresh token.
 - For a manually launched remote session daemon, restart it with a known token, then correct or re-create any remote registration whose stored endpoint or token no longer matches.
-- Start a standalone session daemon off loopback with `--token` or `OMP_SESSION_TOKEN`, and prefer SSH forwarding or a tailnet over exposing the port directly.
+- Start a session daemon off loopback with `--token` or `OMP_SESSION_TOKEN`, and prefer SSH forwarding or a tailnet over exposing the port directly.
 
 ## Worktree branch already checked out
 
@@ -112,19 +112,19 @@ Analysis reads token, cost, and error figures from `stats.db`. A session whose t
 The Debug panel describes the stream. Connection `state` reads `disconnected` while a retry is pending, and `reconnect` shows the delay in milliseconds or `none (stream open)` when the stream is healthy.
 
 - The client transport log names the case: `transient blip` (the browser's native EventSource replay handles it, no action needed), `silence deadline hit` (the stream was open but silent, so it reconnects immediately), or `connection lost` with the retry delay.
-- After a terminal close the client retries at 1s, 2s, 4s, and up to 8s. When the stream opens again the backoff resets and roster mode reattaches the session daemon you were viewing. Readiness stays gated until the new stream reports ready.
+- After a terminal close the client retries at 1s, 2s, 4s, and up to 8s. When the stream opens again the backoff resets and the browser reattaches the session daemon you were viewing. Readiness stays gated until the new stream reports ready.
 - Wait for automatic recovery first. If it persists, check that the fleet and the session daemon are still running and that the network path between them is healthy.
-- For a direct remote connection, verify the token; an unauthorized stream cannot recover by retrying. A protocol mismatch is also terminal and needs compatible versions instead of patience.
+- For a remote connection, verify the token; an unauthorized stream cannot recover by retrying. A protocol mismatch is also terminal and needs compatible versions instead of patience.
 
 ## Collect diagnostics for a bug report
 
 Open the Debug panel with the info button in the status bar (or the one at the bottom of the fleet sidebar). It polls the fleet control plane every 2 seconds while open and keeps the last successful payload if a poll fails. Collect:
 
-- Connection facts: `state`, `mode`, `session` ID, `client` ID, `last frame`, and `reconnect`.
+- Connection facts: `state`, `session` ID, `client` ID, `last frame`, and `reconnect`.
 - Fleet facts: `port`, `uptime`, `since`, the `state` path, and the `config` path.
 - Session daemon rows: name or ID, status (hover for the error text), mode, PID, endpoint host, uptime, and the connector state with attempt count and next retry.
 - The `Fleet log` and `Client transport` logs.
 
-Also include the steps that reproduce the problem, what you expected, what happened instead, and the output of `omp-web --version` (or the commit when running from source), your OS, Bun version, installation method, and whether you use fleet mode or single-session mode. Remove secrets before posting: bearer tokens, authentication URLs and codes, and sensitive paths or transcript content. The fleet debug payload omits tokens, but pasted logs and screenshots can still contain them.
+Also include the steps that reproduce the problem, what you expected, what happened instead, and the output of `omp-web --version` (or the commit when running from source), your OS, Bun version, and installation method. Remove secrets before posting: bearer tokens, authentication URLs and codes, and sensitive paths or transcript content. The fleet debug payload omits tokens, but pasted logs and screenshots can still contain them.
 
-Missing fleet facts in single-session mode are expected, and fields the panel cannot read render as a dash.
+Missing fleet facts, for example while the fleet is still booting, are expected, and fields the panel cannot read render as a dash.

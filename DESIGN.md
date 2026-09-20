@@ -208,7 +208,7 @@ The root font size is user-settable (12–18px, `/settings` parity); every scale
 
 ## Layout
 
-One centered console column, maximum 820px, full viewport height, 16px side padding: the chat thread is the room. In roster mode a 240px sidebar docks on the **left** (`--sidebar-w`), listing daemons grouped by repo; it takes layout space on desktop and narrows to `width: min(240px, 80vw)` at ≤720px.
+One centered console column, maximum 820px, full viewport height, 16px side padding: the chat thread is the room. A 240px sidebar docks on the **left** (`--sidebar-w`), listing daemons grouped by repo; it takes layout space on desktop and narrows to `width: min(240px, 80vw)` at ≤720px.
 
 Overlays have two geometries: the centered **modal** (min 320px, max 640px, max 80vh) for dialogs, and the right-docked **sheet** (`min(880px, 100vw)`, full height, square outer corners) for working panels: settings, subagents, debug. Sheets go full-viewport at ≤720px, where settings also swaps its nav rail for a section-picker select.
 

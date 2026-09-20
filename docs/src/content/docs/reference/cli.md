@@ -1,12 +1,12 @@
 ---
 title: CLI commands and flags
-description: "Canonical reference for every omp-web command, subcommand, flag, default, output stream, and exit code, including the fleet control plane, the standalone session daemon, self-update, and the collaboration script."
+description: "Canonical reference for every omp-web command, subcommand, flag, default, output stream, and exit code, including the fleet control plane, the session daemon, self-update, and the collaboration script."
 ---
 
 `omp-web` is one installed command that covers three kinds of work:
 
-- **Fleet mode:** bare `omp-web` or `omp-web serve` starts the fleet (registry, session daemon supervisor, and browser UI on one loopback port).
-- **Single-session mode:** `omp-web session` runs one session daemon, serving the standalone browser UI for one bound directory.
+- **The fleet:** bare `omp-web` or `omp-web serve` starts the fleet (registry, session daemon supervisor, and the web UI on one loopback port).
+- **A session daemon:** `omp-web session` runs one session daemon, bound to one directory and serving the wire API for one live agent session. It serves no web UI.
 - **Clients:** the fleet verbs are short-lived requests to a running fleet, and `update` maintains the installation from the release channel.
 
 Task guides such as [CLI overview](/cli/overview/) explain when to use which verb. This page owns the signatures, flags, defaults, outputs, and exit codes.
@@ -24,7 +24,7 @@ Task guides such as [CLI overview](/cli/overview/) explain when to use which ver
 
 The verb must be the first argument; flags follow it. The installed entrypoint has no help command that exits 0: `omp-web --help`, `omp-web help`, and any unknown first argument print the usage summary on stderr and exit 1. In a source checkout, `bun run fleet` or `bun run fleet -- help` prints the fleet usage to stdout and exits 0.
 
-Fleet verbs other than `serve` are loopback clients of the running fleet. They connect to `127.0.0.1` on the control port and exit when the request finishes. Fleet mode must be running first; there is no auto-start and no queueing.
+Fleet verbs other than `serve` are loopback clients of the running fleet. They connect to `127.0.0.1` on the control port and exit when the request finishes. The fleet must be running first; there is no auto-start and no queueing.
 
 ## Output streams
 
@@ -69,7 +69,7 @@ Source-checkout note: the same verbs run as `bun run fleet -- <verb> ...`.
 ## serve
 
 ```
-omp-web                                  # fleet mode
+omp-web                                  # the fleet
 omp-web serve [--port <n>] [--workspace-dir <dir>]
 ```
 
@@ -104,7 +104,7 @@ Behavior notes:
 omp-web session [options]
 ```
 
-Runs one session daemon: a single process bound to one directory, holding one live agent session and serving the standalone browser UI and the wire API. The directory is bound at spawn and immutable for the process lifetime.
+Runs one session daemon: a single process bound to one directory, holding one live agent session and serving the wire API. It serves no web UI, because the fleet is the only server of the web UI. The directory is bound at spawn and immutable for the process lifetime.
 
 ```sh
 omp-web session --cwd ~/code/app --port 4721
@@ -139,7 +139,7 @@ Error behavior:
 - Idle auto-exit applies when nothing suppresses it: no attached clients, no streaming turn, no queued messages, no pending dialog, no in-flight tool call, and no live collaboration room. The session daemon checks on a 15 second interval, logs `omp-session: idle for <ms>ms; shutting down`, and exits 0. The session transcript is durable, so the fleet marks the row asleep and can wake it with `--resume`.
 - A bind failure aborts startup.
 
-In a source checkout the same session daemon runs as `bun server/index.ts` or `bun run dev:server`. Single-session mode has no fleet sidebar; see [CLI overview](/cli/overview/) and [Run a standalone session daemon](/cli/standalone/).
+In a source checkout the same session daemon runs as `bun server/index.ts` or `bun run dev:server`. See [CLI overview](/cli/overview/) and [Run a session daemon](/cli/session-daemon/).
 
 ## Fleet control verbs
 

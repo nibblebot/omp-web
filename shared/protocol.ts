@@ -579,9 +579,9 @@ export type SessionScopedFrame =
 
 // Server → browser. Session-scoped frames on a bare omp-session carry NO
 // sessionId (one live session; connect = attached). The fleet edge STAMPS the
-// daemonId as sessionId when proxying, so roster-mode clients can guard
-// daemon switches. The rest are global broadcasts or unicast answers (noted
-// per variant).
+// daemonId as sessionId when proxying, so clients proxied through the edge
+// can guard daemon switches. The rest are global broadcasts or unicast
+// answers (noted per variant).
 export type ServerFrame =
 	| (SessionScopedFrame & { sessionId?: string })
 	// Unicast answer to list_sessions.
@@ -596,9 +596,9 @@ export type ServerFrame =
 	// Unicast: provider needs a pasted code to finish login.
 	| { type: "login_code_request"; requestId: string; title: string; placeholder?: string }
 	// Unicast: socket is now attached to this handle; history, state and
-	// available_commands follow immediately (in that order). Roster mode is
-	// signaled by the fleet edge's roster frame, never by attached (the edge
-	// proxies the daemon's frame through unchanged).
+	// available_commands follow immediately (in that order). The fleet
+	// sidebar's state is signaled by the fleet edge's roster frame, never by
+	// attached (the edge proxies the daemon's frame through unchanged).
 	| { type: "attached"; sessionId: string }
 	// Project-wide daemon broker roster (hub launch processes); global broadcast.
 	| { type: "daemons"; daemons: DaemonInfo[] }
@@ -643,7 +643,7 @@ export type ServerFrame =
 	// clean close as a dormant daemon. Per-stream only, never ringed.
 	| { type: "stream_reset"; reason: string }
 	// --- Fleet edge (omp-fleet → browser; a bare omp-session never sends these) ---
-	// Global broadcast + unicast answer; the roster-mode sidebar's source.
+	// Global broadcast + unicast answer; the fleet sidebar's source.
 	| { type: "roster"; daemons: DaemonEntry[] }
 	| { type: "daemon_status"; daemonId: string; status: DaemonStatus; error?: string }
 	// Edge-generated, fleet-scoped realtime activity for a ready daemon

@@ -59,12 +59,11 @@ The change applies from the next turn. Plan mode is not persisted as a session m
 
 The approval surface that follows a plan proposal is wired by the terminal and ACP hosts. omp-session does not install that handler, so a proposal write in a browser session fails as a tool error and no execution-mode picker appears.
 
-To move from planning to execution in the browser, leave plan mode with `/plan` and ask the agent to implement the plan. Full tool access returns immediately, and the plan file stays in the session's local artifacts for the agent to follow. If you want the proposal and approval flow itself, use the terminal agent; see the [CLI overview](/cli/overview/) for the standalone surfaces.
+To move from planning to execution in the browser, leave plan mode with `/plan` and ask the agent to implement the plan. Full tool access returns immediately, and the plan file stays in the session's local artifacts for the agent to follow. If you want the proposal and approval flow itself, use the terminal agent; see the [CLI overview](/cli/overview/) for the terminal surfaces.
 
-## Mode restrictions
+## Scope and settings
 
-- Goal mode and plan mode both belong to the attached session. In fleet mode with no session attached, there is no session for them to apply to.
-- Goal and plan behavior is identical in fleet mode and single-session mode; neither mode is browser-only or terminal-only.
+- Goal mode and plan mode both belong to the attached session. With no session attached, there is no session for them to apply to.
 - The enable toggles for both modes live in Settings under Tasks, in the Modes group: Goal Mode and Plan Mode.
 
 ## Failure cases

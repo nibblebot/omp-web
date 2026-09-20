@@ -100,7 +100,8 @@ export type RelayUpgradeResult =
 export interface RelayHandle {
 	/**
 	 * Handle a candidate relay room path (/r/<roomId>?role=host|guest). See
-	 * {@link RelayUpgradeResult}. Call before /download & static.
+	 * {@link RelayUpgradeResult}. Call before the remaining plain routes
+	 * (/download, 404 fallback).
 	 */
 	handleUpgrade(url: URL, srv: Server<RelaySocketData>, req: Request): RelayUpgradeResult;
 	handleOpen(ws: RelayWs): void;

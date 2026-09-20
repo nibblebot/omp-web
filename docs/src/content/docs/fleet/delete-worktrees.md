@@ -5,7 +5,7 @@ description: "Delete a fleet-managed worktree from its roster row: the ownership
 
 Deleting a worktree removes its directory from disk, so omp-web guards the action instead of offering a single destructive click. The guards are ownership, a clean Git tree, and an explicit branch choice. This page describes exactly what is refused, what runs on confirm, and what survives.
 
-Deletion is a fleet-mode browser action available on worktree rows; it is also available from the CLI. Single-session mode has no worktrees and no deletion flow.
+Deletion is available on worktree rows in the browser and from the CLI.
 
 ## What can be deleted
 

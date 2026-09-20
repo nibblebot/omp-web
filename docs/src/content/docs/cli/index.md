@@ -3,7 +3,7 @@ title: CLI and automation
 description: Inspect and operate the fleet from scripts and terminals.
 ---
 
-The installed `omp-web` command starts runtime modes and exposes fleet operations for local automation.
+The installed `omp-web` command starts the fleet and session daemons, and exposes fleet operations for local automation.
 
 ## Command families
 
@@ -13,7 +13,7 @@ The installed `omp-web` command starts runtime modes and exposes fleet operation
 - Operate entries with `stop`, `remove`, and `rm-project`.
 - Manage worktrees with `add-worktree` and `rm-worktree`.
 - Send prompts with `prompt`.
-- Start runtimes with bare `omp-web`, `serve`, or `session`.
+- Start the fleet with bare `omp-web` or `serve`, and one session daemon with `session`.
 - Inspect or update the installation with `--version` and `update`.
 
 Fleet selectors can address one session daemon ID, all eligible entries, a name glob, a label, or a project. Fan-out runs different session daemons concurrently while preserving prompt order within each one.
@@ -25,6 +25,6 @@ Fleet selectors can address one session daemon ID, all eligible entries, a name 
 - [Operate session daemons](/cli/session-daemon-operations/) lists, starts, stops, and removes roster entries.
 - [Select multiple session daemons](/cli/selectors/) documents the selector grammar.
 - [Fan-out prompting](/cli/fanout/) sends one prompt to many session daemons with correlated results.
-- [Run a standalone session daemon](/cli/standalone/) starts single-session mode from the terminal.
+- [Run a session daemon](/cli/session-daemon/) starts one session daemon from the terminal.
 
 Use [CLI commands and flags](/reference/cli/) for the exact syntax supported by the installed version.

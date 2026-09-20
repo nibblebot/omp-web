@@ -7,7 +7,7 @@
  * pagination, bundled assets) with `base`, but links authored in Markdown are
  * emitted verbatim: a Starlight content collection runs no remark/rehype
  * pipeline to hook into. This site is served from `/omp-web/` on GitHub Pages,
- * so authored links such as `/concepts/runtime-modes/` would escape the
+ * so authored links such as `/cli/session-daemon/` would escape the
  * project path.
  *
  * The fix is a Sätteri HAST plugin (Sätteri is Astro's default Markdown

@@ -3,7 +3,7 @@ title: Operations
 description: Run omp-web safely, diagnose failures, and recover processes.
 ---
 
-Operations covers networking, authentication, updates, process recovery, diagnostics, and failure handling for fleet and single-session deployments.
+Operations covers networking, authentication, updates, process recovery, diagnostics, and failure handling for the fleet and the session daemons it drives.
 
 ## Security boundaries
 

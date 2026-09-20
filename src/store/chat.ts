@@ -151,8 +151,8 @@ export function pushItem(item: ChatItem): void {
 	setState("items", (items) => [...items, item]);
 }
 
-export function pushNotice(level: string, message: string, href?: string): void {
-	pushItem({ kind: "notice", id: nextId++, level, message, href });
+export function pushNotice(level: string, message: string): void {
+	pushItem({ kind: "notice", id: nextId++, level, message });
 	// finding #P1: error-level notices are status messages; announce them so
 	// screen-reader users hear them without focus being yanked.
 	if (level === "error") announceIfReady(message);

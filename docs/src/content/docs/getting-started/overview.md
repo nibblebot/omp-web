@@ -5,15 +5,13 @@ description: One browser for running and supervising multiple Oh My Pi agent ses
 
 omp-web is a browser UI for running multiple Oh My Pi agent sessions across all your repositories and worktrees: one installed command, one browser UI, N agent sessions. It is built for a solo operator who supervises parallel agents, so you can watch, steer, and fan out across many concurrent sessions without losing work when a process dies.
 
-## Fleet mode is the normal path
+## The fleet at the center
 
-Running `omp-web` starts fleet mode. The fleet, a registry and supervisor, spawns and supervises local session daemons, keeps track of the projects you register, and serves the web UI. Your browser talks to the fleet, and the fleet proxies you through to whichever session daemon you select.
+Running `omp-web` starts the fleet: a registry and supervisor that spawns and supervises local session daemons, keeps track of the projects you register, and serves the web UI. Your browser talks to the fleet, and the fleet proxies you through to whichever session daemon you select.
 
 The fleet sidebar lists each registered project with its main checkout and any linked worktrees as rows. Starting a session daemon from a row launches a separate process bound to that one directory, and selecting the row attaches your browser to its session. Concurrency comes from running multiple session daemons in parallel, normally one per worktree, not from several sessions inside one process.
 
-## Single-session mode
-
-If one session is all you need, `omp-web session` runs a single session daemon and serves the browser UI directly from it. The conversation experience is the same, but there is no fleet sidebar and no Analysis views. This suits focused work on one checkout and deployments that do not need a fleet.
+The fleet starts each local session daemon by running `omp-web session`, the same command you run by hand to stand up a session daemon on a remote host for the fleet to dial. See [Run a session daemon](/cli/session-daemon/).
 
 ## Session daemons are disposable, transcripts are durable
 
@@ -23,9 +21,9 @@ In practice: treat session daemons as replaceable workers, and transcripts as th
 
 ## Who it is for
 
-omp-web targets a single operator running many agents, typically across local projects, Git worktrees, and remote sandboxes. Multi-user access is not a current feature. Some areas also have deliberate limits:
+omp-web targets a single operator running many agents, typically across local projects, Git worktrees, and remote sandboxes. Multi-user access is not a current feature. A few boundaries are worth knowing:
 
-- Analysis, the historical transcript and usage views, is available only in fleet mode.
+- Analysis, the historical transcript and usage views, is served by the fleet alongside the Work view.
 - Collaboration rooms are hosted and joined through the CLI or TUI; there is no browser collaboration surface.
 - Remote access is user-managed, for example over SSH forwarding or a private network.
 

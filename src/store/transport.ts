@@ -461,8 +461,8 @@ export function restartDaemon(projectDir: string, name: string): Promise<DaemonI
 // ---------------------------------------------------------------------------
 // Raw /ctl/* fetches (fleet control plane, proxied by vite to 127.0.0.1:4722).
 // Every consumer used to re-implement the same error taxonomy: the proxy
-// answers 502/504 when nothing listens on :4722 (single-session mode, fleet
-// still booting) and fetch() itself rejects with a TypeError when the proxy
+// answers 502/504 when nothing listens on :4722 (the fleet is still booting or
+// not running) and fetch() itself rejects with a TypeError when the proxy
 // is down. Both are EXPECTED states that render as notices, not crashes.
 // Centralized once here; the actions below add their per-endpoint status
 // messages and body parsing.
@@ -486,12 +486,12 @@ export async function ctlFetch(
 		res = await fetch(path);
 	} catch (err) {
 		// fetch() rejects with a TypeError ("Failed to fetch") when nothing
-		// listens on :4722 (single-session mode, fleet not yet up). Expected.
+		// listens on :4722 (the fleet is not up). Expected.
 		const msg = err instanceof Error ? err.message : String(err);
 		throw new Error(/failed to fetch|networkerror|fetch failed/i.test(msg) ? unreachable : msg);
 	}
 	// 502/504: vite's /ctl proxy couldn't reach :4722, so no fleet server
-	// (single-session mode, or still booting). Expected.
+	// (not running, or still booting). Expected.
 	if (res.status === 502 || res.status === 504) throw new Error(unreachable);
 	if (!res.ok) {
 		if (readError) throw new Error(await readError(res));

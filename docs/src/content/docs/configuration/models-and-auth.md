@@ -64,7 +64,7 @@ Provider credentials live in the Oh My Pi agent directory (`~/.omp/agent` by def
 - **OAuth providers** can be logged in from the browser. In the settings panel, open Web UI and click **manage** on the **Login providers…** row. The Login modal lists the OAuth providers and marks the ones already authenticated. Choosing **Login** opens the provider's login page; providers that require a code collect it in the modal, and the flow completes server-side even if you close the panel. When a provider integration is not available on this machine, its Login button is disabled.
 - **Everything else** is configured through the `omp` CLI, which is exactly what the first-run probe advises: run `omp` and set up a provider and a default model in its `/settings`, or run `omp login` for an OAuth provider.
 
-The Login modal is a session command, so it requires an attached session. In fleet mode with nothing attached, the Login providers row is hidden along with the other session-scoped controls; attach to a session or use single-session mode to log in.
+The Login modal is a session command, so it requires an attached session. With nothing attached, the Login providers row is hidden along with the other session-scoped controls; attach to a session to log in.
 
 Two related surfaces are configuration, not credentials:
 

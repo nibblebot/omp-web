@@ -16,37 +16,32 @@ One carried-over reference in the canonical document points to a companion posit
 
 ## The two products
 
-The repository holds two runtime products plus the browser client they both serve.
+The repository holds two runtime products plus the browser client the fleet serves.
 
 | Layer | Product | Role |
 | --- | --- | --- |
-| `server/` | `omp-session` | One process bound to one directory for its entire life, hosting one live agent session. Runs the `@oh-my-pi/pi-coding-agent` SDK in process (`createAgentSession`; no child process, no JSON-RPC hop) and serves the full standalone UI over SSE and POST. |
+| `server/` | `omp-session` | One process bound to one directory for its entire life, hosting one live agent session. Runs the `@oh-my-pi/pi-coding-agent` SDK in process (`createAgentSession`; no child process, no JSON-RPC hop) and serves the wire API over SSE and POST: no HTML, no browser bundle. |
 | `fleet/` | `omp-fleet` | A registry, supervisor, and browser edge for N session daemons. Spawns local children from command templates, dials remote endpoints, proxies the browser to the selected session daemon, and serves the loopback control plane the `omp-web` CLI uses. Holds zero agent state. |
-| `src/` | Web UI | One Solid.js bundle that serves both modes. There is no router and no second frontend. |
+| `src/` | Web UI | One Solid.js bundle, served by the fleet edge. There is no router and no second frontend. |
 
-The installed `omp-web` entrypoint dispatches to both: bare `omp-web` (or `omp-web serve`) is the fleet, and `omp-web session` is one standalone session daemon.
+The installed `omp-web` entrypoint dispatches to both: bare `omp-web` (or `omp-web serve`) is the fleet, and `omp-web session` is one session daemon that speaks the wire API only. See [Run a session daemon](/cli/session-daemon/).
 
 The two products share the wire contract in `shared/protocol.ts` and the SSE codec in `shared/sse.ts`. The current protocol version is `OMP_PROTO` 2. Evolution is additive-only: adding a frame or command is safe, while changing or removing a shape requires bumping the constant and updating both proto gates (`fleet/connector.ts` on the control dial, `fleet/edge.ts` on the browser pipe) so old and new peers fail loudly instead of misparsing.
 
-Mode is decided by the wire, not by a build or a setting. The fleet edge sends a `roster` frame, which puts the client into roster mode for the life of the page; a bare `omp-session` never sends one, so its clients stay in single-session mode. See [Fleet and single-session modes](/concepts/runtime-modes/).
+The fleet edge is the only sender of the `roster` frame, and it sends one to prime every page it serves. That frame is how the client knows it was served by the fleet: a page served any other way never receives one and shows the fleet-required notice.
 
 ## Topology
 
 ```text
-standalone mode
-  browser --POST /command--> omp-session (one bound directory, one live session)
-          <--SSE /events----
-
-roster mode
-  browser --POST /command--> omp-fleet edge --proxy--> selected omp-session
-          <--SSE /events---- (registry + proxy)        (per-browser pipe)
+browser --POST /command--> omp-fleet edge --proxy--> selected omp-session
+        <--SSE /events---- (registry + proxy)        (per-browser pipe)
 
 background connections
   omp-fleet supervisor --spawn/restart--> local omp-session children
   omp-fleet connector  --dial in--------> local and remote session daemons
 ```
 
-In roster mode the browser never talks to a session daemon directly. It attaches to a roster row, and every command and frame is proxied through the fleet edge, which keeps one pipe per attached browser. The edge also retains a dial-in connector stream per session daemon so status, activity, and the roster stay live while a browser is connected.
+The browser never talks to a session daemon directly. It attaches to a roster row, and every command and frame is proxied through the fleet edge, which keeps one pipe per attached browser. The edge also retains a dial-in connector stream per session daemon so status, activity, and the roster stay live while a browser is connected.
 
 Connections are dial-in in both directions of ownership. The fleet supervisor spawns local session daemons as child processes from command templates, and the connector dials every session daemon, local or remote, with a per-daemon bearer token. Remote session daemons are registered by endpoint and dialed; they are never spawned by the fleet, they never dial out, and they never learn the fleet's address, state file, or any other session daemon's token. A sandboxed host can therefore deny outbound traffic entirely.
 
@@ -92,7 +87,7 @@ Transport is HTTP with SSE, and there is no WebSocket on the agent-driving path.
 - **Keepalive and liveness.** Id-less `ping` events keep the stream warm and never advance the resume counter; a consumer that sees twice the keepalive interval of total silence treats the peer as dead and reconnects.
 - **Backpressure is drop-and-resume, not loss.** A stream whose enqueue would exceed the byte cap is terminated in-band with a `stream_reset` frame. The session daemon is alive, and the consumer redials with `Last-Event-ID`; the replay ring covers the gap.
 - **Drift is gated.** `hello_ok.proto` must equal `OMP_PROTO`, and the handshake's reported cwd must match the registered directory. Both the connector and the edge pipe fail closed on mismatch, parking the entry in `error` rather than driving a mismatched session daemon.
-- **Fleet-scoped frames ride the same stream.** The roster, per-daemon status, real-time activity, session listings, and registered projects are additive frames the edge generates; session-scoped frames are stamped with the roster daemon id as `sessionId` so roster-mode clients can guard session daemon switches.
+- **Fleet-scoped frames ride the same stream.** The roster, per-daemon status, real-time activity, session listings, and registered projects are additive frames the edge generates; session-scoped frames are stamped with the roster daemon id as `sessionId` so the client can guard session daemon switches.
 - **Collab is the one WebSocket surface.** The end-to-end encrypted relay at `/r/<roomId>` is hosted and joined through the CLI or TUI only; the browser UI has no collab surface.
 
 Frame shapes, constants, and the evolution rules live in the canonical document. Start with [`shared/protocol.ts`](https://github.com/nibblebot/omp-web/blob/main/shared/protocol.ts) for the source of truth.
@@ -103,7 +98,7 @@ Layering is strictly leaf-ward, and the seams are deliberate:
 
 - **`shared/`** is the leaf: `protocol.ts` (wire contract and constants) and `sse.ts` (SSE framing and replay ring). It imports nothing else in the repository.
 - **`server/`** imports from `shared/` only.
-- **`fleet/`** imports from `shared/`, plus exactly two deliberate `server/` exceptions: `edge.ts` pulls the embedded UI bundle constant from `server/embedded-dist` to serve the web app, and `settings.ts` reuses the settings metadata helpers from `server/settings-model` for the unattached settings surface. Nothing else crosses that seam.
+- **`fleet/`** imports from `shared/`, plus exactly one deliberate `server/` exception: `settings.ts` reuses the settings metadata helpers from `server/settings-model` for the unattached settings surface. The embedded UI bundle constant lives in `fleet/embedded-dist`, so `edge.ts` serves the web app without reaching back into `server/`. Nothing else crosses that seam.
 - **`src/`** imports repository code from `shared/` only, and imports neither backend layer. Its references to SDK packages are type-only.
 
 Agent-SDK touchpoints in the fleet are narrow. The core modules (registry, supervisor, connector, edge) hold no agent state; the omp-stack probe and the per-worktree session listing load the SDK behind lazy dynamic imports, and the unattached settings service reads the process-global settings singleton. None of them hold a live agent session.
@@ -138,7 +133,6 @@ The architecture keeps agent control behind narrow, fail-closed boundaries. The 
 
 Related pages:
 
-- [Fleet and single-session modes](/concepts/runtime-modes/)
 - [Projects, worktrees, session daemons, and sessions](/concepts/projects-worktrees-session-daemons-sessions/)
 - [Session persistence](/concepts/session-persistence/)
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/)

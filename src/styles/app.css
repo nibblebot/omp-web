@@ -26,8 +26,8 @@
 	color: var(--muted);
 	flex-wrap: wrap;
 }
-/* Roster mode: the floating ☰ toggle owns the top-left corner; keep the
-   status-bar content clear of it. */
+/* The floating ☰ toggle owns the top-left corner while a sidebar is closed;
+   keep the status-bar content clear of it. */
 .app:has(.sidebar-toggle) .status-bar {
 	padding-left: calc(var(--space-6) + 44px);
 }
@@ -178,7 +178,7 @@
 	margin: 0 auto;
 	min-width: 0;
 }
-/* Roster mode, no live attached session (daemon stopped/removed or never
+/* No live attached session (daemon stopped/removed or never
    picked): the chat column is replaced by a quiet centered hint. */
 .roster-empty-pane {
 	flex: 1;
@@ -199,4 +199,33 @@
 	margin: 0;
 	font-size: var(--fs-md);
 	color: var(--muted);
+}
+/* Fleet-required gate (FleetRequiredNotice.tsx): the /events peer is a bare
+   session daemon, not the fleet edge, so no shell is rendered. This notice is
+   the whole page and sizes itself against the viewport (.app is absent). */
+.fleet-required {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-4);
+	min-height: 100vh;
+	min-height: 100dvh;
+	padding: var(--space-7) var(--space-6);
+	text-align: center;
+}
+.fleet-required-title {
+	margin: 0;
+	font-size: var(--fs-xl);
+	color: var(--text);
+}
+.fleet-required-body {
+	margin: 0;
+	max-width: 46ch;
+	font-size: var(--fs-lg);
+	color: var(--muted);
+}
+.fleet-required code {
+	font-family: var(--font-mono);
+	color: var(--text);
 }

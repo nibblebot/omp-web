@@ -11,7 +11,7 @@ Guests dial in. They connect to the room's relay, and the session daemon never c
 
 ## Prerequisites
 
-- A session daemon running and reachable on loopback at a port you know. The examples use the session daemon default, 4721. Start one with `omp-web session` if needed, and see [Run a standalone session daemon](/cli/standalone/) for its flags.
+- A session daemon running and reachable on loopback at a port you know. The examples use the session daemon default, 4721. Start one with `omp-web session` if needed, and see [Run a session daemon](/cli/session-daemon/) for its flags.
 - The omp-web source checkout for the host CLI. Starting a room is `bun run collab`, the `collab` script in `package.json` that runs `server/collab-cli.ts`. There is no installed `omp-web collab` verb.
 - The `omp` CLI on the machine that joins.
 
@@ -119,7 +119,7 @@ A room starts at `starting` and settles at `live` or `error`; with no room the s
 
 ## Encryption
 
-Every session frame is sealed with AES-256-GCM before it leaves the host and opened by the guest; the room key exists only in the links. Session content never reaches the relay in cleartext: it forwards opaque envelopes and handles only the room id, the 4-byte peer id header, and the control messages (`peer-joined`, `peer-left`, `room-closed`). The relay runs inside the session daemon process, on the same HTTP port as the web interface.
+Every session frame is sealed with AES-256-GCM before it leaves the host and opened by the guest; the room key exists only in the links. Session content never reaches the relay in cleartext: it forwards opaque envelopes and handles only the room id, the 4-byte peer id header, and the control messages (`peer-joined`, `peer-left`, `room-closed`). The relay runs inside the session daemon process, on the same HTTP port as the wire API.
 
 This protects session content in transit through the relay. It does not protect a guest terminal after decryption, and it does not replace transport security: the session daemon does not terminate TLS. Plain `ws://` relay links are accepted only for localhost; any other host must be `wss://`, which you terminate yourself.
 
@@ -169,8 +169,7 @@ Deployment responsibilities and limits:
 ## Related pages
 
 - [Remote and advanced](/advanced/)
-- [Run a standalone session daemon](/cli/standalone/)
+- [Run a session daemon](/cli/session-daemon/)
 - [CLI overview](/cli/overview/)
-- [Runtime modes](/concepts/runtime-modes/)
 - [Security model](/operations/security/)
 - [Troubleshooting](/operations/troubleshooting/)

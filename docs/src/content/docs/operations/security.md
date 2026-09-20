@@ -7,9 +7,9 @@ omp-web supervises agents that read files, run shell commands, and change your r
 
 ## Before you start
 
-- Know whether you run fleet mode (browser talks to the fleet) or single-session mode (browser talks directly to one session daemon). The boundaries below apply to both, with the fleet absent in single-session mode.
+- Know where the browser and the session daemons sit relative to the fleet: the browser talks only to the fleet, and every session daemon is either spawned by the fleet or run elsewhere and dialed in by it.
 - Know the machine and OS account that runs `omp-web`. Every session daemon it spawns runs as that account with that account's filesystem access, including access to provider credentials and SSH keys.
-- The exact commands for starting modes and connecting a browser live in [Networking and browser access](/operations/networking/); this page explains what those settings protect.
+- The exact commands for starting the fleet and session daemons and connecting a browser live in [Networking and browser access](/operations/networking/); this page explains what those settings protect.
 
 ## Trust boundaries
 
@@ -46,7 +46,7 @@ Expected result: with the fleet running, `curl -s http://127.0.0.1:4722/ctl/sess
 A session daemon binds `127.0.0.1` by default and is exempt from token checks for loopback peers. Once it is bound off loopback, every route requires the bearer token:
 
 - `GET /events`, `POST /command`, and the collab host upgrade accept `Authorization: Bearer <token>` or `?token=<token>`.
-- `/download` and the static UI require the token too when the session daemon carries one.
+- `/download` requires the token too when the session daemon carries one.
 - A missing or wrong credential returns HTTP 401 before any protocol exchange. The scheme is matched case-insensitively, but the token value is compared exactly, so a wrong-case token is rejected.
 - Binding a non-loopback address without a token is a startup error:
 
@@ -56,7 +56,7 @@ omp-session: refusing to bind non-loopback address "0.0.0.0" without a token; pa
 
 Loopback is resolved strictly: `localhost`, `::1`, and numeric `127.0.0.0/8` addresses. A name such as `127.a.b.c` counts as off loopback, so it triggers both the token requirement and the startup refusal.
 
-To start a standalone session daemon reachable from another host:
+To start a session daemon reachable from another host, for the fleet to dial in:
 
 ```sh
 omp-web session --cwd /path/to/worktree --host 0.0.0.0 --token "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')"
@@ -68,7 +68,7 @@ To register an already running remote session daemon with the fleet, pass its UR
 omp-web add build-box ws://build-box.internal:4721 --token "$OMP_REMOTE_TOKEN" --cwd /srv/project
 ```
 
-Expected result: the session daemon answers only with the exact token, and a tokenless start of an off-loopback session daemon exits 1 with the refusal above. A fleet-managed connection attaches the token automatically; for a direct browser URL you include `?token=<token>` yourself.
+Expected result: the session daemon answers only with the exact token, and a tokenless start of an off-loopback session daemon exits 1 with the refusal above. A fleet-managed connection attaches the token automatically; a direct API client supplies the token itself.
 
 ## Remote connectivity is dial-in
 
@@ -84,7 +84,7 @@ For session daemons the fleet starts, the supervisor mints a new bearer token fo
 
 - Persistence: the current token for each entry lives in the fleet state file, not in a keychain. Protect that file (see [Filesystem protection](#filesystem-protection)).
 - Visibility on the host: the token is substituted into the spawn template command, so it is part of the spawned command line and is visible to process listings on the fleet host for as long as the process runs. Anyone who can inspect processes on that host can read it.
-- Rotation: stop a fleet-managed session daemon and wake it to mint a fresh token. For a standalone session daemon, restart it with a new `--token`. A remote registration that stored the old token keeps failing with 401 until you correct it, which is the intended fail-closed behavior.
+- Rotation: stop a fleet-managed session daemon and wake it to mint a fresh token. For a session daemon you run by hand, restart it with a new `--token`. A remote registration that stored the old token keeps failing with 401 until you correct it, which is the intended fail-closed behavior.
 
 ## What the browser can and cannot see
 
@@ -92,7 +92,7 @@ Roster frames sent to the browser never contain bearer tokens, endpoints, or spa
 
 The Debug panel polls the loopback-only `/ctl/debug` route, which deliberately exposes endpoint URLs and ports and never serializes tokens. When you collect diagnostics, still remove anything you do not want to publish, as described in [Troubleshooting](/operations/troubleshooting/).
 
-A direct browser connection carries the token in the page URL as `?token=<token>`; the client keeps it in page memory and forwards it to the stream and command endpoints. Tokens in URLs leak through browser history, terminal scrollback, logs, and screenshots, so prefer a forwarded loopback connection where no token is needed, and never share a link that contains one.
+The browser holds no credential of its own: the fleet attaches the session daemon's token when it proxies the browser's stream and commands. Tokens still travel in URLs elsewhere, for example a direct API client passing `?token=<token>` or an `omp-web add` registration; URLs leak through browser history, terminal scrollback, logs, and screenshots, so prefer the `Authorization` header where the client supports it, and never share a link that contains a token.
 
 ## Download and filesystem limits
 
@@ -147,10 +147,10 @@ Lock files (`<statePath>.lock` and `<sessionFile>.lock`) protect state files and
 
 | Symptom | Meaning | Fix |
 | --- | --- | --- |
-| `Unauthorized` (HTTP 401) from a session daemon URL | The session daemon is off loopback and the token is missing, wrong, or stale | Add the exact `?token=`, or stop and wake a fleet-managed session daemon so a fresh token is minted |
-| `refusing to bind non-loopback address ... without a token` | A standalone session daemon was started on a non-loopback host without a credential | Restart with `--token` or `OMP_SESSION_TOKEN` |
+| `Unauthorized` (HTTP 401) from a session daemon URL | The session daemon is off loopback and the token is missing, wrong, or stale | Supply the exact `Authorization: Bearer` header or `?token=`, or stop and wake a fleet-managed session daemon so a fresh token is minted |
+| `refusing to bind non-loopback address ... without a token` | A session daemon was started on a non-loopback host without a credential | Restart it with `--token` or `OMP_SESSION_TOKEN` |
 | `unauthorized (401): daemon rejected the token` in the fleet log | A stored remote registration no longer matches the session daemon | Update the registration token, or restart the session daemon with the known token |
-| `Forbidden` (HTTP 403) on a download | The file is outside the download jail roots | Export from the session working directory, or place the file under the session working directory or the system temp directory |
+| `Forbidden` (HTTP 403) on the download route | The file is outside the download jail roots | Export from the session working directory, or place the file under the session working directory or the system temp directory |
 | Browser through a tunnel shows the fleet as unreachable | The tunnel points at nothing or at the wrong port | Start `omp-web` and verify the forwarding target matches the banner port |
 
 ## Built in versus yours

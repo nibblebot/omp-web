@@ -3,7 +3,7 @@ title: The fleet sidebar
 description: "Read the fleet roster at a glance: project groups, main-checkout and worktree rows, status and activity dots, and what clicking each row or menu does."
 ---
 
-The fleet sidebar is the left column of the Work view in fleet mode. It lists every registered project together with the session daemons running for it, and it is where you attach to a session, wake a sleeping session daemon, or open a project or row action menu. For the underlying model, see [Projects, worktrees, session daemons, and sessions](/concepts/projects-worktrees-session-daemons-sessions/).
+The fleet sidebar is the left column of the Work view, served by the fleet. It lists every registered project together with the session daemons running for it, and it is where you attach to a session, wake a sleeping session daemon, or open a project or row action menu. For the underlying model, see [Projects, worktrees, session daemons, and sessions](/concepts/projects-worktrees-session-daemons-sessions/).
 
 The column opens with the Work/Analysis mode switch and a close button, followed by a Projects header whose + button opens the Add repo modal described in [Add your first project](/getting-started/add-first-project/). The roster list sits below that header, then the optional usage panel and the Debug panel and Settings footer. While the column is closed, a button in the top-left corner of the viewport reopens it.
 
@@ -97,7 +97,7 @@ Remote and unregistered rows share the fallback grouping, but their available de
 
 ## Work and Analysis restriction
 
-The fleet sidebar exists only in fleet mode, and only while the Work view is active. The Analysis view is fleet mode only and brings its own transcripts sidebar, so the roster sidebar is not visible there. Single-session mode has no fleet sidebar and no Work/Analysis mode switch at all.
+The fleet sidebar shows only while the Work view is active. The Analysis view brings its own transcripts sidebar, so the roster sidebar is not visible there.
 
 ## Collapse and persistence
 

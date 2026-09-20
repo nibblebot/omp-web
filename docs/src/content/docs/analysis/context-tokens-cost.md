@@ -5,7 +5,7 @@ description: "Read the attached session's context window, token counts, and cost
 
 This page covers the figures for the session currently attached to the browser: how full its context window is, how many tokens it has spent, and what it has cost. They come from the session daemon's live session state, so they describe that one conversation and update as it runs. Two neighboring pages cover different questions: [provider usage limits](/analysis/provider-usage/) are account-level rate-limit windows reported by the provider, and [session analytics](/analysis/analytics/) are historical numbers read from transcripts and `stats.db`.
 
-Because these numbers describe the live session, they need no statistics database and are available in both fleet mode and single-session mode. Only the attached session daemon reports them; to compare sessions, switch to that session first.
+Because these numbers describe the live session, they need no statistics database; they come from the attached session daemon. To compare sessions, switch to that session first.
 
 ## The context segment
 

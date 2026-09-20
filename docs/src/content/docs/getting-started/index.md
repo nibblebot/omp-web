@@ -11,7 +11,7 @@ You need Bun, the `omp` CLI, at least one authenticated model provider, and a de
 
 ## Onboarding path
 
-1. [What is omp-web?](/getting-started/overview/) introduces fleet mode, single-session mode, and durable sessions.
+1. [What is omp-web?](/getting-started/overview/) introduces the fleet, session daemons, and durable sessions.
 2. [Installation](/getting-started/installation/) installs and verifies the `omp-web` command.
 3. [First run](/getting-started/first-run/) creates the data home and opens an empty fleet.
 4. [Add your first project](/getting-started/add-first-project/) registers a Git repository.

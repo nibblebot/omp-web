@@ -5,7 +5,7 @@ description: How steering messages reach a running turn, how follow-ups wait for
 
 The composer accepts more than one kind of message. A normal prompt starts a turn. A steering message is injected into the turn that is already running. A follow-up is queued for the session and is delivered after the current work settles. This page explains the difference, how delivery works, and how the queue itself is managed. [Prompting the agent](/sessions/prompting/) covers the composer controls themselves.
 
-These controls belong to the attached session, so they work the same in fleet mode and single-session mode. The composer is usable only while the session is ready; see [Start your first session](/getting-started/start-first-session/) if input is refused.
+These controls belong to the attached session. The composer is usable only while the session is ready; see [Start your first session](/getting-started/start-first-session/) if input is refused.
 
 ## The three send paths
 

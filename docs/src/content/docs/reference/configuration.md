@@ -3,7 +3,7 @@ title: Configuration schema
 description: Canonical reference for the fleet configuration file, config.json, with every supported key, its default, and the precedence rules the fleet applies.
 ---
 
-The fleet configuration file is a JSON file named `config.json`. The fleet process (`omp-web` or `omp-web serve`) reads it once at startup and uses it to spawn and connect session daemons and to place managed worktrees. A standalone session daemon started with `omp-web session` never reads this file; its behavior comes from flags and `OMP_SESSION_*` variables (see [What this file does not configure](#what-this-file-does-not-configure)).
+The fleet configuration file is a JSON file named `config.json`. The fleet process (`omp-web` or `omp-web serve`) reads it once at startup and uses it to spawn and connect session daemons and to place managed worktrees. A session daemon started with `omp-web session` never reads this file; its behavior comes from flags and `OMP_SESSION_*` variables (see [What this file does not configure](#what-this-file-does-not-configure)).
 
 The first-run setup offer creates the file (see [First run](/getting-started/first-run/)). After that it is edited by hand. The fleet does not reload it while running, so restart the fleet after every change.
 

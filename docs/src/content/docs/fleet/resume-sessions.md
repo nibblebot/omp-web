@@ -5,7 +5,7 @@ description: "Reopen a durable transcript from a roster row: the last-ten-sessio
 
 A session is a durable conversation stored as a JSONL transcript on disk. Session daemons are disposable, so resuming is a normal part of the workflow rather than a recovery step. This page covers the ways the fleet roster reopens a transcript. For the full history toolkit inside a live session, including `/resume`, rename, branch, fork, compact, and drop, see [Manage session history](/sessions/history/).
 
-Resuming from the roster is available in fleet mode, where the browser talks to the fleet. Single-session mode has no roster; there you resume from inside the session itself.
+The roster is the browser's route to a stored conversation: the browser talks to the fleet, and each row owns the picker for its checkout. Inside an attached session the same history actions are available as commands, described in [Manage session history](/sessions/history/).
 
 ## What the roster knows about a session
 
@@ -68,7 +68,7 @@ Inside an attached session you have the full history actions:
 ## CLI and Analysis notes
 
 - The CLI has no resume command. `omp-web prompt <selector> <text>` wakes asleep targets on demand, which resumes their last session file before the prompt is delivered.
-- Historical transcripts can be searched and read in the browser's Analysis view, which is fleet-mode only; see [Browse historical transcripts](/analysis/transcripts/).
+- Historical transcripts can be searched and read in the browser's Analysis view, which reads through the fleet's statistics service; see [Browse historical transcripts](/analysis/transcripts/).
 
 ## Related
 

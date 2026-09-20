@@ -3,21 +3,21 @@ title: Networking and browser access
 description: Where omp-web binds by default, how to reach the browser UI from another device over SSH, a tailnet, or your own TLS proxy, how host, port, and advertise decide where a session daemon is dialed, and how to diagnose reachability and authorization failures.
 ---
 
-omp-web listens on loopback by default. The fleet serves the browser UI, the streaming wire API, and its control plane on one loopback port, and a standalone session daemon serves its own UI on another. This page covers that default layout, the ways to reach it from another device, the host, port, and advertise settings that decide where a session daemon can be dialed, and the failures that appear when a route or a credential is wrong.
+omp-web listens on loopback by default. The fleet serves the browser UI, the streaming wire API, and its control plane on one loopback port, while a session daemon serves the wire API only on another. This page covers that default layout, the ways to reach it from another device, the host, port, and advertise settings that decide where a session daemon can be dialed, and the failures that appear when a route or a credential is wrong.
 
 ## Default network layout
 
 | Listener | Default address | Who connects |
 | --- | --- | --- |
 | Fleet: browser UI, `/events`, `/command`, `/ctl` | `127.0.0.1:4722` | Your browser and the `omp-web` CLI |
-| Session daemon: single-session UI and wire API | `127.0.0.1:4721` | Your browser (single-session mode) or the fleet |
+| Session daemon: wire API only, no UI | `127.0.0.1:4721` when started by hand; the fleet spawns with `--port 0` and dials the reported port | The fleet, or another direct API client |
 | Vite dev server (source checkouts only) | `127.0.0.1:4713` default; the dev runners pick per run | Your browser while running `bun run dev` |
 
 Three properties define the layout:
 
 - **The fleet plane is loopback only.** The browser UI, the `/events` and `/command` endpoints the UI uses, and the `/ctl` routes the CLI uses share one server bound to `127.0.0.1`. Only the port is configurable; there is no host flag. The bind is fixed in the source, so no environment variable or flag can move it off loopback.
 - **A session daemon binds `127.0.0.1` by default and may bind elsewhere.** Off loopback it requires a bearer token, and the agent-driving routes check it. See [Security model](/operations/security/) for token minting, storage, and rotation.
-- **Browser traffic is same-origin.** One process serves the page, `/events`, `/command`, `/ctl`, and `/download`. omp-web sends no CORS headers, so a page served from one origin cannot call the wire API on another.
+- **Browser traffic is same-origin.** The fleet serves the page, `/events`, `/command`, and `/ctl` from one process. omp-web sends no CORS headers, so a page served from one origin cannot call the wire API on another. The session daemon's `/download` route is not proxied by the fleet, so the browser never reaches it.
 
 Connections between the fleet and session daemons are dial-in: the fleet always opens the connection to the session daemon. A session daemon never dials out, never learns the fleet's address or state, and a remote environment needs no route back to the fleet.
 
@@ -41,17 +41,17 @@ Web UI: http://localhost:4722
 
 Open the printed URL and the roster loads with no credential prompt. `omp-web --version` is entirely local; every other subcommand talks to the control plane on this same loopback port, so pass the same `--port` when you changed it.
 
-To run a standalone session daemon without a fleet:
+To run a session daemon by hand, for example on a remote host the fleet will dial in:
 
 ```sh
 omp-web session --cwd /path/to/project
 ```
 
-Expected result: the session daemon prints `omp-session listening on http://localhost:4721` to stderr and reserves stdout for its machine-readable `OMP_SESSION|` line. Open `http://localhost:4721` for the single-session UI.
+Expected result: the session daemon prints `omp-session listening on http://localhost:4721` to stderr and reserves stdout for its machine-readable `OMP_SESSION|` line. It serves the wire API only, with no browser UI; register it with the fleet as described under [Register an already running session daemon](#register-an-already-running-session-daemon) and browse through the fleet.
 
 Safety and persistence in this layout:
 
-- Nothing is reachable from outside the machine, and loopback peers are exempt from the session daemon's bearer check, so no token is needed for local browsing.
+- Nothing is reachable from outside the machine, and loopback peers are exempt from the session daemon's bearer check, so no token is needed for local API calls.
 - Ports are routing, not storage. Changing a port does not move the fleet state file, config, managed worktrees, or session transcripts. Each roster entry records an endpoint: a fleet-spawned row is resolved again from the child's next listening line, while a registered remote entry keeps the endpoint you registered until you re-register it.
 - Starting a second process on a fixed port that is already held fails at startup with `Error: Failed to start server. Is port <n> in use?` and exits 1. Either stop the holder, pass a different `--port`, or pass `--port 0` to let the kernel pick an ephemeral port; the fleet banner, and for a session daemon the `OMP_SESSION|` line, report the real port.
 
@@ -62,15 +62,14 @@ Prerequisites: the machine running omp-web is reachable from the device you brow
 ### Why direct access does not just work
 
 - The fleet refuses connections on anything but loopback, so browsing to the host's LAN, tailnet, or public address does not reach it at all.
-- A session daemon can be bound off loopback, but then every request needs the bearer token, including the script and stylesheet requests that load the UI. A token on the page URL authenticates the document, the stream, and commands, but a browser cannot attach credentials to the asset requests, so the page loads without its bundle. Off-loopback binds exist so the fleet and other API clients can dial in, not as a browser exposure path.
+- A session daemon can be bound off loopback, but that is a dial-in surface for the fleet and other API clients, not a browser exposure path: the daemon serves no UI, and every wire API request needs the bearer token.
 
 ### SSH local forward
 
 Forward the loopback port to the device with the browser:
 
 ```sh
-ssh -N -L 4722:127.0.0.1:4722 user@fleet-host     # fleet mode: browse http://localhost:4722
-ssh -N -L 4721:127.0.0.1:4721 user@session-host  # single-session: browse http://localhost:4721
+ssh -N -L 4722:127.0.0.1:4722 user@fleet-host     # browse http://localhost:4722
 ```
 
 `-N` opens no remote command, so the connection exists only as the forward. Expected result: the same URLs as local use work unchanged, because the forwarded connection arrives at the server from `127.0.0.1` and is treated as loopback.
@@ -87,11 +86,11 @@ Expected result: any device in the tailnet opens the tailnet HTTPS URL and reach
 
 ### Your own TLS proxy
 
-omp-web does not terminate TLS and ships no certificates. To expose the UI over HTTPS, run a reverse proxy on the same host (or on the same machine as a standalone session daemon), terminate TLS there, and forward every path to the loopback port. Requirements that come from the wire protocol:
+omp-web does not terminate TLS and ships no certificates. To expose the UI over HTTPS, run a reverse proxy on the same host as the fleet, terminate TLS there, and forward every path to the fleet's loopback port. Requirements that come from the wire protocol:
 
-- **Do not buffer responses.** `/events` is a long-lived SSE stream. The session daemon marks its responses `x-accel-buffering: no` (honored by nginx) and sends an `event: ping` keepalive every 15 seconds. A proxy that accumulates the response or caches it stalls the UI.
+- **Do not buffer responses.** `/events` is a long-lived SSE stream. The server marks its responses `x-accel-buffering: no` (honored by nginx) and sends an `event: ping` keepalive every 15 seconds. A proxy that accumulates the response or caches it stalls the UI.
 - **Do not time out long-lived connections.** A client that sees no event or comment for 30 seconds treats the stream as dead and redials. Keep proxy read timeouts above the keepalive cadence, and do not enable response compression on the stream.
-- **Forward the whole origin.** The page, `/events`, `/command`, `/ctl`, and `/download` must reach the same server; splitting them across origins fails because there are no CORS headers.
+- **Forward the whole origin.** The page, `/events`, `/command`, and `/ctl` must reach the same server; splitting them across origins fails because there are no CORS headers.
 
 Minimal nginx shape (certificates, access control, and any authentication in front are yours to configure):
 
@@ -101,7 +100,7 @@ server {
 	server_name omp.example.com;
 
 	location / {
-		proxy_pass http://127.0.0.1:4722;   # fleet; use 4721 for a standalone session daemon
+		proxy_pass http://127.0.0.1:4722;   # the fleet edge
 		proxy_http_version 1.1;
 		proxy_set_header Host $host;
 		proxy_buffering off;
@@ -114,15 +113,15 @@ Because the proxy connects from the host, the fleet sees a loopback peer and the
 
 ### Development-only LAN access
 
-When running from a source checkout, the dev runner can expose only the Vite dev server, leaving the fleet and session daemons on loopback. Vite proxies `/events`, `/command`, `/download`, and `/ctl` to them server-side:
+When running from a source checkout, the dev runner can expose only the Vite dev server, leaving the fleet on loopback. Vite proxies `/events`, `/command`, and `/ctl` to the fleet edge server-side:
 
 ```sh
-bun scripts/dev.ts fleet --host                                  # Vite binds 0.0.0.0; backends stay loopback
+bun scripts/dev.ts fleet --host                                  # Vite binds 0.0.0.0; the fleet stays loopback
 bun scripts/dev.ts fleet --host --allow-hosts my-box.tailnet.ts.net
 ```
 
 - `--host` with no address binds `0.0.0.0`; pass an address to bind a specific interface.
-- The dev runner picks Vite's port per run (backends bind ephemeral ports), so read the actual URL from the `stack ready` summary.
+- The dev runner picks Vite's port per run (the fleet binds an ephemeral port), so read the actual URL from the `stack ready` summary.
 - `--allow-hosts` sets Vite's allowed-host list (`*` allows every `Host` header, otherwise a comma-separated list). Unset, Vite's own default applies (localhost and `.local` names); a request with a Host outside the list is refused with Vite's blocked-request message.
 - The dev server has no authentication. Anyone who can reach it can control agents, so use it on trusted networks only, and stop the runner when you are done.
 
@@ -183,7 +182,7 @@ omp-web add build-box ws://build-box.internal:4721 --token "$TOKEN" --cwd /srv/p
 
 ## Connection liveness
 
-- The browser holds one SSE stream to the fleet (or, in single-session mode, to the session daemon). Every stream receives an `event: ping` keepalive every 15 seconds.
+- The browser holds one SSE stream to the fleet. Every stream receives an `event: ping` keepalive every 15 seconds.
 - A fleet-side connection that sees no event or comment for 30 seconds treats the peer as dead, aborts the stream, and redials with jittered exponential backoff (1 second up to 30 seconds), resuming from the last event id so no frames are lost. Browser reconnection follows the same pattern. See [Process lifecycle and recovery](/operations/lifecycle-and-recovery/) for what the statuses mean while this happens.
 - A slow consumer is cut loose with a `stream_reset` frame once its queue passes 4 MiB and reconnects with replay; a reset is not a session daemon crash.
 - A session daemon exits after its idle timeout (30 minutes by default) once nothing needs it. While a browser is attached, the fleet keeps a stream open to each ready session daemon, which suspends that auto-exit; when the last browser detaches, unused streams close so the session daemons can sleep again. Session transcripts are durable JSONL files, so sleeping, disconnecting, and reattaching never lose a conversation.
@@ -192,7 +191,7 @@ omp-web add build-box ws://build-box.internal:4721 --token "$TOKEN" --cwd /srv/p
 
 | Symptom | Meaning | Fix |
 | --- | --- | --- |
-| `Unauthorized` (HTTP 401), or a page that loads without its bundle, on an off-loopback session daemon URL | The request has no bearer token, or the token is wrong. Static assets are gated too. | Reach the UI through a loopback path: SSH forward, tailnet terminator, or same-host proxy. A `?token=` on the page URL authenticates the document and the wire API, not the asset requests. |
+| `Unauthorized` (HTTP 401) on an off-loopback session daemon URL | The request has no bearer token, or the token is wrong. | Add the exact `?token=`, or reach the session daemon through the fleet instead |
 | `refusing to bind non-loopback address "<host>" without a token` | A session daemon was started off loopback with no credential. | Restart it with `--token` or `OMP_SESSION_TOKEN`. |
 | Remote `curl http://<host>:4722` is refused, and no other device can open the fleet URL | The fleet is loopback only. | Forward the loopback port (`ssh -L 4722:127.0.0.1:4722 user@host`) or publish it on a tailnet from the host. Never forward it to a shared or public interface. |
 | Spawn ends in `endpoint timeout` with no listening line | A spawned child never produced a parseable `OMP_SESSION` listening line: the command failed, the remote binary or SSH path is wrong, or `--advertise` is not a `ws://`/`wss://` URL so the line was discarded. | Read the child's stderr in the Debug panel, verify the template command runs by hand, and check the advertise value. See [Debug panel and diagnostics](/operations/diagnostics/). |
@@ -209,7 +208,7 @@ omp-web add build-box ws://build-box.internal:4721 --token "$TOKEN" --cwd /srv/p
 Enforced by the application:
 
 - The fleet plane binds loopback only, with no host override, and the session daemon requires a token before it will bind off loopback.
-- Every off-loopback session daemon route on the agent-driving surface (`/events`, `/command`, `/download`, and the static UI) returns 401 without the exact bearer token, and loopback peers are exempt. Collaboration room guest joins are the deliberate exception; rooms are a CLI and TUI surface with no browser UI.
+- Every off-loopback session daemon route on the agent-driving surface (`/events`, `/command`, and `/download`) returns 401 without the exact bearer token, and loopback peers are exempt. Collaboration room guest joins are the deliberate exception; rooms are a CLI and TUI surface with no browser UI.
 - Connections are dial-in only, and browser roster frames never carry tokens or endpoints.
 
 Left to the deployment:

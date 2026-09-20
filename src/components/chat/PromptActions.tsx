@@ -11,11 +11,10 @@ interface PromptActionsProps {
 
 /** Send/queue/abort row under the composer: New session, Stop, ready pill, Send. */
 export const PromptActions: Component<PromptActionsProps> = (props) => {
-	// Phase 3 roster mode: while the composer is gated (readyAt cleared on
-	// session switch, re-armed by the proxied ready frame), hint the attached
-	// session's status instead of the generic "starting…".
+	// While the composer is gated (readyAt cleared on session switch, re-armed
+	// by the proxied ready frame), hint the attached session's status instead
+	// of the generic "starting…".
 	const rosterHint = () => {
-		if (state.sessionMode !== "roster") return null;
 		const daemon = state.daemonRoster.find((x) => x.daemonId === state.currentSessionId);
 		if (!daemon) return "no daemon attached, pick one in the sidebar";
 		if (daemon.status === "ready") return "attaching to daemon…";
@@ -36,16 +35,12 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 				</button>
 			)}
 			{/* R8: subtle "starting…" pill while the boot session's readiness
-			    gate is clearing (disconnect already has its own pill). Phase 3
-			    roster mode: show the attached session's status instead. */}
+			    gate is clearing (disconnect already has its own pill). Show the
+			    attached session's status instead of the generic phrase. */}
 			<Show when={state.connected && !isReady()}>
 				<span
 					class="ready-pill"
-					title={
-						state.sessionMode === "roster"
-							? "The attached session is still starting (or reconnecting)…"
-							: "The agent is finishing startup (model/provider resolution)…"
-					}
+					title={"The attached session is still starting (or reconnecting)…"}
 				>
 					{rosterHint() ?? "starting…"}
 				</span>
@@ -58,9 +53,7 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 					!state.connected
 						? "Not connected"
 						: !isReady()
-							? state.sessionMode === "roster"
-								? "The attached session is not ready yet…"
-								: "The agent is still starting…"
+							? "The attached session is not ready yet…"
 							: undefined
 				}
 			>

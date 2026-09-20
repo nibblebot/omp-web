@@ -12,10 +12,10 @@ Solo operator running parallel agents: one developer spawning, supervising, and 
 
 ## Product Purpose
 
-Two coupled products sharing one Solid.js web UI:
+Two coupled products around one Solid.js web UI:
 
-- **omp-session**: a single-session agent daemon for `@oh-my-pi/pi-coding-agent`: one process, one bound project directory, one live agent session (in-process SDK, no child process, no JSON-RPC hop), served to the web UI over SSE + POST. Runs via the installed omp-web bundle (`omp-web session`); disposable: disk `.jsonl` logs make respawn/`--resume` lossless.
-- **omp-fleet**: the registry of N daemons: spawns and supervises local children from command templates, attaches external daemons, dials remote sandboxes, and re-exposes them to the same UI (roster mode) and to non-interactive drivers (CLI fan-out prompting). Holds zero SDK state.
+- **omp-session**: the session daemon for `@oh-my-pi/pi-coding-agent`: one process, one bound project directory, one live agent session (in-process SDK, no child process, no JSON-RPC hop), served over SSE + POST. Runs via the installed omp-web bundle (`omp-web session`); disposable: disk `.jsonl` logs make respawn/`--resume` lossless.
+- **omp-fleet**: the registry of N daemons: spawns and supervises local children from command templates, attaches external daemons, dials remote sandboxes, and serves them to the web UI (the only web UI server) and to non-interactive drivers (CLI fan-out prompting). Holds zero SDK state.
 
 Success means the operator can watch, steer, and fan out across many agent sessions from one browser surface without losing a session to process death.
 
@@ -28,14 +28,14 @@ Two differentiators, both user-confirmed:
 
 ## Operating Context
 
-- The operator runs `bun run dev` (fleet roster, vite :4713 + fleet :4722) or `bun run dev:single` (standalone daemon :4721).
+- The operator runs `bun run dev` (vite :4713 for HMR + the fleet on :4722, which serves the UI and spawns session daemons on :4721).
 - Daemons are spawned from user-editable command templates (`~/.omp-web/config.json`); remote daemons reached via ssh `-L`, tailnet, or direct.
 - Remote sessions are dial-in only: omp-fleet initiates every connection; sandbox images know nothing of the outside world. (Documented security model: factual behavior, not currently pinned as an inviolable constraint; see Capabilities and Constraints.)
 - Collab rooms exist but are CLI/TUI-only; there is deliberately no collab surface in the web UI.
 
 ## Capabilities and Constraints
 
-- One app, two modes: standalone (single-session UI, no sidebar) and roster (fleet sidebar, repo-grouped daemon rows, per-row branch + dirty counts, status dots).
+- One app: the fleet-served roster UI with project-grouped daemon rows (per-row branch + dirty counts, status dots).
 - Wire protocol: SSE + POST only on the agent path; `shared/protocol.ts` is the shared contract, additive changes only, `OMP_PROTO` (currently 2) gates drift.
 - Stack: Bun runtime, Solid.js 1.9, Vite, TypeScript. The fleet ships inside the `dist-bundle/cli.js` bundle; there is no separate compiled omp-fleet binary yet (audit #75 open).
 - **Constraints: none pinned for now** (user answer, 2026-08-13). The documented security model (loopback-trusted UI, bearer token off-loopback, dial-in-only remotes, `/download` realpath jail) is factual current behavior but was explicitly not elevated to a binding constraint.

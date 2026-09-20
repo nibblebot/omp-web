@@ -63,9 +63,8 @@
 		transition: none;
 	}
 }
-/* Floating roster toggle: sticky top-left of the viewport. Roster mode only,
-   and only while the sidebar is closed (the open sidebar carries its own ×
-   at its top-right). */
+/* Floating roster toggle: sticky top-left of the viewport. Shown only while
+   the sidebar is closed (the open sidebar carries its own × at its top-right). */
 .sidebar-toggle {
 	position: fixed;
 	top: var(--space-4);

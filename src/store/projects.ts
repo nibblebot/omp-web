@@ -11,7 +11,7 @@ import { ctlFetch, isConnected, postCommand } from "./transport";
  */
 
 // ---------------------------------------------------------------------------
-// Phase 3 fleet edge: roster-mode command senders. spawn/spawn_resume/
+// Phase 3 fleet edge: fleet command senders. spawn/spawn_resume/
 // stop are fire-and-forget. Results arrive as roster + daemon_status
 // broadcasts (spawn failures surface as an error frame). list_projects is a
 // latest-wins pull like listSessions (the edge answers with one `projects`

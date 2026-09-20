@@ -5,7 +5,7 @@ description: "Give a project a second checkout: create a managed worktree under 
 
 A linked Git worktree lets one repository host several branches at once, and each worktree can run its own session daemon. This page covers the two ways to add one to a project in the browser: creating a fleet-managed worktree, and adopting a linked worktree that already exists. For the underlying model, see [Projects, worktrees, session daemons, and sessions](/concepts/projects-worktrees-session-daemons-sessions/).
 
-Worktree management is a fleet-mode browser workflow. Single-session mode has no project groups and no add-worktree dialog.
+Worktree management happens in the browser against the fleet: project groups and the **Add worktree** dialog live in the [fleet sidebar](/fleet/sidebar/).
 
 ## Managed worktrees and where they live
 

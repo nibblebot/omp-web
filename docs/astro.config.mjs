@@ -48,7 +48,6 @@ export default defineConfig({
 				{
 					label: "Core Concepts",
 					items: [
-						{ label: "Fleet and single-session modes", slug: "concepts/runtime-modes" },
 						{
 							label: "Projects, worktrees, session daemons, and sessions",
 							slug: "concepts/projects-worktrees-session-daemons-sessions",
@@ -115,7 +114,7 @@ export default defineConfig({
 						{ label: "Operate session daemons", slug: "cli/session-daemon-operations" },
 						{ label: "Select multiple session daemons", slug: "cli/selectors" },
 						{ label: "Fan-out prompting", slug: "cli/fanout" },
-						{ label: "Run a standalone session daemon", slug: "cli/standalone" },
+						{ label: "Run a session daemon", slug: "cli/session-daemon" },
 					],
 				},
 				{
@@ -124,7 +123,6 @@ export default defineConfig({
 						{ label: "Run a remote session daemon over SSH", slug: "advanced/ssh" },
 						{ label: "Integrate a custom provider", slug: "advanced/custom-provider" },
 						{ label: "Collaboration rooms", slug: "advanced/collaboration" },
-						{ label: "Single-session deployments", slug: "advanced/single-session-deployments" },
 						{ label: "Architecture overview", slug: "advanced/architecture" },
 					],
 				},

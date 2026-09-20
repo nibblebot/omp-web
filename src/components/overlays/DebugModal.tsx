@@ -15,10 +15,10 @@ import { LogRing } from "./LogRing";
 // Debug panel: an engineer's view of BOTH halves of the connection loop:
 // the browser transport (state.ts ring) and the fleet control plane
 // (GET /ctl/debug via the fetchFleetDebug state action → vite's /ctl proxy →
-// 127.0.0.1:4722). In single-session mode (or while the fleet boots) the
-// /ctl fetch fails with a connection refused; that is the EXPECTED state and
-// renders as a notice, not a crash. Tolerant parsing: unknown/absent fields
-// degrade to an em dash placeholder instead of throwing on a half-landed payload.
+// 127.0.0.1:4722). The /ctl fetch fails while the fleet boots or is
+// unreachable; that is the EXPECTED state and renders as a notice, not a
+// crash. Tolerant parsing: unknown/absent fields degrade to an em dash
+// placeholder instead of throwing on a half-landed payload.
 // ---------------------------------------------------------------------------
 
 export const DebugModal: Component<{ onClose: () => void }> = (props) => {
@@ -68,10 +68,6 @@ export const DebugModal: Component<{ onClose: () => void }> = (props) => {
 							<span class="debug-pill" data-status={state.connected ? "connected" : "disconnected"}>
 								{state.connected ? "connected" : "disconnected"}
 							</span>
-						</div>
-						<div class="debug-fact">
-							<span class="debug-label">mode</span>
-							<span class="debug-value">{state.sessionMode}</span>
 						</div>
 						<div class="debug-fact">
 							<span class="debug-label">session</span>

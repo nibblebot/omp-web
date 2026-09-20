@@ -37,7 +37,7 @@
  *     primes every new stream, so hello_ok → attached → history → state →
  *     available_commands → ready come from the session itself). The pipe
  *     opens with the Bearer token, proto-gates hello_ok then FORWARDS it
- *     (finding #61: the browser's own proto check runs in roster mode too),
+ *     (finding #61: the browser's own proto check runs when proxied through the edge),
  *     ingests per-daemon broker rosters, and forwards every other session
  *     frame, STAMPING the
  *     daemonId as sessionId on every session-scoped frame (omp-session no
@@ -108,9 +108,9 @@ import {
 	SSE_PING_EVENT,
 	SseRing,
 } from "../shared/sse";
-import { EMBEDDED_DIST } from "../server/embedded-dist";
 import type { FleetConfig } from "./config";
 import { validateProjectPath } from "./discovery";
+import { EMBEDDED_DIST } from "./embedded-dist";
 import { BrowseError, browseDirectories } from "./fs-browse";
 import type { DaemonConnector } from "./connector";
 import { backoffDelay, daemonHttpBase } from "./connector";
@@ -259,8 +259,8 @@ const BROWSER_COMMAND_TYPES: Record<string, true> = Object.fromEntries(
 /**
  * Session-scoped frame types (protocol's SessionScopedFrame). omp-session
  * no longer stamps a sessionId on these; the pipe forwarder adds the
- * daemonId unconditionally so roster-mode clients can guard daemon
- * switches. `attached` is handled alongside: its sessionId is REQUIRED
+ * daemonId unconditionally so clients proxied through the edge can guard
+ * daemon switches. `attached` is handled alongside: its sessionId is REQUIRED
  * ("s1" from omp-session) and must read as the daemonId when it comes
  * through the edge.
  */
@@ -1702,9 +1702,9 @@ export class FleetEdge {
 
 	/**
 	 * Forward a session frame: proto-gate then forward hello_ok, since the
-	 * browser's own gate needs it in roster mode (finding #61); tap and strip
-	 * per-daemon broker rosters; STAMP sessionId = daemonId on every
-	 * session-scoped frame (omp-session no longer sends one) and on
+	 * browser's own gate needs it when proxied through the edge (finding #61);
+	 * tap and strip per-daemon broker rosters; STAMP sessionId = daemonId on
+	 * every session-scoped frame (omp-session no longer sends one) and on
 	 * `attached` (its required "s1" must read as the daemonId through the
 	 * edge). Global frames pass unchanged. Every forwarded frame is an
 	 * edge-local delta for this browser (a fresh seq; RINGED only for the
@@ -1740,7 +1740,7 @@ export class FleetEdge {
 			}
 			// Finding #61: the gate above proved proto === OMP_PROTO, so
 			// forwarding the daemon's REAL hello_ok gives the browser's own
-			// proto check something to run against in roster mode too (the
+			// proto check something to run against on the edge stream too (the
 			// edge's priming is roster + daemons only). Falls through to the
 			// stamping + #sendDelta below like any other global frame.
 		}
@@ -2459,9 +2459,9 @@ export class FleetEdge {
 			return new Response(file);
 		}
 		// Installed-bundle path: no on-disk dist/ next to an arbitrary cwd, so
-		// serve the assets embedded by build:omp-web. Keys mirror the daemon's
-		// lookup in server/index.ts ("/" → "/index.html"); content-type is
-		// inferred from the file extension, same as the disk branch above.
+		// serve the assets embedded by build:omp-web. Keys are "/" for the
+		// index and pathname otherwise; content-type is inferred from the file
+		// extension, same as the disk branch above.
 		const embedded = EMBEDDED_DIST[pathname === "/" ? "/index.html" : pathname];
 		if (embedded) {
 			return new Response(Bun.file(embedded));

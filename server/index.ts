@@ -31,7 +31,6 @@ import { encodeSseEvent } from "../shared/sse";
 import { acquireFileLock, LockHeldError } from "../shared/file-lock";
 import type { FileLock } from "../shared/file-lock";
 import { isLoopbackHost, parseConfig, type SessionConfig } from "./config";
-import { EMBEDDED_DIST } from "./embedded-dist";
 import { CollabHostAdapter } from "./collab-host";
 import { createRelay, type RelayHandle, type RelaySocketData } from "./collab-relay";
 import { createCollabSession } from "./collab-session";
@@ -784,49 +783,6 @@ function isInside(resolved: string, roots: string[]): boolean {
 	});
 }
 
-/** Content-type by extension for embedded static assets (R15). */
-const EMBEDDED_CONTENT_TYPES: Record<string, string> = {
-	".html": "text/html; charset=utf-8",
-	".js": "text/javascript; charset=utf-8",
-	".mjs": "text/javascript; charset=utf-8",
-	".css": "text/css; charset=utf-8",
-	".json": "application/json",
-	".svg": "image/svg+xml",
-	".png": "image/png",
-	".jpg": "image/jpeg",
-	".jpeg": "image/jpeg",
-	".gif": "image/gif",
-	".webp": "image/webp",
-	".ico": "image/x-icon",
-	".woff": "font/woff",
-	".woff2": "font/woff2",
-	".ttf": "font/ttf",
-	".map": "application/json",
-	".txt": "text/plain; charset=utf-8",
-};
-
-function contentTypeForPath(pathname: string): string {
-	return EMBEDDED_CONTENT_TYPES[path.extname(pathname).toLowerCase()] ?? "application/octet-stream";
-}
-
-/** Final static fallback, mirroring the fleet edge: dist/ is gitignored in a
- *  dev checkout and the checked-in embedded-dist stub is empty until the R15
- *  build regenerates it, so the daemon still answers 200 with a pointer page
- *  instead of a bare 404. */
-const PLACEHOLDER_HTML = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>omp-web</title>
-  </head>
-  <body style="background:#0d1117;color:#e6edf3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;display:grid;place-items:center;min-height:100vh;margin:0">
-    <main style="text-align:center">
-      <h1>omp-web</h1>
-      <p>The UI has not been built into <code>dist/</code> yet.</p>
-    </main>
-  </body>
-</html>`;
-
 /**
  * Authorization header check: the scheme is case-insensitive (`bearer`/
  * `Bearer`), but the token value is compared EXACTLY, consistent with the
@@ -838,7 +794,7 @@ function bearerHeaderOk(header: string | null, token: string): boolean {
 	return header.slice(0, 7).toLowerCase() === "bearer " && header.slice(7) === token;
 }
 
-/** Bearer check for plain-HTTP paths (/download, static): Authorization header or ?token=. */
+/** Bearer check for plain-HTTP paths (/download): Authorization header or ?token=. */
 function bearerOk(req: Request): boolean {
 	const header = req.headers.get("authorization");
 	if (bearerHeaderOk(header, config.token!)) return true;
@@ -969,8 +925,8 @@ const server = Bun.serve<RelaySocketData>({
 			void handleCommand(cmd).catch((err) => console.error("command dispatch failed:", err));
 			return Response.json({ commandId: cmd.id }, { status: 202 });
 		}
-		// /download and static: off-loopback requests require the token too when
-		// one is set (Authorization header or ?token=; downloads are plain fetch).
+		// /download: off-loopback requests require the token too when one is
+		// set (Authorization header or ?token=; downloads are plain fetch).
 		const loopback = isLoopbackIp(srv.requestIP(req)?.address);
 		if (!loopback && config.token && !bearerOk(req))
 			return new Response("Unauthorized", { status: 401 });
@@ -992,26 +948,13 @@ const server = Bun.serve<RelaySocketData>({
 				return new Response("Forbidden", { status: 403 });
 			return new Response(Bun.file(canonical));
 		}
-		// Static: disk dist/ first (today's behavior), then EMBEDDED_DIST (R15).
-		const file = Bun.file(url.pathname === "/" ? "dist/index.html" : `dist${url.pathname}`);
-		if (!(await file.exists())) {
-			// Content type must come from the resolved asset key: "/" maps to
-			// index.html and has no extension itself.
-			const key = url.pathname === "/" ? "/index.html" : url.pathname;
-			const embedded = EMBEDDED_DIST[key];
-			if (embedded) {
-				return new Response(Bun.file(embedded), {
-					headers: { "content-type": contentTypeForPath(key) },
-				});
-			}
-			// Last resort, mirroring the fleet edge: dev checkouts have neither
-			// dist/ nor an embedded bundle; serve the placeholder, not a 404.
-			return new Response(PLACEHOLDER_HTML, {
-				status: 200,
-				headers: { "content-type": "text/html; charset=utf-8" },
-			});
-		}
-		return new Response(file);
+		// No static or HTML route: the daemon serves the wire API only, so
+		// everything else (including "/") points at the fleet, the only
+		// web UI server.
+		return new Response(
+			"omp-web: this is a session daemon (no web UI). Start the fleet with `omp-web` and open the Web UI URL it prints.\n",
+			{ status: 404, headers: { "content-type": "text/plain; charset=utf-8" } },
+		);
 	},
 	websocket: {
 		// Only collab relay sockets reach these handlers: the agent-driving

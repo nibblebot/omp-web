@@ -3,7 +3,7 @@ title: Fan-out prompting
 description: "Send one prompt to many session daemons at once, with automatic waking, parallel turns, and correlated results when you wait."
 ---
 
-`omp-web prompt` sends a prompt to every session daemon a selector matches. Targets are woken on demand, different session daemons run their turns in parallel, prompts to the same session daemon are serialized, and `--wait` correlates each target's own turn into a result you can read per session daemon. This is the fleet-mode way to ask the same question of many worktrees or many machines; the browser has no fan-out prompt surface.
+`omp-web prompt` sends a prompt to every session daemon a selector matches. Targets are woken on demand, different session daemons run their turns in parallel, prompts to the same session daemon are serialized, and `--wait` correlates each target's own turn into a result you can read per session daemon. This is the terminal path for asking the same question of many worktrees or many machines; the browser has no fan-out prompt surface.
 
 The fleet must be running on the control port; see [CLI overview](/cli/overview/).
 

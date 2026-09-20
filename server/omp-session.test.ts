@@ -468,11 +468,31 @@ test("token gate: off-loopback peers need the token; loopback stays exempt", asy
 	const loopback = await openEvents(`http://127.0.0.1:${port}`);
 	await waitForFrame(loopback.frames, "attached", 10_000, "loopback attached frame");
 
-	// Static serving is gated for off-loopback peers too (Authorization or ?token=).
-	const unauth = await fetch(`${base}/`);
-	expect(unauth.status).toBe(401);
-	const authed = await fetch(`${base}/?token=sekret`);
-	expect(authed.status).toBe(200);
+	// The non-wire routes stay gated off-loopback, and the daemon serves no
+	// HTML: an authenticated "/" is the plain-text 404 pointing at the fleet.
+	const unauthRoot = await fetch(`${base}/`);
+	expect(unauthRoot.status).toBe(401);
+	const authedRoot = await fetch(`${base}/?token=sekret`);
+	expect(authedRoot.status).toBe(404);
+	expect(authedRoot.headers.get("content-type")).toContain("text/plain");
+	expect(await authedRoot.text()).toContain("this is a session daemon (no web UI)");
+
+	// /download: the token gate rejects off-loopback peers BEFORE path
+	// validation (a missing path would otherwise be a 400); authenticated
+	// requests still stream a real file from the daemon cwd, and only miss
+	// with a 404 when the path does not resolve.
+	const unauthDownload = await fetch(`${base}/download`);
+	expect(unauthDownload.status).toBe(401);
+	await writeFile(path.join(tmp, "export.txt"), "download-me\n");
+	const authedDownload = await fetch(
+		`${base}/download?path=${encodeURIComponent("export.txt")}&token=sekret`,
+	);
+	expect(authedDownload.status).toBe(200);
+	expect(await authedDownload.text()).toBe("download-me\n");
+	const missingDownload = await fetch(
+		`${base}/download?path=${encodeURIComponent("nope.txt")}&token=sekret`,
+	);
+	expect(missingDownload.status).toBe(404);
 
 	headerStream.close();
 	queryStream.close();

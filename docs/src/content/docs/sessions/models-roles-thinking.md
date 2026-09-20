@@ -5,7 +5,7 @@ description: Change the session model through model roles, set the thinking leve
 
 The session bar above the composer shows the model and thinking level the attached session will use for its next turn. Both are controls: the model segment opens the model roles wizard, and the thinking segment cycles the level or opens a picker on right-click.
 
-The controls apply to the attached session, so they behave the same in fleet mode and single-session mode. If no session is attached, there is no session bar to act on.
+The controls apply to the attached session. If no session is attached, there is no session bar to act on.
 
 ## The session bar
 

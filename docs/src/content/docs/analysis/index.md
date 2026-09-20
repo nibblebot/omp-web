@@ -9,7 +9,7 @@ Analysis separates three kinds of information that answer different questions:
 - Provider usage reports show account-level rate-limit windows reported by configured providers.
 - Historical analytics summarize session transcripts, tool calls, latency, errors, subagents, tokens, and cost.
 
-Analysis views are available only in fleet mode. Single-session mode still shows controls and usage associated with the attached session, but it does not include the fleet-wide historical browser.
+The first two come from the attached session daemon. The historical views read through the fleet's statistics service, over every transcript the fleet host has recorded.
 
 Historical views can read live JSONL transcripts and synchronized `stats.db` records. Missing, archived, or not-yet-synchronized sessions can therefore differ between views. The interface identifies provenance where that distinction matters.
 
