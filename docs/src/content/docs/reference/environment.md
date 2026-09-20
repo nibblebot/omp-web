@@ -3,7 +3,7 @@ title: Environment variables
 description: Canonical reference for the environment variables that the fleet, session daemons, agent runtime, and installer read, including defaults, precedence, and error behavior.
 ---
 
-omp-web reads environment variables in several separate processes: the fleet (fleet mode), each session daemon, the embedded Oh My Pi agent runtime inside those session daemons, and the install and update commands. A few variables belong to the shipped example wrappers instead. This page is the canonical list. Each section names the owning process, the runtime modes it applies to, the accepted shape, and the exact precedence chain.
+omp-web reads environment variables in several separate processes: the fleet (fleet mode), each session daemon, the embedded Oh My Pi agent runtime inside those session daemons, and the install and update commands. This page is the canonical list. Each section names the owning process, the runtime modes it applies to, the accepted shape, and the exact precedence chain.
 
 Rules that hold everywhere:
 
@@ -48,16 +48,6 @@ The state file is pidfile locked for the lifetime of the fleet. Starting a secon
 | `OMP_HOOK_LABELS` | Comma-joined `k=v` labels. May be empty. |
 
 The last non-empty stdout line must be a JSON object with a `url` (a `ws://` or `wss://` address) and a `token`, and may also carry `name` and `cwd`. Diagnostics belong on stderr. A non-zero exit, a timeout, or unparsable output fails the command with HTTP 502; calling `provision` with no hook configured fails with HTTP 400. The result is registered as a remote session daemon, so the fleet connects to it (dial-in) rather than the other way around. See [Remote and advanced](/advanced/) for provider integration.
-
-### Shipped example wrapper variables
-
-The wrappers in `fleet/examples/` are external to the fleet and read their own variables. They are listed here so they are not confused with the supported fleet and session-daemon surface:
-
-| Variable | Owner | Effect |
-| --- | --- | --- |
-| `OMP_PROVIDER_CWD` | `provider-skeleton.sh` | Working directory for the session daemon the skeleton starts. Defaults to the home directory. |
-| `OMP_SESSION_IMAGE` | `docker-omp-session.sh` | Container image to run. Defaults to `your-registry/omp-session:latest`. |
-| `OMP_SESSION_HOST_PORT` | `docker-omp-session.sh` | Fixed host port to publish. When unset, Docker assigns a free port and the wrapper reports the discovered one in its endpoint line. |
 
 ## Session daemon
 

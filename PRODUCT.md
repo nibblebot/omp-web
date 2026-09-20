@@ -50,7 +50,6 @@ Two differentiators, both user-confirmed:
 
 - `README.md`: full architecture, security model, config surface, roadmap.
 - `docs/position.md` (2026-08-13): audit Phase 7 strategic items (findings #71–#80). The full report (`audit.html`) was removed 2026-08-13 and the remediation plan (`audit-plan.md`) archived 2026-08-15; remediation history survives as `finding #N` comments in code. This directory (`omp-fleet.design-audit`) is the design-audit worktree.
-- `fleet/examples/`: copy-pasteable spawn template examples (ssh-remote, docker, provider-skeleton).
 - No testimonials, customers, benchmarks, or marketing claims exist; future work must not fabricate them.
 
 ## Product Principles

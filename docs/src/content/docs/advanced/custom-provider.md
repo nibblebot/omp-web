@@ -72,7 +72,7 @@ The `cwd` value controls roster grouping: the entry's project is the basename of
 
 ## Example: a wrapper that starts a session daemon
 
-The repository ships this pattern as `fleet/examples/provider-skeleton.sh`. This version uses the installed `omp-web session` command; the mechanics are identical.
+The wrapper below starts the session daemon, parses its listening line, and prints the enroll handshake:
 
 ```sh
 #!/usr/bin/env bash
@@ -123,7 +123,7 @@ omp-web provision sandbox
 
 The command prints the new session daemon's id and its initial status, and the fleet sidebar shows the entry under the project derived from `cwd`. The entry leaves `connecting` once the handshake and its cwd check pass, and reaches `ready` when the session daemon finishes resolving its provider and model; you can then prompt it like any other session daemon.
 
-To replace the example's local session daemon with a remote one, replace only the start block: run the session daemon over SSH, in a container, or through your provider's API, and keep the JSON handshake unchanged. The endpoint you report must be reachable from the fleet host. See [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/) for the two shipped patterns.
+To replace the example's local session daemon with a remote one, replace only the start block: run the session daemon over SSH, in a container, or through your provider's API, and keep the JSON handshake unchanged. The endpoint you report must be reachable from the fleet host. See [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/) for those two setups.
 
 ## How the fleet supervises a provisioned session daemon
 

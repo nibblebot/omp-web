@@ -28,7 +28,7 @@ The default fleet state file, `fleet-state.json`, lives in the same directory as
 
 Merging an object follows these rules:
 
-- Unknown keys are ignored, so a file may carry extra keys. The shipped integration examples use a `_comment` string for notes.
+- Unknown keys are ignored, so a file may carry extra keys, for example a `_comment` string used for notes.
 - A known key with the wrong type is ignored, and that key keeps its default.
 - `templates` is replaced in full rather than merged template by template. A file that defines any template also replaces the built-in `local` template.
 - A `templates` object is accepted only when every value is an object with a string `command`. If any entry fails that check, the whole map falls back to the default. Other fields inside a template object (including `host`) are passed through without validation. An empty `templates` object is accepted and leaves no templates at all, so every spawn fails.
@@ -116,14 +116,14 @@ Because `templates` replaces the default map, repeat the `local` entry when you 
     },
     "ssh-remote": {
       "host": "box.example.com",
-      "command": "ssh box.example.com omp-session --cwd {cwd} --port 4721 --host 0.0.0.0 --token {token} --name {name} {labels} {resume}"
+      "command": "ssh box.example.com omp-web session --cwd {cwd} --port 4721 --host 0.0.0.0 --token {token} --name {name} {labels} {resume}"
     }
   },
   "defaultTemplate": "local"
 }
 ```
 
-The repository ships fuller integration examples in `fleet/examples/`: `ssh-remote.json`, `docker.json`, and the `docker-omp-session.sh` wrapper. Copy the template entry into your own file rather than pointing the whole file at the example, because the example leaves `defaultTemplate` at `local`. See [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/).
+See [Run a remote session daemon over SSH](/advanced/ssh/) for remote template shapes and [Run session daemons in Docker](/advanced/docker/) for a container wrapper that publishes a host port and reports it with an `endpoint` line.
 
 ## defaultTemplate and projectTemplates
 
@@ -228,11 +228,11 @@ A file that keeps the default local template, adds two integration templates, pi
       "command": "omp-web session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}"
     },
     "docker": {
-      "command": "/home/you/omp-web/fleet/examples/docker-omp-session.sh {cwd} {token} {name} {labels} {resume}"
+      "command": "/opt/omp-web/docker-omp-session.sh {cwd} {token} {name} {labels} {resume}"
     },
     "ssh-remote": {
       "host": "box.example.com",
-      "command": "ssh box.example.com omp-session --cwd {cwd} --port 4721 --host 0.0.0.0 --token {token} --name {name} {labels} {resume}"
+      "command": "ssh box.example.com omp-web session --cwd {cwd} --port 4721 --host 0.0.0.0 --token {token} --name {name} {labels} {resume}"
     }
   }
 }

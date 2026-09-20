@@ -166,7 +166,7 @@ For a session daemon the fleet starts from a spawn template, the reachable endpo
 
 If no usable `listening` line appears within 30 seconds, the spawn fails with `endpoint timeout: no OMP_SESSION| listening line within 30s` and the child is killed. If the resolved URL is not a `ws://` or `wss://` URL, the spawn fails with `invalid endpoint from child: <url>`.
 
-The remote templates shipped with the source combine these pieces: `fleet/examples/ssh-remote.json` sets the template `host` to the SSH target and starts the session daemon with `--host 0.0.0.0 --token {token}`, and `fleet/examples/docker-omp-session.sh` publishes a host port and prints an `endpoint` line for it. See [Run a session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/).
+The remote template shapes combine these pieces: an SSH template sets the template `host` to the SSH target and starts the session daemon with `--host 0.0.0.0 --token {token}`, while a container wrapper publishes a host port and prints an `endpoint` line for it. See [Run a session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/).
 
 ### Register an already running session daemon
 

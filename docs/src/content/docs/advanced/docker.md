@@ -5,7 +5,7 @@ description: Spawn containerized session daemons from the fleet with the Docker 
 
 A spawn template can run each session daemon inside a Docker container instead of directly on the fleet host. The fleet owns the lifecycle exactly as it does for a local session daemon, and the connection is still dial-in: the fleet initiates the connection to the containerized session daemon over a published host port, and the container never connects back to the fleet.
 
-The repository ships a working example pair: [`fleet/examples/docker.json`](https://github.com/nibblebot/omp-web/blob/main/fleet/examples/docker.json) defines the spawn template, and [`fleet/examples/docker-omp-session.sh`](https://github.com/nibblebot/omp-web/blob/main/fleet/examples/docker-omp-session.sh) is the wrapper that starts the container, publishes its port, and reports the reachable endpoint. This page explains both, then covers the persistence and host path rules the example only hints at.
+This page gives you the wrapper that starts the container, publishes its port, and reports the reachable endpoint, then covers the image contract and the persistence and host path rules that make containerized rows work.
 
 Mode note: this is a fleet setup. The spawn template belongs to the fleet's configuration, and containerized rows appear in the same roster as local ones. Docker does not change sessions, transcripts, or the browser workflow.
 
@@ -14,35 +14,91 @@ Mode note: this is a fleet setup. The spawn template belongs to the fleet's conf
 - A running fleet with at least one registered project. See [First run](/getting-started/first-run/) and [Add your first project](/getting-started/add-first-project/).
 - Docker Engine on the fleet host with a CLI that can run containers, stream container logs, and read published ports. The wrapper calls `docker run`, `docker logs -f`, and `docker port`.
 - Bash on the fleet host. The wrapper is a Bash script and uses `set -euo pipefail`.
-- A copy of `docker-omp-session.sh` at an absolute path that will not move, because the spawn template embeds that path.
+- The wrapper script below saved at an absolute path that will not move, because the spawn template embeds that path.
 - An image that can start a session daemon, plus a provider and default model available to the session daemon inside the container. Prompts fail without them, exactly as they do locally; see [Start your first session](/getting-started/start-first-session/).
 
 ## What the image must provide
 
-The wrapper runs the container with this command (from the checked-in script):
+The wrapper runs the container with this command:
 
 ```sh
 docker run --rm -d --name "$CID" -p "$PORT_SPEC" \
 	-v "$CWD:$CWD" -w "$CWD" \
 	"$IMAGE" \
-	omp-session --cwd "$CWD" --port "$OMP_SESSION_PORT" --host 0.0.0.0 \
+	omp-web session --cwd "$CWD" --port "$OMP_SESSION_PORT" --host 0.0.0.0 \
 	--token "$TOKEN" --name "$NAME" "$@" >/dev/null
 ```
 
 That fixes the image contract:
 
-- **The container command must exist.** The wrapper invokes `omp-session` inside the image. The release installation exposes a single `omp-web` command, and `omp-web session` is the session daemon entry point, so an image built from a release needs either a small `omp-session` alias on the image `PATH` or an edited command line such as `omp-web session --cwd "$CWD" ...`. See [Installation](/getting-started/installation/) and [Run a standalone session daemon](/cli/standalone/).
+- **The container command must exist.** The wrapper invokes `omp-web session` inside the image, so the image must put the installed CLI on the container `PATH` (an `ENV PATH="/root/.bun/bin:$PATH"` line for the default install location) or the wrapper must call it by absolute path. A `docker run` container reads no shell startup files, so the installer's `PATH` export does not apply there. A plain `omp-session` symlink to `omp-web` is not a drop-in either: `omp-web` classifies its first argument, and a bare invocation starts a fleet, so such an alias has to be a wrapper script that runs `omp-web session "$@"`. See [Installation](/getting-started/installation/) and [Run a standalone session daemon](/cli/standalone/).
 - **The session daemon must run in the foreground and log to the container stdout.** The wrapper streams container output with `docker logs -f` and expects the `OMP_SESSION|` contract lines on that stream. An image whose entrypoint daemonizes the process, redirects its stdout elsewhere, or exits immediately breaks endpoint resolution.
 - **The image needs the runtime and the agent's tooling.** The installed bundle runs under Bun, and the agent's Bash, edit, and eval tools execute inside the container, so git, editors, and the project's own toolchain must exist there.
 - **The container needs network egress to the model provider.** The agent runs in-process in the session daemon, so provider calls originate from the container, not from the fleet host. A container without egress reaches a row that cannot complete prompts.
 - **Provider authentication and the default model must resolve inside the container.** The wrapper forwards no host environment variables and mounts only the workspace. The session daemon reads its agent directory inside the container (the SDK default is `~/.omp/agent` for the container user; `PI_CODING_AGENT_DIR` moves it). Bake that state into the image, or mount it from the host as shown under [Persistence and resume](#persistence-and-resume).
-- **The image reference is configurable.** The wrapper defaults to the placeholder `your-registry/omp-session:latest` and reads `OMP_SESSION_IMAGE` first, so either publish under that environment variable or edit the `IMAGE` default in your copy of the wrapper. `docker run` pulls the image when it is not present locally.
+- **The image reference is configurable.** The wrapper below defaults to the placeholder `your-registry/omp-session:latest` and reads `OMP_SESSION_IMAGE` first, so either publish under that environment variable or edit the `IMAGE` default. `docker run` pulls the image when it is not present locally.
 
 There is no Dockerfile in the repository; building and publishing the image is your step.
 
-## How the wrapper works
+## The wrapper
 
-The wrapper receives `<cwd> <token> <name>` from the spawn template and passes every trailing argument, which is where the fleet inserts `{labels}` and `{resume}`, verbatim to the session daemon inside the container.
+The wrapper below starts one container per session daemon, streams the container's stdout so the fleet sees its `OMP_SESSION|` lines, and reports the published host port as an endpoint line:
+
+```sh
+#!/usr/bin/env bash
+# One container per session daemon. The fleet runs this script from a spawn
+# template as: docker-omp-session.sh <cwd> <token> <name> [args...]
+set -euo pipefail
+
+CWD="$1"
+TOKEN="$2"
+NAME="$3"
+shift 3
+
+# Point OMP_SESSION_IMAGE at your image; it must have the omp-web CLI on PATH.
+IMAGE="${OMP_SESSION_IMAGE:-your-registry/omp-session:latest}"
+OMP_SESSION_PORT=4721                  # container-internal port (fixed)
+HOST_PORT="${OMP_SESSION_HOST_PORT:-}" # optional explicit published host port
+
+CID="omp-session-$(printf '%s' "$NAME" | tr -c 'a-zA-Z0-9_.-' '_')-$OMP_SESSION_PORT-$$"
+
+cleanup() {
+	docker rm -f "$CID" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT TERM INT
+
+if [ -n "$HOST_PORT" ]; then
+	PORT_SPEC="127.0.0.1:$HOST_PORT:$OMP_SESSION_PORT"
+else
+	# Let docker pick a free host port, then discover it below.
+	PORT_SPEC="127.0.0.1::$OMP_SESSION_PORT"
+fi
+
+docker run --rm -d --name "$CID" -p "$PORT_SPEC" \
+	-v "$CWD:$CWD" -w "$CWD" \
+	"$IMAGE" \
+	omp-web session --cwd "$CWD" --port "$OMP_SESSION_PORT" --host 0.0.0.0 \
+	--token "$TOKEN" --name "$NAME" "$@" >/dev/null
+
+if [ -z "$HOST_PORT" ]; then
+	# `|| true`: without it, set -e plus pipefail aborts here before the guard
+	# below can name the failure (docker port fails once the container is gone).
+	HOST_PORT="$(docker port "$CID" "$OMP_SESSION_PORT/tcp" | sed 's/.*://' || true)"
+	[ -n "$HOST_PORT" ] || { echo "docker: no published port for $CID" >&2; exit 1; }
+fi
+
+# Stream the container's stdout so its listening line reaches the fleet.
+docker logs -f "$CID" &
+LOGS_PID=$!
+
+# The container's own url (ws://0.0.0.0:4721) is not dialable from the host,
+# so report the published port. The fleet prefers this endpoint line.
+printf 'OMP_SESSION|%s\n' "{\"event\":\"endpoint\",\"url\":\"ws://127.0.0.1:$HOST_PORT\"}"
+
+wait "$LOGS_PID"
+```
+
+It receives `<cwd> <token> <name>` from the spawn template and passes every trailing argument, which is where the fleet inserts `{labels}` and `{resume}`, verbatim to the session daemon inside the container.
 
 1. **Container.** `docker run --rm -d` starts a detached container named `omp-session-<name>-4721-<pid>`. `--rm` and a cleanup trap on `EXIT`, `TERM`, and `INT` remove the container when the wrapper exits.
 2. **Ports.** `--port 4721` is the fixed container-internal port. The default publish spec is `127.0.0.1::4721`, which asks Docker for a free host port bound to host loopback. Setting `OMP_SESSION_HOST_PORT` pins an explicit host port instead. The wrapper discovers the assigned port with `docker port`.
@@ -57,10 +113,11 @@ The wrapper receives `<cwd> <token> <name>` from the spawn template and passes e
 
 ## Configure the spawn template
 
-### 1. Put the wrapper and image in place
+### 1. Save the wrapper and pick the image
+
+Save the script above at an absolute path that will not move, for example `/opt/omp-web/docker-omp-session.sh`, make it executable, and export the image it runs:
 
 ```sh
-cp /path/to/omp-web/fleet/examples/docker-omp-session.sh /opt/omp-web/docker-omp-session.sh
 chmod 755 /opt/omp-web/docker-omp-session.sh
 export OMP_SESSION_IMAGE=registry.example.com/you/omp-session:latest
 ```
@@ -69,13 +126,13 @@ The wrapper reads `OMP_SESSION_IMAGE` and `OMP_SESSION_HOST_PORT` from its envir
 
 ### 2. Add the template to the fleet config
 
-The checked-in example is a snippet. Its exact `docker` entry is:
+The `docker` entry points at the script's absolute path:
 
 ```json
 {
 	"templates": {
 		"docker": {
-			"command": "/path/to/omp-web/fleet/examples/docker-omp-session.sh {cwd} {token} {name} {labels} {resume}"
+			"command": "/opt/omp-web/docker-omp-session.sh {cwd} {token} {name} {labels} {resume}"
 		}
 	},
 	"defaultTemplate": "local"
@@ -84,7 +141,7 @@ The checked-in example is a snippet. Its exact `docker` entry is:
 
 Placeholders stay bare. The fleet shell-quotes each substituted value before the command runs, so wrapping a placeholder in quotes of your own passes the quote characters through to the wrapper as part of the argument.
 
-Merge that `templates.docker` object into the fleet config (by default `~/.omp-web/config.json`; `OMP_FLEET_CONFIG` points elsewhere). The `_comment` field in the checked-in file is ignored by the loader, like every unknown key. A working merged file looks like this:
+Merge that `templates.docker` object into the fleet config (by default `~/.omp-web/config.json`; `OMP_FLEET_CONFIG` points elsewhere). A working merged file looks like this:
 
 ```json
 {
@@ -102,7 +159,7 @@ Merge that `templates.docker` object into the fleet config (by default `~/.omp-w
 
 Rules that the merge must respect:
 
-- The config file is shallow-merged over the built-in defaults, and a file `templates` object replaces the whole built-in map. A file that defines only `docker` removes the built-in `local` template, and the example's `"defaultTemplate": "local"` then resolves to nothing. Keep a `local` entry as above, or point `defaultTemplate` at `docker`. A `templates` object that fails validation, such as a template without a `command` string, makes the loader fall back to the built-in map instead, which also leaves `docker` undefined.
+- The config file is shallow-merged over the built-in defaults, and a file `templates` object replaces the whole built-in map. A file that defines only `docker` removes the built-in `local` template, and a `"defaultTemplate": "local"` then resolves to nothing. Keep a `local` entry as above, or point `defaultTemplate` at `docker`. A `templates` object that fails validation, such as a template without a `command` string, makes the loader fall back to the built-in map instead, which also leaves `docker` undefined.
 - Keep the `workspaceDir` key if your file already has one. First run writes it when you choose a data home, and dropping it falls back to `~/.omp-web/workspaces`.
 - The config is read once at fleet start. Restart the fleet after editing it (`Ctrl+C`, then run `omp-web` again).
 
@@ -118,7 +175,7 @@ The template is filled per spawn. The Docker-relevant behavior:
 
 The fleet shell-quotes every value before substitution, so every placeholder is written bare: `{cwd}`, `{token}`, and `{name}` arrive as single-quoted shell words, and `{labels}` and `{resume}` expand to complete, already-quoted shell arguments. Adding your own quotes around any placeholder passes the quote characters through to the wrapper as part of the value. An unknown placeholder is left verbatim, which is a template bug rather than a silent empty value. [Configure spawn templates](/configuration/spawn-templates/) owns the full placeholder table and resolution rules.
 
-The optional `host` template field exists for templates whose reachable address differs from the bind; the Docker example does not use it because the wrapper prints an endpoint line.
+The optional `host` template field exists for templates whose reachable address differs from the bind; the Docker wrapper above does not use it because it prints an endpoint line.
 
 ### 4. Choose the template per spawn
 
@@ -183,9 +240,9 @@ A session daemon is disposable and its transcript is durable, but in this setup 
 - **The checkout survives** because the wrapper bind-mounts it (`-v "$CWD:$CWD"`), so file edits made by the agent are ordinary host file edits.
 - **The container does not outlive its session daemon.** When the session daemon exits (idle auto-exit after the default 30 minutes, **Stop daemon** from the row menu, or a fleet stop), `docker logs -f` ends, the wrapper exits, and the trap plus `--rm` remove the container. The fleet marks the row asleep and keeps the working directory and last session file.
 - **A wake runs the wrapper again** with `{resume}` filled in when the row has a recorded session file, so the new container starts with `--resume <session file>`. The recorded file is the one the previous container reported in its `hello_ok` handshake.
-- **Agent data is not mounted by the example.** Transcripts and provider state live in the session daemon's agent directory, which defaults to `~/.omp/agent` inside the container, with session transcripts under its `sessions` directory. Nothing writes those to the host, so a wake cannot read the recorded resume file and the session daemon logs `omp-session: --resume <file> failed (...); starting fresh`. The fleet's session picker reads the fleet host's agent directory, so it can also list transcripts the container cannot open.
+- **Agent data is not mounted by default.** Transcripts and provider state live in the session daemon's agent directory, which defaults to `~/.omp/agent` inside the container, with session transcripts under its `sessions` directory. Nothing writes those to the host, so a wake cannot read the recorded resume file and the session daemon logs `omp-session: --resume <file> failed (...); starting fresh`. The fleet's session picker reads the fleet host's agent directory, so it can also list transcripts the container cannot open.
 
-To keep resume working, extend your copy of the wrapper's `docker run` with an agent directory mount and point the session daemon at it:
+To keep resume working, extend the wrapper's `docker run` with an agent directory mount and point the session daemon at it:
 
 ```sh
 AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
@@ -195,7 +252,7 @@ docker run --rm -d --name "$CID" -p "$PORT_SPEC" \
 	-v "$AGENT_DIR:$AGENT_DIR" \
 	-e PI_CODING_AGENT_DIR="$AGENT_DIR" \
 	"$IMAGE" \
-	omp-session --cwd "$CWD" --port "$OMP_SESSION_PORT" --host 0.0.0.0 \
+	omp-web session --cwd "$CWD" --port "$OMP_SESSION_PORT" --host 0.0.0.0 \
 	--token "$TOKEN" --name "$NAME" "$@" >/dev/null
 ```
 
@@ -216,7 +273,7 @@ The wrapper mounts the spawned directory at its host path inside the container a
 
 - `unknown spawn template: docker`: the config file the fleet loaded does not define `docker`, or the fleet was not restarted after the edit. Check the path in use (`~/.omp-web/config.json` unless `OMP_FLEET_CONFIG` overrides it).
 - `unknown spawn template: local`: the `templates` object replaced the built-in map and dropped the `local` entry while `defaultTemplate` still points at it. Add `local` back or change `defaultTemplate`.
-- `endpoint timeout: no OMP_SESSION| listening line within 30s`: the session daemon never produced a contract line within the fleet's resolution window. Open the row's **Daemon details** for the captured wrapper output, then check the container itself with `docker ps -a` and `docker logs <container>`. Typical causes are an image that cannot run `omp-session`, an image pull failure, or a container that exits immediately.
+- `endpoint timeout: no OMP_SESSION| listening line within 30s`: the session daemon never produced a contract line within the fleet's resolution window. Open the row's **Daemon details** for the captured wrapper output, then check the container itself with `docker ps -a` and `docker logs <container>`. Typical causes are an image that cannot run `omp-web session`, an image pull failure, or a container that exits immediately.
 - `child exited N times (5 restarts allowed)`: the wrapper keeps failing before a session daemon exists. The captured output in **Daemon details** names the cause, such as `docker: command not found`, a refused connection to the Docker daemon, or `docker: no published port for <container>`.
 - A non-loopback bind refusal in the container logs: the `--token` argument was dropped from the container command, usually while editing the wrapper.
 - `cwd mismatch: omp-session reports <path>, registered <path>`: the mount path and `--cwd` in the wrapper differ from the registered cwd. Make them equal and wake the row again.

@@ -53,7 +53,7 @@ omp-web add review-box ws://review-box.example.com:4721 --token "$TOKEN" --cwd /
 - `--cwd <dir>` records the checkout path for display and grouping context. It does not make the fleet manage or probe that directory, and remote rows are not stamped with a registered project id, so they appear in the ungrouped set of the sidebar.
 - `--label k=v` may repeat, exactly as with `spawn`.
 
-Working SSH and Docker examples live in [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/).
+Worked SSH and Docker setups are covered in [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/).
 
 ## Start a session daemon through a hook
 

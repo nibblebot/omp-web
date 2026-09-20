@@ -75,7 +75,7 @@ The hook runs through `sh -c` with a 60 second deadline and two environment vari
 
 Everything else the hook prints on stdout is ignored, and diagnostics belong on stderr. On success the fleet registers a remote entry and dials it. The model is dial-in only: the session daemon accepts a connection from the fleet and never learns the fleet's address or state, and the token gates only that session daemon.
 
-Trigger the hook with `omp-web provision <name> [--label k=v]…`. Provisioning is a CLI-driven surface: the browser has no action for it, and the fleet's provisioning route is refused as misconfigured when no hook is set. `fleet/examples/provider-skeleton.sh` is a complete skeleton, and [Run a remote session daemon over SSH](/advanced/ssh/), [Run session daemons in Docker](/advanced/docker/), and [Integrate a custom provider](/advanced/custom-provider/) build on it.
+Trigger the hook with `omp-web provision <name> [--label k=v]…`. Provisioning is a CLI-driven surface: the browser has no action for it, and the fleet's provisioning route is refused as misconfigured when no hook is set. [Integrate a custom provider](/advanced/custom-provider/) has a complete hook skeleton, and [Run a remote session daemon over SSH](/advanced/ssh/) and [Run session daemons in Docker](/advanced/docker/) show the same pattern aimed at remote hosts and containers.
 
 ## Managed worktree root
 
