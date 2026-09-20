@@ -373,11 +373,11 @@ describe("registered projects (Phase 2)", () => {
 		const registry = await loadedRegistry(tmpStatePath());
 		const project = await registry.addProject(await makeRepo());
 		// The auto-registered default workspace: spawned + asleep, no
-		// lastSessionFile, no endpoint — the roster row is its only state.
+		// lastSessionFile, no endpoint; the roster row is its only state.
 		registry.create(baseInit({ projectId: project.projectId, status: "asleep" }));
 		registry.removeProject(project.projectId);
 		expect(registry.projects()).toEqual([]);
-		// The placeholder went with the project — no manual two-step removal.
+		// The placeholder went with the project; no manual two-step removal.
 		expect(registry.list()).toEqual([]);
 		// Other placeholder-shaped entries (any cwd) are untouched.
 		expect(registry.create(baseInit({ status: "asleep" })).status).toBe("asleep");
@@ -397,8 +397,8 @@ describe("registered projects (Phase 2)", () => {
 		);
 		expect(registry.get(placeholder.daemonId)).toBeDefined();
 		expect(registry.projects()).toHaveLength(1);
-		// An asleep entry WITH a lastSessionFile has transcripts — not a
-		// placeholder, so it blocks too.
+		// An asleep entry WITH a lastSessionFile has transcripts, so it is not a
+		// placeholder and blocks too.
 		const withSession = registry.create(
 			baseInit({
 				projectId: project.projectId,
@@ -444,7 +444,7 @@ describe("registered projects (Phase 2)", () => {
 		const project = await registry.addProject(repo); // both hooks
 		expect(fired).toBe(1);
 		expect(projectFired).toBe(1);
-		// A daemon mutation fires onChange only — project broadcasts stay off
+		// A daemon mutation fires onChange only; project broadcasts stay off
 		// the hot path (the edge's registered_projects frame rides
 		// onProjectsChange).
 		registry.create(baseInit({ projectId: project.projectId }));

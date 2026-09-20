@@ -2,15 +2,15 @@
  * Symlink-escape containment for :file route handlers.
  *
  * Lexical sanitization (src/paths.ts decodeFileParam/toAbs) rejects `..`
- * traversal, but a symlink — the final component or any intermediate
- * directory — can still point outside sessionsDir. Every handler that
+ * traversal, but a symlink, whether the final component or an intermediate
+ * directory, can still point outside sessionsDir. Every handler that
  * opens a session file by route param must verify that the RESOLVED
  * realpath of the file stays inside the realpath of sessionsDir.
  */
 import { realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 
-/** Cached realpath of sessionsDir — constant for the life of the process. */
+/** Cached realpath of sessionsDir; constant for the life of the process. */
 const rootCache = new Map<string, string | null>();
 
 export function sessionsRootReal(sessionsDir: string): string | null {

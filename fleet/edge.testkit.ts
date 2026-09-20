@@ -14,7 +14,7 @@ import type { FleetEdge } from "./edge";
 
 export { cleanupTempDirs };
 
-/** Fake omp-session cwd — under a testkit temp dir so the afterAll reaps it. */
+/** Fake omp-session cwd, under a testkit temp dir so the afterAll reaps it. */
 export const FAKE_CWD = join(tempDir("omp-web-edge-fake-cwd-"), "fake-proj");
 export const FAKE_SESSION_FILE = join(FAKE_CWD, ".omp", "session.json");
 export const FAKE_TOKEN = "sekret";
@@ -79,7 +79,7 @@ export interface FakeSession {
 	cwd: string;
 	streams(): FakeStreamSeen[];
 	streamCount(): number;
-	/** POST /command bodies received (the uplink — no hello precedes them). */
+	/** POST /command bodies received (the uplink, no hello precedes them). */
 	received: unknown[];
 	/** Broadcast a {type:"daemons"} broker roster to every open stream. */
 	emitDaemons(entries: DaemonInfo[]): void;
@@ -171,7 +171,7 @@ export function startFakeSession(opts: { cwd?: string } = {}): FakeSession {
 			),
 		);
 		// Phase 6 wire format: omp-session keeps the required "s1" on `attached` but
-		// no longer stamps session-scoped frames — the edge adds the daemonId.
+		// no longer stamps session-scoped frames; the edge adds the daemonId.
 		write(encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: "s1" }, seq++));
 		write(encodeSseEvent(SSE_EVENT_NAME, { type: "history", messages: [] }, seq++));
 		write(encodeSseEvent(SSE_EVENT_NAME, { type: "state", state }, seq++));
@@ -219,7 +219,7 @@ export interface PipeFake {
  * Fake daemon for the pipe tests: primes every /events stream (the
  * connector's control stream and the edge's pipe), answers prompt calls
  * with call_result on all open streams, emits keepalive ping events every
- * heartbeatMs while not paused, and — like the real omp-session — keeps a
+ * heartbeatMs while not paused, and, like the real omp-session, keeps a
  * delta ring so a stream opened with Last-Event-ID ≥ SSE_DELTA_SEQ_START
  * replays the deltas it missed after the full priming.
  */
@@ -514,7 +514,7 @@ export function serveEdge(edge: FleetEdge): { port: number; stop(): void } {
  * RING REPLAY (delta-era frames only) until `want` matches or `timeoutMs`
  * elapses. The probe binds the client (a rebind closes any previous stream),
  * so it must be the LAST use of that clientId in a test. A non-matching
- * `want` falls through to the timeout abort and returns what was collected —
+ * `want` falls through to the timeout abort and returns what was collected;
  * assertions judge the frames.
  */
 export async function collectReplay(

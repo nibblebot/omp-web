@@ -7,9 +7,10 @@ import { PickerRow } from "../shared/PickerRow";
  * current path (clickable segments), a manual path input (accepts "~"/"~/…",
  * expanded edge-side), the scrollable subdirectory listing (git badge when
  * the edge reports a .git dir), and a footer button selecting the CURRENT
- * directory. Presentational only — every fetch goes through the dir-picker
- * module (createDirPicker), which the parent may pass in (`picker` prop) to
- * read browse state itself (AddProjectModal's hasGit submit gate).
+ * directory. The component is presentational only; every fetch goes through
+ * the dir-picker module (createDirPicker), which the parent may pass in
+ * (`picker` prop) to read browse state itself (AddProjectModal's hasGit
+ * submit gate).
  */
 export const DirPicker: Component<{
 	onSelect: (path: string) => void;
@@ -133,7 +134,7 @@ export const DirPicker: Component<{
 				{(err) => <div class="msg-notice dirpick-error">{err()}</div>}
 			</Show>
 			<Show when={snap().truncated && !snap().loading}>
-				<div class="tool-collapsed-note">listing truncated — showing first 500 entries</div>
+				<div class="tool-collapsed-note">listing truncated, showing first 500 entries</div>
 			</Show>
 			<div class="dirpick-footer">
 				<button

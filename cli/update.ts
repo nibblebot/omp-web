@@ -1,14 +1,14 @@
 /**
- * `omp-web update` — self-update from the release channel (docs/release.md).
+ * `omp-web update` self-updates from the release channel (docs/release.md).
  *
  * Release channel: GitHub Releases. The stable latest-release base is
  * `https://github.com/<owner>/<repo>/releases/latest/download`; the GitHub
  * base is a Phase 6 user action (repo creation + scripts/release.ts), so
- * until then the base comes from `OMP_WEB_UPDATE_URL` — Phase 6 replaces
+ * until then the base comes from `OMP_WEB_UPDATE_URL`; Phase 6 replaces
  * that env lookup with the GitHub constant.
  *
  * Flow: resolve the current version, fetch `release-manifest.json` off the
- * base, compare with a tiny local semver compare, then — unless `--check` —
+ * base, compare with a tiny local semver compare, then, unless `--check`,
  * download the tarball asset, verify its sha256 against the manifest, and
  * reinstall via `bun remove omp-web` + `bun add <verified tarball>` in the
  * pinned install dir (scripts/install-omp-web.ts layout). stdout carries the
@@ -38,7 +38,7 @@ export class UpdateError extends Error {
 }
 
 /**
- * Tiny numeric dot-split semver compare — no deps. Negative when a < b.
+ * Tiny numeric dot-split semver compare, no deps. Negative when a < b.
  * Missing trailing segments compare as 0 ("1.2" == "1.2.0"); non-numeric
  * segments ("dev") sort below numeric ones (release > dev).
  */
@@ -209,7 +209,7 @@ export async function applyUpdate(
 /**
  * The bundle lives at `<install-dir>/node_modules/omp-web/dist-bundle/cli.js`
  * (scripts/install-omp-web.ts layout); three levels up is the install dir.
- * In dev/source this resolves somewhere bogus — the existsSync guard below
+ * In dev/source this resolves somewhere bogus; the existsSync guard below
  * rejects it with a clear message.
  */
 function pinnedInstallDir(): string {
@@ -219,7 +219,7 @@ function pinnedInstallDir(): string {
 /**
  * Update installs into omp-web's OWN pinned project dir (NOT the shared
  * `bun install -g` global store, which is flat and shared with the `omp`
- * CLI — it can hold only one @oh-my-pi version, so the bundle's pinned
+ * CLI, which can hold only one @oh-my-pi version, so the bundle's pinned
  * SDK would skew against whatever omp has installed). A same-name
  * path-tarball re-add trips bun's dependency-loop check (verified against
  * bun 1.3.14; `--force` does not bypass it), so update removes the package
@@ -233,13 +233,13 @@ async function realInstall(tarballPath: string): Promise<number> {
 	const installDir = pinnedInstallDir();
 	if (!existsSync(join(installDir, "node_modules", "omp-web", "dist-bundle", "cli.js"))) {
 		console.error(
-			"omp-web: not installed in a pinned directory (scripts/install-omp-web.ts) — reinstall with the installer first",
+			"omp-web: not installed in a pinned directory (scripts/install-omp-web.ts). Reinstall with the installer first",
 		);
 		return 1;
 	}
 	// Anchor the install dir as a bun project so `bun remove`/`bun add` never
 	// walk UP to an ancestor package.json (a repo or $HOME that owns one) and
-	// attach there — the install dir has no package.json of its own unless a
+	// attach there. The install dir has no package.json of its own unless a
 	// successful add wrote one.
 	if (!existsSync(join(installDir, "package.json")))
 		writeFileSync(join(installDir, "package.json"), '{"name":"omp-web-install","private":true}\n');
@@ -259,7 +259,7 @@ async function realInstall(tarballPath: string): Promise<number> {
 	});
 	const addCode = (await add.exited) ?? 1;
 	if (addCode !== 0) return addCode;
-	// Read back the installed version — the bin symlink target is stable, so
+	// Read back the installed version. The bin symlink target is stable, so
 	// the package.json version is the ground truth for "did it actually flip".
 	try {
 		const pkg = (await Bun.file(
@@ -275,7 +275,7 @@ async function realInstall(tarballPath: string): Promise<number> {
 
 /**
  * Post-update advisory: if the fleet control port answers at all (any HTTP
- * status — the fleet is up), the running fleet predates this install.
+ * status, the fleet is up), the running fleet predates this install.
  * Unreachable → silent (no fleet to restart).
  */
 async function probeFleet(): Promise<boolean> {
@@ -331,7 +331,7 @@ export async function main(argv: string[]): Promise<number> {
 		} else {
 			console.log(`omp-web updated to ${result.installedVersion}`);
 			if (await probeFleet()) {
-				console.log("fleet running on old version — restart it");
+				console.log("fleet running on old version. Restart it");
 			}
 		}
 		return 0;

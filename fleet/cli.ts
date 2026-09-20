@@ -22,8 +22,7 @@
  * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722.
  * Managed-worktree root: `--workspace-dir` flag, else OMP_FLEET_WORKSPACE_DIR,
  * else the config-file `workspaceDir` key, else `~/.omp-web/workspaces`.
- * A refused connection prints "fleet not running — start it:
- * omp-fleet serve" and exits 1.
+ * A refused connection prints NOT_RUNNING_MESSAGE and exits 1.
  */
 
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
@@ -33,7 +32,7 @@ import { expandTilde, resolveConfigPath } from "./config";
 import { startFleet, type FleetServer } from "./server";
 
 const DEFAULT_PORT = 4722;
-const NOT_RUNNING_MESSAGE = "fleet not running — start it: omp-fleet serve";
+const NOT_RUNNING_MESSAGE = "fleet not running. Start it: omp-fleet serve";
 
 /** Wire shapes the CLI renders (subsets of RegistryEntry / ProjectEntry). */
 interface DaemonRow {
@@ -106,7 +105,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 				// #26: a missing value, or a value that looks like a flag
 				// (e.g. --wait -1), was silently converted to a boolean true
 				// and dropped by flagString/flagNumber. A non-multi flag with
-				// no usable value is a user error — say so instead of
+				// no usable value is a user error, so say so instead of
 				// silently ignoring it. Multi flags keep the legacy leniency.
 				if (MULTI_FLAGS.has(name)) {
 					put(name, true);
@@ -282,7 +281,7 @@ let linePending = "";
 /**
  * Write `prompt` to stdout, then read one line from stdin (EOF → ""). Plain
  * line reading (no readline): a TTY in cooked mode delivers line-buffered
- * data, but a single chunk may hold several lines — the remainder is kept in
+ * data, but a single chunk may hold several lines; the remainder is kept in
  * `linePending` for the next read. A fresh readline interface per prompt would
  * hang (readline TTY state does not survive close/recreate on one stream).
  * Only used by the first-run offer, which is strictly TTY-gated.
@@ -325,8 +324,8 @@ async function serveCmd(port: number, workspaceDir?: string): Promise<number> {
 	// to configure omp-web before booting.
 	let offerConfigPath: string | undefined;
 	if (shouldOfferSetup(existsSync(resolveConfigPath()), process.stdin.isTTY === true)) {
-		// The offer only runs on an interactive TTY — non-interactive spawners
-		// (whose stdout is parsed for the banner) never reach it — so its
+		// The offer only runs on an interactive TTY; non-interactive spawners
+		// (whose stdout is parsed for the banner) never reach it, so its
 		// status lines, prompts, and confirmations can all print to stdout
 		// normally instead of stderr-red.
 		const { checkOmpSetup, ompStatusLines } = await import("./omp-check");
@@ -349,7 +348,7 @@ async function serveCmd(port: number, workspaceDir?: string): Promise<number> {
 			writeConfigFile(dirs.configPath, dirs.workspaceDir);
 			console.log(`setup: data home configured at ${dirs.dataHome}`);
 			console.log(`setup: config written to ${dirs.configPath}`);
-			// Boot with the freshly written config — a chosen data home may
+			// Boot with the freshly written config; a chosen data home may
 			// differ from the default lookup path; state follows the config.
 			offerConfigPath = dirs.configPath;
 		}
@@ -360,7 +359,7 @@ async function serveCmd(port: number, workspaceDir?: string): Promise<number> {
 		(err: unknown) => {
 			if (err instanceof LockHeldError) {
 				console.error(
-					`fleet already running (pid ${err.holderPid}) — state locked at ${err.lockPath}`,
+					`fleet already running (pid ${err.holderPid}). State locked at ${err.lockPath}`,
 				);
 				return null;
 			}
@@ -374,13 +373,13 @@ async function serveCmd(port: number, workspaceDir?: string): Promise<number> {
 /**
  * Run a booted fleet in the foreground: print the startup banner, mirror
  * lifecycle events to stdout, and block until SIGINT/SIGTERM (then close the
- * server and exit 0). The first banner line keeps its exact shape — scripts
+ * server and exit 0). The first banner line keeps its exact shape; scripts
  * parse the port out of it.
  */
 export async function serveLoop(server: FleetServer): Promise<number> {
 	// Startup banner: where the fleet listens, where its state/config live,
 	// and what a previous fleet run left behind (boot statuses). The first
-	// line keeps its exact shape — scripts parse the port out of it.
+	// line keeps its exact shape; scripts parse the port out of it.
 	console.log(`fleet listening on 127.0.0.1:${server.port}`);
 	console.log(`fleet state: ${server.fleetFacts.statePath}`);
 	console.log(`fleet config: ${server.fleetFacts.configPath ?? "(defaults)"}`);
@@ -481,7 +480,7 @@ async function spawnCmd(
 		}),
 	})) as Record<string, unknown>;
 	console.log(
-		`spawned ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`,
+		`spawned ${String(body.daemonId)} (${String(body.name)}), status ${String(body.status)}`,
 	);
 	return 0;
 }
@@ -510,7 +509,7 @@ async function addRepoCmd(
 	const project = body.project;
 	const registered = `${project?.projectId ?? "?"} (${project?.path ?? path})`;
 	if (body.entry?.daemonId !== undefined) {
-		console.log(`registered ${registered} — spawned ${body.entry.daemonId}`);
+		console.log(`registered ${registered}, spawned ${body.entry.daemonId}`);
 	} else {
 		console.log(`registered ${registered}`);
 	}
@@ -606,11 +605,11 @@ async function addWorktreeCmd(
 	const where = String(entry.cwd ?? existing ?? name);
 	if (existing !== undefined) {
 		console.log(
-			`registered worktree ${where} (${String(entry.daemonId ?? "?")})${start ? ` — status ${String(entry.status ?? "?")}` : " — not started"}`,
+			`registered worktree ${where} (${String(entry.daemonId ?? "?")})${start ? `, status ${String(entry.status ?? "?")}` : ", not started"}`,
 		);
 	} else {
 		console.log(
-			`created worktree ${where} (${String(entry.daemonId ?? "?")})${start ? ` — status ${String(entry.status ?? "?")}` : " — not started"}`,
+			`created worktree ${where} (${String(entry.daemonId ?? "?")})${start ? `, status ${String(entry.status ?? "?")}` : ", not started"}`,
 		);
 	}
 	return 0;
@@ -665,7 +664,7 @@ async function addCmd(
 		}),
 	})) as Record<string, unknown>;
 	console.log(
-		`added ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`,
+		`added ${String(body.daemonId)} (${String(body.name)}), status ${String(body.status)}`,
 	);
 	return 0;
 }
@@ -688,7 +687,7 @@ async function provisionCmd(
 		}),
 	})) as Record<string, unknown>;
 	console.log(
-		`provisioned ${String(body.daemonId)} (${String(body.name)}) — status ${String(body.status)}`,
+		`provisioned ${String(body.daemonId)} (${String(body.name)}), status ${String(body.status)}`,
 	);
 	return 0;
 }
@@ -748,7 +747,7 @@ async function promptCmd(
 	const waitMs = flagNumber(flags, "wait");
 	if (waitValue !== undefined && waitMs === undefined) {
 		throw new CliError(
-			"usage: prompt <selector> <text> [--wait <ms>] — --wait requires a millisecond value",
+			"usage: prompt <selector> <text> [--wait <ms>]. --wait requires a millisecond value",
 		);
 	}
 	if (waitMs === undefined) {

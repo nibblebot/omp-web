@@ -3,7 +3,7 @@
  *
  * The pairing maps are computed ONCE per entries change in a createMemo
  * (never per-row at mount), so toolResults arriving on later pages still
- * pair with their call's execution-start marker — wherever the call lives
+ * pair with their call's execution-start marker, wherever the call lives
  * in the loaded range (audit Phase 1 finding). Calls with an execution
  * start but no result yet in the loaded range read as `hasResult: false`
  * and render a "pending…" badge.
@@ -38,7 +38,7 @@ export interface PairingMaps {
 }
 
 /**
- * Single O(n) scan over all loaded entries. Pure — unit-tested in test/.
+ * Single O(n) scan over all loaded entries. Pure and unit-tested in test/.
  */
 export function pairToolCalls(entries: readonly RawEntry[]): PairingMaps {
 	const calls = new Map<string, ToolCallInfo>();
@@ -73,7 +73,7 @@ export function pairToolCalls(entries: readonly RawEntry[]): PairingMaps {
 		}
 	}
 	// Execution-start markers may appear on an earlier page than the assistant
-	// message — fill startedAt without clobbering name/hasResult/hasCall.
+	// message. Fill startedAt without clobbering name/hasResult/hasCall.
 	for (const e of entries) {
 		const st = toolExecutionStartOf(e);
 		if (st === null) continue;
@@ -89,7 +89,7 @@ export function pairToolCalls(entries: readonly RawEntry[]): PairingMaps {
 }
 
 /**
- * Reactive pairing memo — recomputed once per entries change, shared by every
+ * Reactive pairing memo, recomputed once per entries change and shared by every
  * row. Rows read the returned Maps; they never build their own pairing.
  */
 export function createPairingMaps(entries: Accessor<readonly RawEntry[]>): Accessor<PairingMaps> {

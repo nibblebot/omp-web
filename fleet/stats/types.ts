@@ -2,7 +2,7 @@
  * Server-internal contracts for the fleet/stats API (fleet/stats/*).
  *
  * Wire contracts (SessionSummary, SessionStats, TranscriptPage, Health,
- * SyncResult, …) live in shared/stats-types.ts — route modules and lib
+ * SyncResult, …) live in shared/stats-types.ts; route modules and lib
  * import those from there. This module holds only shapes the server uses
  * internally.
  */
@@ -18,7 +18,7 @@ export interface Route {
 
 /**
  * Read-only stats.db handle with rotation-aware reprobing. The WAL-safe
- * fallback implementation lives in fleet/stats/lib/stats-db.ts — this is the
+ * fallback implementation lives in fleet/stats/lib/stats-db.ts. This is the
  * shape every route codes against.
  */
 export interface StatsDbManager {

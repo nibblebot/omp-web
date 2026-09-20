@@ -1,4 +1,4 @@
-/* Tools — tool/bash card renderers, diff, todo, search, subagents, active strips, eval/lsp/hub/ask-tool cards. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Tools: tool/bash card renderers, diff, todo, search, subagents, active strips, eval/lsp/hub/ask-tool cards. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 .tool-card {
 	background: var(--panel);

@@ -5,14 +5,14 @@ import { ctlFetch, isConnected, postCommand } from "./transport";
 /**
  * Projects/onboarding domain (Phase 3 store facade split): fleet-edge
  * project/worktree/daemon senders and their latest-wins pending slots. All
- * fire-and-forget — answers ride the registered_projects / roster /
+ * fire-and-forget; answers ride the registered_projects / roster /
  * worktree_delete_info broadcasts and error frames. The registered-projects /
  * worktreeDeleteInfo mirrors live in state.ts alongside the mux.
  */
 
 // ---------------------------------------------------------------------------
 // Phase 3 fleet edge: roster-mode command senders. spawn/spawn_resume/
-// stop are fire-and-forget — results arrive as roster + daemon_status
+// stop are fire-and-forget. Results arrive as roster + daemon_status
 // broadcasts (spawn failures surface as an error frame). list_projects is a
 // latest-wins pull like listSessions (the edge answers with one `projects`
 // frame).
@@ -133,7 +133,7 @@ export function removeDaemonById(daemonId: string): void {
 
 // ---------------------------------------------------------------------------
 // Phase 5: project/worktree onboarding senders. All fire-and-forget like the
-// senders above — answers ride the registered_projects / roster /
+// senders above; answers ride the registered_projects / roster /
 // worktree_delete_info broadcasts and error frames. A `start: true` sender
 // also ARMS the post-attach session-picker gate: the spawned daemon's id is
 // server-assigned and unknowable here, so the gate is set to a sentinel and
@@ -214,7 +214,7 @@ export function sendAddExistingWorktree(
 }
 
 /** Stop + evict the worktree's daemon and git-remove the managed worktree
- *  (deleteBranch:true also `git branch -d`s it). Owned+clean only — a
+ *  (deleteBranch:true also `git branch -d`s it). Owned+clean only; a
  *  refusal surfaces as an error frame. */
 export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: boolean } = {}): void {
 	if (!isConnected()) return;
@@ -238,7 +238,7 @@ export function sendWorktreeDeleteInfo(daemonId: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 6: /ctl/fs/browse — the fleet edge's directory listing behind the
+// Phase 6: /ctl/fs/browse, the fleet edge's directory listing behind the
 // onboarding directory pickers (DirPicker). Raw GET like the ctl fetchers in
 // transport.ts, but living here with the onboarding domain.
 // ---------------------------------------------------------------------------
@@ -261,17 +261,17 @@ export interface FsBrowseResult {
 	truncated: boolean;
 }
 
-/** GET /ctl/fs/browse?path=… — subdirectory listing for the onboarding dir
- *  pickers. `path` may be absolute, "~", or "~/rel" (all expanded edge-side);
- *  omitted → the fleet host's home directory. 400 answers carry the edge's
- *  reason as { error } — surfaced verbatim (missing dir, not-a-directory,
- *  unreadable). */
+/** GET /ctl/fs/browse?path=… returns the subdirectory listing for the
+ *  onboarding dir pickers. `path` may be absolute, "~", or "~/rel" (all
+ *  expanded edge-side); omitted → the fleet host's home directory. 400
+ *  answers carry the edge's reason as { error }, surfaced verbatim (missing
+ *  dir, not-a-directory, unreadable). */
 export async function fetchFsBrowse(path?: string): Promise<FsBrowseResult> {
 	const url =
 		path === undefined ? "/ctl/fs/browse" : `/ctl/fs/browse?${new URLSearchParams({ path })}`;
 	const res = await ctlFetch(
 		url,
-		"fleet control plane unreachable — no fleet server on :4722",
+		"fleet control plane unreachable, no fleet server on :4722",
 		(s) => `directory browse failed (${s})`,
 		async (r) => {
 			const body = (await r.json().catch(() => null)) as { error?: unknown } | null;

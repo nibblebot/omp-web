@@ -78,8 +78,8 @@ export const ModelModal: Component<{ onClose: () => void }> = (props) => {
 
 	const title = () => {
 		if (step() === "roles") return "Model roles";
-		if (step() === "model") return `Model roles — ${role()?.tag ?? role()?.name ?? ""}`;
-		return `Thinking — ${role()?.tag ?? role()?.name ?? ""}`;
+		if (step() === "model") return `Model roles, ${role()?.tag ?? role()?.name ?? ""}`;
+		return `Thinking, ${role()?.tag ?? role()?.name ?? ""}`;
 	};
 
 	return (

@@ -1,6 +1,6 @@
 /**
  * StatsDbManagerImpl lifecycle: missing→present pickup, rotation reopen,
- * WAL-fallback temp copy + close cleanup. Unit-level — no server involved.
+ * WAL-fallback temp copy + close cleanup. Unit-level; no server involved.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";

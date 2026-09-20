@@ -9,7 +9,7 @@ import type { RosterEntry } from "./DaemonRow";
 // ---------------------------------------------------------------------------
 // Daemon detail popover: roster facts (cwd/mode/template/uptime/pid/session/
 // labels/error) plus the live stderr tail. The log lifecycle (fetch/loading/
-// error/tail/refresh) is the roster DaemonLogView primitive — the raw
+// error/tail/refresh) is the roster's DaemonLogView component; the raw
 // /ctl/sessions/{id}/stderr fetch now lives in state's fetchDaemonStderr.
 // ---------------------------------------------------------------------------
 
@@ -18,9 +18,9 @@ export const DaemonDetailView: Component<{ daemon: DaemonEntry; onClose: () => v
 ) => {
 	const d = () => props.daemon;
 	// Live-process facts (uptime/pid) mean nothing once the daemon is asleep or
-	// errored — and stale entries from older edges may still carry pid/readyAt
-	// from the last run — so render them defensively off status, not field
-	// presence. The roster entry's status is the single source of truth.
+	// errored; stale entries from older edges may still carry pid/readyAt from
+	// the last run, so render them defensively off status, not field presence.
+	// The roster entry's status is the single source of truth.
 	const alive = () =>
 		d().status === "ready" ||
 		d().status === "connecting" ||

@@ -1,10 +1,10 @@
 /**
- * Stats API composition root — the read-only transcripts/stats surface
+ * Stats API composition root for the read-only transcripts/stats routes
  * (historical sessions, per-session analytics, transcripts, subagents,
  * sync + health), mounted by fleet/server.ts under /ctl/stats.
  *
  * Layering: this module (and everything under fleet/stats) imports only
- * shared/stats-types.ts, bun/node builtins, and ./ — never server/ or src/.
+ * shared/stats-types.ts, bun/node builtins, and ./, never server/ or src/.
  *
  * createStatsApp returns a fetch handler that answers /ctl/stats paths and
  * returns null for everything else (fleet's own control-plane routing owns

@@ -5,7 +5,7 @@ import { call } from "./transport";
 /**
  * Usage domain (Phase 3 store facade split): the READ_ONLY fetchUsageReports
  * relay row (server/methods.ts) mirrored into state.usage* with one-shot,
- * single-flight refresh semantics — the SDK caches provider /usage for ~5min
+ * single-flight refresh semantics; the SDK caches provider /usage for ~5min
  * upstream (with jitter), so callers must never poll; they re-run
  * refreshUsageReports() on mount or on user action and read the mirror.
  */

@@ -44,8 +44,8 @@ export function TranscriptList(props: TranscriptListProps) {
 		async (key) => api.sessions(key.split("\u0000")[0]),
 	);
 
-	// Render from .latest (the last SUCCESSFUL response): a refetch — sync
-	// tick or search — keeps the previous list on screen and updates it in
+	// Render from .latest (the last SUCCESSFUL response). A refetch, sync
+	// tick or search, keeps the previous list on screen and updates it in
 	// place when the new data lands, instead of wiping to a loading state.
 	const sessions = () => sessionsRes.latest?.sessions ?? [];
 

@@ -183,8 +183,8 @@ describe("edge worktree commands", () => {
 	test("delete_worktree stops, evicts, and git-removes the managed worktree", async () => {
 		const target = managedWorktreePath(config.workspaceDir, project.path, "My Branch");
 		const entry = registry.list().find((e) => e.cwd === target)!;
-		// Floor: only roster frames NEWER than the last one seen so far count —
-		// the priming roster (pre-entry) must not satisfy the "gone" predicate.
+		// Floor: only roster frames NEWER than the last one seen so far count.
+		// The priming roster (pre-entry) must not satisfy the "gone" predicate.
 		const rosters = browser.events.filter((ev) => ev.frame.type === "roster");
 		const floorId = rosters.length > 0 ? rosters[rosters.length - 1].id : 0;
 		await browser.send({ type: "delete_worktree", id: "wt5", daemonId: entry.daemonId });
@@ -197,7 +197,7 @@ describe("edge worktree commands", () => {
 		);
 		expect(registry.get(entry.daemonId)).toBeUndefined();
 		// The roster broadcast rides registry.remove, which precedes the git
-		// removal — wait for the directory to actually disappear.
+		// removal, so wait for the directory to actually disappear.
 		await waitFor(() => (existsSync(target) ? null : "removed"), 5000, "worktree removed");
 		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
 			target,

@@ -1,5 +1,5 @@
 /**
- * POST /ctl/stats/sync — real-spawn paths only (own app; no injected runner).
+ * POST /ctl/stats/sync, real-spawn paths only (own app; no injected runner).
  *
  * The app's stats.db lives under $HOME (buildSyncEnv case 2: absolute config
  * root, home-relative NAME handed to the child) so the default spawn path is
@@ -22,7 +22,7 @@ import { createStatsApp, type StatsApp } from "../fleet/stats/index";
 import { syncConfig } from "../fleet/stats/routes/sync";
 
 const SYNC_ERROR_503 =
-	"omp binary not found — install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH";
+	"omp binary not found. Install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH";
 
 /** Fake omp that mimics pi-utils' quirk: stats.db = join(homedir(), PI_CONFIG_DIR, "stats.db"). */
 const FAKE_OMP = `#!/usr/bin/env bun
@@ -43,7 +43,7 @@ let tmpDir: string;
 let binDir: string; // sleeping omp (timeout test)
 let syncBinDir: string; // quirk-mimicking omp (case-2 test)
 let emptyDir: string;
-let homeTmp: string; // stats.db lives here — under $HOME
+let homeTmp: string; // stats.db lives here, under $HOME
 let app: StatsApp;
 let savedPath: string | undefined;
 let savedTimeoutMs: number;
@@ -97,7 +97,7 @@ afterAll(() => {
 	rmSync(homeTmp, { recursive: true, force: true });
 });
 
-describe("POST /ctl/stats/sync — default runner", () => {
+describe("POST /ctl/stats/sync: default runner", () => {
 	test("times out: kills the omp child and returns 504", async () => {
 		syncConfig.timeoutMs = 400;
 		const pidfile = join(tmpDir, "omp.pid");
@@ -109,7 +109,7 @@ describe("POST /ctl/stats/sync — default runner", () => {
 		expect(res.status).toBe(504);
 		expect(await res.json()).toEqual({ error: "sync timed out" });
 
-		// The child was killed — its pid must be gone (allow a moment to reap).
+		// The child was killed, so its pid must be gone (allow a moment to reap).
 		const pid = Number(readFileSync(pidfile, "utf8").trim());
 		expect(Number.isInteger(pid) && pid > 0).toBe(true);
 		const deadline = Date.now() + 2000;
@@ -135,7 +135,7 @@ describe("POST /ctl/stats/sync — default runner", () => {
 	});
 
 	test("absolute config root under $HOME: sync lands in the real stats.db, never a $HOME-nested copy", async () => {
-		syncConfig.timeoutMs = 5000; // generous — the fake omp is a bun script
+		syncConfig.timeoutMs = 5000; // generous; the fake omp is a bun script
 		process.env.PATH = `${syncBinDir}:${savedPath ?? ""}`;
 
 		const res = await postSync();
@@ -159,7 +159,7 @@ describe("POST /ctl/stats/sync — default runner", () => {
 		};
 		expect(h.dbCounts.messages).toBe(1);
 
-		// The old-bug location — join(homedir(), <absolute statsDbPath>) — must
+		// The old-bug location, join(homedir(), <absolute statsDbPath>), must
 		// NOT exist: the child got the home-relative NAME, not the literal path.
 		const nested = join(homedir(), homeTmp.replace(/^\//, ""), "stats.db");
 		expect(existsSync(nested)).toBe(false);

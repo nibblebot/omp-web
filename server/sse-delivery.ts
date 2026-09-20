@@ -62,7 +62,7 @@ const sseEncoder = new TextEncoder();
  * Byte budget per `history` frame (mirrors collab-host's SNAPSHOT_CHUNK_BYTES).
  * Each chunk stays well under SSE_BACKPRESSURE_BYTES so priming of a
  * >4 MiB transcript (base64 image payloads inside messages) never trips the
- * stream's drop-and-resume termination — a terminated prime is a permanent
+ * stream's drop-and-resume termination; a terminated prime is a permanent
  * connect → terminate → reconnect loop, since priming is never ringed.
  */
 const HISTORY_CHUNK_BYTES = 512 * 1024;
@@ -83,7 +83,7 @@ const RING_DELTAS: Record<string, true> = {
 	settings_changed: true,
 	subagent_lifecycle: true,
 	subagent_progress: true,
-	// #18: subagent_event is NOT ringed — the subagent mirror broadcasts only
+	// #18: subagent_event is NOT ringed; the subagent mirror broadcasts only
 	// lifecycle/progress frames (see the mirror comment below); the raw event
 	// channel was never relayed, so the frame type never reaches broadcastTo.
 	ui_request: true,
@@ -123,20 +123,20 @@ export function enqueueTo(stream: SseConsumer, block: string): void {
  * End a stream (buffered data is still delivered; the client resumes via
  * Last-Event-ID). A backpressure drop is signaled IN-BAND: Bun's HTTP layer
  * writes the chunked terminator for both controller.close() and
- * controller.error() (scratch-verified — an errored body stream reads as a
- * clean EOF to fetch clients), so the wire cannot carry the distinction. The
- * `stream_reset` frame enqueued ahead of the close is what the fleet
- * connector maps to "reconnecting" (drop-and-resume); the browser ignores it
- * and native-reconnects. Termination that is genuinely terminal (shutdown —
- * which detaches without closing) keeps the bare clean-close semantics →
- * connector "asleep".
+ * controller.error() (scratch-verified, since an errored body stream reads
+ * as a clean EOF to fetch clients), so the wire cannot carry the
+ * distinction. The `stream_reset` frame enqueued ahead of the close is what
+ * the fleet connector maps to "reconnecting" (drop-and-resume); the browser
+ * ignores it and native-reconnects. Termination that is genuinely terminal
+ * (shutdown, which detaches without closing) keeps the bare clean-close
+ * semantics → connector "asleep".
  */
 export function terminateStream(stream: SseConsumer, reason: string): void {
 	if (reason === "backpressure") {
 		try {
 			// The frame takes a fresh delta-range seq so the consumer's
 			// Last-Event-ID advances past the buffered overflow (read in order
-			// before EOF); it is never ringed — only the dying stream sees it.
+			// before EOF); it is never ringed, so only the dying stream sees it.
 			stream.controller.enqueue(
 				sseEncoder.encode(
 					encodeSseEvent(SSE_EVENT_NAME, { type: "stream_reset", reason }, nextDeltaSeq++),
@@ -157,8 +157,8 @@ export function terminateStream(stream: SseConsumer, reason: string): void {
 /**
  * Enqueue one priming block, pacing to the consumer's drain so the 4 MiB cap
  * never trips. Unlike enqueueTo (deltas: drop-and-resume via the ring),
- * priming MUST complete — a terminated prime is a permanent
- * connect → terminate → reconnect loop for transcripts over the cap — so this
+ * priming MUST complete. A terminated prime is a permanent
+ * connect → terminate → reconnect loop for transcripts over the cap, so this
  * waits for room instead of terminating. The wait holds the queue
  * PRIMING_QUEUE_MARGIN below the cap so a concurrent keepalive ping or small
  * delta never kills a slow reader mid-prime. A detached consumer (cancel,
@@ -173,14 +173,14 @@ export async function enqueuePaced(stream: SseConsumer, block: string): Promise<
 }
 
 /**
- * Return a copy of `message` with image content blocks dropped (the collab
- * welcome degrades oversized entries the same way — stripImagesFromMessage —
+ * Return a copy of `message` with image content blocks dropped. The collab
+ * welcome degrades oversized entries the same way (stripImagesFromMessage),
  * but that helper mutates in place, and the session's live transcript must
- * stay untouched: only the wire copy is stripped).
+ * stay untouched: only the wire copy is stripped.
  */
 function messageWithoutImages(message: AgentMessage): AgentMessage {
 	// Some AgentMessage members (bash/python execution messages) carry no
-	// content array — they cannot hold image blocks and pass through.
+	// content array, so they cannot hold image blocks and pass through.
 	if (!("content" in message)) return message;
 	const content = message.content;
 	if (
@@ -195,7 +195,7 @@ function messageWithoutImages(message: AgentMessage): AgentMessage {
 /**
  * Slice `messages` into byte-bounded `history` frames (mirrors collab-host's
  * #sendSnapshotChunks). A transcript whose single frame fits one chunk keeps
- * the original shape — one frame, no `final` field (back-compatible with
+ * the original shape, one frame with no `final` field (back-compatible with
  * pre-chunking clients); a larger transcript ships as sequential frames the
  * client accumulates until the `final: true` chunk. A single message bigger
  * than one chunk degrades in place of shipping an oversized frame: image
@@ -264,8 +264,8 @@ export function broadcast(frame: ServerFrame): void {
 }
 
 /**
- * Unicast answers (call_result, sessions, files, login_url, …): every live
- * stream of this single-session daemon — the SSE stream is the one answer
+ * Unicast answers (call_result, sessions, files, login_url, …) go to every
+ * live stream of this single-session daemon; the SSE stream is the one answer
  * channel. NOT ringed; a lost answer is re-POSTed by the client.
  */
 export function broadcastAnswer(frame: ServerFrame): void {
@@ -292,7 +292,7 @@ export function broadcastTo(handle: string, frame: SessionScopedFrame): void {
 /**
  * History resync after a transcript-replacing call (newSession/switchSession/
  * branch/fork/handoff): chunked + paced exactly like priming, because a
- * replaced transcript can also exceed the 4 MiB cap — a single-frame
+ * replaced transcript can also exceed the 4 MiB cap. A single-frame
  * broadcast would terminate every attached stream (the same permanent-reconnect
  * bug as priming). History is not ringed; a reconnect re-primes instead.
  */
@@ -342,8 +342,8 @@ export function notifyEvent(
 }
 
 // Phase 11: AbortControllers for in-flight runEphemeralTurn calls, keyed by
-// (session, streamId). abortEphemeral cancels via the SDK signal — the same
-// side-channel pattern bash/python use, but those have dedicated SDK aborters.
+// (session, streamId). abortEphemeral cancels via the SDK signal; it is the
+// same side-channel pattern bash/python use, but those have dedicated SDK aborters.
 export const ephemeralAborts = new Map<SessionEntry, Map<number, AbortController>>();
 
 export function setEphemeralAbort(
@@ -360,7 +360,7 @@ export function clearEphemeralAbort(entry: SessionEntry, streamId: number): void
 	ephemeralAborts.get(entry)?.delete(streamId);
 }
 
-// Keepalive: a named ping event block (SSE_PING_BLOCK — deliberately no id
+// Keepalive: a named ping event block (SSE_PING_BLOCK, deliberately no id
 // field, so it never advances a consumer's resume counter) on every open
 // /events stream every SSE_KEEPALIVE_MS; consumers treat >
 // SSE_SILENCE_DEADLINE_MS of total silence as a dead peer and reconnect.

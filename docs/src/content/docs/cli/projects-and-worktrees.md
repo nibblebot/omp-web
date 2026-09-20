@@ -36,7 +36,7 @@ omp-web add-repo ~/code/app --start --template review --labels role=review,tier=
 - Registering the same repository again exits 1 and names the existing project id. The realpath is the dedup key, so there is no second registration path.
 - Registration also creates the project's default workspace row: a roster entry for the main checkout. Without `--start` that entry is registered asleep, and the command reports the project and stops there. With `--start` the fleet spawns the session daemon immediately and reports the new session daemon id as well.
 - Add `--template <name>` to choose a spawn template for that first start. An unknown template name fails the spawn stage; see [Configure spawn templates](/configuration/spawn-templates/).
-- `--labels k=v,...` attaches labels in one comma-separated flag. Labels are what `label:k=v` selectors match later, so they are worth setting for session daemons you plan to prompt in bulk. Note that other commands take repeated `--label` flags instead; see [Select multiple session daemons](/cli/selectors/).
+- `--labels k=v,...` attaches labels in one comma-separated flag. Labels are what `label:k=v` selectors match later, so they are worth setting for session daemons you plan to prompt in bulk. Other commands take repeated `--label` flags instead; see [Select multiple session daemons](/cli/selectors/).
 - A spawn failure during `--start` exits 1 after the project itself is registered. The project stays in the registry, and you can start it later with `omp-web spawn` or from the browser.
 
 ## Deregister a project

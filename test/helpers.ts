@@ -3,7 +3,7 @@
  * Bun.serve on an ephemeral port, against the generated fixture.
  *
  * Config resolution (fleet/stats/config.ts): stats.db = $PI_CONFIG_DIR/
- * stats.db, sessions = $PI_CODING_AGENT_DIR/sessions — so the fixture keeps
+ * stats.db, sessions = $PI_CODING_AGENT_DIR/sessions, so the fixture keeps
  * stats.db at test/.fixture/stats.db and sessions under
  * test/.fixture/agent/sessions, passed explicitly to createStatsApp.
  */
@@ -27,7 +27,7 @@ export async function startServer(): Promise<void> {
 	});
 	server = Bun.serve({
 		hostname: "127.0.0.1",
-		port: 0, // ephemeral — no fixed port to collide with
+		port: 0, // ephemeral, no fixed port to collide with
 		fetch: async (req) => {
 			const url = new URL(req.url);
 			if (url.pathname.startsWith("/ctl/stats")) {
@@ -35,7 +35,7 @@ export async function startServer(): Promise<void> {
 				if (r !== null) return r;
 			}
 			// Anything the stats app does not own is the fleet control plane's
-			// 404 — mirrored here so HTTP-level tests stay end-to-end.
+			// 404, mirrored here so HTTP-level tests stay end-to-end.
 			return new Response(JSON.stringify({ error: "not found" }), {
 				status: 404,
 				headers: { "content-type": "application/json" },

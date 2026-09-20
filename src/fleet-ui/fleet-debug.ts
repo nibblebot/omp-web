@@ -2,8 +2,8 @@ import { fetchCtlDebug } from "../state";
 
 // ---------------------------------------------------------------------------
 // Fleet debug contract: tolerant parsing of the /ctl/debug payload (mirror of
-// the fleet control-plane contract). Unknown/absent fields degrade to "—"
-// instead of throwing on a half-landed payload. Pure logic — no JSX. The
+// the fleet control-plane contract). Unknown/absent fields degrade to an em
+// dash instead of throwing on a half-landed payload. Pure logic, no JSX. The
 // fetch itself goes through the shared fetchCtlDebug() state action, which
 // owns the unreachable/HTTP error vocabulary (single-session mode renders as
 // a notice, not a crash).

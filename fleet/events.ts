@@ -1,11 +1,11 @@
 /**
  * FleetEventLog: the fleet's capped lifecycle-event ring.
  *
- * Every meaningful fleet transition — daemon status changes, spawn/exit/
- * respawn, control-route failures — is appended here so /ctl/debug and the
- * serve-mode CLI can show what the fleet has been doing. The ring is capped
- * (default 500 entries; the oldest fall off) and MUST never hold secrets:
- * callers strip bearer tokens before logging.
+ * Every meaningful fleet transition is appended here so /ctl/debug and the
+ * serve-mode CLI can show what the fleet has been doing: daemon status
+ * changes, spawn/exit/respawn, and control-route failures. The ring is
+ * capped (default 500 entries; the oldest fall off) and MUST never hold
+ * secrets: callers strip bearer tokens before logging.
  *
  * The optional onEntry mirror lets a consumer render entries as they are
  * added (the CLI prints one `fleet:` line per event) without polling.

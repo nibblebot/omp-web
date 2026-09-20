@@ -96,7 +96,7 @@ export async function validateProjectPath(p: string): Promise<string | null> {
  * Resolve the owning repo of a spawn cwd: the basename of the MAIN worktree
  * of the repository containing `path`, or undefined when `path` IS the main
  * checkout or git can't tell (not a repo, spawn failure, nonzero exit,
- * unparseable output). One uncached git call — spawn/backfill are rare, and
+ * unparseable output). One uncached git call; spawn/backfill are rare, and
  * the result is persisted on the registry entry. Realpaths are compared so a
  * cwd naming the main checkout through a symlink still counts as the main
  * checkout.
@@ -149,8 +149,8 @@ function branchFromHeader(header: string): string | undefined {
 
 /**
  * Parse `git status --porcelain=v1 --branch` output into the current branch
- * and per-file dirty counts. The `## <branch>` header is REQUIRED — a real
- * `--branch` run always emits it, even in an empty repo — so unparseable
+ * and per-file dirty counts. The `## <branch>` header is REQUIRED, since a
+ * real `--branch` run always emits it even in an empty repo, so unparseable
  * output (garbage, a different command's stdout) returns undefined instead
  * of masquerading as a clean repo. Per-file XY codes: `??` untracked;
  * X or Y == 'A' added; X or Y == 'D' deleted; anything else (M/T/R/C/U)
@@ -203,11 +203,11 @@ export function parseNumstat(stdout: string): { linesAdded: number; linesDeleted
 /**
  * Probe one repo's git state: `git status --porcelain=v1 --branch` via the
  * injectable GitRunner (like resolveWorktreeOf). Returns undefined on spawn
- * failure, nonzero exit, or unparseable output — the caller (supervisor
+ * failure, nonzero exit, or unparseable output; the caller (supervisor
  * git-state polling) treats that as "no state", never as a clean repo. On
  * success a best-effort `git diff --numstat HEAD --` run is merged into
- * `git`: a failed numstat run (spawn error, nonzero exit — e.g. a fresh
- * repo without commits) leaves the line fields absent — never 0-by-default,
+ * `git`: a failed numstat run (spawn error, nonzero exit, e.g. a fresh
+ * repo without commits) leaves the line fields absent, never 0-by-default,
  * never fails the whole probe.
  */
 export async function probeGitState(

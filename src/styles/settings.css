@@ -1,4 +1,4 @@
-/* Settings — settings panel and settings-row. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Settings: settings panel and settings-row. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 /* --- Settings panel (TUI /settings parity) --- */
 .settings-panel {

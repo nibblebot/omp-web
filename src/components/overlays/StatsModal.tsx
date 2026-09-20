@@ -33,7 +33,7 @@ export const StatsModal: Component<{ onClose: () => void }> = (props) => {
 		void call("getSessionStats")
 			.then((stats) => setState("stats", stats as SessionStats))
 			.catch((err) => setState("error", String(err)));
-		// Phase 9: /context parity — per-category token breakdown.
+		// Phase 9: /context parity, per-category token breakdown.
 		void call("getContextBreakdown")
 			.then((b) => setBreakdown((b as ContextUsageBreakdown | null) ?? null))
 			.catch(() => setBreakdown(null));

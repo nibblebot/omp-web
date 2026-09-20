@@ -5,7 +5,7 @@
  * `projects[]` (realpath-keyed, `pN` ids) that project groups hang off.
  *
  * State is a JSON file
- * `{ "nextId": number, "entries": RegistryEntry[], "projects"?: RegisteredProject[], "nextProjectId"?: number }` —
+ * `{ "nextId": number, "entries": RegistryEntry[], "projects"?: RegisteredProject[], "nextProjectId"?: number }`;
  * the path is injectable for tests; the fleet server resolves
  * `OMP_FLEET_STATE` / `~/.omp-web/fleet-state.json` and passes it
  * in. Files written before projects existed lack the two new keys and load
@@ -65,20 +65,20 @@ interface RegistryFile {
  * non-terminal persisted status describes nothing that is running.
  * Terminal statuses are kept: "error" (the failure is real) and "asleep"
  * (an intentional stop). Everything else maps per mode:
- *   - "spawning" → "asleep" — a failed spawn; nothing was ever dialed
+ *   - "spawning" → "asleep", a failed spawn; nothing was ever dialed
  *     (respawn --resume is the documented recovery for spawned entries);
- *   - spawned + any other non-terminal status → "asleep" — the child is
+ *   - spawned + any other non-terminal status → "asleep", the child is
  *     gone, so "ready"/"connecting"/… are lies; the user respawns;
- *   - remote/attached + any other non-terminal status → "connecting" — a
+ *   - remote/attached + any other non-terminal status → "connecting", a
  *     dial-in entry has nothing to respawn, so the server redials it at
  *     boot (the same recovery the edge's #wake uses for remote entries).
  * Returns null when the persisted status should be left untouched.
  */
 export function bootStatusFor(entry: Pick<RegistryEntry, "mode" | "status">): DaemonStatus | null {
 	if (entry.status === "error" || entry.status === "asleep") return null;
-	if (entry.status === "spawning") return "asleep"; // failed spawn — no live child, never dialed
+	if (entry.status === "spawning") return "asleep"; // failed spawn, no live child, never dialed
 	if (entry.mode === "spawned") return "asleep"; // child died with the old fleet process
-	return "connecting"; // dial-in: nothing to respawn — redial immediately
+	return "connecting"; // dial-in: nothing to respawn, so redial immediately
 }
 
 export class Registry {
@@ -197,7 +197,7 @@ export class Registry {
 		// An asleep daemon has no live process: stale liveness facts must not
 		// leak into the roster (no pid, no uptime growing since readyAt). The
 		// registry is the roster truth, so clearing here covers every stop path
-		// (edge stop, supervisor stop, idle exit, ctl stop) in one place — the
+		// (edge stop, supervisor stop, idle exit, ctl stop) in one place; the
 		// same invariant the boot downgrade in server.ts enforces explicitly.
 		if (status === "asleep") {
 			delete entry.pid;
@@ -221,7 +221,7 @@ export class Registry {
 
 	/**
 	 * Register a project. Validates that `path` is an existing directory
-	 * containing a git repo (realpath-normalized via validateProjectPath —
+	 * containing a git repo (realpath-normalized via validateProjectPath;
 	 * symlinked paths alias the same project), dedups on realpath equality
 	 * returning the EXISTING project, and persists atomically + fires
 	 * onChange. Throws when the path is not a directory or not a git repo.
@@ -250,12 +250,12 @@ export class Registry {
 
 	/**
 	 * Remove a registered project. Referencing roster entries that are NOT
-	 * provably-empty placeholders block removal — the error names their
+	 * provably-empty placeholders block removal; the error names their
 	 * daemon ids (callers surface the blockers); never touches disk.
-	 * Placeholder entries — mode "spawned", status "asleep", no
-	 * lastSessionFile, no endpoint: the auto-registered default workspace of
-	 * a project that never started, so the roster row is their only state —
-	 * are implicitly dropped with the project, no two-step removal needed.
+	 * A placeholder is the auto-registered default workspace of a project
+	 * that never started: mode "spawned", status "asleep", no lastSessionFile,
+	 * no endpoint, so the roster row is their only state. Placeholders are
+	 * implicitly dropped with the project, no two-step removal needed.
 	 * Unknown ids also throw.
 	 */
 	removeProject(projectId: string): void {
@@ -264,7 +264,7 @@ export class Registry {
 		// Partition referencing entries: real blockers (anything that ever
 		// ran, is spawning/ready/error, or is remote/attached) refuse the
 		// removal wholesale; placeholders are dropped in the same mutation
-		// as the project (and only then — a refused removal leaves them).
+		// as the project (and only then; a refused removal leaves them).
 		const isPlaceholder = (entry: RegistryEntry): boolean =>
 			entry.mode === "spawned" &&
 			entry.status === "asleep" &&

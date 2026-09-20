@@ -1,6 +1,6 @@
 /**
  * Unit tests for scripts/release-llm.ts. The LLM path is exercised purely
- * through the spawn seam — no omp subprocess, no network, no auth.
+ * through the spawn seam: no omp subprocess, no network, no auth.
  *
  * The summarizer prompts once per bounded chunk of commits plus once for the
  * overview, so the fake spawn routes responses by prompt content:
@@ -212,7 +212,7 @@ describe("summarizeChangelog with a fake spawn", () => {
 	test("returns null when every spawn exits non-zero", async () => {
 		const { spawn, calls } = fakeSpawn({ rejectAll: true });
 		expect(await summarizeChangelog(INPUT, { spawn })).toBeNull();
-		// Abort after the first failed call — a stuck model stays stuck.
+		// Abort after the first failed call; a stuck model stays stuck.
 		expect(calls).toHaveLength(1);
 	});
 
@@ -247,7 +247,7 @@ describe("summarizeChangelog with a fake spawn", () => {
 		// The 50ms timeout races runTurn directly: summarizeChangelog hardcodes
 		// DEFAULT_TIMEOUT_MS, so the short budget cannot go through it.
 		expect(await runTurn("hello", undefined, 50, spawn)).toBeNull();
-		// Abort after the first call — a stuck model stays stuck.
+		// Abort after the first call; a stuck model stays stuck.
 		expect(calls).toHaveLength(1);
 	});
 

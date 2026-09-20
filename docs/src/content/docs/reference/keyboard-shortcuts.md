@@ -3,7 +3,7 @@ title: Keyboard shortcuts
 description: Every keyboard shortcut in the omp-web browser UI, by context, with platform differences, gated states, precedence, and browser key conflicts.
 ---
 
-This page is the canonical list of keyboard shortcuts in the omp-web browser UI. The shortcuts are built into the web client, work the same in fleet mode and single-session mode, and are not configurable; there is no keymap setting. A surface that exists in only one mode, such as the roster or the Analysis views, simply has no shortcuts to fire in the other.
+This page is the canonical list of keyboard shortcuts in the omp-web browser UI. The shortcuts are built into the web client, work the same in fleet mode and single-session mode, and are not configurable; there is no keymap setting. A surface that exists in only one mode, such as the roster or the Analysis views, has no shortcuts to fire in the other.
 
 Shortcuts act on the focused element, so each section states its scope. `Ctrl` means Control on every platform; `Cmd` means Command on macOS. Terminal and TUI key handling is outside this reference.
 

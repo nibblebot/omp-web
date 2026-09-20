@@ -1,6 +1,6 @@
 /**
  * Safe accessors over raw JSONL entry objects (RawEntry = Record<string, unknown>).
- * Every read is defensive — the JSONL data is lenient and entries vary in shape.
+ * Every read is defensive; the JSONL data is lenient and entries vary in shape.
  */
 import type { RawEntry } from "../api";
 
@@ -53,9 +53,9 @@ export function entryTs(e: RawEntry): number | null {
 
 /**
  * Tool-execution start marker (`custom` entry with customType "tool_execution_start").
- * Returns the toolCallId and execution start (epoch ms) — data.startedAt when
- * present (ISO string or epoch ms), else the entry's own timestamp — or null
- * when the entry isn't a usable marker.
+ * Returns the toolCallId and execution start (epoch ms), taken from
+ * data.startedAt when present (ISO string or epoch ms) and otherwise from the
+ * entry's own timestamp, or null when the entry isn't a usable marker.
  */
 export function toolExecutionStartOf(
 	e: RawEntry,
@@ -323,7 +323,7 @@ export function titleChangeOf(e: RawEntry): {
 	};
 }
 
-/** TTSR-injection system row (entry type "ttsr_injection") — the injected rule texts. */
+/** TTSR-injection system row (entry type "ttsr_injection"); the injected rule texts. */
 export function ttsrInjectionOf(e: RawEntry): string[] | null {
 	if (e.type !== "ttsr_injection") return null;
 	const r = e.injectedRules;
@@ -331,13 +331,13 @@ export function ttsrInjectionOf(e: RawEntry): string[] | null {
 	return r.filter((x): x is string => typeof x === "string");
 }
 
-/** Compaction system row (entry type "compaction") — its human summary. */
+/** Compaction system row (entry type "compaction"); its human summary. */
 export function compactionSummaryOf(e: RawEntry): string | null {
 	if (e.type !== "compaction") return null;
 	return typeof e.summary === "string" ? e.summary : null;
 }
 
-/** Label system row (entry type "label") — the label text. */
+/** Label system row (entry type "label"); the label text. */
 export function labelOf(e: RawEntry): string | null {
 	if (e.type !== "label") return null;
 	return typeof e.label === "string" ? e.label : null;
@@ -370,7 +370,8 @@ export function customMessageOf(e: RawEntry): CustomMessageInfo | null {
 	};
 }
 
-/** Any `custom` entry (type "custom" + customType) — caller decides which customType to render or hide. */
+/** Any `custom` entry (type "custom" + customType); the caller decides
+ *  which customType to render or hide. */
 export function customEntryOf(
 	e: RawEntry,
 ): { customType: string; data: Record<string, unknown> | null } | null {
@@ -462,7 +463,7 @@ export function userMetaOf(e: RawEntry): UserMeta | null {
 	return { attribution: m.attribution, steering: m.steering, synthetic: m.synthetic };
 }
 
-/** Human label for an entry's type — used in aria-labels and short summaries. */
+/** Human label for an entry's type, used in aria-labels and short summaries. */
 export function entryTypeLabel(e: RawEntry): string {
 	const t = typeof e.type === "string" ? e.type : "unknown";
 	if (t !== "message") return t;

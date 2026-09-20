@@ -111,7 +111,8 @@ export function WebUiSettings(props: { model: SettingsModel; visibleGroup: strin
 						/>
 					</Row>
 					{/* Session-RPC rows: no live session under the fleet fallback, so they
-					    would only error — hidden, mirroring their main-UI session scope. */}
+					    would only error. They stay hidden, mirroring their main-UI session
+					    scope. */}
 					<Show when={!fleetSettingsActive()}>
 						<Row label="fast mode">
 							<input

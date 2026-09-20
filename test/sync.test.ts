@@ -53,7 +53,7 @@ const fakeRunner: SyncRunner = async () => {
 		case "failed":
 			throw new SyncFailed("boom");
 		default: {
-			// success — write a row into stats.db the way `omp stats` would, then
+			// success: write a row into stats.db the way `omp stats` would, then
 			// close (checkpoint) so the main file changes and reprobe must reopen.
 			const db = new Database(statsDbPath());
 			db.run(
@@ -152,7 +152,7 @@ describe("POST /ctl/stats/sync", () => {
 		});
 
 		// The row written by the fake runner is visible only after the sync
-		// handler's post-success reprobe — if that reprobe were missing, the
+		// handler's post-success reprobe; if that reprobe were missing, the
 		// app's original handle (opened before the row existed) would still
 		// report 0.
 		const health = await getHealth();
@@ -185,8 +185,7 @@ describe("POST /ctl/stats/sync", () => {
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(503);
 		expect(await res.json()).toEqual({
-			error:
-				"omp binary not found — install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH",
+			error: "omp binary not found. Install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH",
 		});
 	});
 

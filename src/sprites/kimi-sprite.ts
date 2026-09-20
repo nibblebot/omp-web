@@ -1,5 +1,5 @@
 /**
- * Kimi — 16-bit style pixel-art catgirl avatar.
+ * Kimi, a 16-bit style pixel-art catgirl avatar.
  *
  * Poses: idle/blink for at rest, work1/work2/work-blink cycled while the agent
  * is streaming, happy briefly when a stream finishes.

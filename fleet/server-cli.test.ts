@@ -87,7 +87,7 @@ describe("CLI", () => {
 		} finally {
 			console.error = originalError;
 		}
-		expect(errors.join("\n")).toContain("fleet not running — start it: omp-fleet serve");
+		expect(errors.join("\n")).toContain("fleet not running. Start it: omp-fleet serve");
 	});
 
 	test("usage no longer advertises the removed --fan-out flag (audit #26)", async () => {

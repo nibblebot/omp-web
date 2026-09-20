@@ -3,7 +3,7 @@ import { setState } from "../state";
 /**
  * Fleet/app-scoped ephemeral toast notifications (worktree_removed on-disk
  * eviction toasts). Dependency-light like btw.ts: the store array and two
- * actions, nothing else. Mutations go through setState only — components
+ * actions, nothing else. Mutations go through setState only; components
  * render state.toasts reactively and never hold toast data themselves.
  */
 const TOAST_CAP = 5;

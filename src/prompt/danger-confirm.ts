@@ -4,7 +4,7 @@ import { createSignal } from "solid-js";
 // window.confirm guards on /new, /drop, and /fresh with the app's own Modal
 // chrome. The dialog self-mounts (rendered once from App.tsx, like
 // AskDialog/BtwPanel) and renders nothing while no confirm is pending. State
-// and actions live here — free of solid-js/web and of any component file —
+// and actions live here, free of solid-js/web and of any component file,
 // so pure modules (commands.ts, commands.test.ts) can drive the confirm
 // without pulling Portal into their import graph.
 
@@ -16,7 +16,7 @@ type DangerConfirmOpts = {
 };
 
 // The copy rides a module-level signal; the pending action rides a plain
-// `let` BESIDE it — never inside the signal or a store (signals proxy
+// `let` BESIDE it, never inside the signal or a store (signals proxy
 // objects, and the closure must not be serialized). Calling
 // requestDangerConfirm replaces any pending confirm; the stale action is
 // dropped with it.
@@ -44,7 +44,7 @@ export function dangerConfirm(): { title: string; body: string; confirmLabel: st
 	return pending();
 }
 
-/** Run the pending action, then close — the dialog button's handler. */
+/** Run the pending action, then close; this is the dialog button's handler. */
 export function confirmDangerConfirm(): void {
 	const action = pendingAction;
 	action?.();

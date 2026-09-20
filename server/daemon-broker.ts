@@ -29,7 +29,7 @@ import { broadcast, broadcastTo } from "./sse-delivery";
 // `state` frames (prime + post-mutation) are built from live session getters;
 // the daemons roster is polled from the bound project's broker every
 // DAEMON_POLL_MS and re-broadcast unconditionally (a change-gate would strand
-// clients that connect between broadcasts — the roster is small and the tick
+// clients that connect between broadcasts; the roster is small and the tick
 // cadence is 3s, so unconditional re-broadcast self-heals late joins and
 // dropped frames). The poll runs only while at least one stream is live.
 // ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ export interface ModelRoleCatalogContext {
  * custom) in canonical order with its display metadata, effective assignment,
  * and persisted source. Undefined when no models are available.
  *
- * Unlike buildModelRoles, this lists every role whether or not it resolves —
+ * Unlike buildModelRoles, this lists every role whether or not it resolves;
  * unassigned roles render as "auto-selection applies" rows, and hidden roles
  * are emitted with their hidden flag for the client to filter.
  */
@@ -100,7 +100,7 @@ export function buildModelRoleCatalog(
 				entry.provider = resolved.model.provider;
 				entry.id = resolved.model.id;
 				// Surface the thinking selector only when it is baked into the
-				// role value and resolvable — the "auto" sentinel cannot
+				// role value and resolvable; the "auto" sentinel cannot
 				// round-trip through `provider/model:level`.
 				if (
 					resolved.explicitThinkingLevel &&
@@ -167,7 +167,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 				examples: tool.examples,
 			})),
 			contextUsage: session.getContextUsage(),
-			// Phase 9: cheap sync getters — refreshed on every state broadcast.
+			// Phase 9: cheap sync getters, refreshed on every state broadcast.
 			goalModeState: session.getGoalModeState(),
 			planModeEnabled: session.getPlanModeState()?.enabled ?? false,
 			fastModeEnabled: session.isFastModeEnabled(),
@@ -222,7 +222,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 	/**
 	 * Resolve a daemon's ready host/port from its launch spec via the broker
 	 * describe op, cached by daemon id. Any failure (daemon died between list and
-	 * describe, broker hiccup) resolves undefined without propagating — the next
+	 * describe, broker hiccup) resolves undefined without propagating; the next
 	 * poll tick retries.
 	 */
 	async function readyEndpointFor(

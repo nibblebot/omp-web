@@ -3,7 +3,7 @@
  * start:true" describe): registering a project with start:true boots the
  * spawned child template whose OMP_SESSION listening line points at the
  * shared fake omp-session daemon (see server.testkit), so the supervisor's
- * spawn dial completes against the fake — no real children spawn.
+ * spawn dial completes against the fake, so no real children spawn.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -45,7 +45,7 @@ describe("POST /ctl/projects with start:true (Phase 3 spawn)", () => {
 		({ tmp, statePath, configPath } = fleetPaths());
 		// The spawn fixture: the fake omp-session reports the spawned cwd in
 		// hello_ok (the connector rejects a mismatch), so the fake starts
-		// with the repo's realpath before registration — the template's
+		// with the repo's realpath before registration, so the template's
 		// listening line points at it.
 		const repoDir = join(tmp, "repo");
 		mkdirSync(repoDir, { recursive: true });

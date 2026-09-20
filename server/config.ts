@@ -71,7 +71,7 @@ export function parseDuration(raw: string): number {
 
 /**
  * Loopback hosts: localhost, ::1, or anything in 127.0.0.0/8. Every dotted
- * part must be numeric — "127.a.b.c" resolves off-loopback and is NOT
+ * part must be numeric: "127.a.b.c" resolves off-loopback and is NOT
  * loopback (same strictness as the runtime peer-address check in index.ts).
  */
 export function isLoopbackHost(host: string): boolean {

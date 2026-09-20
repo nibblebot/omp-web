@@ -33,7 +33,7 @@ import { DaemonDetailView } from "./DaemonDetailView";
 // hover-revealed "⋯" actions menu (details, two-click stop/remove, delete
 // worktree). Ready rows attach on click, asleep rows wake-then-attach.
 // Two distilled profiles exist beside the full one: worktree rows (nested,
-// branch as title) and root rows (a project group's main checkout — root
+// branch as title) and root rows (a project group's main checkout with a root
 // glyph + branch as title, no project chip or cwd line; the group header
 // already names the project and the path lives in the tooltip/details).
 // ---------------------------------------------------------------------------
@@ -67,9 +67,9 @@ export type RosterEntry = DaemonEntry & {
  *  green, unreviewed → yellow, unread → light blue. Idle renders nothing. */
 const ACTIVITY_TITLE: Record<SessionActivity, string> = {
 	in_progress: "in progress",
-	blocked: "blocked — waiting for your input",
-	unread: "unread — finished while viewing another session",
-	unreviewed: "done — not reviewed yet",
+	blocked: "blocked, waiting for your input",
+	unread: "unread, finished while viewing another session",
+	unreviewed: "done, not reviewed yet",
 	idle: "idle",
 };
 
@@ -78,17 +78,17 @@ const STATUS_TITLE: Record<DaemonStatus, string> = {
 	connecting: "connecting to the daemon…",
 	session: "session created…",
 	resolving: "resolving provider/model…",
-	ready: "ready — click to attach",
-	asleep: "asleep — click to wake and attach",
+	ready: "ready, click to attach",
+	asleep: "asleep, click to wake and attach",
 	reconnecting: "reconnecting…",
-	error: "error — see details",
+	error: "error, see details",
 };
 
 /** Which row's "⋯" actions menu is open, if any. Module-level for the same
  *  reason as activatingIds: roster broadcasts remount rows, so per-row
  *  signals would silently close an open menu mid-interaction. Daemon rows
  *  key on the daemonId, project-group headers (SidebarGroups) on
- *  `project:<id>` — one open menu total. */
+ *  `project:<id>`, one open menu total. */
 export const [menuOpenId, setMenuOpenId] = createSignal<string | null>(null);
 
 /** Which row's session dropdown (the last-10-sessions resume picker) is
@@ -116,7 +116,7 @@ export const DaemonRow: Component<{
 	// Per-row id-scoped reads: the module signals (menuOpenId/activatingIds)
 	// change on ANY row's interaction, so a plain read would re-render every
 	// row. Each derived memo re-runs when the module signal changes but only
-	// notifies the row when ITS OWN membership flips — one row's menu-open or
+	// notifies the row when ITS OWN membership flips, so one row's menu-open
 	// wake no longer re-renders the whole roster.
 	const activating = createMemo(() => activatingIds().has(d().daemonId));
 	const menuOpen = createMemo(() => menuOpenId() === d().daemonId);
@@ -150,7 +150,7 @@ export const DaemonRow: Component<{
 	});
 
 	// Worktree sessions belong to a main checkout and read as branches, not
-	// dirs — the branch (or name fallback) becomes the title and the project
+	// dirs. The branch (or name fallback) becomes the title and the project
 	// chip + cwd path are dropped so the row never shows the directory.
 	const isWorktree = () => d().worktreeOf !== undefined;
 	// Root rows are a project group's MAIN worktree: the header already names
@@ -159,15 +159,15 @@ export const DaemonRow: Component<{
 	const isRoot = () => props.inProjectGroup === true && !isWorktree();
 	const isAttached = () => d().daemonId === state.currentSessionId;
 	/** Activity dot for THIS row, derived from the attached session's live
-	 *  signals (state.streaming / state.uiRequest / state.answerUnviewed —
-	 *  the finished answer sitting below the scrolled-up viewport) plus the
-	 *  edge's per-daemon realtime activity (state.daemonActivity — detached
+	 *  signals (state.streaming / state.uiRequest / state.answerUnviewed,
+	 *  finished answer sitting below the scrolled-up viewport) plus the
+	 *  edge's per-daemon realtime activity (state.daemonActivity, where detached
 	 *  rows get live blocked/in-progress via daemon_activity frames when the
 	 *  edge broadcasts them) and the client-side unread set (detached rows
-	 *  marked when a turn's end is observed or the user switches away — see
+	 *  marked when a turn's end is observed or the user switches away; see
 	 *  src/fleet-ui/unread.ts). Git dirtiness deliberately does NOT feed the
-	 *  dot — uncommitted changes are the diffstat chips, a separate display.
-	 *  Memoized so only signal flips re-render the row — the store reads
+	 *  dot; uncommitted changes are the diffstat chips, a separate display.
+	 *  Memoized so only signal flips re-render the row; the store reads
 	 *  inside track state.streaming/state.uiRequest/state.answerUnviewed/
 	 *  state.daemonActivity individually, and a roster broadcast replacing
 	 *  the entry refires the memo. Only ready rows get a dot (sessionActivity
@@ -191,7 +191,7 @@ export const DaemonRow: Component<{
 		const a = activity();
 		return a && a !== "idle" ? a : undefined;
 	});
-	/** Copy for the active dot (undefined when idle — the dot keeps the plain
+	/** Copy for the active dot (undefined when idle; the dot keeps the plain
 	 *  status color then). A separate memo so TS narrows the non-idle value
 	 *  for the ACTIVITY_TITLE index instead of re-calling the getter in JSX. */
 	const activityTitle = createMemo(() => {
@@ -217,18 +217,18 @@ export const DaemonRow: Component<{
 	/** True when any diffstat group will render. */
 	const hasGitStats = () =>
 		filesChanged() > 0 || (linesAdded() ?? 0) > 0 || (linesDeleted() ?? 0) > 0;
-	/** "1 file" / "3 files" — English plural for the diffstat titles. */
+	/** "1 file" / "3 files", English plural for the diffstat titles. */
 	const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 	// Clicking the row CARD (anything but the session-title line) resumes the
 	// daemon's current session: ready rows attach; stopped (asleep) rows wake
-	// (respawn --resume lastSessionFile) then attach — no dead space, the whole
-	// card is the resume target. The session-title line is the dropdown trigger
+	// (respawn --resume lastSessionFile) then attach; the whole card is the
+	// resume target, leaving no dead space. The session-title line is the dropdown trigger
 	// (sessionTitleClick below); clicking an open dropdown's own entry resumes
 	// that session.
 	const rowClick = () => {
 		if (activating()) return;
-		// Clicking the card is a resume action — close any open dropdown (the
+		// Clicking the card is a resume action, so close any open dropdown (the
 		// title click stops propagation, so this never fights the trigger).
 		setSessionsOpenId(null);
 		const daemon = d();
@@ -239,7 +239,7 @@ export const DaemonRow: Component<{
 			void attachSession(daemon.daemonId).catch((err) => setState("error", String(err)));
 		} else if (daemon.status === "asleep") {
 			// Wake then attach: the edge wakes first and answers the attach
-			// once the session is ready — send both immediately, the edge
+			// once the session is ready; send both immediately, the edge
 			// serializes them. Activate the row NOW (active highlight + waking
 			// pulse) rather than when the proxied attached frame lands.
 			const id = daemon.daemonId;
@@ -293,7 +293,7 @@ export const DaemonRow: Component<{
 				{...useClickableRow(rowClick, clickable())}
 				title={
 					waking()
-						? "waking — session starting…"
+						? "waking, session starting…"
 						: isAttached()
 							? "active session"
 							: (STATUS_TITLE[d().status] ?? d().status)
@@ -313,7 +313,7 @@ export const DaemonRow: Component<{
 							class="sidebar-row-title daemon-row-title"
 							title={
 								isRoot()
-									? `main worktree — ${d().cwd}`
+									? `main worktree, ${d().cwd}`
 									: isWorktree()
 										? (d().branch ?? d().name)
 										: d().name
@@ -330,7 +330,7 @@ export const DaemonRow: Component<{
 						{/* Row actions collapsed into a "⋯" menu at the top row's
 						    right end: hidden until row hover/focus (always visible on
 						    touch, see the pointer:coarse block in src/styles/base.css). Stop/remove
-						    keep the two-click confirm inside the menu — the first click
+						    keep the two-click confirm inside the menu; the first click
 						    arms (menu stays open), the second executes and closes. */}
 						<KebabMenu
 							label="Row actions"
@@ -342,7 +342,7 @@ export const DaemonRow: Component<{
 								if (v) setSessionsOpenId(null);
 							}}
 						>
-							{/* An asleep daemon has no live process — "Stop" is
+							{/* An asleep daemon has no live process, so "Stop" is
 							    meaningless there; Remove covers roster cleanup. */}
 							<Show when={d().status !== "asleep"}>
 								<ConfirmButton
@@ -377,7 +377,7 @@ export const DaemonRow: Component<{
 								<InfoIcon />
 								Daemon details
 							</button>
-							{/* Delete is offered on every worktree row — the
+							{/* Delete is offered on every worktree row; the
 							    dialog's guard evidence (managed-root ownership +
 							    clean tree) decides whether it can proceed. */}
 							<Show when={isWorktree()}>
@@ -410,7 +410,7 @@ export const DaemonRow: Component<{
 							<div
 								class="daemon-session-title"
 								classList={{ "daemon-session-title--clickable": clickable() }}
-								title={clickable() ? `${title()} — click to view sessions` : title()}
+								title={clickable() ? `${title()}, click to view sessions` : title()}
 								{...useClickableRow(sessionTitleClick, clickable())}
 								onClick={(e) => {
 									// The card's resume must NOT fire when opening the
@@ -441,7 +441,7 @@ export const DaemonRow: Component<{
 						</div>
 					</Show>
 					{/* Root rows drop the project chip + cwd (the group header and
-					    title tooltip carry them) but keep label chips — labels are
+					    title tooltip carry them) but keep label chips, since labels are
 					    fleet-selector state the header knows nothing about. */}
 					<Show when={isRoot() && d().labels.length > 0}>
 						<div class="daemon-chips">
@@ -454,7 +454,7 @@ export const DaemonRow: Component<{
 							</For>
 						</div>
 					</Show>
-					{/* Bottom meta row: branch (full-profile rows only — worktree
+					{/* Bottom meta row: branch (full-profile rows only; worktree
 					    and root rows already show it as the title) and the diffstat
 					    cluster (changed-file count + numstat +/- line counts when
 					    probed). Row actions live in the "⋯" menu on the top row.
@@ -520,13 +520,13 @@ export const DaemonRow: Component<{
 // ---------------------------------------------------------------------------
 // Session dropdown (DaemonSessionsDropdown): the worktree's last-10 sessions,
 // newest-first, anchored to the row. Fetch happens on mount through the fleet
-// edge (list_daemon_sessions) — asleep/never-started daemons answer from disk
+// edge (list_daemon_sessions); asleep/never-started daemons answer from disk
 // too, no live process needed. Clicking an entry resumes that session: asleep
 // rows wake with spawn_resume carrying the file, ready rows attach (if not
 // already) and switchSession to it.
 // ---------------------------------------------------------------------------
 
-/** Relative time ("2m ago") for the dropdown rows — SessionModal-style. */
+/** Relative time ("2m ago") for the dropdown rows, SessionModal-style. */
 function formatTimeAgo(ts: number): string {
 	const diff = Date.now() - ts;
 	if (diff < 60_000) return "just now";

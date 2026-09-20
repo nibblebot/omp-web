@@ -5,7 +5,7 @@
  * an ephemeral port (OMP_SESSION_PORT=0) with a hermetic tmp cwd; connects over
  * loopback and (for the token-gate test) the machine's LAN IP using the
  * OMP_PROTO 2 transport (GET /events SSE down, POST /command up). No external
- * network, no real model calls — the readiness gate is deferred via the
+ * network, no real model calls; the readiness gate is deferred via the
  * OMP_SESSION_TEST_READY_DELAY_MS test hook instead of racing provider discovery.
  */
 
@@ -101,7 +101,7 @@ function openEvents(
 				ids.push(Number(unit.id));
 			}
 		} catch (err) {
-			if (controller.signal.aborted) return; // close() — expected teardown
+			if (controller.signal.aborted) return; // aborted by close(), which is expected teardown
 			reject(err instanceof Error ? err : new Error(String(err)));
 		}
 	})();
@@ -361,7 +361,7 @@ test("off-loopback bind without a token is a startup hard error", async () => {
 test("127.* with non-numeric parts is not loopback: bind without a token is a startup hard error", async () => {
 	// Regression: isLoopbackHost used to accept any 4-part host whose FIRST
 	// octet was 127, so "127.a.b.c" (resolving off-loopback) skipped the token
-	// gate. It must hit the same hard error as 0.0.0.0 — stderr names the token.
+	// gate. It must hit the same hard error as 0.0.0.0; stderr names the token.
 	const tmp = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-"));
 	const child = Bun.spawn(["bun", "server/index.ts", "--host", "127.a.b.c", "--cwd", tmp], {
 		cwd: repoRoot,
@@ -631,7 +631,7 @@ test("prompt-family calls fail with not_ready until the readiness gate clears", 
 	const base = `http://127.0.0.1:${port}`;
 	const events = await openEvents(base);
 	// The open auto-attaches; the priming arrives with the constant guard
-	// token (Phase 6: de-muxed — the client hides the sessions sidebar).
+	// token (Phase 6: de-muxed, so the client hides the sessions sidebar).
 	const attached = await waitForFrame(events.frames, "attached", 10_000, "attached frame");
 	expect(attached.sessionId).toBe("s1");
 	// The gate is still closed: prompt is rejected with not_ready, not a model error.
@@ -841,7 +841,7 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 		expect(typeof last?.text).toBe("string");
 		expect(String(last?.text).startsWith("5:")).toBe(true);
 
-		// Priming continued past history (state follows it, reflecting the
+		// Priming continued past history (state follows it and reflects the
 		// resumed transcript), and the stream is STILL attached: a command
 		// answer arrives on the same stream, which a terminated
 		// (drop-and-resume) stream would never deliver.
@@ -876,7 +876,7 @@ test("backpressure drop is in-band: stream_reset precedes the end; the daemon st
 	// backpressure cap must NOT read as a dormant close on the connector.
 	// Bun's HTTP layer writes the chunked terminator for both
 	// controller.close() and controller.error(), so a wire error cannot carry
-	// the distinction — the daemon marks the drop with a stream_reset frame
+	// the distinction; the daemon marks the drop with a stream_reset frame
 	// immediately before the end instead. This test overflows the cap with a
 	// >4 MiB answer frame (formatSessionAsText serializes the whole resumed
 	// transcript as ONE frame) and proves the marker arrives in-band, the
@@ -926,8 +926,8 @@ test("backpressure drop is in-band: stream_reset precedes the end; the daemon st
 			20_000,
 			"history primed",
 		);
-		// The answer serializes the whole transcript in one frame — over the
-		// 4 MiB cap — tripping enqueueTo's drop-and-resume termination.
+		// The answer serializes the whole transcript in one frame, over the
+		// 4 MiB cap, tripping enqueueTo's drop-and-resume termination.
 		await postCommand(base, { type: "call", id: "bp-1", method: "formatSessionAsText", args: [] });
 		const reset = await waitForFrame(events.frames, "stream_reset", 10_000, "stream_reset frame");
 		expect(reset.reason).toBe("backpressure");
@@ -950,8 +950,8 @@ test("backpressure drop is in-band: stream_reset precedes the end; the daemon st
 }, 60_000);
 
 test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (finding #2)", async () => {
-	// The finding: primeConsumer always sent the full priming, and then — for
-	// a Last-Event-ID >= SSE_DELTA_SEQ_START — replayed ring.after(last). The
+	// The finding: primeConsumer always sent the full priming, and then, for
+	// a Last-Event-ID >= SSE_DELTA_SEQ_START, replayed ring.after(last). The
 	// replayed window includes deltas whose effects are ALREADY inside the
 	// just-primed fresh history/state, so a resume overlapping a completed turn
 	// double-applies every message/tool item (duplicated chat items, stranded
@@ -963,7 +963,7 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	// whose effect the fresh priming provably carries must NOT come back down
 	// the re-primed stream. The event-delta variant needs a live model turn
 	// (integration tests cannot drive one), so the ringed `state` delta from a
-	// settings mutation stands in — it is ringed and snapshot-carried exactly
+	// settings mutation stands in; it is ringed and snapshot-carried exactly
 	// like the message/tool event deltas, so the replay-window math is
 	// identical.
 	const proc = await spawnSession({});
@@ -1006,7 +1006,7 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	// delta was not replayed and the idle daemon emitted no new deltas during
 	// the prime. The replay (pre-fix) is enqueued synchronously right after
 	// the last priming frame, so a short real wait observes the subprocess's
-	// delivery — fake timers cannot drive another process (same convention as
+	// delivery; fake timers cannot drive another process (same convention as
 	// the POST-dedup and removed-mux tests above).
 	await sleep(1500);
 	expect(resumed.ids.every((id) => id < SSE_DELTA_SEQ_START)).toBe(true);
@@ -1016,7 +1016,7 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 
 test("a settled ui_request is never a stale dialog: resumers see end-after-request or nothing (finding #16)", async () => {
 	// The finding: ui_request is a ringed delta, but the ring copy was never
-	// invalidated when the request settled — a client whose snapshot predates
+	// invalidated when the request settled; a client whose snapshot predates
 	// the request would replay a stale dialog whose ui_response silently
 	// no-ops. Fix: broadcast a ringed ui_request_end when the request settles,
 	// so every live tab dismisses and a replay delivers request → end.
@@ -1033,7 +1033,7 @@ test("a settled ui_request is never a stale dialog: resumers see end-after-reque
 	// The resumer opens fresh; once its FIRST frame lands its delta snapshot
 	// is captured (primeConsumer's first statement) and the paced prime is in
 	// flight. A request broadcast now has seq >= the snapshot mark, so the
-	// resumer receives it either live (post-prime) or via the ring replay —
+	// resumer receives it either live (post-prime) or via the ring replay,
 	// and pre-fix would receive it WITHOUT any end.
 	const resumed = await openEvents(base);
 	await waitFor(

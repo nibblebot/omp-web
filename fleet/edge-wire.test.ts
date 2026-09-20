@@ -34,7 +34,7 @@ import {
 
 afterAll(cleanupTempDirs);
 
-/** Second fake omp-session's cwd — different projectDir for cross-daemon merge tests. */
+/** Second fake omp-session's cwd, a different projectDir for cross-daemon merge tests. */
 const OTHER_CWD = "/tmp/other-proj";
 
 describe("fleet edge", () => {
@@ -62,7 +62,7 @@ describe("fleet edge", () => {
 
 	// Hermetic against the dev-runner override: loadConfig lets
 	// OMP_FLEET_LOCAL_TEMPLATE replace the `local` template, and a shell that
-	// ran `bun run dev` carries it — spawns would launch the real daemon
+	// ran `bun run dev` carries it, so spawns would launch the real daemon
 	// instead of the printf fake below. Deleted for the suite's lifetime.
 	const savedLocalTemplate = process.env.OMP_FLEET_LOCAL_TEMPLATE;
 	delete process.env.OMP_FLEET_LOCAL_TEMPLATE;
@@ -77,7 +77,7 @@ describe("fleet edge", () => {
 		mkdirSync(join(browseDir, "repo", ".git"), { recursive: true });
 		mkdirSync(join(browseDir, ".hidden"), { recursive: true });
 		// The spawn fixture: the fake omp-session's hello_ok.cwd is FAKE_CWD, and
-		// the connector rejects a cwd mismatch — so edge spawns must use it.
+		// the connector rejects a cwd mismatch, so edge spawns must use it.
 		mkdirSync(FAKE_CWD, { recursive: true });
 		fake = startFakeSession();
 		writeFileSync(
@@ -336,7 +336,7 @@ describe("fleet edge", () => {
 			"daemon_sessions frame",
 		);
 		if (frame.type !== "daemon_sessions") throw new Error("expected daemon_sessions");
-		// The asleep spawned entry answers from disk — no live process needed.
+		// The asleep spawned entry answers from disk, so no live process is needed.
 		expect(frame.daemonId).toBe(spawnedEntry.daemonId);
 		expect(Array.isArray(frame.sessions)).toBe(true);
 	});
@@ -439,8 +439,8 @@ describe("fleet edge", () => {
 		const browser = await openBrowser(server.port);
 		await browser.waitForFrame((f) => f.type === "roster", "roster");
 		// Phase 6: the mux-era commands and detach were removed from the
-		// protocol. A stale client sending them — or any other non-allowlisted
-		// type — must get the edge rejection instead of a daemon forward.
+		// protocol. A stale client sending them, or any other non-allowlisted
+		// type, must get the edge rejection instead of a daemon forward.
 		// The removed type names are assembled so the identifiers never
 		// appear in this file.
 		const removedMuxTypes = ["create_", "close_", "list_live_"].map((prefix) =>
@@ -477,7 +477,7 @@ describe("fleet edge", () => {
 		);
 		expect(attached.type).toBe("attached");
 		// The pipe is a dedicated daemon /events stream carrying the Bearer
-		// header — daemon auth is HTTP-level now, no hello on the wire.
+		// header; daemon auth is HTTP-level now, with no hello on the wire.
 		await waitFor(() => (fake.streamCount() === before + 1 ? "pipe" : null), 5000, "pipe stream");
 		pipeA = fake.streams()[before];
 		expect(pipeA.authHeader).toBe(`Bearer ${FAKE_TOKEN}`);
@@ -914,7 +914,7 @@ describe("fleet edge", () => {
 	test("stop of a spawned entry broadcasts an asleep roster entry with no pid/uptime and closes the attached pipe", async () => {
 		// A fresh spawned entry that LOOKS alive (pid + readyAt) so the stop
 		// broadcast provably strips the liveness facts. The shared fixtures
-		// stay untouched — later tests keep relying on them.
+		// stay untouched, since later tests keep relying on them.
 		const stopMe = server.registry.create({
 			name: "stop-me",
 			cwd: FAKE_CWD,
@@ -972,7 +972,7 @@ describe("fleet edge", () => {
 		expect(reg.status).toBe("asleep");
 		expect(reg.pid).toBeUndefined();
 		expect(reg.readyAt).toBeUndefined();
-		// The browser's pipe to the stopped daemon is closed at stop time — no
+		// The browser's pipe to the stopped daemon is closed at stop time, with no
 		// redial against the dead endpoint, no phantom "daemon connection lost".
 		await waitFor(() => (stopPipe.closed ? "pipe closed" : null), 5000, "pipe closed on stop");
 		await sleep(100);
@@ -1072,7 +1072,7 @@ describe("fleet edge", () => {
 		expect(project.projectId).toMatch(/^p\d+$/);
 		// The default workspace is auto-registered: a roster broadcast shows
 		// the asleep main-checkout entry, tagged with the project id and
-		// with NO worktreeOf (main checkouts stay untagged — they are the
+		// with NO worktreeOf (main checkouts stay untagged since they are the
 		// repo itself, never a managed worktree).
 		const rosterFrame = await browser.waitForFrame(
 			(f) =>
@@ -1151,7 +1151,7 @@ describe("fleet edge", () => {
 		expect(tagged.entry.cwd).toBe(realpathSync(repoDir));
 		expect(tagged.entry.mode).toBe("spawned");
 		// Cleanup: drop the daemon (child runs under the config's template,
-		// whose hello cwd FAKE_CWD mismatches this repo — status error is fine).
+		// whose hello cwd FAKE_CWD mismatches this repo, so a status error is fine).
 		await server.supervisor.prune(tagged.entry.daemonId);
 		server.registry.remove(tagged.entry.daemonId);
 		server.registry.removeProject(tagged.project.projectId);

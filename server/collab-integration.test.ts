@@ -10,7 +10,7 @@
  *
  * The web channel is OMP_PROTO 2 (GET /events SSE down, POST /command up);
  * the guest's relay socket is the collab protocol and stays WebSocket.
- * The subprocess is killed with SIGTERM at the end — the in-process server is
+ * The subprocess is killed with SIGTERM at the end; the in-process server is
  * NEVER stopped from the test (server.stop() would exit the whole test run).
  */
 
@@ -43,8 +43,8 @@ function sleep(ms: number): Promise<void> {
  * Poll `probe` on a 50ms interval until it returns non-null; throw on timeout.
  *
  * Real wall-clock polling is deliberate here: this is a subprocess integration
- * test — the awaited events arrive over real WebSocket connections from a real
- * server process, so fake timers cannot drive them.
+ * test where the awaited events arrive over real WebSocket connections from a
+ * real server process, so fake timers cannot drive them.
  */
 async function waitFor<T>(probe: () => T | null, timeoutMs: number, label: string): Promise<T> {
 	const deadline = Date.now() + timeoutMs;
@@ -88,7 +88,7 @@ async function readServerPort(
 				};
 				if (parsed.event === "listening" && typeof parsed.port === "number") return parsed.port;
 			} catch {
-				// not a contract line — keep waiting
+				// not a contract line; keep waiting
 			}
 		}
 	}
@@ -127,7 +127,7 @@ function openEvents(port: number): Promise<{ frames: WebFrame[]; close: () => vo
 					frames.push(JSON.parse(unit.data) as WebFrame);
 			}
 		} catch (err) {
-			if (controller.signal.aborted) return; // close() — expected teardown
+			if (controller.signal.aborted) return; // aborted by close(), which is expected teardown
 			reject(err instanceof Error ? err : new Error(String(err)));
 		}
 	})();
@@ -223,9 +223,9 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 	const { frames: webFrames, close: closeWeb } = await openEvents(port);
 	webStreams.push({ close: closeWeb });
 
-	// Connect = attached on a bare omp-session (Phase 6): the priming — attached with
-	// the constant guard token, then history/state/collab_status — arrives at
-	// open; collab_start targets the attached session directly.
+	// Connect = attached on a bare omp-session (Phase 6): the priming (attached
+	// with the constant guard token, then history/state/collab_status) arrives
+	// at open; collab_start targets the attached session directly.
 	const attached = await waitFor(
 		() => webFrames.find((f) => f.type === "attached") ?? null,
 		10_000,
@@ -349,8 +349,8 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 	// stop() yields one event-loop turn for the bye's seal to reach the wire
 	// before closing the socket; under heavy parallel load that seal can land
 	// after the close and the bye is dropped (the adapter documents the race).
-	// closeRoom() is authoritative — it ALWAYS sends the TEXT room-closed
-	// control and the fatal close — so the bye is the preferred signal and the
+	// closeRoom() is authoritative (it ALWAYS sends the TEXT room-closed
+	// control and the fatal close), so the bye is the preferred signal and the
 	// room teardown is the guaranteed one.
 	webFrames.length = 0;
 	const stopResp = await postCommand(port, { type: "collab_stop", id: crypto.randomUUID() });

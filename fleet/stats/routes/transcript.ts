@@ -5,7 +5,7 @@
  *   Paginated raw JSONL entries for one session file. `offset` is the
  *   0-based JSONL LINE index (line 0 is the fixed 256 B title slot),
  *   `limit` defaults to 200 and is capped at 500. Entries are returned
- *   unmodified — rendering is the client's job.
+ *   unmodified; rendering is the client's job.
  * - GET /ctl/stats/sessions/:file/subagents
  *   For a main session `proj/<name>.jsonl`, subagent transcripts live
  *   recursively under `proj/<name>/` (including `__advisor.jsonl`).
@@ -45,7 +45,7 @@ const transcriptRoute = (cfg: AppCtx["cfg"]): Route => ({
 		const { offset, limit } = parsePaging(url);
 		try {
 			const { entries, nextOffset, totalLines } = await readRange(abs, offset, limit);
-			const doc = await loadJsonl(abs); // cache hit — for the truncated flag
+			const doc = await loadJsonl(abs); // cache hit, for the truncated flag
 			return json({
 				entries,
 				nextOffset,
@@ -68,7 +68,7 @@ const subagentsRoute = (cfg: AppCtx["cfg"]): Route => ({
 		if (!rel) return errorJson("session not found", 404);
 		if (!rel.endsWith(".jsonl")) return errorJson("not a session file", 400);
 
-		// Missing-file semantics: the main session file must exist on disk — a
+		// Missing-file semantics: the main session file must exist on disk, so a
 		// deleted session's subagents listing is 404, matching transcript/stats.
 		const mainAbs = join(cfg.sessionsDir, rel);
 		if (!existsSync(mainAbs) || !statSync(mainAbs).isFile()) {
@@ -114,7 +114,7 @@ const subagentsRoute = (cfg: AppCtx["cfg"]): Route => ({
 				};
 				walk(dirAbs, dirRel);
 			} catch {
-				// Directory vanished or unreadable mid-walk — return what we have.
+				// Directory vanished or unreadable mid-walk; return what we have.
 			}
 		}
 		subagents.sort((a, b) =>

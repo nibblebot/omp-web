@@ -2,9 +2,9 @@
  * Session-file reader for the fleet's git-state poll: extracts the title of
  * a daemon's last session file from its head WITHOUT parsing the whole
  * transcript, and reports whether the file holds any messages (a new/empty
- * session — untitled, rendered "New session" in the roster). Runs on a 10s
+ * session, untitled and rendered "New session" in the roster). Runs on a 10s
  * poll loop over N daemons, so reads are bounded to a small head chunk and
- * cached by (path, mtimeMs, size) — unchanged files cost one stat per poll,
+ * cached by (path, mtimeMs, size); unchanged files cost one stat per poll,
  * exactly the HEAD_CACHE pattern of fleet/stats/routes/sessions.ts.
  *
  * File shape (ground truth: fleet/stats/routes/sessions.ts `readHead` +
@@ -42,7 +42,7 @@ function parseHeadLine(line: string | undefined): { type?: string; title?: unkno
 		const o = JSON.parse(line) as unknown;
 		return typeof o === "object" && o !== null ? (o as { type?: string; title?: unknown }) : null;
 	} catch {
-		return null; // truncated at the chunk boundary, or not JSON — skip
+		return null; // truncated at the chunk boundary, or not JSON; skip
 	}
 }
 
@@ -94,7 +94,7 @@ function cacheResult(
  * Title and emptiness of a session file. `title` is the slot/header title or
  * undefined when the file is missing/unreadable or carries none. `empty` is
  * true when the file is missing/unreadable OR its whole contents (size ≤ the
- * head read) contain no message entry — the defining shape of a new/empty
+ * head read) contain no message entry, the defining shape of a new/empty
  * session. Never throws. Results are cached by (path, mtimeMs, size) so an
  * unchanged file costs one stat; missing files are never cached, so a
  * reappearing file is re-read on the next poll.
@@ -107,7 +107,7 @@ export async function readSessionInfo(path: string): Promise<{
 	try {
 		st = await stat(path);
 	} catch {
-		return { title: undefined, empty: true }; // missing/gone — never cached
+		return { title: undefined, empty: true }; // missing/gone, never cached
 	}
 	if (!st.isFile()) return { title: undefined, empty: true };
 	const key = cacheKey(path, st.mtimeMs, st.size);
@@ -128,12 +128,12 @@ export async function readSessionInfo(path: string): Promise<{
 			await fh.close();
 		}
 	} catch {
-		return { title: undefined, empty: true }; // unreadable — never cached
+		return { title: undefined, empty: true }; // unreadable, never cached
 	}
 	const title = titleFromHead(chunk);
 	// Whole file is inside the head → a message-marker miss is authoritative.
 	// A larger file with no marker found in the head is treated as NOT empty
-	// (safe default — never mislabel a real transcript "New session").
+	// (safe default, never mislabel a real transcript "New session").
 	const empty = st.size <= HEAD_BYTES && !hasMessageMarker(chunk);
 	const value = { title, empty };
 	cacheResult(st, path, value);
@@ -144,7 +144,7 @@ export async function readSessionInfo(path: string): Promise<{
  * Title of a session file, or undefined when the file is missing/unreadable
  * or carries no title. Never throws. Reads at most HEAD_BYTES from the head
  * and parses only the first two lines; results are cached by
- * (path, mtimeMs, size) so an unchanged file costs one stat — missing files
+ * (path, mtimeMs, size) so an unchanged file costs one stat; missing files
  * are never cached, so a reappearing file is re-read on the next poll.
  */
 export async function readSessionTitle(path: string): Promise<string | undefined> {

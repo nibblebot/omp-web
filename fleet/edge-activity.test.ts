@@ -4,7 +4,7 @@
  * ui_request_end → blocked) and the browser-gated retain-all that keeps every
  * READY daemon's connector stream live (suspending its idle auto-exit) while
  * ≥1 browser /events stream is open. Standalone per-test edge mounts over a
- * FAKE pipe daemon — same hermetic pattern as edge-pipe.test.ts.
+ * FAKE pipe daemon, same hermetic pattern as edge-pipe.test.ts.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -227,8 +227,8 @@ describe("edge realtime daemon activity (browser-gated retain-all)", () => {
 			expect(s.counts().releases).toBe(0);
 			// The daemon goes dormant: a CLEAN end of its /events stream (the real
 			// daemon's idle auto-exit closes it before exiting) → status "asleep".
-			// daemon.close() would nuke the server mid-stream — an UNCLEAN end →
-			// reconnecting/redial, never asleep. kill() closes the controllers.
+			// daemon.close() would nuke the server mid-stream, an UNCLEAN end that
+			// means reconnecting/redial, never asleep. kill() closes the controllers.
 			s.daemon.kill();
 			await waitFor(() => (s.counts().releases === 1 ? "released" : null), 3000, "released");
 			expect(s.counts().releases).toBe(1);

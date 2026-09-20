@@ -91,7 +91,8 @@ export interface WebMethods {
 }
 
 export function createWebMethods(deps: WebMethodsDeps): WebMethods {
-	/** In-flight user bash/python calls (idle suppression, R11) — wrapper counters around METHODS rows. */
+	/** In-flight user bash/python calls (idle suppression, R11); wrapper counters
+	 *  around METHODS rows. */
 	let inFlightBash = 0;
 	let inFlightPython = 0;
 
@@ -189,7 +190,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		compact: (entry, a) => entry.session.compact(a[0] as string | undefined),
 		retry: (entry) => entry.session.retry(),
 		fork: (entry) => entry.session.fork(),
-		// Sync SDK method: resets provider streams, keeps the transcript — the
+		// Sync SDK method: resets provider streams, keeps the transcript; the
 		// post-mutation state broadcast picks up the new sessionId.
 		freshSession: async (entry) => entry.session.freshSession() ?? null,
 		handoff: (entry, a) => entry.session.handoff(a[0] as string | undefined),
@@ -207,7 +208,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			entry.session.setPlanModeState(a[0] as PlanModeState | undefined);
 		},
 		// goalRuntime rows: createGoal throws when a goal is already active
-		// (matching the CLI's refusal) — the client only offers "set" with no goal.
+		// (matching the CLI's refusal); the client only offers "set" with no goal.
 		goalCreate: (entry, a) =>
 			entry.session.goalRuntime.createGoal({ objective: String(a[0] ?? "") }),
 		goalPause: (entry) => entry.session.goalRuntime.pauseGoal(),
@@ -247,7 +248,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const provider = String(a[1]);
 			const modelId = String(a[2]);
 			// `auto` cannot round-trip through a baked `provider/model:level`
-			// role value — reject it (the TUI persists it via
+			// role value, so reject it (the TUI persists it via
 			// defaultThinkingLevel instead). "inherit"/undefined → no explicit
 			// thinking baked in.
 			const rawLevel = a[3];
@@ -323,7 +324,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			assertModelRoleId(role);
 			const settings = session.settings;
 			const targetScope = settings.get("modelRoleStorage") === "project" ? "project" : "global";
-			// Capture the active role before clearing — an unassigned role drops
+			// Capture the active role before clearing, since an unassigned role drops
 			// out of the cycle entirely, so the post-clear cycle can't name it.
 			const wasActive = activeRoleOf(session) === role;
 			if (targetScope === "project") {
@@ -334,7 +335,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			if (!wasActive) return { role };
 			// The cleared role re-resolves from the newly exposed persisted
 			// layer; apply the effective value live when one resolves (setModel
-			// for default, applyRoleModel otherwise — TUI onUnassign semantics).
+			// for default, applyRoleModel otherwise, as in TUI onUnassign
+			// semantics).
 			const resolved = resolveRoleModelFull(
 				settings,
 				role,
@@ -386,7 +388,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const [path, value] = [String(a[0]), a[1]];
 			const coerced = coerceSettingValue(path, value);
 			// All accepted paths are schema paths persisted via the shared
-			// Settings singleton (in-process merge + debounced disk write — the
+			// Settings singleton (in-process merge + debounced disk write, the
 			// TUI's settings.set semantics).
 			if (path in SETTINGS_SCHEMA) {
 				deps.settings.set(path as SettingPath, coerced as never);

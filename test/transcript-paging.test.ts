@@ -1,5 +1,5 @@
 /**
- * Transcript route paging against a private tmpdir session store — never
+ * Transcript route paging against a private tmpdir session store, never
  * test/.fixture. One stats app per file (createStatsApp instances are fully
  * isolated, but keeping the old one-app-per-file shape is cheapest), driven
  * via in-process handleFetch.

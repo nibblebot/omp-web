@@ -74,7 +74,7 @@ export function AssistantMsg(props: { entry: RawEntry; pairing: PairingMaps }) {
 					<Show when={model !== ""}>
 						<span class="meta-model">{model}</span>
 					</Show>
-					{/* provider and api are the same string on most sessions — render once */}
+					{/* provider and api are the same string on most sessions, so render once */}
 					<Show when={provider !== null && provider !== apiName}>
 						<span class="tx-badge">{provider}</span>
 					</Show>
@@ -313,7 +313,7 @@ export function UserMsg(props: { entry: RawEntry }) {
 	);
 }
 
-/** Standalone toolResult row — only rendered while its call's message isn't loaded. */
+/** Standalone toolResult row, rendered only while its call's message isn't loaded. */
 export function ToolResultMsg(props: { entry: RawEntry; calls: Map<string, ToolCallInfo> }) {
 	const e = props.entry;
 	const m = messageObj(e);
@@ -385,7 +385,7 @@ export function ToolResultMsg(props: { entry: RawEntry; calls: Map<string, ToolC
 	);
 }
 
-/** System-authored developer messages (system reminders etc.) — styled system bubble. */
+/** System-authored developer messages (system reminders etc.), styled system bubble. */
 export function DeveloperMsg(props: { entry: RawEntry }) {
 	const e = props.entry;
 	const ts = entryTs(e);

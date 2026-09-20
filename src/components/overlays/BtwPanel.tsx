@@ -4,7 +4,7 @@ import { Markdown } from "../shared/Markdown";
 import { Modal } from "../shared/Modal";
 
 /**
- * Phase 11: /btw side sheet — an ephemeral Q&A that streams the side-channel
+ * Phase 11: /btw side sheet, an ephemeral Q&A that streams the side-channel
  * reply (runEphemeralTurn) and never appears in the transcript. Esc and
  * backdrop click close it through Modal; closing while streaming aborts the
  * side turn server-side (closeBtw).
@@ -14,7 +14,7 @@ export const BtwPanel: Component = () => {
 	return (
 		<Show when={btw()}>
 			{(b) => (
-				<Modal title="btw — side question" variant="sheet" onClose={closeBtw}>
+				<Modal title="btw, side question" variant="sheet" onClose={closeBtw}>
 					<div class="btw-panel">
 						<Show when={b().question}>
 							<div class="btw-question">{b().question}</div>

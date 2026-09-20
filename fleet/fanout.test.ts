@@ -4,7 +4,7 @@
  * path answers with call_result{ok:true} then assistant message_end events +
  * agent_end (with usage), call_result{ok:false}, abort events, broadcast
  * error frames, or nothing (timeout). Like the real daemon, the fake emits
- * the call_result for a call BEFORE that call's turn frames — it is the
+ * the call_result for a call BEFORE that call's turn frames; it is the
  * acceptance verdict that scopes correlation (audit #21). Covers promptEntry's
  * correlation contract (own-turn agent_end only, unrelated frames ignored),
  * per-daemon serialization of concurrent fan-outs, fanOut's order
@@ -77,7 +77,7 @@ interface FakeStream {
 	send(frame: unknown): void;
 	/** Push a frame with an explicit seq (priming). */
 	write(frame: unknown, seq: number): void;
-	/** Cleanly end the stream (daemon dormant — clean close). */
+	/** Cleanly end the stream (daemon dormant, clean close). */
 	close(): void;
 	/** Internal: true once the stream has been closed. */
 	closed?: boolean;
@@ -274,7 +274,7 @@ describe("promptEntry", () => {
 	test("an unrelated broadcast error frame does not settle a fan-out", async () => {
 		// Regression (audit #21): a broadcast {type:"error"} frame (e.g. a
 		// concurrent browser turn failing) carries no call id and must not
-		// settle our prompt — even after our call_result acceptance. Our own
+		// settle our prompt, even after our call_result acceptance. Our own
 		// call failures arrive as id-matched call_result{ok:false}.
 		const fake = startFake({
 			onCommand: (_fake, stream, frame) => {

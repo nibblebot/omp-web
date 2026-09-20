@@ -62,7 +62,7 @@ function confirmNewSession(): void {
 }
 
 /**
- * `/export [--themes]` — the flag passes useUserThemes to exportToHtml so the
+ * `/export [--themes]`. The flag passes useUserThemes to exportToHtml so the
  * exported HTML carries the active theme instead of the default look.
  */
 export function exportDispatch(args: string): { useThemes: boolean } {
@@ -93,14 +93,14 @@ export function renameDispatch(
 	return title ? { method: "setSessionName", title } : { method: "prompt", text: "/rename" };
 }
 
-/** `/handoff [focus...]` — free-text focus joins into one optional instructions arg. */
+/** `/handoff [focus...]`; free-text focus joins into one optional instructions arg. */
 export function handoffArgs(args: string): [string | undefined] {
 	const focus = args.trim();
 	return [focus || undefined];
 }
 
 /**
- * `/goal` — on 17.1.8 /goal is NOT intercepted by the server's ACP builtin
+ * `/goal`. On 17.1.8 /goal is NOT intercepted by the server's ACP builtin
  * dispatch, so it must never reach the prompt passthrough. Subcommands route
  * to the goalRuntime relay rows; anything else (bare, unknown, or `set`
  * without an objective) opens the goal popover, which owns objective entry.
@@ -129,7 +129,7 @@ export function goalDispatch(args: string):
 }
 
 /**
- * `/plan` toggle — same reasoning as /goal: 17.1.8 does not ACP-intercept
+ * `/plan` toggle, same reasoning as /goal: 17.1.8 does not ACP-intercept
  * /plan, so the toggle drives setPlanModeState directly. planFilePath is not
  * read by the server runtime (only the CLI/tool-views mention it), so the
  * toggle passes "".
@@ -165,11 +165,11 @@ function confirmDropSession(): void {
 }
 
 /** `/fresh`: reset provider state, keep the transcript. While a turn is
- *  streaming the reset goes through the danger confirm — resetting provider
+ *  streaming the reset goes through the danger confirm, since resetting provider
  *  state mid-turn can fail the running turn. */
 function freshSession(): void {
 	void call("freshSession")
-		.then(() => pushNotice("info", "Fresh session — provider state reset, transcript kept."))
+		.then(() => pushNotice("info", "Fresh session; provider state reset, transcript kept."))
 		.catch(showError);
 }
 
@@ -189,7 +189,7 @@ function dumpSession(): void {
 				a.click();
 				URL.revokeObjectURL(url);
 			} else {
-				pushNotice("info", "Transcript is empty — nothing to download.");
+				pushNotice("info", "Transcript is empty, nothing to download.");
 			}
 			if (typeof dumpPath === "string" && dumpPath) {
 				pushNotice("info", "LLM request dump", `/download?path=${encodeURIComponent(dumpPath)}`);
@@ -205,7 +205,7 @@ function dumpSession(): void {
 /**
  * Web-local slash commands: TUI-only commands that have session-method
  * equivalents (or web-native displays). Anything not in this table is sent to the agent
- * verbatim — server-side interception runs builtins/skills/extensions.
+ * verbatim; server-side interception runs builtins/skills/extensions.
  */
 export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	new: confirmNewSession,
@@ -221,7 +221,7 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 		void call("retry")
 			.then((ok) => {
 				if (ok === false)
-					pushNotice("error", "Nothing to retry — no failed turn or the session is busy.");
+					pushNotice("error", "Nothing to retry; no failed turn or the session is busy.");
 			})
 			.catch(showError),
 	fork: () =>
@@ -236,7 +236,7 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 		if (state.streaming) {
 			requestDangerConfirm({
 				title: "Reset provider state",
-				body: "A turn is in flight — the transcript is kept, but resetting provider state mid-turn can fail the running turn.",
+				body: "A turn is in flight; the transcript is kept, but resetting provider state mid-turn can fail the running turn.",
 				confirmLabel: "Reset state",
 				onConfirm: freshSession,
 			});
@@ -258,7 +258,7 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 						willRetry: false,
 					});
 				} else {
-					pushNotice("info", "Handoff complete — new session started.");
+					pushNotice("info", "Handoff complete. New session started.");
 				}
 				if (r?.savedPath)
 					pushNotice(
@@ -277,7 +277,7 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 		).catch(showError);
 	},
 	// Phase 9 (17.1.8): /goal and /plan are NOT ACP-intercepted, so they are
-	// web-local — never prompt passthrough (see goalDispatch/planDispatch).
+	// web-local, never prompt passthrough (see goalDispatch/planDispatch).
 	goal: (args) => {
 		const d = goalDispatch(args);
 		if (d.kind === "popover") setState("modal", "goal");
@@ -309,8 +309,8 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	tools: () => setState("modal", "stats"),
 	help: () => setState("modal", "help"),
 	hotkeys: () => setState("modal", "help"),
-	exit: () => pushNotice("info", "Session persists — close this browser tab to exit."),
-	quit: () => pushNotice("info", "Session persists — close this browser tab to exit."),
+	exit: () => pushNotice("info", "Session persists, close this browser tab to exit."),
+	quit: () => pushNotice("info", "Session persists, close this browser tab to exit."),
 };
 
 /**

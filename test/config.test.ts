@@ -1,7 +1,7 @@
 /**
  * resolveStatsConfig env precedence: PI_CONFIG_DIR → stats.db,
  * PI_CODING_AGENT_DIR → sessions (wins over XDG_DATA_HOME), XDG_DATA_HOME
- * fallback. No port/host — the fleet control plane owns those.
+ * fallback. No port/host; the fleet control plane owns those.
  */
 import { describe, expect, test } from "bun:test";
 import { homedir } from "node:os";

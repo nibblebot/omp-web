@@ -1,5 +1,5 @@
 /**
- * GET /ctl/stats/sessions — full session list with DB-enriched metrics.
+ * GET /ctl/stats/sessions returns the full session list with DB-enriched metrics.
  *
  * Disk is the primary source of which sessions exist; stats.db aggregates
  * (one pass per table) fill in the real numbers. Sessions with DB rows but
@@ -27,7 +27,7 @@ const MAX_SESSIONS = 2000;
 // exists). File adds/removes anywhere invalidate the key immediately via the
 // containing dir's stat; an existing transcript GROWING in place changes no
 // dir stat, so without a TTL the row size/mtime columns would go stale
-// indefinitely — the TTL bounds that staleness. Entries are capped at 2
+// indefinitely. The TTL bounds that staleness. Entries are capped at 2
 // (current + previous key) so dir churn cannot grow the cache without bound.
 // ---------------------------------------------------------------------------
 
@@ -49,7 +49,7 @@ export const sessionsWalkCounter = { runs: 0 };
 /**
  * Recursive directory-stat signature: every directory's (mtimeMs, size) in
  * the tree. Detects file adds/removes/renames anywhere (the containing
- * dir's stat changes) — the root dir's own mtime does NOT move when a
+ * dir's stat changes). The root dir's own mtime does NOT move when a
  * subdirectory gains files, which a flat "sessionsDir mtime" key would
  * miss. In-place file GROWTH changes no dir stat, so that case stays
  * bounded by the TTL.
@@ -63,7 +63,7 @@ function sessionsTreeStat(root: string): string {
 			const st = statSync(d);
 			parts.push(`${d}:${st.mtimeMs}:${st.size}`);
 		} catch {
-			continue; // Unreadable dir — the walk yields nothing for it either.
+			continue; // Unreadable dir; the walk yields nothing for it either.
 		}
 		let entries;
 		try {
@@ -137,7 +137,7 @@ interface UserRow {
 	chars: number | null;
 }
 
-/** Header extraction cache keyed by (abs, mtimeMs, size) — cheap across requests. */
+/** Header extraction cache keyed by (abs, mtimeMs, size), cheap across requests. */
 const headCache = new Map<string, HeaderInfo>();
 const HEAD_CACHE_MAX = 100;
 
@@ -162,7 +162,7 @@ async function readHead(abs: string, mtimeMs: number, size: number): Promise<Hea
 	if (doc) {
 		const first = doc.entries[0] ?? null;
 		const second = doc.entries[1] ?? null;
-		// Older files may lack the title slot — the session header can be line 1.
+		// Older files may lack the title slot, so the session header can be line 1.
 		const head = first?.type === "session" ? first : second?.type === "session" ? second : null;
 		info = {
 			title:
@@ -193,14 +193,14 @@ function sessionsRoute(ctx: AppCtx): Route {
 			const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
 			const tool = (url.searchParams.get("tool") ?? "").trim();
 
-			// Cached full list (disk walk + db enrichment). Copied before filtering —
+			// Cached full list (disk walk + db enrichment). Copied before filtering because
 			// the sort below is in-place and the cached array must stay pristine.
 			let list = [...(await cachedSessionsList(ctx))];
 
 			// 3. Tool filter: only sessions whose file has tool_calls of that name.
 			// DB-backed and per-request (outside the cache) so db unavailability is
-			// still detected per-request — an explicit 503, never a stale or falsely
-			// empty list.
+			// still detected per-request. It yields an explicit 503, never a stale
+			// or falsely empty list.
 			if (tool) {
 				if (!db) return errorJson("stats.db unavailable", 503);
 				let rows: { session_file: string }[];
@@ -239,14 +239,14 @@ function sessionsRoute(ctx: AppCtx): Route {
 
 /**
  * Full disk walk + db enrichment. Degrades to disk-only rows (metrics
- * zeroed, synced:false) on any stats.db trouble — db failure must never 500
+ * zeroed, synced:false) on any stats.db trouble; db failure must never 500
  * this endpoint. Walk count is exposed for tests asserting cache behavior.
  */
 async function computeSessionsList(ctx: AppCtx): Promise<SessionSummary[]> {
 	const { cfg } = ctx;
 	const db = ctx.dbm.db();
 	// Any stats.db failure degrades to disk-only rows (metrics zeroed,
-	// synced:false) — db trouble must never 500 this endpoint.
+	// synced:false); db trouble must never 500 this endpoint.
 	let dbBroken = false;
 	sessionsWalkCounter.runs += 1;
 
@@ -332,7 +332,7 @@ async function computeSessionsList(ctx: AppCtx): Promise<SessionSummary[]> {
 		}
 	}
 
-	// 2. SQL enrichment — one pass per table, merged by absolute path.
+	// 2. SQL enrichment, one pass per table, merged by absolute path.
 	// All queries run inside one guard so a broken/partial schema degrades
 	// atomically: every disk row keeps zeroed metrics + synced:false.
 	if (db && !dbBroken) {

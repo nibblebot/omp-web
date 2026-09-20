@@ -1,6 +1,6 @@
 // Wire shapes mirror the ExtensionUIContext dialog surface
 // (extensibility/extensions/types.ts: ExtensionAskDialogQuestion,
-// ExtensionAskDialogResult, ExtensionUISelectItem). Redefined locally — the
+// ExtensionAskDialogResult, ExtensionUISelectItem). Redefined locally; the
 // web client must not import the server package.
 
 export type AskOption = { label: string; description?: string; preview?: string };

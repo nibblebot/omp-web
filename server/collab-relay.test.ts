@@ -223,7 +223,7 @@ describe("collab relay", () => {
 		const httpBase = `http://127.0.0.1:${new URL(baseUrl).port}`;
 
 		// Refused BEFORE the upgrade with a plain 401 (no close code, no
-		// hello window — same convention as /events and /command).
+		// hello window; same convention as /events and /command).
 		const res = await fetch(`${httpBase}/r/${room}?role=host`);
 		expect(res.status).toBe(401);
 
@@ -314,7 +314,7 @@ describe("collab relay", () => {
 		expect(envelopePeer(env2)).toBe(2);
 		expect(bytesEqual(new Uint8Array(env2).slice(4), PAYLOAD_B)).toBe(true);
 
-		// Only the two peer-joined controls arrived as TEXT — no envelope leaked.
+		// Only the two peer-joined controls arrived as TEXT; no envelope leaked.
 		expect(bag.controls).toEqual([
 			{ t: "peer-joined", peer: 1 },
 			{ t: "peer-joined", peer: 2 },
@@ -407,7 +407,7 @@ describe("collab relay", () => {
 	});
 
 	// The relay owns the orphan timer (module-internal setTimeout), so this
-	// exercises real timer behavior against the platform clock by design —
+	// exercises real timer behavior against the platform clock by design;
 	// the contract mandates a short real TTL wait (orphanTtlMs: 100).
 	test("orphan TTL expiry closes remaining guests with 4001", async () => {
 		const { relay, baseUrl } = startRelayServer({ orphanTtlMs: 100 });

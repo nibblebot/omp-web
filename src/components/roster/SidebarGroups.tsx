@@ -43,7 +43,7 @@ type SidebarGroup = {
 
 /** Fallback grouping for roster entries WITHOUT a projectId (remote/
  *  unregistered): group by repo (`worktreeOf ?? project`), sorted by group
- *  name via localeCompare — the pre-project roster's exact behavior. */
+ *  name via localeCompare, the pre-project roster's exact behavior. */
 function buildGroups(entries: DaemonEntry[]): SidebarGroup[] {
 	const byRepo = new Map<string, DaemonEntry[]>();
 	for (const d of entries) {
@@ -91,7 +91,7 @@ const FirstRunPanel: Component = () => (
 				</button>
 			</li>
 			<li>
-				Prefer the terminal? Just run <code>omp-web</code> — it offers to configure the data home on
+				Prefer the terminal? Just run <code>omp-web</code>. It offers to configure the data home on
 				first run.
 			</li>
 			<li>Sessions appear here once a project exists.</li>
@@ -156,7 +156,7 @@ export const SidebarGroups: Component<{ groups: SidebarGroupsData }> = (props) =
 		// re-render this header.
 		const menuOpen = createMemo(() => menuOpenId() === gkey);
 		// A main-checkout daemon exists when any row is untagged (worktreeOf
-		// is set only for linked-worktree cwds — supervisor resolveWorktreeOf;
+		// is set only for linked-worktree cwds, per supervisor resolveWorktreeOf;
 		// main checkouts stay undefined). The start action spawns on the main
 		// checkout, so it hides once a main daemon exists in ANY status
 		// (spawning → … → asleep → ready).
@@ -255,7 +255,7 @@ export const SidebarGroups: Component<{ groups: SidebarGroupsData }> = (props) =
 			<Show when={props.groups.length === 0}>
 				<Show
 					when={firstRun()}
-					fallback={<div class="sidebar-empty">no projects — press + to add one</div>}
+					fallback={<div class="sidebar-empty">no projects, press + to add one</div>}
 				>
 					<FirstRunPanel />
 				</Show>

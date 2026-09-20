@@ -3,7 +3,7 @@ import { createSignal, onCleanup, type JSX } from "solid-js";
 /** Arming state for a two-click confirm (extracted from DaemonSidebar's
  *  armDaemon/disarmDaemon and SubagentPanel's confirm/cancel pair). The
  *  first click arms (the trigger relabels), a second click fires the action;
- *  auto-disarms after `timeoutMs` (default 4000 — DaemonSidebar's
+ *  auto-disarms after `timeoutMs` (default 4000, matching DaemonSidebar's
  *  ARM_DISARM_MS) and on unmount. */
 export interface ConfirmArm {
 	armed: () => boolean;
@@ -43,7 +43,7 @@ export function ConfirmButton(props: {
 	classList?: Record<string, boolean | undefined>;
 	title?: string;
 	timeoutMs?: number;
-	/** ARIA role override — pass "menuitem" inside a role="menu" dropdown. */
+	/** ARIA role override; pass "menuitem" inside a role="menu" dropdown. */
 	role?: "button" | "menuitem";
 	/** Optional leading content (e.g. a row-action icon) before the label. */
 	children?: JSX.Element;

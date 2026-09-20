@@ -1,19 +1,19 @@
 #!/usr/bin/env bun
 /**
- * dev — one-command dev runner.
+ * dev: one-command dev runner.
  *
  *   bun run dev          fleet mode: vite (:4713 HMR, /events + /command proxied to omp-fleet)
- *                        (:4722) + omp-fleet serve. NO session is started or attached —
+ *                        (:4722) + omp-fleet serve. NO session is started or attached;
  *                        spawn/add one from the roster UI when you want one.
  *   bun run dev:single   single-session mode: omp-session (:4721, --watch) + vite (:4713 HMR)
  *
  *   --host [addr]        bind vite to addr (default 0.0.0.0) for LAN access; backends stay
- *                        loopback — remote browsers reach them through vite's proxies.
+ *                        loopback; remote browsers reach them through vite's proxies.
  *                        No auth on the UI: trusted networks only.
  *   --allow-hosts [csv]  vite allowedHosts: bare = allow every Host header (tailscale
  *                        domains etc.), or a comma-separated allowlist.
  *   --state-from <path>  fleet mode only: fork another fleet's state (a fleet-state.json
- *                        file, or its directory) into this worktree's dev fleet dir —
+ *                        file, or its directory) into this worktree's dev fleet dir,
  *                        like forking it, so the dev UI boots with that roster/projects
  *                        instead of an empty one. Fork-once: only copied when this
  *                        worktree's dev state does not exist yet; later runs keep the
@@ -21,10 +21,10 @@
  *
  * Default in fleet mode: when this worktree is a linked git worktree of another
  * checkout, the dev fleet state is forked from that MAIN worktree's dev state
- * (same fork-once semantics) — so a worktree's dev UI boots with the main
+ * (same fork-once semantics), so a worktree's dev UI boots with the main
  * roster/projects instead of an empty one. Running in the main worktree itself
  * (or with --state-from) never self-seeds.
- *   --fresh               fleet mode only: start on a FRESH state — removes the
+ *   --fresh               fleet mode only: start on a FRESH state. Removes the
  *                        worktree's existing dev fleet state (if any) and skips
  *                        the fork entirely, so the roster boots empty. Mutually
  *                        exclusive with --state-from.
@@ -32,17 +32,17 @@
  * Output model: every child's stdout/stderr is forwarded line-by-line with a
  * colored, fixed-width [name] prefix ([vite   ] [fleet  ] [session]); the
  * runner's own messages use [dev    ]. Colors only when stdout is a TTY and
- * NO_COLOR is unset — piped output has no escapes.
+ * NO_COLOR is unset; piped output has no escapes.
  *
  * Each child is tracked through starting → ready (vite: its `Local:` line;
  * session: the OMP_SESSION| contract line, which is consumed for readiness
- * and NOT echoed — machine noise; fleet: the "fleet listening" banner line).
+ * and NOT echoed as machine noise; fleet: the "fleet listening" banner line).
  * Every transition to ready logs one `✓ <name> ready` runner line; once every
  * child in the mode has been ready at least once, a compact stack summary is
  * printed once per full readiness (re-armed when a session restart brings the
  * stack back). Ctrl-C (or vite/fleet exiting) tears down the rest. The
  * omp-session child is different: idle exit is a FEATURE (no attached clients
- * → clean shutdown), so a session exit just restarts it with backoff — it
+ * → clean shutdown), so a session exit just restarts it with backoff, and it
  * never nukes the stack.
  *
  * Ports: chosen at runtime so parallel worktrees don't collide. fleet/session
@@ -51,14 +51,14 @@
  * pre-ready exit (lost port race, startup crash) is retried on a fresh port,
  * bounded, before being declared fatal.
  *
- * State: the dev fleet's state file — and therefore its pidfile lock, which
- * rides `<state>.lock` — is scoped per worktree OUTSIDE the repo: a stable
+ * State: the dev fleet's state file is scoped per worktree OUTSIDE the repo,
+ * and its pidfile lock rides `<state>.lock` next to it: a stable
  * `<slug>-<hash8>` of the worktree realpath under `<data home>/dev-fleets/`
  * (data home = config dir, so the first-run data-home choice moves it too).
  * N worktrees running `bun run dev` plus the user's real fleet on
  * `<data home>/fleet-state.json` all coexist; nothing is written into the
  * repo. Config AND the managed-worktree root stay shared: the lock guards
- * only the state file — workspaces coordinate at path level (`.omp-web-repo`
+ * only the state file; workspaces coordinate at path level (`.omp-web-repo`
  * markers, existing-target refusal, git's own no-double-checkout), so every
  * fleet sees and manages the same worktrees. A second `bun run dev` in the
  * SAME worktree still correctly fails on the lock (exit 77). Orphaned
@@ -90,7 +90,7 @@ const ROOT = join(import.meta.dir, "..");
  * `<data home>/dev-fleets/<slug>-<hash8>/` where slug is the worktree
  * basename and hash8 the sha256 of its realpath. Deterministic per worktree
  * (dev restarts reuse the same fleet), distinct across worktrees. Only the
- * STATE is scoped — the managed-worktree root deliberately stays shared.
+ * STATE is scoped; the managed-worktree root deliberately stays shared.
  */
 const DEV_FLEET_DIR = (() => {
 	const real = realpathSync(ROOT);
@@ -102,7 +102,7 @@ const DEV_FLEET_DIR = (() => {
  * Fork-once seed: copy a source fleet-state.json into this worktree's dev
  * fleet dir when the dev state does not exist yet (a fresh fork). The source
  * may be a fleet-state.json file or its directory. Later runs keep the
- * diverged fork — like a git fork, the copy never re-syncs. When the dev
+ * diverged fork: like a git fork, the copy never re-syncs. When the dev
  * state already exists it is left untouched and no source is required. The
  * copy is read-only (we never mutate the source), and stale pids/liveness in
  * the fork are downgraded by the fleet's own boot reconcile. A bogus source
@@ -110,19 +110,19 @@ const DEV_FLEET_DIR = (() => {
  *
  * When `source` is undefined (no explicit --state-from), the default in fleet
  * mode is the MAIN worktree's dev state: the sibling worktree whose
- * common-git-dir is the same repo (hash of that checkout's realpath — the
+ * common-git-dir is the same repo (hash of that checkout's realpath, the
  * same formula DEV_FLEET_DIR uses). Running in the main worktree itself
- * yields its own path, which is skipped (a worktree never self-seeds — its
+ * yields its own path, which is skipped (a worktree never self-seeds; its
  * dev state already is the data). No main dev state yet → nothing to fork.
  */
 function seedFleetState(source: string | undefined): void {
 	const target = join(DEV_FLEET_DIR, "fleet-state.json");
 	if (existsSync(target)) {
-		// Fork already diverged — keep it (never re-sync). Logged so a user
+		// Fork already diverged, keep it (never re-sync). Logged so a user
 		// with a small existing dev state isn't silently served stale data
 		// when they expected a fresh fork.
 		if (source !== undefined)
-			log("fleet state exists — keeping the diverged fork (delete it to re-fork)");
+			log("fleet state exists, keeping the diverged fork (delete it to re-fork)");
 		return;
 	}
 	// Default source in fleet mode: the main worktree's dev state.
@@ -139,9 +139,9 @@ function seedFleetState(source: string | undefined): void {
 	mkdirSync(DEV_FLEET_DIR, { recursive: true });
 	if (!existsSync(from)) {
 		if (source !== undefined) throw new Error(`--state-from: no fleet-state.json at ${from}`);
-		return; // no main dev state yet — fresh empty state, nothing to fork
+		return; // no main dev state yet: fresh empty state, nothing to fork
 	}
-	// Validate parseable JSON with the registry's shape before copying —
+	// Validate parseable JSON with the registry's shape before copying;
 	// a corrupt state would abort the fleet at boot, after the stack launched.
 	let parsed: unknown;
 	try {
@@ -168,7 +168,7 @@ function seedFleetState(source: string | undefined): void {
  * The MAIN worktree's dev state path (fleet mode default source), or
  * undefined when there is no sibling main checkout to fork from. A linked
  * worktree's git common dir is the main checkout's .git; the main checkout
- * itself has a common dir equal to its own .git — a self-path is skipped.
+ * itself has a common dir equal to its own .git, so a self-path is skipped.
  */
 function mainWorktreeDevState(): string | undefined {
 	let common;
@@ -177,11 +177,11 @@ function mainWorktreeDevState(): string | undefined {
 			.toString()
 			.trim();
 	} catch {
-		return undefined; // not a git checkout — no main worktree to fork
+		return undefined; // not a git checkout: no main worktree to fork
 	}
 	if (common === "" || common === ".") return undefined;
 	// git-common-dir is absolute for linked worktrees (the main checkout's
-	// .git path), relative for a plain repo — normalize, then resolve up from
+	// .git path), relative for a plain repo; normalize, then resolve up from
 	// the .git dir to the main checkout root.
 	const mainRoot = realpathSync(join(isAbsolute(common) ? common : join(ROOT, common), ".."));
 	if (realpathSync(ROOT) === mainRoot) return undefined; // we ARE the main worktree
@@ -196,7 +196,7 @@ const SESSION_PORT_DEFAULT = 4721;
 
 /**
  * Ports are chosen at runtime so parallel worktrees can each run `bun run dev`
- * without colliding. fleet/session bind port 0 (kernel-assigned ephemeral —
+ * without colliding. fleet/session bind port 0 (kernel-assigned ephemeral,
  * cannot collide; the real port comes back via the OMP_SESSION| contract line
  * / the "fleet listening" banner). Only vite needs a fixed port (browsers
  * bookmark it): probe-pick a free one and launch with --strictPort, so a lost
@@ -249,7 +249,7 @@ const MODES: Record<string, { children: string[]; open: string }> = {
 	},
 	fleet: {
 		children: ["fleet", "vite"],
-		open: "roster: omp-fleet + vite HMR (ports chosen at startup) — spawn/add a session from the sidebar",
+		open: "roster: omp-fleet + vite HMR (ports chosen at startup). Spawn/add a session from the sidebar",
 	},
 };
 
@@ -267,14 +267,14 @@ function buildChild(name: string): Child {
 			// Port 0 = kernel-assigned ephemeral; the real port is parsed from
 			// the "fleet listening on 127.0.0.1:<port>" banner. Sidebar spawns use
 			// the default `local` template, which runs the production `omp-session`
-			// binary — not built in dev. OMP_FLEET_LOCAL_TEMPLATE points it at the
+			// binary, not built in dev. OMP_FLEET_LOCAL_TEMPLATE points it at the
 			// source entry instead (absolute: spawned children inherit the fleet's
 			// cwd, and the repo isn't necessarily it).
 			cmd: ["bun", "fleet/cli.ts", "serve", "--port", "0"],
 			env: {
 				// State (and its `.lock`) scoped per worktree under the data home:
-				// parallel worktrees' dev fleets — and the user's real fleet on
-				// <data home>/fleet-state.json — never contend on one state file,
+				// parallel worktrees' dev fleets, and the user's real fleet on
+				// <data home>/fleet-state.json, never contend on one state file,
 				// and nothing is written into the repo. Config and the managed-
 				// worktree root stay SHARED (the lock guards only state; workspaces
 				// coordinate at path level).
@@ -283,19 +283,19 @@ function buildChild(name: string): Child {
 			},
 		};
 	}
-	// vite: launched last, once the backend ports are known — its proxy targets
+	// vite: launched last, once the backend ports are known; its proxy targets
 	// are fixed at startup via env. --strictPort: exit on collision instead of
 	// silently incrementing (the runner retries on a fresh port).
 	const cmd = ["bunx", "vite", "--port", String(ports.vite), "--strictPort"];
 	// --host exposes vite only: the /events, /command, /download, /ctl proxies
 	// run server-side, so remote browsers reach the loopback backends through
 	// vite. omp-session hard-requires --token off-loopback and the fleet edge
-	// is loopback-only by design — neither needs to change.
+	// is loopback-only by design; neither needs to change.
 	if (host !== undefined) cmd.push("--host", host);
 	const env: Record<string, string> = {};
 	if (modeArg === "fleet") {
 		// OMP_DEV_FLEET switches vite's /events + /command + /download proxy to
-		// omp-fleet, so the roster UI runs with HMR — no dist/ build needed.
+		// omp-fleet, so the roster UI runs with HMR; no dist/ build needed.
 		env.OMP_DEV_FLEET = "1";
 		env.OMP_DEV_FLEET_PORT = String(ports.fleet);
 	} else {
@@ -361,11 +361,11 @@ if (mode === undefined) {
 	process.exit(2);
 }
 if (stateFrom !== undefined && modeArg !== "fleet") {
-	console.error("--state-from only applies in fleet mode (roster) — use `bun run dev`");
+	console.error("--state-from only applies in fleet mode (roster): use `bun run dev`");
 	process.exit(2);
 }
 if (fresh && modeArg !== "fleet") {
-	console.error("--fresh only applies in fleet mode (roster) — use `bun run dev`");
+	console.error("--fresh only applies in fleet mode (roster): use `bun run dev`");
 	process.exit(2);
 }
 if (fresh && stateFrom !== undefined) {
@@ -377,7 +377,7 @@ let shuttingDown = false;
 
 // ---------------------------------------------------------------------------
 // Output: colored, fixed-width per-child prefixes. `dev` is the runner's own
-// tag. Colors are gated on a TTY stdout and NO_COLOR — piped output is plain.
+// tag. Colors are gated on a TTY stdout and NO_COLOR; piped output is plain.
 // ---------------------------------------------------------------------------
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -403,13 +403,13 @@ function log(message: string): void {
 // main-worktree fork) happens at most once, and a bogus source must fail
 // before the stack starts (never after). --fresh instead starts clean: the
 // worktree's existing dev state is removed so the fleet boots EMPTY (the
-// .lock is left to the fleet's own acquire — stale locks self-heal, a live
+// .lock is left to the fleet's own acquire: stale locks self-heal, a live
 // fleet still fails exit 77) and no seeding runs.
 if (fresh) {
 	const existing = join(DEV_FLEET_DIR, "fleet-state.json");
 	if (existsSync(existing)) {
 		rmSync(existing);
-		log("removed existing dev fleet state — fresh start");
+		log("removed existing dev fleet state, fresh start");
 	}
 } else {
 	seedFleetState(stateFrom);
@@ -450,7 +450,7 @@ function markReady(name: string, port: number, detail: string): void {
 	st.port = port;
 	st.readyOnce = true;
 	preReadyFails.set(name, 0);
-	log(`✓ ${name} ready — ${detail} (pid ${st.pid})`);
+	log(`✓ ${name} ready, ${detail} (pid ${st.pid})`);
 	readyWaiters.get(name)?.();
 	readyWaiters.delete(name);
 	checkSummary();
@@ -479,7 +479,7 @@ function checkSummary(): void {
 		log(
 			`${bold(`  ${"state".padEnd(9)}${join(DEV_FLEET_DIR, "fleet-state.json")}  `)}(worktree-scoped)`,
 		);
-		log("  no session attached — spawn/add one from the roster sidebar");
+		log("  no session attached. Spawn/add one from the roster sidebar");
 	} else {
 		const sessionPort = states.get("session")?.port ?? ports.session;
 		log(`${bold(`  ${"session".padEnd(9)}ws://127.0.0.1:${sessionPort}  `)}(dev session)`);
@@ -521,9 +521,9 @@ async function pipePrefixed(
 
 /**
  * Per-child stdout readiness hooks. Session: consume the OMP_SESSION| contract
- * line (machine noise — never echoed; readiness + port come from it). Vite:
+ * line (machine noise, never echoed; readiness + port come from it). Vite:
  * watch for its `Local:` line. Fleet: parse the "fleet listening on
- * 127.0.0.1:<port>" banner (stable shape — scripts parse the port out of it).
+ * 127.0.0.1:<port>" banner (stable shape; scripts parse the port out of it).
  *
  * Stale-line guard: a dead child's pipe can flush after a relaunch, so only
  * the process currently registered under `name` may move readiness/ports.
@@ -544,7 +544,7 @@ function stdoutHook(
 				};
 				if (typeof parsed.port === "number") port = parsed.port;
 			} catch {
-				// not parseable — readiness still happened, keep the default port
+				// not parseable: readiness still happened, keep the default port
 			}
 			const resolved = port > 0 ? port : SESSION_PORT_DEFAULT;
 			ports.session = resolved;
@@ -552,7 +552,7 @@ function stdoutHook(
 				// The session came back on a new port: vite's proxy target is fixed
 				// at startup, so relaunch vite (same vite port) to re-point it.
 				viteSessionPort = resolved;
-				log(`session moved to port ${resolved} — relaunching vite to re-point its proxy`);
+				log(`session moved to port ${resolved}, relaunching vite to re-point its proxy`);
 				void relaunchVite();
 			}
 			markReady("session", resolved, `dev session on ws://127.0.0.1:${resolved}`);
@@ -631,7 +631,7 @@ function launch(child: Child): void {
 			restartBackoffMs = Math.min(restartBackoffMs * 2, RESTART_BACKOFF_MAX_MS);
 			if (wasReady) {
 				log(
-					`${child.name} exited (${code ?? "signal"}) — idle exit is expected; restarting in ${delay / 1000}s (the rest of the stack stays up)`,
+					`${child.name} exited (${code ?? "signal"}). Idle exit is expected; restarting in ${delay / 1000}s (the rest of the stack stays up)`,
 				);
 				setTimeout(() => {
 					if (!shuttingDown) void restartSession();
@@ -644,12 +644,12 @@ function launch(child: Child): void {
 			const fails = (preReadyFails.get(child.name) ?? 0) + 1;
 			preReadyFails.set(child.name, fails);
 			if (fails > MAX_PREREADY_RETRIES) {
-				log(`${child.name} failed ${fails} startup attempts — giving up`);
+				log(`${child.name} failed ${fails} startup attempts, giving up`);
 				fatalResolve({ name: child.name, code });
 				return;
 			}
 			log(
-				`${child.name} exited before ready (${code ?? "signal"}) — retrying on a fresh ephemeral port (${fails}/${MAX_PREREADY_RETRIES})`,
+				`${child.name} exited before ready (${code ?? "signal"}), retrying on a fresh ephemeral port (${fails}/${MAX_PREREADY_RETRIES})`,
 			);
 			sessionPortArg = "0";
 			setTimeout(() => {
@@ -663,15 +663,15 @@ function launch(child: Child): void {
 		if (procs.get(child.name) !== proc) return; // intentionally replaced (vite relaunch)
 		const st = states.get(child.name);
 		if (st !== undefined && !st.readyOnce) {
-			// Pre-ready exit — almost always a lost port race (vite --strictPort).
+			// Pre-ready exit, almost always a lost port race (vite --strictPort).
 			// Retry on a fresh port before declaring the stack broken.
 			const fails = (preReadyFails.get(child.name) ?? 0) + 1;
 			preReadyFails.set(child.name, fails);
 			// Fleet exit 77 = deterministic lock conflict (another fleet holds the
-			// state file — e.g. a second `bun run dev` in the SAME worktree) —
-			// retrying cannot fix it, so fail immediately.
+			// state file, e.g. a second `bun run dev` in the SAME worktree).
+			// Retrying cannot fix it, so fail immediately.
 			if (child.name === "fleet" && code === 77) {
-				log(`${child.name} exited before ready (77) — state lock held by another fleet`);
+				log(`${child.name} exited before ready (77), state lock held by another fleet`);
 				if (st !== undefined) st.status = "exited";
 				fatalResolve({ name: child.name, code });
 				return;
@@ -680,7 +680,7 @@ function launch(child: Child): void {
 				void retryPreReady(child.name, code, fails);
 				return;
 			}
-			log(`${child.name} failed ${fails} startup attempts — giving up`);
+			log(`${child.name} failed ${fails} startup attempts, giving up`);
 		}
 		if (st !== undefined) st.status = "exited";
 		fatalResolve({ name: child.name, code });
@@ -691,14 +691,14 @@ function launch(child: Child): void {
 async function retryPreReady(name: string, code: number | null, attempt: number): Promise<void> {
 	if (name === "vite") ports.vite = await pickFreePort();
 	log(
-		`${name} exited before ready (${code ?? "signal"}) — retrying on port ${name === "vite" ? ports.vite : "0 (ephemeral)"} (${attempt}/${MAX_PREREADY_RETRIES})`,
+		`${name} exited before ready (${code ?? "signal"}), retrying on port ${name === "vite" ? ports.vite : "0 (ephemeral)"} (${attempt}/${MAX_PREREADY_RETRIES})`,
 	);
 	if (!shuttingDown) launch(buildChild(name));
 }
 
 /**
  * Session restart: reuse the last port while it's still free (vite's proxy
- * target stays valid); else rebind ephemeral — the stdout hook relaunches
+ * target stays valid); else rebind ephemeral, and the stdout hook relaunches
  * vite once the new port is known. A lost probe-bind race surfaces as a
  * pre-ready exit, handled in launch().
  */
@@ -723,16 +723,16 @@ async function relaunchVite(): Promise<void> {
 	launch(buildChild("vite"));
 }
 
-// Backend first (ephemeral bind — cannot collide), vite once the proxy target
+// Backend first (ephemeral bind, cannot collide), vite once the proxy target
 // port is known. A fatal resolution during this await = startup retries
 // exhausted on a backend.
-log(`mode: ${modeArg} — ${mode.open}`);
+log(`mode: ${modeArg}, ${mode.open}`);
 
 const backend = modeArg === "fleet" ? "fleet" : "session";
 launch(buildChild(backend));
 const boot = await Promise.race([waitReady(backend).then(() => null), fatalPromise]);
 if (boot !== null) {
-	log(`${boot.name} exited (${boot.code ?? "signal"}) during startup — shutting down`);
+	log(`${boot.name} exited (${boot.code ?? "signal"}) during startup, shutting down`);
 	await shutdown(boot.code ?? 1);
 }
 
@@ -742,7 +742,7 @@ launch(buildChild("vite"));
 
 if (host !== undefined)
 	log(
-		`vite listening on ${host}:${ports.vite} — the UI (and full agent control through it) is reachable from the network with no auth; trusted networks only`,
+		`vite listening on ${host}:${ports.vite}. The UI (and full agent control through it) is reachable from the network with no auth; trusted networks only`,
 	);
 if (allowHosts !== undefined)
 	log(`vite allowedHosts: ${allowHosts === "*" ? "all Host headers allowed" : allowHosts}`);
@@ -762,5 +762,5 @@ process.on("SIGTERM", () => void shutdown(143));
 // First FATAL child (vite/fleet) to exit wins: tear the rest down and
 // propagate its code. Restartable children (session) never reach this race.
 const first = await fatalPromise;
-log(`${first.name} exited (${first.code ?? "signal"}) — shutting down`);
+log(`${first.name} exited (${first.code ?? "signal"}), shutting down`);
 await shutdown(first.code ?? 1);

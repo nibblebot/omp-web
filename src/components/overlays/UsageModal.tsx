@@ -44,7 +44,7 @@ const LimitRow: Component<{ limit: UsageLimit }> = (props) => {
 };
 
 /**
- * Phase 9: /usage parity — per-provider limits with 5h/7d windows, utilization
+ * Phase 9: /usage parity, per-provider limits with 5h/7d windows, utilization
  * bars, status and notes. Data comes from the READ_ONLY fetchUsageReports
  * relay row; providers without reporting resolve to the empty state.
  */

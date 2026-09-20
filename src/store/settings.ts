@@ -16,7 +16,7 @@ async function ctlError(res: Response): Promise<string> {
 		const parsed = JSON.parse(body) as { error?: unknown };
 		if (typeof parsed.error === "string" && parsed.error !== "") return parsed.error;
 	} catch {
-		// non-JSON body — fall through to the raw text
+		// non-JSON body, so fall through to the raw text
 	}
 	return body || String(res.status);
 }

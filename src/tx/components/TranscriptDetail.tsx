@@ -29,7 +29,7 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 	const file = () => props.file;
 
 	const [tab, setTab] = createSignal<Tab>("overview");
-	/** Transcript tool filter — shared: analytics table rows set it, transcript applies it. */
+	/** Transcript tool filter; analytics table rows set it, the transcript applies it. */
 	const [toolFilter, setToolFilter] = createSignal<string | null>(null);
 	/** When set, the Transcript tab shows this subagent file's transcript instead. */
 	const [subFile, setSubFile] = createSignal<string | null>(null);

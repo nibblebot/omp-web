@@ -1,7 +1,7 @@
 /**
  * Minimal ambient types for the solid-js client build used by
  * test/transcript-view.test.ts (bun resolves "solid-js" to its SSR build,
- * where memos never recompute — the reactive client build is needed to
+ * where memos never recompute; the reactive client build is needed to
  * assert recompute-once-per-entries-change behavior).
  */
 declare module "solid-js/dist/solid.js" {

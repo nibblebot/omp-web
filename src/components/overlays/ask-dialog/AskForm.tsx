@@ -5,7 +5,7 @@ import { CircleDotIcon, CircleIcon, SquareCheckIcon, SquareIcon } from "../../sh
 import { PickerRow } from "../../shared/PickerRow";
 import type { AskQuestion } from "./types";
 
-/** Rich multi-question form: ExtensionAskDialogSubmitResult on submit. */
+/** Multi-question form, which submits ExtensionAskDialogSubmitResult. */
 export const AskForm: Component<{ id: string; questions: AskQuestion[] }> = (props) => {
 	// Per-question answer state, keyed by question index.
 	const [selected, setSelected] = createSignal<Record<number, string[]>>({});
@@ -28,7 +28,7 @@ export const AskForm: Component<{ id: string; questions: AskQuestion[] }> = (pro
 	const allAnswered = () => props.questions.every((_, qi) => answered(qi));
 
 	const submit = () => {
-		// ExtensionAskDialogSubmitResult — AskTool validates result count,
+		// ExtensionAskDialogSubmitResult. AskTool validates result count,
 		// order, and ids against the request, so map the questions verbatim.
 		sendUiResponse(props.id, {
 			kind: "submit",

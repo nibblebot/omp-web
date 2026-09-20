@@ -88,7 +88,7 @@ describe("sessions list cache", () => {
 		if (!res2) throw new Error("expected response");
 		expect(res2.status).toBe(200);
 		expect(await sessionsOf(res2)).toEqual(list1);
-		expect(sessionsWalkCounter.runs).toBe(start + 1); // cache hit — no second walk
+		expect(sessionsWalkCounter.runs).toBe(start + 1); // cache hit, no second walk
 	});
 
 	test("in-place file growth is stale within TTL, visible after expiry", async () => {

@@ -1,4 +1,4 @@
-/* Chat — message stream, markdown (.md), run-rows, shimmer, compaction, empty-state, inline images, msg-toolbar. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Chat: message stream, markdown (.md), run-rows, shimmer, compaction, empty-state, inline images, msg-toolbar. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 /* Freshly-revealed text fades in once; the span is recreated per flush, which
    restarts this mount-triggered animation. */
@@ -250,7 +250,7 @@
 	align-self: stretch;
 	padding: var(--space-1) var(--space-5) var(--space-2);
 	/* Body-size and semibold: the working label is the turn's primary status,
-	   not a caption — matches the TUI's bold-crest shimmer emphasis. */
+	   not a caption; this matches the TUI's bold-crest shimmer emphasis. */
 	font-size: var(--fs-base);
 	font-weight: 600;
 	font-style: italic;
@@ -316,7 +316,7 @@ pre {
 	font-size: var(--fs-md);
 }
 /* In-stream markdown headings ride the same ramp as the rest of the UI
-   (fs-2xl 18 / fs-xl 16 / fs-lg 14 bold) — never browser UA defaults, which
+   (fs-2xl 18 / fs-xl 16 / fs-lg 14 bold), never browser UA defaults, which
    would swamp the session title. */
 .md h1,
 .md h2,

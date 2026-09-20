@@ -17,7 +17,7 @@ export function DaemonLogView(props: {
 	const [error, setError] = createSignal<string | null>(null);
 	const [loading, setLoading] = createSignal(false);
 
-	// The roster entry is the status source of truth — read it reactively so a
+	// The roster entry is the status source of truth; read it reactively so a
 	// stop/wake broadcast flips the "historical tail" note without a refetch
 	// (the daemonId is stable across roster broadcasts, unlike the entry
 	// object; an asleep/errored daemon's tail is the capture from its last
@@ -29,8 +29,8 @@ export function DaemonLogView(props: {
 	};
 	const note = () =>
 		entry()?.status === "error"
-			? "daemon errored — captured log from last run"
-			: "daemon asleep — captured log from last run";
+			? "daemon errored, captured log from last run"
+			: "daemon asleep, captured log from last run";
 
 	const load = () => {
 		setLoading(true);

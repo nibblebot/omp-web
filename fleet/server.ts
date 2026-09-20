@@ -2,7 +2,7 @@
  * omp-fleet headless control plane (Phase 2).
  *
  * A loopback-only HTTP JSON API (default port 4722, env OMP_FLEET_PORT,
- * opts.port wins; 0 = ephemeral) on a shared Bun.serve — Phase 3 adds the
+ * opts.port wins; 0 = ephemeral) on a shared Bun.serve; Phase 3 adds the
  * browser SSE edge (/events + /command) on the same server. Wires the
  * persistent Registry, the remote DaemonConnector and the SpawnSupervisor:
  *
@@ -99,7 +99,7 @@ function resolveStatePath(explicit?: string, configPath?: string): string {
 	if (explicit !== undefined && explicit !== "") return expandTilde(explicit);
 	const env = process.env.OMP_FLEET_STATE;
 	if (env !== undefined && env !== "") return expandTilde(env);
-	// Default: the state file lives NEXT TO the config file — the first-run
+	// Default: the state file lives NEXT TO the config file; the first-run
 	// data-home choice moves config + state + workspaces together. With no
 	// config that is the default data home (~/.omp-web), the historic path.
 	return join(dirname(configPath ?? resolveConfigPath()), "fleet-state.json");
@@ -192,7 +192,7 @@ const WORKTREE_INFO_ROUTE = /^\/ctl\/worktrees\/([^/]+)\/delete-info$/;
 
 /**
  * Reject endpoints that are not ws:// or wss:// URLs. The check itself lives
- * in spawn-parse.ts (isValidEndpointUrl) — shared with the supervisor's
+ * in spawn-parse.ts (isValidEndpointUrl), shared with the supervisor's
  * resolved-endpoint guard and parseContractLine so every URL that reaches
  * the connector has passed the same validation.
  */
@@ -360,7 +360,7 @@ class FleetServerImpl implements FleetServer {
 			onStatus: (entry) => {
 				edge?.onDaemonStatus(entry);
 				// #22: a spawned child that reaches the connector's "ready"
-				// transition is stable — the supervisor resets its
+				// transition is stable; the supervisor resets its
 				// consecutive-crash budget there (window-based, not lifetime).
 				this.supervisor.onConnectorStatus(entry);
 				// Fleet observability: every status transition lands in the ring.
@@ -399,7 +399,7 @@ class FleetServerImpl implements FleetServer {
 		// provider source for tests (must not open the real auth DB).
 		this.fleetSettings = createFleetSettings(settingsOptions);
 		// #3: statuses persisted by a previous fleet process describe dead
-		// children/sockets — map them to a truthful boot state and redial
+		// children/sockets; map them to a truthful boot state and redial
 		// remote entries BEFORE anything else starts acting on the roster.
 		this.#reconcileBootStatuses();
 		// Tag pre-existing local entries with their owning repo (roster
@@ -518,7 +518,7 @@ class FleetServerImpl implements FleetServer {
 			const url = new URL(req.url);
 			const path = url.pathname;
 			// Historical transcripts/stats API: /ctl/stats/* is stats-owned
-			// (statsApp returns null for unowned paths — the control-plane
+			// (statsApp returns null for unowned paths; the control-plane
 			// switch below owns the 404/405 for those).
 			if (path.startsWith("/ctl/stats")) {
 				const statsHandled = await statsApp.handleFetch(req, url);
@@ -545,7 +545,7 @@ class FleetServerImpl implements FleetServer {
 					case "/ctl/settings":
 						// Unattached settings model (roster mode): the fleet
 						// service lazily initializes the process-global
-						// Settings singleton + ModelRegistry — no session.
+						// Settings singleton + ModelRegistry, no session.
 						return json(await this.fleetSettings.getModel());
 					default:
 						return json({ error: "not found" }, 404);
@@ -607,7 +607,7 @@ class FleetServerImpl implements FleetServer {
 		const labels = optionalLabels(body);
 		// NUL cannot exist in a shell command string; reject it at the
 		// boundary. (Quoting in supervisor #launch is the real injection
-		// defense — this only keeps NUL out of the wire/state.)
+		// defense; this only keeps NUL out of the wire/state.)
 		if (name !== undefined && name.includes("\0")) {
 			throw new HttpError(400, "invalid field: name must not contain NUL");
 		}
@@ -631,9 +631,9 @@ class FleetServerImpl implements FleetServer {
 	 * and dedups). A path that is not an existing directory or git repo is
 	 * the registry's validation error surfaced as 400; a realpath that is
 	 * already registered dedups to the EXISTING project → 409 carrying it.
-	 * The project's default workspace — a roster entry for the repo's main
-	 * checkout mapped to the repo CWD, never a managed worktree — is
-	 * registered via registerProjectMainEntry:
+	 * The project's default workspace is registered via
+	 * registerProjectMainEntry: a roster entry for the repo's main checkout
+	 * mapped to the repo CWD, never a managed worktree.
 	 *   - start:true → the main checkout is spawned (template/labels
 	 *     passthrough) and the fresh entry is tagged + returned as `entry`;
 	 *   - otherwise → the entry is created asleep (surfacing purely via the
@@ -684,7 +684,7 @@ class FleetServerImpl implements FleetServer {
 	 * DELETE /ctl/projects/:projectId: deregister a project (never touches
 	 * disk); the never-started default workspace (a provably-empty roster
 	 * placeholder) is dropped with it. 409 when real roster entries still
-	 * reference it — the message names the blocking daemon ids
+	 * reference it; the message names the blocking daemon ids
 	 * (registry.removeProject). Unknown ids → 404.
 	 */
 	async #handleRemoveProject(projectId: string): Promise<Response> {
@@ -779,8 +779,8 @@ class FleetServerImpl implements FleetServer {
 	/**
 	 * A poll-detected, on-disk worktree removal: the daemon's cwd vanished
 	 * between git-state poll ticks (git worktree remove run outside the
-	 * fleet). Mirror #handleRemove's eviction — prune/drop + registry.remove
-	 * (the roster broadcast rides registry.onChange automatically) — then
+	 * fleet). Mirror #handleRemove's eviction: prune/drop + registry.remove
+	 * (the roster broadcast rides registry.onChange automatically), then
 	 * announce ONE worktree_removed toast. Never fired for UI-initiated
 	 * delete_worktree/remove paths, which evict directly and must not toast.
 	 */
@@ -806,7 +806,7 @@ class FleetServerImpl implements FleetServer {
 			);
 			// `this.edge` is assigned AFTER the supervisor in the constructor,
 			// but this hook can only fire during git-state polling, which
-			// starts after the edge assignment — optional chaining guards any
+			// starts after the edge assignment, so optional chaining guards any
 			// earlier synchronous trigger regardless.
 			this.edge?.announceWorktreeRemoved({
 				daemonId: entry.daemonId,
@@ -870,7 +870,7 @@ class FleetServerImpl implements FleetServer {
 	async #handleSettingsSet(req: Request): Promise<Response> {
 		const body = await readJson(req);
 		const path = requireString(body, "path");
-		// value is arbitrary JSON (boolean/number/string/array/object) —
+		// value is arbitrary JSON (boolean/number/string/array/object);
 		// coercion happens schema-side, so never requireString it.
 		const value = body["value"];
 		try {
@@ -974,13 +974,13 @@ class FleetServerImpl implements FleetServer {
 	 * DELETE /ctl/worktrees/:daemonId {deleteBranch?}: stop the daemon,
 	 * evict it from the roster, then git-remove the managed worktree (and
 	 * optionally `git branch -d` it). The ownership + dirty guards run
-	 * BEFORE any mutation: a refusal (403 not owned / 409 dirty — no
+	 * BEFORE any mutation: a refusal (403 not owned / 409 dirty; no
 	 * --force in v1) leaves the roster and daemon untouched. Session
 	 * transcripts live under the agent dir, never inside the worktree, so
 	 * nothing outside workspaceDir is ever removed.
 	 */
 	async #handleDeleteWorktree(req: Request, daemonId: string): Promise<Response> {
-		// The body is optional (`{ deleteBranch?: boolean }`) — a bodyless
+		// The body is optional (`{ deleteBranch?: boolean }`); a bodyless
 		// DELETE must not 400.
 		const raw = await req.text();
 		let body: Record<string, unknown>;

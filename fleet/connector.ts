@@ -1,42 +1,42 @@
 /**
  * DaemonConnector: the fleet's per-daemon SSE client.
  *
- * Dials the daemon's registered endpoint over HTTP (R14 — the bearer token
- * rides the Authorization header, so there is no hello handshake) and drives
- * the status machine off the /events stream:
+ * Dials the daemon's registered endpoint over HTTP (R14). The bearer token
+ * rides the Authorization header, so there is no hello handshake; the
+ * connector drives the status machine off the /events stream:
  *
  *   connect → "connecting" → (hello_ok event) "session" → (first state frame)
  *   "resolving" → (ready frame) "ready"
  *
  * Every ServerFrame arrives as an SSE `frame` event with a monotonic id;
- * the keepalive ping event — and any other unit, including comments — resets
+ * the keepalive ping event, and any other unit including comments, resets
  * the silence deadline. A stream
  * that ends cleanly after a validated hello → "asleep" (cwd +
- * lastSessionFile kept) — the daemon went dormant. A stream that ends in
+ * lastSessionFile kept) because the daemon went dormant. A stream that ends in
  * error, or a dial that never opened, → "reconnecting" with jittered
  * exponential backoff (1s→30s by default) and a fresh dial. A
  * `stream_reset` frame immediately before a clean end marks a daemon-side
  * backpressure drop (the daemon is alive, the stream was too slow): the
- * clean end is then treated as "reconnecting" too — drop-and-resume via
+ * clean end is then treated as "reconnecting" too, drop-and-resume via
  * Last-Event-ID, never "asleep". A dial that
  * never reached hello_ok additionally fires `onDialFailed` so the server can
  * respawn spawned daemons with a fresh token. A 401 (wrong token) is
- * terminal: status "error", no reconnect loop — only a respawn can refresh
+ * terminal: status "error", no reconnect loop; only a respawn can refresh
  * the credential.
  *
  * Commands are POST /command (fire-and-forget accept; answers ride /events).
  * On redial the connector resumes from the last event id seen on the
- * previous stream: `Last-Event-ID: <lastSeq>` — the daemon replays ring
+ * previous stream: `Last-Event-ID: <lastSeq>`. The daemon replays ring
  * deltas with seqs strictly greater than it, so a dropped stream never loses
  * frames.
  *
  * Idle policy: the idle-drop timer is armed when a connection reaches
- * "ready" with no retain() subscribers (never-attached dials — supervisor
+ * "ready" with no retain() subscribers (never-attached dials: supervisor
  * endpoint resolution, /ctl add/provision) and re-armed whenever
  * retain()/release() subscribers drop to zero. On fire the stream is
- * aborted after idleDropMs (default 60s) — "disconnect", no status
- * change — letting the daemon's own idle timer fire (→ asleep) and making
- * the next promptEntry respawn/redial on demand.
+ * aborted after idleDropMs (default 60s) as a "disconnect" that leaves the
+ * status unchanged, letting the daemon's own idle timer fire (→ asleep) and
+ * making the next promptEntry respawn/redial on demand.
  *
  * Liveness: no unit at all (frame event, keepalive ping, or comment) for
  * silenceDeadlineMs (default 30s) means the peer is dead → abort the stream,
@@ -61,7 +61,7 @@ export interface ConnectorEvents {
 	/** Every status transition (the registry entry is already updated). */
 	onStatus?: (entry: RegistryEntry) => void;
 	onHello?: (daemonId: string, hello: Extract<ServerFrame, { type: "hello_ok" }>) => void;
-	/** Transport refused/unreachable — server.ts wires this to supervisor.respawn for mode "spawned". */
+	/** Transport refused/unreachable; server.ts wires this to supervisor.respawn for mode "spawned". */
 	onDialFailed?: (entry: RegistryEntry) => void;
 	/** A reconnect was scheduled: attempt is 1-based, delayMs the backoff wait. */
 	onReconnect?: (daemonId: string, attempt: number, delayMs: number) => void;
@@ -84,7 +84,7 @@ interface Waiter {
 
 interface ConnState {
 	daemonId: string;
-	/** AbortController for the in-flight /events fetch — the socket handle. */
+	/** AbortController for the in-flight /events fetch, the socket handle. */
 	abort: AbortController | null;
 	/** True while a /events response is live (200 + body streaming). */
 	streamOpen: boolean;
@@ -215,12 +215,12 @@ export class DaemonConnector {
 	}
 
 	/**
-	 * Removal-time teardown (#24): superset of disconnect() — abort the
-	 * stream, cancel every timer, reject outstanding waitReady() waiters
-	 * immediately ("daemon removed"), and drop the per-daemon state
+	 * Removal-time teardown (#24): a superset of disconnect(). It aborts the
+	 * stream, cancels every timer, rejects outstanding waitReady() waiters
+	 * immediately ("daemon removed"), and drops the per-daemon state
 	 * (listeners, waiters, retain count) entirely. A removed daemon must not
 	 * leak state behind a gone registry entry, and its waiters must not hang
-	 * until their timeout — the registry removal makes #transition's waiter
+	 * until their timeout; the registry removal makes #transition's waiter
 	 * flush unreachable, so drop() owns the rejection.
 	 */
 	drop(daemonId: string): void {
@@ -304,7 +304,7 @@ export class DaemonConnector {
 	/**
 	 * Resolves on status "ready" WITH a live stream; rejects on status "error"
 	 * or timeout (default 60s). A stale "ready" registry status alone is NOT
-	 * enough — the stream may have been idle-dropped or killed behind the
+	 * enough; the stream may have been idle-dropped or killed behind the
 	 * status's back, and send() would fail right after. Without a live stream
 	 * we wait for a ready transition, which only a fresh dial can produce.
 	 */
@@ -449,7 +449,7 @@ export class DaemonConnector {
 					return;
 				}
 				if (res.status === 401) {
-					// Wrong credential: terminal. No reconnect loop — a respawn
+					// Wrong credential: terminal. No reconnect loop; a respawn
 					// (via onDialFailed) refreshes the token.
 					res.body?.cancel().catch(() => {});
 					this.#transition(
@@ -462,7 +462,7 @@ export class DaemonConnector {
 					return;
 				}
 				if (!res.ok) {
-					// HTTP-level refusal — the dial never reached hello_ok.
+					// HTTP-level refusal, so the dial never reached hello_ok.
 					this.#onStreamEnded(state, { clean: false });
 					return;
 				}
@@ -485,7 +485,7 @@ export class DaemonConnector {
 		try {
 			for await (const unit of parseSseUnits(res.body!)) {
 				if (state.abort !== abort) return; // superseded or dropped
-				// Any unit — frame event, keepalive ping, or comment — proves the
+				// Any unit, whether frame event, keepalive ping, or comment, proves the
 				// peer lives and resets the deadline.
 				this.#armSilenceTimer(state);
 				// Keepalive pings (and any other non-frame event) carry no
@@ -589,7 +589,7 @@ export class DaemonConnector {
 		}
 		state.sawHello = true;
 		// Drivable only AFTER the validated hello (R8 + cwd sanity): state/ready
-		// frames that arrived early only marked sawState/sawReady — replay the
+		// frames that arrived early only marked sawState/sawReady; replay the
 		// furthest ladder position now that the handshake checked out.
 		this.#transitionLadder(
 			state.daemonId,
@@ -626,13 +626,13 @@ export class DaemonConnector {
 		state.streamOpen = false;
 		this.#clearSilenceTimer(state);
 		state.abort = null;
-		if (state.closed) return; // disconnect()/close() — intentional, no status change
+		if (state.closed) return; // disconnect()/close(), intentional, so no status change
 		const entry = this.#registry.get(state.daemonId);
 		if (!entry) return;
 		if (entry.status === "error") return; // error is terminal: never overwrite or redial
 		if (opts.clean) {
 			// A stream_reset frame just before EOF marks a backpressure drop:
-			// the daemon is alive and the stream was too slow — drop-and-resume
+			// the daemon is alive and the stream was too slow; drop-and-resume
 			// (reconnecting + Last-Event-ID), never dormant.
 			const reset = state.sawReset;
 			state.sawReset = false;
@@ -671,7 +671,7 @@ export class DaemonConnector {
 	 * Readiness-ladder transitions are monotonic: connecting < session <
 	 * resolving < ready, and "error" is never overwritten. A real
 	 * omp-session sends its attach priming (state, and ready when the gate
-	 * already cleared) BEFORE it answers our hello — an out-of-order
+	 * already cleared) BEFORE it answers our hello; an out-of-order
 	 * hello_ok/state must not downgrade an already-ready daemon.
 	 */
 	#transitionLadder(daemonId: string, status: "session" | "resolving" | "ready"): void {

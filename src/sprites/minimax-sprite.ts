@@ -1,5 +1,5 @@
 /**
- * MiniMax — 16-bit style pixel-art "alive" robot avatar, colored after the
+ * MiniMax, a 16-bit style pixel-art "alive" robot avatar, colored after the
  * MiniMax logo (coral #ec5e41 body, MiniMax Crimson #b4393c shade, orange
  * accents) with cyan LED eyes for contrast.
  *

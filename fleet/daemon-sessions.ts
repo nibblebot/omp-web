@@ -2,15 +2,15 @@
  * Fleet-side session listing for the roster dropdown: the last N sessions of
  * a daemon's worktree, newest-first.
  *
- * The listing goes through the SDK's own SessionManager (LAZY dynamic import
- * — same "fleet stays SDK-free at static-import time" rule as
+ * The listing goes through the SDK's own SessionManager (a LAZY dynamic
+ * import, the same "fleet stays SDK-free at static-import time" rule as
  * fleet/omp-check.ts) so the per-cwd session-dir derivation, HOME/TMP
  * encoding, legacy-dir migration, and scan caching are the SDK's canonical
  * implementation rather than a second convention.
  *
  * Agent-dir resolution: `agentDir` is an OPTIONAL test seam. Production never
  * passes it, so the SDK derives the dir from the fleet process env
- * (`PI_CODING_AGENT_DIR` or the platform default) — which matches production
+ * (`PI_CODING_AGENT_DIR` or the platform default), which matches production
  * spawns, since the DEFAULT_LOCAL_TEMPLATE spawns daemons inheriting the
  * fleet's environment. Dev/test templates that override the agent dir per
  * daemon are out of scope here.
@@ -28,7 +28,7 @@ function safeLine(value: string | undefined): string | undefined {
 
 /**
  * Friendly dropdown label: explicit title, then the first user prompt, then
- * a timestamp fallback — the raw session id is never shown (mirrors the
+ * a timestamp fallback; the raw session id is never shown (mirrors the
  * SDK's own sessionDisplayName behavior; that helper is module-private).
  */
 function sessionDisplayName(info: {
@@ -50,7 +50,7 @@ function sessionDisplayName(info: {
 
 /**
  * The last `limit` sessions in a cwd's session dir, newest-modified first.
- * Never throws — any failure (SDK import, unreadable dir, bad env) returns
+ * Never throws; any failure (SDK import, unreadable dir, bad env) returns
  * an empty list so the roster dropdown degrades to "no sessions" instead of
  * erroring the whole row.
  */

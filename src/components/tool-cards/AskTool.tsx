@@ -4,7 +4,8 @@ import { CollapsiblePre, ToolShell } from "./ToolShell";
 
 type AskQuestion = { id?: string; question?: string; options?: { label?: string }[] };
 
-/** ask tool: settled Q&A card — question from args, chosen answer from result. */
+/** ask tool: settled Q&A card, with the question from args and the chosen
+ *  answer from result. */
 export const AskTool: Component<{ item: ToolItem }> = (props) => {
 	const args = () => (props.item.args as { questions?: AskQuestion[] } | null) ?? {};
 	const question = () => args().questions?.[0]?.question ?? "";

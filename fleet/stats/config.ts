@@ -12,7 +12,7 @@
  * relative paths the DB schema comment implies. Everything is normalized
  * through fleet/stats/paths.ts.
  *
- * The fleet control plane owns the listen port — no port/host here.
+ * The fleet control plane owns the listen port, so no port/host here.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";

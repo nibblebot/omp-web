@@ -3,8 +3,8 @@
  *
  * Card collapse is keyed by entry id; individual <details> elements are
  * keyed by `${entryId}:${purpose}`. Manual <details> toggles live in a
- * manual map that page-appends NEVER touch — only an explicit
- * expand/collapse-all click clears it — so loading the next page cannot
+ * manual map that page-appends NEVER touch; only an explicit
+ * expand/collapse-all click clears it, so loading the next page cannot
  * clobber a toggle the user set by hand (audit Phase 3 finding).
  */
 import { createContext, createSignal, useContext } from "solid-js";

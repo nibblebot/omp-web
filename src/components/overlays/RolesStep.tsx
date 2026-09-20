@@ -8,8 +8,8 @@ import { useClickableRow } from "../shared/PickerRow";
 
 /**
  * Step 1 of the model-role wizard: the role catalog (visible + collapsible
- * hidden sections) and the storage-scope note. Rows are composite — each
- * carries nested clear/hide action buttons — so they stay div +
+ * hidden sections) and the storage-scope note. Rows are composite, each
+ * carrying nested clear/hide action buttons, so they stay div +
  * useClickableRow rather than PickerRow (a real <button> cannot nest
  * buttons). Navigation is handed up via onPickRole; the hidden-section
  * expansion lives in ModelModal so it survives step navigation.
@@ -38,7 +38,7 @@ export const RolesStep: Component<{
 							classList={{ active: isActiveRole(entry) }}
 							aria-pressed={isActiveRole(entry)}
 							{...useClickableRow(() => props.onPickRole(entry))}
-							title={`${entry.tag ?? entry.name} — pick a model`}
+							title={`${entry.tag ?? entry.name}, pick a model`}
 						>
 							<Show when={entry.provider && entry.id}>
 								<CharacterAvatar

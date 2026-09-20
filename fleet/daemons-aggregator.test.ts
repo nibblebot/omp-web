@@ -1,6 +1,6 @@
 /**
  * Aggregated daemons panel (Phase 4/5): pure merge/cache semantics of
- * fleet/daemons-aggregator.ts — cross-daemon merging keyed by
+ * fleet/daemons-aggregator.ts, covering cross-daemon merging keyed by
  * `${projectDir}\u0000${name}`, same-projectDir preference, latest-wins
  * tie-breaks, full-replace ingest, and removal eviction. The browser-facing
  * integration (broadcast on update/open, pipe stripping, registry-removal
@@ -62,7 +62,7 @@ describe("mergeDaemonRosters", () => {
 			new Map([
 				// d1 owns /a: its "shared" is older but authoritative.
 				["d1", source("/a", 10, info("shared", "/a", { pid: 111 }))],
-				// d2 (cwd /b) reports the same key later — recency loses.
+				// d2 (cwd /b) reports the same key later; recency loses.
 				["d2", source("/b", 20, info("shared", "/a", { pid: 222 }))],
 			]),
 		);

@@ -69,7 +69,7 @@ async function makeRepo(dir: string): Promise<void> {
 	await gitOk(dir, ["commit", "-q", "-m", "init"]);
 }
 
-/** A repo cloned from a local file:// remote — clone sets origin/HEAD. */
+/** A repo cloned from a local file:// remote, so clone sets origin/HEAD. */
 async function makeClonedRepo(): Promise<{ clone: string }> {
 	const remote = tmpDir();
 	const clone = tmpDir();
@@ -225,7 +225,7 @@ describe("createWorktree", () => {
 		const repo = tmpDir();
 		await makeRepo(repo);
 		const ws = tmpDir();
-		// `main` is checked out in the main checkout — cannot attach it.
+		// `main` is checked out in the main checkout, so it cannot be attached.
 		await expect(
 			createWorktree(projectFor(repo), "x", { workspaceDir: ws, existingBranch: "main" }),
 		).rejects.toBeInstanceOf(WorktreeBranchCheckedOutError);
@@ -402,7 +402,7 @@ describe("deleteWorktree", () => {
 		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(a.path);
 	});
 
-	test("refuses a path outside workspaceDir — nothing out-of-tree is ever removed", async () => {
+	test("refuses a path outside workspaceDir, nothing out-of-tree is ever removed", async () => {
 		const repo = tmpDir();
 		await makeRepo(repo);
 		const ws = tmpDir();
@@ -461,7 +461,7 @@ describe("registerWorktreeEntry", () => {
 		expect(entry.cwd).toBe(a.path);
 		expect(entry.projectId).toBe("p7");
 		expect(entry.worktreeOf).toBe(repo.split("/").pop()!);
-		// The resolved template name is stored like spawn() stores it —
+		// The resolved template name is stored like spawn() stores it, since
 		// respawn() keys off entry.template.
 		expect(entry.template).toBe("test");
 		expect(registry.get(entry.daemonId)).toBeDefined();
@@ -490,7 +490,7 @@ describe("registerProjectMainEntry", () => {
 			status: "asleep",
 		});
 		// NO worktreeOf: the main checkout is the repo itself and stays
-		// untagged (SidebarGroups' hasMain depends on it) — unlike a
+		// untagged (SidebarGroups' hasMain depends on it), unlike a
 		// registered worktree, which carries the owning repo's name.
 		expect(entry.worktreeOf).toBeUndefined();
 		// The resolved template name is always stored (respawn keys off it).

@@ -111,7 +111,7 @@ export function percentile(vals: number[], p: number): number {
 /**
  * Welch's t statistic comparing two samples; NaN when either side has fewer
  * than 2 values (variance undefined). |t| > 2 is the normal-approximation
- * significance threshold — adequate when each side has >= 3 samples.
+ * significance threshold, adequate when each side has >= 3 samples.
  */
 export function welch(a: number[], b: number[]): number {
 	if (a.length < 2 || b.length < 2) return NaN;
@@ -462,7 +462,7 @@ function fmtPct(cv: number): string {
 	return `${(cv * 100).toFixed(1)}%`.padStart(7);
 }
 
-/** t value, flagged with `*` when |t| > 2; `—` when not computable. */
+/** t value, flagged with `*` when |t| > 2; an em dash when not computable. */
 function fmtT(v: number): string {
 	if (!Number.isFinite(v)) return "—".padStart(8);
 	return `${v.toFixed(2)}${Math.abs(v) > 2 ? "*" : ""}`.padStart(8);
@@ -501,7 +501,7 @@ interface ReportRow {
 function report(lastN: number): void {
 	const records = loadHistory();
 	if (records.length === 0) {
-		console.error("no bench records yet — run `bun run bench run` first");
+		console.error("no bench records yet. Run `bun run bench run` first");
 		process.exit(1);
 	}
 	const window = records.slice(-Math.max(1, lastN));
@@ -537,7 +537,7 @@ function report(lastN: number): void {
 					: null,
 		});
 	}
-	// |t| descending; rows without a computable t (—) sort last.
+	// |t| descending; rows without a computable t (an em dash) sort last.
 	rows.sort((a, b) => {
 		const ta = Number.isFinite(a.t) ? Math.abs(a.t) : 0;
 		const tb = Number.isFinite(b.t) ? Math.abs(b.t) : 0;
@@ -566,7 +566,7 @@ function report(lastN: number): void {
 	console.log(`window: ${window.length} record(s), ${ok.length} ok, ${failed} failed`);
 	console.log(
 		"stats: mean/sd/p50/p95/CV% over successful records' samples (runs[] when present, else v1 files median); " +
-			"t = Welch's t vs baseline, * = |t| > 2 (normal-approximation threshold, adequate for n ≥ 3 per side; — when n < 3 or no baseline)",
+			"t = Welch's t vs baseline, * = |t| > 2 (normal-approximation threshold, adequate for n ≥ 3 per side; a dash when n < 3 or no baseline)",
 	);
 	if (baseline && last && baseline.machine.cpu !== last.machine.cpu) {
 		console.warn(
@@ -589,7 +589,7 @@ interface FlakeStat {
 function flakes(lastN: number): void {
 	const records = loadHistory();
 	if (records.length === 0) {
-		console.error("no bench records yet — run `bun run bench run` first");
+		console.error("no bench records yet. Run `bun run bench run` first");
 		return;
 	}
 	const window = records.slice(-Math.max(1, lastN));
@@ -650,7 +650,7 @@ function flakes(lastN: number): void {
 function setBaseline(): void {
 	const records = loadHistory();
 	if (records.length === 0) {
-		console.error("no bench records yet — run `bun run bench run` first");
+		console.error("no bench records yet. Run `bun run bench run` first");
 		process.exit(1);
 	}
 	const latest = records[records.length - 1];

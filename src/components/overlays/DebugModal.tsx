@@ -12,13 +12,13 @@ import { LastFrameClock } from "./LastFrameClock";
 import { LogRing } from "./LogRing";
 
 // ---------------------------------------------------------------------------
-// Debug panel: an engineer's view of BOTH halves of the connection loop —
+// Debug panel: an engineer's view of BOTH halves of the connection loop:
 // the browser transport (state.ts ring) and the fleet control plane
 // (GET /ctl/debug via the fetchFleetDebug state action → vite's /ctl proxy →
 // 127.0.0.1:4722). In single-session mode (or while the fleet boots) the
 // /ctl fetch fails with a connection refused; that is the EXPECTED state and
 // renders as a notice, not a crash. Tolerant parsing: unknown/absent fields
-// degrade to "—" instead of throwing on a half-landed payload.
+// degrade to an em dash placeholder instead of throwing on a half-landed payload.
 // ---------------------------------------------------------------------------
 
 export const DebugModal: Component<{ onClose: () => void }> = (props) => {
@@ -218,7 +218,7 @@ export const DebugModal: Component<{ onClose: () => void }> = (props) => {
 					<h3 class="debug-section-title">Fleet log</h3>
 					<LogRing
 						entries={() => fleet()?.log ?? []}
-						empty="no fleet log — control plane unreachable"
+						empty="no fleet log, control plane unreachable"
 					/>
 				</section>
 

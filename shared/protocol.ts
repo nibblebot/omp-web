@@ -26,7 +26,10 @@ export interface ModelRoleCatalogEntry {
 	role: string;
 	/** Display name from getRoleInfo (built-in name or configured modelTags override). */
 	name: string;
-	/** TUI-parity tag from getRoleInfo (e.g. SMOL, PLAN); absent for custom roles — render `tag ?? name`. */
+	/**
+	 * TUI-parity tag from getRoleInfo (e.g. SMOL, PLAN); absent for custom
+	 * roles, so render `tag ?? name`.
+	 */
 	tag?: string;
 	/** Hidden roles stay functional but are filtered from picker view (modelTags.<role>.hidden). */
 	hidden: boolean;
@@ -197,8 +200,9 @@ export const SSE_SILENCE_DEADLINE_MS = 30_000;
 export const SSE_RING_CAP = 10_000;
 /**
  * Byte budget for one replay ring (finding #5): a ring must be bounded in
- * BYTES, not just entries — multi-megabyte deltas (large bash chunks, base64
- * image payloads) across thousands of entries would otherwise balloon memory.
+ * BYTES, not only in entries. Multi-megabyte deltas (large bash chunks,
+ * base64 image payloads) across thousands of entries would otherwise
+ * balloon memory.
  * Sized at 2× SSE_BACKPRESSURE_BYTES so the ring comfortably holds the
  * post-drop replay window of a stream that was buffered up to the cap. The
  * entry cap (SSE_RING_CAP) remains a secondary bound for many-small-delta
@@ -210,7 +214,7 @@ export const SSE_RING_BYTES = 8 * 1024 * 1024;
  * Priming frames carry seqs 1..k (k < SSE_DELTA_SEQ_START) per stream, so a
  * Last-Event-ID below this value means "stale/empty client: priming already
  * carries full current state". The daemon replays ring deltas with
- * seq > max(lastEventId, snapshotSeq-1) — the snapshot mark (the next delta
+ * seq > max(lastEventId, snapshotSeq-1). The snapshot mark (the next delta
  * seq captured before the priming snapshot is built) bounds the overlap, so
  * a resume never re-delivers deltas whose effects are inside the fresh
  * priming (finding #2: no duplicated items after a resume).
@@ -232,7 +236,7 @@ export const OMP_SESSION_PREFIX = "OMP_SESSION|";
  * bind.
  *
  * NOTE: the advertised `url` is ws-shaped (`ws://host:port`) for legacy
- * reasons — OMP_PROTO 2 is plain HTTP SSE, and the fleet's dial path
+ * reasons; OMP_PROTO 2 is plain HTTP SSE, and the fleet's dial path
  * normalizes the scheme via daemonHttpBase (fleet/connector.ts). Consumers
  * must never treat it as a WebSocket endpoint.
  */
@@ -266,7 +270,7 @@ export interface DaemonEntry {
 	projectId?: string;
 	/**
 	 * True when the entry's cwd realpath lives under the fleet workspaceDir
-	 * (a managed worktree — eligible for worktree deletion; source: fleet
+	 * (a managed worktree, eligible for worktree deletion; source: fleet
 	 * edge roster). Absent when not managed; older edges omit it.
 	 */
 	managed?: boolean;
@@ -311,7 +315,7 @@ export interface ProjectEntry {
 export interface ProjectBranch {
 	/** Short branch name (refs/heads/ stripped). */
 	name: string;
-	/** True when checked out in some worktree — git refuses a second checkout. */
+	/** True when checked out in some worktree; git refuses a second checkout. */
 	checkedOut: boolean;
 	/** Where it is checked out (main checkout or linked worktree), when checkedOut. */
 	worktreePath?: string;
@@ -355,7 +359,7 @@ export type WebMethodName =
 	| "handoff"
 	| "setSessionName"
 	| "setInterruptMode"
-	// Phase 9 (17.1.8): goal/plan modes are NOT ACP-intercepted — /goal and
+	// Phase 9 (17.1.8): goal/plan modes are NOT ACP-intercepted; /goal and
 	// /plan fall through to the model. Control relays via these SDK rows.
 	| "setGoalModeState"
 	| "setPlanModeState"
@@ -448,13 +452,13 @@ export type ClientCommand =
 	| { type: "spawn_resume"; id: string; daemonId: string; sessionFile?: string }
 	| { type: "stop"; id: string; daemonId: string }
 	// Fleet edge only: list sessions in a daemon's worktree (fleet-edge handled,
-	// answered with a unicast `daemon_sessions` frame — a bare omp-session
+	// answered with a unicast `daemon_sessions` frame; a bare omp-session
 	// rejects it like the other fleet-only commands).
 	| { type: "list_daemon_sessions"; id: string; daemonId: string }
 	// Stop the daemon AND evict it from the roster (registry removal).
 	| { type: "remove"; id: string; daemonId: string }
-	// First-class project registration (add_project registers the realpath —
-	// deduped — and optionally spawns a daemon on the main checkout with
+	// First-class project registration (add_project registers the realpath,
+	// deduped, and optionally spawns a daemon on the main checkout with
 	// template/labels passthrough; answers ride the registered_projects /
 	// roster broadcasts + error frames).
 	| {
@@ -561,7 +565,7 @@ export type ServerFrame =
 	// Unicast answer to list_sessions.
 	| { type: "sessions"; sessions: SessionListEntry[] }
 	// Unicast answer to list_daemon_sessions (the fleet edge answers it directly;
-	// NOT ringed — lost answers are re-POSTed like projects).
+	// NOT ringed; lost answers are re-POSTed like projects).
 	| { type: "daemon_sessions"; daemonId: string; sessions: SessionListEntry[] }
 	// Unicast answer to list_files.
 	| { type: "files"; files: string[] }
@@ -590,7 +594,7 @@ export type ServerFrame =
 	| { type: "daemon_control_result"; id: string; ok: boolean; daemon?: DaemonInfo; error?: string }
 	// Unicast answer to attach (fleet edge): settles the client's pending
 	// attach by command id. Success carries the daemonId as sessionId;
-	// failure carries the error. Added OMP_PROTO 2 additively — an older edge
+	// failure carries the error. Added OMP_PROTO 2 additively; an older edge
 	// that ignores the attach id never sends this frame, and the client's
 	// pending-map timeout backstops it.
 	| { type: "attach_result"; id: string; ok: boolean; sessionId?: string; error?: string }
@@ -625,7 +629,7 @@ export type ServerFrame =
 	// daemon frame stream and broadcast ONLY on change; primed once per known
 	// daemon when a browser stream opens. Never carries a sessionId (it is
 	// per-daemon, not per-attachment), never persisted, and never carries
-	// tokens/endpoints — daemons never send it, so the edge's pipe forwarder
+	// tokens/endpoints; daemons never send it, so the edge's pipe forwarder
 	// strips it like `daemons` broker rosters.
 	| {
 			type: "daemon_activity";
@@ -637,7 +641,7 @@ export type ServerFrame =
 	// registry's project set changes (same trigger as the roster broadcast)
 	// AND during new-stream priming (near the roster frame), so project
 	// groups with zero daemons still render. Never carries tokens/endpoints.
-	// `configPath` (additive, Phase 4) is the resolved fleet config path —
+	// `configPath` (additive, Phase 4) is the resolved fleet config path,
 	// null when no config file exists (defaults apply); the roster's
 	// first-run signal. Older edges omit it; clients treat it as null.
 	| {
@@ -649,8 +653,8 @@ export type ServerFrame =
 	// daemon's cwd vanished between git-state poll ticks). Ringed so a
 	// Last-Event-ID resume within the reclaim window still delivers the
 	// toast once (client-side ring dedup guards the replay). Fleet-edge-only
-	// (a bare omp-session never sends it) and never carries tokens/endpoints
-	// — just daemonId + display name + the vanished path. Never sent for
+	// (a bare omp-session never sends it) and never carries tokens/endpoints,
+	// just daemonId + display name + the vanished path. Never sent for
 	// UI-initiated delete_worktree/remove.
 	| { type: "worktree_removed"; daemonId: string; name: string; path: string }
 	// Unicast answer to list_projects.

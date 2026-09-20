@@ -1,6 +1,6 @@
 /**
  * Degradation tests: /ctl/stats/sessions and /ctl/stats/tools must survive
- * stats.db trouble with JSON responses — never a 500.
+ * stats.db trouble with JSON responses, never a 500.
  *
  *   - missing stats.db        → /ctl/stats/tools 503, sessions 200 disk-only rows
  *   - corrupt stats.db        → same (garbage bytes)
@@ -8,7 +8,7 @@
  *
  * createStatsApp is one-per-process, so a single app is created against a
  * tmpdir and the stats.db file is swapped between phases. The stats app has
- * no ctx surface — reprobing is triggered the same way production does it:
+ * no ctx surface; reprobing is triggered the same way production does it:
  * a GET /ctl/stats/health (the health route re-probes per request).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -66,7 +66,7 @@ describe("stats.db degradation", () => {
 			sessionsDir,
 		};
 		mkdirSync(cfg.configRoot, { recursive: true });
-		// No stats.db yet — the manager starts with a null handle.
+		// No stats.db yet, so the manager starts with a null handle.
 		app = createStatsApp(cfg);
 	});
 
@@ -126,7 +126,7 @@ describe("stats.db degradation", () => {
 		const sessions = await get("/ctl/stats/sessions");
 		if (!sessions) throw new Error("expected response");
 		await expectDegradedSessions(sessions);
-		// Tool filter is db-backed; with a broken db it is an explicit 503 —
+		// Tool filter is db-backed; with a broken db it is an explicit 503,
 		// never a false "no sessions use this tool" empty list.
 		const filtered = await get("/ctl/stats/sessions?tool=edit");
 		if (!filtered) throw new Error("expected response");

@@ -10,8 +10,8 @@ const STAGES = ["registering project", "spawning daemon", "attaching session"];
 
 /**
  * Add-repo modal (Phase 6): register a first-class project with the fleet by
- * PICKING A DIRECTORY in the embedded DirPicker — no freeform path input and
- * no root-scanned discovery list (fleet roots are gone edge-side; the
+ * PICKING A DIRECTORY in the embedded DirPicker, with no freeform path input
+ * and no root-scanned discovery list (fleet roots are gone edge-side; the
  * `projects` frame now carries only unregistered worktrees, which belong to
  * the worktree modal). The retired SpawnPicker's template/labels fields live
  * in the collapsed advanced section here. "Start a session now" (default
@@ -55,7 +55,7 @@ export const AddProjectModal: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	/** Known non-git selection: inline hint + disabled submit. An UNKNOWN git
-	 *  bit (manual/breadcrumb/up navigation) does not gate — the edge's
+	 *  bit (manual/breadcrumb/up navigation) does not gate; the edge's
 	 *  validateProjectPath answers an error frame either way. */
 	const notGit = () => path() !== null && pathGit() === false;
 	const canSubmit = () => path() !== null && !notGit();

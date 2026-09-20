@@ -37,7 +37,7 @@ import type {
 // builds the wire SettingsModel, coerces incoming values exactly like the
 // TUI's #setSettingValue, and replays the web-relevant subset of the TUI's
 // handleSettingChange side effects on the live AgentSession. `settings` is
-// the shared Settings singleton (Settings.instance) — settings.set() already
+// the shared Settings singleton (Settings.instance); settings.set() already
 // updates the in-process merged view and persists (debounced) to disk, which
 // IS the TUI semantics; this module never touches the filesystem itself.
 // ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ export function coerceSettingValue(path: string, value: unknown): unknown {
 	}
 	if (typeof currentValue === "boolean") return value === true || value === "true";
 	// Optional/credential strings start undefined (never set); the TUI's
-	// fallback stores the raw input in that case — mirror it here.
+	// fallback stores the raw input in that case; mirror it here.
 	if (typeof currentValue === "string" || currentValue === undefined || currentValue === null)
 		return String(value);
 	if (Array.isArray(currentValue)) {
@@ -128,7 +128,7 @@ export function coerceSettingValue(path: string, value: unknown): unknown {
 /**
  * Web-relevant subset of the TUI's handleSettingChange: session setters and
  * runtime preference updates. settings.set() (persist) already ran in the
- * caller for schema paths — this switch only applies live side effects, so
+ * caller for schema paths; this switch only applies live side effects, so
  * TUI-only rendering side effects are skipped and unknown paths are rejected
  * upstream by coerceSettingValue.
  */

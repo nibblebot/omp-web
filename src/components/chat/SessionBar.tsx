@@ -25,7 +25,7 @@ const ContextSegment: Component = () => {
 };
 
 /** Session-send configuration (model, thinking) plus the session resource
- *  meters (ctx fill, cumulative stats) — pinned directly above the composer,
+ *  meters (ctx fill, cumulative stats), pinned directly above the composer,
  *  where the send decision happens. Live turn-state (retry, badges) and
  *  global chrome stay in StatusBar. */
 export const SessionBar: Component = () => (

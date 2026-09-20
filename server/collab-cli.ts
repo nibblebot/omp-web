@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Collab CLI: start (or stop) the collab room for the daemon's session and
- * print the `omp join` links — no browser needed.
+ * print the `omp join` links; no browser needed.
  *
  *   bun server/collab-cli.ts                 # start collab, print write + view links
  *   bun server/collab-cli.ts --join          # …and immediately `omp join` the write link
@@ -85,7 +85,7 @@ function openEvents(port: number): Promise<{ close: () => void; frames: FrameCol
 		controller.abort();
 		reject(
 			new Error(
-				`timed out connecting to http://127.0.0.1:${port}/events — is the daemon running? (bun dev:server; port from --port or OMP_SESSION_PORT)`,
+				`timed out connecting to http://127.0.0.1:${port}/events. Is the daemon running? (bun dev:server; port from --port or OMP_SESSION_PORT)`,
 			),
 		);
 	}, 5_000);
@@ -102,7 +102,7 @@ function openEvents(port: number): Promise<{ close: () => void; frames: FrameCol
 				else if (frame.type === "error") frames.errors.push(frame.error);
 			}
 		} catch (err) {
-			if (controller.signal.aborted) return; // close() — expected teardown
+			if (controller.signal.aborted) return; // aborted by close(), which is expected teardown
 			reject(err instanceof Error ? err : new Error(String(err)));
 		}
 	})();
@@ -136,7 +136,7 @@ function printLinks(roomId: string, link: string, viewLink: string): void {
  * collab_start transitions off → live. Throws on collab_status error frames,
  * global error frames that arrive AFTER our collab_start was sent (except
  * the already-active notice), and timeout. `errorBase` is the collector's
- * error count at the moment collab_start was sent — global errors the
+ * error count at the moment collab_start was sent; global errors the
  * daemon broadcasts for UNRELATED failures (fireAndForgetPrompt, resync,
  * non-call commands) must not be read as collab_start failures (#17);
  * collab failures proper arrive as collab_status error frames above.
@@ -157,7 +157,7 @@ async function awaitLiveRoom(
 		if (error && !error.includes("collab already active for this session")) {
 			throw new Error(`collab_start failed: ${error}`);
 		}
-		// "collab already active": another client started the room — the live
+		// "collab already active": another client started the room. The live
 		// status arrives via the adapter's onStatusChange broadcast, so just wait.
 		await Bun.sleep(50);
 	}
@@ -176,7 +176,7 @@ async function main(): Promise<number> {
 	if (opts.stop) {
 		await send(opts.port, { type: "collab_stop", id: crypto.randomUUID() });
 		// #17: correlate global error frames only after our collab_stop was
-		// sent — the daemon broadcasts global errors for unrelated failures
+		// sent; the daemon broadcasts global errors for unrelated failures
 		// (fireAndForgetPrompt, resync, non-call commands) too.
 		const errorBase = frames.errors.length;
 		let sawActive = false;

@@ -15,7 +15,7 @@ Stopping also cancels a pending automatic retry.
 
 A failed turn leaves an error on the transcript. Two mechanisms can re-run it.
 
-**Manual retry.** `/retry` reruns the last failed assistant turn while the session is idle. When there is nothing to retry, or the session is busy, the stream reports `Nothing to retry — no failed turn or the session is busy.`
+**Manual retry.** `/retry` reruns the last failed assistant turn while the session is idle. When there is nothing to retry, or the session is busy, the stream reports `Nothing to retry; no failed turn or the session is busy.`
 
 **Automatic retry.** When a provider error is classified as transient, the session retries the turn itself:
 
@@ -42,7 +42,7 @@ Compact is not destructive to the transcript: the session file keeps its entries
 
 ## Reset provider state
 
-`/fresh` closes the session's provider streams and gives it a new provider session id while keeping the transcript. Use it when a provider session has gone stale or when you want a clean provider-side conversation after changing models or providers. The stream reports `Fresh session — provider state reset, transcript kept.`
+`/fresh` closes the session's provider streams and gives it a new provider session id while keeping the transcript. Use it when a provider session has gone stale or when you want a clean provider-side conversation after changing models or providers. The stream reports `Fresh session; provider state reset, transcript kept.`
 
 If a turn is streaming, omp-web asks you to confirm first, because resetting provider state mid-turn can fail the running turn.
 

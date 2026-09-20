@@ -3,7 +3,7 @@ import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
 import { setState, state } from "../state";
 
 /**
- * Transport domain (Phase 3 store facade split): the RPC/relay layer —
+ * Transport domain (Phase 3 store facade split): the RPC/relay layer,
  * POST /command uplink, the call() id-keyed promise map, fleet attach, and
  * the per-daemon logs/stop/restart RPCs. The /events downlink itself
  * (connect() and its onmessage mux) stays in state.ts; this module owns the
@@ -12,8 +12,8 @@ import { setState, state } from "../state";
 
 // ---------------------------------------------------------------------------
 // Client-side debug ring (Debug panel): every transport lifecycle event lands
-// here, oldest first; the panel renders the newest entry last. Capped ring —
-// the oldest entries drop past DEBUG_RING_CAP.
+// here, oldest first; the panel renders the newest entry last. Capped ring.
+// The oldest entries drop past DEBUG_RING_CAP.
 // ---------------------------------------------------------------------------
 export const DEBUG_RING_CAP = 300;
 
@@ -47,11 +47,11 @@ export function setTransportToken(value: string | null): void {
 /** One page-scoped client id: the fleet edge matches it across the /events
  *  stream and POST /command to route anonymous commands to the owning browser
  *  stream (a bare omp-session ignores both). Shown (truncated) in the Debug
- *  panel; not a secret — it already rides the query string and headers. */
+ *  panel; not a secret, as it already rides the query string and headers. */
 export const clientId = crypto.randomUUID();
 
 /**
- * Uplink: POST one ClientCommand to /command (202 fire-and-forget accept —
+ * Uplink: POST one ClientCommand to /command (202 fire-and-forget accept;
  * answers ride the /events stream only). A non-2xx rejects here so the
  * caller's pending promise settles instead of hanging until timeout.
  */
@@ -90,7 +90,7 @@ export function rejectPendingCalls(err: Error): void {
 }
 
 /**
- * True when a rejected call was superseded by a session/daemon switch — the
+ * True when a rejected call was superseded by a session/daemon switch. The
  * in-flight call's result is stale by design (state.ts rejects pending calls
  * with this message when an `attached` frame lands for another session).
  * Switching sessions is expected control flow, NEVER a user-facing error.
@@ -142,7 +142,7 @@ export function call(
 // the daemon's own priming (history/state/available_commands) follows the
 // proxied attached frame. A bare omp-session never receives attach (its
 // sockets are attached from upgrade). An older edge that ignores the attach
-// id never sends the keyed frame — the DAEMON_TIMEOUT_MS backstop settles
+// id never sends the keyed frame; the DAEMON_TIMEOUT_MS backstop settles
 // the waiter then (#31-style pending map).
 // ---------------------------------------------------------------------------
 let pendingAttach: {
@@ -169,7 +169,7 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 	}
 	// Phase 5: an armed picker gate (a start:true onboarding sender ran but
 	// could not know the spawned daemon's id) is stamped with the REAL
-	// daemonId now that the attach fires — the attach_result handler matches
+	// daemonId now that the attach fires; the attach_result handler matches
 	// against exactly this.
 	if (state.pendingSessionPicker !== null) setState("pendingSessionPicker", cmd.sessionId);
 	const id = cmd.id;
@@ -178,7 +178,7 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 			? window.setTimeout(() => {
 					if (pendingAttach?.id === id) {
 						pendingAttach = null;
-						// The armed gate's attach failed — disarm it.
+						// The armed gate's attach failed; disarm it.
 						if (state.pendingSessionPicker === cmd.sessionId)
 							setState("pendingSessionPicker", null);
 						reject(new Error("attach timed out"));
@@ -191,7 +191,7 @@ function requestAttach(cmd: AttachCmd): Promise<string> {
 			clearTimeout(pendingAttach.timer);
 			pendingAttach = null;
 		}
-		// The armed gate's attach failed — disarm it.
+		// The armed gate's attach failed; disarm it.
 		if (state.pendingSessionPicker === cmd.sessionId) setState("pendingSessionPicker", null);
 		reject(err instanceof Error ? err : new Error(String(err)));
 	});
@@ -233,7 +233,7 @@ export function settleAttachResult(frame: Extract<ServerFrame, { type: "attach_r
 	if (frame.ok && frame.sessionId !== undefined) {
 		pending.resolve(frame.sessionId);
 		pushDebug("info", "transport", `attach ok: ${frame.sessionId}`);
-		// Phase 5: the onboarding daemon's attach settled — ask for
+		// Phase 5: the onboarding daemon's attach settled; ask for
 		// its sessions to decide new-vs-resume; the sessions answer
 		// clears the gate (the flag stays set until then).
 		if (state.pendingSessionPicker === frame.sessionId) {
@@ -243,14 +243,14 @@ export function settleAttachResult(frame: Extract<ServerFrame, { type: "attach_r
 			} satisfies ClientCommand).catch(() => {});
 		} else if (state.pendingSessionPicker !== null) {
 			// An armed gate settled against a DIFFERENT daemon: the
-			// onboarding attach was superseded — disarm so it can't
+			// onboarding attach was superseded, so disarm before it can
 			// fire the picker for the wrong daemon.
 			setState("pendingSessionPicker", null);
 		}
 	} else {
 		pending.reject(new Error(frame.error ?? "attach failed"));
 		pushDebug("warn", "transport", `attach failed: ${frame.error ?? "unknown error"}`);
-		// Phase 5: the armed gate's attach failed — disarm it.
+		// Phase 5: the armed gate's attach failed; disarm it.
 		setState("pendingSessionPicker", null);
 	}
 }
@@ -386,7 +386,7 @@ export function restartDaemon(projectDir: string, name: string): Promise<DaemonI
 // Every consumer used to re-implement the same error taxonomy: the proxy
 // answers 502/504 when nothing listens on :4722 (single-session mode, fleet
 // still booting) and fetch() itself rejects with a TypeError when the proxy
-// is down — both are EXPECTED states that render as notices, not crashes.
+// is down. Both are EXPECTED states that render as notices, not crashes.
 // Centralized once here; the actions below add their per-endpoint status
 // messages and body parsing.
 // ---------------------------------------------------------------------------
@@ -400,7 +400,7 @@ export async function ctlFetch(
 	path: string,
 	unreachable: string,
 	statusError: (status: number) => string,
-	/** When set, non-2xx bodies carry the edge's reason ({ error }) — read it
+	/** When set, non-2xx bodies carry the edge's reason ({ error }); read it
 	 *  and return the message to throw instead of the status-only fallback. */
 	readError?: (res: Response) => Promise<string>,
 ): Promise<Response> {
@@ -413,7 +413,7 @@ export async function ctlFetch(
 		const msg = err instanceof Error ? err.message : String(err);
 		throw new Error(/failed to fetch|networkerror|fetch failed/i.test(msg) ? unreachable : msg);
 	}
-	// 502/504: vite's /ctl proxy couldn't reach :4722 — no fleet server
+	// 502/504: vite's /ctl proxy couldn't reach :4722, so no fleet server
 	// (single-session mode, or still booting). Expected.
 	if (res.status === 502 || res.status === 504) throw new Error(unreachable);
 	if (!res.ok) {
@@ -423,33 +423,33 @@ export async function ctlFetch(
 	return res;
 }
 
-/** GET /ctl/debug — fleet control-plane state (raw payload; the Debug panel
+/** GET /ctl/debug, fleet control-plane state (raw payload; the Debug panel
  *  normalizes it tolerantly). Rejects with the panel's established
  *  unreachable/HTTP message vocabulary. */
 export async function fetchCtlDebug(): Promise<unknown> {
 	const res = await ctlFetch(
 		"/ctl/debug",
-		"fleet control plane unreachable — no fleet server on :4722",
+		"fleet control plane unreachable, no fleet server on :4722",
 		(s) => `fleet control plane unreachable (HTTP ${s})`,
 	);
 	return (await res.json()) as unknown;
 }
 
-/** GET /ctl/sessions/{id}/stderr — a daemon's captured stderr tail. */
+/** GET /ctl/sessions/{id}/stderr, a daemon's captured stderr tail. */
 export async function fetchDaemonStderr(daemonId: string): Promise<{ text: string }> {
 	const res = await ctlFetch(
 		`/ctl/sessions/${encodeURIComponent(daemonId)}/stderr`,
-		"fleet control plane unreachable — no fleet server on :4722",
-		(s) => (s === 404 ? "not a spawned daemon — no stderr captured" : `stderr fetch failed (${s})`),
+		"fleet control plane unreachable, no fleet server on :4722",
+		(s) => (s === 404 ? "not a spawned daemon, no stderr captured" : `stderr fetch failed (${s})`),
 	);
 	return (await res.json()) as { text: string };
 }
 
-/** GET /ctl/templates — the fleet's spawn template names. */
+/** GET /ctl/templates, the fleet's spawn template names. */
 export async function fetchCtlTemplates(): Promise<string[]> {
 	const res = await ctlFetch(
 		"/ctl/templates",
-		"fleet control plane unreachable — no fleet server on :4722",
+		"fleet control plane unreachable, no fleet server on :4722",
 		(s) => `templates fetch failed (${s})`,
 	);
 	return (await res.json()) as string[];

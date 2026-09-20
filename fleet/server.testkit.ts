@@ -20,7 +20,7 @@ import { cleanupTempDirs, tempDir } from "../shared/testkit";
 import { startFleet, type FleetServer } from "./server";
 
 // Entry test files register the cleanup at their own top level:
-// `afterAll(cleanupTempDirs)` — see the shared testkit's doc comment.
+// `afterAll(cleanupTempDirs)`; see the shared testkit's doc comment.
 export { cleanupTempDirs };
 
 // The /ctl/settings routes lazily initialize the process-global Settings
@@ -28,7 +28,7 @@ export { cleanupTempDirs };
 // real ~/.omp config. The pin lives at each entry file's top level, NOT here:
 // a top-level await in this imported module races bun 1.3.14's parallel
 // test-file loader (importers sporadically observe this module's bindings in
-// TDZ — "Cannot access 'FAKE_CWD' before initialization").
+// TDZ: "Cannot access 'FAKE_CWD' before initialization").
 export async function pinSettingsInMemory(): Promise<void> {
 	await Settings.init({ inMemory: true });
 }
@@ -77,7 +77,7 @@ export interface FakeDaemon {
 	close(): void;
 }
 
-/** One open /events stream on the fake (these tests open exactly one per daemon — the connector's). */
+/** One open /events stream on the fake (these tests open exactly one per daemon, the connector's). */
 interface FakeStream {
 	write(frame: unknown, seq: number): void;
 }
@@ -86,7 +86,7 @@ interface FakeStream {
  * Tiny fake omp-session over HTTP: serves /events (SSE) + /command (POST)
  * on a pathless ws:// base (proving daemonHttpBase normalization). Records
  * the Bearer header, primes the status machine on stream open (hello_ok →
- * state → ready — no hello handshake on the wire), and answers prompt
+ * state → ready, with no hello handshake on the wire), and answers prompt
  * calls with call_result + event frames on the stream. `cwd` is the
  * hello_ok.cwd reported to the connector (which rejects mismatches, so
  * spawn tests must point it at the spawned entry's cwd).

@@ -37,7 +37,7 @@ export default defineConfig({
 			"/events": { target: `http://${sessionTarget}`, headers: { "X-Accel-Buffering": "no" } },
 			"/command": { target: `http://${sessionTarget}` },
 			"/download": { target: `http://${sessionTarget}` },
-			// Roster-mode control API (omp-fleet edge) — dev against `omp-fleet serve`.
+			// Roster-mode control API (omp-fleet edge). Dev against `omp-fleet serve`.
 			"/ctl": { target: `http://localhost:${fleetPort}` },
 		},
 	},

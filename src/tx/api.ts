@@ -1,6 +1,6 @@
 /**
  * Typed client for the fleet stats API (historical transcripts/stats view).
- * Wire types are single-sourced from shared/stats-types.ts — do not mirror.
+ * Wire types are single-sourced from shared/stats-types.ts; do not mirror.
  * All requests use relative /ctl/stats paths: vite proxies /ctl to the fleet
  * control plane (loopback :4722) in dev; same-origin in prod.
  */
@@ -44,7 +44,8 @@ export class ApiError extends Error {
 
 export const REQUEST_TIMEOUT_MS = 30_000;
 
-/** Append search params to a relative path — no origin resolution (the caller's origin serves /ctl). */
+/** Append search params to a relative path, with no origin resolution
+ *  (the caller's origin serves /ctl). */
 function withParams(path: string, params?: Record<string, string | number | undefined>): string {
 	if (!params) return path;
 	const qs = new URLSearchParams();
@@ -78,14 +79,14 @@ async function fetchJson<T>(
 					message = (body as { error: string }).error;
 				}
 			} catch {
-				// non-JSON error body — keep the status line
+				// non-JSON error body, so keep the status line
 			}
 			throw new ApiError(message, res.status);
 		}
 		try {
 			return (await res.json()) as T;
 		} catch {
-			// 2xx with a non-JSON body — surface it as an error.
+			// 2xx with a non-JSON body; surface it as an error.
 			throw new ApiError(`Invalid JSON response from ${path}`, res.status);
 		}
 	} catch (e) {

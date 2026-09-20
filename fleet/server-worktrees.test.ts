@@ -129,14 +129,14 @@ describe("worktree lifecycle routes", () => {
 		const entry = (await res.json()) as RegistryEntry;
 		expect(entry.daemonId).toBeTruthy();
 		// The cwd is NOT the main checkout, but it belongs to the project's
-		// worktree set — the stamp still attaches it to the project group.
+		// worktree set, so the stamp still attaches it to the project group.
 		expect(entry.projectId).toBe(project.projectId);
 		expect(server.registry.get(entry.daemonId)?.projectId).toBe(project.projectId);
 		await server.supervisor.stop(entry.daemonId);
 	});
 
 	test("POST add-existing registers a discovered-but-unregistered worktree (start:false)", async () => {
-		// A linked worktree created out-of-band with raw git — exactly what
+		// A linked worktree created out-of-band with raw git, exactly what
 		// discovery's Add-existing tab would list.
 		const outside = join(tmp, "raw-worktree");
 		const add = await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", outside]);
@@ -457,7 +457,7 @@ describe("worktree lifecycle routes", () => {
 			// Browser stream open BEFORE the dir vanishes (the toast must land).
 			const browser = await openBrowser(server.port);
 			// Simulate `git worktree remove` run OUTSIDE the fleet: only the
-			// directory disappears — the fleet sees it on the next git-state
+			// directory disappears; the fleet sees it on the next git-state
 			// poll (default 10s interval).
 			rmSync(entry.cwd, { recursive: true, force: true });
 

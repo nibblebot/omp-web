@@ -1,5 +1,5 @@
 /**
- * DeepSeek — 16-bit style pixel-art whale avatar.
+ * DeepSeek, a 16-bit style pixel-art whale avatar.
  *
  * Poses: idle/blink for at rest, work1/work2/work-blink cycled while the agent
  * is streaming (the spout pulses up and leans between frames), happy briefly

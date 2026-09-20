@@ -9,7 +9,7 @@ import { Modal } from "../shared/Modal";
 // evidence on open (fresh every time), then shows dirty counts and branch
 // merge/push state with an "also delete branch" checkbox (default from
 // server evidence: merged && pushed). A dirty or unowned worktree is
-// refused outright — no --force in v1.
+// refused outright; there is no --force in v1.
 
 /** One dirty-count span (glyph + count), fixed order like the roster rows. */
 type DirtyKind = "added" | "modified" | "deleted" | "untracked";
@@ -37,7 +37,7 @@ export const DeleteWorktreeDialog: Component = () => {
 	});
 
 	/** Evidence-backed checkbox default: delete the branch only when merged
-	 *  and (pushed or no upstream) — server refuses `-d` on unmerged anyway. */
+	 *  and (pushed or no upstream); the server refuses `-d` on unmerged anyway. */
 	const effectiveDeleteBranch = () =>
 		deleteBranch() ?? (info()?.merged === true && info()?.unpushed !== true);
 
@@ -87,8 +87,7 @@ export const DeleteWorktreeDialog: Component = () => {
 				</Show>
 				<Show when={info() !== undefined && !info()!.owned}>
 					<p class="danger-confirm-body">
-						{info()!.reason ??
-							"This directory is not a fleet-managed worktree — nothing to delete."}
+						{info()!.reason ?? "This directory is not a fleet-managed worktree, nothing to delete."}
 					</p>
 				</Show>
 				<Show when={info() !== undefined && info()!.owned && info()!.dirty}>
@@ -107,7 +106,7 @@ export const DeleteWorktreeDialog: Component = () => {
 							</span>
 						</Show>
 						. Deleting is refused while the worktree is dirty
-						{info()!.reason ? ` — ${info()!.reason}` : ""}.
+						{info()!.reason ? `; ${info()!.reason}` : ""}.
 					</p>
 				</Show>
 				<Show when={info() !== undefined && info()!.owned && !info()!.dirty}>

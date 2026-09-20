@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 /**
- * build (`bun run build`) — produce the installable omp-web bundle
+ * build (`bun run build`) produces the installable omp-web bundle
  * (dist-bundle/cli.js).
  *
  * UI-embed pipeline: vite build → regenerate server/embedded-dist.ts →
  * restore the stub in a finally. Then the cli/omp-web.ts dispatcher is
  * bundled with bun build (NOT --compile): all @oh-my-pi/* packages stay
  * external because `bun install -g` installs them as real dependencies
- * next to the bundle — hence no pi-natives embed.
+ * next to the bundle, hence no pi-natives embed.
  * The package version is stamped in via define so `--version` works from an
  * arbitrary cwd without a path-based package.json lookup.
  */
@@ -52,7 +52,7 @@ function generateEmbeddedDist(): string {
 	);
 	// Unlike the compile build (whose file imports become absolute $bunfs
 	// paths), a plain bundle emits outfile-RELATIVE strings that Bun.file would
-	// resolve against the process cwd — broken for an installed bin run from
+	// resolve against the process cwd, broken for an installed bin run from
 	// anywhere. Anchor them to this module's URL instead (in the bundle, that
 	// is dist-bundle/cli.js, next to the copied asset files).
 	const entries: string[] = [];

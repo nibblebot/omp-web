@@ -3,7 +3,7 @@ import { sendRemoveProject, setState, state } from "../../state";
 import { Modal } from "../shared/Modal";
 
 // Remove-project confirm (Phase 5 close-out): deregister a first-class
-// project — never touches disk. Self-mounts (rendered once from App.tsx
+// project. It never touches disk. Self-mounts (rendered once from App.tsx
 // like DangerConfirmDialog) and renders nothing while no target is set.
 // A removal refused by the server (any roster entry still references the
 // project) lands as a global error frame naming the blockers; the dialog
@@ -19,7 +19,7 @@ export const RemoveProjectDialog: Component = () => {
 
 	const target = () => state.removeProjectTarget;
 	const project = () => state.registeredProjects.find((p) => p.projectId === target());
-	/** Referencing daemons — the removal blockers (server names these in its refusal). */
+	/** Referencing daemons, which the server names in its refusal as the blockers. */
 	const blockers = () => state.daemonRoster.filter((d) => d.projectId === target());
 
 	createEffect(() => {
@@ -35,7 +35,7 @@ export const RemoveProjectDialog: Component = () => {
 			errorAtOpen = state.error;
 			setRefusal(null);
 		}
-		// Success path: the project left the registry — dismiss.
+		// Success path: the project left the registry, so dismiss.
 		if (project() === undefined) {
 			setState("removeProjectTarget", null);
 			return;
@@ -64,7 +64,7 @@ export const RemoveProjectDialog: Component = () => {
 			<Modal title="Remove project" onClose={close}>
 				<p class="danger-confirm-body">
 					Remove <span class="worktree-evidence-path">{project()!.name}</span> from the fleet
-					roster? Disk contents stay untouched — this only deregisters the project.
+					roster? Disk contents stay untouched; this only deregisters the project.
 				</p>
 				<Show when={blockers().length > 0}>
 					<div class="worktree-blockers">

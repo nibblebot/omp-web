@@ -65,7 +65,7 @@ import {
 // ---------------------------------------------------------------------------
 // Shared model vocabulary (types stay here so the store init and every
 // caller keep importing them from "../state"). The ~50 exported ACTIONS live
-// in src/store/<domain>.ts and are re-exported at the bottom of this file —
+// in src/store/<domain>.ts and are re-exported at the bottom of this file, so
 // call sites are byte-identical.
 // ---------------------------------------------------------------------------
 export type Block = { kind: "text" | "thinking"; text: string };
@@ -222,7 +222,7 @@ export const [state, setState] = createStore({
 	// rev: monotonic content version of live.blocks, bumped on every live
 	// mutation so scroll/pin effects subscribe to "content changed" without
 	// scanning block text lengths on every flush (see MessageList's pinning
-	// effect — it used to allocate a lengths array per flush).
+	// effect; it used to allocate a lengths array per flush).
 	live: { active: false, blocks: [] as Block[], rev: 0 },
 	// --- WebSessionState mirror (verbatim; see protocol state frames) ---
 	streaming: false,
@@ -232,7 +232,7 @@ export const [state, setState] = createStore({
 	// bottom); the hook keeps it in sync from its pin mutations.
 	chatPinned: true,
 	// A turn ENDED while the transcript was scrolled away from the live edge
-	// (agent_end, src/store/chat.ts) — the finished answer sits below the
+	// (agent_end, src/store/chat.ts). The finished answer sits below the
 	// viewport, unviewed. Cleared when the user re-pins (scrolls to the
 	// bottom / jump button), when a new turn starts, or on session switch
 	// (all in useStickyScroll / applyEvent). Feeds the attached roster row's
@@ -304,8 +304,8 @@ export const [state, setState] = createStore({
 	// Settings model (getSettings/setSetting + settings_changed frames).
 	settingsModel: null as SettingsModel | null,
 	settingsLoading: false,
-	// Attach mode: "single" (standalone omp-session — no sidebar) or "roster"
-	// (fleet edge — the fleet roster sidebar). "roster" is set by the roster
+	// Attach mode: "single" (standalone omp-session, no sidebar) or "roster"
+	// (fleet edge, the fleet roster sidebar). "roster" is set by the roster
 	// frame and sticky across reconnects; the attached frame carries no mode
 	// field and must not clobber it (Phase 6 de-mux).
 	sessionMode: "single" as "single" | "roster",
@@ -320,12 +320,12 @@ export const [state, setState] = createStore({
 	// like daemonRoster; pruned on roster frames for ids that left the fleet.
 	daemonActivity: {} as Record<string, { streaming: boolean; blocked: boolean }>,
 	// Phase 5: first-class registered projects (registered_projects frame;
-	// fleet-scoped like daemonRoster — survives session resets, and
+	// fleet-scoped like daemonRoster; it survives session resets, and
 	// zero-daemon projects still render).
 	registeredProjects: [] as RegisteredProject[],
 	// Phase 4: resolved fleet config path from the registered_projects frame
 	// (null = defaults, no config file). Fleet-scoped like the projects
-	// above — survives session resets. Together with an empty project
+	// above; it survives session resets. Together with an empty project
 	// registry and empty daemon roster it is the roster's first-run signal.
 	fleetConfigPath: null as string | null,
 	// Phase 5: delete-worktree guard evidence (worktree_delete_info unicast),
@@ -336,8 +336,8 @@ export const [state, setState] = createStore({
 	// stamped with the real daemonId when the attach fires, cleared by the
 	// sessions answer / attach failure / daemon switch). Fleet-scoped.
 	pendingSessionPicker: null as string | null,
-	// Phase 5: SessionPicker context when opened from the onboarding gate —
-	// non-null makes the picker render its "New session" top item (Esc =
+	// Phase 5: SessionPicker context when opened from the onboarding gate.
+	// Non-null makes the picker render its "New session" top item (Esc =
 	// new session). Cleared by the picker on close/new-session.
 	sessionPickerGate: null as { daemonId: string } | null,
 	sidebarVisible:
@@ -401,8 +401,8 @@ export const [state, setState] = createStore({
 		typeof localStorage !== "undefined"
 			? localStorage.getItem(USAGE_SIDEBAR_KEY) === "true"
 			: false,
-	// Phase 12: fetchUsageReports mirror — null = never fetched; [] = fetched
-	// but no reporting. Single-flight via usageLoading (refreshUsageReports).
+	// Phase 12: fetchUsageReports mirror; null means never fetched, [] means
+	// fetched but no reporting. Single-flight via usageLoading (refreshUsageReports).
 	usageReports: null as UsageReport[] | null,
 	usageLoading: false as boolean,
 	usageError: null as string | null,
@@ -415,7 +415,7 @@ export const [state, setState] = createStore({
 		streamId: number;
 		error?: string;
 	},
-	// finding #P1: aria-live announcement text — rendered into the always-mounted
+	// finding #P1: aria-live announcement text, rendered into the always-mounted
 	// role="status" region in App.tsx. announce() dedupes identical consecutive
 	// text so a burst of the same transition doesn't re-announce.
 	announcement: "",
@@ -438,7 +438,7 @@ if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__ompSta
 
 /** finding #P1: announce a daemon's transition to a terminal rung (ready/error).
  *  First sighting (boot priming) and repeated identical statuses are silent.
- *  Deliberately NOT gated on session readiness — the roster is fleet-scoped,
+ *  Deliberately NOT gated on session readiness; the roster is fleet-scoped,
  *  so a roster-mode tab with no attached session still hears its daemons come
  *  up or fall over. */
 function announceDaemonStatus(
@@ -480,7 +480,7 @@ let pendingHistory: AgentMessage[] | null = null;
  * Frame seqs already applied on THIS connection's prime window. A delta that
  * is live-delivered while the paced prime is in flight (the consumer attaches
  * before priming completes) is re-sent verbatim by the ring replay, so the
- * second copy must be dropped (finding #2 — without the guard, a resume or a
+ * second copy must be dropped (finding #2; without the guard, a resume or a
  * fresh attach during activity double-applies every delta that arrived after
  * the final history chunk). Cleared on every attach and every loadHistory:
  * a frame wiped by the rebuild is legitimately re-applied by the replay, and
@@ -617,9 +617,9 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 let events: EventSource | null = null;
 
 /** Silence deadline for the /events stream: any frame or ping re-arms it; a
- *  fire means the peer is dead — the socket is open but nothing is flowing
- *  (e.g. a hung middlebox) → teardown + reconnect. The daemon emits a named
- *  `ping` event every SSE_KEEPALIVE_MS precisely so this browser-side
+ *  fire means the peer is dead. The socket is open but nothing is flowing
+ *  (e.g. a hung middlebox), so tear down and reconnect. The daemon emits a
+ *  named `ping` event every SSE_KEEPALIVE_MS precisely so this browser-side
  *  consumer can observe liveness. */
 let silenceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -630,7 +630,7 @@ function armSilenceTimer(): void {
 		silenceTimer = null;
 		if (!events) return; // already torn down / no live stream
 		const dead = events;
-		pushDebug("warn", "transport", "silence deadline hit — forcing reconnect");
+		pushDebug("warn", "transport", "silence deadline hit, forcing reconnect");
 		teardownStream(dead);
 		// Reconnect immediately (no backoff delay): the server may be
 		// perfectly healthy behind a hung middlebox. If the reconnect itself
@@ -647,7 +647,7 @@ function clearSilenceTimer(): void {
 }
 
 /** Teardown for a dead /events stream (terminal CLOSED or silence deadline):
- *  drop readiness and reject pendings. Does NOT schedule the reconnect —
+ *  drop readiness and reject pendings. Does NOT schedule the reconnect;
  *  callers pick the delay (backoff ladder for CLOSED, immediate for silence). */
 function teardownStream(source: EventSource): void {
 	if (events !== source) return; // a newer connect() already superseded this stream
@@ -663,8 +663,8 @@ function teardownStream(source: EventSource): void {
 	rejectPendingCalls(new Error("Disconnected"));
 	resetPendingSessionsFiles();
 	resetPendingProjects();
-	// Phase 5: a dead stream cannot complete the onboarding flow — disarm the
-	// picker gate and drop any picker context.
+	// Phase 5: a dead stream cannot complete the onboarding flow, so disarm
+	// the picker gate and drop any picker context.
 	rejectPendingAttach(new Error("Disconnected"));
 	setState("pendingSessionPicker", null);
 	setState("sessionPickerGate", null);
@@ -737,7 +737,7 @@ const DEAD_DAEMON_STATUSES = new Set<DaemonStatus>(["asleep", "error"]);
 
 /** True when the roster entry is missing or its status is terminal-dead.
  *  Transitional statuses ("connecting"/"session"/"resolving") and "ready"
- *  are NEVER dead — a waking daemon passes through them. */
+ *  are NEVER dead; a waking daemon passes through them. */
 export function isDaemonDead(entry: DaemonEntry | undefined): boolean {
 	return entry === undefined || DEAD_DAEMON_STATUSES.has(entry.status);
 }
@@ -745,7 +745,7 @@ export function isDaemonDead(entry: DaemonEntry | undefined): boolean {
 /** True when this tab has a live attached session to render. Roster mode:
  *  the attached entry must exist and not be dead; a daemon with an attach in
  *  flight counts as live (the roster lags a wake). Standalone mode is always
- *  live — the roster empty pane is gated on sessionMode in App. */
+ *  live; the roster empty pane is gated on sessionMode in App. */
 export function hasLiveSession(): boolean {
 	if (state.sessionMode !== "roster") return true;
 	if (state.currentSessionId === "") return false;
@@ -783,8 +783,8 @@ function resetSessionView(): void {
  *  daemon_status update, if the daemon we are attached to is missing or
  *  terminal-dead (asleep/error), drop the session view. The roster itself
  *  is fleet-scoped and survives. Race guard: the clear MUST NOT fire while
- *  an attach to that daemon is in flight — a freshly waking daemon reads as
- *  "asleep" in lagging roster frames right after wake-attach; the entry and
+ *  an attach to that daemon is in flight, since a freshly waking daemon reads
+ *  as "asleep" in lagging roster frames right after wake-attach; the entry and
  *  in-flight state are re-checked against the POST-frame roster here. */
 function reconcileAttachedSession(): void {
 	if (state.sessionMode !== "roster") return;
@@ -806,7 +806,7 @@ let backoff = 1000;
 
 export function connect(): void {
 	// Browser-only transport: without EventSource there is nothing to dial.
-	// (A bun test worker has neither EventSource nor location — a silence
+	// (A bun test worker has neither EventSource nor location; a silence
 	// timer armed by an earlier suite in the same worker must no-op here,
 	// not crash on location.search.)
 	if (typeof EventSource === "undefined") return;
@@ -832,7 +832,7 @@ export function connect(): void {
 		// No boot-time calls: a roster-mode edge answers every call with
 		// "not attached" until the browser picks a daemon. The attached handler
 		// pulls getSubagents. On a roster-mode RECONNECT the edge has no attach
-		// memory — re-attach to the daemon we were viewing.
+		// memory, so re-attach to the daemon we were viewing.
 		if (state.sessionMode === "roster" && state.currentSessionId)
 			void attachSession(state.currentSessionId).catch(() => {});
 	};
@@ -848,7 +848,7 @@ export function connect(): void {
 			// overwritten by the next state frame; resetSessionView never touches
 			// it). Switching away MID-STREAM means the abandoned turn's end will
 			// never be observed on this tab (the edge streams live frames only for
-			// the attached daemon) — mark it unread. Attaching the target renders
+			// the attached daemon), so mark it unread. Attaching the target renders
 			// it read.
 			const prevSessionId = state.currentSessionId;
 			const prevStreaming = state.streaming;
@@ -867,7 +867,7 @@ export function connect(): void {
 			// sidebar; the roster frame owns sessionMode there.
 			if (state.sessionMode !== "roster") setState("sessionMode", "single");
 			// Finding #28: the attach waiter settles from the edge's id-keyed
-			// attach_result, never from this PROXIED frame — the priming rides
+			// attach_result, never from this PROXIED frame; the priming rides
 			// the daemon pipe, which may be mid-redial when the attach lands.
 			if (switched) {
 				// In-flight calls belonged to the previous session; their results
@@ -882,15 +882,15 @@ export function connect(): void {
 				// roster hint shows the session's status.
 				setState("readyAt", undefined);
 				// Phase 5: a switch to a DIFFERENT daemon disarms the picker gate
-				// (the onboarding attach to the gate's own daemon is a switch too —
-				// that one is kept so the sessions answer can still open the
+				// (the onboarding attach to the gate's own daemon is a switch too,
+				// but that one is kept so the sessions answer can still open the
 				// picker, per the attach_result → list_sessions → sessions order).
 				if (state.pendingSessionPicker !== null && state.pendingSessionPicker !== frame.sessionId) {
 					setState("pendingSessionPicker", null);
 				}
 			}
 			// Subagent mirror is per-session; pull on EVERY attach (first attach,
-			// switch, roster re-attach after reconnect) — calls are answered only
+			// switch, roster re-attach after reconnect). Calls are answered only
 			// once attached, so this is the earliest safe point.
 			void call("getSubagents")
 				.then((subs) => {
@@ -904,9 +904,9 @@ export function connect(): void {
 		// Stale-frame guard: session-scoped frames for a handle this tab no
 		// longer views (in flight during a switch) are dropped. Frames WITHOUT
 		// a sessionId (standalone omp-session: one live session, connect = attached)
-		// always pass — there is nothing to mismatch. attach_result is a unicast
+		// always pass; there is nothing to mismatch. attach_result is a unicast
 		// answer whose sessionId is the ATTACHED daemonId (finding #28) and must
-		// pass too — id-matching against pendingAttach handles staleness.
+		// pass too, since id-matching against pendingAttach handles staleness.
 		if (
 			frame.type !== "attach_result" &&
 			"sessionId" in frame &&
@@ -915,7 +915,7 @@ export function connect(): void {
 			return;
 		// Replay-dedup guard (finding #2): a delta live-delivered during the
 		// paced prime is re-sent verbatim by the ring replay. Its seq was seen
-		// on this connection already, so the second copy is the replay — drop
+		// on this connection already, so the second copy is the replay; drop
 		// it (see seenFrameSeqs; native EventSource exposes the SSE id as
 		// MessageEvent.lastEventId, absent for ping/undecorated frames).
 		const frameSeq = Number((ev as MessageEvent).lastEventId);
@@ -925,7 +925,7 @@ export function connect(): void {
 				// A transcript over the SSE backpressure cap primes as
 				// sequential frames (final: false … final: true); a frame
 				// WITHOUT `final` (the original single-frame shape) is complete
-				// on its own. Reassemble before loadHistory — it rebuilds items
+				// on its own. Reassemble before loadHistory; it rebuilds items
 				// from the whole transcript, so a partial load would lose data.
 				if (frame.final === undefined) {
 					pendingHistory = null;
@@ -993,7 +993,7 @@ export function connect(): void {
 				break;
 			case "sessions":
 				settleSessions(frame.sessions);
-				// Phase 5: post-attach picker gate — the answer to the gate's
+				// Phase 5: post-attach picker gate; the answer to the gate's
 				// list_sessions decides new-vs-resume for the daemon just
 				// attached. History exists → open the picker (its "New session"
 				// top item + Esc = new session are component-side); none →
@@ -1024,8 +1024,8 @@ export function connect(): void {
 				);
 				break;
 			case "roster": {
-				// finding #P1: diff the replacement roster against what we had —
-				// first sighting is boot priming (silent); later transitions to
+				// finding #P1: diff the replacement roster against what we had.
+				// First sighting is boot priming (silent); later transitions to
 				// ready/error announce.
 				const rosterBefore = state.daemonRoster;
 				for (const entry of frame.daemons) {
@@ -1035,20 +1035,20 @@ export function connect(): void {
 						entry.status,
 					);
 				}
-				// The fleet edge sent its daemon roster — this tab is in
+				// The fleet edge sent its daemon roster, so this tab is in
 				// roster mode (sidebar swaps to the session list). The attached
 				// frame carries no mode; this frame is the mode signal, and it
 				// must not be undone by the proxied attached frames (handled
 				// above).
 				// Phase 5: entries carry projectId/managed (project-first
-				// grouping + managed-worktree eligibility) — DaemonEntry owns
+				// grouping + managed-worktree eligibility). DaemonEntry owns
 				// those fields, so they flow through wholesale with the array.
 				setState("daemonRoster", frame.daemons);
 				// Removed daemons never reuse ids, but don't let the set grow unbounded.
 				pruneUnread(new Set(frame.daemons.map((d) => d.daemonId)));
 				// Same for daemonActivity: drop entries whose id left the roster.
 				// setState MERGES plain-object values, so a shrunken record would
-				// never delete keys — reconcile diffs to the pruned record instead.
+				// never delete keys. Reconcile diffs to the pruned record instead.
 				// Skip it when nothing dropped (no useless store notification).
 				{
 					const kept = new Set(frame.daemons.map((d) => d.daemonId));
@@ -1087,7 +1087,7 @@ export function connect(): void {
 					blocked: frame.blocked,
 				});
 				// Unread-on-completion: a detached turn's END is now observable in
-				// realtime — this is the original unread semantic (in_progress → idle
+				// realtime. This is the original unread semantic (in_progress → idle
 				// while unfocused) that the old switch-away-only mark could not cover.
 				// Skip the attached daemon (its live signals are on-screen anyway). The
 				// switch-away-mid-stream mark in the `attached` handler stays as
@@ -1126,7 +1126,7 @@ export function connect(): void {
 					`daemon ${frame.daemonId.slice(0, 8)} → ${frame.status}${frame.error !== undefined ? `: ${frame.error}` : ""}`,
 				);
 				// Same reconcile as the roster frame: the attached daemon just
-				// went asleep/error — clear the session view (race-guarded).
+				// went asleep/error, so clear the session view (race-guarded).
 				reconcileAttachedSession();
 				break;
 			}
@@ -1136,16 +1136,16 @@ export function connect(): void {
 			case "project_branches":
 				// Unicast answer to list_project_branches (fleet-scoped like
 				// projects). A frame whose projectId doesn't match the pending
-				// request belongs to a superseded one — leave it pending.
+				// request belongs to a superseded one; leave it pending.
 				settleProjectBranches(frame.projectId, frame.branches);
 				break;
 			case "registered_projects":
 				// Phase 5: first-class project registry broadcast (fleet-scoped
-				// like the roster — survives session resets; zero-daemon
+				// like the roster; it survives session resets, and zero-daemon
 				// projects still render via daemonsByProject).
 				setState("registeredProjects", frame.projects);
 				// Phase 4: the resolved fleet config path rides the same frame
-				// (additive — older edges omit it, so missing = null). Also
+				// (additive; older edges omit it, so missing = null). Also
 				// fleet-scoped: resetSessionView must not wipe it (it is the
 				// first-run signal until a config file exists).
 				setState("fleetConfigPath", frame.configPath ?? null);
@@ -1158,11 +1158,12 @@ export function connect(): void {
 				break;
 			case "worktree_removed": {
 				// The fleet detected a worktree's directory vanished on disk and
-				// evicted its daemon — one toast per eviction plus an aria-live
-				// announcement (same text, reusing the finding #P1 announce
-				// helper). Broadcast, fleet-edge-only like registered_projects:
-				// no session guard (a bare omp-session never sends it), and
-				// UI-initiated delete_worktree/remove never produce this frame.
+				// evicted its daemon, so each eviction yields one toast plus an
+				// aria-live announcement (same text, reusing the finding #P1
+				// announce helper). Broadcast, fleet-edge-only like
+				// registered_projects: no session guard (a bare omp-session
+				// never sends it), and UI-initiated delete_worktree/remove never
+				// produce this frame.
 				const text = worktreeRemovedToastText(frame.name, frame.path);
 				pushToast(text);
 				announce(text);
@@ -1204,7 +1205,7 @@ export function connect(): void {
 					const next = new Map(prev);
 					const existing = next.get(p.id as string);
 					// Finding #30: progress frames can arrive BEFORE the lifecycle
-					// frame — the progress handler created a `progress-${index}`
+					// frame; the progress handler created a `progress-${index}`
 					// placeholder. Migrate it into the real-id entry so the strip
 					// never shows two rows for one subagent, and keep the data the
 					// placeholder accumulated (task, and status when the lifecycle
@@ -1293,7 +1294,7 @@ export function connect(): void {
 				break;
 			case "ui_request_end":
 				// Finding #16: the dialog settled (answered/rejected). Dismiss
-				// it if it's the one shown — the ring replay delivers this
+				// it if it's the one shown; the ring replay delivers this
 				// AFTER a stale ui_request on resume, so an answered dialog
 				// never reappears as a hanging modal.
 				if (state.uiRequest?.id === frame.id) setState("uiRequest", null);
@@ -1308,7 +1309,7 @@ export function connect(): void {
 			case "error":
 				// Finding #28: an error frame is a GLOBAL uncorrelated broadcast
 				// (fire-and-forget spawn failures, a lost pipe for ANOTHER
-				// daemon, "not attached" answers) — it must never settle an
+				// daemon, "not attached" answers). It must never settle an
 				// in-flight attach. Attach failures arrive as id-keyed
 				// attach_result frames; global errors only display.
 				setState("error", frame.error);
@@ -1317,8 +1318,8 @@ export function connect(): void {
 			case "hello_ok":
 				// Finding #61: the browser enforces OMP_PROTO too. Standalone
 				// priming leads with hello_ok; the fleet edge forwards the
-				// (pipe-gated) hello_ok in roster mode. A mismatch is terminal
-				// — mirror the connector's fail-closed semantics: surface the
+				// (pipe-gated) hello_ok in roster mode. A mismatch is terminal;
+				// mirror the connector's fail-closed semantics: surface the
 				// error, tear the stream down, and do NOT schedule the
 				// reconnect (the backoff loop in onerror would otherwise hot-loop
 				// against an undrivable daemon).
@@ -1353,16 +1354,16 @@ export function connect(): void {
 	source.onerror = () => {
 		// Terminal (401 or fatal): EventSource gives up (readyState CLOSED) and
 		// will NOT retry. Teardown like a socket close, then manually reconnect
-		// with the same 1s→8s backoff — auth failures must not hot-loop.
+		// with the same 1s→8s backoff, since auth failures must not hot-loop.
 		if (source.readyState !== EventSource.CLOSED) {
-			pushDebug("info", "transport", "transient blip — native auto-reconnect");
+			pushDebug("info", "transport", "transient blip, native auto-reconnect");
 			return; // transient blip: native auto-reconnect resumes with Last-Event-ID
 		}
 		teardownStream(source); // no-op if a newer connect() superseded this stream
 		const delay = backoff;
 		backoff = Math.min(backoff * 2, 8000);
 		setState("reconnectDelay", delay);
-		pushDebug("warn", "transport", `connection lost — retrying in ${delay}ms`);
+		pushDebug("warn", "transport", `connection lost, retrying in ${delay}ms`);
 		setTimeout(connect, delay);
 	};
 }

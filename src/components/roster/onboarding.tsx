@@ -36,7 +36,7 @@ export function stageIndex(stage: Stage): number {
  *   spawning → error     daemon_status error frame
  *
  * `begin` snapshots the pre-command roster/error, runs the modal's send
- * action, then enters the pipeline — or closes when the session wasn't
+ * action, then enters the pipeline, or closes when the session wasn't
  * requested (the command is fire-and-forget and the new row appears in the
  * sidebar on its own).
  */

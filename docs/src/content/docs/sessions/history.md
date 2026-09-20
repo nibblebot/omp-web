@@ -3,7 +3,7 @@ title: Manage session history
 description: Compare every history action the browser offers, from new and resume to branch, fork, handoff, and drop, and know what each one keeps, copies, or discards.
 ---
 
-Every conversation is a durable transcript stored on the session daemon's host. The browser exposes a set of history actions that look similar but treat that transcript very differently. This page compares them and explains what survives each one. Durability mechanics belong to [Session persistence](/concepts/session-persistence/).
+Every conversation is a durable transcript stored on the session daemon's host. The browser exposes a set of history actions that look similar but treat that transcript differently. This page compares them and explains what survives each one. Durability mechanics belong to [Session persistence](/concepts/session-persistence/).
 
 All of these actions target the attached session. The `/resume` picker is the single-session path; in fleet mode each roster row has its own session picker, described in [Resume previous sessions](/fleet/resume-sessions/).
 
@@ -63,8 +63,8 @@ Fork fails, with `Fork failed.`, when a hook cancels it or the session is not pe
 
 These four keep the conversation but change how the session continues:
 
-- `/fresh` resets provider state while keeping the transcript. While a turn is streaming the browser asks you to confirm first, because resetting provider state mid-turn can fail the running turn. On success the stream reports `Fresh session — provider state reset, transcript kept.`
-- `/retry` reruns the last failed turn while the session is idle. When there is nothing to retry, or the session is busy, the stream reports `Nothing to retry — no failed turn or the session is busy.`
+- `/fresh` resets provider state while keeping the transcript. While a turn is streaming the browser asks you to confirm first, because resetting provider state mid-turn can fail the running turn. On success the stream reports `Fresh session; provider state reset, transcript kept.`
+- `/retry` reruns the last failed turn while the session is idle. When there is nothing to retry, or the session is busy, the stream reports `Nothing to retry; no failed turn or the session is busy.`
 - `/compact [instructions]` summarizes the older part of the conversation. Optional free text steers the summary. This is covered in depth in [Compaction, retry, and recovery](/sessions/recovery/).
 - `/handoff [focus]` generates a handoff document with an extra model call, then starts a new session carrying that document as context. The document also appears in the stream as a `handoff` compaction card, and the free text after the command becomes focus instructions for the summary. If the runtime saved a copy of the document to disk, the stream also links it for download.
 

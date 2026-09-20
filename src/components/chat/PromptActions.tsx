@@ -17,7 +17,7 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 	const rosterHint = () => {
 		if (state.sessionMode !== "roster") return null;
 		const daemon = state.daemonRoster.find((x) => x.daemonId === state.currentSessionId);
-		if (!daemon) return "no daemon attached — pick one in the sidebar";
+		if (!daemon) return "no daemon attached, pick one in the sidebar";
 		if (daemon.status === "ready") return "attaching to daemon…";
 		return `daemon ${daemon.status}…`;
 	};

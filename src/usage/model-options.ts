@@ -24,10 +24,10 @@ const THINKING_HINTS: Record<string, string> = {
 };
 
 /**
- * Thinking options for a model that exposes a controllable effort surface:
+ * Thinking options for a model that exposes controllable effort levels:
  * "inherit" (defer to the session thinking level) and "off" first, then the
- * model's own efforts in catalog order — all with TUI labels. Empty for
- * models without a surface — callers then skip step 3 and assign without a level.
+ * model's own efforts in catalog order, all with TUI labels. Empty for
+ * models without any; callers then skip step 3 and assign without a level.
  */
 export function thinkingOptions(efforts: readonly string[] | undefined): ThinkingOption[] {
 	if (!efforts || efforts.length === 0) return [];

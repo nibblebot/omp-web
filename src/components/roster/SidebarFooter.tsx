@@ -4,7 +4,7 @@ import { InfoIcon, SettingsIcon } from "../shared/icons";
 
 // ---------------------------------------------------------------------------
 // Sidebar footer: global chrome (debug panel, settings). In roster work
-// these live here instead of the StatusBar header — StatusBar hides its
+// these live here instead of the StatusBar header. StatusBar hides its
 // debug/settings segments while the sidebar is present
 // (`state.sessionMode !== "roster" || state.view !== "work"`), so the two
 // renderings never coexist. View mode switching (Work/Analysis) moved out
@@ -17,8 +17,8 @@ export const SidebarFooter: Component = () => (
 			class="sidebar-icon-btn"
 			classList={{ active: state.modal === "debug" }}
 			onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
-			title="Debug — transport and fleet visibility"
-			aria-label="Debug — transport and fleet visibility"
+			title="Debug, transport and fleet visibility"
+			aria-label="Debug, transport and fleet visibility"
 		>
 			<InfoIcon />
 		</button>

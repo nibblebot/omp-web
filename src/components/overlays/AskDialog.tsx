@@ -5,7 +5,7 @@ import { AskForm, ConfirmForm, EditorForm, InputForm, SelectForm } from "./ask-d
 import type { AskQuestion, UiRequest } from "./ask-dialog";
 
 /**
- * Server-pushed ExtensionUIContext dialogs (Phase 3): the ask tool's rich
+ * Server-pushed ExtensionUIContext dialogs (Phase 3): the ask tool's
  * multi-question form (askDialog) plus select/confirm/input/editor fallbacks
  * rendered with the same modal. Answers go back as ui_response; cancelling
  * resolves the request undefined, which AskTool surfaces as "Ask tool was

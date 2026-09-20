@@ -42,7 +42,7 @@ export const MessageList: Component = () => {
 		pruneRunOpen(new Set(keys));
 		return { m, consumedIds };
 	});
-	// The run an item leads (its first member), or null — the consolidated view
+	// The run an item leads (its first member), or null. The consolidated view
 	// renders one row per run on the first member's slot.
 	const leadRun = (item: ToolItem) => {
 		const run = runOf().m.get(item.id);
@@ -80,7 +80,7 @@ export const MessageList: Component = () => {
 					{/* Observed by useStickyScroll's ResizeObserver: any growth here
 					    (streamed text, tool output, mode switches, run toggles, image
 					    decodes) re-pins a pinned viewport. The zoom overlay stays
-					    outside — it's position:fixed and must not count as content. */}
+					    outside since it's position:fixed and must not count as content. */}
 					<div class="message-list-content" ref={contentRef}>
 						<For each={state.items}>
 							{(item) => (
@@ -94,9 +94,9 @@ export const MessageList: Component = () => {
 												when={state.toolCardsView === "consolidated"}
 												fallback={<AssistantCard assistant={assistant()} thinking />}
 											>
-												{/* Consolidated: assistant messages are never folded into a run row — they
-								    always render as cards. Thinking is hidden only when a following tool run
-								    consumed it (it's shown inside the run row). */}
+												{/* Consolidated: assistant messages are never folded into a run row;
+								    they always render as cards. Thinking is hidden only when a following
+								    tool run consumed it (it's shown inside the run row). */}
 												<AssistantCard
 													assistant={assistant()}
 													thinking={!runOf().consumedIds.has(assistant().id)}

@@ -1,6 +1,6 @@
 /**
  * Fleet edge pipe tests: standalone (per-test) mounts of the edge over a
- * FAKE pipe daemon — backpressure overflow + ring replay, pipe liveness /
+ * FAKE pipe daemon: backpressure overflow + ring replay, pipe liveness /
  * heartbeat-fed silence, redial with and without Last-Event-ID, redial
  * budget exhaustion, and delta-ring filtering / byte-bound eviction. Each
  * test owns its registry/connector/edge and cleans up in a finally.
@@ -82,7 +82,7 @@ describe("edge pipe liveness and replay", () => {
 				"first delta roster",
 			);
 			// Overflow: a synchronous burst of roster broadcasts (constant-size
-			// blocks) far exceeds the cap while the browser is not reading —
+			// blocks) far exceeds the cap while the browser is not reading, so
 			// the stream must be dropped.
 			for (let i = 2; i <= 40; i++) {
 				registry.update(x1.daemonId, { labels: [`v=${i}`] });
@@ -90,8 +90,8 @@ describe("edge pipe liveness and replay", () => {
 			await browser.end(); // the dropped stream's body ends
 			// Reconnect with Last-Event-ID: the ring replays deltas after it.
 			await browser.reopen();
-			// The replay delivers the ringed deltas (delta-era seqs) — the
-			// final burst roster — not just the fresh priming.
+			// The replay delivers the ringed deltas (delta-era seqs), including
+			// the final burst roster, not only the fresh priming.
 			const replayed = await browser.waitForEvent(
 				(ev) =>
 					ev.frame.type === "roster" &&
@@ -169,7 +169,7 @@ describe("edge pipe liveness and replay", () => {
 				"attached",
 			);
 			// Heartbeats every 30ms keep the 200ms silence deadline fed: the
-			// pipe survives far past it — no loss frame, no teardown.
+			// pipe survives far past it, with no loss frame and no teardown.
 			await sleep(600);
 			expect(
 				browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
@@ -279,7 +279,7 @@ describe("edge pipe liveness and replay", () => {
 			// the daemon reachable, so the redial stream below is the pipe's.
 			daemon.killStream(1);
 			// A delta emitted while the pipe is DOWN must be replayed after the
-			// redial — ringed before the redial dials (backoff is 10-50ms).
+			// redial; it is ringed before the redial dials (backoff is 10-50ms).
 			daemon.emitDelta({
 				type: "event",
 				event: { type: "notice", level: "info", message: "after-kill" },
@@ -292,7 +292,7 @@ describe("edge pipe liveness and replay", () => {
 			// The redial resumes from the last forwarded daemon seq.
 			expect(daemon.lastEventIds()[2]).toBe(String(deltaSeq));
 			// The missed delta is replayed to the STILL-ATTACHED browser on the
-			// same stream — no loss frame, no user re-attach.
+			// same stream, with no loss frame and no user re-attach.
 			await browser.waitForFrame(
 				(f) =>
 					f.type === "event" &&
@@ -304,7 +304,7 @@ describe("edge pipe liveness and replay", () => {
 				browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
 			).toBe(false);
 			// The redial re-primed (the daemon always primes every open), so the
-			// browser got a second attached frame — attachment survived.
+			// browser got a second attached frame, so attachment survived.
 			expect(
 				browser.frames.filter((f) => f.type === "attached" && f.sessionId === entry.daemonId)
 					.length,
@@ -599,9 +599,9 @@ describe("edge pipe liveness and replay", () => {
 			);
 			// Replay from just after the priming history: the ring must hold
 			// the ringed deltas (state, ready, the live event) but NOT any
-			// history/call_result/stream_reset/available_commands frame —
-			// those are re-derivable (re-attach priming / re-POST), exactly
-			// like the daemon's own ring.
+			// history/call_result/stream_reset/available_commands frame. Those
+			// are re-derivable (re-attach priming / re-POST), exactly like the
+			// daemon's own ring.
 			const replay = await collectReplay(
 				served.port,
 				browser.clientId,
@@ -708,7 +708,7 @@ describe("edge pipe liveness and replay", () => {
 					(ev.frame.event as { message?: string })?.message?.startsWith("evict-0"),
 			)!.id;
 			// Replay from just before the burst: only the byte-eviction-
-			// surviving tail replays — the newest delta is there, the oldest is
+			// surviving tail replays. The newest delta is there, the oldest is
 			// gone, and the survivors are a contiguous suffix in seq order
 			// (drop-and-resume semantics: the browser resumes from what the
 			// ring still holds, never a corrupted tail).

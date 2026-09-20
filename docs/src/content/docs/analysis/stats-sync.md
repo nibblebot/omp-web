@@ -8,7 +8,7 @@ Analysis reads two sources, and only one of them needs maintenance.
 - Every session transcript is a JSONL file read live from the sessions directory. Transcript browsing, per-message details, tool durations, and the longest call come from these files and work without any database.
 - `stats.db` is an index built from those transcripts by the `omp stats` command. Token totals, cost, per-turn latency percentiles, and error turns come from it, because they are aggregates that the raw files do not carry.
 
-A session that exists on disk but has no rows in `stats.db` is marked `not synced` in the transcripts sidebar and `not indexed` on its row. It still opens; the Overview simply labels which figures are live and which wait for a sync. See [Session analytics](/analysis/analytics/) for how the labels read.
+A session that exists on disk but has no rows in `stats.db` is marked `not synced` in the transcripts sidebar and `not indexed` on its row. It still opens; the Overview labels which figures are live and which wait for a sync. See [Session analytics](/analysis/analytics/) for how the labels read.
 
 ## What a sync does
 
@@ -18,7 +18,7 @@ A sync runs `omp stats --summary` on the machine that runs the fleet, then re-re
 - The transcripts list, the database health, and the open session's analytics all refresh after a successful sync, so a session that was `not synced` becomes fully indexed without a reload.
 - Transcripts themselves are never modified by a sync. The command reads them and records what it computes in the database, and the browser never writes to `stats.db` directly.
 
-Nothing in the transcript views requires a sync. Syncing is what unlocks the database-backed figures and clears the `not indexed` markers.
+Nothing in the transcript views requires a sync. A sync is what populates the database-backed figures and clears the `not indexed` markers.
 
 ## Running a sync
 

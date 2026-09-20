@@ -98,7 +98,7 @@ const EmptyState: Component = () => (
 
 /** Roster mode with no live session (the attached daemon was stopped,
  *  removed, or never picked): a quiet centered hint replaces the whole chat
- *  column — header/stream/composer all belong to a session that is gone. */
+ *  column. Header/stream/composer all belong to a session that is gone. */
 const NoActiveSessionPane: Component = () => (
 	<div class="roster-empty-pane">
 		<p class="roster-empty-title">No active session</p>
@@ -134,7 +134,7 @@ export const App: Component = () => {
 	return (
 		<div class="app">
 			{/* finding #P1: always-mounted aria-live region (WCAG 4.1.3). Announcements
-			    are written by state.announce() — never conditionally rendered, so
+			    are written by state.announce(), never conditionally rendered, so
 			    screen readers register the polite region at mount. */}
 			<div role="status" aria-live="polite" class="visually-hidden">
 				{state.announcement}
@@ -142,7 +142,7 @@ export const App: Component = () => {
 			<StatusBar />
 			{/* Roster toggle: sticky top-left of the viewport (roster mode,
 			    either view), shown only while the current mode's docked
-			    sidebar is closed — the open sidebar carries its own close
+			    sidebar is closed; the open sidebar carries its own close
 			    button top-right. Each mode collapses independently. */}
 			<Show
 				when={
@@ -165,7 +165,7 @@ export const App: Component = () => {
 			</Show>
 			<div class="app-body">
 				{/* Work mode (roster + fleet edge): the docked roster sidebar.
-				    Mounted only in Work; the two-pane swap with Analysis — which
+				    Mounted only in Work; the two-pane swap with Analysis
 				    brings its own transcript sidebar inside TxBrowser. Single mode
 				    has no sidebar at all. First child so it docks LEFT. */}
 				<Show when={state.sessionMode === "roster" && state.view === "work"}>
@@ -197,7 +197,7 @@ export const App: Component = () => {
 				<Show when={state.view === "work" || state.sessionMode !== "roster"}>
 					{/* Roster mode with no live session (stopped/removed daemon, or none
 					    picked yet): the empty pane replaces the chat column. Standalone
-					    mode is never gated — hasLiveSession() is true outside roster. */}
+					    mode is never gated; hasLiveSession() is true outside roster. */}
 					<Show
 						when={state.sessionMode === "roster" && !hasLiveSession()}
 						fallback={

@@ -8,7 +8,7 @@
  * - Virtualization: only viewport-bound rows exist in the DOM
  *   (@tanstack/solid-virtual, overscan 10, measured variable heights).
  * - Pairing: tool-call pairing maps are computed once per entries change over
- *   ALL loaded entries (pairing.ts) — toolResults pair with their call's
+ *   ALL loaded entries (pairing.ts); toolResults pair with their call's
  *   execution start across page boundaries; calls with a start but no result
  *   yet in the loaded range show a "pending…" badge.
  * - The ?tool= filter applies ONLY to the main-session view; subagent
@@ -106,7 +106,7 @@ export function buildDayRows(entries: readonly RawEntry[]): TranscriptRow[] {
 		const ts = entryTs(e);
 		if (ts !== null) {
 			const day = new Date(ts).toDateString();
-			// Separate only when a previous DATED row exists — undated leading rows
+			// Separate only when a previous DATED row exists; undated leading rows
 			// (e.g. the title slot) never produce a spurious separator.
 			if (prevDay !== null && day !== prevDay) {
 				out.push({ kind: "day", ts, label: new Date(ts).toLocaleDateString() });

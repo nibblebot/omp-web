@@ -24,7 +24,7 @@ let nextUiRequestId = 1;
 
 /**
  * Sentinel for the collab ui preference: the collab channel went away
- * mid-request (no writable guest at send time, teardown, abort) — the caller
+ * mid-request (no writable guest at send time, teardown, abort); the caller
  * falls through to the web-socket path below.
  */
 const COLLAB_UI_FALLTHROUGH = Symbol("collab-ui-fallthrough");

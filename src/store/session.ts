@@ -1,8 +1,8 @@
 import { state } from "../state";
 
 /**
- * Session domain (Phase 3 store facade split). The session MIRROR itself —
- * applyState/loadHistory/resetSessionView — deliberately stays in state.ts
+ * Session domain (Phase 3 store facade split). The session MIRROR itself,
+ * applyState/loadHistory/resetSessionView, deliberately stays in state.ts
  * (it is a cross-domain reset surface the tests drive through the mux); this
  * module owns the session readiness accessor.
  */

@@ -51,12 +51,12 @@ export function buildUsageRow(
 	return row;
 }
 
-/** "3.2s" — seconds with one decimal. */
+/** Seconds with one decimal, e.g. "3.2s". */
 export function formatDurationMs(ms: number): string {
 	return `${(ms / 1000).toFixed(1)}s`;
 }
 
-/** "425 tok/s" — compact throughput. */
+/** Compact throughput, e.g. "425 tok/s". */
 export function formatTokensPerSec(tps: number): string {
 	return `${formatTokens(tps)} tok/s`;
 }
@@ -74,7 +74,7 @@ export function formatUsageRow(row: UsageRow): string {
 	return parts.join(" · ");
 }
 
-/** Locale-grouped integer for usage amounts ("1,250"); "—" when absent. */
+/** Locale-grouped integer for usage amounts ("1,250"); an em dash when absent. */
 export function formatAmount(n: number | undefined): string {
 	if (n === undefined || !Number.isFinite(n)) return "—";
 	return n.toLocaleString("en-US");
@@ -83,7 +83,7 @@ export function formatAmount(n: number | undefined): string {
 /**
  * Unit-aware UsageAmount rendering: tokens use the compact k/M formatter,
  * percents append "%", everything else is locale-grouped ("1,250 / 5,000").
- * Missing values render as "—" so limits without amounts stay readable.
+ * Missing values render as an em dash so limits without amounts stay readable.
  */
 export function formatUnitAmount(amount: { used?: number; limit?: number; unit: string }): string {
 	const v = (n: number | undefined) =>
@@ -95,7 +95,7 @@ export function formatUnitAmount(amount: { used?: number; limit?: number; unit: 
 
 /**
  * Fraction of a limit used (0..1), or undefined when the report gives no
- * usable ratio. Local copy of pi-ai's resolveUsedFraction — a runtime value
+ * usable ratio. Local copy of pi-ai's resolveUsedFraction, since a runtime value
  * import from @oh-my-pi/pi-ai pulls the package's non-JS assets into the
  * vite dep graph and breaks the optimizer (documented plan constraint:
  * type-only imports only).

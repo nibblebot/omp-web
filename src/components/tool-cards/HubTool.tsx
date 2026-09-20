@@ -3,7 +3,7 @@ import { ArrowRightIcon } from "../shared/icons";
 import type { ToolItem } from "../../state";
 import { CollapsiblePre, ToolShell } from "./ToolShell";
 
-/** hub tool: send/wait/poll card — peer, message preview, status. */
+/** hub tool: send/wait/poll card showing peer, message preview, and status. */
 export const HubTool: Component<{ item: ToolItem }> = (props) => {
 	const args = () =>
 		(props.item.args as {

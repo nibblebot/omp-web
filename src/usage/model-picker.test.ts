@@ -11,7 +11,7 @@ describe("thinkingLevelLabel (TUI label parity)", () => {
 });
 
 describe("thinkingOptions (ModelPicker step 3)", () => {
-	test("no controllable effort surface yields no options — caller skips the thinking step", () => {
+	test("no controllable effort surface yields no options; caller skips the thinking step", () => {
 		expect(thinkingOptions(undefined)).toEqual([]);
 		expect(thinkingOptions([])).toEqual([]);
 	});

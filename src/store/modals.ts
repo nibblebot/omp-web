@@ -21,7 +21,7 @@ export function sendLoginCode(requestId: string, code: string): void {
 }
 
 // Phase 3: answer the server's ui_request (ExtensionUIContext dialogs).
-// Routing is by stream attachment — no sessionId on the command. The
+// Routing is by stream attachment; no sessionId on the command. The
 // ui_request id doubles as the POST dedup id.
 export function sendUiResponse(id: string, result: unknown): void {
 	if (state.uiRequest?.id === id) setState("uiRequest", null);
@@ -29,7 +29,7 @@ export function sendUiResponse(id: string, result: unknown): void {
 	void postCommand({ type: "ui_response", id, result } satisfies ClientCommand).catch(() => {});
 }
 
-// Cancellation resolves the request undefined — NOT the error variant. The
+// Cancellation resolves the request undefined, NOT the error variant. The
 // AskTool rich-dialog path (tools/ask.ts) maps an undefined result to
 // ToolAbortError("Ask tool was cancelled by the user"); a rejected promise
 // (`error` field) would surface the raw error text instead.

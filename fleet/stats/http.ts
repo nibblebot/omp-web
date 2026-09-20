@@ -14,7 +14,7 @@ export function errorJson(message: string, status = 400): Response {
 /**
  * Run a request through a route registry. Returns null when nothing matches.
  * Every handler call is wrapped in try/catch so a handler bug can never leak
- * a non-JSON 500 (or HTML) — responses are always JSON.
+ * a non-JSON 500 (or HTML). Responses are always JSON.
  */
 export async function dispatchRequest(
 	req: Request,

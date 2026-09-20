@@ -30,7 +30,7 @@ A design direction that only makes sense once one of these exists is out of scop
 
 ## Design principles
 
-The north star is "The Mission Control Console": one operator, many agents. The screen's job is supervision, not conversation, so surfaces recede and status carries the signal. Density follows the terminal rather than the chat app.
+The design direction is "The Mission Control Console": one operator, many agents. The screen's job is supervision, not conversation, so surfaces recede and status carries the signal. Density follows the terminal rather than the chat app.
 
 The named rules are the system's load-bearing constraints. Read their full statements in DESIGN.md.
 

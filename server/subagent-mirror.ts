@@ -18,7 +18,7 @@ import { broadcastTo } from "./sse-delivery";
 // Subagent mirror: a port of the RPC mode's subagent registry semantics at a
 // fixed "progress" subscription level (subagent_event frames were never
 // emitted at that level, so the raw event channel is not relayed). Lifecycle
-// and progress payloads are broadcast verbatim — the client parses exactly
+// and progress payloads are broadcast verbatim; the client parses exactly
 // these shapes. The mirror state lives on the owning SessionEntry (rosters
 // stay namespaced per session) and owns subagentId → sessionFile resolution
 // for transcript reads, including finished agents.

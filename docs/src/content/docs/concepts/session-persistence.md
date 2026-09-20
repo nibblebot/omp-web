@@ -51,7 +51,7 @@ The per-row session dropdown lists the last ten sessions for that checkout, newe
 
 Two failure cases are worth knowing:
 
-- If the file behind a row's last session was removed outside omp-web, a resume of that file fails and the session daemon logs that it is starting fresh. The row is not broken; it simply has no history to restore.
+- If the file behind a row's last session was removed outside omp-web, a resume of that file fails and the session daemon logs that it is starting fresh. The row is not broken; it has no history to restore.
 - If a resume would open a transcript in use by another live process, the start is refused with the lock message above. Waking the existing row is the safe path.
 
 ## What survives what

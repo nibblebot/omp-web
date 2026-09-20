@@ -1,16 +1,16 @@
 /**
  * End-to-end API tests against the generated fixture.
  *
- * Runs the stats app in-process (test/helpers.ts — createStatsApp behind a
- * real Bun.serve on an ephemeral port) with config pointing at test/.fixture,
+ * Runs the stats app in-process: test/helpers.ts puts createStatsApp behind a
+ * real Bun.serve on an ephemeral port, with config pointing at test/.fixture,
  * which scripts/gen-tx-fixture.ts regenerates in beforeAll. All expected
- * values come from the fixture generator's exported EXPECT object — the
+ * values come from the fixture generator's exported EXPECT object, so the
  * tests can never drift from the fixture data they were written against.
  *
  * NOTE on health.sessionsCount: healthRoute sessionCount() counts
  * *.jsonl-named direct children of each project dir. The fixture has 3 main
  * files on disk; the subagent directory is named WITHOUT the .jsonl
- * extension (real omp layout — a file and a directory cannot share one
+ * extension (real omp layout: a file and a directory cannot share one
  * name), so it is not counted. The sessions LIST reports 4 = 3 disk +
  * proj-d (DB-only).
  */
@@ -242,7 +242,7 @@ describe("session viewer api (fixture)", () => {
 	});
 
 	test("subagents proj-d (file missing on disk): 404", async () => {
-		// Unified missing-file semantics — a deleted session's :file detail is 404.
+		// Unified missing-file semantics: a deleted session's :file detail is 404.
 		const res = await api(`/ctl/stats/sessions/${enc(EXPECT.sessions.projD.file)}/subagents`);
 		expect(res.status).toBe(404);
 	});

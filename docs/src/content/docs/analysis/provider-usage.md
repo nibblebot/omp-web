@@ -7,7 +7,7 @@ A provider usage report describes your account with a provider, not the session 
 
 ## Where reports come from
 
-The browser asks the attached session daemon for usage reports and mirrors the answer. The session daemon returns one report per provider that supports reporting; a session with no reporting provider resolves to an empty state rather than an error. Providers that do not expose usage data are simply absent from the list.
+The browser asks the attached session daemon for usage reports and mirrors the answer. The session daemon returns one report per provider that supports reporting; a session with no reporting provider resolves to an empty state rather than an error. Providers that do not expose usage data are absent from the list.
 
 The request is a one-shot read, never a poll:
 

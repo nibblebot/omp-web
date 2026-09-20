@@ -1,4 +1,4 @@
-/* Prompt — composer, queue chips, image tray, send/new-session/stop buttons, autocomplete. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Prompt: composer, queue chips, image tray, send/new-session/stop buttons, autocomplete. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 .prompt-box textarea {
 	width: 100%;

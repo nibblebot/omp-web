@@ -5,7 +5,7 @@ import { call } from "./transport";
 // Phase 11: /btw side panel (runEphemeralTurn relay). The panel owns a
 // streamId that routes ephemeral_delta frames and abortEphemeral; nothing
 // here touches the transcript or the main turn. The delta buffer itself
-// (pendingEphemeral) lives in chat.ts — the rAF flush that drains it is
+// (pendingEphemeral) lives in chat.ts; the rAF flush that drains it is
 // shared with the transcript machinery, so the ephemeral frames coalesce in
 // the same loop.
 // ---------------------------------------------------------------------------

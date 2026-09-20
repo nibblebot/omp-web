@@ -1,4 +1,4 @@
-/* Tx — transcripts/stats view. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Tx: transcripts/stats view. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 /* ── tx: transcripts view ── */
 
@@ -1323,8 +1323,8 @@
   font-size: var(--tx-fs-sm);
   color: var(--tx-text-faint);
 }
-/* universal raw-JSON fallback — sits at the right end of the row's header line;
-   when open it wraps to its own full-width line below the header */
+/* The universal raw-JSON fallback sits at the right end of the row's header
+   line; when open it wraps to its own full-width line below the header */
 .raw-entry {
   margin-left: auto;
   flex: none;

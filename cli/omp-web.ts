@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * omp-web — single installed entrypoint (Phase 2 packaging).
+ * omp-web: the single installed entrypoint (Phase 2 packaging).
  *
  * Installed from the release tarball into a pinned project dir
  * (`scripts/install-omp-web.ts`, default `~/.omp-web/install/`) with an
@@ -18,7 +18,7 @@
  *   omp-web --version | version       → print version, exit 0
  *   omp-web <unknown>                 → usage on stderr, exit 1
  *
- * stdout contract: nothing is printed to stdout before delegating — fleet
+ * stdout contract: nothing is printed to stdout before delegating; fleet
  * `serve`'s banner line 1 and the daemon's `OMP_SESSION|` line stay parseable
  * by spawners.
  */
@@ -46,7 +46,7 @@ const FLEET_SUBCOMMANDS: Record<string, true> = {
 export type DispatchTarget = "fleet" | "session" | "update" | "version" | "usage";
 
 /** Pure argv classification: argv here is process.argv.slice(2). A bare
- *  invocation routes to fleet serve — `omp-web` alone starts the fleet. */
+ *  invocation routes to fleet serve; `omp-web` alone starts the fleet. */
 export function classifyCommand(argv: string[]): DispatchTarget {
 	const cmd = argv[0];
 	if (cmd === "--version" || cmd === "version") return "version";

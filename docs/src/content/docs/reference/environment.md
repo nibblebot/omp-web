@@ -7,7 +7,7 @@ omp-web reads environment variables in several separate processes: the fleet (fl
 
 Rules that hold everywhere:
 
-- Precedence is resolved per setting, not globally: explicit flag, then the matching environment variable, then a config-file value, then the built-in default. A setting with no flag or no config key simply skips that tier; each section lists the exact chain.
+- Precedence is resolved per setting, not globally: explicit flag, then the matching environment variable, then a config-file value, then the built-in default. A setting with no flag or no config key skips that tier; each section lists the exact chain.
 - Values are read once when a process starts. Restart the fleet, or the affected session daemon, after changing a variable.
 - Session daemons started by the fleet inherit the fleet process environment, because spawn templates run through `sh -c` without an environment override. Where you set a variable decides who sees it.
 - The browser UI has no environment variables. Browser preferences are stored locally per browser; see [Configuration](/configuration/).

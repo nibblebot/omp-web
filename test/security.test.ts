@@ -2,12 +2,12 @@
  * Security wave 3 regression tests (2026-08 audit Phase 6):
  *
  *  - Symlink escape: every `:file` handler (transcript, stats, subagents)
- *    rejects paths whose realpath escapes sessionsDir — file symlinks,
+ *    rejects paths whose realpath escapes sessionsDir: file symlinks,
  *    dir symlinks, and symlinked intermediate dirs → 404; real files → 200.
  *  - Subagents recursive walk skips symlinked children pointing outside
  *    the session's own tree and 404s when the walk root itself escapes.
  *  - Unowned paths (non-stats, unknown under /ctl/stats) → handleFetch null:
- *    the fleet control plane's own 404/405 handling owns those — the stats
+ *    the fleet control plane's own 404/405 handling owns those; the stats
  *    app never serves index.html or HTML of any kind.
  *  - /ctl/stats/health redacts the $HOME prefix to "~" in displayed paths.
  */
@@ -46,20 +46,20 @@ beforeAll(() => {
 	// A second main session whose subagent dir is a symlink escape (walk root).
 	writeFileSync(join(sessionsDir, "proj", "leakmain.jsonl"), `${MSG_LINE}\n`);
 
-	// Secret files OUTSIDE sessionsDir — only reachable through a symlink.
+	// Secret files OUTSIDE sessionsDir, only reachable through a symlink.
 	writeFileSync(join(outsideDir, "secret.jsonl"), `${TITLE_LINE}\n${MSG_LINE}\n`);
 	writeFileSync(join(outsideDir, "leak.jsonl"), `${MSG_LINE}\n`);
 
 	// Escape fixtures:
-	// 1. file symlink — sessions/proj/escape.jsonl -> outside/secret.jsonl
+	// 1. file symlink: sessions/proj/escape.jsonl -> outside/secret.jsonl
 	symlinkSync(join(outsideDir, "secret.jsonl"), join(sessionsDir, "proj", "escape.jsonl"));
-	// 2. dir symlink — sessions/evil -> outside
+	// 2. dir symlink: sessions/evil -> outside
 	symlinkSync(outsideDir, join(sessionsDir, "evil"));
-	// 3. intermediate dir symlink — sessions/proj/nested -> outside
+	// 3. intermediate dir symlink: sessions/proj/nested -> outside
 	symlinkSync(outsideDir, join(sessionsDir, "proj", "nested"));
-	// 4. subagent walk-root symlink — sessions/proj/leakmain -> outside
+	// 4. subagent walk-root symlink: sessions/proj/leakmain -> outside
 	symlinkSync(outsideDir, join(sessionsDir, "proj", "leakmain"));
-	// 5. subagent child symlink — sessions/proj/real/leak -> outside
+	// 5. subagent child symlink: sessions/proj/real/leak -> outside
 	symlinkSync(outsideDir, join(sessionsDir, "proj", "real", "leak"));
 
 	cfg = {

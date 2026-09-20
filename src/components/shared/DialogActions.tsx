@@ -2,7 +2,7 @@ import { Show, type JSX } from "solid-js";
 
 /** Cancel+primary footer row, extracted from AskDialog's hand-rolled
  *  `.ask-actions` footers (AskForm/ConfirmForm/InputForm/EditorForm) and the
- *  DangerConfirmDialog danger variant — markup and classes verbatim. The
+ *  DangerConfirmDialog danger variant, with markup and classes verbatim. The
  *  primary button renders `.send` styling, or `.danger-confirm-btn` when
  *  `primaryDanger`. `onPrimary` is OPTIONAL: omit it for a cancel-only
  *  footer (SelectForm's case) with the same `.ask-actions` markup. `busy`

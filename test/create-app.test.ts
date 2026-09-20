@@ -1,7 +1,7 @@
 /**
  * createStatsApp must support any number of apps per process: each app owns
  * a private route registry (threaded through register()), so registrations
- * can never collide — bare `bun test` runs every suite in ONE process and
+ * can never collide. Bare `bun test` runs every suite in ONE process, and
  * the old module-global registry broke on the second createStatsApp call.
  */
 import { afterEach, describe, expect, test } from "bun:test";

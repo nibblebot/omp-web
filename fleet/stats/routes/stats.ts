@@ -5,8 +5,8 @@
  * GET /ctl/stats/sessions/:file/stats → SessionStats
  *
  * Per-session stats merge two sources:
- *   - stats.db — authoritative counts (works even when the session file is gone)
- *   - the session JSONL — durations / pending calls / title, cached by
+ *   - stats.db holds authoritative counts (works even when the session file is gone)
+ *   - the session JSONL supplies durations / pending calls / title, cached by
  *     (mtimeMs, size) so repeated reads of large files are cheap.
  */
 import { existsSync, statSync } from "node:fs";
@@ -33,7 +33,7 @@ import type {
 } from "../../../shared/stats-types";
 
 // ---------------------------------------------------------------------------
-// GET /ctl/stats/tools — global tool breakdown across all sessions.
+// GET /ctl/stats/tools returns a global tool breakdown across all sessions.
 // ---------------------------------------------------------------------------
 
 function toolsRoute(ctx: AppCtx): Route {
@@ -101,7 +101,7 @@ interface SqlStats {
 
 function querySqlStats(db: Database, sessionAbs: string, sessionRel: string): SqlStats {
 	// stats.db stores session_file as ABSOLUTE on this machine, but the schema
-	// documents RELATIVE paths — match both forms so a session is never missed.
+	// documents RELATIVE paths. Match both forms so a session is never missed.
 	const sessionFileArgs = [sessionAbs, sessionRel];
 	const toolRows = db
 		.query(
@@ -449,7 +449,7 @@ function statsRoute(ctx: AppCtx): Route {
 
 			const abs = toAbs(cfg.sessionsDir, rel)!;
 			// Missing-file semantics: a `:file` detail for a file that is not on disk
-			// is 404 — even when stats.db still has rows for it (DB-only sessions stay
+			// is 404, even when stats.db still has rows for it (DB-only sessions stay
 			// visible in the SESSIONS LIST with onDisk:false; their :file details are
 			// gone). Symlinked paths that escape sessionsDir are also 404.
 			if (!existsSync(abs)) return errorJson("session not found", 404);

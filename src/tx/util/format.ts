@@ -76,7 +76,8 @@ export function folderOf(file: string): string {
 	return parts.length > 1 ? (parts[0] ?? "") : "";
 }
 
-/** Encode each `/`-separated path segment, keeping the separators literal — used for API `:file` URL params and hash routes alike. */
+/** Encode each `/`-separated path segment, keeping the separators literal;
+ *  used for API `:file` URL params and hash routes alike. */
 export function encodePathSegments(file: string): string {
 	return file
 		.split("/")

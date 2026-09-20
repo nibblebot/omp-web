@@ -9,7 +9,7 @@ Templates are fleet configuration, read from the fleet's config file. For the co
 
 ## The config file
 
-The fleet reads `~/.omp-web/config.json` by default, or the file named by `OMP_FLEET_CONFIG`. The first-run offer is the only writer, but hand edits are read on the next start and unknown keys are tolerated, so a templates block can simply be added to the file:
+The fleet reads `~/.omp-web/config.json` by default, or the file named by `OMP_FLEET_CONFIG`. The first-run offer is the only writer, but hand edits are read on the next start and unknown keys are tolerated, so a templates block can be added to the file:
 
 ```json
 {

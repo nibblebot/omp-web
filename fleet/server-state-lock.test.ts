@@ -1,6 +1,6 @@
 /**
  * State-lock tests for fleet/server.ts ("fleet state lock" describe): one
- * fleet per state file via an O_EXCL pidfile lock — a second startFleet on
+ * fleet per state file via an O_EXCL pidfile lock, so a second startFleet on
  * the same path rejects with LockHeldError, close() releases the lock, and
  * a spawned `serve` exits 77 with the lock message while another fleet
  * holds the state.
@@ -84,7 +84,7 @@ describe("fleet state lock", () => {
 			expect(exit).toBe(77);
 			expect(out).toBe("");
 			expect(errText).toContain(
-				`fleet already running (pid ${process.pid}) — state locked at ${statePath}.lock`,
+				`fleet already running (pid ${process.pid}). State locked at ${statePath}.lock`,
 			);
 		} finally {
 			await first.close();

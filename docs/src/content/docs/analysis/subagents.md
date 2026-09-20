@@ -30,7 +30,7 @@ Selecting a row opens that transcript in the Transcript tab, tagged `subagent tr
 Notes on what the listing can and cannot show:
 
 - The main session file must still exist on disk for the tab to answer. If it was deleted, the tab reports a load failure even when the directory lingers.
-- Files deleted from the directory simply disappear from the list.
+- Files deleted from the directory disappear from the list.
 - Paths that resolve outside the sessions directory are skipped, so a symlinked entry cannot expose files from elsewhere.
 - Subagent and advisor transcripts never appear as rows in the sessions sidebar. Only main-agent transcripts are listed there; the `__advisor` file name is excluded from that list even when it sits directly in a project folder.
 

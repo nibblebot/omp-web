@@ -63,7 +63,7 @@ Both flows create one roster entry per worktree.
 - The entry is nested under the project group and titled by its branch, falling back to the directory name. Worktree rows never show the full directory; the path is available from the tooltip and from **Daemon details**.
 - Without a session start, the entry is registered asleep and is wakeable at any time; see [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/).
 - The main-checkout row is the project's default workspace and is never created under the workspace root.
-- The row, its path, and its Git facts persist in the fleet state file, and the directory is a normal Git worktree. Restarting the fleet never recreates, moves, or renames a worktree; the row simply comes back asleep.
+- The row, its path, and its Git facts persist in the fleet state file, and the directory is a normal Git worktree. Restarting the fleet never recreates, moves, or renames a worktree; the row comes back asleep.
 
 Failures are staged. If a worktree is created but its session daemon fails to start, the worktree itself stays registered, so it appears in the **Add existing** tab and can be started later. Creation, registration, and session start are separate steps.
 

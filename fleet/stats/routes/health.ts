@@ -1,5 +1,5 @@
 /**
- * GET /ctl/stats/health — liveness + data-source status.
+ * GET /ctl/stats/health returns liveness + data-source status.
  *
  * Ported from the standalone server's health route (minus static serving,
  * SPA fallback and the port field): each request re-stats stats.db so the
@@ -27,7 +27,7 @@ function healthRoute(ctx: AppCtx): Route {
 		pattern: /^\/ctl\/stats\/health$/,
 		handler: () => {
 			// Re-stat stats.db so health reflects rotations/appearances since the
-			// last probe (request-driven — no interval timer).
+			// last probe (request-driven, no interval timer).
 			ctx.dbm.reprobe();
 			const db = ctx.dbm.db();
 			let statsDb: Health["statsDb"] = "missing";
@@ -59,7 +59,7 @@ function healthRoute(ctx: AppCtx): Route {
 				// Reconciled with GET /ctl/stats/sessions: sessionsCount uses the same
 				// walk the sessions list builds from (walkJsonl + isMainSession), so
 				// it always equals the number of on-disk MAIN sessions that list
-				// would show — subagent transcripts and DB-only rows are excluded.
+				// would show; subagent transcripts and DB-only rows are excluded.
 				sessionsCount: countMainSessions(ctx.cfg.sessionsDir),
 				dbCounts,
 			};

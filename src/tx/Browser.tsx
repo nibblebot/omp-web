@@ -42,7 +42,7 @@ export function TxBrowser() {
 		() => syncTick(),
 		() => api.health(),
 	);
-	/** An errored Solid resource throws when read — check .error first. */
+	/** An errored Solid resource throws when read; check .error first. */
 	const healthSafe = () => (health.error ? undefined : health());
 
 	const file = () => {
@@ -152,7 +152,7 @@ function HealthBanner(props: { health: () => Health | undefined; onSynced: () =>
 							}
 						>
 							<span class="banner-msg">
-								stats.db not found — run <code>omp stats</code> once to build the index
+								stats.db not found, run <code>omp stats</code> once to build the index
 							</span>
 						</Show>
 						<button

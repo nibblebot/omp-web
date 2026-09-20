@@ -89,7 +89,7 @@ describe("sessionActivity precedence on ready rows", () => {
 	});
 });
 
-describe("sessionActivity detached rows (no remote signal — old edge or down stream)", () => {
+describe("sessionActivity detached rows (no remote signal: old edge or down stream)", () => {
 	test("uiPending without attached → not blocked (client signals describe only the attached session)", () => {
 		expect(sessionActivity({ status: "ready" }, { ...DETACHED, uiPending: true })).toBe("idle");
 	});
@@ -159,7 +159,7 @@ describe("sessionActivity remote realtime activity (daemon_activity frames)", ()
 
 	test("attached row ignores remote (its own live signals win)", () => {
 		// Even with a remote "blocked", the attached row's read of its own
-		// stream governs — remote is never consulted on attach.
+		// stream governs, so remote is never consulted on attach.
 		expect(sessionActivity({ status: "ready" }, { ...ATTACHED_IDLE, remote: REMOTE_BLOCKED })).toBe(
 			"idle",
 		);

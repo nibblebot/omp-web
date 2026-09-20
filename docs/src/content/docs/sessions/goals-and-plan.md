@@ -17,7 +17,7 @@ Use `/goal set <objective>`, or open the goal panel with `/goal` and type the ob
 
 - The status bar shows a `goal:` badge with the start of the objective. Click it to open the goal panel.
 - The panel shows the objective, its status, the elapsed time, and, when the goal carries a token budget, a progress bar with tokens used against the budget.
-- Goal statuses are `active`, `paused`, `budget-limited`, `complete`, and `dropped`. When the goal is not simply active, the panel also shows the mode and its reason.
+- Goal statuses are `active`, `paused`, `budget-limited`, `complete`, and `dropped`. When the goal is not active, the panel also shows the mode and its reason.
 
 The badge and panel update live as the goal changes, including when the agent updates it.
 

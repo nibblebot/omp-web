@@ -1,29 +1,29 @@
 #!/usr/bin/env bun
 /**
- * test-onboard — OFFLINE end-to-end walk of the omp-web distribution + onboarding path.
+ * test-onboard: OFFLINE end-to-end walk of the omp-web distribution + onboarding path.
  *
  * Phase 5 gate (docs/release.md "Remaining actions"): everything proven
  * locally before anything is published. Runs in a sandboxed HOME +
  * BUN_INSTALL with a local `bun pm pack` tarball and a local manifest
- * fixture — no network beyond the dependency registry for `bun add` / the
+ * fixture: no network beyond the dependency registry for `bun add` / the
  * poison install, no GitHub, no npm publish.
  *
  * Walk:
  *   1. bun run build → bun pm pack → omp-web-<version>.tgz
  *   2. POISON the sandbox global store with @oh-my-pi/pi-ai 17.3.5 (the omp
- *      CLI's version — the skew that broke `bun install -g`-based installs),
+ *      CLI's version, the skew that broke `bun install -g`-based installs),
  *      then install the tarball into a dedicated pinned dir
  *      (scripts/install-omp-web.ts); assert the symlink points there, the
  *      pinned pi-ai is 17.1.8, and `omp-web --version` prints the version
  *      despite the poisoned store
  *   3. fixture repo (git init + commit) with one linked worktree
  *   4. first-run config written to ~/.omp-web/config.json (the serve offer's
- *      TTY-gated write, done directly here — workspaceDir only)
+ *      TTY-gated write, done directly here, workspaceDir only)
  *   5. BARE `omp-web` from an arbitrary cwd (= fleet serve): banner line 1
  *      intact + real embedded UI, then the repo registered + linked worktree
  *      adopted over the loopback /ctl API (the UI picker's path)
  *   6. spawn a session on the registered project (fleet local template now spawns
- *      `omp-web session` — PATH must include $BUN_INSTALL/bin); assert it reaches
+ *      `omp-web session`; PATH must include $BUN_INSTALL/bin); assert it reaches
  *      ready and its cwd matches the project
  *   7. update round-trip: version bumped to 0.2.0, rebuilt bundle, fixture
  *      Bun.serve hosts release-manifest.json + the 0.2.0 tarball;
@@ -83,7 +83,7 @@ function check(name: string, cond: boolean, detail = ""): void {
 	if (cond) console.log(`ok   ${name}`);
 	else {
 		failures++;
-		console.error(`FAIL ${name}${detail !== "" ? ` — ${detail}` : ""}`);
+		console.error(`FAIL ${name}${detail !== "" ? `: ${detail}` : ""}`);
 	}
 }
 
@@ -91,7 +91,7 @@ function sandboxEnv(extra: Record<string, string> = {}): Record<string, string> 
 	// Strip the product's own env knobs from the inherited shell: a dev
 	// shell's OMP_FLEET_STATE points the sandboxed fleet at the developer's
 	// real (locked) state file, and OMP_FLEET_LOCAL_TEMPLATE would replace the
-	// installed bundle's spawn template with the source entry — defeating the
+	// installed bundle's spawn template with the source entry, defeating the
 	// installed-mode assertions. Script-provided knobs ride `extra` (applied
 	// after the scrub, so they survive).
 	const inherited = Object.fromEntries(
@@ -126,7 +126,7 @@ async function run(
 	const timeout = opts.timeoutMs ?? 60_000;
 	const timer = setTimeout(() => {
 		proc.kill();
-		console.error(`FAIL ${name} — timed out after ${timeout}ms`);
+		console.error(`FAIL ${name}: timed out after ${timeout}ms`);
 	}, timeout);
 	const [stdout, stderr] = await Promise.all([
 		new Response(proc.stdout).text(),
@@ -236,10 +236,10 @@ try {
 	);
 
 	// 2. Pinned install (dedicated dir) + symlink + version. First POISON the
-	// shared global store with a NEWER @oh-my-pi (17.3.5 — what the omp CLI
+	// shared global store with a NEWER @oh-my-pi (17.3.5, what the omp CLI
 	// installs): a `bun install -g`-based omp-web would inherit it and crash
 	// (missing exports, e.g. zodToWireSchema). The dedicated-dir install must
-	// be immune — its own node_modules pins the tarball's versions.
+	// be immune: its own node_modules pins the tarball's versions.
 	// ---------------------------------------------------------------------------
 	console.log("== 2. pinned install ==");
 	r = await run(
@@ -316,7 +316,7 @@ try {
 	// 2b. install.sh (bun-only, curl-pipe style): a FRESH HOME + BUN_INSTALL
 	// + data home. The fixture server hosts the release assets at the
 	// download-URL shape install.sh hits; the script must resolve "latest"
-	// from the GitHub API (real network is off-limits here — the sandboxed
+	// from the GitHub API (real network is off-limits here; the sandboxed
 	// OMP_WEB_INSTALL_DIR / OMP_WEB_INSTALLER_API / OMP_WEB_DOWNLOAD_BASE
 	// fixtures cover it), verify the sha256 from the release manifest,
 	// bun-add into its own pinned dir, and symlink the bin. No tarball or
@@ -427,7 +427,7 @@ try {
 
 	// 4. First-run config: the serve offer is TTY-gated, so this scripted
 	// walk writes the same file the offer would (data home + workspaceDir
-	// only — fleet/cli.ts writeConfigFile is the one writer).
+	// only; fleet/cli.ts writeConfigFile is the one writer).
 	// ---------------------------------------------------------------------------
 	console.log("== 4. config ==");
 	mkdirSync(join(dataHome, "workspaces"), { recursive: true });
@@ -493,7 +493,7 @@ try {
 		ui.ok && uiHtml.includes("<!doctype html>"),
 		uiHtml.slice(0, 80),
 	);
-	// Register the first repo (start:false — the E2E spawns explicitly later).
+	// Register the first repo (start:false; the E2E spawns explicitly later).
 	const addRes = await fetch(`http://127.0.0.1:${OMP_PORT}/ctl/projects`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -583,7 +583,7 @@ try {
 	tgz2 = join(ROOT, `omp-web-${v2}.tgz`);
 	check("0.2.0 tarball produced", r.code === 0 && existsSync(tgz2), r.stderr.slice(-200));
 	writeFileSync(pkgPath, originalPkg); // restore immediately after packing
-	if (!existsSync(tgz2)) throw new Error("no 0.2.0 tarball — aborting update step");
+	if (!existsSync(tgz2)) throw new Error("no 0.2.0 tarball, aborting update step");
 	const sha = createHash("sha256").update(readFileSync(tgz2)).digest("hex");
 	mkdirp(fixture);
 	copyFileSync(tgz2, join(fixture, `omp-web-${v2}.tgz`));
@@ -617,7 +617,7 @@ try {
 	);
 	r = await run("--version after update", [bin, "--version"]);
 	check(`--version prints ${v2}`, r.code === 0 && r.stdout.trim() === v2, r.stdout.trim());
-	// The update path runs bun remove/add in the pinned dir — must not walk
+	// The update path runs bun remove/add in the pinned dir, and must not walk
 	// up into the poisoned ancestor.
 	check(
 		"update ancestor package.json untouched",
@@ -660,6 +660,6 @@ if (fatal !== null) {
 	console.error(`FATAL: ${fatal}`);
 }
 console.log(
-	failures === 0 ? `\nPASS — ${v1}→${v2} onboarding walk complete` : `\n${failures} FAILURES`,
+	failures === 0 ? `\nPASS: ${v1}→${v2} onboarding walk complete` : `\n${failures} FAILURES`,
 );
 process.exit(failures === 0 ? 0 : 1);

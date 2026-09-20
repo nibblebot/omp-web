@@ -32,7 +32,7 @@ Because the fleet starts the process, it can also own the checkout:
 - It can create and delete managed worktrees under the workspace directory.
 - It stops and restarts the child, and marks the row asleep when the process exits.
 
-None of this requires the checkout to be a worktree the fleet created. A registered repository's main checkout is supervised the same way; managed worktrees simply add the deletion flow.
+None of this requires the checkout to be a worktree the fleet created. A registered repository's main checkout is supervised the same way; managed worktrees add only the deletion flow.
 
 ## Remote session daemons
 
@@ -91,7 +91,7 @@ Remote support is deliberately narrow:
 - The fleet's control plane binds to loopback, so the browser side is not exposed to the network by registering a remote session daemon.
 - Transport security is yours to provide. Dial endpoints over SSH forwarding, inside a private network such as a tailnet, or behind your own TLS termination. Publishing a session daemon port directly to the internet is not a supported configuration.
 
-An endpoint that answers with the wrong token is reported as an authorization failure and does not retry: the fleet treats a rejected credential as terminal until the row is respawned or re-registered. An endpoint that is simply unreachable retries with backoff, like any other reconnection.
+An endpoint that answers with the wrong token is reported as an authorization failure and does not retry: the fleet treats a rejected credential as terminal until the row is respawned or re-registered. An unreachable endpoint retries with backoff, like any other reconnection.
 
 ## Failure cases
 

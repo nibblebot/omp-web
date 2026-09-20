@@ -136,7 +136,7 @@ A fleet can supervise a session daemon that runs elsewhere only by dialing in. T
 ## Common failures
 
 - Refused bind: the session daemon prints the token refusal above and exits 1. Start it with `--token` or `OMP_SESSION_TOKEN`, or bind loopback and use a forward.
-- HTTP 401 in the browser: the request lacks the bearer credential. Off loopback, load the page with `?token=<token>`, and remember that asset and download requests need the same credential through a proxy or forward.
+- HTTP 401 in the browser: the request lacks the bearer credential. Off loopback, load the page with `?token=<token>`; asset and download requests need the same credential through a proxy or forward.
 - Prompts stay gated with a resolving state: provider, model, or authentication did not resolve. Fix the `omp` configuration, then restart the session daemon.
 - `Failed to start agent session: <error>` followed by exit 1: the session could not be created, usually because the bound directory is missing or unreadable. Check `--cwd` and start again.
 - `omp-session: session file <file> is locked by another omp-session (pid <pid>)`: another process holds that transcript. Stop it, or resume a different transcript.

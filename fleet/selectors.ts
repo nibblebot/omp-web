@@ -2,12 +2,12 @@
  * Daemon selector resolution for the fleet control plane.
  *
  * A selector names a set of registry entries:
- * - `all` — every entry.
- * - A bare daemonId (`d3`) — exact match; wins over glob interpretation.
- * - `label:k=v` (alias `tag:k=v`) — entries whose `labels` array contains
- *   exactly `k=v`.
- * - `project:name` — entries whose `project` equals `name` exactly.
- * - Anything else — a name glob: `*` matches any run (including empty),
+ * - `all` selects every entry.
+ * - A bare daemonId (`d3`) is an exact match; wins over glob interpretation.
+ * - `label:k=v` (alias `tag:k=v`) selects entries whose `labels` array
+ *   contains exactly `k=v`.
+ * - `project:name` selects entries whose `project` equals `name` exactly.
+ * - Anything else is a name glob: `*` matches any run (including empty),
  *   `?` matches exactly one character, and every other character is literal.
  *   The glob is anchored at both ends.
  *

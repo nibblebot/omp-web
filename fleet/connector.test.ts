@@ -106,7 +106,7 @@ interface FakeStream {
 	comment(): void;
 	/** Push a raw `: ping` comment (legacy liveness shape; parseSseUnits still surfaces it). */
 	commentLine(): void;
-	/** Cleanly end the stream (the daemon closed it — clean close). */
+	/** Cleanly end the stream (the daemon closed it, a clean close). */
 	close(): void;
 	/** Abruptly error the stream (unexpected close). */
 	error(): void;
@@ -298,7 +298,7 @@ function chunked(text: string): string {
 /**
  * A minimal raw HTTP/1.1 SSE server that ends the connection mid-chunked-body
  * (like a real daemon crash): the client's body read rejects with a network
- * error — the "unexpected close" the connector maps to reconnecting. Bun.serve
+ * error, the "unexpected close" the connector maps to reconnecting. Bun.serve
  * cannot fake this: its fetch handler closes even errored response streams
  * cleanly (scratch-verified), which the connector would read as a dormant
  * daemon and go asleep.
@@ -939,7 +939,7 @@ describe("DaemonConnector", () => {
 		const fake = startFake({
 			onOpen: (_fake, stream) => {
 				prime(stream);
-				// A keepalive ping event every 20ms — liveness that must keep
+				// A keepalive ping event every 20ms, liveness that must keep
 				// the stream alive far past the 50ms silence deadline. The ping
 				// carries no id and must never be dispatched as a frame.
 				const timer = setInterval(() => stream.comment(), 20);
@@ -971,8 +971,8 @@ describe("DaemonConnector", () => {
 		const fake = startFake({
 			onOpen: (_fake, stream) => {
 				prime(stream);
-				// Legacy comment keepalive — still surfaced by parseSseUnits and
-				// still credited to the silence deadline.
+				// Legacy comment keepalive, still surfaced by parseSseUnits and
+				// credited to the silence deadline.
 				const timer = setInterval(() => stream.commentLine(), 20);
 				stream.onEnd = () => clearInterval(timer);
 			},
@@ -1077,7 +1077,7 @@ describe("DaemonConnector", () => {
 		connector.connect(entry.daemonId);
 		await connector.waitReady(entry.daemonId, 2000);
 		// The stream only ever carried priming (seqs 1..3 < SSE_DELTA_SEQ_START):
-		// no delta ever arrived, so a reconnect must NOT request replay — the
+		// no delta ever arrived, so a reconnect must NOT request replay; the
 		// fresh priming already carries full current state.
 		fake.streams[0]!.close();
 		await waitFor(

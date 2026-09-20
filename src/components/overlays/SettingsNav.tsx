@@ -9,8 +9,8 @@ export interface SettingsSection {
 
 /**
  * Narrow-layout navigation (CSS-gated to ≤720px): a section picker select
- * instead of the wide rail. Pure view — the shell owns the selected-tab
- * state and passes it down with the change callback.
+ * instead of the wide rail. It is a pure view; the shell owns the
+ * selected-tab state and passes it down with the change callback.
  */
 export function SettingsSectionPicker(props: {
 	sections: SettingsSection[];
@@ -33,8 +33,8 @@ export function SettingsSectionPicker(props: {
 /**
  * Wide-layout navigation rail (CSS-gated to ≥721px): one button per section,
  * the active section's subsections beneath it, and the fleet fallback
- * footnote pinned to the rail bottom. Pure view — the shell owns selection
- * state and passes callbacks down.
+ * footnote pinned to the rail bottom. It is a pure view; the shell owns
+ * selection state and passes callbacks down.
  */
 export function SettingsNav(props: {
 	sections: SettingsSection[];
@@ -79,7 +79,7 @@ export function SettingsNav(props: {
 			    the nav rail, not body chrome. */}
 			<Show when={fleetSettingsActive()}>
 				<div class="settings-nav-footnote">
-					No session attached — changes save to config.yml and apply to new sessions.
+					No session attached. Changes save to config.yml and apply to new sessions.
 				</div>
 			</Show>
 		</nav>

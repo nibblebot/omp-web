@@ -21,10 +21,10 @@
  *
  * Host upgrades are privileged: they create rooms, so an optional
  * `authorizeHost` predicate gates them (the daemon wires the R14 bearer
- * gate — loopback exempt, off-loopback needs the token) and `maxRooms` caps
+ * gate: loopback exempt, off-loopback needs the token) and `maxRooms` caps
  * the number of rooms. Guests are never gated: they join by E2E room key.
  * New host rooms past the cap are refused with HTTP 503 before the upgrade
- * (re-adoption of an existing live/orphaned room is always allowed — the
+ * (re-adoption of an existing live/orphaned room is always allowed, since the
  * host-resume path must not be cut); a `handleOpen` backstop closes 4028 for
  * the narrow race where concurrent new-room hosts all passed the upgrade
  * check.
@@ -43,7 +43,7 @@ import type { BufferSource, Server, ServerWebSocket } from "bun";
 /**
  * Per-socket data for every socket served by the omp-web daemon. Only
  * collab relay sockets exist (the agent-driving channel is SSE + POST, and
- * the removed WS transport's "web" variant was never constructed — audit
+ * the removed WS transport's "web" variant was never constructed, per audit
  * #18); the type is the relay socket data directly.
  */
 export interface RelaySocketData {
@@ -67,7 +67,7 @@ export interface RelayOptions {
 	/**
 	 * Authorization gate for host-role upgrades. Called before the upgrade;
 	 * when it returns false the upgrade is refused with HTTP 401 (the caller
-	 * responds). Guests are never gated — they join by E2E room key. Absent
+	 * responds). Guests are never gated; they join by E2E room key. Absent
 	 * = hosts always allowed.
 	 */
 	authorizeHost?: (req: Request, srv: Server<RelaySocketData>) => boolean;
@@ -75,7 +75,7 @@ export interface RelayOptions {
 
 /**
  * The bun server-side websocket (as handed to Bun.serve's handlers). Note:
- * this is `ServerWebSocket<T>`, NOT the client-side global `WebSocket` — the
+ * this is `ServerWebSocket<T>`, NOT the client-side global `WebSocket`; the
  * server socket carries the generic `.data` payload and is what index.ts's
  * `ServerWebSocket<RelaySocketData>` values are assignable to.
  */
@@ -83,13 +83,14 @@ type RelayWs = ServerWebSocket<RelaySocketData>;
 
 /**
  * Outcome of a relay room-path upgrade attempt.
- * - `{ handled: true }` — the pathname matched a room and the upgrade
+ * - `{ handled: true }` means the pathname matched a room and the upgrade
  *   succeeded; the request is fully consumed.
- * - `{ handled: false, status, reason }` — the pathname matched a room but
- *   the upgrade was refused BEFORE the handshake (unauthorized host 401,
+ * - `{ handled: false, status, reason }` means the pathname matched a room
+ *   but the upgrade was refused BEFORE the handshake (unauthorized host 401,
  *   room cap 503, or a failed upgrade 400); the caller should respond with
  *   `status`.
- * - `null` — the pathname is not a room path; web handling should continue.
+ * - `null` means the pathname is not a room path, so web handling should
+ *   continue.
  */
 export type RelayUpgradeResult =
 	| { handled: true }
@@ -129,7 +130,7 @@ function sendSafe(ws: RelayWs, data: string | BufferSource): void {
 	try {
 		ws.send(data);
 	} catch {
-		// Socket already closed — ignore.
+		// Socket already closed; ignore.
 	}
 }
 
@@ -137,7 +138,7 @@ function closeSafe(ws: RelayWs, code: number, reason: string): void {
 	try {
 		ws.close(code, reason);
 	} catch {
-		// Socket already closed — ignore.
+		// Socket already closed; ignore.
 	}
 }
 
@@ -165,12 +166,12 @@ class CollabRelay implements RelayHandle {
 		if (role === "host") {
 			// Hosts create rooms, so they are gated like the agent-driving
 			// endpoints (R14): loopback exempt, off-loopback peers need the
-			// bearer token. Guests join by E2E room key — never gated here.
+			// bearer token. Guests join by E2E room key and are never gated here.
 			if (this.#authorizeHost !== undefined && !this.#authorizeHost(req, srv)) {
 				return { handled: false, status: 401, reason: "Unauthorized" };
 			}
 			// New host rooms are capped. Re-adoption of an existing room
-			// (live or orphaned) is always allowed — the host-resume path
+			// (live or orphaned) is always allowed, since the host-resume path
 			// must not be cut off by the cap.
 			if (!this.#rooms.has(roomId) && this.#rooms.size >= this.#maxRooms) {
 				return { handled: false, status: 503, reason: "too many rooms" };

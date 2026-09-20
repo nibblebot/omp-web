@@ -89,7 +89,7 @@ describe("coerceSettingValue", () => {
 
 	test("unset optional/credential strings (undefined current) store raw input", () => {
 		// hindsight.apiToken is a credential string defaulting to undefined;
-		// the TUI's fallback stores the raw input — must not throw.
+		// the TUI's fallback stores the raw input; must not throw.
 		Settings.instance.set("hindsight.apiToken", undefined as never);
 		expect(coerceSettingValue("hindsight.apiToken", "s3cret")).toBe("s3cret");
 	});

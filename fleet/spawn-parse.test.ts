@@ -46,7 +46,7 @@ describe("fillTemplate", () => {
 		expect(out).toBe("omp-session --label team=web --label tier=prod --name n");
 	});
 
-	test("is pure text substitution — no shell escaping by design (callers must shell-quote)", () => {
+	test("is pure text substitution, no shell escaping by design (callers must shell-quote)", () => {
 		const out = fillTemplate("omp-session --cwd {cwd} --token {token}", {
 			cwd: "/path with spaces",
 			token: "s3cr&t;$(touch /tmp/x)",
@@ -318,7 +318,7 @@ describe("resolveEndpoint precedence", () => {
 		expect(resolveEndpoint([], "template.example")).toBeNull();
 	});
 
-	test("null until a listening line is seen — endpoint-only output doesn't count", () => {
+	test("null until a listening line is seen, endpoint-only output doesn't count", () => {
 		expect(resolveEndpoint([endpoint("ws://10.0.0.5:9000")])).toBeNull();
 		expect(resolveEndpoint([endpoint("ws://10.0.0.5:9000")], "template.example")).toBeNull();
 	});

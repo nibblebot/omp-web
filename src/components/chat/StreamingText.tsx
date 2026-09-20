@@ -9,7 +9,7 @@ const VOID_TAGS: Record<string, true> = { BR: true, HR: true, IMG: true, INPUT: 
 // Appends the freshly-revealed text as one span at the end of the deepest last
 // element, so it inherits the surrounding inline context (<p>, <code>, <strong>…).
 // The span is recreated on every flush, which restarts its mount-triggered CSS
-// animation — a transition would never fire on a newly-created element.
+// animation. A transition would never fire on a newly-created element.
 function appendFresh(root: HTMLElement, text: string): void {
 	let node: HTMLElement = root;
 	for (;;) {
@@ -35,7 +35,7 @@ const LiveTail: Component<{ text: string }> = (props) => {
 		prevLen = text.length;
 		const cut = Math.min(Math.max(freshCount, 0), text.length);
 		// Skip the fresh span when there is no stable text to anchor it to
-		// (e.g. start of a new tail segment) — an unwrapped span would miss
+		// (e.g. start of a new tail segment). An unwrapped span would miss
 		// the paragraph styling for a frame.
 		if (cut === 0 || cut === text.length) {
 			el.innerHTML = renderMarkdown(text);

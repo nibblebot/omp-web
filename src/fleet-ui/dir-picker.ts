@@ -2,7 +2,7 @@ import { fetchFsBrowse, type FsBrowseDir, type FsBrowseResult } from "../store/p
 
 /**
  * Browse-state module behind the onboarding directory pickers
- * (DirPicker.tsx, embedded by AddProjectModal / WorktreeModal). Pure logic —
+ * (DirPicker.tsx, embedded by AddProjectModal / WorktreeModal). Pure logic,
  * no JSX, no Solid: the component subscribes and re-renders off snapshots.
  * All fetching goes through fetchFsBrowse (GET /ctl/fs/browse on the fleet
  * edge); `~`/`~/…` are passed through verbatim and expanded server-side.
@@ -10,7 +10,7 @@ import { fetchFsBrowse, type FsBrowseDir, type FsBrowseResult } from "../store/p
  * hasGit of the CURRENT directory is not part of the browse answer (only
  * listed children carry it), so it is known only when the current path was
  * reached by clicking a listing row: navigate(path, { hasGit }) records it;
- * up()/manual/initial navigation leaves it null (unknown — the server stays
+ * up()/manual/initial navigation leaves it null (unknown, since the server stays
  * authoritative on submit either way).
  */
 
@@ -53,8 +53,8 @@ export function createDirPicker(browse: BrowseFn = fetchFsBrowse): DirPicker {
 		truncated: false,
 		hasGit: null,
 	};
-	// Latest-wins: only the most recent navigate applies its result (or error)
-	// — a slow earlier answer must not clobber a newer listing.
+	// Latest-wins: only the most recent navigate applies its result (or error);
+	// a slow earlier answer must not clobber a newer listing.
 	let seq = 0;
 	const listeners = new Set<() => void>();
 	const set = (patch: Partial<DirPickerState>): void => {

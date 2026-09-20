@@ -18,7 +18,7 @@
  * every turn on the daemon, so `agent_end`/`message_end`/abort events and
  * broadcast `{type:"error"}` frames from concurrent turns (browser-driven
  * prompts, other fan-outs) must never settle this promise. Only the
- * `call_result` for our call id gates acceptance — before it arrives every
+ * `call_result` for our call id gates acceptance; before it arrives every
  * turn frame is ignored, and broadcast error frames (which carry no call id)
  * are never fatal. Per-call failures arrive as id-matched
  * `call_result{ok:false}`; a prompt the daemon never answers settles on the
@@ -80,7 +80,7 @@ export async function promptEntry(
 			try {
 				// Wake on demand. A spawned entry that is asleep/error/reconnecting
 				// is relaunched (--resume); anything whose socket is merely gone
-				// behind a stale "ready" status (idle-drop) needs only a redial —
+				// behind a stale "ready" status (idle-drop) needs only a redial,
 				// far cheaper than killing a healthy child with a respawn.
 				if (current.mode === "spawned" && current.status !== "ready") {
 					await deps.supervisor.respawn(current);
@@ -109,7 +109,7 @@ export async function promptEntry(
 	};
 	// Run only after the previous turn for this daemon fully settles; a
 	// rejected predecessor must not block the queue (promptEntry resolves
-	// normally in practice, but a stray throw would otherwise wedge it).
+	// normally in practice, but a stray throw would otherwise stall it).
 	const turn = previous.then(run, run);
 	const tail = turn.catch(() => {});
 	promptQueues.set(daemonId, tail);
@@ -137,7 +137,7 @@ export async function fanOut(
  * The control stream carries every concurrent turn on the daemon, so
  * correlation is gated on the `call_result` for our call id: until it
  * confirms acceptance (ok:true) or rejection (ok:false), all turn frames are
- * ignored — a browser-driven turn's agent_end or abort can never settle our
+ * ignored; a browser-driven turn's agent_end or abort can never settle our
  * promise. Broadcast `{type:"error"}` frames carry no call id and are never
  * fatal; our own call failures arrive as id-matched `call_result{ok:false}`.
  */
@@ -186,7 +186,7 @@ function correlate(
 		// Frames from other concurrent turns predate our acceptance; ignore.
 		if (!accepted) return;
 		// Broadcast error frames carry no call id and may belong to any
-		// concurrent turn — never fatal for us. Our call's failures arrive as
+		// concurrent turn, never fatal for us. Our call's failures arrive as
 		// the id-matched call_result ok:false handled above.
 		if (frame.type === "error") return;
 		if (frame.type !== "event") return;

@@ -2,7 +2,7 @@
  * Shared test utilities. Import ONLY from *.test.ts files: cleanup state lives
  * here, but the afterAll hook MUST be registered in the importing test file
  * (top level, `afterAll(cleanupTempDirs)`): bun 1.3.14 only reliably runs
- * afterAll hooks registered in the test file's own module — hooks registered
+ * afterAll hooks registered in the test file's own module; hooks registered
  * in an imported module are attributed to whichever file imported it first and
  * are skipped for the rest of a multi-file run.
  */

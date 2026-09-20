@@ -212,7 +212,7 @@ function writeChildScript(
 		);
 		// Idle loop. The tick must stay short: dash defers an untrapped SIGTERM
 		// until the running `sleep` returns, so the supervisor's stop()/close()
-		// teardown (SIGTERM, 5s grace) costs one tick per child — sleep 1 makes
+		// teardown (SIGTERM, 5s grace) costs one tick per child; sleep 1 makes
 		// every spawn test pay ~1s at close. 0.05 keeps the child alive while
 		// making teardown ~instant.
 		lines.push("while :; do sleep 0.05; done");
@@ -276,7 +276,7 @@ interface GitCall {
 
 /**
  * Fake git answering each POLL PASS from `phases`: one pass is a full
- * probeGitState — a status run then a numstat run — so each element is the
+ * probeGitState, a status run then a numstat run, so each element is the
  * pair [statusResult, numstatResult] and the LAST pass repeats. Records
  * every call so tests can pin the exact git args and cwds.
  */
@@ -568,7 +568,7 @@ describe("SpawnSupervisor", () => {
 		const firstToken = registry.get(entry.daemonId)!.token;
 
 		await supervisor.respawn(registry.get(entry.daemonId)!);
-		// Wait for the NEW child to dial and reach ready — the registry token
+		// Wait for the NEW child to dial and reach ready; the registry token
 		// changes at launch time while the old "ready" status is still stale.
 		await waitFor(
 			() => {
@@ -634,7 +634,7 @@ describe("SpawnSupervisor", () => {
 	test("respawn of a template-less asleep entry falls back to spawn's resolution and heals the entry", async () => {
 		// Regression: entries registered asleep without a template (the auto
 		// default workspace, unstarted worktrees, or pre-fix state files) must
-		// be wakeable — respawn used to key off entry.template only and throw
+		// be wakeable, since respawn used to key off entry.template only and throw
 		// "unknown spawn template: undefined", wedging the row asleep.
 		const projectDir = tmpPath("omp-session-sup-notpl-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
@@ -670,7 +670,7 @@ describe("SpawnSupervisor", () => {
 		expect(lines[0]).not.toContain("--resume");
 	});
 
-	test("spawn shell-quotes label/name values — a $(touch) payload stays inert", async () => {
+	test("spawn shell-quotes label/name values, a $(touch) payload stays inert", async () => {
 		const projectDir = tmpPath("omp-session-sup-quote-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
@@ -703,7 +703,7 @@ describe("SpawnSupervisor", () => {
 	test("quoted cwd/name/labels with metacharacters round-trip as single argv entries", async () => {
 		const projectDir = tmpPath("omp-session-sup-roundtrip-");
 		// A REAL directory whose name contains spaces, quotes, $(), backticks,
-		// and a newline — the exact hostile value class the quoting must tame.
+		// and a newline, the exact hostile value class the quoting must tame.
 		const weirdCwd = join(projectDir, "dir 'quoted' $(x) `y`\nnewline");
 		mkdirSync(weirdCwd, { recursive: true });
 		const fake = startFake({ cwd: weirdCwd, sessionFile: "/srv/proj/sess.jsonl" });
@@ -746,7 +746,7 @@ describe("SpawnSupervisor", () => {
 		);
 
 		// NUL-delimited "$@" dump (printf '%s\0' "$@"): each hostile value
-		// survived shell parsing as a single literal argument — even the
+		// survived shell parsing as a single literal argument; even the
 		// embedded newline stays inside one argv entry.
 		const args = readFileSync(argsFile, "utf8").split("\0").slice(0, -1);
 		expect(args[0]).toBe("--cwd");
@@ -760,7 +760,7 @@ describe("SpawnSupervisor", () => {
 		expect(existsSync(pwn)).toBe(false);
 	});
 
-	test("concurrent respawn() calls launch exactly one child — no orphan", async () => {
+	test("concurrent respawn() calls launch exactly one child, no orphan", async () => {
 		const projectDir = tmpPath("omp-session-sup-conc-");
 		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
@@ -791,8 +791,8 @@ describe("SpawnSupervisor", () => {
 		);
 
 		// Two overlapping respawns (no await between the calls): both must
-		// coalesce onto ONE launch — exactly one replacement child, and the
-		// original is terminated rather than orphaned.
+		// coalesce onto ONE launch. Exactly one replacement child is launched,
+		// and the original is terminated rather than orphaned.
 		await Promise.all([
 			supervisor.respawn(registry.get(entry.daemonId)!),
 			supervisor.respawn(registry.get(entry.daemonId)!),
@@ -818,7 +818,7 @@ describe("SpawnSupervisor", () => {
 		expect(pids).toHaveLength(2);
 
 		// stop() kills the tracked (only) child; the pre-respawn child was
-		// terminated by the respawn — no orphan survives.
+		// terminated by the respawn, so no orphan survives.
 		await supervisor.stop(entry.daemonId);
 		for (const pid of pids) {
 			let alive = true;
@@ -893,7 +893,7 @@ describe("SpawnSupervisor", () => {
 	test("#22 crash → ready → crash → ready never errors: the budget resets on the connector ready transition", async () => {
 		const projectDir = tmpPath("omp-session-sup-budget-");
 		// The fake closes each /events stream shortly after priming (dormant),
-		// so every relaunch dials fresh and produces a NEW ready transition —
+		// so every relaunch dials fresh and produces a NEW ready transition,
 		// exactly what a real daemon process (which dies with the child) does.
 		const fake = startFake(
 			{ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" },
@@ -982,7 +982,7 @@ describe("SpawnSupervisor", () => {
 		);
 		expect(updated.error).toContain("invalid endpoint from child");
 		expect(updated.error).toContain("bad host");
-		// The child is dead — not left running behind a wedged pump — and the
+		// The child is dead, not left running behind a wedged pump, and the
 		// connector never touched it.
 		const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
 		await waitFor(
@@ -1211,7 +1211,7 @@ describe("SpawnSupervisor", () => {
 		expect(registry.get(entry.daemonId)?.status).toBe("asleep");
 		expect(connector.isConnected(entry.daemonId)).toBe(false);
 		expect(supervisor.stderrTail(entry.daemonId)).toBe("");
-		// The child stays dead — no restart fires from the pruned state.
+		// The child stays dead; no restart fires from the pruned state.
 		await sleep(100);
 		expect(supervisor.stderrTail(entry.daemonId)).toBe("");
 	});
@@ -1432,7 +1432,7 @@ describe("SpawnSupervisor", () => {
 			"respawned ready",
 		);
 		// The OVERRIDE template's child ran (its args file exists), never
-		// the default's — the fallback resolved projectTemplates.
+		// the default's; the fallback resolved projectTemplates.
 		expect(readFileSync(argsOverride, "utf8").trim().split("\n")).toHaveLength(1);
 		expect(existsSync(argsDefault)).toBe(false);
 		// The resolved name was healed onto the entry for later respawns.
@@ -1654,7 +1654,7 @@ describe("git-state polling", () => {
 			"sessionTitle filled",
 		);
 		// Two broadcasts: the git probe's branch fill (undefined → "main") and
-		// the session-title fill — steady-state ticks change nothing.
+		// the session-title fill; steady-state ticks change nothing.
 		expect(onChange).toBe(2);
 		const filledAt = calls.length;
 		await waitFor(
@@ -1673,7 +1673,7 @@ describe("git-state polling", () => {
 			5000,
 			"sessionTitle cleared",
 		);
-		expect(onChange).toBe(3); // branch fill, title fill, title clear — nothing else
+		expect(onChange).toBe(3); // branch fill, title fill, title clear; nothing else
 	});
 
 	test("probe flags a new/empty session (sessionEmpty) and clears it when a title appears", async () => {
@@ -1719,7 +1719,7 @@ describe("git-state polling", () => {
 			"sessionEmpty flagged",
 		);
 		// Untitled+empty: title stays undefined, empty flag true. Two
-		// broadcasts total (branch fill + the empty flag) — no title churn.
+		// broadcasts total (branch fill + the empty flag), with no title churn.
 		expect(registry.get(local.daemonId)?.sessionTitle).toBeUndefined();
 		expect(onChange).toBe(2);
 		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
@@ -1744,7 +1744,7 @@ describe("git-state polling", () => {
 			"title filled",
 		);
 		expect(registry.get(local.daemonId)?.sessionEmpty).toBeUndefined();
-		expect(onChange).toBe(3); // branch fill, empty flag, title+clear-empty — one each
+		expect(onChange).toBe(3); // branch fill, empty flag, title+clear-empty; one each
 	});
 
 	test("a probe failure clears previously-set fields, once", async () => {
@@ -1840,7 +1840,7 @@ describe("git-state polling", () => {
 			onWorktreeRemoved: (entry) => fired.push(entry),
 		});
 		// A TAGGED worktree entry (the detection gate: worktreeOf set) whose
-		// cwd does NOT exist on disk — e.g. `git worktree remove` run outside
+		// cwd does NOT exist on disk, e.g. `git worktree remove` run outside
 		// the fleet. Branch/git preset so the test can pin that the hook path
 		// returns WITHOUT the stale-field clearing.
 		const entry = registry.create({
@@ -1853,7 +1853,7 @@ describe("git-state polling", () => {
 			worktreeOf: "acme",
 			branch: "main",
 		});
-		// Every probe fails (the dir is gone) — the injected exec never
+		// Every probe fails (the dir is gone); the injected exec never
 		// touches the disk, so the FAILURE comes from the fake; existsSync
 		// decides the gate.
 		const { exec } = fakeGitPhases([
@@ -1877,7 +1877,7 @@ describe("git-state polling", () => {
 		expect(registry.get(entry.daemonId)).toBeDefined();
 		expect(registry.get(entry.daemonId)?.branch).toBe("main");
 		// Simulate the server's eviction (prune/drop + registry.remove): with
-		// the entry gone, later poll ticks must NOT re-fire — the hook is at
+		// the entry gone, later poll ticks must NOT re-fire, since the hook is at
 		// most meaningful once per entry. The polls keep ticking (250ms) but
 		// the roster no longer contains the entry, so nothing is probed.
 		registry.remove(entry.daemonId);
@@ -1887,8 +1887,8 @@ describe("git-state polling", () => {
 
 	test("a probe failure with the cwd still present keeps the clear path and never fires onWorktreeRemoved", async () => {
 		// A REAL directory on disk (tmpPath creates it); the fake exec fails,
-		// but existsSync sees the dir present — transient git failure, no
-		// eviction: branch/git are cleared exactly as before.
+		// but existsSync sees the dir present, a transient git failure. There is
+		// no eviction, and branch/git are cleared exactly as before.
 		const cwd = tmpPath("omp-session-sup-present-");
 		const fired: RegistryEntry[] = [];
 		const { registry, supervisor } = await pollSupervisor({
@@ -1908,7 +1908,7 @@ describe("git-state polling", () => {
 			onChange++;
 		};
 		// First pass: dirty state. Then the repo is unreadable (nonzero
-		// exit) — dir still on disk, so this is the classic clear path.
+		// exit), but the dir is still on disk, so this is the classic clear path.
 		const { exec, calls } = fakeGitPhases([
 			[
 				{ exitCode: 0, stderr: "", stdout: ["## main", " M x", ""].join("\n") },
@@ -1945,7 +1945,7 @@ describe("git-state polling", () => {
 			onWorktreeRemoved: (entry) => fired.push(entry),
 		});
 		// No worktreeOf: a main checkout or untagged spawn. Such entries are
-		// NEVER auto-evicted — only tagged linked worktrees qualify.
+		// NEVER auto-evicted; only tagged linked worktrees qualify.
 		registry.create({
 			name: "main",
 			cwd: ghost,

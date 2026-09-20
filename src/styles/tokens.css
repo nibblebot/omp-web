@@ -1,12 +1,12 @@
-/* Tokens — :root design tokens and data-theme palettes. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Tokens: :root design tokens and data-theme palettes. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 :root {
 	color-scheme: dark;
-	/* Fonts: a deliberate system stack — omp-web is a self-hosted, offline-first
+	/* Fonts: a deliberate system stack. omp-web is a self-hosted, offline-first
 	   tool and ships zero font assets, so the platform's native UI / UI-monospace
 	   faces are used as-is instead of downloading a webfont. The Linux faces are
 	   named FIRST because Chromium resolves system-ui to DejaVu Sans (its own
-	   fallback list) while Firefox goes through fontconfig (Noto Sans here) —
+	   fallback list) while Firefox goes through fontconfig (Noto Sans here);
 	   the same CSS then renders two different faces. Naming the fontconfig
 	   default explicitly makes both engines pick the same family on Linux;
 	   macOS/Windows skip the absent Noto faces and keep their native UI fonts. */
@@ -73,7 +73,7 @@
 	/* Type scale: stepped sizes for a real hierarchy (micro < sm < md < lg <
 	   xl < 2xl) while staying dense enough for the power-user layout. The root
 	   size is user-settable (12-18px), so every step is rem-based. The floor
-	   is 9.6px (fs-micro) — nothing functional sits below it. */
+	   is 9.6px (fs-micro); nothing functional sits below it. */
 	--fs-micro: 0.688rem;
 	--fs-sm: 0.75rem;
 	--fs-md: 0.813rem;
@@ -90,7 +90,7 @@
 
 	/* Context-breakdown ramp: ordered cool-to-warm hues for the neutral
 	   per-category context bar. Deliberately NOT the semantic status tokens
-	   (success/warning/error) — these categories are facts, not statuses.
+	   (success/warning/error); these categories are facts, not statuses.
 	   Shared across themes so a category keeps its color in every palette. */
 	--breakdown-1: #6fa8dc;
 	--breakdown-2: #57b8c2;

@@ -4,7 +4,7 @@ import { createSignal } from "solid-js";
 // viewed: a session marked unread when the user switches away MID-STREAM,
 // cleared when the row is clicked (attached), and pruned when a daemon
 // leaves the roster. It is purely CLIENT-side because the fleet edge exposes
-// live streaming only for the ATTACHED daemon — the abandoned session's turn
+// live streaming only for the ATTACHED daemon. The abandoned session's turn
 // may keep running on its daemon, but this tab never receives the deltas that
 // would mark it done, so only the switch-away-mid-stream moment is observable
 // here. The fleet itself holds zero agent state and, per the AGENTS.md

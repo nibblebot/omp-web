@@ -10,7 +10,7 @@ import path from "node:path";
 // the holder's pid inside the file lets waiters detect crash leftovers.
 //
 // Accepted tiny race: when the holder is dead, two waiters can both observe
-// the stale file, both unlink it, and both create their own lock — the loser
+// the stale file, both unlink it, and both create their own lock; the loser
 // of the create sees EEXIST again and re-checks liveness. Both get a lock in
 // the end, but the file may flip between them; callers must tolerate that the
 // lock is only advisory against live holders, which is all this guarantees.
@@ -82,7 +82,7 @@ export function acquireFileLock(lockPath: string, holder: string): FileLock {
 					if (killCode === "ESRCH") {
 						alive = false; // No such process: the holder is dead.
 					} else if (killCode === "EPERM") {
-						alive = true; // Exists but not ours — still a live holder.
+						alive = true; // Exists but not ours; still a live holder.
 					} else {
 						throw killErr;
 					}

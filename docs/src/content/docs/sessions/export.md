@@ -25,7 +25,7 @@ When the export completes, the stream shows an `Exported session HTML` notice li
 - `transcript.txt` downloads directly in the browser. It is a plain-text rendering of the session built from the session's own dump format: a prelude with the system prompt, model and thinking configuration, and the tool inventory, followed by the message history with headings for user turns, assistant turns, thinking, tool calls with their arguments, tool results, and execution summaries.
 - An LLM request dump is written to the system temp directory, and the stream shows an `LLM request dump` notice linked to it. This is the JSON that would be sent to the provider for the session's messages, and it is useful when you need to reproduce exactly what the model saw. When nothing can be dumped yet, the notice reads `No LLM request dump available yet.`
 
-If the transcript has no messages, the stream reports `Transcript is empty — nothing to download.`, and only the LLM request dump part is attempted.
+If the transcript has no messages, the stream reports `Transcript is empty, nothing to download.`, and only the LLM request dump part is attempted.
 
 ## Copy individual content
 

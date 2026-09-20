@@ -4,8 +4,8 @@
  * Verifies the three things a fresh omp-web needs to be usable: the `omp` CLI
  * installed, at least one provider with usable auth, and a default model
  * selected. Providers and the default model are read through the SDK's own
- * runtime — discoverAuthStorage + ModelRegistry + Settings.loadReadOnly, the
- * same trio the omp-session daemon boots with — so the check reflects exactly
+ * runtime: discoverAuthStorage + ModelRegistry + Settings.loadReadOnly, the
+ * same trio the omp-session daemon boots with, so the check reflects exactly
  * what prompts will see, regardless of SDK version or config layout.
  *
  * The SDK is imported LAZILY inside the probe: the fleet is otherwise SDK-free
@@ -39,7 +39,7 @@ export function resolveOmpBinary(): string | null {
 
 /**
  * Probe the omp stack. `agentDir` overrides the SDK's default (~/.omp/agent)
- * for tests. Never throws — failures come back in `error` with empty
+ * for tests. Never throws; failures come back in `error` with empty
  * providers/model (the offer then advises configuring omp).
  */
 export async function checkOmpSetup(agentDir?: string): Promise<OmpSetupStatus> {
@@ -55,11 +55,11 @@ export async function checkOmpSetup(agentDir?: string): Promise<OmpSetupStatus> 
 		await registry.awaitBackgroundRefresh();
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
 		// Providers that could actually authenticate a prompt today. The SDK's
-		// getApiKeyForProvider is ASYNC in current releases — awaiting via
+		// getApiKeyForProvider is ASYNC in current releases; awaiting via
 		// Promise.resolve also tolerates sync versions. A resolved key (or the
 		// kNoAuth sentinel for keyless providers) counts as usable; undefined
 		// means the provider cannot authenticate. (Before the await this filter
-		// compared a PROMISE to undefined — always true — and reported every
+		// compared a PROMISE to undefined, which is always true, and reported every
 		// available provider as authenticated.)
 		const models = registry.getAvailable();
 		const candidates = [...new Set(models.map((m) => m.provider))].sort();
@@ -100,7 +100,7 @@ export function ompStatusLines(status: OmpSetupStatus): string[] {
 	lines.push(
 		status.ompInstalled
 			? `omp: installed (${binary ?? "?"})`
-			: "omp: NOT installed — run: bun install -g @oh-my-pi/pi-coding-agent",
+			: "omp: NOT installed. Run: bun install -g @oh-my-pi/pi-coding-agent",
 	);
 	lines.push(
 		status.providers.length > 0

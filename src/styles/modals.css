@@ -1,4 +1,4 @@
-/* Modals — modal/sheet, danger-confirm, btw panel, shortcuts, pickers, stats tables, ask dialog, session-new. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Modals: modal/sheet, danger-confirm, btw panel, shortcuts, pickers, stats tables, ask dialog, session-new. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 .modal-backdrop {
 	position: fixed;

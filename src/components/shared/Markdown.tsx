@@ -28,7 +28,7 @@ function decorateCodeBlocks(root: HTMLElement): void {
 	}
 }
 
-// Parses only when `src` changes — frozen paragraphs parse exactly once.
+// Parses only when `src` changes; frozen paragraphs parse exactly once.
 export const Markdown: Component<{ src: string }> = (props) => {
 	const html = createMemo(() => renderMarkdown(props.src));
 	let el!: HTMLDivElement;

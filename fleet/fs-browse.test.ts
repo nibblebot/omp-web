@@ -1,6 +1,6 @@
 /**
  * Hermetic tests for fleet/fs-browse.ts: nested listings, dot-dir skipping
- * (listing only — explicit navigation into a dot-dir still works), hasGit
+ * (listing only; explicit navigation into a dot-dir still works), hasGit
  * for `.git` as directory AND file, the truncation cap (stubbed via the
  * cap option), `~` expansion, missing/not-a-directory errors, and symlink
  * canonicalization. No git, no daemons.

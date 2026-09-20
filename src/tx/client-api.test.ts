@@ -137,7 +137,7 @@ describe("api.sync", () => {
 	test("propagates sync endpoint failures as ApiError", async () => {
 		globalThis.fetch = (async (_url: string, _init?: RequestInit) =>
 			jsonResponse(503, {
-				error: "omp binary not found — run `npm i -g @oh-my-pi/omp-stats` or install omp",
+				error: "omp binary not found. Run `npm i -g @oh-my-pi/omp-stats` or install omp",
 			})) as typeof fetch;
 		try {
 			await api.sync();

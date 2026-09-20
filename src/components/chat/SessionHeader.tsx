@@ -1,7 +1,7 @@
 import { createSignal, Show, type Component } from "solid-js";
 import { call, setState, state } from "../../state";
 
-/** Session identity — the name (click to rename) pinned to the left edge
+/** The session identity is the name (click to rename), pinned to the left edge
  *  directly above the session stream. Chrome and live state stay in
  *  StatusBar; send configuration sits in SessionBar by the composer. */
 export const SessionHeader: Component = () => {

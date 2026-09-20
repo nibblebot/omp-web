@@ -5,7 +5,7 @@ import { TOAST_DISMISS_MS, dismissToast, pushToast } from "./toasts";
 // ---------------------------------------------------------------------------
 // Toast store behavior. window.setTimeout is stubbed with a controllable
 // clock (same pattern as src/prompt/commands.test.ts) so the 6s auto-dismiss
-// path is exercised deterministically — no real waiting, no fake timers.
+// path is exercised deterministically, with no real waiting or fake timers.
 // ---------------------------------------------------------------------------
 type CapturedTimer = { fn: () => void; ms: number };
 
@@ -69,7 +69,7 @@ describe("toasts (fleet/app-scoped ephemeral notifications)", () => {
 		dismissToast(state.toasts[0].id);
 		expect(state.toasts).toEqual([]);
 
-		// The timer armed for "c" fires late — its id is already gone.
+		// The timer armed for "c" fires late; its id is already gone.
 		timers[0].fn();
 		expect(state.toasts).toEqual([]);
 	});

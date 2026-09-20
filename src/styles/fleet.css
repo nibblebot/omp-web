@@ -1,4 +1,4 @@
-/* Fleet — sidebar, collab rows, daemon roster, project/worktree modals, debug panel. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Fleet: sidebar, collab rows, daemon roster, project/worktree modals, debug panel. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 .sidebar {
 	/* Docked left column: participates in .app-body layout, so the chat
@@ -18,9 +18,9 @@
 	display: none;
 }
 /* Narrow viewports: the sidebar stops participating in .app-body layout and
-   becomes a fixed slide-out overlay — docking it would push the chat column
-   off-screen. Closed state slides off-canvas instead of display:none so the
-   transform transition can run. */
+   becomes a fixed slide-out overlay, because docking it would push the chat
+   column off-screen. Closed state slides off-canvas instead of display:none
+   so the transform transition can run. */
 .sidebar-scrim {
 	display: none;
 }
@@ -470,8 +470,8 @@
 .daemon-row--worktree .daemon-status-dot {
 	margin-top: var(--space-4);
 }
-/* Root rows (a project group's main worktree) share the worktree profile —
-   single-line unless labels/diffstat render — so the dot aligns the same. */
+/* Root rows (a project group's main worktree) share the worktree profile,
+   single-line unless labels/diffstat render, so the dot aligns the same. */
 .daemon-row--root .daemon-status-dot {
 	margin-top: var(--space-4);
 }
@@ -507,9 +507,9 @@
 }
 /* Activity cases repaint the LEFT status dot (single dot, no separate
    badge): presence of any colored dot means alive. These override the green
-   ready dot — same specificity, later in the cascade wins. A stopped
-   (asleep) row keeps the plain grey dot (no data-activity), and ready+idle
-   keeps green. */
+   ready dot; at the same specificity, the later rule in the cascade wins. A
+   stopped (asleep) row keeps the plain grey dot (no data-activity), and
+   ready+idle keeps green. */
 .daemon-status-dot[data-activity="blocked"] {
 	background: var(--error);
 	box-shadow: 0 0 6px var(--error);
@@ -1247,7 +1247,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	flex: none;
 }
 /* Existing-branch dropdown (create tab): mirrors .settings-row select.
-   Checked-out branches are <option disabled> — natively greyed and
+   Checked-out branches are <option disabled>, natively greyed and
    unselectable (git refuses a second checkout). */
 .worktree-branch-select {
 	width: 100%;

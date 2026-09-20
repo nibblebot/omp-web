@@ -1,9 +1,9 @@
 /**
  * Aggregated daemons panel (Phase 4/5): the edge taps every daemon
- * connection — the connector's control socket and each proxy pipe — for
- * {type:"daemons"} broker rosters, caches the latest roster per daemonId
- * (full-replace, not union), and merges across daemons into the single
- * {type:"daemons"} frame browsers see.
+ * connection for {type:"daemons"} broker rosters, both the connector's
+ * control socket and each proxy pipe. It caches the latest roster per
+ * daemonId (full-replace, not union) and merges it across daemons into the
+ * single {type:"daemons"} frame browsers see.
  *
  * The client keys entries by daemonsKey (shared/protocol.ts:
  * `${projectDir}\u0000${name}`); daemon names are unique per projectDir and

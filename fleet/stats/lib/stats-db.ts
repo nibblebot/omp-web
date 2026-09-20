@@ -70,7 +70,7 @@ export class StatsDbManagerImpl implements StatsDbManager {
 				stat.mtimeMs === this.#stat.mtimeMs &&
 				stat.size === this.#stat.size
 			) {
-				return; // unchanged — no-op
+				return; // unchanged, no-op
 			}
 			// Missing now, or mtime/size moved → rotation. Drop the prior handle
 			// (and any temp copy) before reopening.
@@ -82,7 +82,7 @@ export class StatsDbManagerImpl implements StatsDbManager {
 			this.#dispose();
 		}
 		if (stat) this.#open(stat);
-		this.#stat = stat; // null when missing — a later probe sees missing→present
+		this.#stat = stat; // null when missing, so a later probe sees missing→present
 	}
 
 	close(): void {
@@ -108,7 +108,7 @@ export class StatsDbManagerImpl implements StatsDbManager {
 			try {
 				rmSync(this.#tempDir, { recursive: true, force: true });
 			} catch {
-				// Temp dir already gone — best effort.
+				// Temp dir already gone; best effort.
 			}
 			this.#tempDir = null;
 		}

@@ -8,7 +8,7 @@ import { buildModelRoleCatalog } from "./daemon-broker";
 // values, sources, tags). Initialize it in-memory so tests touch no disk.
 await Settings.init({ inMemory: true });
 
-// Minimal structural stubs — the SDK matcher only reads provider/id (+ name).
+// Minimal structural stubs; the SDK matcher only reads provider/id (+ name).
 const STUB_MODELS = [
 	{ provider: "openai", id: "gpt-4o" },
 	{ provider: "anthropic", id: "claude-3-5-sonnet" },

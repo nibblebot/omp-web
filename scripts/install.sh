@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-# omp-web installer — bun-only (adapted from oh-my-pi's install.sh).
+# omp-web installer, bun-only (adapted from oh-my-pi's install.sh).
 # Usage: curl -fsSL https://raw.githubusercontent.com/nibblebot/omp-web/main/scripts/install.sh | sh
 #
 #   --ref <ref>    Install a specific tag/commit/branch (defaults to latest)
@@ -148,8 +148,8 @@ resolve_ref() {
 
 # Download and verify the release tarball, then install it into a pinned
 # project dir (~/.omp-web/install/) and symlink the bin. The sha256 comes from
-# the same release's manifest asset (the tarball is verified before bun add —
-# tarball installs carry no registry integrity metadata).
+# the same release's manifest asset (the tarball is verified before bun add,
+# because tarball installs carry no registry integrity metadata).
 install_via_bun() {
 	LATEST="$(resolve_ref)"
 	if [ -z "$LATEST" ]; then
@@ -195,9 +195,9 @@ install_via_bun() {
 
 	mkdir -p "$INSTALL_DIR/install"
 	# Anchor the install dir as its own bun project: `bun add` with no local
-	# package.json walks UP to the nearest project root — an ancestor of the
-	# install dir (a repo under ~, $HOME, or a --prefix nested in a project) —
-	# and attaches there, dropping node_modules into it. A successful add
+	# package.json walks UP to the nearest project root, an ancestor of the
+	# install dir (a repo under ~, $HOME, or a --prefix nested in a project),
+	# then attaches there, dropping node_modules into it. A successful add
 	# writes a package.json of its own, so only a fresh dir needs the anchor.
 	if [ ! -f "$INSTALL_DIR/install/package.json" ]; then
 		printf '%s\n' '{"name":"omp-web-install","private":true}' > "$INSTALL_DIR/install/package.json"

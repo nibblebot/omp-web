@@ -112,7 +112,7 @@ describe("SseRing", () => {
 		ring.push(2, "b".repeat(30)); // 60 > 50 → evict 1
 		ring.push(3, "c".repeat(30)); // 60 > 50 → evict 2
 		// Eviction left a gap, but after() is still correct: it returns every
-		// RINGED entry newer than the id (missing ones are re-derivable —
+		// RINGED entry newer than the id (missing ones are re-derivable,
 		// drop-and-resume, never a corrupted tail).
 		expect(ring.after(1).map((e) => e.seq)).toEqual([3]);
 		expect(ring.after(2).map((e) => e.seq)).toEqual([3]);

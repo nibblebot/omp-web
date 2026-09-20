@@ -12,7 +12,7 @@ import { SSE_RING_BYTES } from "./protocol";
  *   id: <seq>
  *   data: <JSON ServerFrame>
  *
- * Keepalive is a named `ping` event (NO id field — it must not advance the
+ * Keepalive is a named `ping` event (NO id field, so it must not advance the
  * consumer's lastEventId/resume counter) written every SSE_KEEPALIVE_MS.
  * A named event instead of the idiomatic `: ping` comment because native
  * EventSource (the browser consumer) drops comments without surfacing them,
@@ -101,9 +101,9 @@ export async function* parseSseUnits(body: ReadableStream<Uint8Array>): AsyncGen
  * SSE_RING_BYTES) evicts from the head so a few multi-megabyte deltas cannot
  * balloon memory even far below `cap` (finding #5); the entry cap remains as
  * a secondary bound for many-small-delta bursts. Sizes are the stored
- * values' string lengths in UTF-16 code units — the same proxy the daemon's
+ * values' string lengths in UTF-16 code units, the same proxy the daemon's
  * chunkHistory uses for HISTORY_CHUNK_BYTES. For ASCII-heavy payloads
- * (base64 image blocks — the unbounded-memory culprit) that overestimates
+ * (base64 image blocks, the unbounded-memory culprit) that overestimates
  * UTF-8 wire bytes ~2×, the conservative direction; a single entry larger
  * than the whole budget still lands (the newest delta is the one a resuming
  * consumer needs most, and `cap` still bounds the count). Eviction is from

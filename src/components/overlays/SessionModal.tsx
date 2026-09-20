@@ -24,10 +24,10 @@ export const SessionModal: Component<{ onClose: () => void }> = (props) => {
 	const gate = () => state.sessionPickerGate;
 	const gateMode = () => gate() !== null;
 
-	// Gate-mode Esc = "New session". Registered in onMount — BEFORE the
-	// Modal's own capture-phase Esc handler (child onMounts run after the
-	// parent's) — so stopImmediatePropagation reliably swallows it. Outside
-	// gate mode Esc closes via the Modal as usual.
+	// Gate-mode Esc = "New session". Registered in onMount BEFORE the Modal's
+	// own capture-phase Esc handler, since the child's onMount runs after the
+	// parent's; stopImmediatePropagation therefore reliably swallows it.
+	// Outside gate mode Esc closes via the Modal as usual.
 	const onKeyDown = (e: KeyboardEvent) => {
 		if (gateMode() && e.key === "Escape") {
 			e.stopImmediatePropagation();
@@ -102,7 +102,7 @@ export const SessionModal: Component<{ onClose: () => void }> = (props) => {
 						title="Start a fresh session (no history)"
 					>
 						<span class="picker-label session-new-label">New session</span>
-						<span class="picker-detail">start fresh — no history</span>
+						<span class="picker-detail">start fresh, no history</span>
 					</PickerRow>
 				</Show>
 				<For each={filtered()}>

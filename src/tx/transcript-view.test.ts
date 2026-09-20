@@ -2,7 +2,7 @@
  * Regression tests for the transcript overhaul (wave 1, slice F):
  * tool-call pairing across page boundaries, pending-call detection,
  * manual <details> toggles surviving page appends, tool-filter scoping
- * (main view only), and honest progress math. All pure-function tests —
+ * (main view only), and honest progress math. All pure-function tests,
  * no DOM, no fixture dependency.
  */
 import { describe, expect, test } from "bun:test";
@@ -224,7 +224,7 @@ describe("filterTranscriptEntries", () => {
 		expect(out.map((e) => e.id)).toEqual(["f1", "a1", "r1"]);
 	});
 
-	test("subagent view passes a null filter — nothing is filtered out", () => {
+	test("subagent view passes a null filter, nothing is filtered out", () => {
 		const out = filterTranscriptEntries(entries, null, false);
 		expect(out).toHaveLength(5);
 	});
@@ -259,7 +259,7 @@ describe("progressTotal", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildDayRows", () => {
-	// Local-noon epoch ms — the day change holds in any timezone.
+	// Local-noon epoch ms, so the day change holds in any timezone.
 	const noon = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12).getTime();
 	const msgAt = (id: string, ts: number): RawEntry => ({
 		type: "message",
@@ -315,7 +315,7 @@ describe("buildDayRows", () => {
 		expect(rows.map((r) => r.kind)).toEqual(["entry", "entry", "day", "entry"]);
 	});
 
-	test("separators are rows, not entries — entry rows preserve every entry", () => {
+	test("separators are rows, not entries; entry rows preserve every entry", () => {
 		const entries = [msgAt("a", noon(2026, 2, 1)), msgAt("b", noon(2026, 2, 2))];
 		const rows = buildDayRows(entries);
 		const entryRows = rows.filter((r) => r.kind === "entry");

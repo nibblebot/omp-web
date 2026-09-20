@@ -138,7 +138,7 @@ export interface CollabSessionPort {
 	getContextUsage(): ContextUsage | undefined; // {tokens, contextWindow, percent} | undefined
 	/** sessionManager.snapshotForReplication() */
 	snapshot(): { header: SessionHeader; entries: SessionEntry[] };
-	/** session.subscribe — returns unsubscribe */
+	/** session.subscribe; returns unsubscribe */
 	subscribe(cb: (event: AgentSessionEvent) => void): () => void;
 	/** sessionManager.onEntryAppended = cb (single slot; save+restore previous) */
 	onEntryAppended(cb: (entry: SessionEntry) => void): void;
@@ -166,7 +166,7 @@ export interface CollabSessionPort {
  * Outcome of {@link CollabHostAdapter.requestGuestUi}. `answered` carries the
  * guest's response (an `undefined` value is a genuine guest cancel);
  * `unavailable` means the collab channel went away (teardown, relay drop) or
- * the request was aborted before any guest answered — callers MUST NOT treat
+ * the request was aborted before any guest answered; callers MUST NOT treat
  * it as a cancel.
  */
 export type CollabGuestUiResult =
@@ -315,7 +315,7 @@ export class CollabHostAdapter {
 		const key = await importRoomKey(rawKey);
 
 		// The relay lives in the same process: connect via the local endpoint
-		// (loopback) so a public collabUrl — which join LINKS must advertise —
+		// (loopback) so a public collabUrl, which join LINKS must advertise,
 		// never hairpins the host socket back through the network. The R14
 		// host gate requires a loopback peer or a bearer token, and the host
 		// adapter authenticates by loopback only.
@@ -434,7 +434,7 @@ export class CollabHostAdapter {
 	 * Restore (clear) the port's single onEntryAppended slot. The previous
 	 * handler is not readable through the port API; every real wiring
 	 * (index.ts, tests) leaves the slot empty, so clearing it equals restoring
-	 * it — the adapter's equivalent of CollabHost's
+	 * it, the adapter's equivalent of CollabHost's
 	 * `sessionManager.onEntryAppended = undefined`. A port implementation that
 	 * must preserve a handler of its own does the save/restore inside
 	 * `onEntryAppended` per the interface contract.
@@ -706,7 +706,7 @@ export class CollabHostAdapter {
 			return;
 		}
 		// Advisor refs are excluded from port snapshots (CollabAgentRef.kind has
-		// no `advisor`), but reject control by id defensively — mirrors
+		// no `advisor`), but reject control by id defensively, mirroring
 		// CollabHost's guard: a stale/malicious client must never chat/kill/
 		// revive a read-only advisor transcript.
 		const ref = this.#port.listAgents().find((a) => a.id === agentId);

@@ -377,7 +377,7 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 		expect(item()?.output).toBe("tick\ntock\n");
 
 		// The server-side result is still correlated (not stranded) and is
-		// authoritative — it carries the full streamed output.
+		// authoritative, since it carries the full streamed output.
 		dispatch(callResult(bashCall.id, { output: "tick\ntock\nfull\n", exitCode: 0 }));
 		await flushMicrotasks();
 		expect(item()?.status).toBe("done");

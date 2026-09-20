@@ -151,7 +151,7 @@ export const SettingsModal: Component<{ onClose: () => void }> = (props) => {
 					    keeps a body copy there only (CSS-gated to ≤720px). */}
 					<Show when={fleetSettingsActive()}>
 						<div class="settings-note settings-note-narrow">
-							No session attached — changes save to config.yml and apply to new sessions.
+							No session attached. Changes save to config.yml and apply to new sessions.
 						</div>
 					</Show>
 					<Show when={state.settingsLoading && !model()}>

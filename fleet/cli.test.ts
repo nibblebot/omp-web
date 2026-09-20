@@ -49,7 +49,7 @@ describe("resolveBaseDirs", () => {
 });
 
 describe("writeConfigFile", () => {
-	test("writes workspaceDir only — no roots key, unknown keys stay forward-compatible", () => {
+	test("writes workspaceDir only: no roots key, unknown keys stay forward-compatible", () => {
 		const dir = tempDir("cli-config");
 		const configPath = join(dir, "sub", "config.json");
 		const workspaceDir = join(dir, "workspaces");

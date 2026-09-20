@@ -8,7 +8,7 @@ interface BranchEntry {
 	text: string;
 }
 
-/** Phase 5: `/tree` and `/branch` — pick an earlier message to branch from. */
+/** Phase 5: `/tree` and `/branch`, which pick an earlier message to branch from. */
 export const BranchModal: Component<{ onClose: () => void }> = (props) => {
 	const [entries, setEntries] = createSignal<BranchEntry[]>([]);
 	const [error, setError] = createSignal<string | null>(null);

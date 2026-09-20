@@ -1,6 +1,6 @@
 /**
  * dispatchRequest must wrap every handler in try/catch so a throwing route
- * yields JSON 500 ("internal server error") — the stats API can never return
+ * yields JSON 500 ("internal server error"). The stats API can never return
  * HTML or an unhandled rejection.
  */
 import { describe, expect, test } from "bun:test";

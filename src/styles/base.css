@@ -1,4 +1,4 @@
-/* Base — reset/body, visually-hidden, icon, global button/focus-visible, pointer:coarse hit-targets, badge-family geometry. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Base: reset/body, visually-hidden, icon, global button/focus-visible, pointer:coarse hit-targets, badge-family geometry. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 * {
 	box-sizing: border-box;
@@ -13,7 +13,7 @@ body {
 	-webkit-font-smoothing: antialiased;
 	text-rendering: optimizeLegibility;
 }
-/* finding #P1: visually-hidden utility for the aria-live status region — kept
+/* finding #P1: visually-hidden utility for the aria-live status region, kept
  * in the layout for screen readers, clipped out of the visual/paint surface. */
 .visually-hidden {
 	position: absolute;

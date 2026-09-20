@@ -52,7 +52,7 @@ export const StatusBar: Component = () => {
 			<Show when={state.planModeEnabled}>
 				<Segment
 					class="badge plan-badge"
-					title="Plan mode — click to toggle (/plan)"
+					title="Plan mode, click to toggle (/plan)"
 					onClick={planToggle}
 				>
 					plan
@@ -77,8 +77,8 @@ export const StatusBar: Component = () => {
 				<Segment
 					active={state.modal === "debug"}
 					onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
-					title="Debug — transport and fleet visibility"
-					ariaLabel="Debug — transport and fleet visibility"
+					title="Debug, transport and fleet visibility"
+					ariaLabel="Debug, transport and fleet visibility"
 				>
 					<InfoIcon />
 				</Segment>

@@ -1,4 +1,4 @@
-/* Global stylesheet — import manifest.
+/* Global stylesheet: import manifest.
  *
  * The monolithic stylesheet was split into per-domain files under
  * src/styles/ plus src/tx/tx.css; this file only wires them together.
@@ -18,7 +18,7 @@
 @import "./styles/usage.css";
 @import "./tx/tx.css";
 
-/* --- Directory picker (DirPicker.tsx) — kept here (not in a domain file)
+/* --- Directory picker (DirPicker.tsx), kept here (not in a domain file)
    because the Phase 6 onboarding plan scopes its styles to this file. Rules
    mirror the .project-* and .worktree-* modal idioms in fleet.css. --- */
 .dirpick {

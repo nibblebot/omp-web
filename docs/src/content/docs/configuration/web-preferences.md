@@ -60,7 +60,7 @@ In fleet mode with no session attached, these rows are hidden, because there is 
 - Preferences are keyed by the site origin. Opening the same fleet on a different port or hostname is a different origin and starts from defaults.
 - Clearing site data for the origin resets every preference in the tables above, including prompt history.
 - Corrupt or out-of-range values fall back to defaults rather than breaking the interface: an unrecognized theme resolves to `system`, a font size outside 12 to 18 resolves to 15, a malformed collapsed-groups list opens all groups, and unparsable prompt history starts empty.
-- Prompt history writes are best-effort. If storage is full or unavailable, the history simply stops recording; nothing else fails.
+- Prompt history writes are best-effort. If storage is full or unavailable, the history stops recording; nothing else fails.
 - Desktop notifications require permission. Enabling the toggle asks for it on first use. If permission is denied, turns complete silently, with no error; the toggle still reflects your stored preference, and the browser's site settings are where you change permission.
 
 ## Related

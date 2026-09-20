@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * install:omp-web — install the omp-web tarball into its OWN pinned directory.
+ * install:omp-web installs the omp-web tarball into its OWN pinned directory.
  *
  * Why not `bun install -g <tarball>`: the global store is a FLAT node_modules
  * shared with the `omp` CLI, so it can hold only ONE version of each
@@ -8,7 +8,7 @@
  * 17.3.5) instead of the tarball's pin (17.1.8), and the version-skewed
  * bundle crashes at runtime (missing exports). Installing into a dedicated
  * project dir (`bun add <tarball>`) gives omp-web its OWN node_modules with
- * the exact pinned `@oh-my-pi/*` versions — the omp CLI is untouched and the
+ * the exact pinned `@oh-my-pi/*` versions, so the omp CLI is untouched and the
  * bundle's runtime resolution never reaches the shared store.
  *
  * Layout:
@@ -16,12 +16,12 @@
  *   <prefix>/install/node_modules/omp-web/dist-bundle/cli.js   (the bundle)
  *   <bin-dir>/omp-web → …/dist-bundle/cli.js   (symlink; default ~/.bun/bin)
  *
- * The prefix is where the CLI CODE lives — the DATA home (config, state,
+ * The prefix is where the CLI CODE lives; the DATA home (config, state,
  * workspaces) is chosen independently at first run (`Data home directory
  * [~/.omp-web]: `, any path with `~/` expansion).
  *
  * A stale `bun install -g` copy of omp-web in the global store is removed
- * (only omp-web itself — the @oh-my-pi packages there belong to omp).
+ * (only omp-web itself; the @oh-my-pi packages there belong to omp).
  *
  * Usage: bun run install:omp-web [./omp-web-<version>.tgz] [--prefix <dir>] [--bin-dir <dir>]
  * With no tarball argument it builds + packs first (bun run build && bun pm pack)
@@ -64,7 +64,7 @@ async function resolveTarball(tarball: string): Promise<string> {
 		if (!existsSync(tarball)) fail(`tarball not found: ${tarball}`);
 		return tarball;
 	}
-	console.log("install:omp-web: no tarball given — running bun run build + bun pm pack");
+	console.log("install:omp-web: no tarball given, running bun run build + bun pm pack");
 	const build = Bun.spawn(["bun", "run", "build"], { cwd: ROOT });
 	if (((await build.exited) ?? 1) !== 0) fail("bun run build failed");
 	const pack = Bun.spawn(["bun", "pm", "pack"], { cwd: ROOT });
@@ -107,7 +107,7 @@ mkdirSync(binDir, { recursive: true });
 rmSync(binPath, { force: true });
 symlinkSync(bundlePath, binPath);
 
-// 3. Drop any stale `bun install -g` copy (the @oh-my-pi globals stay — omp's).
+// 3. Drop any stale `bun install -g` copy (the @oh-my-pi globals stay; they are omp's).
 const stale = Bun.spawn(["bun", "remove", "-g", "omp-web"]);
 const staleCode = (await stale.exited) ?? 1;
 if (staleCode !== 0 && staleCode !== 1)

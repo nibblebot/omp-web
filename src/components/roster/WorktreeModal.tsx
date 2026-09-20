@@ -23,8 +23,8 @@ const STAGE_LABELS: Record<Tab, string[]> = {
 
 /**
  * Add-worktree modal (Phase 5): register a linked worktree of a registered
- * project. Two tabs — Create new (name input on top, a "+ New branch" row,
- * then an existing-branch dropdown — checked-out branches last and disabled;
+ * project. Two tabs: Create new (name input on top, a "+ New branch" row,
+ * then an existing-branch dropdown, checked-out branches last and disabled;
  * no freeform ref entry, no advanced section) and Add existing (discovered-but-unregistered worktrees
  * of the project, plus an "or pick a directory" DirPicker affordance that feeds
  * the same submit path). "Start a session now" (default ON) spawns a daemon on
@@ -80,7 +80,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	/** Branches for the dropdown: available first, checked-out (already in a
-	 *  workspace — git refuses a second checkout) last and disabled;
+	 *  workspace, since git refuses a second checkout) last and disabled;
 	 *  alphabetical within each group. */
 	const sortedBranches = () =>
 		[...branches()].sort(
@@ -214,7 +214,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = (props) => {
 				)}
 			</Show>
 			<Show when={project() === null}>
-				<div class="msg-notice worktree-error">unknown project — reopen from the sidebar</div>
+				<div class="msg-notice worktree-error">unknown project, reopen from the sidebar</div>
 			</Show>
 			<Show when={!busy() && project() !== null}>
 				<div class="worktree-tabs" role="tablist" aria-label="Worktree mode">
@@ -369,7 +369,7 @@ export const WorktreeModal: Component<{ onClose: () => void }> = (props) => {
 							}}
 						/>
 					</Show>
-					{/* A picker-chosen path matches no listed row — echo it so the
+					{/* A picker-chosen path matches no listed row; echoing it keeps the
 					    selection stays visible once the picker folds away. */}
 					<Show
 						when={selectedPath() !== null && !unregistered().some((p) => p.path === selectedPath())}

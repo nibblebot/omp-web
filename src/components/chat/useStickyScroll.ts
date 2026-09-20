@@ -15,18 +15,18 @@ const RE_PIN_DISTANCE_PX = 80;
  * the container + content refs, the jump-to-bottom visibility signal, and the
  * jump button's click.
  *
- * Pin state is owned ENTIRELY by synchronous gesture handlers — scroll events
+ * Pin state is owned ENTIRELY by synchronous gesture handlers; scroll events
  * never touch it. Up-gestures (wheel-up, scrollbar grab, upward touch drag,
  * up-keys) unpin; down-gestures that land inside the re-pin band, plus the
  * jump button and session switches, re-pin. This closes the two failure
  * classes of distance-threshold scroll-event reconciliation:
  *
- * 1. A scroll event can't re-pin — they can't distinguish a user scrolling
+ * 1. A scroll event can't re-pin, since it can't distinguish a user scrolling
  *    down from a browser clamp (LiveTail's soften re-parse or a shrink
- *    shifting scrollTop), so a small scroll-up during streaming can never be
+ *    shifting scrollTop). A small scroll-up during streaming can never be
  *    yanked back by the next event. Escape is irrevocable until the user
  *    gestures down into the band.
- * 2. Content growth can't move an unpinned viewport — snaps run only while
+ * 2. Content growth can't move an unpinned viewport; snaps run only while
  *    pinned, so a pinned stream follows the live edge and an escaped one
  *    stays exactly where the user left it.
  *
@@ -70,8 +70,8 @@ export function useStickyScroll(): {
 	const unpin = () => {
 		// No room above → the gesture can't move the viewport; stay pinned.
 		if (container.scrollTop <= 0) return;
-		// A pending wheel-down re-pin check must not fire after the escape —
-		// the viewport is still inside the band until the wheel-up lands, so
+		// A pending wheel-down re-pin check must not fire after the escape.
+		// The viewport is still inside the band until the wheel-up lands, so
 		// it would re-pin and snap back (the "can't unstick" race at rAF
 		// granularity).
 		if (rePinRaf !== 0) {
@@ -127,7 +127,7 @@ export function useStickyScroll(): {
 	// Session-first wheel scrolling. Tool bodies with their own vertical
 	// scrollbar (search results; any future capped output) otherwise trap the
 	// wheel: hovering them scrolls the inner area, and the session only moves
-	// once the inner scroller hits its boundary. Redirect instead — wheel over
+	// once the inner scroller hits its boundary. Redirect instead. Wheel over
 	// an inner scroller scrolls the session, unless the user explicitly asks
 	// for inner scroll: Alt+wheel, or wheel over the scroller's own scrollbar.
 	// At the scroller's boundary the event falls through to native scroll
@@ -186,7 +186,7 @@ export function useStickyScroll(): {
 	};
 	// Scrollbar drags, scroll keys, and touch drags are the other pin
 	// gestures (wheel is handled in onWheelRedirect). All unpin/re-pin
-	// SYNCHRONOUSLY — waiting for a scroll event races the streaming snaps.
+	// SYNCHRONOUSLY, since waiting for a scroll event races the streaming snaps.
 	let scrollbarGrab = false;
 	const onScrollbarMouseDown = (e: MouseEvent) => {
 		// The stable gutter keeps the scrollbar strip at the container's right
@@ -211,7 +211,7 @@ export function useStickyScroll(): {
 		// keys are handled MANUALLY: native keyboard paging smooth-scrolls,
 		// and during the animation the position lingers near the bottom, so a
 		// deferred pin check would re-pin and the re-snap would kill the
-		// animation — the same async race the synchronous gestures exist to
+		// animation, the same async race the synchronous gestures exist to
 		// avoid.
 		const onInteractive = (e.target as HTMLElement).closest(
 			"button, a, input, textarea, select, summary",
@@ -252,7 +252,7 @@ export function useStickyScroll(): {
 				container.scrollTop = container.scrollHeight;
 				break;
 			case " ":
-				// Space ACTIVATES focused buttons/links — only Shift+Space (page
+				// Space ACTIVATES focused buttons/links; only Shift+Space (page
 				// up) off interactive elements is ours.
 				if (onInteractive || !e.shiftKey) return;
 				e.preventDefault();
@@ -273,7 +273,7 @@ export function useStickyScroll(): {
 	};
 	onMount(() => {
 		// The single re-snap mechanism (see the module comment): content
-		// observation covers every growth/shrink source — streamed text, tool
+		// observation covers every growth/shrink source: streamed text, tool
 		// output, mode switches, run-row toggles, image decodes, soften
 		// re-parses; container observation covers viewport resizes that change
 		// clientHeight without a content change. Snapping synchronously in the

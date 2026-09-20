@@ -116,7 +116,7 @@ export const LoginModal: Component<{ onClose: () => void }> = (props) => {
 			</Show>
 			<Show when={inFlight() !== null}>
 				<div class="msg-notice">
-					Login in progress — closing this panel will not cancel the server-side flow.
+					Login in progress. Closing this panel will not cancel the server-side flow.
 				</div>
 			</Show>
 			<Show when={state.loginCodeRequest}>

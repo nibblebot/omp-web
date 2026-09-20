@@ -2,8 +2,8 @@
  * Directory browsing for the project directory picker (`GET /ctl/fs/browse`).
  *
  * Lists the SUBDIRECTORIES of one directory, name-sorted, each tagged with
- * `hasGit` (a `.git` entry exists — directory for a main checkout, file for
- * a linked worktree). Dot-directories are skipped in the listing only:
+ * `hasGit` (a `.git` entry exists, meaning a directory for a main checkout or
+ * a file for a linked worktree). Dot-directories are skipped in the listing only:
  * explicitly navigating INTO a dot-path still works. The requested path is
  * `~`/`~/`-expanded and canonicalized to its realpath. Entries whose stat
  * fails (dangling symlinks, permission errors) are skipped silently; a
@@ -23,7 +23,7 @@ export interface BrowseDirEntry {
 	name: string;
 	/** Absolute path inside the canonicalized listing (NOT itself realpathed). */
 	path: string;
-	/** True when `<path>/.git` exists (directory OR file — linked worktree). */
+	/** True when `<path>/.git` exists (directory OR file, which means a linked worktree). */
 	hasGit: boolean;
 }
 

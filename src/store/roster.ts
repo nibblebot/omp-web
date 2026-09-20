@@ -96,7 +96,7 @@ export function requestDaemonSessions(daemonId: string): Promise<SessionListEntr
  * daemons attach (when not already attached) and switch to the session if
  * it is not the one currently live. Resolves when the attach settles / the
  * command is issued, so the caller can end its waking pulse. NEVER surfaces
- * a "session switched" supersession as an error — see switchSessionRetry.
+ * a "session switched" supersession as an error; see switchSessionRetry.
  */
 export function resumeDaemonSession(daemonId: string, sessionFile: string): Promise<void> {
 	const back = state.daemonRoster.find((d) => d.daemonId === daemonId);
@@ -116,7 +116,7 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
 			},
 		);
 	}
-	// Ready daemon. Attach FIRST when not already attached — a switchSession
+	// Ready daemon. Attach FIRST when not already attached; a switchSession
 	// dispatched before the attach settles routes to the wrong/no daemon and
 	// is swept by the attach's "session switched" supersession. The switch
 	// only ever runs once the current daemon is (or is already) attached.
@@ -150,7 +150,7 @@ function switchSessionRetry(daemonId: string, sessionFile: string): Promise<void
 			}
 			// The switch was swept by a session switch. Retry only while THIS
 			// daemon is still the attached session (the rejection means it just
-			// became attached — our own pick); a superseded resume is dropped
+			// became attached, our own pick); a superseded resume is dropped
 			// silently, never applied to a different daemon.
 			if (state.currentSessionId !== daemonId) return undefined;
 			return call("switchSession", [sessionFile]).then(

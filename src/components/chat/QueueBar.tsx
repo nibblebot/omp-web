@@ -28,7 +28,7 @@ export const QueueBar: Component = () => {
 			.catch(() => setQueue(EMPTY));
 	};
 
-	// Refetch whenever the mirrored queue depth changes — the post-mutation
+	// Refetch whenever the mirrored queue depth changes. The post-mutation
 	// state broadcast refreshes queuedMessageCount after every pop/clear/send,
 	// and agent_end settles streaming. Initial fetch included.
 	createEffect(() => {

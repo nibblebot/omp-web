@@ -62,7 +62,7 @@ import { rejectEntryUiRequests, rejectStreamUiRequests, webUiRequest } from "./u
 // de-muxed (Phase 6): every /events stream is attached to that one session from
 // open (connect = attached), which routes call/login_code/ui_response and
 // all session-scoped frames. The constant handle "s1" survives only as the
-// attached frame's client guard token — session-scoped frames carry no
+// attached frame's client guard token; session-scoped frames carry no
 // sessionId on the wire.
 // ---------------------------------------------------------------------------
 
@@ -107,7 +107,7 @@ function markActivity(): void {
 
 /**
  * Boot gate: the OMP_SESSION| listening line prints BEFORE the boot session exists,
- * so early connectors (and the first requests) wait for registration — the
+ * so early connectors (and the first requests) wait for registration. The
  * connect-implies-attached invariant holds even for streams that race boot.
  */
 let resolveBootReady: () => void = () => {};
@@ -149,13 +149,13 @@ const relay: RelayHandle = createRelay({
 	maxRooms: config.collabMaxRooms,
 	// Host upgrades create rooms, so they are gated exactly like /events and
 	// /command (R14): loopback exempt; off-loopback peers need the bearer
-	// token. Guests join by E2E room key — deliberately not gated.
+	// token. Guests join by E2E room key, deliberately not gated.
 	authorizeHost: (req, srv) => r14Authorized(req, srv),
 });
 
 // ---------------------------------------------------------------------------
 // Extracted-module wiring (Phase 6 audit #7): each split module receives its
-// boot-time deps explicitly — config/settings/authStorage/modelRegistry from
+// boot-time deps explicitly: config/settings/authStorage/modelRegistry from
 // the bootstrap above, plus the readiness clock. The delivery module's detach
 // hooks are registered so stream teardown keeps rejecting stream-owned
 // pending code inputs and UI requests exactly as before.
@@ -193,13 +193,13 @@ setOnConsumerDetached((stream, reason) => {
 let nextConsumerId = 1;
 
 /**
- * Prime a fresh /events stream: hello_ok first (daemon identity — HTTP-level
+ * Prime a fresh /events stream: hello_ok first (daemon identity; HTTP-level
  * auth replaced the WS hello handshake), then the attach priming (attached →
  * history → state → collab_status → available_commands → ready), seqs 1..k
  * (k < SSE_DELTA_SEQ_START). `commands` is built BEFORE the stream opens so
  * every priming seq is assigned contiguously (no async gap between priming
  * and the delta era). Then resume per Last-Event-ID: only ring deltas with
- * seq > max(lastEventId, snapshotSeq - 1) replay — the snapshot mark (the
+ * seq > max(lastEventId, snapshotSeq - 1) replay. The snapshot mark (the
  * next delta seq at prime start) bounds the overlap so a resume never
  * re-delivers deltas whose effects are already inside the fresh priming
  * (finding #2: a completed turn's event deltas would otherwise duplicate
@@ -207,7 +207,7 @@ let nextConsumerId = 1;
  *
  * The history frame is the one potentially multi-megabyte payload (base64
  * image data URLs inside messages): it is chunked and paced to the consumer's
- * drain so a transcript over the 4 MiB backpressure cap still primes — a
+ * drain so a transcript over the 4 MiB backpressure cap still primes; a
  * synchronous single-frame prime would be terminated by enqueueTo and the
  * client could never attach (finding #11). Pacing lets the socket drain
  * between chunks; the sequence stays 1..k because priming seqs never reach
@@ -286,7 +286,7 @@ async function primeConsumer(
 	// and the fresh priming carries everything before the snapshot, so only
 	// deltas after max(last, snapshotSeq-1) are new. An absent/sub-1024 id
 	// (fresh client, or a drop mid-prime) means priming carries full state up
-	// to the snapshot — the floor is just the snapshot mark, and deltas that
+	// to the snapshot, so the floor is just the snapshot mark; deltas that
 	// arrived during the paced prime still replay exactly once.
 	const resumeFrom =
 		Number.isFinite(last) && last >= SSE_DELTA_SEQ_START
@@ -296,7 +296,7 @@ async function primeConsumer(
 	// The ring keeps only the last SSE_RING_CAP deltas and evicts from the
 	// head; a first entry above resumeFrom+1 means entries the client still
 	// needs were evicted while the (paced) prime was in flight. Replaying the
-	// tail would silently skip them — drop-and-resume instead: the reconnect's
+	// tail would silently skip them, so drop and resume instead: the reconnect's
 	// Last-Event-ID is a priming seq, so it lands below the new snapshot mark
 	// and the fresh prime carries everything again.
 	if (replay.length > 0 && replay[0].seq > resumeFrom + 1) {
@@ -743,7 +743,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 	} catch (err) {
 		if (cmd.type === "call") {
 			// Finding #59: EVERY failed call answers with the id-keyed
-			// call_result — even without an attached session entry. The
+			// call_result, even without an attached session entry. The
 			// client correlates call() promises only with call_result; a bare
 			// error frame here would leave the promise hanging until timeout.
 			broadcastAnswer({ type: "call_result", id: cmd.id, ok: false, error: String(err) });
@@ -821,7 +821,7 @@ const PLACEHOLDER_HTML = `<!doctype html>
 
 /**
  * Authorization header check: the scheme is case-insensitive (`bearer`/
- * `Bearer`), but the token value is compared EXACTLY — consistent with the
+ * `Bearer`), but the token value is compared EXACTLY, consistent with the
  * ?token= query path (regression: the whole header used to be lowercased,
  * accepting wrong-case tokens).
  */
@@ -840,8 +840,8 @@ function bearerOk(req: Request): boolean {
 /**
  * R14 gate for the agent-driving endpoints (/events, /command): loopback is
  * exempt; off-loopback peers need the bearer token via Authorization header
- * or ?token=. A missing or wrong credential is a 401 — no hello window, no
- * close codes.
+ * or ?token=. A missing or wrong credential is a 401 with no hello window
+ * and no close codes.
  */
 function r14Authorized(req: Request, srv: Server<RelaySocketData>): boolean {
 	if (isLoopbackIp(srv.requestIP(req)?.address)) return true;
@@ -895,7 +895,7 @@ const server = Bun.serve<RelaySocketData>({
 		// relay returns null for every other pathname so web handling
 		// continues. Host upgrades can be refused before the handshake
 		// (off-loopback without the bearer token → 401; new host room past
-		// the cap → 503) — surface that response.
+		// the cap → 503). Surface that response.
 		const relayResult = relay.handleUpgrade(url, srv, req);
 		if (relayResult !== null) {
 			if (relayResult.handled) return;
@@ -926,7 +926,7 @@ const server = Bun.serve<RelaySocketData>({
 			return Response.json({ commandId: cmd.id }, { status: 202 });
 		}
 		// /download and static: off-loopback requests require the token too when
-		// one is set (Authorization header or ?token= — downloads are plain fetch).
+		// one is set (Authorization header or ?token=; downloads are plain fetch).
 		const loopback = isLoopbackIp(srv.requestIP(req)?.address);
 		if (!loopback && config.token && !bearerOk(req))
 			return new Response("Unauthorized", { status: 401 });
@@ -972,7 +972,7 @@ const server = Bun.serve<RelaySocketData>({
 	websocket: {
 		// Only collab relay sockets reach these handlers: the agent-driving
 		// channel is SSE (/events) + POST (/command), and every upgraded
-		// socket carries RelaySocketData (audit #18 — the old "web" variant
+		// socket carries RelaySocketData (audit #18: the old "web" variant
 		// of the union was never constructed).
 		open(ws) {
 			relay.handleOpen(ws);
@@ -1003,10 +1003,10 @@ console.log(`${OMP_SESSION_PREFIX}${JSON.stringify(listeningLine)}`);
 console.error(`omp-session listening on http://localhost:${server.port}`);
 
 // pi-utils' postmortem installs its own SIGINT/SIGTERM/SIGHUP handlers at
-// import time (run SDK cleanup, then exitProcess(130/143/129)) — they preempt
+// import time (run SDK cleanup, then exitProcess(130/143/129)); they preempt
 // omp-session's graceful shutdown with the default-disposition exit code. omp-session owns
-// these signals from bind onward (BEFORE the boot-session await below — a
-// kill during session creation must not skip disposal): drop the import-time
+// these signals from bind onward (BEFORE the boot-session await below, so a
+// kill during session creation cannot skip disposal): drop the import-time
 // handlers, run the same SDK cleanup callbacks inside our shutdown
 // (postmortemCleanup never exits), and exit 0. The shutdown function is
 // hoisted and every binding it touches is already initialized.
@@ -1083,7 +1083,7 @@ try {
 	bootSession = await collabSession.createSession(config.cwd);
 } catch (err) {
 	// A signal during boot runs shutdown() concurrently; the torn-down SDK
-	// state fails createSession — that is the shutdown, not a boot failure.
+	// state fails createSession. That is the shutdown, not a boot failure.
 	if (shuttingDown) process.exit(0);
 	console.error("Failed to start agent session:", err);
 	process.exit(1);
@@ -1163,7 +1163,7 @@ async function shutdown(): Promise<void> {
 	// crash-free exit never leaves a live lock behind.
 	for (const lock of sessionLocks) lock.release();
 	// Run the SDK's registered postmortem cleanup callbacks (browser/pty/MCP
-	// teardown etc.) without exiting — the exit is ours below.
+	// teardown etc.) without exiting; the exit is ours below.
 	await postmortemCleanup().catch(() => {});
 	process.exit(0);
 }

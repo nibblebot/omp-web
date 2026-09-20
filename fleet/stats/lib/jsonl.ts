@@ -9,12 +9,12 @@
  * single read + parse. Corrupt lines are skipped in `entries` but never
  * shift paging: `lineIndex[i]` holds the raw 0-based JSONL line number of
  * `entries[i]`, and `readRange` pages over RAW line windows
- * [offset, offset+limit) — a corrupt line inside the window only yields a
+ * [offset, offset+limit). A corrupt line inside the window only yields a
  * gap, and the next page can never duplicate or drop entries.
  *
  * Byte cap: files larger than MAX_JSONL_BYTES are parsed only up to the
  * last complete line at/before the cap; `truncated: true` marks the doc.
- * PI_MAX_JSONL_BYTES (bytes) overrides the cap at call time — a test seam;
+ * PI_MAX_JSONL_BYTES (bytes) overrides the cap at call time as a test seam;
  * note the cache key deliberately does not include the cap, so tests must
  * use distinct files per cap value.
  *
@@ -43,7 +43,7 @@ let cacheHits = 0;
 let cacheMisses = 0;
 
 export interface JsonlDoc {
-	/** Parsed entries only — corrupt lines are skipped. */
+	/** Parsed entries only; corrupt lines are skipped. */
 	entries: RawEntry[];
 	/** Raw 0-based JSONL line number for entries[i]. */
 	lineIndex: number[];
@@ -82,7 +82,7 @@ export async function loadJsonl(abs: string): Promise<JsonlDoc | null> {
 	try {
 		st = await stat(abs);
 	} catch {
-		return null; // missing — no mtime/size to key on
+		return null; // missing, no mtime/size to key on
 	}
 	if (!st.isFile()) return null;
 	const key = cacheKey(abs, st.mtimeMs, st.size);
@@ -108,7 +108,7 @@ export async function loadJsonl(abs: string): Promise<JsonlDoc | null> {
 			}
 			return doc;
 		})
-		.catch(() => null) // unreadable — do not cache; the next call retries
+		.catch(() => null) // unreadable, so do not cache; the next call retries
 		.finally(() => {
 			inflight.delete(key);
 		});
@@ -206,8 +206,9 @@ export function entryTs(e: RawEntry): number | null {
 /**
  * Tool-execution start marker (`custom` entry with customType
  * "tool_execution_start"). Returns the toolCallId and the execution start as
- * epoch ms — data.startedAt when present (ISO string or epoch ms), else the
- * entry's own timestamp — or null when the entry isn't a usable marker.
+ * epoch ms, using data.startedAt when present (ISO string or epoch ms) and
+ * the entry's own timestamp otherwise. Null when the entry isn't a usable
+ * marker.
  */
 export function toolExecutionStart(
 	e: RawEntry,

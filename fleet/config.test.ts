@@ -19,7 +19,7 @@ afterAll(() => {
 describe("loadConfig", () => {
 	// Hermetic against the dev-runner override: loadConfig lets
 	// OMP_FLEET_LOCAL_TEMPLATE replace the local template outright, and a
-	// shell that ran `bun run dev` carries it — every template assertion
+	// shell that ran `bun run dev` carries it, so every template assertion
 	// below would see the override instead of the file/default.
 	const savedLocalTemplate = process.env.OMP_FLEET_LOCAL_TEMPLATE;
 	beforeAll(() => {

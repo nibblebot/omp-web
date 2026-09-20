@@ -1,7 +1,7 @@
 /**
  * readSessionTitle tests: title-slot extraction, header fallback, untitled
  * and missing files, the (path, mtimeMs, size) cache, and head-bounded reads
- * on gigantic files. Uses only real files in tempDir() — no fixtures.
+ * on gigantic files. Uses only real files in tempDir(), no fixtures.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -95,7 +95,7 @@ describe("readSessionTitle", () => {
 	test("head-bounded: a huge file with a 5MB third line still yields the head title", async () => {
 		const dir = tempDir("omp-session-title-");
 		const path = join(dir, "huge.jsonl");
-		// 5MB of invalid JSON on line 3 — a whole-file parser would pull the
+		// 5MB of invalid JSON on line 3. A whole-file parser would pull the
 		// whole transcript; the reader must only touch the head chunk.
 		writeFileSync(path, titleLine("Huge") + headerLine() + "x".repeat(5 * 1024 * 1024) + "\n");
 

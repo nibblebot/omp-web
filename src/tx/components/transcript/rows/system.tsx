@@ -245,7 +245,7 @@ export function CustomMessageRow(props: { entry: RawEntry }) {
 	);
 }
 
-/** `custom` entry dispatch; tool_execution_start is pairing metadata — invisible. */
+/** `custom` entry dispatch; tool_execution_start is pairing metadata, invisible. */
 export function CustomRow(props: { entry: RawEntry }) {
 	const c = customEntryOf(props.entry);
 	if (c === null) return <GenericSysRow entry={props.entry} label="custom" />;

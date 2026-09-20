@@ -43,7 +43,7 @@ export function EntryRow(props: { entry: RawEntry; pairing: PairingMaps }) {
 		if (role === "fileMention") return <FileMentionMsg entry={e} />;
 		return <GenericSysRow entry={e} label={`message[${role ?? "?"}]`} />;
 	}
-	// The title slot (line 1) duplicates the header — skip it as noise.
+	// The title slot (line 1) duplicates the header; skip it as noise.
 	if (type === "title") return null;
 	switch (type) {
 		case "session":
@@ -78,7 +78,7 @@ export function EntryRow(props: { entry: RawEntry; pairing: PairingMaps }) {
 			return <GenericSysRow entry={e} label="thinking_level_change" detail={detail} />;
 		}
 		case "service_tier_change":
-			// serviceTier may legitimately be null — the effective tier is then "default".
+			// serviceTier may legitimately be null; the effective tier is then "default".
 			return (
 				<GenericSysRow
 					entry={e}

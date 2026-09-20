@@ -8,7 +8,7 @@ import type { SubagentSnapshot } from "./subagent-mirror";
 
 // ---------------------------------------------------------------------------
 // Session registry types: the single boot session. omp-session is de-muxed
-// (Phase 6) — there is exactly one SessionEntry and every web socket is
+// (Phase 6): there is exactly one SessionEntry and every web socket is
 // attached to it from upgrade. The handle "s1" survives only as the attached
 // frame's client guard token. Per-session AgentRegistry/EventBus/SessionManager
 // (Phase 1 factory) keeps subagent rosters namespaced per session; ui_request

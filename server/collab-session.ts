@@ -31,7 +31,7 @@ import { buildUiContext } from "./ui-context";
 
 // ---------------------------------------------------------------------------
 // Collab session port (Slice C): the daemon's per-session surface the collab
-// host adapter drives — session getters, event/entry/bus taps, guest prompt
+// host adapter drives: session getters, event/entry/bus taps, guest prompt
 // injection, agent roster/control, and transcript resolution. Also owns the
 // slash runtime and the session factory itself (createSession).
 // ---------------------------------------------------------------------------
@@ -218,14 +218,14 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 
 	function wireSession(entry: SessionEntry): void {
 		const { session, eventBus } = entry;
-		// session.subscribe covers the entire AgentSessionEvent union — the same
+		// session.subscribe covers the entire AgentSessionEvent union, the same
 		// frames the RPC child emitted onSessionEvent.
 		session.subscribe((event) => {
 			broadcastTo(entry.handle, { type: "event", event });
 			// Tokens/cost/context/queue counts all change at turn end.
 			if (event.type === "agent_end") void deps.broker.broadcastState(entry, true).catch(() => {});
 			// A queued steer is consumed (dequeued) the moment the loop injects
-			// it, but nothing else broadcasts state at that point — the steer
+			// it, but nothing else broadcasts state at that point. The steer
 			// POST's post-mutation broadcast fired at queue time and agent_end
 			// is still far off. Without this refresh, state.queuedMessageCount
 			// (and the QueueBar chips it refetches) stays stale: the delivered
@@ -331,7 +331,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 	/**
 	 * Steer target: a registered agent with a live, running session. Parked refs have session null.
 	 * Task subagents register in AgentRegistry.global() (executor.ts hardcodes it), NOT the session's
-	 * private registry — that one only ever holds "Main". The per-session allowlist is the lifecycle
+	 * private registry, which only ever holds "Main". The per-session allowlist is the lifecycle
 	 * mirror: an id absent from subagentSnapshots belongs to another session (or no session) and is rejected.
 	 */
 	function liveSubagentSession(
@@ -351,8 +351,9 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 
 	/**
 	 * Abort mirrors the hub tool's cancel path (tools/hub/jobs.ts executeCancel): kill the async job
-	 * first — bare session.abort() only interrupts the in-flight turn and the executor keeps the job
-	 * running. Jobless registrations (pre-job spawn, idle/parked zombies) die via abort + lifecycle release.
+	 * first, since bare session.abort() only interrupts the in-flight turn and the executor keeps
+	 * the job running. Jobless registrations (pre-job spawn, idle/parked zombies) die via abort +
+	 * lifecycle release.
 	 */
 	async function abortSubagent(entry: SessionEntry, agentId: string): Promise<void> {
 		if (!entry.subagentSnapshots.has(agentId))

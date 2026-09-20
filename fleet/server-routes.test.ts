@@ -76,7 +76,7 @@ describe("fleet control plane", () => {
 		expect(body.registered).toHaveLength(0);
 
 		// A registered project (real git repo) appears in `registered`;
-		// `projects` stays empty — it lists only unregistered linked
+		// `projects` stays empty; it lists only unregistered linked
 		// worktrees now that root scanning is gone.
 		const repoDir = join(tmp, "registered-repo");
 		mkdirSync(repoDir, { recursive: true });
@@ -114,7 +114,7 @@ describe("fleet control plane", () => {
 		expect(body.entry).toBeUndefined();
 		// The default workspace is auto-registered: exactly one new roster
 		// entry for the repo's main checkout, asleep and tagged with the
-		// project (no worktreeOf — main checkouts stay untagged).
+		// project (no worktreeOf; main checkouts stay untagged).
 		const roster = server.registry.list();
 		expect(roster).toHaveLength(rosterBefore.length + 1);
 		const main = roster.find((e) => e.cwd === realpathSync(repoDir));
@@ -387,7 +387,7 @@ describe("fleet control plane", () => {
 		expect(found?.endpoint).toBe(fake.url);
 	});
 
-	test("GET /ctl/debug returns fleet facts, per-session internals, and the event log — never tokens", async () => {
+	test("GET /ctl/debug returns fleet facts, per-session internals, and the event log; never tokens", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/debug`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as Record<string, unknown>;

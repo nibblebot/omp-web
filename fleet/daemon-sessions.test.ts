@@ -1,7 +1,7 @@
 /**
  * listDaemonSessions tests: newest-first ordering, friendly display names
- * (title → first message → timestamp), the size limit, and hermeticity —
- * the agent dir is injected through the module's optional seam so the tests
+ * (title → first message → timestamp), the size limit, and hermeticity.
+ * The agent dir is injected through the module's optional seam so the tests
  * never depend on (or mutate) the process environment. The session dir is
  * computed with the SDK's own getDefaultSessionDir so the test never
  * reimplements the cwd encoding.
@@ -72,7 +72,7 @@ describe("listDaemonSessions", () => {
 		utimesSync(empty, new Date(1_700_000_000_000 + 120_000), new Date(1_700_000_000_000 + 120_000));
 
 		const result = await listDaemonSessions(cwd, 10, agentDir);
-		// Timestamp rendering is locale/timezone dependent — assert the prefix.
+		// Timestamp rendering is locale/timezone dependent, so assert the prefix.
 		expect(result[0].name).toMatch(/^Untitled · /);
 		expect(result[1].name).toBe("fix the sidebar crash");
 		expect(result[1].messageCount).toBe(1);

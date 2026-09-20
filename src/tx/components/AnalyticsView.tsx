@@ -87,7 +87,7 @@ function Prov(props: { src: "live" | "db" }) {
 function AnalyticsBody(props: { stats: SessionStats; onPickTool: (name: string) => void }) {
 	const s = () => props.stats;
 
-	/** Unsynced sessions mix fresh JSONL counts with empty stats.db columns — label the halves. */
+	/** Unsynced sessions mix fresh JSONL counts with empty stats.db columns; label the halves. */
 	const unsynced = () => !s().synced;
 
 	const maxTotalMs = createMemo(() => {
@@ -102,7 +102,7 @@ function AnalyticsBody(props: { stats: SessionStats; onPickTool: (name: string) 
 		<>
 			<Show when={unsynced()}>
 				<div class="muted small prov-note">
-					Not in stats.db — tool counts and durations are read live from the session JSONL (
+					Not in stats.db, tool counts and durations are read live from the session JSONL (
 					<span class="prov">live</span>); token, cost, and error figures come from stats.db (
 					<span class="prov">db</span>) and stay empty until the session is synced.
 				</div>

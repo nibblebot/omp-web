@@ -1,15 +1,15 @@
 /**
  * wireSession regression tests: a queued steer must clear from the queue the
  * moment it is delivered into the conversation (finding: nothing broadcast
- * state on delivery, so state.queuedMessageCount — and the QueueBar chips it
- * refetches — stayed stale until the next unrelated broadcast).
+ * state on delivery, so state.queuedMessageCount, along with the QueueBar
+ * chips it refetches, stayed stale until the next unrelated broadcast).
  *
  * The subscribe callback is tested hermetically: a fake session entry with a
  * subscriber tap + a stub broker counting broadcastState calls. The mid-run
  * race the regression is about (queue populated while a turn is streaming,
  * then the loop injects the steer) is simulated exactly: the drain is what
  * dequeues, so the broker is invoked with a session whose queue is already
- * empty — and the assertion is that the delivered steer triggers a broadcast.
+ * empty, and the assertion is that the delivered steer triggers a broadcast.
  */
 import { describe, expect, test } from "bun:test";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent";
@@ -91,7 +91,7 @@ describe("wireSession queue-staleness regression", () => {
 
 		// The drain runs before the subscribe callback fires (the loop dequeues
 		// the steer, then emits message_start): the broker snapshot therefore
-		// sees the queue empty — that is exactly the stale-count window. The
+		// sees the queue empty; that is exactly the stale-count window. The
 		// delivered steer's message_start must still trigger a refresh.
 		fire(deliveredSteer());
 
@@ -144,7 +144,7 @@ describe("wireSession queue-staleness regression", () => {
 			eventBus: { on: () => () => {} } as never,
 		} as unknown as SessionEntry);
 
-		// Hidden system steers carry attribution "agent" — they are not
+		// Hidden system steers carry attribution "agent"; they are not
 		// user-restorable, never surface as chips, and must not broadcast.
 		fire({
 			type: "message_start",

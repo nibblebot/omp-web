@@ -1,4 +1,4 @@
-/* Usage — amount-bar, usage rows/panel, goal/plan/retry badges, context breakdown. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Usage: amount-bar, usage rows/panel, goal/plan/retry badges, context breakdown. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 /* Shared progress bar (goal budget, usage limits, sidebar context). */
 .amount-bar {

@@ -1,7 +1,7 @@
 /**
  * JSONL layer unit tests: corrupt-line handling (entries vs lineIndex),
  * LRU cache invalidation (mtime/size), in-flight dedup, LRU bound, and the
- * byte-cap truncation path. All fixtures live in a throwaway tmpdir —
+ * byte-cap truncation path. All fixtures live in a throwaway tmpdir;
  * test/.fixture is never touched.
  *
  * Read counting: loadJsonl increments `misses` exactly once per new parse
@@ -87,7 +87,7 @@ describe("readRange raw-line windows", () => {
 			totalLines: 4,
 		});
 		expect(await readRange(p, 1, 1)).toEqual({
-			// window sits inside the corrupt line — a gap, no entries
+			// window sits inside the corrupt line: a gap, no entries
 			entries: [],
 			nextOffset: 2,
 			totalLines: 4,
@@ -279,7 +279,7 @@ describe("byte cap truncation", () => {
 		const truncated = await loadJsonl(p);
 		expect(truncated!.truncated).toBe(true);
 		expect(truncated!.entries.map((e) => e.n)).toEqual([1]);
-		// Documented seam: the cache key is (abs, mtimeMs, size) — NOT the cap —
+		// Documented seam: the cache key is (abs, mtimeMs, size), NOT the cap,
 		// so a later cap change must not rely on invalidation; tests use distinct
 		// files per cap value. A second call with the same key stays truncated.
 		process.env.PI_MAX_JSONL_BYTES = "500";

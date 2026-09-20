@@ -268,7 +268,7 @@ describe("attached-frame handling", () => {
 		await expect(oldCall).rejects.toThrow("session switched");
 		expect(state.readyAt).toBeUndefined();
 
-		// A fresh getSubagents is issued AFTER the cleanup — the regression was
+		// A fresh getSubagents is issued AFTER the cleanup. The regression was
 		// rejectPendingCalls killing the just-registered pull (swallowed by its
 		// .catch), leaving the panel empty until a later lifecycle frame.
 		const calls = posted.filter(
@@ -277,7 +277,7 @@ describe("attached-frame handling", () => {
 		expect(calls.map((c) => c.method)).toEqual(["getSettings", "getSubagents", "getSubagents"]);
 		const freshId = calls[2].id;
 
-		// Stale answers to rejected calls are ignored — the panel stays empty.
+		// Stale answers to rejected calls are ignored; the panel stays empty.
 		dispatch(callResult(calls[1].id, [sub("stale")]));
 		await flushMicrotasks();
 		expect(state.subagents.size).toBe(0);
@@ -356,7 +356,7 @@ describe("attach correlation (finding #28)", () => {
 		const { id } = lastAttach();
 
 		// A global error (e.g. ANOTHER daemon's pipe lost, or a spawn failure)
-		// while this attach is in flight must not reject it — global errors are
+		// while this attach is in flight must not reject it; global errors are
 		// uncorrelated broadcasts; only the id-keyed attach_result settles it.
 		dispatch({ type: "error", error: "daemon connection lost" });
 		let settled = false;
@@ -391,7 +391,7 @@ describe("attach correlation (finding #28)", () => {
 		FakeEventSource.instances.at(-1)!.onopen?.();
 
 		// Latest-wins: the second attach supersedes the first (which resolves
-		// immediately with whatever session is current — still "" here).
+		// immediately with whatever session is current, still "" here).
 		const first = attachSession("daemon-a");
 		const firstCmd = lastAttach();
 		const second = attachSession("daemon-b");
@@ -567,7 +567,7 @@ describe("client debug ring (transport observability)", () => {
 			expect(state.reconnectDelay).toBe(1000);
 			const messages = state.debugLog.map((e) => e.message).join("\n");
 			expect(messages).toContain("stream closed");
-			expect(messages).toContain("connection lost — retrying in 1000ms");
+			expect(messages).toContain("connection lost, retrying in 1000ms");
 
 			// The scheduled retry dials a fresh stream once the backoff elapses.
 			vi.advanceTimersByTime(1000);
@@ -1037,7 +1037,7 @@ describe("aria-live announcements (finding #P1)", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		dispatch(attached("s1"));
-		// Streaming flips during priming — no announcement until the gate clears.
+		// Streaming flips during priming; no announcement until the gate clears.
 		dispatchSeq(agentStart(), 1024);
 		expect(state.streaming).toBe(true);
 		expect(state.announcement).toBe("");
@@ -1116,7 +1116,7 @@ describe("aria-live announcements (finding #P1)", () => {
 	});
 
 	test("two identical consecutive announcements collapse to one (consecutive-only dedupe)", () => {
-		// The store field is the only observable here — Bun's runtime doesn't
+		// The store field is the only observable here; Bun's runtime doesn't
 		// propagate Solid 1.9 store notifications, so write-counting via an
 		// effect would never fire. The field contract pins the dedupe: the
 		// identical repeat is a no-op, and a repeat after an intervening message
@@ -1134,8 +1134,8 @@ describe("aria-live announcements (finding #P1)", () => {
 
 // ---------------------------------------------------------------------------
 // workingIntent: the shimmer label's dynamic phrase (TUI setWorkingMessage
-// parity). Sourced from tool_execution_start — the loop-resolved `intent`
-// first, then the harness-injected `i` arg — and cleared with the turn.
+// parity). Sourced from tool_execution_start, first the loop-resolved
+// `intent`, then the harness-injected `i` arg, and cleared with the turn.
 // ---------------------------------------------------------------------------
 describe("workingIntent (dynamic shimmer label)", () => {
 	function primeReady(): void {
@@ -1209,7 +1209,7 @@ describe("workingIntent (dynamic shimmer label)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 5: project-first sidebar state — registered_projects frame handling
+// Phase 5: project-first sidebar state: registered_projects frame handling
 // (fleet-scoped, survives session resets) + daemonsByProject grouping.
 // ---------------------------------------------------------------------------
 describe("Phase 5: registered projects and project-first grouping", () => {
@@ -1271,12 +1271,12 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		});
 		expect(state.fleetConfigPath).toBe("/home/u/.omp-web/config.json");
 
-		// An explicit null (defaults apply — no config file) is honored.
+		// An explicit null (defaults apply, no config file) is honored.
 		dispatch({ type: "registered_projects", projects: [p3], configPath: null });
 		expect(state.fleetConfigPath).toBeNull();
 
 		// Fleet-scoped like the projects: a session switch (resetSessionView)
-		// must not wipe it — the first-run signal lives until config exists.
+		// must not wipe it; the first-run signal lives until config exists.
 		dispatch({
 			type: "registered_projects",
 			projects: [p1],
@@ -1307,7 +1307,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		const groups = daemonsByProject();
 		expect(groups.map((g) => g.project?.projectId ?? null)).toEqual(["p2", "p1", "p3"]);
 		expect(groups[0].daemons.map((d) => d.daemonId)).toEqual(["b-main"]);
-		// Main-checkout row first, then worktrees — regardless of roster order.
+		// Main-checkout row first, then worktrees, regardless of roster order.
 		expect(groups[1].daemons.map((d) => d.daemonId)).toEqual(["a-main", "a-wt"]);
 		expect(groups[2].daemons).toEqual([]); // zero-daemon project still renders
 	});
@@ -1322,7 +1322,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 			daemons: [
 				// Unregistered: no projectId at all (remote/unregistered).
 				daemon("zeta-main", { project: "zeta" }),
-				// Orphaned: projectId whose registry entry is gone — must not vanish.
+				// Orphaned: projectId whose registry entry is gone; must not vanish.
 				daemon("orphan", { project: "orphan", projectId: "gone" }),
 				// A worktree of an unregistered repo: same string group, main first.
 				daemon("zeta-wt", { project: "zeta", worktreeOf: "zeta" }),
@@ -1447,7 +1447,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 5: project/worktree command senders — each POSTs the exact
+// Phase 5: project/worktree command senders. Each POSTs the exact
 // ClientCommand variant the fleet edge allowlists.
 // ---------------------------------------------------------------------------
 describe("Phase 5: project/worktree command senders", () => {
@@ -1728,7 +1728,7 @@ describe("Phase 5: post-attach session-picker gate", () => {
 		expect(state.pendingSessionPicker).toBe("d1");
 
 		// The proxied attached frame for the gate's own daemon (a switch from
-		// daemon-a) must NOT disarm — the sessions answer still has to land.
+		// daemon-a) must NOT disarm; the sessions answer still has to land.
 		dispatch(attached("d1"));
 		expect(state.pendingSessionPicker).toBe("d1");
 
@@ -1888,7 +1888,7 @@ describe("attached session reconciliation against roster truth", () => {
 		attachAndPrime();
 		// The proxied attached frame already set currentSessionId, but the
 		// id-keyed attach_result has not settled yet (finding #28: priming
-		// rides the daemon pipe, which may be mid-redial) — the wake-attach
+		// rides the daemon pipe, which may be mid-redial); the wake-attach
 		// is still in flight, so the lagging roster must not clear.
 		const attach = attachSession("daemon-a");
 		const cmd = posted.at(-1);
@@ -2170,7 +2170,7 @@ describe("roster session dropdown", () => {
 	test("resumeDaemonSession retries a switch swept by its own attach's supersession, never banners", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
-		// Attached to d1; resume a session on a DIFFERENT ready daemon (d9) —
+		// Attached to d1; resume a session on a DIFFERENT ready daemon (d9).
 		// the switch lands in-flight while the d9 attach's `attached` frame
 		// sweeps pending calls with "session switched".
 		setState("currentSessionId", "d1");

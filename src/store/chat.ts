@@ -22,7 +22,7 @@ import { call } from "./transport";
  * the transcript (`items`/`live`), the /btw side panel reply buffer, and the
  * rAF-coalesced write machinery moved here from state.ts; state.ts re-exports
  * the public actions so call sites stay byte-identical. The store itself and
- * the connect()/SSE mux remain in state.ts — this module's buffered maps are
+ * the connect()/SSE mux remain in state.ts. This module's buffered maps are
  * drained by the single flushDeltas rAF loop and called into by the mux.
  */
 
@@ -95,8 +95,8 @@ export function userText(content: UserContent): string {
 }
 
 /**
- * First ~max code points of a string, never splitting a surrogate pair —
- * the desktop-notification body is capped so the OS banner stays readable.
+ * First ~max code points of a string, never splitting a surrogate pair.
+ * The desktop-notification body is capped so the OS banner stays readable.
  */
 export function truncateHead(s: string, max = 80): string {
 	if (s.length <= max) return s;
@@ -124,7 +124,7 @@ function lastAssistantText(): string {
  * Phase 11: desktop notification, fired only when the tab is hidden and the
  * user opted in with granted permission. Non-secure contexts (typeof
  * Notification === "undefined") and denied/revoked permission are silent
- * no-ops — mirroring the TUI's OSC turn-complete notification.
+ * no-ops, mirroring the TUI's OSC turn-complete notification.
  */
 function maybeNotify(title: string, body: string): void {
 	if (!state.notifyEnabled || !document.hidden) return;
@@ -141,7 +141,7 @@ export function setNotifyEnabled(enabled: boolean): void {
 	if (typeof localStorage !== "undefined") localStorage.setItem(NOTIFY_KEY, String(enabled));
 	setState("notifyEnabled", enabled);
 	if (enabled && typeof Notification !== "undefined" && Notification.permission === "default") {
-		// Denied is handled by the caller simply not getting notifications;
+		// Denied is handled by the caller not getting notifications;
 		// the request promise can reject in non-secure contexts.
 		void Notification.requestPermission().catch(() => {});
 	}
@@ -153,7 +153,7 @@ export function pushItem(item: ChatItem): void {
 
 export function pushNotice(level: string, message: string, href?: string): void {
 	pushItem({ kind: "notice", id: nextId++, level, message, href });
-	// finding #P1: error-level notices are status messages — announce them so
+	// finding #P1: error-level notices are status messages; announce them so
 	// screen-reader users hear them without focus being yanked.
 	if (level === "error") announceIfReady(message);
 }
@@ -165,7 +165,7 @@ export function announce(text: string): void {
 
 /** Session-scoped announcements: silent until the boot readiness gate clears
  *  (priming/history replay must not announce). Roster transitions are NOT
- *  gated here — they are fleet-scoped and diffed against first sighting. */
+ *  gated here; they are fleet-scoped and diffed against first sighting. */
 function announceIfReady(text: string): void {
 	if (isReady()) announce(text);
 }
@@ -214,7 +214,7 @@ export function resolveBashItem(id: number, result: BashResultLike | { error: st
 	if (index < 0) return;
 	// Synchronous transition: any buffered stream chunks land first so the
 	// error marker appends to (and the success result replaces) ALL streamed
-	// text — output is never lost or reordered by a pending flush.
+	// text. Output is never lost or reordered by a pending flush.
 	drainBashChunk(id, index);
 	setState(
 		"items",
@@ -254,7 +254,7 @@ export function clearPendingDeltas(): void {
 
 // Phase 1: SSE-frame text writes share the same rAF flush, coalescing N
 // frames between flushes into 1 store write per target key. Keys are stable
-// ids (toolCallId / bash item id / btw streamId) — unlike pendingDeltas'
+// ids (toolCallId / bash item id / btw streamId). Unlike pendingDeltas'
 // positional block indices, a flush can never apply to the wrong item.
 // ONLY text/chunk appends and running-status text updates are buffered here;
 // state transitions (tool_execution_end, resolveBashItem, call_result, stream
@@ -356,7 +356,7 @@ function flushDeltas(): void {
 		pendingEphemeral.clear();
 	}
 
-	// Use the same clock as drainDeadline — rAF callback timestamps are not
+	// Use the same clock as drainDeadline, since rAF callback timestamps are not
 	// guaranteed to be comparable (headless BeginFrame can schedule them ahead).
 	const now = performance.now();
 	let budget = Number.POSITIVE_INFINITY;
@@ -395,7 +395,7 @@ function bumpLiveRev(): void {
 
 /** Apply a buffered tool partial for one card synchronously (drain on
  *  tool_execution_end so the authoritative final result replaces ALL partial
- *  text — a late flush must never clobber the settled output). */
+ *  text; a late flush must never clobber the settled output). */
 function drainToolUpdate(toolCallId: string, index: number): void {
 	const update = pendingToolUpdates.get(toolCallId);
 	if (update === undefined) return;
@@ -453,7 +453,7 @@ export function assistantBlocks(content: AssistantContent): Block[] {
 
 /** Working-label intent from a tool_execution_start event, TUI priority:
  *  the loop's resolved `intent` first, then the harness-injected `i` arg
- *  (INTENT_FIELD in pi-wire — kept a literal because pi-wire isn't a client
+ *  (INTENT_FIELD in pi-wire, kept a literal because pi-wire isn't a client
  *  dependency). Non-strings arrive from partial JSON; ignore them. */
 function extractWorkingIntent(
 	e: Extract<AgentSessionEvent, { type: "tool_execution_start" }>,
@@ -476,7 +476,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 			// A new turn supersedes any unviewed-answer flag from the previous
 			// one (the dot reads in_progress for the duration regardless).
 			setState("answerUnviewed", false);
-			// finding #P1: the agent turn became audible — announce the flip.
+			// finding #P1: the agent turn became audible; announce the flip.
 			announceIfReady("agent started");
 			break;
 		case "agent_end":
@@ -586,7 +586,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 			const index = findToolIndex(e.toolCallId);
 			if (index >= 0) {
 				// Running-tool partial text: coalesced by toolCallId into the
-				// rAF flush (last partial wins — tool output is replaced, not
+				// rAF flush (last partial wins, since tool output is replaced, not
 				// appended). tool_execution_end drains this key first.
 				pendingToolUpdates.set(e.toolCallId, {
 					output: tabsToSpaces(extractText(e.partialResult)),
@@ -600,7 +600,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 			const index = findToolIndex(e.toolCallId);
 			if (index >= 0) {
 				// Synchronous transition: a buffered partial lands first so the
-				// authoritative final result replaces ALL partial text — a late
+				// authoritative final result replaces ALL partial text. A late
 				// flush must never clobber the settled output.
 				drainToolUpdate(e.toolCallId, index);
 				setState(

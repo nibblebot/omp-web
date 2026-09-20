@@ -22,7 +22,7 @@
  * entry's branch + dirty counts fresh for the roster; remote entries are
  * never probed with local git (their cwd is on another host). The same poll
  * derives the entry's last-session-file title (sessionTitle) for the roster
- * — remote entries are never probed for it either (their session files live
+ * and never probes remote entries for it either (their session files live
  * on another host).
  */
 
@@ -187,7 +187,7 @@ export class SpawnSupervisor {
 	/**
 	 * Worktree-vanished hook: fired during git-state polling when a tagged
 	 * worktree's cwd no longer exists on disk (probe failed AND the
-	 * directory is gone). Detection only — eviction orchestration
+	 * directory is gone). Detection only; eviction orchestration
 	 * (prune/drop, registry.remove, roster broadcast, toast) is the caller's
 	 * job. At most meaningful once per entry: the server dedups in-flight
 	 * evictions and the entry is gone from the registry after the first.
@@ -209,7 +209,7 @@ export class SpawnSupervisor {
 			/**
 			 * Fired during git-state polling when a tagged worktree's cwd
 			 * vanished on disk (probe failed AND the directory no longer
-			 * exists). Detection only — eviction orchestration (prune/drop,
+			 * exists). Detection only; eviction orchestration (prune/drop,
 			 * registry.remove, roster broadcast, toast) is the caller's job.
 			 * At most meaningful once per entry (the server dedups).
 			 */
@@ -285,7 +285,7 @@ export class SpawnSupervisor {
 	/**
 	 * R3 rule: respawn = --resume lastSessionFile when known. Fresh token per
 	 * attempt. Serialized per daemon: while one respawn is in flight, a
-	 * concurrent call coalesces onto the SAME in-flight promise — the child
+	 * concurrent call coalesces onto the SAME in-flight promise; the child
 	 * is never launched twice and an orphan is never left behind. A failed
 	 * respawn drops the slot so a later call can retry.
 	 */
@@ -377,8 +377,8 @@ export class SpawnSupervisor {
 
 	/**
 	 * Removal-time cleanup (#24): stop() (cancel restarts, drop the socket,
-	 * kill the child, status asleep) then drop the per-daemon ChildState —
-	 * the stderr ring (up to 64KB), restart budget, and timers — so a
+	 * kill the child, status asleep) then drop the per-daemon ChildState:
+	 * the stderr ring (up to 64KB), restart budget, and timers, so a
 	 * removed daemon leaks nothing. stop() alone keeps the state (the daemon
 	 * stays respawnable); prune() is for registry removal only. Idempotent
 	 * for daemons the supervisor never tracked.
@@ -416,7 +416,7 @@ export class SpawnSupervisor {
 	/**
 	 * Connector status hook (wired by server.ts): when a spawned child
 	 * reaches the connector's "ready" transition it has demonstrably
-	 * stabilized — reset its consecutive-crash budget so `restartMax` bounds
+	 * stabilized, so reset its consecutive-crash budget; `restartMax` then bounds
 	 * crash LOOPS, not lifetime restarts. A daemon that crashes, recovers to
 	 * ready, and later crashes again never exhausts the budget; one that
 	 * crash-loops without ever reaching ready still errors after
@@ -431,7 +431,7 @@ export class SpawnSupervisor {
 	/**
 	 * Backfill worktreeOf on local entries registered before spawn-time
 	 * tagging existed (fired once at server start). Remote entries name paths
-	 * on ANOTHER host — never probe those with local git. An unresolvable cwd
+	 * on ANOTHER host, so never probe those with local git. An unresolvable cwd
 	 * leaves the entry untouched; entries removed mid-scan are skipped.
 	 */
 	async backfillWorktrees(): Promise<void> {
@@ -447,11 +447,11 @@ export class SpawnSupervisor {
 	/**
 	 * Start polling git state (branch + dirty counts) for every local
 	 * registry entry: one immediate pass, then one pass every `intervalMs`
-	 * (default 10s). Remote entries are NEVER probed — their cwd lives on
+	 * (default 10s). Remote entries are NEVER probed; their cwd lives on
 	 * another host (same rule as backfillWorktrees). A pass updates the
 	 * registry only when the probed state actually differs from the entry's
-	 * current branch/git — every update broadcasts the roster via
-	 * registry.onChange — and a probe failure clears previously-set fields
+	 * current branch/git; every update broadcasts the roster via
+	 * registry.onChange, and a probe failure clears previously-set fields
 	 * only. The injected `exec` keeps tests hermetic. Idempotent: a second
 	 * call while polling is ignored so passes never stack. `close()` stops
 	 * the timer.
@@ -496,7 +496,7 @@ export class SpawnSupervisor {
 		if (result === undefined) {
 			// Probe failure (spawn error / nonzero exit / unparseable). The repo
 			// may be gone: a TAGGED worktree whose cwd no longer exists on disk
-			// is being evicted (e.g. `git worktree remove` outside the fleet) —
+			// is being evicted (e.g. `git worktree remove` outside the fleet), so
 			// report it and return WITHOUT clearing branch/git; the server
 			// orchestrates the eviction. A probe failure with the directory
 			// still present keeps today's behavior (clear stale fields below).
@@ -521,12 +521,12 @@ export class SpawnSupervisor {
 	 * Probe one entry's last-session-file title and emptiness (a new/empty
 	 * session renders "New session" in the roster) and reconcile the
 	 * registry. Remote entries are never probed (their session files live on
-	 * another host) and neither are entries without a lastSessionFile — same
+	 * another host) and neither are entries without a lastSessionFile, the same
 	 * rule as the git probe's empty-cwd skip. One registry.update happens
 	 * only when title OR empty actually differs (a no-change keeps the
 	 * registry quiet: no onChange, no roster broadcast); a file that became
 	 * unreadable/untitled clears a previously-set title. sessionEmpty only
-	 * carries meaning for untitled files — a titled session is never labeled
+	 * carries meaning for untitled files; a titled session is never labeled
 	 * "New session", so a title appearing clears a stale empty flag in the
 	 * same update. The reader never throws.
 	 */
@@ -592,7 +592,7 @@ export class SpawnSupervisor {
 		const token = mintToken();
 		// Every value interpolated into the template command is
 		// attacker-controlled at some call site (POST /ctl/spawn name/labels)
-		// and lands in `sh -c` — shell-quote each one so it can never break
+		// and lands in `sh -c`; shell-quote each one so it can never break
 		// out into command execution (CVE-style injection defense).
 		const labelsArg = (entry.labels ?? []).map((label) => `--label ${shellQuote(label)}`).join(" ");
 		// R3: resume = --resume <file>. default to the entry's last session file;
@@ -625,7 +625,7 @@ export class SpawnSupervisor {
 		// error + kill. (Injectable so tests can pin the no-resolution path.)
 		state.endpointTimer = setTimeout(() => {
 			if (state.resolved) return;
-			state.exitHandled = true; // we own the aftermath — no restart
+			state.exitHandled = true; // we own the aftermath, no restart
 			const message = `endpoint timeout: no OMP_SESSION| listening line within ${Math.round(this.#endpointTimeoutMs / 1000)}s`;
 			this.#registry.setStatus(daemonId, "error", message);
 			this.#onEvent?.("error", message, daemonId);
@@ -645,11 +645,12 @@ export class SpawnSupervisor {
 			}
 			// #23: a malformed resolved endpoint (garbage wrapper/advertise
 			// url, or a bad template host) would throw inside the connector's
-			// new URL() and kill this stdout pump — a sticky wedge in
-			// "connecting" with zero diagnostics. Validate BEFORE registering
-			// and dialing; fail loudly with the bad value and kill the child.
+			// new URL() and kill this stdout pump, leaving a sticky
+			// "connecting" status with zero diagnostics. Validate BEFORE
+			// registering and dialing; fail loudly with the bad value and
+			// kill the child.
 			if (!isValidEndpointUrl(resolved.url)) {
-				state.exitHandled = true; // we own the aftermath — no restart
+				state.exitHandled = true; // we own the aftermath, no restart
 				this.#registry.setStatus(daemonId, "error", `invalid endpoint from child: ${resolved.url}`);
 				this.#onEvent?.("error", `invalid endpoint from child: ${resolved.url}`, daemonId);
 				child.kill();
@@ -678,7 +679,7 @@ export class SpawnSupervisor {
 			})
 			.catch(() => {
 				// The exit promise should always resolve; a rejection is surfaced
-				// nowhere meaningful, so the child simply stays unreaped.
+				// nowhere meaningful, so the child stays unreaped.
 			});
 	}
 
@@ -719,7 +720,7 @@ export class SpawnSupervisor {
 			);
 			this.#onEvent?.(
 				"error",
-				`${exit} — restart budget exhausted (${this.#restartMax} restarts allowed)`,
+				`${exit}, restart budget exhausted (${this.#restartMax} restarts allowed)`,
 				state.daemonId,
 			);
 			return;
@@ -744,7 +745,7 @@ export class SpawnSupervisor {
 		}, delay);
 		this.#onEvent?.(
 			"warn",
-			`${exit} — restart ${attempt + 1}/${this.#restartMax} in ${delay}ms`,
+			`${exit}, restart ${attempt + 1}/${this.#restartMax} in ${delay}ms`,
 			state.daemonId,
 		);
 	}

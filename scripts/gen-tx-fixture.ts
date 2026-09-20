@@ -12,7 +12,7 @@
  *       __advisor.jsonl                                   advisor transcript
  *     proj-b/2026-01-02T10-00-00-000Z_bbbb.jsonl          main session, normal
  *     proj-c/2026-01-03T10-00-00-000Z_cccc.jsonl          main session, NO stats.db rows (unsynced)
- *     proj-d/2026-01-04T10-00-00-000Z_dddd.jsonl          DB rows only — file NOT on disk
+ *     proj-d/2026-01-04T10-00-00-000Z_dddd.jsonl          DB rows only; file NOT on disk
  *
  * Real-world quirks mirrored:
  *   - stats.db tables match the real schema; session_file stored as ABSOLUTE paths
@@ -43,7 +43,7 @@ const FOLDER_C = "proj-c";
 const FOLDER_D = "proj-d";
 
 // ---------------------------------------------------------------------------
-// Row shapes (mirror the real schema — see PLAN.md §2.1)
+// Row shapes (mirror the real schema; see PLAN.md §2.1)
 // ---------------------------------------------------------------------------
 
 interface MsgRow {
@@ -358,7 +358,7 @@ const main = (turn: Turn, s: SessionData): void => {
 	}
 };
 
-/** user-message text stats as stored in stats.db (sparse table — only synced rows appear) */
+/** user-message text stats as stored in stats.db (sparse table; only synced rows appear) */
 type UserTextStats = Omit<
 	UserRow,
 	"session_file" | "entry_id" | "folder" | "timestamp" | "model" | "provider"
@@ -650,7 +650,7 @@ main(
 	},
 	A,
 );
-// Unsynced tail (stats.db stops at msg-3 — like a partially synced real session).
+// Unsynced tail (stats.db stops at msg-3, like a partially synced real session).
 sys("model_change", "mc-2", "2026-01-01T10:00:10.000Z", A, {
 	from: "claude-opus-4-1",
 	to: "claude-sonnet-4",
@@ -667,7 +667,7 @@ sys("custom_message", "cusm-2", "2026-01-01T10:00:10.200Z", A, {
 	content: "Another custom message.",
 });
 user("user-2", "2026-01-01T10:00:10.300Z", "What about the subagents?", A);
-// Unsynced assistant turns (JSONL only — no stats.db rows, like a session the
+// Unsynced assistant turns (JSONL only; no stats.db rows, like a session the
 // sync worker hasn't caught up with yet).
 A.lines.push(
 	assistantLine(
@@ -780,7 +780,7 @@ A.lines.push(
 		},
 	}),
 );
-// Corrupt/truncated trailing line — must be skipped by lenient parsing.
+// Corrupt/truncated trailing line: lenient parsing must skip it.
 A.lines.push(
 	'{"type":"message","id":"msg-99","parentId":null,"timestamp":"2026-01-01T10:00:13.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Unfinished',
 );
@@ -823,7 +823,7 @@ main(
 	},
 	B,
 );
-// call-edit-b1 deliberately has NO tool_execution_start entry — the UNTIMED
+// call-edit-b1 deliberately has NO tool_execution_start entry, the UNTIMED
 // case: it still counts (calls/errors/resultChars) but contributes NO
 // duration, so edit shows totalMs 0, avgMs null, maxMs null and proj-b's
 // longestCall is null. Pending still means "no result entry", so this is
@@ -979,7 +979,7 @@ const subFiles: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Expected values (exported for tests — derived from the same literals)
+// Expected values (exported for tests, derived from the same literals)
 // ---------------------------------------------------------------------------
 
 function percentile(sorted: number[], p: number): number | null {
@@ -1076,7 +1076,7 @@ function validLineCount(lines: string[]): number {
 			JSON.parse(l);
 			n++;
 		} catch {
-			// garbage — skipped
+			// garbage, skipped
 		}
 	}
 	return n;
@@ -1094,7 +1094,7 @@ export const EXPECT = {
 	health: {
 		// server.ts sessionCount() counts *.jsonl-named direct children of each
 		// project dir. The fixture has 3 main files on disk; the subagent dir is
-		// named WITHOUT the .jsonl suffix (real omp layout — a file and a dir
+		// named WITHOUT the .jsonl suffix (real omp layout: a file and a dir
 		// cannot share one name), so it is not counted. The sessions LIST reports
 		// 4 (3 disk + proj-d DB-only).
 		sessionsCount: 3,

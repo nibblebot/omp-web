@@ -3,7 +3,7 @@
  *
  * The status-line formatting is pure; the SDK probe is exercised against a
  * sandboxed EMPTY agent dir (deterministic: no providers, no default model,
- * no network — the catalog ships bundled). The configured-provider path is
+ * no network, since the catalog ships bundled). The configured-provider path is
  * verified live in the PTY offer walk (this machine's real ~/.omp/agent).
  */
 

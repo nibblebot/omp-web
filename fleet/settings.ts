@@ -5,7 +5,7 @@
  * and fail unattached ("Settings unavailable"). This service backs the
  * settings panel while the fleet edge has no daemon attached: it lazily
  * initializes the process-global Settings singleton (the SAME instance a
- * session would read — any fleet settings path MUST use Settings.init, never
+ * session would read; any fleet settings path MUST use Settings.init, never
  * loadIsolated, or values render from the wrong instance), builds the wire
  * SettingsModel from the shared server/settings-model.ts metadata, and
  * persists coerced values without live session side effects.
@@ -33,13 +33,13 @@ export interface FleetSettingsOptions {
 	 * Provider source for the providerLimits row, injectable for tests.
 	 * Defaults to a lazily-created ModelRegistry backed by
 	 * discoverAuthStorage(getAgentDir()). A rejected factory degrades to an
-	 * empty provider list — the settings request never fails because of it.
+	 * empty provider list; the settings request never fails because of it.
 	 */
 	registry?: () => Promise<ReadonlyArray<{ provider: string }>>;
 }
 
 export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSettings {
-	// Lazy shared singletons: Settings.init is process-global (idempotent —
+	// Lazy shared singletons: Settings.init is process-global (idempotent,
 	// whoever initialized first wins, so an in-memory test instance is used
 	// and nothing touches disk) and the ModelRegistry is expensive, so both
 	// are created once and shared by concurrent callers.
@@ -102,7 +102,7 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 		const coerced = coerceSettingValue(path, value);
 		// Persist-only: no live session exists in roster mode, so
 		// applySettingSideEffects (session setters, prompt refresh, memory
-		// backend, …) is deliberately skipped — the side effects replay when
+		// backend, …) is deliberately skipped; the side effects replay when
 		// a session next boots from the same config, making the merged-view +
 		// debounced-disk write the complete fleet-side action.
 		settings.set(path as SettingPath, coerced as never);

@@ -6,7 +6,7 @@
  * returns a ChangelogDraft.
  *
  * Contracts:
- * - NEVER throws — every failure path (missing omp binary, non-zero exit,
+ * - NEVER throws: every failure path (missing omp binary, non-zero exit,
  *   timeout, malformed output) returns null so the caller can fall back to
  *   the deterministic changelog. A chunk whose output fails to parse is
  *   skipped (the caller's per-group coverage validation then falls back for
@@ -73,14 +73,14 @@ const COMMIT_LINK_BASE = "https://github.com/nibblebot/omp-web/commit/";
 
 interface TurnResult {
 	text: string;
-	/** true when omp timed out or was killed — the caller aborts rather than retrying. */
+	/** true when omp timed out or was killed; the caller aborts rather than retrying. */
 	timedOut: boolean;
 }
 
 const OMP_FLAGS = ["-p", "--no-pty", "--no-session"];
 
 /**
- * Summarize the grouped commits into a ChangelogDraft. NEVER throws — any
+ * Summarize the grouped commits into a ChangelogDraft. NEVER throws: any
  * failure (missing omp binary, non-zero exit, timeout, malformed output)
  * returns null so the caller can fall back to the deterministic changelog.
  */
@@ -98,7 +98,7 @@ export async function summarizeChangelog(
 				const promptText = buildGroupPrompt(input.version, group.cls, group.heading, chunk);
 				const elapsedMin = ((Date.now() - startedAt) / 60_000).toFixed(1);
 				console.log(
-					`release-llm: turn (${group.cls}, chunk ${i / CHUNK_SIZE + 1}/${Math.ceil(group.commits.length / CHUNK_SIZE)}, ${chunk.length} commits) — ${elapsedMin} min elapsed`,
+					`release-llm: turn (${group.cls}, chunk ${i / CHUNK_SIZE + 1}/${Math.ceil(group.commits.length / CHUNK_SIZE)}, ${chunk.length} commits), ${elapsedMin} min elapsed`,
 				);
 				const text = await runTurn(promptText, profile, DEFAULT_TIMEOUT_MS, opts?.spawn);
 				if (text === null) return null; // timeout/error: a stuck model stays stuck
@@ -120,7 +120,7 @@ export async function summarizeChangelog(
 			([cls, bullets]) => ({ cls, bullets }),
 		);
 		console.log(
-			`release-llm: turn (overview) — ${((Date.now() - startedAt) / 60_000).toFixed(1)} min elapsed`,
+			`release-llm: turn (overview), ${((Date.now() - startedAt) / 60_000).toFixed(1)} min elapsed`,
 		);
 		const overviewText = await runTurn(
 			buildOverviewPrompt(input.version, draftGroups),
@@ -229,7 +229,7 @@ function buildGroupPrompt(
 	for (const commit of commits) lines.push(`- ${commit.hash} ${commit.subject}`);
 	lines.push(
 		"",
-		"Output ONLY a single JSON object — no prose, no markdown, no code fences — in this shape:",
+		"Output ONLY a single JSON object. No prose, no markdown, no code fences. In this shape:",
 		`{ "cls": "${cls}", "bullets": ["<bullet> ([<hash>](${COMMIT_LINK_BASE}<hash>))"] }`,
 		"- Every bullet must end with its commit hash link " + `([<hash>](${COMMIT_LINK_BASE}<hash>)).`,
 		`- "cls" must be exactly "${cls}".`,
@@ -258,7 +258,7 @@ function buildOverviewPrompt(
 		"",
 		"Write a 1-3 sentence user-facing overview of this release. " +
 			"Never invent details not present above.",
-		"Output ONLY a single JSON object — no prose, no markdown — in this shape:",
+		"Output ONLY a single JSON object. No prose, no markdown. In this shape:",
 		'{ "overview": "<1-3 sentence release summary>" }',
 		'"overview" may be an empty string only if you cannot summarize.',
 	);
@@ -296,7 +296,7 @@ function parseGroupDraft(text: string): { cls: CommitClass; bullets: string[] } 
 		return null;
 	}
 	if (!isObject(parsed) || Array.isArray(parsed)) return null;
-	// JSON.parse output — shape-validated field by field below.
+	// JSON.parse output, shape-validated field by field below.
 	const obj = parsed as Record<string, unknown>;
 	if (typeof obj.cls !== "string" || COMMIT_CLASSES[obj.cls] !== true) return null;
 	if (!Array.isArray(obj.bullets) || !obj.bullets.every((b) => typeof b === "string")) return null;
@@ -314,7 +314,7 @@ function parseOverview(text: string): string | null {
 		return null;
 	}
 	if (!isObject(parsed) || Array.isArray(parsed)) return null;
-	// JSON.parse output — shape-validated field by field below.
+	// JSON.parse output, shape-validated field by field below.
 	const obj = parsed as Record<string, unknown>;
 	if (typeof obj.overview !== "string") return null;
 	// Collapse model line breaks: the overview is one paragraph in the file.

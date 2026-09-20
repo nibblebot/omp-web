@@ -55,7 +55,7 @@ export function ToggleDetails(props: {
 	);
 }
 
-/** Universal raw-JSON fallback — lives at the right end of each row's header line. */
+/** Universal raw-JSON fallback; it lives at the right end of each row's header line. */
 export function RawJson(props: { entry: RawEntry }) {
 	return (
 		<ToggleDetails entry={props.entry} purpose="raw" class="raw-entry" summary="raw">

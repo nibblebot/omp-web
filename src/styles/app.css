@@ -1,4 +1,4 @@
-/* App — app shell, status bar, segments, app-body/app-main. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* App: app shell, status bar, segments, app-body/app-main. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 .app {
 	position: relative;
@@ -101,7 +101,7 @@
 	font-family: var(--font-mono);
 	color: var(--muted);
 }
-/* Session resource meters (cost/tokens) — machine numbers. */
+/* Session resource meters (cost/tokens) in machine numbers. */
 .stats-segment {
 	font-family: var(--font-mono);
 }
@@ -161,7 +161,7 @@
 	min-height: 0;
 }
 /* Analysis keep-alive host (App.tsx): transparent in the flex row while
-   visible, display:none while in Work — TxBrowser stays mounted so the
+   visible, display:none while in Work; TxBrowser stays mounted so the
    transcript sidebar's list/scroll/search/selection survive mode switches. */
 .tx-keepalive {
 	display: contents;

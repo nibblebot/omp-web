@@ -187,19 +187,19 @@ Six palettes share one semantic contract (~40 slots) and one set of scales; them
 
 **Body Font:** system stack (`"Noto Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`)
 **Mono Font:** system stack (`"Noto Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace`)
-**Display Font:** none: there is no display face and no marketing headline in this UI.
+**Display Font:** none. There is no display face and no marketing headline in this UI.
 
 **Character:** the console speaks in two voices: sans for the operator's prose, mono for machine truth (commands, diffs, paths, daemon metadata, the sidebar roster). Both are zero-asset system stacks: the app ships no font files, by doctrine.
 
 The root font size is user-settable (12–18px, `/settings` parity); every scale step below is rem-based and rides that dial.
 
 ### Hierarchy
-- **Heading** (700, 1rem/1.143rem, 1.3): in-stream markdown h1/h2 and tx section titles: the only type allowed above body size, capped at 16px so it never swamps the session title.
+- **Heading** (700, 1rem/1.143rem, 1.3): in-stream markdown h1/h2 and tx section titles, the only type allowed above body size, capped at 16px so it never swamps the session title.
 - **Title** (600, 0.875rem, 1.5): modal titles, sidebar section titles, row titles. The highest chrome type is deliberately small: hierarchy comes from weight and color, not size.
 - **Body** (400, 0.875rem, 1.5): chat prose, markdown, settings copy.
 - **Mono** (400, 0.813rem): code, terminals, diffs, daemon rows, picker metadata (`line-height: 1.4` in the roster).
 - **Label** (600, 0.75rem, +0.05em tracking, uppercase): section headers, queue kinds, group headers, usage statuses.
-- **Micro** (400, 0.688rem): git dirty counts, debug pills, nested-row metadata: the floor; nothing functional renders below 9.6px.
+- **Micro** (400, 0.688rem): git dirty counts, debug pills, nested-row metadata, the floor; nothing functional renders below 9.6px.
 
 ### Named Rules
 **The Zero-Asset Rule.** No webfonts, ever. If a glyph can't come from the system stack, the design is wrong, not the stack.
@@ -216,7 +216,7 @@ Rhythm is a 2/4/6/8/12/16/24px spacing scale; cards pad at 8–16px, sections se
 
 ## Elevation & Depth
 
-Flat by doctrine. Resting surfaces: cards, chips, sidebar, composer: have zero shadow; structure comes from 1px hairlines and the bg → panel → panel-2 tonal steps. Shadow means one of two things: something is floating above the console, or a status light is lit.
+Flat by doctrine. Surfaces at rest (cards, chips, sidebar, composer) have zero shadow; structure comes from 1px hairlines and the bg → panel → panel-2 tonal steps. Shadow means one of two things: something is floating above the console, or a status light is lit.
 
 ### Shadow Vocabulary
 - **Overlay lift** (`0 8px 24px rgb(0 0 0 / 0.35)`): modals, the lightbox image. The only structural shadow.
@@ -256,7 +256,7 @@ Quiet controls that wake on hover; one primary action per view.
 - **Tool cards:** Instrument Panel fill, 1px Hairline, 8px radius, 0.813rem text; header pads 8px 12px. Every tool render roots at this shell
 - **Message bubbles:** user messages float right in Signal Wash (10px radius, max-width 80%); assistant messages are edge-to-edge: no bubble, no card, by design
 - **Code/log wells:** Console Well fill, 6px radius, mono
-- **Thinking blocks:** no card at all: a 2px Hairline left rail plus Muted Readout text
+- **Thinking blocks:** no card, only a 2px Hairline left rail plus Muted Readout text
 
 ### Inputs / Fields
 - **Style:** Console Well fill, 1px Hairline, 6px radius, 4px 8px padding (search/history variants use Panel fill, 8px radius)
@@ -270,7 +270,7 @@ Quiet controls that wake on hover; one primary action per view.
 - **Modals:** Instrument Panel, Hairline Strong border, 10px radius, 16px padding, overlay-lift shadow over the Backdrop scrim; sheets drop radius and keep only their inner border
 
 ### Signature: the roster row
-The daemon roster row is the product in miniature: status dot (the ladder above) + mono title + micro metadata (cwd, branch, dirty counts) + ghost icon actions that arm red before they kill. If a new surface can't express its state in this vocabulary, the vocabulary should grow a rung: not a new system.
+The daemon roster row is the product in miniature: status dot (the ladder above) + mono title + micro metadata (cwd, branch, dirty counts) + ghost icon actions that arm red before they kill. If a new surface can't express its state in this vocabulary, the vocabulary should grow a rung, not a new system.
 
 ## Do's and Don'ts
 

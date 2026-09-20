@@ -21,7 +21,7 @@
  * listUnregisteredWorktrees, worktreeDeleteInfo, deleteWorktree, and the
  * registration/spawn orchestration shared by the /ctl routes and the edge
  * command handlers (registerWorktreeEntry). Deleting a worktree is guarded
- * by an ownership test (realpath under workspaceDir — nothing outside it is
+ * by an ownership test (realpath under workspaceDir, nothing outside it is
  * ever removed) and a dirty check (`git status --porcelain`; no --force in
  * v1).
  */
@@ -95,7 +95,7 @@ interface GitResult {
 	stderr: string;
 }
 
-/** `git -C <cwd> <args>` via Bun.spawn. Callers choose args — never a fetch. */
+/** `git -C <cwd> <args>` via Bun.spawn. Callers choose args, never a fetch. */
 async function runGit(args: string[], cwd: string): Promise<GitResult> {
 	try {
 		const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
@@ -168,14 +168,14 @@ export async function resolveBaseRef(repoPath: string): Promise<string> {
 	return "HEAD";
 }
 
-/** The target path already exists — createWorktree refuses. */
+/** The target path already exists, so createWorktree refuses. */
 export class WorktreeTargetExistsError extends Error {
 	constructor(readonly target: string) {
 		super(`worktree target already exists: ${target}`);
 	}
 }
 
-/** The branch is checked out in another worktree — cannot attach it. */
+/** The branch is checked out in another worktree, so it cannot be attached. */
 export class WorktreeBranchCheckedOutError extends Error {
 	constructor(readonly branch: string) {
 		super(`branch is already checked out elsewhere: ${branch}`);
@@ -364,8 +364,8 @@ export async function isLinkedWorktreeOf(path: string, mainRepoPath: string): Pr
 }
 
 /**
- * The registered project owning `cwd` — its main checkout, or one of its
- * linked worktrees — or undefined when no registered project matches.
+ * The registered project owning `cwd`: its main checkout, or one of its
+ * linked worktrees, or undefined when no registered project matches.
  * Realpath-compared; a bare spawn on an unregistered path stays untagged
  * (the roster's fallback group shows it). Used to stamp projectId on
  * spawns that arrive with just a cwd (the sidebar start action, /ctl/spawn).
@@ -531,7 +531,7 @@ export interface DeleteWorktreeResult {
 /**
  * Remove a managed worktree: ownership + dirty guards FIRST (no --force in
  * v1; nothing outside workspaceDir is ever removed), then `git worktree
- * remove`, then optionally `git branch -d` (NEVER -D — an unmerged branch is
+ * remove`, then optionally `git branch -d` (NEVER -D, so an unmerged branch is
  * left in place and reported via `branchDeleted: false`). A path that no
  * longer exists is a no-op success (nothing to remove).
  */
@@ -584,7 +584,7 @@ export async function deleteWorktree(
  * a daemon on it (start:true). Shared by the /ctl route and the edge command
  * handler. The entry is mode "spawned", tagged with the project's projectId
  * and name; when start:false it is registered asleep (wakeable via
- * spawn_resume — the supervisor only spawns, attach is client-side).
+ * spawn_resume; the supervisor only spawns, attach is client-side).
  */
 export async function registerWorktreeEntry(
 	registry: Registry,
@@ -603,7 +603,7 @@ export async function registerWorktreeEntry(
 	// Mirror supervisor.spawn's field shape (name/project = worktree
 	// basename) so a started and an unstarted worktree render identically
 	// except status; worktreeOf carries the owning project's name. The
-	// resolved template NAME is stored like spawn() stores it — respawn()
+	// resolved template NAME is stored like spawn() stores it; respawn()
 	// keys off entry.template.
 	return registry.create({
 		name: basename(worktreePath),
@@ -621,11 +621,11 @@ export async function registerWorktreeEntry(
 /**
  * Register the DEFAULT WORKSPACE of a freshly registered project: a roster
  * entry for the repo's main checkout, mapped to the repo CWD. The main
- * checkout is the repo itself — this never creates anything under
+ * checkout is the repo itself, so this never creates anything under
  * workspaceDir. With opts.start the main checkout is spawned via the
  * supervisor (template/labels passthrough) and the fresh entry is tagged
  * with the projectId; otherwise it is registered asleep (mode "spawned")
- * and wakeable via spawn_resume/attach — a respawn with no lastSessionFile
+ * and wakeable via spawn_resume/attach; a respawn with no lastSessionFile
  * is a fresh start. Shared by the /ctl route and the edge command handler.
  */
 export async function registerProjectMainEntry(
@@ -635,7 +635,7 @@ export async function registerProjectMainEntry(
 	opts: { start?: boolean; template?: string; labels?: string[] },
 ): Promise<RegistryEntry> {
 	// Dedup: an entry already mapped to this repo's realpath IS the default
-	// workspace — reuse it, never create a second row for the same checkout.
+	// workspace; reuse it, never create a second row for the same checkout.
 	const existing = registry.list().find((entry) => realpathOf(entry.cwd) === project.path);
 	if (existing !== undefined) {
 		if (existing.projectId === undefined) {
@@ -660,9 +660,9 @@ export async function registerProjectMainEntry(
 	}
 	// Mirror supervisor.spawn's field shape for the main checkout (name and
 	// project = the repo name) so a started and an unstarted default
-	// workspace render identically except status — including the resolved
+	// workspace render identically except status, including the resolved
 	// template NAME (respawn keys off entry.template). NO worktreeOf: main
-	// checkouts stay untagged — SidebarGroups' hasMain depends on that.
+	// checkouts stay untagged; SidebarGroups' hasMain depends on that.
 	return registry.create({
 		name: project.name,
 		cwd: project.path,

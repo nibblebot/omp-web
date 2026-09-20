@@ -1,5 +1,5 @@
-/** Inline SVG icons vendored from Lucide (https://lucide.dev, ISC license) —
- *  no icon font dependency. Strokes follow currentColor so icons tint with
+/** Inline SVG icons vendored from Lucide (https://lucide.dev, ISC license),
+ *  with no icon font dependency. Strokes follow currentColor so icons tint with
  *  their surrounding text/status color; the base .icon rule (src/styles/base.css)
  *  sizes them to 1em, and a `class` prop layers site-specific overrides
  *  (e.g. .daemon-worktree-icon). */
@@ -50,15 +50,15 @@ export const MinusIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** Filled square — stop control (the ■ glyph it replaces reads "stop", and a
- *  stroked outline would read as a checkbox next to SquareIcon). */
+/** Filled square used as the stop control (the ■ glyph it replaces reads
+ *  "stop", and a stroked outline would read as a checkbox next to SquareIcon). */
 export const StopIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<rect width="18" height="18" x="3" y="3" rx="2" fill="currentColor" stroke="none" />
 	</Svg>
 );
 
-/** Vertical ellipsis — "more actions" menu trigger (Lucide ellipsis-vertical). */
+/** Vertical ellipsis used as the "more actions" menu trigger (Lucide ellipsis-vertical). */
 export const DotsIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<circle cx="12" cy="12" r="1" />
@@ -82,7 +82,7 @@ export const SettingsIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** maximize-2 — expand-all affordance (⤢). */
+/** Expand-all affordance (⤢), drawn with Lucide's maximize-2. */
 export const ExpandIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M15 3h6v6" />
@@ -92,7 +92,7 @@ export const ExpandIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** file — changed-files glyph on daemon git rows. */
+/** Changed-files glyph on daemon git rows, drawn with Lucide's file. */
 export const FileIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
@@ -100,7 +100,7 @@ export const FileIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** panel-left — transcripts view toggle (◫). */
+/** Transcripts view toggle (◫), drawn with Lucide's panel-left. */
 export const PanelLeftIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<rect width="18" height="18" x="3" y="3" rx="2" />
@@ -173,7 +173,7 @@ export const CircleIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** circle-dot — selected radio marker (● next to ○). */
+/** Selected radio marker (● next to ○), drawn with Lucide's circle-dot. */
 export const CircleDotIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<circle cx="12" cy="12" r="10" />
@@ -181,7 +181,7 @@ export const CircleDotIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** loader-circle — in-progress status (◐). */
+/** In-progress status (◐), drawn with Lucide's loader-circle. */
 export const LoaderIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M21 12a9 9 0 1 1-6.219-8.56" />
@@ -194,7 +194,7 @@ export const CheckIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** refresh-cw — restarting status (↻). */
+/** Restarting status (↻), drawn with Lucide's refresh-cw. */
 export const RefreshIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
@@ -204,14 +204,14 @@ export const RefreshIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** diamond — stopping status (◇). */
+/** Stopping status (◇), drawn with Lucide's diamond. */
 export const DiamondIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0 3.41 0Z" />
 	</Svg>
 );
 
-/** ban — aborted/abandoned status (⊘). */
+/** Aborted/abandoned status (⊘), drawn with Lucide's ban. */
 export const BanIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<circle cx="12" cy="12" r="10" />
@@ -226,8 +226,9 @@ export const CornerDownRightIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** git-branch — worktree marker on daemon rows (replaces the hand-drawn
- *  3-node glyph; sized/tinted by .daemon-worktree-icon in src/styles/fleet.css). */
+/** Worktree marker on daemon rows, drawn with Lucide's git-branch. It replaces
+ *  the hand-drawn 3-node glyph; sized/tinted by .daemon-worktree-icon in
+ *  src/styles/fleet.css. */
 export const WorktreeIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M15 6a9 9 0 0 0-9 9V3" />
@@ -236,9 +237,9 @@ export const WorktreeIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** house — main-worktree marker on project-group root rows (the checkout
- *  the project was registered from; linked worktrees nest beneath it).
- *  Sized/tinted by .daemon-root-icon in src/styles/fleet.css. */
+/** Main-worktree marker on project-group root rows, drawn with Lucide's house.
+ *  This is the checkout the project was registered from, and linked worktrees
+ *  nest beneath it. Sized/tinted by .daemon-root-icon in src/styles/fleet.css. */
 export const RootIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -246,7 +247,7 @@ export const RootIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** trash-2 — destructive delete affordance (⌫). */
+/** Destructive delete affordance (⌫), drawn with Lucide's trash-2. */
 export const TrashIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M3 6h18" />
@@ -257,7 +258,7 @@ export const TrashIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** terminal — Work mode glyph (the live-conversation surface, ▸_). */
+/** Work mode glyph (the live-conversation surface, ▸_), drawn with Lucide's terminal. */
 export const TerminalIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<polyline points="4 17 10 11 4 5" />
@@ -265,7 +266,7 @@ export const TerminalIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** bar-chart-3 — Analysis mode glyph (the transcripts/stats surface). */
+/** Analysis mode glyph (the transcripts/stats surface), drawn with Lucide's bar-chart-3. */
 export const BarChart3Icon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M3 3v18h18" />

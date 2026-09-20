@@ -11,13 +11,13 @@
  * short-idle daemon.
  *
  * Model determinism: every daemon runs against a fresh empty
- * PI_CODING_AGENT_DIR, so no model is selectable — no live model/API
+ * PI_CODING_AGENT_DIR, so no model is selectable, with no live model/API
  * dependency (see LOCAL_TEMPLATE construction below). Exactly 5 prompts are
  * issued (d1, d2, d3, the added external daemon, and the respawned idle
  * daemon); all assert ok:false. The daemon's prompt method is fire-and-forget
  * and its turn failure arrives as a broadcast error frame (which the fanout
  * deliberately ignores), so a no-model prompt settles on the fanout's waitMs
- * client timeout — the assertions above check the /ctl/prompt → fan-out →
+ * client timeout. The assertions above check the /ctl/prompt → fan-out →
  * daemon correlation seam (dispatch + per-daemon serialization + timeout
  * error), not a model error. Session-file paths (lastSessionFile) come from
  * hello_ok/state frames at ready, not from completed turns.
@@ -28,7 +28,7 @@
  * The shortidle template pins the test-only OMP_SESSION_TEST_IDLE_CHECK_MS knob
  * (500ms idle-check tick; default 15s) inline per-spawn, so the idle
  * auto-exit lifecycle runs in seconds; daemons without an idle timeout are
- * unaffected (faster ticks are harmless — they only gate an exit that never
+ * unaffected (faster ticks are harmless, since they only gate an exit that never
  * comes without --idle-timeout). It is pinned in the template rather than set
  * on Bun.env in beforeAll because Bun does not propagate runtime process.env
  * mutations to env-less Bun.spawn children, which is how the supervisor
@@ -48,7 +48,7 @@ const PROMPT_TEXT = "Reply with exactly: PONG";
 
 // Provider API keys in the SHELL env (a dev machine exports e.g.
 // KIMI_API_KEY) would hand spawned daemons a live model and break the
-// no-model determinism below — Bun.spawn children inherit the ORIGINAL
+// no-model determinism below. Bun.spawn children inherit the ORIGINAL
 // process env, not runtime process.env mutations, so the scrub rides the
 // command line: `env -u KEY …` per exported *_API_KEY / *_AUTH_TOKEN,
 // computed once at module load.
@@ -64,13 +64,13 @@ const PROVIDER_ENV_SCRUB_STR = PROVIDER_ENV_SCRUB_ARGV.join(" ");
  * so the auth broker cannot inject keys). With no auth and no model cache the
  * daemon has NO selectable model: boots, readiness gate, and hello_ok/state
  * frames (incl. sessionFile) all behave normally, but every prompt turn never
- * produces agent_end — the daemon's prompt is fire-and-forget and turn
+ * produces agent_end. The daemon's prompt is fire-and-forget and turn
  * failures arrive as broadcast error frames, which the fanout deliberately
- * ignores — so each prompt settles on the client waitMs timeout with
+ * ignores, so each prompt settles on the client waitMs timeout with
  * ok:false. No test outcome ever depends on a live model/API. Prompts ARE
- * issued through the control plane — they exercise the /ctl/prompt → fan-out
+ * issued through the control plane; they exercise the /ctl/prompt → fan-out
  * → daemon dispatch + per-daemon serialization + timeout-error correlation
- * seam, including wake-on-demand respawn — and all assert ok:false.
+ * seam, including wake-on-demand respawn, and all assert ok:false.
  * (Dead-porting provider *_BASE_URL env instead does NOT work: cached model
  * configs carry an explicit baseUrl that wins over the env override.)
  *
@@ -105,7 +105,7 @@ function sleep(ms: number): Promise<void> {
 	return promise;
 }
 
-describe("fleet integration — real omp-session daemons", () => {
+describe("fleet integration: real omp-session daemons", () => {
 	let tmp: string;
 	let statePath: string;
 	let configPath: string;
@@ -252,7 +252,7 @@ describe("fleet integration — real omp-session daemons", () => {
 				if (done) break;
 			}
 		} catch {
-			// Pipe closed — the daemon is gone; nothing to drain.
+			// Pipe closed. The daemon is gone; nothing to drain.
 		}
 	}
 
@@ -268,7 +268,7 @@ describe("fleet integration — real omp-session daemons", () => {
 		// Hermetic per-daemon agent dir ({name} expands per daemon in the fleet
 		// templates): no auth, no model cache → every prompt errors (no model).
 		// PROVIDER_ENV_SCRUB_STR strips shell-exported provider keys the same
-		// way (see module scope) — without it a dev machine's KIMI_API_KEY et al
+		// way (see module scope). Without it a dev machine's KIMI_API_KEY et al
 		// would give every daemon a live model and turns would SUCCEED.
 		const hermeticEnv = `${PROVIDER_ENV_SCRUB_STR} PI_CODING_AGENT_DIR=${join(tmp, "agent-{name}")} PI_AUTH_NO_BORROW=1`;
 		LOCAL_TEMPLATE = `${hermeticEnv} bun server/index.ts --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`;
@@ -295,7 +295,7 @@ describe("fleet integration — real omp-session daemons", () => {
 		);
 		// Hermetic against the dev-runner override: startFleet -> loadConfig lets
 		// OMP_FLEET_LOCAL_TEMPLATE replace the config file's `local` template
-		// outright (config.ts), and a shell that ran `bun run dev` carries it —
+		// outright (config.ts), and a shell that ran `bun run dev` carries it, so
 		// daemons would spawn with the plain dev template (no hermetic env
 		// prefix), land on the REAL agent dir, get a live model, and turns would
 		// SUCCEED, racing the 5s waitMs (flaky ok:true). Deleted for the suite's
@@ -398,7 +398,7 @@ describe("fleet integration — real omp-session daemons", () => {
 	}, 90_000);
 
 	test("prompts fan out to all three daemons; every turn errors (no selectable model)", async () => {
-		// d1/d2/d3 are independent daemons — run the three prompts concurrently.
+		// d1/d2/d3 are independent daemons, so run the three prompts concurrently.
 		// No live model: hermetic agent dirs mean no model is selectable, so no
 		// turn ever produces agent_end. The daemon's prompt is fire-and-forget
 		// and its turn failure arrives as a broadcast error frame (deliberately
@@ -422,7 +422,8 @@ describe("fleet integration — real omp-session daemons", () => {
 		const sessionBefore = before.lastSessionFile!;
 		expect(tokenBefore).toBeTruthy();
 		expect(pidBefore).toBeGreaterThan(0);
-		expect(sessionBefore).toBeTruthy(); // known from hello_ok/state frames at ready — no turn needed
+		// The session file is known from hello_ok/state frames at ready; no turn needed
+		expect(sessionBefore).toBeTruthy();
 		try {
 			process.kill(pidBefore, "SIGKILL");
 		} catch {
@@ -522,7 +523,7 @@ describe("fleet integration — real omp-session daemons", () => {
 		// asleep daemon with --resume and awaits ready BEFORE the turn is sent;
 		// the turn itself then errors (fanout waitMs timeout). The
 		// session log is written lazily on a completed turn, so it may never
-		// exist on disk here — the resume proof is the path identity below.
+		// exist on disk here; the resume proof is the path identity below.
 		const result = await ctlPrompt(d4.daemonId, 5_000);
 		expect(result.ok).toBe(false);
 		expect(result.error).toBeTruthy();

@@ -57,7 +57,8 @@ export interface LongestCall {
 export interface SessionStats {
 	file: string;
 	title: string | null;
-	/** false when stats.db has no rows for this session — metrics below mix live-JSONL counts with empty DB columns */
+	/** false when stats.db has no rows for this session; metrics below mix
+	 *  live-JSONL counts with empty DB columns */
 	synced: boolean;
 	spanMs: number | null;
 	turns: number;

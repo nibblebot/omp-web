@@ -1,6 +1,6 @@
 /**
  * Pure parse/format helpers for the fleet's session-spawn surface
- * (docs/src/content/docs/reference/configuration.md). No subprocess, no live sessions — the spawn
+ * (docs/src/content/docs/reference/configuration.md). No subprocess, no live sessions; the spawn
  * SUPERVISOR imports from here.
  *
  * Wire contract:
@@ -24,14 +24,14 @@ import { OMP_SESSION_PREFIX, type StdoutContractLine } from "../shared/protocol"
 /**
  * `{key}` substitution for spawn templates. Unknown keys are left verbatim
  * (a missing var is a template bug the caller should surface, not silent
- * data loss); `{labels}` in vars simply expands to whatever the caller built
+ * data loss); `{labels}` in vars expands to whatever the caller built
  * (empty string when there are no labels).
  *
  * This is PURE text substitution: values are inserted verbatim with no
  * shell escaping. The template itself is trusted config, but the values
  * substituted at runtime may be attacker-controlled (e.g. name/labels from
  * POST /ctl/spawn), so a caller that interpolates the result into a shell
- * command MUST run every value through {@link shellQuote} first —
+ * command MUST run every value through {@link shellQuote} first;
  * supervisor.ts #launch does exactly that.
  */
 export function fillTemplate(command: string, vars: Record<string, string>): string {
@@ -43,8 +43,8 @@ export function fillTemplate(command: string, vars: Record<string, string>): str
 /**
  * Wrap a value in single quotes for safe insertion into a POSIX shell
  * command, escaping any embedded `'` as `'\''` (close quote, escaped quote,
- * reopen quote). Everything inside single quotes — spaces, `$()`, backticks,
- * `$VAR`, newlines — is literal, so this renders attacker-controlled values
+ * reopen quote). Everything inside single quotes is literal: spaces, `$()`,
+ * backticks, `$VAR`, newlines, so this renders attacker-controlled values
  * inert when they end up in a template's `{key}` slot. Pair with
  * fillTemplate: quote first, then substitute.
  */
@@ -53,7 +53,7 @@ export function shellQuote(value: string): string {
 }
 
 /**
- * True when `raw` is a ws:// or wss:// URL — the fleet dial wire contract.
+ * True when `raw` is a ws:// or wss:// URL, the fleet dial wire contract.
  * This is the SINGLE shared check for endpoint URLs: server.ts's /ctl/add +
  * spawn-hook validation, the supervisor's resolved-endpoint guard, and
  * parseContractLine all delegate here. Malformed strings ("garbage"),
@@ -75,8 +75,8 @@ export function isValidEndpointUrl(raw: unknown): boolean {
  * `null` for anything that isn't one: non-prefixed lines (interleaved human
  * logs), malformed JSON, valid JSON with an unknown event, a known event
  * with the wrong shape, or a contract line carrying a malformed endpoint URL
- * (those are dropped as noise — a wrapper that prints garbage must not wedge
- * the resolve path). Never throws.
+ * (those are dropped as noise, so a wrapper that prints garbage cannot
+ * break the resolve path). Never throws.
  *
  * Validation per contract: `listening` requires `bind:string`,
  * `port:number`, `url` a ws(s) URL (advertise optional, must be a ws(s) URL
@@ -138,7 +138,7 @@ export interface ResolvedEndpoint {
  * Resolve the reachable endpoint for a spawned session from its parsed
  * `OMP_SESSION|` lines, per R6b precedence:
  *
- *  1. wrapper `{event:"endpoint"}` url — the LAST endpoint line wins;
+ *  1. the LAST wrapper `{event:"endpoint"}` url wins;
  *  2. `templateHost` + the last `listening` port;
  *  3. the last `listening` `advertise` url;
  *  4. loopback `ws://127.0.0.1:<port>`.

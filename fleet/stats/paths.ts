@@ -36,7 +36,7 @@ export function decodeFileParam(sessionsDir: string, raw: string): string | null
 
 /**
  * Normalize any session_file value found in the DB to an absolute path.
- * Real DBs store absolute paths; the schema comment says relative — accept both.
+ * Real DBs store absolute paths; the schema comment says relative. Accept both.
  */
 export function normDbFile(sessionsDir: string, f: string): string {
 	if (isAbsolute(f)) return normalize(f);
@@ -58,7 +58,7 @@ export function folderOf(rel: string): string {
 /** True when the rel path is a main-agent session: <proj>/<file>.jsonl (2 segments). */
 export function isMainSession(rel: string): boolean {
 	// Windows paths arrive with backslashes; normalize to `/` so the split is
-	// OS-independent — `proj\file.jsonl` and `proj/file.jsonl` behave the same
+	// OS-independent, so `proj\file.jsonl` and `proj/file.jsonl` behave the same
 	// everywhere.
 	const parts = rel.replaceAll("\\", "/").split("/");
 	return parts.length === 2 && parts[1]!.endsWith(".jsonl") && !parts[1]!.startsWith("__advisor");

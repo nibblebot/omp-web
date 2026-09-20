@@ -1,7 +1,7 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
-// Sanitization is mandatory — model output can contain raw HTML.
+// Sanitization is mandatory, because model output can contain raw HTML.
 export function renderMarkdown(src: string): string {
 	return DOMPurify.sanitize(marked.parse(src, { async: false }));
 }
