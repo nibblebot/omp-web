@@ -6,10 +6,10 @@ hero:
   tagline: Run and manage Oh My Pi coding sessions from the browser.
   actions:
     - text: Get started
-      link: /getting-started/installation/
+      link: /omp-web/getting-started/installation/
       icon: right-arrow
     - text: First run
-      link: /getting-started/first-run/
+      link: /omp-web/getting-started/first-run/
       icon: rocket
     - text: View on GitHub
       link: https://github.com/nibblebot/omp-web

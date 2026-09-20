@@ -1,0 +1,60 @@
+name: Docs site
+
+# Builds the Starlight documentation site under docs/ and deploys the static
+# output to GitHub Pages. Unlike a standalone docs package, docs/ has no
+# package.json of its own: Astro, Starlight, and the `build:docs` script all
+# live in the root package.json/bun.lock, so the workflow installs and builds
+# from the repository root. The site publishes from the `docs` branch at
+# https://nibblebot.github.io/omp-web/, so Astro's site/base in
+# docs/astro.config.mjs must match this URL (site = https://nibblebot.github.io,
+# base = /omp-web/).
+#
+# Pages must be enabled on the repo with Source = "GitHub Actions" (Settings →
+# Pages); the deploy job then publishes whatever this workflow uploads.
+
+on:
+  push:
+    branches: [docs]
+    paths:
+      - "docs/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight deployment; cancel superseded branch runs.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build static site
+        run: bun run build:docs
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: docs/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

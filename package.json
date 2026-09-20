@@ -42,14 +42,15 @@
 		"solid-js": "^1.9.15"
 	},
 	"devDependencies": {
+		"@astrojs/markdown-satteri": "^0.4.1",
 		"@astrojs/starlight": "^0.42.2",
 		"@types/bun": "^1.4.0",
 		"@types/diff": "^8.0.0",
 		"@typescript/native-preview": "7.0.0-dev.20260707.2",
+		"astro": "^7.3.3",
 		"eslint-plugin-solid": "^0.15.0",
 		"oxfmt": "^0.63.0",
 		"oxlint": "^1.81.0",
-		"astro": "^7.3.3",
 		"vite": "^8.2.2",
 		"vite-plugin-solid": "^2.11.14"
 	}

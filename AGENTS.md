@@ -10,7 +10,7 @@ Two products in one tree, sharing one Solid.js web UI and one wire contract:
 - **omp-fleet** (`fleet/`): registry + supervisor + connector for N daemons (local children, external/remote). Re-exposes them to the same UI in **roster mode** and to CLI fan-out. Holds **zero agent state**. All truth lives in the omp-session processes and their `.jsonl` session logs.
 - **Web UI** (`src/`): one Solid.js bundle serves both modes; mode is decided by the wire (`roster` frame ⇒ roster mode, sticky; a bare omp-session never sends it ⇒ standalone). No router.
 
-Runtime is **Bun** (`type: module`, `bun.lock` committed). No CI. Lint runs through **oxlint** (`.oxlintrc.json`; Solid rules come from `eslint-plugin-solid` loaded as an oxlint JS plugin) and formatting through **oxfmt** (`.oxfmtrc.json`: tabs, print width 100, TS/TSX only: markdown/CSS/HTML/JSON stay hand-maintained). Comments reference audit findings as `finding #N` (numbering kept from the 2026-08 audit).
+Runtime is **Bun** (`type: module`, `bun.lock` committed). GitHub Actions is used only to build and deploy the docs site from the `docs` branch (`.github/workflows/docs.yml`); there is no product CI. Lint runs through **oxlint** (`.oxlintrc.json`; Solid rules come from `eslint-plugin-solid` loaded as an oxlint JS plugin) and formatting through **oxfmt** (`.oxfmtrc.json`: tabs, print width 100, TS/TSX only: markdown/CSS/HTML/JSON stay hand-maintained). Comments reference audit findings as `finding #N` (numbering kept from the 2026-08 audit).
 
 ## Commands
 
@@ -29,6 +29,9 @@ bun scripts/test.ts --bail 1   # extra args forwarded to bun test (file filters 
 bun run bench                  # scripts/bench-tests.ts: run [--runs N]|report [--last N]|flakes [--last N]|baseline; per-file stats (mean/sd/p50/p95/CV%, Welch t vs baseline), flake/broken classification, JSONL history in .bench/
 bun run build                  # → dist-bundle/cli.js installable bundle (vite build → regenerate server/embedded-dist.ts → bun build, dist/ + @oh-my-pi/* external; shebang verified)
 bun run build:web              # vite build → dist/ (gitignored; the UI half of `build`)
+bun run dev:docs               # Astro/Starlight docs site under docs/, served with the /omp-web/ base
+bun run build:docs             # static docs build → docs/dist/ for GitHub Pages
+bun run preview:docs           # preview the built docs site locally
 bun scripts/test-onboard.ts    # OFFLINE distribution+onboarding E2E: pack → poisoned-store pinned install → first-run config → bare serve → spawn → update round-trip (exit 0 = green)
 bun run fleet -- serve|sessions|projects|spawn|add-repo|add|provision|stop|remove|rm-project|add-worktree|rm-worktree|prompt
 bun run collab [-- --join|--stop]   # collab room CLI (TUI/CLI-only surface)
@@ -76,6 +79,7 @@ Ports: defaults vite **4713**, omp-session **4721**, omp-fleet **4722** (used by
 |`scripts/install-omp-web.ts`|Pinned installer: `bun add <tarball>` into `<prefix>/install/` (default `~/.omp-web`; its own node_modules = exact `@oh-my-pi/*` pins) + bin symlink; NOT `bun install -g` (flat shared store inherits the omp CLI's SDK version → skew → runtime breakage; `--prefix`/`--bin-dir` for tests). The prefix holds the CLI CODE; the DATA home is chosen independently at first run|
 | `scripts/bench-tests.ts` | Suite benchmark harness: `run`/`report`/`baseline`, JSONL history in gitignored `.bench/` |
 | `test/` | Stats-suite tests (14 files) for the `fleet/stats/` API; gitignored `test/.fixture/` auto-regenerated idempotently by `scripts/gen-tx-fixture.ts` (api.test.ts `beforeAll`) |
+| `docs/astro.config.mjs`, `docs/src/content/docs/` | Astro/Starlight documentation site, published from the `docs` branch by `.github/workflows/docs.yml` at `https://nibblebot.github.io/omp-web/` with base `/omp-web/`; generated `docs/dist/` is gitignored |
 | `docs/architecture.md`, `docs/position.md`, `docs/research/` | System architecture (wire contract, module map) + audit Phase 7 strategic items (findings #71–#80) + design-audit research (committed docs) |
 
 ## The wire contract (OMP_PROTO 2)
