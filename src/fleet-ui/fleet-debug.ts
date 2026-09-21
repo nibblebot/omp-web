@@ -136,7 +136,7 @@ function normalizeFleet(raw: unknown): FleetDebug | null {
 
 /** HH:MM:SS local wall time for a ms-epoch timestamp (log rows, startedAt). */
 export function fmtTime(ts: number): string {
-	return ts > 0 ? new Date(ts).toTimeString().slice(0, 8) : "—";
+	return ts > 0 ? new Date(ts).toTimeString().slice(0, 8) : "-";
 }
 
 /** Host[:port] of a ws/http endpoint URL; the raw string when unparsable. */

@@ -169,7 +169,7 @@ Key constants (all in `shared/protocol.ts`): `OMP_PROTO = 2`, `SSE_KEEPALIVE_MS`
 - **SDK pins**: the seven `@oh-my-pi/*` packages repo code imports (`pi-agent-core`, `pi-ai`, `pi-catalog`, `pi-coding-agent`, `pi-tui`, `pi-utils`, `pi-wire`) are pinned exactly (18.2.6). `patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch` keeps `TokenCountMode "approximate"` a bytes/4 byte estimate for every model so context stats and compaction thresholds never block on the native BPE pass (`PI_TOKENIZER_ACCURATE=1` opts back in; `strict` stays exact). Patch the dependency through `patches/` + `patchedDependencies`, never by hand-editing `node_modules`.
 - Comments reference audit remediation findings as `finding #N` (numbering kept from the 2026-08 audit); keep the numbering when fixing/annotating.
 - `dist/`, `node_modules/` are gitignored; `docs/architecture.md`, `docs/release.md` are committed docs: update, don't delete.
-- Docs and markdown prose use no em dashes (AI tell): use periods or commas instead, never en-dash or hyphen stand-ins. En dashes inside numeric ranges (12–18px) are fine. Exception: CHANGELOG.md, whose bullets mirror commit subjects verbatim and must not drift from git history or the published release notes.
+- Docs and markdown prose use no em dashes (AI tell): use periods or commas instead, never en-dash or hyphen stand-ins. En dashes inside numeric ranges (12–18px) are fine.
 
 ## Editing workflows
 

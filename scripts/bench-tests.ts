@@ -447,24 +447,24 @@ function tsLabel(ts: number): string {
 }
 
 function fmtDelta(v: number | null): string {
-	if (v === null) return "—".padStart(9);
+	if (v === null) return "-".padStart(9);
 	const s = `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
 	return s.padStart(9);
 }
 
 function fmtStat(v: number): string {
-	if (!Number.isFinite(v)) return "—".padStart(9);
+	if (!Number.isFinite(v)) return "-".padStart(9);
 	return v.toFixed(1).padStart(9);
 }
 
 function fmtPct(cv: number): string {
-	if (!Number.isFinite(cv)) return "—".padStart(7);
+	if (!Number.isFinite(cv)) return "-".padStart(7);
 	return `${(cv * 100).toFixed(1)}%`.padStart(7);
 }
 
-/** t value, flagged with `*` when |t| > 2; an em dash when not computable. */
+/** t value, flagged with `*` when |t| > 2; a dash when not computable. */
 function fmtT(v: number): string {
-	if (!Number.isFinite(v)) return "—".padStart(8);
+	if (!Number.isFinite(v)) return "-".padStart(8);
 	return `${v.toFixed(2)}${Math.abs(v) > 2 ? "*" : ""}`.padStart(8);
 }
 
@@ -537,7 +537,7 @@ function report(lastN: number): void {
 					: null,
 		});
 	}
-	// |t| descending; rows without a computable t (an em dash) sort last.
+	// |t| descending; rows without a computable t (a dash) sort last.
 	rows.sort((a, b) => {
 		const ta = Number.isFinite(a.t) ? Math.abs(a.t) : 0;
 		const tb = Number.isFinite(b.t) ? Math.abs(b.t) : 0;

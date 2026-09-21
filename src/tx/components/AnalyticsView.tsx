@@ -128,7 +128,7 @@ function AnalyticsBody(props: { stats: SessionStats; onPickTool: (name: string) 
 						class="value"
 						title={longest() ? `${longest()!.toolName} · ${longest()!.toolCallId}` : undefined}
 					>
-						<Show when={longest()} fallback={<span class="value-muted">—</span>}>
+						<Show when={longest()} fallback={<span class="value-muted">-</span>}>
 							{(l) => (
 								<span>
 									{l().toolName} <span class="value-sub">{formatMs(l().durationMs)}</span>

@@ -74,20 +74,20 @@ export function formatUsageRow(row: UsageRow): string {
 	return parts.join(" · ");
 }
 
-/** Locale-grouped integer for usage amounts ("1,250"); an em dash when absent. */
+/** Locale-grouped integer for usage amounts ("1,250"); a dash when absent. */
 export function formatAmount(n: number | undefined): string {
-	if (n === undefined || !Number.isFinite(n)) return "—";
+	if (n === undefined || !Number.isFinite(n)) return "-";
 	return n.toLocaleString("en-US");
 }
 
 /**
  * Unit-aware UsageAmount rendering: tokens use the compact k/M formatter,
  * percents append "%", everything else is locale-grouped ("1,250 / 5,000").
- * Missing values render as an em dash so limits without amounts stay readable.
+ * Missing values render as a dash so limits without amounts stay readable.
  */
 export function formatUnitAmount(amount: { used?: number; limit?: number; unit: string }): string {
 	const v = (n: number | undefined) =>
-		n === undefined ? "—" : amount.unit === "tokens" ? formatTokens(n) : formatAmount(n);
+		n === undefined ? "-" : amount.unit === "tokens" ? formatTokens(n) : formatAmount(n);
 	const used = v(amount.used);
 	const suffix = amount.unit === "percent" && amount.used !== undefined ? "%" : "";
 	return amount.limit !== undefined ? `${used} / ${v(amount.limit)}${suffix}` : `${used}${suffix}`;

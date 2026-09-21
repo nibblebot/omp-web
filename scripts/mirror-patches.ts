@@ -5,7 +5,7 @@
  *
  * Why this exists: bun applies `patchedDependencies` only from the root
  * project's package.json. A dependency that declares its own map (the omp-web
- * tarball does, for the pi-agent-core tokenizer fix) is ignored — the pinned
+ * tarball does, for the pi-agent-core tokenizer fix) is ignored, the pinned
  * `@oh-my-pi/*` packages would install unpatched, and the bundle would run the
  * slow path the patch removes. Verified against bun 1.4.2: a tarball-installed
  * package's `patchedDependencies` is not applied, and a `file:` dependency

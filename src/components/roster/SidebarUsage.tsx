@@ -23,7 +23,7 @@ const UsageRow: Component<{ limit: UsageLimit }> = (props) => {
 					</span>
 				)}
 			</span>
-			<span class="sidebar-usage-pct">{pct() === undefined ? "—" : `${pct()}%`}</span>
+			<span class="sidebar-usage-pct">{pct() === undefined ? "-" : `${pct()}%`}</span>
 			<div class="sidebar-usage-bar">
 				<div
 					class="sidebar-usage-bar-fill"

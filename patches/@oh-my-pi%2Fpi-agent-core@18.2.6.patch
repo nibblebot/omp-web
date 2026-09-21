@@ -28,7 +28,7 @@ index 34afa8f742faa1f4823b6a64462c90a18f82c553..e17011538ca43bdf8a95654efe1e41e9
 - * `PI_TOKENIZER_ACCURATE=1`).
 + * the model that will be billed. Approximate counts stay on the fast byte
 + * estimate for every model; `strict` (and `PI_TOKENIZER_ACCURATE=1`) uses
-+ * exact native counts — the catalog-resolved tokenizer when known, o200k
++ * exact native counts, the catalog-resolved tokenizer when known, o200k
 + * otherwise.
   */
  export class Tokenizer {

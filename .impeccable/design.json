@@ -827,7 +827,7 @@
       "name": "Primary Button (Send)",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "The one primary action per view — send/spawn. Signal Blue fill, console-black text, weight 600.",
+      "description": "The one primary action per view, send/spawn. Signal Blue fill, console-black text, weight 600.",
       "html": "<button class=\"ds-btn-primary\">Send</button>",
       "css": ".ds-btn-primary { background: var(--accent); border: 1px solid var(--accent); color: var(--bg); font-weight: 600; font-size: 0.857rem; padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: background-color 140ms ease-out, border-color 140ms ease-out; } .ds-btn-primary:hover { background: color-mix(in srgb, var(--accent), var(--bg) 12%); border-color: color-mix(in srgb, var(--accent), var(--bg) 12%); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; } .ds-btn-primary:disabled { opacity: 0.5; cursor: default; }"
     },
@@ -898,18 +898,18 @@
   ],
   "narrative": {
     "northStar": "The Mission Control Console",
-    "overview": "One operator, many agents. This UI is the flight-ops room for a fleet of disposable agent daemons: calm, watchful, exact. The screen's job is supervision, not conversation — surfaces recede so that status (dots, pills, chips, streamed text) can carry the signal. Nothing competes with the readouts.\n\nDensity follows the terminal, not the chat app: compact 2-24px spacing rhythm, machine truth set in monospace, labels in small tracked caps, controls that sit quiet until hovered. Depth is nearly absent by doctrine — structure comes from 1px hairlines and tonal panel steps, and shadow appears only when something floats above the console or when a status light glows.\n\nThe palette is a dark instrument panel first: near-black blue-gray surfaces, a softened white readout, and a single Signal Blue accent used with deliberate rarity. Five alternate palettes rebalance the same semantic slots.",
+    "overview": "One operator, many agents. This UI is the flight-ops room for a fleet of disposable agent daemons: calm, watchful, exact. The screen's job is supervision, not conversation, surfaces recede so that status (dots, pills, chips, streamed text) can carry the signal. Nothing competes with the readouts.\n\nDensity follows the terminal, not the chat app: compact 2-24px spacing rhythm, machine truth set in monospace, labels in small tracked caps, controls that sit quiet until hovered. Depth is nearly absent by doctrine, structure comes from 1px hairlines and tonal panel steps, and shadow appears only when something floats above the console or when a status light glows.\n\nThe palette is a dark instrument panel first: near-black blue-gray surfaces, a softened white readout, and a single Signal Blue accent used with deliberate rarity. Five alternate palettes rebalance the same semantic slots.",
     "keyCharacteristics": [
       "Dark-first instrument panel; five alternate themes overriding only color tokens",
       "Flat-by-default surfaces; 1px borders do the structural work",
       "One accent, used rarely; status speaks in a semantic trio (bg + border + text)",
-      "Zero font assets — system sans + system mono only",
+      "Zero font assets, system sans + system mono only",
       "Single 140ms ease-out motion vocabulary; six small keyframes; full prefers-reduced-motion teardown"
     ],
     "rules": [
       {
         "name": "The One Voice Rule",
-        "body": "The accent appears on ≤10% of any screen — focus rings, the active selection, one primary action. If everything signals, nothing does.",
+        "body": "The accent appears on ≤10% of any screen, focus rings, the active selection, one primary action. If everything signals, nothing does.",
         "section": "colors"
       },
       {
@@ -940,7 +940,7 @@
     ],
     "dos": [
       "Do build every surface from the semantic tokens (var(--bg), var(--panel), …) so all six themes stay coherent; themes override colors only.",
-      "Do express status as the full trio (bg + border + text) — queued, ready, error, and diff states all follow it.",
+      "Do express status as the full trio (bg + border + text), queued, ready, error, and diff states all follow it.",
       "Do keep motion at 140ms ease-out (the single transition vocabulary) and gate anything animated behind prefers-reduced-motion.",
       "Do set machine truth in the mono stack at 0.857rem or smaller; the roster lives at 0.75rem/1.4.",
       "Do let assistant output run edge-to-edge; reserve bubbles for the operator's own messages.",
@@ -952,7 +952,7 @@
       "Don't chat-app the surface: no avatar pairs, no messenger bubble symmetry, no emoji-forward empty states.",
       "Don't load a webfont or hard-code a font family outside the two system stacks (The Zero-Asset Rule).",
       "Don't invent one-off colors, radii, or spacing outside the token scales; extend the scale or reuse a rung.",
-      "Don't use the breakdown data-viz ramp for status, or status hues in charts — the ramps are deliberately disjoint."
+      "Don't use the breakdown data-viz ramp for status, or status hues in charts, the ramps are deliberately disjoint."
     ]
   }
 }

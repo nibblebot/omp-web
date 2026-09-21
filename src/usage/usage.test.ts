@@ -82,9 +82,9 @@ describe("formatAmount", () => {
 		expect(formatAmount(1250)).toBe("1,250");
 		expect(formatAmount(0)).toBe("0");
 	});
-	test("absent values render as em dash", () => {
-		expect(formatAmount(undefined)).toBe("—");
-		expect(formatAmount(Number.NaN)).toBe("—");
+	test("absent values render as a dash", () => {
+		expect(formatAmount(undefined)).toBe("-");
+		expect(formatAmount(Number.NaN)).toBe("-");
 	});
 });
 
@@ -101,8 +101,8 @@ describe("formatUnitAmount", () => {
 		expect(formatUnitAmount({ used: 42, unit: "percent" })).toBe("42%");
 	});
 
-	test("missing values render as em dash", () => {
-		expect(formatUnitAmount({ unit: "tokens" })).toBe("—");
+	test("missing values render as a dash", () => {
+		expect(formatUnitAmount({ unit: "tokens" })).toBe("-");
 		expect(formatUnitAmount({ used: 10, unit: "usd" })).toBe("10");
 	});
 });

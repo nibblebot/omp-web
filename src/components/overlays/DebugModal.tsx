@@ -17,7 +17,7 @@ import { LogRing } from "./LogRing";
 // (GET /ctl/debug via the fetchFleetDebug state action → vite's /ctl proxy →
 // 127.0.0.1:4722). The /ctl fetch fails while the fleet boots or is
 // unreachable; that is the EXPECTED state and renders as a notice, not a
-// crash. Tolerant parsing: unknown/absent fields degrade to an em dash
+// crash. Tolerant parsing: unknown/absent fields degrade to a dash
 // placeholder instead of throwing on a half-landed payload.
 // ---------------------------------------------------------------------------
 
@@ -72,7 +72,7 @@ export const DebugModal: Component<{ onClose: () => void }> = (props) => {
 						<div class="debug-fact">
 							<span class="debug-label">session</span>
 							<span class="debug-value" title={state.currentSessionId}>
-								{state.currentSessionId === "" ? "—" : state.currentSessionId.slice(0, 8)}
+								{state.currentSessionId === "" ? "-" : state.currentSessionId.slice(0, 8)}
 							</span>
 						</div>
 						<div class="debug-fact">
@@ -113,32 +113,32 @@ export const DebugModal: Component<{ onClose: () => void }> = (props) => {
 									<div class="debug-facts">
 										<div class="debug-fact">
 											<span class="debug-label">port</span>
-											<span class="debug-value">{fl()?.port ?? "—"}</span>
+											<span class="debug-value">{fl()?.port ?? "-"}</span>
 										</div>
 										<div class="debug-fact">
 											<span class="debug-label">uptime</span>
 											<span class="debug-value">
 												{fl()?.uptimeSec !== undefined
 													? formatDaemonUptime(fl()!.uptimeSec! * 1000)
-													: "—"}
+													: "-"}
 											</span>
 										</div>
 										<div class="debug-fact">
 											<span class="debug-label">since</span>
 											<span class="debug-value">
-												{fl()?.startedAt !== undefined ? fmtTime(fl()!.startedAt!) : "—"}
+												{fl()?.startedAt !== undefined ? fmtTime(fl()!.startedAt!) : "-"}
 											</span>
 										</div>
 										<div class="debug-fact">
 											<span class="debug-label">state</span>
 											<span class="debug-value" title={fl()?.statePath ?? ""}>
-												{fl()?.statePath ?? "—"}
+												{fl()?.statePath ?? "-"}
 											</span>
 										</div>
 										<div class="debug-fact">
 											<span class="debug-label">config</span>
 											<span class="debug-value" title={fl()?.configPath ?? ""}>
-												{fl()?.configPath ?? "—"}
+												{fl()?.configPath ?? "-"}
 											</span>
 										</div>
 									</div>
@@ -161,7 +161,7 @@ export const DebugModal: Component<{ onClose: () => void }> = (props) => {
 														{(s) => (
 															<tr>
 																<td class="debug-cell-name" title={s.daemonId}>
-																	{s.name ?? s.daemonId?.slice(0, 8) ?? "—"}
+																	{s.name ?? s.daemonId?.slice(0, 8) ?? "-"}
 																</td>
 																<td>
 																	<span
@@ -169,18 +169,18 @@ export const DebugModal: Component<{ onClose: () => void }> = (props) => {
 																		data-status={s.status ?? "unknown"}
 																		title={s.error ?? s.status ?? ""}
 																	>
-																		{s.status ?? "—"}
+																		{s.status ?? "-"}
 																	</span>
 																</td>
-																<td>{s.mode ?? "—"}</td>
-																<td>{s.pid ?? "—"}</td>
+																<td>{s.mode ?? "-"}</td>
+																<td>{s.pid ?? "-"}</td>
 																<td class="debug-cell-mono" title={s.endpoint}>
-																	{s.endpoint !== undefined ? endpointHost(s.endpoint) : "—"}
+																	{s.endpoint !== undefined ? endpointHost(s.endpoint) : "-"}
 																</td>
 																<td>
 																	{s.uptimeSec !== undefined
 																		? formatDaemonUptime(s.uptimeSec * 1000)
-																		: "—"}
+																		: "-"}
 																</td>
 																<td class="debug-cell-mono">
 																	{s.connector
@@ -189,7 +189,7 @@ export const DebugModal: Component<{ onClose: () => void }> = (props) => {
 																					? ` · ${s.connector.nextRetryInMs}ms`
 																					: ""
 																			}`
-																		: "—"}
+																		: "-"}
 																</td>
 															</tr>
 														)}

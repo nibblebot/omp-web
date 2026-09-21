@@ -2,7 +2,7 @@
 
 /** Human duration, e.g. 342 ms / 1.2 s / 3 min 5 s / 1 hr 2 min. */
 export function formatMs(ms: number | null | undefined): string {
-	if (ms === null || ms === undefined || Number.isNaN(ms)) return "—";
+	if (ms === null || ms === undefined || Number.isNaN(ms)) return "-";
 	if (ms < 1000) return `${Math.round(ms)} ms`;
 	if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
 	if (ms < 3_600_000) {
@@ -17,7 +17,7 @@ export function formatMs(ms: number | null | undefined): string {
 
 /** Compact counts: 1.2k, 3.4M. */
 export function formatCompact(n: number | null | undefined): string {
-	if (n === null || n === undefined || Number.isNaN(n)) return "—";
+	if (n === null || n === undefined || Number.isNaN(n)) return "-";
 	if (Math.abs(n) >= 1_000_000)
 		return `${(n / 1_000_000).toFixed(Math.abs(n) >= 10_000_000 ? 0 : 1)}M`;
 	if (Math.abs(n) >= 10_000) return `${Math.round(n / 1000)}k`;
@@ -27,14 +27,14 @@ export function formatCompact(n: number | null | undefined): string {
 
 /** Dollar amount with enough precision to stay meaningful at small values. */
 export function formatCost(cost: number | null | undefined): string {
-	if (cost === null || cost === undefined || Number.isNaN(cost)) return "—";
+	if (cost === null || cost === undefined || Number.isNaN(cost)) return "-";
 	if (cost === 0) return "$0.00";
 	const digits = cost >= 100 ? 0 : cost >= 1 ? 2 : cost >= 0.01 ? 4 : 5;
 	return `$${cost.toFixed(digits)}`;
 }
 
 export function formatBytes(n: number | null | undefined): string {
-	if (n === null || n === undefined || Number.isNaN(n)) return "—";
+	if (n === null || n === undefined || Number.isNaN(n)) return "-";
 	if (n < 1024) return `${n} B`;
 	if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
 	return `${(n / (1024 * 1024)).toFixed(1)} MB`;
@@ -42,7 +42,7 @@ export function formatBytes(n: number | null | undefined): string {
 
 /** Relative time, e.g. "3 min ago", "2 day ago". */
 export function timeAgo(ts: number | null | undefined): string {
-	if (ts === null || ts === undefined || Number.isNaN(ts)) return "—";
+	if (ts === null || ts === undefined || Number.isNaN(ts)) return "-";
 	const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
 	if (s < 10) return "just now";
 	if (s < 60) return `${s} sec ago`;
@@ -60,7 +60,7 @@ export function timeAgo(ts: number | null | undefined): string {
 }
 
 export function formatDateTime(ts: number | null | undefined): string {
-	if (ts === null || ts === undefined || Number.isNaN(ts)) return "—";
+	if (ts === null || ts === undefined || Number.isNaN(ts)) return "-";
 	return new Date(ts).toLocaleString();
 }
 
