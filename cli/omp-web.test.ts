@@ -20,6 +20,7 @@ describe("classifyCommand", () => {
 			"add-worktree",
 			"rm-worktree",
 			"prompt",
+			"preflight",
 		]) {
 			expect(classifyCommand([verb])).toBe("fleet");
 		}

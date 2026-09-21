@@ -45,6 +45,7 @@ const FLEET_SUBCOMMANDS: Record<string, true> = {
 	"add-worktree": true,
 	"rm-worktree": true,
 	prompt: true,
+	preflight: true,
 };
 
 /** Where argv routes the process. */
@@ -68,7 +69,7 @@ const USAGE = `usage: omp-web [serve] [options] | omp-web <command> [options]
   sessions | projects          list roster entries / adoptable worktrees
   profiles                     list provider profiles
   spawn | add-repo | add | provision | add-clone | start | stop | remove
-  rm-project | add-worktree | rm-worktree | prompt
+  rm-project | add-worktree | rm-worktree | prompt | preflight
                                fleet control plane (see: omp-web <command> --help)
   session [options]            run one agent session daemon (no web UI)
   update [--check] [--force] [--version x.y.z]
