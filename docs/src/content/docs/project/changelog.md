@@ -16,7 +16,7 @@ The omp-web release history lives in [`CHANGELOG.md`](https://github.com/nibbleb
 
 `CHANGELOG.md` wins whenever two of these disagree. GitHub Releases normally repeat the matching changelog entry, because the release command publishes that entry as the release notes; a maintainer can substitute hand-written notes for a single release, so one release page can read differently from the changelog while the changelog keeps recording what the release contains.
 
-`docs/release.md` in the repository remains authoritative for maintainer release operations, and the [Release process](/project/release/) page is a guide to it. That document ends with a checklist carried over from a removed release plan. Its publishing items describe work that has already happened, including publishing the repository and cutting the v0.1.0 release, so treat that checklist as a historical record rather than pending work.
+`docs/release.md` in the repository remains authoritative for maintainer release operations, and the [Release process](/project/release/) page is a guide to it.
 
 ## How a release entry is organized
 

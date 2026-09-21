@@ -7,8 +7,6 @@ This page is for maintainers cutting an omp-web release. It covers the two workf
 
 The repository documents remain authoritative. [`docs/release.md`](https://github.com/nibblebot/omp-web/blob/main/docs/release.md) is the detailed load-bearing contract for the release channel, the update channel, and the orchestrator, and [`scripts/release.ts`](https://github.com/nibblebot/omp-web/blob/main/scripts/release.ts) is the executable workflow. Until that document's contents are fully migrated into this site, treat `docs/release.md` plus the script as the sources of truth: if this page disagrees with either, they win.
 
-`docs/release.md` ends with a checklist carried over from a removed release plan. Those publishing items are historical: the repository is published, `v0.1.0` and `v0.1.1` have shipped, and the stable latest-download URL serves the newest manifest. Do not execute that checklist as current work.
-
 ## Command surface
 
 Run the orchestrator from the repository root; there is no npm script alias:
@@ -47,9 +45,37 @@ bun run check:types
 bun run format:check
 bun run build:web
 bun run test
+bun scripts/test-onboard.ts
 ```
 
-`build:web` runs before `test` as a fast sanity gate that the UI bundle still compiles; the gate order is unchanged. The suite no longer needs a built `dist/`, and the session daemon serves no UI. `bun run lint` is deliberately not a gate, because lint warnings do not fail the repository's lint run. The gate is skipped entirely by `--dry-run`.
+The list is exported as `GATE_COMMANDS` from `scripts/release.ts`; that export is the single definition of the gate. `bun scripts/test-onboard.ts` is the offline distribution and onboarding end-to-end run: pack, sandboxed pinned install, first-run config, bare serve, spawn, and update round trip. `build:web` runs before `test` as a fast sanity gate that the UI bundle still compiles. The suite no longer needs a built `dist/`, and the session daemon serves no UI. `bun run lint` is deliberately not a gate, because lint warnings do not fail the repository's lint run. The gate is skipped entirely by `--dry-run`.
+
+## Preflight and drift checks
+
+`scripts/preflight.ts` is a standalone advisory check for release drift, and it is not called by the orchestrator. Run it before cutting a release:
+
+```sh
+bun scripts/preflight.ts [--strict] [--json] [--offline]
+```
+
+It exits 0 when the report is clean and 1 when it holds an error finding. `--strict` also exits 1 on warnings. `--json` prints the whole report as one JSON object on stdout instead of the text report; usage errors go to stderr in either mode. `--offline` never invokes npm: the npm-backed checks report as skipped and every other check still runs.
+
+Findings carry one of two severities:
+
+| Severity | Finding |
+| --- | --- |
+| error | The seven `@oh-my-pi/*` pins in `package.json` disagree with each other. |
+| error | The root `patchedDependencies` map and `patches/` disagree: a map key with no patch file, a patch file no key references, or a key whose version suffix is not that package's own pin. |
+| error | `package.json` and `bun.lock` disagree about `patchedDependencies`. |
+| warn | The pinned `@oh-my-pi/*` versions are behind the upstream npm latest (npm-backed). |
+| warn | A stale SDK version literal in a docs page (npm-backed). The frozen clone design and ledger docs, `docs/clone-*.md`, are excluded: they record design-time SDK facts by charter. |
+| warn | Commits are unpushed relative to `origin/main` (the release pushes to `origin/main`, and Pages builds the site from `main`, so unpushed commits also leave the published site stale). |
+| warn | `gh` is not authenticated. |
+| warn | An unchecked Markdown task box in `docs/*.md` or `docs/src/content/docs/**/*.md`. Prose that quotes the box syntax is not a finding, and `docs/clone-plan.md` is excluded because its boxes are the live clone-phase tracker. |
+| warn | A relative link in the docs resolves to no file. |
+| warn | A documented gate list disagrees with `GATE_COMMANDS` in `scripts/release.ts`. |
+
+This script is not `omp-web preflight`, the CLI verb that validates a clone provider profile on this host; the two are unrelated.
 
 ## Version selection
 
@@ -89,7 +115,7 @@ bun scripts/release.ts --stage
 bun scripts/release.ts --go --yes
 ```
 
-Step 1 runs the preconditions, gate, changelog, build, pack, and artifact validation, then prints the review summary and exits without publishing. Step 3 revalidates everything from disk before publishing: the branch, `gh` auth, `origin`, a working tree containing exactly `package.json` and `CHANGELOG.md`, the staged manifest version and tarball name, tarball integrity, the notes artifact, the presence of the changelog section, and that the tag is still absent. Then it commits, tags, pushes, creates the GitHub release, and verifies the live channel. `--go --dry-run` prints the publish commands and changes nothing.
+Step 1 runs the preconditions, gate, changelog, build, pack, artifact validation, and the packed-tarball install smoke, then prints the review summary and exits without publishing. Step 3 revalidates everything from disk before publishing: the branch, `gh` auth, `origin`, a working tree containing exactly `package.json` and `CHANGELOG.md`, the staged manifest version and tarball name, tarball integrity, the notes artifact, the presence of the changelog section, and that the tag is still absent. It then runs the packed-tarball smoke again, commits, tags, pushes, creates the GitHub release, and verifies the live channel. `--go --dry-run` prints the publish commands and changes nothing.
 
 Re-running `--stage` on a tree that already holds a staged release fails the clean-tree precondition with the `--go` hint.
 
@@ -122,6 +148,9 @@ Before publishing, and again during `--go`, the script validates the packed tarb
 - the first line of that entry is `#!/usr/bin/env bun`
 - the bundle contains the version string
 - the recomputed SHA-256 matches the manifest
+- the packed tarball installs for real in a temporary sandbox, and the installed `omp-web --version` prints exactly the release version
+
+The install smoke is `smokePackedTarball(tgzPath, version)`. It runs `bun scripts/install-omp-web.ts <abs tgz> --prefix <sandbox>/datahome --bin-dir <sandbox>/bin` inside a `mkdtemp` sandbox whose `HOME` and `BUN_INSTALL` both point into that sandbox, so the installer's global-removal path can never touch the operator's real global install, then runs the installed `<sandbox>/bin/omp-web --version` and requires the printed version to match. The sandbox is always removed, and a failing smoke stops the run: the tarball installed here is the tarball that gets published.
 
 After publishing, it verifies the live channel by retrying the stable manifest URL up to 12 times, five seconds apart, until it reports the new version, then downloads the tarball and cross-checks its digest against the manifest. Treat a release as done only after this step passes.
 
@@ -144,9 +173,11 @@ Every failure prints `release: error: <message>` on stderr and exits 1; the run 
 
 ## Tests and CI
 
-`scripts/release.test.ts` covers the deterministic core: commit classification, bump computation, changelog formatting, coverage validation, manifest generation, tarball and staged-artifact validation, staged tree validation, and argument parsing. The LLM path is exercised only for its degrade behavior in unit tests. Distribution changes are additionally covered by the offline end-to-end gate `bun scripts/test-onboard.ts` (pack, pinned install, first run, bare serve, spawn, update round trip).
+`scripts/release.test.ts` covers the deterministic core: commit classification, bump computation, changelog formatting, coverage validation, manifest generation, tarball and staged-artifact validation, staged tree validation, and argument parsing. The LLM path is exercised only for its degrade behavior in unit tests. Distribution changes are covered by `bun scripts/test-onboard.ts`, the offline end-to-end gate that is also the last command of the release gate (pack, pinned install, first run, bare serve, spawn, update round trip).
 
-There is no CI. The repository's `.github/` directory holds issue templates only, so the release script's local gate and validation steps are the quality bar for a release.
+The live channel itself has no recorded end-to-end verification: `bun scripts/test-onboard.ts` covers install and update against local fixtures, and the packed-tarball smoke installs the local artifact, so a real install from the release URL plus `omp-web update` against the real channel remains unproven.
+
+There is no product CI. The repository's `.github/` directory holds the issue templates plus one workflow, `.github/workflows/docs.yml`, which builds the Starlight site from `docs/` and deploys it to GitHub Pages on every push to `main` that touches `docs/**`, `package.json`, `bun.lock`, or the workflow itself. Nothing builds, tests, or publishes the product, so the release script's local gate and validation steps are the quality bar for a release.
 
 ## Related
 

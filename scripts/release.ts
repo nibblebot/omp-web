@@ -9,8 +9,17 @@
  * (./release-llm) is imported statically and degrades to the
  * deterministic fallback on any failure.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import * as readline from "node:readline/promises";
 import { compareVersions, sha256Of } from "../cli/update";
 import { summarizeChangelog } from "./release-llm";
@@ -20,6 +29,44 @@ export const GITHUB_RELEASES_BASE = "https://github.com/nibblebot/omp-web/releas
 export const COMMIT_URL = "https://github.com/nibblebot/omp-web/commit/";
 export const MANIFEST_NAME = "release-manifest.json";
 export const ARTIFACT_DIR = "dist-release/";
+
+/**
+ * Release gate: the exact argv lists run in order after the version is
+ * picked and before anything is generated. `test-onboard` is the offline
+ * end-to-end walk (pack, pinned install, update round-trip). The dry-run
+ * plan derives its gate lines from this list, so the plan, the loop and the
+ * docs scan can never disagree.
+ */
+export const GATE_COMMANDS: readonly (readonly string[])[] = [
+	["bun", "run", "check:types"],
+	["bun", "run", "format:check"],
+	["bun", "run", "build:web"],
+	["bun", "run", "test"],
+	["bun", "scripts/test-onboard.ts"],
+];
+
+/** Dry-run line for the packed-artifact smoke (see smokePackedTarball). */
+function smokeLine(version: string): string {
+	return `bun scripts/install-omp-web.ts ${ARTIFACT_DIR}omp-web-${version}.tgz --prefix <sandbox>/datahome --bin-dir <sandbox>/bin, then <sandbox>/bin/omp-web --version`;
+}
+
+/**
+ * The command plan a dry run prints: the gate (GATE_COMMANDS), then build,
+ * pack, the packed-artifact smoke, and the publish steps.
+ */
+export function releasePlan(tag: string, version: string): string[] {
+	return [
+		...GATE_COMMANDS.map((cmd) => cmd.join(" ")),
+		"bun run build",
+		"bun pm pack",
+		smokeLine(version),
+		"git add package.json CHANGELOG.md",
+		`git commit -m "release: ${tag}"`,
+		`git tag ${tag}`,
+		"git push origin main --follow-tags",
+		`gh release create ${tag} ${ARTIFACT_DIR}omp-web-${version}.tgz ${ARTIFACT_DIR}${MANIFEST_NAME} --repo ${GITHUB_REPO} --title "${tag}" --notes-file ${ARTIFACT_DIR}notes.md`,
+	];
+}
 
 export type CommitClass = "breaking" | "feat" | "fix" | "other";
 
@@ -296,9 +343,14 @@ interface RunResult {
 	stderr: Buffer;
 }
 
-/** Run a command, capturing stdout/stderr (read concurrently to avoid pipe deadlock). */
-async function run(args: string[]): Promise<RunResult> {
-	const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
+/** Run a command, capturing stdout/stderr (read concurrently to avoid pipe deadlock).
+ *  `env` overrides layer over the inherited environment (HOME, BUN_INSTALL). */
+async function run(args: string[], env: Record<string, string> = {}): Promise<RunResult> {
+	const proc = Bun.spawn(args, {
+		stdout: "pipe",
+		stderr: "pipe",
+		env: { ...process.env, ...env },
+	});
 	const [stdout, stderr] = await Promise.all([
 		new Response(proc.stdout).arrayBuffer(),
 		new Response(proc.stderr).arrayBuffer(),
@@ -362,6 +414,65 @@ export async function validateTarball(
 		problems.push(`sha256 mismatch: computed ${computed}, manifest ${sha256}`);
 	}
 	return problems;
+}
+
+/**
+ * Pure sandbox plan for the packed-artifact smoke: installer argv, the env
+ * overrides that keep the install inside the sandbox, and the version probe.
+ * `env` holds only the overrides; `run` layers them over process.env.
+ */
+export interface SmokePlan {
+	installArgs: string[];
+	env: Record<string, string>;
+	bin: string;
+	versionArgs: string[];
+}
+
+/** Command assembly for smokePackedTarball, pure so tests can pin it without spawning. */
+export function smokePackedTarballPlan(tgzPath: string, sandbox: string): SmokePlan {
+	const bin = join(sandbox, "bin", "omp-web");
+	return {
+		installArgs: [
+			"bun",
+			"scripts/install-omp-web.ts",
+			resolve(tgzPath),
+			"--prefix",
+			join(sandbox, "datahome"),
+			"--bin-dir",
+			join(sandbox, "bin"),
+		],
+		env: { HOME: join(sandbox, "home"), BUN_INSTALL: join(sandbox, "bun") },
+		bin,
+		versionArgs: [bin, "--version"],
+	};
+}
+
+/**
+ * Smoke the packed artifact on a machine that has never seen omp-web: install
+ * it with its own installer into a throwaway sandbox and assert the linked
+ * `omp-web --version` prints `version`. HOME + BUN_INSTALL point into the
+ * sandbox so the installer's pinning and its `bun remove -g` sweep cannot
+ * touch the operator's real global install. Throws on failure (the child's
+ * stderr tail rides along); the sandbox is removed on every path.
+ */
+export async function smokePackedTarball(tgzPath: string, version: string): Promise<void> {
+	const sandbox = mkdtempSync(join(tmpdir(), "omp-web-smoke-"));
+	try {
+		const plan = smokePackedTarballPlan(tgzPath, sandbox);
+		const install = await run(plan.installArgs, plan.env);
+		if (install.status !== 0) {
+			fail(`packed artifact smoke: install failed (exit ${install.status})${tail(install.stderr)}`);
+		}
+		const probe = await run(plan.versionArgs, plan.env);
+		const printed = probe.stdout.toString().trim();
+		if (probe.status !== 0 || printed !== version) {
+			fail(
+				`packed artifact smoke: omp-web --version printed ${JSON.stringify(printed)} (exit ${probe.status}), expected ${version}${tail(probe.stderr)}`,
+			);
+		}
+	} finally {
+		rmSync(sandbox, { recursive: true, force: true });
+	}
 }
 
 function todayLocal(): string {
@@ -655,7 +766,8 @@ async function verifyChannel(version: string): Promise<void> {
  * Publish a staged release (--go): verify the staged state (package.json
  * version, CHANGELOG.md section, dist-release artifacts), then commit/tag/
  * push and create the GitHub release from the staged artifacts. No
- * generation, no gates; the --stage run already validated everything.
+ * generation, no gates; the staged artifacts are re-validated and re-smoked
+ * before anything is committed.
  */
 async function publishStaged(opts: { yes: boolean; dryRun: boolean }): Promise<void> {
 	await checkBranchMain();
@@ -697,6 +809,7 @@ async function publishStaged(opts: { yes: boolean; dryRun: boolean }): Promise<v
 		);
 		console.log("release: commands that would run:");
 		for (const cmd of [
+			smokeLine(version),
 			"git add package.json CHANGELOG.md",
 			`git commit -m "release: ${tag}"`,
 			`git tag ${tag}`,
@@ -721,6 +834,12 @@ async function publishStaged(opts: { yes: boolean; dryRun: boolean }): Promise<v
 		}
 	}
 
+	// Re-smoke the staged tarball before anything is committed: cheap state
+	// checks and the confirm run first, the artifact must still install and
+	// report its version on a clean machine.
+	await smokePackedTarball(join(ARTIFACT_DIR, `omp-web-${version}.tgz`), version);
+	console.log(`release: ok packed artifact smoke (${version})`);
+
 	await commitTagPush(tag);
 	await createRelease(tag, version);
 	await verifyChannel(version);
@@ -732,9 +851,9 @@ async function publishStaged(opts: { yes: boolean; dryRun: boolean }): Promise<v
 /**
  * Release orchestrator: preconditions -> commit review -> version -> gate ->
  * changelog -> (dry-run | confirm | stage) -> version write -> build/pack ->
- * manifest -> validate -> commit/tag/push -> gh release -> verify. Never
- * returns a failing state silently: every failure path sets process.exitCode
- * = 1.
+ * manifest -> validate -> smoke -> (stage stop | commit/tag/push) -> gh
+ * release -> verify. Never returns a failing state silently: every failure
+ * path sets process.exitCode = 1.
  */
 async function release(argv: string[]): Promise<void> {
 	const parsed = parseReleaseArgs(argv);
@@ -826,14 +945,15 @@ async function release(argv: string[]): Promise<void> {
 
 	// 4. Gate (skipped in --dry-run; dry-run only previews the plan).
 	// build:web runs before test as a fast sanity gate that the UI bundle
-	// still compiles; the suite itself needs no built dist/.
+	// still compiles; the suite itself needs no built dist/. test-onboard
+	// runs last: the offline end-to-end walk of pack + pinned install.
 	if (!dryRun) {
-		for (const cmd of ["check:types", "format:check", "build:web", "test"]) {
-			console.log(`release: running bun run ${cmd}`);
-			const res = await run(["bun", "run", cmd]);
-			if (res.status !== 0)
-				fail(`gate failed: bun run ${cmd} (exit ${res.status})${tail(res.stderr)}`);
-			console.log(`release: ok gate bun run ${cmd}`);
+		for (const cmd of GATE_COMMANDS) {
+			const line = cmd.join(" ");
+			console.log(`release: running ${line}`);
+			const res = await run([...cmd]);
+			if (res.status !== 0) fail(`gate failed: ${line} (exit ${res.status})${tail(res.stderr)}`);
+			console.log(`release: ok gate ${line}`);
 		}
 	} else {
 		console.log("release: skipping gate (--dry-run)");
@@ -883,19 +1003,7 @@ async function release(argv: string[]): Promise<void> {
 		console.log(section.replace(/^/gm, "  "));
 		console.log(`release: artifacts: ${artifactNames.join(", ")}`);
 		console.log("release: commands that would run:");
-		const planned = [
-			"bun run check:types",
-			"bun run format:check",
-			"bun run build:web",
-			"bun run test",
-			"bun run build",
-			"bun pm pack",
-			"git add package.json CHANGELOG.md",
-			`git commit -m "release: ${tag}"`,
-			`git tag ${tag}`,
-			"git push origin main --follow-tags",
-			`gh release create ${tag} ${ARTIFACT_DIR}omp-web-${version}.tgz ${ARTIFACT_DIR}${MANIFEST_NAME} --repo ${GITHUB_REPO} --title "${tag}" --notes-file ${ARTIFACT_DIR}notes.md`,
-		];
+		const planned = releasePlan(tag, version);
 		for (const cmd of planned) console.log(`release:   ${cmd}`);
 		console.log(
 			"release: two-phase: append --stage to generate + validate and stop (review), then publish with --go",
@@ -960,6 +1068,11 @@ async function release(argv: string[]): Promise<void> {
 		fail(`tarball validation failed:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
 	}
 	console.log("release: ok tarball validated");
+
+	// 11a. Smoke the exact artifact: install it into a throwaway sandbox and
+	// run --version there, so a bad tarball never reaches --stage review.
+	await smokePackedTarball(tarballPath, version);
+	console.log(`release: ok packed artifact smoke (${version})`);
 
 	// 11b. Stage mode: write the notes artifact and stop before publishing.
 	if (stage) {

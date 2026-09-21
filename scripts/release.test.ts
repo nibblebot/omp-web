@@ -6,8 +6,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync, renameSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import {
+	GATE_COMMANDS,
 	appliedBump,
 	changelogSection,
 	classifyCommit,
@@ -21,7 +23,9 @@ import {
 	parseGitLog,
 	parseReleaseArgs,
 	prependChangelog,
+	releasePlan,
 	releaseTreeProblem,
+	smokePackedTarballPlan,
 	stagedProblems,
 	validateCoverage,
 	validateTarball,
@@ -63,6 +67,39 @@ async function makeFixtureTgz(dir: string, content?: string): Promise<string> {
 	if (status !== 0) throw new Error(`tar fixture failed (exit ${status})`);
 	return tgz;
 }
+
+describe("GATE_COMMANDS + releasePlan", () => {
+	test("gate is the exact argv lists in order", () => {
+		expect(GATE_COMMANDS).toEqual([
+			["bun", "run", "check:types"],
+			["bun", "run", "format:check"],
+			["bun", "run", "build:web"],
+			["bun", "run", "test"],
+			["bun", "scripts/test-onboard.ts"],
+		]);
+	});
+
+	test("gate is defined once: the dry-run plan opens with it, restated nowhere", () => {
+		const plan = releasePlan("v0.2.0", "0.2.0");
+		const gateLines = GATE_COMMANDS.map((cmd) => cmd.join(" "));
+		expect(plan.slice(0, gateLines.length)).toEqual(gateLines);
+		expect(plan.filter((line) => gateLines.includes(line))).toEqual(gateLines);
+	});
+
+	test("plan continues through build, pack, smoke and publish", () => {
+		const plan = releasePlan("v0.2.0", "0.2.0");
+		expect(plan.slice(GATE_COMMANDS.length)).toEqual([
+			"bun run build",
+			"bun pm pack",
+			expect.stringContaining("omp-web-0.2.0.tgz"),
+			"git add package.json CHANGELOG.md",
+			`git commit -m "release: v0.2.0"`,
+			"git tag v0.2.0",
+			"git push origin main --follow-tags",
+			expect.stringContaining("gh release create v0.2.0 dist-release/omp-web-0.2.0.tgz"),
+		]);
+	});
+});
 
 describe("classifyCommit", () => {
 	test("feat/fix/other plain", () => {
@@ -374,6 +411,42 @@ describe("validateTarball", () => {
 		const tgz = await makeFixtureTgz(dir);
 		const problems = await validateTarball(tgz, "0.1.0", "0".repeat(64));
 		expect(problems.some((p) => p.includes("sha256 mismatch"))).toBe(true);
+	});
+});
+
+describe("smokePackedTarballPlan", () => {
+	const sandbox = join(tmpdir(), "omp-web-smoke-fixture");
+	const tgz = join(tmpdir(), "omp-web-0.1.0.tgz");
+
+	test("install argv targets the sandbox prefix + bin dir", () => {
+		expect(smokePackedTarballPlan(tgz, sandbox).installArgs).toEqual([
+			"bun",
+			"scripts/install-omp-web.ts",
+			tgz,
+			"--prefix",
+			join(sandbox, "datahome"),
+			"--bin-dir",
+			join(sandbox, "bin"),
+		]);
+	});
+
+	test("relative tarball paths reach the child as absolute paths", () => {
+		const plan = smokePackedTarballPlan(join("dist-release", "omp-web-0.1.0.tgz"), sandbox);
+		expect(isAbsolute(plan.installArgs[2])).toBe(true);
+		expect(plan.installArgs[2].endsWith(join("dist-release", "omp-web-0.1.0.tgz"))).toBe(true);
+	});
+
+	test("env confines HOME + BUN_INSTALL to the sandbox", () => {
+		expect(smokePackedTarballPlan(tgz, sandbox).env).toEqual({
+			HOME: join(sandbox, "home"),
+			BUN_INSTALL: join(sandbox, "bun"),
+		});
+	});
+
+	test("version probe runs the sandbox bin with --version", () => {
+		const plan = smokePackedTarballPlan(tgz, sandbox);
+		expect(plan.bin).toBe(join(sandbox, "bin", "omp-web"));
+		expect(plan.versionArgs).toEqual([plan.bin, "--version"]);
 	});
 });
 

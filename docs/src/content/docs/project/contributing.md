@@ -33,15 +33,19 @@ The runner chooses ports per run, so several checkouts can run side by side. `bu
 
 ## Checks before a pull request
 
-Keep each pull request to one logical change, and run the checks that `CONTRIBUTING.md` requires:
+Keep each pull request to one logical change, and run the release gate list (`GATE_COMMANDS` in `scripts/release.ts`) before opening it:
 
 ```sh
-bun run check:types   # tsgo -p tsconfig.json --noEmit (tsgo, not tsc)
-bun run format:check  # oxfmt --check
-bun run test          # bun test suite via scripts/test.ts
+bun run check:types           # tsgo -p tsconfig.json --noEmit (tsgo, not tsc)
+bun run format:check          # oxfmt --check
+bun run build:web             # vite build; fast sanity check that the UI bundle still compiles
+bun run test                  # bun test suite via scripts/test.ts
+bun scripts/test-onboard.ts   # offline distribution and onboarding end-to-end run
 ```
 
-There is no CI, so these local checks are the quality bar. `bun run lint` (oxlint) and `bun run format` (oxfmt, writes TS/TSX in place) are also available; warnings alone do not fail the lint run.
+A pull request that passes all five locally leaves the release run nothing to fix. `bun run lint` (oxlint) and `bun run format` (oxfmt, writes TS/TSX in place) are also available; warnings alone do not fail the lint run. There is no product CI, so these local checks are the quality bar.
+
+Before a release, or when a change touches `package.json`, `patches/`, or the docs, run `bun scripts/preflight.ts` for an advisory drift report (exit 0 clean, exit 1 on errors, exit 1 on warnings too under `--strict`). The finding list is on the [Release process](/project/release/) page.
 
 Testing conventions that matter before submitting:
 
@@ -59,7 +63,7 @@ Testing conventions that matter before submitting:
 
 ## Release machinery
 
-Cutting a release is a maintainer operation. The current procedure lives in [`docs/release.md`](https://github.com/nibblebot/omp-web/blob/main/docs/release.md) and [`scripts/release.ts`](https://github.com/nibblebot/omp-web/blob/main/scripts/release.ts). The "Remaining actions" checklist at the end of `docs/release.md` is carried over from an earlier release plan and predates the current release history (repository creation and the first release are already done), so treat those checkboxes as historical and verify the current version against `package.json` and `CHANGELOG.md` instead of executing them as current work. Changes to the release machinery follow the conventions in `AGENTS.md`.
+Cutting a release is a maintainer operation. The current procedure lives in [`docs/release.md`](https://github.com/nibblebot/omp-web/blob/main/docs/release.md) and [`scripts/release.ts`](https://github.com/nibblebot/omp-web/blob/main/scripts/release.ts), with the [Release process](/project/release/) page as the site guide; `bun scripts/preflight.ts` reports release drift before a run. Changes to the release machinery follow the conventions in `AGENTS.md`.
 
 ## Wire protocol caution
 

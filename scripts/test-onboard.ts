@@ -2,7 +2,7 @@
 /**
  * test-onboard: OFFLINE end-to-end walk of the omp-web distribution + onboarding path.
  *
- * Phase 5 gate (docs/release.md "Remaining actions"): everything proven
+ * Release gate (docs/release.md "Release orchestrator"): everything proven
  * locally before anything is published. Runs in a sandboxed HOME +
  * BUN_INSTALL with a local `bun pm pack` tarball and a local manifest
  * fixture: no network beyond the dependency registry for `bun add` / the
@@ -15,8 +15,8 @@
  *      the skew that broke `bun install -g`-based installs), then install
  *      the tarball into a dedicated pinned dir
  *      (scripts/install-omp-web.ts); assert the symlink points there, the
- *      pinned pi-ai is 18.2.6, and `omp-web --version` prints the version
- *      despite the poisoned store
+ *      pinned pi-ai matches the root package.json pin, and `omp-web
+ *      --version` prints the version despite the poisoned store
  *   3. fixture repo (git init + commit) with one linked worktree
  *   4. first-run config written to ~/.omp-web/config.json (the serve offer's
  *      TTY-gated write, done directly here, workspaceDir only)
@@ -49,6 +49,26 @@ const ROOT = join(import.meta.dir, "..");
 const KEEP = process.argv.includes("--keep");
 const pkgPath = join(ROOT, "package.json");
 const originalPkg = readFileSync(pkgPath, "utf8");
+
+/**
+ * The SDK pin the tarball itself declares (exact versions, no ranges): the
+ * pinned install must reproduce it, whatever version an SDK bump ships.
+ */
+function readSdkPin(): string {
+	const pkg: unknown = JSON.parse(originalPkg);
+	if (pkg === null || typeof pkg !== "object" || !("dependencies" in pkg)) {
+		throw new Error("package.json has no dependencies object");
+	}
+	const deps = pkg.dependencies;
+	if (deps === null || typeof deps !== "object" || !("@oh-my-pi/pi-ai" in deps)) {
+		throw new Error("package.json dependencies have no @oh-my-pi/pi-ai");
+	}
+	const pin = deps["@oh-my-pi/pi-ai"];
+	if (typeof pin !== "string") throw new Error("@oh-my-pi/pi-ai pin is not a string");
+	return pin;
+}
+
+const sdkPin = readSdkPin();
 
 const sandbox = mkdtempSync(join(tmpdir(), "omp-web-onboard-"));
 const home = join(sandbox, "home");
@@ -325,14 +345,23 @@ try {
 		linkTarget === join(dataHome, "install", "node_modules", "omp-web", "dist-bundle", "cli.js"),
 		linkTarget,
 	);
+	const installedPkg: unknown = JSON.parse(
+		readFileSync(
+			join(dataHome, "install", "node_modules", "@oh-my-pi", "pi-ai", "package.json"),
+			"utf8",
+		),
+	);
+	const installedPiAi =
+		installedPkg !== null &&
+		typeof installedPkg === "object" &&
+		"version" in installedPkg &&
+		typeof installedPkg.version === "string"
+			? installedPkg.version
+			: null;
 	check(
-		"pinned pi-ai is 18.2.6 (not the store's 17.3.5)",
-		JSON.parse(
-			readFileSync(
-				join(dataHome, "install", "node_modules", "@oh-my-pi", "pi-ai", "package.json"),
-				"utf8",
-			),
-		).version === "18.2.6",
+		`pinned pi-ai is ${sdkPin} (not the store's 17.3.5)`,
+		installedPiAi === sdkPin,
+		JSON.stringify(installedPiAi),
 	);
 	// P9.1 installed-tree resolution: the provider executables + image
 	// definition must survive pack + pinned install next to cli.js, and the
