@@ -44,6 +44,7 @@ The installer and the updater own one directory tree, separate from all fleet da
 | `<prefix>/install/package.json` | a private anchor project, so Bun never attaches the install to an ancestor project directory |
 | `<prefix>/install/node_modules/omp-web/` | the released `omp-web` package with its own pinned `@oh-my-pi/*` dependencies |
 | `<prefix>/install/node_modules/omp-web/dist-bundle/cli.js` | the bundled entrypoint; the UI assets are copied next to it inside `dist-bundle/` |
+| `<prefix>/install/patches/` | the released dependency patch files, mirrored there by the installer/updater and declared in `<prefix>/install/package.json` (`patchedDependencies`) |
 | `$BUN_INSTALL/bin/omp-web` (default `~/.bun/bin/omp-web`) | the symlink to that entrypoint, the command on your `PATH` |
 
 - The one-line installer downloads `omp-web-<version>.tgz` and `release-manifest.json`, verifies the tarball SHA-256 against the manifest, installs into the pinned directory, and links the command. An existing pinned install is upgraded in place.

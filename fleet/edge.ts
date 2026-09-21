@@ -17,7 +17,11 @@
  *     daemon's RING_DELTAS, finding #5): priming frames (history,
  *     available_commands) and unicast answers (call_result) ride the live
  *     stream with a seq but no ring entry, re-derivable by re-attach
- *     priming / re-POST, exactly like the daemon.
+ *     priming / re-POST, exactly like the daemon. The daemon broadcasts an
+ *     answer to every stream it has, so an id-keyed answer is additionally
+ *     routed to the ONE browser whose POST asked for it (the pipe's copy is
+ *     dropped otherwise), never fanned out to browsers that share nothing
+ *     with the command but the daemon.
  *   - POST /command is the browser uplink: one ClientCommand per request,
  *     202 {commandId} on accept, answers ride /events only. Commands are
  *     routed to a browser by the X-Omp-Client-Id header (the browser binds
@@ -81,6 +85,7 @@
  */
 
 import {
+	COMMAND_DEDUP_WINDOW_MS,
 	OMP_PROTO,
 	SSE_BACKPRESSURE_BYTES,
 	SSE_DELTA_SEQ_START,
@@ -336,6 +341,70 @@ const PLACEHOLDER_HTML = `<!doctype html>
   </body>
 </html>`;
 
+/**
+ * Forwarded commands whose answer is id-keyed (ANSWER_FRAME_TYPES) and so
+ * routable back to the browser that asked. `login_code`/`ui_response` carry
+ * an id too but are answered by no frame, and `list_sessions`/`list_files`
+ * answer with unkeyed frames (sessions/files), so neither is routable.
+ */
+const ANSWERED_FORWARD_TYPES: Record<string, true> = {
+	call: true,
+	daemon_logs: true,
+	daemon_stop: true,
+	daemon_restart: true,
+};
+
+/** The daemon's id-keyed unicast answers (one pipe copy per attached browser). */
+const ANSWER_FRAME_TYPES: Record<string, true> = {
+	call_result: true,
+	daemon_logs_result: true,
+	daemon_control_result: true,
+};
+
+/**
+ * Answer frame type per forwarded command type: the client correlates each
+ * command with exactly one frame type, so a refusal (see
+ * {@link FleetEdge.#recordForwardOrigin}) must speak the same type or the
+ * caller waits out its own timeout.
+ */
+const REFUSED_ANSWER_TYPES: Record<string, string> = {
+	call: "call_result",
+	daemon_logs: "daemon_logs_result",
+	daemon_stop: "daemon_control_result",
+	daemon_restart: "daemon_control_result",
+};
+
+/** Cap on remembered forward origins (the daemon's answer cache is capped the same way). */
+const FORWARD_ORIGIN_CAP = 256;
+
+/**
+ * The browser one forwarded command id belongs to.
+ */
+interface ForwardOrigin {
+	clientId: string;
+	/** The daemon the command was forwarded to (the answer must come back from the same one). */
+	daemonId: string;
+	/** That daemon's process identity at forward time ({@link FleetEdge.#daemonGenerations}). */
+	generation: number | undefined;
+	/**
+	 * The endpoint the command was POSTed to. A respawned local daemon binds a
+	 * fresh port, so this catches a restart even in the unlikely case the new
+	 * child reuses the old pid.
+	 */
+	endpoint: string | undefined;
+	/**
+	 * The bearer token the command was sent with. The supervisor mints a fresh
+	 * random token per spawn attempt, so a rotation proves the process behind
+	 * the entry was replaced even while a pipe redial is still in flight and
+	 * the endpoint looks unchanged. Never leaves this map.
+	 */
+	token: string | undefined;
+	/** The answer reached the origin: later pipe copies of it are consumed, not fanned out. */
+	delivered: boolean;
+	/** Insertion time, for the TTL sweep (the daemon's dedup window). */
+	at: number;
+}
+
 /** The live machinery the edge coordinates. */
 export interface EdgeDeps {
 	registry: Registry;
@@ -492,6 +561,24 @@ export class FleetEdge {
 	readonly #browsers = new Set<BrowserStream>();
 	/** Command-addressable browsers by clientId (ring survives stream replacement). */
 	readonly #clients = new Map<string, BrowserClient>();
+	/**
+	 * Forwarded command id → the browser that asked (per-origin correlation).
+	 * The daemon broadcasts each unicast answer to ALL its streams, so with one
+	 * pipe per browser every browser would otherwise receive every other
+	 * browser's answer; a replayed answer could then settle a pending call in
+	 * the wrong tab. Answers are delivered to the recorded origin only, and a
+	 * duplicate pipe copy of a delivered answer is consumed instead of fanned
+	 * out. Entries expire with the daemon's own dedup window.
+	 */
+	readonly #forwardOrigins = new Map<string, ForwardOrigin>();
+	/**
+	 * Last process identity (`hello_ok.pid`) seen on a pipe per daemonId. The
+	 * daemon's dedup memory is per PROCESS, so a replay that reaches a
+	 * respawned child would re-EXECUTE the command; comparing the generation
+	 * recorded at forward time against the current one is what makes the
+	 * client's replay at-most-once across a restart.
+	 */
+	readonly #daemonGenerations = new Map<string, number>();
 	/** daemonIds mid-wake (respawn/redial); serializes spawn_resume + attach. */
 	readonly #waking = new Set<string>();
 	/** Cached broker rosters per daemonId, merged into the broadcast daemons frame. */
@@ -1644,6 +1731,13 @@ export class FleetEdge {
 				);
 				return;
 			}
+			// Process identity of the daemon behind this pipe. A respawn
+			// presents a different pid, so a command forwarded before the
+			// restart is never replayed into the new process (the dedup
+			// memory that makes a replay safe is per process).
+			if (typeof frame.pid === "number" && Number.isInteger(frame.pid)) {
+				this.#daemonGenerations.set(pipe.daemonId, frame.pid);
+			}
 			// Finding #61: the gate above proved proto === OMP_PROTO, so
 			// forwarding the daemon's REAL hello_ok gives the browser's own
 			// proto check something to run against in roster mode too (the
@@ -1668,6 +1762,9 @@ export class FleetEdge {
 			SESSION_SCOPED_FRAME_TYPES[String(frame.type)] === true || frame.type === "attached"
 				? { ...frame, sessionId: pipe.daemonId }
 				: frame;
+		// Id-keyed answers go to the browser that asked, not to every browser
+		// whose pipe happens to carry the daemon's broadcast copy.
+		if (this.#routeAnswer(stamped)) return;
 		this.#sendDelta(stream, stamped);
 	}
 
@@ -1764,8 +1861,29 @@ export class FleetEdge {
 			return;
 		}
 		// Fire-and-forget accept: answers ride the pipe's /events stream (and
-		// thus this browser's). A dropped POST is recovered by the browser's
-		// pending-map timeout + re-send; the daemon dedups by command id.
+		// thus this browser's), routed back by the origin recorded here. A lost
+		// answer is recovered by the browser re-POSTing the same id: the daemon
+		// dedups it (never re-dispatching) and replays the answer it recorded.
+		const refusal = this.#recordForwardOrigin(
+			stream.client.clientId,
+			pipe.daemonId,
+			{ endpoint: entry.endpoint, token: entry.token },
+			cmd,
+		);
+		if (refusal !== null) {
+			// The daemon was replaced since this id was first forwarded, so its
+			// dedup memory is gone and forwarding again would EXECUTE the
+			// command a second time. Answer by id instead (never silence: the
+			// caller is waiting for exactly this frame type).
+			const answerType = REFUSED_ANSWER_TYPES[String(cmd.type)];
+			const id = typeof cmd.id === "string" ? cmd.id : "";
+			if (answerType !== undefined && id !== "") {
+				this.#sendAnswer(stream, { type: answerType, id, ok: false, error: refusal });
+			} else {
+				this.#sendError(stream, refusal);
+			}
+			return;
+		}
 		fetch(daemonHttpBase(entry.endpoint) + "/command", {
 			method: "POST",
 			headers: { Authorization: `Bearer ${entry.token ?? ""}`, "Content-Type": "application/json" },
@@ -1773,6 +1891,103 @@ export class FleetEdge {
 		}).catch(() => {
 			// Ignore: the pipe's silence deadline owns daemon liveness.
 		});
+	}
+
+	/**
+	 * Remember which browser a forwarded command id belongs to, so its answer
+	 * can be routed back to exactly that browser (see #routeAnswer). The FIRST
+	 * forward wins while the answer is outstanding: a second browser reusing a
+	 * numeric id must not steal the correlation (ids are page-unique, so this
+	 * only guards hand-crafted collisions and a client's own re-POST).
+	 *
+	 * Returns null when the command may be forwarded, or the error message to
+	 * answer an id-keyed refusal with. A replay (the client re-POSTing an id
+	 * whose answer never arrived) is refused when the daemon now serving that
+	 * entry is a different PROCESS: the pid that owned the id is gone with its
+	 * dedup memory, so forwarding would execute the command twice.
+	 */
+	#recordForwardOrigin(
+		clientId: string | null,
+		daemonId: string,
+		identity: { endpoint: string; token: string | undefined },
+		cmd: Record<string, unknown>,
+	): string | null {
+		if (clientId === null) return null;
+		if (ANSWERED_FORWARD_TYPES[String(cmd.type)] !== true) return null;
+		const id = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : undefined;
+		if (id === undefined) return null;
+		const now = Date.now();
+		const { endpoint, token } = identity;
+		const generation = this.#daemonGenerations.get(daemonId);
+		const existing = this.#forwardOrigins.get(id);
+		if (existing !== undefined && !existing.delivered) {
+			const previous = existing.generation;
+			// Every axis is a proof of a DIFFERENT process; each is named in the
+			// refusal so the reason matches what actually changed (a pid clause
+			// on an endpoint change reads as "pid 42 → 42").
+			const changes: string[] = [];
+			if (previous !== undefined && generation !== undefined && previous !== generation) {
+				changes.push(`pid ${previous} → ${generation}`);
+			}
+			if (existing.endpoint !== undefined && existing.endpoint !== endpoint) {
+				changes.push("new endpoint");
+			}
+			if (existing.token !== undefined && token !== undefined && existing.token !== token) {
+				changes.push("rotated credentials");
+			}
+			if (existing.daemonId === daemonId && changes.length > 0) {
+				this.#forwardOrigins.delete(id);
+				return `daemon restarted before this command was answered (${changes.join(", ")}); re-issue it`;
+			}
+			// Still the same process: refresh the TTL so routing survives as
+			// long as the client keeps replaying, and keep the FIRST origin.
+			existing.at = now;
+			return null;
+		}
+		for (const [key, origin] of this.#forwardOrigins) {
+			if (now - origin.at > COMMAND_DEDUP_WINDOW_MS) this.#forwardOrigins.delete(key);
+		}
+		this.#forwardOrigins.set(id, {
+			clientId,
+			daemonId,
+			generation,
+			endpoint,
+			token,
+			delivered: false,
+			at: now,
+		});
+		// Cap the map by dropping DELIVERED records only: forgetting an
+		// outstanding id would make its next replay look like a first forward,
+		// and a first forward into a replaced process executes the command
+		// again. Undelivered records are bounded by the TTL sweep above.
+		for (const [key, origin] of this.#forwardOrigins) {
+			if (this.#forwardOrigins.size <= FORWARD_ORIGIN_CAP) break;
+			if (origin.delivered) this.#forwardOrigins.delete(key);
+		}
+		return null;
+	}
+
+	/**
+	 * Route one id-keyed answer from a daemon pipe to the browser that asked.
+	 * Returns true when the frame was consumed: delivered to the origin, or a
+	 * duplicate copy of an answer that already reached it (the daemon
+	 * broadcasts to every pipe, so every browser's pipe sees every answer).
+	 * False leaves the frame to normal forwarding: an answer this edge never
+	 * forwarded a command for has no origin to correlate with.
+	 */
+	#routeAnswer(frame: Record<string, unknown>): boolean {
+		const id = typeof frame.id === "string" ? frame.id : undefined;
+		if (id === undefined || ANSWER_FRAME_TYPES[String(frame.type)] !== true) return false;
+		const origin = this.#forwardOrigins.get(id);
+		if (origin === undefined) return false;
+		if (origin.delivered) return true;
+		const target = this.#clients.get(origin.clientId)?.stream ?? null;
+		// The origin has no live stream right now (drop-and-resume): keep the
+		// record outstanding so its re-POST's replayed answer still lands.
+		if (target === null) return true;
+		origin.delivered = true;
+		this.#sendAnswer(target, frame);
+		return true;
 	}
 
 	/** Reset the pipe's silence deadline; every SSE unit (event or comment) re-arms it. */
@@ -2013,6 +2228,9 @@ export class FleetEdge {
 			this.#daemonsAggregator.remove(daemonId);
 			// A removed daemon's activity is gone too: never primed, never broadcast.
 			this.#daemonActivity.delete(daemonId);
+			// Its process identity is meaningless once the entry is gone; a
+			// re-added daemon re-registers it from its own hello_ok.
+			this.#daemonGenerations.delete(daemonId);
 			evicted = true;
 		}
 		for (const entry of this.#registry.list()) {

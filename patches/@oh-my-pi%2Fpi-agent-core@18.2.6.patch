@@ -1,0 +1,48 @@
+diff --git a/src/tokenizer.ts b/src/tokenizer.ts
+index 34afa8f742faa1f4823b6a64462c90a18f82c553..e17011538ca43bdf8a95654efe1e41e92425086b 100644
+--- a/src/tokenizer.ts
++++ b/src/tokenizer.ts
+@@ -28,11 +28,11 @@ export function tokenizerEncodingForModel(model: Pick<Model, "tokenizer"> | null
+ /**
+  * `strict` always tries an exact native count (the catalog-resolved tokenizer
+  * when known, o200k_base otherwise), falling back to the byte upper bound when
+- * the loaded addon does not recognize that encoding. `approximate` and
+- * `upperbound` prefer the same exact count for known tokenizer families or
+- * when `PI_TOKENIZER_ACCURATE=1` is set; otherwise they use a cheap heuristic:
+- * `approximate` a bytes/4 guess, `upperbound` the raw byte length (never
+- * undercounts).
++ * the loaded addon does not recognize that encoding. `approximate` is a cheap
++ * bytes/4 guess, regardless of the catalog-resolved tokenizer family, unless
++ * `PI_TOKENIZER_ACCURATE=1` forces the exact count. `upperbound` prefers that
++ * exact count for known tokenizer families or under `PI_TOKENIZER_ACCURATE=1`,
++ * and otherwise uses the raw byte length (never undercounts).
+  */
+ export type TokenCountMode = "strict" | "approximate" | "upperbound";
+ 
+@@ -124,9 +124,10 @@ interface MessageEstimate {
+  * is fixed at construction, so a cached count can never straddle two
+  * encodings. An `Agent` owns one for its active model (swapping the instance
+  * when the model's encoding changes); one-shot flows construct their own for
+- * the model that will be billed. Known tokenizer families use exact native
+- * counts; unknown models keep the fast byte estimate (or o200k when
+- * `PI_TOKENIZER_ACCURATE=1`).
++ * the model that will be billed. Approximate counts stay on the fast byte
++ * estimate for every model; `strict` (and `PI_TOKENIZER_ACCURATE=1`) uses
++ * exact native counts — the catalog-resolved tokenizer when known, o200k
++ * otherwise.
+  */
+ export class Tokenizer {
+ 	readonly #encoding: natives.Encoding | null;
+@@ -151,6 +152,12 @@ export class Tokenizer {
+ 
+ 	countTokens(text: string | string[], mode: TokenCountMode = "approximate"): number {
+ 		if (mode === "strict") return countTokensNat(text, this.#encoding, mode).tokens;
++		// Approximate counting is a byte heuristic by default: a catalog-known
++		// encoding must not drag the hot path (context stats, compaction
++		// thresholds) into the native tokenizer, whose BPE pass is quadratic on
++		// homogeneous long runs (a 900 KiB message costs minutes on
++		// deepseek-v3). `PI_TOKENIZER_ACCURATE=1` opts back into exact counts.
++		if (mode === "approximate" && !accurate) return sumFragments(text, byteEstimate);
+ 		if (!testEnv && this.#encoding !== null) return countTokensNat(text, this.#encoding, mode).tokens;
+ 		if (accurate) return countTokensNat(text, undefined, mode).tokens;
+ 		return sumFragments(text, mode === "upperbound" ? byteLength : byteEstimate);

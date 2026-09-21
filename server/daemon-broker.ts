@@ -1,5 +1,5 @@
 import type { Model } from "@oh-my-pi/pi-ai";
-import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import {
 	MODEL_ROLE_IDS,
 	getKnownRoleIds,
@@ -10,7 +10,7 @@ import {
 	daemonClientForProject,
 	type DaemonBrokerClient,
 } from "@oh-my-pi/pi-coding-agent/launch/client";
-import type { DaemonSnapshot } from "@oh-my-pi/pi-coding-agent/launch/protocol";
+import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/hub";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import {
@@ -161,9 +161,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			dumpTools: session.agent.state.tools.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
-				parameters: isZodSchema(tool.parameters)
-					? zodToWireSchema(tool.parameters)
-					: tool.parameters,
+				parameters: toolWireSchema(tool),
 				examples: tool.examples,
 			})),
 			contextUsage: session.getContextUsage(),
@@ -171,8 +169,13 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			goalModeState: session.getGoalModeState(),
 			planModeEnabled: session.getPlanModeState()?.enabled ?? false,
 			fastModeEnabled: session.isFastModeEnabled(),
-			computerToolEnabled: session.getActiveToolNames().includes("computer"),
-			inspectImageMode: session.inspectImageState().mode,
+			// 18.1.9 turned computer use into an eval prelude gated by the
+			// session-scoped `computer.enabled` setting; there is no longer a
+			// top-level `computer` tool to query.
+			computerToolEnabled: session.settings.get("computer.enabled"),
+			// 18.1.9 removed the inspect_image tool (`read <image>?q=` owns image
+			// questions), so the legacy mode is reported as never-registered.
+			inspectImageMode: "off",
 		};
 	}
 

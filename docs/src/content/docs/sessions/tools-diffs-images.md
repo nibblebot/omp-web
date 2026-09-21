@@ -73,7 +73,6 @@ Image handling is configured in Settings:
 - `images.autoResize` resizes large images to a maximum of 2000x2000 for provider compatibility. On by default.
 - `images.blockImages` prevents images from being sent to providers at all. Off by default.
 - `images.describeForTextModels`, under Model in the Vision group, has a vision model describe attachments when the active model cannot accept images. The description is sent as hidden context next to your message, and the image is also saved in the session's local file space so the agent can inspect it later. On by default.
-- `inspect_image.mode` controls how the agent's own image inspection tool routes an image.
 
 The [configuration reference](/reference/configuration/) owns the full setting list and defaults.
 

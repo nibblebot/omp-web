@@ -50,7 +50,6 @@ import {
 	call,
 	clientId,
 	pendingAttachTarget,
-	pendingCalls,
 	pendingDaemonControl,
 	pendingDaemonLogs,
 	pushDebug,
@@ -60,6 +59,7 @@ import {
 	setConnected,
 	setTransportToken,
 	settleAttachResult,
+	settleCallResult,
 } from "./store/transport";
 
 // ---------------------------------------------------------------------------
@@ -973,15 +973,9 @@ export function connect(): void {
 				}
 				break;
 			}
-			case "call_result": {
-				const pending = pendingCalls.get(frame.id);
-				if (!pending) break; // unknown id (timed out or stale): ignore
-				pendingCalls.delete(frame.id);
-				clearTimeout(pending.timer);
-				if (frame.ok) pending.resolve(frame.data);
-				else pending.reject(new Error(frame.error ?? "call failed"));
+			case "call_result":
+				settleCallResult(frame);
 				break;
-			}
 			case "attach_result":
 				// Finding #28: the edge answers attach with this id-keyed
 				// unicast; unrelated global error frames never settle the

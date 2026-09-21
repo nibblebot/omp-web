@@ -204,6 +204,14 @@ export interface PipeFake {
 	port: number;
 	/** Last-Event-ID seen on each /events open, in open order (null when absent). */
 	lastEventIds(): Array<string | null>;
+	/** Every command POST body this fake received, in arrival order. */
+	commands(): Array<Record<string, unknown>>;
+	/**
+	 * Set the pid the next dial reports in hello_ok: the edge reads it as the
+	 * daemon's process identity, so flipping it models a respawn (the dedup
+	 * memory of the previous process is gone).
+	 */
+	setPid(next: number): void;
 	/** Stop the heartbeat keepalives: the pipe then goes silent (the edge trips its deadline). */
 	pause(): void;
 	/** Drop ONE live stream non-cleanly (index 0 = the connector's control stream, 1 = the pipe). */
@@ -226,6 +234,10 @@ export interface PipeFake {
 export function startPipeFake(opts: { heartbeatMs?: number } = {}): PipeFake {
 	const heartbeatMs = opts.heartbeatMs ?? 30;
 	let paused = false;
+	// A respawn presents a NEW pid on the next dial; tests flip it to model the
+	// daemon's dedup memory (which is per process) being lost with the child.
+	let pid = 4243;
+	const commands: Array<Record<string, unknown>> = [];
 	const encoder = new TextEncoder();
 	const live: Array<(block: string) => void> = [];
 	const controllers: Array<ReadableStreamDefaultController<Uint8Array>> = [];
@@ -246,6 +258,7 @@ export function startPipeFake(opts: { heartbeatMs?: number } = {}): PipeFake {
 						return new Response("malformed", { status: 400 });
 					}
 					const cmd = frame as { type?: string; id?: string };
+					commands.push(cmd as Record<string, unknown>);
 					if (cmd.type === "call" && cmd.id !== undefined) {
 						const seq = nextSeq++;
 						const block = encodeSseEvent(
@@ -286,7 +299,7 @@ export function startPipeFake(opts: { heartbeatMs?: number } = {}): PipeFake {
 								proto: OMP_PROTO,
 								name: "pipe-fake",
 								cwd: FAKE_CWD,
-								pid: 4243,
+								pid,
 								version: "0.0.0-test",
 							},
 							seq++,
@@ -331,6 +344,10 @@ export function startPipeFake(opts: { heartbeatMs?: number } = {}): PipeFake {
 		url: `ws://127.0.0.1:${server.port}`,
 		port: server.port!,
 		lastEventIds: () => [...seen],
+		commands: () => [...commands],
+		setPid: (next: number) => {
+			pid = next;
+		},
 		pause: () => {
 			paused = true;
 		},

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
-import { SETTING_TABS } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import { SETTING_TABS } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import {
 	applySettingSideEffects,
 	buildSettingsModel,
@@ -213,7 +213,6 @@ describe("applySettingSideEffects", () => {
 				void calls.push(`thinking:${String(level)}:${persist === true}`),
 			refreshBaseSystemPrompt: async () => void calls.push("refreshPrompt"),
 			applyMemoryBackend: async () => void calls.push("applyMemory"),
-			applyInspectImageModeChange: async () => void calls.push("applyInspectImage"),
 			agent,
 		};
 

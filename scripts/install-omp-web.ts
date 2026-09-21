@@ -5,7 +5,7 @@
  * Why not `bun install -g <tarball>`: the global store is a FLAT node_modules
  * shared with the `omp` CLI, so it can hold only ONE version of each
  * `@oh-my-pi/*` package. bun keeps whatever omp already installed (e.g.
- * 17.3.5) instead of the tarball's pin (17.1.8), and the version-skewed
+ * 18.1.19) instead of the tarball's pin (18.2.6), and the version-skewed
  * bundle crashes at runtime (missing exports). Installing into a dedicated
  * project dir (`bun add <tarball>`) gives omp-web its OWN node_modules with
  * the exact pinned `@oh-my-pi/*` versions, so the omp CLI is untouched and the
@@ -102,12 +102,28 @@ const addCode = (await add.exited) ?? 1;
 if (addCode !== 0) fail(`bun add failed (exit ${addCode})`);
 if (!existsSync(bundlePath)) fail(`bundle missing after install: ${bundlePath}`);
 
-// 2. Link the bin.
+// 2. Mirror the installed package's `patchedDependencies` into the install dir
+//    and re-resolve. bun applies patches only from the ROOT project's
+//    package.json; the map the tarball itself declares is ignored, so without
+//    this the pinned @oh-my-pi packages would resolve unpatched. The package
+//    ships the mirror script + patch files; a release that predates it ships
+//    no patches at all, so the missing script is not an error.
+const mirror = join(installDir, "node_modules", "omp-web", "scripts", "mirror-patches.ts");
+if (existsSync(mirror)) {
+	const mirrored = Bun.spawn([process.execPath, mirror, installDir], {
+		cwd: installDir,
+		stdout: "inherit",
+		stderr: "inherit",
+	});
+	if (((await mirrored.exited) ?? 1) !== 0) fail("dependency patch mirroring failed");
+}
+
+// 3. Link the bin.
 mkdirSync(binDir, { recursive: true });
 rmSync(binPath, { force: true });
 symlinkSync(bundlePath, binPath);
 
-// 3. Drop any stale `bun install -g` copy (the @oh-my-pi globals stay; they are omp's).
+// 4. Drop any stale `bun install -g` copy (the @oh-my-pi globals stay; they are omp's).
 const stale = Bun.spawn(["bun", "remove", "-g", "omp-web"]);
 const staleCode = (await stale.exited) ?? 1;
 if (staleCode !== 0 && staleCode !== 1)

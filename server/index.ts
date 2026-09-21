@@ -1,4 +1,4 @@
-import { readdir, realpath, stat } from "node:fs/promises";
+import { open, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
@@ -10,9 +10,15 @@ import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-com
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import { cleanup as postmortemCleanup } from "@oh-my-pi/pi-utils/postmortem";
 import type { Server } from "bun";
-import type { AvailableSlashCommand, ClientCommand, SessionListEntry } from "../shared/protocol";
+import type {
+	AvailableSlashCommand,
+	ClientCommand,
+	ServerFrame,
+	SessionListEntry,
+} from "../shared/protocol";
 import {
-	COMMAND_DEDUP_CAP,
+	COMMAND_DEDUP_ANSWER_CAP,
+	COMMAND_DEDUP_ID_CAP,
 	COMMAND_DEDUP_WINDOW_MS,
 	OMP_PROTO,
 	OMP_SESSION_PREFIX,
@@ -542,9 +548,9 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					// Resync BEFORE the call_result: picker success UI (notices,
 					// modal close) must run after the transcript is replaced.
 					await resync();
-					broadcastAnswer({ type: "call_result", id: cmd.id, ok: true, data });
+					answerCommand(cmd.id, { type: "call_result", id: cmd.id, ok: true, data });
 				} else {
-					broadcastAnswer({ type: "call_result", id: cmd.id, ok: true, data });
+					answerCommand(cmd.id, { type: "call_result", id: cmd.id, ok: true, data });
 					await resync();
 				}
 				break;
@@ -665,7 +671,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 						timeoutMs: 30_000,
 					});
 					if (result.op !== "logs") throw new Error("unexpected daemon broker response");
-					broadcastAnswer({
+					answerCommand(cmd.id, {
 						type: "daemon_logs_result",
 						id: cmd.id,
 						ok: true,
@@ -674,7 +680,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 						state: result.state,
 					});
 				} catch (err) {
-					broadcastAnswer({
+					answerCommand(cmd.id, {
 						type: "daemon_logs_result",
 						id: cmd.id,
 						ok: false,
@@ -692,7 +698,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 						timeoutMs: cmd.timeoutMs ?? 10_000,
 					});
 					if (result.op !== "stop") throw new Error("unexpected daemon broker response");
-					broadcastAnswer({
+					answerCommand(cmd.id, {
 						type: "daemon_control_result",
 						id: cmd.id,
 						ok: true,
@@ -703,7 +709,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 						),
 					});
 				} catch (err) {
-					broadcastAnswer({
+					answerCommand(cmd.id, {
 						type: "daemon_control_result",
 						id: cmd.id,
 						ok: false,
@@ -717,7 +723,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					const client = await daemonClientForProject(cmd.projectDir);
 					const result = await client.request({ op: "restart", name: cmd.name });
 					if (result.op !== "restart") throw new Error("unexpected daemon broker response");
-					broadcastAnswer({
+					answerCommand(cmd.id, {
 						type: "daemon_control_result",
 						id: cmd.id,
 						ok: true,
@@ -728,7 +734,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 						),
 					});
 				} catch (err) {
-					broadcastAnswer({
+					answerCommand(cmd.id, {
 						type: "daemon_control_result",
 						id: cmd.id,
 						ok: false,
@@ -746,7 +752,9 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 			// call_result, even without an attached session entry. The
 			// client correlates call() promises only with call_result; a bare
 			// error frame here would leave the promise hanging until timeout.
-			broadcastAnswer({ type: "call_result", id: cmd.id, ok: false, error: String(err) });
+			// Recorded like any other answer, so a re-POST replay reports the
+			// real dispatch failure instead of a fabricated success.
+			answerCommand(cmd.id, { type: "call_result", id: cmd.id, ok: false, error: String(err) });
 		} else {
 			broadcastAnswer({ type: "error", error: String(err) });
 		}
@@ -852,10 +860,50 @@ function r14Authorized(req: Request, srv: Server<RelaySocketData>): boolean {
 
 /**
  * POST /command idempotency: re-accept duplicates of a command id within
- * COMMAND_DEDUP_WINDOW_MS (capped at COMMAND_DEDUP_CAP remembered ids)
- * without re-dispatching. The client's replay covers any lost answer.
+ * COMMAND_DEDUP_WINDOW_MS (ids capped at COMMAND_DEDUP_ID_CAP as a flood
+ * backstop) without re-dispatching, and REPLAY the answer the original
+ * already produced (answers capped at COMMAND_DEDUP_ANSWER_CAP, since each
+ * one can be large).
+ *
+ * The replay is what makes the client's lost-answer recovery work. Answers are
+ * unicast (call_result and friends) and deliberately NOT ringed, so a dropped
+ * answer is recoverable only by re-POSTing the command; a dedup that re-accepts
+ * the duplicate silently would leave that re-POST unanswered forever. The
+ * duplicate still never re-dispatches, so a replayed command executes once: the
+ * id memory therefore outlives every answer, and only the id cap can lose one
+ * (an evicted id would re-execute the command).
  */
 const commandDedup = new Map<string, number>();
+
+/** Recorded answers by command id, replayed to duplicates (same window as the dedup). */
+const commandAnswers = new Map<string, { frame: ServerFrame; at: number }>();
+
+/** Drop the oldest remembered keys past `cap` (insertion order is age order). */
+function capRemembered<K, V>(map: Map<K, V>, cap: number): void {
+	while (map.size > cap) {
+		const oldest = map.keys().next();
+		if (oldest.done) return;
+		map.delete(oldest.value);
+	}
+}
+
+/**
+ * Record one id-keyed answer so a later duplicate POST can replay it, then
+ * broadcast it. Every answer the daemon emits for a command id goes through
+ * here: the replay must return the ORIGINAL outcome (success data or the real
+ * dispatch error), never a re-execution.
+ */
+function answerCommand(id: string | undefined, frame: ServerFrame): void {
+	if (typeof id === "string" && id.length > 0) {
+		const now = Date.now();
+		for (const [key, entry] of commandAnswers) {
+			if (now - entry.at > COMMAND_DEDUP_WINDOW_MS) commandAnswers.delete(key);
+		}
+		commandAnswers.set(id, { frame, at: now });
+		capRemembered(commandAnswers, COMMAND_DEDUP_ANSWER_CAP);
+	}
+	broadcastAnswer(frame);
+}
 
 function commandSeenRecently(id: string | undefined): boolean {
 	if (typeof id !== "string" || id.length === 0) return false;
@@ -865,17 +913,7 @@ function commandSeenRecently(id: string | undefined): boolean {
 	}
 	if (commandDedup.has(id)) return true;
 	commandDedup.set(id, now);
-	if (commandDedup.size > COMMAND_DEDUP_CAP) {
-		let oldestKey: string | undefined;
-		let oldestAt = Infinity;
-		for (const [key, at] of commandDedup) {
-			if (at < oldestAt) {
-				oldestAt = at;
-				oldestKey = key;
-			}
-		}
-		if (oldestKey !== undefined) commandDedup.delete(oldestKey);
-	}
+	capRemembered(commandDedup, COMMAND_DEDUP_ID_CAP);
 	return false;
 }
 
@@ -918,7 +956,13 @@ const server = Bun.serve<RelaySocketData>({
 				return new Response("Malformed JSON", { status: 400 });
 			}
 			// Idempotent accept: a duplicate id is 202 without a re-dispatch.
+			// When the original already answered, the recorded answer is
+			// replayed (the duplicate is the client recovering a lost one); a
+			// duplicate that arrives while the original is still in flight is
+			// a silent accept, since that answer is still coming.
 			if (commandSeenRecently(cmd.id)) {
+				const answer = commandAnswers.get(cmd.id);
+				if (answer !== undefined) broadcastAnswer(answer.frame);
 				return Response.json({ commandId: cmd.id }, { status: 202 });
 			}
 			// Fire-and-forget accept: answers ride the /events stream only.
@@ -1054,6 +1098,37 @@ function acquireSessionLock(file: string | undefined): void {
 	}
 }
 
+/**
+ * Diagnostic note for a refused `--resume`: the SDK rejects a switch whose
+ * recorded cwd differs from this process's (the daemon's project dir is
+ * spawn-bound), and that is the one refusal an operator can neither guess nor
+ * fix from a bare "returned false". Reads the file's head for the session
+ * header, compares resolved paths, and returns an empty string when there is
+ * nothing to add. Never throws.
+ */
+async function resumeCwdNote(file: string, cwd: string): Promise<string> {
+	try {
+		const handle = await open(file, "r");
+		try {
+			const buffer = new Uint8Array(8 * 1024);
+			const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+			const head = new TextDecoder().decode(buffer.subarray(0, bytesRead));
+			for (const line of head.split("\n")) {
+				if (!line.trimStart().startsWith('{"type":"session"')) continue;
+				const header = JSON.parse(line) as { cwd?: unknown };
+				if (typeof header.cwd !== "string" || header.cwd === "") return "";
+				if (path.resolve(header.cwd) === path.resolve(cwd)) return "";
+				return ` (the session was recorded under ${header.cwd}, this daemon runs ${cwd})`;
+			}
+			return "";
+		} finally {
+			await handle.close();
+		}
+	} catch {
+		return "";
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Boot (R8): fresh session (or --resume switch, R3), then the readiness gate
 // clears in the background once provider/model/auth resolution completes.
@@ -1100,7 +1175,7 @@ if (config.resume) {
 			await daemonBroker.broadcastAvailableCommands(bootEntry);
 		} else {
 			console.error(
-				`omp-session: --resume ${config.resume}: session switch returned false; starting fresh`,
+				`omp-session: --resume ${config.resume}: session switch returned false; starting fresh${await resumeCwdNote(config.resume, config.cwd)}`,
 			);
 		}
 	} catch (err) {

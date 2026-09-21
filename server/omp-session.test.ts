@@ -17,6 +17,7 @@ import path from "node:path";
 import type { Subprocess } from "bun";
 import { generateRoomId } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import {
+	COMMAND_DEDUP_ANSWER_CAP,
 	OMP_PROTO,
 	OMP_SESSION_PREFIX,
 	SSE_DELTA_SEQ_START,
@@ -45,6 +46,14 @@ async function waitFor<T>(probe: () => T | null, timeoutMs: number, label: strin
 }
 
 type Frame = { type: string; [key: string]: unknown };
+
+/** The `sessionName` a `state` frame carries (undefined when absent/not a string). */
+function stateSessionName(frame: Frame): string | undefined {
+	if (frame.type !== "state") return undefined;
+	const { state } = frame;
+	if (typeof state !== "object" || state === null || !("sessionName" in state)) return undefined;
+	return typeof state.sessionName === "string" ? state.sessionName : undefined;
+}
 
 /** The daemon's /events URL for an origin (optionally carrying ?token=). */
 function eventsUrlFor(baseUrl: string): string {
@@ -736,31 +745,61 @@ test("removed mux commands fall through to the unknown-command error; read-only 
 	await cleanup();
 }, 30_000);
 
-test("POST /command dedups by id within the window", async () => {
+test("POST /command dedups by id within the window and replays the recorded answer", async () => {
 	const proc = await spawnSession({});
 	running.push(proc);
 	const { port, cleanup } = proc;
 	const base = `http://127.0.0.1:${port}`;
 	const events = await openEvents(base);
 	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
-	// The same command id posted twice: both accept 202, but only ONE dispatch
-	// happens (a single call_result answer, not two).
-	const payload = { type: "call", id: "dup-cmd", method: "getSettings", args: [] };
+	// The same command id posted twice: both accept 202, the method dispatches
+	// ONCE, and the duplicate receives the answer the original produced. The
+	// duplicate is the client recovering a lost answer (call_result is a
+	// non-ringed unicast), so a dedup that re-accepted silently would leave
+	// that recovery re-POST unanswered forever.
+	const payload = { type: "call", id: "dup-cmd", method: "setSessionName", args: ["dup-name"] };
 	const first = await postCommand(base, payload);
 	const second = await postCommand(base, payload);
 	expect(first.status).toBe(202);
 	expect(second.status).toBe(202);
 	await waitFor(
-		() => events.frames.find((f) => f.type === "call_result" && f.id === "dup-cmd") ?? null,
+		() =>
+			events.frames.filter((f) => f.type === "call_result" && f.id === "dup-cmd").length >= 2
+				? true
+				: null,
 		10_000,
-		"call_result for dup-cmd",
+		"replayed call_result for dup-cmd",
 	);
 	// Real delay: the dedup window and answer delivery live in the subprocess;
 	// only observing real time proves the duplicate was NOT re-dispatched.
 	await sleep(1200);
-	expect(events.frames.filter((f) => f.type === "call_result" && f.id === "dup-cmd").length).toBe(
-		1,
+	const answers = events.frames.filter((f) => f.type === "call_result" && f.id === "dup-cmd");
+	expect(answers).toHaveLength(2);
+	expect(answers[1]).toEqual(answers[0]); // the replay is the recorded answer
+	// The post-mutation state resync is the dispatch's own fingerprint: exactly
+	// one broadcast carried the new name, so the duplicate replayed an answer
+	// instead of executing the call again.
+	const resyncs = events.frames.filter((f) => stateSessionName(f) === "dup-name");
+	expect(resyncs).toHaveLength(1);
+
+	// A FAILED dispatch replays its real error the same way: the recovery must
+	// report the daemon's failure, never a fabricated success.
+	const bad = { type: "call", id: "dup-err", method: "no-such-method", args: [] };
+	await postCommand(base, bad);
+	await postCommand(base, bad);
+	await waitFor(
+		() =>
+			events.frames.filter((f) => f.type === "call_result" && f.id === "dup-err").length >= 2
+				? true
+				: null,
+		10_000,
+		"replayed error call_result for dup-err",
 	);
+	const errors = events.frames.filter((f) => f.type === "call_result" && f.id === "dup-err");
+	expect(errors).toHaveLength(2);
+	expect(errors[0].ok).toBe(false);
+	expect(String(errors[0].error)).toContain("Unknown method");
+	expect(errors[1]).toEqual(errors[0]);
 	events.close();
 	await cleanup();
 }, 30_000);
@@ -797,7 +836,15 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 		}
 		await writeFile(fixture, entries.join("\n") + "\n");
 
-		const proc = await spawnSession({ args: ["--resume", fixture] });
+		// The daemon's project dir is spawn-bound and the transcript records its
+		// own cwd in the session header: 18.2.6 refuses a resume whose recorded
+		// cwd differs from the daemon's (switchSession returns false, logged on
+		// stderr, and the daemon starts fresh with an EMPTY history), so the
+		// fixture's dir becomes the session cwd.
+		const proc = await spawnSession({
+			args: ["--resume", fixture],
+			env: { OMP_SESSION_CWD: bigDir },
+		});
 		running.push(proc);
 		const { port, cleanup } = proc;
 		const base = `http://127.0.0.1:${port}`;
@@ -859,6 +906,122 @@ test("a >4 MiB transcript primes as chunked history; the stream stays attached (
 	}
 }, 60_000);
 
+test("--resume of a transcript recorded under another cwd names both cwds in the refusal", async () => {
+	// 18.2.6 refuses a switch whose recorded cwd differs from the daemon's
+	// project dir (SESSION_CWD_CHANGE_REJECTED → switchSession false). The
+	// daemon's own project dir is spawn-bound, so this is unfixable from the
+	// resume flag alone: the message has to say which two cwds disagree.
+	const foreignDir = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-foreign-"));
+	try {
+		const fixture = path.join(foreignDir, "foreign.jsonl");
+		await writeFile(
+			fixture,
+			[
+				JSON.stringify({
+					type: "session",
+					version: 3,
+					id: "foreign",
+					timestamp: new Date().toISOString(),
+					cwd: foreignDir,
+				}),
+				JSON.stringify({
+					type: "message",
+					id: "m0",
+					parentId: null,
+					timestamp: new Date().toISOString(),
+					message: { role: "user", content: [{ type: "text", text: "hi" }] },
+				}),
+			].join("\n") + "\n",
+		);
+		// spawnSession's project dir is its own hermetic tmp, so the resume is
+		// cross-cwd by construction.
+		const proc = await spawnSession({ args: ["--resume", fixture] });
+		running.push(proc);
+		const stderr = await waitFor(
+			() =>
+				proc.stderrTail().includes("session switch returned false") ? proc.stderrTail() : null,
+			10_000,
+			"refused-resume message",
+		);
+		expect(stderr).toContain(`--resume ${fixture}: session switch returned false`);
+		expect(stderr).toContain(`the session was recorded under ${foreignDir}`);
+		expect(stderr).toMatch(/this daemon runs \/tmp\/omp-session-test-[^)]+/);
+		await proc.cleanup();
+	} finally {
+		await rm(foreignDir, { recursive: true, force: true });
+	}
+}, 30_000);
+
+test("computer/inspect_image settings drive the 18.x surface instead of the removed tool APIs", async () => {
+	const proc = await spawnSession({});
+	running.push(proc);
+	const { port, cleanup } = proc;
+	const base = `http://127.0.0.1:${port}`;
+	const events = await openEvents(base);
+	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
+	const latestState = ():
+		| { computerToolEnabled?: boolean; inspectImageMode?: string }
+		| undefined => {
+		const frame = events.frames.filter((f) => f.type === "state").at(-1);
+		if (!frame || frame.type !== "state") return undefined;
+		return frame.state as { computerToolEnabled?: boolean; inspectImageMode?: string };
+	};
+	// 18.1.9 turned computer use into an eval prelude gated by the session-scoped
+	// `computer.enabled` setting and deleted the inspect_image tool, so the legacy
+	// tool getters are gone: the wire field comes from that setting, and the mode
+	// is a frozen "off". This daemon has the eval tool active, so the computer
+	// prelude exists and the toggle applies; the refusal branch (no prelude) is
+	// unit-tested in server/methods.test.ts.
+	const initial = latestState()?.computerToolEnabled;
+	expect(initial).toBe(false);
+	const answer = async (id: string): Promise<Frame> =>
+		waitFor(
+			() => events.frames.find((f) => f.type === "call_result" && f.id === id) ?? null,
+			10_000,
+			`call_result ${id}`,
+		);
+	await postCommand(base, {
+		type: "call",
+		id: "ct-on",
+		method: "setComputerToolEnabled",
+		args: [true],
+	});
+	expect((await answer("ct-on")).ok).toBe(true);
+	await waitFor(
+		() => (latestState()?.computerToolEnabled === true ? true : null),
+		10_000,
+		"computer.enabled → true",
+	);
+	await postCommand(base, {
+		type: "call",
+		id: "ct-off",
+		method: "setComputerToolEnabled",
+		args: [false],
+	});
+	expect((await answer("ct-off")).ok).toBe(true);
+	await waitFor(
+		() => (latestState()?.computerToolEnabled === false ? true : null),
+		10_000,
+		"computer.enabled → false",
+	);
+	// The removed tool's wire field stays frozen and the legacy setter refuses
+	// loudly instead of reporting a success nothing applied.
+	expect(latestState()?.inspectImageMode).toBe("off");
+	await postCommand(base, {
+		type: "call",
+		id: "ii-1",
+		method: "setInspectImageMode",
+		args: ["auto"],
+	});
+	const tombstone = await answer("ii-1");
+	expect(tombstone.ok).toBe(false);
+	expect(String(tombstone.error)).toContain("inspect_image");
+	// Both refusals are answers, not crashes: the stream stays attached.
+	expect(events.frames.some((f) => f.type === "error")).toBe(false);
+	events.close();
+	await cleanup();
+}, 30_000);
+
 test("small transcripts keep the single-frame history shape (no `final` field)", async () => {
 	const proc = await spawnSession({});
 	running.push(proc);
@@ -908,7 +1071,12 @@ test("backpressure drop is in-band: stream_reset precedes the end; the daemon st
 		}
 		await writeFile(fixture, entries.join("\n") + "\n");
 
-		const proc = await spawnSession({ args: ["--resume", fixture] });
+		// Same cwd alignment as the chunked-history fixture above: the resumed
+		// transcript must record the daemon's project dir or it loads empty.
+		const proc = await spawnSession({
+			args: ["--resume", fixture],
+			env: { OMP_SESSION_CWD: bigDir },
+		});
 		running.push(proc);
 		const { port, cleanup } = proc;
 		const base = `http://127.0.0.1:${port}`;
@@ -948,6 +1116,40 @@ test("backpressure drop is in-band: stream_reset precedes the end; the daemon st
 		await rm(bigDir, { recursive: true, force: true }).catch(() => {});
 	}
 }, 60_000);
+
+test("a deduped id survives a burst past COMMAND_DEDUP_ANSWER_CAP: the replay is re-accepted, never re-executed", async () => {
+	const proc = await spawnSession({});
+	running.push(proc);
+	const { port, cleanup } = proc;
+	const base = `http://127.0.0.1:${port}`;
+	const events = await openEvents(base);
+	await waitForFrame(events.frames, "attached", 10_000, "attached frame");
+	// A browser recovering a lost answer re-POSTs the same id every 5s for the
+	// whole dedup window, so id memory has to outlive a window of other
+	// commands: answers are capped tightly (they can be large), ids are not.
+	const payload = { type: "call", id: "cap-a", method: "setSessionName", args: ["cap-name"] };
+	await postCommand(base, payload);
+	await waitForFrame(events.frames, "call_result", 10_000, "initial call_result");
+	// Distinct ids past the answer cap, oldest-first: pre-fix these evicted
+	// cap-a itself, and the replay below dispatched the call a SECOND time.
+	for (let i = 0; i < COMMAND_DEDUP_ANSWER_CAP + 6; i++) {
+		const res = await postCommand(base, {
+			type: "call",
+			id: `cap-fill-${i}`,
+			method: "getSettings",
+			args: [],
+		});
+		expect(res.status).toBe(202);
+	}
+	// The replay (the client's recovery attempt) must NOT re-dispatch, which
+	// only the dispatch fingerprint can show: the post-mutation resync.
+	await postCommand(base, payload);
+	await sleep(1200); // real time: the subprocess owns the dedup maps
+	expect(events.frames.filter((f) => stateSessionName(f) === "cap-name")).toHaveLength(1);
+	expect(events.frames.filter((f) => f.type === "call_result" && f.id === "cap-a")).toHaveLength(1);
+	events.close();
+	await cleanup();
+}, 30_000);
 
 test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (finding #2)", async () => {
 	// The finding: primeConsumer always sent the full priming, and then, for

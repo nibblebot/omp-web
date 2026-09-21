@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { shrinkForReplication } from "@oh-my-pi/pi-coding-agent/collab/replication-shrink";
 import {
 	SSE_BACKPRESSURE_BYTES,
 	SSE_DELTA_SEQ_START,
@@ -66,6 +65,18 @@ const sseEncoder = new TextEncoder();
  * connect → terminate → reconnect loop, since priming is never ringed.
  */
 const HISTORY_CHUNK_BYTES = 512 * 1024;
+/**
+ * Per-message ceiling for the history degrade pipeline, restoring the bound
+ * 17.1.8's collab replication applied here (`MAX_REPLICATED_PAYLOAD_BYTES`).
+ * A message at or under this ceiling ships verbatim even when it exceeds the
+ * frame batch target above: it takes a paced frame of its own, which still
+ * stays well under the 4 MiB backpressure cap. Only a message over the
+ * ceiling degrades — image blocks first, then progressive clipping — and only
+ * until it is back under the ceiling. Without this split, every large message
+ * would be clipped to the first shrink pass and a transcript of large-but-
+ * legal messages would collapse into one small frame.
+ */
+const MESSAGE_REPLICATION_CEILING_BYTES = 1024 * 1024;
 /**
  * Headroom the paced priming loop keeps below the hard cap: a slow reader
  * mid-prime hovers near the cap, and a concurrent keepalive ping or small
@@ -193,14 +204,77 @@ function messageWithoutImages(message: AgentMessage): AgentMessage {
 }
 
 /**
+ * Tightening passes for {@link shrinkMessageFrame}: each clamps every string
+ * and array to a smaller budget, and the first pass whose output fits
+ * {@link MESSAGE_REPLICATION_CEILING_BYTES} wins. The cadence mirrors the
+ * collab replication shrink 17.1.8 applied here, kept local because 18.1.9
+ * dropped that generic helper (session entries and agent events now own their
+ * own bounds) and SSE history frames are omp-web's own wire.
+ */
+const MESSAGE_SHRINK_PASSES: ReadonlyArray<{ stringCap: number; arrayLimit: number }> = [
+	{ stringCap: 64 * 1024, arrayLimit: 256 },
+	{ stringCap: 16 * 1024, arrayLimit: 128 },
+	{ stringCap: 4 * 1024, arrayLimit: 64 },
+	{ stringCap: 1 * 1024, arrayLimit: 32 },
+	{ stringCap: 256, arrayLimit: 16 },
+	{ stringCap: 64, arrayLimit: 1 },
+];
+
+const ELISION_RESERVE = 80;
+
+/**
+ * Deep-copy `value`, head-truncating strings longer than `stringCap` and
+ * head-clipping arrays longer than `arrayLimit`, with elision markers the
+ * client renders verbatim. Only string leaves and array tails change, so the
+ * copy stays parseable as the AgentMessage it came from.
+ */
+function shrinkWalk(value: unknown, stringCap: number, arrayLimit: number): unknown {
+	if (typeof value === "string") {
+		if (value.length <= stringCap) return value;
+		const head = Math.max(0, stringCap - ELISION_RESERVE);
+		return `${value.slice(0, head)}\n…[${value.length - head} chars elided for history frame]`;
+	}
+	if (Array.isArray(value)) {
+		const keep = Math.min(value.length, arrayLimit);
+		const out: unknown[] = [];
+		for (let i = 0; i < keep; i++) out.push(shrinkWalk(value[i], stringCap, arrayLimit));
+		if (value.length > keep) out.push(`…[${value.length - keep} items elided for history frame]`);
+		return out;
+	}
+	if (value !== null && typeof value === "object") {
+		const source = value as Record<string, unknown>;
+		const out: Record<string, unknown> = {};
+		for (const key in source) out[key] = shrinkWalk(source[key], stringCap, arrayLimit);
+		return out;
+	}
+	return value;
+}
+
+/**
+ * Bound one history message under {@link MESSAGE_REPLICATION_CEILING_BYTES},
+ * preserving its shape. Returns the last pass's output when even the tightest
+ * budget does not fit, mirroring the pre-18.1.9 helper: the frame still ships,
+ * because a dropped message silently truncates the client's transcript.
+ */
+function shrinkMessageFrame(message: AgentMessage): AgentMessage {
+	let shrunk: unknown = message;
+	for (const pass of MESSAGE_SHRINK_PASSES) {
+		shrunk = shrinkWalk(message, pass.stringCap, pass.arrayLimit);
+		if (JSON.stringify(shrunk).length <= MESSAGE_REPLICATION_CEILING_BYTES) break;
+	}
+	return shrunk as AgentMessage;
+}
+
+/**
  * Slice `messages` into byte-bounded `history` frames (mirrors collab-host's
  * #sendSnapshotChunks). A transcript whose single frame fits one chunk keeps
  * the original shape, one frame with no `final` field (back-compatible with
  * pre-chunking clients); a larger transcript ships as sequential frames the
- * client accumulates until the `final: true` chunk. A single message bigger
- * than one chunk degrades in place of shipping an oversized frame: image
- * blocks are stripped, then long strings are shrunk like collab replication,
- * so the stream survives regardless.
+ * client accumulates until the `final: true` chunk. A single message over the
+ * {@link MESSAGE_REPLICATION_CEILING_BYTES} degrades in place of shipping an
+ * oversized frame: image blocks are stripped, then long strings and array
+ * tails are clipped, so the stream survives regardless. A message between the
+ * frame budget and that ceiling stays verbatim in a paced frame of its own.
  */
 export function chunkHistory(
 	messages: AgentMessage[],
@@ -218,11 +292,11 @@ export function chunkHistory(
 	for (const message of messages) {
 		let wire: AgentMessage = message;
 		let bytes = JSON.stringify(wire).length;
-		if (bytes > HISTORY_CHUNK_BYTES) {
+		if (bytes > MESSAGE_REPLICATION_CEILING_BYTES) {
 			wire = messageWithoutImages(wire);
 			bytes = JSON.stringify(wire).length;
-			if (bytes > HISTORY_CHUNK_BYTES) {
-				wire = shrinkForReplication(wire);
+			if (bytes > MESSAGE_REPLICATION_CEILING_BYTES) {
+				wire = shrinkMessageFrame(wire);
 				bytes = JSON.stringify(wire).length;
 			}
 		}

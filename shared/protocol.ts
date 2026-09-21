@@ -4,16 +4,23 @@ import type { ContextUsage } from "@oh-my-pi/pi-coding-agent";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
-import type { InspectImageMode } from "@oh-my-pi/pi-coding-agent/utils/inspect-image-mode";
 import type { FileEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import type { AvailableSlashCommandSource } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
-import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
+import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools";
 
 // ---------------------------------------------------------------------------
 // Local copies of the RPC wire types (structurally verbatim from the
 // @oh-my-pi/pi-coding-agent@17.1.8 RPC mode's protocol type definitions).
 // The server no longer spawns the RPC child, so the protocol owns these.
 // ---------------------------------------------------------------------------
+
+/**
+ * Vision-delegation mode for the legacy `inspect_image` tool (verbatim
+ * 17.1.8 union). The SDK removed that tool in 18.1.9 (`read <image>?q=` owns
+ * image questions now), so the wire field stays frozen while the server
+ * reports the tool's never-registered state.
+ */
+export type InspectImageMode = "auto" | "on" | "off";
 
 /** Pick of Model the model picker consumes (was the RPC client's ModelInfo). */
 export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
@@ -84,9 +91,12 @@ export interface WebSessionState {
 	planModeEnabled: boolean;
 	/** Priority-service flag for the active model family (isFastModeEnabled()). */
 	fastModeEnabled: boolean;
-	/** Whether the computer tool is exposed (getActiveToolNames().includes("computer")). */
+	/** Whether computer use is enabled for the session (settings.get("computer.enabled")). */
 	computerToolEnabled: boolean;
-	/** Effective inspect_image mode (inspectImageState().mode). */
+	/**
+	 * Effective inspect_image mode. The SDK removed that tool in 18.1.9, so the
+	 * server reports "off" (never registered); the wire field stays frozen.
+	 */
 	inspectImageMode: InspectImageMode;
 }
 
@@ -222,9 +232,20 @@ export const SSE_RING_BYTES = 8 * 1024 * 1024;
 export const SSE_DELTA_SEQ_START = 1024;
 /** Per-stream enqueue cap: beyond it the stream is terminated (drop-and-resume). */
 export const SSE_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
-/** POST /command idempotency: dedup window and remembered-id cap. */
+/**
+ * POST /command idempotency: how long an id is remembered, how many recorded
+ * ANSWERS stay replayable, and the flood backstop on remembered ids.
+ * Remembering an id is what makes a re-POST safe (it is re-accepted, never
+ * re-dispatched), and a browser recovering a lost answer re-POSTs every 5s for
+ * the whole window, so id memory has to cover a window of real traffic rather
+ * than a handful of commands: evicting a live id early would let the replay
+ * execute the command twice. Recorded answers can be large, so their own cap
+ * stays small; an evicted answer degrades a replay to "accepted, no answer"
+ * (the caller's deadline settles it) and never to a re-execution.
+ */
 export const COMMAND_DEDUP_WINDOW_MS = 60_000;
-export const COMMAND_DEDUP_CAP = 64;
+export const COMMAND_DEDUP_ANSWER_CAP = 64;
+export const COMMAND_DEDUP_ID_CAP = 4_096;
 
 /** Prefix of the `OMP_SESSION|` stdout contract lines (R6b). */
 export const OMP_SESSION_PREFIX = "OMP_SESSION|";
@@ -416,7 +437,8 @@ export type WebMethodName =
 // login_code/ui_response implicitly target it. `attach` exists only at the
 // fleet edge, where it selects the daemon to proxy.
 // Every command carries a client-supplied `id` for POST idempotency: the
-// server dedups within a window (COMMAND_DEDUP_CAP / COMMAND_DEDUP_WINDOW_MS)
+// server dedups within a window (COMMAND_DEDUP_WINDOW_MS), remembering ids up
+// to COMMAND_DEDUP_ID_CAP and replayable answers up to COMMAND_DEDUP_ANSWER_CAP,
 // and re-accepts duplicates with 202; answers ride the /events stream.
 export type ClientCommand =
 	| { type: "call"; id: string; method: WebMethodName; args?: unknown[]; streamId?: number }

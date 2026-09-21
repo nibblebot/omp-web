@@ -6,15 +6,16 @@ import {
 	getDefault,
 	getType,
 	SETTINGS_SCHEMA,
-	SETTING_TABS,
 	type SettingPath,
-	type SettingTab,
-	TAB_METADATA,
 } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
 import {
 	getSettingsForTab,
+	SETTING_TABS,
 	type SettingDef,
-} from "@oh-my-pi/pi-coding-agent/modes/components/settings-defs";
+	type SettingTab,
+	TAB_METADATA,
+} from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import {
 	setExcludedSearchProviders,
 	setSearchProviderOrder,
@@ -42,6 +43,14 @@ import type {
 // IS the TUI semantics; this module never touches the filesystem itself.
 // ---------------------------------------------------------------------------
 
+/**
+ * Setting definitions come from the SDK's host adapter (schema + UI metadata +
+ * live visibility conditions) combined with pi-tui's overlay grammar. Both are
+ * built once: the entries are static for the process, and pi-tui memoizes the
+ * derived defs against this array's identity.
+ */
+const settingsHost = createSettingsHost();
+
 /** Structural slice of AgentSession this module calls (kept narrow for testability). */
 export interface AgentSessionLike {
 	setSteeringMode(mode: "all" | "one-at-a-time"): void;
@@ -51,7 +60,6 @@ export interface AgentSessionLike {
 	setThinkingLevel(level: never, persist?: boolean): void;
 	refreshBaseSystemPrompt(): Promise<void>;
 	applyMemoryBackend(): Promise<void>;
-	applyInspectImageModeChange(): Promise<unknown>;
 	agent: {
 		temperature?: number;
 		topP?: number;
@@ -160,9 +168,6 @@ export async function applySettingSideEffects(
 		case "memory.backend":
 			await session.applyMemoryBackend();
 			break;
-		case "inspect_image.mode":
-			await session.applyInspectImageModeChange();
-			break;
 		case "temperature":
 		case "topP":
 		case "topK":
@@ -228,13 +233,15 @@ function defToItem(
 	themes: string[],
 	providers: string[],
 ): SettingsItem {
-	const value = settings.get(def.path);
+	// Host-supplied def paths are plain strings; the schema owns the key space.
+	const path = def.path as SettingPath;
+	const value = settings.get(path);
 	const base = {
 		path: def.path,
 		label: def.label,
 		description: def.description,
 		value,
-		changed: settingChanged(value, getDefault(def.path)),
+		changed: settingChanged(value, getDefault(path)),
 	};
 	switch (def.type) {
 		case "boolean":
@@ -268,7 +275,7 @@ function buildGroups(
 	// section layout; groups that end up with zero visible items never appear.
 	const groups: SettingsGroup[] = [];
 	let current: SettingsGroup | null = null;
-	for (const def of getSettingsForTab(tab)) {
+	for (const def of getSettingsForTab(settingsHost.entries, tab)) {
 		if (def.condition && !def.condition()) continue;
 		const item = defToItem(def, session, themes, providers);
 		if (!def.group) {

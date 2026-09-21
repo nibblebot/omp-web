@@ -1,3 +1,4 @@
+import { COMMAND_DEDUP_WINDOW_MS } from "../../shared/protocol";
 import type { ClientCommand, DaemonInfo, ServerFrame, WebMethodName } from "../../shared/protocol";
 import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
 import { setState, state } from "../state";
@@ -75,15 +76,75 @@ export function postCommand(cmd: ClientCommand): Promise<void> {
 // ---------------------------------------------------------------------------
 // call() relay: id-keyed promise map resolved by matching call_result frames.
 // ---------------------------------------------------------------------------
-let nextCallId = 1;
-export const pendingCalls = new Map<
-	string,
-	{ resolve: (data: unknown) => void; reject: (err: Error) => void; timer: number }
->();
+
+/**
+ * Replay cadence for a call whose answer never arrived. call_result is a
+ * non-ringed unicast answer (server/sse-delivery.ts), so when the daemon-pipe
+ * downlink drops it — drop-and-resume backpressure, an emission while the pipe
+ * is mid-redial, a lost accept — nothing else replays it and the pending call
+ * would hang until its own timeout. Re-POSTing the SAME command id recovers
+ * it: the daemon dedups the id within COMMAND_DEDUP_WINDOW_MS (never
+ * re-dispatching) and replays the answer it recorded, so a replay can neither
+ * execute the command twice nor report a different outcome.
+ */
+const CALL_REPLAY_INTERVAL_MS = 5_000;
+
+/** One pending call: its answer settles it, its own command recovers it. */
+interface PendingCall {
+	resolve: (data: unknown) => void;
+	reject: (err: Error) => void;
+	/** Timeout handle (0 when the caller passed timeoutMs 0: no deadline). */
+	timer: number;
+	/** Replay handle (0 while no replay is armed). */
+	replayTimer: number;
+	/** The exact command to re-POST: verbatim, same id (the dedup key). */
+	cmd: Extract<ClientCommand, { type: "call" }>;
+	/** When the original POST went out: the at-most-once bound for replays. */
+	firstPostAt: number;
+}
+
+export const pendingCalls = new Map<string, PendingCall>();
+
+function clearCallTimers(pending: PendingCall): void {
+	if (pending.timer !== 0) clearTimeout(pending.timer);
+	if (pending.replayTimer !== 0) clearTimeout(pending.replayTimer);
+}
+
+/**
+ * Settle one pending call from its correlated call_result (connect()'s mux
+ * routes the frame here). Unknown ids — timed out, already settled by an
+ * earlier copy of the answer, stale session — are ignored.
+ */
+export function settleCallResult(frame: Extract<ServerFrame, { type: "call_result" }>): void {
+	const pending = pendingCalls.get(frame.id);
+	if (!pending) return; // unknown id (timed out or stale): ignore
+	pendingCalls.delete(frame.id);
+	clearCallTimers(pending);
+	if (frame.ok) pending.resolve(frame.data);
+	else pending.reject(new Error(frame.error ?? "call failed"));
+}
+
+/** Re-POST an unanswered call, then re-arm: a recovered answer may be lost again. */
+function scheduleCallReplay(id: string): void {
+	const pending = pendingCalls.get(id);
+	if (!pending) return;
+	pending.replayTimer = window.setTimeout(() => {
+		const current = pendingCalls.get(id);
+		if (!current) return;
+		current.replayTimer = 0;
+		// At-most-once bound: past the dedup window the daemon no longer
+		// remembers the id, so a re-POST could EXECUTE the command again.
+		if (Date.now() - current.firstPostAt > COMMAND_DEDUP_WINDOW_MS) return;
+		// A failed replay is not fatal: the call keeps its own deadline, and
+		// the next tick re-POSTs again (the daemon replays its answer).
+		void postCommand(current.cmd).catch(() => {});
+		scheduleCallReplay(id);
+	}, CALL_REPLAY_INTERVAL_MS);
+}
 
 export function rejectPendingCalls(err: Error): void {
 	for (const [id, p] of pendingCalls) {
-		clearTimeout(p.timer);
+		clearCallTimers(p);
 		p.reject(err);
 		pendingCalls.delete(id);
 	}
@@ -110,29 +171,45 @@ export function call(
 		reject(new Error("Not connected"));
 		return promise;
 	}
-	const id = `c${nextCallId++}`;
-	// OAuth/manual-code flows exceed any sane default; login passes 0.
-	const timer =
-		timeoutMs > 0
-			? window.setTimeout(() => {
-					pendingCalls.delete(id);
-					reject(new Error(`call "${method}" timed out`));
-				}, timeoutMs)
-			: 0;
-	pendingCalls.set(id, { resolve, reject, timer });
+	// Page-unique: ids from two tabs must never collide. The daemon dedups
+	// POSTs by id alone, so a shared id would swallow the other tab's command
+	// and a replayed answer would settle the wrong tab's pending call.
+	const id = `c${crypto.randomUUID()}`;
 	// streamId tags server-side bash/python chunk frames so the client can
 	// route them to the in-flight chat item (the bash item id).
-	postCommand({
+	const cmd = {
 		type: "call",
 		id,
 		method,
 		args,
 		...(streamId !== undefined ? { streamId } : {}),
-	} satisfies ClientCommand).catch((err) => {
+	} satisfies ClientCommand;
+	// OAuth/manual-code flows exceed any sane default; login passes 0.
+	const timer =
+		timeoutMs > 0
+			? window.setTimeout(() => {
+					const pending = pendingCalls.get(id);
+					if (pending) clearCallTimers(pending);
+					pendingCalls.delete(id);
+					reject(new Error(`call "${method}" timed out`));
+				}, timeoutMs)
+			: 0;
+	pendingCalls.set(id, {
+		resolve,
+		reject,
+		timer,
+		replayTimer: 0,
+		cmd,
+		firstPostAt: Date.now(),
+	});
+	postCommand(cmd).catch((err) => {
+		const pending = pendingCalls.get(id);
+		if (!pending) return; // a racing answer already settled the call
 		pendingCalls.delete(id);
-		clearTimeout(timer);
+		clearCallTimers(pending);
 		reject(err instanceof Error ? err : new Error(String(err)));
 	});
+	scheduleCallReplay(id);
 	return promise;
 }
 

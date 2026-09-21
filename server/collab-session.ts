@@ -108,8 +108,11 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 				};
 			},
 			emitNotice: (level, message) => notifyEvent(entry, message, level),
-			promptFromGuest: (text, images, fromName) =>
-				session.promptCustomMessage(
+			// 18.x returns whether the prompt was picked up; the guest port is
+			// fire-and-forget (collab-host only observes rejections), so the
+			// disposition is discarded.
+			promptFromGuest: async (text, images, fromName) => {
+				await session.promptCustomMessage(
 					{
 						customType: COLLAB_PROMPT_MESSAGE_TYPE,
 						content: images?.length ? [{ type: "text", text }, ...images] : text,
@@ -118,7 +121,8 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 						attribution: "user",
 					},
 					{ streamingBehavior: "steer", queueChipText: text },
-				),
+				);
+			},
 			abort: () => session.abort({ reason: USER_INTERRUPT_LABEL }),
 			listAgents: () => {
 				const refs: CollabAgentRef[] = [];

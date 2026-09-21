@@ -9,7 +9,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SSE_DELTA_SEQ_START } from "../shared/protocol";
+import { SSE_DELTA_SEQ_START, type ServerFrame } from "../shared/protocol";
 import type { FleetConfig } from "./config";
 import { DaemonConnector } from "./connector";
 import { FleetEdge } from "./edge";
@@ -28,6 +28,7 @@ import {
 	startPipeFake,
 	waitFor,
 	cleanupTempDirs,
+	type BrowserSocket,
 } from "./edge.testkit";
 
 afterAll(cleanupTempDirs);
@@ -493,6 +494,665 @@ describe("edge pipe liveness and replay", () => {
 			);
 			expect(releases).toBe(retains);
 			expect(releases).toBeGreaterThanOrEqual(1);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("an id-keyed answer reaches only the browser that asked, even when two browsers reuse the command id", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-answer-origin-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "answer-origin",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 3000);
+		const config: FleetConfig = {
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge({
+			registry,
+			connector,
+			supervisor,
+			config,
+			eventLog: new FleetEventLog(),
+			fleet: {
+				port: 0,
+				startedAt: Date.now(),
+				statePath: "/tmp/fleet-test-state.json",
+				configPath: null,
+			},
+		});
+		const served = serveEdge(edge);
+		try {
+			const browserA = await openBrowser(served.port);
+			await browserA.waitForFrame((f) => f.type === "roster", "roster A");
+			await browserA.send({ type: "attach", sessionId: entry.daemonId });
+			await browserA.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached A",
+			);
+			const browserB = await openBrowser(served.port);
+			await browserB.waitForFrame((f) => f.type === "roster", "roster B");
+			await browserB.send({ type: "attach", sessionId: entry.daemonId });
+			await browserB.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached B",
+			);
+			const answersFor = (browser: BrowserSocket): ServerFrame[] =>
+				browser.frames.filter((f) => f.type === "call_result" && f.id === "c1");
+
+			// The daemon answers on EVERY stream it has (one pipe per browser), so
+			// B's pipe carries a copy of A's answer too. Only A asked for it, so
+			// only A may settle from it; the copy is consumed, never fanned out.
+			await browserA.send({ type: "call", id: "c1", method: "prompt", args: ["from A"] });
+			await browserA.waitForFrame((f) => f.type === "call_result" && f.id === "c1", "A's answer");
+			await sleep(300); // real time: a fan-out copy would land in this window
+			expect(answersFor(browserA)).toHaveLength(1);
+			expect(answersFor(browserB)).toHaveLength(0);
+
+			// B reuses A's id (the numeric-id collision the old page-local
+			// counter made routine): its forward re-claims the correlation, so B
+			// settles from its OWN answer and A gets no second copy.
+			await browserB.send({ type: "call", id: "c1", method: "prompt", args: ["from B"] });
+			await browserB.waitForFrame((f) => f.type === "call_result" && f.id === "c1", "B's answer");
+			await sleep(300);
+			expect(answersFor(browserB)).toHaveLength(1);
+			expect(answersFor(browserA)).toHaveLength(1);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("a replayed command is refused by id once the daemon is a different process (never re-executed)", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-replay-restart-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
+		const config: FleetConfig = {
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge(
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
+			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
+		);
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "replay-restart",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
+			// daemon_logs is forwarded and id-keyed, and this fake answers only
+			// `call` commands, so it stands in for an answer lost in flight.
+			const lost = { type: "daemon_logs", id: "lost-1", projectDir: FAKE_CWD, name: "pipe-fake" };
+			await browser.send(lost);
+			await waitFor(
+				() => (daemon.commands().length === 1 ? "forwarded" : null),
+				3000,
+				"first forward",
+			);
+
+			// The child dies and is respawned: the redial presents a new pid, so
+			// the dedup memory behind id lost-1 is gone with the old process.
+			daemon.setPid(9999);
+			daemon.killStream(1);
+			await waitFor(
+				() => (daemon.lastEventIds().length === 3 ? "redial" : null),
+				3000,
+				"pipe redial",
+			);
+			await waitFor(
+				() => (daemon.commands().length === 1 ? "no extra forward" : null),
+				300,
+				"no forward while re-priming",
+			);
+
+			// The browser replays the same id (its lost-answer recovery). It must
+			// be answered by id with a refusal, and NEVER reach the new child:
+			// forwarding it would execute the command a second time.
+			await browser.send(lost);
+			await browser.waitForFrame(
+				(f) => f.type === "daemon_logs_result" && f.id === "lost-1",
+				"refusal answer",
+			);
+			await sleep(300); // real time: a forward would have landed in this window
+			expect(daemon.commands()).toHaveLength(1);
+			const refusals = browser.frames.filter(
+				(f): f is Extract<ServerFrame, { type: "daemon_logs_result" }> =>
+					f.type === "daemon_logs_result" && f.id === "lost-1",
+			);
+			expect(refusals).toHaveLength(1);
+			expect(refusals[0].ok).toBe(false);
+			// The refusal names the axis that proved the restart: this one is
+			// the pid, so no endpoint/credential clause belongs in it.
+			expect(String(refusals[0].error)).toContain("daemon restarted");
+			expect(String(refusals[0].error)).toContain("pid 4243 → 9999");
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("a replay is still forwarded while the same process serves the daemon (its dedup answers it)", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-replay-same-pid-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
+		const config: FleetConfig = {
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge(
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
+			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
+		);
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "replay-same-pid",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
+			// Same lost-answer setup as above, but the pipe comes back on the SAME
+			// pid (a transient redial, not a respawn): the daemon still holds the
+			// id, so the replay must be forwarded rather than refused (a refusal
+			// here would break recovery for the common case).
+			const lost = { type: "daemon_logs", id: "lost-2", projectDir: FAKE_CWD, name: "pipe-fake" };
+			await browser.send(lost);
+			await waitFor(
+				() => (daemon.commands().length === 1 ? "forwarded" : null),
+				3000,
+				"first forward",
+			);
+			daemon.killStream(1);
+			await waitFor(
+				() => (daemon.lastEventIds().length === 3 ? "redial" : null),
+				3000,
+				"pipe redial",
+			);
+			await browser.send(lost);
+			await waitFor(
+				() => (daemon.commands().length === 2 ? "replay forwarded" : null),
+				3000,
+				"replay forward",
+			);
+			await sleep(300);
+			expect(browser.frames.some((f) => f.type === "daemon_logs_result" && f.id === "lost-2")).toBe(
+				false,
+			);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("a replay is refused when the daemon's endpoint changed even if the pid is reused", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-replay-endpoint-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
+		const config: FleetConfig = {
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge(
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
+			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
+		);
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "replay-endpoint",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
+			const lost = { type: "daemon_logs", id: "lost-3", projectDir: FAKE_CWD, name: "pipe-fake" };
+			await browser.send(lost);
+			await waitFor(
+				() => (daemon.commands().length === 1 ? "forwarded" : null),
+				3000,
+				"first forward",
+			);
+			// The child is respawned onto a different port while the pid happens
+			// to be reused: the pid alone would look unchanged, the endpoint does
+			// not. (The stale endpoint is deliberately unreachable: the guard
+			// must refuse BEFORE any forward is attempted.)
+			registry.update(entry.daemonId, { endpoint: "ws://127.0.0.1:9" });
+			await browser.send(lost);
+			const refusals = await waitFor(
+				() => {
+					const hits = browser.frames.filter(
+						(f): f is Extract<ServerFrame, { type: "daemon_logs_result" }> =>
+							f.type === "daemon_logs_result" && f.id === "lost-3",
+					);
+					return hits.length > 0 ? hits : null;
+				},
+				3000,
+				"refusal answer",
+			);
+			// The pid never changed here, so the refusal must say what did: a
+			// "pid 4243 → 4243" clause would read as nonsense in the UI.
+			expect(String(refusals[0].error)).toContain("new endpoint");
+			expect(String(refusals[0].error)).not.toContain("pid");
+			await sleep(300);
+			expect(daemon.commands()).toHaveLength(1);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("an outstanding id survives a flood past the origin cap, so its replay is still refused across a restart", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-replay-cap-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
+		const config: FleetConfig = {
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge(
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
+			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
+		);
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "replay-cap",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
+			// The unanswered command is the OLDEST origin record, so a
+			// count-based cap would drop it first.
+			const lost = { type: "daemon_logs", id: "lost-4", projectDir: FAKE_CWD, name: "pipe-fake" };
+			await browser.send(lost);
+			await waitFor(
+				() => (daemon.commands().length === 1 ? "forwarded" : null),
+				3000,
+				"first forward",
+			);
+			// A busy turn: far more forwarded commands than the 256-record
+			// origin cap, every one of them answered (delivered, so evictable).
+			const flood = 300;
+			for (let i = 0; i < flood; i++) {
+				await browser.send({ type: "call", id: `flood-${i}`, method: "prompt", args: ["x"] });
+			}
+			await waitFor(
+				() =>
+					browser.frames.filter((f) => f.type === "call_result" && f.id.startsWith("flood-"))
+						.length >= flood
+						? true
+						: null,
+				5000,
+				"flood answers",
+			);
+			// Respawn: the answer for lost-4 never came, and the process that
+			// owed it is gone.
+			daemon.setPid(8888);
+			daemon.killStream(1);
+			await waitFor(
+				() => (daemon.lastEventIds().length === 3 ? "redial" : null),
+				3000,
+				"pipe redial",
+			);
+			// The replay must still be recognized as a replay (its record
+			// outlived the flood) and refused; pre-fix it looked like a first
+			// forward and reached the new child.
+			await browser.send(lost);
+			await browser.waitForFrame(
+				(f) => f.type === "daemon_logs_result" && f.id === "lost-4",
+				"refusal answer",
+			);
+			await sleep(300);
+			expect(daemon.commands().filter((c) => c.id === "lost-4")).toHaveLength(1);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("a replay is refused when the daemon's credentials rotated (same pid and endpoint)", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-replay-token-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
+		const config: FleetConfig = {
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge(
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
+			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
+		);
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "replay-token",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
+			const lost = { type: "daemon_logs", id: "lost-5", projectDir: FAKE_CWD, name: "pipe-fake" };
+			await browser.send(lost);
+			await waitFor(
+				() => (daemon.commands().length === 1 ? "forwarded" : null),
+				3000,
+				"first forward",
+			);
+			// A respawn mints a fresh random token (supervisor) BEFORE the new
+			// child dials, so the rotation is the earliest proof of a replaced
+			// process: pid and endpoint can still look unchanged here.
+			registry.update(entry.daemonId, { token: "rotated-token" });
+			await browser.send(lost);
+			const refusals = await waitFor(
+				() => {
+					const hits = browser.frames.filter(
+						(f): f is Extract<ServerFrame, { type: "daemon_logs_result" }> =>
+							f.type === "daemon_logs_result" && f.id === "lost-5",
+					);
+					return hits.length > 0 ? hits : null;
+				},
+				3000,
+				"refusal answer",
+			);
+			expect(String(refusals[0].error)).toContain("rotated credentials");
+			// The refusal must never carry the credential itself.
+			expect(String(refusals[0].error)).not.toContain("rotated-token");
+			expect(String(refusals[0].error)).not.toContain(FAKE_TOKEN);
+			await sleep(300);
+			expect(daemon.commands()).toHaveLength(1);
+		} finally {
+			edge.close();
+			await supervisor.close();
+			await connector.close();
+			daemon.close();
+			served.stop();
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("a command forwarded during a silence-deadline redial settles by id after the pipe returns (no error frame)", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-redial-answer-"));
+		const registry = new Registry(join(tmp, "state.json"));
+		await registry.load();
+		const connector = new DaemonConnector(registry, undefined, {
+			backoffMinMs: 10,
+			backoffMaxMs: 50,
+			idleDropMs: 60_000,
+		});
+		const daemon = startPipeFake({ heartbeatMs: 30 });
+		const entry = registry.create({
+			name: "redial-answer",
+			cwd: FAKE_CWD,
+			project: "fake-proj",
+			labels: [],
+			mode: "remote",
+			endpoint: daemon.url,
+			token: FAKE_TOKEN,
+			status: "connecting",
+		});
+		connector.connect(entry.daemonId);
+		await connector.waitReady(entry.daemonId, 3000);
+		const config: FleetConfig = {
+			templates: {},
+			defaultTemplate: "local",
+			workspaceDir: "/tmp/fleet-test-ws",
+		};
+		const supervisor = new SpawnSupervisor(registry, connector, config);
+		const edge = new FleetEdge(
+			{
+				registry,
+				connector,
+				supervisor,
+				config,
+				eventLog: new FleetEventLog(),
+				fleet: {
+					port: 0,
+					startedAt: Date.now(),
+					statePath: "/tmp/fleet-test-state.json",
+					configPath: null,
+				},
+			},
+			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 400, pipeBackoffMaxMs: 800, pipeMaxRedials: 8 },
+		);
+		const served = serveEdge(edge);
+		try {
+			const browser = await openBrowser(served.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached",
+			);
+			// A delta first, so the pipe's resume floor lands in the delta era
+			// (the redial only carries Last-Event-ID ≥ SSE_DELTA_SEQ_START).
+			daemon.emitDelta({
+				type: "event",
+				event: { type: "notice", level: "info", message: "pre-redial" },
+			});
+			await browser.waitForFrame(
+				(f) => f.type === "event" && (f.event as { message?: string })?.message === "pre-redial",
+				"pre-redial delta",
+			);
+			// Silence the daemon: the pipe trips its 200ms deadline and redials
+			// (finding #4) while the browser stream stays up.
+			daemon.pause();
+			await sleep(300); // deadline tripped, redial still pending (400ms backoff)
+			// The command is forwarded while the pipe is DOWN: it travels over
+			// HTTP, so the daemon answers on its live streams and the origin must
+			// still settle, by id, exactly once — and a redial is NOT a loss.
+			await browser.send({ type: "call", id: "redial-1", method: "prompt", args: ["mid-redial"] });
+			await browser.waitForFrame(
+				(f) => f.type === "call_result" && f.id === "redial-1",
+				"answer for the mid-redial command",
+			);
+			await sleep(300);
+			expect(
+				browser.frames.filter((f) => f.type === "call_result" && f.id === "redial-1"),
+			).toHaveLength(1);
+			expect(
+				browser.frames.some((f) => f.type === "error" && f.error === "daemon connection lost"),
+			).toBe(false);
+			expect(connector.isConnected(entry.daemonId)).toBe(true);
 		} finally {
 			edge.close();
 			await supervisor.close();

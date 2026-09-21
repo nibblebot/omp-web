@@ -2230,3 +2230,107 @@ describe("roster session dropdown", () => {
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
 	});
 });
+
+describe("call delivery: a lost answer is recovered by re-POSTing the command", () => {
+	/**
+	 * Fake daemon over the stubbed fetch + FakeEventSource. It EXECUTES each
+	 * command id once and records the answer, but the first answer never rides
+	 * the downlink: call_result is a non-ringed unicast, so a frame dropped on
+	 * the daemon pipe (backpressure drop-and-resume, a redial, a lost accept)
+	 * is gone for good. A re-POST of the SAME id is deduped — no second
+	 * execution — and REPLAYS the recorded answer, exactly like the daemon's
+	 * command dedup.
+	 */
+	function startLostAnswerDaemon(answerFor: (id: string) => ServerFrame): {
+		executed: string[];
+		posts: string[];
+	} {
+		const executed: string[] = [];
+		const posts: string[] = [];
+		const answers = new Map<string, ServerFrame>();
+		globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+			const cmd = JSON.parse(String(init?.body)) as ClientCommand;
+			if (cmd.type === "call") {
+				posts.push(cmd.id);
+				const recorded = answers.get(cmd.id);
+				if (recorded === undefined) {
+					executed.push(cmd.id);
+					answers.set(cmd.id, answerFor(cmd.id));
+				} else {
+					dispatch(recorded); // the deduped re-POST's replayed answer
+				}
+			}
+			return { ok: true, status: 202 } as Response;
+		}) as unknown as typeof fetch;
+		return { executed, posts };
+	}
+
+	test("prompt: the replayed answer settles the pending call once and the prompt ran once", async () => {
+		vi.useFakeTimers();
+		try {
+			connect();
+			FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true
+			const daemon = startLostAnswerDaemon((id) => ({
+				type: "call_result",
+				id,
+				ok: true,
+				data: { ran: id },
+			}));
+
+			const outcomes: string[] = [];
+			const pending = call("prompt", ["hello"]).then(
+				() => outcomes.push("resolved"),
+				(err) => outcomes.push(`rejected: ${String(err)}`),
+			);
+			await flushMicrotasks();
+			expect(daemon.posts).toHaveLength(1);
+			expect(daemon.executed).toHaveLength(1);
+
+			// The answer was lost: the call is still pending, so the replay
+			// re-POSTs the SAME command (same id, the dedup key).
+			vi.advanceTimersByTime(5_000);
+			await flushMicrotasks();
+			expect(daemon.posts).toHaveLength(2);
+			expect(daemon.posts[0]).toBe(daemon.posts[1]);
+
+			// The replayed answer settles it exactly once, and the daemon never
+			// executed the prompt a second time.
+			await pending;
+			expect(outcomes).toEqual(["resolved"]);
+			expect(daemon.executed).toHaveLength(1);
+			expect(daemon.posts).toHaveLength(2); // settled: the replay cadence stops
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("prompt: a replayed failure answer rejects with the daemon's real error, never a fake success", async () => {
+		vi.useFakeTimers();
+		try {
+			connect();
+			FakeEventSource.instances.at(-1)!.onopen?.();
+			const daemon = startLostAnswerDaemon((id) => ({
+				type: "call_result",
+				id,
+				ok: false,
+				error: "not_ready",
+			}));
+
+			const outcomes: string[] = [];
+			const pending = call("prompt", ["hello"]).then(
+				() => outcomes.push("resolved"),
+				(err) => outcomes.push(String(err)),
+			);
+			await flushMicrotasks();
+			vi.advanceTimersByTime(5_000);
+			await flushMicrotasks();
+			expect(daemon.posts).toHaveLength(2); // the lost answer was re-POSTed
+
+			await pending;
+			expect(outcomes).toEqual(["Error: not_ready"]);
+			expect(daemon.executed).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});

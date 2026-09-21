@@ -1,21 +1,19 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import type { Settings } from "@oh-my-pi/pi-coding-agent";
+import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
+import { getAvailableThemes, type Settings } from "@oh-my-pi/pi-coding-agent";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { formatModelSelectorValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import {
 	SETTINGS_SCHEMA,
 	type SettingPath,
 } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
-import { getAvailableThemes } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { resolveRoleModelFull } from "@oh-my-pi/pi-coding-agent/session/role-models";
-import type { InspectImageMode } from "@oh-my-pi/pi-coding-agent/utils/inspect-image-mode";
 import type { WebMethodName } from "../shared/protocol";
 import type { CollabSession, Images } from "./collab-session";
 import type { DaemonBroker } from "./daemon-broker";
@@ -198,7 +196,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		setInterruptMode: async (entry, a) => {
 			entry.session.setInterruptMode(a[0] as "immediate" | "wait");
 		},
-		// Phase 9 (17.1.8): /goal and /plan are NOT ACP-intercepted server-side, so
+		// Phase 9 (SDK 18.2.6): /goal and /plan are NOT ACP-intercepted server-side, so
 		// goal/plan control drives the SDK directly. The post-mutation state
 		// broadcast re-reads getGoalModeState()/getPlanModeState()?.enabled.
 		setGoalModeState: async (entry, a) => {
@@ -285,7 +283,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				const { switched } = await session.setModel(model, "default", {
 					thinkingLevel: level,
 					persist: targetScope === "global",
-					currentContextTokens: session.getContextUsage()?.tokens ?? 0,
 				});
 				if (!switched) return { role, provider: model.provider, id: model.id };
 				if (targetScope === "project") {
@@ -351,7 +348,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 						resolved.explicitThinkingLevel && resolved.thinkingLevel !== "auto"
 							? resolved.thinkingLevel
 							: undefined,
-					currentContextTokens: session.getContextUsage()?.tokens ?? 0,
 				});
 			} else {
 				await session.applyRoleModel({
@@ -423,8 +419,41 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		setFastMode: async (entry, a) => {
 			entry.session.setFastMode(a[0] as boolean);
 		},
-		setComputerToolEnabled: (entry, a) => entry.session.setComputerToolEnabled(a[0] as boolean),
-		setInspectImageMode: (entry, a) => entry.session.setInspectImageMode(a[0] as InspectImageMode),
+		// 18.1.9 turned computer use into an eval prelude gated by the
+		// session-scoped `computer.enabled` setting (the SDK's own /computer
+		// toggle), so this drives that override and rebuilds the prompt. The
+		// availability guard mirrors applyComputerUseToggle (builtin-modes.ts):
+		// the prelude only exists while the eval tool is active, so enabling it
+		// without one must revert and refuse rather than answer a success that
+		// nothing applied.
+		setComputerToolEnabled: async (entry, a) => {
+			const { session } = entry;
+			const enabled = a[0] === true;
+			const previous = session.settings.get("computer.enabled");
+			session.settings.override("computer.enabled", enabled);
+			if (
+				enabled &&
+				!session.getEvalPreludes().some((definition) => definition.name === "computer")
+			) {
+				session.settings.override("computer.enabled", previous);
+				throw new Error("computer use is unavailable in this session");
+			}
+			try {
+				await session.refreshBaseSystemPrompt();
+			} catch (error) {
+				session.settings.override("computer.enabled", previous);
+				throw error;
+			}
+		},
+		// 18.1.9 removed the inspect_image tool (`read <image>?q=` owns image
+		// questions), so there is no session-scoped vision mode left to set. The
+		// wire method stays (OMP_PROTO 2 is frozen) and fails loudly rather than
+		// reporting a success nothing applied.
+		setInspectImageMode: () => {
+			throw new Error(
+				"setInspectImageMode is unsupported: @oh-my-pi/pi-coding-agent 18.1.9 removed the inspect_image tool",
+			);
+		},
 		// READ_ONLY rows: usage reports + context breakdown (skip the state broadcast).
 		fetchUsageReports: (entry) => entry.session.fetchUsageReports(),
 		getContextBreakdown: async (entry) => entry.session.getContextBreakdown(),

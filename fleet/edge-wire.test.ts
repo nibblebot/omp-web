@@ -528,6 +528,15 @@ describe("fleet edge", () => {
 			method: "prompt",
 			args: ["hello"],
 		});
+		// Forwarded exactly once: the answer is routed by command id, so nothing
+		// re-sends or re-executes the command behind the client's back.
+		expect(fake.received.filter((m) => (m as { id?: string }).id === "c1")).toHaveLength(1);
+		// And exactly one answer reaches the browser, even though the daemon
+		// broadcasts every answer to every stream it has.
+		await sleep(300);
+		expect(browserA.frames.filter((f) => f.type === "call_result" && f.id === "c1")).toHaveLength(
+			1,
+		);
 	});
 
 	test("a second browser attach gets an independent pipe and its own priming", async () => {

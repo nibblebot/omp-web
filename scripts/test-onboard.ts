@@ -10,11 +10,12 @@
  *
  * Walk:
  *   1. bun run build → bun pm pack → omp-web-<version>.tgz
- *   2. POISON the sandbox global store with @oh-my-pi/pi-ai 17.3.5 (the omp
- *      CLI's version, the skew that broke `bun install -g`-based installs),
- *      then install the tarball into a dedicated pinned dir
+ *   2. POISON the sandbox global store with @oh-my-pi/pi-ai 17.3.5 (a
+ *      stand-in for the version skew a shared global store leaves behind,
+ *      the skew that broke `bun install -g`-based installs), then install
+ *      the tarball into a dedicated pinned dir
  *      (scripts/install-omp-web.ts); assert the symlink points there, the
- *      pinned pi-ai is 17.1.8, and `omp-web --version` prints the version
+ *      pinned pi-ai is 18.2.6, and `omp-web --version` prints the version
  *      despite the poisoned store
  *   3. fixture repo (git init + commit) with one linked worktree
  *   4. first-run config written to ~/.omp-web/config.json (the serve offer's
@@ -205,6 +206,36 @@ function mkdirp(p: string): void {
 	mkdirSync(p, { recursive: true });
 }
 
+/**
+ * Probe the INSTALLED @oh-my-pi/pi-agent-core through the install dir's own
+ * module graph. A 256 KiB homogeneous run must take the approximate bytes/4
+ * path the mirrored pi-agent-core patch installs; the exact native count is
+ * ~20 s on deepseek-v3 and reports 32768, so an unpatched tree fails on the
+ * value, not just the clock.
+ */
+async function tokenizerProbe(
+	installRoot: string,
+): Promise<{ n?: unknown; bytes4?: unknown; ms?: unknown; out: string }> {
+	const script = [
+		'const { Tokenizer } = await import("@oh-my-pi/pi-agent-core");',
+		'const tokenizer = new Tokenizer({ tokenizer: "deepseek-v3" });',
+		'const text = "x".repeat(256 * 1024);',
+		'const bytes = Buffer.byteLength(text, "utf-8");',
+		"const started = Bun.nanoseconds();",
+		"const n = tokenizer.countTokens(text);",
+		"console.log(JSON.stringify({ n, bytes4: (bytes + 3) >> 2, ms: (Bun.nanoseconds() - started) / 1e6 }));",
+	].join("\n");
+	const probe = await run("installed tokenizer probe", ["bun", "-e", script], {
+		cwd: installRoot,
+		timeoutMs: 120_000,
+	});
+	let parsed: { n?: unknown; bytes4?: unknown; ms?: unknown } = {};
+	try {
+		parsed = JSON.parse(probe.stdout.trim().split("\n").at(-1) ?? "{}") as typeof parsed;
+	} catch {}
+	return { ...parsed, out: `${probe.stdout.trim()} ${probe.stderr.trim().slice(-200)}` };
+}
+
 // ---------------------------------------------------------------------------
 try {
 	// 1. Build + pack
@@ -236,10 +267,11 @@ try {
 	);
 
 	// 2. Pinned install (dedicated dir) + symlink + version. First POISON the
-	// shared global store with a NEWER @oh-my-pi (17.3.5, what the omp CLI
-	// installs): a `bun install -g`-based omp-web would inherit it and crash
-	// (missing exports, e.g. zodToWireSchema). The dedicated-dir install must
-	// be immune: its own node_modules pins the tarball's versions.
+	// shared global store with a DIFFERENT @oh-my-pi (17.3.5, standing in for
+	// whatever version the omp CLI's own global install leaves there): a
+	// `bun install -g`-based omp-web would inherit it and crash (missing or
+	// renamed exports). The dedicated-dir install must be immune: its own
+	// node_modules pins the tarball's versions.
 	// ---------------------------------------------------------------------------
 	console.log("== 2. pinned install ==");
 	r = await run(
@@ -266,19 +298,51 @@ try {
 		linkTarget,
 	);
 	check(
-		"pinned pi-ai is 17.1.8 (not the store's 17.3.5)",
+		"pinned pi-ai is 18.2.6 (not the store's 17.3.5)",
 		JSON.parse(
 			readFileSync(
 				join(dataHome, "install", "node_modules", "@oh-my-pi", "pi-ai", "package.json"),
 				"utf8",
 			),
-		).version === "17.1.8",
+		).version === "18.2.6",
 	);
 	r = await run("--version", [bin, "--version"]);
 	check(
 		`--version prints ${v1} despite the poisoned store`,
 		r.code === 0 && r.stdout.trim() === v1,
 		r.stdout.trim(),
+	);
+	// The pi-agent-core patch: bun applies `patchedDependencies` only from the
+	// ROOT package.json, so the installer mirrors the tarball's map into the
+	// pinned dir and copies the patch files out of the package. Assert both the
+	// mechanism (map + files) and the behavior (approximate bytes/4 count).
+	const installRoot = join(dataHome, "install");
+	const mirrored = ((): Record<string, string> => {
+		try {
+			const parsed = JSON.parse(readFileSync(join(installRoot, "package.json"), "utf8")) as {
+				patchedDependencies?: Record<string, string>;
+			};
+			return parsed.patchedDependencies ?? {};
+		} catch {
+			return {};
+		}
+	})();
+	check(
+		"install dir mirrors the package's patchedDependencies",
+		Object.keys(mirrored).length > 0 &&
+			Object.values(mirrored).every((patch) => existsSync(join(installRoot, patch))),
+		JSON.stringify(mirrored),
+	);
+	const pinnedProbe = await tokenizerProbe(installRoot);
+	check(
+		"installed pi-agent-core counts approximate (bytes/4)",
+		pinnedProbe.n === 65536 && pinnedProbe.bytes4 === 65536,
+		pinnedProbe.out,
+	);
+	check(
+		"installed approximate count is fast",
+		typeof pinnedProbe.ms === "number" && pinnedProbe.ms < 2000,
+		`${pinnedProbe.ms}ms`,
 	);
 
 	// Anchor a poisoned ANCESTOR project: with no package.json of its own,
@@ -382,6 +446,14 @@ try {
 	);
 	r = await run("install.sh --version", [instBin, "--version"]);
 	check("install.sh --version prints v1", r.code === 0 && r.stdout.trim() === v1, r.stdout.trim());
+	// install.sh wires the patch itself (shell path, no install-omp-web.ts):
+	// same behavioral proof as the pinned install above.
+	const installerProbe = await tokenizerProbe(join(instDataHome, "install"));
+	check(
+		"install.sh install counts approximate (bytes/4)",
+		installerProbe.n === 65536 && installerProbe.bytes4 === 65536,
+		installerProbe.out,
+	);
 	r = await run(
 		"install.sh reinstall is idempotent (same version)",
 		["sh", join(ROOT, "scripts", "install.sh")],
@@ -404,6 +476,7 @@ try {
 	// ---------------------------------------------------------------------------
 	console.log("== 3. fixture repo ==");
 	const gitEnv = {
+		...sandboxEnv(),
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_AUTHOR_NAME: "e2e",
 		GIT_AUTHOR_EMAIL: "e2e@test",
@@ -617,6 +690,19 @@ try {
 	);
 	r = await run("--version after update", [bin, "--version"]);
 	check(`--version prints ${v2}`, r.code === 0 && r.stdout.trim() === v2, r.stdout.trim());
+	// The self-update path (bun remove + bun add + re-mirror) must leave the
+	// patched approximate path active in the pinned tree.
+	const updatedProbe = await tokenizerProbe(installRoot);
+	check(
+		"update keeps the approximate path (bytes/4)",
+		updatedProbe.n === 65536 && updatedProbe.bytes4 === 65536,
+		updatedProbe.out,
+	);
+	check(
+		"update keeps the approximate count fast",
+		typeof updatedProbe.ms === "number" && updatedProbe.ms < 2000,
+		`${updatedProbe.ms}ms`,
+	);
 	// The update path runs bun remove/add in the pinned dir, and must not walk
 	// up into the poisoned ancestor.
 	check(

@@ -360,8 +360,9 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 
 	test("long-running bash streams past 30s and resolves when the late call_result arrives", async () => {
 		const { call: bashCall, item } = startBang("!sleep 60", "bash");
-		// timeout 0 = no timer armed for streamed commands.
-		expect(timers).toEqual([]);
+		// Streamed commands have no deadline, but transport recovery still
+		// replays the same id while the daemon's dedup record is valid.
+		expect(timers.map((timer) => timer.ms)).toEqual([5_000]);
 		expect(item()?.status).toBe("running");
 
 		dispatch({ type: "bash_chunk", id: bashCall.streamId!, text: "tick\n" });
@@ -387,7 +388,7 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 
 	test("long-running python streams past 30s and resolves when the late call_result arrives", async () => {
 		const { call: pyCall, item } = startBang("$print('sleep')", "python");
-		expect(timers).toEqual([]);
+		expect(timers.map((timer) => timer.ms)).toEqual([5_000]);
 
 		dispatch({ type: "python_chunk", id: pyCall.streamId!, text: "one\n" });
 		await flushMicrotasks();
@@ -410,13 +411,16 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 		advance(40_000);
 		expect(item()?.status).toBe("running");
 
-		// The UI's abort button posts abortBash as its own command.
+		// The UI's abort button posts abortBash as its own command. The
+		// unanswered bash call was replayed once with the same dedup id.
 		const abortPromise = call("abortBash");
 		await flushMicrotasks();
 		expect(posted.map((c) => (c.type === "call" ? c.method : c.type))).toEqual([
 			"bash",
+			"bash",
 			"abortBash",
 		]);
+		expect(posted[1]).toEqual(posted[0]);
 		const abortCall = posted.find(
 			(c): c is Extract<ClientCommand, { type: "call" }> =>
 				c.type === "call" && c.method === "abortBash",

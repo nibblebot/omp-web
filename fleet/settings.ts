@@ -11,9 +11,13 @@
  * persists coerced values without live session side effects.
  */
 
-import { Settings, discoverAuthStorage, ModelRegistry } from "@oh-my-pi/pi-coding-agent";
+import {
+	Settings,
+	discoverAuthStorage,
+	getAvailableThemes,
+	ModelRegistry,
+} from "@oh-my-pi/pi-coding-agent";
 import type { SettingPath } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
-import { getAvailableThemes } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import type { SettingsModel } from "../shared/protocol";
 import {
