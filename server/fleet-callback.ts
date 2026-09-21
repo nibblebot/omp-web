@@ -45,14 +45,14 @@ import { isLoopbackHost } from "./config";
  *
  * Identity and the enrollment credential ride request HEADERS (frozen by
  * Main): x-omp-workspace-id, x-omp-generation, x-omp-connection-id, plus
- * `authorization: Bearer <credential>`. Never query params or path segments
- * — the connection id stays out of URL logs. A fresh `connectionId`
+ * `authorization: Bearer <credential>`. Never query params or path segments;
+ * the connection id stays out of URL logs. A fresh `connectionId`
  * (crypto.randomUUID()) is minted per pair and both halves of one pair share
  * it.
  *
  * Up establishment (Bun.serve constraint, agreed with the fleet half): the
  * fleet reads the /callback/up body to COMPLETION inside its handler, so the
- * up HTTP response arrives only when the upload ENDS — never while the pair
+ * up HTTP response arrives only when the upload ENDS, never while the pair
  * lives. The daemon therefore treats the up half as established when the POST
  * is launched and still pending; any settled up response (or a rejected
  * upload) means the up half ended and the pair is replaced. Pair readiness is
@@ -64,9 +64,9 @@ import { isLoopbackHost } from "./config";
  * Pair lifecycle:
  *   - start() resolves only when the pair is READY (up launched + down open +
  *     pair_ready observed), within the pair-ready timeout.
- *   - Either half failing — down stream ended/errored, up response settled,
+ *   - Either half failing, down stream ended/errored, up response settled,
  *     up body cancelled by the peer, 30 s down silence, or an outbound
- *     backlog that never drained within the silence deadline — replaces
+ *     backlog that never drained within the silence deadline, replaces
  *     BOTH halves after jittered 1 s → 30 s backoff (the connector's
  *     backoffDelay pattern).
  *   - The fleet emits 15 s `heartbeat` envelopes (streamId "transport") that
@@ -77,7 +77,7 @@ import { isLoopbackHost } from "./config";
  *     connectionId starts a fresh per-connection seq space.
  *
  * Outbound envelopes are held in a bounded queue (8 MiB per connection,
- * 4 MiB per virtual stream — the ledger caps). The fleet keeps no offline
+ * 4 MiB per virtual stream; the ledger caps). The fleet keeps no offline
  * queue, so envelopes queued while a pair is down are replayed on the fresh
  * pair; when the buffer is full a send is DROPPED, counted, and surfaced as
  * a typed retryable error via onError. Single envelopes over the 1 MiB cap
@@ -86,7 +86,7 @@ import { isLoopbackHost } from "./config";
  *
  * HTTPS is enforced at construction (matching config.ts): http is refused
  * unless `allowHttp` is set AND the host is loopback. An explicit
- * `proxy` (http/https) is passed to every fetch — there is no silent
+ * `proxy` (http/https) is passed to every fetch; there is no silent
  * fallback to a direct connection, and an unsupported scheme is a
  * construction-time error.
  */
@@ -135,7 +135,7 @@ export interface FleetCallbackOptions {
 	proxy?: string;
 	/** Explicit loopback-HTTP exception; honored only for loopback callback hosts. */
 	allowHttp?: boolean;
-	// Timing / limits — production defaults are the ledger constants; tests
+	// Timing / limits: production defaults are the ledger constants; tests
 	// shrink them to observe cadence deterministically.
 	heartbeatMs?: number;
 	silenceMs?: number;
@@ -540,7 +540,7 @@ export class FleetCallback {
 		}
 		// Typed fleet error body ({error, message, detail?}) or the HTTP
 		// status mapping. A missing stored session surfaces as `unavailable`
-		// (HTTP 503 via the frozen status map) — the daemon reports it typed
+		// (HTTP 503 via the frozen status map); the daemon reports it typed
 		// and the caller decides.
 		let errorBody: { error?: unknown; message?: unknown; detail?: unknown } = {};
 		try {
@@ -567,8 +567,8 @@ export class FleetCallback {
 	 * daemon streams each part via `readable` to
 	 * POST /callback/bulk/<correlationId> with the usual identity headers plus
 	 * `x-omp-bulk-part: <n>` (0-based) and `x-omp-bulk-final: 1` on the last
-	 * part. The AGGREGATE stays capped at the ledger's BULK_MAX_BYTES (64 MiB)
-	 * — multi-part exists so neither side buffers the whole body at once.
+	 * part. The AGGREGATE stays capped at the ledger's BULK_MAX_BYTES (64 MiB);
+	 * multi-part exists so neither side buffers the whole body at once.
 	 *
 	 * Requires a READY pair. Throws {@link CallbackError}: `unavailable` with
 	 * no transport/parts rejected, `invalid_request` when the fleet reports a
@@ -742,7 +742,7 @@ export class FleetCallback {
 	}
 
 	/**
-	 * Open one fresh pair: launch the up POST (fire-and-forget — the fleet
+	 * Open one fresh pair: launch the up POST (fire-and-forget; the fleet
 	 * reads the body to completion, so its response only arrives when the up
 	 * half ends), open the down GET, then wait for the in-band pair_ready
 	 * envelope. Returns the ready pair, or null when establishment failed
@@ -982,7 +982,7 @@ export class FleetCallback {
 			},
 			cancel: (reason) => {
 				// The peer stopped reading / the socket died while we were not
-				// the ones tearing down — the up half is gone.
+				// the ones tearing down; the up half is gone.
 				if (!this.#isCurrent(pair)) return;
 				this.#finishPair(pair, {
 					kind: "failure",
@@ -1020,7 +1020,7 @@ export class FleetCallback {
 				else this.#streamBytes.delete(item.streamId);
 				this.#sent++;
 				progressed = true;
-				// The wire seq is now exact — surface it to ring keepers.
+				// The wire seq is now exact; surface it to ring keepers.
 				if (item.onEmittedSeq !== undefined) {
 					try {
 						item.onEmittedSeq(emitted.seq);
@@ -1059,7 +1059,7 @@ export class FleetCallback {
 		// While no pair is live (initial dial / mid-reconnect) the send is held
 		// for the fresh pair. UUIDs are fixed-width (36 chars), so validating
 		// and sizing against a placeholder connection id is byte-exact for the
-		// real emit — and lets the queue accept work during reconnects.
+		// real emit, and lets the queue accept work during reconnects.
 		const placeholderConnectionId = pair?.connectionId ?? "00000000-0000-4000-8000-000000000000";
 		const candidate: CallbackEnvelope = {
 			version: OMP_CALLBACK_PROTO,

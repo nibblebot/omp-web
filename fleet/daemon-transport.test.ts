@@ -5,8 +5,8 @@
  * acceptance, stale/revoked-generation rejection, bounded + isolated virtual
  * streams, bounded down delivery, and bulk multi-part sequencing. Every
  * scenario drives the actual registry over real loopback HTTP with controlled
- * daemon halves (one long-lived NDJSON up POST + one long-lived SSE down GET)
- * — no mock transport, no source assertions. Each test owns its
+ * daemon halves (one long-lived NDJSON up POST + one long-lived SSE down GET),
+ * no mock transport, no source assertions. Each test owns its
  * registry/server and cleans up in a finally.
  *
  * Harness notes (verified against the real wire):
@@ -15,7 +15,7 @@
  *   end a leg.
  * - The fleet re-delivers pair_ready on every (up/down) establishment, and a
  *   redial replays ring entries at their ORIGINAL down seqs, so a resumed
- *   consumer dedups by (connectionId, seq) — a command is never re-accepted
+ *   consumer dedups by (connectionId, seq); a command is never re-accepted
  *   under a fresh seq.
  * - A daemon-side drop of either leg is NOT observed as pair loss: the fleet
  *   keeps the surviving half live and expects the daemon to redial the lost
@@ -24,7 +24,7 @@
  *   down-stream byte cap, or close()); ending the UP half alone leaves the
  *   down delivery path live.
  *
- * Timers: these are integration tests over real HTTP/SSE state — fake timers
+ * Timers: these are integration tests over real HTTP/SSE state; fake timers
  * cannot advance Bun's network stack, so the suite follows the repo's
  * poll-until-observable waitFor idiom and bounds every deadline. The slow
  * sink's delay is the deliberate stall under test.
@@ -94,7 +94,7 @@ function serve(registry: DaemonTransportRegistry): Fixture {
 			// Close the registry FIRST: it cancels in-flight up bodies (each
 			// handler settles with a typed response) and closes down stream
 			// controllers, so every client fetch settles before the server is
-			// torn down — no dangling promises, no unhandled rejections.
+			// torn down; no dangling promises, no unhandled rejections.
 			registry.close();
 			server.stop(true);
 		},
@@ -247,7 +247,7 @@ async function expectUnavailable(p: Promise<unknown>): Promise<void> {
 	await expect(p).rejects.toMatchObject({ code: "unavailable" });
 }
 
-/** Dial the down link and keep reading it SLOWLY — a daemon whose receive
+/** Dial the down link and keep reading it SLOWLY: a daemon whose receive
  * side cannot keep up with the fleet. The registry must bound the buffered
  * bytes and tear the connection down (drop-and-resume) rather than grow
  * without limit.
@@ -338,7 +338,7 @@ describe("daemon transport controlled pairs", () => {
 
 			// The daemon then loses the DOWN half and redials BOTH halves on
 			// the same connectionId (renewal). The pre-drop commands replay
-			// at their ORIGINAL seqs — each exactly once, never re-rung under
+			// at their ORIGINAL seqs; each exactly once, never re-rung under
 			// a fresh identity.
 			down.drop();
 			const up2 = openUp(fixture, ws, gen, connId, cred);
@@ -401,7 +401,7 @@ describe("daemon transport controlled pairs", () => {
 			expect(c2.seq).toBeGreaterThan(c1.seq);
 			await waitFor(() => down2.seen().find((e) => e.seq === c2.seq), 2000, "c2 delivery");
 			// The original upload leg was never killed: it ends cleanly with
-			// the registry's own ack (received 0 — no up envelopes were sent).
+			// the registry's own ack (received 0, no up envelopes were sent).
 			const ended = await up.end();
 			expect(ended.status).toBe(200);
 			expect(ended.body).toMatchObject({ ok: true });
@@ -429,7 +429,7 @@ describe("daemon transport controlled pairs", () => {
 			await waitFor(() => first.seen().find((e) => e.seq === a.seq), 2000, "a delivery");
 
 			// Loss without a resume point: the daemon redials blind (no
-			// Last-Event-ID) and the WHOLE ring replays — command `a` returns
+			// Last-Event-ID) and the WHOLE ring replays; command `a` returns
 			// under its original seq, the identity a deduping consumer keys on.
 			first.drop();
 			const blind = await openDown(fixture, ws, gen, connId, cred);
@@ -443,7 +443,7 @@ describe("daemon transport controlled pairs", () => {
 			expect(blindReplay[0].seq).toBe(a.seq);
 
 			// Acknowledged resume: Last-Event-ID = a.seq skips the acked
-			// prefix entirely — `a` is not re-delivered, later traffic is.
+			// prefix entirely; `a` is not re-delivered, later traffic is.
 			const acked = await openDown(fixture, ws, gen, connId, cred, a.seq);
 			await waitFor(() => acked.seen().find(pairReady), 2000, "pair_ready on acked resume");
 			const b = await fixture.registry.sendToDaemon(ws, {
@@ -508,7 +508,7 @@ describe("daemon transport controlled pairs", () => {
 			expect(cmd.generation).toBe(2);
 			await waitFor(() => g2down.seen().find((e) => e.seq === cmd.seq), 2000, "gen2 delivery");
 
-			// The revoked gen-1 credential is now denied outright (401 — the
+			// The revoked gen-1 credential is now denied outright (401, the
 			// record is gone, so no existence oracle).
 			const stale = await fetch(`${fixture.url}${CALLBACK_UP_PATH}`, {
 				method: "POST",
@@ -639,7 +639,7 @@ describe("daemon transport controlled pairs", () => {
 			expect(reuse.status).toBe(409);
 
 			// A hole in the sequence (0 then 2): the transfer fails as a
-			// whole — correlation settles failed and serves no bytes.
+			// whole; correlation settles failed and serves no bytes.
 			const hole = fixture.registry.createBulkCorrelation(ws, { capture: true });
 			const h0 = await postPart(bulkUrl(hole), H, 0, false, "aaa");
 			expect(h0.status).toBe(200);
@@ -650,7 +650,7 @@ describe("daemon transport controlled pairs", () => {
 			expect(holeResult.data).toBeUndefined();
 
 			// An out-of-order FIRST part (1 on a fresh correlation) is
-			// rejected the same way — no corrupt prefix is ever buffered.
+			// rejected the same way; no corrupt prefix is ever buffered.
 			const ooo = fixture.registry.createBulkCorrelation(ws, { capture: true });
 			const o1 = await postPart(bulkUrl(ooo), H, 1, true, "zzz");
 			expect(o1.status).toBe(409);
@@ -668,7 +668,7 @@ describe("daemon transport controlled pairs", () => {
 
 			// Correlations are workspace-scoped: a foreign workspace's upload
 			// is rejected (400 unknown correlation) and leaves the record
-			// INTACT — the owner still completes it untouched.
+			// INTACT; the owner still completes it untouched.
 			const foreign = fixture.registry.createBulkCorrelation(wsOther, { capture: true });
 			const x = await postPart(bulkUrl(foreign), H, 0, true, "steal");
 			expect(x.status).toBe(400);
@@ -753,7 +753,7 @@ describe("daemon transport controlled pairs", () => {
 			expect(slowStatus!.queued + slowDelivered.length).toBeLessThan(40);
 
 			// Commands that arrive while the queue is pinned are still
-			// drained (control always precedes frames) — nothing is starved.
+			// drained (control always precedes frames); nothing is starved.
 			for (let i = 0; i < 8; i++) {
 				up1.push("control", "command", { type: "cmd", id: `c${i}` });
 			}
@@ -808,7 +808,7 @@ describe("daemon transport controlled pairs", () => {
 			// A daemon whose downlink cannot keep up with the fleet: the
 			// registry must bound the buffered bytes and tear the connection
 			// down (drop-and-resume) rather than grow without limit. No up
-			// leg — the ring and down delivery are the subject.
+			// leg; the ring and down delivery are the subject.
 			const stalled = await openSlowDown(fixture, ws, gen, connId, cred);
 			await stalled.ready();
 			expect(fixture.registry.pairStatus(ws).paired).toBe(true);
@@ -853,9 +853,9 @@ describe("daemon transport controlled pairs", () => {
 			expect(ringDepth).toBeGreaterThan(0);
 			expect(ringDepth).toBeLessThan(sentSeqs.length);
 
-			// Redial: the daemon resumes (blind — it read nothing past the
+			// Redial: the daemon resumes (blind, it read nothing past the
 			// pair_ready). Replay is strictly ascending, duplicate-free, and
-			// ends at the last sent seq — no loss past the resume point, no
+			// ends at the last sent seq; no loss past the resume point, no
 			// duplicated ring entries.
 			const redial = await openDown(fixture, ws, gen, connId, cred);
 			await waitFor(

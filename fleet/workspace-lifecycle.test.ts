@@ -1,19 +1,19 @@
 /**
- * Clone-workspace deletion lifecycle tests (clone-plan P7.3/P7.5 —
+ * Clone-workspace deletion lifecycle tests (clone-plan P7.3/P7.5,
  * DeletionSafetyTests). Deterministic failure-transition regressions over
  * the real fleet control plane (loopback HTTP) with a real git clone source
  * and a scripted fixture provider executable that keeps DURABLE operation
  * records (`<stateDir>/ops.jsonl`, appended on every provider request). No
- * test depends on error wording or source text — every assertion is an
+ * test depends on error wording or source text; every assertion is an
  * observable retention / refusal / retry / no-double-writer contract:
  *
  *  1. live-writer refusal + no bypass: deleting a desired-running clone is
  *     refused and a second delete attempt through the same gate is refused
- *     again — the roster entry, the volume, and the enrollment survive and
+ *     again: the roster entry, the volume, and the enrollment survive and
  *     the provider never sees a delete;
  *  2. serialized concurrent deletes: parallel deletes of a stopped,
  *     verified workspace complete exactly one destroy (one entry removal,
- *     one provider delete) — the loser is refused, never a double delete;
+ *     one provider delete); the loser is refused, never a double delete;
  *  3. incomplete store retains registry/volume: an interrupted (never
  *     fully acked) workspace's delete is blocked with everything retained
  *     and a durable delete-pending-retry state;
@@ -30,7 +30,7 @@
  *
  * Fixtures reuse fleet/server.testkit's fleetPaths/startTestFleet (real
  * startFleet on ephemeral ports, state under a tracked temp dir). Git
- * identity comes only from the operator's gitconfig — never overridden.
+ * identity comes only from the operator's gitconfig, never overridden.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -173,7 +173,7 @@ if (op === "ensure-running") {
 
 /**
  * JSONL session transcript: a title slot, a session header, then one
- * assistant message line — all newline-terminated. Matches the daemon's
+ * assistant message line, all newline-terminated. Matches the daemon's
  * streamed lineage layout (`<sessionDir>/<sessionId>.jsonl`).
  */
 const SESSION_ID = "s1";
@@ -291,7 +291,7 @@ function deleteWorkspace(port: number, daemonId: string): Promise<Response> {
 
 describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 	test(
-		"deleting a live desired-running clone is refused with everything retained — and a second attempt cannot bypass the refusal",
+		"deleting a live desired-running clone is refused with everything retained, and a second attempt cannot bypass the refusal",
 		async () => {
 			const { server, workspaceDir, repoDir } = await bootFleet({
 				runningWhileLive: true,
@@ -313,7 +313,7 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				const del1 = await deleteWorkspace(server.port, daemonId);
 				expect(del1.status).toBe(409); // writer_active maps to 409
 				// A second delete (through the SAME verified gate) is refused
-				// again — no state change, no bypass, no accidental delete.
+				// again; no state change, no bypass, no accidental delete.
 				const del2 = await deleteWorkspace(server.port, daemonId);
 				expect(del2.status).toBe(409);
 
@@ -359,7 +359,7 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				]);
 				// Exactly one destroy completed; the loser is refused with a
 				// typed client error (409 conflict while the winner's gate is
-				// in flight, or 400 once the winner removed the entry) —
+				// in flight, or 400 once the winner removed the entry),
 				// never a 500 double-delete.
 				const statuses = [a.status, b.status];
 				expect(statuses.filter((s) => s === 200)).toHaveLength(1);
@@ -396,7 +396,7 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				// streamed file's final byte was never acked (index ackedOffset
 				// is one short of the durable length). The volume carries the
 				// same session tree, so only the store's offset-contiguity
-				// check fails — the exact interrupted-stream condition.
+				// check fails, the exact interrupted-stream condition.
 				seedSession(logsDir, workspaceDir, daemonId, {
 					ackedOffset: Buffer.byteLength(transcriptJsonl(), "utf8") - 1,
 				});
@@ -410,7 +410,7 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				expect(entry.workspace?.deletion?.state).toBe("delete-pending-retry");
 				expect(entry.workspace?.deletion?.error?.code).toBe("conflict");
 				// Volume retained; store retained and still writable (no
-				// read-only marker — verification never passed).
+				// read-only marker, verification never passed).
 				expect(existsSync(join(workspaceDir, daemonId))).toBe(true);
 				expect(existsSync(readOnlyMarker(logsDir, daemonId))).toBe(false);
 				// The provider never saw a delete (the gate stopped at the
@@ -508,7 +508,7 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 					expect(existsSync(join(workspaceDir, daemonId))).toBe(false);
 					expect(existsSync(readOnlyMarker(logsDir, daemonId))).toBe(true);
 					// The durable provider record shows the failed delete AND
-					// the successful retry — exactly two attempts total across
+					// the successful retry, exactly two attempts total across
 					// both fleet lifetimes, no double destroy after success.
 					expect(deleteCount(workspaceDir, daemonId)).toBe(2);
 					const deletes = providerOps(workspaceDir, daemonId).filter((o) => o.op === "delete");

@@ -290,9 +290,9 @@ Defects found by the smoke and fixed the same day:
 
 Central gates after all lanes settled: `bun run check:types` clean; full suite 1182 pass / 0 fail (87 files).
 
-Restart-reconcile and CLI lifecycle (2026-09-06, direct `fleet/cli.ts serve`, state file preserved — no dev-runner `--fresh` wipe):
+Restart-reconcile and CLI lifecycle (2026-09-06, direct `fleet/cli.ts serve`, state file preserved; no dev-runner `--fresh` wipe):
 
-- True P6.3 restart: fleet SIGTERM + restart with the same state file restored the roster (d1 main, d2 clone) and adopted the LIVE sandbox by durable identity (same provider pid across the restart, no duplicate spawn, no re-preparation; stage straight to ready). Earlier dev-runner restart was not evidence: `--fresh` wipes `dev-fleets/` state (`fleet/cli.ts:412`), and that wipe preserves the log store — registry wipe ≠ store wipe, and the orphaned pre-wipe store stayed purgeable (`readOnly: false`), distinct from verified-delete `readOnly: true`.
+- True P6.3 restart: fleet SIGTERM + restart with the same state file restored the roster (d1 main, d2 clone) and adopted the LIVE sandbox by durable identity (same provider pid across the restart, no duplicate spawn, no re-preparation; stage straight to ready). Earlier dev-runner restart was not evidence: `--fresh` wipes `dev-fleets/` state (`fleet/cli.ts:412`), and that wipe preserves the log store; registry wipe ≠ store wipe, and the orphaned pre-wipe store stayed purgeable (`readOnly: false`), distinct from verified-delete `readOnly: true`.
 - Stop-state classification: explicit "Stop workspace" yields status `asleep` + `desiredState: stopped` + cleared stage; distinguishable from idle auto-exit by desiredState (P6.4 authority check).
 - CLI lifecycle verbs (P8.7): `add-repo`, `add-clone`, `stop`, `start` (wake re-ensured on the existing checkout, new sandbox pid, daemon log appended not reset), `rm-worktree` → 409 refusal while live ("unobservable activity; stop current work first"), then "removed clone workspace daemon d2 (verified 1 session)" after stop: volume removed, store read-only/orphaned/viewOnly with `resumeClonePath`.
 - Resume-boundary lineage re-diff: after a fleet restart AND a sandbox restart (new pid), a second real turn streamed byte-identical (6/6 records, turn token present store-side); offset re-derivation across the wake boundary holds.

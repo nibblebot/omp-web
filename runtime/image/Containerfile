@@ -1,4 +1,4 @@
-# Session runtime image (P5.4) — the containerized omp-session daemon for the
+# Session runtime image (P5.4): the containerized omp-session daemon for the
 # kubernetes provider (runtime/providers/kubernetes-provider.ts).
 #
 # Build from the repo root (the COPY sources are context-relative):

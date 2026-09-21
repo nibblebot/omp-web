@@ -79,7 +79,7 @@ export function lifecycleStatus(code: CloneLifecycleError["code"]): number {
 
 /**
  * The clones control app: mount responses for the fleet server. Every
- * mutation goes through {@link WorkspaceLifecycle} — the authoritative
+ * mutation goes through {@link WorkspaceLifecycle}, the authoritative
  * create/ensure/stop/delete owner.
  */
 export class CloneControlApi {
@@ -161,7 +161,7 @@ export class CloneControlApi {
 
 	/**
 	 * POST /ctl/remove {selector}: clone entries route through the SAME
-	 * verified delete gate as DELETE /ctl/worktrees/:id — removal can never
+	 * verified delete gate as DELETE /ctl/worktrees/:id; removal can never
 	 * bypass it. Direct/worktree entries are removed by the server's legacy
 	 * path (kind-dispatched at the caller).
 	 */

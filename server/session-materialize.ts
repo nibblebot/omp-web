@@ -23,7 +23,7 @@
  * rename; parents are fsynced on first creation.
  *
  * Safety: every received relpath is validated with the frozen manifest
- * predicate (isNormalizedPosixRelativePath — no `..`, no absolute, no `.`
+ * predicate (isNormalizedPosixRelativePath: no `..`, no absolute, no `.`
  * segments) and the resolved target must stay inside the sessions dir BEFORE
  * any file is opened. Any hostile or malformed record aborts the WHOLE
  * materialization with nothing committed and all temps removed.
@@ -417,7 +417,7 @@ function transferError(error: unknown, sessionId: string): MaterializeSessionErr
 }
 
 /** True when the sessions tree already has ANY file for this session (main
- * file or artifact dir) — the daemon skips materialization when warm. */
+ * file or artifact dir); the daemon skips materialization when warm. */
 export function sessionTreeExists(sessionsDir: string, sessionId: string): boolean {
 	const probes = [join(sessionsDir, `${sessionId}.jsonl`), join(sessionsDir, sessionId)];
 	let entries;
@@ -437,7 +437,7 @@ export function sessionTreeExists(sessionsDir: string, sessionId: string): boole
 /**
  * Resolve the absolute main-session JSONL of `sessionId` under a sessions
  * dir: `<sessionId>.jsonl` at depth 1 or `<proj>/<sessionId>.jsonl` at
- * depth 2 (the frozen layout; bounded scan, no traversal — mirrors the
+ * depth 2 (the frozen layout; bounded scan, no traversal; mirrors the
  * fleet-side resolver in fleet/wake-materialize.ts so both halves agree).
  * Returns null when the session's main file is cold/missing.
  */

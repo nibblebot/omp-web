@@ -10,7 +10,7 @@ import type { SessionLogTailer } from "./log-tailer";
 
 /**
  * Daemon-side quiesce evidence helpers (P4.5/P7.4). All functions are
- * synchronous I/O on the canonical agent sessions tree + checkout git state —
+ * synchronous I/O on the canonical agent sessions tree + checkout git state;
  * invoked only after the writer admission barrier is up and the session
  * cascade is disposed, so no writer can mutate the tree mid-verification.
  */
@@ -91,7 +91,7 @@ export function finalizeTailerBoundary(tailer: SessionLogTailer): FlushBoundary 
 		if (entry.eof)
 			boundary[streamId] = { offset: entry.offset, generation: entry.generation, eof: true };
 	}
-	// Streams whose eof emission failed are NOT in the boundary — the caller
+	// Streams whose eof emission failed are NOT in the boundary; the caller
 	// must treat a boundary that does not cover every tracked stream as an
 	// explicit failure.
 	const status = tailer.status();
@@ -171,7 +171,7 @@ function parsePorcelain(stdout: string): {
 /**
  * Collect final Git evidence with writers stopped. Fails closed: any probe
  * failure (git missing, not a repo, fetch failure, remote unreachable)
- * returns ok:false with a ledger `conflict` code — deletion is blocked and
+ * returns ok:false with a ledger `conflict` code; deletion is blocked and
  * the workspace + volume + fleet store are retained.
  */
 export async function collectGitEvidence(checkoutDir: string): Promise<{

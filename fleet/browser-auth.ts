@@ -6,7 +6,7 @@
  * constant-time against its stored SHA-256 hash, and never persisted, echoed,
  * or placed in URLs/localStorage. Server-side the store keeps hashes:
  * sha256(sessionId) → record, sha256(csrfToken), and the expected
- * sha256(accessToken) — plus the raw csrfToken, which the server re-serves to
+ * sha256(accessToken), plus the raw csrfToken, which the server re-serves to
  * an authenticated browser after a restart (its ban is client-side:
  * localStorage/URL only, not the 0600 server state file). Expiry is absolute
  * (createdAt + 30 days, never slid); logout/revoke-all/rotation end sessions
@@ -64,7 +64,7 @@ export interface BrowserAuthStoreOptions {
 	 * The operator-configured sha-256 access-token hash (config
 	 * browserAccessTokenHash). The configured hash is authoritative:
 	 * a fresh store adopts it at construction; a hash DIFFERENT from the
-	 * persisted one means the operator rotated the access token — every
+	 * persisted one means the operator rotated the access token, every
 	 * live session is revoked (absolute lifetimes are never slid; they end
 	 * at rotation) and the new hash is adopted. Absent/equal → no change.
 	 */
@@ -194,7 +194,7 @@ export class BrowserAuthStore {
 		}
 		// Operator token sync (P2.1 rotation): the configured hash is
 		// authoritative. A fresh store adopts it; a DIFFERENT hash means the
-		// operator rotated the access token — every live session is revoked
+		// operator rotated the access token, every live session is revoked
 		// (absolute lifetimes are never slid; they end now) and the new hash
 		// is adopted. Absent → the store keeps whatever it persisted.
 		this.#syncConfiguredTokenHash(opts.configuredTokenHash);
@@ -354,7 +354,7 @@ export class BrowserAuthStore {
 		try {
 			raw = readFileSync(this.#path, "utf8");
 		} catch (error) {
-			// Fresh store — nothing loaded yet. Any other read failure also
+			// Fresh store: nothing loaded yet. Any other read failure also
 			// behaves as fresh rather than corrupting on a later first save.
 			const code =
 				typeof error === "object" && error !== null && "code" in error ? error.code : undefined;

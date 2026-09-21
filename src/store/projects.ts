@@ -200,7 +200,7 @@ export function sendCreateWorktree(
  *  lifecycle service prepares the workspace (pin + verify source at
  *  `revision`, independent object store), runs it under the selected
  *  provider profile, and broadcasts preparation/runtime/callback/ready
- *  lifecycle stages on the roster entry. `source` has at most one member —
+ *  lifecycle stages on the roster entry. `source` has at most one member:
  *  local path or remote URL; omitted = the registered project's local path.
  *  `start:true` also arms the post-attach picker gate like the worktree
  *  senders above. */

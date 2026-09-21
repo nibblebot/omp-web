@@ -1167,7 +1167,7 @@ describe("edge pipe liveness and replay", () => {
 			await sleep(300); // deadline tripped, redial still pending (400ms backoff)
 			// The command is forwarded while the pipe is DOWN: it travels over
 			// HTTP, so the daemon answers on its live streams and the origin must
-			// still settle, by id, exactly once — and a redial is NOT a loss.
+			// still settle, by id, exactly once, and a redial is NOT a loss.
 			await browser.send({ type: "call", id: "redial-1", method: "prompt", args: ["mid-redial"] });
 			await browser.waitForFrame(
 				(f) => f.type === "call_result" && f.id === "redial-1",

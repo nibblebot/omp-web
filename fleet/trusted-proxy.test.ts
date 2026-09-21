@@ -17,7 +17,7 @@ describe("parseIp", () => {
 		expect(mapped).toEqual({ bits: 0xc0000201n, width: 32 });
 	});
 
-	test("rejects malformed literals (never a match — fail closed)", () => {
+	test("rejects malformed literals (never a match, fail closed)", () => {
 		for (const bad of [
 			"",
 			"not-an-ip",

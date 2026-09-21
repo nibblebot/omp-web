@@ -397,7 +397,7 @@ async function computeSessionsList(ctx: AppCtx): Promise<SessionSummary[]> {
 	// 3. Fleet log-store coverage (P8.6): store-only sessions surface as
 	// rows with origin "fleet-store"; sessions that also exist on disk are
 	// deduplicated by stable session identity (the store sessionId ↔ a
-	// fleet-local header id) — the local row carries the `stored` annotation
+	// fleet-local header id), the local row carries the `stored` annotation
 	// instead of duplicating. Unstreamed remote history is simply absent.
 	if (cfg.stored !== undefined) {
 		try {

@@ -170,7 +170,7 @@ function labelList(flags: Map<string, FlagValue>): string[] | undefined {
 }
 
 /** Every `--trusted-proxy` occurrence (repeatable); each value may itself be
- *  comma-splittable — loadConfig splits occurrences, mirroring `label`. */
+ *  comma-splittable; loadConfig splits occurrences, mirroring `label`. */
 function trustedProxyList(flags: Map<string, FlagValue>): string[] | undefined {
 	const value = flags.get("trusted-proxy");
 	return Array.isArray(value) ? value : undefined;
@@ -502,7 +502,7 @@ async function projectsCmd(port: number): Promise<number> {
 	return 0;
 }
 
-/** profiles: GET /ctl/profiles — the secret-free provider profile catalog. */
+/** profiles: GET /ctl/profiles, the secret-free provider profile catalog. */
 async function profilesCmd(port: number): Promise<number> {
 	const body = (await ctl(port, "/ctl/profiles")) as { profiles?: unknown };
 	if (!Array.isArray(body.profiles)) throw new CliError("unexpected profiles response");
@@ -729,7 +729,7 @@ async function addCloneCmd(
 	const where = String(entry.cwd ?? name);
 	const stage = entry.lifecycleStage !== undefined ? ` ${entry.lifecycleStage}` : "";
 	console.log(
-		`created clone ${where} (${String(entry.daemonId ?? "?")})${start ? ` — status ${String(entry.status ?? "?")}${stage}` : " — not started"}`,
+		`created clone ${where} (${String(entry.daemonId ?? "?")})${start ? `, status ${String(entry.status ?? "?")}${stage}` : ", not started"}`,
 	);
 	return 0;
 }
@@ -752,7 +752,7 @@ async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 	const profile = config.providerProfiles?.[profileId];
 	if (profile === undefined) {
 		throw new CliError(
-			`no provider profile "${profileId}" in ${configPath} — configure providerProfiles."${profileId}" first`,
+			`no provider profile "${profileId}" in ${configPath}: configure providerProfiles."${profileId}" first`,
 		);
 	}
 	const dataHome = dirname(configPath);
@@ -860,7 +860,7 @@ async function provisionCmd(
  * (POST /ctl/start, server alias of /ctl/wake; P6.1). The route accepts a
  * daemon id only, so the selector (id or exact roster name) is resolved
  * client-side against /ctl/sessions first. The server refuses non-clone
- * entries — direct/template sessions keep /ctl/spawn.
+ * entries; direct/template sessions keep /ctl/spawn.
  */
 async function startCmd(
 	positionals: string[],
@@ -879,7 +879,7 @@ async function startCmd(
 	}
 	const first = matches[0];
 	if (matches.some((row) => row.daemonId !== first.daemonId)) {
-		throw new CliError(`selector ${selector} matches multiple daemons — use a daemon id`);
+		throw new CliError(`selector ${selector} matches multiple daemons; use a daemon id`);
 	}
 	const body = (await ctl(port, "/ctl/start", {
 		method: "POST",
@@ -887,7 +887,7 @@ async function startCmd(
 		body: JSON.stringify({ daemonId: first.daemonId }),
 	})) as { observed?: string; pid?: number };
 	console.log(
-		`started ${first.daemonId} — observed ${String(body.observed ?? "?")}` +
+		`started ${first.daemonId}, observed ${String(body.observed ?? "?")}` +
 			(body.pid !== undefined ? ` (pid ${body.pid})` : ""),
 	);
 	return 0;
@@ -1015,7 +1015,7 @@ options:
                        headers are honored (repeatable; env
                        OMP_FLEET_TRUSTED_PROXY csv, config trustedProxies
                        key); forwarded headers are ignored from any other
-                       peer — never trusted by default`;
+                       peer, never trusted by default`;
 
 export async function main(argv: string[]): Promise<number> {
 	try {

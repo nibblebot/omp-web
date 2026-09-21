@@ -4,7 +4,7 @@
  * construction with the explicit loopback-dev Secure exception, absolute
  * 30-day expiry that never slides, and logout / revoke-all / access-token
  * rotation (including the configuredTokenHash boot rotation) invalidating
- * exactly the right sessions — with revocation surviving a reload.
+ * exactly the right sessions, with revocation surviving a reload.
  *
  * The peer-aware gate policy (forwarded headers, CSRF/origin over real HTTP)
  * lives in fleet/server-auth.test.ts; this file tests the store alone.
@@ -67,7 +67,7 @@ describe("cookie construction", () => {
 		expect(cookie).toContain("Path=/");
 		expect(cookie).toContain(`Max-Age=${TTL_SECONDS}`);
 		// The Expires attribute is the minted ABSOLUTE deadline (UTC seconds
-		// granularity — the floor of expiresAt, never later).
+		// granularity, the floor of expiresAt, never later).
 		const expiresMatch = /Expires=([^;]+)/.exec(cookie);
 		expect(expiresMatch).not.toBeNull();
 		const parsed = Date.parse(expiresMatch![1]!);
@@ -294,7 +294,7 @@ describe("corrupt store fails closed", () => {
 	test("a session record written without the revoked flag reloads as live (pre-revocation writes)", () => {
 		// Tampering with the file is out of the trust model, but the load
 		// path must tolerate a missing `revoked` field as a live record
-		// (backward-compatible writes before the flag existed) — a session
+		// (backward-compatible writes before the flag existed): a session
 		// minted under the CURRENT expected hash is genuinely live.
 		const path = storePath("corrupt-flags");
 		const first = new BrowserAuthStore(path);

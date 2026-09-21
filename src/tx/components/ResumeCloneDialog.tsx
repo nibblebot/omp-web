@@ -1,11 +1,11 @@
 /**
  * ResumeCloneDialog: resume an orphaned (deleted) stored workspace onto a
- * fresh clone. The ONLY resume affordance in the fleet-store surface —
+ * fresh clone. The ONLY resume affordance in the fleet-store surface:
  * resumeClonePath is server-issued and present only on orphaned workspaces;
  * the dialog never renders for fleet-stored browsing otherwise.
  *
  * The warning is explicit: session logs are not the workspace, and
- * transcripts never contain working-tree files — uncommitted working-tree
+ * transcripts never contain working-tree files; uncommitted working-tree
  * state is unrecoverable once the workspace is gone.
  *
  * The dialog picks which stored session to resume (POST body requires
@@ -161,7 +161,7 @@ function ResumeDialogBody(props: { target: ResumeTarget; onClose: () => void }) 
 				<p class="resume-warn">
 					This provisions a fresh clone at the pinned commit and resumes the selected session there.{" "}
 					<strong>
-						UNCOMMITTED WORKING-TREE FILE STATE IS UNRECOVERABLE — session logs are not the
+						UNCOMMITTED WORKING-TREE FILE STATE IS UNRECOVERABLE; session logs are not the
 						workspace, and transcripts do not contain working-tree files.
 					</strong>
 				</p>
@@ -216,7 +216,7 @@ function ResumeDialogBody(props: { target: ResumeTarget; onClose: () => void }) 
 										{(s) => (
 											<option value={s.sessionId}>
 												{s.title ?? s.sessionId}
-												{s.title ? ` — ${s.sessionId}` : ""}
+												{s.title ? `: ${s.sessionId}` : ""}
 											</option>
 										)}
 									</For>
@@ -249,7 +249,7 @@ function ResumeDialogBody(props: { target: ResumeTarget; onClose: () => void }) 
 				</Show>
 				<Show when={done()}>
 					<div class="resume-ok" role="status">
-						Resume request accepted — provisioning a fresh clone.
+						Resume request accepted: provisioning a fresh clone.
 					</div>
 				</Show>
 

@@ -1,23 +1,23 @@
 /**
- * Clone recovery + race regressions (clone-plan P6.1/P6.2/P6.3/P6.4 —
+ * Clone recovery + race regressions (clone-plan P6.1/P6.2/P6.3/P6.4:
  * RecoveryCompletion's uncertain-safety boundaries). These are deliberately
  * narrow deterministic regressions, NOT a lifecycle matrix:
  *
  *  1. restart at the enrollment-before-authorization boundary: a fleet that
  *     crashed after persisting the enrollment (gen N) but before persisting
  *     authorizedGeneration must, on restart, re-inspect the sandbox and NOT
- *     blindly re-ensure at a fenced generation — a live sandbox reattaches
+ *     blindly re-ensure at a fenced generation; a live sandbox reattaches
  *     at the same generation with the persisted credential; a sandbox the
  *     provider reports stopped/missing for desired-running bumps exactly
  *     once (no double writer, no stale-gen request).
  *
  *  2. stale generation / uncertain predecessor: with an inspect `conflict`
- *     (uncertain termination) replacement is refused — no new writer is
+ *     (uncertain termination) replacement is refused; no new writer is
  *     admitted and the registry authorizedGeneration does not move.
  *
  *  3. busy / disconnected is not idle-stopped: a clone workspace's compute
  *     is provider-owned (never a supervisor child); the fleet is the SOLE
- *     idle-stop authority — no legacy supervisor idle path, connector
+ *     idle-stop authority; no legacy supervisor idle path, connector
  *     disconnect, or registry downgrade may stop a desired-running clone.
  *
  * Fixtures: a real local git repo for the clone source, a scripted fake
@@ -179,7 +179,7 @@ async function createClone(server: FleetServer, repoDir: string, name: string): 
 
 describe("clone recovery: restart durable boundaries + races", () => {
 	test(
-		"restart reattaches a live desired-running sandbox at the SAME generation — never a second writer",
+		"restart reattaches a live desired-running sandbox at the SAME generation, never a second writer",
 		async () => {
 			const { server, paths, workspaceDir, repoDir } = await bootFleet("reattach-running");
 			try {
@@ -195,7 +195,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 
 				// FLEET RESTART: same statePath, fresh process. Boot reconcile
 				// inspects; the sandbox is running → reattach at gen 1 with the
-				// persisted credential — never a bump, never a re-ensure.
+				// persisted credential, never a bump, never a re-ensure.
 				await server.close();
 				const server2 = await startTestFleet(
 					{ statePath: paths.statePath, configPath: paths.configPath },
@@ -215,7 +215,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				try {
 					// Boot reconcile is fire-and-forget: the persisted status is
 					// ALREADY "ready" (clone entries skip the boot downgrade), so
-					// wait for the reconcile's reattach side-effect — the stage
+					// wait for the reconcile's reattach side-effect: the stage
 					// flips to "ready" (from the persisted value) only after the
 					// provider inspect confirms the sandbox is live.
 					await waitFor(
@@ -235,7 +235,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 					expect(entry.workspace?.desiredState).toBe("running");
 					expect(entry.workspace?.enrollment?.generation).toBe(1); // persisted cred reused
 					// The provider saw exactly ONE ensure (gen 1) across both
-					// fleet lifetimes — reattach is inspect-only, never a second
+					// fleet lifetimes; reattach is inspect-only, never a second
 					// ensure (no duplicate writer).
 					const ops = providerOps(workspaceDir, daemonId);
 					const ensures = ops.filter((o) => o.op === "ensure-running");
@@ -298,7 +298,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 					expect(entry.workspace?.desiredState).toBe("running");
 					expect(entry.status).toBe("ready");
 					// Exactly TWO ensures total (gen 1 pre-restart, gen 2 post) and
-					// the gen-2 ensure request carried generation 2 — never the
+					// the gen-2 ensure request carried generation 2, never the
 					// stale gen 1 (the fencing regression Main observed).
 					const ops = providerOps(workspaceDir, daemonId);
 					const ensures = ops.filter((o) => o.op === "ensure-running");
@@ -318,7 +318,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 	);
 
 	test(
-		"uncertain predecessor (inspect conflict) refuses replacement — no second writer admitted, generation never moves",
+		"uncertain predecessor (inspect conflict) refuses replacement; no second writer admitted, generation never moves",
 		async () => {
 			const { server, workspaceDir, repoDir } = await bootFleet("uncertain");
 			try {
@@ -332,7 +332,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				});
 				server.registry.setStatus(daemonId, "ready");
 				// Start/wake must refuse: the inspect conflict means the
-				// predecessor's termination is uncertain — no new writer may be
+				// predecessor's termination is uncertain; no new writer may be
 				// admitted (P6.2).
 				const wake = await postJson(server.port, "/ctl/start", { daemonId });
 				expect(wake.status).toBe(409);
@@ -352,7 +352,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 	);
 
 	test(
-		"a dead desired-running sandbox is surfaced failed/error by the callback watchdog — never left at an eternal callback stage",
+		"a dead desired-running sandbox is surfaced failed/error by the callback watchdog, never left at an eternal callback stage",
 		async () => {
 			const { server, repoDir } = await bootFleet("dead-after-ensure");
 			try {
@@ -365,7 +365,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				// The sandbox is dead (later inspects report stopped): the
 				// watchdog (~10s inspect cadence) must flip to failed/error.
 				// Real-time wait is deliberate: the watchdog is a wall-clock
-				// poller (1s ticks, inspect every 10th) — there is no event to
+				// poller (1s ticks, inspect every 10th); there is no event to
 				// await, so waitFor polls the observable transition.
 				await waitFor(
 					() => server.registry.get(daemonId)?.lifecycleStage === "failed",
@@ -408,7 +408,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				expect(entry.status).toBe("asleep");
 				expect(entry.workspace?.enrollment).toBeUndefined(); // revoked
 				expect(entry.lifecycleStage).toBeUndefined(); // no active stage
-				// The volume (checkout) is preserved — stop never deletes.
+				// The volume (checkout) is preserved; stop never deletes.
 				const checkout = join(entry.cwd ?? "", ".checkout", ".git");
 				expect(existsSync(checkout)).toBe(true);
 			} finally {

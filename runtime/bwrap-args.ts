@@ -5,7 +5,7 @@
  * host `/` is never bound; instead a fixed set of credential-free system
  * roots is read-only bound (existence-checked and realpath-deduped): the
  * Nix store, the current system profile, `/usr`, `/bin`, `/sbin`, `/lib`,
- * `/lib64`, `/opt` — plus a small allowlist of `/etc` entries (resolver and
+ * `/lib64`, `/opt`, plus a small allowlist of `/etc` entries (resolver and
  * CA/cert data, locale identity), and the runtime package root (the nearest
  * ancestor of the runtime entry that carries `node_modules/@oh-my-pi`).
  * Operator home, `/home`, `/var`, sibling workspace volumes, every other
@@ -16,7 +16,7 @@
  * Per P5.5: operator credentials, the SSH agent, container sockets, and
  * fleet/provider administration state are never mountable; selected model
  * credentials enter ONLY through profile `secretRefs` resolved by the
- * provider and merged after the ambient allowlist — never from the operator
+ * provider and merged after the ambient allowlist, never from the operator
  * environment and never through the request JSON.
  */
 
@@ -100,7 +100,7 @@ export interface BwrapArgsInput {
 	env?: Record<string, string | undefined>;
 	/**
 	 * Selected model credentials resolved from `profile.secretRefs` by the
-	 * provider (P5.5). Values merge AFTER the ambient allowlist — they are
+	 * provider (P5.5). Values merge AFTER the ambient allowlist; they are
 	 * the ONLY source for keys outside the allowlist and cannot override any
 	 * allowlisted key.
 	 */
@@ -116,7 +116,7 @@ export interface BwrapArgsInput {
 }
 
 export interface BwrapArgsOutput {
-	/** Complete bwrap argv — the only namespace surface. */
+	/** Complete bwrap argv: the only namespace surface. */
 	argv: string[];
 	/** Whitelisted sandbox environment. */
 	env: Record<string, string>;
@@ -136,7 +136,7 @@ export const ENV_DENY_KEYS: readonly string[] = [
  * Env keys a sandboxed omp-session needs (callback flags, locale). This is
  * the ONLY ambient-env passthrough: anything absent here cannot enter the
  * sandbox from the operator environment. Credential-shaped keys
- * (PI_AUTH_*, PI_PROFILE, PI_CONFIG_DIR) were intentionally REMOVED — they
+ * (PI_AUTH_*, PI_PROFILE, PI_CONFIG_DIR) were intentionally REMOVED; they
  * are model credentials and enter only via `profile.secretRefs`.
  */
 export const ENV_ALLOW_KEYS: readonly string[] = [
@@ -258,7 +258,7 @@ export function assertWorkspaceVolume(source: string, roots: DenyRoots): void {
 /**
  * Assert a bind source is not inside any denied root. Compares realpaths,
  * so symlinked tools (NixOS /run/current-system/sw/bin/bun) resolve to
- * their store target before the check — the store path, not the
+ * their store target before the check: the store path, not the
  * user-facing symlink, is what the mount actually exposes.
  */
 export function assertAllowedSource(source: string, roots: DenyRoots): void {
@@ -310,7 +310,7 @@ export function existingDenyDirs(roots: DenyRoots): string[] {
 /**
  * Deny roots that exist and are files (sockets). A mount requires a
  * directory destination, so a file path is hidden by read-only binding
- * /dev/null over it — inside the sandbox the path is no longer a socket.
+ * /dev/null over it; inside the sandbox the path is no longer a socket.
  */
 export function existingDenyFiles(roots: DenyRoots): string[] {
 	const existing: string[] = [];
@@ -447,7 +447,11 @@ export function defaultRuntimeLaunch(env?: Record<string, string | undefined>): 
 	}
 	// Fall back to the shallowest dev path so preflight reports it missing
 	// actionably when neither layout is present.
-	return { entry: devCandidates[0], bin: environment.OMP_RUNTIME_BIN ?? process.execPath, args: [] };
+	return {
+		entry: devCandidates[0],
+		bin: environment.OMP_RUNTIME_BIN ?? process.execPath,
+		args: [],
+	};
 }
 
 function isContained(candidate: string, root: string): boolean {
@@ -514,7 +518,7 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 		argv.push(...flags, source, dest);
 	};
 
-	// Fresh namespace device/proc/tmp mounts FIRST — bwrap creates these
+	// Fresh namespace device/proc/tmp mounts FIRST: bwrap creates these
 	// destinations on the empty namespace, and a later ro-bind of a system
 	// root must never pin `/dev`/`/proc`/`/tmp` first (bwrap then cannot
 	// mount over it). Each of these flags takes ONE argument (the dest).
@@ -522,7 +526,7 @@ export function buildBwrapArgv(input: BwrapArgsInput): BwrapArgsOutput {
 	argv.push("--proc", "/proc");
 	argv.push("--tmpfs", "/tmp");
 
-	// Allowlist system roots — existence-checked, realpath-deduped. The
+	// Allowlist system roots: existence-checked, realpath-deduped. The
 	// realpath is mounted at the requested path.
 	const mountedReal = new Set<string>();
 	const mountRoot = (requested: string): void => {

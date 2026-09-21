@@ -6,8 +6,8 @@
  *
  * Env contract (set by the pod spec; see kubernetes-provider.ts):
  *   OMP_WORKSPACE_ID, OMP_PREP_SOURCE_REMOTE (required),
- *   OMP_PREP_REVISION (pinned full commit; optional — resolves HEAD once),
- *   OMP_PREP_BRANCH (optional — defaults to deriveWorkspaceBranch).
+ *   OMP_PREP_REVISION (pinned full commit; optional, resolves HEAD once),
+ *   OMP_PREP_BRANCH (optional, defaults to deriveWorkspaceBranch).
  *
  * Fails with the frozen vocabulary to stderr + exit code; the provider
  * surfaces pod termination reasons actionably on ensure-running.

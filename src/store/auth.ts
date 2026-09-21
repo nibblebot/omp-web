@@ -1,10 +1,10 @@
 /**
  * Browser auth domain (P2.4 store facade): opaque 256-bit session cookie
- * (`omp_session`, HttpOnly + Secure + SameSite=Lax, 30-day absolute expiry —
+ * (`omp_session`, HttpOnly + Secure + SameSite=Lax, 30-day absolute expiry;
  * ledger "Browser auth" in docs/clone-contracts.md). The access token lives
  * ONLY for the duration of a signIn() call: it is posted once to
- * POST /auth/login and dropped. The client persists NOTHING — no
- * localStorage/sessionStorage, no tokens in the URL — the browser keeps only
+ * POST /auth/login and dropped. The client persists NOTHING: no
+ * localStorage/sessionStorage, no tokens in the URL; the browser keeps only
  * the server-issued HttpOnly cookie, and this module caches the per-session
  * CSRF token in memory for mutation headers. Every request is same-origin so
  * the cookie rides along automatically.
@@ -51,7 +51,7 @@ export class AuthError extends Error {
 let status: AuthStatus = "unknown";
 let expiresAt: number | undefined;
 /** Per-session CSRF token from the login/session answers. Memory-only by
- *  contract — never persisted, never placed in the URL. */
+ *  contract, never persisted, never placed in the URL. */
 let csrf: string | null = null;
 
 const listeners = new Set<(snapshot: AuthSnapshot) => void>();
@@ -61,7 +61,7 @@ function snapshot(): AuthSnapshot {
 }
 
 /** Move the auth state and notify listeners. Silent no-op when nothing
- *  changes — concurrent 401s collapse into one signedOut notification. */
+ *  changes; concurrent 401s collapse into one signedOut notification. */
 function transition(next: AuthStatus, nextExpiresAt?: number): AuthSnapshot {
 	if (status === next && expiresAt === nextExpiresAt) return snapshot();
 	status = next;
@@ -151,7 +151,7 @@ function readExpiresAt(body: Record<string, unknown>): number | undefined {
 
 /**
  * Fetch wrapper for authed fleet endpoints. Three jobs:
- *  1. Same-origin credentials on every request (cookie-only auth — the
+ *  1. Same-origin credentials on every request (cookie-only auth: the
  *     HttpOnly omp_session cookie IS the credential; no bearer tokens here).
  *  2. Adds the session-bound CSRF header on mutations (anything but
  *     GET/HEAD) when a token is cached. Without one the request still goes
@@ -159,7 +159,7 @@ function readExpiresAt(body: Record<string, unknown>): number | undefined {
  *     client guessing.
  *  3. A 401 answer means the session cookie is dead: transitions to
  *     signedOut (notifying listeners → sign-in modal) and drops the stale
- *     CSRF token. The Response is returned either way — callers decide.
+ *     CSRF token. The Response is returned either way; callers decide.
  */
 export async function authedFetch(
 	input: string | URL | Request,
@@ -205,7 +205,7 @@ export async function checkSession(): Promise<AuthSnapshot> {
 
 /**
  * Exchange an access token for a session: POST /auth/login. The token is
- * used exactly once here and never stored — success leaves only the
+ * used exactly once here and never stored; success leaves only the
  * server-issued HttpOnly cookie and the in-memory CSRF token. 401/403 throw
  * AuthError (typically `unauthorized`/`forbidden`); the sign-in modal shows
  * the message.

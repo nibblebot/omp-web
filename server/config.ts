@@ -63,8 +63,8 @@ export interface SessionConfig {
 	callbackToken?: string;
 	/**
 	 * Explicit streaming proxy URL for the callback pair. Absent = direct.
-	 * Only http/https proxies are supported; anything else is a startup error
-	 * — there is no silent fallback to a direct connection.
+	 * Only http/https proxies are supported; anything else is a startup error;
+	 * there is no silent fallback to a direct connection.
 	 */
 	callbackProxy?: string;
 	/** Explicit loopback HTTP exception; honored only for loopback callback URL hosts. */
@@ -150,7 +150,7 @@ export function parseConfig(argv: string[]): SessionConfig {
 	// Enforcement lives here so a bad setup is a visible startup error instead
 	// of a runtime surprise: HTTPS always, HTTP only behind an explicit
 	// --callback-allow-http for a loopback host; an explicit proxy must be
-	// http/https — never silently ignored, never fallen back from.
+	// http/https, never silently ignored, never fallen back from.
 	const callbackAllowHttp =
 		flags.has("callback-allow-http") || Bun.env.OMP_SESSION_CALLBACK_ALLOW_HTTP === "1";
 	const callbackUrlRaw = flag("callback-url") ?? Bun.env.OMP_SESSION_CALLBACK_URL;

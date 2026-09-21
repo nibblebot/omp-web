@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Kubernetes provider (P5.3) — implements the frozen provider operation
+ * Kubernetes provider (P5.3): implements the frozen provider operation
  * protocol (docs/clone-contracts.md, "Provider operation protocol") for
  * clone workspaces on an operator-prepared Kubernetes API.
  *
@@ -43,8 +43,8 @@
  *   writer until termination is proven. The PVC is retained.
  * - `delete` runs only after stop semantics (it stops first when the pod
  *   is still present), verifies the claim's ownership labels before
- *   removing it — a foreign claim on the deterministic name is never
- *   deleted — and then removes the provider stateDir.
+ *   removing it, a foreign claim on the deterministic name is never
+ *   deleted, and then removes the provider stateDir.
  *
  * Restart rediscovery: pod/PVC names are deterministic from workspaceId
  * (DNS-1123 sanitize + 8-char sha256 suffix), so after a fleet or provider
@@ -55,9 +55,9 @@
  * Configuration (operator-explicit; no ambient discovery):
  * - kube context: `profile.context` (additive protocol field agreed with
  *   the Runtime owner; effective fallback is the `OMP_KUBE_CONTEXT`
- *   environment of the fleet process) — required; the ambient
+ *   environment of the fleet process), required; the ambient
  *   current-context is NEVER used.
- * - namespace/image: `profile.namespace` / `profile.image` — required.
+ * - namespace/image: `profile.namespace` / `profile.image`, required.
  * - resources/storage: `profile.resources {cpu, memory}` (applied as both
  *   requests and limits → Guaranteed QoS), `profile.storage {class, size}`
  *   (class optional = cluster default; size defaults to 10 Gi).
@@ -67,7 +67,7 @@
  * - callback enrollment: the fleet-written `<stateDir>/callback-env.json`
  *   handoff (same contract as bwrap-provider) is injected as pod env. The
  *   enrollment token is generation-scoped and readable by anyone with pod
- *   get permission in the operator-approved namespace — the same exposure
+ *   get permission in the operator-approved namespace, the same exposure
  *   class as bwrap's process environment; the namespace must be scoped
  *   accordingly (P5.5 RBAC is operator-owned).
  * - in-pod preparation: the fleet resolves the pin and passes it through
@@ -82,7 +82,7 @@
  * creation, and no ephemeral/emptyDir fallback for workspace storage.
  *
  * Bundle-safety: imports only node builtins and shared/*; no import.meta
- * path reads, no self-respawn. `kubectl` argv arrays only — never a shell.
+ * path reads, no self-respawn. `kubectl` argv arrays only, never a shell.
  */
 
 import type { Subprocess } from "bun";
@@ -1041,7 +1041,7 @@ function defaultDeps(): OpDeps {
  * deterministic name → ownership labels → token/generation annotations →
  * API uid re-anchor; the stateDir record is rebuilt when lost. A live pod
  * for a DIFFERENT generation, a foreign-token pod, or a terminating
- * predecessor is `conflict` — never a second writer on the claim.
+ * predecessor is `conflict`, never a second writer on the claim.
  */
 async function opEnsureRunning(
 	rawRequest: ProviderRequest,
@@ -1094,7 +1094,7 @@ async function opEnsureRunning(
 			if (!ownedByWorkspace(meta, workspaceId)) {
 				return err(
 					"conflict",
-					`pod ${cfg.namespace}/${podName} exists without this workspace's ownership identity; refusing to touch a foreign object — inspect it manually (kubectl --context <ctx> -n ${cfg.namespace} describe pod ${podName})`,
+					`pod ${cfg.namespace}/${podName} exists without this workspace's ownership identity; refusing to touch a foreign object; inspect it manually (kubectl --context <ctx> -n ${cfg.namespace} describe pod ${podName})`,
 					false,
 				);
 			}
@@ -1102,7 +1102,7 @@ async function opEnsureRunning(
 			if (podToken === "") {
 				return err(
 					"conflict",
-					`pod ${cfg.namespace}/${podName} carries no workspace-token annotation; this provider never creates such a pod — refusing to adopt it`,
+					`pod ${cfg.namespace}/${podName} carries no workspace-token annotation; this provider never creates such a pod, refusing to adopt it`,
 					false,
 				);
 			}
@@ -1117,7 +1117,7 @@ async function opEnsureRunning(
 			if (record !== null && record.workspaceToken !== podToken) {
 				return err(
 					"conflict",
-					`pod ${podName} carries a different workspace token than the recorded identity; refusing to adopt — delete the pod manually or run stop/delete`,
+					`pod ${podName} carries a different workspace token than the recorded identity; refusing to adopt; delete the pod manually or run stop/delete`,
 					false,
 				);
 			}
@@ -1136,7 +1136,7 @@ async function opEnsureRunning(
 			if (phase === "Failed" || phase === "Succeeded") {
 				// Terminated corpse: provably not writing. Remove it and wait for
 				// proven absence before creating the replacement (same generation,
-				// same token — the PVC init marker still guards preparation).
+				// same token, the PVC init marker still guards preparation).
 				try {
 					await kubeDelete(deps.exec, cfg, "pod", podName, `pod ${podName} (terminal ${phase})`);
 					if (!(await waitGone(deps.exec, cfg, "pod", podName, deps.stopWaitMs))) {
@@ -1200,8 +1200,8 @@ async function opEnsureRunning(
 		}
 
 		// Pod absent: a same-generation record means the pod vanished
-		// externally — recreate with the recorded token. A different
-		// generation means a replacement after a proven stop — fresh token.
+		// externally: recreate with the recorded token. A different
+		// generation means a replacement after a proven stop, fresh token.
 		// No record means a new workspace.
 		const token =
 			record !== null && record.generation === generation
@@ -1229,7 +1229,7 @@ async function opEnsureRunning(
 			if (cfg.storageClass !== undefined && meta.storageClassName !== cfg.storageClass) {
 				return err(
 					"conflict",
-					`existing claim ${podName} uses storageClass ${JSON.stringify(meta.storageClassName)}, profile requests ${JSON.stringify(cfg.storageClass)}; PVC spec is immutable — align the profile or migrate the claim deliberately`,
+					`existing claim ${podName} uses storageClass ${JSON.stringify(meta.storageClassName)}, profile requests ${JSON.stringify(cfg.storageClass)}; PVC spec is immutable; align the profile or migrate the claim deliberately`,
 					false,
 				);
 			}
@@ -1339,7 +1339,7 @@ async function createPodAndWait(
 	const remediation =
 		reason !== null && /ImagePull|ErrImage/i.test(reason)
 			? `image ${cfg.image} cannot be pulled (${reason}); make the session-runtime image available to the cluster`
-			: `pod ${podName} did not reach Running (${waited.phase}${reason === null ? "" : `: ${reason}`}); the identity is recorded — retry ensure-running to adopt it`;
+			: `pod ${podName} did not reach Running (${waited.phase}${reason === null ? "" : `: ${reason}`}); the identity is recorded; retry ensure-running to adopt it`;
 	return err("unavailable", remediation, waited.phase !== "Failed" && waited.phase !== "Succeeded");
 }
 
@@ -1491,7 +1491,7 @@ async function opStop(rawRequest: ProviderRequest, deps: OpDeps): Promise<Provid
 }
 
 /**
- * delete: authorized only after the stop proof — a live or uncertain pod
+ * delete: authorized only after the stop proof; a live or uncertain pod
  * is stopped through the same identity checks first, and an unprovable
  * termination is `conflict`. The claim's ownership identity is verified
  * before removal; a foreign claim is never deleted.
@@ -1850,7 +1850,7 @@ export async function preflightKubernetesProfile(
 		checks.push({
 			name: "kube-image",
 			ok: true,
-			detail: `image ${profile.image}; pullability is verified at first pod start — ensure the cluster can pull this reference (imagePullSecrets are namespace-scoped and operator-managed)`,
+			detail: `image ${profile.image}; pullability is verified at first pod start; ensure the cluster can pull this reference (imagePullSecrets are namespace-scoped and operator-managed)`,
 		});
 	}
 

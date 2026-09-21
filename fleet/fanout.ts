@@ -50,7 +50,7 @@ export interface PromptResult {
 
 /**
  * Minimal transport/lifecycle surfaces the fan-out needs for clone entries
- * (structural conformance — the server wires the real DaemonTransportRegistry
+ * (structural conformance: the server wires the real DaemonTransportRegistry
  * and WorkspaceLifecycle; fan-out never imports them to avoid a cycle).
  */
 export interface FanoutTransport {
@@ -105,7 +105,7 @@ export async function promptEntry(
 		const current = deps.registry.get(daemonId) ?? entry;
 		if (current.workspace?.kind === "clone") {
 			// Clone fan-out rides the callback pair (P3.4/P6.1): wake through
-			// the lifecycle ensure (never the supervisor/connector — provider
+			// the lifecycle ensure (never the supervisor/connector: provider
 			// compute has no fleet child or dialable socket), then send the
 			// prompt as a kind:"command" envelope on the transport control
 			// stream and correlate the answer frames the daemon mirrors there.
@@ -157,7 +157,7 @@ export async function promptEntry(
 
 /**
  * Fan out one prompt to a clone workspace over its callback pair. Wakes via
- * the lifecycle ensure when the pair is down, waits for the pair (bounded —
+ * the lifecycle ensure when the pair is down, waits for the pair (bounded:
  * ensureCloneRunning resolves at provider-running, the daemon dials right
  * after), then sends kind:"command" on the transport control stream and
  * correlates the daemon's mirrored frames (P3.4). No offline queue and no
@@ -222,7 +222,7 @@ function waitForPair(transport: FanoutTransport, daemonId: string, waitMs: numbe
 		unsubscribe();
 		resolve();
 	});
-	// Check once after subscribing — the pair may have come up between the
+	// Check once after subscribing; the pair may have come up between the
 	// ensure resolution and the subscription above.
 	if (transport.pairStatus(daemonId).paired) {
 		clearTimeout(timer);

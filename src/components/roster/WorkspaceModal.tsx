@@ -38,7 +38,7 @@ type SourceMode = "default" | "local" | "remote";
 
 /**
  * Add-workspace modal (P8.1): the unified replacement for the worktree-only
- * dialog. Three modes — Worktree (register a linked worktree of a registered
+ * dialog. Three modes: Worktree (register a linked worktree of a registered
  * project: "+ New branch" or an existing-branch dropdown), Clone (an
  * independent provider-run clone workspace: name, provider profile, optional
  * source/revision/branch, start-now), and Add existing (discovered-but-
@@ -47,7 +47,7 @@ type SourceMode = "default" | "local" | "remote";
  * Preferences (P8.2): the opened mode honors the remembered kind (never
  * force Worktree), the start checkbox defaults from the remembered value and
  * only defaults ON without any prior preference, and a remembered clone
- * profile pre-selects ONLY while it still exists in the fleet's catalog —
+ * profile pre-selects ONLY while it still exists in the fleet's catalog;
  * missing or never-saved profiles force a deliberate selection. Nothing
  * except kind/profile/start is ever persisted (never names, branches,
  * sources, revisions).
@@ -89,7 +89,7 @@ export const WorkspaceModal: Component<{ onClose: () => void }> = (props) => {
 		kind: "new",
 	});
 	let nameInput!: HTMLInputElement;
-	/** The tab an error rung originated from — retry/back-to-edit return
+	/** The tab an error rung originated from; retry/back-to-edit return
 	 *  there (the tab may still read as the error-rung's tab otherwise). */
 	const [tabAtSubmit, setTabAtSubmit] = createSignal<Tab>("worktree");
 
@@ -121,7 +121,7 @@ export const WorkspaceModal: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	/** Branches for the dropdown: available first, checked-out (already in a
-	 *  workspace — git refuses a second checkout) last and disabled;
+	 *  workspace, git refuses a second checkout) last and disabled;
 	 *  alphabetical within each group. */
 	const sortedBranches = () =>
 		[...branches()].sort(
@@ -129,7 +129,7 @@ export const WorkspaceModal: Component<{ onClose: () => void }> = (props) => {
 		);
 
 	// The fleet's secret-free provider profile catalog (P8.1; rides the
-	// registered_projects frame — boot-static, [] on older fleets).
+	// registered_projects frame, boot-static, [] on older fleets).
 	const profiles = () => state.providerProfiles;
 	/** A real profile is selected AND still present in the catalog. */
 	const profileChosen = () => profiles().some((p) => p.id === profileId());
@@ -192,7 +192,7 @@ export const WorkspaceModal: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	/** Remember the mode's choices (kind + start always; profileId with
-	 *  clones only — see the prefs module). */
+	 *  clones only, see the prefs module). */
 	const remember = (kind: WorkspaceKindChoice, profile?: string) => {
 		rememberWorkspaceCreationPrefs(
 			profile !== undefined
@@ -340,7 +340,7 @@ export const WorkspaceModal: Component<{ onClose: () => void }> = (props) => {
 						    submission with the current field values); Back to edit
 						    returns to the form to change fields first. The pipeline
 						    is fully reset in both cases (the failed roster entry is
-						    left in place — e.g. a failed preparation keeps its
+						    left in place, e.g. a failed preparation keeps its
 						    prepared volume for the retry). */}
 						<div class="worktree-actions">
 							<button
@@ -361,7 +361,7 @@ export const WorkspaceModal: Component<{ onClose: () => void }> = (props) => {
 				)}
 			</Show>
 			<Show when={project() === null}>
-				<div class="msg-notice worktree-error">unknown project — reopen from the sidebar</div>
+				<div class="msg-notice worktree-error">unknown project: reopen from the sidebar</div>
 			</Show>
 			<Show when={!busy() && project() !== null}>
 				<div class="worktree-tabs" role="tablist" aria-label="Workspace mode">
@@ -517,7 +517,7 @@ export const WorkspaceModal: Component<{ onClose: () => void }> = (props) => {
 						<div class="picker-group-name">Provider profile</div>
 						<Show when={profiles().length === 0}>
 							<div class="tool-collapsed-note">
-								this fleet has no provider profiles configured — clones are unavailable
+								this fleet has no provider profiles configured; clones are unavailable
 							</div>
 						</Show>
 						<Show when={profiles().length > 0}>
@@ -695,7 +695,7 @@ export const WorkspaceModal: Component<{ onClose: () => void }> = (props) => {
 							}}
 						/>
 					</Show>
-					{/* A picker-chosen path matches no listed row — echo it so the
+					{/* A picker-chosen path matches no listed row; echo it so the
 					    selection stays visible once the picker folds away. */}
 					<Show
 						when={selectedPath() !== null && !unregistered().some((p) => p.path === selectedPath())}

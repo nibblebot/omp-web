@@ -44,7 +44,7 @@ function parseIpv4(value: string): bigint | null {
 
 /** Full IPv6: up to 8 hex groups, at most one "::" compression (which must
  *  compress at least one group), optional embedded dotted-quad tail counting
- *  as two groups. Zone ids ("%eth0") are rejected — not comparable. Returns
+ *  as two groups. Zone ids ("%eth0") are rejected, not comparable. Returns
  *  the 128-bit value. */
 function parseIpv6(value: string): bigint | null {
 	const input = value.toLowerCase();

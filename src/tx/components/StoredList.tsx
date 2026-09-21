@@ -6,8 +6,8 @@
  * opens the stored detail route in the main pane.
  *
  * Coverage labels: every row carries the "fleet-stored" chip; an orphaned
- * workspace is additionally labeled "deleted workspace — view only". These
- * rows are read-only browsing — NEVER an inline Resume / wake affordance.
+ * workspace is additionally labeled "deleted workspace: view only". These
+ * rows are read-only browsing, NEVER an inline Resume / wake affordance.
  * The ONLY resume action lives on orphaned workspaces via their server-issued
  * resumeClonePath, opening the confirm dialog (ResumeCloneDialog).
  */
@@ -43,7 +43,7 @@ export function StoredList(props: StoredListProps) {
 		(key) => (key !== null ? api.storedSessions(expanded() ?? undefined) : null),
 	);
 	/** Reactive per-workspace sessions read (createResource's .latest is
-	 *  non-tracking — the accordion rows must re-render when the resource
+	 *  non-tracking; the accordion rows must re-render when the resource
 	 *  resolves, so read the resource value through a memo). */
 	const workspaceSessions = (workspaceId: string): StoredSessionSummary[] =>
 		(sessionsRes()?.sessions ?? []).filter((s) => s.workspaceId === workspaceId);
@@ -136,7 +136,7 @@ export function StoredList(props: StoredListProps) {
 
 function WorkspaceRow(props: {
 	workspace: StoredWorkspaceSummary;
-	/** Reactive accessor (Solid's For memoizes the row body per ITEM — a
+	/** Reactive accessor (Solid's For memoizes the row body per ITEM; a
 	 *  static boolean prop would go stale when the accordion flips). */
 	expanded: () => boolean;
 	onToggle: () => void;
@@ -182,7 +182,7 @@ function WorkspaceRow(props: {
 				<div class="row-tags">
 					<span class="tag tag-store">fleet-stored</span>
 					<Show when={w().viewOnly}>
-						<span class="tag tag-warn">deleted workspace — view only</span>
+						<span class="tag tag-warn">deleted workspace: view only</span>
 					</Show>
 					<Show when={w().readOnly && !w().viewOnly}>
 						<span class="tag tag-muted">read only</span>

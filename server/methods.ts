@@ -160,7 +160,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		}
 		if (kind === "switchSession") {
 			// P8.4/P8.9: a READY clone's dropdown sends the session ID (the
-			// fleet store key — path=id=sessionId), not a file path. The SDK
+			// fleet store key: path=id=sessionId), not a file path. The SDK
 			// switchSession treats a non-existent path as "start fresh at
 			// that path", which is the "only New session" defect. Resolve a
 			// bare id (slash-free, non-.jsonl, not an existing file) against
@@ -191,7 +191,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	 * pair is active (clone workspaces): materialize the session's stored
 	 * transcripts if cold, then locate its main file under the sessions
 	 * root. A store miss surfaces as typed `unavailable` (the membership
-	 * rejection — never a silent fresh session).
+	 * rejection, never a silent fresh session).
 	 */
 	async function resolveSwitchSessionTarget(
 		entry: SessionEntry,

@@ -524,7 +524,7 @@ interface BrowserStream {
 
 /**
  * One proxy pipe: a browser's dedicated direct /events stream to a daemon
- * (direct/worktree daemons — the legacy transport, unchanged).
+ * (direct/worktree daemons, the legacy transport, unchanged).
  */
 interface DirectPipeState {
 	mode: "direct";
@@ -547,7 +547,7 @@ interface DirectPipeState {
 
 /**
  * One callback virtual stream: a browser's dedicated "browser/<connId>" pair
- * to a clone daemon (P3.4 — no inbound dial ever exists for these). The
+ * to a clone daemon (P3.4: no inbound dial ever exists for these). The
  * daemon primes + replays per stream; the edge only forwards envelopes and
  * re-sends stream_open after every pair replacement. Never redials: pair
  * liveness is the transport's job; a dropped pair surfaces as a
@@ -556,7 +556,7 @@ interface DirectPipeState {
 interface CallbackPipeState {
 	mode: "callback";
 	daemonId: string;
-	/** Edge-chosen browser connection id — the "browser/<connId>" stream's suffix. */
+	/** Edge-chosen browser connection id, the "browser/<connId>" stream's suffix. */
 	connId: string;
 	/** Intentional teardown (browser close / re-attach / clone stopped/removed). */
 	closed: boolean;
@@ -608,8 +608,8 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
  * worktree deletion.
  *
  * P1.4 clone-workspace projection: the roster surfaces the PUBLIC subset of
- * the fleet-private WorkspaceRecord — kind→workspaceKind,
- * desiredState→desiredState, profileId→providerProfileId — plus the
+ * the fleet-private WorkspaceRecord: kind→workspaceKind,
+ * desiredState→desiredState, profileId→providerProfileId, plus the
  * ephemeral lifecycle liveness facts (lifecycleStage/lifecycleError, the
  * same liveness class as status/pid/readyAt). The record's private
  * remainder (providerHandle, cleanup/archive state, clone sources) NEVER
@@ -660,7 +660,7 @@ export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): Daem
 	}
 	if (entry.error !== undefined) roster.error = entry.error;
 	// Clone workspace projection (P1.4): pass through the PUBLIC workspace
-	// fields only — kind/desiredState/profileId from the fleet-private record
+	// fields only: kind/desiredState/profileId from the fleet-private record
 	// (legacy entries carry an in-memory inferred workspace after load), and
 	// the ephemeral lifecycle liveness facts straight off the entry. The
 	// record's providerHandle and everything else private stays off the wire.
@@ -1377,7 +1377,7 @@ export class FleetEdge {
 				this.#sendError(stream, `unknown daemon: ${daemonId}`);
 				return;
 			}
-			// Clone sessions list from the fleet transcript store (P8.4 — the
+			// Clone sessions list from the fleet transcript store (P8.4: the
 			// owning daemon's session dir lives in the provider volume, never
 			// a fleet-local cwd); direct/worktree list from disk so asleep/
 			// never-started daemons answer too. Empty list when no store.
@@ -1545,7 +1545,7 @@ export class FleetEdge {
 
 	/**
 	 * create_clone: delegate entirely to the injected lifecycle service (the
-	 * SAME create the POST /ctl/clones control-plane route uses — no HTTP
+	 * SAME create the POST /ctl/clones control-plane route uses, no HTTP
 	 * self-proxy, no second lifecycle implementation). Progress + the new
 	 * roster entry ride the roster/daemon_status/lifecycleStage broadcasts;
 	 * with start:true the lifecycle also ensures the provider compute and
@@ -1619,7 +1619,7 @@ export class FleetEdge {
 			if (entry.workspace?.kind === "clone") {
 				// Clone delete is the lifecycle's verified P7 gate (admission,
 				// quiesce, store verification, read-only flip, provider
-				// deletion) — NEVER the git-worktree guards below: they reason
+				// deletion); NEVER the git-worktree guards below: they reason
 				// about a fleet-local cwd that a clone volume does not have.
 				if (!this.#lifecycle) {
 					this.#sendError(stream, "clone delete is unavailable: no lifecycle service wired");
@@ -1673,7 +1673,7 @@ export class FleetEdge {
 			if (entry.workspace?.kind === "clone") {
 				// Clone guard evidence is the lifecycleStage/lifecycleError on
 				// the roster entry (the fleet-private WorkspaceDeletion state
-				// never crosses this boundary) — not git-worktree guard facts.
+				// never crosses this boundary), not git-worktree guard facts.
 				this.#sendError(
 					stream,
 					"clone deletion guard evidence rides lifecycleStage/lifecycleError",
@@ -1745,7 +1745,7 @@ export class FleetEdge {
 				return;
 			}
 			if (entry.workspace?.kind === "clone") {
-				// Clone stop is the lifecycle's proof-bearing provider stop —
+				// Clone stop is the lifecycle's proof-bearing provider stop;
 				// NEVER the supervisor/connector paths (they do not manage
 				// provider compute). Channel teardown happens first so no
 				// browser keeps a callback stream against a stopping daemon.
@@ -1793,7 +1793,7 @@ export class FleetEdge {
 			}
 			if (entry.workspace?.kind === "clone") {
 				// Clone remove routes through the SAME verified deletion gate
-				// as delete (P7) — never registry.remove: dropping the roster
+				// as delete (P7), never registry.remove: dropping the roster
 				// identity without verification would orphan or lose the
 				// volume/store silently. Browsers detach only AFTER the gate
 				// passes, so a gate refusal keeps live attachments intact.
@@ -1843,7 +1843,7 @@ export class FleetEdge {
 			// Clone attach readiness is the callback pair's, not the connector's:
 			// ensureCloneRunning resolved at provider-running + enrollment (the
 			// pair dials in right after) and #openCallbackPipe primes via
-			// onPairChange — a connector waitReady would hang against a daemon
+			// onPairChange; a connector waitReady would hang against a daemon
 			// that has no control socket at all.
 			if (entry.workspace?.kind !== "clone") {
 				await this.#connector.waitReady(daemonId, ATTACH_WAIT_READY_MS);
@@ -1897,7 +1897,7 @@ export class FleetEdge {
 					resumeFile && resumeFile.trim() !== "" ? { resumeSessionId: resumeFile } : undefined,
 				);
 			} finally {
-				// Clone wakes settle on resolve — ensureCloneRunning is
+				// Clone wakes settle on resolve; ensureCloneRunning is
 				// idempotent, so a back-to-back wake is safe either way.
 				this.#waking.delete(daemonId);
 			}
@@ -1926,10 +1926,10 @@ export class FleetEdge {
 
 	/**
 	 * Open this browser's dedicated daemon channel and answer the attach:
-	 * ok once the channel is underway — the direct pipe's resume machinery
+	 * ok once the channel is underway; the direct pipe's resume machinery
 	 * keeps the attachment alive across drops, and the callback virtual
 	 * stream re-primes on every pair replacement (finding #28). Direct daemons
-	 * dial their endpoint; clone daemons bind a callback virtual stream — no
+	 * dial their endpoint; clone daemons bind a callback virtual stream; no
 	 * inbound dial exists for them (P3.4).
 	 */
 	#openPipe(stream: BrowserStream, entry: RegistryEntry, commandId?: string): void {
@@ -1976,7 +1976,7 @@ export class FleetEdge {
 	 * edge sends stream_open on bind and after every pair replacement, then
 	 * forwards the daemon's frame envelopes verbatim (priming included) to
 	 * this browser. Slow browsers are dropped (drop-and-resume, direct-pipe
-	 * parity — the transport's 4 MiB stream queue bound fires the sink's
+	 * parity: the transport's 4 MiB stream queue bound fires the sink's
 	 * onBackpressure). A torn-down pair surfaces as the same terminal
 	 * "daemon connection lost" error frame a direct pipe emits after its
 	 * redial budget exhausts; the edge never redials or queues for clones.
@@ -2010,7 +2010,7 @@ export class FleetEdge {
 		pipe.detach = () => transport.detachVirtualStream(daemonId, streamId);
 		stream.pipe = pipe;
 		// Attach accepted: the stream is bound below, and from here the
-		// transport owns pair liveness (stream_open re-sends on pair change) —
+		// transport owns pair liveness (stream_open re-sends on pair change);
 		// the browser is attached. Progress rides the lifecycleStage roster
 		// broadcasts; attach_result mirrors the direct pipe's dial-underway ok.
 		if (commandId !== undefined)
@@ -2040,7 +2040,7 @@ export class FleetEdge {
 	}
 
 	/** Send stream_open on this browser's callback stream (prime / re-prime).
-	 * lastSeq is omitted on pair replacement — the per-connection daemon seq
+	 * lastSeq is omitted on pair replacement: the per-connection daemon seq
 	 * space restarts, so the daemon re-primes from its ring head. */
 	#sendStreamOpen(pipe: CallbackPipeState): void {
 		const transport = this.#transport;
@@ -2048,7 +2048,7 @@ export class FleetEdge {
 		const status = transport.pairStatus(pipe.daemonId);
 		if (!status.paired || status.connectionId === null) return;
 		if (pipe.pairConnectionId !== status.connectionId) {
-			// New pair: its seq space is fresh — never send a stale lastSeq.
+			// New pair: its seq space is fresh; never send a stale lastSeq.
 			pipe.pairConnectionId = status.connectionId;
 			pipe.lastSeq = 0;
 		}
@@ -2084,7 +2084,7 @@ export class FleetEdge {
 			if (typeof payload === "object" && payload !== null && "type" in payload) {
 				if (payload.type === "stream_resync") {
 					// The daemon dropped frames on ITS outbound buffer and pushes a
-					// fresh snapshot after this marker — mirror the direct pipe's
+					// fresh snapshot after this marker; mirror the direct pipe's
 					// stream_reset so the client re-primes (never a silent gap).
 					this.#sendDelta(stream, { type: "stream_reset" });
 				}
@@ -2350,7 +2350,7 @@ export class FleetEdge {
 			return;
 		}
 		// Callback: tell the daemon the stream closed, then unbind. Best
-		// effort — a missing pair (stop/delete already tore it down) makes
+		// effort. A missing pair (stop/delete already tore it down) makes
 		// sendToDaemon throw, which is fine: the detach below is the
 		// authority, and the daemon GCs orphan streams itself.
 		this.#transport
@@ -2780,7 +2780,7 @@ export class FleetEdge {
 	 * ones (evicting their cached rosters). Direct/worktree daemons are
 	 * tapped on their connector control socket; clone daemons on the
 	 * callback pair's mirrored "control" stream (the daemon broadcasts the
-	 * same session frames there — P3.4). Idempotent; runs on every registry
+	 * same session frames there, P3.4). Idempotent; runs on every registry
 	 * change and once at construction.
 	 */
 	#reconcileDaemonTaps(): void {
@@ -2907,11 +2907,11 @@ export class FleetEdge {
 
 	/**
 	 * Delete-gate admission signal (P7.3): the derived realtime activity of
-	 * one daemon. UNKNOWN (known:false) until the first derivable frame — a
+	 * one daemon. UNKNOWN (known:false) until the first derivable frame; a
 	 * daemon with no observed activity cannot be proven idle, so callers
 	 * refuse deletion while it is live. `live` reports whether the daemon's
 	 * transport channel is currently up: the connector socket for direct/
-	 * worktree daemons, the callback pair for clones (P3.4 — the fleet
+	 * worktree daemons, the callback pair for clones (P3.4: the fleet
 	 * cannot observe a clone's accepted work any other way). Read-only:
 	 * never mutates.
 	 */
@@ -2951,7 +2951,7 @@ export class FleetEdge {
 		for (const entry of this.#registry.list()) {
 			if (entry.status !== "ready") continue;
 			// Clone liveness is the callback pair's (P3.4): the connector
-			// neither retains nor dials them — nothing to suspend or dial.
+			// neither retains nor dials them; nothing to suspend or dial.
 			if (entry.workspace?.kind === "clone") continue;
 			if (!this.#watchedReady.has(entry.daemonId)) {
 				this.#watchedReady.add(entry.daemonId);
@@ -3032,7 +3032,7 @@ export class FleetEdge {
 	 * the daemon's mode-appropriate transport (P3.4). Direct/worktree daemons
 	 * proxy their HTTP /download endpoint (bearer, same realpath jail);
 	 * clone daemons get a fleet-issued capture bulk correlation and a
-	 * download_bulk command on the transport control stream — the daemon
+	 * download_bulk command on the transport control stream; the daemon
 	 * streams the file back over POST /callback/bulk (multi-part under the
 	 * 64 MiB aggregate cap) with no inbound dial. Both paths ride the
 	 * server-level auth gate (BrowserAuth) and never touch the fleet's own

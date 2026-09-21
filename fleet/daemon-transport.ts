@@ -1,16 +1,16 @@
 /**
- * Fleet-side callback transport (clone-plan P3.3) — the fleet half of the
+ * Fleet-side callback transport (clone-plan P3.3): the fleet half of the
  * OMP_CALLBACK_PROTO 1 outbound callback pair. Contracts:
  * docs/clone-contracts.md "Callback transport" / "Typed errors"; wire
  * vocabulary from shared/callback-protocol.ts. Daemons dial OUT to the
  * fleet; the fleet never dials in, and there is NO durable offline command
  * queue: sendToDaemon with no live pair fails `unavailable`, never buffers.
  *
- * Routes (mounted by handleFetch; identity rides HEADERS ONLY — the URL
+ * Routes (mounted by handleFetch; identity rides HEADERS ONLY; the URL
  * alone never enrolls, authenticates, or authorizes anything):
  *
  *   POST /callback/up                    Long-lived NDJSON upload of daemon
- *                                        envelopes, parsed incrementally —
+ *                                        envelopes, parsed incrementally;
  *                                        HTTP chunk boundaries are never
  *                                        record boundaries (createNdjsonParser
  *                                        over the raw byte chunks). Bounded:
@@ -34,15 +34,15 @@
  *                                        transfer (64 MiB cap) correlated to
  *                                        a fleet-issued id from
  *                                        createBulkCorrelation. Completion
- *                                        is transport receipt — state
- *                                        "received" — NEVER archive
+ *                                        is transport receipt, state
+ *                                        "received", NEVER archive
  *                                        acceptance.
  *
  * Pair establishment: once both halves for a connectionId are live, the
  * fleet emits ONE control envelope on the down half (streamId "transport",
  * payload {type:"pair_ready", connectionId, generation}); a daemon resolves
  * start() on it (PAIR_READY_TIMEOUT_MS deadline). It rides the replay ring,
- * so a resuming redial re-delivers it — idempotent by connectionId. All
+ * so a resuming redial re-delivers it; idempotent by connectionId. All
  * transport-generated envelopes (pair_ready, heartbeats) carry streamId
  * "transport" so they pass validateEnvelope on the daemon side.
  *
@@ -67,7 +67,7 @@
  * ALWAYS dequeue before frame envelopes, and frames rotate round-robin
  * across streams, so a multi-MiB history transfer can never starve
  * command/control traffic or other clients. An envelope for a streamId with
- * no attached sink is dropped by design (bounded transport) — the fleet
+ * no attached sink is dropped by design (bounded transport); the fleet
  * edge attaches sinks before letting traffic flow.
  *
  * Main (fleet/server.ts) mounts this as the first responder for the
@@ -76,7 +76,7 @@
  *   fetch: (req) => transport.handleFetch(req) ?? nextRoutes(req)
  *
  * handleFetch resolves a Response for /callback/* paths (typed-error JSON
- * {error, message, detail?} on failures) and null for anything else —
+ * {error, message, detail?} on failures) and null for anything else;
  * non-callback paths are not this module's business.
  */
 
@@ -263,9 +263,9 @@ interface VirtualStream {
 	workspaceId: string;
 	streamId: string;
 	sink: VirtualStreamSink;
-	/** command/control/ack — always drained before any frame. */
+	/** command/control/ack: always drained before any frame. */
 	high: CallbackEnvelope[];
-	/** frame — exactly one per stream per round-robin rotation. */
+	/** frame: exactly one per stream per round-robin rotation. */
 	low: CallbackEnvelope[];
 	bytes: number;
 	dropped: number;
@@ -338,7 +338,7 @@ export interface BulkCorrelation {
 export interface BulkResult {
 	correlationId: string;
 	workspaceId: string;
-	/** "received" is transport receipt only — NEVER archive acceptance. */
+	/** "received" is transport receipt only; NEVER archive acceptance. */
 	state: "received" | "failed";
 	/** Aggregate bytes across all parts of the transfer. */
 	bytes: number;
@@ -431,11 +431,11 @@ export class DaemonTransportRegistry {
 	/** Boot re-enrollment from a persisted binding: like
 	 * {@link enrollWorkspace} but the credential is ALREADY the sha-256
 	 * digest (a persisted hex hash), so nothing is hashed or re-derived
-	 * here — the raw credential is never available at boot. Validates the
+	 * here; the raw credential is never available at boot. Validates the
 	 * 64-char hex shape, then stores the same in-memory record issuance
 	 * would. Idempotent: re-loading the same binding is a no-op; a
 	 * different hash for the same non-revoked workspace+generation is a
-	 * `conflict` (the state file and transport disagree — refuse rather
+	 * `conflict` (the state file and transport disagree; refuse rather
 	 * than silently override). */
 	enrollPersisted(workspaceId: string, generation: number, credentialHash: string): void {
 		if (!workspaceId)
@@ -609,7 +609,7 @@ export class DaemonTransportRegistry {
 					);
 				}
 				// P8.9 wake materialization: a bulk POST whose body is a small
-				// MaterializeRequest is a DOWNLOAD request — the daemon mints
+				// MaterializeRequest is a DOWNLOAD request; the daemon mints
 				// the correlation id (never issued by the fleet, so no bulk
 				// record exists) and the fleet serves the workspace's stored
 				// session bytes as an NDJSON response. Fleet-issued upload
@@ -630,7 +630,7 @@ export class DaemonTransportRegistry {
 			return null;
 		} catch (error) {
 			// Auth/enrollment/correlation rejections surface as typed JSON,
-			// never an uncaught 500 — the frozen status map owns the status.
+			// never an uncaught 500; the frozen status map owns the status.
 			if (isCallbackError(error)) return errorResponse(error);
 			throw error;
 		}
@@ -660,7 +660,7 @@ export class DaemonTransportRegistry {
 		};
 		this.#upConnections.add(conn);
 		// Header-borne connectionId: the up half may complete the pair (down
-		// dialed first) — announce without waiting for the first envelope.
+		// dialed first), announce without waiting for the first envelope.
 		this.#maybeAnnouncePairReady(conn);
 		if (req.body === null) {
 			this.#upConnections.delete(conn);
@@ -696,7 +696,7 @@ export class DaemonTransportRegistry {
 		} catch (error) {
 			if (isCallbackError(error)) return errorResponse(error);
 			// The platform aborted the body (daemon dropped the upload); any
-			// status is unobservable — respond typed for symmetry.
+			// status is unobservable; respond typed for symmetry.
 			return Response.json(
 				{ error: "unavailable", message: "callback up connection aborted" },
 				{ status: 503 },
@@ -810,8 +810,8 @@ export class DaemonTransportRegistry {
 				},
 			},
 			// Byte-counted queuing strategy (finding: a default chunk-counted
-			// strategy made desiredSize a CHUNK count — never below the
-			// byte budget regardless of how many unread bytes accumulated —
+			// strategy made desiredSize a CHUNK count, never below the
+			// byte budget regardless of how many unread bytes accumulated,
 			// so #writeDown's drop-and-resume could not trip and a stalled
 			// daemon buffered unbounded bytes). Mirroring the browser edge's
 			// byte strategy, desiredSize is now a true byte fill level and
@@ -821,7 +821,7 @@ export class DaemonTransportRegistry {
 				size: (chunk) => (chunk as Uint8Array).byteLength,
 			},
 		);
-		// Replay BEFORE live registration — sendToDaemon only sees live
+		// Replay BEFORE live registration; sendToDaemon only sees live
 		// connections and there is no await between the two, so a fresh
 		// command can never interleave into the replay window.
 		for (const entry of record.ring.after(lastEventId)) {
@@ -871,7 +871,7 @@ export class DaemonTransportRegistry {
 
 	/** Fleet → daemon envelope. Returns the registry-stamped envelope (down
 	 * seq assigned, rung for Last-Event-ID resume) once the write is queued.
-	 * No live pair: throws `unavailable` — never queues offline work. */
+	 * No live pair: throws `unavailable`; never queues offline work. */
 	async sendToDaemon(workspaceId: string, draft: CallbackEnvelopeInput): Promise<CallbackEnvelope> {
 		const conn = this.#liveDownFor(workspaceId);
 		if (!conn) {
@@ -930,7 +930,7 @@ export class DaemonTransportRegistry {
 		// Byte-counted strategy (#handleDown): desiredSize = highWaterMark −
 		// buffered, so a stalled reader that lets buffered bytes exceed the
 		// frozen per-connection cap (CONNECTION_MAX_BYTES) drives desiredSize
-		// below zero — the genuine drop-and-resume signal. The ring survives;
+		// below zero: the genuine drop-and-resume signal. The ring survives;
 		// the daemon redials with Last-Event-ID when it notices the closed
 		// stream.
 		const desired = conn.controller.desiredSize;
@@ -990,7 +990,7 @@ export class DaemonTransportRegistry {
 		const size = envelopeBytes(envelope);
 		let dropped = false;
 		// Bound: 4 MiB per stream. Room-making order drops the oldest FRAME
-		// first, then the oldest high-priority envelope — bounded memory wins,
+		// first, then the oldest high-priority envelope; bounded memory wins,
 		// and every drop fires the backpressure signal + pairStatus counter.
 		while (
 			stream.bytes + size > STREAM_MAX_BYTES &&
@@ -1045,7 +1045,7 @@ export class DaemonTransportRegistry {
 	 * The drain is where starvation is prevented. Phase 1 drains EVERY
 	 * command/control/ack envelope (round-robin across streams, so one
 	 * stream's control flood cannot starve another's); phase 2 delivers
-	 * exactly ONE frame per stream per rotation, then re-checks phase 1 — a
+	 * exactly ONE frame per stream per rotation, then re-checks phase 1; a
 	 * control arriving mid-drain preempts the remaining frames. A slow sink
 	 * parks only its own workspace's pump.
 	 */
@@ -1147,7 +1147,7 @@ export class DaemonTransportRegistry {
 			throw callbackError("invalid_request", "bulk upload requires a body");
 		}
 		// Multi-part transfers (P3.4 downloads): a daemon streams one logical
-		// payload as sequential POSTs to the SAME correlation — headers
+		// payload as sequential POSTs to the SAME correlation: headers
 		// x-omp-bulk-part:<n> (0-based, strictly sequential, no gaps/overlaps)
 		// and x-omp-bulk-final:1 on the last part. Neither side buffers the
 		// whole body at once; the AGGREGATE across parts stays capped at
@@ -1220,7 +1220,7 @@ export class DaemonTransportRegistry {
 			record.chunks = [];
 		}
 		record.resolve(result);
-		// Transport receipt ONLY — archive acceptance is the archive store's
+		// Transport receipt ONLY; archive acceptance is the archive store's
 		// durable receipt (manifest verify + atomic rename), never this 200.
 		return Response.json({ status: "received", correlationId, bytes: record.bytes });
 	}
@@ -1245,9 +1245,9 @@ export class DaemonTransportRegistry {
 	 * before any body read). Reads at most MATERIALIZE_REQUEST_MAX_BYTES:
 	 * when the body parses as a MaterializeRequest the fleet answers with
 	 * the transfer; ANY other body is drained to completion and reported as
-	 * "not a request" so the caller can handle it as an upload — the reader
+	 * "not a request" so the caller can handle it as an upload; the reader
 	 * is never left locked and the stream is never cancelled mid-body.
-	 * Authentication is the SAME enrollment as any callback request — a
+	 * Authentication is the SAME enrollment as any callback request; a
 	 * materialization request is authenticated before its body is read, so
 	 * unknown correlations cannot be probed. The log store is the
 	 * authority: a missing workspace/session resolves to typed
@@ -1308,7 +1308,7 @@ export class DaemonTransportRegistry {
 					}
 					// The fleet-issued bulk record never exists for this
 					// correlation (the daemon minted it), so there is no
-					// record to settle — the HTTP 200 with the full NDJSON
+					// record to settle; the HTTP 200 with the full NDJSON
 					// body IS the transport receipt.
 				} catch (error) {
 					controller.error(error instanceof Error ? error : new Error(String(error)));
@@ -1324,7 +1324,7 @@ export class DaemonTransportRegistry {
 	}
 
 	/**
-	 * Read a POST body up to `maxBytes`, returning the decoded text — or null
+	 * Read a POST body up to `maxBytes`, returning the decoded text, or null
 	 * when the body is empty or exceeds the cap. A body at or under the cap
 	 * is DRAINED to completion so the reader is never left locked. An
 	 * over-cap body is canceled: safe because the caller routes fleet-issued

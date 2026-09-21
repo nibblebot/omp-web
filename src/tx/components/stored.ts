@@ -13,7 +13,7 @@ const KIND_LABELS: Record<string, string> = {
 	metadata: "metadata",
 };
 
-/** "clone · feature-x · profile p" — the workspace provenance line. */
+/** "clone · feature-x · profile p": the workspace provenance line. */
 export function provenanceLabel(p: StoredWorkspaceProvenance | undefined): string {
 	if (!p) return "";
 	const parts = [p.projectId, p.kind];

@@ -6,7 +6,7 @@
  *
  * Invocation model: `<executable> <op>` with exactly one JSON request on
  * stdin (<= 1 MiB), exactly one JSON response on stdout, stderr a human log
- * never parsed. Exit 0 means a response was produced on stdout — an
+ * never parsed. Exit 0 means a response was produced on stdout: an
  * `ok:false` response envelope is still exit 0, because the invocation
  * succeeded and the OPERATION failed (the envelope classifies it). This
  * function therefore returns every well-formed envelope as-is (callers
@@ -14,8 +14,8 @@
  * transport/protocol failures: spawn failure, timeout, oversized output, a
  * non-zero exit, or a malformed response.
  *
- * Like the rest of the runtime, spawning uses explicit argv arrays — never a
- * shell — and every byte of child output is collected with a hard cap so a
+ * Like the rest of the runtime, spawning uses explicit argv arrays, never a
+ * shell, and every byte of child output is collected with a hard cap so a
  * misbehaving provider cannot exhaust fleet memory.
  */
 
@@ -59,7 +59,7 @@ interface ProviderOpErrorInit {
 /**
  * Typed failure of one provider invocation: thrown for spawn failures,
  * timeouts, oversized output, non-zero exits, and malformed responses. A
- * provider-authored `ok:false` envelope returned at exit 0 is NOT thrown —
+ * provider-authored `ok:false` envelope returned at exit 0 is NOT thrown:
  * the caller receives the response and branches on `ok`. Non-zero exits
  * throw even when stdout carries an `ok:false` envelope (exit 0 is the
  * contract's "a response was produced" signal), but the envelope's
@@ -104,7 +104,7 @@ function errorMessage(err: unknown): string {
  * Collect one piped child stream up to `maxBytes`, decoding as UTF-8. When
  * the cap is exceeded the remaining output is discarded (the caller kills
  * the child via `onOverflow` so the sibling stream drains) and "" is
- * returned — oversized output is a failure, not a payload.
+ * returned; oversized output is a failure, not a payload.
  */
 async function collectPipe(
 	pipe: ReadableStream<Uint8Array>,
@@ -137,10 +137,10 @@ async function collectPipe(
  *
  * Returns any well-formed envelope (ok or not) the provider produced at exit
  * 0. Throws {@link ProviderOpError}:
- * - `unavailable` (retryable) — the executable could not be spawned;
- * - `timeout` (retryable) — no response within `timeoutMs`; the child is
+ * - `unavailable` (retryable): the executable could not be spawned;
+ * - `timeout` (retryable): no response within `timeoutMs`; the child is
  *   SIGTERM-killed and SIGKILL-escalated after a grace period;
- * - `internal` — output exceeded the 1 MiB cap, the provider exited non-zero
+ * - `internal`: output exceeded the 1 MiB cap, the provider exited non-zero
  *   without a trustworthy envelope, or the response envelope is malformed;
  * - a provider envelope's own code when the provider exited non-zero but
  *   still produced a valid `ok:false` envelope.

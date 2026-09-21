@@ -22,12 +22,12 @@
  *
  * Fill-missing-only rule: the store may LAG the volume (a stop can leave an
  * unacknowledged tail on the volume that never streamed). This helper never
- * overwrites an existing local file — the volume is the fresher truth and
+ * overwrites an existing local file; the volume is the fresher truth and
  * the daemon's tailer re-streams any local tail once booted. Only truly
  * cold/missing files are filled from the store.
  *
  * Safety: every relpath is validated with the frozen manifest predicate
- * (isNormalizedPosixRelativePath — no `..`, no absolute, no `.` segments)
+ * (isNormalizedPosixRelativePath: no `..`, no absolute, no `.` segments)
  * and the resolved target must stay inside the sessions dir (isPathUnder,
  * the fleet-side convention shared with the resume-clone route) before any
  * file is opened. A hostile stored relpath aborts the whole fill.
@@ -204,7 +204,7 @@ export function resolveMainSessionFile(sessionsDir: string, sessionId: string): 
  * Pick the newest session id for an implicit wake: the union of the volume
  * session tree (main files at depth ≤ 2, newest mtime) and the store
  * listing (when supplied), newest mtime wins. Returns undefined when no
- * session exists anywhere (the wake then boots fresh — correct for a
+ * session exists anywhere (the wake then boots fresh, correct for a
  * never-started clone).
  */
 export function pickNewestSessionId(opts: {

@@ -1,7 +1,7 @@
 /**
  * Fleet browser-auth wiring glue (P2.2/P2.3) shared by fleet/server.ts and
  * fleet/edge.ts. Deliberately NOT part of fleet/browser-auth.ts (that module
- * is a pure session store owned by the P2 lane — if it ever changes, this
+ * is a pure session store owned by the P2 lane; if it ever changes, this
  * file is the single place the gate policy adapts).
  *
  * Gate policy:
@@ -13,7 +13,7 @@
  *     honored ONLY when the direct peer matches the configured
  *     trustedProxies list (IP/CIDR literals); then the FIRST XFF hop is the
  *     client address and XFP may mark the request forwarded-over-https.
- *     Forwarded headers from any untrusted peer are ignored entirely —
+ *     Forwarded headers from any untrusted peer are ignored entirely,
  *     never trusted by default, and hostile values can never admit a
  *     loopback exemption or the origin allowlist (fail closed). XFP has no
  *     consumer past resolution: checkOrigin compares the PRESENTED absolute
@@ -23,7 +23,7 @@
  *     R14) are exempt from the browser-session check; they carry no cookie.
  *     A loopback peer that DOES carry forwarded headers is an undeclared
  *     proxy: it resolves as a non-loopback client (session required) until
- *     the proxy is listed in trustedProxies — fail closed, never an open
+ *     the proxy is listed in trustedProxies, fail closed, never an open
  *     door for remote clients behind an unlisted proxy.
  *   - When enabled, /ctl/* and edge browser routes require a live browser
  *     session (authenticate) unless the client is loopback; mutations
@@ -124,7 +124,7 @@ export class FleetAuthGate {
 	}
 
 	/** Operator access-token rotation: revokes every session (absolute
-	 *  lifetimes end at rotation — nothing slides) and adopts the new
+	 *  lifetimes end at rotation, nothing slides) and adopts the new
 	 *  expected sha-256 hash. Mount as a gated mutation. */
 	rotateAccessToken(newTokenHash: string): void {
 		this.#store.rotateAccessToken(newTokenHash);
@@ -153,7 +153,7 @@ export class FleetAuthGate {
 		return null;
 	}
 
-	/** sha-256 hex of a raw session id: the wire's sessionIdHash (public — it
+	/** sha-256 hex of a raw session id: the wire's sessionIdHash (public, it
 	 *  only maps a cookie to its record; the cookie value stays HttpOnly). */
 	sessionIdHash(sessionId: string): string {
 		return createHash("sha256").update(sessionId, "utf8").digest("hex");
@@ -171,10 +171,10 @@ export class FleetAuthGate {
 	/** Effective client address for this request: the direct socket peer,
 	 *  replaced by the FIRST X-Forwarded-For hop only when the direct peer
 	 *  matches the configured trusted proxies. Forwarded headers from any
-	 *  other peer are ignored entirely (never trusted by default — hostile
+	 *  other peer are ignored entirely (never trusted by default; hostile
 	 *  values cannot spoof a client, a loopback exemption, or the origin
 	 *  allowlist). A loopback peer that nevertheless carries forwarded
-	 *  headers is an UNDECLARED proxy — only a proxy adds XFF/XFP/XFH, and
+	 *  headers is an UNDECLARED proxy: only a proxy adds XFF/XFP/XFH, and
 	 *  handing it the loopback exemption would admit every remote client it
 	 *  fronts. Such a peer resolves as "" (non-loopback → a session is
 	 *  required), failing closed until the operator lists the proxy in the
@@ -223,7 +223,7 @@ export class FleetAuthGate {
 
 	/** Non-loopback clients must hold a live session when auth is enabled;
 	 *  loopback clients (and the disabled state) are admitted with null.
-	 *  Callers pass the EFFECTIVE client address (clientAddress — the XFF
+	 *  Callers pass the EFFECTIVE client address (clientAddress, the XFF
 	 *  first hop when the peer is trusted); authenticate never re-reads
 	 *  forwarded headers itself. */
 	authenticate(req: Request, effectiveClient: string): AuthenticatedSession | null {
@@ -244,7 +244,7 @@ export class FleetAuthGate {
 }
 
 /** Loopback peer test for a socket address: 127.0.0.0/8, ::1, and IPv4-mapped
- *  IPv6 of the same (strict numeric parts — same rule as the daemon R14 gate). */
+ *  IPv6 of the same (strict numeric parts, same rule as the daemon R14 gate). */
 export function isLoopbackIp(address: string | null | undefined): boolean {
 	if (address === null || address === undefined) return false;
 	const a = address.toLowerCase();

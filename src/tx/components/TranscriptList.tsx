@@ -241,7 +241,7 @@ export function TranscriptList(props: TranscriptListProps) {
 							</div>
 							{/* Fleet log-store coverage (P8.6): shown only when the
 							    store is mounted. The server omits unstreamed remote
-							    history — nothing is fabricated. */}
+							    history; nothing is fabricated. */}
 							<Show when={h().fleetStore}>
 								{(fs) => (
 									<div class="foot-line">
@@ -268,7 +268,7 @@ function TranscriptRow(props: {
 	onOpenStored: (workspaceId: string, sessionId: string) => void;
 }) {
 	const s = () => props.session;
-	// A fleet-store row's `file` is a display key only — opening it goes to
+	// A fleet-store row's `file` is a display key only; opening it goes to
 	// the STORED detail route (the /ctl/stored read surface), never to the
 	// /ctl/stats detail.
 	const isStore = () => s().origin === "fleet-store";

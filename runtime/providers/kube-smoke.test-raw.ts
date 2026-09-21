@@ -366,7 +366,7 @@ async function main(): Promise<void> {
 		JSON.stringify(again),
 	);
 
-	// Case C: wiped stateDir (provider restart) — rediscovery from pod identity.
+	// Case C: wiped stateDir (provider restart), rediscovery from pod identity.
 	rmSync(stateDir, { recursive: true, force: true });
 	const rediscovered = await runOp(req("ensure-running"), { exec: fakeExec, env });
 	check(
@@ -402,7 +402,7 @@ async function main(): Promise<void> {
 	}
 
 	// Case E: with an identity record present, a pod whose token differs from
-	// the record is a conflict — the record is never silently re-anchored.
+	// the record is a conflict; the record is never silently re-anchored.
 	{
 		const pvcName = firstPvcName();
 		// Case C wiped the record; re-establish it (adopts the pod's token).
@@ -480,7 +480,7 @@ async function main(): Promise<void> {
 		JSON.stringify(stopGen2),
 	);
 
-	// Case J: delete while running — auto-stop through the gate, then PVC removal.
+	// Case J: delete while running, auto-stop through the gate, then PVC removal.
 	{
 		const pvcName = firstPvcName();
 		const resp = await runOp(req("delete"), { exec: fakeExec, env });
@@ -593,7 +593,7 @@ async function main(): Promise<void> {
 		JSON.stringify(inspect),
 	);
 
-	// Case Q: preflight — full pass and each missing-prerequisite variant.
+	// Case Q: preflight, full pass and each missing-prerequisite variant.
 	{
 		const allOk = await preflightKubernetesProfile(PROFILE as ProviderProfile, {
 			exec: fakeExec,

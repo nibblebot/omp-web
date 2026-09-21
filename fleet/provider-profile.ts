@@ -2,7 +2,7 @@
  * Provider profiles: declarative descriptions of the external provider
  * executables that manage clone workspaces (`OMP_PROVIDER_PROTO = 1`), stored
  * in the fleet config file under the `providerProfiles` key. Validation is
- * shape-level and total — it never throws; malformed entries come back as
+ * shape-level and total. It never throws; malformed entries come back as
  * typed errors so the config loader can drop them with an actionable warning
  * and still boot. `toPublicProfile` derives the secret-free capability view
  * that is safe to cross trust boundaries (roster frames, `/ctl/debug`):
@@ -32,7 +32,7 @@ export interface ProviderProfile {
 	context?: string;
 	/**
 	 * Sandbox network mode (bwrap profiles): "host" shares the host network
-	 * namespace — dev profiles reach the fleet's loopback callback URL — and
+	 * namespace: dev profiles reach the fleet's loopback callback URL, and
 	 * "isolated" (absent = default) keeps the fresh netns and requires an
 	 * HTTPS callback URL routable from inside. Additive; never inferred.
 	 */

@@ -76,7 +76,7 @@ export interface FleetConfig {
 	 * (P2.3): IP or CIDR literals. X-Forwarded-For / X-Forwarded-Proto
 	 * shape the client-address and loopback decisions ONLY when the direct
 	 * socket peer matches this list; forwarded headers from any other peer
-	 * are ignored entirely (fail closed — never trusted by default). Flag
+	 * are ignored entirely (fail closed, never trusted by default). Flag
 	 * `--trusted-proxy` (repeatable, each occurrence comma-splittable) >
 	 * env `OMP_FLEET_TRUSTED_PROXY` (csv) > config-file `trustedProxies`
 	 * key. Malformed literals are a hard load error.
@@ -153,7 +153,7 @@ export async function loadConfig(
 		config.templates = { ...config.templates, local: { command: localCommand } };
 	}
 	// Env `OMP_FLEET_SPAWN_HOOK` / `OMP_FLEET_WORKSPACE_DIR` win over the
-	// config-file value AND over defaults — applied here in loadConfig, not
+	// config-file value AND over defaults, applied here in loadConfig, not
 	// inside mergeConfig, so the overrides also hold when NO config file
 	// exists (mergeConfig is skipped on the defaultConfig path). Explicit
 	// CLI flags still beat env below.
@@ -200,13 +200,13 @@ export async function loadConfig(
 	// Trusted proxies: explicit flag (repeatable, csv per occurrence) > env
 	// `OMP_FLEET_TRUSTED_PROXY` (csv) > config-file `trustedProxies`
 	// (mergeConfig applied env+file already). Unresolvable literals are a
-	// hard config error — a typo'd proxy must never be silently dropped
+	// hard config error. A typo'd proxy must never be silently dropped
 	// into a fail-open-less forwarding decision (and invalid entries never
 	// match, so a drop would strand real proxies behind TLS silently).
 	const flagProxies = opts?.trustedProxy;
 	if (flagProxies !== undefined && flagProxies.length > 0) {
 		// String entries only: the CLI's legacy multi-flag leniency can push a
-		// bare boolean when a value was missing — a security flag must never
+		// bare boolean when a value was missing. A security flag must never
 		// crash the load (it degrades to "no trusted proxies", fail closed).
 		config.trustedProxies = flagProxies
 			.filter((entry): entry is string => typeof entry === "string")
@@ -224,7 +224,7 @@ export async function loadConfig(
 	return config;
 }
 
-/** sha-256 hex digest of the operator access token — the ONLY form kept
+/** sha-256 hex digest of the operator access token, the ONLY form kept
  *  beyond the config load; the plaintext never rides config or the store. */
 function hashAccessToken(token: string): string {
 	return createHash("sha256").update(token, "utf8").digest("hex");
@@ -296,7 +296,7 @@ function mergeConfig(raw: unknown): FleetConfig {
 	}
 	// Browser-auth operator credential from the config file: must already be
 	// the sha-256 hex digest of the access token (the plaintext is NEVER
-	// stored — a raw token in the file is a misconfiguration). Malformed →
+	// stored; a raw token in the file is a misconfiguration). Malformed →
 	// hard config error, never a silent auth-disable.
 	if (file.browserAccessToken !== undefined) {
 		if (

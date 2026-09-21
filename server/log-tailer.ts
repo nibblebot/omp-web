@@ -17,8 +17,8 @@ import type { CallbackSendResult } from "./fleet-callback";
 /**
  * Continuous session-log tailer, daemon half (P3.7; docs/clone-contracts.md
  * "Session log streaming"). Tails the full session lineage subtree of an
- * agent sessions dir — main session JSONL, subagent/advisor recorders,
- * metadata JSONL and blobs — and streams raw bytes to the fleet as `frame`
+ * agent sessions dir: main session JSONL, subagent/advisor recorders,
+ * metadata JSONL and blobs, and streams raw bytes to the fleet as `frame`
  * envelopes on one virtual stream per lineage file, streamId
  * `logs/<sessionId>/<relpath>` with relpath POSIX-relative to the sessions
  * dir (manifest normalization).
@@ -27,7 +27,7 @@ import type { CallbackSendResult } from "./fleet-callback";
  * and the manifest isMainSession rule): main session files are `*.jsonl`
  * directly inside the sessions root AND directly inside one-level project
  * dirs (`<proj>/<file>.jsonl`); every file under the sibling artifact subtree
- * `<main minus .jsonl>/` — walked recursively — is lineage too, including
+ * `<main minus .jsonl>/`, walked recursively, is lineage too, including
  * `__advisor.jsonl`, `__advisor.<slug>.jsonl`, subagent transcripts and
  * non-JSONL blobs. Transient SDK rewrite files (`.<name>.<snowflake>.tmp`,
  * `*.jsonl.<snowflake>.tmp`, EPERM `.bak` backups) are never discovered.
@@ -38,7 +38,7 @@ import type { CallbackSendResult } from "./fleet-callback";
  * - LogChunk payload `{offset, generation, data(base64), eof}`; `kind` stays
  *   `frame`; eof=true only on the final chunk of a closed session file.
  * - Fleet→daemon control on the down half: `{type:"log_ack", offsets}` (an
- *   ack is durability — the fleet fsynced before it) and
+ *   ack is durability; the fleet fsynced before it) and
  *   `{type:"log_gap", from, to}` (repair request: re-stream `[from, to)` of
  *   the named stream). Both arrive via handleControl() from the connector's
  *   onEnvelope.
@@ -46,14 +46,14 @@ import type { CallbackSendResult } from "./fleet-callback";
  *   `opts.restore` and each file is streamed from its last acked offset; the
  *   fleet ignores re-sends below its acked offset.
  * - Generations: per-file identity counter. dev+ino change (the SDK's atomic
- *   temp+rename full rewrites — see FileSessionStorage.writeTextSync/Atomic)
+ *   temp+rename full rewrites, see FileSessionStorage.writeTextSync/Atomic)
  *   or size shrink bumps the generation and resyncs from offset 0; the fleet
  *   resets that stream's offset state on the first chunk of the new
  *   generation. (ctime is deliberately NOT watched: appends and the in-place
  *   title-slot rewrite touch ctime without changing file identity.)
  * - Ring: per-session 4 MiB unacked accounting window. Bytes are never
- *   buffered here — the file is source of truth and the connector's own
- *   replay ring covers recent redelivery — so overflow (acks lagging) simply
+ *   buffered here; the file is source of truth and the connector's own
+ *   replay ring covers recent redelivery, so overflow (acks lagging) simply
  *   rewinds every lagging stream of the session to its acked offset and
  *   re-streams that file region from disk, flagged as a gap for status until
  *   the acks catch up.
@@ -62,12 +62,12 @@ import type { CallbackSendResult } from "./fleet-callback";
  *   until its newline arrives, the generation changes, or the file closes);
  *   on close the remainder streams verbatim, exactly like the SDK loader
  *   tolerates it. A held partial past LOG_CHUNK_MAX_BYTES means the file
- *   carries an over-long record — its whole lines stream from the head with
+ *   carries an over-long record; its whole lines stream from the head with
  *   no partial hold. Non-JSONL blobs stream raw bytes with no line
  *   discipline.
  *
  * Chunk bounds: the connector rejects envelopes over ENVELOPE_MAX_BYTES
- * (1 MiB) as invalid_request, so raw chunk data is capped at 512 KiB —
+ * (1 MiB) as invalid_request, so raw chunk data is capped at 512 KiB;
  * ~683 KiB of base64, comfortably inside the cap with envelope overhead.
  *
  * Never throws after start(): every failure lands in status().lastError with
@@ -124,7 +124,7 @@ const SCAN_INTERVAL_MS = 1_000;
  * Ack-watermark persistence (P3.7 daemon half): an ack is fleet-side
  * durability, so a daemon restart resumes each lineage stream from its last
  * acked offset instead of re-streaming. Watermarks live in a sidecar next to
- * the sessions dir — a plain streamId → {offset, generation} map — rewritten
+ * the sessions dir, a plain streamId → {offset, generation} map, rewritten
  * atomically (same-dir temp + rename). Writes are debounced (~1s, coalesced,
  * unref'd) while running and flushed synchronously on stop() so a graceful
  * shutdown never loses the final acks. dev/ino ride along in each entry so a
@@ -211,7 +211,7 @@ export class SessionLogTailer {
 	readonly #streams = new Map<string, TrackedStream>();
 	/** POSIX relpath from sessionsDir → stream (watch fast path, dedupe). */
 	readonly #byRel = new Map<string, TrackedStream>();
-	/** Last assigned generation per relpath — keeps the counter rising across drops. */
+	/** Last assigned generation per relpath: keeps the counter rising across drops. */
 	readonly #assignedGen = new Map<string, number>();
 	#watcher: FSWatcher | null = null;
 	#tick: ReturnType<typeof setTimeout> | null = null;
@@ -244,7 +244,7 @@ export class SessionLogTailer {
 	/**
 	 * Load the ack sidecar and merge it under the explicit restore map
 	 * (explicit opts.restore wins). Tolerates a missing/unreadable/corrupt
-	 * sidecar — the tailer simply starts un-restored; the fleet's offset
+	 * sidecar, the tailer simply starts un-restored; the fleet's offset
 	 * continuity check makes any re-stream safe.
 	 */
 	#loadSidecar(into: Map<string, LogTailerRestoreEntry>): void {
@@ -252,13 +252,13 @@ export class SessionLogTailer {
 		try {
 			raw = readFileSync(this.#sidecarPath(), "utf8");
 		} catch {
-			return; // Missing or unreadable — start un-restored.
+			return; // Missing or unreadable, start un-restored.
 		}
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(raw);
 		} catch {
-			return; // Corrupt — start un-restored.
+			return; // Corrupt, start un-restored.
 		}
 		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return;
 		for (const [streamId, value] of Object.entries(parsed as Record<string, unknown>)) {
@@ -321,7 +321,7 @@ export class SessionLogTailer {
 			try {
 				unlinkSync(tmp);
 			} catch {
-				// Temp may never have been created — nothing to clean up.
+				// Temp may never have been created, nothing to clean up.
 			}
 		}
 	}
@@ -356,7 +356,7 @@ export class SessionLogTailer {
 			try {
 				this.#watcher.close();
 			} catch {
-				// Watcher already gone — nothing to clean up.
+				// Watcher already gone, nothing to clean up.
 			}
 			this.#watcher = null;
 		}
@@ -368,7 +368,7 @@ export class SessionLogTailer {
 	 * releases any held-back torn tail VERBATIM (closed JSONL streams stream
 	 * raw bytes to EOF, exactly like the SDK loader tolerates them) and emits
 	 * the per-stream eof marker at the final offset. Returns the final flush
-	 * boundary keyed by streamId — the offsets the fleet store must reach
+	 * boundary keyed by streamId, the offsets the fleet store must reach
 	 * before the delete gate passes. Never throws: streams that fail to emit
 	 * land in status().lastError and their boundary entry is omitted, which
 	 * the caller treats as an explicit failure.
@@ -387,7 +387,7 @@ export class SessionLogTailer {
 			try {
 				this.#watcher.close();
 			} catch {
-				// Watcher already gone — nothing to clean up.
+				// Watcher already gone, nothing to clean up.
 			}
 			this.#watcher = null;
 		}
@@ -462,7 +462,7 @@ export class SessionLogTailer {
 	 * One fleet→daemon control envelope (down half). `log_ack` carries a batch
 	 * of durable offsets keyed by streamId; `log_gap` requests re-streaming
 	 * `[from, to)` of the stream named by the envelope's streamId. Malformed
-	 * payloads are recorded as typed errors and ignored — never throws.
+	 * payloads are recorded as typed errors and ignored, never throws.
 	 */
 	handleControl(streamId: string, payload: unknown): void {
 		this.#safe(() => {
@@ -505,7 +505,7 @@ export class SessionLogTailer {
 				this.#repairRange(target, from);
 				return;
 			}
-			// Other control types belong to other features — not ours to act on.
+			// Other control types belong to other features, not ours to act on.
 		}, "handleControl failed");
 	}
 
@@ -517,7 +517,7 @@ export class SessionLogTailer {
 				return;
 			}
 			const stream = this.#streams.get(streamId);
-			if (stream === undefined) return; // Unknown/late stream — nothing to free.
+			if (stream === undefined) return; // Unknown/late stream, nothing to free.
 			if (offset > stream.sentOffset) return; // Stale-generation ack; ignore.
 			if (offset > stream.lastAcked) {
 				stream.lastAcked = offset;
@@ -566,7 +566,7 @@ export class SessionLogTailer {
 		try {
 			this.#watcher.close();
 		} catch {
-			// Ignore — closing a dead watcher must not throw.
+			// Ignore; closing a dead watcher must not throw.
 		}
 		this.#watcher = null;
 	}
@@ -576,7 +576,7 @@ export class SessionLogTailer {
 			if (filename !== null && filename !== "") {
 				const known = this.#byRel.get(toPosix(String(filename)));
 				if (known !== undefined) {
-					// Fast path: an already-tracked file moved — drain it directly.
+					// Fast path: an already-tracked file moved, drain it directly.
 					this.#drain(known);
 					this.#checkRing(known.sessionKey);
 					return;
@@ -614,7 +614,7 @@ export class SessionLogTailer {
 		try {
 			rootEntries = readdirSync(this.#sessionsDir, { withFileTypes: true });
 		} catch {
-			return; // Agent dir missing — nothing to track; tick retries.
+			return; // Agent dir missing, nothing to track; tick retries.
 		}
 
 		const dirs: string[] = [];
@@ -705,7 +705,7 @@ export class SessionLogTailer {
 		const posixRel = toPosix(rel);
 		if (this.#byRel.has(posixRel)) return;
 		// The streamId contract is `logs/<sessionId>/<relpath>` with
-		// sessionId EXACTLY ONE SLASH-FREE segment — the fleet splits on the
+		// sessionId EXACTLY ONE SLASH-FREE segment; the fleet splits on the
 		// first slash after logs/ (fleet/server.ts #onLogEnvelope). A
 		// slash-bearing sessionId (a project-nested main key like
 		// `proj-x/sess-b`) would silently split into a wrong sessionDir +
@@ -755,7 +755,7 @@ export class SessionLogTailer {
 		try {
 			entries = readdirSync(dirAbs, { withFileTypes: true });
 		} catch {
-			return; // Subtree gone or unreadable — main file still tracked.
+			return; // Subtree gone or unreadable, main file still tracked.
 		}
 		for (const entry of entries) {
 			if (TRANSIENT_NAME.test(entry.name)) continue;
@@ -787,7 +787,7 @@ export class SessionLogTailer {
 		try {
 			st = statSync(stream.absPath);
 		} catch {
-			this.#dropStream(stream); // Deleted workspace-side — closure, untrack.
+			this.#dropStream(stream); // Deleted workspace-side, closure, untrack.
 			return;
 		}
 		if (!st.isFile()) {
@@ -798,7 +798,7 @@ export class SessionLogTailer {
 		// Identity: dev+ino change (SDK atomic temp+rename rewrite) or size
 		// shrink bumps the generation and resyncs from offset 0. On the first
 		// stat after a restart with a restore watermark, a file smaller than
-		// the acked offset means it was rewritten while the daemon was down —
+		// the acked offset means it was rewritten while the daemon was down,
 		// same divergence rule, resync under a fresh generation.
 		const identityChanged = stream.dev !== -1 && (st.dev !== stream.dev || st.ino !== stream.ino);
 		const shrunk = stream.size > 0 && st.size < stream.size;
@@ -820,7 +820,7 @@ export class SessionLogTailer {
 		// the file identity that produced the acked offset. When that identity
 		// differs from the file now on disk (an atomic rewrite while the daemon
 		// was down, or a new file reusing a streamId after a clean close), the
-		// watermark belongs to a dead file — resync from 0 under a fresh
+		// watermark belongs to a dead file; resync from 0 under a fresh
 		// generation. No-op when the sidecar carried no identity (watermarkDev
 		// -1) or outside a restart (watermarkDev is refreshed every drain, so
 		// it always equals dev/ino after the first).
@@ -870,7 +870,7 @@ export class SessionLogTailer {
 				// Live JSONL: complete newline-terminated records only. A torn
 				// trailing line is held back; if it ever fills a whole chunk the
 				// file legitimately carries an over-long record, so stream the
-				// chunk without a partial hold (next reads continue mid-record —
+				// chunk without a partial hold (next reads continue mid-record,
 				// the fleet reassembles by offset continuity).
 				let cut = buf.lastIndexOf(0x0a, got - 1) + 1;
 				if (cut === 0) {
@@ -894,7 +894,7 @@ export class SessionLogTailer {
 				try {
 					closeSync(fd);
 				} catch {
-					// fd already closed — nothing to do.
+					// fd already closed, nothing to do.
 				}
 			}
 		}
@@ -979,8 +979,8 @@ export class SessionLogTailer {
 		if (session.streams.some((stream) => stream.gap !== null)) return; // Repair already in flight.
 
 		// Ring overflow with acks lagging: drop the session's unacked buffered
-		// bytes by rewinding every lagging stream to its acked offset — the
-		// ledger allows the ring to drop and the file stays source of truth —
+		// bytes by rewinding every lagging stream to its acked offset, the
+		// ledger allows the ring to drop and the file stays source of truth,
 		// and flag the gap. #drain's ring gate then re-streams the region from
 		// disk at most once; the gap clears when acks pass the rewound
 		// watermark, after which fresh appends resume.

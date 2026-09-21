@@ -1,16 +1,16 @@
 /**
  * Add-workspace dialog preferences (P8.2): remembers ONLY the last-used
  * workspace kind, provider profile, and start-immediately toggle, scoped
- * per browser per fleet origin (the key embeds location.origin — unlike the
+ * per browser per fleet origin (the key embeds location.origin; unlike the
  * unscoped omp.* keys, a browser talking to two fleet origins through one
  * UI origin keeps separate memories). Cross-project by design.
  *
  * NEVER persist names, branches, source URLs/paths, revisions, or secrets
- * here — the type below deliberately has no fields for them.
+ * here; the type below deliberately has no fields for them.
  */
 
 /** Kinds the unified Add-workspace dialog can create (Add-existing shares
- *  the worktree memory — it creates no new workspace kind). */
+ *  the worktree memory; it creates no new workspace kind). */
 export type WorkspaceKindChoice = "worktree" | "clone";
 
 export interface WorkspaceCreationPrefs {

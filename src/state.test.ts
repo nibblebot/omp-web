@@ -2268,8 +2268,8 @@ describe("call delivery: a lost answer is recovered by re-POSTing the command", 
 	 * command id once and records the answer, but the first answer never rides
 	 * the downlink: call_result is a non-ringed unicast, so a frame dropped on
 	 * the daemon pipe (backpressure drop-and-resume, a redial, a lost accept)
-	 * is gone for good. A re-POST of the SAME id is deduped — no second
-	 * execution — and REPLAYS the recorded answer, exactly like the daemon's
+	 * is gone for good. A re-POST of the SAME id is deduped, no second
+	 * execution, and REPLAYS the recorded answer, exactly like the daemon's
 	 * command dedup.
 	 */
 	function startLostAnswerDaemon(answerFor: (id: string) => ServerFrame): {

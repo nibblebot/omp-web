@@ -2,16 +2,16 @@
  * Daemon control broker replay regression (P3.10): per-browser virtual
  * stream_open ring-hit replay vs ring-miss re-prime. The observed defect:
  * openStream's ring-miss guard was logically unreachable (`live > 0 &&
- * replay.length === 0 && newest > lastSeq` cannot fire — the newest live
+ * replay.length === 0 && newest > lastSeq` cannot fire; the newest live
  * entry itself satisfies `seq > lastSeq`, so ringAfter never returns empty
  * while a newer entry exists). Consequences:
  *
  *   - A reconnect floor at or below the EVICTED ring head silently
- *     partial-replayed the retained tail — entries between the floor and
+ *     partial-replayed the retained tail; entries between the floor and
  *     the head were lost with no stream_resync (never a partial replay
  *     violated).
  *   - A caught-up ring hit (existing stream, floor >= newest) fell through
- *     to `deps.primeStream(...)` — a re-prime where the client already had
+ *     to `deps.primeStream(...)`; a re-prime where the client already had
  *     everything (P3.10: "ring hit replays; only a miss re-primes").
  *
  * Fix: track the ring eviction frontier (`evictedSeq`, the highest wire seq
@@ -159,7 +159,7 @@ describe("daemon-control stream_open replay (P3.10)", () => {
 		// Reconnect fully caught up (floor == the only delta's seq).
 		openStream(control, 1025);
 		expect(primes.length).toBe(1); // no re-prime (pre-fix this re-primed)
-		// Only the stream_open ack was added — no replayed delta, no prime.
+		// Only the stream_open ack was added, no replayed delta, no prime.
 		const added = sent.slice(sentBeforeReopen);
 		expect(added.length).toBe(1); // the ack
 		expect(added.filter((s) => s.kind === "frame")).toHaveLength(0);
@@ -177,7 +177,7 @@ describe("daemon-control stream_open replay (P3.10)", () => {
 		control.publish(STREAM, big); // wire 1026: pushes 1025 out (frontier=1025)
 		expect(control.status().streams[0]!.ringEntries).toBe(1); // head evicted
 		// Reconnect with a floor BELOW the evicted entry (1024 < frontier
-		// 1025): the client still needs the evicted delta — a MISS.
+		// 1025): the client still needs the evicted delta, a MISS.
 		const before = primes.length;
 		openStream(control, 1024);
 		expect(primes.length).toBe(before + 1); // full re-prime
@@ -204,7 +204,7 @@ describe("daemon-control stream_open replay (P3.10)", () => {
 		openStream(control, 1026); // floor above the frontier: HIT, replay 1027
 		expect(primes.length).toBe(before); // no re-prime
 		const added = sent.slice(sentBeforeReopen);
-		// Exactly the replayed event frame + the stream_open ack — no prime.
+		// Exactly the replayed event frame + the stream_open ack, no prime.
 		expect(added.filter((s) => s.kind === "frame")).toHaveLength(1);
 		expect(typeOf(added.find((s) => s.kind === "frame")!.payload)).toBe("event");
 		control.stop();
@@ -238,7 +238,7 @@ describe("daemon-control stream_open replay (P3.10)", () => {
 		expect(primes.length).toBe(1);
 		// Pair replacement: the per-connection seq space restarts, so the old
 		// ring (seqs 1025/1026 of the dead pair) must be cleared and the
-		// stream re-primed — never replayed into the new seq space.
+		// stream re-primed, never replayed into the new seq space.
 		control.onPairChange();
 		expect(primes.length).toBe(2); // re-primed
 		const st = control.status().streams[0]!;

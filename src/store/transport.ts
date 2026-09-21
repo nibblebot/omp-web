@@ -59,7 +59,7 @@ export const clientId = crypto.randomUUID();
  */
 export function postCommand(cmd: ClientCommand): Promise<void> {
 	// Browser auth (P2.4): with a server-side session (signedIn/signedOut/
-	// unknown) the /command uplink rides authedFetch — the session cookie is
+	// unknown) the /command uplink rides authedFetch; the session cookie is
 	// the credential and a 401 transitions to signedOut (sign-in modal). When
 	// auth is DISABLED the path stays a plain fetch: byte-identical behavior
 	// to before this integration, no probe, no CSRF.
@@ -88,8 +88,8 @@ export function postCommand(cmd: ClientCommand): Promise<void> {
 /**
  * Replay cadence for a call whose answer never arrived. call_result is a
  * non-ringed unicast answer (server/sse-delivery.ts), so when the daemon-pipe
- * downlink drops it — drop-and-resume backpressure, an emission while the pipe
- * is mid-redial, a lost accept — nothing else replays it and the pending call
+ * downlink drops it: drop-and-resume backpressure, an emission while the pipe
+ * is mid-redial, a lost accept; nothing else replays it and the pending call
  * would hang until its own timeout. Re-POSTing the SAME command id recovers
  * it: the daemon dedups the id within COMMAND_DEDUP_WINDOW_MS (never
  * re-dispatching) and replays the answer it recorded, so a replay can neither
@@ -120,8 +120,8 @@ function clearCallTimers(pending: PendingCall): void {
 
 /**
  * Settle one pending call from its correlated call_result (connect()'s mux
- * routes the frame here). Unknown ids — timed out, already settled by an
- * earlier copy of the answer, stale session — are ignored.
+ * routes the frame here). Unknown ids, timed out, already settled by an
+ * earlier copy of the answer, stale session, are ignored.
  */
 export function settleCallResult(frame: Extract<ServerFrame, { type: "call_result" }>): void {
 	const pending = pendingCalls.get(frame.id);

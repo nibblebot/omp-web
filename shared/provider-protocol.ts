@@ -1,5 +1,5 @@
 /**
- * Provider operation protocol (OMP_PROVIDER_PROTO = 1) — the frozen contract
+ * Provider operation protocol (OMP_PROVIDER_PROTO = 1); the frozen contract
  * for fleet-side clone-workspace sandbox providers (P5.1). Encoding, request
  * shape, response shape, identity/supervision rules and the error vocabulary
  * are fixed by docs/clone-contracts.md ("Provider operation protocol (frozen
@@ -10,7 +10,7 @@
  * human log the fleet never parses. Exit 0 means a response was produced on
  * stdout; the response envelope itself carries the typed success or failure
  * (an `ok:false` envelope is a *successful* invocation whose operation
- * failed — classified by code, not by exit status). A non-zero exit with no
+ * failed, classified by code, not by exit status). A non-zero exit with no
  * parseable response means the provider itself failed to operate.
  *
  * Safety rules enforced here (P5.5 never negotiable):
@@ -55,7 +55,7 @@ export type ProviderObserved = "running" | "stopped" | "missing";
 /**
  * Opaque, provider-namespaced handle: the provider's durable identity for the
  * resource it manages for this workspace. The fleet treats it as a private
- * opaque token — it never inspects it and it never crosses trust boundaries
+ * opaque token; it never inspects it and it never crosses trust boundaries
  * (roster frames, /ctl/debug). Same workspace/generation → same handle; the
  * provider rediscoverable by durable identity, never by PID alone. Non-empty
  * and bounded; absent only until the provider has created the resource.
@@ -76,7 +76,7 @@ export const PROVIDER_ERROR_CODES = [
 export type ProviderErrorCode = (typeof PROVIDER_ERROR_CODES)[number];
 
 /**
- * A provider profile — structurally the fleet config's ProviderProfile
+ * A provider profile, structurally the fleet config's ProviderProfile
  * (fleet/provider-profile.ts, P1.3) minus the config-file editing concern.
  * `secretRefs` holds external secret reference NAMES only; values never
  * leave the config file and never appear in requests.
@@ -138,7 +138,7 @@ const PROVIDER_SOURCE_KEYS = ["local", "remote"] as const;
  * resolve, never materialized secret material. Blocks whitespace, control
  * characters, and anything reserved/secret-like (long random blobs are still
  * reference-shaped, but this is the fleet's own config vocabulary, not a
- * passphrase field — real secrets live behind the reference).
+ * passphrase field; real secrets live behind the reference).
  */
 const SECRET_REF_RE = /^[A-Za-z0-9._~:/@+-]+$/;
 
@@ -161,7 +161,7 @@ export interface ProviderPidFile {
 	/**
 	 * Launch token embedded in the workspace process argv; liveness requires
 	 * `/proc/<pid>/cmdline` to contain it (see matchProviderPidFile). Stays
-	 * in the provider's private stateDir — never in requests.
+	 * in the provider's private stateDir, never in requests.
 	 */
 	workspaceToken: string;
 }
@@ -226,7 +226,7 @@ export interface ProviderRequest {
 	 * Clone source (exactly one member), additive for provider-side volume
 	 * initialization (kubernetes in-pod PVC init); bwrap clones are prepared
 	 * fleet-side and ignore it. `local` is a fleet-host filesystem path and is
-	 * meaningless in-cluster — kubernetes providers reject it.
+	 * meaningless in-cluster; kubernetes providers reject it.
 	 */
 	source?: { local?: string; remote?: string };
 	/** The pinned full commit (fleet-resolved once via resolveWorkspacePin). */
@@ -321,7 +321,7 @@ function parseProfile(value: unknown, where: string): ProviderProfile {
 			);
 		}
 		secretRefs = {};
-		// Values are external secret reference names ONLY — never materialized
+		// Values are external secret reference names ONLY, never materialized
 		// secrets (P5.5). Reference-shaped values are enforced here so a
 		// secret cannot be smuggled into a request.
 		for (const [name, ref] of Object.entries(secretRefsRaw)) {
@@ -596,7 +596,7 @@ function parseErrorResponse(value: Record<string, unknown>): ProviderErrorRespon
 /**
  * Parse an untrusted response payload: byte-bound (1 MiB by default), JSON
  * parse, then strict envelope validation per the `ok` branch (unknown keys
- * rejected). An `ok:false` envelope parses and returns as-is — the caller
+ * rejected). An `ok:false` envelope parses and returns as-is; the caller
  * decides how to surface provider-typed failures. A provider-authored
  * malformed envelope throws ProviderProtocolError("invalid_request").
  */
@@ -626,7 +626,7 @@ export function parseProviderResponse(
 /**
  * Read `/proc/<pid>/stat` field 22 (starttime, clock ticks since boot).
  * Returns null when the pid is not a live process or the file is unreadable
- * (the correct "gone" answer). `comm` may contain spaces or `)` — the tail
+ * (the correct "gone" answer). `comm` may contain spaces or `)`; the tail
  * after the LAST `) ` is parsed, keeping the field indexes stable.
  */
 export function parseProcStartTime(pid: number): number | null {
@@ -648,7 +648,7 @@ export function parseProcStartTime(pid: number): number | null {
 /**
  * Read the provider's identity pidfile from its private per-workspace
  * `stateDir`. Returns null when absent or malformed. Unknown extra fields
- * are tolerated — the file is provider-private and forward-compatible.
+ * are tolerated; the file is provider-private and forward-compatible.
  */
 export function readProviderPidFile(stateDir: string): ProviderPidFile | null {
 	let raw: string;
@@ -692,7 +692,7 @@ export function readProviderPidFile(stateDir: string): ProviderPidFile | null {
  * pidfile exists, a live process at that pid has the same procStartTime (a
  * reused PID with a different start time never matches), and
  * `/proc/<pid>/cmdline` still contains the recorded workspaceToken. A
- * missing pidfile or gone process returns false ("terminated or unknown —
+ * missing pidfile or gone process returns false ("terminated or unknown,
  * cannot claim live"). Never PID-only.
  */
 export function matchProviderPidFile(stateDir: string, pid: number): boolean {

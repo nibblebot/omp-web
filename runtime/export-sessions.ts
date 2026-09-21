@@ -32,7 +32,7 @@ import { ExportError, type ManifestFileKind } from "../shared/archive-manifest";
 //   finding): title slot + session header + newline-terminated entries with a
 //   header id matching the session id, and NO partial tail; anything that
 //   resembles the SDK's "persistence is indeterminate" condition is a hard
-//   blocker. It tolerates no recovery — quiesced writers plus this structural
+//   blocker. It tolerates no recovery; quiesced writers plus this structural
 //   read is the ONLY supported flush acknowledgment (force-kill/process exit
 //   is never evidence).
 //
@@ -132,7 +132,7 @@ function parseJsonlLines(content: string): JsonlLine[] {
  * load-bearing): title slot (or header, for legacy files without a slot) on
  * line 1, then a session header line, then newline-terminated entries. Every
  * line must be complete JSON and the file must not end in a partial record.
- * Throws ledger `unavailable`/`conflict` ExportErrors — never recovers.
+ * Throws ledger `unavailable`/`conflict` ExportErrors; never recovers.
  */
 export function verifyJsonlStructure(absolutePath: string, sessionId: string): void {
 	const lines = parseJsonlLines(readFileText(absolutePath));
@@ -146,7 +146,7 @@ export function verifyJsonlStructure(absolutePath: string, sessionId: string): v
 	const fingerprint = lines[0]?.text ?? "";
 	if (isPersistenceIndeterminateFingerprint(fingerprint)) {
 		throw asUnavailable(
-			new Error("session persistence indeterminate artifact — hard blocker"),
+			new Error("session persistence indeterminate artifact: hard blocker"),
 			"session structural verification",
 			absolutePath,
 		);
@@ -233,14 +233,14 @@ export function verifyJsonlStructure(absolutePath: string, sessionId: string): v
 		);
 	}
 	// NOTE: the header id is a minted session UUID that does NOT equal the
-	// filename stem — the SDK names main files `<timestamp>_<id>.jsonl` and
+	// filename stem: the SDK names main files `<timestamp>_<id>.jsonl` and
 	// fork files `<agentId>.jsonl`, so filename↔header-id equality is NOT an
 	// invariant and is never asserted here. Lineage identity comes from the
 	// file's path (which session dir / artifact subtree it lives under), not
 	// from the header.
 
 	// Remaining lines are entries; each must be complete JSON on a
-	// newline-terminated line. A partial (unterminated) tail fails — a
+	// newline-terminated line. A partial (unterminated) tail fails: a
 	// truncated file is exactly what this check exists to catch.
 	for (let index = current; index < lines.length; index++) {
 		const line = lines[index] ?? { text: "", terminated: false };
@@ -310,7 +310,7 @@ export interface SessionLineageEntry {
  * `sessionId`: `<sessionId>.jsonl` at depth 1 (root main) or
  * `<proj>/<sessionId>.jsonl` at depth 2 (project main), per the frozen
  * log-stream identity (`logs/<sessionId>/<relpath>`, relpath
- * sessions-root-relative verbatim — docs/clone-contracts.md, Main's ruling).
+ * sessions-root-relative verbatim: docs/clone-contracts.md, Main's ruling).
  */
 export function isMainRelpath(relpath: string, sessionId: string): boolean {
 	const segments = relpath.split("/");
@@ -320,7 +320,7 @@ export function isMainRelpath(relpath: string, sessionId: string): boolean {
 
 /**
  * The nearest ancestor main whose stem dir prefixes `relpath` (longest stem
- * wins) — the SDK nests artifacts under `<main>.jsonl`'s sibling stem dir
+ * wins): the SDK nests artifacts under `<main>.jsonl`'s sibling stem dir
  * (`<main>.jsonl` ↔ `<main>/`), possibly under a `<proj>/` prefix.
  */
 export function owningMainRel(relpath: string, mains: ReadonlySet<string>): string | undefined {
@@ -341,7 +341,7 @@ function sessionIdOfMain(mainRel: string): string {
 /**
  * Classify one path against the declared main set: main files classify main;
  * anything else must nest under a declared main's stem dir (else the tree
- * has a file with no owning lineage — rejected). Nested `__advisor*.jsonl`
+ * has a file with no owning lineage, rejected). Nested `__advisor*.jsonl`
  * are advisor recorders, other `.jsonl` are subagent transcripts (each is
  * its OWN SDK session with its own header), everything else is metadata.
  */

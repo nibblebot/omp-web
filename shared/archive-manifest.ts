@@ -234,8 +234,8 @@ export function validateManifest(manifest: unknown): ArchiveManifest {
 
 /**
  * Deterministic JSON: object keys sorted recursively, insignificant
- * whitespace dropped, `undefined` properties skipped. This — not the
- * pretty-printed file bytes — is what exportId hashes.
+ * whitespace dropped, `undefined` properties skipped. This, not the
+ * pretty-printed file bytes, is what exportId hashes.
  */
 export function canonicalJson(value: unknown): string {
 	if (value === null || typeof value !== "object") {

@@ -864,7 +864,7 @@ export class FleetLogStore {
 		if (dir === null) return null;
 		// In-memory stream state when the store loaded this session; disk walk
 		// covers everything else. Deliberately NO #restoreSession here: restore
-		// repairs/adopts/rewrites the index — this is the read-only surface.
+		// repairs/adopts/rewrites the index; this is the read-only surface.
 		const streams = this.#sessions.get(workspaceId)?.get(sessionId)?.streams;
 		const raw: Array<{
 			relpath: string;

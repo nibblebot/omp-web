@@ -19,7 +19,7 @@
 import type { SessionListEntry } from "../shared/protocol";
 
 /**
- * Fleet transcript store read surface (P3.8) — the clone counterpart of the
+ * Fleet transcript store read surface (P3.8), the clone counterpart of the
  * SDK SessionManager listing. The edge injects the fleet's FleetLogStore via
  * this STRUCTURAL subset so this module never imports the fleet log-store
  * implementation (it stays a fleet/transport-boundary leaf). FleetLogStore's
@@ -44,7 +44,7 @@ export interface StoredSessionInfo {
 /**
  * The last `limit` fleet-stored sessions of one clone workspace, newest-
  * modified first. The store key IS the SDK session id (slash-free lineage
- * key), so identity compares directly against resume/attach inputs — never a
+ * key), so identity compares directly against resume/attach inputs: never a
  * fleet-local cwd/filesystem assumption (P8.4). The store index carries no
  * prompt text, so labels fall back to the timestamp form (StoredHistory's
  * display rows enrich titles from JSONL heads for its own read surface).

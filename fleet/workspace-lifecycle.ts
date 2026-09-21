@@ -4,7 +4,7 @@
  * owner for provider-managed clone workspaces, shared by the control-plane
  * HTTP handlers (POST /ctl/clones, /ctl/start|wake, /ctl/stop, DELETE
  * /ctl/worktrees/:id) and the browser edge's command dispatch (Transport's
- * `EdgeLifecycleHooks` — this class conforms to it structurally).
+ * `EdgeLifecycleHooks`, this class conforms to it structurally).
  *
  * Frozen contracts: docs/clone-contracts.md ("Browser and CLI workspace
  * creation", "Provider operation protocol", "Fleet log store", "Retention",
@@ -23,7 +23,7 @@
  *   (admission → quiesce with proven stop → Git guard → store verification
  *   against the workspace volume's own session tree → read-only flip →
  *   provider deletion → volume deletion → roster removal). `removeClone`
- *   routes through the SAME gate — no kind-blind roster eviction can bypass
+ *   routes through the SAME gate; no kind-blind roster eviction can bypass
  *   it.
  * - Stop preserves checkout and session logs; only the verified gate
  *   deletes. Idle handling stays fleet-owned (P6.4): this service never
@@ -154,7 +154,7 @@ function sleep(ms: number): Promise<void> {
 	return promise;
 }
 
-/** One `git -C <cwd> <args>` invocation via explicit argv — never a shell. */
+/** One `git -C <cwd> <args>` invocation via explicit argv, never a shell. */
 async function runGit(
 	args: string[],
 	cwd: string,
@@ -322,7 +322,7 @@ export class WorkspaceLifecycle {
 	 * safely), provider_failed (provider op failure after preparation).
 	 *
 	 * On PREPARATION failure the entry and its partial volume are removed
-	 * and the error is typed — nothing streamed, nothing retained. On
+	 * and the error is typed; nothing streamed, nothing retained. On
 	 * START failure after a successful preparation the entry IS retained
 	 * (volume + pin are expensive and durable) with lifecycleStage
 	 * "failed" + lifecycleError; retry via ensureCloneRunning (start).
@@ -437,7 +437,7 @@ export class WorkspaceLifecycle {
 		);
 
 		// Resolve the pin ONCE, for EVERY profile (fleet-owned pin
-		// resolution — the k8s provider never resolves; Runtime contract).
+		// resolution, the k8s provider never resolves; Runtime contract).
 		// prepareWorkspace (bwrap) resolves internally too, but the explicit
 		// resolve here persists the full commit BEFORE any retry-prone step
 		// and feeds the persisted pin into the volume prep below.
@@ -465,7 +465,7 @@ export class WorkspaceLifecycle {
 		registry.updateWorkspace(daemonId, { pinnedRevision });
 
 		// Preparation. Fleet-local volumes (bwrap) prepare here; kubernetes
-		// profiles skip the fleet-side clone — the provider initializes its
+		// profiles skip the fleet-side clone: the provider initializes its
 		// PVC in-pod at the persisted pin during ensure-running (Runtime
 		// lane), reusing the SAME full commit on every retry.
 		if (profile.provider === "bwrap") {
@@ -500,7 +500,7 @@ export class WorkspaceLifecycle {
 
 		if (!start) {
 			// Prepared and parked: stopped clone, wakeable via start. A
-			// stopped workspace has NO active lifecycle stage — clear the
+			// stopped workspace has NO active lifecycle stage; clear the
 			// transient "preparation" so the roster never shows an eternal
 			// pulsing stage for a deliberately parked clone (start will set
 			// preparation→runtime→callback→ready on wake).
@@ -515,7 +515,7 @@ export class WorkspaceLifecycle {
 		}
 
 		// Start immediately: run the ensure path. A start failure after a
-		// successful preparation keeps the entry (typed failed stage) — the
+		// successful preparation keeps the entry (typed failed stage): the
 		// volume + pin are durable and expensive; start retries in place.
 		try {
 			await this.#ensure(registry.get(daemonId) ?? registry.update(daemonId, {}), {
@@ -555,7 +555,7 @@ export class WorkspaceLifecycle {
 	 * should boot into (the edge pre-validates it against the fleet store
 	 * listing). When given, the wake materializes that session's cold/
 	 * missing stored transcripts into the volume and hands the daemon the
-	 * resolved main-file path as OMP_SESSION_RESUME (bwrap volumes only —
+	 * resolved main-file path as OMP_SESSION_RESUME (bwrap volumes only:
 	 * the sandbox sees the host path). When ABSENT the wake resumes the
 	 * newest session it can see (volume ∪ store), so a stopped clone wake
 	 * continues its last session instead of booting fresh; a never-started
@@ -591,7 +591,7 @@ export class WorkspaceLifecycle {
 			// failure; an ok response here proves the generation terminated.
 			const response = await this.#runCloneOp(entry.daemonId, "stop", handle);
 			if (response.observed === "running") {
-				// The provider failed to prove termination — a running
+				// The provider failed to prove termination: a running
 				// process would violate the desired stopped state.
 				throw new CloneLifecycleError(
 					"conflict",
@@ -638,7 +638,7 @@ export class WorkspaceLifecycle {
 	 * Reconcile provider-managed clone workspaces after a fleet restart.
 	 * Provider compute survived the restart (it is not an in-memory child),
 	 * so this inspects durable identity BEFORE acting:
-	 *   - observed running  → reattach (refresh handle, ready) — same
+	 *   - observed running  → reattach (refresh handle, ready), same
 	 *     generation, persisted credential reused; NEVER a new process;
 	 *   - observed stopped/missing + desired running → ensure-running
 	 *     (bumped generation after the predecessor is proven gone);
@@ -652,7 +652,7 @@ export class WorkspaceLifecycle {
 			if (entry.workspace?.kind !== "clone") continue;
 			const record = entry.workspace;
 			// A persisted "deleting" state describes an in-flight gate of a
-			// previous fleet process — nothing is running now, so it
+			// previous fleet process; nothing is running now, so it
 			// reconciles to delete-pending-retry (retry by deleting again).
 			if (record.deletion?.state === "deleting") {
 				this.#deps.registry.setWorkspaceDeletion(entry.daemonId, {
@@ -694,7 +694,7 @@ export class WorkspaceLifecycle {
 				);
 				continue;
 			}
-			// stopped | missing — desired state decides.
+			// stopped | missing: desired state decides.
 			if (desired === "running") {
 				try {
 					await this.#ensure(this.#deps.registry.get(entry.daemonId) ?? entry, {
@@ -795,7 +795,7 @@ export class WorkspaceLifecycle {
 		let reuseToken: string | undefined;
 		if (inspect !== null && inspect.observed === "running" && currentGen !== undefined) {
 			// Reattach path. If the persisted binding matches this
-			// generation AND the state-file token is recoverable, reuse it —
+			// generation AND the state-file token is recoverable, reuse it:
 			// the daemon's live pair keeps its original credential.
 			if (record.enrollment !== undefined && record.enrollment.generation === currentGen) {
 				try {
@@ -822,7 +822,7 @@ export class WorkspaceLifecycle {
 				generation = currentGen + 1;
 			}
 		} else {
-			// stopped | missing (proven gone) — or never started.
+			// stopped | missing (proven gone), or never started.
 			if (opts.firstStart && currentGen === undefined) {
 				generation = 1;
 			} else {
@@ -867,7 +867,7 @@ export class WorkspaceLifecycle {
 			// response here is a live, current-generation runtime. The
 			// generation override is REQUIRED: the bump was computed +
 			// enrolled above but authorizedGeneration persists only after
-			// ensure succeeds — without it the request would carry the stale
+			// ensure succeeds; without it the request would carry the stale
 			// pre-bump generation and the provider would fence it (P6.2).
 			const response = await this.#runCloneOp(entry.daemonId, "ensure-running", handle, generation);
 			this.#deps.registry.updateWorkspace(daemonId, {
@@ -903,7 +903,7 @@ export class WorkspaceLifecycle {
 
 	/**
 	 * P7.3/P7.5 ordered gate for clone workspaces (shared by deleteClone and
-	 * removeClone — removal cannot bypass it):
+	 * removeClone, removal cannot bypass it):
 	 *   1. serialize concurrent DELETEs + reconcile a persisted "deleting"
 	 *      from a previous fleet process to delete-pending-retry;
 	 *   2. admission: refuse while compute is live or its pair is live
@@ -912,11 +912,11 @@ export class WorkspaceLifecycle {
 	 *   3. persist "deleting" (durable state before any destructive step);
 	 *   4. quiesce: revoke the callback enrollment (no further log frames)
 	 *      and PROVE the compute stopped via the provider BEFORE
-	 *      verification — a stop that cannot prove termination blocks;
+	 *      verification; a stop that cannot prove termination blocks;
 	 *   5. Git guard with writers stopped (dirty/untracked/stash/unpreserved
 	 *      history block; no force override);
 	 *   6. fleet-store verification INCLUDING an independent cross-check of
-	 *      the workspace volume's own session tree — an empty store never
+	 *      the workspace volume's own session tree; an empty store never
 	 *      trivially passes when sessions existed on the volume;
 	 *   7. read-only flip (only when anything is retained);
 	 *   8. provider deletion → volume deletion → roster removal.
@@ -958,7 +958,7 @@ export class WorkspaceLifecycle {
 
 		// Admission. For clones, "active work" is not derivable fleet-side:
 		// a ready workspace whose callback pair is live (or whose enrollment
-		// is live) may carry accepted work — refuse with an actionable
+		// is live) may carry accepted work; refuse with an actionable
 		// message instead of risking mid-turn deletion. Explicitly stopped
 		// workspaces (asleep, desired stopped, enrollment revoked) pass.
 		const record = entry.workspace;
@@ -1002,8 +1002,8 @@ export class WorkspaceLifecycle {
 
 		// Quiesce writers: revoke the callback enrollment (no further log
 		// frames reach the store), then PROVE the provider compute stopped.
-		// The stop is not a flush acknowledgment — only the store's verified
-		// offsets + the volume cross-check prove completeness — but no writer
+		// The stop is not a flush acknowledgment; only the store's verified
+		// offsets + the volume cross-check prove completeness, but no writer
 		// may still run while verification reads.
 		if (entry.workspace?.enrollment !== undefined) {
 			const gen = entry.workspace.enrollment.generation;
@@ -1018,7 +1018,7 @@ export class WorkspaceLifecycle {
 				stop = await this.#runCloneOp(entry.daemonId, "stop", this.#handleOf(entry));
 			} catch (err) {
 				// #runCloneOp throws a typed CloneLifecycleError on provider
-				// failure — persist delete-pending-retry and retain everything.
+				// failure; persist delete-pending-retry and retain everything.
 				const code = err instanceof CloneLifecycleError ? err.code : "provider_failed";
 				const message = err instanceof Error ? err.message : String(err);
 				const error: DeletionGateError = {
@@ -1204,7 +1204,7 @@ export class WorkspaceLifecycle {
 		}
 
 		// Finalize: roster identity removed (verified read-only store is
-		// Retention's). No orphan marker — verification passed.
+		// Retention's). No orphan marker: verification passed.
 		registry.remove(daemonId);
 		eventLog.add("info", "server", `workspace ${daemonId} deleted (verified)`, daemonId);
 		return { removed: daemonId, verified: verify.sessions.map((s) => s.sessionId) };
@@ -1282,7 +1282,7 @@ export class WorkspaceLifecycle {
 			);
 		}
 		// Unpreserved local history: refresh origin remote-tracking refs
-		// best-effort (offline is fine — the count below is conservative
+		// best-effort (offline is fine; the count below is conservative
 		// against the last known refs), then count commits not reachable
 		// from any origin ref.
 		await runGit(["fetch", "--quiet", "--no-tags", "origin"], checkoutDir).catch(() => {
@@ -1343,7 +1343,7 @@ export class WorkspaceLifecycle {
 		}
 
 		if (volumePresent && files.length === 0 && everStarted) {
-			// Volume present but no session files yet — a running/stopped
+			// Volume present but no session files yet: a running/stopped
 			// workspace that never opened a session. The store should be
 			// empty too; verifyWorkspaceLogs already proved that (ok with
 			// sessions:[]). Nothing to cross-check.
@@ -1351,7 +1351,7 @@ export class WorkspaceLifecycle {
 		if (!volumePresent) {
 			if (everStarted && storeManifest === undefined) {
 				// Store verified (storeManifest is present only on ok:true
-				// with provenance) — if the store really has zero sessions
+				// with provenance), if the store really has zero sessions
 				// AND we cannot read the volume, completeness is unprovable.
 				// (storeManifest undefined on a non-ok result is handled by
 				// the caller; here it means ok + no manifest is impossible.)
@@ -1462,12 +1462,12 @@ export class WorkspaceLifecycle {
 	/**
 	 * One provider operation invocation, typed. Re-reads the CURRENT
 	 * registry entry by daemonId so every op builds its request from ONE
-	 * consistent snapshot — a stale caller entry can never send a request
+	 * consistent snapshot; a stale caller entry can never send a request
 	 * carrying an old generation against a freshly enrolled one (P6.2
 	 * fencing). `generationOverride` is REQUIRED on the ensure-running call
 	 * after a generation bump: the bump is computed and enrolled BEFORE the
 	 * provider runs, but `authorizedGeneration` on the record is only
-	 * persisted AFTER ensure succeeds — without the override the request
+	 * persisted AFTER ensure succeeds; without the override the request
 	 * would carry the stale pre-bump generation and the provider would
 	 * fence it. Maps provider failures onto the frozen error vocabulary
 	 * with caller-safe messages.
@@ -1485,7 +1485,7 @@ export class WorkspaceLifecycle {
 		const record = entry.workspace;
 		// Every op carries the workspace's clone source + pinned full commit
 		// + branch (Runtime contract): the k8s provider initializes its PVC
-		// in-pod at the persisted pin from these — never resolves itself;
+		// in-pod at the persisted pin from these, never resolves itself;
 		// bwrap ignores them (fleet-side prepared). Additive per
 		// shared/provider-protocol.ts ProviderRequest.
 		const request = {
@@ -1538,7 +1538,7 @@ export class WorkspaceLifecycle {
 	 *     stop) → no fleet-side hint (documented P5-blocked lane);
 	 *   - explicit `resumeSessionId` that exists nowhere → typed
 	 *     `unavailable` (the edge pre-validates against the store, so this
-	 *     only fires on a store/volume disagreement — never silent fresh);
+	 *     only fires on a store/volume disagreement, never silent fresh);
 	 *   - implicit wake → newest session (volume ∪ store) so a stopped
 	 *     clone wake continues its last session.
 	 * Fill-missing-only materialization: existing volume files are never
@@ -1587,7 +1587,7 @@ export class WorkspaceLifecycle {
 			} catch (err) {
 				if (explicit !== undefined) {
 					// An explicit pick that cannot be materialized is a typed
-					// failure — never a silent fresh boot over the user's pick.
+					// failure, never a silent fresh boot over the user's pick.
 					throw err instanceof WakeMaterializeError
 						? new CloneLifecycleError(
 								err.code === "invalid_request" ? "invalid_request" : "unavailable",
@@ -1626,7 +1626,7 @@ export class WorkspaceLifecycle {
 		// Stale-lock cleanup (P8.9 boot-resume): the daemon locks the resumed
 		// session file (`<file>.lock`) with its PID. A prior sandbox lifetime
 		// that was stopped without a graceful release leaves that lock file
-		// behind — and its PID is namespace-relative (e.g. 2 inside bwrap),
+		// behind, and its PID is namespace-relative (e.g. 2 inside bwrap),
 		// so the NEW sandbox's liveness probe sees an ALIVE pid 2 and refuses
 		// to boot ("session file ... is locked by another omp-session"). This
 		// wake only reaches here after the predecessor generation is PROVEN
@@ -1636,7 +1636,7 @@ export class WorkspaceLifecycle {
 		try {
 			unlinkSync(`${mainFile}.lock`);
 		} catch {
-			// Absent or already cleared — nothing to do.
+			// Absent or already cleared, nothing to do.
 		}
 		return { OMP_SESSION_RESUME: mainFile };
 	}
@@ -1734,7 +1734,7 @@ export class WorkspaceLifecycle {
 	 * periodically re-inspects the provider: a sandbox that is no longer
 	 * running surfaces as status "error" + lifecycleStage "failed" with the
 	 * typed message (never an eternal "callback" stage over a dead pid), and
-	 * the polling stops. A live-but-slow sandbox keeps polling — the stage
+	 * the polling stops. A live-but-slow sandbox keeps polling: the stage
 	 * flips to "ready" the moment the pair establishes. There is no silent
 	 * timeout that leaves the stage stuck.
 	 */
@@ -1781,7 +1781,7 @@ export class WorkspaceLifecycle {
 					}
 				} catch {
 					// Inspect failed (provider unavailable or a typed
-					// conflict/unavailable): keep polling — the pair may
+					// conflict/unavailable): keep polling; the pair may
 					// still come up; the next inspect retries. A genuinely
 					// dead sandbox reports observed != running (not an
 					// error), which is handled above.

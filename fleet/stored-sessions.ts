@@ -1,10 +1,10 @@
 /**
  * Fleet log-store read model + HTTP surface (P8.5). Everything here is a
- * pure disk read over FleetLogStore — never touches a daemon, the SDK, or
+ * pure disk read over FleetLogStore: never touches a daemon, the SDK, or
  * compute, so browsing fleet-stored history can never wake a workspace.
  *
  * Layering: imports only fleet/log-store.ts, shared/stats-types.ts, node
- * builtins and ./ — never server/ or src/. Reuses the stats app's route
+ * builtins and ./: never server/ or src/. Reuses the stats app's route
  * registry convention (Route + dispatchRequest + json/errorJson) so the
  * fleet control plane can mount it with one line beside /ctl/stats.
  *
@@ -324,7 +324,7 @@ const MAX_PARSE_BYTES = 256 * 1024 * 1024;
 
 /**
  * Paginated parsed view of a stored JSONL file's bytes. `readBytes` is the
- * cap the prefix was read at — when the real file is larger, the page is
+ * cap the prefix was read at; when the real file is larger, the page is
  * marked truncated and the line count is "as parsed", which the UI reports
  * honestly instead of a wrong total.
  */

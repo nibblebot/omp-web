@@ -277,7 +277,7 @@ export type DaemonStatus =
 	| "error";
 
 // --- Clone workspace identity (P1, additive): workspace/daemon lifecycle
-// facts the fleet edge surfaces on the roster. OMP_PROTO stays 2 — these are
+// facts the fleet edge surfaces on the roster. OMP_PROTO stays 2; these are
 // optional DaemonEntry additions, never shape changes.
 
 /** How a workspace's checkout was produced (clone-contracts ledger). */
@@ -293,7 +293,7 @@ export type LifecycleStage = "preparation" | "runtime" | "callback" | "ready" | 
  * Secret-free capability view of a fleet provider profile (frozen contract,
  * docs/clone-contracts.md "Browser and CLI workspace creation"). Safe to
  * cross trust boundaries: never carries the executable, image/namespace
- * details, or secret reference VALUES — only their names. Lifted from
+ * details, or secret reference VALUES, only their names. Lifted from
  * fleet/provider-profile.ts (which re-exports this type) so browser/CLI
  * consumers import the single wire source from shared/protocol.ts.
  */
@@ -307,7 +307,7 @@ export interface PublicProviderProfile {
 	network?: "host" | "isolated";
 	/** Declared storage class name, when any. */
 	storageClassName?: string;
-	/** Secret reference names only — values never appear here. */
+	/** Secret reference names only; values never appear here. */
 	secretRefNames?: string[];
 }
 
@@ -736,7 +736,7 @@ export type ServerFrame =
 			configPath?: string | null;
 			/**
 			 * Boot-static secret-free provider-profile catalog (frozen
-			 * contract, additive). Absent from older fleets — clients treat
+			 * contract, additive). Absent from older fleets; clients treat
 			 * it as an empty catalog. Never carries secret values or
 			 * executable internals.
 			 */

@@ -213,7 +213,7 @@ describe("fleet browser auth", () => {
 			expect(hostile.status).toBe(403);
 
 			// With CSRF + the allowlisted origin → the gate passes and the
-			// handler answers (400: empty spawn body) — proof of admission.
+			// handler answers (400: empty spawn body), proof of admission.
 			const admitted = await fetch(`${base}/ctl/spawn`, {
 				method: "POST",
 				headers: {
@@ -295,7 +295,7 @@ describe("fleet browser auth", () => {
 			browserAccessToken: TOKEN,
 			// NO trusted proxies configured: a direct peer that happens to be
 			// the LAN IP is untrusted, so its X-Forwarded-For claiming a
-			// loopback client must be IGNORED — the effective client stays
+			// loopback client must be IGNORED; the effective client stays
 			// the non-loopback LAN peer and a session is required.
 		});
 		const base = `http://${lanIp}:${port}`;
@@ -322,7 +322,7 @@ describe("fleet browser auth", () => {
 		await pinSettingsInMemory();
 		const paths = fleetPaths("omp-web-server-trustedxff-");
 		// The positive case: the fleet trusts the LAN IP as a proxy, so the
-		// XFF first hop (127.0.0.1 — the browser behind the proxy on the same
+		// XFF first hop (127.0.0.1, the browser behind the proxy on the same
 		// machine as the proxy's egress) IS honored → loopback exemption.
 		const port = freePort();
 		const server = await startFleet({
@@ -396,7 +396,7 @@ describe("fleet auth gate forwarded-header resolution", () => {
 		expect(gate.clientAddress(req({ "x-forwarded-for": "127.0.0.1" }), null)).toBe("");
 		// The host loopback itself is never a trusted proxy by default: a
 		// forwarded header arriving ON the loopback socket is an undeclared
-		// proxy and resolves non-loopback ("") — fail closed (see below).
+		// proxy and resolves non-loopback (""), fail closed (see below).
 		expect(noProxyGate.clientAddress(req({ "x-forwarded-for": "10.0.0.9" }), "127.0.0.1")).toBe("");
 	});
 

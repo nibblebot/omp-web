@@ -36,7 +36,7 @@ export interface SessionSummary {
 	 * Coverage label (P8.6). "fleet-local" (default, omitted) = the row came
 	 * from the fleet-local sessions dir walk + stats.db; "fleet-store" = the
 	 * session lives in the fleet transcript store (deleted/stopped workspace,
-	 * compute absent). A "fleet-store" row's `file` is a display key only —
+	 * compute absent). A "fleet-store" row's `file` is a display key only;
 	 * read its bytes through the /ctl/stored routes, never /ctl/stats.
 	 */
 	origin?: "fleet-local" | "fleet-store";
@@ -168,7 +168,7 @@ export interface StoredFileInfo {
 	ackedBytes: number;
 	/** True when the daemon closed the stream. */
 	eof: boolean;
-	/** "missing" = indexed but absent on disk — unavailable, never a broken link. */
+	/** "missing" = indexed but absent on disk; unavailable, never a broken link. */
 	status: StoredFileStatus;
 }
 

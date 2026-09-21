@@ -21,7 +21,7 @@
  * layout (server/log-tailer.ts). Materialization therefore restores exactly
  * the tree the tailer streams.
  *
- * Identity and credentials travel in the usual callback request headers — the
+ * Identity and credentials travel in the usual callback request headers; the
  * transport registry authenticates the POST exactly like a bulk upload before
  * the materialization branch runs.
  *
@@ -74,7 +74,7 @@ export interface MaterializeSessionRecord {
 
 /**
  * File declaration. `relpath` is POSIX-relative to the requested session
- * subtree (normalized: no `..`, no absolute, no `.` segments) — the daemon
+ * subtree (normalized: no `..`, no absolute, no `.` segments); the daemon
  * validates it with isNormalizedPosixRelativePath and refuses anything else.
  * `sha256` covers the FULL file bytes; the daemon verifies it after
  * reassembling every chunk of the file (which may span transfers).
@@ -335,7 +335,7 @@ export function planMaterializeFiles(subtreeRoot: string): MaterializeFilePlan {
 			}
 			continue;
 		}
-		// A project dir containing `<name>.jsonl` — the dir is a project dir,
+		// A project dir containing `<name>.jsonl`; the dir is a project dir,
 		// so that jsonl is a main unless it sits under another main's dir.
 		const parentIsArtifact = [...files].some(
 			(f) => f.relpath === `${dir}.jsonl` && !isAdvisorName(f.relpath),

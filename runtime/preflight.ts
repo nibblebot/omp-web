@@ -5,7 +5,7 @@
  *
  * Scope (frozen by the P5.6 lane contract):
  *  - bwrap binary present + version + user namespaces usable (probe
- *    `bwrap --ro-bind / / echo` — the same mount/namespace shape the real
+ *    `bwrap --ro-bind / / echo`, the same mount/namespace shape the real
  *    sandbox uses, trivially);
  *  - profile executable present + executable bit;
  *  - runtime entry (the sandboxed omp-session entry) + runtime binary (bun)
@@ -13,9 +13,9 @@
  *  - callback URL reachability CLASS-CHECK (DNS + TCP only; no bytes are
  *    ever written, so no credential or request can leak) when configured;
  *  - durable state dirs writable (workspace root + logs root; a missing dir
- *    passes when its parent is writable — those dirs are created lazily on
+ *    passes when its parent is writable; those dirs are created lazily on
  *    demand, so a preflight must not require them to pre-exist);
- *  - profile tools: absolute, existing, and outside every forbidden root —
+ *  - profile tools: absolute, existing, and outside every forbidden root:
  *    a profile requesting a denied bind fails HERE with an actionable
  *    message (the same denylist the argv builder enforces at request time,
  *    P5.5);
@@ -160,7 +160,7 @@ function probeDirWritable(dir: string): { ok: true; note: string } | { ok: false
 	let probe: string | null = null;
 	try {
 		probe = mkdtempSync(join(parent, ".preflight-"));
-		return { ok: true, note: `${dir} is missing but its parent is writable — created on demand` };
+		return { ok: true, note: `${dir} is missing but its parent is writable, created on demand` };
 	} catch (err) {
 		return { ok: false, detail: `cannot create ${dir}: ${errMessage(err)}` };
 	} finally {
@@ -231,7 +231,7 @@ async function checkBwrapBinary(ctx: PreflightContext): Promise<PreflightCheck> 
 				name: "bwrap-binary",
 				ok: false,
 				detail: `bwrap --version exited ${String(code)}: ${version}`,
-				remediation: `the bwrap binary at ${resolved} does not run — reinstall bubblewrap`,
+				remediation: `the bwrap binary at ${resolved} does not run; reinstall bubblewrap`,
 			};
 		}
 	} catch (err) {
@@ -264,7 +264,7 @@ async function checkBwrapUserns(ctx: PreflightContext): Promise<PreflightCheck> 
 				ok: false,
 				detail: `sandbox probe failed (rc ${String(code)}): ${detail || "no output"}`,
 				remediation:
-					`user namespaces appear unavailable — enable unprivileged user namespaces ` +
+					`user namespaces appear unavailable; enable unprivileged user namespaces ` +
 					`(kernel.unprivileged_userns_clone=1 / AppArmor profile permitting bwrap) or run the fleet ` +
 					`under a user-namespace-capable service`,
 			};
@@ -275,7 +275,7 @@ async function checkBwrapUserns(ctx: PreflightContext): Promise<PreflightCheck> 
 			name: "bwrap-userns",
 			ok: false,
 			detail: `sandbox probe could not run: ${errMessage(err)}`,
-			remediation: `cannot spawn ${resolved} — fix its permissions/loader or reinstall bubblewrap`,
+			remediation: `cannot spawn ${resolved}; fix its permissions/loader or reinstall bubblewrap`,
 		};
 	}
 }
@@ -425,7 +425,7 @@ async function checkCallback(ctx: PreflightContext): Promise<PreflightCheck> {
 		};
 	}
 
-	// TCP class-check (connect only — nothing is written), bounded per try.
+	// TCP class-check (connect only, nothing is written), bounded per try.
 	for (const address of addresses) {
 		const budget = remaining();
 		if (budget <= 0) break;
@@ -516,7 +516,7 @@ async function checkDeniedBinds(
 				ok: false,
 				detail: `the workspace root ${ctx.workspaceRoot} is inside a forbidden root (${err.root}, ${err.kind})`,
 				remediation:
-					`move the fleet workspace root outside ${err.root} — operator home/ssh state, ` +
+					`move the fleet workspace root outside ${err.root}; operator home/ssh state, ` +
 					`container sockets, and fleet/provider state are never bindable`,
 			};
 		}
@@ -532,7 +532,7 @@ async function checkDeniedBinds(
 				ok: false,
 				detail: `tool ${tool} resolves inside a forbidden root (${err.root}, ${err.kind})`,
 				remediation:
-					`remove "${tool}" from providerProfiles."${profile.id}".tools — operator home/ssh ` +
+					`remove "${tool}" from providerProfiles."${profile.id}".tools; operator home/ssh ` +
 					`state, container sockets, and fleet/provider state are never mounted into a sandbox`,
 			};
 		}
@@ -546,7 +546,7 @@ async function checkDeniedBinds(
 
 /**
  * P5.4/P5.5: profile secret references must be resolvable on this host
- * BEFORE any launch. bwrap: `env:NAME` scheme only — values are supplied to
+ * BEFORE any launch. bwrap: `env:NAME` scheme only; values are supplied to
  * the fleet as environment variables; the sandbox never mounts operator
  * agent state. Kubernetes: values are cluster secret references resolved
  * API-side; this row is informational.
@@ -574,7 +574,7 @@ async function checkProfileSecrets(
 				name: "profile-secrets",
 				ok: false,
 				detail: `secretRefs.${name}: unsupported scheme "${ref}"`,
-				remediation: `use "env:NAME" references — model credentials are supplied to the fleet as environment variables, never mounted from the operator agent dir`,
+				remediation: `use "env:NAME" references; model credentials are supplied to the fleet as environment variables, never mounted from the operator agent dir`,
 			};
 		}
 		const varName = ref.slice("env:".length);
@@ -609,7 +609,7 @@ async function checkProfileSecrets(
 
 /**
  * Kubernetes provider rows (P5.3, P5.6): operator-explicit context,
- * namespace, image, and storage. These become hard failures — a kubernetes
+ * namespace, image, and storage. These become hard failures: a kubernetes
  * profile without an explicit context must never silently use the ambient
  * current-context.
  */
@@ -686,7 +686,7 @@ function checkStrayK8sFields(profile: ProviderProfile): PreflightCheck {
 
 /**
  * Run the full preflight battery for a profile. Never throws for a check
- * outcome — failures are rows; only an internal bug throws. Kubernetes
+ * outcome: failures are rows; only an internal bug throws. Kubernetes
  * profiles run the host-generic checks plus the real API-requirement rows
  * (context/namespace/image/storage), never a not-yet-supported placeholder.
  */

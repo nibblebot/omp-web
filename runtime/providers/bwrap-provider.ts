@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * bwrap sandbox provider (P5.2) — implements the frozen provider operation
+ * bwrap sandbox provider (P5.2): implements the frozen provider operation
  * protocol (docs/clone-contracts.md, "Provider operation protocol") for
  * clone workspaces on a bwrap-capable Linux host.
  *
@@ -248,7 +248,7 @@ const CALLBACK_ENV_PREFIX = "OMP_SESSION_CALLBACK_";
 const RESUME_ENV_KEY = "OMP_SESSION_RESUME";
 
 function isCallbackEnvKey(key: string): boolean {
-	// The callback pair's enrollment keys OR the wake-resume hint — both gated
+	// The callback pair's enrollment keys OR the wake-resume hint, both gated
 	// by ENV_ALLOW_KEYS membership so nothing outside the allowlist can ride
 	// the handoff file (P5.5).
 	return (
@@ -260,11 +260,11 @@ function isCallbackEnvKey(key: string): boolean {
  * Read the fleet's callback enrollment handoff (`<stateDir>/callback-env.json`,
  * written 0600 before ensure-running). Returns the env entries to inject into
  * the sandbox, or null when the file is absent (a spawn without callback
- * flags is still allowed — stop-only management must not break).
+ * flags is still allowed, stop-only management must not break).
  *
  * Strictness (P5.5): only known `OMP_SESSION_CALLBACK_*` keys pass; values
  * are bounded non-empty strings; the file's workspaceId and generation must
- * equal the request's — a new generation must never start under a stale
+ * equal the request's: a new generation must never start under a stale
  * enrollment. Corrupt files throw `unavailable` (the fleet rewrites and
  * retries); identity mismatches throw `conflict`.
  */
@@ -387,7 +387,7 @@ interface SuperviseSpec {
 	workspaceToken: string;
 	/** Validated callback enrollment env from callback-env.json (may be empty). */
 	callbackEnv: Record<string, string>;
-	/** Secret-ref env key NAMES only — values never touch disk. */
+	/** Secret-ref env key NAMES only; values never touch disk. */
 	secretEnvKeys: readonly string[];
 }
 
@@ -399,7 +399,7 @@ const SECRET_MAX_CHARS = 4096;
 /**
  * Resolve profile `secretRefs` to concrete sandbox env values (P5.5).
  * Scheme `env:NAME` reads the named variable from the PROVIDER's own
- * environment — selected model credentials are supplied to the fleet, never
+ * environment: selected model credentials are supplied to the fleet, never
  * mounted from the operator agent dir. Values never touch the request JSON,
  * argv, or the stateDir; the supervisor receives only key names and pulls
  * the actual values from its own env. Unknown schemes are configuration
@@ -464,7 +464,7 @@ function runtimeLaunchFor(): RuntimeLaunch {
 	// Clone daemons dial OUT over the callback channel; nobody dials in. The
 	// daemon still binds its HTTP listener at boot, and under a host-network
 	// profile (P5.7) the default port 4721 collides with any other local
-	// daemon — an instant, silent in-sandbox death (smoke 2026-09-06: "Failed
+	// daemon: an instant, silent in-sandbox death (smoke 2026-09-06: "Failed
 	// to start server. Is port 4721 in use?"). Always bind an ephemeral port
 	// unless the operator pinned one (env flag mapping is 1:1).
 	if (process.env.OMP_SESSION_PORT === undefined && !launch.args.includes("--port")) {
@@ -540,7 +540,7 @@ async function runSupervisor(stateDir: string): Promise<number> {
 			bwrapBin: spec.bwrapBin,
 			denyRoots: deriveDenyRoots(process.env),
 			// The fleet-written callback enrollment rides only the env
-			// allowlist path — never the request JSON (P5.5).
+			// allowlist path, never the request JSON (P5.5).
 			env: { ...process.env, ...spec.callbackEnv },
 			// The provider's secret refs resolved to concrete values (only
 			// key names ride the sidecar; values live in this process env).
@@ -630,7 +630,7 @@ async function runSupervisor(stateDir: string): Promise<number> {
 
 	// Hold the sandbox: bwrap exits when the sandbox command exits. Drain
 	// the bounded stderr reader to completion so a POST-appearance death
-	// (the sandbox command started, then died — e.g. a port collision or a
+	// (the sandbox command started, then died, e.g. a port collision or a
 	// runtime crash) is recorded with its real rc AND stderr tail, not lost
 	// with the dropped reader. supervise.err is the actionable record either
 	// way; the pidfile stays in place so inspect reports "stopped".
@@ -688,7 +688,7 @@ async function opEnsureRunning(request: ProviderRequest): Promise<ProviderRespon
 	// The workspace-owned private home may not exist yet (a fleet-created
 	// clone dir without a home, or a fresh workspace): create it plus the
 	// agent dir the sandbox writes its sessions into. Idempotent and
-	// workspace-scoped — never touches anything outside homeDir.
+	// workspace-scoped; never touches anything outside homeDir.
 	try {
 		mkdirSync(homeDir, { recursive: true });
 		mkdirSync(join(homeDir, "agent"), { recursive: true });

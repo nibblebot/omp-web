@@ -1,14 +1,14 @@
 /**
  * Fleet log-store coverage for /ctl/stats (P8.6). Everything here is a pure
- * disk read over FleetLogStore — never a daemon, the SDK, or compute.
+ * disk read over FleetLogStore: never a daemon, the SDK, or compute.
  *
  * Rows joined by STABLE SESSION IDENTITY (the store sessionId ↔ a
  * fleet-local session header id). Main-streamed sessions that survive on
- * disk are counted once — the local row carries the `stored` annotation
+ * disk are counted once; the local row carries the `stored` annotation
  * rather than duplicating. Store-only sessions (deleted/stopped workspaces,
  * compute absent) surface as origin "fleet-store" rows whose `file` is a
  * display key only; their bytes are served by /ctl/stored, never by
- * /ctl/stats. Unstreamed remote history is simply absent — no row, no
+ * /ctl/stats. Unstreamed remote history is simply absent: no row, no
  * completeness claim.
  *
  * Layering: imports only ./log-store, ../stats/*, shared/stats-types.ts,
@@ -89,7 +89,7 @@ export function storeCoverage(
 	return { workspaces, sessions, bytes };
 }
 
-/** File key for a store-only summary row (display only — never a stats :file). */
+/** File key for a store-only summary row (display only, never a stats :file). */
 export function storeFileKey(session: StoredSessionInfo, mainRelpath: string | undefined): string {
 	return mainRelpath === undefined
 		? `${session.workspaceId}/${session.sessionId}`

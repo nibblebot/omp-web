@@ -6,17 +6,17 @@
  * Layout per the frozen contract (docs/clone-contracts.md, "Preparation
  * layout"):
  *
- * - `.omp-workspace-init.json` — the pin (workspaceId, source, resolvedCommit,
+ * - `.omp-workspace-init.json`: the pin (workspaceId, source, resolvedCommit,
  *   branch) is persisted BEFORE the clone so retries reuse the same commit and
  *   never re-resolve; the verified marker (with `initializedAt`/`prepVersion`)
  *   is written only after the checkout passes verification.
- * - `.checkout/` — the working clone. Cloned with `--no-hardlinks`, never
+ * - `.checkout/`: the working clone. Cloned with `--no-hardlinks`, never
  *   `--shared`, and verified to have no `objects/info/alternates` file, so its
  *   object store is independent of the source. Clone copies committed history
  *   only; uncommitted source files are never transferred.
  *
  * Git is spawned with explicit argv arrays (no shell). This module never
- * mutates git identity or config — the operator's own git config applies.
+ * mutates git identity or config; the operator's own git config applies.
  */
 
 import { closeSync, existsSync, fsyncSync, openSync, renameSync, writeSync } from "node:fs";
@@ -45,7 +45,7 @@ export interface WorkspaceSource {
 
 /**
  * The pin record: the marker as persisted before the clone starts. A marker
- * file in this shape means "pinned, not yet initialized" — retries reuse
+ * file in this shape means "pinned, not yet initialized": retries reuse
  * `resolvedCommit` instead of resolving again.
  */
 export interface WorkspacePin {
@@ -226,7 +226,7 @@ interface GitResult {
 }
 
 /**
- * `git -C <cwd> <args>` via Bun.spawn with explicit argv — never a shell.
+ * `git -C <cwd> <args>` via Bun.spawn with explicit argv, never a shell.
  * `GIT_TERMINAL_PROMPT=0` keeps remote contacts non-interactive; the rest of
  * the environment is inherited untouched, so the operator's git config,
  * credentials, and identity apply.
@@ -263,7 +263,7 @@ async function runGit(args: string[], cwd: string, signal?: AbortSignal): Promis
 	}
 }
 
-/** The git binary itself was unusable — environment problem, `unavailable`. */
+/** The git binary itself was unusable; environment problem, `unavailable`. */
 function requireGitRan(op: string, res: GitResult): void {
 	if (res.spawnFailed) {
 		throw new PrepareWorkspaceError(
@@ -380,7 +380,7 @@ function describeSource(source: WorkspaceSource): string {
 
 /**
  * Refuses to run against a marker whose identity (workspaceId, branch,
- * source) differs from the request — the pin belongs to that configuration.
+ * source) differs from the request; the pin belongs to that configuration.
  */
 function assertMarkerIdentity(
 	stored: WorkspacePin,
@@ -556,7 +556,7 @@ async function resolvePin(
 /**
  * Re-verifies that the source still offers the pinned commit before any
  * clone. An unreachable local commit or unadvertised remote commit is
- * `unavailable` — the pin is never silently replaced by upstream state.
+ * `unavailable`; the pin is never silently replaced by upstream state.
  */
 async function verifyPinInSource(
 	source: WorkspaceSource,
@@ -700,7 +700,7 @@ export interface ResolveWorkspacePinOptions {
  * Resolve a requested revision (or the source HEAD) to a full commit id
  * WITHOUT modifying anything: local sources `rev-parse --verify
  * <rev>^{commit}`, remote sources resolve against advertised refs only and
- * refuse an unoffered commit. This is the fleet-owned pin resolution —
+ * refuse an unoffered commit. This is the fleet-owned pin resolution:
  * the k8s provider never resolves; `createClone` calls this ONCE for every
  * profile and persists the full commit as `pinnedRevision` before any
  * provider-side init, so in-pod preparation always reuses the same pin.

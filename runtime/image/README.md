@@ -20,14 +20,14 @@ fleet-side (`server/index.ts`), so session behavior matches across providers.
 | `/workspace/.home/` | private writable home; sessions at `.home/agent/sessions` |
 
 `runtime/image/entrypoint.sh` (tini PID 1) runs preparation exactly once per
-PVC — only when the verified marker is absent — via
+PVC, only when the verified marker is absent, via
 `runtime/image/prepare-inpod.ts`, then execs the session daemon.
 
 ## Files
 
-- `Containerfile` — two-stage build (lockfile-pinned deps → lean runtime).
-- `entrypoint.sh` — new-workspace preparation gate + daemon exec.
-- `prepare-inpod.ts` — in-pod wrapper over `runtime/prepare-workspace.ts`.
+- `Containerfile`: two-stage build (lockfile-pinned deps → lean runtime).
+- `entrypoint.sh`: new-workspace preparation gate + daemon exec.
+- `prepare-inpod.ts`: in-pod wrapper over `runtime/prepare-workspace.ts`.
 
 ## Build prerequisites (reported by provider preflight, never auto-provisioned)
 

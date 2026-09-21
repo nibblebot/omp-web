@@ -30,7 +30,7 @@ import { validateProjectPath } from "./discovery";
 
 /**
  * Workspace identity unions, re-exported for fleet/registry consumers. The
- * canonical definitions live in shared/protocol.ts — the shared leaf that
+ * canonical definitions live in shared/protocol.ts, the shared leaf that
  * already feeds DaemonEntry/RegisteredProject to this file. Defining them
  * here instead would make the wire types (or this file's importers) depend
  * on a fleet-internal module; re-exporting keeps one source and the
@@ -68,13 +68,13 @@ export interface DeletionGateError {
  * Per-entry verify-at-deletion state (P7.3). Absent = never deleted.
  *
  * Lifecycle: a delete request enters "deleting" (gate in flight; the roster
- * identity is NEVER removed early — cleanup state remains until the whole
+ * identity is NEVER removed early; cleanup state remains until the whole
  * transition finishes and survives fleet restart). A failed gate persists
  * "delete-pending-retry" with the typed error; the workspace, its volume,
  * and its (still writable) store are all retained, and a retry re-enters
  * "deleting". On success the store flips read-only, provider resources are
  * deleted, and only then does the roster entry transition away (removal by
- * the caller — a "deleted" entry is a removed identity whose verified store
+ * the caller; a "deleted" entry is a removed identity whose verified store
  * is served view-only by Retention).
  */
 export interface WorkspaceDeletion {
@@ -112,7 +112,7 @@ export interface StoreOrphanMarker {
 /**
  * Persisted callback-enrollment binding (restart survival): ONLY the
  * SHA-256 hex digest of the 256-bit enrollment credential plus its
- * generation — the raw credential is never persisted. Fleet-private like
+ * generation; the raw credential is never persisted. Fleet-private like
  * the rest of the workspace record: never serialized into roster frames,
  * registered_projects frames, or /ctl/debug.
  */
@@ -124,7 +124,7 @@ export interface WorkspaceEnrollment {
 
 /**
  * Fleet-private workspace lifecycle record riding RegistryEntry. The whole
- * record — including the opaque `providerHandle` and the deletion state —
+ * record, including the opaque `providerHandle` and the deletion state,
  * is fleet-private: never serialize it into roster frames,
  * registered_projects frames, or /ctl/debug; the edge maps the public
  * projection explicitly.
@@ -226,10 +226,10 @@ export function bootStatusFor(entry: Pick<RegistryEntry, "mode" | "status">): Da
  * Legacy-inference base workspace record for entries persisted before P1.
  * Contract rule: managed or worktreeOf → "worktree"; every other mode
  * (spawned without worktreeOf, remote, attached) → "direct". desiredState
- * is "running" — a legacy entry is a live roster row. projectId comes from
+ * is "running": a legacy entry is a live roster row. projectId comes from
  * the entry's registered-project link ("" when absent, e.g. remote
  * entries). In-memory only: load() stamps it and the entry's next mutation
- * persists it — no rewrite at boot.
+ * persists it; no rewrite at boot.
  */
 function inferWorkspaceRecord(
 	entry: Pick<RegistryEntry, "managed" | "worktreeOf" | "projectId">,
@@ -362,7 +362,7 @@ export class Registry {
 			status: init.status ?? "spawning",
 		};
 		// create() is a mutation, so it stamps the legacy-inferred record when
-		// init omits one — in-memory state then matches what a reload would
+		// init omits one; in-memory state then matches what a reload would
 		// produce (load() inference covers files written before P1).
 		if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
 		this.entries.push(entry);
@@ -390,7 +390,7 @@ export class Registry {
 	}
 
 	/**
-	 * Shallow-merges `patch` into the workspace record and persists —
+	 * Shallow-merges `patch` into the workspace record and persists;
 	 * top-level keys replace wholesale (deletion/providerHandle are not
 	 * deep-merged; use the dedicated deletion accessors for deletion-state
 	 * transitions). Entries without a persisted record get the legacy-
@@ -434,7 +434,7 @@ export class Registry {
 
 	/**
 	 * Clears the persisted callback-enrollment binding and persists. When
-	 * `generation` is given, clears ONLY a binding at that generation — a
+	 * `generation` is given, clears ONLY a binding at that generation; a
 	 * stale-generation revocation must not wipe a newer binding. Returns
 	 * whether a binding was cleared; throws on an unknown daemon id.
 	 */
@@ -454,7 +454,7 @@ export class Registry {
 
 	/**
 	 * Persisted callback-enrollment bindings, one per workspace holding one
-	 * (defensive copies) — the boot re-enrollment supply for the transport.
+	 * (defensive copies), the boot re-enrollment supply for the transport.
 	 */
 	workspaceEnrollments(): Array<{ workspaceId: string; enrollment: WorkspaceEnrollment }> {
 		const out: Array<{ workspaceId: string; enrollment: WorkspaceEnrollment }> = [];
@@ -491,7 +491,7 @@ export class Registry {
 	 * removed (P8.10: resume-onto-fresh-clone for orphaned clone
 	 * workspaces). Returns undefined when the entry is gone or has no usable
 	 * provenance. Exactly-one-source and pinnedRevision validity are
-	 * enforced by the resume-clone route, not here — this only mirrors what
+	 * enforced by the resume-clone route, not here; this only mirrors what
 	 * the record carried at removal time.
 	 */
 	#captureOrphanProvenance(

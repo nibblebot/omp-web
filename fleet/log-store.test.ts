@@ -8,7 +8,7 @@
  * Everything runs against the REAL FleetLogStore over real disk files in a
  * per-suite tempDir (shared/testkit tempDir/cleanupTempDirs, top-level
  * afterAll registered here): every "reload" is a fresh FleetLogStore.load()
- * over the same rootDir — never a mock fs and never a reused in-memory
+ * over the same rootDir: never a mock fs and never a reused in-memory
  * instance. Assertions are observable contract only: durable bytes returned
  * by readStored/storedLineage, ack offsets on ingest results, repair kinds
  * and offsets on the load report, typed LogStoreError codes for refusals,
@@ -203,7 +203,7 @@ describe("FleetLogStore gap repair without byte loss", () => {
 
 		// The repair: the daemon re-streams from the acked offset (log_gap
 		// repair). Every byte of the intended stream must be present exactly
-		// once afterward — across a reload too.
+		// once afterward, across a reload too.
 		const o3 = ingestAcked(afterGap, MAIN_RELPATH, chunkAt(o2, 1, l3));
 		expect(o3).toBe(o2 + l3.length);
 		const expected = Buffer.from(l1 + l2 + l3, "utf8");
@@ -225,7 +225,7 @@ describe("FleetLogStore rewrite resync from zero", () => {
 		ingestAcked(store, MAIN_RELPATH, chunkAt(oldEnd, 1, gen1b));
 
 		// Daemon-side atomic rewrite: new file identity arrives at generation 2
-		// starting at offset 0. The stored gen-1 bytes must be truncated — a
+		// starting at offset 0. The stored gen-1 bytes must be truncated: a
 		// resync from zero, never a mixed old+new file.
 		const r1 = recordLine("rewritten", 1);
 		const r1End = ingestAcked(store, MAIN_RELPATH, chunkAt(0, 2, r1));
@@ -529,7 +529,7 @@ describe("FleetLogStore read-only rejection and retention", () => {
 		expect(gone).toMatchObject({ sessions: ["s1"], readOnly: false });
 		expect(verified).toMatchObject({ sessions: ["s1"], readOnly: true });
 
-		// Retention: neither orphan was deleted or rewritten — the raw bytes
+		// Retention: neither orphan was deleted or rewritten; the raw bytes
 		// are still readable from disk, and the live workspace is untouched.
 		expectBuffersEqual(store.readStored(goneWs, "s1", "s1.jsonl"), Buffer.from(goneBytes, "utf8"));
 		expectBuffersEqual(

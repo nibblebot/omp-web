@@ -197,7 +197,7 @@ export const api = {
 	/**
 	 * Raw stored bytes (application/x-ndjson, byte-identical to the stream).
 	 * `file` defaults to the main relpath on the server when omitted; a
-	 * missing (derived) file answers 404 { error: { code: "unavailable" } } —
+	 * missing (derived) file answers 404 { error: { code: "unavailable" } };
 	 * the caller renders it as unavailable, never as a download.
 	 */
 	storedRaw: async (workspaceId: string, sessionId: string, file: string): Promise<string> => {
@@ -219,7 +219,7 @@ export const api = {
 					code = parsed.code ?? null;
 				}
 			} catch {
-				// non-JSON error body — keep the status line
+				// non-JSON error body: keep the status line
 			}
 			throw new ApiError(message, res.status, code);
 		}
@@ -227,7 +227,7 @@ export const api = {
 	},
 
 	/**
-	 * Resume-onto-fresh-clone (orphaned/deleted workspaces ONLY — the ONLY
+	 * Resume-onto-fresh-clone (orphaned/deleted workspaces ONLY, the ONLY
 	 * resume affordance; fleet-stored browsing never offers inline Resume).
 	 * A mutation: authedFetch adds the session CSRF header and handles 401.
 	 * `resumePath` is the workspace summary's resumeClonePath, server-issued.
@@ -253,7 +253,7 @@ export const api = {
 					code = parsed.code ?? null;
 				}
 			} catch {
-				// non-JSON error body — keep the status line
+				// non-JSON error body: keep the status line
 			}
 			throw new ApiError(message, res.status, code);
 		}
@@ -264,7 +264,7 @@ export const api = {
 			}
 			return {};
 		} catch {
-			// 2xx with no JSON body (e.g. 204) — nothing to parse.
+			// 2xx with no JSON body (e.g. 204): nothing to parse.
 			return {};
 		}
 	},

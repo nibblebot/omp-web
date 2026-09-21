@@ -140,7 +140,7 @@ export function useOnboardingPipeline(onReady: () => void) {
 	};
 
 	/** Back to the form from an error rung: edits may be retried (the prior
-	 *  artifacts are left in place — e.g. a failed preparation keeps its
+	 *  artifacts are left in place, e.g. a failed preparation keeps its
 	 *  prepared volume). Clears the error snapshot so a stale global error
 	 *  frame cannot re-trigger the error rung. */
 	const reset = () => {

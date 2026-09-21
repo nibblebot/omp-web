@@ -35,12 +35,12 @@ export const CALLBACK_BULK_PATH_PREFIX = "/callback/bulk/";
  * Reserved control-plane wire literals both halves must agree on
  * byte-for-byte; carried here so neither lane invents a variant:
  *
- * - CALLBACK_TRANSPORT_STREAM_ID — streamId the fleet uses for its own
+ * - CALLBACK_TRANSPORT_STREAM_ID: streamId the fleet uses for its own
  *   envelopes (pair_ready, heartbeats); rides the replay ring so a resuming
  *   redial re-delivers them.
- * - CALLBACK_CONTROL_STREAM_ID — streamId the daemon uses for its transport
+ * - CALLBACK_CONTROL_STREAM_ID: streamId the daemon uses for its transport
  *   heartbeats on the up stream.
- * - CALLBACK_PAIR_READY_TYPE — payload.type of the single control envelope
+ * - CALLBACK_PAIR_READY_TYPE: payload.type of the single control envelope
  *   the fleet emits once both halves of a connectionId are live; payload is
  *   {type, connectionId, generation}, idempotent by connectionId.
  */
@@ -54,7 +54,7 @@ export const CALLBACK_BROWSER_STREAM_PREFIX = "browser/";
  * Bulk multi-part upload headers (daemon → fleet, POST /callback/bulk/<id>).
  * Parts are 0-based, strictly sequential, no gaps/overlaps; the final part
  * carries BULK_FINAL_HEADER: 1. The AGGREGATE across all parts stays capped
- * at BULK_MAX_BYTES (64 MiB) — multi-part exists so neither side buffers the
+ * at BULK_MAX_BYTES (64 MiB); multi-part exists so neither side buffers the
  * whole body at once, never to raise the ceiling. A failed/aborted/expired
  * part fails the whole correlation.
  */
@@ -514,7 +514,7 @@ export function encodeSseEnvelope(envelope: CallbackEnvelope): string {
 /**
  * Async-iterate validated envelopes from a /callback/down response body.
  * Reuses parseSseUnits (partial-chunk, CRLF, multi-line-data handling).
- * Comments and the transport `ping` keepalive are consumed silently —
+ * Comments and the transport `ping` keepalive are consumed silently;
  * observable liveness comes from `heartbeat` envelopes (15 s cadence vs the
  * 30 s silence deadline). Malformed event data throws
  * CallbackError("invalid_request"). The event name mirrors the envelope kind
@@ -613,7 +613,7 @@ function newChunkId(): string {
  * so arbitrary slice points are byte-exact and every produced envelope
  * re-validates under `maxRecordBytes` (default ENVELOPE_MAX_BYTES; enforced
  * with a defensive re-validation pass). Slice envelopes inherit the source
- * envelope's identity fields and seq — the sender assigns fresh monotonic
+ * envelope's identity fields and seq; the sender assigns fresh monotonic
  * seq values at emit time. Reassemble with reassembleChunks.
  */
 export function planOversizeSplit(
@@ -730,11 +730,11 @@ export function reassembleChunks(
  * Outcome of a dedup-gated command submission (ledger: "Dedup: command id
  * within workspace, existing 60 s / 64-entry window").
  *
- * - "accepted" — the id was fresh; the caller may submit it. The window
+ * - "accepted": the id was fresh; the caller may submit it. The window
  *   records a pending entry until confirmAccepted is called.
- * - "not_submitted" — duplicate of a prior submission already confirmed
+ * - "not_submitted": duplicate of a prior submission already confirmed
  *   accepted: safe to skip; do not resend.
- * - "unknown" — duplicate of a prior submission whose daemon acceptance was
+ * - "unknown": duplicate of a prior submission whose daemon acceptance was
  *   never confirmed (e.g. the connection died mid-flight): the caller must
  *   not assume either acceptance or loss.
  */
@@ -742,7 +742,7 @@ export type CommandSubmitOutcome = "not_submitted" | "accepted" | "unknown";
 
 /**
  * Command-identity dedup window. Identity is the (workspaceId, commandId)
- * pair exactly — payloads are never fingerprinted, and a fresh id is always
+ * pair exactly; payloads are never fingerprinted, and a fresh id is always
  * "accepted" even if its payload matches an earlier different-id command.
  */
 export interface DedupWindow {

@@ -23,18 +23,18 @@ import { isRingedDeltaType } from "./sse-delivery";
  *
  * - Browser streams: per `browser/<connId>` replay ring of emitted frame
  *   envelopes. stream_open (lastSeq = replay floor) replays ring frames with
- *   wire seq > lastSeq (ring HIT — never a re-prime); a floor below the
+ *   wire seq > lastSeq (ring HIT, never a re-prime); a floor below the
  *   ring's eviction frontier (ring MISS) flips stream_resync followed
- *   by a full re-prime burst — never a silent partial replay; a caught-up
+ *   by a full re-prime burst, never a silent partial replay; a caught-up
  *   floor replays nothing and does not re-prime. An outbound buffer drop
  *   also flips stream_resync. stream_close drops the stream. Each pair
- *   replacement (onPairChange) clears every still-open stream's ring — the
- *   per-connection wire seq space restarts — and re-primes it fresh
+ *   replacement (onPairChange) clears every still-open stream's ring, the
+ *   per-connection wire seq space restarts, and re-primes it fresh
  *   instead of streaming into the void.
  * - Command routing: kind:"command" payloads on a browser/control stream are
  *   acked (command_ack receipt) then dispatched through the mounted
  *   handleCommand; answers (call_result/unicast) flow as frames on the same
- *   stream. Dedup is the daemon's existing 60 s / 64-entry window — a
+ *   stream. Dedup is the daemon's existing 60 s / 64-entry window; a
  *   duplicate is acked but not re-dispatched.
  * - Control mirror: every session-scoped frame the direct /events path
  *   broadcasts is mirrored as a kind:"frame" envelope on streamId "control"
@@ -117,8 +117,8 @@ interface BrowserStream {
 	bytes: number;
 	/**
 	 * Ring eviction frontier: the highest wire seq ever dropped from the
-	 * ring head. A reconnect floor BELOW this frontier is a ring MISS —
-	 * entries the client still needs were evicted — and must full re-prime
+	 * ring head. A reconnect floor BELOW this frontier is a ring MISS,
+	 * entries the client still needs were evicted, and must full re-prime
 	 * (never a silent partial tail). A floor at or above the frontier means
 	 * the client consumed every evicted entry. 0 while nothing was evicted.
 	 */
@@ -175,10 +175,10 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 	 * envelopes are ringed keyed on the REAL wire seq (reported by the
 	 * transport at emit) so a reconnect re-sends exactly what the edge is
 	 * missing; acks/controls and non-ringed frames (priming bursts, unicast
-	 * answers) are never ringed — priming is re-derived on stream_open and a
+	 * answers) are never ringed; priming is re-derived on stream_open and a
 	 * lost answer is re-POSTed by the client, matching the direct SSE ring
 	 * semantics. Ring memory is byte-bounded (4 MiB) per stream. A "dropped"
-	 * send on a browser stream flips stream_resync — no silent gap ever.
+	 * send on a browser stream flips stream_resync, no silent gap ever.
 	 */
 	const emit = (streamId: string, kind: CallbackKind, payload: unknown, record = true): void => {
 		const isBrowser = streamId.startsWith("browser/");
@@ -267,8 +267,8 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		if (lastSeq !== undefined) stream!.lastSeq = lastSeq;
 		const replay = ringAfter(stream!, stream!.lastSeq);
 		// Ring MISS: the reconnect floor is BELOW the eviction frontier, so
-		// the client never consumed a ringed delta the ring already dropped —
-		// entries it still needs were evicted. Never honor a partial tail —
+		// the client never consumed a ringed delta the ring already dropped;
+		// entries it still needs were evicted. Never honor a partial tail;
 		// resync + full re-prime (P3.10: only a miss re-primes). A floor at
 		// or above the frontier (the client consumed every evicted entry) is
 		// a HIT below. A brand-new stream has no frontier and primes below.
@@ -283,8 +283,8 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			stream!.evictedSeq = 0;
 			deps.primeStream(streamId);
 			// The prime burst's ringed-delta frames (state/ready/collab_status)
-			// advance the floor themselves via emit; do NOT force lastSeq here
-			// — that could regress the floor below the just-primed frames and
+			// advance the floor themselves via emit; do NOT force lastSeq here;
+			// that could regress the floor below the just-primed frames and
 			// re-deliver them on the next open.
 			return;
 		}
@@ -295,7 +295,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			stream!.lastSeq = entry.seq;
 		}
 		// A caught-up ring hit (an existing stream whose floor is at or past
-		// the newest entry) replays nothing and must NOT re-prime — the
+		// the newest entry) replays nothing and must NOT re-prime; the
 		// client has everything. Only a brand-new stream (no ring history)
 		// primes fresh.
 		if (newStream) deps.primeStream(streamId);
@@ -510,7 +510,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		},
 		// The callback pair was replaced: every connection's per-stream wire
 		// seq space RESTARTS (new connectionId). Retained ring entries carry
-		// seqs from the dead pair — replaying them on the fresh pair would
+		// seqs from the dead pair; replaying them on the fresh pair would
 		// deliver frames whose seqs mean nothing in the new space (new-pair
 		// emits reuse the same numbers). Clear each stream's ring and
 		// re-prime fresh; the edge replays its OWN browser ring

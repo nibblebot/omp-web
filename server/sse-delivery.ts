@@ -71,7 +71,7 @@ const HISTORY_CHUNK_BYTES = 512 * 1024;
  * A message at or under this ceiling ships verbatim even when it exceeds the
  * frame batch target above: it takes a paced frame of its own, which still
  * stays well under the 4 MiB backpressure cap. Only a message over the
- * ceiling degrades — image blocks first, then progressive clipping — and only
+ * ceiling degrades: image blocks first, then progressive clipping, and only
  * until it is back under the ceiling. Without this split, every large message
  * would be clipped to the first shrink pass and a transcript of large-but-
  * legal messages would collapse into one small frame.
@@ -478,7 +478,7 @@ export function setOnConsumerDetached(fn: (stream: SseConsumer, reason: string) 
 
 // Callback mirror tap (P3.4): registered by server/index.ts when a callback
 // pair exists. Every broadcastTo/broadcastAnswer/broadcast frame is handed to
-// the tap VERBATIM (payload only — seq/stream stamping is the transport's),
+// the tap VERBATIM (payload only; seq/stream stamping is the transport's),
 // so the fleet derives activity + fanout correlation exactly like the direct
 // control-socket tap. The tap never throws into the delivery path.
 let onFrameTap: ((frame: ServerFrame | SessionScopedFrame) => void) | null = null;

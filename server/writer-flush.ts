@@ -9,9 +9,9 @@ import type { CallbackErrorCode } from "../shared/callback-protocol";
  * AgentSession.dispose and AgentLifecycleManager.release swallow descendant
  * and advisor-recorder close failures (allSettled / try-catch in the pinned
  * 17.1.8 sources), so dispose resolution alone is NOT all-writer flush
- * evidence. Before ANY dispose, this captures every reachable live writer —
+ * evidence. Before ANY dispose, this captures every reachable live writer,
  * the boot session's own SessionManager plus every registered sub/advisor
- * ref with a live AgentSession — and calls flush() on each. A latched
+ * ref with a live AgentSession, and calls flush() on each. A latched
  * SessionPersistenceIndeterminateError (or any rejected flush) is a hard
  * block, surfaced typed.
  *
@@ -62,7 +62,7 @@ export function captureWriters(
  * Fail-closed writer precondition + explicit flush of every reachable
  * SessionManager. Returns WriterFlushResult with per-descendant states.
  * Any live writer (main streaming/queued, a sub/advisor ref running, or a
- * flush rejection) fails closed with `writer_active` / `unavailable` —
+ * flush rejection) fails closed with `writer_active` / `unavailable`;
  * deletion is refused, never inferred from dispose resolution.
  */
 export async function flushAllWriters(input: {
@@ -108,7 +108,7 @@ export async function flushAllWriters(input: {
 			descendants: [],
 			advisors: "inactive",
 			error: `main session flush failed: ${flushMain.error}`,
-			note: "main flush rejected or persistence indeterminate — deletion blocked (P4.5)",
+			note: "main flush rejected or persistence indeterminate; deletion blocked (P4.5)",
 		};
 	}
 	const states: QuiesceWriterEntry[] = [];
@@ -121,7 +121,7 @@ export async function flushAllWriters(input: {
 					descendants: states,
 					advisors: "inactive",
 					error: `descendant ${ref.id} flush failed: ${flushed.error}`,
-					note: "descendant flush rejected or persistence indeterminate — deletion blocked (P4.5)",
+					note: "descendant flush rejected or persistence indeterminate; deletion blocked (P4.5)",
 				};
 			}
 			states.push({ id: ref.id, kind: ref.kind, sessionFile: ref.sessionFile, state: "flushed" });
@@ -142,7 +142,7 @@ export async function flushAllWriters(input: {
 			descendants: states,
 			advisors: advisorState.state,
 			error: `advisor catch-up barrier failed: ${advisorState.error}`,
-			note: "advisor recorder catch-up unresolved — deletion blocked",
+			note: "advisor recorder catch-up unresolved; deletion blocked",
 		};
 	}
 	return {
@@ -220,7 +220,7 @@ async function advisorCaughtUp(
 		};
 	} catch {
 		// getAdvisorStatusOverview may not exist on older SDK builds; treat as
-		// inactive only when advisors are provably off — otherwise fail closed.
+		// inactive only when advisors are provably off, otherwise fail closed.
 		try {
 			const overview = session.getAdvisorStatusOverview();
 			if (

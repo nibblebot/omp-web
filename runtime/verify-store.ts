@@ -28,7 +28,7 @@ import {
 } from "./export-sessions";
 
 // ---------------------------------------------------------------------------
-// Verify-at-deletion gate (P7.1/P7.2 core) — runtime/verify-store.ts.
+// Verify-at-deletion gate (P7.1/P7.2 core): runtime/verify-store.ts.
 //
 // Frozen contract (docs/clone-contracts.md "Fleet log store"/"Typed errors";
 // docs/clone-design.md "Workspace deletion: verify-at-deletion contract"):
@@ -48,12 +48,12 @@ import {
 // Workspace deletion is gated on fleet store completeness for every session:
 // offset-contiguous streams (index ackedOffset equals the stored file size,
 // no gap markers) AND structurally verified JSONL under the manifest rules
-// (title slot, header, newline-terminated entries, no trailing partial) —
+// (title slot, header, newline-terminated entries, no trailing partial),
 // against the store layout logs/<workspaceId>/<sessionId>/<relpath> plus the
 // per-session index.json sidecar. Path/type validation is independent of
 // daemon trust: traversal, symlinks, non-regular files, and an index
 // inconsistent with the stored tree are rejected. The daemon streams every
-// lineage file (main JSONL plus its artifact subtree — subagent/advisor
+// lineage file (main JSONL plus its artifact subtree, subagent/advisor
 // transcripts and raw blobs) under one session id, so a session directory is
 // one self-contained lineage tree and index↔disk equality over that tree IS
 // the artifact-lineage completeness check.
@@ -69,11 +69,11 @@ import {
 // exactly this exported signature.
 //
 // Error-code mapping (frozen ledger vocabulary):
-//   invalid_request — malformed caller arguments (logsRoot/workspaceId).
-//   unavailable     — fs/environment failures and resource bounds (10k files
+//   invalid_request: malformed caller arguments (logsRoot/workspaceId).
+//   unavailable    : fs/environment failures and resource bounds (10k files
 //                     / 16 GiB, shared with the export gate), plus the JSONL
 //                     predicate's own unavailable verdicts.
-//   conflict        — stored content contradicting the contract: offset
+//   conflict       : stored content contradicting the contract: offset
 //                     disagreement, gap/inconsistent index, unsafe stream
 //                     key, symlink/non-regular file, declared file missing,
 //                     unindexed file, malformed JSONL (ExportError conflict).
@@ -92,7 +92,7 @@ export interface VerifiedSession {
  * The success arm carries the additive P4.5 verification manifest (built
  * only when provenance is supplied via {@link VerifyWorkspaceLogsOptions}):
  * an {@link ArchiveManifest} over every verified file, plus its
- * content-addressed export id. Verify-only semantics are preserved — the
+ * content-addressed export id. Verify-only semantics are preserved: the
  * manifest is computed, never used to copy or stage anything; persisting it
  * on the roster entry is the deletion lane's consumption (out of scope).
  */
@@ -133,9 +133,9 @@ export interface VerifyWorkspaceLogsOptions {
 	};
 	/**
 	 * The daemon's quiesce manifest (P4.5 quiesce_result control envelope).
-	 * When supplied, the gate ALSO proves the fleet store matches it exactly
-	 * — every declared file present in the store with equal size/sha256/kind/
-	 * sessionId/parentPath, and no store file outside the declared set — on
+	 * When supplied, the gate ALSO proves the fleet store matches it exactly:
+	 * every declared file present in the store with equal size/sha256/kind/
+	 * sessionId/parentPath, and no store file outside the declared set, on
 	 * top of the offset-contiguity/structural checks. `generatedAt` is
 	 * excluded from equality; `provenance.workspaceId` must equal
 	 * `workspaceId` (a drifted manifest is a conflict).
@@ -601,7 +601,7 @@ function sha256File(absolute: string): string {
  * Verify the fleet log store for one workspace: every session offset-
  * contiguous and structurally complete, every session reported in
  * deterministic order. A workspace with no session directories (or no logs
- * subtree at all) resolves ok with an empty inventory — nothing was ever
+ * subtree at all) resolves ok with an empty inventory: nothing was ever
  * streamed, so nothing gates deletion. Bounds failures return `unavailable`.
  */
 export async function verifyWorkspaceLogs(opts: VerifyWorkspaceLogsOptions): Promise<VerifyResult> {

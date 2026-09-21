@@ -5,10 +5,10 @@
  * StoredSessionDetail.files; selecting a stored file shows its transcript
  * (parsed, via the shared TranscriptPage rendering) or, via the raw toggle,
  * the byte-identical JSONL. A file with status "missing" is rendered as an
- * explicit UNAVAILABLE — never a clickable download/transcript link.
+ * explicit UNAVAILABLE, never a clickable download/transcript link.
  *
  * The resume-onto-fresh-clone action appears ONLY when the workspace summary
- * carries resumeClonePath (orphaned/deleted workspaces) — never for
+ * carries resumeClonePath (orphaned/deleted workspaces), never for
  * fleet-stored browsing otherwise.
  */
 import { Show, createEffect, createResource, createSignal, For } from "solid-js";
@@ -34,7 +34,7 @@ export function StoredDetail(props: { workspaceId: string; sessionId: string }) 
 		},
 	);
 
-	/** An errored Solid resource throws when read — check .error first. */
+	/** An errored Solid resource throws when read; check .error first. */
 	const detail = () => (detailRes.error ? undefined : detailRes());
 
 	// Workspace summaries: provenance facts + the orphaned resume path live
@@ -116,7 +116,7 @@ export function StoredDetail(props: { workspaceId: string; sessionId: string }) 
 				<div class="head-tags">
 					<span class="tag tag-store">fleet-stored</span>
 					<Show when={detail()?.orphaned === true}>
-						<span class="tag tag-warn">deleted workspace — view only</span>
+						<span class="tag tag-warn">deleted workspace: view only</span>
 					</Show>
 					<Show when={detail()?.readOnly === true && detail()?.orphaned !== true}>
 						<span class="tag tag-muted">read only</span>
@@ -129,7 +129,7 @@ export function StoredDetail(props: { workspaceId: string; sessionId: string }) 
 				{(ws) => (
 					<Show when={ws.orphaned === true && ws.resumeClonePath !== undefined}>
 						<div class="stored-orphan-banner">
-							<span>This workspace was deleted — sessions are stored view-only.</span>
+							<span>This workspace was deleted; sessions are stored view-only.</span>
 							<button
 								type="button"
 								class="btn btn-small"
@@ -225,7 +225,7 @@ function FileRow(props: { file: StoredFileInfo; selected: boolean; onPick: () =>
 					</Show>
 				</Show>
 				<Show when={missing()}>
-					<span class="tx-unavailable-inline">missing from fleet store — unavailable</span>
+					<span class="tx-unavailable-inline">missing from fleet store: unavailable</span>
 				</Show>
 			</span>
 		</button>

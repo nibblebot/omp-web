@@ -9,12 +9,12 @@ import { Modal } from "../shared/Modal";
 // Worktree targets keep the guard-evidence flow: the sidebar row asked for
 // the evidence on open, this dialog shows dirty counts and branch merge/push
 // state with an "also delete branch" checkbox (default from server evidence:
-// merged && pushed). A dirty or unowned worktree is refused outright — no
+// merged && pushed). A dirty or unowned worktree is refused outright: no
 // --force in v1.
 //
 // Clone targets use the verified-delete flow: deletion is an explicit
 // operation distinct from ordinary stop and from stopping the current work.
-// The fleet refuses while work is active (the operator stops it first —
+// The fleet refuses while work is active (the operator stops it first,
 // "Stop current work" on the attached row / the chat Stop button), verifies
 // the fleet transcript store for every session, and only then deletes
 // provider compute/storage and the checkout. The same delete_worktree
@@ -44,7 +44,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 	const daemon = () =>
 		target() !== null ? state.daemonRoster.find((d) => d.daemonId === target()!) : undefined;
 	const isClone = () => daemon()?.workspaceKind === "clone";
-	/** The roster entry when the target is a clone, else undefined — Show
+	/** The roster entry when the target is a clone, else undefined; Show
 	 *  narrows the child callback to the entry (never to `true`). */
 	const cloneDaemon = (): DaemonEntry | undefined =>
 		isClone() && daemon() !== undefined ? daemon() : undefined;
@@ -72,7 +72,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 			errorAtOpen = state.error;
 			setRefusal(null);
 		}
-		// The entry left the roster — the delete finished (or the daemon was
+		// The entry left the roster; the delete finished (or the daemon was
 		// evicted another way): dismiss.
 		if (daemon() === undefined) {
 			setState("deleteWorkspaceTarget", null);
@@ -88,7 +88,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 	});
 
 	/** Evidence-backed checkbox default: delete the branch only when merged
-	 *  and (pushed or no upstream) — server refuses `-d` on unmerged anyway. */
+	 *  and (pushed or no upstream); server refuses `-d` on unmerged anyway. */
 	const effectiveDeleteBranch = () =>
 		deleteBranch() ?? (info()?.merged === true && info()?.unpushed !== true);
 
@@ -107,7 +107,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 	const dirtyTotal = () => dirtyKinds().reduce((sum, k) => sum + k.n, 0);
 
 	/** Worktree confirm allowed only once evidence is in AND the worktree is
-	 *  owned + clean. Clones have no guard-evidence rung — the fleet's
+	 *  owned + clean. Clones have no guard-evidence rung; the fleet's
 	 *  verified-delete gate admits/refuses at submit time. */
 	const worktreeConfirmable = () => {
 		const i = info();
@@ -156,7 +156,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 										<span class="worktree-evidence-path">{clone().providerProfileId}</span>)
 									</>
 								) : null}
-								? This refuses while work is active — stop the current work first if a turn is
+								? This refuses while work is active; stop the current work first if a turn is
 								running. It verifies every session transcript is safely stored in the fleet, then
 								deletes the provider compute/storage and the local checkout. Uncommitted
 								working-tree state is lost; session transcripts are not a source backup. This cannot
@@ -189,7 +189,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 					<Show when={info() !== undefined && !info()!.owned}>
 						<p class="danger-confirm-body">
 							{info()!.reason ??
-								"This directory is not a fleet-managed worktree — nothing to delete."}
+								"This directory is not a fleet-managed worktree: nothing to delete."}
 						</p>
 					</Show>
 					<Show when={info() !== undefined && info()!.owned && info()!.dirty}>
@@ -209,7 +209,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 								</span>
 							</Show>
 							. Deleting is refused while the worktree is dirty
-							{info()!.reason ? ` — ${info()!.reason}` : ""}.
+							{info()!.reason ? `: ${info()!.reason}` : ""}.
 						</p>
 					</Show>
 					<Show when={info() !== undefined && info()!.owned && !info()!.dirty}>

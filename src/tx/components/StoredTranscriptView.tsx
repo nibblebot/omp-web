@@ -3,14 +3,14 @@
  *
  * The /ctl/stored transcript route answers the same TranscriptPage shape as
  * the /ctl/stats route, so the row renderers, pairing maps, collapse store
- * and day-separator machinery from transcript/ are reused verbatim — the one
+ * and day-separator machinery from transcript/ are reused verbatim; the one
  * difference is the fetch source (api.storedTranscript instead of
  * api.transcript) and that no stats-derived tool filter exists here (no
  * stats.db rows for store files; tool names are unknown until a page lands).
  *
  * Read-only by design: no resume, no download, no compute wake. A file
  * indexed but absent from the store answers 404 { error: { code:
- * "unavailable" } } and renders an explicit notice — never a broken link.
+ * "unavailable" } } and renders an explicit notice, never a broken link.
  */
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { createVirtualizer } from "@tanstack/solid-virtual";
@@ -278,7 +278,7 @@ interface StoredTranscriptPaneProps {
 /**
  * Stored-transcript pane: the paging controller plus a raw-bytes toggle.
  * The raw affordance fetches format=raw (byte-identical application/x-ndjson)
- * and renders it read-only in a capped <pre> — embedded stored bytes stay
+ * and renders it read-only in a capped <pre>; embedded stored bytes stay
  * available even when derived assets are missing.
  */
 export function StoredTranscriptPane(props: StoredTranscriptPaneProps) {
@@ -344,7 +344,7 @@ export function StoredTranscriptPane(props: StoredTranscriptPaneProps) {
 
 			<Show when={unavailable()}>
 				<div class="tx-unavailable" role="alert">
-					This file is missing from the fleet store — unavailable.
+					This file is missing from the fleet store: unavailable.
 				</div>
 			</Show>
 
@@ -372,7 +372,7 @@ export function StoredTranscriptPane(props: StoredTranscriptPaneProps) {
 							{raw()}
 							<Show when={rawTruncated()}>
 								<div class="stored-raw-cap-note">
-									Truncated — showing the first {(RAW_CAP_BYTES / 1024).toFixed(0)} KB of stored
+									Truncated: showing the first {(RAW_CAP_BYTES / 1024).toFixed(0)} KB of stored
 									bytes.
 								</div>
 							</Show>

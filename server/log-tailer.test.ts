@@ -1,6 +1,6 @@
 /**
  * SessionLogTailer regression (P3.9): a fleet log_gap control whose envelope
- * streamId NAMES the affected log stream must repair that stream — the
+ * streamId NAMES the affected log stream must repair that stream; the
  * daemon's handleControl requires the target when the control does not ride
  * the reserved transport stream (fleet sends log_gap on the target stream;
  * a missing target used to gap-lock mid-file holes permanently).
@@ -55,7 +55,7 @@ describe("SessionLogTailer log_gap repair", () => {
 			expect(status.lastError).toBeNull();
 
 			// The repair re-streams [8, EOF): at least one fresh chunk whose
-			// offset is 8 (or a later continuation) — bytes already acked are
+			// offset is 8 (or a later continuation); bytes already acked are
 			// never re-sent.
 			const replayed = sent.slice(sentAfterAck);
 			expect(replayed.length).toBeGreaterThan(0);

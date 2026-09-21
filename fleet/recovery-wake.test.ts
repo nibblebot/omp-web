@@ -1,7 +1,7 @@
 /**
  * Wake-from-store / resume recovery regressions (clone-plan P8.4/P8.9/P8.10;
  * docs/clone-contracts.md "Wake"). Deliberately narrow deterministic tests
- * over the uncertain boundaries this lane introduced — NOT a lifecycle
+ * over the uncertain boundaries this lane introduced; NOT a lifecycle
  * matrix (DeletionSafetyTests owns fleet/workspace-lifecycle.test.ts for the
  * destroy path; Lifecycle owns fleet/clone-recovery.test.ts for restart
  * races). No file/helper collision with either.
@@ -15,7 +15,7 @@
  *     union (volume ∪ store) returns the newest mtime.
  *  4. An explicit resumeSessionId wake materializes the stored transcript
  *     into the volume and hands the daemon OMP_SESSION_RESUME (bwrap
- *     profile) — checked via the callback-env handoff the fake provider
+ *     profile), checked via the callback-env handoff the fake provider
  *     records; a never-started clone wake writes NO resume env.
  *  5. A k8s-shaped profile wake writes NO resume env (pod paths differ).
  *  6. resume-onto-fresh-clone route keeps 404 (no provenance) / 409 (live
@@ -363,7 +363,7 @@ describe("clone wake resume (P8.9)", () => {
 					chunkAt(0, 1, sessionBody(SESSION), true),
 				);
 
-				// Explicit wake with the store-validated session id — the
+				// Explicit wake with the store-validated session id, the
 				// same call the edge's spawn_resume makes after membership
 				// validation. The /ctl/start route intentionally takes only
 				// daemonId (implicit wake); the explicit id rides the
@@ -481,7 +481,7 @@ describe("resume-onto-fresh-clone route (P8.10)", () => {
 				sessionId: SESSION,
 			});
 			// With no cloneResumeSpawner wired the route fails typed 503
-			// (P5) — never a fake spawn.
+			// (P5), never a fake spawn.
 			expect(res.status).toBe(503);
 			const body = (await res.json()) as { error?: string };
 			expect(body.error ?? "").toContain("no clone provider is configured");
