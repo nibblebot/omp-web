@@ -16,7 +16,7 @@ have not set those up. For the process model behind the interface, see
 Two icon buttons at the top of each sidebar switch the top-level view:
 
 - **Work** is the live workspace: fleet sidebar, transcript, composer.
-- **Analysis** browses historical transcripts, session analytics, and subagent transcripts.
+- **Analysis** browses historical transcripts, fleet-stored session history, session analytics, and subagent transcripts.
 
 Analysis reads the fleet statistics API, so it is served by the fleet itself.
 Each view remembers its own sidebar state, and a turn that finishes while you
@@ -33,17 +33,25 @@ The sidebar is the project-first roster of session daemons.
 
 - A **Projects** heading with a **+** button that opens the add-repo flow.
 - One collapsible group per registered project: the main-checkout row first,
-  then worktree rows, ending with **+ Add worktree**.
+  then worktree and clone workspace rows, ending with **+ Add workspace** (a
+  worktree, a clone workspace, or an existing worktree to adopt).
 - Rows can show the session daemon name and session title, labels, working
-  directory, branch, and git change counts. The left dot shows lifecycle states
+  directory, branch, and git change counts. Clone workspace rows carry a `clone`
+  chip and their provider profile id. The left dot shows lifecycle states
   from spawning through ready, asleep, reconnecting, or error. On ready rows it
   can instead show in progress, blocked, unread, or unreviewed activity.
 - Clicking a ready row attaches to that session daemon; clicking an asleep row
   wakes it and resumes its last session. Clicking the session title instead
-  opens the recent-sessions menu for that worktree.
+  opens the recent-sessions menu for that checkout.
 - The row actions menu offers **Stop daemon**, **Remove daemon**,
-  **Daemon details**, and, on worktree rows, **Delete worktree**.
+  **Daemon details**, and, on worktree rows, **Delete worktree…**. On clone
+  workspace rows it instead offers **Start workspace**, **Stop workspace**,
+  **Stop current work** on the attached row, and **Delete workspace…**; see
+  [Clone workspaces](/fleet/clone-workspaces/).
 - The footer holds **Debug** and **Settings**, plus an optional Usage panel.
+- When the fleet is configured with browser auth, a browser without a session
+  gets the **Sign in** dialog before the roster loads, and sign out lives in
+  Settings under Web UI; see [Browser access and sign-in](/operations/browser-auth/).
 
 ## Transcript
 
@@ -152,4 +160,5 @@ starts with the roster sidebar closed so the conversation has room.
 - [Start your first session](/getting-started/start-first-session/)
 - [Prompting the agent](/sessions/prompting/)
 - [The fleet sidebar](/fleet/sidebar/)
+- [Clone workspaces](/fleet/clone-workspaces/)
 - [Troubleshooting](/operations/troubleshooting/)

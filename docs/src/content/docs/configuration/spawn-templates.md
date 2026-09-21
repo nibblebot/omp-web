@@ -31,6 +31,17 @@ The fleet reads `~/.omp-web/config.json` by default, or the file named by `OMP_F
 - The command runs through `sh -c`, so it can be a wrapper, a pipeline, or any shell invocation.
 - The optional `host` is a template-declared reachable hostname. The fleet uses it when the spawned process reports a listening port but no other reachable address, composing the dial address from that host and the reported port.
 
+The same config file carries the fleet's other operator keys. Each is covered on its own page:
+
+| Key | What it configures |
+| --- | --- |
+| `workspaceDir` | The managed worktree root. |
+| `providerProfiles` | Clone workspace providers: `bwrap` or Kubernetes, with executable, resources, storage, and secret references. See [Provider profiles](/configuration/provider-profiles/). |
+| `bind` | The address the control plane and browser edge bind. A non-loopback bind without browser auth is a startup error. |
+| `browserAccessToken` | The operator access token for the browser surface, stored only as its sha-256 digest. See [Browser access and sign-in](/operations/browser-auth/). |
+| `browserOrigin` | The public origin admitted for browser mutations. |
+| `trustedProxies` | Reverse proxies whose `X-Forwarded-For` and `X-Forwarded-Proto` headers the fleet honors; forwarded headers from any other peer are ignored. |
+
 ## Placeholders
 
 | Placeholder | Expands to |
@@ -105,6 +116,8 @@ The environment reference owns the full precedence list: [Environment variables 
 
 - [Configuration schema](/reference/configuration/)
 - [Environment variables and precedence](/reference/environment/)
+- [Provider profiles](/configuration/provider-profiles/)
+- [Browser access and sign-in](/operations/browser-auth/)
 - [Data and state management](/configuration/data-and-state/)
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/)
 - [Run a remote session daemon over SSH](/advanced/ssh/)

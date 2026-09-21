@@ -3,7 +3,7 @@ title: Manage projects and worktrees
 description: "Register and deregister Git projects, create or adopt linked worktrees, and delete managed worktrees from the terminal with the same guards the browser UI applies."
 ---
 
-The fleet does not scan for projects. A repository joins it only when you register it, and a checkout gets a roster row only when you create or adopt a worktree, or spawn a session daemon on a directory directly. These commands perform the same registration work as the fleet sidebar and enforce the same safety rules: registration never touches repository files, only fleet-managed worktrees can be deleted, and deletion refuses a dirty checkout.
+The fleet does not scan for projects. A repository joins it only when you register it, and a checkout gets a roster row only when you create or adopt a worktree, create a clone workspace, or spawn a session daemon on a directory directly. These commands perform the same registration work as the fleet sidebar and enforce the same safety rules: registration never touches repository files, only fleet-managed worktrees can be deleted, and deletion refuses a dirty checkout.
 
 The fleet must be running and reachable on the control port; see [CLI overview](/cli/overview/) for that connection. For the underlying model, see [Projects, worktrees, session daemons, and sessions](/concepts/projects-worktrees-session-daemons-sessions/).
 
@@ -85,6 +85,29 @@ Adopt-existing form:
 
 A worktree that was created but whose spawn failed stays on disk as an unregistered linked worktree, so it appears in `omp-web projects` and can be adopted again. See [Create and adopt worktrees](/fleet/worktrees/) for the dialog equivalents.
 
+## Create a clone workspace
+
+A clone workspace is the second way to get a checkout of a project, and it is not a Git worktree: it is an independent clone on a provider-run volume, with its own object store, its own agent directory, and its own lifecycle. Use it when the work should run somewhere other than this machine.
+
+```sh
+omp-web add-clone app sandbox-1 --profile bwrap-dev
+omp-web add-clone app sandbox-2 --profile k8s-ci --remote ssh://git@host/srv/app --revision 4f9c1ab --no-start
+```
+
+- `--profile <id>` is required and must name a loaded provider profile. `omp-web profiles` lists them, and a fleet with none configured has no clone route to call.
+- The source is at most one of `--local <path>` (a path on the fleet host) and `--remote <url>` (a reachable Git URL). With neither, the server uses the registered project's local path. A `kubernetes` profile cannot read a fleet-host path at all, so it refuses a local source and needs `--remote`.
+- `--revision <rev>` pins the initial commit and `--branch <b>` selects the branch. The pin is resolved once and reused by retries, so a later fetch cannot change what the volume was prepared from.
+- The session daemon starts by default, exactly as with `add-worktree`; `--no-start` registers the row parked and starts nothing.
+- The command reports whether the clone was created, the session daemon id, and either the status with its lifecycle stage or that it was not started.
+
+Validate the profile on the host that will run it before you create the first workspace:
+
+```sh
+omp-web preflight --profile bwrap-dev
+```
+
+It probes the provider executable, the callback reachability, the durable state directories, the declared tools, the deny roots, and the secret references, prints one line per check, and exits 1 if any check fails. See [Provider profiles](/configuration/provider-profiles/) and [Sandboxed session runtime](/advanced/sandbox-runtimes/).
+
 ## Delete a managed worktree
 
 ```sh
@@ -93,6 +116,8 @@ omp-web rm-worktree d4 --delete-branch
 ```
 
 This command takes one session daemon id, taken from `omp-web sessions`, and acts on exactly that row; it does not accept selector forms. It stops the row's process, drops it from the roster, and removes the worktree directory with Git.
+
+The same verb handles a clone workspace row, dispatching on the entry's kind. For a clone it runs the verify-at-deletion gate before anything is removed: writers are stopped, the Git guard runs against the clone's `.checkout/`, the fleet store is checked for completeness against the volume's own session tree, and only then does the store subtree flip read-only and the provider delete the compute and the volume. A blocked deletion keeps the workspace, its volume, and its logs, and reports the reason, so there is nothing to undo. The output names how many sessions were verified: `removed clone workspace daemon <daemonId> (verified <n> sessions)`. See [Clone workspaces](/fleet/clone-workspaces/).
 
 Guards run before anything is mutated, so a refusal leaves the row, the process, and the directory untouched:
 
@@ -119,6 +144,7 @@ The browser flow with its confirmation and evidence lines is described in [Safel
 | `worktree already registered: <path>` | `--existing` on a path already mapped to a roster row |
 | `not a managed worktree (path outside workspaceDir)` | `rm-worktree` on a worktree the fleet does not own |
 | `worktree has uncommitted changes` | `rm-worktree` on a dirty worktree |
+| A clone deletion that reports a pending retry | The verify-at-deletion gate refused: the workspace, volume, and logs are retained so you can fix the cause and retry |
 
 Control-plane failures exit 1, so a script can branch on the exit status; the message on stderr names the cause.
 
@@ -130,4 +156,7 @@ Control-plane failures exit 1, so a script can branch on the exit status; the me
 - [Projects, worktrees, session daemons, and sessions](/concepts/projects-worktrees-session-daemons-sessions/)
 - [Create and adopt worktrees](/fleet/worktrees/)
 - [Safely delete managed worktrees](/fleet/delete-worktrees/)
+- [Clone workspaces](/fleet/clone-workspaces/)
+- [Provider profiles](/configuration/provider-profiles/)
+- [Sandboxed session runtime](/advanced/sandbox-runtimes/)
 - [CLI commands and flags](/reference/cli/)

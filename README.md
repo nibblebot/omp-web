@@ -91,6 +91,8 @@ Full user documentation lives under [`docs/src/content/docs/`](docs/src/content/
 - [Fleet management](docs/src/content/docs/fleet/sidebar.md) and [Analysis](docs/src/content/docs/analysis/transcripts.md): the roster and the historical browser.
 - [CLI commands and flags](docs/src/content/docs/reference/cli.md), [Configuration schema](docs/src/content/docs/reference/configuration.md), [Environment variables](docs/src/content/docs/reference/environment.md), and [Files and directories](docs/src/content/docs/reference/files.md): the canonical references.
 - [Troubleshooting](docs/src/content/docs/operations/troubleshooting.md) and [Security model](docs/src/content/docs/operations/security.md): failure handling and trust boundaries.
+- [Clone workspaces](docs/src/content/docs/fleet/clone-workspaces.md), [Provider profiles](docs/src/content/docs/configuration/provider-profiles.md), and [Sandboxed session runtime](docs/src/content/docs/advanced/sandbox-runtimes.md): the clone runtime and its provider configuration.
+- [Stored sessions](docs/src/content/docs/analysis/stored-sessions.md) and [Browser access and sign-in](docs/src/content/docs/operations/browser-auth.md): fleet-store history browsing and non-loopback sign-in.
 - [System architecture](docs/architecture.md): wire contract, module map, and process boundaries for contributors.
 
 ## Self-update
@@ -116,7 +118,7 @@ bun install
 bun dev      # vite (HMR) + fleet, ports chosen per run
 ```
 
-In a linked worktree, `bun dev` forks the dev fleet state from the main worktree (copy-once, like a git fork), so the worktree's roster boots with the main worktree's sessions/projects instead of empty; later runs keep the diverged fork. `--state-from <path>` forks from an explicit state file or directory, and `--fresh` skips seeding and starts on a clean state.
+In a linked worktree, `bun dev` forks the dev fleet state from the main worktree (copy-once, like a git fork), so the worktree's roster boots with the main worktree's sessions/projects instead of empty; later runs keep the diverged fork. `--state-from <path>` forks from an explicit state file or directory, and `--fresh` skips seeding and starts on a clean state. Dev fleet state is scoped per worktree outside the repo at `<data home>/dev-fleets/<slug>-<hash8>/` (slug is the worktree basename, `hash8` the sha-256 prefix of its realpath), so several dev stacks and your real fleet coexist. The stack also adopts a running auth broker, or spawns `omp auth-broker serve` when the `omp` CLI is present, exporting `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` for clone `secretRefs` `env:` references; without a broker the stack only warns and clones run unauthenticated.
 
 ## Advanced
 
@@ -125,11 +127,13 @@ omp-web session [options]            # run a single-session agent daemon
 omp-web sessions | projects | profiles   # roster / projects / provider profiles
 omp-web spawn <path>                 # start a daemon on a directory
 omp-web add-repo <path> [--start]    # register a project (deduped on realpath)
+omp-web add <name> <url> [--token <t>] [--cwd <path>]   # register an external daemon
+omp-web provision <name> [--label k=v]                  # enroll via the configured spawn hook
 omp-web add-worktree <project> <name> [--no-start]      # create a managed worktree
 omp-web add-worktree <project> --existing <path>        # adopt an existing one
 omp-web add-clone <project> <name> --profile <id> [--local <path> | --remote <url>] [--revision <rev>] [--branch <b>] [--no-start]
 omp-web preflight --profile <id>     # validate a provider profile locally
-omp-web start <daemon-id>            # wake a stopped clone workspace
+omp-web start <selector>             # ensure a clone workspace is running (wake)
 omp-web stop <selector> | remove <selector>
 omp-web rm-project <selector> | rm-worktree <daemon-id> [--delete-branch]
 omp-web prompt <selector> <text> [--wait <ms>]

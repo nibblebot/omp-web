@@ -57,7 +57,7 @@ The chosen template and labels are stored on the project's main-checkout row and
 ## Expected result
 
 - The sidebar gains a collapsible group named after the repository directory. The group header tooltip carries the full path.
-- The group lists the main checkout first: a row for the repository itself, which is also its default workspace. Worktree rows and a "+ Add worktree" action appear below it.
+- The group lists the main checkout first: a row for the repository itself, which is also its default workspace. Worktree rows, clone workspace rows, and a "+ Add workspace" action appear below it.
 - With "Start a session now" off, that row is asleep. Clicking the row wakes the session daemon and attaches; nothing runs until then.
 - With it on, the row progresses from spawning to ready, and then the browser attaches.
 - The group header offers its start icon, labeled "Start a session in \<project\>", only when a project has no main-checkout row at all. Adding a project normally creates that row, so you start sessions by clicking the row instead.

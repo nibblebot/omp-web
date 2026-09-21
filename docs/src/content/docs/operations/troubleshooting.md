@@ -53,6 +53,7 @@ A fleet control command with nothing listening on the loopback control port exit
 - Start `omp-web` with no arguments. That runs the fleet, the supervisor, and the web UI; it is the same as `omp-web serve`.
 - The fleet serves the browser UI, so a Debug panel notice about an unreachable control plane means the `/ctl/debug` fetch failed or the fleet is still booting, not a separate runtime; the connection facts still describe the live stream.
 - If a fleet should be running, check the terminal that started it and confirm its control port (4722 unless configured otherwise).
+- The CLI always dials `127.0.0.1`, so a fleet bound only to a specific off-loopback address (for example `--bind 10.0.0.5`) reports `fleet not running` to the CLI even while remote browsers reach it. A bind that includes loopback (the default, or `0.0.0.0`) keeps the CLI working.
 
 ## Session daemon stuck resolving
 
@@ -86,6 +87,27 @@ A session daemon that is reachable off loopback requires its bearer token. A mis
 - For a manually launched remote session daemon, restart it with a known token, then correct or re-create any remote registration whose stored endpoint or token no longer matches.
 - Start a session daemon off loopback with `--token` or `OMP_SESSION_TOKEN`, and prefer SSH forwarding or a tailnet over exposing the port directly.
 
+## Browser token rejected or missing
+
+With browser auth enabled (an operator access token is configured), off-loopback clients need a live session for `/events`, `/command`, and `/ctl/*`; loopback clients, including the CLI and a browser on the fleet host, are exempt, so this failure means the request resolved as non-loopback.
+
+- Missing, expired, or revoked session: the fleet answers `401` with `{"error":"unauthorized"}` on the data routes, and the client bumps to signed-out and opens its sign-in surface. Sign in with the operator access token.
+- Wrong token at login: `POST /auth/login` answers 401 with `access token rejected`. The value is compared against the configured sha-256 digest, so a token that worked before the operator rotated it no longer does, and rotation revokes every live session at once.
+- A mutation fails with `403` after a successful login: the request lacks the `X-Omp-Csrf` header, or its `Origin` is not on the allowlist. Set `browserOrigin` to the origin you actually serve the UI from, and keep the page and the API on one origin.
+- `browserAccessToken` in the config file must be the 64-character sha-256 hex digest, not the token itself: a raw or short value is a hard config error at load. Hash it once with `sha256sum` and configure that.
+
+## Fleet refuses to start on a non-loopback bind
+
+A fleet told to bind an off-loopback address with no operator access token configured exits 1 before the banner:
+
+```text
+refusing to bind non-loopback address "0.0.0.0" without browser auth; set OMP_FLEET_BROWSER_TOKEN (or --browser-access-token / config browserAccessToken)
+```
+
+- Configure browser auth (`--browser-access-token`, `OMP_FLEET_BROWSER_TOKEN`, or the config `browserAccessToken` digest), or keep the loopback bind and reach the fleet through SSH forwarding, a tailnet terminator, or a loopback proxy.
+- The address is resolved strictly: `localhost`, `::1`, and numeric `127.0.0.0/8` addresses count as loopback, and anything else, including `0.0.0.0`, requires browser auth.
+- A reverse proxy in front changes nothing about this rule: if the fleet itself binds off loopback, the token must exist before it will start.
+
 ## Worktree branch already checked out
 
 Git allows a local branch to be checked out in only one worktree. Creating a managed worktree from an existing branch fails with `branch is already checked out elsewhere: <branch>`. The branch picker lists checked-out branches last, disables them, and labels them `<branch> (checked out)`.
@@ -98,6 +120,30 @@ Worktree deletion is fail-closed. A worktree with added, modified, deleted, or u
 
 - Commit, stash, move, or discard every change, including untracked files, with Git outside omp-web, then retry the deletion.
 - There is no force-delete option, and optional branch deletion uses `git branch -d`, so a branch that is not fully merged is reported as not deleted.
+
+## Clone deletion is blocked
+
+Deleting a clone workspace runs the verify-at-deletion gate, and a refusal is the gate working as intended: the workspace, its volume, and its logs are kept, the entry moves to `delete-pending-retry`, and the gate's message is preserved. Every block is retryable; there is no force override. See [Clone workspaces](/fleet/clone-workspaces/).
+
+- `workspace <id> is live with unobservable activity; stop current work (explicit stop) before deleting` | the workspace is ready with a live callback pair or enrollment, so mid-turn work cannot be ruled out | `omp-web stop <selector>` first, then delete.
+- `workspace <id> has uncommitted or untracked files (...)` | the clone's `.checkout` is dirty | Commit, push, or stash inside the clone, then retry. Session transcripts are not source backup.
+- `workspace <id> has <n> stash(es); drop or apply them before deletion` | stashes exist in the clone | Apply or drop them, then retry.
+- `workspace <id> has <n> commit(s) not preserved on its configured remote; push them first` | local history exists only in the clone | Push the commits, then retry.
+- `could not prove the workspace's compute terminated; deletion blocked` | the provider stop did not prove termination | Stop the workspace, check the provider side for a surviving process, then retry.
+- `fleet log store is unavailable; deletion cannot be verified` or `session ... is missing from the fleet store; deletion blocked (logs were not fully streamed)` | the transcript mirror is incomplete or unreadable | Wake the workspace so its tailer can re-stream the missing lineage, confirm the state directory is writable, then retry. Never edit or delete the store by hand.
+- `deletion was interrupted before verification completed; retry the delete` | a fleet crash landed mid-gate | Retry the deletion; the gate resumes from the retained state.
+
+A store subtree left behind by a deletion that never passed the gate is listed by `GET /ctl/logs/orphans`; only an explicit `POST /ctl/logs/purge {workspaceId}` removes it.
+
+## Clone resume fails typed `unavailable`
+
+Waking a stopped clone resumes its last session, materializing a cold or missing transcript from the fleet log store before `--resume` runs. A typed `unavailable` means the data to resume from is not available anywhere and the fleet refused to boot a fresh session in its place.
+
+- `cannot resume session <id> for <daemon>: no transcript on the volume or in the fleet store` (or `... no fleet log store and the session is not on the volume`) | the requested session exists in neither place | Pick a session that exists on the volume, or let the implicit wake resume the newest one.
+- `resume-onto-fresh-clone is unavailable: no clone provider is configured (P5)` | the workspace was deleted and this fleet has no provider hook to rebuild a volume from the pinned commit | Configure a clone provider profile and hook; the default fleet ships none.
+- `no resumable clone provenance for workspace <id> (the source or pinned commit was not retained)` | the orphan marker lacks the source and pin needed to rebuild | Browse the stored session read-only from [Stored sessions](/analysis/stored-sessions/) instead of resuming.
+- `no stored transcripts for session <id> in workspace <id>` | the store has no copy of that session | Choose a session the store lists for that workspace.
+- `workspace <id> is still registered; resume-onto-fresh-clone applies only to deleted workspaces` | the workspace is alive, so it wakes through its own session daemon | Wake the row normally instead of using the resume-onto-fresh-clone action.
 
 ## Statistics database is stale
 
@@ -122,8 +168,9 @@ Open the Debug panel with the info button in the status bar (or the one at the b
 
 - Connection facts: `state`, `session` ID, `client` ID, `last frame`, and `reconnect`.
 - Fleet facts: `port`, `uptime`, `since`, the `state` path, and the `config` path.
-- Session daemon rows: name or ID, status (hover for the error text), mode, PID, endpoint host, uptime, and the connector state with attempt count and next retry.
+- Session daemon rows: name or ID, status (hover for the error text), mode, PID, endpoint host, uptime, and the connector state with attempt count and next retry. For a clone row, also copy the lifecycle stage the sidebar shows in place of the status (for example `preparing workspace`) or the `lifecycle` error text it renders when a stage fails.
 - The `Fleet log` and `Client transport` logs.
+- For a browser-auth failure, say so explicitly and include the HTTP status the browser saw (`401` for a missing or revoked session, `403` for a CSRF or origin rejection). The sign-in token itself never belongs in a report.
 
 Also include the steps that reproduce the problem, what you expected, what happened instead, and the output of `omp-web --version` (or the commit when running from source), your OS, Bun version, and installation method. Remove secrets before posting: bearer tokens, authentication URLs and codes, and sensitive paths or transcript content. The fleet debug payload omits tokens, but pasted logs and screenshots can still contain them.
 

@@ -39,6 +39,8 @@ Each flag has an `OMP_SESSION_*` environment equivalent; see [Environment variab
 
 With `--port 0` the real port is assigned at bind time. Read it from the process output rather than assuming one.
 
+One more group of flags exists for the clone workspace transport: `--callback-url`, `--callback-workspace`, `--callback-generation`, `--callback-token`, `--callback-proxy`, and `--callback-allow-http`. They make the daemon dial the fleet's callback pair instead of listening for it, which is how a workspace that has no inbound service is reached. The fleet fills them for the daemons it starts inside a workspace; you do not set them by hand unless you are building that transport yourself. See [Clone workspaces](/fleet/clone-workspaces/) and [Sandboxed session runtime](/advanced/sandbox-runtimes/).
+
 ## Output and startup failures
 
 - Standard output carries one machine-readable contract line whose JSON describes the bound address, port, and URL:

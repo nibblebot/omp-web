@@ -16,15 +16,15 @@ Where this page and a canonical source disagree, the canonical source wins.
 
 ## Who the interface is for
 
-omp-web targets a solo operator running parallel agents: one developer spawning, supervising, and steering many concurrent sessions across local projects, Git worktrees, and remote sandboxes. Every surface optimizes for supervising N sessions rather than one conversation. The [session model](/concepts/projects-worktrees-session-daemons-sessions/) explains the concepts the UI is built around.
+omp-web targets a solo operator running parallel agents: one developer spawning, supervising, and steering many concurrent sessions across local projects, Git worktrees, and provider-managed clone workspaces. Every surface optimizes for supervising N sessions rather than one conversation. The [session model](/concepts/projects-worktrees-session-daemons-sessions/) explains the concepts the UI is built around.
 
 Current product constraints bound what the interface may assume. These are limits, not backlog promises:
 
-- Multi-user access is not implemented. It is an open strategic question in PRODUCT.md, not a current audience.
+- Multi-user access is not implemented. It is an open strategic question in PRODUCT.md, not a current audience. Browser access is a single operator access token for the whole fleet, not per-user accounts; see [Browser access and sign-in](/operations/browser-auth/).
 - There is no browser collaboration surface. Collaboration rooms are operated through the CLI or TUI.
 - Browser fan-out prompting is not implemented. Fan-out is a CLI capability.
-- Analysis views need the fleet's statistics service, which every deployment now has.
-- Remote access is user-managed, for example over SSH forwarding or a private network. Remote TLS management is not part of the product.
+- Analysis views need fleet-served history: the statistics service plus the fleet log store, both of which every deployment now has.
+- Remote access is user-managed, for example over SSH forwarding or a private network. The fleet can run behind an operator-provided same-origin TLS gateway, with browser auth gating the browser surface and a trusted-proxy list controlling whose forwarded headers are honored, but it does not provision or terminate TLS itself.
 
 A design direction that only makes sense once one of these exists is out of scope until PRODUCT.md says otherwise.
 

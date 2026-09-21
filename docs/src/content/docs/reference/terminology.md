@@ -12,13 +12,16 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 | Terms | Distinction |
 | --- | --- |
 | Project and worktree | A project is the fleet's registration of a repository. A worktree is one directory that repository owns. |
+| Worktree and clone workspace | A worktree is a linked checkout inside your own repository on this machine. A clone workspace is an independent clone on a provider-run volume, with its own object store and its own lifecycle. |
 | Session daemon and session | The session daemon is the disposable process. The session is the conversation it hosts, recorded in a durable transcript. |
+| Transcript and stored session | A transcript is the JSONL file the agent writes on the machine running the daemon. A stored session is the fleet's durable mirror of that lineage in the log store, which survives the workspace. |
 | Fleet and roster | The fleet is the process that supervises session daemons. The roster is the list of those session daemons in the sidebar. |
 | The fleet and a session daemon | The fleet serves the web UI and supervises session daemons. A session daemon runs one live session for one bound directory and serves the wire API only. |
 | Ready and attached | Ready is a session daemon status. Attached describes this browser tab, which holds one session daemon at a time. |
 | Wake and attach | Waking starts an asleep session daemon and then attaches. Attaching alone binds a browser tab to a session daemon that is already ready. |
 | Branch, fork, and handoff | Branch starts a new transcript from an earlier message. Fork copies the current session in full. Handoff summarizes into a new session. |
 | Streaming and blocked | Streaming means a turn is producing output. Blocked means that turn is waiting for an answer in a dialog. |
+| Daemon bearer token and browser access token | The bearer token authenticates one session daemon to the fleet. The browser access token authenticates a browser to the fleet's own surface. |
 
 ## A to C
 
@@ -32,6 +35,12 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 
 **Branch**. An action that starts a new transcript from an earlier point in the conversation. The messages up to the chosen user message are kept, later messages stay only in the previous session file, and the chosen message is offered back in the composer for editing. The new session file records the old one as its parent. See [Slash commands](/reference/slash-commands/).
 
+**Browser access token**. The operator credential that turns on browser sign-in for the fleet's own surface. `--browser-access-token` or `OMP_FLEET_BROWSER_TOKEN` supplies it in plaintext and it is stored only as its SHA-256 hex digest, so the `browserAccessToken` config key must already be that digest. A non-loopback fleet bind with no token configured refuses to start. See [Browser access and sign-in](/operations/browser-auth/).
+
+**Callback pair**. The two outbound HTTP streams (a downlink from the fleet and an uplink to it) that a clone workspace daemon uses in place of an inbound service. The daemon dials the fleet, authenticates with workspace enrollment credentials plus workspace, generation, and connection headers, and the pair is HTTPS-only except for the explicit loopback HTTP development exception. See [Clone workspaces](/fleet/clone-workspaces/).
+
+**Clone workspace**. An independent checkout of a registered project, created with `omp-web add-clone` or from the add-workspace dialog, that a provider runs for the fleet on its own volume: `.checkout/` holds the clone with its own object store and `.home/agent/` holds the agent directory and its sessions. It is not a Git worktree in your repository, it has no inbound listener, and it is removed by the guarded verify-at-deletion gate. Provider selection, declared resources, and secret references come from a provider profile. See [Clone workspaces](/fleet/clone-workspaces/).
+
 **Collaboration room**. A multi-agent surface for one session, operated through the omp CLI or TUI. omp-web intentionally has no collaboration surface in the browser.
 
 **Compaction**. Reducing the active context by summarizing older messages so a long session keeps fitting the model's context window. Compaction runs manually through `/compact` or automatically when the window fills, if auto-compaction is enabled. The summary is recorded in the session file, and recent messages are kept verbatim.
@@ -40,9 +49,11 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 
 ## D to F
 
-**Fan-out**. Sending one prompt to many session daemons at once from the command line, selected with a selector, for example `omp-web prompt 'project:app' "Summarize the open work."`. Each session daemon runs the prompt as its own turn. Fan-out is a CLI feature; the browser sends prompts to the attached session only.
+**Enrollment credentials**. The workspace-scoped credential a clone workspace daemon presents when it dials the fleet's callback pair, generated per workspace at 256 bits and stored in the fleet state only as a hash. They are bound to the workspace id and an authorized generation, so a credential is valid for one workspace and can be revoked by bumping the generation. They never ride a URL path or a query string. See [Clone workspaces](/fleet/clone-workspaces/).
 
-**Fleet**. The registry, supervisor, and proxy for session daemons, run by bare `omp-web` (the same as `omp-web serve`). It tracks projects and session daemons, spawns and stops local child processes, dials remote session daemons, and serves the web UI. The browser only ever talks to the fleet, which proxies it through to the attached session daemon. The fleet holds no agent state; models, credentials, and conversations live in the session daemons and their transcripts.
+**Fan-out**. Sending one prompt to many session daemons at once from the command line, selected with a selector, for example `omp-web prompt 'project:app' "Summarize the open work."`. Each session daemon runs the prompt as its own turn. Fan-out is a CLI feature; the browser sends prompts to the attached session only. See [Fan-out prompting](/cli/fanout/).
+
+**Fleet**. The registry, supervisor, and proxy for session daemons, run by bare `omp-web` (the same as `omp-web serve`). It tracks projects, clones, and session daemons, spawns and stops local child processes, dials remote session daemons, runs clone workspaces through their provider, and serves the web UI. The browser only ever talks to the fleet, which proxies it through to the attached session daemon. Agent state stays in the session daemons and their transcripts: the fleet keeps a durable mirror of the session lineage it is streamed in the log store, but it holds no model state and no live session.
 
 **Follow-up**. A message queued to run after the current turn finishes, instead of interrupting it. Contrast with steering. Queue chips in the composer show what is waiting.
 
@@ -60,6 +71,10 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 
 **Label**. A `k=v` tag attached to a session daemon when it is spawned or registered, for example `role=review`. Labels show on roster rows and drive CLI selectors and fan-out.
 
+**Lifecycle stage**. The progress label a clone workspace row shows while its provider brings the workspace up: preparation, runtime, callback, then ready, with failed as the terminal failure state. A parked workspace has no stage, and a stage never sticks at callback over a dead process. See [Understand roster status](/fleet/roster-status/).
+
+**Log store**. The fleet's durable copy of the session lineage that managed session daemons stream, kept under `<state dir>/logs/<workspaceId>/<sessionId>/<relpath>` with a per-session `index.json`. It outlives the compute that produced it: retention is explicit, verified history is never garbage-collected, and a workspace deleted without passing its verification gate leaves an orphaned subtree. See [Stored sessions](/analysis/stored-sessions/) and [Files and directories](/reference/files/).
+
 ## M to P
 
 **Main checkout**. The repository's primary working directory, the one that contains the Git directory, as opposed to a linked worktree. Registering a project auto-registers its main checkout as the project's default workspace with its own roster row.
@@ -68,11 +83,15 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 
 **Model role**. A named model slot, for example Default, Fast, Thinking, or Subtask, that resolves to a provider model. The model-roles picker assigns models to roles, optionally baking in a thinking level, and a change to the session's active role applies immediately. Role storage scope follows the session's role-storage setting (global config against project configuration).
 
+**Orphaned store subtree**. A workspace's directory under the log store that outlived the workspace because the deletion did not pass its verification gate. The registry records a marker with the source and pinned revision, `GET /ctl/logs/orphans` lists it, and only an explicit purge removes it. See [Stored sessions](/analysis/stored-sessions/).
+
 **Plan mode**. A session mode in which the agent researches and writes a plan before making changes, then presents it for approval. Approving the plan starts execution.
 
 **Project**. A Git repository registered with the fleet, keyed by the realpath of its main checkout and given a stable id such as `p1`. Registration stores metadata only; it never copies, moves, or deletes repository files. Registering the same repository through another path returns the existing project, and removing a project is refused while session daemons still reference it.
 
 **Prompt composer**. The input area at the bottom of the chat column where prompts, slash commands, and image attachments are entered. Autocomplete, prompt history, and queue chips all live there.
+
+**Provider profile**. A named entry in the config file's `providerProfiles` map that declares how clone workspaces of one kind are run: the provider (`bwrap` or `kubernetes`), the provider executable, the tools to expose, optional resource and storage limits, and secret references by name only. The fleet validates each profile at load and serves the secret-free view through `omp-web profiles`. See [Provider profiles](/configuration/provider-profiles/).
 
 ## Q to S
 
@@ -80,7 +99,7 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 
 **Ready**. A session daemon status, and the point at which the session daemon accepts prompts. The session daemon reports ready after its session exists and the provider, model, and credentials have resolved; before that, prompt-family calls fail with a not-ready error and the composer shows a starting hint. Roster rows also use the ladder below.
 
-**Remote session daemon**. A session daemon the fleet reaches over the network instead of supervising as a local child process. It is registered with its URL and token, and the fleet dials out to it; the local machine never probes its Git state, and waking redials instead of starting a process. Connections are dial-in only, which fits SSH tunnels, tailnets, and sandboxes.
+**Remote session daemon**. A session daemon the fleet reaches over the network instead of supervising as a local child process. It is registered with its URL and token, and the fleet dials out to it; the local machine never probes its Git state, and waking redials instead of starting a process. Connections are dial-in only, which fits SSH tunnels, tailnets, and sandboxes; a clone workspace is the one row kind that instead dials the fleet's callback pair. See [Local and remote sessions](/concepts/local-and-remote/).
 
 **Resume**. Continuing a session from its transcript. Waking an asleep row resumes its last session file, or starts a fresh session when the row has none; the per-row session picker resumes one of the worktree's recent sessions. A transcript can be open in only one session daemon at a time, so a second session daemon aimed at a file that is already in use refuses to start. See [Troubleshooting](/operations/troubleshooting/) for a blocked start.
 
@@ -100,6 +119,8 @@ Throughout the documentation, the per-directory `omp-session` process is called 
 | error | A terminal failure for this attempt; details are on the row, and a restart retries. |
 
 After a fleet restart, locally spawned rows read as asleep because their child processes are gone, while remote rows are dialed again.
+
+**Sandbox runtime**. The environment a clone workspace's session daemon runs in, produced by the profile's provider: a fleet-local `bwrap` sandbox built from an allowlist of mounts, or a Kubernetes pod on a persistent volume. Both share the host kernel, so neither is a confidentiality boundary. Operator prerequisites for a profile are reported by `omp-web preflight --profile <id>` and never provisioned for you. See [Sandboxed session runtime](/advanced/sandbox-runtimes/).
 
 **Selector**. A CLI expression that names session daemons: `all`, an exact session daemon id such as `d3`, `label:k=v` (alias `tag:k=v`), `project:name`, or a name glob using `*` and `?`. An exact session daemon id wins over a glob interpretation. For example, `omp-web stop d3` stops one session daemon and `omp-web stop 'web-*'` stops every session daemon whose name matches the glob. See [CLI commands and flags](/reference/cli/).
 
@@ -121,6 +142,8 @@ After a fleet restart, locally spawned rows read as asleep because their child p
 
 **Steering**. A message sent while a turn is running and injected into that turn, so the agent sees it without waiting for the turn to end. Contrast with follow-up.
 
+**Stored session**. One session's lineage as the fleet log store holds it, enumerated from disk under `logs/<workspaceId>/<sessionId>/` and readable without waking any compute. While the workspace is still known to the registry, a stored session also carries its secret-free provenance: the project, the workspace kind, the profile id, the branch, and the pinned revision. Once the workspace is gone the row reads as orphaned, and the registry's orphan marker is what preserves the source and pinned revision for a later resume onto a fresh clone. See [Stored sessions](/analysis/stored-sessions/).
+
 **Streaming**. The state of a session daemon whose attached session is mid-turn and producing output. Roster rows show a spinning dot while streaming, including rows that are not currently attached.
 
 **Subagent**. A child agent run that the main agent delegates a task to. Subagents have their own lifecycle, progress, and transcript files under the owning session's directory; they can be steered or aborted individually, and they leave the main session untouched. The chat shows active subagents, and Analysis lists their transcripts under the Subagents tab.
@@ -137,10 +160,12 @@ After a fleet restart, locally spawned rows read as asleep because their child p
 
 **Usage**. Token counts and cost per session and per model, shown in the context meter, the usage modal, and Analysis. Provider usage limits, when a provider exposes them, appear in the same places and are refreshed on demand, not on a timer.
 
-**Wake**. Starting an asleep session daemon and attaching to it. Local rows respawn on their bound directory and resume their last session when they have one; remote rows are dialed again.
+**Wake**. Starting an asleep session daemon and attaching to it. Local rows respawn on their bound directory and resume their last session when they have one; remote rows are dialed again; a clone workspace re-provisions its compute and resumes its last session, materializing that transcript from the log store first when the volume is cold or the file is missing. See [Session daemon lifecycle](/concepts/session-daemon-lifecycle/).
 
 **Work**. One of the two top-level views, alongside Analysis, and the live chat one: the roster sidebar plus the attached session's stream and composer. It is the default top-level view.
 
 **Workspace directory**. The root under which managed worktrees are created, `~/.omp-web/workspaces` by default. It resolves with `--workspace-dir` winning over the `OMP_FLEET_WORKSPACE_DIR` environment variable, then the `workspaceDir` configuration key, then the default, and the directory is created lazily on the first managed worktree.
+
+**Workspace volume**. The per-workspace volume a clone workspace runs on, rooted at `<workspaceDir>/<daemonId>`: `.checkout/` holds the working clone with its own object store and `.home/agent/` holds the sandbox's agent directory, including the sessions written there. The volume is what makes a stopped clone resumable and what the deletion gate verifies before anything is removed. See [Clone workspaces](/fleet/clone-workspaces/) and [Files and directories](/reference/files/).
 
 **Worktree**. A directory a session daemon can be bound to: a project's main checkout or a linked Git worktree of that repository. Working on two branches at once means two worktrees, each with its own session daemon, because a session daemon never changes directory.

@@ -5,6 +5,8 @@ description: "How the fleet resolves a session daemon selector into roster entri
 
 Three fleet verbs take one selector and act on every session daemon it matches: `stop`, `remove`, and `prompt`. The fleet resolves the selector against the live roster each time a command runs, so an entry registered a moment ago is selectable, and a session daemon id is never reused. For the commands themselves, see [Operate session daemons](/cli/session-daemon-operations/) and [Fan-out prompting](/cli/fanout/).
 
+A fourth verb, `start`, takes a narrower value that is not one of these forms: a session daemon id or an exact roster name, resolved in the calling process, and it refuses a value that matches more than one row. See [Wake a stopped clone workspace](/cli/session-daemon-operations/).
+
 ## Resolution order
 
 The fleet tries the forms below in order and stops at the first one that applies. Except for `all`, every form matches against roster fields, not against the directory listing.
@@ -63,9 +65,10 @@ Inside the fleet, the same rule applies to the control plane, which is why a scr
 
 ## What selectors do not cover
 
-- There is no listing command that accepts a selector; `omp-web sessions` lists the whole roster, and `omp-web projects` lists the discovered worktrees that are not roster rows yet.
-- `rm-worktree` takes exactly one session daemon id and no selector form, because deleting a directory is a single-target operation.
-- `rm-project` and the `<project>` argument of `add-worktree` take their own project selector, resolved client-side against the registered projects: project id, exact path, or name. See [Manage projects and worktrees](/cli/projects-and-worktrees/).
+- There is no listing command that accepts a selector; `omp-web sessions` lists the whole roster, and `omp-web projects` lists the discovered worktrees that are not roster rows yet. `omp-web profiles` lists provider profiles, which are not roster entries at all.
+- `rm-worktree` takes exactly one session daemon id and no selector form, because deleting a directory is a single-target operation. `remove` on a clone workspace row reaches the same verified deletion, so the difference is the selector grammar, not the effect.
+- `start` takes an id or an exact name and refuses ambiguity, so a fan-out style `start label:role=review` is not available.
+- `rm-project` and the `<project>` argument of `add-worktree` and `add-clone` take their own project selector, resolved client-side against the registered projects: project id, exact path, or name. See [Manage projects and worktrees](/cli/projects-and-worktrees/).
 - Selectors cannot express negation, intersections, or unions. To address an arbitrary set, run the command once per selector.
 
 ## Related

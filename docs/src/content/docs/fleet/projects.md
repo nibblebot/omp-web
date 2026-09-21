@@ -29,7 +29,7 @@ The collapsed **Advanced** section overrides the defaults for the project's main
 Registration gives the repository's main checkout a roster entry, called its default workspace. An entry already mapped to that checkout is reused instead of duplicated. Worktree rows you add later nest under the project group.
 
 - The fleet sidebar gains a collapsible group named after the repository directory. The group header tooltip carries the full checkout path.
-- The group lists the main-checkout row first, then any linked worktrees, then a **+ Add worktree** action.
+- The group lists the main-checkout row first, then any linked worktrees and clone workspaces, then a **+ Add workspace** action (worktree, clone, or existing worktree).
 - Without an immediate start, that row is created asleep. Clicking it wakes the session daemon and attaches; see [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/).
 - The group header shows a start button, labeled **Start a session in &lt;project&gt;**, only while the project has no main-checkout row at all.
 
@@ -41,6 +41,7 @@ Open the project group's actions menu on its header and choose **Delete projectâ
 
 - The dialog names the project and states that disk contents stay untouched; removal only deregisters the project.
 - While any session daemon still references the project, removal is refused and the refusal names the blocking ids, for example `project p1 in use by daemons: d1, d2`. The dialog keeps the refusal on screen together with a **referenced by** list of the roster rows that carry the project id, so you can stop or remove them first. The dialog also lists the never-started main-checkout placeholder in that chip list, but the server drops that placeholder silently as part of the removal instead of treating it as a blocker.
+- A clone workspace row blocks removal too, and it is never treated as a placeholder: delete the workspace through its verified gate first, or the volume would be orphaned. See [Clone workspaces](/fleet/clone-workspaces/).
 - Once no real roster entry references the project, the removal succeeds, closes the dialog, and drops the project from the sidebar.
 
 Removal is a metadata change only:

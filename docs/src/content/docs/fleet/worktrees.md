@@ -3,9 +3,9 @@ title: Create and adopt worktrees
 description: "Give a project a second checkout: create a managed worktree under the workspace root, or adopt an existing linked worktree, and know which one the fleet can delete."
 ---
 
-A linked Git worktree lets one repository host several branches at once, and each worktree can run its own session daemon. This page covers the two ways to add one to a project in the browser: creating a fleet-managed worktree, and adopting a linked worktree that already exists. For the underlying model, see [Projects, worktrees, session daemons, and sessions](/concepts/projects-worktrees-session-daemons-sessions/).
+A linked Git worktree lets one repository host several branches at once, and each worktree can run its own session daemon. This page covers the two ways to add one to a project in the browser: creating a fleet-managed worktree, and adopting a linked worktree that already exists. Clone workspaces are a different kind of workspace with their own lifecycle; see [Clone workspaces](/fleet/clone-workspaces/). For the underlying model, see [Projects, worktrees, session daemons, and sessions](/concepts/projects-worktrees-session-daemons-sessions/).
 
-Worktree management happens in the browser against the fleet: project groups and the **Add worktree** dialog live in the [fleet sidebar](/fleet/sidebar/).
+Worktree management happens in the browser against the fleet: project groups and the **Add workspace** modal live in the [fleet sidebar](/fleet/sidebar/).
 
 ## Managed worktrees and where they live
 
@@ -20,12 +20,12 @@ An **adopted** worktree is a linked worktree that already exists elsewhere on di
 
 ## Create a worktree
 
-In the fleet sidebar, expand the project group and click **+ Add worktree**. The **Add worktree** dialog opens on the **Create new** tab.
+In the fleet sidebar, expand the project group and click **+ Add workspace**. The **Add workspace** modal opens on the **Worktree** tab, or on the mode you used last, with three modes: **Worktree**, **Clone**, and **Add existing**.
 
 1. Enter a name in the `name` field (placeholder `feature/…`). The name becomes the branch name unless you choose an existing branch.
 2. Under **Branch**, leave **+ New branch** selected to create a branch, or pick a branch from the **use an existing branch…** dropdown.
-3. Leave **Start a session now** checked (the default) to spawn a session daemon on the new worktree, or clear it to register the row asleep.
-4. Click **Create worktree**. With a start requested, the dialog tracks **creating worktree**, **spawning daemon**, and **attaching session**; without one it closes as soon as the worktree is registered.
+3. Decide **Start a session now**. The checkbox defaults on the first time; after that the modal remembers your last choice and pre-selects it.
+4. Click **Create worktree**. With a start requested, the modal tracks **creating worktree**, **spawning daemon**, and **attaching session**; without one it closes as soon as the worktree is registered.
 
 ### New branch or existing branch
 

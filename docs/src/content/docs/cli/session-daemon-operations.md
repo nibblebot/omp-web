@@ -17,13 +17,13 @@ omp-web sessions
 | --- | --- |
 | `id` | The session daemon id used by selectors and by `rm-worktree`, for example `d3` |
 | `name` | The display name, which defaults to the checkout directory name |
-| `mode` | `spawned` for a local process the fleet started, `remote` for a dial-in session daemon |
+| `mode` | `spawned` for a row the fleet drives through its own lifecycle, including a clone workspace, and `remote` for a session daemon you registered with `omp-web add` |
 | `status` | The current lifecycle status, including `asleep` rows with no live process |
 | `project` | The entry's project label, which defaults to the checkout directory basename |
-| `cwd` | The bound directory, empty for a remote entry added without `--cwd` |
+| `cwd` | The bound directory, empty for a remote entry added without `--cwd`; for a clone workspace this is its volume root |
 | `labels` | Comma-joined labels, empty when the entry has none |
 
-The command lists every registry entry, so asleep and error rows appear alongside ready ones. It takes no selector. To act on a subset, use the id or filter the table in your shell and pass the result to another command; see [Select multiple session daemons](/cli/selectors/).
+The command lists every registry entry, so asleep and error rows appear alongside ready ones. It takes no selector. To act on a subset, use the id or filter the table in your shell and pass the result to another command; see [Select multiple session daemons](/cli/selectors/). The table has no column for a clone workspace's lifecycle stage; the browser roster shows that stage while the provider is bringing the workspace up. See [Understand roster status](/fleet/roster-status/).
 
 ## Start a local session daemon
 
@@ -67,6 +67,23 @@ omp-web provision review-box --label role=review
 - The last non-empty line of the hook's standard output must be JSON with `url` and `token`, and may include `name` and `cwd`. Those fields become the registry entry, which the fleet then dials like any other remote session daemon.
 - Failures exit 1: no hook configured, a nonzero hook exit, a timeout, unparseable output, or missing `url` or `token`.
 
+## Wake a stopped clone workspace
+
+```sh
+omp-web start d7
+omp-web start sandbox-1
+```
+
+`start` is the fleet-side ensure-running call for a clone workspace, and it is the terminal equivalent of clicking a parked clone row. The selector matches a session daemon id or an exact roster name, resolved against the roster in this process, and it must identify exactly one row:
+
+- Nothing matches: exit 1 with `no session matches selector: <selector>`.
+- The value matches several distinct rows: exit 1 with `selector <selector> matches multiple daemons; use a daemon id`.
+- The row is not a clone workspace: exit 1 with `daemon <daemonId> is not a clone workspace (kind <kind>); start a worktree/direct session through /ctl/spawn`. Use `omp-web spawn` for worktrees and direct sessions.
+
+On success the fleet re-provisions the workspace's compute through its provider and resumes the last session; if the volume is cold or the transcript is missing there, the stored lineage is materialized onto the volume before the resume path runs. The command prints `started <daemonId>, observed <observed>`, with the provider's process id appended when it reports one. It returns once the provider reports the workspace running, which is before the daemon has finished resolving its session, so poll `omp-web sessions` if you need the status to settle at `ready`.
+
+`stop` and `remove` do not need `start`: `stop` parks a clone by stopping its compute and keeping the volume, and waking it later is what `start` does. See [Clone workspaces](/fleet/clone-workspaces/).
+
 ## Stop a session daemon
 
 ```sh
@@ -78,10 +95,11 @@ omp-web stop project:app
 
 - A `spawned` row is terminated gracefully first, with a forced kill five seconds later if it does not exit, and its status becomes `asleep` with the last session file preserved.
 - A `remote` row is disconnected and marked `asleep`.
-- The row stays in the roster in both cases. The bound directory is untouched.
+- A clone workspace stops its provider-managed compute and keeps its volume, so the checkout and the session logs stay exactly where they were.
+- The row stays in the roster in all three cases. The bound directory is untouched.
 - A selector that matches nothing exits 1 and stops nothing.
 
-An asleep row is woken on demand: by a fan-out prompt that targets it, or by attaching to it from the browser. Waking a local row respawns the process and resumes its last session; waking a remote row redials it. See [Fan-out prompting](/cli/fanout/) and [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/).
+An asleep row is woken on demand: by a fan-out prompt that targets it, by attaching to it from the browser, or, for a clone workspace, with `omp-web start`. Waking a local row respawns the process and resumes its last session; waking a remote row redials it; waking a clone re-provisions compute and materializes any missing transcript from the log store first. See [Fan-out prompting](/cli/fanout/) and [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/).
 
 ## Remove a session daemon
 
@@ -96,8 +114,9 @@ omp-web remove label:role=review
 - A `remote` row is disconnected and dropped.
 - The registry entry disappears, and with it the row in the browser.
 - The checkout, the Git state, and the session transcripts are untouched. Transcripts are not stored inside the checkout, so removing or deleting a worktree cannot remove them.
+- A clone workspace is the exception: `remove` routes through the same verify-at-deletion gate as `rm-worktree`, because a kind-blind roster eviction must not be able to bypass it. The workspace, its volume, and its stored logs are deleted together, and a blocked gate leaves all three in place with a typed error instead.
 
-For a managed worktree, removing the roster row alone leaves the directory in place. Use `omp-web rm-worktree <daemon-id>` to stop, evict, and delete the directory in one guarded operation; see [Manage projects and worktrees](/cli/projects-and-worktrees/).
+For a managed worktree, removing the roster row alone leaves the directory in place. Use `omp-web rm-worktree <daemon-id>` to stop, evict, and delete the directory in one guarded operation, which is also the single-target form of clone deletion; see [Manage projects and worktrees](/cli/projects-and-worktrees/).
 
 ## Failure behavior
 
@@ -109,6 +128,8 @@ For a managed worktree, removing the roster row alone leaves the directory in pl
 | No spawn hook configured | Exit 1 for `provision` |
 | Hook failure, timeout, or bad JSON | Exit 1 with the hook error |
 | Selector matches nothing | Exit 1 with a message naming the selector; nothing is stopped or removed |
+| `start` on a row that is not a clone workspace | Exit 1 with the refusal naming the row's kind; use `omp-web spawn` instead |
+| Clone deletion refused by the verification gate | Exit 1 with the reason; the workspace, volume, and logs are retained |
 | Fleet not running | Exit 1 with the not-running message |
 
 ## Related
@@ -119,4 +140,6 @@ For a managed worktree, removing the roster row alone leaves the directory in pl
 - [Fan-out prompting](/cli/fanout/)
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/)
 - [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/)
+- [Clone workspaces](/fleet/clone-workspaces/)
+- [Stored sessions](/analysis/stored-sessions/)
 - [CLI commands and flags](/reference/cli/)

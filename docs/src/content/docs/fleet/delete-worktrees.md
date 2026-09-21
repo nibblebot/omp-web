@@ -7,6 +7,8 @@ Deleting a worktree removes its directory from disk, so omp-web guards the actio
 
 Deletion is available on worktree rows in the browser and from the CLI.
 
+This page covers linked worktrees only. A clone workspace deletes through its own verified-deletion gate (quiesce, Git guard, store verification, read-only flip) with no force override; see [Clone workspaces](/fleet/clone-workspaces/).
+
 ## What can be deleted
 
 Only a **fleet-managed worktree** can be deleted: a linked worktree whose realpath is under the workspace root (`~/.omp-web/workspaces` by default, or the configured `workspaceDir`; see [Create and adopt worktrees](/fleet/worktrees/) and the [files reference](/reference/files/)).
@@ -79,12 +81,14 @@ These two actions are easy to confuse because both live in the same menu:
 - The evidence dialog is browser-only. The CLI attempts the deletion directly, and a refusal comes back as a fleet error with the guard's message, such as a `409` for a dirty worktree or a `403` for a path outside the workspace root. Nothing is modified on a refusal.
 - `--delete-branch` requests the same `git branch -d` behavior; an unmerged branch is still left in place without failing the command.
 - No force flag exists. There is no way to make omp-web delete a dirty worktree.
+- The route dispatches by workspace kind: pointing the command at a clone workspace id runs the clone verified-deletion gate instead, with no branch flag.
 
 The full signature is in the [CLI reference](/reference/cli/).
 
 ## Related
 
 - [Create and adopt worktrees](/fleet/worktrees/)
+- [Clone workspaces](/fleet/clone-workspaces/)
 - [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/)
 - [The fleet sidebar](/fleet/sidebar/)
 - [Register and remove projects](/fleet/projects/)

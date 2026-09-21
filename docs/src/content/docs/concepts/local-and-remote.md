@@ -5,6 +5,8 @@ description: "How session daemons join a fleet: spawned locally as supervised ch
 
 A fleet can supervise session daemons in two places. A **local session daemon** is a child process the fleet starts on its own machine. A **remote session daemon** runs wherever you like, and the fleet connects to it over the network. Both speak the same contract, the fleet serves the same session experience for either, and the roster row looks the same until you read the details.
 
+A third case exists: a **clone workspace** daemon runs inside a provider-managed volume (sandboxed `bwrap` or Kubernetes) and has no inbound service at all. It dials the fleet outbound over the callback pair, and its stop, wake, and deletion follow the workspace lifecycle rather than the spawn-template path described here. See [Clone workspaces](/fleet/clone-workspaces/) and [Sandboxed session runtime](/advanced/sandbox-runtimes/).
+
 The distinction matters because ownership follows the process. The fleet can restart, stop, and probe a process it started; for one it merely dials, it can only connect, disconnect, and report what the session daemon says about itself.
 
 ## Local session daemons
@@ -105,6 +107,7 @@ An endpoint that answers with the wrong token is reported as an authorization fa
 
 - [What is omp-web?](/getting-started/overview/) for how the fleet serves the browser in front of these session daemons.
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/) for the states a remote row passes through and how a wake redials it.
+- [Clone workspaces](/fleet/clone-workspaces/) for the fleet-managed provider case, where the daemon dials out instead.
 - [Session persistence](/concepts/session-persistence/) for what is stored on the fleet host and what stays on the remote one.
 - [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/) for operating rows in the UI.
 - [Operate session daemons from the CLI](/cli/session-daemon-operations/) for the command surface behind registration and wake.

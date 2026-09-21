@@ -5,6 +5,8 @@ description: "Use the Analysis view to search, filter, and read every stored ses
 
 The Analysis view is the historical browser for stored sessions. It lists every main-agent transcript in the fleet host's sessions directory, opens one at a time, and renders the raw conversation from disk. Session transcripts are durable: they outlive the session daemons that wrote them, so this view keeps working for checkouts and processes that no longer exist. The model behind that durability is described in [Session persistence](/concepts/session-persistence/).
 
+The view has a second history surface, the **Fleet store**. This page's list reads transcripts on the fleet host's disk through the statistics service; the Fleet store reads the fleet's own log store, the durable mirror of lineage logs streamed by managed session daemons. That copy outlives a deleted clone workspace, whose sessions stay readable there as view-only history. See [Stored sessions and orphans](/analysis/stored-sessions/) for that surface and the actions it offers.
+
 The Analysis view is part of the fleet-served UI, reached with the Work/Analysis switch, and it replaces the roster column with its own transcripts sidebar.
 
 ## Entering Analysis
@@ -17,7 +19,7 @@ Once opened, the Analysis view stays mounted while you switch to Work and back, 
 
 ## The sessions sidebar
 
-The list shows one row per main-agent session transcript. Subagent transcripts are not rows here; they appear per session in the Subagents tab. A session that has rows in `stats.db` but no file on disk still gets a row, so deleted or archived history remains visible as long as the database still has rows for it.
+The list shows one row per main-agent session transcript. Subagent transcripts are not rows here; they appear per session in the Subagents tab. A session that has rows in `stats.db` but no file on disk still gets a row, so deleted or archived history remains visible as long as the database still has rows for it. Beneath this list sits the capped **Fleet store** section, which browses the fleet log store instead; see [Stored sessions and orphans](/analysis/stored-sessions/).
 
 Above the list:
 
@@ -89,5 +91,6 @@ The sessions directory location and how to inspect the transcript files are cove
 - [Session analytics](/analysis/analytics/)
 - [Subagent activity and transcripts](/analysis/subagents/)
 - [Sync the statistics database](/analysis/stats-sync/)
+- [Stored sessions and orphans](/analysis/stored-sessions/)
 - [Session persistence](/concepts/session-persistence/)
 - [Files and directories](/reference/files/)

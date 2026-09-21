@@ -144,7 +144,7 @@ Confirmed anti-references: chat-app cosplay (rounded messenger bubbles, avatar p
 - Flat-by-default surfaces; 1px borders do the structural work
 - One accent, used rarely; status speaks in a semantic trio (bg + border + text)
 - Zero font assets: system sans + system mono only
-- Single 140ms ease-out motion vocabulary; six small keyframes; motion gated behind `prefers-reduced-motion` where animated
+- Single 140ms ease-out motion vocabulary; seven small keyframes; motion gated behind `prefers-reduced-motion` where animated
 
 ## Colors
 
@@ -176,7 +176,7 @@ The palette is a night-shift console: cool near-black surfaces, softened-white t
 - **Breakdown ramp** (`#6fa8dc`, `#57b8c2`, `#9a8fd8`, `#d88a6f`, `#cfa05a`): context-usage data-viz only; deliberately disjoint from status hues so a chart never reads as an alert.
 
 ### Themes
-Six palettes share one semantic contract (~40 slots) and one set of scales; themes override colors only, never radius/spacing/type. The default `:root` is the dark console above; `light`, `catppuccin-mocha`, `catppuccin-latte` restate it in hex/rgba; `omp-dark` / `omp-light` restate it in OKLCH with a magenta signal (`oklch(70% 0.24 340)` dark, `oklch(44% 0.18 348)` light). Per-theme values live in `.impeccable/design.json` → `extensions.themes`. `index.html` resolves `data-theme` before first paint (persisted choice → `prefers-color-scheme` → dark).
+Six palettes share one semantic contract (32 color slots) and one set of scales; themes override colors only, never radius/spacing/type. The default `:root` is the dark console above; `light`, `catppuccin-mocha`, `catppuccin-latte` restate it in hex/rgba; `omp-dark` / `omp-light` restate it in OKLCH with a magenta signal (`oklch(70% 0.24 340)` dark, `oklch(44% 0.18 348)` light). Per-theme values live in `.impeccable/design.json` → `extensions.themes`. `index.html` resolves `data-theme` before first paint (persisted choice → `prefers-color-scheme` → dark).
 
 ### Named Rules
 **The One Voice Rule.** The accent appears on ≤10% of any screen: focus rings, the active selection, one primary action. If everything signals, nothing does.
@@ -208,7 +208,7 @@ The root font size is user-settable (12–18px, `/settings` parity); every scale
 
 ## Layout
 
-One centered console column, maximum 820px, full viewport height, 16px side padding: the chat thread is the room. A 240px sidebar docks on the **left** (`--sidebar-w`), listing daemons grouped by repo; it takes layout space on desktop and narrows to `width: min(240px, 80vw)` at ≤720px.
+One centered console column, maximum 820px, full viewport height, 16px side padding: the chat thread is the room. A 240px sidebar docks on the **left** (`--sidebar-w`), listing the registered projects with their daemons (main checkout row, worktrees, clone workspaces) and falling back to repo-grouped headers for entries that carry no registered project; it takes layout space on desktop and narrows to `width: min(240px, 80vw)` at ≤720px.
 
 Overlays have two geometries: the centered **modal** (min 320px, max 640px, max 80vh) for dialogs, and the right-docked **sheet** (`min(880px, 100vw)`, full height, square outer corners) for working panels: settings, subagents, debug. Sheets go full-viewport at ≤720px, where settings also swaps its nav rail for a section-picker select.
 
@@ -268,6 +268,13 @@ Quiet controls that wake on hover; one primary action per view.
 - **Daemon sidebar:** Console Well fill, left hairline, mono 0.75rem; rows are 6px-radius ghosts with a transparent border that fills Hover Wash on hover and Signal Wash + Signal Edge when active; group headers are uppercase tracked labels with a rotating caret; per-row git metadata in micro mono with added/modified/deleted/untracked color coding
 - **Settings:** desktop nav rail swaps to a section-picker select at ≤720px; both use the same ghost-row language
 - **Modals:** Instrument Panel, Hairline Strong border, 10px radius, 16px padding, overlay-lift shadow over the Backdrop scrim; sheets drop radius and keep only their inner border
+
+### Workspaces
+- **Add-workspace dialog:** one modal with `Worktree` / `Clone` / `Add existing` tabs; the Clone tab pairs a provider-profile select with a three-way source-mode radio group (project checkout, local path, remote URL) and inline name/revision/branch fields. A fleet with no profiles renders the inline note "this fleet has no provider profiles configured; clones are unavailable".
+- **Clone rows:** a `clone` kind chip (Signal Blue text and border on the chip shell) and a provider-profile chip (Faint Readout) join the row's chip cluster; the row menu switches to workspace wording (`Start workspace`, `Stop workspace`, `Delete workspace…`).
+- **Lifecycle stage line:** micro italic Faint Readout (`preparing workspace`, `starting runtime`, `connecting channel`) pulsing on the 1.2s `daemon-dot-pulse`; a failed stage turns Alarm Red text and swaps the label for the error plus a ghost Retry.
+- **Sign-in:** the browser-auth modal (session-expired variant included) uses the standard dialog shell; the access token is posted once and never persisted client-side.
+- **Fleet-required notice:** a shell-independent full-screen gate replacing the app when the stream belongs to a bare session daemon rather than the fleet; the settings sheet carries a narrow-layout copy of the same note at ≤720px, where the nav rail is hidden.
 
 ### Signature: the roster row
 The daemon roster row is the product in miniature: status dot (the ladder above) + mono title + micro metadata (cwd, branch, dirty counts) + ghost icon actions that arm red before they kill. If a new surface can't express its state in this vocabulary, the vocabulary should grow a rung, not a new system.

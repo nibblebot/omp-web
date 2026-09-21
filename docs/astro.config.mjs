@@ -83,6 +83,7 @@ export default defineConfig({
 						{ label: "Resume previous sessions", slug: "fleet/resume-sessions" },
 						{ label: "Understand roster status", slug: "fleet/roster-status" },
 						{ label: "Safely delete managed worktrees", slug: "fleet/delete-worktrees" },
+						{ label: "Clone workspaces", slug: "fleet/clone-workspaces" },
 					],
 				},
 				{
@@ -94,6 +95,7 @@ export default defineConfig({
 						{ label: "Session analytics", slug: "analysis/analytics" },
 						{ label: "Subagent activity and transcripts", slug: "analysis/subagents" },
 						{ label: "Sync the statistics database", slug: "analysis/stats-sync" },
+						{ label: "Stored sessions", slug: "analysis/stored-sessions" },
 					],
 				},
 				{
@@ -104,6 +106,7 @@ export default defineConfig({
 						{ label: "Web interface preferences", slug: "configuration/web-preferences" },
 						{ label: "Data and state management", slug: "configuration/data-and-state" },
 						{ label: "Configure spawn templates", slug: "configuration/spawn-templates" },
+						{ label: "Provider profiles", slug: "configuration/provider-profiles" },
 					],
 				},
 				{
@@ -124,6 +127,7 @@ export default defineConfig({
 						{ label: "Integrate a custom provider", slug: "advanced/custom-provider" },
 						{ label: "Collaboration rooms", slug: "advanced/collaboration" },
 						{ label: "Architecture overview", slug: "advanced/architecture" },
+						{ label: "Sandboxed session runtime", slug: "advanced/sandbox-runtimes" },
 					],
 				},
 				{
@@ -135,6 +139,7 @@ export default defineConfig({
 						{ label: "Process lifecycle and recovery", slug: "operations/lifecycle-and-recovery" },
 						{ label: "Debug panel and diagnostics", slug: "operations/diagnostics" },
 						{ label: "Troubleshooting", slug: "operations/troubleshooting" },
+						{ label: "Browser access and sign-in", slug: "operations/browser-auth" },
 					],
 				},
 				{

@@ -7,7 +7,7 @@ Operations covers networking, authentication, updates, process recovery, diagnos
 
 ## Security boundaries
 
-The fleet control plane binds to loopback. A session daemon bound off-loopback requires a bearer token. Fleet-spawned session daemons receive fresh tokens, and browser roster frames do not expose tokens or endpoints. Remote transport security remains the operator's responsibility.
+The fleet control plane binds to loopback by default, and loopback peers are exempt from credentials. Binding off loopback requires browser auth: one operator access token (stored only as its digest), a session cookie for non-loopback clients, and the CSRF header plus an allowed origin on mutations. A session daemon bound off-loopback requires a bearer token. Fleet-spawned session daemons receive fresh tokens, and browser roster frames do not expose tokens or endpoints. Remote transport security remains the operator's responsibility.
 
 Downloaded files are restricted to approved filesystem roots, but configuration, state, transcript, and statistics files still require normal operating-system protections.
 
@@ -18,6 +18,7 @@ Session daemons are disposable. Idle processes can sleep, crashed processes rece
 ## In this section
 
 - [Networking and browser access](/operations/networking/) covers binding, remote browser access, and reachability failures.
+- [Browser access and sign-in](/operations/browser-auth/) configures the operator access token and the proxy rules behind it.
 - [Security model](/operations/security/) states what the application protects and what stays with the operator.
 - [Updates](/operations/updates/) updates, pins, or replaces an installation and restarts processes safely.
 - [Process lifecycle and recovery](/operations/lifecycle-and-recovery/) explains ownership, stop, sleep, wake, locks, and recovery order.

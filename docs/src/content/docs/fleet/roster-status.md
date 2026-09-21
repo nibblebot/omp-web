@@ -41,9 +41,14 @@ Transitional statuses (spawning, connecting, session, resolving) and reconnectin
 - an endpoint that is not a valid URL,
 - a token rejection or a protocol mismatch between the fleet and the session daemon,
 - a working directory mismatch, where the process reports a different directory than the one the row started it in,
-- an exhausted restart budget, reported as something like `child exited 6 times (5 restarts allowed)`.
+- an exhausted restart budget, reported as something like `child exited 6 times (5 restarts allowed)`,
+- a failed clone workspace stage (preparation, runtime, or callback), with the lifecycle's own message on the row.
 
 A local row in error can be retried by stopping it and waking it again, which starts a fresh process with a fresh token and resumes the last session file. Removing the row and starting again from the project group is the equivalent for a row that cannot be stopped normally. See [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/) for the operations themselves, and [Troubleshooting](/operations/troubleshooting/) for provider and protocol symptoms.
+
+### Clone workspace stages
+
+A clone workspace row carries a second progress line while the fleet's workspace lifecycle runs: preparing workspace, starting runtime, connecting channel. Those are provider stages, not daemon statuses, and they appear while a clone is being created or recovered. On failure the line shows the lifecycle error text and a **Retry** button that re-issues the start; `ready` renders nothing extra, because the status dot already says it. See [Clone workspaces](/fleet/clone-workspaces/).
 
 ## Activity dots
 
@@ -70,12 +75,15 @@ The activity dot is not related to Git state. Uncommitted changes are reported b
 - **any status → reconnecting** happens on an unclean stream end or a failed dial. A clean stream end instead means the session daemon exited, which puts the row asleep.
 - **connecting, session, resolving, or ready → asleep** happens on an explicit stop, on the session daemon's idle auto-exit, or on a clean connection close that is not the session daemon reporting a backpressure drop.
 - **any status → error** happens on the failure paths listed above. Error is never overwritten by a later transition.
+- **A clone workspace row** walks the same ladder with the provider stage alongside it: the lifecycle prepares the volume, starts the runtime, and the row reaches ready once the daemon's outbound callback pair connects. A wake re-provisions compute instead of respawning a child process.
 
-On a fleet restart, persisted rows are reconciled rather than trusted: spawned rows that were not asleep come back asleep because their processes died with the old fleet, remote rows come back connecting and are dialed immediately, and rows that were already asleep or in error keep that state.
+On a fleet restart, persisted rows are reconciled rather than trusted: spawned rows that were not asleep come back asleep because their processes died with the old fleet, remote rows come back connecting and are dialed immediately, rows that were already asleep or in error keep that state, and clone workspace rows are reconciled against their recorded desired state.
 
 ## When a worktree disappears under a row
 
 If a worktree directory is deleted outside omp-web, for example in a terminal, the fleet notices within a poll cycle, evicts the row, and shows a toast such as `Worktree removed on disk: <name> (<path>)`. The toast is delivered once per eviction, even to a browser that was disconnected when it happened. This is a different event from deleting a worktree through the UI, which removes the row as part of the deletion and does not raise the toast.
+
+Clone workspace rows are not part of this path. Their checkout lives in a provider volume, so the fleet cannot watch it for disappearance, and a clone row is only ever removed through the verified-deletion gate described in [Clone workspaces](/fleet/clone-workspaces/).
 
 ## Related
 
@@ -83,4 +91,5 @@ If a worktree directory is deleted outside omp-web, for example in a terminal, t
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/)
 - [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/)
 - [Resume previous sessions](/fleet/resume-sessions/)
+- [Clone workspaces](/fleet/clone-workspaces/)
 - [Safely delete managed worktrees](/fleet/delete-worktrees/)

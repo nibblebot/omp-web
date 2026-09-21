@@ -3,7 +3,7 @@ title: Fan-out prompting
 description: "Send one prompt to many session daemons at once, with automatic waking, parallel turns, and correlated results when you wait."
 ---
 
-`omp-web prompt` sends a prompt to every session daemon a selector matches. Targets are woken on demand, different session daemons run their turns in parallel, prompts to the same session daemon are serialized, and `--wait` correlates each target's own turn into a result you can read per session daemon. This is the terminal path for asking the same question of many worktrees or many machines; the browser has no fan-out prompt surface.
+`omp-web prompt` sends a prompt to every session daemon a selector matches. Targets are woken on demand, different session daemons run their turns in parallel, prompts to the same session daemon are serialized, and `--wait` correlates each target's own turn into a result you can read per session daemon. This is the terminal path for asking the same question of many worktrees, many machines, or many clone workspaces; the browser has no fan-out prompt surface.
 
 The fleet must be running on the control port; see [CLI overview](/cli/overview/).
 
@@ -59,8 +59,9 @@ Before sending, the fleet makes each target ready, which is what lets a prompt r
 - A local session daemon that is not `ready`, including one that is asleep or in `error`, is respawned, resuming its last session file, and the fleet waits up to 60 seconds for it to become ready.
 - A local session daemon whose connection dropped behind a stale ready status is only redialed, which avoids killing a healthy process.
 - A remote session daemon is redialed the same way.
+- A clone workspace is woken through its provider instead: the fleet ensures the workspace is running, waits up to 60 seconds for the callback pair to pair, and then sends the prompt over that pair. There is no offline queue and no blind retry, so a workspace whose pair never comes up is a per-target error.
 
-If a target does not become ready inside that window, it comes back as a per-target error under `--wait`, and a fire-and-forget run reports nothing about it. The `--wait` budget starts after the target is ready, so the worst case for one target is the readiness wait plus your budget. Because waking resumes the last session, a fan-out prompt continues the conversation that row was already on rather than starting fresh; see [Session persistence](/concepts/session-persistence/).
+If a target does not become ready inside that window, it comes back as a per-target error under `--wait`, and a fire-and-forget run reports nothing about it. The `--wait` budget starts after the target is ready, so the worst case for one target is the readiness wait plus your budget. Because waking resumes the last session, a fan-out prompt continues the conversation that row was already on rather than starting fresh; a clone workspace whose volume is cold gets its transcript materialized from the log store before the resume path runs. See [Session persistence](/concepts/session-persistence/) and [Clone workspaces](/fleet/clone-workspaces/).
 
 ## Parallelism and ordering
 
@@ -87,6 +88,7 @@ The practical consequence is that `--wait` output is trustworthy per session dae
 - `project:name` addresses every session daemon of one checkout family, including linked worktrees whose project field matches.
 - `all` includes every local and remote row, asleep or not. Prefer a narrower selector when a prompt has side effects.
 - A session daemon id always names the same row, but rows come and go as you add and remove them, so a long-lived script should prefer labels or `project:` over ids.
+- A clone workspace is a valid target like any other row, and its turn runs inside the sandbox: the prompt travels over the callback pair rather than a fleet-side connection, and a workspace that cannot pair reports a per-target error instead of queueing.
 
 ## Related
 
@@ -95,4 +97,5 @@ The practical consequence is that `--wait` output is trustworthy per session dae
 - [Operate session daemons](/cli/session-daemon-operations/)
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/)
 - [Prompting the agent](/sessions/prompting/)
+- [Clone workspaces](/fleet/clone-workspaces/)
 - [CLI commands and flags](/reference/cli/)

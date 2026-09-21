@@ -7,7 +7,7 @@ description: "Canonical reference for every omp-web command, subcommand, flag, d
 
 - **The fleet:** bare `omp-web` or `omp-web serve` starts the fleet (registry, session daemon supervisor, and the web UI on one loopback port).
 - **A session daemon:** `omp-web session` runs one session daemon, bound to one directory and serving the wire API for one live agent session. It serves no web UI.
-- **Clients:** the fleet verbs are short-lived requests to a running fleet, and `update` maintains the installation from the release channel.
+- **Clients:** the fleet verbs are short-lived requests to a running fleet, `preflight` validates a provider profile in its own process, and `update` maintains the installation from the release channel.
 
 Task guides such as [CLI overview](/cli/overview/) explain when to use which verb. This page owns the signatures, flags, defaults, outputs, and exit codes.
 
@@ -16,7 +16,8 @@ Task guides such as [CLI overview](/cli/overview/) explain when to use which ver
 | First argument | Routes to |
 | --- | --- |
 | none (bare `omp-web`) | `serve` |
-| `serve`, `sessions`, `projects`, `spawn`, `add-repo`, `add`, `provision`, `stop`, `remove`, `rm-project`, `add-worktree`, `rm-worktree`, `prompt` | fleet control plane |
+| `serve`, `sessions`, `projects`, `profiles`, `spawn`, `add-repo`, `add`, `provision`, `add-clone`, `start`, `stop`, `remove`, `rm-project`, `add-worktree`, `rm-worktree`, `prompt` | fleet control plane, over the control port |
+| `preflight` | fleet control plane, run locally in this process |
 | `session` | session daemon |
 | `update` | self-update |
 | `--version` or `version` | version print |
@@ -24,7 +25,7 @@ Task guides such as [CLI overview](/cli/overview/) explain when to use which ver
 
 The verb must be the first argument; flags follow it. The installed entrypoint has no help command that exits 0: `omp-web --help`, `omp-web help`, and any unknown first argument print the usage summary on stderr and exit 1. In a source checkout, `bun run fleet` or `bun run fleet -- help` prints the fleet usage to stdout and exits 0.
 
-Fleet verbs other than `serve` are loopback clients of the running fleet. They connect to `127.0.0.1` on the control port and exit when the request finishes. The fleet must be running first; there is no auto-start and no queueing.
+Fleet verbs other than `serve` and `preflight` are loopback clients of the running fleet. They connect to `127.0.0.1` on the control port and exit when the request finishes. The fleet must be running first; there is no auto-start and no queueing. `preflight` is the exception: it reads the config file in its own process and never contacts a fleet, so it works while no fleet is running.
 
 ## Output streams
 
@@ -35,14 +36,14 @@ Fleet verbs other than `serve` are loopback clients of the running fleet. They c
 | `session` | one `OMP_SESSION\|` contract line at bind | all human logs and errors |
 | `update` | result lines | failures, prefixed `omp-web:` |
 
-`serve` line 1 is `fleet listening on 127.0.0.1:<port>` and `session` prints its contract line before anything else, because spawners parse both. Nothing is written to stdout before a command is selected.
+`serve` line 1 is `fleet listening on <bind>:<port>` (the default bind is `127.0.0.1`) and `session` prints its contract line before anything else, because spawners parse both. Nothing is written to stdout before a command is selected.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| 0 | The command completed. This includes `update --check`, version printing, and `prompt --wait` even when individual targets failed |
-| 1 | Usage or flag error, fleet not running, control-plane error, update failure, or session daemon startup error |
+| 0 | The command completed. This includes `update --check`, version printing, `prompt --wait` even when individual targets failed, and `preflight` with every check passing |
+| 1 | Usage or flag error, fleet not running, control-plane error, update failure, session daemon startup error, or a `preflight` check that failed |
 | 77 | `serve` refused to start because another fleet holds the state file lock |
 
 `serve` and `session` handle `SIGINT` and `SIGTERM` by shutting down cleanly and exiting 0; `session` also handles `SIGHUP`.
@@ -55,13 +56,14 @@ Every fleet verb accepts `--port <n>`, in `--port n` or `--port=n` form. For `se
 - A numeric value must be an integer from 0 to 65535; `0` on `serve` binds an ephemeral port, and the real port appears in banner line 1.
 - A numeric `--port` outside that range, or a non-integer, exits 1 with `invalid --port: <value>`. A non-numeric `--port` value is ignored, so the environment or default applies. An invalid `OMP_FLEET_PORT` exits 1 with `invalid OMP_FLEET_PORT: <value>`.
 - `--workspace-dir <dir>` is read by `serve` only; the other fleet verbs accept and ignore it.
+- `--bind <addr>`, `--browser-access-token <t>`, `--browser-origin <o>`, and `--trusted-proxy <ip-or-cidr>` are read by `serve` only, and each has a matching environment variable and config key. See [serve](#serve).
 
 Fleet flag parsing rules:
 
 - Flags take a value either as `--flag value` or `--flag=value`.
-- `--start`, `--no-start`, and `--delete-branch` are booleans. A bare occurrence means true and never consumes the following argument; `--flag=true` and `--flag=false` are also accepted.
-- `--label <k=v>` repeats to accumulate labels.
-- A value-taking flag with no value, or with a following token that starts with `-`, exits 1 with `missing value for --<flag>` or `invalid value for --<flag>: <value>`. The repeatable `--label` is the exception: a valueless occurrence is accepted and dropped.
+- `--start`, `--no-start`, and `--delete-branch` are booleans. A bare occurrence means true and never consumes the following argument; `--flag=true` and `--flag=false` are also accepted, and any other value exits 1 with `invalid value for --<flag>: <value>`.
+- `--label <k=v>` and `--trusted-proxy <ip-or-cidr>` repeat to accumulate values.
+- A value-taking flag with no value, or with a following token that starts with `-`, exits 1 with `missing value for --<flag>` or `invalid value for --<flag>: <value>`. The repeatable `--label` and `--trusted-proxy` are the exceptions: a valueless occurrence is accepted and dropped. For `--trusted-proxy` that is deliberate: the security setting degrades to "no trusted proxies" instead of failing the flag parse.
 - Flags a command does not read are accepted and ignored when they carry a value. There is no `--` separator.
 
 Source-checkout note: the same verbs run as `bun run fleet -- <verb> ...`.
@@ -70,20 +72,37 @@ Source-checkout note: the same verbs run as `bun run fleet -- <verb> ...`.
 
 ```
 omp-web                                  # the fleet
-omp-web serve [--port <n>] [--workspace-dir <dir>]
+omp-web serve [--port <n>] [--workspace-dir <dir>] [--bind <addr>]
+              [--browser-access-token <t>] [--browser-origin <o>]
+              [--trusted-proxy <ip-or-cidr>]...
 ```
 
 Starts the fleet: persistent registry, supervisor for spawned session daemons, connector for remote ones, and the browser UI on the same port. It runs in the foreground until a signal arrives.
 
 ```sh
 omp-web serve --port 4800 --workspace-dir ~/code/worktrees
+omp-web serve --bind 0.0.0.0 --browser-access-token "$(cat ~/.omp-web/operator.token)"
 ```
 
 Managed-worktree root precedence: `--workspace-dir`, then `OMP_FLEET_WORKSPACE_DIR`, then the config file's `workspaceDir` key, then `~/.omp-web/workspaces`. A leading `~` is expanded. The root is created lazily on the first managed worktree, never at boot.
 
+Bind and browser auth, each resolved as flag, then environment variable, then config key:
+
+| Flag | Environment | Config key | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `--bind <addr>` | `OMP_FLEET_BIND` | `bind` | `127.0.0.1` | Address the control plane and the browser edge bind |
+| `--browser-access-token <t>` | `OMP_FLEET_BROWSER_TOKEN` | `browserAccessToken` | absent (browser auth off) | Operator access token for browser sign-in |
+| `--browser-origin <o>` | `OMP_FLEET_BROWSER_ORIGIN` | `browserOrigin` | absent | Origin admitted for browser mutations |
+| `--trusted-proxy <ip-or-cidr>` | `OMP_FLEET_TRUSTED_PROXY` (comma-separated) | `trustedProxies` | absent | Reverse proxies whose forwarded headers the fleet honors |
+
+- A non-loopback bind without browser auth configured is a startup error and the fleet exits 1: `refusing to bind non-loopback address "<addr>" without browser auth; set OMP_FLEET_BROWSER_TOKEN (or --browser-access-token / config browserAccessToken)`. The control plane is never opened unauthenticated on a reachable address.
+- The access token is kept only as its SHA-256 hex digest. `--browser-access-token` and `OMP_FLEET_BROWSER_TOKEN` accept the plaintext and are hashed at load; the `browserAccessToken` config key must already be that 64-character digest. See [Browser access and sign-in](/operations/browser-auth/).
+- `--trusted-proxy` is repeatable and each occurrence may itself be a comma-separated list. Forwarded headers are honored only when the direct socket peer matches a configured entry, so forwarded headers from any other peer are ignored.
+- See [Configuration schema](/reference/configuration/) for the key-by-key config semantics and [Environment variables](/reference/environment/) for the full precedence table.
+
 Banner output, in order:
 
-1. `fleet listening on 127.0.0.1:<port>` (scripts parse the port from this line).
+1. `fleet listening on <bind>:<port>` (scripts parse the port from this line; the default bind is `127.0.0.1`).
 2. `fleet state: <path>`, the registry file.
 3. `fleet config: <path>`, or `(defaults)` when no config file exists.
 4. `fleet restored <n> sessions` with a per-status breakdown when the registry was not empty.
@@ -122,6 +141,12 @@ omp-web session --cwd ~/code/app --port 0 --name app --resume ~/.omp/agent/sessi
 | `--idle-timeout <dur>` | `OMP_SESSION_IDLE_TIMEOUT` | `30m` | Idle auto-exit delay; `0` disables |
 | `--name <name>` | `OMP_SESSION_NAME` | basename of cwd | Display name in the fleet registry |
 | `--label <k=v>` | `OMP_SESSION_LABELS` | none | Selector labels; repeats and combines with the environment list |
+| `--callback-url <url>` | `OMP_SESSION_CALLBACK_URL` | none | Fleet callback pair base URL; `http` only for a loopback host with `--callback-allow-http` |
+| `--callback-workspace <id>` | `OMP_SESSION_CALLBACK_WORKSPACE` | none | Roster daemon id the pair is bound to; required with `--callback-url` |
+| `--callback-generation <n>` | `OMP_SESSION_CALLBACK_GENERATION` | `1` when a callback URL is set | Authorized credential generation; a positive integer |
+| `--callback-token <t>` | `OMP_SESSION_CALLBACK_TOKEN` | none | Enrollment credential presented on both halves of the pair |
+| `--callback-proxy <url>` | `OMP_SESSION_CALLBACK_PROXY` | none (direct) | Streaming proxy for the pair; `http` or `https` only, with no direct fallback |
+| `--callback-allow-http` | `OMP_SESSION_CALLBACK_ALLOW_HTTP` | unset | Bare boolean; opens loopback HTTP for the callback URL (the variable counts only when it is `1`) |
 
 Each flag wins over its environment variable, which wins over the default. `--idle-timeout` accepts `90s`, `30m`, `1h`, or a bare number of milliseconds. Repeated scalar flags keep the first value; `--label` repeats accumulate. Unrecognized flags and positional arguments are ignored, so there is no `session --help`; invalid values exit 1 with an `omp-session:` message.
 
@@ -135,6 +160,7 @@ Error behavior:
 - An invalid port (`invalid port "<value>" (0-65535; 0 = ephemeral)`) or duration (`invalid duration "<value>" (expected e.g. 90s, 30m, 1h, or bare milliseconds)`) exits 1 at startup.
 - Binding a non-loopback address without a token exits 1; the message names `--token` and `OMP_SESSION_TOKEN`.
 - `--resume` failure logs `omp-session: --resume <file> ... starting fresh` and boots a new session instead of exiting.
+- Callback transport misconfiguration exits 1 at startup, before the bind: `invalid --callback-url "<value>" (not a URL)`, `--callback-url refuses http "<value>" (https required; --callback-allow-http only opens loopback HTTP)`, `--callback-allow-http only honors loopback hosts, got "<host>"`, `--callback-url requires --callback-workspace (the pair is workspace-bound)`, `invalid --callback-generation "<value>" (positive integer)`, and `unsupported --callback-proxy scheme "<scheme>" (<value>); only http/https proxies are supported and there is no direct fallback`.
 - A session file already locked by another session daemon exits 1 and names the holding pid.
 - Idle auto-exit applies when nothing suppresses it: no attached clients, no streaming turn, no queued messages, no pending dialog, no in-flight tool call, and no live collaboration room. The session daemon checks on a 15 second interval, logs `omp-session: idle for <ms>ms; shutting down`, and exits 0. The session transcript is durable, so the fleet marks the row asleep and can wake it with `--resume`.
 - A bind failure aborts startup.
@@ -143,16 +169,20 @@ In a source checkout the same session daemon runs as `bun server/index.ts` or `b
 
 ## Fleet control verbs
 
-The verbs below require a running fleet. Each prints its result on stdout and exits 0, or prints `fleet error (<status>): <message>` on stderr and exits 1. A refused connection prints the not-running message with the suggested start command and exits 1.
+The verbs below require a running fleet. Each prints its result on stdout and exits 0, or prints `fleet error (<status>): <message>` on stderr and exits 1. A refused connection prints `fleet not running. Start it: omp-fleet serve` (`omp-fleet` is the fleet's internal process name) and exits 1. `preflight` is the one verb in this section that needs no running fleet.
 
 ```sh
 omp-web sessions
+omp-web profiles
 omp-web add-repo ~/code/app --start
 omp-web spawn ~/code/app --name review --label role=review
 omp-web add review-box ws://review-box.example.com:4721 --token "$TOKEN"
+omp-web add-clone app sandbox-1 --profile bwrap-dev --remote ssh://host/srv/app
+omp-web start d7
 omp-web prompt project:app summarize the open TODOs --wait 120000
 omp-web stop label:role=review
 omp-web rm-worktree d4 --delete-branch
+omp-web preflight --profile bwrap-dev
 ```
 
 ### sessions
@@ -170,6 +200,16 @@ omp-web projects [--port <n>]
 ```
 
 Prints columns `name`, `path`, `branch`, and `worktreeOf`. Rows are each registered project's linked worktrees that no roster row uses yet, so every row is a candidate for adoption with `omp-web add-worktree --existing`. Registered projects themselves are not listed; the `project` column of `omp-web sessions` names the project behind a roster row. See [Manage projects and worktrees](/cli/projects-and-worktrees/).
+
+### profiles
+
+```
+omp-web profiles [--port <n>]
+```
+
+Prints the provider profile catalog the fleet loaded from the config file's `providerProfiles` key: the secret-free view of each profile, with columns `id`, `provider`, `cpu`, `memory`, `storage`, `secrets`, and `network`. Secret values are never in this output, because they never leave the fleet; `secrets` lists reference names only.
+
+With no profiles configured the command prints exactly `no provider profiles configured (set providerProfiles in the fleet config)` and exits 0. A profile that failed validation at load was dropped with a warning on the fleet's stderr, so it is absent here as well. See [Provider profiles](/configuration/provider-profiles/).
 
 ### spawn
 
@@ -214,6 +254,45 @@ Starts a session daemon through the configured spawn hook (`spawnHook` or `OMP_F
 
 Output: `provisioned <daemonId> (<name>)` followed by the status. Exits 1 when no hook is configured or the hook fails, times out, or returns unusable output.
 
+### add-worktree
+
+```
+omp-web add-worktree <project> <name> [--base <ref>] [--branch <existing>] [--no-start] [--port <n>]
+omp-web add-worktree <project> --existing <path> [--no-start] [--port <n>]
+```
+
+Creates a managed worktree, or registers an existing linked worktree. `<project>` accepts id, path, or name. A session daemon is spawned by default; `--no-start` registers the row asleep instead. `--base` chooses the base ref for a new branch; `--branch` attaches an existing local branch, refused when it does not exist or is checked out elsewhere.
+
+Output: `created worktree <path> (<daemonId>)` with either the status or `not started`; the `--existing` form prints `registered worktree` instead of `created worktree`.
+
+### add-clone
+
+```
+omp-web add-clone <project> <name> --profile <id> [--local <path> | --remote <url>]
+                  [--revision <rev>] [--branch <b>] [--no-start] [--port <n>]
+```
+
+Creates a clone workspace: an independent checkout on a provider-managed volume, run by the profile named by `--profile`. `<project>` accepts the same id, path, or name selector forms as `rm-project`.
+
+- `--profile <id>` is required and must name a key in the config file's `providerProfiles` map. `omp-web profiles` lists the loaded ones.
+- At most one source may be given: `--local <path>` clones a path on the fleet host, `--remote <url>` clones a reachable Git URL. With neither, the server falls back to the registered project's local path. A `kubernetes` profile cannot read a fleet-host path, so it refuses a local source with `source.local is a fleet-host filesystem path and cannot initialize a kubernetes volume; use source.remote for kubernetes profiles`; pass `--remote` for those profiles.
+- `--revision <rev>` pins the initial commit; `--branch <b>` chooses the branch. Revision input is always `--revision`, never `--base` (which belongs to `add-worktree`).
+- The session daemon is started by default; `--no-start` registers the row without compute. `start` defaults on, exactly as with `add-worktree`.
+
+Output: `created clone <path> (<daemonId>)` with either `, status <status>` plus the lifecycle stage when the server reports one, or `, not started`. A fleet with no provider profiles configured has no clone route to call: the request fails with a typed `unavailable` error. See [Clone workspaces](/fleet/clone-workspaces/) and [Sandboxed session runtime](/advanced/sandbox-runtimes/).
+
+### start
+
+```
+omp-web start <selector> [--port <n>]
+```
+
+Ensures one clone workspace is running, the fleet-side counterpart of waking a row. The selector is resolved client-side against the roster and matches a session daemon id or an exact roster name; a selector that matches nothing exits 1 with `no session matches selector: <selector>`, and one that matches several distinct rows exits 1 with `selector <selector> matches multiple daemons; use a daemon id`.
+
+The route behind it only ever runs provider-managed clone entries. A worktree or direct session daemon refuses with `daemon <daemonId> is not a clone workspace (kind <kind>); start a worktree/direct session through /ctl/spawn`; use `omp-web spawn` for those.
+
+Output: `started <daemonId>, observed <observed>`, with ` (pid <n>)` appended when the provider reports a process id. See [Clone workspaces](/fleet/clone-workspaces/).
+
 ### stop, remove
 
 ```
@@ -221,7 +300,7 @@ omp-web stop <selector> [--port <n>]
 omp-web remove <selector> [--port <n>]
 ```
 
-`stop` terminates every matching session daemon and leaves the roster rows asleep; `remove` drops the matching rows from the registry entirely. A spawned row is terminated gracefully (SIGTERM, then SIGKILL after a short grace period); a remote row is disconnected. Selector matching happens on the fleet side; a selector that matches nothing exits 1 and changes nothing.
+`stop` terminates every matching session daemon and leaves the roster rows asleep; `remove` drops the matching rows from the registry entirely. A spawned row is terminated gracefully (SIGTERM, then SIGKILL after a short grace period); a remote row is disconnected. A clone workspace stops its provider-managed compute and keeps the volume, so a later `start` or wake resumes rather than reclones. Selector matching happens on the fleet side; a selector that matches nothing exits 1 and changes nothing.
 
 Output: `stopped <id>, <id>...` or `removed <id>, <id>...`.
 
@@ -235,26 +314,16 @@ Deregisters a project without touching disk. The selector resolves client-side i
 
 Removal is refused while roster entries still reference the project, with the blocking session daemon ids in the message; the project's never-started default workspace row is dropped with it. Output: `removed <projectId>`.
 
-### add-worktree
-
-```
-omp-web add-worktree <project> <name> [--base <ref>] [--branch <existing>] [--no-start] [--port <n>]
-omp-web add-worktree <project> --existing <path> [--no-start] [--port <n>]
-```
-
-Creates a managed worktree, or registers an existing linked worktree. `<project>` accepts id, path, or name. A session daemon is spawned by default; `--no-start` registers the row asleep instead. `--base` chooses the base ref for a new branch; `--branch` attaches an existing local branch, refused when it does not exist or is checked out elsewhere.
-
-Output: `created worktree <path> (<daemonId>)` with either the status or `not started`; the `--existing` form prints `registered worktree` instead of `created worktree`.
-
 ### rm-worktree
 
 ```
 omp-web rm-worktree <daemon-id> [--delete-branch] [--port <n>]
 ```
 
-Takes one session daemon id, not a selector. Guards run before anything is mutated: only worktrees under the workspace root are owned and deletable, and a dirty worktree is refused; there is no force option. On success the session daemon is stopped, the row is evicted, and Git removes the worktree. `--delete-branch` additionally tries `git branch -d`; a branch Git refuses to delete is left in place while the worktree is still removed.
+Takes one session daemon id, not a selector. The same route serves both row kinds and dispatches on the entry's kind:
 
-Output: `removed worktree daemon <daemonId> (<path>, branch <branch>)`.
+- A Git worktree: guards run before anything is mutated. Only worktrees under the workspace root are owned and deletable, and a dirty worktree is refused; there is no force option. On success the session daemon is stopped, the row is evicted, and Git removes the worktree. `--delete-branch` additionally tries `git branch -d`; a branch Git refuses to delete is left in place while the worktree is still removed. Output: `removed worktree daemon <daemonId> (<path>, branch <branch>)`.
+- A clone workspace: deletion runs the verify-at-deletion gate (quiesce, Git guard, store completeness, read-only flip) before any provider or volume deletion. A blocked deletion keeps the workspace, its volume, and its logs. Output: `removed clone workspace daemon <daemonId> (verified <n> sessions)`.
 
 ### prompt
 
@@ -269,6 +338,31 @@ Sends one prompt to every matching session daemon. Asleep targets are woken firs
 
 See [Fan-out prompting](/cli/fanout/).
 
+### preflight
+
+```
+omp-web preflight --profile <id> [--port <n>]
+```
+
+Validates one provider profile on this host before any clone workspace uses it. It is the only fleet verb that runs entirely in the calling process: it resolves the config file exactly as `serve` does (`OMP_FLEET_CONFIG`, then `~/.omp-web/config.json`), loads `providerProfiles`, and runs the profile checks locally. No fleet needs to be running, and `--port` is parsed but unused.
+
+- `--profile <id>` is required. Without it the command exits 1 with `usage: omp-fleet preflight --profile <id>`.
+- An id that is not a configured profile exits 1 with `no provider profile "<id>" in <configPath>: configure providerProfiles."<id>" first`.
+
+Output starts with `profile <id>: ready` or `profile <id>: NOT ready`, followed by one line per check:
+
+```text
+profile bwrap-dev: ready
+  [ok] bwrap-binary: bwrap <version> at <path>
+  [ok] durable-logs-root: writable: /home/you/.omp-web/logs
+```
+
+Each line is `  [ok] <name>: <detail>` or `  [FAIL] <name>: <detail>`, and a failed check adds an indented `      fix: <remediation>` line naming the concrete repair. The command exits 0 when every check passes and 1 when any check fails, so it is usable as a pre-launch gate in scripts.
+
+Checks are host-generic plus provider-specific. A bwrap profile first probes the `bwrap` binary and user namespaces, then the session runtime entrypoint and binary, then the provider executable, callback reachability, the durable state directories, declared tool paths, denied bind roots, secret references, and stray Kubernetes-only fields. A Kubernetes profile skips the host sandbox checks (the daemon runs in a pod image) and instead reports the real API prerequisites: context, namespace, image, and storage. Nothing is ever provisioned and nothing is written: the callback check resolves DNS and opens a TCP connection only, and a profile with no callback URL reports the check as `not configured`.
+
+See [Provider profiles](/configuration/provider-profiles/) and [Sandboxed session runtime](/advanced/sandbox-runtimes/).
+
 ### Selectors
 
 | Form | Matches |
@@ -280,7 +374,7 @@ See [Fan-out prompting](/cli/fanout/).
 | `review*`, `box?` | name glob, anchored at both ends |
 | any other text | name glob interpretation of the literal text |
 
-`stop`, `remove`, and `prompt` accept these forms. `rm-project` and `add-worktree` take project selectors (id, path, or name). See [Select multiple session daemons](/cli/selectors/).
+`stop`, `remove`, and `prompt` accept these forms. `rm-project`, `add-worktree`, and `add-clone` take project selectors (id, path, or name). `start` takes a narrower selector: a session daemon id or an exact roster name, and it refuses a value that matches several rows. See [Select multiple session daemons](/cli/selectors/).
 
 ## update
 

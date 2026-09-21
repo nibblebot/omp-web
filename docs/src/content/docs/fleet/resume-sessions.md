@@ -7,13 +7,15 @@ A session is a durable conversation stored as a JSONL transcript on disk. Sessio
 
 The roster is the browser's route to a stored conversation: the browser talks to the fleet, and each row owns the picker for its checkout. Inside an attached session the same history actions are available as commands, described in [Manage session history](/sessions/history/).
 
+Most of this page applies to every row. The clone workspace case differs in where the session list and the transcript bytes come from, and it is called out where it matters; for the lifecycle behind it, see [Clone workspaces](/fleet/clone-workspaces/).
+
 ## What the roster knows about a session
 
 Each roster row tracks the session file its session daemon last used. On its Git-state poll, roughly every ten seconds, the fleet also probes that file for its title and whether it is empty, so the row can show what it is about to resume.
 
 - The session title line appears under the row's title and shows the transcript's title.
 - A file that exists but has no messages renders as **New session**.
-- The line is absent when there is no stored transcript and no empty session file to report.
+- The line is absent when there is no stored transcript and no empty session file to report. A clone workspace whose volume is not reachable from the fleet host has no probeable file, so its title line may be absent.
 
 ## Resume the current session
 
@@ -27,8 +29,8 @@ Clicking the card of a ready or asleep row resumes the session daemon's current 
 
 Click the session title line, not the rest of the card, to open the row's session dropdown. It lists that checkout's sessions, newest first, up to ten of them.
 
-- The dropdown answers directly from disk, so it works for an asleep row and for one that has never run in this browser session.
-- Each entry shows a display name and a relative modification time such as `5m ago`. The display name is the session title when it has one, otherwise the first user prompt, otherwise a timestamp-based placeholder. Raw session ids are not shown. The entry tooltip carries the session's working directory.
+- The dropdown answers on demand, so it works for an asleep row and for one that has never run in this browser session. A worktree row lists its checkout's session files from disk; a clone workspace row lists the sessions stored in the fleet log store, so it works whether or not the clone is running.
+- Each entry shows a display name and a relative modification time such as `5m ago`. The display name is the session title when it has one, otherwise the first user prompt, otherwise a timestamp-based placeholder. Clone store entries carry no titles, so they use the timestamp placeholder. Raw session ids are not shown. The entry tooltip carries the session's working directory.
 - The transcript currently loaded by that row is highlighted. For the attached row this is the live file; for other rows it is the file a wake would resume.
 - While the list loads it shows **loading sessions…**; a checkout with no stored transcripts shows **no sessions yet**; a failure shows the error text in place of the list.
 
@@ -36,18 +38,19 @@ The trigger is part of the row, so it is only available on rows that can act: re
 
 ### What picking an entry does
 
-- **On an asleep row**, the fleet wakes the session daemon with the file you picked and attaches this browser afterward. The file is first checked against that checkout's own session listing, so a path from somewhere else is refused with `session file not in this worktree: <path>` and the row stays asleep. The row shows a waking pulse until the attach settles.
+- **On an asleep row**, the fleet wakes the session daemon with the file you picked and attaches this browser afterward. The file is first checked against that checkout's own session listing, so a path from somewhere else is refused with `session file not in this worktree: <path>` and the row stays asleep. A clone row is checked against its fleet store listing instead, and a miss is refused with `session not in this clone's fleet store: <file>`. The row shows a waking pulse until the attach settles.
 - **On a ready row**, the browser attaches to the session if it is not already attached, then switches the live session to the picked transcript. Picking the file that is already live is a plain attach. The session daemon's process and working directory do not change; only the live conversation does.
+- **On a clone workspace row**, a wake materializes the picked session's stored transcripts into the volume first when they are cold or missing there, then resumes. The same is true of a plain wake, which resumes the last session. An explicit pick that cannot be materialized is a typed failure, never a silent fresh boot, so a chosen transcript is never quietly dropped.
 - **Other browser tabs attached to the same session daemon** follow the switch, because they share one live session.
 
 A refused or failed resume surfaces in the global error banner, and the row keeps its previous session. If the row has an error status, fix or remove it first; see [Understand roster status](/fleet/roster-status/).
 
 ## The onboarding picker
 
-When a session daemon is started through **Start a session now** in the **Add repo** or **Add worktree** dialog, the first attach checks the checkout for existing transcripts.
+When a session daemon is started through **Start a session now** in the **Add repo** dialog or the **Add workspace** modal, the first attach checks the checkout for existing transcripts. That includes a clone workspace created with a start.
 
 - If transcripts exist, the History modal opens headed **New session or resume**, newest first, with a **New session** row at the top that starts a fresh session with no history. Selecting a row makes that transcript the live session; Escape also chooses **New session**.
-- If no transcripts exist, omp-web starts a fresh session immediately and no modal appears.
+- If no transcripts exist, omp-web starts a fresh session immediately and no modal appears. A clone workspace created fresh normally lands here, because its volume starts empty.
 
 This picker is specific to that onboarding flow. Waking a row later never opens it: a wake resumes the last session file, and a specific transcript is chosen from the row's dropdown instead.
 
@@ -61,14 +64,14 @@ Inside an attached session you have the full history actions:
 
 ## Durability and safety
 
-- Transcripts are stored outside the worktree, under the agent directory, so they survive stopping a session daemon, letting it idle out, restarting the fleet, and even deleting the worktree. Locations are listed in the [files reference](/reference/files/), and the model is explained in [Session persistence](/concepts/session-persistence/).
+- Transcripts are stored outside the worktree, under the agent directory, so they survive stopping a session daemon, letting it idle out, restarting the fleet, and even deleting the worktree. A clone workspace's transcript tree lives in its volume instead, but every managed session daemon mirrors its lineage to the fleet log store, so the history survives the volume being torn down or deleted. Locations are listed in the [files reference](/reference/files/), and the model is explained in [Session persistence](/concepts/session-persistence/).
 - A transcript has one writer at a time. If a second session daemon tries to resume a transcript another process holds, it refuses to start with a message such as `omp-session: session file <file> is locked by another omp-session (pid <pid>)`. Stop the other process or resume a different transcript; do not delete the lock file. See [Troubleshooting](/operations/troubleshooting/).
 - Resuming never moves the row. A session daemon always works in the directory it was started with, so resuming keeps the same checkout and branch.
 
 ## CLI and Analysis notes
 
-- The CLI has no resume command. `omp-web prompt <selector> <text>` wakes asleep targets on demand, which resumes their last session file before the prompt is delivered.
-- Historical transcripts can be searched and read in the browser's Analysis view, which reads through the fleet's statistics service; see [Browse historical transcripts](/analysis/transcripts/).
+- `omp-web start <selector>` wakes a stopped clone workspace, which resumes its last session unless you pick another. For other rows the CLI has no dedicated resume command: `omp-web prompt <selector> <text>` wakes asleep targets on demand, which resumes their last session file before the prompt is delivered.
+- Historical transcripts can be searched and read in the browser's Analysis view, which reads through the fleet's statistics service; see [Browse historical transcripts](/analysis/transcripts/). Sessions whose workspace was deleted live on in the fleet log store as view-only history, and resuming one onto a fresh clone is the explicit resume action on that surface; see [Stored sessions and orphans](/analysis/stored-sessions/).
 
 ## Related
 
@@ -76,4 +79,6 @@ Inside an attached session you have the full history actions:
 - [Session persistence](/concepts/session-persistence/)
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/)
 - [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/)
+- [Clone workspaces](/fleet/clone-workspaces/)
 - [Manage session history](/sessions/history/)
+- [Stored sessions and orphans](/analysis/stored-sessions/)

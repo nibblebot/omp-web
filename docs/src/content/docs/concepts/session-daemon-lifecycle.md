@@ -49,6 +49,8 @@ What happens next, in order:
 
 Steps that fail before `ready` are visible rather than silent: the row turns red with error details, and the details view shows the captured stderr from the child, which is where the session daemon writes everything except its contract lines.
 
+A clone workspace starts differently. The fleet runs no spawn template for one; the workspace lifecycle ensures the provider volume and compute, starts the session runtime, and the sandboxed daemon dials the fleet outbound. The same status ladder applies, and the row additionally shows the provider lifecycle stage (preparing workspace, starting runtime, connecting channel) until the daemon reports ready. See [Clone workspaces](/fleet/clone-workspaces/).
+
 ## Working states
 
 Two things can happen to a ready session daemon that are not lifecycle states:
@@ -77,6 +79,7 @@ Waking depends on what kind of row it is:
 
 - **A locally spawned row** is respawned from its template with the resume file, usually its last session, or the file you picked from the session dropdown.
 - **A remote row** is redialed instead. There is no child process to restart, so the fleet reconnects to the endpoint it has on record.
+- **A clone workspace row** wakes through the workspace lifecycle: the fleet re-provisions compute, resumes the last session, and materializes the transcript from the fleet store first when the volume is cold or the transcript is missing there. Stopping one preserves the checkout and the session logs.
 
 Either way the wake is serialized per row, so clicking a sleeping row and attaching to it in quick succession launches one process, not two.
 
@@ -90,6 +93,8 @@ Two details matter for what you see:
 - A clean end is not a drop. When a session daemon goes dormant it closes the stream normally, and the row goes asleep instead of reconnecting. A reset frame just before the close marks the opposite case: the session daemon is alive but the client was too slow, so the fleet reconnects rather than sleeping.
 
 The browser stays attached to the same session daemon while this happens: the composer stays gated, the conversation does not reset, and the stream resumes when a redial succeeds. If the redial budget is exhausted, or the session daemon rejects the token or speaks the wrong protocol version, the attachment is reported lost and an error banner appears; clicking the row attaches again.
+
+Clone rows are the exception. The fleet never dials a clone daemon, because it has no inbound service; the daemon dials the fleet's callback pair outbound, and a dropped pair is re-established by the daemon with the same jittered backoff.
 
 ## Crashes and bounded restarts
 
@@ -127,4 +132,5 @@ The fleet owns the child processes, so restarting it changes what the rows can c
 - [Local and remote sessions](/concepts/local-and-remote/) for the dial-in rows that are woken by redial instead of respawn.
 - [The fleet sidebar](/fleet/sidebar/) for how statuses and activity render.
 - [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/) for the actions on a row.
+- [Clone workspaces](/fleet/clone-workspaces/) for the provider-managed lifecycle behind a clone row.
 - [Troubleshooting](/operations/troubleshooting/) for the setup failures behind the error states.

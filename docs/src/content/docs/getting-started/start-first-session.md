@@ -16,11 +16,13 @@ A registered project appears as a sidebar group with a row for its main checkout
 
 If `Start a session now` was enabled while adding the project, omp-web already ran register, spawn, and attach for you.
 
+The same sidebar is where the other workspace kinds start. A worktree you added gets its own row, and a **Clone** workspace created through **+ Add workspace** runs in a provider-managed volume and starts through its own lifecycle; see [Clone workspaces](/fleet/clone-workspaces/).
+
 The composer stays gated until the attached session daemon reports ready. Readiness is reported by the session daemon after it resolves its provider, model, and authentication; an open connection alone is not readiness. While gated, Enter is suppressed, the send button is disabled, and a pill near the buttons says that the session is still starting. Wait for ready instead of resending the prompt.
 
 ## Choose a new session or resume a previous one
 
-- Onboarding picker: when the session daemon was started through the add-project or add-worktree flow with `Start a session now` enabled, the first attach also checks that worktree for existing transcripts. If any exist, the History modal opens headed `New session or resume`, newest first, with a `New session` row at the top that starts fresh with no history. Escape in that modal also chooses `New session`. If no transcripts exist, omp-web starts a fresh session immediately and no modal appears. This picker appears only for that onboarding flow.
+- Onboarding picker: when the session daemon was started through the add-project flow or the **Add workspace** modal (worktree or clone) with `Start a session now` enabled, the first attach also checks that checkout for existing transcripts. If any exist, the History modal opens headed `New session or resume`, newest first, with a `New session` row at the top that starts fresh with no history. Escape in that modal also chooses `New session`. If no transcripts exist, omp-web starts a fresh session immediately and no modal appears. This picker appears only for that onboarding flow.
 - Explicit resume: run `/resume` at any time to open the same modal headed `Resume from disk`. The list is filterable by name or working directory, and each row shows the session's directory, message count, and timestamp. Selecting a row makes that transcript the live session.
 - Wake path: clicking an asleep row resumes its last transcript without opening a picker, which is described below.
 
@@ -57,9 +59,9 @@ The strip above the composer shows the session's provider and model, thinking le
 A session daemon is disposable; the transcript is durable.
 
 - What asleep means: there is no live session daemon process. The fleet keeps the worktree path and last transcript so the session daemon can be resumed later.
-- How a row goes asleep: use `Stop daemon` and then `Confirm stop` in the row's menu, or let the session daemon reach its idle auto-exit. The default idle timeout is 30 minutes of continuous inactivity. While at least one browser has the fleet open, ready session daemons are kept alive so their activity stays visible; their idle timers resume when the last browser disconnects.
+- How a row goes asleep: use `Stop daemon` and then `Confirm stop` in the row's menu (a clone workspace row reads `Stop workspace`), or let the session daemon reach its idle auto-exit. The default idle timeout is 30 minutes of continuous inactivity. While at least one browser has the fleet open, ready session daemons are kept alive so their activity stays visible; their idle timers resume when the last browser disconnects.
 - What you see: when the attached session daemon is stopped or goes asleep, the chat column is replaced by the `No active session` pane, and the row stays in the sidebar.
-- Wake and resume: click an asleep row's card. omp-web wakes the session daemon with its last transcript and attaches this browser once it is ready. The row shows a waking state until the attach settles. A session daemon that has no stored transcript starts a fresh session instead.
+- Wake and resume: click an asleep row's card. omp-web wakes the session daemon with its last transcript and attaches this browser once it is ready. The row shows a waking state until the attach settles. A session daemon that has no stored transcript starts a fresh session instead. Waking a clone workspace works the same way: the fleet re-provisions its compute and materializes the transcript from the fleet store first when the clone's volume is cold.
 - Resume a specific transcript: click the asleep row's session title line and choose a session from the dropdown. That wakes the session daemon with the chosen transcript and attaches this browser.
 - Durable transcripts: the conversation is stored as a JSONL transcript on disk, not in the browser or the process, so closing the tab does not end it. The `/exit` notice says the session persists and that closing the browser tab is how you leave. Resuming reopens the transcript with its history intact, and the session appears again in the resume lists.
 

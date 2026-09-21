@@ -26,10 +26,10 @@ Prerequisites are the same as a normal install: [Bun](https://bun.sh) and a conf
 git clone https://github.com/nibblebot/omp-web
 cd omp-web
 bun install        # install dependencies
-bun run dev        # vite (HMR) + the fleet, the only runtime of the UI
+bun run dev        # vite (HMR) + the fleet + the auth broker, the only runtime of the UI
 ```
 
-The runner chooses ports per run, so several checkouts can run side by side. `bun run dev` also scopes its fleet state per worktree under the data home, so a development fleet coexists with your installed fleet instead of clobbering its roster. `bun run dev:server` runs just the session daemon and `bun run dev:web` just the Vite UI when you want the two halves separately.
+The runner chooses ports per run, so several checkouts can run side by side. `bun run dev` also scopes its fleet state per worktree under the data home, so a development fleet coexists with your installed fleet instead of clobbering its roster. It also ensures an auth broker is available for clone sandboxes: an already-running broker that answers an authenticated probe is adopted, otherwise `omp auth-broker serve` is spawned, and either way its URL and bearer land in the fleet's environment so provider profile secret references resolve. If the broker cannot be set up, the stack still starts and clones run unauthenticated. `bun run dev:server` runs just the session daemon (in watch mode) and `bun run dev:web` just the Vite UI when you want the two halves separately.
 
 ## Checks before a pull request
 

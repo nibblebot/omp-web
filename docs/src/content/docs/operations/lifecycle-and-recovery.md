@@ -7,8 +7,8 @@ This page is the operator view of omp-web process lifecycle: who owns each proce
 
 The two rules behind everything here:
 
-- Session daemons are disposable. A session is a durable transcript on disk, so stopping, losing, or restarting the process never loses a conversation.
-- Remote connectivity is dial-in. The fleet connects out to a session daemon's endpoint; a session daemon never connects back to the fleet, and the fleet never signals a process on another host.
+- Session daemons are disposable. A session is a durable transcript on disk, so stopping, losing, or restarting the process never loses a conversation. For a managed clone workspace the same transcript is also mirrored into the fleet log store, so wake can restore it even when the volume no longer has it.
+- Remote connectivity is dial-in, with one exception. The fleet connects out to a session daemon's endpoint, and a direct or worktree session daemon never connects back to the fleet. A managed clone workspace's daemon has no inbound service at all: it dials the fleet's callback pair outbound, so the fleet supervises its connection rather than a local child process.
 
 ## Process ownership
 
@@ -17,6 +17,7 @@ The two rules behind everything here:
 | Fleet (`omp-web`, `omp-web serve`) | You, in a terminal | The loopback control plane, the browser edge, the roster state file and its lock, the spawned session daemon children, and the connector sockets | `Ctrl+C` or `SIGTERM` (exit 0), or a crash |
 | Session daemon (`omp-session`, launched as `omp-web session`) | The fleet through a spawn template, or you manually for remote hosts | One bound working directory, one live session, its session file lock, and its idle timer | An idle auto-exit, an explicit stop, a crash, or shutdown of its supervising fleet |
 | Remote session daemon | Whatever runs on the remote host (a shell, an SSH session, a container entrypoint) | The same state on that host | Outside the fleet's control |
+| Clone workspace daemon | The clone lifecycle service, through a provider (bwrap or Kubernetes) | One provider volume: the `.checkout/` clone, a private home with the transcripts under `.home/agent/sessions`, and the outbound callback pair | An explicit stop, deletion through the verified gate, or a provider-side failure. The lifecycle owner never stops clone compute on its own |
 | Browser tab | You | No process. It holds one SSE stream to the fleet, and its actions are requests to the fleet | Tab close or navigation |
 
 Ownership has three practical consequences:
@@ -39,6 +40,7 @@ Expected result: every spawned row is persisted as `asleep` with its working dir
 
 - A local spawned row is signalled with `SIGTERM`, escalated to `SIGKILL` after five seconds, and marked `asleep`. Its last session file and working directory are kept, and the next spawn mints a fresh access token.
 - A remote row is disconnected and marked `asleep`. Nothing is signalled on the remote host, and its process keeps running there.
+- A clone workspace takes a third path, the provider-owned stop described under [Stop, wake, and delete a clone workspace](#stop-wake-and-delete-a-clone-workspace).
 
 Stopping a session daemon never deletes a transcript: session files live outside the worktree, under the agent directory. If you want the conversation gone, that is a transcript-management action, not a lifecycle action. To stop a session daemon and also drop its roster entry, use `omp-web remove <selector>`; removal runs the same stop first, then discards the entry and the supervisor state behind it. Removing a managed-worktree row leaves the directory on disk; [Safely delete managed worktrees](/fleet/delete-worktrees/) is the deletion path.
 
@@ -61,6 +63,16 @@ Clicking or waking an `asleep` row is a supervisor action:
 - A `ready` row whose control socket was merely idle-dropped is redialed, not replaced, because the live process is still healthy.
 
 A wake does not open the transcript picker; [Resume previous sessions](/fleet/resume-sessions/) covers picking a different session from the row's dropdown. When a wake is attached to a browser, the browser waits up to 60 seconds for the session daemon to report `ready`. The wait fails with an error frame on the row if readiness never arrives, typically because a provider or model is missing. From the CLI, `omp-web prompt <selector> <text>` also wakes `asleep` targets before prompting; see [Operate session daemons](/cli/session-daemon-operations/).
+
+### Stop, wake, and delete a clone workspace
+
+A managed clone workspace rides the same roster as a worktree session daemon, but its lifecycle belongs to the clone lifecycle service (`fleet/workspace-lifecycle.ts`) rather than the worktree guards. The roster surfaces its stage as `preparation`, `runtime`, `callback`, or `ready`, with `failed` carrying the lifecycle error text. See [Clone workspaces](/fleet/clone-workspaces/).
+
+- **Stop keeps the workspace.** `omp-web stop <selector>` on a clone runs the proof-bearing provider stop (a stop that cannot prove termination is refused with `stop of <daemonId> could not prove termination (observed running)`), then persists `desiredState: stopped`, marks the row `asleep`, and revokes the callback enrollment for that generation. The volume is untouched, so the checkout and every session log written under `.home/agent/sessions` survive.
+- **Wake re-provisions compute and resumes.** Waking the row, or `omp-web start <daemon-id>`, reconciles through the lifecycle owner: it inspects the provider for a surviving predecessor, provisions or reattaches compute, re-establishes the callback pair, and resumes the last session. When the resume target's transcript is cold or missing on the volume, the daemon requests it over the bulk channel and the fleet serves the validated stored lineage into `.home/agent/sessions` before the existing `--resume` path runs; the materialized tree is byte-identical, verified by size and sha256 before the file is renamed into place. An explicit resume target that exists nowhere fails typed `unavailable` instead of silently booting a fresh session. Before a wake resume the fleet unlinks the stale `<session>.lock` beside the target, because bwrap pid namespaces confuse the daemon's liveness probe; the stop proof above is what makes that safe.
+- **Deletion is a separate, verified gate, not the worktree guards.** Removing a clone, or deleting it from the UI, runs the verify-at-deletion gate: admission (refused while a live workspace's activity cannot be observed), quiesce with a proven stop, the clone's Git guard over `.checkout` (uncommitted or untracked files, stashes, and commits not preserved on the remote all block), fleet-store verification cross-checked against the volume's own session tree, a read-only flip, then provider deletion, volume deletion, and roster removal. The worktree guards never apply here: they reason about a fleet-local directory that a clone volume does not have. There is no force override, a blocked deletion keeps the workspace, its volume, and its logs, and the entry carries `delete-pending-retry` plus the gate's message. A blocked deletion is not an orphan: it keeps the live entry, volume, and store in place. A store subtree becomes an orphan only when its workspace disappeared without a passed gate (deleted outside the fleet, for example); those are listed by `GET /ctl/logs/orphans`, and only an explicit `POST /ctl/logs/purge {workspaceId}` removes one.
+
+Deleting a clone row with `omp-web remove <selector>` routes through the same gate, so nothing evicts a clone around verification.
 
 ## Bounded crash restart
 
@@ -92,8 +104,10 @@ The registry persists, but child processes and connector sockets do not. On ever
 | `asleep` or `error` | Kept as is | Wake an `asleep` row; fix the cause and wake an `error` row |
 | Spawned, any other status | `asleep`, with `pid` and `readyAt` cleared | Wake respawns with `--resume` |
 | Remote or attached, any other status | `connecting`, dialed immediately | None needed; the redial runs at boot |
+| Clone workspace | Re-inspected through its provider: a running predecessor is reattached at the same generation, a stopped or missing one is ensured when its desired state is `running`, and a stopped-desired workspace is left alone | None for a reattach; the ensure path is the wake path |
+| Clone workspace with a persisted `deleting` state | `delete-pending-retry` with the reason recorded | Retry the deletion through the same gate |
 
-Each downgrade is written to the fleet log as `boot reconcile: <old status> → <target>`, and the startup banner reports the restored session counts by status. Spawned rows are deliberately not auto-started: a fleet restart never launches new agent processes by itself, it only marks them wakeable.
+Each downgrade is written to the fleet log as `boot reconcile: <old status> → <target>`, and the startup banner reports the restored session counts by status. Spawned rows are deliberately not auto-started: a fleet restart never launches new agent processes by itself, it only marks them wakeable. Clone compute is not an in-memory child, so it survives a restart and is reattached rather than respawned; only the callback pair is rebuilt.
 
 To restart a fleet safely:
 
@@ -140,12 +154,15 @@ Disposability only works because the important state lives outside the processes
 
 | State | Location | Survives |
 | --- | --- | --- |
-| Session transcripts | `.jsonl` files under the agent directory, outside worktrees | Process exit, fleet restart, stop, remove, and managed-worktree deletion |
+| Session transcripts | `.jsonl` files under the agent directory, outside worktrees; managed workspaces also mirror them into the fleet log store | Process exit, fleet restart, stop, remove, and managed-worktree deletion; a cold clone volume gets them materialized back before `--resume` |
 | Roster and registered projects | Fleet state JSON, written atomically on every mutation | Fleet restarts; a data-home change starts a new, empty roster |
+| Clone workspace records | The same fleet state JSON, as the fleet-private `WorkspaceRecord` on clone entries (source, pin, profile, generation, desired state, deletion state) | Fleet restarts; never serialized to roster or debug surfaces |
+| Fleet log store | `<state dir>/logs/<workspaceId>/<sessionId>/<relpath>` plus a per-session `index.json` | Fleet restarts; verified history is deleted only through the deletion gate, or explicitly purged |
 | Managed worktrees | Under the configured workspace directory | Stop, remove, and fleet restart; deletion is a separate guarded action |
+| Clone workspaces | A provider volume holding `.checkout/` and `.home/agent/sessions` | Stop, fleet restart, and provider restarts; deletion is a separate verified gate |
 | Fleet configuration | The config file, read at start | Fleet restarts; only the first-run offer writes it |
 | Statistics database | `stats.db` under omp's config root, read-only from the fleet | Fleet restarts; it can lag until a sync runs, see [Sync the statistics database](/analysis/stats-sync/) |
-| Browser preferences | Browser `localStorage` | Everything except clearing site data |
+| Browser preferences | Browser `localStorage` | Everything except clearing site data. Browser auth puts nothing here: the session lives in the `omp_session` cookie |
 
 No process holds the only copy of a conversation, and no recovery step requires hand-editing state. Exact paths and precedence are owned by [Files and directories](/reference/files/) and [Data and state management](/configuration/data-and-state/); [Session persistence](/concepts/session-persistence/) explains transcript durability in depth.
 
@@ -214,6 +231,10 @@ The data home holds the config file, the roster state file, and managed worktree
 | Row is `error` with a protocol or cwd mismatch | Incompatible builds, or an entry pointing at the wrong directory | Update both sides, or correct the entry; retrying cannot fix either |
 | Browser shows `reconnecting` with a growing delay | The stream closed and the client is on its 1 to 8 second ladder | Wait for automatic recovery, then check that the fleet and the session daemon are still running |
 | Browser never reconnects at all | A terminal case such as a protocol mismatch or a rejected token | Fix the version or token, then reload |
+| Clone deletion refused with `delete-pending-retry` and a gate message | The verify-at-deletion gate did not pass, and the workspace, volume, and logs were retained | Read the message: Git guard text needs a commit, push, or stash inside the clone; `live with unobservable activity` needs `omp-web stop` first; a store or quiesce message means the transcript mirror or the compute stop could not be proven |
+| Clone wake or resume fails typed `unavailable` | The resume target exists neither on the volume nor in the fleet log store, or the workspace was deleted | Pick a session that exists on the volume, or use the explicit resume-onto-fresh-clone action for a deleted workspace; verify the fleet log store is present |
+| Clone row is `error` with a `lifecycleError` | A lifecycle stage failed: preparation, runtime, or callback | Read the error text and the fleet log, fix the provider side, then wake the row; `omp-web preflight --profile <id>` checks the profile before a retry |
+| Clone row sits on `preparing workspace` or `connecting channel` | A lifecycle stage is still running, or its provider op is retrying | Watch the transitions; a failed stage surfaces its typed error as `lifecycleError` on the roster, and boot-time inspect failures are logged as `clone boot reconcile: inspect failed ...` |
 
 [Troubleshooting](/operations/troubleshooting/) expands each symptom with the exact messages, and its final section lists what to collect from the Debug panel for a bug report.
 
@@ -221,6 +242,7 @@ The data home holds the config file, the roster state file, and managed worktree
 
 - [Session daemon lifecycle](/concepts/session-daemon-lifecycle/)
 - [Start, stop, wake, and remove session daemons](/fleet/session-daemon-operations/)
+- [Clone workspaces](/fleet/clone-workspaces/): create, stop, wake, and verified deletion
 - [Session persistence](/concepts/session-persistence/)
 - [Understand roster status](/fleet/roster-status/)
 - [Operate session daemons](/cli/session-daemon-operations/)

@@ -51,6 +51,10 @@ Notes:
 
 The hook is a different mechanism from spawn templates: templates run a command line that the fleet fills with `{cwd}`, `{token}`, `{name}`, `{labels}`, and `{resume}` placeholders, and the fleet supervises the child process. A provider hook encapsulates all of that itself and returns a dial-in endpoint instead. See [Configure spawn templates](/configuration/spawn-templates/) for the template path.
 
+## Not the same as provider profiles
+
+A `spawnHook` and a `providerProfiles` entry are different mechanisms with different owners. A provider profile declares a sandbox (`bwrap` or Kubernetes) that the fleet itself creates, stops, wakes, and deletes as a [clone workspace](/fleet/clone-workspaces/), with the clone lifecycle owning compute, the volume, and transcript mirroring; `omp-web preflight --profile <id>` validates it. A spawn hook enrolls a session daemon that something else runs, and the fleet only registers, dials, and supervises the connection. Use a provider profile when the fleet should own the environment's lifecycle, and a spawn hook when an external system hands you a reachable daemon. See [Provider profiles](/configuration/provider-profiles/).
+
 ## The enrollment contract
 
 The wrapper must satisfy all of the following.

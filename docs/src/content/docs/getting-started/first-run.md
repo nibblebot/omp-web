@@ -79,6 +79,8 @@ After setup, the fleet keeps its configuration, registry state, and managed work
 | `<data-home>/fleet-state.json` | Roster and registered projects, written next to the config file when the fleet records state. |
 | `<data-home>/workspaces/` | Root for managed worktrees. |
 
+The same directory also holds `logs/`, the fleet log store that mirrors session transcripts from managed daemons, and, once browser auth is enabled, `browser-auth.json`. [Data and state management](/configuration/data-and-state/) covers both.
+
 The installed CLI code is separate from the data home. The installer keeps the code in its own pinned prefix (`~/.omp-web/install/` by default) and, by default, links the `omp-web` command from `~/.bun/bin`. The data home holds fleet data only. Choosing a custom data home does not move or reinstall the code, and `omp-web update` updates the code in place. With the default answer the two share `~/.omp-web`, but the `install/` subdirectory belongs to the installer, not to your data.
 
 ### The startup banner
