@@ -1,3 +1,38 @@
+## v0.2.0, 2026-09-21
+
+omp-web 0.2.0 removes the standalone single-session web UI mode, with omp-session now serving the wire API only. It adds preflight drift reports, gate E2E and packed-artifact smoke tests, and main-based docs deployment, plus fixes including an SDK bump to 18.2.6 with patched tokenizer estimates and at-most-once replay of unanswered calls.
+
+### Breaking changes
+- refactor(fleet)!: make the fleet the only web UI server ([b5a158f89bb4e3c53e1f7763969f09ebf19be3e7](https://github.com/nibblebot/omp-web/commit/b5a158f89bb4e3c53e1f7763969f09ebf19be3e7))
+
+### Features
+- Add preflight drift reports, gate E2E, packed-artifact smoke tests, and main-based docs deploy ([cc459b76a95e55e1637da037ed6d2ea8407e4a78](https://github.com/nibblebot/omp-web/commit/cc459b76a95e55e1637da037ed6d2ea8407e4a78))
+- Route the preflight verb through the CLI and pin pi-catalog explicitly ([193b80757fce25b78ab6f61c1a483c394cb813ec](https://github.com/nibblebot/omp-web/commit/193b80757fce25b78ab6f61c1a483c394cb813ec))
+- Run the auth broker together with the fleet dev stack ([d756e6916a8c0d30f4ff61426f505fd1066d2beb](https://github.com/nibblebot/omp-web/commit/d756e6916a8c0d30f4ff61426f505fd1066d2beb))
+- Add provider-managed clone workspaces to the fleet ([9726067035351733696ac3ebc6d9af7377897b23](https://github.com/nibblebot/omp-web/commit/9726067035351733696ac3ebc6d9af7377897b23))
+- Publish the documentation site to GitHub Pages ([ac43d6b92749b6e5faf6c18ba08fc3f82c5c8bbd](https://github.com/nibblebot/omp-web/commit/ac43d6b92749b6e5faf6c18ba08fc3f82c5c8bbd))
+- Add a work and analysis mode switcher with persistent transcripts sidebar ([c06eab7a965424a24fa3b292f21309713e92f5c6](https://github.com/nibblebot/omp-web/commit/c06eab7a965424a24fa3b292f21309713e92f5c6))
+- Add a usage-in-sidebar setting with a condensed sidebar usage widget ([396e2f88db9b02475f572fe3b9d15241a259588c](https://github.com/nibblebot/omp-web/commit/396e2f88db9b02475f572fe3b9d15241a259588c))
+
+### Bug fixes
+- Bump the agent SDK to 18.2.6, patch tokenizer estimates, and replay unanswered calls at most once ([571653b0c34a74e2b3e34b3dce07677549df1d34](https://github.com/nibblebot/omp-web/commit/571653b0c34a74e2b3e34b3dce07677549df1d34))
+- Repair two pre-existing test failures ([efe8e84bf6d6a13711a786c595b489fbbc268ba0](https://github.com/nibblebot/omp-web/commit/efe8e84bf6d6a13711a786c595b489fbbc268ba0))
+- Serve a placeholder page when no web bundle is embedded ([8186acf0aee9cbfacee39ca70b7865074abb8f2d](https://github.com/nibblebot/omp-web/commit/8186acf0aee9cbfacee39ca70b7865074abb8f2d))
+
+### Maintenance & other
+- Document clone workspaces, browser auth, and sandbox runtimes ([ba26ea23abe2c9575a5a984959b27b12ac5ed3ab](https://github.com/nibblebot/omp-web/commit/ba26ea23abe2c9575a5a984959b27b12ac5ed3ab))
+- Remove the last em dashes, including those in the changelog ([c12a64abb0faac269c33123d11ca55cc972d20c8](https://github.com/nibblebot/omp-web/commit/c12a64abb0faac269c33123d11ca55cc972d20c8))
+- Strip AI writing tells from the clone-workspace branch ([dacc2ca1360a8373b157c6851f7c1de0c4e0f393](https://github.com/nibblebot/omp-web/commit/dacc2ca1360a8373b157c6851f7c1de0c4e0f393))
+- Commit the clone workspace design, plan, and summary ([0e367045758e8048411e50492f9d50f1a179315a](https://github.com/nibblebot/omp-web/commit/0e367045758e8048411e50492f9d50f1a179315a))
+- Strip AI writing tells from comments, strings, and prose ([a9405ee4f0709674362cedf922fadbb7d4b2d0dd](https://github.com/nibblebot/omp-web/commit/a9405ee4f0709674362cedf922fadbb7d4b2d0dd))
+- Drop the Docker session-daemon guide ([0080da1a538324e8bf1daca244bd430e68cb35ef](https://github.com/nibblebot/omp-web/commit/0080da1a538324e8bf1daca244bd430e68cb35ef))
+- Remove fleet/examples and inline the docker wrapper ([6306f21eed9e40b95e4e7ec10a6dc2b943d12f55](https://github.com/nibblebot/omp-web/commit/6306f21eed9e40b95e4e7ec10a6dc2b943d12f55))
+- Build the Starlight documentation site ([07cd0b22e06fc822b0ee32ad115f234cca11102a](https://github.com/nibblebot/omp-web/commit/07cd0b22e06fc822b0ee32ad115f234cca11102a))
+- Add issue templates ([22b733a1fd18bfc1c37e044fd263e57e3d33d83e](https://github.com/nibblebot/omp-web/commit/22b733a1fd18bfc1c37e044fd263e57e3d33d83e))
+- Require log-file capture for test suite runs ([0d29560927065d7f0490b8e1a2286de71806439b](https://github.com/nibblebot/omp-web/commit/0d29560927065d7f0490b8e1a2286de71806439b))
+- Bump runtime and dev dependencies ([6c576d9992b4e4a97359bb6ca1efd753a1882a40](https://github.com/nibblebot/omp-web/commit/6c576d9992b4e4a97359bb6ca1efd753a1882a40))
+- Strip em dashes from markdown prose and use commas in changelog headers ([afc5de110fec6f1ca42d04ebd7a2aab9c8851cd2](https://github.com/nibblebot/omp-web/commit/afc5de110fec6f1ca42d04ebd7a2aab9c8851cd2))
+
 ## v0.1.1, 2026-08-20
 
 This release fixes two chat issues: pinned chat streams now stay pinned through any content change, and the queued-steer chip is cleared once the steer is delivered. It also improves reliability by replacing a flaky queued-steer end-to-end test with hermetic coverage, and anchors the pinned install directory as its own bun project.
