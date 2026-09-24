@@ -15,8 +15,9 @@
  *      the skew that broke `bun install -g`-based installs), then install
  *      the tarball into a dedicated pinned dir
  *      (scripts/install-omp-web.ts); assert the symlink points there, the
- *      pinned pi-ai matches the root package.json pin, and `omp-web
- *      --version` prints the version despite the poisoned store
+ *      pinned pi-ai matches the root package.json pin, `omp-web --version`
+ *      prints the version despite the poisoned store, and the install is
+ *      patch-free (no root patchedDependencies or patch files)
  *   3. fixture repo (git init + commit) with one linked worktree
  *   4. first-run config written to ~/.omp-web/config.json (the serve offer's
  *      TTY-gated write, done directly here, workspaceDir only)
@@ -26,10 +27,13 @@
  *   6. spawn a session on the registered project (fleet local template now spawns
  *      `omp-web session`; PATH must include $BUN_INSTALL/bin); assert it reaches
  *      ready and its cwd matches the project
- *   7. update round-trip: version bumped to 0.2.0, rebuilt bundle, fixture
- *      Bun.serve hosts release-manifest.json + the 0.2.0 tarball;
- *      OMP_WEB_UPDATE_URL → omp-web update (bun remove + bun add in the pinned
- *      dir); assert the symlink still resolves and `omp-web --version` prints 0.2.0
+ *   7. update round-trip on the clean pinned prefix: the version is bumped
+ *      above this tree's own, the bundle rebuilt, and a fixture Bun.serve
+ *      hosts release-manifest.json + the new tarball; OMP_WEB_UPDATE_URL →
+ *      omp-web update (bun remove + bun add in the pinned dir); assert the
+ *      symlink still resolves, `omp-web --version` prints the new version,
+ *      and the update stayed anchored in the pinned dir instead of attaching
+ *      to the poisoned ancestor project
  *
  * Usage: bun scripts/test-onboard.ts [--keep]   (--keep leaves the sandbox dir)
  * Exit 0 when every assertion passes, 1 otherwise.
@@ -94,7 +98,8 @@ const INSTALLER_PORT = 48273;
 let failures = 0;
 let fatal: string | null = null;
 let v1 = "";
-let v2 = "0.2.0";
+/** Update target: v1 with the patch segment bumped (set in step 1). */
+let v2 = "";
 let tgz = "";
 let tgz2 = "";
 let fixtureServer: { stop(): void } | null = null;
@@ -226,36 +231,6 @@ function mkdirp(p: string): void {
 	mkdirSync(p, { recursive: true });
 }
 
-/**
- * Probe the INSTALLED @oh-my-pi/pi-agent-core through the install dir's own
- * module graph. A 256 KiB homogeneous run must take the approximate bytes/4
- * path the mirrored pi-agent-core patch installs; the exact native count is
- * ~20 s on deepseek-v3 and reports 32768, so an unpatched tree fails on the
- * value, not just the clock.
- */
-async function tokenizerProbe(
-	installRoot: string,
-): Promise<{ n?: unknown; bytes4?: unknown; ms?: unknown; out: string }> {
-	const script = [
-		'const { Tokenizer } = await import("@oh-my-pi/pi-agent-core");',
-		'const tokenizer = new Tokenizer({ tokenizer: "deepseek-v3" });',
-		'const text = "x".repeat(256 * 1024);',
-		'const bytes = Buffer.byteLength(text, "utf-8");',
-		"const started = Bun.nanoseconds();",
-		"const n = tokenizer.countTokens(text);",
-		"console.log(JSON.stringify({ n, bytes4: (bytes + 3) >> 2, ms: (Bun.nanoseconds() - started) / 1e6 }));",
-	].join("\n");
-	const probe = await run("installed tokenizer probe", ["bun", "-e", script], {
-		cwd: installRoot,
-		timeoutMs: 120_000,
-	});
-	let parsed: { n?: unknown; bytes4?: unknown; ms?: unknown } = {};
-	try {
-		parsed = JSON.parse(probe.stdout.trim().split("\n").at(-1) ?? "{}") as typeof parsed;
-	} catch {}
-	return { ...parsed, out: `${probe.stdout.trim()} ${probe.stderr.trim().slice(-200)}` };
-}
-
 // ---------------------------------------------------------------------------
 try {
 	// 1. Build + pack
@@ -263,6 +238,12 @@ try {
 	console.log("== 1. build + pack ==");
 	const pkg = JSON.parse(originalPkg) as { version: string };
 	v1 = pkg.version;
+	// The update round-trip must install a version ABOVE this tree's own (the
+	// release script writes the bumped version only after the gate), so bump
+	// the patch segment: 0.2.0 → 0.2.1.
+	const bumped = v1.split(".");
+	bumped[bumped.length - 1] = String(Number(bumped.at(-1)) + 1);
+	v2 = bumped.join(".");
 	let r = await run("bun run build", ["bun", "run", "build"]);
 	check("bun run build succeeds", r.code === 0, r.stderr.slice(-300));
 	check(
@@ -279,7 +260,7 @@ try {
 	);
 	// P9.1: the build ships the provider executables and the reproducible
 	// session-runtime image definition next to cli.js. package `files` =
-	// ["dist-bundle/"], so the tarball carries the whole tree; the source
+	// ["dist-bundle/"], so the tarball carries only the bundle; the source
 	// tree here is the pre-pack proof.
 	const bwrapProvider = join(ROOT, "dist-bundle", "providers", "bwrap-provider.js");
 	check(
@@ -393,37 +374,19 @@ try {
 		r.code === 0 && r.stdout.trim() === v1,
 		r.stdout.trim(),
 	);
-	// The pi-agent-core patch: bun applies `patchedDependencies` only from the
-	// ROOT package.json, so the installer mirrors the tarball's map into the
-	// pinned dir and copies the patch files out of the package. Assert both the
-	// mechanism (map + files) and the behavior (approximate bytes/4 count).
+	// No release ships a dependency patch: the pinned install declares none in
+	// its root package.json and gets no copied patch files.
 	const installRoot = join(dataHome, "install");
-	const mirrored = ((): Record<string, string> => {
-		try {
-			const parsed = JSON.parse(readFileSync(join(installRoot, "package.json"), "utf8")) as {
-				patchedDependencies?: Record<string, string>;
-			};
-			return parsed.patchedDependencies ?? {};
-		} catch {
-			return {};
-		}
-	})();
+	const installRootJson = readFileSync(join(installRoot, "package.json"), "utf8");
 	check(
-		"install dir mirrors the package's patchedDependencies",
-		Object.keys(mirrored).length > 0 &&
-			Object.values(mirrored).every((patch) => existsSync(join(installRoot, patch))),
-		JSON.stringify(mirrored),
-	);
-	const pinnedProbe = await tokenizerProbe(installRoot);
-	check(
-		"installed pi-agent-core counts approximate (bytes/4)",
-		pinnedProbe.n === 65536 && pinnedProbe.bytes4 === 65536,
-		pinnedProbe.out,
+		"fresh install declares no patched dependencies",
+		!installRootJson.includes("patchedDependencies"),
+		installRootJson,
 	);
 	check(
-		"installed approximate count is fast",
-		typeof pinnedProbe.ms === "number" && pinnedProbe.ms < 2000,
-		`${pinnedProbe.ms}ms`,
+		"fresh install leaves no copied patch file",
+		!existsSync(join(installRoot, "patches")),
+		join(installRoot, "patches"),
 	);
 
 	// Anchor a poisoned ANCESTOR project: with no package.json of its own,
@@ -527,13 +490,19 @@ try {
 	);
 	r = await run("install.sh --version", [instBin, "--version"]);
 	check("install.sh --version prints v1", r.code === 0 && r.stdout.trim() === v1, r.stdout.trim());
-	// install.sh wires the patch itself (shell path, no install-omp-web.ts):
-	// same behavioral proof as the pinned install above.
-	const installerProbe = await tokenizerProbe(join(instDataHome, "install"));
+	// install.sh wires the same pinned layout (shell path, no
+	// install-omp-web.ts): a fresh prefix must come out patch-free too.
+	const instRoot = join(instDataHome, "install");
+	const instRootJson = readFileSync(join(instRoot, "package.json"), "utf8");
 	check(
-		"install.sh install counts approximate (bytes/4)",
-		installerProbe.n === 65536 && installerProbe.bytes4 === 65536,
-		installerProbe.out,
+		"install.sh install declares no patched dependencies",
+		!instRootJson.includes("patchedDependencies"),
+		instRootJson,
+	);
+	check(
+		"install.sh install leaves no copied patch file",
+		!existsSync(join(instRoot, "patches")),
+		join(instRoot, "patches"),
 	);
 	r = await run(
 		"install.sh reinstall is idempotent (same version)",
@@ -727,19 +696,19 @@ try {
 		`entry=${JSON.stringify(projectEntry)} project=${JSON.stringify(p1)}`,
 	);
 
-	// 7. update round-trip (fixture manifest + 0.2.0 tarball)
+	// 7. update round-trip (clean pinned prefix, fixture manifest + next-version tarball)
 	// ---------------------------------------------------------------------------
 	console.log("== 7. update ==");
-	// Build a v0.2.0 bundle: bump package.json, rebuild, pack, restore.
+	// Build a v<next> bundle: bump package.json, rebuild, pack, restore.
 	writeFileSync(pkgPath, originalPkg.replace(`"version": "${v1}"`, `"version": "${v2}"`));
-	r = await run("bun run build (0.2.0)", ["bun", "run", "build"], { timeoutMs: 120_000 });
-	check("0.2.0 build succeeds", r.code === 0, r.stderr.slice(-300));
+	r = await run(`bun run build (${v2})`, ["bun", "run", "build"], { timeoutMs: 120_000 });
+	check(`${v2} build succeeds`, r.code === 0, r.stderr.slice(-300));
 	// Pack with the bumped package.json (bun pm pack names the tarball from it), then restore.
-	r = await run("pack 0.2.0", ["bun", "pm", "pack"]);
+	r = await run(`pack ${v2}`, ["bun", "pm", "pack"]);
 	tgz2 = join(ROOT, `omp-web-${v2}.tgz`);
-	check("0.2.0 tarball produced", r.code === 0 && existsSync(tgz2), r.stderr.slice(-200));
+	check(`${v2} tarball produced`, r.code === 0 && existsSync(tgz2), r.stderr.slice(-200));
 	writeFileSync(pkgPath, originalPkg); // restore immediately after packing
-	if (!existsSync(tgz2)) throw new Error("no 0.2.0 tarball, aborting update step");
+	if (!existsSync(tgz2)) throw new Error(`no ${v2} tarball, aborting update step`);
 	const sha = createHash("sha256").update(readFileSync(tgz2)).digest("hex");
 	mkdirp(fixture);
 	copyFileSync(tgz2, join(fixture, `omp-web-${v2}.tgz`));
@@ -761,7 +730,7 @@ try {
 		OMP_WEB_UPDATE_URL: `http://127.0.0.1:${UPDATE_PORT}/latest/download`,
 	});
 	r = await run("omp-web update --check", [bin, "update", "--check"], { env: updateEnv });
-	check("update --check reports 0.2.0", r.code === 0 && r.stdout.trim() === v2, r.stdout.trim());
+	check(`update --check reports ${v2}`, r.code === 0 && r.stdout.trim() === v2, r.stdout.trim());
 
 	r = await run("omp-web update", [bin, "update"], { env: updateEnv, timeoutMs: 180_000 });
 	check("update applies", r.code === 0, r.stderr.slice(-300));
@@ -773,19 +742,6 @@ try {
 	);
 	r = await run("--version after update", [bin, "--version"]);
 	check(`--version prints ${v2}`, r.code === 0 && r.stdout.trim() === v2, r.stdout.trim());
-	// The self-update path (bun remove + bun add + re-mirror) must leave the
-	// patched approximate path active in the pinned tree.
-	const updatedProbe = await tokenizerProbe(installRoot);
-	check(
-		"update keeps the approximate path (bytes/4)",
-		updatedProbe.n === 65536 && updatedProbe.bytes4 === 65536,
-		updatedProbe.out,
-	);
-	check(
-		"update keeps the approximate count fast",
-		typeof updatedProbe.ms === "number" && updatedProbe.ms < 2000,
-		`${updatedProbe.ms}ms`,
-	);
 	// The update path runs bun remove/add in the pinned dir, and must not walk
 	// up into the poisoned ancestor.
 	check(

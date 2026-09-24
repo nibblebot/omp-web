@@ -55,8 +55,6 @@ Exit codes: 0 when the report is clean; 1 when any finding has severity `error`;
 Errors (the checkout is internally inconsistent):
 
 - the seven `@oh-my-pi/*` pins in `package.json` disagree with each other (they are one set and move together);
-- the root `patchedDependencies` map and `patches/` disagree: a map key with no patch file, a patch file that no key references, or a key whose version suffix is not that package's own pin;
-- `package.json` and `bun.lock` disagree about `patchedDependencies`.
 
 Warnings (drift that is not a broken release by itself):
 

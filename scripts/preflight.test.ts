@@ -10,7 +10,6 @@ import { cleanupTempDirs, tempDir } from "../shared/testkit";
 import {
 	CHECKBOX_SKIPPED,
 	checkGateList,
-	checkPatchCoherence,
 	checkSdkPins,
 	compareSemver,
 	exitCode,
@@ -117,89 +116,6 @@ describe("sdk-pins", () => {
 		expect(findings[0]?.severity).toBe("warn");
 		expect(findings[0]?.message).toContain("unverified");
 		expect(findings[0]?.detail).toContain("ENOTFOUND");
-	});
-});
-
-describe("patch-coherence", () => {
-	const base = {
-		dependencies: { "@oh-my-pi/pi-agent-core": "18.2.6" },
-		patchedDependencies: {
-			"@oh-my-pi/pi-agent-core@18.2.6": "patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch",
-		},
-		patchFiles: ["patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch"],
-		lockPatchedDependencies: {
-			"@oh-my-pi/pi-agent-core@18.2.6": "patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch",
-		},
-	};
-
-	test("a coherent map, patch dir and lock file report nothing", () => {
-		expect(checkPatchCoherence(base)).toEqual([]);
-	});
-
-	test("a spelling difference in the mapped path is not a finding", () => {
-		const findings = checkPatchCoherence({
-			...base,
-			patchedDependencies: {
-				"@oh-my-pi/pi-agent-core@18.2.6": "./patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch",
-			},
-		});
-		expect(findings).toEqual([]);
-	});
-
-	test("a mapped path with no file is an error", () => {
-		const findings = checkPatchCoherence({ ...base, patchFiles: [] });
-		expect(findings).toHaveLength(1);
-		expect(findings[0]?.severity).toBe("error");
-		expect(findings[0]?.message).toContain("points at a missing patch file");
-	});
-
-	test("an unreferenced patch file is an error", () => {
-		const findings = checkPatchCoherence({
-			...base,
-			patchFiles: [...base.patchFiles, "patches/leftover.patch"],
-		});
-		expect(findings).toHaveLength(1);
-		expect(findings[0]?.message).toContain("patches/leftover.patch is not referenced");
-	});
-
-	test("a key whose version is not the package pin is an error", () => {
-		const findings = checkPatchCoherence({
-			...base,
-			patchedDependencies: {
-				"@oh-my-pi/pi-agent-core@18.2.5": "patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch",
-			},
-			lockPatchedDependencies: null,
-		});
-		expect(findings).toHaveLength(1);
-		expect(findings[0]?.message).toContain("@oh-my-pi/pi-agent-core@18.2.5");
-		expect(findings[0]?.message).toContain("pin 18.2.6");
-	});
-
-	test("bun.lock drift is an error in both directions", () => {
-		expect(checkPatchCoherence({ ...base, lockPatchedDependencies: {} })[0]?.message).toContain(
-			"bun.lock has no patchedDependencies entry",
-		);
-		expect(
-			checkPatchCoherence({
-				...base,
-				lockPatchedDependencies: {
-					"@oh-my-pi/pi-agent-core@18.2.6": "patches/other.patch",
-				},
-			})[0]?.message,
-		).toContain("bun.lock maps @oh-my-pi/pi-agent-core@18.2.6 to patches/other.patch");
-		expect(
-			checkPatchCoherence({
-				...base,
-				lockPatchedDependencies: {
-					...base.lockPatchedDependencies,
-					"@oh-my-pi/pi-utils@18.2.6": "patches/utils.patch",
-				},
-			})[0]?.message,
-		).toContain("bun.lock has an extra patchedDependencies entry");
-	});
-
-	test("an unreadable lock file only skips the drift comparison", () => {
-		expect(checkPatchCoherence({ ...base, lockPatchedDependencies: null })).toEqual([]);
 	});
 });
 
@@ -352,7 +268,7 @@ describe("arguments, exit codes and report text", () => {
 
 	test("summarize counts both severities and mirrors the exit code", () => {
 		const warn: Finding = { id: "repo-state", severity: "warn", message: "unpushed commits" };
-		const error: Finding = { id: "patch-coherence", severity: "error", message: "lock drift" };
+		const error: Finding = { id: "sdk-pins", severity: "error", message: "pins disagree" };
 		expect(
 			summarize([warn], { strict: false, offline: true, skipped: ["sdk-pins (--offline)"] }),
 		).toEqual({
@@ -387,10 +303,9 @@ describe("arguments, exit codes and report text", () => {
 	});
 });
 
-/** Scratch repository for the wired run: uniform pins, one patch, docs with drift. */
+/** Scratch repository for the wired run: uniform pins, docs with drift. */
 function writeRepo(): string {
 	const root = tempDir("preflight-");
-	mkdirSync(join(root, "patches"), { recursive: true });
 	mkdirSync(join(root, "docs/src/content/docs/project"), { recursive: true });
 	writeFileSync(
 		join(root, "package.json"),
@@ -399,16 +314,10 @@ function writeRepo(): string {
 				name: "omp-web",
 				version: "0.1.1",
 				dependencies: { "@oh-my-pi/pi-utils": "18.2.6", "solid-js": "^1.9.15" },
-				patchedDependencies: { "@oh-my-pi/pi-utils@18.2.6": "patches/pi-utils.patch" },
 			},
 			null,
 			"\t",
 		),
-	);
-	writeFileSync(join(root, "patches/pi-utils.patch"), "diff\n");
-	writeFileSync(
-		join(root, "bun.lock"),
-		'{\n\t"lockfileVersion": 1,\n\t"patchedDependencies": {\n\t\t"@oh-my-pi/pi-utils@18.2.6": "patches/pi-utils.patch",\n\t},\n}\n',
 	);
 	writeFileSync(
 		join(root, "CHANGELOG.md"),
@@ -474,16 +383,14 @@ function fakeRunner(calls: string[][]): CommandRunner {
 }
 
 describe("runChecks", () => {
-	test("reports git, gh, docs and lockfile drift from a scratch repository", async () => {
+	test("reports git, gh and docs drift from a scratch repository", async () => {
 		const calls: string[][] = [];
 		const root = writeRepo();
 		const { findings, skipped } = await runChecks({ root, offline: false, run: fakeRunner(calls) });
-		const ids = findings.map((finding) => finding.id);
 
 		expect(messages(findings.filter((finding) => finding.id === "sdk-pins"))).toBe(
 			"@oh-my-pi/* pinned at 18.2.6, upstream latest is 18.2.8 (2 versions behind)",
 		);
-		expect(ids).not.toContain("patch-coherence");
 		const repoState = messages(findings.filter((finding) => finding.id === "repo-state"));
 		expect(repoState).toContain("HEAD is 2 commits ahead of origin/main");
 		expect(repoState).toContain("gh is not authenticated");

@@ -65,8 +65,6 @@ Findings carry one of two severities:
 | Severity | Finding |
 | --- | --- |
 | error | The seven `@oh-my-pi/*` pins in `package.json` disagree with each other. |
-| error | The root `patchedDependencies` map and `patches/` disagree: a map key with no patch file, a patch file no key references, or a key whose version suffix is not that package's own pin. |
-| error | `package.json` and `bun.lock` disagree about `patchedDependencies`. |
 | warn | The pinned `@oh-my-pi/*` versions are behind the upstream npm latest (npm-backed). |
 | warn | A stale SDK version literal in a docs page (npm-backed). The frozen clone design and ledger docs, `docs/clone-*.md`, are excluded: they record design-time SDK facts by charter. |
 | warn | Commits are unpushed relative to `origin/main` (the release pushes to `origin/main`, and Pages builds the site from `main`, so unpushed commits also leave the published site stale). |

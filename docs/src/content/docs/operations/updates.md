@@ -36,10 +36,22 @@ Any failure prints to stderr with an `omp-web:` prefix and exits 1.
 3. Compares the manifest version with the installed version. Versions compare by numeric dot-segments, so `1.2` equals `1.2.0` and a non-numeric `dev` build sorts below every release. A manifest that is not newer stops as up to date without touching the install unless `--force` is passed.
 4. Downloads the tarball named by the manifest.
 5. Computes its SHA-256 in memory and compares it with the manifest digest. A mismatch aborts before anything touches disk. Verification covers integrity of the download; it does not vouch for the channel itself, so use the official channel or a mirror you trust, over HTTPS.
-6. Writes the verified bytes to a temporary file, runs `bun remove omp-web` and then `bun add <tarball>` inside the pinned install directory (`~/.omp-web/install/` in the standard layout), mirrors the package's `patchedDependencies` into that directory and re-resolves, and deletes the temporary file on every exit path. Bun applies `patchedDependencies` only from the project root, so a dependency's own map is ignored: the mirror step copies the shipped patch files next to the install (outside `node_modules/omp-web`, which the remove/add cycle replaces) and re-applies them, which is also what keeps the patch active across updates.
+6. Writes the verified bytes to a temporary file, runs `bun remove omp-web` and then `bun add <tarball>` inside the pinned install directory (`~/.omp-web/install/` in the standard layout), and deletes the temporary file on every exit path. Current releases carry `dist-bundle/` only and declare no SDK patch. Update never rewrites the prefix's `patchedDependencies`, so a legacy patch left by a release up to 0.2.0 survives it; see [Clean up a legacy dependency patch](#clean-up-a-legacy-dependency-patch).
 7. Reads the installed package version back to confirm the flip, prints the result, and probes the fleet control plane.
 
 The update installs into omp-web's own pinned project directory, not the shared global Bun store: a global store is flat and shared with the `omp` CLI, which holds one `@oh-my-pi` version of its own. The same-name re-add after a remove is deliberate, because re-adding the same path tarball over an existing install trips Bun's dependency-loop check.
+
+## Clean up a legacy dependency patch
+
+Releases up to 0.2.0 installed a root `patchedDependencies` entry for `@oh-my-pi/pi-agent-core@18.2.6` in `<prefix>/install/package.json` and copied `patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch` next to it. Current releases ship no patches, and nothing removes that legacy state: the installer and `omp-web update` reinstall the package but leave the prefix's `patchedDependencies` map alone, so upgrading an old patched prefix does not clean the patch. Remove it by hand:
+
+```sh
+cd ~/.omp-web/install    # the pinned prefix, the project that owns node_modules
+$EDITOR package.json     # delete ONLY the "@oh-my-pi/pi-agent-core@18.2.6" key from patchedDependencies
+bun install              # re-resolves @oh-my-pi/pi-agent-core without the patch
+```
+
+Remove that one exact key and leave every other mapping in place: other `patchedDependencies` entries (for other packages or versions) are yours, and a mapping whose patch file is missing breaks the next `bun install`. After checking that no remaining mapping names it, delete `patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch`; remove the `patches/` directory too if empty. Nothing outside the prefix changes: the pinned `@oh-my-pi/*` packages then resolve to the unpatched upstream code, and later updates keep them that way.
 
 ## Install or roll back a pinned release
 

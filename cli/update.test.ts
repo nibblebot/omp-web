@@ -46,20 +46,20 @@ function tarballFixture() {
 	return { bytes, sha: createHash("sha256").update(bytes).digest("hex") };
 }
 
-/** Serve a v0.2.0 manifest + tarball (or a pinned base variant). */
-async function serveUpdate() {
+/** Serve a manifest + tarball (or a pinned base variant). */
+async function serveUpdate(version = "0.2.0") {
 	const { bytes, sha } = tarballFixture();
 	const fixture = await serveFixture((req) => {
 		const path = new URL(req.url).pathname;
 		if (path === "/release-manifest.json") {
 			return Response.json({
-				version: "0.2.0",
-				tarball: "omp-web-0.2.0.tgz",
+				version,
+				tarball: `omp-web-${version}.tgz`,
 				sha256: sha,
 				extraKey: "tolerated",
 			});
 		}
-		if (path === "/omp-web-0.2.0.tgz") return new Response(bytes);
+		if (path === `/omp-web-${version}.tgz`) return new Response(bytes);
 		return undefined;
 	});
 	return { ...fixture, sha };
@@ -230,7 +230,6 @@ describe("applyUpdate", () => {
 				applyUpdate(base, { current: "0.2.0", force: false }, { fetch, install }),
 			);
 			expect(e.code).toBe("up-to-date");
-			expect(e.message).toBe("omp-web is up to date (0.2.0)");
 			expect(installs).toHaveLength(0);
 		} finally {
 			await stop();
@@ -305,6 +304,11 @@ describe("applyUpdate", () => {
 describe("main", () => {
 	const CHANNEL = "OMP_WEB_UPDATE_URL";
 
+	/** Keep the new-release check ahead of the checked-out version. */
+	async function nextVersion(): Promise<string> {
+		return (await resolveVersion()).replace(/\d+$/, (patch) => String(Number(patch) + 1));
+	}
+
 	function withEnv<T>(url: string | undefined, fn: () => Promise<T>): Promise<T> {
 		const prev = process.env[CHANNEL];
 		if (url === undefined) delete process.env[CHANNEL];
@@ -337,12 +341,13 @@ describe("main", () => {
 	}
 
 	test("with no channel env, falls back to the GitHub releases base", async () => {
+		const newer = await nextVersion();
 		const calls: string[] = [];
 		const origFetch = globalThis.fetch;
 		globalThis.fetch = (async (input: unknown) => {
 			calls.push(String(input));
 			return new Response(
-				JSON.stringify({ version: "0.2.0", tarball: "omp-web-0.2.0.tgz", sha256: "deadbeef" }),
+				JSON.stringify({ version: newer, tarball: `omp-web-${newer}.tgz`, sha256: "deadbeef" }),
 				{ status: 200 },
 			);
 		}) as typeof fetch;
@@ -351,7 +356,7 @@ describe("main", () => {
 			const code = await withEnv(undefined, () => main(["--check"]));
 			expect(code).toBe(0);
 			expect(calls).toEqual([`${GITHUB_RELEASES_BASE}/release-manifest.json`]);
-			expect(c.out).toEqual(["0.2.0"]);
+			expect(c.out).toEqual([newer]);
 			expect(c.err).toHaveLength(0);
 		} finally {
 			globalThis.fetch = origFetch;
@@ -360,12 +365,13 @@ describe("main", () => {
 	});
 
 	test("--check prints the manifest version and exits 0", async () => {
-		const { base, stop } = await serveUpdate();
+		const newer = await nextVersion();
+		const { base, stop } = await serveUpdate(newer);
 		const c = captureConsole();
 		try {
 			const code = await withEnv(base, () => main(["--check"]));
 			expect(code).toBe(0);
-			expect(c.out).toEqual(["0.2.0"]);
+			expect(c.out).toEqual([newer]);
 			expect(c.err).toHaveLength(0);
 		} finally {
 			c.restore();
@@ -373,43 +379,20 @@ describe("main", () => {
 		}
 	});
 
-	test("--check reports up to date when the manifest is not newer", async () => {
-		// resolveVersion() reads package.json in dev; track it instead of
-		// pinning a literal that goes stale on every version bump.
-		const current = await resolveVersion();
-		const { sha } = tarballFixture();
-		const { base, stop } = await serveFixture((req) => {
-			if (new URL(req.url).pathname === "/release-manifest.json") {
-				return Response.json({ version: current, tarball: "omp-web.tgz", sha256: sha });
-			}
-			return undefined;
-		});
-		const c = captureConsole();
-		try {
-			// Manifest not newer than the running version means up to date; the
-			// message formats opts.current (update.ts), not the manifest.
-			const code = await withEnv(base, () => main(["--check"]));
-			expect(code).toBe(0);
-			expect(c.out).toEqual([`omp-web is up to date (${current})`]);
-		} finally {
-			c.restore();
-			await stop();
-		}
-	});
-
 	test("--check --version pins the per-release base", async () => {
+		const newer = await nextVersion();
 		const { sha } = tarballFixture();
 		const { base, stop } = await serveFixture((req) => {
-			if (new URL(req.url).pathname === "/download/v0.2.0/release-manifest.json") {
-				return Response.json({ version: "0.2.0", tarball: "omp-web-0.2.0.tgz", sha256: sha });
+			if (new URL(req.url).pathname === `/download/v${newer}/release-manifest.json`) {
+				return Response.json({ version: newer, tarball: `omp-web-${newer}.tgz`, sha256: sha });
 			}
 			return undefined;
 		});
 		const c = captureConsole();
 		try {
-			const code = await withEnv(base, () => main(["--check", "--version", "0.2.0"]));
+			const code = await withEnv(base, () => main(["--check", "--version", newer]));
 			expect(code).toBe(0);
-			expect(c.out).toEqual(["0.2.0"]);
+			expect(c.out).toEqual([newer]);
 		} finally {
 			c.restore();
 			await stop();

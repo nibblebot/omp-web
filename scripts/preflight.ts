@@ -2,10 +2,10 @@
  * Standalone release preflight: `bun scripts/preflight.ts [--strict] [--json] [--offline]`.
  *
  * Reports the drift that makes a release wrong or the published docs stale:
- * @oh-my-pi pin disagreement and lag behind upstream npm, the patch map
- * against patches/ and bun.lock, unpushed commits, gh auth, unchecked docs
- * boxes, dead relative doc links, a documented gate list that disagrees with
- * GATE_COMMANDS, and stale SDK version literals in the docs. GitHub Pages
+ * @oh-my-pi pin disagreement and lag behind upstream npm, unpushed commits,
+ * gh auth, unchecked docs boxes, dead relative doc links, a documented gate
+ * list that disagrees with GATE_COMMANDS, and stale SDK version literals in
+ * the docs. GitHub Pages
  * builds the site from main, so the repo-state unpushed-commit warning is also
  * the stale-site signal.
  *
@@ -29,7 +29,6 @@ export type Severity = "error" | "warn";
 /** One id per check below; every finding carries the id of its check. */
 export type CheckId =
 	| "sdk-pins"
-	| "patch-coherence"
 	| "repo-state"
 	| "docs-checkboxes"
 	| "docs-links"
@@ -226,98 +225,6 @@ export function publishedSdkVersions(sweep: UpstreamSweep): ReadonlySet<string> 
 	return versions.size === 0 ? null : versions;
 }
 
-export interface PatchCoherenceInput {
-	/** package.json dependencies (the pins the patch keys must match). */
-	dependencies: Record<string, string>;
-	/** package.json patchedDependencies. */
-	patchedDependencies: Record<string, string>;
-	/** Every file under patches/, as repo-relative POSIX paths. */
-	patchFiles: readonly string[];
-	/** bun.lock's patchedDependencies, or null when the lock file was unreadable. */
-	lockPatchedDependencies: Record<string, string> | null;
-}
-
-/** Same file, different spelling: `./x` vs `x`, backslashes, doubled slashes. */
-export function normalizePatchPath(path: string): string {
-	return path
-		.replace(/\\/g, "/")
-		.replace(/^\.\//, "")
-		.replace(/\/{2,}/g, "/");
-}
-
-/**
- * `patch-coherence`: the patch map in package.json, the files in patches/, and
- * bun.lock's copy of the map describe one thing, so any disagreement is an
- * error (bun installs the patch it finds in the lock file, not the one the
- * release README points at).
- */
-export function checkPatchCoherence(input: PatchCoherenceInput): Finding[] {
-	const findings: Finding[] = [];
-	const files = new Set(input.patchFiles.map(normalizePatchPath));
-	const referenced = new Set<string>();
-	for (const [key, target] of Object.entries(input.patchedDependencies)) {
-		const path = normalizePatchPath(target);
-		referenced.add(path);
-		if (!files.has(path)) {
-			findings.push({
-				id: "patch-coherence",
-				severity: "error",
-				message: `patchedDependencies["${key}"] points at a missing patch file: ${target}`,
-			});
-		}
-		const at = key.lastIndexOf("@");
-		if (at > 0) {
-			const name = key.slice(0, at);
-			const version = key.slice(at + 1);
-			const pin = input.dependencies[name];
-			if (pin !== undefined && pin !== version) {
-				findings.push({
-					id: "patch-coherence",
-					severity: "error",
-					message: `patchedDependencies key ${key} does not match the ${name} pin ${pin}`,
-				});
-			}
-		}
-	}
-	for (const file of files) {
-		if (referenced.has(file)) continue;
-		findings.push({
-			id: "patch-coherence",
-			severity: "error",
-			message: `${file} is not referenced by patchedDependencies (orphan patch file)`,
-		});
-	}
-	if (input.lockPatchedDependencies === null) return findings;
-	const lock = input.lockPatchedDependencies;
-	for (const [key, target] of Object.entries(input.patchedDependencies)) {
-		const locked = lock[key];
-		if (locked === undefined) {
-			findings.push({
-				id: "patch-coherence",
-				severity: "error",
-				message: `bun.lock has no patchedDependencies entry for ${key}`,
-			});
-			continue;
-		}
-		if (normalizePatchPath(locked) !== normalizePatchPath(target)) {
-			findings.push({
-				id: "patch-coherence",
-				severity: "error",
-				message: `bun.lock maps ${key} to ${locked}, package.json maps it to ${target}`,
-			});
-		}
-	}
-	for (const key of Object.keys(lock)) {
-		if (input.patchedDependencies[key] !== undefined) continue;
-		findings.push({
-			id: "patch-coherence",
-			severity: "error",
-			message: `bun.lock has an extra patchedDependencies entry: ${key}`,
-		});
-	}
-	return findings;
-}
-
 /** Captured result of one command; status -1 when the spawn itself failed. */
 export interface CommandResult {
 	status: number;
@@ -444,15 +351,6 @@ export function docsMarkdownFiles(root: string): string[] {
 		}
 	}
 	return [...files].sort();
-}
-
-/** Every file under patches/, repo-relative (empty when the directory is absent). */
-export function patchFiles(root: string): string[] {
-	const dir = join(root, "patches");
-	if (!existsSync(dir)) return [];
-	return [...new Bun.Glob("**/*").scanSync({ cwd: dir })]
-		.map((rel) => `patches/${rel.split(sep).join("/")}`)
-		.sort();
 }
 
 /** One-line excerpt for a report detail (trimmed, capped at 120 chars). */
@@ -693,25 +591,6 @@ function readJsonObject(path: string, label: string): Record<string, unknown> {
 	return parsed as Record<string, unknown>;
 }
 
-/** bun.lock's patchedDependencies map, or null (with a skip note) when it cannot be read. */
-function lockPatchedDependencies(root: string, skipped: string[]): Record<string, string> | null {
-	const path = join(root, "bun.lock");
-	if (!existsSync(path)) {
-		skipped.push(
-			"patch-coherence (bun.lock is missing): package.json compared against patches/ only",
-		);
-		return null;
-	}
-	try {
-		const lock = Bun.JSONC.parse(readFileSync(path, "utf8")) as unknown;
-		if (typeof lock !== "object" || lock === null) throw new Error("not an object");
-		return stringMap((lock as Record<string, unknown>).patchedDependencies);
-	} catch (err) {
-		skipped.push(`patch-coherence (bun.lock is unreadable: ${errorMessage(err)})`);
-		return null;
-	}
-}
-
 /** One `npm view <pkg> version versions --json` per package, in parallel. */
 export async function sweepUpstreams(
 	pins: readonly SdkPin[],
@@ -775,21 +654,11 @@ export async function runChecks(opts: PreflightOptions): Promise<PreflightOutcom
 
 	const pkg = readJsonObject(join(root, "package.json"), "package.json");
 	const dependencies = stringMap(pkg.dependencies);
-	const patchedDependencies = stringMap(pkg.patchedDependencies);
 	const pins = sdkPins(dependencies);
 
 	const sweep = opts.offline ? null : await sweepUpstreams(pins, run);
 	findings.push(...checkSdkPins(pins, sweep));
 	if (sweep === null) skipped.push("sdk-pins (--offline): upstream npm versions not queried");
-
-	findings.push(
-		...checkPatchCoherence({
-			dependencies,
-			patchedDependencies,
-			patchFiles: patchFiles(root),
-			lockPatchedDependencies: lockPatchedDependencies(root, skipped),
-		}),
-	);
 
 	findings.push(...(await checkRepoState(run)));
 

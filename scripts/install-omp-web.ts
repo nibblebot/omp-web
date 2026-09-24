@@ -102,28 +102,12 @@ const addCode = (await add.exited) ?? 1;
 if (addCode !== 0) fail(`bun add failed (exit ${addCode})`);
 if (!existsSync(bundlePath)) fail(`bundle missing after install: ${bundlePath}`);
 
-// 2. Mirror the installed package's `patchedDependencies` into the install dir
-//    and re-resolve. bun applies patches only from the ROOT project's
-//    package.json; the map the tarball itself declares is ignored, so without
-//    this the pinned @oh-my-pi packages would resolve unpatched. The package
-//    ships the mirror script + patch files; a release that predates it ships
-//    no patches at all, so the missing script is not an error.
-const mirror = join(installDir, "node_modules", "omp-web", "scripts", "mirror-patches.ts");
-if (existsSync(mirror)) {
-	const mirrored = Bun.spawn([process.execPath, mirror, installDir], {
-		cwd: installDir,
-		stdout: "inherit",
-		stderr: "inherit",
-	});
-	if (((await mirrored.exited) ?? 1) !== 0) fail("dependency patch mirroring failed");
-}
-
-// 3. Link the bin.
+// 2. Link the bin.
 mkdirSync(binDir, { recursive: true });
 rmSync(binPath, { force: true });
 symlinkSync(bundlePath, binPath);
 
-// 4. Drop any stale `bun install -g` copy (the @oh-my-pi globals stay; they are omp's).
+// 3. Drop any stale `bun install -g` copy (the @oh-my-pi globals stay; they are omp's).
 const stale = Bun.spawn(["bun", "remove", "-g", "omp-web"]);
 const staleCode = (await stale.exited) ?? 1;
 if (staleCode !== 0 && staleCode !== 1)

@@ -49,10 +49,11 @@ The installer and the updater own one directory tree, separate from all fleet da
 | `<prefix>/install/package.json` | a private anchor project, so Bun never attaches the install to an ancestor project directory |
 | `<prefix>/install/node_modules/omp-web/` | the released `omp-web` package with its own pinned `@oh-my-pi/*` dependencies |
 | `<prefix>/install/node_modules/omp-web/dist-bundle/cli.js` | the bundled entrypoint; the UI assets are copied next to it inside `dist-bundle/` |
-| `<prefix>/install/patches/` | the released dependency patch files, mirrored there by the installer/updater and declared in `<prefix>/install/package.json` (`patchedDependencies`) |
+| `<prefix>/install/patches/` | legacy only: releases up to 0.2.0 copied `patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch` here and declared it in `<prefix>/install/package.json`. No patch files ship with a current install, and neither the installer nor `omp-web update` removes leftovers; see [Updates](/operations/updates/) for the manual cleanup |
 | `$BUN_INSTALL/bin/omp-web` (default `~/.bun/bin/omp-web`) | the symlink to that entrypoint, the command on your `PATH` |
 
 - The one-line installer downloads `omp-web-<version>.tgz` and `release-manifest.json`, verifies the tarball SHA-256 against the manifest, installs into the pinned directory, and links the command. An existing pinned install is upgraded in place.
+- Current releases ship no dependency patches: the tarball carries `dist-bundle/` only, and a fresh prefix installs the pinned `@oh-my-pi/*` packages exactly as published upstream. An install made by a release up to 0.2.0 keeps its `patchedDependencies` entry for `@oh-my-pi/pi-agent-core@18.2.6` and the copied patch file until they are removed by hand; [Updates](/operations/updates/) has the steps.
 - `omp-web update` verifies the release tarball the same way, stages it in the system temp directory, reinstalls it in the same pinned directory, and removes the temporary file. It does not move an install and does not touch the data home.
 - A source checkout installs the same layout with `bun run install:omp-web [tarball] [--prefix <dir>] [--bin-dir <dir>]`. The defaults match the release installer: prefix `~/.omp-web`, bin directory `$BUN_INSTALL/bin` (`~/.bun/bin`).
 - The prefix and the bin directory are decided at install time. Choosing a different data home never moves the code, and `~/.omp-web/install/` belongs to the installer even when the data home is also `~/.omp-web`.

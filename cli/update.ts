@@ -259,22 +259,6 @@ async function realInstall(tarballPath: string): Promise<number> {
 	});
 	const addCode = (await add.exited) ?? 1;
 	if (addCode !== 0) return addCode;
-	// Mirror the freshly installed package's `patchedDependencies` into the
-	// install dir and re-resolve. bun applies patches only from the ROOT
-	// project's package.json, so an update must re-copy the (version-keyed)
-	// patch files shipped by the new release and re-apply them; the previous
-	// release's entries stayed inert during `bun add` above. Releases that
-	// predate the mirror script carry no patches, so its absence is fine.
-	const mirror = join(installDir, "node_modules", "omp-web", "scripts", "mirror-patches.ts");
-	if (existsSync(mirror)) {
-		const mirrored = Bun.spawn([process.execPath, mirror, installDir], {
-			cwd: installDir,
-			stdout: "inherit",
-			stderr: "inherit",
-			env: process.env,
-		});
-		if (((await mirrored.exited) ?? 1) !== 0) return 1;
-	}
 	// Read back the installed version. The bin symlink target is stable, so
 	// the package.json version is the ground truth for "did it actually flip".
 	try {

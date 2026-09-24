@@ -6,11 +6,7 @@
 	"bin": {
 		"omp-web": "dist-bundle/cli.js"
 	},
-	"files": [
-		"dist-bundle/",
-		"patches/",
-		"scripts/mirror-patches.ts"
-	],
+	"files": ["dist-bundle/"],
 	"scripts": {
 		"dev": "bun scripts/dev.ts fleet",
 		"dev:server": "bun --watch server/index.ts",
@@ -58,8 +54,5 @@
 		"oxlint": "^1.81.0",
 		"vite": "^8.2.2",
 		"vite-plugin-solid": "^2.11.14"
-	},
-	"patchedDependencies": {
-		"@oh-my-pi/pi-agent-core@18.2.6": "patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch"
 	}
 }

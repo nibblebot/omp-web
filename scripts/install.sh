@@ -208,19 +208,6 @@ install_via_bun() {
 		exit 1
 	fi
 
-	# Mirror the package's patchedDependencies into this project and re-resolve:
-	# bun applies patches only from the ROOT package.json, so the map the
-	# tarball declares is ignored and the pinned @oh-my-pi packages would run
-	# unpatched. Releases that predate the shipped mirror script carry no
-	# patches, so its absence is not an error.
-	MIRROR="$INSTALL_DIR/install/node_modules/$PACKAGE/scripts/mirror-patches.ts"
-	if [ -f "$MIRROR" ]; then
-		if ! (cd "$INSTALL_DIR/install" && bun "$MIRROR" "$INSTALL_DIR/install"); then
-			echo "Failed to apply dependency patches for $PACKAGE"
-			exit 1
-		fi
-	fi
-
 	# Link the bin and verify it resolves to the pinned install.
 	mkdir -p "$BIN_DIR"
 	ln -sf "$INSTALL_DIR/install/node_modules/omp-web/dist-bundle/cli.js" "$BIN_DIR/omp-web"
