@@ -1,12 +1,14 @@
 {
 	"name": "omp-web",
 	"private": true,
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"type": "module",
 	"bin": {
 		"omp-web": "dist-bundle/cli.js"
 	},
-	"files": ["dist-bundle/"],
+	"files": [
+		"dist-bundle/"
+	],
 	"scripts": {
 		"dev": "bun scripts/dev.ts fleet",
 		"dev:server": "bun --watch server/index.ts",

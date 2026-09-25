@@ -1,3 +1,10 @@
+## v0.2.1, 2026-09-25
+
+omp-web 0.2.1 uses the unpatched SDK and removes the legacy migration path.
+
+### Maintenance & other
+- Use the unpatched SDK and remove the legacy migration path. ([df29af5942edb39d4b23e8f232e4803a63022b07](https://github.com/nibblebot/omp-web/commit/df29af5942edb39d4b23e8f232e4803a63022b07))
+
 ## v0.2.0, 2026-09-21
 
 omp-web 0.2.0 removes the standalone single-session web UI mode, with omp-session now serving the wire API only. It adds preflight drift reports, gate E2E and packed-artifact smoke tests, and main-based docs deployment, plus fixes including an SDK bump to 18.2.6 with patched tokenizer estimates and at-most-once replay of unanswered calls.
