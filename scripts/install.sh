@@ -17,7 +17,7 @@ set -e
 # Test-only env overrides (never documented in the README): OMP_WEB_INSTALLER_API
 # redirects the GitHub API calls, OMP_WEB_DOWNLOAD_BASE the release-asset
 # downloads, and OMP_WEB_INSTALL_DIR the data home, so the offline E2E
-# (scripts/test-onboard.ts step 2b) can exercise the script against a local
+# (e2e/onboarding.ts step 2b) can exercise the script against a local
 # fixture without network.
 
 REPO="nibblebot/omp-web"

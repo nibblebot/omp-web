@@ -7,7 +7,7 @@ A [clone workspace](/fleet/clone-workspaces/) runs the same session daemon every
 
 ## What runs in a clone
 
-- **The session daemon.** The provider launches the runtime entry under bun with `--omp-workspace-token=<token>` as the last argv word: `server/index.ts` in a development checkout, or the installed bundle's `session` mode. `OMP_RUNTIME_ENTRY` and `OMP_RUNTIME_BIN` override the resolved entry and binary.
+- **The session daemon.** The provider launches the runtime entry under bun with `--omp-workspace-token=<token>` as the last argv word: `apps/session/index.ts` in a development checkout, or the installed bundle's `session` mode. `OMP_RUNTIME_ENTRY` and `OMP_RUNTIME_BIN` override the resolved entry and binary.
 - **A daemon with no inbound service.** Nothing dials a clone. It binds an ephemeral port (the bwrap provider appends `--port 0` unless a port is pinned, so sandboxes that share a host network namespace cannot collide) and dials the fleet's callback pair outbound: `POST /callback/up` for the NDJSON upload, `GET /callback/down` for the SSE downlink, and daemon-initiated `POST /callback/bulk/<correlationId>` for large transfers. The enrollment credential is 256-bit and generation-scoped, and it is read from the provider-state `callback-env.json` handoff (mode 0600) that the fleet writes before the runtime starts. Enrollment credentials ride request headers only, never URL paths or query strings.
 - **A private home.** `HOME` is the volume's `.home/`, the agent dir is `.home/agent` (`PI_CODING_AGENT_DIR`), and the daemon writes sessions into `.home/agent/sessions`. The same volume holds `.checkout/`, the working clone.
 - **A pinned checkout.** Preparation resolves the initial commit once, persists the pin in `.omp-workspace-init.json` before cloning, clones into `.checkout/` with an independent object store (`--no-hardlinks`, no alternates), and writes the verified marker last. Uncommitted source files are never transferred. The bwrap provider prepares fleet-side; the Kubernetes provider prepares in-pod at the same persisted pin, so a replacement pod never re-clones or re-resolves.
@@ -42,15 +42,15 @@ Seeding is best-effort and never overwrites an existing file. It runs again duri
 
 ## The Kubernetes session-runtime image
 
-`runtime/image/` holds the reproducible image definition for the kubernetes provider. Build it from the repo root:
+`apps/session/Containerfile` holds the reproducible image definition for the kubernetes provider (with `entrypoint.sh`, `prepare-inpod.ts`, and `image-README.md` beside it). Build it from the repo root:
 
 ```sh
-docker build -f runtime/image/Containerfile -t <image> .
+docker build -f apps/session/Containerfile -t <image> .
 ```
 
-- **Two stages.** The first resolves the repo's pinned `bun.lock` with `bun install --frozen-lockfile --production`; the second is a lean runtime stage with git, ca-certificates, and tini, carrying `package.json`, `server/`, `shared/`, and `runtime/`.
-- **The same runtime entry as bwrap.** The image runs the same runtime entry the bwrap provider launches (`server/index.ts`), so session behavior matches across providers.
-- **One initialization per volume.** tini is PID 1 and runs `entrypoint.sh`, which requires `OMP_WORKSPACE_ROOT`, `OMP_WORKSPACE_ID`, and `OMP_WORKSPACE_GENERATION`, prepares a new volume exactly once (only when the verified `.omp-workspace-init.json` marker is absent, through `runtime/image/prepare-inpod.ts` over `runtime/prepare-workspace.ts`), then execs the daemon with `--omp-workspace-token`. A pod that starts on a claim that already holds the marker never re-clones and never re-resolves.
+- **Two stages.** The first resolves the repo's pinned `bun.lock` with `bun install --frozen-lockfile --production`; the second is a lean runtime stage with git, ca-certificates, and tini, carrying `package.json`, `apps/`, and `lib/`.
+- **The same runtime entry as bwrap.** The image runs the same runtime entry the bwrap provider launches (`apps/session/index.ts`), so session behavior matches across providers.
+- **One initialization per volume.** tini is PID 1 and runs `entrypoint.sh`, which requires `OMP_WORKSPACE_ROOT`, `OMP_WORKSPACE_ID`, and `OMP_WORKSPACE_GENERATION`, prepares a new volume exactly once (only when the verified `.omp-workspace-init.json` marker is absent, through `apps/session/prepare-inpod.ts` over `lib/runtime/prepare-workspace.ts`), then execs the daemon with `--omp-workspace-token`. A pod that starts on a claim that already holds the marker never re-clones and never re-resolves.
 - **Unprivileged.** The container runs as user and group 10001 with a read-only root filesystem, all capabilities dropped, `allowPrivilegeEscalation: false`, `runAsNonRoot`, and the `RuntimeDefault` seccomp profile. `/workspace` (the PVC) and an emptyDir `/tmp` are writable, and the pod never mounts a service-account token.
 - **No baked secrets.** Model and tool credentials arrive as `secretKeyRef` environment entries from the profile, and the callback enrollment arrives as pod environment from the fleet's handoff file.
 

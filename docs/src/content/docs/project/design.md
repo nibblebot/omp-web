@@ -9,7 +9,7 @@ omp-web is a mission-control console for one operator supervising many agent ses
 | --- | --- |
 | Product audience, positioning, capabilities, and constraints | [PRODUCT.md](https://github.com/nibblebot/omp-web/blob/main/PRODUCT.md) |
 | Design intent, principles, named rules, and component vocabulary | [DESIGN.md](https://github.com/nibblebot/omp-web/blob/main/DESIGN.md) |
-| Shipped token values and theme palettes | [`src/styles/tokens.css`](https://github.com/nibblebot/omp-web/blob/main/src/styles/tokens.css) |
+| Shipped token values and theme palettes | [`apps/web/styles/tokens.css`](https://github.com/nibblebot/omp-web/blob/main/apps/web/styles/tokens.css) |
 | Exact values, theme slot inventory, and reference HTML/CSS recipes | [`.impeccable/design.json`](https://github.com/nibblebot/omp-web/blob/main/.impeccable/design.json) |
 
 Where this page and a canonical source disagree, the canonical source wins.
@@ -44,24 +44,24 @@ The named rules are the system's load-bearing constraints. Read their full state
 
 ## Where UI tokens live
 
-`src/styles/tokens.css` is the shipped source of truth. It defines the semantic color slots (surfaces, the text ladder, the accent, status trios, diff washes, and the data-viz ramp), the shared scales (radius, spacing, elevation, motion, focus ring, type, and z-order), and the `:root[data-theme="..."]` palettes for six themes: the default dark console plus light, catppuccin-mocha, catppuccin-latte, omp-dark, and omp-light. Themes override color slots only; radius, spacing, and type stay shared across all of them.
+`apps/web/styles/tokens.css` is the shipped source of truth. It defines the semantic color slots (surfaces, the text ladder, the accent, status trios, diff washes, and the data-viz ramp), the shared scales (radius, spacing, elevation, motion, focus ring, type, and z-order), and the `:root[data-theme="..."]` palettes for six themes: the default dark console plus light, catppuccin-mocha, catppuccin-latte, omp-dark, and omp-light. Themes override color slots only; radius, spacing, and type stay shared across all of them.
 
-Theme and font size are client-local preferences. `index.html` resolves the stored theme before first paint, `src/prefs/theme.ts` applies it at runtime, and the root font size is user-settable from 12 to 18px. Every type step is rem-based so it rides that dial. Components consume tokens; they never hardcode color, radius, or spacing values.
+Theme and font size are client-local preferences. `apps/web/index.html` resolves the stored theme before first paint, `apps/web/prefs/theme.ts` applies it at runtime, and the root font size is user-settable from 12 to 18px. Every type step is rem-based so it rides that dial. Components consume tokens; they never hardcode color, radius, or spacing values.
 
 ### The canonical design schema
 
 `.impeccable/design.json` is the machine-readable companion to DESIGN.md (schemaVersion 2). It records the narrative (north star, key characteristics, named rules, and do's and don'ts), the color slots with display names and tonal ramps, typography roles, shadows, motion, breakpoints, per-theme token values, and a components array of reference HTML and CSS recipes.
 
-Use it when you need exact values, a theme slot inventory, or a reference recipe. Do not treat it as a second source of truth: DESIGN.md owns intent and rules, and `src/styles/tokens.css` owns shipped behavior. Changes to the system update all three together.
+Use it when you need exact values, a theme slot inventory, or a reference recipe. Do not treat it as a second source of truth: DESIGN.md owns intent and rules, and `apps/web/styles/tokens.css` owns shipped behavior. Changes to the system update all three together.
 
 The same directory holds dated critique snapshots under `.impeccable/critique/`. Those snapshots record a review from a point in time and are not a current work list; remediation work has landed since. Verify any finding against the current code and the [changelog](https://github.com/nibblebot/omp-web/blob/main/CHANGELOG.md) before acting on it.
 
 ## Component and style conventions
 
-- One global stylesheet split by domain under `src/styles/`: base, app, chat, tools, prompt, modals, settings, fleet, and usage, with the transcripts view bringing its own `src/tx/tx.css`. `src/styles.css` is the single `@import` entry and its order is load-bearing, so new rules go where the existing cascade stays intact.
+- One global stylesheet split by domain under `apps/web/styles/`: base, app, chat, tools, prompt, modals, settings, fleet, and usage, with the transcripts view bringing its own `apps/web/tx/tx.css`. `apps/web/styles.css` is the single `@import` entry and its order is load-bearing, so new rules go where the existing cascade stays intact.
 - Plain kebab-case, feature-prefixed class names such as `msg-*`, `tool-*`, and `daemon-*`. No CSS modules and no utility framework.
 - The component vocabulary comes from DESIGN.md: one primary button per view with quiet ghost and danger variants; pill chips and 8px status dots; one shared tool-card shell for every tool render; user messages in bubbles with assistant output edge-to-edge; a single global focus ring; centered modals and right-docked sheets; and the roster row as the signature component.
-- UI components are presentational. They read the `src/state.ts` store reactively, mutate only through exported store actions, and express visual state through classes and DOM attributes such as `data-status`.
+- UI components are presentational. They read the `apps/web/state.ts` store reactively, mutate only through exported store actions, and express visual state through classes and DOM attributes such as `data-status`.
 - Repository-wide engineering conventions for the UI, from the client state model to formatting and verification, live in [AGENTS.md](https://github.com/nibblebot/omp-web/blob/main/AGENTS.md).
 
 ## Accessibility and responsive expectations
@@ -77,7 +77,7 @@ The same directory holds dated critique snapshots under `.impeccable/critique/`.
 
 1. Read DESIGN.md before changing visuals and PRODUCT.md before changing what a surface is for.
 2. Build from existing tokens and the component vocabulary. If a value is missing, extend the shared scale instead of hardcoding a one-off.
-3. When a token, theme, or scale rung changes, update `src/styles/tokens.css`, DESIGN.md, and `.impeccable/design.json` together.
+3. When a token, theme, or scale rung changes, update `apps/web/styles/tokens.css`, DESIGN.md, and `.impeccable/design.json` together.
 4. Keep themes to color-only overrides.
 5. Verify UI changes in the running app (`bun run dev`), including the 720px breakpoint and reduced-motion behavior.
 

@@ -165,7 +165,7 @@ Error behavior:
 - Idle auto-exit applies when nothing suppresses it: no attached clients, no streaming turn, no queued messages, no pending dialog, no in-flight tool call, and no live collaboration room. The session daemon checks on a 15 second interval, logs `omp-session: idle for <ms>ms; shutting down`, and exits 0. The session transcript is durable, so the fleet marks the row asleep and can wake it with `--resume`.
 - A bind failure aborts startup.
 
-In a source checkout the same session daemon runs as `bun server/index.ts` or `bun run dev:server`. See [CLI overview](/cli/overview/) and [Run a session daemon](/cli/session-daemon/).
+In a source checkout the same session daemon runs as `bun apps/session/index.ts` or `bun run dev:server`. See [CLI overview](/cli/overview/) and [Run a session daemon](/cli/session-daemon/).
 
 ## Fleet control verbs
 
@@ -418,7 +418,7 @@ Prints the resolved version and exits 0. Resolution order: the build-time stamp,
 Collaboration rooms are operated outside the browser. The collaboration CLI is a repository script, not part of the installed `omp-web` command surface; there is no `omp-web collab`. In a checkout:
 
 ```
-bun server/collab-cli.ts [--join] [--view] [--stop] [--port <n>]
+bun apps/cli/collab-cli.ts [--join] [--view] [--stop] [--port <n>]
 bun run collab -- [--join] [--view] [--stop] [--port <n>]
 ```
 
