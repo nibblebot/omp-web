@@ -15,7 +15,7 @@
  * node builtins. Never server/ or src/.
  */
 import type { FleetLogStore, StoredSessionInfo } from "./log-store";
-import type { RawEntry } from "../../lib/wire/stats-types";
+import type { RawEntry } from "#lib/wire/stats-types";
 import { parseLine } from "./stats-jsonl";
 
 /** One stored main file's head facts, read from the stored bytes. */

@@ -32,7 +32,7 @@ import type {
 	StoredWorkspaceSummary,
 	TranscriptPage,
 	RawEntry,
-} from "../../lib/wire/stats-types";
+} from "#lib/wire/stats-types";
 import { parseLine } from "./stats-jsonl";
 
 // ---------------------------------------------------------------------------

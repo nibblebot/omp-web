@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { SubagentMessagesResult } from "../../../../lib/wire/protocol";
+import type { SubagentMessagesResult } from "#lib/wire/protocol";
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import { call, type SubagentInfo } from "../../state";
 import { ArrowLeftIcon } from "../shared/icons";

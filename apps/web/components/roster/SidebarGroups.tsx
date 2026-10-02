@@ -1,5 +1,5 @@
 import { createMemo, createSignal, For, Show, type Component } from "solid-js";
-import type { DaemonEntry, RegisteredProject } from "../../../../lib/wire/protocol";
+import type { DaemonEntry, RegisteredProject } from "#lib/wire/protocol";
 import { setState, state } from "../../state";
 import { spawnDaemon } from "../../store/projects";
 import { KebabMenu } from "../shared/KebabMenu";

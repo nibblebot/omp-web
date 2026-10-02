@@ -10,8 +10,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ProviderProfile } from "../../../lib/runtime/provider-protocol";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import type { ProviderProfile } from "#lib/runtime/provider-protocol";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { runProfilePreflight } from "../preflight";
 
 afterAll(cleanupTempDirs);

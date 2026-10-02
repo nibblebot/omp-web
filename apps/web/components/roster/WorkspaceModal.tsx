@@ -1,5 +1,5 @@
 import { createEffect, createSignal, For, onMount, Show, type Component } from "solid-js";
-import type { ProjectBranch, ProjectEntry } from "../../../../lib/wire/protocol";
+import type { ProjectBranch, ProjectEntry } from "#lib/wire/protocol";
 import {
 	currentWorkspaceCreationPrefs,
 	rememberWorkspaceCreationPrefs,

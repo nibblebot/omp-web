@@ -2,12 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { UsageReport } from "@oh-my-pi/pi-ai";
 import { createStore, produce, reconcile } from "solid-js/store";
-import {
-	OMP_PROTO,
-	SSE_EVENT_NAME,
-	SSE_SILENCE_DEADLINE_MS,
-	daemonsKey,
-} from "../../lib/wire/protocol";
+import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "#lib/wire/protocol";
 import type {
 	AvailableSlashCommand,
 	DaemonEntry,
@@ -20,8 +15,8 @@ import type {
 	ServerFrame,
 	SettingsModel,
 	WebSessionState,
-} from "../../lib/wire/protocol";
-import { SSE_PING_EVENT } from "../../lib/wire/sse";
+} from "#lib/wire/protocol";
+import { SSE_PING_EVENT } from "#lib/wire/sse";
 import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
 import { scanImages } from "./text/images";
 import type { UsageLike } from "./usage/usage";

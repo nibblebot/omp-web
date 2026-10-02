@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import type { RegisteredProject } from "../../../lib/wire/protocol";
+import type { RegisteredProject } from "#lib/wire/protocol";
 import { Registry, type RegistryEntry } from "../registry";
 import type { SpawnSupervisor } from "../supervisor";
 import {

@@ -27,7 +27,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createDaemonControl, type DaemonControl, type DaemonControlDeps } from "../daemon-control";
-import type { CallbackEnvelope, CallbackKind } from "../../../lib/wire/callback-protocol";
+import type { CallbackEnvelope, CallbackKind } from "#lib/wire/callback-protocol";
 
 const STREAM = "browser/test-conn";
 

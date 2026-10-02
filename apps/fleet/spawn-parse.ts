@@ -19,7 +19,7 @@
  *   value first (see shellQuote; supervisor.ts #launch does this).
  */
 
-import { OMP_SESSION_PREFIX, type StdoutContractLine } from "../../lib/wire/protocol";
+import { OMP_SESSION_PREFIX, type StdoutContractLine } from "#lib/wire/protocol";
 
 /**
  * `{key}` substitution for spawn templates. Unknown keys are left verbatim

@@ -31,7 +31,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { FleetLogStore, LogStoreError, type LogChunk, type LogStoreErrorCode } from "../log-store";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 afterAll(cleanupTempDirs);
 

@@ -96,10 +96,10 @@ import {
 	type ProviderProfile,
 	type ProviderRequest,
 	type ProviderResponse,
-} from "../../lib/runtime/provider-protocol";
-import type { ProviderErrorCode } from "../../lib/runtime/provider-protocol";
-import { acquireFileLock } from "../../lib/platform/file-lock";
-import { ENV_ALLOW_KEYS } from "../../lib/runtime/bwrap-args";
+} from "#lib/runtime/provider-protocol";
+import type { ProviderErrorCode } from "#lib/runtime/provider-protocol";
+import { acquireFileLock } from "#lib/platform/file-lock";
+import { ENV_ALLOW_KEYS } from "#lib/runtime/bwrap-args";
 import type { PreflightCheck, PreflightResult } from "./preflight";
 
 // ---------------------------------------------------------------------------

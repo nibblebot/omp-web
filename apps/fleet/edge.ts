@@ -102,16 +102,16 @@ import {
 	type RegisteredProject,
 	type ServerFrame,
 	type SessionScopedFrame,
-} from "../../lib/wire/protocol";
+} from "#lib/wire/protocol";
 import {
 	encodeSseEvent,
 	parseSseUnits,
 	SSE_PING_BLOCK,
 	SSE_PING_EVENT,
 	SseRing,
-} from "../../lib/wire/sse";
-import { CALLBACK_CONTROL_STREAM_ID } from "../../lib/wire/callback-protocol";
-import type { CallbackEnvelope } from "../../lib/wire/callback-protocol";
+} from "#lib/wire/sse";
+import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
+import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
 import type { FleetConfig } from "./config";
 import { validateProjectPath } from "./discovery";
 import { EMBEDDED_DIST } from "./embedded-dist";

@@ -30,7 +30,7 @@ import type {
 	ToolGlobal,
 	RawEntry,
 	LongestCall,
-} from "../../lib/wire/stats-types";
+} from "#lib/wire/stats-types";
 
 // ---------------------------------------------------------------------------
 // GET /ctl/stats/tools returns a global tool breakdown across all sessions.

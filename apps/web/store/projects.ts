@@ -1,4 +1,4 @@
-import type { ClientCommand, ProjectBranch, ProjectEntry } from "../../../lib/wire/protocol";
+import type { ClientCommand, ProjectBranch, ProjectEntry } from "#lib/wire/protocol";
 import { setState } from "../state";
 import { ctlFetch, isConnected, postCommand } from "./transport";
 

@@ -27,13 +27,13 @@ import {
 	type CallbackEnvelope,
 	type CallbackErrorCode,
 	type CallbackKind,
-} from "../../lib/wire/callback-protocol";
+} from "#lib/wire/callback-protocol";
 import {
 	parseMaterializeRecord,
 	type MaterializeRecord,
 	type MaterializeRequest,
-} from "../../lib/session-files/wake-materialize";
-import { isLoopbackHost } from "../../lib/platform/hosts";
+} from "#lib/session-files/wake-materialize";
+import { isLoopbackHost } from "#lib/platform/hosts";
 
 /**
  * Callback transport, daemon half (P3.2; docs/clone-contracts.md "Callback

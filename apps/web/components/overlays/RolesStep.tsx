@@ -1,5 +1,5 @@
 import { For, Show, type Component } from "solid-js";
-import type { ModelRoleCatalogEntry } from "../../../../lib/wire/protocol";
+import type { ModelRoleCatalogEntry } from "#lib/wire/protocol";
 import { thinkingLevelLabel } from "../../usage/model-options";
 import { call, setState, state } from "../../state";
 import { CharacterAvatar } from "../shared/CharacterAvatar";

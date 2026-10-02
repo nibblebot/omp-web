@@ -11,6 +11,11 @@ The image carries the pinned `bun.lock` dependencies plus git, ca-certificates,
 and tini, and runs the same runtime entry the bwrap provider launches
 fleet-side (`apps/session/index.ts`), so session behavior matches across providers.
 
+Source execution requires `/opt/omp-web/package.json` alongside the preserved
+`apps/session/` and `lib/` directories. The root manifest supplies the
+`"#lib/*": "./lib/*.ts"` package-import mapping for extensionless shared-library
+imports; flattening either directory breaks runtime resolution.
+
 ## In-pod layout (the per-workspace PVC at `/workspace`)
 
 | Path | Purpose |

@@ -25,7 +25,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { FleetLogStore, type LogChunk } from "../log-store";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { verifyWorkspaceLogs, type VerifyResult } from "../verify-store";
 
 afterAll(cleanupTempDirs);

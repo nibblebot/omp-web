@@ -50,32 +50,32 @@ import {
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 
-import { ENROLLMENT_KEY_BYTES } from "../../lib/wire/callback-protocol";
-import type { LifecycleStage } from "../../lib/wire/protocol";
+import { ENROLLMENT_KEY_BYTES } from "#lib/wire/callback-protocol";
+import type { LifecycleStage } from "#lib/wire/protocol";
 import type { Registry, RegistryEntry, WorkspaceRecord, DeletionGateError } from "./registry";
 import type { FleetConfig } from "./config";
 import type { DaemonTransportRegistry } from "./daemon-transport";
 import type { FleetLogStore } from "./log-store";
 import type { FleetEventLog } from "./events";
 import type { WorkspaceResourceDeleter } from "./server";
-import type { ProviderOkResponse, ProviderResponse } from "../../lib/runtime/provider-protocol";
-import { runProviderOp } from "../../lib/runtime/provider-exec";
+import type { ProviderOkResponse, ProviderResponse } from "#lib/runtime/provider-protocol";
+import { runProviderOp } from "#lib/runtime/provider-exec";
 import {
 	deriveWorkspaceBranch,
 	PrepareWorkspaceError,
 	prepareWorkspace,
 	resolveWorkspacePin,
-} from "../../lib/runtime/prepare-workspace";
+} from "#lib/runtime/prepare-workspace";
 import { verifyWorkspaceLogs } from "./verify-store";
-import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "../../lib/session-files/export-sessions";
+import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "#lib/session-files/export-sessions";
 import {
 	WakeMaterializeError,
 	materializeMissingSessionFiles,
 	pickNewestSessionId,
 	resolveMainSessionFile,
 } from "./wake-materialize";
-import type { ArchiveManifest } from "../../lib/session-files/archive-manifest";
-import { isNormalizedPosixRelativePath } from "../../lib/session-files/archive-manifest";
+import type { ArchiveManifest } from "#lib/session-files/archive-manifest";
+import { isNormalizedPosixRelativePath } from "#lib/session-files/archive-manifest";
 
 // ---------------------------------------------------------------------------
 // Typed errors (frozen ledger vocabulary; message text is safe to surface)

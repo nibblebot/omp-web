@@ -2,13 +2,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { defaultDenyRoots, defaultRuntimeLaunch } from "../runtime-launch";
-import {
-	buildBwrapArgv,
-	DeniedBindError,
-	type BwrapArgsInput,
-} from "../../../lib/runtime/bwrap-args";
-import type { ProviderProfile } from "../../../lib/runtime/provider-protocol";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { buildBwrapArgv, DeniedBindError, type BwrapArgsInput } from "#lib/runtime/bwrap-args";
+import type { ProviderProfile } from "#lib/runtime/provider-protocol";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 afterAll(cleanupTempDirs);
 

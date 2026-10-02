@@ -19,7 +19,7 @@ import {
 	type DaemonInfo,
 	type ModelRoleCatalogEntry,
 	type WebSessionState,
-} from "../../lib/wire/protocol";
+} from "#lib/wire/protocol";
 import type { SessionConfig } from "./config";
 import type { SessionEntry } from "./session-entry";
 import { broadcast, broadcastTo } from "./sse-delivery";

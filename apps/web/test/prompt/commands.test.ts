@@ -10,8 +10,8 @@ import {
 	queueMethod,
 	renameDispatch,
 } from "../../prompt/commands";
-import { SSE_EVENT_NAME } from "../../../../lib/wire/protocol";
-import type { ClientCommand, ServerFrame } from "../../../../lib/wire/protocol";
+import { SSE_EVENT_NAME } from "#lib/wire/protocol";
+import type { ClientCommand, ServerFrame } from "#lib/wire/protocol";
 import {
 	addBashItem,
 	appendBashChunk,

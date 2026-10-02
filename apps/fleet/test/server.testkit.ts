@@ -14,9 +14,9 @@ import { expect } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../../../lib/wire/protocol";
-import { encodeSseEvent } from "../../../lib/wire/sse";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "#lib/wire/protocol";
+import { encodeSseEvent } from "#lib/wire/sse";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { startFleet, type FleetServer } from "../server";
 
 // Entry test files register the cleanup at their own top level:

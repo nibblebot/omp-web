@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { bootStatusFor, Registry } from "../registry";
 
 const tmpDirs: string[] = [];

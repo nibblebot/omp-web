@@ -1,5 +1,5 @@
 import { createEffect, createUniqueId, For, type Component, type Setter } from "solid-js";
-import type { ImageArg } from "../../../../lib/wire/protocol";
+import type { ImageArg } from "#lib/wire/protocol";
 import { promptInsert, setPromptInsert } from "../../state";
 import { XIcon } from "../shared/icons";
 import { Autocomplete } from "./Autocomplete";

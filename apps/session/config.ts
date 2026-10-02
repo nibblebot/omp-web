@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isLoopbackHost } from "../../lib/platform/hosts";
+import { isLoopbackHost } from "#lib/platform/hosts";
 
 /**
  * omp-session config surface (docs/src/content/docs/reference/environment.md). Flags map 1:1 to

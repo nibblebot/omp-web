@@ -8,7 +8,7 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { checkOmpSetup, ompStatusLines, resolveOmpBinary } from "../omp-check";
 
 afterAll(cleanupTempDirs);

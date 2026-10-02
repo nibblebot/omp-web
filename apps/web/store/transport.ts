@@ -1,10 +1,5 @@
-import { COMMAND_DEDUP_WINDOW_MS } from "../../../lib/wire/protocol";
-import type {
-	ClientCommand,
-	DaemonInfo,
-	ServerFrame,
-	WebMethodName,
-} from "../../../lib/wire/protocol";
+import { COMMAND_DEDUP_WINDOW_MS } from "#lib/wire/protocol";
+import type { ClientCommand, DaemonInfo, ServerFrame, WebMethodName } from "#lib/wire/protocol";
 import type { DaemonLogsResult, DebugEntry, DebugLevel } from "../state";
 import { setState, state } from "../state";
 import { authedFetch } from "./auth";

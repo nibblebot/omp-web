@@ -1,16 +1,16 @@
-import { callbackError } from "../../lib/wire/callback-protocol";
+import { callbackError } from "#lib/wire/callback-protocol";
 import type {
 	CallbackEnvelope,
 	CallbackErrorCode,
 	CallbackKind,
-} from "../../lib/wire/callback-protocol";
+} from "#lib/wire/callback-protocol";
 import type {
 	CommandAckPayload,
 	ControlAckPayload,
 	FlushBoundary,
 	QuiesceWriterEntry,
 	StreamResyncControl,
-} from "../../lib/wire/callback-protocol";
+} from "#lib/wire/callback-protocol";
 import type { WriterFlushResult } from "./writer-flush";
 import { isRingedDeltaType } from "./sse-delivery";
 

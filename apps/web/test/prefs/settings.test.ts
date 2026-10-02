@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { SettingsItem, SettingsModel, SettingsTab } from "../../../../lib/wire/protocol";
+import type { SettingsItem, SettingsModel, SettingsTab } from "#lib/wire/protocol";
 import {
 	appearanceWebImages,
 	displayOptionValue,

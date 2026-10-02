@@ -1,5 +1,5 @@
 import { For, Show, type Component } from "solid-js";
-import type { DaemonEntry } from "../../../../lib/wire/protocol";
+import type { DaemonEntry } from "#lib/wire/protocol";
 import { formatDaemonUptime } from "../../fleet-ui/daemon-ui";
 import { DaemonLogView } from "./DaemonLogView";
 import { Modal } from "../shared/Modal";

@@ -13,7 +13,7 @@ import type {
 	DaemonStatus,
 	LifecycleStage,
 	SessionListEntry,
-} from "../../../../lib/wire/protocol";
+} from "#lib/wire/protocol";
 import { sessionActivity, type SessionActivity } from "../../fleet-ui/session-activity";
 import { unreadIds } from "../../fleet-ui/unread";
 import {

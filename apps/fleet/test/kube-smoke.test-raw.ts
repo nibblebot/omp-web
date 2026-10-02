@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPodManifest, preflightKubernetesProfile, runOp } from "../kubernetes-provider";
 import type { KubeExecResult } from "../kubernetes-provider";
-import type { ProviderProfile, ProviderRequest } from "../../../lib/runtime/provider-protocol";
+import type { ProviderProfile, ProviderRequest } from "#lib/runtime/provider-protocol";
 import type { PreflightCheck } from "../preflight";
 
 let failures = 0;

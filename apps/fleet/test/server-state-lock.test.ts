@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { LockHeldError } from "../../../lib/platform/file-lock";
+import { LockHeldError } from "#lib/platform/file-lock";
 import { startFleet } from "../server";
 import {
 	cleanupTempDirs,

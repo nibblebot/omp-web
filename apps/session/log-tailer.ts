@@ -10,8 +10,8 @@ import {
 } from "node:fs";
 import type { Dirent, FSWatcher } from "node:fs";
 import { join } from "node:path";
-import { callbackError } from "../../lib/wire/callback-protocol";
-import type { CallbackErrorCode } from "../../lib/wire/callback-protocol";
+import { callbackError } from "#lib/wire/callback-protocol";
+import type { CallbackErrorCode } from "#lib/wire/callback-protocol";
 import type { CallbackSendResult } from "./fleet-callback";
 
 /**

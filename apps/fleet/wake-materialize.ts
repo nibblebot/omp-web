@@ -39,7 +39,7 @@
 
 import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
-import { isNormalizedPosixRelativePath } from "../../lib/session-files/archive-manifest";
+import { isNormalizedPosixRelativePath } from "#lib/session-files/archive-manifest";
 import { isPathUnder } from "./worktrees";
 
 export type WakeMaterializeErrorCode = "invalid_request" | "unavailable";

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { cleanupTempDirs } from "../../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs } from "#lib/testkit/temp-dir.testkit";
 import {
 	applyUpdate,
 	compareVersions,

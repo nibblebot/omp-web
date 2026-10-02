@@ -1,4 +1,4 @@
-import type { SettingsModel } from "../../../lib/wire/protocol";
+import type { SettingsModel } from "#lib/wire/protocol";
 import { fleetSettingsActive, setState, state } from "../state";
 import { call } from "./transport";
 import { authedFetch } from "./auth";

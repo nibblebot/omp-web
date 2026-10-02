@@ -1,7 +1,7 @@
 import { createSignal, type Component } from "solid-js";
 import { dispatchInput, type InputMode } from "../../prompt/commands";
 import { PromptHistory } from "../../prompt/history";
-import type { ImageArg } from "../../../../lib/wire/protocol";
+import type { ImageArg } from "#lib/wire/protocol";
 import { call, dequeueLastQueued, isReady, setState, state } from "../../state";
 import { PromptActions } from "./PromptActions";
 import { PromptComposer } from "./PromptComposer";

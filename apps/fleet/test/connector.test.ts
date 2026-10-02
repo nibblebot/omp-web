@@ -20,8 +20,8 @@ import {
 	SSE_EVENT_NAME,
 	SSE_RING_CAP,
 	type ClientCommand,
-} from "../../../lib/wire/protocol";
-import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "../../../lib/wire/sse";
+} from "#lib/wire/protocol";
+import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "#lib/wire/sse";
 import { DaemonConnector, daemonHttpBase, type ConnectorEvents } from "../connector";
 import { Registry, type RegistryEntry } from "../registry";
 

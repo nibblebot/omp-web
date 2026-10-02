@@ -13,7 +13,7 @@ import {
 	resolveEndpoint,
 	shellQuote,
 } from "../spawn-parse";
-import type { StdoutContractLine } from "../../../lib/wire/protocol";
+import type { StdoutContractLine } from "#lib/wire/protocol";
 
 // ---------------------------------------------------------------------------
 // fillTemplate

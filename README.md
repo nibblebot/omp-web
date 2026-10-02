@@ -118,6 +118,8 @@ bun install
 bun dev      # vite (HMR) + fleet, ports chosen per run
 ```
 
+Source imports into `lib/` use extensionless `#lib/<path below lib/>`, such as `#lib/wire/protocol`, through root `package.json`'s imports mapping. Keep local imports such as `./helpers` relative. Shared libraries are closed: their repository imports stay inside `lib/`, with no library cycles, enforced by `bun run lint`.
+
 In a linked worktree, `bun dev` forks the dev fleet state from the main worktree (copy-once, like a git fork), so the worktree's roster boots with the main worktree's sessions/projects instead of empty; later runs keep the diverged fork. `--state-from <path>` forks from an explicit state file or directory, and `--fresh` skips seeding and starts on a clean state. Dev fleet state is scoped per worktree outside the repo at `<data home>/dev-fleets/<slug>-<hash8>/` (slug is the worktree basename, `hash8` the sha-256 prefix of its realpath), so several dev stacks and your real fleet coexist. The stack also adopts a running auth broker, or spawns `omp auth-broker serve` when the `omp` CLI is present, exporting `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` for clone `secretRefs` `env:` references; without a broker the stack only warns and clones run unauthenticated.
 
 ## Advanced

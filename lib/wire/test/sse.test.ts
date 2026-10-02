@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK, SseRing, type SseUnit } from "../sse";
+import {
+	encodeSseEvent,
+	parseSseUnits,
+	SSE_PING_BLOCK,
+	SseRing,
+	type SseUnit,
+} from "#lib/wire/sse";
 
 function streamFrom(chunks: string[]): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();

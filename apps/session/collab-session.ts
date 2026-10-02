@@ -20,7 +20,7 @@ import {
 	type SubagentProgressPayload,
 } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import type { CollabWireStatus } from "../../lib/wire/protocol";
+import type { CollabWireStatus } from "#lib/wire/protocol";
 import type { CollabAgentRef, CollabHostStatus, CollabSessionPort } from "./collab-host";
 import type { SessionConfig } from "./config";
 import type { DaemonBroker } from "./daemon-broker";

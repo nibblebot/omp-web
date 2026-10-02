@@ -8,7 +8,7 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
 import { DaemonConnector } from "../connector";
 import { FleetEdge } from "../edge";

@@ -61,12 +61,12 @@
 import type { Server } from "bun";
 import { existsSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { RegisteredProject, PublicProviderProfile } from "../../lib/wire/protocol";
+import type { RegisteredProject, PublicProviderProfile } from "#lib/wire/protocol";
 import type { FleetConfig } from "./config";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { toPublicProfile } from "./provider-profile";
-import { isLoopbackHost } from "../../lib/platform/hosts";
-import { acquireFileLock, type FileLock } from "../../lib/platform/file-lock";
+import { isLoopbackHost } from "#lib/platform/hosts";
+import { acquireFileLock, type FileLock } from "#lib/platform/file-lock";
 import type { DeletionGateError, RegistryEntry } from "./registry";
 import { bootStatusFor, Registry } from "./registry";
 import { validateProjectPath } from "./discovery";
@@ -86,22 +86,19 @@ import { BrowserAuthStore, clearSessionCookie } from "./browser-auth";
 import { DaemonTransportRegistry } from "./daemon-transport";
 import { FleetAuthGate, isLoopbackBind, peerIsLoopback, BrowserAuthError } from "./fleet-auth-gate";
 import { compileTrustedProxies } from "./trusted-proxy";
-import {
-	CALLBACK_TRANSPORT_STREAM_ID,
-	type CallbackEnvelope,
-} from "../../lib/wire/callback-protocol";
+import { CALLBACK_TRANSPORT_STREAM_ID, type CallbackEnvelope } from "#lib/wire/callback-protocol";
 import { FleetLogStore, LogStoreError, type LogChunk, type LogIngestResult } from "./log-store";
 import { createStoredApp, type StoredApp } from "./stored-sessions";
 import { verifyWorkspaceLogs, type VerifyResult } from "./verify-store";
-import { prepareWorkspace } from "../../lib/runtime/prepare-workspace";
-import { runProviderOp } from "../../lib/runtime/provider-exec";
+import { prepareWorkspace } from "#lib/runtime/prepare-workspace";
+import { runProviderOp } from "#lib/runtime/provider-exec";
 import type {
 	ProviderHandle,
 	ProviderProfile,
 	ProviderRequest,
 	ProviderResponse,
-} from "../../lib/runtime/provider-protocol";
-import { ENROLLMENT_KEY_BYTES } from "../../lib/wire/callback-protocol";
+} from "#lib/runtime/provider-protocol";
+import { ENROLLMENT_KEY_BYTES } from "#lib/wire/callback-protocol";
 import { createHash, randomBytes } from "node:crypto";
 import {
 	CloneLifecycleError,

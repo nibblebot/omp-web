@@ -11,12 +11,12 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { YAML } from "bun";
-import { cleanupTempDirs, tempDir } from "../../testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import {
 	prepareWorkspace,
 	WORKSPACE_PREP_VERSION,
 	type PrepareWorkspaceResult,
-} from "../prepare-workspace";
+} from "#lib/runtime/prepare-workspace";
 
 afterAll(cleanupTempDirs);
 

@@ -18,7 +18,7 @@ import {
 	THEME_OPTIONS,
 	type ThemePreference,
 } from "../../prefs/theme";
-import type { SettingsModel } from "../../../../lib/wire/protocol";
+import type { SettingsModel } from "#lib/wire/protocol";
 import { Row, SettingsRow } from "./SettingsRow";
 
 /**

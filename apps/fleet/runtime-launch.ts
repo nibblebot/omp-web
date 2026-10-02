@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join, normalize } from "node:path";
-import { deriveDenyRoots, type DenyRoots } from "../../lib/runtime/bwrap-args";
+import { deriveDenyRoots, type DenyRoots } from "#lib/runtime/bwrap-args";
 
 export interface RuntimeLaunch {
 	/** Absolute runtime entry the sandbox runs. */

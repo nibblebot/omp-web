@@ -12,7 +12,7 @@
  * Fails with the frozen vocabulary to stderr + exit code; the provider
  * surfaces pod termination reasons actionably on ensure-running.
  */
-import { prepareWorkspace } from "../../lib/runtime/prepare-workspace";
+import { prepareWorkspace } from "#lib/runtime/prepare-workspace";
 
 function requiredEnv(name: string): string {
 	const value = process.env[name];

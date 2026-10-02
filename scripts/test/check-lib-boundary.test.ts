@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cleanupTempDirs, tempDir } from "../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { checkLibBoundary } from "../check-lib-boundary";
 import type { LibBoundaryFinding } from "../check-lib-boundary";
 

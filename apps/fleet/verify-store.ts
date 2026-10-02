@@ -17,7 +17,7 @@ import {
 	computeExportId,
 	isNormalizedPosixRelativePath,
 	validateManifest,
-} from "../../lib/session-files/archive-manifest";
+} from "#lib/session-files/archive-manifest";
 import {
 	JSONL_SUFFIX,
 	MAX_EXPORT_BYTES,
@@ -25,7 +25,7 @@ import {
 	classifyLineageEntry,
 	isMainRelpath,
 	verifyJsonlStructure,
-} from "../../lib/session-files/export-sessions";
+} from "#lib/session-files/export-sessions";
 
 // ---------------------------------------------------------------------------
 // Verify-at-deletion gate (P7.1/P7.2 core): runtime/verify-store.ts.

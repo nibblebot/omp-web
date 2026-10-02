@@ -1,4 +1,4 @@
-import type { ImageArg } from "../../../lib/wire/protocol";
+import type { ImageArg } from "#lib/wire/protocol";
 
 /**
  * Recursively collect image payloads from a tool result, message content, or

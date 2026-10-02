@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { produce } from "solid-js/store";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
-import type { ImageArg } from "../../../lib/wire/protocol";
+import type { ImageArg } from "#lib/wire/protocol";
 import { scanImages } from "../text/images";
 import type { UsageLike } from "../usage/usage";
 import {

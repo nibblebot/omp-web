@@ -34,8 +34,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { CALLBACK_CONTROL_STREAM_ID } from "../../lib/wire/callback-protocol";
-import type { ClientCommand, ServerFrame } from "../../lib/wire/protocol";
+import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
+import type { ClientCommand, ServerFrame } from "#lib/wire/protocol";
 import type { Registry, RegistryEntry } from "./registry";
 import type { DaemonConnector } from "./connector";
 import type { SpawnSupervisor } from "./supervisor";

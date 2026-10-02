@@ -90,7 +90,7 @@ export function validateProfiles(raw: unknown): ProfileValidationResult {
 // from the shared protocol module, never from this fleet-private leaf.
 // Imported AND re-exported so it is bound locally (toPublicProfile below
 // annotates with it) while fleet-local importers keep the same name.
-import type { PublicProviderProfile } from "../../lib/wire/protocol";
+import type { PublicProviderProfile } from "#lib/wire/protocol";
 export type { PublicProviderProfile };
 
 /**

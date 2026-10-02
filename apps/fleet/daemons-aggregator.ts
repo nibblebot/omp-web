@@ -13,7 +13,7 @@
  * latest arrival.
  */
 
-import { daemonsKey, type DaemonInfo } from "../../lib/wire/protocol";
+import { daemonsKey, type DaemonInfo } from "#lib/wire/protocol";
 
 export { daemonsKey };
 

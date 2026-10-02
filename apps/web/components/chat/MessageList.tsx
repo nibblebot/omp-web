@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
 import { setState, state, type ToolItem } from "../../state";
-import type { ImageArg } from "../../../../lib/wire/protocol";
+import type { ImageArg } from "#lib/wire/protocol";
 import { FullImageOverlay } from "../shared/ImageScan";
 import { ArrowDownIcon, ExpandIcon } from "../shared/icons";
 import { ToolCard, ToolStripCard } from "./ToolCard";

@@ -12,13 +12,13 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ModelsConfigFile } from "@oh-my-pi/pi-coding-agent/config/models-config";
-import { cleanupTempDirs, tempDir } from "../../testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import {
 	resolveBaselineSourcePath,
 	sanitizeBaselineConfig,
 	sanitizeModelsConfig,
 	seedSandboxBaseline,
-} from "../sandbox-baseline";
+} from "#lib/runtime/sandbox-baseline";
 
 afterAll(cleanupTempDirs);
 

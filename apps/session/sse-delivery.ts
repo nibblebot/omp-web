@@ -8,8 +8,8 @@ import {
 	SSE_RING_BYTES,
 	type ServerFrame,
 	type SessionScopedFrame,
-} from "../../lib/wire/protocol";
-import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "../../lib/wire/sse";
+} from "#lib/wire/protocol";
+import { encodeSseEvent, SSE_PING_BLOCK, SseRing } from "#lib/wire/sse";
 import type { SessionEntry } from "./session-entry";
 
 // ---------------------------------------------------------------------------

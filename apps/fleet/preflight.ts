@@ -35,12 +35,12 @@ import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { connect } from "node:net";
 import { lookup } from "node:dns/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { ProviderProfile } from "../../lib/runtime/provider-protocol";
+import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 import {
 	DeniedBindError,
 	assertAllowedSource,
 	assertWorkspaceVolume,
-} from "../../lib/runtime/bwrap-args";
+} from "#lib/runtime/bwrap-args";
 import { defaultDenyRoots, defaultRuntimeLaunch } from "./runtime-launch";
 
 // ---------------------------------------------------------------------------

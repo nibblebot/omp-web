@@ -102,6 +102,8 @@ Layering is strictly leaf-ward, and the seams are deliberate:
 - **`apps/web/`** imports repository code from `lib/wire` only and imports neither backend app. Its references to SDK packages are type-only.
 - **`e2e/`, `scripts/`, `docs/`** may import any app or library surface; they are orchestration consumers, not dependencies.
 
+Shared-library imports use extensionless `#lib/<path below lib/>`, for example `#lib/wire/protocol`, including parent-directory imports inside `lib/`. Root `package.json` owns the only alias mapping (`"#lib/*": "./lib/*.ts"`). Ordinary local imports such as `./helpers` stay relative; the closed-library boundary still applies.
+
 Agent-SDK touchpoints in the fleet are narrow. The core modules (registry, supervisor, connector, edge) hold no agent state; the omp-stack probe and the per-worktree session listing load the SDK behind lazy dynamic imports, and the unattached settings service reads the process-global settings singleton. None of them hold a live agent session.
 
 ## The zero-agent-state invariant, and its two exceptions

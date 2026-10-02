@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RegisteredProject } from "../../../lib/wire/protocol";
+import type { RegisteredProject } from "#lib/wire/protocol";
 import type { FleetConfig } from "../config";
 import { DaemonConnector } from "../connector";
 import { FleetEdge } from "../edge";

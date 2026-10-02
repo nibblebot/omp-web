@@ -16,7 +16,7 @@
  * daemon are out of scope here.
  */
 
-import type { SessionListEntry } from "../../lib/wire/protocol";
+import type { SessionListEntry } from "#lib/wire/protocol";
 
 /**
  * Fleet transcript store read surface (P3.8), the clone counterpart of the

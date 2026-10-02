@@ -1,6 +1,6 @@
 import { For, Show, type Component } from "solid-js";
 import { call, pushNotice, setState, type ChatItem } from "../../../state";
-import type { ImageArg } from "../../../../../lib/wire/protocol";
+import type { ImageArg } from "#lib/wire/protocol";
 import { imageDataUrl } from "../../../text/images";
 import { CopyButton } from "../../shared/CopyButton";
 

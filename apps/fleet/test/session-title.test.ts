@@ -7,7 +7,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { readSessionInfo, readSessionTitle } from "../session-title";
 
 afterAll(cleanupTempDirs);

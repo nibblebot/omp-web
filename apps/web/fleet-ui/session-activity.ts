@@ -1,4 +1,4 @@
-import type { DaemonStatus } from "../../../lib/wire/protocol";
+import type { DaemonStatus } from "#lib/wire/protocol";
 
 /**
  * Roster-row session activity, derived from the ATTACHED session's live

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
 import { SETTING_TABS } from "@oh-my-pi/pi-tui/overlays/settings-defs";
-import type { SettingsModel } from "../../../lib/wire/protocol";
+import type { SettingsModel } from "#lib/wire/protocol";
 import { createFleetSettings } from "../settings";
 
 // The fleet service reads/writes the shared Settings singleton (values,

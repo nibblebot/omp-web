@@ -14,7 +14,7 @@ import { loadJsonl } from "./stats-jsonl";
 import { walkJsonl } from "./stats-sessions-index";
 import { readStoredHead, storeFileKey } from "./stats-store-index";
 import type { AppCtx, Route } from "./stats-types";
-import type { SessionSummary } from "../../lib/wire/stats-types";
+import type { SessionSummary } from "#lib/wire/stats-types";
 import { normDbFile, isMainSession, folderOf } from "./stats-paths";
 import type { StatsConfig } from "./stats-config";
 

@@ -58,6 +58,8 @@ Strictly leaf-ward layering, verified across the tree:
 - **`apps/`**: the four applications. `apps/session/` is the omp-session daemon, `apps/fleet/` the omp-fleet supervisor/registry/edge, `apps/cli/` the installed entrypoints, `apps/web/` the Solid browser client. Apps import `lib/` freely and do not import each other; `apps/web/` imports repository code from `lib/wire` only, and its SDK references are type-only.
 - **`e2e/`, `scripts/`, `docs/`**: orchestration and tooling consumers that may import any app or library surface (`e2e/onboarding.ts` and the release scripts do).
 
+Shared-library imports use extensionless `#lib/<path below lib/>`, for example `#lib/wire/protocol`, including parent-directory imports within `lib/`. Ordinary local relative imports such as `./helpers` remain relative. Root `package.json` is the single alias source of truth (`"#lib/*": "./lib/*.ts"`); TypeScript and Vite use package-import resolution without duplicate alias maps. The alias does not relax the closed-library boundary.
+
 fleet↔session coupling is exactly the wire-contract library (`lib/wire/protocol.ts`) plus the SSE codec (`lib/wire/sse.ts`), with `OMP_PROTO` gating drift at hello; there is no app-to-app source import.
 
 ## The wire contract (`lib/wire/protocol.ts`, OMP_PROTO 2)

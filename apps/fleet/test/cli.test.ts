@@ -8,7 +8,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { resolveBaseDirs, shouldOfferSetup, writeConfigFile } from "../cli";
 
 afterAll(cleanupTempDirs);
