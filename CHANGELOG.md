@@ -1,3 +1,11 @@
+## Unreleased
+
+omp-web moves its source tree into application and library roots. Behavior, wire protocol, CLI commands, distribution layout, and installer URLs are unchanged.
+
+### Maintenance & other
+- Move application source to `apps/{cli,fleet,session,web}`, shared libraries to `lib/*`, cross-app E2E to `e2e/`, and tooling tests to `scripts/test/`; enforce the closed `lib/` import boundary in lint.
+- Remove the optional benchmark harness, its `bench` command, and local benchmark outputs; ordinary test execution is unchanged.
+
 ## v0.2.1, 2026-09-25
 
 omp-web 0.2.1 uses the unpatched SDK and removes the legacy migration path.

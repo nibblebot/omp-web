@@ -290,7 +290,7 @@ These variables act directly on this file's domain. The complete variable list, 
 
 Two details, because they trip people up. First, `OMP_FLEET_WORKSPACE_DIR` and `OMP_FLEET_SPAWN_HOOK` are applied after the file is merged, so they win over the file value and also apply when there is no config file at all; only the `--workspace-dir` flag outranks `OMP_FLEET_WORKSPACE_DIR`. Second, `OMP_FLEET_CONFIG`, `OMP_FLEET_LOCAL_TEMPLATE`, and the `--workspace-dir` flag are independent of the file and always apply. Every variable in the table above is resolved per process at startup, so restart the fleet after changing one.
 
-The development runner `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so sidebar spawns run the source entry instead of an unbuilt production binary. If you run the fleet from source yourself, the same variable is how you point the `local` template at `bun server/index.ts`.
+The development runner `bun run dev` sets `OMP_FLEET_LOCAL_TEMPLATE` so sidebar spawns run the source entry instead of an unbuilt production binary. If you run the fleet from source yourself, the same variable is how you point the `local` template at `bun apps/session/index.ts`.
 
 ## What the first-run offer writes
 

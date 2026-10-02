@@ -12,7 +12,7 @@ Guests dial in. They connect to the room's relay, and the session daemon never c
 ## Prerequisites
 
 - A session daemon running and reachable on loopback at a port you know. The examples use the session daemon default, 4721. Start one with `omp-web session` if needed, and see [Run a session daemon](/cli/session-daemon/) for its flags.
-- The omp-web source checkout for the host CLI. Starting a room is `bun run collab`, the `collab` script in `package.json` that runs `server/collab-cli.ts`. There is no installed `omp-web collab` verb.
+- The omp-web source checkout for the host CLI. Starting a room is `bun run collab`, the `collab` script in `package.json` that runs `apps/cli/collab-cli.ts`. There is no installed `omp-web collab` verb.
 - The `omp` CLI on the machine that joins.
 
 The collab CLI talks to one session daemon over loopback, not to the fleet control plane. Session daemons spawned by the fleet use an ephemeral port under the default template, so the default port only reaches a session daemon you started yourself, for example `omp-web session --port 4721`.
@@ -53,7 +53,7 @@ bun run collab -- --view --join     # start, then join read-only
 bun run collab -- --port 4730       # drive a session daemon on another loopback port
 ```
 
-`bun server/collab-cli.ts` takes the same flags if you prefer the entry point directly. Only one room exists per session at a time.
+`bun apps/cli/collab-cli.ts` takes the same flags if you prefer the entry point directly. Only one room exists per session at a time.
 
 ## Join a room
 

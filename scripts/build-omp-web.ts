@@ -3,15 +3,15 @@
  * build (`bun run build`) produces the installable omp-web bundle
  * (dist-bundle/cli.js + dist-bundle/providers/* + dist-bundle/image/*).
  *
- * UI-embed pipeline: vite build → regenerate fleet/embedded-dist.ts →
- * restore the stub in a finally. Then the cli/omp-web.ts dispatcher is
+ * UI-embed pipeline: vite build → regenerate apps/fleet/embedded-dist.ts →
+ * restore the stub in a finally. Then the apps/cli/omp-web.ts dispatcher is
  * bundled with bun build (NOT --compile): all @oh-my-pi/* packages stay
  * external because `bun install -g` installs them as real dependencies
  * next to the bundle, hence no pi-natives embed. The provider executables
- * (runtime/providers/*.ts) get the same single-file treatment into
+ * (apps/fleet/*.ts) get the same single-file treatment into
  * dist-bundle/providers/, with shebang + exec bit preserved so the installed
  * fleet can spawn them directly. The reproducible session-runtime image
- * definition (runtime/image/) is copied verbatim into dist-bundle/image/.
+ * definition (apps/session/) is copied explicitly into dist-bundle/image/.
  * The package version is stamped in via define so `--version` works from an
  * arbitrary cwd without a path-based package.json lookup.
  */
@@ -27,24 +27,25 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 const STUB = `export const EMBEDDED_DIST: Record<string, string> = {};\n`;
 const ROOT = join(import.meta.dir, "..");
-const EMBEDDED_DIST_FILE = join(ROOT, "fleet", "embedded-dist.ts");
+const EMBEDDED_DIST_FILE = join(ROOT, "apps", "fleet", "embedded-dist.ts");
 const DIST_DIR = join(ROOT, "dist");
 const OUTFILE = join(ROOT, "dist-bundle", "cli.js");
 const PROVIDERS_DIR = join(ROOT, "dist-bundle", "providers");
 /** Provider executables (P9.1): key = shipped filename, value = source entry. */
 const PROVIDER_SOURCES: Record<string, string> = {
-	"bwrap-provider.js": join(ROOT, "runtime", "providers", "bwrap-provider.ts"),
-	"kubernetes-provider.js": join(ROOT, "runtime", "providers", "kubernetes-provider.ts"),
+	"bwrap-provider.js": join(ROOT, "apps", "fleet", "bwrap-provider.ts"),
+	"kubernetes-provider.js": join(ROOT, "apps", "fleet", "kubernetes-provider.ts"),
 };
-/** Reproducible session-runtime image definition, shipped verbatim. */
-const IMAGE_SRC = join(ROOT, "runtime", "image");
+/** Session-runtime image definition, copied explicitly (flat sources, README.md name). */
+const IMAGE_FILES = ["Containerfile", "entrypoint.sh", "prepare-inpod.ts", "image-README.md"];
+const IMAGE_SRC = join(ROOT, "apps", "session");
 const IMAGE_DST = join(ROOT, "dist-bundle", "image");
 
-/** Recursively list file paths under `dir`, slash-normalized, relative to `base`. */
+/** Recursively list dist/ file paths, slash-normalized, relative to `base`. */
 function listFiles(dir: string, base: string): string[] {
 	const out: string[] = [];
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -61,16 +62,7 @@ function listFiles(dir: string, base: string): string[] {
 	return out;
 }
 
-/** Copy every file under `src` into `dst`, preserving the relative layout. */
-function copyDir(src: string, dst: string): void {
-	for (const rel of listFiles(src, src)) {
-		const to = join(dst, rel);
-		mkdirSync(dirname(to), { recursive: true });
-		copyFileSync(join(src, rel), to);
-	}
-}
-
-/** Build the temporary fleet/embedded-dist.ts module for the current dist/ contents. */
+/** Build the temporary apps/fleet/embedded-dist.ts module for the current dist/ contents. */
 function generateEmbeddedDist(): string {
 	const files = listFiles(DIST_DIR, DIST_DIR)
 		.filter((f) => !f.startsWith("."))
@@ -80,7 +72,9 @@ function generateEmbeddedDist(): string {
 		throw new Error(`vite build produced no dist/index.html; got: ${files.join(", ")}`);
 	}
 	const imports = files.map(
-		(f, i) => `import f${i} from ${JSON.stringify(`../dist/${f}`)} with { type: "file" };`,
+		// apps/fleet/embedded-dist.ts sits two levels deeper than dist/, so the
+		// file imports climb out of apps/fleet back to the repo root dist/.
+		(f, i) => `import f${i} from ${JSON.stringify(`../../dist/${f}`)} with { type: "file" };`,
 	);
 	// Unlike the compile build (whose file imports become absolute $bunfs
 	// paths), a plain bundle emits outfile-RELATIVE strings that Bun.file would
@@ -107,8 +101,8 @@ if (version === null) {
 }
 
 try {
-	// 1. UI bundle (vite owns dist/ and wipes it).
-	await Bun.$`bunx vite build`.cwd(ROOT);
+	// 1. UI bundle (vite owns dist/ and wipes it; config is explicit).
+	await Bun.$`bunx vite build --config apps/web/vite.config.ts`.cwd(ROOT);
 	// 2. Regenerate the embedded-asset module for the fleet edge, its only consumer.
 	writeFileSync(EMBEDDED_DIST_FILE, generateEmbeddedDist());
 	// 3. Bundle the dispatcher. Bun preserves the entrypoint shebang; verified
@@ -117,7 +111,7 @@ try {
 	rmSync(OUTDIR, { recursive: true, force: true });
 	mkdirSync(OUTDIR, { recursive: true });
 	const build = await Bun.build({
-		entrypoints: [join(ROOT, "cli", "omp-web.ts")],
+		entrypoints: [join(ROOT, "apps", "cli", "omp-web.ts")],
 		outdir: OUTDIR,
 		minify: true,
 		target: "bun",
@@ -171,16 +165,20 @@ try {
 			throw new Error(`provider bundle lost its shebang (got ${JSON.stringify(providerHead)}…)`);
 		}
 	}
-	// 6. Reproducible session-runtime image definition (P9.1): ship the
-	//    Containerfile + entrypoint verbatim under dist-bundle/image/. The
-	//    image build consumes the repo root as its context, so the shipped
-	//    copy stays byte-identical to runtime/image/.
-	if (!existsSync(join(IMAGE_SRC, "Containerfile"))) {
-		throw new Error(
-			`runtime image definition missing under ${IMAGE_SRC}; the Kubernetes lane must land it before the build gate`,
-		);
+	// 6. Session-runtime image definition: copy the flat apps/session sources
+	//    explicitly into dist-bundle/image/, renaming image-README.md back to
+	//    the existing packaged README.md name. The image build consumes the
+	//    repo root as its context.
+	for (const file of IMAGE_FILES) {
+		if (!existsSync(join(IMAGE_SRC, file))) {
+			throw new Error(`session image source missing under ${IMAGE_SRC}: ${file}`);
+		}
 	}
-	copyDir(IMAGE_SRC, IMAGE_DST);
+	mkdirSync(IMAGE_DST, { recursive: true });
+	for (const file of IMAGE_FILES) {
+		const dest = file === "image-README.md" ? "README.md" : file;
+		copyFileSync(join(IMAGE_SRC, file), join(IMAGE_DST, dest));
+	}
 	console.log(`built ${OUTFILE}`);
 	console.log(
 		`shipped providers + image: ${Object.keys(PROVIDER_SOURCES)
@@ -188,6 +186,6 @@ try {
 			.join(", ")}; dist-bundle/image/`,
 	);
 } finally {
-	// fleet/embedded-dist.ts stays a stub in the tree; it exists only for the build.
+	// apps/fleet/embedded-dist.ts stays a stub in the tree; it exists only for the build.
 	writeFileSync(EMBEDDED_DIST_FILE, STUB);
 }

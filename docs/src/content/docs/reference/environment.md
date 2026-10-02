@@ -159,7 +159,7 @@ These knobs belong to the clone workspace machinery: the providers that run a wo
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `OMP_BWRAP_BIN` | `bwrap` on `PATH` | The bubblewrap binary the `bwrap` provider runs. Point it at an installed binary when `bwrap` is not on the fleet's `PATH`. |
-| `OMP_RUNTIME_ENTRY` | the repo's `server/index.ts` in a source checkout, or the installed bundle | The session runtime entrypoint the sandbox runs. Set it to a built entry when you run the fleet from source without a bundle. |
+| `OMP_RUNTIME_ENTRY` | the repo's `apps/session/index.ts` in a source checkout, or the installed bundle | The session runtime entrypoint the sandbox runs. Set it to a built entry when you run the fleet from source without a bundle. |
 | `OMP_RUNTIME_BIN` | `bun` | The binary that runs the sandboxed session daemon. |
 | `OMP_KUBE_BIN` | `kubectl` on `PATH` | The Kubernetes client the `kubernetes` provider shells out to. |
 | `OMP_KUBE_CONTEXT` | none | Kubeconfig context for a `kubernetes` profile. The provider never falls back to the ambient current-context, so a missing context is a preflight failure, not a silent default. |
@@ -175,8 +175,8 @@ Everything below is internal to development, tests, and release tooling. It is l
 
 | Variable | Used by | Effect |
 | --- | --- | --- |
-| `OMP_DEV_FLEET_PORT` | `vite.config.ts` | Fleet edge port that the development Vite proxy targets for `/events`, `/command`, and `/ctl`. Default `4722`; `scripts/dev.ts` sets it per run. |
-| `OMP_DEV_ALLOW_HOSTS` | `vite.config.ts` | `1`, `true`, or `*` allows every Host header; anything else is a comma-separated allowlist. Set by `bun scripts/dev.ts --allow-hosts`. |
+| `OMP_DEV_FLEET_PORT` | `apps/web/vite.config.ts` | Fleet edge port that the development Vite proxy targets for `/events`, `/command`, and `/ctl`. Default `4722`; `scripts/dev.ts` sets it per run. |
+| `OMP_DEV_ALLOW_HOSTS` | `apps/web/vite.config.ts` | `1`, `true`, or `*` allows every Host header; anything else is a comma-separated allowlist. Set by `bun scripts/dev.ts --allow-hosts`. |
 | `NO_COLOR` | `scripts/dev.ts` | Presence disables ANSI colors in the development runner's output. It is also passed through into bwrap sandboxes, so a sandboxed daemon inherits your color preference. |
 | `OMP_SESSION_TEST_READY_DELAY_MS` | session daemon tests | Delays the readiness gate by the given number of milliseconds after provider, model, and authentication resolution completes. |
 | `OMP_SESSION_TEST_IDLE_CHECK_MS` | session daemon tests | Idle auto-exit check interval in milliseconds. Default `15000`. |
@@ -189,4 +189,4 @@ Everything below is internal to development, tests, and release tooling. It is l
 
 The development runner `bun run dev` adopts or spawns an auth broker on loopback and exports `OMP_AUTH_BROKER_URL` and `OMP_AUTH_BROKER_TOKEN` into its own environment before the fleet child starts, so provider `secretRefs` of the form `env:NAME` resolve from it. Every broker failure degrades to a brokerless stack with a warning rather than stopping the run; in that case clone sandboxes that need broker-borrowed credentials cannot resolve them. The runner also sets `OMP_FLEET_STATE` to a per-worktree state file under `<data home>/dev-fleets/<slug>-<hash8>/` and `OMP_FLEET_LOCAL_TEMPLATE` to the source session entry.
 
-The contributor collaboration CLI (`bun run collab`, `bun server/collab-cli.ts`) defaults its session daemon port from `OMP_SESSION_PORT`, the same variable the session daemon itself reads for its listen port.
+The contributor collaboration CLI (`bun run collab`, `bun apps/cli/collab-cli.ts`) defaults its session daemon port from `OMP_SESSION_PORT`, the same variable the session daemon itself reads for its listen port.

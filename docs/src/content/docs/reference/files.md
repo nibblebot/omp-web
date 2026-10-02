@@ -279,11 +279,10 @@ These paths exist only in a source checkout and are all gitignored. None of them
 | --- | --- | --- |
 | `dist/` | the built web UI; the fleet serves it from disk before falling back to its embedded copy | `bun run build:web` or `bun run build` |
 | `dist-bundle/` | the installable bundle `cli.js` plus the copied UI assets | `bun run build` |
-| `fleet/embedded-dist.ts` | a stub in the tree; a build replaces it with the embedded asset map and restores the stub when it finishes | `bun run build` |
+| `apps/fleet/embedded-dist.ts` | a stub in the tree; a build replaces it with the embedded asset map and restores the stub when it finishes | `bun run build` |
 | `dist-release/` | release staging: `omp-web-<version>.tgz`, `release-manifest.json`, and `notes.md` | the release script |
 | `omp-web-<version>.tgz` in the repository root | the packed tarball, moved into `dist-release/` during a release | `bun pm pack` |
-| `.bench/` | `history.jsonl` benchmark records and the `baseline` pointer | `bun run bench` |
-| `test/.fixture/` | `stats.db` plus an `agent/sessions/` tree used by the statistics tests | `bun run tx-fixture`, or the test suite itself |
+| `apps/fleet/test/.fixture/` | `stats.db` plus an `agent/sessions/` tree used by the statistics tests | `bun run tx-fixture`, or the test suite itself |
 | `docs/dist/`, `docs/.astro/` | the built documentation site and the Astro cache | `bun run build:docs` or `bun run dev:docs` |
 | `omp-session-*.html` in the repository root | an export written by a session daemon whose process working directory is the repository root | the `/export` command |
 

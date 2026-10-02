@@ -45,10 +45,10 @@ bun run check:types
 bun run format:check
 bun run build:web
 bun run test
-bun scripts/test-onboard.ts
+bun e2e/onboarding.ts
 ```
 
-The list is exported as `GATE_COMMANDS` from `scripts/release.ts`; that export is the single definition of the gate. `bun scripts/test-onboard.ts` is the offline distribution and onboarding end-to-end run: pack, sandboxed pinned install, first-run config, bare serve, spawn, and update round trip. `build:web` runs before `test` as a fast sanity gate that the UI bundle still compiles. The suite no longer needs a built `dist/`, and the session daemon serves no UI. `bun run lint` is deliberately not a gate, because lint warnings do not fail the repository's lint run. The gate is skipped entirely by `--dry-run`.
+The list is exported as `GATE_COMMANDS` from `scripts/release.ts`; that export is the single definition of the gate. `bun e2e/onboarding.ts` is the offline distribution and onboarding end-to-end run: pack, sandboxed pinned install, first-run config, bare serve, spawn, and update round trip. `build:web` runs before `test` as a fast sanity gate that the UI bundle still compiles. The suite no longer needs a built `dist/`, and the session daemon serves no UI. `bun run lint` is deliberately not a gate: its oxlint warnings do not fail the repository's lint run (the `lib/` boundary check that runs first does fail on violations, but the release gate does not need it). The gate is skipped entirely by `--dry-run`.
 
 ## Preflight and drift checks
 
@@ -171,9 +171,9 @@ Every failure prints `release: error: <message>` on stderr and exits 1; the run 
 
 ## Tests and CI
 
-`scripts/release.test.ts` covers the deterministic core: commit classification, bump computation, changelog formatting, coverage validation, manifest generation, tarball and staged-artifact validation, staged tree validation, and argument parsing. The LLM path is exercised only for its degrade behavior in unit tests. Distribution changes are covered by `bun scripts/test-onboard.ts`, the offline end-to-end gate that is also the last command of the release gate (pack, pinned install, first run, bare serve, spawn, update round trip).
+`scripts/test/release.test.ts` covers the deterministic core: commit classification, bump computation, changelog formatting, coverage validation, manifest generation, tarball and staged-artifact validation, staged tree validation, and argument parsing. The LLM path is exercised only for its degrade behavior in unit tests. Distribution changes are covered by `bun e2e/onboarding.ts`, the offline end-to-end gate that is also the last command of the release gate (pack, pinned install, first run, bare serve, spawn, update round trip).
 
-The live channel itself has no recorded end-to-end verification: `bun scripts/test-onboard.ts` covers install and update against local fixtures, and the packed-tarball smoke installs the local artifact, so a real install from the release URL plus `omp-web update` against the real channel remains unproven.
+The live channel itself has no recorded end-to-end verification: `bun e2e/onboarding.ts` covers install and update against local fixtures, and the packed-tarball smoke installs the local artifact, so a real install from the release URL plus `omp-web update` against the real channel remains unproven.
 
 There is no product CI. The repository's `.github/` directory holds the issue templates plus one workflow, `.github/workflows/docs.yml`, which builds the Starlight site from `docs/` and deploys it to GitHub Pages on every push to `main` that touches `docs/**`, `package.json`, `bun.lock`, or the workflow itself. Nothing builds, tests, or publishes the product, so the release script's local gate and validation steps are the quality bar for a release.
 

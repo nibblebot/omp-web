@@ -20,13 +20,13 @@ The repository holds two runtime products plus the browser client the fleet serv
 
 | Layer | Product | Role |
 | --- | --- | --- |
-| `server/` | `omp-session` | One process bound to one directory for its entire life, hosting one live agent session. Runs the `@oh-my-pi/pi-coding-agent` SDK in process (`createAgentSession`; no child process, no JSON-RPC hop) and serves the wire API over SSE and POST: no HTML, no browser bundle. |
-| `fleet/` | `omp-fleet` | A registry, supervisor, and browser edge for N session daemons. Spawns local children from command templates, dials remote endpoints, proxies the browser to the selected session daemon, and serves the loopback control plane the `omp-web` CLI uses. Holds zero agent state, with exactly two deliberate persistence exceptions: the fleet-private workspace record on clone entries and the fleet log store, a durable transcript mirror. Managed clone daemons have no inbound service and dial the fleet outbound over the callback pair. |
-| `src/` | Web UI | One Solid.js bundle, served by the fleet edge. There is no router and no second frontend. |
+| `apps/session/` | `omp-session` | One process bound to one directory for its entire life, hosting one live agent session. Runs the `@oh-my-pi/pi-coding-agent` SDK in process (`createAgentSession`; no child process, no JSON-RPC hop) and serves the wire API over SSE and POST: no HTML, no browser bundle. |
+| `apps/fleet/` | `omp-fleet` | A registry, supervisor, and browser edge for N session daemons. Spawns local children from command templates, dials remote endpoints, proxies the browser to the selected session daemon, and serves the loopback control plane the `omp-web` CLI uses. Holds zero agent state, with exactly two deliberate persistence exceptions: the fleet-private workspace record on clone entries and the fleet log store, a durable transcript mirror. Managed clone daemons have no inbound service and dial the fleet outbound over the callback pair. |
+| `apps/web/` | Web UI | One Solid.js bundle, served by the fleet edge. There is no router and no second frontend. |
 
 The installed `omp-web` entrypoint dispatches to both: bare `omp-web` (or `omp-web serve`) is the fleet, and `omp-web session` is one session daemon that speaks the wire API only. See [Run a session daemon](/cli/session-daemon/).
 
-The two products share the wire contract in `shared/protocol.ts` and the SSE codec in `shared/sse.ts`. The current protocol version is `OMP_PROTO` 2. Evolution is additive-only: adding a frame or command is safe, while changing or removing a shape requires bumping the constant and updating both proto gates (`fleet/connector.ts` on the control dial, `fleet/edge.ts` on the browser pipe) so old and new peers fail loudly instead of misparsing.
+The two products share the wire contract in `lib/wire/protocol.ts` and the SSE codec in `lib/wire/sse.ts`. The current protocol version is `OMP_PROTO` 2. Evolution is additive-only: adding a frame or command is safe, while changing or removing a shape requires bumping the constant and updating both proto gates (`apps/fleet/connector.ts` on the control dial, `apps/fleet/edge.ts` on the browser pipe) so old and new peers fail loudly instead of misparsing.
 
 The fleet edge is the only sender of the `roster` frame, and it sends one to prime every page it serves. That frame is how the client knows it was served by the fleet: a page served any other way never receives one and shows the fleet-required notice.
 
@@ -54,7 +54,7 @@ The agent SDK session inside the `omp-session` process and its JSONL transcript 
 
 - **Session daemon.** The live session holds the transcript, model and provider state, queues, tool calls, and open dialogs. The transcript is written durably as it goes, which is what makes the process disposable.
 - **Fleet.** The registry persists only roster metadata: registered projects, per-daemon endpoints, the per-spawn bearer token, the last session file, the probed session title and emptiness, and git branch and dirty counts for local checkouts. It mirrors defined wire points rather than inventing state: the bound directory from the validated `hello_ok` handshake, the session file from hello and state frames, readiness from the `ready` frame. There is no conversation content, queue, dialog, or model state in the fleet. Two deliberate exceptions exist: the fleet-private workspace record on clone entries (kind, source, pinned revision, profile, desired state, generation, provider handle, deletion state), which never serializes to roster or debug surfaces, and the fleet log store, a durable mirror of the lineage transcripts every managed daemon streams over the callback pair.
-- **Browser.** One `createStore` in `src/state.ts` is the entire client model. The per-session view resets on every attach, and session-scoped frames whose stamped `sessionId` does not match the current session are dropped, so switching rows cannot carry stale frames across. Roster state is fleet-scoped and survives session switches. The only browser persistence is `localStorage` preferences and prompt history; browser auth adds an HttpOnly `omp_session` cookie and keeps the access token only for the duration of a login call.
+- **Browser.** One `createStore` in `apps/web/state.ts` is the entire client model. The per-session view resets on every attach, and session-scoped frames whose stamped `sessionId` does not match the current session are dropped, so switching rows cannot carry stale frames across. Roster state is fleet-scoped and survives session switches. The only browser persistence is `localStorage` preferences and prompt history; browser auth adds an HttpOnly `omp_session` cookie and keeps the access token only for the duration of a login call.
 
 Nothing assumes process permanence. Restarting the fleet loses no agent state: agent truth stays in the `omp-session` processes, and the fleet's own additions are roster metadata, the workspace record, and the transcript mirror, none of which the agent reads for correctness. The durable record is the transcript on disk, mirrored into the fleet store for managed workspaces.
 
@@ -91,16 +91,16 @@ Transport is HTTP with SSE, and there is no WebSocket on the agent-driving path.
 - **Fleet-scoped frames ride the same stream.** The roster, per-daemon status, real-time activity, session listings, and registered projects are additive frames the edge generates; session-scoped frames are stamped with the roster daemon id as `sessionId` so the client can guard session daemon switches.
 - **Collab is the one WebSocket surface.** The end-to-end encrypted relay at `/r/<roomId>` is hosted and joined through the CLI or TUI only; the browser UI has no collab surface.
 
-Frame shapes, constants, and the evolution rules live in the canonical document. Start with [`shared/protocol.ts`](https://github.com/nibblebot/omp-web/blob/main/shared/protocol.ts) for the source of truth.
+Frame shapes, constants, and the evolution rules live in the canonical document. Start with [`lib/wire/protocol.ts`](https://github.com/nibblebot/omp-web/blob/main/lib/wire/protocol.ts) for the source of truth.
 
 ## Import boundaries
 
 Layering is strictly leaf-ward, and the seams are deliberate:
 
-- **`shared/`** is the leaf: `protocol.ts` (wire contract and constants) and `sse.ts` (SSE framing and replay ring). It imports nothing else in the repository.
-- **`server/`** imports from `shared/` only.
-- **`fleet/`** imports from `shared/`, plus exactly one deliberate `server/` exception: `settings.ts` reuses the settings metadata helpers from `server/settings-model` for the unattached settings surface. The embedded UI bundle constant lives in `fleet/embedded-dist`, so `edge.ts` serves the web app without reaching back into `server/`. Nothing else crosses that seam.
-- **`src/`** imports repository code from `shared/` only, and imports neither backend layer. Its references to SDK packages are type-only.
+- **`lib/`** is the closed leaf layer (`wire`, `platform`, `runtime`, `session-files`, `sdk-settings`, `testkit`). Repository-local imports inside a library must resolve inside `lib/`; `scripts/check-lib-boundary.ts` (the first half of `bun run lint`) enforces that across imports, re-exports, type-only edges, and dynamic imports, and rejects library cycles. Bun/Node built-ins and npm packages stay unrestricted.
+- **`apps/session/`** and **`apps/fleet/`** import `lib/` freely and do not import each other. There is no app-to-app source seam: the shared settings model lives in `lib/sdk-settings/settings-model.ts`, and the embedded UI bundle constant lives in `apps/fleet/embedded-dist.ts`, so `edge.ts` serves the web app without reaching into the session app.
+- **`apps/web/`** imports repository code from `lib/wire` only and imports neither backend app. Its references to SDK packages are type-only.
+- **`e2e/`, `scripts/`, `docs/`** may import any app or library surface; they are orchestration consumers, not dependencies.
 
 Agent-SDK touchpoints in the fleet are narrow. The core modules (registry, supervisor, connector, edge) hold no agent state; the omp-stack probe and the per-worktree session listing load the SDK behind lazy dynamic imports, and the unattached settings service reads the process-global settings singleton. None of them hold a live agent session.
 
@@ -132,7 +132,7 @@ The architecture keeps agent control behind narrow, fail-closed boundaries. The 
 
 - Canonical architecture document: [`docs/architecture.md`](https://github.com/nibblebot/omp-web/blob/main/docs/architecture.md) remains authoritative for protocol details, frame shapes, and the module map.
 - Engineering invariants and workflows: [`AGENTS.md`](https://github.com/nibblebot/omp-web/blob/main/AGENTS.md).
-- Wire source of truth: [`shared/protocol.ts`](https://github.com/nibblebot/omp-web/blob/main/shared/protocol.ts) and [`shared/sse.ts`](https://github.com/nibblebot/omp-web/blob/main/shared/sse.ts).
+- Wire source of truth: [`lib/wire/protocol.ts`](https://github.com/nibblebot/omp-web/blob/main/lib/wire/protocol.ts) and [`lib/wire/sse.ts`](https://github.com/nibblebot/omp-web/blob/main/lib/wire/sse.ts).
 
 Related pages:
 

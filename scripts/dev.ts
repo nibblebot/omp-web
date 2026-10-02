@@ -76,9 +76,9 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { expandTilde, resolveConfigPath } from "../fleet/config";
-import { resolveOmpBinary } from "../fleet/omp-check";
-import { slugifyWorktreeName } from "../fleet/worktrees";
+import { expandTilde, resolveConfigPath } from "../apps/fleet/config";
+import { resolveOmpBinary } from "../apps/fleet/omp-check";
+import { slugifyWorktreeName } from "../apps/fleet/worktrees";
 
 const ROOT = join(import.meta.dir, "..");
 /**
@@ -280,7 +280,7 @@ function buildChild(name: string): Child {
 			// binary, not built in dev. OMP_FLEET_LOCAL_TEMPLATE points it at the
 			// source entry instead (absolute: spawned children inherit the fleet's
 			// cwd, and the repo isn't necessarily it).
-			cmd: ["bun", "fleet/cli.ts", "serve", "--port", "0"],
+			cmd: ["bun", "apps/fleet/cli.ts", "serve", "--port", "0"],
 			env: {
 				// State (and its `.lock`) scoped per worktree under the data home:
 				// parallel worktrees' dev fleets, and the user's real fleet on
@@ -289,7 +289,7 @@ function buildChild(name: string): Child {
 				// worktree root stay SHARED (the lock guards only state; workspaces
 				// coordinate at path level).
 				OMP_FLEET_STATE: join(DEV_FLEET_DIR, "fleet-state.json"),
-				OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "server", "index.ts")} --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`,
+				OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "apps", "session", "index.ts")} --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`,
 			},
 		};
 	}
@@ -305,7 +305,15 @@ function buildChild(name: string): Child {
 	// vite: launched last, once the fleet port is known; its proxy targets are
 	// fixed at startup via env. --strictPort: exit on collision instead of
 	// silently incrementing (the runner retries on a fresh port).
-	const cmd = ["bunx", "vite", "--port", String(ports.vite), "--strictPort"];
+	const cmd = [
+		"bunx",
+		"vite",
+		"--config",
+		"apps/web/vite.config.ts",
+		"--port",
+		String(ports.vite),
+		"--strictPort",
+	];
 	// --host exposes vite only: the /events, /command, /ctl proxies run
 	// server-side, so remote browsers reach the loopback fleet edge through
 	// vite. The edge is loopback-only by design.

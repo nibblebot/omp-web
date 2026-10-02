@@ -1,0 +1,2367 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import { OMP_PROTO, SSE_EVENT_NAME } from "../../../lib/wire/protocol";
+import type {
+	ClientCommand,
+	DaemonEntry,
+	RegisteredProject,
+	ServerFrame,
+	SessionListEntry,
+	SettingsModel,
+	WebSessionState,
+} from "../../../lib/wire/protocol";
+import { pruneUnread, unreadIds } from "../fleet-ui/unread";
+import {
+	announce,
+	attachSession,
+	call,
+	connect,
+	daemonsByProject,
+	hasLiveSession,
+	initialView,
+	listProjectBranches,
+	pushNotice,
+	refreshSettings,
+	sendAddExistingWorktree,
+	sendAddProject,
+	sendCreateWorktree,
+	sendDeleteWorktree,
+	sendRemoveProject,
+	sendWorktreeDeleteInfo,
+	setState,
+	setTxSidebarVisible,
+	setView,
+	spawnResume,
+	state,
+	updateSetting,
+	requestDaemonSessions,
+	resumeDaemonSession,
+	type SubagentInfo,
+} from "../state";
+
+// ---------------------------------------------------------------------------
+// Minimal /events transport double. connect() registers its SSE handler on a
+// FakeEventSource; tests dispatch frames through it exactly like the real
+// stream and capture POSTed /command bodies via a stubbed fetch.
+// ---------------------------------------------------------------------------
+type SseHandler = (ev: { data: string; lastEventId?: string }) => void;
+
+class FakeEventSource {
+	static instances: FakeEventSource[] = [];
+	static handlers = new Map<string, SseHandler>();
+	onopen: (() => void) | null = null;
+	/** Assigned by connect() like the real EventSource; tests invoke it. */
+	onerror: (() => void) | null = null;
+	constructor(public readonly url: string) {
+		FakeEventSource.instances.push(this);
+	}
+	addEventListener(type: string, handler: SseHandler): void {
+		FakeEventSource.handlers.set(type, handler);
+	}
+	close(): void {}
+	/** Dispatch one SSE event; `lastEventId` mirrors native EventSource's
+	 *  MessageEvent.lastEventId (the wire `id:` field, e.g. "1024"). */
+	static dispatch(type: string, data: string, lastEventId?: string): void {
+		FakeEventSource.handlers.get(type)?.({ data, lastEventId });
+	}
+}
+
+const posted: ClientCommand[] = [];
+
+function attached(sessionId: string): ServerFrame {
+	return { type: "attached", sessionId };
+}
+
+function callResult(id: string, data: unknown): ServerFrame {
+	return { type: "call_result", id, ok: true, data };
+}
+
+function dispatch(frame: ServerFrame): void {
+	FakeEventSource.dispatch(SSE_EVENT_NAME, JSON.stringify(frame));
+}
+
+/** Dispatch one frame stamped with an SSE id (priming seqs 1..k or delta seqs >= SSE_DELTA_SEQ_START). */
+function dispatchSeq(frame: ServerFrame, seq: number): void {
+	FakeEventSource.dispatch(SSE_EVENT_NAME, JSON.stringify(frame), String(seq));
+}
+
+function userMsg(text: string): {
+	role: "user";
+	content: Array<{ type: "text"; text: string }>;
+	timestamp: number;
+} {
+	return { role: "user", content: [{ type: "text", text }], timestamp: 0 };
+}
+
+function assistantMsg(text: string): {
+	role: "assistant";
+	content: Array<{ type: "text"; text: string }>;
+} {
+	return { role: "assistant", content: [{ type: "text", text }] };
+}
+
+function toolResultMsg(toolCallId: string): {
+	role: "toolResult";
+	toolCallId: string;
+	toolName: string;
+	content: Array<{ type: "text"; text: string }>;
+} {
+	return {
+		role: "toolResult",
+		toolCallId,
+		toolName: "bash",
+		content: [{ type: "text", text: "out" }],
+	};
+}
+
+/** A completed turn as it appears in history: user prompt, assistant message with a tool call, tool result. */
+function completedTurnHistory(): unknown[] {
+	return [
+		userMsg("q"),
+		{
+			role: "assistant",
+			content: [
+				{ type: "text", text: "a" },
+				{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo hi" } },
+			],
+		},
+		toolResultMsg("t1"),
+	];
+}
+
+/** The same turn re-streamed as live event deltas (what a resume replays). */
+function completedTurnEvents(): ServerFrame[] {
+	const ev = (event: unknown): ServerFrame => ({ type: "event", event }) as ServerFrame;
+	return [
+		ev({ type: "message_start", message: userMsg("q") }),
+		ev({
+			type: "tool_execution_start",
+			toolCallId: "t1",
+			toolName: "bash",
+			args: { command: "echo hi" },
+		}),
+		ev({
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "bash",
+			result: { output: "out" },
+		}),
+		ev({ type: "message_end", message: assistantMsg("a") }),
+	];
+}
+
+function itemCounts(): Record<string, number> {
+	const counts: Record<string, number> = {};
+	for (const item of state.items) counts[item.kind] = (counts[item.kind] ?? 0) + 1;
+	return counts;
+}
+
+async function flushMicrotasks(): Promise<void> {
+	await Promise.resolve();
+	await Promise.resolve();
+}
+
+function sub(status: string): SubagentInfo {
+	return { id: "s1", index: 0, agent: "task", status, lastUpdate: 0 };
+}
+
+beforeEach(() => {
+	posted.length = 0;
+	FakeEventSource.instances.length = 0;
+	FakeEventSource.handlers.clear();
+	// Browser globals the store's transport touches; the Bun test runner has none.
+	globalThis.location = { search: "" } as Location;
+	globalThis.window = {
+		setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms),
+	} as unknown as Window & typeof globalThis;
+	globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
+	globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+		if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
+		return { ok: true, status: 202 } as Response;
+	}) as unknown as typeof fetch;
+	setState({
+		currentSessionId: "",
+		fleetRequired: false,
+		connected: false,
+		readyAt: undefined,
+		subagents: new Map(),
+		error: null,
+		debugLog: [],
+		lastFrameAt: 0,
+		reconnectDelay: 0,
+		announcement: "",
+		// Transcript pin mirror + unviewed-answer flag (useStickyScroll /
+		// agent_end in store/chat.ts); reset for isolation.
+		chatPinned: true,
+		answerUnviewed: false,
+		// Toasts are fleet/app-scoped ephemeral UI state; reset for isolation
+		// like the fleet-scoped collections above (and their dismiss timers
+		// only ever remove their own id, so a stale timer is a no-op).
+		toasts: [],
+		// Transcript items are per-session view state; without a reset a test
+		// that attached (no switch → no resetSessionView) leaks its items into
+		// the next test.
+		items: [],
+		streaming: false,
+		workingIntent: undefined,
+		// Phase 5 fleet-scoped + modal state: reset for isolation like the rest
+		// (roster frames / picker-gate tests otherwise leak into each other).
+		daemonRoster: [],
+		daemonActivity: {},
+		registeredProjects: [],
+		providerProfiles: [],
+		fleetConfigPath: null,
+		worktreeDeleteInfo: {},
+		pendingSessionPicker: null,
+		sessionPickerGate: null,
+		workspaceModalProjectId: null,
+		deleteWorkspaceTarget: null,
+		removeProjectTarget: null,
+		modal: null,
+		// Top-level view mode + its UI flags (setView / setTxSidebarVisible /
+		// workUnviewed); reset for isolation.
+		view: "work",
+		workUnviewed: false,
+		txSidebarVisible: true,
+	});
+});
+
+// The transport stubs are global and would otherwise leak into sibling test
+// files run in the same process (`bun test a.ts b.ts` without --parallel);
+// restore the originals once this file's own tests are done.
+const originalLocation = globalThis.location;
+const originalWindow = globalThis.window;
+const originalEventSource = globalThis.EventSource;
+const originalFetch = globalThis.fetch;
+const originalLocalStorage = globalThis.localStorage;
+const originalHistory = globalThis.history;
+
+afterEach(() => {
+	globalThis.location = originalLocation;
+	globalThis.window = originalWindow;
+	globalThis.EventSource = originalEventSource;
+	globalThis.fetch = originalFetch;
+	globalThis.localStorage = originalLocalStorage;
+	globalThis.history = originalHistory;
+});
+
+describe("attached-frame handling", () => {
+	test("daemon switch rejects the old session's calls but the fresh getSubagents pull survives", async () => {
+		connect();
+		const es = FakeEventSource.instances.at(-1);
+		expect(es).toBeDefined();
+		es!.onopen?.(); // connected = true; without this call() fails fast
+
+		// A previous-session call is in flight when the switch lands.
+		const oldCall = call("getSettings");
+		expect(posted.map((c) => (c.type === "call" ? c.method : c.type))).toEqual(["getSettings"]);
+
+		// First attach: no switch, so the pull is issued and nothing is rejected.
+		dispatch(attached("session-a"));
+		expect(posted.map((c) => (c.type === "call" ? c.method : c.type))).toEqual([
+			"getSettings",
+			"getSubagents",
+		]);
+
+		// The switch lands: the old session's calls are rejected and readiness
+		// drops (the moved cleanup block still runs).
+		setState("readyAt", 123);
+		dispatch(attached("session-b"));
+		await expect(oldCall).rejects.toThrow("session switched");
+		expect(state.readyAt).toBeUndefined();
+
+		// A fresh getSubagents is issued AFTER the cleanup. The regression was
+		// rejectPendingCalls killing the just-registered pull (swallowed by its
+		// .catch), leaving the panel empty until a later lifecycle frame.
+		const calls = posted.filter(
+			(c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call",
+		);
+		expect(calls.map((c) => c.method)).toEqual(["getSettings", "getSubagents", "getSubagents"]);
+		const freshId = calls[2].id;
+
+		// Stale answers to rejected calls are ignored; the panel stays empty.
+		dispatch(callResult(calls[1].id, [sub("stale")]));
+		await flushMicrotasks();
+		expect(state.subagents.size).toBe(0);
+
+		// The fresh call's answer populates the panel for the new session.
+		dispatch(callResult(freshId, [sub("running")]));
+		await flushMicrotasks();
+		expect(state.subagents.get("s1")?.status).toBe("running");
+		expect(state.currentSessionId).toBe("session-b");
+	});
+});
+
+describe("replay dedup (finding #2: resume must not double-apply deltas)", () => {
+	function primeAndStream(): void {
+		connect();
+		const es = FakeEventSource.instances.at(-1);
+		expect(es).toBeDefined();
+		es!.onopen?.();
+		dispatch(attached("session-a"));
+	}
+
+	test("a delta live-delivered during priming is not double-applied by the ring replay", async () => {
+		primeAndStream();
+		// A fresh prime with an empty transcript; a NEW turn streams live while
+		// the paced prime is still in flight (delta seqs >= SSE_DELTA_SEQ_START).
+		dispatchSeq({ type: "history", messages: [] }, 3);
+		const events = completedTurnEvents(); // user q → tool t1 (done) → assistant a
+		events.forEach((frame, i) => dispatchSeq(frame, 1024 + i));
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1, tool: 1 });
+		expect(state.items.filter((it) => it.kind === "tool")[0]).toMatchObject({
+			toolCallId: "t1",
+			status: "done",
+		});
+
+		// The ring replay re-sends those exact frames (same seqs) after
+		// `ready`. Pre-guard, every item would double and a second tool card
+		// would strand running (tool_execution_end resolves the FIRST match).
+		events.forEach((frame, i) => dispatchSeq(frame, 1024 + i));
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1, tool: 1 });
+		expect(state.items.filter((it) => it.kind === "tool")[0]).toMatchObject({
+			toolCallId: "t1",
+			status: "done",
+		});
+	});
+
+	test("a delta live-delivered BEFORE the history rebuild is re-applied exactly once by the replay", async () => {
+		primeAndStream();
+		// Multi-chunk prime: a live delta lands between history chunks, so the
+		// final chunk's loadHistory rebuild wipes its item; the ring replay
+		// must re-deliver it (its seq was cleared by the rebuild), exactly once.
+		dispatchSeq({ type: "event", event: { type: "message_start", message: userMsg("q") } }, 1024);
+		expect(itemCounts()).toEqual({ user: 1 });
+		dispatchSeq({ type: "history", messages: [] }, 3); // final chunk → rebuild wipes the live item
+		expect(itemCounts()).toEqual({});
+		dispatchSeq({ type: "event", event: { type: "message_start", message: userMsg("q") } }, 1024); // replay
+		expect(itemCounts()).toEqual({ user: 1 });
+		// And a SECOND replay copy is deduped like any other re-seen seq.
+		dispatchSeq({ type: "event", event: { type: "message_start", message: userMsg("q") } }, 1024);
+		expect(itemCounts()).toEqual({ user: 1 });
+	});
+});
+
+describe("attach correlation (finding #28)", () => {
+	/** The attach command posted by the last attachSession() call. */
+	function lastAttach(): Extract<ClientCommand, { type: "attach" }> {
+		const cmd = posted.at(-1);
+		if (!cmd || cmd.type !== "attach") throw new Error("expected an attach command");
+		return cmd;
+	}
+
+	test("an unrelated global error frame does not reject an in-flight attach; the keyed attach_result settles it", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true
+
+		const attach = attachSession("daemon-a");
+		const { id } = lastAttach();
+
+		// A global error (e.g. ANOTHER daemon's pipe lost, or a spawn failure)
+		// while this attach is in flight must not reject it; global errors are
+		// uncorrelated broadcasts; only the id-keyed attach_result settles it.
+		dispatch({ type: "error", error: "daemon connection lost" });
+		let settled = false;
+		void attach.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await flushMicrotasks();
+		expect(settled).toBe(false);
+
+		dispatch({ type: "attach_result", id, ok: true, sessionId: "daemon-a" });
+		await expect(attach).resolves.toBe("daemon-a");
+	});
+
+	test("a keyed attach_result failure rejects the attach", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const attach = attachSession("daemon-b");
+		const { id } = lastAttach();
+
+		dispatch({ type: "attach_result", id, ok: false, error: "unknown daemon: d9" });
+		await expect(attach).rejects.toThrow("unknown daemon: d9");
+	});
+
+	test("a stale attach_result for a superseded attach never settles the new waiter", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		// Latest-wins: the second attach supersedes the first (which resolves
+		// immediately with whatever session is current, still "" here).
+		const first = attachSession("daemon-a");
+		const firstCmd = lastAttach();
+		const second = attachSession("daemon-b");
+		const secondCmd = lastAttach();
+		expect(firstCmd.id).not.toBe(secondCmd.id);
+		await expect(first).resolves.toBe("");
+
+		// The superseded attach's keyed result must not settle the second waiter.
+		dispatch({ type: "attach_result", id: firstCmd.id, ok: true, sessionId: "daemon-a" });
+		let settled = false;
+		void second.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await flushMicrotasks();
+		expect(settled).toBe(false);
+
+		dispatch({ type: "attach_result", id: secondCmd.id, ok: true, sessionId: "daemon-b" });
+		await expect(second).resolves.toBe("daemon-b");
+	});
+});
+
+describe("ui_request_end dismissal (finding #16)", () => {
+	test("a settled dialog's ui_request_end dismisses it; ends for other ids leave it open", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({
+			type: "ui_request",
+			id: "ui1",
+			method: "confirm",
+			params: { title: "t", message: "m" },
+		});
+		expect(state.uiRequest?.id).toBe("ui1");
+		// An end for a different (already-superseded) id must not close the
+		// dialog currently shown.
+		dispatch({ type: "ui_request_end", id: "ui0" });
+		expect(state.uiRequest?.id).toBe("ui1");
+		dispatch({ type: "ui_request_end", id: "ui1" });
+		expect(state.uiRequest).toBeNull();
+	});
+});
+
+describe("hello_ok proto gate (finding #61)", () => {
+	test("hello_ok with a mismatched proto is terminal: error + teardown, no reconnect loop", () => {
+		connect();
+		const es = FakeEventSource.instances.at(-1)!;
+		es.onopen?.();
+		expect(state.connected).toBe(true);
+		dispatch({ type: "hello_ok", proto: 1, name: "old", cwd: "/x", pid: 1, version: "0.0.0" });
+		expect(state.error).toContain("proto mismatch");
+		expect(state.error).toContain("expected 2");
+		expect(state.connected).toBe(false);
+		// Fail-closed: the stream is torn down and NO reconnect is scheduled
+		// (a second connect() would create a second FakeEventSource).
+		expect(FakeEventSource.instances.length).toBe(1);
+	});
+
+	test("hello_ok with the current proto is accepted", () => {
+		connect();
+		const es = FakeEventSource.instances.at(-1)!;
+		es.onopen?.();
+		expect(state.connected).toBe(true);
+		dispatch({
+			type: "hello_ok",
+			proto: OMP_PROTO,
+			name: "ok",
+			cwd: "/x",
+			pid: 1,
+			version: "0.0.0",
+		});
+		expect(state.error).toBeNull();
+		expect(state.connected).toBe(true);
+	});
+});
+
+describe("subagent placeholder migration (finding #30)", () => {
+	test("progress before lifecycle migrates the placeholder into the real-id entry, preserving its data", () => {
+		connect();
+		// Progress lands first: the handler creates a `progress-3` placeholder.
+		dispatch({
+			type: "subagent_progress",
+			payload: {
+				index: 3,
+				agent: "task",
+				task: "deploy the fleet",
+				progress: { status: "running" },
+			},
+		});
+		expect(state.subagents.size).toBe(1);
+		expect(state.subagents.get("progress-3")?.status).toBe("running");
+
+		// The lifecycle frame (no status field) arrives later: it must migrate
+		// the placeholder rather than insert a second row with the same index.
+		dispatch({ type: "subagent_lifecycle", payload: { id: "sub-7", index: 3, agent: "task" } });
+		expect(state.subagents.size).toBe(1);
+		expect(state.subagents.get("progress-3")).toBeUndefined();
+		const entry = state.subagents.get("sub-7");
+		expect(entry).toBeDefined();
+		expect(entry?.index).toBe(3);
+		expect(entry?.agent).toBe("task");
+		expect(entry?.task).toBe("deploy the fleet");
+		expect(entry?.status).toBe("running");
+	});
+
+	test("later progress frames update the migrated real entry, never a placeholder", () => {
+		connect();
+		dispatch({
+			type: "subagent_progress",
+			payload: { index: 2, agent: "task", task: "t", progress: { status: "running" } },
+		});
+		dispatch({ type: "subagent_lifecycle", payload: { id: "sub-9", index: 2, status: "started" } });
+		expect(state.subagents.size).toBe(1);
+		expect(state.subagents.get("sub-9")?.status).toBe("started");
+
+		// The next progress frame must find the REAL entry (same index), not
+		// resurrect the placeholder, and the strip stays at one row.
+		dispatch({
+			type: "subagent_progress",
+			payload: { index: 2, task: "t2", progress: { status: "running" } },
+		});
+		expect(state.subagents.size).toBe(1);
+		expect(state.subagents.get("progress-2")).toBeUndefined();
+		expect(state.subagents.get("sub-9")?.status).toBe("running");
+		expect(state.subagents.get("sub-9")?.task).toBe("t2");
+	});
+
+	test("lifecycle-first ordering is unchanged", () => {
+		connect();
+		dispatch({
+			type: "subagent_lifecycle",
+			payload: { id: "sub-1", index: 0, agent: "task", status: "started" },
+		});
+		expect(state.subagents.size).toBe(1);
+		expect(state.subagents.get("sub-1")?.status).toBe("started");
+
+		dispatch({
+			type: "subagent_progress",
+			payload: { index: 0, task: "t", progress: { status: "running" } },
+		});
+		expect(state.subagents.size).toBe(1);
+		expect(state.subagents.get("progress-0")).toBeUndefined();
+		expect(state.subagents.get("sub-1")?.status).toBe("running");
+		expect(state.subagents.get("sub-1")?.task).toBe("t");
+	});
+});
+
+describe("client debug ring (transport observability)", () => {
+	/** The attach command id posted by the last attachSession() call. */
+	function lastAttachId(): string {
+		const cmd = posted.at(-1);
+		if (!cmd || cmd.type !== "attach") throw new Error("expected an attach command");
+		return cmd.id;
+	}
+
+	test("connect/open/teardown write ring entries; CLOSED onerror schedules the backoff retry", () => {
+		vi.useFakeTimers();
+		try {
+			connect();
+			expect(state.debugLog.at(-1)?.message).toBe("connecting /events");
+			const es = FakeEventSource.instances.at(-1)!;
+			es.onopen?.();
+			expect(state.debugLog.at(-1)?.message).toBe("stream open");
+			expect(state.reconnectDelay).toBe(0);
+
+			// The stub carries no readyState, so onerror takes the terminal CLOSED
+			// path (teardown + manual retry) rather than the transient-blip return.
+			es.onerror?.();
+			expect(state.connected).toBe(false);
+			expect(state.reconnectDelay).toBe(1000);
+			const messages = state.debugLog.map((e) => e.message).join("\n");
+			expect(messages).toContain("stream closed");
+			expect(messages).toContain("connection lost, retrying in 1000ms");
+
+			// The scheduled retry dials a fresh stream once the backoff elapses.
+			vi.advanceTimersByTime(1000);
+			expect(FakeEventSource.instances.length).toBe(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("the ring is capped at 300 entries, oldest dropped", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		// daemon_status frames land one ring entry each; distinct daemon ids
+		// make the cap's drop boundary observable in the messages.
+		for (let i = 0; i < 320; i++) {
+			dispatch({ type: "daemon_status", daemonId: `d${i}`, status: "ready" });
+		}
+		expect(state.debugLog.length).toBe(300);
+		expect(state.debugLog[0].message).toContain("d20");
+		expect(state.debugLog[299].message).toContain("d319");
+	});
+
+	test("attach/attach_result and error frames land ring entries", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch(attached("daemon-a"));
+		expect(state.debugLog.at(-1)?.message).toBe("attached daemon-a");
+
+		dispatch({ type: "error", error: "daemon connection lost" });
+		expect(state.debugLog.at(-1)?.message).toBe("error frame: daemon connection lost");
+		expect(state.debugLog.at(-1)?.level).toBe("error");
+
+		const attach = attachSession("daemon-a");
+		dispatch({ type: "attach_result", id: lastAttachId(), ok: true, sessionId: "daemon-a" });
+		expect(state.debugLog.at(-1)?.message).toBe("attach ok: daemon-a");
+		await expect(attach).resolves.toBe("daemon-a");
+
+		// A failed attach writes a warn entry and rejects the caller.
+		const bad = attachSession("daemon-b");
+		dispatch({ type: "attach_result", id: lastAttachId(), ok: false, error: "unknown daemon: d9" });
+		expect(state.debugLog.at(-1)?.message).toBe("attach failed: unknown daemon: d9");
+		expect(state.debugLog.at(-1)?.level).toBe("warn");
+		await expect(bad).rejects.toThrow("unknown daemon: d9");
+	});
+});
+
+describe("fleet settings fallback (no daemon attached)", () => {
+	const model: SettingsModel = { tabs: [] };
+
+	/** Drain the async fetch/.then/.finally chain (each hop is one microtask). */
+	async function settle(): Promise<void> {
+		for (let i = 0; i < 8; i++) await Promise.resolve();
+	}
+
+	/** Swap globalThis.fetch for a JSON responder; records every request. */
+	function stubFetch(
+		respond: (url: string, init?: RequestInit) => { status: number; body: unknown },
+	): Array<{ url: string; method: string; body?: unknown }> {
+		const requests: Array<{ url: string; method: string; body?: unknown }> = [];
+		globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+			const url = String(input);
+			const { status, body } = respond(url, init);
+			requests.push({
+				url,
+				method: init?.method ?? "GET",
+				body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+			});
+			return {
+				ok: status >= 200 && status < 300,
+				status,
+				json: async () => body,
+				text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+			} as unknown as Response;
+		}) as unknown as typeof fetch;
+		return requests;
+	}
+
+	test("refreshSettings GETs /ctl/settings and stores the model (no /command POST)", async () => {
+		setState({
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
+		const requests = stubFetch(() => ({ status: 200, body: model }));
+
+		refreshSettings();
+		await settle();
+
+		expect(requests).toEqual([{ url: "/ctl/settings", method: "GET", body: undefined }]);
+		expect(posted).toEqual([]); // nothing went over the /command uplink
+		expect(state.settingsModel).toBe(model);
+		expect(state.settingsLoading).toBe(false);
+		expect(state.error).toBeNull();
+	});
+
+	test("updateSetting POSTs /ctl/settings/set with {path, value} and stores the response model", async () => {
+		setState({
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
+		const requests = stubFetch(() => ({ status: 200, body: model }));
+
+		updateSetting("agent.model", "gpt-5");
+		await settle();
+
+		expect(requests).toEqual([
+			{ url: "/ctl/settings/set", method: "POST", body: { path: "agent.model", value: "gpt-5" } },
+		]);
+		expect(posted).toEqual([]);
+		expect(state.settingsModel).toBe(model);
+		expect(state.error).toBeNull();
+	});
+
+	test("a non-ok /ctl/settings/set response surfaces the server {error} message in state.error", async () => {
+		setState({
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
+		stubFetch(() => ({ status: 400, body: { error: "unknown setting path" } }));
+
+		updateSetting("bogus.path", 1);
+		await settle();
+
+		expect(state.error).toBe("unknown setting path");
+		expect(state.settingsModel).toBeNull();
+	});
+
+	test("a non-ok /ctl/settings response surfaces the server error and leaves the model null", async () => {
+		setState({
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
+		stubFetch(() => ({ status: 500, body: "boom" }));
+
+		refreshSettings();
+		await settle();
+
+		expect(state.error).toBe("boom");
+		expect(state.settingsModel).toBeNull();
+		expect(state.settingsLoading).toBe(false);
+	});
+
+	test("with a session attached, updateSetting stays on the /command call path (no /ctl fetch)", async () => {
+		setState({
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
+		const requests = stubFetch(() => ({ status: 200, body: model }));
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true so call() posts
+		// Flip to an attached state AFTER the stream opens, so the onopen
+		// auto-attach doesn't muddy the posted list.
+		setState({ currentSessionId: "daemon-a" });
+
+		updateSetting("agent.model", "gpt-5");
+		await settle();
+
+		expect(requests.filter((r) => r.url.startsWith("/ctl"))).toEqual([]); // no /ctl fetch while attached
+		// The /command uplink carries the RPC (recorded by stubFetch, since it
+		// replaced the beforeEach fetch stub that feeds `posted`).
+		const calls = requests
+			.filter((r) => r.url === "/command")
+			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].method).toBe("setSetting");
+		expect(calls[0].args).toEqual(["agent.model", "gpt-5"]);
+
+		// Resolve the RPC so no dangling call timer survives the test. The
+		// frame round-trips through JSON, so the model is a clone, not `model`.
+		dispatch(callResult(calls[0].id, model));
+		await settle();
+		expect(state.settingsModel).toEqual(model);
+	});
+});
+
+describe("state-frame application (model-role picker state)", () => {
+	/** A complete `state` frame; `extra` overrides the role-picker fields under test. */
+	function stateFrame(extra?: Partial<WebSessionState>): ServerFrame {
+		const base: WebSessionState = {
+			thinkingLevel: undefined,
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "all",
+			interruptMode: "immediate",
+			sessionId: "sess-1",
+			autoCompactionEnabled: false,
+			autoRetryEnabled: true,
+			messageCount: 0,
+			queuedMessageCount: 0,
+			todoPhases: [],
+			goalModeState: undefined,
+			planModeEnabled: false,
+			fastModeEnabled: false,
+			computerToolEnabled: false,
+			inspectImageMode: "auto",
+			...(extra ?? {}),
+		};
+		return { type: "state", state: base };
+	}
+
+	test("modelRoleCatalog and modelRoleStorage mirror from a state frame alongside modelRoles", () => {
+		connect();
+		dispatch(
+			stateFrame({
+				modelRoles: [{ role: "default", provider: "anthropic", id: "claude-sonnet-4-5" }],
+				modelRoleCatalog: [
+					{
+						role: "default",
+						name: "Default",
+						hidden: false,
+						provider: "anthropic",
+						id: "claude-sonnet-4-5",
+						source: "global",
+					},
+					{ role: "advisor", name: "Advisor", hidden: true, source: "default" },
+				],
+				modelRoleStorage: "project",
+			}),
+		);
+		// The catalog/storage ride the same applyState path as modelRoles; the
+		// frame round-trips through JSON, so expect structural equality.
+		expect(state.modelRoles).toEqual([
+			{ role: "default", provider: "anthropic", id: "claude-sonnet-4-5" },
+		]);
+		expect(state.modelRoleCatalog).toEqual([
+			{
+				role: "default",
+				name: "Default",
+				hidden: false,
+				provider: "anthropic",
+				id: "claude-sonnet-4-5",
+				source: "global",
+			},
+			{ role: "advisor", name: "Advisor", hidden: true, source: "default" },
+		]);
+		expect(state.modelRoleStorage).toBe("project");
+	});
+
+	test("a frame without role state clears the prior mirror (session-scoped, unlike the daemon roster)", () => {
+		connect();
+		dispatch(
+			stateFrame({
+				modelRoleCatalog: [{ role: "default", name: "Default", hidden: false, source: "default" }],
+				modelRoleStorage: "global",
+			}),
+		);
+		expect(state.modelRoleCatalog).toHaveLength(1);
+		expect(state.modelRoleStorage).toBe("global");
+
+		// A later snapshot without role state (e.g. taken before the catalog
+		// could build) must reset the mirror, never keep stale entries.
+		dispatch(stateFrame());
+		expect(state.modelRoleCatalog).toBeUndefined();
+		expect(state.modelRoleStorage).toBeUndefined();
+		expect(state.modelRoles).toBeUndefined();
+	});
+});
+
+describe("answerUnviewed (turn ended below the viewport)", () => {
+	/** A fully primed stream: attached, empty history, readiness gate cleared. */
+	function primeReady(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+		dispatchSeq({ type: "history", messages: [] }, 3);
+		dispatch({ type: "ready", readyAt: 123 });
+	}
+	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+	const agentEnd = (): ServerFrame => ({
+		type: "event",
+		event: { type: "agent_end", messages: [] },
+	});
+
+	test("agent_end while the transcript is pinned → not flagged (the answer was in view)", () => {
+		primeReady(); // chatPinned defaults true
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(agentEnd(), 1025);
+		expect(state.streaming).toBe(false);
+		expect(state.answerUnviewed).toBe(false);
+	});
+
+	test("agent_end while scrolled up → flagged; the next turn start clears it", () => {
+		primeReady();
+		setState("chatPinned", false); // user is scrolled up (useStickyScroll mirror)
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(agentEnd(), 1025);
+		expect(state.answerUnviewed).toBe(true);
+		dispatchSeq(agentStart(), 1026);
+		expect(state.answerUnviewed).toBe(false);
+	});
+});
+
+describe("workUnviewed (a turn ended while in Analysis)", () => {
+	/** A fully primed stream: attached, empty history, readiness gate cleared. */
+	function primeReady(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+		dispatchSeq({ type: "history", messages: [] }, 3);
+		dispatch({ type: "ready", readyAt: 123 });
+	}
+	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+	const agentEnd = (): ServerFrame => ({
+		type: "event",
+		event: { type: "agent_end", messages: [] },
+	});
+
+	test("agent_end while the view is work → not flagged", () => {
+		primeReady(); // view defaults work
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(agentEnd(), 1025);
+		expect(state.workUnviewed).toBe(false);
+	});
+
+	test("agent_end while the view is analysis → flagged; setView(work) clears it", () => {
+		setView("analysis");
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(agentEnd(), 1025);
+		expect(state.workUnviewed).toBe(true);
+
+		setView("work");
+		expect(state.workUnviewed).toBe(false);
+		// Staying in analysis keeps the flag (only entering work clears it).
+		setState("workUnviewed", true);
+		setView("analysis");
+		expect(state.workUnviewed).toBe(true);
+	});
+
+	test("a detached daemon's streaming flip true→false while in analysis → flagged", () => {
+		// Prime the connected transport without an attached session so d2 is
+		// detached; then switch to analysis.
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setView("analysis");
+
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		expect(state.workUnviewed).toBe(false);
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+		expect(state.workUnviewed).toBe(true);
+
+		// A detached daemon ending while in work never flags.
+		setView("work");
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+		expect(state.workUnviewed).toBe(false);
+	});
+
+	test("the ATTACHED daemon's turn end is not workUnviewed either", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("d2")); // currentSessionId = d2
+		setView("analysis");
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+		expect(state.workUnviewed).toBe(false);
+	});
+});
+
+describe("setView persistence and hash handling", () => {
+	/** In-memory localStorage double; set before connect/store re-init. */
+	function stubStorage(): void {
+		const store = new Map<string, string>();
+		globalThis.localStorage = {
+			getItem: (k: string) => store.get(k) ?? null,
+			setItem: (k: string, v: string) => void store.set(k, v),
+			removeItem: (k: string) => void store.delete(k),
+		} as unknown as Storage;
+	}
+
+	test("setView persists omp.view; setTxSidebarVisible persists its own key", () => {
+		stubStorage();
+		setView("analysis");
+		expect(globalThis.localStorage.getItem("omp.view")).toBe("analysis");
+		setTxSidebarVisible(false);
+		expect(globalThis.localStorage.getItem("omp.txSidebarVisible")).toBe("false");
+	});
+
+	test("entering work clears the hash via history.replaceState and the workUnviewed dot", () => {
+		stubStorage();
+		globalThis.history = {
+			replaceState: vi.fn(),
+		} as unknown as typeof history;
+		globalThis.location = { hash: "#/s/x", pathname: "/app", search: "?a=1" } as Location;
+		setState("workUnviewed", true);
+		setView("analysis");
+		setView("work");
+		expect(history.replaceState).toHaveBeenCalledWith(null, "", "/app?a=1");
+		expect(state.workUnviewed).toBe(false);
+	});
+
+	test("entering analysis keeps the hash untouched", () => {
+		stubStorage();
+		const replaceState = vi.fn();
+		globalThis.history = { replaceState } as unknown as typeof history;
+		globalThis.location = { hash: "", pathname: "/app", search: "" } as Location;
+		setView("analysis");
+		expect(replaceState).not.toHaveBeenCalled();
+	});
+
+	test("defaults: txSidebarVisible true, view work, dot false", () => {
+		stubStorage();
+		expect(state.txSidebarVisible).toBe(true);
+		expect(state.view).toBe("work");
+		expect(state.workUnviewed).toBe(false);
+	});
+});
+
+describe("initialView (boot view resolution)", () => {
+	test("legacy values migrate: chat → work, transcripts → analysis", () => {
+		expect(initialView("chat", "")).toBe("work");
+		expect(initialView("transcripts", "")).toBe("analysis");
+	});
+
+	test("unknown/null persist values fall back to work; current values pass through", () => {
+		expect(initialView("analysis", "")).toBe("analysis");
+		expect(initialView("work", "")).toBe("work");
+		expect(initialView(null, "")).toBe("work");
+		expect(initialView("bogus", "")).toBe("work");
+		expect(initialView("", "")).toBe("work");
+	});
+
+	test("a #/s/<file> hash deep-links into analysis even when work is persisted", () => {
+		expect(initialView("work", "#/s/abc.jsonl")).toBe("analysis");
+		expect(initialView("work", "#s/abc.jsonl")).toBe("analysis");
+	});
+
+	test("a #/stored/<workspaceId>/<sessionId> hash deep-links into analysis (P8.5)", () => {
+		expect(initialView("work", "#/stored/d7/sess-1")).toBe("analysis");
+		expect(initialView("work", "#stored/d7/sess-1")).toBe("analysis");
+	});
+
+	test("a non-/s/ hash falls through to the persisted value", () => {
+		expect(initialView("analysis", "#/settings")).toBe("analysis");
+		expect(initialView("work", "#/settings")).toBe("work");
+	});
+});
+
+describe("aria-live announcements (finding #P1)", () => {
+	/** A fully primed stream: attached, empty history, readiness gate cleared. */
+	function primeReady(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+		dispatchSeq({ type: "history", messages: [] }, 3);
+		dispatch({ type: "ready", readyAt: 123 });
+	}
+
+	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+	const agentEnd = (): ServerFrame => ({
+		type: "event",
+		event: { type: "agent_end", messages: [] },
+	});
+
+	test("an agent turn starting announces only after the session is ready", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+		// Streaming flips during priming; no announcement until the gate clears.
+		dispatchSeq(agentStart(), 1024);
+		expect(state.streaming).toBe(true);
+		expect(state.announcement).toBe("");
+
+		// Post-readiness: turn end announces, and the next turn start does too.
+		dispatch({ type: "ready", readyAt: 123 });
+		dispatchSeq(agentEnd(), 1025);
+		expect(state.announcement).toBe("agent finished");
+		dispatchSeq(agentStart(), 1026);
+		expect(state.announcement).toBe("agent started");
+	});
+
+	test("a tool run starting, completing, and failing announces its kind", () => {
+		primeReady();
+		dispatchSeq(
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_start",
+					toolCallId: "t1",
+					toolName: "bash",
+					args: { command: "echo hi" },
+				},
+			},
+			1024,
+		);
+		expect(state.announcement).toBe("bash started");
+		dispatchSeq(
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_end",
+					toolCallId: "t1",
+					toolName: "bash",
+					result: { output: "out" },
+				},
+			},
+			1025,
+		);
+		expect(state.announcement).toBe("bash completed");
+		// A failed run announces "failed" (the tool output itself is never announced).
+		dispatchSeq(
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_start",
+					toolCallId: "t2",
+					toolName: "bash",
+					args: { command: "boom" },
+				},
+			},
+			1026,
+		);
+		dispatchSeq(
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_end",
+					toolCallId: "t2",
+					toolName: "bash",
+					result: { output: "" },
+					isError: true,
+				},
+			},
+			1027,
+		);
+		expect(state.announcement).toBe("bash failed");
+	});
+
+	test("an error notice announces its message; non-error notices stay silent", () => {
+		primeReady();
+		pushNotice("info", "not a status change");
+		expect(state.announcement).toBe("");
+		pushNotice("error", "nothing to retry");
+		expect(state.announcement).toBe("nothing to retry");
+	});
+
+	test("two identical consecutive announcements collapse to one (consecutive-only dedupe)", () => {
+		// The store field is the only observable here; Bun's runtime doesn't
+		// propagate Solid 1.9 store notifications, so write-counting via an
+		// effect would never fire. The field contract pins the dedupe: the
+		// identical repeat is a no-op, and a repeat after an intervening message
+		// re-announces (the region's content changed, so SRs hear it again).
+		announce("tick");
+		announce("tick"); // identical consecutive text → collapsed, no re-announce
+		expect(state.announcement).toBe("tick");
+		announce("tock");
+		expect(state.announcement).toBe("tock");
+		// Non-consecutive repeat of earlier text announces again.
+		announce("tick");
+		expect(state.announcement).toBe("tick");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// workingIntent: the shimmer label's dynamic phrase (TUI setWorkingMessage
+// parity). Sourced from tool_execution_start, first the loop-resolved
+// `intent`, then the harness-injected `i` arg, and cleared with the turn.
+// ---------------------------------------------------------------------------
+describe("workingIntent (dynamic shimmer label)", () => {
+	function primeReady(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+		dispatchSeq({ type: "history", messages: [] }, 3);
+		dispatch({ type: "ready", readyAt: 123 });
+	}
+	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+	const agentEnd = (): ServerFrame => ({
+		type: "event",
+		event: { type: "agent_end", messages: [] },
+	});
+	const toolStart = (toolCallId: string, extra: Record<string, unknown>): ServerFrame => ({
+		type: "event",
+		event: {
+			type: "tool_execution_start",
+			toolCallId,
+			toolName: "read",
+			args: { path: "x.ts" },
+			...extra,
+		},
+	});
+
+	test("loop-resolved intent wins; latest call's intent replaces it", () => {
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		expect(state.workingIntent).toBeUndefined();
+		dispatchSeq(toolStart("t1", { intent: "Reading config files" }), 1025);
+		expect(state.workingIntent).toBe("Reading config files");
+		dispatchSeq(toolStart("t2", { intent: "Editing the parser" }), 1026);
+		expect(state.workingIntent).toBe("Editing the parser");
+	});
+
+	test("falls back to the harness `i` arg when the event has no intent", () => {
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(
+			toolStart("t1", { args: { path: "x.ts", i: "Searching for shimmer styles" } }),
+			1025,
+		);
+		expect(state.workingIntent).toBe("Searching for shimmer styles");
+	});
+
+	test("non-string intent payloads from partial JSON are ignored", () => {
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(toolStart("t1", { intent: { partial: true } }), 1025);
+		expect(state.workingIntent).toBeUndefined();
+	});
+
+	test("turn end and a fresh turn clear the intent", () => {
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(toolStart("t1", { intent: "Reading config files" }), 1025);
+		dispatchSeq(agentEnd(), 1026);
+		expect(state.streaming).toBe(false);
+		expect(state.workingIntent).toBeUndefined();
+	});
+
+	test("an idle state snapshot clears a stale intent from a pre-reconnect turn", () => {
+		primeReady();
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(toolStart("t1", { intent: "Reading config files" }), 1025);
+		// Reconnect primed against an idle daemon: the state frame says the turn
+		// is over, so the last intent must not linger under the shimmer.
+		dispatch({ type: "state", state: { isStreaming: false } as unknown as WebSessionState });
+		expect(state.workingIntent).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5: project-first sidebar state: registered_projects frame handling
+// (fleet-scoped, survives session resets) + daemonsByProject grouping.
+// ---------------------------------------------------------------------------
+describe("Phase 5: registered projects and project-first grouping", () => {
+	const p1: RegisteredProject = { projectId: "p1", path: "/repos/a", name: "a", addedAt: 1 };
+	const p2: RegisteredProject = { projectId: "p2", path: "/repos/b", name: "b", addedAt: 2 };
+	const p3: RegisteredProject = { projectId: "p3", path: "/repos/c", name: "c", addedAt: 3 };
+
+	/** Minimal roster entry; extra fields (projectId/worktreeOf/…) ride along. */
+	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: id,
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			...extra,
+		};
+	}
+
+	test("registered_projects populates the store and survives a session reset (fleet-scoped)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "registered_projects", projects: [p1, p2, p3] });
+		expect(state.registeredProjects).toEqual([p1, p2, p3]);
+
+		// A daemon switch runs resetSessionView (session-scoped cleanup); the
+		// project registry is fleet-scoped and must come through intact.
+		dispatch(attached("daemon-a"));
+		dispatch(attached("daemon-b")); // switch → resetSessionView
+		expect(state.currentSessionId).toBe("daemon-b");
+		expect(state.registeredProjects).toEqual([p1, p2, p3]);
+	});
+
+	test("a later registered_projects broadcast replaces the collection wholesale", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "registered_projects", projects: [p1, p2] });
+		dispatch({ type: "registered_projects", projects: [p2] }); // p1 deregistered
+		expect(state.registeredProjects).toEqual([p2]);
+	});
+
+	test("registered_projects carries the fleet config path (additive; missing = null, fleet-scoped)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		// Older edges omit configPath entirely: the store must read null.
+		dispatch({ type: "registered_projects", projects: [p1] });
+		expect(state.fleetConfigPath).toBeNull();
+
+		// A config-carrying frame sets it (resolved config path, not null).
+		dispatch({
+			type: "registered_projects",
+			projects: [p2],
+			configPath: "/home/u/.omp-web/config.json",
+		});
+		expect(state.fleetConfigPath).toBe("/home/u/.omp-web/config.json");
+
+		// An explicit null (defaults apply, no config file) is honored.
+		dispatch({ type: "registered_projects", projects: [p3], configPath: null });
+		expect(state.fleetConfigPath).toBeNull();
+
+		// Fleet-scoped like the projects: a session switch (resetSessionView)
+		// must not wipe it; the first-run signal lives until config exists.
+		dispatch({
+			type: "registered_projects",
+			projects: [p1],
+			configPath: "/home/u/.omp-web/config.json",
+		});
+		dispatch(attached("daemon-a"));
+		dispatch(attached("daemon-b")); // switch → resetSessionView
+		expect(state.currentSessionId).toBe("daemon-b");
+		expect(state.registeredProjects).toEqual([p1]);
+		expect(state.fleetConfigPath).toBe("/home/u/.omp-web/config.json");
+	});
+
+	test("daemonsByProject: registry order, zero-daemon projects present, main-checkout rows first", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		// Registry order deliberately differs from roster order.
+		dispatch({ type: "registered_projects", projects: [p2, p1, p3] });
+		dispatch({
+			type: "roster",
+			daemons: [
+				daemon("b-main", { projectId: "p2" }),
+				daemon("a-wt", { projectId: "p1", worktreeOf: "a" }),
+				daemon("a-main", { projectId: "p1" }),
+			],
+		});
+
+		const groups = daemonsByProject();
+		expect(groups.map((g) => g.project?.projectId ?? null)).toEqual(["p2", "p1", "p3"]);
+		expect(groups[0].daemons.map((d) => d.daemonId)).toEqual(["b-main"]);
+		// Main-checkout row first, then worktrees, regardless of roster order.
+		expect(groups[1].daemons.map((d) => d.daemonId)).toEqual(["a-main", "a-wt"]);
+		expect(groups[2].daemons).toEqual([]); // zero-daemon project still renders
+	});
+
+	test("daemonsByProject: entries without a registered project fall into one trailing null group in string-grouping order", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "registered_projects", projects: [p1] });
+		dispatch({
+			type: "roster",
+			daemons: [
+				// Unregistered: no projectId at all (remote/unregistered).
+				daemon("zeta-main", { project: "zeta" }),
+				// Orphaned: projectId whose registry entry is gone; must not vanish.
+				daemon("orphan", { project: "orphan", projectId: "gone" }),
+				// A worktree of an unregistered repo: same string group, main first.
+				daemon("zeta-wt", { project: "zeta", worktreeOf: "zeta" }),
+				daemon("alpha", { project: "alpha" }),
+				// Registered daemon: belongs to p1's group, not the fallback.
+				daemon("a-main", { projectId: "p1" }),
+			],
+		});
+
+		const groups = daemonsByProject();
+		expect(groups.map((g) => g.project?.projectId ?? null)).toEqual(["p1", null]);
+		expect(groups[0].daemons.map((d) => d.daemonId)).toEqual(["a-main"]);
+		// Today's string grouping: repo keys sorted via localeCompare, main
+		// checkouts before worktrees within a repo, roster order within each.
+		expect(groups[1].daemons.map((d) => d.daemonId)).toEqual([
+			"alpha",
+			"orphan",
+			"zeta-main",
+			"zeta-wt",
+		]);
+	});
+
+	test("daemonsByProject with no unregistered entries emits no trailing null group", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({ type: "registered_projects", projects: [p1] });
+		dispatch({ type: "roster", daemons: [daemon("a-main", { projectId: "p1" })] });
+		const groups = daemonsByProject();
+		expect(groups.map((g) => g.project?.projectId ?? null)).toEqual(["p1"]);
+	});
+
+	test("worktree_delete_info answers populate the daemonId-keyed evidence map (fleet-scoped)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({
+			type: "worktree_delete_info",
+			daemonId: "d1",
+			owned: true,
+			dirty: true,
+			git: { added: 1, modified: 0, deleted: 0, untracked: 2 },
+			branch: "feat",
+			merged: false,
+			unpushed: true,
+		});
+		dispatch({
+			type: "worktree_delete_info",
+			daemonId: "d1",
+			owned: true,
+			dirty: false,
+			branch: "feat",
+			merged: true,
+			unpushed: false,
+		});
+		dispatch({
+			type: "worktree_delete_info",
+			daemonId: "d2",
+			owned: false,
+			dirty: false,
+			reason: "not managed",
+		});
+
+		expect(state.worktreeDeleteInfo["d1"]).toMatchObject({
+			owned: true,
+			dirty: false,
+			merged: true,
+		}); // latest-wins
+		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({
+			owned: false,
+			dirty: false,
+			reason: "not managed",
+		});
+
+		// Fleet-scoped: survives the reset of a daemon switch.
+		dispatch(attached("daemon-a"));
+		dispatch(attached("daemon-b"));
+		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({
+			owned: false,
+			dirty: false,
+			reason: "not managed",
+		});
+	});
+
+	test("listProjectBranches resolves via a matching project_branches frame; a mismatched projectId frame does not settle it", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true
+
+		const branches = listProjectBranches("p1");
+		expect(posted).toEqual([
+			{ type: "list_project_branches", id: expect.any(String), projectId: "p1" },
+		]);
+
+		// A frame for a different project belongs to a superseded request and
+		// must not settle the pending promise.
+		dispatch({
+			type: "project_branches",
+			projectId: "p2",
+			branches: [{ name: "other", checkedOut: false }],
+		});
+		let settled = false;
+		void branches.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await flushMicrotasks();
+		expect(settled).toBe(false);
+
+		// The matching projectId frame settles it with the branch list.
+		dispatch({
+			type: "project_branches",
+			projectId: "p1",
+			branches: [{ name: "main", checkedOut: true, worktreePath: "/w/main" }],
+		});
+		await expect(branches).resolves.toEqual([
+			{ name: "main", checkedOut: true, worktreePath: "/w/main" },
+		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5: project/worktree command senders. Each POSTs the exact
+// ClientCommand variant the fleet edge allowlists.
+// ---------------------------------------------------------------------------
+describe("Phase 5: project/worktree command senders", () => {
+	test("sendAddProject posts add_project (path + optional start/template/labels)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendAddProject("/repos/a", { start: true, template: "agent", labels: ["x", "y"] });
+		expect(posted).toEqual([
+			{
+				type: "add_project",
+				id: expect.any(String),
+				path: "/repos/a",
+				start: true,
+				template: "agent",
+				labels: ["x", "y"],
+			},
+		]);
+
+		// Bare path: no optional fields on the wire.
+		posted.length = 0;
+		sendAddProject("/repos/b");
+		expect(posted).toEqual([{ type: "add_project", id: expect.any(String), path: "/repos/b" }]);
+	});
+
+	test("sendRemoveProject posts remove_project", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		sendRemoveProject("p1");
+		expect(posted).toEqual([{ type: "remove_project", id: expect.any(String), projectId: "p1" }]);
+	});
+
+	test("sendCreateWorktree posts create_worktree with name and optional overrides", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendCreateWorktree("p1", "feature-x", { baseRef: "main", start: true });
+		expect(posted).toEqual([
+			{
+				type: "create_worktree",
+				id: expect.any(String),
+				projectId: "p1",
+				name: "feature-x",
+				baseRef: "main",
+				start: true,
+			},
+		]);
+
+		posted.length = 0;
+		sendCreateWorktree("p1", "feat", { existingBranch: "feat" });
+		expect(posted).toEqual([
+			{
+				type: "create_worktree",
+				id: expect.any(String),
+				projectId: "p1",
+				name: "feat",
+				existingBranch: "feat",
+			},
+		]);
+	});
+
+	test("sendAddExistingWorktree posts add_worktree with the worktree path", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		sendAddExistingWorktree("p1", "/w/feat", { start: true });
+		expect(posted).toEqual([
+			{
+				type: "add_worktree",
+				id: expect.any(String),
+				projectId: "p1",
+				worktreePath: "/w/feat",
+				start: true,
+			},
+		]);
+	});
+
+	test("sendDeleteWorktree posts delete_worktree (deleteBranch optional)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendDeleteWorktree("d1", { deleteBranch: true });
+		expect(posted).toEqual([
+			{ type: "delete_worktree", id: expect.any(String), daemonId: "d1", deleteBranch: true },
+		]);
+
+		posted.length = 0;
+		sendDeleteWorktree("d1");
+		expect(posted).toEqual([{ type: "delete_worktree", id: expect.any(String), daemonId: "d1" }]);
+	});
+
+	test("sendWorktreeDeleteInfo posts worktree_delete_info for the daemon", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		sendWorktreeDeleteInfo("d1");
+		expect(posted).toEqual([
+			{ type: "worktree_delete_info", id: expect.any(String), daemonId: "d1" },
+		]);
+	});
+
+	test("start:false senders leave the gate untouched", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendAddProject("/repos/a", { start: false });
+		sendCreateWorktree("p1", "feat");
+		sendAddExistingWorktree("p1", "/w/feat", { start: false });
+		expect(state.pendingSessionPicker).toBeNull();
+		expect(posted.map((c) => c.type)).toEqual(["add_project", "create_worktree", "add_worktree"]);
+		// start:false rides the wire (explicit opts pass through like spawnDaemon's)
+		// but must NOT arm the gate.
+		expect(posted[0]).toMatchObject({ type: "add_project", start: false });
+		expect(posted[1]).not.toHaveProperty("start");
+		expect(posted[2]).toMatchObject({ type: "add_worktree", start: false });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5: post-attach session-picker gate. A start:true onboarding sender
+// arms the gate (daemonId unknown at send time); the onboarding attach stamps
+// the real daemonId; attach_result for that daemon asks list_sessions; the
+// sessions answer decides new-vs-resume and clears the gate.
+// ---------------------------------------------------------------------------
+describe("Phase 5: post-attach session-picker gate", () => {
+	function sessionEntry(id: string, cwd: string): SessionListEntry {
+		return { path: cwd, id, cwd, name: id, messageCount: 0, modifiedAt: 0 };
+	}
+
+	/** The attach command posted by the most recent attachSession() call. */
+	function lastAttachCmd(): Extract<ClientCommand, { type: "attach" }> {
+		const cmd = posted
+			.filter((c): c is Extract<ClientCommand, { type: "attach" }> => c.type === "attach")
+			.at(-1);
+		if (!cmd) throw new Error("expected an attach command");
+		return cmd;
+	}
+
+	/** Commands of one type as posted, oldest first. */
+	function postedOf<T extends ClientCommand["type"]>(
+		type: T,
+	): Array<Extract<ClientCommand, { type: T }>> {
+		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
+	}
+
+	test("armed gate: attach_result asks list_sessions; non-empty answer opens the picker with the daemon context", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		// The sender arms the gate (it cannot know the spawned daemon's id).
+		sendAddProject("/repos/a", { start: true });
+		expect(state.pendingSessionPicker).not.toBeNull();
+
+		// The onboarding attach stamps the REAL daemonId.
+		const attach = attachSession("d1");
+		expect(state.pendingSessionPicker).toBe("d1");
+
+		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d1" });
+		await expect(attach).resolves.toBe("d1");
+		// The gate asked for sessions; the flag stays set until the answer.
+		expect(postedOf("list_sessions")).toHaveLength(1);
+		expect(state.pendingSessionPicker).toBe("d1");
+
+		// Non-empty answer: open the picker with the pending daemon context.
+		dispatch({ type: "sessions", sessions: [sessionEntry("s1", "/repos/a")] });
+		expect(state.pendingSessionPicker).toBeNull();
+		expect(state.sessionPickerGate).toEqual({ daemonId: "d1" });
+		expect(state.modal).toBe("sessions");
+	});
+
+	test("armed gate: empty sessions answer starts a new session and clears the gate (no picker)", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendCreateWorktree("p1", "feat", { start: true });
+		const attach = attachSession("d2");
+		expect(state.pendingSessionPicker).toBe("d2");
+		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d2" });
+		await expect(attach).resolves.toBe("d2");
+		expect(postedOf("list_sessions")).toHaveLength(1);
+
+		dispatch({ type: "sessions", sessions: [] });
+		expect(state.pendingSessionPicker).toBeNull();
+		expect(state.sessionPickerGate).toBeNull();
+		expect(state.modal).toBeNull();
+		// The daemon got the same new-session RPC /new uses.
+		const newSessionCalls = postedOf("call").filter((c) => c.method === "newSession");
+		expect(newSessionCalls).toHaveLength(1);
+	});
+
+	test("an attach failure disarms the gate", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendAddExistingWorktree("p1", "/w/feat", { start: true });
+		const attach = attachSession("d3");
+		expect(state.pendingSessionPicker).toBe("d3");
+		dispatch({
+			type: "attach_result",
+			id: lastAttachCmd().id,
+			ok: false,
+			error: "unknown daemon: d3",
+		});
+		await expect(attach).rejects.toThrow("unknown daemon: d3");
+		expect(state.pendingSessionPicker).toBeNull();
+		expect(postedOf("list_sessions")).toHaveLength(0);
+	});
+
+	test("a superseding attach re-points the gate to the latest daemon (latest-wins)", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendAddProject("/repos/a", { start: true });
+		attachSession("d1");
+		expect(state.pendingSessionPicker).toBe("d1");
+		// A newer attach supersedes it before the first settles; the gate
+		// follows the LATEST attach (it gates whichever daemon onboarding
+		// ended up on).
+		attachSession("d9");
+		expect(state.pendingSessionPicker).toBe("d9");
+
+		// The superseded attach's keyed result is ignored (id mismatch) and
+		// the gate stays pointed at d9.
+		const firstCmd = postedOf("attach")[0];
+		dispatch({ type: "attach_result", id: firstCmd.id, ok: true, sessionId: "d1" });
+		expect(state.pendingSessionPicker).toBe("d9");
+		expect(postedOf("list_sessions")).toHaveLength(0);
+
+		// The current attach settles → the gate fires for d9.
+		const attach = attachSession("d9");
+		dispatch({
+			type: "attach_result",
+			id: postedOf("attach").at(-1)!.id,
+			ok: true,
+			sessionId: "d9",
+		});
+		await expect(attach).resolves.toBe("d9");
+		expect(postedOf("list_sessions")).toHaveLength(1);
+		expect(state.pendingSessionPicker).toBe("d9"); // armed until the answer
+
+		dispatch({ type: "sessions", sessions: [sessionEntry("s1", "/repos/a")] });
+		expect(state.sessionPickerGate).toEqual({ daemonId: "d9" });
+		expect(state.modal).toBe("sessions");
+	});
+
+	test("spawn_resume never arms the gate (routine asleep-row wake)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		expect(state.pendingSessionPicker).toBeNull();
+		spawnResume("d9");
+		expect(posted).toEqual([{ type: "spawn_resume", id: expect.any(String), daemonId: "d9" }]);
+		expect(state.pendingSessionPicker).toBeNull();
+	});
+
+	test("no armed gate: attach + sessions answer open nothing", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const attach = attachSession("d4");
+		dispatch({ type: "attach_result", id: lastAttachCmd().id, ok: true, sessionId: "d4" });
+		await expect(attach).resolves.toBe("d4");
+		expect(postedOf("list_sessions")).toHaveLength(0);
+
+		// A sessions broadcast (e.g. the picker's own listSessions) with no
+		// gate must never open the picker on its own.
+		dispatch({ type: "sessions", sessions: [sessionEntry("s1", "/repos/a")] });
+		expect(state.modal).toBeNull();
+		expect(state.sessionPickerGate).toBeNull();
+	});
+
+	test("a switch to a different daemon disarms the gate; the onboarding daemon's own switch keeps it", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a")); // already attached elsewhere
+
+		// Onboarding flow: armed, then attached to the new daemon.
+		sendCreateWorktree("p1", "feat", { start: true });
+		attachSession("d1");
+		expect(state.pendingSessionPicker).toBe("d1");
+
+		// The proxied attached frame for the gate's own daemon (a switch from
+		// daemon-a) must NOT disarm; the sessions answer still has to land.
+		dispatch(attached("d1"));
+		expect(state.pendingSessionPicker).toBe("d1");
+
+		// A switch to yet another daemon disarms it.
+		dispatch(attached("daemon-c"));
+		expect(state.pendingSessionPicker).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// worktree_removed: poll-detected on-disk worktree removal (the fleet evicted
+// the daemon and broadcasts). One toast per eviction + an aria-live announce;
+// fleet-edge-only like registered_projects, so no session guard is applied.
+// ---------------------------------------------------------------------------
+describe("worktree_removed (on-disk removal toast)", () => {
+	/** A fully primed stream: attached + empty history. */
+	function prime(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("s1"));
+	}
+
+	test("a worktree_removed frame appends one toast (name + path) and announces it", () => {
+		prime();
+		dispatch({
+			type: "worktree_removed",
+			daemonId: "d1",
+			name: "feat-x",
+			path: "/repos/proj/worktrees/feat-x",
+		} as ServerFrame);
+		const expected = "Worktree removed on disk: feat-x (/repos/proj/worktrees/feat-x)";
+		expect(state.toasts).toHaveLength(1);
+		expect(state.toasts[0].text).toBe(expected);
+		expect(state.announcement).toBe(expected);
+	});
+
+	test("a second eviction appends a second toast (one toast per eviction)", () => {
+		prime();
+		dispatch({
+			type: "worktree_removed",
+			daemonId: "d1",
+			name: "feat-x",
+			path: "/repos/proj/worktrees/feat-x",
+		} as ServerFrame);
+		dispatch({
+			type: "worktree_removed",
+			daemonId: "d2",
+			name: "feat-y",
+			path: "/repos/proj/worktrees/feat-y",
+		} as ServerFrame);
+		expect(state.toasts.map((t) => t.text)).toEqual([
+			"Worktree removed on disk: feat-x (/repos/proj/worktrees/feat-x)",
+			"Worktree removed on disk: feat-y (/repos/proj/worktrees/feat-y)",
+		]);
+	});
+
+	test("a long path is truncated from the left with an ellipsis (text stays under 120 chars)", () => {
+		prime();
+		const longPath = `/repos/proj/worktrees/feat-${"segment/".repeat(20)}tail`;
+		dispatch({
+			type: "worktree_removed",
+			daemonId: "d1",
+			name: "feat",
+			path: longPath,
+		} as ServerFrame);
+		const text = state.toasts[0].text;
+		expect(text.length).toBeLessThanOrEqual(120);
+		expect(text.startsWith("Worktree removed on disk: feat (")).toBe(true);
+		expect(text.endsWith(")")).toBe(true);
+		expect(text).toContain("…");
+		expect(text).toContain("tail"); // the informative basename tail survives
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Roster truth vs. the attached chat column: a roster/daemon_status frame
+// marking the attached daemon dead (asleep/error) or removing it clears the
+// session view, but MUST NOT fire while that daemon's attach is in flight
+// (a freshly waking daemon reads as "asleep" in lagging roster frames).
+// ---------------------------------------------------------------------------
+describe("attached session reconciliation against roster truth", () => {
+	/** Minimal roster entry; status/extra fields ride along. */
+	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: id,
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			...extra,
+		};
+	}
+
+	/** Connect + attach to a daemon with an empty-transcript prime in place. */
+	function attachAndPrime(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+		dispatchSeq({ type: "history", messages: [userMsg("q"), assistantMsg("a")] } as ServerFrame, 3);
+		setState("readyAt", 123);
+	}
+
+	test("a roster frame marking the attached daemon asleep clears the session view (roster survives)", () => {
+		attachAndPrime();
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.readyAt).toBe(123);
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readyAt).toBeUndefined();
+		expect(state.items).toEqual([]);
+		// Fleet-scoped roster data survives the session clear.
+		expect(state.daemonRoster.map((d) => d.daemonId)).toEqual(["daemon-a"]);
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("a roster frame keeping the attached daemon ready does NOT clear", () => {
+		attachAndPrime();
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
+
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.readyAt).toBe(123);
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+		expect(hasLiveSession()).toBe(true);
+	});
+
+	test("removing the attached entry from the roster clears the session view", () => {
+		attachAndPrime();
+
+		dispatch({ type: "roster", daemons: [] });
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readyAt).toBeUndefined();
+		expect(state.items).toEqual([]);
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("a daemon_status asleep frame for the attached daemon clears the session view", () => {
+		attachAndPrime();
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
+
+		dispatch({ type: "daemon_status", daemonId: "daemon-a", status: "asleep" });
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.readyAt).toBeUndefined();
+		expect(state.items).toEqual([]);
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("RACE: a lagging 'asleep' roster frame does not clear while the attach is in flight", async () => {
+		attachAndPrime();
+		// The proxied attached frame already set currentSessionId, but the
+		// id-keyed attach_result has not settled yet (finding #28: priming
+		// rides the daemon pipe, which may be mid-redial); the wake-attach
+		// is still in flight, so the lagging roster must not clear.
+		const attach = attachSession("daemon-a");
+		const cmd = posted.at(-1);
+		if (!cmd || cmd.type !== "attach") throw new Error("expected an attach command");
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+		expect(hasLiveSession()).toBe(true);
+
+		// Once the attach settles, the same asleep roster frame IS truth.
+		dispatch({ type: "attach_result", id: cmd.id, ok: true, sessionId: "daemon-a" });
+		await expect(attach).resolves.toBe("daemon-a");
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		expect(state.currentSessionId).toBe("");
+		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("the in-flight guard only protects the attach target (a different dead daemon clears)", async () => {
+		attachAndPrime();
+		// Attaching to daemon-b must not shield a daemon-a that died.
+		const attach = attachSession("daemon-b");
+		const cmd = posted.at(-1);
+		if (!cmd || cmd.type !== "attach") throw new Error("expected an attach command");
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		expect(state.currentSessionId).toBe("");
+
+		dispatch({ type: "attach_result", id: cmd.id, ok: true, sessionId: "daemon-b" });
+		await expect(attach).resolves.toBe("daemon-b");
+	});
+
+	test("hasLiveSession: transitional wake statuses stay live, terminal-dead statuses gate the pane", () => {
+		attachAndPrime();
+		// A transitional wake status is never dead.
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "connecting" })] });
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(hasLiveSession()).toBe(true);
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "error" })] });
+		expect(state.currentSessionId).toBe("");
+		expect(hasLiveSession()).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Fleet edge detection: the roster frame is what tells the client its /events
+// peer is the fleet edge, which primes it FIRST on every stream open. A bare
+// session daemon never sends one, so an attached/hello_ok frame arriving
+// before any roster frame gates the whole UI behind the fleet-required notice.
+// ---------------------------------------------------------------------------
+describe("fleet-required gate (peer is not the fleet edge)", () => {
+	test("a roster frame before the attach keeps the UI ungated", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({ type: "roster", daemons: [] });
+		dispatch(attached("daemon-a"));
+		expect(state.fleetRequired).toBe(false);
+	});
+
+	test("an attach before any roster frame gates the UI", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+		expect(state.fleetRequired).toBe(true);
+	});
+
+	test("a hello_ok before any roster frame gates the UI", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({
+			type: "hello_ok",
+			proto: OMP_PROTO,
+			name: "s",
+			cwd: "/x",
+			pid: 1,
+			version: "0.0.0",
+		});
+		expect(state.fleetRequired).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Unread-dot tracking: a session abandoned mid-stream (its turn's end will
+// never be observed on this tab) is marked unread at switch-away time; the
+// row is cleared on attach; dead roster entries are pruned. All client-side.
+// ---------------------------------------------------------------------------
+describe("unread-dot tracking", () => {
+	/** Minimal roster entry (mirrors the reconciliation describe). */
+	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: id,
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			...extra,
+		};
+	}
+
+	const agentStart = (): ServerFrame => ({ type: "event", event: { type: "agent_start" } });
+
+	beforeEach(() => {
+		// Module-level unread state must not leak between tests.
+		pruneUnread(new Set());
+	});
+
+	test("switching away mid-stream marks the abandoned session unread", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+		dispatchSeq(agentStart(), 1024); // driver state.streaming → true
+		expect(state.streaming).toBe(true);
+
+		dispatch(attached("daemon-b"));
+
+		expect(unreadIds().has("daemon-a")).toBe(true);
+		expect(unreadIds().has("daemon-b")).toBe(false);
+	});
+
+	test("switching away while NOT streaming leaves the session read", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+
+		dispatch(attached("daemon-b"));
+
+		expect(unreadIds().has("daemon-a")).toBe(false);
+		expect(unreadIds().has("daemon-b")).toBe(false);
+	});
+
+	test("attaching to a marked session clears its unread dot", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+		dispatchSeq(agentStart(), 1024);
+		dispatch(attached("daemon-b"));
+		expect(unreadIds().has("daemon-a")).toBe(true);
+
+		dispatch(attached("daemon-a"));
+
+		expect(unreadIds().has("daemon-a")).toBe(false);
+	});
+
+	test("a roster frame prunes unread ids for daemons that left", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("daemon-a"));
+		dispatchSeq(agentStart(), 1024);
+		dispatch(attached("daemon-b"));
+		expect(unreadIds().has("daemon-a")).toBe(true);
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-b")] });
+
+		expect(unreadIds().has("daemon-a")).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// daemon_activity: the fleet edge's realtime per-daemon stream (streaming /
+// blocked) for EVERY ready daemon, delivered as additive fleet-scoped frames.
+// It carries no sessionId, so it passes the stale-frame guard untouched. Fed
+// into state.daemonActivity and pruned on roster frames like unread; a
+// detached daemon's observed streaming flip true→false marks it unread.
+// ---------------------------------------------------------------------------
+describe("daemon_activity frames", () => {
+	/** Minimal roster entry (mirrors the unread/reconciliation describes). */
+	function daemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: id,
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			...extra,
+		};
+	}
+
+	beforeEach(() => {
+		// Module-level unread state must not leak between tests.
+		pruneUnread(new Set());
+	});
+
+	test("stores per-daemon activity; an identical repeat is idempotent", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		expect(state.daemonActivity["d2"]).toEqual({ streaming: true, blocked: false });
+
+		// Same values again → no change.
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		expect(state.daemonActivity["d2"]).toEqual({ streaming: true, blocked: false });
+
+		// A later frame for the same daemon updates both fields.
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: true });
+		expect(state.daemonActivity["d2"]).toEqual({ streaming: false, blocked: true });
+	});
+
+	test("a detached daemon's streaming flip true→false marks it unread", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		expect(unreadIds().has("d2")).toBe(false);
+
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+		expect(unreadIds().has("d2")).toBe(true);
+	});
+
+	test("the ATTACHED daemon's turn end is NOT marked unread", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("d2")); // currentSessionId = d2
+
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
+
+		expect(unreadIds().has("d2")).toBe(false);
+	});
+
+	test("a roster frame without d2 prunes its daemonActivity entry", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
+
+		dispatch({ type: "roster", daemons: [daemon("d1")] });
+
+		expect(state.daemonActivity["d2"]).toBeUndefined();
+
+		// An id still on the roster survives a later roster frame (no flush).
+		dispatch({ type: "daemon_activity", daemonId: "d1", streaming: true, blocked: false });
+		dispatch({ type: "roster", daemons: [daemon("d1")] });
+		expect(state.daemonActivity["d1"]).toEqual({ streaming: true, blocked: false });
+	});
+});
+
+describe("roster session dropdown", () => {
+	/** Minimal roster entry with a worktree cwd. */
+	function rosterDaemon(id: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId: id,
+			name: id,
+			cwd: `/repos/${id}`,
+			project: "x",
+			labels: [],
+			mode: "spawned",
+			status: "ready",
+			...extra,
+		};
+	}
+
+	/** Commands of one type as posted, oldest first. */
+	function postedOf<T extends ClientCommand["type"]>(
+		type: T,
+	): Array<Extract<ClientCommand, { type: T }>> {
+		return posted.filter((c): c is Extract<ClientCommand, { type: T }> => c.type === type);
+	}
+
+	const se = (id: string): SessionListEntry => ({
+		path: `/sessions/${id}.jsonl`,
+		id,
+		cwd: "/repos/d9",
+		name: id,
+		messageCount: 1,
+		modifiedAt: 1,
+	});
+
+	test("daemon_sessions frame settles the per-daemon dropdown request", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		const pending = requestDaemonSessions("d9");
+		expect(postedOf("list_daemon_sessions")).toEqual([
+			{ type: "list_daemon_sessions", id: expect.any(String), daemonId: "d9" },
+		]);
+
+		// A frame for a DIFFERENT daemon must not settle it.
+		dispatch({ type: "daemon_sessions", daemonId: "other", sessions: [se("x")] });
+		dispatch({ type: "daemon_sessions", daemonId: "d9", sessions: [se("a"), se("b")] });
+		await expect(pending).resolves.toEqual([se("a"), se("b")]);
+	});
+
+	test("resumeDaemonSession wakes an asleep daemon with the chosen session then attaches", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", {
+				status: "asleep",
+				lastSessionFile: "/sessions/current.jsonl",
+			}),
+		]);
+
+		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		expect(postedOf("spawn_resume")).toEqual([
+			{
+				type: "spawn_resume",
+				id: expect.any(String),
+				daemonId: "d9",
+				sessionFile: "/sessions/picked.jsonl",
+			},
+		]);
+		expect(postedOf("attach")).toHaveLength(1);
+	});
+
+	test("resumeDaemonSession retries a switch swept by its own attach's supersession, never banners", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		// Attached to d1; resume a session on a DIFFERENT ready daemon (d9).
+		// the switch lands in-flight while the d9 attach's `attached` frame
+		// sweeps pending calls with "session switched".
+		setState("currentSessionId", "d1");
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		await Promise.resolve();
+		await Promise.resolve();
+		// The first switchSession is in flight when the proxied attached frame
+		// switches the session → rejectPendingCalls sweeps it.
+		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(1);
+		dispatch(attached("d9"));
+		await Promise.resolve();
+		await Promise.resolve();
+		// The superseded switch retries ONCE against the now-current daemon.
+		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(2);
+		expect(state.error).toBeNull(); // the supersession is never a banner
+	});
+
+	test("resumeDaemonSession on a ready detached daemon attaches first, then switches to the picked session", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		resumeDaemonSession("d9", "/sessions/picked.jsonl");
+		expect(postedOf("attach")).toHaveLength(1);
+		// The switch is issued only AFTER the attach settles.
+		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
+		dispatch({ type: "attach_result", id: postedOf("attach")[0].id, ok: true, sessionId: "d9" });
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(postedOf("call").filter((c) => c.method === "switchSession")).toEqual([
+			{
+				type: "call",
+				id: expect.any(String),
+				method: "switchSession",
+				args: ["/sessions/picked.jsonl"],
+			},
+		]);
+		expect(state.error).toBeNull();
+	});
+
+	test("resumeDaemonSession to the already-current session on a ready daemon only attaches", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("daemonRoster", [
+			rosterDaemon("d9", { status: "ready", lastSessionFile: "/sessions/current.jsonl" }),
+		]);
+
+		resumeDaemonSession("d9", "/sessions/current.jsonl");
+		expect(postedOf("attach")).toHaveLength(1);
+		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(0);
+	});
+});
+
+describe("call delivery: a lost answer is recovered by re-POSTing the command", () => {
+	/**
+	 * Fake daemon over the stubbed fetch + FakeEventSource. It EXECUTES each
+	 * command id once and records the answer, but the first answer never rides
+	 * the downlink: call_result is a non-ringed unicast, so a frame dropped on
+	 * the daemon pipe (backpressure drop-and-resume, a redial, a lost accept)
+	 * is gone for good. A re-POST of the SAME id is deduped, no second
+	 * execution, and REPLAYS the recorded answer, exactly like the daemon's
+	 * command dedup.
+	 */
+	function startLostAnswerDaemon(answerFor: (id: string) => ServerFrame): {
+		executed: string[];
+		posts: string[];
+	} {
+		const executed: string[] = [];
+		const posts: string[] = [];
+		const answers = new Map<string, ServerFrame>();
+		globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+			const cmd = JSON.parse(String(init?.body)) as ClientCommand;
+			if (cmd.type === "call") {
+				posts.push(cmd.id);
+				const recorded = answers.get(cmd.id);
+				if (recorded === undefined) {
+					executed.push(cmd.id);
+					answers.set(cmd.id, answerFor(cmd.id));
+				} else {
+					dispatch(recorded); // the deduped re-POST's replayed answer
+				}
+			}
+			return { ok: true, status: 202 } as Response;
+		}) as unknown as typeof fetch;
+		return { executed, posts };
+	}
+
+	test("prompt: the replayed answer settles the pending call once and the prompt ran once", async () => {
+		vi.useFakeTimers();
+		try {
+			connect();
+			FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true
+			const daemon = startLostAnswerDaemon((id) => ({
+				type: "call_result",
+				id,
+				ok: true,
+				data: { ran: id },
+			}));
+
+			const outcomes: string[] = [];
+			const pending = call("prompt", ["hello"]).then(
+				() => outcomes.push("resolved"),
+				(err) => outcomes.push(`rejected: ${String(err)}`),
+			);
+			await flushMicrotasks();
+			expect(daemon.posts).toHaveLength(1);
+			expect(daemon.executed).toHaveLength(1);
+
+			// The answer was lost: the call is still pending, so the replay
+			// re-POSTs the SAME command (same id, the dedup key).
+			vi.advanceTimersByTime(5_000);
+			await flushMicrotasks();
+			expect(daemon.posts).toHaveLength(2);
+			expect(daemon.posts[0]).toBe(daemon.posts[1]);
+
+			// The replayed answer settles it exactly once, and the daemon never
+			// executed the prompt a second time.
+			await pending;
+			expect(outcomes).toEqual(["resolved"]);
+			expect(daemon.executed).toHaveLength(1);
+			expect(daemon.posts).toHaveLength(2); // settled: the replay cadence stops
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("prompt: a replayed failure answer rejects with the daemon's real error, never a fake success", async () => {
+		vi.useFakeTimers();
+		try {
+			connect();
+			FakeEventSource.instances.at(-1)!.onopen?.();
+			const daemon = startLostAnswerDaemon((id) => ({
+				type: "call_result",
+				id,
+				ok: false,
+				error: "not_ready",
+			}));
+
+			const outcomes: string[] = [];
+			const pending = call("prompt", ["hello"]).then(
+				() => outcomes.push("resolved"),
+				(err) => outcomes.push(String(err)),
+			);
+			await flushMicrotasks();
+			vi.advanceTimersByTime(5_000);
+			await flushMicrotasks();
+			expect(daemon.posts).toHaveLength(2); // the lost answer was re-POSTed
+
+			await pending;
+			expect(outcomes).toEqual(["Error: not_ready"]);
+			expect(daemon.executed).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
