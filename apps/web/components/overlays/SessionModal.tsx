@@ -2,7 +2,7 @@ import { createSignal, For, onCleanup, onMount, Show, type Component } from "sol
 import { call, listSessions, setState, state } from "../../state";
 import { Modal } from "../shared/Modal";
 import { PickerRow } from "../shared/PickerRow";
-import type { SessionListEntry } from "../../../../lib/wire/protocol";
+import type { SessionListEntry } from "#lib/wire/protocol";
 
 /**
  * Session picker: on-disk session files, click to switchSession.

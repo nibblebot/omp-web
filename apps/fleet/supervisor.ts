@@ -29,7 +29,7 @@
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import type { Subprocess } from "bun";
-import type { StdoutContractLine } from "../../lib/wire/protocol";
+import type { StdoutContractLine } from "#lib/wire/protocol";
 import type { FleetConfig, SpawnTemplate } from "./config";
 import {
 	fillTemplate,

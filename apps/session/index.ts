@@ -15,7 +15,7 @@ import type {
 	ClientCommand,
 	ServerFrame,
 	SessionListEntry,
-} from "../../lib/wire/protocol";
+} from "#lib/wire/protocol";
 import {
 	COMMAND_DEDUP_ANSWER_CAP,
 	COMMAND_DEDUP_ID_CAP,
@@ -26,11 +26,11 @@ import {
 	SSE_DELTA_SEQ_START,
 	SSE_EVENT_NAME,
 	type StdoutContractLine,
-} from "../../lib/wire/protocol";
-import { encodeSseEvent } from "../../lib/wire/sse";
-import { acquireFileLock, LockHeldError } from "../../lib/platform/file-lock";
-import type { FileLock } from "../../lib/platform/file-lock";
-import { isLoopbackHost } from "../../lib/platform/hosts";
+} from "#lib/wire/protocol";
+import { encodeSseEvent } from "#lib/wire/sse";
+import { acquireFileLock, LockHeldError } from "#lib/platform/file-lock";
+import type { FileLock } from "#lib/platform/file-lock";
+import { isLoopbackHost } from "#lib/platform/hosts";
 import { parseConfig, type SessionConfig } from "./config";
 import { FleetCallback, type FleetCallbackStatus } from "./fleet-callback";
 import { SessionLogTailer } from "./log-tailer";
@@ -68,8 +68,8 @@ import {
 } from "./sse-delivery";
 import { clearSubagents } from "./subagent-mirror";
 import { rejectEntryUiRequests, rejectStreamUiRequests, webUiRequest } from "./ui-context";
-import { callbackError } from "../../lib/wire/callback-protocol";
-import type { CallbackEnvelope } from "../../lib/wire/callback-protocol";
+import { callbackError } from "#lib/wire/callback-protocol";
+import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
 import { createDaemonControl, type DaemonControl } from "./daemon-control";
 import {
 	boundaryAcked,

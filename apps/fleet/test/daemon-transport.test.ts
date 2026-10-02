@@ -41,7 +41,7 @@ import {
 	parseSseEnvelope,
 	STREAM_MAX_BYTES,
 	type CallbackEnvelope,
-} from "../../../lib/wire/callback-protocol";
+} from "#lib/wire/callback-protocol";
 import { DaemonTransportRegistry } from "../daemon-transport";
 
 const sleep = (ms: number): Promise<void> => Bun.sleep(ms);

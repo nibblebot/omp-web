@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { DaemonInfo } from "../../../lib/wire/protocol";
+import type { DaemonInfo } from "#lib/wire/protocol";
 import {
 	daemonsKey,
 	DaemonsAggregator,

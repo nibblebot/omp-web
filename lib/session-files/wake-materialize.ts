@@ -33,7 +33,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isNormalizedPosixRelativePath, type ManifestFileKind } from "./archive-manifest";
-import { BULK_MAX_BYTES, callbackError } from "../wire/callback-protocol";
+import { BULK_MAX_BYTES, callbackError } from "#lib/wire/callback-protocol";
 
 /** Request type literal for the materialization branch of the bulk route. */
 export const MATERIALIZE_REQUEST_TYPE = "materialize_session";

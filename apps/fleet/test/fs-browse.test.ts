@@ -12,7 +12,7 @@ import { realpath, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { BrowseError, browseDirectories } from "../fs-browse";
 
 afterAll(cleanupTempDirs);

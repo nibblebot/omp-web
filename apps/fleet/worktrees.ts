@@ -30,7 +30,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
-import type { ProjectBranch, ProjectEntry, RegisteredProject } from "../../lib/wire/protocol";
+import type { ProjectBranch, ProjectEntry, RegisteredProject } from "#lib/wire/protocol";
 import { probeGitState, validateProjectPath } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";

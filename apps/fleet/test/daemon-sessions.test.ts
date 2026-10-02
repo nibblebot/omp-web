@@ -12,7 +12,7 @@ import { utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { listDaemonSessions } from "../daemon-sessions";
 
 afterAll(cleanupTempDirs);

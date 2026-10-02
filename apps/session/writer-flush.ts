@@ -1,8 +1,8 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { SessionEntry } from "./session-entry";
-import type { QuiesceWriterEntry } from "../../lib/wire/callback-protocol";
-import type { CallbackErrorCode } from "../../lib/wire/callback-protocol";
+import type { QuiesceWriterEntry } from "#lib/wire/callback-protocol";
+import type { CallbackErrorCode } from "#lib/wire/callback-protocol";
 
 /**
  * All-writer flush capture (P4.5; RuntimeMap P0.3 finding). The SDK's

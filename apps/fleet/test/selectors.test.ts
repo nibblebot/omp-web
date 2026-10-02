@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { DaemonEntry } from "../../../lib/wire/protocol";
+import type { DaemonEntry } from "#lib/wire/protocol";
 import { matchSelector } from "../selectors";
 
 type RegistryEntryShape = DaemonEntry & { registeredAt: number };

@@ -41,7 +41,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { isLoopbackHost } from "../../lib/platform/hosts";
+import { isLoopbackHost } from "#lib/platform/hosts";
 import { isTrustedProxy, type ProxyRule } from "./trusted-proxy";
 import {
 	BrowserAuthStore,

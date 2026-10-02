@@ -1,6 +1,6 @@
 import { createSignal, For, Show, type Component } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import { daemonsKey, type DaemonInfo } from "../../../../lib/wire/protocol";
+import { daemonsKey, type DaemonInfo } from "#lib/wire/protocol";
 import { isLiveDaemon, restartDaemon, setState, state, stopDaemon } from "../../state";
 import { LoaderIcon } from "../shared/icons";
 import { formatDaemonUptime } from "../../fleet-ui/daemon-ui";

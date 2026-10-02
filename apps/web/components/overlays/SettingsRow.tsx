@@ -2,7 +2,7 @@ import { createSignal, For, Show, type JSX } from "solid-js";
 import { displayOptionValue, formatItemValue } from "../../prefs/settings";
 import { updateSetting } from "../../state";
 import { ChevronDownIcon, ChevronUpIcon } from "../shared/icons";
-import type { SettingsItem } from "../../../../lib/wire/protocol";
+import type { SettingsItem } from "#lib/wire/protocol";
 
 /** Shared row layout: label (+ changed dot) and description left, control right. */
 export function Row(props: {

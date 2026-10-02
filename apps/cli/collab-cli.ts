@@ -17,8 +17,8 @@
  */
 
 import { spawn } from "bun";
-import type { ClientCommand, CollabWireStatus, ServerFrame } from "../../lib/wire/protocol";
-import { parseSseUnits, SSE_PING_EVENT } from "../../lib/wire/sse";
+import type { ClientCommand, CollabWireStatus, ServerFrame } from "#lib/wire/protocol";
+import { parseSseUnits, SSE_PING_EVENT } from "#lib/wire/sse";
 
 interface Options {
 	port: number;

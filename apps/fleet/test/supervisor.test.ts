@@ -21,14 +21,14 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Server } from "bun";
-import { OMP_PROTO, SSE_EVENT_NAME } from "../../../lib/wire/protocol";
-import { encodeSseEvent } from "../../../lib/wire/sse";
+import { OMP_PROTO, SSE_EVENT_NAME } from "#lib/wire/protocol";
+import { encodeSseEvent } from "#lib/wire/sse";
 import type { FleetConfig } from "../config";
 import { DaemonConnector } from "../connector";
 import type { GitResult, GitRunner } from "../discovery";
 import { Registry, type RegistryEntry } from "../registry";
 import { SpawnSupervisor } from "../supervisor";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 const tmpDirs: string[] = [];
 

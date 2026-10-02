@@ -1,4 +1,4 @@
-import type { ClientCommand } from "../../../lib/wire/protocol";
+import type { ClientCommand } from "#lib/wire/protocol";
 import { setState, state } from "../state";
 import { isConnected, postCommand } from "./transport";
 

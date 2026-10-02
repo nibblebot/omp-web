@@ -27,9 +27,9 @@ import {
 	parseCollabLink,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
-import { OMP_SESSION_PREFIX } from "../../../lib/wire/protocol";
-import { parseSseUnits, SSE_PING_EVENT } from "../../../lib/wire/sse";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { OMP_SESSION_PREFIX } from "#lib/wire/protocol";
+import { parseSseUnits, SSE_PING_EVENT } from "#lib/wire/sse";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 

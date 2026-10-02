@@ -1,5 +1,5 @@
 import { For, type Component } from "solid-js";
-import type { ModelInfo, ModelRoleCatalogEntry } from "../../../../lib/wire/protocol";
+import type { ModelInfo, ModelRoleCatalogEntry } from "#lib/wire/protocol";
 import { thinkingOptions } from "../../usage/model-options";
 import { ArrowLeftIcon } from "../shared/icons";
 import { PickerRow } from "../shared/PickerRow";

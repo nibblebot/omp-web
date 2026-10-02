@@ -1,4 +1,4 @@
-import type { DaemonEntry } from "../../../../lib/wire/protocol";
+import type { DaemonEntry } from "#lib/wire/protocol";
 import { createEffect, createSignal, For, Show, type Component } from "solid-js";
 import { sendDeleteWorktree, setState, state } from "../../state";
 import { Modal } from "../shared/Modal";

@@ -106,7 +106,7 @@ import {
 	STREAM_MAX_BYTES,
 	type CallbackKind,
 	validateEnvelope,
-} from "../../lib/wire/callback-protocol";
+} from "#lib/wire/callback-protocol";
 import type { FleetLogStore } from "./log-store";
 import {
 	MATERIALIZE_REQUEST_MAX_BYTES,
@@ -115,8 +115,8 @@ import {
 	parseMaterializeRequest,
 	planMaterializeFiles,
 	type MaterializeRequest,
-} from "../../lib/session-files/wake-materialize";
-import { SseRing } from "../../lib/wire/sse";
+} from "#lib/session-files/wake-materialize";
+import { SseRing } from "#lib/wire/sse";
 
 /**
  * Byte budget for one down replay ring. The ledger bounds the ring at

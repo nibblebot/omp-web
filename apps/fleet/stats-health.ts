@@ -11,7 +11,7 @@ import { sep } from "node:path";
 import { json } from "./stats-http";
 import { countMainSessions } from "./stats-sessions-index";
 import { storeCoverage } from "./stats-store-index";
-import type { Health } from "../../lib/wire/stats-types";
+import type { Health } from "#lib/wire/stats-types";
 import type { AppCtx, Route } from "./stats-types";
 
 /** Replace the home-dir prefix with "~" for DISPLAY only (cfg stays intact). */

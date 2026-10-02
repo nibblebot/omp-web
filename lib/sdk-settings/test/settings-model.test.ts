@@ -6,7 +6,7 @@ import {
 	coerceSettingValue,
 	settingChanged,
 	type SettingsSession,
-} from "../settings-model";
+} from "#lib/sdk-settings/settings-model";
 
 // The module reads/writes the shared Settings singleton (values, changed
 // flags, condition gates). Initialize it in-memory so tests touch no disk.

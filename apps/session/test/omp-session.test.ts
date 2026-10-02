@@ -22,9 +22,9 @@ import {
 	OMP_SESSION_PREFIX,
 	SSE_DELTA_SEQ_START,
 	type StdoutContractLine,
-} from "../../../lib/wire/protocol";
-import { parseSseUnits, SSE_PING_EVENT } from "../../../lib/wire/sse";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+} from "#lib/wire/protocol";
+import { parseSseUnits, SSE_PING_EVENT } from "#lib/wire/sse";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 

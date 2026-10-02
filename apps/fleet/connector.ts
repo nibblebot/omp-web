@@ -53,8 +53,8 @@ import {
 	type DaemonStatus,
 	type ServerFrame,
 	type WebSessionState,
-} from "../../lib/wire/protocol";
-import { parseSseUnits } from "../../lib/wire/sse";
+} from "#lib/wire/protocol";
+import { parseSseUnits } from "#lib/wire/sse";
 import type { Registry, RegistryEntry } from "./registry";
 
 export interface ConnectorEvents {

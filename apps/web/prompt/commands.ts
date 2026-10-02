@@ -1,4 +1,4 @@
-import type { ImageArg } from "../../../lib/wire/protocol";
+import type { ImageArg } from "#lib/wire/protocol";
 import { requestDangerConfirm } from "./danger-confirm";
 import {
 	addBashItem,

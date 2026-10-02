@@ -8,8 +8,8 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "../../lib/session-files/export-sessions";
-import { isNormalizedPosixRelativePath } from "../../lib/session-files/archive-manifest";
+import { MAX_EXPORT_BYTES, MAX_EXPORT_FILES } from "#lib/session-files/export-sessions";
+import { isNormalizedPosixRelativePath } from "#lib/session-files/archive-manifest";
 
 /** Workspace sessions live at <volumeRoot>/.home/agent/sessions (frozen layout). */
 export function workspaceSessionsDir(volumeRoot: string): string {

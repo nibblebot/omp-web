@@ -23,7 +23,7 @@
  */
 import { open, readFile, stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
-import type { RawEntry } from "../../lib/wire/stats-types";
+import type { RawEntry } from "#lib/wire/stats-types";
 
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
 

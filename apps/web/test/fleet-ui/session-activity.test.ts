@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { DaemonStatus } from "../../../../lib/wire/protocol";
+import type { DaemonStatus } from "#lib/wire/protocol";
 import { sessionActivity, type SessionActivity } from "../../fleet-ui/session-activity";
 
 /** Attached session, idle stream. */

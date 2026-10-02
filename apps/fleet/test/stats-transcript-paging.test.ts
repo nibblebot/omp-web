@@ -15,7 +15,7 @@ import { join } from "node:path";
 import type { StatsConfig } from "../stats-config";
 import { jsonlCacheStats } from "../stats-jsonl";
 import { createStatsApp, type StatsApp } from "../stats-app";
-import type { TranscriptPage } from "../../../lib/wire/stats-types";
+import type { TranscriptPage } from "#lib/wire/stats-types";
 
 let app: StatsApp;
 let dir: string;

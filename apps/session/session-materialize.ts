@@ -51,11 +51,11 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
 	isNormalizedPosixRelativePath,
 	type ManifestFileKind,
-} from "../../lib/session-files/archive-manifest";
+} from "#lib/session-files/archive-manifest";
 import type {
 	MaterializeChunkRecord,
 	MaterializeRecord,
-} from "../../lib/session-files/wake-materialize";
+} from "#lib/session-files/wake-materialize";
 import type { MaterializeResult } from "./fleet-callback";
 
 export type MaterializeSessionErrorCode = "unavailable" | "invalid_request" | "retryable";

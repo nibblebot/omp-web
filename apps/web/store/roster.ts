@@ -1,4 +1,4 @@
-import type { ClientCommand, SessionListEntry } from "../../../lib/wire/protocol";
+import type { ClientCommand, SessionListEntry } from "#lib/wire/protocol";
 import { setState, state } from "../state";
 import {
 	attachSession,

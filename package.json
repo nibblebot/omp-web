@@ -3,6 +3,9 @@
 	"private": true,
 	"version": "0.2.1",
 	"type": "module",
+	"imports": {
+		"#lib/*": "./lib/*.ts"
+	},
 	"bin": {
 		"omp-web": "dist-bundle/cli.js"
 	},

@@ -14,11 +14,11 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { resolveRoleModelFull } from "@oh-my-pi/pi-coding-agent/session/role-models";
-import type { WebMethodName } from "../../lib/wire/protocol";
+import type { WebMethodName } from "#lib/wire/protocol";
 import type { CollabSession, Images } from "./collab-session";
 import type { DaemonBroker } from "./daemon-broker";
 import type { SessionEntry } from "./session-entry";
-import { buildSettingsModel, coerceSettingValue } from "../../lib/sdk-settings/settings-model";
+import { buildSettingsModel, coerceSettingValue } from "#lib/sdk-settings/settings-model";
 import { applySettingSideEffects } from "./settings-effects";
 import { resolveSessionMainFile, MaterializeSessionError } from "./session-materialize";
 import {

@@ -22,7 +22,7 @@ import type {
 	SettingsModel,
 	SettingsOption,
 	SettingsTab,
-} from "../wire/protocol";
+} from "#lib/wire/protocol";
 
 // ---------------------------------------------------------------------------
 // Shared settings panel model (TUI /settings parity).

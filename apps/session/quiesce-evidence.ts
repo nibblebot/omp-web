@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { callbackError } from "../../lib/wire/callback-protocol";
-import type { CallbackErrorCode } from "../../lib/wire/callback-protocol";
-import type { CloneGitEvidence, FlushBoundary } from "../../lib/wire/callback-protocol";
-import type { ManifestFile, ManifestFileKind } from "../../lib/session-files/archive-manifest";
-import { planSessionExport, verifyJsonlStructure } from "../../lib/session-files/export-sessions";
+import { callbackError } from "#lib/wire/callback-protocol";
+import type { CallbackErrorCode } from "#lib/wire/callback-protocol";
+import type { CloneGitEvidence, FlushBoundary } from "#lib/wire/callback-protocol";
+import type { ManifestFile, ManifestFileKind } from "#lib/session-files/archive-manifest";
+import { planSessionExport, verifyJsonlStructure } from "#lib/session-files/export-sessions";
 import type { SessionLogTailer } from "./log-tailer";
 
 /**

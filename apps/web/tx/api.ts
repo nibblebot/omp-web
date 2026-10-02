@@ -23,7 +23,7 @@ import type {
 	SyncResult,
 	ToolStat,
 	TranscriptPage,
-} from "../../../lib/wire/stats-types";
+} from "#lib/wire/stats-types";
 import { encodePathSegments } from "./util/format";
 import { authedFetch } from "../store/auth";
 
@@ -45,7 +45,7 @@ export type {
 	SyncResult,
 	ToolStat,
 	TranscriptPage,
-} from "../../../lib/wire/stats-types";
+} from "#lib/wire/stats-types";
 
 /** Fetch failure carrying the HTTP status; message prefers the server's `{error}`. */
 export class ApiError extends Error {

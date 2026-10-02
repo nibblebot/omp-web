@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { RegisteredProject } from "../../../lib/wire/protocol";
+import type { RegisteredProject } from "#lib/wire/protocol";
 import { main } from "../cli";
 import { openBrowser } from "./edge.testkit";
 import type { RegistryEntry } from "../registry";

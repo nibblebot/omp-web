@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { acquireFileLock, LockHeldError } from "../file-lock";
-import { cleanupTempDirs, tempDir } from "../../testkit/temp-dir.testkit";
+import { acquireFileLock, LockHeldError } from "#lib/platform/file-lock";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 afterAll(cleanupTempDirs);
 

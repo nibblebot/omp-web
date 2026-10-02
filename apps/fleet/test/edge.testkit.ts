@@ -6,10 +6,10 @@
  * never picks it up as a suite.
  */
 import { join } from "node:path";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "../../../lib/wire/protocol";
-import type { DaemonEntry, DaemonInfo, ServerFrame } from "../../../lib/wire/protocol";
-import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK } from "../../../lib/wire/sse";
-import { cleanupTempDirs, tempDir } from "../../../lib/testkit/temp-dir.testkit";
+import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "#lib/wire/protocol";
+import type { DaemonEntry, DaemonInfo, ServerFrame } from "#lib/wire/protocol";
+import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK } from "#lib/wire/sse";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetEdge } from "../edge";
 
 export { cleanupTempDirs };

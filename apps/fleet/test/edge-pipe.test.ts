@@ -9,7 +9,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SSE_DELTA_SEQ_START, type ServerFrame } from "../../../lib/wire/protocol";
+import { SSE_DELTA_SEQ_START, type ServerFrame } from "#lib/wire/protocol";
 import type { FleetConfig } from "../config";
 import { DaemonConnector } from "../connector";
 import { FleetEdge } from "../edge";

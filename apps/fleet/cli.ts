@@ -38,7 +38,7 @@
 
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { LockHeldError } from "../../lib/platform/file-lock";
+import { LockHeldError } from "#lib/platform/file-lock";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { startFleet, type FleetServer } from "./server";
 import { runProfilePreflight } from "./preflight";

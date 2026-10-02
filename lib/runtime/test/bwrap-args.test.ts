@@ -12,7 +12,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ProviderProfile } from "../provider-protocol";
+import type { ProviderProfile } from "#lib/runtime/provider-protocol";
 import {
 	DeniedBindError,
 	assertAllowedSource,
@@ -22,9 +22,9 @@ import {
 	existingDenyDirs,
 	existingDenyFiles,
 	runtimeRootFor,
-} from "../bwrap-args";
+} from "#lib/runtime/bwrap-args";
 
-import { cleanupTempDirs, tempDir } from "../../testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 afterAll(cleanupTempDirs);
 

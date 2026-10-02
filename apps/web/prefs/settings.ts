@@ -1,9 +1,4 @@
-import type {
-	SettingsGroup,
-	SettingsItem,
-	SettingsModel,
-	SettingsTab,
-} from "../../../lib/wire/protocol";
+import type { SettingsGroup, SettingsItem, SettingsModel, SettingsTab } from "#lib/wire/protocol";
 
 /**
  * Pure display helpers for the settings panel (TUI /settings parity). No

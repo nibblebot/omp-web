@@ -10,7 +10,7 @@ import type {
 	SubagentLifecyclePayload,
 	SubagentProgressPayload,
 } from "@oh-my-pi/pi-coding-agent/task";
-import type { SubagentMessagesResult } from "../../lib/wire/protocol";
+import type { SubagentMessagesResult } from "#lib/wire/protocol";
 import type { SessionEntry } from "./session-entry";
 import { broadcastTo } from "./sse-delivery";
 

@@ -31,7 +31,7 @@ import {
 	validateTarball,
 } from "../release";
 import type { ChangelogDraft, CommitClass, CommitInfo, Group } from "../release";
-import { cleanupTempDirs, tempDir } from "../../lib/testkit/temp-dir.testkit";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 afterAll(cleanupTempDirs);
 

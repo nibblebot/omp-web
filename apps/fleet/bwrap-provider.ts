@@ -50,10 +50,10 @@ import {
 	type ProviderObserved,
 	type ProviderRequest,
 	type ProviderResponse,
-} from "../../lib/runtime/provider-protocol";
-import type { ProviderErrorCode } from "../../lib/runtime/provider-protocol";
-import { acquireFileLock } from "../../lib/platform/file-lock";
-import { ENV_ALLOW_KEYS, buildBwrapArgv } from "../../lib/runtime/bwrap-args";
+} from "#lib/runtime/provider-protocol";
+import type { ProviderErrorCode } from "#lib/runtime/provider-protocol";
+import { acquireFileLock } from "#lib/platform/file-lock";
+import { ENV_ALLOW_KEYS, buildBwrapArgv } from "#lib/runtime/bwrap-args";
 import { defaultDenyRoots, defaultRuntimeLaunch, type RuntimeLaunch } from "./runtime-launch";
 
 /** The provider's own pidfile record (superset of the shared identity shape). */

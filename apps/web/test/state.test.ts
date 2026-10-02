@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
-import { OMP_PROTO, SSE_EVENT_NAME } from "../../../lib/wire/protocol";
+import { OMP_PROTO, SSE_EVENT_NAME } from "#lib/wire/protocol";
 import type {
 	ClientCommand,
 	DaemonEntry,
@@ -8,7 +8,7 @@ import type {
 	SessionListEntry,
 	SettingsModel,
 	WebSessionState,
-} from "../../../lib/wire/protocol";
+} from "#lib/wire/protocol";
 import { pruneUnread, unreadIds } from "../fleet-ui/unread";
 import {
 	announce,

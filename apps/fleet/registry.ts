@@ -25,7 +25,7 @@ import type {
 	DesiredState,
 	RegisteredProject,
 	WorkspaceKind,
-} from "../../lib/wire/protocol";
+} from "#lib/wire/protocol";
 import { validateProjectPath } from "./discovery";
 
 /**

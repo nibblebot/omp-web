@@ -35,10 +35,12 @@ RUN apk add --no-cache --update git ca-certificates tini \
  && rm -rf /var/cache/apk/*
 WORKDIR /opt/omp-web
 COPY --from=deps /opt/omp-web/node_modules ./node_modules
-# Session sources the daemon needs: package metadata for the version lookup,
-# the flat session app, and the closed lib/ tree it imports.
+# Session sources the daemon needs: root metadata for version lookup and #lib
+# package imports, with the apps/ and closed lib/ directory layouts preserved.
 # (fleet bwrap parity: the entry is apps/session/index.ts.)
-COPY package.json apps/ lib/ ./
+COPY package.json ./
+COPY apps/ ./apps/
+COPY lib/ ./lib/
 
 # Isolated private home: populated at first start under the PVC.
 ENV OMP_WORKSPACE_ROOT=/workspace \

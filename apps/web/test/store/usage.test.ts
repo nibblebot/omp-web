@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { OMP_PROTO, SSE_EVENT_NAME } from "../../../../lib/wire/protocol";
-import type { ClientCommand, ServerFrame } from "../../../../lib/wire/protocol";
+import { OMP_PROTO, SSE_EVENT_NAME } from "#lib/wire/protocol";
+import type { ClientCommand, ServerFrame } from "#lib/wire/protocol";
 import { call, connect, setState, state } from "../../state";
 import { refreshUsageReports, setSidebarUsage } from "../../state";
 

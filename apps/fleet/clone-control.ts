@@ -24,7 +24,7 @@
  */
 
 import type { Registry } from "./registry";
-import type { PublicProviderProfile } from "../../lib/wire/protocol";
+import type { PublicProviderProfile } from "#lib/wire/protocol";
 import type { ProviderProfile } from "./provider-profile";
 import { toPublicProfile } from "./provider-profile";
 import {

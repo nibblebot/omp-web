@@ -19,12 +19,12 @@ import {
 } from "@oh-my-pi/pi-coding-agent";
 import type { SettingPath } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
-import type { SettingsModel } from "../../lib/wire/protocol";
+import type { SettingsModel } from "#lib/wire/protocol";
 import {
 	buildSettingsModel,
 	coerceSettingValue,
 	type SettingsSession,
-} from "../../lib/sdk-settings/settings-model";
+} from "#lib/sdk-settings/settings-model";
 
 /** The unattached settings surface the fleet control plane exposes. */
 export interface FleetSettings {

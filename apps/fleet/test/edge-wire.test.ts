@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OMP_PROTO } from "../../../lib/wire/protocol";
+import { OMP_PROTO } from "#lib/wire/protocol";
 import { shouldDropFrame, toRosterEntry } from "../edge";
 import type { RegistryEntry } from "../registry";
 import { Registry } from "../registry";
