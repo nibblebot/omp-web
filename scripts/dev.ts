@@ -3,10 +3,13 @@
  * dev: one-command dev runner.
  *
  *   bun run dev          vite (:4713 HMR, /events + /command proxied to the omp-fleet
- *                        edge) + omp-fleet serve (:4722) + an optional auth broker
- *                        (adopted when one already runs, else spawned) that clone
- *                        sandboxes borrow credentials from. NO session is started or
+ *                        edge) + omp-fleet serve (:4722). NO session is started or
  *                        attached; spawn/add one from the roster UI when you want one.
+ *
+ *   --auth-broker        opt in to an auth broker that clone sandboxes borrow
+ *                        credentials from (adopted when one already runs, else
+ *                        spawned). Default startup does no automatic broker work;
+ *                        explicitly supplied broker env is still inherited.
  *
  *   --host [addr]        bind vite to addr (default 0.0.0.0) for LAN access; the fleet
  *                        stays loopback; remote browsers reach it through vite's proxies.
@@ -202,16 +205,18 @@ const ports = { vite: VITE_PORT_DEFAULT, fleet: 4722 };
 /**
  * Auth broker: clone sandboxes have no credential store of their own, so they
  * borrow the operator's from a broker when OMP_AUTH_BROKER_URL/TOKEN are in the
- * provider env (profile secretRefs `env:` references). The dev stack ADOPTS an
- * already-running broker that answers an authenticated probe on the default
- * bind (the credential store is global: one broker serves every worktree),
- * else spawns `omp auth-broker serve` itself and exports the pair into
+ * provider env (profile secretRefs `env:` references). With --auth-broker, the
+ * dev stack ADOPTS an already-running broker that answers an authenticated probe
+ * on the default bind (the credential store is global: one broker serves every
+ * worktree), else spawns `omp auth-broker serve` itself and exports the pair into
  * process.env BEFORE the fleet child launches (children inherit it;
- * resolveProfileSecrets reads it at clone spawn). The broker is OPTIONAL:
- * missing omp CLI, token failure, or startup retries exhausted degrade to a
- * warning and a brokerless stack (clones run unauthenticated), never a fatal
- * exit. There is no idle-exit to disable: the broker's `idleTimeout` is
- * Bun.serve's per-connection socket timeout, not a process lifetime.
+ * resolveProfileSecrets reads it at clone spawn). This is explicit opt-in:
+ * default startup never creates a token, probes, launches, or exports broker
+ * configuration. When opted in, missing omp CLI, token failure, or startup retries
+ * exhausted degrade to a warning and a brokerless stack (clones run
+ * unauthenticated), never a fatal exit. There is no idle-exit to disable: the
+ * broker's `idleTimeout` is Bun.serve's per-connection socket timeout, not a
+ * process lifetime.
  */
 const BROKER_DEFAULT_PORT = 8765;
 /**
@@ -332,6 +337,7 @@ let host: string | undefined;
 let allowHosts: string | undefined;
 let stateFrom: string | undefined;
 let fresh = false;
+let authBroker = false;
 for (let i = 0; i < args.length; i++) {
 	const arg = args[i];
 	if (arg === "fleet") {
@@ -368,10 +374,12 @@ for (let i = 0; i < args.length; i++) {
 		stateFrom = expandTilde(arg.slice("--state-from=".length));
 	} else if (arg === "--fresh") {
 		fresh = true;
+	} else if (arg === "--auth-broker") {
+		authBroker = true;
 	} else {
 		console.error(`unrecognized argument: ${arg}`);
 		console.error(
-			"usage: bun scripts/dev.ts [fleet] [--host [addr]] [--allow-hosts [csv]] [--state-from <path>] [--fresh]",
+			"usage: bun scripts/dev.ts [fleet] [--host [addr]] [--allow-hosts [csv]] [--state-from <path>] [--fresh] [--auth-broker]",
 		);
 		process.exit(2);
 	}
@@ -597,8 +605,8 @@ function launch(child: Child): void {
 	void pipePrefixed(proc.stdout, child.name, process.stdout, stdoutHook(child.name, proc));
 	void pipePrefixed(proc.stderr, child.name, process.stderr);
 	if (child.name === "broker") {
-		// The broker is an OPTIONAL sidecar: its exit must never take the stack
-		// down. Relaunch it on the same port (the URL was baked into the fleet's
+		// The opted-in broker sidecar is non-fatal: its exit must never take the
+		// stack down. Relaunch it on the same port (the URL was baked into the fleet's
 		// env at launch and cannot change mid-run) with a bounded backoff. A
 		// deliberate remove-then-kill (give-up path) leaves procs pointing
 		// elsewhere, so this returns before scheduling a restart.
@@ -714,11 +722,11 @@ async function brokerToken(bin: string): Promise<string | undefined> {
 }
 
 /**
- * Fleet-mode boot step: make an auth broker available and export
+ * Opt-in --auth-broker boot step: make an auth broker available and export
  * OMP_AUTH_BROKER_URL/TOKEN into process.env BEFORE the fleet child launches
  * (children inherit it; provider secretRefs `env:` references resolve from
  * it). Adopt-first, spawn-else; every failure degrades to a brokerless stack
- * with a warning.
+ * with a warning. Without the flag, inherited broker env is left untouched.
  */
 async function ensureBroker(): Promise<void> {
 	const bin = resolveOmpBinary();
@@ -767,7 +775,7 @@ async function ensureBroker(): Promise<void> {
 	}
 }
 
-await ensureBroker();
+if (authBroker) await ensureBroker();
 launch(buildChild("fleet"));
 const boot = await Promise.race([waitReady("fleet").then(() => null), fatalPromise]);
 if (boot !== null) {

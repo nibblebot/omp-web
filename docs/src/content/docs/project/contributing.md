@@ -26,10 +26,14 @@ Prerequisites are the same as a normal install: [Bun](https://bun.sh) and a conf
 git clone https://github.com/nibblebot/omp-web
 cd omp-web
 bun install        # install dependencies
-bun run dev        # vite (HMR) + the fleet + the auth broker, the only runtime of the UI
+bun run dev        # vite (HMR) + the fleet, with no automatically managed auth broker
 ```
 
-The runner chooses ports per run, so several checkouts can run side by side. `bun run dev` also scopes its fleet state per worktree under the data home, so a development fleet coexists with your installed fleet instead of clobbering its roster. It also ensures an auth broker is available for clone sandboxes: an already-running broker that answers an authenticated probe is adopted, otherwise `omp auth-broker serve` is spawned, and either way its URL and bearer land in the fleet's environment so provider profile secret references resolve. If the broker cannot be set up, the stack still starts and clones run unauthenticated. `bun run dev:server` runs just the session daemon (in watch mode) and `bun run dev:web` just the Vite UI when you want the two halves separately.
+The runner chooses ports per run, so several checkouts can run side by side. `bun run dev` also scopes its fleet state per worktree under the data home, so a development fleet coexists with your installed fleet instead of clobbering its roster. By default it performs no broker token creation, authenticated probe, adoption, spawn, restart, or automatic broker environment export. Local sessions use the user's ordinary SDK credentials.
+
+For isolated clone sandboxes, configure credentials explicitly through provider profile `secretRefs`, or opt into the development broker with `bun run dev --auth-broker`. With that flag, an already-running broker that answers an authenticated probe is adopted; otherwise `omp auth-broker serve` is spawned as a restartable child. Either way, its URL and bearer token are exported into the fleet's environment so profile secret references resolve. Broker setup failures warn and let the stack start, but sandboxes that need broker-borrowed credentials cannot resolve them without another explicit credential source.
+
+Production `omp-web` never manages broker startup; operators run and configure a broker explicitly when needed. Default dev preserves explicitly supplied `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` and existing profile `secretRefs` as inherited opt-in configuration. `bun run dev:server` runs just the session daemon (in watch mode) and `bun run dev:web` just the Vite UI; neither manages a broker.
 
 ## Checks before a pull request
 
