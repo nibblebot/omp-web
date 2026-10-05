@@ -22,7 +22,7 @@ import { createStatsApp, type StatsApp } from "../stats-app";
 import { syncConfig } from "../stats-sync";
 
 const SYNC_ERROR_503 =
-	"omp binary not found. Install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH";
+	"omp binary not found. Install omp (`bun install -g @oh-my-pi/pi-coding-agent`) or add it to PATH";
 
 /** Fake omp that mimics pi-utils' quirk: stats.db = join(homedir(), PI_CONFIG_DIR, "stats.db"). */
 const FAKE_OMP = `#!/usr/bin/env bun
@@ -36,7 +36,7 @@ db.exec("CREATE TABLE IF NOT EXISTS tool_calls (id INTEGER PRIMARY KEY AUTOINCRE
 db.exec("CREATE TABLE IF NOT EXISTS user_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_file TEXT NOT NULL, entry_id TEXT NOT NULL, folder TEXT NOT NULL, model TEXT NOT NULL, provider TEXT NOT NULL, api TEXT NOT NULL, timestamp INTEGER NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL, premium_requests REAL NOT NULL, cost_total REAL NOT NULL, agent_type TEXT NOT NULL DEFAULT 'main', UNIQUE(session_file, entry_id))");
 db.run("INSERT INTO messages (session_file, entry_id, folder, model, provider, api, timestamp, stop_reason, input_tokens, output_tokens, total_tokens, premium_requests, cost_total, agent_type) VALUES ('a.jsonl','e1','p','m','p','a',0,'done',1,1,2,0,0,'main')");
 db.close();
-console.log("Synced 1 new entries from 1 files (1 total)");
+process.stderr.write("Synced 1 new entries from 1 files (1 total)\\n");
 `;
 
 let tmpDir: string;

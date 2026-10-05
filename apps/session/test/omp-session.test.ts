@@ -1403,3 +1403,151 @@ test("a crashed omp-session's stale lock is broken: the same --resume starts aga
 		await rm(dir, { recursive: true, force: true }).catch(() => {});
 	}
 }, 60_000);
+
+test("SDK persistence relocation updates live state and locks its new journal", async () => {
+	const dir = tempDir("omp-session-relocation-");
+	const originalSessionId = crypto.randomUUID();
+	const fixture = path.join(dir, "session.jsonl");
+	const fixtureContent =
+		[
+			JSON.stringify({
+				type: "session",
+				version: 3,
+				id: originalSessionId,
+				cwd: dir,
+				timestamp: new Date().toISOString(),
+			}),
+			JSON.stringify({
+				type: "message",
+				id: "m0",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: { role: "user", content: [{ type: "text", text: "relocation fixture" }] },
+			}),
+		].join("\n") + "\n";
+	await writeFile(fixture, fixtureContent);
+	const proc = await spawnSession({
+		args: ["--resume", fixture],
+		env: { OMP_SESSION_CWD: dir },
+	});
+	running.push(proc);
+	const base = `http://127.0.0.1:${proc.port}`;
+	const events = await openEvents(base);
+	try {
+		await waitForFrame(events.frames, "ready", 15_000, "ready");
+		const hello = await waitForFrame(events.frames, "hello_ok", 10_000, "hello");
+		const original = hello.sessionFile;
+		if (typeof original !== "string") throw new Error("missing session file");
+		expect(original).toBe(fixture);
+		expect(readFileSync(original, "utf8")).toBe(fixtureContent);
+		// A fresh session's title changes are memory-only until the SDK's lazy
+		// journal gate is crossed. Resume a durable journal instead; without a
+		// title slot, its first rename must perform a guarded full rewrite.
+		// Replace that journal with another identity before the rewrite, which
+		// must preserve the replacement and move our durable history to a sibling.
+		const replacement = `${JSON.stringify({
+			type: "session",
+			version: 3,
+			id: "foreign-session",
+			cwd: dir,
+			timestamp: new Date().toISOString(),
+		})}\n`;
+		await writeFile(original, replacement);
+		events.frames.length = 0;
+		await postCommand(base, {
+			type: "call",
+			id: "persist-after",
+			method: "setSessionName",
+			args: ["after relocation"],
+		});
+		const after = await waitFor(
+			() =>
+				events.frames.find(
+					(frame) => frame.type === "call_result" && frame.id === "persist-after",
+				) ?? null,
+			10_000,
+			"durable relocated title",
+		);
+		expect(after.ok).toBe(true);
+		const moved = await waitFor(
+			() =>
+				events.frames.find((frame) => {
+					const state = frame.state;
+					return (
+						frame.type === "state" &&
+						state !== null &&
+						typeof state === "object" &&
+						"sessionFile" in state &&
+						typeof state.sessionFile === "string" &&
+						state.sessionFile !== original
+					);
+				}) ?? null,
+			10_000,
+			"relocated state",
+		);
+		const state = moved.state;
+		if (
+			!state ||
+			typeof state !== "object" ||
+			!("sessionFile" in state) ||
+			typeof state.sessionFile !== "string" ||
+			!("sessionId" in state) ||
+			typeof state.sessionId !== "string"
+		) {
+			throw new Error("missing relocated session identity");
+		}
+		const sessionFile = state.sessionFile;
+		const lock = JSON.parse(readFileSync(`${sessionFile}.lock`, "utf8")) as { pid: number };
+		expect(lock.pid).toBe(proc.child.pid);
+		const journal = readFileSync(sessionFile, "utf8");
+		const header = journal
+			.split("\n")
+			.map((line) => (line ? (JSON.parse(line) as Frame) : null))
+			.find((entry) => entry?.type === "session");
+		expect(header?.id).toBe(state.sessionId);
+		expect(header?.id).not.toBe(originalSessionId);
+		expect(header?.parentSession).toBe(originalSessionId);
+		expect(journal).toContain('"text":"relocation fixture"');
+		expect(journal).toContain('"title":"after relocation"');
+		expect(state).toMatchObject({ sessionName: "after relocation" });
+		expect(readFileSync(original, "utf8")).toBe(replacement);
+		expect(
+			events.frames.some((frame) => {
+				const event = frame.event;
+				return (
+					frame.type === "event" &&
+					event !== null &&
+					typeof event === "object" &&
+					"type" in event &&
+					event.type === "notice" &&
+					"message" in event &&
+					typeof event.message === "string" &&
+					event.message.includes("Session moved")
+				);
+			}),
+		).toBe(true);
+		// The relocation callback must protect the new path just as boot does:
+		// another real daemon cannot resume it while this process owns it.
+		const contender = await spawnSession({
+			args: ["--resume", sessionFile],
+			env: { OMP_SESSION_CWD: dir },
+		});
+		running.push(contender);
+		await expectExitCode(contender.child, 1);
+		const stderr = await waitFor(
+			() =>
+				contender.stderrTail().includes("locked by another omp-session")
+					? contender.stderrTail()
+					: null,
+			10_000,
+			"relocated journal ownership refusal",
+		);
+		expect(stderr).toContain(`session file ${sessionFile} is locked by another omp-session`);
+		expect(stderr).toContain(`pid ${proc.child.pid}`);
+		await proc.cleanup();
+		expect(existsSync(`${sessionFile}.lock`)).toBe(false);
+	} finally {
+		events.close();
+		await proc.cleanup();
+	}
+}, 60_000);

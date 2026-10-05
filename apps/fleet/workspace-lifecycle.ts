@@ -1623,8 +1623,8 @@ export class WorkspaceLifecycle {
 			}
 			return undefined; // Implicit target vanished; boot fresh.
 		}
-		// Stale-lock cleanup (P8.9 boot-resume): the daemon locks the resumed
-		// session file (`<file>.lock`) with its PID. A prior sandbox lifetime
+		// Stale-lock cleanup (P8.9 boot-resume): omp-session's own PID-file
+		// lock (#lib/platform/file-lock) sits at `<file>.lock`. A prior sandbox lifetime
 		// that was stopped without a graceful release leaves that lock file
 		// behind, and its PID is namespace-relative (e.g. 2 inside bwrap),
 		// so the NEW sandbox's liveness probe sees an ALIVE pid 2 and refuses
@@ -1633,6 +1633,9 @@ export class WorkspaceLifecycle {
 		// terminated (P6.2 stop proof precedes the generation bump), so any
 		// lock beside the resume target is definitionally stale: clear it
 		// before the daemon spawns. Best-effort (a missing lock is fine).
+		// This is NOT the SDK's identity-scoped session ownership lease: that
+		// native OS lock is released on process death, and its flock sidecars
+		// must never be unlinked (doing so can split ownership across inodes).
 		try {
 			unlinkSync(`${mainFile}.lock`);
 		} catch {

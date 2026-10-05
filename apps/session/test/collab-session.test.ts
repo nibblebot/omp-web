@@ -1,15 +1,7 @@
 /**
- * wireSession regression tests: a queued steer must clear from the queue the
- * moment it is delivered into the conversation (finding: nothing broadcast
- * state on delivery, so state.queuedMessageCount, along with the QueueBar
- * chips it refetches, stayed stale until the next unrelated broadcast).
- *
- * The subscribe callback is tested hermetically: a fake session entry with a
- * subscriber tap + a stub broker counting broadcastState calls. The mid-run
- * race the regression is about (queue populated while a turn is streaming,
- * then the loop injects the steer) is simulated exactly: the drain is what
- * dequeues, so the broker is invoked with a session whose queue is already
- * empty, and the assertion is that the delivered steer triggers a broadcast.
+ * SDK displayable queue transitions must resync the existing state snapshot
+ * immediately, including dequeue, removal/restoration and follow-up changes.
+ * Hidden agent-authored steers remain coalesced away by the SDK.
  */
 import { describe, expect, test } from "bun:test";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent";
@@ -56,22 +48,13 @@ function stubBroker() {
 	};
 }
 
-/** A delivered user steer exactly as the SDK emits it (#queueUserMessage). */
-function deliveredSteer(): AgentSessionEvent {
-	return {
-		type: "message_start",
-		message: {
-			role: "user",
-			content: [{ type: "text", text: "hold on" }],
-			steering: true,
-			attribution: "user",
-			timestamp: Date.now(),
-		},
-	};
+/** A displayable queue snapshot after delivery or removal. */
+function drainedQueue(): AgentSessionEvent {
+	return { type: "queue_update", steering: [], followUp: [] };
 }
 
 describe("wireSession queue-staleness regression", () => {
-	test("a delivered user steer broadcasts state (queue already drained server-side)", () => {
+	test("a drained queue broadcasts state without waiting for a transcript event", () => {
 		const { broker, calls } = stubBroker();
 		const collab = createCollabSession({
 			config: { idleTimeoutMs: 0 } as never,
@@ -89,17 +72,15 @@ describe("wireSession queue-staleness regression", () => {
 			eventBus: { on: () => () => {} } as never,
 		} as unknown as SessionEntry);
 
-		// The drain runs before the subscribe callback fires (the loop dequeues
-		// the steer, then emits message_start): the broker snapshot therefore
-		// sees the queue empty; that is exactly the stale-count window. The
-		// delivered steer's message_start must still trigger a refresh.
-		fire(deliveredSteer());
+		// Queue mutations notify after changing the SDK queue, so the broker
+		// reads the post-delivery count even when no message_start is emitted.
+		fire(drainedQueue());
 
 		expect(calls.length).toBe(1);
 		expect(calls[0]).toEqual({ withStats: false });
 	});
 
-	test("non-steer user message_start events do not broadcast", () => {
+	test("message_start no longer duplicates queue_update state refreshes", () => {
 		const { broker, calls } = stubBroker();
 		const collab = createCollabSession({
 			config: { idleTimeoutMs: 0 } as never,
@@ -122,6 +103,16 @@ describe("wireSession queue-staleness regression", () => {
 		fire({
 			type: "message_start",
 			message: { role: "user", content: "hello", timestamp: Date.now() },
+		});
+		fire({
+			type: "message_start",
+			message: {
+				role: "user",
+				content: "delivered steer",
+				steering: true,
+				attribution: "user",
+				timestamp: Date.now(),
+			},
 		});
 		expect(calls.length).toBe(0);
 	});

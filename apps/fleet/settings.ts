@@ -11,20 +11,9 @@
  * persists coerced values without live session side effects.
  */
 
-import {
-	Settings,
-	discoverAuthStorage,
-	getAvailableThemes,
-	ModelRegistry,
-} from "@oh-my-pi/pi-coding-agent";
-import type { SettingPath } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
-import { getAgentDir } from "@oh-my-pi/pi-utils";
+import type { Settings } from "@oh-my-pi/pi-coding-agent";
 import type { SettingsModel } from "#lib/wire/protocol";
-import {
-	buildSettingsModel,
-	coerceSettingValue,
-	type SettingsSession,
-} from "#lib/sdk-settings/settings-model";
+import type { SettingsSession } from "#lib/sdk-settings/settings-model";
 
 /** The unattached settings surface the fleet control plane exposes. */
 export interface FleetSettings {
@@ -53,6 +42,10 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 	const ensureSettings = (): Promise<Settings> => {
 		if (settingsInit === null) {
 			settingsInit = (async () => {
+				const [{ Settings }, { getAgentDir }] = await Promise.all([
+					import("@oh-my-pi/pi-coding-agent"),
+					import("@oh-my-pi/pi-utils"),
+				]);
 				try {
 					return Settings.instance;
 				} catch {
@@ -70,6 +63,10 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 			providers = (async () => {
 				try {
 					if (options.registry) return await options.registry();
+					const [{ discoverAuthStorage, ModelRegistry }, { getAgentDir }] = await Promise.all([
+						import("@oh-my-pi/pi-coding-agent"),
+						import("@oh-my-pi/pi-utils"),
+					]);
 					const authStorage = await discoverAuthStorage(getAgentDir());
 					const registry = new ModelRegistry(authStorage);
 					await registry.awaitBackgroundRefresh();
@@ -86,6 +83,10 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 
 	async function getModel(): Promise<SettingsModel> {
 		await ensureSettings();
+		const [{ getAvailableThemes }, { buildSettingsModel }] = await Promise.all([
+			import("@oh-my-pi/pi-coding-agent"),
+			import("#lib/sdk-settings/settings-model"),
+		]);
 		// Resolve providers + themes once per build; the session slice is
 		// static for the fleet (no attached session to query).
 		const [models, themes] = await Promise.all([getProviders(), getAvailableThemes()]);
@@ -101,6 +102,10 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 
 	async function set(path: string, value: unknown): Promise<SettingsModel> {
 		const settings = await ensureSettings();
+		const [{ lookup }, { coerceSettingValue }] = await Promise.all([
+			import("@oh-my-pi/pi-coding-agent/config/registry"),
+			import("#lib/sdk-settings/settings-model"),
+		]);
 		// Schema-driven coercion mirrors the TUI's #setSettingValue; throws
 		// on unknown paths / uncoercible values (the route maps those to 400).
 		const coerced = coerceSettingValue(path, value);
@@ -109,7 +114,7 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 		// backend, …) is deliberately skipped; the side effects replay when
 		// a session next boots from the same config, making the merged-view +
 		// debounced-disk write the complete fleet-side action.
-		settings.set(path as SettingPath, coerced as never);
+		lookup(path)!.set(settings, coerced);
 		return getModel();
 	}
 

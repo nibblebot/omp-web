@@ -1,13 +1,4 @@
-import {
-	settings,
-	validateProviderMaxInFlightRequests,
-} from "@oh-my-pi/pi-coding-agent/config/settings";
-import {
-	getDefault,
-	getType,
-	SETTINGS_SCHEMA,
-	type SettingPath,
-} from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
 import {
 	getSettingsForTab,
@@ -28,11 +19,11 @@ import type {
 // Shared settings panel model (TUI /settings parity).
 //
 // The web client's settings panel is driven by the same declarative metadata
-// as the TUI: schema + UI defs from @oh-my-pi/pi-coding-agent. This module
-// builds the wire SettingsModel and coerces incoming values exactly like the
-// TUI's #setSettingValue. `settings` is the shared Settings singleton
-// (Settings.instance); settings.set() updates the in-process merged view and
-// persists (debounced) to disk. This module never touches the filesystem itself.
+// as the TUI: registry + UI defs from @oh-my-pi/pi-coding-agent. This module
+// builds the wire SettingsModel and coerces incoming values like the TUI's
+// #setSettingValue. The settings host reads the layered preferences (not
+// environment credentials); registered handles persist writes in the caller.
+// This module never touches the filesystem itself.
 // ---------------------------------------------------------------------------
 
 /**
@@ -58,12 +49,13 @@ export function settingChanged(current: unknown, defaultValue: unknown): boolean
 }
 
 /**
- * Schema-driven value coercion, mirroring the TUI's #setSettingValue. Throws
- * Error on unknown/non-schema paths.
+ * Registry-driven value coercion, mirroring the TUI's #setSettingValue. Throws
+ * Error on unknown/unregistered paths.
  */
 export function coerceSettingValue(path: string, value: unknown): unknown {
-	if (!(path in SETTINGS_SCHEMA)) throw new Error(`Unknown setting: ${path}`);
-	const schemaType = getType(path as SettingPath);
+	const setting = lookup(path);
+	if (!setting) throw new Error(`Unknown setting: ${path}`);
+	const schemaType = setting.type;
 
 	// "default" resets the threshold to the schema default (-1) regardless of type.
 	if (path === "compaction.thresholdPercent" && value === "default") return -1;
@@ -83,12 +75,12 @@ export function coerceSettingValue(path: string, value: unknown): unknown {
 			throw new Error(`Invalid record JSON for ${path}`);
 		}
 		if (path === "providers.maxInFlightRequests") {
-			return validateProviderMaxInFlightRequests(parsed);
+			return settingsHost.validateProviderLimits(parsed);
 		}
 		return parsed;
 	}
 
-	const currentValue = settings.get(path as SettingPath);
+	const currentValue = settingsHost.get(path);
 	if (typeof currentValue === "number") {
 		const n = Number(value);
 		if (!Number.isFinite(n)) throw new Error(`Invalid numeric value for ${path}`);
@@ -144,15 +136,13 @@ function defToItem(
 	themes: string[],
 	providers: string[],
 ): SettingsItem {
-	// Host-supplied def paths are plain strings; the schema owns the key space.
-	const path = def.path as SettingPath;
-	const value = settings.get(path);
+	const value = settingsHost.get(def.path);
 	const base = {
 		path: def.path,
 		label: def.label,
 		description: def.description,
 		value,
-		changed: settingChanged(value, getDefault(path)),
+		changed: settingChanged(value, def.defaultValue),
 	};
 	switch (def.type) {
 		case "boolean":
@@ -210,11 +200,13 @@ function buildGroups(
  * the just-applied change.
  */
 export function buildSettingsModel(session: SettingsSession, themes: string[]): SettingsModel {
-	// providerLimits lists the session's providers, sorted unique (matches the
-	// TUI's /settings provider picker).
-	const providers = [...new Set(session.getAvailableModels().map((m) => m.provider))].sort((a, b) =>
-		a.localeCompare(b),
+	// Match the TUI picker: retain configured limits even for unavailable providers.
+	const limits = settingsHost.normalizeProviderLimits(
+		settingsHost.get("providers.maxInFlightRequests"),
 	);
+	const providers = [
+		...new Set([...session.getAvailableModels().map((m) => m.provider), ...Object.keys(limits)]),
+	].sort((a, b) => a.localeCompare(b));
 	const tabs: SettingsTab[] = SETTING_TABS.map((tab) => ({
 		id: tab,
 		label: TAB_METADATA[tab].label,

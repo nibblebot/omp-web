@@ -3,16 +3,20 @@
  * PI_CODING_AGENT_DIR → sessions (wins over XDG_DATA_HOME), XDG_DATA_HOME
  * fallback. No port/host; the fleet control plane owns those.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolveStatsConfig } from "../stats-config";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+
+afterAll(cleanupTempDirs);
 
 /** Scrub the runner's own PI_/XDG_ vars so tests are hermetic. */
 function baseEnv(): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = {};
 	for (const [k, v] of Object.entries(process.env)) {
-		if (!/^(PI_|XDG_DATA_HOME$)/.test(k)) env[k] = v;
+		if (!/^(OMP_PROFILE$|PI_|XDG_DATA_HOME$)/.test(k)) env[k] = v;
 	}
 	return env;
 }
@@ -29,9 +33,12 @@ describe("resolveStatsConfig env precedence", () => {
 		expect(cfg.sessionsDir).toBe(join("/tmp/piagent", "sessions"));
 	});
 
-	test("XDG_DATA_HOME is the sessions fallback", () => {
-		const cfg = resolveStatsConfig({ ...baseEnv(), XDG_DATA_HOME: "/tmp/xdg" });
-		expect(cfg.sessionsDir).toBe(join("/tmp/xdg", "omp", "agent", "sessions"));
+	test("existing XDG_DATA_HOME root holds stats and flattened sessions", () => {
+		const xdg = tempDir("omp-stats-xdg-");
+		mkdirSync(join(xdg, "omp"));
+		const cfg = resolveStatsConfig({ ...baseEnv(), XDG_DATA_HOME: xdg });
+		expect(cfg.sessionsDir).toBe(join(xdg, "omp", "sessions"));
+		expect(cfg.statsDbPath).toBe(join(xdg, "omp", "stats.db"));
 	});
 
 	test("PI_CODING_AGENT_DIR wins over XDG_DATA_HOME", () => {
@@ -41,6 +48,56 @@ describe("resolveStatsConfig env precedence", () => {
 			XDG_DATA_HOME: "/tmp/xdg",
 		});
 		expect(cfg.sessionsDir).toBe(join("/tmp/piagent", "sessions"));
+	});
+
+	test("unmigrated XDG roots leave stats and sessions at the default", () => {
+		const xdg = tempDir("omp-stats-xdg-unmigrated-");
+		const cfg = resolveStatsConfig({ ...baseEnv(), XDG_DATA_HOME: xdg });
+		expect(cfg.statsDbPath).toBe(join(homedir(), ".omp", "stats.db"));
+		expect(cfg.sessionsDir).toBe(join(homedir(), ".omp", "agent", "sessions"));
+	});
+
+	test("a custom agent directory disables XDG redirection for the database too", () => {
+		const xdg = tempDir("omp-stats-xdg-custom-");
+		mkdirSync(join(xdg, "omp"));
+		const cfg = resolveStatsConfig({
+			...baseEnv(),
+			PI_CODING_AGENT_DIR: "/tmp/piagent",
+			XDG_DATA_HOME: xdg,
+		});
+		expect(cfg.statsDbPath).toBe(join(homedir(), ".omp", "stats.db"));
+		expect(cfg.sessionsDir).toBe("/tmp/piagent/sessions");
+	});
+
+	test("OMP_PROFILE wins over PI_PROFILE and the custom agent directory", () => {
+		const cfg = resolveStatsConfig({
+			...baseEnv(),
+			OMP_PROFILE: "work",
+			PI_PROFILE: "legacy",
+			PI_CODING_AGENT_DIR: "/tmp/piagent",
+		});
+		const root = join(homedir(), ".omp", "profiles", "work");
+		expect(cfg.configRoot).toBe(root);
+		expect(cfg.statsDbPath).toBe(join(root, "stats.db"));
+		expect(cfg.sessionsDir).toBe(join(root, "agent", "sessions"));
+	});
+
+	test("an explicitly empty OMP_PROFILE selects default instead of PI_PROFILE", () => {
+		const cfg = resolveStatsConfig({ ...baseEnv(), OMP_PROFILE: "", PI_PROFILE: "legacy" });
+		expect(cfg.configRoot).toBe(join(homedir(), ".omp"));
+	});
+
+	test("named profiles only adopt their own migrated XDG directory", () => {
+		const xdg = tempDir("omp-stats-xdg-profile-");
+		mkdirSync(join(xdg, "omp"));
+		const env = { ...baseEnv(), OMP_PROFILE: "work", XDG_DATA_HOME: xdg };
+		expect(resolveStatsConfig(env).statsDbPath).toBe(
+			join(homedir(), ".omp", "profiles", "work", "stats.db"),
+		);
+		const profileRoot = join(xdg, "omp", "profiles", "work");
+		mkdirSync(profileRoot, { recursive: true });
+		expect(resolveStatsConfig(env).statsDbPath).toBe(join(profileRoot, "stats.db"));
+		expect(resolveStatsConfig(env).sessionsDir).toBe(join(profileRoot, "sessions"));
 	});
 
 	test("sessions fall back under PI_CONFIG_DIR when neither agent var is set", () => {

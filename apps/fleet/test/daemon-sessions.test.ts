@@ -37,6 +37,36 @@ function sessionDirFor(agentDir: string, cwd: string): string {
 }
 
 describe("listDaemonSessions", () => {
+	test("lists a real SDK-produced journal with its title and messages", async () => {
+		const agentDir = tempDir("omp-session-list-produced-");
+		const cwd = join(agentDir, "repo");
+		const memory = SessionManager.inMemory(cwd);
+		memory.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "exercise actual session serialization" }],
+			timestamp: Date.now(),
+		});
+		await memory.setSessionName("SDK-produced session", "user");
+		const persisted = await memory.persistCopy({
+			sessionDir: sessionDirFor(agentDir, cwd),
+			suppressBreadcrumb: true,
+		});
+		try {
+			await persisted.flush();
+			const result = await listDaemonSessions(cwd, 10, agentDir);
+			expect(result).toHaveLength(1);
+			expect(result[0]).toMatchObject({
+				path: persisted.getSessionFile(),
+				id: persisted.getSessionId(),
+				name: "SDK-produced session",
+				cwd,
+				messageCount: 1,
+			});
+		} finally {
+			await persisted.close();
+		}
+	});
+
 	test("returns sessions newest-first with friendly names, capped at the limit", async () => {
 		const agentDir = tempDir("omp-session-list-agent-");
 		const cwd = join(agentDir, "repo");

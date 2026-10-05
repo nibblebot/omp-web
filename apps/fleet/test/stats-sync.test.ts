@@ -185,7 +185,8 @@ describe("POST /ctl/stats/sync", () => {
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(503);
 		expect(await res.json()).toEqual({
-			error: "omp binary not found. Install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH",
+			error:
+				"omp binary not found. Install omp (`bun install -g @oh-my-pi/pi-coding-agent`) or add it to PATH",
 		});
 	});
 
@@ -209,15 +210,21 @@ describe("buildSyncEnv", () => {
 		sessionsDir: "/home/u/repos/app/agent/sessions",
 	});
 
-	test("default stats.db: drops PI_CONFIG_DIR and PI_PROFILE so omp uses its default", () => {
+	test("default stats.db: drops profile and XDG redirects so omp uses the chosen target", () => {
 		const savedConfig = process.env.PI_CONFIG_DIR;
 		const savedProfile = process.env.PI_PROFILE;
+		const savedOmpProfile = process.env.OMP_PROFILE;
+		const savedXdgData = process.env.XDG_DATA_HOME;
 		process.env.PI_CONFIG_DIR = "stale";
 		process.env.PI_PROFILE = "stale";
+		process.env.OMP_PROFILE = "other-profile";
+		process.env.XDG_DATA_HOME = "/tmp/stale-xdg";
 		try {
 			const out = buildSyncEnv(baseCfg(join(HOME, ".omp", "stats.db")), HOME);
 			expect("PI_CONFIG_DIR" in out).toBe(false);
 			expect("PI_PROFILE" in out).toBe(false);
+			expect("OMP_PROFILE" in out).toBe(false);
+			expect("XDG_DATA_HOME" in out).toBe(false);
 			expect(out.PI_CODING_AGENT_DIR).toBe("/home/u/repos/app/agent");
 			// untouched vars pass through
 			expect(out.PORT).toBe(process.env.PORT);
@@ -226,6 +233,10 @@ describe("buildSyncEnv", () => {
 			else process.env.PI_CONFIG_DIR = savedConfig;
 			if (savedProfile === undefined) delete process.env.PI_PROFILE;
 			else process.env.PI_PROFILE = savedProfile;
+			if (savedOmpProfile === undefined) delete process.env.OMP_PROFILE;
+			else process.env.OMP_PROFILE = savedOmpProfile;
+			if (savedXdgData === undefined) delete process.env.XDG_DATA_HOME;
+			else process.env.XDG_DATA_HOME = savedXdgData;
 		}
 	});
 

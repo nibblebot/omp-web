@@ -1,19 +1,16 @@
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { SessionEntry } from "./session-entry";
 import type { QuiesceWriterEntry } from "#lib/wire/callback-protocol";
 import type { CallbackErrorCode } from "#lib/wire/callback-protocol";
 
 /**
- * All-writer flush capture (P4.5; RuntimeMap P0.3 finding). The SDK's
- * AgentSession.dispose and AgentLifecycleManager.release swallow descendant
- * and advisor-recorder close failures (allSettled / try-catch in the pinned
- * 17.1.8 sources), so dispose resolution alone is NOT all-writer flush
- * evidence. Before ANY dispose, this captures every reachable live writer,
- * the boot session's own SessionManager plus every registered sub/advisor
- * ref with a live AgentSession, and calls flush() on each. A latched
- * SessionPersistenceIndeterminateError (or any rejected flush) is a hard
- * block, surfaced typed.
+ * All-writer flush capture (P4.5; RuntimeMap P0.3 finding). The pinned SDK
+ * logs descendant release failures and advisor-recorder teardown failures
+ * rather than rejecting its complete disposal cascade. Dispose resolution
+ * alone is therefore NOT all-writer flush evidence. Before ANY dispose,
+ * capture every reachable writer, drain advisor cards, then explicitly flush
+ * each SessionManager. Any rejected flush is a hard deletion block.
  *
  * Writers that the SDK already released (parked/aborted refs with null
  * sessions) are recorded as parked/disposed and covered by the structural
@@ -43,9 +40,14 @@ export interface WriterFlushResult {
 export function captureWriters(
 	entry: SessionEntry,
 	registry: AgentRegistry,
-	mainSessionFile: string | null,
 ): { main: AgentSession; descendants: WriterRef[] } {
 	const refs = registry.list();
+	// Task executors register globally, unlike the boot session's private
+	// registry. Only this entry's mirrored ids belong to this lineage.
+	for (const id of entry.subagentSnapshots.keys()) {
+		const ref = AgentRegistry.global().get(id);
+		if (ref && !refs.some((existing) => existing.id === id)) refs.push(ref);
+	}
 	const descendants: WriterRef[] = refs
 		.filter((ref) => ref.id !== "s1" && (ref.kind === "sub" || ref.kind === "advisor"))
 		.map((ref) => ({
@@ -68,10 +70,9 @@ export function captureWriters(
 export async function flushAllWriters(input: {
 	entry: SessionEntry;
 	registry: AgentRegistry;
-	mainSessionFile: string | null;
 }): Promise<WriterFlushResult> {
-	const { entry, registry, mainSessionFile } = input;
-	const { main, descendants } = captureWriters(entry, registry, mainSessionFile);
+	const { entry, registry } = input;
+	const { main, descendants } = captureWriters(entry, registry);
 
 	// Precondition gate: no live writer may remain (P7.3 "refuse active
 	// work"). The main session's own busy state is the primary signal.
@@ -83,9 +84,6 @@ export async function flushAllWriters(input: {
 			error: "main session is streaming or has queued messages",
 		};
 	}
-	// mainSessionFile is reserved for the structural-verification pass that
-	// runs after dispose (the main JSONL path is derived from the sessions
-	// tree, not this handle).
 	for (const ref of descendants) {
 		if (ref.status === "running" || ref.status === "idle") {
 			return {
@@ -95,6 +93,19 @@ export async function flushAllWriters(input: {
 				error: `descendant writer ${ref.id} (${ref.kind}) is still live (${ref.status})`,
 			};
 		}
+	}
+
+	// Advisor catch-up persists cards into the main transcript. The barrier
+	// must precede the explicit flush, including pending cards after a pause.
+	const advisorState = await advisorCaughtUp(main);
+	if (!advisorState.ok) {
+		return {
+			ok: false,
+			descendants: [],
+			advisors: advisorState.state,
+			error: `advisor catch-up barrier failed: ${advisorState.error}`,
+			note: "advisor recorder catch-up unresolved; deletion blocked",
+		};
 	}
 
 	// Explicit flush of every reachable SessionManager BEFORE dispose. The
@@ -135,21 +146,11 @@ export async function flushAllWriters(input: {
 		}
 	}
 
-	const advisorState = await advisorCaughtUp(main);
-	if (!advisorState.ok) {
-		return {
-			ok: false,
-			descendants: states,
-			advisors: advisorState.state,
-			error: `advisor catch-up barrier failed: ${advisorState.error}`,
-			note: "advisor recorder catch-up unresolved; deletion blocked",
-		};
-	}
 	return {
 		ok: true,
 		descendants: states,
 		advisors: advisorState.state,
-		note: "SDK 17.1.8 ceiling: dispose suppresses descendant/advisor errors; flush here is the explicit evidence, and structural read verification of every declared JSONL runs after dispose.",
+		note: "SDK disposal logs descendant/advisor failures; explicit flush and post-dispose structural verification provide the deletion evidence.",
 	};
 }
 
@@ -187,12 +188,9 @@ function isLedgerCode(value: string): value is CallbackErrorCode {
 }
 
 /**
- * Advisor catch-up barrier. SessionAdvisors exposes no direct flush promise
- * (recorder close errors are swallowed by dispose's allSettled), so the
- * supported close cousins are: waitForAdvisorCatchup (pending card events)
- * when the API exists, else "inactive" when no advisor is configured/active.
- * `getAdvisorStatusOverview()` reports configured advisors; a configured +
- * active advisor that cannot be drained fails closed.
+ * Always drain pending advisor-card persistence, even when the overview has
+ * no active runtime. The current SDK's catch-up barrier covers those cards
+ * as well as reviews; a timeout or rejected barrier is never proof of flush.
  */
 async function advisorCaughtUp(
 	session: AgentSession,
@@ -200,40 +198,20 @@ async function advisorCaughtUp(
 	try {
 		const overview = session.getAdvisorStatusOverview();
 		const active = overview.advisors.some(
-			(a) => a.status !== "paused" && a.status !== "no_model" && a.status !== "quota_exhausted",
+			(advisor) =>
+				advisor.status !== "paused" &&
+				advisor.status !== "no_model" &&
+				advisor.status !== "quota_exhausted",
 		);
-		if (!active) return { ok: true, state: "inactive" };
-		// waitForAdvisorCatchup is the supported drain barrier; when the pinned
-		// SDK lacks it, a configured advisor fails closed rather than guessing.
-		const wait = (
-			session as AgentSession & { waitForAdvisorCatchup?: (timeoutMs: number) => Promise<boolean> }
-		).waitForAdvisorCatchup;
-		if (typeof wait === "function") {
-			const ok = await wait.call(session, 10_000);
-			if (!ok) return { ok: false, state: "caught_up", error: "advisor catch-up timed out" };
-			return { ok: true, state: "caught_up" };
-		}
+		const state = active ? "caught_up" : "inactive";
+		const ok = await session.waitForAdvisorCatchup(10_000, { waitThroughRecovery: true });
+		if (!ok) return { ok: false, state, error: "advisor catch-up timed out" };
+		return { ok: true, state };
+	} catch (cause) {
 		return {
 			ok: false,
 			state: "caught_up",
-			error: "advisors active but the SDK exposes no catch-up barrier",
+			error: cause instanceof Error ? cause.message : String(cause),
 		};
-	} catch {
-		// getAdvisorStatusOverview may not exist on older SDK builds; treat as
-		// inactive only when advisors are provably off, otherwise fail closed.
-		try {
-			const overview = session.getAdvisorStatusOverview();
-			if (
-				overview.advisors.some(
-					(a) => a.status !== "paused" && a.status !== "no_model" && a.status !== "quota_exhausted",
-				)
-			) {
-				return { ok: false, state: "caught_up", error: "cannot verify advisor catch-up" };
-			}
-		} catch {
-			// No overview API at all: nothing we can prove. The structural
-			// read verification after dispose still covers __advisor*.jsonl.
-		}
-		return { ok: true, state: "inactive" };
 	}
 }

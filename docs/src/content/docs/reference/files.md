@@ -34,9 +34,9 @@ Only a few locations are configurable. Each section states its precedence chain,
 | Managed worktree root | `~/.omp-web/workspaces` | worktree actions | `--workspace-dir`, `OMP_FLEET_WORKSPACE_DIR`, the `workspaceDir` key |
 | Clone workspace volume | `<workspace root>/<daemonId>/` | the clone lifecycle | the same root as managed worktrees |
 | Clone provider state | `<workspace root>/.provider-state/<daemonId>/` | the clone provider | the same root as managed worktrees |
-| Session transcripts | `~/.omp/agent/sessions/<project>/<session>.jsonl` | the agent runtime inside a session daemon | `PI_CODING_AGENT_DIR`, `XDG_DATA_HOME` |
+| Session transcripts | `~/.omp/agent/sessions/<project>/<session>.jsonl` | the agent runtime inside a session daemon | agent directory, profile, existing XDG migration |
 | Transcript lock | `<transcript>.lock` | the session daemon that owns the transcript | follows the transcript |
-| Statistics database | `~/.omp/stats.db` | the `omp` CLI | `PI_CONFIG_DIR` |
+| Statistics database | `~/.omp/stats.db` | the `omp` CLI | `PI_CONFIG_DIR`, `OMP_PROFILE` (`PI_PROFILE` alias), eligible existing `XDG_DATA_HOME` root |
 | Browser preferences | `localStorage` for the site origin | the browser UI | none, per browser profile |
 
 ## Installed code
@@ -190,7 +190,7 @@ Transcripts are Oh My Pi agent data, written by the agent runtime inside a sessi
 
 | Location | Resolution |
 | --- | --- |
-| Sessions directory | `$PI_CODING_AGENT_DIR/sessions` when the variable is set, else `$XDG_DATA_HOME/omp/agent/sessions` when `XDG_DATA_HOME` is set, else `<config root>/agent/sessions`, which defaults to `~/.omp/agent/sessions` |
+| Sessions directory | Resolved agent directory's `sessions/`, default `~/.omp/agent/sessions`; see [Statistics database](#statistics-database) below for Analysis's profile and existing XDG migration rules |
 | Transcript | `<sessions directory>/<project directory>/<session file>.jsonl` |
 | Subagent and advisor transcripts | `<sessions directory>/<project directory>/<session file without .jsonl>/`, nested the same way for deeper subagents |
 | Transcript lock | `<transcript>.lock` |
@@ -225,12 +225,16 @@ The Analysis views read the Oh My Pi statistics database. omp-web opens it read-
 
 | Path | Notes |
 | --- | --- |
-| `$PI_CONFIG_DIR/stats.db`, default `~/.omp/stats.db` | the database; the reader treats `PI_CONFIG_DIR` as a literal path |
+| `<resolved data root>/stats.db`, default `~/.omp/stats.db` | the database; the reader treats `PI_CONFIG_DIR` as a literal path and applies the profile and migration rules below |
 | `stats.db-wal`, `stats.db-shm` | SQLite write-ahead sidecars created by the `omp` CLI |
-| `$PI_CODING_AGENT_DIR/sessions` (see the transcript chain above) | the sessions tree the reader enriches from |
+| `<resolved sessions root>` | the sessions tree the reader enriches from, resolved by the same profile and migration rules |
+
+Analysis selects `OMP_PROFILE` before the `PI_PROFILE` compatibility alias, trims the selected value, and treats an empty value or `default` as the default profile. The config root is the literal `PI_CONFIG_DIR` value or `~/.omp`, with `profiles/<name>` appended for a named profile. Normally that root owns `stats.db`, and sessions live under `<config root>/agent/sessions`; only the default profile honors a `PI_CODING_AGENT_DIR` override.
+
+On Linux and macOS, an existing `$XDG_DATA_HOME/omp` root can take over if the agent directory is unset or exactly `<config root>/agent`. A named profile instead needs its own existing `$XDG_DATA_HOME/omp/profiles/<name>` root. When eligible, that root owns both `stats.db` and `sessions/` directly, with no intervening `agent/` directory.
 
 - The handle is opened read-only with `query_only` enforced. If the sidecars are missing after a crash, the reader copies the database and its sidecars into a temporary directory under the system temp directory and reads the copy; the copy is removed when the handle is reprobed or the fleet closes.
-- The sync action runs the `omp` statistics summary command with an environment derived from the resolved database location, so the child writes the same file the viewer reads. A database outside your home directory cannot be addressed by the `omp` CLI and the sync reports that specific failure.
+- The sync action runs `omp stats --summary` and parses its stderr summary. It gives the child the resolved absolute sessions parent, clears `OMP_PROFILE`, `PI_PROFILE`, and `XDG_DATA_HOME`, and translates the database directory into a home-relative `PI_CONFIG_DIR` name (or removes it for the default `~/.omp/stats.db`). The child therefore writes the same file the viewer reads. A database outside your home directory cannot be addressed by the `omp` CLI and the sync reports that specific failure.
 - The database is a derived index over transcripts. Deleting it or leaving it stale costs analytics only, never conversations. Run a sync to rebuild it.
 
 See [Sync the statistics database](/analysis/stats-sync/) for the sync workflow and [Session analytics](/analysis/analytics/) for the views.

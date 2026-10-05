@@ -9,11 +9,14 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { Settings } from "@oh-my-pi/pi-coding-agent";
+import { cfgModelRoleStorage, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { createWebMethods } from "../methods";
 import type { SessionEntry } from "../session-entry";
 
 interface StubSession {
-	settings: { get: (key: string) => boolean; override: (key: string, value: boolean) => void };
+	settings: Settings;
 	getEvalPreludes: () => ReadonlyArray<{ name: string }>;
 	refreshBaseSystemPrompt: () => Promise<void>;
 }
@@ -24,15 +27,10 @@ function stubEntry(opts: { preludes?: ReadonlyArray<{ name: string }>; refreshEr
 	overrides: Array<boolean>;
 	refreshes: () => number;
 } {
-	let value = false;
+	const settings = Settings.isolated();
 	let refreshes = 0;
 	const session: StubSession = {
-		settings: {
-			get: () => value,
-			override: (_key, next) => {
-				value = next;
-			},
-		},
+		settings,
 		getEvalPreludes: () => opts.preludes ?? [],
 		refreshBaseSystemPrompt: async () => {
 			refreshes++;
@@ -69,7 +67,7 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 		await expect(methods.setComputerToolEnabled(entry, [true])).rejects.toThrow(
 			"unavailable in this session",
 		);
-		expect(entry.session.settings.get("computer.enabled")).toBe(false);
+		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
 		expect(refreshes()).toBe(0);
 	});
 
@@ -77,7 +75,7 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 		const { entry, refreshes } = stubEntry({ preludes: [{ name: "computer" }] });
 		const methods = methodsTable();
 		await methods.setComputerToolEnabled(entry, [true]);
-		expect(entry.session.settings.get("computer.enabled")).toBe(true);
+		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(true);
 		expect(refreshes()).toBe(1);
 	});
 
@@ -85,7 +83,7 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 		const { entry, refreshes } = stubEntry({ preludes: [] });
 		const methods = methodsTable();
 		await methods.setComputerToolEnabled(entry, [false]);
-		expect(entry.session.settings.get("computer.enabled")).toBe(false);
+		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
 		expect(refreshes()).toBe(1);
 	});
 
@@ -98,7 +96,7 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 		await expect(methods.setComputerToolEnabled(entry, [true])).rejects.toThrow(
 			"prompt rebuild exploded",
 		);
-		expect(entry.session.settings.get("computer.enabled")).toBe(false);
+		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
 	});
 
 	test("setInspectImageMode is a loud tombstone, never a silent success", () => {
@@ -108,5 +106,87 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 		// ok:false call_result (asserted over the wire in omp-session.test.ts).
 		expect(() => methods.setInspectImageMode(entry, ["auto"])).toThrow("inspect_image");
 		expect(refreshes()).toBe(0);
+	});
+});
+
+describe("model-role registry settings preserve scope and cancellation", () => {
+	test("a cancelled default-model switch never overwrites a project assignment", async () => {
+		const settings = Settings.isolated();
+		cfgModelRoleStorage.override(settings, "project");
+		settings.setProjectModelRole("default", "openai/previous:low");
+		const selected = { provider: "openai", id: "selected" };
+		const switches: unknown[] = [];
+		const entry = {
+			session: {
+				settings,
+				getAvailableModels: () => [selected],
+				setModel: async (_model: unknown, _role: string, options: unknown) => {
+					switches.push(options);
+					return { switched: false };
+				},
+			},
+		} as unknown as SessionEntry;
+		await methodsTable().setModelRole(entry, ["default", "openai", "selected", "inherit"]);
+		expect(switches).toEqual([{ thinkingLevel: undefined, persist: false }]);
+		expect(settings.getProjectModelRole("default")).toBe("openai/previous:low");
+	});
+
+	test("inherit omits baked thinking and writes a non-active role only in project scope", async () => {
+		const settings = Settings.isolated();
+		cfgModelRoleStorage.override(settings, "project");
+		settings.setModelRole("smol", "openai/global:high");
+		const selected = { provider: "openai", id: "selected" };
+		const entry = {
+			session: {
+				settings,
+				getAvailableModels: () => [selected],
+				getRoleModelCycle: () => undefined,
+			},
+		} as unknown as SessionEntry;
+		await methodsTable().setModelRole(entry, ["smol", "openai", "selected", "inherit"]);
+		expect(settings.getProjectModelRole("smol")).toBe("openai/selected");
+		expect(settings.getModelRoleSource("smol")).toBe("project");
+		settings.clearProjectModelRole("smol");
+		expect(settings.getModelRole("smol")).toBe("openai/global:high");
+	});
+
+	test("clearing an active project role reveals and applies inherited global thinking", async () => {
+		const settings = Settings.isolated();
+		cfgModelRoleStorage.override(settings, "project");
+		settings.setModelRole("smol", "openai/global:high");
+		settings.setProjectModelRole("smol", "openai/project:low");
+		const global = { provider: "openai", id: "global" };
+		const project = { provider: "openai", id: "project" };
+		const applied: unknown[] = [];
+		const entry = {
+			session: {
+				settings,
+				model: project,
+				getAvailableModels: () => [global, project],
+				getRoleModelCycle: () => ({ models: [{ role: "smol", model: project }], currentIndex: 0 }),
+				applyRoleModel: async (value: unknown) => {
+					applied.push(value);
+				},
+			},
+		} as unknown as SessionEntry;
+		await methodsTable().clearModelRole(entry, ["smol"]);
+		expect(settings.getProjectModelRole("smol")).toBeUndefined();
+		expect(settings.getModelRole("smol")).toBe("openai/global:high");
+		expect(applied).toEqual([
+			{ role: "smol", model: global, thinkingLevel: "high", explicitThinkingLevel: true },
+		]);
+	});
+
+	test("hiding a role keeps other registry tags and its assignment intact", async () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("writer", "openai/selected");
+		cfgModelTags.set(settings, { writer: { name: "Writer" }, smol: { name: "Fast" } });
+		const entry = { session: { settings } } as unknown as SessionEntry;
+		await methodsTable().setModelRoleHidden(entry, ["writer", true]);
+		expect(cfgModelTags.get(settings)).toEqual({
+			writer: { name: "Writer", hidden: true },
+			smol: { name: "Fast" },
+		});
+		expect(settings.getModelRole("writer")).toBe("openai/selected");
 	});
 });

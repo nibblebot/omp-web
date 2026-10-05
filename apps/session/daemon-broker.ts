@@ -6,13 +6,15 @@ import {
 	getRoleInfo,
 } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { resolveModelRoleValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { cfgModelRoleStorage } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import {
 	daemonClientForProject,
 	type DaemonBrokerClient,
 } from "@oh-my-pi/pi-coding-agent/launch/client";
-import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/hub";
+import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
+import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import {
 	DAEMON_KEY_SEP,
 	daemonsKey,
@@ -141,7 +143,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 				availableModels: session.getAvailableModels(),
 				currentModel: session.model,
 			}),
-			modelRoleStorage: session.settings.get("modelRoleStorage"),
+			modelRoleStorage: cfgModelRoleStorage.get(session.settings),
 			thinkingLevel: session.thinkingLevel,
 			isStreaming: session.isStreaming,
 			isCompacting: session.isCompacting,
@@ -172,7 +174,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			// 18.1.9 turned computer use into an eval prelude gated by the
 			// session-scoped `computer.enabled` setting; there is no longer a
 			// top-level `computer` tool to query.
-			computerToolEnabled: session.settings.get("computer.enabled"),
+			computerToolEnabled: cfgComputerEnabled.get(session.settings),
 			// 18.1.9 removed the inspect_image tool (`read <image>?q=` owns image
 			// questions), so the legacy mode is reported as never-registered.
 			inspectImageMode: "off",

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
+import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { SETTING_TABS } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import type { SettingsModel } from "#lib/wire/protocol";
 import { createFleetSettings } from "../settings";
@@ -69,7 +70,7 @@ describe("createFleetSettings", () => {
 	test("set coerces and persists into the Settings singleton, returning a fresh model", async () => {
 		const settings = createFleetSettings({ registry: emptyRegistry });
 		const model = await settings.set("compaction.thresholdPercent", "50");
-		expect(Settings.instance.get("compaction.thresholdPercent")).toBe(50);
+		expect(lookup("compaction.thresholdPercent")!.get(Settings.instance)).toBe(50);
 		const item = itemsOf("context", model.tabs).find(
 			(item) => item.path === "compaction.thresholdPercent",
 		);
@@ -77,7 +78,7 @@ describe("createFleetSettings", () => {
 		expect(item?.changed).toBe(true);
 		// Restore the schema default so the singleton stays pristine for
 		// other tests in this file.
-		Settings.instance.set("compaction.thresholdPercent", -1);
+		lookup("compaction.thresholdPercent")!.set(Settings.instance, -1);
 	});
 
 	test("set rejects unknown paths", async () => {

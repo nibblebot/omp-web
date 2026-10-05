@@ -151,7 +151,8 @@ Analysis reads token, cost, and error figures from `stats.db`. A session whose t
 
 - Click `Sync now` in the transcripts view or `Sync stats DB` in analytics. Syncing runs `omp stats --summary` on the server and refreshes the database view.
 - If the banner reports `stats.db not found`, run `omp stats` once to build the index. An unreadable database is reported as `stats.db could not be opened at <path>`.
-- Sync failures surface as `sync already in progress`, `sync timed out`, `omp stats failed`, or `omp binary not found`. For the last one, install it with `npm i -g @oh-my-pi/omp-stats` or add it to `PATH`.
+- Sync failures surface as `sync already in progress`, `sync timed out`, `omp stats failed`, or `omp binary not found`. For the last one, install it with `bun install -g @oh-my-pi/pi-coding-agent` or add it to `PATH`. A nonzero exit includes the last 500 characters of stderr in the response's `detail`.
+- Check the resolved `dir` and `db` paths in the transcripts sidebar. Analysis selects `OMP_PROFILE` before the `PI_PROFILE` alias and uses a named profile's own directories. On Linux and macOS, an existing eligible XDG root has `sessions/` and `stats.db` directly under it, not under `agent/`. Sync pins the child to those resolved targets and clears inherited profile and XDG selectors; a database outside your home directory cannot be synced. See [Sync the statistics database](/analysis/stats-sync/) for the exact migration gates.
 
 ## Browser keeps reconnecting
 

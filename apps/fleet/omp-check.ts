@@ -45,28 +45,28 @@ export function resolveOmpBinary(): string | null {
 export async function checkOmpSetup(agentDir?: string): Promise<OmpSetupStatus> {
 	const ompInstalled = resolveOmpBinary() !== null;
 	try {
-		const [{ getAgentDir }, { discoverAuthStorage, ModelRegistry, Settings }] = await Promise.all([
-			import("@oh-my-pi/pi-utils"),
-			import("@oh-my-pi/pi-coding-agent"),
-		]);
+		const [{ getAgentDir }, { discoverAuthStorage, ModelRegistry, Settings }, { cfgModelRoles }] =
+			await Promise.all([
+				import("@oh-my-pi/pi-utils"),
+				import("@oh-my-pi/pi-coding-agent"),
+				import("@oh-my-pi/pi-coding-agent/config/model-settings"),
+			]);
 		const dir = agentDir ?? getAgentDir();
 		const authStorage = await discoverAuthStorage(dir);
 		const registry = new ModelRegistry(authStorage);
 		await registry.awaitBackgroundRefresh();
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
 		// Providers that could actually authenticate a prompt today. The SDK's
-		// getApiKeyForProvider is ASYNC in current releases; awaiting via
-		// Promise.resolve also tolerates sync versions. A resolved key (or the
+		// getApiKeyForProvider resolves asynchronously. A resolved key (or the
 		// kNoAuth sentinel for keyless providers) counts as usable; undefined
-		// means the provider cannot authenticate. (Before the await this filter
-		// compared a PROMISE to undefined, which is always true, and reported every
-		// available provider as authenticated.)
+		// means the provider cannot authenticate. Before awaiting, this filter
+		// compared a PROMISE to undefined and reported every available provider.
 		const models = registry.getAvailable();
 		const candidates = [...new Set(models.map((m) => m.provider))].sort();
 		const usable = await Promise.all(
 			candidates.map(async (provider) => {
 				try {
-					return (await Promise.resolve(registry.getApiKeyForProvider(provider))) !== undefined;
+					return (await registry.getApiKeyForProvider(provider)) !== undefined;
 				} catch {
 					return false;
 				}
@@ -74,8 +74,7 @@ export async function checkOmpSetup(agentDir?: string): Promise<OmpSetupStatus> 
 		);
 		const providers = candidates.filter((_, i) => usable[i]);
 		// The default-role model selection (the omp TUI /models writes this).
-		const roles = settings.get("modelRoles");
-		const defaultSelector = (roles as Record<string, unknown> | undefined)?.default;
+		const defaultSelector = cfgModelRoles.get(settings).default;
 		const defaultModel =
 			typeof defaultSelector === "string" && defaultSelector !== "" ? defaultSelector : null;
 		return { ompInstalled, providers, defaultModel, error: null };
