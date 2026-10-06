@@ -6,8 +6,8 @@
  *
  * A character exposes six poses: idle/blink at rest, work1/work2/work-blink
  * cycled while the agent is streaming, happy briefly when a stream finishes.
- * Each character module (kimi-sprite, minimax-sprite, deepseek-sprite) defines
- * its own SpriteArt; characters.ts maps model providers to characters.
+ * Each character module (kimi, minimax, deepseek, opus, sonnet, and the default
+ * omp sprite) defines its own SpriteArt; characters.ts maps models to characters.
  */
 
 export type PetPose = "idle" | "blink" | "work1" | "work2" | "work-blink" | "happy";

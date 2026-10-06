@@ -371,7 +371,7 @@ pre {
 	color: var(--muted-3);
 }
 
-/* --- Empty state: greeting + suggested prompts before the first message --- */
+/* --- Empty state: greeting before the first message --- */
 
 .empty-state {
 	flex: 1;
@@ -391,35 +391,6 @@ pre {
 	margin: 0;
 	font-size: 1rem;
 	color: var(--muted);
-}
-.empty-chips {
-	display: flex;
-	flex-wrap: wrap;
-	justify-content: center;
-	gap: var(--space-3);
-}
-.empty-chip {
-	padding: var(--space-2) var(--space-5);
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--r-pill);
-	color: var(--muted-3);
-	font: inherit;
-	font-size: var(--fs-md);
-	cursor: pointer;
-	transition:
-		background var(--dur-fast) var(--ease-out),
-		color var(--dur-fast) var(--ease-out),
-		border-color var(--dur-fast) var(--ease-out);
-}
-.empty-chip:hover {
-	background: var(--hover);
-	color: var(--text);
-	border-color: var(--accent-border);
-}
-.empty-chip:focus-visible {
-	outline: var(--focus-ring);
-	outline-offset: 2px;
 }
 
 /* --- Inline images, eval/lsp/hub/ask tool cards --- */

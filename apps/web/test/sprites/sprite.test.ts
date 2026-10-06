@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHARACTERS, characterForProvider } from "../../sprites/characters";
+import { CHARACTERS, characterForModel } from "../../sprites/characters";
 import { SPRITE_SIZE } from "../../sprites/sprite";
 
 describe("character sprites", () => {
@@ -26,36 +26,40 @@ describe("character sprites", () => {
 	});
 });
 
-describe("characterForProvider", () => {
-	test('maps "minimax" to the minimax character', () => {
-		expect(characterForProvider("minimax").provider).toBe("minimax");
-	});
-
+describe("characterForModel", () => {
 	test('prefix-maps "minimax-code" to the minimax character', () => {
-		expect(characterForProvider("minimax-code").provider).toBe("minimax");
+		expect(characterForModel("minimax-code").id).toBe("minimax");
 	});
 
 	test('maps "DEEPSEEK" to the deepseek character (case-insensitive)', () => {
-		expect(characterForProvider("DEEPSEEK").provider).toBe("deepseek");
+		expect(characterForModel("DEEPSEEK").id).toBe("deepseek");
 	});
 
-	test('prefix-maps "kimi-code" to the kimi character', () => {
-		expect(characterForProvider("kimi-code").provider).toBe("kimi");
+	test("provider-family characters match by prefix, not substring", () => {
+		expect(characterForModel("my-kimi-proxy").id).toBe("omp");
 	});
 
-	test("falls back to kimi for an undefined provider", () => {
-		expect(characterForProvider(undefined).provider).toBe("kimi");
+	test("falls back to omp for an undefined provider", () => {
+		expect(characterForModel(undefined).id).toBe("omp");
 	});
 
-	test('falls back to kimi for an unknown provider like "openai"', () => {
-		expect(characterForProvider("openai").provider).toBe("kimi");
+	test("falls back to omp for an unknown model", () => {
+		expect(characterForModel("openai", "gpt-5").id).toBe("omp");
+		expect(characterForModel("anthropic", "claude-haiku-4-5").id).toBe("omp");
 	});
 
 	test("falls back to the model id for gateway providers", () => {
-		expect(characterForProvider("opencode-go", "deepseek-v4-flash").provider).toBe("deepseek");
+		expect(characterForModel("opencode-go", "deepseek-v4-flash").id).toBe("deepseek");
 	});
 
 	test("provider match wins over the model id", () => {
-		expect(characterForProvider("minimax-code", "deepseek-v4-flash").provider).toBe("minimax");
+		expect(characterForModel("minimax-code", "deepseek-v4-flash").id).toBe("minimax");
+	});
+
+	test("Claude families match by model-id substring across providers", () => {
+		expect(characterForModel("anthropic", "claude-opus-4-5").id).toBe("opus");
+		expect(characterForModel("bedrock", "anthropic.claude-opus-4-1-v1:0").id).toBe("opus");
+		expect(characterForModel("openrouter", "anthropic/claude-sonnet-4.5").id).toBe("sonnet");
+		expect(characterForModel("vertex", "claude-sonnet-4@20250514").id).toBe("sonnet");
 	});
 });
