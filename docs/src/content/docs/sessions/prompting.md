@@ -28,8 +28,6 @@ Type in the textarea and press Enter, or click Send.
 
 The placeholder lists the common keys: `Message the agent… (Enter send, Ctrl+Enter follow-up, / for commands)`. The action row also contains New session, which behaves like `/new`: it asks for confirmation when the transcript is not empty and then replaces the current session.
 
-On an empty transcript, suggested prompts such as "Summarize this repo" insert text into the composer without sending it.
-
 If the session daemon rejects a send, the error appears in the status bar banner instead of the transcript.
 
 ## Steer a running turn

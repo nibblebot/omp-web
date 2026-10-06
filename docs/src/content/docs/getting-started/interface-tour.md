@@ -68,8 +68,7 @@ The transcript fills the main column:
 - While the agent streams, a shimmering line shows the current working intent,
   and a **Jump to bottom** button appears if you scroll away from the live
   edge.
-- An empty transcript greets you with suggested prompts that insert into the
-  composer without sending.
+- An empty transcript shows the provider's character and a one-line greeting.
 
 ## Composer and queue
 

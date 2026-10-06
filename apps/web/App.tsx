@@ -1,5 +1,5 @@
-import { For, createEffect, createSignal, onMount, Show, type Component } from "solid-js";
-import { characterForProvider } from "./sprites/characters";
+import { createEffect, createSignal, onMount, Show, type Component } from "solid-js";
+import { characterForModel } from "./sprites/characters";
 import { PanelLeftIcon } from "./components/shared/icons";
 import { CharacterAvatar, Modal } from "./components/shared";
 import {
@@ -61,7 +61,6 @@ import {
 	connect,
 	hasLiveSession,
 	initAuth,
-	setPromptInsert,
 	setSidebarVisible,
 	setState,
 	setTxSidebarVisible,
@@ -91,30 +90,14 @@ const SHORTCUTS: Array<[string, string]> = [
 	["!! cmd", "Run shell command, output local only (dimmed)"],
 ];
 
-/** First-run empty state: large character sprite, greeting, and suggested
- *  prompts that insert into the prompt box (consumed by PromptBox). */
-const SUGGESTED_PROMPTS = [
-	"Summarize this repo",
-	"Explain the server protocol",
-	"List open issues",
-];
-
+/** Empty-transcript state: large character sprite and a one-line greeting. */
 const EmptyState: Component = () => (
 	<div class="empty-state">
-		<CharacterAvatar provider={state.model?.provider} pose="happy" size={96} />
+		<CharacterAvatar provider={state.model?.provider} id={state.model?.id} pose="happy" size={96} />
 		<p class="empty-greeting">
-			{characterForProvider(state.model?.provider).name} is ready. What should we work on? Ctrl+O
-			expands tool outputs, and Ctrl+R searches prompt history.
+			{characterForModel(state.model?.provider, state.model?.id).name} is ready. What should we work
+			on?
 		</p>
-		<div class="empty-chips">
-			<For each={SUGGESTED_PROMPTS}>
-				{(text) => (
-					<button type="button" class="empty-chip" onClick={() => setPromptInsert({ text })}>
-						{text}
-					</button>
-				)}
-			</For>
-		</div>
 	</div>
 );
 

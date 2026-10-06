@@ -28,7 +28,7 @@ The composer stays gated until the attached session daemon reports ready. Readin
 
 ## Send your first prompt
 
-With a ready row attached and a fresh transcript, the main pane greets you with the provider's character and begins, `<name> is ready. What should we work on?`. Suggested-prompt chips such as `Summarize this repo` insert text into the composer; they do not send a message.
+With a ready row attached and a fresh transcript, the main pane greets you with the provider's character and `<name> is ready. What should we work on?`.
 
 Composer behavior:
 
