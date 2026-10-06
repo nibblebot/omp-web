@@ -18,6 +18,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Subagent hub layout: the filter toolbar and Goals/Advisor control rows no longer reserve 260px of height each (the steer-cluster flex basis now applies only inside a worker row); underlined tabs, a single-line wrapping toolbar, a wider dialog, and rows that truncate the description and model instead of overflowing.
 - Worker detail view: no longer wipes and refetches the transcript on every subagent frame (the scope-reset effect tracked an unmemoized key over a per-frame `sub` object), which made the view flicker between the transcript and "loading…"; its header wraps instead of squeezing the back button.
 - Subagent lists (task card, active strip, worker hub) render rows keyed by subagent id instead of per-frame objects, so rows no longer remount on every progress frame: spinners rotate smoothly, clicks on a row open its detail view, and the hub keeps a stable order (in-flight first) instead of reshuffling by last update.
+- Advisor notes render inline in the conversation (they were dropped as unhandled custom messages): one card per delivery, live and from history, matching the TUI advisor card with note count and blocker tally, per-note severity rail and badge, advisor attribution, `T-n` age, and the first three notes shown until expanded (Ctrl+O or the card's own toggle).
 
 
 ### Maintenance & other

@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AdvisorNote } from "@oh-my-pi/pi-tui/chat/messages";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { UsageReport } from "@oh-my-pi/pi-ai";
 import { createStore, produce, reconcile } from "solid-js/store";
@@ -21,6 +22,7 @@ import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
 import { scanImages } from "./text/images";
 import type { UsageLike } from "./usage/usage";
 import {
+	advisorNotesOf,
 	announce,
 	appendBashChunk,
 	applyEvent,
@@ -129,7 +131,11 @@ export type ChatItem =
 	  }
 	| BashItem
 	| CompactionItem
+	| AdvisorItem
 	| { kind: "notice"; id: number; level: string; message: string };
+
+/** Advisor notes injected into the primary session (`custom` message, customType "advisor"). */
+export type AdvisorItem = { kind: "advisor"; id: number; notes: AdvisorNote[] };
 
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
@@ -615,8 +621,12 @@ export function loadHistory(messages: AgentMessage[]): void {
 					...(images.length > 0 ? { images } : {}),
 				});
 			}
+		} else {
+			// Advisor cards render inline like the TUI; other custom/developer
+			// messages stay hidden.
+			const notes = advisorNotesOf(msg);
+			if (notes !== null) pushItem({ kind: "advisor", id: nextChatId(), notes });
 		}
-		// Any other role (developer, custom messages): skip.
 	}
 }
 

@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { produce } from "solid-js/store";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AdvisorNote } from "@oh-my-pi/pi-tui/chat/messages";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { ImageArg } from "#lib/wire/protocol";
 import { scanImages } from "../text/images";
@@ -106,6 +107,28 @@ export function truncateHead(s: string, max = 80): string {
 		i += c >= 0xd800 && c <= 0xdbff ? 2 : 1;
 	}
 	return s.slice(0, i);
+}
+
+/**
+ * Notes of an advisor card message (`role: "custom"`, `customType: "advisor"`,
+ * `details.notes`), or null for any other message. Mirrors the TUI's
+ * ui-helpers branch: only `display` messages render, and a card with missing
+ * details still renders (zero notes).
+ */
+export function advisorNotesOf(message: unknown): AdvisorNote[] | null {
+	const m = message as {
+		role?: unknown;
+		customType?: unknown;
+		display?: unknown;
+		details?: { notes?: unknown };
+	};
+	if (m?.role !== "custom" || m.customType !== "advisor" || !m.display) return null;
+	const notes = m.details?.notes;
+	if (!Array.isArray(notes)) return [];
+	return notes.filter(
+		(n): n is AdvisorNote =>
+			n !== null && typeof n === "object" && typeof (n as AdvisorNote).note === "string",
+	);
 }
 
 /** Last settled assistant message's visible text (thinking excluded). */
@@ -565,6 +588,10 @@ export function applyEvent(e: AgentSessionEvent): void {
 					duration: meta.duration,
 				});
 				setState("live", "active", false);
+			} else {
+				// Advisor cards (steered or preserved) settle as custom messages.
+				const notes = advisorNotesOf(msg);
+				if (notes !== null) pushItem({ kind: "advisor", id: nextId++, notes });
 			}
 			break;
 		}
