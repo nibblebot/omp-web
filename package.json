@@ -49,10 +49,13 @@
 	"devDependencies": {
 		"@astrojs/markdown-satteri": "^0.4.1",
 		"@astrojs/starlight": "^0.42.2",
+		"@babel/parser": "^7.29.9",
+		"@babel/types": "^7.29.8",
 		"@types/bun": "^1.4.0",
 		"@types/diff": "^8.0.0",
 		"@typescript/native-preview": "7.0.0-dev.20260707.2",
 		"astro": "^7.3.3",
+		"enhanced-resolve": "^5.26.0",
 		"eslint-plugin-solid": "^0.15.0",
 		"oxfmt": "^0.63.0",
 		"oxlint": "^1.81.0",
