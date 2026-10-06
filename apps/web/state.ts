@@ -1329,32 +1329,42 @@ export function connect(): void {
 							index?: number;
 							agent?: string;
 							task?: string;
-							progress?: { status?: string };
+							progress?: { id?: string; status?: string; description?: string };
 							parentToolCallId?: string;
 					  }
 					| undefined;
 				if (p?.index === undefined) break;
 				setState("subagents", (prev) => {
 					const next = new Map(prev);
-					let key = [...next.keys()].find((k) => next.get(k)?.index === p.index);
-					if (!key) {
-						key = `progress-${p.index}`;
-						next.set(key, {
-							id: key,
-							index: p.index as number,
-							agent: p.agent ?? "agent",
-							status: "started",
-							lastUpdate: Date.now(),
-							parentToolCallId: p.parentToolCallId,
-						});
-					}
-					const entry = next.get(key);
-					if (entry) {
-						if (p.task !== undefined) entry.task = p.task;
-						if (p.parentToolCallId !== undefined) entry.parentToolCallId = p.parentToolCallId;
-						if (p.progress?.status) entry.status = p.progress.status;
-						entry.lastUpdate = Date.now();
-					}
+					// The SDK's AgentProgress carries the subagent id: key on it. `index`
+					// is only unique within one task call, so the index fallback (id-less
+					// payloads) must not cross into another call's subagents.
+					const progressId = typeof p.progress?.id === "string" ? p.progress.id : undefined;
+					const key =
+						progressId ??
+						[...next.keys()].find((k) => {
+							const sub = next.get(k)!;
+							return (
+								sub.index === p.index &&
+								(p.parentToolCallId === undefined ||
+									sub.parentToolCallId === undefined ||
+									sub.parentToolCallId === p.parentToolCallId)
+							);
+						}) ??
+						`progress-${p.index}`;
+					const existing = next.get(key);
+					// Replace, never mutate: rows are keyed by object identity, so an
+					// in-place edit would leave the rendered status/task stale.
+					next.set(key, {
+						id: key,
+						index: existing?.index ?? (p.index as number),
+						agent: p.agent ?? existing?.agent ?? "agent",
+						description: p.progress?.description ?? existing?.description,
+						task: p.task ?? existing?.task,
+						status: p.progress?.status ?? existing?.status ?? "started",
+						lastUpdate: Date.now(),
+						parentToolCallId: p.parentToolCallId ?? existing?.parentToolCallId,
+					});
 					return next;
 				});
 				break;

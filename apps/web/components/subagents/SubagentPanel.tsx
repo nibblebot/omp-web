@@ -1,12 +1,12 @@
 import { createMemo, createSignal, For, Show, type Component } from "solid-js";
-import { state, type SubagentInfo } from "../../state";
+import { isActiveSubagent, state, type SubagentInfo } from "../../state";
 import type { WorkerKey } from "#lib/wire/protocol";
 import { getSessionWorkerInfos, getWorkerInfo, listWorkers } from "../../store/subagents";
 import { onMount } from "solid-js";
 import { Modal } from "../shared/Modal";
 import { useClickableRow } from "../shared/PickerRow";
 import { SubagentControls } from "./SubagentControls";
-import { SubagentRow } from "../shared/SubagentRow";
+import { latestSubagent, SubagentRow, subagentName } from "../shared/SubagentRow";
 import { WorkerFocus } from "./WorkerFocus";
 import { AdvisorPanel } from "./AdvisorPanel";
 import { GoalLoopSection, VibeOnlySection } from "./GoalLoopPanel";
@@ -24,8 +24,8 @@ import {
 type HubTab = "workers" | "advisor" | "goals" | "vibe";
 
 interface TreeNode {
-	sub: SubagentInfo;
-	children: SubagentInfo[];
+	id: string;
+	children: string[];
 }
 
 /**
@@ -34,7 +34,8 @@ interface TreeNode {
  * toggle (tree groups by parentToolCallId, one level, `subagent-child` indent),
  * error-only + response/tool filters, agent/subtree scope selects, follow
  * toggle into the focused view. Selection is `{sessionId, agentId}` keyed off
- * the stable `state.sessionId` — no invented identity. focused-draft map stays
+ * `state.currentSessionId` (the attached handle the worker store and the live
+ * mirror are keyed by) — no invented identity. focused-draft map stays
  * module-scope; the Main draft is preserved to localStorage on focus.
  *
  * Data: reads the `state.subagents` mirror only (initial list comes from the
@@ -46,8 +47,9 @@ export const SubagentPanel: Component<{
 	onFocus?: (key: WorkerKey) => void;
 }> = (props) => {
 	const [tab, setTab] = createSignal<HubTab>("workers");
-	// Selection model: {sessionId, agentId} | null — sessionId is the stable
-	// state.sessionId, never invented.
+	// Selection model: {sessionId, agentId} | null — sessionId is the attached
+	// handle (state.currentSessionId), never invented. state.sessionId is the SDK
+	// session uuid, which no worker record is keyed by.
 	const [selected, setSelected] = createSignal<{ sessionId: string; agentId: string } | null>(null);
 	const [query, setQuery] = createSignal("");
 	const [tree, setTree] = createSignal(false);
@@ -60,8 +62,14 @@ export const SubagentPanel: Component<{
 	const [showHidden, setShowHidden] = createSignal(false);
 	const [rosterError, setRosterError] = createSignal<string | null>(null);
 
-	const sessionId = () => state.sessionId;
-	const subs = () => getSessionWorkerInfos(sessionId()).sort((a, b) => b.lastUpdate - a.lastUpdate);
+	const sessionId = () => state.currentSessionId;
+	// Stable order: in-flight first, otherwise discovery order. Sorting by
+	// lastUpdate reshuffled busy rows on every progress frame.
+	const subs = () =>
+		getSessionWorkerInfos(sessionId()).sort(
+			(a, b) => Number(isActiveSubagent(b)) - Number(isActiveSubagent(a)),
+		);
+	const byId = createMemo(() => new Map(subs().map((sub) => [sub.id, sub])));
 	const selectedSub = (): SubagentInfo | null => {
 		const key = selected();
 		if (!key) return null;
@@ -104,6 +112,7 @@ export const SubagentPanel: Component<{
 		if (showHidden()) return list;
 		return list.filter((sub) => getWorkerPin(sub.id) !== "off");
 	});
+	const visibleIds = createMemo(() => visible().map((sub) => sub.id));
 	const hiddenCount = createMemo(() => filtered().length - visible().length);
 
 	const treeNodes = createMemo((): TreeNode[] => {
@@ -123,22 +132,26 @@ export const SubagentPanel: Component<{
 		for (const root of list.filter(
 			(sub) => !workerParentId(sub) || !ids.has(workerParentId(sub)!),
 		)) {
-			const children: SubagentInfo[] = [];
+			const children: string[] = [];
 			const pending = [...(childrenByParent.get(root.id) ?? [])];
 			rendered.add(root.id);
 			while (pending.length) {
 				const child = pending.shift()!;
 				if (rendered.has(child.id)) continue;
 				rendered.add(child.id);
-				children.push(child);
+				children.push(child.id);
 				pending.push(...(childrenByParent.get(child.id) ?? []));
 			}
-			nodes.push({ sub: root, children });
+			nodes.push({ id: root.id, children });
 		}
 		// Corrupt cyclic lineage must not make a worker disappear.
-		for (const sub of list) if (!rendered.has(sub.id)) nodes.push({ sub, children: [] });
+		for (const sub of list) if (!rendered.has(sub.id)) nodes.push({ id: sub.id, children: [] });
 		return nodes;
 	});
+	// <For> keys by reference: iterate stable id strings, never per-frame objects.
+	const treeRootIds = createMemo(() => treeNodes().map((node) => node.id));
+	const treeChildIds = (id: string): string[] =>
+		treeNodes().find((node) => node.id === id)?.children ?? [];
 
 	const focus = (sub: SubagentInfo): void => {
 		markWorkerSeen(sub);
@@ -154,54 +167,52 @@ export const SubagentPanel: Component<{
 		);
 	});
 
-	const row = (sub: SubagentInfo, child: boolean) => (
-		<div
-			class={child ? "subagent-panel-row subagent-child" : "subagent-panel-row"}
-			style={{ cursor: "pointer" }}
-			{...useClickableRow(() => focus(sub))}
-		>
-			<SubagentRow sub={sub} showMeta unread={isWorkerUnread(sub)} model={workerModel(sub)} />
-			<Show when={sub.status === "started" || sub.status === "running"}>
-				<SubagentControls sub={sub} />
-			</Show>
-		</div>
-	);
+	const row = (id: string, child: boolean) => {
+		const sub = latestSubagent((key) => byId().get(key), id);
+		return (
+			<div
+				class={child ? "subagent-panel-row subagent-child" : "subagent-panel-row"}
+				style={{ cursor: "pointer" }}
+				{...useClickableRow(() => focus(sub()))}
+			>
+				<SubagentRow
+					sub={sub()}
+					showMeta
+					unread={isWorkerUnread(sub())}
+					model={workerModel(sub())}
+				/>
+				<Show when={sub().status === "started" || sub().status === "running"}>
+					<SubagentControls sub={sub()} />
+				</Show>
+			</div>
+		);
+	};
 
 	return (
-		<Modal title={`Subagents (${subs().length})`} onClose={props.onClose}>
-			<div class="subagent-controls" role="tablist" aria-label="Subagent hub tabs">
-				<button
-					type="button"
-					role="tab"
-					aria-selected={tab() === "workers"}
-					onClick={() => setTab("workers")}
+		<Modal title={`Subagents (${subs().length})`} class="subagent-hub" onClose={props.onClose}>
+			<div class="subagent-hub-tabs" role="tablist" aria-label="Subagent hub tabs">
+				<For
+					each={
+						[
+							["workers", "Workers"],
+							["advisor", "Advisor"],
+							["goals", "Goals & Loops"],
+							["vibe", "Vibe"],
+						] as const
+					}
 				>
-					Workers
-				</button>
-				<button
-					type="button"
-					role="tab"
-					aria-selected={tab() === "advisor"}
-					onClick={() => setTab("advisor")}
-				>
-					Advisor
-				</button>
-				<button
-					type="button"
-					role="tab"
-					aria-selected={tab() === "goals"}
-					onClick={() => setTab("goals")}
-				>
-					Goals &amp; Loops
-				</button>
-				<button
-					type="button"
-					role="tab"
-					aria-selected={tab() === "vibe"}
-					onClick={() => setTab("vibe")}
-				>
-					Vibe
-				</button>
+					{([id, label]) => (
+						<button
+							type="button"
+							role="tab"
+							class="subagent-hub-tab"
+							aria-selected={tab() === id}
+							onClick={() => setTab(id)}
+						>
+							{label}
+						</button>
+					)}
+				</For>
 			</div>
 
 			<Show when={tab() === "workers"}>
@@ -217,7 +228,7 @@ export const SubagentPanel: Component<{
 								value={query()}
 								onInput={(e) => setQuery(e.currentTarget.value)}
 							/>
-							<div class="subagent-controls">
+							<div class="subagent-hub-toolbar">
 								<label class="subagent-status">
 									<input
 										type="checkbox"
@@ -270,7 +281,7 @@ export const SubagentPanel: Component<{
 										<For each={subtreeRoots()}>
 											{(root) => (
 												<option value={root.id}>
-													{root.agent} · {root.id}
+													{subagentName(root)} · {root.agent}
 												</option>
 											)}
 										</For>
@@ -280,12 +291,15 @@ export const SubagentPanel: Component<{
 							<Show when={rosterError()}>
 								{(error) => <div class="msg-notice">worker roster unavailable: {error()}</div>}
 							</Show>
-							<Show when={tree()} fallback={<For each={visible()}>{(sub) => row(sub, false)}</For>}>
-								<For each={treeNodes()}>
-									{(node) => (
+							<Show
+								when={tree()}
+								fallback={<For each={visibleIds()}>{(id) => row(id, false)}</For>}
+							>
+								<For each={treeRootIds()}>
+									{(id) => (
 										<>
-											{row(node.sub, false)}
-											<For each={node.children}>{(child) => row(child, true)}</For>
+											{row(id, false)}
+											<For each={treeChildIds(id)}>{(child) => row(child, true)}</For>
 										</>
 									)}
 								</For>

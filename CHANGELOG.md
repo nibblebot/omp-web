@@ -13,6 +13,12 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Integrations: real skills/commands reload with consent; MCP/skill rows report explicit unavailable until headless extraction lands; declarative browser extension UI with terminal-only incompatibility diagnostics.
 - Portability: explicit compaction modes with eligibility, durable BTW history with guarded promotion, manifest-backed downloads through the fleet origin, SessionScope-bound voice control rows over the existing SSE stream, and targeted resume/pins/foreign import.
 
+### Fixes
+- Subagents: the worker hub lists live subagents again (it filtered by the SDK session uuid instead of the attached handle, so it opened empty while the status bar counted them); rows and the focused worker header show the spawned subagent name beside its agent type, in-flight glyphs spin, and progress updates key on the subagent id so equal indexes from separate task calls no longer merge and status/task changes re-render.
+- Subagent hub layout: the filter toolbar and Goals/Advisor control rows no longer reserve 260px of height each (the steer-cluster flex basis now applies only inside a worker row); underlined tabs, a single-line wrapping toolbar, a wider dialog, and rows that truncate the description and model instead of overflowing.
+- Worker detail view: no longer wipes and refetches the transcript on every subagent frame (the scope-reset effect tracked an unmemoized key over a per-frame `sub` object), which made the view flicker between the transcript and "loading…"; its header wraps instead of squeezing the back button.
+- Subagent lists (task card, active strip, worker hub) render rows keyed by subagent id instead of per-frame objects, so rows no longer remount on every progress frame: spinners rotate smoothly, clicks on a row open its detail view, and the hub keeps a stable order (in-flight first) instead of reshuffling by last update.
+
 
 ### Maintenance & other
 - Move application source to `apps/{cli,fleet,session,web}`, shared libraries to `lib/*`, cross-app E2E to `e2e/`, and tooling tests to `scripts/test/`; enforce the closed `lib/` import boundary in lint.

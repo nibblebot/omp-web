@@ -10,4 +10,4 @@ export { ModeSwitch } from "./ModeSwitch";
 export { Modal } from "./Modal";
 export { PickerRow, useClickableRow } from "./PickerRow";
 export type { ClickableRowProps } from "./PickerRow";
-export { STATUS_ICON, SubagentRow } from "./SubagentRow";
+export { STATUS_ICON, SubagentRow, latestSubagent, subagentName } from "./SubagentRow";
