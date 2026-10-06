@@ -1,6 +1,18 @@
 ## Unreleased
 
-omp-web moves its source tree into application and library roots, and makes development auth broker management opt-in. Wire protocol, distribution layout, and installer URLs are unchanged.
+omp-web reconciles the single-session browser UX: equivalent browser capability through existing SDK/fleet/transport reuse. Wire stays OMP_PROTO 2 additive-only.
+
+### Features
+- Lifecycle: same-session clear, new identity, provider-state fresh, and session-ID-confirmed durable delete with fleet purge acknowledgment; misleading `/drop` alias removed (`/delete` + menu action replace it).
+- Settings: effective value, owning layer, explicit presence, unset eligibility, SDK warnings, and live/next-session/restart effects on every row; typed record/list editing; project layer read-only with config-file guidance.
+- Session graph: searchable ID-anchored tree with same-file navigate vs new-file branch, ask re-answer transaction, and entry-ID branch-from-card (no text-equality lookup).
+- Editor: partitioned drafts with cleared-ring recovery, bounded Vim subset, large-paste folding, file attach validation, and download/export external-edit round-trip.
+- Models: temporary session-only switch with effort-clamp feedback, preset list/save/apply/delete, and branch-local model-worker chips.
+- Review: daemon-bound Git stage/unstage/hunk/commit with fingerprint gates; versioned plan approval with stale refusal; durable anchored annotations with drift/orphan marking; canonical phased todos with revision conflicts.
+- Workers: searchable hub with live focus/steer, park/revive/resume lifecycle, advisor config/status/transcript, and guided goals/loops plus Vibe director controls.
+- Integrations: real skills/commands reload with consent; MCP/skill rows report explicit unavailable until headless extraction lands; declarative browser extension UI with terminal-only incompatibility diagnostics.
+- Portability: explicit compaction modes with eligibility, durable BTW history with guarded promotion, manifest-backed downloads through the fleet origin, SessionScope-bound voice control rows over the existing SSE stream, and targeted resume/pins/foreign import.
+
 
 ### Maintenance & other
 - Move application source to `apps/{cli,fleet,session,web}`, shared libraries to `lib/*`, cross-app E2E to `e2e/`, and tooling tests to `scripts/test/`; enforce the closed `lib/` import boundary in lint.

@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 
 // Danger-confirm dialog state (P1 hardening): replaces the native
-// window.confirm guards on /new, /drop, and /fresh with the app's own Modal
+// window.confirm guard on /fresh with the app's own Modal
 // chrome. The dialog self-mounts (rendered once from App.tsx, like
 // AskDialog/BtwPanel) and renders nothing while no confirm is pending. State
 // and actions live here, free of solid-js/web and of any component file,

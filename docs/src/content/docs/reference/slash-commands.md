@@ -27,26 +27,25 @@ This page is the canonical table. [Prompting the agent](/sessions/prompting/) ex
 
 | Command | Arguments | Action | What you see |
 | --- | --- | --- | --- |
-| `/new`, `/clear` | none | Replaces the current session with a new one (`newSession`). | Confirmation when the transcript has items, then the transcript is replaced and every open tab resyncs. |
-| `/drop` | none | Same new-session action, with a confirmation that warns the transcript is discarded. | Confirmation when the transcript has items, then the transcript is replaced. |
-| `/resume` | none | Opens the History picker, which lists session files on disk for the attached directory (`list_sessions`). | Picking an entry switches the attached session daemon to that session and resyncs the transcript. |
+| `/new` | none | Starts a new session (`newSession`). | Confirmation when the transcript has items, then the transcript is replaced and every open tab resyncs. |
+| `/clear` | none | Clears context in place, keeping session id, title, and file (`clearSession` → `resetSessionContext`). | The transcript resyncs to the cleared context; a notice reports the dropped count. Refused with a warning while a turn is streaming. |
+| `/delete` | none | Deletes the current session and starts a replacement (`deleteSession`); confirmation names the exact session ID. | Confirmation first, then the replacement transcript with every open tab resynced. Durable deletion failures report instead of a false success. |
+| `/resume` | `[session-id\|@claude\|@codex]` | Bare opens the History picker (`list_sessions`); an id arg switches the attached session to that transcript directly (`switchSession`). Unknown ids report the switch error. | Picker, or the switched transcript with every tab resynced. |
 | `/tree`, `/branch` | none | Opens the Branch session picker over earlier user messages (`getBranchMessages`). | Picking a message branches from it, closes the picker, and posts a `branched at: ...` notice. An extension can cancel, which is reported in the picker. |
 | `/btw` | question (optional) | Opens the side-question panel. With a question it starts a side turn (`runEphemeralTurn`) that never enters the transcript. | The reply streams into the panel; stop or close aborts a streaming reply. Bare `/btw` opens the panel with a usage hint. |
-| `/export` | `--themes` (optional) | Exports the session to HTML (`exportHtml`). `--themes` carries the active web theme into the export; any other argument is ignored. | A transcript notice names the exported file's path on the session daemon's host. |
-| `/retry` | none | Retries the last failed assistant turn when the session is idle (`retry`). | The retried turn streams. If there is no failed turn or the session is busy, a notice says there is nothing to retry. |
-| `/fork` | none | Forks the session history in place (`fork`). | The transcript resyncs and a notice reports `Forked session.` or `Fork failed.` |
-| `/fresh` | none | Resets provider state and keeps the transcript (`freshSession`). | Confirmation first while a turn is streaming. On success a notice reports the reset and the transcript is unchanged. |
-| `/handoff` | focus (optional) | Starts a new session carrying a summary document; the focus text becomes the handoff instructions (`handoff`). | The transcript resyncs, a `compaction (handoff)` card shows the document, and a notice names the saved document's path when the session daemon wrote one. |
-| `/dump` | none | Downloads the transcript as plain text and requests a dump of the last LLM request (`formatSessionAsText`, `dumpLlmRequestToTmpDir`). | `transcript.txt` downloads in the browser; notices cover an empty transcript and name the LLM request dump's path when one exists. |
+| `/export` | `--themes` (optional), `[path]` (optional) | Exports the session to HTML (`exportHtml`). `--themes` carries the active web theme into the export; a path sets the server-side output path. | A transcript notice names the exported file's path on the session daemon's host. |
+| `/retry` | none | Retries the last failed assistant turn when the session is idle (`retry`). Extra args report usage. | The retried turn streams. If there is no failed turn or the session is busy, a notice says there is nothing to retry. |
+| `/fork` | none | Forks the session history in place (`fork`). Extra args report usage. | The transcript resyncs and a notice reports `Forked session.` or `Fork failed.` |
+| `/fresh` | none | Resets provider state and keeps the transcript (`freshSession`). Extra args report usage. | Confirmation first while a turn is streaming. On success a notice reports the reset and the transcript is unchanged. |
+| `/handoff` | focus (optional) | Generates a handoff document and compacts the context **in place** — same session identity, same file, recent history kept (`handoff`). | A `compaction (handoff)` card shows the document plus a `Handoff complete. Context compacted in place.` notice; a saved-path notice follows when the session daemon wrote one. Cancel reports `Handoff cancelled.` |
+| `/dump` | `[all]` (optional) | Bare downloads the transcript as plain text and requests the last LLM request dump (`formatSessionAsText`, `dumpLlmRequestToTmpDir`). `/dump all` requests the bounded server archive. Unknown args report usage. | `transcript.txt` downloads in the browser; notices cover an empty transcript and name the LLM request dump's path when one exists. `/dump all` is not yet available in the browser and says so explicitly. |
 | `/rename` | title (optional) | With a title, sets the session name immediately (`setSessionName`), with no model turn. Bare, forwards `/rename` to the agent. | The new title appears in session listings. Bare `/rename` is answered by the agent-side builtin with its usage message in a notice. |
-| `/goal` | `set <objective>`, `pause`, `resume`, `drop`, or none | Creates, pauses, resumes, or drops the session goal. Bare, unknown subcommands, and `set` with no objective open the Goal panel. | The goal badge in the status bar and the Goal panel update from session state. Creating a goal while one is active is refused. |
-| `/plan` | none | Toggles plan mode (`setPlanModeState`). | The plan badge in the status bar turns on or off. |
+| `/goal` | `set <objective>`, `show`, `pause`, `resume`, `drop`, `budget <N\|off>`, or none | Creates, pauses, resumes, or drops the session goal. `show` and `budget` open the Goal panel (budget adjustment lands with the P4 goal service); bare, unknown subcommands, and `set` with no objective open the Goal panel. | The goal badge in the status bar and the Goal panel update from session state. Creating a goal while one is active is refused. |
+| `/plan` | `[prompt]` (optional) | Bare toggles plan mode (`setPlanModeState`); with a prompt, enters plan mode with that prompt as the first plan turn. | The plan badge in the status bar turns on or off, with a notice when a prompt starts the plan. |
 | `/queue` | message | Queues a follow-up message for the session (`followUp`). | The message appears in the queue bar and is delivered in turn order, which is immediate when the session is idle. An empty message is ignored. |
-| `/compact` | instructions (optional) | Runs manual context compaction, with the instructions when given (`compact`). | A `compaction (manual)` card appears with the summary and, when reported, the token count. |
-| `/model` | none | Opens the model picker. | Choose a model role, then a model, then a thinking level when that model exposes one. |
-| `/usage`, `/context`, `/tools` | none | Opens Session stats. | Token, message, and tool counts, the context breakdown, the tool list, and the compaction controls. |
-| `/help`, `/hotkeys` | none | Opens the shortcuts dialog. | A modal listing the keyboard bindings. |
-| `/exit`, `/quit` | none | Nothing to quit: the session outlives the browser tab. | A notice explains that the session persists and that closing the tab is how you leave. |
+| `/compact` | `[soft\|remote\|snapcompact] [focus]` | Runs manual context compaction (`compact`). An unknown first token is focus text; `snapcompact` with focus reports usage. | A `compaction (manual)` card appears with the summary and, when reported, the token count. |
+| `/model` | `[provider/id]` (optional) | Bare opens the model picker; a selector sets the session model directly (`setModel`), resolved against live discovery. | Picker, or a `Model set to provider/id.` notice; unknown selectors report the miss. |
+| `/move`, `/wt`, `/worktree` | — | Refused explicitly for attached fleet sessions: the daemon checkout is immutable while attached (`moveSession` would desynchronize roster/session files/artifacts). | An error notice naming the fleet alternative (sidebar for moves, Add-workspace modal for worktrees). |
 
 ## Examples
 
@@ -67,9 +66,9 @@ An unhandled name, for example `/outline the remaining work`, is forwarded to th
 
 Three groups ask before acting:
 
-- `/new` and `/clear` ask when the transcript has items. The dialog is titled `Start a new session`, and its confirm button reads `New session`.
-- `/drop` asks under the same condition, with a body that warns the transcript is discarded and a `Drop session` confirm button.
-- `/fresh` asks while a turn is streaming, because resetting provider state mid-turn can fail the running turn. Its confirm button reads `Reset state`.
+	- `/new` asks when the transcript has items. The dialog is titled `Start a new session`, and its confirm button reads `New session`.
+	- `/delete` always asks, with a body that names the exact session ID and a `Delete session` confirm button.
+	- `/fresh` asks while a turn is streaming, because resetting provider state mid-turn can fail the running turn. Its confirm button reads `Reset state`.
 
 Cancel, Escape, and the backdrop close a confirmation without running the action. Opening a new confirmation replaces any confirmation still pending.
 

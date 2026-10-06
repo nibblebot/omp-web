@@ -3,12 +3,20 @@ import { dispatchInput, type InputMode } from "../../prompt/commands";
 import { PromptHistory } from "../../prompt/history";
 import type { ImageArg } from "#lib/wire/protocol";
 import { call, dequeueLastQueued, isReady, setState, state } from "../../state";
+import { cancelScheduledDraftSave, clearDraft, currentDraftKey, removeDraft, saveDraft } from "../../store/drafts";
 import { PromptActions } from "./PromptActions";
-import { PromptComposer } from "./PromptComposer";
+import { PromptComposer, expandChipsForSubmit } from "./PromptComposer";
 import { usePromptAutocomplete } from "./usePromptAutocomplete";
 
 const history = new PromptHistory();
 
+/**
+ * P2 prompt box (G03). Submit expands `^model` chips, pushes submitted text
+ * to history (separate from unsent drafts), and clears the live draft slot.
+ * Compatible Up: plain Up browses submitted history ONLY when the caret is
+ * on the first line and the composer is not folded/Vim-visual — never
+ * stealing caret motion or cleared-draft recovery (explicit Recover action).
+ */
 export const PromptBox: Component = () => {
 	const [message, setMessage] = createSignal("");
 	const [images, setImages] = createSignal<ImageArg[]>([]);
@@ -21,15 +29,35 @@ export const PromptBox: Component = () => {
 		// R8 readiness gate: the send button is disabled and Enter is suppressed
 		// until the server broadcasts `ready` (boot session's gate cleared).
 		if (!isReady()) return;
-		const text = message().trim();
+		const raw = message();
+		const text = raw.trim();
 		const imgs = images();
 		if (!text && imgs.length === 0) return;
-		dispatchInput(message().trim(), imgs, mode);
+		void expandChipsForSubmit(raw.trim()).then((expanded) => {
+			dispatchInput(expanded, imgs, mode);
+		});
 		if (text) history.push(text);
 		setMessage("");
 		setImages([]);
 		ac.setToken(null);
 		history.reset();
+		const key = currentDraftKey();
+		cancelScheduledDraftSave(key);
+		removeDraft(key);
+		requestAnimationFrame(ac.autoGrow);
+	};
+
+	/** Explicit destructive clear (toolbar/discard): moves the live text to
+	 *  the bounded cleared ring for recovery, then empties the composer. */
+	const discard = (): void => {
+		cancelScheduledDraftSave(currentDraftKey());
+		const text = message();
+		const imgs = images();
+		if (!text.trim() && imgs.length === 0) return;
+		saveDraft(currentDraftKey(), { text, images: imgs, updatedAt: Date.now() });
+		clearDraft(currentDraftKey());
+		setMessage("");
+		setImages([]);
 		requestAnimationFrame(ac.autoGrow);
 	};
 
@@ -101,7 +129,14 @@ export const PromptBox: Component = () => {
 			return;
 		}
 		const el = e.currentTarget as HTMLTextAreaElement;
-		if (e.key === "ArrowUp" && !el.value.slice(0, el.selectionStart).includes("\n")) {
+		// Compatible Up: first-line caret + no multiline above + not browsing
+		// a cleared recovery. Multiline caret motion and IME always win.
+		if (
+			e.key === "ArrowUp" &&
+			!e.shiftKey &&
+			!el.value.slice(0, el.selectionStart).includes("\n")
+		) {
+			if (e.isComposing || e.keyCode === 229) return;
 			const recalled = history.prev(message());
 			if (recalled !== null) {
 				e.preventDefault();
@@ -137,7 +172,7 @@ export const PromptBox: Component = () => {
 					textarea = el;
 				}}
 			/>
-			<PromptActions message={message} images={images} submit={submit} />
+			<PromptActions message={message} images={images} submit={submit} onDiscard={discard} />
 		</div>
 	);
 };

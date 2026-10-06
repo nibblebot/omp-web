@@ -1,14 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+	btwDispatch,
+	compactDispatch,
 	dispatchInput,
+	dumpDispatch,
 	exportDispatch,
+	exportRouteArgs,
 	goalDispatch,
 	handoffArgs,
 	LOCAL_COMMANDS,
+	modelDispatch,
 	parseInput,
 	planDispatch,
 	queueMethod,
 	renameDispatch,
+	resumeDispatch,
 } from "../../prompt/commands";
 import { SSE_EVENT_NAME } from "#lib/wire/protocol";
 import type { ClientCommand, ServerFrame } from "#lib/wire/protocol";
@@ -128,9 +134,10 @@ describe("LOCAL_COMMANDS table", () => {
 	});
 
 	test("covers the Phase 8 session-command set", () => {
-		for (const name of ["retry", "fork", "fresh", "handoff", "drop", "dump", "rename"]) {
+		for (const name of ["retry", "fork", "fresh", "handoff", "delete", "dump", "rename"]) {
 			expect(LOCAL_COMMANDS[name]).toBeFunction();
 		}
+		expect(LOCAL_COMMANDS["drop"]).toBeUndefined();
 	});
 });
 
@@ -235,8 +242,92 @@ describe("Phase 11 web-plus commands", () => {
 		expect(exportDispatch("--verbose")).toEqual({ useThemes: false });
 		expect(exportDispatch("themes")).toEqual({ useThemes: false });
 	});
+
+	test("/export honors path alongside --themes", () => {
+		expect(exportRouteArgs("--themes")).toEqual({ useThemes: true });
+		expect(exportRouteArgs("--themes /tmp/out.html")).toEqual({
+			useThemes: true,
+			path: "/tmp/out.html",
+		});
+		expect(exportRouteArgs("")).toEqual({ useThemes: false });
+	});
 });
 
+describe("P0.2 argument-aware collision routes", () => {
+	test("/resume bare opens picker, id arg switches", () => {
+		expect(resumeDispatch("")).toEqual({ kind: "picker" });
+		expect(resumeDispatch("   ")).toEqual({ kind: "picker" });
+		expect(resumeDispatch("abc123")).toEqual({ kind: "switch", target: "abc123" });
+		expect(resumeDispatch("@claude")).toEqual({ kind: "switch", target: "@claude" });
+	});
+
+	test("/model bare opens picker, selector selects", () => {
+		expect(modelDispatch("")).toEqual({ kind: "picker" });
+		expect(modelDispatch("anthropic/claude-opus")).toEqual({
+			kind: "select",
+			selector: "anthropic/claude-opus",
+		});
+	});
+
+	test("/compact mirrors parseCompactArgs verdicts", () => {
+		expect(compactDispatch("")).toEqual({ kind: "run" });
+		expect(compactDispatch("soft")).toEqual({ kind: "run", mode: "soft", instructions: undefined });
+		expect(compactDispatch("remote focus on api")).toEqual({
+			kind: "run",
+			mode: "remote",
+			instructions: "focus on api",
+		});
+		expect(compactDispatch("focus on api")).toEqual({ kind: "run", instructions: "focus on api" });
+		expect(compactDispatch("snapcompact extra").kind).toBe("usage");
+		expect(compactDispatch("SOFT focus")).toEqual({
+			kind: "run",
+			mode: "soft",
+			instructions: "focus",
+		});
+	});
+
+	test("/dump bare/all/unknown", () => {
+		expect(dumpDispatch("")).toEqual({ kind: "single" });
+		expect(dumpDispatch("all")).toEqual({ kind: "all" });
+		expect(dumpDispatch("ALL")).toEqual({ kind: "all" });
+		expect(dumpDispatch("everything").kind).toBe("usage");
+	});
+
+	test("/goal show and budget open the popover, stray args do not call", () => {
+		expect(goalDispatch("show")).toEqual({ kind: "popover" });
+		expect(goalDispatch("budget 5000")).toEqual({ kind: "popover" });
+		expect(goalDispatch("budget off")).toEqual({ kind: "popover" });
+		expect(goalDispatch("pause extra")).toEqual({ kind: "popover" });
+		expect(goalDispatch("resume extra")).toEqual({ kind: "popover" });
+		expect(goalDispatch("drop extra")).toEqual({ kind: "popover" });
+		expect(goalDispatch("pause")).toEqual({ kind: "call", method: "goalPause", args: [] });
+	});
+
+	test("/plan with prompt enters plan mode, bare toggles", () => {
+		const before = state.planModeEnabled;
+		expect(planDispatch("design the api").args[0].enabled).toBe(true);
+		expect(planDispatch("").args[0].enabled).toBe(!before);
+		expect(planDispatch().args[0].enabled).toBe(!before);
+	});
+
+	test("/btw bare opens panel, question asks", () => {
+		expect(btwDispatch("")).toEqual({ kind: "panel" });
+		expect(btwDispatch("   ")).toEqual({ kind: "panel" });
+		expect(btwDispatch("what does this do")).toEqual({
+			kind: "ask",
+			question: "what does this do",
+		});
+	});
+
+	test("LOCAL_COMMANDS covers move/wt/worktree refusals", () => {
+		expect(LOCAL_COMMANDS.move).toBeFunction();
+		expect(LOCAL_COMMANDS.wt).toBeFunction();
+		expect(LOCAL_COMMANDS.worktree).toBeFunction();
+		expect(LOCAL_COMMANDS.resume).toBeFunction();
+		expect(LOCAL_COMMANDS.model).toBeFunction();
+		expect(LOCAL_COMMANDS.dump).toBeFunction();
+	});
+});
 // ---------------------------------------------------------------------------
 // Finding #29: bang-shell/python calls must not time out at 30s. Chunks
 // (bash_chunk/python_chunk) provide liveness, abortBash/abortEval are the
@@ -470,11 +561,12 @@ describe("bang-shell/python stream lifecycle (#29)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// P1 danger-model hardening: /new, /drop, and /fresh gate through the app's
+// P1 danger-model hardening: /fresh gates through the app's
 // danger-confirm dialog (module-level state in ConfirmDialog.tsx) instead of
-// window.confirm. Confirmation only when there is something to lose (non-empty
-// transcript, or a turn streaming for /fresh); confirming runs the pending
-// action and clears the dialog. The file-level beforeEach already resets
+// window.confirm. Confirmation only when there is something to lose
+// (a turn streaming); confirming runs the pending
+// action and clears the dialog. `/new` executes immediately with no
+// confirmation. The file-level beforeEach already resets
 // items/connected and installs the fetch stub that records POSTed commands.
 // ---------------------------------------------------------------------------
 describe("danger confirm guards (P1 hardening)", () => {
@@ -499,21 +591,13 @@ describe("danger confirm guards (P1 hardening)", () => {
 		setState({ items: [], streaming: false });
 	});
 
-	test("/new with a non-empty transcript requests a danger confirm and POSTs only after confirming", async () => {
+	test("/new with a non-empty transcript calls newSession immediately with no danger confirm", async () => {
 		connectTransport();
 		seedItem();
 		dispatchInput("/new", undefined, "enter");
 		await flushMicrotasks();
-		expect(dangerConfirm()).toMatchObject({
-			title: "Start a new session",
-			confirmLabel: "New session",
-		});
-		expect(postedMethod("newSession")).toEqual([]);
-
-		confirmDangerConfirm();
-		await flushMicrotasks();
-		expect(dangerConfirm()).toBeNull();
 		expect(postedMethod("newSession").length).toBe(1);
+		expect(dangerConfirm()).toBeNull();
 	});
 
 	test("/new with an empty transcript calls newSession immediately", async () => {
@@ -524,21 +608,13 @@ describe("danger confirm guards (P1 hardening)", () => {
 		expect(dangerConfirm()).toBeNull();
 	});
 
-	test("/drop with a non-empty transcript requests a danger confirm and POSTs only after confirming", async () => {
+	test("/delete POSTs deleteSession immediately with no danger confirm shown", async () => {
 		connectTransport();
 		seedItem();
-		dispatchInput("/drop", undefined, "enter");
-		await flushMicrotasks();
-		expect(dangerConfirm()).toMatchObject({
-			title: "Drop this session",
-			confirmLabel: "Drop session",
-		});
-		expect(postedMethod("newSession")).toEqual([]);
-
-		confirmDangerConfirm();
+		dispatchInput("/delete", undefined, "enter");
 		await flushMicrotasks();
 		expect(dangerConfirm()).toBeNull();
-		expect(postedMethod("newSession").length).toBe(1);
+		expect(postedMethod("deleteSession").length).toBe(1);
 	});
 
 	test("/fresh while streaming requests a danger confirm and POSTs only after confirming", async () => {

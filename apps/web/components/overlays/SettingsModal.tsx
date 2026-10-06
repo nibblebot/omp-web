@@ -147,11 +147,12 @@ export const SettingsModal: Component<{ onClose: () => void }> = (props) => {
 					/>
 				</Show>
 				<div class="settings-body">
-					{/* Narrow layout hides the nav rail, so the fleet fallback notice
-					    keeps a body copy there only (CSS-gated to ≤720px). */}
-					<Show when={fleetSettingsActive()}>
-						<div class="settings-note settings-note-narrow">
-							No session attached. Changes save to config.yml and apply to new sessions.
+					<Show when={model()}>
+						<div class="settings-note">
+							{model()?.target === "future-sessions" || fleetSettingsActive()
+								? "Future sessions: changes save to config.yml. Existing sessions are unchanged."
+								: "Current session: effective values include session overrides. Global/project config edits also apply to future sessions."}{" "}
+							Each setting shows whether it applies immediately, to new sessions, or after restart.
 						</div>
 					</Show>
 					<Show when={state.settingsLoading && !model()}>

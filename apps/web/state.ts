@@ -63,6 +63,17 @@ import {
 	settleAttachResult,
 	settleCallResult,
 } from "./store/transport";
+import { createReviewState, resetReview } from "./store/review";
+import { createIntegrationState } from "./store/integrations";
+import { createResumeState } from "./store/resume";
+import { createCompactionState } from "./store/compaction";
+import { createWorkersState } from "./store/subagents";
+import {
+	createBrowserUiState,
+	endBrowserUiRequest,
+	receiveBrowserUiRequest,
+	resetBrowserUiRequests,
+} from "./store/browser-ui";
 
 // ---------------------------------------------------------------------------
 // Shared model vocabulary (types stay here so the store init and every
@@ -188,7 +199,16 @@ export type ModalName =
 	| "workspace"
 	// Browser-auth sign-in surface (P2.4; opened by the auth subscription on
 	// signedOut, exactly like the store/modals contract wires it).
-	| "sign-in";
+	| "sign-in"
+	| "mcp"
+	| "skills"
+	| "git"
+	| "plan-review"
+	| "annotations"
+	| "todos"
+	| "compaction"
+	| "btw-history"
+	| "voice";
 
 /** Unicast answer to sendWorktreeDeleteInfo: guard evidence for the
  *  delete-worktree confirm dialog (ownership, dirty counts, branch state). */
@@ -227,6 +247,12 @@ export function initialView(persisted: string | null, hash: string): "work" | "a
 }
 
 export const [state, setState] = createStore({
+	review: createReviewState(),
+	integrations: createIntegrationState(),
+	resume: createResumeState(),
+	compaction: createCompactionState(),
+	workers: createWorkersState(),
+	browserUi: createBrowserUiState(),
 	items: [] as ChatItem[],
 	// rev: monotonic content version of live.blocks, bumped on every live
 	// mutation so scroll/pin effects subscribe to "content changed" without
@@ -259,6 +285,8 @@ export const [state, setState] = createStore({
 	thinkingLevel: undefined as WebSessionState["thinkingLevel"],
 	sessionName: undefined as string | undefined,
 	sessionId: "",
+	sessionScope: undefined as WebSessionState["sessionScope"],
+	capabilities: {} as NonNullable<WebSessionState["capabilities"]>,
 	// R8 omp-session readiness: set by the `ready` broadcast (or a stamped state
 	// frame) once the SDK session is live and provider/model/auth resolved.
 	readyAt: undefined as WebSessionState["readyAt"],
@@ -594,6 +622,8 @@ export function loadHistory(messages: AgentMessage[]): void {
 
 function applyState(s: WebSessionState, stats?: SessionStats): void {
 	setState({
+		sessionScope: s.sessionScope,
+		capabilities: s.capabilities ?? {},
 		model: s.model,
 		modelRoles: s.modelRoles,
 		modelRoleCatalog: s.modelRoleCatalog,
@@ -778,6 +808,17 @@ export function hasLiveSession(): boolean {
 
 /** Per-session UI state dropped when attaching to a different session. */
 function resetSessionView(): void {
+	resetReview();
+	resetBrowserUiRequests();
+	setState({
+		sessionScope: undefined,
+		capabilities: {},
+		integrations: createIntegrationState(),
+		resume: createResumeState(),
+		compaction: createCompactionState(),
+		workers: createWorkersState(),
+		browserUi: createBrowserUiState(),
+	});
 	clearPendingDeltas();
 	// Same rationale as loadHistory: ids must not collide across transcripts.
 	resetChatIds();
@@ -1341,17 +1382,23 @@ export function connect(): void {
 				// Replace-with-warning: a second dialog supersedes the open one.
 				// Answer the stale id as cancelled so its server-side pending
 				// promise settles instead of hanging until socket close.
-				if (state.uiRequest) {
-					console.warn(`ui_request ${frame.id} superseding unanswered ${state.uiRequest.id}`);
-					cancelUiRequest(state.uiRequest.id);
+				if (frame.method === "browser_ui") receiveBrowserUiRequest(frame);
+				else {
+					if (state.uiRequest) {
+						console.warn(`ui_request ${frame.id} superseding unanswered ${state.uiRequest.id}`);
+						cancelUiRequest(state.uiRequest.id);
+					}
+					setState("uiRequest", { id: frame.id, method: frame.method, params: frame.params });
 				}
-				setState("uiRequest", { id: frame.id, method: frame.method, params: frame.params });
 				break;
 			case "ui_request_end":
 				// Finding #16: the dialog settled (answered/rejected). Dismiss
 				// it if it's the one shown; the ring replay delivers this
 				// AFTER a stale ui_request on resume, so an answered dialog
-				// never reappears as a hanging modal.
+				// never reappears as a hanging modal. The frame carries no
+				// method field, so browser_ui contributions always dismiss here
+				// alongside the modal dialog.
+				endBrowserUiRequest(frame.id);
 				if (state.uiRequest?.id === frame.id) setState("uiRequest", null);
 				break;
 			case "settings_changed": {

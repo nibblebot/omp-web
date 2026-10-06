@@ -7,6 +7,8 @@ interface PromptActionsProps {
 	message: () => string;
 	images: () => ImageArg[];
 	submit: (mode: InputMode) => void;
+	/** Explicit destructive clear → bounded cleared ring (Recover in composer). */
+	onDiscard?: () => void;
 }
 
 /** Send/queue/abort row under the composer: New session, Stop, ready pill, Send. */
@@ -26,6 +28,15 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 			<button class="new-session" onClick={() => dispatchInput("/new", undefined, "enter")}>
 				New session
 			</button>
+			{props.onDiscard && (props.message().trim() || props.images().length > 0) && (
+				<button
+					class="queue-clear"
+					title="Discard draft (recoverable via Recover)"
+					onClick={props.onDiscard}
+				>
+					Discard
+				</button>
+			)}
 			{state.streaming && (
 				<button
 					class="stop"

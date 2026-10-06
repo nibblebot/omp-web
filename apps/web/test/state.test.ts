@@ -744,7 +744,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].method).toBe("setSetting");
-		expect(calls[0].args).toEqual(["agent.model", "gpt-5"]);
+		expect(calls[0].args).toEqual(["agent.model", "gpt-5", null, null]);
 
 		// Resolve the RPC so no dangling call timer survives the test. The
 		// frame round-trips through JSON, so the model is a clone, not `model`.

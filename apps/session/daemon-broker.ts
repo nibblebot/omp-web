@@ -41,6 +41,8 @@ export interface DaemonBrokerDeps {
 	config: SessionConfig;
 	/** Read the boot readiness timestamp (R8); set by the daemon boot once provider/model/auth resolution completes. */
 	getReadyAt: () => number | null;
+	/** Additive host-owned capability and attachment binding snapshot. */
+	getWebState?: (session: AgentSession) => Pick<WebSessionState, "capabilities" | "sessionScope">;
 }
 
 export interface DaemonBroker {
@@ -136,6 +138,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 
 	function buildStateSnapshot(session: AgentSession): WebSessionState {
 		return {
+			...deps.getWebState?.(session),
 			model: session.model,
 			modelRoles: buildModelRoles(session),
 			modelRoleCatalog: buildModelRoleCatalog({

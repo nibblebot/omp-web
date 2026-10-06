@@ -102,6 +102,8 @@ const RING_DELTAS: Record<string, true> = {
 	// answers, so a resume replays request → end (dismissed), never a stale
 	// dialog whose ui_response would silently no-op.
 	ui_request_end: true,
+	voice_dictation_delta: true,
+	voice_realtime_event: true,
 	collab_status: true,
 	ready: true,
 	daemons: true,

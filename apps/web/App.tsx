@@ -10,7 +10,13 @@ import {
 	SessionHeader,
 	StatusBar,
 } from "./components/chat";
-import { ActiveSubagents, SubagentPanel } from "./components/subagents";
+import {
+	ActiveSubagents,
+	AdvisorPanel,
+	GoalLoopPanel,
+	SubagentPanel,
+	WorkerFocus,
+} from "./components/subagents";
 import {
 	ActiveDaemons,
 	AddProjectModal,
@@ -24,20 +30,32 @@ import { SignInModal } from "./components/SignInModal";
 import {
 	AskDialog,
 	BranchModal,
+	BrowserUiRenderer,
+	BtwHistoryView,
 	BtwPanel,
+	CompactionControls,
 	DangerConfirmDialog,
 	DebugModal,
+	DownloadDialog,
 	GoalModal,
 	HistoryModal,
 	LoginModal,
+	McpManager,
 	ModelModal,
+	ResumePicker,
 	SessionModal,
 	SettingsModal,
+	SkillsManager,
 	StatsModal,
 	ThinkingModal,
 	Toasts,
 	UsageModal,
+	VoiceControls,
 } from "./components/overlays";
+import { GitPanel } from "./components/review/GitPanel";
+import { PlanReview } from "./components/review/PlanReview";
+import { AnnotationSidebar } from "./components/review/AnnotationSidebar";
+import { TodoBoard } from "./components/review/TodoBoard";
 import {
 	bootAuth,
 	connect,
@@ -264,6 +282,9 @@ export const App: Component = () => {
 				<Show when={state.modal === "subagents"}>
 					<SubagentPanel onClose={() => setState("modal", null)} />
 				</Show>
+				<Show when={state.modal === "goal"}>
+					<GoalModal onClose={() => setState("modal", null)} />
+				</Show>
 				<Show when={state.modal === "sessions"}>
 					<SessionModal onClose={() => setState("modal", null)} />
 				</Show>
@@ -285,6 +306,39 @@ export const App: Component = () => {
 				<Show when={state.modal === "debug"}>
 					<DebugModal onClose={() => setState("modal", null)} />
 				</Show>
+				<Show when={state.modal === "mcp"}>
+					<McpManager onClose={() => setState("modal", null)} />
+				</Show>
+				<Show when={state.modal === "skills"}>
+					<SkillsManager onClose={() => setState("modal", null)} />
+				</Show>
+				<Show when={state.modal === "git"}>
+					<GitPanel />
+				</Show>
+				<Show when={state.modal === "plan-review"}>
+					<PlanReview />
+				</Show>
+				<Show when={state.modal === "annotations"}>
+					<AnnotationSidebar />
+				</Show>
+				<Show when={state.modal === "todos"}>
+					<TodoBoard />
+				</Show>
+				<Show when={state.modal === "compaction"}>
+					<CompactionControls onClose={() => setState("modal", null)} />
+				</Show>
+				<Show when={state.modal === "btw-history"}>
+					<BtwHistoryView onClose={() => setState("modal", null)} />
+				</Show>
+				<Show when={state.modal === "voice"}>
+					<Show
+						when={state.sessionScope}
+						keyed
+						fallback={<div class="msg-notice">Attach a session before using voice.</div>}
+					>
+						{(scope) => <VoiceControls scope={scope} />}
+					</Show>
+				</Show>
 				<Show when={state.modal === "add-project"}>
 					<AddProjectModal onClose={() => setState("modal", null)} />
 				</Show>
@@ -294,8 +348,6 @@ export const App: Component = () => {
 				<Show when={state.modal === "sign-in"}>
 					<SignInModal onClose={() => setState("modal", null)} />
 				</Show>
-				<AskDialog />
-				<BtwPanel />
 				<DangerConfirmDialog />
 				<DeleteWorkspaceDialog />
 				<RemoveProjectDialog />

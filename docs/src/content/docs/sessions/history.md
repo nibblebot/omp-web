@@ -18,9 +18,8 @@ All of these actions target the attached session. `/resume` opens the picker for
 | Fork | `/fork` | Copies the whole transcript, entries and artifacts, into a new file and continues there. | Yes |
 | Fresh provider state | `/fresh` | None. The transcript is kept; provider streams and the provider session id are reset. | No |
 | Retry | `/retry` | Reruns the last failed assistant turn after removing it from the active context. | No |
-| Compact | `/compact [instructions]` | Replaces older context with a summary while the stream keeps its messages and gains a compaction card. | No |
-| Handoff | `/handoff [focus]` | Generates a handoff document, then starts a new session with that document as its starting context. | Yes |
-| Drop | `/drop` | Starts a new session and deletes the previous transcript file. This cannot be undone. | Yes |
+| Compact | `/compact [mode] [focus]` | Replaces older context with a summary while the stream keeps its messages and gains a compaction card. Mode is `soft`, `remote`, or `snapcompact`; anything else is focus text. | No |
+| Handoff | `/handoff [focus]` | Generates a handoff document and compacts the context in place: same session identity, same file, recent history kept. | No |
 
 ## New, drop, and the confirmation dialogs
 
@@ -65,17 +64,17 @@ These four keep the conversation but change how the session continues:
 
 - `/fresh` resets provider state while keeping the transcript. While a turn is streaming the browser asks you to confirm first, because resetting provider state mid-turn can fail the running turn. On success the stream reports `Fresh session; provider state reset, transcript kept.`
 - `/retry` reruns the last failed turn while the session is idle. When there is nothing to retry, or the session is busy, the stream reports `Nothing to retry; no failed turn or the session is busy.`
-- `/compact [instructions]` summarizes the older part of the conversation. Optional free text steers the summary. This is covered in depth in [Compaction, retry, and recovery](/sessions/recovery/).
-- `/handoff [focus]` generates a handoff document with an extra model call, then starts a new session carrying that document as context. The document also appears in the stream as a `handoff` compaction card, and the free text after the command becomes focus instructions for the summary. If the runtime saved a copy of the document to disk, the stream also links it for download.
+- `/compact [mode] [focus]` summarizes the older part of the conversation. The optional first word selects the compaction mode (`soft`, `remote`, `snapcompact`); remaining free text steers the summary. `snapcompact` takes no focus text. This is covered in depth in [Compaction, retry, and recovery](/sessions/recovery/).
+- `/handoff [focus]` generates a handoff document with an extra model call and compacts the context in place: the same session keeps its identity and file while older context is replaced by the document. The document also appears in the stream as a `handoff` compaction card, and the free text after the command becomes focus instructions for the summary. If the runtime saved a copy of the document to disk, the stream also links it for download.
 
 ## Scope
 
 - `/resume` lists the transcripts the attached session daemon can see. Each roster row also owns its own picker, and the roster decides which session daemon you are attached to; the history actions themselves then behave exactly as described here.
-- New, branch, fork, handoff, and drop only affect the attached session. Dropping a session deletes its transcript, so it no longer appears in any resume picker.
+- New, branch, fork, and drop only affect the attached session. Dropping a session deletes its transcript, so it no longer appears in any resume picker. Handoff and compact keep the same session in place.
 
 ## Persistence consequences
 
-- New, branch, fork, handoff, and drop all move the session to a different transcript file; new, branch, fork, and handoff keep the previous file on disk, and drop deletes it.
+- New, branch, fork, and drop move the session to a different transcript file; new, branch, and fork keep the previous file on disk, and drop deletes it. Handoff and compact rewrite context in place without changing files.
 - The resume picker lists transcripts on disk, so anything a hook cancelled or a dropped session no longer appears.
 - A rename is recorded in the transcript as a title change, so it survives a resume and shows up in the transcript browser.
 - Actions that change the transcript resync every attached browser tab, not just the one that triggered them.
