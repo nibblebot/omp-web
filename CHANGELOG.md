@@ -24,6 +24,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 ### Bug fixes
 - Keep streaming active and completion markers unset through non-yielded `agent_end` events; mark a turn complete only when the agent yields.
 - Read the latest `omp stats` summary from stderr, align profile and existing flattened XDG paths, pin sync children to the viewer's resolved targets, and correct the CLI install hint to `@oh-my-pi/pi-coding-agent`.
+- Apply the thinking level of a `default` role assigned or cleared in the model roles picker to the live session, matching the TUI model hub; previously only the saved role value changed and the session bar kept the old level.
 
 ## v0.2.1, 2026-09-25
 

@@ -461,6 +461,9 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				if (targetScope === "project") {
 					settings.setProjectModelRole("default", formatModelSelectorValue(selector, level));
 				}
+				// setModel bakes `level` into the persisted role value but keeps the
+				// live effort; apply it like the TUI model hub's onAssign does.
+				if (level !== undefined) session.setThinkingLevel(level);
 				return { role, provider: model.provider, id: model.id };
 			}
 			const modelRoleValue = formatModelSelectorValue(selector, level);
@@ -504,9 +507,9 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			}
 			if (!wasActive) return { role };
 			// The cleared role re-resolves from the newly exposed persisted
-			// layer; apply the effective value live when one resolves (setModel
-			// for default, applyRoleModel otherwise, as in TUI onUnassign
-			// semantics).
+			// layer; apply the effective value live when one resolves.
+			// applyRoleModel switches without persisting and then applies the
+			// role's explicit thinking, which a bare setModel never does live.
 			const resolved = resolveRoleModelFull(
 				settings,
 				role,
@@ -514,22 +517,12 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				session.model,
 			);
 			if (!resolved.model) return { role };
-			if (role === "default") {
-				await session.setModel(resolved.model, "default", {
-					persist: false,
-					thinkingLevel:
-						resolved.explicitThinkingLevel && resolved.thinkingLevel !== "auto"
-							? resolved.thinkingLevel
-							: undefined,
-				});
-			} else {
-				await session.applyRoleModel({
-					role,
-					model: resolved.model,
-					thinkingLevel: resolved.thinkingLevel,
-					explicitThinkingLevel: resolved.explicitThinkingLevel,
-				});
-			}
+			await session.applyRoleModel({
+				role,
+				model: resolved.model,
+				thinkingLevel: resolved.thinkingLevel,
+				explicitThinkingLevel: resolved.explicitThinkingLevel,
+			});
 			return { role };
 		},
 		setModelRoleHidden: async (entry, a) => {

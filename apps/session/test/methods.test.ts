@@ -191,3 +191,97 @@ describe("model-role registry settings preserve scope and cancellation", () => {
 		expect(settings.getModelRole("writer")).toBe("openai/selected");
 	});
 });
+
+interface StubModel {
+	provider: string;
+	id: string;
+}
+
+interface LiveEffortSession {
+	settings: Settings;
+	model: StubModel;
+	thinkingLevel: string | undefined;
+}
+
+/**
+ * Session double holding the SDK's live-effort contract: setModel switches the
+ * model (persisting the role when asked) but keeps the current effort; only
+ * setThinkingLevel and applyRoleModel's explicit selector change it.
+ */
+function liveEffortEntry(
+	settings: Settings,
+	models: StubModel[],
+	live: { model: StubModel; thinkingLevel: string },
+): { entry: SessionEntry; session: LiveEffortSession } {
+	const session = {
+		settings,
+		model: live.model,
+		thinkingLevel: live.thinkingLevel as string | undefined,
+		getAvailableModels: () => models,
+		getRoleModelCycle: () => ({
+			models: [{ role: "default", model: session.model }],
+			currentIndex: 0,
+		}),
+		setModel: async (model: StubModel) => {
+			session.model = model;
+			return { switched: true };
+		},
+		setThinkingLevel: (level: string | undefined) => {
+			session.thinkingLevel = level;
+		},
+		applyRoleModel: async (resolved: {
+			model: StubModel;
+			thinkingLevel?: string;
+			explicitThinkingLevel: boolean;
+		}) => {
+			session.model = resolved.model;
+			if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined) {
+				session.thinkingLevel = resolved.thinkingLevel;
+			}
+		},
+	};
+	return { entry: { session } as unknown as SessionEntry, session };
+}
+
+describe("default-role mutations drive the live thinking level", () => {
+	const opus = { provider: "anthropic", id: "claude-opus-5-5" };
+
+	test("assigning the default role applies its picked level to a session at another level", async () => {
+		const { entry, session } = liveEffortEntry(Settings.isolated(), [opus], {
+			model: opus,
+			thinkingLevel: "max",
+		});
+		await methodsTable().setModelRole!(entry, ["default", "anthropic", "claude-opus-5-5", "high"]);
+		expect(session.thinkingLevel).toBe("high");
+	});
+
+	test("assigning the default role with inherit keeps the live level", async () => {
+		const { entry, session } = liveEffortEntry(Settings.isolated(), [opus], {
+			model: opus,
+			thinkingLevel: "max",
+		});
+		await methodsTable().setModelRole!(entry, [
+			"default",
+			"anthropic",
+			"claude-opus-5-5",
+			"inherit",
+		]);
+		expect(session.thinkingLevel).toBe("max");
+	});
+
+	test("clearing the active project default applies the revealed global level", async () => {
+		const settings = Settings.isolated();
+		cfgModelRoleStorage.override(settings, "project");
+		settings.setModelRole("default", "openai/global:high");
+		settings.setProjectModelRole("default", "openai/project:low");
+		const global = { provider: "openai", id: "global" };
+		const project = { provider: "openai", id: "project" };
+		const { entry, session } = liveEffortEntry(settings, [global, project], {
+			model: project,
+			thinkingLevel: "low",
+		});
+		await methodsTable().clearModelRole!(entry, ["default"]);
+		expect(session.model).toEqual(global);
+		expect(session.thinkingLevel).toBe("high");
+	});
+});
