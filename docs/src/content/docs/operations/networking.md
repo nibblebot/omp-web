@@ -12,7 +12,7 @@ omp-web listens on loopback by default. The fleet serves the browser UI, the str
 | Fleet: browser UI, `/events`, `/command`, `/ctl` | `127.0.0.1:4722` | Your browser and the `omp-web` CLI |
 | Session daemon: wire API only, no UI | `127.0.0.1:4721` when started by hand; the fleet spawns with `--port 0` and dials the reported port | The fleet, or another direct API client |
 | Fleet callback pair (`/callback/*`) | On the fleet's own bind and port | Managed clone daemons, dialing outbound from their sandbox |
-| Vite dev server (source checkouts only) | `127.0.0.1:4713` default; the dev runners pick per run | Your browser while running `bun run dev` |
+| Vite dev server (source checkouts only) | `127.0.0.1:4713` for `bun run dev:web`; `bun run dev` uses a stable per-worktree port | Your browser while running `bun run dev` |
 
 Three properties define the layout:
 

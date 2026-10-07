@@ -2,9 +2,16 @@
 /**
  * dev: one-command dev runner.
  *
- *   bun run dev          vite (:4713 HMR, /events + /command proxied to the omp-fleet
- *                        edge) + omp-fleet serve (:4722). NO session is started or
+ *   bun run dev          vite (HMR UI on a stable per-worktree port, /events + /command
+ *                        + /ctl proxied to the omp-fleet edge) + omp-fleet serve
+ *                        (ephemeral port). Open the `ui` URL; the fleet's own `/`
+ *                        serves dist/, not the dev UI. NO session is started or
  *                        attached; spawn/add one from the roster UI when you want one.
+ *
+ *   --open / --no-open   force / disable opening the UI in a browser. Default: open
+ *                        on every interactive local run (TTY, no --host, a display
+ *                        on Linux). BROWSER=none (vite's
+ *                        knob) also disables it. Vite's `o + enter` reopens any time.
  *
  *   --auth-broker        opt in to an auth broker that clone sandboxes borrow
  *                        credentials from (adopted when one already runs, else
@@ -38,17 +45,22 @@
  * messages use [dev    ]. Colors only when stdout is a TTY and NO_COLOR is
  * unset; piped output has no escapes.
  *
- * Each child is tracked through starting → ready (vite: its `Local:` line;
- * fleet: the "fleet listening" banner line). Every transition to ready logs one
- * `✓ <name> ready` runner line; once every child has been ready at least once,
- * a compact stack summary is printed once. Ctrl-C (or vite/fleet exiting) tears
+ * Each child is tracked through starting → ready (vite: the end of its startup
+ * banner; fleet: the "fleet listening" banner line). The startup banners of
+ * both are folded into ONE summary printed once every child is ready, so no
+ * fact prints twice: the fleet's listening/state/config/restored/`Web UI:`
+ * lines and vite's first banner are dropped (vite's later reprints, e.g.
+ * `u + enter`, pass through). A `✓ <name> ready` line prints only for a
+ * re-ready after the summary (broker restarts). Vite inherits stdin, so its
+ * h/o/u/r/c/q + enter shortcuts work. Ctrl-C (or vite/fleet exiting) tears
  * down the rest.
  *
- * Ports: chosen at runtime so parallel worktrees don't collide. The fleet binds
- * port 0 (kernel-assigned ephemeral; the real port is read back from the banner
- * line); vite gets a probe-picked port with --strictPort. A pre-ready exit
- * (lost port race, startup crash) is retried on a fresh port, bounded, before
- * being declared fatal.
+ * Ports: the fleet binds port 0 (kernel-assigned ephemeral; the real port is
+ * read back from the banner line). Vite gets a stable port derived from the
+ * worktree hash (falls back to a probe-picked one when taken) with
+ * --strictPort, so bookmarks, localStorage prefs, and open tabs survive
+ * restarts. A pre-ready exit (lost port race, startup crash) is retried on a
+ * fresh port, bounded, before being declared fatal.
  *
  * State: the dev fleet's state file is scoped per worktree OUTSIDE the repo,
  * and its pidfile lock rides `<state>.lock` next to it: a stable
@@ -91,12 +103,13 @@ const ROOT = join(import.meta.dir, "..");
  * (dev restarts reuse the same fleet), distinct across worktrees. Only the
  * STATE is scoped; the managed-worktree root deliberately stays shared.
  */
-const DEV_FLEET_DIR = (() => {
-	const real = realpathSync(ROOT);
-	const hash = createHash("sha256").update(real).digest("hex").slice(0, 8);
-	const slug = slugifyWorktreeName(basename(real)) || "worktree";
-	return join(dirname(resolveConfigPath()), "dev-fleets", `${slug}-${hash}`);
-})();
+const WORKTREE_REAL = realpathSync(ROOT);
+const WORKTREE_HASH = createHash("sha256").update(WORKTREE_REAL).digest("hex").slice(0, 8);
+const DEV_FLEET_DIR = join(
+	dirname(resolveConfigPath()),
+	"dev-fleets",
+	`${slugifyWorktreeName(basename(WORKTREE_REAL)) || "worktree"}-${WORKTREE_HASH}`,
+);
 /**
  * Fork-once seed: copy a source fleet-state.json into this worktree's dev
  * fleet dir when the dev state does not exist yet (a fresh fork). The source
@@ -193,14 +206,20 @@ function mainWorktreeDevState(): string | undefined {
 const VITE_PORT_DEFAULT = 4713;
 
 /**
- * Ports are chosen at runtime so parallel worktrees can each run `bun run dev`
- * without colliding. The fleet binds port 0 (kernel-assigned ephemeral, cannot
- * collide; the real port comes back via the "fleet listening" banner). Only
- * vite needs a fixed port (browsers bookmark it): probe-pick a free one and
- * launch with --strictPort, so a lost probe-bind race is a clean pre-ready
- * exit. Any pre-ready exit is retried on a fresh port (bounded) before being
- * declared fatal.
+ * Ports. The fleet binds port 0 (kernel-assigned ephemeral, cannot collide;
+ * the real port comes back via the "fleet listening" banner): the browser
+ * never sees it, vite proxies to it. Vite's port is what the browser keeps,
+ * and the origin (host + port) scopes localStorage (theme, font size,
+ * sidebar layout, prompt history) and notification permission, and is what
+ * vite's HMR client polls to reload an open tab after a restart. So vite
+ * gets a STABLE per-worktree port derived from the same hash as
+ * DEV_FLEET_DIR, in 20000-29999 (below Linux's default ephemeral range
+ * 32768-60999, so kernel-assigned ports rarely squat it). When it is taken
+ * (another stack, a hash collision), the runner falls back to a probe-picked
+ * port. Launch uses --strictPort, so a lost probe-bind race is a clean
+ * pre-ready exit, retried on a fresh port (bounded) before being fatal.
  */
+const VITE_STABLE_PORT = 20000 + (Number.parseInt(WORKTREE_HASH, 16) % 10000);
 const ports = { vite: VITE_PORT_DEFAULT, fleet: 4722 };
 /**
  * Auth broker: clone sandboxes have no credential store of their own, so they
@@ -263,6 +282,8 @@ interface Child {
 	name: string;
 	cmd: string[];
 	env?: Record<string, string>;
+	/** Default "ignore" (Bun.spawn's default: /dev/null). */
+	stdin?: "inherit" | "ignore";
 }
 
 /**
@@ -323,13 +344,32 @@ function buildChild(name: string): Child {
 	// server-side, so remote browsers reach the loopback fleet edge through
 	// vite. The edge is loopback-only by design.
 	if (host !== undefined) cmd.push("--host", host);
+	// vite's own --open: once per vite process (not on its in-process
+	// restarts), honors BROWSER/BROWSER_ARGS (BROWSER=none disables), and logs
+	// an open failure instead of exiting.
+	if (shouldOpenUi()) cmd.push("--open");
 	const env: Record<string, string> = {
 		// vite's proxy target for /events + /command + /ctl; the roster UI runs
 		// with HMR, no dist/ build needed.
 		OMP_DEV_FLEET_PORT: String(ports.fleet),
 	};
 	if (allowHosts !== undefined) env.OMP_DEV_ALLOW_HOSTS = allowHosts;
-	return { name: "vite", cmd, env };
+	// Inherited stdin: vite binds its CLI shortcuts (h/o/u/r/c/q + enter) only
+	// when its stdin is a TTY; Bun.spawn's default /dev/null disables them.
+	return { name: "vite", cmd, env, stdin: "inherit" };
+}
+
+/**
+ * Auto-open policy. `--open` forces, `--no-open` disables. The default opens
+ * on every interactive local run: stdin+stdout TTY (agents/scripts running
+ * the stack never pop tabs), no --host (its browser is usually on another
+ * machine), and a display on Linux.
+ */
+function shouldOpenUi(): boolean {
+	if (openMode !== "auto") return openMode === "always";
+	if (process.stdout.isTTY !== true || process.stdin.isTTY !== true) return false;
+	if (host !== undefined) return false;
+	return process.platform !== "linux" || !!process.env.DISPLAY || !!process.env.WAYLAND_DISPLAY;
 }
 
 const args = process.argv.slice(2);
@@ -338,6 +378,7 @@ let allowHosts: string | undefined;
 let stateFrom: string | undefined;
 let fresh = false;
 let authBroker = false;
+let openMode: "auto" | "always" | "never" = "auto";
 for (let i = 0; i < args.length; i++) {
 	const arg = args[i];
 	if (arg === "fleet") {
@@ -376,10 +417,14 @@ for (let i = 0; i < args.length; i++) {
 		fresh = true;
 	} else if (arg === "--auth-broker") {
 		authBroker = true;
+	} else if (arg === "--open") {
+		openMode = "always";
+	} else if (arg === "--no-open") {
+		openMode = "never";
 	} else {
 		console.error(`unrecognized argument: ${arg}`);
 		console.error(
-			"usage: bun scripts/dev.ts [fleet] [--host [addr]] [--allow-hosts [csv]] [--state-from <path>] [--fresh] [--auth-broker]",
+			"usage: bun scripts/dev.ts [fleet] [--host [addr]] [--allow-hosts [csv]] [--state-from <path>] [--fresh] [--auth-broker] [--open|--no-open]",
 		);
 		process.exit(2);
 	}
@@ -449,6 +494,15 @@ interface ChildState {
 const states = new Map<string, ChildState>();
 /** True once the stack summary has been printed. */
 let summaryPrinted = false;
+/** From the fleet's "fleet restored N sessions (...)" banner line. */
+let restoredSummary = "";
+/** vite's `Network:` URLs from its startup banner (only with --host). */
+const networkUrls: string[] = [];
+/**
+ * vite binds its CLI shortcuts (and prints their hint as the last banner line)
+ * exactly when its stdin is a TTY and CI is unset; it inherits both from us.
+ */
+const viteShortcuts = process.stdin.isTTY === true && !process.env.CI;
 /** One-shot waiters for the next `ready` transition of a child (startup sequencing). */
 const readyWaiters = new Map<string, () => void>();
 
@@ -466,7 +520,7 @@ function markReady(name: string, port: number, detail: string): void {
 	st.port = port;
 	st.readyOnce = true;
 	preReadyFails.set(name, 0);
-	log(`✓ ${name} ready, ${detail} (pid ${st.pid})`);
+	if (summaryPrinted) log(`✓ ${name} ready, ${detail} (pid ${st.pid})`);
 	readyWaiters.get(name)?.();
 	readyWaiters.delete(name);
 	checkSummary();
@@ -481,20 +535,28 @@ function checkSummary(): void {
 	summaryPrinted = true;
 	const uiPort = states.get("vite")?.port ?? ports.vite;
 	const fleetPort = states.get("fleet")?.port ?? ports.fleet;
-	log(bold("stack ready"));
-	log(
-		`${bold(`  ${"ui".padEnd(9)}http://localhost:${uiPort}  `)}` +
-			"(vite, HMR, proxies /events /command /ctl → fleet)",
+	const row = (label: string, value: string, note: string, strong = true): void => {
+		const head = `${label.padEnd(8)}${value}`;
+		log(`${strong ? bold(head) : head}  ${note}`);
+	};
+	row(
+		"ui",
+		`http://localhost:${uiPort}`,
+		viteShortcuts ? "(o + enter opens it, h + enter lists shortcuts)" : "(vite HMR)",
 	);
-	log(`${bold(`  ${"fleet".padEnd(9)}http://127.0.0.1:${fleetPort}  `)}(control plane + edge)`);
+	for (const url of networkUrls) row("network", url, "(--host)");
+	row(
+		"fleet",
+		`http://127.0.0.1:${fleetPort}`,
+		"(backend, not the UI; set OMP_FLEET_PORT to this port for `bun run fleet`)",
+	);
 	if (brokerUrl !== undefined)
-		log(
-			`${bold(`  ${"broker".padEnd(9)}${brokerUrl}  `)}(auth broker${states.get("broker")?.readyOnce === true ? "" : ", adopted, not managed by this stack"}; clone secretRefs borrow credentials)`,
+		row(
+			"broker",
+			brokerUrl,
+			states.get("broker")?.readyOnce === true ? "(auth broker)" : "(auth broker, adopted)",
 		);
-	log(
-		`${bold(`  ${"state".padEnd(9)}${join(DEV_FLEET_DIR, "fleet-state.json")}  `)}(worktree-scoped)`,
-	);
-	log("  no session attached. Spawn/add one from the roster sidebar");
+	row("state", join(DEV_FLEET_DIR, "fleet-state.json"), `(${restoredSummary || "empty"})`, false);
 }
 
 /** Forward a piped stream with a per-line `[name] ` prefix. */
@@ -531,9 +593,17 @@ async function pipePrefixed(
 }
 
 /**
- * Per-child stdout readiness hooks. Vite: watch for its `Local:` line. Fleet:
- * parse the "fleet listening on 127.0.0.1:<port>" banner (stable shape;
- * scripts parse the port out of it).
+ * Per-child stdout hooks: readiness, plus dropping the banner lines the
+ * summary replaces. Vite: its first banner (blank lines, `VITE vX ready`,
+ * `Local:`, `Network:`, the shortcuts hint); ready fires at the banner's last
+ * line (the hint when shortcuts bind, else `Network:`), with a short fallback
+ * timer after `Local:` so a changed banner can never stall the summary.
+ * Fleet: parse the "fleet listening on 127.0.0.1:<port>" banner (stable
+ * shape) and drop it with the state/config/restored/`Web UI:` lines; the
+ * `Web UI:` URL is the dist/-serving fleet port, not the dev UI.
+ *
+ * markReady is deferred to a microtask so the summary prints after the rest
+ * of the triggering chunk.
  *
  * Stale-line guard: a dead child's pipe can flush after a relaunch, so only
  * the process currently registered under `name` may move readiness/ports.
@@ -544,20 +614,62 @@ function stdoutHook(
 ): ((line: string) => string | false | void) | undefined {
 	const current = (): boolean => procs.get(name) === proc;
 	if (name === "vite") {
+		let inBanner = true;
+		let port: number | undefined;
+		networkUrls.length = 0;
+		const endBanner = (): void => {
+			if (!inBanner || port === undefined) return;
+			inBanner = false;
+			const p = port;
+			queueMicrotask(() => markReady("vite", p, `ui on http://localhost:${p}`));
+		};
 		return (line) => {
-			if (!current()) return;
-			const m = line.replace(ANSI_RE, "").match(/Local:\s+http:\/\/localhost:(\d+)/);
-			if (m) markReady("vite", Number(m[1]), `ui on http://localhost:${m[1]}`);
+			if (!current() || !inBanner) return;
+			const plain = line.replace(ANSI_RE, "").trim();
+			const local = plain.match(/Local:\s+http:\/\/localhost:(\d+)/);
+			if (local) {
+				port = Number(local[1]);
+				setTimeout(endBanner, 500);
+				return false;
+			}
+			const network = plain.match(/Network:\s+(\S+)/);
+			if (network) {
+				// With --host, vite prints one `Network:` URL per interface: the
+				// summary's network rows. Without it, the one line is "use --host
+				// to expose" and ends the banner when no shortcut hint follows.
+				if (network[1].startsWith("http")) networkUrls.push(network[1].replace(/\/$/, ""));
+				else if (!viteShortcuts) endBanner();
+				return false;
+			}
+			if (plain.endsWith("to show help")) {
+				endBanner();
+				return false;
+			}
+			if (plain === "" || /^VITE v\S+\s+ready in/.test(plain)) return false;
 		};
 	}
 	if (name === "fleet") {
 		return (line) => {
 			if (!current()) return;
-			const m = line.replace(ANSI_RE, "").match(/fleet listening on 127\.0\.0\.1:(\d+)/);
+			const plain = line.replace(ANSI_RE, "");
+			const restored = plain.match(/^fleet restored (\d+) sessions?(?: \((.*)\))?$/);
+			if (restored) {
+				const n = Number(restored[1]);
+				restoredSummary =
+					n === 0
+						? ""
+						: `${n} session${n === 1 ? "" : "s"}${restored[2] ? `, ${restored[2]}` : ""}`;
+				return false;
+			}
+			const m = plain.match(/^fleet listening on 127\.0\.0\.1:(\d+)/);
 			if (m) {
 				ports.fleet = Number(m[1]);
-				markReady("fleet", ports.fleet, `control+edge on http://127.0.0.1:${m[1]}`);
+				queueMicrotask(() =>
+					markReady("fleet", ports.fleet, `control+edge on http://127.0.0.1:${m[1]}`),
+				);
+				return false;
 			}
+			if (/^(fleet state: |fleet config: |Web UI: )/.test(plain)) return false;
 		};
 	}
 	if (name === "broker") {
@@ -599,6 +711,7 @@ function launch(child: Child): void {
 		env: { ...process.env, ...child.env },
 		stdout: "pipe",
 		stderr: "pipe",
+		stdin: child.stdin ?? "ignore",
 	});
 	procs.set(child.name, proc);
 	states.set(child.name, { name: child.name, status: "starting", pid: proc.pid, readyOnce: false });
@@ -678,13 +791,6 @@ async function retryPreReady(name: string, code: number | null, attempt: number)
 	);
 	if (!shuttingDown) launch(buildChild(name));
 }
-
-// Fleet first (ephemeral bind, cannot collide), vite once the edge port is
-// known. A fatal resolution during this await = startup retries exhausted on
-// the fleet.
-log(
-	"starting omp-fleet + vite HMR (ports chosen at startup). Spawn/add a session from the sidebar",
-);
 
 /**
  * Authenticated broker probe: 200 on /v1/snapshot with OUR token means a
@@ -776,6 +882,9 @@ async function ensureBroker(): Promise<void> {
 }
 
 if (authBroker) await ensureBroker();
+// Fleet first (ephemeral bind, cannot collide), vite once the edge port is
+// known. A fatal resolution during this await = startup retries exhausted on
+// the fleet.
 launch(buildChild("fleet"));
 const boot = await Promise.race([waitReady("fleet").then(() => null), fatalPromise]);
 if (boot !== null) {
@@ -783,7 +892,9 @@ if (boot !== null) {
 	await shutdown(boot.code ?? 1);
 }
 
-ports.vite = await pickFreePort();
+ports.vite = (await isPortFree(VITE_STABLE_PORT)) ? VITE_STABLE_PORT : await pickFreePort();
+if (ports.vite !== VITE_STABLE_PORT)
+	log(`stable ui port ${VITE_STABLE_PORT} is taken, using ${ports.vite} for this run`);
 launch(buildChild("vite"));
 
 if (host !== undefined)

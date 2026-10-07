@@ -115,7 +115,7 @@ omp-web update --version x.y.z  # pin a specific release
 
 ```sh
 bun install
-bun run dev                # vite (HMR) + fleet, ports chosen per run; no managed auth broker
+bun run dev                # vite (HMR) + fleet, stable per-worktree UI port, opens the UI in your browser; no managed auth broker
 bun run dev --auth-broker  # opt into adopting or spawning an auth broker for clone sandboxes
 ```
 
