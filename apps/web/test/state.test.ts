@@ -870,6 +870,50 @@ describe("answerUnviewed (turn ended below the viewport)", () => {
 		dispatchSeq(agentStart(), 1026);
 		expect(state.answerUnviewed).toBe(false);
 	});
+
+	test("a continuation keeps the composer busy without signaling a completed answer", () => {
+		primeReady();
+		setState({ chatPinned: false, view: "analysis" });
+		dispatchSeq(agentStart(), 1024);
+		setState("live", { active: true, blocks: [] });
+		setState("workingIntent", "Retrying");
+		dispatchSeq(
+			{
+				type: "event",
+				event: { type: "agent_end", messages: [], isTerminal: false, yielded: false },
+			},
+			1025,
+		);
+		expect(state.streaming).toBe(true);
+		expect(state.live.active).toBe(false);
+		expect(state.workingIntent).toBeUndefined();
+		expect(state.answerUnviewed).toBe(false);
+		expect(state.workUnviewed).toBe(false);
+		expect(state.announcement).toBe("agent started");
+	});
+
+	test("a yielded turn awaiting background work still signals a completed answer", () => {
+		primeReady();
+		setState({ chatPinned: false, view: "analysis" });
+		dispatchSeq(agentStart(), 1024);
+		dispatchSeq(
+			{
+				type: "event",
+				event: {
+					type: "agent_end",
+					messages: [],
+					isTerminal: false,
+					yielded: true,
+					awaitingAsyncWork: true,
+				},
+			},
+			1025,
+		);
+		expect(state.streaming).toBe(false);
+		expect(state.answerUnviewed).toBe(true);
+		expect(state.workUnviewed).toBe(true);
+		expect(state.announcement).toBe("agent finished");
+	});
 });
 
 describe("workUnviewed (a turn ended while in Analysis)", () => {

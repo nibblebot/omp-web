@@ -64,8 +64,8 @@ export class SyncTimedOut extends Error {}
  * Any other output (or none) falls back to all-zero counts, matching the
  * success-if-exit-0 contract.
  */
-export function parseSummary(stdout: string): SyncOutcome {
-	const m = /Synced (\d+) new entries from (\d+) files \((\d+) total\)/.exec(stdout);
+export function parseSummary(output: string): SyncOutcome {
+	const m = /Synced (\d+) new entries from (\d+) files \((\d+) total\)/.exec(output);
 	if (!m) return { processed: 0, files: 0, totalMessages: 0 };
 	return { processed: Number(m[1]), files: Number(m[2]), totalMessages: Number(m[3]) };
 }
@@ -79,18 +79,22 @@ export function parseSummary(stdout: string): SyncOutcome {
  * statsDbPath through as PI_CONFIG_DIR would make omp write under $HOME
  * instead of the real location. Cases:
  *   - default stats.db (`$HOME/.omp/stats.db`): drop PI_CONFIG_DIR and
- *     PI_PROFILE so omp falls back to its built-in default target
+ *     PI_PROFILE / OMP_PROFILE so omp falls back to its built-in default target
  *   - any other stats.db under $HOME: pass the home-relative NAME of its
- *     directory (and drop PI_PROFILE, which would select a different profile)
+ *     directory (and drop both profile vars, which would select a different profile)
  *   - stats.db outside $HOME: omp cannot be pointed at it, so SyncConfigError
  *     is thrown.
  * PI_CODING_AGENT_DIR is always set to the absolute sessions parent (omp
  * honors absolute agent dirs). All other env vars pass through unchanged;
- * PI_CONFIG_DIR / PI_PROFILE are only deleted when this function explicitly
- * overrides them.
+ * PI_CONFIG_DIR / PI_PROFILE / OMP_PROFILE / XDG_DATA_HOME are only overridden
+ * to keep the child on the viewer's explicit database and sessions targets.
  */
 export function buildSyncEnv(cfg: StatsConfig, home: string): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
+	delete env.OMP_PROFILE;
+	// The SDK's XDG root takes precedence over PI_CONFIG_DIR when it exists.
+	// cfg already chose the target; never let the child redirect it again.
+	delete env.XDG_DATA_HOME;
 	const statsDir = dirname(cfg.statsDbPath);
 	if (cfg.statsDbPath === join(home, ".omp", "stats.db")) {
 		// Default target, so omp uses its built-in default.
@@ -139,20 +143,20 @@ export async function spawnSync(env: NodeJS.ProcessEnv): Promise<SyncOutcome> {
 			// Cancel the timer when the race settles so it never dangles.
 			aborter.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
 		});
-		const { code, stdout, stderr } = await Promise.race([
+		const { code, stderr } = await Promise.race([
 			(async () => {
-				const [stdout, stderr] = await Promise.all([
+				const [, stderr] = await Promise.all([
 					Bun.readableStreamToText(proc.stdout),
 					Bun.readableStreamToText(proc.stderr),
 				]);
 				const code = await proc.exited;
-				return { code, stdout, stderr };
+				return { code, stderr };
 			})(),
 			timeout,
 		]);
 
 		if (code !== 0) throw new SyncFailed(stderr.slice(-500));
-		return parseSummary(stdout);
+		return parseSummary(stderr);
 	} finally {
 		aborter.abort();
 		try {
@@ -167,7 +171,7 @@ export async function spawnSync(env: NodeJS.ProcessEnv): Promise<SyncOutcome> {
 let inflight: Promise<Response> | null = null;
 
 const SYNC_ERROR_503 =
-	"omp binary not found. Install omp (`npm i -g @oh-my-pi/omp-stats`) or add it to PATH";
+	"omp binary not found. Install omp (`bun install -g @oh-my-pi/pi-coding-agent`) or add it to PATH";
 
 export function register(ctx: AppCtx, routes: Route[]): void {
 	routes.push({

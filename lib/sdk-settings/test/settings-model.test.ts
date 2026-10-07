@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
+import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { SETTING_TABS } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import {
 	buildSettingsModel,
@@ -11,6 +12,19 @@ import {
 // The module reads/writes the shared Settings singleton (values, changed
 // flags, condition gates). Initialize it in-memory so tests touch no disk.
 await Settings.init({ inMemory: true });
+
+afterEach(() => {
+	for (const path of [
+		"compaction.thresholdPercent",
+		"compaction.thresholdTokens",
+		"compaction.methodOrder",
+		"providers.maxInFlightRequests",
+		"memory.backend",
+		"hindsight.apiToken",
+	]) {
+		lookup(path)!.unset(Settings.instance);
+	}
+});
 
 const fakeSession: SettingsSession = {
 	getAvailableThinkingLevels: () => ["low", "high"],
@@ -71,6 +85,14 @@ describe("coerceSettingValue", () => {
 		expect(() => coerceSettingValue("providers.maxInFlightRequests", '{"openai": "4"}')).toThrow(
 			"Provider request limits must be positive numbers",
 		);
+		expect(coerceSettingValue("providers.maxInFlightRequests", { openai: 0.2 })).toEqual({
+			openai: 1,
+		});
+		for (const invalid of [0, -1, NaN, Infinity, null, true]) {
+			expect(() =>
+				coerceSettingValue("providers.maxInFlightRequests", { openai: invalid }),
+			).toThrow("Provider request limits must be positive numbers: openai");
+		}
 	});
 
 	test("boolean settings accept booleans and 'true'/'false' strings", () => {
@@ -88,20 +110,27 @@ describe("coerceSettingValue", () => {
 	test("unset optional/credential strings (undefined current) store raw input", () => {
 		// hindsight.apiToken is a credential string defaulting to undefined;
 		// the TUI's fallback stores the raw input; must not throw.
-		Settings.instance.set("hindsight.apiToken", undefined as never);
+		lookup("hindsight.apiToken")!.unset(Settings.instance);
 		expect(coerceSettingValue("hindsight.apiToken", "s3cret")).toBe("s3cret");
 	});
 
 	test("multiselect settings filter to string arrays", () => {
-		expect(coerceSettingValue("providers.webSearchOrder", ["google", 7, "exa"])).toEqual([
-			"google",
-			"exa",
+		expect(coerceSettingValue("compaction.methodOrder", ["server", 7, "soft"])).toEqual([
+			"server",
+			"soft",
 		]);
-		expect(coerceSettingValue("providers.webSearchOrder", "not-an-array")).toEqual([]);
+		expect(coerceSettingValue("compaction.methodOrder", "not-an-array")).toEqual([]);
 	});
 
 	test("unknown paths throw", () => {
 		expect(() => coerceSettingValue("no.such.path", 1)).toThrow("Unknown setting: no.such.path");
+		for (const retired of [
+			"providers.webSearchOrder",
+			"providers.webSearchExclude",
+			"providers.imageOrder",
+		]) {
+			expect(() => coerceSettingValue(retired, [])).toThrow(`Unknown setting: ${retired}`);
+		}
 	});
 });
 
@@ -177,23 +206,90 @@ describe("buildSettingsModel", () => {
 	});
 
 	test("changed flags reflect the live settings singleton", () => {
-		Settings.instance.set("compaction.thresholdPercent", 80);
+		lookup("compaction.thresholdPercent")!.set(Settings.instance, 80);
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
 		const item = itemsOf("context", model).find(
 			(item) => item.path === "compaction.thresholdPercent",
 		);
 		expect(item?.value).toBe(80);
 		expect(item?.changed).toBe(true);
-		Settings.instance.set("compaction.thresholdPercent", -1);
+		lookup("compaction.thresholdPercent")!.set(Settings.instance, -1);
+	});
+
+	test("compaction threshold resets clear changed flags after persistence", () => {
+		for (const path of ["compaction.thresholdPercent", "compaction.thresholdTokens"]) {
+			const setting = lookup(path)!;
+			setting.set(Settings.instance, coerceSettingValue(path, "50"));
+			expect(
+				itemsOf("context", buildSettingsModel(fakeSession, [])).find((item) => item.path === path),
+			).toMatchObject({ value: 50, changed: true });
+			setting.set(Settings.instance, coerceSettingValue(path, "default"));
+			expect(
+				itemsOf("context", buildSettingsModel(fakeSession, [])).find((item) => item.path === path),
+			).toMatchObject({ value: -1, changed: false });
+		}
+	});
+
+	test("ordered compaction choices reflect the saved order", () => {
+		lookup("compaction.methodOrder")!.set(
+			Settings.instance,
+			coerceSettingValue("compaction.methodOrder", ["soft", "server"]),
+		);
+		const item = itemsOf("context", buildSettingsModel(fakeSession, [])).find(
+			(item) => item.path === "compaction.methodOrder",
+		);
+		expect(item).toMatchObject({
+			type: "multiselect",
+			ordered: true,
+			value: ["soft", "server"],
+			changed: true,
+		});
+	});
+
+	test("provider limits retain configured providers absent from available models", () => {
+		lookup("providers.maxInFlightRequests")!.set(
+			Settings.instance,
+			coerceSettingValue("providers.maxInFlightRequests", { unavailable: 3.9 }),
+		);
+		const item = itemsOf("providers", buildSettingsModel(fakeSession, [])).find(
+			(item) => item.type === "providerLimits",
+		);
+		expect(item?.value).toEqual({ unavailable: 3 });
+		expect(item?.providers).toEqual(["anthropic", "openai", "unavailable"]);
+	});
+
+	test("environment credentials never populate the editable settings model", () => {
+		const previous = process.env.HINDSIGHT_API_TOKEN;
+		process.env.HINDSIGHT_API_TOKEN = "environment-secret";
+		try {
+			lookup("memory.backend")!.set(Settings.instance, "hindsight");
+			lookup("hindsight.apiToken")!.unset(Settings.instance);
+			const item = itemsOf("memory", buildSettingsModel(fakeSession, [])).find(
+				(entry) => entry.path === "hindsight.apiToken",
+			);
+			expect(item).toMatchObject({ type: "text", secret: true, changed: false });
+			expect(item?.value).toBeUndefined();
+			lookup("hindsight.apiToken")!.set(
+				Settings.instance,
+				coerceSettingValue("hindsight.apiToken", "configured-secret"),
+			);
+			const saved = itemsOf("memory", buildSettingsModel(fakeSession, [])).find(
+				(entry) => entry.path === "hindsight.apiToken",
+			);
+			expect(saved?.value).toBe("configured-secret");
+		} finally {
+			if (previous === undefined) delete process.env.HINDSIGHT_API_TOKEN;
+			else process.env.HINDSIGHT_API_TOKEN = previous;
+		}
 	});
 
 	test("condition-gated defs respond to live settings on every build", () => {
-		Settings.instance.set("memory.backend", "hindsight");
+		lookup("memory.backend")!.set(Settings.instance, "hindsight");
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
 		const hindsightItems = itemsOf("memory", model).filter((item) =>
 			item.path.startsWith("hindsight."),
 		);
 		expect(hindsightItems.length).toBeGreaterThan(0);
-		Settings.instance.set("memory.backend", "off");
+		lookup("memory.backend")!.unset(Settings.instance);
 	});
 });

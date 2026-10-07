@@ -483,9 +483,13 @@ export function applyEvent(e: AgentSessionEvent): void {
 			// The final message content is authoritative (message_end pushes the
 			// full item); leftover queue entries must not leak into the next message.
 			pendingDeltas.clear();
-			setState("streaming", false);
 			setState("live", "active", false);
 			setState("workingIntent", undefined);
+			// SDK continuations (retry, compaction, stop reminders) settle the
+			// current message without finishing the turn. Keep the composer busy
+			// until a yield; older producers omit this optional field.
+			if (e.yielded === false) break;
+			setState("streaming", false);
 			// Turn finished below the viewport (user is scrolled up): flag the
 			// answer as unviewed so the roster row shows the yellow unreviewed
 			// dot until the user scrolls to the live edge.

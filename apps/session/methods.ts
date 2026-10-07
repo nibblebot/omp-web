@@ -3,10 +3,8 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { getAvailableThemes, type Settings } from "@oh-my-pi/pi-coding-agent";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import {
-	SETTINGS_SCHEMA,
-	type SettingPath,
-} from "@oh-my-pi/pi-coding-agent/config/settings-schema";
+import { cfgModelRoleStorage, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -14,6 +12,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { resolveRoleModelFull } from "@oh-my-pi/pi-coding-agent/session/role-models";
+import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import type { WebMethodName } from "#lib/wire/protocol";
 import type { CollabSession, Images } from "./collab-session";
 import type { DaemonBroker } from "./daemon-broker";
@@ -344,7 +343,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			}
 			if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
 			const settings = session.settings;
-			const targetScope = settings.get("modelRoleStorage") === "project" ? "project" : "global";
+			const targetScope = cfgModelRoleStorage.get(settings) === "project" ? "project" : "global";
 			const selector = `${model.provider}/${model.id}`;
 			if (role === "default") {
 				const { switched } = await session.setModel(model, "default", {
@@ -387,7 +386,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const role = String(a[0] ?? "");
 			assertModelRoleId(role);
 			const settings = session.settings;
-			const targetScope = settings.get("modelRoleStorage") === "project" ? "project" : "global";
+			const targetScope = cfgModelRoleStorage.get(settings) === "project" ? "project" : "global";
 			// Capture the active role before clearing, since an unassigned role drops
 			// out of the cycle entirely, so the post-clear cycle can't name it.
 			const wasActive = activeRoleOf(session) === role;
@@ -431,10 +430,10 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			assertModelRoleId(role);
 			const hidden = a[1] === true;
 			const settings = entry.session.settings;
-			const tags = settings.get("modelTags");
+			const tags = cfgModelTags.get(settings);
 			// modelTags is a global-layer setting: persist globally, and the
 			// picker filters hidden roles client-side while they stay functional.
-			settings.set("modelTags", { ...tags, [role]: { ...tags[role], hidden } });
+			cfgModelTags.set(settings, { ...tags, [role]: { ...tags[role], hidden } });
 			return { role, hidden };
 		},
 		getAvailableModels: async (entry) => {
@@ -450,12 +449,9 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		setSetting: async (entry, a) => {
 			const [path, value] = [String(a[0]), a[1]];
 			const coerced = coerceSettingValue(path, value);
-			// All accepted paths are schema paths persisted via the shared
-			// Settings singleton (in-process merge + debounced disk write, the
-			// TUI's settings.set semantics).
-			if (path in SETTINGS_SCHEMA) {
-				deps.settings.set(path as SettingPath, coerced as never);
-			}
+			// Registry handles validate and persist to the shared settings scope.
+			// Virtual settings are handled only by their explicit side effects.
+			lookup(path)?.set(deps.settings, coerced);
 			await applySettingSideEffects(entry.session, path, coerced);
 			const model = buildSettingsModel(entry.session, await getAvailableThemes());
 			broadcastTo(entry.handle, { type: "settings_changed", model });
@@ -496,19 +492,19 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		setComputerToolEnabled: async (entry, a) => {
 			const { session } = entry;
 			const enabled = a[0] === true;
-			const previous = session.settings.get("computer.enabled");
-			session.settings.override("computer.enabled", enabled);
+			const previous = cfgComputerEnabled.get(session.settings);
+			cfgComputerEnabled.override(session.settings, enabled);
 			if (
 				enabled &&
 				!session.getEvalPreludes().some((definition) => definition.name === "computer")
 			) {
-				session.settings.override("computer.enabled", previous);
+				cfgComputerEnabled.override(session.settings, previous);
 				throw new Error("computer use is unavailable in this session");
 			}
 			try {
 				await session.refreshBaseSystemPrompt();
 			} catch (error) {
-				session.settings.override("computer.enabled", previous);
+				cfgComputerEnabled.override(session.settings, previous);
 				throw error;
 			}
 		},
@@ -605,7 +601,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				id: provider.id,
 				name: provider.name,
 				available: provider.available,
-				authenticated: deps.authStorage.hasAuth(provider.id),
+				authenticated:
+					deps.authStorage.keys.source(provider.storeCredentialsAs ?? provider.id) !== undefined,
 			})),
 		login: () => Promise.reject(new Error("login is handled per-socket")),
 		getSubagents: async (entry) => {

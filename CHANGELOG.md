@@ -6,6 +6,12 @@ omp-web moves its source tree into application and library roots, and makes deve
 - Move application source to `apps/{cli,fleet,session,web}`, shared libraries to `lib/*`, cross-app E2E to `e2e/`, and tooling tests to `scripts/test/`; enforce the closed `lib/` import boundary in lint.
 - Remove the optional benchmark harness, its `bench` command, and local benchmark outputs; ordinary test execution is unchanged.
 - Make development auth broker management opt-in via `bun run dev --auth-broker`; default dev starts only the fleet and Vite and preserves explicitly configured broker environment variables and provider-profile secret references.
+- Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.6.1.
+- Migrate live settings to SDK registry handles and provider authentication to the namespaced OAuth login and effective credential-source APIs, preserving settings scope and browser login dialogs.
+
+### Bug fixes
+- Keep streaming active and completion markers unset through non-yielded `agent_end` events; mark a turn complete only when the agent yields.
+- Read the latest `omp stats` summary from stderr, align profile and existing flattened XDG paths, pin sync children to the viewer's resolved targets, and correct the CLI install hint to `@oh-my-pi/pi-coding-agent`.
 
 ## v0.2.1, 2026-09-25
 

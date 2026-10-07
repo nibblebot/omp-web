@@ -1,10 +1,8 @@
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { discoverAuthStorage, ModelRegistry, Settings } from "@oh-my-pi/pi-coding-agent";
 import { daemonClientForProject } from "@oh-my-pi/pi-coding-agent/launch/client";
-import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
@@ -45,6 +43,7 @@ import { createCollabSession } from "./collab-session";
 import { createDaemonBroker } from "./daemon-broker";
 import { createWebMethods } from "./methods";
 import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
+import { loginWithCallbacks } from "./login";
 import {
 	broadcast,
 	broadcastAnswer,
@@ -425,72 +424,6 @@ async function openEventsResponse(req: Request): Promise<Response> {
 	});
 }
 
-// Login callbacks are streaming (open_url + manual code input), so login is
-// special-cased in dispatch. Pending code inputs are keyed per connection
-// (the streams live at dispatch time) and are rejected on login settle, on
-// every owning stream closing, on the attached session's close, and on shutdown.
-let nextLoginRequestId = 1;
-
-async function loginWithCallbacks(entry: SessionEntry, providerId: string): Promise<unknown> {
-	const knownProvider = getOAuthProviders().find((p) => p.id === providerId);
-	if (!knownProvider) throw new Error(`Unknown OAuth provider: ${providerId}`);
-	// Track whether onAuth has fired. Providers that require interactive input
-	// before a browser URL cannot be satisfied by the web UI; after onAuth,
-	// prompt input is the pasted OAuth code/redirect URL path.
-	let authEmitted = false;
-	// The streams live at dispatch time own this login's code prompts; when
-	// every one closes, the prompt dies with them.
-	const promptStreams = new Set(streams);
-	try {
-		await authStorage.login(providerId as Parameters<AuthStorage["login"]>[0], {
-			onAuth: (info) => {
-				authEmitted = true;
-				broadcastAnswer({
-					type: "login_url",
-					url: info.url,
-					launchUrl: info.launchUrl,
-					instructions: info.instructions,
-				});
-			},
-			onProgress: (message) => notifyEvent(entry, message),
-			onPrompt: (prompt) => {
-				if (!authEmitted) {
-					return Promise.reject(
-						new Error(
-							`Provider '${providerId}' requires interactive prompts ` +
-								"which are not supported in the web UI. Use the terminal UI to log in.",
-						),
-					);
-				}
-				const requestId = `lr${nextLoginRequestId++}`;
-				const { promise, resolve, reject } = Promise.withResolvers<string>();
-				pendingCodeInputs.set(requestId, { streams: promptStreams, resolve, reject });
-				broadcastAnswer({
-					type: "login_code_request",
-					requestId,
-					title: prompt.message,
-					placeholder: prompt.placeholder,
-				});
-				return promise;
-			},
-		});
-		// Provider-scoped online refresh so the just-persisted credential
-		// re-runs discovery instead of reusing a fresh authoritative cache row.
-		await modelRegistry.refreshProvider(providerId, "online");
-		await daemonBroker.broadcastAvailableCommands(entry);
-		return { providerId };
-	} finally {
-		// Reject this call's leftover code inputs (already-resolved entries
-		// were deleted by the login_code handler, so only stragglers remain).
-		for (const [id, p] of pendingCodeInputs) {
-			if (p.streams === promptStreams) {
-				p.reject(new Error("login ended"));
-				pendingCodeInputs.delete(id);
-			}
-		}
-	}
-}
-
 const LIST_FILES_SKIP: Record<string, true> = { ".git": true, node_modules: true };
 const LIST_FILES_CEILING = 10_000;
 
@@ -583,7 +516,17 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				if (!method) throw new Error(`Unknown method: ${cmd.method}`);
 				const data =
 					cmd.method === "login"
-						? await loginWithCallbacks(entry, cmd.args?.[0] as string)
+						? await loginWithCallbacks(
+								entry,
+								cmd.args?.[0] as string,
+								authStorage,
+								async (providerId) => {
+									// Online refresh re-runs discovery for the stored credential's
+									// provider (device-login aliases can store under another id).
+									await modelRegistry.refreshProvider(providerId, "online");
+									await daemonBroker.broadcastAvailableCommands(entry);
+								},
+							)
 						: await method(entry, cmd.args ?? [], cmd.streamId);
 				// Post-mutation resync is best-effort: the mutation already
 				// succeeded, so a resync failure must not fail the call.
@@ -1242,6 +1185,15 @@ bootEntry = bootSession;
 // Lock the live session file (no-op when it duplicates the --resume lock, or
 // when the session is in-memory and sessionFile is undefined).
 acquireSessionLock(bootSession.session.sessionFile);
+// The SDK can fork a contested journal to a fresh sibling without ending the
+// agent turn. Keep host locks and fleet's mirrored sessionFile in step with it.
+bootSession.session.sessionManager.onPersistenceNotice((notice) => {
+	acquireSessionLock(notice.to);
+	notifyEvent(bootSession, `Session moved to ${notice.to} (${notice.reason})`, "warning");
+	void daemonBroker.broadcastState(bootSession).catch((error) => {
+		console.error("Failed to broadcast session persistence relocation:", error);
+	});
+});
 if (config.resume) {
 	try {
 		const ok = await bootEntry.session.switchSession(config.resume);
@@ -1363,7 +1315,6 @@ if (config.callbackUrl !== undefined) {
 			flushAllWriters({
 				entry: bootEntry!,
 				registry: bootEntry!.agentRegistry,
-				mainSessionFile: bootEntry!.session.sessionFile ?? null,
 			}),
 		finalizeTailer: async () => {
 			if (logTailer === null) {

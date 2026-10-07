@@ -8,6 +8,8 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { checkOmpSetup, ompStatusLines, resolveOmpBinary } from "../omp-check";
 
@@ -74,5 +76,16 @@ describe("checkOmpSetup (sandboxed empty agent dir)", () => {
 		// model is the deterministic half of this fixture.
 		expect(status.defaultModel).toBeNull();
 		expect(typeof status.ompInstalled).toBe("boolean");
+	});
+
+	test("reads the configured default role from the isolated read-only settings", async () => {
+		const dir = tempDir("omp-check-configured-");
+		writeFileSync(
+			join(dir, "config.yml"),
+			"modelRoles:\n  default: anthropic/claude-sonnet-4-6:high\n",
+		);
+		const status = await checkOmpSetup(dir);
+		expect(status.error).toBeNull();
+		expect(status.defaultModel).toBe("anthropic/claude-sonnet-4-6:high");
 	});
 });

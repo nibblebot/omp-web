@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { Settings, settings } from "@oh-my-pi/pi-coding-agent";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
+import { cfgModelRoles, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModelRoleCatalog } from "../daemon-broker";
 
@@ -18,8 +19,8 @@ const STUB_MODELS = [
 beforeEach(() => {
 	// Reset the layers the builder reads: global roles/tags wholesale, plus
 	// any project-layer roles installed by the source-mapping test.
-	settings.set("modelRoles", {});
-	settings.set("modelTags", {});
+	cfgModelRoles.set(settings, {});
+	cfgModelTags.set(settings, {});
 	for (const role of ["smol", "slow", "vision", "writer", "default"]) {
 		settings.clearProjectModelRole(role);
 	}
@@ -55,7 +56,7 @@ describe("buildModelRoleCatalog", () => {
 	});
 
 	test("surfaces the hidden flag from modelTags", () => {
-		settings.set("modelTags", { smol: { name: "Fast", hidden: true } });
+		cfgModelTags.set(settings, { smol: { name: "Fast", hidden: true } });
 		const entries = catalog()!;
 		expect(entries.find((entry) => entry.role === "smol")).toMatchObject({
 			name: "Fast",
@@ -66,7 +67,7 @@ describe("buildModelRoleCatalog", () => {
 
 	test("keeps hidden custom roles in the catalog with their flag", () => {
 		settings.setModelRole("writer", "openai/gpt-4o");
-		settings.set("modelTags", { writer: { name: "Writer", hidden: true } });
+		cfgModelTags.set(settings, { writer: { name: "Writer", hidden: true } });
 		expect(catalog()!.find((entry) => entry.role === "writer")).toMatchObject({
 			role: "writer",
 			name: "Writer",

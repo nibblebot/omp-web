@@ -563,6 +563,21 @@ describe("CollabHostAdapter", () => {
 		expect(ev.event.type).toBe("notice");
 	});
 
+	test("advisor footer changes resync collab state without replicating unsupported event kinds", async () => {
+		const guest = await connectGuest(adapter.status!.link, "Advisor observer");
+		guestSockets.push(guest.socket);
+		await waitForWelcome(guest);
+		// Wait for the join snapshot before isolating the advisor transition.
+		await waitFor(() => guest.frames.find((frame) => frame.t === "state"));
+		guest.frames.length = 0;
+		port.streaming = true;
+		port.emitEvent({ type: "advisor_cost_changed" });
+		const snapshot = await waitFor(() => guest.frames.find((frame) => frame.t === "state"));
+		expect(snapshot.t).toBe("state");
+		if (snapshot.t === "state") expect(snapshot.state.isStreaming).toBe(true);
+		expect(guest.frames.some((frame) => frame.t === "event")).toBe(false);
+	});
+
 	test("bus events: exactly one frame per guest per event, both task channels delivered", async () => {
 		const guest = await connectGuest(adapter.status!.link, "Eve");
 		guestSockets.push(guest.socket);

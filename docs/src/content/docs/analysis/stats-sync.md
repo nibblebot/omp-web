@@ -12,7 +12,7 @@ A session that exists on disk but has no rows in `stats.db` is marked `not synce
 
 ## What a sync does
 
-A sync runs `omp stats --summary` on the machine that runs the fleet, then re-reads the database. The server spawns the command, waits for it, and reports what it processed:
+A sync runs `omp stats --summary` on the machine that runs the fleet, then re-reads the database. The server spawns the command, waits for it, and reads its summary from stderr to report what it processed:
 
 - `Synced N entries from M files` is the success message shown in the Overview toolbar.
 - The transcripts list, the database health, and the open session's analytics all refresh after a successful sync, so a session that was `not synced` becomes fully indexed without a reload.
@@ -54,8 +54,8 @@ When the state is anything but `ok`, a banner appears over the detail pane:
 | `stats.db could not be opened at <path>` | The file exists but cannot be read, for example a permissions or file-format problem. |
 | `sync already in progress` | Another sync is running in the same fleet process. Wait for it to finish. |
 | `sync timed out` | The command exceeded its ten-minute limit and was killed. Check the host and the size of the transcript store, then retry. |
-| `omp stats failed` | The command exited with a nonzero status. The server records the tail of its output for inspection; check that the `omp` CLI works on the fleet host. |
-| `omp binary not found` | The `omp` CLI is not on the server's `PATH`. Install it with `npm i -g @oh-my-pi/omp-stats` or add it to `PATH`. |
+| `omp stats failed` | The command exited with a nonzero status. The response includes the last 500 characters of stderr as `detail`; check that the `omp` CLI works on the fleet host. |
+| `omp binary not found` | The `omp` CLI is not on the server's `PATH`. Install it with `bun install -g @oh-my-pi/pi-coding-agent` or add it to `PATH`. |
 | The database lies outside the config root | The server cannot point the CLI at a database outside your home directory, so the sync is refused with an explanation. Move the database under your home directory or stop overriding the config directory. |
 
 Sync is also the documented first response to the stale-statistics symptom in [Troubleshooting](/operations/troubleshooting/).
@@ -65,6 +65,12 @@ Sync is also the documented first response to the stale-statistics symptom in [T
 - Reads are read-only. If the database cannot be opened read-only, for example when its write-ahead log sidecars are missing, the server serves a temporary copy instead of touching the original, and its health report notes that the current view comes from a copy.
 - Sync is the only operation that changes the database, and it does so by running the `omp stats` command, exactly as if you ran it yourself.
 - The database and sessions locations come from the `omp` configuration, and a sync points the CLI at the same files the browser reads. The full precedence is owned by [Environment variables and precedence](/reference/environment/) and the locations themselves by [Files and directories](/reference/files/).
+
+The viewer selects `OMP_PROFILE` before the compatibility alias `PI_PROFILE`, trims the selected value, and treats an empty value or `default` as the default profile. Its config root is the literal `PI_CONFIG_DIR` value, or `~/.omp`; a named profile appends `profiles/<name>`. The database normally lives at `<config root>/stats.db`. Default-profile sessions honor `PI_CODING_AGENT_DIR`; named-profile sessions use `<config root>/agent/sessions`.
+
+On Linux and macOS, an existing `$XDG_DATA_HOME/omp` root, or `$XDG_DATA_HOME/omp/profiles/<name>` for a named profile, takes over only when the agent directory is unset or is exactly `<config root>/agent`. The named profile's own root must exist. The migrated layout is flattened: `stats.db` and `sessions/` are directly under that XDG root, not under an extra `agent/` directory.
+
+The sync child always gets the viewer's absolute sessions parent as `PI_CODING_AGENT_DIR`. It clears `OMP_PROFILE`, `PI_PROFILE`, and `XDG_DATA_HOME`, and translates the database directory into the CLI's home-relative `PI_CONFIG_DIR` name (or removes it for `~/.omp/stats.db`). This keeps inherited profiles or XDG roots from redirecting the command. A database outside the home directory remains unsupported for sync, even though the viewer can read it.
 
 ## Related
 
