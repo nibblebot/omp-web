@@ -447,6 +447,27 @@ button.picker-row {
 	margin-top: var(--space-5);
 }
 
+/* --- SessionModal (/resume): fixed width so rows don't size the dialog;
+   one-line rows with the title truncating before the right-aligned meta. --- */
+.resume-modal {
+	width: min(600px, 92vw);
+}
+.resume-modal-row {
+	align-items: center;
+}
+.resume-modal-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.resume-modal-row .picker-chip {
+	flex: none;
+}
+.resume-modal-row .picker-meta {
+	flex: none;
+}
+
 /* --- SessionPicker gate mode ("New session" top item) --- */
 .session-new {
 	align-items: center;

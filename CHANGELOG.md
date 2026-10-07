@@ -26,6 +26,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 
 ### Fixes
 - Slash/`@` autocomplete: the popup renders every match (it rendered only the first twelve, so the mouse wheel could not reach later commands, and arrowing past row twelve appended rows without scrolling, hiding the selection); keyboard moves scroll the selection into view, and pointer selection follows mouse movement only, so wheel-scrolling rows under a still pointer no longer changes the selection.
+- `/resume` dialog: one titled header instead of "History" plus a "Resume from disk" label, fixed-width one-line rows whose titles truncate before a right-aligned `N msgs · 2h ago` column, a `current` marker on the attached session, and the always-identical project cwd and full timestamp moved to the row tooltip (the filter now matches titles only).
 
 ### Maintenance & other
 - Move application source to `apps/{cli,fleet,session,web}`, shared libraries to `lib/*`, cross-app E2E to `e2e/`, and tooling tests to `scripts/test/`; enforce the closed `lib/` import boundary in lint.

@@ -1,5 +1,6 @@
 import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
 import { call, listSessions, setState, state } from "../../state";
+import { formatTimeAgo } from "../../text/time-ago";
 import { Modal } from "../shared/Modal";
 import { PickerRow } from "../shared/PickerRow";
 import type { SessionListEntry } from "#lib/wire/protocol";
@@ -44,16 +45,14 @@ export const SessionModal: Component<{ onClose: () => void }> = (props) => {
 			.catch((err) => setError(String(err)));
 	});
 
+	// list_sessions is scoped to the daemon's project, so every row shares one
+	// cwd: filter on the title/id only, and show the cwd in the row tooltip.
 	const filtered = () => {
 		const q = filter().toLowerCase();
 		const list = gateMode()
 			? [...sessions()].sort((a, b) => b.modifiedAt - a.modifiedAt)
 			: sessions();
-		return q
-			? list.filter(
-					(s) => (s.name ?? s.id).toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q),
-				)
-			: list;
+		return q ? list.filter((s) => (s.name ?? s.id).toLowerCase().includes(q)) : list;
 	};
 
 	const close = () => {
@@ -82,14 +81,15 @@ export const SessionModal: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	return (
-		<Modal title="History" onClose={close}>
-			<div class="picker-group-name">
-				{gateMode() ? "New session or resume" : "Resume from disk"}
-			</div>
+		<Modal
+			title={gateMode() ? "New session or resume" : "Resume session"}
+			class="resume-modal"
+			onClose={close}
+		>
 			<input
 				class="picker-filter"
 				aria-label="Filter sessions"
-				placeholder="Filter by name or cwd…"
+				placeholder="Filter sessions…"
 				value={filter()}
 				onInput={(e) => setFilter(e.currentTarget.value)}
 			/>
@@ -108,14 +108,18 @@ export const SessionModal: Component<{ onClose: () => void }> = (props) => {
 				<For each={filtered()}>
 					{(s, i) => (
 						<PickerRow
-							class="picker-row"
+							class="picker-row resume-modal-row"
 							classList={{ active: gateMode() && i() === 0 }}
 							onClick={() => choose(s)}
+							title={`${s.name ?? s.id}\n${s.cwd || "(no cwd)"}\n${new Date(s.modifiedAt).toLocaleString()}`}
 						>
-							<span class="picker-label">{s.name ?? s.id.slice(0, 8)}</span>
-							<span class="picker-detail">
-								{s.cwd || "(no cwd)"} · {s.messageCount} msgs ·{" "}
-								{new Date(s.modifiedAt).toLocaleString()}
+							<span class="picker-label resume-modal-name">{s.name ?? s.id.slice(0, 8)}</span>
+							<Show when={s.path === state.sessionFile}>
+								<span class="picker-chip">current</span>
+							</Show>
+							<span class="picker-meta">
+								{s.messageCount} {s.messageCount === 1 ? "msg" : "msgs"} ·{" "}
+								{formatTimeAgo(s.modifiedAt)}
 							</span>
 						</PickerRow>
 					)}

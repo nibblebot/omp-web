@@ -28,6 +28,7 @@ import {
 	state,
 	stopDaemonById,
 } from "../../state";
+import { formatTimeAgo } from "../../text/time-ago";
 import { ConfirmButton } from "../shared/ConfirmButton";
 import { KebabMenu } from "../shared/KebabMenu";
 import { useClickableRow } from "../shared/PickerRow";
@@ -682,15 +683,6 @@ export const DaemonRow: Component<{
 // rows wake with spawn_resume carrying the file, ready rows attach (if not
 // already) and switchSession to it.
 // ---------------------------------------------------------------------------
-
-/** Relative time ("2m ago") for the dropdown rows, SessionModal-style. */
-function formatTimeAgo(ts: number): string {
-	const diff = Date.now() - ts;
-	if (diff < 60_000) return "just now";
-	if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-	if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-	return new Date(ts).toLocaleDateString();
-}
 
 const DaemonSessionsDropdown: Component<{
 	daemon: RosterEntry;
