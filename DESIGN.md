@@ -176,7 +176,7 @@ The palette is a night-shift console: cool near-black surfaces, softened-white t
 - **Breakdown ramp** (`#6fa8dc`, `#57b8c2`, `#9a8fd8`, `#d88a6f`, `#cfa05a`): context-usage data-viz only; deliberately disjoint from status hues so a chart never reads as an alert.
 
 ### Themes
-Six palettes share one semantic contract (32 color slots) and one set of scales; themes override colors only, never radius/spacing/type. The default `:root` is the dark console above; `light`, `catppuccin-mocha`, `catppuccin-latte` restate it in hex/rgba; `omp-dark` / `omp-light` restate it in OKLCH with a magenta signal (`oklch(70% 0.24 340)` dark, `oklch(44% 0.18 348)` light). Per-theme values live in `.impeccable/design.json` → `extensions.themes`. `index.html` resolves `data-theme` before first paint (persisted choice → `prefers-color-scheme` → dark).
+Six palettes share one semantic contract (32 color slots) and one set of scales; themes override colors only, never radius/spacing/type. The default `:root` is the dark console above; `light`, `catppuccin-mocha`, `catppuccin-latte` restate it in hex/rgba; `omp-dark` / `omp-light` restate it in OKLCH with a magenta signal (`oklch(70% 0.24 340)` dark, `oklch(44% 0.18 348)` light). Per-theme values live in `.impeccable/design.json` → `extensions.themes`. `apps/web/index.html` resolves `data-theme` before first paint (persisted choice → `prefers-color-scheme` → dark).
 
 ### Named Rules
 **The One Voice Rule.** The accent appears on ≤10% of any screen: focus rings, the active selection, one primary action. If everything signals, nothing does.

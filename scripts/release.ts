@@ -21,7 +21,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import * as readline from "node:readline/promises";
-import { compareVersions, sha256Of } from "../cli/update";
+import { compareVersions, sha256Of } from "../apps/cli/update";
 import { summarizeChangelog } from "./release-llm";
 
 export const GITHUB_REPO = "nibblebot/omp-web";
@@ -32,7 +32,7 @@ export const ARTIFACT_DIR = "dist-release/";
 
 /**
  * Release gate: the exact argv lists run in order after the version is
- * picked and before anything is generated. `test-onboard` is the offline
+ * picked and before anything is generated. `e2e/onboarding.ts` is the offline
  * end-to-end walk (pack, pinned install, update round-trip). The dry-run
  * plan derives its gate lines from this list, so the plan, the loop and the
  * docs scan can never disagree.
@@ -42,7 +42,7 @@ export const GATE_COMMANDS: readonly (readonly string[])[] = [
 	["bun", "run", "format:check"],
 	["bun", "run", "build:web"],
 	["bun", "run", "test"],
-	["bun", "scripts/test-onboard.ts"],
+	["bun", "e2e/onboarding.ts"],
 ];
 
 /** Dry-run line for the packed-artifact smoke (see smokePackedTarball). */
@@ -945,7 +945,7 @@ async function release(argv: string[]): Promise<void> {
 
 	// 4. Gate (skipped in --dry-run; dry-run only previews the plan).
 	// build:web runs before test as a fast sanity gate that the UI bundle
-	// still compiles; the suite itself needs no built dist/. test-onboard
+	// still compiles; the suite itself needs no built dist/. e2e/onboarding.ts
 	// runs last: the offline end-to-end walk of pack + pinned install.
 	if (!dryRun) {
 		for (const cmd of GATE_COMMANDS) {

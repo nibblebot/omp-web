@@ -27,7 +27,7 @@ Session daemons are disposable processes; the durable truth is the session `.jso
 
 ## Clone workspaces
 
-Beyond local worktrees, omp-web can create **clone workspaces** managed by an external provider (sandboxed `bwrap`, or Kubernetes) declared in `~/.omp-web/config.json` under `providerProfiles`. A clone workspace runs in its own volume (`.checkout/` working clone with an independent object store, `.home/` private writable home whose `agent/sessions` tree holds the transcripts) with the session daemon inside, dialing the fleet over the outbound callback pair. Profiles carry operator-declared limits and secret references (names only cross trust boundaries). `omp-web preflight --profile <id>` validates a profile's executable, tools, secret references, and callback reachability before workspaces use it. The required streaming gateway/proxy and cluster prerequisites are operator setup, not something omp-web provisions; see [`docs/architecture.md`](docs/architecture.md) and [`runtime/image/README.md`](runtime/image/README.md).
+Beyond local worktrees, omp-web can create **clone workspaces** managed by an external provider (sandboxed `bwrap`, or Kubernetes) declared in `~/.omp-web/config.json` under `providerProfiles`. A clone workspace runs in its own volume (`.checkout/` working clone with an independent object store, `.home/` private writable home whose `agent/sessions` tree holds the transcripts) with the session daemon inside, dialing the fleet over the outbound callback pair. Profiles carry operator-declared limits and secret references (names only cross trust boundaries). `omp-web preflight --profile <id>` validates a profile's executable, tools, secret references, and callback reachability before workspaces use it. The required streaming gateway/proxy and cluster prerequisites are operator setup, not something omp-web provisions; see [`docs/architecture.md`](docs/architecture.md) and [`apps/session/image-README.md`](apps/session/image-README.md).
 
 Clone workspace notes:
 
@@ -117,6 +117,8 @@ omp-web update --version x.y.z  # pin a specific release
 bun install
 bun dev      # vite (HMR) + fleet, ports chosen per run
 ```
+
+Source imports into `lib/` use extensionless `#lib/<path below lib/>`, such as `#lib/wire/protocol`, through root `package.json`'s imports mapping. Keep local imports such as `./helpers` relative. Shared libraries are closed: their repository imports stay inside `lib/`, with no library cycles, enforced by `bun run lint`.
 
 In a linked worktree, `bun dev` forks the dev fleet state from the main worktree (copy-once, like a git fork), so the worktree's roster boots with the main worktree's sessions/projects instead of empty; later runs keep the diverged fork. `--state-from <path>` forks from an explicit state file or directory, and `--fresh` skips seeding and starts on a clean state. Dev fleet state is scoped per worktree outside the repo at `<data home>/dev-fleets/<slug>-<hash8>/` (slug is the worktree basename, `hash8` the sha-256 prefix of its realpath), so several dev stacks and your real fleet coexist. The stack also adopts a running auth broker, or spawns `omp auth-broker serve` when the `omp` CLI is present, exporting `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` for clone `secretRefs` `env:` references; without a broker the stack only warns and clones run unauthenticated.
 

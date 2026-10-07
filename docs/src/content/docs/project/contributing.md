@@ -40,10 +40,10 @@ bun run check:types           # tsgo -p tsconfig.json --noEmit (tsgo, not tsc)
 bun run format:check          # oxfmt --check
 bun run build:web             # vite build; fast sanity check that the UI bundle still compiles
 bun run test                  # bun test suite via scripts/test.ts
-bun scripts/test-onboard.ts   # offline distribution and onboarding end-to-end run
+bun e2e/onboarding.ts         # offline distribution and onboarding end-to-end run
 ```
 
-A pull request that passes all five locally leaves the release run nothing to fix. `bun run lint` (oxlint) and `bun run format` (oxfmt, writes TS/TSX in place) are also available; warnings alone do not fail the lint run. There is no product CI, so these local checks are the quality bar.
+A pull request that passes all five locally leaves the release run nothing to fix. `bun run lint` (the `lib/` boundary check plus oxlint; oxlint warnings alone do not fail the run) and `bun run format` (oxfmt, writes TS/TSX in place) are also available. There is no product CI, so these local checks are the quality bar.
 
 Before a release, or when a change touches `package.json` or the docs, run `bun scripts/preflight.ts` for an advisory drift report (exit 0 clean, exit 1 on errors, exit 1 on warnings too under `--strict`). The finding list is on the [Release process](/project/release/) page.
 
@@ -51,7 +51,7 @@ Testing conventions that matter before submitting:
 
 - New behavior needs tests. A bug fix should reproduce the bug first, then confirm the reproduction no longer triggers.
 - The heavy suites spawn real processes. Write the run to a log file instead of piping it to `head` or `tail`, which hides failing tests above the summary: `bun run test > /tmp/omp-test.log 2>&1`.
-- Run a single file with `bun scripts/test.ts <path>`; extra arguments are forwarded to `bun test`. Filesystem-touching tests create scratch directories with `tempDir()` from `shared/testkit.ts`.
+- Run a single file with `bun scripts/test.ts <path>`; extra arguments are forwarded to `bun test`. Filesystem-touching tests create scratch directories with `tempDir()` from `lib/testkit/temp-dir.testkit.ts`.
 - Tests must not need a live model or API. Do not suppress warnings or errors to make the suite green.
 
 ## Code style
@@ -67,7 +67,7 @@ Cutting a release is a maintainer operation. The current procedure lives in [`do
 
 ## Wire protocol caution
 
-The wire contract in `shared/protocol.ts` is **additive-only**. Adding a `WebMethodName`, `ClientCommand` variant, or `ServerFrame` variant is fine. Changing or removing a shape is a breaking change: it requires bumping `OMP_PROTO` and updating the proto gates in `fleet/connector.ts` (hello gate) and `fleet/edge.ts` (pipe gate) so old and new peers fail loudly instead of misparsing.
+The wire contract in `lib/wire/protocol.ts` is **additive-only**. Adding a `WebMethodName`, `ClientCommand` variant, or `ServerFrame` variant is fine. Changing or removing a shape is a breaking change: it requires bumping `OMP_PROTO` and updating the proto gates in `apps/fleet/connector.ts` (hello gate) and `apps/fleet/edge.ts` (pipe gate) so old and new peers fail loudly instead of misparsing.
 
 Two session daemon rules follow from the contract: stdout is reserved for `OMP_SESSION|` contract lines because spawners parse stdout, and all logs go to stderr.
 

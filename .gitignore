@@ -4,6 +4,5 @@ dist/
 dist-bundle/
 *.tgz
 omp-session-*.html
-test/.fixture/
-.bench/
+apps/fleet/test/.fixture/
 dist-release/
