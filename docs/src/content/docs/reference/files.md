@@ -197,7 +197,7 @@ Transcripts are Oh My Pi agent data, written by the agent runtime inside a sessi
 
 - The project directory name encodes the session working directory: relative to your home directory it is `-<path with separators as dashes>`, under the system temp root it is `-tmp-<path>`, and outside both it is `--<absolute path with separators as dashes>--`.
 - A transcript opens with a fixed title slot line and a session header; message entries follow. Persistence is lazy, so a fresh session that has produced no assistant output may have no file on disk yet.
-- The session daemon locks every transcript it opens, including a `--resume` target, for its whole lifetime. A second session daemon aimed at the same transcript exits 1 with `omp-session: session file <file> is locked by another omp-session (pid <pid>)`. A clean shutdown removes the lock file, and a lock left behind by a dead process is broken automatically on the next start.
+- The session daemon locks every transcript it opens, including a `--resume` target, for its whole lifetime. A second session daemon aimed at the same transcript exits 77 with `omp-session: session file <file> is locked by another omp-session (pid <pid>); …`. A clean shutdown removes the lock file, and a lock left behind by a dead process is broken automatically on the next start.
 - Session daemons spawned by the fleet inherit the fleet process environment, so they all resolve the same sessions directory unless the fleet itself is started with a different environment or a custom template points a session daemon elsewhere.
 - Deleting a transcript permanently deletes that conversation. The roster's recent-sessions dropdown and the transcripts browser read the sessions tree from disk, so a deleted transcript stops being resumable.
 

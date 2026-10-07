@@ -21,7 +21,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Server } from "bun";
-import { OMP_PROTO, SSE_EVENT_NAME } from "#lib/wire/protocol";
+import { OMP_PROTO, OMP_SESSION_EXIT_SESSION_LOCKED, SSE_EVENT_NAME } from "#lib/wire/protocol";
 import { encodeSseEvent } from "#lib/wire/sse";
 import type { FleetConfig } from "../config";
 import { DaemonConnector } from "../connector";
@@ -191,14 +191,20 @@ async function loadedRegistry(): Promise<Registry> {
 /**
  * Write a fake child script. It appends "$@" (the template-filled token /
  * labels / resume args) to argsFile, optionally records its pid, prints
- * stderr lines, then either exits 1 (fail) or prints the OMP_SESSION| listening
- * line for `port` and idles.
+ * stderr lines, then either exits 1 (fail), exits with `exitBeforeListening`
+ * (a daemon refusing at boot before bind, like a --resume session-lock
+ * conflict), or prints the OMP_SESSION| listening line for `port` and idles.
  */
 function writeChildScript(
 	dir: string,
 	port: number,
 	argsFile: string,
-	opts: { fail?: boolean; pidFile?: string; stderrLines?: string[] } = {},
+	opts: {
+		fail?: boolean;
+		pidFile?: string;
+		stderrLines?: string[];
+		exitBeforeListening?: number;
+	} = {},
 ): string {
 	const script = join(dir, "child.sh");
 	const lines = ["#!/bin/sh", 'trap "exit 0" TERM INT', `echo "$@" >> ${argsFile}`];
@@ -206,6 +212,8 @@ function writeChildScript(
 	for (const line of opts.stderrLines ?? []) lines.push(`echo ${JSON.stringify(line)} >&2`);
 	if (opts.fail) {
 		lines.push("exit 1");
+	} else if (opts.exitBeforeListening !== undefined) {
+		lines.push(`exit ${opts.exitBeforeListening}`);
 	} else {
 		lines.push(
 			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${port},"url":"ws://127.0.0.1:${port}"}'`,
@@ -891,6 +899,46 @@ describe("SpawnSupervisor", () => {
 		expect(updated.error).toContain("exited");
 		// Initial launch + 5 restarts; the 6th exit exceeds the consecutive cap.
 		expect(readFileSync(argsFile, "utf8").trim().split("\n")).toHaveLength(6);
+	}, 20_000);
+
+	test("a session-lock exit never restarts: the entry sleeps, waiting attaches get the daemon's reason, a late dial failure cannot wake it", async () => {
+		const projectDir = tmpPath("omp-session-sup-locked-");
+		const argsFile = join(projectDir, "args.txt");
+		const reason =
+			"session file /srv/proj/sess.jsonl is locked by another omp-session (pid 4242); it is already open elsewhere (another omp-web or dev fleet), close it there and retry";
+		const script = writeChildScript(projectDir, 1, argsFile, {
+			stderrLines: ["booting", `omp-session: ${reason}`],
+			exitBeforeListening: OMP_SESSION_EXIT_SESSION_LOCKED,
+		});
+		const registry = await loadedRegistry();
+		// Wired exactly as server.ts wires it: dial failures go through the
+		// supervisor's respawn gate.
+		let supervisor: SpawnSupervisor;
+		const connector = new DaemonConnector(
+			registry,
+			{ onDialFailed: (entry) => void supervisor.respawnAfterDialFailure(entry)?.catch(() => {}) },
+			{ backoffMinMs: 10, backoffMaxMs: 50 },
+		);
+		liveConnectors.push(connector);
+		const events: Array<{ level: string; message: string }> = [];
+		supervisor = makeSupervisor(registry, connector, makeConfig(script), {
+			restartMax: 5,
+			backoffMinMs: 20,
+			backoffMaxMs: 50,
+			onEvent: (level, message) => events.push({ level, message }),
+		});
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		await expect(connector.waitReady(entry.daemonId, 10_000)).rejects.toThrow(reason);
+		expect(registry.get(entry.daemonId)?.status).toBe("asleep");
+		expect(events.some((e) => e.level === "error" && e.message === reason)).toBe(true);
+		// A restart would have been scheduled (and announced) synchronously in
+		// the exit handler, before the waiter could be rejected.
+		expect(events.some((e) => /restart \d+\//.test(e.message))).toBe(false);
+		// A dial failure arriving after the lock exit (a daemon that bound
+		// before locking its live file) must not relaunch the child.
+		expect(supervisor.respawnAfterDialFailure(registry.get(entry.daemonId)!)).toBeUndefined();
+		expect(readFileSync(argsFile, "utf8").trim().split("\n")).toHaveLength(1);
 	}, 20_000);
 
 	test("#22 crash → ready → crash → ready never errors: the budget resets on the connector ready transition", async () => {

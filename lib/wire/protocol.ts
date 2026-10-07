@@ -258,6 +258,14 @@ export const COMMAND_DEDUP_ID_CAP = 4_096;
 export const OMP_SESSION_PREFIX = "OMP_SESSION|";
 
 /**
+ * omp-session exit code when its session file is locked by another live
+ * omp-session (e.g. the same session open in a second fleet). Deterministic:
+ * a spawner must not retry it; the daemon's last stderr line names the file
+ * and the holder. Same value as the fleet's own state-lock conflict exit.
+ */
+export const OMP_SESSION_EXIT_SESSION_LOCKED = 77;
+
+/**
  * The `OMP_SESSION|` stdout contract lines (R6b). omp-session prints
  * `listening` immediately after bind, before session creation; a remote
  * wrapper MAY print `endpoint` when the reachable address differs from the

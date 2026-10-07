@@ -10,8 +10,12 @@
  *
  * Failure handling: an unexpected child exit restarts the session with a
  * FRESH token per attempt, bounded backoff 1s→30s jittered, at most
- * restartMax (default 5) restarts, then status "error". A session that had
- * reached "ready" and whose socket was dropped (connector idle policy)
+ * restartMax (default 5) restarts, then status "error". The exception is a
+ * session-lock conflict (exit OMP_SESSION_EXIT_SESSION_LOCKED: the session
+ * is open in another omp-session, e.g. a second fleet): deterministic, so no
+ * restart; the entry returns to "asleep" (wakeable once the holder closes)
+ * and pending attaches are rejected with the daemon's last stderr line. A
+ * session that had reached "ready" and whose socket was dropped (connector idle policy)
  * exiting cleanly goes "asleep" instead of restarting. respawn()/stop()
  * are the intentional paths: respawn uses `{resume} = "--resume
  * <lastSessionFile>"` when the session has one (R3), stop() SIGTERMs,
@@ -29,7 +33,7 @@
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import type { Subprocess } from "bun";
-import type { StdoutContractLine } from "#lib/wire/protocol";
+import { OMP_SESSION_EXIT_SESSION_LOCKED, type StdoutContractLine } from "#lib/wire/protocol";
 import type { FleetConfig, SpawnTemplate } from "./config";
 import {
 	fillTemplate,
@@ -62,6 +66,8 @@ interface ChildState {
 	respawnInFlight: Promise<void> | null;
 	exitHandled: boolean;
 	stderrRing: string;
+	/** Settles when the current child's stderr pipe is drained. */
+	stderrDrained?: Promise<void>;
 }
 
 const DEFAULT_RESTART_MAX = 5;
@@ -280,6 +286,20 @@ export class SpawnSupervisor {
 		// Give the fresh entry its branch/git before the next poll tick.
 		this.probeGitState(entry.daemonId);
 		return entry;
+	}
+
+	/**
+	 * The connector's dial-failure hook (wired by server.ts): respawn a
+	 * spawned child whose transport was refused. An asleep entry is dormant
+	 * on purpose (stopped, idled out, or put back to sleep after a
+	 * session-lock exit), so a late dial failure from its dead child must
+	 * never wake it: that would relaunch a child that locks out again, every
+	 * cycle. Returns undefined when nothing was respawned.
+	 */
+	respawnAfterDialFailure(entry: RegistryEntry): Promise<void> | undefined {
+		const current = this.#registry.get(entry.daemonId) ?? entry;
+		if (current.mode !== "spawned" || current.status === "asleep") return undefined;
+		return this.respawn(current);
 	}
 
 	/**
@@ -660,7 +680,7 @@ export class SpawnSupervisor {
 			this.#onEvent?.("info", `endpoint ${resolved.url} pid ${child.pid}`, daemonId);
 			this.#connector.connect(daemonId);
 		});
-		void readChunks(child.stderr, (chunk) => {
+		state.stderrDrained = readChunks(child.stderr, (chunk) => {
 			state.stderrRing = (state.stderrRing + chunk).slice(-this.#stderrRingBytes);
 		});
 		// Exit handling via `exited` (not the onExit spawn option): state.child
@@ -713,6 +733,14 @@ export class SpawnSupervisor {
 			this.#onEvent?.("info", `${exit} (clone workspace; provider-managed)`, state.daemonId);
 			return;
 		}
+		if (exitCode === OMP_SESSION_EXIT_SESSION_LOCKED) {
+			// Synchronously dormant (before any queued dial-failure respawn can
+			// observe a live status); the reason follows once stderr drains.
+			this.#registry.setStatus(state.daemonId, "asleep");
+			this.#connector.disconnect(state.daemonId);
+			void this.#reportSessionLocked(state);
+			return;
+		}
 		if (
 			entry.status === "ready" &&
 			!this.#connector.isConnected(state.daemonId) &&
@@ -759,6 +787,26 @@ export class SpawnSupervisor {
 			`${exit}, restart ${attempt + 1}/${this.#restartMax} in ${delay}ms`,
 			state.daemonId,
 		);
+	}
+
+	/**
+	 * Session-lock conflict, after the entry is already asleep: wait (bounded)
+	 * for the child's stderr to drain so its reason line is in the ring, then
+	 * reject the attaches waiting on this wake with that reason.
+	 */
+	async #reportSessionLocked(state: ChildState): Promise<void> {
+		if (state.stderrDrained) await Promise.race([state.stderrDrained, sleep(1_000)]);
+		if (!this.#registry.get(state.daemonId)) return;
+		const lastLine = state.stderrRing
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line !== "")
+			.at(-1);
+		const reason =
+			lastLine?.replace(/^omp-session: /, "") ??
+			"session file is locked by another omp-session; close it there and retry";
+		this.#connector.fail(state.daemonId, reason);
+		this.#onEvent?.("error", reason, state.daemonId);
 	}
 
 	/** SIGTERM, then SIGKILL after graceMs; resolves once the child has exited. */

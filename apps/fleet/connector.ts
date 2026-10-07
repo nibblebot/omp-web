@@ -221,6 +221,22 @@ export class DaemonConnector {
 	}
 
 	/**
+	 * A wake that cannot reach ready (e.g. the respawned child exited on a
+	 * session-lock conflict): disconnect() plus reject every outstanding
+	 * waitReady() waiter with `reason`, so an attach answers with the cause
+	 * now instead of timing out. No status change; the caller owns it.
+	 */
+	fail(daemonId: string, reason: string): void {
+		const state = this.#states.get(daemonId);
+		if (!state) return;
+		this.disconnect(daemonId);
+		for (const waiter of state.waiters.splice(0)) {
+			clearTimeout(waiter.timer);
+			waiter.reject(new Error(reason));
+		}
+	}
+
+	/**
 	 * Removal-time teardown (#24): a superset of disconnect(). It aborts the
 	 * stream, cancels every timer, rejects outstanding waitReady() waiters
 	 * immediately ("daemon removed"), and drops the per-daemon state

@@ -19,6 +19,7 @@ import { generateRoomId } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import {
 	COMMAND_DEDUP_ANSWER_CAP,
 	OMP_PROTO,
+	OMP_SESSION_EXIT_SESSION_LOCKED,
 	OMP_SESSION_PREFIX,
 	SSE_DELTA_SEQ_START,
 	type StdoutContractLine,
@@ -290,6 +291,39 @@ async function spawnSession(
 		await rm(tmp, { recursive: true, force: true }).catch(() => {});
 	};
 	return { child, tmp, port: parsed.port, firstLine: line, stderrTail: () => stderrTail, cleanup };
+}
+
+/**
+ * Spawn a daemon expected to refuse at boot (before bind, so it never prints
+ * its listening line) and collect its exit code and full output.
+ */
+async function spawnRefusedSession(
+	opts: { args?: string[]; env?: Record<string, string> } = {},
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	const tmp = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-"));
+	try {
+		const child = Bun.spawn(["bun", "apps/session/index.ts", ...(opts.args ?? [])], {
+			cwd: repoRoot,
+			env: {
+				...process.env,
+				OMP_SESSION_PORT: "0",
+				OMP_SESSION_CWD: tmp,
+				PI_NO_TITLE: "1",
+				PI_CODING_AGENT_DIR: tempDir("omp-session-agent-"),
+				...opts.env,
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		return { exitCode, stdout, stderr };
+	} finally {
+		await rm(tmp, { recursive: true, force: true }).catch(() => {});
+	}
 }
 
 /** First non-internal IPv4 address (the machine's LAN IP); undefined when none exists. */
@@ -1333,7 +1367,7 @@ async function expectExitCode(
 	expect(actual).toBe(code);
 }
 
-test("a second omp-session on the same --resume file exits 1 with a locked-session error", async () => {
+test("a second omp-session on the same --resume file refuses before bind with the locked-session exit", async () => {
 	const { dir, fixture } = await writeResumeFixture();
 	try {
 		const a = await spawnSession({ args: ["--resume", fixture] });
@@ -1349,18 +1383,14 @@ test("a second omp-session on the same --resume file exits 1 with a locked-sessi
 			a.child.pid,
 		);
 
-		// Daemon B on the same absolute --resume fails at the lock: exit 1 and
-		// the documented stderr message.
-		const b = await spawnSession({ args: ["--resume", fixture] });
-		running.push(b);
-		await expectExitCode(b.child, 1);
-		const stderr = await waitFor(
-			() => (b.stderrTail().includes("locked by another omp-session") ? b.stderrTail() : null),
-			10_000,
-			"locked-session stderr message",
-		);
-		expect(stderr).toContain(`session file ${fixture} is locked by another omp-session`);
-		expect(stderr).toMatch(/pid \d+/);
+		// Daemon B on the same absolute --resume fails at the lock BEFORE
+		// bind: no listening line (a spawner never resolves an endpoint for
+		// it), the deterministic lock exit code, and the documented message.
+		const b = await spawnRefusedSession({ args: ["--resume", fixture] });
+		expect(b.exitCode).toBe(OMP_SESSION_EXIT_SESSION_LOCKED);
+		expect(b.stdout).not.toContain(OMP_SESSION_PREFIX);
+		expect(b.stderr).toContain(`session file ${fixture} is locked by another omp-session`);
+		expect(b.stderr).toMatch(/pid \d+/);
 
 		// Graceful shutdown releases the lock.
 		await a.cleanup();
@@ -1528,22 +1558,15 @@ test("SDK persistence relocation updates live state and locks its new journal", 
 		).toBe(true);
 		// The relocation callback must protect the new path just as boot does:
 		// another real daemon cannot resume it while this process owns it.
-		const contender = await spawnSession({
+		const contender = await spawnRefusedSession({
 			args: ["--resume", sessionFile],
 			env: { OMP_SESSION_CWD: dir },
 		});
-		running.push(contender);
-		await expectExitCode(contender.child, 1);
-		const stderr = await waitFor(
-			() =>
-				contender.stderrTail().includes("locked by another omp-session")
-					? contender.stderrTail()
-					: null,
-			10_000,
-			"relocated journal ownership refusal",
+		expect(contender.exitCode).toBe(OMP_SESSION_EXIT_SESSION_LOCKED);
+		expect(contender.stderr).toContain(
+			`session file ${sessionFile} is locked by another omp-session`,
 		);
-		expect(stderr).toContain(`session file ${sessionFile} is locked by another omp-session`);
-		expect(stderr).toContain(`pid ${proc.child.pid}`);
+		expect(contender.stderr).toContain(`pid ${proc.child.pid}`);
 		await proc.cleanup();
 		expect(existsSync(`${sessionFile}.lock`)).toBe(false);
 	} finally {

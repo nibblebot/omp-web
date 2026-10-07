@@ -41,7 +41,7 @@ Starting a second fleet against the same state file exits with status 77 and rep
 
 ## Session transcript lock already held
 
-Every session file is locked for the lifetime of the session daemon that owns it, including a `--resume` target. A second session daemon on the same transcript exits 1 with `omp-session: session file <file> is locked by another omp-session (pid <pid>)`. This happens when, for example, a manually started `omp-web session --resume <file>` targets a transcript that a fleet-managed session daemon already owns.
+Every session file is locked for the lifetime of the session daemon that owns it, including a `--resume` target. A second session daemon on the same transcript exits 77 with `omp-session: session file <file> is locked by another omp-session (pid <pid>); it is already open elsewhere (another omp-web or dev fleet), close it there and retry`. This happens when, for example, a manually started `omp-web session --resume <file>` targets a transcript that a fleet-managed session daemon already owns, or when you open a session in a second fleet (another omp-web instance or a `bun run dev` fleet) while the first still has it open. In the browser, opening such a session fails at once with that message and the row stays asleep; the fleet does not retry.
 
 - Keep one session daemon per transcript. Stop the other one with `omp-web stop <id>` (`omp-web sessions` lists the IDs), or resume a different session.
 - Never delete a live lock. A lock left by a dead process is cleaned up on the next start.

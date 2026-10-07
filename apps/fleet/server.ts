@@ -949,25 +949,23 @@ class FleetServerImpl implements FleetServer {
 
 	#onDialFailed(entry: RegistryEntry): void {
 		// Respawn spawned children on transport failure (dial refused); the
-		// supervisor owns the R3 --resume rule AND serializes overlapping
-		// respawns per daemon (concurrent calls coalesce into one launch).
+		// supervisor owns the R3 --resume rule, serializes overlapping
+		// respawns per daemon (concurrent calls coalesce into one launch), and
+		// never wakes an asleep entry from a late dial failure.
 		// Attached/remote entries are dial-in only: their own backoff in the
 		// connector covers retries.
 		this.eventLog.add("warn", "connector", `dial failed (${entry.mode})`, entry.daemonId);
-		if (entry.mode !== "spawned") return;
-		void (async () => {
-			try {
-				await this.supervisor.respawn(entry);
-			} catch (err) {
-				console.error(`fleet: respawn ${entry.daemonId} failed`, err);
-				this.eventLog.add(
-					"error",
-					"server",
-					`respawn ${entry.daemonId} failed: ${err instanceof Error ? err.message : String(err)}`,
-					entry.daemonId,
-				);
-			}
-		})();
+		const respawn = this.supervisor.respawnAfterDialFailure(entry);
+		if (respawn === undefined) return;
+		void respawn.catch((err: unknown) => {
+			console.error(`fleet: respawn ${entry.daemonId} failed`, err);
+			this.eventLog.add(
+				"error",
+				"server",
+				`respawn ${entry.daemonId} failed: ${err instanceof Error ? err.message : String(err)}`,
+				entry.daemonId,
+			);
+		});
 	}
 
 	/**

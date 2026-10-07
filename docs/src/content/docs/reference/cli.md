@@ -161,7 +161,7 @@ Error behavior:
 - Binding a non-loopback address without a token exits 1; the message names `--token` and `OMP_SESSION_TOKEN`.
 - `--resume` failure logs `omp-session: --resume <file> ... starting fresh` and boots a new session instead of exiting.
 - Callback transport misconfiguration exits 1 at startup, before the bind: `invalid --callback-url "<value>" (not a URL)`, `--callback-url refuses http "<value>" (https required; --callback-allow-http only opens loopback HTTP)`, `--callback-allow-http only honors loopback hosts, got "<host>"`, `--callback-url requires --callback-workspace (the pair is workspace-bound)`, `invalid --callback-generation "<value>" (positive integer)`, and `unsupported --callback-proxy scheme "<scheme>" (<value>); only http/https proxies are supported and there is no direct fallback`.
-- A session file already locked by another session daemon exits 1 and names the holding pid.
+- A session file already locked by another session daemon exits 77 and names the holding pid. The fleet does not restart a child that exits 77.
 - Idle auto-exit applies when nothing suppresses it: no attached clients, no streaming turn, no queued messages, no pending dialog, no in-flight tool call, and no live collaboration room. The session daemon checks on a 15 second interval, logs `omp-session: idle for <ms>ms; shutting down`, and exits 0. The session transcript is durable, so the fleet marks the row asleep and can wake it with `--resume`.
 - A bind failure aborts startup.
 

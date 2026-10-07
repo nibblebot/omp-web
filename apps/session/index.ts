@@ -19,6 +19,7 @@ import {
 	COMMAND_DEDUP_ID_CAP,
 	COMMAND_DEDUP_WINDOW_MS,
 	OMP_PROTO,
+	OMP_SESSION_EXIT_SESSION_LOCKED,
 	OMP_SESSION_PREFIX,
 	SSE_BACKPRESSURE_BYTES,
 	SSE_DELTA_SEQ_START,
@@ -890,6 +891,53 @@ function commandSeenRecently(id: string | undefined): boolean {
 	return false;
 }
 
+// ---------------------------------------------------------------------------
+// Session-file locking: a second omp-session on the same session file fails
+// loudly (exit OMP_SESSION_EXIT_SESSION_LOCKED, which spawners treat as
+// deterministic: no retry) instead of racing the holder and clobbering state. The
+// --resume file is locked before the boot session exists; the live session
+// file is locked right after createSession (a no-op when it duplicates the
+// resume lock, or when the session is in-memory and has no file). All locks
+// are released in shutdown().
+// ---------------------------------------------------------------------------
+
+const sessionLocks: FileLock[] = [];
+const heldSessionLockPaths = new Set<string>();
+
+/**
+ * Acquire a lock on `file` (path + ".lock") unless it is already held by this
+ * process. A live holder exits with the documented "locked by another
+ * omp-session" error; a signal racing boot takes the shutdown exit path.
+ */
+function acquireSessionLock(file: string | undefined): void {
+	if (!file || heldSessionLockPaths.has(file)) return;
+	try {
+		const lock = acquireFileLock(`${file}.lock`, `omp-session ${config.name}`);
+		heldSessionLockPaths.add(file);
+		sessionLocks.push(lock);
+	} catch (err) {
+		// A signal during boot runs shutdown() concurrently; that shutdown is
+		// the exit path, not this lock failure.
+		if (shuttingDown) process.exit(0);
+		if (err instanceof LockHeldError) {
+			// The last stderr line is the user-facing reason: the fleet
+			// supervisor surfaces it verbatim to the browser that asked.
+			console.error(
+				`omp-session: session file ${file} is locked by another omp-session (pid ${err.holderPid}); it is already open elsewhere (another omp-web or dev fleet), close it there and retry`,
+			);
+			process.exit(OMP_SESSION_EXIT_SESSION_LOCKED);
+		}
+		throw err;
+	}
+}
+
+// Lock the --resume session file BEFORE bind, so a second omp-session
+// pointed at the same file exits before printing its listening line: a
+// spawner never resolves an endpoint (or dials) for a daemon that cannot
+// own its session. Only absolute paths are locked here; the live file
+// (which may be identical) is locked right after createSession below.
+if (config.resume && path.isAbsolute(config.resume)) acquireSessionLock(config.resume);
+
 const server = Bun.serve<RelaySocketData>({
 	port: config.port,
 	hostname: config.host,
@@ -1036,43 +1084,6 @@ process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
 process.on("SIGHUP", () => void shutdown());
 
-// ---------------------------------------------------------------------------
-// Session-file locking: a second omp-session on the same session file fails
-// loudly (exit 1) instead of racing the holder and clobbering state. The
-// --resume file is locked before the boot session exists; the live session
-// file is locked right after createSession (a no-op when it duplicates the
-// resume lock, or when the session is in-memory and has no file). All locks
-// are released in shutdown().
-// ---------------------------------------------------------------------------
-
-const sessionLocks: FileLock[] = [];
-const heldSessionLockPaths = new Set<string>();
-
-/**
- * Acquire a lock on `file` (path + ".lock") unless it is already held by this
- * process. A live holder exits with the documented "locked by another
- * omp-session" error; a signal racing boot takes the shutdown exit path.
- */
-function acquireSessionLock(file: string | undefined): void {
-	if (!file || heldSessionLockPaths.has(file)) return;
-	try {
-		const lock = acquireFileLock(`${file}.lock`, `omp-session ${config.name}`);
-		heldSessionLockPaths.add(file);
-		sessionLocks.push(lock);
-	} catch (err) {
-		// A signal during boot runs shutdown() concurrently; that shutdown is
-		// the exit path, not this lock failure.
-		if (shuttingDown) process.exit(0);
-		if (err instanceof LockHeldError) {
-			console.error(
-				`omp-session: session file ${file} is locked by another omp-session (pid ${err.holderPid})`,
-			);
-			process.exit(1);
-		}
-		throw err;
-	}
-}
-
 /**
  * Diagnostic note for a refused `--resume`: the SDK rejects a switch whose
  * recorded cwd differs from this process's (the daemon's project dir is
@@ -1187,11 +1198,7 @@ async function materializeSession(
 		throw new MaterializeSessionError("unavailable", `materialization failed: ${String(error)}`);
 	}
 }
-// Lock the --resume session file before the boot session exists so a second
-// omp-session pointed at the same file fails loudly instead of racing it.
-// Only absolute paths are locked here; the live file (which may be identical)
-// is locked right after createSession below.
-if (config.resume && path.isAbsolute(config.resume)) acquireSessionLock(config.resume);
+
 try {
 	bootSession = await collabSession.createSession(config.cwd);
 } catch (err) {

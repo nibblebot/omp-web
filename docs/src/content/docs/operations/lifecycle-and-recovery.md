@@ -123,7 +123,7 @@ Nothing about a restart requires touching files. Transcripts, managed worktrees,
 omp-web uses pidfile locks, created atomically and checked against process liveness. Two locks protect the state you cannot afford to interleave:
 
 - Fleet state lock: `<statePath>.lock` next to the state file, taken before the control plane starts and held for the fleet's lifetime. It is released last in shutdown, after every child and socket is torn down. A second fleet against the same state file exits 77 and names the holder.
-- Session file locks: `<sessionFile>.lock` next to the transcript. The session daemon takes one for an explicit `--resume` target before the session exists, and one for the live session file once the session is created, so a second session daemon aimed at the same transcript exits 1 with `omp-session: session file <file> is locked by another omp-session (pid <pid>)`. This protects every resume path, including a fleet respawn and a browser-driven session switch.
+- Session file locks: `<sessionFile>.lock` next to the transcript. The session daemon takes one for an explicit `--resume` target before the session exists, and one for the live session file once the session is created, so a second session daemon aimed at the same transcript exits 77 with `omp-session: session file <file> is locked by another omp-session (pid <pid>); it is already open elsewhere (another omp-web or dev fleet), close it there and retry`. This protects every resume path, including a fleet respawn and a browser-driven session switch. The fleet treats exit 77 as deterministic: it does not restart the child, the row returns to asleep, and the browser that asked to open the session gets that message as the error.
 
 Lock behavior an operator should rely on:
 
@@ -224,7 +224,7 @@ The data home holds the config file, the roster state file, and managed worktree
 | Symptom | Meaning | First action |
 | --- | --- | --- |
 | Start refused with exit 77 and `fleet already running (pid <pid>)` | Another live fleet owns the state file lock | Use the running fleet, or stop it cleanly and start again |
-| Start refused with `session file <file> is locked by another omp-session (pid <pid>)` | A live session daemon owns that transcript | Stop that session daemon or resume a different session; never delete the lock |
+| Start refused with `session file <file> is locked by another omp-session (pid <pid>)`, or the browser shows it when opening a session | A live session daemon owns that transcript, often the same session open in another omp-web or dev fleet | Close it there (or stop that session daemon), then open it again, or resume a different session; never delete the lock |
 | Row sits in `resolving` and never becomes ready | Provider, model, or authentication resolution did not finish | Fix the omp setup, then stop and wake the row |
 | Row is `error` with a restart-budget or endpoint message | Crash loop or a spawn that never reported its endpoint | Read Daemon details, fix the cause, wake once; remove and re-add to clear a stale budget |
 | Row is `error` with `unauthorized (401)` | The stored token does not match the session daemon | Wake to re-mint for a fleet-managed session daemon, or fix the token for a manual or remote session daemon |
