@@ -1,12 +1,18 @@
+import { BlockList, isIP } from "node:net";
+
+/** 127.0.0.0/8 and ::1; BlockList also matches their IPv4-mapped IPv6 forms. */
+const LOOPBACK = new BlockList();
+LOOPBACK.addSubnet("127.0.0.0", 8, "ipv4");
+LOOPBACK.addAddress("::1", "ipv6");
+
 /**
- * Loopback hosts: localhost, ::1, or anything in 127.0.0.0/8. Every dotted
- * part must be numeric: "127.a.b.c" resolves off-loopback and is NOT
- * loopback (same strictness as the runtime peer-address check in index.ts).
+ * Loopback hosts: localhost, or an IP literal in 127.0.0.0/8 / ::1 (including
+ * ::ffff:127.x). Anything `isIP` rejects is NOT loopback: "127.a.b.c" or
+ * "127.0.0.999" would resolve as a hostname, possibly off-loopback.
  */
 export function isLoopbackHost(host: string): boolean {
-	const h = host.toLowerCase();
-	if (h === "localhost" || h === "::1") return true;
-	const v4 = h.startsWith("::ffff:") ? h.slice(7) : h;
-	const parts = v4.split(".");
-	return parts.length === 4 && parts.every((p) => /^\d+$/.test(p)) && Number(parts[0]) === 127;
+	if (host.toLowerCase() === "localhost") return true;
+	const family = isIP(host);
+	if (family === 0) return false;
+	return LOOPBACK.check(host, family === 4 ? "ipv4" : "ipv6");
 }

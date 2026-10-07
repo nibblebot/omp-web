@@ -309,7 +309,7 @@ function buildChild(name: string): Child {
 		"bunx",
 		"vite",
 		"--config",
-		"apps/web/vite.config.ts",
+		join(ROOT, "apps", "web", "vite.config.ts"),
 		"--port",
 		String(ports.vite),
 		"--strictPort",

@@ -34,6 +34,7 @@ const ROOT = join(import.meta.dir, "..");
 const EMBEDDED_DIST_FILE = join(ROOT, "apps", "fleet", "embedded-dist.ts");
 const DIST_DIR = join(ROOT, "dist");
 const OUTFILE = join(ROOT, "dist-bundle", "cli.js");
+const VITE_CONFIG = join(ROOT, "apps", "web", "vite.config.ts");
 const PROVIDERS_DIR = join(ROOT, "dist-bundle", "providers");
 /** Provider executables (P9.1): key = shipped filename, value = source entry. */
 const PROVIDER_SOURCES: Record<string, string> = {
@@ -101,8 +102,9 @@ if (version === null) {
 }
 
 try {
-	// 1. UI bundle (vite owns dist/ and wipes it; config is explicit).
-	await Bun.$`bunx vite build --config apps/web/vite.config.ts`.cwd(ROOT);
+	// 1. UI bundle (vite owns dist/ and wipes it). The config lives under
+	//    apps/web/, not the repo root, so vite must be pointed at it.
+	await Bun.$`bunx vite build --config ${VITE_CONFIG}`.cwd(ROOT);
 	// 2. Regenerate the embedded-asset module for the fleet edge, its only consumer.
 	writeFileSync(EMBEDDED_DIST_FILE, generateEmbeddedDist());
 	// 3. Bundle the dispatcher. Bun preserves the entrypoint shebang; verified
@@ -165,10 +167,13 @@ try {
 			throw new Error(`provider bundle lost its shebang (got ${JSON.stringify(providerHead)}…)`);
 		}
 	}
-	// 6. Session-runtime image definition: copy the flat apps/session sources
-	//    explicitly into dist-bundle/image/, renaming image-README.md back to
-	//    the existing packaged README.md name. The image build consumes the
-	//    repo root as its context.
+	// 6. Session-runtime image definition. The published package ships only
+	//    dist-bundle/ (package.json "files"), so an installed omp-web has no
+	//    apps/session/; the kubernetes provider needs an operator-built image,
+	//    and this copy is how an install carries its definition (onboarding
+	//    E2E asserts it). The list is explicit because apps/session/ is flat:
+	//    a directory copy would ship the whole daemon source. image-README.md
+	//    is renamed to README.md to keep the packaged layout unchanged.
 	for (const file of IMAGE_FILES) {
 		if (!existsSync(join(IMAGE_SRC, file))) {
 			throw new Error(`session image source missing under ${IMAGE_SRC}: ${file}`);

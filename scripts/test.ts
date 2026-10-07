@@ -36,22 +36,20 @@ function physicalCores(): number {
 	return availableParallelism();
 }
 
-if (import.meta.main) {
-	const workers = Math.max(1, physicalCores());
-	const child = Bun.spawn(
-		[
-			"bun",
-			"test",
-			`--parallel=${workers}`,
-			"--timeout",
-			"15000",
-			"--retry",
-			"0",
-			...process.argv.slice(2),
-		],
-		{
-			stdio: ["inherit", "inherit", "inherit"],
-		},
-	);
-	process.exit((await child.exited) ?? 1);
-}
+const workers = Math.max(1, physicalCores());
+const child = Bun.spawn(
+	[
+		"bun",
+		"test",
+		`--parallel=${workers}`,
+		"--timeout",
+		"15000",
+		"--retry",
+		"0",
+		...process.argv.slice(2),
+	],
+	{
+		stdio: ["inherit", "inherit", "inherit"],
+	},
+);
+process.exit((await child.exited) ?? 1);
