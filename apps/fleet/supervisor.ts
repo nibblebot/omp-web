@@ -60,6 +60,8 @@ interface ChildState {
 	restarts: number;
 	restartTimer: ReturnType<typeof setTimeout> | null;
 	stopping: boolean;
+	/** Exit summary of the child stop() terminated; stop() reports it on its one line. */
+	stopExit?: string;
 	/** respawn() already launched a replacement; the old child's exit must not restart. */
 	manualRespawn: boolean;
 	/** In-flight respawn() promise; concurrent respawn() calls coalesce onto it (one launch). */
@@ -357,9 +359,7 @@ export class SpawnSupervisor {
 			await this.#terminate(state.child, RESP_AWN_KILL_GRACE_MS);
 			state.child = null;
 		}
-		const resumeFileLabel =
-			resumeFile && resumeFile.trim() !== "" ? resumeFile : current.lastSessionFile;
-		this.#onEvent?.("info", `respawn${resumeFileLabel ? " (--resume)" : ""}`, current.daemonId);
+		// The launch's own event line names it a respawn (and --resume).
 		this.#launch(this.#registry.get(current.daemonId) ?? current, template, {
 			resume: true,
 			resumeFile,
@@ -385,14 +385,18 @@ export class SpawnSupervisor {
 		}
 		// Drop the socket before killing so the child's death looks intentional.
 		this.#connector.disconnect(daemonId);
+		const killed = state?.child != null;
 		if (state?.child) {
+			state.stopExit = undefined;
 			await this.#terminate(state.child, STOP_SIGTERM_GRACE_MS);
 			state.child = null;
 		}
 		if (this.#registry.get(daemonId)) {
 			this.#registry.setStatus(daemonId, "asleep");
 		}
-		this.#onEvent?.("info", "stop", daemonId);
+		// One line per stop that actually ended a child (stopping an already
+		// asleep entry, e.g. on fleet shutdown, is a no-op and stays quiet).
+		if (killed) this.#onEvent?.("info", `stop (${state?.stopExit ?? "exited"})`, daemonId);
 	}
 
 	/**
@@ -638,7 +642,10 @@ export class SpawnSupervisor {
 			return;
 		}
 		state.child = child;
-		this.#onEvent?.("info", `spawn template=${entry.template ?? "?"} cwd=${entry.cwd}`, daemonId);
+		// One line per launch: spawn vs respawn (resume) and the template. The
+		// endpoint and pid surface on the connector's ready transition.
+		const verb = opts.resume ? `respawn${resumeArg !== "" ? " --resume" : ""}` : "spawn";
+		this.#onEvent?.("info", `${verb} template=${entry.template ?? "?"}`, daemonId);
 		// The fresh token is visible to the roster immediately (R14 rotation).
 		this.#registry.update(daemonId, { token, pid: child.pid });
 		// Endpoint resolution timeout: no listening line within the window →
@@ -677,7 +684,6 @@ export class SpawnSupervisor {
 				return;
 			}
 			this.#registry.update(daemonId, { endpoint: resolved.url });
-			this.#onEvent?.("info", `endpoint ${resolved.url} pid ${child.pid}`, daemonId);
 			this.#connector.connect(daemonId);
 		});
 		state.stderrDrained = readChunks(child.stderr, (chunk) => {
@@ -710,9 +716,9 @@ export class SpawnSupervisor {
 		if (!entry) return;
 		const exit = `exit code=${exitCode}${signalCode !== null ? ` signal=${signalCode}` : ""}`;
 		if (state.stopping) {
-			// stop() owns the aftermath (status asleep); the exit itself still
-			// lands in the ring as the child's last breath.
-			this.#onEvent?.("info", `${exit} (stopping)`, state.daemonId);
+			// stop() owns the aftermath (status asleep) and reports the exit on
+			// its own line.
+			state.stopExit = exit;
 			return;
 		}
 		if (state.manualRespawn) {

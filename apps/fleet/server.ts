@@ -61,7 +61,7 @@
 import type { Server } from "bun";
 import { existsSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { RegisteredProject, PublicProviderProfile } from "#lib/wire/protocol";
+import type { DaemonStatus, RegisteredProject, PublicProviderProfile } from "#lib/wire/protocol";
 import type { FleetConfig } from "./config";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { toPublicProfile } from "./provider-profile";
@@ -123,6 +123,13 @@ import {
 } from "./worktrees";
 
 const DEFAULT_PORT = 4722;
+/** Transient status-ladder steps kept out of the event ring (see onStatus). */
+const LADDER_STEPS: Partial<Record<DaemonStatus, true>> = {
+	spawning: true,
+	connecting: true,
+	session: true,
+	resolving: true,
+};
 
 // P3.8 fleet log-store ack batching (docs/clone-contracts.md "Session log
 // streaming"): log_ack controls ride the reserved transport stream once per
@@ -637,13 +644,17 @@ class FleetServerImpl implements FleetServer {
 				// transition is stable; the supervisor resets its
 				// consecutive-crash budget there (window-based, not lifetime).
 				this.supervisor.onConnectorStatus(entry);
-				// Fleet observability: every status transition lands in the ring.
-				this.eventLog.add(
-					entry.status === "error" ? "error" : entry.status === "reconnecting" ? "warn" : "info",
-					"connector",
-					entry.status === "error" ? `error: ${entry.error ?? "error"}` : entry.status,
-					entry.daemonId,
-				);
+				// Fleet observability: status transitions land in the ring, minus
+				// the sub-second ladder steps (spawning/connecting/session/
+				// resolving) every dial walks; the live status is on the roster.
+				if (LADDER_STEPS[entry.status] !== true) {
+					this.eventLog.add(
+						entry.status === "error" ? "error" : entry.status === "reconnecting" ? "warn" : "info",
+						"connector",
+						entry.status === "error" ? `error: ${entry.error ?? "error"}` : entry.status,
+						entry.daemonId,
+					);
+				}
 			},
 			onReconnect: (daemonId, attempt, delayMs) => {
 				this.eventLog.add(
@@ -1548,10 +1559,12 @@ class FleetServerImpl implements FleetServer {
 			} else if (entry.mode === "spawned") {
 				await this.supervisor.stop(entry.daemonId);
 			} else {
+				// Supervisor and lifecycle stops log their own line; only the
+				// dial-in disconnect is unlogged without this one.
 				this.connector.disconnect(entry.daemonId);
 				this.registry.setStatus(entry.daemonId, "asleep");
+				this.eventLog.add("info", "server", `stopped (${entry.mode})`, entry.daemonId);
 			}
-			this.eventLog.add("info", "server", `stopped (${entry.mode})`, entry.daemonId);
 			stopped.push(entry.daemonId);
 		}
 		return json({ stopped });

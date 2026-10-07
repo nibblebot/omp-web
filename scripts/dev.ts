@@ -670,6 +670,8 @@ function stdoutHook(
 				return false;
 			}
 			if (/^(fleet state: |fleet config: |Web UI: )/.test(plain)) return false;
+			// The child prefix already says fleet; drop the line's own "fleet: ".
+			if (plain.startsWith("fleet: ")) return plain.slice("fleet: ".length);
 		};
 	}
 	if (name === "broker") {

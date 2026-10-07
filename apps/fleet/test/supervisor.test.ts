@@ -551,7 +551,9 @@ describe("SpawnSupervisor", () => {
 			),
 		).toBe(true);
 		expect(
-			events.some((event) => event.daemonId === entry.daemonId && event.message === "stop"),
+			events.some(
+				(event) => event.daemonId === entry.daemonId && event.message.startsWith("stop ("),
+			),
 		).toBe(true);
 		expect(
 			events.some((event) => event.daemonId === entry.daemonId && event.message === "prune"),

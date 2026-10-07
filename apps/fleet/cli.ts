@@ -434,25 +434,17 @@ export async function serveLoop(server: FleetServer): Promise<number> {
 	// The UI is served on the same port as the control plane; the line is
 	// bold so it stands out in the banner.
 	console.log(`\u001b[1mWeb UI: http://localhost:${server.port}\u001b[0m`);
-	// Lifecycle events print as one human line per transition, enriched with
-	// the live registry facts the message alone doesn't carry (status,
-	// endpoint, pid).
+	// Lifecycle events print as one human line each. The ready line carries
+	// the live endpoint + pid (the facts a reader dials); other lines stand
+	// on their message alone.
 	server.eventLog.onEntry = (entry) => {
 		const daemon = entry.daemonId !== undefined ? server.registry.get(entry.daemonId) : undefined;
-		const parts = [entry.daemonId, daemon?.name, entry.message].filter(
-			(part): part is string => part !== undefined && part !== "",
-		);
-		let line = `fleet: ${parts.join(" ")}`;
-		if (daemon) {
-			// Connector transitions carry the status as the message itself;
-			// other sources (exit/respawn/stop) get the live status appended.
-			const details: string[] = [];
-			if (daemon.status && daemon.status !== entry.message) details.push(daemon.status);
-			if (daemon.endpoint) details.push(daemon.endpoint);
-			if (daemon.pid !== undefined) details.push(`pid ${daemon.pid}`);
-			if (details.length > 0) line += ` (${details.join(", ")})`;
+		const parts = [entry.daemonId, daemon?.name, entry.message];
+		if (daemon && entry.source === "connector" && entry.message === "ready") {
+			parts.push(daemon.endpoint, daemon.pid !== undefined ? `pid ${daemon.pid}` : undefined);
 		}
-		console.log(line);
+		const shown = parts.filter((part): part is string => part !== undefined && part !== "");
+		console.log(`fleet: ${shown.join(" ")}`);
 	};
 	let shuttingDown = false;
 	const shutdown = async (signal: string) => {
