@@ -33,7 +33,7 @@ export const SessionHeader: Component = () => {
 							}
 						}}
 					>
-						{state.sessionName ?? state.sessionId.slice(0, 8)}
+						{state.sessionName ?? (state.messageCount === 0 ? "New session" : "Untitled session")}
 					</h1>
 				}
 			>

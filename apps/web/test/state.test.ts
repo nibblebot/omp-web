@@ -341,6 +341,58 @@ describe("replay dedup (finding #2: resume must not double-apply deltas)", () =>
 	});
 });
 
+describe("advisor notes render inline (TUI advisor card parity)", () => {
+	const notes = [
+		{ note: "check the null path", severity: "concern" },
+		{ note: "ship it", advisor: "reviewer", turnsAgo: 2 },
+	];
+	const advisorMsg = {
+		role: "custom",
+		customType: "advisor",
+		display: true,
+		content: "<advisory>…</advisory>",
+		details: { notes },
+		timestamp: 0,
+	};
+
+	function primed(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("session-a"));
+	}
+
+	test("history: advisor messages become advisor items; other custom messages stay hidden", () => {
+		primed();
+		dispatch({
+			type: "history",
+			messages: [
+				userMsg("q"),
+				advisorMsg,
+				{
+					role: "custom",
+					customType: "loop-continuation",
+					display: false,
+					content: "x",
+					timestamp: 0,
+				},
+				assistantMsg("a"),
+			],
+		} as ServerFrame);
+		expect(state.items.map((it) => it.kind)).toEqual(["user", "advisor", "assistant"]);
+		expect(state.items[1]).toMatchObject({ kind: "advisor", notes });
+	});
+
+	test("live: a steered/preserved advisor card (message_start + message_end) lands exactly once", () => {
+		primed();
+		dispatch({ type: "history", messages: [] });
+		const ev = (event: unknown): ServerFrame => ({ type: "event", event }) as ServerFrame;
+		dispatch(ev({ type: "message_start", message: advisorMsg }));
+		dispatch(ev({ type: "message_end", message: advisorMsg }));
+		expect(itemCounts()).toEqual({ advisor: 1 });
+		expect(state.items[0]).toMatchObject({ kind: "advisor", notes });
+	});
+});
+
 describe("attach correlation (finding #28)", () => {
 	/** The attach command posted by the last attachSession() call. */
 	function lastAttach(): Extract<ClientCommand, { type: "attach" }> {
@@ -540,6 +592,51 @@ describe("subagent placeholder migration (finding #30)", () => {
 		expect(state.subagents.get("progress-0")).toBeUndefined();
 		expect(state.subagents.get("sub-1")?.status).toBe("running");
 		expect(state.subagents.get("sub-1")?.task).toBe("t");
+	});
+
+	test("progress keys on the SDK subagent id, so equal indexes from two task calls stay distinct", () => {
+		connect();
+		for (const [id, call] of [
+			["Owl", "call-a"],
+			["Wren", "call-b"],
+		]) {
+			dispatch({
+				type: "subagent_lifecycle",
+				payload: { id, index: 0, agent: "task", status: "started", parentToolCallId: call },
+			});
+		}
+		dispatch({
+			type: "subagent_progress",
+			payload: {
+				index: 0,
+				agent: "task",
+				task: "wren task",
+				parentToolCallId: "call-b",
+				progress: { id: "Wren", status: "running" },
+			},
+		});
+		expect(state.subagents.size).toBe(2);
+		expect(state.subagents.get("Owl")?.status).toBe("started");
+		expect(state.subagents.get("Owl")?.task).toBeUndefined();
+		expect(state.subagents.get("Wren")?.status).toBe("running");
+		expect(state.subagents.get("Wren")?.task).toBe("wren task");
+	});
+
+	test("progress replaces the entry object so identity-keyed rows re-render", () => {
+		connect();
+		dispatch({
+			type: "subagent_lifecycle",
+			payload: { id: "Owl", index: 0, agent: "task", status: "started" },
+		});
+		const before = state.subagents.get("Owl");
+		dispatch({
+			type: "subagent_progress",
+			payload: { index: 0, task: "t", progress: { id: "Owl", status: "running" } },
+		});
+		const after = state.subagents.get("Owl");
+		expect(after).not.toBe(before);
+		expect(before?.status).toBe("started");
+		expect(after?.status).toBe("running");
 	});
 });
 

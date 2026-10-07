@@ -8,6 +8,7 @@ import { groupToolRuns, type Run } from "../../chat/tool-runs";
 import { useStickyScroll } from "./useStickyScroll";
 import { LiveBlock } from "./StreamingText";
 import {
+	AdvisorCard,
 	AssistantCard,
 	BashCard,
 	CompactionCard,
@@ -129,6 +130,9 @@ export const MessageList: Component = () => {
 									</Match>
 									<Match when={item.kind === "compaction" && item}>
 										{(c) => <CompactionCard item={c()} />}
+									</Match>
+									<Match when={item.kind === "advisor" && item}>
+										{(a) => <AdvisorCard item={a()} />}
 									</Match>
 									<Match when={item.kind === "notice" && item}>
 										{(notice) => <NoticeCard item={notice()} />}

@@ -41,6 +41,8 @@ Clicking the segment cycles through `off`, `auto`, and the model's supported eff
 
 The session default itself is the Thinking Level setting in Settings under Model, in the Thinking group. It accepts `auto` or a concrete level, and it applies to new sessions unless a role or the session overrides it. The [configuration reference](/reference/configuration/) owns the full list of settings and defaults.
 
+The level belongs to the session, not to the role. Resuming a transcript, including the automatic resume when a sleeping row wakes, restores the level the transcript recorded, and `/new` keeps the current level, so the thinking segment can show a different level than the `default` role's chip. Picking a level, or reassigning the `default` role with a concrete level, applies it to the live session.
+
 ## Where models come from
 
 See [Models and provider authentication](/configuration/models-and-auth/) for signing providers in, and [Integrate a custom provider](/advanced/custom-provider/) if you run your own endpoint. Providers discovered in the background can take a moment to appear after startup; the wizard waits for an in-flight refresh before it shows the list.

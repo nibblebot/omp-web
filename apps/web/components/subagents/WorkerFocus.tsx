@@ -1,7 +1,16 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SubagentMessagesResult } from "#lib/wire/protocol";
 import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { createEffect, createSignal, For, on, onCleanup, Show, type Component } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	on,
+	onCleanup,
+	Show,
+	type Component,
+} from "solid-js";
 import { type SubagentInfo } from "../../state";
 import {
 	abortSubagent,
@@ -14,6 +23,7 @@ import { call } from "../../store/transport";
 import { pushNotice } from "../../store/chat";
 import { ArrowLeftIcon } from "../shared/icons";
 import { ConfirmButton } from "../shared/ConfirmButton";
+import { subagentName } from "../shared/SubagentRow";
 import { Inspector, type InspectorTab } from "./Inspector";
 import {
 	canAbort,
@@ -123,7 +133,10 @@ export const WorkerFocus: Component<{
 	const [notice, setNotice] = createSignal<string | null>(null);
 	let scopeRevision = 0;
 
-	const draftKey = () => `${props.sessionId}::${props.sub.id}`;
+	// Memoized so the scope reset below fires only when the key string changes:
+	// `props.sub` is a fresh object on every subagent frame, and `on` re-runs on
+	// every source re-evaluation, which wiped and refetched the transcript per frame.
+	const draftKey = createMemo(() => `${props.sessionId}::${props.sub.id}`);
 	const blockReason = () => steerBlockReason(props.sub);
 	const model = () => workerModel(props.sub);
 
@@ -235,23 +248,20 @@ export const WorkerFocus: Component<{
 	};
 
 	createEffect(
-		on(
-			() => `${props.sessionId}::${props.sub.id}`,
-			(key, previous) => {
-				if (previous) setFocusDraft(previous, steerText());
-				scopeRevision++;
-				setMessages([]);
-				setNextByte(0);
-				setHasMore(false);
-				setLoading(false);
-				setError(null);
-				setNotice(null);
-				setSteerText(getFocusDraft(key));
-				setPin(getWorkerPin(props.sub.id));
-				markWorkerSeen(props.sub);
-				void load();
-			},
-		),
+		on(draftKey, (key, previous) => {
+			if (previous) setFocusDraft(previous, steerText());
+			scopeRevision++;
+			setMessages([]);
+			setNextByte(0);
+			setHasMore(false);
+			setLoading(false);
+			setError(null);
+			setNotice(null);
+			setSteerText(getFocusDraft(key));
+			setPin(getWorkerPin(props.sub.id));
+			markWorkerSeen(props.sub);
+			void load();
+		}),
 	);
 	onCleanup(() => {
 		scopeRevision++;
@@ -271,12 +281,16 @@ export const WorkerFocus: Component<{
 
 	return (
 		<div class="subagent-list">
-			<div class="subagent-panel-row">
-				<button type="button" onClick={props.onBack}>
+			<div class="subagent-focus-header">
+				<button type="button" class="subagent-focus-back" onClick={props.onBack}>
 					<ArrowLeftIcon /> back
 				</button>
+				<span class="subagent-agent">{subagentName(props.sub)}</span>
+				<Show when={subagentName(props.sub) !== props.sub.agent}>
+					<span class="subagent-type">{props.sub.agent}</span>
+				</Show>
 				<span class="subagent-status">
-					{props.sub.agent} · {props.sub.status}
+					{props.sub.status}
 					<Show when={model()}> · {model()}</Show>
 				</span>
 				<Show when={isWorkerUnread(props.sub)}>
@@ -284,7 +298,7 @@ export const WorkerFocus: Component<{
 						●
 					</span>
 				</Show>
-				<label class="subagent-status">
+				<label class="subagent-status subagent-focus-follow">
 					<input
 						type="checkbox"
 						checked={props.follow}

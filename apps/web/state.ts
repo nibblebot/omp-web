@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AdvisorNote } from "@oh-my-pi/pi-tui/chat/messages";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { UsageReport } from "@oh-my-pi/pi-ai";
 import { createStore, produce, reconcile } from "solid-js/store";
@@ -21,6 +22,7 @@ import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
 import { scanImages } from "./text/images";
 import type { UsageLike } from "./usage/usage";
 import {
+	advisorNotesOf,
 	announce,
 	appendBashChunk,
 	applyEvent,
@@ -129,7 +131,11 @@ export type ChatItem =
 	  }
 	| BashItem
 	| CompactionItem
+	| AdvisorItem
 	| { kind: "notice"; id: number; level: string; message: string };
+
+/** Advisor notes injected into the primary session (`custom` message, customType "advisor"). */
+export type AdvisorItem = { kind: "advisor"; id: number; notes: AdvisorNote[] };
 
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
@@ -615,8 +621,12 @@ export function loadHistory(messages: AgentMessage[]): void {
 					...(images.length > 0 ? { images } : {}),
 				});
 			}
+		} else {
+			// Advisor cards render inline like the TUI; other custom/developer
+			// messages stay hidden.
+			const notes = advisorNotesOf(msg);
+			if (notes !== null) pushItem({ kind: "advisor", id: nextChatId(), notes });
 		}
-		// Any other role (developer, custom messages): skip.
 	}
 }
 
@@ -1329,32 +1339,42 @@ export function connect(): void {
 							index?: number;
 							agent?: string;
 							task?: string;
-							progress?: { status?: string };
+							progress?: { id?: string; status?: string; description?: string };
 							parentToolCallId?: string;
 					  }
 					| undefined;
 				if (p?.index === undefined) break;
 				setState("subagents", (prev) => {
 					const next = new Map(prev);
-					let key = [...next.keys()].find((k) => next.get(k)?.index === p.index);
-					if (!key) {
-						key = `progress-${p.index}`;
-						next.set(key, {
-							id: key,
-							index: p.index as number,
-							agent: p.agent ?? "agent",
-							status: "started",
-							lastUpdate: Date.now(),
-							parentToolCallId: p.parentToolCallId,
-						});
-					}
-					const entry = next.get(key);
-					if (entry) {
-						if (p.task !== undefined) entry.task = p.task;
-						if (p.parentToolCallId !== undefined) entry.parentToolCallId = p.parentToolCallId;
-						if (p.progress?.status) entry.status = p.progress.status;
-						entry.lastUpdate = Date.now();
-					}
+					// The SDK's AgentProgress carries the subagent id: key on it. `index`
+					// is only unique within one task call, so the index fallback (id-less
+					// payloads) must not cross into another call's subagents.
+					const progressId = typeof p.progress?.id === "string" ? p.progress.id : undefined;
+					const key =
+						progressId ??
+						[...next.keys()].find((k) => {
+							const sub = next.get(k)!;
+							return (
+								sub.index === p.index &&
+								(p.parentToolCallId === undefined ||
+									sub.parentToolCallId === undefined ||
+									sub.parentToolCallId === p.parentToolCallId)
+							);
+						}) ??
+						`progress-${p.index}`;
+					const existing = next.get(key);
+					// Replace, never mutate: rows are keyed by object identity, so an
+					// in-place edit would leave the rendered status/task stale.
+					next.set(key, {
+						id: key,
+						index: existing?.index ?? (p.index as number),
+						agent: p.agent ?? existing?.agent ?? "agent",
+						description: p.progress?.description ?? existing?.description,
+						task: p.task ?? existing?.task,
+						status: p.progress?.status ?? existing?.status ?? "started",
+						lastUpdate: Date.now(),
+						parentToolCallId: p.parentToolCallId ?? existing?.parentToolCallId,
+					});
 					return next;
 				});
 				break;

@@ -3,7 +3,13 @@ import { dispatchInput, type InputMode } from "../../prompt/commands";
 import { PromptHistory } from "../../prompt/history";
 import type { ImageArg } from "#lib/wire/protocol";
 import { call, dequeueLastQueued, isReady, setState, state } from "../../state";
-import { cancelScheduledDraftSave, clearDraft, currentDraftKey, removeDraft, saveDraft } from "../../store/drafts";
+import {
+	cancelScheduledDraftSave,
+	clearDraft,
+	currentDraftKey,
+	removeDraft,
+	saveDraft,
+} from "../../store/drafts";
 import { PromptActions } from "./PromptActions";
 import { PromptComposer, expandChipsForSubmit } from "./PromptComposer";
 import { usePromptAutocomplete } from "./usePromptAutocomplete";

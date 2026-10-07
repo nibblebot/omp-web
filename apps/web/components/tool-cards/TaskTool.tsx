@@ -1,6 +1,6 @@
 import { For, Show, type Component } from "solid-js";
 import { state, type ToolItem } from "../../state";
-import { SubagentRow } from "../shared/SubagentRow";
+import { latestSubagent, SubagentRow } from "../shared/SubagentRow";
 import { ToolShell } from "./ToolShell";
 
 /** task tool: the agent list this tool call spawned, scoped by parentToolCallId
@@ -11,15 +11,21 @@ export const TaskTool: Component<{ item: ToolItem }> = (props) => {
 		const args = props.item.args as { description?: string; task?: string; prompt?: string } | null;
 		return args?.description ?? args?.task ?? args?.prompt ?? "";
 	};
-	const subs = () =>
+	const subIds = () =>
 		[...state.subagents.values()]
 			.filter((sub) => sub.parentToolCallId === props.item.toolCallId)
-			.sort((a, b) => a.index - b.index);
+			.sort((a, b) => a.index - b.index)
+			.map((sub) => sub.id);
 	return (
 		<ToolShell name={<>task {description()}</>} status={props.item.status} class="task-tool">
-			<Show when={subs().length > 0}>
+			<Show when={subIds().length > 0}>
 				<div class="subagent-list">
-					<For each={subs()}>{(sub) => <SubagentRow sub={sub} />}</For>
+					<For each={subIds()}>
+						{(id) => {
+							const sub = latestSubagent((key) => state.subagents.get(key), id);
+							return <SubagentRow sub={sub()} />;
+						}}
+					</For>
 				</div>
 			</Show>
 		</ToolShell>

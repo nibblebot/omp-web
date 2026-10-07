@@ -1,3 +1,4 @@
+export { AdvisorCard } from "./Advisor";
 export { AssistantCard } from "./Assistant";
 export { BashCard } from "./Bash";
 export { CompactionCard } from "./Compaction";

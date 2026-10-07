@@ -371,6 +371,70 @@ pre {
 	color: var(--muted-3);
 }
 
+/* --- Advisor notes (TUI advisor card parity) --- */
+
+.advisor-item {
+	align-self: stretch;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	background: var(--panel);
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-lg);
+	padding: var(--space-4) var(--space-5);
+	font-size: var(--fs-md);
+}
+.advisor-item.advisor-has-blocker {
+	border-color: var(--error-border);
+}
+.advisor-label {
+	color: var(--accent);
+	font-weight: 600;
+}
+.advisor-meta,
+.advisor-dim {
+	color: var(--muted);
+}
+.advisor-blockers {
+	color: var(--error);
+}
+.advisor-note {
+	border-left: 3px solid var(--muted);
+	padding-left: var(--space-4);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.advisor-note > * + * {
+	margin-left: var(--space-3);
+}
+.advisor-sev-concern {
+	border-left-color: var(--warning);
+}
+.advisor-sev-blocker {
+	border-left-color: var(--error);
+}
+.advisor-badge {
+	text-transform: uppercase;
+	font-size: var(--fs-sm);
+	font-weight: 600;
+	color: var(--muted);
+}
+.advisor-sev-concern .advisor-badge {
+	color: var(--warning);
+}
+.advisor-sev-blocker .advisor-badge {
+	color: var(--error);
+}
+.advisor-toggle {
+	align-self: flex-start;
+	background: none;
+	border: none;
+	padding: 0;
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+
 /* --- Empty state: greeting + suggested prompts before the first message --- */
 
 .empty-state {

@@ -228,6 +228,10 @@ pre.terminal {
 	gap: var(--space-4);
 	align-items: baseline;
 	font-size: var(--fs-md);
+	min-width: 0;
+}
+.subagent-glyph {
+	flex: none;
 }
 .subagent-glyph[data-status="completed"],
 .subagent-glyph[data-status="done"] {
@@ -238,12 +242,36 @@ pre.terminal {
 	color: var(--error);
 }
 .subagent-glyph[data-status="started"],
-.subagent-glyph[data-status="running"] {
+.subagent-glyph[data-status="running"],
+.subagent-glyph[data-status="pending"] {
 	color: var(--warning);
+}
+.subagent-glyph[data-status="started"] .icon,
+.subagent-glyph[data-status="running"] .icon,
+.subagent-glyph[data-status="pending"] .icon {
+	animation: subagent-spin 0.9s linear infinite;
+}
+@keyframes subagent-spin {
+	to {
+		transform: rotate(1turn);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.subagent-glyph .icon {
+		animation: none;
+	}
 }
 .subagent-agent {
 	color: var(--accent);
 	font-weight: 600;
+	flex: none;
+	white-space: nowrap;
+}
+.subagent-type {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	flex: none;
+	white-space: nowrap;
 }
 .subagent-desc {
 	color: var(--muted);
@@ -251,29 +279,50 @@ pre.terminal {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	flex: 1;
+	min-width: 0;
 }
 .subagent-status {
 	color: var(--muted-2);
 	font-size: var(--fs-sm);
+	flex: none;
+	white-space: nowrap;
+}
+.subagent-model {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	max-width: 16em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .subagent-panel-row {
 	display: flex;
 	gap: var(--space-4);
-	align-items: baseline;
+	align-items: center;
 	justify-content: space-between;
+	padding: var(--space-2) var(--space-3);
+	border-radius: var(--r-md);
+}
+.subagent-panel-row:hover {
+	background: var(--hover);
 }
 .subagent-panel-row .subagent-row {
 	flex: 1;
+	min-width: 0;
+}
+.subagent-panel-row > .subagent-controls {
+	flex: 0 1 260px;
 }
 .subagent-time {
 	color: var(--muted-2);
 	font-size: var(--fs-sm);
+	flex: none;
+	white-space: nowrap;
 }
 .subagent-controls {
 	display: flex;
 	gap: var(--space-2);
 	align-items: center;
-	flex: 0 1 260px;
 }
 .subagent-controls .picker-filter {
 	flex: 1;
@@ -281,6 +330,80 @@ pre.terminal {
 	min-width: 0;
 	padding: 1px var(--space-3);
 	font-size: var(--fs-sm);
+}
+/* Worker hub modal (SubagentPanel.tsx): wider than the default picker so a
+   row fits name, type, description, status, model, time, and steer controls. */
+.modal.subagent-hub {
+	width: min(860px, 94vw);
+	max-width: none;
+}
+.subagent-hub .subagent-list {
+	padding: 0;
+	gap: var(--space-3);
+}
+.subagent-hub-tabs {
+	display: flex;
+	gap: var(--space-1);
+	border-bottom: 1px solid var(--border);
+	margin-bottom: var(--space-5);
+}
+.subagent-hub-tab {
+	background: none;
+	border: none;
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
+	font: inherit;
+	font-size: var(--fs-md);
+	color: var(--muted-2);
+	padding: var(--space-3) var(--space-4);
+	cursor: pointer;
+	margin-bottom: -1px;
+}
+.subagent-hub-tab[aria-selected="true"] {
+	color: var(--text);
+	border-bottom-color: var(--accent);
+}
+.subagent-hub-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2) var(--space-5);
+}
+.subagent-hub-toolbar label {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.subagent-hub-toolbar select {
+	max-width: 14em;
+}
+/* Focused worker header (WorkerFocus.tsx): wraps instead of squeezing the
+   back button; follow/pin sit at the right edge when they fit. */
+.subagent-focus-header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2) var(--space-4);
+}
+.subagent-focus-back {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	flex: none;
+	white-space: nowrap;
+}
+.subagent-focus-header label {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.subagent-focus-follow {
+	margin-left: auto;
+}
+.subagent-focus-header > .subagent-status {
+	flex: 0 1 auto;
+	white-space: normal;
+	overflow-wrap: anywhere;
 }
 .active-subagents,
 .active-daemons {
