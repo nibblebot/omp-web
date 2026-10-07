@@ -24,6 +24,9 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - The empty-session character no longer flashes the fallback robot (or the previous session's character) when attaching or starting a new session: the transcript primes before the session's state frame, so the greeting now waits for that state to land before drawing the model's character.
 
 
+### Fixes
+- Slash/`@` autocomplete: the popup renders every match (it rendered only the first twelve, so the mouse wheel could not reach later commands, and arrowing past row twelve appended rows without scrolling, hiding the selection); keyboard moves scroll the selection into view, and pointer selection follows mouse movement only, so wheel-scrolling rows under a still pointer no longer changes the selection.
+
 ### Maintenance & other
 - Move application source to `apps/{cli,fleet,session,web}`, shared libraries to `lib/*`, cross-app E2E to `e2e/`, and tooling tests to `scripts/test/`; enforce the closed `lib/` import boundary in lint.
 - Remove the optional benchmark harness, its `bench` command, and local benchmark outputs; ordinary test execution is unchanged.
