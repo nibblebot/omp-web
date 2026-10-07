@@ -211,7 +211,19 @@ const relay: RelayHandle = createRelay({
 // pending code inputs and UI requests exactly as before.
 // ---------------------------------------------------------------------------
 
-const daemonBroker = createDaemonBroker({ config, getReadyAt: () => readyAt });
+const attachmentGeneration = config.callbackGeneration ?? crypto.randomUUID();
+const attachmentWorkspace = config.callbackWorkspace ?? config.cwd;
+const daemonBroker = createDaemonBroker({
+	config,
+	getReadyAt: () => readyAt,
+	getWebState: (session) => ({
+		sessionScope: {
+			workspaceId: attachmentWorkspace,
+			sessionId: session.sessionId,
+			generation: String(attachmentGeneration),
+		},
+	}),
+});
 const collabSession = createCollabSession({
 	config,
 	agentDir,
@@ -234,6 +246,7 @@ const {
 	broker: daemonBroker,
 	materializeSession,
 	sessionsDir,
+	cwd: config.cwd,
 	hasCallbackPair: () => fleetCallback !== null,
 });
 setOnStreamsEmpty(() => daemonBroker.stopDaemonPoll());
@@ -508,6 +521,13 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 			case "call": {
 				const entry = attachedEntry();
 				if (!entry) throw new Error("Not attached to a session");
+				if (
+					cmd.scope &&
+					(cmd.scope.workspaceId !== attachmentWorkspace ||
+						cmd.scope.generation !== String(attachmentGeneration) ||
+						cmd.scope.sessionId !== entry.session.sessionId)
+				)
+					throw new Error("Stale session attachment; refresh before retrying");
 				// Readiness gate (R8): prompt-family methods are rejected until
 				// the boot session's provider/model/auth resolution completes.
 				// The wire error is the literal string "not_ready".

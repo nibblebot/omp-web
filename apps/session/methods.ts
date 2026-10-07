@@ -20,7 +20,68 @@ import type { SessionEntry } from "./session-entry";
 import { buildSettingsModel, coerceSettingValue } from "#lib/sdk-settings/settings-model";
 import { applySettingSideEffects } from "./settings-effects";
 import { resolveSessionMainFile, MaterializeSessionError } from "./session-materialize";
+import os from "node:os";
+import { createDownloadMethods } from "./download-manifest";
+import { createResumeImportHandlers } from "./resume-import-adapter";
+import { listWorkers, parkWorker, resumeWorker, reviveWorker } from "./worker-lifecycle";
 import {
+	getAdvisorOverview,
+	getAdvisorStats,
+	getAdvisorWarnings,
+	setAdvisorEnabled,
+} from "./advisor-service";
+import {
+	getAdvisorConfiguration,
+	getAdvisorSettings,
+	setAdvisorConfiguration,
+	setAdvisorSettings,
+} from "./advisor-config";
+import { readAdvisorHistory } from "./advisor-history";
+import {
+	cancelLoop,
+	createGoal,
+	dropGoal,
+	getLoopPolicy,
+	pauseGoal,
+	pauseLoop,
+	previewLoop,
+	replaceGoal,
+	resumeGoal,
+	resumeLoop,
+	setBudget,
+	startLoop,
+} from "./goal-service";
+import {
+	getVibeState,
+	killAllVibeWorkers,
+	killVibeWorker,
+	rehydrateVibeWorkers,
+	sendVibeWorker,
+	setVibeMode,
+	spawnVibeWorker,
+	waitVibeWorkers,
+} from "./vibe-service";
+import { createVoiceAdapter, type VoiceAdapter } from "./voice-adapter";
+import { serviceFor } from "./btw-history-adapter";
+import { cfgSttEnabled } from "@oh-my-pi/pi-coding-agent/stt/settings";
+import {
+	abortCompactionRun,
+	compactionSnapshot,
+	executeCompaction,
+	executeDropImages,
+	executeShake,
+	handoffPreview,
+} from "./compaction-adapter";
+import { createLifecycleMethods } from "./lifecycle-adapter";
+import { createSettingsMethods } from "./settings-methods";
+import { rejectEntryUiRequests } from "./ui-context";
+import { createAnnotationMethods } from "./review-annotations";
+import { createGitReviewMethods } from "./review-git";
+import { createPlanReviewMethods } from "./review-plan";
+import { createTodoMethods } from "./review-todos";
+import { createIntegrationMethods } from "./integrations-methods";
+import {
+	broadcast,
 	broadcastTo,
 	clearEphemeralAbort,
 	ephemeralAborts,
@@ -83,6 +144,8 @@ export interface WebMethodsDeps {
 	) => Promise<{ files: number; bytes: number } | { alreadyPresent: true }>;
 	/** Agent sessions root the daemon writes into (boot-time constant). */
 	sessionsDir: string;
+	/** Daemon bound cwd (resume scoping); entry.cwd matches it on this daemon. */
+	cwd: string;
 	/** True when a fleet callback pair is active (clone workspaces). A live
 	 * pair is the ONLY way a bare session id can be resolved against the
 	 * fleet store; without it, switchSession keeps its path semantics. */
@@ -90,9 +153,11 @@ export interface WebMethodsDeps {
 }
 
 export interface WebMethods {
-	methods: Record<
-		WebMethodName,
-		(entry: SessionEntry, args: unknown[], streamId?: number) => Promise<unknown>
+	methods: Partial<
+		Record<
+			WebMethodName,
+			(entry: SessionEntry, args: unknown[], streamId?: number) => Promise<unknown>
+		>
 	>;
 	readOnly: Partial<Record<WebMethodName, true>>;
 	notReadyGated: Partial<Record<WebMethodName, true>>;
@@ -106,6 +171,28 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	 *  around METHODS rows. */
 	let inFlightBash = 0;
 	let inFlightPython = 0;
+
+	// Per-entry voice adapters: discovery reads live settings, STT uses the
+	// session model registry, deltas emit as SSE frames on the entry handle.
+	const voiceAdapters = new WeakMap<SessionEntry, VoiceAdapter>();
+	const voiceAdapter = (entry: SessionEntry): VoiceAdapter => {
+		const cached = voiceAdapters.get(entry);
+		if (cached) return cached;
+		const created = createVoiceAdapter({
+			sttDependencies: {
+				settings: deps.settings,
+				registry: entry.session.modelRegistry,
+			},
+			discovery: () => ({
+				sttEnabled: cfgSttEnabled.get(deps.settings),
+				toolsEnabled: true,
+				liveAuthPresent: false,
+			}),
+			emit: (frame) => broadcastTo(entry.handle, frame),
+		});
+		voiceAdapters.set(entry, created);
+		return created;
+	};
 
 	// Read-only calls skip the post-mutation state broadcast.
 	const READ_ONLY: Partial<Record<WebMethodName, true>> = {
@@ -135,13 +222,18 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	};
 
 	// Calls that replace the transcript; every tab resyncs, not just the requester.
-	// handoff starts a new session server-side; fork rewrites history in place.
+	// Handoff compacts in place; every replacement/rewind resyncs all tabs.
 	const HISTORY_RELOAD: Partial<Record<WebMethodName, true>> = {
 		newSession: true,
 		switchSession: true,
 		branch: true,
 		fork: true,
 		handoff: true,
+		clearSession: true,
+		deleteSession: true,
+		navigateTree: true,
+		resumeAfterAskReanswer: true,
+		btwPromote: true,
 	};
 
 	async function changeSession(
@@ -227,9 +319,11 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		return mainFile;
 	}
 
-	const METHODS: Record<
-		WebMethodName,
-		(entry: SessionEntry, args: unknown[], streamId?: number) => Promise<unknown>
+	const METHODS: Partial<
+		Record<
+			WebMethodName,
+			(entry: SessionEntry, args: unknown[], streamId?: number) => Promise<unknown>
+		>
 	> = {
 		prompt: async (entry, a) => {
 			const text = a[0] as string;
@@ -248,15 +342,12 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
 			deps.collab.fireAndForgetPrompt(entry, a[0] as string, a[1] as Images);
 		},
-		newSession: (entry, a) => changeSession(entry, "newSession", a[0] as string | undefined),
+		// newSession/clearSession/freshSession/deleteSession land via the lifecycle spread below.
 		switchSession: (entry, a) => changeSession(entry, "switchSession", a[0] as string),
 		branch: (entry, a) => changeSession(entry, "branch", a[0] as string),
 		compact: (entry, a) => entry.session.compact(a[0] as string | undefined),
 		retry: (entry) => entry.session.retry(),
 		fork: (entry) => entry.session.fork(),
-		// Sync SDK method: resets provider streams, keeps the transcript; the
-		// post-mutation state broadcast picks up the new sessionId.
-		freshSession: async (entry) => entry.session.freshSession() ?? null,
 		handoff: (entry, a) => entry.session.handoff(a[0] as string | undefined),
 		setSessionName: (entry, a) => entry.session.setSessionName(a[0] as string, "user"),
 		setInterruptMode: async (entry, a) => {
@@ -271,13 +362,29 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		setPlanModeState: async (entry, a) => {
 			entry.session.setPlanModeState(a[0] as PlanModeState | undefined);
 		},
-		// goalRuntime rows: createGoal throws when a goal is already active
-		// (matching the CLI's refusal); the client only offers "set" with no goal.
+		// Goal runtime owns consent, budgets, and exclusion guards (goal-service).
 		goalCreate: (entry, a) =>
-			entry.session.goalRuntime.createGoal({ objective: String(a[0] ?? "") }),
-		goalPause: (entry) => entry.session.goalRuntime.pauseGoal(),
-		goalResume: (entry) => entry.session.goalRuntime.resumeGoal(),
-		goalDrop: (entry) => entry.session.goalRuntime.dropGoal(),
+			createGoal(entry, {
+				objective: String((a[0] as { objective?: unknown }) ?? a[0] ?? ""),
+				...(typeof a[0] === "object" && a[0] !== null
+					? (a[0] as { tokenBudget?: number; consent?: boolean })
+					: { consent: true }),
+			}),
+		goalReplace: (entry, a) =>
+			replaceGoal(entry, {
+				objective: String(a[0] ?? ""),
+				...(typeof a[1] === "object" && a[1] !== null
+					? (a[1] as { tokenBudget?: number; consent?: boolean })
+					: {}),
+			}),
+		goalBudget: (entry, a) => setBudget(entry, typeof a[0] === "number" ? a[0] : undefined),
+		goalPause: (entry) => pauseGoal(entry),
+		goalResume: (entry, a) =>
+			resumeGoal(
+				entry,
+				typeof a[0] === "object" && a[0] !== null ? (a[0] as { consent?: boolean }) : undefined,
+			),
+		goalDrop: (entry) => dropGoal(entry),
 		formatSessionAsText: async (entry) => entry.session.formatSessionAsText(),
 		// Dump lands in os.tmpdir(), already inside the /download realpath jail.
 		dumpLlmRequestToTmpDir: (entry) => entry.session.dumpLlmRequestToTmpDir(),
@@ -439,23 +546,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		getAvailableModels: async (entry) => {
 			await entry.session.modelRegistry.awaitBackgroundRefresh();
 			return entry.session.getAvailableModels();
-		},
-		// Settings panel (TUI /settings parity). getSettings is READ_ONLY; the
-		// model is built fresh per call from the shared Settings singleton.
-		getSettings: async (entry) => {
-			await entry.session.modelRegistry.awaitBackgroundRefresh();
-			return buildSettingsModel(entry.session, await getAvailableThemes());
-		},
-		setSetting: async (entry, a) => {
-			const [path, value] = [String(a[0]), a[1]];
-			const coerced = coerceSettingValue(path, value);
-			// Registry handles validate and persist to the shared settings scope.
-			// Virtual settings are handled only by their explicit side effects.
-			lookup(path)?.set(deps.settings, coerced);
-			await applySettingSideEffects(entry.session, path, coerced);
-			const model = buildSettingsModel(entry.session, await getAvailableThemes());
-			broadcastTo(entry.handle, { type: "settings_changed", model });
-			return model;
 		},
 		setThinkingLevel: async (entry, a) => {
 			entry.session.setThinkingLevel(a[0] as ThinkingLevel);
@@ -624,8 +714,17 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			});
 		},
 		getSubagentMessages: (entry, a) => {
-			const selector = a[0] as { subagentId?: string; sessionFile?: string; fromByte?: number };
-			return readSubagentTranscript(resolveSubagentSessionFile(entry, selector), selector.fromByte);
+			const selector = a[0] as {
+				subagentId?: string;
+				sessionFile?: string;
+				fromByte?: number;
+				maxBytes?: number;
+			};
+			return readSubagentTranscript(
+				resolveSubagentSessionFile(entry, selector),
+				selector.fromByte,
+				selector.maxBytes,
+			);
 		},
 		subagentSteer: async (entry, a) => {
 			await deps.collab.liveSubagentSession(entry, a[0] as string, "steer").steer(a[1] as string);
@@ -640,6 +739,181 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		// real implementation, see apps/session/session-materialize.ts).
 		materializeSession: (entry, a) =>
 			deps.materializeSession(entry, a[0] as { sessionId?: string }),
+		...createLifecycleMethods({
+			sessionsDir: deps.sessionsDir,
+			hasCallbackPair: deps.hasCallbackPair,
+			assertWritable: async (entry) => {
+				if (entry.session.sessionFile == null || !entry.session.sessionFile.endsWith(".jsonl"))
+					throw new Error("Session lifecycle refused: no persisted file-backed session");
+			},
+			settleHostWork: async (entry) => {
+				rejectEntryUiRequests(entry, "session lifecycle boundary");
+				for (const controller of ephemeralAborts.get(entry)?.values() ?? []) controller.abort();
+			},
+			settleWorkers: async (entry) => {
+				for (const id of entry.subagentSnapshots.keys()) {
+					await deps.collab.abortSubagent(entry, id).catch(() => {});
+				}
+			},
+			broadcastAvailableCommands: (entry) => deps.broker.broadcastAvailableCommands(entry),
+		}),
+		...createSettingsMethods({
+			settings: deps.settings,
+			getThemes: getAvailableThemes,
+			broadcast: (model) => broadcast({ type: "settings_changed", model }),
+		}),
+		...createAnnotationMethods(),
+		...createGitReviewMethods(),
+		...createPlanReviewMethods(),
+		...createTodoMethods(),
+		...createIntegrationMethods({
+			broadcastState: (entry) => deps.broker.broadcastState(entry),
+			broadcastAvailableCommands: (entry) => deps.broker.broadcastAvailableCommands(entry),
+		}).methods,
+		...createDownloadMethods({
+			manifestDeps: (entry) => ({
+				sessionId: entry.session.sessionId,
+				...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
+				sessionsDir: deps.sessionsDir,
+				subagentSessionFiles: entry.transcriptSessionFilesBySubagentId,
+				subagentSnapshots: entry.subagentSnapshots,
+			}),
+			roots: () => [deps.sessionsDir, os.tmpdir()],
+		}),
+		...Object.fromEntries(
+			Object.entries(
+				createResumeImportHandlers({ cwd: deps.cwd, sessionDir: deps.sessionsDir }),
+			).map(([name, handler]) => [name, (_entry: SessionEntry, args: unknown[]) => handler(args)]),
+		),
+		compactionSnapshot: async (entry) => compactionSnapshot(entry.session),
+		compactEx: async (entry, a) => {
+			const input = (a[0] ?? {}) as { mode?: string; instructions?: string };
+			const mode = input.mode === "remote" || input.mode === "snapcompact" ? input.mode : "soft";
+			return executeCompaction(entry.session, {
+				mode,
+				...(typeof input.instructions === "string" ? { instructions: input.instructions } : {}),
+			});
+		},
+		shake: async (entry, a) => {
+			const input = (a[0] ?? {}) as { mode?: string };
+			const mode = input.mode === "images" || input.mode === "thinking" ? input.mode : "elide";
+			return executeShake(entry.session, mode);
+		},
+		dropImages: async (entry) => executeDropImages(entry.session),
+		abortCompaction: async (entry, a) => {
+			const reason = (a[0] as { reason?: unknown } | undefined)?.reason;
+			return abortCompactionRun(entry.session, reason);
+		},
+		handoffPreview: async (entry, a) => {
+			const focus = (a[0] as { focus?: unknown } | undefined)?.focus;
+			return handoffPreview(entry.session, typeof focus === "string" ? focus : undefined);
+		},
+		voiceCapability: async (entry) => voiceAdapter(entry).capability(),
+		voiceDictationStart: async (entry, a) => voiceAdapter(entry).dictationStart(a[0] as never),
+		voiceDictationFrame: async (entry, a) => voiceAdapter(entry).dictationFrame(a[0] as never),
+		voiceDictationCommit: async (entry, a) => voiceAdapter(entry).dictationCommit(a[0] as never),
+		voiceDictationCancel: async (entry, a) => voiceAdapter(entry).dictationCancel(a[0] as never),
+		voiceRealtimeStart: async (entry, a) => voiceAdapter(entry).realtimeStart(a[0] as never),
+		voiceRealtimeFrame: async (entry, a) => voiceAdapter(entry).realtimeFrame(a[0] as never),
+		voiceRealtimeInterrupt: async (entry, a) =>
+			voiceAdapter(entry).realtimeInterrupt(a[0] as never),
+		voiceRealtimeMute: async (entry, a) => voiceAdapter(entry).realtimeMute(a[0] as never),
+		voiceRealtimeStop: async (entry, a) => voiceAdapter(entry).realtimeStop(a[0] as never),
+		btwList: async (entry, a) => (await serviceFor(entry.session)).listBtwRecords(a[0] as never),
+		btwSearch: async (entry, a) =>
+			(await serviceFor(entry.session)).listBtwSearch(String(a[0] ?? ""), a[1] as never),
+		btwPage: async (entry, a) =>
+			(await serviceFor(entry.session)).pageBtwTurns(String(a[0]), a[1] as never, a[2] as never),
+		btwStart: async (entry, a, streamId) => {
+			const service = await serviceFor(entry.session);
+			const record = await service.startBtwTurn(entry.session, String(a[0] ?? ""), {
+				onDelta: (text) => {
+					if (streamId !== undefined)
+						broadcastTo(entry.handle, { type: "ephemeral_delta", id: streamId, text });
+				},
+			});
+			return { record };
+		},
+		btwFollowUp: async (entry, a, streamId) => {
+			const service = await serviceFor(entry.session);
+			const record = await service.startBtwTurn(entry.session, String(a[1] ?? ""), {
+				recordId: String(a[0]),
+				onDelta: (text) => {
+					if (streamId !== undefined)
+						broadcastTo(entry.handle, { type: "ephemeral_delta", id: streamId, text });
+				},
+			});
+			return { record };
+		},
+		btwCancel: async (entry, a) => ({
+			record: await (await serviceFor(entry.session)).cancelBtwTurn(String(a[0])),
+		}),
+		btwCopy: async (entry, a) => ({
+			text: (await serviceFor(entry.session)).copyBtwText(String(a[0])) ?? null,
+		}),
+		btwPromotePreview: async (entry, a) =>
+			(await serviceFor(entry.session)).previewPromoteBtw(
+				entry.session,
+				entry.session.sessionManager,
+				String(a[0]),
+			),
+		btwPromote: async (entry, a) =>
+			(await serviceFor(entry.session)).promoteBtwToBranch(
+				entry.session,
+				entry.session.sessionManager,
+				String(a[0]),
+			),
+		workerList: async (entry) => ({ workers: await listWorkers(entry) }),
+		workerPark: async (entry, a) => parkWorker(entry, String(a[0])),
+		workerRevive: async (entry, a) => reviveWorker(entry, String(a[0])),
+		workerResume: async (entry, a) => resumeWorker(entry, String(a[0])),
+		advisorGetStatus: async (entry, a) => {
+			const section = (a[0] as { section?: string } | undefined)?.section;
+			if (section === "stats") return getAdvisorStats(entry);
+			if (section === "warnings") return getAdvisorWarnings(entry);
+			if (section === "configuration") return getAdvisorConfiguration(entry, "project");
+			return getAdvisorOverview(entry);
+		},
+		advisorConfigure: async (entry, a) => {
+			const input = (a[0] ?? {}) as { enabled?: boolean; scope?: string; document?: unknown };
+			if (typeof input.enabled === "boolean") return setAdvisorEnabled(entry, input.enabled);
+			if (input.document !== undefined)
+				return setAdvisorConfiguration(entry, {
+					scope: input.scope === "user" ? "user" : "project",
+					document: input.document,
+				} as never);
+			return setAdvisorSettings(entry, input as never);
+		},
+		advisorTranscript: async (entry, a) => readAdvisorHistory(entry, (a[0] ?? {}) as never),
+		loopPreview: async (_entry, a) => previewLoop(String(a[0] ?? "")),
+		loopPolicy: async (entry) => getLoopPolicy(entry),
+		loopStart: async (entry, a) =>
+			startLoop(entry, {
+				argsText: String(a[0] ?? ""),
+				...(typeof a[1] === "object" && a[1] !== null
+					? (a[1] as { prompt?: string; consent?: boolean })
+					: {}),
+			}),
+		loopPause: async (entry) => pauseLoop(entry),
+		loopCancel: async (entry) => cancelLoop(entry),
+		loopResume: async (entry, a) =>
+			resumeLoop(
+				entry,
+				typeof a[0] === "object" && a[0] !== null ? (a[0] as { consent?: boolean }) : {},
+			),
+		vibeStatus: async (entry) => getVibeState(entry),
+		vibeSetMode: async (entry, a) =>
+			setVibeMode(
+				entry,
+				a[0] === true,
+				typeof a[1] === "object" && a[1] !== null ? (a[1] as { consent?: boolean }) : undefined,
+			),
+		vibeSpawn: async (entry, a) => spawnVibeWorker(entry, (a[0] ?? {}) as never),
+		vibeSend: async (entry, a) => sendVibeWorker(entry, (a[0] ?? {}) as never),
+		vibeWait: async (entry, a) => waitVibeWorkers(entry, (a[0] ?? {}) as never),
+		vibeKill: async (entry, a) => killVibeWorker(entry, String(a[0])),
+		vibeKillAll: async (entry) => killAllVibeWorkers(entry),
+		vibeRehydrate: async (entry) => rehydrateVibeWorkers(entry),
 	};
 
 	return {

@@ -294,6 +294,8 @@ const SESSION_SCOPED_FRAME_LIST = [
 	// Finding #16: the dialog's settle marker rides the session scope like the
 	// request, so a daemon switch guard applies the same way.
 	"ui_request_end",
+	"voice_dictation_delta",
+	"voice_realtime_event",
 	"collab_status",
 ] as const satisfies readonly SessionScopedFrame["type"][];
 // Exhaustiveness pin (finding #63): same addition-direction guard as the

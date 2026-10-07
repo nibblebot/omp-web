@@ -208,42 +208,48 @@ export function resolveSubagentSessionFile(
 	throw new Error("getSubagentMessages requires subagentId or sessionFile");
 }
 
-/** Port of the RPC transcript reader: byte-offset paging over the subagent's .jsonl. */
+/** Read bounded complete JSONL records; entry IDs remain durable transcript anchors. */
 export async function readSubagentTranscript(
 	sessionFile: string,
 	fromByte = 0,
-): Promise<SubagentMessagesResult> {
+	maxBytes = 256 * 1024,
+): Promise<SubagentMessagesResult & { hasMore: boolean }> {
 	let startByte = Number.isFinite(fromByte) ? Math.max(0, Math.trunc(fromByte)) : 0;
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 1024 || maxBytes > 4 * 1024 * 1024) {
+		throw new Error("Worker transcript page size must be between 1024 and 4194304 bytes");
+	}
 	const file = Bun.file(sessionFile);
 	let size: number;
 	try {
 		({ size } = await stat(sessionFile));
 	} catch (err) {
 		if (!isEnoent(err)) throw err;
-		return {
-			sessionFile,
-			fromByte: startByte,
-			nextByte: startByte,
-			reset: false,
-			entries: [],
-			messages: [],
-		};
+		throw new Error("Worker transcript artifact unavailable");
 	}
 	let reset = false;
 	if (startByte > size) {
 		startByte = 0;
 		reset = true;
 	}
-	const text = startByte >= size ? "" : await file.slice(startByte).text();
-	const lastNewline = text.lastIndexOf("\n");
-	const completeText = lastNewline >= 0 ? text.slice(0, lastNewline + 1) : "";
-	const entries = completeText.length > 0 ? parseSessionEntries(completeText) : [];
-	const nextByte = startByte + Buffer.byteLength(completeText, "utf8");
+	const endByte = Math.min(size, startByte + maxBytes);
+	const bytes =
+		startByte >= size
+			? Buffer.alloc(0)
+			: Buffer.from(await file.slice(startByte, endByte).arrayBuffer());
+	const lastNewline = bytes.lastIndexOf(10);
+	if (lastNewline < 0 && endByte < size) {
+		throw new Error("Worker transcript record exceeds page size; request a larger bounded page");
+	}
+	const completeBytes = lastNewline >= 0 ? bytes.subarray(0, lastNewline + 1) : Buffer.alloc(0);
+	const entries =
+		completeBytes.length > 0 ? parseSessionEntries(completeBytes.toString("utf8")) : [];
+	const nextByte = startByte + completeBytes.length;
 	return {
 		sessionFile,
 		fromByte: startByte,
 		nextByte,
 		reset,
+		hasMore: nextByte < size && endByte < size,
 		entries,
 		messages: entries.filter(isSessionMessageEntry).map((entry) => entry.message),
 	};

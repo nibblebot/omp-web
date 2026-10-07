@@ -53,6 +53,7 @@ function methodsTable() {
 		// Clone-workspace deps (P8.9 wake): unused by these rows, so inert doubles.
 		materializeSession: async () => ({ alreadyPresent: true as const }),
 		sessionsDir: "/tmp/fleet-test-sessions",
+		cwd: "/tmp/fleet-test-cwd",
 		hasCallbackPair: () => false,
 	}).methods;
 }
@@ -64,7 +65,7 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 		// without one must not be left believing computer use is on.
 		const { entry, refreshes } = stubEntry({ preludes: [] });
 		const methods = methodsTable();
-		await expect(methods.setComputerToolEnabled(entry, [true])).rejects.toThrow(
+		await expect(methods.setComputerToolEnabled!(entry, [true])).rejects.toThrow(
 			"unavailable in this session",
 		);
 		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
@@ -74,7 +75,7 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 	test("enabling with an active prelude keeps the override and rebuilds the prompt", async () => {
 		const { entry, refreshes } = stubEntry({ preludes: [{ name: "computer" }] });
 		const methods = methodsTable();
-		await methods.setComputerToolEnabled(entry, [true]);
+		await methods.setComputerToolEnabled!(entry, [true]);
 		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(true);
 		expect(refreshes()).toBe(1);
 	});
@@ -82,7 +83,7 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 	test("disabling needs no prelude and still rebuilds the prompt", async () => {
 		const { entry, refreshes } = stubEntry({ preludes: [] });
 		const methods = methodsTable();
-		await methods.setComputerToolEnabled(entry, [false]);
+		await methods.setComputerToolEnabled!(entry, [false]);
 		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
 		expect(refreshes()).toBe(1);
 	});
@@ -93,7 +94,7 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 			refreshError: new Error("prompt rebuild exploded"),
 		});
 		const methods = methodsTable();
-		await expect(methods.setComputerToolEnabled(entry, [true])).rejects.toThrow(
+		await expect(methods.setComputerToolEnabled!(entry, [true])).rejects.toThrow(
 			"prompt rebuild exploded",
 		);
 		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
@@ -104,7 +105,7 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 		const methods = methodsTable();
 		// The row throws synchronously; the dispatch core turns that into an
 		// ok:false call_result (asserted over the wire in omp-session.test.ts).
-		expect(() => methods.setInspectImageMode(entry, ["auto"])).toThrow("inspect_image");
+		expect(() => methods.setInspectImageMode!(entry, ["auto"])).toThrow("inspect_image");
 		expect(refreshes()).toBe(0);
 	});
 });
@@ -126,7 +127,7 @@ describe("model-role registry settings preserve scope and cancellation", () => {
 				},
 			},
 		} as unknown as SessionEntry;
-		await methodsTable().setModelRole(entry, ["default", "openai", "selected", "inherit"]);
+		await methodsTable().setModelRole!(entry, ["default", "openai", "selected", "inherit"]);
 		expect(switches).toEqual([{ thinkingLevel: undefined, persist: false }]);
 		expect(settings.getProjectModelRole("default")).toBe("openai/previous:low");
 	});
@@ -143,7 +144,7 @@ describe("model-role registry settings preserve scope and cancellation", () => {
 				getRoleModelCycle: () => undefined,
 			},
 		} as unknown as SessionEntry;
-		await methodsTable().setModelRole(entry, ["smol", "openai", "selected", "inherit"]);
+		await methodsTable().setModelRole!(entry, ["smol", "openai", "selected", "inherit"]);
 		expect(settings.getProjectModelRole("smol")).toBe("openai/selected");
 		expect(settings.getModelRoleSource("smol")).toBe("project");
 		settings.clearProjectModelRole("smol");
@@ -169,7 +170,7 @@ describe("model-role registry settings preserve scope and cancellation", () => {
 				},
 			},
 		} as unknown as SessionEntry;
-		await methodsTable().clearModelRole(entry, ["smol"]);
+		await methodsTable().clearModelRole!(entry, ["smol"]);
 		expect(settings.getProjectModelRole("smol")).toBeUndefined();
 		expect(settings.getModelRole("smol")).toBe("openai/global:high");
 		expect(applied).toEqual([
@@ -182,7 +183,7 @@ describe("model-role registry settings preserve scope and cancellation", () => {
 		settings.setModelRole("writer", "openai/selected");
 		cfgModelTags.set(settings, { writer: { name: "Writer" }, smol: { name: "Fast" } });
 		const entry = { session: { settings } } as unknown as SessionEntry;
-		await methodsTable().setModelRoleHidden(entry, ["writer", true]);
+		await methodsTable().setModelRoleHidden!(entry, ["writer", true]);
 		expect(cfgModelTags.get(settings)).toEqual({
 			writer: { name: "Writer", hidden: true },
 			smol: { name: "Fast" },

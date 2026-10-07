@@ -11,10 +11,11 @@ import type {
 import type { CollabHostAdapter } from "./collab-host";
 import type { SessionEntry } from "./session-entry";
 import { broadcastTo, notifyEvent, streams, type SseConsumer } from "./sse-delivery";
+import { wrapTerminalHooks } from "./browser-ui";
 
 // ---------------------------------------------------------------------------
 // ExtensionUIContext (plan §1.7): the dialog subset round-trips over the
-// socket as ui_request/ui_response frames; terminal-only surface is stubbed.
+// socket as ui_request/ui_response frames; declarative presentation hooks are adapted.
 // Pending requests live on the owning SessionEntry, target only that
 // session's attached streams, and are rejected when every targeted stream has
 // closed and on session close / server shutdown.
@@ -46,10 +47,18 @@ function uiRequest(entry: SessionEntry, method: string, params: unknown): Promis
 }
 
 /** The pre-existing web dialog path (one pending request per entry). */
+export function hasBrowserUiClient(entry: SessionEntry): boolean {
+	for (const stream of streams) {
+		if (stream.attached === entry.handle) return true;
+	}
+	return false;
+}
+
 export function webUiRequest(
 	entry: SessionEntry,
 	method: string,
 	params: unknown,
+	onRegistered?: (id: string) => void,
 ): Promise<unknown> {
 	const targets = new Set<SseConsumer>();
 	for (const stream of streams) {
@@ -60,6 +69,7 @@ export function webUiRequest(
 	const id = `ui${nextUiRequestId++}`;
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	entry.pendingUiRequests.set(id, { streams: targets, resolve, reject });
+	onRegistered?.(id);
 	broadcastTo(entry.handle, { type: "ui_request", id, method, params });
 	return promise;
 }
@@ -270,7 +280,7 @@ export function rejectStreamUiRequests(
 
 /** One context per session: dialog requests and notices route to that session's streams. */
 export function buildUiContext(entry: SessionEntry): ExtensionUIContext {
-	return {
+	return wrapTerminalHooks(entry, {
 		select: (title, options) =>
 			uiRequest(entry, "select", { title, options }) as Promise<string | undefined>,
 		confirm: async (title, message) =>
@@ -282,27 +292,5 @@ export function buildUiContext(entry: SessionEntry): ExtensionUIContext {
 		askDialog: (questions) =>
 			uiRequest(entry, "askDialog", { questions }) as Promise<ExtensionAskDialogResult | undefined>,
 		notify: (message, type) => notifyEvent(entry, message, type ?? "info"),
-		// --- Terminal-only surface: no-ops in the headless web host. ---
-		onTerminalInput: () => () => {},
-		setStatus: () => {},
-		setWorkingMessage: () => {},
-		setWidget: () => {},
-		setFooter: () => {},
-		setHeader: () => {},
-		setTitle: () => {},
-		custom: () =>
-			Promise.reject(new Error("Custom UI components are not supported in the web host")),
-		setEditorText: () => {},
-		pasteToEditor: () => {},
-		getEditorText: () => "",
-		addAutocompleteProvider: () => {},
-		setEditorComponent: () => {},
-		theme: {} as ExtensionUIContext["theme"],
-		getAllThemes: () => Promise.resolve([]),
-		getTheme: () => Promise.resolve(undefined),
-		setTheme: () =>
-			Promise.resolve({ success: false, error: "Themes are not supported in the web host" }),
-		getToolsExpanded: () => false,
-		setToolsExpanded: () => {},
-	};
+	});
 }

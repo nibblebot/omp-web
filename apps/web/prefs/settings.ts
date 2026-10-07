@@ -23,6 +23,28 @@ export function displayOptionValue(item: SettingsItem, value: unknown): string {
 	return String(value ?? "");
 }
 
+/** JSON syntax is checked here; schema/type constraints are checked by setSetting. */
+export function parseSettingDraft(raw: string): unknown {
+	return JSON.parse(raw);
+}
+
+export function formatSettingValue(value: unknown, secret = false): string {
+	if (secret) return value == null || value === "" ? "" : "••••••••";
+	if (typeof value === "string") return value;
+	return JSON.stringify(value) ?? "";
+}
+
+export function settingEffectLabel(effect: "live" | "next-session" | "restart"): string {
+	switch (effect) {
+		case "live":
+			return "Applies immediately";
+		case "next-session":
+			return "Applies to new sessions";
+		case "restart":
+			return "Requires restart";
+	}
+}
+
 /** Human-readable current value of an item, per type (TUI display parity). */
 export function formatItemValue(item: SettingsItem): string {
 	const value = item.value;
@@ -54,6 +76,9 @@ export function formatItemValue(item: SettingsItem): string {
 				.sort()
 				.join(", ");
 		}
+		case "record":
+		case "list":
+			return formatSettingValue(value, item.secret);
 	}
 	return String(value ?? "");
 }

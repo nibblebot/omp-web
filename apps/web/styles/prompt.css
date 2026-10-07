@@ -200,3 +200,33 @@ button.stop:not(:disabled):hover {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* P2 composer tools (G03): folded large-paste view, tool row, external-edit
+ * cluster. The fold is visual only — submit always uses the full payload. */
+.prompt-fold {
+	border: 1px dashed var(--border-strong);
+	border-radius: var(--r-md);
+	padding: var(--space-3) var(--space-4);
+	margin-bottom: var(--space-3);
+	background: var(--panel-2);
+}
+.prompt-fold pre {
+	margin: 0 0 var(--space-2);
+	max-height: 160px;
+	overflow: hidden;
+	white-space: pre-wrap;
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+}
+.prompt-tools {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+	margin-top: var(--space-2);
+}
+.prompt-extedit {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}

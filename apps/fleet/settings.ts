@@ -15,10 +15,30 @@ import type { Settings } from "@oh-my-pi/pi-coding-agent";
 import type { SettingsModel } from "#lib/wire/protocol";
 import type { SettingsSession } from "#lib/sdk-settings/settings-model";
 
+export type SettingsLayer = "global" | "project";
+
+export class FleetSettingsError extends Error {
+	constructor(
+		message: string,
+		readonly status: 400 | 409,
+	) {
+		super(message);
+	}
+}
+
+// All fleet services share the SDK singleton; revision checks and writes must
+// remain ordered even when more than one service is instantiated.
+let mutationQueue: Promise<unknown> = Promise.resolve();
 /** The unattached settings surface the fleet control plane exposes. */
 export interface FleetSettings {
 	getModel(): Promise<SettingsModel>;
-	set(path: string, value: unknown): Promise<SettingsModel>;
+	set(
+		path: string,
+		value: unknown,
+		expectedRevision?: number,
+		layer?: SettingsLayer,
+	): Promise<SettingsModel>;
+	unset(path: string, expectedRevision?: number, layer?: SettingsLayer): Promise<SettingsModel>;
 }
 
 export interface FleetSettingsOptions {
@@ -82,7 +102,7 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 	};
 
 	async function getModel(): Promise<SettingsModel> {
-		await ensureSettings();
+		const settings = await ensureSettings();
 		const [{ getAvailableThemes }, { buildSettingsModel }] = await Promise.all([
 			import("@oh-my-pi/pi-coding-agent"),
 			import("#lib/sdk-settings/settings-model"),
@@ -97,26 +117,80 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 			getAvailableThinkingLevels: () => [],
 			getAvailableModels: () => models,
 		};
-		return buildSettingsModel(fallbackSession, themes);
+		return buildSettingsModel(fallbackSession, themes, {
+			settings,
+			target: "future-sessions",
+			projectWritable: false,
+		});
 	}
 
-	async function set(path: string, value: unknown): Promise<SettingsModel> {
-		const settings = await ensureSettings();
-		const [{ lookup }, { coerceSettingValue }] = await Promise.all([
-			import("@oh-my-pi/pi-coding-agent/config/registry"),
-			import("#lib/sdk-settings/settings-model"),
-		]);
-		// Schema-driven coercion mirrors the TUI's #setSettingValue; throws
-		// on unknown paths / uncoercible values (the route maps those to 400).
-		const coerced = coerceSettingValue(path, value);
-		// Persist-only: no live session exists on the unattached settings surface, so
-		// applySettingSideEffects (session setters, prompt refresh, memory
-		// backend, …) is deliberately skipped; the side effects replay when
-		// a session next boots from the same config, making the merged-view +
-		// debounced-disk write the complete fleet-side action.
-		lookup(path)!.set(settings, coerced);
-		return getModel();
+	function mutate(
+		path: string,
+		value: unknown,
+		expectedRevision: number | undefined,
+		layer: SettingsLayer,
+		remove: boolean,
+	): Promise<SettingsModel> {
+		const operation = mutationQueue.then(async () => {
+			if (layer !== "global" && layer !== "project")
+				throw new FleetSettingsError("Invalid settings layer", 400);
+			if (
+				expectedRevision !== undefined &&
+				(!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+			)
+				throw new FleetSettingsError("Invalid expectedRevision", 400);
+			const settings = await ensureSettings();
+			const [{ lookup }, { coerceSettingValue }] = await Promise.all([
+				import("@oh-my-pi/pi-coding-agent/config/registry"),
+				import("#lib/sdk-settings/settings-model"),
+			]);
+			if (expectedRevision !== undefined && settings.revision !== expectedRevision)
+				throw new FleetSettingsError("Settings changed; refresh before editing.", 409);
+			const setting = lookup(path);
+			if (!setting) throw new FleetSettingsError(`Unknown setting: ${path}`, 400);
+			let coerced: unknown;
+			if (!remove) {
+				try {
+					coerced = coerceSettingValue(path, value, settings);
+				} catch (error) {
+					throw new FleetSettingsError(error instanceof Error ? error.message : String(error), 400);
+				}
+			}
+			// Persist only: future sessions apply their own live side effects.
+			// Project layer has no per-setting SDK write surface (only model-role
+			// project values persist), so project writes refuse with guidance.
+			if (layer === "project") {
+				throw new FleetSettingsError(
+					"Project-layer settings are read-only here: edit the project config file directly.",
+					400,
+				);
+			} else {
+				if (remove) setting.unset(settings);
+				else setting.set(settings, coerced);
+				await settings.flush();
+			}
+			return getModel();
+		});
+		mutationQueue = operation.catch(() => undefined);
+		return operation;
 	}
 
-	return { getModel, set };
+	function set(
+		path: string,
+		value: unknown,
+		expectedRevision?: number,
+		layer: SettingsLayer = "global",
+	): Promise<SettingsModel> {
+		return mutate(path, value, expectedRevision, layer, false);
+	}
+
+	function unset(
+		path: string,
+		expectedRevision?: number,
+		layer: SettingsLayer = "global",
+	): Promise<SettingsModel> {
+		return mutate(path, undefined, expectedRevision, layer, true);
+	}
+
+	return { getModel, set, unset };
 }

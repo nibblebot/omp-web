@@ -284,6 +284,59 @@ button.picker-row {
 .picker-note:empty {
 	margin-top: 0;
 }
+/* P2 session-graph picker (BranchModal): kind filter chips, per-node detail
+ * disclosure, same-file vs new-file actions, ask re-answer form. */
+.graph-filters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-4);
+}
+.graph-filter {
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	padding: var(--space-1) var(--space-4);
+	cursor: pointer;
+}
+.graph-filter[aria-pressed="true"] {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+	color: var(--text);
+}
+.graph-list {
+	max-height: 44vh;
+}
+.graph-node.active > .picker-row {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+}
+.graph-detail {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-4) var(--space-3) calc(var(--space-4) * 2);
+}
+.graph-opt {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}
+.graph-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-3);
+}
+.graph-ask-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-4);
+	margin-top: var(--space-4);
+}
 .stats-table {
 	border-collapse: collapse;
 	font-size: var(--fs-lg);

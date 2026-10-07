@@ -190,6 +190,7 @@ export function call(
 		id,
 		method,
 		args,
+		scope: state.sessionScope ? { ...state.sessionScope } : undefined,
 		...(streamId !== undefined ? { streamId } : {}),
 	} satisfies ClientCommand;
 	// OAuth/manual-code flows exceed any sane default; login passes 0.

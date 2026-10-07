@@ -29,39 +29,102 @@ async function ctlError(res: Response): Promise<string> {
 // endpoints back the panel instead (config.yml writes apply to new
 // sessions); the session RPC resumes once a session is attached.
 // ---------------------------------------------------------------------------
-export function refreshSettings(): void {
-	setState("settingsLoading", true);
-	const load = fleetSettingsActive()
-		? fetch("/ctl/settings")
-				.then(async (res) => {
-					if (!res.ok) throw await ctlError(res);
-					return (await res.json()) as SettingsModel;
-				})
-				.then((m) => setState("settingsModel", m))
-		: call("getSettings").then((m) => setState("settingsModel", m as SettingsModel));
-	load
-		.catch((err) => setState("error", String(err)))
-		.finally(() => setState("settingsLoading", false));
+/** Apply RPC and pushed snapshots without letting older revisions replace newer ones. */
+export function applySettingsModel(model: SettingsModel): void {
+	const target = fleetSettingsActive() ? "future-sessions" : "current-session";
+	if (model.target !== undefined && model.target !== target) return;
+	const current = state.settingsModel;
+	if (
+		current?.revision !== undefined &&
+		(current.target === undefined || current.target === model.target) &&
+		(model.revision === undefined || model.revision < current.revision)
+	)
+		return;
+	setState("settingsModel", model);
 }
 
-/** Send one setting; the fresh model returned is authoritative, apply it. */
-export function updateSetting(path: string, value: unknown): void {
-	if (fleetSettingsActive()) {
-		const doFetch = state.authStatus !== "disabled" ? authedFetch : fetch;
-		doFetch("/ctl/settings/set", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ path, value }),
-		})
-			.then(async (res) => {
+let loadId = 0;
+
+export function refreshSettings(): void {
+	const id = ++loadId;
+	const sessionId = state.currentSessionId;
+	const fleet = fleetSettingsActive();
+	setState("settingsLoading", true);
+	const load = fleet
+		? fetch("/ctl/settings").then(async (res) => {
 				if (!res.ok) throw await ctlError(res);
 				return (await res.json()) as SettingsModel;
 			})
-			.then((m) => setState("settingsModel", m))
-			.catch((err) => setState("error", String(err)));
-		return;
-	}
-	call("setSetting", [path, value])
-		.then((m) => setState("settingsModel", m as SettingsModel))
-		.catch((err) => setState("error", String(err)));
+		: call("getSettings", []).then((m) => m as SettingsModel);
+	load
+		.then((model) => {
+			if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
+				applySettingsModel(model);
+			}
+		})
+		.catch((err) => {
+			if (id === loadId) setState("error", String(err));
+		})
+		.finally(() => {
+			if (id === loadId) setState("settingsLoading", false);
+		});
+}
+
+function writeSetting(
+	path: string,
+	value: unknown,
+	unset: boolean,
+	expectedRevision: number | undefined,
+	layer?: string,
+): void {
+	const sessionId = state.currentSessionId;
+	const fleet = fleetSettingsActive();
+	const request = fleet
+		? (state.authStatus !== "disabled" ? authedFetch : fetch)(
+				unset ? "/ctl/settings/unset" : "/ctl/settings/set",
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(
+						unset ? { path, expectedRevision, layer } : { path, value, expectedRevision, layer },
+					),
+				},
+			).then(async (res) => {
+				if (!res.ok) throw await ctlError(res);
+				return (await res.json()) as SettingsModel;
+			})
+		: call(
+				unset ? "unsetSetting" : "setSetting",
+				unset ? [path, expectedRevision, layer] : [path, value, expectedRevision, layer],
+			).then((model) => model as SettingsModel);
+	request
+		.then((model) => {
+			if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
+				applySettingsModel(model);
+			}
+		})
+		.catch((err) => {
+			if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
+				setState("error", String(err));
+			}
+		});
+}
+
+/** Set an explicit value, including null; validation remains authoritative on the server. */
+export function updateSetting(
+	path: string,
+	value: unknown,
+	expectedRevision = state.settingsModel?.revision,
+	layer?: string,
+): void {
+	writeSetting(path, value, false, expectedRevision, layer);
+}
+
+/** Remove an explicit override rather than storing null. */
+export function unsetSetting(
+	path: string,
+	expectedRevision = state.settingsModel?.revision,
+	layer?: string,
+): void {
+	writeSetting(path, undefined, true, expectedRevision, layer);
 }

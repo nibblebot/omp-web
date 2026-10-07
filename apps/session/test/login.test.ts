@@ -117,9 +117,10 @@ describe("namespaced OAuth login through production SSE dialogs", () => {
 			broker: {} as never,
 			materializeSession: async () => ({ alreadyPresent: true }),
 			sessionsDir: "",
+			cwd: "/tmp/fleet-test-cwd",
 			hasCallbackPair: () => false,
 		}).methods;
-		const providers = (await methods.getLoginProviders(entry, [])) as Array<{
+		const providers = (await methods.getLoginProviders!(entry, [])) as Array<{
 			id: string;
 			authenticated: boolean;
 		}>;
@@ -200,9 +201,10 @@ test("login-provider auth availability includes runtime keys without claiming st
 		broker: {} as never,
 		materializeSession: async () => ({ alreadyPresent: true }),
 		sessionsDir: "",
+		cwd: "/tmp/fleet-test-cwd",
 		hasCallbackPair: () => false,
 	}).methods;
-	const providers = (await methods.getLoginProviders(entry, [])) as Array<{
+	const providers = (await methods.getLoginProviders!(entry, [])) as Array<{
 		id: string;
 		authenticated: boolean;
 	}>;

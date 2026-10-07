@@ -1,6 +1,13 @@
 import { createSignal, For, Show, type JSX } from "solid-js";
-import { displayOptionValue, formatItemValue } from "../../prefs/settings";
-import { updateSetting } from "../../state";
+import {
+	displayOptionValue,
+	formatItemValue,
+	formatSettingValue,
+	parseSettingDraft,
+	settingEffectLabel,
+} from "../../prefs/settings";
+import { state } from "../../state";
+import { unsetSetting, updateSetting as writeSetting } from "../../store/settings";
 import { ChevronDownIcon, ChevronUpIcon } from "../shared/icons";
 import type { SettingsItem } from "#lib/wire/protocol";
 
@@ -40,15 +47,40 @@ export function SettingsRow(props: { item: SettingsItem }) {
 	// providerLimits: expanded panel with per-provider drafts, reseeded on open.
 	const [limitsOpen, setLimitsOpen] = createSignal(false);
 	const [limitDrafts, setLimitDrafts] = createSignal<Record<string, string>>({});
+	const [jsonDraft, setJsonDraft] = createSignal("");
+	const [jsonEditing, setJsonEditing] = createSignal(false);
+	const [jsonError, setJsonError] = createSignal("");
+	const [layer, setLayer] = createSignal(
+		item.view?.explicit?.layer === "project" ? "project" : "global",
+	);
+	let draftRevision: number | undefined;
+	const updateSetting = (
+		path: string,
+		value: unknown,
+		revision = state.settingsModel?.revision,
+	) => {
+		writeSetting(path, value, revision, layer());
+	};
+	const commitJson = () => {
+		try {
+			const value = parseSettingDraft(jsonDraft());
+			setJsonError("");
+			updateSetting(item.path, value, draftRevision);
+			setJsonEditing(false);
+		} catch (error) {
+			setJsonError(`Invalid JSON: ${String(error)}`);
+		}
+	};
 
 	const commitText = () => {
 		if (!dirty()) return;
-		updateSetting(item.path, draft());
+		updateSetting(item.path, draft(), draftRevision);
 		setDraft("");
 		setDirty(false);
 	};
 
 	const seedLimitDrafts = () => {
+		draftRevision = state.settingsModel?.revision;
 		const record = (item.value && typeof item.value === "object" ? item.value : {}) as Record<
 			string,
 			number
@@ -63,15 +95,18 @@ export function SettingsRow(props: { item: SettingsItem }) {
 	const commitLimit = (provider: string, raw: string) => {
 		const next = { ...limitDrafts(), [provider]: raw };
 		setLimitDrafts(next);
-		// Empty input = unlimited: only finite positive numbers make it through.
-		const out: Record<string, number> = {};
+		// Empty input removes a provider limit; all numeric constraints belong to the backend.
+		const out: Record<string, unknown> = { ...((item.value as Record<string, unknown>) ?? {}) };
 		for (const p of item.providers ?? []) {
 			const text = next[p];
-			if (text === undefined || text === "") continue;
-			const n = Number(text);
-			if (Number.isFinite(n) && n > 0) out[p] = n;
+			if (text === undefined || text === "") {
+				delete out[p];
+			} else {
+				const n = Number(text);
+				out[p] = Number.isFinite(n) ? n : text;
+			}
 		}
-		updateSetting(item.path, out);
+		updateSetting(item.path, out, draftRevision);
 	};
 
 	const resetLimits = () => {
@@ -147,6 +182,7 @@ export function SettingsRow(props: { item: SettingsItem }) {
 						value={draft()}
 						placeholder={formatItemValue(item)}
 						onInput={(e) => {
+							if (!dirty()) draftRevision = state.settingsModel?.revision;
 							setDraft(e.currentTarget.value);
 							setDirty(true);
 						}}
@@ -228,6 +264,53 @@ export function SettingsRow(props: { item: SettingsItem }) {
 				</button>
 			);
 			break;
+		case "record":
+		case "list":
+			control = (
+				<div class="settings-text">
+					<Show
+						when={jsonEditing()}
+						fallback={
+							<button
+								type="button"
+								class="settings-control-btn"
+								onClick={() => {
+									setJsonDraft(
+										JSON.stringify(item.value ?? (item.type === "list" ? [] : {}), null, 2),
+									);
+									draftRevision = state.settingsModel?.revision;
+									setJsonError("");
+									setJsonEditing(true);
+								}}
+							>
+								Edit {item.type}
+							</button>
+						}
+					>
+						<textarea
+							aria-label={`${item.label} JSON`}
+							value={jsonDraft()}
+							onInput={(e) => setJsonDraft(e.currentTarget.value)}
+						/>
+						<button type="button" class="settings-control-btn" onClick={commitJson}>
+							Save
+						</button>
+						<button
+							type="button"
+							class="settings-control-btn"
+							onClick={() => setJsonEditing(false)}
+						>
+							Cancel
+						</button>
+						<Show when={jsonError()}>
+							<div role="alert" class="settings-item-desc">
+								{jsonError()}
+							</div>
+						</Show>
+					</Show>
+				</div>
+			);
+			break;
 		default:
 			control = <span class="settings-item-desc">{formatItemValue(item)}</span>;
 	}
@@ -236,7 +319,53 @@ export function SettingsRow(props: { item: SettingsItem }) {
 		<>
 			<Row label={item.label} description={item.description} changed={item.changed}>
 				{control}
+				<Show when={item.view}>
+					<select
+						aria-label={`${item.label} write layer`}
+						value={layer()}
+						onChange={(e) => setLayer(e.currentTarget.value)}
+					>
+						<option value="global">Global config</option>
+						<option value="project">Project config</option>
+					</select>
+					<button
+						type="button"
+						class="settings-control-btn"
+						disabled={!item.view?.canUnset}
+						title={
+							item.view?.canUnset
+								? "Remove the explicit override; inherit the next layer"
+								: "No removable explicit override"
+						}
+						onClick={() =>
+							unsetSetting(item.path, state.settingsModel?.revision, item.view?.explicit?.layer)
+						}
+					>
+						Unset override
+					</button>
+				</Show>
 			</Row>
+			<Show when={item.view}>
+				{(view) => (
+					<div class="settings-item-desc">
+						<div>
+							Effective: {formatSettingValue(view().effective, item.secret)} · Source:{" "}
+							{view().source}
+						</div>
+						<div>
+							Explicit:{" "}
+							{view().explicit
+								? `${formatSettingValue(view().explicit!.value, item.secret)} (${view().explicit!.layer})`
+								: "Inherited (no explicit override)"}
+						</div>
+						<div>
+							{settingEffectLabel(view().effect)} ·{" "}
+							{view().canUnset ? "Override can be unset" : "Override cannot be unset"}
+						</div>
+						<For each={view().warnings}>{(warning) => <div role="status">{warning}</div>}</For>
+					</div>
+				)}
+			</Show>
 			<Show when={item.type === "providerLimits" && limitsOpen()}>
 				<div class="settings-limit-inputs">
 					<For each={item.providers ?? []}>

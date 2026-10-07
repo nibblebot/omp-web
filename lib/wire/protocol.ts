@@ -50,6 +50,8 @@ export interface ModelRoleCatalogEntry {
 }
 
 export interface WebSessionState {
+	sessionScope?: SessionScope;
+	capabilities?: ServerCapabilities;
 	model?: Model;
 	/** Resolved model-role assignments (role -> provider/id) in canonical role order; undefined when nothing resolves. */
 	modelRoles?: Array<{ role: string; provider: string; id: string }>;
@@ -138,9 +140,12 @@ export type SettingsItemType =
 	| "submenu"
 	| "text"
 	| "multiselect"
-	| "providerLimits";
+	| "providerLimits"
+	| "record"
+	| "list";
 
 export interface SettingsItem {
+	view?: SettingView;
 	path: string;
 	label: string;
 	description: string;
@@ -173,6 +178,8 @@ export interface SettingsTab {
 }
 
 export interface SettingsModel {
+	revision?: number;
+	target?: "current-session" | "future-sessions";
 	tabs: SettingsTab[];
 }
 
@@ -476,7 +483,120 @@ export type WebMethodName =
 	| "getSubagentMessages"
 	| "subagentSteer"
 	| "subagentAbort"
-	| "materializeSession";
+	| "materializeSession"
+	| "clearSession"
+	| "deleteSession"
+	| "unsetSetting"
+	| "getSessionGraph"
+	| "navigateTree"
+	| "resumeAfterAskReanswer"
+	| "getMcpState"
+	| "mcpAdd"
+	| "mcpUpdate"
+	| "mcpRemove"
+	| "mcpTest"
+	| "mcpReconnect"
+	| "mcpReload"
+	| "mcpEnable"
+	| "mcpDisable"
+	| "mcpOAuthReauth"
+	| "mcpOAuthRevoke"
+	| "mcpInspect"
+	| "getSkillsState"
+	| "skillSearch"
+	| "skillInstall"
+	| "skillUpdate"
+	| "skillUninstall"
+	| "pluginManage"
+	| "reloadIntegrations"
+	| "gitStatus"
+	| "gitStage"
+	| "gitUnstage"
+	| "gitStageHunks"
+	| "gitCommit"
+	| "gitFileDiff"
+	| "gitUnstagedPatch"
+	| "annotationList"
+	| "annotationCreate"
+	| "annotationUpdate"
+	| "annotationRemove"
+	| "annotationReanchor"
+	| "annotationCompose"
+	| "planGet"
+	| "planDecide"
+	| "planReopen"
+	| "planCancel"
+	| "todoGet"
+	| "todoApply"
+	| "todoImport"
+	| "todoExport"
+	| "compactEx"
+	| "compactionSnapshot"
+	| "shake"
+	| "dropImages"
+	| "abortCompaction"
+	| "handoffPreview"
+	| "setModelTemporary"
+	| "getModelPresets"
+	| "saveModelPreset"
+	| "applyModelPreset"
+	| "deleteModelPreset"
+	| "getModelMentions"
+	| "getResumeCapabilities"
+	| "resumeResolve"
+	| "resumeList"
+	| "resumePinToggle"
+	| "foreignList"
+	| "foreignPreview"
+	| "foreignImport"
+	| "foreignUploadStage"
+	| "foreignUploadCancel"
+	| "lineageResume"
+	| "btwList"
+	| "btwSearch"
+	| "btwPage"
+	| "btwStart"
+	| "btwFollowUp"
+	| "btwCancel"
+	| "btwCopy"
+	| "btwPromotePreview"
+	| "btwPromote"
+	| "workerList"
+	| "workerPark"
+	| "workerRevive"
+	| "workerResume"
+	| "advisorGetStatus"
+	| "advisorConfigure"
+	| "advisorTranscript"
+	| "goalReplace"
+	| "goalBudget"
+	| "loopPreview"
+	| "loopPolicy"
+	| "loopStart"
+	| "loopPause"
+	| "loopCancel"
+	| "loopResume"
+	| "vibeStatus"
+	| "vibeSetMode"
+	| "vibeSpawn"
+	| "vibeSend"
+	| "vibeWait"
+	| "vibeKill"
+	| "vibeKillAll"
+	| "vibeRehydrate"
+	| "downloadManifest"
+	| "dumpSessionArchive"
+	| "exportDownload"
+	| "voiceCapability"
+	| "voiceDictationStart"
+	| "voiceDictationFrame"
+	| "voiceDictationCommit"
+	| "voiceDictationCancel"
+	| "voiceRealtimeStart"
+	| "voiceRealtimeFrame"
+	| "voiceRealtimeInterrupt"
+	| "voiceRealtimeMute"
+	| "voiceRealtimeStop";
 
 // Client → server (POST /command bodies; one command per request, 202 accept).
 // Routing is by STREAM ATTACHMENT: on omp-session an /events stream is attached
@@ -488,7 +608,14 @@ export type WebMethodName =
 // to COMMAND_DEDUP_ID_CAP and replayable answers up to COMMAND_DEDUP_ANSWER_CAP,
 // and re-accepts duplicates with 202; answers ride the /events stream.
 export type ClientCommand =
-	| { type: "call"; id: string; method: WebMethodName; args?: unknown[]; streamId?: number }
+	| {
+			type: "call";
+			id: string;
+			method: WebMethodName;
+			args?: unknown[];
+			streamId?: number;
+			scope?: SessionScope;
+	  }
 	| { type: "login_code"; id: string; requestId: string; code: string }
 	// Answer to a server "ui_request" frame (ExtensionUIContext dialogs).
 	| { type: "ui_response"; id: string; result?: unknown; error?: string }
@@ -624,6 +751,28 @@ export type SessionScopedFrame =
 	// Phase 11: live output of an in-flight /btw side question (id = the
 	// client's btw streamId); broadcast session-scoped like bash_chunk.
 	| { type: "ephemeral_delta"; id: number; text: string }
+	// G19 voice downlink: dictation interim/final text and realtime events ride
+	// the existing SSE stream (no new transport); the voice store ingests them.
+	| {
+			type: "voice_dictation_delta";
+			dictationId: string;
+			generation: string;
+			scope: SessionScope;
+			interim: string;
+			final: boolean;
+	  }
+	| {
+			type: "voice_realtime_event";
+			realtimeId: string;
+			generation: string;
+			scope: SessionScope;
+			phase: string;
+			turnId: number;
+			inputLevel?: number;
+			outputLevel?: number;
+			transcript?: { role: "user" | "assistant"; text: string; final: boolean };
+			audioBase64?: string;
+	  }
 	// Unicast answer to a "call" command.
 	| { type: "call_result"; id: string; ok: boolean; data?: unknown; error?: string }
 	| { type: "available_commands"; commands: AvailableSlashCommand[] }
@@ -821,3 +970,209 @@ export type SessionListEntry = {
 	modifiedAt: number;
 	messageCount: number;
 };
+// ---------------------------------------------------------------------------
+// Shared additive contracts (OMP_PROTO 2 frozen).
+// Everything below is additive: optional fields, new method names gated by
+// server-advertised Capability, new frames. No required shape, enum, ID, or
+// seq semantics above changes. Consumers MUST gate on Capability.availability
+// (never on version) and MUST treat absent fields as unavailable.
+// ---------------------------------------------------------------------------
+
+/**
+ * C02: server-advertised availability for one optional capability. The
+ * server owns the verdict; the browser never guesses from OMP_PROTO or SDK
+ * version. `reason` is a short human-readable why-unavailable string.
+ */
+export interface Capability {
+	available: boolean;
+	reason?: string;
+}
+
+/**
+ * C03: stable scope binding every mutation to a workspace/session/attachment
+ * generation. IDs are opaque server strings; the browser never uses message
+ * text, list index, or filename display strings as identity.
+ */
+export interface SessionScope {
+	workspaceId: string;
+	sessionId: string;
+	generation: string;
+}
+
+/** C03: stable anchor to one transcript entry at a content revision. */
+export interface EntryAnchor {
+	sessionId: string;
+	entryId: string;
+	revision: string;
+}
+
+/** C03: stable key for one live worker agent inside a session. */
+export interface WorkerKey {
+	sessionId: string;
+	agentId: string;
+}
+
+/**
+ * C04: cursor/revision paging contract for graph/transcript children. Opaque
+ * cursor; the server rejects stale scope/revision instead of serving overlap.
+ */
+export interface PageCursor {
+	cursor?: string | null;
+	revision: string;
+}
+
+/**
+ * C05: which durable draft owns an unsent composer buffer. Main is preserved
+ * across focus changes; the server owns durable agent state, the store owns
+ * normalized mirrors, components own transient presentation only.
+ */
+export type DraftScope =
+	| { kind: "main"; sessionId: string; branchId?: string }
+	| { kind: "worker"; sessionId: string; agentId: string }
+	| { kind: "side"; sessionId: string; sideSessionId: string };
+
+/**
+ * Settings effective-value provenance. `layer` is the owning store layer;
+ * `origin` names the source kind. Never carries environment credential values.
+ */
+export type SettingOrigin = "default" | "global" | "project" | "runtime" | "cli" | "env";
+
+/** One setting's effective value plus provenance, unset eligibility, warnings, and effect timing. */
+export interface SettingView {
+	path: string;
+	effective: unknown;
+	source: SettingOrigin;
+	explicit?: { value: unknown; layer: string };
+	canUnset: boolean;
+	warnings: string[];
+	effect: "live" | "next-session" | "restart";
+}
+
+/**
+ * Durable review anchor discriminated union. Diff/file anchors carry commit
+ * base/head plus side/range plus a contentHash so drift marks them stale
+ * instead of silently moving them. Never posts to GitHub implicitly.
+ */
+export type ReviewAnchor =
+	| { kind: "entry"; anchor: EntryAnchor }
+	| {
+			kind: "diff";
+			repositoryId: string;
+			base: string;
+			head: string;
+			path: string;
+			side: "old" | "new";
+			start: number;
+			end: number;
+			contentHash: string;
+	  }
+	| { kind: "file"; path: string; start: number; end: number; contentHash: string }
+	| { kind: "text"; text: string; contentHash: string };
+
+/**
+ * C06: browser extension capability contract stub (G12/P0-C06). The server
+ * advertises which extension UI surfaces have a real browser renderer.
+ * Terminal-only presentation never gains browser execution authority: an
+ * unadvertised surface MUST surface an explicit unsupported diagnostic with
+ * safe cancellation, never simulated success or indefinite wait.
+ */
+export type BrowserUiCapability = "dialogs" | "editor" | "widget" | "actions";
+
+/** Server-advertised browser-extension UI support, keyed by capability. */
+export type BrowserUiCapabilities = Partial<Record<BrowserUiCapability, Capability>>;
+
+/**
+ * C02/C06: additive capability map carried on the attach priming / state
+ * snapshots as they grow. Each key is a consumer-domain capability name;
+ * unknown keys MUST be ignored by older browsers. Absent map or absent key
+ * means unavailable (never guess from version).
+ */
+export interface ServerCapabilities {
+	browserUi?: BrowserUiCapabilities;
+	graph?: Capability;
+	review?: Capability;
+	planReview?: Capability;
+	todos?: Capability;
+	git?: Capability;
+	workerLifecycle?: Capability;
+	modelPresets?: Capability;
+	temporaryModel?: Capability;
+	modelMentions?: Capability;
+	advisor?: Capability;
+	goals?: Capability;
+	loops?: Capability;
+	vibe?: Capability;
+	btwHistory?: Capability;
+	integrations?: Capability;
+	voice?: Capability;
+	downloads?: Capability;
+	resumeImport?: Capability;
+	[key: string]: Capability | BrowserUiCapabilities | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// P3 review-surface DTOs (G02/Git, G05/plan, G06/annotations, G16/todos).
+// Additive vocabulary for sibling-lane domain modules; server rows land with
+// the P3 service factories and gate behind the keys above. Absent = unavailable.
+// ---------------------------------------------------------------------------
+
+/** One changed path in the daemon-bound repository adapter snapshot (G02). */
+export interface GitPathEntry {
+	path: string;
+	origPath?: string;
+	kind: "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflicted";
+	additions?: number;
+	deletions?: number;
+}
+
+/** Narrow repo snapshot: fingerprints gate every mutation against drift (G02). */
+export interface GitStatusDto {
+	available: boolean;
+	reason?: string;
+	cwd: string;
+	branch: string | null;
+	clean: boolean;
+	indexFingerprint: string;
+	worktreeFingerprint: string;
+	eligible: { stage: boolean; commit: boolean; reason?: string };
+	unstaged: GitPathEntry[];
+	staged: GitPathEntry[];
+	head: {
+		sha: string;
+		shortSha: string;
+		subject: string;
+		authorName: string;
+		authorEmail: string;
+		authorDate: string;
+	} | null;
+}
+
+/** Versioned plan under review; stale version refuses, disconnect never approves (G05). */
+export interface PlanReviewDto {
+	reviewId: string;
+	planFilePath: string;
+	title: string;
+	contentHash: string;
+	version: number;
+	status: "waiting" | "approved" | "changes_requested" | "dismissed";
+	annotations?: ReviewAnnotationDto[];
+}
+
+/** One durable anchored-feedback annotation; drift marks stale/orphaned, never moves silently (G06). */
+export interface ReviewAnnotationDto {
+	id: string;
+	author: "operator" | "agent";
+	source: "diff" | "file" | "message" | "reply" | "text" | "plan";
+	anchor: ReviewAnchor;
+	note: string;
+	revision: number;
+	status: "current" | "stale" | "orphaned";
+	createdAt: number;
+}
+
+/** Todo board mirror: SDK TodoPhase verbatim plus a revision fingerprint (G16). */
+export interface TodoBoardDto {
+	phases: TodoPhase[];
+	revision: string;
+	selected?: { phase: number; task: number };
+}
