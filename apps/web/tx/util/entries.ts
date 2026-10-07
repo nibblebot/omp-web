@@ -249,14 +249,22 @@ export interface SessionInitInfo {
 	readSummarize: unknown;
 }
 
-/** Session-init system row (entry type "session_init"); tools are tool names. */
+/**
+ * Session-init system row (entry type "session_init"); tools are tool names.
+ * `systemPrompt` is the SDK's block array (pi-coding-agent ≥ 18.6.3) or, in
+ * older files, one string the SDK joined with blank lines; blocks are joined
+ * the same way so both render identically.
+ */
 export function sessionInitOf(e: RawEntry): SessionInitInfo | null {
 	if (e.type !== "session_init") return null;
 	const tools = Array.isArray(e.tools)
 		? e.tools.filter((t): t is string => typeof t === "string")
 		: [];
+	const systemPrompt = Array.isArray(e.systemPrompt)
+		? e.systemPrompt.filter((b): b is string => typeof b === "string").join("\n\n")
+		: str(e.systemPrompt);
 	return {
-		systemPrompt: str(e.systemPrompt),
+		systemPrompt,
 		tools,
 		resolvedModel: typeof e.resolvedModel === "string" ? e.resolvedModel : null,
 		modelRole: typeof e.modelRole === "string" ? e.modelRole : null,
