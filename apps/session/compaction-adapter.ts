@@ -23,7 +23,7 @@ import {
  *
  * Pure domain helpers + thin SDK execution wrappers. No wire imports: this
  * module never touches lib/wire, apps/session/methods.ts, or SSE delivery.
- * It reuses the installed SDK 18.6.1 behavior (compact-modes grammar,
+ * It reuses the installed SDK 18.7.0 behavior (compact-modes grammar,
  * CompactOptions, shake types) instead of reimplementing it.
  */
 

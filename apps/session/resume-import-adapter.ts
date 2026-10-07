@@ -6,7 +6,7 @@
  * wiring (P0) calls {@link createResumeImportHandlers}; the fleet edge,
  * protocol, state and web prompt command table are NEVER touched here.
  *
- * SDK reuse (installed @oh-my-pi/pi-coding-agent 18.6.1; revalidate on bump):
+ * SDK reuse (installed @oh-my-pi/pi-coding-agent 18.7.0; revalidate on bump):
  * - session/session-listing.ts: `listSessions`, `listAllSessions`,
  *   `filterSessionsForPicker` (empties dropped, pins kept). The matcher
  *   `sessionMatchesResumeArg` and `sessionIdFromSessionPath` are

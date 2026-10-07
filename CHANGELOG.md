@@ -25,13 +25,14 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Move application source to `apps/{cli,fleet,session,web}`, shared libraries to `lib/*`, cross-app E2E to `e2e/`, and tooling tests to `scripts/test/`; enforce the closed `lib/` import boundary in lint.
 - Remove the optional benchmark harness, its `bench` command, and local benchmark outputs; ordinary test execution is unchanged.
 - Make development auth broker management opt-in via `bun run dev --auth-broker`; default dev starts only the fleet and Vite and preserves explicitly configured broker environment variables and provider-profile secret references.
-- Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.6.1.
+- Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.7.0.
 - Migrate live settings to SDK registry handles and provider authentication to the namespaced OAuth login and effective credential-source APIs, preserving settings scope and browser login dialogs.
 
 ### Bug fixes
 - Keep streaming active and completion markers unset through non-yielded `agent_end` events; mark a turn complete only when the agent yields.
 - Read the latest `omp stats` summary from stderr, align profile and existing flattened XDG paths, pin sync children to the viewer's resolved targets, and correct the CLI install hint to `@oh-my-pi/pi-coding-agent`.
 - Apply the thinking level of a `default` role assigned or cleared in the model roles picker to the live session, matching the TUI model hub; previously only the saved role value changed and the session bar kept the old level.
+- Show the system prompt of transcript `session_init` rows written by SDK 18.6.3 or later, which store it as a block array instead of one string; the transcripts view previously rendered it empty.
 
 ## v0.2.1, 2026-09-25
 

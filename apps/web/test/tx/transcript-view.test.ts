@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 // reactivity assertions) need. Types come from apps/web/test/tx/solid-dist.d.ts.
 import { createMemo, createRoot, createSignal } from "solid-js/dist/solid.js";
 import type { RawEntry } from "../../tx/api";
-import { entryTypeLabel, shortSummary } from "../../tx/util/entries";
+import { entryTypeLabel, sessionInitOf, shortSummary } from "../../tx/util/entries";
 import { createCollapseStore } from "../../tx/components/transcript/collapse";
 import { pairToolCalls, createPairingMaps } from "../../tx/components/transcript/pairing";
 import {
@@ -342,5 +342,14 @@ describe("entry labels", () => {
 	test("shortSummary truncates long text", () => {
 		const e = toolResult("r", "c1", "x".repeat(200));
 		expect(shortSummary(e)).toBe(`${"x".repeat(60)}…`);
+	});
+});
+
+describe("sessionInitOf", () => {
+	test("system prompt blocks (SDK >= 18.6.3) render like the legacy joined string", () => {
+		const blocks = { type: "session_init", id: "b", systemPrompt: ["base", "project"] };
+		const legacy = { type: "session_init", id: "l", systemPrompt: "base\n\nproject" };
+		expect(sessionInitOf(blocks as RawEntry)?.systemPrompt).toBe("base\n\nproject");
+		expect(sessionInitOf(legacy as RawEntry)?.systemPrompt).toBe("base\n\nproject");
 	});
 });
