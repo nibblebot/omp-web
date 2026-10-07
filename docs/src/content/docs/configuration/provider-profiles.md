@@ -87,11 +87,19 @@ The browser and the CLI never see a profile's executable, image or namespace det
 
 ## Development auth broker
 
-`bun run dev` can make a broker available before the fleet child starts, so `env:` references resolve in development:
+Default `bun run dev` starts the fleet and Vite without broker token creation, authenticated probing, adoption, spawning, restarting, or automatic broker environment export. To make a broker available before the fleet child starts, explicitly opt in with:
+
+```sh
+bun run dev --auth-broker
+```
+
+With that flag:
 
 - It first probes for a broker already running on the default bind (`http://127.0.0.1:8765`) with the operator's bearer token and adopts it. The credential store is global, so one broker serves every worktree.
-- Otherwise it spawns `omp auth-broker serve`, waits for readiness, and exports `OMP_AUTH_BROKER_URL` and `OMP_AUTH_BROKER_TOKEN` into the environment the fleet and its providers inherit.
-- The broker is optional: a missing `omp` CLI, an unreadable token, or a start timeout logs a warning and continues without one, and clones then run unauthenticated.
+- Otherwise it spawns `omp auth-broker serve` as a restartable child and waits for readiness. Whether adopted or spawned, its `OMP_AUTH_BROKER_URL` and `OMP_AUTH_BROKER_TOKEN` are exported into the environment the fleet and its providers inherit.
+- A missing `omp` CLI, an unreadable token, or a start timeout logs a warning and lets the stack continue. Sandboxes that need broker-borrowed credentials cannot resolve them without another explicit credential source.
+
+Production `omp-web` never manages broker startup. Local sessions use the user's ordinary SDK credentials. Isolated clone sandboxes need explicitly configured credentials through `secretRefs`, or an operator-run broker (`omp auth-broker serve`) whose URL and token their profile injects. Explicitly supplied `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` and existing profile `secretRefs` remain opt-in configuration; default dev inherits them without replacement or automatic broker work.
 
 Sandboxes borrow OAuth-based provider credentials from the broker at runtime; refresh tokens stay on the broker. A bwrap sandbox reaches a loopback broker only under `network: "host"`. In a sandbox, an OAuth provider counts as resolvable exactly when both broker variables are injected, and seeded model-role entries for such providers survive only then.
 

@@ -115,12 +115,17 @@ omp-web update --version x.y.z  # pin a specific release
 
 ```sh
 bun install
-bun dev      # vite (HMR) + fleet, ports chosen per run
+bun run dev                # vite (HMR) + fleet, ports chosen per run; no managed auth broker
+bun run dev --auth-broker  # opt into adopting or spawning an auth broker for clone sandboxes
 ```
 
 Source imports into `lib/` use extensionless `#lib/<path below lib/>`, such as `#lib/wire/protocol`, through root `package.json`'s imports mapping. Keep local imports such as `./helpers` relative. Shared libraries are closed: their repository imports stay inside `lib/`, with no library cycles, enforced by `bun run lint`.
 
-In a linked worktree, `bun dev` forks the dev fleet state from the main worktree (copy-once, like a git fork), so the worktree's roster boots with the main worktree's sessions/projects instead of empty; later runs keep the diverged fork. `--state-from <path>` forks from an explicit state file or directory, and `--fresh` skips seeding and starts on a clean state. Dev fleet state is scoped per worktree outside the repo at `<data home>/dev-fleets/<slug>-<hash8>/` (slug is the worktree basename, `hash8` the sha-256 prefix of its realpath), so several dev stacks and your real fleet coexist. The stack also adopts a running auth broker, or spawns `omp auth-broker serve` when the `omp` CLI is present, exporting `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` for clone `secretRefs` `env:` references; without a broker the stack only warns and clones run unauthenticated.
+In a linked worktree, `bun run dev` forks the dev fleet state from the main worktree (copy-once, like a git fork), so the worktree's roster boots with the main worktree's sessions/projects instead of empty; later runs keep the diverged fork. `--state-from <path>` forks from an explicit state file or directory, and `--fresh` skips seeding and starts on a clean state. Dev fleet state is scoped per worktree outside the repo at `<data home>/dev-fleets/<slug>-<hash8>/` (slug is the worktree basename, `hash8` the sha-256 prefix of its realpath), so several dev stacks and your real fleet coexist.
+
+By default, development starts only the fleet and Vite, with no broker token creation, authenticated probe, adoption, spawn, restart, or automatic broker environment export. `bun run dev --auth-broker` explicitly opts into adopting an authenticated broker on loopback or spawning `omp auth-broker serve` as a restartable child, then exporting `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` for clone profile `secretRefs` using `env:` references. Broker setup failures warn and let the stack continue; sandboxes that need broker-borrowed credentials cannot resolve them without another explicit credential source.
+
+Production `omp-web` never manages broker startup. Local sessions use the user's ordinary SDK credentials; isolated clone sandboxes need explicitly configured credentials or an operator-run broker exposed through their profile's `secretRefs`. Explicitly supplied `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` and existing profile `secretRefs` remain opt-in configuration and are inherited by the default dev stack without being replaced.
 
 ## Advanced
 
