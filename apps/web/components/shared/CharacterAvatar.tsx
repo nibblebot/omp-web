@@ -15,8 +15,7 @@ export const CharacterAvatar: Component<{
 	let canvas!: HTMLCanvasElement;
 	// Render effect (PetMainAvatar precedent): the canvas ref is only assigned
 	// after mount, so create the tracked effect there; provider/pose changes
-	// redraw in place. EmptyState's avatar first paints with state.model still
-	// undefined, then must repaint once the model resolves.
+	// (e.g. a model switch under the empty state) redraw in place.
 	onMount(() => {
 		const ctx = canvas.getContext("2d")!;
 		createRenderEffect(() =>

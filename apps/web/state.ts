@@ -286,6 +286,12 @@ export const [state, setState] = createStore({
 	modelRoles: undefined as WebSessionState["modelRoles"],
 	modelRoleCatalog: undefined as WebSessionState["modelRoleCatalog"],
 	modelRoleStorage: undefined as WebSessionState["modelRoleStorage"],
+	// True once a state frame has landed for the transcript currently loaded.
+	// Every history load (priming, newSession/switchSession resync) is followed
+	// by a state frame carrying that session's model; until it arrives
+	// state.model still belongs to the previous session (or is undefined on
+	// first attach), so the empty-state character must not render from it.
+	modelSynced: false,
 	thinkingLevel: undefined as WebSessionState["thinkingLevel"],
 	sessionName: undefined as string | undefined,
 	sessionId: "",
@@ -627,6 +633,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 		live: { active: false, blocks: [], rev: 0 },
 		retryInfo: null,
 		workingIntent: undefined,
+		modelSynced: false,
 	});
 }
 
@@ -635,6 +642,7 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		sessionScope: s.sessionScope,
 		capabilities: s.capabilities ?? {},
 		model: s.model,
+		modelSynced: true,
 		modelRoles: s.modelRoles,
 		modelRoleCatalog: s.modelRoleCatalog,
 		modelRoleStorage: s.modelRoleStorage,
@@ -833,6 +841,7 @@ function resetSessionView(): void {
 	// Same rationale as loadHistory: ids must not collide across transcripts.
 	resetChatIds();
 	setState({
+		modelSynced: false,
 		items: [],
 		live: { active: false, blocks: [], rev: 0 },
 		subagents: new Map<string, SubagentInfo>(),

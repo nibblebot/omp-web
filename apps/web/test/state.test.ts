@@ -222,6 +222,7 @@ beforeEach(() => {
 		view: "work",
 		workUnviewed: false,
 		txSidebarVisible: true,
+		modelSynced: false,
 	});
 });
 
@@ -932,6 +933,31 @@ describe("state-frame application (model-role picker state)", () => {
 		expect(state.modelRoleCatalog).toBeUndefined();
 		expect(state.modelRoleStorage).toBeUndefined();
 		expect(state.modelRoles).toBeUndefined();
+	});
+
+	test("modelSynced holds the empty-state character until the loaded transcript's state lands", () => {
+		const model = (id: string) =>
+			({ provider: "anthropic", id }) as unknown as WebSessionState["model"];
+		connect();
+		// Priming sends history BEFORE state: on first attach the model is
+		// still unknown, so nothing may render a (fallback) character yet.
+		dispatch(attached("daemon-a"));
+		dispatch({ type: "history", messages: [] });
+		expect(state.modelSynced).toBe(false);
+		dispatch(stateFrame({ model: model("gpt-5") }));
+		expect(state.modelSynced).toBe(true);
+
+		// newSession resync: the empty history lands while state.model is still
+		// the previous session's; the new session's default model follows.
+		dispatch({ type: "history", messages: [] });
+		expect(state.modelSynced).toBe(false);
+		expect(state.model?.id).toBe("gpt-5");
+		dispatch(stateFrame({ model: model("claude-opus-5-5") }));
+		expect(state.modelSynced).toBe(true);
+
+		// A daemon switch drops the sync before the new daemon's priming.
+		dispatch(attached("daemon-b"));
+		expect(state.modelSynced).toBe(false);
 	});
 });
 
