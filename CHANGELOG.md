@@ -19,6 +19,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Worker detail view: no longer wipes and refetches the transcript on every subagent frame (the scope-reset effect tracked an unmemoized key over a per-frame `sub` object), which made the view flicker between the transcript and "loading…"; its header wraps instead of squeezing the back button.
 - Subagent lists (task card, active strip, worker hub) render rows keyed by subagent id instead of per-frame objects, so rows no longer remount on every progress frame: spinners rotate smoothly, clicks on a row open its detail view, and the hub keeps a stable order (in-flight first) instead of reshuffling by last update.
 - Advisor notes render inline in the conversation (they were dropped as unhandled custom messages): one card per delivery, live and from history, matching the TUI advisor card with note count and blocker tally, per-note severity rail and badge, advisor attribution, `T-n` age, and the first three notes shown until expanded (Ctrl+O or the card's own toggle).
+- Opening a session renders its history without a long main-thread stall: the transcript replay built the chat with one store write per message, each copying the list and re-walking every earlier item (~420ms blocked on a 2 MB transcript); it now commits once (~80ms).
 
 
 ### Maintenance & other

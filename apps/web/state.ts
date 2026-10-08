@@ -2,7 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AdvisorNote } from "@oh-my-pi/pi-tui/chat/messages";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { UsageReport } from "@oh-my-pi/pi-ai";
-import { createStore, produce, reconcile } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "#lib/wire/protocol";
 import type {
 	AvailableSlashCommand,
@@ -30,10 +30,8 @@ import {
 	capTail,
 	clearPendingDeltas,
 	extractText,
-	findToolIndex,
 	nextChatId,
 	pendingEphemeral,
-	pushItem,
 	resetChatIds,
 	scheduleFlush,
 	tabsToSpaces,
@@ -554,16 +552,17 @@ export function loadHistory(messages: AgentMessage[]): void {
 	// Phase 5: reset id sequence so newly-switched sessions don't collide with
 	// leftover ids from the prior transcript.
 	resetChatIds();
-	setState({
-		items: [],
-		live: { active: false, blocks: [], rev: 0 },
-		retryInfo: null,
-		workingIntent: undefined,
-	});
+	// Build the transcript as a plain array and commit it with ONE store write.
+	// Appending per message (`[...items, item]`) copied the array and made the
+	// store re-walk every prior item on each push: quadratic, ~400ms of main
+	// thread on a 2 MB transcript before the chat could paint.
+	const items: ChatItem[] = [];
+	// First tool item per toolCallId (the store's findToolIndex semantics).
+	const toolIndex = new Map<string, number>();
 	for (const msg of messages) {
 		if (msg.role === "user") {
 			const images = scanImages(msg.content);
-			pushItem({
+			items.push({
 				kind: "user",
 				id: nextChatId(),
 				text: userText(msg.content),
@@ -571,7 +570,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 			});
 		} else if (msg.role === "assistant") {
 			const meta = msg as { usage?: UsageLike; ttft?: number; duration?: number };
-			pushItem({
+			items.push({
 				kind: "assistant",
 				id: nextChatId(),
 				blocks: assistantBlocks(msg.content),
@@ -581,7 +580,8 @@ export function loadHistory(messages: AgentMessage[]): void {
 			});
 			for (const c of msg.content) {
 				if (c.type === "toolCall") {
-					pushItem({
+					if (!toolIndex.has(c.id)) toolIndex.set(c.id, items.length);
+					items.push({
 						kind: "tool",
 						id: nextChatId(),
 						toolCallId: c.id,
@@ -593,24 +593,18 @@ export function loadHistory(messages: AgentMessage[]): void {
 				}
 			}
 		} else if (msg.role === "toolResult") {
-			const index = findToolIndex(msg.toolCallId);
+			const index = toolIndex.get(msg.toolCallId);
 			const output = capTail(tabsToSpaces(extractText(msg)), 8000);
 			const status: ToolStatus = msg.isError ? "error" : "done";
 			const images = scanImages(msg);
-			if (index >= 0) {
-				setState(
-					"items",
-					produce((items) => {
-						const item = items[index];
-						if (item?.kind === "tool") {
-							item.output = output;
-							item.status = status;
-							if (images.length > 0) item.images = images;
-						}
-					}),
-				);
+			const item = index === undefined ? undefined : items[index];
+			if (item?.kind === "tool") {
+				item.output = output;
+				item.status = status;
+				if (images.length > 0) item.images = images;
 			} else {
-				pushItem({
+				toolIndex.set(msg.toolCallId, items.length);
+				items.push({
 					kind: "tool",
 					id: nextChatId(),
 					toolCallId: msg.toolCallId,
@@ -625,9 +619,15 @@ export function loadHistory(messages: AgentMessage[]): void {
 			// Advisor cards render inline like the TUI; other custom/developer
 			// messages stay hidden.
 			const notes = advisorNotesOf(msg);
-			if (notes !== null) pushItem({ kind: "advisor", id: nextChatId(), notes });
+			if (notes !== null) items.push({ kind: "advisor", id: nextChatId(), notes });
 		}
 	}
+	setState({
+		items,
+		live: { active: false, blocks: [], rev: 0 },
+		retryInfo: null,
+		workingIntent: undefined,
+	});
 }
 
 function applyState(s: WebSessionState, stats?: SessionStats): void {
