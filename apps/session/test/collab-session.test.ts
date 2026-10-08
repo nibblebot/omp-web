@@ -6,6 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { stripImagesFromMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { SessionEntry } from "../session-entry";
 import { createCollabSession } from "../collab-session";
 
@@ -148,5 +150,49 @@ describe("wireSession queue-staleness regression", () => {
 			},
 		});
 		expect(calls.length).toBe(0);
+	});
+});
+
+describe("collab port snapshot", () => {
+	test("welcome image stripping never reaches the live session entries", () => {
+		const { broker } = stubBroker();
+		const collab = createCollabSession({
+			config: { idleTimeoutMs: 0 } as never,
+			agentDir: "",
+			authStorage: {} as never,
+			modelRegistry: {} as never,
+			settings: {} as never,
+			broker,
+		});
+		const sessionManager = SessionManager.inMemory("/tmp");
+		sessionManager.appendMessage({
+			role: "user",
+			content: [
+				{ type: "text", text: "look" },
+				{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+			],
+			timestamp: Date.now(),
+		});
+		const port = collab.buildCollabPort({
+			handle: "s1",
+			cwd: "/tmp",
+			session: { sessionManager } as unknown as AgentSession,
+			eventBus: { on: () => () => {} } as never,
+		} as unknown as SessionEntry);
+
+		// The host strips images in place from the snapshot it is handed once a
+		// welcome exceeds its size threshold.
+		for (const entry of port.snapshot().entries) {
+			if (entry.type === "message") stripImagesFromMessage(entry.message);
+		}
+
+		const live = sessionManager.getEntries().find((entry) => entry.type === "message");
+		expect(
+			live?.type === "message" && live.message.role === "user" && live.message.content,
+		).toContainEqual({
+			type: "image",
+			data: "aGVsbG8=",
+			mimeType: "image/png",
+		});
 	});
 });

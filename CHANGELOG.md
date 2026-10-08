@@ -32,7 +32,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Move application source to `apps/{cli,fleet,session,web}`, shared libraries to `lib/*`, cross-app E2E to `e2e/`, and tooling tests to `scripts/test/`; enforce the closed `lib/` import boundary in lint.
 - Remove the optional benchmark harness, its `bench` command, and local benchmark outputs; ordinary test execution is unchanged.
 - Make development auth broker management opt-in via `bun run dev --auth-broker`; default dev starts only the fleet and Vite and preserves explicitly configured broker environment variables and provider-profile secret references.
-- Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.7.0.
+- Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.8.6.
 - Fleet lifecycle output: a wake prints two lines (`respawn --resume template=…`, then `ready <endpoint> pid <n>`) instead of seven; the event ring drops the sub-second spawning/connecting/session/resolving ladder steps and the separate endpoint line, a stop is one `stop (exit …)` line, and `bun run dev` no longer doubles the `fleet:` prefix.
 - Migrate live settings to SDK registry handles and provider authentication to the namespaced OAuth login and effective credential-source APIs, preserving settings scope and browser login dialogs.
 

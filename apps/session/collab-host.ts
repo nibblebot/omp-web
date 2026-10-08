@@ -45,8 +45,8 @@ import {
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import {
-	shrinkReplicatedEntry,
-	shrinkReplicatedEvent,
+	serializeReplicatedEntry,
+	serializeReplicatedEvent,
 } from "@oh-my-pi/pi-coding-agent/collab/replication-shrink";
 
 /** Events that change the footer state guests render. */
@@ -375,7 +375,7 @@ export class CollabHostAdapter {
 
 		this.#unsubscribe = this.#port.subscribe((event) => {
 			if (isWireAgentEvent(event))
-				this.#broadcast({ t: "event", event: shrinkReplicatedEvent(event) });
+				this.#broadcast({ t: "event", event: serializeReplicatedEvent(event).value });
 			this.#onEventForState(event);
 		});
 		// Port contract: one subscribeBus call covers BOTH task channels
@@ -387,7 +387,7 @@ export class CollabHostAdapter {
 		this.#agentsUnsubscribe = this.#port.subscribeAgents(() => this.#scheduleAgentsBroadcast());
 		this.#port.onEntryAppended((entry) => {
 			if (isWireSessionEntry(entry))
-				this.#broadcast({ t: "entry", entry: shrinkReplicatedEntry(entry) });
+				this.#broadcast({ t: "entry", entry: serializeReplicatedEntry(entry).value });
 			// Model/thinking/title changes land as entries while idle; refresh
 			// guest state promptly (debounce + JSON diff dedupe).
 			this.#scheduleStateBroadcast();
@@ -563,7 +563,7 @@ export class CollabHostAdapter {
 	/**
 	 * Slice {@link entries} into byte-bounded `snapshot-chunk` frames targeted
 	 * at {@link fromPeer}. Each entry is first run through
-	 * {@link shrinkReplicatedEntry} so a single oversized tool-result entry
+	 * {@link serializeReplicatedEntry} so a single oversized tool-result entry
 	 * cannot ship as an oversized chunk that trips the relay's per-frame
 	 * `maxPayloadLength`. Every batch carries at least one entry, and the last
 	 * batch is tagged `final: true` so the guest can finalize the replica. An
@@ -584,8 +584,9 @@ export class CollabHostAdapter {
 			while (i < entries.length) {
 				const entry = entries[i];
 				if (!entry) break;
-				const shrunk = shrinkReplicatedEntry(entry);
-				const entryBytes = JSON.stringify(shrunk).length;
+				const bounded = serializeReplicatedEntry(entry);
+				const shrunk = bounded.value;
+				const entryBytes = bounded.json.length;
 				if (batch.length > 0 && batchBytes + entryBytes > SNAPSHOT_CHUNK_BYTES) break;
 				batch.push(shrunk);
 				batchBytes += entryBytes;

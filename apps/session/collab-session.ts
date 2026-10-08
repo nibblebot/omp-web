@@ -4,11 +4,13 @@ import {
 	COLLAB_PROMPT_MESSAGE_TYPE,
 	type CollabPromptDetails,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
+import { copyForReplication } from "@oh-my-pi/pi-coding-agent/collab/replication-shrink";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import type { SessionEntry as SdkSessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
@@ -79,7 +81,15 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			getModel: () => session.model,
 			getThinkingLevel: () => session.thinkingLevel,
 			getContextUsage: () => session.getContextUsage(),
-			snapshot: () => session.sessionManager.snapshotForReplication(),
+			// The SDK returns the live header/entries (no copy since 18.8). The host
+			// strips welcome images in place, so hand it the SDK's depth-bounded copy.
+			snapshot: () => {
+				const live = session.sessionManager.snapshotForReplication();
+				return {
+					header: copyForReplication(live.header),
+					entries: copyForReplication(live.entries as SdkSessionEntry[]),
+				};
+			},
 			subscribe: (cb) => session.subscribe(cb),
 			// Single slot; the adapter restores it (with null) on teardown.
 			onEntryAppended: (cb) => {
