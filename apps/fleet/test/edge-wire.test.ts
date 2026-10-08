@@ -11,6 +11,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { __resetDirsFromEnvForTests, setAgentDir } from "@oh-my-pi/pi-utils";
+import { tempDir } from "#lib/testkit/temp-dir.testkit";
 import { OMP_PROTO } from "#lib/wire/protocol";
 import { shouldDropFrame, toRosterEntry } from "../edge";
 import type { RegistryEntry } from "../registry";
@@ -716,6 +720,69 @@ describe("fleet edge", () => {
 		);
 		expect(respawns).toBe(respawnsBefore + 1);
 		expect(server.registry.get(entry.daemonId)?.status).toBe("ready");
+	});
+
+	test("spawn_resume with a picked session then attach resumes the PICKED session once", async () => {
+		// The roster UI fires spawn_resume {sessionFile} and attach back-to-back.
+		// spawn_resume validates the pick against the worktree listing (async disk
+		// read) before waking; an attach that wakes first would respawn on
+		// lastSessionFile and silently drop the pick.
+		const agentDir = tempDir("omp-web-edge-agentdir-");
+		const savedEnv = {
+			PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+			OMP_PROFILE: process.env.OMP_PROFILE,
+			PI_PROFILE: process.env.PI_PROFILE,
+		};
+		// listDaemonSessions resolves the agent dir from the SDK's process-level
+		// state (the edge has no per-call seam), so point it at the temp dir for
+		// this test only and restore it exactly afterwards.
+		setAgentDir(agentDir);
+		const origRespawn = server.supervisor.respawn;
+		const resumeFiles: Array<string | undefined> = [];
+		server.supervisor.respawn = async (e: RegistryEntry, opts?: { resumeFile?: string }) => {
+			resumeFiles.push(opts?.resumeFile);
+			await origRespawn.call(server.supervisor, e, opts);
+		};
+		try {
+			const sessionDir = SessionManager.getDefaultSessionDir(
+				FAKE_CWD,
+				agentDir,
+				new FileSessionStorage(),
+			);
+			const picked = join(sessionDir, "picked.jsonl");
+			writeFileSync(
+				picked,
+				`${JSON.stringify({ type: "session", id: "picked", cwd: FAKE_CWD })}\n`,
+			);
+			const entry = server.registry.create({
+				name: "spawned-picked",
+				cwd: FAKE_CWD,
+				project: "fake-proj",
+				labels: [],
+				mode: "spawned",
+				template: "local",
+				status: "asleep",
+				lastSessionFile: join(sessionDir, "last.jsonl"),
+			});
+			const browser = await openBrowser(server.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({ type: "spawn_resume", daemonId: entry.daemonId, sessionFile: picked });
+			await browser.send({ type: "attach", sessionId: entry.daemonId });
+			await browser.waitForFrame(
+				(f) => f.type === "attached" && f.sessionId === entry.daemonId,
+				"attached (picked)",
+			);
+			// Exactly one respawn, and on the PICKED file rather than lastSessionFile.
+			expect(resumeFiles).toEqual([picked]);
+			expect(server.registry.get(entry.daemonId)?.status).toBe("ready");
+		} finally {
+			server.supervisor.respawn = origRespawn;
+			for (const [key, value] of Object.entries(savedEnv)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+			__resetDirsFromEnvForTests();
+		}
 	});
 
 	test("GET /ctl/sessions/{id}/stderr returns text for spawned and 404 for remote", async () => {

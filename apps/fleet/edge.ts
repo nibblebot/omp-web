@@ -724,6 +724,12 @@ export class FleetEdge {
 	readonly #daemonGenerations = new Map<string, number>();
 	/** daemonIds mid-wake (respawn/redial); serializes spawn_resume + attach. */
 	readonly #waking = new Set<string>();
+	/**
+	 * In-flight spawn_resume work per daemonId, registered synchronously before
+	 * its first await so a concurrently arriving attach can await the pick
+	 * validation instead of racing past it and waking on lastSessionFile.
+	 */
+	readonly #pendingResumes = new Map<string, Promise<void>>();
 	/** Cached broker rosters per daemonId, merged into the broadcast daemons frame. */
 	readonly #daemonsAggregator = new DaemonsAggregator();
 	/** Control-socket taps per daemonId (unsubscribe fns), reconciled on registry change. */
@@ -1694,6 +1700,24 @@ export class FleetEdge {
 		daemonId: string,
 		sessionFile?: string,
 	): Promise<void> {
+		// Registered BEFORE the first await: the roster UI fires the attach
+		// back-to-back, and an attach that did not wait for this validation
+		// would wake the daemon on lastSessionFile and silently drop the pick.
+		const run = this.#runSpawnResume(stream, daemonId, sessionFile);
+		this.#pendingResumes.set(daemonId, run);
+		try {
+			await run;
+		} finally {
+			if (this.#pendingResumes.get(daemonId) === run) this.#pendingResumes.delete(daemonId);
+		}
+	}
+
+	/** The validation + wake body of spawn_resume (see #handleSpawnResume). */
+	async #runSpawnResume(
+		stream: BrowserStream,
+		daemonId: string,
+		sessionFile?: string,
+	): Promise<void> {
 		try {
 			const entry = this.#registry.get(daemonId);
 			if (!entry) {
@@ -1833,14 +1857,24 @@ export class FleetEdge {
 		daemonId: string,
 		commandId: string | undefined,
 	): Promise<void> {
-		const entry = this.#registry.get(daemonId);
-		if (!entry) {
+		if (!this.#registry.get(daemonId)) {
 			this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
 			return;
 		}
 		// Re-attach (same or another daemon) closes the previous pipe first.
 		this.#closePipe(stream);
 		try {
+			// A back-to-back spawn_resume may still be validating its picked
+			// session; wait for it (its own rejection is already reported to
+			// its stream) so this wake does not respawn on lastSessionFile
+			// first. The entry is re-read after the wait: registry entries are
+			// REPLACED on update, so a pre-wait object can carry a stale status.
+			await this.#pendingResumes.get(daemonId)?.catch(() => {});
+			const entry = this.#registry.get(daemonId);
+			if (!entry) {
+				this.#sendAttachOutcome(stream, commandId, { error: `unknown daemon: ${daemonId}` });
+				return;
+			}
 			await this.#wake(entry);
 			// Clone attach readiness is the callback pair's, not the connector's:
 			// ensureCloneRunning resolved at provider-running + enrollment (the
@@ -1880,9 +1914,11 @@ export class FleetEdge {
 	 * through the lifecycle ensure (provider compute + enrollment; pair
 	 * readiness rides the lifecycleStage roster broadcasts and the transport
 	 * onPairChange stream_open re-send, never awaited here). Serialized per
-	 * daemon. The roster UI sends spawn_resume and attach back-to-back; a
-	 * second wake (from the attach) while the first is in flight must not
-	 * respawn or ensure the child again, it just awaits ready.
+	 * daemon. The roster UI sends spawn_resume and attach back-to-back; the
+	 * attach awaits the spawn_resume's in-flight promise (#pendingResumes)
+	 * before waking, so the pick it validated is the resume that runs, and a
+	 * second wake while the first is in flight must not respawn or ensure
+	 * the child again, it just awaits ready.
 	 */
 	async #wake(entry: RegistryEntry, resumeFile?: string): Promise<void> {
 		const daemonId = entry.daemonId;
