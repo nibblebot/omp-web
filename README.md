@@ -14,7 +14,7 @@ Because it drives the agent through the SDK instead of the RPC, omp-web has full
 - **Multiple Repos, Worktrees, and Clones, one UI.** Start, monitor, and chat with one agent daemon per worktree or per independent clone workspace across every repo.
 - **A full web UI, not a terminal wrapper.** Live-streamed responses, rendered markdown and diffs, tool output, slash commands, prompt history and autocomplete, per-session context/usage meters, and a transcripts/stats view.
 - **Custom wire protocol for full SDK control.** The SSE + POST contract carries the full SDK surface, including daemon and subagent control the RPC doesn't expose.
-- **Manage repos, worktrees, and clones from the UI.** Register projects (deduped by realpath); create or adopt managed worktrees; or create independent clone workspaces through a declared provider profile (sandboxed bwrap or Kubernetes). Managed worktrees delete safely: clean-tree-only, `git branch -d`, no `--force`. Clone workspaces delete only through the verified-deletion gate (see [`docs/architecture.md`](docs/architecture.md)); remove and worktree delete both route through that same gate for clone entries.
+- **Manage repos, worktrees, and clones from the UI.** Register projects (deduped by realpath); create or adopt managed worktrees; or create independent clone workspaces through a declared provider profile (sandboxed bwrap or Kubernetes). Managed worktrees delete safely: clean-tree-only, `git branch -d`, no `--force`. Clone workspaces delete only through the verified-deletion gate (see [Clone workspaces](docs/src/content/docs/fleet/clone-workspaces.md)); remove and worktree delete both route through that same gate for clone entries.
 - **CLI for automation.** Spawn, stop, remove, inspect, and fan a prompt out to many daemons from the terminal, the same fleet the browser talks to.
 - **Self-updating.** `omp-web update` checks the release channel and reinstalls the latest version in one command.
 - **Self-healing.** Idle daemons exit after 30 minutes and are respawned on demand; crashed daemons restart with bounded backoff; dropped connections show `reconnecting` and browsers re-attach automatically. Clone workspaces add an explicit stop/wake lifecycle: stop preserves the workspace volume and session logs, wake re-provisions compute and resumes the last session (cold volumes materialize the transcript from the fleet store first).
@@ -27,14 +27,14 @@ Session daemons are disposable processes; the durable truth is the session `.jso
 
 ## Clone workspaces
 
-Beyond local worktrees, omp-web can create **clone workspaces** managed by an external provider (sandboxed `bwrap`, or Kubernetes) declared in `~/.omp-web/config.json` under `providerProfiles`. A clone workspace runs in its own volume (`.checkout/` working clone with an independent object store, `.home/` private writable home whose `agent/sessions` tree holds the transcripts) with the session daemon inside, dialing the fleet over the outbound callback pair. Profiles carry operator-declared limits and secret references (names only cross trust boundaries). `omp-web preflight --profile <id>` validates a profile's executable, tools, secret references, and callback reachability before workspaces use it. The required streaming gateway/proxy and cluster prerequisites are operator setup, not something omp-web provisions; see [`docs/architecture.md`](docs/architecture.md) and [`apps/session/image-README.md`](apps/session/image-README.md).
+Beyond local worktrees, omp-web can create **clone workspaces** managed by an external provider (sandboxed `bwrap`, or Kubernetes) declared in `~/.omp-web/config.json` under `providerProfiles`. A clone workspace runs in its own volume (`.checkout/` working clone with an independent object store, `.home/` private writable home whose `agent/sessions` tree holds the transcripts) with the session daemon inside, dialing the fleet over the outbound callback pair. Profiles carry operator-declared limits and secret references (names only cross trust boundaries). `omp-web preflight --profile <id>` validates a profile's executable, tools, secret references, and callback reachability before workspaces use it. The required streaming gateway/proxy and cluster prerequisites are operator setup, not something omp-web provisions; see [Sandboxed session runtime](docs/src/content/docs/advanced/sandbox-runtimes.md) and [`apps/session/image-README.md`](apps/session/image-README.md).
 
 Clone workspace notes:
 
 - **Stop and wake.** `stop` keeps the checkout and the session logs. `wake` re-provisions compute and resumes the last session; a cold volume (or missing transcript) is materialized byte-identical from the fleet store before the resume path runs, and an explicit session pick on a ready clone switches to that real session rather than booting fresh.
 - **Deletion is verified.** Deleting a clone workspace runs the verify-at-deletion gate (quiesce, Git guard, store completeness, read-only flip) before any provider or volume deletion; a blocked deletion keeps the workspace, volume, and logs.
 - **Session logs are not the workspace.** Transcripts never contain working-tree files; uncommitted work in a clone is not recoverable from them.
-- **Runtime distribution.** The fleet ships the provider executables and a reproducible session-runtime image definition; provider runtimes must be installed and preflighted per host. Isolation limits are honest ones: bwrap and Kubernetes sandboxes share the host kernel, and model/tool credentials reach the sandbox as environment values that a sandboxed process can read. See the security section in [`docs/architecture.md`](docs/architecture.md).
+- **Runtime distribution.** The fleet ships the provider executables and a reproducible session-runtime image definition; provider runtimes must be installed and preflighted per host. Isolation limits are honest ones: bwrap and Kubernetes sandboxes share the host kernel, and model/tool credentials reach the sandbox as environment values that a sandboxed process can read. See the [Security model](docs/src/content/docs/operations/security.md).
 
 > **Status of runtime claims.** omp-web does not yet claim production-grade proof for the clone runtime: real Kubernetes lifecycle evidence (no operator cluster) and production same-origin TLS gateway + streaming-proxy failure/recovery evidence (not provisioned) are pending operator setup, as are the multi-runtime/fairness load dimensions. The streaming callback path itself works over explicit loopback HTTP (developer default) with HTTPS required elsewhere, and clone workspaces need a real provider profile: the default fleet has none, so clone routes fail with a typed `unavailable` until one is configured.
 
@@ -59,7 +59,7 @@ flowchart TB
   daemons -.-> log
 ```
 
-Deep dive into [`docs/architecture.md`](docs/architecture.md): wire contract, module map, security model.
+See [System architecture](docs/src/content/docs/advanced/architecture.md) for an overview of the runtime, conceptual wire model, and import, state, and security boundaries.
 
 ## Requirements
 
@@ -93,7 +93,7 @@ Full user documentation lives under [`docs/src/content/docs/`](docs/src/content/
 - [Troubleshooting](docs/src/content/docs/operations/troubleshooting.md) and [Security model](docs/src/content/docs/operations/security.md): failure handling and trust boundaries.
 - [Clone workspaces](docs/src/content/docs/fleet/clone-workspaces.md), [Provider profiles](docs/src/content/docs/configuration/provider-profiles.md), and [Sandboxed session runtime](docs/src/content/docs/advanced/sandbox-runtimes.md): the clone runtime and its provider configuration.
 - [Stored sessions](docs/src/content/docs/analysis/stored-sessions.md) and [Browser access and sign-in](docs/src/content/docs/operations/browser-auth.md): fleet-store history browsing and non-loopback sign-in.
-- [System architecture](docs/architecture.md): wire contract, module map, and process boundaries for contributors.
+- [System architecture](docs/src/content/docs/advanced/architecture.md): runtime overview, conceptual wire model, and import, state, and security boundaries for contributors.
 
 ## Self-update
 
