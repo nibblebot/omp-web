@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Repository guardrails. README.md and Starlight are user docs; source types define precise contracts.
+Repository guardrails. README.md is user documentation; source types define precise contracts.
 
 ## What this repo is
 
@@ -19,8 +19,6 @@ bun scripts/test.ts <test-file>      # targeted tests
 bun run test
 bun run build:web
 bun run build                       # installable bundle
-bun run dev:docs
-bun run build:docs
 bun e2e/onboarding.ts                # offline distribution E2E
 ```
 
@@ -36,7 +34,7 @@ Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Restart d
 | `apps/web/` | `state.ts` facade, actions in `store/`, feature logic, presentational `components/` |
 | `lib/` | Closed wire/runtime/session-files/sdk-settings/platform/testkit libraries |
 | `apps/*/test/`, `lib/*/test/`, `scripts/test/`, `e2e/` | Owner-local tests and cross-app/distribution checks |
-| `scripts/`, `docs/src/content/docs/`, `docs/release.md` | Tooling, Starlight site, release contracts |
+| `scripts/`, `docs/release.md` | Tooling and release contracts |
 
 Production source is flat in cli/fleet/session; preserve the web feature hierarchy.
 
@@ -107,5 +105,5 @@ Update wire contracts, producers, consumers, dispatch classification, and behavi
 - Code: targeted tests, then types. Library/daemon/edge changes also require the full suite.
 - UI: `bun run dev`, verify the actual browser surface, including fleet-required handling when relevant.
 - CLI/distribution/bundle/first-run: `bun e2e/onboarding.ts`.
-- Docs: check paths/links; build docs for site changes.
+- Docs: check paths/links.
 - Release: `GATE_COMMANDS` in `scripts/release.ts` is authoritative; includes types, format, web build, full tests, onboarding, followed by packed-artifact installation smoke. Preflight is advisory, not part of orchestration.
