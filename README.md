@@ -1,42 +1,29 @@
 # omp-web
 
-omp-web is a **web UI for running multiple oh-my-pi sessions, across all your repos, worktrees, and independent clone workspaces**: one installed command, one browser UI, N agent sessions.
+omp-web is a **web UI for running multiple oh-my-pi sessions, across all your repos and worktrees**: one installed command, one browser UI, N agent sessions.
 
 Because it drives the agent through the SDK instead of the RPC, omp-web has full daemon and subagent control; RPC-based GUIs don't.
 
 <img id="omp-web-demo" src="docs/screenshots/omp-web-demo.gif" alt="omp-web UI demo" width="800">
 
 
-> **⚠ Early-stage software.** omp-web is under active development and has sharp edges. Expect breaking changes between releases: the wire protocol, config/state formats, and UI are not yet stable. Session transcripts are durable `.jsonl` files and the fleet mirrors them continuously, but the surrounding tooling (fleet state, config, managed worktrees, clone workspaces and their provider profiles) is still evolving; don't treat this as production data storage yet. Report issues and rough spots as you find them.
+> **⚠ Early-stage software.** omp-web is under active development and has sharp edges. Expect breaking changes between releases: the wire protocol, config/state formats, and UI are not yet stable. Session transcripts are durable `.jsonl` files. The surrounding tooling (fleet state, config, and managed worktrees) is still evolving; don't treat this as production data storage yet. Report issues and rough spots as you find them.
 
 ## Features
 
-- **Multiple Repos, Worktrees, and Clones, one UI.** Start, monitor, and chat with one agent daemon per worktree or per independent clone workspace across every repo.
+- **Multiple Repos and Worktrees, one UI.** Start, monitor, and chat with one agent daemon per worktree across every repo.
 - **A full web UI, not a terminal wrapper.** Live-streamed responses, rendered markdown and diffs, tool output, slash commands, prompt history and autocomplete, per-session context/usage meters, and a transcripts/stats view.
 - **Custom wire protocol for full SDK control.** The SSE + POST contract carries the full SDK surface, including daemon and subagent control the RPC doesn't expose.
-- **Manage repos, worktrees, and clones from the UI.** Register projects (deduped by realpath); create or adopt managed worktrees; or create independent clone workspaces through a declared provider profile (sandboxed bwrap or Kubernetes). Managed worktrees delete safely: clean-tree-only, `git branch -d`, no `--force`. Clone workspaces delete only through the verified-deletion gate (see [Clone workspaces](docs/src/content/docs/fleet/clone-workspaces.md)); remove and worktree delete both route through that same gate for clone entries.
+- **Manage repos and worktrees from the UI.** Register projects (deduped by realpath); create or adopt managed worktrees. Managed worktrees delete safely: clean-tree-only, `git branch -d`, no `--force`.
 - **CLI for automation.** Spawn, stop, remove, inspect, and fan a prompt out to many daemons from the terminal, the same fleet the browser talks to.
-- **Self-updating.** `omp-web update` checks the release channel and reinstalls the latest version in one command.
-- **Self-healing.** Idle daemons exit after 30 minutes and are respawned on demand; crashed daemons restart with bounded backoff; dropped connections show `reconnecting` and browsers re-attach automatically. Clone workspaces add an explicit stop/wake lifecycle: stop preserves the workspace volume and session logs, wake re-provisions compute and resumes the last session (cold volumes materialize the transcript from the fleet store first).
+- **Self-updating.** `omp-web update` checks GitHub Releases and installs a newer release when available.
+- **Self-healing.** Idle daemons exit after 30 minutes by default and are respawned on demand; crashed daemons restart with bounded backoff; dropped connections show `reconnecting` and browsers re-attach automatically.
 
 ## Runtime
 
-`omp-web` (bare, or `omp-web serve`) runs the fleet: registry, supervisor, and the web UI it serves on one loopback port, proxying the browser through to whichever session daemon you select. `omp-web session` runs one session daemon (one process, one bound directory, one live agent session, wire API only, no web UI): the fleet spawns these by default with a local template, and you run one by hand on a remote host for the fleet to dial in.
+`omp-web` (bare, or `omp-web serve`) runs the fleet: registry, supervisor, and the web UI it serves on one port, loopback by default, proxying the browser through to whichever session daemon you select. `omp-web session` runs one session daemon (one process, one bound directory, one live agent session, wire API only, no web UI): the fleet spawns these by default with a local template, and you run one by hand on a remote host for the fleet to dial in. Non-loopback fleet service requires browser authentication; non-loopback session daemons require a token.
 
 Session daemons are disposable processes; the durable truth is the session `.jsonl` transcript on disk.
-
-## Clone workspaces
-
-Beyond local worktrees, omp-web can create **clone workspaces** managed by an external provider (sandboxed `bwrap`, or Kubernetes) declared in `~/.omp-web/config.json` under `providerProfiles`. A clone workspace runs in its own volume (`.checkout/` working clone with an independent object store, `.home/` private writable home whose `agent/sessions` tree holds the transcripts) with the session daemon inside, dialing the fleet over the outbound callback pair. Profiles carry operator-declared limits and secret references (names only cross trust boundaries). `omp-web preflight --profile <id>` validates a profile's executable, tools, secret references, and callback reachability before workspaces use it. The required streaming gateway/proxy and cluster prerequisites are operator setup, not something omp-web provisions; see [Sandboxed session runtime](docs/src/content/docs/advanced/sandbox-runtimes.md) and [`apps/session/image-README.md`](apps/session/image-README.md).
-
-Clone workspace notes:
-
-- **Stop and wake.** `stop` keeps the checkout and the session logs. `wake` re-provisions compute and resumes the last session; a cold volume (or missing transcript) is materialized byte-identical from the fleet store before the resume path runs, and an explicit session pick on a ready clone switches to that real session rather than booting fresh.
-- **Deletion is verified.** Deleting a clone workspace runs the verify-at-deletion gate (quiesce, Git guard, store completeness, read-only flip) before any provider or volume deletion; a blocked deletion keeps the workspace, volume, and logs.
-- **Session logs are not the workspace.** Transcripts never contain working-tree files; uncommitted work in a clone is not recoverable from them.
-- **Runtime distribution.** The fleet ships the provider executables and a reproducible session-runtime image definition; provider runtimes must be installed and preflighted per host. Isolation limits are honest ones: bwrap and Kubernetes sandboxes share the host kernel, and model/tool credentials reach the sandbox as environment values that a sandboxed process can read. See the [Security model](docs/src/content/docs/operations/security.md).
-
-> **Status of runtime claims.** omp-web does not yet claim production-grade proof for the clone runtime: real Kubernetes lifecycle evidence (no operator cluster) and production same-origin TLS gateway + streaming-proxy failure/recovery evidence (not provisioned) are pending operator setup, as are the multi-runtime/fairness load dimensions. The streaming callback path itself works over explicit loopback HTTP (developer default) with HTTPS required elsewhere, and clone workspaces need a real provider profile: the default fleet has none, so clone routes fail with a typed `unavailable` until one is configured.
 
 ## Architecture
 
@@ -54,17 +41,16 @@ flowchart TB
 
   browser <-->|"SSE + POST"| fleet
   fleet <-->|"proxied SSE + POST"| daemons
-  daemons -.->|"outbound callback pair (managed clones)"| fleet
   daemons <--> model
   daemons -.-> log
 ```
 
-See [System architecture](docs/src/content/docs/advanced/architecture.md) for an overview of the runtime, conceptual wire model, and import, state, and security boundaries.
+See [`AGENTS.md`](AGENTS.md) for the engineering map, wire contract, and import, state, and security boundaries.
 
 ## Requirements
 
-- [Bun](https://bun.sh) (the runtime and the installer)
-- The **`omp` CLI** with at least one provider and a default model configured: run `omp` and set it up in its `/settings` (or `omp login` for an OAuth provider). omp-web verifies this on first run and prompts fail until a model resolves.
+- [Bun](https://bun.sh) **1.3.14 or newer** (the runtime and installer). The one-line installer installs Bun when absent; upgrade an existing older installation first.
+- The **`omp` CLI** with usable provider credentials and a default model configured: run `omp` to configure it, or `omp login` for an OAuth provider. An interactive first run with no fleet config checks this setup; missing setup warns but does not prevent the fleet from starting. Prompts need a usable model and credentials.
 
 ## Install
 
@@ -73,7 +59,7 @@ See [System architecture](docs/src/content/docs/advanced/architecture.md) for an
 curl -fsSL https://raw.githubusercontent.com/nibblebot/omp-web/main/scripts/install.sh | sh
 ```
 
-The installer downloads the latest release tarball, verifies its sha256 against the release manifest, and installs it into a pinned project dir (`~/.omp-web/install/`) with a `~/.bun/bin/omp-web` symlink. Then `omp-web update` keeps it current.
+The installer downloads the latest release tarball, verifies its sha256 against the release manifest, and installs it into a pinned project dir (`~/.omp-web/install/`) with a `~/.bun/bin/omp-web` symlink by default (or `$BUN_INSTALL/bin/omp-web`). Put that bin directory on `PATH`. Then `omp-web update` keeps it current.
 
 ## Verify
 
@@ -81,70 +67,66 @@ The installer downloads the latest release tarball, verifies its sha256 against 
 omp-web --version
 ```
 
-## Documentation
-
-Full user documentation lives under [`docs/src/content/docs/`](docs/src/content/docs/) and builds as a Starlight site (`bun install && bun run dev:docs`).
-
-- [What is omp-web?](docs/src/content/docs/getting-started/overview.md) and [Installation](docs/src/content/docs/getting-started/installation.md): the product model and prerequisites.
-- [First run](docs/src/content/docs/getting-started/first-run.md) and [Start your first session](docs/src/content/docs/getting-started/start-first-session.md): from an empty fleet to your first prompt.
-- [Core concepts](docs/src/content/docs/concepts/projects-worktrees-session-daemons-sessions.md): projects, worktrees, session daemons, and sessions.
-- [Fleet management](docs/src/content/docs/fleet/sidebar.md) and [Analysis](docs/src/content/docs/analysis/transcripts.md): the roster and the historical browser.
-- [CLI commands and flags](docs/src/content/docs/reference/cli.md), [Configuration schema](docs/src/content/docs/reference/configuration.md), [Environment variables](docs/src/content/docs/reference/environment.md), and [Files and directories](docs/src/content/docs/reference/files.md): the canonical references.
-- [Troubleshooting](docs/src/content/docs/operations/troubleshooting.md) and [Security model](docs/src/content/docs/operations/security.md): failure handling and trust boundaries.
-- [Clone workspaces](docs/src/content/docs/fleet/clone-workspaces.md), [Provider profiles](docs/src/content/docs/configuration/provider-profiles.md), and [Sandboxed session runtime](docs/src/content/docs/advanced/sandbox-runtimes.md): the clone runtime and its provider configuration.
-- [Stored sessions](docs/src/content/docs/analysis/stored-sessions.md) and [Browser access and sign-in](docs/src/content/docs/operations/browser-auth.md): fleet-store history browsing and non-loopback sign-in.
-- [System architecture](docs/src/content/docs/advanced/architecture.md): runtime overview, conceptual wire model, and import, state, and security boundaries for contributors.
+Run `omp-web` to start the fleet and open its printed UI URL. Register a repository in the UI, start or select a session, and send a prompt. Local sessions use your ordinary SDK credentials.
 
 ## Self-update
 
 ```sh
-omp-web update                  # check the release channel and reinstall the latest
-omp-web update --check          # just report the newest version
-omp-web update --version x.y.z  # pin a specific release
+omp-web update                          # install the latest release if newer
+omp-web update --check                  # check for an update without installing
+omp-web update --version x.y.z          # select a specific newer release
+omp-web update --force --version x.y.z  # reinstall or downgrade to a specific release
 ```
+
+`--version` selects a release for this invocation, not a durable pin; a future bare update still checks the latest release. Restart the running fleet after updating.
 
 ## Configuration and State
 
 - Default data directory: `~/.omp-web/`
-- `config.json` (fleet config; defaults are loaded read-only, and the file is written only by the first-run offer and by operator edits). Keys include `templates` (spawn command templates), `workspaceDir` (managed worktrees root), `bind`, `browserAccessToken` (stored only as its sha-256 digest), `browserOrigin`, `trustedProxies`, and `providerProfiles` (clone provider profiles; see Clone workspaces). Env `OMP_FLEET_CONFIG` selects a different config file; flags such as `--bind`/`--browser-access-token` and env `OMP_FLEET_BIND`/`OMP_FLEET_BROWSER_TOKEN` override the file keys.
-- `fleet-state.json` (roster + registered projects + clone workspace records, atomic writes, exclusive pidfile lock)
-- `workspaces/` (managed worktrees, created lazily). Chosen at first run; config, state, and workspaces always live together under it.
-- `logs/` under the fleet state dir (the fleet log store): a durable mirror of the session lineage logs streamed by every managed daemon. Store layout is `logs/<workspaceId>/<sessionId>/<relpath>` plus a per-session `index.json`. Retention is explicit and manual: nothing is garbage-collected automatically. A workspace deleted without passing the verification gate leaves its store subtree as an orphan, listed by `GET /ctl/logs/orphans` and removed only by `POST /ctl/logs/purge {workspaceId}`; verified (read-only) store data is kept unless the operator purges it manually. Read-only history browsing never wakes compute; a deleted workspace's sessions are view-only, and resuming one onto a fresh clone is the explicit `POST /ctl/workspaces/:id/resume-clone` action.
+- `config.json`: fleet config, loaded read-only; only the interactive first-run offer and operator edits write it. Keys include `templates` (spawn commands), `workspaceDir`, `bind`, `browserAccessToken` (a sha-256 digest, not plaintext), `browserOrigin`, and `trustedProxies`. `OMP_FLEET_CONFIG` selects a different file. Flags such as `--bind`/`--browser-access-token` and env `OMP_FLEET_BIND`/`OMP_FLEET_BROWSER_TOKEN` override file keys; CLI/env browser tokens are plaintext inputs hashed in memory.
+- `fleet-state.json`: roster and registered projects, with atomic writes and an exclusive lifetime pidfile lock. Defaults beside the selected config; `OMP_FLEET_STATE` selects another path.
+- `workspaces/`: default managed-worktree root, created as needed or during accepted first-run setup. `--workspace-dir`, `OMP_FLEET_WORKSPACE_DIR`, or config `workspaceDir` select another root independently of config and state.
+- `logs/` beside the state file: durable lineage-file mirrors streamed over enrolled callback pairs when the fleet log store is available. Default local/template daemons keep transcripts in their SDK session directory and are not automatically mirrored.
+
+Interactive first run can choose a data home and write `config.json` there. If you choose a non-default location, set `OMP_FLEET_CONFIG` to that file for subsequent launches. Config, state, and workspace paths can be configured separately; installed code remains in its installation prefix.
 
 ## Develop
 
 ```sh
 bun install
-bun run dev                # vite (HMR) + fleet, stable per-worktree UI port, opens the UI in your browser; no managed auth broker
-bun run dev --auth-broker  # opt into adopting or spawning an auth broker for clone sandboxes
+bun run dev                # Vite HMR + fleet; open the printed ui URL; no managed auth broker
 ```
+
+Dev auto-opens the browser for interactive graphical local runs; `--open`/`--no-open` override this. Use the printed `ui` URL, not the fleet's potentially stale `dist/` UI. Restart dev-spawned daemons after server edits; they are not watched.
 
 Source imports into `lib/` use extensionless `#lib/<path below lib/>`, such as `#lib/wire/protocol`, through root `package.json`'s imports mapping. Keep local imports such as `./helpers` relative. Shared libraries are closed: their repository imports stay inside `lib/`, with no library cycles, enforced by `bun run lint`.
 
-In a linked worktree, `bun run dev` forks the dev fleet state from the main worktree (copy-once, like a git fork), so the worktree's roster boots with the main worktree's sessions/projects instead of empty; later runs keep the diverged fork. `--state-from <path>` forks from an explicit state file or directory, and `--fresh` skips seeding and starts on a clean state. Dev fleet state is scoped per worktree outside the repo at `<data home>/dev-fleets/<slug>-<hash8>/` (slug is the worktree basename, `hash8` the sha-256 prefix of its realpath), so several dev stacks and your real fleet coexist.
+In a linked worktree, `bun run dev` copy-once forks the main worktree's existing **dev** fleet state when available; otherwise it starts empty. Later runs keep the diverged roster. `--state-from <path>` seeds from an explicit state file or directory, while `--fresh` deletes this worktree's existing dev roster and skips seeding. Dev state lives outside the repo at `<data home>/dev-fleets/<slug>-<hash8>/` (worktree basename and sha-256 prefix of its realpath). Config and the managed-workspace root remain shared across dev stacks; a separate dev roster does not isolate workspace storage.
 
-By default, development starts only the fleet and Vite, with no broker token creation, authenticated probe, adoption, spawn, restart, or automatic broker environment export. `bun run dev --auth-broker` explicitly opts into adopting an authenticated broker on loopback or spawning `omp auth-broker serve` as a restartable child, then exporting `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` for clone profile `secretRefs` using `env:` references. Broker setup failures warn and let the stack continue; sandboxes that need broker-borrowed credentials cannot resolve them without another explicit credential source.
-
-Production `omp-web` never manages broker startup. Local sessions use the user's ordinary SDK credentials; isolated clone sandboxes need explicitly configured credentials or an operator-run broker exposed through their profile's `secretRefs`. Explicitly supplied `OMP_AUTH_BROKER_URL`/`OMP_AUTH_BROKER_TOKEN` and existing profile `secretRefs` remain opt-in configuration and are inherited by the default dev stack without being replaced.
+By default, development starts only the fleet and Vite, with no managed auth broker or automatic credential configuration. Production `omp-web` never manages broker startup. Local sessions use the user's ordinary SDK credentials.
 
 ## Advanced
 
 ```sh
 omp-web session [options]            # run a single-session agent daemon
-omp-web sessions | projects | profiles   # roster / projects / provider profiles
+omp-web sessions                    # roster
+omp-web projects                    # registered projects
 omp-web spawn <path>                 # start a daemon on a directory
 omp-web add-repo <path> [--start]    # register a project (deduped on realpath)
 omp-web add <name> <url> [--token <t>] [--cwd <path>]   # register an external daemon
 omp-web provision <name> [--label k=v]                  # enroll via the configured spawn hook
 omp-web add-worktree <project> <name> [--no-start]      # create a managed worktree
 omp-web add-worktree <project> --existing <path>        # adopt an existing one
-omp-web add-clone <project> <name> --profile <id> [--local <path> | --remote <url>] [--revision <rev>] [--branch <b>] [--no-start]
-omp-web preflight --profile <id>     # validate a provider profile locally
-omp-web start <selector>             # ensure a clone workspace is running (wake)
-omp-web stop <selector> | remove <selector>
-omp-web rm-project <selector> | rm-worktree <daemon-id> [--delete-branch]
+omp-web stop <selector>
+omp-web remove <selector>
+omp-web rm-project <project>
+omp-web rm-worktree <daemon-id> [--delete-branch]
 omp-web prompt <selector> <text> [--wait <ms>]
 ```
+
+`stop`, `remove`, and `prompt` selectors accept `all`, an exact daemon ID, `label:k=v` (also `tag:k=v`), `project:name`, or name globs with `*` and `?`; quote globs to prevent shell expansion. Project arguments accept a registered project ID, path/realpath, or basename. Control commands connect to loopback; `--port` or `OMP_FLEET_PORT` selects the fleet port (default 4722).
+
+`prompt` submits without waiting unless `--wait <ms>` supplies a result timeout.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the checks before a pull request and [`AGENTS.md`](AGENTS.md) for the full engineering map.
 
@@ -153,7 +135,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the checks before a pull request an
 Install from this repo (build → pack → install):
 
 ```sh
-git clone <this-repo> && cd omp-web
+git clone https://github.com/nibblebot/omp-web.git && cd omp-web
 bun install
 bun run install:omp-web       # build → pack → install into ~/.omp-web/install/
 omp-web --version             # verify: prints <version>
