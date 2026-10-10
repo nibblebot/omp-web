@@ -30,7 +30,8 @@
 		"test": "bun scripts/test.ts",
 		"tx-fixture": "bun apps/fleet/test/gen-tx-fixture.ts",
 		"collab": "bun apps/cli/collab-cli.ts",
-		"fleet": "bun apps/fleet/cli.ts"
+		"fleet": "bun apps/fleet/cli.ts",
+		"design": "bun apps/design-system/server.ts"
 	},
 	"dependencies": {
 		"@oh-my-pi/pi-agent-core": "18.8.6",
@@ -49,12 +50,15 @@
 	"devDependencies": {
 		"@astrojs/markdown-satteri": "^0.4.3",
 		"@astrojs/starlight": "^0.42.6",
+		"@babel/core": "^7.29.7",
 		"@babel/parser": "^7.29.9",
+		"@babel/preset-typescript": "^7",
 		"@babel/types": "^7.29.8",
 		"@types/bun": "^1.4.2",
 		"@types/diff": "^8.0.0",
 		"@typescript/native-preview": "7.0.0-dev.20260707.2",
 		"astro": "^7.3.8",
+		"babel-preset-solid": "^1.9.15",
 		"enhanced-resolve": "^5.26.0",
 		"eslint-plugin-solid": "^0.15.0",
 		"oxfmt": "^0.63.0",

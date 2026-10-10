@@ -105,6 +105,14 @@ In a linked worktree, `bun run dev` copy-once forks the main worktree's existing
 
 By default, development starts only the fleet and Vite, with no managed auth broker or automatic credential configuration. Production `omp-web` never manages broker startup. Local sessions use the user's ordinary SDK credentials.
 
+### Design system
+
+```sh
+bun run design             # component showcase on http://localhost:4799/ (OMP_DESIGN_PORT overrides)
+```
+
+`apps/design-system/` is a standalone Bun server that bundles the real `apps/web` components (Babel with `babel-preset-solid`) and shows each one with fixture data. No fleet runs behind it: control-plane fetches (`/ctl`, `/auth`) are answered from `apps/design-system/fixtures/routes.ts`, daemon commands and `call()` answers come from story handlers in `apps/design-system/daemon.ts`, and stories seed the shared store through `seed`. The store, the fake daemon, and module-level dialog state reset before every story and variant. The sidebar is computed from the component graph (`graph.ts`): it starts at `App` and drills down through what each component renders, opening the path to the current story. Where a component renders several pieces from another feature folder, they sit under a folder row for that feature (`chat/`), split again by subfolder (`status/`), so App and ModalHost show a few big pieces rather than every component; `ui/` primitives and the Icons page are listed below the tree, and exported components nothing renders are listed under "Not rendered by App". The search box replaces the tree with a flat list of matches. `#/coverage` lists every exported component and whether it has a story. Refresh the page to rebuild after source edits; restart the server after editing `server.ts` or fixture routes. Add a story by creating `apps/design-system/stories/<feature>/<subfolder>/<Name>.tsx`, mirroring the component's folder, whose default export is a `defineStory(...)` (or an array of them); see `registry.ts` for the contract.
+
 ## Advanced
 
 ```sh

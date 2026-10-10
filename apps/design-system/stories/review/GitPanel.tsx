@@ -1,0 +1,89 @@
+import { GitPanel } from "../../../web/components/review/GitPanel";
+import { setState } from "../../../web/state";
+import {
+	gitCalls,
+	reviewCapabilities,
+	reviewGitDiff,
+	reviewGitDiffBinary,
+	reviewGitStatusUnavailable,
+} from "../../fixtures/review";
+import { answerCalls } from "../../daemon";
+import { defineStory } from "../../registry";
+
+export default defineStory({
+	id: "review-git-panel",
+	title: "GitPanel",
+	component: { file: "apps/web/components/review/GitPanel.tsx", export: "GitPanel" },
+	seed: { capabilities: reviewCapabilities },
+	variants: [
+		{
+			name: "Changes",
+			description:
+				"Untracked, modified, and staged rows on feat/design-fixtures, with a commit message box.",
+			seed: () => answerCalls(gitCalls()),
+			render: () => (
+				<div class="ds-frame-tall">
+					<GitPanel />
+				</div>
+			),
+		},
+		{
+			name: "Diff open",
+			description: "A single-hunk diff of CopyButton.tsx open in the diff viewer.",
+			seed: () => {
+				answerCalls(gitCalls());
+				setState("review", "fileDiff", reviewGitDiff);
+			},
+			render: () => (
+				<div class="ds-frame-tall">
+					<GitPanel />
+				</div>
+			),
+		},
+		{
+			name: "Binary asset",
+			description: "A staged font file, shown with the binary placeholder instead of text.",
+			seed: () => {
+				answerCalls(gitCalls());
+				setState("review", "fileDiff", reviewGitDiffBinary);
+			},
+			render: () => (
+				<div class="ds-frame-tall">
+					<GitPanel />
+				</div>
+			),
+		},
+		{
+			name: "Not a repository",
+			description:
+				"The working directory is not a git repository, so the panel shows the reason row.",
+			seed: () => answerCalls(gitCalls({ status: reviewGitStatusUnavailable })),
+			render: () => (
+				<div class="ds-frame-tall">
+					<GitPanel />
+				</div>
+			),
+		},
+		{
+			name: "Status error",
+			description: "git refused the status call because the index is locked.",
+			seed: () =>
+				answerCalls(gitCalls({ statusError: "index.lock exists; another git process is running" })),
+			render: () => (
+				<div class="ds-frame-tall">
+					<GitPanel />
+				</div>
+			),
+		},
+		{
+			name: "Loading",
+			description: "The status request is still in flight.",
+			seed: () => answerCalls(gitCalls({ pending: true })),
+			render: () => (
+				<div class="ds-frame-tall">
+					<GitPanel />
+				</div>
+			),
+		},
+	],
+});

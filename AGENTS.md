@@ -18,6 +18,7 @@ bun run format:check
 bun scripts/test.ts <test-file>      # targeted tests
 bun run test
 bun run build:web
+bun run design                      # component showcase (own Bun server, real apps/web components)
 bun run build                       # installable bundle
 bun e2e/onboarding.ts                # offline distribution E2E
 ```
@@ -31,12 +32,15 @@ Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Restart d
 | `apps/cli/` | Installed entrypoint, update, collab CLI |
 | `apps/session/` | Session daemon, dispatch, SSE delivery, callback/log mirroring |
 | `apps/fleet/` | Registry, supervision, connector, browser edge, control API, stats, clone lifecycle |
-| `apps/web/` | `state.ts` facade, actions in `store/`, feature logic, presentational `components/` |
+| `apps/web/` | `state.ts` facade, actions in `store/`, feature logic (`chat/`, `prompt/`, `subagents/`, `fleet-ui/`, ...), `ModalHost.tsx`, presentational `components/` |
+| `apps/design-system/` | Component showcase: Bun server + Solid transform, App drill-down nav from the render graph, stories, typed fixtures, fixture HTTP routes |
 | `lib/` | Closed wire/runtime/session-files/sdk-settings/platform/testkit libraries |
 | `apps/*/test/`, `lib/*/test/`, `scripts/test/`, `e2e/` | Owner-local tests and cross-app/distribution checks |
 | `scripts/`, `docs/release.md` | Tooling and release contracts |
 
-Production source is flat in cli/fleet/session; preserve the web feature hierarchy.
+Production source is flat in cli/fleet/session; preserve the web feature hierarchy. `apps/web/components/` groups by feature, matching `store/` modules: `ui/` (domain-free primitives, no `state.ts` import), `app/` (shell widgets), `chat/{status,transcript,tools,composer,controls}`, `requests/` (agent-to-user dialogs that self-mount on store state), `sessions/`, `models/`, `settings/`, `usage/`, `fleet/{sidebar,daemon,workspaces}`, `subagents/`, `review/`; `tx/` stays a self-contained feature. A component used by exactly one parent lives in that parent's folder. Logic and types stay out of `components/`.
+
+Component names say what the user sees, one name per concept, no abbreviations; a file holding one component is named after it. Suffixes: `*Modal` (dialog shell), `*Picker` (choose one item), `*Panel` (review/workspace surface), `*Tab` (hub tab body), `*Card` (transcript item), `*ToolCard` (tool call renderer), `*Row` (list row), `*Bar` (strip above the composer).
 
 ## The wire contract (OMP_PROTO 2)
 
@@ -75,6 +79,7 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only). `POST /command` acce
 ### Frontend (`apps/web/`)
 
 - One `createStore` in `state.ts`; components mutate shared data only through exported actions.
+- Every overlay mounts through `ModalHost.tsx`: one renderer per `ModalName` (typed `satisfies Record<ModalName, …>`) plus the self-mounting dialogs. Never mount overlays in `App.tsx`.
 - Markdown always uses `DOMPurify.sanitize(marked.parse(...))`; model HTML is untrusted.
 - Mutate streaming blocks in place; replacing objects remounts Solid `<For>` and breaks scrolling/fades.
 - Preserve stale-session guards and replay dedup. Session switches reject pending calls/reset IDs without clearing fleet-scoped data.

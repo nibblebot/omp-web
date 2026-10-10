@@ -1,0 +1,342 @@
+/* Showcase chrome. Loaded after apps/web/styles.css so it can use the shared
+ * design tokens (tokens.css) and follow the active theme palette. Every class
+ * is ds- prefixed so it can never collide with production selectors. */
+.ds-shell {
+	display: grid;
+	grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+	height: 100vh;
+}
+.ds-nav {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	padding: var(--space-5);
+	overflow-y: auto;
+	background: var(--panel);
+	border-right: 1px solid var(--border);
+}
+.ds-brand {
+	color: var(--accent);
+	font-weight: 600;
+	text-decoration: none;
+	padding-bottom: var(--space-3);
+}
+.ds-theme {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-4);
+	color: var(--muted-3);
+	font-size: var(--fs-sm, 0.85em);
+}
+.ds-theme select,
+.ds-search {
+	background: var(--btn);
+	color: var(--text);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-md);
+	padding: var(--space-2) var(--space-4);
+	font: inherit;
+}
+.ds-search {
+	width: 100%;
+	box-sizing: border-box;
+}
+.ds-nav-section {
+	display: flex;
+	flex-direction: column;
+	margin-top: var(--space-4);
+}
+.ds-nav-heading {
+	margin: 0 0 var(--space-2);
+	font-size: 0.8em;
+	font-weight: 500;
+	color: var(--muted-3);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.ds-nav-link {
+	display: block;
+	min-width: 0;
+	padding: var(--space-2) var(--space-4);
+	border-radius: var(--r-sm);
+	color: var(--text);
+	text-decoration: none;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.ds-nav-link:hover {
+	background: var(--hover);
+}
+.ds-nav-link[aria-current="page"] {
+	background: var(--accent-dim);
+	color: var(--accent);
+}
+.ds-nav-note {
+	margin-left: var(--space-3);
+	color: var(--muted-3);
+	font-size: 0.8em;
+}
+.ds-nav-footer {
+	margin-top: auto;
+	border-top: 1px solid var(--border);
+	padding-top: var(--space-4);
+}
+/* App drill-down tree: each level indents under the row that renders it. */
+.ds-tree {
+	margin: 0;
+	padding: 0 0 0 var(--space-5);
+	list-style: none;
+}
+.ds-tree.ds-tree-root {
+	padding-left: 0;
+	margin-top: var(--space-3);
+}
+.ds-tree-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-1);
+	min-width: 0;
+}
+.ds-tree-row .ds-nav-link {
+	flex: 1;
+	padding-left: var(--space-2);
+}
+.ds-tree-toggle,
+.ds-tree-spacer {
+	flex: none;
+	width: 1.5em;
+	height: 1.5em;
+}
+.ds-tree-toggle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: 0;
+	border-radius: var(--r-sm);
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+.ds-tree-toggle:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+.ds-tree-label {
+	padding: var(--space-2);
+	color: var(--muted);
+}
+.ds-main {
+	overflow-y: auto;
+	padding: var(--space-7);
+	min-width: 0;
+}
+.ds-page-title {
+	margin: 0 0 var(--space-5);
+	font-size: 1.4em;
+}
+.ds-lede,
+.ds-empty {
+	color: var(--muted);
+}
+.ds-story {
+	margin-bottom: var(--space-7);
+}
+.ds-story-head {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: var(--space-5);
+	margin-bottom: var(--space-5);
+	padding-bottom: var(--space-3);
+	border-bottom: 1px solid var(--border);
+}
+.ds-story-title {
+	margin: 0;
+	font-size: 1.15em;
+}
+.ds-story-title a {
+	color: var(--text);
+	text-decoration: none;
+}
+.ds-story-file {
+	color: var(--muted);
+	font-family: var(--font-mono);
+	font-size: 0.8em;
+}
+.ds-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-3);
+	margin-bottom: var(--space-5);
+}
+.ds-tab[aria-selected="true"] {
+	background: var(--accent-dim);
+	border-color: var(--accent-border);
+	color: var(--accent);
+}
+.ds-variant {
+	margin-bottom: var(--space-6);
+}
+.ds-variant-head {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: var(--space-4);
+	margin-bottom: var(--space-3);
+}
+.ds-variant-name {
+	margin: 0;
+	font-size: 0.9em;
+	font-weight: 600;
+	color: var(--muted-3);
+}
+.ds-variant-desc {
+	margin: 0;
+	font-size: 0.85em;
+	color: var(--muted);
+}
+.ds-variant-body {
+	padding: var(--space-6);
+	border: 1px dashed var(--border-strong);
+	border-radius: var(--r-lg);
+	background: var(--bg);
+}
+/* Modal and ImageThumbnails portal to <body> with position: fixed, exactly as in
+ * production. Start them past the showcase nav so it stays usable while an
+ * overlay story is open. */
+body > div:not(#root) > .modal-backdrop,
+body > div:not(#root) > .img-overlay {
+	left: var(--sidebar-w);
+}
+/* Frame for full-screen and fixed-position components (screens, sidebars,
+ * toasts): `transform` makes it the containing block for fixed descendants,
+ * so they lay out inside the variant instead of over the page. */
+.ds-frame {
+	position: relative;
+	height: 640px;
+	overflow: hidden;
+	transform: translateZ(0);
+	border-radius: var(--r-md);
+}
+.ds-frame-tall {
+	height: 820px;
+}
+/* Icons page: a gallery of tiles plus rows of the full set. */
+.ds-icon-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+	gap: var(--space-4);
+}
+.ds-icon-tile {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--space-3);
+	padding: var(--space-5) var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	font-size: 0.8em;
+}
+.ds-icon-glyph {
+	font-size: 1.75rem;
+	line-height: 1;
+}
+.ds-icon-row {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: var(--space-3);
+}
+.ds-error {
+	margin: 0;
+	padding: var(--space-4) var(--space-5);
+	overflow-x: auto;
+	background: var(--error-bg);
+	border: 1px solid var(--error-border);
+	border-radius: var(--r-md);
+	color: var(--error-text);
+	font-family: var(--font-mono);
+	font-size: 0.85em;
+	white-space: pre-wrap;
+}
+.ds-meta {
+	display: grid;
+	gap: var(--space-3);
+	margin: 0 0 var(--space-6);
+	font-size: 0.85em;
+}
+.ds-meta-row {
+	display: grid;
+	grid-template-columns: 5.5em minmax(0, 1fr);
+	align-items: baseline;
+	gap: var(--space-4);
+}
+.ds-meta dt {
+	color: var(--muted);
+}
+.ds-meta dd {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--space-3);
+	margin: 0;
+}
+.ds-badge {
+	padding: var(--space-1) var(--space-4);
+	border-radius: var(--r-pill);
+	background: var(--accent-dim);
+	border: 1px solid var(--accent-border);
+	color: var(--accent);
+}
+.ds-group {
+	color: var(--muted-3);
+}
+.ds-chip {
+	display: inline-flex;
+	align-items: baseline;
+	gap: var(--space-3);
+	padding: var(--space-1) var(--space-4);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-md);
+	background: var(--panel);
+	color: var(--accent);
+	text-decoration: none;
+}
+.ds-chip:hover {
+	background: var(--hover);
+}
+.ds-chip-plain {
+	color: var(--muted-3);
+}
+.ds-chip-note {
+	color: var(--muted);
+	font-size: 0.85em;
+}
+.ds-section-title {
+	margin: var(--space-7) 0 var(--space-4);
+	font-size: 1.05em;
+}
+.ds-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.85em;
+}
+.ds-table th,
+.ds-table td {
+	padding: var(--space-2) var(--space-4);
+	border-bottom: 1px solid var(--border);
+	text-align: left;
+	vertical-align: baseline;
+}
+.ds-table th {
+	color: var(--muted);
+	font-weight: 500;
+}
+.ds-table a {
+	color: var(--accent);
+}
+.ds-missing {
+	color: var(--warning);
+}
