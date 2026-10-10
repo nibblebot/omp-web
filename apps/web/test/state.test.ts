@@ -219,9 +219,9 @@ beforeEach(() => {
 		daemonDetailsId: null,
 		modal: null,
 		// Top-level view mode + its UI flags (setView / setTxSidebarVisible /
-		// workUnviewed); reset for isolation.
-		view: "work",
-		workUnviewed: false,
+		// chatUnviewed); reset for isolation.
+		view: "chat",
+		chatUnviewed: false,
 		txSidebarVisible: true,
 		modelSynced: false,
 	});
@@ -1012,7 +1012,7 @@ describe("answerUnviewed (turn ended below the viewport)", () => {
 		expect(state.live.active).toBe(false);
 		expect(state.workingIntent).toBeUndefined();
 		expect(state.answerUnviewed).toBe(false);
-		expect(state.workUnviewed).toBe(false);
+		expect(state.chatUnviewed).toBe(false);
 		expect(state.announcement).toBe("agent started");
 	});
 
@@ -1035,12 +1035,12 @@ describe("answerUnviewed (turn ended below the viewport)", () => {
 		);
 		expect(state.streaming).toBe(false);
 		expect(state.answerUnviewed).toBe(true);
-		expect(state.workUnviewed).toBe(true);
+		expect(state.chatUnviewed).toBe(true);
 		expect(state.announcement).toBe("agent finished");
 	});
 });
 
-describe("workUnviewed (a turn ended while in Analysis)", () => {
+describe("chatUnviewed (a turn ended while in Analysis)", () => {
 	/** A fully primed stream: attached, empty history, readiness gate cleared. */
 	function primeReady(): void {
 		connect();
@@ -1055,26 +1055,26 @@ describe("workUnviewed (a turn ended while in Analysis)", () => {
 		event: { type: "agent_end", messages: [] },
 	});
 
-	test("agent_end while the view is work → not flagged", () => {
-		primeReady(); // view defaults work
+	test("agent_end while the view is chat → not flagged", () => {
+		primeReady(); // view defaults chat
 		dispatchSeq(agentStart(), 1024);
 		dispatchSeq(agentEnd(), 1025);
-		expect(state.workUnviewed).toBe(false);
+		expect(state.chatUnviewed).toBe(false);
 	});
 
-	test("agent_end while the view is analysis → flagged; setView(work) clears it", () => {
+	test("agent_end while the view is analysis → flagged; setView(chat) clears it", () => {
 		setView("analysis");
 		primeReady();
 		dispatchSeq(agentStart(), 1024);
 		dispatchSeq(agentEnd(), 1025);
-		expect(state.workUnviewed).toBe(true);
+		expect(state.chatUnviewed).toBe(true);
 
-		setView("work");
-		expect(state.workUnviewed).toBe(false);
-		// Staying in analysis keeps the flag (only entering work clears it).
-		setState("workUnviewed", true);
+		setView("chat");
+		expect(state.chatUnviewed).toBe(false);
+		// Staying in analysis keeps the flag (only entering chat clears it).
+		setState("chatUnviewed", true);
 		setView("analysis");
-		expect(state.workUnviewed).toBe(true);
+		expect(state.chatUnviewed).toBe(true);
 	});
 
 	test("a detached daemon's streaming flip true→false while in analysis → flagged", () => {
@@ -1085,25 +1085,25 @@ describe("workUnviewed (a turn ended while in Analysis)", () => {
 		setView("analysis");
 
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
-		expect(state.workUnviewed).toBe(false);
+		expect(state.chatUnviewed).toBe(false);
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
-		expect(state.workUnviewed).toBe(true);
+		expect(state.chatUnviewed).toBe(true);
 
-		// A detached daemon ending while in work never flags.
-		setView("work");
+		// A detached daemon ending while in chat never flags.
+		setView("chat");
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
-		expect(state.workUnviewed).toBe(false);
+		expect(state.chatUnviewed).toBe(false);
 	});
 
-	test("the ATTACHED daemon's turn end is not workUnviewed either", () => {
+	test("the ATTACHED daemon's turn end is not chatUnviewed either", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		dispatch(attached("d2")); // currentSessionId = d2
 		setView("analysis");
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: true, blocked: false });
 		dispatch({ type: "daemon_activity", daemonId: "d2", streaming: false, blocked: false });
-		expect(state.workUnviewed).toBe(false);
+		expect(state.chatUnviewed).toBe(false);
 	});
 });
 
@@ -1126,17 +1126,17 @@ describe("setView persistence and hash handling", () => {
 		expect(globalThis.localStorage.getItem("omp.txSidebarVisible")).toBe("false");
 	});
 
-	test("entering work clears the hash via history.replaceState and the workUnviewed dot", () => {
+	test("entering chat clears the hash via history.replaceState and the chatUnviewed dot", () => {
 		stubStorage();
 		globalThis.history = {
 			replaceState: vi.fn(),
 		} as unknown as typeof history;
 		globalThis.location = { hash: "#/s/x", pathname: "/app", search: "?a=1" } as Location;
-		setState("workUnviewed", true);
+		setState("chatUnviewed", true);
 		setView("analysis");
-		setView("work");
+		setView("chat");
 		expect(history.replaceState).toHaveBeenCalledWith(null, "", "/app?a=1");
-		expect(state.workUnviewed).toBe(false);
+		expect(state.chatUnviewed).toBe(false);
 	});
 
 	test("entering analysis keeps the hash untouched", () => {
@@ -1148,41 +1148,41 @@ describe("setView persistence and hash handling", () => {
 		expect(replaceState).not.toHaveBeenCalled();
 	});
 
-	test("defaults: txSidebarVisible true, view work, dot false", () => {
+	test("defaults: txSidebarVisible true, view chat, dot false", () => {
 		stubStorage();
 		expect(state.txSidebarVisible).toBe(true);
-		expect(state.view).toBe("work");
-		expect(state.workUnviewed).toBe(false);
+		expect(state.view).toBe("chat");
+		expect(state.chatUnviewed).toBe(false);
 	});
 });
 
 describe("initialView (boot view resolution)", () => {
-	test("legacy values migrate: chat → work, transcripts → analysis", () => {
-		expect(initialView("chat", "")).toBe("work");
+	test("legacy values migrate: work → chat, transcripts → analysis", () => {
+		expect(initialView("work", "")).toBe("chat");
 		expect(initialView("transcripts", "")).toBe("analysis");
 	});
 
-	test("unknown/null persist values fall back to work; current values pass through", () => {
+	test("unknown/null persist values fall back to chat; current values pass through", () => {
 		expect(initialView("analysis", "")).toBe("analysis");
-		expect(initialView("work", "")).toBe("work");
-		expect(initialView(null, "")).toBe("work");
-		expect(initialView("bogus", "")).toBe("work");
-		expect(initialView("", "")).toBe("work");
+		expect(initialView("chat", "")).toBe("chat");
+		expect(initialView(null, "")).toBe("chat");
+		expect(initialView("bogus", "")).toBe("chat");
+		expect(initialView("", "")).toBe("chat");
 	});
 
-	test("a #/s/<file> hash deep-links into analysis even when work is persisted", () => {
-		expect(initialView("work", "#/s/abc.jsonl")).toBe("analysis");
-		expect(initialView("work", "#s/abc.jsonl")).toBe("analysis");
+	test("a #/s/<file> hash deep-links into analysis even when chat is persisted", () => {
+		expect(initialView("chat", "#/s/abc.jsonl")).toBe("analysis");
+		expect(initialView("chat", "#s/abc.jsonl")).toBe("analysis");
 	});
 
 	test("a #/stored/<workspaceId>/<sessionId> hash deep-links into analysis (P8.5)", () => {
-		expect(initialView("work", "#/stored/d7/sess-1")).toBe("analysis");
-		expect(initialView("work", "#stored/d7/sess-1")).toBe("analysis");
+		expect(initialView("chat", "#/stored/d7/sess-1")).toBe("analysis");
+		expect(initialView("chat", "#stored/d7/sess-1")).toBe("analysis");
 	});
 
 	test("a non-/s/ hash falls through to the persisted value", () => {
 		expect(initialView("analysis", "#/settings")).toBe("analysis");
-		expect(initialView("work", "#/settings")).toBe("work");
+		expect(initialView("chat", "#/settings")).toBe("chat");
 	});
 });
 

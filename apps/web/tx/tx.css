@@ -142,7 +142,7 @@
   display: none;
   grid-area: none;
 }
-/* Top chrome: Work/Analysis mode switch flush left, sidebar close flush
+/* Top chrome: Chat/Analysis mode switch flush left, sidebar close flush
    right. Pixel-identical to the roster .sidebar-mode-row (fleet.css) so
    switching modes never shifts the sidebar chrome. */
 .tx-sidebar-mode-row {

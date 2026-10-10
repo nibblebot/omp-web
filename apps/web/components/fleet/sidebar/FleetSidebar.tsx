@@ -8,7 +8,7 @@ import { SidebarUsage } from "./SidebarUsage";
 
 // ---------------------------------------------------------------------------
 // Fleet-edge roster sidebar (Phase 5). Rendered by App.tsx whenever
-// `state.view === "work"` (the fleet is the only web UI runtime). Shell:
+// `state.view === "chat"` (the fleet is the only web UI runtime). Shell:
 // derives the project-first group list (daemonsByProject) and composes the
 // group rendering (ProjectGroups) with the global chrome footer (SidebarFooter).
 // Registered projects group their daemons as the main-checkout row first, then
@@ -32,7 +32,7 @@ export const FleetSidebar: Component = () => {
 	return (
 		<>
 			<aside class="sidebar" classList={{ open: state.sidebarVisible }}>
-				{/* Top chrome: Work/Analysis mode switch flush left, sidebar close
+				{/* Top chrome: Chat/Analysis mode switch flush left, sidebar close
 			    flush right. Pinned above the scrolling roster so both stay
 			    reachable; the Projects header below keeps the add action. */}
 				<div class="sidebar-mode-row">

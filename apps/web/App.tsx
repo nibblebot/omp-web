@@ -29,6 +29,64 @@ import { TranscriptBrowser } from "./tx/TranscriptBrowser";
 // Apply persisted theme/font-size before first render to avoid a dark flash.
 initTheme();
 
+/**
+ * Chat mode: the docked roster sidebar (it owns its own narrow-viewport
+ * scrim, first so it docks LEFT) plus the live conversation column. App
+ * mounts it only while `state.view === "chat"`.
+ */
+const ChatMode: Component = () => (
+	<>
+		<FleetSidebar />
+		{/* No live session (stopped/removed daemon, or none picked yet): the
+		    empty pane replaces the chat column. */}
+		<Show
+			when={!hasLiveSession()}
+			fallback={
+				<main class="app-main">
+					{/* Session identity (name/rename) at the left edge above the stream. */}
+					<SessionTitle />
+					<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyTranscript />}>
+						<MessageList />
+					</Show>
+					<QueueBar />
+					<div class="active-strips">
+						<ActiveSubagents />
+						<ActiveDaemons />
+					</div>
+					{/* Session-send config bar (model/thinking/stats), glued to the composer. */}
+					<SessionConfigBar />
+					<PromptBox />
+				</main>
+			}
+		>
+			<main class="app-main">
+				<NoActiveSessionPane />
+			</main>
+		</Show>
+	</>
+);
+
+/**
+ * Analysis mode: the transcript sidebar + detail pane. Keep-alive: the first
+ * entry into Analysis mounts TranscriptBrowser; later Chat/Analysis swaps
+ * only toggle its host's display, so the sidebar list, scroll, search,
+ * project filter, and selected transcript all survive view switches. App
+ * mounts it unconditionally so the sticky flag outlives Chat mode.
+ */
+const AnalysisMode: Component = () => {
+	const [opened, setOpened] = createSignal(false);
+	createEffect(() => {
+		if (state.view === "analysis") setOpened(true);
+	});
+	return (
+		<Show when={opened()}>
+			<div class="tx-keepalive" classList={{ hidden: state.view !== "analysis" }}>
+				<TranscriptBrowser />
+			</div>
+		</Show>
+	);
+};
+
 export const App: Component = () => {
 	onMount(() => {
 		connect();
@@ -52,12 +110,6 @@ export const App: Component = () => {
 			setState("modal", "history");
 		});
 	});
-	// Sticky Analysis keep-alive flag: the first entry into Analysis mounts
-	// TranscriptBrowser; later Work/Analysis swaps only toggle its host's display.
-	const [analysisOpened, setAnalysisOpened] = createSignal(false);
-	createEffect(() => {
-		if (state.view === "analysis") setAnalysisOpened(true);
-	});
 	return (
 		<div class="app">
 			{/* finding #P1: always-mounted aria-live region (WCAG 4.1.3). Announcements
@@ -73,7 +125,7 @@ export const App: Component = () => {
 				    sidebar collapses independently. */}
 			<Show
 				when={
-					(state.view === "work" && !state.sidebarVisible) ||
+					(state.view === "chat" && !state.sidebarVisible) ||
 					(state.view === "analysis" && !state.txSidebarVisible)
 				}
 			>
@@ -81,63 +133,21 @@ export const App: Component = () => {
 					type="button"
 					id="sidebar-toggle"
 					class="sidebar-toggle"
-					onClick={() => (state.view === "work" ? toggleSidebar() : setTxSidebarVisible(true))}
-					title={state.view === "work" ? "Open roster sidebar" : "Open transcripts sidebar"}
-					aria-label={state.view === "work" ? "Open roster sidebar" : "Open transcripts sidebar"}
-					aria-expanded={state.view === "work" ? state.sidebarVisible : state.txSidebarVisible}
+					onClick={() => (state.view === "chat" ? toggleSidebar() : setTxSidebarVisible(true))}
+					title={state.view === "chat" ? "Open roster sidebar" : "Open transcripts sidebar"}
+					aria-label={state.view === "chat" ? "Open roster sidebar" : "Open transcripts sidebar"}
+					aria-expanded={state.view === "chat" ? state.sidebarVisible : state.txSidebarVisible}
 				>
 					<PanelLeftIcon />
 				</button>
 			</Show>
 			<div class="app-body">
-				{/* Work view: the docked roster sidebar (it owns its own
-					    narrow-viewport scrim). Mounted only in Work; the two-pane
-					    swap with Analysis brings its own transcript sidebar inside
-					    TranscriptBrowser. First child so it docks LEFT. */}
-				<Show when={state.view === "work"}>
-					<FleetSidebar />
+				{/* The inactive mode renders nothing (Chat) or a display:none
+				    host (Analysis keep-alive), so the active mode lays out alone. */}
+				<Show when={state.view === "chat"}>
+					<ChatMode />
 				</Show>
-				{/* Analysis view: the transcript
-					    sidebar + detail pane. Keep-alive: once opened, TranscriptBrowser
-					    stays mounted and only hides (display:none), so the sidebar
-					    list, scroll, search, project filter, and selected
-					    transcript all survive view switches. */}
-				<Show when={analysisOpened()}>
-					<div class="tx-keepalive" classList={{ hidden: state.view !== "analysis" }}>
-						<TranscriptBrowser />
-					</div>
-				</Show>
-				<Show when={state.view === "work"}>
-					{/* No live session (stopped/removed daemon, or none
-						    picked yet): the empty pane replaces the chat column. */}
-					<Show
-						when={!hasLiveSession()}
-						fallback={
-							<main class="app-main">
-								{/* Session identity (name/rename) at the left edge above the stream. */}
-								<SessionTitle />
-								<Show
-									when={state.items.length > 0 || state.live.active}
-									fallback={<EmptyTranscript />}
-								>
-									<MessageList />
-								</Show>
-								<QueueBar />
-								<div class="active-strips">
-									<ActiveSubagents />
-									<ActiveDaemons />
-								</div>
-								{/* Session-send config bar (model/thinking/stats), glued to the composer. */}
-								<SessionConfigBar />
-								<PromptBox />
-							</main>
-						}
-					>
-						<main class="app-main">
-							<NoActiveSessionPane />
-						</main>
-					</Show>
-				</Show>
+				<AnalysisMode />
 			</div>
 			<ModalHost />
 		</div>

@@ -7,22 +7,22 @@ export default defineStory({
 	component: { file: "apps/web/components/app/ViewSwitch.tsx", export: "ViewSwitch" },
 	variants: [
 		{
-			name: "Work view",
-			description: "Work is the active mode.",
-			seed: { view: "work", workUnviewed: false },
+			name: "Chat view",
+			description: "Chat is the active mode.",
+			seed: { view: "chat", chatUnviewed: false },
 			render: () => <ViewSwitch />,
 		},
 		{
 			name: "Analysis view",
 			description: "Analysis is the active mode.",
-			seed: { view: "analysis", workUnviewed: false },
+			seed: { view: "analysis", chatUnviewed: false },
 			render: () => <ViewSwitch />,
 		},
 		{
-			name: "Unviewed work turn",
+			name: "Unviewed chat turn",
 			description:
-				"A turn ended unattended in Analysis, so the Work button carries the activity dot.",
-			seed: { view: "analysis", workUnviewed: true },
+				"A turn ended unattended in Analysis, so the Chat button carries the activity dot.",
+			seed: { view: "analysis", chatUnviewed: true },
 			render: () => <ViewSwitch />,
 		},
 	],

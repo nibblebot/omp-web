@@ -3,11 +3,11 @@ import { setState, state } from "../../../state";
 import { InfoIcon, SettingsIcon } from "../../ui/icons";
 
 // ---------------------------------------------------------------------------
-// Sidebar footer: global chrome (debug panel, settings). In the Work view
+// Sidebar footer: global chrome (debug panel, settings). In the Chat view
 // these live here instead of the StatusBar header. StatusBar hides its
 // debug/settings segments while the sidebar is present
-// (`state.view !== "work"`), so the two renderings never coexist. View mode
-// switching (Work/Analysis) moved out of this footer onto the ViewSwitch row
+// (`state.view !== "chat"`), so the two renderings never coexist. View mode
+// switching (Chat/Analysis) moved out of this footer onto the ViewSwitch row
 // atop the sidebar.
 // ---------------------------------------------------------------------------
 

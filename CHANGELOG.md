@@ -12,6 +12,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Workers: searchable hub with live focus/steer, park/revive/resume lifecycle, advisor config/status/transcript, and guided goals/loops plus Vibe director controls.
 - Integrations: real skills/commands reload with consent; MCP/skill rows report explicit unavailable until headless extraction lands; declarative browser extension UI with terminal-only incompatibility diagnostics.
 - Portability: explicit compaction modes with eligibility, durable BTW history with guarded promotion, manifest-backed downloads through the fleet origin, SessionScope-bound voice control rows over the existing SSE stream, and targeted resume/pins/foreign import.
+- View modes: Work mode is renamed Chat mode (switcher button, labels, and store state); a persisted `work` view boots into Chat.
 
 ### Fixes
 - Subagents: the worker hub lists live subagents again (it filtered by the SDK session uuid instead of the attached handle, so it opened empty while the status bar counted them); rows and the focused worker header show the spawned subagent name beside its agent type, in-flight glyphs spin, and progress updates key on the subagent id so equal indexes from separate task calls no longer merge and status/task changes re-render.

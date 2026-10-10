@@ -19,7 +19,7 @@ import {
 /** localStorage key for the roster sidebar visibility toggle. */
 const SIDEBAR_KEY = "omp.sidebarVisible";
 
-/** localStorage key for the persisted Work/Analysis top-level view. */
+/** localStorage key for the persisted Chat/Analysis top-level view. */
 const VIEW_KEY = "omp.view";
 
 /** localStorage key for the transcripts (Analysis) sidebar visibility toggle. */
@@ -210,19 +210,19 @@ export function toggleSidebar(): void {
 }
 
 /**
- * Top-level Work/Analysis view. Persists omp.view; entering Work also
+ * Top-level Chat/Analysis view. Persists omp.view; entering Chat also
  * clears the #/s/<file> deep-link hash (Analysis owns it while active) and
- * the Work-button dot (workUnviewed).
+ * the Chat-button dot (chatUnviewed).
  */
-export function setView(view: "work" | "analysis"): void {
+export function setView(view: "chat" | "analysis"): void {
 	if (typeof localStorage !== "undefined") localStorage.setItem(VIEW_KEY, view);
 	setState("view", view);
-	if (view === "work") {
+	if (view === "chat") {
 		// Clear the transcript deep-link hash without firing a hashchange
 		// event; Analysis re-owns the hash on its next selection.
 		if (typeof history !== "undefined" && typeof location !== "undefined")
 			history.replaceState(null, "", location.pathname + location.search);
-		setState("workUnviewed", false);
+		setState("chatUnviewed", false);
 	}
 }
 

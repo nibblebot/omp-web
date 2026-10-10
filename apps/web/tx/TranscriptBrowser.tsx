@@ -101,7 +101,7 @@ export function TranscriptBrowser() {
 	return (
 		<div class="tx-app">
 			<aside class="tx-sidebar" classList={{ open: state.txSidebarVisible }}>
-				{/* Top chrome: Work/Analysis mode switch flush left, sidebar
+				{/* Top chrome: Chat/Analysis mode switch flush left, sidebar
 				    close flush right. Mirrors the roster sidebar mode row. */}
 				<div class="tx-sidebar-mode-row">
 					<ViewSwitch />

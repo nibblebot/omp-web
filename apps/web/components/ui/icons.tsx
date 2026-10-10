@@ -258,7 +258,7 @@ export const TrashIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
-/** Work mode glyph (the live-conversation surface, ▸_), drawn with Lucide's terminal. */
+/** Chat mode glyph (the live-conversation surface, ▸_), drawn with Lucide's terminal. */
 export const TerminalIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<polyline points="4 17 10 11 4 5" />

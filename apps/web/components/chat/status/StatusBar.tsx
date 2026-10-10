@@ -70,10 +70,10 @@ export const StatusBar: Component = () => {
 					subagents ({state.subagents.size})
 				</StatusSegment>
 			</Show>
-			{/* Debug/settings segments live in the sidebar footer during Work;
+			{/* Debug/settings segments live in the sidebar footer during Chat;
 			    keep them in the header in the Analysis view, where no sidebar
 			    footer renders. */}
-			<Show when={state.view !== "work"}>
+			<Show when={state.view !== "chat"}>
 				<StatusSegment
 					active={state.modal === "debug"}
 					onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}

@@ -135,8 +135,8 @@ function ResumeDialogBody(props: { target: ResumeTarget; onClose: () => void }) 
 				profileId() !== "" ? profileId() : undefined,
 			);
 			setDone(true);
-			// Back to the Work roster where the new clone will appear.
-			setView("work");
+			// Back to the Chat roster where the new clone will appear.
+			setView("chat");
 		} catch (e) {
 			// Typed failures surface verbatim in-dialog (no upstream
 			// substitution): the fleet's {error:{code,message}} answer.
