@@ -106,3 +106,22 @@ button:not(:disabled):not(.active):hover {
 	border-radius: var(--r-pill);
 	white-space: nowrap;
 }
+
+/* Card primitive (components/ui/Card.tsx): bordered panel surface with an
+   optional header row. Feature classes layer padding, tone, and layout on top. */
+.card {
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	font-size: var(--fs-md);
+}
+.card-header {
+	display: flex;
+	gap: var(--space-4);
+	align-items: baseline;
+	padding: var(--space-4) var(--space-5);
+	overflow: hidden;
+}
+summary.card-header {
+	cursor: pointer;
+}

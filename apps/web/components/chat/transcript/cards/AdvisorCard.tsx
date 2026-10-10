@@ -1,5 +1,6 @@
 import { createEffect, createSignal, For, on, Show, type Component } from "solid-js";
 import { state, type AdvisorItem } from "../../../../state";
+import { Card } from "../../../ui/Card";
 
 /** Notes shown while collapsed; matches the TUI advisor card (COLLAPSED_NOTES). */
 const COLLAPSED_NOTES = 3;
@@ -30,7 +31,7 @@ export const AdvisorCard: Component<{ item: AdvisorItem }> = (props) => {
 	const shown = () => (collapsible() && !expanded() ? notes().slice(0, COLLAPSED_NOTES) : notes());
 	const hidden = () => notes().length - shown().length;
 	return (
-		<div class="advisor-item" classList={{ "advisor-has-blocker": blockers() > 0 }}>
+		<Card class="advisor-item" classList={{ "advisor-has-blocker": blockers() > 0 }}>
 			<div class="advisor-head">
 				<span class="advisor-label">Advisor</span>
 				<span class="advisor-meta"> · {plural(notes().length, "note")}</span>
@@ -59,6 +60,6 @@ export const AdvisorCard: Component<{ item: AdvisorItem }> = (props) => {
 					{hidden() > 0 ? `… +${plural(hidden(), "more note")}` : "show fewer"}
 				</button>
 			</Show>
-		</div>
+		</Card>
 	);
 };

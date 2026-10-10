@@ -1,19 +1,5 @@
-/* Tools: tool/bash card renderers, diff, todo, search, subagents, active strips, eval/lsp/hub/ask-tool cards. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Tools: tool/bash card renderers, diff, todo, search, subagents, background bars, eval/lsp/hub/ask-tool cards. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
-.tool-card {
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--r-lg);
-	font-size: var(--fs-md);
-}
-.tool-card summary {
-	cursor: pointer;
-	padding: var(--space-4) var(--space-5);
-	display: flex;
-	gap: var(--space-4);
-	align-items: baseline;
-	overflow: hidden;
-}
 .tool-name {
 	font-weight: 600;
 	color: var(--accent);
@@ -35,26 +21,14 @@
 	text-overflow: ellipsis;
 }
 
-.bash-card {
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--r-lg);
-	font-size: var(--fs-md);
-}
-.bash-card.dimmed {
+.user-command-card.dimmed {
 	opacity: 0.55;
 }
 /* Shared dimming for subagent transcript blocks (thinking + toolResult
-   panels); same treatment as .bash-card.dimmed so dimmed content reads
+   panels); same treatment as .user-command-card.dimmed so dimmed content reads
    consistently across the UI. */
 .dim-block {
 	opacity: 0.6;
-}
-.bash-header {
-	display: flex;
-	gap: var(--space-4);
-	align-items: baseline;
-	padding: var(--space-4) var(--space-5);
 }
 .bash-cmd {
 	font-family: var(--font-mono);
@@ -78,23 +52,23 @@
 	border-color: var(--error-border);
 	color: var(--error);
 }
-.bash-abort {
+.user-command-abort {
 	margin-left: auto;
 	padding: 1px var(--space-5);
 	font-size: var(--fs-sm);
 }
-.bash-truncated {
+.user-command-truncated {
 	color: var(--muted-2);
 	padding: 0 var(--space-5) var(--space-4);
 	font-size: var(--fs-sm);
 }
 
-.tool-header .tool-name {
+.tool-card > div.card-header .tool-name {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.tool-header .tool-status {
+.tool-card > div.card-header .tool-status {
 	margin-left: auto;
 	flex-shrink: 0;
 }
@@ -405,43 +379,39 @@ pre.terminal {
 	white-space: normal;
 	overflow-wrap: anywhere;
 }
-.active-subagents,
-.active-daemons {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-1);
+/* Background bars (ui/BackgroundBar.tsx): Card-based strips above the composer. */
+.background-bar {
 	flex: 1;
 	min-width: 0;
 	padding: var(--space-3) var(--space-5);
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--r-lg);
-	animation: active-strip-in 180ms ease-out;
+	animation: background-bar-in 180ms ease-out;
 }
-.active-subagent-row {
+.background-bar-rows {
 	display: flex;
-	align-items: baseline;
-	gap: var(--space-4);
-	padding: var(--space-1) var(--space-2);
-	border-radius: var(--r-md);
-	cursor: pointer;
+	flex-direction: column;
+	gap: var(--space-1);
 }
-.active-subagent-row:hover {
-	background: var(--hover);
-}
-.active-subagent-row .subagent-row {
-	flex: 1;
-}
-.active-strips {
-	display: flex;
-	gap: var(--space-4);
-	margin-top: var(--space-4);
-}
-.active-daemon-row {
+.background-bar-row {
 	display: flex;
 	align-items: baseline;
 	gap: var(--space-4);
 	font-size: var(--fs-md);
+}
+.background-bar-row--clickable {
+	padding: var(--space-1) var(--space-2);
+	border-radius: var(--r-md);
+	cursor: pointer;
+}
+.background-bar-row--clickable:hover {
+	background: var(--hover);
+}
+.background-bar-row .subagent-row {
+	flex: 1;
+}
+.background-bars {
+	display: flex;
+	gap: var(--space-4);
+	margin-top: var(--space-4);
 }
 .daemon-glyph[data-state="ready"] {
 	color: var(--success);
@@ -515,7 +485,7 @@ pre.terminal {
 	color: var(--error);
 	border-color: var(--error);
 }
-@keyframes active-strip-in {
+@keyframes background-bar-in {
 	from {
 		opacity: 0;
 		transform: translateY(4px);

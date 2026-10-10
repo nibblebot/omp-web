@@ -1,16 +1,15 @@
 import { createEffect, createSignal, onMount, Show, type Component } from "solid-js";
 import { NoActiveSessionPane } from "./components/app/NoActiveSessionPane";
 import {
-	MessageList,
 	PromptBox,
 	QueueBar,
 	SessionConfigBar,
 	SessionTitle,
 	StatusBar,
+	Transcript,
 } from "./components/chat";
-import { EmptyTranscript } from "./components/chat/transcript/EmptyTranscript";
-import { ActiveDaemons, FleetSidebar } from "./components/fleet";
-import { ActiveSubagents } from "./components/subagents";
+import { BackgroundDaemonsBar, FleetSidebar } from "./components/fleet";
+import { BackgroundSubagentsBar } from "./components/subagents";
 import { PanelLeftIcon } from "./components/ui/icons";
 import { ModalHost } from "./ModalHost";
 import {
@@ -45,13 +44,11 @@ const ChatMode: Component = () => (
 				<main class="app-main">
 					{/* Session identity (name/rename) at the left edge above the stream. */}
 					<SessionTitle />
-					<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyTranscript />}>
-						<MessageList />
-					</Show>
+					<Transcript />
 					<QueueBar />
-					<div class="active-strips">
-						<ActiveSubagents />
-						<ActiveDaemons />
+					<div class="background-bars">
+						<BackgroundSubagentsBar />
+						<BackgroundDaemonsBar />
 					</div>
 					{/* Session-send config bar (model/thinking/stats), glued to the composer. */}
 					<SessionConfigBar />

@@ -1,11 +1,11 @@
 import { createSignal, Show } from "solid-js";
 import { AdvisorCard } from "../../../web/components/chat/transcript/cards/AdvisorCard";
 import { AssistantCard } from "../../../web/components/chat/transcript/cards/AssistantCard";
-import { BashCard } from "../../../web/components/chat/transcript/cards/BashCard";
 import { CompactionCard } from "../../../web/components/chat/transcript/cards/CompactionCard";
 import { NoticeCard } from "../../../web/components/chat/transcript/cards/NoticeCard";
 import { ToolRunRow } from "../../../web/components/chat/transcript/cards/ToolRunRow";
 import { UserCard } from "../../../web/components/chat/transcript/cards/UserCard";
+import { UserCommandCard } from "../../../web/components/chat/transcript/cards/UserCommandCard";
 import { ToolCard, ToolChip } from "../../../web/components/chat/tools/ToolCard";
 import { StreamingBlock } from "../../../web/components/chat/transcript/StreamingBlock";
 import { StatusSegment } from "../../../web/components/chat/status/StatusSegment";
@@ -90,17 +90,29 @@ const stories: Story[] = [
 		],
 	}),
 	defineStory({
-		id: "chat-transcript-cards-bash-card",
-		title: "BashCard",
+		id: "chat-transcript-cards-user-command-card",
+		title: "UserCommandCard",
 		component: {
-			file: "apps/web/components/chat/transcript/cards/BashCard.tsx",
-			export: "BashCard",
+			file: "apps/web/components/chat/transcript/cards/UserCommandCard.tsx",
+			export: "UserCommandCard",
 		},
 		variants: [
-			{ name: "Done, exit 0", render: () => <BashCard item={chatBashItems[0]!} /> },
-			{ name: "Running, output streaming", render: () => <BashCard item={chatBashItems[1]!} /> },
-			{ name: "Python $$, dimmed", render: () => <BashCard item={chatBashItems[2]!} /> },
-			{ name: "Non-zero exit, truncated", render: () => <BashCard item={chatBashItems[3]!} /> },
+			{
+				name: "Done, exit 0",
+				render: () => <UserCommandCard item={chatBashItems[0]!} />,
+			},
+			{
+				name: "Running, output streaming",
+				render: () => <UserCommandCard item={chatBashItems[1]!} />,
+			},
+			{
+				name: "Python $$, dimmed",
+				render: () => <UserCommandCard item={chatBashItems[2]!} />,
+			},
+			{
+				name: "Non-zero exit, truncated",
+				render: () => <UserCommandCard item={chatBashItems[3]!} />,
+			},
 		],
 	}),
 	defineStory({

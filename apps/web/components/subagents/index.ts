@@ -1,4 +1,4 @@
-export { ActiveSubagents } from "./ActiveSubagents";
+export { BackgroundSubagentsBar } from "./BackgroundSubagentsBar";
 export { SubagentsDialog } from "./SubagentsDialog";
 export { SubagentFocus } from "./SubagentFocus";
 export { SubagentInspector } from "./SubagentInspector";

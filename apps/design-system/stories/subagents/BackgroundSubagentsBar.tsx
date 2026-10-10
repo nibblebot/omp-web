@@ -1,13 +1,13 @@
-import { ActiveSubagents } from "../../../web/components/subagents/ActiveSubagents";
+import { BackgroundSubagentsBar } from "../../../web/components/subagents/BackgroundSubagentsBar";
 import { infosFor, seedSubagents, subagentMapOf } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
 
 export default defineStory({
-	id: "subagents-active-subagents",
-	title: "ActiveSubagents",
+	id: "subagents-background-subagents-bar",
+	title: "BackgroundSubagentsBar",
 	component: {
-		file: "apps/web/components/subagents/ActiveSubagents.tsx",
-		export: "ActiveSubagents",
+		file: "apps/web/components/subagents/BackgroundSubagentsBar.tsx",
+		export: "BackgroundSubagentsBar",
 	},
 	variants: [
 		{
@@ -15,7 +15,7 @@ export default defineStory({
 			seed: () => seedSubagents({}, { subagents: subagentMapOf(infosFor("1-FixtureBuilder")) }),
 			render: () => (
 				<div class="ds-frame">
-					<ActiveSubagents />
+					<BackgroundSubagentsBar />
 				</div>
 			),
 		},
@@ -28,7 +28,7 @@ export default defineStory({
 				),
 			render: () => (
 				<div class="ds-frame">
-					<ActiveSubagents />
+					<BackgroundSubagentsBar />
 				</div>
 			),
 		},
@@ -42,7 +42,7 @@ export default defineStory({
 				),
 			render: () => (
 				<div class="ds-frame">
-					<ActiveSubagents />
+					<BackgroundSubagentsBar />
 				</div>
 			),
 		},

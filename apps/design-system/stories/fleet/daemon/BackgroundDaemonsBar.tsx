@@ -1,14 +1,14 @@
-import { ActiveDaemons } from "../../../../web/components/fleet/daemon/ActiveDaemons";
+import { BackgroundDaemonsBar } from "../../../../web/components/fleet/daemon/BackgroundDaemonsBar";
 import { rosterDaemonMap } from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
 import { defineStory } from "../../../registry";
 
 export default defineStory({
-	id: "fleet-daemon-active-daemons",
-	title: "ActiveDaemons",
+	id: "fleet-daemon-background-daemons-bar",
+	title: "BackgroundDaemonsBar",
 	component: {
-		file: "apps/web/components/fleet/daemon/ActiveDaemons.tsx",
-		export: "ActiveDaemons",
+		file: "apps/web/components/fleet/daemon/BackgroundDaemonsBar.tsx",
+		export: "BackgroundDaemonsBar",
 	},
 	variants: [
 		{
@@ -16,7 +16,7 @@ export default defineStory({
 			seed: () => seedRosterFleet({ daemons: rosterDaemonMap(Date.now()) }),
 			render: () => (
 				<div class="ds-frame">
-					<ActiveDaemons />
+					<BackgroundDaemonsBar />
 				</div>
 			),
 		},
@@ -26,7 +26,7 @@ export default defineStory({
 				seedRosterFleet({ daemons: new Map([...rosterDaemonMap(Date.now())].slice(0, 1)) }),
 			render: () => (
 				<div class="ds-frame">
-					<ActiveDaemons />
+					<BackgroundDaemonsBar />
 				</div>
 			),
 		},

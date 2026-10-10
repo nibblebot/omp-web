@@ -1,6 +1,8 @@
 import { createMemo, For, Match, Show, Switch, type Component } from "solid-js";
+import { characterForModel } from "../../../sprites/characters";
 import { openLightbox, setState, state, type ToolItem } from "../../../state";
 import { ArrowDownIcon, ExpandIcon } from "../../ui/icons";
+import { CharacterAvatar } from "../../models/CharacterAvatar";
 import { ToolCard, ToolChip } from "../tools/ToolCard";
 import { groupToolRuns, type Run } from "../../../chat/tool-runs";
 import { useStickyScroll } from "./useStickyScroll";
@@ -8,17 +10,40 @@ import { StreamingBlock } from "./StreamingBlock";
 import {
 	AdvisorCard,
 	AssistantCard,
-	BashCard,
 	CompactionCard,
 	NoticeCard,
 	ToolRunRow,
 	UserCard,
+	UserCommandCard,
 	pruneRunOpen,
 } from "./cards";
 
 const TOOL_CARD_VIEWS = ["expanded", "collapsed", "consolidated"] as const;
 
-export const MessageList: Component = () => {
+/** Empty-transcript state: large character sprite and a one-line greeting.
+ *  Held blank until the loaded transcript's state frame lands (modelSynced):
+ *  history primes before state, so rendering earlier would flash the
+ *  previous session's (or the fallback) character. */
+const EmptyState: Component = () => (
+	<div class="chat-transcript-empty">
+		<Show when={state.modelSynced}>
+			<CharacterAvatar
+				provider={state.model?.provider}
+				id={state.model?.id}
+				pose="happy"
+				size={96}
+			/>
+			<p class="chat-transcript-empty-greeting">
+				{characterForModel(state.model?.provider, state.model?.id).name} is ready. What should we
+				work on?
+			</p>
+		</Show>
+	</div>
+);
+
+/** Toolbar + scroller for a non-empty transcript. Owns useStickyScroll, so the
+ *  hook's setup and onMount run when the list mounts (first item or live turn). */
+const TranscriptList: Component = () => {
 	const { containerRef, contentRef, jumpVisible, jumpToBottom } = useStickyScroll();
 	// Memoized so the items scan runs on items/toolCardsView changes, not every render.
 	const showToolbar = createMemo(
@@ -73,13 +98,13 @@ export const MessageList: Component = () => {
 					</button>
 				</div>
 			</Show>
-			<div class="message-list-wrap">
-				<div class="message-list" ref={containerRef}>
+			<div class="chat-transcript-wrap">
+				<div class="chat-transcript" ref={containerRef}>
 					{/* Observed by useStickyScroll's ResizeObserver: any growth here
 					    (streamed text, tool output, mode switches, run toggles, image
 					    decodes) re-pins a pinned viewport. The zoom overlay stays
 					    outside since it's position:fixed and must not count as content. */}
-					<div class="message-list-content" ref={contentRef}>
+					<div class="chat-transcript-content" ref={contentRef}>
 						<For each={state.items}>
 							{(item) => (
 								<Switch>
@@ -123,7 +148,7 @@ export const MessageList: Component = () => {
 										)}
 									</Match>
 									<Match when={item.kind === "bash" && item}>
-										{(bash) => <BashCard item={bash()} />}
+										{(bash) => <UserCommandCard item={bash()} />}
 									</Match>
 									<Match when={item.kind === "compaction" && item}>
 										{(c) => <CompactionCard item={c()} />}
@@ -180,3 +205,14 @@ export const MessageList: Component = () => {
 		</>
 	);
 };
+
+/**
+ * The session transcript: the tool-view toolbar plus the sticky-scrolling
+ * message stream. Shows the greeting empty state while there are no items and
+ * no live turn.
+ */
+export const Transcript: Component = () => (
+	<Show when={state.items.length > 0 || state.live.active} fallback={<EmptyState />}>
+		<TranscriptList />
+	</Show>
+);

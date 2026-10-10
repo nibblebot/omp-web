@@ -144,7 +144,7 @@ export const chatStreamingBlock: Block = {
 // Transcript items: a realistic turn in order.
 // ---------------------------------------------------------------------------
 
-/** MessageList / UserCard / AssistantCard / ToolCard / BashCard / CompactionCard / NoticeCard / AdvisorCard: one settled turn. */
+/** Transcript / UserCard / AssistantCard / ToolCard / UserCommandCard / CompactionCard / NoticeCard / AdvisorCard: one settled turn. */
 export const chatTranscriptItems: ChatItem[] = [
 	{
 		kind: "user",
@@ -239,7 +239,7 @@ export const chatRuns: Run[] = [
 // Bash (! and $ shell) cards.
 // ---------------------------------------------------------------------------
 
-/** BashCard: completed `!` shell command with exit 0. */
+/** UserCommandCard: completed `!` shell command with exit 0. */
 const bashDone: BashItem = {
 	kind: "bash",
 	id: 20,
@@ -252,7 +252,7 @@ const bashDone: BashItem = {
 	truncated: false,
 };
 
-/** BashCard: running shell command, output still streaming. */
+/** UserCommandCard: running shell command, output still streaming. */
 const bashRunning: BashItem = {
 	kind: "bash",
 	id: 21,
@@ -265,7 +265,7 @@ const bashRunning: BashItem = {
 	truncated: false,
 };
 
-/** BashCard: `$$` python item, dimmed because it ran outside the current turn. */
+/** UserCommandCard: `$$` python item, dimmed because it ran outside the current turn. */
 const bashPythonDimmed: BashItem = {
 	kind: "bash",
 	id: 22,
@@ -279,7 +279,7 @@ const bashPythonDimmed: BashItem = {
 	truncated: false,
 };
 
-/** BashCard: non-zero exit with output truncated at the viewer cap. */
+/** UserCommandCard: non-zero exit with output truncated at the viewer cap. */
 const bashTruncated: BashItem = {
 	kind: "bash",
 	id: 23,
@@ -292,7 +292,7 @@ const bashTruncated: BashItem = {
 	truncated: true,
 };
 
-/** BashCard fixtures covering running, done, python, dimmed, and truncated states. */
+/** UserCommandCard fixtures covering running, done, python, dimmed, and truncated states. */
 export const chatBashItems: BashItem[] = [bashDone, bashRunning, bashPythonDimmed, bashTruncated];
 
 // ---------------------------------------------------------------------------
@@ -378,7 +378,7 @@ export const chatPromptHistory: string[] = [
 	"Summarize the open review annotations",
 ];
 
-/** ChatItem fixtures for a streaming turn: the list a live MessageList renders while the last block is still open. */
+/** ChatItem fixtures for a streaming turn: the list a live Transcript renders while the last block is still open. */
 export const chatStreamingItems: ChatItem[] = [
 	{
 		kind: "assistant",

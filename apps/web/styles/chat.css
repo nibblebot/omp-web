@@ -1,4 +1,4 @@
-/* Chat: message stream, markdown (.md), run-rows, shimmer, compaction, empty-state, inline images, msg-toolbar. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Chat: message stream, markdown (.md), run-rows, shimmer, compaction, transcript empty state, inline images, msg-toolbar. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 /* Freshly-revealed text fades in once; the span is recreated per flush, which
    restarts this mount-triggered animation. */
@@ -28,14 +28,14 @@
 }
 /* Wrap owns the jump-to-bottom button's positioning context; the scroller
    keeps flex:1 inside it. */
-.message-list-wrap {
+.chat-transcript-wrap {
 	position: relative;
 	flex: 1;
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
 }
-.message-list {
+.chat-transcript {
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
@@ -47,7 +47,7 @@
 }
 /* Observed by useStickyScroll's content ResizeObserver: owns the row layout
    so its border-box tracks every growth/shrink source in the stream. */
-.message-list-content {
+.chat-transcript-content {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-5);
@@ -85,7 +85,7 @@
 	justify-content: flex-end;
 	align-items: center;
 	gap: var(--space-3);
-	/* Matches .message-list side padding so the toggle stays aligned with
+	/* Matches .chat-transcript side padding so the toggle stays aligned with
 	   the card edges. */
 	padding: var(--space-2) var(--space-5) var(--space-3);
 }
@@ -360,14 +360,10 @@ pre {
 
 .compaction-item {
 	align-self: stretch;
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--r-lg);
-	font-size: var(--fs-md);
 }
-.compaction-item summary {
-	cursor: pointer;
-	padding: var(--space-4) var(--space-5);
+.compaction-item > .card-header {
+	display: list-item;
+	overflow: visible;
 	color: var(--muted-3);
 }
 
@@ -378,11 +374,8 @@ pre {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
-	background: var(--panel);
-	border: 1px solid var(--accent-border);
-	border-radius: var(--r-lg);
+	border-color: var(--accent-border);
 	padding: var(--space-4) var(--space-5);
-	font-size: var(--fs-md);
 }
 .advisor-item.advisor-has-blocker {
 	border-color: var(--error-border);
@@ -437,7 +430,7 @@ pre {
 
 /* --- Empty state: greeting before the first message --- */
 
-.empty-state {
+.chat-transcript-empty {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
@@ -447,11 +440,11 @@ pre {
 	padding: var(--space-7) var(--space-5);
 	text-align: center;
 }
-.empty-state canvas {
+.chat-transcript-empty canvas {
 	image-rendering: pixelated;
 	filter: drop-shadow(var(--shadow-sprite));
 }
-.empty-greeting {
+.chat-transcript-empty-greeting {
 	margin: 0;
 	font-size: 1rem;
 	color: var(--muted);

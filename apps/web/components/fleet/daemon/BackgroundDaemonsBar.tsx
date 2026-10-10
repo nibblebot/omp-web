@@ -1,14 +1,15 @@
-import { createSignal, For, Show, type Component } from "solid-js";
+import { createSignal, Show, type Component } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { daemonsKey, type DaemonInfo } from "#lib/wire/protocol";
 import { isLiveDaemon, restartDaemon, setState, state, stopDaemon } from "../../../state";
+import { BackgroundBar } from "../../ui/BackgroundBar";
 import { LoaderIcon } from "../../ui/icons";
 import { formatDaemonUptime } from "../../../fleet-ui/daemon-ui";
 import { DAEMON_ICON } from "./daemon-icons";
 
 /** One live daemon in the strip: glyph, name, state, ready endpoint (if
-    declared), meta, and kill/restart actions. */
-const ActiveDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
+    declared), meta, and kill/restart actions. Rendered inside a `.background-bar-row`. */
+const BackgroundDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 	const [busy, setBusy] = createSignal(false);
 	const meta = [
 		props.d.pid !== undefined ? `pid ${props.d.pid}` : "",
@@ -30,7 +31,7 @@ const ActiveDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 		}
 	};
 	return (
-		<div class="active-daemon-row">
+		<>
 			<span class="daemon-glyph" data-state={props.d.state}>
 				<Dynamic component={DAEMON_ICON[props.d.state] ?? LoaderIcon} />
 			</span>
@@ -62,19 +63,18 @@ const ActiveDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 					kill
 				</button>
 			</div>
-		</div>
+		</>
 	);
 };
 
-/** Live daemons strip above the prompt: visible only while >=1 supervised process is alive. */
-export const ActiveDaemons: Component = () => {
+/** Background daemons strip above the prompt: one row per live supervised process
+    (rows are not clickable; restart/kill act in place). Visible only while >=1 is alive. */
+export const BackgroundDaemonsBar: Component = () => {
 	const live = () =>
 		[...state.daemons.values()].filter(isLiveDaemon).sort((a, b) => a.startedAt - b.startedAt);
 	return (
-		<Show when={live().length > 0}>
-			<div class="active-daemons">
-				<For each={live()}>{(d) => <ActiveDaemonRow d={d} />}</For>
-			</div>
-		</Show>
+		<BackgroundBar items={live()} label="Background daemons">
+			{(d) => <BackgroundDaemonRow d={d} />}
+		</BackgroundBar>
 	);
 };

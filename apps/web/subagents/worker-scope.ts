@@ -116,7 +116,7 @@ export function isWorkerUnread(sub: Pick<SubagentInfo, "id" | "lastUpdate">): bo
  * Per-worker detail density: "collapsed" = header row + actions only,
  * "full" = transcript + inspector, "off" = hidden from the hub list behind
  * a "show hidden (N)" recovery toggle. "off" deliberately does NOT hide the
- * ActiveSubagents strip entry — the strip keeps identical behavior per its
+ * BackgroundSubagentsBar strip entry — the strip keeps identical behavior per its
  * contract; strip hiding is a future seam, not silent filtering.
  */
 export type WorkerPin = "collapsed" | "full" | "off";

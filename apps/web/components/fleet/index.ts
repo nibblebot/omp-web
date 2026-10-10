@@ -1,4 +1,4 @@
-export { ActiveDaemons } from "./daemon/ActiveDaemons";
+export { BackgroundDaemonsBar } from "./daemon/BackgroundDaemonsBar";
 export { AddProjectDialog } from "./workspaces/AddProjectDialog";
 export { DaemonLog } from "./daemon/DaemonLog";
 export { FleetSidebar } from "./sidebar/FleetSidebar";

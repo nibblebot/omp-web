@@ -1,5 +1,6 @@
 import { createSignal, For, Show, type Component, type JSX } from "solid-js";
 import { state, type ToolItem } from "../../../state";
+import { Card } from "../../ui/Card";
 
 /** Lines of tool output shown while collapsed; Ctrl+O (toolsExpanded) reveals the rest. */
 export const COLLAPSED_LINES = 20;
@@ -41,34 +42,23 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 		</Show>
 	);
 	return (
-		<Show
-			when={props.collapsible}
-			fallback={
-				<div class={cardClass()}>
-					<div class="tool-header">
-						<span class="tool-name">{props.name}</span>
-						{status()}
-						{props.meta}
-					</div>
-					{props.children}
-				</div>
-			}
-		>
-			<details
-				class={cardClass()}
-				open={userOpen() ?? (state.toolsExpanded || props.status === "running")}
-				onToggle={(e) => {
-					if (e.isTrusted) setUserOpen(e.currentTarget.open);
-				}}
-			>
-				<summary>
+		<Card
+			class={cardClass()}
+			collapsible={props.collapsible}
+			open={userOpen() ?? (state.toolsExpanded || props.status === "running")}
+			onToggle={(e) => {
+				if (e.isTrusted) setUserOpen(e.currentTarget.open);
+			}}
+			header={
+				<>
 					<span class="tool-name">{props.name}</span>
 					{status()}
 					{props.meta}
-				</summary>
-				{props.children}
-			</details>
-		</Show>
+				</>
+			}
+		>
+			{props.children}
+		</Card>
 	);
 };
 

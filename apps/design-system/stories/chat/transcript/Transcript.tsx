@@ -1,4 +1,4 @@
-import { MessageList } from "../../../../web/components/chat/transcript/MessageList";
+import { Transcript } from "../../../../web/components/chat/transcript/Transcript";
 import {
 	screenItems,
 	screenLiveBlocks,
@@ -11,9 +11,9 @@ import { defineStory } from "../../../registry";
 const idleLive = { active: false, blocks: [], rev: 0 };
 
 export default defineStory({
-	id: "chat-transcript-message-list",
-	title: "MessageList",
-	component: { file: "apps/web/components/chat/transcript/MessageList.tsx", export: "MessageList" },
+	id: "chat-transcript-transcript",
+	title: "Transcript",
+	component: { file: "apps/web/components/chat/transcript/Transcript.tsx", export: "Transcript" },
 	seed: { ...screenSessionSeed, items: screenItems, live: idleLive, streaming: false },
 	variants: [
 		{
@@ -22,7 +22,7 @@ export default defineStory({
 				"A finished turn with reasoning, tool cards, a failed then passing check, and a compaction.",
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
-					<MessageList />
+					<Transcript />
 				</div>
 			),
 		},
@@ -37,7 +37,7 @@ export default defineStory({
 			},
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
-					<MessageList />
+					<Transcript />
 				</div>
 			),
 		},
@@ -46,7 +46,7 @@ export default defineStory({
 			seed: { toolCardsView: "collapsed" },
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
-					<MessageList />
+					<Transcript />
 				</div>
 			),
 		},
@@ -55,7 +55,28 @@ export default defineStory({
 			seed: { toolCardsView: "consolidated" },
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
-					<MessageList />
+					<Transcript />
+				</div>
+			),
+		},
+		{
+			name: "Empty: model synced",
+			description: "A fresh session: the model's character greets the user.",
+			seed: { items: [], live: idleLive, modelSynced: true },
+			render: () => (
+				<div class="ds-frame ds-frame-tall">
+					<Transcript />
+				</div>
+			),
+		},
+		{
+			name: "Empty: waiting for the model",
+			description:
+				"Before the state frame lands the pane stays blank, so no wrong character flashes.",
+			seed: { items: [], live: idleLive, modelSynced: false },
+			render: () => (
+				<div class="ds-frame ds-frame-tall">
+					<Transcript />
 				</div>
 			),
 		},

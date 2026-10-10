@@ -535,7 +535,7 @@ export const grepLongTool: ToolItem = tool(
 		...Array.from({ length: 40 }, (_, i) => {
 			const file = [
 				"chat/SessionConfigBar",
-				"chat/MessageList",
+				"chat/Transcript",
 				"overlays/SessionStatsDialog",
 				"fleet-ui/FleetSidebar",
 			][i % 4];
@@ -605,7 +605,7 @@ export const taskSubagents: SubagentInfo[] = [
 	),
 	sub(taskRunningTool, 1, "Bram", "task", "Stories for chat cards", "running", 9_000),
 	sub(taskRunningTool, 2, "Cleo", "scout", "Map component props", "completed", 62_000),
-	sub(taskDoneTool, 0, "Dara", "scout", "Find MessageList call sites", "completed", 120_000),
+	sub(taskDoneTool, 0, "Dara", "scout", "Find Transcript call sites", "completed", 120_000),
 	sub(taskDoneTool, 1, "Eli", "scout", "Read the chat store", "completed", 118_000),
 	sub(taskErrorTool, 0, "Ines", "task", "Move annotations to anchor groups", "failed", 30_000),
 ];

@@ -324,7 +324,7 @@ export const rosterSidebarGroups: ProjectGroupsData = [
 	{ project: null, daemons: [daemonRemoteError, daemonRemoteBlocked] },
 ];
 
-/** Supervised process rows for ActiveDaemons, anchored to `now` since the strip renders `Date.now() - startedAt`. */
+/** Supervised process rows for BackgroundDaemonsBar, anchored to `now` since the strip renders `Date.now() - startedAt`. */
 export function rosterDaemonInfos(now: number): DaemonInfo[] {
 	return [
 		{
@@ -534,7 +534,7 @@ export const rosterFleetState = {
 	},
 } satisfies Partial<typeof state>;
 
-/** Map of supervised processes keyed like state.daemons, for ActiveDaemons seeds. */
+/** Map of supervised processes keyed like state.daemons, for BackgroundDaemonsBar seeds. */
 export function rosterDaemonMap(now: number): Map<string, DaemonInfo> {
 	return new Map(rosterDaemonInfos(now).map((info) => [daemonsKey(info), info]));
 }

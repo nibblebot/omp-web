@@ -326,12 +326,3 @@
 	padding: var(--space-2) var(--space-4);
 	font: inherit;
 }
-/* --- Tool renderers, subagents, daemons --- */
-
-.tool-header {
-	display: flex;
-	gap: var(--space-4);
-	align-items: baseline;
-	padding: var(--space-4) var(--space-5);
-	overflow: hidden;
-}
