@@ -120,9 +120,33 @@ interface NavGroup {
 }
 const navGroups = new Map<string, NavGroup>();
 
-/** Folder label ("chat/", "status/") of a nav group row, or null for a component id. */
+/**
+ * Whether `child` (a node `parentId` renders) is a mode row: a story-less
+ * component declared in the root's own file, so App's file-local screens
+ * ("ChatMode", "AnalysisMode") stay as rows of their own instead of being
+ * flattened into App's children.
+ */
+function isModeRow(parentId: string, child: GraphNode): boolean {
+	return (
+		rootNode !== null &&
+		parentId === rootNode.id &&
+		child.file === rootNode.file &&
+		!entryByNodeId.has(child.id)
+	);
+}
+
+/**
+ * Row label of a nav row that isn't a plain component: the folder label
+ * ("chat/", "status/") of a nav group, or the PascalCase name split into words
+ * ("Chat Mode") of a mode row. Null for a component id.
+ */
 export function navGroupLabel(id: string): string | null {
-	return navGroups.get(id)?.label ?? null;
+	const group = navGroups.get(id);
+	if (group) return group.label;
+	const node = nodeById.get(id);
+	if (!node || !rootNode || node.id === rootNode.id) return null;
+	if (node.file !== rootNode.file || entryByNodeId.has(id)) return null;
+	return nodeLabel(node).replace(/([a-z0-9])([A-Z])/g, "$1 $2");
 }
 
 const storyCache = new Map<string, string[]>();
@@ -130,7 +154,8 @@ const storyCache = new Map<string, string[]>();
  * The stories a node renders, in render order: `ui/` primitives are left to
  * their own section (they appear under almost everything), and nodes without
  * a story (file-local helpers) are skipped with their own children pulled up
- * in their place.
+ * in their place. The exception is the root's own file-local components
+ * (App's "ChatMode" and "AnalysisMode"), which stay as mode rows.
  */
 function renderedStories(id: string): string[] {
 	const cached = storyCache.get(id);
@@ -139,7 +164,8 @@ function renderedStories(id: string): string[] {
 	for (const childId of nodeById.get(id)?.children ?? []) {
 		const child = nodeById.get(childId);
 		if (!child || isPrimitive(child)) continue;
-		const pulled = entryByNodeId.has(childId) ? [childId] : renderedStories(childId);
+		const pulled =
+			entryByNodeId.has(childId) || isModeRow(id, child) ? [childId] : renderedStories(childId);
 		for (const next of pulled) if (!out.includes(next)) out.push(next);
 	}
 	storyCache.set(id, out);
@@ -199,7 +225,9 @@ const childCache = new Map<string, string[]>();
  * that a row per subfolder ("status/"), so a component that composes many
  * features (App, ModalHost) shows a few big pieces instead of every piece.
  * Stories from the component's own feature, feature roots, and a folder's
- * only story stay ungrouped. For a folder row: its members.
+ * only story stay ungrouped, as do App's mode rows ("Chat Mode"), which are
+ * grouped by feature relative to themselves like any other component. For a
+ * folder row: its members.
  */
 export function navChildren(id: string): string[] {
 	const group = navGroups.get(id);
@@ -212,6 +240,7 @@ export function navChildren(id: string): string[] {
 		id,
 		renderedStories(id),
 		(child) => {
+			if (isModeRow(id, child)) return null;
 			const { feature } = splitGroup(child.group);
 			return feature === ownFeature ? null : feature;
 		},
