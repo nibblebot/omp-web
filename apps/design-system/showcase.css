@@ -297,9 +297,6 @@ body > div:not(#root) > .modal-backdrop {
 	border: 1px solid var(--accent-border);
 	color: var(--accent);
 }
-.ds-group {
-	color: var(--muted-3);
-}
 .ds-chip {
 	display: inline-flex;
 	align-items: baseline;

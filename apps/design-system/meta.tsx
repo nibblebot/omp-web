@@ -1,5 +1,5 @@
 import { For, Show, type Component } from "solid-js";
-import { entryByNodeId, nodeById, nodeLabel, tierLabel, type StoryEntry } from "./catalog";
+import { entryByNodeId, nodeById, nodeLabel, type StoryEntry } from "./catalog";
 
 /** A graph component as a link to its story, or plain text with the reason there is none. */
 export const NodeLink: Component<{ id: string }> = (props) => {
@@ -40,18 +40,12 @@ const NodeList: Component<{ label: string; ids: string[]; empty: string }> = (pr
 	</div>
 );
 
-/** Tier, source location, rendered children, and parents of the story's component. */
+/** Source location, rendered children, and parents of the story's component. */
 export const StoryMeta: Component<{ entry: StoryEntry }> = (props) => (
 	<>
 		<Show when={props.entry.error}>{(message) => <p class="ds-error">{message()}</p>}</Show>
 		<Show when={props.entry.node === null && props.entry.error === null}>
 			<dl class="ds-meta">
-				<div class="ds-meta-row">
-					<dt>Section</dt>
-					<dd>
-						<span class="ds-badge">{props.entry.story.section}</span>
-					</dd>
-				</div>
 				<div class="ds-meta-row">
 					<dt>Source</dt>
 					<dd>
@@ -66,13 +60,6 @@ export const StoryMeta: Component<{ entry: StoryEntry }> = (props) => (
 		<Show when={props.entry.node}>
 			{(node) => (
 				<dl class="ds-meta">
-					<div class="ds-meta-row">
-						<dt>Tier</dt>
-						<dd>
-							<span class="ds-badge">{tierLabel(node().tier)}</span>
-							<span class="ds-group">{node().group}</span>
-						</dd>
-					</div>
 					<div class="ds-meta-row">
 						<dt>Source</dt>
 						<dd>
