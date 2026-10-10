@@ -22,6 +22,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Opening a session renders its history without a long main-thread stall: the transcript replay built the chat with one store write per message, each copying the list and re-walking every earlier item (~420ms blocked on a 2 MB transcript); it now commits once (~80ms).
 - Picking a session from an asleep row's dropdown resumes that session again: the attach sent alongside the wake no longer races ahead of the pick's validation and wakes the daemon on its last session instead.
 - The empty-session character no longer flashes the fallback robot (or the previous session's character) when attaching or starting a new session: the transcript primes before the session's state frame, so the greeting now waits for that state to land before drawing the model's character.
+- Removed the fleet-required notice: the browser no longer replaces the whole shell when its `/events` peer sends `attached`/`hello_ok` before a `roster` frame. The session daemon still serves no web UI.
 
 
 ### Fixes

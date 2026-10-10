@@ -364,11 +364,6 @@ export const [state, setState] = createStore({
 	// Settings model (getSettings/setSetting + settings_changed frames).
 	settingsModel: null as SettingsModel | null,
 	settingsLoading: false,
-	// The peer is a bare session daemon, not the fleet edge (the fleet is the
-	// only web UI server). Set when an `attached` or `hello_ok` frame arrives
-	// before any `roster` frame on this connection; sticky, never cleared.
-	// App renders the fleet-required notice instead of the shell while true.
-	fleetRequired: false,
 	// Fleet edge roster (roster frame). Patched in place by
 	// daemon_status frames; NOT cleared by resetSessionView (it is
 	// fleet-scoped, not session-scoped). Entries carry projectId/managed
@@ -421,10 +416,8 @@ export const [state, setState] = createStore({
 	txSidebarVisible:
 		typeof localStorage !== "undefined" ? localStorage.getItem(TX_SIDEBAR_KEY) !== "false" : true,
 	// Top-level view: "work" (roster sidebar + live conversation) or
-	// "analysis" (transcript sidebar + historical transcripts browser; the
-	// /ctl/stats API it needs exists only on the fleet edge, so the
-	// fleet-required notice covers a bare daemon). Persisted
-	// in omp.view with silent migration; a boot-time #/s/<file> hash
+	// "analysis" (transcript sidebar + historical transcripts browser).
+	// Persisted in omp.view with silent migration; a boot-time #/s/<file> hash
 	// deep-links into Analysis (initialView above).
 	view: initialView(
 		typeof localStorage !== "undefined" ? localStorage.getItem(VIEW_KEY) : null,
@@ -892,12 +885,6 @@ function reconcileAttachedSession(): void {
 
 let backoff = 1000;
 
-/** Whether THIS connection has seen a `roster` frame; reset by connect(). A
- *  bare session daemon never sends one, so an `attached` or `hello_ok` frame
- *  arriving before it proves the peer is not the fleet edge (see
- *  state.fleetRequired). */
-let rosterSeen = false;
-
 /** Wire the browser-auth module into the store: mirror snapshots into the
  *  state fields and open the sign-in modal on signedOut. The module's own
  *  statuses ('unknown' | 'signedOut' | 'signedIn') map 1:1; the 'disabled'
@@ -932,7 +919,6 @@ export function bootAuth(): void {
 }
 
 export function connect(): void {
-	rosterSeen = false;
 	// Browser-only transport: without EventSource there is nothing to dial.
 	// (A bun test worker has neither EventSource nor location; a silence
 	// timer armed by an earlier suite in the same worker must no-op here,
@@ -989,9 +975,6 @@ export function connect(): void {
 			// A fresh priming series starts; the replay-dedup window resets
 			// (seqs restart per connection, see seenFrameSeqs).
 			seenFrameSeqs.clear();
-			// A bare session daemon never sends a roster frame, so an attached
-			// frame arriving before one proves the peer is not the fleet edge.
-			if (!rosterSeen) setState("fleetRequired", true);
 			// Finding #28: the attach waiter settles from the edge's id-keyed
 			// attach_result, never from this PROXIED frame; the priming rides
 			// the daemon pipe, which may be mid-redial when the attach lands.
@@ -1157,9 +1140,7 @@ export function connect(): void {
 					);
 				}
 				// The fleet edge's daemon roster (sidebar swaps to the session
-				// list). This frame is what proves the peer is the fleet edge: a
-				// bare session daemon never sends it (see state.fleetRequired).
-				rosterSeen = true;
+				// list).
 				// Phase 5: entries carry projectId/managed (project-first
 				// grouping + managed-worktree eligibility). DaemonEntry owns
 				// those fields, so they flow through wholesale with the array.
@@ -1474,9 +1455,6 @@ export function connect(): void {
 					teardownStream(source);
 					return;
 				}
-				// A bare session daemon never sends a roster frame, so a
-				// hello_ok arriving before one proves the peer is not the edge.
-				if (!rosterSeen) setState("fleetRequired", true);
 				break;
 			default:
 				// Anything else unknown is tolerated and ignored, never thrown.

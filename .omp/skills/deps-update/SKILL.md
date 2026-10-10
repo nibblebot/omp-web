@@ -129,7 +129,7 @@ bun e2e/onboarding.ts
 
 This is the release gate (`GATE_COMMANDS` in `scripts/release.ts`; re-read it in case it changed) plus lint, the installable bundle, and the docs build, because non-SDK dependencies are mostly build tooling. After `bun run build`, `git status --porcelain apps/fleet/embedded-dist.ts` must be empty (the build restores the stub in a `finally`); if it is not, the build broke mid-way: treat it as a failure and restore the stub with `git checkout apps/fleet/embedded-dist.ts`.
 
-**UI smoke** (whenever any `apps/web/` runtime dependency or `vite`/`vite-plugin-solid` changed, once after the last commit): start `bun run dev --no-open` as a long-lived service, wait for the runner's `ui` URL, open it in the browser tool, and confirm the fleet shell renders (roster sidebar present, no `fleet-required` notice), the browser console has no errors, and a chat transcript with markdown renders if one is available. Stop the service afterwards. Without a browser tool, fetch the `ui` URL and confirm the module graph serves (HTTP 200 for the page and its entry script), and state the visual limit in the report.
+**UI smoke** (whenever any `apps/web/` runtime dependency or `vite`/`vite-plugin-solid` changed, once after the last commit): start `bun run dev --no-open` as a long-lived service, wait for the runner's `ui` URL, open it in the browser tool, and confirm the fleet shell renders (roster sidebar present), the browser console has no errors, and a chat transcript with markdown renders if one is available. Stop the service afterwards. Without a browser tool, fetch the `ui` URL and confirm the module graph serves (HTTP 200 for the page and its entry script), and state the visual limit in the report.
 
 ## 7. Adapt
 

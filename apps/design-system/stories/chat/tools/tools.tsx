@@ -89,7 +89,7 @@ const stories: Story[] = [
 						status="running"
 						meta={<span class="tool-meta">python · cell 2</span>}
 					>
-						<pre>{"apps/web/components/FleetRequiredNotice.tsx 612\n"}</pre>
+						<pre>{"apps/web/components/app/NoActiveSessionPane.tsx 612\n"}</pre>
 					</ToolCardShell>
 				),
 			},

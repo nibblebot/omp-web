@@ -249,7 +249,7 @@ export const evalRunningTool: ToolItem = tool(
 			"    print(f, f.stat().st_size)",
 		),
 	},
-	"apps/web/components/FleetRequiredNotice.tsx 612\n",
+	"apps/web/components/app/NoActiveSessionPane.tsx 612\n",
 );
 /** EvalToolCard: completed python cell. */
 export const evalDoneTool: ToolItem = tool(

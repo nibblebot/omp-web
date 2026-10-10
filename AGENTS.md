@@ -46,7 +46,7 @@ Overlay is the umbrella term, not a suffix: a portaled layer above the app shell
 
 ## The wire contract (OMP_PROTO 2)
 
-Agent transport is HTTP + SSE, not WebSocket (collab-only). `POST /command` accepts ID-keyed commands with `202`; answers arrive via SSE `call_result`. `lib/wire/protocol.ts` owns shapes/constants. Fleet stamps session identity; a bare-daemon browser connection must show the fleet-required notice.
+Agent transport is HTTP + SSE, not WebSocket (collab-only). `POST /command` accepts ID-keyed commands with `202`; answers arrive via SSE `call_result`. `lib/wire/protocol.ts` owns shapes/constants. Fleet stamps session identity.
 
 ## Invariants & conventions, read before editing
 
@@ -117,7 +117,7 @@ Update wire contracts, producers, consumers, dispatch classification, and behavi
 ## Verification
 
 - Code: targeted tests, then types. Library/daemon/edge changes also require the full suite.
-- UI: `bun run dev`, verify the actual browser surface, including fleet-required handling when relevant. Component changes also get their story checked in `bun run design` (refresh after source edits; restart after `server.ts` or fixture-route edits).
+- UI: `bun run dev`, verify the actual browser surface. Component changes also get their story checked in `bun run design` (refresh after source edits; restart after `server.ts` or fixture-route edits).
 - CLI/distribution/bundle/first-run: `bun e2e/onboarding.ts`.
 - Docs: check paths/links.
 - Release: `GATE_COMMANDS` in `scripts/release.ts` is authoritative; includes types, format, web build, full tests, onboarding, followed by packed-artifact installation smoke. Preflight is advisory, not part of orchestration.

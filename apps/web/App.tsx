@@ -1,5 +1,4 @@
 import { createEffect, createSignal, onMount, Show, type Component } from "solid-js";
-import { FleetRequiredNotice } from "./components/app/FleetRequiredNotice";
 import { NoActiveSessionPane } from "./components/app/NoActiveSessionPane";
 import {
 	MessageList,
@@ -59,93 +58,88 @@ export const App: Component = () => {
 	createEffect(() => {
 		if (state.view === "analysis") setAnalysisOpened(true);
 	});
-	// A bare session daemon serves the wire API but no web UI; the fleet is
-	// the only UI server, so the notice replaces the entire shell.
 	return (
-		<Show when={!state.fleetRequired} fallback={<FleetRequiredNotice />}>
-			<div class="app">
-				{/* finding #P1: always-mounted aria-live region (WCAG 4.1.3). Announcements
+		<div class="app">
+			{/* finding #P1: always-mounted aria-live region (WCAG 4.1.3). Announcements
 				    are written by state.announce(), never conditionally rendered, so
 				    screen readers register the polite region at mount. */}
-				<div role="status" aria-live="polite" class="visually-hidden">
-					{state.announcement}
-				</div>
-				<StatusBar />
-				{/* Roster toggle: sticky top-left of the viewport (either view),
+			<div role="status" aria-live="polite" class="visually-hidden">
+				{state.announcement}
+			</div>
+			<StatusBar />
+			{/* Roster toggle: sticky top-left of the viewport (either view),
 				    shown only while the current view's docked sidebar is closed;
 				    the open sidebar carries its own close button top-right. Each
 				    sidebar collapses independently. */}
-				<Show
-					when={
-						(state.view === "work" && !state.sidebarVisible) ||
-						(state.view === "analysis" && !state.txSidebarVisible)
-					}
+			<Show
+				when={
+					(state.view === "work" && !state.sidebarVisible) ||
+					(state.view === "analysis" && !state.txSidebarVisible)
+				}
+			>
+				<button
+					type="button"
+					id="sidebar-toggle"
+					class="sidebar-toggle"
+					onClick={() => (state.view === "work" ? toggleSidebar() : setTxSidebarVisible(true))}
+					title={state.view === "work" ? "Open roster sidebar" : "Open transcripts sidebar"}
+					aria-label={state.view === "work" ? "Open roster sidebar" : "Open transcripts sidebar"}
+					aria-expanded={state.view === "work" ? state.sidebarVisible : state.txSidebarVisible}
 				>
-					<button
-						type="button"
-						id="sidebar-toggle"
-						class="sidebar-toggle"
-						onClick={() => (state.view === "work" ? toggleSidebar() : setTxSidebarVisible(true))}
-						title={state.view === "work" ? "Open roster sidebar" : "Open transcripts sidebar"}
-						aria-label={state.view === "work" ? "Open roster sidebar" : "Open transcripts sidebar"}
-						aria-expanded={state.view === "work" ? state.sidebarVisible : state.txSidebarVisible}
-					>
-						<PanelLeftIcon />
-					</button>
-				</Show>
-				<div class="app-body">
-					{/* Work view: the docked roster sidebar (it owns its own
+					<PanelLeftIcon />
+				</button>
+			</Show>
+			<div class="app-body">
+				{/* Work view: the docked roster sidebar (it owns its own
 					    narrow-viewport scrim). Mounted only in Work; the two-pane
 					    swap with Analysis brings its own transcript sidebar inside
 					    TranscriptBrowser. First child so it docks LEFT. */}
-					<Show when={state.view === "work"}>
-						<FleetSidebar />
-					</Show>
-					{/* Analysis view (/ctl/stats needs a fleet process, so the
-					    fleet-required notice covers a bare daemon): the transcript
+				<Show when={state.view === "work"}>
+					<FleetSidebar />
+				</Show>
+				{/* Analysis view: the transcript
 					    sidebar + detail pane. Keep-alive: once opened, TranscriptBrowser
 					    stays mounted and only hides (display:none), so the sidebar
 					    list, scroll, search, project filter, and selected
 					    transcript all survive view switches. */}
-					<Show when={analysisOpened()}>
-						<div class="tx-keepalive" classList={{ hidden: state.view !== "analysis" }}>
-							<TranscriptBrowser />
-						</div>
-					</Show>
-					<Show when={state.view === "work"}>
-						{/* No live session (stopped/removed daemon, or none
+				<Show when={analysisOpened()}>
+					<div class="tx-keepalive" classList={{ hidden: state.view !== "analysis" }}>
+						<TranscriptBrowser />
+					</div>
+				</Show>
+				<Show when={state.view === "work"}>
+					{/* No live session (stopped/removed daemon, or none
 						    picked yet): the empty pane replaces the chat column. */}
-						<Show
-							when={!hasLiveSession()}
-							fallback={
-								<main class="app-main">
-									{/* Session identity (name/rename) at the left edge above the stream. */}
-									<SessionTitle />
-									<Show
-										when={state.items.length > 0 || state.live.active}
-										fallback={<EmptyTranscript />}
-									>
-										<MessageList />
-									</Show>
-									<QueueBar />
-									<div class="active-strips">
-										<ActiveSubagents />
-										<ActiveDaemons />
-									</div>
-									{/* Session-send config bar (model/thinking/stats), glued to the composer. */}
-									<SessionConfigBar />
-									<PromptBox />
-								</main>
-							}
-						>
+					<Show
+						when={!hasLiveSession()}
+						fallback={
 							<main class="app-main">
-								<NoActiveSessionPane />
+								{/* Session identity (name/rename) at the left edge above the stream. */}
+								<SessionTitle />
+								<Show
+									when={state.items.length > 0 || state.live.active}
+									fallback={<EmptyTranscript />}
+								>
+									<MessageList />
+								</Show>
+								<QueueBar />
+								<div class="active-strips">
+									<ActiveSubagents />
+									<ActiveDaemons />
+								</div>
+								{/* Session-send config bar (model/thinking/stats), glued to the composer. */}
+								<SessionConfigBar />
+								<PromptBox />
 							</main>
-						</Show>
+						}
+					>
+						<main class="app-main">
+							<NoActiveSessionPane />
+						</main>
 					</Show>
-				</div>
-				<ModalHost />
+				</Show>
 			</div>
-		</Show>
+			<ModalHost />
+		</div>
 	);
 };

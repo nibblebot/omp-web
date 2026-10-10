@@ -200,32 +200,3 @@
 	font-size: var(--fs-md);
 	color: var(--muted);
 }
-/* Fleet-required gate (FleetRequiredNotice.tsx): the /events peer is a bare
-   session daemon, not the fleet edge, so no shell is rendered. This notice is
-   the whole page and sizes itself against the viewport (.app is absent). */
-.fleet-required {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: var(--space-4);
-	min-height: 100vh;
-	min-height: 100dvh;
-	padding: var(--space-7) var(--space-6);
-	text-align: center;
-}
-.fleet-required-title {
-	margin: 0;
-	font-size: var(--fs-xl);
-	color: var(--text);
-}
-.fleet-required-body {
-	margin: 0;
-	max-width: 46ch;
-	font-size: var(--fs-lg);
-	color: var(--muted);
-}
-.fleet-required code {
-	font-family: var(--font-mono);
-	color: var(--text);
-}

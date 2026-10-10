@@ -6,8 +6,7 @@ import { rosterDaemons } from "./roster";
 /**
  * The App screen's /events stream and the commands answered on it. App calls
  * the real connect(), so it needs a live SSE stream that looks like the fleet
- * edge: a `roster` frame before `hello_ok` (a bare daemon never sends one, and
- * the client then shows the fleet-required notice). POST /command replies are
+ * edge: a `roster` frame before `hello_ok`. POST /command replies are
  * unicast frames on that stream, matched by command id. Frames published while
  * no stream is open are kept (bounded) and replayed on the next open. `call()`
  * answers for stories come from the page instead (daemon.ts).

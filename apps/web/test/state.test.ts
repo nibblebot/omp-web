@@ -180,7 +180,6 @@ beforeEach(() => {
 	}) as unknown as typeof fetch;
 	setState({
 		currentSessionId: "",
-		fleetRequired: false,
 		connected: false,
 		readyAt: undefined,
 		subagents: new Map(),
@@ -2100,43 +2099,6 @@ describe("attached session reconciliation against roster truth", () => {
 		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "error" })] });
 		expect(state.currentSessionId).toBe("");
 		expect(hasLiveSession()).toBe(false);
-	});
-});
-
-// ---------------------------------------------------------------------------
-// Fleet edge detection: the roster frame is what tells the client its /events
-// peer is the fleet edge, which primes it FIRST on every stream open. A bare
-// session daemon never sends one, so an attached/hello_ok frame arriving
-// before any roster frame gates the whole UI behind the fleet-required notice.
-// ---------------------------------------------------------------------------
-describe("fleet-required gate (peer is not the fleet edge)", () => {
-	test("a roster frame before the attach keeps the UI ungated", () => {
-		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
-		dispatch({ type: "roster", daemons: [] });
-		dispatch(attached("daemon-a"));
-		expect(state.fleetRequired).toBe(false);
-	});
-
-	test("an attach before any roster frame gates the UI", () => {
-		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
-		dispatch(attached("daemon-a"));
-		expect(state.fleetRequired).toBe(true);
-	});
-
-	test("a hello_ok before any roster frame gates the UI", () => {
-		connect();
-		FakeEventSource.instances.at(-1)!.onopen?.();
-		dispatch({
-			type: "hello_ok",
-			proto: OMP_PROTO,
-			name: "s",
-			cwd: "/x",
-			pid: 1,
-			version: "0.0.0",
-		});
-		expect(state.fleetRequired).toBe(true);
 	});
 });
 

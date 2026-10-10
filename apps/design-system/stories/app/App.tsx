@@ -79,15 +79,5 @@ export default defineStory({
 				</div>
 			),
 		},
-		{
-			name: "Fleet required",
-			description: "The fleet gate blocks the app until a daemon fleet is available.",
-			seed: { fleetRequired: true },
-			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<App />
-				</div>
-			),
-		},
 	],
 });
