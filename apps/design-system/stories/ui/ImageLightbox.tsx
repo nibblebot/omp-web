@@ -12,12 +12,12 @@ export default defineStory({
 			name: "Terminal screenshot",
 			description:
 				"Full-size preview of a failing type-check run. Portals to the body above the nav.",
-			render: () => <ImageLightbox image={terminalScreenshot} onClose={() => undefined} />,
+			render: (ctx) => <ImageLightbox image={terminalScreenshot} onClose={ctx.close} />,
 		},
 		{
 			name: "Chart screenshot",
 			description: "Full-size preview of tokens per session over the last seven days.",
-			render: () => <ImageLightbox image={chartScreenshot} onClose={() => undefined} />,
+			render: (ctx) => <ImageLightbox image={chartScreenshot} onClose={ctx.close} />,
 		},
 	],
 });

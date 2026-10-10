@@ -28,7 +28,7 @@ export default [
 				description:
 					"Project and profile servers: one connected, one with an expired token, one disabled.",
 				seed: () => answerCalls({ getMcpState: () => ({ servers: mcpServers }) }),
-				render: () => <McpServersDialog onClose={() => undefined} />,
+				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Test passed",
@@ -36,7 +36,7 @@ export default [
 					answerCalls({ getMcpState: () => ({ servers: mcpServers }) });
 					setState("integrations", "mcpTestResult", mcpTestPassed);
 				},
-				render: () => <McpServersDialog onClose={() => undefined} />,
+				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Test failed",
@@ -44,7 +44,7 @@ export default [
 					answerCalls({ getMcpState: () => ({ servers: mcpServers }) });
 					setState("integrations", "mcpTestResult", mcpTestFailed);
 				},
-				render: () => <McpServersDialog onClose={() => undefined} />,
+				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Inspection result",
@@ -53,12 +53,12 @@ export default [
 					answerCalls({ getMcpState: () => ({ servers: mcpServers }) });
 					setState("integrations", "mcpInspection", mcpInspectionTools);
 				},
-				render: () => <McpServersDialog onClose={() => undefined} />,
+				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Loading",
 				seed: () => answerCalls({ getMcpState: () => Promise.withResolvers<unknown>().promise }),
-				render: () => <McpServersDialog onClose={() => undefined} />,
+				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Load failed",
@@ -67,7 +67,7 @@ export default [
 						getMcpState: () =>
 							Promise.reject(new Error("Could not read the MCP inventory from the daemon.")),
 					}),
-				render: () => <McpServersDialog onClose={() => undefined} />,
+				render: (ctx) => <McpServersDialog onClose={ctx.close} />,
 			},
 		],
 	}),
@@ -91,7 +91,7 @@ export default [
 							smitheryAvailable: true,
 						}),
 					}),
-				render: () => <SkillsDialog onClose={() => undefined} />,
+				render: (ctx) => <SkillsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Smithery unavailable",
@@ -104,12 +104,12 @@ export default [
 							smitheryAvailable: false,
 						}),
 					}),
-				render: () => <SkillsDialog onClose={() => undefined} />,
+				render: (ctx) => <SkillsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Loading",
 				seed: () => answerCalls({ getSkillsState: () => Promise.withResolvers<unknown>().promise }),
-				render: () => <SkillsDialog onClose={() => undefined} />,
+				render: (ctx) => <SkillsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Load failed",
@@ -118,7 +118,7 @@ export default [
 						getSkillsState: () =>
 							Promise.reject(new Error("Skill registry index could not be read.")),
 					}),
-				render: () => <SkillsDialog onClose={() => undefined} />,
+				render: (ctx) => <SkillsDialog onClose={ctx.close} />,
 			},
 		],
 	}),

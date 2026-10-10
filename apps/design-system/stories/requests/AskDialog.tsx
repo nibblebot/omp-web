@@ -18,8 +18,6 @@ import {
 } from "../../fixtures/dialogs";
 import { defineStory } from "../../registry";
 
-const noop = (): void => {};
-
 export default [
 	defineStory({
 		id: "requests-ask-dialog",
@@ -62,16 +60,16 @@ export default [
 		variants: [
 			{
 				name: "Two questions",
-				render: () => (
-					<Modal title="Agent question" onClose={noop}>
+				render: (ctx) => (
+					<Modal title="Agent question" onClose={ctx.close}>
 						<QuestionsForm id="ask_42" questions={[askScopeQuestion, askChecksQuestion]} />
 					</Modal>
 				),
 			},
 			{
 				name: "Long questions with previews",
-				render: () => (
-					<Modal title="Agent question" onClose={noop}>
+				render: (ctx) => (
+					<Modal title="Agent question" onClose={ctx.close}>
 						<QuestionsForm id="ask_43" questions={askLongQuestions} />
 					</Modal>
 				),

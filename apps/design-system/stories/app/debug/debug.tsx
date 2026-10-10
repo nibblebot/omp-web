@@ -23,7 +23,7 @@ export default [
 					reconnectDelay: 0,
 					debugLog: debugLogEntries,
 				},
-				render: () => <FleetDebugSheet onClose={() => {}} />,
+				render: (ctx) => <FleetDebugSheet onClose={ctx.close} />,
 			},
 			{
 				name: "Reconnecting",
@@ -33,12 +33,12 @@ export default [
 					reconnectDelay: 4000,
 					debugLog: debugLogReconnecting,
 				},
-				render: () => <FleetDebugSheet onClose={() => {}} />,
+				render: (ctx) => <FleetDebugSheet onClose={ctx.close} />,
 			},
 			{
 				name: "No session attached",
 				seed: { connected: false, currentSessionId: "", reconnectDelay: 0, debugLog: [] },
-				render: () => <FleetDebugSheet onClose={() => {}} />,
+				render: (ctx) => <FleetDebugSheet onClose={ctx.close} />,
 			},
 		],
 	}),

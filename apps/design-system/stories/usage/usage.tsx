@@ -26,7 +26,7 @@ export default [
 						getSessionStats: () => sessionStatsSummary,
 						getContextBreakdown: () => contextBreakdown,
 					}),
-				render: () => <SessionStatsDialog onClose={() => undefined} />,
+				render: (ctx) => <SessionStatsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Breakdown unavailable",
@@ -38,7 +38,7 @@ export default [
 							throw new Error("context breakdown unavailable");
 						},
 					}),
-				render: () => <SessionStatsDialog onClose={() => undefined} />,
+				render: (ctx) => <SessionStatsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Loading",
@@ -47,7 +47,7 @@ export default [
 						getSessionStats: pending,
 						getContextBreakdown: pending,
 					}),
-				render: () => <SessionStatsDialog onClose={() => undefined} />,
+				render: (ctx) => <SessionStatsDialog onClose={ctx.close} />,
 			},
 		],
 	}),
@@ -67,12 +67,12 @@ export default [
 					answerCalls({
 						fetchUsageReports: () => rosterUsageReports,
 					}),
-				render: () => <UsageLimitsDialog onClose={() => undefined} />,
+				render: (ctx) => <UsageLimitsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Loading",
 				seed: () => answerCalls({ fetchUsageReports: pending }),
-				render: () => <UsageLimitsDialog onClose={() => undefined} />,
+				render: (ctx) => <UsageLimitsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "Fetch failed",
@@ -82,12 +82,12 @@ export default [
 							throw new Error("Usage endpoint returned 503");
 						},
 					}),
-				render: () => <UsageLimitsDialog onClose={() => undefined} />,
+				render: (ctx) => <UsageLimitsDialog onClose={ctx.close} />,
 			},
 			{
 				name: "No reports",
 				seed: () => answerCalls({ fetchUsageReports: () => [] }),
-				render: () => <UsageLimitsDialog onClose={() => undefined} />,
+				render: (ctx) => <UsageLimitsDialog onClose={ctx.close} />,
 			},
 		],
 	}),

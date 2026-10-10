@@ -31,7 +31,7 @@ export default [
 				name: "Session settings",
 				description: "Current-session target, every section populated.",
 				seed: () => answerCalls({ getSettings: () => settingsModelCurrentSession }),
-				render: () => <SettingsSheet onClose={() => undefined} />,
+				render: (ctx) => <SettingsSheet onClose={ctx.close} />,
 			},
 			{
 				name: "Loading",
@@ -40,7 +40,7 @@ export default [
 					answerCalls({
 						getSettings: () => Promise.withResolvers<unknown>().promise,
 					}),
-				render: () => <SettingsSheet onClose={() => undefined} />,
+				render: (ctx) => <SettingsSheet onClose={ctx.close} />,
 			},
 			{
 				name: "Load failed",
@@ -50,7 +50,7 @@ export default [
 							throw new Error("settings.yml is locked by another omp process");
 						},
 					}),
-				render: () => <SettingsSheet onClose={() => undefined} />,
+				render: (ctx) => <SettingsSheet onClose={ctx.close} />,
 			},
 		],
 	}),

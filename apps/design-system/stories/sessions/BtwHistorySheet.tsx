@@ -22,7 +22,7 @@ export default defineStory({
 		{
 			name: "Recent side questions",
 			seed: () => answerHistory(btwHistoryRecords),
-			render: () => <BtwHistorySheet onClose={() => {}} />,
+			render: (ctx) => <BtwHistorySheet onClose={ctx.close} />,
 		},
 		{
 			name: "Record selected",
@@ -31,12 +31,12 @@ export default defineStory({
 				refreshBtwHistory();
 				selectBtwRecord("btw_41");
 			},
-			render: () => <BtwHistorySheet onClose={() => {}} />,
+			render: (ctx) => <BtwHistorySheet onClose={ctx.close} />,
 		},
 		{
 			name: "Empty history",
 			seed: () => answerHistory([]),
-			render: () => <BtwHistorySheet onClose={() => {}} />,
+			render: (ctx) => <BtwHistorySheet onClose={ctx.close} />,
 		},
 		{
 			name: "History unavailable",
@@ -47,7 +47,7 @@ export default defineStory({
 					},
 				});
 			},
-			render: () => <BtwHistorySheet onClose={() => {}} />,
+			render: (ctx) => <BtwHistorySheet onClose={ctx.close} />,
 		},
 	],
 });

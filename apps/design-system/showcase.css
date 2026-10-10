@@ -204,6 +204,14 @@
 	border-radius: var(--r-lg);
 	background: var(--bg);
 }
+/* A dismissed variant: its overlay called `close`, Reopen remounts it. */
+.ds-closed {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	color: var(--muted);
+	font-size: 0.9em;
+}
 /* Modal (including the lightbox variant) portals to <body> with position: fixed, exactly
  * as in production. Start them past the showcase nav so it stays usable while an
  * overlay story is open. */

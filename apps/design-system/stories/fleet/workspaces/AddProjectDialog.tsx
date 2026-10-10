@@ -14,7 +14,7 @@ export default defineStory({
 	variants: [
 		{
 			name: "Register a repo",
-			render: () => <AddProjectDialog onClose={() => undefined} />,
+			render: (ctx) => <AddProjectDialog onClose={ctx.close} />,
 		},
 	],
 });

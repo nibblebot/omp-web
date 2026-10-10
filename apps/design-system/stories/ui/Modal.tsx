@@ -14,8 +14,8 @@ export default defineStory({
 		{
 			name: "Titled picker",
 			description: "A titled dialog holding a picker list, as the model picker uses it.",
-			render: () => (
-				<Modal title="Switch model" onClose={() => undefined}>
+			render: (ctx) => (
+				<Modal title="Switch model" onClose={ctx.close}>
 					<div class="picker-list">
 						<For each={pickerModels.slice(0, 3)}>
 							{(model) => (
@@ -33,8 +33,8 @@ export default defineStory({
 		{
 			name: "Side sheet",
 			description: 'variant="sheet" anchors the dialog to the right edge at full height.',
-			render: () => (
-				<Modal title="Session stats" variant="sheet" onClose={() => undefined}>
+			render: (ctx) => (
+				<Modal title="Session stats" variant="sheet" onClose={ctx.close}>
 					<dl class="ds-meta">
 						<div class="ds-meta-row">
 							<dt>Turns</dt>
@@ -59,8 +59,8 @@ export default defineStory({
 		{
 			name: "Aria-labelled, no title",
 			description: "Without a title, the dialog takes its accessible name from ariaLabel.",
-			render: () => (
-				<Modal ariaLabel="Keyboard shortcuts" onClose={() => undefined}>
+			render: (ctx) => (
+				<Modal ariaLabel="Keyboard shortcuts" onClose={ctx.close}>
 					<p class="picker-note">Esc closes this dialog. Tab cycles through its controls.</p>
 				</Modal>
 			),
@@ -69,8 +69,8 @@ export default defineStory({
 			name: "Long content",
 			description:
 				"Long markdown inside the dialog, to check that the body scrolls under the title.",
-			render: () => (
-				<Modal title="Transport review" onClose={() => undefined}>
+			render: (ctx) => (
+				<Modal title="Transport review" onClose={ctx.close}>
 					<Markdown src={markdownLong} />
 				</Modal>
 			),

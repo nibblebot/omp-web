@@ -10,7 +10,7 @@ export default defineStory({
 		{
 			name: "Keyboard shortcuts",
 			description: "The help modal: every composer and transcript shortcut.",
-			render: () => <ShortcutsDialog onClose={() => undefined} />,
+			render: (ctx) => <ShortcutsDialog onClose={ctx.close} />,
 		},
 	],
 });

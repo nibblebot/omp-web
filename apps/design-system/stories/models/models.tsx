@@ -47,7 +47,7 @@ export default [
 						getAvailableModels: () => modelInfos,
 						getModelMentions: () => ({ mentions: [] }),
 					}),
-				render: () => <ModelPicker onClose={() => undefined} />,
+				render: (ctx) => <ModelPicker onClose={ctx.close} />,
 			},
 			{
 				name: "Catalog loading",
@@ -56,7 +56,7 @@ export default [
 						getAvailableModels: () => Promise.withResolvers<unknown>().promise,
 						getModelMentions: () => ({ mentions: [] }),
 					}),
-				render: () => <ModelPicker onClose={() => undefined} />,
+				render: (ctx) => <ModelPicker onClose={ctx.close} />,
 			},
 			{
 				name: "Catalog failed",
@@ -67,7 +67,7 @@ export default [
 						},
 						getModelMentions: () => ({ mentions: [] }),
 					}),
-				render: () => <ModelPicker onClose={() => undefined} />,
+				render: (ctx) => <ModelPicker onClose={ctx.close} />,
 			},
 		],
 	}),
@@ -158,7 +158,7 @@ export default [
 					model: sessionModel,
 					thinkingLevel: "medium" as ThinkingLevel,
 				},
-				render: () => <ThinkingLevelPicker onClose={() => undefined} />,
+				render: (ctx) => <ThinkingLevelPicker onClose={ctx.close} />,
 			},
 			{
 				name: "High selected",
@@ -167,7 +167,7 @@ export default [
 					model: sessionModel,
 					thinkingLevel: "high" as ThinkingLevel,
 				},
-				render: () => <ThinkingLevelPicker onClose={() => undefined} />,
+				render: (ctx) => <ThinkingLevelPicker onClose={ctx.close} />,
 			},
 			{
 				name: "Inherit from role",
@@ -176,7 +176,7 @@ export default [
 					model: sessionModel,
 					thinkingLevel: "inherit",
 				},
-				render: () => <ThinkingLevelPicker onClose={() => undefined} />,
+				render: (ctx) => <ThinkingLevelPicker onClose={ctx.close} />,
 			},
 		],
 	}),

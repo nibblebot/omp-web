@@ -19,7 +19,7 @@ export default defineStory({
 				seedRosterFleet({ workspaceModalProjectId: "proj_omp_web", modal: "workspace" });
 				rememberWorkspaceCreationPrefs({ kind: "worktree", start: true });
 			},
-			render: () => <AddWorkspaceDialog onClose={() => undefined} />,
+			render: (ctx) => <AddWorkspaceDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Clone with provider profile",
@@ -27,7 +27,7 @@ export default defineStory({
 				seedRosterFleet({ workspaceModalProjectId: "proj_omp_web", modal: "workspace" });
 				rememberWorkspaceCreationPrefs({ kind: "clone", start: false, profileId: "k8s-bench" });
 			},
-			render: () => <AddWorkspaceDialog onClose={() => undefined} />,
+			render: (ctx) => <AddWorkspaceDialog onClose={ctx.close} />,
 		},
 	],
 });

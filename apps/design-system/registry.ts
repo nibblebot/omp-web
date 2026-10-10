@@ -9,6 +9,16 @@ import type { state } from "../web/state";
  */
 export type StoreSeed = Partial<typeof state> | (() => void);
 
+/** What the stage hands a variant's `render`. */
+export interface VariantContext {
+	/**
+	 * Dismiss the variant: the stage unmounts it and offers Reopen (re-seeding
+	 * first when variants show one at a time). Wire it to an overlay's
+	 * `onClose` so Esc, backdrop clicks, and close buttons dismiss it.
+	 */
+	close: () => void;
+}
+
 export interface StoryVariant {
 	/** Short label shown above the rendered variant. */
 	name: string;
@@ -18,7 +28,7 @@ export interface StoryVariant {
 	 * variant at a time (the store is global), re-seeding on every switch.
 	 */
 	seed?: StoreSeed;
-	render: () => JSX.Element;
+	render: (ctx: VariantContext) => JSX.Element;
 }
 
 /** The real component a story showcases, as the graph knows it. */

@@ -29,7 +29,7 @@ export default defineStory({
 						subagents: subagentMapOf(subagentInfos),
 					},
 				),
-			render: () => <SubagentsDialog onClose={() => undefined} />,
+			render: (ctx) => <SubagentsDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Empty roster",
@@ -38,7 +38,7 @@ export default defineStory({
 					{ workerList: () => [] },
 					{ currentSessionId: SESSION_ID, subagents: subagentMapOf([]) },
 				),
-			render: () => <SubagentsDialog onClose={() => undefined} />,
+			render: (ctx) => <SubagentsDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Roster unavailable",
@@ -52,12 +52,12 @@ export default defineStory({
 					},
 					{ currentSessionId: SESSION_ID },
 				),
-			render: () => <SubagentsDialog onClose={() => undefined} />,
+			render: (ctx) => <SubagentsDialog onClose={ctx.close} />,
 		},
 		{
 			name: "No attached session",
 			seed: () => seedSubagents({ workerList: () => [] }, { currentSessionId: "" }),
-			render: () => <SubagentsDialog onClose={() => undefined} />,
+			render: (ctx) => <SubagentsDialog onClose={ctx.close} />,
 		},
 	],
 });

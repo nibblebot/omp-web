@@ -19,7 +19,7 @@ export default defineStory({
 				setState("capabilities", { graph: { available: true } });
 				answerCalls({ getSessionGraph: () => sessionGraphPage });
 			},
-			render: () => <SessionGraphDialog onClose={() => {}} />,
+			render: (ctx) => <SessionGraphDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Paged graph",
@@ -27,7 +27,7 @@ export default defineStory({
 				setState("capabilities", { graph: { available: true } });
 				answerCalls({ getSessionGraph: () => sessionGraphPageMore });
 			},
-			render: () => <SessionGraphDialog onClose={() => {}} />,
+			render: (ctx) => <SessionGraphDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Legacy daemon header",
@@ -36,7 +36,7 @@ export default defineStory({
 					graph: { available: false, reason: "Upgrade omp to 14.2 to browse the session graph." },
 				});
 			},
-			render: () => <SessionGraphDialog onClose={() => {}} />,
+			render: (ctx) => <SessionGraphDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Load failed",
@@ -48,7 +48,7 @@ export default defineStory({
 					},
 				});
 			},
-			render: () => <SessionGraphDialog onClose={() => {}} />,
+			render: (ctx) => <SessionGraphDialog onClose={ctx.close} />,
 		},
 	],
 });

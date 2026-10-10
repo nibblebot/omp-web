@@ -18,7 +18,7 @@ export default defineStory({
 		{
 			name: "Provider list",
 			seed: answerProviders,
-			render: () => <ProviderLoginDialog onClose={() => {}} />,
+			render: (ctx) => <ProviderLoginDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Browser sign-in in progress",
@@ -26,7 +26,7 @@ export default defineStory({
 				answerProviders();
 				setState("loginUrl", loginBrowserUrl);
 			},
-			render: () => <ProviderLoginDialog onClose={() => {}} />,
+			render: (ctx) => <ProviderLoginDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Device code requested",
@@ -34,7 +34,7 @@ export default defineStory({
 				answerProviders();
 				setState("loginCodeRequest", loginCodePrompt);
 			},
-			render: () => <ProviderLoginDialog onClose={() => {}} />,
+			render: (ctx) => <ProviderLoginDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Provider list failed",
@@ -45,7 +45,7 @@ export default defineStory({
 					},
 				});
 			},
-			render: () => <ProviderLoginDialog onClose={() => {}} />,
+			render: (ctx) => <ProviderLoginDialog onClose={ctx.close} />,
 		},
 	],
 });

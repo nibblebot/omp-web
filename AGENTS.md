@@ -38,7 +38,7 @@ Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Restart d
 | `apps/*/test/`, `lib/*/test/`, `scripts/test/`, `e2e/` | Owner-local tests and cross-app/distribution checks |
 | `scripts/`, `docs/release.md` | Tooling and release contracts |
 
-Production source is flat in cli/fleet/session; preserve the web feature hierarchy. `apps/web/components/` groups by feature, matching `store/` modules: `ui/` (domain-free primitives, no `state.ts` import), `app/` (shell widgets), `chat/{status,transcript,tools,composer,controls}`, `requests/` (agent-to-user dialogs that self-mount on store state), `sessions/`, `models/`, `settings/`, `usage/`, `fleet/{sidebar,daemon,workspaces}`, `subagents/`, `review/`; `tx/` stays a self-contained feature. A component used by exactly one parent lives in that parent's folder. Logic and types stay out of `components/`.
+Production source is flat in cli/fleet/session; preserve the web feature hierarchy. `apps/web/components/` groups by feature, matching `store/` modules: `ui/` (domain-free primitives, no `state.ts` import), `app/` (shell widgets), `chat/{status,transcript,tools,composer,controls}`, `requests/` (agent-to-user dialogs that self-mount on store state), `sessions/`, `models/`, `settings/{integrations}`, `usage/`, `fleet/{sidebar,daemon,workspaces}`, `subagents/`, `review/`; `tx/` stays a self-contained feature. A component used by exactly one parent lives in that parent's folder. Logic and types stay out of `components/`.
 
 Component names say what the user sees, one name per concept, no abbreviations; a file holding one component is named after it. Suffixes: `*Dialog` (centered `Modal`), `*Sheet` (`Modal variant="sheet"`, right side sheet), `*Lightbox` (`Modal variant="lightbox"`, full-bleed media), `*Picker` (choose one item, in a `Modal` or inline), `*Panel` (shell-less review/workspace body; its host supplies the shell), `*Tab` (hub tab body), `*Card` (transcript item), `*ToolCard` (tool call renderer), `*Row` (list row), `*Bar` (strip above the composer). `Modal` names only the `components/ui/Modal.tsx` primitive; no other component ends in `Modal`.
 
@@ -87,6 +87,13 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only). `POST /command` acce
 - Preserve stale-session guards and replay dedup. Session switches reject pending calls/reset IDs without clearing fleet-scoped data.
 - Preserve global CSS import order and shared design tokens; theme palettes override variables only. No CSS modules; avoid inline styles.
 
+### Design system (`apps/design-system/`)
+
+- Stories render the real `apps/web` components, never copies. No fleet runs behind it: control-plane fetches are answered by `fixtures/routes.ts`, daemon commands and `call()` answers by story handlers (`daemon.ts`). Stories set state only through `seed` (a top-level store patch or a function driving real exported actions); store, fake daemon, and dialog state reset per story and variant.
+- One story file per component at `stories/<feature>/<subfolder>/<Name>.tsx`, mirroring `apps/web/components/`, default-exporting `defineStory(...)` (or an array); `registry.ts` owns the contract. A component family (`ui/icons.tsx`, `ui/buttons.tsx`) is one page: `component` lists every `ComponentRef` and `section` names its nav entry.
+- Components that portal a full-screen overlay (`Modal`, `ImageLightbox`) need `tabs: true` so variants never stack, and wire their dismiss prop to the stage's `render: (ctx) => … onClose={ctx.close}`, never a no-op. Re-clicking the active tab re-seeds a variant whose overlay closed through store state (`ModalHost`).
+- Adding, moving, or renaming an exported component updates its story and `ComponentRef` (`file`, `export`) in the same change; `#/coverage` lists components without a story.
+
 ### Tests
 
 - Run through `scripts/test.ts` from repo root; no live model/API dependency. Do not add retries or suppress failures.
@@ -110,7 +117,7 @@ Update wire contracts, producers, consumers, dispatch classification, and behavi
 ## Verification
 
 - Code: targeted tests, then types. Library/daemon/edge changes also require the full suite.
-- UI: `bun run dev`, verify the actual browser surface, including fleet-required handling when relevant.
+- UI: `bun run dev`, verify the actual browser surface, including fleet-required handling when relevant. Component changes also get their story checked in `bun run design` (refresh after source edits; restart after `server.ts` or fixture-route edits).
 - CLI/distribution/bundle/first-run: `bun e2e/onboarding.ts`.
 - Docs: check paths/links.
 - Release: `GATE_COMMANDS` in `scripts/release.ts` is authoritative; includes types, format, web build, full tests, onboarding, followed by packed-artifact installation smoke. Preflight is advisory, not part of orchestration.

@@ -28,7 +28,7 @@ export default [
 						resumeList: () => ({ candidates: resumeCandidates }),
 						foreignList: () => ({ sessions: foreignSessionPreviews }),
 					}),
-				render: () => <ResumePicker onClose={() => undefined} />,
+				render: (ctx) => <ResumePicker onClose={ctx.close} />,
 			},
 			{
 				name: "Loading",
@@ -37,7 +37,7 @@ export default [
 						resumeList: pending,
 						foreignList: pending,
 					}),
-				render: () => <ResumePicker onClose={() => undefined} />,
+				render: (ctx) => <ResumePicker onClose={ctx.close} />,
 			},
 			{
 				name: "Search failed",
@@ -48,7 +48,7 @@ export default [
 						},
 						foreignList: () => ({ sessions: [] }),
 					}),
-				render: () => <ResumePicker onClose={() => undefined} />,
+				render: (ctx) => <ResumePicker onClose={ctx.close} />,
 			},
 		],
 	}),
@@ -63,7 +63,7 @@ export default [
 				name: "Resume session",
 				description: "Recent sessions for this workspace, newest first.",
 				seed: () => answerCommands({ list_sessions: () => settleSessions(sessionListEntries) }),
-				render: () => <SessionPicker onClose={() => undefined} />,
+				render: (ctx) => <SessionPicker onClose={ctx.close} />,
 			},
 			{
 				name: "New session or resume",
@@ -72,7 +72,7 @@ export default [
 					answerCommands({ list_sessions: () => settleSessions(sessionListEntries) });
 					setState("sessionPickerGate", { daemonId: "daemon_local" });
 				},
-				render: () => <SessionPicker onClose={() => undefined} />,
+				render: (ctx) => <SessionPicker onClose={ctx.close} />,
 			},
 			{
 				name: "Before the list arrives",
@@ -80,7 +80,7 @@ export default [
 					"The daemon has not answered yet; the modal shows its empty note until it does.",
 				// Accepted but never answered, like a daemon that has not replied yet.
 				seed: () => answerCommands({ list_sessions: () => undefined }),
-				render: () => <SessionPicker onClose={() => undefined} />,
+				render: (ctx) => <SessionPicker onClose={ctx.close} />,
 			},
 		],
 	}),

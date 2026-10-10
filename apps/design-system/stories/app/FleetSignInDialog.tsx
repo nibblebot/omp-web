@@ -10,12 +10,12 @@ export default defineStory({
 		{
 			name: "Sign in",
 			description: "The default sign-in dialog for fleet browser auth.",
-			render: () => <FleetSignInDialog onClose={() => undefined} />,
+			render: (ctx) => <FleetSignInDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Session expired",
 			description: "Opened after a 401 moved the auth store to signed out mid-use.",
-			render: () => <FleetSignInDialog variant="expired" onClose={() => undefined} />,
+			render: (ctx) => <FleetSignInDialog variant="expired" onClose={ctx.close} />,
 		},
 	],
 });

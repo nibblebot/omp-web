@@ -15,29 +15,29 @@ export default defineStory({
 	variants: [
 		{
 			name: "No goal set",
-			render: () => <GoalDialog onClose={() => {}} />,
+			render: (ctx) => <GoalDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Active with token budget",
 			seed: { goalModeState: { enabled: true, mode: "active", goal: goalActive } },
-			render: () => <GoalDialog onClose={() => {}} />,
+			render: (ctx) => <GoalDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Paused",
 			seed: { goalModeState: { enabled: true, mode: "active", goal: goalPaused } },
-			render: () => <GoalDialog onClose={() => {}} />,
+			render: (ctx) => <GoalDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Budget limited",
 			seed: { goalModeState: { enabled: true, mode: "active", goal: goalBudgetLimited } },
-			render: () => <GoalDialog onClose={() => {}} />,
+			render: (ctx) => <GoalDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Completed, exiting goal mode",
 			seed: {
 				goalModeState: { enabled: true, mode: "exiting", reason: "completed", goal: goalCompleted },
 			},
-			render: () => <GoalDialog onClose={() => {}} />,
+			render: (ctx) => <GoalDialog onClose={ctx.close} />,
 		},
 	],
 });

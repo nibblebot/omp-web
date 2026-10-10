@@ -22,7 +22,7 @@ export default defineStory({
 		{
 			name: "Ready, soft selected",
 			seed: ready,
-			render: () => <CompactionDialog onClose={() => {}} />,
+			render: (ctx) => <CompactionDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Remote refused on this route",
@@ -30,7 +30,7 @@ export default defineStory({
 				answerCalls({ compactionSnapshot: () => compactionSnapshotRemoteBlocked });
 				selectCompactionMode("remote");
 			},
-			render: () => <CompactionDialog onClose={() => {}} />,
+			render: (ctx) => <CompactionDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Snapcompact rejects focus text",
@@ -39,7 +39,7 @@ export default defineStory({
 				selectCompactionMode("snapcompact");
 				setCompactionFocus("keep the vitest migration notes");
 			},
-			render: () => <CompactionDialog onClose={() => {}} />,
+			render: (ctx) => <CompactionDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Compaction running",
@@ -47,7 +47,7 @@ export default defineStory({
 				answerCalls({ compactionSnapshot: () => ({ ...compactionSnapshotReady, active: true }) });
 				setState("compaction", "progress", { phase: "running", startedAt: Date.now() - 12_000 });
 			},
-			render: () => <CompactionDialog onClose={() => {}} />,
+			render: (ctx) => <CompactionDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Compaction finished",
@@ -66,7 +66,7 @@ export default defineStory({
 					historyRetained: true,
 				});
 			},
-			render: () => <CompactionDialog onClose={() => {}} />,
+			render: (ctx) => <CompactionDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Snapshot failed",
@@ -77,7 +77,7 @@ export default defineStory({
 					},
 				});
 			},
-			render: () => <CompactionDialog onClose={() => {}} />,
+			render: (ctx) => <CompactionDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Maintenance finished",
@@ -90,7 +90,7 @@ export default defineStory({
 					removed: 17,
 				});
 			},
-			render: () => <CompactionDialog onClose={() => {}} />,
+			render: (ctx) => <CompactionDialog onClose={ctx.close} />,
 		},
 	],
 });

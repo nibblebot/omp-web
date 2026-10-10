@@ -15,28 +15,26 @@ export default defineStory({
 	variants: [
 		{
 			name: "Main checkout, ready",
-			render: () => <DaemonDetailsDialog daemon={rosterDaemon.main} onClose={() => undefined} />,
+			render: (ctx) => <DaemonDetailsDialog daemon={rosterDaemon.main} onClose={ctx.close} />,
 		},
 		{
 			name: "Worktree, attached",
-			render: () => (
-				<DaemonDetailsDialog daemon={rosterDaemon.worktree} onClose={() => undefined} />
-			),
+			render: (ctx) => <DaemonDetailsDialog daemon={rosterDaemon.worktree} onClose={ctx.close} />,
 		},
 		{
 			name: "Asleep worktree",
-			render: () => <DaemonDetailsDialog daemon={rosterDaemon.asleep} onClose={() => undefined} />,
+			render: (ctx) => <DaemonDetailsDialog daemon={rosterDaemon.asleep} onClose={ctx.close} />,
 		},
 		{
 			name: "Clone failed",
-			render: () => (
-				<DaemonDetailsDialog daemon={rosterDaemon.cloneFailed} onClose={() => undefined} />
+			render: (ctx) => (
+				<DaemonDetailsDialog daemon={rosterDaemon.cloneFailed} onClose={ctx.close} />
 			),
 		},
 		{
 			name: "Remote error",
-			render: () => (
-				<DaemonDetailsDialog daemon={rosterDaemon.remoteError} onClose={() => undefined} />
+			render: (ctx) => (
+				<DaemonDetailsDialog daemon={rosterDaemon.remoteError} onClose={ctx.close} />
 			),
 		},
 	],

@@ -21,17 +21,17 @@ export default defineStory({
 		{
 			name: "Recent prompts",
 			seed: () => seedHistory(promptHistoryEntries),
-			render: () => <PromptHistoryPicker onClose={() => {}} />,
+			render: (ctx) => <PromptHistoryPicker onClose={ctx.close} />,
 		},
 		{
 			name: "Long and multi-line prompts",
 			seed: () => seedHistory([...promptHistoryEntries.slice(0, 2), ...promptHistoryLong]),
-			render: () => <PromptHistoryPicker onClose={() => {}} />,
+			render: (ctx) => <PromptHistoryPicker onClose={ctx.close} />,
 		},
 		{
 			name: "Empty",
 			seed: () => localStorage.removeItem(HISTORY_KEY),
-			render: () => <PromptHistoryPicker onClose={() => {}} />,
+			render: (ctx) => <PromptHistoryPicker onClose={ctx.close} />,
 		},
 	],
 });
