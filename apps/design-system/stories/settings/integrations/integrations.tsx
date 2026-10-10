@@ -1,5 +1,5 @@
-import { McpManager } from "../../../../web/components/settings/integrations/McpManager";
-import { SkillsManager } from "../../../../web/components/settings/integrations/SkillsManager";
+import { McpServersDialog } from "../../../../web/components/settings/integrations/McpServersDialog";
+import { SkillsDialog } from "../../../../web/components/settings/integrations/SkillsDialog";
 import { setState } from "../../../../web/state";
 import {
 	mcpInspectionTools,
@@ -15,10 +15,10 @@ import { defineStory } from "../../../registry";
 export default [
 	defineStory({
 		id: "settings-integrations-mcp-manager",
-		title: "McpManager",
+		title: "McpServersDialog",
 		component: {
-			file: "apps/web/components/settings/integrations/McpManager.tsx",
-			export: "McpManager",
+			file: "apps/web/components/settings/integrations/McpServersDialog.tsx",
+			export: "McpServersDialog",
 		},
 		tabs: true,
 		seed: { currentSessionId: "sess_09a41c" },
@@ -28,7 +28,7 @@ export default [
 				description:
 					"Project and profile servers: one connected, one with an expired token, one disabled.",
 				seed: () => answerCalls({ getMcpState: () => ({ servers: mcpServers }) }),
-				render: () => <McpManager onClose={() => undefined} />,
+				render: () => <McpServersDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Test passed",
@@ -36,7 +36,7 @@ export default [
 					answerCalls({ getMcpState: () => ({ servers: mcpServers }) });
 					setState("integrations", "mcpTestResult", mcpTestPassed);
 				},
-				render: () => <McpManager onClose={() => undefined} />,
+				render: () => <McpServersDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Test failed",
@@ -44,7 +44,7 @@ export default [
 					answerCalls({ getMcpState: () => ({ servers: mcpServers }) });
 					setState("integrations", "mcpTestResult", mcpTestFailed);
 				},
-				render: () => <McpManager onClose={() => undefined} />,
+				render: () => <McpServersDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Inspection result",
@@ -53,12 +53,12 @@ export default [
 					answerCalls({ getMcpState: () => ({ servers: mcpServers }) });
 					setState("integrations", "mcpInspection", mcpInspectionTools);
 				},
-				render: () => <McpManager onClose={() => undefined} />,
+				render: () => <McpServersDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Loading",
 				seed: () => answerCalls({ getMcpState: () => Promise.withResolvers<unknown>().promise }),
-				render: () => <McpManager onClose={() => undefined} />,
+				render: () => <McpServersDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Load failed",
@@ -67,16 +67,16 @@ export default [
 						getMcpState: () =>
 							Promise.reject(new Error("Could not read the MCP inventory from the daemon.")),
 					}),
-				render: () => <McpManager onClose={() => undefined} />,
+				render: () => <McpServersDialog onClose={() => undefined} />,
 			},
 		],
 	}),
 	defineStory({
 		id: "settings-integrations-skills-manager",
-		title: "SkillsManager",
+		title: "SkillsDialog",
 		component: {
-			file: "apps/web/components/settings/integrations/SkillsManager.tsx",
-			export: "SkillsManager",
+			file: "apps/web/components/settings/integrations/SkillsDialog.tsx",
+			export: "SkillsDialog",
 		},
 		tabs: true,
 		variants: [
@@ -91,7 +91,7 @@ export default [
 							smitheryAvailable: true,
 						}),
 					}),
-				render: () => <SkillsManager onClose={() => undefined} />,
+				render: () => <SkillsDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Smithery unavailable",
@@ -104,12 +104,12 @@ export default [
 							smitheryAvailable: false,
 						}),
 					}),
-				render: () => <SkillsManager onClose={() => undefined} />,
+				render: () => <SkillsDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Loading",
 				seed: () => answerCalls({ getSkillsState: () => Promise.withResolvers<unknown>().promise }),
-				render: () => <SkillsManager onClose={() => undefined} />,
+				render: () => <SkillsDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Load failed",
@@ -118,7 +118,7 @@ export default [
 						getSkillsState: () =>
 							Promise.reject(new Error("Skill registry index could not be read.")),
 					}),
-				render: () => <SkillsManager onClose={() => undefined} />,
+				render: () => <SkillsDialog onClose={() => undefined} />,
 			},
 		],
 	}),

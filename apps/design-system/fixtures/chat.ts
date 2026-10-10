@@ -371,7 +371,7 @@ export const chatAutocompleteItems: AcItem[] = [
 	{ label: "/review", detail: "Open the review panel", apply: "/review " },
 ];
 
-/** PromptHistoryModal / PromptBox: a recent prompt history with an entry that has no detail. */
+/** PromptHistoryPicker / PromptBox: a recent prompt history with an entry that has no detail. */
 export const chatPromptHistory: string[] = [
 	"Add a copy-to-clipboard button to the fenced code blocks in the chat transcript.",
 	"Run the design-system fixtures check after the rename.",

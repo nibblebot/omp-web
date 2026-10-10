@@ -1,7 +1,7 @@
 import { createSignal, onCleanup, type JSX } from "solid-js";
 
 /** Arming state for a two-click confirm (extracted from FleetSidebar's
- *  armDaemon/disarmDaemon and SubagentHub's confirm/cancel pair). The
+ *  armDaemon/disarmDaemon and SubagentsDialog's confirm/cancel pair). The
  *  first click arms (the trigger relabels), a second click fires the action;
  *  auto-disarms after `timeoutMs` (default 4000, matching FleetSidebar's
  *  ARM_DISARM_MS) and on unmount. */

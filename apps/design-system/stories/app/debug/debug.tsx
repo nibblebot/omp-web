@@ -1,4 +1,4 @@
-import { FleetDebugModal } from "../../../../web/components/app/debug/FleetDebugModal";
+import { FleetDebugSheet } from "../../../../web/components/app/debug/FleetDebugSheet";
 import { LastFrameClock } from "../../../../web/components/app/debug/LastFrameClock";
 import { DebugLog } from "../../../../web/components/app/debug/DebugLog";
 import { setState } from "../../../../web/state";
@@ -7,11 +7,11 @@ import { defineStory } from "../../../registry";
 
 export default [
 	defineStory({
-		id: "app-fleet-debug-modal",
-		title: "FleetDebugModal",
+		id: "app-fleet-debug-sheet",
+		title: "FleetDebugSheet",
 		component: {
-			file: "apps/web/components/app/debug/FleetDebugModal.tsx",
-			export: "FleetDebugModal",
+			file: "apps/web/components/app/debug/FleetDebugSheet.tsx",
+			export: "FleetDebugSheet",
 		},
 		tabs: true,
 		variants: [
@@ -23,7 +23,7 @@ export default [
 					reconnectDelay: 0,
 					debugLog: debugLogEntries,
 				},
-				render: () => <FleetDebugModal onClose={() => {}} />,
+				render: () => <FleetDebugSheet onClose={() => {}} />,
 			},
 			{
 				name: "Reconnecting",
@@ -33,12 +33,12 @@ export default [
 					reconnectDelay: 4000,
 					debugLog: debugLogReconnecting,
 				},
-				render: () => <FleetDebugModal onClose={() => {}} />,
+				render: () => <FleetDebugSheet onClose={() => {}} />,
 			},
 			{
 				name: "No session attached",
 				seed: { connected: false, currentSessionId: "", reconnectDelay: 0, debugLog: [] },
-				render: () => <FleetDebugModal onClose={() => {}} />,
+				render: () => <FleetDebugSheet onClose={() => {}} />,
 			},
 		],
 	}),

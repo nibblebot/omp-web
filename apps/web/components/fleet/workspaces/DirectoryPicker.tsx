@@ -12,7 +12,7 @@ import { PickerRow } from "../../ui/PickerRow";
  * the edge reports a .git dir), and a footer button selecting the CURRENT
  * directory. The component is presentational only; every fetch goes through
  * the dir-picker module (createDirPicker), which the parent may pass in
- * (`picker` prop) to read browse state itself (AddProjectModal's hasGit
+ * (`picker` prop) to read browse state itself (AddProjectDialog's hasGit
  * submit gate).
  */
 export const DirectoryPicker: Component<{

@@ -76,7 +76,6 @@ export const GitPanel: Component = () => {
 	);
 	return (
 		<section class="review-panel" aria-label="Git review">
-			<h2>Git review</h2>
 			<Show when={reviewAvailable("git")} fallback={<p>{unavailableReason("git")}</p>}>
 				<div class="review-actions">
 					<button type="button" disabled={gitLoading()} onClick={() => void run(refreshGit)}>

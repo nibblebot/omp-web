@@ -45,7 +45,7 @@ export interface Story {
 	seed?: StoreSeed;
 	/**
 	 * Show one variant at a time even without variant seeds. Required for
-	 * components that portal a full-screen overlay (Modal, ImageThumbnails) so
+	 * components that portal a full-screen overlay (Modal, ImageLightbox) so
 	 * variants never stack on top of each other.
 	 */
 	tabs?: boolean;

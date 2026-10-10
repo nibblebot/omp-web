@@ -479,23 +479,6 @@ pre {
 	border: 1px solid var(--border);
 	display: block;
 }
-.img-overlay {
-	position: fixed;
-	inset: 0;
-	background: var(--backdrop);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	z-index: var(--z-lightbox);
-	cursor: zoom-out;
-}
-.img-overlay img {
-	max-width: 92vw;
-	max-height: 92vh;
-	border-radius: var(--r-lg);
-	cursor: default;
-	box-shadow: var(--shadow-2);
-}
 .msg-user-text {
 	white-space: pre-wrap;
 }

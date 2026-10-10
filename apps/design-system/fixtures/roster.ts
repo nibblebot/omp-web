@@ -43,10 +43,10 @@ const docsSite: RegisteredProject = {
 	addedAt: T0 - 2 * DAY,
 };
 
-/** RegisteredProject list: FleetSidebar project sections and AddProjectModal duplicate checks. */
+/** RegisteredProject list: FleetSidebar project sections and AddProjectDialog duplicate checks. */
 export const rosterProjects: RegisteredProject[] = [ompWeb, piMono, docsSite];
 
-/** ProjectEntry list: DirectoryPicker and AddWorkspaceModal "Add existing" rows, including worktrees that point at their parent. */
+/** ProjectEntry list: DirectoryPicker and AddWorkspaceDialog "Add existing" rows, including worktrees that point at their parent. */
 export const rosterProjectEntries: ProjectEntry[] = [
 	{ name: "omp-web", path: OMP_WEB, isWorktree: false, branch: "main" },
 	{
@@ -73,7 +73,7 @@ export const rosterProjectEntries: ProjectEntry[] = [
 	{ name: "pi-mono", path: PI_MONO, isWorktree: false, branch: "main" },
 ];
 
-/** ProjectBranch list: branch picker rows in AddWorkspaceModal. */
+/** ProjectBranch list: branch picker rows in AddWorkspaceDialog. */
 export const rosterProjectBranches: ProjectBranch[] = [
 	{ name: "main", checkedOut: true, worktreePath: OMP_WEB },
 	{ name: "feat/design-fixtures", checkedOut: true, worktreePath: `${WORKTREES}/design-fixtures` },
@@ -401,7 +401,7 @@ export function rosterDaemonInfos(now: number): DaemonInfo[] {
 	];
 }
 
-/** PublicProviderProfile list: AddWorkspaceModal provider picker and clone-row profile chips. */
+/** PublicProviderProfile list: AddWorkspaceDialog provider picker and clone-row profile chips. */
 export const rosterProviderProfiles: PublicProviderProfile[] = [
 	{ id: "bwrap-default", provider: "bwrap", network: "host" },
 	{

@@ -1,7 +1,5 @@
-import { createMemo, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
-import { setState, state, type ToolItem } from "../../../state";
-import type { ImageArg } from "#lib/wire/protocol";
-import { FullImageOverlay } from "../../ui/ImageThumbnails";
+import { createMemo, For, Match, Show, Switch, type Component } from "solid-js";
+import { openLightbox, setState, state, type ToolItem } from "../../../state";
 import { ArrowDownIcon, ExpandIcon } from "../../ui/icons";
 import { ToolCard, ToolChip } from "../tools/ToolCard";
 import { groupToolRuns, type Run } from "../../../chat/tool-runs";
@@ -21,7 +19,6 @@ import {
 const TOOL_CARD_VIEWS = ["expanded", "collapsed", "consolidated"] as const;
 
 export const MessageList: Component = () => {
-	const [zoomed, setZoomed] = createSignal<ImageArg | null>(null);
 	const { containerRef, contentRef, jumpVisible, jumpToBottom } = useStickyScroll();
 	// Memoized so the items scan runs on items/toolCardsView changes, not every render.
 	const showToolbar = createMemo(
@@ -87,7 +84,7 @@ export const MessageList: Component = () => {
 							{(item) => (
 								<Switch>
 									<Match when={item.kind === "user" && item}>
-										{(user) => <UserCard user={user()} onZoom={setZoomed} />}
+										{(user) => <UserCard user={user()} onZoom={openLightbox} />}
 									</Match>
 									<Match when={item.kind === "assistant" && item}>
 										{(assistant) => (
@@ -166,9 +163,6 @@ export const MessageList: Component = () => {
 							</div>
 						</Show>
 					</div>
-					<Show when={zoomed()}>
-						{(img) => <FullImageOverlay image={img()} onClose={() => setZoomed(null)} />}
-					</Show>
 				</div>
 				{/* Floated over the stream's lower-right while unpinned; one click
 			    re-pins and lands at the live edge. */}

@@ -132,9 +132,9 @@ export function TranscriptBrowser() {
 					syncTick={syncTick}
 				/>
 			</aside>
-			{/* Narrow-viewport slide-out: tapping outside the overlay sidebar
-			    closes it. Same .sidebar-scrim pattern as the roster (App.tsx);
-			    CSS shows it only at <=720px. */}
+			{/* Narrow-viewport drawer: tapping outside the slide-out sidebar
+			    closes it. Same .sidebar-scrim pattern as the roster
+			    (FleetSidebar); CSS shows it only at <=720px. */}
 			<Show when={state.txSidebarVisible}>
 				<button
 					type="button"

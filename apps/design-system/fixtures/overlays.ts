@@ -479,7 +479,7 @@ export const foreignSessionPreviews: ForeignSessionPreview[] = [
 // Integrations: MCP servers, skills, and plugins.
 // ---------------------------------------------------------------------------
 
-/** McpServerEntry list: McpManager rows, one connected, one errored, one disabled. */
+/** McpServerEntry list: McpServersDialog rows, one connected, one errored, one disabled. */
 export const mcpServers: McpServerEntry[] = [
 	{
 		name: "filesystem",
@@ -500,7 +500,7 @@ export const mcpServers: McpServerEntry[] = [
 	{ name: "postgres", transport: "stdio", enabled: false, status: "disabled", source: "project" },
 ];
 
-/** SkillEntry list: SkillsManager rows. */
+/** SkillEntry list: SkillsDialog rows. */
 export const skillEntries: SkillEntry[] = [
 	{
 		id: "pdf-extract",
@@ -517,7 +517,7 @@ export const skillEntries: SkillEntry[] = [
 	},
 ];
 
-/** PluginEntry list: plugin rows in SkillsManager, extending the skill shape. */
+/** PluginEntry list: plugin rows in SkillsDialog, extending the skill shape. */
 export const pluginEntries: PluginEntry[] = [
 	{
 		id: "github-review",
@@ -566,7 +566,7 @@ export const downloadManifest: WebDownloadManifest = {
 // BTW side conversations.
 // ---------------------------------------------------------------------------
 
-/** BtwRecordView list: BtwHistoryModal rows, one complete and one interrupted. */
+/** BtwRecordView list: BtwHistorySheet rows, one complete and one interrupted. */
 export const btwRecords: BtwRecordView[] = [
 	{
 		id: "btw_01",
@@ -680,7 +680,7 @@ export const sessionListEntries: SessionListEntry[] = [
 	},
 ];
 
-/** SessionStats: SessionStatsModal totals for the attached session, with the context window nearly half used. */
+/** SessionStats: SessionStatsDialog totals for the attached session, with the context window nearly half used. */
 export const sessionStatsSummary: SessionStats = {
 	sessionFile: "/home/joshua/.omp/sessions/omp-web/2026-10-09T09-40-12.jsonl",
 	sessionId: "sess_09a41c",
@@ -702,7 +702,7 @@ export const sessionStatsSummary: SessionStats = {
 	contextUsage: { tokens: 84_310, contextWindow: 200_000, percent: 42.2 },
 };
 
-/** ContextUsageBreakdown: SessionStatsModal's context section, anchored to the last provider response. */
+/** ContextUsageBreakdown: SessionStatsDialog's context section, anchored to the last provider response. */
 export const contextBreakdown: ContextUsageBreakdown = {
 	contextWindow: 200_000,
 	anchored: true,

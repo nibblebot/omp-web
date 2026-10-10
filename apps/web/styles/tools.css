@@ -331,23 +331,23 @@ pre.terminal {
 	padding: 1px var(--space-3);
 	font-size: var(--fs-sm);
 }
-/* Worker hub modal (SubagentHub.tsx): wider than the default picker so a
+/* Worker hub modal (SubagentsDialog.tsx): wider than the default picker so a
    row fits name, type, description, status, model, time, and steer controls. */
-.modal.subagent-hub {
+.modal.subagents-dialog {
 	width: min(860px, 94vw);
 	max-width: none;
 }
-.subagent-hub .subagent-list {
+.subagents-dialog .subagent-list {
 	padding: 0;
 	gap: var(--space-3);
 }
-.subagent-hub-tabs {
+.subagents-dialog-tabs {
 	display: flex;
 	gap: var(--space-1);
 	border-bottom: 1px solid var(--border);
 	margin-bottom: var(--space-5);
 }
-.subagent-hub-tab {
+.subagents-dialog-tab {
 	background: none;
 	border: none;
 	border-bottom: 2px solid transparent;
@@ -359,22 +359,22 @@ pre.terminal {
 	cursor: pointer;
 	margin-bottom: -1px;
 }
-.subagent-hub-tab[aria-selected="true"] {
+.subagents-dialog-tab[aria-selected="true"] {
 	color: var(--text);
 	border-bottom-color: var(--accent);
 }
-.subagent-hub-toolbar {
+.subagents-dialog-toolbar {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	gap: var(--space-2) var(--space-5);
 }
-.subagent-hub-toolbar label {
+.subagents-dialog-toolbar label {
 	display: inline-flex;
 	align-items: center;
 	gap: var(--space-2);
 }
-.subagent-hub-toolbar select {
+.subagents-dialog-toolbar select {
 	max-width: 14em;
 }
 /* Focused worker header (SubagentFocus.tsx): wraps instead of squeezing the

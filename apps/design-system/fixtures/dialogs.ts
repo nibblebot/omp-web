@@ -63,7 +63,7 @@ export const askLongQuestions: AskQuestion[] = [
 			{
 				label: "Keep the class name prop",
 				description: "Callers keep working; the prop is removed in a follow-up.",
-				preview: '<Modal title="Goal" class="goal-modal" onClose={close}>',
+				preview: '<Modal title="Goal" class="goal-dialog" onClose={close}>',
 			},
 			{
 				label: "Rewrite callers in this change",
@@ -79,15 +79,15 @@ export const askLongQuestions: AskQuestion[] = [
 		question: "Which story groups should be regenerated?",
 		options: [
 			{ label: "requests-ask-dialog" },
-			{ label: "sessions-session-graph-modal" },
+			{ label: "sessions-session-graph-dialog" },
 			{ label: "requests-extension-ui" },
-			{ label: "requests-btw-panel" },
-			{ label: "chat-controls-compaction-modal" },
-			{ label: "app-fleet-debug-modal" },
+			{ label: "requests-btw-sheet" },
+			{ label: "chat-controls-compaction-dialog" },
+			{ label: "app-fleet-debug-sheet" },
 			{ label: "requests-download-dialog" },
-			{ label: "chat-controls-goal-modal" },
-			{ label: "chat-composer-prompt-history-modal" },
-			{ label: "models-provider-login-modal" },
+			{ label: "chat-controls-goal-dialog" },
+			{ label: "chat-composer-prompt-history-picker" },
+			{ label: "models-provider-login-dialog" },
 		],
 		multi: true,
 	},
@@ -125,7 +125,7 @@ export const inputParams = {
 export const editorParams = {
 	title: "Edit the handoff note",
 	prefill:
-		"Overlay stories: AskDialog, GoalModal, and BtwPanel are covered.\nRemaining: DownloadDialog consent phase, ProviderLoginModal providers.\n",
+		"Overlay stories: AskDialog, GoalDialog, and BtwSheet are covered.\nRemaining: DownloadDialog consent phase, ProviderLoginDialog providers.\n",
 };
 
 // ---------------------------------------------------------------------------
@@ -161,16 +161,16 @@ export const dangerSamples: DangerSample[] = [
 // ---------------------------------------------------------------------------
 
 type AppState = typeof state;
-export type BtwPanelState = NonNullable<AppState["btw"]>;
+export type BtwSheetState = NonNullable<AppState["btw"]>;
 
-export const btwStreaming: BtwPanelState = {
+export const btwStreaming: BtwSheetState = {
 	question: "Why does the tool card collapse when the window narrows?",
 	reply: "The collapse comes from the tool header row. Below 520px the",
 	streaming: true,
 	streamId: 7,
 };
 
-export const btwAnswered: BtwPanelState = {
+export const btwAnswered: BtwSheetState = {
 	question: "Does the approval queue survive a reconnect?",
 	reply:
 		"Yes. Pending approvals live in the daemon roster, not the browser. On reconnect the client re-reads the queue from the `state` frame, so a card that was open before the drop is still listed.\n\nThe only gap is the 2 s window between the socket closing and the first state frame; the card shows a stale marker during it.",
@@ -178,7 +178,7 @@ export const btwAnswered: BtwPanelState = {
 	streamId: 8,
 };
 
-export const btwFailed: BtwPanelState = {
+export const btwFailed: BtwSheetState = {
 	question: "Summarize the open review annotations",
 	reply: "",
 	streaming: false,
@@ -265,7 +265,7 @@ export function btwTranscriptFor(recordId: string): BtwTranscriptTurnView[] {
 }
 
 // ---------------------------------------------------------------------------
-// Session graph (SessionGraphModal): daemon answer for getSessionGraph.
+// Session graph (SessionGraphDialog): daemon answer for getSessionGraph.
 // ---------------------------------------------------------------------------
 
 function node(
@@ -292,13 +292,13 @@ function node(
 const graphNodes: GraphNode[] = [
 	node("n01", null, "user", "Split the overlay stories by tier", 96, 1),
 	node("n02", "n01", "assistant", "Reading the component graph for the overlay group", 95, 2),
-	node("n03", "n02", "tool", "apps/web/components/sessions/SessionGraphModal.tsx", 94, 0, "read"),
+	node("n03", "n02", "tool", "apps/web/components/sessions/SessionGraphDialog.tsx", 94, 0, "read"),
 	node("n04", "n02", "tool", "apps/web/store/graph.ts", 93, 0, "read"),
 	node(
 		"n05",
 		"n02",
 		"assistant",
-		"SessionGraphModal shows the graph when the capability is on",
+		"SessionGraphDialog shows the graph when the capability is on",
 		92,
 		1,
 	),
@@ -445,13 +445,13 @@ export const fleetLogEntries: FleetDebug["log"] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Prompt history (PromptHistoryModal): localStorage "omp-web:history", oldest first.
+// Prompt history (PromptHistoryPicker): localStorage "omp-web:history", oldest first.
 // ---------------------------------------------------------------------------
 
 export const promptHistoryEntries: string[] = [
 	"Read the overlay components and list their props",
 	"Split the stories by tier and keep fixtures typed",
-	"Why does SessionGraphModal fall back to the legacy header?",
+	"Why does SessionGraphDialog fall back to the legacy header?",
 	"Add a variant for the remote compaction refusal",
 	"Run the type check once the overlay stories land",
 	"Explain the call relay used by the design server",

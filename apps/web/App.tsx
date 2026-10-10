@@ -19,7 +19,6 @@ import {
 	connect,
 	hasLiveSession,
 	initAuth,
-	setSidebarVisible,
 	setState,
 	setTxSidebarVisible,
 	state,
@@ -95,23 +94,12 @@ export const App: Component = () => {
 					</button>
 				</Show>
 				<div class="app-body">
-					{/* Work view: the docked roster sidebar. Mounted only in Work;
-					    the two-pane swap with Analysis brings its own transcript
-					    sidebar inside TranscriptBrowser. First child so it docks LEFT. */}
+					{/* Work view: the docked roster sidebar (it owns its own
+					    narrow-viewport scrim). Mounted only in Work; the two-pane
+					    swap with Analysis brings its own transcript sidebar inside
+					    TranscriptBrowser. First child so it docks LEFT. */}
 					<Show when={state.view === "work"}>
 						<FleetSidebar />
-						{/* Narrow-viewport slide-out: tapping outside the overlay sidebar
-						    closes it. Hidden by CSS on wide layouts, where the sidebar
-						    docks instead of overlaying. */}
-						<Show when={state.sidebarVisible}>
-							<button
-								type="button"
-								class="sidebar-scrim"
-								tabindex={-1}
-								onClick={() => setSidebarVisible(false)}
-								aria-label="Close sidebar"
-							/>
-						</Show>
 					</Show>
 					{/* Analysis view (/ctl/stats needs a fleet process, so the
 					    fleet-required notice covers a bare daemon): the transcript

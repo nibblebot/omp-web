@@ -114,6 +114,8 @@ beforeEach(() => {
 		workspaceModalProjectId: null,
 		deleteWorkspaceTarget: null,
 		removeProjectTarget: null,
+		lightboxImage: null,
+		daemonDetailsId: null,
 		modal: null,
 		usageReports: null,
 		usageLoading: false,

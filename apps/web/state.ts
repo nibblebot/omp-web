@@ -350,6 +350,12 @@ export const [state, setState] = createStore({
 	deleteWorkspaceTarget: null as string | null,
 	// projectId the remove-project confirm targets.
 	removeProjectTarget: null as string | null,
+	// daemonId whose details dialog is open (fleet-scoped: survives session
+	// switches; the dialog closes itself when the roster entry disappears).
+	daemonDetailsId: null as string | null,
+	// Image shown in the full-size lightbox (session content, so
+	// resetSessionView clears it).
+	lightboxImage: null as ImageArg | null,
 	toolsExpanded: false,
 	toolCardsView: "expanded" as ToolCardsView,
 	// Daemon broker roster (hub/launch long-running processes); project-scoped,
@@ -858,6 +864,7 @@ function resetSessionView(): void {
 		loginCodeRequest: null,
 		uiRequest: null,
 		btw: null,
+		lightboxImage: null,
 	});
 }
 
@@ -1546,7 +1553,14 @@ export {
 	sendDeleteWorktree,
 	sendWorktreeDeleteInfo,
 } from "./store/projects";
-export { sendLoginCode, sendUiResponse } from "./store/modals";
+export {
+	closeDaemonDetails,
+	closeLightbox,
+	openDaemonDetails,
+	openLightbox,
+	sendLoginCode,
+	sendUiResponse,
+} from "./store/modals";
 export { checkSession, signIn, signOut } from "./store/auth";
 export { refreshSettings, updateSetting } from "./store/settings";
 export { refreshUsageReports, setSidebarUsage } from "./store/usage";

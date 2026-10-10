@@ -1,7 +1,7 @@
 /* Settings: settings panel and settings-row. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 /* --- Settings panel (TUI /settings parity) --- */
-.settings-panel {
+.settings-sheet {
 	height: 100%;
 	display: flex;
 	flex-direction: column;

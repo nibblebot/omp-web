@@ -181,7 +181,7 @@ export const reviewAnnotations: ReviewAnnotationDto[] = [
 	},
 ];
 
-/** TodoBoardDto: plan phases with a blocked task, a dropped task, and a selected task for TodoBoard. */
+/** TodoBoardDto: plan phases with a blocked task, a dropped task, and a selected task for TodoPanel. */
 export const reviewTodoBoard: TodoBoardDto = {
 	revision: "r7",
 	selected: { phase: 1, task: 0 },

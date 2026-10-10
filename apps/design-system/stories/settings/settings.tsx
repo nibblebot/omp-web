@@ -1,4 +1,4 @@
-import { SettingsModal } from "../../../web/components/settings/SettingsModal";
+import { SettingsSheet } from "../../../web/components/settings/SettingsSheet";
 import { SettingsRowLayout, SettingsRow } from "../../../web/components/settings/SettingsRow";
 import { SettingsNav, SettingsSectionPicker } from "../../../web/components/settings/SettingsNav";
 import { WebUiSettings } from "../../../web/components/settings/WebUiSettings";
@@ -21,9 +21,9 @@ import { defineStory } from "../../registry";
 
 export default [
 	defineStory({
-		id: "settings-modal",
-		title: "SettingsModal",
-		component: { file: "apps/web/components/settings/SettingsModal.tsx", export: "SettingsModal" },
+		id: "settings-sheet",
+		title: "SettingsSheet",
+		component: { file: "apps/web/components/settings/SettingsSheet.tsx", export: "SettingsSheet" },
 		tabs: true,
 		seed: { currentSessionId: "sess_09a41c" },
 		variants: [
@@ -31,7 +31,7 @@ export default [
 				name: "Session settings",
 				description: "Current-session target, every section populated.",
 				seed: () => answerCalls({ getSettings: () => settingsModelCurrentSession }),
-				render: () => <SettingsModal onClose={() => undefined} />,
+				render: () => <SettingsSheet onClose={() => undefined} />,
 			},
 			{
 				name: "Loading",
@@ -40,7 +40,7 @@ export default [
 					answerCalls({
 						getSettings: () => Promise.withResolvers<unknown>().promise,
 					}),
-				render: () => <SettingsModal onClose={() => undefined} />,
+				render: () => <SettingsSheet onClose={() => undefined} />,
 			},
 			{
 				name: "Load failed",
@@ -50,7 +50,7 @@ export default [
 							throw new Error("settings.yml is locked by another omp process");
 						},
 					}),
-				render: () => <SettingsModal onClose={() => undefined} />,
+				render: () => <SettingsSheet onClose={() => undefined} />,
 			},
 		],
 	}),

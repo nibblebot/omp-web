@@ -83,7 +83,7 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 	return (
 		<Modal
 			title={gateMode() ? "New session or resume" : "Resume session"}
-			class="resume-modal"
+			class="session-picker"
 			onClose={close}
 		>
 			<input
@@ -108,12 +108,12 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 				<For each={filtered()}>
 					{(s, i) => (
 						<PickerRow
-							class="picker-row resume-modal-row"
+							class="picker-row session-picker-row"
 							classList={{ active: gateMode() && i() === 0 }}
 							onClick={() => choose(s)}
 							title={`${s.name ?? s.id}\n${s.cwd || "(no cwd)"}\n${new Date(s.modifiedAt).toLocaleString()}`}
 						>
-							<span class="picker-label resume-modal-name">{s.name ?? s.id.slice(0, 8)}</span>
+							<span class="picker-label session-picker-name">{s.name ?? s.id.slice(0, 8)}</span>
 							<Show when={s.path === state.sessionFile}>
 								<span class="picker-chip">current</span>
 							</Show>

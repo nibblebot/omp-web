@@ -32,8 +32,8 @@ import type { VoiceUnavailableReason } from "#lib/wire/voice";
  * disposal lives in ../../store/voice; this component never touches
  * getUserMedia, MediaStream, or AudioContext directly.
  *
- * Deliberately NOT registered in overlays/index.ts or the modal system:
- * embed it next to the composer or in a settings surface.
+ * Mounted by ModalHost's `voice` modal: a centered Modal wraps this component,
+ * which owns no overlay chrome of its own.
  */
 
 const REMEDIATION: Record<VoiceUnavailableReason, string> = {

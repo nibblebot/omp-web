@@ -8,7 +8,7 @@ import { Modal } from "../ui/Modal";
 
 // Danger-confirm dialog (P1 hardening): replaces the native window.confirm
 // guard on /fresh with the app's own Modal chrome. The
-// dialog self-mounts (rendered once from App.tsx, like AskDialog/BtwPanel)
+// dialog self-mounts (rendered once from App.tsx, like AskDialog/BtwSheet)
 // and renders nothing while no confirm is pending. The confirm state and
 // actions live in src/danger-confirm.ts (no solid-js/web) so pure modules
 // like commands.ts can drive them; this file owns the Portal/rendering only.

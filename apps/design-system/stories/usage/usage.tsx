@@ -1,5 +1,5 @@
-import { SessionStatsModal } from "../../../web/components/usage/SessionStatsModal";
-import { UsageLimitsModal } from "../../../web/components/usage/UsageLimitsModal";
+import { SessionStatsDialog } from "../../../web/components/usage/SessionStatsDialog";
+import { UsageLimitsDialog } from "../../../web/components/usage/UsageLimitsDialog";
 import { contextBreakdown, sessionStatsSummary } from "../../fixtures/overlays";
 import { rosterUsageReports } from "../../fixtures/roster";
 import { answerCalls } from "../../daemon";
@@ -9,11 +9,11 @@ const pending = () => Promise.withResolvers<unknown>().promise;
 
 export default [
 	defineStory({
-		id: "usage-session-stats-modal",
-		title: "SessionStatsModal",
+		id: "usage-session-stats-dialog",
+		title: "SessionStatsDialog",
 		component: {
-			file: "apps/web/components/usage/SessionStatsModal.tsx",
-			export: "SessionStatsModal",
+			file: "apps/web/components/usage/SessionStatsDialog.tsx",
+			export: "SessionStatsDialog",
 		},
 		tabs: true,
 		seed: { currentSessionId: "sess_09a41c", autoCompactionEnabled: true },
@@ -26,7 +26,7 @@ export default [
 						getSessionStats: () => sessionStatsSummary,
 						getContextBreakdown: () => contextBreakdown,
 					}),
-				render: () => <SessionStatsModal onClose={() => undefined} />,
+				render: () => <SessionStatsDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Breakdown unavailable",
@@ -38,7 +38,7 @@ export default [
 							throw new Error("context breakdown unavailable");
 						},
 					}),
-				render: () => <SessionStatsModal onClose={() => undefined} />,
+				render: () => <SessionStatsDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Loading",
@@ -47,16 +47,16 @@ export default [
 						getSessionStats: pending,
 						getContextBreakdown: pending,
 					}),
-				render: () => <SessionStatsModal onClose={() => undefined} />,
+				render: () => <SessionStatsDialog onClose={() => undefined} />,
 			},
 		],
 	}),
 	defineStory({
-		id: "usage-limits-modal",
-		title: "UsageLimitsModal",
+		id: "usage-limits-dialog",
+		title: "UsageLimitsDialog",
 		component: {
-			file: "apps/web/components/usage/UsageLimitsModal.tsx",
-			export: "UsageLimitsModal",
+			file: "apps/web/components/usage/UsageLimitsDialog.tsx",
+			export: "UsageLimitsDialog",
 		},
 		tabs: true,
 		variants: [
@@ -67,12 +67,12 @@ export default [
 					answerCalls({
 						fetchUsageReports: () => rosterUsageReports,
 					}),
-				render: () => <UsageLimitsModal onClose={() => undefined} />,
+				render: () => <UsageLimitsDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Loading",
 				seed: () => answerCalls({ fetchUsageReports: pending }),
-				render: () => <UsageLimitsModal onClose={() => undefined} />,
+				render: () => <UsageLimitsDialog onClose={() => undefined} />,
 			},
 			{
 				name: "Fetch failed",
@@ -82,12 +82,12 @@ export default [
 							throw new Error("Usage endpoint returned 503");
 						},
 					}),
-				render: () => <UsageLimitsModal onClose={() => undefined} />,
+				render: () => <UsageLimitsDialog onClose={() => undefined} />,
 			},
 			{
 				name: "No reports",
 				seed: () => answerCalls({ fetchUsageReports: () => [] }),
-				render: () => <UsageLimitsModal onClose={() => undefined} />,
+				render: () => <UsageLimitsDialog onClose={() => undefined} />,
 			},
 		],
 	}),

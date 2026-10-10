@@ -204,11 +204,10 @@
 	border-radius: var(--r-lg);
 	background: var(--bg);
 }
-/* Modal and ImageThumbnails portal to <body> with position: fixed, exactly as in
- * production. Start them past the showcase nav so it stays usable while an
+/* Modal (including the lightbox variant) portals to <body> with position: fixed, exactly
+ * as in production. Start them past the showcase nav so it stays usable while an
  * overlay story is open. */
-body > div:not(#root) > .modal-backdrop,
-body > div:not(#root) > .img-overlay {
+body > div:not(#root) > .modal-backdrop {
 	left: var(--sidebar-w);
 }
 /* Frame for full-screen and fixed-position components (screens, sidebars,

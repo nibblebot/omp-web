@@ -117,7 +117,7 @@ Clearing the timer in the settle path removes the leak. A test that resolves the
 
 ## 3. Stale answers after a panel unmounts
 
-\`GitPanel\` and \`TodoBoard\` both start a refresh in \`onMount\`. If the user leaves the panel before the answer arrives, the store still writes the result into the shared signal. The store already tracks a generation counter for composer inserts; the same counter should guard the refresh path.
+\`GitPanel\` and \`TodoPanel\` both start a refresh in \`onMount\`. If the user leaves the panel before the answer arrives, the store still writes the result into the shared signal. The store already tracks a generation counter for composer inserts; the same counter should guard the refresh path.
 
 | Path | Writes after unmount | Guarded today |
 | --- | --- | --- |

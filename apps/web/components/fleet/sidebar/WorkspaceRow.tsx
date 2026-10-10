@@ -19,6 +19,7 @@ import { unreadIds } from "../../../fleet-ui/unread";
 import {
 	attachSession,
 	call,
+	openDaemonDetails,
 	removeDaemonById,
 	requestDaemonSessions,
 	resumeDaemonSession,
@@ -41,7 +42,6 @@ import {
 	TrashIcon,
 	XIcon,
 } from "../../ui/icons";
-import { DaemonDetailsModal } from "../daemon/DaemonDetailsModal";
 
 // ---------------------------------------------------------------------------
 // One fleet-roster row: status dot, branch/project chips, git diffstat, and a
@@ -135,7 +135,6 @@ export const WorkspaceRow: Component<{
 	 *  the main worktree and distills to the root profile. */
 	inProjectGroup?: boolean;
 }> = (props) => {
-	const [detailOpen, setDetailOpen] = createSignal(false);
 	const d = () => props.daemon as RosterEntry;
 
 	// Per-row id-scoped reads: the module signals (menuOpenId/activatingIds)
@@ -477,7 +476,7 @@ export const WorkspaceRow: Component<{
 								class="sidebar-menu-item"
 								onClick={() => {
 									setMenuOpenId(null);
-									setDetailOpen(true);
+									openDaemonDetails(d().daemonId);
 								}}
 							>
 								<InfoIcon />
@@ -668,9 +667,6 @@ export const WorkspaceRow: Component<{
 					<DaemonSessionsDropdown daemon={d()} onClose={() => setSessionsOpenId(null)} />
 				</Show>
 			</div>
-			<Show when={detailOpen()}>
-				<DaemonDetailsModal daemon={d()} onClose={() => setDetailOpen(false)} />
-			</Show>
 		</>
 	);
 };

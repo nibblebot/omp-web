@@ -536,7 +536,7 @@ export const grepLongTool: ToolItem = tool(
 			const file = [
 				"chat/SessionConfigBar",
 				"chat/MessageList",
-				"overlays/SessionStatsModal",
+				"overlays/SessionStatsDialog",
 				"fleet-ui/FleetSidebar",
 			][i % 4];
 			return `apps/web/components/${file}.tsx:${12 + i * 7}:\tconst value = () => state.field${i}();`;

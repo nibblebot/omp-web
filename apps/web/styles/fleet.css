@@ -18,9 +18,10 @@
 	display: none;
 }
 /* Narrow viewports: the sidebar stops participating in .app-body layout and
-   becomes a fixed slide-out overlay, because docking it would push the chat
-   column off-screen. Closed state slides off-canvas instead of display:none
-   so the transform transition can run. */
+   becomes a fixed slide-out drawer (layout chrome, not a ModalHost overlay),
+   because docking it would push the chat column off-screen. Closed state
+   slides off-canvas instead of display:none so the transform transition can
+   run. */
 .sidebar-scrim {
 	display: none;
 }
@@ -1058,7 +1059,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	color: var(--muted-2);
 	margin-bottom: var(--space-2);
 }
-/* --- Add-repo modal (AddProjectModal.tsx) --- */
+/* --- Add-repo modal (AddProjectDialog.tsx) --- */
 .project-form {
 	display: flex;
 	flex-direction: column;
@@ -1216,7 +1217,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	margin-bottom: var(--space-4);
 	text-align: left;
 }
-/* --- Add-workspace modal (AddWorkspaceModal.tsx: Worktree/Clone/Add existing) --- */
+/* --- Add-workspace modal (AddWorkspaceDialog.tsx: Worktree/Clone/Add existing) --- */
 .worktree-tabs {
 	display: flex;
 	gap: var(--space-1);

@@ -12,6 +12,8 @@ import {
 	foreignSessionPreviews,
 	resumeCandidates,
 } from "../../fixtures/overlays";
+import { rosterDaemon, rosterFleetState } from "../../fixtures/roster";
+import { chartScreenshot } from "../../fixtures/shared";
 import { defineStory } from "../../registry";
 
 /**
@@ -33,6 +35,27 @@ export default defineStory({
 			render: () => <ModalHost />,
 		},
 		{
+			name: "state.modal: git",
+			description:
+				"A shell-less `*Panel` body: ModalHost wraps GitPanel in a side sheet so Esc, backdrop, and close work.",
+			seed: { modal: "git" },
+			render: () => <ModalHost />,
+		},
+		{
+			name: "Daemon details",
+			description:
+				"`state.daemonDetailsId` names a roster daemon: DaemonDetailsDialog renders while that daemon is in the roster.",
+			seed: { ...rosterFleetState, daemonDetailsId: rosterDaemon.main.daemonId },
+			render: () => <ModalHost />,
+		},
+		{
+			name: "Image lightbox",
+			description:
+				"`state.lightboxImage` set by a thumbnail click: ImageLightbox shows it full size.",
+			seed: { lightboxImage: chartScreenshot },
+			render: () => <ModalHost />,
+		},
+		{
 			name: "Agent ask request",
 			description: "`state.uiRequest` set by an agent ask: AskDialog renders the questions.",
 			seed: () => setState("uiRequest", askUiRequest),
@@ -40,7 +63,7 @@ export default defineStory({
 		},
 		{
 			name: "/btw side question",
-			description: "`state.btw` holds an answered side question: BtwPanel opens as a sheet.",
+			description: "`state.btw` holds an answered side question: BtwSheet opens as a sheet.",
 			seed: { btw: btwAnswered },
 			render: () => <ModalHost />,
 		},

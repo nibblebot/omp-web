@@ -69,7 +69,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const [chipError, setChipError] = createSignal<string | null>(null);
 	const draftKey = () => currentDraftKey();
 
-	// QueueBar dequeue / PromptHistoryModal picks / graph editorText land here.
+	// QueueBar dequeue / PromptHistoryPicker picks / graph editorText land here.
 	createEffect(() => {
 		const insert = promptInsert();
 		if (!insert) return;

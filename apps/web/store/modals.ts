@@ -1,4 +1,4 @@
-import type { ClientCommand } from "#lib/wire/protocol";
+import type { ClientCommand, ImageArg } from "#lib/wire/protocol";
 import { setState, state } from "../state";
 import { isConnected, postCommand } from "./transport";
 
@@ -37,4 +37,22 @@ export function cancelUiRequest(id: string): void {
 	if (state.uiRequest?.id === id) setState("uiRequest", null);
 	if (!isConnected()) return;
 	void postCommand({ type: "ui_response", id } satisfies ClientCommand).catch(() => {});
+}
+
+/** Full-size image overlay (ModalHost mounts ImageLightbox while the slot is set). */
+export function openLightbox(image: ImageArg): void {
+	setState("lightboxImage", image);
+}
+
+export function closeLightbox(): void {
+	setState("lightboxImage", null);
+}
+
+/** Daemon details dialog (ModalHost mounts it while the id resolves to a roster entry). */
+export function openDaemonDetails(daemonId: string): void {
+	setState("daemonDetailsId", daemonId);
+}
+
+export function closeDaemonDetails(): void {
+	setState("daemonDetailsId", null);
 }

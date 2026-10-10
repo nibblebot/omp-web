@@ -85,7 +85,7 @@ let generation = 0;
 let cachedPage: GraphPage | null = null;
 const askProbes = new Map<string, { revision: string; generation: number }>();
 
-/** Prefilter consumed once by SessionGraphModal on mount when a card has no
+/** Prefilter consumed once by SessionGraphDialog on mount when a card has no
  * stable entry ID. Text narrows presentation only; it never selects identity. */
 let branchModalPrefilter: string | null = null;
 

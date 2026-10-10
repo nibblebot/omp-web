@@ -47,6 +47,41 @@
 		border-left: none;
 	}
 }
+/* Lightbox variant: a full-size image on the backdrop scrim, no panel chrome.
+   The box shrinks to the image: clicks on the image hit the box (which stops
+   propagation) and clicks on the scrim close. */
+.modal-backdrop.lightbox {
+	z-index: var(--z-lightbox);
+	cursor: zoom-out;
+}
+.modal.lightbox {
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	box-shadow: none;
+	outline: none;
+	padding: 0;
+	min-width: 0;
+	max-width: none;
+	max-height: none;
+	overflow: visible;
+}
+.modal.lightbox img {
+	display: block;
+	max-width: 92vw;
+	max-height: 92vh;
+	border-radius: var(--r-lg);
+	box-shadow: var(--shadow-2);
+	cursor: default;
+}
+
+/* Review panels mount in a sheet; the sheet body scrolls, not the page. */
+.modal.sheet.review-sheet {
+	overflow-y: auto;
+}
+.modal.sheet.review-sheet > * {
+	flex-shrink: 0;
+}
 .modal-title {
 	margin: 0 0 var(--space-4);
 	font-size: 1rem;
@@ -71,7 +106,7 @@ button.danger-confirm-btn:not(:disabled):hover {
 }
 /* /btw side-panel sheet (Modal sheet variant). Fills the sheet;
    the reply area scrolls internally. */
-.btw-panel {
+.btw-sheet {
 	flex: 1;
 	min-height: 0;
 	display: flex;
@@ -284,7 +319,7 @@ button.picker-row {
 .picker-note:empty {
 	margin-top: 0;
 }
-/* P2 session-graph picker (SessionGraphModal): kind filter chips, per-node detail
+/* P2 session-graph picker (SessionGraphDialog): kind filter chips, per-node detail
  * disclosure, same-file vs new-file actions, ask re-answer form. */
 .graph-filters {
 	display: flex;
@@ -449,22 +484,22 @@ button.picker-row {
 
 /* --- SessionPicker (/resume): fixed width so rows don't size the dialog;
    one-line rows with the title truncating before the right-aligned meta. --- */
-.resume-modal {
+.session-picker {
 	width: min(600px, 92vw);
 }
-.resume-modal-row {
+.session-picker-row {
 	align-items: center;
 }
-.resume-modal-name {
+.session-picker-name {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.resume-modal-row .picker-chip {
+.session-picker-row .picker-chip {
 	flex: none;
 }
-.resume-modal-row .picker-meta {
+.session-picker-row .picker-meta {
 	flex: none;
 }
 

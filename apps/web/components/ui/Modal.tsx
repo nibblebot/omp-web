@@ -2,7 +2,7 @@ import { onCleanup, onMount, type Component, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
 
 // Stable per-instance ids: several modals can be mounted at once (a state.modal
-// picker plus AskDialog/BtwPanel sheets), so a module counter keeps ids unique.
+// picker plus AskDialog/BtwSheet sheets), so a module counter keeps ids unique.
 let modalTitleSeq = 0;
 
 /**
@@ -15,8 +15,8 @@ export const Modal: Component<{
 	ariaLabel?: string;
 	onClose: () => void;
 	class?: string;
-	/** "sheet" anchors the dialog as a full-height right-anchored side sheet. */
-	variant?: "sheet";
+	/** "sheet": full-height right-anchored side sheet. "lightbox": bare full-size image, no panel chrome. */
+	variant?: "sheet" | "lightbox";
 	children: JSX.Element;
 }> = (props) => {
 	let box!: HTMLDivElement;
@@ -65,12 +65,12 @@ export const Modal: Component<{
 		<Portal>
 			<div
 				class="modal-backdrop"
-				classList={{ sheet: props.variant === "sheet" }}
+				classList={{ sheet: props.variant === "sheet", lightbox: props.variant === "lightbox" }}
 				onClick={props.onClose}
 			>
 				<div
 					class={props.class ? `modal ${props.class}` : "modal"}
-					classList={{ sheet: props.variant === "sheet" }}
+					classList={{ sheet: props.variant === "sheet", lightbox: props.variant === "lightbox" }}
 					role="dialog"
 					aria-modal="true"
 					aria-labelledby={props.title ? titleId : undefined}

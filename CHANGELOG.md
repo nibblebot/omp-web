@@ -27,6 +27,8 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 ### Fixes
 - Slash/`@` autocomplete: the popup renders every match (it rendered only the first twelve, so the mouse wheel could not reach later commands, and arrowing past row twelve appended rows without scrolling, hiding the selection); keyboard moves scroll the selection into view, and pointer selection follows mouse movement only, so wheel-scrolling rows under a still pointer no longer changes the selection.
 - `/resume` dialog: one titled header instead of "History" plus a "Resume from disk" label, fixed-width one-line rows whose titles truncate before a right-aligned `N msgs · 2h ago` column, a `current` marker on the attached session, and the always-identical project cwd and full timestamp moved to the row tooltip (the filter now matches titles only).
+- Git review, plan review, annotations, todos, and voice open in a closable sheet or dialog (they rendered bare, in page flow, with no Esc, backdrop, or close). Every summonable surface now has an opener: `/mcp`, `/skills`, and `/todo` open their dialogs when bare and forward arguments to the agent; `/git`, `/plan-review`, `/annotations`, `/voice`, `/compaction`, and `/btw-history` open theirs.
+- Daemon details and the image lightbox are store-driven overlays mounted by `ModalHost`, so global shortcuts and session resets see them; the daemon details dialog closes when its daemon leaves the roster, and the lightbox reuses the shared `Modal` focus trap instead of a copy.
 
 ### Maintenance & other
 - Move application source to `apps/{cli,fleet,session,web}`, shared libraries to `lib/*`, cross-app E2E to `e2e/`, and tooling tests to `scripts/test/`; enforce the closed `lib/` import boundary in lint.
@@ -35,6 +37,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.8.6.
 - Fleet lifecycle output: a wake prints two lines (`respawn --resume template=…`, then `ready <endpoint> pid <n>`) instead of seven; the event ring drops the sub-second spawning/connecting/session/resolving ladder steps and the separate endpoint line, a stop is one `stop (exit …)` line, and `bun run dev` no longer doubles the `fleet:` prefix.
 - Migrate live settings to SDK registry handles and provider authentication to the namespaced OAuth login and effective credential-source APIs, preserving settings scope and browser login dialogs.
+- Overlay taxonomy: `Modal` names only the `ui/Modal.tsx` primitive; components carry role suffixes (`*Dialog` centered, `*Sheet` side sheet, `*Lightbox`, `*Picker`, shell-less `*Panel`), with matching CSS class renames. The narrow-viewport sidebar scrim moved from `App.tsx` into `FleetSidebar`. See AGENTS.md.
 
 ### Bug fixes
 - Keep streaming active and completion markers unset through non-yielded `agent_end` events; mark a turn complete only when the agent yields.

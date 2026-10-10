@@ -2,7 +2,7 @@ import { fetchFsBrowse, type FsBrowseDir, type FsBrowseResult } from "../store/p
 
 /**
  * Browse-state module behind the onboarding directory pickers
- * (DirectoryPicker.tsx, embedded by AddProjectModal / AddWorkspaceModal). Pure logic,
+ * (DirectoryPicker.tsx, embedded by AddProjectDialog / AddWorkspaceDialog). Pure logic,
  * no JSX, no Solid: the component subscribes and re-renders off snapshots.
  * All fetching goes through fetchFsBrowse (GET /ctl/fs/browse on the fleet
  * edge); `~`/`~/…` are passed through verbatim and expanded server-side.

@@ -17,7 +17,7 @@
 //
 // WIRING NOTE (for the integrator): this module is intentionally NOT
 // registered in overlays/index or App. To mount the surface, render
-// BtwHistoryModal from components/sessions/BtwHistoryModal.tsx and call
+// BtwHistorySheet from components/sessions/BtwHistorySheet.tsx and call
 // rediscoverBtwHistory() on attach/ready (new connections re-list saved side
 // sessions) — state.ts owns the mux, so the re-list hook lives with the
 // attach settle, not here. Streaming turns poll btwList until the call

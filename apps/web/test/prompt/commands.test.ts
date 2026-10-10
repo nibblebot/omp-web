@@ -141,6 +141,24 @@ describe("LOCAL_COMMANDS table", () => {
 	});
 });
 
+describe("modal openers", () => {
+	test("bare /mcp opens the MCP modal", () => {
+		setState("modal", null);
+		LOCAL_COMMANDS.mcp("");
+		expect(state.modal).toBe("mcp");
+	});
+	test("/todo opens the todos modal", () => {
+		setState("modal", null);
+		LOCAL_COMMANDS.todo("");
+		expect(state.modal).toBe("todos");
+	});
+	test("/git rejects arguments and leaves the modal closed", () => {
+		setState("modal", null);
+		LOCAL_COMMANDS.git("x");
+		expect(state.modal).toBeNull();
+	});
+});
+
 describe("session command parsing", () => {
 	test("/rename with a title renames directly, no LLM round-trip", () => {
 		expect(renameDispatch("My Session")).toEqual({ method: "setSessionName", title: "My Session" });

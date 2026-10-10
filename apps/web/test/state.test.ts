@@ -216,6 +216,8 @@ beforeEach(() => {
 		workspaceModalProjectId: null,
 		deleteWorkspaceTarget: null,
 		removeProjectTarget: null,
+		lightboxImage: null,
+		daemonDetailsId: null,
 		modal: null,
 		// Top-level view mode + its UI flags (setView / setTxSidebarVisible /
 		// workUnviewed); reset for isolation.

@@ -10,6 +10,7 @@ import {
 	setState,
 	state,
 	type BashResultLike,
+	type ModalName,
 } from "../state";
 
 export type InputMode = "enter" | "followup";
@@ -370,6 +371,28 @@ function dumpSession(): void {
 	})();
 }
 
+/** Bare `/name` opens its dialog; arguments follow the SDK's subcommand grammar, so they are forwarded to the agent verbatim. */
+function openOrForward(modal: ModalName, name: string): (args: string) => void {
+	return (args) => {
+		const text = args.trim();
+		if (text) void call("prompt", [`/${name} ${text}`]).catch(showError);
+		else setState("modal", modal);
+	};
+}
+
+/** Bare `/name` opens its dialog. Arguments (e.g. the SDK's `/git [revision]`)
+ *  belong to the terminal UI, whose output never reaches the browser. */
+function openModal(modal: ModalName): (args: string) => void {
+	return (args) => {
+		if (args.trim())
+			pushNotice(
+				"error",
+				`/${modal} arguments are terminal-only; type /${modal} alone to open it in the browser.`,
+			);
+		else setState("modal", modal);
+	};
+}
+
 /**
  * Web-local slash commands: TUI-only commands that have session-method
  * equivalents (or web-native displays). Anything not in this table is sent to the agent
@@ -479,6 +502,16 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	// (see goalDispatch/planDispatch).
 	goal: goalRouteArgs,
 	plan: planToggle,
+	// Modal openers: bare names open the dialog (see openOrForward/openModal).
+	mcp: openOrForward("mcp", "mcp"),
+	skills: openOrForward("skills", "skills"),
+	todo: openOrForward("todos", "todo"),
+	git: openModal("git"),
+	"plan-review": openModal("plan-review"),
+	annotations: openModal("annotations"),
+	voice: openModal("voice"),
+	compaction: openModal("compaction"),
+	"btw-history": openModal("btw-history"),
 	queue: (args) => {
 		const msg = args.trim();
 		if (!msg) return;

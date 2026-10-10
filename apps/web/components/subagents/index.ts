@@ -1,5 +1,5 @@
 export { ActiveSubagents } from "./ActiveSubagents";
-export { SubagentHub } from "./SubagentHub";
+export { SubagentsDialog } from "./SubagentsDialog";
 export { SubagentFocus } from "./SubagentFocus";
 export { SubagentInspector } from "./SubagentInspector";
 export type { SubagentInspectorTab } from "./SubagentInspector";
