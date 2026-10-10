@@ -84,7 +84,7 @@ describe("pairToolCalls", () => {
 		expect(call!.startedAt).toBe(CALL_START_MS);
 		expect(call!.hasResult).toBe(true);
 		expect(call!.hasCall).toBe(true);
-		// The result is nested under its call card (EntryRow hides it standalone).
+		// The result is nested under its call card (TranscriptEntryRow hides it standalone).
 		expect(results.get("call-a")?.map((r) => r.id)).toEqual(["res-a"]);
 	});
 
@@ -115,7 +115,7 @@ describe("pairToolCalls", () => {
 		const { calls } = pairToolCalls([toolResult("res-c", "call-c", "early")]);
 		const call = calls.get("call-c")!;
 		expect(call.hasResult).toBe(true);
-		expect(call.hasCall).toBe(false); // EntryRow keeps the standalone row
+		expect(call.hasCall).toBe(false); // TranscriptEntryRow keeps the standalone row
 	});
 
 	test("results are collected per toolCallId and hasResult flips once a result exists", () => {

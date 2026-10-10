@@ -331,7 +331,7 @@ pre.terminal {
 	padding: 1px var(--space-3);
 	font-size: var(--fs-sm);
 }
-/* Worker hub modal (SubagentPanel.tsx): wider than the default picker so a
+/* Worker hub modal (SubagentHub.tsx): wider than the default picker so a
    row fits name, type, description, status, model, time, and steer controls. */
 .modal.subagent-hub {
 	width: min(860px, 94vw);
@@ -377,7 +377,7 @@ pre.terminal {
 .subagent-hub-toolbar select {
 	max-width: 14em;
 }
-/* Focused worker header (WorkerFocus.tsx): wraps instead of squeezing the
+/* Focused worker header (SubagentFocus.tsx): wraps instead of squeezing the
    back button; follow/pin sit at the right edge when they fit. */
 .subagent-focus-header {
 	display: flex;

@@ -1653,7 +1653,7 @@
 }
 
 /* ---------- fleet log-store surface (P8.5/P8.6) ---------- */
-/* StoredList lives beneath TranscriptList in the sidebar: the local list
+/* StoredSessionList lives beneath TranscriptList in the sidebar: the local list
    (.sidebar-inner, flex:1 1 0) is the flexible upper region that scrolls
    internally; this section is the capped (45%) lower region whose own
    .stored-list scrolls. Both coexist in the sidebar column. */

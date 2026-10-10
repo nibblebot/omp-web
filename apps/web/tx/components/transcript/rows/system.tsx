@@ -6,7 +6,7 @@
  */
 import { For, Show } from "solid-js";
 import type { RawEntry } from "../../../api";
-import { Markdown } from "../../../../components/shared/Markdown";
+import { Markdown } from "../../../../components/ui/Markdown";
 import {
 	compactionSummaryOf,
 	customEntryOf,
@@ -20,7 +20,7 @@ import {
 	ttsrInjectionOf,
 } from "../../../util/entries";
 import { formatCompact, formatDateTime, formatMs } from "../../../util/format";
-import { DataKv, GenericSysRow, Kv, SysCard, ToggleDetails, prettyJson } from "./shared";
+import { DataKeyValue, SystemRow, KeyValue, SystemCard, ToggleDetails, prettyJson } from "./shared";
 
 /** CSS modifier class per note severity; unknown severities fall back to muted. */
 const NOTE_SEV_CLASS: Record<string, string> = {
@@ -33,27 +33,27 @@ const NOTE_SEV_CLASS: Record<string, string> = {
 	success: "ok",
 };
 
-export function SessionHeader(props: { entry: RawEntry }) {
+export function SessionHeaderRow(props: { entry: RawEntry }) {
 	const h = sessionHeaderOf(props.entry);
 	return (
-		<SysCard entry={props.entry} label="session">
+		<SystemCard entry={props.entry} label="session">
 			<Show when={h !== null}>
 				<>
-					<Kv k="title" v={h?.title} />
-					<Kv k="id" v={h?.id} />
-					<Kv k="cwd" v={h?.cwd} />
-					<Kv k="version" v={h?.version} />
-					<Kv k="titleSource" v={h?.titleSource} />
+					<KeyValue k="title" v={h?.title} />
+					<KeyValue k="id" v={h?.id} />
+					<KeyValue k="cwd" v={h?.cwd} />
+					<KeyValue k="version" v={h?.version} />
+					<KeyValue k="titleSource" v={h?.titleSource} />
 				</>
 			</Show>
-		</SysCard>
+		</SystemCard>
 	);
 }
 
 export function SessionInitRow(props: { entry: RawEntry }) {
 	const s = sessionInitOf(props.entry);
 	return (
-		<SysCard entry={props.entry} label="session_init">
+		<SystemCard entry={props.entry} label="session_init">
 			<Show when={s !== null}>
 				<>
 					<div class="sys-summary">
@@ -111,21 +111,21 @@ export function SessionInitRow(props: { entry: RawEntry }) {
 						</ToggleDetails>
 					</Show>
 					<Show when={s?.spawns !== undefined && s?.spawns !== null}>
-						<Kv k="spawns" v={s?.spawns} />
+						<KeyValue k="spawns" v={s?.spawns} />
 					</Show>
 					<Show when={s?.readSummarize !== undefined && s?.readSummarize !== null}>
-						<Kv k="readSummarize" v={s?.readSummarize} />
+						<KeyValue k="readSummarize" v={s?.readSummarize} />
 					</Show>
 				</>
 			</Show>
-		</SysCard>
+		</SystemCard>
 	);
 }
 
 export function ModeChangeRow(props: { entry: RawEntry }) {
 	const m = modeChangeOf(props.entry);
 	return (
-		<SysCard entry={props.entry} label="mode_change">
+		<SystemCard entry={props.entry} label="mode_change">
 			<Show when={m !== null}>
 				<>
 					<div class="sys-summary">
@@ -133,19 +133,19 @@ export function ModeChangeRow(props: { entry: RawEntry }) {
 					</div>
 					<Show when={m?.data !== null}>
 						<For each={Object.entries(m?.data ?? {})}>
-							{([k, v]) => <DataKv k={k} v={v} entry={props.entry} />}
+							{([k, v]) => <DataKeyValue k={k} v={v} entry={props.entry} />}
 						</For>
 					</Show>
 				</>
 			</Show>
-		</SysCard>
+		</SystemCard>
 	);
 }
 
 export function TitleChangeRow(props: { entry: RawEntry }) {
 	const t = titleChangeOf(props.entry);
 	return (
-		<SysCard entry={props.entry} label="title_change">
+		<SystemCard entry={props.entry} label="title_change">
 			<Show when={t !== null}>
 				<>
 					<div class="title-flow">
@@ -167,27 +167,27 @@ export function TitleChangeRow(props: { entry: RawEntry }) {
 					</div>
 				</>
 			</Show>
-		</SysCard>
+		</SystemCard>
 	);
 }
 
 export function TtsrInjectionRow(props: { entry: RawEntry }) {
 	const rules = ttsrInjectionOf(props.entry);
 	return (
-		<SysCard entry={props.entry} label="ttsr_injection">
+		<SystemCard entry={props.entry} label="ttsr_injection">
 			<Show when={rules !== null}>
 				<div class="chip-row">
 					<For each={rules ?? []}>{(r) => <span class="mini-chip">{r}</span>}</For>
 				</div>
 			</Show>
-		</SysCard>
+		</SystemCard>
 	);
 }
 
 export function CompactionRow(props: { entry: RawEntry }) {
 	const s = compactionSummaryOf(props.entry);
 	return (
-		<SysCard entry={props.entry} label="compaction">
+		<SystemCard entry={props.entry} label="compaction">
 			<Show when={s !== null && s !== ""}>
 				<ToggleDetails
 					entry={props.entry}
@@ -198,7 +198,7 @@ export function CompactionRow(props: { entry: RawEntry }) {
 					<pre>{s}</pre>
 				</ToggleDetails>
 			</Show>
-		</SysCard>
+		</SystemCard>
 	);
 }
 
@@ -206,7 +206,7 @@ export function CustomMessageRow(props: { entry: RawEntry }) {
 	const c = customMessageOf(props.entry);
 	const content = typeof c?.content === "string" ? c.content : "";
 	return (
-		<SysCard entry={props.entry} label="custom_message">
+		<SystemCard entry={props.entry} label="custom_message">
 			<Show when={c !== null}>
 				<>
 					<div class="sys-summary">
@@ -241,20 +241,20 @@ export function CustomMessageRow(props: { entry: RawEntry }) {
 					</Show>
 				</>
 			</Show>
-		</SysCard>
+		</SystemCard>
 	);
 }
 
 /** `custom` entry dispatch; tool_execution_start is pairing metadata, invisible. */
 export function CustomRow(props: { entry: RawEntry }) {
 	const c = customEntryOf(props.entry);
-	if (c === null) return <GenericSysRow entry={props.entry} label="custom" />;
+	if (c === null) return <SystemRow entry={props.entry} label="custom" />;
 	if (c.customType === "tool_execution_start") return null;
 	if (c.customType === "session_exit") return <SessionExitRow entry={props.entry} data={c.data} />;
 	if (c.customType === "goal-completed")
 		return <GoalCompletedRow entry={props.entry} data={c.data} />;
 	return (
-		<SysCard
+		<SystemCard
 			entry={props.entry}
 			label={c.customType !== "" ? `custom · ${c.customType}` : "custom"}
 		>
@@ -268,7 +268,7 @@ export function CustomRow(props: { entry: RawEntry }) {
 					<pre>{prettyJson(c.data)}</pre>
 				</ToggleDetails>
 			</Show>
-		</SysCard>
+		</SystemCard>
 	);
 }
 
@@ -279,7 +279,7 @@ export function SessionExitRow(props: { entry: RawEntry; data: Record<string, un
 	const recorded = str(d.recordedAt);
 	const recordedTs = recorded !== "" ? Date.parse(recorded) : NaN;
 	return (
-		<SysCard entry={props.entry} label="session_exit">
+		<SystemCard entry={props.entry} label="session_exit">
 			<div class="sys-summary">
 				<Show when={kind !== ""}>
 					<span class="tx-badge">{kind}</span>
@@ -291,7 +291,7 @@ export function SessionExitRow(props: { entry: RawEntry; data: Record<string, un
 					<span class="meta-time">{formatDateTime(recordedTs)}</span>
 				</Show>
 			</div>
-		</SysCard>
+		</SystemCard>
 	);
 }
 
@@ -302,7 +302,7 @@ export function GoalCompletedRow(props: { entry: RawEntry; data: Record<string, 
 	const durationMs = seconds !== null ? seconds * 1000 : null;
 	const tokens = num(d.tokensUsed);
 	return (
-		<SysCard entry={props.entry} label="goal-completed">
+		<SystemCard entry={props.entry} label="goal-completed">
 			<Show when={objective !== ""}>
 				<div class="tx-goal-objective">{objective}</div>
 			</Show>
@@ -314,6 +314,6 @@ export function GoalCompletedRow(props: { entry: RawEntry; data: Record<string, 
 					<span class="tx-badge">{formatCompact(tokens)} tokens</span>
 				</Show>
 			</div>
-		</SysCard>
+		</SystemCard>
 	);
 }

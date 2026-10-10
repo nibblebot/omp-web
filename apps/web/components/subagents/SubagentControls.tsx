@@ -1,6 +1,6 @@
 import { createSignal, type Component } from "solid-js";
 import { abortSubagent, pushNotice, steerSubagent, type SubagentInfo } from "../../state";
-import { ConfirmButton } from "../shared/ConfirmButton";
+import { ConfirmButton } from "../ui/ConfirmButton";
 
 /** Steer/abort controls for a running subagent row; hidden for finished/idle/parked agents. */
 export const SubagentControls: Component<{ sub: SubagentInfo }> = (props) => {

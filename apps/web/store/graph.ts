@@ -1,6 +1,6 @@
 import type { ImageArg } from "#lib/wire/protocol";
 import { call, pushNotice, setPromptInsert, setState, state } from "../state";
-import type { AskOption, AskQuestion } from "../components/overlays/ask-dialog/types";
+import type { AskOption, AskQuestion } from "../prompt/ask-types";
 import { stashUnsent } from "./drafts";
 import { invalidateMentions } from "./models";
 
@@ -85,7 +85,7 @@ let generation = 0;
 let cachedPage: GraphPage | null = null;
 const askProbes = new Map<string, { revision: string; generation: number }>();
 
-/** Prefilter consumed once by BranchModal on mount when a card has no
+/** Prefilter consumed once by SessionGraphModal on mount when a card has no
  * stable entry ID. Text narrows presentation only; it never selects identity. */
 let branchModalPrefilter: string | null = null;
 

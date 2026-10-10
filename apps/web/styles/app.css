@@ -161,7 +161,7 @@
 	min-height: 0;
 }
 /* Analysis keep-alive host (App.tsx): transparent in the flex row while
-   visible, display:none while in Work; TxBrowser stays mounted so the
+   visible, display:none while in Work; TranscriptBrowser stays mounted so the
    transcript sidebar's list/scroll/search/selection survive mode switches. */
 .tx-keepalive {
 	display: contents;

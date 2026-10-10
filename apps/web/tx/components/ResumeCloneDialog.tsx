@@ -14,12 +14,12 @@
  * session's detail preselected that session.
  */
 import { Show, createEffect, createResource, createSignal, For } from "solid-js";
-import { Modal } from "../../components/shared/Modal";
+import { Modal } from "../../components/ui/Modal";
 import { api, ApiError, type StoredSessionSummary, type StoredWorkspaceSummary } from "../api";
 import { state, setView } from "../../state";
 
 // ---------------------------------------------------------------------------
-// Module-level open state (self-mounting dialog, rendered from TxBrowser).
+// Module-level open state (self-mounting dialog, rendered from TranscriptBrowser).
 // ---------------------------------------------------------------------------
 
 interface ResumeTarget {

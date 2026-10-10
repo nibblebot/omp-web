@@ -1,6 +1,6 @@
 import { createResource, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
 import { call, pushNotice } from "../../state";
-import { ConfirmButton } from "../shared/ConfirmButton";
+import { ConfirmButton } from "../ui/ConfirmButton";
 
 /**
  * Advisor panel: config/status/transcript for the SDK advisor runtime.

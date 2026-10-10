@@ -1,61 +1,19 @@
 import { createEffect, createSignal, onMount, Show, type Component } from "solid-js";
-import { characterForModel } from "./sprites/characters";
-import { PanelLeftIcon } from "./components/shared/icons";
-import { CharacterAvatar, Modal } from "./components/shared";
+import { FleetRequiredNotice } from "./components/app/FleetRequiredNotice";
+import { NoActiveSessionPane } from "./components/app/NoActiveSessionPane";
 import {
 	MessageList,
 	PromptBox,
 	QueueBar,
-	SessionBar,
-	SessionHeader,
+	SessionConfigBar,
+	SessionTitle,
 	StatusBar,
 } from "./components/chat";
-import {
-	ActiveSubagents,
-	AdvisorPanel,
-	GoalLoopPanel,
-	SubagentPanel,
-	WorkerFocus,
-} from "./components/subagents";
-import {
-	ActiveDaemons,
-	AddProjectModal,
-	DaemonSidebar,
-	DeleteWorkspaceDialog,
-	RemoveProjectDialog,
-	WorkspaceModal,
-} from "./components/roster";
-import { FleetRequiredNotice } from "./components/FleetRequiredNotice";
-import { SignInModal } from "./components/SignInModal";
-import {
-	AskDialog,
-	BranchModal,
-	BrowserUiRenderer,
-	BtwHistoryView,
-	BtwPanel,
-	CompactionControls,
-	DangerConfirmDialog,
-	DebugModal,
-	DownloadDialog,
-	GoalModal,
-	HistoryModal,
-	LoginModal,
-	McpManager,
-	ModelModal,
-	ResumePicker,
-	SessionModal,
-	SettingsModal,
-	SkillsManager,
-	StatsModal,
-	ThinkingModal,
-	Toasts,
-	UsageModal,
-	VoiceControls,
-} from "./components/overlays";
-import { GitPanel } from "./components/review/GitPanel";
-import { PlanReview } from "./components/review/PlanReview";
-import { AnnotationSidebar } from "./components/review/AnnotationSidebar";
-import { TodoBoard } from "./components/review/TodoBoard";
+import { EmptyTranscript } from "./components/chat/transcript/EmptyTranscript";
+import { ActiveDaemons, FleetSidebar } from "./components/fleet";
+import { ActiveSubagents } from "./components/subagents";
+import { PanelLeftIcon } from "./components/ui/icons";
+import { ModalHost } from "./ModalHost";
 import {
 	bootAuth,
 	connect,
@@ -68,58 +26,10 @@ import {
 	toggleSidebar,
 } from "./state";
 import { initTheme } from "./prefs/theme";
-import { TxBrowser } from "./tx/Browser";
+import { TranscriptBrowser } from "./tx/TranscriptBrowser";
 
 // Apply persisted theme/font-size before first render to avoid a dark flash.
 initTheme();
-
-const SHORTCUTS: Array<[string, string]> = [
-	["Enter", "Send (steers while the agent is streaming)"],
-	["Ctrl+Enter", "Queue as follow-up"],
-	["Shift+Enter", "Newline"],
-	["Esc", "Abort the running turn"],
-	["Esc Esc", "Branch picker (empty prompt)"],
-	["Ctrl+R", "Fuzzy-search prompt history"],
-	["Ctrl+O", "Expand all tool outputs"],
-	["Alt+↑", "Pop last queued message into the prompt"],
-	["-> / => msg", "Queue as steer / follow-up"],
-	["↑ / ↓", "Prompt history (caret on first/last line)"],
-	["/ …", "Slash commands (Tab completes)"],
-	["@ …", "File mentions (Tab completes)"],
-	["! cmd", "Run shell command, output into context"],
-	["!! cmd", "Run shell command, output local only (dimmed)"],
-];
-
-/** Empty-transcript state: large character sprite and a one-line greeting.
- *  Held blank until the loaded transcript's state frame lands (modelSynced):
- *  history primes before state, so rendering earlier would flash the
- *  previous session's (or the fallback) character. */
-const EmptyState: Component = () => (
-	<div class="empty-state">
-		<Show when={state.modelSynced}>
-			<CharacterAvatar
-				provider={state.model?.provider}
-				id={state.model?.id}
-				pose="happy"
-				size={96}
-			/>
-			<p class="empty-greeting">
-				{characterForModel(state.model?.provider, state.model?.id).name} is ready. What should we
-				work on?
-			</p>
-		</Show>
-	</div>
-);
-
-/** No live session (the attached daemon was stopped,
- *  removed, or never picked): a quiet centered hint replaces the whole chat
- *  column. Header/stream/composer all belong to a session that is gone. */
-const NoActiveSessionPane: Component = () => (
-	<div class="roster-empty-pane">
-		<p class="roster-empty-title">No active session</p>
-		<p class="roster-empty-hint">Pick a daemon from the sidebar to start a session.</p>
-	</div>
-);
 
 export const App: Component = () => {
 	onMount(() => {
@@ -145,7 +55,7 @@ export const App: Component = () => {
 		});
 	});
 	// Sticky Analysis keep-alive flag: the first entry into Analysis mounts
-	// TxBrowser; later Work/Analysis swaps only toggle its host's display.
+	// TranscriptBrowser; later Work/Analysis swaps only toggle its host's display.
 	const [analysisOpened, setAnalysisOpened] = createSignal(false);
 	createEffect(() => {
 		if (state.view === "analysis") setAnalysisOpened(true);
@@ -187,9 +97,9 @@ export const App: Component = () => {
 				<div class="app-body">
 					{/* Work view: the docked roster sidebar. Mounted only in Work;
 					    the two-pane swap with Analysis brings its own transcript
-					    sidebar inside TxBrowser. First child so it docks LEFT. */}
+					    sidebar inside TranscriptBrowser. First child so it docks LEFT. */}
 					<Show when={state.view === "work"}>
-						<DaemonSidebar />
+						<FleetSidebar />
 						{/* Narrow-viewport slide-out: tapping outside the overlay sidebar
 						    closes it. Hidden by CSS on wide layouts, where the sidebar
 						    docks instead of overlaying. */}
@@ -205,13 +115,13 @@ export const App: Component = () => {
 					</Show>
 					{/* Analysis view (/ctl/stats needs a fleet process, so the
 					    fleet-required notice covers a bare daemon): the transcript
-					    sidebar + detail pane. Keep-alive: once opened, TxBrowser
+					    sidebar + detail pane. Keep-alive: once opened, TranscriptBrowser
 					    stays mounted and only hides (display:none), so the sidebar
 					    list, scroll, search, project filter, and selected
 					    transcript all survive view switches. */}
 					<Show when={analysisOpened()}>
 						<div class="tx-keepalive" classList={{ hidden: state.view !== "analysis" }}>
-							<TxBrowser />
+							<TranscriptBrowser />
 						</div>
 					</Show>
 					<Show when={state.view === "work"}>
@@ -222,10 +132,10 @@ export const App: Component = () => {
 							fallback={
 								<main class="app-main">
 									{/* Session identity (name/rename) at the left edge above the stream. */}
-									<SessionHeader />
+									<SessionTitle />
 									<Show
 										when={state.items.length > 0 || state.live.active}
-										fallback={<EmptyState />}
+										fallback={<EmptyTranscript />}
 									>
 										<MessageList />
 									</Show>
@@ -235,7 +145,7 @@ export const App: Component = () => {
 										<ActiveDaemons />
 									</div>
 									{/* Session-send config bar (model/thinking/stats), glued to the composer. */}
-									<SessionBar />
+									<SessionConfigBar />
 									<PromptBox />
 								</main>
 							}
@@ -246,105 +156,7 @@ export const App: Component = () => {
 						</Show>
 					</Show>
 				</div>
-				<Show when={state.modal === "help"}>
-					<Modal title="Shortcuts" onClose={() => setState("modal", null)}>
-						<table class="shortcuts">
-							<tbody>
-								{SHORTCUTS.map(([key, desc]) => (
-									<tr>
-										<td class="shortcut-key">{key}</td>
-										<td>{desc}</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</Modal>
-				</Show>
-				<Show when={state.modal === "model"}>
-					<ModelModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "thinking"}>
-					<ThinkingModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "stats"}>
-					<StatsModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "settings"}>
-					<SettingsModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "subagents"}>
-					<SubagentPanel onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "goal"}>
-					<GoalModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "sessions"}>
-					<SessionModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "branch"}>
-					<BranchModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "history"}>
-					<HistoryModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "login"}>
-					<LoginModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "goal"}>
-					<GoalModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "usage"}>
-					<UsageModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "debug"}>
-					<DebugModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "mcp"}>
-					<McpManager onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "skills"}>
-					<SkillsManager onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "git"}>
-					<GitPanel />
-				</Show>
-				<Show when={state.modal === "plan-review"}>
-					<PlanReview />
-				</Show>
-				<Show when={state.modal === "annotations"}>
-					<AnnotationSidebar />
-				</Show>
-				<Show when={state.modal === "todos"}>
-					<TodoBoard />
-				</Show>
-				<Show when={state.modal === "compaction"}>
-					<CompactionControls onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "btw-history"}>
-					<BtwHistoryView onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "voice"}>
-					<Show
-						when={state.sessionScope}
-						keyed
-						fallback={<div class="msg-notice">Attach a session before using voice.</div>}
-					>
-						{(scope) => <VoiceControls scope={scope} />}
-					</Show>
-				</Show>
-				<Show when={state.modal === "add-project"}>
-					<AddProjectModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "workspace"}>
-					<WorkspaceModal onClose={() => setState("modal", null)} />
-				</Show>
-				<Show when={state.modal === "sign-in"}>
-					<SignInModal onClose={() => setState("modal", null)} />
-				</Show>
-				<DangerConfirmDialog />
-				<DeleteWorkspaceDialog />
-				<RemoveProjectDialog />
-				<Toasts />
+				<ModalHost />
 			</div>
 		</Show>
 	);

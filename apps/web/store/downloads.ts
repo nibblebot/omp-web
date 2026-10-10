@@ -33,7 +33,7 @@
 //     existing { path } plus clientFilename.
 // WIRING NOTE: this module is intentionally NOT registered in state.ts or
 // overlays/index.ts. To mount, render DownloadDialog from
-// components/overlays/DownloadDialog.tsx and call its openDownload() entry.
+// components/requests/DownloadDialog.tsx and call its openDownload() entry.
 
 import { createSignal } from "solid-js";
 import { state } from "../state";

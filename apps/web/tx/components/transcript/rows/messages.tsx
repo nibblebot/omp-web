@@ -23,8 +23,8 @@ import {
 	userText,
 } from "../../../util/entries";
 import { formatCompact, formatCost, formatDateTime, formatMs } from "../../../util/format";
-import { ChevronDownIcon, CornerDownRightIcon } from "../../../../components/shared/icons";
-import { Markdown } from "../../../../components/shared/Markdown";
+import { ChevronDownIcon, CornerDownRightIcon } from "../../../../components/ui/icons";
+import { Markdown } from "../../../../components/ui/Markdown";
 import type { PairingMaps, ToolCallInfo } from "../pairing";
 import { useRowCollapse } from "../collapse";
 import { RawJson, ToggleDetails, prettyJson, rowAriaLabel, scalar } from "./shared";
@@ -32,7 +32,7 @@ import { RawJson, ToggleDetails, prettyJson, rowAriaLabel, scalar } from "./shar
 /** Tool results can be huge (hundreds of KB); cap what we render per card. */
 const MAX_RESULT_CHARS = 10_000;
 
-export function AssistantMsg(props: { entry: RawEntry; pairing: PairingMaps }) {
+export function AssistantMessageRow(props: { entry: RawEntry; pairing: PairingMaps }) {
 	const e = props.entry;
 	const m = messageObj(e);
 	const model = str(m.model);
@@ -108,7 +108,7 @@ export function AssistantMsg(props: { entry: RawEntry; pairing: PairingMaps }) {
 				<RawJson entry={e} />
 			</div>
 			<For each={blocks}>
-				{(b, i) => <Block block={b} pairing={props.pairing} entry={e} idx={i()} />}
+				{(b, i) => <MessageBlock block={b} pairing={props.pairing} entry={e} idx={i()} />}
 			</For>
 			<Show when={usage !== null || ctx !== null || meta?.stopDetails != null}>
 				<ToggleDetails entry={e} purpose="usage" class="usage-details" summary="usage">
@@ -157,7 +157,12 @@ export function AssistantMsg(props: { entry: RawEntry; pairing: PairingMaps }) {
 	);
 }
 
-function Block(props: { block: ContentBlock; pairing: PairingMaps; entry: RawEntry; idx: number }) {
+function MessageBlock(props: {
+	block: ContentBlock;
+	pairing: PairingMaps;
+	entry: RawEntry;
+	idx: number;
+}) {
 	const b = props.block;
 	if (b.type === "text") {
 		const text = str(b.text);
@@ -216,14 +221,14 @@ function ToolCallCard(props: {
 				<pre>{args}</pre>
 			</ToggleDetails>
 			<For each={resultEntries}>
-				{(r) => <ToolResultSub entry={r} startedAt={call?.startedAt ?? null} />}
+				{(r) => <ToolResultSection entry={r} startedAt={call?.startedAt ?? null} />}
 			</For>
 		</div>
 	);
 }
 
 /** Paired toolResult, rendered as a subsection of its tool call card. */
-function ToolResultSub(props: { entry: RawEntry; startedAt: number | null }) {
+function ToolResultSection(props: { entry: RawEntry; startedAt: number | null }) {
 	const e = props.entry;
 	const isErr = toolResultIsError(e);
 	const meta = toolResultMetaOf(e);
@@ -269,7 +274,7 @@ function ToolResultSub(props: { entry: RawEntry; startedAt: number | null }) {
 	);
 }
 
-export function UserMsg(props: { entry: RawEntry }) {
+export function UserMessageRow(props: { entry: RawEntry }) {
 	const e = props.entry;
 	const ts = entryTs(e);
 	const text = userText(e);
@@ -314,7 +319,7 @@ export function UserMsg(props: { entry: RawEntry }) {
 }
 
 /** Standalone toolResult row, rendered only while its call's message isn't loaded. */
-export function ToolResultMsg(props: { entry: RawEntry; calls: Map<string, ToolCallInfo> }) {
+export function ToolResultRow(props: { entry: RawEntry; calls: Map<string, ToolCallInfo> }) {
 	const e = props.entry;
 	const m = messageObj(e);
 	const isErr = toolResultIsError(e);
@@ -386,7 +391,7 @@ export function ToolResultMsg(props: { entry: RawEntry; calls: Map<string, ToolC
 }
 
 /** System-authored developer messages (system reminders etc.), styled system bubble. */
-export function DeveloperMsg(props: { entry: RawEntry }) {
+export function DeveloperMessageRow(props: { entry: RawEntry }) {
 	const e = props.entry;
 	const ts = entryTs(e);
 	const text = contentBlocks(e)
@@ -418,7 +423,7 @@ export function DeveloperMsg(props: { entry: RawEntry }) {
 }
 
 /** File mentions: one collapsible attachment card per file. */
-export function FileMentionMsg(props: { entry: RawEntry }) {
+export function FileMentionRow(props: { entry: RawEntry }) {
 	const e = props.entry;
 	const ts = entryTs(e);
 	const m = messageObj(e);

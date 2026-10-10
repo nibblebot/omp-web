@@ -398,7 +398,7 @@ function flushDeltas(): void {
 		const cut = budget >= d.text.length ? d.text.length : codePointCut(d.text, budget);
 		if (state.live.blocks[index]?.kind !== d.kind) ensureLiveBlock(index, d.kind);
 		// In-place path mutation keeps block identity stable, so <For> does not
-		// recreate LiveBlock components on every frame.
+		// recreate StreamingBlock components on every frame.
 		setState("live", "blocks", index, "text", (text) => text + tabsToSpaces(d.text.slice(0, cut)));
 		wroteLiveText = true;
 		if (cut >= d.text.length) pendingDeltas.delete(index);

@@ -14,7 +14,7 @@ import {
 	systemDetail,
 } from "../../../util/entries";
 import { formatDateTime } from "../../../util/format";
-import { ChevronDownIcon } from "../../../../components/shared/icons";
+import { ChevronDownIcon } from "../../../../components/ui/icons";
 import { RowStateCtx, useRowCollapse } from "../collapse";
 
 /** Stable details key for one <details> inside a row; survives remounts + page appends. */
@@ -83,7 +83,7 @@ export function prettyJson(v: unknown): string {
 }
 
 /** Typed card container for rich system entries: collapsible header (+raw) + body. */
-export function SysCard(props: { entry: RawEntry; label: string; children?: JSX.Element }) {
+export function SystemCard(props: { entry: RawEntry; label: string; children?: JSX.Element }) {
 	const ts = entryTimestamp(props.entry);
 	const row = useRowCollapse(props.entry);
 	return (
@@ -109,7 +109,7 @@ export function SysCard(props: { entry: RawEntry; label: string; children?: JSX.
 }
 
 /** Thin one-line system row (kept for simple entries) + raw JSON in the row. */
-export function GenericSysRow(props: { entry: RawEntry; label: string; detail?: string }) {
+export function SystemRow(props: { entry: RawEntry; label: string; detail?: string }) {
 	const ts = entryTimestamp(props.entry);
 	const detail = props.detail !== undefined ? props.detail : systemDetail(props.entry);
 	return (
@@ -127,7 +127,7 @@ export function GenericSysRow(props: { entry: RawEntry; label: string; detail?: 
 }
 
 /** key/value line; hidden when the value isn't a present scalar. */
-export function Kv(props: { k: string; v: unknown }) {
+export function KeyValue(props: { k: string; v: unknown }) {
 	const s = scalar(props.v);
 	return (
 		<Show when={s !== null}>
@@ -140,7 +140,7 @@ export function Kv(props: { k: string; v: unknown }) {
 }
 
 /** One entry of an arbitrary `data` object: scalar → kv pair, nested → collapsed JSON. */
-export function DataKv(props: { k: string; v: unknown; entry: RawEntry }) {
+export function DataKeyValue(props: { k: string; v: unknown; entry: RawEntry }) {
 	const s = scalar(props.v);
 	return (
 		<Show

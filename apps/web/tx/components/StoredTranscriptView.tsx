@@ -18,7 +18,7 @@ import type { RawEntry } from "../api";
 import { api, ApiError } from "../api";
 import { createCollapseStore, RowStateCtx } from "./transcript/collapse";
 import { createPairingMaps } from "./transcript/pairing";
-import { EntryRow } from "./transcript/rows/entry-row";
+import { TranscriptEntryRow } from "./transcript/rows/entry-row";
 import { buildDayRows, type LastPageMeta, progressTotal } from "./transcript";
 import { str } from "../util/entries";
 import { basename } from "../util/format";
@@ -247,7 +247,7 @@ function StoredTranscriptController(props: StoredTranscriptControllerProps) {
 												<span>{row.label}</span>
 											</div>
 										) : (
-											<EntryRow entry={row.entry} pairing={pairing()} />
+											<TranscriptEntryRow entry={row.entry} pairing={pairing()} />
 										)}
 									</div>
 								);

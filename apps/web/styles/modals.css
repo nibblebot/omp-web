@@ -284,7 +284,7 @@ button.picker-row {
 .picker-note:empty {
 	margin-top: 0;
 }
-/* P2 session-graph picker (BranchModal): kind filter chips, per-node detail
+/* P2 session-graph picker (SessionGraphModal): kind filter chips, per-node detail
  * disclosure, same-file vs new-file actions, ask re-answer form. */
 .graph-filters {
 	display: flex;
@@ -447,7 +447,7 @@ button.picker-row {
 	margin-top: var(--space-5);
 }
 
-/* --- SessionModal (/resume): fixed width so rows don't size the dialog;
+/* --- SessionPicker (/resume): fixed width so rows don't size the dialog;
    one-line rows with the title truncating before the right-aligned meta. --- */
 .resume-modal {
 	width: min(600px, 92vw);

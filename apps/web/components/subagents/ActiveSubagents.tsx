@@ -1,7 +1,7 @@
 import { For, Show, type Component } from "solid-js";
 import { isActiveSubagent, setState, state } from "../../state";
-import { useClickableRow } from "../shared/PickerRow";
-import { latestSubagent, SubagentRow } from "../shared/SubagentRow";
+import { useClickableRow } from "../ui/PickerRow";
+import { latestSubagent, SubagentRow } from "./SubagentRow";
 
 /** Live strip above the prompt: visible only while >=1 subagent is in flight. */
 export const ActiveSubagents: Component = () => {

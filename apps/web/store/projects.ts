@@ -274,7 +274,7 @@ export function sendWorktreeDeleteInfo(daemonId: string): void {
 
 // ---------------------------------------------------------------------------
 // Phase 6: /ctl/fs/browse, the fleet edge's directory listing behind the
-// onboarding directory pickers (DirPicker). Raw GET like the ctl fetchers in
+// onboarding directory pickers (DirectoryPicker). Raw GET like the ctl fetchers in
 // transport.ts, but living here with the onboarding domain.
 // ---------------------------------------------------------------------------
 

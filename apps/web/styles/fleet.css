@@ -109,7 +109,7 @@
 	color: var(--text);
 }
 /* Pinned top chrome of the roster sidebar: the Work/Analysis mode switch
-   flush left (ModeSwitch.tsx) with the sidebar close button flush right.
+   flush left (ViewSwitch.tsx) with the sidebar close button flush right.
    Sits above the scrolling roster list and the Projects header. */
 .sidebar-mode-row {
 	flex: none;
@@ -736,7 +736,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 /* Menu trigger: hidden until the row/group header is hovered/focused (or
    the menu is open) on fine pointers; always visible on touch via the
    pointer:coarse block near the top of this file. The G4 start-session
-   header action (SidebarGroups project group) reveals the same way. */
+   header action (ProjectGroups project group) reveals the same way. */
 .sidebar-menu-btn,
 .project-start {
 	opacity: 0;
@@ -1216,7 +1216,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	margin-bottom: var(--space-4);
 	text-align: left;
 }
-/* --- Add-workspace modal (WorkspaceModal.tsx: Worktree/Clone/Add existing) --- */
+/* --- Add-workspace modal (AddWorkspaceModal.tsx: Worktree/Clone/Add existing) --- */
 .worktree-tabs {
 	display: flex;
 	gap: var(--space-1);
@@ -1378,7 +1378,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	margin-top: var(--space-3);
 	align-items: center;
 }
-/* --- Sidebar: project-first groups (DaemonSidebar.tsx) --- */
+/* --- Sidebar: project-first groups (FleetSidebar.tsx) --- */
 /* Left padding lives entirely on the toggle so the caret lands on the 12px
    scan line (list padding 6 + toggle padding 6). */
 .project-group {
@@ -1426,7 +1426,7 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 	background: var(--hover);
 }
 
-/* --- Phase 4: first-run empty state (SidebarGroups FirstRunPanel) --- */
+/* --- Phase 4: first-run empty state (ProjectGroups FirstRunPanel) --- */
 .firstrun {
 	display: flex;
 	flex-direction: column;

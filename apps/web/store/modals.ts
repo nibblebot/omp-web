@@ -30,7 +30,7 @@ export function sendUiResponse(id: string, result: unknown): void {
 }
 
 // Cancellation resolves the request undefined, NOT the error variant. The
-// AskTool rich-dialog path (tools/ask.ts) maps an undefined result to
+// AskToolCard rich-dialog path (tools/ask.ts) maps an undefined result to
 // ToolAbortError("Ask tool was cancelled by the user"); a rejected promise
 // (`error` field) would surface the raw error text instead.
 export function cancelUiRequest(id: string): void {

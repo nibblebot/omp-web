@@ -31,8 +31,8 @@ import {
 } from "../../util/entries";
 import { createCollapseStore, RowStateCtx } from "./collapse";
 import { createPairingMaps } from "./pairing";
-import { EntryRow } from "./rows/entry-row";
-import { ArrowLeftIcon } from "../../../components/shared/icons";
+import { TranscriptEntryRow } from "./rows/entry-row";
+import { ArrowLeftIcon } from "../../../components/ui/icons";
 
 const PAGE_SIZE = 200;
 
@@ -355,7 +355,7 @@ export function TranscriptView(props: TranscriptProps) {
 												<span>{row.label}</span>
 											</div>
 										) : (
-											<EntryRow entry={row.entry} pairing={pairing()} />
+											<TranscriptEntryRow entry={row.entry} pairing={pairing()} />
 										)}
 									</div>
 								);

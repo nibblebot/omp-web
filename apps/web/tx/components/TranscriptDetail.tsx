@@ -1,9 +1,9 @@
 import { Show, createResource, createSignal } from "solid-js";
 import { api } from "../api";
 import { basename, folderOf, formatCompact, formatMs } from "../util/format";
-import { AnalyticsView } from "./AnalyticsView";
+import { TranscriptOverview } from "./TranscriptOverview";
 import { TranscriptView } from "./transcript";
-import { SubagentsView } from "./SubagentsView";
+import { TranscriptSubagents } from "./TranscriptSubagents";
 
 type Tab = "overview" | "transcript" | "subagents";
 
@@ -151,7 +151,7 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 				id="tab-panel-overview"
 				aria-labelledby="tab-overview"
 			>
-				<AnalyticsView
+				<TranscriptOverview
 					stats={() => mainStatsSafe()}
 					error={() => mainStats.error}
 					onPickTool={(name) => {
@@ -184,7 +184,7 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 				id="tab-panel-subagents"
 				aria-labelledby="tab-subagents"
 			>
-				<SubagentsView file={file()} onOpen={openSubagent} />
+				<TranscriptSubagents file={file()} onOpen={openSubagent} />
 			</section>
 		</div>
 	);

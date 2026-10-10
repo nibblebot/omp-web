@@ -1,0 +1,25 @@
+import { Show, type Component } from "solid-js";
+import type { ToolItem } from "../../../state";
+import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
+
+type AskQuestion = { id?: string; question?: string; options?: { label?: string }[] };
+
+/** ask tool: settled Q&A card, with the question from args and the chosen
+ *  answer from result. */
+export const AskToolCard: Component<{ item: ToolItem }> = (props) => {
+	const args = () => (props.item.args as { questions?: AskQuestion[] } | null) ?? {};
+	const question = () => args().questions?.[0]?.question ?? "";
+	const options = () =>
+		(args().questions?.[0]?.options ?? []).map((o) => o?.label ?? "").filter(Boolean) ?? [];
+	return (
+		<ToolCardShell name="ask" status={props.item.status} class="ask-tool">
+			<Show when={question()}>
+				<div class="ask-tool-question">{question()}</div>
+			</Show>
+			<Show when={options().length > 0}>
+				<div class="ask-tool-options">{options().join(" / ")}</div>
+			</Show>
+			<CollapsibleOutput item={props.item} output={props.item.output} />
+		</ToolCardShell>
+	);
+};

@@ -1,6 +1,6 @@
 import { createSignal, For, Show, type Component } from "solid-js";
 import { call, pushNotice, state } from "../../state";
-import { ConfirmButton } from "../shared/ConfirmButton";
+import { ConfirmButton } from "../ui/ConfirmButton";
 import { formatTokens } from "../../usage/context";
 
 /**
@@ -657,7 +657,7 @@ export const GoalLoopPanel: Component = () => (
 );
 
 /** Goals + loops half of GoalLoopPanel (used by the "Goals & Loops" hub tab). */
-export const GoalLoopSection: Component = () => (
+export const GoalsAndLoopsTab: Component = () => (
 	<div class="subagent-list">
 		<div class="msg-notice">consent gate: nothing runs until you confirm.</div>
 		<GoalSection />
@@ -666,7 +666,7 @@ export const GoalLoopSection: Component = () => (
 );
 
 /** Vibe half of GoalLoopPanel (used by the "Vibe" hub tab). */
-export const VibeOnlySection: Component = () => (
+export const VibeTab: Component = () => (
 	<div class="subagent-list">
 		<div class="msg-notice">consent gate: nothing runs until you confirm.</div>
 		<VibeSection />
