@@ -18,7 +18,7 @@ export const NodeLink: Component<{ id: string }> = (props) => {
 					}
 				>
 					{(e) => (
-						<a class="ds-chip" href={`#/${e().story.id}`} title={`${n().file}:${n().line}`}>
+						<a class="ds-chip" href={`#/stories/${e().story.id}`} title={`${n().file}:${n().line}`}>
 							{nodeLabel(n())}
 							<span class="ds-chip-note">tier {n().tier}</span>
 						</a>
@@ -29,12 +29,42 @@ export const NodeLink: Component<{ id: string }> = (props) => {
 	);
 };
 
-const NodeList: Component<{ label: string; ids: string[]; empty: string }> = (props) => (
+/** A graph component as a button that retargets the inspector to it (no story link). */
+const NodePick: Component<{ id: string; onPick: (id: string) => void }> = (props) => {
+	const node = () => nodeById.get(props.id);
+	return (
+		<Show when={node()} fallback={<span class="ds-chip">{props.id}</span>}>
+			{(n) => (
+				<button
+					type="button"
+					class="ds-chip ds-chip-button"
+					title={`${n().file}:${n().line}`}
+					onClick={() => props.onPick(props.id)}
+				>
+					{nodeLabel(n())}
+					<span class="ds-chip-note">tier {n().tier}</span>
+				</button>
+			)}
+		</Show>
+	);
+};
+
+/** A labeled list of components: story links, or buttons when `onPick` is given. */
+export const NodeList: Component<{
+	label: string;
+	ids: string[];
+	empty: string;
+	onPick?: (id: string) => void;
+}> = (props) => (
 	<div class="ds-meta-row">
 		<dt>{props.label}</dt>
 		<dd>
 			<Show when={props.ids.length > 0} fallback={<span class="ds-empty">{props.empty}</span>}>
-				<For each={props.ids}>{(id) => <NodeLink id={id} />}</For>
+				<For each={props.ids}>
+					{(id) =>
+						props.onPick ? <NodePick id={id} onPick={props.onPick} /> : <NodeLink id={id} />
+					}
+				</For>
 			</Show>
 		</dd>
 	</div>

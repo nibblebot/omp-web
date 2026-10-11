@@ -59,9 +59,10 @@ const VariantFrame: Component<{ variant: StoryVariant; reopen?: () => void }> = 
  * One story. The store is global, so seeding is per story: unseeded variants
  * stack under the story seed; if any variant carries its own seed (or the story
  * sets `tabs`), tabs show one at a time and every switch, re-click of the
- * active tab, or Reopen resets and re-seeds before rendering.
+ * active tab, or Reopen resets and re-seeds before rendering. `embedded` (the
+ * inspector iframe) drops the title link and metadata: the parent shows them.
  */
-export const StoryView: Component<{ entry: StoryEntry }> = (props) => {
+export const StoryView: Component<{ entry: StoryEntry; embedded?: boolean }> = (props) => {
 	const story = () => props.entry.story;
 	const exclusive = createMemo(
 		() => story().tabs === true || story().variants.some((v) => v.seed !== undefined),
@@ -83,12 +84,14 @@ export const StoryView: Component<{ entry: StoryEntry }> = (props) => {
 	};
 	return (
 		<article class="ds-story" id={`story-${story().id}`}>
-			<header class="ds-story-head">
-				<h2 class="ds-story-title">
-					<a href={`#/${story().id}`}>{story().title}</a>
-				</h2>
-			</header>
-			<StoryMeta entry={props.entry} />
+			<Show when={!props.embedded}>
+				<header class="ds-story-head">
+					<h2 class="ds-story-title">
+						<a href={`#/stories/${story().id}`}>{story().title}</a>
+					</h2>
+				</header>
+				<StoryMeta entry={props.entry} />
+			</Show>
 			<Show
 				when={exclusive()}
 				fallback={

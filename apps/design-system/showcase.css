@@ -1,10 +1,42 @@
 /* Showcase chrome. Loaded after apps/web/styles.css so it can use the shared
  * design tokens (tokens.css) and follow the active theme palette. Every class
  * is ds- prefixed so it can never collide with production selectors. */
+/* Page: the shared top bar above the active view (App or stories), filling the window.
+ * The bar height lives on body so portaled modal backdrops can clear it. */
+body {
+	--ds-topbar-h: 2.75rem;
+}
+.ds-page {
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	overflow: hidden;
+}
+.ds-topbar {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: var(--space-4);
+	box-sizing: border-box;
+	height: var(--ds-topbar-h);
+	padding: 0 var(--space-5);
+	background: var(--panel);
+	border-bottom: 1px solid var(--border);
+	font-size: var(--fs-md);
+}
+.ds-topbar .ds-brand {
+	padding: 0 var(--space-4) 0 0;
+}
+.ds-topbar-hint {
+	margin-left: auto;
+	color: var(--muted);
+	font-size: var(--fs-sm);
+}
 .ds-shell {
 	display: grid;
+	flex: 1;
 	grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
-	height: 100vh;
+	min-height: 0;
 }
 .ds-nav {
 	display: flex;
@@ -14,6 +46,11 @@
 	overflow-y: auto;
 	background: var(--panel);
 	border-right: 1px solid var(--border);
+}
+/* Rows keep their height when the nav overflows; `overflow: hidden` on
+ * .ds-nav-link would otherwise let flex shrink them to nothing. */
+.ds-nav > * {
+	flex: none;
 }
 .ds-brand {
 	color: var(--accent);
@@ -213,10 +250,17 @@
 	font-size: 0.9em;
 }
 /* Modal (including the lightbox variant) portals to <body> with position: fixed, exactly
- * as in production. Start them past the showcase nav so it stays usable while an
- * overlay story is open. */
-body > div:not(#root) > .modal-backdrop {
+ * as in production. Start them below the top bar, past the showcase nav in the stories
+ * view, and past the App view's inspector while it is open, so the page stays usable. */
+body[data-ds-view="stories"] > div:not(#root) > .modal-backdrop,
+body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
+	top: var(--ds-topbar-h);
+}
+body[data-ds-view="stories"] > div:not(#root) > .modal-backdrop {
 	left: var(--sidebar-w);
+}
+body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
+	right: var(--ds-inspector-w, 0px);
 }
 /* Frame for full-screen and fixed-position components (screens, sidebars,
  * toasts): `transform` makes it the containing block for fixed descendants,
@@ -343,4 +387,173 @@ body > div:not(#root) > .modal-backdrop {
 }
 .ds-missing {
 	color: var(--warning);
+}
+/* App view (`/`): the real App fills the space below the top bar. */
+.ds-app-view {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+	overflow: hidden;
+}
+.ds-app-row {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+}
+.ds-app-stage {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	transform: translateZ(0);
+}
+.ds-app-stage > .app {
+	height: 100%;
+}
+.ds-chip-button {
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+
+/* Shift labels: fixed overlay above the App, one row of names per on-screen corner. */
+.ds-labels {
+	position: fixed;
+	inset: 0;
+	z-index: 1000;
+	pointer-events: none;
+}
+.ds-label-group {
+	position: fixed;
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	transform: translateY(-100%);
+	white-space: nowrap;
+}
+.ds-label-name {
+	padding: 1px var(--space-3);
+	border: 0;
+	border-radius: var(--r-xs);
+	background: var(--accent);
+	color: var(--bg);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	font-weight: 600;
+	line-height: 1.5;
+	box-shadow: var(--shadow-1);
+	cursor: pointer;
+	pointer-events: auto;
+}
+.ds-label-name:hover,
+.ds-label-name:focus-visible {
+	outline: 2px solid var(--text);
+	outline-offset: 1px;
+}
+/* An ancestor with nothing on screen of its own: named in a descendant's row, no box to outline. */
+.ds-label-name.ds-label-folded {
+	background: var(--accent-dim);
+	color: var(--accent);
+	box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.ds-label-sep {
+	color: var(--muted-3);
+	font-size: var(--fs-sm);
+}
+.ds-label-outline {
+	position: fixed;
+	box-sizing: border-box;
+	border: 2px dashed var(--accent);
+	border-radius: var(--r-sm);
+	pointer-events: none;
+}
+
+/* Inspector: right-hand sidebar with a story iframe for the picked component. */
+.ds-inspector {
+	position: relative;
+	display: flex;
+	flex: none;
+	flex-direction: column;
+	min-height: 0;
+	background: var(--panel);
+	border-left: 1px solid var(--border);
+}
+.ds-inspector-handle {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: -3px;
+	width: 6px;
+	cursor: col-resize;
+	z-index: 1;
+}
+.ds-inspector-handle:hover {
+	background: var(--accent-border);
+}
+.ds-inspector-head {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	padding: var(--space-4) var(--space-5);
+	border-bottom: 1px solid var(--border);
+}
+.ds-inspector-title-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+.ds-inspector-title {
+	flex: 1;
+	min-width: 0;
+	margin: 0;
+	overflow: hidden;
+	font-family: var(--font-mono);
+	font-size: var(--fs-xl);
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.ds-inspector-close {
+	flex: none;
+}
+.ds-resizing iframe {
+	pointer-events: none;
+}
+.ds-inspector-links {
+	display: grid;
+	gap: var(--space-2);
+	margin: 0;
+	max-height: 30%;
+	overflow-y: auto;
+}
+.ds-inspector-body {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+}
+.ds-inspector-frame {
+	flex: 1;
+	width: 100%;
+	min-height: 0;
+	border: 0;
+	background: var(--bg);
+}
+.ds-inspector-note {
+	margin: 0;
+	padding: var(--space-5);
+	color: var(--muted);
+	font-size: var(--fs-md);
+}
+
+/* Embed (`/?embed=<storyId>`): the story alone, filling the iframe. */
+.ds-embed {
+	min-height: 100vh;
+	box-sizing: border-box;
+	padding: var(--space-5);
+	background: var(--bg);
 }

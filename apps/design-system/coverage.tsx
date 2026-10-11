@@ -69,7 +69,7 @@ export const Coverage: Component = () => (
 									when={entryByNodeId.get(node.id)}
 									fallback={<span class="ds-missing">missing</span>}
 								>
-									{(entry) => <a href={`#/${entry().story.id}`}>{entry().story.title}</a>}
+									{(entry) => <a href={`#/stories/${entry().story.id}`}>{entry().story.title}</a>}
 								</Show>
 							</td>
 						</tr>

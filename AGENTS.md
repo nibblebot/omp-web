@@ -90,9 +90,10 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only). `POST /command` acce
 ### Design system (`apps/design-system/`)
 
 - Stories render the real `apps/web` components, never copies. No fleet runs behind it: control-plane fetches are answered by `fixtures/routes.ts`, daemon commands and `call()` answers by story handlers (`daemon.ts`). Stories set state only through `seed` (a top-level store patch or a function driving real exported actions); store, fake daemon, and dialog state reset per story and variant.
+- The App view (`/`) is the real `<App />` in Chat Mode with fixture data. Holding Shift labels the component under the pointer and its ancestors, Ctrl+Shift every mounted apps/web component (`app-view.tsx`, `labels.tsx`; parents come from `inspect-runtime.ts`'s owner tree); clicking a label opens it in `inspector.tsx`, an isolated `/?embed=<storyId>` iframe. Stories live under `#/stories` (`#/stories/coverage`, `#/stories/<storyId>`); every other hash belongs to the App.
 - One story file per component at `stories/<feature>/<subfolder>/<Name>.tsx`, mirroring `apps/web/components/`, default-exporting `defineStory(...)` (or an array); `registry.ts` owns the contract. A component family (`ui/icons.tsx`, `ui/buttons.tsx`) is one page: `component` lists every `ComponentRef` and `section` names its nav entry.
 - Components that portal a full-screen overlay (`Modal`, `ImageLightbox`) need `tabs: true` so variants never stack, and wire their dismiss prop to the stage's `render: (ctx) => … onClose={ctx.close}`, never a no-op. Re-clicking the active tab re-seeds a variant whose overlay closed through store state (`ModalHost`).
-- Adding, moving, or renaming an exported component updates its story and `ComponentRef` (`file`, `export`) in the same change; `#/coverage` lists components without a story.
+- Adding, moving, or renaming an exported component updates its story and `ComponentRef` (`file`, `export`) in the same change; `#/stories/coverage` lists components without a story.
 
 ### Tests
 

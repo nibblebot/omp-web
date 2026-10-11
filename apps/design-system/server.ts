@@ -7,8 +7,9 @@ import { virtualModulesPlugin } from "./virtual-modules";
 /**
  * Design system server: bundles the showcase client with Bun.build (in
  * memory, nothing written to disk) and serves it with Bun.serve. Components
- * come straight from apps/web; only the shell lives here. The bundle is
- * rebuilt on every page load so a refresh always shows current sources.
+ * come straight from apps/web; only the shell lives here. The bundle is rebuilt on
+ * every top-level page load so a refresh shows current sources. Inspector frames
+ * (`/?embed=`) reuse the current bundle instead.
  */
 const root = dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.OMP_DESIGN_PORT ?? 4799);
@@ -45,14 +46,18 @@ const NO_FLEET = { error: "design system: no fleet behind this server" };
 const server = Bun.serve({
 	port,
 	async fetch(req, srv) {
-		const { pathname } = new URL(req.url);
+		const url = new URL(req.url);
+		const { pathname } = url;
 		// The fixture SSE stream pings every 15s (like the fleet edge); Bun's
 		// default 10s idle timeout would cut it between pings and force reconnects.
 		if (pathname === "/events") srv.timeout(req, 0);
 		if (pathname === "/") {
-			// A page load starts a fresh build; its assets await the same promise.
-			bundle = build();
-			bundle.catch(() => undefined);
+			// A top-level page load starts a fresh build; its assets await the same
+			// promise. Inspector frames (`/?embed=`) reuse the current bundle.
+			if (!url.searchParams.has("embed") || bundle === null) {
+				bundle = build();
+				bundle.catch(() => undefined);
+			}
 			return new Response(Bun.file(join(root, "index.html")), {
 				headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
 			});

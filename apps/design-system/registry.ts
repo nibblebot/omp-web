@@ -40,7 +40,7 @@ export interface ComponentRef {
 }
 
 export interface Story {
-	/** URL-safe unique id, used as the hash route (`#/<id>`). */
+	/** URL-safe unique id, used as the hash route (`#/stories/<id>`). */
 	id: string;
 	title: string;
 	/**
