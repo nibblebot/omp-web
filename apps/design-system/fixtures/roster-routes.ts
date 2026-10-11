@@ -17,8 +17,8 @@ const fsTree: Record<string, FsBrowseDir[]> = {
 	[`${HOME}/Repos`]: [
 		{ name: "omp-web", path: OMP_WEB, hasGit: true },
 		{ name: "omp-web-worktrees", path: `${HOME}/Repos/omp-web-worktrees`, hasGit: false },
-		{ name: "pi-mono", path: `${HOME}/Repos/pi-mono`, hasGit: true },
-		{ name: "docs-site", path: `${HOME}/Repos/docs-site`, hasGit: true },
+		{ name: "localaction", path: `${HOME}/Repos/localaction`, hasGit: true },
+		{ name: "nixos-config", path: `${HOME}/Repos/nixos-config`, hasGit: true },
 	],
 	[OMP_WEB]: [
 		{ name: "apps", path: `${OMP_WEB}/apps`, hasGit: false },

@@ -15,21 +15,21 @@ export default defineStory({
 	variants: [
 		{
 			name: "Project with running daemons",
-			seed: () => seedRosterFleet({ removeProjectTarget: "proj_pi_mono" }),
+			seed: () => seedRosterFleet({ removeProjectTarget: "proj_localaction" }),
 			render: () => <RemoveProjectDialog />,
 		},
 		{
 			name: "Project with no daemons",
-			seed: () => seedRosterFleet({ removeProjectTarget: "proj_docs_site" }),
+			seed: () => seedRosterFleet({ removeProjectTarget: "proj_nixos_config" }),
 			render: () => <RemoveProjectDialog />,
 		},
 		{
 			name: "Refused by server",
 			seed: () => {
-				seedRosterFleet({ removeProjectTarget: "proj_pi_mono" });
+				seedRosterFleet({ removeProjectTarget: "proj_localaction" });
 				// The refusal frame lands after the dialog opens, as the server sends it.
 				setTimeout(
-					() => setState("error", "remove refused: 3 daemons still reference pi-mono"),
+					() => setState("error", "remove refused: 2 daemons still reference localaction"),
 					400,
 				);
 			},

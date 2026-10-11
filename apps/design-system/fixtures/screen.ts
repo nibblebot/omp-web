@@ -14,8 +14,9 @@ import type {
 } from "../../web/state";
 import type { UsageLike } from "../../web/usage/usage";
 import { FIXTURE_NOW } from "./session";
-import { rosterDaemons, rosterProjects } from "./roster";
+import { rosterAppDaemons, rosterProjects } from "./roster";
 import { sessionModel } from "./overlays";
+import type { AppSessionView } from "./app-sessions";
 import {
 	editToolItem,
 	evalImageTool,
@@ -43,7 +44,8 @@ const opusThinking: NonNullable<Model["thinking"]> = {
 	efforts: ["low", "medium", "high", "xhigh"] as Effort[],
 };
 
-const claude: Model = {
+/** The Claude model the screen session runs on; reused by the other App view sessions. */
+export const claude: Model = {
 	id: "claude-opus-4",
 	name: "Claude Opus 4",
 	api: "anthropic-messages",
@@ -113,12 +115,10 @@ export const screenStats: SessionStats = {
 	cost: 3.42,
 };
 
-/** Store patch describing a ready, attached session with model, context and stats. */
-export const screenSessionSeed: Partial<typeof state> = {
-	connected: true,
+/** Per-session store fields of the screen session: restored when the App view attaches to `dmn_a002`. */
+export const screenSessionView: AppSessionView = {
 	readyAt: FIXTURE_NOW - 22 * MIN,
 	sessionId: "sess_09a41c",
-	currentSessionId: SCREEN_DAEMON_ID,
 	sessionName: "Copy button for code fences",
 	sessionFile: screenStats.sessionFile,
 	model: claude,
@@ -126,9 +126,16 @@ export const screenSessionSeed: Partial<typeof state> = {
 	contextUsage: { tokens: 118_400, contextWindow: 200_000, percent: 59.2 },
 	stats: screenStats,
 	messageCount: 39,
+};
+
+/** Store patch describing a ready, attached session with model, context and stats. */
+export const screenSessionSeed: Partial<typeof state> = {
+	connected: true,
+	currentSessionId: SCREEN_DAEMON_ID,
+	...screenSessionView,
 	availableModels: screenModelInfos,
 	availableCommands: screenSlashCommands,
-	daemonRoster: rosterDaemons,
+	daemonRoster: rosterAppDaemons,
 	registeredProjects: rosterProjects,
 	authStatus: "disabled",
 };
@@ -164,7 +171,8 @@ const bashTool = (
 	output,
 });
 
-const turnUsage = (input: number, output: number, cacheRead: number): UsageLike => ({
+/** UsageLike for one assistant turn; totalTokens covers input, output and cache reads. */
+export const turnUsage = (input: number, output: number, cacheRead: number): UsageLike => ({
 	input,
 	output,
 	cacheRead,

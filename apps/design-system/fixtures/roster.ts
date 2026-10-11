@@ -18,7 +18,10 @@ const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 
 const OMP_WEB = "/home/joshua/Repos/omp-web";
-const PI_MONO = "/home/joshua/Repos/pi-mono";
+const LOCALACTION = "/home/joshua/Repos/localaction";
+const LOCALACTION_WORKTREES = "/home/joshua/Repos/localaction-worktrees";
+const NIXOS_CONFIG = "/home/joshua/Repos/nixos-config";
+const NIXOS_CONFIG_WORKTREES = "/home/joshua/Repos/nixos-config-worktrees";
 const WORKTREES = "/home/joshua/Repos/omp-web-worktrees";
 
 const ompWeb: RegisteredProject = {
@@ -28,23 +31,23 @@ const ompWeb: RegisteredProject = {
 	addedAt: T0 - 14 * DAY,
 };
 
-const piMono: RegisteredProject = {
-	projectId: "proj_pi_mono",
-	path: PI_MONO,
-	name: "pi-mono",
+const localaction: RegisteredProject = {
+	projectId: "proj_localaction",
+	path: LOCALACTION,
+	name: "localaction",
 	addedAt: T0 - 30 * DAY,
 };
 
 /** A registered project with no daemons yet: its group shows the "start a session" chevron. */
-const docsSite: RegisteredProject = {
-	projectId: "proj_docs_site",
-	path: "/home/joshua/Repos/docs-site",
-	name: "docs-site",
+const nixosConfig: RegisteredProject = {
+	projectId: "proj_nixos_config",
+	path: NIXOS_CONFIG,
+	name: "nixos-config",
 	addedAt: T0 - 2 * DAY,
 };
 
 /** RegisteredProject list: FleetSidebar project sections and AddProjectDialog duplicate checks. */
-export const rosterProjects: RegisteredProject[] = [ompWeb, piMono, docsSite];
+export const rosterProjects: RegisteredProject[] = [ompWeb, localaction, nixosConfig];
 
 /** ProjectEntry list: DirectoryPicker and AddWorkspaceDialog "Add existing" rows, including worktrees that point at their parent. */
 export const rosterProjectEntries: ProjectEntry[] = [
@@ -70,7 +73,7 @@ export const rosterProjectEntries: ProjectEntry[] = [
 		worktreeOf: "omp-web",
 		branch: "release/0.3",
 	},
-	{ name: "pi-mono", path: PI_MONO, isWorktree: false, branch: "main" },
+	{ name: "localaction", path: LOCALACTION, isWorktree: false, branch: "main" },
 ];
 
 /** ProjectBranch list: branch picker rows in AddWorkspaceDialog. */
@@ -204,21 +207,21 @@ const daemonCloneFailed: DaemonEntry = {
 		"PersistentVolumeClaim omp-k8s-trial stayed Pending for 120s (no fast-ssd capacity)",
 };
 
-/** DaemonEntry: pi-mono main checkout, ready; its turn finished while the user was elsewhere (unread). */
-const daemonPiMain: DaemonEntry = {
+/** DaemonEntry: localaction main checkout, ready; its turn finished while the user was elsewhere (unread). */
+const daemonLocalactionMain: DaemonEntry = {
 	daemonId: "dmn_b001",
-	name: "pi-mono",
-	cwd: PI_MONO,
-	project: "pi-mono",
-	projectId: "proj_pi_mono",
+	name: "localaction",
+	cwd: LOCALACTION,
+	project: "localaction",
+	projectId: "proj_localaction",
 	managed: false,
 	branch: "main",
 	git: { added: 0, modified: 1, deleted: 1, untracked: 0, linesAdded: 12, linesDeleted: 30 },
 	labels: [],
 	mode: "spawned",
 	status: "ready",
-	lastSessionFile: "/home/joshua/.omp/sessions/pi-mono/2026-10-09T07-55-01.jsonl",
-	sessionTitle: "Trim the provider catalog",
+	lastSessionFile: "/home/joshua/.omp/sessions/localaction/2026-10-09T07-55-01.jsonl",
+	sessionTitle: "Cache action checkouts between runs",
 	readyAt: T0 - 140 * MIN,
 	uptime: 140 * 60,
 	pid: 40122,
@@ -229,17 +232,17 @@ const daemonPiMain: DaemonEntry = {
 /** DaemonEntry: attached daemon whose socket dropped; the status dot pulses while it redials. */
 const daemonReconnecting: DaemonEntry = {
 	daemonId: "dmn_b002",
-	name: "pi-mono-review",
-	cwd: `${PI_MONO}-review`,
-	project: "pi-mono",
-	projectId: "proj_pi_mono",
-	worktreeOf: PI_MONO,
+	name: "job-matrix",
+	cwd: `${LOCALACTION_WORKTREES}/job-matrix`,
+	project: "localaction",
+	projectId: "proj_localaction",
+	worktreeOf: LOCALACTION,
 	managed: false,
-	branch: "review/provider-catalog",
-	labels: ["review"],
+	branch: "feat/job-matrix",
+	labels: ["matrix"],
 	mode: "attached",
 	status: "reconnecting",
-	sessionTitle: "Review open annotations",
+	sessionTitle: "Expand matrix strategies into jobs",
 	error: "socket closed (ECONNRESET); retrying in 4s",
 	workspaceKind: "worktree",
 	desiredState: "running",
@@ -248,8 +251,8 @@ const daemonReconnecting: DaemonEntry = {
 /** DaemonEntry: remote daemon that failed to resolve its session (no projectId, so it lands in the fallback group). */
 const daemonRemoteError: DaemonEntry = {
 	daemonId: "dmn_c001",
-	name: "pi-mono-bench",
-	cwd: "/srv/work/pi-mono",
+	name: "localaction-bench",
+	cwd: "/srv/work/localaction",
 	project: "bench-host",
 	managed: false,
 	labels: ["bench"],
@@ -286,7 +289,7 @@ export const rosterDaemons: DaemonEntry[] = [
 	daemonStarting,
 	daemonClonePreparing,
 	daemonCloneFailed,
-	daemonPiMain,
+	daemonLocalactionMain,
 	daemonReconnecting,
 	daemonRemoteError,
 	daemonRemoteBlocked,
@@ -300,11 +303,108 @@ export const rosterDaemon = {
 	starting: daemonStarting,
 	clonePreparing: daemonClonePreparing,
 	cloneFailed: daemonCloneFailed,
-	piMain: daemonPiMain,
+	localactionMain: daemonLocalactionMain,
 	reconnecting: daemonReconnecting,
 	remoteError: daemonRemoteError,
 	remoteBlocked: daemonRemoteBlocked,
 } satisfies Record<string, DaemonEntry>;
+
+/** DaemonEntry: managed localaction worktree, ready and idle; the App view's healthy counterpart of `daemonReconnecting`. */
+const daemonJobMatrix: DaemonEntry = {
+	daemonId: "dmn_b003",
+	name: "job-matrix",
+	cwd: `${LOCALACTION_WORKTREES}/job-matrix`,
+	project: "localaction",
+	projectId: "proj_localaction",
+	worktreeOf: LOCALACTION,
+	managed: true,
+	branch: "feat/job-matrix",
+	git: { added: 1, modified: 3, deleted: 0, untracked: 0, linesAdded: 148, linesDeleted: 22 },
+	labels: ["matrix"],
+	mode: "spawned",
+	status: "ready",
+	lastSessionFile: "/home/joshua/.omp/sessions/localaction/2026-10-09T09-12-48.jsonl",
+	sessionTitle: "Expand matrix strategies into jobs",
+	readyAt: T0 - 48 * MIN,
+	uptime: 48 * 60,
+	pid: 46305,
+	workspaceKind: "worktree",
+	desiredState: "running",
+};
+
+/** DaemonEntry: asleep localaction worktree from yesterday (App view only). */
+const daemonArtifactPaths: DaemonEntry = {
+	daemonId: "dmn_b004",
+	name: "artifact-paths",
+	cwd: `${LOCALACTION_WORKTREES}/artifact-paths`,
+	project: "localaction",
+	projectId: "proj_localaction",
+	worktreeOf: LOCALACTION,
+	managed: true,
+	branch: "fix/artifact-paths",
+	git: { added: 0, modified: 0, deleted: 0, untracked: 0 },
+	labels: [],
+	mode: "spawned",
+	status: "asleep",
+	lastSessionFile: "/home/joshua/.omp/sessions/localaction/2026-10-08T14-31-07.jsonl",
+	sessionTitle: "Normalize artifact upload paths on Windows runners",
+	workspaceKind: "worktree",
+	desiredState: "stopped",
+};
+
+/** DaemonEntry: nixos-config main checkout, ready with uncommitted host changes (App view only). */
+const daemonNixosMain: DaemonEntry = {
+	daemonId: "dmn_d001",
+	name: "nixos-config",
+	cwd: NIXOS_CONFIG,
+	project: "nixos-config",
+	projectId: "proj_nixos_config",
+	managed: false,
+	branch: "main",
+	git: { added: 1, modified: 2, deleted: 0, untracked: 0, linesAdded: 57, linesDeleted: 14 },
+	labels: [],
+	mode: "spawned",
+	status: "ready",
+	lastSessionFile: "/home/joshua/.omp/sessions/nixos-config/2026-10-09T08-47-19.jsonl",
+	sessionTitle: "Split home-manager modules per host",
+	readyAt: T0 - 70 * MIN,
+	uptime: 70 * 60,
+	pid: 43968,
+	workspaceKind: "direct",
+	desiredState: "running",
+};
+
+/** DaemonEntry: asleep nixos-config worktree for a flake input bump (App view only). */
+const daemonFlakeUpdate: DaemonEntry = {
+	daemonId: "dmn_d002",
+	name: "flake-update",
+	cwd: `${NIXOS_CONFIG_WORKTREES}/flake-update`,
+	project: "nixos-config",
+	projectId: "proj_nixos_config",
+	worktreeOf: NIXOS_CONFIG,
+	managed: true,
+	branch: "chore/flake-update",
+	git: { added: 0, modified: 1, deleted: 0, untracked: 0, linesAdded: 18, linesDeleted: 18 },
+	labels: [],
+	mode: "spawned",
+	status: "asleep",
+	lastSessionFile: "/home/joshua/.omp/sessions/nixos-config/2026-10-07T19-05-52.jsonl",
+	sessionTitle: "Bump nixpkgs and fix broken overlays",
+	workspaceKind: "worktree",
+	desiredState: "stopped",
+};
+
+/** DaemonEntry list for the App view (`/`): a plausible working sidebar, with no clone, failed, transitional, or reconnecting rows. */
+export const rosterAppDaemons: DaemonEntry[] = [
+	daemonMain,
+	daemonFixtures,
+	daemonAsleep,
+	daemonLocalactionMain,
+	daemonJobMatrix,
+	daemonArtifactPaths,
+	daemonNixosMain,
+	daemonFlakeUpdate,
+];
 
 /** ProjectGroupsData: grouped daemons per project for ProjectGroups; main checkouts first, then worktrees and clones; unregistered remotes trail. */
 export const rosterSidebarGroups: ProjectGroupsData = [
@@ -319,8 +419,8 @@ export const rosterSidebarGroups: ProjectGroupsData = [
 			daemonStarting,
 		],
 	},
-	{ project: piMono, daemons: [daemonPiMain, daemonReconnecting] },
-	{ project: docsSite, daemons: [] },
+	{ project: localaction, daemons: [daemonLocalactionMain, daemonReconnecting] },
+	{ project: nixosConfig, daemons: [] },
 	{ project: null, daemons: [daemonRemoteError, daemonRemoteBlocked] },
 ];
 
@@ -361,7 +461,7 @@ export function rosterDaemonInfos(now: number): DaemonInfo[] {
 		{
 			name: "bench-runner",
 			id: "dmn_p003",
-			projectDir: PI_MONO,
+			projectDir: LOCALACTION,
 			state: "restarting",
 			pid: 49102,
 			createdAt: now - 6 * MIN,

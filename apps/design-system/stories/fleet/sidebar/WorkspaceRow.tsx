@@ -69,7 +69,7 @@ export default defineStory({
 			name: "Unread output",
 			render: () => (
 				<div class="sidebar-list">
-					<WorkspaceRow daemon={rosterDaemon.piMain} />
+					<WorkspaceRow daemon={rosterDaemon.localactionMain} />
 				</div>
 			),
 		},
