@@ -83,10 +83,10 @@ export const AppView: Component = () => {
 				// resets the view: settle and save the session being left.
 				const left = attached;
 				attached = id;
-				if (left !== "" && left !== id) {
-					abortCannedTurn();
-					visited.set(left, captureSession());
-				}
+				// A switch always ends a running canned turn (a no-op when idle);
+				// only a real session is kept for switching back.
+				abortCannedTurn();
+				if (left !== "" && left !== id) visited.set(left, captureSession());
 				const session = visited.get(id) ?? appSessions[id];
 				if (session === undefined) return;
 				// Restore once the handler's reset has run.

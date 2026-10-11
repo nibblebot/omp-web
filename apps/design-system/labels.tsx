@@ -40,6 +40,10 @@ interface Group {
 /** Off; Shift: the component under the pointer and its ancestors; Ctrl+Shift: every component. */
 type Mode = "off" | "hover" | "all";
 
+/** The held label mode. Module-level so the top bar can light up the shortcut being held. */
+const [mode, setMode] = createSignal<Mode>("off");
+export const labelMode = mode;
+
 /** Bounding box of an instance's element nodes that are on screen inside the stage. */
 function unionBox(nodes: Node[], stage: DOMRect): Box | null {
 	let left = Infinity;
@@ -181,7 +185,6 @@ export const Labels: Component<{
 	stage: () => HTMLElement | undefined;
 	onOpen: (id: string) => void;
 }> = (props) => {
-	const [mode, setMode] = createSignal<Mode>("off");
 	const [snapshot, setSnapshot] = createSignal<Group[]>([]);
 	const [hovered, setHovered] = createSignal<string | null>(null);
 	const pointer = { x: -1, y: -1 };
@@ -221,6 +224,9 @@ export const Labels: Component<{
 		window.addEventListener("blur", blur);
 		window.addEventListener("pointermove", move, { capture: true, passive: true });
 		onCleanup(() => {
+			// The mode outlives this component; a key still held when the App
+			// view unmounts must not leave labels or the top bar chip lit.
+			setMode("off");
 			window.removeEventListener("keydown", down);
 			window.removeEventListener("keyup", up);
 			window.removeEventListener("blur", blur);
@@ -287,6 +293,9 @@ export const Labels: Component<{
 		<Show when={mode() !== "off"}>
 			<Portal mount={document.body}>
 				<div class="ds-labels">
+					<div class="ds-labels-hint" role="status">
+						Click a label to open that component's design in the inspector
+					</div>
 					<For each={keys()}>
 						{(groupKey) => (
 							<div

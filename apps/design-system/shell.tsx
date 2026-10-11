@@ -32,6 +32,7 @@ import {
 	type StoryEntry,
 } from "./catalog";
 import { Coverage } from "./coverage";
+import { labelMode } from "./labels";
 import { StoryView } from "./stage";
 
 /**
@@ -254,10 +255,16 @@ const ThemeSwitcher: Component = () => {
 	);
 };
 
-/** Top bar shared by both views: App and Stories tabs, theme, and the label shortcut hint in the App view. */
+/** Top bar shared by both views: brand with the DEMO badge, App and Stories tabs, theme, and the label shortcuts in the App view. */
 const TopBar: Component<{ app: boolean }> = (props) => (
 	<nav class="ds-topbar">
 		<span class="ds-brand">omp web design system</span>
+		<span
+			class="ds-demo-badge"
+			title="Demo: fixture data only; no fleet, daemon, or model runs behind it"
+		>
+			Demo
+		</span>
 		<a class="ds-nav-link" href="#/" aria-current={props.app ? "page" : undefined}>
 			App
 		</a>
@@ -266,7 +273,17 @@ const TopBar: Component<{ app: boolean }> = (props) => (
 		</a>
 		<ThemeSwitcher />
 		<Show when={props.app}>
-			<span class="ds-topbar-hint">Shift: label components under pointer · Ctrl+Shift: all</span>
+			<div class="ds-shortcuts" aria-label="Component label shortcuts">
+				<span class="ds-shortcut" classList={{ "ds-shortcut--active": labelMode() === "hover" }}>
+					<kbd>Shift</kbd>
+					<span>label under pointer</span>
+				</span>
+				<span class="ds-shortcut" classList={{ "ds-shortcut--active": labelMode() === "all" }}>
+					<kbd>Ctrl</kbd>+<kbd>Shift</kbd>
+					<span>label all</span>
+				</span>
+				<span class="ds-shortcut ds-shortcut--note">click a label for its design</span>
+			</div>
 		</Show>
 	</nav>
 );

@@ -27,10 +27,64 @@ body {
 .ds-topbar .ds-brand {
 	padding: 0 var(--space-4) 0 0;
 }
-.ds-topbar-hint {
+/* Brand, badge, tabs and theme keep their size; the shortcut chips take what is left. */
+.ds-topbar > * {
+	flex: none;
+}
+/* Fixed "Demo" badge beside the brand: the whole page runs on fixtures. */
+.ds-demo-badge {
+	padding: var(--space-1) var(--space-5);
+	border: 1px solid var(--warning-border);
+	border-radius: var(--r-pill);
+	background: var(--warning-bg);
+	color: var(--warning);
+	font-size: var(--fs-lg);
+	font-weight: 800;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+}
+/* App view label shortcuts: keycap chips; the held one fills with the accent. */
+.ds-shortcuts {
+	display: flex;
+	gap: var(--space-4);
 	margin-left: auto;
-	color: var(--muted);
+}
+.ds-shortcut {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-5);
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-pill);
+	background: var(--accent-dim);
+	color: var(--text);
+	font-weight: 500;
+	white-space: nowrap;
+}
+.ds-shortcut > span {
+	margin-left: var(--space-2);
+}
+.ds-shortcut kbd {
+	padding: 0 var(--space-3);
+	border: 1px solid var(--border-strong);
+	border-bottom-width: 2px;
+	border-radius: var(--r-sm);
+	background: var(--panel);
+	color: var(--accent);
+	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
+	font-weight: 700;
+}
+.ds-shortcut--active {
+	border-color: var(--accent);
+	background: var(--accent);
+	color: var(--bg);
+}
+/* Follow-on instruction after the key chips: no keycap, dashed so it reads as a step. */
+.ds-shortcut--note {
+	border-style: dashed;
+	background: transparent;
+	color: var(--accent);
 }
 .ds-shell {
 	display: grid;
@@ -470,6 +524,22 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 	border: 2px dashed var(--accent);
 	border-radius: var(--r-sm);
 	pointer-events: none;
+}
+/* Shown while labels are up: the click affordance, pinned bottom-centre above the App. */
+.ds-labels-hint {
+	position: fixed;
+	bottom: var(--space-7);
+	left: 50%;
+	transform: translateX(-50%);
+	padding: var(--space-4) var(--space-6);
+	border: 1px solid var(--accent);
+	border-radius: var(--r-pill);
+	background: var(--panel);
+	color: var(--text);
+	font-size: var(--fs-lg);
+	font-weight: 600;
+	box-shadow: var(--shadow-1);
+	white-space: nowrap;
 }
 
 /* Inspector: right-hand sidebar with a story iframe for the picked component. */
