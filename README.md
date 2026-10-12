@@ -14,7 +14,7 @@ Because it drives the agent through the SDK instead of the RPC, omp-web has full
 - **Multiple Repos and Worktrees, one UI.** Start, monitor, and chat with one agent daemon per worktree across every repo.
 - **A full web UI, not a terminal wrapper.** Live-streamed responses, rendered markdown and diffs, tool output, slash commands, prompt history and autocomplete, per-session context/usage meters, and a transcripts/stats view.
 - **Custom wire protocol for full SDK control.** The SSE + POST contract carries the full SDK surface, including daemon and subagent control the RPC doesn't expose.
-- **Manage repos and worktrees from the UI.** Register projects (deduped by realpath); create or adopt managed worktrees. Managed worktrees delete safely: clean-tree-only, `git branch -d`, no `--force`.
+- **Manage repos and worktrees from the UI.** Register projects (deduped by realpath); create owned worktrees or adopt external ones. Owned worktrees delete safely: clean-tree-only, `git branch -d`, no `--force`. Removing a local daemon preserves its files.
 - **CLI for automation.** Spawn, stop, remove, inspect, and fan a prompt out to many daemons from the terminal, the same fleet the browser talks to.
 - **Self-updating.** `omp-web update` checks GitHub Releases and installs a newer release when available.
 - **Self-healing.** Sessions dial out to the control plane and redial it after a restart or a dropped connection; a session with no control plane for 10 minutes shuts itself down. Idle daemons exit after 30 minutes by default and are respawned on demand; crashed daemons restart with bounded backoff; browsers re-attach automatically.
@@ -103,12 +103,15 @@ Upgrading from a release before sessions dialed out: entries added with the remo
 
 - Default data directory: `~/.omp-web/`
 - `config.json`: fleet config, loaded read-only; only the interactive first-run offer and operator edits write it. Keys include `templates` (spawn commands), `workspaceDir`, `bind`, `browserAccessToken` (a sha-256 digest, not plaintext), `browserOrigin`, and `trustedProxies`. `OMP_FLEET_CONFIG` selects a different file. Flags such as `--bind`/`--browser-access-token` and env `OMP_FLEET_BIND`/`OMP_FLEET_BROWSER_TOKEN` override file keys; CLI/env browser tokens are plaintext inputs hashed in memory.
-- `fleet-state.json`: roster and registered projects, with atomic writes and an exclusive lifetime pidfile lock. Defaults beside the selected config; `OMP_FLEET_STATE` selects another path.
-- `workspaces/`: default managed-worktree root, created as needed or during accepted first-run setup. `--workspace-dir`, `OMP_FLEET_WORKSPACE_DIR`, or config `workspaceDir` select another root independently of config and state.
+- `fleet-state.json`: roster and registered projects as pretty-printed JSON, with atomic writes and an exclusive lifetime pidfile lock. Defaults beside the selected config; `OMP_FLEET_STATE` selects another path.
+- `workspaces/`: default creation destination for local worktrees, created as needed or during accepted first-run setup. `--workspace-dir`, `OMP_FLEET_WORKSPACE_DIR`, or config `workspaceDir` select another directory independently of config and state; location never determines ownership. Worktrees use `<workspaceDir>/<repo-basename>/<slug(name)>` directly, with no repository marker or hash disambiguation; an existing target is rejected.
 - `logs/` beside the state file: durable lineage-file mirrors streamed over enrolled callback pairs when the fleet log store is available. Local spawned sessions are not mirrored; their transcripts stay in their SDK session directory.
 - `session-logs/<daemonId>.log` beside the state file: stdout and stderr of each locally spawned session, appended across restarts and never rotated (`/ctl/sessions/<id>/stderr` and the Debug panel show the last 64 KiB). Delete a file to reclaim space; the next launch recreates it.
+- `clones/` beside the selected state file: private volumes for new provider-managed clones. Existing clones keep their persisted volume location and provider administration directory even when `workspaceDir` changes; no automatic move occurs.
 
 Interactive first run can choose a data home and write `config.json` there. If you choose a non-default location, set `OMP_FLEET_CONFIG` to that file for subsequent launches. Config, state, and workspace paths can be configured separately; installed code remains in its installation prefix.
+
+Local worktree ownership is creation provenance, not directory containment. Worktrees created by the fleet are explicitly owned; adopted worktrees are external even inside the default directory. Legacy worktrees with no recorded provenance migrate safely to external in memory and are persisted on the next registry mutation (startup alone does not rewrite state). Changing the default directory neither grants nor revokes ownership. Local **Remove from omp-web** / `omp-web remove` stops and unregisters the daemon without deleting files or the Git worktree; only explicitly owned linked worktrees offer disk deletion, with clean-tree checks and no force. Provider-managed clones retain their separate verified-deletion lifecycle.
 
 ## Optional features
 
@@ -154,8 +157,8 @@ omp-web spawn <path>                 # start a daemon on a directory
 omp-web add-repo <path> [--start]    # register a project (deduped on realpath)
 omp-web enroll <name> [--label k=v] [--cwd dir] [--callback-url url]   # enroll a remote session; prints its run command
 omp-web provision <name> [--label k=v]                  # enroll via the configured spawn hook
-omp-web add-worktree <project> <name> [--no-start]      # create a managed worktree
-omp-web add-worktree <project> --existing <path>        # adopt an existing one
+omp-web add-worktree <project> <name> [--no-start]      # create an owned worktree
+omp-web add-worktree <project> --existing <path>        # adopt an external one
 omp-web stop <selector>
 omp-web remove <selector>
 omp-web rm-project <project>

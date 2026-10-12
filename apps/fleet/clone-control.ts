@@ -19,6 +19,10 @@
  *   DELETE /ctl/worktrees/:daemonId → kind-dispatch to the verified gate
  *   POST /ctl/remove {selector} → clone entries hit the SAME verified gate
  *
+ * Entry-bearing responses use the public roster projection; workspace
+ * sources, provider handles, enrollment credentials, and private ownership
+ * stay in the registry. Start/wake return only daemonId and observed state.
+ *
  * Typed failures reuse the frozen ledger vocabulary with caller-safe
  * messages; the HTTP layer maps them onto status codes.
  */
@@ -33,6 +37,7 @@ import {
 	type CloneCreateInput,
 } from "./workspace-lifecycle";
 import type { FleetEventLog } from "./events";
+import { toRosterEntry } from "./edge";
 
 /** curl/HTTP error with a message safe to return to the caller. */
 export class CloneHttpError extends Error {
@@ -116,7 +121,7 @@ export class CloneControlApi {
 	async createClone(body: CloneCreateInput): Promise<Response> {
 		const entry = await this.#lifecycle.createClone(body);
 		this.#eventLog.add("info", "server", `clone created ${entry.daemonId}`, entry.daemonId);
-		return json({ entry }, 201);
+		return json({ entry: toRosterEntry(entry) }, 201);
 	}
 
 	/** POST /ctl/start|wake {daemonId}: clone-only ensure-running. */
@@ -126,13 +131,9 @@ export class CloneControlApi {
 		}
 		// ensureCloneRunning is a service-level ensure; resolve synchronously.
 		await this.#lifecycle.ensureCloneRunning(body.daemonId);
-		const entry = this.#registry.get(body.daemonId);
 		return json({
 			daemonId: body.daemonId,
 			observed: "running",
-			...(entry?.workspace?.providerHandle !== undefined
-				? { handle: entry.workspace.providerHandle }
-				: {}),
 		});
 	}
 

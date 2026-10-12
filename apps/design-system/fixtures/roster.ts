@@ -116,7 +116,7 @@ const daemonMain: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: managed worktree, ready, with local changes; the row the browser is attached to. */
+/** DaemonEntry: owned worktree, ready, with local changes; the row the browser is attached to. */
 const daemonFixtures: DaemonEntry = {
 	daemonId: "dmn_a002",
 	name: "design-fixtures",
@@ -159,6 +159,18 @@ const daemonAsleep: DaemonEntry = {
 	desiredState: "stopped",
 };
 
+/** DaemonEntry: adopted worktree in the default creation directory; its files are not owned. */
+const daemonExternalWorktree: DaemonEntry = {
+	...daemonAsleep,
+	daemonId: "dmn_a007",
+	name: "adopted-review",
+	cwd: `${WORKTREES}/adopted-review`,
+	managed: false,
+	branch: "review/external",
+	lastSessionFile: undefined,
+	sessionTitle: undefined,
+};
+
 /** DaemonEntry: worktree whose daemon is still resolving provider and model (transitional status). */
 const daemonStarting: DaemonEntry = {
 	daemonId: "dmn_a004",
@@ -184,7 +196,7 @@ const daemonClonePreparing: DaemonEntry = {
 	cwd: "/home/joshua/.omp/clones/bench-clone",
 	project: "omp-web",
 	projectId: "proj_omp_web",
-	managed: true,
+	managed: false,
 	branch: "main",
 	labels: ["bench"],
 	mode: "spawned",
@@ -202,7 +214,7 @@ const daemonCloneFailed: DaemonEntry = {
 	cwd: "/home/joshua/.omp/clones/k8s-trial",
 	project: "omp-web",
 	projectId: "proj_omp_web",
-	managed: true,
+	managed: false,
 	labels: ["trial"],
 	mode: "spawned",
 	status: "error",
@@ -294,6 +306,7 @@ export const rosterDaemons: DaemonEntry[] = [
 	daemonMain,
 	daemonFixtures,
 	daemonAsleep,
+	daemonExternalWorktree,
 	daemonStarting,
 	daemonClonePreparing,
 	daemonCloneFailed,
@@ -308,6 +321,7 @@ export const rosterDaemon = {
 	main: daemonMain,
 	worktree: daemonFixtures,
 	asleep: daemonAsleep,
+	externalWorktree: daemonExternalWorktree,
 	starting: daemonStarting,
 	clonePreparing: daemonClonePreparing,
 	cloneFailed: daemonCloneFailed,
@@ -561,7 +575,7 @@ export const rosterUsageReports: UsageReport[] = [
 	},
 ];
 
-/** WorktreeDeleteInfo: clean, merged, managed worktree; the dialog offers branch deletion. */
+/** WorktreeDeleteInfo: clean, merged, owned worktree; the dialog offers branch deletion. */
 export const worktreeInfoClean: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
 	daemonId: "dmn_a003",
@@ -585,13 +599,13 @@ export const worktreeInfoDirty: WorktreeDeleteInfo = {
 	reason: "commit or stash the changes first",
 };
 
-/** WorktreeDeleteInfo: directory outside the managed root, so there is nothing to delete. */
+/** WorktreeDeleteInfo: adopted external worktree, regardless of its directory location. */
 export const worktreeInfoUnowned: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
-	daemonId: "dmn_a001",
+	daemonId: "dmn_a007",
 	owned: false,
 	dirty: false,
-	reason: "/home/joshua/Repos/omp-web is the main checkout, not a fleet-managed worktree",
+	reason: "This worktree is not owned by omp-web. Remove it from omp-web to preserve its files.",
 };
 
 /** SessionListEntry list per daemon for the row's session dropdown, newest first. */

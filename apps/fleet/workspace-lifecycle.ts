@@ -47,7 +47,7 @@ import {
 	unlinkSync,
 	writeSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { Subprocess } from "bun";
 
 import { ENROLLMENT_KEY_BYTES } from "#lib/wire/callback-protocol";
@@ -126,7 +126,9 @@ export interface CloneCreateInput {
 /** External wiring the fleet server injects (nothing HTTP here). */
 export interface WorkspaceLifecycleDeps {
 	registry: Registry;
-	config: Pick<FleetConfig, "workspaceDir" | "providerProfiles">;
+	config: Pick<FleetConfig, "providerProfiles">;
+	/** Private volume allocation root beside this fleet's selected state file. */
+	cloneRoot: string;
 	transport: DaemonTransportRegistry;
 	/** Fleet log store; null when the logs dir was unwritable at boot. */
 	logStore: FleetLogStore | null;
@@ -393,14 +395,14 @@ export class WorkspaceLifecycle {
 		const source: { local?: string; remote?: string } =
 			sourceLocal !== undefined || sourceRemote !== undefined
 				? {
-						...(sourceLocal !== undefined ? { local: sourceLocal } : {}),
+						...(sourceLocal !== undefined ? { local: resolve(sourceLocal) } : {}),
 						...(sourceRemote !== undefined ? { remote: sourceRemote } : {}),
 					}
-				: { local: project.path };
+				: { local: resolve(project.path) };
 		const start = input.start ?? false;
 		const branch = input.branch ?? deriveWorkspaceBranch(name);
 
-		// Durable identity first: the volume lives under workspaceDir/<dN>.
+		// Durable identity first; only new volumes use this fleet's private root.
 		const created = registry.create({
 			name: name.trim(),
 			cwd: "",
@@ -412,7 +414,7 @@ export class WorkspaceLifecycle {
 			status: "asleep",
 		});
 		const daemonId = created.daemonId;
-		const volumeRoot = join(config.workspaceDir, daemonId);
+		const volumeRoot = join(this.#deps.cloneRoot, daemonId);
 
 		// Persist source/profile/desiredState BEFORE any retry-prone step.
 		const record: WorkspaceRecord = {
@@ -444,7 +446,7 @@ export class WorkspaceLifecycle {
 		let pinnedRevision: string | undefined;
 		try {
 			pinnedRevision = await resolveWorkspacePin(source, input.revision, {
-				// The workspaceDir is created lazily and may not exist yet on a
+				// The clone root is created lazily and may not exist yet on a
 				// fresh fleet; the registered project path always exists.
 				cwd: project.path,
 			});
@@ -1242,7 +1244,7 @@ export class WorkspaceLifecycle {
 	 */
 	async #runGitGuard(daemonId: string): Promise<void> {
 		const entry = this.#require(daemonId);
-		const checkoutDir = join(entry.cwd ?? "", ".checkout");
+		const { checkoutDir } = this.#clonePaths(entry);
 		if (!existsSync(join(checkoutDir, ".git"))) {
 			// A never-prepared/never-started clone has no checkout to guard;
 			// the store/volume checks below are authoritative.
@@ -1317,8 +1319,8 @@ export class WorkspaceLifecycle {
 	): Promise<{ ok: true } | { ok: false; message: string }> {
 		const entry = this.#require(daemonId);
 		const record = entry.workspace;
-		const volumeRoot = entry.cwd ?? join(this.#deps.config.workspaceDir, daemonId);
-		const sessionsDir = join(volumeRoot, ".home", "agent", "sessions");
+		const { volumeRoot, homeDir } = this.#clonePaths(entry);
+		const sessionsDir = join(homeDir, "agent", "sessions");
 		const everStarted =
 			record?.authorizedGeneration !== undefined ||
 			record?.providerHandle !== undefined ||
@@ -1436,19 +1438,25 @@ export class WorkspaceLifecycle {
 		return { profileId, profile };
 	}
 
-	/** Workspace paths: volume root + sandbox dirs (frozen layout). */
+	/** Persisted volume location also anchors provider identity and callback state. */
 	#clonePaths(entry: RegistryEntry): {
 		volumeRoot: string;
 		checkoutDir: string;
 		homeDir: string;
 		stateDir: string;
 	} {
-		const volumeRoot = join(this.#deps.config.workspaceDir, entry.daemonId);
+		const volumeRoot = entry.cwd;
+		if (!volumeRoot || !isAbsolute(volumeRoot)) {
+			throw new CloneLifecycleError(
+				"unavailable",
+				`clone workspace ${entry.daemonId} has no persisted absolute volume location`,
+			);
+		}
 		return {
 			volumeRoot,
 			checkoutDir: join(volumeRoot, ".checkout"),
 			homeDir: join(volumeRoot, ".home"),
-			stateDir: join(this.#deps.config.workspaceDir, ".provider-state", entry.daemonId),
+			stateDir: join(dirname(volumeRoot), ".provider-state", entry.daemonId),
 		};
 	}
 

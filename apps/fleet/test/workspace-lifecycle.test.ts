@@ -38,11 +38,12 @@ import {
 	chmodSync,
 	existsSync,
 	mkdirSync,
+	renameSync,
 	readFileSync,
 	readdirSync,
 	writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import type { FleetServer } from "../server";
 import {
 	cleanupTempDirs,
@@ -130,7 +131,7 @@ interface ProviderScenario {
  * Scripted fixture provider executable speaking OMP_PROVIDER_PROTO
  * (`<executable> <op>`, one JSON request on stdin, one JSON response on
  * stdout). Every request is durably appended to `<stateDir>/ops.jsonl` (the
- * provider state dir lives under the fleet workspaceDir, so the record
+ * provider state dir lives beside the persisted clone volume, so the record
  * survives fleet restarts). `deleteFailures` control how many initial
  * `delete` requests fail (`unavailable`); `stopObserved` can refuse to
  * prove termination.
@@ -241,6 +242,7 @@ interface FleetFixture {
 	server: FleetServer;
 	paths: { tmp: string; statePath: string; configPath: string };
 	workspaceDir: string;
+	cloneRoot: string;
 	logsDir: string;
 	repoDir: string;
 }
@@ -250,9 +252,13 @@ interface FleetFixture {
  * workspaceDir + state under tmp (fleet logs live at <tmp>/logs). Registers
  * a local git repo as the clone project.
  */
-async function bootFleet(scenario: ProviderScenario): Promise<FleetFixture> {
+async function bootFleet(
+	scenario: ProviderScenario,
+	sharedWorkspaceDir?: string,
+): Promise<FleetFixture> {
 	const paths = fleetPaths("omp-workspace-lifecycle-");
-	const workspaceDir = join(paths.tmp, "workspaces");
+	const workspaceDir = sharedWorkspaceDir ?? join(paths.tmp, "workspaces");
+	const cloneRoot = join(dirname(paths.statePath), "clones");
 	const logsDir = join(paths.tmp, "logs");
 	const repoDir = join(paths.tmp, "repo");
 	await makeRepo(repoDir);
@@ -267,7 +273,7 @@ async function bootFleet(scenario: ProviderScenario): Promise<FleetFixture> {
 		},
 		{ workspaceDir },
 	);
-	return { server, paths, workspaceDir, logsDir, repoDir };
+	return { server, paths, workspaceDir, cloneRoot, logsDir, repoDir };
 }
 
 /** Create a clone of the registered repo, returning its daemonId. */
@@ -289,11 +295,71 @@ function deleteWorkspace(port: number, daemonId: string): Promise<Response> {
 	return fetch(`http://127.0.0.1:${port}/ctl/worktrees/${daemonId}`, { method: "DELETE" });
 }
 
+test(
+	"fleets sharing a worktree destination allocate independent private clone volumes and provider state",
+	async () => {
+		const scenario = {
+			runningWhileLive: false,
+			stopObserved: "stopped" as const,
+			deleteFailures: 0,
+		};
+		const first = await bootFleet(scenario);
+		let second: FleetFixture | undefined;
+		try {
+			second = await bootFleet(scenario, first.workspaceDir);
+			const firstId = await createClone(first.server, first.repoDir, "first");
+			const secondId = await createClone(second.server, second.repoDir, "second");
+			expect(firstId).toBe(secondId);
+			const firstVolume = first.server.registry.get(firstId)!.cwd!;
+			const secondVolume = second.server.registry.get(secondId)!.cwd!;
+			expect(firstVolume).toBe(join(first.cloneRoot, firstId));
+			expect(secondVolume).toBe(join(second.cloneRoot, secondId));
+			expect(firstVolume).not.toBe(secondVolume);
+			expect((await postJson(first.server.port, "/ctl/start", { daemonId: firstId })).status).toBe(
+				200,
+			);
+			expect(providerOps(first.cloneRoot, firstId)).toHaveLength(1);
+			expect(providerOps(second.cloneRoot, secondId)).toHaveLength(0);
+			expect(
+				(await postJson(second.server.port, "/ctl/start", { daemonId: secondId })).status,
+			).toBe(200);
+			expect(providerOps(second.cloneRoot, secondId)).toHaveLength(1);
+			expect(existsSync(join(first.workspaceDir, firstId))).toBe(false);
+		} finally {
+			await second?.server.close();
+			await first.server.close();
+		}
+	},
+	{ timeout: 30_000 },
+);
+
+test(
+	"a clone without its persisted location fails instead of using an allocation destination",
+	async () => {
+		const { server, cloneRoot, repoDir } = await bootFleet({
+			runningWhileLive: false,
+			stopObserved: "stopped",
+			deleteFailures: 0,
+		});
+		try {
+			const daemonId = await createClone(server, repoDir, "missing-location");
+			server.registry.update(daemonId, { cwd: "" });
+			const start = await postJson(server.port, "/ctl/start", { daemonId });
+			expect(start.status).toBe(503);
+			expect(providerOps(cloneRoot, daemonId)).toHaveLength(0);
+			expect(server.registry.get(daemonId)!.cwd).toBe("");
+		} finally {
+			await server.close();
+		}
+	},
+	{ timeout: 20_000 },
+);
+
 describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 	test(
 		"deleting a live desired-running clone is refused with everything retained, and a second attempt cannot bypass the refusal",
 		async () => {
-			const { server, workspaceDir, repoDir } = await bootFleet({
+			const { server, cloneRoot, repoDir } = await bootFleet({
 				runningWhileLive: true,
 				stopObserved: "stopped",
 				deleteFailures: 0,
@@ -325,7 +391,7 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				expect(after.workspace?.enrollment?.generation).toBe(1);
 				expect(after.workspace?.deletion).toBeUndefined();
 				expect(existsSync(join(after.cwd ?? "", ".checkout", ".git"))).toBe(true);
-				expect(providerOps(workspaceDir, daemonId).some((o) => o.op === "delete")).toBe(false);
+				expect(providerOps(cloneRoot, daemonId).some((o) => o.op === "delete")).toBe(false);
 			} finally {
 				await server.close();
 			}
@@ -336,7 +402,7 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 	test(
 		"parallel deletes serialize: exactly one destroy, the loser refused",
 		async () => {
-			const { server, workspaceDir, repoDir } = await bootFleet({
+			const { server, cloneRoot, repoDir } = await bootFleet({
 				runningWhileLive: false,
 				stopObserved: "stopped",
 				deleteFailures: 0,
@@ -371,10 +437,8 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				// The roster is gone, the volume is gone, and the provider saw
 				// exactly ONE delete op.
 				expect(server.registry.get(daemonId)).toBeUndefined();
-				expect(existsSync(join(workspaceDir, daemonId))).toBe(false);
-				expect(providerOps(workspaceDir, daemonId).filter((o) => o.op === "delete")).toHaveLength(
-					1,
-				);
+				expect(existsSync(join(cloneRoot, daemonId))).toBe(false);
+				expect(providerOps(cloneRoot, daemonId).filter((o) => o.op === "delete")).toHaveLength(1);
 			} finally {
 				await server.close();
 			}
@@ -385,7 +449,7 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 	test(
 		"an incomplete store blocks deletion with the registry entry, volume, and store retained and a durable retry state",
 		async () => {
-			const { server, workspaceDir, logsDir, repoDir } = await bootFleet({
+			const { server, cloneRoot, logsDir, repoDir } = await bootFleet({
 				runningWhileLive: false,
 				stopObserved: "stopped",
 				deleteFailures: 0,
@@ -397,7 +461,7 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				// is one short of the durable length). The volume carries the
 				// same session tree, so only the store's offset-contiguity
 				// check fails, the exact interrupted-stream condition.
-				seedSession(logsDir, workspaceDir, daemonId, {
+				seedSession(logsDir, cloneRoot, daemonId, {
 					ackedOffset: Buffer.byteLength(transcriptJsonl(), "utf8") - 1,
 				});
 
@@ -411,13 +475,11 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				expect(entry.workspace?.deletion?.error?.code).toBe("conflict");
 				// Volume retained; store retained and still writable (no
 				// read-only marker, verification never passed).
-				expect(existsSync(join(workspaceDir, daemonId))).toBe(true);
+				expect(existsSync(join(cloneRoot, daemonId))).toBe(true);
 				expect(existsSync(readOnlyMarker(logsDir, daemonId))).toBe(false);
 				// The provider never saw a delete (the gate stopped at the
 				// verification step).
-				expect(providerOps(workspaceDir, daemonId).filter((o) => o.op === "delete")).toHaveLength(
-					0,
-				);
+				expect(providerOps(cloneRoot, daemonId).filter((o) => o.op === "delete")).toHaveLength(0);
 				// A start remains blocked too: the workspace is quarantined by
 				// the pending-retry state until a delete retry succeeds.
 				const wake = await postJson(server.port, "/ctl/start", { daemonId });
@@ -437,8 +499,10 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				stopObserved: "stopped",
 				deleteFailures: 1, // the FIRST provider delete fails
 			});
+			// Preserve an old shared-root volume through the changed-destination restart.
+			const cloneRoot = workspaceDir;
 			const config = {
-				workspaceDir,
+				workspaceDir: join(paths.tmp, "changed-worktrees"),
 				providerProfiles: {
 					local: {
 						id: "local",
@@ -452,12 +516,15 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 			};
 			const boot = async (): Promise<FleetServer> =>
 				await startTestFleet({ statePath: paths.statePath, configPath: paths.configPath }, config, {
-					workspaceDir,
+					workspaceDir: config.workspaceDir,
 				});
 			let daemonId: string;
 			{
 				const id = await createClone(server, repoDir, "verified-retry");
 				daemonId = id;
+				mkdirSync(workspaceDir, { recursive: true });
+				renameSync(server.registry.get(id)!.cwd!, join(cloneRoot, id));
+				server.registry.update(id, { cwd: join(cloneRoot, id) });
 			}
 			try {
 				// Start (gen 1, desired running) then explicitly stop: the
@@ -473,7 +540,7 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 
 				// Verified, stopped clone with a real stored session (valid
 				// JSONL, offset-contiguous index) mirrored on the volume.
-				seedSession(logsDir, workspaceDir, daemonId, {});
+				seedSession(logsDir, cloneRoot, daemonId, {});
 
 				// First delete: verification passes, the store flips read-only,
 				// then the provider delete FAILS → delete-pending-retry with
@@ -489,8 +556,8 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 				// Verified: the store flipped read-only and stays; the volume
 				// is retained until the retry destroys it.
 				expect(existsSync(readOnlyMarker(logsDir, daemonId))).toBe(true);
-				expect(existsSync(join(workspaceDir, daemonId))).toBe(true);
-				expect(deleteCount(workspaceDir, daemonId)).toBe(1); // exactly ONE failed attempt
+				expect(existsSync(join(cloneRoot, daemonId))).toBe(true);
+				expect(deleteCount(cloneRoot, daemonId)).toBe(1); // exactly ONE failed attempt
 
 				// FLEET RESTART on the same state, then the RETRY: the retry
 				// must complete the interrupted destroy exactly once.
@@ -505,13 +572,13 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 					// The registry identity is gone, the volume is gone, the
 					// verified store (read-only) is retained for Retention.
 					expect(server2.registry.get(daemonId)).toBeUndefined();
-					expect(existsSync(join(workspaceDir, daemonId))).toBe(false);
+					expect(existsSync(join(cloneRoot, daemonId))).toBe(false);
 					expect(existsSync(readOnlyMarker(logsDir, daemonId))).toBe(true);
 					// The durable provider record shows the failed delete AND
 					// the successful retry, exactly two attempts total across
 					// both fleet lifetimes, no double destroy after success.
-					expect(deleteCount(workspaceDir, daemonId)).toBe(2);
-					const deletes = providerOps(workspaceDir, daemonId).filter((o) => o.op === "delete");
+					expect(deleteCount(cloneRoot, daemonId)).toBe(2);
+					const deletes = providerOps(cloneRoot, daemonId).filter((o) => o.op === "delete");
 					expect(deletes).toHaveLength(2);
 					expect(deletes[0]!.handle).toBeDefined();
 					expect(deletes[1]!.handle).toBe(deletes[0]!.handle);
@@ -528,9 +595,70 @@ describe("clone workspace deletion lifecycle (P7.3/P7.5)", () => {
 	);
 });
 
+test(
+	"clone create, start, and wake HTTP responses keep provider and enrollment state private",
+	async () => {
+		const { server, repoDir } = await bootFleet({
+			runningWhileLive: true,
+			stopObserved: "stopped",
+			deleteFailures: 0,
+		});
+		try {
+			const project = await server.registry.addProject(repoDir);
+			const response = await postJson(server.port, "/ctl/clones", {
+				projectId: project.projectId,
+				name: "private-clone",
+				profileId: "local",
+				source: { local: repoDir },
+				start: true,
+			});
+			expect(response.status).toBe(201);
+			const body = (await response.json()) as { entry: { daemonId: string } };
+			const daemonId = body.entry.daemonId;
+			const entry = server.registry.get(daemonId)!;
+			// Prove the omitted facts actually exist; lifecycle assertions must
+			// read private state in-process, not depend on a private HTTP shape.
+			expect(entry.workspace?.source).toEqual({ local: repoDir });
+			expect(entry.workspace?.providerHandle).toBe("h");
+			expect(entry.workspace?.enrollment?.credentialHash).toBeDefined();
+			expect(body.entry).toMatchObject({
+				daemonId,
+				name: "private-clone",
+				workspaceKind: "clone",
+				desiredState: "running",
+				providerProfileId: "local",
+			});
+			for (const key of [
+				"workspace",
+				"source",
+				"providerHandle",
+				"enrollment",
+				"credentialHash",
+				"template",
+				"registeredAt",
+				"managed",
+				"localWorktreeOwnership",
+			]) {
+				expect(body.entry).not.toHaveProperty(key);
+			}
+			expect(JSON.stringify(body)).not.toContain(repoDir);
+			expect(JSON.stringify(body)).not.toContain(entry.workspace!.enrollment!.credentialHash);
+			for (const route of ["/ctl/start", "/ctl/wake"]) {
+				const started = await postJson(server.port, route, { daemonId });
+				expect(started.status).toBe(200);
+				expect(await started.json()).toEqual({ daemonId, observed: "running" });
+				expect(server.registry.get(daemonId)!.workspace?.providerHandle).toBe("h");
+			}
+		} finally {
+			await server.close();
+		}
+	},
+	{ timeout: 20_000 },
+);
+
 describe("clone source validation over /ctl/clones (P1.3)", () => {
 	const validSources = [
-		{ label: "local-only", kind: "local" as const },
+		{ label: "relative-local", kind: "local" as const },
 		{ label: "remote-only", kind: "remote" as const },
 	];
 
@@ -538,14 +666,17 @@ describe("clone source validation over /ctl/clones (P1.3)", () => {
 		test(
 			`a ${label} source clones successfully and materializes a real volume`,
 			async () => {
-				const { server, workspaceDir, repoDir } = await bootFleet({
+				const { server, paths, workspaceDir, cloneRoot, repoDir } = await bootFleet({
 					runningWhileLive: false,
 					stopObserved: "stopped",
 					deleteFailures: 0,
 				});
 				try {
 					const project = await server.registry.addProject(repoDir);
-					const source = kind === "local" ? { local: repoDir } : { remote: `file://${repoDir}` };
+					const source =
+						kind === "local"
+							? { local: relative(process.cwd(), repoDir) }
+							: { remote: `file://${repoDir}` };
 					const res = await postJson(server.port, "/ctl/clones", {
 						projectId: project.projectId,
 						name: `clone-${label}`,
@@ -558,12 +689,24 @@ describe("clone source validation over /ctl/clones (P1.3)", () => {
 					const daemonId = body.entry.daemonId;
 					const entry = server.registry.get(daemonId)!;
 					expect(entry.workspace?.kind).toBe("clone");
-					// The workspace volume was really prepared from the source:
-					// an independent checkout under workspaceDir/<dN>/.checkout
-					// holding the source's file.
-					const checkout = join(workspaceDir, daemonId, ".checkout");
+					// Independent checkout is private to the selected fleet state,
+					// never allocated in the configured worktree destination.
+					expect(entry.cwd).toBe(join(dirname(paths.statePath), "clones", daemonId));
+					expect(existsSync(join(workspaceDir, daemonId))).toBe(false);
+					const checkout = join(cloneRoot, daemonId, ".checkout");
 					expect(existsSync(join(checkout, ".git"))).toBe(true);
 					expect(existsSync(join(checkout, "readme.md"))).toBe(true);
+					if (kind === "local") {
+						expect(entry.workspace?.source).toEqual({ local: repoDir });
+						const marker = JSON.parse(
+							readFileSync(join(entry.cwd!, ".omp-workspace-init.json"), "utf8"),
+						) as { source: { local: string } };
+						expect(marker.source.local).toBe(repoDir);
+						const deletion = await deleteWorkspace(server.port, daemonId);
+						expect(deletion.status).toBe(200);
+						expect(server.registry.get(daemonId)).toBeUndefined();
+						expect(existsSync(entry.cwd!)).toBe(false);
+					}
 				} finally {
 					await server.close();
 				}
@@ -581,7 +724,7 @@ describe("clone source validation over /ctl/clones (P1.3)", () => {
 		test(
 			`an invalid source (${label}) is refused with 400 and creates no workspace`,
 			async () => {
-				const { server, workspaceDir, repoDir } = await bootFleet({
+				const { server, cloneRoot, repoDir } = await bootFleet({
 					runningWhileLive: false,
 					stopObserved: "stopped",
 					deleteFailures: 0,
@@ -598,11 +741,11 @@ describe("clone source validation over /ctl/clones (P1.3)", () => {
 					});
 					expect(res.status).toBe(400); // invalid_request maps to 400
 					// Refused before any durable work: no roster entry was
-					// added and no workspaceDir/<dN> volume was created.
+					// added and no private clone volume was created.
 					expect(server.registry.list()).toHaveLength(before);
 					let volumeEntries: string[];
 					try {
-						volumeEntries = readdirSync(workspaceDir);
+						volumeEntries = readdirSync(cloneRoot);
 					} catch {
 						volumeEntries = [];
 					}

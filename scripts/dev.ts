@@ -68,10 +68,10 @@
  * (data home = config dir, so the first-run data-home choice moves it too).
  * N worktrees running `bun run dev` plus the user's real fleet on
  * `<data home>/fleet-state.json` all coexist; nothing is written into the
- * repo. Config AND the managed-worktree root stay shared: the lock guards
- * only the state file; workspaces coordinate at path level (`.omp-web-repo`
- * markers, existing-target refusal, git's own no-double-checkout), so every
- * fleet sees and manages the same worktrees. A second `bun run dev` in the
+ * repo. Config AND the default worktree directory stay shared: worktrees
+ * coordinate at path level (existing-target refusal and git's own
+ * no-double-checkout). Each fleet owns only worktrees it created;
+ * clones are private under its state directory. A second `bun run dev` in the
  * SAME worktree still correctly fails on the lock (exit 77). Orphaned
  * dev-fleets dirs from deleted worktrees are inert and safe to remove by
  * hand once their dev stack is stopped (no auto-GC).
@@ -100,8 +100,8 @@ const ROOT = join(import.meta.dir, "..");
  * Per-worktree dev fleet data (state + its pidfile lock), outside the repo:
  * `<data home>/dev-fleets/<slug>-<hash8>/` where slug is the worktree
  * basename and hash8 the sha256 of its realpath. Deterministic per worktree
- * (dev restarts reuse the same fleet), distinct across worktrees. Only the
- * STATE is scoped; the managed-worktree root deliberately stays shared.
+ * (dev restarts reuse the same fleet), distinct across worktrees. State and
+ * clone storage are scoped; the default worktree directory stays shared.
  */
 const WORKTREE_REAL = realpathSync(ROOT);
 const WORKTREE_HASH = createHash("sha256").update(WORKTREE_REAL).digest("hex").slice(0, 8);
@@ -312,9 +312,8 @@ function buildChild(name: string): Child {
 				// State (and its `.lock`) scoped per worktree under the data home:
 				// parallel worktrees' dev fleets, and the user's real fleet on
 				// <data home>/fleet-state.json, never contend on one state file,
-				// and nothing is written into the repo. Config and the managed-
-				// worktree root stay SHARED (the lock guards only state; workspaces
-				// coordinate at path level).
+				// and nothing is written into the repo. Config and the default
+				// worktree directory stay SHARED; clone storage is state-private.
 				OMP_FLEET_STATE: join(DEV_FLEET_DIR, "fleet-state.json"),
 				OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "apps", "session", "index.ts")} --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`,
 			},

@@ -111,6 +111,138 @@ describe("Registry", () => {
 		expect(JSON.parse(readFileSync(statePath, "utf8")).nextId).toBe(3);
 	});
 
+	test("generic worktree creation defaults to external even with legacy managed metadata", async () => {
+		const statePath = tmpStatePath();
+		const registry = await loadedRegistry(statePath);
+		const entries = [
+			registry.create(baseInit({ worktreeOf: "/tmp/main" })),
+			registry.create(baseInit({ managed: true })),
+			registry.create(
+				baseInit({
+					managed: true,
+					workspace: { kind: "worktree", projectId: "p1", desiredState: "running" },
+				}),
+			),
+		];
+		for (const entry of entries) {
+			expect(entry.workspace).toMatchObject({
+				kind: "worktree",
+				localWorktreeOwnership: "external",
+			});
+		}
+		const direct = registry.create(baseInit());
+		expect(direct.workspace?.kind).toBe("direct");
+		expect(direct.workspace?.localWorktreeOwnership).toBeUndefined();
+		expect((await loadedRegistry(statePath)).list()).toEqual(registry.list());
+	});
+
+	test("explicit worktree ownership persists through workspace mutations and reload", async () => {
+		const statePath = tmpStatePath();
+		const registry = await loadedRegistry(statePath);
+		const owned = registry.create(
+			baseInit({
+				workspace: {
+					kind: "worktree",
+					projectId: "p1",
+					desiredState: "running",
+					localWorktreeOwnership: "owned",
+					source: { local: "/tmp/main" },
+				},
+			}),
+		);
+		const external = registry.create(
+			baseInit({
+				managed: true,
+				workspace: {
+					kind: "worktree",
+					projectId: "p1",
+					desiredState: "running",
+					localWorktreeOwnership: "external",
+					source: { local: "/tmp/external-main" },
+				},
+			}),
+		);
+		registry.updateWorkspace(owned.daemonId, { desiredState: "stopped" });
+		registry.update(external.daemonId, { name: "renamed-external" });
+		const reloaded = await loadedRegistry(statePath);
+		expect(reloaded.get(owned.daemonId)?.workspace).toEqual({
+			kind: "worktree",
+			projectId: "p1",
+			desiredState: "stopped",
+			localWorktreeOwnership: "owned",
+			source: { local: "/tmp/main" },
+		});
+		expect(reloaded.get(external.daemonId)?.workspace?.localWorktreeOwnership).toBe("external");
+		expect(reloaded.get(external.daemonId)?.workspace?.source).toEqual({
+			local: "/tmp/external-main",
+		});
+		expect(reloaded.list()).toEqual(registry.list());
+	});
+
+	test("legacy worktree ownership migrates lazily without claiming managed checkouts", async () => {
+		const statePath = tmpStatePath();
+		const fixtures = [
+			baseInit({ managed: true }),
+			baseInit({ worktreeOf: "/tmp/main" }),
+			baseInit({
+				managed: true,
+				workspace: { kind: "worktree", projectId: "p1", desiredState: "running" },
+			}),
+			baseInit({
+				workspace: {
+					kind: "worktree",
+					projectId: "p1",
+					desiredState: "stopped",
+					localWorktreeOwnership: "owned",
+				},
+			}),
+			baseInit(),
+			baseInit({
+				workspace: { kind: "clone", projectId: "p1", desiredState: "stopped" },
+			}),
+		];
+		const original = JSON.stringify({
+			nextId: 7,
+			entries: fixtures.map((init, index) => ({
+				...init,
+				daemonId: `d${index + 1}`,
+				registeredAt: 1,
+				status: "asleep",
+			})),
+		});
+		writeFileSync(statePath, original);
+		const registry = new Registry(statePath);
+		let changes = 0;
+		registry.onChange = () => {
+			changes++;
+		};
+		await registry.load();
+		expect(changes).toBe(0);
+		expect(readFileSync(statePath, "utf8")).toBe(original);
+		for (const daemonId of ["d1", "d2", "d3"]) {
+			expect(registry.get(daemonId)?.workspace).toMatchObject({
+				kind: "worktree",
+				localWorktreeOwnership: "external",
+			});
+		}
+		expect(registry.get("d4")?.workspace?.localWorktreeOwnership).toBe("owned");
+		expect(registry.get("d5")?.workspace).toEqual({
+			kind: "direct",
+			projectId: "",
+			desiredState: "running",
+		});
+		expect(registry.get("d6")?.workspace).toEqual({
+			kind: "clone",
+			projectId: "p1",
+			desiredState: "stopped",
+		});
+		registry.update("d3", { name: "migrated" });
+		expect(changes).toBe(1);
+		const persisted = JSON.parse(readFileSync(statePath, "utf8"));
+		expect(persisted.entries[2].workspace.localWorktreeOwnership).toBe("external");
+		expect((await loadedRegistry(statePath)).list()).toEqual(registry.list());
+	});
+
 	test("dN allocation is monotonic across remove and reload (no id reuse)", async () => {
 		const statePath = tmpStatePath();
 		const registry = await loadedRegistry(statePath);

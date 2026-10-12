@@ -138,8 +138,10 @@ export interface WorkspaceEnrollment {
  */
 export interface WorkspaceRecord {
 	kind: WorkspaceKind;
+	/** Local worktrees only: explicit deletion ownership; absent legacy provenance is external. */
+	localWorktreeOwnership?: "owned" | "external";
 	projectId: string;
-	/** Clone sources. */
+	/** Clone sources; for local worktrees, local is the canonical owning repository path. */
 	source?: { local?: string; remote?: string };
 	/** Resolved commit, pinned once. */
 	pinnedRevision?: string;
@@ -211,12 +213,16 @@ interface RegistryFile {
  * the entry's registered-project link ("" when absent, e.g. remote
  * entries). In-memory only: load() stamps it and the entry's next mutation
  * persists it; no rewrite at boot.
+ * Legacy worktrees are external: managed only described process management,
+ * never authorization to delete their checkout.
  */
 function inferWorkspaceRecord(
 	entry: Pick<RegistryEntry, "managed" | "worktreeOf" | "projectId">,
 ): WorkspaceRecord {
+	const kind = entry.managed || entry.worktreeOf !== undefined ? "worktree" : "direct";
 	return {
-		kind: entry.managed || entry.worktreeOf !== undefined ? "worktree" : "direct",
+		kind,
+		...(kind === "worktree" ? { localWorktreeOwnership: "external" as const } : {}),
 		projectId: entry.projectId ?? "",
 		desiredState: "running",
 	};
@@ -274,6 +280,12 @@ export class Registry {
 		// entry's next mutation, never at boot.
 		for (const entry of this.entries) {
 			if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
+			if (
+				entry.workspace.kind === "worktree" &&
+				entry.workspace.localWorktreeOwnership === undefined
+			) {
+				entry.workspace.localWorktreeOwnership = "external";
+			}
 		}
 
 		// Tolerant read: files written before projects existed lack the keys.
@@ -346,6 +358,12 @@ export class Registry {
 		// init omits one; in-memory state then matches what a reload would
 		// produce (load() inference covers files written before P1).
 		if (entry.workspace === undefined) entry.workspace = inferWorkspaceRecord(entry);
+		if (
+			entry.workspace.kind === "worktree" &&
+			entry.workspace.localWorktreeOwnership === undefined
+		) {
+			entry.workspace = { ...entry.workspace, localWorktreeOwnership: "external" };
+		}
 		this.entries.push(entry);
 		this.#mutated();
 		return entry;
@@ -650,17 +668,21 @@ export class Registry {
 
 	#persist(): void {
 		mkdirSync(dirname(this.statePath), { recursive: true });
-		const payload = JSON.stringify({
-			nextId: this.nextId,
-			entries: this.entries,
-			projects: this.projectList,
-			nextProjectId: this.nextProjectId,
-			...(Object.keys(this.storeOrphanList).length > 0
-				? { storeOrphans: this.storeOrphanList }
-				: {}),
-		} satisfies RegistryFile);
+		const payload = JSON.stringify(
+			{
+				nextId: this.nextId,
+				entries: this.entries,
+				projects: this.projectList,
+				nextProjectId: this.nextProjectId,
+				...(Object.keys(this.storeOrphanList).length > 0
+					? { storeOrphans: this.storeOrphanList }
+					: {}),
+			} satisfies RegistryFile,
+			null,
+			2,
+		);
 		const tmp = `${this.statePath}.tmp`;
-		writeFileSync(tmp, payload, "utf8");
+		writeFileSync(tmp, `${payload}\n`, "utf8");
 		renameSync(tmp, this.statePath);
 	}
 }

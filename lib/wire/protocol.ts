@@ -340,9 +340,9 @@ export interface DaemonEntry {
 	 */
 	projectId?: string;
 	/**
-	 * True when the entry's cwd realpath lives under the fleet workspaceDir
-	 * (a managed worktree, eligible for worktree deletion; source: fleet
-	 * edge roster). Absent when not managed; older edges omit it.
+	 * True only for a local worktree explicitly recorded as fleet-owned.
+	 * Path location does not grant ownership. Absent for external/legacy
+	 * worktrees and other workspace kinds; older edges omit it.
 	 */
 	managed?: boolean;
 	/** Current git branch of the session cwd for local entries (source: fleet edge roster; older edges omit it). */

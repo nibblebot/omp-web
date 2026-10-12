@@ -116,7 +116,6 @@ import type { FleetEventLog, FleetFacts } from "./events";
 import {
 	createWorktree,
 	deleteWorktree,
-	isPathUnder,
 	listProjectBranches,
 	mergeUnregisteredWorktrees,
 	projectIdForCwd,
@@ -513,10 +512,8 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
 /**
  * the DaemonEntry fields of a registry entry (never credentials, template,
  * or registeredAt) plus a live uptime in seconds since
- * readyAt (or registeredAt when never ready) and pid. `workspaceDir` (the
- * fleet managed-worktree root) computes `managed`: true when the entry's cwd
- * realpath is under it, the roster signal the close-out UI uses to offer
- * worktree deletion.
+ * readyAt (or registeredAt when never ready) and pid. `managed` reflects
+ * explicit persisted ownership of a local worktree, never path containment.
  *
  * P1.4 clone-workspace projection: the roster surfaces the PUBLIC subset of
  * the fleet-private WorkspaceRecord: kind→workspaceKind,
@@ -530,7 +527,7 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
  * future workspace field must be mapped here explicitly (or added to the
  * RegisteredProject shape) before it can appear on the wire.
  */
-export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): DaemonEntry {
+export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 	const roster: DaemonEntry = {
 		daemonId: entry.daemonId,
 		name: entry.name,
@@ -552,9 +549,12 @@ export function toRosterEntry(entry: RegistryEntry, workspaceDir?: string): Daem
 	};
 	if (entry.worktreeOf !== undefined) roster.worktreeOf = entry.worktreeOf;
 	if (entry.projectId !== undefined) roster.projectId = entry.projectId;
-	if (workspaceDir !== undefined && workspaceDir !== "" && entry.cwd !== "") {
-		if (isPathUnder(realpathOf(entry.cwd), realpathOf(workspaceDir))) roster.managed = true;
-	}
+	if (
+		entry.mode !== "remote" &&
+		entry.workspace?.kind === "worktree" &&
+		entry.workspace.localWorktreeOwnership === "owned"
+	)
+		roster.managed = true;
 	if (entry.branch !== undefined) roster.branch = entry.branch;
 	if (entry.git !== undefined) roster.git = { ...entry.git };
 	if (entry.lastSessionFile !== undefined) roster.lastSessionFile = entry.lastSessionFile;
@@ -845,9 +845,7 @@ export class FleetEdge {
 							SSE_EVENT_NAME,
 							{
 								type: "roster",
-								daemons: this.#registry
-									.list()
-									.map((entry) => toRosterEntry(entry, this.#config.workspaceDir)),
+								daemons: this.#registry.list().map((entry) => toRosterEntry(entry)),
 							},
 							seq++,
 						),
@@ -1422,6 +1420,7 @@ export class FleetEdge {
 		try {
 			await registerWorktreeEntry(this.#registry, this.#supervisor, project, created.path, {
 				start: opts.start,
+				ownership: "owned",
 			});
 		} catch (err) {
 			this.#sendError(stream, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1478,7 +1477,10 @@ export class FleetEdge {
 			return;
 		}
 		try {
-			await registerWorktreeEntry(this.#registry, this.#supervisor, project, resolved, { start });
+			await registerWorktreeEntry(this.#registry, this.#supervisor, project, resolved, {
+				start,
+				ownership: "external",
+			});
 		} catch (err) {
 			this.#sendError(stream, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
@@ -1517,7 +1519,7 @@ export class FleetEdge {
 				return;
 			}
 			const path = entry.cwd ?? "";
-			const info = await worktreeDeleteInfo(path, this.#config.workspaceDir);
+			const info = await worktreeDeleteInfo(entry);
 			if (!info.owned) {
 				this.#sendError(stream, info.reason ?? `not a managed worktree: ${path}`);
 				return;
@@ -1535,7 +1537,7 @@ export class FleetEdge {
 			await this.#supervisor.prune(daemonId);
 			// The roster broadcast rides registry.onChange.
 			this.#registry.remove(daemonId);
-			await deleteWorktree(path, this.#config.workspaceDir, { deleteBranch });
+			await deleteWorktree(entry, { deleteBranch });
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
 		}
@@ -1562,7 +1564,7 @@ export class FleetEdge {
 				);
 				return;
 			}
-			const info = await worktreeDeleteInfo(entry.cwd ?? "", this.#config.workspaceDir);
+			const info = await worktreeDeleteInfo(entry);
 			this.#sendAnswer(stream, { type: "worktree_delete_info", daemonId, ...info });
 		} catch (err) {
 			this.#sendError(stream, err instanceof Error ? err.message : String(err));
@@ -2345,9 +2347,7 @@ export class FleetEdge {
 	#broadcastRoster(): void {
 		this.#broadcast({
 			type: "roster",
-			daemons: this.#registry
-				.list()
-				.map((entry) => toRosterEntry(entry, this.#config.workspaceDir)),
+			daemons: this.#registry.list().map((entry) => toRosterEntry(entry)),
 		});
 	}
 

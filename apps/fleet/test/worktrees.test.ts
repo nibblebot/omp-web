@@ -1,6 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { RegisteredProject } from "#lib/wire/protocol";
@@ -34,10 +41,6 @@ function tmpDir(): string {
 afterAll(() => {
 	for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
 });
-
-function sha1Prefix(s: string): string {
-	return createHash("sha1").update(s).digest("hex").slice(0, 4);
-}
 
 /** One `git -C <cwd> <args>` invocation (real git; repos are local + hermetic). */
 async function git(
@@ -82,6 +85,30 @@ function projectFor(repoPath: string, projectId = "p1"): RegisteredProject {
 	return { projectId, path: repoPath, name: repoPath.split("/").pop()!, addedAt: 0 };
 }
 
+function worktreeEntry(
+	path: string,
+	ownership?: "owned" | "external",
+	repoPath?: string,
+): RegistryEntry {
+	return {
+		daemonId: "d1",
+		name: basename(path),
+		cwd: path,
+		project: "repo",
+		labels: [],
+		mode: "spawned",
+		status: "asleep",
+		registeredAt: 0,
+		workspace: {
+			kind: "worktree",
+			projectId: "p1",
+			desiredState: "stopped",
+			...(repoPath !== undefined ? { source: { local: repoPath } } : {}),
+			...(ownership !== undefined ? { localWorktreeOwnership: ownership } : {}),
+		},
+	};
+}
+
 /** The repo's main-checkout path owning `worktreePath` (porcelain block 0). */
 async function mainRepoOf(path: string): Promise<string | null> {
 	const result = await git(path, ["worktree", "list", "--porcelain"]);
@@ -123,42 +150,6 @@ describe("managedWorktreePath", () => {
 			join(ws, "omp-web", "feature-branch"),
 		);
 	});
-
-	test("no suffix when no marker exists", () => {
-		const ws = tmpDir();
-		expect(managedWorktreePath(ws, "/home/u/src/omp-web", "x")).toBe(join(ws, "omp-web", "x"));
-	});
-
-	test("no suffix when the marker names the same repo realpath", () => {
-		const ws = tmpDir();
-		const repo = "/home/u/src/omp-web";
-		const dir = join(ws, "omp-web");
-		mkdirSync(dir, { recursive: true });
-		writeFileSync(join(dir, ".omp-web-repo"), `${repo}\n`);
-		expect(managedWorktreePath(ws, repo, "x")).toBe(join(ws, "omp-web", "x"));
-	});
-
-	test("suffixes the basename with a sha1 prefix when a different repo owns the directory", () => {
-		const ws = tmpDir();
-		const repoA = "/home/u/src/omp-web";
-		const repoB = "/home/v/src/omp-web";
-		const dir = join(ws, "omp-web");
-		mkdirSync(dir, { recursive: true });
-		writeFileSync(join(dir, ".omp-web-repo"), repoA);
-		expect(managedWorktreePath(ws, repoB, "x")).toBe(join(ws, `omp-web-${sha1Prefix(repoB)}`, "x"));
-	});
-
-	test("deterministic: the same inputs always map to the same path", () => {
-		const ws = tmpDir();
-		const repoA = "/home/u/src/omp-web";
-		const repoB = "/home/v/src/omp-web";
-		const dir = join(ws, "omp-web");
-		mkdirSync(dir, { recursive: true });
-		writeFileSync(join(dir, ".omp-web-repo"), repoA);
-		const first = managedWorktreePath(ws, repoB, "My Branch");
-		expect(first).toBe(join(ws, `omp-web-${sha1Prefix(repoB)}`, "my-branch"));
-		expect(managedWorktreePath(ws, repoB, "My Branch")).toBe(first);
-	});
 });
 
 describe("resolveBaseRef", () => {
@@ -182,7 +173,7 @@ describe("resolveBaseRef", () => {
 });
 
 describe("createWorktree", () => {
-	test("creates the managed worktree: slug path, branch, marker, base ref", async () => {
+	test("creates the managed worktree: slug path, branch, no marker, base ref", async () => {
 		const repo = tmpDir();
 		await makeRepo(repo);
 		const ws = tmpDir();
@@ -192,10 +183,7 @@ describe("createWorktree", () => {
 		expect(created.branch).toBe("feature-branch");
 		expect(created.baseRef).toBe("main");
 		expect(existsSync(target)).toBe(true);
-		// Ownership marker records the owning repo realpath.
-		expect(readFileSync(join(ws, repo.split("/").pop()!, ".omp-web-repo"), "utf8").trim()).toBe(
-			repo,
-		);
+		expect(existsSync(join(ws, basename(repo), ".omp-web-repo"))).toBe(false);
 		// git agrees: the worktree is listed and the branch exists at base's commit.
 		const list = (await git(repo, ["worktree", "list", "--porcelain"])).stdout;
 		expect(list).toContain(`worktree ${target}`);
@@ -203,6 +191,46 @@ describe("createWorktree", () => {
 		expect(await gitOk(repo, ["rev-parse", "--verify", "refs/heads/feature-branch"])).toBe(
 			await gitOk(repo, ["rev-parse", "refs/heads/main"]),
 		);
+	});
+
+	test("same-basename repos share a parent without markers and reject an occupied target", async () => {
+		const root = tmpDir();
+		const repoA = join(root, "a", "repo");
+		const repoB = join(root, "b", "repo");
+		for (const repo of [repoA, repoB]) {
+			mkdirSync(repo, { recursive: true });
+			await gitOk(repo, ["init", "-q", "-b", "main"]);
+			writeFileSync(join(repo, "readme.md"), "hello\n");
+			await gitOk(repo, ["add", "."]);
+			await gitOk(repo, ["commit", "-q", "-m", "init"]);
+		}
+		const ws = tmpDir();
+		const projectA = projectFor(repoA, "a");
+		const projectB = projectFor(repoB, "b");
+		const first = await createWorktree(projectA, "First Feature", { workspaceDir: ws });
+		const second = await createWorktree(projectB, "Second Feature", { workspaceDir: ws });
+		expect(first.path).toBe(join(ws, "repo", "first-feature"));
+		expect(second.path).toBe(join(ws, "repo", "second-feature"));
+		expect(existsSync(join(ws, "repo", ".omp-web-repo"))).toBe(false);
+		expect(await mainRepoOf(first.path)).toBe(repoA);
+		expect(await mainRepoOf(second.path)).toBe(repoB);
+		writeFileSync(join(first.path, "readme.md"), "original worktree edits\n");
+		writeFileSync(join(first.path, "scratch.txt"), "original untracked work\n");
+		const firstHead = await gitOk(first.path, ["rev-parse", "HEAD"]);
+		const firstRegistration = await gitOk(repoA, ["worktree", "list", "--porcelain"]);
+		const secondRegistration = await gitOk(repoB, ["worktree", "list", "--porcelain"]);
+		await expect(
+			createWorktree(projectB, "First Feature", { workspaceDir: ws }),
+		).rejects.toBeInstanceOf(WorktreeTargetExistsError);
+		expect(readFileSync(join(first.path, "readme.md"), "utf8")).toBe("original worktree edits\n");
+		expect(readFileSync(join(first.path, "scratch.txt"), "utf8")).toBe("original untracked work\n");
+		expect(await gitOk(first.path, ["rev-parse", "HEAD"])).toBe(firstHead);
+		expect(await gitOk(repoA, ["worktree", "list", "--porcelain"])).toBe(firstRegistration);
+		expect(await gitOk(repoB, ["worktree", "list", "--porcelain"])).toBe(secondRegistration);
+		expect(
+			(await git(repoB, ["show-ref", "--verify", "refs/heads/first-feature"])).exitCode,
+		).not.toBe(0);
+		expect(existsSync(join(ws, "repo", ".omp-web-repo"))).toBe(false);
 	});
 
 	test("refuses when the target path already exists", async () => {
@@ -244,6 +272,7 @@ describe("createWorktree", () => {
 		expect(created.baseRef).toBeUndefined();
 		const target = join(ws, repo.split("/").pop()!, "attach-me");
 		expect(existsSync(target)).toBe(true);
+		expect(existsSync(join(ws, basename(repo), ".omp-web-repo"))).toBe(false);
 		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(
 			`branch refs/heads/feature`,
 		);
@@ -301,16 +330,18 @@ describe("isLinkedWorktreeOf", () => {
 		expect(await isLinkedWorktreeOf(a.path, repo)).toBe(true);
 		expect(await isLinkedWorktreeOf(repo, repo)).toBe(false); // main checkout is not a linked worktree
 		expect(await isLinkedWorktreeOf(a.path, other)).toBe(false); // owned by a different repo
+		mkdirSync(join(a.path, "nested"));
+		expect(await isLinkedWorktreeOf(join(a.path, "nested"), repo)).toBe(false);
 	});
 });
 
 describe("worktreeDeleteInfo", () => {
-	test("rejects an out-of-tree path as not owned", async () => {
+	test("rejects legacy ownership even when a path is present", async () => {
 		const outside = tmpDir();
-		expect(await worktreeDeleteInfo(outside, tmpDir())).toEqual({
+		expect(await worktreeDeleteInfo(worktreeEntry(outside))).toEqual({
 			owned: false,
 			dirty: false,
-			reason: "not a managed worktree (path outside workspaceDir)",
+			reason: "worktree is not explicitly owned by fleet",
 		});
 	});
 
@@ -319,7 +350,7 @@ describe("worktreeDeleteInfo", () => {
 		await makeRepo(repo);
 		const ws = tmpDir();
 		const a = await createWorktree(projectFor(repo), "clean", { workspaceDir: ws });
-		const info = await worktreeDeleteInfo(a.path, ws);
+		const info = await worktreeDeleteInfo(worktreeEntry(a.path, "owned", repo));
 		expect(info.owned).toBe(true);
 		expect(info.dirty).toBe(false);
 		expect(info.git).toEqual({
@@ -341,7 +372,7 @@ describe("worktreeDeleteInfo", () => {
 		const ws = tmpDir();
 		const a = await createWorktree(projectFor(repo), "dirty", { workspaceDir: ws });
 		writeFileSync(join(a.path, "scratch.txt"), "new\n");
-		const info = await worktreeDeleteInfo(a.path, ws);
+		const info = await worktreeDeleteInfo(worktreeEntry(a.path, "owned", repo));
 		expect(info.owned).toBe(true);
 		expect(info.dirty).toBe(true);
 		expect(info.git?.untracked).toBe(1);
@@ -357,7 +388,7 @@ describe("worktreeDeleteInfo", () => {
 		await gitOk(a.path, ["add", "."]);
 		await gitOk(a.path, ["commit", "-q", "-m", "feat"]);
 		await gitOk(a.path, ["branch", "--set-upstream-to=origin/main"]);
-		const info = await worktreeDeleteInfo(a.path, ws);
+		const info = await worktreeDeleteInfo(worktreeEntry(a.path, "owned", clone));
 		expect(info.owned).toBe(true);
 		expect(info.dirty).toBe(false);
 		expect(info.branch).toBe("feat");
@@ -365,10 +396,10 @@ describe("worktreeDeleteInfo", () => {
 		expect(info.unpushed).toBe(true); // 1 commit ahead of origin/main
 	});
 
-	test("missing path under workspaceDir reports owned with a not-found reason", async () => {
+	test("missing owned path refuses deletion with a not-found reason", async () => {
 		const ws = tmpDir();
-		const info = await worktreeDeleteInfo(join(ws, "repo", "ghost"), ws);
-		expect(info.owned).toBe(true);
+		const info = await worktreeDeleteInfo(worktreeEntry(join(ws, "repo", "ghost"), "owned"));
+		expect(info.owned).toBe(false);
 		expect(info.dirty).toBe(false);
 		expect(info.reason).toBe("worktree path does not exist");
 	});
@@ -380,7 +411,9 @@ describe("deleteWorktree", () => {
 		await makeRepo(repo);
 		const ws = tmpDir();
 		const a = await createWorktree(projectFor(repo), "gone", { workspaceDir: ws });
-		const result = await deleteWorktree(a.path, ws, { deleteBranch: true });
+		const result = await deleteWorktree(worktreeEntry(a.path, "owned", repo), {
+			deleteBranch: true,
+		});
 		expect(result.path).toBe(a.path);
 		expect(result.branch).toBe("gone");
 		expect(result.branchDeleted).toBe(true);
@@ -395,27 +428,28 @@ describe("deleteWorktree", () => {
 		const ws = tmpDir();
 		const a = await createWorktree(projectFor(repo), "keep", { workspaceDir: ws });
 		writeFileSync(join(a.path, "scratch.txt"), "new\n");
-		await expect(deleteWorktree(a.path, ws, { deleteBranch: true })).rejects.toBeInstanceOf(
-			WorktreeDirtyError,
-		);
+		await expect(
+			deleteWorktree(worktreeEntry(a.path, "owned", repo), { deleteBranch: true }),
+		).rejects.toBeInstanceOf(WorktreeDirtyError);
 		expect(existsSync(a.path)).toBe(true);
 		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(a.path);
 	});
 
-	test("refuses a path outside workspaceDir, nothing out-of-tree is ever removed", async () => {
+	test("refuses external and legacy linked worktrees inside the creation root", async () => {
 		const repo = tmpDir();
 		await makeRepo(repo);
 		const ws = tmpDir();
-		// A plain directory outside the workspace root.
-		const outside = tmpDir();
-		await expect(deleteWorktree(outside, ws)).rejects.toBeInstanceOf(WorktreeNotOwnedError);
-		expect(existsSync(outside)).toBe(true);
-		// A REAL git worktree created outside workspaceDir is refused too.
-		const rogue = join(tmpDir(), "rogue");
-		await gitOk(repo, ["worktree", "add", "-b", "rogue", rogue]);
-		await expect(deleteWorktree(rogue, ws)).rejects.toBeInstanceOf(WorktreeNotOwnedError);
-		expect(existsSync(rogue)).toBe(true);
-		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(rogue);
+		const { path } = await createWorktree(projectFor(repo), "external", { workspaceDir: ws });
+		for (const ownership of ["external", undefined] as const) {
+			const entry = worktreeEntry(path, ownership);
+			expect((await worktreeDeleteInfo(entry)).owned).toBe(false);
+			await expect(deleteWorktree(entry)).rejects.toBeInstanceOf(WorktreeNotOwnedError);
+		}
+		const remote: RegistryEntry = { ...worktreeEntry(path, "owned"), mode: "remote" };
+		expect((await worktreeDeleteInfo(remote)).owned).toBe(false);
+		await expect(deleteWorktree(remote)).rejects.toBeInstanceOf(WorktreeNotOwnedError);
+		expect(existsSync(path)).toBe(true);
+		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(path);
 	});
 
 	test("never -D: an unmerged branch survives branch -d", async () => {
@@ -426,18 +460,104 @@ describe("deleteWorktree", () => {
 		writeFileSync(join(a.path, "new.txt"), "n\n");
 		await gitOk(a.path, ["add", "."]);
 		await gitOk(a.path, ["commit", "-q", "-m", "unmerged"]);
-		const result = await deleteWorktree(a.path, ws, { deleteBranch: true });
+		const result = await deleteWorktree(worktreeEntry(a.path, "owned", repo), {
+			deleteBranch: true,
+		});
 		expect(existsSync(a.path)).toBe(false);
 		expect(result.branch).toBe("unmerged");
 		expect(result.branchDeleted).toBe(false); // git branch -d refused (unmerged)
 		expect(await gitOk(repo, ["branch", "--list", "unmerged"])).toBe("unmerged");
 	});
 
-	test("a missing path is a no-op success", async () => {
-		const ws = tmpDir();
-		const ghost = join(ws, "repo", "ghost");
-		const result = await deleteWorktree(ghost, ws);
-		expect(result.path).toBe(ghost);
+	test("a missing owned path is refused", async () => {
+		const ghost = join(tmpDir(), "repo", "ghost");
+		await expect(deleteWorktree(worktreeEntry(ghost, "owned"))).rejects.toThrow(
+			"worktree path does not exist",
+		);
+	});
+
+	test("owned worktree remains deletable after the configured creation root changes", async () => {
+		const repo = tmpDir();
+		await makeRepo(repo);
+		const registry = new Registry(join(tmpDir(), "state.json"));
+		await registry.load();
+		const oldRoot = tmpDir();
+		const created = await createWorktree(projectFor(repo), "owned", { workspaceDir: oldRoot });
+		const entry = await registerWorktreeEntry(
+			registry,
+			{ resolveTemplateName: () => "test" } as unknown as SpawnSupervisor,
+			projectFor(repo),
+			created.path,
+			{ ownership: "owned" },
+		);
+		const newRoot = tmpDir();
+		await createWorktree(projectFor(repo), "new-root", { workspaceDir: newRoot });
+		expect((await worktreeDeleteInfo(entry)).owned).toBe(true);
+		await deleteWorktree(entry);
+		expect(existsSync(created.path)).toBe(false);
+	});
+
+	test("explicit ownership cannot authorize deleting the main checkout or a plain directory", async () => {
+		const repo = tmpDir();
+		await makeRepo(repo);
+		for (const path of [repo, tmpDir()]) {
+			const entry = worktreeEntry(path, "owned", repo);
+			expect(await worktreeDeleteInfo(entry)).toMatchObject({
+				owned: false,
+				reason: "path is not a linked Git worktree",
+			});
+			await expect(deleteWorktree(entry)).rejects.toThrow("not a linked Git worktree");
+			expect(existsSync(path)).toBe(true);
+		}
+	});
+
+	test("symlink substitution cannot authorize removal of an external linked worktree", async () => {
+		const repo = join(tmpDir(), "repo");
+		await makeRepo(repo);
+		const externalRepo = join(tmpDir(), "repo");
+		await makeRepo(externalRepo);
+		const created = await createWorktree(projectFor(repo), "original", { workspaceDir: tmpDir() });
+		const external = await createWorktree(projectFor(externalRepo), "external", {
+			workspaceDir: tmpDir(),
+		});
+		const entry = worktreeEntry(created.path, "owned", repo);
+		await gitOk(repo, ["worktree", "remove", created.path]);
+		symlinkSync(external.path, created.path, "dir");
+		expect(await worktreeDeleteInfo(entry)).toMatchObject({
+			owned: false,
+			reason: "worktree path resolves through a symlink",
+		});
+		await expect(deleteWorktree(entry)).rejects.toThrow("resolves through a symlink");
+		expect(existsSync(external.path)).toBe(true);
+		expect((await git(externalRepo, ["worktree", "list", "--porcelain"])).stdout).toContain(
+			external.path,
+		);
+	});
+
+	test("a substituted linked worktree from a foreign same-name repository is refused", async () => {
+		const repo = join(tmpDir(), "repo");
+		const foreignRepo = join(tmpDir(), "repo");
+		await makeRepo(repo);
+		await makeRepo(foreignRepo);
+		const created = await createWorktree(projectFor(repo), "original", { workspaceDir: tmpDir() });
+		const entry = worktreeEntry(created.path, "owned", repo);
+		await gitOk(repo, ["worktree", "remove", created.path]);
+		await gitOk(foreignRepo, ["worktree", "add", "-b", "substitute", created.path]);
+		expect((await worktreeDeleteInfo(entry)).owned).toBe(false);
+		await expect(deleteWorktree(entry)).rejects.toThrow("not a linked Git worktree");
+		expect(existsSync(created.path)).toBe(true);
+	});
+
+	test("explicit ownership without repository provenance is refused", async () => {
+		const repo = tmpDir();
+		await makeRepo(repo);
+		const created = await createWorktree(projectFor(repo), "missing-provenance", {
+			workspaceDir: tmpDir(),
+		});
+		const entry = worktreeEntry(created.path, "owned");
+		expect((await worktreeDeleteInfo(entry)).owned).toBe(false);
+		await expect(deleteWorktree(entry)).rejects.toThrow("not a linked Git worktree");
+		expect(existsSync(created.path)).toBe(true);
 	});
 });
 
@@ -454,17 +574,63 @@ describe("registerWorktreeEntry", () => {
 			{ resolveTemplateName: () => "test" } as unknown as SpawnSupervisor,
 			projectFor(repo, "p7"),
 			a.path,
-			{ start: false },
+			{ start: false, ownership: "owned" },
 		);
 		expect(entry.mode).toBe("spawned");
 		expect(entry.status).toBe("asleep");
 		expect(entry.cwd).toBe(a.path);
 		expect(entry.projectId).toBe("p7");
 		expect(entry.worktreeOf).toBe(repo.split("/").pop()!);
+		expect(entry.workspace?.localWorktreeOwnership).toBe("owned");
 		// The resolved template name is stored like spawn() stores it, since
 		// respawn() keys off entry.template.
 		expect(entry.template).toBe("test");
 		expect(registry.get(entry.daemonId)).toBeDefined();
+	});
+
+	test("registration preserves requested ownership both asleep and started", async () => {
+		const repo = tmpDir();
+		await makeRepo(repo);
+		const statePath = join(tmpDir(), "state.json");
+		const registry = new Registry(statePath);
+		await registry.load();
+		const supervisor = {
+			resolveTemplateName: () => "test",
+			spawn: async ({ cwd }: { cwd: string }) =>
+				registry.create({
+					name: basename(cwd),
+					cwd,
+					project: projectFor(repo).name,
+					worktreeOf: projectFor(repo).name,
+					labels: [],
+					mode: "spawned",
+					status: "connecting",
+				}),
+		} as unknown as SpawnSupervisor;
+		for (const start of [false, true]) {
+			for (const ownership of ["owned", "external"] as const) {
+				const created = await createWorktree(projectFor(repo), `${ownership}-${start}`, {
+					workspaceDir: tmpDir(),
+				});
+				const entry = await registerWorktreeEntry(
+					registry,
+					supervisor,
+					projectFor(repo),
+					created.path,
+					{ start, ownership },
+				);
+				expect(entry.workspace).toMatchObject({
+					kind: "worktree",
+					projectId: "p1",
+					localWorktreeOwnership: ownership,
+					desiredState: start ? "running" : "stopped",
+					source: { local: repo },
+				});
+				const reloaded = new Registry(statePath);
+				await reloaded.load();
+				expect(reloaded.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe(ownership);
+			}
+		}
 	});
 });
 

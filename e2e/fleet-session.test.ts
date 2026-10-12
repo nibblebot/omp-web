@@ -59,6 +59,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
+import type { DaemonEntry } from "#lib/wire/protocol";
 import { startCallbackDaemon } from "../apps/fleet/test/callback-daemon.testkit";
 import type { RegistryEntry } from "../apps/fleet/registry";
 import { type FleetServer, startFleet } from "../apps/fleet/server";
@@ -101,7 +102,7 @@ interface StopResponse {
 }
 
 interface EnrollResponse {
-	entry: RegistryEntry;
+	entry: DaemonEntry;
 	enrollment: { workspaceId: string; generation: number; token: string; callbackUrl: string };
 }
 
@@ -184,11 +185,11 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 	let server!: FleetServer;
 	/** Saved OMP_FLEET_* env, restored in afterAll (see the beforeAll scrub). */
 	const savedFleetEnv: Record<string, string | undefined> = {};
-	let d1!: RegistryEntry;
-	let d2!: RegistryEntry;
-	let d3!: RegistryEntry;
-	let d4!: RegistryEntry;
-	let survivor!: RegistryEntry;
+	let d1!: DaemonEntry;
+	let d2!: DaemonEntry;
+	let d3!: DaemonEntry;
+	let d4!: DaemonEntry;
+	let survivor!: DaemonEntry;
 	let ext: Subprocess | undefined;
 	/** Every daemon pid observed (spawn responses, /proc sweeps, the external launch). */
 	const trackedPids = new Set<number>();
@@ -205,11 +206,19 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		});
 	}
 
-	async function getEntry(id: string): Promise<RegistryEntry | undefined> {
+	async function getEntry(id: string): Promise<DaemonEntry | undefined> {
 		const res = await fetch(`${base()}/ctl/sessions`);
 		if (res.status !== 200) throw new Error(`GET /ctl/sessions → ${res.status}`);
-		const entries = (await res.json()) as RegistryEntry[];
+		const entries = (await res.json()) as DaemonEntry[];
 		return entries.find((entry) => entry.daemonId === id);
+	}
+
+	/** Privileged assertions read private workspace state from disk, never from HTTP. */
+	function getPersistedEntry(id: string): RegistryEntry {
+		const state = JSON.parse(readFileSync(statePath, "utf8")) as StateFile;
+		const entry = state.entries.find((entry) => entry.daemonId === id);
+		if (!entry) throw new Error(`daemon ${id} is absent from durable fleet state`);
+		return entry;
 	}
 
 	/** The single live session process launched with `--name <name>` (the bun daemon, not the sh wrapper). */
@@ -230,12 +239,12 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 	 */
 	async function waitForEntry(
 		id: string,
-		predicate: (entry: RegistryEntry) => boolean,
+		predicate: (entry: DaemonEntry) => boolean,
 		timeoutMs: number,
 		what: string,
-	): Promise<RegistryEntry> {
+	): Promise<DaemonEntry> {
 		const deadline = Date.now() + timeoutMs;
-		let last: RegistryEntry | undefined;
+		let last: DaemonEntry | undefined;
 		while (Date.now() < deadline) {
 			last = await getEntry(id);
 			if (last) {
@@ -372,9 +381,9 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		expect(r1.status).toBe(200);
 		expect(r2.status).toBe(200);
 		expect(r3.status).toBe(200);
-		d1 = (await r1.json()) as RegistryEntry;
-		d2 = (await r2.json()) as RegistryEntry;
-		d3 = (await r3.json()) as RegistryEntry;
+		d1 = (await r1.json()) as DaemonEntry;
+		d2 = (await r2.json()) as DaemonEntry;
+		d3 = (await r3.json()) as DaemonEntry;
 		expect(d1.mode).toBe("spawned");
 		expect(d1.labels).toEqual(["env=integration"]);
 		for (const entry of [d1, d2, d3]) {
@@ -388,8 +397,9 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		// The supervisor enrolled each launch: workspaceId === daemonId, first generation.
 		for (const entry of [a, b, c]) {
 			expect(entry.status).toBe("ready");
-			expect(entry.workspace?.enrollment?.generation).toBe(1);
-			expect(entry.workspace?.enrollment?.credentialHash).toMatch(/^[0-9a-f]{64}$/);
+			const enrollment = getPersistedEntry(entry.daemonId).workspace?.enrollment;
+			expect(enrollment?.generation).toBe(1);
+			expect(enrollment?.credentialHash).toMatch(/^[0-9a-f]{64}$/);
 		}
 		// Each daemon records its session file once its pair forms.
 		const withFiles = await Promise.all(
@@ -425,7 +435,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 
 	test("SIGKILL one child: the supervisor relaunches it under a new generation; the old credential is refused", async () => {
 		const before = (await getEntry(d2.daemonId))!;
-		const enrollmentBefore = before.workspace!.enrollment!;
+		const enrollmentBefore = getPersistedEntry(d2.daemonId).workspace!.enrollment!;
 		const oldProc = daemonProc("d-two");
 		// The credential the old child dialed with, read from its environment.
 		const oldToken = readFileSync(`/proc/${oldProc.pid}/environ`, "utf8")
@@ -435,22 +445,24 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		expect(oldToken).toMatch(/^[0-9a-f]{64}$/);
 		process.kill(oldProc.pid, "SIGKILL");
 		// The relaunch enrolls a new generation and returns to ready once its pair forms.
+		await waitUntil(
+			() =>
+				(getPersistedEntry(d2.daemonId).workspace?.enrollment?.generation ?? 0) >
+				enrollmentBefore.generation,
+			90_000,
+			"persist a new enrollment generation",
+		);
 		const after = await waitForEntry(
 			d2.daemonId,
-			(e) =>
-				e.status === "ready" &&
-				(e.workspace?.enrollment?.generation ?? 0) > enrollmentBefore.generation,
+			(e) => e.status === "ready",
 			90_000,
 			"recover to ready under a new generation",
 		);
-		const enrollmentAfter = after.workspace!.enrollment!;
+		const enrollmentAfter = getPersistedEntry(d2.daemonId).workspace!.enrollment!;
 		expect(enrollmentAfter.generation).toBeGreaterThan(enrollmentBefore.generation);
 		expect(enrollmentAfter.credentialHash).not.toBe(enrollmentBefore.credentialHash);
 		// The new enrollment is persisted to state.json.
-		const disk = JSON.parse(readFileSync(statePath, "utf8")) as StateFile;
-		expect(disk.entries.find((e) => e.daemonId === d2.daemonId)?.workspace?.enrollment).toEqual(
-			enrollmentAfter,
-		);
+		expect(getPersistedEntry(d2.daemonId).workspace?.enrollment).toEqual(enrollmentAfter);
 		// The relaunched child is a new process.
 		const relaunched = daemonProc("d-two");
 		expect(relaunched.pid).not.toBe(oldProc.pid);
@@ -536,7 +548,9 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 			"become ready",
 		);
 		expect(ready.cwd).toBe(projDirs[1]);
-		expect(ready.workspace?.enrollment?.generation).toBe(body.enrollment.generation);
+		expect(getPersistedEntry(extEntry.daemonId).workspace?.enrollment?.generation).toBe(
+			body.enrollment.generation,
+		);
 		// The call round-trips to the daemon; the no-model turn settles ok:false.
 		const result = await ctlPrompt(extEntry.daemonId);
 		expect(result.ok).toBe(false);
@@ -550,7 +564,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		expect(exitCode).not.toBe("timeout");
 		const asleep = await getEntry(extEntry.daemonId);
 		expect(asleep?.status).toBe("asleep");
-		expect(asleep?.workspace?.enrollment).toBeUndefined();
+		expect(getPersistedEntry(extEntry.daemonId).workspace?.enrollment).toBeUndefined();
 	}, 120_000);
 
 	test("short-idle daemon: idle exit → asleep (enrollment released)", async () => {
@@ -560,7 +574,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 			template: "shortidle",
 		});
 		expect(res.status).toBe(200);
-		d4 = (await res.json()) as RegistryEntry;
+		d4 = (await res.json()) as DaemonEntry;
 		await waitForEntry(d4.daemonId, (e) => e.status === "ready", 60_000, "become ready");
 		const proc = daemonProc("d-four");
 		// Idle exit runs when no browser stream and no in-flight bash/python is
@@ -574,12 +588,12 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		);
 		await waitUntil(() => !isRunning(proc.pid), 10_000, "the idle daemon process to exit");
 		expect(asleep.cwd).toBe(projDirs[2]);
-		expect(asleep.workspace?.enrollment).toBeUndefined();
+		expect(getPersistedEntry(d4.daemonId).workspace?.enrollment).toBeUndefined();
 	}, 90_000);
 
 	test("asleep daemon wakes on a prompt: the fanout respawns it under a new generation", async () => {
 		const before = (await getEntry(d4.daemonId))!;
-		const generationBefore = before.workspace?.authorizedGeneration ?? 0;
+		const generationBefore = getPersistedEntry(d4.daemonId).workspace?.authorizedGeneration ?? 0;
 		// The prompt is the wake trigger: the fanout respawns the asleep spawned
 		// daemon and waits for ready before sending the turn.
 		const promise = ctlPrompt(d4.daemonId);
@@ -600,22 +614,18 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		const result = await promise;
 		expect(result.ok).toBe(false);
 		expect(result.error).toBeTruthy();
-		const after = (await getEntry(d4.daemonId))!;
 		// The wake enrolled a new generation (monotonic across the idle exit).
-		expect(after.workspace?.authorizedGeneration ?? 0).toBeGreaterThan(generationBefore);
+		expect(getPersistedEntry(d4.daemonId).workspace?.authorizedGeneration ?? 0).toBeGreaterThan(
+			generationBefore,
+		);
 	}, 120_000);
 
 	test("closing the fleet leaves the daemon running; a new fleet re-adopts the same process without a respawn", async () => {
 		const res = await postJson("/ctl/spawn", { cwd: projDirs[0], name: "d-survivor" });
 		expect(res.status).toBe(200);
-		survivor = (await res.json()) as RegistryEntry;
-		const ready = await waitForEntry(
-			survivor.daemonId,
-			(e) => e.status === "ready",
-			60_000,
-			"become ready",
-		);
-		const enrollmentBefore = ready.workspace!.enrollment!;
+		survivor = (await res.json()) as DaemonEntry;
+		await waitForEntry(survivor.daemonId, (e) => e.status === "ready", 60_000, "become ready");
+		const enrollmentBefore = getPersistedEntry(survivor.daemonId).workspace!.enrollment!;
 		const withFile = await waitForEntry(
 			survivor.daemonId,
 			(e) => e.status === "ready" && e.lastSessionFile !== undefined,
@@ -649,7 +659,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		// The SAME process re-paired: no respawn, no new generation.
 		expect(isRunning(proc.pid)).toBe(true);
 		expect(daemonProc("d-survivor").pid).toBe(proc.pid);
-		expect(rejoined.workspace?.enrollment).toEqual(enrollmentBefore);
+		expect(getPersistedEntry(survivor.daemonId).workspace?.enrollment).toEqual(enrollmentBefore);
 		expect(rejoined.lastSessionFile).toBe(sessionFileBefore);
 
 		// It still takes a prompt through the new fleet's control plane.
@@ -670,7 +680,7 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		await waitUntil(() => !isRunning(proc.pid), 30_000, "the stopped daemon process to exit");
 		const entry = (await getEntry(survivor.daemonId))!;
 		expect(entry.status).toBe("asleep");
-		expect(entry.workspace?.enrollment).toBeUndefined();
+		expect(getPersistedEntry(survivor.daemonId).workspace?.enrollment).toBeUndefined();
 		expect(sessionProcs(tmp).some((p) => argAfter(p.args, "--name") === "d-survivor")).toBe(false);
 	}, 60_000);
 

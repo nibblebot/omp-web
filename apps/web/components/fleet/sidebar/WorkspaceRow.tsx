@@ -462,9 +462,9 @@ export const WorkspaceRow: Component<{
 								<ConfirmButton
 									role="menuitem"
 									class="sidebar-menu-item"
-									label="Remove daemon"
+									label="Remove from omp-web"
 									confirmLabel="Confirm remove"
-									title="Removes the daemon from the roster (stops it first)"
+									title="Stops the daemon and removes it from omp-web; worktree files are preserved"
 									onConfirm={() => doRemove()}
 								>
 									<XIcon />
@@ -482,10 +482,9 @@ export const WorkspaceRow: Component<{
 								<InfoIcon />
 								Daemon details
 							</button>
-							{/* Delete is offered on every worktree row; the
-							    dialog's guard evidence (managed-root ownership +
-							    clean tree) decides whether it can proceed. */}
-							<Show when={isWorktree()}>
+							{/* Only explicitly owned linked worktrees offer disk deletion;
+							    the dialog still requires clean Git evidence. */}
+							<Show when={isWorktree() && !isClone() && d().managed === true}>
 								<button
 									type="button"
 									role="menuitem"

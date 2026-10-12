@@ -37,7 +37,7 @@
  * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722. For `ui`,
  * `--port` is the UI listen port (default 4723; OMP_FLEET_PORT does not apply)
  * and `--control-port` (else OMP_FLEET_PORT, else 4722) names the control plane.
- * Managed-worktree root: `--workspace-dir` flag, else OMP_FLEET_WORKSPACE_DIR,
+ * Default worktree directory: `--workspace-dir` flag, else OMP_FLEET_WORKSPACE_DIR,
  * else the config-file `workspaceDir` key, else `~/.omp-web/workspaces`.
  * Bind address / browser auth: `--bind`, `--browser-access-token`,
  * `--browser-origin`, and `--trusted-proxy` flags, else OMP_FLEET_BIND /
@@ -51,7 +51,7 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { LockHeldError } from "#lib/platform/file-lock";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
-import { startFleet, type FleetServer } from "./server";
+import { resolveStatePath, startFleet, type FleetServer } from "./server";
 import { runProfilePreflight } from "./preflight";
 import { DEFAULT_UI_PORT, startUiServer, type UiServer } from "./ui-server";
 
@@ -833,9 +833,9 @@ async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 			`no provider profile "${profileId}" in ${configPath}: configure providerProfiles."${profileId}" first`,
 		);
 	}
-	const dataHome = dirname(configPath);
+	const dataHome = dirname(resolveStatePath(undefined, configPath));
 	const result = await runProfilePreflight(profile, {
-		workspaceRoot: config.workspaceDir,
+		workspaceRoot: join(dataHome, "clones"),
 		logsRoot: join(dataHome, "logs"),
 		// The bwrap provider is not yet wired into a live fleet in this
 		// lane (P6); a callback URL is only reachability-class-checked once
@@ -1120,7 +1120,7 @@ options:
   --control-port <n>   ui: control plane to proxy to (default 4722, env OMP_FLEET_PORT)
   --open               open the UI in a browser once running (bare, ui)
   --verbose            bare/control: also print state and config paths and every event
-  --workspace-dir <d>  managed worktree root (default ~/.omp-web/workspaces,
+  --workspace-dir <d>  Default worktree directory (default ~/.omp-web/workspaces,
                        env OMP_FLEET_WORKSPACE_DIR)
   --bind <addr>        control plane + browser edge bind address (default
                        127.0.0.1, env OMP_FLEET_BIND)

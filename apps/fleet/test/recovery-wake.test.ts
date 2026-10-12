@@ -24,8 +24,16 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import type { FleetServer } from "../server";
 import type { FleetPaths } from "./server.testkit";
 import {
@@ -300,12 +308,14 @@ interface Booted {
 	server: FleetServer;
 	paths: FleetPaths;
 	workspaceDir: string;
+	cloneRoot: string;
 	repoDir: string;
 }
 
 async function bootFleet(profile: "bwrap" | "k8s" = "bwrap"): Promise<Booted> {
 	const paths = fleetPaths("omp-recovery-wake-");
 	const workspaceDir = join(paths.tmp, "workspaces");
+	const cloneRoot = join(dirname(paths.statePath), "clones");
 	const repoDir = join(paths.tmp, "repo");
 	await makeRepo(repoDir);
 	const provider = writeFakeProvider(join(paths.tmp, "provider"));
@@ -327,7 +337,7 @@ async function bootFleet(profile: "bwrap" | "k8s" = "bwrap"): Promise<Booted> {
 		{ workspaceDir, providerProfiles },
 		{ workspaceDir },
 	);
-	return { server, paths, workspaceDir, repoDir };
+	return { server, paths, workspaceDir, cloneRoot, repoDir };
 }
 
 async function createClone(server: FleetServer, repoDir: string, name: string): Promise<string> {
@@ -345,11 +355,16 @@ async function createClone(server: FleetServer, repoDir: string, name: string): 
 
 describe("clone wake resume (P8.9)", () => {
 	test(
-		"explicit resumeSessionId wake materializes the stored transcript and writes OMP_SESSION_RESUME",
+		"explicit resume wakes at the persisted legacy location and hands off OMP_SESSION_RESUME there",
 		async () => {
 			const { server, paths, workspaceDir, repoDir } = await bootFleet();
 			try {
 				const daemonId = await createClone(server, repoDir, "wake-resume");
+				const legacyRoot = join(paths.tmp, "legacy-clones");
+				const volumeRoot = join(legacyRoot, daemonId);
+				mkdirSync(legacyRoot, { recursive: true });
+				renameSync(server.registry.get(daemonId)!.cwd!, volumeRoot);
+				server.registry.update(daemonId, { cwd: volumeRoot });
 				// Populate the fleet store for this workspace as if a prior
 				// lifetime streamed a session. The fleet store lives next to
 				// the state file under dirname(statePath)/logs.
@@ -377,13 +392,14 @@ describe("clone wake resume (P8.9)", () => {
 				).lifecycle.ensureCloneRunning(daemonId, { resumeSessionId: SESSION });
 
 				// Volume got the materialized main file.
-				const volumeMain = join(workspaceDir, daemonId, ".home", "agent", "sessions", MAIN_RELPATH);
+				const volumeMain = join(volumeRoot, ".home", "agent", "sessions", MAIN_RELPATH);
 				expect(existsSync(volumeMain)).toBe(true);
 				expect(readFileSync(volumeMain, "utf8")).toBe(sessionBody(SESSION));
 				// The provider observed OMP_SESSION_RESUME in the handoff.
-				const seen = envSeen(workspaceDir, daemonId);
+				const seen = envSeen(legacyRoot, daemonId);
 				expect(seen).not.toBeNull();
 				expect(seen?.env?.OMP_SESSION_RESUME).toBe(volumeMain);
+				expect(existsSync(join(workspaceDir, daemonId))).toBe(false);
 			} finally {
 				await server.close();
 			}
@@ -394,12 +410,12 @@ describe("clone wake resume (P8.9)", () => {
 	test(
 		"never-started clone wake writes NO resume env (fresh boot)",
 		async () => {
-			const { server, workspaceDir, repoDir } = await bootFleet();
+			const { server, cloneRoot, repoDir } = await bootFleet();
 			try {
 				const daemonId = await createClone(server, repoDir, "fresh");
 				const start = await postJson(server.port, "/ctl/start", { daemonId });
 				expect(start.status).toBe(200);
-				const seen = envSeen(workspaceDir, daemonId);
+				const seen = envSeen(cloneRoot, daemonId);
 				expect(seen?.env?.OMP_SESSION_RESUME).toBeUndefined();
 			} finally {
 				await server.close();
@@ -411,12 +427,12 @@ describe("clone wake resume (P8.9)", () => {
 	test(
 		"k8s-shaped profile wake writes NO resume env",
 		async () => {
-			const { server, workspaceDir, repoDir } = await bootFleet("k8s");
+			const { server, cloneRoot, repoDir } = await bootFleet("k8s");
 			try {
 				const daemonId = await createClone(server, repoDir, "k8s-wake");
 				const start = await postJson(server.port, "/ctl/start", { daemonId });
 				expect(start.status).toBe(200);
-				const seen = envSeen(workspaceDir, daemonId);
+				const seen = envSeen(cloneRoot, daemonId);
 				expect(seen?.env?.OMP_SESSION_RESUME).toBeUndefined();
 			} finally {
 				await server.close();

@@ -133,7 +133,7 @@ describe("edge worktree commands", () => {
 	});
 
 	test("add_worktree registers a discovered-but-unregistered worktree", async () => {
-		const outside = join(tmp, "raw-wt");
+		const outside = join(config.workspaceDir, "repo", "raw-wt");
 		await gitIn(repoDir, ["worktree", "add", "-b", "raw-feat", outside]);
 		await browser.send({
 			type: "add_worktree",
@@ -151,8 +151,21 @@ describe("edge worktree commands", () => {
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
 		expect(entry.status).toBe("asleep");
-		// Outside the workspace root: not managed (no worktree deletion offer).
+		// Adoption stays external even inside the configured creation root.
 		expect(entry).not.toHaveProperty("managed");
+		const registered = registry.get(entry.daemonId)!;
+		expect(registered.workspace?.localWorktreeOwnership).toBe("external");
+		await browser.send({
+			type: "delete_worktree",
+			id: "external-delete",
+			daemonId: entry.daemonId,
+		});
+		await browser.waitForFrame(
+			(f) => f.type === "error" && f.error.includes("not explicitly owned"),
+			"external ownership refusal",
+		);
+		expect(registry.get(entry.daemonId)).toBeDefined();
+		expect(existsSync(outside)).toBe(true);
 	});
 
 	test("worktree_delete_info answers with the unicast guard-evidence frame", async () => {
@@ -180,28 +193,63 @@ describe("edge worktree commands", () => {
 		expect(err.error).toContain("d999");
 	});
 
-	test("delete_worktree stops, evicts, and git-removes the managed worktree", async () => {
+	test("delete_worktree removes an owned worktree after the creation root changes", async () => {
 		const target = managedWorktreePath(config.workspaceDir, project.path, "My Branch");
 		const entry = registry.list().find((e) => e.cwd === target)!;
 		// Floor: only roster frames NEWER than the last one seen so far count.
 		// The priming roster (pre-entry) must not satisfy the "gone" predicate.
 		const rosters = browser.events.filter((ev) => ev.frame.type === "roster");
 		const floorId = rosters.length > 0 ? rosters[rosters.length - 1].id : 0;
-		await browser.send({ type: "delete_worktree", id: "wt5", daemonId: entry.daemonId });
-		await browser.waitForEvent(
-			(ev) =>
-				ev.id > floorId &&
-				ev.frame.type === "roster" &&
-				!ev.frame.daemons.some((d) => d.daemonId === entry.daemonId),
-			"roster without the deleted worktree",
-		);
-		expect(registry.get(entry.daemonId)).toBeUndefined();
-		// The roster broadcast rides registry.remove, which precedes the git
-		// removal, so wait for the directory to actually disappear.
-		await waitFor(() => (existsSync(target) ? null : "removed"), 5000, "worktree removed");
-		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
-			target,
-		);
+		const originalRoot = config.workspaceDir;
+		config.workspaceDir = join(tmp, "replacement-workspaces");
+		try {
+			await browser.send({ type: "delete_worktree", id: "wt5", daemonId: entry.daemonId });
+			await browser.waitForEvent(
+				(ev) =>
+					ev.id > floorId &&
+					ev.frame.type === "roster" &&
+					!ev.frame.daemons.some((d) => d.daemonId === entry.daemonId),
+				"roster without the deleted worktree",
+			);
+			expect(registry.get(entry.daemonId)).toBeUndefined();
+			// registry.remove broadcasts before Git removal finishes.
+			await waitFor(() => (existsSync(target) ? null : "removed"), 5000, "worktree removed");
+			expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
+				target,
+			);
+		} finally {
+			config.workspaceDir = originalRoot;
+		}
+	});
+
+	test("delete_worktree rejects the main checkout despite forged explicit ownership", async () => {
+		const main = registry.create({
+			name: "main",
+			cwd: repoDir,
+			project: project.name,
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+			projectId: project.projectId,
+			workspace: {
+				kind: "worktree",
+				projectId: project.projectId,
+				desiredState: "stopped",
+				localWorktreeOwnership: "owned",
+				source: { local: repoDir },
+			},
+		});
+		try {
+			await browser.send({ type: "delete_worktree", id: "reject-main", daemonId: main.daemonId });
+			await browser.waitForFrame(
+				(f) => f.type === "error" && f.error.includes("not a linked Git worktree"),
+				"main checkout refusal",
+			);
+			expect(registry.get(main.daemonId)).toBeDefined();
+			expect(existsSync(repoDir)).toBe(true);
+		} finally {
+			registry.remove(main.daemonId);
+		}
 	});
 
 	test("delete_worktree refuses a dirty worktree with an error frame, nothing mutated", async () => {
@@ -420,10 +468,11 @@ describe("edge worktree commands", () => {
 			if (frame.type !== "projects") throw new Error("expected projects");
 			expect(frame.projects).toContainEqual(expected);
 
-			// Registering a daemon on that cwd marks it managed → the row
-			// disappears. A fresh browser avoids stale projects frames.
+			// Registering a daemon on that cwd excludes it from discovery;
+			// adoption does not transfer ownership. Avoid stale projects frames.
 			const entry = await registerWorktreeEntry(registry, supervisor, project, wtReal, {
 				start: false,
+				ownership: "external",
 			});
 			try {
 				browser.close();

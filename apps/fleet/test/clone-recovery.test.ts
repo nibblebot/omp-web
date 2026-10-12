@@ -28,8 +28,8 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { FleetServer } from "../server";
 import {
 	cleanupTempDirs,
@@ -137,6 +137,7 @@ interface TestFleet {
 	server: FleetServer;
 	paths: { tmp: string; statePath: string; configPath: string };
 	workspaceDir: string;
+	cloneRoot: string;
 	repoDir: string;
 }
 
@@ -147,6 +148,7 @@ async function bootFleet(
 ): Promise<TestFleet> {
 	const paths = fleetPaths("omp-clone-recovery-");
 	const workspaceDir = join(paths.tmp, "workspaces");
+	const cloneRoot = join(dirname(paths.statePath), "clones");
 	const repoDir = join(paths.tmp, "repo");
 	await makeRepo(repoDir);
 	const fakeProvider = providerDir ?? writeFakeProvider(join(paths.tmp, "provider"), scenario);
@@ -160,7 +162,7 @@ async function bootFleet(
 		},
 		{ workspaceDir },
 	);
-	return { server, paths, workspaceDir, repoDir };
+	return { server, paths, workspaceDir, cloneRoot, repoDir };
 }
 
 /** Create a clone (no start), returning its daemonId. */
@@ -179,11 +181,16 @@ async function createClone(server: FleetServer, repoDir: string, name: string): 
 
 describe("clone recovery: restart durable boundaries + races", () => {
 	test(
-		"restart reattaches a live desired-running sandbox at the SAME generation, never a second writer",
+		"restart after a destination change reattaches a legacy clone at its original location and generation",
 		async () => {
 			const { server, paths, workspaceDir, repoDir } = await bootFleet("reattach-running");
 			try {
 				const daemonId = await createClone(server, repoDir, "reattach");
+				// Model a clone allocated by an older fleet in the shared destination.
+				const legacyVolume = join(workspaceDir, daemonId);
+				mkdirSync(workspaceDir, { recursive: true });
+				renameSync(server.registry.get(daemonId)!.cwd!, legacyVolume);
+				server.registry.update(daemonId, { cwd: legacyVolume });
 				// Start (gen 1, desired running, enrollment + authorizedGeneration
 				// persisted; the fake sandbox stays "running" across restart).
 				const start = await postJson(server.port, "/ctl/start", { daemonId });
@@ -192,6 +199,14 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				expect(entry.workspace?.authorizedGeneration).toBe(1);
 				expect(entry.workspace?.desiredState).toBe("running");
 				expect(entry.workspace?.enrollment?.generation).toBe(1);
+				const enrollment = entry.workspace?.enrollment;
+				const handoffPath = join(workspaceDir, ".provider-state", daemonId, "callback-env.json");
+				const handoff = JSON.parse(readFileSync(handoffPath, "utf8")) as {
+					workspaceId: string;
+					generation: number;
+					env: Record<string, string>;
+				};
+				const changedDestination = join(paths.tmp, "changed-worktrees");
 
 				// FLEET RESTART: same statePath, fresh process. Boot reconcile
 				// inspects; the sandbox is running → reattach at gen 1 with the
@@ -200,7 +215,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				const server2 = await startTestFleet(
 					{ statePath: paths.statePath, configPath: paths.configPath },
 					{
-						workspaceDir,
+						workspaceDir: changedDestination,
 						providerProfiles: {
 							local: {
 								id: "local",
@@ -210,7 +225,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 							},
 						},
 					},
-					{ workspaceDir },
+					{ workspaceDir: changedDestination },
 				);
 				try {
 					// Boot reconcile is fire-and-forget: the persisted status is
@@ -234,6 +249,15 @@ describe("clone recovery: restart durable boundaries + races", () => {
 					expect(entry.workspace?.authorizedGeneration).toBe(1); // NO bump
 					expect(entry.workspace?.desiredState).toBe("running");
 					expect(entry.workspace?.enrollment?.generation).toBe(1); // persisted cred reused
+					expect(entry.cwd).toBe(legacyVolume);
+					expect(entry.workspace?.enrollment).toEqual(enrollment);
+					const recoveredHandoff = JSON.parse(readFileSync(handoffPath, "utf8")) as typeof handoff;
+					expect(recoveredHandoff.workspaceId).toBe(handoff.workspaceId);
+					expect(recoveredHandoff.generation).toBe(handoff.generation);
+					expect(recoveredHandoff.env.OMP_SESSION_CALLBACK_TOKEN).toBe(
+						handoff.env.OMP_SESSION_CALLBACK_TOKEN,
+					);
+					expect(existsSync(join(changedDestination, daemonId))).toBe(false);
 					// The provider saw exactly ONE ensure (gen 1) across both
 					// fleet lifetimes; reattach is inspect-only, never a second
 					// ensure (no duplicate writer).
@@ -243,6 +267,10 @@ describe("clone recovery: restart durable boundaries + races", () => {
 					expect(ensures[0]!.generation).toBe(1);
 					const inspects = ops.filter((o) => o.op === "inspect");
 					expect(inspects.length).toBeGreaterThanOrEqual(1);
+					const stop = await postJson(server2.port, "/ctl/stop", { selector: daemonId });
+					expect(stop.status).toBe(200);
+					expect(providerOps(workspaceDir, daemonId).some((o) => o.op === "stop")).toBe(true);
+					expect(existsSync(join(legacyVolume, ".checkout", ".git"))).toBe(true);
 				} finally {
 					await server2.close();
 				}
@@ -258,7 +286,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 	test(
 		"restart of a desired-running clone whose sandbox died bumps EXACTLY ONCE and sends the bumped generation (no stale-gen request, no double writer)",
 		async () => {
-			const { server, paths, workspaceDir, repoDir } = await bootFleet("stopped");
+			const { server, paths, cloneRoot, repoDir } = await bootFleet("stopped");
 			try {
 				const daemonId = await createClone(server, repoDir, "dead-restart");
 				const start = await postJson(server.port, "/ctl/start", { daemonId });
@@ -271,7 +299,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				const server2 = await startTestFleet(
 					{ statePath: paths.statePath, configPath: paths.configPath },
 					{
-						workspaceDir,
+						workspaceDir: join(paths.tmp, "changed-worktrees"),
 						providerProfiles: {
 							local: {
 								id: "local",
@@ -281,7 +309,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 							},
 						},
 					},
-					{ workspaceDir },
+					{ workspaceDir: join(paths.tmp, "changed-worktrees") },
 				);
 				try {
 					// Boot reconcile: inspect reports stopped + desired running →
@@ -300,7 +328,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 					// Exactly TWO ensures total (gen 1 pre-restart, gen 2 post) and
 					// the gen-2 ensure request carried generation 2, never the
 					// stale gen 1 (the fencing regression Main observed).
-					const ops = providerOps(workspaceDir, daemonId);
+					const ops = providerOps(cloneRoot, daemonId);
 					const ensures = ops.filter((o) => o.op === "ensure-running");
 					expect(ensures).toHaveLength(2);
 					expect(ensures[0]!.generation).toBe(1);
@@ -320,7 +348,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 	test(
 		"uncertain predecessor (inspect conflict) refuses replacement; no second writer admitted, generation never moves",
 		async () => {
-			const { server, workspaceDir, repoDir } = await bootFleet("uncertain");
+			const { server, cloneRoot, repoDir } = await bootFleet("uncertain");
 			try {
 				const daemonId = await createClone(server, repoDir, "uncertain");
 				// Manually persist a gen-1 authorized state (as a previous fleet
@@ -342,7 +370,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				expect(after.workspace?.authorizedGeneration).toBe(1); // never moved
 				// The provider NEVER saw an ensure or stop (inspect conflict
 				// blocks before any mutation).
-				const ops = providerOps(workspaceDir, daemonId);
+				const ops = providerOps(cloneRoot, daemonId);
 				expect(ops.some((o) => o.op === "ensure-running")).toBe(false);
 			} finally {
 				await server.close();
@@ -389,7 +417,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 	test(
 		"stop of a clone never touches the supervisor child paths and preserves the volume (checkout + enrollment removed, desired stopped)",
 		async () => {
-			const { server, workspaceDir, repoDir } = await bootFleet("stopped");
+			const { server, cloneRoot, repoDir } = await bootFleet("stopped");
 			try {
 				const daemonId = await createClone(server, repoDir, "stop-preserve");
 				const start = await postJson(server.port, "/ctl/start", { daemonId });
@@ -398,7 +426,7 @@ describe("clone recovery: restart durable boundaries + races", () => {
 				expect(entryBefore.workspace?.desiredState).toBe("running");
 				// The provider saw one ensure at gen 1.
 				expect(
-					providerOps(workspaceDir, daemonId).filter((o) => o.op === "ensure-running"),
+					providerOps(cloneRoot, daemonId).filter((o) => o.op === "ensure-running"),
 				).toHaveLength(1);
 
 				const stop = await postJson(server.port, "/ctl/stop", { selector: daemonId });

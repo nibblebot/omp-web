@@ -6,15 +6,15 @@
  * browser SSE edge (/events + /command) on the same server. Wires the
  * persistent Registry, the callback transport and the SpawnSupervisor:
  *
- *   GET  /ctl/sessions {…}                         → RegistryEntry[]
+ *   GET  /ctl/sessions {…}                         → DaemonEntry[]
  *   GET  /ctl/projects {…}                         → { projects: ProjectEntry[], registered: RegisteredProject[] }
  *   POST /ctl/projects {path, start?, template?, labels?} → 201 { project, entry? } | 409 { error, project }
  *   DELETE /ctl/projects/:projectId                → 200 { removed } | 409 { error }
  *   GET  /ctl/settings                             -> SettingsModel
  *   GET  /ctl/worktrees/:daemonId/delete-info      -> worktree_delete_info payload
- *   POST /ctl/spawn    {cwd, template?, name?, labels?} -> RegistryEntry
+ *   POST /ctl/spawn    {cwd, template?, name?, labels?} -> DaemonEntry
  *   POST /ctl/enroll  {name, labels?, cwd?, callbackUrl?} → 201 {entry, enrollment}
- *   POST /ctl/provision {name, labels?}            → RegistryEntry (spawn hook)
+ *   POST /ctl/provision {name, labels?}            → DaemonEntry (spawn hook)
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
  *   POST /ctl/remove   {selector}                  → { removed: string[] }
  *   POST /ctl/prompt   {selector, text, waitMs?}   → PromptResult[] | { submitted: string[] }
@@ -59,8 +59,8 @@
  */
 
 import type { Server } from "bun";
-import { existsSync, rmSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import type { DaemonStatus, RegisteredProject, PublicProviderProfile } from "#lib/wire/protocol";
 import type { FleetConfig } from "./config";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
@@ -77,7 +77,7 @@ import {
 	releaseSessionCredential,
 	withCallbackEnv,
 } from "./supervisor";
-import { isPathUnder, realpathOf } from "./worktrees";
+import { realpathOf } from "./worktrees";
 import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
 import { FleetEdge, toRosterEntry } from "./edge";
@@ -201,14 +201,14 @@ export function publicProfileCatalog(config: {
 	return Object.values(config.providerProfiles ?? {}).map((profile) => toPublicProfile(profile));
 }
 
-function resolveStatePath(explicit?: string, configPath?: string): string {
-	if (explicit !== undefined && explicit !== "") return expandTilde(explicit);
+export function resolveStatePath(explicit?: string, configPath?: string): string {
+	if (explicit !== undefined && explicit !== "") return resolve(expandTilde(explicit));
 	const env = process.env.OMP_FLEET_STATE;
-	if (env !== undefined && env !== "") return expandTilde(env);
+	if (env !== undefined && env !== "") return resolve(expandTilde(env));
 	// Default: the state file lives NEXT TO the config file; the first-run
 	// data-home choice moves config + state + workspaces together. With no
 	// config that is the default data home (~/.omp-web), the historic path.
-	return join(dirname(configPath ?? resolveConfigPath()), "fleet-state.json");
+	return resolve(join(dirname(configPath ?? resolveConfigPath()), "fleet-state.json"));
 }
 
 function resolvePort(explicit?: number): number {
@@ -299,27 +299,37 @@ const WORKTREE_INFO_ROUTE = /^\/ctl\/worktrees\/([^/]+)\/delete-info$/;
 const WORKSPACE_RESUME_CLONE_ROUTE = /^\/ctl\/workspaces\/([^/]+)\/resume-clone$/;
 
 /**
- * Local clone volume deleter (P7.5): removes the workspace's own volume,
- * the checkout and session data, under the fleet workspaceDir root. Only
- * ever called AFTER the store verification gate passed and the store flipped
- * read-only; the roster removal follows this call. Never touches the fleet
- * log store (Retention owns it) and never removes anything outside the
- * managed root.
+ * Post-verification local clone deletion follows persisted volume provenance,
+ * not the current default worktree destination. Validate identity and layout
+ * independently so a substituted directory cannot authorize recursive removal.
  */
 class LocalCloneResourceDeleter implements WorkspaceResourceDeleter {
-	private readonly workspaceRoot: string;
-	constructor(workspaceDir: string) {
-		this.workspaceRoot = workspaceDir;
-	}
 	async deleteWorkspaceResources(workspaceId: string, entry: RegistryEntry): Promise<void> {
 		const cwd = entry.cwd ?? "";
 		if (cwd === "") return; // No volume to remove (a placeholder).
-		const realRoot = realpathOf(this.workspaceRoot);
+		const workspace = entry.workspace;
+		if (workspace?.kind !== "clone" || workspaceId !== entry.daemonId) {
+			throw new Error(`refusing to delete non-clone volume: ${workspaceId}`);
+		}
 		const realCwd = realpathOf(cwd);
-		if (!isPathUnder(realCwd, realRoot)) {
-			throw new Error(
-				`refusing to delete clone volume outside workspaceDir: ${cwd} (workspace ${workspaceId})`,
-			);
+		if (realCwd !== join(realpathOf(dirname(cwd)), workspaceId) || basename(cwd) !== workspaceId) {
+			throw new Error(`refusing to delete substituted clone volume: ${cwd}`);
+		}
+		// A missing volume is already removed; never follow a renamed/symlinked
+		// checkout or trust a directory name alone as clone creation evidence.
+		if (!existsSync(cwd)) return;
+		const marker = JSON.parse(readFileSync(join(realCwd, ".omp-workspace-init.json"), "utf8"));
+		if (
+			!workspace.pinnedRevision ||
+			(!workspace.source?.local && !workspace.source?.remote) ||
+			marker.workspaceId !== workspaceId ||
+			marker.resolvedCommit !== workspace.pinnedRevision ||
+			marker.source?.local !==
+				(workspace.source?.local ? resolve(workspace.source.local) : undefined) ||
+			marker.source?.remote !== workspace.source?.remote ||
+			realpathOf(join(realCwd, ".checkout")) !== join(realCwd, ".checkout")
+		) {
+			throw new Error(`refusing to delete clone volume with mismatched provenance: ${cwd}`);
 		}
 		// The volume is the workspace root itself: .checkout + .home + the
 		// init marker live under it. Remove it as a unit.
@@ -433,6 +443,7 @@ class FleetServerImpl implements FleetServer {
 	readonly lifecycle: WorkspaceLifecycle;
 	/** P1/P8 clones control API (route layer over the lifecycle service). */
 	readonly cloneApi: CloneControlApi;
+	readonly cloneRoot: string;
 	/** State-file lock: taken in startFleet, released in close(). */
 	readonly lock: FileLock;
 
@@ -486,7 +497,8 @@ class FleetServerImpl implements FleetServer {
 		this.#redialGraceMs = redialGraceMs;
 		this.config = config;
 		this.lock = lock;
-		this.resourceDeleter = resourceDeleter ?? new LocalCloneResourceDeleter(config.workspaceDir);
+		this.cloneRoot = join(dirname(facts.statePath), "clones");
+		this.resourceDeleter = resourceDeleter ?? new LocalCloneResourceDeleter();
 		this.cloneResumeSpawner = cloneResumeSpawner ?? null;
 		this.startedAt = Date.now();
 		this.fleetFacts = {
@@ -616,7 +628,8 @@ class FleetServerImpl implements FleetServer {
 		// log-tap attach and callback-URL provider, no edge dependency.
 		this.lifecycle = new WorkspaceLifecycle({
 			registry,
-			config: { workspaceDir: config.workspaceDir, providerProfiles: config.providerProfiles },
+			config: { providerProfiles: config.providerProfiles },
+			cloneRoot: this.cloneRoot,
 			transport: this.transport,
 			logStore: this.logStore,
 			resourceDeleter: this.resourceDeleter,
@@ -1038,16 +1051,9 @@ class FleetServerImpl implements FleetServer {
 				`clone start failed: ${err instanceof Error ? err.message : String(err)}`,
 			);
 		}
-		const current = this.registry.get(daemonId);
 		return json({
 			daemonId,
 			observed: "running",
-			...(current?.workspace?.authorizedGeneration !== undefined
-				? { generation: current.workspace.authorizedGeneration }
-				: {}),
-			...(current?.workspace?.providerHandle !== undefined
-				? { handle: current.workspace.providerHandle }
-				: {}),
 		});
 	}
 
@@ -1144,7 +1150,7 @@ class FleetServerImpl implements FleetServer {
 				if (infoMatch) return await this.#handleWorktreeDeleteInfo(infoMatch[1]);
 				switch (path) {
 					case "/ctl/sessions":
-						return json(this.registry.list());
+						return json(this.registry.list().map(toRosterEntry));
 					case "/ctl/profiles":
 						// P1.3: secret-free provider-profile catalog for CLI/browser.
 						return json(this.cloneApi.profiles());
@@ -1395,7 +1401,7 @@ class FleetServerImpl implements FleetServer {
 		// under the project. Unregistered paths stay untagged (fallback group).
 		const projectId = await projectIdForCwd(this.registry.projects(), resolved);
 		if (projectId !== undefined) this.registry.update(entry.daemonId, { projectId });
-		return json(this.registry.get(entry.daemonId) ?? entry);
+		return json(toRosterEntry(this.registry.get(entry.daemonId) ?? entry));
 	}
 
 	/**
@@ -1443,7 +1449,7 @@ class FleetServerImpl implements FleetServer {
 			});
 			// `entry` only when spawned: an asleep default workspace surfaces
 			// purely via the roster broadcast.
-			return json({ project, ...(start ? { entry } : {}) }, 201);
+			return json({ project, ...(start && entry ? { entry: toRosterEntry(entry) } : {}) }, 201);
 		} catch (err) {
 			// The project stays registered; the 500 names the stage.
 			throw new HttpError(
@@ -1499,7 +1505,7 @@ class FleetServerImpl implements FleetServer {
 		this.eventLog.add("info", "server", `enrolled ${entry.name} (${callbackUrl})`, entry.daemonId);
 		return json(
 			{
-				entry: toRosterEntry(entry, this.config.workspaceDir),
+				entry: toRosterEntry(entry),
 				enrollment: {
 					workspaceId: entry.daemonId,
 					generation: enrollment.generation,
@@ -1551,7 +1557,7 @@ class FleetServerImpl implements FleetServer {
 			throw err;
 		}
 		this.eventLog.add("info", "server", `provisioned ${entry.name} (spawn hook)`, entry.daemonId);
-		return json(toRosterEntry(entry, this.config.workspaceDir));
+		return json(toRosterEntry(entry));
 	}
 
 	async #handleStop(req: Request): Promise<Response> {
@@ -1766,6 +1772,7 @@ class FleetServerImpl implements FleetServer {
 			try {
 				entry = await registerWorktreeEntry(this.registry, this.supervisor, project, created.path, {
 					start,
+					ownership: "owned",
 				});
 			} catch (err) {
 				throw new HttpError(
@@ -1779,7 +1786,7 @@ class FleetServerImpl implements FleetServer {
 				`worktree created ${created.path} (${created.branch})`,
 				entry.daemonId,
 			);
-			return json({ entry }, 201);
+			return json({ entry: toRosterEntry(entry) }, 201);
 		}
 		// Add-existing: validate it is an unregistered linked worktree of the project.
 		let resolved: string;
@@ -1798,12 +1805,13 @@ class FleetServerImpl implements FleetServer {
 		try {
 			entry = await registerWorktreeEntry(this.registry, this.supervisor, project, resolved, {
 				start,
+				ownership: "external",
 			});
 		} catch (err) {
 			throw new HttpError(500, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 		this.eventLog.add("info", "server", `worktree registered ${resolved}`, entry.daemonId);
-		return json({ entry }, 201);
+		return json({ entry: toRosterEntry(entry) }, 201);
 	}
 
 	/**
@@ -1813,7 +1821,7 @@ class FleetServerImpl implements FleetServer {
 	async #handleWorktreeDeleteInfo(daemonId: string): Promise<Response> {
 		const entry = this.registry.get(daemonId);
 		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
-		const info = await worktreeDeleteInfo(entry.cwd ?? "", this.config.workspaceDir);
+		const info = await worktreeDeleteInfo(entry);
 		return json({ daemonId, ...info });
 	}
 
@@ -1967,7 +1975,7 @@ class FleetServerImpl implements FleetServer {
 		// Provision the fresh volume at the pinned commit. prepareWorkspace
 		// enforces the pin: an unresolvable source/commit is a typed
 		// failure, never a silent upstream substitution.
-		const volumeRoot = join(this.config.workspaceDir, workspaceId);
+		const volumeRoot = join(this.cloneRoot, workspaceId);
 		let prepared;
 		try {
 			prepared = await prepareWorkspace({
@@ -2051,12 +2059,12 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * DELETE /ctl/worktrees/:daemonId {deleteBranch?}: stop the daemon,
-	 * evict it from the roster, then git-remove the managed worktree (and
-	 * optionally `git branch -d` it). The ownership + dirty guards run
-	 * BEFORE any mutation: a refusal (403 not owned / 409 dirty; no
-	 * --force in v1) leaves the roster and daemon untouched. Session
-	 * transcripts live under the agent dir, never inside the worktree, so
-	 * nothing outside workspaceDir is ever removed.
+	 * evict it from the roster, then git-remove the explicitly owned worktree
+	 * (and optionally `git branch -d` it). Provenance, linked-worktree identity,
+	 * and dirty guards run BEFORE any mutation: a refusal (403 not owned /
+	 * 409 dirty; never --force) leaves the roster and daemon untouched.
+	 * Session transcripts live under the agent dir, never inside the worktree;
+	 * the current default creation directory has no role in deletion.
 	 */
 	async #handleDeleteWorktree(req: Request, daemonId: string): Promise<Response> {
 		// The body is optional (`{ deleteBranch?: boolean }`); a bodyless
@@ -2079,8 +2087,8 @@ class FleetServerImpl implements FleetServer {
 		const entry = this.registry.get(daemonId);
 		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
 		const path = entry.cwd ?? "";
-		const info = await worktreeDeleteInfo(path, this.config.workspaceDir);
-		if (!info.owned) throw new HttpError(403, info.reason ?? `not a managed worktree: ${path}`);
+		const info = await worktreeDeleteInfo(entry);
+		if (!info.owned) throw new HttpError(403, info.reason ?? `not an owned worktree: ${path}`);
 		if (info.dirty)
 			throw new HttpError(409, info.reason ?? `worktree has uncommitted changes: ${path}`);
 		// Stop + evict (removal-time cleanup: #24 prune drops supervisor state).
@@ -2092,7 +2100,7 @@ class FleetServerImpl implements FleetServer {
 		// Git removal; the guards are re-asserted inside (race backstop).
 		let deleted: Awaited<ReturnType<typeof deleteWorktree>>;
 		try {
-			deleted = await deleteWorktree(path, this.config.workspaceDir, { deleteBranch });
+			deleted = await deleteWorktree(entry, { deleteBranch });
 		} catch (err) {
 			if (err instanceof WorktreeNotOwnedError) throw new HttpError(403, err.message);
 			if (err instanceof WorktreeDirtyError) throw new HttpError(409, err.message);

@@ -7,12 +7,12 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { RegisteredProject } from "#lib/wire/protocol";
 import { main } from "../cli";
 import { openBrowser } from "./edge.testkit";
 import type { RegistryEntry } from "../registry";
-import type { FleetServer } from "../server";
+import { type FleetServer, resolveStatePath } from "../server";
 import {
 	cleanupTempDirs,
 	fleetPaths,
@@ -30,6 +30,10 @@ afterAll(cleanupTempDirs);
 // testkit: a top-level await in an imported module races the bun 1.3.14
 // parallel test-file loader (importers sporadically see its bindings in TDZ).
 await pinSettingsInMemory();
+
+test("explicit relative fleet state paths resolve absolutely", () => {
+	expect(resolveStatePath("relative/fleet-state.json")).toBe(resolve("relative/fleet-state.json"));
+});
 
 describe("worktree lifecycle routes", () => {
 	let tmp: string;
@@ -90,13 +94,14 @@ describe("worktree lifecycle routes", () => {
 		expect(entry.worktreeOf).toBe(project.name);
 		expect(entry.mode).toBe("spawned");
 		expect(entry.status).toBe("asleep");
+		expect(server.registry.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe("owned");
+		expect(entry).toHaveProperty("managed", true);
+		expect(entry).not.toHaveProperty("workspace");
+		expect(entry).not.toHaveProperty("localWorktreeOwnership");
 		const target = join(workspaceDir, project.name, "feature-branch");
 		expect(entry.cwd).toBe(target);
 		expect(existsSync(target)).toBe(true);
-		// Ownership marker records the owning repo realpath.
-		expect(readFileSync(join(workspaceDir, project.name, ".omp-web-repo"), "utf8").trim()).toBe(
-			repoDir,
-		);
+		expect(existsSync(join(workspaceDir, project.name, ".omp-web-repo"))).toBe(false);
 		// git agrees: the worktree is listed with the slug branch.
 		const list = await gitIn(repoDir, ["worktree", "list", "--porcelain"]);
 		expect(list.stdout).toContain(target);
@@ -117,6 +122,7 @@ describe("worktree lifecycle routes", () => {
 		const target = join(workspaceDir, project.name, "started");
 		expect(entry.cwd).toBe(target);
 		expect(existsSync(target)).toBe(true);
+		expect(existsSync(join(workspaceDir, project.name, ".omp-web-repo"))).toBe(false);
 		// The spawned child idles (`sleep 30`); stop it so the suite ends clean.
 		await server.supervisor.stop(entry.daemonId);
 	});
@@ -152,6 +158,81 @@ describe("worktree lifecycle routes", () => {
 		expect(entry.worktreeOf).toBe(project.name);
 		expect(entry.mode).toBe("spawned");
 		expect(entry.status).toBe("asleep");
+		expect(server.registry.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe("external");
+		expect(entry).not.toHaveProperty("managed");
+		expect(entry).not.toHaveProperty("workspace");
+		expect(entry).not.toHaveProperty("localWorktreeOwnership");
+	});
+
+	test("GET /ctl/sessions exposes owned and external worktrees without private provenance", async () => {
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
+		expect(res.status).toBe(200);
+		const entries: RegistryEntry[] = await res.json();
+		const owned = entries.find(
+			(entry) => entry.cwd === join(workspaceDir, project.name, "feature-branch"),
+		);
+		const external = entries.find((entry) => entry.cwd === join(tmp, "raw-worktree"));
+		expect(owned).toBeDefined();
+		expect(owned).toHaveProperty("managed", true);
+		expect(external).toBeDefined();
+		expect(external).not.toHaveProperty("managed");
+		for (const entry of [owned, external]) {
+			expect(entry).not.toHaveProperty("workspace");
+			expect(entry).not.toHaveProperty("localWorktreeOwnership");
+		}
+	});
+
+	test("adopting a worktree inside workspaceDir never grants disk-delete ownership", async () => {
+		const target = join(workspaceDir, project.name, "adopted-inside");
+		expect(
+			(await gitIn(repoDir, ["worktree", "add", "-b", "adopted-inside", target])).exitCode,
+		).toBe(0);
+		const adopted = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			worktreePath: target,
+		});
+		expect(adopted.status).toBe(201);
+		const body = await adopted.json();
+		expect(typeof body.entry.daemonId).toBe("string");
+		expect(body.entry.cwd).toBe(target);
+		const entry = server.registry.get(body.entry.daemonId)!;
+		expect(server.registry.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe("external");
+		const info = await fetch(
+			`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}/delete-info`,
+		);
+		expect(info.status).toBe(200);
+		expect(await info.json()).toMatchObject({ owned: false });
+		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
+			method: "DELETE",
+		});
+		expect(del.status).toBe(403);
+		expect(server.registry.get(entry.daemonId)).toBeDefined();
+		expect(readFileSync(join(target, "readme.md"), "utf8")).toBe("hello\n");
+		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).toContain(target);
+	});
+
+	test("POST /ctl/remove forgets an external worktree without deleting dirty files or Git registration", async () => {
+		const target = join(workspaceDir, project.name, "external-dirty");
+		expect(
+			(await gitIn(repoDir, ["worktree", "add", "-b", "external-dirty", target])).exitCode,
+		).toBe(0);
+		const adopted = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
+			worktreePath: target,
+		});
+		expect(adopted.status).toBe(201);
+		const body = await adopted.json();
+		expect(typeof body.entry.daemonId).toBe("string");
+		expect(body.entry.cwd).toBe(target);
+		const entry = server.registry.get(body.entry.daemonId)!;
+		writeFileSync(join(target, "readme.md"), "user edits\n");
+		writeFileSync(join(target, "scratch.txt"), "untracked user work\n");
+		const removed = await postJson(server.port, "/ctl/remove", { selector: entry.daemonId });
+		expect(removed.status).toBe(200);
+		expect(await removed.json()).toMatchObject({ removed: [entry.daemonId] });
+		expect(server.registry.get(entry.daemonId)).toBeUndefined();
+		expect(readFileSync(join(target, "readme.md"), "utf8")).toBe("user edits\n");
+		expect(readFileSync(join(target, "scratch.txt"), "utf8")).toBe("untracked user work\n");
+		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).toContain(target);
+		expect((await gitIn(target, ["status", "--porcelain"])).stdout).toContain("scratch.txt");
 	});
 
 	test("POST add-existing refuses the main checkout and non-worktree paths", async () => {
@@ -258,21 +339,42 @@ describe("worktree lifecycle routes", () => {
 		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).toContain(target);
 	});
 
-	test("DELETE refuses a not-owned cwd with 403", async () => {
-		const rogue = server.registry.create({
-			name: "rogue",
-			cwd: join(tmp, "outside-rogue"),
-			project: "x",
+	test("a provenance-free legacy entry inside workspaceDir refuses disk deletion", async () => {
+		const target = join(workspaceDir, project.name, "legacy-unowned");
+		expect(
+			(await gitIn(repoDir, ["worktree", "add", "-b", "legacy-unowned", target])).exitCode,
+		).toBe(0);
+		// Old registry entries carry grouping metadata but no ownership record.
+		const legacy = server.registry.create({
+			name: "legacy-unowned",
+			cwd: target,
+			project: project.name,
+			projectId: project.projectId,
+			worktreeOf: project.name,
 			labels: [],
 			mode: "spawned",
 			status: "asleep",
 		});
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${rogue.daemonId}`, {
+		const sessions = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
+		expect(sessions.status).toBe(200);
+		const entries: RegistryEntry[] = await sessions.json();
+		const publicLegacy = entries.find((entry) => entry.daemonId === legacy.daemonId);
+		expect(publicLegacy).toBeDefined();
+		expect(publicLegacy).not.toHaveProperty("managed");
+		expect(publicLegacy).not.toHaveProperty("workspace");
+		expect(publicLegacy).not.toHaveProperty("localWorktreeOwnership");
+		const info = await fetch(
+			`http://127.0.0.1:${server.port}/ctl/worktrees/${legacy.daemonId}/delete-info`,
+		);
+		expect(info.status).toBe(200);
+		expect(await info.json()).toMatchObject({ owned: false });
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${legacy.daemonId}`, {
 			method: "DELETE",
 		});
 		expect(res.status).toBe(403);
-		expect(server.registry.get(rogue.daemonId)).toBeDefined();
-		server.registry.remove(rogue.daemonId);
+		expect(server.registry.get(legacy.daemonId)).toBeDefined();
+		expect(readFileSync(join(target, "readme.md"), "utf8")).toBe("hello\n");
+		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).toContain(target);
 	});
 
 	test("DELETE with deleteBranch:true also removes the merged branch (-d only)", async () => {
@@ -300,6 +402,54 @@ describe("worktree lifecycle routes", () => {
 			method: "DELETE",
 		});
 		expect(res.status).toBe(404);
+	});
+
+	test("owned provenance survives restart with a changed workspaceDir and permits clean disk deletion", async () => {
+		const paths = fleetPaths("omp-web-owned-restart-");
+		const originalWorkspaceDir = join(paths.tmp, "original-workspaces");
+		const changedWorkspaceDir = join(paths.tmp, "changed-workspaces");
+		const config = { templates: { local: { command: "sleep 30" } }, defaultTemplate: "local" };
+		let restarted: FleetServer | undefined;
+		try {
+			restarted = await startTestFleet(paths, config, { workspaceDir: originalWorkspaceDir });
+			const registered = await restarted.registry.addProject(repoDir);
+			const created = await postJson(
+				restarted.port,
+				`/ctl/projects/${registered.projectId}/worktrees`,
+				{ name: "Restart Owned", start: false },
+			);
+			expect(created.status).toBe(201);
+			const body = await created.json();
+			expect(typeof body.entry.daemonId).toBe("string");
+			const entry = restarted.registry.get(body.entry.daemonId)!;
+			expect(entry.cwd).toBe(join(originalWorkspaceDir, registered.name, "restart-owned"));
+			expect(restarted.registry.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe(
+				"owned",
+			);
+			await restarted.close();
+			restarted = undefined;
+			restarted = await startTestFleet(paths, config, { workspaceDir: changedWorkspaceDir });
+			expect(restarted.registry.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe(
+				"owned",
+			);
+			const info = await fetch(
+				`http://127.0.0.1:${restarted.port}/ctl/worktrees/${entry.daemonId}/delete-info`,
+			);
+			expect(info.status).toBe(200);
+			expect(await info.json()).toMatchObject({ owned: true, dirty: false });
+			const deleted = await fetch(
+				`http://127.0.0.1:${restarted.port}/ctl/worktrees/${entry.daemonId}`,
+				{ method: "DELETE" },
+			);
+			expect(deleted.status).toBe(200);
+			expect(restarted.registry.get(entry.daemonId)).toBeUndefined();
+			expect(existsSync(entry.cwd)).toBe(false);
+			expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
+				entry.cwd,
+			);
+		} finally {
+			if (restarted) await restarted.close();
+		}
 	});
 
 	test("CLI add-worktree creates via the route (selector by name, --no-start respected)", async () => {

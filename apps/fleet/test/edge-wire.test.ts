@@ -1507,13 +1507,7 @@ describe("edge pure helpers", () => {
 		expect(toRosterEntry(base)).not.toHaveProperty("sessionEmpty");
 	});
 
-	test("toRosterEntry sets managed only for cwds realpath-under the workspaceDir", () => {
-		const tmpRoot = tempDir("omp-web-edge-managed-");
-		const ws = join(tmpRoot, "workspaces");
-		const inside = join(ws, "repo", "feature");
-		mkdirSync(inside, { recursive: true });
-		const outside = join(tmpRoot, "outside");
-		mkdirSync(outside, { recursive: true });
+	test("toRosterEntry exposes managed only for explicitly owned local worktrees", () => {
 		const base: RegistryEntry = {
 			daemonId: "d9",
 			name: "n",
@@ -1524,15 +1518,39 @@ describe("edge pure helpers", () => {
 			status: "asleep",
 			registeredAt: Date.now(),
 		};
-		expect(toRosterEntry({ ...base, cwd: inside }, ws).managed).toBe(true);
-		// Outside the workspace root: absent (older-edge behavior), never false.
-		expect(toRosterEntry({ ...base, cwd: outside }, ws)).not.toHaveProperty("managed");
-		// A prefix-lookalike sibling (tmp/workspaces-other) is NOT under ws.
-		expect(toRosterEntry({ ...base, cwd: `${ws}-other` }, ws)).not.toHaveProperty("managed");
-		// No workspaceDir argument: absent, whatever the cwd.
-		expect(toRosterEntry({ ...base, cwd: inside })).not.toHaveProperty("managed");
-		// Empty cwd (remote-style entries) never carry it either.
-		expect(toRosterEntry(base, ws)).not.toHaveProperty("managed");
+		const workspace = {
+			kind: "worktree" as const,
+			projectId: "p1",
+			desiredState: "stopped" as const,
+			localWorktreeOwnership: "owned" as const,
+		};
+		expect(toRosterEntry({ ...base, cwd: "/old-root/repo/feature", workspace }).managed).toBe(true);
+		expect(
+			toRosterEntry({
+				...base,
+				cwd: "/new-root/repo/external",
+				workspace: { ...workspace, localWorktreeOwnership: "external" },
+			}),
+		).not.toHaveProperty("managed");
+		expect(
+			toRosterEntry({
+				...base,
+				workspace: {
+					kind: "worktree",
+					projectId: "p1",
+					desiredState: "stopped",
+				},
+			}),
+		).not.toHaveProperty("managed");
+		expect(toRosterEntry({ ...base, managed: true })).not.toHaveProperty("managed");
+		for (const kind of ["direct", "clone"] as const) {
+			expect(toRosterEntry({ ...base, workspace: { ...workspace, kind } })).not.toHaveProperty(
+				"managed",
+			);
+		}
+		expect(toRosterEntry({ ...base, mode: "remote", workspace })).not.toHaveProperty("managed");
+		expect(toRosterEntry({ ...base, workspace })).not.toHaveProperty("localWorktreeOwnership");
+		expect(toRosterEntry({ ...base, workspace })).not.toHaveProperty("workspace");
 	});
 
 	test("shouldDropFrame guards the cap boundary", () => {

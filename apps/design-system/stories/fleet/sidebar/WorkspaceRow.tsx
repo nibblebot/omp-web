@@ -18,10 +18,18 @@ export default defineStory({
 			),
 		},
 		{
-			name: "Worktree, attached",
+			name: "Owned worktree, attached",
 			render: () => (
 				<div class="sidebar-list">
 					<WorkspaceRow daemon={rosterDaemon.worktree} />
+				</div>
+			),
+		},
+		{
+			name: "External worktree",
+			render: () => (
+				<div class="sidebar-list">
+					<WorkspaceRow daemon={rosterDaemon.externalWorktree} />
 				</div>
 			),
 		},

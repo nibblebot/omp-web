@@ -8,7 +8,7 @@
  * are tolerated. `OMP_FLEET_SPAWN_HOOK` overrides the config file's
  * `spawnHook`; `OMP_FLEET_LOCAL_TEMPLATE` replaces the `local` template's
  * command outright (dev runners point it at the source entry when the
- * production binary isn't built). `workspaceDir` (root for managed
+ * production binary isn't built). `workspaceDir` (default directory for new
  * worktrees) resolves flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR`
  * > config-file `workspaceDir` key > `~/.omp-web/workspaces`. The bind
  * address resolves `--bind` > env `OMP_FLEET_BIND` > config-file `bind` key
@@ -44,9 +44,9 @@ export interface FleetConfig {
 	/** Env `OMP_FLEET_SPAWN_HOOK` wins over the config file value. */
 	spawnHook?: string;
 	/**
-	 * Root for managed worktrees (created lazily on first worktree, never at
-	 * boot). Flag `--workspace-dir` > env `OMP_FLEET_WORKSPACE_DIR` >
-	 * config-file `workspaceDir` key > `~/.omp-web/workspaces` (~ expanded).
+	 * Default creation destination for local worktrees (created lazily, never
+	 * at boot), not an ownership boundary. Flag `--workspace-dir` >
+	 * env `OMP_FLEET_WORKSPACE_DIR` > config key > `~/.omp-web/workspaces`.
 	 */
 	workspaceDir: string;
 	/**
@@ -100,7 +100,7 @@ export const DEFAULT_LOCAL_TEMPLATE: SpawnTemplate = {
 	command: "omp-web session --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}",
 };
 
-/** Default managed-worktree root under the consolidated home data dir. */
+/** Default worktree creation directory under the consolidated home data dir. */
 export function defaultWorkspaceDir(): string {
 	return expandTilde("~/.omp-web/workspaces");
 }

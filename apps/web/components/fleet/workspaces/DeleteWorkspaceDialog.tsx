@@ -189,7 +189,7 @@ export const DeleteWorkspaceDialog: Component = () => {
 					<Show when={info() !== undefined && !info()!.owned}>
 						<p class="danger-confirm-body">
 							{info()!.reason ??
-								"This directory is not a fleet-managed worktree: nothing to delete."}
+								"This worktree is not owned by omp-web. Remove it from omp-web to preserve its files."}
 						</p>
 					</Show>
 					<Show when={info() !== undefined && info()!.owned && info()!.dirty}>
@@ -214,15 +214,15 @@ export const DeleteWorkspaceDialog: Component = () => {
 					</Show>
 					<Show when={info() !== undefined && info()!.owned && !info()!.dirty}>
 						<p class="danger-confirm-body">
-							Delete the fleet-managed worktree
+							Delete the worktree owned by omp-web
 							{daemon() ? (
 								<>
 									{" "}
 									at <span class="worktree-evidence-path">{daemon()!.cwd}</span>
 								</>
 							) : null}
-							? This stops the daemon and removes it from the roster; session transcripts survive
-							(they live under the agent dir, not the worktree).
+							? This stops the daemon, removes it from the roster, and deletes its files from disk.
+							Session transcripts survive (they live under the agent dir, not the worktree).
 						</p>
 						<Show when={info()!.branch}>
 							{(branch) => (

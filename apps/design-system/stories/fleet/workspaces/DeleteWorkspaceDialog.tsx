@@ -20,7 +20,7 @@ export default defineStory({
 	seed: () => seedRosterFleet(),
 	variants: [
 		{
-			name: "Clean managed worktree",
+			name: "Clean owned worktree",
 			seed: () =>
 				seedRosterFleet({
 					deleteWorkspaceTarget: worktreeInfoClean.daemonId,
@@ -29,7 +29,7 @@ export default defineStory({
 			render: () => <DeleteWorkspaceDialog />,
 		},
 		{
-			name: "Dirty worktree refused",
+			name: "Dirty owned worktree refused",
 			seed: () =>
 				seedRosterFleet({
 					deleteWorkspaceTarget: worktreeInfoDirty.daemonId,
@@ -38,7 +38,7 @@ export default defineStory({
 			render: () => <DeleteWorkspaceDialog />,
 		},
 		{
-			name: "Outside managed root",
+			name: "External worktree refused",
 			seed: () =>
 				seedRosterFleet({
 					deleteWorkspaceTarget: worktreeInfoUnowned.daemonId,

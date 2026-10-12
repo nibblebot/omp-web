@@ -8,35 +8,25 @@
  *
  *   <workspaceDir>/<repo-basename>/<slug(name)>
  *
- * When a directory under workspaceDir with the same basename already belongs
- * to a DIFFERENT repo realpath, the basename is suffixed with the first 4 hex
- * chars of the sha1 of the repo realpath (`omp-web-a1b2` style). Ownership
- * is recorded in a `<basename>/.omp-web-repo` marker file containing the
- * owning repo's realpath; the worktree-creation flow writes it, these helpers
- * only read it. Both helpers are pure/deterministic: the same inputs map to
- * the same path (sync fs checks allowed).
+ * Repositories with the same basename share that directory. Creation refuses
+ * an existing target path; no repository collision detection is performed.
  *
  * The lifecycle half shells out to git ONLY (never fetches, never uses
  * --force / branch -D): resolveBaseRef, createWorktree,
  * listUnregisteredWorktrees, worktreeDeleteInfo, deleteWorktree, and the
  * registration/spawn orchestration shared by the /ctl routes and the edge
- * command handlers (registerWorktreeEntry). Deleting a worktree is guarded
- * by an ownership test (realpath under workspaceDir, nothing outside it is
- * ever removed) and a dirty check (`git status --porcelain`; no --force in
- * v1).
+ * command handlers (registerWorktreeEntry). Deleting a worktree requires
+ * explicit persisted ownership, independently verified linked-worktree
+ * identity, and a clean `git status --porcelain` (never --force).
  */
 
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
 import type { ProjectBranch, ProjectEntry, RegisteredProject } from "#lib/wire/protocol";
 import { probeGitState, validateProjectPath } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
-
-/** Marker file recording the repo realpath that owns a workspaceDir entry. */
-const OMP_WEB_REPO_MARKER = ".omp-web-repo";
 
 /** Lowercase a worktree name; runs of non-alphanumerics become `-`, edges trimmed. */
 export function slugifyWorktreeName(name: string): string {
@@ -47,26 +37,13 @@ export function slugifyWorktreeName(name: string): string {
 	return slug === "" ? "worktree" : slug;
 }
 
-/**
- * Map a repo realpath + worktree name to its managed path under workspaceDir.
- * Basenames colliding with a different repo's directory (`.omp-web-repo`
- * marker naming another realpath) get a `-<sha1(repo)[0..4]>` suffix.
- */
+/** Map a repo realpath + worktree name to its managed path under workspaceDir. */
 export function managedWorktreePath(
 	workspaceDir: string,
 	repoRealpath: string,
 	worktreeName: string,
 ): string {
-	let repoBasename = basename(repoRealpath);
-	const marker = join(workspaceDir, repoBasename, OMP_WEB_REPO_MARKER);
-	if (existsSync(marker)) {
-		const owner = readFileSync(marker, "utf8").trim();
-		if (owner !== repoRealpath) {
-			const hash = createHash("sha1").update(repoRealpath).digest("hex").slice(0, 4);
-			repoBasename = `${repoBasename}-${hash}`;
-		}
-	}
-	return join(workspaceDir, repoBasename, slugifyWorktreeName(worktreeName));
+	return join(workspaceDir, basename(repoRealpath), slugifyWorktreeName(worktreeName));
 }
 
 /** Realpath of `p` (missing paths keep their normalized form). */
@@ -197,8 +174,7 @@ export interface CreateWorktreeResult {
  * workspaceDir. The workspaceDir + repo directory are created lazily HERE
  * (first worktree creation). Refuses when the target path already exists,
  * when an existing branch is checked out in another worktree, or when git
- * rejects the operation (unknown branch/base). Writes the `.omp-web-repo`
- * ownership marker after a successful add. Returns `{ path, branch, baseRef }`.
+ * rejects the operation (unknown branch/base). Returns `{ path, branch, baseRef }`.
  */
 export async function createWorktree(
 	project: RegisteredProject,
@@ -238,10 +214,8 @@ export async function createWorktree(
 			throw new Error(
 				`git worktree add failed: ${add.stderr.trim() || `git exited ${add.exitCode}`}`,
 			);
-		writeFileSync(join(dirname(target), OMP_WEB_REPO_MARKER), `${project.path}\n`);
 		return { path: target, branch: slug, baseRef };
 	}
-	writeFileSync(join(dirname(target), OMP_WEB_REPO_MARKER), `${project.path}\n`);
 	return { path: target, branch: opts.existingBranch };
 }
 
@@ -358,10 +332,18 @@ async function mainRepoOf(path: string): Promise<string | null> {
  * repository whose main checkout is `mainRepoPath`.
  */
 export async function isLinkedWorktreeOf(path: string, mainRepoPath: string): Promise<boolean> {
-	const main = await mainRepoOf(path);
-	if (main === null) return false;
+	const list = await runGit(["worktree", "list", "--porcelain"], path);
+	if (list.exitCode !== 0) return false;
+	const blocks = parseWorktreeList(list.stdout);
+	const main = blocks[0]?.path;
+	if (main === undefined) return false;
+	const resolved = realpathOf(path);
 	const mainResolved = realpathOf(main);
-	return realpathOf(path) !== mainResolved && mainResolved === realpathOf(mainRepoPath);
+	return (
+		resolved !== mainResolved &&
+		mainResolved === realpathOf(mainRepoPath) &&
+		blocks.slice(1).some((block) => block.path !== undefined && realpathOf(block.path) === resolved)
+	);
 }
 
 /**
@@ -408,7 +390,7 @@ export async function validateUnregisteredWorktree(
 
 /** Guard evidence for the delete confirmation (worktree_delete_info frame). */
 export interface WorktreeDeleteInfo {
-	/** True when the worktree's realpath is under the fleet workspaceDir. */
+	/** True only for an explicitly owned entry with valid linked-worktree identity. */
 	owned: boolean;
 	/** True when git status shows any change (added/modified/deleted/untracked). */
 	dirty: boolean;
@@ -432,26 +414,30 @@ export interface WorktreeDeleteInfo {
 }
 
 /**
- * Guard evidence for deleting one worktree path: ownership (realpath under
- * workspaceDir), dirty counts (probeGitState), and the branch's
- * merged/unpushed state vs the main repo's base ref. Never deletes anything.
+ * Guard evidence for a registered worktree: explicit ownership, linked Git
+ * worktree identity, dirty counts, and merged/unpushed branch state.
+ * The configured creation root is not deletion authority.
  */
-export async function worktreeDeleteInfo(
-	path: string,
-	workspaceDir: string,
-): Promise<WorktreeDeleteInfo> {
+export async function worktreeDeleteInfo(entry: RegistryEntry): Promise<WorktreeDeleteInfo> {
+	const path = entry.cwd;
 	if (path === "") return { owned: false, dirty: false, reason: "entry has no worktree path" };
-	const ws = realpathOf(workspaceDir);
+	if (
+		entry.mode === "remote" ||
+		entry.workspace?.kind !== "worktree" ||
+		entry.workspace.localWorktreeOwnership !== "owned"
+	) {
+		return { owned: false, dirty: false, reason: "worktree is not explicitly owned by fleet" };
+	}
 	const resolved = realpathOf(path);
-	if (!isPathUnder(resolved, ws)) {
-		return {
-			owned: false,
-			dirty: false,
-			reason: "not a managed worktree (path outside workspaceDir)",
-		};
+	if (resolved !== resolve(path)) {
+		return { owned: false, dirty: false, reason: "worktree path resolves through a symlink" };
 	}
 	if (!existsSync(resolved)) {
-		return { owned: true, dirty: false, reason: "worktree path does not exist" };
+		return { owned: false, dirty: false, reason: "worktree path does not exist" };
+	}
+	const mainPath = entry.workspace.source?.local;
+	if (mainPath === undefined || !(await isLinkedWorktreeOf(resolved, mainPath))) {
+		return { owned: false, dirty: false, reason: "path is not a linked Git worktree" };
 	}
 	const state = await probeGitState(resolved);
 	const counts = state?.git;
@@ -505,10 +491,10 @@ async function branchUnpushed(worktreePath: string): Promise<boolean> {
 	return Number.isFinite(count) && count > 0;
 }
 
-/** Deletion was refused: the path is not under workspaceDir (403-class). */
+/** Deletion was refused: no explicit fleet ownership (403-class). */
 export class WorktreeNotOwnedError extends Error {
 	constructor(readonly path: string) {
-		super(`not a managed worktree (path outside workspaceDir): ${path}`);
+		super(`worktree is not explicitly owned by fleet: ${path}`);
 	}
 }
 
@@ -530,21 +516,30 @@ export interface DeleteWorktreeResult {
 }
 
 /**
- * Remove a managed worktree: ownership + dirty guards FIRST (no --force in
- * v1; nothing outside workspaceDir is ever removed), then `git worktree
- * remove`, then optionally `git branch -d` (NEVER -D, so an unmerged branch is
- * left in place and reported via `branchDeleted: false`). A path that no
- * longer exists is a no-op success (nothing to remove).
+ * Remove an explicitly owned linked Git worktree after ownership, identity,
+ * and dirty guards, then optionally `git branch -d` (never -D).
  */
 export async function deleteWorktree(
-	path: string,
-	workspaceDir: string,
+	entry: RegistryEntry,
 	opts: { deleteBranch?: boolean } = {},
 ): Promise<DeleteWorktreeResult> {
-	if (path === "") throw new WorktreeNotOwnedError(path);
+	const path = entry.cwd;
+	if (
+		path === "" ||
+		entry.mode === "remote" ||
+		entry.workspace?.kind !== "worktree" ||
+		entry.workspace.localWorktreeOwnership !== "owned"
+	) {
+		throw new WorktreeNotOwnedError(path);
+	}
 	const resolved = realpathOf(path);
-	if (!isPathUnder(resolved, realpathOf(workspaceDir))) throw new WorktreeNotOwnedError(path);
-	if (!existsSync(resolved)) return { path: resolved };
+	if (resolved !== resolve(path))
+		throw new Error(`worktree path resolves through a symlink: ${path}`);
+	if (!existsSync(resolved)) throw new Error(`worktree path does not exist: ${path}`);
+	const mainPath = entry.workspace.source?.local;
+	if (mainPath === undefined || !(await isLinkedWorktreeOf(resolved, mainPath))) {
+		throw new Error(`path is not a linked Git worktree: ${path}`);
+	}
 	const state = await probeGitState(resolved);
 	if (
 		state?.git !== undefined &&
@@ -555,8 +550,6 @@ export async function deleteWorktree(
 	) {
 		throw new WorktreeDirtyError(path);
 	}
-	const mainPath = await mainRepoOf(resolved);
-	if (mainPath === null) throw new Error(`cannot resolve the worktree's repository: ${path}`);
 	const remove = await runGit(["worktree", "remove", resolved], mainPath);
 	if (remove.exitCode !== 0) {
 		throw new Error(
@@ -592,13 +585,24 @@ export async function registerWorktreeEntry(
 	supervisor: SpawnSupervisor,
 	project: RegisteredProject,
 	worktreePath: string,
-	opts: { start?: boolean },
+	opts: { start?: boolean; ownership: "owned" | "external" },
 ): Promise<RegistryEntry> {
 	if (opts.start) {
 		// supervisor.spawn creates the entry (worktreeOf auto-resolved from
 		// git) and launches the child; tag the project id right after.
 		const entry = await supervisor.spawn({ cwd: worktreePath });
-		registry.update(entry.daemonId, { projectId: project.projectId, worktreeOf: project.name });
+		registry.update(entry.daemonId, {
+			projectId: project.projectId,
+			worktreeOf: project.name,
+			workspace: {
+				...entry.workspace,
+				kind: "worktree",
+				projectId: project.projectId,
+				source: { local: project.path },
+				desiredState: "running",
+				localWorktreeOwnership: opts.ownership,
+			},
+		});
 		return registry.get(entry.daemonId) ?? entry;
 	}
 	// Mirror supervisor.spawn's field shape (name/project = worktree
@@ -612,6 +616,13 @@ export async function registerWorktreeEntry(
 		project: basename(worktreePath),
 		worktreeOf: project.name,
 		projectId: project.projectId,
+		workspace: {
+			kind: "worktree",
+			projectId: project.projectId,
+			source: { local: project.path },
+			desiredState: "stopped",
+			localWorktreeOwnership: opts.ownership,
+		},
 		labels: [],
 		mode: "spawned",
 		status: "asleep",
