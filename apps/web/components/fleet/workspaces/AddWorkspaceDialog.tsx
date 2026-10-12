@@ -179,8 +179,7 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 	const unregistered = () => {
 		const proj = project();
 		if (!proj) return [];
-		const uniqueParent =
-			state.registeredProjects.filter((p) => p.name === proj.name).length === 1;
+		const uniqueParent = state.registeredProjects.filter((p) => p.name === proj.name).length === 1;
 		const checkoutPaths = new Set(
 			branches().flatMap((b) => (b.worktreePath ? [normalizePath(b.worktreePath)] : [])),
 		);
@@ -196,9 +195,7 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 	};
 
 	const remember = (kind: WorkspaceKindChoice, profile?: string) => {
-		rememberWorkspaceCreationPrefs(
-			profile !== undefined ? { kind, profileId: profile } : { kind },
-		);
+		rememberWorkspaceCreationPrefs(profile !== undefined ? { kind, profileId: profile } : { kind });
 	};
 
 	const submitWorktree = () => {
@@ -213,11 +210,7 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 				return;
 			}
 			remember("worktree");
-			begin(
-				() => sendAddExistingWorktree(proj.projectId, sel.path, { start: true }),
-				true,
-				close,
-			);
+			begin(() => sendAddExistingWorktree(proj.projectId, sel.path, { start: true }), true, close);
 			return;
 		}
 		if (sel.kind === "new") {
@@ -227,11 +220,7 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 				return;
 			}
 			remember("worktree");
-			begin(
-				() => sendCreateWorktree(proj.projectId, n, { start: true }),
-				true,
-				close,
-			);
+			begin(() => sendCreateWorktree(proj.projectId, n, { start: true }), true, close);
 			return;
 		}
 		remember("worktree");
@@ -283,7 +272,6 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 			close,
 		);
 	};
-
 
 	/** Error-rung "Edit and retry": back to the form, then re-run the SAME
 	 *  submission (the submit buttons on the form re-trigger their tab's
@@ -691,7 +679,9 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 			</Show>
 			<OnboardingProgress
 				stage={stage}
-				labels={STAGE_LABELS[tab() === "clone" ? "clone" : importAtSubmit() ? "existing" : "worktree"]}
+				labels={
+					STAGE_LABELS[tab() === "clone" ? "clone" : importAtSubmit() ? "existing" : "worktree"]
+				}
 				note={stageNote()}
 				prefix="worktree"
 			/>
