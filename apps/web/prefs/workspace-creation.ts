@@ -1,22 +1,22 @@
 /**
  * Add-workspace dialog preferences (P8.2): remembers ONLY the last-used
- * workspace kind, provider profile, and start-immediately toggle, scoped
- * per browser per fleet origin (the key embeds location.origin; unlike the
- * unscoped omp.* keys, a browser talking to two fleet origins through one
- * UI origin keeps separate memories). Cross-project by design.
+ * workspace kind and provider profile, scoped per browser per fleet origin
+ * (the key embeds location.origin; unlike the unscoped omp.* keys, a
+ * browser talking to two fleet origins through one UI origin keeps
+ * separate memories). Cross-project by design. Adding a workspace always
+ * starts its session, so there is no start toggle to remember.
  *
  * NEVER persist names, branches, source URLs/paths, revisions, or secrets
  * here; the type below deliberately has no fields for them.
  */
 
-/** Kinds the unified Add-workspace dialog can create (Add-existing shares
- *  the worktree memory; it creates no new workspace kind). */
+/** Kinds the unified Add-workspace dialog can create (adopting an existing
+ *  worktree shares the worktree memory; it creates no new workspace kind). */
 export type WorkspaceKindChoice = "worktree" | "clone";
 
 export interface WorkspaceCreationPrefs {
 	kind?: WorkspaceKindChoice;
 	profileId?: string;
-	start?: boolean;
 }
 
 /** localStorage key prefix; the fleet origin is appended verbatim. */
@@ -40,7 +40,6 @@ export function currentWorkspaceCreationPrefs(): WorkspaceCreationPrefs {
 		const prefs: WorkspaceCreationPrefs = {};
 		if (p.kind === "worktree" || p.kind === "clone") prefs.kind = p.kind;
 		if (typeof p.profileId === "string" && p.profileId !== "") prefs.profileId = p.profileId;
-		if (typeof p.start === "boolean") prefs.start = p.start;
 		return prefs;
 	} catch {
 		return {};
@@ -48,21 +47,19 @@ export function currentWorkspaceCreationPrefs(): WorkspaceCreationPrefs {
 }
 
 /**
- * Merge a submitted choice into the memory. `kind` and `start` always
- * update; `profileId` updates only when given, so choosing a worktree never
- * erases the remembered clone profile (returning to the Clone tab still
+ * Merge a submitted choice into the memory. `kind` always updates;
+ * `profileId` updates only when given, so creating a worktree never erases
+ * the remembered clone profile (returning to the Clone tab still
  * pre-selects it).
  */
 export function rememberWorkspaceCreationPrefs(update: {
 	kind: WorkspaceKindChoice;
-	start: boolean;
 	profileId?: string;
 }): void {
 	if (typeof localStorage === "undefined") return;
 	const next: WorkspaceCreationPrefs = {
 		...currentWorkspaceCreationPrefs(),
 		kind: update.kind,
-		start: update.start,
 	};
 	if (update.profileId !== undefined) next.profileId = update.profileId;
 	try {

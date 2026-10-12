@@ -49,7 +49,7 @@ const nixosConfig: RegisteredProject = {
 /** RegisteredProject list: FleetSidebar project sections and AddProjectDialog duplicate checks. */
 export const rosterProjects: RegisteredProject[] = [ompWeb, localaction, nixosConfig];
 
-/** ProjectEntry list: DirectoryPicker and AddWorkspaceDialog "Add existing" rows, including worktrees that point at their parent. */
+/** ProjectEntry list: DirectoryPicker and AddWorkspaceDialog discovery rows, including worktrees that point at their parent. */
 export const rosterProjectEntries: ProjectEntry[] = [
 	{ name: "omp-web", path: OMP_WEB, isWorktree: false, branch: "main" },
 	{
@@ -72,6 +72,14 @@ export const rosterProjectEntries: ProjectEntry[] = [
 		isWorktree: true,
 		worktreeOf: "omp-web",
 		branch: "release/0.3",
+	},
+	// Detached linked worktree with no local branch: discovery's own row,
+	// offered for adoption when no branch row covers it.
+	{
+		name: "spike-detached",
+		path: `${WORKTREES}/spike-detached`,
+		isWorktree: true,
+		worktreeOf: "omp-web",
 	},
 	{ name: "localaction", path: LOCALACTION, isWorktree: false, branch: "main" },
 ];

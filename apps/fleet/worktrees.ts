@@ -286,7 +286,8 @@ export async function listProjectBranches(mainPath: string): Promise<ProjectBran
 
 /**
  * The project's LINKED worktrees (main checkout excluded) whose realpath is
- * not among `registeredPaths`. Feeds the "Add existing" tab.
+ * not among `registeredPaths`. Feeds the Add-workspace dialog's
+ * existing-worktrees list.
  */
 export async function listUnregisteredWorktrees(
 	projectPath: string,

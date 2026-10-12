@@ -21,6 +21,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - CLI: `omp-web add <name> <url> --token` is removed. `omp-web enroll <name>` creates a remote session's roster entry and prints the command to run on its host. Entries added with `add` cannot connect any more: remove them and enroll the host again.
 - Fleet: `omp-web provision` runs the spawn hook with the `OMP_SESSION_CALLBACK_*` variables and succeeds when the hook exits 0; the hook's stdout `{url, token}` contract is gone.
 - Fleet: spawned sessions run detached, so a terminal Ctrl+C never reaches them; their stdout and stderr go to `session-logs/<daemonId>.log` beside the state file (not rotated). The Debug panel shows each session's callback pair state instead of a connector column.
+- Workspaces: the Add-workspace dialog's Worktree view combines new-branch creation, creating on an available branch, and adopting a detected or picked existing checkout in one selection list (the separate Add existing tab is gone); checked-out branches show where their checkout lives instead of being disabled without explanation. Adding a workspace always starts and attaches its session, so the start checkbox is gone from the Worktree and Clone forms and from the remembered creation preferences.
 
 ### Fixes
 - Vite: explicit extensions in config imports eliminate native-config compatibility warnings during `bun dev`.

@@ -1103,8 +1103,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .project-advanced[open] summary {
 	margin-bottom: var(--space-3);
 }
-.project-start,
-.worktree-start {
+.project-start {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
@@ -1113,8 +1112,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	font-size: var(--fs-sm);
 	cursor: pointer;
 }
-.project-start input,
-.worktree-start input {
+.project-start input {
 	cursor: pointer;
 }
 .project-list {

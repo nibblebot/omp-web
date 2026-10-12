@@ -14,10 +14,13 @@ export default defineStory({
 	seed: () => seedRosterFleet({ workspaceModalProjectId: "proj_omp_web", modal: "workspace" }),
 	variants: [
 		{
-			name: "New worktree",
+			// One Worktree view: "+ New branch", available branches, checked-out
+			// branches that adopt their checkout, and detected unregistered
+			// worktrees; every submission starts and attaches a session.
+			name: "Worktree creation and adoption",
 			seed: () => {
 				seedRosterFleet({ workspaceModalProjectId: "proj_omp_web", modal: "workspace" });
-				rememberWorkspaceCreationPrefs({ kind: "worktree", start: true });
+				rememberWorkspaceCreationPrefs({ kind: "worktree" });
 			},
 			render: (ctx) => <AddWorkspaceDialog onClose={ctx.close} />,
 		},
@@ -25,7 +28,7 @@ export default defineStory({
 			name: "Clone with provider profile",
 			seed: () => {
 				seedRosterFleet({ workspaceModalProjectId: "proj_omp_web", modal: "workspace" });
-				rememberWorkspaceCreationPrefs({ kind: "clone", start: false, profileId: "k8s-bench" });
+				rememberWorkspaceCreationPrefs({ kind: "clone", profileId: "k8s-bench" });
 			},
 			render: (ctx) => <AddWorkspaceDialog onClose={ctx.close} />,
 		},

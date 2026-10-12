@@ -19,50 +19,35 @@ import { PickerRow } from "../../ui/PickerRow";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { OnboardingProgress, useOnboardingPipeline } from "./onboarding";
 
-/** Workspace modes: a NEW managed worktree, an independent CLONE workspace,
- *  or registration of an EXISTING worktree. */
-type Tab = "worktree" | "clone" | "existing";
+/** Worktrees share one creation/import view; clones remain independent. */
+type Tab = "worktree" | "clone";
+type WorktreeSelection =
+	| { kind: "new" }
+	| { kind: "branch"; name: string }
+	| { kind: "existing"; path: string };
 
-/** Progress labels per tab; rung index matches stageIndex. Clone creation
- *  runs the fleet lifecycle (prepare → runtime → callback → ready), whose
- *  first two rungs replace the worktree's creating/spawning wording. */
-const STAGE_LABELS: Record<Tab, string[]> = {
+/** Progress labels track the operation, including imports within Worktree. */
+const STAGE_LABELS = {
 	worktree: ["creating worktree", "spawning daemon", "attaching session"],
 	clone: ["preparing workspace", "starting runtime", "attaching session"],
 	existing: ["registering worktree", "spawning daemon", "attaching session"],
-};
+} satisfies Record<Tab | "existing", string[]>;
 
 /** Clone source modes: default project checkout, an explicit local path, or
  *  a remote URL. At most one of local/remote rides the command. */
 type SourceMode = "default" | "local" | "remote";
 
 /**
- * Add-workspace modal (P8.1): the unified replacement for the worktree-only
- * dialog. Three modes: Worktree (register a linked worktree of a registered
- * project: "+ New branch" or an existing-branch dropdown), Clone (an
- * independent provider-run clone workspace: name, provider profile, optional
- * source/revision/branch, start-now), and Add existing (discovered-but-
- * unregistered worktrees plus an "or pick a directory" affordance).
- *
- * Preferences (P8.2): the opened mode honors the remembered kind (never
- * force Worktree), the start checkbox defaults from the remembered value and
- * only defaults ON without any prior preference, and a remembered clone
- * profile pre-selects ONLY while it still exists in the fleet's catalog;
- * missing or never-saved profiles force a deliberate selection. Nothing
- * except kind/profile/start is ever persisted (never names, branches,
- * sources, revisions).
- *
- * "Start a session now" arms the session-picker gate like the old modal; the
- * modal tracks register/prepare → spawn → attach so the gate opens after
- * attach settles. Failure at any rung surfaces the stage's error.
+ * One Worktree view creates new/available branches or imports existing linked
+ * checkouts. Clone creates an independent provider-managed workspace.
+ * Every submission starts the runtime and attaches a session before closing.
+ * Only workspace kind and clone profile are remembered.
  */
 export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) => {
 	const remembered = currentWorkspaceCreationPrefs();
 	/** Opened mode: the remembered kind when there is one, else Worktree. */
 	const [tab, setTab] = createSignal<Tab>(remembered.kind === "clone" ? "clone" : "worktree");
 	const [name, setName] = createSignal("");
-	/** Start-now: enabled by default only WITHOUT a prior preference. */
-	const [start, setStart] = createSignal(remembered.start ?? true);
 	// Clone tab fields.
 	const [profileId, setProfileId] = createSignal(
 		remembered.profileId !== undefined &&
@@ -75,23 +60,18 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 	const [revision, setRevision] = createSignal("");
 	const [branch, setBranch] = createSignal("");
 	const [fieldError, setFieldError] = createSignal<string | null>(null);
-	const [selectedPath, setSelectedPath] = createSignal<string | null>(null);
-	/** Add-existing tab: the embedded DirectoryPicker is hidden behind an "or pick a
-	 *  directory" affordance until asked for. */
 	const [browsing, setBrowsing] = createSignal(false);
 	const [projects, setProjects] = createSignal<ProjectEntry[]>([]);
 	const [projectsError, setProjectsError] = createSignal<string | null>(null);
-	// Worktree tab branch-picker data.
+	const [projectsLoading, setProjectsLoading] = createSignal(true);
+	// Branch checkout paths provide reliable project association for imports.
 	const [branches, setBranches] = createSignal<ProjectBranch[]>([]);
 	const [branchesLoading, setBranchesLoading] = createSignal(true);
 	const [branchesError, setBranchesError] = createSignal<string | null>(null);
-	const [selected, setSelected] = createSignal<{ kind: "new" } | { kind: "branch"; name: string }>({
-		kind: "new",
-	});
+	const [selected, setSelected] = createSignal<WorktreeSelection>({ kind: "new" });
 	let nameInput!: HTMLInputElement;
-	/** The tab an error rung originated from; retry/back-to-edit return
-	 *  there (the tab may still read as the error-rung's tab otherwise). */
 	const [tabAtSubmit, setTabAtSubmit] = createSignal<Tab>("worktree");
+	const [importAtSubmit, setImportAtSubmit] = createSignal(false);
 
 	const close = () => {
 		setState("modal", null);
@@ -103,30 +83,38 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 	const project = () =>
 		state.registeredProjects.find((p) => p.projectId === state.workspaceModalProjectId) ?? null;
 
-	/** True when an existing branch is selected (vs. creating a new one). */
-	const branchSelected = () => selected().kind === "branch";
-
-	/** Name of the selected existing branch, or "" in new-branch mode (the
-	 *  dropdown's placeholder value). */
+	const normalizePath = (path: string) => path.replace(/\/+$/, "");
+	const pathUnavailable = (path: string) => {
+		const normalized = normalizePath(path);
+		return (
+			normalized === normalizePath(project()?.path ?? "") ||
+			state.daemonRoster.some((daemon) => normalizePath(daemon.cwd) === normalized)
+		);
+	};
+	const selectedPath = () => {
+		const sel = selected();
+		return sel.kind === "existing" ? sel.path : null;
+	};
 	const selectedBranch = () => {
 		const sel = selected();
-		return sel.kind === "branch" ? sel.name : "";
+		if (sel.kind === "branch") return sel.name;
+		if (sel.kind === "existing")
+			return branches().find((b) => b.worktreePath === sel.path)?.name ?? "";
+		return "";
 	};
-
-	/** Name input value: the selected branch's name (shown read-only), or the
-	 *  user's typed new-branch name. */
-	const nameValue = () => {
-		const sel = selected();
-		return sel.kind === "branch" ? sel.name : name();
-	};
-
-	/** Branches for the dropdown: available first, checked-out (already in a
-	 *  workspace, git refuses a second checkout) last and disabled;
-	 *  alphabetical within each group. */
 	const sortedBranches = () =>
 		[...branches()].sort(
 			(a, b) => Number(a.checkedOut) - Number(b.checkedOut) || a.name.localeCompare(b.name),
 		);
+	const branchUnavailable = (branch: ProjectBranch) =>
+		branch.checkedOut && (!branch.worktreePath || pathUnavailable(branch.worktreePath));
+	const branchLabel = (branch: ProjectBranch) => {
+		if (!branch.checkedOut) return branch.name;
+		if (!branch.worktreePath) return `${branch.name} (checked out; pick its directory)`;
+		if (normalizePath(branch.worktreePath) === normalizePath(project()?.path ?? ""))
+			return `${branch.name} (main checkout)`;
+		return `${branch.name} (${pathUnavailable(branch.worktreePath) ? "already available" : "add existing worktree"})`;
+	};
 
 	// The fleet's secret-free provider profile catalog (P8.1; rides the
 	// registered_projects frame, boot-static, [] on older fleets).
@@ -134,29 +122,49 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 	/** A real profile is selected AND still present in the catalog. */
 	const profileChosen = () => profiles().some((p) => p.id === profileId());
 
-	// Worktree-tab branch data: fetched on open and whenever the targeted
-	// project changes. Keyed on the projectId string, NOT the registry object
-	// (registered_projects broadcasts replace the array wholesale and must not
-	// refetch); a stale response for a superseded project is dropped.
+	let discoveryRequest = 0;
+	let branchRequest = 0;
+	const refreshProjects = (projectId = state.workspaceModalProjectId) => {
+		const request = ++discoveryRequest;
+		setProjectsLoading(true);
+		setProjectsError(null);
+		void listProjects()
+			.then((list) => {
+				if (request !== discoveryRequest || state.workspaceModalProjectId !== projectId) return;
+				setProjects(list);
+				setProjectsLoading(false);
+			})
+			.catch((err) => {
+				if (request !== discoveryRequest || state.workspaceModalProjectId !== projectId) return;
+				setProjectsError(String(err));
+				setProjectsLoading(false);
+			});
+	};
+
+	// Key both requests on project ID, not replaced registry objects.
 	createEffect(() => {
 		const projectId = state.workspaceModalProjectId;
+		const request = ++branchRequest;
+		++discoveryRequest;
 		setSelected({ kind: "new" });
-		if (projectId === null) {
-			setBranches([]);
-			setBranchesLoading(false);
-			setBranchesError(null);
-			return;
-		}
-		setBranchesLoading(true);
+		setBrowsing(false);
+		setFieldError(null);
+		setBranches([]);
+		setProjects([]);
 		setBranchesError(null);
+		setProjectsError(null);
+		setBranchesLoading(projectId !== null);
+		setProjectsLoading(projectId !== null);
+		if (projectId === null) return;
+		refreshProjects(projectId);
 		void listProjectBranches(projectId)
 			.then((list) => {
-				if (state.workspaceModalProjectId !== projectId) return;
+				if (request !== branchRequest || state.workspaceModalProjectId !== projectId) return;
 				setBranches(list);
 				setBranchesLoading(false);
 			})
 			.catch((err) => {
-				if (state.workspaceModalProjectId !== projectId) return;
+				if (request !== branchRequest || state.workspaceModalProjectId !== projectId) return;
 				setBranchesError(String(err));
 				setBranchesLoading(false);
 			});
@@ -166,38 +174,30 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 		requestAnimationFrame(() => nameInput?.focus());
 	});
 
-	/** Discovery refresh for the Add-existing tab. */
-	const refreshProjects = () => {
-		void listProjects()
-			.then((list) => {
-				setProjects(list);
-				setProjectsError(null);
-				setSelectedPath(null);
-			})
-			.catch((err) => setProjectsError(String(err)));
-	};
-
-	/** Unregistered worktrees of the selected project: discovered linked
-	 *  worktrees (`isWorktree` + worktreeOf = project name) whose path has
-	 *  no roster daemon yet. */
+	/** Discovery lacks parent identity. Branch paths are authoritative; retain
+	 * detached entries only when the parent basename is unambiguous. */
 	const unregistered = () => {
 		const proj = project();
 		if (!proj) return [];
-		const rosterCwds = state.daemonRoster.map((d) => d.cwd);
-		return projects().filter((p) => {
-			if (!p.isWorktree || p.worktreeOf !== proj.name) return false;
-			const wp = p.path.endsWith("/") ? p.path.slice(0, -1) : p.path;
-			return !rosterCwds.some((c) => (c.endsWith("/") ? c.slice(0, -1) : c) === wp);
-		});
+		const uniqueParent =
+			state.registeredProjects.filter((p) => p.name === proj.name).length === 1;
+		const checkoutPaths = new Set(
+			branches().flatMap((b) => (b.worktreePath ? [normalizePath(b.worktreePath)] : [])),
+		);
+		return projects().filter(
+			(p) =>
+				p.isWorktree &&
+				!pathUnavailable(p.path) &&
+				!checkoutPaths.has(normalizePath(p.path)) &&
+				!p.branch &&
+				uniqueParent &&
+				p.worktreeOf === proj.name,
+		);
 	};
 
-	/** Remember the mode's choices (kind + start always; profileId with
-	 *  clones only, see the prefs module). */
 	const remember = (kind: WorkspaceKindChoice, profile?: string) => {
 		rememberWorkspaceCreationPrefs(
-			profile !== undefined
-				? { kind, start: start(), profileId: profile }
-				: { kind, start: start() },
+			profile !== undefined ? { kind, profileId: profile } : { kind },
 		);
 	};
 
@@ -205,7 +205,21 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 		const proj = project();
 		if (!proj) return;
 		setTabAtSubmit("worktree");
+		setImportAtSubmit(selected().kind === "existing");
 		const sel = selected();
+		if (sel.kind === "existing") {
+			if (pathUnavailable(sel.path)) {
+				setFieldError("This checkout is already available");
+				return;
+			}
+			remember("worktree");
+			begin(
+				() => sendAddExistingWorktree(proj.projectId, sel.path, { start: true }),
+				true,
+				close,
+			);
+			return;
+		}
 		if (sel.kind === "new") {
 			const n = name().trim();
 			if (!n) {
@@ -214,8 +228,8 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 			}
 			remember("worktree");
 			begin(
-				() => sendCreateWorktree(proj.projectId, n, start() ? { start: true } : {}),
-				start(),
+				() => sendCreateWorktree(proj.projectId, n, { start: true }),
+				true,
 				close,
 			);
 			return;
@@ -225,9 +239,9 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 			() =>
 				sendCreateWorktree(proj.projectId, sel.name, {
 					existingBranch: sel.name,
-					...(start() ? { start: true } : {}),
+					start: true,
 				}),
-			start(),
+			true,
 			close,
 		);
 	};
@@ -263,27 +277,13 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 					...(source !== undefined ? { source } : {}),
 					...(rev !== "" ? { revision: rev } : {}),
 					...(br !== "" ? { branch: br } : {}),
-					...(start() ? { start: true } : {}),
+					start: true,
 				}),
-			start(),
+			true,
 			close,
 		);
 	};
 
-	const submitExisting = () => {
-		const proj = project();
-		if (!proj || selectedPath() === null) return;
-		setTabAtSubmit("existing");
-		remember("worktree");
-		begin(
-			() =>
-				sendAddExistingWorktree(proj.projectId, selectedPath()!, {
-					...(start() ? { start: true } : {}),
-				}),
-			start(),
-			close,
-		);
-	};
 
 	/** Error-rung "Edit and retry": back to the form, then re-run the SAME
 	 *  submission (the submit buttons on the form re-trigger their tab's
@@ -301,7 +301,6 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 			if (stage().kind === "form") {
 				if (cur === "worktree") void submitWorktree();
 				else if (cur === "clone") void submitClone();
-				else if (cur === "existing") void submitExisting();
 			}
 		});
 	};
@@ -312,9 +311,9 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 		if (st.kind === "creating")
 			return tab() === "clone"
 				? "preparing the clone workspace…"
-				: tab() === "worktree"
-					? "creating the worktree…"
-					: "registering the worktree…";
+				: importAtSubmit()
+					? "registering the worktree…"
+					: "creating the worktree…";
 		if (st.kind === "spawning") return "starting the daemon…";
 		return "attaching to the session…";
 	};
@@ -391,20 +390,6 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 					>
 						Clone
 					</button>
-					<button
-						type="button"
-						class="worktree-tab"
-						classList={{ active: tab() === "existing" }}
-						role="tab"
-						aria-selected={tab() === "existing"}
-						onClick={() => {
-							setTab("existing");
-							setFieldError(null);
-							refreshProjects();
-						}}
-					>
-						Add existing
-					</button>
 				</div>
 				<Show when={tab() === "worktree"}>
 					<form
@@ -414,22 +399,23 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 							void submitWorktree();
 						}}
 					>
-						<label class="daemon-detail-label" for="workspace-name">
-							name
-						</label>
-						<input
-							id="workspace-name"
-							ref={nameInput}
-							class="picker-filter worktree-name"
-							placeholder="feature/…"
-							value={nameValue()}
-							onInput={(e) => {
-								setName(e.currentTarget.value);
-								setFieldError(null);
-							}}
-							disabled={branchSelected()}
-							spellcheck={false}
-						/>
+						<Show when={selected().kind === "new"}>
+							<label class="daemon-detail-label" for="workspace-name">
+								name
+							</label>
+							<input
+								id="workspace-name"
+								ref={nameInput}
+								class="picker-filter worktree-name"
+								placeholder="feature/…"
+								value={name()}
+								onInput={(e) => {
+									setName(e.currentTarget.value);
+									setFieldError(null);
+								}}
+								spellcheck={false}
+							/>
+						</Show>
 						<Show when={fieldError()}>
 							{(err) => <div class="msg-notice worktree-name-error">{err()}</div>}
 						</Show>
@@ -438,7 +424,11 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 							<PickerRow
 								class="picker-row worktree-row"
 								classList={{ active: selected().kind === "new" }}
-								onClick={() => setSelected({ kind: "new" })}
+								onClick={() => {
+									setSelected({ kind: "new" });
+									setFieldError(null);
+									requestAnimationFrame(() => nameInput?.focus());
+								}}
 								title="Create a new branch"
 							>
 								<span class="picker-label worktree-row-name session-new-label">+ New branch</span>
@@ -457,7 +447,14 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 									value={selectedBranch()}
 									onChange={(e) => {
 										const v = e.currentTarget.value;
-										if (v !== "") setSelected({ kind: "branch", name: v });
+										const choice = branches().find((b) => b.name === v);
+										if (!choice || branchUnavailable(choice)) return;
+										setSelected(
+											choice.checkedOut && choice.worktreePath
+												? { kind: "existing", path: choice.worktreePath }
+												: { kind: "branch", name: choice.name },
+										);
+										setFieldError(null);
 									}}
 								>
 									<option value="" disabled>
@@ -465,25 +462,73 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 									</option>
 									<For each={sortedBranches()}>
 										{(b) => (
-											<option value={b.name} disabled={b.checkedOut}>
-												{b.checkedOut ? `${b.name} (checked out)` : b.name}
+											<option value={b.name} disabled={branchUnavailable(b)}>
+												{branchLabel(b)}
 											</option>
 										)}
 									</For>
 								</select>
 							</Show>
 						</div>
-						<label class="worktree-start">
-							<input
-								type="checkbox"
-								checked={start()}
-								onChange={(e) => setStart(e.currentTarget.checked)}
+						<div class="picker-group-name">Existing worktrees</div>
+						<Show when={projectsLoading()}>
+							<div class="tool-collapsed-note">loading worktrees…</div>
+						</Show>
+						<Show when={projectsError()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
+						<div class="worktree-list">
+							<For each={unregistered()}>
+								{(p) => (
+									<PickerRow
+										class="picker-row worktree-row"
+										classList={{ active: selectedPath() === p.path }}
+										onClick={() => {
+											setSelected({ kind: "existing", path: p.path });
+											setFieldError(null);
+										}}
+										title={p.path}
+									>
+										<span class="picker-label worktree-row-name">{p.name}</span>
+										<span class="picker-chip worktree-row-branch">{p.branch || "detached"}</span>
+									</PickerRow>
+								)}
+							</For>
+							<Show when={!projectsLoading() && !projectsError() && unregistered().length === 0}>
+								<div class="tool-collapsed-note">no additional detected worktrees</div>
+							</Show>
+						</div>
+						<Show
+							when={browsing()}
+							fallback={
+								<button
+									type="button"
+									class="daemon-row-btn dirpick-toggle"
+									onClick={() => setBrowsing(true)}
+								>
+									or pick a directory…
+								</button>
+							}
+						>
+							<DirectoryPicker
+								onSelect={(path) => {
+									setSelected({ kind: "existing", path });
+									setFieldError(null);
+									setBrowsing(false);
+								}}
 							/>
-							Start a session now
-						</label>
+						</Show>
+						<Show when={selectedPath()}>
+							<div class="dirpick-chosen">Selected: {selectedPath()}</div>
+						</Show>
 						<div class="worktree-actions">
-							<button type="submit" class="worktree-btn">
-								Create worktree
+							<button
+								type="submit"
+								class="worktree-btn"
+								disabled={selected().kind === "new" && name().trim() === ""}
+							>
+								{selected().kind === "existing" ? "Add worktree" : "Create worktree"}
+							</button>
+							<button type="button" class="daemon-row-btn" onClick={() => refreshProjects()}>
+								refresh
 							</button>
 						</div>
 					</form>
@@ -636,14 +681,6 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 							}}
 							spellcheck={false}
 						/>
-						<label class="worktree-start">
-							<input
-								type="checkbox"
-								checked={start()}
-								onChange={(e) => setStart(e.currentTarget.checked)}
-							/>
-							Start a session now
-						</label>
 						<div class="worktree-actions">
 							<button type="submit" class="worktree-btn" disabled={!cloneReady()}>
 								Create clone
@@ -651,83 +688,10 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 						</div>
 					</form>
 				</Show>
-				<Show when={tab() === "existing"}>
-					<div class="picker-group-name">Unregistered worktrees</div>
-					<Show when={projectsError()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
-					<div class="worktree-list">
-						<For each={unregistered()}>
-							{(p) => (
-								<PickerRow
-									class="picker-row worktree-row"
-									classList={{ active: selectedPath() === p.path }}
-									onClick={() => setSelectedPath(p.path)}
-									title={p.path}
-								>
-									<span class="picker-label worktree-row-name">{p.name}</span>
-									<Show when={p.branch}>
-										{(b) => <span class="picker-chip worktree-row-branch">{b()}</span>}
-									</Show>
-								</PickerRow>
-							)}
-						</For>
-						<Show when={unregistered().length === 0 && !projectsError()}>
-							<div class="tool-collapsed-note">no unregistered worktrees</div>
-						</Show>
-					</div>
-					<Show
-						when={browsing()}
-						fallback={
-							<button
-								type="button"
-								class="daemon-row-btn dirpick-toggle"
-								onClick={() => setBrowsing(true)}
-							>
-								or pick a directory…
-							</button>
-						}
-					>
-						<DirectoryPicker
-							onSelect={(p) => {
-								// Same submit path as a listed entry: sendAddExistingWorktree
-								// with the picked path.
-								setSelectedPath(p);
-								setBrowsing(false);
-							}}
-						/>
-					</Show>
-					{/* A picker-chosen path matches no listed row; echo it so the
-					    selection stays visible once the picker folds away. */}
-					<Show
-						when={selectedPath() !== null && !unregistered().some((p) => p.path === selectedPath())}
-					>
-						<div class="dirpick-chosen">Selected: {selectedPath()}</div>
-					</Show>
-					<label class="worktree-start">
-						<input
-							type="checkbox"
-							checked={start()}
-							onChange={(e) => setStart(e.currentTarget.checked)}
-						/>
-						Start a session now
-					</label>
-					<div class="worktree-actions">
-						<button
-							type="button"
-							class="worktree-btn"
-							disabled={selectedPath() === null}
-							onClick={() => void submitExisting()}
-						>
-							Add worktree
-						</button>
-						<button type="button" class="daemon-row-btn" onClick={refreshProjects}>
-							refresh
-						</button>
-					</div>
-				</Show>
 			</Show>
 			<OnboardingProgress
 				stage={stage}
-				labels={STAGE_LABELS[tab()]}
+				labels={STAGE_LABELS[tab() === "clone" ? "clone" : importAtSubmit() ? "existing" : "worktree"]}
 				note={stageNote()}
 				prefix="worktree"
 			/>
