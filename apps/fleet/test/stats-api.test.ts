@@ -3,7 +3,7 @@
  *
  * Runs the stats app in-process: test/helpers.ts puts createStatsApp behind a
  * real Bun.serve on an ephemeral port, with config pointing at test/.fixture,
- * which scripts/gen-tx-fixture.ts regenerates in beforeAll. All expected
+ * which gen-tx-fixture.ts regenerates in beforeAll. All expected
  * values come from the fixture generator's exported EXPECT object, so the
  * tests can never drift from the fixture data they were written against.
  *

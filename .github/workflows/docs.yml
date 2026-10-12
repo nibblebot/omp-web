@@ -4,9 +4,9 @@ name: Docs site
 # output to GitHub Pages. Unlike a standalone docs package, docs/ has no
 # package.json of its own: Astro, Starlight, and the `build:docs` script all
 # live in the root package.json/bun.lock, so the workflow installs and builds
-# from the repository root. GitHub Pages builds and deploys the site from
-# `main`: a push to `main` that touches the paths below rebuilds and redeploys
-# the site at https://nibblebot.github.io/omp-web/, so Astro's site/base in
+# from the repository root. Automatic deploys on push to `main` are disabled
+# for now; run the workflow manually (workflow_dispatch) to rebuild and deploy
+# the site at https://nibblebot.github.io/omp-web/. Astro's site/base in
 # docs/astro.config.mjs must match this URL (site = https://nibblebot.github.io,
 # base = /omp-web/).
 #
@@ -18,13 +18,6 @@ name: Docs site
 # rejected at the deploy job.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docs/**"
-      - "package.json"
-      - "bun.lock"
-      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:

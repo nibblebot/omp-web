@@ -5,9 +5,7 @@
  * @oh-my-pi pin disagreement and lag behind upstream npm, unpushed commits,
  * gh auth, unchecked docs boxes, dead relative doc links, a documented gate
  * list that disagrees with GATE_COMMANDS, and stale SDK version literals in
- * the docs. GitHub Pages
- * builds the site from main, so the repo-state unpushed-commit warning is also
- * the stale-site signal.
+ * the docs.
  *
  * Standalone by design (docs/release.md, "Preflight"): scripts/release.ts
  * never calls it, so a release can run while findings are present. Exit 0 when

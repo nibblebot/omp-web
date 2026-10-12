@@ -59,7 +59,7 @@ Errors (the checkout is internally inconsistent):
 Warnings (drift that is not a broken release by itself):
 
 - the pinned `@oh-my-pi/*` versions are behind the upstream npm latest;
-- commits are unpushed relative to `origin/main` (the release pushes to `origin/main`, and Pages builds the site from `main`, so unpushed commits also leave the published site stale);
+- commits are unpushed relative to `origin/main` (the release pushes to `origin/main`);
 - `gh` is not authenticated;
 - an unchecked Markdown task box in `docs/*.md` or `docs/src/content/docs/**/*.md` (line-anchored task items; prose that quotes the box syntax is not a finding, and `docs/clone-plan.md` is excluded because its boxes are the live clone-phase tracker);
 - a relative link in the docs resolves to no file;
@@ -87,4 +87,4 @@ The repository is public. `v0.1.0` and `v0.1.1` shipped on 2026-08-20, and the s
 
 The live channel is verified by the release script only as far as the manifest poll in step 12. A full live-channel walk (install from the real release URL, then `omp-web update` against the real channel) has no recorded result: `bun e2e/onboarding.ts` exercises install and update against local fixtures, and the packed-tarball smoke installs the local artifact. Treat that path as unproven until someone records it.
 
-There is no product CI. The only workflow is `.github/workflows/docs.yml`, which builds the Starlight site from `docs/` and deploys it to GitHub Pages on every push to `main` that touches `docs/**`, `package.json`, `bun.lock`, or the workflow itself; nothing else runs on push or pull request. The release script's local gate plus its validation and smoke steps are the quality bar for a release.
+There is no product CI. The only workflow is `.github/workflows/docs.yml`, which builds the Starlight site from `docs/` and deploys it to GitHub Pages; automatic deploys on push are disabled for now, so it runs only when dispatched manually. Nothing runs on push or pull request. The release script's local gate plus its validation and smoke steps are the quality bar for a release.

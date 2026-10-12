@@ -223,6 +223,12 @@ const VITE_STABLE_PORT = 20000 + (Number.parseInt(WORKTREE_HASH, 16) % 10000);
 const FLEET_STABLE_PORT = 30000 + (Number.parseInt(WORKTREE_HASH, 16) % 10000);
 const ports = { vite: VITE_PORT_DEFAULT, fleet: FLEET_STABLE_PORT };
 /**
+ * `--control-grace` for dev-spawned sessions: how long one outlives the dev
+ * fleet before shutting itself down. Short so stopping dev ends its sessions;
+ * a dev restart within this window still lets them redial the stable port.
+ */
+const DEV_SESSION_CONTROL_GRACE = "2s";
+/**
  * Auth broker: clone sandboxes have no credential store of their own, so they
  * borrow the operator's from a broker when OMP_AUTH_BROKER_URL/TOKEN are in the
  * provider env (profile secretRefs `env:` references). With --auth-broker, the
@@ -302,11 +308,13 @@ function buildChild(name: string): Child {
 		return {
 			name,
 			// ports.fleet is the stable per-worktree port (set before launch): sessions redial
-			// its callback URL across dev restarts. Sidebar spawns use
+			// its callback URL across a quick dev restart. Sidebar spawns use
 			// the default `local` template, which runs the production `omp-session`
 			// binary, not built in dev. OMP_FLEET_LOCAL_TEMPLATE points it at the
 			// source entry instead (absolute: spawned children inherit the fleet's
-			// cwd, and the repo isn't necessarily it).
+			// cwd, and the repo isn't necessarily it). --control-grace makes
+			// dev sessions die soon after the dev fleet goes away, however it
+			// ends (Ctrl+C, closed terminal, SIGKILL); production keeps the 10m default.
 			cmd: ["bun", "apps/fleet/cli.ts", "--port", String(ports.fleet)],
 			env: {
 				// State (and its `.lock`) scoped per worktree under the data home:
@@ -315,7 +323,7 @@ function buildChild(name: string): Child {
 				// and nothing is written into the repo. Config and the default
 				// worktree directory stay SHARED; clone storage is state-private.
 				OMP_FLEET_STATE: join(DEV_FLEET_DIR, "fleet-state.json"),
-				OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "apps", "session", "index.ts")} --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`,
+				OMP_FLEET_LOCAL_TEMPLATE: `bun ${join(ROOT, "apps", "session", "index.ts")} --cwd {cwd} --port 0 --token {token} --name {name} --control-grace ${DEV_SESSION_CONTROL_GRACE} {labels} {resume}`,
 			},
 		};
 	}
@@ -548,7 +556,7 @@ function checkSummary(): void {
 	row(
 		"fleet",
 		`http://127.0.0.1:${fleetPort}`,
-		"(backend, not the UI; set OMP_FLEET_PORT to this port for `bun run fleet`)",
+		"(backend, not the UI; pass --port or set OMP_FLEET_PORT to this port for omp-web commands)",
 	);
 	if (brokerUrl !== undefined)
 		row(

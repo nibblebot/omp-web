@@ -6,14 +6,14 @@ import { featureSizes } from "./build/feature-sizes.ts";
 
 // Web root: this config lives at apps/web/vite.config.ts. Root is set
 // explicitly (vite defaults root to the invoking cwd, not the config dir),
-// so `bun run dev:web` / `bun run build:web` work from the repository root.
+// so `bun run build:web` works from the repository root.
 const webRoot = dirname(fileURLToPath(import.meta.url));
 
 // Dev HMR proxy: /events + /command go to the omp-fleet edge (it serves the
 // roster UI and proxies each session's wire API), and /ctl to the fleet
 // control plane on the same port. OMP_DEV_FLEET_PORT is picked per-run by
 // scripts/dev.ts so parallel worktrees don't collide; the fixed default keeps
-// `bun run dev:web` against a manually started `bun run fleet` working.
+// a standalone vite against a manually started `bun apps/fleet/cli.ts` working.
 const fleetPort = process.env.OMP_DEV_FLEET_PORT ?? "4722";
 
 // OMP_DEV_ALLOW_HOSTS (set by `--allow-hosts`): "1"/"true"/"*" allows every

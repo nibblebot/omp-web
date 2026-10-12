@@ -9,7 +9,7 @@
  *   bun apps/cli/collab-cli.ts --stop          # stop the collab room
  *   bun apps/cli/collab-cli.ts --port 4721     # daemon HTTP port (env OMP_SESSION_PORT also works)
  *
- * The daemon must be running (`bun dev:server`). Connect = attached on a
+ * The daemon must be running (`bun apps/session/index.ts`). Connect = attached on a
  * bare omp-session: the /events stream primes the single boot session's
  * collab status on open. The room link is generated server-side on
  * collab_start; this client drives the same OMP_PROTO 2 transport the web UI
@@ -85,7 +85,7 @@ function openEvents(port: number): Promise<{ close: () => void; frames: FrameCol
 		controller.abort();
 		reject(
 			new Error(
-				`timed out connecting to http://127.0.0.1:${port}/events. Is the daemon running? (bun dev:server; port from --port or OMP_SESSION_PORT)`,
+				`timed out connecting to http://127.0.0.1:${port}/events. Is the daemon running? (bun apps/session/index.ts; port from --port or OMP_SESSION_PORT)`,
 			),
 		);
 	}, 5_000);

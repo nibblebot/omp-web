@@ -129,7 +129,7 @@ bun install
 bun run dev                # Vite HMR + fleet; open the printed ui URL; no managed auth broker
 ```
 
-Dev auto-opens the browser for interactive graphical local runs; `--open`/`--no-open` override this. Use the printed `ui` URL, not the fleet's potentially stale `dist/` UI. The dev fleet listens on a stable per-worktree port so dev-spawned sessions, which outlive a dev restart, redial it; if that port is taken it picks a free one and says so, and surviving sessions then cannot reconnect until they hit their grace or are stopped. Restart dev-spawned daemons after server edits (`bun run fleet stop all --port <fleet port>` with the port from the dev summary, or stop them from the UI); they are not watched.
+Dev auto-opens the browser for interactive graphical local runs; `--open`/`--no-open` override this. Use the printed `ui` URL, not the fleet's potentially stale `dist/` UI. Dev-spawned sessions run with a 2s `--control-grace` (production keeps 10 minutes), so they shut themselves down about 2 seconds after dev stops, however it stops. The dev fleet listens on a stable per-worktree port, so a dev restart within that window lets them redial; if that port is taken it picks a free one and says so, and the surviving sessions then exit at the end of their grace. Restart dev-spawned daemons after server edits (stop them from the UI, or restart dev and wait out the grace); they are not watched.
 
 Source imports into `lib/` use extensionless `#lib/<path below lib/>`, such as `#lib/wire/protocol`, through root `package.json`'s imports mapping. Keep local imports such as `./helpers` relative. Shared libraries are closed: their repository imports stay inside `lib/`, with no library cycles, enforced by `bun run lint`.
 

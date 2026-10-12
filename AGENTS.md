@@ -8,23 +8,38 @@ Bun, TypeScript ESM, Solid.js. `omp-session` runs one in-process SDK session per
 
 ## Commands
 
+### Dev
+
 ```sh
 bun install
 bun run dev                         # Vite HMR + fleet
-bun run check:types                  # tsgo, not tsc
-bun run lint                        # library boundaries + oxlint
 bun run format                      # oxfmt, TS/TSX only
-bun run format:check
-bun scripts/test.ts <test-file>      # targeted tests
-bun run test
-bun run build:web
 bun run design                      # component stories (own Bun server, real apps/web components)
 bun run demo                        # App demo with fixture data (own Bun server)
-bun run build                       # installable bundle
-bun e2e/onboarding.ts                # offline distribution E2E
+bun run dev:docs                    # Astro dev server for docs/
 ```
 
-Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Dev-spawned daemons outlive a dev restart and redial the stable per-worktree fleet port; restart them after server edits (stop them through the fleet); they are not watched. Broker management is opt-in via `bun run dev --auth-broker`; default dev and production never manage broker startup or automatically configure credentials.
+Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Dev-spawned daemons run with a 2s `--control-grace` (`DEV_SESSION_CONTROL_GRACE` in `scripts/dev.ts`; production keeps 10m), so they exit about 2s after dev stops, by any means; a dev restart within that window lets them redial the stable per-worktree fleet port. Restart them after server edits (stop them from the UI, or restart dev and wait out the grace); they are not watched. Broker management is opt-in via `bun run dev --auth-broker`; default dev and production never manage broker startup or automatically configure credentials.
+
+### Checks
+
+```sh
+bun run check:types                 # tsgo, not tsc
+bun run lint                        # library boundaries + oxlint
+bun run format:check
+bun scripts/test.ts <test-file>     # targeted tests
+bun run test
+bun e2e/onboarding.ts               # offline distribution E2E
+```
+
+### Build & install
+
+```sh
+bun run build:web
+bun run build                       # installable bundle
+bun run build:docs                  # static docs site (docs/dist)
+bun run install:omp-web             # build, pack, install into ~/.omp-web/install/
+```
 
 ## Repo layout
 
