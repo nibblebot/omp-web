@@ -15,9 +15,9 @@
  * --force / branch -D): resolveBaseRef, createWorktree,
  * listUnregisteredWorktrees, worktreeDeleteInfo, deleteWorktree, and the
  * registration/spawn orchestration shared by the /ctl routes and the edge
- * command handlers (registerWorktreeEntry). Deleting a worktree requires
- * explicit persisted ownership, independently verified linked-worktree
- * identity, and a clean `git status --porcelain` (never --force).
+ * command handlers (registerWorktreeEntry). Deleting a worktree requires a
+ * local linked Git worktree of its project (verified independently) and a
+ * clean `git status --porcelain` (never --force).
  */
 
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
@@ -170,7 +170,7 @@ export interface CreateWorktreeResult {
 }
 
 /**
- * Create (or attach) a managed worktree for a registered project under
+ * Create (or attach) a linked worktree for a registered project under
  * workspaceDir. The workspaceDir + repo directory are created lazily HERE
  * (first worktree creation). Refuses when the target path already exists,
  * when an existing branch is checked out in another worktree, or when git
@@ -390,8 +390,8 @@ export async function validateUnregisteredWorktree(
 
 /** Guard evidence for the delete confirmation (worktree_delete_info frame). */
 export interface WorktreeDeleteInfo {
-	/** True only for an explicitly owned entry with valid linked-worktree identity. */
-	owned: boolean;
+	/** True only for a local linked Git worktree of its project with valid identity. */
+	linked: boolean;
 	/** True when git status shows any change (added/modified/deleted/untracked). */
 	dirty: boolean;
 	/** Per-file dirty counts (absent when git could not be probed). */
@@ -409,42 +409,39 @@ export interface WorktreeDeleteInfo {
 	merged?: boolean;
 	/** True when the branch has commits not in its upstream (false when no upstream). */
 	unpushed?: boolean;
-	/** Why deletion would be refused (not owned / dirty / missing path). */
+	/** Why deletion would be refused (not linked / dirty / missing path). */
 	reason?: string;
 }
 
 /**
- * Guard evidence for a registered worktree: explicit ownership, linked Git
- * worktree identity, dirty counts, and merged/unpushed branch state.
+ * Guard evidence for a registered worktree: linked Git worktree identity,
+ * dirty counts, and merged/unpushed branch state.
  * The configured creation root is not deletion authority.
  */
 export async function worktreeDeleteInfo(entry: RegistryEntry): Promise<WorktreeDeleteInfo> {
 	const path = entry.cwd;
-	if (path === "") return { owned: false, dirty: false, reason: "entry has no worktree path" };
-	if (
-		entry.mode === "remote" ||
-		entry.workspace?.kind !== "worktree" ||
-		entry.workspace.localWorktreeOwnership !== "owned"
-	) {
-		return { owned: false, dirty: false, reason: "worktree is not explicitly owned by fleet" };
+	if (path === "") return { linked: false, dirty: false, reason: "entry has no worktree path" };
+	if (entry.mode === "remote" || entry.workspace?.kind !== "worktree") {
+		return { linked: false, dirty: false, reason: "not a local linked worktree" };
 	}
 	const resolved = realpathOf(path);
 	if (resolved !== resolve(path)) {
-		return { owned: false, dirty: false, reason: "worktree path resolves through a symlink" };
+		return { linked: false, dirty: false, reason: "worktree path resolves through a symlink" };
 	}
 	if (!existsSync(resolved)) {
-		return { owned: false, dirty: false, reason: "worktree path does not exist" };
+		return { linked: false, dirty: false, reason: "worktree path does not exist" };
 	}
-	const mainPath = entry.workspace.source?.local;
-	if (mainPath === undefined || !(await isLinkedWorktreeOf(resolved, mainPath))) {
-		return { owned: false, dirty: false, reason: "path is not a linked Git worktree" };
+	// Legacy records carry no source.local; Git names the main checkout.
+	const mainPath = entry.workspace.source?.local ?? (await mainRepoOf(resolved));
+	if (mainPath === null || !(await isLinkedWorktreeOf(resolved, mainPath))) {
+		return { linked: false, dirty: false, reason: "path is not a linked Git worktree" };
 	}
 	const state = await probeGitState(resolved);
 	const counts = state?.git;
 	const dirty =
 		counts !== undefined &&
 		(counts.added > 0 || counts.modified > 0 || counts.deleted > 0 || counts.untracked > 0);
-	const info: WorktreeDeleteInfo = { owned: true, dirty };
+	const info: WorktreeDeleteInfo = { linked: true, dirty };
 	if (state !== undefined) {
 		info.git = { ...state.git };
 		if (state.branch !== undefined) {
@@ -491,13 +488,6 @@ async function branchUnpushed(worktreePath: string): Promise<boolean> {
 	return Number.isFinite(count) && count > 0;
 }
 
-/** Deletion was refused: no explicit fleet ownership (403-class). */
-export class WorktreeNotOwnedError extends Error {
-	constructor(readonly path: string) {
-		super(`worktree is not explicitly owned by fleet: ${path}`);
-	}
-}
-
 /** Deletion was refused: the worktree has uncommitted changes (409-class, no --force in v1). */
 export class WorktreeDirtyError extends Error {
 	constructor(readonly path: string) {
@@ -516,28 +506,23 @@ export interface DeleteWorktreeResult {
 }
 
 /**
- * Remove an explicitly owned linked Git worktree after ownership, identity,
- * and dirty guards, then optionally `git branch -d` (never -D).
+ * Remove a local linked Git worktree after its identity and dirty guards,
+ * then optionally `git branch -d` (never -D).
  */
 export async function deleteWorktree(
 	entry: RegistryEntry,
 	opts: { deleteBranch?: boolean } = {},
 ): Promise<DeleteWorktreeResult> {
 	const path = entry.cwd;
-	if (
-		path === "" ||
-		entry.mode === "remote" ||
-		entry.workspace?.kind !== "worktree" ||
-		entry.workspace.localWorktreeOwnership !== "owned"
-	) {
-		throw new WorktreeNotOwnedError(path);
+	if (path === "" || entry.mode === "remote" || entry.workspace?.kind !== "worktree") {
+		throw new Error(`not a local linked worktree: ${path}`);
 	}
 	const resolved = realpathOf(path);
 	if (resolved !== resolve(path))
 		throw new Error(`worktree path resolves through a symlink: ${path}`);
 	if (!existsSync(resolved)) throw new Error(`worktree path does not exist: ${path}`);
-	const mainPath = entry.workspace.source?.local;
-	if (mainPath === undefined || !(await isLinkedWorktreeOf(resolved, mainPath))) {
+	const mainPath = entry.workspace.source?.local ?? (await mainRepoOf(resolved));
+	if (mainPath === null || !(await isLinkedWorktreeOf(resolved, mainPath))) {
 		throw new Error(`path is not a linked Git worktree: ${path}`);
 	}
 	const state = await probeGitState(resolved);
@@ -585,7 +570,7 @@ export async function registerWorktreeEntry(
 	supervisor: SpawnSupervisor,
 	project: RegisteredProject,
 	worktreePath: string,
-	opts: { start?: boolean; ownership: "owned" | "external" },
+	opts: { start?: boolean } = {},
 ): Promise<RegistryEntry> {
 	if (opts.start) {
 		// supervisor.spawn creates the entry (worktreeOf auto-resolved from
@@ -600,7 +585,6 @@ export async function registerWorktreeEntry(
 				projectId: project.projectId,
 				source: { local: project.path },
 				desiredState: "running",
-				localWorktreeOwnership: opts.ownership,
 			},
 		});
 		return registry.get(entry.daemonId) ?? entry;
@@ -621,7 +605,6 @@ export async function registerWorktreeEntry(
 			projectId: project.projectId,
 			source: { local: project.path },
 			desiredState: "stopped",
-			localWorktreeOwnership: opts.ownership,
 		},
 		labels: [],
 		mode: "spawned",

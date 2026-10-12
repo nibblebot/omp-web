@@ -53,6 +53,7 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only). Browser to fleet: `G
 ### Protocol (`lib/wire/`)
 
 - Changes are additive-only unless the version is bumped with both gates: `OMP_PROTO` (frames) is gated in `apps/fleet/edge.ts` (daemon `hello_ok`) and `apps/web/state.ts`; `OMP_CALLBACK_PROTO` (the callback pair) is gated in `lib/wire/callback-protocol.ts`, shared by `apps/fleet/daemon-transport.ts` and `apps/session/fleet-callback.ts`.
+- Waived once, by user decision: roster `managed` was removed and `worktree_delete_info.owned` renamed to `linked` without a bump. Both are edge-produced and fail safe across versions (delete hidden or refused, never wrongly allowed).
 - Preserve byte-bounded history, chunk accumulation, and replay/backpressure semantics. `stream_reset` ends a stream, not the daemon. Do not clip messages merely because they exceed the frame batch target.
 - Command retries reuse the same ID within the dedup window. Duplicates replay answers, never re-dispatch; replay across daemon process changes must fail, never execute again.
 
@@ -73,7 +74,7 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only). Browser to fleet: `G
 - Answers go only to the originating browser. Disconnects and origin-map caps must not discard outstanding replay protection. Reject replays when the daemon's generation or credentials change.
 - Fleet/session files use exclusive lifetime locks. Session-lock exit 77 must not restart; fail waiting attaches and return the entry to asleep.
 - Registry writes are atomic; project/daemon IDs are monotonic, never reused. Validate explicit resume files against the owning worktree's listing, never arbitrary paths.
-- Worktree deletion requires managed ownership and a clean tree. No force; branch deletion uses `git branch -d`, never `-D`. Transcripts survive worktree deletion.
+- Worktree deletion requires a local linked Git worktree of the owning project and a clean tree. No force; branch deletion uses `git branch -d`, never `-D`. Transcripts survive worktree deletion.
 - Clone operations go through `workspace-lifecycle.ts`, never handler self-fetches. Persist retry-sensitive state before provider steps; prove predecessor termination before replacement, never PID-only.
 - Clone stop preserves checkout/logs. Deletion requires proven stop, Git guards, transcript-store verification against the volume, and read-only protection before provider/volume removal. No force bypass; transcripts are not source backup.
 - Resume restores the requested durable session or fails explicitly, never silently boots fresh or substitutes upstream source. A spawned session respawns with `--resume <lastSessionFile>`; the edge records `lastSessionFile` from the `state` frame every session publishes on its control stream at each pair-up. Stored-history reads never wake compute; retention/purge is explicit, not automatic GC.

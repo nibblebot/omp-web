@@ -120,7 +120,6 @@ import {
 	validateUnregisteredWorktree,
 	worktreeDeleteInfo,
 	WorktreeDirtyError,
-	WorktreeNotOwnedError,
 	WorktreeTargetExistsError,
 	type CreateWorktreeResult,
 } from "./worktrees";
@@ -1412,7 +1411,7 @@ class FleetServerImpl implements FleetServer {
 	 * already registered dedups to the EXISTING project → 409 carrying it.
 	 * The project's default workspace is registered via
 	 * registerProjectMainEntry: a roster entry for the repo's main checkout
-	 * mapped to the repo CWD, never a managed worktree.
+	 * mapped to the repo CWD, never a linked worktree.
 	 *   - start:true → the main checkout is spawned (template/labels
 	 *     passthrough) and the fresh entry is tagged + returned as `entry`;
 	 *   - otherwise → the entry is created asleep (surfacing purely via the
@@ -1772,7 +1771,6 @@ class FleetServerImpl implements FleetServer {
 			try {
 				entry = await registerWorktreeEntry(this.registry, this.supervisor, project, created.path, {
 					start,
-					ownership: "owned",
 				});
 			} catch (err) {
 				throw new HttpError(
@@ -1805,7 +1803,6 @@ class FleetServerImpl implements FleetServer {
 		try {
 			entry = await registerWorktreeEntry(this.registry, this.supervisor, project, resolved, {
 				start,
-				ownership: "external",
 			});
 		} catch (err) {
 			throw new HttpError(500, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -2059,10 +2056,10 @@ class FleetServerImpl implements FleetServer {
 
 	/**
 	 * DELETE /ctl/worktrees/:daemonId {deleteBranch?}: stop the daemon,
-	 * evict it from the roster, then git-remove the explicitly owned worktree
-	 * (and optionally `git branch -d` it). Provenance, linked-worktree identity,
-	 * and dirty guards run BEFORE any mutation: a refusal (403 not owned /
-	 * 409 dirty; never --force) leaves the roster and daemon untouched.
+	 * evict it from the roster, then git-remove the local linked worktree
+	 * (and optionally `git branch -d` it). Linked-worktree identity and dirty
+	 * guards run BEFORE any mutation: a refusal (403 not linked / 409 dirty;
+	 * never --force) leaves the roster and daemon untouched.
 	 * Session transcripts live under the agent dir, never inside the worktree;
 	 * the current default creation directory has no role in deletion.
 	 */
@@ -2088,7 +2085,7 @@ class FleetServerImpl implements FleetServer {
 		if (!entry) throw new HttpError(404, `unknown daemon: ${daemonId}`);
 		const path = entry.cwd ?? "";
 		const info = await worktreeDeleteInfo(entry);
-		if (!info.owned) throw new HttpError(403, info.reason ?? `not an owned worktree: ${path}`);
+		if (!info.linked) throw new HttpError(403, info.reason ?? `not a linked worktree: ${path}`);
 		if (info.dirty)
 			throw new HttpError(409, info.reason ?? `worktree has uncommitted changes: ${path}`);
 		// Stop + evict (removal-time cleanup: #24 prune drops supervisor state).
@@ -2102,7 +2099,6 @@ class FleetServerImpl implements FleetServer {
 		try {
 			deleted = await deleteWorktree(entry, { deleteBranch });
 		} catch (err) {
-			if (err instanceof WorktreeNotOwnedError) throw new HttpError(403, err.message);
 			if (err instanceof WorktreeDirtyError) throw new HttpError(409, err.message);
 			throw new HttpError(
 				500,

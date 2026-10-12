@@ -408,7 +408,6 @@ export class WorkspaceLifecycle {
 			cwd: "",
 			project: project.name,
 			projectId,
-			managed: true,
 			labels: [],
 			mode: "spawned",
 			status: "asleep",

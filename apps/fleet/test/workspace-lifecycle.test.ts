@@ -636,8 +636,6 @@ test(
 				"credentialHash",
 				"template",
 				"registeredAt",
-				"managed",
-				"localWorktreeOwnership",
 			]) {
 				expect(body.entry).not.toHaveProperty(key);
 			}

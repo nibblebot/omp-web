@@ -18,7 +18,7 @@ export default defineStory({
 			),
 		},
 		{
-			name: "Owned worktree, attached",
+			name: "Linked worktree, attached",
 			render: () => (
 				<div class="sidebar-list">
 					<WorkspaceRow daemon={rosterDaemon.worktree} />
@@ -26,10 +26,10 @@ export default defineStory({
 			),
 		},
 		{
-			name: "External worktree",
+			name: "Pre-existing linked worktree",
 			render: () => (
 				<div class="sidebar-list">
-					<WorkspaceRow daemon={rosterDaemon.externalWorktree} />
+					<WorkspaceRow daemon={rosterDaemon.registeredWorktree} />
 				</div>
 			),
 		},

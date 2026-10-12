@@ -174,7 +174,7 @@ export function sendRemoveProject(projectId: string): void {
 	} satisfies ClientCommand).catch(() => {});
 }
 
-/** Create a managed worktree under workspaceDir (branch = slugified name
+/** Create a worktree under workspaceDir (branch = slugified name
  *  unless baseRef/existingBranch override) and optionally spawn a daemon on
  *  it (start:true arms the post-attach picker gate). */
 export function sendCreateWorktree(
@@ -248,8 +248,8 @@ export function sendAddExistingWorktree(
 	} satisfies ClientCommand).catch(() => {});
 }
 
-/** Stop + evict the worktree's daemon and git-remove the managed worktree
- *  (deleteBranch:true also `git branch -d`s it). Owned+clean only; a
+/** Stop + evict the worktree's daemon and git-remove the linked worktree
+ *  (deleteBranch:true also `git branch -d`s it). Clean only; a
  *  refusal surfaces as an error frame. */
 export function sendDeleteWorktree(daemonId: string, opts: { deleteBranch?: boolean } = {}): void {
 	if (!isConnected()) return;

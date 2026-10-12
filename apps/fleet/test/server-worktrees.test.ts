@@ -83,7 +83,7 @@ describe("worktree lifecycle routes", () => {
 		if (server !== undefined) await server.close();
 	});
 
-	test("POST /ctl/projects/:id/worktrees creates a managed worktree and registers the entry (start:false)", async () => {
+	test("POST /ctl/projects/:id/worktrees creates a worktree and registers the entry (start:false)", async () => {
 		const res = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
 			name: "Feature Branch",
 		});
@@ -94,10 +94,7 @@ describe("worktree lifecycle routes", () => {
 		expect(entry.worktreeOf).toBe(project.name);
 		expect(entry.mode).toBe("spawned");
 		expect(entry.status).toBe("asleep");
-		expect(server.registry.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe("owned");
-		expect(entry).toHaveProperty("managed", true);
 		expect(entry).not.toHaveProperty("workspace");
-		expect(entry).not.toHaveProperty("localWorktreeOwnership");
 		const target = join(workspaceDir, project.name, "feature-branch");
 		expect(entry.cwd).toBe(target);
 		expect(existsSync(target)).toBe(true);
@@ -158,31 +155,25 @@ describe("worktree lifecycle routes", () => {
 		expect(entry.worktreeOf).toBe(project.name);
 		expect(entry.mode).toBe("spawned");
 		expect(entry.status).toBe("asleep");
-		expect(server.registry.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe("external");
-		expect(entry).not.toHaveProperty("managed");
 		expect(entry).not.toHaveProperty("workspace");
-		expect(entry).not.toHaveProperty("localWorktreeOwnership");
 	});
 
-	test("GET /ctl/sessions exposes owned and external worktrees without private provenance", async () => {
+	test("GET /ctl/sessions exposes linked worktrees without private provenance", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
 		expect(res.status).toBe(200);
 		const entries: RegistryEntry[] = await res.json();
-		const owned = entries.find(
+		const created = entries.find(
 			(entry) => entry.cwd === join(workspaceDir, project.name, "feature-branch"),
 		);
-		const external = entries.find((entry) => entry.cwd === join(tmp, "raw-worktree"));
-		expect(owned).toBeDefined();
-		expect(owned).toHaveProperty("managed", true);
-		expect(external).toBeDefined();
-		expect(external).not.toHaveProperty("managed");
-		for (const entry of [owned, external]) {
+		const registered = entries.find((entry) => entry.cwd === join(tmp, "raw-worktree"));
+		expect(created).toBeDefined();
+		expect(registered).toBeDefined();
+		for (const entry of [created, registered]) {
 			expect(entry).not.toHaveProperty("workspace");
-			expect(entry).not.toHaveProperty("localWorktreeOwnership");
 		}
 	});
 
-	test("adopting a worktree inside workspaceDir never grants disk-delete ownership", async () => {
+	test("a clean registered linked worktree inside workspaceDir can be deleted from disk", async () => {
 		const target = join(workspaceDir, project.name, "adopted-inside");
 		expect(
 			(await gitIn(repoDir, ["worktree", "add", "-b", "adopted-inside", target])).exitCode,
@@ -195,25 +186,26 @@ describe("worktree lifecycle routes", () => {
 		expect(typeof body.entry.daemonId).toBe("string");
 		expect(body.entry.cwd).toBe(target);
 		const entry = server.registry.get(body.entry.daemonId)!;
-		expect(server.registry.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe("external");
 		const info = await fetch(
 			`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}/delete-info`,
 		);
 		expect(info.status).toBe(200);
-		expect(await info.json()).toMatchObject({ owned: false });
+		expect(await info.json()).toMatchObject({ linked: true, dirty: false });
 		const del = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${entry.daemonId}`, {
 			method: "DELETE",
 		});
-		expect(del.status).toBe(403);
-		expect(server.registry.get(entry.daemonId)).toBeDefined();
-		expect(readFileSync(join(target, "readme.md"), "utf8")).toBe("hello\n");
-		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).toContain(target);
+		expect(del.status).toBe(200);
+		expect(server.registry.get(entry.daemonId)).toBeUndefined();
+		expect(existsSync(target)).toBe(false);
+		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
+			target,
+		);
 	});
 
-	test("POST /ctl/remove forgets an external worktree without deleting dirty files or Git registration", async () => {
-		const target = join(workspaceDir, project.name, "external-dirty");
+	test("POST /ctl/remove forgets a dirty registered worktree without deleting its files or Git registration", async () => {
+		const target = join(workspaceDir, project.name, "registered-dirty");
 		expect(
-			(await gitIn(repoDir, ["worktree", "add", "-b", "external-dirty", target])).exitCode,
+			(await gitIn(repoDir, ["worktree", "add", "-b", "registered-dirty", target])).exitCode,
 		).toBe(0);
 		const adopted = await postJson(server.port, `/ctl/projects/${project.projectId}/worktrees`, {
 			worktreePath: target,
@@ -280,14 +272,14 @@ describe("worktree lifecycle routes", () => {
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
 			daemonId?: string;
-			owned?: boolean;
+			linked?: boolean;
 			dirty?: boolean;
 			branch?: string;
 			merged?: boolean;
 			unpushed?: boolean;
 		};
 		expect(body.daemonId).toBe(entry.daemonId);
-		expect(body.owned).toBe(true);
+		expect(body.linked).toBe(true);
 		expect(body.dirty).toBe(false);
 		expect(body.branch).toBe("feature-branch");
 		expect(body.merged).toBe(true);
@@ -339,14 +331,14 @@ describe("worktree lifecycle routes", () => {
 		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).toContain(target);
 	});
 
-	test("a provenance-free legacy entry inside workspaceDir refuses disk deletion", async () => {
-		const target = join(workspaceDir, project.name, "legacy-unowned");
+	test("a legacy entry without a source checkout resolves its repository from Git and deletes", async () => {
+		const target = join(workspaceDir, project.name, "legacy-unsourced");
 		expect(
-			(await gitIn(repoDir, ["worktree", "add", "-b", "legacy-unowned", target])).exitCode,
+			(await gitIn(repoDir, ["worktree", "add", "-b", "legacy-unsourced", target])).exitCode,
 		).toBe(0);
-		// Old registry entries carry grouping metadata but no ownership record.
+		// Old registry entries carry grouping metadata but no workspace source.
 		const legacy = server.registry.create({
-			name: "legacy-unowned",
+			name: "legacy-unsourced",
 			cwd: target,
 			project: project.name,
 			projectId: project.projectId,
@@ -360,21 +352,21 @@ describe("worktree lifecycle routes", () => {
 		const entries: RegistryEntry[] = await sessions.json();
 		const publicLegacy = entries.find((entry) => entry.daemonId === legacy.daemonId);
 		expect(publicLegacy).toBeDefined();
-		expect(publicLegacy).not.toHaveProperty("managed");
 		expect(publicLegacy).not.toHaveProperty("workspace");
-		expect(publicLegacy).not.toHaveProperty("localWorktreeOwnership");
 		const info = await fetch(
 			`http://127.0.0.1:${server.port}/ctl/worktrees/${legacy.daemonId}/delete-info`,
 		);
 		expect(info.status).toBe(200);
-		expect(await info.json()).toMatchObject({ owned: false });
+		expect(await info.json()).toMatchObject({ linked: true, dirty: false });
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/worktrees/${legacy.daemonId}`, {
 			method: "DELETE",
 		});
-		expect(res.status).toBe(403);
-		expect(server.registry.get(legacy.daemonId)).toBeDefined();
-		expect(readFileSync(join(target, "readme.md"), "utf8")).toBe("hello\n");
-		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).toContain(target);
+		expect(res.status).toBe(200);
+		expect(server.registry.get(legacy.daemonId)).toBeUndefined();
+		expect(existsSync(target)).toBe(false);
+		expect((await gitIn(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
+			target,
+		);
 	});
 
 	test("DELETE with deleteBranch:true also removes the merged branch (-d only)", async () => {
@@ -404,8 +396,8 @@ describe("worktree lifecycle routes", () => {
 		expect(res.status).toBe(404);
 	});
 
-	test("owned provenance survives restart with a changed workspaceDir and permits clean disk deletion", async () => {
-		const paths = fleetPaths("omp-web-owned-restart-");
+	test("linked worktree survives restart with a changed workspaceDir and permits clean disk deletion", async () => {
+		const paths = fleetPaths("omp-web-linked-restart-");
 		const originalWorkspaceDir = join(paths.tmp, "original-workspaces");
 		const changedWorkspaceDir = join(paths.tmp, "changed-workspaces");
 		const config = { templates: { local: { command: "sleep 30" } }, defaultTemplate: "local" };
@@ -416,27 +408,21 @@ describe("worktree lifecycle routes", () => {
 			const created = await postJson(
 				restarted.port,
 				`/ctl/projects/${registered.projectId}/worktrees`,
-				{ name: "Restart Owned", start: false },
+				{ name: "Restart Linked", start: false },
 			);
 			expect(created.status).toBe(201);
 			const body = await created.json();
 			expect(typeof body.entry.daemonId).toBe("string");
 			const entry = restarted.registry.get(body.entry.daemonId)!;
-			expect(entry.cwd).toBe(join(originalWorkspaceDir, registered.name, "restart-owned"));
-			expect(restarted.registry.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe(
-				"owned",
-			);
+			expect(entry.cwd).toBe(join(originalWorkspaceDir, registered.name, "restart-linked"));
 			await restarted.close();
 			restarted = undefined;
 			restarted = await startTestFleet(paths, config, { workspaceDir: changedWorkspaceDir });
-			expect(restarted.registry.get(entry.daemonId)?.workspace?.localWorktreeOwnership).toBe(
-				"owned",
-			);
 			const info = await fetch(
 				`http://127.0.0.1:${restarted.port}/ctl/worktrees/${entry.daemonId}/delete-info`,
 			);
 			expect(info.status).toBe(200);
-			expect(await info.json()).toMatchObject({ owned: true, dirty: false });
+			expect(await info.json()).toMatchObject({ linked: true, dirty: false });
 			const deleted = await fetch(
 				`http://127.0.0.1:${restarted.port}/ctl/worktrees/${entry.daemonId}`,
 				{ method: "DELETE" },
@@ -569,7 +555,7 @@ describe("worktree lifecycle routes", () => {
 				branch: "merge-feat",
 			});
 
-			// A roster entry for that cwd marks it managed → the row
+			// A roster entry for that cwd marks it registered → the row
 			// disappears from the projects array.
 			entry = server.registry.create({
 				name: "ctl-merge-wt",

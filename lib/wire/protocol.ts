@@ -339,12 +339,6 @@ export interface DaemonEntry {
 	 * kept). Older edges omit it.
 	 */
 	projectId?: string;
-	/**
-	 * True only for a local worktree explicitly recorded as fleet-owned.
-	 * Path location does not grant ownership. Absent for external/legacy
-	 * worktrees and other workspace kinds; older edges omit it.
-	 */
-	managed?: boolean;
 	/** Current git branch of the session cwd for local entries (source: fleet edge roster; older edges omit it). */
 	branch?: string;
 	/** git dirty-state file counts (source: fleet edge roster; older edges omit them). */
@@ -695,10 +689,10 @@ export type ClientCommand =
 			branch?: string;
 			start?: boolean;
 	  }
-	// Stop the daemon, evict it from the roster, and remove the managed
-	// worktree (owned + clean only; deleteBranch: true also `git branch -d`s).
+	// Stop the daemon, evict it from the roster, and remove the linked
+	// worktree (clean only; deleteBranch: true also `git branch -d`s).
 	| { type: "delete_worktree"; id: string; daemonId: string; deleteBranch?: boolean }
-	// Guard evidence for the delete confirmation (owned/dirty/branch state);
+	// Guard evidence for the delete confirmation (linked/dirty/branch state);
 	// answered by the unicast worktree_delete_info frame.
 	| { type: "worktree_delete_info"; id: string; daemonId: string }
 	| { type: "list_projects"; id: string }
@@ -880,12 +874,12 @@ export type ServerFrame =
 	// Unicast answer to list_project_branches (fleet-scoped, like projects).
 	| { type: "project_branches"; projectId: string; branches: ProjectBranch[] }
 	// Unicast answer to worktree_delete_info: guard evidence for the delete
-	// confirmation (ownership, dirty counts, branch merge/push state). Never
-	// carries tokens/endpoints.
+	// confirmation (linked identity, dirty counts, branch merge/push state).
+	// Never carries tokens/endpoints.
 	| {
 			type: "worktree_delete_info";
 			daemonId: string;
-			owned: boolean;
+			linked: boolean;
 			dirty: boolean;
 			git?: {
 				added: number;

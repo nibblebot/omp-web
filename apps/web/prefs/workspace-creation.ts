@@ -10,7 +10,7 @@
  * here; the type below deliberately has no fields for them.
  */
 
-/** Kinds the unified Add-workspace dialog can create (adopting an existing
+/** Kinds the unified Add-workspace dialog can create (registering an existing
  *  worktree shares the worktree memory; it creates no new workspace kind). */
 export type WorkspaceKindChoice = "worktree" | "clone";
 

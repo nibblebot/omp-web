@@ -4,7 +4,7 @@ import {
 	rosterDaemon,
 	worktreeInfoClean,
 	worktreeInfoDirty,
-	worktreeInfoUnowned,
+	worktreeInfoNotLinked,
 } from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
 import { defineStory } from "../../../registry";
@@ -20,7 +20,7 @@ export default defineStory({
 	seed: () => seedRosterFleet(),
 	variants: [
 		{
-			name: "Clean owned worktree",
+			name: "Clean linked worktree",
 			seed: () =>
 				seedRosterFleet({
 					deleteWorkspaceTarget: worktreeInfoClean.daemonId,
@@ -29,7 +29,7 @@ export default defineStory({
 			render: () => <DeleteWorkspaceDialog />,
 		},
 		{
-			name: "Dirty owned worktree refused",
+			name: "Dirty linked worktree refused",
 			seed: () =>
 				seedRosterFleet({
 					deleteWorkspaceTarget: worktreeInfoDirty.daemonId,
@@ -38,11 +38,11 @@ export default defineStory({
 			render: () => <DeleteWorkspaceDialog />,
 		},
 		{
-			name: "External worktree refused",
+			name: "Not a linked worktree refused",
 			seed: () =>
 				seedRosterFleet({
-					deleteWorkspaceTarget: worktreeInfoUnowned.daemonId,
-					worktreeDeleteInfo: { [worktreeInfoUnowned.daemonId]: worktreeInfoUnowned },
+					deleteWorkspaceTarget: worktreeInfoNotLinked.daemonId,
+					worktreeDeleteInfo: { [worktreeInfoNotLinked.daemonId]: worktreeInfoNotLinked },
 				}),
 			render: () => <DeleteWorkspaceDialog />,
 		},

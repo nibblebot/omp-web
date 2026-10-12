@@ -512,8 +512,7 @@ export function shouldDropFrame(bufferedAmount: number, capBytes: number): boole
 /**
  * the DaemonEntry fields of a registry entry (never credentials, template,
  * or registeredAt) plus a live uptime in seconds since
- * readyAt (or registeredAt when never ready) and pid. `managed` reflects
- * explicit persisted ownership of a local worktree, never path containment.
+ * readyAt (or registeredAt when never ready) and pid.
  *
  * P1.4 clone-workspace projection: the roster surfaces the PUBLIC subset of
  * the fleet-private WorkspaceRecord: kind→workspaceKind,
@@ -549,12 +548,6 @@ export function toRosterEntry(entry: RegistryEntry): DaemonEntry {
 	};
 	if (entry.worktreeOf !== undefined) roster.worktreeOf = entry.worktreeOf;
 	if (entry.projectId !== undefined) roster.projectId = entry.projectId;
-	if (
-		entry.mode !== "remote" &&
-		entry.workspace?.kind === "worktree" &&
-		entry.workspace.localWorktreeOwnership === "owned"
-	)
-		roster.managed = true;
 	if (entry.branch !== undefined) roster.branch = entry.branch;
 	if (entry.git !== undefined) roster.git = { ...entry.git };
 	if (entry.lastSessionFile !== undefined) roster.lastSessionFile = entry.lastSessionFile;
@@ -1322,7 +1315,7 @@ export class FleetEdge {
 	 * validates + dedups). A dedup answers an error frame naming the
 	 * existing projectId. The project's default workspace is registered via
 	 * registerProjectMainEntry: a roster entry for the repo's main checkout
-	 * mapped to the repo CWD, never a managed worktree. With start:true the
+	 * mapped to the repo CWD, never a linked worktree. With start:true the
 	 * main checkout is spawned (template/labels passthrough) and the fresh
 	 * entry is tagged with the projectId; without it the entry is created
 	 * asleep (wakeable via spawn_resume/attach). Success surfaces via the
@@ -1420,7 +1413,6 @@ export class FleetEdge {
 		try {
 			await registerWorktreeEntry(this.#registry, this.#supervisor, project, created.path, {
 				start: opts.start,
-				ownership: "owned",
 			});
 		} catch (err) {
 			this.#sendError(stream, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1479,7 +1471,6 @@ export class FleetEdge {
 		try {
 			await registerWorktreeEntry(this.#registry, this.#supervisor, project, resolved, {
 				start,
-				ownership: "external",
 			});
 		} catch (err) {
 			this.#sendError(stream, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1488,7 +1479,7 @@ export class FleetEdge {
 
 	/**
 	 * delete_worktree: stop the daemon, evict it from the roster, then git
-	 * worktree remove (owned + clean only; optional `git branch -d`). The
+	 * worktree remove (linked + clean only; optional `git branch -d`). The
 	 * guards run BEFORE any mutation, so a refusal leaves the daemon and
 	 * roster untouched.
 	 */
@@ -1520,8 +1511,8 @@ export class FleetEdge {
 			}
 			const path = entry.cwd ?? "";
 			const info = await worktreeDeleteInfo(entry);
-			if (!info.owned) {
-				this.#sendError(stream, info.reason ?? `not a managed worktree: ${path}`);
+			if (!info.linked) {
+				this.#sendError(stream, info.reason ?? `not a linked worktree: ${path}`);
 				return;
 			}
 			if (info.dirty) {
@@ -1545,7 +1536,7 @@ export class FleetEdge {
 
 	/**
 	 * worktree_delete_info: answer with the unicast guard-evidence frame
-	 * (owned/dirty/branch merge+push state) for the delete confirmation.
+	 * (linked/dirty/branch merge+push state) for the delete confirmation.
 	 */
 	async #handleWorktreeDeleteInfo(stream: BrowserStream, daemonId: string): Promise<void> {
 		try {

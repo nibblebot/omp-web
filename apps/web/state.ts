@@ -214,7 +214,7 @@ export type ModalName =
 	| "btw-history";
 
 /** Unicast answer to sendWorktreeDeleteInfo: guard evidence for the
- *  delete-worktree confirm dialog (ownership, dirty counts, branch state). */
+ *  delete-worktree confirm dialog (linked identity, dirty counts, branch state). */
 export type WorktreeDeleteInfo = Extract<ServerFrame, { type: "worktree_delete_info" }>;
 
 /** localStorage key for the roster sidebar visibility toggle. */
@@ -371,8 +371,8 @@ export const [state, setState] = createStore({
 	settingsLoading: false,
 	// Fleet edge roster (roster frame). Patched in place by
 	// daemon_status frames; NOT cleared by resetSessionView (it is
-	// fleet-scoped, not session-scoped). Entries carry projectId/managed
-	// (Phase 5: project-first grouping + managed-worktree eligibility).
+	// fleet-scoped, not session-scoped). Entries carry projectId
+	// (Phase 5: project-first grouping + linked-worktree eligibility).
 	daemonRoster: [] as DaemonEntry[],
 	// Per-daemon realtime activity (streaming / blocked) fed by the edge's
 	// additive fleet-scoped `daemon_activity` frames (derived from each ready
@@ -1149,9 +1149,9 @@ export function connect(): void {
 				}
 				// The fleet edge's daemon roster (sidebar swaps to the session
 				// list).
-				// Phase 5: entries carry projectId/managed (project-first
-				// grouping + managed-worktree eligibility). DaemonEntry owns
-				// those fields, so they flow through wholesale with the array.
+				// Phase 5: entries carry projectId (project-first grouping and
+				// linked-worktree eligibility). DaemonEntry owns those fields, so they
+				// flow through wholesale with the array.
 				setState("daemonRoster", frame.daemons);
 				// Removed daemons never reuse ids, but don't let the set grow unbounded.
 				pruneUnread(new Set(frame.daemons.map((d) => d.daemonId)));

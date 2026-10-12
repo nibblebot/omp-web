@@ -1596,7 +1596,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		dispatch({
 			type: "worktree_delete_info",
 			daemonId: "d1",
-			owned: true,
+			linked: true,
 			dirty: true,
 			git: { added: 1, modified: 0, deleted: 0, untracked: 2 },
 			branch: "feat",
@@ -1606,7 +1606,7 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		dispatch({
 			type: "worktree_delete_info",
 			daemonId: "d1",
-			owned: true,
+			linked: true,
 			dirty: false,
 			branch: "feat",
 			merged: true,
@@ -1615,29 +1615,29 @@ describe("Phase 5: registered projects and project-first grouping", () => {
 		dispatch({
 			type: "worktree_delete_info",
 			daemonId: "d2",
-			owned: false,
+			linked: false,
 			dirty: false,
-			reason: "not managed",
+			reason: "not a linked worktree",
 		});
 
 		expect(state.worktreeDeleteInfo["d1"]).toMatchObject({
-			owned: true,
+			linked: true,
 			dirty: false,
 			merged: true,
 		}); // latest-wins
 		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({
-			owned: false,
+			linked: false,
 			dirty: false,
-			reason: "not managed",
+			reason: "not a linked worktree",
 		});
 
 		// Fleet-scoped: survives the reset of a daemon switch.
 		dispatch(attached("daemon-a"));
 		dispatch(attached("daemon-b"));
 		expect(state.worktreeDeleteInfo["d2"]).toMatchObject({
-			owned: false,
+			linked: false,
 			dirty: false,
-			reason: "not managed",
+			reason: "not a linked worktree",
 		});
 	});
 

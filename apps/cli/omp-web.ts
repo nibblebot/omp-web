@@ -74,7 +74,7 @@ const USAGE = `usage: omp-web [options] | omp-web <command> [options]
   control                      control plane only, no UI (default port 4722)
   ui                           UI daemon: static UI + proxy to the control plane
                                (default port 4723)
-  sessions | projects          list roster entries / adoptable worktrees
+  sessions | projects          list roster entries / unregistered worktrees
   profiles                     list provider profiles
   spawn | add-repo | enroll | provision | add-clone | start | stop | remove
   rm-project | add-worktree | rm-worktree | prompt | preflight

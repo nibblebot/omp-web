@@ -101,7 +101,6 @@ const daemonMain: DaemonEntry = {
 	cwd: OMP_WEB,
 	project: "omp-web",
 	projectId: "proj_omp_web",
-	managed: false,
 	branch: "main",
 	git: { added: 0, modified: 2, deleted: 0, untracked: 1, linesAdded: 64, linesDeleted: 9 },
 	labels: ["main"],
@@ -116,7 +115,7 @@ const daemonMain: DaemonEntry = {
 	desiredState: "running",
 };
 
-/** DaemonEntry: owned worktree, ready, with local changes; the row the browser is attached to. */
+/** DaemonEntry: linked worktree, ready, with local changes; the row the browser is attached to. */
 const daemonFixtures: DaemonEntry = {
 	daemonId: "dmn_a002",
 	name: "design-fixtures",
@@ -124,7 +123,6 @@ const daemonFixtures: DaemonEntry = {
 	project: "omp-web",
 	projectId: "proj_omp_web",
 	worktreeOf: OMP_WEB,
-	managed: true,
 	branch: "feat/design-fixtures",
 	git: { added: 2, modified: 5, deleted: 0, untracked: 3, linesAdded: 412, linesDeleted: 18 },
 	labels: ["design", "fixtures"],
@@ -147,7 +145,6 @@ const daemonAsleep: DaemonEntry = {
 	project: "omp-web",
 	projectId: "proj_omp_web",
 	worktreeOf: OMP_WEB,
-	managed: true,
 	branch: "fix/review-anchors",
 	git: { added: 0, modified: 0, deleted: 0, untracked: 0 },
 	labels: [],
@@ -159,13 +156,12 @@ const daemonAsleep: DaemonEntry = {
 	desiredState: "stopped",
 };
 
-/** DaemonEntry: adopted worktree in the default creation directory; its files are not owned. */
-const daemonExternalWorktree: DaemonEntry = {
+/** DaemonEntry: registered linked worktree in the default creation directory; deletable like any other. */
+const daemonRegisteredWorktree: DaemonEntry = {
 	...daemonAsleep,
 	daemonId: "dmn_a007",
 	name: "adopted-review",
 	cwd: `${WORKTREES}/adopted-review`,
-	managed: false,
 	branch: "review/external",
 	lastSessionFile: undefined,
 	sessionTitle: undefined,
@@ -179,7 +175,6 @@ const daemonStarting: DaemonEntry = {
 	project: "omp-web",
 	projectId: "proj_omp_web",
 	worktreeOf: OMP_WEB,
-	managed: true,
 	branch: "feat/tx-pagination",
 	labels: ["tx"],
 	mode: "spawned",
@@ -196,7 +191,6 @@ const daemonClonePreparing: DaemonEntry = {
 	cwd: "/home/joshua/.omp/clones/bench-clone",
 	project: "omp-web",
 	projectId: "proj_omp_web",
-	managed: false,
 	branch: "main",
 	labels: ["bench"],
 	mode: "spawned",
@@ -214,7 +208,6 @@ const daemonCloneFailed: DaemonEntry = {
 	cwd: "/home/joshua/.omp/clones/k8s-trial",
 	project: "omp-web",
 	projectId: "proj_omp_web",
-	managed: false,
 	labels: ["trial"],
 	mode: "spawned",
 	status: "error",
@@ -234,7 +227,6 @@ const daemonLocalactionMain: DaemonEntry = {
 	cwd: LOCALACTION,
 	project: "localaction",
 	projectId: "proj_localaction",
-	managed: false,
 	branch: "main",
 	git: { added: 0, modified: 1, deleted: 1, untracked: 0, linesAdded: 12, linesDeleted: 30 },
 	labels: [],
@@ -257,7 +249,6 @@ const daemonReconnecting: DaemonEntry = {
 	project: "localaction",
 	projectId: "proj_localaction",
 	worktreeOf: LOCALACTION,
-	managed: false,
 	branch: "feat/job-matrix",
 	labels: ["matrix"],
 	mode: "remote",
@@ -274,7 +265,6 @@ const daemonRemoteError: DaemonEntry = {
 	name: "localaction-bench",
 	cwd: "/srv/work/localaction",
 	project: "bench-host",
-	managed: false,
 	labels: ["bench"],
 	mode: "remote",
 	status: "error",
@@ -291,7 +281,6 @@ const daemonRemoteBlocked: DaemonEntry = {
 	name: "release-bot",
 	cwd: "/srv/work/release",
 	project: "bench-host",
-	managed: false,
 	labels: ["release"],
 	mode: "remote",
 	status: "ready",
@@ -306,7 +295,7 @@ export const rosterDaemons: DaemonEntry[] = [
 	daemonMain,
 	daemonFixtures,
 	daemonAsleep,
-	daemonExternalWorktree,
+	daemonRegisteredWorktree,
 	daemonStarting,
 	daemonClonePreparing,
 	daemonCloneFailed,
@@ -321,7 +310,7 @@ export const rosterDaemon = {
 	main: daemonMain,
 	worktree: daemonFixtures,
 	asleep: daemonAsleep,
-	externalWorktree: daemonExternalWorktree,
+	registeredWorktree: daemonRegisteredWorktree,
 	starting: daemonStarting,
 	clonePreparing: daemonClonePreparing,
 	cloneFailed: daemonCloneFailed,
@@ -331,7 +320,7 @@ export const rosterDaemon = {
 	remoteBlocked: daemonRemoteBlocked,
 } satisfies Record<string, DaemonEntry>;
 
-/** DaemonEntry: managed localaction worktree, ready and idle; the App view's healthy counterpart of `daemonReconnecting`. */
+/** DaemonEntry: localaction linked worktree, ready and idle; the App view's healthy counterpart of `daemonReconnecting`. */
 const daemonJobMatrix: DaemonEntry = {
 	daemonId: "dmn_b003",
 	name: "job-matrix",
@@ -339,7 +328,6 @@ const daemonJobMatrix: DaemonEntry = {
 	project: "localaction",
 	projectId: "proj_localaction",
 	worktreeOf: LOCALACTION,
-	managed: true,
 	branch: "feat/job-matrix",
 	git: { added: 1, modified: 3, deleted: 0, untracked: 0, linesAdded: 148, linesDeleted: 22 },
 	labels: ["matrix"],
@@ -362,7 +350,6 @@ const daemonArtifactPaths: DaemonEntry = {
 	project: "localaction",
 	projectId: "proj_localaction",
 	worktreeOf: LOCALACTION,
-	managed: true,
 	branch: "fix/artifact-paths",
 	git: { added: 0, modified: 0, deleted: 0, untracked: 0 },
 	labels: [],
@@ -381,7 +368,6 @@ const daemonNixosMain: DaemonEntry = {
 	cwd: NIXOS_CONFIG,
 	project: "nixos-config",
 	projectId: "proj_nixos_config",
-	managed: false,
 	branch: "main",
 	git: { added: 1, modified: 2, deleted: 0, untracked: 0, linesAdded: 57, linesDeleted: 14 },
 	labels: [],
@@ -404,7 +390,6 @@ const daemonFlakeUpdate: DaemonEntry = {
 	project: "nixos-config",
 	projectId: "proj_nixos_config",
 	worktreeOf: NIXOS_CONFIG,
-	managed: true,
 	branch: "chore/flake-update",
 	git: { added: 0, modified: 1, deleted: 0, untracked: 0, linesAdded: 18, linesDeleted: 18 },
 	labels: [],
@@ -575,11 +560,11 @@ export const rosterUsageReports: UsageReport[] = [
 	},
 ];
 
-/** WorktreeDeleteInfo: clean, merged, owned worktree; the dialog offers branch deletion. */
+/** WorktreeDeleteInfo: clean, merged, linked worktree; the dialog offers branch deletion. */
 export const worktreeInfoClean: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
 	daemonId: "dmn_a003",
-	owned: true,
+	linked: true,
 	dirty: false,
 	branch: "fix/review-anchors",
 	merged: true,
@@ -590,7 +575,7 @@ export const worktreeInfoClean: WorktreeDeleteInfo = {
 export const worktreeInfoDirty: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
 	daemonId: "dmn_a002",
-	owned: true,
+	linked: true,
 	dirty: true,
 	git: { added: 2, modified: 5, deleted: 0, untracked: 3, linesAdded: 412, linesDeleted: 18 },
 	branch: "feat/design-fixtures",
@@ -599,13 +584,14 @@ export const worktreeInfoDirty: WorktreeDeleteInfo = {
 	reason: "commit or stash the changes first",
 };
 
-/** WorktreeDeleteInfo: adopted external worktree, regardless of its directory location. */
-export const worktreeInfoUnowned: WorktreeDeleteInfo = {
+/** WorktreeDeleteInfo: not a linked Git worktree; the dialog refuses it. */
+export const worktreeInfoNotLinked: WorktreeDeleteInfo = {
 	type: "worktree_delete_info",
 	daemonId: "dmn_a007",
-	owned: false,
+	linked: false,
 	dirty: false,
-	reason: "This worktree is not owned by omp-web. Remove it from omp-web to preserve its files.",
+	reason:
+		"This is not a linked Git worktree omp-web can delete. Remove it from omp-web to preserve its files.",
 };
 
 /** SessionListEntry list per daemon for the row's session dropdown, newest first. */

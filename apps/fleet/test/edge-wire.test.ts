@@ -1267,7 +1267,7 @@ describe("fleet edge", () => {
 		expect(project.projectId).toMatch(/^p\d+$/);
 		// The default workspace is auto-registered: a roster broadcast shows the
 		// asleep main-checkout entry, tagged with the project id and with NO
-		// worktreeOf (main checkouts are the repo itself, never a managed worktree).
+		// worktreeOf (main checkouts are the repo itself, never a linked worktree).
 		const rosterFrame = await browser.waitForFrame(
 			(f) =>
 				f.type === "roster" &&
@@ -1507,11 +1507,11 @@ describe("edge pure helpers", () => {
 		expect(toRosterEntry(base)).not.toHaveProperty("sessionEmpty");
 	});
 
-	test("toRosterEntry exposes managed only for explicitly owned local worktrees", () => {
+	test("toRosterEntry never emits managed, workspace, or ownership fields", () => {
 		const base: RegistryEntry = {
 			daemonId: "d9",
 			name: "n",
-			cwd: "",
+			cwd: "/some/root/repo/feature",
 			project: "x",
 			labels: [],
 			mode: "spawned",
@@ -1522,35 +1522,11 @@ describe("edge pure helpers", () => {
 			kind: "worktree" as const,
 			projectId: "p1",
 			desiredState: "stopped" as const,
-			localWorktreeOwnership: "owned" as const,
 		};
-		expect(toRosterEntry({ ...base, cwd: "/old-root/repo/feature", workspace }).managed).toBe(true);
-		expect(
-			toRosterEntry({
-				...base,
-				cwd: "/new-root/repo/external",
-				workspace: { ...workspace, localWorktreeOwnership: "external" },
-			}),
-		).not.toHaveProperty("managed");
-		expect(
-			toRosterEntry({
-				...base,
-				workspace: {
-					kind: "worktree",
-					projectId: "p1",
-					desiredState: "stopped",
-				},
-			}),
-		).not.toHaveProperty("managed");
-		expect(toRosterEntry({ ...base, managed: true })).not.toHaveProperty("managed");
-		for (const kind of ["direct", "clone"] as const) {
-			expect(toRosterEntry({ ...base, workspace: { ...workspace, kind } })).not.toHaveProperty(
-				"managed",
-			);
-		}
+		const entry = toRosterEntry({ ...base, workspace });
+		expect(entry).not.toHaveProperty("managed");
+		expect(entry).not.toHaveProperty("workspace");
 		expect(toRosterEntry({ ...base, mode: "remote", workspace })).not.toHaveProperty("managed");
-		expect(toRosterEntry({ ...base, workspace })).not.toHaveProperty("localWorktreeOwnership");
-		expect(toRosterEntry({ ...base, workspace })).not.toHaveProperty("workspace");
 	});
 
 	test("shouldDropFrame guards the cap boundary", () => {

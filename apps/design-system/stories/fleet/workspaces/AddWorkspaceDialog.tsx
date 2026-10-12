@@ -15,9 +15,9 @@ export default defineStory({
 	variants: [
 		{
 			// One Worktree view: "+ New branch", available branches, checked-out
-			// branches that adopt their checkout, and detected unregistered
+			// branches that register their checkout, and detected unregistered
 			// worktrees; every submission starts and attaches a session.
-			name: "Worktree creation and adoption",
+			name: "Worktree creation and registration",
 			seed: () => {
 				seedRosterFleet({ workspaceModalProjectId: "proj_omp_web", modal: "workspace" });
 				rememberWorkspaceCreationPrefs({ kind: "worktree" });

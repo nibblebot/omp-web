@@ -482,9 +482,9 @@ export const WorkspaceRow: Component<{
 								<InfoIcon />
 								Daemon details
 							</button>
-							{/* Only explicitly owned linked worktrees offer disk deletion;
+							{/* Linked Git worktrees offer disk deletion;
 							    the dialog still requires clean Git evidence. */}
-							<Show when={isWorktree() && !isClone() && d().managed === true}>
+							<Show when={isWorktree() && !isClone() && d().mode !== "remote"}>
 								<button
 									type="button"
 									role="menuitem"

@@ -125,7 +125,6 @@ describe("edge worktree commands", () => {
 		expect(entry.worktreeOf).toBe(project.name);
 		expect(entry.mode).toBe("spawned");
 		expect(entry.status).toBe("asleep");
-		expect(entry.managed).toBe(true);
 		expect(existsSync(target)).toBe(true);
 		// The roster never leaks tokens/endpoints.
 		expect(JSON.stringify(roster)).not.toContain("token");
@@ -151,21 +150,44 @@ describe("edge worktree commands", () => {
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
 		expect(entry.status).toBe("asleep");
-		// Adoption stays external even inside the configured creation root.
-		expect(entry).not.toHaveProperty("managed");
-		const registered = registry.get(entry.daemonId)!;
-		expect(registered.workspace?.localWorktreeOwnership).toBe("external");
+	});
+
+	test("delete_worktree removes a clean attached linked worktree", async () => {
+		const outside = join(config.workspaceDir, "repo", "raw-wt");
+		const entry = registry.list().find((e) => e.cwd === outside)!;
 		await browser.send({
-			type: "delete_worktree",
-			id: "external-delete",
+			type: "worktree_delete_info",
+			id: "attached-info",
 			daemonId: entry.daemonId,
 		});
-		await browser.waitForFrame(
-			(f) => f.type === "error" && f.error.includes("not explicitly owned"),
-			"external ownership refusal",
+		const info = await browser.waitForFrame(
+			(f) => f.type === "worktree_delete_info" && f.daemonId === entry.daemonId,
+			"attached worktree_delete_info",
 		);
-		expect(registry.get(entry.daemonId)).toBeDefined();
-		expect(existsSync(outside)).toBe(true);
+		if (info.type !== "worktree_delete_info") throw new Error("expected worktree_delete_info");
+		expect(info.linked).toBe(true);
+		expect(info.dirty).toBe(false);
+		// Floor: only roster frames NEWER than the last one seen so far count.
+		const rosters = browser.events.filter((ev) => ev.frame.type === "roster");
+		const floorId = rosters.length > 0 ? rosters[rosters.length - 1].id : 0;
+		await browser.send({
+			type: "delete_worktree",
+			id: "attached-delete",
+			daemonId: entry.daemonId,
+		});
+		await browser.waitForEvent(
+			(ev) =>
+				ev.id > floorId &&
+				ev.frame.type === "roster" &&
+				!ev.frame.daemons.some((d) => d.daemonId === entry.daemonId),
+			"roster without the attached worktree",
+		);
+		expect(registry.get(entry.daemonId)).toBeUndefined();
+		await waitFor(
+			() => (existsSync(outside) ? null : "removed"),
+			5000,
+			"attached worktree removed",
+		);
 	});
 
 	test("worktree_delete_info answers with the unicast guard-evidence frame", async () => {
@@ -177,7 +199,7 @@ describe("edge worktree commands", () => {
 			"worktree_delete_info",
 		);
 		if (frame.type !== "worktree_delete_info") throw new Error("expected worktree_delete_info");
-		expect(frame.owned).toBe(true);
+		expect(frame.linked).toBe(true);
 		expect(frame.dirty).toBe(false);
 		expect(frame.branch).toBe("my-branch");
 		expect(frame.merged).toBe(true);
@@ -193,7 +215,7 @@ describe("edge worktree commands", () => {
 		expect(err.error).toContain("d999");
 	});
 
-	test("delete_worktree removes an owned worktree after the creation root changes", async () => {
+	test("delete_worktree removes a linked worktree after the creation root changes", async () => {
 		const target = managedWorktreePath(config.workspaceDir, project.path, "My Branch");
 		const entry = registry.list().find((e) => e.cwd === target)!;
 		// Floor: only roster frames NEWER than the last one seen so far count.
@@ -222,7 +244,7 @@ describe("edge worktree commands", () => {
 		}
 	});
 
-	test("delete_worktree rejects the main checkout despite forged explicit ownership", async () => {
+	test("delete_worktree rejects the main checkout (not a linked worktree)", async () => {
 		const main = registry.create({
 			name: "main",
 			cwd: repoDir,
@@ -235,7 +257,6 @@ describe("edge worktree commands", () => {
 				kind: "worktree",
 				projectId: project.projectId,
 				desiredState: "stopped",
-				localWorktreeOwnership: "owned",
 				source: { local: repoDir },
 			},
 		});
@@ -304,7 +325,6 @@ describe("edge worktree commands", () => {
 		expect(entry.mode).toBe("spawned");
 		expect(entry.projectId).toBe(project.projectId);
 		expect(entry.worktreeOf).toBe(project.name);
-		expect(entry.managed).toBe(true);
 		// Stop the idling child (`sleep 30`) so the suite ends clean.
 		await supervisor.stop(entry.daemonId);
 	});
@@ -352,7 +372,6 @@ describe("edge worktree commands", () => {
 			const entry = roster.daemons.find((d) => d.cwd === target)!;
 			expect(entry.projectId).toBe(project.projectId);
 			expect(entry.mode).toBe("spawned");
-			expect(entry.managed).toBe(true);
 			expect(existsSync(target)).toBe(true);
 			// start:false entries carry no roster branch field; git is the
 			// ground truth that the worktree sits on the attached branch.
@@ -446,7 +465,7 @@ describe("edge worktree commands", () => {
 		expect(err.error).toContain("p999");
 	});
 
-	test("list_projects lists a registered project's unmanaged linked worktrees and drops roster cwds", async () => {
+	test("list_projects lists a registered project's not-yet-registered linked worktrees and drops roster cwds", async () => {
 		// A linked worktree of the registered project: only the
 		// registry-backed merge surfaces it (there is no root scanning).
 		const wtPath = join(tmp, "merge-wt");
@@ -468,11 +487,10 @@ describe("edge worktree commands", () => {
 			if (frame.type !== "projects") throw new Error("expected projects");
 			expect(frame.projects).toContainEqual(expected);
 
-			// Registering a daemon on that cwd excludes it from discovery;
-			// adoption does not transfer ownership. Avoid stale projects frames.
+			// Registering a daemon on that cwd excludes it from discovery.
+			// Avoid stale projects frames.
 			const entry = await registerWorktreeEntry(registry, supervisor, project, wtReal, {
 				start: false,
-				ownership: "external",
 			});
 			try {
 				browser.close();

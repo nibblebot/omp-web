@@ -9,7 +9,7 @@ import { Modal } from "../../ui/Modal";
 // Worktree targets keep the guard-evidence flow: the sidebar row asked for
 // the evidence on open, this dialog shows dirty counts and branch merge/push
 // state with an "also delete branch" checkbox (default from server evidence:
-// merged && pushed). A dirty or unowned worktree is refused outright: no
+// merged && pushed). A dirty or non-linked worktree is refused outright: no
 // --force in v1.
 //
 // Clone targets use the verified-delete flow: deletion is an explicit
@@ -107,11 +107,11 @@ export const DeleteWorkspaceDialog: Component = () => {
 	const dirtyTotal = () => dirtyKinds().reduce((sum, k) => sum + k.n, 0);
 
 	/** Worktree confirm allowed only once evidence is in AND the worktree is
-	 *  owned + clean. Clones have no guard-evidence rung; the fleet's
+	 *  linked + clean. Clones have no guard-evidence rung; the fleet's
 	 *  verified-delete gate admits/refuses at submit time. */
 	const worktreeConfirmable = () => {
 		const i = info();
-		return i !== undefined && i.owned && !i.dirty;
+		return i !== undefined && i.linked && !i.dirty;
 	};
 
 	const close = () => {
@@ -186,13 +186,13 @@ export const DeleteWorkspaceDialog: Component = () => {
 					<Show when={info() === undefined}>
 						<p class="danger-confirm-body">checking worktree state…</p>
 					</Show>
-					<Show when={info() !== undefined && !info()!.owned}>
+					<Show when={info() !== undefined && !info()!.linked}>
 						<p class="danger-confirm-body">
 							{info()!.reason ??
-								"This worktree is not owned by omp-web. Remove it from omp-web to preserve its files."}
+								"This is not a linked Git worktree omp-web can delete. Remove it from omp-web to preserve its files."}
 						</p>
 					</Show>
-					<Show when={info() !== undefined && info()!.owned && info()!.dirty}>
+					<Show when={info() !== undefined && info()!.linked && info()!.dirty}>
 						<p class="danger-confirm-body">
 							This worktree has {dirtyTotal()} uncommitted change
 							{dirtyTotal() === 1 ? "" : "s"}
@@ -212,9 +212,9 @@ export const DeleteWorkspaceDialog: Component = () => {
 							{info()!.reason ? `: ${info()!.reason}` : ""}.
 						</p>
 					</Show>
-					<Show when={info() !== undefined && info()!.owned && !info()!.dirty}>
+					<Show when={info() !== undefined && info()!.linked && !info()!.dirty}>
 						<p class="danger-confirm-body">
-							Delete the worktree owned by omp-web
+							Delete the worktree
 							{daemon() ? (
 								<>
 									{" "}
