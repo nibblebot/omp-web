@@ -3,8 +3,8 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import type { Plugin, Rollup } from "vite";
-import type { FeatureId } from "../features/manifest";
-import { FEATURE_IDS, isFeatureId } from "../features/manifest";
+import type { FeatureId } from "../features/manifest.ts";
+import { FEATURE_IDS, isFeatureId } from "../features/manifest.ts";
 
 /** File name of the emitted size manifest, relative to the dist root. */
 export const FEATURE_SIZES_FILE = "feature-sizes.json";

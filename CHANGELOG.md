@@ -23,6 +23,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Fleet: spawned sessions run detached, so a terminal Ctrl+C never reaches them; their stdout and stderr go to `session-logs/<daemonId>.log` beside the state file (not rotated). The Debug panel shows each session's callback pair state instead of a connector column.
 
 ### Fixes
+- Vite: explicit extensions in config imports eliminate native-config compatibility warnings during `bun dev`.
 - Sessions: a browser attached through the callback pair gets the transcript again, on attach and after New session, switch, branch, and every other transcript-replacing call (the pair primed and resynced without `history` frames, so the old transcript stayed on screen and re-attaching showed it empty). History frames are paced against the pair's outbound buffer and bounded to fit one callback envelope.
 - Transcript: `!`/`$` shell and python runs render from history as settled cards (command, output, exit code, dimmed for `!!`/`$$`), so they survive reloads, re-attaches, and session switches instead of vanishing.
 - Subagents: the worker hub lists live subagents again (it filtered by the SDK session uuid instead of the attached handle, so it opened empty while the status bar counted them); rows and the focused worker header show the spawned subagent name beside its agent type, in-flight glyphs spin, and progress updates key on the subagent id so equal indexes from separate task calls no longer merge and status/task changes re-render.

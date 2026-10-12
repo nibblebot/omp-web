@@ -1,4 +1,4 @@
-import type { ModalName } from "../state";
+import type { ModalName } from "../state.ts";
 
 /**
  * Static feature manifest: the only feature metadata the entry chunk carries.

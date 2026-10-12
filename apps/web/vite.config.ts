@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import solidPlugin from "vite-plugin-solid";
-import { featureSizes } from "./build/feature-sizes";
+import { featureSizes } from "./build/feature-sizes.ts";
 
 // Web root: this config lives at apps/web/vite.config.ts. Root is set
 // explicitly (vite defaults root to the invoking cwd, not the config dir),
