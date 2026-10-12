@@ -42,6 +42,7 @@ import { CollabHostAdapter } from "./collab-host";
 import { createRelay, type RelayHandle, type RelaySocketData } from "./collab-relay";
 import { createCollabSession } from "./collab-session";
 import { createDaemonBroker } from "./daemon-broker";
+import { buildServerCapabilities } from "./capabilities";
 import { createWebMethods } from "./methods";
 import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
 import { loginWithCallbacks } from "./login";
@@ -217,6 +218,10 @@ const daemonBroker = createDaemonBroker({
 	config,
 	getReadyAt: () => readyAt,
 	getWebState: (session) => ({
+		capabilities: buildServerCapabilities({
+			methods: METHODS,
+			cwd: session.sessionManager.getCwd(),
+		}),
 		sessionScope: {
 			workspaceId: attachmentWorkspace,
 			sessionId: session.sessionId,
