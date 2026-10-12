@@ -620,6 +620,19 @@ export function loadHistory(messages: AgentMessage[]): void {
 					...(images.length > 0 ? { images } : {}),
 				});
 			}
+		} else if (msg.role === "bashExecution" || msg.role === "pythonExecution") {
+			// `!`/`$` runs: the same card the live call renders, settled.
+			items.push({
+				kind: "bash",
+				id: nextChatId(),
+				command: msg.role === "bashExecution" ? msg.command : msg.code,
+				dimmed: msg.excludeFromContext === true,
+				lang: msg.role === "bashExecution" ? "bash" : "python",
+				status: "done",
+				output: capTail(msg.output, 8000),
+				exitCode: msg.exitCode ?? null,
+				truncated: msg.truncated,
+			});
 		} else {
 			// Advisor cards render inline like the TUI; other custom/developer
 			// messages stay hidden.
@@ -1438,7 +1451,7 @@ export function connect(): void {
 				// Finding #61: the browser enforces OMP_PROTO too. A bare
 				// session daemon leads its priming with hello_ok; the fleet edge
 				// forwards the (pipe-gated) hello_ok. A mismatch is terminal;
-				// mirror the connector's fail-closed semantics: surface the
+				// fail closed: surface the
 				// error, tear the stream down, and do NOT schedule the
 				// reconnect (the backoff loop in onerror would otherwise hot-loop
 				// against an undrivable daemon).

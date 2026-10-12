@@ -1,8 +1,8 @@
 /**
- * CLI end-to-end tests for fleet/server.ts ("CLI" describe): the omp-fleet
- * subcommands exercised in-process against a booted fleet (sessions table,
- * parse-error exits) plus one true end-to-end Bun.spawn'd serve + sessions
- * pair against a seeded state copy.
+ * CLI end-to-end tests for fleet/server.ts ("CLI" describe): the omp-web
+ * fleet subcommands exercised in-process against a booted fleet (sessions
+ * table, parse-error exits) plus one true end-to-end Bun.spawn'd bare start +
+ * sessions pair against a seeded state copy.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -47,8 +47,6 @@ describe("CLI", () => {
 			project: "fake-proj",
 			labels: ["env=test"],
 			mode: "remote",
-			endpoint: "ws://127.0.0.1:1",
-			token: "t",
 			status: "asleep",
 		});
 		server = await startFleet({
@@ -82,6 +80,47 @@ describe("CLI", () => {
 		expect(output).toContain("env=test");
 	});
 
+	test("main(['enroll']) registers a remote entry and prints the session command", async () => {
+		const { code, logs } = await captureMain([
+			"enroll",
+			"edge-box",
+			"--label",
+			"env=prod",
+			"--cwd",
+			"/srv/app",
+			"--callback-url",
+			"https://fleet.example/callback",
+			"--port",
+			String(server.port),
+		]);
+		expect(code).toBe(0);
+		const entry = server.registry.list().find((e) => e.name === "edge-box");
+		expect(entry?.mode).toBe("remote");
+		expect(entry?.labels).toEqual(["env=prod"]);
+		const daemonId = entry?.daemonId;
+		const generation = entry?.workspace?.enrollment?.generation;
+		expect(logs[0]).toBe(`enrolled ${daemonId} (edge-box); run on the session host:`);
+		const token = /^OMP_SESSION_CALLBACK_TOKEN=([0-9a-f]{64}) /.exec(logs[1] ?? "")?.[1];
+		expect(token).toBeDefined();
+		expect(logs[1]).toBe(
+			`OMP_SESSION_CALLBACK_TOKEN=${token} omp-web session --cwd /srv/app --port 0 --callback-url https://fleet.example/callback --callback-workspace ${daemonId} --callback-generation ${generation}`,
+		);
+	});
+
+	test("enroll over a loopback http callback URL adds --callback-allow-http", async () => {
+		const { code, logs } = await captureMain([
+			"enroll",
+			"local-box",
+			"--callback-url",
+			"http://127.0.0.1:4722/callback",
+			"--port",
+			String(server.port),
+		]);
+		expect(code).toBe(0);
+		expect(logs[1]).toMatch(/ --callback-allow-http$/);
+		expect(logs[1]).toContain("--cwd . --port 0");
+	});
+
 	test("main with a refused connection exits 1 with the not-running message", async () => {
 		// Find a port with no listener: bind and release a server first.
 		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("x") });
@@ -98,7 +137,7 @@ describe("CLI", () => {
 		} finally {
 			console.error = originalError;
 		}
-		expect(errors.join("\n")).toContain("fleet not running. Start it: omp-fleet serve");
+		expect(errors.join("\n")).toContain("omp-web not running. Start it: omp-web");
 	});
 
 	test("usage no longer advertises the removed --fan-out flag (audit #26)", async () => {
@@ -155,14 +194,14 @@ describe("CLI", () => {
 		expect(errors.join("\n")).toContain("missing value for --port");
 	});
 
-	test("CLI serve + sessions end-to-end via Bun.spawn", async () => {
+	test("CLI bare serve + sessions end-to-end via Bun.spawn", async () => {
 		// The describe's in-process fleet holds the state lock on statePath;
 		// a second fleet on the SAME path now fails loudly (that is the lock's
 		// contract). Serve reads a copy of the seeded state instead, so the
 		// e2e flow (serve boots + sessions lists the seeded roster) still runs.
 		const serveStatePath = join(tmp, "serve-state.json");
 		copyFileSync(statePath, serveStatePath);
-		const serve = Bun.spawn(["bun", "apps/fleet/cli.ts", "serve", "--port", "0"], {
+		const serve = Bun.spawn(["bun", "apps/fleet/cli.ts", "--port", "0"], {
 			cwd: join(import.meta.dir, "..", "..", ".."),
 			env: { ...process.env, OMP_FLEET_STATE: serveStatePath, OMP_FLEET_CONFIG: configPath },
 			stdout: "pipe",
@@ -192,9 +231,90 @@ describe("CLI", () => {
 			if (serve.exitCode === null) serve.kill("SIGKILL");
 		}
 	});
+
+	test("control serves the API with no UI and rejects --open", async () => {
+		const cwd = join(import.meta.dir, "..", "..", "..");
+		const controlStatePath = join(tmp, "control-state.json");
+		copyFileSync(statePath, controlStatePath);
+		const env = { ...process.env, OMP_FLEET_STATE: controlStatePath, OMP_FLEET_CONFIG: configPath };
+		const control = Bun.spawn(["bun", "apps/fleet/cli.ts", "control", "--port", "0"], {
+			cwd,
+			env,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		try {
+			const port = await readListeningPort(control.stdout, 10_000);
+			const root = await fetch(`http://127.0.0.1:${port}/`);
+			expect(root.status).toBe(404);
+			expect(await root.json()).toEqual({
+				error: "this omp-web control plane serves no UI; run: omp-web ui",
+			});
+			const sessions = Bun.spawn(["bun", "apps/fleet/cli.ts", "sessions", "--port", String(port)], {
+				cwd,
+				env,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const out = await readAll(sessions.stdout);
+			expect(await sessions.exited).toBe(0);
+			expect(out).toContain(seeded.daemonId);
+		} finally {
+			control.kill("SIGKILL");
+			await control.exited;
+		}
+	});
+
+	test("control rejects --open because it serves no UI", async () => {
+		const child = Bun.spawn(["bun", "apps/fleet/cli.ts", "control", "--port", "0", "--open"], {
+			cwd: join(import.meta.dir, "..", "..", ".."),
+			env: { ...process.env, OMP_FLEET_CONFIG: configPath },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const errText = await readAll(child.stderr);
+		expect(await child.exited).toBe(1);
+		expect(errText).toContain("omp-web ui --open");
+	});
+
+	test("ui exits 1 with a clear error when its port is taken", async () => {
+		const taken = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("x") });
+		try {
+			const child = Bun.spawn(
+				["bun", "apps/fleet/cli.ts", "ui", "--port", String(taken.port), "--control-port", "1"],
+				{
+					cwd: join(import.meta.dir, "..", "..", ".."),
+					env: { ...process.env, OMP_FLEET_CONFIG: configPath },
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			const errText = await readAll(child.stderr);
+			expect(await child.exited).toBe(1);
+			expect(errText).toContain(`port ${taken.port} is in use`);
+		} finally {
+			taken.stop(true);
+		}
+	});
+
+	test("ui prints its banner naming the control plane it proxies", async () => {
+		const ui = Bun.spawn(["bun", "apps/fleet/cli.ts", "ui", "--port", "0", "--control-port", "1"], {
+			cwd: join(import.meta.dir, "..", "..", ".."),
+			env: { ...process.env, OMP_FLEET_CONFIG: configPath },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		try {
+			const port = await readListeningPort(ui.stdout, 10_000);
+			expect(port).toBeGreaterThan(0);
+		} finally {
+			ui.kill("SIGKILL");
+			await ui.exited;
+		}
+	});
 });
 
-/** Read the spawned `serve` stdout until it reports its listening port. */
+/** Read the spawned serve/control/ui stdout until its banner reports the listening port. */
 async function readListeningPort(
 	stream: ReadableStream<Uint8Array>,
 	timeoutMs: number,
@@ -214,7 +334,7 @@ async function readListeningPort(
 			} | null;
 			if (result === null || result.done) break;
 			buffer += decoder.decode(result.value, { stream: true });
-			const match = /fleet listening on 127\.0\.0\.1:(\d+)/.exec(buffer);
+			const match = /omp-web(?: control| ui)? listening on http:\/\/localhost:(\d+)/.exec(buffer);
 			if (match) return Number(match[1]);
 		}
 	} finally {
@@ -233,4 +353,18 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 		buffer += decoder.decode(value, { stream: true });
 	}
 	return buffer;
+}
+
+/** Run `main` with console.log captured; returns the exit code and each printed line. */
+async function captureMain(argv: string[]): Promise<{ code: number; logs: string[] }> {
+	const logs: string[] = [];
+	const originalLog = console.log;
+	console.log = (msg?: unknown) => {
+		logs.push(String(msg));
+	};
+	try {
+		return { code: await main(argv), logs };
+	} finally {
+		console.log = originalLog;
+	}
 }

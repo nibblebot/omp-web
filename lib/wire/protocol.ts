@@ -201,7 +201,7 @@ export interface SettingsModel {
 
 export const OMP_PROTO = 2;
 
-// --- SSE framing constants (shared by daemon, fleet connector, and edge) ---
+// --- SSE framing constants (shared by the daemon and the fleet) ---
 
 /** SSE event field carrying every ServerFrame. */
 export const SSE_EVENT_NAME = "frame";
@@ -269,12 +269,12 @@ export const OMP_SESSION_EXIT_SESSION_LOCKED = 77;
  * The `OMP_SESSION|` stdout contract lines (R6b). omp-session prints
  * `listening` immediately after bind, before session creation; a remote
  * wrapper MAY print `endpoint` when the reachable address differs from the
- * bind.
+ * bind. The line is informational for whoever launched the daemon (the
+ * terminal, a supervisor, or the session log); the fleet does not parse it.
  *
  * NOTE: the advertised `url` is ws-shaped (`ws://host:port`) for legacy
- * reasons; OMP_PROTO 2 is plain HTTP SSE, and the fleet's dial path
- * normalizes the scheme via daemonHttpBase (fleet/connector.ts). Consumers
- * must never treat it as a WebSocket endpoint.
+ * reasons; OMP_PROTO 2 is plain HTTP SSE. Consumers must never treat it as a
+ * WebSocket endpoint.
  */
 export type StdoutContractLine =
 	| { event: "listening"; bind: string; port: number; url: string; advertise?: string }
@@ -357,7 +357,7 @@ export interface DaemonEntry {
 		linesDeleted?: number;
 	};
 	labels: string[];
-	mode: "spawned" | "attached" | "remote";
+	mode: "spawned" | "remote";
 	status: DaemonStatus;
 	lastSessionFile?: string;
 	/** Title of the daemon's last session file (source: fleet edge roster, probed from the

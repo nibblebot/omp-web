@@ -17,8 +17,8 @@
  *
  *  3. busy / disconnected is not idle-stopped: a clone workspace's compute
  *     is provider-owned (never a supervisor child); the fleet is the SOLE
- *     idle-stop authority; no legacy supervisor idle path, connector
- *     disconnect, or registry downgrade may stop a desired-running clone.
+ *     idle-stop authority; no legacy supervisor idle path, callback pair drop, or
+ *     registry downgrade may stop a desired-running clone.
  *
  * Fixtures: a real local git repo for the clone source, a scripted fake
  * provider executable speaking OMP_PROVIDER_PROTO (stdin request / stdout

@@ -17,11 +17,25 @@ Because it drives the agent through the SDK instead of the RPC, omp-web has full
 - **Manage repos and worktrees from the UI.** Register projects (deduped by realpath); create or adopt managed worktrees. Managed worktrees delete safely: clean-tree-only, `git branch -d`, no `--force`.
 - **CLI for automation.** Spawn, stop, remove, inspect, and fan a prompt out to many daemons from the terminal, the same fleet the browser talks to.
 - **Self-updating.** `omp-web update` checks GitHub Releases and installs a newer release when available.
-- **Self-healing.** Idle daemons exit after 30 minutes by default and are respawned on demand; crashed daemons restart with bounded backoff; dropped connections show `reconnecting` and browsers re-attach automatically.
+- **Self-healing.** Sessions dial out to the control plane and redial it after a restart or a dropped connection; a session with no control plane for 10 minutes shuts itself down. Idle daemons exit after 30 minutes by default and are respawned on demand; crashed daemons restart with bounded backoff; browsers re-attach automatically.
 
 ## Runtime
 
-`omp-web` (bare, or `omp-web serve`) runs the fleet: registry, supervisor, and the web UI it serves on one port, loopback by default, proxying the browser through to whichever session daemon you select. `omp-web session` runs one session daemon (one process, one bound directory, one live agent session, wire API only, no web UI): the fleet spawns these by default with a local template, and you run one by hand on a remote host for the fleet to dial in. Non-loopback fleet service requires browser authentication; non-loopback session daemons require a token.
+`omp-web` runs the fleet in one process: registry, supervisor, and the web UI, on one port. The split form runs the two halves as separate processes: the control plane alone, and a UI process that serves the web UI and proxies its API calls to the control plane.
+
+```sh
+omp-web [--port n] [--open]                          # control plane + UI on http://localhost:4722
+omp-web control [--port n]                           # split: control plane only, no UI (default 4722)
+omp-web ui [--port n] [--control-port n] [--open]    # split: UI on 4723, proxying to the control plane on 4722
+```
+
+Everything binds loopback (127.0.0.1) by default; expose the UI port through your own reverse proxy (for example `tailscale serve` or NetBird). `--open` launches the browser at the UI once it is up (not available on `control`). `--port` selects the listen port; `OMP_FLEET_PORT` selects the default control-plane port. Startup prints one line, `omp-web listening on http://localhost:<port> (<N> sessions)` (`omp-web control listening on …` and `omp-web ui listening on … (control :<port>)` for the split form), then only warnings and errors; `--verbose` adds the state and config paths and every lifecycle event.
+
+Sessions dial out: each session daemon connects to the control plane over the callback pair (an NDJSON upload and an SSE downlink), and the control plane never opens a connection into a session. Sessions behind NAT, in a sandbox, or in a Kubernetes pod with no inbound traffic work the same way. Ctrl+C on `omp-web` or `omp-web control` stops the control plane only; sessions keep running, including a turn in progress, and redial the next control plane with the same credential. Restart the control plane on the same port: a session keeps dialing the address it was given. After a restart, entries show `reconnecting`, then `ready` once their session redials; one that has not redialed within 45 seconds is shown `asleep`. A session with no control plane for 10 minutes (`--control-grace`, or `OMP_SESSION_CONTROL_GRACE`; `0` disables) shuts itself down gracefully, and one whose credential the fleet rejects (revoked, or superseded by a newer generation) shuts down at once. A spawned session that is asleep wakes on attach or prompt, resuming its last transcript; if the previous process is still alive somewhere (for example dialing an old port), the wake fails with "locked by another omp-session" until that process exits or is stopped. `omp-web stop <selector>` asks a session to shut down, terminates a local one, and revokes its credential.
+
+`omp-web session` runs one session daemon (one process, one bound directory, one live agent session, wire API only, no web UI). The fleet spawns local sessions with the default local template; a remote session is enrolled and started on its own host (see below). Callback URLs must be https, except loopback http with `--callback-allow-http`. Non-loopback fleet service requires browser authentication.
+
+Remote sessions: `omp-web enroll <name> [--label k=v] [--cwd dir] [--callback-url url]` creates the roster entry and prints the command to run on the session host, which carries the session's credential. The fleet stores only a digest of that credential. `--callback-url` defaults to the control plane's own `/callback` address (or `OMP_FLEET_CALLBACK_URL`); when the host reaches the control plane through a reverse proxy, point the URL at that proxy. The split UI port proxies `/callback` too. `omp-web provision <name>` runs the configured spawn hook with `OMP_HOOK_NAME`, `OMP_HOOK_LABELS`, and the `OMP_SESSION_CALLBACK_*` variables; the hook succeeds when it exits 0. Local sessions are not mirrored: their transcripts stay on this host (`OMP_SESSION_LOG_MIRROR=0`).
 
 Session daemons are disposable processes; the durable truth is the session `.jsonl` transcript on disk.
 
@@ -30,7 +44,8 @@ Session daemons are disposable processes; the durable truth is the session `.jso
 ```mermaid
 flowchart TB
   browser["Web UI (Solid.js)"]
-  fleet["<b>omp-web</b> <br/>serves web UI, registry, supervisor, proxy"]
+  fleet["<b>omp-web</b> / <b>omp-web control</b><br/>registry, supervisor, proxy; bare form also serves the web UI"]
+  uiproc["<b>omp-web ui</b> (split form)<br/>serves the web UI, proxies to the control plane"]
   model["Model provider"]
   log["session .jsonl, durable truth"]
 
@@ -40,7 +55,9 @@ flowchart TB
   end
 
   browser <-->|"SSE + POST"| fleet
-  fleet <-->|"proxied SSE + POST"| daemons
+  browser <-.->|"split form"| uiproc
+  uiproc <-.->|"SSE + POST"| fleet
+  daemons -->|"callback pair (session dials out)"| fleet
   daemons <--> model
   daemons -.-> log
 ```
@@ -67,7 +84,7 @@ The installer downloads the latest release tarball, verifies its sha256 against 
 omp-web --version
 ```
 
-Run `omp-web` to start the fleet and open its printed UI URL. Register a repository in the UI, start or select a session, and send a prompt. Local sessions use your ordinary SDK credentials.
+Run `omp-web --open` to start the fleet and open the UI in your browser (or run `omp-web` and open its printed URL). Register a repository in the UI, start or select a session, and send a prompt. Local sessions use your ordinary SDK credentials.
 
 ## Self-update
 
@@ -78,7 +95,9 @@ omp-web update --version x.y.z          # select a specific newer release
 omp-web update --force --version x.y.z  # reinstall or downgrade to a specific release
 ```
 
-`--version` selects a release for this invocation, not a durable pin; a future bare update still checks the latest release. Restart the running fleet after updating.
+`--version` selects a release for this invocation, not a durable pin; a future bare update still checks the latest release. After updating, stop the running control plane (Ctrl+C) and start it again. Running sessions survive that restart on the code they started with; `omp-web stop all` ends them so the next attach or prompt starts them on the new release.
+
+Upgrading from a release before sessions dialed out: entries added with the removed `omp-web add <url>` cannot connect any more; remove them (`omp-web remove <selector>`) and enroll the host again with `omp-web enroll`. Spawned entries need nothing; they enroll on their next start.
 
 ## Configuration and State
 
@@ -86,7 +105,8 @@ omp-web update --force --version x.y.z  # reinstall or downgrade to a specific r
 - `config.json`: fleet config, loaded read-only; only the interactive first-run offer and operator edits write it. Keys include `templates` (spawn commands), `workspaceDir`, `bind`, `browserAccessToken` (a sha-256 digest, not plaintext), `browserOrigin`, and `trustedProxies`. `OMP_FLEET_CONFIG` selects a different file. Flags such as `--bind`/`--browser-access-token` and env `OMP_FLEET_BIND`/`OMP_FLEET_BROWSER_TOKEN` override file keys; CLI/env browser tokens are plaintext inputs hashed in memory.
 - `fleet-state.json`: roster and registered projects, with atomic writes and an exclusive lifetime pidfile lock. Defaults beside the selected config; `OMP_FLEET_STATE` selects another path.
 - `workspaces/`: default managed-worktree root, created as needed or during accepted first-run setup. `--workspace-dir`, `OMP_FLEET_WORKSPACE_DIR`, or config `workspaceDir` select another root independently of config and state.
-- `logs/` beside the state file: durable lineage-file mirrors streamed over enrolled callback pairs when the fleet log store is available. Default local/template daemons keep transcripts in their SDK session directory and are not automatically mirrored.
+- `logs/` beside the state file: durable lineage-file mirrors streamed over enrolled callback pairs when the fleet log store is available. Local spawned sessions are not mirrored; their transcripts stay in their SDK session directory.
+- `session-logs/<daemonId>.log` beside the state file: stdout and stderr of each locally spawned session, appended across restarts and never rotated (`/ctl/sessions/<id>/stderr` and the Debug panel show the last 64 KiB). Delete a file to reclaim space; the next launch recreates it.
 
 Interactive first run can choose a data home and write `config.json` there. If you choose a non-default location, set `OMP_FLEET_CONFIG` to that file for subsequent launches. Config, state, and workspace paths can be configured separately; installed code remains in its installation prefix.
 
@@ -97,7 +117,7 @@ bun install
 bun run dev                # Vite HMR + fleet; open the printed ui URL; no managed auth broker
 ```
 
-Dev auto-opens the browser for interactive graphical local runs; `--open`/`--no-open` override this. Use the printed `ui` URL, not the fleet's potentially stale `dist/` UI. Restart dev-spawned daemons after server edits; they are not watched.
+Dev auto-opens the browser for interactive graphical local runs; `--open`/`--no-open` override this. Use the printed `ui` URL, not the fleet's potentially stale `dist/` UI. The dev fleet listens on a stable per-worktree port so dev-spawned sessions, which outlive a dev restart, redial it; if that port is taken it picks a free one and says so, and surviving sessions then cannot reconnect until they hit their grace or are stopped. Restart dev-spawned daemons after server edits (`bun run fleet stop all --port <fleet port>` with the port from the dev summary, or stop them from the UI); they are not watched.
 
 Source imports into `lib/` use extensionless `#lib/<path below lib/>`, such as `#lib/wire/protocol`, through root `package.json`'s imports mapping. Keep local imports such as `./helpers` relative. Shared libraries are closed: their repository imports stay inside `lib/`, with no library cycles, enforced by `bun run lint`.
 
@@ -123,7 +143,7 @@ omp-web sessions                    # roster
 omp-web projects                    # registered projects
 omp-web spawn <path>                 # start a daemon on a directory
 omp-web add-repo <path> [--start]    # register a project (deduped on realpath)
-omp-web add <name> <url> [--token <t>] [--cwd <path>]   # register an external daemon
+omp-web enroll <name> [--label k=v] [--cwd dir] [--callback-url url]   # enroll a remote session; prints its run command
 omp-web provision <name> [--label k=v]                  # enroll via the configured spawn hook
 omp-web add-worktree <project> <name> [--no-start]      # create a managed worktree
 omp-web add-worktree <project> --existing <path>        # adopt an existing one
@@ -134,7 +154,7 @@ omp-web rm-worktree <daemon-id> [--delete-branch]
 omp-web prompt <selector> <text> [--wait <ms>]
 ```
 
-`stop`, `remove`, and `prompt` selectors accept `all`, an exact daemon ID, `label:k=v` (also `tag:k=v`), `project:name`, or name globs with `*` and `?`; quote globs to prevent shell expansion. Project arguments accept a registered project ID, path/realpath, or basename. Control commands connect to loopback; `--port` or `OMP_FLEET_PORT` selects the fleet port (default 4722).
+`stop`, `remove`, and `prompt` selectors accept `all`, an exact daemon ID, `label:k=v` (also `tag:k=v`), `project:name`, or name globs with `*` and `?`; quote globs to prevent shell expansion. Project arguments accept a registered project ID, path/realpath, or basename. Control commands connect to loopback; `--port` or `OMP_FLEET_PORT` selects the fleet port (default 4722). `prompt` to an asleep spawned session wakes it first; a remote session must already be connected.
 
 `prompt` submits without waiting unless `--wait <ms>` supplies a result timeout.
 

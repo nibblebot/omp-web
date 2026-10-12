@@ -1,275 +1,307 @@
 /**
  * Fleet edge realtime daemon-activity tests: per-daemon
- * {type:"daemon_activity"} derivation (state → streaming, ui_request /
- * ui_request_end → blocked) and the browser-gated retain-all that keeps every
- * READY daemon's connector stream live (suspending its idle auto-exit) while
- * ≥1 browser /events stream is open. Standalone per-test edge mounts over a
- * FAKE pipe daemon, same hermetic pattern as edge-pipe.test.ts.
+ * {type:"daemon_activity"} frames derived from the frames each session
+ * mirrors onto its callback pair's control stream (state -> streaming,
+ * ui_request / ui_request_end -> blocked). The only daemon is the shared
+ * callback-pair fake dialing OUT to a real DaemonTransportRegistry; the
+ * fleet never dials a session.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { tempDir } from "#lib/testkit/temp-dir.testkit";
+import { afterAll, describe, expect, test } from "bun:test";
+import { CALLBACK_CONTROL_STREAM_ID } from "#lib/wire/callback-protocol";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonConnector } from "../connector";
+import { DaemonTransportRegistry } from "../daemon-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
 import { Registry } from "../registry";
 import { SpawnSupervisor } from "../supervisor";
+import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
 import {
 	FAKE_CWD,
-	FAKE_TOKEN,
+	FAKE_STATE,
 	openBrowser,
-	serveEdge,
 	sleep,
-	startPipeFake,
 	waitFor,
-	type PipeFake,
+	type BrowserSocket,
 } from "./edge.testkit";
 
-/** Collect only the browser's daemon_activity frames for one daemon. */
-function activityFrames(
-	browser: { frames: unknown[] },
-	daemonId: string,
-): Array<{ streaming: boolean; blocked: boolean }> {
-	return browser.frames.filter(
-		(f): f is { type: "daemon_activity"; daemonId: string; streaming: boolean; blocked: boolean } =>
-			typeof f === "object" &&
-			f !== null &&
-			(f as { type?: string }).type === "daemon_activity" &&
-			(f as { daemonId?: string }).daemonId === daemonId,
+afterAll(cleanupTempDirs);
+
+/** One browser's daemon_activity frames for one daemon, in arrival order. */
+function activityFrames(browser: BrowserSocket, daemonId: string) {
+	return browser.frames.flatMap((f) =>
+		f.type === "daemon_activity" && f.daemonId === daemonId ? [f] : [],
 	);
 }
 
-describe("edge realtime daemon activity (browser-gated retain-all)", () => {
-	/** Build a registry + connector + ready daemon + edge over one fake pipe daemon. */
+function stateFrame(isStreaming: boolean) {
+	return { type: "state", state: { ...FAKE_STATE, isStreaming } };
+}
+
+function dialogOpen(id: string) {
+	return { type: "ui_request", id, method: "confirm", params: {} };
+}
+
+function dialogEnd(id: string) {
+	return { type: "ui_request_end", id };
+}
+
+describe("edge realtime daemon activity (callback control stream)", () => {
+	/** Registry + transport + edge on one port serving both /callback and the edge routes. */
 	async function setup() {
 		const tmp = tempDir("omp-web-edge-activity-");
-		const registry = new Registry(join(tmp, "state.json"));
+		const statePath = join(tmp, "state.json");
+		const registry = new Registry(statePath);
 		await registry.load();
-		const connector = new DaemonConnector(registry, undefined, {
-			backoffMinMs: 10,
-			backoffMaxMs: 50,
-			idleDropMs: 60_000,
-		});
-		const daemon = startPipeFake({ heartbeatMs: 30 });
-		const entry = registry.create({
-			name: "act",
-			cwd: FAKE_CWD,
-			project: "fake-proj",
-			labels: [],
-			mode: "remote",
-			endpoint: daemon.url,
-			token: FAKE_TOKEN,
-			status: "connecting",
-		});
 		const config: FleetConfig = {
-			templates: {},
+			templates: { local: { command: "true" } },
 			defaultTemplate: "local",
-			workspaceDir: "/tmp/fleet-test-ws",
+			workspaceDir: join(tmp, "workspaces"),
 			bind: "127.0.0.1",
 		};
-		const supervisor = new SpawnSupervisor(registry, connector, config);
-		// Count retain/release so the tests assert the lifecycle (exactly-once).
-		let retains = 0;
-		let releases = 0;
-		const origRetain = connector.retain.bind(connector);
-		connector.retain = (daemonId: string) => {
-			retains++;
-			origRetain(daemonId);
-		};
-		const origRelease = connector.release.bind(connector);
-		connector.release = (daemonId: string) => {
-			releases++;
-			origRelease(daemonId);
-		};
-		const edge = new FleetEdge(
-			{
-				registry,
-				connector,
-				supervisor,
-				config,
-				eventLog: new FleetEventLog(),
-				fleet: {
-					port: 0,
-					startedAt: Date.now(),
-					statePath: "/tmp/fleet-test-state.json",
-					configPath: null,
-					bind: "127.0.0.1",
-				},
-			},
-			{ silenceDeadlineMs: 200, pipeBackoffMinMs: 10, pipeBackoffMaxMs: 50, pipeMaxRedials: 8 },
-		);
-		const served = serveEdge(edge);
+		const transport = new DaemonTransportRegistry();
+		const supervisor = new SpawnSupervisor(registry, config, {
+			transport,
+			statePath,
+			callbackUrl: () => "https://fleet.test/callback",
+		});
+		const edge = new FleetEdge({
+			registry,
+			supervisor,
+			config,
+			eventLog: new FleetEventLog(),
+			transport,
+			fleet: { port: 0, startedAt: Date.now(), statePath, configPath: null, bind: "127.0.0.1" },
+		});
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: async (req) =>
+				(await transport.handleFetch(req)) ??
+				(await edge.handleFetch(req)) ??
+				new Response("not found", { status: 404 }),
+		});
+		const port = server.port;
+		if (port === undefined) throw new Error("edge test server bound no port");
+		const url = `http://127.0.0.1:${port}`;
+		const daemons: CallbackDaemon[] = [];
+		const browsers: BrowserSocket[] = [];
 		return {
 			registry,
-			connector,
-			supervisor,
-			daemon,
-			entry,
 			edge,
-			served,
-			counts: () => ({ retains, releases }),
+			port,
+			/** A paired, ready spawned (non-clone) roster entry and its connected callback daemon. */
+			async addDaemon(name: string) {
+				const entry = registry.create({
+					name,
+					cwd: FAKE_CWD,
+					project: "fake-proj",
+					labels: [],
+					mode: "spawned",
+					status: "ready",
+				});
+				const token = randomBytes(32).toString("hex");
+				transport.enrollWorkspace(entry.daemonId, 1, token);
+				const daemon = startCallbackDaemon({
+					url,
+					workspaceId: entry.daemonId,
+					generation: 1,
+					token,
+				});
+				daemons.push(daemon);
+				await daemon.waitConnected();
+				return { entry, daemon };
+			},
+			async browser() {
+				const browser = await openBrowser(port);
+				browsers.push(browser);
+				await browser.waitForFrame((f) => f.type === "roster", "roster priming");
+				return browser;
+			},
+			async teardown() {
+				for (const browser of browsers) browser.close();
+				for (const daemon of daemons) await daemon.stop();
+				edge.close();
+				await supervisor.close();
+				transport.close();
+				server.stop(true);
+			},
 		};
 	}
 
-	async function ready(s: Awaited<ReturnType<typeof setup>>) {
-		s.connector.connect(s.entry.daemonId);
-		await s.connector.waitReady(s.entry.daemonId, 3000);
-		expect(s.registry.get(s.entry.daemonId)?.status).toBe("ready");
-	}
-
-	async function teardown(s: Awaited<ReturnType<typeof setup>>) {
-		s.edge.close();
-		await s.supervisor.close();
-		await s.connector.close();
-		s.daemon.close();
-		s.served.stop();
-	}
-
-	test("a browser stream open retains + dials every READY daemon; closing releases it exactly once", async () => {
+	test("state / ui_request / ui_request_end derive streaming+blocked; unchanged values emit nothing", async () => {
 		const s = await setup();
 		try {
-			await ready(s);
-			expect(s.counts().retains).toBe(0);
-			// Open a browser: the ready daemon is retained + kept dialed.
-			const browser = await openBrowser(s.served.port);
-			await browser.waitForFrame((f) => f.type === "roster", "roster priming");
-			expect(s.counts().retains).toBe(1);
-			expect(s.connector.isConnected(s.entry.daemonId)).toBe(true);
-			// A second browser must not double-retain (guarded re-entry).
-			const browser2 = await openBrowser(s.served.port);
-			await browser2.waitForFrame((f) => f.type === "roster", "roster priming");
-			expect(s.counts().retains).toBe(1);
-			// Last browser closes → every retain released (idle-drop re-armed).
-			browser.close();
-			browser2.close();
-			await waitFor(() => (s.counts().releases === 1 ? "released" : null), 3000, "released");
-			expect(s.counts().releases).toBe(1);
-		} finally {
-			await teardown(s);
-		}
-	});
+			const { entry, daemon } = await s.addDaemon("act");
+			// Nothing derivable yet: activity unknown, but the pair is live.
+			expect(s.edge.daemonActivity(entry.daemonId)).toMatchObject({ known: false, live: true });
+			const browser = await s.browser();
+			expect(activityFrames(browser, entry.daemonId)).toHaveLength(0);
 
-	test("state / ui_request / ui_request_end derive streaming+blocked; repeat values emit no duplicate frame", async () => {
-		const s = await setup();
-		try {
-			await ready(s);
-			const browser = await openBrowser(s.served.port);
-			await browser.waitForFrame((f) => f.type === "roster", "roster priming");
-			// Every wait targets the frame COUNT: value predicates would match
-			// stale earlier frames (blocked:true looks identical across opens)
-			// and race ahead of SSE delivery.
-			const count = () => activityFrames(browser, s.entry.daemonId).length;
-			const last = () => activityFrames(browser, s.entry.daemonId).at(-1);
-			const waitCount = async (n: number, what: string) => {
-				await waitFor(() => (count() === n ? "ok" : null), 3000, what);
-			};
-			const open = count(); // priming may already carry a known value
-			// state → streaming:true (unknown→known counts as a change).
-			s.daemon.emitDelta({
-				type: "state",
-				state: { sessionId: "s1", isStreaming: true, controlRecordCount: 0 } as never,
-			});
-			await waitCount(open + 1, "streaming activity");
-			expect(last()).toMatchObject({ streaming: true, blocked: false });
-			// ui_request → blocked:true.
-			s.daemon.emitDelta({ type: "ui_request", id: "r1", method: "confirm", params: {} });
-			await waitCount(open + 2, "blocked activity");
-			expect(last()).toMatchObject({ streaming: true, blocked: true });
-			// ui_request_end → blocked:false.
-			s.daemon.emitDelta({ type: "ui_request_end", id: "r1" });
-			await waitCount(open + 3, "unblocked activity");
-			expect(last()).toMatchObject({ streaming: true, blocked: false });
-			// Repeats of the same values must NOT emit another frame; only the
-			// re-open (a genuine change) does.
-			s.daemon.emitDelta({
-				type: "state",
-				state: { sessionId: "s1", isStreaming: true, controlRecordCount: 1 } as never,
-			});
-			s.daemon.emitDelta({ type: "ui_request_end", id: "r1" }); // already closed
-			s.daemon.emitDelta({ type: "ui_request", id: "r1", method: "confirm", params: {} }); // re-open → blocked:true (a change!)
-			await waitCount(open + 4, "re-block broadcast");
-			expect(last()).toMatchObject({ streaming: true, blocked: true });
-		} finally {
-			await teardown(s);
-		}
-	});
-
-	test("a new browser stream primes the current known activity for a ready daemon", async () => {
-		const s = await setup();
-		try {
-			await ready(s);
-			// Derive activity BEFORE any browser opens (no broadcast with no clients).
-			s.daemon.emitDelta({
-				type: "state",
-				state: { sessionId: "s1", isStreaming: true, controlRecordCount: 0 } as never,
-			});
-			// Open a browser: priming carries the known {streaming:true}.
-			const browser = await openBrowser(s.served.port);
-			await browser.waitForFrame(
-				(f) =>
-					f.type === "daemon_activity" &&
-					f.daemonId === s.entry.daemonId &&
-					f.streaming === true &&
-					f.blocked === false,
-				"primed activity",
-			);
-		} finally {
-			await teardown(s);
-		}
-	});
-
-	test("a watched daemon going dormant (asleep) is released and emits no further activity frames", async () => {
-		const s = await setup();
-		try {
-			await ready(s);
-			const browser = await openBrowser(s.served.port);
-			await browser.waitForFrame((f) => f.type === "roster", "roster priming");
-			expect(s.counts().retains).toBe(1);
-			expect(s.counts().releases).toBe(0);
-			// The daemon goes dormant: a CLEAN end of its /events stream (the real
-			// daemon's idle auto-exit closes it before exiting) → status "asleep".
-			// daemon.close() would nuke the server mid-stream, an UNCLEAN end that
-			// means reconnecting/redial, never asleep. kill() closes the controllers.
-			s.daemon.kill();
-			await waitFor(() => (s.counts().releases === 1 ? "released" : null), 3000, "released");
-			expect(s.counts().releases).toBe(1);
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true));
 			await waitFor(
-				() => (s.registry.get(s.entry.daemonId)?.status === "asleep" ? "asleep" : null),
+				() => (activityFrames(browser, entry.daemonId).length === 1 ? "ok" : null),
 				3000,
-				"daemon asleep",
+				"streaming activity",
 			);
-			const before = activityFrames(browser, s.entry.daemonId).length;
-			await sleep(150);
-			// No activity frame follows the dormancy.
-			expect(activityFrames(browser, s.entry.daemonId).length).toBe(before);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: true,
+				blocked: false,
+			});
+			expect(s.edge.daemonActivity(entry.daemonId)).toMatchObject({
+				known: true,
+				streaming: true,
+				blocked: false,
+			});
+
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("r1"));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 2 ? "ok" : null),
+				3000,
+				"blocked activity",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: true,
+				blocked: true,
+			});
+
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogEnd("r1"));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 3 ? "ok" : null),
+				3000,
+				"unblocked activity",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({
+				streaming: true,
+				blocked: false,
+			});
+
+			// Same-value state, an end for a dialog that is not open, then a
+			// genuine change. The stream is ordered, so once the final change
+			// has surfaced any duplicate frame would already be counted.
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true));
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogEnd("r1"));
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("r1"));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 4 ? "ok" : null),
+				3000,
+				"re-block broadcast",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({ blocked: true });
+
+			// Re-opening the already-open dialog is not a change; closing it
+			// turns the daemon back to unblocked.
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("r1"));
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogEnd("r1"));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 5 ? "ok" : null),
+				3000,
+				"unblock after replayed open",
+			);
+			expect(activityFrames(browser, entry.daemonId).at(-1)).toMatchObject({ blocked: false });
+			expect(activityFrames(browser, entry.daemonId)).toHaveLength(5);
 		} finally {
-			await teardown(s);
+			await s.teardown();
 		}
 	});
 
-	test("daemon_activity frames never carry sessionId / token / endpoint fields", async () => {
+	test("a new browser stream primes the known activity of a ready daemon", async () => {
 		const s = await setup();
 		try {
-			await ready(s);
-			const browser = await openBrowser(s.served.port);
-			await browser.waitForFrame((f) => f.type === "roster", "roster priming");
-			s.daemon.emitDelta({
-				type: "state",
-				state: { sessionId: "s1", isStreaming: true, controlRecordCount: 0 } as never,
-			});
-			await browser.waitForFrame(
-				(f) => f.type === "daemon_activity" && f.daemonId === s.entry.daemonId,
-				"activity",
+			const { entry, daemon } = await s.addDaemon("primed");
+			// Derive activity before any browser exists.
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true));
+			await waitFor(
+				() => (s.edge.daemonActivity(entry.daemonId).known ? "known" : null),
+				3000,
+				"activity derived",
 			);
-			for (const f of activityFrames(browser, s.entry.daemonId)) {
-				const record = f as unknown as Record<string, unknown>;
-				expect(record).not.toHaveProperty("token");
-				expect(record).not.toHaveProperty("endpoint");
-				expect(record).not.toHaveProperty("sessionId");
+			const browser = await openBrowser(s.port);
+			try {
+				await browser.waitForFrame(
+					(f) =>
+						f.type === "daemon_activity" &&
+						f.daemonId === entry.daemonId &&
+						f.streaming === true &&
+						f.blocked === false,
+					"primed activity",
+				);
+			} finally {
+				browser.close();
 			}
 		} finally {
-			await teardown(s);
+			await s.teardown();
+		}
+	});
+
+	test("activity is tracked per daemon", async () => {
+		const s = await setup();
+		try {
+			const a = await s.addDaemon("alpha");
+			const b = await s.addDaemon("beta");
+			const browser = await s.browser();
+			a.daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true));
+			b.daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("only-b"));
+			await waitFor(
+				() =>
+					activityFrames(browser, a.entry.daemonId).length === 1 &&
+					activityFrames(browser, b.entry.daemonId).length === 1
+						? "ok"
+						: null,
+				3000,
+				"one activity frame per daemon",
+			);
+			expect(activityFrames(browser, a.entry.daemonId)[0]).toMatchObject({
+				streaming: true,
+				blocked: false,
+			});
+			expect(activityFrames(browser, b.entry.daemonId)[0]).toMatchObject({
+				streaming: false,
+				blocked: true,
+			});
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	test("a removed daemon emits no further activity", async () => {
+		const s = await setup();
+		try {
+			const { entry, daemon } = await s.addDaemon("gone");
+			const browser = await s.browser();
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true));
+			await waitFor(
+				() => (activityFrames(browser, entry.daemonId).length === 1 ? "ok" : null),
+				3000,
+				"first activity",
+			);
+			s.registry.remove(entry.daemonId);
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false));
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("late"));
+			await sleep(150);
+			expect(activityFrames(browser, entry.daemonId)).toHaveLength(1);
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	test("daemon_activity frames carry only daemonId, streaming, and blocked", async () => {
+		const s = await setup();
+		try {
+			const { entry, daemon } = await s.addDaemon("shape");
+			const browser = await s.browser();
+			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true));
+			await browser.waitForFrame(
+				(f) => f.type === "daemon_activity" && f.daemonId === entry.daemonId,
+				"activity",
+			);
+			for (const frame of activityFrames(browser, entry.daemonId)) {
+				expect(Object.keys(frame).sort()).toEqual(["blocked", "daemonId", "streaming", "type"]);
+			}
+		} finally {
+			await s.teardown();
 		}
 	});
 });

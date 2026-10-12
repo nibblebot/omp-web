@@ -57,7 +57,7 @@ import {
 	notifyEvent,
 	pendingCodeInputs,
 	ringAfter,
-	sendHistoryPaced,
+	historyFrames,
 	setOnConsumerDetached,
 	setOnStreamsEmpty,
 	snapshotDeltaSeq,
@@ -79,7 +79,7 @@ import {
 	verifyLineageStructure,
 } from "./quiesce-evidence";
 import { flushAllWriters } from "./writer-flush";
-import { setOnFrameTap } from "./sse-delivery";
+import { setOnFrameTap, setOnHistoryTap } from "./sse-delivery";
 
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
@@ -124,7 +124,6 @@ if (missingCallback.length > 0 && missingCallback.length < callbackPairFields.le
 	);
 	process.exit(1);
 }
-
 // TUI default global config directory (~/.omp/agent; sdk.ts documents the same).
 const agentDir = getAgentDir();
 const sessionsDir = path.join(agentDir, "sessions");
@@ -158,7 +157,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * Boot gate: the OMP_SESSION| listening line prints BEFORE the boot session exists,
- * so early connectors (and the first requests) wait for registration. The
+ * so early requests (event streams and commands) wait for registration. The
  * connect-implies-attached invariant holds even for streams that race boot.
  */
 let resolveBootReady: () => void = () => {};
@@ -265,6 +264,45 @@ setOnConsumerDetached((stream, reason) => {
 let nextConsumerId = 1;
 
 /**
+ * The attach priming frames, in order: hello_ok (daemon identity), attached,
+ * history (one frame, or byte-bounded chunks), state, collab_status,
+ * available_commands (when built), ready (once the boot session is ready).
+ * One builder for both transports, so a direct /events stream and a callback
+ * browser stream always prime the same state. Snapshots the session when called.
+ */
+function primingFrames(
+	entry: SessionEntry,
+	commands: AvailableSlashCommand[] | null,
+): Array<ServerFrame> {
+	return [
+		{
+			type: "hello_ok",
+			proto: OMP_PROTO,
+			name: config.name,
+			cwd: config.cwd,
+			pid: process.pid,
+			version,
+			...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
+		},
+		{ type: "attached", sessionId: BOOT_HANDLE },
+		...historyFrames(entry.session.messages),
+		{
+			type: "state",
+			state: daemonBroker.buildStateSnapshot(entry.session),
+			stats: entry.session.getSessionStats(),
+		},
+		// Current collab status, so a client attaching to a live room sees it immediately.
+		{
+			type: "collab_status",
+			status: collabSession.toWireStatus(entry.collab.adapter?.status ?? null),
+		},
+		...(commands !== null ? [{ type: "available_commands" as const, commands }] : []),
+		// Late attachers get `ready` appended to the priming sequence (R8).
+		...(readyAt !== null ? [{ type: "ready" as const, readyAt }] : []),
+	];
+}
+
+/**
  * Prime a fresh /events stream: hello_ok first (daemon identity; HTTP-level
  * auth replaced the WS hello handshake), then the attach priming (attached →
  * history → state → collab_status → available_commands → ready), seqs 1..k
@@ -298,60 +336,12 @@ async function primeConsumer(
 	const snapshotSeq = snapshotDeltaSeq();
 	consumer.attached = entry.handle;
 	let seq = 1;
-	enqueueTo(
-		consumer,
-		encodeSseEvent(
-			SSE_EVENT_NAME,
-			{
-				type: "hello_ok",
-				proto: OMP_PROTO,
-				name: config.name,
-				cwd: config.cwd,
-				pid: process.pid,
-				version,
-				...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
-			},
-			seq++,
-		),
-	);
-	enqueueTo(
-		consumer,
-		encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: BOOT_HANDLE }, seq++),
-	);
-	await sendHistoryPaced(consumer, entry.session.messages, () => seq++);
-	await enqueuePaced(
-		consumer,
-		encodeSseEvent(
-			SSE_EVENT_NAME,
-			{
-				type: "state",
-				state: daemonBroker.buildStateSnapshot(entry.session),
-				stats: entry.session.getSessionStats(),
-			},
-			seq++,
-		),
-	);
-	// Current collab status, so a client attaching to a live room sees it immediately.
-	await enqueuePaced(
-		consumer,
-		encodeSseEvent(
-			SSE_EVENT_NAME,
-			{
-				type: "collab_status",
-				status: collabSession.toWireStatus(entry.collab.adapter?.status ?? null),
-			},
-			seq++,
-		),
-	);
-	if (commands !== null) {
-		await enqueuePaced(
-			consumer,
-			encodeSseEvent(SSE_EVENT_NAME, { type: "available_commands", commands }, seq++),
-		);
-	}
-	// Late attachers get `ready` appended to the priming sequence (R8).
-	if (readyAt !== null) {
-		await enqueuePaced(consumer, encodeSseEvent(SSE_EVENT_NAME, { type: "ready", readyAt }, seq++));
+	for (const [index, frame] of primingFrames(entry, commands).entries()) {
+		const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq++);
+		// hello_ok and attached land synchronously, before any await; the
+		// rest (history chunks first) pace to the consumer's drain.
+		if (index < 2) enqueueTo(consumer, block);
+		else await enqueuePaced(consumer, block);
 	}
 	const last = lastEventId === null ? NaN : Number(lastEventId);
 	// Replay floor: the client already has everything up to its Last-Event-ID
@@ -553,7 +543,8 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				// succeeded, so a resync failure must not fail the call.
 				const resync = async () => {
 					try {
-						if (HISTORY_RELOAD[cmd.method]) await broadcastHistory(entry);
+						if (HISTORY_RELOAD[cmd.method])
+							await broadcastHistory(entry.handle, historyFrames(entry.session.messages));
 						if (HISTORY_RELOAD[cmd.method] || !READ_ONLY[cmd.method])
 							await daemonBroker.broadcastState(entry);
 					} catch (err) {
@@ -1055,8 +1046,8 @@ const server = Bun.serve<RelaySocketData>({
 
 // ---------------------------------------------------------------------------
 // R6b: the OMP_SESSION| listening contract line goes to STDOUT immediately after
-// bind, BEFORE session creation (the spawner learns the endpoint early and is
-// typically already connected when `ready` arrives). Human logs go to stderr.
+// bind, BEFORE session creation. The fleet does not parse it; it is informational
+// for whoever launched the daemon (session output lands in session-logs/). Human logs go to stderr.
 // ---------------------------------------------------------------------------
 
 const listeningLine: StdoutContractLine = {
@@ -1143,6 +1134,10 @@ let fleetCallback: FleetCallback | null = null;
  *  pair starts, stopped before it stops in shutdown(). Null = no callback
  *  flags / tailer failed to construct. */
 let logTailer: SessionLogTailer | null = null;
+/** Bounded wait at shutdown for queued callback envelopes (the ShutdownControl ack) to reach the wire. */
+const CALLBACK_DRAIN_MS = 1_000;
+/** No-control-plane shutdown timer (C4): armed while no callback pair is ready. */
+let controlGraceTimer: Timer | undefined;
 /**
  * Callback control broker (P3.3/P3.5/P4.5): per-browser virtual streams,
  * command routing, control mirror, and the quiesce state machine. Created
@@ -1295,6 +1290,23 @@ if (config.callbackUrl !== undefined) {
 				console.error(
 					`omp-session: callback pair ${status.state} (workspace ${status.workspaceId} gen ${status.generation}${status.connectionId !== null ? `, connection ${status.connectionId}` : ""})`,
 				);
+				// C4 grace: a ready pair cancels the no-control-plane timer; any other
+				// live state (re)arms it. A terminal stop does not arm.
+				if (status.state === "ready") {
+					clearControlGrace();
+					// Every pair-up (first pair, redial, a new control plane)
+					// tells the fleet which session file this daemon is on: the
+					// boot state broadcast predates the pair, and respawn resumes
+					// the fleet's recorded lastSessionFile.
+					const entry = bootEntry;
+					if (daemonControl !== null && entry !== null) {
+						daemonControl.publish("control", {
+							type: "state",
+							state: daemonBroker.buildStateSnapshot(entry.session),
+							stats: entry.session.getSessionStats(),
+						});
+					}
+				} else if (status.state !== "stopped") armControlGrace();
 			},
 			onError: (error, context) => {
 				console.error(
@@ -1303,6 +1315,12 @@ if (config.callbackUrl !== undefined) {
 			},
 			onEnvelope: (envelope) => routeDown(envelope),
 			onControl: (envelope) => routeDown(envelope),
+			onRejected: (error) => {
+				console.error(
+					`omp-session: fleet rejected the callback credential: ${error.code} ${error.message}; shutting down`,
+				);
+				void shutdown();
+			},
 		},
 	);
 	// P3.7 session log tailing: the SDK's per-project sessions layout is a
@@ -1314,15 +1332,17 @@ if (config.callbackUrl !== undefined) {
 	// exists where frames could emit before this handler is live. A missing
 	// agent dir is not fatal here: the tailer logs the failure and keeps
 	// polling until the dir appears.
-	try {
-		logTailer = new SessionLogTailer({
-			sessionsDir,
-			send: (streamId, payload) => callbackSend(streamId, "frame", payload),
-		});
-	} catch (err) {
-		console.error(
-			`omp-session: log tailer unavailable (${err instanceof Error ? err.message : String(err)}); session logs will not stream`,
-		);
+	if (config.logMirror) {
+		try {
+			logTailer = new SessionLogTailer({
+				sessionsDir,
+				send: (streamId, payload) => callbackSend(streamId, "frame", payload),
+			});
+		} catch (err) {
+			console.error(
+				`omp-session: log tailer unavailable (${err instanceof Error ? err.message : String(err)}); session logs will not stream`,
+			);
+		}
 	}
 	// Control broker (P3.3/P3.5/P4.5): mounted after the tailer so log
 	// controls are routed first; broker handles stream_open/close, quiesce,
@@ -1335,7 +1355,16 @@ if (config.callbackUrl !== undefined) {
 				? undefined
 				: { disposeQuiesce: () => closeSession(bootEntry!, "quiesce") },
 		handleCommand: async (command: unknown) => {
-			await handleCommand(command as ClientCommand);
+			const cmd = command as ClientCommand;
+			markActivity();
+			// Same idempotency window as POST /command: a duplicate id replays the
+			// recorded answer and is never re-dispatched.
+			if (commandSeenRecently(cmd.id)) {
+				const answer = commandAnswers.get(cmd.id);
+				if (answer !== undefined) broadcastAnswer(answer.frame);
+				return undefined;
+			}
+			await handleCommand(cmd);
 			return undefined; // Answers flow through the broadcast mirror tap.
 		},
 		flushWriters: () =>
@@ -1344,6 +1373,7 @@ if (config.callbackUrl !== undefined) {
 				registry: bootEntry!.agentRegistry,
 			}),
 		finalizeTailer: async () => {
+			if (!config.logMirror) return {};
 			if (logTailer === null) {
 				throw callbackError("unavailable", "log tailer unavailable for quiesce");
 			}
@@ -1353,12 +1383,10 @@ if (config.callbackUrl !== undefined) {
 			const deadline = Date.now() + timeoutMs;
 			const { promise, resolve, reject } = Promise.withResolvers<void>();
 			const poll = (): void => {
-				if (logTailer !== null) {
-					const acked = logTailer.ackedOffsets();
-					if (boundaryAcked(boundary, acked)) {
-						resolve();
-						return;
-					}
+				const acked = logTailer?.ackedOffsets() ?? new Map<string, number>();
+				if (boundaryAcked(boundary, acked)) {
+					resolve();
+					return;
 				}
 				if (Date.now() > deadline) {
 					reject(
@@ -1409,40 +1437,28 @@ if (config.callbackUrl !== undefined) {
 			}
 			return { ok: true, git: result.evidence };
 		},
-		primeStream: (streamId) => {
-			// Re-prime burst: the same frame set the direct SSE priming sends.
+		preparePriming: async () => {
 			const entry = bootEntry;
-			if (entry === null) {
-				console.error(`omp-session: cannot prime ${streamId}: no boot session`);
-				return;
+			if (entry === null) throw new Error("no boot session to prime from");
+			let commands: AvailableSlashCommand[] | null = null;
+			try {
+				commands = await buildAvailableSlashCommands(entry.session);
+			} catch (err) {
+				console.error("Failed to build available commands:", err);
 			}
-			const ctl = daemonControl;
-			if (ctl === null) return;
-			const publish = (frame: Record<string, unknown>): void => ctl.publish(streamId, frame);
-			publish({
-				type: "hello_ok",
-				proto: OMP_PROTO,
-				name: config.name,
-				cwd: config.cwd,
-				pid: process.pid,
-				version,
-				...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
-			});
-			publish({ type: "attached", sessionId: BOOT_HANDLE });
-			publish({
-				type: "state",
-				state: daemonBroker.buildStateSnapshot(entry.session),
-				stats: entry.session.getSessionStats(),
-			});
-			publish({
-				type: "collab_status",
-				status: collabSession.toWireStatus(entry.collab.adapter?.status ?? null),
-			});
-			if (readyAt !== null) publish({ type: "ready", readyAt });
+			return () => primingFrames(entry, commands);
 		},
+		bufferedBytes: (streamId) =>
+			fleetCallback?.bufferedBytes(streamId) ?? { stream: 0, connection: 0 },
 		send: callbackSend,
 		pairLive: () => fleetCallback !== null && fleetCallback.status().state === "ready",
 		mainSessionFile: null,
+		onShutdown: (reason) => {
+			console.error(
+				`omp-session: control plane requested shutdown${reason !== undefined ? ` (${reason})` : ""}`,
+			);
+			void shutdown();
+		},
 	});
 	// Register the mirror tap: every broadcast/broadcastAnswer/broadcastTo
 	// frame is forwarded verbatim: to the "control" stream (fleet activity +
@@ -1451,6 +1467,11 @@ if (config.callbackUrl !== undefined) {
 	setOnFrameTap((frame) => {
 		const ctl = daemonControl;
 		if (ctl !== null) ctl.mirror(frame as Record<string, unknown>);
+	});
+	// History resyncs reach the pair's browser streams through their own tap:
+	// paced, and never onto the control stream.
+	setOnHistoryTap(async (frames) => {
+		await daemonControl?.publishHistory(frames);
 	});
 	// Once the pair is ready (fleet pair_ready observed) start streaming
 	// session logs over it; tailer start() is sync (initial scan + watcher).
@@ -1470,6 +1491,7 @@ if (config.callbackUrl !== undefined) {
 
 function isIdleSuppressed(): boolean {
 	if (streams.size > 0) return true;
+	if (daemonControl !== null && daemonControl.status().streams.length > 0) return true;
 	if (getInFlightBash() > 0 || getInFlightPython() > 0) return true;
 	if (bootEntry) {
 		if (bootEntry.session.isStreaming) return true;
@@ -1501,16 +1523,48 @@ function relayBaseUrl(): string {
 	return config.collabUrl ?? `ws://localhost:${server.port}`;
 }
 
+/**
+ * Wait (bounded) for queued callback envelopes to reach the wire. A dead or
+ * stopped pair never drains, so the wait is capped at CALLBACK_DRAIN_MS.
+ */
+async function drainCallback(): Promise<void> {
+	const deadline = Date.now() + CALLBACK_DRAIN_MS;
+	for (;;) {
+		const status = fleetCallback?.status();
+		if (status === undefined || status.state === "stopped" || status.pendingEnvelopes === 0) return;
+		if (Date.now() >= deadline) return;
+		await Bun.sleep(20);
+	}
+}
+
+/** Arm the no-control-plane shutdown timer (C4). No-op when disabled or already armed. */
+function armControlGrace(): void {
+	if (controlGraceTimer !== undefined || config.controlGraceMs <= 0 || shuttingDown) return;
+	controlGraceTimer = setTimeout(() => {
+		controlGraceTimer = undefined;
+		console.error(`omp-session: no control plane for ${config.controlGraceMs}ms; shutting down`);
+		void shutdown();
+	}, config.controlGraceMs);
+}
+
+function clearControlGrace(): void {
+	clearTimeout(controlGraceTimer);
+	controlGraceTimer = undefined;
+}
+
 // Graceful shutdown: dispose the boot session via closeSession (beginDispose
 // is the sync admission barrier; dispose is idempotent), then exit.
 async function shutdown(): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	if (idleTimer) clearInterval(idleTimer);
-	// Stop the log tailer BEFORE the callback pair so no chunk frames queue
-	// into a half-torn transport, then stop the pair (its own stop is sync).
+	clearControlGrace();
+	// Stop the log tailer and control broker first so nothing new queues, then
+	// give queued envelopes (the ShutdownControl ack, final frames) a bounded
+	// window to reach the wire before the pair closes.
 	if (logTailer !== null) logTailer.stop();
 	if (daemonControl !== null) daemonControl.stop();
+	await drainCallback();
 	if (fleetCallback !== null) fleetCallback.stop();
 	if (bootEntry) await closeSession(bootEntry, "server shutting down");
 	server.stop();

@@ -1,11 +1,14 @@
 /**
- * SpawnSupervisor tests. A FAKE child script (sh) stands in for omp-session: it
- * appends its argv (which carries the template-filled token / labels /
- * resume args) to a file, optionally prints the OMP_SESSION| listening line for a
- * fake daemon the connector dials, and optionally fails. Covers spawn →
- * endpoint resolution → connect, respawn with --resume + fresh token,
- * restart-on-failure with fresh token per attempt, stop (kill + asleep),
- * restart cancellation, and the stderr ring.
+ * SpawnSupervisor tests. A FAKE child script (sh) stands in for omp-session:
+ * it appends its argv (the template-filled token / labels / resume args) and
+ * its callback credential to files the test reads, optionally logs to
+ * stderr, then exits or idles. A real DaemonTransportRegistry served over
+ * loopback HTTP receives the dial; tests that need a live pair start the
+ * callback-daemon testkit with the credential the child was launched with.
+ * Covers spawn (generation, child env, no secret on the entry), pair timeout,
+ * respawn (generation bump, --resume), stop (ShutdownControl, revoke,
+ * asleep), close (children and enrollments survive), exit policy (77, 0,
+ * bounded restarts, pair resets the budget), stderrTail, and git-state polling.
  */
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
@@ -21,14 +24,15 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Server } from "bun";
-import { OMP_PROTO, OMP_SESSION_EXIT_SESSION_LOCKED, SSE_EVENT_NAME } from "#lib/wire/protocol";
-import { encodeSseEvent } from "#lib/wire/sse";
+import { CALLBACK_TRANSPORT_STREAM_ID } from "#lib/wire/callback-protocol";
+import { OMP_SESSION_EXIT_SESSION_LOCKED } from "#lib/wire/protocol";
 import type { FleetConfig } from "../config";
-import { DaemonConnector } from "../connector";
+import { DaemonTransportRegistry } from "../daemon-transport";
 import type { GitResult, GitRunner } from "../discovery";
 import { Registry, type RegistryEntry } from "../registry";
-import { SpawnSupervisor } from "../supervisor";
+import { SpawnSupervisor, type SupervisorDeps } from "../supervisor";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
 
 const tmpDirs: string[] = [];
 
@@ -44,21 +48,14 @@ afterAll(() => {
 
 afterAll(cleanupTempDirs);
 
-// Every fixture a test creates is tracked here so teardown runs even when a
-// test fails mid-body (body-end `await connector.close(); fake.stop();`
-// would otherwise leak spawned children, sockets, and servers into the rest
-// of the suite). afterEach closes whatever the body left open; each close is
-// idempotent, so fixtures the body already closed are no-ops. Order matters:
-// supervisors first (kill children, drop sockets), then connectors (abort
-// remaining streams), then the fake daemon servers.
-const liveSupervisors: SpawnSupervisor[] = [];
-const liveConnectors: DaemonConnector[] = [];
-const liveFakes: FakeServer[] = [];
+// Every fixture a test creates registers its teardown here so it runs even
+// when a test fails mid-body (the children are real processes). Cleanups run
+// in reverse creation order: daemons first, then the supervisor's children,
+// the transport, and the HTTP server.
+const cleanups: Array<() => Promise<void> | void> = [];
 
 afterEach(async () => {
-	for (const supervisor of liveSupervisors.splice(0)) await supervisor.close();
-	for (const connector of liveConnectors.splice(0)) await connector.close();
-	for (const fake of liveFakes.splice(0)) fake.stop();
+	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
 function sleep(ms: number): Promise<void> {
@@ -77,153 +74,107 @@ async function waitFor<T>(probe: () => T | null, timeoutMs: number, label: strin
 	}
 }
 
-interface FakeServer {
-	server: Server<undefined>;
-	port: number;
-	openCount: number;
-	headers: Array<Record<string, string>>;
-	/** Client aborts observed server-side (client disconnect). */
-	serverCloses: number;
-	stop(): void;
+function isAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
-/** Fake omp-session daemon: primes hello_ok (hello.cwd) → state → ready on every dial. */
-function startFake(
-	hello: { cwd: string; sessionFile: string },
-	opts?: { closeAfterMs?: number },
-): FakeServer {
-	const encoder = new TextEncoder();
-	const fake: FakeServer = {
-		server: null as unknown as Server<undefined>,
-		port: 0,
-		openCount: 0,
-		headers: [],
-		serverCloses: 0,
-		stop() {
-			this.server.stop(true);
+/** Non-empty lines of a file the fake child writes; [] while it does not exist yet. */
+function readLines(file: string): string[] {
+	if (!existsSync(file)) return [];
+	return readFileSync(file, "utf8")
+		.split("\n")
+		.filter((line) => line !== "");
+}
+
+/** Resolves with the file's lines once at least `count` launches have appended to it. */
+function waitForLaunches(file: string, count: number): Promise<string[]> {
+	return waitFor(
+		() => {
+			const lines = readLines(file);
+			return lines.length >= count ? lines : null;
 		},
-	};
-	fake.server = Bun.serve({
-		port: 0,
-		hostname: "127.0.0.1",
-		fetch(req) {
-			const url = new URL(req.url);
-			if (url.pathname === "/command") {
-				return (async () => {
-					await req.json().catch(() => null);
-					return Response.json({ commandId: "" }, { status: 202 });
-				})();
+		5000,
+		`${count} launch(es) in ${basename(file)}`,
+	);
+}
+
+/** The child's pid (`$$` of the script), once written. */
+function waitForPid(file: string): Promise<number> {
+	return waitFor(
+		() => {
+			const pid = Number.parseInt(readLines(file)[0] ?? "", 10);
+			return Number.isInteger(pid) && pid > 0 ? pid : null;
+		},
+		5000,
+		"child pid",
+	);
+}
+
+/** The OMP_SESSION_* environment the latest launch dumped, once it is at `generation`. */
+function waitForEnv(file: string, generation: number): Promise<Record<string, string>> {
+	return waitFor(
+		() => {
+			if (!existsSync(file)) return null;
+			const env: Record<string, string> = {};
+			for (const line of readFileSync(file, "utf8").split("\n")) {
+				const eq = line.indexOf("=");
+				if (eq > 0) env[line.slice(0, eq)] = line.slice(eq + 1);
 			}
-			if (url.pathname !== "/events") return new Response("not found", { status: 404 });
-			fake.openCount++;
-			fake.headers.push(Object.fromEntries(req.headers.entries()));
-			let closeRecorded = false;
-			const recordClose = (): void => {
-				if (closeRecorded) return;
-				closeRecorded = true;
-				fake.serverCloses++;
-			};
-			const write = (
-				controller: ReadableStreamDefaultController<Uint8Array>,
-				frame: unknown,
-				seq: number,
-			): void => {
-				controller.enqueue(encoder.encode(encodeSseEvent(SSE_EVENT_NAME, frame, seq)));
-			};
-			const body = new ReadableStream<Uint8Array>({
-				start(controller) {
-					req.signal.addEventListener("abort", recordClose);
-					write(
-						controller,
-						{
-							type: "hello_ok",
-							proto: OMP_PROTO,
-							name: "fake",
-							cwd: hello.cwd,
-							pid: 4242,
-							version: "test",
-							sessionFile: hello.sessionFile,
-						},
-						1,
-					);
-					write(
-						controller,
-						{
-							type: "state",
-							sessionId: "s1",
-							state: { sessionId: "s1", sessionFile: hello.sessionFile, isStreaming: false },
-						},
-						2,
-					);
-					write(controller, { type: "ready", readyAt: Date.now() }, 3);
-					// Simulate a daemon going dormant shortly after priming: the
-					// connector sees a clean EOF → "asleep", so a later relaunch
-					// dials fresh and produces a NEW ready transition.
-					if (opts?.closeAfterMs !== undefined) {
-						const closeTimer = setTimeout(() => {
-							try {
-								controller.close();
-							} catch {
-								// The stream was already closed/aborted (client drop).
-							}
-						}, opts.closeAfterMs);
-						req.signal.addEventListener("abort", () => clearTimeout(closeTimer));
-					}
-				},
-				cancel() {
-					recordClose();
-				},
-			});
-			return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+			return env.OMP_SESSION_CALLBACK_GENERATION === String(generation) ? env : null;
 		},
-	});
-	fake.port = fake.server.port ?? 0;
-	liveFakes.push(fake);
-	return fake;
+		5000,
+		`launch env at generation ${generation}`,
+	);
 }
 
-async function loadedRegistry(): Promise<Registry> {
-	const registry = new Registry(join(tmpPath("omp-session-sup-state-"), "state.json"));
-	await registry.load();
-	return registry;
+interface ChildScriptOpts {
+	envFile?: string;
+	pidFile?: string;
+	/** Appends "<generation> <credential>" per launch. */
+	launchesFile?: string;
+	stderrLines?: string[];
+	/** Exit immediately with this code instead of idling. */
+	exitCode?: number;
+	/** The idle loop exits 1 (once, removing the flag) when this file appears. */
+	crashFlag?: string;
 }
 
 /**
  * Write a fake child script. It appends "$@" (the template-filled token /
- * labels / resume args) to argsFile, optionally records its pid, prints
- * stderr lines, then either exits 1 (fail), exits with `exitBeforeListening`
- * (a daemon refusing at boot before bind, like a --resume session-lock
- * conflict), or prints the OMP_SESSION| listening line for `port` and idles.
+ * labels / resume args) to argsFile, optionally dumps its OMP_SESSION_*
+ * environment, records its pid and launches, prints stderr lines, then
+ * either exits with `exitCode` or idles.
  */
-function writeChildScript(
-	dir: string,
-	port: number,
-	argsFile: string,
-	opts: {
-		fail?: boolean;
-		pidFile?: string;
-		stderrLines?: string[];
-		exitBeforeListening?: number;
-	} = {},
-): string {
+function writeChildScript(dir: string, argsFile: string, opts: ChildScriptOpts = {}): string {
 	const script = join(dir, "child.sh");
-	const lines = ["#!/bin/sh", 'trap "exit 0" TERM INT', `echo "$@" >> ${argsFile}`];
-	if (opts.pidFile) lines.push(`echo $$ > ${opts.pidFile}`);
-	for (const line of opts.stderrLines ?? []) lines.push(`echo ${JSON.stringify(line)} >&2`);
-	if (opts.fail) {
-		lines.push("exit 1");
-	} else if (opts.exitBeforeListening !== undefined) {
-		lines.push(`exit ${opts.exitBeforeListening}`);
-	} else {
+	const lines = ["#!/bin/sh", 'trap "exit 0" TERM INT', `echo "$@" >> '${argsFile}'`];
+	if (opts.envFile) {
 		lines.push(
-			`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${port},"url":"ws://127.0.0.1:${port}"}'`,
+			`env | grep '^OMP_SESSION_' | sort > '${opts.envFile}.tmp' && mv '${opts.envFile}.tmp' '${opts.envFile}'`,
 		);
+	}
+	if (opts.launchesFile) {
+		lines.push(
+			`echo "$OMP_SESSION_CALLBACK_GENERATION $OMP_SESSION_CALLBACK_TOKEN" >> '${opts.launchesFile}'`,
+		);
+	}
+	if (opts.pidFile) lines.push(`echo $$ > '${opts.pidFile}'`);
+	for (const line of opts.stderrLines ?? []) lines.push(`echo ${JSON.stringify(line)} >&2`);
+	if (opts.exitCode !== undefined) {
+		lines.push(`exit ${opts.exitCode}`);
+	} else {
 		// Idle loop. The tick must stay short: dash defers an untrapped SIGTERM
-		// until the running `sleep` returns, so the supervisor's stop()/close()
-		// teardown (SIGTERM, 5s grace) costs one tick per child; sleep 1 makes
-		// every spawn test pay ~1s at close. 0.05 keeps the child alive while
-		// making teardown ~instant.
-		lines.push("while :; do sleep 0.05; done");
+		// until the running `sleep` returns, so every teardown costs one tick
+		// per child; 0.05 keeps the child alive while making teardown ~instant.
+		const crash = opts.crashFlag
+			? `if [ -e '${opts.crashFlag}' ]; then rm -f '${opts.crashFlag}'; exit 1; fi; `
+			: "";
+		lines.push(`while :; do ${crash}sleep 0.05; done`);
 	}
 	writeFileSync(script, lines.join("\n") + "\n");
 	return script;
@@ -257,25 +208,92 @@ function makeTierConfig(
 	};
 }
 
-function makeConnector(registry: Registry): DaemonConnector {
-	const connector = new DaemonConnector(registry, undefined, {
-		backoffMinMs: 10,
-		backoffMaxMs: 50,
-	});
-	liveConnectors.push(connector);
-	return connector;
+interface Harness {
+	registry: Registry;
+	transport: DaemonTransportRegistry;
+	supervisor: SpawnSupervisor;
+	statePath: string;
+	/** The base URL the callback daemon testkit dials (no /callback suffix). */
+	base: string;
+	/** The value children receive as OMP_SESSION_CALLBACK_URL. */
+	callbackUrl: string;
 }
 
-/** Supervisor with afterEach-tracked teardown (its children are real processes). */
-function makeSupervisor(
-	registry: Registry,
-	connector: DaemonConnector,
+/**
+ * A supervisor over a real registry and a real DaemonTransportRegistry served
+ * on an ephemeral loopback port. Teardown stops every entry (killing its
+ * child, which close() deliberately leaves running), then closes the
+ * supervisor, the transport, and the server.
+ */
+async function makeHarness(
 	config: FleetConfig,
 	opts?: ConstructorParameters<typeof SpawnSupervisor>[3],
-): SpawnSupervisor {
-	const supervisor = new SpawnSupervisor(registry, connector, config, opts);
-	liveSupervisors.push(supervisor);
-	return supervisor;
+	deps?: Pick<SupervisorDeps, "pairTimeoutMs" | "onEnrolled">,
+): Promise<Harness> {
+	const statePath = join(tmpPath("omp-session-sup-state-"), "state.json");
+	const registry = new Registry(statePath);
+	await registry.load();
+	const transport = new DaemonTransportRegistry();
+	const server: Server<undefined> = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		idleTimeout: 255,
+		fetch: async (req) =>
+			(await transport.handleFetch(req)) ?? new Response("not found", { status: 404 }),
+	});
+	const base = `http://127.0.0.1:${server.port}`;
+	const callbackUrl = `${base}/callback`;
+	const supervisor = new SpawnSupervisor(
+		registry,
+		config,
+		{ transport, statePath, callbackUrl: () => callbackUrl, ...deps },
+		opts,
+	);
+	cleanups.push(async () => {
+		for (const entry of registry.list()) await supervisor.stop(entry.daemonId);
+		supervisor.close();
+		transport.close();
+		await server.stop(true);
+	});
+	return { registry, transport, supervisor, statePath, base, callbackUrl };
+}
+
+interface Fixture extends Harness {
+	dir: string;
+	argsFile: string;
+	envFile: string;
+	pidFile: string;
+	launchesFile: string;
+}
+
+/** A harness whose template runs the standard fake child (writeChildScript) in a fresh dir. */
+async function makeFixture(
+	prefix: string,
+	child: ChildScriptOpts = {},
+	supOpts?: ConstructorParameters<typeof SpawnSupervisor>[3],
+	deps?: Pick<SupervisorDeps, "pairTimeoutMs" | "onEnrolled">,
+): Promise<Fixture> {
+	const dir = tmpPath(prefix);
+	const argsFile = join(dir, "args.txt");
+	const envFile = join(dir, "env.txt");
+	const pidFile = join(dir, "pid.txt");
+	const launchesFile = join(dir, "launches.txt");
+	const script = writeChildScript(dir, argsFile, { envFile, pidFile, launchesFile, ...child });
+	const harness = await makeHarness(makeConfig(script), supOpts, deps);
+	return { ...harness, dir, argsFile, envFile, pidFile, launchesFile };
+}
+
+/** Start the daemon half of the pair with the credential the child was launched with; waits for the pair. */
+async function pairDaemon(harness: Harness, env: Record<string, string>): Promise<CallbackDaemon> {
+	const daemon = startCallbackDaemon({
+		url: harness.base,
+		workspaceId: env.OMP_SESSION_CALLBACK_WORKSPACE,
+		generation: Number(env.OMP_SESSION_CALLBACK_GENERATION),
+		token: env.OMP_SESSION_CALLBACK_TOKEN,
+	});
+	cleanups.push(() => daemon.stop());
+	await daemon.waitConnected(5000);
+	return daemon;
 }
 
 /** Recorded git invocation for the fake exec. */
@@ -323,30 +341,22 @@ function makeWorktreeRepo(dir: string): { main: string; wt: string } {
 	return { main, wt };
 }
 
+const TOKEN_ARG = /^[A-Za-z0-9_-]{43}$/;
+
 describe("SpawnSupervisor", () => {
 	test("spawn tags worktreeOf for a worktree cwd; a main checkout stays untagged", async () => {
-		const projectDir = tmpPath("omp-session-sup-wt-");
-		const { main, wt } = makeWorktreeRepo(projectDir);
-		const fake = startFake({ cwd: wt, sessionFile: "/srv/proj/sess.jsonl" });
-		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 0,
-		});
+		const { main, wt } = makeWorktreeRepo(tmpPath("omp-session-sup-wt-"));
+		const fx = await makeFixture("omp-session-sup-wt-child-", {}, { restartMax: 0 });
 
-		const wtEntry = await supervisor.spawn({ cwd: wt });
+		const wtEntry = await fx.supervisor.spawn({ cwd: wt });
 		expect(wtEntry.worktreeOf).toBe("main-repo");
-		const mainEntry = await supervisor.spawn({ cwd: main });
+		const mainEntry = await fx.supervisor.spawn({ cwd: main });
 		expect(mainEntry.worktreeOf).toBeUndefined();
 	});
 
 	test("backfillWorktrees tags untagged local entries; remote entries are never probed", async () => {
-		const projectDir = tmpPath("omp-session-sup-backfill-");
-		const { main, wt } = makeWorktreeRepo(projectDir);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), {
+		const { main, wt } = makeWorktreeRepo(tmpPath("omp-session-sup-backfill-"));
+		const { registry, supervisor } = await makeHarness(makeConfig("/nonexistent-child.sh"), {
 			restartMax: 0,
 		});
 		const spawned = registry.create({
@@ -365,7 +375,6 @@ describe("SpawnSupervisor", () => {
 			project: "r",
 			labels: [],
 			mode: "remote",
-			endpoint: "ws://127.0.0.1:1",
 		});
 		const mainEntry = registry.create({
 			name: "m",
@@ -382,105 +391,133 @@ describe("SpawnSupervisor", () => {
 		expect(registry.get(mainEntry.daemonId)!.worktreeOf).toBeUndefined();
 	});
 
-	test("spawn runs the child, resolves the endpoint, and connects to ready", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile, {
-			pidFile: join(projectDir, "pid.txt"),
-		});
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-		});
-
-		const entry = await supervisor.spawn({ cwd: projectDir, labels: ["env=prod"] });
-		expect(entry.mode).toBe("spawned");
-		expect(entry.project).toBe(basename(projectDir));
-		expect(entry.status).toBe("spawning");
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
+	test("spawn enrolls generation 1 and launches the child with the callback env; the entry holds no secret", async () => {
+		const enrolled: string[] = [];
+		const fx = await makeFixture(
+			"omp-session-sup-env-",
+			{},
+			{ restartMax: 2 },
+			{ onEnrolled: (daemonId) => enrolled.push(daemonId) },
 		);
-		const updated = registry.get(entry.daemonId)!;
-		expect(updated.endpoint).toBe(`ws://127.0.0.1:${fake.port}`);
-		expect(updated.lastSessionFile).toBe("/srv/proj/sess.jsonl");
-		expect(updated.pid).toBeTypeOf("number");
-		expect(updated.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
-		expect(fake.headers[0]?.["authorization"]).toBe(`Bearer ${updated.token}`);
-		expect(connector.isConnected(entry.daemonId)).toBe(true);
-		const line1 = readFileSync(argsFile, "utf8").split("\n")[0];
-		expect(line1).toContain(updated.token!);
-		expect(line1).toContain("--label env=prod");
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir, labels: ["env=prod"] });
+		expect(entry.mode).toBe("spawned");
+		expect(entry.project).toBe(basename(fx.dir));
+		const env = await waitForEnv(fx.envFile, 1);
+		expect(env.OMP_SESSION_CALLBACK_URL).toBe(fx.callbackUrl);
+		expect(env.OMP_SESSION_CALLBACK_WORKSPACE).toBe(entry.daemonId);
+		expect(env.OMP_SESSION_CALLBACK_GENERATION).toBe("1");
+		expect(env.OMP_SESSION_CALLBACK_TOKEN).toMatch(/^[0-9a-f]{64}$/);
+		expect(env.OMP_SESSION_CALLBACK_ALLOW_HTTP).toBe("1"); // loopback http callback
+		expect(env.OMP_SESSION_LOG_MIRROR).toBe("0");
+		expect(enrolled).toEqual([entry.daemonId]);
+
+		const current = fx.registry.get(entry.daemonId)!;
+		expect(current.status).toBe("connecting");
+		expect(current.pid).toBeTypeOf("number");
+		// The registry keeps only the credential's digest, never the credential.
+		expect(current).not.toHaveProperty("token");
+		expect(JSON.stringify(current)).not.toContain(env.OMP_SESSION_CALLBACK_TOKEN);
+		expect(current.workspace?.enrollment?.generation).toBe(1);
+		expect(current.workspace?.enrollment?.credentialHash).not.toBe(env.OMP_SESSION_CALLBACK_TOKEN);
+		expect(current.workspace?.authorizedGeneration).toBe(1);
+		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
+			enrolled: true,
+			authorizedGeneration: 1,
+			paired: false,
+		});
+		const [line] = await waitForLaunches(fx.argsFile, 1);
+		expect(line).toContain("--label env=prod");
 	});
 
-	test("snapshot exposes pid, restarts, and endpoint for a live spawned child", async () => {
-		const projectDir = tmpPath("omp-session-sup-snap-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-		});
+	test("a daemon dialing with the child's credential pairs with the transport", async () => {
+		const fx = await makeFixture("omp-session-sup-pair-", {}, { restartMax: 2 });
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		const env = await waitForEnv(fx.envFile, 1);
+		const daemon = await pairDaemon(fx, env);
+
+		expect(daemon.connected()).toBe(true);
+		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
+			enrolled: true,
+			authorizedGeneration: 1,
+			paired: true,
+		});
+		expect(fx.supervisor.snapshot()[entry.daemonId]?.restarts).toBe(0);
+	});
+
+	test("no pair within pairTimeoutMs errors the entry, revokes the credential, and kills the child", async () => {
+		const fx = await makeFixture(
+			"omp-session-sup-timeout-",
+			{},
+			{ restartMax: 2 },
+			{ pairTimeoutMs: 200 },
 		);
-		const snap = supervisor.snapshot()[entry.daemonId];
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		const pid = await waitForPid(fx.pidFile);
+		const failed = await waitFor(
+			() => {
+				const current = fx.registry.get(entry.daemonId);
+				return current?.status === "error" ? current : null;
+			},
+			5000,
+			"pair-timeout error",
+		);
+		expect(failed.error).toContain("no callback pair");
+		await waitFor(() => (isAlive(pid) ? null : true), 5000, "child killed");
+		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		// The timeout owns the aftermath: the killed child is not restarted.
+		await sleep(150);
+		expect(readLines(fx.argsFile)).toHaveLength(1);
+	});
+
+	test("snapshot exposes pid and restarts for a live spawned child", async () => {
+		const fx = await makeFixture("omp-session-sup-snap-", {}, { restartMax: 2 });
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		await waitForEnv(fx.envFile, 1);
+		const snap = fx.supervisor.snapshot()[entry.daemonId];
 		expect(snap).toBeDefined();
 		expect(snap?.restarts).toBe(0);
 		expect(typeof snap?.pid).toBe("number");
-		expect(snap?.endpoint).toBe(`ws://127.0.0.1:${fake.port}`);
 	});
 
 	test("snapshot reports restart-budget use and no live pid after the budget is exhausted", async () => {
-		const projectDir = tmpPath("omp-session-sup-snapfail-");
-		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt"), { fail: true });
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 1,
-			backoffMinMs: 20,
-			backoffMaxMs: 40,
-		});
+		const fx = await makeFixture(
+			"omp-session-sup-snapfail-",
+			{ exitCode: 1 },
+			{ restartMax: 1, backoffMinMs: 20, backoffMaxMs: 40 },
+		);
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
 		await waitFor(
-			() =>
-				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+			() => (fx.registry.get(entry.daemonId)?.status === "error" ? "error" : null),
 			10_000,
 			"error status",
 		);
-		const snap = supervisor.snapshot()[entry.daemonId];
+		const snap = fx.supervisor.snapshot()[entry.daemonId];
 		expect(snap).toBeDefined();
 		expect(snap?.restarts).toBe(1); // one restart consumed before the cap hit
 		expect(snap?.pid).toBeUndefined(); // no live child
-		expect(snap?.endpoint).toBeUndefined(); // never resolved
 	});
 
-	test("onEvent reports spawn, endpoint resolution, exit/restart, and budget exhaustion", async () => {
-		const projectDir = tmpPath("omp-session-sup-events-");
-		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt"), { fail: true });
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
+	test("onEvent reports spawn, exit/restart, and budget exhaustion", async () => {
 		const events: Array<{ level: string; message: string; daemonId?: string }> = [];
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 1,
-			backoffMinMs: 20,
-			backoffMaxMs: 40,
-			onEvent: (level, message, daemonId) => events.push({ level, message, daemonId }),
-		});
+		const fx = await makeFixture(
+			"omp-session-sup-events-",
+			{ exitCode: 1 },
+			{
+				restartMax: 1,
+				backoffMinMs: 20,
+				backoffMaxMs: 40,
+				onEvent: (level, message, daemonId) => events.push({ level, message, daemonId }),
+			},
+		);
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
 		await waitFor(
-			() =>
-				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+			() => (fx.registry.get(entry.daemonId)?.status === "error" ? "error" : null),
 			10_000,
 			"error status",
 		);
@@ -505,36 +542,21 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("onEvent reports respawn, replaced-exit, stop, and prune", async () => {
-		const projectDir = tmpPath("omp-session-sup-events2-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
 		const events: Array<{ level: string; message: string; daemonId?: string }> = [];
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-			onEvent: (level, message, daemonId) => events.push({ level, message, daemonId }),
-		});
-
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
-		// lastSessionFile was adopted from hello_ok, so the respawn resumes.
-		const firstToken = registry.get(entry.daemonId)!.token;
-		await supervisor.respawn(registry.get(entry.daemonId)!);
-		await waitFor(
-			() => {
-				const updated = registry.get(entry.daemonId);
-				return updated?.status === "ready" && updated.token !== firstToken ? "ready" : null;
+		const fx = await makeFixture(
+			"omp-session-sup-events2-",
+			{},
+			{
+				restartMax: 2,
+				onEvent: (level, message, daemonId) => events.push({ level, message, daemonId }),
 			},
-			5000,
-			"ready after respawn",
 		);
-		await supervisor.prune(entry.daemonId);
-		// Give the killed child's exit handler a beat to land.
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		await waitForEnv(fx.envFile, 1);
+		await fx.supervisor.respawn(fx.registry.get(entry.daemonId)!);
+		await waitForEnv(fx.envFile, 2);
+		await fx.supervisor.prune(entry.daemonId);
 		await waitFor(
 			() =>
 				events.some(
@@ -560,84 +582,63 @@ describe("SpawnSupervisor", () => {
 		).toBe(true);
 	});
 
-	test("respawn uses --resume lastSessionFile and a fresh token; reconnects to ready", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
+	test("respawn bumps the generation to 2 with a fresh credential and the daemon pairs at it", async () => {
+		const fx = await makeFixture("omp-session-sup-regen-", {}, { restartMax: 2 });
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		const env1 = await waitForEnv(fx.envFile, 1);
+		const first = await pairDaemon(fx, env1);
+
+		await fx.supervisor.respawn(fx.registry.get(entry.daemonId)!);
+		const env2 = await waitForEnv(fx.envFile, 2);
+		expect(env2.OMP_SESSION_CALLBACK_WORKSPACE).toBe(entry.daemonId);
+		expect(env2.OMP_SESSION_CALLBACK_TOKEN).toMatch(/^[0-9a-f]{64}$/);
+		expect(env2.OMP_SESSION_CALLBACK_TOKEN).not.toBe(env1.OMP_SESSION_CALLBACK_TOKEN);
+		// Enrolling generation 2 revoked generation 1: the old pair is refused on redial.
+		await waitFor(() => first.rejection(), 5000, "generation 1 rejection");
+		expect(first.connected()).toBe(false);
+
+		await pairDaemon(fx, env2);
+		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
+			enrolled: true,
+			authorizedGeneration: 2,
+			paired: true,
 		});
+		const current = fx.registry.get(entry.daemonId)!;
+		expect(current.workspace?.enrollment?.generation).toBe(2);
+		expect(current.workspace?.authorizedGeneration).toBe(2);
+	});
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
-		const firstToken = registry.get(entry.daemonId)!.token;
+	test("respawn uses --resume lastSessionFile and a fresh token", async () => {
+		const fx = await makeFixture("omp-session-sup-resume-", {}, { restartMax: 2 });
 
-		await supervisor.respawn(registry.get(entry.daemonId)!);
-		// Wait for the NEW child to dial and reach ready; the registry token
-		// changes at launch time while the old "ready" status is still stale.
-		await waitFor(
-			() => {
-				const current = registry.get(entry.daemonId)!;
-				return fake.openCount >= 2 && current.status === "ready" && current.token !== firstToken
-					? "ready"
-					: null;
-			},
-			8000,
-			"respawned ready",
-		);
-		const updated = registry.get(entry.daemonId)!;
-		const lines = readFileSync(argsFile, "utf8").trim().split("\n");
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		await waitForLaunches(fx.argsFile, 1);
+		fx.registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
+
+		await fx.supervisor.respawn(fx.registry.get(entry.daemonId)!);
+		const lines = await waitForLaunches(fx.argsFile, 2);
 		expect(lines).toHaveLength(2);
-		expect(lines[0]).toBe(firstToken!); // first spawn: no resume, bare token
+		expect(lines[0]).toMatch(TOKEN_ARG); // first spawn: no resume, bare token
 		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl"); // R3 resume rule
-		expect(lines[1]).toContain(updated.token!);
-		expect(updated.token!).not.toBe(firstToken!);
-		expect(fake.openCount).toBeGreaterThanOrEqual(2);
+		expect(lines[1]?.split(" ")[0]).toMatch(TOKEN_ARG);
+		expect(lines[1]?.split(" ")[0]).not.toBe(lines[0]);
 	});
 
 	test("respawn with an explicit resumeFile resumes THAT file, not lastSessionFile", async () => {
-		const projectDir = tmpPath("omp-session-sup-resumefile-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-		});
+		const fx = await makeFixture("omp-session-sup-resumefile-", {}, { restartMax: 2 });
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
-		const firstToken = registry.get(entry.daemonId)!.token;
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		await waitForLaunches(fx.argsFile, 1);
+		fx.registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
 
 		// Dropdown-picked session: the SUPERVISOR takes the file verbatim (the
 		// edge validates membership); this test proves the argv actually carries
 		// the chosen path rather than the entry's lastSessionFile.
-		await supervisor.respawn(registry.get(entry.daemonId)!, {
+		await fx.supervisor.respawn(fx.registry.get(entry.daemonId)!, {
 			resumeFile: "/chosen/other-session.jsonl",
 		});
-		await waitFor(
-			() => {
-				const current = registry.get(entry.daemonId)!;
-				return fake.openCount >= 2 && current.status === "ready" && current.token !== firstToken
-					? "ready"
-					: null;
-			},
-			8000,
-			"respawned ready",
-		);
-		const lines = readFileSync(argsFile, "utf8").trim().split("\n");
+		const lines = await waitForLaunches(fx.argsFile, 2);
 		expect(lines).toHaveLength(2);
 		expect(lines[1]).toContain("--resume /chosen/other-session.jsonl");
 		expect(lines[1]).not.toContain("/srv/proj/sess.jsonl");
@@ -648,19 +649,11 @@ describe("SpawnSupervisor", () => {
 		// default workspace, unstarted worktrees, or pre-fix state files) must
 		// be wakeable, since respawn used to key off entry.template only and throw
 		// "unknown spawn template: undefined", wedging the row asleep.
-		const projectDir = tmpPath("omp-session-sup-notpl-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-		});
+		const fx = await makeFixture("omp-session-sup-notpl-", {}, { restartMax: 2 });
 
-		const entry = registry.create({
+		const entry = fx.registry.create({
 			name: "placeholder",
-			cwd: projectDir,
+			cwd: fx.dir,
 			project: "placeholder",
 			labels: [],
 			mode: "spawned",
@@ -668,42 +661,25 @@ describe("SpawnSupervisor", () => {
 		});
 		expect(entry.template).toBeUndefined();
 
-		await supervisor.respawn(entry);
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			8000,
-			"respawned ready",
-		);
-		const updated = registry.get(entry.daemonId)!;
-		expect(updated.template).toBe("test"); // healed with the resolved name
-		const lines = readFileSync(argsFile, "utf8").trim().split("\n");
+		await fx.supervisor.respawn(entry);
+		const lines = await waitForLaunches(fx.argsFile, 1);
+		expect(fx.registry.get(entry.daemonId)?.template).toBe("test"); // healed with the resolved name
 		expect(lines).toHaveLength(1);
-		expect(lines[0]).toBe(updated.token!); // no lastSessionFile → fresh start, no --resume
+		expect(lines[0]).toMatch(TOKEN_ARG); // no lastSessionFile → fresh start, no --resume
 		expect(lines[0]).not.toContain("--resume");
+		const env = await waitForEnv(fx.envFile, 1);
+		expect(env.OMP_SESSION_CALLBACK_WORKSPACE).toBe(entry.daemonId);
 	});
 
 	test("spawn shell-quotes label/name values, a $(touch) payload stays inert", async () => {
-		const projectDir = tmpPath("omp-session-sup-quote-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-		});
+		const fx = await makeFixture("omp-session-sup-quote-", {}, { restartMax: 2 });
 
-		const pwn = join(projectDir, "pwned");
-		const entry = await supervisor.spawn({
-			cwd: projectDir,
+		const pwn = join(fx.dir, "pwned");
+		await fx.supervisor.spawn({
+			cwd: fx.dir,
 			labels: [`k=$(touch ${pwn})`, "q='quoted'", "sp ace"],
 		});
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
-		const line = readFileSync(argsFile, "utf8").split("\n")[0];
+		const [line] = await waitForLaunches(fx.argsFile, 1);
 		// The payloads arrived as literal argv text (sh stripped the outer
 		// quoting); none of the metacharacters was executed.
 		expect(line).toContain(`--label k=$(touch ${pwn})`);
@@ -718,7 +694,6 @@ describe("SpawnSupervisor", () => {
 		// and a newline, the exact hostile value class the quoting must tame.
 		const weirdCwd = join(projectDir, "dir 'quoted' $(x) `y`\nnewline");
 		mkdirSync(weirdCwd, { recursive: true });
-		const fake = startFake({ cwd: weirdCwd, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
 		const script = join(projectDir, "child.sh");
 		writeFileSync(
@@ -726,8 +701,7 @@ describe("SpawnSupervisor", () => {
 			[
 				"#!/bin/sh",
 				'trap "exit 0" TERM INT',
-				`printf '%s\\0' "$@" > '${argsFile}'`,
-				`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
+				`printf '%s\\0' "$@" > '${argsFile}.tmp' && mv '${argsFile}.tmp' '${argsFile}'`,
 				"while :; do sleep 0.05; done",
 			].join("\n") + "\n",
 		);
@@ -741,22 +715,16 @@ describe("SpawnSupervisor", () => {
 			workspaceDir: "/tmp/fleet-test-ws",
 			bind: "127.0.0.1",
 		};
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, config, { restartMax: 2 });
+		const { supervisor } = await makeHarness(config, { restartMax: 2 });
 
 		const trickyName = "na'me $(nope) `nope` with spaces\nand a newline";
 		const pwn = join(projectDir, "pwned");
-		const entry = await supervisor.spawn({
+		await supervisor.spawn({
 			cwd: weirdCwd,
 			name: trickyName,
 			labels: [`k=$(touch ${pwn})`],
 		});
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
+		await waitFor(() => (existsSync(argsFile) ? "written" : null), 5000, "args file");
 
 		// NUL-delimited "$@" dump (printf '%s\0' "$@"): each hostile value
 		// survived shell parsing as a single literal argument; even the
@@ -765,7 +733,7 @@ describe("SpawnSupervisor", () => {
 		expect(args[0]).toBe("--cwd");
 		expect(args[1]).toBe(weirdCwd);
 		expect(args[2]).toBe("--token");
-		expect(args[3]).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(args[3]).toMatch(TOKEN_ARG);
 		expect(args[4]).toBe("--name");
 		expect(args[5]).toBe(trickyName);
 		expect(args[6]).toBe("--label");
@@ -775,7 +743,6 @@ describe("SpawnSupervisor", () => {
 
 	test("concurrent respawn() calls launch exactly one child, no orphan", async () => {
 		const projectDir = tmpPath("omp-session-sup-conc-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
 		const argsFile = join(projectDir, "args.txt");
 		const pidsFile = join(projectDir, "pids.txt");
 		const script = join(projectDir, "child.sh");
@@ -786,22 +753,14 @@ describe("SpawnSupervisor", () => {
 				'trap "exit 0" TERM INT',
 				`echo $$ >> '${pidsFile}'`,
 				`echo "$@" >> '${argsFile}'`,
-				`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
 				"while :; do sleep 0.05; done",
 			].join("\n") + "\n",
 		);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-		});
+		const { registry, supervisor } = await makeHarness(makeConfig(script), { restartMax: 2 });
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
+		await waitForLaunches(argsFile, 1);
+		registry.update(entry.daemonId, { lastSessionFile: "/srv/proj/sess.jsonl" });
 
 		// Two overlapping respawns (no await between the calls): both must
 		// coalesce onto ONE launch. Exactly one replacement child is launched,
@@ -810,595 +769,348 @@ describe("SpawnSupervisor", () => {
 			supervisor.respawn(registry.get(entry.daemonId)!),
 			supervisor.respawn(registry.get(entry.daemonId)!),
 		]);
-		await waitFor(
-			() => {
-				const current = registry.get(entry.daemonId)!;
-				return fake.openCount >= 2 && current.status === "ready" ? "ready" : null;
-			},
-			8000,
-			"respawned ready",
-		);
+		await waitForLaunches(argsFile, 2);
+		await sleep(150); // a double-launch would have landed by now
 
 		// One launch per spawn/respawn, never a double-launch: the initial
 		// child wrote line/pid 1, the respawned child line/pid 2.
-		const lines = readFileSync(argsFile, "utf8").trim().split("\n");
+		const lines = readLines(argsFile);
 		expect(lines).toHaveLength(2);
 		expect(lines[1]).toContain("--resume /srv/proj/sess.jsonl");
-		const pids = readFileSync(pidsFile, "utf8")
-			.trim()
-			.split("\n")
-			.map((l) => Number.parseInt(l, 10));
+		const pids = readLines(pidsFile).map((l) => Number.parseInt(l, 10));
 		expect(pids).toHaveLength(2);
 
 		// stop() kills the tracked (only) child; the pre-respawn child was
 		// terminated by the respawn, so no orphan survives.
 		await supervisor.stop(entry.daemonId);
-		for (const pid of pids) {
-			let alive = true;
-			try {
-				process.kill(pid, 0);
-			} catch {
-				alive = false;
-			}
-			expect(alive).toBe(false);
-		}
+		for (const pid of pids) expect(isAlive(pid)).toBe(false);
 	});
 
-	test("restart-on-failure: bounded restarts with a fresh token per attempt, then error", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile, { fail: true });
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
+	test("restart-on-failure: bounded restarts, a fresh generation and credential per attempt, then error", async () => {
 		// restartMax 1: initial child + exactly one restart, then error.
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 1,
-		});
+		const fx = await makeFixture("omp-session-sup-restart-", { exitCode: 1 }, { restartMax: 1 });
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() =>
-				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		const failed = await waitFor(
+			() => {
+				const current = fx.registry.get(entry.daemonId);
+				return current?.status === "error" ? current : null;
+			},
 			10_000,
 			"error status",
 		);
-		const updated = registry.get(entry.daemonId)!;
-		expect(updated.error).toContain("exited");
-		const lines = readFileSync(argsFile, "utf8").trim().split("\n");
-		expect(lines).toHaveLength(2);
-		expect(lines[1]).toContain(updated.token!); // the final attempt's token is registered
-		expect(lines[0]).not.toBe(lines[1]); // fresh token across attempts
+		expect(failed.error).toContain("exited");
+		const launches = readLines(fx.launchesFile).map((line) => line.split(" "));
+		expect(launches).toHaveLength(2);
+		expect(launches.map(([generation]) => generation)).toEqual(["1", "2"]);
+		expect(launches[0]?.[1]).not.toBe(launches[1]?.[1]); // fresh credential across attempts
+		expect(readLines(fx.argsFile)).toHaveLength(2);
+		// The exhausted entry holds no live credential; the generation stays monotonic.
+		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		expect(failed.workspace?.authorizedGeneration).toBe(2);
 	});
 
-	test("#22 rapid crashes without ever reaching ready exhaust the budget and error (window, not lifetime)", async () => {
-		const projectDir = tmpPath("omp-session-sup-budgetfail-");
-		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, 1, argsFile, { fail: true });
-		const registry = await loadedRegistry();
-		// The connector's onStatus is wired to the supervisor exactly as
-		// server.ts wires it; a crash loop never reaches ready, so no reset.
-		let supervisor: SpawnSupervisor;
-		const connector = new DaemonConnector(
-			registry,
-			{ onStatus: (entry) => supervisor.onConnectorStatus(entry) },
-			{ backoffMinMs: 10, backoffMaxMs: 50 },
+	test("rapid crashes that never pair exhaust the budget and error (window, not lifetime)", async () => {
+		const fx = await makeFixture(
+			"omp-session-sup-budgetfail-",
+			{ exitCode: 1 },
+			{ restartMax: 5, backoffMinMs: 20, backoffMaxMs: 50 },
 		);
-		supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 5,
-			backoffMinMs: 20,
-			backoffMaxMs: 50,
-		});
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() =>
-				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		const failed = await waitFor(
+			() => {
+				const current = fx.registry.get(entry.daemonId);
+				return current?.status === "error" ? current : null;
+			},
 			10_000,
 			"error status",
 		);
-		const updated = registry.get(entry.daemonId)!;
-		expect(updated.error).toContain("exited");
+		expect(failed.error).toContain("exited");
 		// Initial launch + 5 restarts; the 6th exit exceeds the consecutive cap.
-		expect(readFileSync(argsFile, "utf8").trim().split("\n")).toHaveLength(6);
+		expect(readLines(fx.argsFile)).toHaveLength(6);
 	}, 20_000);
 
-	test("a session-lock exit never restarts: the entry sleeps, waiting attaches get the daemon's reason, a late dial failure cannot wake it", async () => {
-		const projectDir = tmpPath("omp-session-sup-locked-");
-		const argsFile = join(projectDir, "args.txt");
+	test("a pair resets the restart budget: crash, relaunch, pair leaves no restarts consumed", async () => {
+		const crashFlag = join(tmpPath("omp-session-sup-flag-"), "crash.flag");
+		const fx = await makeFixture(
+			"omp-session-sup-budget-",
+			{ crashFlag },
+			{ restartMax: 1, backoffMinMs: 20, backoffMaxMs: 50 },
+		);
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		const env1 = await waitForEnv(fx.envFile, 1);
+		await pairDaemon(fx, env1);
+
+		// The paired child crashes; its restart is generation 2.
+		writeFileSync(crashFlag, "");
+		const env2 = await waitForEnv(fx.envFile, 2);
+		await pairDaemon(fx, env2);
+		await waitFor(
+			() => (fx.supervisor.snapshot()[entry.daemonId]?.restarts === 0 ? "reset" : null),
+			5000,
+			"restart budget reset by the pair",
+		);
+		expect(fx.registry.get(entry.daemonId)?.status).not.toBe("error");
+	}, 20_000);
+
+	test("exit 77 (session locked) never restarts: the entry sleeps carrying the child's last log line", async () => {
 		const reason =
 			"session file /srv/proj/sess.jsonl is locked by another omp-session (pid 4242); it is already open elsewhere (another omp-web or dev fleet), close it there and retry";
-		const script = writeChildScript(projectDir, 1, argsFile, {
-			stderrLines: ["booting", `omp-session: ${reason}`],
-			exitBeforeListening: OMP_SESSION_EXIT_SESSION_LOCKED,
-		});
-		const registry = await loadedRegistry();
-		// Wired exactly as server.ts wires it: dial failures go through the
-		// supervisor's respawn gate.
-		let supervisor: SpawnSupervisor;
-		const connector = new DaemonConnector(
-			registry,
-			{ onDialFailed: (entry) => void supervisor.respawnAfterDialFailure(entry)?.catch(() => {}) },
-			{ backoffMinMs: 10, backoffMaxMs: 50 },
-		);
-		liveConnectors.push(connector);
 		const events: Array<{ level: string; message: string }> = [];
-		supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 5,
-			backoffMinMs: 20,
-			backoffMaxMs: 50,
-			onEvent: (level, message) => events.push({ level, message }),
-		});
+		const fx = await makeFixture(
+			"omp-session-sup-locked-",
+			{
+				stderrLines: ["booting", `omp-session: ${reason}`],
+				exitCode: OMP_SESSION_EXIT_SESSION_LOCKED,
+			},
+			{
+				restartMax: 5,
+				backoffMinMs: 20,
+				backoffMaxMs: 50,
+				onEvent: (level, message) => events.push({ level, message }),
+			},
+		);
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await expect(connector.waitReady(entry.daemonId, 10_000)).rejects.toThrow(reason);
-		expect(registry.get(entry.daemonId)?.status).toBe("asleep");
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		const asleep = await waitFor(
+			() => {
+				const current = fx.registry.get(entry.daemonId);
+				return current?.status === "asleep" ? current : null;
+			},
+			10_000,
+			"asleep status",
+		);
+		expect(asleep.error).toBe(reason);
 		expect(events.some((e) => e.level === "error" && e.message === reason)).toBe(true);
 		// A restart would have been scheduled (and announced) synchronously in
-		// the exit handler, before the waiter could be rejected.
+		// the exit handler, before the status flipped.
 		expect(events.some((e) => /restart \d+\//.test(e.message))).toBe(false);
-		// A dial failure arriving after the lock exit (a daemon that bound
-		// before locking its live file) must not relaunch the child.
-		expect(supervisor.respawnAfterDialFailure(registry.get(entry.daemonId)!)).toBeUndefined();
-		expect(readFileSync(argsFile, "utf8").trim().split("\n")).toHaveLength(1);
+		await sleep(150);
+		expect(readLines(fx.argsFile)).toHaveLength(1);
+		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
 	}, 20_000);
 
-	test("#22 crash → ready → crash → ready never errors: the budget resets on the connector ready transition", async () => {
-		const projectDir = tmpPath("omp-session-sup-budget-");
-		// The fake closes each /events stream shortly after priming (dormant),
-		// so every relaunch dials fresh and produces a NEW ready transition,
-		// exactly what a real daemon process (which dies with the child) does.
-		const fake = startFake(
-			{ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" },
-			{ closeAfterMs: 200 },
+	test("a clean exit 0 puts the entry asleep without a restart", async () => {
+		const fx = await makeFixture(
+			"omp-session-sup-clean-",
+			{ exitCode: 0 },
+			{ restartMax: 5, backoffMinMs: 20, backoffMaxMs: 50 },
 		);
-		const argsFile = join(projectDir, "args.txt");
-		const counterFile = join(projectDir, "counter.txt");
-		const script = join(projectDir, "child.sh");
-		writeFileSync(
-			script,
-			[
-				"#!/bin/sh",
-				'trap "exit 0" TERM INT',
-				`n=$(cat '${counterFile}' 2>/dev/null || echo 0)`,
-				"n=$((n + 1))",
-				`echo "$n" > '${counterFile}'`,
-				`echo "$@" >> '${argsFile}'`,
-				// Odd launches crash before printing anything; even launches
-				// resolve an endpoint (reaching ready), then crash after a beat.
-				"if [ $((n % 2)) -eq 1 ]; then exit 1; fi",
-				`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
-				"sleep 0.6",
-				"exit 1",
-			].join("\n") + "\n",
-		);
-		const registry = await loadedRegistry();
-		let supervisor: SpawnSupervisor;
-		const connector = new DaemonConnector(
-			registry,
-			{ onStatus: (entry) => supervisor.onConnectorStatus(entry) },
-			{ backoffMinMs: 10, backoffMaxMs: 50 },
-		);
-		supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 5,
-			backoffMinMs: 20,
-			backoffMaxMs: 50,
-		});
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		// Six launches: three crash-only + three that reach ready. With the
-		// old LIFETIME budget this would hit the 5-restart cap; the ready
-		// transitions reset it, so the daemon keeps restarting instead of
-		// erroring.
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
 		await waitFor(
-			() => {
-				try {
-					return readFileSync(argsFile, "utf8").trim().split("\n").length >= 6
-						? "six-launches"
-						: null;
-				} catch {
-					return null; // the child may not have written the file yet
-				}
-			},
-			15_000,
-			"six child launches",
+			() => (fx.registry.get(entry.daemonId)?.status === "asleep" ? "asleep" : null),
+			10_000,
+			"asleep status",
 		);
-		const current = registry.get(entry.daemonId)!;
-		expect(current.status).not.toBe("error");
-		expect(current.error).toBeUndefined();
-	}, 20_000);
+		await sleep(150);
+		expect(readLines(fx.argsFile)).toHaveLength(1);
+		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+	});
 
-	test("#23 a malformed template-host endpoint fails loudly with the bad value and kills the child (no wedge)", async () => {
-		const projectDir = tmpPath("omp-session-sup-badhost-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const pidFile = join(projectDir, "pid.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile, { pidFile });
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		// A template host that can never form a valid ws:// URL: the resolved
-		// endpoint is rejected BEFORE the connector dials (the old behavior
-		// threw inside new URL() and wedged the stdout pump).
-		const config: FleetConfig = {
-			templates: { test: { command: `sh ${script} {token} {labels} {resume}`, host: "bad host" } },
-			defaultTemplate: "test",
-			workspaceDir: "/tmp/fleet-test-ws",
-			bind: "127.0.0.1",
-		};
-		const supervisor = makeSupervisor(registry, connector, config, { restartMax: 2 });
+	test("stop on a paired child sends ShutdownControl, revokes the credential, kills the child, and sets asleep", async () => {
+		const fx = await makeFixture("omp-session-sup-stop-", {}, { restartMax: 2 });
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		const updated = await waitFor(
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		const env = await waitForEnv(fx.envFile, 1);
+		const pid = await waitForPid(fx.pidFile);
+		const daemon = await pairDaemon(fx, env);
+
+		await fx.supervisor.stop(entry.daemonId);
+
+		const shutdown = await waitFor(
 			() =>
-				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
-			5000,
-			"error status",
+				daemon
+					.received()
+					.find((e) => e.streamId === CALLBACK_TRANSPORT_STREAM_ID && e.kind === "control") ?? null,
+			3000,
+			"ShutdownControl",
 		);
-		expect(updated.error).toContain("invalid endpoint from child");
-		expect(updated.error).toContain("bad host");
-		// The child is dead, not left running behind a wedged pump, and the
-		// connector never touched it.
-		const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-		await waitFor(
-			() => {
-				try {
-					process.kill(pid, 0);
-					return null;
-				} catch {
-					return "dead";
-				}
-			},
-			2000,
-			"child death",
-		);
-		expect(connector.isConnected(entry.daemonId)).toBe(false);
-		expect(registry.get(entry.daemonId)!.status).toBe("error");
-	});
-
-	test("#23 a malformed endpoint line is dropped as noise; the valid listening line still resolves (no wedged pump)", async () => {
-		const projectDir = tmpPath("omp-session-sup-garbage-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const script = join(projectDir, "child.sh");
-		writeFileSync(
-			script,
-			[
-				"#!/bin/sh",
-				'trap "exit 0" TERM INT',
-				// The malformed wrapper endpoint line must not throw inside the
-				// supervisor's read loop: it is dropped at parse time and the
-				// following valid listening line resolves normally.
-				`printf 'OMP_SESSION|%s\\n' '{"event":"endpoint","url":"garbage"}'`,
-				`printf 'OMP_SESSION|%s\\n' '{"event":"listening","bind":"127.0.0.1","port":${fake.port},"url":"ws://127.0.0.1:${fake.port}"}'`,
-				"while :; do sleep 0.05; done",
-			].join("\n") + "\n",
-		);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-		});
-
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
-		const updated = registry.get(entry.daemonId)!;
-		expect(updated.endpoint).toBe(`ws://127.0.0.1:${fake.port}`);
-		expect(updated.status).toBe("ready");
-	});
-
-	test("#23 a child that prints only malformed contract lines errors at the endpoint deadline and is killed", async () => {
-		const projectDir = tmpPath("omp-session-sup-onlygarbage-");
-		const argsFile = join(projectDir, "args.txt");
-		const pidFile = join(projectDir, "pid.txt");
-		const script = join(projectDir, "child.sh");
-		writeFileSync(
-			script,
-			[
-				"#!/bin/sh",
-				'trap "exit 0" TERM INT',
-				`echo $$ > '${pidFile}'`,
-				`echo "$@" >> '${argsFile}'`,
-				`printf 'OMP_SESSION|%s\\n' '{"event":"endpoint","url":"garbage"}'`,
-				"while :; do sleep 0.05; done",
-			].join("\n") + "\n",
-		);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-			endpointTimeoutMs: 1000,
-		});
-
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		const updated = await waitFor(
-			() =>
-				registry.get(entry.daemonId)?.status === "error" ? registry.get(entry.daemonId)! : null,
-			5000,
-			"error status",
-		);
-		expect(updated.error).toContain("endpoint timeout");
-		const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-		await waitFor(
-			() => {
-				try {
-					process.kill(pid, 0);
-					return null;
-				} catch {
-					return "dead";
-				}
-			},
-			2000,
-			"child death",
-		);
-		expect(connector.isConnected(entry.daemonId)).toBe(false);
-	});
-
-	test("stop kills the child, drops the socket, and sets status asleep", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const pidFile = join(projectDir, "pid.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile, { pidFile });
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-		});
-
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
-		const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-		expect(pid).toBeGreaterThan(0);
-
-		await supervisor.stop(entry.daemonId);
-		expect(registry.get(entry.daemonId)?.status).toBe("asleep");
-		expect(connector.isConnected(entry.daemonId)).toBe(false);
-		await waitFor(() => (fake.serverCloses >= 1 ? "closed" : null), 2000, "server-observed close");
-		let alive = true;
-		try {
-			process.kill(pid, 0);
-		} catch {
-			alive = false;
-		}
-		expect(alive).toBe(false);
+		expect(shutdown.payload).toEqual({ type: "shutdown", reason: "stop" });
+		const stopped = fx.registry.get(entry.daemonId)!;
+		expect(stopped.status).toBe("asleep");
+		expect(stopped.workspace?.enrollment).toBeUndefined();
+		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		expect(isAlive(pid)).toBe(false);
 	});
 
 	test("stop cancels a scheduled restart", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile, { fail: true });
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 5,
-		});
+		const fx = await makeFixture(
+			"omp-session-sup-stoprestart-",
+			{ exitCode: 1 },
+			{ restartMax: 5 },
+		);
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		// The first child exits ~instantly and schedules a restart at ≥500ms;
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		// The first child exits ~instantly and schedules a restart at >=500ms;
 		// stop() within that window must cancel it.
-		await waitFor(
-			() => {
-				try {
-					return readFileSync(argsFile, "utf8").trim().split("\n").length >= 1 ? "spawned" : null;
-				} catch {
-					return null; // the child may not have written the file yet
-				}
-			},
-			2000,
-			"first child",
-		);
-		await supervisor.stop(entry.daemonId);
-		expect(registry.get(entry.daemonId)?.status).toBe("asleep");
+		await waitForLaunches(fx.argsFile, 1);
+		await fx.supervisor.stop(entry.daemonId);
+		expect(fx.registry.get(entry.daemonId)?.status).toBe("asleep");
 		await sleep(2200); // the 1s-min backoff would have fired by now if not cancelled
-		expect(readFileSync(argsFile, "utf8").trim().split("\n")).toHaveLength(1);
+		expect(readLines(fx.argsFile)).toHaveLength(1);
 	});
 
-	test("stderrTail returns the ring buffer; the ring truncates to stderrRingBytes", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile, {
-			stderrLines: ["boom-one", "boom-two"],
-		});
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-		});
+	test("close leaves the child running and its enrollment in place", async () => {
+		const fx = await makeFixture("omp-session-sup-close-", {}, { restartMax: 2 });
 
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
-		const tail = supervisor.stderrTail(entry.daemonId);
-		expect(tail).toContain("boom-one");
-		expect(tail).toContain("boom-two");
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		const env = await waitForEnv(fx.envFile, 1);
+		const pid = await waitForPid(fx.pidFile);
+		const daemon = await pairDaemon(fx, env);
 
-		await supervisor.stop(entry.daemonId);
+		fx.supervisor.close();
+		await sleep(150);
 
-		// A small ring keeps only the tail.
-		const supervisor2 = makeSupervisor(registry, connector, makeConfig(script), {
-			stderrRingBytes: 8,
+		// Sessions outlive the control plane: the child and its pair survive
+		// (the harness teardown kills the child).
+		expect(isAlive(pid)).toBe(true);
+		expect(daemon.connected()).toBe(true);
+		expect(fx.transport.pairStatus(entry.daemonId)).toMatchObject({
+			enrolled: true,
+			authorizedGeneration: 1,
+			paired: true,
 		});
-		const entry2 = await supervisor2.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry2.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready 2",
-		);
-		const smallTail = supervisor2.stderrTail(entry2.daemonId);
-		expect(smallTail.length).toBeLessThanOrEqual(8);
-		expect(smallTail.endsWith("two\n")).toBe(true);
+		expect(fx.registry.get(entry.daemonId)?.workspace?.enrollment?.generation).toBe(1);
 	});
 
-	test("#24 prune() drops the per-daemon child state after stop (stderr ring, restart budget)", async () => {
-		const projectDir = tmpPath("omp-session-sup-prune-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsFile = join(projectDir, "args.txt");
-		const script = writeChildScript(projectDir, fake.port, argsFile, {
-			stderrLines: ["prune-boom"],
-		});
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script));
-		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
+	test("stderrTail returns the tail of the session log file, bounded to 64 KiB", async () => {
+		const projectDir = tmpPath("omp-session-sup-stderr-");
+		const script = join(projectDir, "child.sh");
+		writeFileSync(
+			script,
+			[
+				"#!/bin/sh",
+				'trap "exit 0" TERM INT',
+				'echo "head-line"',
+				"head -c 70000 /dev/zero | tr '\\0' 'a'",
+				"echo",
+				'echo "tail-marker" >&2',
+				"while :; do sleep 0.05; done",
+			].join("\n") + "\n",
 		);
-		// The stderr ring is populated while the child lives.
-		expect(supervisor.stderrTail(entry.daemonId)).toContain("prune-boom");
-		// prune() = stop + drop the ChildState: the ring (up to 64KB per
-		// daemon) and restart budget must not outlive the removed daemon.
-		await supervisor.prune(entry.daemonId);
-		expect(registry.get(entry.daemonId)?.status).toBe("asleep");
-		expect(connector.isConnected(entry.daemonId)).toBe(false);
-		expect(supervisor.stderrTail(entry.daemonId)).toBe("");
+		const { supervisor } = await makeHarness(makeConfig(script), { restartMax: 2 });
+		expect(supervisor.stderrTail("d-never-spawned")).toBe("");
+
+		const entry = await supervisor.spawn({ cwd: projectDir });
+		const tail = await waitFor(
+			() => {
+				const text = supervisor.stderrTail(entry.daemonId);
+				return text.includes("tail-marker") ? text : null;
+			},
+			5000,
+			"log tail",
+		);
+		expect(tail.length).toBeLessThanOrEqual(64 * 1024);
+		expect(tail).not.toContain("head-line"); // fell outside the 64 KiB tail
+		expect(tail.endsWith("tail-marker\n")).toBe(true);
+	});
+
+	test("prune drops the per-daemon child state after stop; the log file and a revoked enrollment remain consistent", async () => {
+		const fx = await makeFixture(
+			"omp-session-sup-prune-",
+			{ stderrLines: ["prune-boom"] },
+			{ restartMax: 2 },
+		);
+
+		const entry = await fx.supervisor.spawn({ cwd: fx.dir });
+		await waitFor(
+			() => (fx.supervisor.stderrTail(entry.daemonId).includes("prune-boom") ? "logged" : null),
+			5000,
+			"child log",
+		);
+		expect(fx.supervisor.snapshot()[entry.daemonId]).toBeDefined();
+
+		await fx.supervisor.prune(entry.daemonId);
+		expect(fx.registry.get(entry.daemonId)?.status).toBe("asleep");
+		expect(fx.supervisor.snapshot()[entry.daemonId]).toBeUndefined();
+		expect(fx.transport.pairStatus(entry.daemonId).enrolled).toBe(false);
+		// The log lives on disk, so it outlasts the supervisor's child state.
+		expect(fx.supervisor.stderrTail(entry.daemonId)).toContain("prune-boom");
 		// The child stays dead; no restart fires from the pruned state.
 		await sleep(100);
-		expect(supervisor.stderrTail(entry.daemonId)).toBe("");
+		expect(readLines(fx.argsFile)).toHaveLength(1);
 	});
 
 	test("unknown template rejects and creates nothing", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
-		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt"));
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {});
-		const before = registry.list().length;
-		await expect(supervisor.spawn({ cwd: projectDir, template: "nope" })).rejects.toThrow(
+		const fx = await makeFixture("omp-session-sup-unknown-", {}, {});
+		const before = fx.registry.list().length;
+		await expect(fx.supervisor.spawn({ cwd: fx.dir, template: "nope" })).rejects.toThrow(
 			/unknown spawn template/,
 		);
-		expect(registry.list()).toHaveLength(before);
+		expect(fx.registry.list()).toHaveLength(before);
 	});
+
+	/** Two scripts in separate dirs (writeChildScript uses a fixed `child.sh` name per dir). */
+	function tierScripts(projectDir: string): {
+		argsDefault: string;
+		argsOverride: string;
+		scriptDefault: string;
+		scriptOverride: string;
+	} {
+		const argsDefault = join(projectDir, "args-default.txt");
+		const argsOverride = join(projectDir, "args-override.txt");
+		mkdirSync(join(projectDir, "tpl-default"), { recursive: true });
+		mkdirSync(join(projectDir, "tpl-override"), { recursive: true });
+		return {
+			argsDefault,
+			argsOverride,
+			scriptDefault: writeChildScript(join(projectDir, "tpl-default"), argsDefault),
+			scriptOverride: writeChildScript(join(projectDir, "tpl-override"), argsOverride),
+		};
+	}
 
 	test("projectTemplates: basename(cwd) picks the template when init.template is absent", async () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsDefault = join(projectDir, "args-default.txt");
-		const argsOverride = join(projectDir, "args-override.txt");
-		// Separate dirs: writeChildScript uses a fixed `child.sh` name per dir.
-		mkdirSync(join(projectDir, "tpl-default"), { recursive: true });
-		mkdirSync(join(projectDir, "tpl-override"), { recursive: true });
-		const scriptDefault = writeChildScript(join(projectDir, "tpl-default"), fake.port, argsDefault);
-		const scriptOverride = writeChildScript(
-			join(projectDir, "tpl-override"),
-			fake.port,
-			argsOverride,
-		);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(
-			registry,
-			connector,
+		const { argsDefault, argsOverride, scriptDefault, scriptOverride } = tierScripts(projectDir);
+		const { registry, supervisor } = await makeHarness(
 			makeTierConfig(scriptDefault, scriptOverride, { [basename(projectDir)]: "other" }),
 			{ restartMax: 2 },
 		);
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
+		const [line] = await waitForLaunches(argsOverride, 1);
 		expect(registry.get(entry.daemonId)?.template).toBe("other");
-		expect(readFileSync(argsOverride, "utf8").split("\n")[0]).toContain(
-			registry.get(entry.daemonId)!.token!,
-		);
+		expect(line).toMatch(TOKEN_ARG);
 		// The default-template child must never have launched.
 		expect(existsSync(argsDefault)).toBe(false);
 	});
 
 	test("init.template wins over projectTemplates", async () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsDefault = join(projectDir, "args-default.txt");
-		const argsOverride = join(projectDir, "args-override.txt");
-		mkdirSync(join(projectDir, "tpl-default"), { recursive: true });
-		mkdirSync(join(projectDir, "tpl-override"), { recursive: true });
-		const scriptDefault = writeChildScript(join(projectDir, "tpl-default"), fake.port, argsDefault);
-		const scriptOverride = writeChildScript(
-			join(projectDir, "tpl-override"),
-			fake.port,
-			argsOverride,
-		);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(
-			registry,
-			connector,
+		const { argsDefault, argsOverride, scriptDefault, scriptOverride } = tierScripts(projectDir);
+		const { registry, supervisor } = await makeHarness(
 			makeTierConfig(scriptDefault, scriptOverride, { [basename(projectDir)]: "other" }),
 			{ restartMax: 2 },
 		);
 
 		const entry = await supervisor.spawn({ cwd: projectDir, template: "test" });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
+		await waitForLaunches(argsDefault, 1);
 		expect(registry.get(entry.daemonId)?.template).toBe("test");
-		expect(readFileSync(argsDefault, "utf8").split("\n")[0]).toContain(
-			registry.get(entry.daemonId)!.token!,
-		);
 		expect(existsSync(argsOverride)).toBe(false);
 	});
 
 	test("defaultTemplate applies when the project has no override", async () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsDefault = join(projectDir, "args-default.txt");
-		const argsOverride = join(projectDir, "args-override.txt");
-		mkdirSync(join(projectDir, "tpl-default"), { recursive: true });
-		mkdirSync(join(projectDir, "tpl-override"), { recursive: true });
-		const scriptDefault = writeChildScript(join(projectDir, "tpl-default"), fake.port, argsDefault);
-		const scriptOverride = writeChildScript(
-			join(projectDir, "tpl-override"),
-			fake.port,
-			argsOverride,
-		);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
+		const { argsDefault, argsOverride, scriptDefault, scriptOverride } = tierScripts(projectDir);
 		// The override key deliberately does not match this project's basename.
-		const supervisor = makeSupervisor(
-			registry,
-			connector,
+		const { registry, supervisor } = await makeHarness(
 			makeTierConfig(scriptDefault, scriptOverride, { "some-other-project": "other" }),
 			{ restartMax: 2 },
 		);
 
 		const entry = await supervisor.spawn({ cwd: projectDir });
-		await waitFor(
-			() => (registry.get(entry.daemonId)?.status === "ready" ? "ready" : null),
-			5000,
-			"ready",
-		);
+		await waitForLaunches(argsDefault, 1);
 		expect(registry.get(entry.daemonId)?.template).toBe("test");
-		expect(readFileSync(argsDefault, "utf8").split("\n")[0]).toContain(
-			registry.get(entry.daemonId)!.token!,
-		);
 		expect(existsSync(argsOverride)).toBe(false);
 	});
 
 	test("unknown projectTemplates value rejects and creates nothing", async () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
-		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt"));
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(
-			registry,
-			connector,
+		const script = writeChildScript(projectDir, join(projectDir, "args.txt"));
+		const { registry, supervisor } = await makeHarness(
 			makeTierConfig(script, script, { [basename(projectDir)]: "nope" }),
 			{ restartMax: 2 },
 		);
@@ -1411,12 +1123,8 @@ describe("SpawnSupervisor", () => {
 
 	test("resolveTemplateName: explicit → projectTemplates[basename(cwd)] → defaultTemplate; unknown names reject", async () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
-		const script = writeChildScript(projectDir, 1, join(projectDir, "args.txt")); // path only; no child runs
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(
-			registry,
-			connector,
+		const script = writeChildScript(projectDir, join(projectDir, "args.txt")); // path only; no child runs
+		const { supervisor } = await makeHarness(
 			makeTierConfig(script, script, { [basename(projectDir)]: "other" }),
 			{ restartMax: 0 },
 		);
@@ -1437,31 +1145,16 @@ describe("SpawnSupervisor", () => {
 			workspaceDir: "/tmp/fleet-test-ws",
 			bind: "127.0.0.1",
 		};
-		const supervisor2 = makeSupervisor(registry, connector, missingDefault, { restartMax: 0 });
+		const { supervisor: supervisor2 } = await makeHarness(missingDefault, { restartMax: 0 });
 		expect(() => supervisor2.resolveTemplateName("/x")).toThrow("unknown spawn template: missing");
 	});
 
 	test("respawn of a template-less asleep entry resolves projectTemplates/defaultTemplate (asleep default workspaces are wakeable)", async () => {
 		const projectDir = tmpPath("omp-session-sup-proj-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const argsDefault = join(projectDir, "args-default.txt");
-		const argsOverride = join(projectDir, "args-override.txt");
-		// Separate dirs: writeChildScript uses a fixed `child.sh` name per dir.
-		mkdirSync(join(projectDir, "tpl-default"), { recursive: true });
-		mkdirSync(join(projectDir, "tpl-override"), { recursive: true });
-		const scriptDefault = writeChildScript(join(projectDir, "tpl-default"), fake.port, argsDefault);
-		const scriptOverride = writeChildScript(
-			join(projectDir, "tpl-override"),
-			fake.port,
-			argsOverride,
-		);
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
+		const { argsDefault, argsOverride, scriptDefault, scriptOverride } = tierScripts(projectDir);
 		// The project has a per-repo override; a template-less entry must
 		// resolve it exactly like spawn() would.
-		const supervisor = makeSupervisor(
-			registry,
-			connector,
+		const { registry, supervisor } = await makeHarness(
 			makeTierConfig(scriptDefault, scriptOverride, { [basename(projectDir)]: "other" }),
 			{ restartMax: 2 },
 		);
@@ -1478,17 +1171,9 @@ describe("SpawnSupervisor", () => {
 		expect(asleep.template).toBeUndefined();
 
 		await supervisor.respawn(asleep);
-		await waitFor(
-			() => {
-				const current = registry.get(asleep.daemonId)!;
-				return current.status === "ready" ? "ready" : null;
-			},
-			8000,
-			"respawned ready",
-		);
-		// The OVERRIDE template's child ran (its args file exists), never
-		// the default's; the fallback resolved projectTemplates.
-		expect(readFileSync(argsOverride, "utf8").trim().split("\n")).toHaveLength(1);
+		// The OVERRIDE template's child ran, never the default's; the
+		// fallback resolved projectTemplates.
+		expect(await waitForLaunches(argsOverride, 1)).toHaveLength(1);
 		expect(existsSync(argsDefault)).toBe(false);
 		// The resolved name was healed onto the entry for later respawns.
 		expect(registry.get(asleep.daemonId)?.template).toBe("other");
@@ -1497,22 +1182,14 @@ describe("SpawnSupervisor", () => {
 
 describe("git-state polling", () => {
 	/** Supervisor with a config whose child would fail: polling tests never spawn. */
-	async function pollSupervisor(opts?: ConstructorParameters<typeof SpawnSupervisor>[3]): Promise<{
-		registry: Registry;
-		connector: DaemonConnector;
-		supervisor: SpawnSupervisor;
-	}> {
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), {
-			restartMax: 0,
-			...(opts ?? {}),
-		});
-		return { registry, connector, supervisor };
+	function pollSupervisor(
+		opts?: ConstructorParameters<typeof SpawnSupervisor>[3],
+	): Promise<Harness> {
+		return makeHarness(makeConfig("/nonexistent-child.sh"), { restartMax: 0, ...(opts ?? {}) });
 	}
 
 	test("probes local entries only on change; remote and empty-cwd entries are never probed", async () => {
-		const { registry, connector, supervisor } = await pollSupervisor();
+		const { registry, supervisor } = await pollSupervisor();
 		const local = registry.create({
 			name: "l",
 			cwd: "/srv/repos/acme",
@@ -1529,15 +1206,13 @@ describe("git-state polling", () => {
 			project: "acme",
 			labels: [],
 			mode: "remote",
-			endpoint: "ws://127.0.0.1:1",
 		});
 		registry.create({
 			name: "e",
 			cwd: "",
 			project: "",
 			labels: [],
-			mode: "attached",
-			endpoint: "ws://127.0.0.1:2",
+			mode: "remote",
 		});
 		let onChange = 0;
 		registry.onChange = () => {
@@ -1582,13 +1257,10 @@ describe("git-state polling", () => {
 	});
 
 	test("a changed state updates the registry and persists to disk", async () => {
-		const statePath = join(tmpPath("omp-session-sup-gitstate-"), "state.json");
-		const registry = new Registry(statePath);
-		await registry.load();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), {
-			restartMax: 0,
-		});
+		const { registry, supervisor, statePath } = await makeHarness(
+			makeConfig("/nonexistent-child.sh"),
+			{ restartMax: 0 },
+		);
 		const local = registry.create({
 			name: "l",
 			cwd: "/srv/repos/acme",
@@ -1659,13 +1331,10 @@ describe("git-state polling", () => {
 	});
 
 	test("git-poll probe fills sessionTitle from the last session file and clears it when the file is gone", async () => {
-		const statePath = join(tmpPath("omp-session-sup-title-"), "state.json");
-		const registry = new Registry(statePath);
-		await registry.load();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), {
-			restartMax: 0,
-		});
+		const { registry, supervisor, statePath } = await makeHarness(
+			makeConfig("/nonexistent-child.sh"),
+			{ restartMax: 0 },
+		);
 		// Real session file with the fixed-256-byte title slot + header.
 		const sessionDir = tempDir("omp-session-sup-titlefile-");
 		const sessionFile = join(sessionDir, "session.jsonl");
@@ -1732,13 +1401,10 @@ describe("git-state polling", () => {
 	});
 
 	test("probe flags a new/empty session (sessionEmpty) and clears it when a title appears", async () => {
-		const statePath = join(tmpPath("omp-session-sup-empty-"), "state.json");
-		const registry = new Registry(statePath);
-		await registry.load();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig("/nonexistent-child.sh"), {
-			restartMax: 0,
-		});
+		const { registry, supervisor, statePath } = await makeHarness(
+			makeConfig("/nonexistent-child.sh"),
+			{ restartMax: 0 },
+		);
 		// A fresh session: header present, NO title slot, NO messages.
 		const sessionDir = tempDir("omp-session-sup-emptyfile-");
 		const sessionFile = join(sessionDir, "session.jsonl");
@@ -1803,7 +1469,7 @@ describe("git-state polling", () => {
 	});
 
 	test("a probe failure clears previously-set fields, once", async () => {
-		const { registry, connector, supervisor } = await pollSupervisor();
+		const { registry, supervisor } = await pollSupervisor();
 		const local = registry.create({
 			name: "l",
 			cwd: "/srv/repos/acme",
@@ -1856,14 +1522,9 @@ describe("git-state polling", () => {
 	});
 
 	test("spawn() runs a one-off probe before the next poll tick", async () => {
-		const projectDir = tmpPath("omp-session-sup-gitone-");
-		const fake = startFake({ cwd: projectDir, sessionFile: "/srv/proj/sess.jsonl" });
-		const script = writeChildScript(projectDir, fake.port, join(projectDir, "args.txt"));
-		const registry = await loadedRegistry();
-		const connector = makeConnector(registry);
-		const supervisor = makeSupervisor(registry, connector, makeConfig(script), {
-			restartMax: 2,
-		});
+		const fx = await makeFixture("omp-session-sup-gitone-", {}, { restartMax: 2 });
+		const { registry, supervisor } = fx;
+		const projectDir = fx.dir;
 
 		const stdout = ["## main", "?? new.txt", ""].join("\n");
 		const { exec, calls } = fakeGitPhases([

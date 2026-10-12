@@ -40,8 +40,8 @@ import type { CallbackSendResult } from "./fleet-callback";
  * - Fleet→daemon control on the down half: `{type:"log_ack", offsets}` (an
  *   ack is durability; the fleet fsynced before it) and
  *   `{type:"log_gap", from, to}` (repair request: re-stream `[from, to)` of
- *   the named stream). Both arrive via handleControl() from the connector's
- *   onEnvelope.
+ *   the named stream). Both arrive via handleControl() from FleetCallback's
+ *   onEnvelope/onControl routing in index.ts.
  * - Resume: after a daemon restart the acked watermarks come back through
  *   `opts.restore` and each file is streamed from its last acked offset; the
  *   fleet ignores re-sends below its acked offset.
@@ -52,7 +52,7 @@ import type { CallbackSendResult } from "./fleet-callback";
  *   generation. (ctime is deliberately NOT watched: appends and the in-place
  *   title-slot rewrite touch ctime without changing file identity.)
  * - Ring: per-session 4 MiB unacked accounting window. Bytes are never
- *   buffered here; the file is source of truth and the connector's own
+ *   buffered here; the file is source of truth and the callback transport's own
  *   replay ring covers recent redelivery, so overflow (acks lagging) simply
  *   rewinds every lagging stream of the session to its acked offset and
  *   re-streams that file region from disk, flagged as a gap for status until
@@ -66,7 +66,7 @@ import type { CallbackSendResult } from "./fleet-callback";
  *   no partial hold. Non-JSONL blobs stream raw bytes with no line
  *   discipline.
  *
- * Chunk bounds: the connector rejects envelopes over ENVELOPE_MAX_BYTES
+ * Chunk bounds: the callback protocol rejects envelopes over ENVELOPE_MAX_BYTES
  * (1 MiB) as invalid_request, so raw chunk data is capped at 512 KiB;
  * ~683 KiB of base64, comfortably inside the cap with envelope overhead.
  *
@@ -108,7 +108,7 @@ interface AckSidecarEntry extends LogTailerRestoreEntry {
 export interface LogTailerOptions {
 	/** Agent sessions dir: `*.jsonl` at the root and one project level are main sessions. */
 	sessionsDir: string;
-	/** Frame-emitting send leg; identity/seq stamping stays in the connector. */
+	/** Frame-emitting send leg; identity/seq stamping stays in the callback client. */
 	send: LogTailerSend;
 	/** Acked offsets per streamId to resume from after a daemon restart. */
 	restore?: Map<string, LogTailerRestoreEntry>;

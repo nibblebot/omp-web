@@ -1,8 +1,8 @@
 /**
  * Control-plane route tests for fleet/server.ts ("fleet control plane"
  * describe): the /ctl/* routes exercised over loopback HTTP against a real
- * DaemonConnector + the shared fake omp-session daemon (see server.testkit).
- * No real omp-session children are spawned.
+ * fleet server (see server.testkit). No omp-session children are spawned, and
+ * enrolled entries are never paired here.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -11,15 +11,11 @@ import { basename, join } from "node:path";
 import type { RegistryEntry } from "../registry";
 import type { FleetServer } from "../server";
 import {
-	FAKE_CWD,
 	cleanupTempDirs,
 	fleetPaths,
 	gitInit,
 	postJson,
-	startFakeDaemon,
 	startTestFleet,
-	waitFor,
-	type FakeDaemon,
 	pinSettingsInMemory,
 } from "./server.testkit";
 
@@ -37,7 +33,6 @@ describe("fleet control plane", () => {
 	let statePath: string;
 	let configPath: string;
 	let server: FleetServer;
-	let fake: FakeDaemon;
 	let entry: RegistryEntry;
 
 	beforeAll(async () => {
@@ -55,7 +50,6 @@ describe("fleet control plane", () => {
 
 	afterAll(async () => {
 		if (server !== undefined) await server.close();
-		if (fake !== undefined) fake.close();
 	});
 
 	test("GET /ctl/sessions reflects the registry (empty at boot)", async () => {
@@ -130,7 +124,6 @@ describe("fleet control plane", () => {
 		});
 		expect(main!.worktreeOf).toBeUndefined();
 		expect(main!.lastSessionFile).toBeUndefined();
-		expect(main!.endpoint).toBeUndefined();
 		// The registered project shows up in GET /ctl/projects.
 		const merged = (await (await fetch(`http://127.0.0.1:${server.port}/ctl/projects`)).json()) as {
 			registered: Array<{ projectId: string }>;
@@ -247,7 +240,7 @@ describe("fleet control plane", () => {
 		expect(body.error).toContain("unknown project id");
 	});
 
-	test("GET /ctl/settings returns the unattached settings model", async () => {
+	test("GET /ctl/settings returns the settings model", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/settings`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
@@ -343,8 +336,17 @@ describe("fleet control plane", () => {
 		expect(body.error).toContain("spawn hook");
 	});
 
-	test("POST /ctl/add 400s on invalid JSON", async () => {
-		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/add`, {
+	test("POST /ctl/add is gone (404)", async () => {
+		const res = await postJson(server.port, "/ctl/add", {
+			name: "gone",
+			url: "ws://127.0.0.1:1",
+			token: "t",
+		});
+		expect(res.status).toBe(404);
+	});
+
+	test("POST /ctl/enroll 400s on invalid JSON", async () => {
+		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/enroll`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: "{not json",
@@ -352,39 +354,47 @@ describe("fleet control plane", () => {
 		expect(res.status).toBe(400);
 	});
 
-	test("POST /ctl/add creates a remote entry and the connector dials with the Bearer header", async () => {
-		fake = startFakeDaemon("sekret");
-		const res = await postJson(server.port, "/ctl/add", {
-			name: "added",
-			url: fake.url,
-			token: "sekret",
+	test("POST /ctl/enroll 400s on a non-loopback http callback URL", async () => {
+		const res = await postJson(server.port, "/ctl/enroll", {
+			name: "remote-http",
+			callbackUrl: "http://example.com:9000",
 		});
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as RegistryEntry;
-		expect(body.mode).toBe("remote");
-		expect(body.status).toBe("connecting");
-		entry = body;
-		// The connector must dial the fake and present the Bearer header.
-		await waitFor(() => fake.seen.authHeader !== null, 5000, "fake daemon dial");
-		expect(fake.seen.authHeader).toBe("Bearer sekret");
-		// hello_ok.cwd is adopted when the entry had no cwd.
-		await waitFor(
-			() => server.registry.get(entry.daemonId)?.status === "ready",
-			5000,
-			"daemon ready",
-		);
-		expect(server.registry.get(entry.daemonId)?.cwd).toBe(FAKE_CWD);
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toContain("callback URL must be https");
 	});
 
-	test("sessions list reflects the registry after add", async () => {
+	test("POST /ctl/enroll 201 returns the roster entry and a callback enrollment; the entry carries no credential", async () => {
+		const res = await postJson(server.port, "/ctl/enroll", {
+			name: "enrolled",
+			labels: ["env=test"],
+		});
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as {
+			entry: RegistryEntry;
+			enrollment: { workspaceId: string; generation: number; token: string; callbackUrl: string };
+		};
+		expect(body.entry.mode).toBe("remote");
+		expect(body.entry.name).toBe("enrolled");
+		expect(body.entry.labels).toEqual(["env=test"]);
+		expect(body.entry.status).toBe("connecting");
+		expect(body.entry).not.toHaveProperty("token");
+		expect(body.entry).not.toHaveProperty("workspace");
+		expect(body.enrollment.workspaceId).toBe(body.entry.daemonId);
+		expect(body.enrollment.generation).toBe(1);
+		expect(body.enrollment.token).toMatch(/^[0-9a-f]{64}$/);
+		expect(body.enrollment.callbackUrl).toMatch(/^http:\/\/.+:\d+$/);
+		entry = body.entry;
+	});
+
+	test("sessions list reflects the registry after enroll", async () => {
 		const res = await fetch(`http://127.0.0.1:${server.port}/ctl/sessions`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as RegistryEntry[];
 		const found = body.find((e) => e.daemonId === entry.daemonId);
 		expect(found).toBeDefined();
-		expect(found?.name).toBe("added");
-		expect(found?.status).toBe("ready");
-		expect(found?.endpoint).toBe(fake.url);
+		expect(found?.name).toBe("enrolled");
+		expect(found?.status).toBe("connecting");
 	});
 
 	test("GET /ctl/debug returns fleet facts, per-session internals, and the event log; never tokens", async () => {
@@ -404,18 +414,16 @@ describe("fleet control plane", () => {
 		expect(fleet.uptimeSec).toBeGreaterThanOrEqual(0);
 		expect(fleet.statePath).toBe(statePath);
 		expect(fleet.configPath).toBe(configPath);
-		// Sessions carry the live entry plus connector/supervisor internals.
+		// Sessions carry the live entry plus its pair and supervisor internals.
 		const sessions = body.sessions as Array<Record<string, unknown>>;
 		expect(Array.isArray(sessions)).toBe(true);
 		const found = sessions.find((session) => session.daemonId === entry.daemonId);
 		expect(found).toBeDefined();
-		expect(found?.status).toBe("ready");
-		expect(found?.endpoint).toBe(fake.url);
+		expect(found?.status).toBe("connecting");
 		expect(found?.registeredAt).toBe(server.registry.get(entry.daemonId)?.registeredAt);
 		expect(found?.uptimeSec).toBeGreaterThanOrEqual(0);
-		expect(found?.connector).toMatchObject({ state: "streaming", attempts: 0 });
-		// The log holds the lifecycle trail for this daemon (its status
-		// transitions landed in the ring at the connector wiring points).
+		expect(found?.pair).toMatchObject({ enrolled: true, paired: false });
+		// The log holds the lifecycle trail for this daemon (enrollment landed in the ring).
 		const log = body.log as Array<{
 			source?: string;
 			daemonId?: string;
@@ -425,11 +433,11 @@ describe("fleet control plane", () => {
 		expect(Array.isArray(log)).toBe(true);
 		expect(log.length).toBeGreaterThan(0);
 		expect(
-			log.some((event) => event.source === "connector" && event.daemonId === entry.daemonId),
-		).toBe(true);
-		expect(
 			log.some(
-				(event) => event.source === "server" && event.message === `added added (${fake.url})`,
+				(event) =>
+					event.source === "server" &&
+					event.daemonId === entry.daemonId &&
+					event.message?.startsWith(`enrolled ${entry.name} (`) === true,
 			),
 		).toBe(true);
 		// The browser-facing payload must never leak a bearer token: no key
@@ -451,46 +459,6 @@ describe("fleet control plane", () => {
 		expect(res.status).toBe(404);
 	});
 
-	test("POST /ctl/prompt without waitMs returns { submitted } and dispatches", async () => {
-		const res = await postJson(server.port, "/ctl/prompt", {
-			selector: entry.daemonId,
-			text: "ping",
-		});
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as { submitted?: unknown };
-		expect(body.submitted).toEqual([entry.daemonId]);
-		// The background dispatch must reach the fake (prompt call observed).
-		await waitFor(
-			() =>
-				fake.seen.calls.some(
-					(c) =>
-						(c as { type?: string; method?: string }).type === "call" &&
-						(c as { method?: string }).method === "prompt",
-				),
-			5000,
-			"prompt call on fake",
-		);
-	});
-
-	test("POST /ctl/prompt with waitMs returns PromptResult[]", async () => {
-		const res = await postJson(server.port, "/ctl/prompt", {
-			selector: entry.daemonId,
-			text: "hello there",
-			waitMs: 5000,
-		});
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as Array<{
-			daemonId?: string;
-			ok?: boolean;
-			text?: string;
-			error?: string;
-		}>;
-		expect(body).toHaveLength(1);
-		expect(body[0]?.daemonId).toBe(entry.daemonId);
-		expect(body[0]?.ok).toBe(true);
-		expect(body[0]?.error).toBeUndefined();
-	});
-
 	test("POST /ctl/stop 404s on an unknown selector", async () => {
 		const res = await postJson(server.port, "/ctl/stop", { selector: "nope" });
 		expect(res.status).toBe(404);
@@ -509,38 +477,15 @@ describe("fleet control plane", () => {
 		expect(res.status).toBe(404);
 	});
 
-	test("POST /ctl/remove evicts a remote entry from the registry", async () => {
-		// Its own fake daemon + fresh entry, so the shared `entry` fixture
-		// (and the shared `fake`) stays intact for later tests.
-		const localFake = startFakeDaemon("remove-token");
-		try {
-			const res = await postJson(server.port, "/ctl/add", {
-				name: "removable",
-				url: localFake.url,
-				token: "remove-token",
-			});
-			expect(res.status).toBe(200);
-			const added = (await res.json()) as RegistryEntry;
-			await waitFor(
-				() => server.registry.get(added.daemonId)?.status === "ready",
-				5000,
-				"removable daemon ready",
-			);
-			// #24: the connector tracks per-daemon state for the dialed entry;
-			// removal must prune it, not leave listeners/waiters/retain counts
-			// behind a gone registry entry.
-			const before = server.connector.stateCount();
-			expect(before).toBeGreaterThan(0);
-			const del = await postJson(server.port, "/ctl/remove", { selector: added.daemonId });
-			expect(del.status).toBe(200);
-			const body = (await del.json()) as { removed?: unknown };
-			expect(body.removed).toEqual([added.daemonId]);
-			expect(server.registry.get(added.daemonId)).toBeUndefined();
-			expect(server.connector.stateCount()).toBe(before - 1);
-			expect(server.connector.isConnected(added.daemonId)).toBe(false);
-		} finally {
-			localFake.close();
-		}
+	test("POST /ctl/remove evicts an enrolled remote entry from the registry", async () => {
+		const res = await postJson(server.port, "/ctl/enroll", { name: "removable" });
+		expect(res.status).toBe(201);
+		const added = ((await res.json()) as { entry: RegistryEntry }).entry;
+		const del = await postJson(server.port, "/ctl/remove", { selector: added.daemonId });
+		expect(del.status).toBe(200);
+		const body = (await del.json()) as { removed?: unknown };
+		expect(body.removed).toEqual([added.daemonId]);
+		expect(server.registry.get(added.daemonId)).toBeUndefined();
 	});
 
 	test("unknown route 404s", async () => {

@@ -12,7 +12,7 @@ const webRoot = dirname(fileURLToPath(import.meta.url));
 // roster UI and proxies each session's wire API), and /ctl to the fleet
 // control plane on the same port. OMP_DEV_FLEET_PORT is picked per-run by
 // scripts/dev.ts so parallel worktrees don't collide; the fixed default keeps
-// `bun run dev:web` against a manually started `bun run fleet serve` working.
+// `bun run dev:web` against a manually started `bun run fleet` working.
 const fleetPort = process.env.OMP_DEV_FLEET_PORT ?? "4722";
 
 // OMP_DEV_ALLOW_HOSTS (set by `--allow-hosts`): "1"/"true"/"*" allows every

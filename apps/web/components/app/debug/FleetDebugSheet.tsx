@@ -1,11 +1,6 @@
 import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
 import { clientId, state } from "../../../state";
-import {
-	endpointHost,
-	fetchFleetDebug,
-	fmtTime,
-	type FleetDebug,
-} from "../../../fleet-ui/fleet-debug";
+import { fetchFleetDebug, fmtPair, fmtTime, type FleetDebug } from "../../../fleet-ui/fleet-debug";
 import { formatDaemonUptime } from "../../../fleet-ui/daemon-ui";
 import { Modal } from "../../ui/Modal";
 import { LastFrameClock } from "./LastFrameClock";
@@ -151,9 +146,8 @@ export const FleetDebugSheet: Component<{ onClose: () => void }> = (props) => {
 														<th>status</th>
 														<th>mode</th>
 														<th>pid</th>
-														<th>endpoint</th>
 														<th>uptime</th>
-														<th>connector</th>
+														<th>pair</th>
 													</tr>
 												</thead>
 												<tbody>
@@ -174,23 +168,12 @@ export const FleetDebugSheet: Component<{ onClose: () => void }> = (props) => {
 																</td>
 																<td>{s.mode ?? "-"}</td>
 																<td>{s.pid ?? "-"}</td>
-																<td class="debug-cell-mono" title={s.endpoint}>
-																	{s.endpoint !== undefined ? endpointHost(s.endpoint) : "-"}
-																</td>
 																<td>
 																	{s.uptimeSec !== undefined
 																		? formatDaemonUptime(s.uptimeSec * 1000)
 																		: "-"}
 																</td>
-																<td class="debug-cell-mono">
-																	{s.connector
-																		? `${s.connector.state}${s.connector.attempts > 0 ? ` (${s.connector.attempts})` : ""}${
-																				s.connector.nextRetryInMs !== undefined
-																					? ` · ${s.connector.nextRetryInMs}ms`
-																					: ""
-																			}`
-																		: "-"}
-																</td>
+																<td class="debug-cell-mono">{s.pair ? fmtPair(s.pair) : "-"}</td>
 															</tr>
 														)}
 													</For>

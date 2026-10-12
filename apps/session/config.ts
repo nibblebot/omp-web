@@ -70,6 +70,16 @@ export interface SessionConfig {
 	callbackProxy?: string;
 	/** Explicit loopback HTTP exception; honored only for loopback callback URL hosts. */
 	callbackAllowHttp: boolean;
+	/**
+	 * Grace before a session with a callback pair configured but no ready pair shuts itself
+	 * down (ms; set by --control-grace, default 10m). 0 disables the grace shutdown.
+	 */
+	controlGraceMs: number;
+	/**
+	 * Mirror transcript logs over the callback pair (--log-mirror 0|1, default 1). Local
+	 * spawns pass 0: their transcripts already live on the fleet host.
+	 */
+	logMirror: boolean;
 }
 
 /** Parse a duration string: `90s`, `30m`, `1h`, or a bare number = milliseconds. */
@@ -202,6 +212,13 @@ export function parseConfig(argv: string[]): SessionConfig {
 		}
 		callbackProxy = parsed.toString();
 	}
+	const controlGraceMs = parseDuration(
+		flag("control-grace") ?? Bun.env.OMP_SESSION_CONTROL_GRACE ?? "10m",
+	);
+	const logMirrorRaw = flag("log-mirror") ?? Bun.env.OMP_SESSION_LOG_MIRROR ?? "1";
+	if (logMirrorRaw !== "0" && logMirrorRaw !== "1") {
+		throw new Error(`invalid --log-mirror "${logMirrorRaw}" (0 or 1)`);
+	}
 	return {
 		cwd,
 		port,
@@ -227,5 +244,7 @@ export function parseConfig(argv: string[]): SessionConfig {
 		callbackToken: flag("callback-token") ?? Bun.env.OMP_SESSION_CALLBACK_TOKEN,
 		callbackProxy,
 		callbackAllowHttp,
+		controlGraceMs,
+		logMirror: logMirrorRaw === "1",
 	};
 }

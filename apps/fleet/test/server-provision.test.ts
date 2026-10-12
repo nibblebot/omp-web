@@ -1,8 +1,9 @@
 /**
  * Provision-hook tests for fleet/server.ts ("POST /ctl/provision (spawn
- * hook)" describe): the spawnHook config runs a shell provider whose last
- * stdout line is the JSON (name/url/token/cwd) for the new remote entry,
- * plus direct runSpawnHook unit coverage and the CLI `provision` command.
+ * hook)" describe): the spawnHook config runs via `sh -c` with the callback
+ * enrollment in its env. Exit 0 registers an enrolled remote entry; non-zero
+ * exit or timeout rolls it back. Also covers direct runSpawnHook units and
+ * the CLI `provision` command.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -16,10 +17,7 @@ import {
 	fleetPaths,
 	hermeticStatsConfig,
 	postJson,
-	startFakeDaemon,
 	startTestFleet,
-	waitFor,
-	type FakeDaemon,
 	pinSettingsInMemory,
 } from "./server.testkit";
 
@@ -39,12 +37,10 @@ describe("POST /ctl/provision (spawn hook)", () => {
 	let hookPath: string;
 	let envFile: string;
 	let hookServer: FleetServer;
-	let hookFake: FakeDaemon;
 
 	beforeAll(async () => {
 		({ tmp, statePath, configPath } = fleetPaths());
 		envFile = join(tmp, "hook-env.txt");
-		hookFake = startFakeDaemon("hook-token");
 		hookPath = join(tmp, "hook.sh");
 		writeHappyHook();
 		// `sh -c <path>` needs the exec bit; rewrites below keep the mode.
@@ -54,10 +50,13 @@ describe("POST /ctl/provision (spawn hook)", () => {
 
 	afterAll(async () => {
 		if (hookServer !== undefined) await hookServer.close();
-		if (hookFake !== undefined) hookFake.close();
 	});
 
-	/** The shared hook: records its env, prints noise, then last-line JSON (name/url/token/cwd). */
+	/**
+	 * The shared hook: records the provision env (name, labels, callback
+	 * enrollment, log-mirror flag), prints stdout noise that must be ignored,
+	 * and exits 0.
+	 */
 	function writeHappyHook(): void {
 		writeFileSync(
 			hookPath,
@@ -65,15 +64,20 @@ describe("POST /ctl/provision (spawn hook)", () => {
 				"#!/bin/sh",
 				`echo "name=$OMP_HOOK_NAME" >> ${envFile}`,
 				`echo "labels=$OMP_HOOK_LABELS" >> ${envFile}`,
-				"echo 'provisioning sandbox...'", // noise: must not break parsing
+				`echo "callback=$OMP_SESSION_CALLBACK_URL" >> ${envFile}`,
+				`echo "workspace=$OMP_SESSION_CALLBACK_WORKSPACE" >> ${envFile}`,
+				`echo "generation=$OMP_SESSION_CALLBACK_GENERATION" >> ${envFile}`,
+				`echo "token=$OMP_SESSION_CALLBACK_TOKEN" >> ${envFile}`,
+				`echo "allowHttp=\${OMP_SESSION_CALLBACK_ALLOW_HTTP-unset}" >> ${envFile}`,
+				`echo "logMirror=\${OMP_SESSION_LOG_MIRROR-unset}" >> ${envFile}`,
+				"echo 'provisioning sandbox...'",
 				"echo 'still working...'",
-				`printf '{"name":"hook-%s","url":"ws://127.0.0.1:${hookFake.port}","token":"hook-token","cwd":"/srv/sandbox"}\\n' "$OMP_HOOK_NAME"`,
-				"echo ''", // trailing blank line: last NON-empty line is the JSON
+				"exit 0",
 			].join("\n") + "\n",
 		);
 	}
 
-	test("happy path: hook JSON → remote entry created and dialed with the Bearer token", async () => {
+	test("exit 0: enrolled remote entry created; hook env carries the callback enrollment", async () => {
 		const res = await postJson(hookServer.port, "/ctl/provision", {
 			name: "sandbox-a",
 			labels: ["env=prod", "team=x"],
@@ -81,36 +85,33 @@ describe("POST /ctl/provision (spawn hook)", () => {
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as RegistryEntry;
 		expect(body.mode).toBe("remote");
-		expect(body.name).toBe("hook-sandbox-a"); // hook name wins over the requested name
+		expect(body.name).toBe("sandbox-a");
 		expect(body.labels).toEqual(["env=prod", "team=x"]);
-		expect(body.cwd).toBe("/srv/sandbox");
-		expect(body.project).toBe("sandbox");
-		expect(body.endpoint).toBe(`ws://127.0.0.1:${hookFake.port}`);
-		expect(body.token).toBe("hook-token");
+		expect(body.cwd).toBe("");
+		expect(body.project).toBe("");
 		expect(body.status).toBe("connecting");
-		// The connector must dial the printed endpoint with the Bearer token.
-		await waitFor(() => hookFake.seen.authHeader !== null, 5000, "provision dial");
-		expect(hookFake.seen.authHeader).toBe("Bearer hook-token");
-		// The hook env carried the requested name and comma-joined labels.
+		expect(body).not.toHaveProperty("token");
 		const envText = readFileSync(envFile, "utf8");
 		expect(envText).toContain("name=sandbox-a");
 		expect(envText).toContain("labels=env=prod,team=x");
+		expect(envText).toMatch(/^callback=http:\/\/.+$/m);
+		expect(envText).toMatch(/^token=[0-9a-f]{64}$/m);
+		expect(envText).toContain("generation=1");
+		expect(envText).toContain("allowHttp=1");
+		expect(envText).toContain("logMirror=unset");
 	});
 
-	test("uses the requested name and empty cwd when the hook output omits them", async () => {
-		const { tmp: dir, statePath, configPath: cfg } = fleetPaths();
+	test("hook stdout is ignored: exit 0 succeeds with the requested name and empty cwd", async () => {
+		const { tmp: dir, statePath: sp, configPath: cfg } = fleetPaths();
 		const hook = join(dir, "hook.sh");
-		writeFileSync(
-			hook,
-			`#!/bin/sh\nprintf '{"url":"ws://127.0.0.1:${hookFake.port}","token":"hook-token"}\n'\n`,
-		);
+		writeFileSync(hook, "#!/bin/sh\necho 'not json at all'\nexit 0\n");
 		chmodSync(hook, 0o755);
 		writeFileSync(cfg, JSON.stringify({ spawnHook: hook }));
 		const srv = await startFleet({
 			port: 0,
-			statePath,
+			statePath: sp,
 			configPath: cfg,
-			statsConfig: hermeticStatsConfig(statePath),
+			statsConfig: hermeticStatsConfig(sp),
 		});
 		try {
 			const res = await postJson(srv.port, "/ctl/provision", { name: "requested-name" });
@@ -135,36 +136,6 @@ describe("POST /ctl/provision (spawn hook)", () => {
 		expect(hookServer.registry.list()).toHaveLength(before);
 	});
 
-	test("502 when the last stdout line is not valid JSON", async () => {
-		const before = hookServer.registry.list().length;
-		writeFileSync(hookPath, "#!/bin/sh\necho 'provisioning...'\necho 'not json'\n");
-		const res = await postJson(hookServer.port, "/ctl/provision", { name: "x" });
-		expect(res.status).toBe(502);
-		const body = (await res.json()) as { error?: string };
-		expect(body.error).toContain("not valid JSON");
-		expect(hookServer.registry.list()).toHaveLength(before);
-	});
-
-	test("502 when the hook output lacks url or token", async () => {
-		const before = hookServer.registry.list().length;
-		writeFileSync(hookPath, '#!/bin/sh\necho \'{"name":"x"}\'\n');
-		const res = await postJson(hookServer.port, "/ctl/provision", { name: "x" });
-		expect(res.status).toBe(502);
-		const body = (await res.json()) as { error?: string };
-		expect(body.error).toContain("missing url or token");
-		expect(hookServer.registry.list()).toHaveLength(before);
-	});
-
-	test("502 when the hook prints a non-ws url", async () => {
-		const before = hookServer.registry.list().length;
-		writeFileSync(hookPath, '#!/bin/sh\necho \'{"url":"http://example.com","token":"t"}\'\n');
-		const res = await postJson(hookServer.port, "/ctl/provision", { name: "x" });
-		expect(res.status).toBe(502);
-		const body = (await res.json()) as { error?: string };
-		expect(body.error).toContain("url must be ws:// or wss://");
-		expect(hookServer.registry.list()).toHaveLength(before);
-	});
-
 	test("runSpawnHook kills the child and rejects on timeout", async () => {
 		// `exec` replaces sh with sleep so the SIGKILL lands on the sleeper.
 		await expect(runSpawnHook("exec sleep 120", {}, 200)).rejects.toThrow(/timed out/);
@@ -175,7 +146,7 @@ describe("POST /ctl/provision (spawn hook)", () => {
 	});
 
 	test("CLI provision posts to /ctl/provision and prints the entry", async () => {
-		// The 502 tests rewrote the shared hook; restore the happy-path one.
+		// The 502 test rewrote the shared hook; restore the happy-path one.
 		writeHappyHook();
 		const logs: string[] = [];
 		const originalLog = console.log;
@@ -197,11 +168,11 @@ describe("POST /ctl/provision (spawn hook)", () => {
 		}
 		const output = logs.join("\n");
 		expect(output).toContain("provisioned");
-		expect(output).toContain("hook-cli-sandbox");
-		expect(output).toContain("connecting");
+		expect(output).toContain("(cli-sandbox)");
+		expect(output).toContain("status connecting");
 		// The --label flag reached the hook env and the registered entry.
 		expect(readFileSync(envFile, "utf8")).toContain("labels=env=test");
-		const entry = hookServer.registry.list().find((e) => e.name === "hook-cli-sandbox");
+		const entry = hookServer.registry.list().find((e) => e.name === "cli-sandbox");
 		expect(entry?.labels).toEqual(["env=test"]);
 	});
 });

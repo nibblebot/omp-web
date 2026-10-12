@@ -331,7 +331,7 @@ export async function main(argv: string[]): Promise<number> {
 		} else {
 			console.log(`omp-web updated to ${result.installedVersion}`);
 			if (await probeFleet()) {
-				console.log("fleet running on old version. Restart it");
+				console.log("omp-web is running an older version; stop it (Ctrl+C) and start it again");
 			}
 		}
 		return 0;

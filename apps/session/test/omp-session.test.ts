@@ -1090,14 +1090,14 @@ test("small transcripts keep the single-frame history shape (no `final` field)",
 
 test("backpressure drop is in-band: stream_reset precedes the end; the daemon stays alive for resume", async () => {
 	// Regression (audit #0): a stream killed for exceeding the SSE
-	// backpressure cap must NOT read as a dormant close on the connector.
+	// backpressure cap must NOT read as a dormant close on its /events client.
 	// Bun's HTTP layer writes the chunked terminator for both
 	// controller.close() and controller.error(), so a wire error cannot carry
 	// the distinction; the daemon marks the drop with a stream_reset frame
 	// immediately before the end instead. This test overflows the cap with a
 	// >4 MiB answer frame (formatSessionAsText serializes the whole resumed
 	// transcript as ONE frame) and proves the marker arrives in-band, the
-	// end still reads as a clean EOF (what the connector needs the marker
+	// end still reads as a clean EOF (what a client needs the marker
 	// for), and the daemon serves a fresh stream right after.
 	const bigDir = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-bpres-"));
 	try {
@@ -1154,7 +1154,7 @@ test("backpressure drop is in-band: stream_reset precedes the end; the daemon st
 		const reset = await waitForFrame(events.frames, "stream_reset", 10_000, "stream_reset frame");
 		expect(reset.reason).toBe("backpressure");
 		// The marker precedes the end: the wire close still reads clean (EOF),
-		// which is exactly why the connector needs the in-band marker to tell
+		// which is exactly why a client needs the in-band marker to tell
 		// drop-and-resume apart from a dormant close.
 		expect(await events.ended).toBe("eof");
 		// The daemon is ALIVE: a fresh stream attaches and answers commands.

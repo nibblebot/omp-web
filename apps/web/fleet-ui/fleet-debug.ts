@@ -19,10 +19,10 @@ type FleetLogEntry = {
 	daemonId?: string;
 };
 
-type FleetConnector = {
-	state: string;
-	attempts: number;
-	nextRetryInMs?: number;
+type FleetPair = {
+	enrolled: boolean;
+	paired: boolean;
+	authorizedGeneration: number | null;
 };
 
 type FleetSession = {
@@ -30,13 +30,12 @@ type FleetSession = {
 	name?: string;
 	status?: string;
 	mode?: string;
-	endpoint?: string;
 	pid?: number;
 	readyAt?: number;
 	registeredAt?: number;
 	uptimeSec?: number;
 	error?: string;
-	connector?: FleetConnector;
+	pair?: FleetPair;
 };
 
 export type FleetDebug = {
@@ -64,6 +63,10 @@ function asNumber(v: unknown): number | undefined {
 	return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
+function asBoolean(v: unknown): boolean {
+	return v === true;
+}
+
 /** Extract only the contract's fields, tolerantly; unknown fields are dropped. */
 function normalizeFleet(raw: unknown): FleetDebug | null {
 	const root = asRecord(raw);
@@ -74,24 +77,23 @@ function normalizeFleet(raw: unknown): FleetDebug | null {
 		for (const s of root.sessions) {
 			const r = asRecord(s);
 			if (!r) continue;
-			const connector = asRecord(r.connector);
+			const pair = asRecord(r.pair);
 			sessions.push({
 				daemonId: asString(r.daemonId),
 				name: asString(r.name),
 				status: asString(r.status),
 				mode: asString(r.mode),
-				endpoint: asString(r.endpoint),
 				pid: asNumber(r.pid),
 				readyAt: asNumber(r.readyAt),
 				registeredAt: asNumber(r.registeredAt),
 				uptimeSec: asNumber(r.uptimeSec),
 				error: asString(r.error),
-				...(connector !== undefined
+				...(pair !== undefined
 					? {
-							connector: {
-								state: asString(connector.state) ?? "unknown",
-								attempts: asNumber(connector.attempts) ?? 0,
-								nextRetryInMs: asNumber(connector.nextRetryInMs),
+							pair: {
+								enrolled: asBoolean(pair.enrolled),
+								paired: asBoolean(pair.paired),
+								authorizedGeneration: asNumber(pair.authorizedGeneration) ?? null,
 							},
 						}
 					: {}),
@@ -139,13 +141,12 @@ export function fmtTime(ts: number): string {
 	return ts > 0 ? new Date(ts).toTimeString().slice(0, 8) : "-";
 }
 
-/** Host[:port] of a ws/http endpoint URL; the raw string when unparsable. */
-export function endpointHost(endpoint: string): string {
-	try {
-		return new URL(endpoint).host;
-	} catch {
-		return endpoint;
-	}
+/** Cell text for a session's callback pair: `paired g<N>`, `unpaired g<N>`, or
+ *  `not enrolled`. The generation suffix is dropped when none is authorized. */
+export function fmtPair(pair: FleetPair): string {
+	if (!pair.enrolled) return "not enrolled";
+	const gen = pair.authorizedGeneration !== null ? ` g${pair.authorizedGeneration}` : "";
+	return `${pair.paired ? "paired" : "unpaired"}${gen}`;
 }
 
 /** GET /ctl/debug via the shared fetchCtlDebug() state action, normalized to

@@ -395,6 +395,60 @@ describe("advisor notes render inline (TUI advisor card parity)", () => {
 	});
 });
 
+describe("history: bang-shell and python runs render as settled cards", () => {
+	test("bashExecution and pythonExecution messages become bash items", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("session-a"));
+		dispatch({
+			type: "history",
+			messages: [
+				userMsg("q"),
+				{
+					role: "bashExecution",
+					command: "echo hi",
+					output: "hi\n",
+					exitCode: 0,
+					cancelled: false,
+					truncated: false,
+					timestamp: 0,
+				},
+				{
+					role: "bashExecution",
+					command: "sleep 9",
+					output: "",
+					cancelled: true,
+					truncated: true,
+					excludeFromContext: true,
+					timestamp: 0,
+				},
+				{
+					role: "pythonExecution",
+					code: "print(1)",
+					output: "1\n",
+					exitCode: 1,
+					cancelled: false,
+					truncated: false,
+					timestamp: 0,
+				},
+			],
+		} as ServerFrame);
+		expect(state.items.map((it) => it.kind)).toEqual(["user", "bash", "bash", "bash"]);
+		expect(state.items.slice(1)).toMatchObject([
+			{
+				command: "echo hi",
+				lang: "bash",
+				dimmed: false,
+				status: "done",
+				output: "hi\n",
+				exitCode: 0,
+			},
+			{ command: "sleep 9", lang: "bash", dimmed: true, exitCode: null, truncated: true },
+			{ command: "print(1)", lang: "python", dimmed: false, output: "1\n", exitCode: 1 },
+		]);
+	});
+});
+
 describe("attach correlation (finding #28)", () => {
 	/** The attach command posted by the last attachSession() call. */
 	function lastAttach(): Extract<ClientCommand, { type: "attach" }> {

@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { resolveBaseDirs, shouldOfferSetup, writeConfigFile } from "../cli";
+import { main, resolveBaseDirs, shouldOfferSetup, writeConfigFile } from "../cli";
 
 afterAll(cleanupTempDirs);
 
@@ -57,5 +57,23 @@ describe("writeConfigFile", () => {
 		expect(existsSync(configPath)).toBe(true);
 		const parsed = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
 		expect(parsed).toEqual({ workspaceDir });
+	});
+});
+
+describe("removed add verb", () => {
+	test("add is an unknown command: exit 1, no request sent", async () => {
+		const errors: string[] = [];
+		const originalError = console.error;
+		console.error = (msg?: unknown) => {
+			errors.push(String(msg));
+		};
+		let code: number;
+		try {
+			code = await main(["add", "worker", "https://edge.example", "--token", "t", "--port", "1"]);
+		} finally {
+			console.error = originalError;
+		}
+		expect(code).toBe(1);
+		expect(errors[0]).toBe("unknown command: add");
 	});
 });

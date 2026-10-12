@@ -7,7 +7,7 @@ import { encodeSseEvent, parseSseUnits, SSE_PING_EVENT } from "./sse";
  *
  * Pure module: no I/O, no ambient state beyond the explicit parser/dedup
  * objects this file creates. Shared by the fleet (server routes, edge) and
- * the daemon connector.
+ * the daemon's callback client.
  *
  * Up:   daemon-initiated long-lived POST /callback/up, body
  *       application/x-ndjson UTF-8 envelopes, one record <= 1 MiB,
@@ -151,6 +151,21 @@ export interface QuiesceBeginControl {
 	requestId: string;
 	timeoutMs?: number;
 }
+
+/** fleet→daemon, kind "control", streamId "transport": graceful shutdown; the daemon acks, then exits 0. */
+export interface ShutdownControl {
+	type: "shutdown";
+	reason?: string;
+}
+
+/** Every fleet→daemon control payload on the down half. */
+export type DownControl =
+	| StreamOpenControl
+	| StreamCloseControl
+	| LogAckControl
+	| LogGapControl
+	| QuiesceBeginControl
+	| ShutdownControl;
 
 /** Final per-stream flush boundary: the fleet store must reach exactly these offsets. */
 export type FlushBoundary = Record<string, { offset: number; generation: number; eof: true }>;

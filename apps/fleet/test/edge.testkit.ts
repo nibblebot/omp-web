@@ -1,16 +1,18 @@
 /**
- * Shared fakes and harness for the split fleet edge suites (edge-wire,
- * edge-pipe, edge-worktrees): a fake omp-session / pipe daemon serving the
- * OMP_PROTO 2 wire contract, a browser SSE edge client, ring replay
- * collection, and polling helpers. Named *.testkit.ts so bun test discovery
- * never picks it up as a suite.
+ * Shared harness for the split fleet edge suites (edge-wire, edge-pipe,
+ * edge-worktrees): a browser SSE edge client, ring replay collection, wire
+ * fixtures, and polling helpers. The controlled daemon lives in
+ * callback-daemon.testkit.ts (a session-side callback pair dialed out to the
+ * fleet; the fleet never dials a session). Named *.testkit.ts so bun test
+ * discovery never picks it up as a suite.
  */
 import { join } from "node:path";
-import { OMP_PROTO, SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "#lib/wire/protocol";
+import { SSE_DELTA_SEQ_START, SSE_EVENT_NAME } from "#lib/wire/protocol";
 import type { DaemonEntry, DaemonInfo, ServerFrame } from "#lib/wire/protocol";
-import { encodeSseEvent, parseSseUnits, SSE_PING_BLOCK } from "#lib/wire/sse";
+import { parseSseUnits } from "#lib/wire/sse";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetEdge } from "../edge";
+import type { DaemonTransportRegistry } from "../daemon-transport";
 
 export { cleanupTempDirs };
 
@@ -66,313 +68,6 @@ export const FAKE_STATE = {
 	computerToolEnabled: false,
 	inspectImageMode: "disabled",
 };
-
-/** One /events stream observed on the fake (the connector's control stream or an edge pipe). */
-export interface FakeStreamSeen {
-	authHeader: string | null;
-	closed: boolean;
-}
-
-export interface FakeSession {
-	url: string;
-	port: number;
-	cwd: string;
-	streams(): FakeStreamSeen[];
-	streamCount(): number;
-	/** POST /command bodies received (the uplink, no hello precedes them). */
-	received: unknown[];
-	/** Broadcast a {type:"daemons"} broker roster to every open stream. */
-	emitDaemons(entries: DaemonInfo[]): void;
-	close(): void;
-}
-
-/**
- * Fake omp-session over the OMP_PROTO 2 wire contract: primes every /events
- * open (hello_ok first, then the attach priming), answers prompt calls with
- * call_result on ALL open streams (like the real single-session daemon,
- * whose unicast answers go to every stream; consumers dedup by id), and
- * records everything. Registered endpoints are pathless ws:// URLs, so
- * serving /events + /command on the bare origin also proves the
- * daemonHttpBase normalization end-to-end.
- */
-export function startFakeSession(opts: { cwd?: string } = {}): FakeSession {
-	const cwd = opts.cwd ?? FAKE_CWD;
-	const sessionFile = join(cwd, ".omp", "session.json");
-	const state = { ...FAKE_STATE, sessionFile };
-	const streams: FakeStreamSeen[] = [];
-	const received: unknown[] = [];
-	const live: Array<(block: string) => void> = [];
-	let nextSeq = SSE_DELTA_SEQ_START;
-	const encoder = new TextEncoder();
-	const server = Bun.serve({
-		hostname: "127.0.0.1",
-		port: 0,
-		fetch(req) {
-			const url = new URL(req.url);
-			if (url.pathname === "/command") {
-				return (async () => {
-					let frame: unknown;
-					try {
-						frame = await req.json();
-					} catch {
-						return new Response("malformed", { status: 400 });
-					}
-					received.push(frame);
-					const cmd = frame as { type?: string; id?: string };
-					if (cmd.type === "call" && cmd.id !== undefined) {
-						const answer = encodeSseEvent(
-							SSE_EVENT_NAME,
-							{ type: "call_result", id: cmd.id, ok: true, data: { echoed: frame } },
-							nextSeq++,
-						);
-						for (const write of live) write(answer);
-					}
-					return Response.json({ commandId: cmd.id ?? "" }, { status: 202 });
-				})();
-			}
-			if (url.pathname !== "/events") return new Response("not found", { status: 404 });
-			const seen: FakeStreamSeen = { authHeader: req.headers.get("authorization"), closed: false };
-			streams.push(seen);
-			let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
-			const write = (block: string): void => {
-				controller!.enqueue(encoder.encode(block));
-			};
-			live.push(write);
-			const body = new ReadableStream<Uint8Array>({
-				start(ctrl) {
-					controller = ctrl;
-					prime(write);
-				},
-				cancel() {
-					seen.closed = true;
-					const index = live.indexOf(write);
-					if (index !== -1) live.splice(index, 1);
-				},
-			});
-			return new Response(body, { headers: { "content-type": "text/event-stream" } });
-		},
-	});
-	/** omp-session's stream priming: hello_ok FIRST (HTTP-level auth), then the attach priming. */
-	function prime(write: (block: string) => void): void {
-		let seq = 1;
-		write(
-			encodeSseEvent(
-				SSE_EVENT_NAME,
-				{
-					type: "hello_ok",
-					proto: OMP_PROTO,
-					name: "fake",
-					cwd,
-					pid: 4242,
-					version: "0.0.0-test",
-					sessionFile,
-				},
-				seq++,
-			),
-		);
-		// Phase 6 wire format: omp-session keeps the required "s1" on `attached` but
-		// no longer stamps session-scoped frames; the edge adds the daemonId.
-		write(encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: "s1" }, seq++));
-		write(encodeSseEvent(SSE_EVENT_NAME, { type: "history", messages: [] }, seq++));
-		write(encodeSseEvent(SSE_EVENT_NAME, { type: "state", state }, seq++));
-		write(encodeSseEvent(SSE_EVENT_NAME, { type: "available_commands", commands: [] }, seq++));
-		write(encodeSseEvent(SSE_EVENT_NAME, { type: "ready", readyAt: Date.now() }, seq++));
-	}
-	return {
-		url: `ws://127.0.0.1:${server.port}`,
-		port: server.port!,
-		cwd,
-		streams: () => [...streams],
-		streamCount: () => streams.length,
-		received,
-		emitDaemons: (entries: DaemonInfo[]) => {
-			const frame = encodeSseEvent(
-				SSE_EVENT_NAME,
-				{ type: "daemons", daemons: entries },
-				nextSeq++,
-			);
-			for (const write of live) write(frame);
-		},
-		close: () => {
-			server.stop(true);
-		},
-	};
-}
-
-export interface PipeFake {
-	url: string;
-	port: number;
-	/** Last-Event-ID seen on each /events open, in open order (null when absent). */
-	lastEventIds(): Array<string | null>;
-	/** Every command POST body this fake received, in arrival order. */
-	commands(): Array<Record<string, unknown>>;
-	/**
-	 * Set the pid the next dial reports in hello_ok: the edge reads it as the
-	 * daemon's process identity, so flipping it models a respawn (the dedup
-	 * memory of the previous process is gone).
-	 */
-	setPid(next: number): void;
-	/** Stop the heartbeat keepalives: the pipe then goes silent (the edge trips its deadline). */
-	pause(): void;
-	/** Drop ONE live stream non-cleanly (index 0 = the connector's control stream, 1 = the pipe). */
-	killStream(index: number): void;
-	/** Drop every live stream non-cleanly (a daemon-side kill). */
-	kill(): void;
-	/** Broadcast a delta to live streams AND ring it for Last-Event-ID replay. */
-	emitDelta(frame: ServerFrame): void;
-	close(): void;
-}
-
-/**
- * Fake daemon for the pipe tests: primes every /events stream (the
- * connector's control stream and the edge's pipe), answers prompt calls
- * with call_result on all open streams, emits keepalive ping events every
- * heartbeatMs while not paused, and, like the real omp-session, keeps a
- * delta ring so a stream opened with Last-Event-ID ≥ SSE_DELTA_SEQ_START
- * replays the deltas it missed after the full priming.
- */
-export function startPipeFake(opts: { heartbeatMs?: number } = {}): PipeFake {
-	const heartbeatMs = opts.heartbeatMs ?? 30;
-	let paused = false;
-	// A respawn presents a NEW pid on the next dial; tests flip it to model the
-	// daemon's dedup memory (which is per process) being lost with the child.
-	let pid = 4243;
-	const commands: Array<Record<string, unknown>> = [];
-	const encoder = new TextEncoder();
-	const live: Array<(block: string) => void> = [];
-	const controllers: Array<ReadableStreamDefaultController<Uint8Array>> = [];
-	const seen: Array<string | null> = [];
-	const ring: Array<{ seq: number; block: string }> = [];
-	let nextSeq = SSE_DELTA_SEQ_START;
-	const server = Bun.serve({
-		hostname: "127.0.0.1",
-		port: 0,
-		fetch(req) {
-			const url = new URL(req.url);
-			if (url.pathname === "/command") {
-				return (async () => {
-					let frame: unknown;
-					try {
-						frame = await req.json();
-					} catch {
-						return new Response("malformed", { status: 400 });
-					}
-					const cmd = frame as { type?: string; id?: string };
-					commands.push(cmd as Record<string, unknown>);
-					if (cmd.type === "call" && cmd.id !== undefined) {
-						const seq = nextSeq++;
-						const block = encodeSseEvent(
-							SSE_EVENT_NAME,
-							{ type: "call_result", id: cmd.id, ok: true, data: { echoed: frame } },
-							seq,
-						);
-						ring.push({ seq, block });
-						for (const write of live) write(block);
-					}
-					return Response.json({ commandId: cmd.id ?? "" }, { status: 202 });
-				})();
-			}
-			if (url.pathname !== "/events") return new Response("not found", { status: 404 });
-			const lastEventId = req.headers.get("last-event-id");
-			seen.push(lastEventId);
-			let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
-			const write = (block: string): void => {
-				try {
-					controller!.enqueue(encoder.encode(block));
-				} catch {
-					// Stream already errored/closed (kill); the consumer saw the end.
-				}
-			};
-			live.push(write);
-			const body = new ReadableStream<Uint8Array>({
-				start(ctrl) {
-					controller = ctrl;
-					controllers.push(ctrl);
-					// Full priming on EVERY open (the real daemon re-primes even
-					// for a delta resume), then ring replay for delta-era ids.
-					let seq = 1;
-					write(
-						encodeSseEvent(
-							SSE_EVENT_NAME,
-							{
-								type: "hello_ok",
-								proto: OMP_PROTO,
-								name: "pipe-fake",
-								cwd: FAKE_CWD,
-								pid,
-								version: "0.0.0-test",
-							},
-							seq++,
-						),
-					);
-					write(encodeSseEvent(SSE_EVENT_NAME, { type: "attached", sessionId: "s1" }, seq++));
-					write(encodeSseEvent(SSE_EVENT_NAME, { type: "history", messages: [] }, seq++));
-					write(
-						encodeSseEvent(
-							SSE_EVENT_NAME,
-							{ type: "state", state: { ...FAKE_STATE, sessionFile: FAKE_SESSION_FILE } },
-							seq++,
-						),
-					);
-					write(
-						encodeSseEvent(SSE_EVENT_NAME, { type: "available_commands", commands: [] }, seq++),
-					);
-					write(encodeSseEvent(SSE_EVENT_NAME, { type: "ready", readyAt: Date.now() }, seq++));
-					const last = lastEventId === null ? NaN : Number(lastEventId);
-					if (Number.isFinite(last) && last >= SSE_DELTA_SEQ_START) {
-						for (const entry of ring) {
-							if (entry.seq > last) write(entry.block);
-						}
-					}
-				},
-				cancel() {
-					const index = live.indexOf(write);
-					if (index !== -1) {
-						live.splice(index, 1);
-						controllers.splice(index, 1);
-					}
-				},
-			});
-			return new Response(body, { headers: { "content-type": "text/event-stream" } });
-		},
-	});
-	const heartbeat = setInterval(() => {
-		if (paused) return;
-		for (const write of live) write(SSE_PING_BLOCK);
-	}, heartbeatMs);
-	return {
-		url: `ws://127.0.0.1:${server.port}`,
-		port: server.port!,
-		lastEventIds: () => [...seen],
-		commands: () => [...commands],
-		setPid: (next: number) => {
-			pid = next;
-		},
-		pause: () => {
-			paused = true;
-		},
-		killStream: (index: number) => {
-			const ctrl = controllers[index];
-			// A clean close is still a non-intentional drop to the edge (the
-			// consume loop's EOF path redials); close avoids Bun reporting an
-			// unhandled stream error the way controller.error() does.
-			if (ctrl) ctrl.close();
-		},
-		kill: () => {
-			for (const ctrl of [...controllers]) ctrl.close();
-		},
-		emitDelta: (frame: ServerFrame) => {
-			const seq = nextSeq++;
-			const block = encodeSseEvent(SSE_EVENT_NAME, frame, seq);
-			ring.push({ seq, block });
-			for (const write of live) write(block);
-		},
-		close: () => {
-			clearInterval(heartbeat);
-			server.stop(true);
-		},
-	};
-}
 
 export function sleep(ms: number): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
@@ -515,13 +210,22 @@ export async function openBrowser(port: number): Promise<BrowserSocket> {
 	return browser;
 }
 
-/** Mount a standalone edge on an ephemeral loopback port for direct tests. */
-export function serveEdge(edge: FleetEdge): { port: number; stop(): void } {
+/**
+ * Mount a standalone edge on an ephemeral loopback port for direct tests.
+ * Pass the transport the edge was built with to also serve /callback/* so a
+ * callback-daemon.testkit daemon can dial the pair.
+ */
+export function serveEdge(
+	edge: FleetEdge,
+	transport?: DaemonTransportRegistry,
+): { port: number; stop(): void } {
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
 		fetch: async (req) =>
-			(await edge.handleFetch(req)) ?? new Response("not found", { status: 404 }),
+			(await transport?.handleFetch(req)) ??
+			(await edge.handleFetch(req)) ??
+			new Response("not found", { status: 404 }),
 	});
 	return { port: server.port!, stop: () => server.stop(true) };
 }

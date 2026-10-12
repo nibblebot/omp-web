@@ -24,7 +24,7 @@ function entry(overrides: Partial<RegistryEntryShape> = {}): RegistryEntryShape 
 		cwd: `/home/user/${daemonId}`,
 		project: "root",
 		labels: [],
-		mode: "attached",
+		mode: "spawned",
 		status: "asleep",
 		registeredAt: 1,
 		...overrides,

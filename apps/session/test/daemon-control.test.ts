@@ -11,7 +11,7 @@
  *     the head were lost with no stream_resync (never a partial replay
  *     violated).
  *   - A caught-up ring hit (existing stream, floor >= newest) fell through
- *     to `deps.primeStream(...)`; a re-prime where the client already had
+ *     to a re-prime where the client already had
  *     everything (P3.10: "ring hit replays; only a miss re-primes").
  *
  * Fix: track the ring eviction frontier (`evictedSeq`, the highest wire seq
@@ -48,10 +48,18 @@ function typeOf(payload: unknown): string | undefined {
 
 /** Stub deps: send() returns "sent", assigns a fresh wire seq per ringed
  * browser-stream frame (invoking onEmittedSeq like the real transport), and
- * records every send. primeStream records its calls. */
-function makeHarness(): { control: DaemonControl; sent: Sent[]; primes: string[] } {
+ * records every send. Each prime records one entry in `primes`; its snapshot
+ * is `snapshot()` (no frames by default). */
+function makeHarness(snapshot: () => Record<string, unknown>[] = () => []): {
+	control: DaemonControl;
+	sent: Sent[];
+	primes: string[];
+	/** Resolves once `count` envelopes have been sent in total. */
+	sentCount: (count: number) => Promise<void>;
+} {
 	const sent: Sent[] = [];
 	const primes: string[] = [];
+	const waiters: Array<{ count: number; resolve: () => void }> = [];
 	let wireSeq = 1024;
 	const send: DaemonControlDeps["send"] = (streamId, kind, payload, onEmittedSeq): string => {
 		let seq: number | null = null;
@@ -60,7 +68,14 @@ function makeHarness(): { control: DaemonControl; sent: Sent[]; primes: string[]
 			onEmittedSeq(seq);
 		}
 		sent.push({ streamId, kind, payload, seq });
+		for (const waiter of waiters) if (sent.length >= waiter.count) waiter.resolve();
 		return "sent";
+	};
+	const sentCount = (count: number): Promise<void> => {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		if (sent.length >= count) resolve();
+		else waiters.push({ count, resolve });
+		return promise;
 	};
 	const deps: DaemonControlDeps = {
 		getEntry: () => undefined,
@@ -77,15 +92,18 @@ function makeHarness(): { control: DaemonControl; sent: Sent[]; primes: string[]
 			provenance: { workspaceId: "w1", workspaceName: "w", resolvedCommit: "", generatedAt: 0 },
 		}),
 		collectGitEvidence: async () => ({ ok: true }),
-		primeStream: (streamId) => {
-			primes.push(streamId);
+		preparePriming: async () => {
+			primes.push("prime");
+			return snapshot;
 		},
+		bufferedBytes: () => ({ stream: 0, connection: 0 }),
 		send,
 		pairLive: () => true,
 		mainSessionFile: null,
+		onShutdown: () => {},
 	};
 	const control = createDaemonControl(deps);
-	return { control, sent, primes };
+	return { control, sent, primes, sentCount };
 }
 
 /** Open the stream (stream_open control) with an optional lastSeq. */
@@ -120,7 +138,7 @@ describe("daemon-control stream_open replay (P3.10)", () => {
 	test("a fresh stream primes; subsequent ringed deltas ring with wire seqs", () => {
 		const { control, sent, primes } = makeHarness();
 		openStream(control); // brand-new: prime
-		expect(primes).toEqual([STREAM]);
+		expect(primes).toHaveLength(1);
 		emitState(control);
 		emitState(control);
 		const ringed = ringedSeqs(sent);
@@ -256,6 +274,48 @@ describe("daemon-control stream_open replay (P3.10)", () => {
 		openStream(control, 1027);
 		expect(primes.length).toBe(2); // no new prime
 		expect(sent.slice(sentBeforeReopen).filter((s) => s.kind === "frame")).toHaveLength(0);
+		control.stop();
+	});
+});
+
+describe("daemon-control browser-stream priming", () => {
+	test("frames mirrored after the priming snapshot arrive after the prime, in order", async () => {
+		let control!: DaemonControl;
+		const harness = makeHarness(() => {
+			// A live frame published the instant the snapshot is taken: its
+			// effect is not in the snapshot, so it must follow the history.
+			control.mirror({ type: "event", event: { type: "turn_start" } });
+			return [
+				{ type: "hello_ok" },
+				{ type: "attached", sessionId: "s1" },
+				{ type: "history", messages: [] },
+				{ type: "state", state: {} },
+			];
+		});
+		control = harness.control;
+		openStream(control);
+		// stream_open ack + the event's control-stream mirror + 4 priming frames + the held event.
+		await harness.sentCount(7);
+		const browserFrames = harness.sent
+			.filter((s) => s.streamId === STREAM && s.kind === "frame")
+			.map((s) => typeOf(s.payload));
+		expect(browserFrames).toEqual(["hello_ok", "attached", "history", "state", "event"]);
+		control.stop();
+	});
+
+	test("a history resync reaches every browser stream but not the control stream", async () => {
+		const { control, sent } = makeHarness();
+		openStream(control);
+		const before = sent.length;
+		await control.publishHistory([
+			{ type: "history", messages: [], final: false },
+			{ type: "history", messages: [], final: true },
+		]);
+		const added = sent.slice(before);
+		expect(added.map((s) => [s.streamId, typeOf(s.payload)])).toEqual([
+			[STREAM, "history"],
+			[STREAM, "history"],
+		]);
 		control.stop();
 	});
 });

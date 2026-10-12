@@ -1,32 +1,42 @@
 /**
- * omp-fleet CLI (Phase 2 headless control plane).
+ * omp-web fleet CLI (headless control plane), reached as `omp-web <verb>`
+ * (apps/cli/omp-web.ts routes here) or `bun apps/fleet/cli.ts <verb>`.
  *
- * `serve` runs the control plane in-process (foreground). Every other
- * subcommand is a thin loopback HTTP client against the control plane:
+ * Bare `omp-web` (no verb, flags allowed) runs the control plane and the UI
+ * on one port (foreground). `control` runs the control plane alone; `ui` runs
+ * the UI daemon (static UI plus a reverse proxy to the control plane) on its
+ * own port. `help` prints usage. Every other subcommand is a thin loopback
+ * HTTP client against the control plane:
  *
- *   omp-fleet serve [--port n] [--workspace-dir d] [--bind addr]
+ *   omp-web [--port n] [--workspace-dir d] [--bind addr]
  *                     [--browser-access-token t] [--browser-origin o]
- *                     [--trusted-proxy ip-or-cidr]…
- *   omp-fleet sessions [--port n]
- *   omp-fleet projects [--port n]
- *   omp-fleet profiles [--port n]
- *   omp-fleet spawn <path> [--template t] [--name n] [--label k=v]…
- *   omp-fleet add-repo <path> [--start] [--template t] [--labels k=v,...]
- *   omp-fleet add <name> <url> --token <t> [--label k=v]… [--cwd c]
- *   omp-fleet provision <name> [--label k=v]…
- *   omp-fleet add-clone <project> <name> --profile <id>
+ *                     [--trusted-proxy ip-or-cidr]… [--open] [--verbose]
+ *   omp-web control [--port n] [--workspace-dir d] [--bind addr]
+ *                     [--browser-access-token t] [--browser-origin o]
+ *                     [--trusted-proxy ip-or-cidr]… [--verbose]
+ *   omp-web ui [--port n] [--control-port n] [--open]
+ *   omp-web sessions [--port n]
+ *   omp-web projects [--port n]
+ *   omp-web profiles [--port n]
+ *   omp-web spawn <path> [--template t] [--name n] [--label k=v]…
+ *   omp-web add-repo <path> [--start] [--template t] [--labels k=v,...]
+ *   omp-web enroll <name> [--label k=v]… [--cwd dir] [--callback-url url]
+ *   omp-web provision <name> [--label k=v]…
+ *   omp-web add-clone <project> <name> --profile <id>
  *                        [--local path | --remote url] [--revision rev]
  *                        [--branch b] [--no-start]
- *   omp-fleet start <selector>
- *   omp-fleet stop <selector>
- *   omp-fleet remove <selector>
- *   omp-fleet rm-project <selector>
- *   omp-fleet add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]
- *   omp-fleet add-worktree <project> --existing <path> [--no-start]
- *   omp-fleet rm-worktree <daemon-id> [--delete-branch]
- *   omp-fleet prompt <selector> <text> [--wait <ms>]
+ *   omp-web start <selector>
+ *   omp-web stop <selector>
+ *   omp-web remove <selector>
+ *   omp-web rm-project <selector>
+ *   omp-web add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]
+ *   omp-web add-worktree <project> --existing <path> [--no-start]
+ *   omp-web rm-worktree <daemon-id> [--delete-branch]
+ *   omp-web prompt <selector> <text> [--wait <ms>]
  *
- * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722.
+ * Port resolution: `--port` flag, else OMP_FLEET_PORT, else 4722. For `ui`,
+ * `--port` is the UI listen port (default 4723; OMP_FLEET_PORT does not apply)
+ * and `--control-port` (else OMP_FLEET_PORT, else 4722) names the control plane.
  * Managed-worktree root: `--workspace-dir` flag, else OMP_FLEET_WORKSPACE_DIR,
  * else the config-file `workspaceDir` key, else `~/.omp-web/workspaces`.
  * Bind address / browser auth: `--bind`, `--browser-access-token`,
@@ -36,15 +46,17 @@
  * A refused connection prints NOT_RUNNING_MESSAGE and exits 1.
  */
 
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { LockHeldError } from "#lib/platform/file-lock";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { startFleet, type FleetServer } from "./server";
 import { runProfilePreflight } from "./preflight";
+import { DEFAULT_UI_PORT, startUiServer, type UiServer } from "./ui-server";
 
 const DEFAULT_PORT = 4722;
-const NOT_RUNNING_MESSAGE = "fleet not running. Start it: omp-fleet serve";
+const NOT_RUNNING_MESSAGE = "omp-web not running. Start it: omp-web";
 
 /** Wire shapes the CLI renders (subsets of RegistryEntry / ProjectEntry). */
 interface DaemonRow {
@@ -86,7 +98,7 @@ interface ParsedArgs {
 const MULTI_FLAGS = new Set(["label", "trusted-proxy"]);
 
 /** Flags that are bare booleans: presence = true (never consume a value); `--flag=true|false` also accepted. */
-const BOOLEAN_FLAGS = new Set(["start", "no-start", "delete-branch"]);
+const BOOLEAN_FLAGS = new Set(["start", "no-start", "delete-branch", "open", "verbose", "help"]);
 
 function parseArgs(argv: string[]): ParsedArgs {
 	const positionals: string[] = [];
@@ -196,19 +208,21 @@ function realpathOrNull(p: string): string | null {
 	}
 }
 
-function resolvePort(flags: Map<string, FlagValue>): number {
-	const fromFlag = flagNumber(flags, "port");
-	if (fromFlag !== undefined) {
-		if (Number.isInteger(fromFlag) && fromFlag >= 0 && fromFlag <= 65535) return fromFlag;
-		throw new CliError(`invalid --port: ${flags.get("port")}`);
-	}
+/** `--<name> n` as a port (0-65535); undefined when the flag is absent or not a number. */
+function portFlag(flags: Map<string, FlagValue>, name: string): number | undefined {
+	const fromFlag = flagNumber(flags, name);
+	if (fromFlag === undefined) return undefined;
+	if (Number.isInteger(fromFlag) && fromFlag >= 0 && fromFlag <= 65535) return fromFlag;
+	throw new CliError(`invalid --${name}: ${flags.get(name)}`);
+}
+
+/** OMP_FLEET_PORT as a port (0-65535); undefined when unset or empty. */
+function envPort(): number | undefined {
 	const env = process.env.OMP_FLEET_PORT;
-	if (env !== undefined && env !== "") {
-		const n = Number(env);
-		if (Number.isInteger(n) && n >= 0 && n <= 65535) return n;
-		throw new CliError(`invalid OMP_FLEET_PORT: ${env}`);
-	}
-	return DEFAULT_PORT;
+	if (env === undefined || env === "") return undefined;
+	const n = Number(env);
+	if (Number.isInteger(n) && n >= 0 && n <= 65535) return n;
+	throw new CliError(`invalid OMP_FLEET_PORT: ${env}`);
 }
 
 function isConnRefused(err: unknown): boolean {
@@ -297,7 +311,7 @@ export function resolveBaseDirs(opts: {
 /**
  * Write the fleet config file: `workspaceDir` only, no `roots` key. Unknown
  * keys are tolerated by loadConfig, so future writers stay compatible. This
- * is the ONLY writer of the config file (the serve first-run offer).
+ * is the ONLY writer of the config file (the first-run offer).
  */
 export function writeConfigFile(configPath: string, workspaceDir: string): void {
 	mkdirSync(dirname(configPath), { recursive: true });
@@ -349,13 +363,14 @@ export function readLine(prompt: string): Promise<string> {
 
 async function serveCmd(
 	port: number,
-	workspaceDir?: string,
-	serveOpts?: {
+	workspaceDir: string | undefined,
+	serveOpts: {
 		bind?: string;
 		browserAccessToken?: string;
 		browserOrigin?: string;
 		trustedProxy?: string[];
 	},
+	loop: ServeLoopOptions,
 ): Promise<number> {
 	// First-run auto-offer: no config file + an interactive terminal → verify
 	// the omp stack (installed / provider / default model), then ask whether
@@ -397,6 +412,7 @@ async function serveCmd(
 		port,
 		workspaceDir,
 		configPath: offerConfigPath,
+		serveUi: loop.serveUi,
 		...serveOpts,
 	}).catch((err: unknown) => {
 		if (err instanceof LockHeldError) {
@@ -408,49 +424,74 @@ async function serveCmd(
 		throw err;
 	});
 	if (server === null) return 77;
-	return serveLoop(server);
+	return serveLoop(server, loop);
+}
+
+/** How {@link serveLoop} presents a booted fleet. */
+export interface ServeLoopOptions {
+	/** False for `omp-web control` (no UI on this port). */
+	serveUi: boolean;
+	/** Print state/config paths and every lifecycle event, not only warn/error. */
+	verbose: boolean;
+	/** Open the browser at the UI after the ready line. */
+	open: boolean;
 }
 
 /**
- * Run a booted fleet in the foreground: print the startup banner, mirror
- * lifecycle events to stdout, and block until SIGINT/SIGTERM (then close the
- * server and exit 0). The first banner line keeps its exact shape; scripts
- * parse the port out of it.
+ * Open `url` in the default browser: detached, stdio ignored, unref'd. A
+ * launcher that cannot be spawned prints one stderr warning; serving goes on.
  */
-export async function serveLoop(server: FleetServer): Promise<number> {
-	// Startup banner: where the fleet listens, where its state/config live,
-	// and what a previous fleet run left behind (boot statuses). The first
-	// line keeps its exact shape; scripts parse the port out of it.
-	console.log(`fleet listening on ${server.fleetFacts.bind}:${server.port}`);
-	console.log(`fleet state: ${server.fleetFacts.statePath}`);
-	console.log(`fleet config: ${server.fleetFacts.configPath ?? "(defaults)"}`);
-	const restored = server.registry.list();
-	const byStatus = new Map<string, number>();
-	for (const entry of restored) byStatus.set(entry.status, (byStatus.get(entry.status) ?? 0) + 1);
-	const statusSummary = [...byStatus.entries()].map(([status, n]) => `${status}: ${n}`).join(", ");
+function openBrowser(url: string): void {
+	const [cmd, args]: [string, string[]] =
+		process.platform === "darwin"
+			? ["open", [url]]
+			: process.platform === "win32"
+				? ["cmd", ["/c", "start", '""', url]]
+				: ["xdg-open", [url]];
+	try {
+		const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+		child.on("error", (err) => console.error(`omp-web: could not open a browser: ${err.message}`));
+		child.unref();
+	} catch (err) {
+		console.error(
+			`omp-web: could not open a browser: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+}
+
+/**
+ * Run a booted fleet in the foreground: print the ready line, mirror
+ * lifecycle events (warn/error only unless verbose) to stdout, and block until
+ * SIGINT/SIGTERM (then close the server and exit 0). The first line keeps its
+ * exact shape; scripts parse the port and session counts out of it.
+ */
+export async function serveLoop(server: FleetServer, opts: ServeLoopOptions): Promise<number> {
+	const sessions = server.registry.list().length;
+	const counts = `${sessions} session${sessions === 1 ? "" : "s"}`;
+	const { bind } = server.fleetFacts;
+	const host = bind === "127.0.0.1" || bind === "::1" || bind === "localhost" ? "localhost" : bind;
 	console.log(
-		`fleet restored ${restored.length} session${restored.length === 1 ? "" : "s"}${statusSummary !== "" ? ` (${statusSummary})` : ""}`,
+		`omp-web${opts.serveUi ? "" : " control"} listening on http://${host}:${server.port} (${counts})`,
 	);
-	// The UI is served on the same port as the control plane; the line is
-	// bold so it stands out in the banner.
-	console.log(`\u001b[1mWeb UI: http://localhost:${server.port}\u001b[0m`);
-	// Lifecycle events print as one human line each. The ready line carries
-	// the live endpoint + pid (the facts a reader dials); other lines stand
-	// on their message alone.
+	if (opts.verbose) {
+		console.log(`state: ${server.fleetFacts.statePath}`);
+		console.log(`config: ${server.fleetFacts.configPath ?? "(defaults)"}`);
+	}
+	// Lifecycle events print as one line each (warn/error only unless
+	// verbose); each stands on its message alone.
 	server.eventLog.onEntry = (entry) => {
+		if (!opts.verbose && entry.level === "info") return;
 		const daemon = entry.daemonId !== undefined ? server.registry.get(entry.daemonId) : undefined;
 		const parts = [entry.daemonId, daemon?.name, entry.message];
-		if (daemon && entry.source === "connector" && entry.message === "ready") {
-			parts.push(daemon.endpoint, daemon.pid !== undefined ? `pid ${daemon.pid}` : undefined);
-		}
 		const shown = parts.filter((part): part is string => part !== undefined && part !== "");
-		console.log(`fleet: ${shown.join(" ")}`);
+		console.log(`omp-web: ${shown.join(" ")}`);
 	};
+	if (opts.open) openBrowser(`http://localhost:${server.port}`);
 	let shuttingDown = false;
 	const shutdown = async (signal: string) => {
 		if (shuttingDown) return;
 		shuttingDown = true;
-		console.error(`fleet: ${signal}, shutting down`);
+		if (opts.verbose) console.error(`omp-web: ${signal}, shutting down`);
 		try {
 			await server.close();
 		} finally {
@@ -459,6 +500,51 @@ export async function serveLoop(server: FleetServer): Promise<number> {
 	};
 	process.on("SIGINT", () => void shutdown("SIGINT"));
 	process.on("SIGTERM", () => void shutdown("SIGTERM"));
+	await new Promise<void>(() => {});
+	return 0;
+}
+
+/**
+ * `omp-web ui`: the UI daemon (static UI + reverse proxy to the control
+ * plane) in the foreground until SIGINT/SIGTERM. `port` is the UI listen
+ * port; `controlPort` is where the control plane listens.
+ */
+async function uiCmd(port: number, controlPort: number, open: boolean): Promise<number> {
+	let ui: UiServer;
+	try {
+		ui = startUiServer({ port, controlPort });
+	} catch (err) {
+		const code = (err as { code?: unknown } | null)?.code;
+		const message = err instanceof Error ? err.message : String(err);
+		if (code === "EADDRINUSE" || /EADDRINUSE|in use/i.test(message)) {
+			throw new CliError(`omp-web ui: port ${port} is in use`);
+		}
+		throw err;
+	}
+	const url = `http://localhost:${ui.port}`;
+	console.log(`omp-web ui listening on ${url} (control :${controlPort})`);
+	// One probe: a UI started before its control plane keeps running (the
+	// proxy answers once control is up), but say so instead of failing quietly.
+	try {
+		await fetch(`http://127.0.0.1:${controlPort}/ctl/sessions`, {
+			signal: AbortSignal.timeout(1500),
+		});
+	} catch {
+		console.error(`omp-web ui: no control plane on :${controlPort} yet`);
+	}
+	if (open) openBrowser(url);
+	let closing = false;
+	const shutdown = async () => {
+		if (closing) return;
+		closing = true;
+		try {
+			await ui.close();
+		} finally {
+			process.exit(0);
+		}
+	};
+	process.on("SIGINT", () => void shutdown());
+	process.on("SIGTERM", () => void shutdown());
 	await new Promise<void>(() => {});
 	return 0;
 }
@@ -525,7 +611,7 @@ async function spawnCmd(
 ): Promise<number> {
 	const cwd = positionals[0];
 	if (cwd === undefined)
-		throw new CliError("usage: omp-fleet spawn <path> [--template t] [--name n] [--label k=v]…");
+		throw new CliError("usage: omp-web spawn <path> [--template t] [--name n] [--label k=v]…");
 	const body = (await ctl(port, "/ctl/spawn", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -550,7 +636,7 @@ async function addRepoCmd(
 	const path = positionals[0];
 	if (path === undefined) {
 		throw new CliError(
-			"usage: omp-fleet add-repo <path> [--start] [--template t] [--labels k=v,...]",
+			"usage: omp-web add-repo <path> [--start] [--template t] [--labels k=v,...]",
 		);
 	}
 	const body = (await ctl(port, "/ctl/projects", {
@@ -580,7 +666,7 @@ async function rmProjectCmd(
 ): Promise<number> {
 	const selector = positionals[0];
 	if (selector === undefined) {
-		throw new CliError("usage: omp-fleet rm-project <selector> (projectId, realpath, or basename)");
+		throw new CliError("usage: omp-web rm-project <selector> (projectId, realpath, or basename)");
 	}
 	// Resolve the selector client-side against the registered set: exact
 	// projectId, exact realpath (or the selector's own realpath, so a
@@ -641,8 +727,8 @@ async function addWorktreeCmd(
 	const existing = flagString(flags, "existing");
 	if (project === undefined || (name === undefined) === (existing === undefined)) {
 		throw new CliError(
-			"usage: omp-fleet add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]\n" +
-				"       omp-fleet add-worktree <project> --existing <path> [--no-start]",
+			"usage: omp-web add-worktree <project> <name> [--base ref] [--branch existing] [--no-start]\n" +
+				"       omp-web add-worktree <project> --existing <path> [--no-start]",
 		);
 	}
 	const projectId = await resolveProjectId(port, project);
@@ -697,7 +783,7 @@ async function addCloneCmd(
 		(local !== undefined && remote !== undefined)
 	) {
 		throw new CliError(
-			"usage: omp-fleet add-clone <project> <name> --profile <id>\n" +
+			"usage: omp-web add-clone <project> <name> --profile <id>\n" +
 				"       [--local path | --remote url] [--revision rev] [--branch b] [--no-start]",
 		);
 	}
@@ -728,7 +814,7 @@ async function addCloneCmd(
 
 /**
  * preflight --profile <id>: local (no control-plane RPC) production-profile
- * preflight (P5.6). Loads the config file exactly like `serve` (env
+ * preflight (P5.6). Loads the config file exactly like the server does (env
  * OMP_FLEET_CONFIG honored), runs the runtime/preflight battery against the
  * profile, prints one line per check with remediation on failures, and
  * exits non-zero when any check fails. Additive: profile configs are
@@ -737,7 +823,7 @@ async function addCloneCmd(
 async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 	const profileId = flagString(flags, "profile");
 	if (profileId === undefined) {
-		throw new CliError("usage: omp-fleet preflight --profile <id>");
+		throw new CliError("usage: omp-web preflight --profile <id>");
 	}
 	const configPath = resolveConfigPath();
 	const config = await loadConfig(configPath);
@@ -751,7 +837,7 @@ async function preflightCmd(flags: Map<string, FlagValue>): Promise<number> {
 	const result = await runProfilePreflight(profile, {
 		workspaceRoot: config.workspaceDir,
 		logsRoot: join(dataHome, "logs"),
-		// The bwrap provider is not yet wired into a live fleet serve in this
+		// The bwrap provider is not yet wired into a live fleet in this
 		// lane (P6); a callback URL is only reachability-class-checked once
 		// the fleet has one to pass.
 	});
@@ -776,7 +862,7 @@ async function rmWorktreeCmd(
 ): Promise<number> {
 	const daemonId = positionals[0];
 	if (daemonId === undefined)
-		throw new CliError("usage: omp-fleet rm-worktree <daemon-id> [--delete-branch]");
+		throw new CliError("usage: omp-web rm-worktree <daemon-id> [--delete-branch]");
 	const deleteBranch = flagBoolean(flags, "delete-branch");
 	const body = (await ctl(port, `/ctl/worktrees/${encodeURIComponent(daemonId)}`, {
 		method: "DELETE",
@@ -796,30 +882,60 @@ async function rmWorktreeCmd(
 	return 0;
 }
 
-async function addCmd(
+/**
+ * enroll: create a remote roster entry and print the command that starts its
+ * session on the remote host. The session dials OUT to the callback URL with
+ * the one-time-shown token; the control plane never connects to it.
+ */
+async function enrollCmd(
 	positionals: string[],
 	flags: Map<string, FlagValue>,
 	port: number,
 ): Promise<number> {
 	const name = positionals[0];
-	const url = positionals[1];
-	const token = flagString(flags, "token");
-	if (name === undefined || url === undefined) {
-		throw new CliError("usage: omp-fleet add <name> <url> --token <t> [--label k=v]… [--cwd c]");
+	if (name === undefined) {
+		throw new CliError(
+			"usage: omp-web enroll <name> [--label k=v]… [--cwd dir] [--callback-url url]",
+		);
 	}
-	const body = (await ctl(port, "/ctl/add", {
+	const cwd = flagString(flags, "cwd");
+	const body = (await ctl(port, "/ctl/enroll", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({
 			name,
-			url,
-			token,
 			labels: labelList(flags),
-			cwd: flagString(flags, "cwd"),
+			cwd,
+			callbackUrl: flagString(flags, "callback-url"),
 		}),
-	})) as Record<string, unknown>;
+	})) as {
+		entry?: { daemonId?: unknown; name?: unknown };
+		enrollment?: {
+			workspaceId?: unknown;
+			generation?: unknown;
+			token?: unknown;
+			callbackUrl?: unknown;
+		};
+	};
+	const { entry, enrollment } = body;
+	if (
+		entry === undefined ||
+		enrollment === undefined ||
+		typeof enrollment.workspaceId !== "string" ||
+		typeof enrollment.generation !== "number" ||
+		typeof enrollment.token !== "string" ||
+		typeof enrollment.callbackUrl !== "string"
+	) {
+		throw new CliError("unexpected enroll response");
+	}
+	const allowHttp = enrollment.callbackUrl.startsWith("http:") ? " --callback-allow-http" : "";
 	console.log(
-		`added ${String(body.daemonId)} (${String(body.name)}), status ${String(body.status)}`,
+		`enrolled ${String(entry.daemonId)} (${String(entry.name)}); run on the session host:`,
+	);
+	console.log(
+		`OMP_SESSION_CALLBACK_TOKEN=${enrollment.token} omp-web session --cwd ${cwd ?? "."} --port 0` +
+			` --callback-url ${enrollment.callbackUrl} --callback-workspace ${enrollment.workspaceId}` +
+			` --callback-generation ${enrollment.generation}${allowHttp}`,
 	);
 	return 0;
 }
@@ -831,7 +947,7 @@ async function provisionCmd(
 ): Promise<number> {
 	const name = positionals[0];
 	if (name === undefined) {
-		throw new CliError("usage: omp-fleet provision <name> [--label k=v]…");
+		throw new CliError("usage: omp-web provision <name> [--label k=v]…");
 	}
 	const body = (await ctl(port, "/ctl/provision", {
 		method: "POST",
@@ -860,7 +976,7 @@ async function startCmd(
 	port: number,
 ): Promise<number> {
 	const selector = positionals[0];
-	if (selector === undefined) throw new CliError("usage: omp-fleet start <selector>");
+	if (selector === undefined) throw new CliError("usage: omp-web start <selector>");
 	const roster = await ctl(port, "/ctl/sessions");
 	if (!Array.isArray(roster)) throw new CliError("unexpected sessions response");
 	const matches = (roster as unknown[])
@@ -891,7 +1007,7 @@ async function stopCmd(
 	port: number,
 ): Promise<number> {
 	const selector = positionals[0];
-	if (selector === undefined) throw new CliError("usage: omp-fleet stop <selector>");
+	if (selector === undefined) throw new CliError("usage: omp-web stop <selector>");
 	const body = (await ctl(port, "/ctl/stop", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -908,7 +1024,7 @@ async function removeCmd(
 	port: number,
 ): Promise<number> {
 	const selector = positionals[0];
-	if (selector === undefined) throw new CliError("usage: omp-fleet remove <selector>");
+	if (selector === undefined) throw new CliError("usage: omp-web remove <selector>");
 	const body = (await ctl(port, "/ctl/remove", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -934,7 +1050,7 @@ async function promptCmd(
 	const selector = positionals[0];
 	const text = positionals.slice(1).join(" ");
 	if (selector === undefined || text === "") {
-		throw new CliError("usage: omp-fleet prompt <selector> <text> [--wait <ms>]");
+		throw new CliError("usage: omp-web prompt <selector> <text> [--wait <ms>]");
 	}
 	const waitValue = flags.get("wait");
 	const waitMs = flagNumber(flags, "wait");
@@ -968,17 +1084,24 @@ async function promptCmd(
 	return 0;
 }
 
-const USAGE = `usage: omp-fleet <command> [options]
+const USAGE = `usage: omp-web [options] | omp-web <command> [options]
 
 commands:
-  serve                        run the control plane (loopback HTTP)
+  (none)                       control plane + UI on one port
+  control                      control plane only; no UI on this port
+  ui                           UI daemon: static UI + proxy to the control plane
   sessions                     list sessions
   projects                     list discovered projects
   profiles                     list provider profiles (secret-free catalog)
   spawn <path> [--template t] [--name n] [--label k=v]…
   add-repo <path> [--start] [--template t] [--labels k=v,...]
-  add <name> <url> --token <t> [--label k=v]… [--cwd c]
+  enroll <name> [--label k=v]… [--cwd dir] [--callback-url url]
+                               remote session: prints the command to run on its host
   provision <name> [--label k=v]…
+                               enroll, then run OMP_FLEET_SPAWN_HOOK with
+                               OMP_HOOK_NAME, OMP_HOOK_LABELS and the
+                               OMP_SESSION_CALLBACK_* env; the hook must start
+                               \`omp-web session\` with it (exit 0 = success)
   add-clone <project> <name> --profile <id> [--local path | --remote url]
                                [--revision rev] [--branch b] [--no-start]
   start <selector>             ensure a clone workspace is running (wake)
@@ -992,7 +1115,11 @@ commands:
   prompt <selector> <text> [--wait <ms>]
 
 options:
-  --port <n>           control plane port (default 4722, env OMP_FLEET_PORT)
+  --port <n>           control plane port (default 4722, env OMP_FLEET_PORT);
+                       ui: its listen port (default 4723)
+  --control-port <n>   ui: control plane to proxy to (default 4722, env OMP_FLEET_PORT)
+  --open               open the UI in a browser once running (bare, ui)
+  --verbose            bare/control: also print state and config paths and every event
   --workspace-dir <d>  managed worktree root (default ~/.omp-web/workspaces,
                        env OMP_FLEET_WORKSPACE_DIR)
   --bind <addr>        control plane + browser edge bind address (default
@@ -1012,22 +1139,40 @@ options:
 export async function main(argv: string[]): Promise<number> {
 	try {
 		const { positionals, flags } = parseArgs(argv);
-		const port = resolvePort(flags);
+		const port = portFlag(flags, "port") ?? envPort() ?? DEFAULT_PORT;
 		const command = positionals[0];
 		const rest = positionals.slice(1);
-		switch (command) {
-			case undefined:
-			case "":
+		// `--help` on any verb (or bare) prints usage instead of running it.
+		switch (flagBoolean(flags, "help") === true ? "help" : command) {
 			case "help":
 				console.log(USAGE);
 				return 0;
-			case "serve":
-				return await serveCmd(port, flagString(flags, "workspace-dir"), {
-					bind: flagString(flags, "bind"),
-					browserAccessToken: flagString(flags, "browser-access-token"),
-					browserOrigin: flagString(flags, "browser-origin"),
-					trustedProxy: trustedProxyList(flags),
-				});
+			case undefined:
+			case "":
+			case "control": {
+				const serveUi = command !== "control";
+				const open = flagBoolean(flags, "open") === true;
+				if (!serveUi && open) {
+					throw new CliError("--open: the control plane serves no UI; use: omp-web ui --open");
+				}
+				return await serveCmd(
+					port,
+					flagString(flags, "workspace-dir"),
+					{
+						bind: flagString(flags, "bind"),
+						browserAccessToken: flagString(flags, "browser-access-token"),
+						browserOrigin: flagString(flags, "browser-origin"),
+						trustedProxy: trustedProxyList(flags),
+					},
+					{ serveUi, verbose: flagBoolean(flags, "verbose") === true, open },
+				);
+			}
+			case "ui":
+				return await uiCmd(
+					portFlag(flags, "port") ?? DEFAULT_UI_PORT,
+					portFlag(flags, "control-port") ?? envPort() ?? DEFAULT_PORT,
+					flagBoolean(flags, "open") === true,
+				);
 			case "sessions":
 				return await sessionsCmd(port);
 			case "projects":
@@ -1038,8 +1183,8 @@ export async function main(argv: string[]): Promise<number> {
 				return await spawnCmd(rest, flags, port);
 			case "add-repo":
 				return await addRepoCmd(rest, flags, port);
-			case "add":
-				return await addCmd(rest, flags, port);
+			case "enroll":
+				return await enrollCmd(rest, flags, port);
 			case "provision":
 				return await provisionCmd(rest, flags, port);
 			case "add-clone":

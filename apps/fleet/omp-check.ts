@@ -1,5 +1,6 @@
 /**
- * First-run omp-stack check for the serve offer (fleet/cli.ts serveCmd).
+ * First-run omp-stack check for the bare `omp-web` / `omp-web control` first-run
+ * offer (fleet/cli.ts serveCmd).
  *
  * Verifies the three things a fresh omp-web needs to be usable: the `omp` CLI
  * installed, at least one provider with usable auth, and a default model
@@ -89,7 +90,7 @@ export async function checkOmpSetup(agentDir?: string): Promise<OmpSetupStatus> 
 }
 
 /**
- * First-run status + advice lines. Printed to STDOUT by the serve offer (the
+ * First-run status + advice lines. Printed to STDOUT by the first-run offer (the
  * offer is TTY-only, so non-interactive spawners that parse the banner never
  * see these).
  */

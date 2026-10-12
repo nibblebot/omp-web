@@ -1,4 +1,9 @@
-import { callbackError } from "#lib/wire/callback-protocol";
+import {
+	callbackError,
+	CONNECTION_MAX_BYTES,
+	ENVELOPE_MAX_BYTES,
+	STREAM_MAX_BYTES,
+} from "#lib/wire/callback-protocol";
 import type {
 	CallbackEnvelope,
 	CallbackErrorCode,
@@ -88,8 +93,13 @@ export interface DaemonControlDeps {
 	verifyLineage: () => Promise<LineageVerification>;
 	/** Git evidence with writers stopped; must fail closed on any probe failure. */
 	collectGitEvidence: () => Promise<GitEvidenceResult>;
-	/** Re-prime burst for one stream: the same frames the direct SSE prime sends. */
-	primeStream: (streamId: string) => void;
+	/**
+	 * Async half of a browser-stream prime (anything that must be awaited, such
+	 * as building the slash-command list). Resolves to the synchronous half,
+	 * which snapshots the session into the full priming frame list (the same
+	 * frames the direct SSE prime sends) at the moment it is called.
+	 */
+	preparePriming: () => Promise<() => Record<string, unknown>[]>;
 	/** Send leg to the callback pair (the transport stamps identity/seq). */
 	send: (
 		streamId: string,
@@ -97,9 +107,13 @@ export interface DaemonControlDeps {
 		payload: unknown,
 		onEmittedSeq?: (seq: number) => void,
 	) => unknown;
+	/** Bytes queued on the pair's outbound buffer for one stream and the whole connection. */
+	bufferedBytes: (streamId: string) => { stream: number; connection: number };
 	/** Live callback pair present. */
 	pairLive: () => boolean;
 	mainSessionFile: string | null;
+	/** Fleet ShutdownControl: the caller runs the graceful exit once the ack is queued. */
+	onShutdown: (reason: string | undefined) => void;
 }
 
 interface RingEntry {
@@ -123,6 +137,16 @@ interface BrowserStream {
 	 * the client consumed every evicted entry. 0 while nothing was evicted.
 	 */
 	evictedSeq: number;
+	/** Bumped by every prime; a paced send from an older prime or resync stops. */
+	epoch: number;
+	/**
+	 * Frames mirrored while the prime is in flight, delivered after it in
+	 * order. Non-null from the priming snapshot until the prime finishes, so
+	 * frames already reflected in the snapshot are never delivered twice and
+	 * later frames never land before the history they extend.
+	 */
+	deferred: Record<string, unknown>[] | null;
+	deferredBytes: number;
 }
 
 export interface DaemonControlStatus {
@@ -136,6 +160,13 @@ export interface DaemonControlStatus {
 const RING_CAP = 10_000;
 const RING_MAX_BYTES = 4 * 1024 * 1024;
 const QUIESCE_DEFAULT_TIMEOUT_MS = 30_000;
+/**
+ * Paced sends (priming, history resync) wait until the pair's outbound buffer
+ * can take one maximal envelope plus this margin, so concurrent live frames
+ * still fit and a large transcript never trips the buffer's drop.
+ */
+const PACE_MARGIN_BYTES = 256 * 1024;
+const PACE_POLL_MS = 10;
 
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -256,12 +287,94 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		return out;
 	};
 
+	/**
+	 * Wait until the pair's outbound buffer can take one maximal envelope for
+	 * this stream. False when the stream closed, the broker stopped, or a newer
+	 * prime superseded `epoch`: the caller's remaining frames are obsolete.
+	 */
+	const waitForRoom = async (stream: BrowserStream, epoch: number): Promise<boolean> => {
+		for (;;) {
+			if (stopped || streams.get(stream.streamId) !== stream || stream.epoch !== epoch)
+				return false;
+			const queued = deps.bufferedBytes(stream.streamId);
+			if (
+				queued.stream + ENVELOPE_MAX_BYTES + PACE_MARGIN_BYTES <= STREAM_MAX_BYTES &&
+				queued.connection + ENVELOPE_MAX_BYTES + PACE_MARGIN_BYTES <= CONNECTION_MAX_BYTES
+			)
+				return true;
+			await Bun.sleep(PACE_POLL_MS);
+		}
+	};
+
+	/**
+	 * Deliver one live frame to a browser stream, or hold it while that
+	 * stream's prime is in flight. A held backlog past the ring budget
+	 * abandons the prime with stream_resync; the client reconnects and
+	 * primes fresh.
+	 */
+	const deliver = (stream: BrowserStream, frame: Record<string, unknown>): void => {
+		if (stream.deferred === null) {
+			emit(stream.streamId, "frame", frame);
+			return;
+		}
+		stream.deferred.push(frame);
+		stream.deferredBytes += JSON.stringify(frame).length;
+		if (stream.deferredBytes <= RING_MAX_BYTES) return;
+		stream.epoch++;
+		stream.deferred = null;
+		stream.deferredBytes = 0;
+		emit(stream.streamId, "control", { type: "stream_resync" } satisfies StreamResyncControl);
+	};
+
+	/**
+	 * Prime one browser stream: the full priming frame list (hello_ok →
+	 * attached → history → state → collab_status → available_commands →
+	 * ready), paced against the pair's outbound buffer so a multi-MiB
+	 * transcript never trips its drop. Live frames mirrored after the snapshot
+	 * are held and delivered after the prime, in order.
+	 */
+	const prime = (stream: BrowserStream): void => {
+		const epoch = ++stream.epoch;
+		stream.deferred = null;
+		stream.deferredBytes = 0;
+		const run = async (): Promise<void> => {
+			const build = await deps.preparePriming();
+			if (stopped || streams.get(stream.streamId) !== stream || stream.epoch !== epoch) return;
+			const held: Record<string, unknown>[] = [];
+			stream.deferred = held;
+			for (const frame of build()) {
+				if (!(await waitForRoom(stream, epoch))) return;
+				emit(stream.streamId, "frame", frame);
+			}
+			// `held` keeps growing while this drains; the loop bound re-reads it.
+			for (let i = 0; i < held.length; i++) {
+				if (!(await waitForRoom(stream, epoch))) return;
+				emit(stream.streamId, "frame", held[i]!);
+			}
+			stream.deferred = null;
+			stream.deferredBytes = 0;
+		};
+		run().catch((err: unknown) => {
+			console.error(`omp-session: priming ${stream.streamId} failed:`, err);
+		});
+	};
+
 	const openStream = (streamId: string, lastSeq?: number): void => {
 		if (stopped || !streamId.startsWith("browser/")) return;
 		let stream = streams.get(streamId);
 		const newStream = stream === undefined;
 		if (newStream) {
-			stream = { streamId, lastSeq: 0, entries: [], head: 0, bytes: 0, evictedSeq: 0 };
+			stream = {
+				streamId,
+				lastSeq: 0,
+				entries: [],
+				head: 0,
+				bytes: 0,
+				evictedSeq: 0,
+				epoch: 0,
+				deferred: null,
+				deferredBytes: 0,
+			};
 			streams.set(streamId, stream);
 		}
 		if (lastSeq !== undefined) stream!.lastSeq = lastSeq;
@@ -281,7 +394,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 			stream!.head = 0;
 			stream!.bytes = 0;
 			stream!.evictedSeq = 0;
-			deps.primeStream(streamId);
+			prime(stream!);
 			// The prime burst's ringed-delta frames (state/ready/collab_status)
 			// advance the floor themselves via emit; do NOT force lastSeq here;
 			// that could regress the floor below the just-primed frames and
@@ -298,7 +411,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		// the newest entry) replays nothing and must NOT re-prime; the
 		// client has everything. Only a brand-new stream (no ring history)
 		// primes fresh.
-		if (newStream) deps.primeStream(streamId);
+		if (newStream) prime(stream!);
 	};
 
 	const handleControl = (envelope: CallbackEnvelope): void => {
@@ -327,6 +440,10 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 					requestId,
 					typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined,
 				);
+				break;
+			case "shutdown":
+				ack(envelope.streamId, "shutdown", undefined, true);
+				deps.onShutdown(typeof payload.reason === "string" ? payload.reason : undefined);
 				break;
 			default:
 				ack(
@@ -481,7 +598,30 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		// mirror stream AND every open browser stream (ringed-delta frames
 		// ring on the browser stream for reconnect replay).
 		emit("control", "frame", frame);
-		for (const stream of streams.values()) emit(stream.streamId, "frame", frame);
+		for (const stream of streams.values()) deliver(stream, frame);
+	};
+
+	/**
+	 * History resync for every browser stream (the counterpart of the direct
+	 * path's broadcastHistory). Never on the control stream: the fleet's
+	 * activity mirror has no use for a transcript. A stream mid-prime holds the
+	 * frames like any live frame, so they land after its older snapshot.
+	 */
+	const publishHistory = async (frames: Record<string, unknown>[]): Promise<void> => {
+		if (stopped || !deps.pairLive()) return;
+		await Promise.all(
+			[...streams.values()].map(async (stream) => {
+				if (stream.deferred !== null) {
+					for (const frame of frames) deliver(stream, frame);
+					return;
+				}
+				const epoch = stream.epoch;
+				for (const frame of frames) {
+					if (!(await waitForRoom(stream, epoch))) return;
+					emit(stream.streamId, "frame", frame);
+				}
+			}),
+		);
 	};
 
 	const stop = (): void => {
@@ -523,10 +663,11 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				stream.bytes = 0;
 				stream.evictedSeq = 0;
 				stream.lastSeq = 0;
-				deps.primeStream(stream.streamId);
+				prime(stream);
 			}
 		},
 		mirror,
+		publishHistory,
 		publish: (streamId, frame) => emit(streamId, "frame", frame),
 		beginQuiesce,
 		abort: () => {
@@ -546,7 +687,9 @@ export interface DaemonControl {
 	onPairChange(): void;
 	/** Mirror a session-scoped frame onto streamId "control" + browser streams (verbatim payload). */
 	mirror(frame: Record<string, unknown>): void;
-	/** Publish a frame directly to one browser stream (prime bursts); ringed deltas ring. */
+	/** Paced history resync onto every browser stream (never the control stream). */
+	publishHistory(frames: Record<string, unknown>[]): Promise<void>;
+	/** Publish a frame directly to one stream; ringed deltas ring on browser streams. */
 	publish(streamId: string, frame: Record<string, unknown>): void;
 	/** Begin quiesce (transport control). */
 	beginQuiesce(requestId: string, timeoutMs?: number): void;

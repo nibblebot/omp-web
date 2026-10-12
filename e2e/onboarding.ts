@@ -19,9 +19,9 @@
  *      prints the version despite the poisoned store, and the install is
  *      patch-free (no root patchedDependencies or patch files)
  *   3. fixture repo (git init + commit) with one linked worktree
- *   4. first-run config written to ~/.omp-web/config.json (the serve offer's
+ *   4. first-run config written to ~/.omp-web/config.json (the first-run offer's
  *      TTY-gated write, done directly here, workspaceDir only)
- *   5. BARE `omp-web` from an arbitrary cwd (= fleet serve): banner line 1
+ *   5. BARE `omp-web` from an arbitrary cwd (control plane + UI): banner line 1
  *      intact + real embedded UI, then the repo registered + linked worktree
  *      adopted over the loopback /ctl API (the UI picker's path)
  *   6. spawn a session on the registered project (fleet local template now spawns
@@ -218,6 +218,17 @@ function startDetached(
 }
 
 async function killAll(): Promise<void> {
+	// Sessions dial out and outlive the control plane by design, so killing
+	// `serve` would leave them running: stop every session through the
+	// control plane first (best effort; it may already be down).
+	try {
+		await fetch(`http://127.0.0.1:${OMP_PORT}/ctl/stop`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ selector: "all" }),
+			signal: AbortSignal.timeout(15_000),
+		});
+	} catch {}
 	for (const s of [...started].reverse()) {
 		try {
 			s.proc.kill("SIGTERM");
@@ -550,7 +561,7 @@ try {
 	);
 	check("git worktree add", r.code === 0, r.stderr.slice(-200));
 
-	// 4. First-run config: the serve offer is TTY-gated, so this scripted
+	// 4. First-run config: the first-run offer is TTY-gated, so this scripted
 	// walk writes the same file the offer would (data home + workspaceDir
 	// only; apps/fleet/cli.ts writeConfigFile is the one writer).
 	console.log("== 4. config ==");
@@ -571,14 +582,14 @@ try {
 		check("config.json has no roots", !("roots" in cfg), JSON.stringify(cfg));
 	}
 
-	// 5. BARE omp-web from an arbitrary cwd (= serve), then register the
+	// 5. BARE omp-web from an arbitrary cwd (control plane + UI), then register the
 	// project + adopt the worktree over the loopback API (the picker's path)
 	// ---------------------------------------------------------------------------
-	console.log("== 5. serve (bare) ==");
+	console.log("== 5. bare omp-web ==");
 	mkdirp(serveCwd);
 	const serve = startDetached(
 		"serve",
-		[],
+		["--verbose"],
 		sandboxEnv({ OMP_FLEET_PORT: String(OMP_PORT) }),
 		serveCwd,
 	);
@@ -586,27 +597,22 @@ try {
 	let banner = "";
 	while (
 		Date.now() < serveDeadline &&
-		!banner.includes(`fleet listening on 127.0.0.1:${OMP_PORT}`)
+		!banner.includes(`omp-web listening on http://localhost:${OMP_PORT}`)
 	) {
 		await sleep(200);
 		banner = serve.stdout.join("\n");
 	}
 	check(
-		"serve prints fleet listening banner",
-		banner.includes(`fleet listening on 127.0.0.1:${OMP_PORT}`),
+		"startup banner shows the omp-web listening line",
+		banner.includes(`omp-web listening on http://localhost:${OMP_PORT}`),
 		banner !== "" ? banner : `(no stdout; stderr: ${serve.stderr.join("\n").slice(-300)})`,
 	);
-	check("serve banner shows the config path", banner.includes("config: " + configPath), banner);
+	check("verbose banner shows the config path", banner.includes("config: " + configPath), banner);
 	// The state file lives next to the config (the data-home choice moves
 	// config + state + workspaces together).
 	check(
-		"serve banner shows state next to the config",
+		"verbose banner shows state next to the config",
 		banner.includes("state: " + join(dataHome, "fleet-state.json")),
-		banner,
-	);
-	check(
-		"serve banner shows the Web UI link",
-		banner.includes(`Web UI: http://localhost:${OMP_PORT}`),
 		banner,
 	);
 	// UI served from an arbitrary cwd:
@@ -693,6 +699,22 @@ try {
 		"daemon tagged with the registered projectId",
 		projectEntry?.projectId === p1?.projectId,
 		`entry=${JSON.stringify(projectEntry)} project=${JSON.stringify(p1)}`,
+	);
+	// Stop through the control plane: the session process exits and the entry
+	// goes asleep (sessions outlive a control-plane exit, so this is the stop path).
+	const stopRes = await fetch(`http://127.0.0.1:${OMP_PORT}/ctl/stop`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ selector: daemonId }),
+	});
+	const stopped = await fetchJson(`http://127.0.0.1:${OMP_PORT}/ctl/sessions`);
+	const stoppedEntry = (stopped.body as { daemonId: string; status: string }[]).find(
+		(e) => e.daemonId === daemonId,
+	);
+	check(
+		"stop ends the session (entry asleep)",
+		stopRes.ok && stoppedEntry?.status === "asleep",
+		JSON.stringify(stoppedEntry),
 	);
 
 	// 7. update round-trip (clean pinned prefix, fixture manifest + next-version tarball)

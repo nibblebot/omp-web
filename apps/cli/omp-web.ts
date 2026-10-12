@@ -7,11 +7,11 @@
  * `omp-web` symlink in the bun bin dir; the bundle is `dist-bundle/cli.js`.
  * Routes:
  *
- *   omp-web (bare) | omp-web serve|sessions|projects|profiles|spawn|
- *           add-repo|add|provision|add-clone|start|stop|remove|rm-project|
- *           add-worktree|rm-worktree|prompt
+ *   omp-web [options] | omp-web control|ui|sessions|projects|profiles|spawn|
+ *           add-repo|enroll|provision|add-clone|start|stop|remove|rm-project|
+ *           add-worktree|rm-worktree|prompt|preflight
  *                                     → fleet control-plane CLI (apps/fleet/cli.ts;
- *                                       bare = serve)
+ *                                       bare = control plane + UI)
  *   omp-web session [options]         → the omp-session daemon (apps/session/index.ts;
  *                                       the dynamic import IS the daemon; wire
  *                                       API only, no web UI)
@@ -19,22 +19,25 @@
  *                                       (apps/cli/update.ts)
  *   omp-web <unknown>                 → usage on stderr, exit 1
  *
- * stdout contract: nothing is printed to stdout before delegating; fleet
- * `serve`'s banner line 1 and the daemon's `OMP_SESSION|` line stay parseable
- * by spawners.
+ * stdout contract: nothing is printed to stdout before delegating. Bare
+ * `omp-web`, `control`, and `ui` print their banner as the first stdout line
+ * (`omp-web listening on ...`, `omp-web control listening on ...`,
+ * `omp-web ui listening on ...`); the daemon's `OMP_SESSION|` line stays
+ * parseable by spawners.
  */
 
 import { resolveVersion } from "./version";
 
 /** Fleet control-plane verbs, kept in sync with apps/fleet/cli.ts's USAGE. */
 const FLEET_SUBCOMMANDS: Record<string, true> = {
-	serve: true,
+	control: true,
+	ui: true,
 	sessions: true,
 	projects: true,
 	profiles: true,
 	spawn: true,
 	"add-repo": true,
-	add: true,
+	enroll: true,
 	provision: true,
 	"add-clone": true,
 	start: true,
@@ -48,32 +51,46 @@ const FLEET_SUBCOMMANDS: Record<string, true> = {
 };
 
 /** Where argv routes the process. */
-export type DispatchTarget = "fleet" | "session" | "update" | "version" | "usage";
+export type DispatchTarget = "fleet" | "session" | "update" | "version" | "help" | "usage";
 
 /** Pure argv classification: argv here is process.argv.slice(2). A bare
- *  invocation routes to fleet serve; `omp-web` alone starts the fleet. */
+ *  invocation, or one that starts with a flag (`omp-web --open`), routes to
+ *  the fleet CLI, whose bare form runs control plane + UI. */
 export function classifyCommand(argv: string[]): DispatchTarget {
 	const cmd = argv[0];
 	if (cmd === "--version" || cmd === "version") return "version";
+	if (cmd === "--help" || cmd === "-h" || cmd === "help") return "help";
 	if (cmd === "session") return "session";
 	if (cmd === "update") return "update";
-	if (cmd === undefined || cmd === "" || FLEET_SUBCOMMANDS[cmd]) return "fleet";
+	if (cmd === undefined || cmd === "" || cmd.startsWith("-") || FLEET_SUBCOMMANDS[cmd])
+		return "fleet";
 	return "usage";
 }
 
-const USAGE = `usage: omp-web [serve] [options] | omp-web <command> [options]
+const USAGE = `usage: omp-web [options] | omp-web <command> [options]
 
-  (bare) | serve               start the fleet (registry + supervisor + edge);
+  (bare)                       control plane + UI on one port (default 4722);
                                first run with no config on a TTY offers setup
+  control                      control plane only, no UI (default port 4722)
+  ui                           UI daemon: static UI + proxy to the control plane
+                               (default port 4723)
   sessions | projects          list roster entries / adoptable worktrees
   profiles                     list provider profiles
-  spawn | add-repo | add | provision | add-clone | start | stop | remove
+  spawn | add-repo | enroll | provision | add-clone | start | stop | remove
   rm-project | add-worktree | rm-worktree | prompt | preflight
-                               fleet control plane (see: omp-web <command> --help)
+                               fleet control plane (missing arguments print
+                               the command's usage)
   session [options]            run one agent session daemon (no web UI)
   update [--check] [--force] [--version x.y.z]
                                self-update from the release channel
   --version | version          print version
+
+options (bare, control, ui):
+  --port <n>                   listen port
+  --control-port <n>           ui only: control plane to proxy to (default 4722)
+  --open                       bare, ui: open the UI in a browser once ready
+  --verbose                    bare, control: state/config paths and every
+                               lifecycle event
 `;
 
 /** Version resolution lives in apps/cli/version.ts (shared with omp-web update). */
@@ -95,9 +112,11 @@ if (import.meta.main) {
 		case "fleet": {
 			// Dynamic import by design: keeps the fleet graph (and its transitive
 			// @oh-my-pi deps) out of the load path of `--version`, and out of
-			// `session` processes entirely. A bare `omp-web` is fleet serve.
+			// `session` processes entirely. A bare `omp-web` (or one starting
+			// with a flag) has no verb, which the fleet CLI runs as control
+			// plane + UI.
 			const { main } = await import("../fleet/cli");
-			process.exit(await main(argv.length === 0 ? ["serve"] : argv));
+			process.exit(await main(argv));
 			break;
 		}
 		case "session": {
@@ -110,6 +129,10 @@ if (import.meta.main) {
 			await import("../session/index");
 			break;
 		}
+		case "help":
+			console.log(USAGE);
+			process.exit(0);
+			break;
 		case "usage":
 			console.error(USAGE);
 			process.exit(1);

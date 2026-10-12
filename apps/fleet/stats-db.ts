@@ -74,11 +74,6 @@ export class StatsDbManagerImpl implements StatsDbManager {
 			}
 			// Missing now, or mtime/size moved → rotation. Drop the prior handle
 			// (and any temp copy) before reopening.
-			console.log("[stats-db] rotation detected; reopening", {
-				path: this.#target,
-				prior: this.#stat,
-				next: stat,
-			});
 			this.#dispose();
 		}
 		if (stat) this.#open(stat);
@@ -88,7 +83,6 @@ export class StatsDbManagerImpl implements StatsDbManager {
 	close(): void {
 		if (this.#handle === null && this.#tempDir === null) return;
 		this.#dispose();
-		console.log("[stats-db] close", { path: this.#target });
 	}
 
 	/** Release resources without lifecycle logging (used by rotation). */

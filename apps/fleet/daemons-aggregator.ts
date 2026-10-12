@@ -1,7 +1,7 @@
 /**
- * Aggregated daemons panel (Phase 4/5): the edge taps every daemon
- * connection for {type:"daemons"} broker rosters, both the connector's
- * control socket and each proxy pipe. It caches the latest roster per
+ * Aggregated daemons panel (Phase 4/5): the edge taps every daemon's
+ * callback pair for {type:"daemons"} broker rosters, both its control-stream
+ * envelopes and each browser's callback stream. It caches the latest roster per
  * daemonId (full-replace, not union) and merges it across daemons into the
  * single {type:"daemons"} frame browsers see.
  *

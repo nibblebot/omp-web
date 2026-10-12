@@ -1,11 +1,15 @@
 /**
  * Boot reconciliation tests for fleet/server.ts ("boot reconciliation (#3)"
- * describe): a fleet booted against a seeded registry must downgrade stale
- * non-terminal spawned entries, redial remote entries persisted 'ready', and
- * leave intentional stops and terminal errors untouched.
+ * describe): a fleet booted against a seeded registry downgrades stale
+ * non-terminal spawned entries to 'asleep'. An enrolled remote entry persisted
+ * 'ready' drops to 'reconnecting' (its daemon redials with the persisted
+ * enrollment) and becomes 'asleep' once the redial grace elapses. An
+ * unenrolled remote entry has nothing to redial with, so it goes straight to
+ * 'asleep'. Intentional stops and terminal errors stay untouched.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { Registry } from "../registry";
 import { startFleet, type FleetServer } from "../server";
@@ -14,9 +18,7 @@ import {
 	cleanupTempDirs,
 	fleetPaths,
 	hermeticStatsConfig,
-	startFakeDaemon,
 	waitFor,
-	type FakeDaemon,
 	pinSettingsInMemory,
 } from "./server.testkit";
 
@@ -29,20 +31,23 @@ afterAll(cleanupTempDirs);
 // parallel test-file loader (importers sporadically see its bindings in TDZ).
 await pinSettingsInMemory();
 
+const BOOT_CREDENTIAL = "boot-credential";
+
 describe("boot reconciliation (#3)", () => {
 	let tmp: string;
 	let statePath: string;
 	let configPath: string;
 	let server: FleetServer;
-	let fake: FakeDaemon;
+
+	const TEST_REDIAL_GRACE_MS = 1_500;
 
 	beforeAll(async () => {
 		({ tmp, statePath, configPath } = fleetPaths());
 		writeFileSync(configPath, JSON.stringify({}));
-		fake = startFakeDaemon("boot-token");
 		// Seed the registry exactly as a previous fleet process would have
 		// left it: stale non-terminal statuses (children/sockets died with
-		// that process), an intentional stop, and a real error.
+		// that process), an enrolled and an unenrolled remote 'ready' entry,
+		// an intentional stop, and a real error.
 		const registry = new Registry(statePath);
 		await registry.load();
 		registry.create({
@@ -74,14 +79,25 @@ describe("boot reconciliation (#3)", () => {
 			template: "test",
 			status: "connecting",
 		});
-		registry.create({
-			name: "boot-dial",
+		const enrolled = registry.create({
+			name: "enrolled-ready",
 			cwd: "",
 			project: "",
 			labels: [],
 			mode: "remote",
-			endpoint: fake.url,
-			token: "boot-token",
+			status: "ready",
+			readyAt: Date.now() - 120_000,
+		});
+		registry.setWorkspaceEnrollment(enrolled.daemonId, {
+			credentialHash: createHash("sha256").update(BOOT_CREDENTIAL).digest("hex"),
+			generation: 1,
+		});
+		registry.create({
+			name: "unenrolled-ready",
+			cwd: "",
+			project: "",
+			labels: [],
+			mode: "remote",
 			status: "ready",
 			readyAt: Date.now() - 120_000,
 		});
@@ -91,7 +107,6 @@ describe("boot reconciliation (#3)", () => {
 			project: "",
 			labels: [],
 			mode: "remote",
-			endpoint: "ws://127.0.0.1:1",
 			status: "asleep",
 		});
 		registry.create({
@@ -100,21 +115,20 @@ describe("boot reconciliation (#3)", () => {
 			project: "",
 			labels: [],
 			mode: "remote",
-			endpoint: "ws://127.0.0.1:1",
 			status: "error",
-			error: "unauthorized (401): daemon rejected the token",
+			error: "daemon rejected the credential",
 		});
 		server = await startFleet({
 			port: 0,
 			statePath,
 			configPath,
 			statsConfig: hermeticStatsConfig(statePath),
+			redialGraceMs: TEST_REDIAL_GRACE_MS,
 		});
 	});
 
 	afterAll(async () => {
 		if (server !== undefined) await server.close();
-		if (fake !== undefined) fake.close();
 	});
 
 	test("spawned stale 'ready'/'spawning'/'connecting' entries are downgraded to asleep with stale readyAt/pid cleared", () => {
@@ -127,32 +141,33 @@ describe("boot reconciliation (#3)", () => {
 		expect(entries.find((e) => e.name === "stale-connecting")!.status).toBe("asleep");
 	});
 
-	test("a remote entry persisted 'ready' is redialed at boot (connecting → ready via the connector)", async () => {
-		const entry = server.registry.list().find((e) => e.name === "boot-dial")!;
-		// The boot reconcile dials immediately; the fake must see the token.
-		await waitFor(() => fake.seen.authHeader !== null, 5000, "boot dial");
-		expect(fake.seen.authHeader).toBe("Bearer boot-token");
-		await waitFor(
-			() => server.registry.get(entry.daemonId)?.status === "ready",
-			5000,
-			"re-ready after boot redial",
-		);
-		expect(server.registry.get(entry.daemonId)?.readyAt).toBeTypeOf("number");
+	test("an enrolled remote entry persisted 'ready' is reconnecting at boot, with stale readyAt cleared", () => {
+		const entry = server.registry.list().find((e) => e.name === "enrolled-ready")!;
+		expect(entry.status).toBe("reconnecting");
+		expect(entry.readyAt).toBeUndefined();
 	});
 
-	test("intentionally stopped and terminal-error entries are left untouched", async () => {
+	test("an unenrolled remote entry persisted 'ready' goes straight to asleep at boot", () => {
+		const entry = server.registry.list().find((e) => e.name === "unenrolled-ready")!;
+		expect(entry.status).toBe("asleep");
+		expect(entry.readyAt).toBeUndefined();
+	});
+
+	test("an enrolled entry still 'reconnecting' after the redial grace becomes asleep", async () => {
+		const entry = server.registry.list().find((e) => e.name === "enrolled-ready")!;
+		await waitFor(
+			() => server.registry.get(entry.daemonId)?.status === "asleep",
+			TEST_REDIAL_GRACE_MS + 2_000,
+			"redial grace expiry",
+		);
+		expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
+	}, 10_000);
+
+	test("intentionally stopped and terminal-error entries are left untouched", () => {
 		const stopped = server.registry.list().find((e) => e.name === "stopped")!;
 		const errored = server.registry.list().find((e) => e.name === "terminal-error")!;
 		expect(stopped.status).toBe("asleep");
 		expect(errored.status).toBe("error");
-		expect(errored.error).toContain("unauthorized");
-		// A short wait proves the stopped entry was NOT dialed: the connector
-		// transitions synchronously on connect(), so any dial would have left
-		// "asleep" by now.
-		const { promise, resolve } = Promise.withResolvers<void>();
-		setTimeout(resolve, 400);
-		await promise;
-		expect(server.registry.get(stopped.daemonId)?.status).toBe("asleep");
-		expect(server.connector.isConnected(stopped.daemonId)).toBe(false);
+		expect(errored.error).toContain("rejected");
 	});
 });

@@ -9,7 +9,7 @@ import { FleetEventLog } from "../events";
 describe("FleetEventLog", () => {
 	test("add appends entries in order; list returns a copy, oldest first", () => {
 		const log = new FleetEventLog(10);
-		log.add("info", "connector", "connecting", "d1");
+		log.add("info", "server", "connecting", "d1");
 		log.add("warn", "supervisor", "exit code=1", "d2");
 		log.add("error", "server", "request failed");
 		const list = log.list();
@@ -19,7 +19,7 @@ describe("FleetEventLog", () => {
 			"exit code=1",
 			"request failed",
 		]);
-		expect(list[0]).toMatchObject({ level: "info", source: "connector", daemonId: "d1" });
+		expect(list[0]).toMatchObject({ level: "info", source: "server", daemonId: "d1" });
 		expect(list[2]?.level).toBe("error");
 		expect(list[2]?.daemonId).toBeUndefined();
 		// The returned array is a copy: mutating it must not affect the ring.
@@ -40,7 +40,7 @@ describe("FleetEventLog", () => {
 		const log = new FleetEventLog(10);
 		const seen: string[] = [];
 		log.onEntry = (entry) => seen.push(`${entry.level}:${entry.message}`);
-		log.add("info", "connector", "ready", "d9");
+		log.add("info", "server", "ready", "d9");
 		log.add("error", "server", "boom");
 		expect(seen).toEqual(["info:ready", "error:boom"]);
 	});

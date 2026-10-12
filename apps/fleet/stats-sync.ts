@@ -180,7 +180,6 @@ export function register(ctx: AppCtx, routes: Route[]): void {
 		handler: async () => {
 			if (inflight) return errorJson("sync already in progress", 409);
 
-			console.log("[sync] started");
 			const started = Date.now();
 			const task = (async (): Promise<Response> => {
 				try {
@@ -188,14 +187,9 @@ export function register(ctx: AppCtx, routes: Route[]): void {
 					const outcome = await runner(process.env);
 					ctx.dbm.reprobe();
 					const durationMs = Date.now() - started;
-					console.log("[sync] finished", {
-						processed: outcome.processed,
-						files: outcome.files,
-						durationMs,
-					});
 					return json({ ...outcome, durationMs });
 				} catch (err) {
-					console.log("[sync] failed", err instanceof Error ? err.message : String(err));
+					console.error("[sync] failed", err instanceof Error ? err.message : String(err));
 					if (err instanceof SyncConfigError) return errorJson(err.message, 503);
 					if (err instanceof SyncUnavailable) return errorJson(SYNC_ERROR_503, 503);
 					if (err instanceof SyncTimedOut) return errorJson("sync timed out", 504);

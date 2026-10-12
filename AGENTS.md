@@ -4,7 +4,7 @@ Repository guardrails. README.md is user documentation; source types define prec
 
 ## What this repo is
 
-Bun, TypeScript ESM, Solid.js. `omp-session` runs one in-process SDK session per daemon, bound to an immutable project directory. Durable agent truth lives in session `.jsonl` logs. `omp-fleet` supervises daemons and alone serves the UI. It holds no agent state; persistence is roster metadata, private clone workspace records, and the fleet log store. The browser has one shared store and no router.
+Bun, TypeScript ESM, Solid.js. `omp-session` runs one in-process SDK session per daemon, bound to an immutable project directory. Durable agent truth lives in session `.jsonl` logs. `omp-web` (`apps/fleet`) supervises daemons and serves the UI: bare `omp-web` runs control plane and UI on one port, `omp-web control` runs the control plane alone, and `omp-web ui` serves the UI and proxies its API to a control plane. It holds no agent state; persistence is roster metadata, private clone workspace records, and the fleet log store. The browser has one shared store and no router.
 
 ## Commands
 
@@ -23,7 +23,7 @@ bun run build                       # installable bundle
 bun e2e/onboarding.ts                # offline distribution E2E
 ```
 
-Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Restart dev-spawned daemons after server edits; they are not watched. Broker management is opt-in via `bun run dev --auth-broker`; default dev and production never manage broker startup or automatically configure credentials.
+Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Dev-spawned daemons outlive a dev restart and redial the stable per-worktree fleet port; restart them after server edits (stop them through the fleet); they are not watched. Broker management is opt-in via `bun run dev --auth-broker`; default dev and production never manage broker startup or automatically configure credentials.
 
 ## Repo layout
 
@@ -31,7 +31,7 @@ Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Restart d
 | --- | --- |
 | `apps/cli/` | Installed entrypoint, update, collab CLI |
 | `apps/session/` | Session daemon, dispatch, SSE delivery, callback/log mirroring |
-| `apps/fleet/` | Registry, supervision, connector, browser edge, control API, stats, clone lifecycle |
+| `apps/fleet/` | Registry, supervision, callback pair (session dial-out), browser edge, control API, stats, clone lifecycle |
 | `apps/web/` | `state.ts` facade, actions in `store/`, feature logic (`chat/`, `prompt/`, `subagents/`, `fleet-ui/`, ...), `ModalHost.tsx`, presentational `components/` |
 | `apps/design-system/` | Component showcase: Bun server + Solid transform, App drill-down nav from the render graph, stories, typed fixtures, fixture HTTP routes |
 | `lib/` | Closed wire/runtime/session-files/sdk-settings/platform/testkit libraries |
@@ -46,36 +46,38 @@ Overlay is the umbrella term, not a suffix: a portaled layer above the app shell
 
 ## The wire contract (OMP_PROTO 2)
 
-Agent transport is HTTP + SSE, not WebSocket (collab-only). `POST /command` accepts ID-keyed commands with `202`; answers arrive via SSE `call_result`. `lib/wire/protocol.ts` owns shapes/constants. Fleet stamps session identity.
+Agent transport is HTTP + SSE, not WebSocket (collab-only). Browser to fleet: `GET /events` SSE down, `POST /command` up, ID-keyed commands accepted with `202`, answers via SSE `call_result`. Fleet to session: only the session-initiated callback pair (`OMP_CALLBACK_PROTO 1`, `lib/wire/callback-protocol.ts`): `POST /callback/up` NDJSON, `GET /callback/down` SSE, `POST /callback/bulk/<id>`; browser streams and commands ride it as virtual streams. A session's own `/events` and `/command` listener stays for direct clients; the fleet never uses it. `lib/wire/protocol.ts` owns frame shapes/constants. Fleet stamps session identity.
 
 ## Invariants & conventions, read before editing
 
 ### Protocol (`lib/wire/`)
 
-- Changes are additive-only unless `OMP_PROTO` is bumped with both fleet gates (`connector.ts`, `edge.ts`).
+- Changes are additive-only unless the version is bumped with both gates: `OMP_PROTO` (frames) is gated in `apps/fleet/edge.ts` (daemon `hello_ok`) and `apps/web/state.ts`; `OMP_CALLBACK_PROTO` (the callback pair) is gated in `lib/wire/callback-protocol.ts`, shared by `apps/fleet/daemon-transport.ts` and `apps/session/fleet-callback.ts`.
 - Preserve byte-bounded history, chunk accumulation, and replay/backpressure semantics. `stream_reset` ends a stream, not the daemon. Do not clip messages merely because they exceed the frame batch target.
 - Command retries reuse the same ID within the dedup window. Duplicates replay answers, never re-dispatch; replay across daemon process changes must fail, never execute again.
 
 ### Server
 
-- Daemon stdout is reserved for `OMP_SESSION|` contract lines; logs go to stderr.
+- Daemon stdout is reserved for `OMP_SESSION|` contract lines (informational for whoever launched it; the fleet does not parse it); logs go to stderr. Spawned sessions' stdout/stderr land in `<state dir>/session-logs/<daemonId>.log`.
 - Preserve `methods.ts` classification: read-only calls skip mutation broadcasts, history reloads resync before answers, prompts are readiness-gated.
 - Loopback auth exemption does not extend off-loopback: binding without a token fails startup; wrong credentials return 401.
 - Callback transport requires workspace/generation identity and HTTPS, except explicitly allowed loopback HTTP. Configured proxies must be http/https, never silently ignored.
-- Downloads stay realpath-jailed; file listings stay inside cwd. Idle exit requires no clients or active work, tools, dialogs, or collab room.
+- Downloads stay realpath-jailed; file listings stay inside cwd. Idle exit requires no clients (local `/events` streams or callback browser streams) or active work, tools, dialogs, or collab room.
+- With a callback pair configured, a session redials with backoff and never shuts down on a dropped pair alone: it exits gracefully after `--control-grace` without a ready pair, at once on a fleet `shutdown` control, and at once on a credential rejection (401, 409 `generation_obsolete`). Pair commands share the `POST /command` dedup window.
 
 ### Fleet
 
 - Keep static fleet loading SDK-free; exceptional SDK access uses lazy imports.
-- Mint tokens per spawn/restart. Never expose tokens, private workspace records, enrollment digests, or secret values in roster/debug/public profiles; debug snapshots must not expose daemon endpoints.
-- Answers go only to the originating browser. Disconnects and origin-map caps must not discard outstanding replay protection. Reject replays when daemon PID, endpoint, or credentials change.
+- Mint a fresh callback credential and generation per spawn/restart; revoke the previous generation first. The fleet stores only credential digests. Never expose tokens, private workspace records, enrollment digests, or secret values in roster/debug/public profiles; debug snapshots must not expose daemon endpoints.
+- Sessions outlive the control plane: fleet `close()` never kills sessions or revokes enrollments; persisted enrollments re-enroll at boot so sessions redial with their original credential. Status of every non-clone entry comes from pair state. `stop`/`remove` send the `shutdown` control and revoke.
+- Answers go only to the originating browser. Disconnects and origin-map caps must not discard outstanding replay protection. Reject replays when the daemon's generation or credentials change.
 - Fleet/session files use exclusive lifetime locks. Session-lock exit 77 must not restart; fail waiting attaches and return the entry to asleep.
 - Registry writes are atomic; project/daemon IDs are monotonic, never reused. Validate explicit resume files against the owning worktree's listing, never arbitrary paths.
 - Worktree deletion requires managed ownership and a clean tree. No force; branch deletion uses `git branch -d`, never `-D`. Transcripts survive worktree deletion.
 - Clone operations go through `workspace-lifecycle.ts`, never handler self-fetches. Persist retry-sensitive state before provider steps; prove predecessor termination before replacement, never PID-only.
 - Clone stop preserves checkout/logs. Deletion requires proven stop, Git guards, transcript-store verification against the volume, and read-only protection before provider/volume removal. No force bypass; transcripts are not source backup.
-- Resume restores the requested durable session or fails explicitly, never silently boots fresh or substitutes upstream source. Stored-history reads never wake compute; retention/purge is explicit, not automatic GC.
-- Remote entries are dial-in-only, never locally Git-probed; clones are the outbound callback exception. Sandboxes never mount operator agent state.
+- Resume restores the requested durable session or fails explicitly, never silently boots fresh or substitutes upstream source. A spawned session respawns with `--resume <lastSessionFile>`; the edge records `lastSessionFile` from the `state` frame every session publishes on its control stream at each pair-up. Stored-history reads never wake compute; retention/purge is explicit, not automatic GC.
+- The fleet never dials a session: every session, local or remote, connects out over the callback pair. Remote entries are never locally Git-probed. Sandboxes never mount operator agent state.
 - Template substitutions require caller shell escaping. Config loading stays read-only; preserve the TTY-only first-run writer.
 
 ### Frontend (`apps/web/`)

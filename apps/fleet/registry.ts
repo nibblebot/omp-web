@@ -1,6 +1,6 @@
 /**
  * Daemon registry for the omp-fleet: the persistent, insertion-ordered
- * roster of daemons (spawned, attached, remote) with monotonic `dN` id
+ * roster of daemons (spawned and remote) with monotonic `dN` id
  * allocation that survives restarts, plus the first-class registered
  * `projects[]` (realpath-keyed, `pN` ids) that project groups hang off.
  *
@@ -27,6 +27,13 @@ import type {
 	WorkspaceKind,
 } from "#lib/wire/protocol";
 import { validateProjectPath } from "./discovery";
+
+/**
+ * How long an enrolled session may stay unpaired after a control-plane boot
+ * before it is shown asleep. A session that redials inside this window keeps
+ * its status; the supervisor owns the status of sessions it launches.
+ */
+export const REDIAL_GRACE_MS = 45_000;
 
 /**
  * Workspace identity unions, re-exported for fleet/registry consumers. The
@@ -169,10 +176,6 @@ export interface RegistryEntry extends DaemonEntry {
 	/** True when the daemon's last session file has no messages (new/empty session);
 	 *  set alongside sessionTitle by the supervisor's git-state polling probe. */
 	sessionEmpty?: boolean;
-	/** Remote/attached: the ws(s)://host:port as registered. */
-	endpoint?: string;
-	/** Bearer token for dial-in (R14). */
-	token?: string;
 	/** Spawned entries: the template name they were spawned from. */
 	template?: string;
 	registeredAt: number;
@@ -201,31 +204,9 @@ interface RegistryFile {
 }
 
 /**
- * Truthful boot status for a persisted entry after a fleet restart: every
- * spawned child and connector socket died with the old process, so any
- * non-terminal persisted status describes nothing that is running.
- * Terminal statuses are kept: "error" (the failure is real) and "asleep"
- * (an intentional stop). Everything else maps per mode:
- *   - "spawning" → "asleep", a failed spawn; nothing was ever dialed
- *     (respawn --resume is the documented recovery for spawned entries);
- *   - spawned + any other non-terminal status → "asleep", the child is
- *     gone, so "ready"/"connecting"/… are lies; the user respawns;
- *   - remote/attached + any other non-terminal status → "connecting", a
- *     dial-in entry has nothing to respawn, so the server redials it at
- *     boot (the same recovery the edge's #wake uses for remote entries).
- * Returns null when the persisted status should be left untouched.
- */
-export function bootStatusFor(entry: Pick<RegistryEntry, "mode" | "status">): DaemonStatus | null {
-	if (entry.status === "error" || entry.status === "asleep") return null;
-	if (entry.status === "spawning") return "asleep"; // failed spawn, no live child, never dialed
-	if (entry.mode === "spawned") return "asleep"; // child died with the old fleet process
-	return "connecting"; // dial-in: nothing to respawn, so redial immediately
-}
-
-/**
  * Legacy-inference base workspace record for entries persisted before P1.
  * Contract rule: managed or worktreeOf → "worktree"; every other mode
- * (spawned without worktreeOf, remote, attached) → "direct". desiredState
+ * (spawned without worktreeOf, remote) → "direct". desiredState
  * is "running": a legacy entry is a live roster row. projectId comes from
  * the entry's registered-project link ("" when absent, e.g. remote
  * entries). In-memory only: load() stamps it and the entry's next mutation
@@ -521,13 +502,14 @@ export class Registry {
 
 	/**
 	 * Sets the status; the `error` field is only carried while status is
-	 * "error" and is cleared on every other transition (or when no message
-	 * is supplied).
+	 * "error" or "asleep" (an asleep entry may carry the reason it stopped,
+	 * e.g. a session lock) and is cleared on every other transition (or when
+	 * no message is supplied).
 	 */
 	setStatus(daemonId: string, status: DaemonStatus, error?: string): void {
 		const entry = this.#require(daemonId);
 		entry.status = status;
-		if (status === "error") {
+		if (status === "error" || status === "asleep") {
 			if (error === undefined) delete entry.error;
 			else entry.error = error;
 		} else {
@@ -601,11 +583,11 @@ export class Registry {
 		const index = this.projectList.findIndex((project) => project.projectId === projectId);
 		if (index === -1) throw new Error(`unknown project id: ${projectId}`);
 		// Partition referencing entries: real blockers (anything that ever
-		// ran, is spawning/ready/error, or is remote/attached) refuse the
+		// ran, is spawning/ready/error, or is remote) refuse the
 		// removal wholesale; placeholders are dropped in the same mutation
 		// as the project (and only then; a refused removal leaves them).
 		// A placeholder is a never-started DEFAULT workspace only: spawned
-		// and asleep, no lastSessionFile, no endpoint. A clone workspace is
+		// and asleep, with no lastSessionFile. A clone workspace is
 		// NEVER a placeholder: its cwd is a managed volume under the fleet
 		// workspaceDir with preparation/provider state, so it must block
 		// project removal until it is deleted through the verified gate
@@ -615,8 +597,7 @@ export class Registry {
 			entry.workspace?.kind !== "clone" &&
 			entry.mode === "spawned" &&
 			entry.status === "asleep" &&
-			entry.lastSessionFile === undefined &&
-			entry.endpoint === undefined;
+			entry.lastSessionFile === undefined;
 		const blockers = this.entries.filter(
 			(entry) => entry.projectId === projectId && !isPlaceholder(entry),
 		);

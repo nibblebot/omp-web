@@ -1,82 +1,90 @@
 /**
- * Cross-app E2E: real fleet + real omp-session daemons.
+ * Cross-app E2E: real fleet + real omp-session daemons over the dial-out model.
  *
- * Boots a real fleet (startFleet from apps/fleet/server) on an ephemeral
- * loopback port with tmp state + config, spawns THREE real omp-session
- * daemons (bun apps/session/index.ts via the configured local spawn template)
- * over the HTTP control plane, prompts each, SIGKILLs one child and asserts
- * the supervisor's restart-on-failure (fresh token per attempt, --resume of
- * the known session file), `add`s an externally launched omp-session and
- * drives it, then exercises the idle auto-exit → asleep →
- * respawn-on-demand-with---resume lifecycle on a short-idle daemon.
+ * Boots a real fleet (startFleet from apps/fleet/server) on a loopback port
+ * with tmp state + config, and spawns real omp-session daemons through the
+ * configured spawn templates (bun apps/session/index.ts). Every daemon dials
+ * OUT to the fleet's callback pair (/callback/up, /callback/down); the fleet
+ * never dials a daemon. The supervisor enrolls each launch (workspaceId ===
+ * daemonId, generation bumps per launch, credential in
+ * OMP_SESSION_CALLBACK_TOKEN, digest persisted in entry.workspace.enrollment),
+ * runs the child detached, and appends its output to
+ * <state dir>/session-logs/<daemonId>.log.
  *
- * Model determinism: every daemon runs against a fresh empty
- * PI_CODING_AGENT_DIR, so no model is selectable, with no live model/API
- * dependency (see LOCAL_TEMPLATE construction below). Exactly 5 prompts are
- * issued (d1, d2, d3, the added external daemon, and the respawned idle
- * daemon); all assert ok:false. The daemon's prompt method is fire-and-forget
- * and its turn failure arrives as a broadcast error frame (which the fanout
- * deliberately ignores), so a no-model prompt settles on the fanout's waitMs
- * client timeout. The assertions above check the /ctl/prompt → fan-out →
- * daemon correlation seam (dispatch + per-daemon serialization + timeout
- * error), not a model error. Session-file paths (lastSessionFile) come from
- * hello_ok/state frames at ready, not from completed turns.
+ * Scenarios (serial, one shared fleet; scenario 5 closes and re-opens it):
+ *  1. spawn three daemons; all reach ready once their pair forms; prompt each.
+ *  2. SIGKILL one child: the supervisor relaunches it under a NEW enrollment
+ *     generation; the old generation's credential is revoked (a redial with it
+ *     is refused with 401/409).
+ *  3. POST /ctl/enroll for an externally launched omp-session (mode "remote"):
+ *     it goes ready, answers a prompt, and POST /ctl/stop shuts it down over
+ *     the pair (asleep, enrollment released).
+ *  4. idle auto-exit → asleep (enrollment released); a prompt wakes it: the
+ *     fanout respawns it under a new enrollment generation.
+ *  5. closing the fleet does NOT kill sessions: the daemon keeps running; a new
+ *     fleet on the same state/config/port re-enrolls the persisted digest at
+ *     boot, the SAME process re-pairs and the entry returns to ready with no
+ *     respawn, and a prompt still reaches it.
+ *  6. POST /ctl/stop on that daemon makes the process exit and the entry asleep.
+ *  7. a prompt on that stopped daemon wakes it: the respawn carries --resume <lastSessionFile>.
  *
- * Tests are serial and share one fleet instance; every timeout failure
- * includes the daemon's stderr tail when the supervisor can provide it.
+ * Model determinism: every daemon runs with a fresh, empty PI_CODING_AGENT_DIR
+ * and PI_AUTH_NO_BORROW=1, so no model is selectable and no live model or API
+ * is ever touched. A prompt is accepted by the daemon, its turn can never
+ * complete, and the fanout settles it on the /ctl/prompt waitMs timeout with
+ * ok:false. The assertions cover the /ctl/prompt → fan-out → daemon dispatch
+ * and the timeout correlation, not a model answer. Exactly seven prompts are
+ * issued across the suite (d1, d2, d3, the external daemon, the woken idle
+ * daemon, the re-adopted survivor, the survivor woken after its stop), and
+ * the final assertion checks that count.
+ *
+ * Daemons are detached and outlive the fleet by design, so process hygiene is
+ * explicit: every observed pid is tracked, and afterAll closes the fleet and
+ * then SIGKILLs every session process whose command line names this suite's
+ * tmp root, so nothing is left behind even when a test fails midway.
  *
  * The shortidle template pins the test-only OMP_SESSION_TEST_IDLE_CHECK_MS knob
- * (500ms idle-check tick; default 15s) inline per-spawn, so the idle
- * auto-exit lifecycle runs in seconds; daemons without an idle timeout are
- * unaffected (faster ticks are harmless, since they only gate an exit that never
- * comes without --idle-timeout). It is pinned in the template rather than set
- * on Bun.env in beforeAll because Bun does not propagate runtime process.env
- * mutations to env-less Bun.spawn children, which is how the supervisor
- * launches daemons; the fleet wraps templates in `sh -c`, so a leading env
- * assignment reaches exactly that child.
+ * (500ms idle-check tick; default 15s) so the idle lifecycle runs in seconds.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
-import { startFleet, type FleetServer } from "../apps/fleet/server";
+import type { Subprocess } from "bun";
+import { startCallbackDaemon } from "../apps/fleet/test/callback-daemon.testkit";
 import type { RegistryEntry } from "../apps/fleet/registry";
-import { parseContractLine } from "../apps/fleet/spawn-parse";
+import { type FleetServer, startFleet } from "../apps/fleet/server";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { hermeticStatsConfig } from "./helpers.testkit";
 
-const PROMPT_TEXT = "Reply with exactly: PONG";
+afterAll(cleanupTempDirs);
 
-// Provider API keys in the SHELL env (a dev machine exports e.g.
-// KIMI_API_KEY) would hand spawned daemons a live model and break the
-// no-model determinism below. Bun.spawn children inherit the ORIGINAL
-// process env, not runtime process.env mutations, so the scrub rides the
-// command line: `env -u KEY …` per exported *_API_KEY / *_AUTH_TOKEN,
-// computed once at module load.
+const PROMPT_TEXT = "Reply with exactly: PONG";
+const SESSION_ENTRY = "apps/session/index.ts";
+
+// Provider API keys exported in the SHELL (a dev machine has e.g. KIMI_API_KEY)
+// would give spawned daemons a live model and break the no-model determinism
+// below. The scrub rides the spawn command line (`env -u KEY …`), and the
+// externally launched daemon's env is filtered by the same key list.
 const PROVIDER_ENV_KEYS = Object.keys(process.env).filter(
 	(k) => k.endsWith("_API_KEY") || k.endsWith("_AUTH_TOKEN"),
 );
-const PROVIDER_ENV_SCRUB_ARGV = ["env", ...PROVIDER_ENV_KEYS.flatMap((k) => ["-u", k])];
-const PROVIDER_ENV_SCRUB_STR = PROVIDER_ENV_SCRUB_ARGV.join(" ");
+const PROVIDER_ENV_SCRUB_STR = PROVIDER_ENV_KEYS.map((k) => `-u ${k}`).join(" ");
+const PROVIDER_ENV_SCRUB = PROVIDER_ENV_SCRUB_STR === "" ? "" : `env ${PROVIDER_ENV_SCRUB_STR} `;
 
 /**
- * Model determinism: every daemon spawns with PI_CODING_AGENT_DIR pointed at
- * a fresh empty directory inside the suite's tmp root (plus PI_AUTH_NO_BORROW=1
- * so the auth broker cannot inject keys). With no auth and no model cache the
- * daemon has NO selectable model: boots, readiness gate, and hello_ok/state
- * frames (incl. sessionFile) all behave normally, but every prompt turn never
- * produces agent_end. The daemon's prompt is fire-and-forget and turn
- * failures arrive as broadcast error frames, which the fanout deliberately
- * ignores, so each prompt settles on the client waitMs timeout with
- * ok:false. No test outcome ever depends on a live model/API. Prompts ARE
- * issued through the control plane; they exercise the /ctl/prompt → fan-out
- * → daemon dispatch + per-daemon serialization + timeout-error correlation
- * seam, including wake-on-demand respawn, and all assert ok:false.
- * (Dead-porting provider *_BASE_URL env instead does NOT work: cached model
- * configs carry an explicit baseUrl that wins over the env override.)
- *
- * Built in beforeAll because the paths derive from the suite tmp dir; {name}
- * survives into the fleet templates, which expand it per daemon.
+ * Built in beforeAll because the paths derive from the suite tmp dir. {name}
+ * and {labels}/{resume} expand per daemon in the fleet templates. The callback
+ * credential rides the child environment (set by the supervisor), not the
+ * template.
  */
 let LOCAL_TEMPLATE = "";
 let SHORTIDLE_TEMPLATE = "";
@@ -88,22 +96,84 @@ interface PromptResultWire {
 	error?: string;
 }
 
-/** The externally launched omp-session we manage ourselves (step 5). */
-interface ExtDaemon {
-	child: { pid: number; kill(signal?: string): void; exited: Promise<number | null> };
-	url: string;
+interface StopResponse {
+	stopped: string[];
+}
+
+interface EnrollResponse {
+	entry: RegistryEntry;
+	enrollment: { workspaceId: string; generation: number; token: string; callbackUrl: string };
+}
+
+interface StateFile {
+	entries: RegistryEntry[];
+}
+
+/** A live process whose command line names apps/session/index.ts and this suite's root. */
+interface SessionProc {
+	pid: number;
+	args: string[];
 }
 
 /**
- * Polling here deliberately uses real wall-clock time: the daemons under test
- * are separate OS processes with their own clocks (model latency, omp-session's idle
- * timer, the supervisor's restart backoff). Deterministic fake timers cannot
- * drive them, so the waits below await real status transitions instead.
+ * Real wall-clock waiting for OS processes. The daemons under test are separate
+ * processes on the platform clock (idle timers, supervisor restart backoff, the
+ * redial after a fleet restart), so fake timers cannot drive them; waits poll
+ * the observable status until it changes instead of guessing a duration.
  */
 function sleep(ms: number): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
 	setTimeout(resolve, ms);
 	return promise;
+}
+
+async function waitUntil(
+	cond: () => boolean | Promise<boolean>,
+	timeoutMs: number,
+	what: string,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (await cond()) return;
+		await sleep(60);
+	}
+	throw new Error(`timed out waiting for ${what} (${timeoutMs}ms)`);
+}
+
+/** Every process whose argv names the session entry point and `root`. */
+function sessionProcs(root: string): SessionProc[] {
+	const out: SessionProc[] = [];
+	for (const name of readdirSync("/proc")) {
+		if (!/^\d+$/.test(name)) continue;
+		let raw: string;
+		try {
+			raw = readFileSync(`/proc/${name}/cmdline`, "utf8");
+		} catch {
+			continue; // exited between readdir and read
+		}
+		const args = raw.split("\0");
+		if (!args.includes(SESSION_ENTRY) || !raw.includes(root)) continue;
+		out.push({ pid: Number(name), args });
+	}
+	return out;
+}
+
+/** True while `pid` is a live, non-zombie process. */
+function isRunning(pid: number): boolean {
+	let stat: string;
+	try {
+		stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+	} catch {
+		return false;
+	}
+	// The state field follows the parenthesised comm, which may itself contain ')'.
+	const close = stat.lastIndexOf(")");
+	return stat.slice(close + 2, close + 3) !== "Z";
+}
+
+function argAfter(args: string[], flag: string): string | undefined {
+	const i = args.indexOf(flag);
+	return i >= 0 ? args[i + 1] : undefined;
 }
 
 describe("e2e: real fleet + real omp-session daemons", () => {
@@ -112,17 +182,17 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 	let configPath: string;
 	let projDirs: string[];
 	let server!: FleetServer;
-	// Saved OMP_FLEET_* env for afterAll restore (see beforeAll scrub).
-	let savedFleetEnv: Record<string, string | undefined> = {};
+	/** Saved OMP_FLEET_* env, restored in afterAll (see the beforeAll scrub). */
+	const savedFleetEnv: Record<string, string | undefined> = {};
 	let d1!: RegistryEntry;
 	let d2!: RegistryEntry;
 	let d3!: RegistryEntry;
 	let d4!: RegistryEntry;
-	let ext!: ExtDaemon;
-	let extEntry!: RegistryEntry;
-	/** Every child pid we have seen (spawn responses + restarts + external). */
+	let survivor!: RegistryEntry;
+	let ext: Subprocess | undefined;
+	/** Every daemon pid observed (spawn responses, /proc sweeps, the external launch). */
 	const trackedPids = new Set<number>();
-	/** Prompts issued through the control plane (all error-out, no live model). */
+	/** Prompts issued through the control plane (all settle ok:false, no live model). */
 	let promptCount = 0;
 
 	const base = (): string => `http://127.0.0.1:${server.port}`;
@@ -135,39 +205,45 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		});
 	}
 
-	async function listDaemons(): Promise<RegistryEntry[]> {
+	async function getEntry(id: string): Promise<RegistryEntry | undefined> {
 		const res = await fetch(`${base()}/ctl/sessions`);
 		if (res.status !== 200) throw new Error(`GET /ctl/sessions → ${res.status}`);
-		return (await res.json()) as RegistryEntry[];
+		const entries = (await res.json()) as RegistryEntry[];
+		return entries.find((entry) => entry.daemonId === id);
 	}
 
-	async function getEntry(id: string): Promise<RegistryEntry | undefined> {
-		return (await listDaemons()).find((entry) => entry.daemonId === id);
+	/** The single live session process launched with `--name <name>` (the bun daemon, not the sh wrapper). */
+	function daemonProc(name: string): SessionProc {
+		const matches = sessionProcs(tmp).filter((p) => argAfter(p.args, "--name") === name);
+		if (matches.length !== 1) {
+			throw new Error(
+				`expected exactly one live session process named ${name}, found ${matches.length}`,
+			);
+		}
+		trackedPids.add(matches[0].pid);
+		return matches[0];
 	}
 
 	/**
-	 * Poll GET /ctl/sessions until `predicate(entry)` holds. Every observed
-	 * status is recorded; a timeout (or an error status) throws with the
-	 * daemon's stderr tail when available.
+	 * Poll GET /ctl/sessions until `predicate` holds. An error status throws at
+	 * once with the daemon's log tail; a timeout throws with the last status.
 	 */
 	async function waitForEntry(
 		id: string,
 		predicate: (entry: RegistryEntry) => boolean,
 		timeoutMs: number,
 		what: string,
-	): Promise<{ entry: RegistryEntry; seen: string[] }> {
+	): Promise<RegistryEntry> {
 		const deadline = Date.now() + timeoutMs;
-		const seen: string[] = [];
 		let last: RegistryEntry | undefined;
 		while (Date.now() < deadline) {
 			last = await getEntry(id);
 			if (last) {
-				seen.push(last.status);
-				if (predicate(last)) return { entry: last, seen };
+				if (predicate(last)) return last;
 				if (last.status === "error") {
 					const tail = server.supervisor.stderrTail(id);
 					throw new Error(
-						`daemon ${id} entered error: ${last.error ?? "unknown"}${tail ? `\nstderr tail: ${tail.slice(-500)}` : ""}`,
+						`daemon ${id} entered error: ${last.error ?? "unknown"}${tail ? `\nlog tail: ${tail.slice(-500)}` : ""}`,
 					);
 				}
 			}
@@ -175,109 +251,37 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		}
 		const tail = server.supervisor.stderrTail(id);
 		throw new Error(
-			`timed out waiting for ${id} to ${what} (${timeoutMs}ms); last status: ${last?.status ?? "absent"}${tail ? `\nstderr tail: ${tail.slice(-500)}` : ""}`,
+			`timed out waiting for ${id} to ${what} (${timeoutMs}ms); last status: ${last?.status ?? "absent"}${tail ? `\nlog tail: ${tail.slice(-500)}` : ""}`,
 		);
 	}
 
-	/** One prompt through POST /ctl/prompt with correlation (waitMs). */
-	async function ctlPrompt(selector: string, waitMs: number): Promise<PromptResultWire> {
+	/** One prompt through POST /ctl/prompt; every prompt settles ok:false (no model). */
+	async function ctlPrompt(selector: string): Promise<PromptResultWire> {
 		promptCount++;
-		const res = await postJson("/ctl/prompt", { selector, text: PROMPT_TEXT, waitMs });
+		const res = await postJson("/ctl/prompt", { selector, text: PROMPT_TEXT, waitMs: 5_000 });
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as PromptResultWire[];
 		expect(body).toHaveLength(1);
 		return body[0];
 	}
 
-	/** Launch `bun apps/session/index.ts` ourselves and parse its OMP_SESSION| listening line. */
-	async function spawnExternal(
-		cwd: string,
-		token: string,
-		name: string,
-		extraArgs: string[],
-	): Promise<ExtDaemon> {
-		const command = [
-			...PROVIDER_ENV_SCRUB_ARGV,
-			`PI_CODING_AGENT_DIR=${join(tmp, "agent-" + name)}`,
-			"PI_AUTH_NO_BORROW=1",
-			"bun",
-			"apps/session/index.ts",
-			"--cwd",
-			cwd,
-			"--port",
-			"0",
-			"--token",
-			token,
-			"--name",
-			name,
-			...extraArgs,
-		].join(" ");
-		const child = Bun.spawn(["sh", "-c", command], { stdout: "pipe", stderr: "pipe" });
-		const reader = child.stdout.getReader();
-		const decoder = new TextDecoder();
-		let buffer = "";
-		let url: string | undefined;
-		const deadline = Date.now() + 30_000;
-		while (Date.now() < deadline && url === undefined) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
-			let newline: number;
-			while ((newline = buffer.indexOf("\n")) >= 0) {
-				const line = buffer.slice(0, newline);
-				buffer = buffer.slice(newline + 1);
-				const parsed = parseContractLine(line);
-				if (parsed?.event === "listening" && url === undefined) url = parsed.url;
-			}
-		}
-		// Keep draining both pipes in the background so nothing ever blocks the daemon.
-		void drain(reader);
-		void drain(child.stderr.getReader());
-		if (url === undefined) {
-			try {
-				child.kill("SIGKILL");
-			} catch {
-				// already gone
-			}
-			throw new Error(
-				`external omp-session ${name} printed no OMP_SESSION| listening line within 30s`,
-			);
-		}
-		return { child: child as unknown as ExtDaemon["child"], url };
-	}
-
-	async function drain(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
-		try {
-			for (;;) {
-				const { done } = await reader.read();
-				if (done) break;
-			}
-		} catch {
-			// Pipe closed. The daemon is gone; nothing to drain.
-		}
-	}
-
 	beforeAll(async () => {
-		if (!existsSync(join(process.cwd(), "apps", "session", "index.ts"))) {
+		if (!existsSync(join(process.cwd(), SESSION_ENTRY))) {
 			throw new Error(
-				"integration tests must run from the repo root: bun test e2e/fleet-session.test.ts",
+				"integration tests must run from the repo root: bun scripts/test.ts e2e/fleet-session.test.ts",
 			);
 		}
-		tmp = mkdtempSync(join(tmpdir(), "omp-web-integration-"));
+		tmp = tempDir("omp-web-integration-");
 		statePath = join(tmp, "state.json");
 		configPath = join(tmp, "config.json");
-		// Hermetic per-daemon agent dir ({name} expands per daemon in the fleet
-		// templates): no auth, no model cache → every prompt errors (no model).
-		// PROVIDER_ENV_SCRUB_STR strips shell-exported provider keys the same
-		// way (see module scope). Without it a dev machine's KIMI_API_KEY et al
-		// would give every daemon a live model and turns would SUCCEED.
-		const hermeticEnv = `${PROVIDER_ENV_SCRUB_STR} PI_CODING_AGENT_DIR=${join(tmp, "agent-{name}")} PI_AUTH_NO_BORROW=1`;
-		LOCAL_TEMPLATE = `${hermeticEnv} bun apps/session/index.ts --cwd {cwd} --port 0 --token {token} --name {name} {labels} {resume}`;
-		// Short-idle variant additionally pins the test-only idle-check knob
-		// (500ms tick; default 15s) so the R11 lifecycle runs in seconds.
-		SHORTIDLE_TEMPLATE = `OMP_SESSION_TEST_IDLE_CHECK_MS=500 ${hermeticEnv} bun apps/session/index.ts --cwd {cwd} --port 0 --token {token} --name {name} --idle-timeout 2s {labels} {resume}`;
+		// Hermetic per-daemon agent dir ({name} expands per daemon): no auth and
+		// no model cache, so no model is selectable and every prompt times out.
+		const hermeticEnv = `${PROVIDER_ENV_SCRUB}PI_CODING_AGENT_DIR=${join(tmp, "agent-{name}")} PI_AUTH_NO_BORROW=1`;
+		LOCAL_TEMPLATE = `${hermeticEnv} bun ${SESSION_ENTRY} --cwd {cwd} --port 0 --name {name} {labels} {resume}`;
+		// Short-idle variant pins the test-only idle-check knob (500ms tick) so the
+		// idle lifecycle runs in seconds.
+		SHORTIDLE_TEMPLATE = `OMP_SESSION_TEST_IDLE_CHECK_MS=500 ${hermeticEnv} bun ${SESSION_ENTRY} --cwd {cwd} --port 0 --name {name} --idle-timeout 2s {labels} {resume}`;
 		const projectsRoot = join(tmp, "projects");
-		mkdirSync(projectsRoot, { recursive: true });
 		projDirs = [
 			join(projectsRoot, "proj-a"),
 			join(projectsRoot, "proj-b"),
@@ -294,14 +298,10 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 				defaultTemplate: "local",
 			}),
 		);
-		// Hermetic against the dev-runner override: startFleet -> loadConfig lets
-		// OMP_FLEET_LOCAL_TEMPLATE replace the config file's `local` template
-		// outright (config.ts), and a shell that ran `bun run dev` carries it, so
-		// daemons would spawn with the plain dev template (no hermetic env
-		// prefix), land on the REAL agent dir, get a live model, and turns would
-		// SUCCEED, racing the 5s waitMs (flaky ok:true). Deleted for the suite's
-		// lifetime; restored in afterAll.
-		savedFleetEnv = {};
+		// Hermetic against the dev-runner override: OMP_FLEET_* env replaces config
+		// templates outright (config.ts), so a shell that ran `bun run dev` would
+		// spawn daemons with the real agent dir and a live model. Cleared for the
+		// suite's lifetime; restored in afterAll.
 		for (const key of Object.keys(process.env)) {
 			if (key.startsWith("OMP_FLEET_")) {
 				savedFleetEnv[key] = process.env[key];
@@ -321,44 +321,40 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 			if (value === undefined) delete process.env[key];
 			else process.env[key] = value;
 		}
-		// Collect every pid we know about BEFORE the HTTP server goes away.
-		const pids = new Set<number>(trackedPids);
-		if (server !== undefined) {
+		// Close the fleet FIRST so no supervisor restart races the kills below.
+		// close() deliberately leaves sessions running, so they are reaped here.
+		if (server !== undefined) await server.close();
+		if (ext !== undefined) {
 			try {
-				for (const entry of await listDaemons()) {
-					if (typeof entry.pid === "number") pids.add(entry.pid);
-				}
+				ext.kill("SIGKILL");
 			} catch {
-				// Server already stopped.
+				// already gone
 			}
-			await server.close();
-			await sleep(400);
 		}
-		// SIGKILL any stragglers (also the real child of a sh wrapper, if one exists).
-		for (const pid of pids) {
+		if (tmp === undefined) return;
+		// Tracked pids plus a /proc sweep for any session naming this suite's tmp
+		// root. A tracked pid is killed only while its command line still names
+		// tmp, so a recycled pid is never hit.
+		const doomed = new Set<number>(sessionProcs(tmp).map((p) => p.pid));
+		for (const pid of trackedPids) {
 			try {
-				const children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8")
-					.trim()
-					.split(/\s+/)
-					.filter(Boolean)
-					.map(Number);
-				for (const childPid of children) {
-					try {
-						process.kill(childPid, "SIGKILL");
-					} catch {
-						// gone
-					}
-				}
+				if (readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(tmp)) doomed.add(pid);
 			} catch {
-				// Process already gone.
+				// already gone
 			}
+		}
+		for (const pid of doomed) {
 			try {
 				process.kill(pid, "SIGKILL");
 			} catch {
 				// gone
 			}
 		}
-		if (tmp) rmSync(tmp, { recursive: true, force: true });
+		await waitUntil(
+			() => sessionProcs(tmp).every((p) => !isRunning(p.pid)),
+			10_000,
+			"daemons to exit",
+		);
 	});
 
 	test("boots the control plane against a fresh tmp state", async () => {
@@ -367,13 +363,11 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		expect((await res.json()) as unknown[]).toEqual([]);
 	});
 
-	test("spawns three real daemons; all reach ready through the status ladder", async () => {
-		const mk = (cwd: string, name: string, labels?: string[]) =>
-			postJson("/ctl/spawn", { cwd, name, labels });
+	test("spawns three real daemons; all reach ready once their callback pair forms", async () => {
 		const [r1, r2, r3] = await Promise.all([
-			mk(projDirs[0], "d-one", ["env=integration"]),
-			mk(projDirs[1], "d-two"),
-			mk(projDirs[2], "d-three"),
+			postJson("/ctl/spawn", { cwd: projDirs[0], name: "d-one", labels: ["env=integration"] }),
+			postJson("/ctl/spawn", { cwd: projDirs[1], name: "d-two" }),
+			postJson("/ctl/spawn", { cwd: projDirs[2], name: "d-three" }),
 		]);
 		expect(r1.status).toBe(200);
 		expect(r2.status).toBe(200);
@@ -382,115 +376,184 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		d2 = (await r2.json()) as RegistryEntry;
 		d3 = (await r3.json()) as RegistryEntry;
 		expect(d1.mode).toBe("spawned");
-		expect(d1.status).toBe("spawning");
 		expect(d1.labels).toEqual(["env=integration"]);
-		trackedPids.add(d1.pid!);
-		trackedPids.add(d2.pid!);
-		trackedPids.add(d3.pid!);
-		const isReady = (entry: RegistryEntry) => entry.status === "ready";
+		for (const entry of [d1, d2, d3]) {
+			if (entry.pid !== undefined) trackedPids.add(entry.pid);
+		}
 		const [a, b, c] = await Promise.all([
-			waitForEntry(d1.daemonId, isReady, 60_000, "become ready"),
-			waitForEntry(d2.daemonId, isReady, 60_000, "become ready"),
-			waitForEntry(d3.daemonId, isReady, 60_000, "become ready"),
+			waitForEntry(d1.daemonId, (e) => e.status === "ready", 60_000, "become ready"),
+			waitForEntry(d2.daemonId, (e) => e.status === "ready", 60_000, "become ready"),
+			waitForEntry(d3.daemonId, (e) => e.status === "ready", 60_000, "become ready"),
 		]);
-		// Status machine evidence: the connector dialed (connecting) before the
-		// readiness gate cleared. The session/resolving rungs are too fast to
-		// guarantee observation; connecting persists for the whole boot.
-		const ladder = [...new Set(a.seen)];
-		expect(ladder.at(-1)).toBe("ready");
-		expect(ladder).toContain("connecting");
-		expect(b.entry.status).toBe("ready");
-		expect(c.entry.status).toBe("ready");
+		// The supervisor enrolled each launch: workspaceId === daemonId, first generation.
+		for (const entry of [a, b, c]) {
+			expect(entry.status).toBe("ready");
+			expect(entry.workspace?.enrollment?.generation).toBe(1);
+			expect(entry.workspace?.enrollment?.credentialHash).toMatch(/^[0-9a-f]{64}$/);
+		}
+		// Each daemon records its session file once its pair forms.
+		const withFiles = await Promise.all(
+			[a, b, c].map((entry) =>
+				waitForEntry(
+					entry.daemonId,
+					(e) => e.status === "ready" && e.lastSessionFile !== undefined,
+					30_000,
+					"record its session file",
+				),
+			),
+		);
+		for (const entry of withFiles) expect(entry.lastSessionFile).toBeTruthy();
+		// Each daemon is a detached process with its output under session-logs/.
+		for (const [entry, name] of [
+			[a, "d-one"],
+			[b, "d-two"],
+			[c, "d-three"],
+		] as const) {
+			daemonProc(name);
+			expect(existsSync(join(tmp, "session-logs", `${entry.daemonId}.log`))).toBe(true);
+		}
 	}, 90_000);
 
-	test("prompts fan out to all three daemons; every turn errors (no selectable model)", async () => {
-		// d1/d2/d3 are independent daemons, so run the three prompts concurrently.
-		// No live model: hermetic agent dirs mean no model is selectable, so no
-		// turn ever produces agent_end. The daemon's prompt is fire-and-forget
-		// and its turn failure arrives as a broadcast error frame (deliberately
-		// ignored by the fanout), so each prompt settles on the client waitMs
-		// timeout. The seam under test is /ctl/prompt → fan-out → daemon
-		// dispatch + per-daemon serialization + timeout error. waitMs is short:
-		// a no-model prompt can never settle any other way.
-		const results = await Promise.all(
-			[d1, d2, d3].map((entry) => ctlPrompt(entry.daemonId, 5_000)),
-		);
+	test("prompts fan out to all three daemons; each settles ok:false (no selectable model)", async () => {
+		const results: PromptResultWire[] = [];
+		for (const entry of [d1, d2, d3]) results.push(await ctlPrompt(entry.daemonId));
 		for (const result of results) {
 			expect(result.ok).toBe(false);
 			expect(result.error).toBeTruthy();
 		}
 	}, 90_000);
 
-	test("SIGKILL one child: roster shows reconnecting, supervisor restarts with a fresh token", async () => {
+	test("SIGKILL one child: the supervisor relaunches it under a new generation; the old credential is refused", async () => {
 		const before = (await getEntry(d2.daemonId))!;
-		const tokenBefore = before.token!;
-		const pidBefore = before.pid!;
-		const sessionBefore = before.lastSessionFile!;
-		expect(tokenBefore).toBeTruthy();
-		expect(pidBefore).toBeGreaterThan(0);
-		// The session file is known from hello_ok/state frames at ready; no turn needed
-		expect(sessionBefore).toBeTruthy();
-		try {
-			process.kill(pidBefore, "SIGKILL");
-		} catch {
-			// Already gone; the waits below still prove the recovery path.
-		}
-		// The connector must surface the crash before the supervisor relaunches.
-		const reconnecting = await waitForEntry(
+		const enrollmentBefore = before.workspace!.enrollment!;
+		const oldProc = daemonProc("d-two");
+		// The credential the old child dialed with, read from its environment.
+		const oldToken = readFileSync(`/proc/${oldProc.pid}/environ`, "utf8")
+			.split("\0")
+			.find((e) => e.startsWith("OMP_SESSION_CALLBACK_TOKEN="))
+			?.slice("OMP_SESSION_CALLBACK_TOKEN=".length);
+		expect(oldToken).toMatch(/^[0-9a-f]{64}$/);
+		process.kill(oldProc.pid, "SIGKILL");
+		// The relaunch enrolls a new generation and returns to ready once its pair forms.
+		const after = await waitForEntry(
 			d2.daemonId,
-			(e) => e.status === "reconnecting",
-			30_000,
-			"report reconnecting",
-		);
-		expect(reconnecting.seen).toContain("reconnecting");
-		// Then the supervisor restarts the child (fresh token, new pid) and it returns to ready.
-		const recovered = await waitForEntry(
-			d2.daemonId,
-			(e) => e.status === "ready" && e.token !== tokenBefore,
+			(e) =>
+				e.status === "ready" &&
+				(e.workspace?.enrollment?.generation ?? 0) > enrollmentBefore.generation,
 			90_000,
-			"recover to ready with a fresh token",
+			"recover to ready under a new generation",
 		);
-		const after = recovered.entry;
-		expect(after.token).not.toBe(tokenBefore);
-		expect(after.pid).not.toBe(pidBefore);
-		trackedPids.add(after.pid!);
-		// The fresh token is persisted: every registry mutation writes state.json.
-		const disk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
-		expect(disk.entries.find((e) => e.daemonId === d2.daemonId)?.token).toBe(after.token);
-		// R3 on the crash path: the restarted child resumed the same session file.
-		expect(after.lastSessionFile).toBe(sessionBefore);
-	}, 90_000);
-
-	test("add an externally launched omp-session and drive it (turn errors, no live model)", async () => {
-		ext = await spawnExternal(projDirs[1], "ext-token-123", "ext-drive", ["--idle-timeout", "0"]);
-		trackedPids.add(ext.child.pid);
-		const res = await postJson("/ctl/add", {
-			name: "ext-drive",
-			url: ext.url,
-			token: "ext-token-123",
+		const enrollmentAfter = after.workspace!.enrollment!;
+		expect(enrollmentAfter.generation).toBeGreaterThan(enrollmentBefore.generation);
+		expect(enrollmentAfter.credentialHash).not.toBe(enrollmentBefore.credentialHash);
+		// The new enrollment is persisted to state.json.
+		const disk = JSON.parse(readFileSync(statePath, "utf8")) as StateFile;
+		expect(disk.entries.find((e) => e.daemonId === d2.daemonId)?.workspace?.enrollment).toEqual(
+			enrollmentAfter,
+		);
+		// The relaunched child is a new process.
+		const relaunched = daemonProc("d-two");
+		expect(relaunched.pid).not.toBe(oldProc.pid);
+		// The relaunch resumes the durable session the old child was on.
+		expect(before.lastSessionFile).toBeTruthy();
+		expect(argAfter(relaunched.args, "--resume")).toBe(before.lastSessionFile);
+		expect(after.lastSessionFile).toBe(before.lastSessionFile);
+		// The old generation's credential is revoked: a redial with it is refused.
+		const stale = startCallbackDaemon({
+			url: base(),
+			workspaceId: d2.daemonId,
+			generation: enrollmentBefore.generation,
+			token: oldToken!,
 		});
-		expect(res.status).toBe(200);
-		extEntry = (await res.json()) as RegistryEntry;
+		try {
+			await waitUntil(
+				() => stale.rejection() !== null,
+				10_000,
+				"the stale credential to be refused",
+			);
+			const rejected = stale.rejection()!;
+			expect([401, 409]).toContain(rejected.status);
+			expect(stale.connected()).toBe(false);
+		} finally {
+			await stale.stop();
+		}
+	}, 120_000);
+
+	test("enroll an externally launched omp-session via /ctl/enroll; it goes ready, answers a prompt, and stops over the pair", async () => {
+		const res = await postJson("/ctl/enroll", {
+			name: "ext-drive",
+			labels: ["origin=external"],
+			cwd: projDirs[1],
+		});
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as EnrollResponse;
+		const extEntry = body.entry;
 		expect(extEntry.mode).toBe("remote");
+		expect(body.enrollment.workspaceId).toBe(extEntry.daemonId);
+		expect(body.enrollment.token).toMatch(/^[0-9a-f]{64}$/);
+		expect(body.enrollment.callbackUrl).toBe(base());
+		// Launch exactly as the enroll flow prints it: token in env, the rest as flags.
+		const env: Record<string, string> = {};
+		for (const [key, value] of Object.entries(process.env)) {
+			if (value === undefined) continue;
+			if (PROVIDER_ENV_KEYS.includes(key)) continue;
+			if (key.startsWith("OMP_SESSION_") || key.startsWith("OMP_FLEET_")) continue;
+			env[key] = value;
+		}
+		env.PI_CODING_AGENT_DIR = join(tmp, "agent-ext-drive");
+		env.PI_AUTH_NO_BORROW = "1";
+		env.OMP_SESSION_CALLBACK_TOKEN = body.enrollment.token;
+		const logFd = openSync(join(tmp, "ext-drive.log"), "a");
+		try {
+			ext = Bun.spawn(
+				[
+					"bun",
+					SESSION_ENTRY,
+					"--cwd",
+					projDirs[1],
+					"--port",
+					"0",
+					"--name",
+					"ext-drive",
+					"--callback-url",
+					body.enrollment.callbackUrl,
+					"--callback-workspace",
+					body.enrollment.workspaceId,
+					"--callback-generation",
+					String(body.enrollment.generation),
+					"--callback-allow-http",
+				],
+				{ env, stdin: "ignore", stdout: logFd, stderr: logFd },
+			);
+		} finally {
+			closeSync(logFd);
+		}
+		trackedPids.add(ext.pid);
 		const ready = await waitForEntry(
 			extEntry.daemonId,
 			(e) => e.status === "ready",
 			60_000,
 			"become ready",
 		);
-		// hello_ok.cwd is adopted for `add`ed entries without a registered cwd.
-		expect(ready.entry.cwd).toBe(projDirs[1]);
-		// Driving proof: the call round-trips to the daemon and its deterministic
-		// no-model outcome correlates back as an error (the fanout timeout).
-		const result = await ctlPrompt(extEntry.daemonId, 5_000);
+		expect(ready.cwd).toBe(projDirs[1]);
+		expect(ready.workspace?.enrollment?.generation).toBe(body.enrollment.generation);
+		// The call round-trips to the daemon; the no-model turn settles ok:false.
+		const result = await ctlPrompt(extEntry.daemonId);
 		expect(result.ok).toBe(false);
 		expect(result.error).toBeTruthy();
-		// We launched it, we stop it.
-		ext.child.kill("SIGTERM");
-		await ext.child.exited;
-	}, 90_000);
+		// Stop over the pair: the fleet asks the session to shut down and revokes it.
+		const stop = await postJson("/ctl/stop", { selector: extEntry.daemonId });
+		expect(stop.status).toBe(200);
+		const stopBody = (await stop.json()) as StopResponse;
+		expect(stopBody.stopped).toEqual([extEntry.daemonId]);
+		const exitCode = await Promise.race([ext.exited, sleep(30_000).then(() => "timeout" as const)]);
+		expect(exitCode).not.toBe("timeout");
+		const asleep = await getEntry(extEntry.daemonId);
+		expect(asleep?.status).toBe("asleep");
+		expect(asleep?.workspace?.enrollment).toBeUndefined();
+	}, 120_000);
 
-	test("short-idle daemon: disconnect → idle exit → asleep (session file retained)", async () => {
+	test("short-idle daemon: idle exit → asleep (enrollment released)", async () => {
 		const res = await postJson("/ctl/spawn", {
 			cwd: projDirs[2],
 			name: "d-four",
@@ -498,51 +561,140 @@ describe("e2e: real fleet + real omp-session daemons", () => {
 		});
 		expect(res.status).toBe(200);
 		d4 = (await res.json()) as RegistryEntry;
-		const ready = await waitForEntry(
-			d4.daemonId,
-			(e) => e.status === "ready",
-			60_000,
-			"become ready",
-		);
-		const sessionBefore = ready.entry.lastSessionFile;
-		expect(sessionBefore).toBeTruthy();
-		trackedPids.add(ready.entry.pid!);
-		// Drop the fleet's socket; omp-session's idle timer only fires with NO
-		// attached clients (2s idle + 500ms check tick → clean exit within ~2.5s).
-		server.connector.disconnect(d4.daemonId);
+		await waitForEntry(d4.daemonId, (e) => e.status === "ready", 60_000, "become ready");
+		const proc = daemonProc("d-four");
+		// Idle exit runs when no browser stream and no in-flight bash/python is
+		// active; the callback pair does not count. A clean exit is dormant: the
+		// supervisor releases the credential and marks the entry asleep.
 		const asleep = await waitForEntry(
 			d4.daemonId,
 			(e) => e.status === "asleep",
 			30_000,
 			"go asleep after idle exit",
 		);
-		// Asleep keeps cwd + lastSessionFile for the respawn-on-demand rule.
-		expect(asleep.entry.cwd).toBe(projDirs[2]);
-		expect(asleep.entry.lastSessionFile).toBe(sessionBefore);
-	}, 60_000);
+		await waitUntil(() => !isRunning(proc.pid), 10_000, "the idle daemon process to exit");
+		expect(asleep.cwd).toBe(projDirs[2]);
+		expect(asleep.workspace?.enrollment).toBeUndefined();
+	}, 90_000);
 
-	test("asleep daemon respawns on demand with --resume (same session file)", async () => {
+	test("asleep daemon wakes on a prompt: the fanout respawns it under a new generation", async () => {
 		const before = (await getEntry(d4.daemonId))!;
-		const sessionBefore = before.lastSessionFile!;
-		expect(sessionBefore).toBeTruthy();
-		// The prompt is the on-demand wake trigger: the fan-out respawns the
-		// asleep daemon with --resume and awaits ready BEFORE the turn is sent;
-		// the turn itself then errors (fanout waitMs timeout). The
-		// session log is written lazily on a completed turn, so it may never
-		// exist on disk here; the resume proof is the path identity below.
-		const result = await ctlPrompt(d4.daemonId, 5_000);
+		const generationBefore = before.workspace?.authorizedGeneration ?? 0;
+		// The prompt is the wake trigger: the fanout respawns the asleep spawned
+		// daemon and waits for ready before sending the turn.
+		const promise = ctlPrompt(d4.daemonId);
+		// Short-idle may exit the woken daemon again before the turn settles, so
+		// capture its process while it is alive, from the moment the wake starts.
+		let woken: SessionProc | undefined;
+		await waitUntil(
+			() => {
+				woken = sessionProcs(tmp).find((p) => argAfter(p.args, "--name") === "d-four");
+				return woken !== undefined;
+			},
+			30_000,
+			"the woken d-four process",
+		);
+		trackedPids.add(woken!.pid);
+		expect(before.lastSessionFile).toBeTruthy();
+		expect(argAfter(woken!.args, "--resume")).toBe(before.lastSessionFile);
+		const result = await promise;
 		expect(result.ok).toBe(false);
 		expect(result.error).toBeTruthy();
 		const after = (await getEntry(d4.daemonId))!;
-		expect(after.status).toBe("ready");
-		// Same session file across the respawn proves the new child got --resume.
-		expect(after.lastSessionFile).toBe(sessionBefore);
-		// Disk evidence: state.json keeps the same lastSessionFile through the respawn.
-		const disk = JSON.parse(readFileSync(statePath, "utf8")) as { entries: RegistryEntry[] };
-		expect(disk.entries.find((e) => e.daemonId === d4.daemonId)?.lastSessionFile).toBe(
-			sessionBefore,
+		// The wake enrolled a new generation (monotonic across the idle exit).
+		expect(after.workspace?.authorizedGeneration ?? 0).toBeGreaterThan(generationBefore);
+	}, 120_000);
+
+	test("closing the fleet leaves the daemon running; a new fleet re-adopts the same process without a respawn", async () => {
+		const res = await postJson("/ctl/spawn", { cwd: projDirs[0], name: "d-survivor" });
+		expect(res.status).toBe(200);
+		survivor = (await res.json()) as RegistryEntry;
+		const ready = await waitForEntry(
+			survivor.daemonId,
+			(e) => e.status === "ready",
+			60_000,
+			"become ready",
 		);
-		// Accounting: exactly 5 prompts issued across the suite (all error-out).
-		expect(promptCount).toBe(5);
-	}, 90_000);
+		const enrollmentBefore = ready.workspace!.enrollment!;
+		const withFile = await waitForEntry(
+			survivor.daemonId,
+			(e) => e.status === "ready" && e.lastSessionFile !== undefined,
+			30_000,
+			"record its session file",
+		);
+		const sessionFileBefore = withFile.lastSessionFile;
+		expect(sessionFileBefore).toBeTruthy();
+		const proc = daemonProc("d-survivor");
+		const port = server.port;
+
+		// close() no longer kills sessions: the daemon keeps running and redials.
+		await server.close();
+		expect(isRunning(proc.pid)).toBe(true);
+
+		// A new fleet on the same state/config/port re-enrolls the persisted digest at
+		// boot, so the daemon's original credential is accepted again.
+		server = await startFleet({
+			port,
+			statePath,
+			configPath,
+			statsConfig: hermeticStatsConfig(statePath),
+		});
+		expect(server.port).toBe(port);
+		const rejoined = await waitForEntry(
+			survivor.daemonId,
+			(e) => e.status === "ready",
+			60_000,
+			"re-pair after the fleet restart",
+		);
+		// The SAME process re-paired: no respawn, no new generation.
+		expect(isRunning(proc.pid)).toBe(true);
+		expect(daemonProc("d-survivor").pid).toBe(proc.pid);
+		expect(rejoined.workspace?.enrollment).toEqual(enrollmentBefore);
+		expect(rejoined.lastSessionFile).toBe(sessionFileBefore);
+
+		// It still takes a prompt through the new fleet's control plane.
+		const result = await ctlPrompt(survivor.daemonId);
+		expect(result.ok).toBe(false);
+		expect(result.error).toBeTruthy();
+		expect(daemonProc("d-survivor").pid).toBe(proc.pid);
+		// Accounting: six prompts across the suite, all settled ok:false.
+		expect(promptCount).toBe(6);
+	}, 150_000);
+
+	test("POST /ctl/stop makes the daemon exit and the entry asleep", async () => {
+		const proc = daemonProc("d-survivor");
+		const res = await postJson("/ctl/stop", { selector: survivor.daemonId });
+		expect(res.status).toBe(200);
+		const stopBody = (await res.json()) as StopResponse;
+		expect(stopBody.stopped).toEqual([survivor.daemonId]);
+		await waitUntil(() => !isRunning(proc.pid), 30_000, "the stopped daemon process to exit");
+		const entry = (await getEntry(survivor.daemonId))!;
+		expect(entry.status).toBe("asleep");
+		expect(entry.workspace?.enrollment).toBeUndefined();
+		expect(sessionProcs(tmp).some((p) => argAfter(p.args, "--name") === "d-survivor")).toBe(false);
+	}, 60_000);
+
+	test("a prompt wakes the stopped daemon: the fanout respawns it with --resume its lastSessionFile", async () => {
+		const stopped = (await getEntry(survivor.daemonId))!;
+		expect(stopped.status).toBe("asleep");
+		const resumeFile = stopped.lastSessionFile;
+		expect(resumeFile).toBeTruthy();
+		const promise = ctlPrompt(survivor.daemonId);
+		let woken: SessionProc | undefined;
+		await waitUntil(
+			() => {
+				woken = sessionProcs(tmp).find((p) => argAfter(p.args, "--name") === "d-survivor");
+				return woken !== undefined;
+			},
+			30_000,
+			"the woken d-survivor process",
+		);
+		trackedPids.add(woken!.pid);
+		expect(argAfter(woken!.args, "--resume")).toBe(resumeFile);
+		const result = await promise;
+		expect(result.ok).toBe(false);
+		expect(result.error).toBeTruthy();
+		// Accounting: this is the seventh prompt across the suite.
+		expect(promptCount).toBe(7);
+	}, 120_000);
 });

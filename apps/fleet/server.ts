@@ -4,7 +4,7 @@
  * A loopback-only HTTP JSON API (default port 4722, env OMP_FLEET_PORT,
  * opts.port wins; 0 = ephemeral) on a shared Bun.serve; Phase 3 adds the
  * browser SSE edge (/events + /command) on the same server. Wires the
- * persistent Registry, the remote DaemonConnector and the SpawnSupervisor:
+ * persistent Registry, the callback transport and the SpawnSupervisor:
  *
  *   GET  /ctl/sessions {…}                         → RegistryEntry[]
  *   GET  /ctl/projects {…}                         → { projects: ProjectEntry[], registered: RegisteredProject[] }
@@ -13,7 +13,7 @@
  *   GET  /ctl/settings                             -> SettingsModel
  *   GET  /ctl/worktrees/:daemonId/delete-info      -> worktree_delete_info payload
  *   POST /ctl/spawn    {cwd, template?, name?, labels?} -> RegistryEntry
- *   POST /ctl/add      {name, url, token?, labels?, cwd?} → RegistryEntry
+ *   POST /ctl/enroll  {name, labels?, cwd?, callbackUrl?} → 201 {entry, enrollment}
  *   POST /ctl/provision {name, labels?}            → RegistryEntry (spawn hook)
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
  *   POST /ctl/remove   {selector}                  → { removed: string[] }
@@ -43,19 +43,19 @@
  * the workspace enrollment credentials (P3.3, mounted first for that prefix).
  *
  * /ctl/provision runs config.spawnHook via `sh -c` with env OMP_HOOK_NAME /
- * OMP_HOOK_LABELS and a 60s deadline; the hook's last non-empty stdout line
- * must be JSON { name?, url, token, cwd? } (R6/N3 enroll contract) and the
- * result is registered as a remote entry and dialed. 400 when no hook is
- * configured, 502 on hook failure / bad output.
+ * OMP_HOOK_LABELS plus the OMP_SESSION_CALLBACK_* enrollment vars and a 60s
+ * deadline. Exit 0 registers an enrolled remote entry; the hook starts the
+ * session on its host. 400 when no hook is configured; 502 on hook failure
+ * (the entry is removed).
  *
  * Errors: 400 invalid JSON / validation failure, 404 empty selector match,
  * 405 wrong method, 500 {error} on anything else. `waitMs` absent on
  * /ctl/prompt dispatches fire-and-forget: each match gets the prompt in the
  * background and the route returns { submitted } without awaiting the turn.
  *
- * The connector's onDialFailed is wired to respawn spawned entries (the
- * supervisor serializes overlapping respawns per daemon); attached/remote
- * entries are left to their own backoff.
+ * Sessions dial the control plane over the callback pair; the fleet never
+ * dials a session. Spawned children are supervised here, remote sessions are
+ * enrolled and started by the operator on their host (`omp-web enroll`).
  */
 
 import type { Server } from "bun";
@@ -68,16 +68,19 @@ import { toPublicProfile } from "./provider-profile";
 import { isLoopbackHost } from "#lib/platform/hosts";
 import { acquireFileLock, type FileLock } from "#lib/platform/file-lock";
 import type { DeletionGateError, RegistryEntry } from "./registry";
-import { bootStatusFor, Registry } from "./registry";
+import { REDIAL_GRACE_MS, Registry } from "./registry";
 import { validateProjectPath } from "./discovery";
 import { matchSelector } from "./selectors";
-import { DaemonConnector } from "./connector";
-import { SpawnSupervisor } from "./supervisor";
-import { isValidEndpointUrl } from "./spawn-parse";
+import {
+	SpawnSupervisor,
+	enrollSessionCredential,
+	releaseSessionCredential,
+	withCallbackEnv,
+} from "./supervisor";
 import { isPathUnder, realpathOf } from "./worktrees";
 import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
-import { FleetEdge } from "./edge";
+import { FleetEdge, toRosterEntry } from "./edge";
 import { FleetEventLog, type FleetFacts } from "./events";
 import { createFleetSettings, type FleetSettings, type FleetSettingsOptions } from "./settings";
 import { createStatsApp } from "./stats-app";
@@ -123,14 +126,6 @@ import {
 } from "./worktrees";
 
 const DEFAULT_PORT = 4722;
-/** Transient status-ladder steps kept out of the event ring (see onStatus). */
-const LADDER_STEPS: Partial<Record<DaemonStatus, true>> = {
-	spawning: true,
-	connecting: true,
-	session: true,
-	resolving: true,
-};
-
 // P3.8 fleet log-store ack batching (docs/clone-contracts.md "Session log
 // streaming"): log_ack controls ride the reserved transport stream once per
 // batch. Batches flush when the accumulated-chunk budget is hit or the
@@ -183,8 +178,9 @@ export interface CloneResumeSpawner {
 export interface FleetServer {
 	port: number;
 	registry: Registry;
-	connector: DaemonConnector;
 	supervisor: SpawnSupervisor;
+	/** Daemon transport registry (callback pairs); tests drive sessions through it. */
+	transport: DaemonTransportRegistry;
 	/** Fleet lifecycle-event ring (backing /ctl/debug; CLI mirrors it to stdout). */
 	eventLog: FleetEventLog;
 	/** Fleet-wide facts (port/startedAt/state paths) for the banner + /ctl/debug. */
@@ -301,17 +297,6 @@ const WORKTREE_DELETE_ROUTE = /^\/ctl\/worktrees\/([^/]+)$/;
 const WORKTREE_INFO_ROUTE = /^\/ctl\/worktrees\/([^/]+)\/delete-info$/;
 /** P8.10 resume-onto-fresh-clone: POST /ctl/workspaces/:id/resume-clone. */
 const WORKSPACE_RESUME_CLONE_ROUTE = /^\/ctl\/workspaces\/([^/]+)\/resume-clone$/;
-/**
- * Reject endpoints that are not ws:// or wss:// URLs. The check itself lives
- * in spawn-parse.ts (isValidEndpointUrl), shared with the supervisor's
- * resolved-endpoint guard and parseContractLine so every URL that reaches
- * the connector has passed the same validation.
- */
-function validateEndpointUrl(raw: string): void {
-	if (!isValidEndpointUrl(raw)) {
-		throw new HttpError(400, `url must be ws:// or wss://: ${raw}`);
-	}
-}
 
 /**
  * Local clone volume deleter (P7.5): removes the workspace's own volume,
@@ -367,22 +352,21 @@ function readAllText(stream: ReadableStream<Uint8Array>): Promise<string> {
 }
 
 /**
- * Run `config.spawnHook` via `sh -c` with the provision env
- * (`OMP_HOOK_NAME` / `OMP_HOOK_LABELS` comma-joined) and a deadline. The
- * child is SIGKILLed on timeout. Resolves with captured stdout/stderr; a
- * non-zero exit or a timeout rejects with a 502 {@link HttpError}.
+ * Run `config.spawnHook` via `sh -c` with the provision env and a deadline.
+ * The child is SIGKILLed on timeout. Exit 0 is success; a non-zero exit or
+ * a timeout rejects with a 502 {@link HttpError} (stderr's last line in the
+ * message on a non-zero exit).
  */
 export async function runSpawnHook(
 	hook: string,
 	env: Record<string, string>,
 	timeoutMs: number = HOOK_TIMEOUT_MS,
-): Promise<{ stdout: string; stderr: string }> {
+): Promise<void> {
 	const child = Bun.spawn(["sh", "-c", hook], {
 		env: { ...process.env, ...env },
-		stdout: "pipe",
+		stdout: "ignore",
 		stderr: "pipe",
 	});
-	const stdout = readAllText(child.stdout);
 	const stderr = readAllText(child.stderr);
 	const timedOut = await Promise.race([
 		child.exited.then(() => false),
@@ -395,69 +379,34 @@ export async function runSpawnHook(
 		});
 		throw new HttpError(502, `spawn hook timed out after ${Math.round(timeoutMs / 1000)}s`);
 	}
-	const [out, err] = await Promise.all([stdout, stderr]);
+	const err = await stderr;
 	if (child.exitCode !== 0) {
 		const detail = err.trim().split("\n").at(-1);
 		throw new HttpError(502, `spawn hook exited ${child.exitCode}${detail ? `: ${detail}` : ""}`);
 	}
-	return { stdout: out, stderr: err };
-}
-
-/** Hook output the provision route accepts (contract): { name?, url, token, cwd? }. */
-interface HookOutput {
-	name?: string;
-	url: string;
-	token: string;
-	cwd?: string;
 }
 
 /**
- * Parse the hook's stdout: the LAST non-empty line must be JSON with at
- * least `url` and `token` (both ws:// or wss:// for url, non-empty strings).
- * Anything else is a 502 {@link HttpError}.
+ * Validate a session callback URL: https, or http only on a loopback host
+ * (the daemon refuses any other plaintext URL). 400 otherwise.
  */
-function parseHookOutput(stdout: string): HookOutput {
-	const lines = stdout
-		.split("\n")
-		.map((line) => line.trim())
-		.filter((line) => line !== "");
-	const last = lines[lines.length - 1];
-	if (last === undefined) {
-		throw new HttpError(502, "spawn hook produced no stdout");
-	}
-	let parsed: unknown;
+function requireCallbackUrl(raw: string): string {
+	let url: URL;
 	try {
-		parsed = JSON.parse(last);
+		url = new URL(raw);
 	} catch {
-		throw new HttpError(502, `spawn hook stdout is not valid JSON: ${last}`);
+		throw new HttpError(400, `invalid callback URL: ${raw}`);
 	}
-	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-		throw new HttpError(502, `spawn hook stdout must be a JSON object: ${last}`);
+	const loopbackHttp = url.protocol === "http:" && isLoopbackHost(url.hostname);
+	if (url.protocol !== "https:" && !loopbackHttp) {
+		throw new HttpError(400, `callback URL must be https (or http on loopback): ${raw}`);
 	}
-	const obj = parsed as Record<string, unknown>;
-	if (
-		typeof obj.url !== "string" ||
-		obj.url === "" ||
-		typeof obj.token !== "string" ||
-		obj.token === ""
-	) {
-		throw new HttpError(502, "spawn hook output missing url or token");
-	}
-	try {
-		validateEndpointUrl(obj.url);
-	} catch (err) {
-		throw new HttpError(502, (err as HttpError).message);
-	}
-	const out: HookOutput = { url: obj.url, token: obj.token };
-	if (typeof obj.name === "string" && obj.name !== "") out.name = obj.name;
-	if (typeof obj.cwd === "string" && obj.cwd !== "") out.cwd = obj.cwd;
-	return out;
+	return raw;
 }
 
 class FleetServerImpl implements FleetServer {
 	readonly port: number;
 	readonly registry: Registry;
-	readonly connector: DaemonConnector;
 	readonly supervisor: SpawnSupervisor;
 	readonly config: FleetConfig;
 	readonly edge: FleetEdge;
@@ -493,6 +442,11 @@ class FleetServerImpl implements FleetServer {
 	readonly #logAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	/** Per-workspace transport tap unsubscribe; cleared in close(). */
 	readonly #logTaps = new Map<string, () => void>();
+	/** Callback-pair watch per non-clone entry; unsubscribed in close(). */
+	readonly #pairWatches = new Map<string, () => void>();
+	/** Boot redial grace timers for enrolled sessions; cleared on pair or close(). */
+	readonly #redialTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	readonly #redialGraceMs: number;
 	/** Historical transcripts/stats API (P8.6): per-instance stats app,
 	 *  constructed in the constructor so it can receive the log store when it
 	 *  loads; closed in close(). */
@@ -525,8 +479,11 @@ class FleetServerImpl implements FleetServer {
 		resourceDeleter?: WorkspaceResourceDeleter,
 		cloneResumeSpawner?: CloneResumeSpawner | null,
 		statsConfig?: Pick<StatsConfig, "statsDbPath" | "sessionsDir">,
+		serveUi = true,
+		redialGraceMs = REDIAL_GRACE_MS,
 	) {
 		this.registry = registry;
+		this.#redialGraceMs = redialGraceMs;
 		this.config = config;
 		this.lock = lock;
 		this.resourceDeleter = resourceDeleter ?? new LocalCloneResourceDeleter(config.workspaceDir);
@@ -636,40 +593,21 @@ class FleetServerImpl implements FleetServer {
 				})
 			: null;
 		let edge: FleetEdge | null = null;
-		this.connector = new DaemonConnector(registry, {
-			onDialFailed: (entry) => this.#onDialFailed(entry),
-			onStatus: (entry) => {
-				edge?.onDaemonStatus(entry);
-				// #22: a spawned child that reaches the connector's "ready"
-				// transition is stable; the supervisor resets its
-				// consecutive-crash budget there (window-based, not lifetime).
-				this.supervisor.onConnectorStatus(entry);
-				// Fleet observability: status transitions land in the ring, minus
-				// the sub-second ladder steps (spawning/connecting/session/
-				// resolving) every dial walks; the live status is on the roster.
-				if (LADDER_STEPS[entry.status] !== true) {
-					this.eventLog.add(
-						entry.status === "error" ? "error" : entry.status === "reconnecting" ? "warn" : "info",
-						"connector",
-						entry.status === "error" ? `error: ${entry.error ?? "error"}` : entry.status,
-						entry.daemonId,
-					);
-				}
+		this.supervisor = new SpawnSupervisor(
+			registry,
+			config,
+			{
+				transport: this.transport,
+				statePath: facts.statePath,
+				callbackUrl: () => this.#callbackUrl(),
+				onEnrolled: (daemonId) => this.#watchPair(daemonId),
 			},
-			onReconnect: (daemonId, attempt, delayMs) => {
-				this.eventLog.add(
-					"warn",
-					"connector",
-					`reconnect scheduled (attempt ${attempt}, delay ${delayMs}ms)`,
-					daemonId,
-				);
+			{
+				onEvent: (level, message, daemonId) =>
+					this.eventLog.add(level, "supervisor", message, daemonId),
+				onWorktreeRemoved: (entry) => void this.#onWorktreeVanished(entry),
 			},
-		});
-		this.supervisor = new SpawnSupervisor(registry, this.connector, config, {
-			onEvent: (level, message, daemonId) =>
-				this.eventLog.add(level, "supervisor", message, daemonId),
-			onWorktreeRemoved: (entry) => void this.#onWorktreeVanished(entry),
-		});
+		);
 		// P6/P7 lifecycle owner: the single create/ensure/stop/delete
 		// authority for provider-managed clone workspaces, shared by the
 		// control-plane routes and the edge command dispatch. Constructed
@@ -697,7 +635,6 @@ class FleetServerImpl implements FleetServer {
 		// block above; never a bare store-less app.
 		edge = new FleetEdge({
 			registry,
-			connector: this.connector,
 			supervisor: this.supervisor,
 			config,
 			eventLog: this.eventLog,
@@ -706,6 +643,7 @@ class FleetServerImpl implements FleetServer {
 			lifecycle: this.lifecycle,
 			logStore: this.logStore ?? undefined,
 			providerProfiles: publicProfileCatalog(config),
+			serveUi,
 		});
 		this.edge = edge;
 		// Unattached settings service (the fleet control plane's /ctl/settings): lazy
@@ -762,14 +700,15 @@ class FleetServerImpl implements FleetServer {
 		} catch (err) {
 			errors.push(err);
 		}
+		// Unsubscribe before transport.close() so a pair dropping during
+		// shutdown cannot write status. Sessions keep running; enrollments stay.
+		for (const unwatch of this.#pairWatches.values()) unwatch();
+		this.#pairWatches.clear();
+		for (const timer of this.#redialTimers.values()) clearTimeout(timer);
+		this.#redialTimers.clear();
 		this.#closeLogStoreWiring();
 		try {
 			this.transport.close();
-		} catch (err) {
-			errors.push(err);
-		}
-		try {
-			await this.connector.close();
 		} catch (err) {
 			errors.push(err);
 		}
@@ -958,58 +897,106 @@ class FleetServerImpl implements FleetServer {
 		this.#logTaps.clear();
 	}
 
-	#onDialFailed(entry: RegistryEntry): void {
-		// Respawn spawned children on transport failure (dial refused); the
-		// supervisor owns the R3 --resume rule, serializes overlapping
-		// respawns per daemon (concurrent calls coalesce into one launch), and
-		// never wakes an asleep entry from a late dial failure.
-		// Attached/remote entries are dial-in only: their own backoff in the
-		// connector covers retries.
-		this.eventLog.add("warn", "connector", `dial failed (${entry.mode})`, entry.daemonId);
-		const respawn = this.supervisor.respawnAfterDialFailure(entry);
-		if (respawn === undefined) return;
-		void respawn.catch((err: unknown) => {
-			console.error(`fleet: respawn ${entry.daemonId} failed`, err);
-			this.eventLog.add(
-				"error",
-				"server",
-				`respawn ${entry.daemonId} failed: ${err instanceof Error ? err.message : String(err)}`,
-				entry.daemonId,
-			);
-		});
+	/**
+	 * Watch one entry's callback pair. Idempotent: the watch lives until
+	 * close(), so re-enrolling the same daemon keeps its subscription.
+	 */
+	#watchPair(daemonId: string): void {
+		if (this.#pairWatches.has(daemonId)) return;
+		this.#pairWatches.set(
+			daemonId,
+			this.transport.onPairChange(daemonId, (status) =>
+				this.#onPairChange(daemonId, status.paired),
+			),
+		);
+	}
+
+	/** Drops a removed entry's pair watch and any pending redial grace. */
+	#forgetPair(daemonId: string): void {
+		this.#pairWatches.get(daemonId)?.();
+		this.#pairWatches.delete(daemonId);
+		this.#logTaps.get(daemonId)?.();
+		this.#logTaps.delete(daemonId);
+		this.#clearRedialGrace(daemonId);
 	}
 
 	/**
-	 * #3: reconcile statuses persisted by a previous fleet process. Spawned
-	 * children and connector sockets died with that process, so non-terminal
-	 * statuses are mapped to a truthful boot state (bootStatusFor): spawned
-	 * entries → "asleep" (respawn --resume recovers), remote/attached → the
-	 * connector redials immediately. Stale liveness facts (readyAt, pid) are
-	 * cleared on every downgrade so the roster never shows uptime/pid for a
-	 * process that is not running.
+	 * Pair transitions drive the status of non-clone entries: a paired session
+	 * is "ready"; a session that loses its pair while ready is "reconnecting".
+	 * Connecting/asleep/error belong to the supervisor, so pair loss in those
+	 * states changes nothing here.
+	 */
+	#onPairChange(daemonId: string, paired: boolean): void {
+		const entry = this.registry.get(daemonId);
+		if (entry === undefined || entry.workspace?.kind === "clone") return;
+		if (paired) {
+			this.#clearRedialGrace(daemonId);
+			if (entry.status === "ready") return;
+			this.registry.update(daemonId, { readyAt: Date.now() });
+			this.#setDaemonStatus(daemonId, "ready");
+		} else if (entry.status === "ready") {
+			this.#setDaemonStatus(daemonId, "reconnecting");
+		}
+	}
+
+	/**
+	 * Status transition driven by the callback pair: registry write, the
+	 * `daemon_status` broadcast, and the event ring.
+	 */
+	#setDaemonStatus(daemonId: string, status: DaemonStatus, error?: string): void {
+		this.registry.setStatus(daemonId, status, error);
+		const entry = this.registry.get(daemonId);
+		if (entry === undefined) return;
+		this.edge.onDaemonStatus(entry);
+		this.eventLog.add(
+			status === "error" ? "error" : status === "reconnecting" ? "warn" : "info",
+			"server",
+			status === "error" ? `error: ${error ?? "error"}` : status,
+			daemonId,
+		);
+	}
+
+	/** Boot grace: an enrolled session that has not redialed by the deadline is shown asleep. */
+	#armRedialGrace(daemonId: string): void {
+		const timer = setTimeout(() => {
+			this.#redialTimers.delete(daemonId);
+			if (this.registry.get(daemonId)?.status !== "reconnecting") return;
+			this.#setDaemonStatus(daemonId, "asleep");
+		}, this.#redialGraceMs);
+		this.#redialTimers.set(daemonId, timer);
+	}
+
+	#clearRedialGrace(daemonId: string): void {
+		const timer = this.#redialTimers.get(daemonId);
+		if (timer === undefined) return;
+		clearTimeout(timer);
+		this.#redialTimers.delete(daemonId);
+	}
+
+	/**
+	 * Reconcile statuses persisted by a previous fleet process. Sessions outlive
+	 * the control plane and redial it with their enrollment, so an enrolled
+	 * non-clone entry is "reconnecting" until its pair returns (or "asleep" after
+	 * the redial grace). An unenrolled entry has no credential to redial with and
+	 * becomes "asleep". Stale liveness facts (readyAt, pid) are cleared on every
+	 * downgrade. Clone entries are reconciled by the workspace lifecycle.
 	 */
 	#reconcileBootStatuses(): void {
 		for (const entry of this.registry.list()) {
-			// P6.3: provider-managed clone entries are NOT stale in-memory
-			// children; their sandbox compute survived the restart. Never
-			// downgrade them here; #reconcileCloneWorkspaces inspects and
-			// reattaches/recreates them by durable provider identity.
 			if (entry.workspace?.kind === "clone") continue;
-			const target = bootStatusFor(entry);
-			if (target === null) continue;
-			const patch: Partial<RegistryEntry> = { status: target };
-			if (entry.readyAt !== undefined) patch.readyAt = undefined;
-			if (entry.pid !== undefined) patch.pid = undefined;
-			this.registry.update(entry.daemonId, patch);
+			const enrolled = entry.workspace?.enrollment !== undefined;
+			if (enrolled) this.#watchPair(entry.daemonId);
+			if (entry.status === "asleep" || entry.status === "error") continue;
+			const target: DaemonStatus = enrolled ? "reconnecting" : "asleep";
+			this.registry.update(entry.daemonId, { readyAt: undefined, pid: undefined });
+			this.registry.setStatus(entry.daemonId, target);
 			this.eventLog.add(
 				"info",
 				"server",
 				`boot reconcile: ${entry.status} → ${target}`,
 				entry.daemonId,
 			);
-			if (target === "connecting") {
-				this.connector.connect(entry.daemonId);
-			}
+			if (enrolled) this.#armRedialGrace(entry.daemonId);
 		}
 	}
 
@@ -1066,11 +1053,10 @@ class FleetServerImpl implements FleetServer {
 
 	#fanoutDeps(): FanoutDeps {
 		// P6.1 fanout trigger: prompt/wake for clones goes through the same
-		// lifecycle owner (Transport's FanoutDeps contract: transport +
-		// lifecycle are optional, direct/worktree use connector/supervisor).
+		// lifecycle owner; spawned and remote entries wake via the supervisor
+		// and the callback pair (transport).
 		return {
 			registry: this.registry,
-			connector: this.connector,
 			supervisor: this.supervisor,
 			transport: this.transport,
 			lifecycle: this.lifecycle,
@@ -1202,8 +1188,8 @@ class FleetServerImpl implements FleetServer {
 						return await this.#handleCreateClone(req);
 					case "/ctl/spawn":
 						return await this.#handleSpawn(req);
-					case "/ctl/add":
-						return await this.#handleAdd(req);
+					case "/ctl/enroll":
+						return await this.#handleEnroll(req);
 					case "/ctl/provision":
 						return await this.#handleProvision(req);
 					// P6.1 clone lifecycle: ensure-running / wake for a
@@ -1485,63 +1471,87 @@ class FleetServerImpl implements FleetServer {
 		return json({ removed: projectId });
 	}
 
-	async #handleAdd(req: Request): Promise<Response> {
+	/**
+	 * POST /ctl/enroll { name, labels?, cwd?, callbackUrl? }: create a remote
+	 * roster entry and mint its callback credential. The token is returned
+	 * once; the session host runs `omp-web session` with it and dials the
+	 * callback URL. 201 with the public roster projection and the enrollment.
+	 */
+	async #handleEnroll(req: Request): Promise<Response> {
 		const body = await readJson(req);
 		const name = requireString(body, "name");
-		const url = requireString(body, "url");
-		validateEndpointUrl(url);
-		const token = optionalString(body, "token");
 		const labels = optionalLabels(body);
 		const cwd = optionalString(body, "cwd");
+		const callbackUrl = requireCallbackUrl(
+			optionalString(body, "callbackUrl") ?? this.#callbackUrl(),
+		);
 		const entry = this.registry.create({
 			name,
 			cwd: cwd ?? "",
 			project: cwd ? basename(cwd) : "",
 			labels: labels ?? [],
 			mode: "remote",
-			endpoint: url,
-			token,
 			status: "connecting",
 		});
-		this.connector.connect(entry.daemonId);
-		this.eventLog.add("info", "server", `added ${entry.name} (${url})`, entry.daemonId);
-		return json(entry);
+		const enrollment = enrollSessionCredential(this.transport, this.registry, entry.daemonId);
+		this.#watchPair(entry.daemonId);
+		this.#attachLogStoreTap(entry.daemonId);
+		this.eventLog.add("info", "server", `enrolled ${entry.name} (${callbackUrl})`, entry.daemonId);
+		return json(
+			{
+				entry: toRosterEntry(entry, this.config.workspaceDir),
+				enrollment: {
+					workspaceId: entry.daemonId,
+					generation: enrollment.generation,
+					token: enrollment.credential,
+					callbackUrl,
+				},
+			},
+			201,
+		);
 	}
 
 	/**
-	 * POST /ctl/provision { name, labels? }: run `config.spawnHook` via
-	 * `sh -c` with env `OMP_HOOK_NAME` / `OMP_HOOK_LABELS` (comma-joined),
-	 * 60s deadline. The hook's LAST non-empty stdout line must be JSON
-	 * `{ name?, url, token, cwd? }`; the result is registered as a remote
-	 * entry and dialed. 400 when no hook is configured; 502 on hook
-	 * failure, timeout, unparseable output, or missing url/token.
+	 * POST /ctl/provision { name, labels? }: create an enrolled remote entry
+	 * and run `config.spawnHook` via `sh -c` with the provision env
+	 * (OMP_HOOK_NAME / OMP_HOOK_LABELS plus the callback vars). Hook exit 0
+	 * is success; any failure removes the entry and revokes its credential.
+	 * 400 when no hook is configured; 502 on hook failure or timeout.
 	 */
 	async #handleProvision(req: Request): Promise<Response> {
 		const hook = this.config.spawnHook;
 		if (hook === undefined || hook === "") {
 			throw new HttpError(400, "no spawn hook configured");
 		}
+		const callbackUrl = requireCallbackUrl(this.#callbackUrl());
 		const body = await readJson(req);
 		const name = requireString(body, "name");
 		const labels = optionalLabels(body);
-		const { stdout } = await runSpawnHook(hook, {
-			OMP_HOOK_NAME: name,
-			OMP_HOOK_LABELS: (labels ?? []).join(","),
-		});
-		const output = parseHookOutput(stdout);
 		const entry = this.registry.create({
-			name: output.name ?? name,
-			cwd: output.cwd ?? "",
-			project: output.cwd ? basename(output.cwd) : "",
+			name,
+			cwd: "",
+			project: "",
 			labels: labels ?? [],
 			mode: "remote",
-			endpoint: output.url,
-			token: output.token,
 			status: "connecting",
 		});
-		this.connector.connect(entry.daemonId);
+		const enrollment = enrollSessionCredential(this.transport, this.registry, entry.daemonId);
+		this.#watchPair(entry.daemonId);
+		this.#attachLogStoreTap(entry.daemonId);
+		const env = withCallbackEnv(
+			{ OMP_HOOK_NAME: name, OMP_HOOK_LABELS: (labels ?? []).join(",") },
+			{ url: callbackUrl, daemonId: entry.daemonId, enrollment },
+		);
+		try {
+			await runSpawnHook(hook, env);
+		} catch (err) {
+			releaseSessionCredential(this.transport, this.registry, entry.daemonId);
+			this.#forgetPair(entry.daemonId);
+			this.registry.remove(entry.daemonId);
+			throw err;
+		}
 		this.eventLog.add("info", "server", `provisioned ${entry.name} (spawn hook)`, entry.daemonId);
-		return json(entry);
+		return json(toRosterEntry(entry, this.config.workspaceDir));
 	}
 
 	async #handleStop(req: Request): Promise<Response> {
@@ -1559,10 +1569,9 @@ class FleetServerImpl implements FleetServer {
 			} else if (entry.mode === "spawned") {
 				await this.supervisor.stop(entry.daemonId);
 			} else {
-				// Supervisor and lifecycle stops log their own line; only the
-				// dial-in disconnect is unlogged without this one.
-				this.connector.disconnect(entry.daemonId);
-				this.registry.setStatus(entry.daemonId, "asleep");
+				// Remote entries have no child: stop shuts the session down over
+				// the pair if live, then revokes the enrollment.
+				await this.supervisor.stop(entry.daemonId);
 				this.eventLog.add("info", "server", `stopped (${entry.mode})`, entry.daemonId);
 			}
 			stopped.push(entry.daemonId);
@@ -1591,11 +1600,8 @@ class FleetServerImpl implements FleetServer {
 		if (!this.registry.get(entry.daemonId)) return;
 		this.#evictingWorktrees.add(entry.daemonId);
 		try {
-			if (entry.mode === "spawned") {
-				await this.supervisor.prune(entry.daemonId);
-			} else {
-				this.connector.drop(entry.daemonId);
-			}
+			await this.supervisor.prune(entry.daemonId);
+			this.#forgetPair(entry.daemonId);
 			this.#markStoreOrphanIfStored(entry);
 			this.registry.remove(entry.daemonId);
 			this.eventLog.add(
@@ -1668,14 +1674,11 @@ class FleetServerImpl implements FleetServer {
 					throw err;
 				}
 			} else {
-				// Legacy direct/worktree eviction (unchanged): #24 prune/drop
-				// the per-daemon supervisor/connector state so a removed
-				// daemon leaks nothing (stderr ring, listeners, waiters).
-				if (entry.mode === "spawned") {
-					await this.supervisor.prune(entry.daemonId);
-				} else {
-					this.connector.drop(entry.daemonId);
-				}
+				// Legacy direct/worktree eviction: prune drops the per-daemon
+				// supervisor state and revokes the enrollment, so a removed
+				// daemon leaks nothing.
+				await this.supervisor.prune(entry.daemonId);
+				this.#forgetPair(entry.daemonId);
 				this.#markStoreOrphanIfStored(entry);
 				this.registry.remove(entry.daemonId);
 			}
@@ -2081,10 +2084,9 @@ class FleetServerImpl implements FleetServer {
 		if (info.dirty)
 			throw new HttpError(409, info.reason ?? `worktree has uncommitted changes: ${path}`);
 		// Stop + evict (removal-time cleanup: #24 prune drops supervisor state).
-		if (entry.mode === "spawned") {
+		if (entry.workspace?.kind !== "clone") {
 			await this.supervisor.prune(daemonId);
-		} else {
-			this.connector.drop(daemonId);
+			this.#forgetPair(daemonId);
 		}
 		this.registry.remove(daemonId);
 		// Git removal; the guards are re-asserted inside (race backstop).
@@ -2125,6 +2127,10 @@ export async function startFleet(
 		/** Test seam: hermetic stats.db/sessions locations. Production leaves
 		 *  this unset so stats resolves the operator defaults ($PI_CONFIG_DIR). */
 		statsConfig?: Pick<StatsConfig, "statsDbPath" | "sessionsDir">;
+		/** Serve the static UI and its routes (default true). The control-only process passes false. */
+		serveUi?: boolean;
+		/** Test seam: redial grace before a session with no pair is marked asleep (default REDIAL_GRACE_MS). */
+		redialGraceMs?: number;
 	} = {},
 ): Promise<FleetServer> {
 	const configPath = resolveConfigPath(opts.configPath);
@@ -2168,6 +2174,8 @@ export async function startFleet(
 			undefined,
 			null,
 			opts.statsConfig,
+			opts.serveUi,
+			opts.redialGraceMs,
 		);
 	} catch (err) {
 		lock.release();

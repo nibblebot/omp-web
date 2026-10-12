@@ -2,7 +2,7 @@
  * State-lock tests for fleet/server.ts ("fleet state lock" describe): one
  * fleet per state file via an O_EXCL pidfile lock, so a second startFleet on
  * the same path rejects with LockHeldError, close() releases the lock, and
- * a spawned `serve` exits 77 with the lock message while another fleet
+ * a spawned bare CLI exits 77 with the lock message while another fleet
  * holds the state.
  */
 
@@ -73,10 +73,10 @@ describe("fleet state lock", () => {
 		await second.close();
 	});
 
-	test("serve exits 77 with the lock message when another fleet holds the state", async () => {
+	test("bare CLI exits 77 with the lock message when another fleet holds the state", async () => {
 		const first = await startFleet(fleetOpts());
 		try {
-			const serve = Bun.spawn(["bun", "apps/fleet/cli.ts", "serve", "--port", "0"], {
+			const serve = Bun.spawn(["bun", "apps/fleet/cli.ts", "--port", "0"], {
 				cwd: join(import.meta.dir, "..", "..", ".."),
 				env: { ...process.env, OMP_FLEET_STATE: statePath, OMP_FLEET_CONFIG: configPath },
 				stdout: "pipe",

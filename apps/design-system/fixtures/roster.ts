@@ -240,7 +240,7 @@ const daemonReconnecting: DaemonEntry = {
 	managed: false,
 	branch: "feat/job-matrix",
 	labels: ["matrix"],
-	mode: "attached",
+	mode: "remote",
 	status: "reconnecting",
 	sessionTitle: "Expand matrix strategies into jobs",
 	error: "socket closed (ECONNRESET); retrying in 4s",

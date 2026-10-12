@@ -2,9 +2,9 @@ import { SSE_RING_BYTES } from "./protocol";
 
 /**
  * Shared SSE helpers for the OMP_PROTO 2 transport (POST /command up,
- * GET /events down). Used by the daemon (server/index.ts), the fleet
- * connector and edge, and the test fakes. The browser uses native
- * EventSource instead (it cannot set headers, and loopback is exempt).
+ * GET /events down). Used by the daemon (session/), the fleet edge and daemon
+ * transport, and the test fakes. The browser uses native EventSource
+ * instead (it cannot set headers, and loopback is exempt).
  *
  * Wire shape (see protocol.ts):
  *
@@ -101,8 +101,7 @@ export async function* parseSseUnits(body: ReadableStream<Uint8Array>): AsyncGen
  * SSE_RING_BYTES) evicts from the head so a few multi-megabyte deltas cannot
  * balloon memory even far below `cap` (finding #5); the entry cap remains as
  * a secondary bound for many-small-delta bursts. Sizes are the stored
- * values' string lengths in UTF-16 code units, the same proxy the daemon's
- * chunkHistory uses for HISTORY_CHUNK_BYTES. For ASCII-heavy payloads
+ * values' string lengths in UTF-16 code units. For ASCII-heavy payloads
  * (base64 image blocks, the unbounded-memory culprit) that overestimates
  * UTF-8 wire bytes ~2×, the conservative direction; a single entry larger
  * than the whole budget still lands (the newest delta is the one a resuming

@@ -9,18 +9,15 @@ import type { DaemonStatus } from "#lib/wire/protocol";
  * Only a READY daemon gets an activity dot: every other status keeps the
  * existing status-dot ladder and asleep shows nothing at all.
  *
- * WHY detached rows can report live blocked/in-progress: the fleet edge
- * retains a connector stream to every ready daemon while at least one
- * browser is attached, derives `{streaming, blocked}` per daemon from the
- * tapped `state`/`ui_request`/`ui_request_end` frames, and broadcasts those
- * as additive fleet-scoped `daemon_activity` frames (`remote` here). This is
- * the accepted tradeoff: a retained stream counts as an attached client, so
- * a ready daemon's idle auto-exit is SUSPENDED while any browser is
- * connected (resuming via the connector idle-drop after the last browser
- * disconnects), a deliberate, user-approved deviation from the old "never
- * invent a fleet-side frame / idle-drop" invariant. `remote` is undefined
- * when the edge predates this feature or the daemon's stream is down; such
- * rows simply read idle when not unread.
+ * WHY detached rows can report live blocked/in-progress: every paired daemon
+ * mirrors the frames it emits (`state`/`ui_request`/`ui_request_end`) on its
+ * callback control stream; the fleet derives `{streaming, blocked}` per daemon
+ * from those and broadcasts them as additive fleet-scoped `daemon_activity`
+ * frames (`remote` here), whichever session a browser has open. A browser
+ * attached to a session keeps that daemon alive (idle exit is suppressed); a
+ * browser connected to the fleet but attached elsewhere does not. `remote` is
+ * undefined when the edge predates this feature or the daemon is not paired;
+ * such rows simply read idle when not unread.
  *
  * Git dirtiness is deliberately NOT part of this indicator: uncommitted
  * changes surface separately as the row's diffstat chips.

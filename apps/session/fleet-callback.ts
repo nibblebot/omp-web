@@ -67,8 +67,7 @@ import { isLoopbackHost } from "#lib/platform/hosts";
  *   - Either half failing, down stream ended/errored, up response settled,
  *     up body cancelled by the peer, 30 s down silence, or an outbound
  *     backlog that never drained within the silence deadline, replaces
- *     BOTH halves after jittered 1 s → 30 s backoff (the connector's
- *     backoffDelay pattern).
+ *     BOTH halves after jittered 1 s → 30 s backoff.
  *   - The fleet emits 15 s `heartbeat` envelopes (streamId "transport") that
  *     keep the 30 s down silence deadline alive; the daemon mirrors 15 s
  *     heartbeats up (streamId "control") while idle.
@@ -168,6 +167,12 @@ export interface FleetCallbackEvents {
 	 * touching the raw frame forwarding path.
 	 */
 	onControl?: (envelope: CallbackEnvelope) => void;
+	/**
+	 * Terminal refusal: the fleet rejected this credential (`unauthorized`) or superseded its
+	 * generation (`generation_obsolete`). The instance is already stopped when this fires;
+	 * no reconnect follows.
+	 */
+	onRejected?: (error: CallbackError) => void;
 }
 
 export interface FleetCallbackStatus {
@@ -265,7 +270,7 @@ function deferred<T>(): Deferred<T> {
 	};
 }
 
-/** Jittered exponential backoff: base = min(max, min·2^attempt), ±50% (fleet/connector pattern). */
+/** Jittered exponential backoff: base = min(max, min·2^attempt), ±50%. */
 function backoffDelay(attempt: number, minMs: number, maxMs: number): number {
 	const base = Math.min(maxMs, minMs * 2 ** attempt);
 	return Math.round(base * (0.5 + Math.random()));
@@ -317,6 +322,17 @@ const HTTP_ERROR_CODE: Record<number, CallbackErrorCode> = {
 	429: "retryable",
 	503: "unavailable",
 };
+
+/** Refusal code of a non-2xx fleet response: the typed body's `error` when it names a frozen code, else the HTTP status. */
+function refusalCode(status: number, text: string): CallbackErrorCode {
+	try {
+		const body = JSON.parse(text) as { error?: unknown };
+		if (typeof body.error === "string" && isCallbackErrorCode(body.error)) return body.error;
+	} catch {
+		// Non-JSON body: fall through to the HTTP-status mapping.
+	}
+	return HTTP_ERROR_CODE[status] ?? "retryable";
+}
 
 function errMsg(cause: unknown): string {
 	return cause instanceof Error ? cause.message : String(cause);
@@ -658,6 +674,11 @@ export class FleetCallback {
 		}
 	}
 
+	/** Bytes waiting in the outbound buffer for one stream and across the connection (send pacing). */
+	bufferedBytes(streamId: string): { stream: number; connection: number } {
+		return { stream: this.#streamBytes.get(streamId) ?? 0, connection: this.#pendingBytes };
+	}
+
 	status(): FleetCallbackStatus {
 		const pair = this.#pair;
 		const lastError = this.#lastError;
@@ -851,13 +872,14 @@ export class FleetCallback {
 			duplex: "half",
 		});
 		void fetch(`${this.#base}${CALLBACK_UP_PATH}`, init)
-			.then((res) => {
+			.then(async (res) => {
 				if (!this.#isCurrent(pair)) {
 					res.body?.cancel().catch(() => {});
 					return;
 				}
-				res.body?.cancel().catch(() => {});
-				const code = res.ok ? "retryable" : (HTTP_ERROR_CODE[res.status] ?? "retryable");
+				const text = res.ok ? "" : await res.text().catch(() => "");
+				if (res.ok) res.body?.cancel().catch(() => {});
+				const code = res.ok ? "retryable" : refusalCode(res.status, text);
 				this.#finishPair(pair, {
 					kind: "failure",
 					error: callbackError(
@@ -900,7 +922,7 @@ export class FleetCallback {
 				this.#reportError(
 					"down",
 					callbackError(
-						HTTP_ERROR_CODE[res.status] ?? "retryable",
+						refusalCode(res.status, bodyText),
 						`callback down refused: HTTP ${res.status}`,
 						{ detail: bodyText.length > 0 ? bodyText.slice(0, 300) : undefined },
 					),
@@ -1351,6 +1373,21 @@ export class FleetCallback {
 		if (onError) {
 			try {
 				onError(error, { phase, streamId: item?.streamId, kind: item?.kind });
+			} catch {
+				// Listener failures never break the transport.
+			}
+		}
+		if (error.code === "unauthorized" || error.code === "generation_obsolete") this.#refuse(error);
+	}
+
+	/** Terminal fleet refusal (credential rejected or superseded): stop for good, no re-dial. */
+	#refuse(error: CallbackError): void {
+		if (this.#stopped) return;
+		this.stop();
+		const onRejected = this.#events?.onRejected;
+		if (onRejected) {
+			try {
+				onRejected(error);
 			} catch {
 				// Listener failures never break the transport.
 			}

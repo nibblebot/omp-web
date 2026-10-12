@@ -17,7 +17,7 @@ export interface FleetLogEntry {
 	/** Epoch milliseconds when the event happened. */
 	ts: number;
 	level: FleetLogLevel;
-	/** The emitting subsystem: "connector", "supervisor", "server", … */
+	/** The emitting subsystem: "supervisor", "server", … */
 	source: string;
 	message: string;
 	/** The daemon the event concerns, when daemon-scoped. */

@@ -3,10 +3,10 @@
  * dev: one-command dev runner.
  *
  *   bun run dev          vite (HMR UI on a stable per-worktree port, /events + /command
- *                        + /ctl proxied to the omp-fleet edge) + omp-fleet serve
- *                        (ephemeral port). Open the `ui` URL; the fleet's own `/`
- *                        serves dist/, not the dev UI. NO session is started or
- *                        attached; spawn/add one from the roster UI when you want one.
+ *                        + /ctl proxied to the fleet edge) + bare omp-web fleet
+ *                        (stable per-worktree port). Open the `ui` URL; the fleet's own `/`
+ *                        serves dist/, not the dev UI. NO session is started. Spawn one from
+ *                        the roster UI, or enroll a remote one with `omp-web enroll`.
  *
  *   --open / --no-open   force / disable opening the UI in a browser. Default: open
  *                        on every interactive local run (TTY, no --host, a display
@@ -46,10 +46,10 @@
  * unset; piped output has no escapes.
  *
  * Each child is tracked through starting → ready (vite: the end of its startup
- * banner; fleet: the "fleet listening" banner line). The startup banners of
+ * banner; fleet: the "omp-web listening" banner line). The startup banners of
  * both are folded into ONE summary printed once every child is ready, so no
- * fact prints twice: the fleet's listening/state/config/restored/`Web UI:`
- * lines and vite's first banner are dropped (vite's later reprints, e.g.
+ * fact prints twice: the fleet's listening line and vite's first banner are dropped
+ * (vite's later reprints, e.g.
  * `u + enter`, pass through). A `✓ <name> ready` line prints only for a
  * re-ready after the summary (broker restarts). Vite inherits stdin, so its
  * h/o/u/r/c/q + enter shortcuts work. Ctrl-C (or vite/fleet exiting) tears
@@ -206,8 +206,8 @@ function mainWorktreeDevState(): string | undefined {
 const VITE_PORT_DEFAULT = 4713;
 
 /**
- * Ports. The fleet binds port 0 (kernel-assigned ephemeral, cannot collide;
- * the real port comes back via the "fleet listening" banner): the browser
+ * Ports. The fleet binds a stable per-worktree port (a free port when that one is taken),
+ * the port is confirmed by the "omp-web listening" banner: the browser
  * never sees it, vite proxies to it. Vite's port is what the browser keeps,
  * and the origin (host + port) scopes localStorage (theme, font size,
  * sidebar layout, prompt history) and notification permission, and is what
@@ -220,7 +220,8 @@ const VITE_PORT_DEFAULT = 4713;
  * pre-ready exit, retried on a fresh port (bounded) before being fatal.
  */
 const VITE_STABLE_PORT = 20000 + (Number.parseInt(WORKTREE_HASH, 16) % 10000);
-const ports = { vite: VITE_PORT_DEFAULT, fleet: 4722 };
+const FLEET_STABLE_PORT = 30000 + (Number.parseInt(WORKTREE_HASH, 16) % 10000);
+const ports = { vite: VITE_PORT_DEFAULT, fleet: FLEET_STABLE_PORT };
 /**
  * Auth broker: clone sandboxes have no credential store of their own, so they
  * borrow the operator's from a broker when OMP_AUTH_BROKER_URL/TOKEN are in the
@@ -300,13 +301,13 @@ function buildChild(name: string): Child {
 	if (name === "fleet") {
 		return {
 			name,
-			// Port 0 = kernel-assigned ephemeral; the real port is parsed from
-			// the "fleet listening on 127.0.0.1:<port>" banner. Sidebar spawns use
+			// ports.fleet is the stable per-worktree port (set before launch): sessions redial
+			// its callback URL across dev restarts. Sidebar spawns use
 			// the default `local` template, which runs the production `omp-session`
 			// binary, not built in dev. OMP_FLEET_LOCAL_TEMPLATE points it at the
 			// source entry instead (absolute: spawned children inherit the fleet's
 			// cwd, and the repo isn't necessarily it).
-			cmd: ["bun", "apps/fleet/cli.ts", "serve", "--port", "0"],
+			cmd: ["bun", "apps/fleet/cli.ts", "--port", String(ports.fleet)],
 			env: {
 				// State (and its `.lock`) scoped per worktree under the data home:
 				// parallel worktrees' dev fleets, and the user's real fleet on
@@ -494,7 +495,7 @@ interface ChildState {
 const states = new Map<string, ChildState>();
 /** True once the stack summary has been printed. */
 let summaryPrinted = false;
-/** From the fleet's "fleet restored N sessions (...)" banner line. */
+/** From the fleet's ready banner: its session counts in parentheses. */
 let restoredSummary = "";
 /** vite's `Network:` URLs from its startup banner (only with --host). */
 const networkUrls: string[] = [];
@@ -598,9 +599,9 @@ async function pipePrefixed(
  * `Local:`, `Network:`, the shortcuts hint); ready fires at the banner's last
  * line (the hint when shortcuts bind, else `Network:`), with a short fallback
  * timer after `Local:` so a changed banner can never stall the summary.
- * Fleet: parse the "fleet listening on 127.0.0.1:<port>" banner (stable
- * shape) and drop it with the state/config/restored/`Web UI:` lines; the
- * `Web UI:` URL is the dist/-serving fleet port, not the dev UI.
+ * Fleet: parse the "omp-web listening on http://localhost:<port> (N sessions)"
+ * banner (stable shape) and drop it; warn/error lines drop their "omp-web: "
+ * prefix (the child prefix already says fleet).
  *
  * markReady is deferred to a microtask so the summary prints after the rest
  * of the triggering chunk.
@@ -652,26 +653,18 @@ function stdoutHook(
 		return (line) => {
 			if (!current()) return;
 			const plain = line.replace(ANSI_RE, "");
-			const restored = plain.match(/^fleet restored (\d+) sessions?(?: \((.*)\))?$/);
-			if (restored) {
-				const n = Number(restored[1]);
-				restoredSummary =
-					n === 0
-						? ""
-						: `${n} session${n === 1 ? "" : "s"}${restored[2] ? `, ${restored[2]}` : ""}`;
-				return false;
-			}
-			const m = plain.match(/^fleet listening on 127\.0\.0\.1:(\d+)/);
+			const m = plain.match(/^omp-web listening on http:\/\/localhost:(\d+) \((\d+) sessions?\)$/);
 			if (m) {
 				ports.fleet = Number(m[1]);
+				const n = Number(m[2]);
+				restoredSummary = n === 0 ? "" : `${n} session${n === 1 ? "" : "s"}`;
 				queueMicrotask(() =>
 					markReady("fleet", ports.fleet, `control+edge on http://127.0.0.1:${m[1]}`),
 				);
 				return false;
 			}
-			if (/^(fleet state: |fleet config: |Web UI: )/.test(plain)) return false;
-			// The child prefix already says fleet; drop the line's own "fleet: ".
-			if (plain.startsWith("fleet: ")) return plain.slice("fleet: ".length);
+			// The child prefix already says fleet; drop the line's own "omp-web: ".
+			if (plain.startsWith("omp-web: ")) return plain.slice("omp-web: ".length);
 		};
 	}
 	if (name === "broker") {
@@ -788,8 +781,9 @@ function launch(child: Child): void {
 /** Re-pick the child's port (vite; fleet rebinds ephemeral) and relaunch. */
 async function retryPreReady(name: string, code: number | null, attempt: number): Promise<void> {
 	if (name === "vite") ports.vite = await pickFreePort();
+	if (name === "fleet") ports.fleet = await pickFreePort();
 	log(
-		`${name} exited before ready (${code ?? "signal"}), retrying on port ${name === "vite" ? ports.vite : "0 (ephemeral)"} (${attempt}/${MAX_PREREADY_RETRIES})`,
+		`${name} exited before ready (${code ?? "signal"}), retrying on port ${name === "vite" ? ports.vite : name === "fleet" ? ports.fleet : "0 (ephemeral)"} (${attempt}/${MAX_PREREADY_RETRIES})`,
 	);
 	if (!shuttingDown) launch(buildChild(name));
 }
@@ -887,6 +881,9 @@ if (authBroker) await ensureBroker();
 // Fleet first (ephemeral bind, cannot collide), vite once the edge port is
 // known. A fatal resolution during this await = startup retries exhausted on
 // the fleet.
+ports.fleet = (await isPortFree(FLEET_STABLE_PORT)) ? FLEET_STABLE_PORT : await pickFreePort();
+if (ports.fleet !== FLEET_STABLE_PORT)
+	log(`stable fleet port ${FLEET_STABLE_PORT} is taken, using ${ports.fleet} for this run`);
 launch(buildChild("fleet"));
 const boot = await Promise.race([waitReady("fleet").then(() => null), fatalPromise]);
 if (boot !== null) {

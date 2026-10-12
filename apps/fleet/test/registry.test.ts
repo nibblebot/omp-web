@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { bootStatusFor, Registry } from "../registry";
+import { Registry } from "../registry";
 
 const tmpDirs: string[] = [];
 
@@ -57,7 +57,7 @@ describe("Registry", () => {
 		expect(entry.registeredAt).toBeGreaterThan(0);
 	});
 
-	test("create stores every field incl. endpoint/token/labels/template", async () => {
+	test("create stores every field incl. labels/template", async () => {
 		const registry = await loadedRegistry(tmpStatePath());
 		const entry = registry.create(
 			baseInit({
@@ -67,8 +67,6 @@ describe("Registry", () => {
 				worktreeOf: "main",
 				labels: ["env=prod", "team=core"],
 				mode: "remote",
-				endpoint: "ws://10.0.0.5:9000",
-				token: "secret-token",
 				template: "local",
 				status: "ready",
 			}),
@@ -81,8 +79,6 @@ describe("Registry", () => {
 			worktreeOf: "main",
 			labels: ["env=prod", "team=core"],
 			mode: "remote",
-			endpoint: "ws://10.0.0.5:9000",
-			token: "secret-token",
 			template: "local",
 			status: "ready",
 		});
@@ -94,8 +90,6 @@ describe("Registry", () => {
 		const a = registry.create(
 			baseInit({
 				name: "alpha",
-				endpoint: "ws://10.0.0.5:9000",
-				token: "t0",
 				labels: ["env=prod"],
 			}),
 		);
@@ -104,8 +98,7 @@ describe("Registry", () => {
 				name: "beta",
 				cwd: "/tmp/proj-b",
 				project: "proj-b",
-				mode: "attached",
-				endpoint: "wss://remote:4721",
+				mode: "remote",
 			}),
 		);
 		registry.setStatus(a.daemonId, "ready");
@@ -490,41 +483,5 @@ describe("registered projects (Phase 2)", () => {
 			JSON.stringify({ nextId: 1, entries: [], projects: [{ name: "missing-projectId" }] }),
 		);
 		await expect(new Registry(statePath).load()).rejects.toThrow(statePath);
-	});
-});
-
-describe("bootStatusFor (#3 boot reconciliation)", () => {
-	const spawned = { mode: "spawned" as const };
-	const remote = { mode: "remote" as const };
-	const attached = { mode: "attached" as const };
-
-	test("terminal statuses are kept for every mode", () => {
-		expect(bootStatusFor({ ...spawned, status: "error" })).toBeNull();
-		expect(bootStatusFor({ ...spawned, status: "asleep" })).toBeNull();
-		expect(bootStatusFor({ ...remote, status: "error" })).toBeNull();
-		expect(bootStatusFor({ ...remote, status: "asleep" })).toBeNull();
-		expect(bootStatusFor({ ...attached, status: "asleep" })).toBeNull();
-	});
-
-	test("spawned entries: every non-terminal status (incl. spawning) → asleep", () => {
-		for (const status of [
-			"spawning",
-			"connecting",
-			"session",
-			"resolving",
-			"ready",
-			"reconnecting",
-		] as const) {
-			expect(bootStatusFor({ ...spawned, status })).toBe("asleep");
-		}
-	});
-
-	test("remote/attached: spawning (failed spawn) → asleep; other non-terminal → connecting (redial)", () => {
-		expect(bootStatusFor({ ...remote, status: "spawning" })).toBe("asleep");
-		expect(bootStatusFor({ ...attached, status: "spawning" })).toBe("asleep");
-		for (const status of ["connecting", "session", "resolving", "ready", "reconnecting"] as const) {
-			expect(bootStatusFor({ ...remote, status })).toBe("connecting");
-			expect(bootStatusFor({ ...attached, status })).toBe("connecting");
-		}
 	});
 });

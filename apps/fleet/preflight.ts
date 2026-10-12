@@ -451,7 +451,7 @@ async function checkCallback(ctx: PreflightContext): Promise<PreflightCheck> {
 		ok: false,
 		detail: `TCP connect failed for ${url.hostname}:${port} (tried ${addresses.join(", ")})`,
 		remediation:
-			`the callback server must be reachable from the daemon host: start it (fleet serve on the ` +
+			`the callback server must be reachable from the daemon host: start it (omp-web on the ` +
 			`reachable bind), open firewall port ${port}, or fix the callback URL`,
 	};
 }

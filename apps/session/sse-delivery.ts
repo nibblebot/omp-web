@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { ENVELOPE_MAX_BYTES } from "#lib/wire/callback-protocol";
 import {
 	SSE_BACKPRESSURE_BYTES,
 	SSE_DELTA_SEQ_START,
@@ -58,25 +59,31 @@ let nextDeltaSeq = SSE_DELTA_SEQ_START;
 const sseEncoder = new TextEncoder();
 
 /**
- * Byte budget per `history` frame (mirrors collab-host's SNAPSHOT_CHUNK_BYTES).
- * Each chunk stays well under SSE_BACKPRESSURE_BYTES so priming of a
- * >4 MiB transcript (base64 image payloads inside messages) never trips the
- * stream's drop-and-resume termination; a terminated prime is a permanent
+ * Byte budget per `history` frame (mirrors collab-host's SNAPSHOT_CHUNK_BYTES),
+ * in UTF-8 bytes. Each chunk stays well under SSE_BACKPRESSURE_BYTES so priming
+ * of a >4 MiB transcript (base64 image payloads inside messages) never trips
+ * the stream's drop-and-resume termination; a terminated prime is a permanent
  * connect → terminate → reconnect loop, since priming is never ringed.
  */
 const HISTORY_CHUNK_BYTES = 512 * 1024;
 /**
- * Per-message ceiling for the history degrade pipeline, restoring the bound
- * 17.1.8's collab replication applied here (`MAX_REPLICATED_PAYLOAD_BYTES`).
- * A message at or under this ceiling ships verbatim even when it exceeds the
- * frame batch target above: it takes a paced frame of its own, which still
- * stays well under the 4 MiB backpressure cap. Only a message over the
- * ceiling degrades: image blocks first, then progressive clipping, and only
- * until it is back under the ceiling. Without this split, every large message
- * would be clipped to the first shrink pass and a transcript of large-but-
- * legal messages would collapse into one small frame.
+ * Room a callback envelope needs around one history frame: the envelope's
+ * identity/seq fields plus the frame's own `type`/`final` keys.
  */
-const MESSAGE_REPLICATION_CEILING_BYTES = 1024 * 1024;
+const HISTORY_ENVELOPE_HEADROOM_BYTES = 64 * 1024;
+/**
+ * Per-message ceiling for the history degrade pipeline, in UTF-8 bytes. A
+ * message at or under this ceiling ships verbatim even when it exceeds the
+ * frame batch target above: it takes a paced frame of its own. The ceiling
+ * keeps that frame inside one callback envelope (ENVELOPE_MAX_BYTES), since
+ * browser streams ride the callback pair and an oversized envelope is
+ * rejected, never delivered. Only a message over the ceiling degrades: image
+ * blocks first, then progressive clipping, and only until it is back under
+ * the ceiling. Without this split, every large message would be clipped to
+ * the first shrink pass and a transcript of large-but-legal messages would
+ * collapse into one small frame.
+ */
+const MESSAGE_REPLICATION_CEILING_BYTES = ENVELOPE_MAX_BYTES - HISTORY_ENVELOPE_HEADROOM_BYTES;
 /**
  * Headroom the paced priming loop keeps below the hard cap: a slow reader
  * mid-prime hovers near the cap, and a concurrent keepalive ping or small
@@ -144,11 +151,11 @@ export function enqueueTo(stream: SseConsumer, block: string): void {
  * writes the chunked terminator for both controller.close() and
  * controller.error() (scratch-verified, since an errored body stream reads
  * as a clean EOF to fetch clients), so the wire cannot carry the
- * distinction. The `stream_reset` frame enqueued ahead of the close is what
- * the fleet connector maps to "reconnecting" (drop-and-resume); the browser
- * ignores it and native-reconnects. Termination that is genuinely terminal
- * (shutdown, which detaches without closing) keeps the bare clean-close
- * semantics → connector "asleep".
+ * distinction. The `stream_reset` frame enqueued ahead of the close tells
+ * direct /events clients to drop and resume (the browser ignores it and
+ * native-reconnects). Termination that is genuinely terminal (shutdown, which
+ * detaches without closing) keeps the bare clean-close semantics, which
+ * clients read as a dormant close.
  */
 export function terminateStream(stream: SseConsumer, reason: string): void {
 	if (reason === "backpressure") {
@@ -268,10 +275,16 @@ function shrinkMessageFrame(message: AgentMessage): AgentMessage {
 	let shrunk: unknown = message;
 	for (const pass of MESSAGE_SHRINK_PASSES) {
 		shrunk = shrinkWalk(message, pass.stringCap, pass.arrayLimit);
-		if (JSON.stringify(shrunk).length <= MESSAGE_REPLICATION_CEILING_BYTES) break;
+		if (utf8Bytes(JSON.stringify(shrunk)) <= MESSAGE_REPLICATION_CEILING_BYTES) break;
 	}
 	return shrunk as AgentMessage;
 }
+
+function utf8Bytes(text: string): number {
+	return Buffer.byteLength(text, "utf8");
+}
+
+export type HistoryFrame = Extract<SessionScopedFrame, { type: "history" }>;
 
 /**
  * Slice `messages` into byte-bounded `history` frames (mirrors collab-host's
@@ -284,57 +297,36 @@ function shrinkMessageFrame(message: AgentMessage): AgentMessage {
  * tails are clipped, so the stream survives regardless. A message between the
  * frame budget and that ceiling stays verbatim in a paced frame of its own.
  */
-export function chunkHistory(
-	messages: AgentMessage[],
-): Array<{ messages: AgentMessage[]; final?: boolean }> {
+export function historyFrames(messages: AgentMessage[]): HistoryFrame[] {
 	const whole = JSON.stringify({ type: "history", messages });
-	if (whole.length <= HISTORY_CHUNK_BYTES) return [{ messages }];
-	const frames: Array<{ messages: AgentMessage[]; final?: boolean }> = [];
+	if (utf8Bytes(whole) <= HISTORY_CHUNK_BYTES) return [{ type: "history", messages }];
+	const frames: HistoryFrame[] = [];
 	let batch: AgentMessage[] = [];
 	let batchBytes = 0;
 	const flush = (final: boolean): void => {
-		frames.push({ messages: batch, final });
+		frames.push({ type: "history", messages: batch, final });
 		batch = [];
 		batchBytes = 0;
 	};
 	for (const message of messages) {
 		let wire: AgentMessage = message;
-		let bytes = JSON.stringify(wire).length;
+		let bytes = utf8Bytes(JSON.stringify(wire));
 		if (bytes > MESSAGE_REPLICATION_CEILING_BYTES) {
 			wire = messageWithoutImages(wire);
-			bytes = JSON.stringify(wire).length;
+			bytes = utf8Bytes(JSON.stringify(wire));
 			if (bytes > MESSAGE_REPLICATION_CEILING_BYTES) {
 				wire = shrinkMessageFrame(wire);
-				bytes = JSON.stringify(wire).length;
+				bytes = utf8Bytes(JSON.stringify(wire));
 			}
 		}
-		if (batch.length > 0 && batchBytes + bytes > HISTORY_CHUNK_BYTES) flush(false);
+		// +1: the array separator each message adds to the frame.
+		if (batch.length > 0 && batchBytes + bytes + 1 > HISTORY_CHUNK_BYTES) flush(false);
 		batch.push(wire);
-		batchBytes += bytes;
+		batchBytes += bytes + 1;
 	}
 	if (batch.length > 0) flush(true);
 	else frames[frames.length - 1].final = true;
 	return frames;
-}
-
-/**
- * Deliver `messages` to one stream as history frame(s), each paced under the
- * cap: the single back-compatible frame when the transcript fits one chunk,
- * otherwise sequential byte-bounded frames. Every frame takes a fresh seq
- * from `nextSeq` (priming's per-stream counter or the daemon-global delta
- * counter for live broadcasts).
- */
-export async function sendHistoryPaced(
-	stream: SseConsumer,
-	messages: AgentMessage[],
-	nextSeq: () => number,
-): Promise<void> {
-	for (const frame of chunkHistory(messages)) {
-		await enqueuePaced(
-			stream,
-			encodeSseEvent(SSE_EVENT_NAME, { type: "history", ...frame }, nextSeq()),
-		);
-	}
 }
 
 /** Global frames (error, daemons roster, ready): ringed deltas to every stream. */
@@ -380,18 +372,18 @@ export function broadcastTo(handle: string, frame: SessionScopedFrame): void {
  * replaced transcript can also exceed the 4 MiB cap. A single-frame
  * broadcast would terminate every attached stream (the same permanent-reconnect
  * bug as priming). History is not ringed; a reconnect re-primes instead.
+ * Callback-pair browser streams get the same frames through the history tap;
+ * the frame tap is not used because it also feeds the fleet's control mirror,
+ * which has no use for a transcript.
  */
-export async function broadcastHistory(entry: SessionEntry): Promise<void> {
-	const frames = chunkHistory(entry.session.messages);
+export async function broadcastHistory(handle: string, frames: HistoryFrame[]): Promise<void> {
 	for (const stream of streams) {
-		if (stream.attached !== entry.handle) continue;
+		if (stream.attached !== handle) continue;
 		for (const frame of frames) {
-			await enqueuePaced(
-				stream,
-				encodeSseEvent(SSE_EVENT_NAME, { type: "history", ...frame }, nextDeltaSeq++),
-			);
+			await enqueuePaced(stream, encodeSseEvent(SSE_EVENT_NAME, frame, nextDeltaSeq++));
 		}
 	}
+	if (onHistoryTap !== null) await onHistoryTap(frames);
 }
 
 /**
@@ -496,6 +488,14 @@ function tapFrame(frame: ServerFrame | SessionScopedFrame): void {
 	} catch {
 		// Listener failures never break delivery.
 	}
+}
+
+// Callback history tap: registered by apps/session/index.ts when a callback
+// pair exists. broadcastHistory hands it the resync frames for the pair's
+// browser streams (paced there against the pair's outbound buffer).
+let onHistoryTap: ((frames: HistoryFrame[]) => Promise<void>) | null = null;
+export function setOnHistoryTap(fn: ((frames: HistoryFrame[]) => Promise<void>) | null): void {
+	onHistoryTap = fn;
 }
 
 /** Snapshot the delta high-water mark BEFORE priming (the replay floor). */

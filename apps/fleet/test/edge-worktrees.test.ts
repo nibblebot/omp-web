@@ -1,37 +1,31 @@
 /**
  * Fleet edge worktree command tests: create_worktree / add_worktree /
  * worktree_delete_info / delete_worktree / list_project_branches /
- * list_projects against a real git repo, on a standalone edge mount
- * (serverless: the "local" template idles so start:true never dials a real
- * omp-session).
+ * list_projects against a real git repo, on a standalone edge mount.
+ * Worktree entries are non-clone spawned entries: the "local" template
+ * idles (`sleep 30`) and never pairs, so the fleet only ever sees the
+ * roster and git state, never a session dialed by the fleet.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RegisteredProject } from "#lib/wire/protocol";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import type { FleetConfig } from "../config";
-import { DaemonConnector } from "../connector";
+import { DaemonTransportRegistry } from "../daemon-transport";
 import { FleetEdge } from "../edge";
 import { FleetEventLog } from "../events";
 import { Registry } from "../registry";
 import { SpawnSupervisor } from "../supervisor";
 import { managedWorktreePath, registerWorktreeEntry } from "../worktrees";
-import {
-	asRoster,
-	openBrowser,
-	serveEdge,
-	waitFor,
-	type BrowserSocket,
-	cleanupTempDirs,
-} from "./edge.testkit";
+import { asRoster, openBrowser, serveEdge, waitFor, type BrowserSocket } from "./edge.testkit";
 
 afterAll(cleanupTempDirs);
 
 describe("edge worktree commands", () => {
 	let tmp: string;
 	let registry: Registry;
-	let connector: DaemonConnector;
+	let transport: DaemonTransportRegistry;
 	let config: FleetConfig;
 	let supervisor: SpawnSupervisor;
 	let edge: FleetEdge;
@@ -53,10 +47,9 @@ describe("edge worktree commands", () => {
 	}
 
 	beforeAll(async () => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-web-edge-wt-"));
+		tmp = tempDir("omp-web-edge-wt-");
 		registry = new Registry(join(tmp, "state.json"));
 		await registry.load();
-		connector = new DaemonConnector(registry);
 		// The "local" template idles so a start:true spawn never reaches a
 		// real omp-session; the tests stop the child themselves.
 		config = {
@@ -65,13 +58,18 @@ describe("edge worktree commands", () => {
 			workspaceDir: join(tmp, "workspaces"),
 			bind: "127.0.0.1",
 		};
-		supervisor = new SpawnSupervisor(registry, connector, config);
+		transport = new DaemonTransportRegistry();
+		supervisor = new SpawnSupervisor(registry, config, {
+			transport,
+			statePath: join(tmp, "state.json"),
+			callbackUrl: () => "https://fleet.test/callback",
+		});
 		edge = new FleetEdge({
 			registry,
-			connector,
 			supervisor,
 			config,
 			eventLog: new FleetEventLog(),
+			transport,
 			fleet: {
 				port: 0,
 				startedAt: Date.now(),
@@ -102,7 +100,7 @@ describe("edge worktree commands", () => {
 		served.stop();
 		edge.close();
 		await supervisor.close();
-		await connector.close();
+		transport.close();
 		rmSync(tmp, { recursive: true, force: true });
 	});
 

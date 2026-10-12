@@ -1,0 +1,370 @@
+/**
+ * Session daemon lifecycle against a fake control plane. The daemon dials OUT
+ * to the fake fleet over the callback pair; the fake never dials the daemon.
+ *
+ * Grace periods, idle timeouts, and quiet-time checks are process-level
+ * behavior measured against the platform clock in a real subprocess, so those
+ * waits are real time by design. Everything else awaits an observed event.
+ */
+import { afterAll, expect, test } from "bun:test";
+import type { Subprocess } from "bun";
+import {
+	CALLBACK_CONTROL_STREAM_ID,
+	CALLBACK_DOWN_PATH,
+	CALLBACK_TRANSPORT_STREAM_ID,
+	CALLBACK_UP_PATH,
+	type CallbackEnvelope,
+	type CallbackKind,
+	encodeSseEnvelope,
+} from "#lib/wire/callback-protocol";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+
+const repoRoot = new URL("../../..", import.meta.url).pathname;
+const WORKSPACE = "ws-control-plane";
+const GENERATION = 1;
+const TOKEN = "ab".repeat(32);
+
+interface FakeFleet {
+	url: string;
+	/** Resolves when the daemon opens its down stream. */
+	paired: Promise<void>;
+	/** Envelopes the daemon uploaded on /callback/up, in arrival order. */
+	up: CallbackEnvelope[];
+	/** Resolves once `count` uploaded envelopes satisfy `match`. */
+	waitForUp(match: (envelope: CallbackEnvelope) => boolean, count: number): Promise<void>;
+	/** Sends one down envelope on the current pair. */
+	send(streamId: string, kind: CallbackKind, payload: unknown): void;
+	stop(): void;
+	/** Ends the current down stream (network loss); the daemon redials and a new pair forms. */
+	dropPair(): void;
+}
+
+function startFakeFleet(options: { reject?: boolean } = {}): FakeFleet {
+	const encoder = new TextEncoder();
+	const decoder = new TextDecoder();
+	const up: CallbackEnvelope[] = [];
+	const arrivalListeners = new Set<() => void>();
+	let down: ReadableStreamDefaultController<Uint8Array> | null = null;
+	let connectionId = "";
+	let seq = 0;
+	let resolvePaired: () => void = () => {};
+	const paired = new Promise<void>((resolve) => {
+		resolvePaired = resolve;
+	});
+
+	const envelope = (streamId: string, kind: CallbackKind, payload: unknown): CallbackEnvelope => ({
+		version: 1,
+		workspaceId: WORKSPACE,
+		generation: GENERATION,
+		connectionId,
+		streamId,
+		seq: ++seq,
+		kind,
+		payload,
+		at: Date.now(),
+	});
+
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		idleTimeout: 255,
+		async fetch(req) {
+			const pathname = new URL(req.url).pathname;
+			if (options.reject || req.headers.get("authorization") !== `Bearer ${TOKEN}`) {
+				return Response.json(
+					{ error: "unauthorized", message: "unknown credential" },
+					{ status: 401 },
+				);
+			}
+			if (req.method === "GET" && pathname === CALLBACK_DOWN_PATH) {
+				connectionId = req.headers.get("x-omp-connection-id") ?? "";
+				const stream = new ReadableStream<Uint8Array>({
+					start(controller) {
+						down = controller;
+						const ready = envelope(CALLBACK_TRANSPORT_STREAM_ID, "control", {
+							type: "pair_ready",
+							connectionId,
+							generation: GENERATION,
+						});
+						controller.enqueue(encoder.encode(encodeSseEnvelope(ready)));
+						resolvePaired();
+					},
+					cancel() {
+						down = null;
+					},
+				});
+				return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+			}
+			if (req.method === "POST" && pathname === CALLBACK_UP_PATH) {
+				const reader = req.body?.getReader();
+				if (!reader) return new Response("missing body", { status: 400 });
+				let buffered = "";
+				for (;;) {
+					const chunk = await reader.read();
+					if (chunk.done) break;
+					buffered += decoder.decode(chunk.value, { stream: true });
+					let newline = buffered.indexOf("\n");
+					while (newline !== -1) {
+						const line = buffered.slice(0, newline).trim();
+						buffered = buffered.slice(newline + 1);
+						if (line.length > 0) {
+							up.push(JSON.parse(line) as CallbackEnvelope);
+							for (const notify of arrivalListeners) notify();
+						}
+						newline = buffered.indexOf("\n");
+					}
+				}
+				return Response.json({ ok: true });
+			}
+			return new Response("not found", { status: 404 });
+		},
+	});
+
+	return {
+		url: `http://127.0.0.1:${server.port}`,
+		paired,
+		up,
+		waitForUp(match, count) {
+			return new Promise<void>((resolve) => {
+				const check = (): void => {
+					if (up.filter(match).length >= count) {
+						arrivalListeners.delete(check);
+						resolve();
+					}
+				};
+				arrivalListeners.add(check);
+				check();
+			});
+		},
+		send(streamId, kind, payload) {
+			if (!down) throw new Error("fake fleet has no open down stream");
+			down.enqueue(encoder.encode(encodeSseEnvelope(envelope(streamId, kind, payload))));
+		},
+		stop() {
+			down?.close();
+			server.stop(true);
+		},
+		dropPair() {
+			const current = down;
+			down = null;
+			current?.close();
+		},
+	};
+}
+
+/** The sessionFile of a control-stream state frame, or undefined for any other envelope. */
+function stateFrameSessionFile(envelope: CallbackEnvelope): string | undefined {
+	const payload = envelope.payload;
+	if (envelope.kind !== "frame" || envelope.streamId !== CALLBACK_CONTROL_STREAM_ID)
+		return undefined;
+	if (typeof payload !== "object" || payload === null) return undefined;
+	if (!("type" in payload) || payload.type !== "state") return undefined;
+	if (!("state" in payload) || typeof payload.state !== "object" || payload.state === null)
+		return undefined;
+	if (!("sessionFile" in payload.state) || typeof payload.state.sessionFile !== "string")
+		return undefined;
+	return payload.state.sessionFile;
+}
+
+/** The id of a call_result frame, or undefined for any other envelope. */
+function callResultId(envelope: CallbackEnvelope): string | undefined {
+	const payload = envelope.payload;
+	if (envelope.kind !== "frame") return undefined;
+	if (typeof payload !== "object" || payload === null) return undefined;
+	if (!("type" in payload) || payload.type !== "call_result") return undefined;
+	if (!("id" in payload) || typeof payload.id !== "string") return undefined;
+	return payload.id;
+}
+
+/** The frame payload of an envelope on `streamId`, or undefined for any other envelope. */
+function streamFrame(
+	envelope: CallbackEnvelope,
+	streamId: string,
+): { type?: unknown; id?: unknown; messages?: unknown } | undefined {
+	if (envelope.kind !== "frame" || envelope.streamId !== streamId) return undefined;
+	const payload = envelope.payload;
+	return typeof payload === "object" && payload !== null ? payload : undefined;
+}
+
+/** A loopback port with nothing listening on it. */
+function closedPortUrl(): string {
+	const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
+	const url = `http://127.0.0.1:${probe.port}`;
+	probe.stop(true);
+	return url;
+}
+
+const running: Subprocess[] = [];
+const fleets: FakeFleet[] = [];
+
+afterAll(async () => {
+	for (const child of running) {
+		if (child.exitCode === null) child.kill();
+	}
+	for (const fleet of fleets) fleet.stop();
+	await cleanupTempDirs();
+});
+
+function trackFleet(options: { reject?: boolean } = {}): FakeFleet {
+	const fleet = startFakeFleet(options);
+	fleets.push(fleet);
+	return fleet;
+}
+
+function spawnDaemon(callbackUrl: string, extra: Record<string, string> = {}): Subprocess {
+	const child = Bun.spawn(["bun", "apps/session/index.ts"], {
+		cwd: repoRoot,
+		env: {
+			...process.env,
+			OMP_SESSION_PORT: "0",
+			OMP_SESSION_CWD: tempDir("omp-session-cp-cwd-"),
+			PI_NO_TITLE: "1",
+			PI_CODING_AGENT_DIR: tempDir("omp-session-cp-agent-"),
+			OMP_SESSION_CALLBACK_URL: callbackUrl,
+			OMP_SESSION_CALLBACK_WORKSPACE: WORKSPACE,
+			OMP_SESSION_CALLBACK_GENERATION: String(GENERATION),
+			OMP_SESSION_CALLBACK_TOKEN: TOKEN,
+			OMP_SESSION_CALLBACK_ALLOW_HTTP: "1",
+			OMP_SESSION_LOG_MIRROR: "0",
+			...extra,
+		},
+		stdin: "ignore",
+		stdout: "ignore",
+		stderr: "ignore",
+	});
+	running.push(child);
+	return child;
+}
+
+/** Exit code, or null when the child is still alive after timeoutMs. */
+function exitWithin(child: Subprocess, timeoutMs: number): Promise<number | null> {
+	return Promise.race([child.exited, Bun.sleep(timeoutMs).then(() => null)]);
+}
+
+test("a ShutdownControl from the fleet stops the session with exit 0", async () => {
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	await fleet.paired;
+	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});
+
+test("a session with no reachable control plane exits after the grace period", async () => {
+	const child = spawnDaemon(closedPortUrl(), { OMP_SESSION_CONTROL_GRACE: "2s" });
+	const started = Date.now();
+	expect(await exitWithin(child, 30_000)).toBe(0);
+	expect(Date.now() - started).toBeGreaterThanOrEqual(1500);
+});
+
+test("a credential the fleet rejects shuts the session down without waiting for the grace period", async () => {
+	const fleet = trackFleet({ reject: true });
+	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});
+
+test("a live pair keeps the session up past the grace period", async () => {
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "2s" });
+	await fleet.paired;
+	// Real time: the grace window must elapse for this to prove anything.
+	expect(await exitWithin(child, 4_000)).toBeNull();
+	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});
+
+test("a command repeated over the pair is dispatched once and its answer replayed", async () => {
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	await fleet.paired;
+	const command = { type: "call", id: "dup-cmd", method: "setSessionName", args: ["dup-name"] };
+	fleet.send(CALLBACK_CONTROL_STREAM_ID, "command", command);
+	fleet.send(CALLBACK_CONTROL_STREAM_ID, "command", command);
+	await fleet.waitForUp((e) => callResultId(e) === "dup-cmd", 2);
+	// Real time: a re-dispatch would land a third answer only after the
+	// subprocess handled it, so only quiet time proves the duplicate was dropped.
+	await Bun.sleep(1200);
+	expect(fleet.up.filter((e) => callResultId(e) === "dup-cmd")).toHaveLength(2);
+	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});
+
+test("an open browser stream keeps the idle timeout from stopping the session", async () => {
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, {
+		OMP_SESSION_CONTROL_GRACE: "0",
+		OMP_SESSION_IDLE_TIMEOUT: "3s",
+		OMP_SESSION_TEST_IDLE_CHECK_MS: "200",
+	});
+	await fleet.paired;
+	fleet.send("browser-1", "control", { type: "stream_open" });
+	// Real time: the idle timeout must elapse while the stream is open.
+	expect(await exitWithin(child, 2_500)).toBeNull();
+	fleet.send("browser-1", "control", { type: "stream_close" });
+	expect(await exitWithin(child, 15_000)).toBe(0);
+});
+
+test("every pair-up publishes the session file on the control stream, including after a redial", async () => {
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	await fleet.paired;
+	// No browser stream is open: the state frame must not depend on one.
+	await fleet.waitForUp((e) => stateFrameSessionFile(e) !== undefined, 1);
+	fleet.dropPair();
+	await fleet.waitForUp((e) => stateFrameSessionFile(e) !== undefined, 2);
+	const sessionFiles = fleet.up.map(stateFrameSessionFile).filter((f) => f !== undefined);
+	expect(sessionFiles).toHaveLength(2);
+	expect(sessionFiles[0]).toBeString();
+	expect(sessionFiles[0]!.length).toBeGreaterThan(0);
+	expect(sessionFiles[1]).toBe(sessionFiles[0]);
+	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});
+
+test("browser streams prime the transcript and get the history resync after newSession", async () => {
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	await fleet.paired;
+	const frames = (streamId: string) =>
+		fleet.up.map((e) => streamFrame(e, streamId)).filter((f) => f !== undefined);
+	const historyLengths = (streamId: string, beforeAnswer?: string): number[] => {
+		const list = frames(streamId);
+		const end =
+			beforeAnswer === undefined
+				? list.length
+				: list.findIndex((f) => f.type === "call_result" && f.id === beforeAnswer);
+		return list
+			.slice(0, end)
+			.filter((f) => f.type === "history")
+			.map((f) => (Array.isArray(f.messages) ? f.messages.length : -1));
+	};
+
+	// Attach: the transcript (empty) primes between attached and state.
+	fleet.send("browser/one", "control", { type: "stream_open" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/one")?.type === "state", 1);
+	const primed = frames("browser/one").map((f) => f.type);
+	expect(primed.slice(0, 4)).toEqual(["hello_ok", "attached", "history", "state"]);
+	expect(historyLengths("browser/one")).toEqual([0]);
+
+	// One transcript message, then a second browser attaches and primes it.
+	fleet.send("browser/one", "command", {
+		type: "call",
+		id: "bash-1",
+		method: "bash",
+		args: ["echo primed", false],
+	});
+	await fleet.waitForUp((e) => streamFrame(e, "browser/one")?.id === "bash-1", 1);
+	fleet.send("browser/two", "control", { type: "stream_open" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/two")?.type === "state", 1);
+	expect(historyLengths("browser/two")).toEqual([1]);
+
+	// New session: both browser streams get the empty transcript before the answer.
+	fleet.send("browser/one", "command", { type: "call", id: "new-1", method: "newSession" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/two")?.id === "new-1", 1);
+	expect(historyLengths("browser/one", "new-1")).toEqual([0, 0]);
+	expect(historyLengths("browser/two", "new-1")).toEqual([1, 0]);
+	// The fleet's control mirror never carries the transcript.
+	expect(frames(CALLBACK_CONTROL_STREAM_ID).some((f) => f.type === "history")).toBe(false);
+
+	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});
