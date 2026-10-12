@@ -1,5 +1,7 @@
 import { render } from "solid-js/web";
 import { initTheme } from "../web/prefs/theme";
+import { FEATURE_IDS } from "../web/features/manifest";
+import { activateFeatures } from "../web/features/registry";
 // Same global stylesheet production loads (index.tsx), then the showcase chrome.
 import "../web/styles.css";
 import "./showcase.css";
@@ -12,4 +14,6 @@ import { Shell } from "./shell";
 // story mounts App, against the design server's fixture /events stream.
 initTheme();
 installDaemon();
-render(() => <Shell />, document.getElementById("root")!);
+void activateFeatures(FEATURE_IDS).then(() =>
+	render(() => <Shell />, document.getElementById("root")!),
+);

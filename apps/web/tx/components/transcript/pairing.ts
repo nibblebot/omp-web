@@ -9,7 +9,7 @@
  * and render a "pending…" badge.
  */
 import { createMemo, type Accessor } from "solid-js";
-import type { RawEntry } from "../../api";
+import type { RawEntry } from "../../../store/fleet-api";
 import {
 	contentBlocks,
 	isMessage,

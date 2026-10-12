@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 // recompute; the reactive client build is what the browser (and these
 // reactivity assertions) need. Types come from apps/web/test/tx/solid-dist.d.ts.
 import { createMemo, createRoot, createSignal } from "solid-js/dist/solid.js";
-import type { RawEntry } from "../../tx/api";
+import type { RawEntry } from "../../store/fleet-api";
 import { entryTypeLabel, sessionInitOf, shortSummary } from "../../tx/util/entries";
 import { createCollapseStore } from "../../tx/components/transcript/collapse";
 import { pairToolCalls, createPairingMaps } from "../../tx/components/transcript/pairing";

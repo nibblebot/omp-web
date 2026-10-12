@@ -7,8 +7,8 @@ import { ToolCard, ToolChip } from "../tools/ToolCard";
 import { groupToolRuns, type Run } from "../../../chat/tool-runs";
 import { useStickyScroll } from "./useStickyScroll";
 import { StreamingBlock } from "./StreamingBlock";
+import { featureTranscriptCard } from "../../../features/registry";
 import {
-	AdvisorCard,
 	AssistantCard,
 	CompactionCard,
 	NoticeCard,
@@ -154,7 +154,11 @@ const TranscriptList: Component = () => {
 										{(c) => <CompactionCard item={c()} />}
 									</Match>
 									<Match when={item.kind === "advisor" && item}>
-										{(a) => <AdvisorCard item={a()} />}
+										{(a) => (
+											<Show when={featureTranscriptCard("advisor")} keyed>
+												{(Card) => <Card item={a()} />}
+											</Show>
+										)}
 									</Match>
 									<Match when={item.kind === "notice" && item}>
 										{(notice) => <NoticeCard item={notice()} />}

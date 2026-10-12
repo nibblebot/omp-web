@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
-	btwDispatch,
 	compactDispatch,
 	dispatchInput,
 	dumpDispatch,
 	exportDispatch,
 	exportRouteArgs,
-	goalDispatch,
 	handoffArgs,
 	LOCAL_COMMANDS,
 	modelDispatch,
@@ -141,24 +139,6 @@ describe("LOCAL_COMMANDS table", () => {
 	});
 });
 
-describe("modal openers", () => {
-	test("bare /mcp opens the MCP modal", () => {
-		setState("modal", null);
-		LOCAL_COMMANDS.mcp("");
-		expect(state.modal).toBe("mcp");
-	});
-	test("/todo opens the todos modal", () => {
-		setState("modal", null);
-		LOCAL_COMMANDS.todo("");
-		expect(state.modal).toBe("todos");
-	});
-	test("/git rejects arguments and leaves the modal closed", () => {
-		setState("modal", null);
-		LOCAL_COMMANDS.git("x");
-		expect(state.modal).toBeNull();
-	});
-});
-
 describe("session command parsing", () => {
 	test("/rename with a title renames directly, no LLM round-trip", () => {
 		expect(renameDispatch("My Session")).toEqual({ method: "setSessionName", title: "My Session" });
@@ -181,8 +161,7 @@ describe("session command parsing", () => {
 });
 
 describe("goal/plan local commands", () => {
-	test("LOCAL_COMMANDS covers goal and plan", () => {
-		expect(LOCAL_COMMANDS.goal).toBeFunction();
+	test("LOCAL_COMMANDS covers plan", () => {
 		expect(LOCAL_COMMANDS.plan).toBeFunction();
 	});
 
@@ -194,29 +173,6 @@ describe("goal/plan local commands", () => {
 		});
 		expect(parseInput("/goal pause")).toEqual({ kind: "slash", name: "goal", args: "pause" });
 		expect(parseInput("/plan")).toEqual({ kind: "slash", name: "plan", args: "" });
-	});
-
-	test("/goal subcommands route to goalRuntime relay rows", () => {
-		expect(goalDispatch("set implement the API")).toEqual({
-			kind: "call",
-			method: "goalCreate",
-			args: ["implement the API"],
-		});
-		expect(goalDispatch("set   padded   objective  ")).toEqual({
-			kind: "call",
-			method: "goalCreate",
-			args: ["padded objective"],
-		});
-		expect(goalDispatch("pause")).toEqual({ kind: "call", method: "goalPause", args: [] });
-		expect(goalDispatch("resume")).toEqual({ kind: "call", method: "goalResume", args: [] });
-		expect(goalDispatch("drop")).toEqual({ kind: "call", method: "goalDrop", args: [] });
-	});
-
-	test("bare or unknown /goal opens the popover instead of prompting", () => {
-		expect(goalDispatch("")).toEqual({ kind: "popover" });
-		expect(goalDispatch("   ")).toEqual({ kind: "popover" });
-		expect(goalDispatch("set")).toEqual({ kind: "popover" });
-		expect(goalDispatch("wat")).toEqual({ kind: "popover" });
 	});
 
 	test("/plan toggles planModeEnabled via setPlanModeState", () => {
@@ -232,23 +188,7 @@ describe("goal/plan local commands", () => {
 });
 
 describe("Phase 11 web-plus commands", () => {
-	test("parseInput classifies /btw with and without a question", () => {
-		expect(parseInput("/btw")).toEqual({ kind: "slash", name: "btw", args: "" });
-		expect(parseInput("/btw what does this function do")).toEqual({
-			kind: "slash",
-			name: "btw",
-			args: "what does this function do",
-		});
-		// parseInput keeps the trailing space verbatim (dispatchInput trims).
-		expect(parseInput("/BTW  explain  main() ")).toEqual({
-			kind: "slash",
-			name: "btw",
-			args: "explain  main() ",
-		});
-	});
-
 	test("LOCAL_COMMANDS covers the Phase 11 set", () => {
-		expect(LOCAL_COMMANDS.btw).toBeFunction();
 		expect(LOCAL_COMMANDS.export).toBeFunction();
 	});
 
@@ -311,30 +251,11 @@ describe("P0.2 argument-aware collision routes", () => {
 		expect(dumpDispatch("everything").kind).toBe("usage");
 	});
 
-	test("/goal show and budget open the popover, stray args do not call", () => {
-		expect(goalDispatch("show")).toEqual({ kind: "popover" });
-		expect(goalDispatch("budget 5000")).toEqual({ kind: "popover" });
-		expect(goalDispatch("budget off")).toEqual({ kind: "popover" });
-		expect(goalDispatch("pause extra")).toEqual({ kind: "popover" });
-		expect(goalDispatch("resume extra")).toEqual({ kind: "popover" });
-		expect(goalDispatch("drop extra")).toEqual({ kind: "popover" });
-		expect(goalDispatch("pause")).toEqual({ kind: "call", method: "goalPause", args: [] });
-	});
-
 	test("/plan with prompt enters plan mode, bare toggles", () => {
 		const before = state.planModeEnabled;
 		expect(planDispatch("design the api").args[0].enabled).toBe(true);
 		expect(planDispatch("").args[0].enabled).toBe(!before);
 		expect(planDispatch().args[0].enabled).toBe(!before);
-	});
-
-	test("/btw bare opens panel, question asks", () => {
-		expect(btwDispatch("")).toEqual({ kind: "panel" });
-		expect(btwDispatch("   ")).toEqual({ kind: "panel" });
-		expect(btwDispatch("what does this do")).toEqual({
-			kind: "ask",
-			question: "what does this do",
-		});
 	});
 
 	test("LOCAL_COMMANDS covers move/wt/worktree refusals", () => {
@@ -450,6 +371,21 @@ afterEach(() => {
 });
 
 describe("bang-shell/python stream lifecycle (#29)", () => {
+	test("/live is refused locally without sending a prompt", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		const before = state.items.length;
+		dispatchInput("/live", undefined, "enter");
+		expect(posted.filter((command) => command.type === "call")).toEqual([]);
+		expect(state.items.slice(before)).toMatchObject([
+			{
+				kind: "notice",
+				level: "error",
+				message: "/live is terminal-only: realtime voice runs in the omp terminal UI.",
+			},
+		]);
+	});
+
 	function startBang(input: string, method: "bash" | "python") {
 		connect();
 		const es = FakeEventSource.instances.at(-1);
@@ -658,5 +594,23 @@ describe("danger confirm guards (P1 hardening)", () => {
 		await flushMicrotasks();
 		expect(postedMethod("freshSession").length).toBe(1);
 		expect(dangerConfirm()).toBeNull();
+	});
+});
+
+describe("disabled feature commands", () => {
+	beforeEach(() => {
+		setState({ items: [], streaming: false });
+	});
+
+	test("a slash command owned by a disabled feature shows a local notice and is never forwarded", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		posted.length = 0;
+		dispatchInput("/git", undefined, "enter");
+		expect(state.items.at(-1)).toMatchObject({
+			kind: "notice",
+			message: "/git is part of Review, which is disabled. Enable it in Settings > Features.",
+		});
+		expect(posted.some((c) => c.type === "call" && c.method === "prompt")).toBe(false);
 	});
 });

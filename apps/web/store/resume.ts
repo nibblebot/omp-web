@@ -1,6 +1,6 @@
 import type { SessionListEntry } from "#lib/wire/protocol";
 import { call, state, setState } from "../state";
-import { api } from "../tx/api";
+import { api } from "./fleet-api";
 import { requestDaemonSessions, resumeDaemonSession } from "./roster";
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,7 @@
+/* Review panels mount in a sheet; the sheet body scrolls, not the page. */
+.modal.sheet.review-sheet {
+	overflow-y: auto;
+}
+.modal.sheet.review-sheet > * {
+	flex-shrink: 0;
+}

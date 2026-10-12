@@ -326,3 +326,43 @@
 	padding: var(--space-2) var(--space-4);
 	font: inherit;
 }
+
+.features-settings {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+}
+.features-summary {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	padding: var(--space-4) var(--space-5);
+	margin-bottom: var(--space-4);
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	font-size: var(--fs-md);
+	color: var(--muted-3);
+}
+.features-summary-line,
+.features-reload {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-4);
+	align-items: center;
+	justify-content: space-between;
+}
+.features-reload {
+	color: var(--text);
+}
+.feature-controls {
+	display: flex;
+	gap: var(--space-4);
+	align-items: center;
+}
+.feature-status,
+.feature-size {
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+	font-variant-numeric: tabular-nums;
+}

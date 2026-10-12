@@ -15,7 +15,12 @@
  */
 import { Show, createEffect, createResource, createSignal, For } from "solid-js";
 import { Modal } from "../../components/ui/Modal";
-import { api, ApiError, type StoredSessionSummary, type StoredWorkspaceSummary } from "../api";
+import {
+	api,
+	ApiError,
+	type StoredSessionSummary,
+	type StoredWorkspaceSummary,
+} from "../../store/fleet-api";
 import { state, setView } from "../../state";
 
 // ---------------------------------------------------------------------------

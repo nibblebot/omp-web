@@ -1,5 +1,5 @@
 /**
- * Unit tests for the client API layer (src/tx/api.ts).
+ * Unit tests for the client API layer (src/store/fleet-api.ts).
  *
  * fetch is stubbed per test; no server is spawned. Verifies:
  * - non-2xx responses throw ApiError with status and the server's {error} message
@@ -9,8 +9,7 @@
  * - api.sync() POSTs /ctl/stats/sync and parses the payload
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { ApiError, REQUEST_TIMEOUT_MS, api } from "../../tx/api";
-import { encodePathSegments } from "../../tx/util/format";
+import { ApiError, encodePathSegments, REQUEST_TIMEOUT_MS, api } from "../../store/fleet-api";
 
 const realFetch = globalThis.fetch;
 const realSetTimeout = globalThis.setTimeout;

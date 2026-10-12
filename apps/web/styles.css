@@ -16,7 +16,6 @@
 @import "./styles/settings.css";
 @import "./styles/fleet.css";
 @import "./styles/usage.css";
-@import "./tx/tx.css";
 
 /* --- Directory picker (DirectoryPicker.tsx), kept here (not in a domain file)
    because the Phase 6 onboarding plan scopes its styles to this file. Rules

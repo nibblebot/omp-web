@@ -6,7 +6,7 @@ import type {
 	ServerCapabilities,
 	TodoBoardDto,
 } from "#lib/wire/protocol";
-import type { GitReviewDiff, TodoReviewOp } from "../../web/store/review";
+import type { GitReviewDiff, TodoReviewOp } from "../../web/store/slices/review";
 import type { CallHandlers } from "../daemon";
 import { FIXTURE_NOW } from "./session";
 

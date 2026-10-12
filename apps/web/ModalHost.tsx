@@ -1,12 +1,9 @@
-import { Show, createEffect, type Component, type JSX } from "solid-js";
-import { FleetDebugSheet } from "./components/app/debug/FleetDebugSheet";
+import { For, Show, createEffect, type Component, type JSX } from "solid-js";
 import { ShortcutsDialog } from "./components/app/ShortcutsDialog";
 import { FleetSignInDialog } from "./components/app/FleetSignInDialog";
 import { Toasts } from "./components/app/Toasts";
 import { PromptHistoryPicker } from "./components/chat/composer/PromptHistoryPicker";
-import { VoiceControls } from "./components/chat/composer/VoiceControls";
 import { CompactionDialog } from "./components/chat/controls/CompactionDialog";
-import { GoalDialog } from "./components/chat/controls/GoalDialog";
 import { AddProjectDialog } from "./components/fleet/workspaces/AddProjectDialog";
 import { DeleteWorkspaceDialog } from "./components/fleet/workspaces/DeleteWorkspaceDialog";
 import { RemoveProjectDialog } from "./components/fleet/workspaces/RemoveProjectDialog";
@@ -17,33 +14,26 @@ import { ModelPicker } from "./components/models/ModelPicker";
 import { ThinkingLevelPicker } from "./components/models/ThinkingLevelPicker";
 import { AskDialog } from "./components/requests/AskDialog";
 import { ExtensionUi } from "./components/requests/ExtensionUi";
-import { BtwSheet } from "./components/requests/BtwSheet";
 import { DangerConfirmDialog } from "./components/requests/DangerConfirmDialog";
 import { DownloadDialog } from "./components/requests/DownloadDialog";
-import { AnnotationsPanel } from "./components/review/AnnotationsPanel";
-import { GitPanel } from "./components/review/GitPanel";
-import { PlanReviewPanel } from "./components/review/PlanReviewPanel";
-import { TodoPanel } from "./components/review/TodoPanel";
 import { SessionGraphDialog } from "./components/sessions/SessionGraphDialog";
-import { BtwHistorySheet } from "./components/sessions/BtwHistorySheet";
 import { ResumePicker } from "./components/sessions/ResumePicker";
 import { SessionPicker } from "./components/sessions/SessionPicker";
-import { McpServersDialog } from "./components/settings/integrations/McpServersDialog";
-import { SkillsDialog } from "./components/settings/integrations/SkillsDialog";
 import { SettingsSheet } from "./components/settings/SettingsSheet";
 import { SubagentsDialog } from "./components/subagents/SubagentsDialog";
 import { SessionStatsDialog } from "./components/usage/SessionStatsDialog";
 import { UsageLimitsDialog } from "./components/usage/UsageLimitsDialog";
 import { ImageLightbox } from "./components/ui/ImageLightbox";
-import { Modal } from "./components/ui/Modal";
+import { featureModal, featureOverlays } from "./features/registry";
 import { closeDaemonDetails, closeLightbox, setState, state, type ModalName } from "./state";
 import { resumePickerOpen } from "./store/resume";
 
 /**
  * Every overlay App mounts: the active `state.modal`, plus the dialogs that
  * mount once and render nothing until their own store state asks for them
- * (agent ask/confirm/download requests, extension UI, /btw, resume, fleet
- * confirmations, daemon details, the image lightbox, toasts).
+ * (agent ask/confirm/download requests, extension UI, resume, fleet
+ * confirmations, daemon details, the image lightbox, toasts). Overlays owned
+ * by an enabled feature come from the feature registry.
  */
 export const ModalHost: Component = () => {
 	const close = () => setState("modal", null);
@@ -58,6 +48,12 @@ export const ModalHost: Component = () => {
 		const id = state.daemonDetailsId;
 		if (id !== null && !state.daemonRoster.some((d) => d.daemonId === id)) closeDaemonDetails();
 	});
+	// Renderer for a modal owned by a feature. Renders nothing when the feature
+	// is disabled on this page, so a stale `state.modal` cannot mount feature UI.
+	const featureModalHost = (name: ModalName): JSX.Element => {
+		const Render = featureModal(name);
+		return Render ? <Render onClose={close} /> : null;
+	};
 	// One renderer per `state.modal` value. `satisfies Record<ModalName, …>`
 	// makes a modal without a renderer a type error, and object keys are
 	// unique, so a modal can never be mounted twice.
@@ -72,47 +68,20 @@ export const ModalHost: Component = () => {
 		history: () => <PromptHistoryPicker onClose={close} />,
 		subagents: () => <SubagentsDialog onClose={close} />,
 		login: () => <ProviderLoginDialog onClose={close} />,
-		goal: () => <GoalDialog onClose={close} />,
+		goal: () => featureModalHost("goal"),
 		usage: () => <UsageLimitsDialog onClose={close} />,
-		debug: () => <FleetDebugSheet onClose={close} />,
+		debug: () => featureModalHost("debug"),
 		"add-project": () => <AddProjectDialog onClose={close} />,
 		workspace: () => <AddWorkspaceDialog onClose={close} />,
 		"sign-in": () => <FleetSignInDialog onClose={close} />,
-		mcp: () => <McpServersDialog onClose={close} />,
-		skills: () => <SkillsDialog onClose={close} />,
-		git: () => (
-			<Modal variant="sheet" title="Git review" class="review-sheet" onClose={close}>
-				<GitPanel />
-			</Modal>
-		),
-		"plan-review": () => (
-			<Modal variant="sheet" title="Plan review" class="review-sheet" onClose={close}>
-				<PlanReviewPanel />
-			</Modal>
-		),
-		annotations: () => (
-			<Modal variant="sheet" title="Annotations" class="review-sheet" onClose={close}>
-				<AnnotationsPanel />
-			</Modal>
-		),
-		todos: () => (
-			<Modal variant="sheet" title="Todos" class="review-sheet" onClose={close}>
-				<TodoPanel />
-			</Modal>
-		),
+		mcp: () => featureModalHost("mcp"),
+		skills: () => featureModalHost("skills"),
+		git: () => featureModalHost("git"),
+		"plan-review": () => featureModalHost("plan-review"),
+		annotations: () => featureModalHost("annotations"),
+		todos: () => featureModalHost("todos"),
 		compaction: () => <CompactionDialog onClose={close} />,
-		"btw-history": () => <BtwHistorySheet onClose={close} />,
-		voice: () => (
-			<Modal title="Voice" onClose={close}>
-				<Show
-					when={state.sessionScope}
-					keyed
-					fallback={<div class="msg-notice">Attach a session before using voice.</div>}
-				>
-					{(scope) => <VoiceControls scope={scope} />}
-				</Show>
-			</Modal>
-		),
+		"btw-history": () => featureModalHost("btw-history"),
 	} satisfies Record<ModalName, () => JSX.Element>;
 	return (
 		<>
@@ -126,7 +95,7 @@ export const ModalHost: Component = () => {
 				{(daemon) => <DaemonDetailsDialog daemon={daemon()} onClose={closeDaemonDetails} />}
 			</Show>
 			<AskDialog />
-			<BtwSheet />
+			<For each={featureOverlays()}>{(Overlay) => <Overlay />}</For>
 			<ExtensionUi placement="modal" />
 			<DownloadDialog />
 			<DangerConfirmDialog />

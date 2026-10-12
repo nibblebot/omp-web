@@ -1,5 +1,5 @@
 import { Show, createEffect, createResource, createSignal, onCleanup } from "solid-js";
-import { api, type Health } from "./api";
+import { api, encodePathSegments, type Health } from "../store/fleet-api";
 import { ViewSwitch } from "../components/app/ViewSwitch";
 import { XIcon } from "../components/ui/icons";
 import { setTxSidebarVisible, state } from "../state";
@@ -8,7 +8,7 @@ import { TranscriptList } from "./components/TranscriptList";
 import { StoredSessionList } from "./components/StoredSessionList";
 import { StoredSessionPage } from "./components/StoredSessionPage";
 import { ResumeCloneDialog } from "./components/ResumeCloneDialog";
-import { decodeFileFromHash, encodePathSegments, formatBytes } from "./util/format";
+import { decodeFileFromHash, formatBytes } from "./util/format";
 type Route =
 	| { view: "list" }
 	| { view: "session"; file: string }

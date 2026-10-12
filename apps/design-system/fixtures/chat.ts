@@ -1,8 +1,8 @@
 import type { AcItem } from "../../web/components/chat/composer/AutocompletePopup";
 import type { Run } from "../../web/chat/tool-runs";
 import type { UsageLike } from "../../web/usage/usage";
+import type { AdvisorItem } from "../../web/store/slices/advisor";
 import type {
-	AdvisorItem,
 	BashItem,
 	Block,
 	ChatItem,

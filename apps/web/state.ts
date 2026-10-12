@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AdvisorNote } from "@oh-my-pi/pi-tui/chat/messages";
+import type { AdvisorItem } from "./store/slices/advisor";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { UsageReport } from "@oh-my-pi/pi-ai";
 import { createStore, reconcile } from "solid-js/store";
@@ -18,11 +18,12 @@ import type {
 	WebSessionState,
 } from "#lib/wire/protocol";
 import { SSE_PING_EVENT } from "#lib/wire/sse";
+import { featurePreferences } from "./features/preferences";
 import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
 import { scanImages } from "./text/images";
 import type { UsageLike } from "./usage/usage";
+import { advisorNotesOf } from "./store/slices/advisor";
 import {
-	advisorNotesOf,
 	announce,
 	appendBashChunk,
 	applyEvent,
@@ -63,8 +64,10 @@ import {
 	settleAttachResult,
 	settleCallResult,
 } from "./store/transport";
-import { createReviewState, resetReview } from "./store/review";
-import { createIntegrationState } from "./store/integrations";
+import { createReviewState, resetReviewState } from "./store/slices/review";
+import { applyBtwEphemeralDelta, createBtwState } from "./store/slices/btw";
+import { createGoalState } from "./store/slices/goals";
+import { createIntegrationState } from "./store/slices/integrations";
 import { createResumeState } from "./store/resume";
 import { createCompactionState } from "./store/compaction";
 import { createWorkersState } from "./store/subagents";
@@ -131,9 +134,6 @@ export type ChatItem =
 	| CompactionItem
 	| AdvisorItem
 	| { kind: "notice"; id: number; level: string; message: string };
-
-/** Advisor notes injected into the primary session (`custom` message, customType "advisor"). */
-export type AdvisorItem = { kind: "advisor"; id: number; notes: AdvisorNote[] };
 
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
@@ -211,8 +211,7 @@ export type ModalName =
 	| "annotations"
 	| "todos"
 	| "compaction"
-	| "btw-history"
-	| "voice";
+	| "btw-history";
 
 /** Unicast answer to sendWorktreeDeleteInfo: guard evidence for the
  *  delete-worktree confirm dialog (ownership, dirty counts, branch state). */
@@ -239,9 +238,16 @@ const TX_SIDEBAR_KEY = "omp.txSidebarVisible";
  * transcript regardless of the persisted value; otherwise the persisted
  * value migrates silently to the current vocabulary (legacy "work" maps to
  * "chat", legacy "transcripts" maps to "analysis"), with anything unknown or
- * absent defaulting to Chat.
+ * absent defaulting to Chat. When the analysis feature is disabled, every
+ * route into Analysis (deep link, persisted value, legacy value) falls back
+ * to Chat.
  */
-export function initialView(persisted: string | null, hash: string): "chat" | "analysis" {
+export function initialView(
+	persisted: string | null,
+	hash: string,
+	analysisEnabled: boolean,
+): "chat" | "analysis" {
+	if (!analysisEnabled) return "chat";
 	// Live-session deep link (#/s/<file>) and P8.5 fleet-stored deep link
 	// (#/stored/<workspaceId>/<sessionId>) both boot into the Analysis view,
 	// overriding the persisted Chat/Analysis choice.
@@ -316,7 +322,7 @@ export const [state, setState] = createStore({
 	autoRetryEnabled: true,
 	dumpTools: [] as NonNullable<WebSessionState["dumpTools"]>,
 	// --- Phase 9: modes & usage parity (WebSessionState mirror) ---
-	goalModeState: undefined as WebSessionState["goalModeState"],
+	...createGoalState(),
 	planModeEnabled: false,
 	fastModeEnabled: false,
 	computerToolEnabled: false,
@@ -332,7 +338,6 @@ export const [state, setState] = createStore({
 	availableCommands: [] as AvailableSlashCommand[],
 	availableModels: [] as ModelInfo[],
 	stats: null as SessionStats | null,
-	goal: null as { objective: string } | null,
 	subagents: new Map<string, SubagentInfo>(),
 	connected: false,
 	// Browser-auth state (P2.4): mirrored from src/store/auth.ts by
@@ -422,6 +427,7 @@ export const [state, setState] = createStore({
 	view: initialView(
 		typeof localStorage !== "undefined" ? localStorage.getItem(VIEW_KEY) : null,
 		typeof location !== "undefined" ? location.hash : "",
+		featurePreferences().analysis,
 	),
 	// Chat-button activity dot: a turn ENDED while the tab was in Analysis
 	// (agent_end in src/store/chat.ts for the attached session, detached
@@ -468,13 +474,7 @@ export const [state, setState] = createStore({
 	usageError: null as string | null,
 	// Phase 11: /btw side-panel session. streamId routes ephemeral_delta
 	// frames to this panel; the panel never appears in the transcript.
-	btw: null as null | {
-		question: string;
-		reply: string;
-		streaming: boolean;
-		streamId: number;
-		error?: string;
-	},
+	btw: createBtwState(),
 	// finding #P1: aria-live announcement text, rendered into the always-mounted
 	// role="status" region in App.tsx. announce() dedupes identical consecutive
 	// text so a burst of the same transition doesn't re-announce.
@@ -838,7 +838,7 @@ export function hasLiveSession(): boolean {
 
 /** Per-session UI state dropped when attaching to a different session. */
 function resetSessionView(): void {
-	resetReview();
+	setState("review", resetReviewState(state.review));
 	resetBrowserUiRequests();
 	setState({
 		sessionScope: undefined,
@@ -858,8 +858,7 @@ function resetSessionView(): void {
 		live: { active: false, blocks: [], rev: 0 },
 		subagents: new Map<string, SubagentInfo>(),
 		stats: null,
-		goal: null,
-		goalModeState: undefined,
+		...createGoalState(),
 		retryInfo: null,
 		workingIntent: undefined,
 		modal: null,
@@ -869,7 +868,7 @@ function resetSessionView(): void {
 		loginUrl: null,
 		loginCodeRequest: null,
 		uiRequest: null,
-		btw: null,
+		btw: createBtwState(),
 		lightboxImage: null,
 	});
 }
@@ -1089,11 +1088,7 @@ export function connect(): void {
 				// stale frames from a superseded question. Coalesced into the
 				// rAF flush by streamId (frames append); the flush re-checks
 				// that this stream is still the panel's live one.
-				if (state.btw?.streaming && frame.id === state.btw.streamId) {
-					const pending = pendingEphemeral.get(frame.id);
-					pendingEphemeral.set(frame.id, pending === undefined ? frame.text : pending + frame.text);
-					scheduleFlush();
-				}
+				applyBtwEphemeralDelta(state.btw, frame, pendingEphemeral, scheduleFlush);
 				break;
 			}
 			case "call_result":
@@ -1565,6 +1560,5 @@ export {
 	restartDaemon,
 } from "./store/transport";
 export { steerSubagent, abortSubagent } from "./store/subagents";
-export { askBtw, closeBtw } from "./store/btw";
 export { dismissToast, pushToast } from "./store/toasts";
 export { announce, appendBashChunk, applyEvent, cancelUiRequest, attachSession, call, clientId };

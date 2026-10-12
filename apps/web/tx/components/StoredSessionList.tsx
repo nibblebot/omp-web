@@ -12,7 +12,12 @@
  * resumeClonePath, opening the confirm dialog (ResumeCloneDialog).
  */
 import { Show, For, createResource, createSignal } from "solid-js";
-import { api, ApiError, type StoredSessionSummary, type StoredWorkspaceSummary } from "../api";
+import {
+	api,
+	ApiError,
+	type StoredSessionSummary,
+	type StoredWorkspaceSummary,
+} from "../../store/fleet-api";
 import { formatBytes, formatCompact, timeAgo } from "../util/format";
 import { openResumeClone } from "./ResumeCloneDialog";
 import { kindsSummary, provenanceLabel } from "./stored";

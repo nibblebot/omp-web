@@ -61,9 +61,7 @@ import {
 	spawnVibeWorker,
 	waitVibeWorkers,
 } from "./vibe-service";
-import { createVoiceAdapter, type VoiceAdapter } from "./voice-adapter";
 import { serviceFor } from "./btw-history-adapter";
-import { cfgSttEnabled } from "@oh-my-pi/pi-coding-agent/stt/settings";
 import {
 	abortCompactionRun,
 	compactionSnapshot,
@@ -171,28 +169,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	 *  around METHODS rows. */
 	let inFlightBash = 0;
 	let inFlightPython = 0;
-
-	// Per-entry voice adapters: discovery reads live settings, STT uses the
-	// session model registry, deltas emit as SSE frames on the entry handle.
-	const voiceAdapters = new WeakMap<SessionEntry, VoiceAdapter>();
-	const voiceAdapter = (entry: SessionEntry): VoiceAdapter => {
-		const cached = voiceAdapters.get(entry);
-		if (cached) return cached;
-		const created = createVoiceAdapter({
-			sttDependencies: {
-				settings: deps.settings,
-				registry: entry.session.modelRegistry,
-			},
-			discovery: () => ({
-				sttEnabled: cfgSttEnabled.get(deps.settings),
-				toolsEnabled: true,
-				liveAuthPresent: false,
-			}),
-			emit: (frame) => broadcastTo(entry.handle, frame),
-		});
-		voiceAdapters.set(entry, created);
-		return created;
-	};
 
 	// Read-only calls skip the post-mutation state broadcast.
 	const READ_ONLY: Partial<Record<WebMethodName, true>> = {
@@ -801,17 +777,6 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const focus = (a[0] as { focus?: unknown } | undefined)?.focus;
 			return handoffPreview(entry.session, typeof focus === "string" ? focus : undefined);
 		},
-		voiceCapability: async (entry) => voiceAdapter(entry).capability(),
-		voiceDictationStart: async (entry, a) => voiceAdapter(entry).dictationStart(a[0] as never),
-		voiceDictationFrame: async (entry, a) => voiceAdapter(entry).dictationFrame(a[0] as never),
-		voiceDictationCommit: async (entry, a) => voiceAdapter(entry).dictationCommit(a[0] as never),
-		voiceDictationCancel: async (entry, a) => voiceAdapter(entry).dictationCancel(a[0] as never),
-		voiceRealtimeStart: async (entry, a) => voiceAdapter(entry).realtimeStart(a[0] as never),
-		voiceRealtimeFrame: async (entry, a) => voiceAdapter(entry).realtimeFrame(a[0] as never),
-		voiceRealtimeInterrupt: async (entry, a) =>
-			voiceAdapter(entry).realtimeInterrupt(a[0] as never),
-		voiceRealtimeMute: async (entry, a) => voiceAdapter(entry).realtimeMute(a[0] as never),
-		voiceRealtimeStop: async (entry, a) => voiceAdapter(entry).realtimeStop(a[0] as never),
 		btwList: async (entry, a) => (await serviceFor(entry.session)).listBtwRecords(a[0] as never),
 		btwSearch: async (entry, a) =>
 			(await serviceFor(entry.session)).listBtwSearch(String(a[0] ?? ""), a[1] as never),

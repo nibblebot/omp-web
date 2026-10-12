@@ -110,6 +110,15 @@ Upgrading from a release before sessions dialed out: entries added with the remo
 
 Interactive first run can choose a data home and write `config.json` there. If you choose a non-default location, set `OMP_FLEET_CONFIG` to that file for subsequent launches. Config, state, and workspace paths can be configured separately; installed code remains in its installation prefix.
 
+## Optional features
+
+The web UI's optional features can be turned on or off per browser in **Settings > Features**. A feature that is off is never downloaded: its code loads only when it is enabled.
+
+- Choices are stored in this browser's local storage (`omp.features`), not in `config.json`. Changes take effect after **Reload to apply**.
+- The panel shows each feature's size (gzip and raw) and the total you load: the core plus the enabled features. Sizes come from the production build's `feature-sizes.json`; development builds do not produce it and show no sizes.
+- A slash command owned by a disabled feature, such as `/git` under Review, shows a local notice and is never sent to the agent. Enable the feature to use it again.
+- Features: Analysis mode, Review (`/git`, `/plan-review`, `/annotations`, `/todo`), Integrations (`/mcp`, `/skills`), BTW (`/btw`, `/btw-history`), Goals (`/goal`, Goals & Loops and Vibe), Advisor, and Debug. All are on by default.
+
 ## Develop
 
 ```sh

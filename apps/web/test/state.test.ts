@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
 import { OMP_PROTO, SSE_EVENT_NAME } from "#lib/wire/protocol";
 import type {
 	ClientCommand,
@@ -9,6 +9,7 @@ import type {
 	SettingsModel,
 	WebSessionState,
 } from "#lib/wire/protocol";
+import { activateFeatures } from "../features/registry";
 import { pruneUnread, unreadIds } from "../fleet-ui/unread";
 import {
 	announce,
@@ -344,6 +345,10 @@ describe("replay dedup (finding #2: resume must not double-apply deltas)", () =>
 });
 
 describe("advisor notes render inline (TUI advisor card parity)", () => {
+	beforeAll(async () => {
+		await activateFeatures(["advisor"]);
+	});
+
 	const notes = [
 		{ note: "check the null path", severity: "concern" },
 		{ note: "ship it", advisor: "reviewer", turnsAgo: 2 },
@@ -1212,31 +1217,38 @@ describe("setView persistence and hash handling", () => {
 
 describe("initialView (boot view resolution)", () => {
 	test("legacy values migrate: work → chat, transcripts → analysis", () => {
-		expect(initialView("work", "")).toBe("chat");
-		expect(initialView("transcripts", "")).toBe("analysis");
+		expect(initialView("work", "", true)).toBe("chat");
+		expect(initialView("transcripts", "", true)).toBe("analysis");
 	});
 
 	test("unknown/null persist values fall back to chat; current values pass through", () => {
-		expect(initialView("analysis", "")).toBe("analysis");
-		expect(initialView("chat", "")).toBe("chat");
-		expect(initialView(null, "")).toBe("chat");
-		expect(initialView("bogus", "")).toBe("chat");
-		expect(initialView("", "")).toBe("chat");
+		expect(initialView("analysis", "", true)).toBe("analysis");
+		expect(initialView("chat", "", true)).toBe("chat");
+		expect(initialView(null, "", true)).toBe("chat");
+		expect(initialView("bogus", "", true)).toBe("chat");
+		expect(initialView("", "", true)).toBe("chat");
 	});
 
 	test("a #/s/<file> hash deep-links into analysis even when chat is persisted", () => {
-		expect(initialView("chat", "#/s/abc.jsonl")).toBe("analysis");
-		expect(initialView("chat", "#s/abc.jsonl")).toBe("analysis");
+		expect(initialView("chat", "#/s/abc.jsonl", true)).toBe("analysis");
+		expect(initialView("chat", "#s/abc.jsonl", true)).toBe("analysis");
 	});
 
 	test("a #/stored/<workspaceId>/<sessionId> hash deep-links into analysis (P8.5)", () => {
-		expect(initialView("chat", "#/stored/d7/sess-1")).toBe("analysis");
-		expect(initialView("chat", "#stored/d7/sess-1")).toBe("analysis");
+		expect(initialView("chat", "#/stored/d7/sess-1", true)).toBe("analysis");
+		expect(initialView("chat", "#stored/d7/sess-1", true)).toBe("analysis");
 	});
 
 	test("a non-/s/ hash falls through to the persisted value", () => {
-		expect(initialView("analysis", "#/settings")).toBe("analysis");
-		expect(initialView("chat", "#/settings")).toBe("chat");
+		expect(initialView("analysis", "#/settings", true)).toBe("analysis");
+		expect(initialView("chat", "#/settings", true)).toBe("chat");
+	});
+
+	test("with analysis disabled, every route into Analysis falls back to Chat", () => {
+		expect(initialView("analysis", "", false)).toBe("chat");
+		expect(initialView("transcripts", "", false)).toBe("chat");
+		expect(initialView("chat", "#/s/abc.jsonl", false)).toBe("chat");
+		expect(initialView("chat", "#/stored/d7/sess-1", false)).toBe("chat");
 	});
 });
 

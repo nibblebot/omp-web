@@ -90,12 +90,6 @@ button:not(:disabled):not(.active):hover {
 		opacity: 1;
 		pointer-events: auto;
 	}
-
-	/* Long log lines wrap instead of truncating on touch. */
-	.debug-log-msg {
-		white-space: normal;
-		overflow-wrap: anywhere;
-	}
 }
 
 /* Pill/badge family: shared geometry, per-class tone. */

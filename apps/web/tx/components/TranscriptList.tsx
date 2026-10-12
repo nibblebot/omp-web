@@ -8,7 +8,7 @@ import {
 	on,
 	onCleanup,
 } from "solid-js";
-import { api, ApiError, type Health, type SessionSummary } from "../api";
+import { api, ApiError, type Health, type SessionSummary } from "../../store/fleet-api";
 import { basename, formatBytes, formatCompact, formatCost, timeAgo } from "../util/format";
 import { shouldFallbackMissingFile } from "../util/missing-file";
 import { groupSessionsByProject } from "../util/project-groups";

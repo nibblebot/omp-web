@@ -12,7 +12,7 @@
  * fleet-stored browsing otherwise.
  */
 import { Show, createEffect, createResource, createSignal, For } from "solid-js";
-import { api, type StoredFileInfo } from "../api";
+import { api, type StoredFileInfo } from "../../store/fleet-api";
 import { formatBytes, formatDateTime, timeAgo } from "../util/format";
 import { StoredTranscriptPane } from "./StoredTranscriptView";
 import { openResumeCloneSession } from "./ResumeCloneDialog";

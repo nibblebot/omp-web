@@ -24,8 +24,16 @@ import type {
 	ToolStat,
 	TranscriptPage,
 } from "#lib/wire/stats-types";
-import { encodePathSegments } from "./util/format";
-import { authedFetch } from "../store/auth";
+import { authedFetch } from "./auth";
+
+/** Encode each `/`-separated path segment, keeping the separators literal;
+ *  used for API `:file` URL params and hash routes alike. */
+export function encodePathSegments(file: string): string {
+	return file
+		.split("/")
+		.map((seg) => encodeURIComponent(seg))
+		.join("/");
+}
 
 export type {
 	Health,

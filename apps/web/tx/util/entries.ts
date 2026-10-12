@@ -2,7 +2,7 @@
  * Safe accessors over raw JSONL entry objects (RawEntry = Record<string, unknown>).
  * Every read is defensive; the JSONL data is lenient and entries vary in shape.
  */
-import type { RawEntry } from "../api";
+import type { RawEntry } from "../../store/fleet-api";
 
 export interface ContentBlock {
 	type?: unknown;

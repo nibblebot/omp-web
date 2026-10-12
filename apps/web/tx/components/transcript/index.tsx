@@ -18,8 +18,8 @@
  */
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import type { RawEntry } from "../../api";
-import { api, type TranscriptPage } from "../../api";
+import type { RawEntry } from "../../../store/fleet-api";
+import { api, type TranscriptPage } from "../../../store/fleet-api";
 import { basename } from "../../util/format";
 import {
 	contentBlocks,

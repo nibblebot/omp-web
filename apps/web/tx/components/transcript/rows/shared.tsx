@@ -4,7 +4,7 @@
  */
 import { Show, useContext } from "solid-js";
 import type { JSX } from "solid-js";
-import type { RawEntry } from "../../../api";
+import type { RawEntry } from "../../../../store/fleet-api";
 import {
 	entryTimestamp,
 	entryTypeLabel,

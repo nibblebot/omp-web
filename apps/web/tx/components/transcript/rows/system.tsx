@@ -5,7 +5,7 @@
  * goal-completed).
  */
 import { For, Show } from "solid-js";
-import type { RawEntry } from "../../../api";
+import type { RawEntry } from "../../../../store/fleet-api";
 import { Markdown } from "../../../../components/ui/Markdown";
 import {
 	compactionSummaryOf,

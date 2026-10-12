@@ -3,7 +3,6 @@ import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { AvailableSlashCommand, ImageArg, ModelInfo } from "#lib/wire/protocol";
 import type {
-	AdvisorItem,
 	BashItem,
 	Block,
 	ChatItem,
@@ -13,6 +12,7 @@ import type {
 	state,
 } from "../../web/state";
 import type { UsageLike } from "../../web/usage/usage";
+import type { AdvisorItem } from "../../web/store/slices/advisor";
 import { FIXTURE_NOW } from "./session";
 import { rosterAppDaemons, rosterProjects } from "./roster";
 import { sessionModel } from "./overlays";

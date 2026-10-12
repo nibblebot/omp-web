@@ -1,5 +1,7 @@
 import { batch } from "solid-js";
 import { unwrap } from "solid-js/store";
+import { FEATURES } from "../web/features/manifest";
+import { setFeaturePreference } from "../web/features/preferences";
 import { cancelDangerConfirm } from "../web/prompt/danger-confirm";
 import { setState, state } from "../web/state";
 import { closeDownload } from "../web/store/downloads";
@@ -18,15 +20,18 @@ import type { StoreSeed } from "./registry";
 const pristine = structuredClone(unwrap(state));
 
 /**
- * Restore every top-level store field to its import-time value, and close the
+ * Restore every top-level store field to its import-time value, close the
  * self-mounting dialogs whose state lives in module signals outside the store
- * (danger confirm, download), so one story's open dialog never shows in the next.
+ * (danger confirm, download), and restore manifest-default feature
+ * preferences (persisted in localStorage, read by core UI such as the view
+ * switch), so one story's state never shows in the next.
  */
 export function resetStore(): void {
 	batch(() => {
 		setState(structuredClone(pristine));
 		cancelDangerConfirm();
 		closeDownload();
+		for (const feature of FEATURES) setFeaturePreference(feature.id, feature.defaultEnabled);
 	});
 }
 

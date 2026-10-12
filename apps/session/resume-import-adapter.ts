@@ -304,7 +304,7 @@ export interface ResumeListResult {
  * Picker listing: empties dropped (pins kept) via `filterSessionsForPicker`,
  * pinned-first via `sortPinnedFirst`, optional ID/prefix/title/cwd search.
  * Provenance: every row is a live local transcript (`scope: "local"`);
- * fleet-stored (read-only/unavailable) rows stay in the tx/api stored*
+ * fleet-stored (read-only/unavailable) rows stay in the store/fleet-api.ts stored
  * surface, which never wakes compute.
  */
 export async function listResumeCandidates(

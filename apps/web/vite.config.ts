@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import solidPlugin from "vite-plugin-solid";
+import { featureSizes } from "./build/feature-sizes";
 
 // Web root: this config lives at apps/web/vite.config.ts. Root is set
 // explicitly (vite defaults root to the invoking cwd, not the config dir),
@@ -31,7 +32,7 @@ const allowedHosts =
 
 export default defineConfig({
 	root: webRoot,
-	plugins: [solidPlugin()],
+	plugins: [solidPlugin(), featureSizes()],
 	server: {
 		port: 4713,
 		allowedHosts,

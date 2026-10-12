@@ -15,12 +15,12 @@
 // state.sessionId before applying). Main leaf is never moved client-side:
 // confirmPromoteBtw only reports the server's {cancelled, sessionFile}.
 //
-// WIRING NOTE (for the integrator): this module is intentionally NOT
-// registered in overlays/index or App. To mount the surface, render
-// BtwHistorySheet from components/sessions/BtwHistorySheet.tsx and call
-// rediscoverBtwHistory() on attach/ready (new connections re-list saved side
-// sessions) — state.ts owns the mux, so the re-list hook lives with the
-// attach settle, not here. Streaming turns poll btwList until the call
+// WIRING NOTE: the btw feature owns this surface. features/btw.tsx mounts
+// BtwHistorySheet (components/sessions/BtwHistorySheet.tsx) as the "btw-history"
+// modal. rediscoverBtwHistory() must run on attach/ready (new connections re-list
+// saved side sessions); state.ts owns the mux, so the re-list hook lives with the
+// attach settle, not here.
+// Streaming turns poll btwList until the call
 // settles: ephemeral_delta frames for history streamIds are dropped by the
 // state.ts mux guard today (it only routes the ephemeral panel's streamId),
 // so polling is the transport until P0 approves a mux relaxation.

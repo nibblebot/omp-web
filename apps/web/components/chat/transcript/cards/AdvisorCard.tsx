@@ -1,5 +1,6 @@
 import { createEffect, createSignal, For, on, Show, type Component } from "solid-js";
-import { state, type AdvisorItem } from "../../../../state";
+import type { AdvisorItem } from "../../../../store/slices/advisor";
+import { state } from "../../../../state";
 import { Card } from "../../../ui/Card";
 
 /** Notes shown while collapsed; matches the TUI advisor card (COLLAPSED_NOTES). */

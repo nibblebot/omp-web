@@ -1,7 +1,6 @@
 import { createSignal } from "solid-js";
 import { produce } from "solid-js/store";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AdvisorNote } from "@oh-my-pi/pi-tui/chat/messages";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { ImageArg } from "#lib/wire/protocol";
 import { scanImages } from "../text/images";
@@ -17,6 +16,9 @@ import {
 } from "../state";
 import { isReady } from "./session";
 import { call } from "./transport";
+import { advisorNotesOf } from "./slices/advisor";
+import { flushBtwEphemeral } from "./slices/btw";
+import { applyGoalUpdated } from "./slices/goals";
 
 /**
  * Chat/streaming domain (Phase 3 store facade split). Everything that mutates
@@ -107,28 +109,6 @@ export function truncateHead(s: string, max = 80): string {
 		i += c >= 0xd800 && c <= 0xdbff ? 2 : 1;
 	}
 	return s.slice(0, i);
-}
-
-/**
- * Notes of an advisor card message (`role: "custom"`, `customType: "advisor"`,
- * `details.notes`), or null for any other message. Mirrors the TUI's
- * ui-helpers branch: only `display` messages render, and a card with missing
- * details still renders (zero notes).
- */
-export function advisorNotesOf(message: unknown): AdvisorNote[] | null {
-	const m = message as {
-		role?: unknown;
-		customType?: unknown;
-		display?: unknown;
-		details?: { notes?: unknown };
-	};
-	if (m?.role !== "custom" || m.customType !== "advisor" || !m.display) return null;
-	const notes = m.details?.notes;
-	if (!Array.isArray(notes)) return [];
-	return notes.filter(
-		(n): n is AdvisorNote =>
-			n !== null && typeof n === "object" && typeof (n as AdvisorNote).note === "string",
-	);
 }
 
 /** Last settled assistant message's visible text (thinking excluded). */
@@ -369,14 +349,9 @@ function flushDeltas(): void {
 		pendingBashChunks.clear();
 	}
 	if (pendingEphemeral.size > 0) {
-		const streamId = state.btw?.streaming ? state.btw.streamId : undefined;
-		const text = streamId === undefined ? undefined : pendingEphemeral.get(streamId);
-		if (text !== undefined && streamId !== undefined) {
-			pendingEphemeral.delete(streamId);
-			setState("btw", "reply", (reply) => reply + text);
-		}
-		// Frames buffered for a superseded/closed stream never apply.
-		pendingEphemeral.clear();
+		flushBtwEphemeral(state.btw, pendingEphemeral, (text) =>
+			setState("btw", "reply", (reply) => reply + text),
+		);
 	}
 
 	// Use the same clock as drainDeadline, since rAF callback timestamps are not
@@ -665,17 +640,14 @@ export function applyEvent(e: AgentSessionEvent): void {
 		case "thinking_level_changed":
 			setState("thinkingLevel", e.thinkingLevel ?? undefined);
 			break;
-		case "goal_updated":
+		case "goal_updated": {
 			// The event carries the full GoalModeState when available; fall back
 			// to deriving a minimal active state from the goal payload.
-			if (e.state) setState("goalModeState", e.state);
-			else
-				setState(
-					"goalModeState",
-					e.goal ? { enabled: true, mode: "active", goal: e.goal } : undefined,
-				);
-			setState("goal", e.goal ? { objective: e.goal.objective } : null);
+			const next = applyGoalUpdated(e);
+			setState("goalModeState", next.goalModeState);
+			setState("goal", next.goal);
 			break;
+		}
 		case "auto_retry_start":
 			// Phase 9: live countdown badge in the status bar; notice stays.
 			setState("retryInfo", {

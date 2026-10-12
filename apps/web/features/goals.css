@@ -1,0 +1,36 @@
+/* Goals: status-bar goal badge and the /goal popover (GoalDialog). */
+.goal-badge {
+	cursor: pointer;
+}
+.goal-badge:hover {
+	background: var(--warning-bg);
+	border-color: var(--warning-border);
+}
+/* Goal popover. */
+.goal-empty .goal-actions {
+	margin-top: calc(var(--space-4) + var(--space-1));
+	justify-content: center;
+}
+.goal-empty {
+	color: var(--muted);
+	text-align: center;
+	padding: var(--space-5) 0;
+}
+.goal-objective {
+	font-size: 1rem;
+	color: var(--text);
+}
+.goal-budget {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.goal-set-input {
+	flex: 1;
+	min-width: 0;
+	padding: var(--space-2) var(--space-4);
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+}

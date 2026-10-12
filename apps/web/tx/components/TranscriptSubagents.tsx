@@ -1,5 +1,5 @@
 import { For, Show, createResource } from "solid-js";
-import { api } from "../api";
+import { api } from "../../store/fleet-api";
 import { formatBytes, timeAgo } from "../util/format";
 
 interface SubagentsProps {

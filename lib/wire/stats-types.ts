@@ -1,6 +1,6 @@
 /**
  * Wire contracts for the read-only transcripts/stats API (fleet/stats).
- * Server (fleet/stats/*) implements; client (src/tx/api.ts) consumes.
+ * Server (apps/fleet/stats-*.ts) implements; client (apps/web/store/fleet-api.ts) consumes.
  * Leaf module: no in-repo imports. Ported from the standalone
  * omp-transcripts.theme "session-viewer" app.
  */

@@ -8,7 +8,7 @@
  * clobber a toggle the user set by hand (audit Phase 3 finding).
  */
 import { createContext, createSignal, useContext } from "solid-js";
-import type { RawEntry } from "../../api";
+import type { RawEntry } from "../../../store/fleet-api";
 import { str } from "../../util/entries";
 
 export interface DetailsState {

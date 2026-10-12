@@ -1,6 +1,9 @@
 import type { Component } from "solid-js";
-import { setState, state } from "../../../state";
-import { InfoIcon, SettingsIcon } from "../../ui/icons";
+import { For } from "solid-js";
+import { Dynamic } from "solid-js/web";
+import { featureSidebarFooter } from "../../../features/registry";
+import { setState } from "../../../state";
+import { SettingsIcon } from "../../ui/icons";
 
 // ---------------------------------------------------------------------------
 // Sidebar footer: global chrome (debug panel, settings). In the Chat view
@@ -13,15 +16,9 @@ import { InfoIcon, SettingsIcon } from "../../ui/icons";
 
 export const SidebarFooter: Component = () => (
 	<div class="sidebar-foot">
-		<button
-			class="sidebar-icon-btn"
-			classList={{ active: state.modal === "debug" }}
-			onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
-			title="Debug, transport and fleet visibility"
-			aria-label="Debug, transport and fleet visibility"
-		>
-			<InfoIcon />
-		</button>
+		<For each={featureSidebarFooter()}>
+			{(slot) => (slot.debugButton ? <Dynamic component={slot.debugButton} /> : null)}
+		</For>
 		<button
 			class="sidebar-icon-btn"
 			onClick={() => setState("modal", "settings")}

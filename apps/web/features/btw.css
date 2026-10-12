@@ -1,0 +1,54 @@
+/* /btw side-panel sheet (Modal sheet variant). Fills the sheet;
+   the reply area scrolls internally. */
+.btw-sheet {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+}
+
+.btw-question {
+	background: var(--accent-dim);
+	border-radius: var(--r-xl);
+	padding: var(--space-4) var(--space-5);
+	white-space: pre-wrap;
+}
+.btw-reply {
+	flex: 1;
+	min-height: 60px;
+	overflow-y: auto;
+}
+.btw-cursor {
+	display: inline-block;
+	width: 8px;
+	height: 1em;
+	vertical-align: -0.15em;
+	margin-left: var(--space-1);
+	background: var(--accent);
+	animation: btw-blink 1s steps(2, start) infinite;
+}
+@keyframes btw-blink {
+	to {
+		visibility: hidden;
+	}
+}
+.btw-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-4);
+}
+.btw-abort,
+.btw-close {
+	background: var(--btn);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	color: var(--text);
+	font-size: var(--fs-md);
+	padding: var(--space-2) var(--space-5);
+	cursor: pointer;
+}
+.btw-abort:hover,
+.btw-close:hover {
+	background: var(--hover);
+}

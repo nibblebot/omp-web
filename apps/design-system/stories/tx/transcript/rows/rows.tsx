@@ -97,7 +97,7 @@ export default [
 				render: () => (
 					<RowHost>
 						<ToggleDetails entry={userEntry} purpose="demo" summary="tool arguments">
-							<pre>{'{ "path": "apps/web/tx/api.ts", "limit": 80 }'}</pre>
+							<pre>{'{ "path": "apps/web/store/fleet-api.ts", "limit": 80 }'}</pre>
 						</ToggleDetails>
 					</RowHost>
 				),
@@ -107,7 +107,7 @@ export default [
 				render: () => (
 					<RowHost initialExpanded>
 						<ToggleDetails entry={userEntry} purpose="demo" summary="tool arguments">
-							<pre>{'{ "path": "apps/web/tx/api.ts", "limit": 80 }'}</pre>
+							<pre>{'{ "path": "apps/web/store/fleet-api.ts", "limit": 80 }'}</pre>
 						</ToggleDetails>
 					</RowHost>
 				),

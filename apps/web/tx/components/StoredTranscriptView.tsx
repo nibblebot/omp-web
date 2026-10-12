@@ -14,8 +14,8 @@
  */
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import type { RawEntry } from "../api";
-import { api, ApiError } from "../api";
+import type { RawEntry } from "../../store/fleet-api";
+import { api, ApiError } from "../../store/fleet-api";
 import { createCollapseStore, RowStateCtx } from "./transcript/collapse";
 import { createPairingMaps } from "./transcript/pairing";
 import { TranscriptEntryRow } from "./transcript/rows/entry-row";

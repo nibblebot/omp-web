@@ -2,6 +2,8 @@ import { createEffect, createMemo, createSignal, type Accessor, type Setter } fr
 import { currentToken, fuzzyRank, type AcToken } from "../../../prompt/autocomplete";
 import { LOCAL_COMMANDS } from "../../../prompt/commands";
 import { listFiles, state } from "../../../state";
+import { featureCommandDetails } from "../../../features/registry";
+import { featureForCommand } from "../../../features/manifest";
 import type { AcItem } from "./AutocompletePopup";
 
 const LOCAL_DETAILS: Record<string, string> = {
@@ -20,22 +22,13 @@ const LOCAL_DETAILS: Record<string, string> = {
 	rename: "Rename this session (bare: agent auto-titles)",
 	compact: "Compact session context (/compact [soft|remote|snapcompact] [focus])",
 	model: "Model picker (or /model provider/id)",
+	live: "Unavailable in the browser",
 	move: "Unavailable for attached sessions",
 	wt: "Unavailable for attached sessions",
 	worktree: "Unavailable for attached sessions",
 	queue: "Queue a follow-up message",
-	goal: "Goal controls (/goal set|show|pause|resume|drop|budget)",
 	plan: "Toggle plan mode (/plan [prompt])",
-	btw: "Side question (/btw [question])",
-	mcp: "MCP servers (/mcp [add|list|remove|test])",
-	skills: "Skills (/skills [subcommand])",
-	todo: "Todo panel (/todo [subcommand])",
-	git: "Git review panel",
-	"plan-review": "Plan review panel",
-	annotations: "Annotations panel",
-	voice: "Voice controls",
 	compaction: "Context compaction controls",
-	"btw-history": "Browse BTW side-question history",
 	help: "Keyboard shortcuts",
 	hotkeys: "Keyboard shortcuts",
 	exit: "Close this tab",
@@ -113,12 +106,15 @@ export function usePromptAutocomplete(
 				apply: f.includes(" ") ? `@"${f}" ` : `@${f} `,
 			}));
 		}
-		const local = Object.keys(LOCAL_COMMANDS).map((name) => ({
-			name,
-			detail: LOCAL_DETAILS[name] ?? "web-local",
-		}));
+		const local = [
+			...Object.keys(LOCAL_COMMANDS).map((name) => ({
+				name,
+				detail: LOCAL_DETAILS[name] ?? "web-local",
+			})),
+			...featureCommandDetails().map(([name, detail]) => ({ name, detail })),
+		];
 		const remote = state.availableCommands
-			.filter((c) => !LOCAL_COMMANDS[c.name])
+			.filter((c) => !LOCAL_COMMANDS[c.name] && !featureForCommand(c.name))
 			.map((c) => ({ name: c.name, detail: c.description ?? c.input?.hint ?? "" }));
 		return [...local, ...remote]
 			.map((c) => ({ c, rank: fuzzyRank(t.query, c.name) }))

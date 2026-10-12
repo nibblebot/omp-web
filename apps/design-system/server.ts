@@ -26,7 +26,7 @@ async function build(): Promise<Bundle> {
 		conditions: ["browser", "solid"],
 		plugins: [solidPlugin, virtualModulesPlugin()],
 		// state.ts guards its dev-only `window.__ompState` handle on this.
-		define: { "import.meta.env.DEV": "true" },
+		define: { "import.meta.env.DEV": "true", "import.meta.env.BASE_URL": JSON.stringify("/") },
 		sourcemap: "inline",
 		minify: false,
 	});

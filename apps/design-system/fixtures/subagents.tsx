@@ -3,12 +3,8 @@ import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { type JSX, onMount } from "solid-js";
 import type { SubagentMessagesResult } from "#lib/wire/protocol";
 import { type SubagentInfo, setState, type state } from "../../web/state";
-import type {
-	AdvisorOverview,
-	WorkerRecord,
-	WorkerStatus,
-	WorkersState,
-} from "../../web/store/subagents";
+import type { AdvisorOverview } from "../../web/store/subagents-advisor";
+import type { WorkerRecord, WorkerStatus, WorkersState } from "../../web/store/subagents";
 import { workerKey } from "../../web/store/subagents";
 import { answerCalls, type CallHandlers } from "../daemon";
 

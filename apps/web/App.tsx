@@ -1,4 +1,5 @@
 import { createEffect, createSignal, onMount, Show, type Component } from "solid-js";
+import { Dynamic } from "solid-js/web";
 import { NoActiveSessionPane } from "./components/app/NoActiveSessionPane";
 import {
 	PromptBox,
@@ -19,11 +20,13 @@ import {
 	initAuth,
 	setState,
 	setTxSidebarVisible,
+	setView,
 	state,
 	toggleSidebar,
 } from "./state";
 import { initTheme } from "./prefs/theme";
-import { TranscriptBrowser } from "./tx/TranscriptBrowser";
+import { featureView } from "./features/registry";
+import { featurePreferences } from "./features/preferences";
 
 // Apply persisted theme/font-size before first render to avoid a dark flash.
 initTheme();
@@ -64,11 +67,11 @@ const ChatMode: Component = () => (
 );
 
 /**
- * Analysis mode: the transcript sidebar + detail pane. Keep-alive: the first
- * entry into Analysis mounts TranscriptBrowser; later Chat/Analysis swaps
- * only toggle its host's display, so the sidebar list, scroll, search,
- * project filter, and selected transcript all survive view switches. App
- * mounts it unconditionally so the sticky flag outlives Chat mode.
+ * Analysis mode: the transcript sidebar + detail pane, supplied by the
+ * analysis feature's `view` slot. Keep-alive: the first entry into Analysis
+ * mounts the view; later Chat/Analysis swaps only toggle its host's display,
+ * so the sidebar list, scroll, search, project filter, and selected transcript
+ * all survive view switches. Renders nothing while analysis is disabled.
  */
 const AnalysisMode: Component = () => {
 	const [opened, setOpened] = createSignal(false);
@@ -76,10 +79,12 @@ const AnalysisMode: Component = () => {
 		if (state.view === "analysis") setOpened(true);
 	});
 	return (
-		<Show when={opened()}>
-			<div class="tx-keepalive" classList={{ hidden: state.view !== "analysis" }}>
-				<TranscriptBrowser />
-			</div>
+		<Show when={opened() && featureView("analysis")}>
+			{(View) => (
+				<div class="tx-keepalive" classList={{ hidden: state.view !== "analysis" }}>
+					<Dynamic component={View()} />
+				</div>
+			)}
 		</Show>
 	);
 };
@@ -106,6 +111,11 @@ export const App: Component = () => {
 			e.preventDefault();
 			setState("modal", "history");
 		});
+	});
+	// Switching Analysis off in Settings hides the mode switch at once, so
+	// leave Analysis immediately rather than strand the user until reload.
+	createEffect(() => {
+		if (state.view === "analysis" && !featurePreferences().analysis) setView("chat");
 	});
 	return (
 		<div class="app">

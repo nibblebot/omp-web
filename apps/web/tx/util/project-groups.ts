@@ -1,4 +1,4 @@
-import type { SessionSummary } from "../api";
+import type { SessionSummary } from "../../store/fleet-api";
 
 /**
  * Partition a server-returned session list (already most-recent-first) into

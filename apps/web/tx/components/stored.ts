@@ -4,7 +4,7 @@
  * exist so the sidebar list, the detail header and the transcript-list
  * coverage chips describe the same store facts in one voice.
  */
-import type { StoredFileInfo, StoredWorkspaceProvenance } from "../api";
+import type { StoredFileInfo, StoredWorkspaceProvenance } from "../../store/fleet-api";
 
 const KIND_LABELS: Record<string, string> = {
 	main: "main",

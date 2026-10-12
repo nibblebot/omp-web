@@ -6,7 +6,7 @@ import type { SettingsSection } from "../../web/components/settings/SettingsNav"
 import type { BtwRecordView } from "../../web/store/btw-history";
 import type { BrowserUiRequest } from "../../web/store/browser-ui";
 import type { DownloadConsent, WebDownloadManifest } from "../../web/store/downloads";
-import type { McpServerEntry, PluginEntry, SkillEntry } from "../../web/store/integrations";
+import type { McpServerEntry, PluginEntry, SkillEntry } from "../../web/store/slices/integrations";
 import type { ModelPreset } from "../../web/store/models";
 import type { ForeignSessionPreview, ResumeCandidate } from "../../web/store/resume";
 import type { BrowserUiContribution } from "#lib/wire/browser-ui-contract";
@@ -14,12 +14,10 @@ import type {
 	ContextUsageBreakdown,
 	SessionStats,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
-import type { VoiceCapability } from "#lib/wire/voice";
 import type {
 	ModelInfo,
 	ModelRoleCatalogEntry,
 	SessionListEntry,
-	SessionScope,
 	SettingsItem,
 	SettingsModel,
 } from "#lib/wire/protocol";
@@ -642,7 +640,7 @@ export const browserUiRequestFailed: BrowserUiRequest = {
 };
 
 // ---------------------------------------------------------------------------
-// Sessions, stats, MCP results, and voice.
+// Sessions, stats, and MCP results.
 // ---------------------------------------------------------------------------
 
 /** SessionListEntry list: SessionPicker rows, a named session, an unnamed one, and an older session in another repo. */
@@ -736,21 +734,4 @@ export const mcpInspectionTools = {
 		"list_directory: List entries in a directory. Args: path (string)",
 		"search_files: Recursive filename search. Args: root (string), pattern (string)",
 	].join("\n"),
-};
-
-/** VoiceCapability: both speech-to-text and realtime voice are available. */
-export const voiceCapabilityReady: VoiceCapability = { sttAvailable: true, liveAvailable: true };
-
-/** VoiceCapability: dictation works but realtime voice is unavailable on this provider. */
-export const voiceCapabilityPartial: VoiceCapability = {
-	sttAvailable: true,
-	liveAvailable: false,
-	reason: "provider",
-};
-
-/** SessionScope: the attached session, the target of VoiceControls. */
-export const voiceScope: SessionScope = {
-	workspaceId: "ws_omp_web",
-	sessionId: "sess_09a41c",
-	generation: "gen_3",
 };

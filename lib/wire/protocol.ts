@@ -594,17 +594,7 @@ export type WebMethodName =
 	| "vibeRehydrate"
 	| "downloadManifest"
 	| "dumpSessionArchive"
-	| "exportDownload"
-	| "voiceCapability"
-	| "voiceDictationStart"
-	| "voiceDictationFrame"
-	| "voiceDictationCommit"
-	| "voiceDictationCancel"
-	| "voiceRealtimeStart"
-	| "voiceRealtimeFrame"
-	| "voiceRealtimeInterrupt"
-	| "voiceRealtimeMute"
-	| "voiceRealtimeStop";
+	| "exportDownload";
 
 // Client → server (POST /command bodies; one command per request, 202 accept).
 // Routing is by STREAM ATTACHMENT: on omp-session an /events stream is attached
@@ -759,28 +749,6 @@ export type SessionScopedFrame =
 	// Phase 11: live output of an in-flight /btw side question (id = the
 	// client's btw streamId); broadcast session-scoped like bash_chunk.
 	| { type: "ephemeral_delta"; id: number; text: string }
-	// G19 voice downlink: dictation interim/final text and realtime events ride
-	// the existing SSE stream (no new transport); the voice store ingests them.
-	| {
-			type: "voice_dictation_delta";
-			dictationId: string;
-			generation: string;
-			scope: SessionScope;
-			interim: string;
-			final: boolean;
-	  }
-	| {
-			type: "voice_realtime_event";
-			realtimeId: string;
-			generation: string;
-			scope: SessionScope;
-			phase: string;
-			turnId: number;
-			inputLevel?: number;
-			outputLevel?: number;
-			transcript?: { role: "user" | "assistant"; text: string; final: boolean };
-			audioBase64?: string;
-	  }
 	// Unicast answer to a "call" command.
 	| { type: "call_result"; id: string; ok: boolean; data?: unknown; error?: string }
 	| { type: "available_commands"; commands: AvailableSlashCommand[] }
@@ -1112,7 +1080,6 @@ export interface ServerCapabilities {
 	vibe?: Capability;
 	btwHistory?: Capability;
 	integrations?: Capability;
-	voice?: Capability;
 	downloads?: Capability;
 	resumeImport?: Capability;
 	[key: string]: Capability | BrowserUiCapabilities | undefined;

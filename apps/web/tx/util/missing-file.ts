@@ -1,4 +1,4 @@
-import type { SessionSummary } from "../api";
+import type { SessionSummary } from "../../store/fleet-api";
 
 /** Facts the session list has gathered about the current sessions request. */
 export interface MissingFileSnapshot {

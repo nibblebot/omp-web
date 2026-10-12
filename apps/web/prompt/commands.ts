@@ -1,8 +1,9 @@
 import type { ImageArg } from "#lib/wire/protocol";
 import { requestDangerConfirm } from "./danger-confirm";
+import { featureCommand } from "../features/registry";
+import { featureForCommand } from "../features/manifest";
 import {
 	addBashItem,
-	askBtw,
 	call,
 	pushCompaction,
 	pushNotice,
@@ -69,50 +70,6 @@ export function renameDispatch(
 export function handoffArgs(args: string): [string | undefined] {
 	const focus = args.trim();
 	return [focus || undefined];
-}
-
-/**
- * `/goal`. TUI-only in the SDK registry (builtin-modes.ts:376 `goal` carries
- * `handleTui` only, so ACP dispatch falls through to model text). The web
- * host therefore never forwards it: full TUI subcommand grammar below —
- * `set <objective>`, `show` (opens the Goal panel, the browser read surface),
- * `pause`, `resume`, `drop`, `budget <N|off>` (token budget via the goal
- * runtime), bare / `set` without objective / unknown opens the popover.
- */
-export function goalDispatch(args: string):
-	| { kind: "popover" }
-	| {
-			kind: "call";
-			method: "goalCreate" | "goalPause" | "goalResume" | "goalDrop";
-			args: unknown[];
-	  } {
-	const tokens = args.trim().split(/\s+/).filter(Boolean);
-	if (tokens.length === 0) return { kind: "popover" };
-	const [sub, ...rest] = tokens;
-	switch (sub) {
-		case "set":
-			if (rest.length === 0) return { kind: "popover" };
-			return { kind: "call", method: "goalCreate", args: [rest.join(" ")] };
-		case "show":
-			// The Goal panel renders live state; no SDK call needed.
-			return { kind: "popover" };
-		case "pause":
-			if (rest.length > 0) return { kind: "popover" };
-			return { kind: "call", method: "goalPause", args: [] };
-		case "resume":
-			if (rest.length > 0) return { kind: "popover" };
-			return { kind: "call", method: "goalResume", args: [] };
-		case "drop":
-			if (rest.length > 0) return { kind: "popover" };
-			return { kind: "call", method: "goalDrop", args: [] };
-		case "budget":
-			// Token-budget adjustment belongs to the P4 goal service
-			// (goalRuntime.onBudgetMutated); until its wire row lands, route
-			// to the panel instead of dropping the arg or prompting.
-			return { kind: "popover" };
-		default:
-			return { kind: "popover" };
-	}
 }
 
 /**
@@ -298,24 +255,6 @@ function dumpRoute(args: string): void {
 }
 
 /**
- * `/goal` full TUI grammar: set/show/pause/resume/drop/budget. `show` opens
- * the Goal panel (the browser's read surface for goal details); `budget N`
- * and `budget off` adjust the token budget via the goal runtime; bare,
- * unknown, or `set` without an objective opens the popover. Never prompts.
- */
-export function goalRouteArgs(args: string): void {
-	const d = goalDispatch(args);
-	if (d.kind === "popover") setState("modal", "goal");
-	else void call(d.method, d.args).catch(showError);
-}
-
-/** `/btw [question]`: bare opens the panel; a question starts a side turn. Surrounding blank lines are trimmed. */
-export function btwDispatch(args: string): { kind: "panel" } | { kind: "ask"; question: string } {
-	const q = args.trim();
-	return q ? { kind: "ask", question: q } : { kind: "panel" };
-}
-
-/**
  * P0.4: cwd-mutating workspace commands are refused explicitly while the
  * daemon/fleet assumes an immutable checkout. `/move` and `/wt` would
  * desynchronize the roster, session files, and artifact roots; refusing with
@@ -372,7 +311,7 @@ function dumpSession(): void {
 }
 
 /** Bare `/name` opens its dialog; arguments follow the SDK's subcommand grammar, so they are forwarded to the agent verbatim. */
-function openOrForward(modal: ModalName, name: string): (args: string) => void {
+export function openOrForward(modal: ModalName, name: string): (args: string) => void {
 	return (args) => {
 		const text = args.trim();
 		if (text) void call("prompt", [`/${name} ${text}`]).catch(showError);
@@ -410,13 +349,6 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	resume: resumeRoute,
 	tree: () => setState("modal", "branch"),
 	branch: () => setState("modal", "branch"),
-	// Phase 11: /btw <question> asks a side-channel question in the panel
-	// (never the transcript); bare /btw opens the panel empty.
-	btw: (args) => {
-		const d = btwDispatch(args);
-		if (d.kind === "panel") askBtw("");
-		else askBtw(d.question);
-	},
 	export: exportRoute,
 	retry: (args) => {
 		if (args.trim()) {
@@ -498,20 +430,9 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 			d.method === "setSessionName" ? call("setSessionName", [d.title]) : call("prompt", [d.text])
 		).catch(showError);
 	},
-	// TUI-only in the SDK registry, so web-local, never prompt passthrough
-	// (see goalDispatch/planDispatch).
-	goal: goalRouteArgs,
 	plan: planToggle,
 	// Modal openers: bare names open the dialog (see openOrForward/openModal).
-	mcp: openOrForward("mcp", "mcp"),
-	skills: openOrForward("skills", "skills"),
-	todo: openOrForward("todos", "todo"),
-	git: openModal("git"),
-	"plan-review": openModal("plan-review"),
-	annotations: openModal("annotations"),
-	voice: openModal("voice"),
 	compaction: openModal("compaction"),
-	"btw-history": openModal("btw-history"),
 	queue: (args) => {
 		const msg = args.trim();
 		if (!msg) return;
@@ -519,6 +440,8 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	},
 	compact: compactRoute,
 	model: modelRoute,
+	live: () =>
+		pushNotice("error", "/live is terminal-only: realtime voice runs in the omp terminal UI."),
 	move: () => refuseWorkspaceRoot("move"),
 	wt: () => refuseWorkspaceRoot("wt"),
 	worktree: () => refuseWorkspaceRoot("wt"),
@@ -573,6 +496,19 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			const handler = LOCAL_COMMANDS[parsed.name];
 			if (handler) {
 				handler(parsed.args);
+				return;
+			}
+			const owned = featureCommand(parsed.name);
+			if (owned) {
+				owned.command.run(parsed.args);
+				return;
+			}
+			const off = featureForCommand(parsed.name);
+			if (off) {
+				pushNotice(
+					"info",
+					`/${parsed.name} is part of ${off.label}, which is disabled. Enable it in Settings > Features.`,
+				);
 				return;
 			}
 			// Agent-side builtin/skill/extension/file commands handle it. Their

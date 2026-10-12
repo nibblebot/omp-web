@@ -1,5 +1,6 @@
 import { Show, type Component } from "solid-js";
-import { closeBtw, state } from "../../state";
+import { state } from "../../state";
+import { closeBtw } from "../../store/btw";
 import { Markdown } from "../ui/Markdown";
 import { Modal } from "../ui/Modal";
 

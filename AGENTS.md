@@ -32,13 +32,13 @@ Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Dev-spawn
 | `apps/cli/` | Installed entrypoint, update, collab CLI |
 | `apps/session/` | Session daemon, dispatch, SSE delivery, callback/log mirroring |
 | `apps/fleet/` | Registry, supervision, callback pair (session dial-out), browser edge, control API, stats, clone lifecycle |
-| `apps/web/` | `state.ts` facade, actions in `store/`, feature logic (`chat/`, `prompt/`, `subagents/`, `fleet-ui/`, ...), `ModalHost.tsx`, presentational `components/` |
+| `apps/web/` | `state.ts` facade, actions in `store/`, feature logic (`chat/`, `prompt/`, `subagents/`, `fleet-ui/`, ...), `ModalHost.tsx`, presentational `components/`, optional feature entries in `features/` (see Frontend invariants) |
 | `apps/design-system/` | Component showcase: Bun server + Solid transform, App drill-down nav from the render graph, stories, typed fixtures, fixture HTTP routes |
 | `lib/` | Closed wire/runtime/session-files/sdk-settings/platform/testkit libraries |
 | `apps/*/test/`, `lib/*/test/`, `scripts/test/`, `e2e/` | Owner-local tests and cross-app/distribution checks |
 | `scripts/`, `docs/release.md` | Tooling and release contracts |
 
-Production source is flat in cli/fleet/session; preserve the web feature hierarchy. `apps/web/components/` groups by feature, matching `store/` modules: `ui/` (domain-free primitives, no `state.ts` import), `app/` (shell widgets), `chat/{status,transcript,tools,composer,controls}`, `requests/` (agent-to-user dialogs that self-mount on store state), `sessions/`, `models/`, `settings/{integrations}`, `usage/`, `fleet/{sidebar,daemon,workspaces}`, `subagents/`, `review/`; `tx/` stays a self-contained feature. A component used by exactly one parent lives in that parent's folder. Logic and types stay out of `components/`.
+Production source is flat in cli/fleet/session; preserve the web feature hierarchy. `apps/web/components/` groups by feature, matching `store/` modules: `ui/` (domain-free primitives, no `state.ts` import), `app/` (shell widgets), `chat/{status,transcript,tools,composer,controls}`, `requests/` (agent-to-user dialogs that self-mount on store state), `sessions/`, `models/`, `settings/{integrations}`, `usage/`, `fleet/{sidebar,daemon,workspaces}`, `subagents/`, `review/`. `apps/web/tx/` (Analysis) stays a self-contained feature, wired by `features/analysis.tsx`. A component used by exactly one parent lives in that parent's folder. Logic and types stay out of `components/`.
 
 Component names say what the user sees, one name per concept, no abbreviations; a file holding one component is named after it. Suffixes: `*Dialog` (centered `Modal`), `*Sheet` (`Modal variant="sheet"`, right side sheet), `*Lightbox` (`Modal variant="lightbox"`, full-bleed media), `*Picker` (choose one item, in a `Modal` or inline), `*Panel` (shell-less review/workspace body; its host supplies the shell), `*Tab` (hub tab body), `*Card` (transcript item), `*ToolCard` (tool call renderer), `*Row` (list row), `*Bar` (strip above the composer). `Modal` names only the `components/ui/Modal.tsx` primitive; no other component ends in `Modal`.
 
@@ -88,6 +88,9 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only). Browser to fleet: `G
 - Mutate streaming blocks in place; replacing objects remounts Solid `<For>` and breaks scrolling/fades.
 - Preserve stale-session guards and replay dedup. Session switches reject pending calls/reset IDs without clearing fleet-scoped data.
 - Preserve global CSS import order and shared design tokens; theme palettes override variables only. No CSS modules; avoid inline styles.
+- Optional features are declared in `features/manifest.ts` and reach the page only through `features/registry.ts` slots: modal, overlay, command, view, status bar, sidebar footer, subagent tab, transcript card. Each `features/<id>.{ts,tsx}` default-exports a `FeatureModule`; the registry loads it only through `import("./<id>")`, so a disabled feature's JS and CSS are never fetched.
+- Core code never statically imports a feature entry or a module only that feature owns; type-only imports are fine. Pure shapes and factories that core reads live in `store/slices/<id>.ts`; feature actions stay in the feature's `store/` module.
+- A slash command owned by a disabled feature shows a local notice and is never forwarded to the agent (`prompt/commands.ts`). Analysis routes (`omp.view`, legacy `transcripts`, `#/s/…`, `#/stored/…`) fall back to Chat when Analysis is disabled.
 
 ### Design system (`apps/design-system/`)
 

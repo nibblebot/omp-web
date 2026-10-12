@@ -1,5 +1,5 @@
 import { Show, createResource, createSignal } from "solid-js";
-import { api } from "../api";
+import { api } from "../../store/fleet-api";
 import { basename, folderOf, formatCompact, formatMs } from "../util/format";
 import { TranscriptOverview } from "./TranscriptOverview";
 import { TranscriptView } from "./transcript";

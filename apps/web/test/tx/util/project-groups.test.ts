@@ -6,7 +6,7 @@
  * group (uniform list look).
  */
 import { describe, expect, test } from "bun:test";
-import type { SessionSummary } from "../../../tx/api";
+import type { SessionSummary } from "../../../store/fleet-api";
 import { groupSessionsByProject } from "../../../tx/util/project-groups";
 
 function session(

@@ -3,6 +3,7 @@ import { filterSettings, type SettingsMatch } from "../../prefs/settings";
 import { fleetSettingsActive, refreshSettings, state } from "../../state";
 import { XIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
+import { FeaturesSettings } from "./FeaturesSettings";
 import { SettingsNav, SettingsSectionPicker } from "./SettingsNav";
 import { SettingsRow } from "./SettingsRow";
 import { WebUiSettings } from "./WebUiSettings";
@@ -34,11 +35,14 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	});
 
 	const model = () => state.settingsModel;
-	// Client tabs: "Web UI" first, then one tab per non-appearance schema tab
-	// (schema order). The tab bar only renders once a model exists; with no
-	// model it's just "Web UI".
+	// Client tabs: "Web UI" and "Features" first, then one tab per
+	// non-appearance schema tab (schema order). Without a model only the two
+	// client tabs exist.
 	const clientTabs = () => {
-		const tabs = [{ id: "web-ui", label: "Web UI" }];
+		const tabs = [
+			{ id: "web-ui", label: "Web UI" },
+			{ id: "features", label: "Features" },
+		];
 		const m = model();
 		if (m) {
 			for (const tab of m.tabs) {
@@ -82,6 +86,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		setQuery("");
 	};
 	const searching = () => query().trim() !== "";
+	const onFeatures = () => activeTabId() === "features";
 	const results = () => {
 		const m = model();
 		return m && searching() ? filterSettings(m, query()) : [];
@@ -123,31 +128,30 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 					<XIcon />
 				</button>
 			</div>
-			<Show when={model()}>
-				{/* Narrow-layout navigation (CSS-gated to ≤720px): a section
-				    picker instead of the wide layout's nav rail. */}
-				<SettingsSectionPicker
+			{/* Narrow-layout navigation (CSS-gated to ≤720px): a section
+			    picker instead of the wide layout's nav rail. */}
+			<SettingsSectionPicker
+				sections={clientTabs()}
+				activeTabId={activeTabId()}
+				onSelectTab={selectTab}
+			/>
+			<div class="settings-content">
+				<SettingsNav
 					sections={clientTabs()}
 					activeTabId={activeTabId()}
+					subsections={tabSubsections(activeTabId())}
+					activeGroup={activeGroup()}
 					onSelectTab={selectTab}
+					onSelectGroup={(name) => {
+						setActiveGroup(name);
+						setQuery("");
+					}}
 				/>
-			</Show>
-			<div class="settings-content">
-				<Show when={model()}>
-					<SettingsNav
-						sections={clientTabs()}
-						activeTabId={activeTabId()}
-						subsections={tabSubsections(activeTabId())}
-						activeGroup={activeGroup()}
-						onSelectTab={selectTab}
-						onSelectGroup={(name) => {
-							setActiveGroup(name);
-							setQuery("");
-						}}
-					/>
-				</Show>
 				<div class="settings-body">
-					<Show when={model()}>
+					<Show when={onFeatures() && !searching()}>
+						<FeaturesSettings />
+					</Show>
+					<Show when={model() && !onFeatures()}>
 						<div class="settings-note">
 							{model()?.target === "future-sessions" || fleetSettingsActive()
 								? "Future sessions: changes save to config.yml. Existing sessions are unchanged."
@@ -155,11 +159,14 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 							Each setting shows whether it applies immediately, to new sessions, or after restart.
 						</div>
 					</Show>
-					<Show when={state.settingsLoading && !model()}>
+					<Show when={state.settingsLoading && !model() && !onFeatures()}>
 						<div class="settings-note">Loading settings…</div>
 					</Show>
-					<Show when={!state.settingsLoading && !model()}>
+					<Show when={!state.settingsLoading && !model() && !onFeatures()}>
 						<div class="settings-note">Settings unavailable.</div>
+					</Show>
+					<Show when={searching()}>
+						<FeaturesSettings query={query()} />
 					</Show>
 					<Show when={searching() && model()}>
 						<For each={resultsByTab()}>

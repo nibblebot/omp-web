@@ -8,8 +8,8 @@ import { useClickableRow } from "../ui/PickerRow";
 import { SubagentControls } from "./SubagentControls";
 import { latestSubagent, SubagentRow, subagentName } from "./SubagentRow";
 import { SubagentFocus } from "./SubagentFocus";
-import { AdvisorPanel } from "./AdvisorPanel";
-import { GoalsAndLoopsTab, VibeTab } from "./GoalLoopPanel";
+import { Dynamic } from "solid-js/web";
+import { featureSubagentTabs } from "../../features/registry";
 import {
 	TOOL_AGENTS,
 	getWorkerPin,
@@ -21,7 +21,7 @@ import {
 	workerParentId,
 } from "../../subagents/worker-scope";
 
-type HubTab = "workers" | "advisor" | "goals" | "vibe";
+type HubTab = string;
 
 interface TreeNode {
 	id: string;
@@ -40,7 +40,7 @@ interface TreeNode {
  *
  * Data: reads the `state.subagents` mirror only (initial list comes from the
  * attach-primed `getSubagents`; no call() on mount here). Tabs:
- * Workers | Advisor | Goals & Loops | Vibe (role=tablist, buttons suffice).
+ * Workers, then one tab per active feature (role=tablist, buttons suffice).
  */
 export const SubagentsDialog: Component<{
 	onClose: () => void;
@@ -191,25 +191,16 @@ export const SubagentsDialog: Component<{
 	return (
 		<Modal title={`Subagents (${subs().length})`} class="subagents-dialog" onClose={props.onClose}>
 			<div class="subagents-dialog-tabs" role="tablist" aria-label="Subagent hub tabs">
-				<For
-					each={
-						[
-							["workers", "Workers"],
-							["advisor", "Advisor"],
-							["goals", "Goals & Loops"],
-							["vibe", "Vibe"],
-						] as const
-					}
-				>
-					{([id, label]) => (
+				<For each={[{ id: "workers", label: "Workers" }, ...featureSubagentTabs()]}>
+					{(entry) => (
 						<button
 							type="button"
 							role="tab"
 							class="subagents-dialog-tab"
-							aria-selected={tab() === id}
-							onClick={() => setTab(id)}
+							aria-selected={tab() === entry.id}
+							onClick={() => setTab(entry.id)}
 						>
-							{label}
+							{entry.label}
 						</button>
 					)}
 				</For>
@@ -324,15 +315,13 @@ export const SubagentsDialog: Component<{
 					)}
 				</Show>
 			</Show>
-			<Show when={tab() === "advisor"}>
-				<AdvisorPanel />
-			</Show>
-			<Show when={tab() === "goals"}>
-				<GoalsAndLoopsTab />
-			</Show>
-			<Show when={tab() === "vibe"}>
-				<VibeTab />
-			</Show>
+			<For each={featureSubagentTabs()}>
+				{(feature) => (
+					<Show when={tab() === feature.id}>
+						<Dynamic component={feature.panel} />
+					</Show>
+				)}
+			</For>
 		</Modal>
 	);
 };

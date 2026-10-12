@@ -2,7 +2,7 @@
  * Row dispatch: entry type → renderer. Keeps all original row types working,
  * now fed by the shared pairing maps from transcript/pairing.ts.
  */
-import type { RawEntry } from "../../../api";
+import type { RawEntry } from "../../../../store/fleet-api";
 import {
 	labelOf,
 	messageRole,

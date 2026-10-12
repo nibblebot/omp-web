@@ -1,5 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
-import { api, type SessionStats } from "../api";
+import { api, type SessionStats } from "../../store/fleet-api";
 import { formatCompact, formatCost, formatDateTime, formatMs } from "../util/format";
 
 interface AnalyticsProps {

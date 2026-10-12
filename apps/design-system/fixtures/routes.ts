@@ -1,5 +1,6 @@
 import type { SettingsModel } from "#lib/wire/protocol";
 import type { FleetDebug } from "../../web/fleet-ui/fleet-debug";
+import type { FeatureSizeManifest } from "../../web/features/sizes";
 import {
 	entriesFor,
 	health,
@@ -18,7 +19,7 @@ import { rosterFsBrowse } from "./roster-routes";
 import { answerCommand, eventsResponse } from "./command-bus";
 
 /**
- * Fixture HTTP routes. Components fetch fleet endpoints at runtime (tx/api.ts,
+ * Fixture HTTP routes. Components fetch fleet endpoints at runtime (store/fleet-api.ts,
  * store/settings.ts, store/transport.ts, store/auth.ts); the design server
  * answers them from here, before its 404 stub. Add a route by appending to
  * `fixtureRoutes`:
@@ -132,8 +133,38 @@ const fleetDebug: FleetDebug = {
 	],
 };
 
+/** Fixture build sizes for Settings > Features. Mirrors the production manifest shape. */
+const featureSizes: FeatureSizeManifest = {
+	version: 1,
+	chunks: {
+		"assets/index-fixture.js": { bytes: 512000, gzip: 160000 },
+		"assets/index-fixture.css": { bytes: 98000, gzip: 17000 },
+		"assets/analysis-fixture.js": { bytes: 88000, gzip: 26000 },
+		"assets/shared-fixture.js": { bytes: 42000, gzip: 13000 },
+		"assets/goals-fixture.js": { bytes: 61000, gzip: 18000 },
+		"assets/review-fixture.js": { bytes: 120000, gzip: 34000 },
+		"assets/integrations-fixture.js": { bytes: 30000, gzip: 9000 },
+		"assets/btw-fixture.js": { bytes: 12000, gzip: 4000 },
+		"assets/advisor-fixture.js": { bytes: 22000, gzip: 7000 },
+		"assets/debug-fixture.js": { bytes: 18000, gzip: 6000 },
+	},
+	core: ["assets/index-fixture.js", "assets/index-fixture.css"],
+	features: {
+		analysis: ["assets/analysis-fixture.js", "assets/shared-fixture.js"],
+		goals: ["assets/goals-fixture.js", "assets/shared-fixture.js"],
+		review: ["assets/review-fixture.js"],
+		integrations: ["assets/integrations-fixture.js"],
+		btw: ["assets/btw-fixture.js"],
+		advisor: ["assets/advisor-fixture.js"],
+		debug: ["assets/debug-fixture.js"],
+	},
+};
+
+/** Set `available = false` to answer /feature-sizes.json with 404 (a dev build). */
+export const featureSizesFixture = { available: true };
+
 export const fixtureRoutes: FixtureRoute[] = [
-	// --- tx/api.ts: /ctl/stats ---
+	// --- store/fleet-api.ts: /ctl/stats ---
 	{ method: "GET", path: "/ctl/stats/health", respond: () => health },
 	{
 		method: "GET",
@@ -174,7 +205,7 @@ export const fixtureRoutes: FixtureRoute[] = [
 	},
 	{ method: "POST", path: "/ctl/stats/sync", respond: () => syncResult },
 
-	// --- tx/api.ts: /ctl/stored (fleet log store) ---
+	// --- store/fleet-api.ts: /ctl/stored (fleet log store) ---
 	{
 		method: "GET",
 		path: "/ctl/stored/workspaces",
@@ -267,6 +298,12 @@ export const fixtureRoutes: FixtureRoute[] = [
 		method: "GET",
 		path: "/events",
 		respond: () => eventsResponse(),
+	},
+	{
+		method: "GET",
+		path: "/feature-sizes.json",
+		respond: () =>
+			featureSizesFixture.available ? featureSizes : unavailable("No feature sizes in this build."),
 	},
 ];
 

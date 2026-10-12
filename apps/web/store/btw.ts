@@ -46,3 +46,9 @@ export function closeBtw(): void {
 		void call("abortEphemeral", [], 5_000, current.streamId).catch(() => {});
 	}
 }
+
+/** `/btw [question]`: bare opens the panel; a question starts a side turn. Surrounding blank lines are trimmed. */
+export function btwDispatch(args: string): { kind: "panel" } | { kind: "ask"; question: string } {
+	const q = args.trim();
+	return q ? { kind: "ask", question: q } : { kind: "panel" };
+}

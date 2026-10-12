@@ -19,7 +19,7 @@
 // apps/fleet/download-policy.ts): traversal/cross-workspace -> forbidden,
 // stale/disconnect -> retryable/unavailable, 64 MiB cap -> explicit cap
 // message. Text downloads offer clipboard copy with permission handling.
-// Stored lineage uses the read-only tx/api.ts stored* routes and never wakes
+// Stored lineage uses the read-only store/fleet-api.ts stored* routes and never wakes
 // compute; missing blobs render explicit unavailable.
 //
 // PROPOSED wire for P0 (OMP_PROTO stays 2, additive-only):

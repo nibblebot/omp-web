@@ -1,7 +1,9 @@
-import { createEffect, createSignal, onCleanup, Show, type Component } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show, type Component } from "solid-js";
+import { Dynamic } from "solid-js/web";
 import { planToggle } from "../../../prompt/commands";
+import { featureStatusBar } from "../../../features/registry";
 import { setState, state } from "../../../state";
-import { InfoIcon, SettingsIcon } from "../../ui/icons";
+import { SettingsIcon } from "../../ui/icons";
 import { StatusSegment } from "./StatusSegment";
 
 // Phase 9: live auto-retry countdown ("retry 2/5 · 3.2s"). Re-renders on a
@@ -38,17 +40,9 @@ export const StatusBar: Component = () => {
 			<Show when={state.compacting}>
 				<span class="segment badge">compacting…</span>
 			</Show>
-			<Show when={state.goal}>
-				{(g) => (
-					<StatusSegment
-						class="badge goal-badge"
-						title={g().objective}
-						onClick={() => setState("modal", "goal")}
-					>
-						goal: {g().objective.slice(0, 20)}
-					</StatusSegment>
-				)}
-			</Show>
+			<For each={featureStatusBar()}>
+				{(slot) => (slot.goalBadge ? <Dynamic component={slot.goalBadge} /> : null)}
+			</For>
 			<Show when={state.planModeEnabled}>
 				<StatusSegment
 					class="badge plan-badge"
@@ -73,15 +67,10 @@ export const StatusBar: Component = () => {
 			{/* Debug/settings segments live in the sidebar footer during Chat;
 			    keep them in the header in the Analysis view, where no sidebar
 			    footer renders. */}
+			<For each={featureStatusBar()}>
+				{(slot) => (slot.debugButton ? <Dynamic component={slot.debugButton} /> : null)}
+			</For>
 			<Show when={state.view !== "chat"}>
-				<StatusSegment
-					active={state.modal === "debug"}
-					onClick={() => setState("modal", state.modal === "debug" ? null : "debug")}
-					title="Debug, transport and fleet visibility"
-					ariaLabel="Debug, transport and fleet visibility"
-				>
-					<InfoIcon />
-				</StatusSegment>
 				<StatusSegment
 					onClick={() => setState("modal", "settings")}
 					title="Settings"

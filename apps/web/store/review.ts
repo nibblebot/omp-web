@@ -7,73 +7,10 @@ import type {
 	TodoBoardDto,
 	WebMethodName,
 } from "#lib/wire/protocol";
+import type { GitReviewDiff, TodoReviewOp } from "./slices/review";
 import { state, setState } from "../state";
 import { call } from "./transport";
 
-export interface GitReviewDiff {
-	path: string;
-	area: "unstaged" | "staged" | "commit";
-	oldText?: string;
-	newText?: string;
-	binary: boolean;
-	tooLarge: boolean;
-	fingerprint: string;
-	patch?: string;
-	truncated?: boolean;
-	hunks: { index: number; header: string; text: string }[];
-}
-export interface TodoReviewOp {
-	op: string;
-	phase?: string;
-	task?: string;
-	items?: string[];
-	list?: { phase: string; items: string[] }[];
-	[key: string]: unknown;
-}
-export interface ReviewState {
-	gitStatus: GitStatusDto | null;
-	gitLoading: boolean;
-	gitError: string | null;
-	gitSelection: string[];
-	selectedHunks: number[];
-	fileDiff: GitReviewDiff | null;
-	planReview: PlanReviewDto | null;
-	planLoading: boolean;
-	planError: string | null;
-	annotations: ReviewAnnotationDto[];
-	annotationsLoading: boolean;
-	annotationsError: string | null;
-	composerInsert: string | null;
-	todoBoard: TodoBoardDto | null;
-	todoLoading: boolean;
-	todoError: string | null;
-	todoConflict: boolean;
-	todoDraft: string;
-	selectedTodo: { phase: number; task: number } | null;
-}
-export function createReviewState(): ReviewState {
-	return {
-		gitStatus: null,
-		gitLoading: false,
-		gitError: null,
-		gitSelection: [],
-		selectedHunks: [],
-		fileDiff: null,
-		planReview: null,
-		planLoading: false,
-		planError: null,
-		annotations: [],
-		annotationsLoading: false,
-		annotationsError: null,
-		composerInsert: null,
-		todoBoard: null,
-		todoLoading: false,
-		todoError: null,
-		todoConflict: false,
-		todoDraft: "",
-		selectedTodo: null,
-	};
-}
 export const reviewCaps = (): ServerCapabilities => state.capabilities ?? {};
 export const setReviewCaps = (caps: ServerCapabilities): void => {
 	setState("capabilities", caps);
@@ -118,11 +55,6 @@ const message = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 const stale = (error: unknown): boolean =>
 	/stale|revision|fingerprint|version|conflict/i.test(message(error));
-let generation = 0;
-export function resetReview(): void {
-	generation++;
-	setState("review", createReviewState());
-}
 async function run<T>(
 	domain: "git" | "plan" | "annotations" | "todo",
 	capability: "git" | "planReview" | "review" | "todos",
@@ -130,13 +62,13 @@ async function run<T>(
 	onStale?: () => Promise<unknown>,
 ): Promise<T | undefined> {
 	if (!reviewAvailable(capability) || state.review[`${domain}Loading`]) return;
-	const epoch = generation;
+	const epoch = state.review.generation;
 	setState("review", `${domain}Loading`, true);
 	setState("review", `${domain}Error`, null);
 	try {
 		return await task();
 	} catch (error) {
-		if (epoch !== generation) return;
+		if (epoch !== state.review.generation) return;
 		if (stale(error)) {
 			if (domain === "todo") setState("review", "todoConflict", true);
 			if (onStale) {
@@ -150,13 +82,13 @@ async function run<T>(
 		setState("review", `${domain}Error`, message(error));
 		return undefined;
 	} finally {
-		if (epoch === generation) setState("review", `${domain}Loading`, false);
+		if (epoch === state.review.generation) setState("review", `${domain}Loading`, false);
 	}
 }
 async function getGit(): Promise<void> {
-	const epoch = generation;
+	const epoch = state.review.generation;
 	const snapshot = await rpc<GitStatusDto>("gitStatus");
-	if (epoch !== generation) return;
+	if (epoch !== state.review.generation) return;
 	setState("review", "gitStatus", snapshot);
 	const paths = new Set([...snapshot.staged, ...snapshot.unstaged].map((row) => row.path));
 	setState("review", "gitSelection", (previous) => previous.filter((path) => paths.has(path)));
@@ -186,9 +118,9 @@ async function mutateGit(
 		"git",
 		"git",
 		async () => {
-			const epoch = generation;
+			const epoch = state.review.generation;
 			await rpc(method, { fingerprint: snapshot.indexFingerprint, ...args });
-			if (epoch !== generation) return;
+			if (epoch !== state.review.generation) return;
 			await getGit();
 			return true;
 		},
@@ -207,16 +139,16 @@ export const commitStaged = (text: string) =>
 	text.trim() ? mutateGit("gitCommit", { message: text }) : Promise.resolve(undefined);
 export const loadFileDiff = (path: string, area: GitReviewDiff["area"] = "unstaged") =>
 	run("git", "git", async () => {
-		const epoch = generation;
+		const epoch = state.review.generation;
 		const result = await rpc<Omit<GitReviewDiff, "path" | "area">>("gitFileDiff", { path, area });
-		if (epoch !== generation) return;
+		if (epoch !== state.review.generation) return;
 		setState("review", "fileDiff", { ...result, path, area });
 		setState("review", "selectedHunks", []);
 	});
 async function getPlan(): Promise<void> {
-	const epoch = generation;
+	const epoch = state.review.generation;
 	const value = await rpc<PlanReviewDto | null>("planGet");
-	if (epoch === generation) setState("review", "planReview", value);
+	if (epoch === state.review.generation) setState("review", "planReview", value);
 }
 export const refreshPlan = () => run("plan", "planReview", getPlan);
 async function mutatePlan(method: string, extra: Record<string, unknown> = {}) {
@@ -226,9 +158,9 @@ async function mutatePlan(method: string, extra: Record<string, unknown> = {}) {
 		"plan",
 		"planReview",
 		async () => {
-			const epoch = generation;
+			const epoch = state.review.generation;
 			await rpc(method, { reviewId: snapshot.reviewId, version: snapshot.version, ...extra });
-			if (epoch !== generation) return;
+			if (epoch !== state.review.generation) return;
 			await getPlan();
 			return true;
 		},
@@ -243,9 +175,9 @@ export const decidePlan = (
 export const reopenPlan = () => mutatePlan("planReopen");
 export const cancelPlan = () => mutatePlan("planCancel");
 async function getAnnotations(): Promise<void> {
-	const epoch = generation;
+	const epoch = state.review.generation;
 	const value = await rpc<ReviewAnnotationDto[]>("annotationList");
-	if (epoch === generation) setState("review", "annotations", value);
+	if (epoch === state.review.generation) setState("review", "annotations", value);
 }
 export const refreshAnnotations = () => run("annotations", "review", getAnnotations);
 async function mutateAnnotation(method: string, args: Record<string, unknown>) {
@@ -253,9 +185,9 @@ async function mutateAnnotation(method: string, args: Record<string, unknown>) {
 		"annotations",
 		"review",
 		async () => {
-			const epoch = generation;
+			const epoch = state.review.generation;
 			await rpc(method, args);
-			if (epoch !== generation) return;
+			if (epoch !== state.review.generation) return;
 			await getAnnotations();
 			return true;
 		},
@@ -297,19 +229,19 @@ export const composeForComposer = (
 	supplemental?: string,
 ) =>
 	run("annotations", "review", async () => {
-		const epoch = generation;
+		const epoch = state.review.generation;
 		const result = await rpc<{ intent: string; prompt: string; submitted: boolean }>(
 			"annotationCompose",
 			{ ids, intent, supplemental },
 		);
-		if (epoch === generation && intent === "insert")
+		if (epoch === state.review.generation && intent === "insert")
 			setState("review", "composerInsert", result.prompt);
 		return result;
 	});
 async function getTodos(): Promise<void> {
-	const epoch = generation;
+	const epoch = state.review.generation;
 	const value = await rpc<TodoBoardDto>("todoGet");
-	if (epoch === generation) setState("review", "todoBoard", value);
+	if (epoch === state.review.generation) setState("review", "todoBoard", value);
 }
 export const refreshTodos = () => run("todo", "todos", getTodos);
 async function mutateTodos(method: string, args: Record<string, unknown>) {
@@ -319,15 +251,15 @@ async function mutateTodos(method: string, args: Record<string, unknown>) {
 		"todo",
 		"todos",
 		async () => {
-			const epoch = generation;
+			const epoch = state.review.generation;
 			const result = await rpc<{ errors?: string[] }>(method, {
 				...args,
 				baseRevision: snapshot.revision,
 			});
-			if (epoch !== generation) return;
+			if (epoch !== state.review.generation) return;
 			if (result.errors?.length) throw new Error(result.errors.join("\n"));
 			await getTodos();
-			if (epoch === generation) setState("review", "todoConflict", false);
+			if (epoch === state.review.generation) setState("review", "todoConflict", false);
 			return true;
 		},
 		getTodos,

@@ -6,7 +6,7 @@
  * absent file could be hiding past a truncated response.
  */
 import { describe, expect, test } from "bun:test";
-import type { SessionSummary } from "../../../tx/api";
+import type { SessionSummary } from "../../../store/fleet-api";
 import { shouldFallbackMissingFile, type MissingFileSnapshot } from "../../../tx/util/missing-file";
 
 function session(file: string, onDisk = true): SessionSummary {

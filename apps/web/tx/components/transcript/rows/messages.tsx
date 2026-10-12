@@ -3,7 +3,7 @@
  * including the tool-call card with its paired result subsection.
  */
 import { For, Show } from "solid-js";
-import type { RawEntry } from "../../../api";
+import type { RawEntry } from "../../../../store/fleet-api";
 import type { ContentBlock } from "../../../util/entries";
 import {
 	assistantMetaOf,
