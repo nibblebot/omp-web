@@ -1,3 +1,4 @@
+import { boot } from "./boot";
 import {
 	createEffect,
 	createMemo,
@@ -10,13 +11,6 @@ import {
 	type Component,
 } from "solid-js";
 import { ChevronDownIcon, ChevronRightIcon } from "../web/components/ui/icons";
-import {
-	currentThemePreference,
-	setTheme,
-	THEME_OPTIONS,
-	type ThemePreference,
-} from "../web/prefs/theme";
-import { AppView } from "./app-view";
 import {
 	byTitle,
 	entries,
@@ -32,33 +26,27 @@ import {
 	type StoryEntry,
 } from "./catalog";
 import { Coverage } from "./coverage";
-import { labelMode } from "./labels";
 import { StoryView } from "./stage";
+import { TopBar } from "./topbar";
 
-/**
- * The stories browser lives under `#/stories` (home, `coverage`, `<storyId>`).
- * Every other hash, including empty and the App's own `#/s/...` routes, is the App view.
- */
+const TITLE = "omp web design stories";
+
+/** Routes live under `#/stories` (`coverage`, `<storyId>`); any other hash is the home page. */
 type Route =
-	| { kind: "app" }
 	| { kind: "home" }
 	| { kind: "coverage" }
 	| { kind: "story"; entry: StoryEntry }
 	| { kind: "missing"; id: string };
 
 function parseRoute(hash: string): Route {
-	const match = /^#\/stories(?:\/(.*))?$/.exec(hash);
-	if (!match) return { kind: "app" };
-	const path = match[1] ?? "";
-	if (path === "") return { kind: "home" };
+	const path = /^#\/stories\/(.+)$/.exec(hash)?.[1];
+	if (path === undefined) return { kind: "home" };
 	if (path === "coverage") return { kind: "coverage" };
 	const entry = entryByStoryId.get(path);
 	return entry ? { kind: "story", entry } : { kind: "missing", id: path };
 }
 
 const [hash, setHash] = createSignal(location.hash);
-/** The last stories route, so the top bar's Stories tab returns to the open story. */
-const [lastStories, setLastStories] = createSignal("#/stories");
 
 /** Search text: title, id, folder or section, and every component the story shows (so "check" finds Icons). */
 const matches = (entry: StoryEntry, query: string): boolean =>
@@ -240,138 +228,49 @@ const Sidebar: Component<{ current: Route }> = (props) => {
 	);
 };
 
-const ThemeSwitcher: Component = () => {
-	const [pref, setPref] = createSignal<ThemePreference>(currentThemePreference());
-	return (
-		<label class="ds-theme">
-			<span>Theme</span>
-			<select
-				value={pref()}
-				onChange={(e) => setPref(setTheme(e.currentTarget.value as ThemePreference))}
-			>
-				<For each={THEME_OPTIONS}>{(opt) => <option value={opt.id}>{opt.label}</option>}</For>
-			</select>
-		</label>
-	);
-};
-
-/** Top bar shared by both views: brand with the DEMO badge, App and Stories tabs, theme, and the label shortcuts in the App view. */
-const TopBar: Component<{ app: boolean }> = (props) => (
-	<nav class="ds-topbar">
-		<span class="ds-brand">omp web design system</span>
-		<span
-			class="ds-demo-badge"
-			title="Demo: fixture data only; no fleet, daemon, or model runs behind it"
-		>
-			Demo
-		</span>
-		<a class="ds-nav-link" href="#/" aria-current={props.app ? "page" : undefined}>
-			App
-		</a>
-		<a class="ds-nav-link" href={lastStories()} aria-current={props.app ? undefined : "page"}>
-			Stories
-		</a>
-		<ThemeSwitcher />
-		<Show when={props.app}>
-			<div class="ds-shortcuts" aria-label="Component label shortcuts">
-				<span class="ds-shortcut" classList={{ "ds-shortcut--active": labelMode() === "hover" }}>
-					<kbd>Shift</kbd>
-					<span>label under pointer</span>
-				</span>
-				<span class="ds-shortcut" classList={{ "ds-shortcut--active": labelMode() === "all" }}>
-					<kbd>Ctrl</kbd>+<kbd>Shift</kbd>
-					<span>label all</span>
-				</span>
-				<span class="ds-shortcut ds-shortcut--note">click a label for its design</span>
-			</div>
-		</Show>
-	</nav>
-);
-
-/** `?embed=<storyId>` selects the inspector's iframe. It is read from the query, never the hash. */
-const embedId = new URLSearchParams(location.search).get("embed");
-
-/**
- * One story with no chrome: the parent inspector shows its metadata. The parent's
- * theme switcher persists through setTheme (localStorage), which fires `storage`
- * here; re-applying the stored preference follows it. Writing an unchanged value
- * fires no event, so this cannot loop.
- */
-const Embed: Component<{ id: string }> = (props) => {
-	const follow = () => setTheme(currentThemePreference());
-	window.addEventListener("storage", follow);
-	onCleanup(() => window.removeEventListener("storage", follow));
-	const entry = () => entryByStoryId.get(props.id);
-	return (
-		<main class="ds-embed">
-			<Show when={entry()} fallback={<p class="ds-error">Unknown story: {props.id}</p>}>
-				{(e) => <StoryView entry={e()} embedded />}
-			</Show>
-		</main>
-	);
-};
-
-export const Shell: Component = () => (
-	<Show when={embedId} fallback={<Showcase />}>
-		{(id) => {
-			document.body.dataset.dsView = "embed";
-			return <Embed id={id()} />;
-		}}
-	</Show>
-);
-
-/** The App view or the stories view, picked by the hash route. */
-const Showcase: Component = () => {
+/** The stories page: sidebar plus the home, coverage, or story picked by the hash route. */
+const Stories: Component = () => {
+	document.body.dataset.dsView = "stories";
 	const onHash = () => setHash(location.hash);
 	window.addEventListener("hashchange", onHash);
 	onCleanup(() => window.removeEventListener("hashchange", onHash));
 	const route = createMemo(() => parseRoute(hash()));
-	createEffect(() => {
-		const app = route().kind === "app";
-		document.body.dataset.dsView = app ? "app" : "stories";
-		if (!app) setLastStories(hash());
-	});
 	return (
 		<div class="ds-page">
-			<TopBar app={route().kind === "app"} />
-			<Show
-				when={route().kind === "app"}
-				fallback={
-					<div class="ds-shell">
-						<Sidebar current={route()} />
-						<main class="ds-main">
-							<Switch>
-								<Match when={route().kind === "home"}>
-									<h1 class="ds-page-title">Component showcase</h1>
-									<p class="ds-lede">
-										Real components from apps/web with example data. The sidebar starts at App and
-										drills down through what each component renders; shared primitives and icons are
-										listed below it. See <a href="#/stories/coverage">Coverage</a> for every
-										exported component.
-									</p>
-								</Match>
-								<Match when={route()} keyed>
-									{(r) => (
-										<Switch>
-											<Match when={r.kind === "coverage"}>
-												<Coverage />
-											</Match>
-											<Match when={r.kind === "story" && r}>
-												{(s) => <StoryView entry={s().entry} />}
-											</Match>
-											<Match when={r.kind === "missing" && r}>
-												{(m) => <p class="ds-error">Unknown story: {m().id}</p>}
-											</Match>
-										</Switch>
-									)}
-								</Match>
-							</Switch>
-						</main>
-					</div>
-				}
-			>
-				<AppView />
-			</Show>
+			<TopBar brand={TITLE} />
+			<div class="ds-shell">
+				<Sidebar current={route()} />
+				<main class="ds-main">
+					<Switch>
+						<Match when={route().kind === "home"}>
+							<h1 class="ds-page-title">Component showcase</h1>
+							<p class="ds-lede">
+								Real components from apps/web with example data. The sidebar starts at App and
+								drills down through what each component renders; shared primitives and icons are
+								listed below it. See <a href="#/stories/coverage">Coverage</a> for every exported
+								component.
+							</p>
+						</Match>
+						<Match when={route()} keyed>
+							{(r) => (
+								<Switch>
+									<Match when={r.kind === "coverage"}>
+										<Coverage />
+									</Match>
+									<Match when={r.kind === "story" && r}>
+										{(s) => <StoryView entry={s().entry} />}
+									</Match>
+									<Match when={r.kind === "missing" && r}>
+										{(m) => <p class="ds-error">Unknown story: {m().id}</p>}
+									</Match>
+								</Switch>
+							)}
+						</Match>
+					</Switch>
+				</main>
+			</div>
 		</div>
 	);
 };
+
+boot(TITLE, () => <Stories />);

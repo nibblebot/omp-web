@@ -39,7 +39,7 @@ function captureSession(): AppSession {
 }
 
 /**
- * The App view (`/`): the real `<App />` in Chat Mode, seeded with the screen
+ * The App view (the demo page, `bun run demo`): the real `<App />` in Chat Mode, seeded with the screen
  * fixtures and answered by the fake daemon. Holding Shift labels the component
  * under the pointer and its ancestors, Ctrl+Shift every mounted component; a
  * label opens its component in the inspector sidebar.

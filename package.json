@@ -31,7 +31,8 @@
 		"tx-fixture": "bun apps/fleet/test/gen-tx-fixture.ts",
 		"collab": "bun apps/cli/collab-cli.ts",
 		"fleet": "bun apps/fleet/cli.ts",
-		"design": "bun apps/design-system/server.ts"
+		"design": "bun apps/design-system/server.ts stories",
+		"demo": "bun apps/design-system/server.ts demo"
 	},
 	"dependencies": {
 		"@oh-my-pi/pi-agent-core": "18.8.6",

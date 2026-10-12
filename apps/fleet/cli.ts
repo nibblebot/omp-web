@@ -46,10 +46,10 @@
  * A refused connection prints NOT_RUNNING_MESSAGE and exits 1.
  */
 
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { LockHeldError } from "#lib/platform/file-lock";
+import { openBrowser } from "#lib/platform/open-browser";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { resolveStatePath, startFleet, type FleetServer } from "./server";
 import { runProfilePreflight } from "./preflight";
@@ -438,28 +438,6 @@ export interface ServeLoopOptions {
 }
 
 /**
- * Open `url` in the default browser: detached, stdio ignored, unref'd. A
- * launcher that cannot be spawned prints one stderr warning; serving goes on.
- */
-function openBrowser(url: string): void {
-	const [cmd, args]: [string, string[]] =
-		process.platform === "darwin"
-			? ["open", [url]]
-			: process.platform === "win32"
-				? ["cmd", ["/c", "start", '""', url]]
-				: ["xdg-open", [url]];
-	try {
-		const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
-		child.on("error", (err) => console.error(`omp-web: could not open a browser: ${err.message}`));
-		child.unref();
-	} catch (err) {
-		console.error(
-			`omp-web: could not open a browser: ${err instanceof Error ? err.message : String(err)}`,
-		);
-	}
-}
-
-/**
  * Run a booted fleet in the foreground: print the ready line, mirror
  * lifecycle events (warn/error only unless verbose) to stdout, and block until
  * SIGINT/SIGTERM (then close the server and exit 0). The first line keeps its
@@ -486,7 +464,7 @@ export async function serveLoop(server: FleetServer, opts: ServeLoopOptions): Pr
 		const shown = parts.filter((part): part is string => part !== undefined && part !== "");
 		console.log(`omp-web: ${shown.join(" ")}`);
 	};
-	if (opts.open) openBrowser(`http://localhost:${server.port}`);
+	if (opts.open) openBrowser(`http://localhost:${server.port}`, "omp-web");
 	let shuttingDown = false;
 	const shutdown = async (signal: string) => {
 		if (shuttingDown) return;
@@ -532,7 +510,7 @@ async function uiCmd(port: number, controlPort: number, open: boolean): Promise<
 	} catch {
 		console.error(`omp-web ui: no control plane on :${controlPort} yet`);
 	}
-	if (open) openBrowser(url);
+	if (open) openBrowser(url, "omp-web");
 	let closing = false;
 	const shutdown = async () => {
 		if (closing) return;

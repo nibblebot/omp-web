@@ -1,7 +1,7 @@
 /* Showcase chrome. Loaded after apps/web/styles.css so it can use the shared
  * design tokens (tokens.css) and follow the active theme palette. Every class
  * is ds- prefixed so it can never collide with production selectors. */
-/* Page: the shared top bar above the active view (App or stories), filling the window.
+/* Page: the shared top bar above the page body (demo App view or stories), filling the window.
  * The bar height lives on body so portaled modal backdrops can clear it. */
 body {
 	--ds-topbar-h: 2.75rem;
@@ -442,7 +442,7 @@ body[data-ds-view="app"] > div:not(#root) > .modal-backdrop {
 .ds-missing {
 	color: var(--warning);
 }
-/* App view (`/`): the real App fills the space below the top bar. */
+/* App view (demo page): the real App fills the space below the top bar. */
 .ds-app-view {
 	display: flex;
 	flex: 1;

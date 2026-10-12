@@ -56,7 +56,7 @@ function answerCall(cmd: Extract<ClientCommand, { type: "call" }>, handler: Call
 	}, ANSWER_DELAY_MS);
 }
 
-/** Install the /command hook once, at boot (main.tsx). */
+/** Install the /command hook once, at boot (boot.tsx). */
 export function installDaemon(): void {
 	const nativeFetch = window.fetch.bind(window);
 	const answering = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {

@@ -87,13 +87,6 @@ export const Inspector: Component<{
 								: "file-local, not exported"}
 							{` · ${tierLabel(node.tier)} · group ${node.group}`}
 						</span>
-						<Show when={entry()} keyed>
-							{(e) => (
-								<a class="ds-chip-note" href={`#/stories/${e.story.id}`}>
-									Open in stories
-								</a>
-							)}
-						</Show>
 						<dl class="ds-inspector-links">
 							<NodeList
 								label="Renders"

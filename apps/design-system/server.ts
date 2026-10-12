@@ -1,18 +1,32 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { openBrowser } from "#lib/platform/open-browser";
 import { handleFixtureRoute } from "./fixtures/routes";
 import { solidPlugin } from "./solid-plugin";
 import { virtualModulesPlugin } from "./virtual-modules";
 
 /**
- * Design system server: bundles the showcase client with Bun.build (in
- * memory, nothing written to disk) and serves it with Bun.serve. Components
- * come straight from apps/web; only the shell lives here. The bundle is rebuilt on
- * every top-level page load so a refresh shows current sources. Inspector frames
- * (`/?embed=`) reuse the current bundle instead.
+ * Design system server for one standalone page, picked by the first argument:
+ * `stories` (component stories, `bun run design`) or `demo` (the App view,
+ * `bun run demo`). It bundles that page's entry with Bun.build (in memory,
+ * nothing written to disk) and serves it with Bun.serve. Components come
+ * straight from apps/web; only the page chrome lives here. The bundle is rebuilt
+ * on every top-level page load so a refresh shows current sources. Inspector
+ * frames (`/?embed=`) reuse the current bundle instead. Startup opens the page
+ * in the default browser.
  */
 const root = dirname(fileURLToPath(import.meta.url));
-const port = Number(process.env.OMP_DESIGN_PORT ?? 4799);
+const VIEWS = {
+	stories: { entry: "stories.tsx", portEnv: "OMP_DESIGN_PORT", port: 4799 },
+	demo: { entry: "demo.tsx", portEnv: "OMP_DEMO_PORT", port: 4798 },
+} as const;
+const viewName = process.argv[2];
+if (viewName !== "stories" && viewName !== "demo") {
+	console.error("usage: bun apps/design-system/server.ts <stories|demo>");
+	process.exit(2);
+}
+const view = VIEWS[viewName];
+const port = Number(process.env[view.portEnv] ?? view.port);
 
 interface Bundle {
 	js: Blob;
@@ -21,7 +35,7 @@ interface Bundle {
 
 async function build(): Promise<Bundle> {
 	const result = await Bun.build({
-		entrypoints: [join(root, "main.tsx")],
+		entrypoints: [join(root, view.entry)],
 		target: "browser",
 		conditions: ["browser", "solid"],
 		plugins: [solidPlugin, virtualModulesPlugin()],
@@ -96,4 +110,6 @@ const server = Bun.serve({
 	},
 });
 
-console.log(`design system: http://localhost:${server.port}/`);
+const url = `http://localhost:${server.port}/`;
+console.log(`design ${viewName}: ${url}`);
+openBrowser(url, `design ${viewName}`);
