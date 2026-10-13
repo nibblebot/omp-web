@@ -482,21 +482,30 @@ export function planSessionExport(sessionsDir: string): SessionExportPlan {
 			stack.push({ dirAbs: path.join(sessionsDir, dirName), mainRel: rootMain });
 			continue;
 		}
-		// Project dir: its child JSONLs may be depth-2 mains.
+		// Project dir: its child JSONLs may be depth-2 mains. readdir order is
+		// arbitrary, so every child is validated and every main declared FIRST;
+		// only then can a `<proj>/<main>/` artifact dir be resolved (a dir is
+		// an artifact dir only when its sibling main has been declared).
 		const dirAbs = path.join(sessionsDir, dirName);
-		for (const child of readdirSync(dirAbs, { withFileTypes: true })) {
+		const children = readdirSync(dirAbs, { withFileTypes: true }).map((child) => {
 			const childAbs = path.join(dirAbs, child.name);
 			const childRel = path.relative(sessionsDir, childAbs);
-			const type = inspectEntry(childAbs, childRel);
-			if (type === "file" && isMainSessionName(child.name)) {
-				const sessionId = sessionIdOfMain(childRel);
-				mainSessions.set(childRel, sessionId);
-				addFile({ relToSessions: childRel, kind: "main", sessionId });
-				continue;
-			}
-			if (type === "dir" && mainSessions.has(`${childRel}${JSONL_SUFFIX}`)) {
-				stack.push({ dirAbs: childAbs, mainRel: `${childRel}${JSONL_SUFFIX}` });
-			}
+			return {
+				name: child.name,
+				abs: childAbs,
+				rel: childRel,
+				type: inspectEntry(childAbs, childRel),
+			};
+		});
+		for (const child of children) {
+			if (child.type !== "file" || !isMainSessionName(child.name)) continue;
+			const sessionId = sessionIdOfMain(child.rel);
+			mainSessions.set(child.rel, sessionId);
+			addFile({ relToSessions: child.rel, kind: "main", sessionId });
+		}
+		for (const child of children) {
+			if (child.type !== "dir" || !mainSessions.has(`${child.rel}${JSONL_SUFFIX}`)) continue;
+			stack.push({ dirAbs: child.abs, mainRel: `${child.rel}${JSONL_SUFFIX}` });
 		}
 	}
 	const mains = new Set(mainSessions.keys());

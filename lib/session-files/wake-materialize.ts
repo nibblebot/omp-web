@@ -30,7 +30,7 @@
  * (or no pair exists daemon-side). No new error names.
  */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isNormalizedPosixRelativePath, type ManifestFileKind } from "./archive-manifest";
 import { BULK_MAX_BYTES, callbackError } from "#lib/wire/callback-protocol";
@@ -307,10 +307,14 @@ export function planMaterializeFiles(subtreeRoot: string): MaterializeFilePlan {
 			const absolute = join(dir, entry.name);
 			let stats;
 			try {
-				stats = statSync(absolute);
+				// lstat, not stat: a symlink is never followed (the store is
+				// written by this fleet, and a link must not pull host bytes
+				// into a served transfer or recurse the walk).
+				stats = lstatSync(absolute);
 			} catch {
 				continue;
 			}
+			if (stats.isSymbolicLink()) continue;
 			if (stats.isDirectory()) {
 				walk(absolute);
 				continue;
