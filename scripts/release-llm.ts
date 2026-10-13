@@ -71,9 +71,12 @@ const DEFAULT_TIMEOUT_MS = 240_000;
 const CHUNK_SIZE = 15;
 const COMMIT_LINK_BASE = "https://github.com/nibblebot/omp-web/commit/";
 
-interface TurnResult {
+/**
+ * One turn's outcome: the assistant text read from stdout, plus whether omp
+ * timed out or was killed (the caller aborts rather than retrying).
+ */
+export interface TurnResult {
 	text: string;
-	/** true when omp timed out or was killed; the caller aborts rather than retrying. */
 	timedOut: boolean;
 }
 
@@ -162,28 +165,23 @@ export async function runTurn(
 	return text.length === 0 ? null : text;
 }
 
-const spawnOmp = (args: string[], promptText: string): Promise<TurnResult> => {
-	const { promise, resolve, reject } = Promise.withResolvers<TurnResult>();
-	const bin = Bun.which("omp") ?? "omp";
+/**
+ * Real spawn path: `Bun.which("omp")` + one-shot argv, stdout read to EOF.
+ * The ordering is deliberate: draining the stdout pipe ends only when the
+ * child closes it (i.e. by exiting), so awaiting the text first and `exited`
+ * second can never lose the text to a race. The exit code is checked after;
+ * a non-zero exit reports empty text, exactly like the injected seam in
+ * runTurn, so the caller falls back to the deterministic changelog.
+ */
+export const spawnOmp = async (args: string[], promptText: string): Promise<TurnResult> => {
+	// PATH is passed explicitly: Bun.which without options resolves against the
+	// environment the process started with, so a PATH adjusted at runtime (the
+	// stub-binary test) or exported by this process would be ignored.
+	const bin = Bun.which("omp", { PATH: process.env.PATH }) ?? "omp";
 	const proc = Bun.spawn([bin, ...args, promptText], { stdout: "pipe", stderr: "pipe" });
-	// Both `exited` and the stdout text resolve the promise; the LAST of the
-	// two wins. The guards below are intentionally absent: `exited` fires
-	// before the process is reaped (proc.exitCode is still null then) and the
-	// stdout text resolves after reaping (exitCode is set), so each branch
-	// must resolve unconditionally or the turn deadlocks until the timeout.
-	proc.exited.then(
-		(code) => {
-			resolve({ text: "", timedOut: false });
-		},
-		(reason) => reject(reason instanceof Error ? reason : new Error(String(reason))),
-	);
-	new Response(proc.stdout).text().then(
-		(text) => {
-			resolve({ text, timedOut: false });
-		},
-		(reason) => reject(reason instanceof Error ? reason : new Error(String(reason))),
-	);
-	return promise;
+	const text = await new Response(proc.stdout).text();
+	const code = await proc.exited;
+	return code !== 0 ? { text: "", timedOut: false } : { text, timedOut: false };
 };
 
 type Settled<T> = { ok: true; value: T } | { ok: false };

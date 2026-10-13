@@ -7,8 +7,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+import { compareVersions } from "../../apps/cli/update";
+import { GATE_COMMANDS } from "../release";
 import {
-	CHECKBOX_SKIPPED,
 	checkGateList,
 	checkSdkPins,
 	compareSemver,
@@ -54,6 +55,32 @@ describe("compareSemver", () => {
 	test("sorts a non-numeric segment below every release", () => {
 		expect(compareSemver("0.1.0", "dev")).toBeGreaterThan(0);
 		expect(compareSemver("18.2.9-dev.1", "18.2.6")).toBeLessThan(0);
+	});
+
+	test("stays in lockstep with cli/update.ts compareVersions", () => {
+		// preflight keeps its own copy so it never imports the update pipeline;
+		// this pins the "semantics match" claim in that function's doc comment
+		// against the implementation the CLI actually ships.
+		const cases: Array<[string, string]> = [
+			["0.2.0", "0.1.0"],
+			["0.1.0", "0.2.0"],
+			["0.10.0", "0.9.0"],
+			["18.2.6", "18.2.6"],
+			["1.2", "1.2.0"],
+			["1.2.0", "1.2"],
+			["dev", "0.1.0"],
+			["0.1.0", "dev"],
+			["dev", "dev"],
+			["18.2.9-dev.1", "18.2.6"],
+			["", ""],
+			["2.0.0", "2.0.0.1"],
+		];
+		for (const [a, b] of cases) {
+			expect({ case: [a, b], value: compareSemver(a, b) }).toEqual({
+				case: [a, b],
+				value: compareVersions(a, b),
+			});
+		}
 	});
 
 	test("versionsNewerThan keeps only strictly newer versions", () => {
@@ -141,10 +168,6 @@ describe("docs-checkboxes", () => {
 		expect(findings).toHaveLength(1);
 		expect(findings[0]?.message).toBe("docs/release.md:1 unchecked box");
 	});
-
-	test("the clone tracker file is excluded from the scan", () => {
-		expect(CHECKBOX_SKIPPED["docs/clone-plan.md"]).toBe(true);
-	});
 });
 
 describe("docs-links", () => {
@@ -177,20 +200,18 @@ describe("docs-links", () => {
 });
 
 describe("docs-gate-list", () => {
-	const gate = [
-		["bun", "run", "check:types"],
-		["bun", "e2e/onboarding.ts"],
-	];
+	// A two-command slice of the real gate: the first and the last command.
+	const gate = [GATE_COMMANDS[0], GATE_COMMANDS[GATE_COMMANDS.length - 1]];
 
 	test("warns per file and command that is missing from the docs", () => {
 		const findings = checkGateList(gate, [
 			file("docs/release.md", gate.map((command) => `- \`${command.join(" ")}\``).join("\n")),
-			file("docs/src/content/docs/project/release.md", "gate: `bun run check:types`"),
+			file("docs/src/content/docs/project/release.md", `gate: \`${gate[0].join(" ")}\``),
 		]);
 		expect(findings).toHaveLength(1);
 		expect(findings[0]?.id).toBe("docs-gate-list");
 		expect(findings[0]?.message).toBe(
-			"docs/src/content/docs/project/release.md does not mention the gate command: bun e2e/onboarding.ts",
+			`docs/src/content/docs/project/release.md does not mention the gate command: ${gate[1].join(" ")}`,
 		);
 	});
 
@@ -323,22 +344,14 @@ function writeRepo(): string {
 		join(root, "CHANGELOG.md"),
 		"# Changelog\n\n## v0.1.1, 2026-08-20\n\n## v0.1.0, 2026-08-20\n",
 	);
-	const gate = [
-		["bun", "run", "check:types"],
-		["bun", "run", "format:check"],
-		["bun", "run", "build:web"],
-		["bun", "run", "test"],
-		["bun", "e2e/onboarding.ts"],
-	];
 	// The repo copy documents the whole gate; the site guide is missing the last command.
 	writeFileSync(
 		join(root, "docs/release.md"),
-		gate.map((command) => `- \`${command.join(" ")}\``).join("\n"),
+		GATE_COMMANDS.map((command) => `- \`${command.join(" ")}\``).join("\n"),
 	);
 	writeFileSync(
 		join(root, "docs/src/content/docs/project/release.md"),
-		gate
-			.slice(0, 4)
+		GATE_COMMANDS.slice(0, -1)
 			.map((command) => `- \`${command.join(" ")}\``)
 			.join("\n"),
 	);

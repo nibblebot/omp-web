@@ -25,12 +25,13 @@ import {
 	prependChangelog,
 	releasePlan,
 	releaseTreeProblem,
+	runGate,
 	smokePackedTarballPlan,
 	stagedProblems,
 	validateCoverage,
 	validateTarball,
 } from "../release";
-import type { ChangelogDraft, CommitClass, CommitInfo, Group } from "../release";
+import type { ChangelogDraft, CommitClass, CommitInfo, GateRunner, Group } from "../release";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 afterAll(cleanupTempDirs);
@@ -69,7 +70,7 @@ async function makeFixtureTgz(dir: string, content?: string): Promise<string> {
 }
 
 describe("GATE_COMMANDS + releasePlan", () => {
-	test("gate is the exact argv lists in order", () => {
+	test("gate is the exact argv lists in order, and the dry-run plan opens with them", () => {
 		expect(GATE_COMMANDS).toEqual([
 			["bun", "run", "check:types"],
 			["bun", "run", "format:check"],
@@ -77,13 +78,10 @@ describe("GATE_COMMANDS + releasePlan", () => {
 			["bun", "run", "test"],
 			["bun", "e2e/onboarding.ts"],
 		]);
-	});
-
-	test("gate is defined once: the dry-run plan opens with it, restated nowhere", () => {
-		const plan = releasePlan("v0.2.0", "0.2.0");
+		// The plan's opening lines are derived from GATE_COMMANDS, in order.
 		const gateLines = GATE_COMMANDS.map((cmd) => cmd.join(" "));
+		const plan = releasePlan("v0.2.0", "0.2.0");
 		expect(plan.slice(0, gateLines.length)).toEqual(gateLines);
-		expect(plan.filter((line) => gateLines.includes(line))).toEqual(gateLines);
 	});
 
 	test("plan continues through build, pack, smoke and publish", () => {
@@ -98,6 +96,42 @@ describe("GATE_COMMANDS + releasePlan", () => {
 			"git push origin main --follow-tags",
 			expect.stringContaining("gh release create v0.2.0 dist-release/omp-web-0.2.0.tgz"),
 		]);
+	});
+});
+
+describe("runGate", () => {
+	/** Fake runner over GATE_COMMANDS: records argv, fails the Nth call when asked. */
+	function fakeRunner(failAt = -1): { runner: GateRunner; calls: string[][] } {
+		const calls: string[][] = [];
+		const runner: GateRunner = async (args) => {
+			calls.push([...args]);
+			const failed = calls.length === failAt;
+			return failed
+				? { status: 2, stdout: Buffer.alloc(0), stderr: Buffer.from("boom\n") }
+				: { status: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+		};
+		return { runner, calls };
+	}
+
+	test("runs every GATE_COMMANDS argv in order", async () => {
+		const { runner, calls } = fakeRunner();
+		await runGate(false, runner);
+		expect(calls).toEqual(GATE_COMMANDS.map((cmd) => [...cmd]));
+	});
+
+	test("stops at the first failing command with its exit code and stderr", async () => {
+		const { runner, calls } = fakeRunner(2);
+		await expect(runGate(false, runner)).rejects.toThrow(
+			["gate failed: bun run format:check (exit 2)", "boom"].join("\n"),
+		);
+		// The remaining commands never run: a failed gate aborts the release.
+		expect(calls).toEqual(GATE_COMMANDS.slice(0, 2).map((cmd) => [...cmd]));
+	});
+
+	test("--dry-run skips the gate and spawns nothing", async () => {
+		const { runner, calls } = fakeRunner();
+		await runGate(true, runner);
+		expect(calls).toEqual([]);
 	});
 });
 

@@ -1,6 +1,8 @@
 /**
- * Unit tests for scripts/release-llm.ts. The LLM path is exercised purely
- * through the spawn seam: no omp subprocess, no network, no auth.
+ * Unit tests for scripts/release-llm.ts. The LLM path is exercised through
+ * the spawn seam: no omp subprocess, no network, no auth. The one exception
+ * is the `spawnOmp` block at the end, which runs the real path against an
+ * executable `omp` shim on PATH.
  *
  * The summarizer prompts once per bounded chunk of commits plus once for the
  * overview, so the fake spawn routes responses by prompt content:
@@ -8,9 +10,14 @@
  * - the overview prompt contains the `"overview"` output contract.
  */
 
-import { describe, expect, test } from "bun:test";
-import { runTurn, summarizeChangelog } from "../release-llm";
-import type { SpawnFn, SummarizeInput } from "../release-llm";
+import { afterAll, describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+import { runTurn, spawnOmp, summarizeChangelog } from "../release-llm";
+import type { SpawnFn, SummarizeInput, TurnResult } from "../release-llm";
+
+afterAll(cleanupTempDirs);
 
 const COMMIT_LINK_BASE = "https://github.com/nibblebot/omp-web/commit/";
 
@@ -288,5 +295,43 @@ describe("summarizeChangelog with a fake spawn", () => {
 			if (before === undefined) delete process.env.OMP_WEB_RELEASE_PROFILE;
 			else process.env.OMP_WEB_RELEASE_PROFILE = before;
 		}
+	});
+});
+
+describe("spawnOmp against a stub omp binary on PATH", () => {
+	/**
+	 * Real spawn path, no seam: an executable `omp` shim in a temp dir is
+	 * prepended to PATH so `Bun.which("omp")` resolves it. Test files share
+	 * this process, so PATH is mutated and restored inside one synchronous
+	 * block: spawnOmp reads PATH before its first await, and nothing else can
+	 * run in between.
+	 */
+	function startStubRun(script: string, prompt: string): Promise<TurnResult> {
+		const binDir = tempDir("release-llm-bin-");
+		writeFileSync(join(binDir, "omp"), script, { mode: 0o755 });
+		const saved = process.env.PATH;
+		process.env.PATH = `${binDir}:${saved ?? ""}`;
+		try {
+			return spawnOmp([...OMP_FLAGS], prompt);
+		} finally {
+			if (saved === undefined) delete process.env.PATH;
+			else process.env.PATH = saved;
+		}
+	}
+
+	test("round-trips the shim's stdout as the turn text", async () => {
+		const prompt = "summarize this chunk";
+		// The shim echoes its whole argv, so this covers the real
+		// Bun.which + Bun.spawn path, the flag order and stdout capture.
+		expect(await startStubRun('#!/bin/sh\nprintf "stub omp: %s\\n" "$*"\n', prompt)).toEqual({
+			text: `stub omp: ${[...OMP_FLAGS, prompt].join(" ")}\n`,
+			timedOut: false,
+		});
+	});
+
+	test("a non-zero exit reports empty text, like the injected seam", async () => {
+		expect(
+			await startStubRun('#!/bin/sh\nprintf "partial output"\nexit 3\n', "summarize it"),
+		).toEqual({ text: "", timedOut: false });
 	});
 });

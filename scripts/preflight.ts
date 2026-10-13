@@ -82,7 +82,8 @@ export function parsePreflightArgs(
  * preflight must not import the @oh-my-pi SDK (or the update pipeline) to
  * compare two version strings. Semantics match cli/update.ts compareVersions:
  * missing segments count as 0, and a non-numeric segment ("dev") sorts below
- * every number.
+ * every number. Kept in lockstep by a parity test in
+ * scripts/test/preflight.test.ts.
  */
 export function compareSemver(a: string, b: string): number {
 	const pa = a.split(".");
@@ -334,7 +335,7 @@ export const RELEASE_DOCS: Record<string, true> = {
  * The clone plan's own phased execution tracker: its `- [ ]` boxes are live
  * clone work, not documentation drift, so the checkbox scan skips the file.
  */
-export const CHECKBOX_SKIPPED: Record<string, true> = { "docs/clone-plan.md": true };
+const CHECKBOX_SKIPPED: Record<string, true> = { "docs/clone-plan.md": true };
 
 /**
  * Docs files scanned by the text checks: `docs/*.md` plus the markdown files

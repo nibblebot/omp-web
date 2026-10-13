@@ -68,6 +68,29 @@ export function releasePlan(tag: string, version: string): string[] {
 	];
 }
 
+/** The gate seam: argv → process result (the real `run` below, fakes in tests). */
+export type GateRunner = (args: string[]) => Promise<RunResult>;
+
+/**
+ * Release gate loop: run GATE_COMMANDS in order and stop at the first
+ * non-zero exit (throwing, so `main` aborts before anything is generated).
+ * `--dry-run` only announces the skip; the plan preview is its real output.
+ * The runner is injected so tests can pin ordering/abort without spawning.
+ */
+export async function runGate(dryRun: boolean, runner: GateRunner = run): Promise<void> {
+	if (dryRun) {
+		console.log("release: skipping gate (--dry-run)");
+		return;
+	}
+	for (const cmd of GATE_COMMANDS) {
+		const line = cmd.join(" ");
+		console.log(`release: running ${line}`);
+		const res = await runner([...cmd]);
+		if (res.status !== 0) fail(`gate failed: ${line} (exit ${res.status})${tail(res.stderr)}`);
+		console.log(`release: ok gate ${line}`);
+	}
+}
+
 export type CommitClass = "breaking" | "feat" | "fix" | "other";
 
 export interface CommitInfo {
@@ -337,7 +360,8 @@ export function makeManifest(version: string, tarball: string, sha256: string): 
 	return JSON.stringify({ version, tarball, sha256 }, null, "\t") + "\n";
 }
 
-interface RunResult {
+/** One finished command: exit status and captured output (see `run`). */
+export interface RunResult {
 	status: number;
 	stdout: Buffer;
 	stderr: Buffer;
@@ -947,17 +971,7 @@ async function release(argv: string[]): Promise<void> {
 	// build:web runs before test as a fast sanity gate that the UI bundle
 	// still compiles; the suite itself needs no built dist/. e2e/onboarding.ts
 	// runs last: the offline end-to-end walk of pack + pinned install.
-	if (!dryRun) {
-		for (const cmd of GATE_COMMANDS) {
-			const line = cmd.join(" ");
-			console.log(`release: running ${line}`);
-			const res = await run([...cmd]);
-			if (res.status !== 0) fail(`gate failed: ${line} (exit ${res.status})${tail(res.stderr)}`);
-			console.log(`release: ok gate ${line}`);
-		}
-	} else {
-		console.log("release: skipping gate (--dry-run)");
-	}
+	await runGate(dryRun);
 
 	// 5. Changelog (LLM-assisted, deterministic fallback).
 	const date = todayLocal();
