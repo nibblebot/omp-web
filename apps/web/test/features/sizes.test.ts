@@ -41,12 +41,11 @@ describe("featureSizeTotals", () => {
 		);
 	});
 
-	test("a feature absent from the build contributes nothing", () => {
-		expect(featureSizeTotals(manifest, ["debug"])).toEqual({ bytes: 1100, gzip: 450 });
-	});
-
-	test("unknown ids are ignored", () => {
-		expect(featureSizeTotals(manifest, ["nope" as FeatureId])).toEqual({ bytes: 1100, gzip: 450 });
+	test("features absent from the build and unknown ids contribute nothing", () => {
+		const ids: FeatureId[] = ["debug", "nope" as FeatureId];
+		for (const id of ids) {
+			expect(featureSizeTotals(manifest, [id])).toEqual({ bytes: 1100, gzip: 450 });
+		}
 	});
 });
 

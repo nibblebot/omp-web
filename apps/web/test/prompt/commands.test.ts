@@ -31,6 +31,7 @@ import {
 	confirmDangerConfirm,
 	dangerConfirm,
 } from "../../prompt/danger-confirm";
+import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
 
 describe("parseInput", () => {
 	test("plain text", () => {
@@ -177,13 +178,16 @@ describe("goal/plan local commands", () => {
 
 	test("/plan toggles planModeEnabled via setPlanModeState", () => {
 		const before = state.planModeEnabled;
-		expect(planDispatch().args[0].enabled).toBe(!before);
-		expect(planDispatch().args[0].planFilePath).toBe("");
-		// Flip the store and confirm the toggle inverts.
-		setState("planModeEnabled", !before);
-		expect(planDispatch().args[0].enabled).toBe(before);
-		// Restore for sibling tests.
-		setState("planModeEnabled", before);
+		try {
+			setState("planModeEnabled", false);
+			expect(planDispatch().args[0].enabled).toBe(true);
+			expect(planDispatch().args[0].planFilePath).toBe("");
+			// Flip the store and confirm the toggle inverts.
+			setState("planModeEnabled", true);
+			expect(planDispatch().args[0].enabled).toBe(false);
+		} finally {
+			setState("planModeEnabled", before);
+		}
 	});
 });
 
@@ -253,9 +257,14 @@ describe("P0.2 argument-aware collision routes", () => {
 
 	test("/plan with prompt enters plan mode, bare toggles", () => {
 		const before = state.planModeEnabled;
-		expect(planDispatch("design the api").args[0].enabled).toBe(true);
-		expect(planDispatch("").args[0].enabled).toBe(!before);
-		expect(planDispatch().args[0].enabled).toBe(!before);
+		try {
+			setState("planModeEnabled", false);
+			expect(planDispatch("design the api").args[0].enabled).toBe(true);
+			expect(planDispatch("").args[0].enabled).toBe(true);
+			expect(planDispatch().args[0].enabled).toBe(true);
+		} finally {
+			setState("planModeEnabled", before);
+		}
 	});
 
 	test("LOCAL_COMMANDS covers move/wt/worktree refusals", () => {
@@ -316,13 +325,13 @@ const timers: { fn: () => void; ms: number; fired: boolean }[] = [];
 
 function installClock(): void {
 	timers.length = 0;
-	globalThis.window = {
+	setBrowserGlobal("window", {
 		setTimeout: (fn: () => void, ms?: number) => {
 			timers.push({ fn, ms: ms ?? 0, fired: false });
 			return timers.length;
 		},
 		clearTimeout: () => {},
-	} as unknown as Window & typeof globalThis;
+	} as unknown as Window & typeof globalThis);
 }
 
 function advance(ms: number): void {
@@ -340,12 +349,12 @@ beforeEach(() => {
 	FakeEventSource.instances.length = 0;
 	FakeEventSource.handlers.clear();
 	installClock();
-	globalThis.location = { search: "" } as Location;
-	globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
-	globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+	setBrowserGlobal("location", { search: "" } as Location);
+	setBrowserGlobal("EventSource", FakeEventSource as unknown as typeof EventSource);
+	setBrowserGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
 		if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
 		return { ok: true, status: 202 } as Response;
-	}) as unknown as typeof fetch;
+	}) as unknown as typeof fetch);
 	setState({
 		currentSessionId: "",
 		connected: false,
@@ -355,20 +364,9 @@ beforeEach(() => {
 	});
 });
 
-// The transport stubs are global and would otherwise leak into sibling test
-// files run in the same worker (a bun test worker can run several files);
-// restore the originals once this file's own tests are done.
-const originalLocation = globalThis.location;
-const originalWindow = globalThis.window;
-const originalEventSource = globalThis.EventSource;
-const originalFetch = globalThis.fetch;
-
-afterEach(() => {
-	globalThis.location = originalLocation;
-	globalThis.window = originalWindow;
-	globalThis.EventSource = originalEventSource;
-	globalThis.fetch = originalFetch;
-});
+// Browser doubles are process-global; restore them after each test so they
+// cannot leak into sibling test files run in the same worker.
+afterEach(restoreBrowserGlobals);
 
 describe("bang-shell/python stream lifecycle (#29)", () => {
 	test("/live is refused locally without sending a prompt", () => {

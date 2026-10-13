@@ -1,5 +1,5 @@
 /**
- * Unit tests for the client API layer (src/store/fleet-api.ts).
+ * Unit tests for the client API layer (store/fleet-api.ts).
  *
  * fetch is stubbed per test; no server is spawned. Verifies:
  * - non-2xx responses throw ApiError with status and the server's {error} message
@@ -10,8 +10,8 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { ApiError, encodePathSegments, REQUEST_TIMEOUT_MS, api } from "../../store/fleet-api";
+import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
 
-const realFetch = globalThis.fetch;
 const realSetTimeout = globalThis.setTimeout;
 const realClearTimeout = globalThis.clearTimeout;
 
@@ -38,14 +38,14 @@ describe("encodePathSegments", () => {
 
 describe("fetchJson error handling", () => {
 	afterEach(() => {
-		globalThis.fetch = realFetch;
+		restoreBrowserGlobals();
 		globalThis.setTimeout = realSetTimeout;
 		globalThis.clearTimeout = realClearTimeout;
 	});
 
 	test("non-2xx JSON error body -> ApiError with status and server message", async () => {
-		globalThis.fetch = (async (_url: string, _init?: RequestInit) =>
-			jsonResponse(503, { error: "stats.db unavailable" })) as typeof fetch;
+		setBrowserGlobal("fetch", (async (_url: string, _init?: RequestInit) =>
+			jsonResponse(503, { error: "stats.db unavailable" })) as typeof fetch);
 		try {
 			await api.stats("x/y.jsonl");
 			throw new Error("expected rejection");
@@ -58,8 +58,8 @@ describe("fetchJson error handling", () => {
 	});
 
 	test("non-2xx non-JSON body -> ApiError with HTTP status line", async () => {
-		globalThis.fetch = (async (_url: string, _init?: RequestInit) =>
-			htmlResponse(404)) as typeof fetch;
+		setBrowserGlobal("fetch", (async (_url: string, _init?: RequestInit) =>
+			htmlResponse(404)) as typeof fetch);
 		try {
 			await api.health();
 			throw new Error("expected rejection");
@@ -71,8 +71,8 @@ describe("fetchJson error handling", () => {
 	});
 
 	test("2xx non-JSON body -> ApiError (SPA-fallback guard)", async () => {
-		globalThis.fetch = (async (_url: string, _init?: RequestInit) =>
-			htmlResponse(200)) as typeof fetch;
+		setBrowserGlobal("fetch", (async (_url: string, _init?: RequestInit) =>
+			htmlResponse(200)) as typeof fetch);
 		try {
 			await api.health();
 			throw new Error("expected rejection");
@@ -93,12 +93,12 @@ describe("fetchJson error handling", () => {
 		}) as typeof setTimeout;
 		globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
 
-		globalThis.fetch = ((_url: string, init?: RequestInit) => {
+		setBrowserGlobal("fetch", ((_url: string, init?: RequestInit) => {
 			const signal = init?.signal as AbortSignal;
 			return new Promise<Response>((_resolve, reject) => {
 				signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
 			});
-		}) as typeof fetch;
+		}) as typeof fetch);
 
 		const pending = api.health();
 		expect(abortCb).not.toBeNull();
@@ -116,16 +116,14 @@ describe("fetchJson error handling", () => {
 });
 
 describe("api.sync", () => {
-	afterEach(() => {
-		globalThis.fetch = realFetch;
-	});
+	afterEach(restoreBrowserGlobals);
 
 	test("POSTs /ctl/stats/sync and returns the payload", async () => {
 		let captured: { url: string; init?: RequestInit } | null = null;
-		globalThis.fetch = (async (url: string, init?: RequestInit) => {
+		setBrowserGlobal("fetch", (async (url: string, init?: RequestInit) => {
 			captured = { url, init };
 			return jsonResponse(200, { processed: 12, files: 3, totalMessages: 99, durationMs: 42 });
-		}) as typeof fetch;
+		}) as typeof fetch);
 
 		const result = await api.sync();
 		expect(result).toEqual({ processed: 12, files: 3, totalMessages: 99, durationMs: 42 });
@@ -134,10 +132,10 @@ describe("api.sync", () => {
 	});
 
 	test("propagates sync endpoint failures as ApiError", async () => {
-		globalThis.fetch = (async (_url: string, _init?: RequestInit) =>
+		setBrowserGlobal("fetch", (async (_url: string, _init?: RequestInit) =>
 			jsonResponse(503, {
 				error: "omp binary not found. Run `npm i -g @oh-my-pi/omp-stats` or install omp",
-			})) as typeof fetch;
+			})) as typeof fetch);
 		try {
 			await api.sync();
 			throw new Error("expected rejection");

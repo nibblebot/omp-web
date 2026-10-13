@@ -173,6 +173,12 @@ describe("filterSettings", () => {
 						description: "cap output",
 					}),
 					item({ type: "enum", path: "images.blockImages", label: "Block images" }),
+					item({
+						type: "boolean",
+						path: "images.autoResize",
+						label: "Auto-resize pastes",
+						description: "shrink oversized images",
+					}),
 				],
 			},
 		],
@@ -186,11 +192,16 @@ describe("filterSettings", () => {
 		expect(matches[0].item.path).toBe("compaction.thresholdPercent");
 	});
 
-	test("matches item label case-insensitively across tabs", () => {
+	test("excludes terminal-only appearance items from label matches", () => {
 		// Appearance items outside the web Images group are terminal-only and
-		// have no home in the panel, so they are excluded from search.
-		const matches = filterSettings(model, "MAX");
-		expect(matches).toEqual([]);
+		// have no home in the panel, so they are excluded from search even
+		// when their label matches.
+		expect(filterSettings(model, "MAX")).toEqual([]);
+		// An images.* label still matches, case-insensitively.
+		const matches = filterSettings(model, "AUTO-RESIZE");
+		expect(matches).toHaveLength(1);
+		expect(matches[0].tab.id).toBe("appearance");
+		expect(matches[0].item.path).toBe("images.autoResize");
 	});
 
 	test("matches group name", () => {
@@ -199,10 +210,14 @@ describe("filterSettings", () => {
 		expect(matches[0].group.name).toBe("Advanced");
 	});
 
-	test("matches item description", () => {
+	test("excludes terminal-only appearance items from description matches", () => {
 		// Same exclusion as the label test: "cap output" only exists on the
 		// appearance tab's theme.name item, which is not an images.* item.
 		expect(filterSettings(model, "cap output")).toEqual([]);
+		// An images.* description still matches, case-insensitively.
+		const matches = filterSettings(model, "SHRINK OVERSIZED");
+		expect(matches).toHaveLength(1);
+		expect(matches[0].item.path).toBe("images.autoResize");
 	});
 
 	test("matches an appearance item in the web Images group", () => {

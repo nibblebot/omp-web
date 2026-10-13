@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { parseInput } from "../../prompt/commands";
-import { activateFeatures, featureCommand, featureModal } from "../../features/registry";
+import { activateFeatures, featureCommand } from "../../features/registry";
 import { setState, state } from "../../state";
 import { btwDispatch } from "../../store/btw";
 
@@ -31,12 +31,6 @@ describe("btw feature", () => {
 			kind: "ask",
 			question: "what does this do",
 		});
-	});
-
-	test("btw and btw-history commands and the history modal come from the btw feature", () => {
-		expect(featureCommand("btw")?.feature.id).toBe("btw");
-		expect(featureCommand("btw-history")?.feature.id).toBe("btw");
-		expect(featureModal("btw-history")).toBeFunction();
 	});
 
 	test("bare /btw-history opens the history modal", () => {

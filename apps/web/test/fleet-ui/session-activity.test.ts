@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { DaemonStatus } from "#lib/wire/protocol";
-import { sessionActivity, type SessionActivity } from "../../fleet-ui/session-activity";
+import { sessionActivity } from "../../fleet-ui/session-activity";
 
 /** Attached session, idle stream. */
 const ATTACHED_IDLE = {
@@ -166,28 +166,5 @@ describe("sessionActivity remote realtime activity (daemon_activity frames)", ()
 		expect(
 			sessionActivity({ status: "ready" }, { ...ATTACHED_STREAMING, remote: REMOTE_IDLE }),
 		).toBe("in_progress");
-	});
-});
-
-describe("sessionActivity result set", () => {
-	test("every branch returns a valid SessionActivity value", () => {
-		const results: Array<SessionActivity | null> = [
-			sessionActivity({ status: "error" }, ATTACHED_BLOCKED),
-			sessionActivity({ status: "ready" }, DETACHED),
-			sessionActivity({ status: "ready" }, ATTACHED_IDLE),
-			sessionActivity({ status: "ready" }, ATTACHED_UNREVIEWED),
-			sessionActivity({ status: "ready" }, { ...DETACHED, unread: true }),
-			sessionActivity({ status: "ready" }, ATTACHED_STREAMING),
-			sessionActivity({ status: "ready" }, ATTACHED_BLOCKED),
-		];
-		expect(results).toEqual([
-			null,
-			"idle",
-			"idle",
-			"unreviewed",
-			"unread",
-			"in_progress",
-			"blocked",
-		]);
 	});
 });

@@ -1,5 +1,5 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
-import { OMP_PROTO, SSE_EVENT_NAME } from "#lib/wire/protocol";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
+import { OMP_PROTO } from "#lib/wire/protocol";
 import type {
 	ClientCommand,
 	DaemonEntry,
@@ -9,7 +9,8 @@ import type {
 	SettingsModel,
 	WebSessionState,
 } from "#lib/wire/protocol";
-import { activateFeatures } from "../features/registry";
+import { FEATURE_IDS, type FeatureId } from "../features/manifest";
+import { activateFeatures, isFeatureEnabled } from "../features/registry";
 import { pruneUnread, unreadIds } from "../fleet-ui/unread";
 import {
 	announce,
@@ -38,67 +39,22 @@ import {
 	resumeDaemonSession,
 	type SubagentInfo,
 } from "../state";
-
-// ---------------------------------------------------------------------------
-// Minimal /events transport double. connect() registers its SSE handler on a
-// FakeEventSource; tests dispatch frames through it exactly like the real
-// stream and capture POSTed /command bodies via a stubbed fetch.
-// ---------------------------------------------------------------------------
-type SseHandler = (ev: { data: string; lastEventId?: string }) => void;
-
-class FakeEventSource {
-	static instances: FakeEventSource[] = [];
-	static handlers = new Map<string, SseHandler>();
-	onopen: (() => void) | null = null;
-	/** Assigned by connect() like the real EventSource; tests invoke it. */
-	onerror: (() => void) | null = null;
-	constructor(public readonly url: string) {
-		FakeEventSource.instances.push(this);
-	}
-	addEventListener(type: string, handler: SseHandler): void {
-		FakeEventSource.handlers.set(type, handler);
-	}
-	close(): void {}
-	/** Dispatch one SSE event; `lastEventId` mirrors native EventSource's
-	 *  MessageEvent.lastEventId (the wire `id:` field, e.g. "1024"). */
-	static dispatch(type: string, data: string, lastEventId?: string): void {
-		FakeEventSource.handlers.get(type)?.({ data, lastEventId });
-	}
-}
-
-const posted: ClientCommand[] = [];
-
-function attached(sessionId: string): ServerFrame {
-	return { type: "attached", sessionId };
-}
-
-function callResult(id: string, data: unknown): ServerFrame {
-	return { type: "call_result", id, ok: true, data };
-}
-
-function dispatch(frame: ServerFrame): void {
-	FakeEventSource.dispatch(SSE_EVENT_NAME, JSON.stringify(frame));
-}
-
-/** Dispatch one frame stamped with an SSE id (priming seqs 1..k or delta seqs >= SSE_DELTA_SEQ_START). */
-function dispatchSeq(frame: ServerFrame, seq: number): void {
-	FakeEventSource.dispatch(SSE_EVENT_NAME, JSON.stringify(frame), String(seq));
-}
-
-function userMsg(text: string): {
-	role: "user";
-	content: Array<{ type: "text"; text: string }>;
-	timestamp: number;
-} {
-	return { role: "user", content: [{ type: "text", text }], timestamp: 0 };
-}
-
-function assistantMsg(text: string): {
-	role: "assistant";
-	content: Array<{ type: "text"; text: string }>;
-} {
-	return { role: "assistant", content: [{ type: "text", text }] };
-}
+import {
+	FakeEventSource,
+	attached,
+	assistantMsg,
+	callResult,
+	dispatch,
+	dispatchSeq,
+	flushMicrotasks,
+	installLocalStorageShim,
+	installTransportStubs,
+	itemCounts,
+	posted,
+	restoreBrowserGlobals,
+	setBrowserGlobal,
+	userMsg,
+} from "./web.testkit";
 
 function toolResultMsg(toolCallId: string): {
 	role: "toolResult";
@@ -150,35 +106,28 @@ function completedTurnEvents(): ServerFrame[] {
 	];
 }
 
-function itemCounts(): Record<string, number> {
-	const counts: Record<string, number> = {};
-	for (const item of state.items) counts[item.kind] = (counts[item.kind] ?? 0) + 1;
-	return counts;
-}
-
-async function flushMicrotasks(): Promise<void> {
-	await Promise.resolve();
-	await Promise.resolve();
-}
-
 function sub(status: string): SubagentInfo {
 	return { id: "s1", index: 0, agent: "task", status, lastUpdate: 0 };
 }
 
+let baselineFeatures: FeatureId[];
+let baselineToasts: typeof state.toasts;
+let baselinePlanModeEnabled: typeof state.planModeEnabled;
+
+beforeAll(() => {
+	baselineFeatures = FEATURE_IDS.filter(isFeatureEnabled);
+	baselineToasts = [...state.toasts];
+	baselinePlanModeEnabled = state.planModeEnabled;
+});
+
+afterAll(async () => {
+	await activateFeatures(baselineFeatures);
+	setState("toasts", baselineToasts);
+	setState("planModeEnabled", baselinePlanModeEnabled);
+});
+
 beforeEach(() => {
-	posted.length = 0;
-	FakeEventSource.instances.length = 0;
-	FakeEventSource.handlers.clear();
-	// Browser globals the store's transport touches; the Bun test runner has none.
-	globalThis.location = { search: "" } as Location;
-	globalThis.window = {
-		setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms),
-	} as unknown as Window & typeof globalThis;
-	globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
-	globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
-		if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
-		return { ok: true, status: 202 } as Response;
-	}) as unknown as typeof fetch;
+	installTransportStubs();
 	setState({
 		currentSessionId: "",
 		connected: false,
@@ -228,24 +177,10 @@ beforeEach(() => {
 	});
 });
 
-// The transport stubs are global and would otherwise leak into sibling test
-// files run in the same process (`bun test a.ts b.ts` without --parallel);
-// restore the originals once this file's own tests are done.
-const originalLocation = globalThis.location;
-const originalWindow = globalThis.window;
-const originalEventSource = globalThis.EventSource;
-const originalFetch = globalThis.fetch;
-const originalLocalStorage = globalThis.localStorage;
-const originalHistory = globalThis.history;
-
-afterEach(() => {
-	globalThis.location = originalLocation;
-	globalThis.window = originalWindow;
-	globalThis.EventSource = originalEventSource;
-	globalThis.fetch = originalFetch;
-	globalThis.localStorage = originalLocalStorage;
-	globalThis.history = originalHistory;
-});
+// Browser doubles are process-global (see web.testkit.ts) and would otherwise
+// leak into sibling test files run in the same process. Restore them after each
+// test, including test-specific overrides.
+afterEach(restoreBrowserGlobals);
 
 describe("attached-frame handling", () => {
 	test("daemon switch rejects the old session's calls but the fresh getSubagents pull survives", async () => {
@@ -787,7 +722,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		respond: (url: string, init?: RequestInit) => { status: number; body: unknown },
 	): Array<{ url: string; method: string; body?: unknown }> {
 		const requests: Array<{ url: string; method: string; body?: unknown }> = [];
-		globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+		setBrowserGlobal("fetch", (async (input: unknown, init?: RequestInit) => {
 			const url = String(input);
 			const { status, body } = respond(url, init);
 			requests.push({
@@ -801,7 +736,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 				json: async () => body,
 				text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
 			} as unknown as Response;
-		}) as unknown as typeof fetch;
+		}) as unknown as typeof fetch);
 		return requests;
 	}
 
@@ -1167,18 +1102,8 @@ describe("chatUnviewed (a turn ended while in Analysis)", () => {
 });
 
 describe("setView persistence and hash handling", () => {
-	/** In-memory localStorage double; set before connect/store re-init. */
-	function stubStorage(): void {
-		const store = new Map<string, string>();
-		globalThis.localStorage = {
-			getItem: (k: string) => store.get(k) ?? null,
-			setItem: (k: string, v: string) => void store.set(k, v),
-			removeItem: (k: string) => void store.delete(k),
-		} as unknown as Storage;
-	}
-
 	test("setView persists omp.view; setTxSidebarVisible persists its own key", () => {
-		stubStorage();
+		installLocalStorageShim();
 		setView("analysis");
 		expect(globalThis.localStorage.getItem("omp.view")).toBe("analysis");
 		setTxSidebarVisible(false);
@@ -1186,11 +1111,11 @@ describe("setView persistence and hash handling", () => {
 	});
 
 	test("entering chat clears the hash via history.replaceState and the chatUnviewed dot", () => {
-		stubStorage();
-		globalThis.history = {
+		installLocalStorageShim();
+		setBrowserGlobal("history", {
 			replaceState: vi.fn(),
-		} as unknown as typeof history;
-		globalThis.location = { hash: "#/s/x", pathname: "/app", search: "?a=1" } as Location;
+		} as unknown as typeof history);
+		setBrowserGlobal("location", { hash: "#/s/x", pathname: "/app", search: "?a=1" } as Location);
 		setState("chatUnviewed", true);
 		setView("analysis");
 		setView("chat");
@@ -1199,16 +1124,16 @@ describe("setView persistence and hash handling", () => {
 	});
 
 	test("entering analysis keeps the hash untouched", () => {
-		stubStorage();
+		installLocalStorageShim();
 		const replaceState = vi.fn();
-		globalThis.history = { replaceState } as unknown as typeof history;
-		globalThis.location = { hash: "", pathname: "/app", search: "" } as Location;
+		setBrowserGlobal("history", { replaceState } as unknown as typeof history);
+		setBrowserGlobal("location", { hash: "", pathname: "/app", search: "" } as Location);
 		setView("analysis");
 		expect(replaceState).not.toHaveBeenCalled();
 	});
 
 	test("defaults: txSidebarVisible true, view chat, dot false", () => {
-		stubStorage();
+		installLocalStorageShim();
 		expect(state.txSidebarVisible).toBe(true);
 		expect(state.view).toBe("chat");
 		expect(state.chatUnviewed).toBe(false);
@@ -2476,7 +2401,7 @@ describe("call delivery: a lost answer is recovered by re-POSTing the command", 
 		const executed: string[] = [];
 		const posts: string[] = [];
 		const answers = new Map<string, ServerFrame>();
-		globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+		setBrowserGlobal("fetch", (async (_input: unknown, init?: RequestInit) => {
 			const cmd = JSON.parse(String(init?.body)) as ClientCommand;
 			if (cmd.type === "call") {
 				posts.push(cmd.id);
@@ -2489,7 +2414,7 @@ describe("call delivery: a lost answer is recovered by re-POSTing the command", 
 				}
 			}
 			return { ok: true, status: 202 } as Response;
-		}) as unknown as typeof fetch;
+		}) as unknown as typeof fetch);
 		return { executed, posts };
 	}
 

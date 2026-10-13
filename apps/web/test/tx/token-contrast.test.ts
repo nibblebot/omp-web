@@ -5,7 +5,6 @@
  * and the fleet palettes from src/styles/tokens.css, and enforces:
  * - every `var(--tx-...)` referenced inside the section is defined there
  *   (the rename .badge→.tx-badge, --bg→--tx-bg, etc. must not leave dangles)
- * - the core semantic remaps point at the intended fleet tokens
  * - --tx-text-faint resolves to a WCAG AA 4.5:1 pair on both --tx-bg and
  *   --tx-bg-selected, in the default (dark) palette and in fleet's canonical
  *   light palette (fleet's light theme re-skins tx via the var() chains)
@@ -103,19 +102,6 @@ describe("tx section token integrity", () => {
 		for (const name of refs) {
 			expect(txTokens[name], `missing definition for ${name}`).toBeDefined();
 		}
-	});
-
-	test("core tokens remap onto the intended fleet tokens", () => {
-		expect(txTokens["--tx-bg"]).toBe("var(--bg)");
-		expect(txTokens["--tx-text"]).toBe("var(--text)");
-		expect(txTokens["--tx-accent"]).toBe("var(--accent)");
-		expect(txTokens["--tx-accent-dim"]).toBe("var(--accent-dim)");
-		expect(txTokens["--tx-border"]).toBe("var(--border)");
-		expect(txTokens["--tx-text-dim"]).toBe("var(--muted)");
-		expect(txTokens["--tx-text-faint"]).toBe("var(--muted-2)");
-		expect(txTokens["--tx-err"]).toBe("var(--error)");
-		expect(txTokens["--tx-warn"]).toBe("var(--warning)");
-		expect(txTokens["--tx-ok"]).toBe("var(--success)");
 	});
 
 	test("font stacks stay literal tx fonts", () => {

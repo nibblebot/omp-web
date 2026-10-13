@@ -91,18 +91,44 @@ describe("groupToolRuns", () => {
 		expect(runs[0]!.durationMs).toBe(0);
 	});
 
-	test("a user item breaks a run and a fresh suffix belongs to the next run", () => {
-		// assistant(3) after the user must be consumed by tool(4), NOT folded into run[1]
-		const items = [tool(1, "read"), user(2), assistant(3, [thinking("h")]), tool(4, "glob")];
-		expect(groupToolRuns(items)).toEqual([
-			run(1, [tool(1, "read")]),
-			run(4, [tool(4, "glob")], {
-				thinking: [thinking("h")],
-				consumedAssistantIds: [3],
-				turnCount: 1,
-			}),
-		]);
-	});
+	// Every item kind that is neither a tool nor an assistant breaks the run.
+	// The user row additionally pins that a suffix AFTER the breaker is a fresh
+	// suffix for the next run: assistant(3) is consumed by tool(4), NOT folded
+	// into run[1].
+	const breakerCases: Array<{ kind: string; items: ChatItem[]; expected: Run[] }> = [
+		{
+			kind: "user",
+			items: [tool(1, "read"), user(2), assistant(3, [thinking("h")]), tool(4, "glob")],
+			expected: [
+				run(1, [tool(1, "read")]),
+				run(4, [tool(4, "glob")], {
+					thinking: [thinking("h")],
+					consumedAssistantIds: [3],
+					turnCount: 1,
+				}),
+			],
+		},
+		{
+			kind: "bash",
+			items: [tool(1, "read"), bash(2), tool(3, "glob")],
+			expected: [run(1, [tool(1, "read")]), run(3, [tool(3, "glob")])],
+		},
+		{
+			kind: "compaction",
+			items: [tool(1, "read"), compaction(2), tool(3, "glob")],
+			expected: [run(1, [tool(1, "read")]), run(3, [tool(3, "glob")])],
+		},
+		{
+			kind: "notice",
+			items: [tool(1, "read"), notice(2), tool(3, "glob")],
+			expected: [run(1, [tool(1, "read")]), run(3, [tool(3, "glob")])],
+		},
+	];
+	for (const breakerCase of breakerCases) {
+		test(`a ${breakerCase.kind} item breaks the run`, () => {
+			expect(groupToolRuns(breakerCase.items)).toEqual(breakerCase.expected);
+		});
+	}
 
 	test("a breaker clears a stale assistant suffix so it is never consumed", () => {
 		// assistant(1) precedes the user, so the breaker must drop it entirely
@@ -112,21 +138,6 @@ describe("groupToolRuns", () => {
 		expect(runs[0]!.thinking).toEqual([]);
 		expect(runs[0]!.consumedAssistantIds).toEqual([]);
 		expect(runs[0]!.turnCount).toBe(0);
-	});
-
-	test("a bash item breaks the run", () => {
-		const items = [tool(1, "read"), bash(2), tool(3, "glob")];
-		expect(groupToolRuns(items)).toEqual([run(1, [tool(1, "read")]), run(3, [tool(3, "glob")])]);
-	});
-
-	test("a compaction item breaks the run", () => {
-		const items = [tool(1, "read"), compaction(2), tool(3, "glob")];
-		expect(groupToolRuns(items)).toEqual([run(1, [tool(1, "read")]), run(3, [tool(3, "glob")])]);
-	});
-
-	test("a notice item breaks the run", () => {
-		const items = [tool(1, "read"), notice(2), tool(3, "glob")];
-		expect(groupToolRuns(items)).toEqual([run(1, [tool(1, "read")]), run(3, [tool(3, "glob")])]);
 	});
 
 	test("a thinking-bearing suffix is consumed: thinking folded, ids, turns, durations summed", () => {

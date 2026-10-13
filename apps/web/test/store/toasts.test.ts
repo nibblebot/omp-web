@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { setState, state } from "../../state";
 import { TOAST_DISMISS_MS, dismissToast, pushToast } from "../../store/toasts";
+import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
 
 // ---------------------------------------------------------------------------
 // Toast store behavior. window.setTimeout is stubbed with a controllable
@@ -11,22 +12,18 @@ type CapturedTimer = { fn: () => void; ms: number };
 
 const timers: CapturedTimer[] = [];
 
-const originalWindow = globalThis.window;
-
 beforeEach(() => {
 	timers.length = 0;
-	globalThis.window = {
+	setBrowserGlobal("window", {
 		setTimeout: (fn: () => void, ms?: number) => {
 			timers.push({ fn, ms: ms ?? 0 });
 			return timers.length;
 		},
-	} as unknown as Window & typeof globalThis;
+	} as unknown as Window & typeof globalThis);
 	setState("toasts", []);
 });
 
-afterEach(() => {
-	globalThis.window = originalWindow;
-});
+afterEach(restoreBrowserGlobals);
 
 function toastTexts(): string[] {
 	return state.toasts.map((t) => t.text);

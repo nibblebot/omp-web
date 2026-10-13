@@ -1,83 +1,36 @@
-import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { SSE_EVENT_NAME } from "#lib/wire/protocol";
-import type { ClientCommand, ServerFrame } from "#lib/wire/protocol";
-import { activateFeatures } from "../../features/registry";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import type { ServerFrame } from "#lib/wire/protocol";
+import { FEATURE_IDS, type FeatureId } from "../../features/manifest";
+import { activateFeatures, isFeatureEnabled } from "../../features/registry";
 import { connect, setState, state } from "../../state";
+import {
+	FakeEventSource,
+	assistantMsg,
+	attached,
+	dispatch,
+	installTransportStubs,
+	itemCounts,
+	restoreBrowserGlobals,
+	userMsg,
+} from "../web.testkit";
 
-// ---------------------------------------------------------------------------
-// Minimal /events transport double (same shape as test/state.test.ts).
-// connect() registers its SSE handler on a FakeEventSource; tests dispatch
-// frames through it exactly like the real stream.
-// ---------------------------------------------------------------------------
-type SseHandler = (ev: { data: string; lastEventId?: string }) => void;
-
-class FakeEventSource {
-	static instances: FakeEventSource[] = [];
-	static handlers = new Map<string, SseHandler>();
-	onopen: (() => void) | null = null;
-	onerror: (() => void) | null = null;
-	constructor(public readonly url: string) {
-		FakeEventSource.instances.push(this);
-	}
-	addEventListener(type: string, handler: SseHandler): void {
-		FakeEventSource.handlers.set(type, handler);
-	}
-	close(): void {}
-	static dispatch(type: string, data: string, lastEventId?: string): void {
-		FakeEventSource.handlers.get(type)?.({ data, lastEventId });
-	}
-}
-
-const posted: ClientCommand[] = [];
-
-function attached(sessionId: string): ServerFrame {
-	return { type: "attached", sessionId };
-}
-
-function dispatch(frame: ServerFrame): void {
-	FakeEventSource.dispatch(SSE_EVENT_NAME, JSON.stringify(frame));
-}
-
-function userMsg(text: string): {
-	role: "user";
-	content: Array<{ type: "text"; text: string }>;
-	timestamp: number;
-} {
-	return { role: "user", content: [{ type: "text", text }], timestamp: 0 };
-}
-
-function assistantMsg(text: string): {
-	role: "assistant";
-	content: Array<{ type: "text"; text: string }>;
-} {
-	return { role: "assistant", content: [{ type: "text", text }] };
-}
-
-function itemCounts(): Record<string, number> {
-	const counts: Record<string, number> = {};
-	for (const item of state.items) counts[item.kind] = (counts[item.kind] ?? 0) + 1;
-	return counts;
-}
+let baselineFeatures: FeatureId[];
 
 beforeAll(async () => {
+	baselineFeatures = FEATURE_IDS.filter(isFeatureEnabled);
 	await activateFeatures(["advisor"]);
 });
 
+afterAll(async () => {
+	await activateFeatures(baselineFeatures);
+});
+
 beforeEach(() => {
-	posted.length = 0;
-	FakeEventSource.instances.length = 0;
-	FakeEventSource.handlers.clear();
-	globalThis.location = { search: "" } as Location;
-	globalThis.window = {
-		setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms),
-	} as unknown as Window & typeof globalThis;
-	globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
-	globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
-		if (typeof init?.body === "string") posted.push(JSON.parse(init.body) as ClientCommand);
-		return { ok: true, status: 202 } as Response;
-	}) as unknown as typeof fetch;
+	installTransportStubs();
 	setState("items", []);
 });
+
+afterEach(restoreBrowserGlobals);
 
 describe("advisor notes render inline (TUI advisor card parity)", () => {
 	const notes = [

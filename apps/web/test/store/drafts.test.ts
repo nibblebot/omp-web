@@ -11,6 +11,7 @@ import {
 	type DraftBody,
 	type DraftKey,
 } from "../../store/drafts";
+import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
 
 // ---------------------------------------------------------------------------
 // Ghost-draft guards: a sent prompt must never return to the composer. Real
@@ -23,8 +24,6 @@ import {
 // Real-timer integration: these tests exercise the live platform clock path
 // the composer relies on, which deterministic time control cannot cover.
 // ---------------------------------------------------------------------------
-
-const originalWindow = globalThis.window;
 
 const usedKeys: DraftKey[] = [];
 
@@ -45,11 +44,11 @@ function delay(ms: number): Promise<void> {
 }
 
 beforeEach(() => {
-	globalThis.window = {
+	setBrowserGlobal("window", {
 		setTimeout: (fn: (...args: unknown[]) => void, ms?: number) =>
 			setTimeout(fn, ms) as unknown as number,
 		clearTimeout: (id: number) => clearTimeout(id),
-	} as unknown as Window & typeof globalThis;
+	} as unknown as Window & typeof globalThis);
 });
 
 afterEach(() => {
@@ -59,7 +58,7 @@ afterEach(() => {
 		deleteClearedDrafts(key);
 	}
 	usedKeys.length = 0;
-	globalThis.window = originalWindow;
+	restoreBrowserGlobals();
 });
 
 describe("drafts (ghost-draft guards)", () => {

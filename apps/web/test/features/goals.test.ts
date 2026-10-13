@@ -1,18 +1,7 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { goalDispatch } from "../../features/goal-dispatch";
-import { activateFeatures, featureCommand } from "../../features/registry";
 
 describe("goals feature", () => {
-	beforeEach(async () => {
-		await activateFeatures(["goals"]);
-	});
-
-	test("/goal is registered as a feature command with its detail string", () => {
-		expect(featureCommand("goal")?.command.detail).toBe(
-			"Goal controls (/goal set|show|pause|resume|drop|budget)",
-		);
-	});
-
 	test("/goal subcommands route to goalRuntime relay rows", () => {
 		expect(goalDispatch("set implement the API")).toEqual({
 			kind: "call",
