@@ -1,9 +1,16 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
+let sanitizer: typeof DOMPurify | undefined;
+
+/** Return the sanitizer shared by rendering and removal diagnostics. */
+export function getMarkdownSanitizer(): typeof DOMPurify {
+	return (sanitizer ??= DOMPurify());
+}
+
 // Sanitization is mandatory, because model output can contain raw HTML.
 export function renderMarkdown(src: string): string {
-	return DOMPurify.sanitize(marked.parse(src, { async: false }));
+	return getMarkdownSanitizer().sanitize(marked.parse(src, { async: false }));
 }
 
 /**
