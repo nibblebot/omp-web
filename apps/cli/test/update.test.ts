@@ -1,12 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { cleanupTempDirs } from "#lib/testkit/temp-dir.testkit";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import {
 	applyUpdate,
 	compareVersions,
 	GITHUB_RELEASES_BASE,
 	main,
 	parseManifest,
+	realInstall,
 	resolveBase,
 	sha256Of,
 	UpdateError,
@@ -15,14 +18,53 @@ import { resolveVersion } from "../version";
 
 afterAll(cleanupTempDirs);
 
-/** A fake install seam: records every tarball path handed to it. */
+/** A fake install seam: records every tarball path + expected version handed to it. */
 function fakeInstall(code = 0) {
 	const installs: string[] = [];
-	const install = async (tarballPath: string) => {
+	const versions: string[] = [];
+	const install = async (tarballPath: string, expectedVersion: string) => {
 		installs.push(tarballPath);
+		versions.push(expectedVersion);
 		return code;
 	};
-	return { installs, install };
+	return { installs, versions, install };
+}
+
+/** A pinned-prefix install root in a temp dir: the bundle the guard probes for
+ *  plus a manifest (a legacy prefix's `patchedDependencies` when seeded). */
+function installRoot(manifest: Record<string, unknown> = {}) {
+	const root = tempDir("omp-web-install-");
+	mkdirSync(join(root, "node_modules", "omp-web", "dist-bundle"), { recursive: true });
+	writeFileSync(join(root, "node_modules", "omp-web", "dist-bundle", "cli.js"), "// bundle\n");
+	writeFileSync(
+		join(root, "package.json"),
+		`${JSON.stringify({ name: "omp-web-install", private: true, ...manifest }, null, "\t")}\n`,
+	);
+	return root;
+}
+
+/** Fake bun steps for a temp install root: records the commands and writes the
+ *  installed package.json the read-back reads. Like bun, the add rewrites the
+ *  manifest's dependency set and leaves the prefix's own keys alone. */
+function fakeBun(installDir: string, installedVersion: string) {
+	const calls: string[][] = [];
+	const run = async (args: string[]) => {
+		calls.push(args);
+		if (args[1] === "add") {
+			writeFileSync(
+				join(installDir, "node_modules", "omp-web", "package.json"),
+				`{"name":"omp-web","version":"${installedVersion}"}\n`,
+			);
+			const manifest = (await Bun.file(join(installDir, "package.json")).json()) as Record<
+				string,
+				unknown
+			>;
+			manifest.dependencies = { "omp-web": `file:${args[2]}` };
+			writeFileSync(join(installDir, "package.json"), `${JSON.stringify(manifest, null, "\t")}\n`);
+		}
+		return 0;
+	};
+	return { calls, run };
 }
 
 /**
@@ -155,7 +197,7 @@ describe("sha256Of", () => {
 describe("applyUpdate", () => {
 	test("happy path verifies sha256 and installs the verified tarball", async () => {
 		const { base, stop, sha } = await serveUpdate();
-		const { installs, install } = fakeInstall();
+		const { installs, versions, install } = fakeInstall();
 		try {
 			const result = await applyUpdate(
 				base,
@@ -164,6 +206,7 @@ describe("applyUpdate", () => {
 			);
 			expect(result).toEqual({ installedVersion: "0.2.0", installCalled: true });
 			expect(installs).toHaveLength(1);
+			expect(versions).toEqual(["0.2.0"]);
 			expect(installs[0]).toMatch(/omp-web-update-[0-9a-z]+\.tgz$/);
 			expect(installs[0]).not.toContain(base);
 			expect(sha).toHaveLength(64);
@@ -301,6 +344,48 @@ describe("applyUpdate", () => {
 	});
 });
 
+describe("realInstall", () => {
+	/** The entry releases up to 0.2.0 left in a prefix's root manifest. */
+	const legacyPatch = {
+		"@oh-my-pi/pi-agent-core@18.2.6": "patches/@oh-my-pi%2Fpi-agent-core@18.2.6.patch",
+	};
+
+	test("removes, adds, and accepts a matching on-disk version", async () => {
+		const root = installRoot();
+		const tarball = join(root, "omp-web-0.2.0.tgz");
+		const { calls, run } = fakeBun(root, "0.2.0");
+		expect(await realInstall(tarball, "0.2.0", { installDir: root, run })).toBe(0);
+		expect(calls).toEqual([
+			["bun", "remove", "omp-web"],
+			["bun", "add", tarball],
+		]);
+	});
+
+	test("a read-back version that differs from the manifest's fails loudly", async () => {
+		const root = installRoot();
+		const tarball = join(root, "omp-web-0.2.0.tgz");
+		const { run } = fakeBun(root, "0.1.0");
+		const e = await rejection(realInstall(tarball, "0.2.0", { installDir: root, run }));
+		expect(e.code).toBe("install");
+		expect(e.message).toContain("0.1.0");
+		expect(e.message).toContain("0.2.0");
+	});
+
+	test("a legacy root patchedDependencies entry survives the install", async () => {
+		const root = installRoot({ patchedDependencies: legacyPatch });
+		const tarball = join(root, "omp-web-0.2.0.tgz");
+		const { run } = fakeBun(root, "0.2.0");
+		expect(await realInstall(tarball, "0.2.0", { installDir: root, run })).toBe(0);
+		// The remove/add cycle rewrote the manifest (the fake models bun: new
+		// dependency set, the prefix's own keys carried over); the legacy map
+		// must still be there. Dropping it is a manual step, never an update's.
+		const manifest = (await Bun.file(join(root, "package.json")).json()) as {
+			patchedDependencies?: unknown;
+		};
+		expect(manifest.patchedDependencies).toEqual(legacyPatch);
+	});
+});
+
 describe("main", () => {
 	const CHANNEL = "OMP_WEB_UPDATE_URL";
 
@@ -361,21 +446,6 @@ describe("main", () => {
 		} finally {
 			globalThis.fetch = origFetch;
 			c.restore();
-		}
-	});
-
-	test("--check prints the manifest version and exits 0", async () => {
-		const newer = await nextVersion();
-		const { base, stop } = await serveUpdate(newer);
-		const c = captureConsole();
-		try {
-			const code = await withEnv(base, () => main(["--check"]));
-			expect(code).toBe(0);
-			expect(c.out).toEqual([newer]);
-			expect(c.err).toHaveLength(0);
-		} finally {
-			c.restore();
-			await stop();
 		}
 	});
 

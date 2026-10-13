@@ -1,36 +1,38 @@
 import { describe, expect, test } from "bun:test";
-import { classifyCommand } from "../omp-web";
+import { classifyCommand, type DispatchTarget } from "../omp-web";
 
 describe("classifyCommand", () => {
-	test("routes every fleet control-plane verb to fleet", () => {
-		for (const verb of [
-			"control",
-			"ui",
-			"sessions",
-			"projects",
-			"profiles",
-			"spawn",
-			"add-repo",
-			"enroll",
-			"provision",
-			"add-clone",
-			"start",
-			"stop",
-			"remove",
-			"rm-project",
-			"add-worktree",
-			"rm-worktree",
-			"prompt",
-			"preflight",
-		]) {
-			expect(classifyCommand([verb])).toBe("fleet");
-		}
-	});
+	/** One routing table for every argv the dispatcher must place. Trailing
+	 *  args ride along: classification reads argv[0], so a verb's options
+	 *  never change its target. */
+	const routes: Array<[string[], DispatchTarget]> = [
+		[["control"], "fleet"],
+		[["ui"], "fleet"],
+		[["sessions"], "fleet"],
+		[["projects"], "fleet"],
+		[["profiles"], "fleet"],
+		[["spawn"], "fleet"],
+		[["add-repo"], "fleet"],
+		[["enroll"], "fleet"],
+		[["provision"], "fleet"],
+		[["add-clone"], "fleet"],
+		[["start"], "fleet"],
+		[["stop"], "fleet"],
+		[["remove"], "fleet"],
+		[["rm-project"], "fleet"],
+		[["add-worktree"], "fleet"],
+		[["rm-worktree"], "fleet"],
+		[["prompt"], "fleet"],
+		[["preflight"], "fleet"],
+		[["control", "--port", "0"], "fleet"],
+		[["sessions", "--port", "4722"], "fleet"],
+		[["ui", "--control-port", "4722", "--open"], "fleet"],
+	];
 
-	test("keeps trailing args with the fleet verb", () => {
-		expect(classifyCommand(["control", "--port", "0"])).toBe("fleet");
-		expect(classifyCommand(["sessions", "--port", "4722"])).toBe("fleet");
-		expect(classifyCommand(["ui", "--control-port", "4722", "--open"])).toBe("fleet");
+	test("routes argv to its target", () => {
+		for (const [argv, target] of routes) {
+			expect(classifyCommand(argv)).toBe(target);
+		}
 	});
 
 	test("routes the daemon token to session", () => {

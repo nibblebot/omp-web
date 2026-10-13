@@ -106,8 +106,10 @@ export function resolveBase(envBase: string, pin?: string): string {
 /** Injectable I/O for the update pipeline (tests stub these; main wires the real ones). */
 export interface UpdateIO {
 	fetch: typeof fetch;
-	/** Install a verified local tarball globally; resolves the child exit code. */
-	install: (tarballPath: string) => Promise<number>;
+	/** Install a verified local tarball; resolves the child exit code.
+	 *  `expectedVersion` is the manifest's version, verified against the
+	 *  installed package's own manifest. */
+	install: (tarballPath: string, expectedVersion: string) => Promise<number>;
 }
 
 export interface ApplyUpdateOptions {
@@ -196,7 +198,7 @@ export async function applyUpdate(
 	const tmpPath = join(tmpdir(), `omp-web-update-${Math.random().toString(36).slice(2)}.tgz`);
 	try {
 		await Bun.write(tmpPath, data);
-		const code = await io.install(tmpPath);
+		const code = await io.install(tmpPath, manifest.version);
 		if (code !== 0) {
 			throw new UpdateError("install", `bun add failed (exit ${code})`);
 		}
@@ -216,6 +218,15 @@ function pinnedInstallDir(): string {
 	return fileURLToPath(new URL("../../..", import.meta.url));
 }
 
+/** Seams for `realInstall`: tests point it at a temp prefix with a recording
+ *  runner; production leaves both at their defaults. */
+export interface RealInstallOptions {
+	/** Pinned prefix to update (default: the dir this bundle is installed in). */
+	installDir?: string;
+	/** Run one bun step in the install dir; resolves the child exit code. */
+	run?: (args: string[]) => Promise<number>;
+}
+
 /**
  * Update installs into omp-web's OWN pinned project dir (NOT the shared
  * `bun install -g` global store, which is flat and shared with the `omp`
@@ -229,8 +240,23 @@ function pinnedInstallDir(): string {
  * the child. After install the on-disk package version is read back and must
  * match the manifest's, or the update fails loudly.
  */
-async function realInstall(tarballPath: string): Promise<number> {
-	const installDir = pinnedInstallDir();
+export async function realInstall(
+	tarballPath: string,
+	expectedVersion: string,
+	opts: RealInstallOptions = {},
+): Promise<number> {
+	const installDir = opts.installDir ?? pinnedInstallDir();
+	const run =
+		opts.run ??
+		(async (args: string[]) => {
+			const child = Bun.spawn(args, {
+				cwd: installDir,
+				stdout: "inherit",
+				stderr: "inherit",
+				env: process.env,
+			});
+			return (await child.exited) ?? 1;
+		});
 	if (!existsSync(join(installDir, "node_modules", "omp-web", "dist-bundle", "cli.js"))) {
 		console.error(
 			"omp-web: not installed in a pinned directory (scripts/install-omp-web.ts). Reinstall with the installer first",
@@ -240,37 +266,36 @@ async function realInstall(tarballPath: string): Promise<number> {
 	// Anchor the install dir as a bun project so `bun remove`/`bun add` never
 	// walk UP to an ancestor package.json (a repo or $HOME that owns one) and
 	// attach there. The install dir has no package.json of its own unless a
-	// successful add wrote one.
+	// successful add wrote one. An existing manifest is left alone: the prefix
+	// owns it, and the legacy `patchedDependencies` map releases up to 0.2.0
+	// left behind is user state that update never removes.
 	if (!existsSync(join(installDir, "package.json")))
 		writeFileSync(join(installDir, "package.json"), '{"name":"omp-web-install","private":true}\n');
-	const remove = Bun.spawn(["bun", "remove", "omp-web"], {
-		cwd: installDir,
-		stdout: "inherit",
-		stderr: "inherit",
-		env: process.env,
-	});
-	const removeCode = (await remove.exited) ?? 1;
+	const removeCode = await run(["bun", "remove", "omp-web"]);
 	if (removeCode !== 0 && removeCode !== 1) return removeCode;
-	const add = Bun.spawn(["bun", "add", tarballPath], {
-		cwd: installDir,
-		stdout: "inherit",
-		stderr: "inherit",
-		env: process.env,
-	});
-	const addCode = (await add.exited) ?? 1;
+	const addCode = await run(["bun", "add", tarballPath]);
 	if (addCode !== 0) return addCode;
 	// Read back the installed version. The bin symlink target is stable, so
 	// the package.json version is the ground truth for "did it actually flip".
+	let installed: unknown;
 	try {
 		const pkg = (await Bun.file(
 			join(installDir, "node_modules", "omp-web", "package.json"),
 		).json()) as {
 			version?: unknown;
 		};
-		return typeof pkg.version === "string" && pkg.version !== "" ? 0 : 1;
+		installed = pkg.version;
 	} catch {
 		return 1;
 	}
+	if (typeof installed !== "string" || installed === "") return 1;
+	if (installed !== expectedVersion) {
+		throw new UpdateError(
+			"install",
+			`installed omp-web version ${installed} does not match the manifest's ${expectedVersion}`,
+		);
+	}
+	return 0;
 }
 
 /**
