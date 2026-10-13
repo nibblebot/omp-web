@@ -5,8 +5,8 @@
  *
  * Layering: imports only fleet/log-store.ts, shared/stats-types.ts, node
  * builtins and ./: never server/ or src/. Reuses the stats app's route
- * registry convention (Route + dispatchRequest + json/errorJson) so the
- * fleet control plane can mount it with one line beside /ctl/stats.
+ * registry convention (Route + dispatchRequest + json) so the fleet control
+ * plane can mount it with one line beside /ctl/stats.
  *
  * Route contract (frozen with Lifecycle + Frontend):
  *   GET /ctl/stored/workspaces
@@ -21,7 +21,7 @@
  * contain credentials or private endpoints; provenance is secret-free
  * (source paths/URLs are never serialized).
  */
-import { json, errorJson, dispatchRequest } from "./stats-http";
+import { json, dispatchRequest } from "./stats-http";
 import type { Route } from "./stats-types";
 import type { FleetLogStore, StoredFileInfo, StoredSessionInfo } from "./log-store";
 import type {
@@ -107,6 +107,28 @@ function decodeRelpathParam(raw: string): string | null {
 		if (part.length === 0 || part === "." || part === "..") return null;
 	}
 	return decoded;
+}
+
+// ---------------------------------------------------------------------------
+// Typed error envelope
+// ---------------------------------------------------------------------------
+
+/**
+ * Frozen wire error body: { error: { code, message } }. The typed vocabulary
+ * is invalid_request (400: unsafe ids/relpaths/params) and unavailable (404:
+ * unknown workspaces/sessions/files); `detail` is reserved and never emitted
+ * today. Deliberately NOT stats-http's errorJson, which emits { error: string }.
+ *
+ * Kept as one helper so every error return shares the envelope in lockstep:
+ * the shape is a frozen client-facing contract (see
+ * apps/web/store/fleet-api.ts errorMessageFromBody + ApiError.code).
+ */
+function typedError(
+	code: "invalid_request" | "unavailable",
+	message: string,
+	status: number,
+): Response {
+	return json({ error: { code, message } }, status);
 }
 
 // ---------------------------------------------------------------------------
@@ -266,12 +288,12 @@ function transcriptRoute(deps: StoredAppDeps): Route {
 				!isSafeComponent(workspaceId) ||
 				!isSafeComponent(sessionId)
 			) {
-				return errorJson("invalid session identity", 400);
+				return typedError("invalid_request", "invalid session identity", 400);
 			}
 			const store = deps.store;
 			const lineage = store.storedLineage(workspaceId, sessionId);
 			if (lineage === null) {
-				return errorJson("session not found in fleet store", 404);
+				return typedError("unavailable", "session not found in fleet store", 404);
 			}
 			const fileParam = url.searchParams.get("file");
 			let relpath: string | undefined;
@@ -280,12 +302,12 @@ function transcriptRoute(deps: StoredAppDeps): Route {
 			} else {
 				const decoded = decodeRelpathParam(fileParam);
 				if (decoded === null) {
-					return errorJson("invalid file relpath", 400);
+					return typedError("invalid_request", "invalid file relpath", 400);
 				}
 				relpath = decoded;
 			}
 			if (relpath === undefined || relpath.length === 0) {
-				return errorJson("no main transcript stored for this session", 404);
+				return typedError("unavailable", "no main transcript stored for this session", 404);
 			}
 			const format = (url.searchParams.get("format") ?? "parsed").toLowerCase();
 			if (format === "raw") {
@@ -298,7 +320,9 @@ function transcriptRoute(deps: StoredAppDeps): Route {
 					headers: { "content-type": "application/x-ndjson; charset=utf-8" },
 				});
 			}
-			if (format !== "parsed") return errorJson("invalid format (parsed|raw)", 400);
+			if (format !== "parsed") {
+				return typedError("invalid_request", "invalid format (parsed|raw)", 400);
+			}
 			// Bounded parse: never buffer or parse more than the cap; the
 			// prefix is line-truncated at the cap so `truncated` is honest.
 			const bytes = store.readStoredPrefix(workspaceId, sessionId, relpath, MAX_PARSE_BYTES);
@@ -309,15 +333,7 @@ function transcriptRoute(deps: StoredAppDeps): Route {
 }
 
 const unavailableFile = (relpath: string): Response =>
-	json(
-		{
-			error: {
-				code: "unavailable",
-				message: `stored file ${relpath} is unavailable (missing on disk)`,
-			},
-		},
-		404,
-	);
+	typedError("unavailable", `stored file ${relpath} is unavailable (missing on disk)`, 404);
 
 /** Parse cap for one stored transcript (mirrors the stats jsonl convention). */
 const MAX_PARSE_BYTES = 256 * 1024 * 1024;
@@ -382,10 +398,12 @@ function detailRoute(deps: StoredAppDeps): Route {
 				!isSafeComponent(workspaceId) ||
 				!isSafeComponent(sessionId)
 			) {
-				return errorJson("invalid session identity", 400);
+				return typedError("invalid_request", "invalid session identity", 400);
 			}
 			const info = deps.store.storedLineage(workspaceId, sessionId);
-			if (info === null) return errorJson("session not found in fleet store", 404);
+			if (info === null) {
+				return typedError("unavailable", "session not found in fleet store", 404);
+			}
 			return json(detailRow(deps, info, deps.store.isReadOnly(workspaceId)));
 		},
 	};
@@ -403,7 +421,7 @@ function sessionsRoute(deps: StoredAppDeps): Route {
 			const rawWs = url.searchParams.get("workspaceId");
 			const ws = rawWs === null ? null : decodeSegment(rawWs);
 			if (rawWs !== null && (ws === null || !isSafeComponent(ws))) {
-				return errorJson("invalid workspaceId", 400);
+				return typedError("invalid_request", "invalid workspaceId", 400);
 			}
 			let rows: StoredSessionInfo[];
 			if (ws === null) {
