@@ -11,6 +11,7 @@ import type { Subprocess } from "bun";
 import {
 	CALLBACK_CONTROL_STREAM_ID,
 	CALLBACK_DOWN_PATH,
+	CALLBACK_ERROR_HTTP_STATUS,
 	CALLBACK_TRANSPORT_STREAM_ID,
 	CALLBACK_UP_PATH,
 	type CallbackEnvelope,
@@ -34,12 +35,58 @@ interface FakeFleet {
 	waitForUp(match: (envelope: CallbackEnvelope) => boolean, count: number): Promise<void>;
 	/** Sends one down envelope on the current pair. */
 	send(streamId: string, kind: CallbackKind, payload: unknown): void;
+	/** Requests the fake has answered (a refused pair dials again after its backoff). */
+	readonly counters: { requests: number };
 	stop(): void;
 	/** Ends the current down stream (network loss); the daemon redials and a new pair forms. */
 	dropPair(): void;
 }
 
-function startFakeFleet(options: { reject?: boolean } = {}): FakeFleet {
+/** A refusal every request is answered with, standing in for the real fleet's error bodies. */
+interface FakeRefusal {
+	status: number;
+	/** JSON-serialized when `json`, raw text otherwise. */
+	body: unknown;
+	json: boolean;
+}
+
+/**
+ * The fleet's refusal shapes (callback-protocol error codes). The session treats
+ * only `unauthorized` and `generation_obsolete` as terminal; every other code,
+ * typed or inferred from the status, is retryable.
+ */
+const REFUSALS = {
+	unauthorized: {
+		status: CALLBACK_ERROR_HTTP_STATUS.unauthorized,
+		body: { error: "unauthorized", message: "unknown credential" },
+		json: true,
+	},
+	generationObsolete: {
+		status: CALLBACK_ERROR_HTTP_STATUS.generation_obsolete,
+		body: { error: "generation_obsolete" },
+		json: true,
+	},
+	conflict: {
+		status: CALLBACK_ERROR_HTTP_STATUS.conflict,
+		body: { error: "conflict" },
+		json: true,
+	},
+	plainConflict: {
+		status: CALLBACK_ERROR_HTTP_STATUS.conflict,
+		body: "conflict",
+		json: false,
+	},
+} as const satisfies Record<string, FakeRefusal>;
+
+function refusalResponse(refusal: FakeRefusal): Response {
+	if (refusal.json) return Response.json(refusal.body, { status: refusal.status });
+	return new Response(String(refusal.body), {
+		status: refusal.status,
+		headers: { "content-type": "text/plain; charset=utf-8" },
+	});
+}
+
+function startFakeFleet(options: { refuse?: FakeRefusal } = {}): FakeFleet {
 	const encoder = new TextEncoder();
 	const decoder = new TextDecoder();
 	const up: CallbackEnvelope[] = [];
@@ -47,6 +94,7 @@ function startFakeFleet(options: { reject?: boolean } = {}): FakeFleet {
 	let down: ReadableStreamDefaultController<Uint8Array> | null = null;
 	let connectionId = "";
 	let seq = 0;
+	const counters = { requests: 0 };
 	let resolvePaired: () => void = () => {};
 	const paired = new Promise<void>((resolve) => {
 		resolvePaired = resolve;
@@ -69,12 +117,11 @@ function startFakeFleet(options: { reject?: boolean } = {}): FakeFleet {
 		port: 0,
 		idleTimeout: 255,
 		async fetch(req) {
+			counters.requests++;
 			const pathname = new URL(req.url).pathname;
-			if (options.reject || req.headers.get("authorization") !== `Bearer ${TOKEN}`) {
-				return Response.json(
-					{ error: "unauthorized", message: "unknown credential" },
-					{ status: 401 },
-				);
+			const wrongCredential = req.headers.get("authorization") !== `Bearer ${TOKEN}`;
+			if (options.refuse !== undefined || wrongCredential) {
+				return refusalResponse(options.refuse ?? REFUSALS.unauthorized);
 			}
 			if (req.method === "GET" && pathname === CALLBACK_DOWN_PATH) {
 				connectionId = req.headers.get("x-omp-connection-id") ?? "";
@@ -140,6 +187,7 @@ function startFakeFleet(options: { reject?: boolean } = {}): FakeFleet {
 			if (!down) throw new Error("fake fleet has no open down stream");
 			down.enqueue(encoder.encode(encodeSseEnvelope(envelope(streamId, kind, payload))));
 		},
+		counters,
 		stop() {
 			down?.close();
 			server.stop(true);
@@ -180,10 +228,28 @@ function callResultId(envelope: CallbackEnvelope): string | undefined {
 function streamFrame(
 	envelope: CallbackEnvelope,
 	streamId: string,
-): { type?: unknown; id?: unknown; messages?: unknown } | undefined {
+): { type?: unknown; id?: unknown; messages?: unknown; state?: unknown } | undefined {
 	if (envelope.kind !== "frame" || envelope.streamId !== streamId) return undefined;
 	const payload = envelope.payload;
 	return typeof payload === "object" && payload !== null ? payload : undefined;
+}
+
+/** The readiness stamp of a `state` frame payload, or undefined while the gate is open. */
+function stateReadyAt(frame: { type?: unknown; state?: unknown } | undefined): number | undefined {
+	if (frame?.type !== "state") return undefined;
+	const state = frame.state;
+	if (typeof state !== "object" || state === null || !("readyAt" in state)) return undefined;
+	return typeof state.readyAt === "number" ? state.readyAt : undefined;
+}
+
+/** The sessionName of a `state` frame payload (undefined when absent/not a string). */
+function stateSessionName(
+	frame: { type?: unknown; state?: unknown } | undefined,
+): string | undefined {
+	if (frame?.type !== "state") return undefined;
+	const state = frame.state;
+	if (typeof state !== "object" || state === null || !("sessionName" in state)) return undefined;
+	return typeof state.sessionName === "string" ? state.sessionName : undefined;
 }
 
 /** A loopback port with nothing listening on it. */
@@ -205,7 +271,7 @@ afterAll(async () => {
 	await cleanupTempDirs();
 });
 
-function trackFleet(options: { reject?: boolean } = {}): FakeFleet {
+function trackFleet(options: { refuse?: FakeRefusal } = {}): FakeFleet {
 	const fleet = startFakeFleet(options);
 	fleets.push(fleet);
 	return fleet;
@@ -241,6 +307,15 @@ function exitWithin(child: Subprocess, timeoutMs: number): Promise<number | null
 	return Promise.race([child.exited, Bun.sleep(timeoutMs).then(() => null)]);
 }
 
+/** Poll `probe` until it holds, or throw once the deadline passes. */
+async function waitUntil(probe: () => boolean, timeoutMs: number, label: string): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!probe()) {
+		if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label} (${timeoutMs}ms)`);
+		await Bun.sleep(25);
+	}
+}
+
 test("a ShutdownControl from the fleet stops the session with exit 0", async () => {
 	const fleet = trackFleet();
 	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
@@ -257,10 +332,37 @@ test("a session with no reachable control plane exits after the grace period", a
 });
 
 test("a credential the fleet rejects shuts the session down without waiting for the grace period", async () => {
-	const fleet = trackFleet({ reject: true });
+	const fleet = trackFleet({ refuse: REFUSALS.unauthorized });
 	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
+
+test("a fleet generation_obsolete shuts the session down without waiting for the grace period", async () => {
+	// The fleet announces a superseded generation with HTTP 409 and a typed
+	// body (apps/fleet/test/daemon-transport.test.ts). Like a rejected
+	// credential, it is terminal: the session must not keep dialing a pair the
+	// fleet has already replaced, and it must not sit out the grace window.
+	const fleet = trackFleet({ refuse: REFUSALS.generationObsolete });
+	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});
+
+test("a 409 that is not a terminal refusal leaves the session dialing", async () => {
+	// Only `unauthorized` and `generation_obsolete` stop the transport; every
+	// other refusal (a typed conflict, or a 409 body the status must map) is
+	// retried on the backoff, so the daemon keeps dialing instead of exiting.
+	for (const refusal of [REFUSALS.conflict, REFUSALS.plainConflict]) {
+		const fleet = trackFleet({ refuse: refusal });
+		const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "10m" });
+		await waitUntil(
+			() => fleet.counters.requests >= 2,
+			30_000,
+			`a second dial after HTTP ${refusal.status}`,
+		);
+		expect(await exitWithin(child, 2_000)).toBeNull();
+		child.kill();
+	}
+}, 30_000);
 
 test("a live pair keeps the session up past the grace period", async () => {
 	const fleet = trackFleet();
@@ -270,7 +372,7 @@ test("a live pair keeps the session up past the grace period", async () => {
 	expect(await exitWithin(child, 4_000)).toBeNull();
 	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown" });
 	expect(await exitWithin(child, 20_000)).toBe(0);
-});
+}, 30_000);
 
 test("a command repeated over the pair is dispatched once and its answer replayed", async () => {
 	const fleet = trackFleet();
@@ -301,7 +403,7 @@ test("an open browser stream keeps the idle timeout from stopping the session", 
 	expect(await exitWithin(child, 2_500)).toBeNull();
 	fleet.send("browser-1", "control", { type: "stream_close" });
 	expect(await exitWithin(child, 15_000)).toBe(0);
-});
+}, 30_000);
 
 test("every pair-up publishes the session file on the control stream, including after a redial", async () => {
 	const fleet = trackFleet();
@@ -364,6 +466,90 @@ test("browser streams prime the transcript and get the history resync after newS
 	expect(historyLengths("browser/two", "new-1")).toEqual([1, 0]);
 	// The fleet's control mirror never carries the transcript.
 	expect(frames(CALLBACK_CONTROL_STREAM_ID).some((f) => f.type === "history")).toBe(false);
+
+	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});
+
+test("a history-reload call resyncs the transcript before its answer", async () => {
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	await fleet.paired;
+	// The transcript resync is browser-stream-only (the fleet's control mirror
+	// never carries history), so the call is driven over the pair's control
+	// stream while the browser stream attached to the same pair shows the order.
+	fleet.send("browser/resync", "control", { type: "stream_open" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/resync")?.type === "state", 1);
+
+	fleet.send(CALLBACK_CONTROL_STREAM_ID, "command", {
+		type: "call",
+		id: "reload-1",
+		method: "newSession",
+		args: [],
+	});
+	await fleet.waitForUp((e) => streamFrame(e, "browser/resync")?.id === "reload-1", 1);
+
+	const frames = fleet.up
+		.map((e) => streamFrame(e, "browser/resync"))
+		.filter((f) => f !== undefined);
+	const at = (probe: (frame: (typeof frames)[number]) => boolean): number[] =>
+		frames.map((frame, index) => (probe(frame) ? index : -1)).filter((index) => index >= 0);
+	const answerAt = frames.findIndex((f) => f.type === "call_result" && f.id === "reload-1");
+	// Attach priming + the reload's replacement, both before the answer: picker
+	// success UI must run against the transcript the call produced.
+	const historyAt = at((f) => f.type === "history");
+	expect(historyAt).toHaveLength(2);
+	expect(answerAt).toBeGreaterThan(historyAt[1]!);
+	expect(at((f) => f.type === "state").at(-1)).toBeLessThan(answerAt);
+
+	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});
+
+test("a read-only call broadcasts no state; a mutating call does", async () => {
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, { OMP_SESSION_CONTROL_GRACE: "0" });
+	await fleet.paired;
+	fleet.send("browser/state", "control", { type: "stream_open" });
+	// Wait for the snapshot to carry the readiness stamp: the gate clearing is
+	// a state broadcast of its own, and it must land before the window below.
+	await fleet.waitForUp((e) => stateReadyAt(streamFrame(e, "browser/state")) !== undefined, 1);
+
+	const frames = () =>
+		fleet.up.map((e) => streamFrame(e, "browser/state")).filter((f) => f !== undefined);
+	const states = () => frames().filter((f) => f.type === "state");
+	const before = states().length;
+
+	fleet.send("browser/state", "command", {
+		type: "call",
+		id: "stats-1",
+		method: "getSessionStats",
+		args: [],
+	});
+	await fleet.waitForUp((e) => streamFrame(e, "browser/state")?.id === "stats-1", 1);
+	fleet.send("browser/state", "command", {
+		type: "call",
+		id: "name-1",
+		method: "setSessionName",
+		args: ["state-probe"],
+	});
+	await fleet.waitForUp((e) => streamFrame(e, "browser/state")?.id === "name-1", 1);
+	// The mutating resync lands after its answer, so wait for it before counting:
+	// anything the read-only call broadcast would have been enqueued before this
+	// frame and is therefore already counted.
+	await fleet.waitForUp(
+		(e) => stateSessionName(streamFrame(e, "browser/state")) === "state-probe",
+		1,
+	);
+
+	// Exactly one state frame across both calls, and it belongs to the mutating
+	// one: the read-only row skipped the broadcast.
+	const broadcast = states().at(-1);
+	expect(states()).toHaveLength(before + 1);
+	expect(stateSessionName(broadcast)).toBe("state-probe");
+	expect(frames().indexOf(broadcast!)).toBeGreaterThan(
+		frames().findIndex((f) => f.type === "call_result" && f.id === "name-1"),
+	);
 
 	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
 	expect(await exitWithin(child, 20_000)).toBe(0);

@@ -3,15 +3,18 @@
  * auth (R14), readiness gate (R8), idle auto-exit (R11), POST idempotency, and
  * the removed-mux-command fallthrough. Spawns apps/session/index.ts as a subprocess on
  * an ephemeral port (OMP_SESSION_PORT=0) with a hermetic tmp cwd; connects over
- * loopback and (for the token-gate test) the machine's LAN IP using the
- * OMP_PROTO 2 transport (GET /events SSE down, POST /command up). No external
- * network, no real model calls; the readiness gate is deferred via the
- * OMP_SESSION_TEST_READY_DELAY_MS test hook instead of racing provider discovery.
+ * loopback and, wherever the host owns an interface the daemon is reachable on,
+ * from that off-loopback address too (the token and relay gates decide from the
+ * socket peer address, so only a real peer address exercises their off-loopback
+ * half) using the OMP_PROTO 2 transport (GET /events SSE down, POST /command
+ * up). No external network, no real model calls; the readiness gate is deferred
+ * via the OMP_SESSION_TEST_READY_DELAY_MS test hook instead of racing provider
+ * discovery.
  */
 
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Subprocess } from "bun";
@@ -326,14 +329,43 @@ async function spawnRefusedSession(
 	}
 }
 
-/** First non-internal IPv4 address (the machine's LAN IP); undefined when none exists. */
-function lanIpv4(): string | undefined {
+/** The machine's non-internal IPv4 addresses: candidate off-loopback peer addresses. */
+function nonLoopbackIpv4s(): string[] {
+	const out: string[] = [];
 	for (const addrs of Object.values(os.networkInterfaces())) {
 		for (const addr of addrs ?? []) {
-			if (addr.family === "IPv4" && !addr.internal) return addr.address;
+			if (addr.family === "IPv4" && !addr.internal) out.push(addr.address);
 		}
 	}
-	return undefined;
+	return out;
+}
+
+/**
+ * Origins on `port` that reach the daemon from off-loopback: one per interface
+ * this host can actually source a connection from, probed with `token` (the
+ * daemon these gates run against is bound off-loopback with it) so a down or
+ * unroutable interface is not mistaken for a usable peer address. Empty on a
+ * loopback-only host, which cannot produce an off-loopback peer at all: the R14
+ * gate reads the SOCKET peer address, so a loopback-bound client always
+ * resolves as 127.0.0.1. The gate tests below therefore always assert their
+ * loopback half (the daemon's own default peer) and add the off-loopback half
+ * for every interface this returns.
+ */
+async function offLoopbackOrigins(port: number, token: string): Promise<string[]> {
+	const origins: string[] = [];
+	for (const ip of nonLoopbackIpv4s()) {
+		const origin = `http://${ip}:${port}`;
+		const reachable = await fetch(`${origin}/?token=${token}`, {
+			signal: AbortSignal.timeout(3_000),
+		})
+			.then(async (res) => {
+				await res.body?.cancel().catch(() => {});
+				return true;
+			})
+			.catch(() => false);
+		if (reachable) origins.push(origin);
+	}
+	return origins;
 }
 
 const running: SessionProc[] = [];
@@ -425,112 +457,186 @@ test("127.* with non-numeric parts is not loopback: bind without a token is a st
 }, 30_000);
 
 test("token gate: off-loopback peers need the token; loopback stays exempt", async () => {
-	const lanIp = lanIpv4();
-	if (!lanIp) {
-		console.warn("no non-loopback IPv4 interface found; skipping token-gate test");
-		return;
-	}
 	const proc = await spawnSession({ args: ["--host", "0.0.0.0", "--token", "sekret"] });
 	running.push(proc);
 	const { child, tmp, port, cleanup } = proc;
-	const base = `http://${lanIp}:${port}`;
+	const loopbackBase = `http://127.0.0.1:${port}`;
+	const offLoopback = (await offLoopbackOrigins(port, "sekret"))[0];
 
-	// Wrong credential → 401 on both endpoints (no hello window, no close codes).
-	const wrongStream = await fetch(`${base}/events`, { headers: { authorization: "Bearer nope" } });
-	expect(wrongStream.status).toBe(401);
-	const wrongCommand = await fetch(`${base}/command`, {
-		method: "POST",
-		headers: { authorization: "Bearer nope", "content-type": "application/json" },
-		body: JSON.stringify({ type: "call", id: "c-wrong", method: "getSettings", args: [] }),
-	});
-	expect(wrongCommand.status).toBe(401);
-
-	// Wrong-CASE token → 401 too: the scheme is case-insensitive, the token
-	// value is not (regression: the whole header used to be lowercased, so
-	// "Bearer SEKRET" slipped past a "sekret" token).
-	const caseStream = await fetch(`${base}/events`, { headers: { authorization: "Bearer SEKRET" } });
-	expect(caseStream.status).toBe(401);
-	const caseCommand = await fetch(`${base}/command`, {
-		method: "POST",
-		headers: { authorization: "Bearer SEKRET", "content-type": "application/json" },
-		body: JSON.stringify({ type: "call", id: "c-case", method: "getSettings", args: [] }),
-	});
-	expect(caseCommand.status).toBe(401);
-
-	// Lowercase scheme with the exact token still authenticates.
-	const lowerScheme = await fetch(`${base}/events`, {
-		headers: { authorization: "bearer sekret" },
-	});
-	expect(lowerScheme.status).toBe(200);
-	lowerScheme.body?.cancel();
-
-	// Authorization header → the stream primes hello_ok with the daemon identity.
-	const headerStream = await openEvents(base, { headers: { authorization: "Bearer sekret" } });
-	const headerHello = await waitForFrame(
-		headerStream.frames,
-		"hello_ok",
-		10_000,
-		"header hello_ok",
-	);
-	expect(headerHello.proto).toBe(OMP_PROTO);
-	expect(headerHello.cwd).toBe(tmp);
-	expect(headerHello.pid).toBe(child.pid);
-	expect(headerHello.name).toBe(path.basename(tmp));
-	expect(typeof headerHello.version).toBe("string");
-	// …and commands accept with 202 echoing the id.
-	const headerCmd = await postCommand(
-		base,
-		{ type: "call", id: "c-h1", method: "getSettings", args: [] },
-		{ headers: { authorization: "Bearer sekret" } },
-	);
-	expect(headerCmd.status).toBe(202);
-	expect((await headerCmd.json()).commandId).toBe("c-h1");
-
-	// ?token= query → same bearer, query form.
-	const queryStream = await openEvents(`${base}?token=sekret`);
-	const queryHello = await waitForFrame(queryStream.frames, "hello_ok", 10_000, "query hello_ok");
-	expect(queryHello.proto).toBe(OMP_PROTO);
-	const queryCmd = await postCommand(`${base}?token=sekret`, {
+	// Loopback is exempt on every route (the daemon's own default peer): the
+	// stream primes with no credential, commands are accepted, and the doc route
+	// answers its plain-text 404 instead of the gate's 401.
+	const loopback = await openEvents(loopbackBase);
+	await waitForFrame(loopback.frames, "attached", 10_000, "loopback attached frame");
+	const loopbackCmd = await postCommand(loopbackBase, {
 		type: "call",
-		id: "c-q1",
+		id: "c-l1",
 		method: "getSettings",
 		args: [],
 	});
-	expect(queryCmd.status).toBe(202);
+	expect(loopbackCmd.status).toBe(202);
+	const loopbackRoot = await fetch(`${loopbackBase}/`);
+	expect(loopbackRoot.status).toBe(404);
+	expect(loopbackRoot.headers.get("content-type")).toContain("text/plain");
+	expect(await loopbackRoot.text()).toContain("this is a session daemon (no web UI)");
 
-	// Loopback without a token still works: the priming (attached) arrives.
-	const loopback = await openEvents(`http://127.0.0.1:${port}`);
-	await waitForFrame(loopback.frames, "attached", 10_000, "loopback attached frame");
+	// Off-loopback peers need the token. The gate reads the socket peer address,
+	// so this half runs over the interfaces this host can source a connection
+	// from (offLoopbackOrigins); the loopback half above runs everywhere.
+	if (offLoopback !== undefined) {
+		const base = offLoopback;
 
-	// The non-wire routes stay gated off-loopback, and the daemon serves no
-	// HTML: an authenticated "/" is the plain-text 404 pointing at the fleet.
-	const unauthRoot = await fetch(`${base}/`);
-	expect(unauthRoot.status).toBe(401);
-	const authedRoot = await fetch(`${base}/?token=sekret`);
-	expect(authedRoot.status).toBe(404);
-	expect(authedRoot.headers.get("content-type")).toContain("text/plain");
-	expect(await authedRoot.text()).toContain("this is a session daemon (no web UI)");
+		// Wrong credential → 401 on both endpoints (no hello window, no close codes).
+		const wrongStream = await fetch(`${base}/events`, {
+			headers: { authorization: "Bearer nope" },
+		});
+		expect(wrongStream.status).toBe(401);
+		const wrongCommand = await fetch(`${base}/command`, {
+			method: "POST",
+			headers: { authorization: "Bearer nope", "content-type": "application/json" },
+			body: JSON.stringify({ type: "call", id: "c-wrong", method: "getSettings", args: [] }),
+		});
+		expect(wrongCommand.status).toBe(401);
 
-	// /download: the token gate rejects off-loopback peers BEFORE path
-	// validation (a missing path would otherwise be a 400); authenticated
-	// requests still stream a real file from the daemon cwd, and only miss
-	// with a 404 when the path does not resolve.
-	const unauthDownload = await fetch(`${base}/download`);
-	expect(unauthDownload.status).toBe(401);
-	await writeFile(path.join(tmp, "export.txt"), "download-me\n");
-	const authedDownload = await fetch(
-		`${base}/download?path=${encodeURIComponent("export.txt")}&token=sekret`,
-	);
-	expect(authedDownload.status).toBe(200);
-	expect(await authedDownload.text()).toBe("download-me\n");
-	const missingDownload = await fetch(
-		`${base}/download?path=${encodeURIComponent("nope.txt")}&token=sekret`,
-	);
-	expect(missingDownload.status).toBe(404);
+		// Wrong-CASE token → 401 too: the scheme is case-insensitive, the token
+		// value is not (regression: the whole header used to be lowercased, so
+		// "Bearer SEKRET" slipped past a "sekret" token).
+		const caseStream = await fetch(`${base}/events`, {
+			headers: { authorization: "Bearer SEKRET" },
+		});
+		expect(caseStream.status).toBe(401);
+		const caseCommand = await fetch(`${base}/command`, {
+			method: "POST",
+			headers: { authorization: "Bearer SEKRET", "content-type": "application/json" },
+			body: JSON.stringify({ type: "call", id: "c-case", method: "getSettings", args: [] }),
+		});
+		expect(caseCommand.status).toBe(401);
 
-	headerStream.close();
-	queryStream.close();
+		// Lowercase scheme with the exact token still authenticates.
+		const lowerScheme = await fetch(`${base}/events`, {
+			headers: { authorization: "bearer sekret" },
+		});
+		expect(lowerScheme.status).toBe(200);
+		lowerScheme.body?.cancel();
+
+		// Authorization header → the stream primes hello_ok with the daemon identity.
+		const headerStream = await openEvents(base, { headers: { authorization: "Bearer sekret" } });
+		const headerHello = await waitForFrame(
+			headerStream.frames,
+			"hello_ok",
+			10_000,
+			"header hello_ok",
+		);
+		expect(headerHello.proto).toBe(OMP_PROTO);
+		expect(headerHello.cwd).toBe(tmp);
+		expect(headerHello.pid).toBe(child.pid);
+		expect(headerHello.name).toBe(path.basename(tmp));
+		expect(typeof headerHello.version).toBe("string");
+		// …and commands accept with 202 echoing the id.
+		const headerCmd = await postCommand(
+			base,
+			{ type: "call", id: "c-h1", method: "getSettings", args: [] },
+			{ headers: { authorization: "Bearer sekret" } },
+		);
+		expect(headerCmd.status).toBe(202);
+		expect((await headerCmd.json()).commandId).toBe("c-h1");
+
+		// ?token= query → same bearer, query form.
+		const queryStream = await openEvents(`${base}?token=sekret`);
+		const queryHello = await waitForFrame(queryStream.frames, "hello_ok", 10_000, "query hello_ok");
+		expect(queryHello.proto).toBe(OMP_PROTO);
+		const queryCmd = await postCommand(`${base}?token=sekret`, {
+			type: "call",
+			id: "c-q1",
+			method: "getSettings",
+			args: [],
+		});
+		expect(queryCmd.status).toBe(202);
+
+		// The non-wire routes stay gated off-loopback, and the daemon serves no
+		// HTML: an authenticated "/" is the plain-text 404 pointing at the fleet.
+		const unauthRoot = await fetch(`${base}/`);
+		expect(unauthRoot.status).toBe(401);
+		const authedRoot = await fetch(`${base}/?token=sekret`);
+		expect(authedRoot.status).toBe(404);
+		expect(authedRoot.headers.get("content-type")).toContain("text/plain");
+		expect(await authedRoot.text()).toContain("this is a session daemon (no web UI)");
+
+		// /download: the token gate rejects off-loopback peers BEFORE path
+		// validation (a missing path would otherwise be a 400); authenticated
+		// requests still stream a real file from the daemon cwd, and only miss
+		// with a 404 when the path does not resolve.
+		const unauthDownload = await fetch(`${base}/download`);
+		expect(unauthDownload.status).toBe(401);
+		await writeFile(path.join(tmp, "export.txt"), "download-me\n");
+		const authedDownload = await fetch(
+			`${base}/download?path=${encodeURIComponent("export.txt")}&token=sekret`,
+		);
+		expect(authedDownload.status).toBe(200);
+		expect(await authedDownload.text()).toBe("download-me\n");
+		const missingDownload = await fetch(
+			`${base}/download?path=${encodeURIComponent("nope.txt")}&token=sekret`,
+		);
+		expect(missingDownload.status).toBe(404);
+
+		headerStream.close();
+		queryStream.close();
+	}
+
 	loopback.close();
+	await cleanup();
+}, 30_000);
+
+/**
+ * The /download jail is the only trust boundary on that route: the canonical
+ * (realpath) target must live inside tmpdir, the session cwd, or the daemon's
+ * process cwd. Escapes are refused with 403 while a path that does not resolve
+ * stays a 404, because existence is decided before the jail. Requests are sent
+ * from loopback (which the token gate exempts) with no credential, so these
+ * statuses are the jail's: a wrongly gated route would answer 401 instead.
+ */
+test("/download serves only files inside the canonical roots", async () => {
+	const proc = await spawnSession({ args: ["--host", "0.0.0.0", "--token", "sekret"] });
+	running.push(proc);
+	const { tmp, port, cleanup } = proc;
+	const base = `http://127.0.0.1:${port}`;
+	const download = (requested: string): Promise<Response> =>
+		fetch(`${base}/download?path=${encodeURIComponent(requested)}`);
+
+	// An export written into the session cwd is served.
+	await writeFile(path.join(tmp, "export.txt"), "download-me\n");
+	const inside = await download("export.txt");
+	expect(inside.status).toBe(200);
+	expect(await inside.text()).toBe("download-me\n");
+
+	// A real file outside every root is the escape target: the bun binary
+	// running this suite (the guard lines fail loudly rather than let the jail
+	// assertions below degrade into 200s if the host ever nests it under a root).
+	const outside = await realpath(process.execPath);
+	expect(outside.startsWith(os.tmpdir())).toBe(false);
+	expect(outside.startsWith(repoRoot)).toBe(false);
+
+	// A symlink inside the cwd pointing outside every root is an escape: both
+	// sides are canonicalized, so the target decides (a lexical prefix check
+	// would have called the link itself "inside").
+	await symlink(outside, path.join(tmp, "escape-link"));
+	expect((await download("escape-link")).status).toBe(403);
+
+	// A relative path climbing out of the cwd (and out of tmpdir) is refused.
+	const climbing = path.relative(tmp, outside);
+	expect(climbing.startsWith("..")).toBe(true);
+	expect((await download(climbing)).status).toBe(403);
+
+	// An absolute path outside the roots is refused.
+	expect((await download(outside)).status).toBe(403);
+
+	// A path that does not resolve is a 404, not a 403: the relative miss, and
+	// an absolute miss outside the roots (which a jail-first check would call
+	// a 403).
+	const missing = `missing-${crypto.randomUUID()}.txt`;
+	expect((await download(missing)).status).toBe(404);
+	expect((await download(path.join(path.dirname(outside), missing))).status).toBe(404);
+
 	await cleanup();
 }, 30_000);
 
@@ -552,32 +658,34 @@ function openRelaySocket(url: string, timeoutMs = 10_000): Promise<WebSocket> {
 }
 
 test("relay host upgrades are gated like the agent endpoints; guests stay token-free", async () => {
-	const lanIp = lanIpv4();
-	if (!lanIp) {
-		console.warn("no non-loopback IPv4 interface found; skipping relay host-gate test");
-		return;
-	}
 	const proc = await spawnSession({ args: ["--host", "0.0.0.0", "--token", "sekret"] });
 	running.push(proc);
 	const { port, cleanup } = proc;
-	const httpBase = `http://${lanIp}:${port}`;
-	const wsBase = `ws://${lanIp}:${port}`;
-	const room = generateRoomId();
+	const offLoopback = (await offLoopbackOrigins(port, "sekret"))[0];
 	const sockets: WebSocket[] = [];
 
-	// Off-loopback host upgrade without a credential → 401 before the
-	// upgrade (no close code, no hello window).
-	const unauth = await fetch(`${httpBase}/r/${room}?role=host`);
-	expect(unauth.status).toBe(401);
+	// Off-loopback peers (one per interface this host can source a connection
+	// from, see offLoopbackOrigins) hit the host gate; the loopback half below
+	// runs on every host.
+	if (offLoopback !== undefined) {
+		const httpBase = offLoopback;
+		const wsBase = offLoopback.replace(/^http/, "ws");
+		const room = generateRoomId();
 
-	// Off-loopback host with ?token= → the upgrade succeeds.
-	const host = await openRelaySocket(`${wsBase}/r/${room}?role=host&token=sekret`);
-	sockets.push(host);
+		// Off-loopback host upgrade without a credential → 401 before the
+		// upgrade (no close code, no hello window).
+		const unauth = await fetch(`${httpBase}/r/${room}?role=host`);
+		expect(unauth.status).toBe(401);
 
-	// Guests are deliberately not gated: an off-loopback guest with no token
-	// still upgrades (it then gets the ordinary no-room close).
-	const guest = await openRelaySocket(`${wsBase}/r/${generateRoomId()}?role=guest`);
-	sockets.push(guest);
+		// Off-loopback host with ?token= → the upgrade succeeds.
+		const host = await openRelaySocket(`${wsBase}/r/${room}?role=host&token=sekret`);
+		sockets.push(host);
+
+		// Guests are deliberately not gated: an off-loopback guest with no token
+		// still upgrades (it then gets the ordinary no-room close).
+		const guest = await openRelaySocket(`${wsBase}/r/${generateRoomId()}?role=guest`);
+		sockets.push(guest);
+	}
 
 	// Loopback host without a token stays exempt, same as /events.
 	const loopHost = await openRelaySocket(`ws://127.0.0.1:${port}/r/${generateRoomId()}?role=host`);

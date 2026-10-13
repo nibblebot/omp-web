@@ -28,6 +28,26 @@ afterAll(() => {
 /** A `state` SSE frame as the daemon serializes it. */
 type StateFrame = { type?: string; state?: WebSessionState };
 
+/**
+ * Capability keys the UI depends on, in the daemon's `capabilities` map. The
+ * protocol is additive (a new capability is a new key), so the assertion below
+ * requires these and tolerates anything the daemon adds.
+ */
+const REQUIRED_CAPABILITY_KEYS = [
+	"advisor",
+	"btwHistory",
+	"downloads",
+	"git",
+	"goals",
+	"loops",
+	"planReview",
+	"resumeImport",
+	"review",
+	"todos",
+	"vibe",
+	"workerLifecycle",
+] as const;
+
 /** Read stdout up to the first newline and return that line. */
 async function firstStdoutLine(stream: ReadableStream<Uint8Array>): Promise<string> {
 	const reader = stream.getReader();
@@ -84,26 +104,12 @@ test("a git cwd advertises git (and the review domains) as available", async () 
 	const state = await attachedState(repo);
 
 	expect(state.capabilities?.git).toEqual({ available: true });
-	expect(Object.keys(state.capabilities ?? {}).sort()).toEqual(
-		[
-			"advisor",
-			"btwHistory",
-			"downloads",
-			"git",
-			"goals",
-			"loops",
-			"planReview",
-			"resumeImport",
-			"review",
-			"todos",
-			"vibe",
-			"workerLifecycle",
-		].sort(),
+	// Superset, not an exact key list: the map is additive, so every new
+	// capability is a new key. Only the domains the UI requires are pinned;
+	// dropping one of them is the drift this asserts against.
+	expect(Object.keys(state.capabilities ?? {})).toEqual(
+		expect.arrayContaining([...REQUIRED_CAPABILITY_KEYS]),
 	);
-	// Keys whose server half is missing or whose shape differs stay absent (drift guard).
-	for (const absent of ["graph", "integrations", "browserUi", "modelPresets"]) {
-		expect(state.capabilities).not.toHaveProperty(absent);
-	}
 }, 60_000);
 
 test("a non-git cwd advertises git as unavailable with the reason", async () => {

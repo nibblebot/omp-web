@@ -80,15 +80,10 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 		expect(refreshes()).toBe(1);
 	});
 
-	test("disabling needs no prelude and still rebuilds the prompt", async () => {
-		const { entry, refreshes } = stubEntry({ preludes: [] });
-		const methods = methodsTable();
-		await methods.setComputerToolEnabled!(entry, [false]);
-		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
-		expect(refreshes()).toBe(1);
-	});
-
 	test("a failed prompt rebuild rolls the override back", async () => {
+		// A distinct branch from the missing-prelude refusal above: the override
+		// is already applied when the rebuild throws, so the catch must restore
+		// the previous value before rethrowing.
 		const { entry } = stubEntry({
 			preludes: [{ name: "computer" }],
 			refreshError: new Error("prompt rebuild exploded"),
@@ -98,6 +93,14 @@ describe("computer/inspect_image rows after the 18.x drift", () => {
 			"prompt rebuild exploded",
 		);
 		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
+	});
+
+	test("disabling needs no prelude and still rebuilds the prompt", async () => {
+		const { entry, refreshes } = stubEntry({ preludes: [] });
+		const methods = methodsTable();
+		await methods.setComputerToolEnabled!(entry, [false]);
+		expect(cfgComputerEnabled.get(entry.session.settings)).toBe(false);
+		expect(refreshes()).toBe(1);
 	});
 
 	test("setInspectImageMode is a loud tombstone, never a silent success", () => {
