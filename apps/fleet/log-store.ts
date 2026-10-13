@@ -12,9 +12,12 @@
 //     result (log_gap repair); lower is a post-reconnect resend and is dropped.
 //   - Generations: per-file identity counter. An older generation is dropped;
 //     a newer one truncates the stored bytes and resyncs from 0.
-//   - Retention: explicit purgeSession/purgeWorkspace only, plus listOrphans
-//     against a caller-supplied live workspace set. No garbage collection, no
-//     timers; verified data is never deleted internally.
+//   - Retention: purgeSession is driven by the daemon's additive
+//     `session_deleted` control notice (the workspace deleted the session; the
+//     fleet copy follows) or explicitly by purgeSession/purgeWorkspace, e.g.
+//     for orphaned or verified read-only logs, plus listOrphans against a
+//     caller-supplied live workspace set. No garbage collection, no timers;
+//     verified data is never deleted internally.
 //
 // Everything here runs on synchronous fs calls: a single ingest is one
 // critical section by construction (Node/Bun executes sync code without

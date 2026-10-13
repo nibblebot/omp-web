@@ -182,6 +182,8 @@ export interface FleetServer {
 	transport: DaemonTransportRegistry;
 	/** Fleet lifecycle-event ring (backing /ctl/debug; CLI mirrors it to stdout). */
 	eventLog: FleetEventLog;
+	/** Durable log store (null when the fleet boots without one); the stored-session and log routes read it. */
+	readonly logStore: FleetLogStore | null;
 	/** Fleet-wide facts (port/startedAt/state paths) for the banner + /ctl/debug. */
 	fleetFacts: FleetFacts;
 	close(): Promise<void>;

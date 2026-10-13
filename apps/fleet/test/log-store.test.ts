@@ -2,8 +2,10 @@
  * FleetLogStore durable-behavior regressions (P3.6/P3.9 callback safety
  * surface): contiguous append and post-reconnect duplicate replay, gap
  * repair without byte loss, daemon-side rewrite forcing resync from zero,
- * reload after crash-partial record/index disagreement, read-only rejection,
- * and orphan retention/manual purge.
+ * reload after crash-partial record/index disagreement, the remaining
+ * load() repair kinds (stale tmp removal, complete-line forward adoption,
+ * invalid index keys, unsafe dirs, vanished files), read-only rejection, and
+ * orphan retention/manual purge.
  *
  * Everything runs against the REAL FleetLogStore over real disk files in a
  * per-suite tempDir (shared/testkit tempDir/cleanupTempDirs, top-level
@@ -24,7 +26,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import {
 	appendFileSync,
 	existsSync,
+	mkdirSync,
 	readdirSync,
+	readFileSync,
 	truncateSync,
 	unlinkSync,
 	writeFileSync,
@@ -622,5 +626,238 @@ describe("FleetLogStore unsafe acceptance refusals", () => {
 		expect(leftovers).toEqual([]);
 		expect(store.storedLineage(WORKSPACE, SESSION)).toBeNull();
 		expect(store.listStoredWorkspaces()).toEqual([]);
+	});
+});
+
+describe("FleetLogStore load repair sweep", () => {
+	test("removed_stale_tmp: a leftover index tmp is removed and reported once", () => {
+		const rootDir = tempDir("omp-logstore-tmp-");
+		const l1 = recordLine("main", 1);
+		const store = new FleetLogStore({ rootDir });
+		const end = ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, l1));
+
+		// Crash between the tmp fsync and the rename in #persistIndex: the
+		// half-written sidecar is still on disk beside consistent state.
+		const staleTmp = join(rootDir, WORKSPACE, SESSION, "index.json.tmp");
+		writeFileSync(staleTmp, '{"version":1,"streams":{"sess-1.jsonl"');
+
+		const reloaded = FleetLogStore.load(rootDir);
+		expect(reloaded.loadReport.repairs).toEqual([
+			{
+				workspaceId: WORKSPACE,
+				sessionId: SESSION,
+				relpath: "index.json.tmp",
+				kind: "removed_stale_tmp",
+			},
+		]);
+		expect(existsSync(staleTmp)).toBe(false);
+		// The cleanup is not a data loss path: durable bytes are untouched and
+		// the corrected index makes the very next load repair-free.
+		expectBuffersEqual(
+			reloaded.readStored(WORKSPACE, SESSION, MAIN_RELPATH),
+			Buffer.from(l1, "utf8"),
+		);
+		const again = FleetLogStore.load(rootDir);
+		expect(again.loadReport.repairs).toEqual([]);
+		expect(ingestAcked(again, MAIN_RELPATH, chunkAt(end, 1, recordLine("main", 2)))).toBe(
+			l1.length + recordLine("main", 2).length,
+		);
+	});
+
+	test("file_longer_than_index: fsynced bytes the index never recorded are adopted, not re-appended", () => {
+		const rootDir = tempDir("omp-logstore-longer-");
+		const l1 = recordLine("main", 1);
+		const l2 = recordLine("main", 2);
+		const store = new FleetLogStore({ rootDir });
+		ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, l1));
+
+		// Crash after the daemon fsynced a complete l2 but before the index
+		// rename: the file ends with a newline (no torn tail to cut back).
+		appendFileSync(storedFile(rootDir, MAIN_RELPATH), l2);
+
+		const reloaded = FleetLogStore.load(rootDir);
+		expect(reloaded.loadReport.repairs).toEqual([
+			{
+				workspaceId: WORKSPACE,
+				sessionId: SESSION,
+				relpath: MAIN_RELPATH,
+				kind: "file_longer_than_index",
+				from: l1.length,
+				to: l1.length + l2.length,
+			},
+		]);
+		expectBuffersEqual(
+			reloaded.readStored(WORKSPACE, SESSION, MAIN_RELPATH),
+			Buffer.from(l1 + l2, "utf8"),
+		);
+
+		// The adopted bytes were persisted into the index: the daemon's resend
+		// of the same l2 chunk is a duplicate, never a second append, and a
+		// fresh load confirms nothing drifted.
+		expect(reloaded.ingest(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(l1.length, 1, l2))).toEqual({
+			status: "duplicate",
+		});
+		const again = FleetLogStore.load(rootDir);
+		expect(again.loadReport.repairs).toEqual([]);
+		expectBuffersEqual(
+			again.readStored(WORKSPACE, SESSION, MAIN_RELPATH),
+			Buffer.from(l1 + l2, "utf8"),
+		);
+	});
+
+	test("dropped_invalid_stream: an index key outside the relpath namespace is dropped, valid streams survive", () => {
+		const rootDir = tempDir("omp-logstore-bad-key-");
+		const l1 = recordLine("main", 1);
+		const l2 = recordLine("main", 2);
+		const store = new FleetLogStore({ rootDir });
+		const end = ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, l1));
+		ingestAcked(store, MAIN_RELPATH, chunkAt(end, 1, l2));
+
+		// A corrupted sidecar: keys that are not safe relpaths (the reserved
+		// index name and a traversal path) claim durable bytes.
+		const indexPath = join(rootDir, WORKSPACE, SESSION, "index.json");
+		const index = JSON.parse(readFileSync(indexPath, "utf8")) as {
+			streams: Record<string, unknown>;
+		};
+		index.streams["index.json"] = { generation: 1, ackedOffset: 5, eof: true };
+		index.streams["../escape.jsonl"] = { generation: 1, ackedOffset: 7, eof: true };
+		writeFileSync(indexPath, JSON.stringify(index));
+
+		const reloaded = FleetLogStore.load(rootDir);
+		expect(reloaded.loadReport.repairs).toEqual([
+			{
+				workspaceId: WORKSPACE,
+				sessionId: SESSION,
+				relpath: "index.json",
+				kind: "dropped_invalid_stream",
+			},
+			{
+				workspaceId: WORKSPACE,
+				sessionId: SESSION,
+				relpath: "../escape.jsonl",
+				kind: "dropped_invalid_stream",
+			},
+		]);
+
+		// Dropped, not materialized: no file appeared outside the session
+		// subtree, the rebuilt index has only the valid key, and the valid
+		// stream keeps its bytes, ack state, and lineage row.
+		expect(existsSync(join(rootDir, WORKSPACE, "escape.jsonl"))).toBe(false);
+		expect(existsSync(join(rootDir, "escape.jsonl"))).toBe(false);
+		const rebuilt = JSON.parse(readFileSync(indexPath, "utf8")) as {
+			streams: Record<string, unknown>;
+		};
+		expect(Object.keys(rebuilt.streams)).toEqual([MAIN_RELPATH]);
+		expectBuffersEqual(
+			reloaded.readStored(WORKSPACE, SESSION, MAIN_RELPATH),
+			Buffer.from(l1 + l2, "utf8"),
+		);
+		const lineage = reloaded.storedLineage(WORKSPACE, SESSION);
+		expect(lineage?.files.map((f) => f.relpath)).toEqual([MAIN_RELPATH]);
+		expect(lineage?.ackedBytes).toBe(l1.length + l2.length);
+
+		// The surviving stream's resume point is intact: an exact resend is a
+		// duplicate and a fresh load is clean.
+		expect(reloaded.ingest(WORKSPACE, SESSION, MAIN_RELPATH, chunkAt(0, 1, l1 + l2))).toEqual({
+			status: "duplicate",
+		});
+		expect(FleetLogStore.load(rootDir).loadReport.repairs).toEqual([]);
+	});
+
+	test("skipped_invalid_dir: unsafe directory names are skipped wholesale, never traversed or deleted", () => {
+		const rootDir = tempDir("omp-logstore-bad-dir-");
+		const l1 = recordLine("main", 1);
+		const store = new FleetLogStore({ rootDir });
+		ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, l1));
+
+		// One directory name outside the id namespace at the store root and one
+		// store-reserved name inside the workspace.
+		const badWorkspace = join(rootDir, "escape\\ws");
+		const badSession = join(rootDir, WORKSPACE, "index.json");
+		mkdirSync(badWorkspace);
+		mkdirSync(badSession);
+		writeFileSync(join(badWorkspace, "stream.jsonl"), recordLine("x", 1));
+		writeFileSync(join(badSession, "stream.jsonl"), recordLine("y", 1));
+
+		const reloaded = FleetLogStore.load(rootDir);
+		const skipped = reloaded.loadReport.repairs.filter((r) => r.kind === "skipped_invalid_dir");
+		expect(skipped).toHaveLength(2);
+		expect(skipped.map((r) => [r.workspaceId, r.sessionId])).toEqual(
+			expect.arrayContaining([
+				["escape\\ws", ""],
+				[WORKSPACE, "index.json"],
+			]),
+		);
+
+		// Skipped means invisible, not removed: the subtrees stay on disk with
+		// their bytes, expose no session/workspace row, and never enter the
+		// load report's counts.
+		expect(readFileSync(join(badSession, "stream.jsonl"), "utf8")).toBe(recordLine("y", 1));
+		expect(reloaded.storedLineage(WORKSPACE, "index.json")).toBeNull();
+		expect(reloaded.readStored(WORKSPACE, "index.json", "stream.jsonl")).toBeNull();
+		expect(reloaded.listStoredSessions(WORKSPACE).map((s) => s.sessionId)).toEqual([SESSION]);
+		expect(reloaded.listStoredWorkspaces().map((w) => w.workspaceId)).toEqual([WORKSPACE]);
+		expect(reloaded.loadReport.sessions).toBe(1);
+		expect(reloaded.loadReport.streams).toBe(1);
+		expectBuffersEqual(
+			reloaded.readStored(WORKSPACE, SESSION, MAIN_RELPATH),
+			Buffer.from(l1, "utf8"),
+		);
+
+		// The skip is not a repairable drift: it is reported on every load and
+		// rewrites nothing (the next load reports the same two skips only).
+		const again = FleetLogStore.load(rootDir);
+		expect(again.loadReport.repairs.map((r) => r.kind)).toEqual([
+			"skipped_invalid_dir",
+			"skipped_invalid_dir",
+		]);
+	});
+
+	test("file_missing_reset: a vanished stream file resets its resume offset to 0 and the resend restores it", () => {
+		const rootDir = tempDir("omp-logstore-missing-");
+		const main = recordLine("main", 1) + recordLine("main", 2);
+		const sub = recordLine("sub", 1) + recordLine("sub", 2);
+		const store = new FleetLogStore({ rootDir });
+		ingestAcked(store, MAIN_RELPATH, chunkAt(0, 1, main));
+		const subEnd = ingestAcked(store, SUBAGENT_RELPATH, chunkAt(0, 1, sub));
+
+		// The subagent stream vanished while its index entry still claimed the
+		// bytes were acked (external deletion, e.g. a tool cleaning the dir).
+		unlinkSync(storedFile(rootDir, SUBAGENT_RELPATH));
+
+		const reloaded = FleetLogStore.load(rootDir);
+		expect(reloaded.loadReport.repairs).toEqual([
+			{
+				workspaceId: WORKSPACE,
+				sessionId: SESSION,
+				relpath: SUBAGENT_RELPATH,
+				kind: "file_missing_reset",
+				from: subEnd,
+				to: 0,
+			},
+		]);
+		// The vanished file is unreadable and honestly listed as missing with
+		// no ack state left above zero; the sibling main stream is untouched.
+		expect(reloaded.readStored(WORKSPACE, SESSION, SUBAGENT_RELPATH)).toBeNull();
+		const lineage = reloaded.storedLineage(WORKSPACE, SESSION);
+		expect(lineage?.files.find((f) => f.relpath === SUBAGENT_RELPATH)).toMatchObject({
+			status: "missing",
+			bytes: 0,
+			ackedBytes: 0,
+		});
+		expect(lineage?.missingAssets).toBe(1);
+		expectBuffersEqual(
+			reloaded.readStored(WORKSPACE, SESSION, MAIN_RELPATH),
+			Buffer.from(main, "utf8"),
+		);
+
+		// The reset offset is the resume point: the daemon's re-stream from 0
+		// is acked and restores the file byte-identically.
+		expect(ingestAcked(reloaded, SUBAGENT_RELPATH, chunkAt(0, 1, sub))).toBe(sub.length);
+		expectBuffersEqual(
+			reloaded.readStored(WORKSPACE, SESSION, SUBAGENT_RELPATH),
+			Buffer.from(sub, "utf8"),
+		);
+		expect(FleetLogStore.load(rootDir).loadReport.repairs).toEqual([]);
 	});
 });
