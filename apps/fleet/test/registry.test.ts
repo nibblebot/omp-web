@@ -1,31 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import {
-	mkdtempSync,
-	mkdirSync,
-	readFileSync,
-	readdirSync,
-	rmSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { Registry } from "../registry";
 
-const tmpDirs: string[] = [];
-
 afterAll(cleanupTempDirs);
 
 function tmpStatePath(): string {
-	const dir = mkdtempSync(join(tmpdir(), "omp-session-registry-"));
-	tmpDirs.push(dir);
-	return join(dir, "state.json");
+	return join(tempDir("omp-session-registry-"), "state.json");
 }
-
-afterAll(() => {
-	for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
-});
 
 type CreateInit = Parameters<Registry["create"]>[0];
 
@@ -232,6 +216,42 @@ describe("Registry", () => {
 		expect(readdirSync(dirname(statePath)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
 	});
 
+	test("a failed save leaves the previous state file intact and readable", async () => {
+		const statePath = tmpStatePath();
+		let failRename = false;
+		const registry = new Registry(statePath, () => {
+			if (failRename) throw new Error("injected save failure");
+		});
+		await registry.load();
+		registry.create(baseInit({ name: "kept" }));
+		registry.setStatus("d1", "ready");
+
+		// The mutation lands in memory, but the persist fails before the
+		// rename: the real state file keeps the last complete snapshot.
+		failRename = true;
+		expect(() => registry.create(baseInit({ name: "lost" }))).toThrow("injected save failure");
+		const onDisk = JSON.parse(readFileSync(statePath, "utf8")) as {
+			nextId: number;
+			entries: Array<{ daemonId: string; name: string }>;
+		};
+		expect(onDisk.entries.map((e) => e.daemonId)).toEqual(["d1"]);
+		expect(onDisk.entries.map((e) => e.name)).toEqual(["kept"]);
+		expect(onDisk.nextId).toBe(2);
+		const reloaded = await loadedRegistry(statePath);
+		expect(reloaded.get("d1")).toMatchObject({ name: "kept", status: "ready" });
+		expect(reloaded.get("d2")).toBeUndefined();
+
+		// A later save (failure cleared) succeeds atomically: the stale tmp
+		// file is replaced and renamed, so none is left behind.
+		failRename = false;
+		registry.setStatus("d1", "asleep");
+		const recovered = JSON.parse(readFileSync(statePath, "utf8")) as {
+			entries: Array<{ daemonId: string; status: string }>;
+		};
+		expect(recovered.entries.find((e) => e.daemonId === "d1")?.status).toBe("asleep");
+		expect(readdirSync(dirname(statePath)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+	});
+
 	test("update applies a partial patch, persists, and throws on unknown id", async () => {
 		const statePath = tmpStatePath();
 		const registry = await loadedRegistry(statePath);
@@ -354,6 +374,88 @@ describe("Registry", () => {
 	});
 });
 
+describe("workspace enrollment and store-orphan markers", () => {
+	test("setWorkspaceEnrollment persists the binding and workspaceEnrollments() reports it", async () => {
+		const statePath = tmpStatePath();
+		const registry = await loadedRegistry(statePath);
+		registry.create(baseInit({ name: "enrolled" }));
+		registry.create(baseInit({ name: "plain" }));
+		registry.setWorkspaceEnrollment("d1", { credentialHash: "a".repeat(64), generation: 3 });
+
+		expect(registry.workspaceEnrollments()).toEqual([
+			{ workspaceId: "d1", enrollment: { credentialHash: "a".repeat(64), generation: 3 } },
+		]);
+		expect((await loadedRegistry(statePath)).workspaceEnrollments()).toEqual(
+			registry.workspaceEnrollments(),
+		);
+	});
+
+	test("clearWorkspaceEnrollment ignores a stale generation and clears the matching one", async () => {
+		const statePath = tmpStatePath();
+		const registry = await loadedRegistry(statePath);
+		registry.create(baseInit());
+		registry.setWorkspaceEnrollment("d1", { credentialHash: "b".repeat(64), generation: 2 });
+
+		// A revocation carrying an older generation must not wipe the newer
+		// binding, in memory or on disk.
+		expect(registry.clearWorkspaceEnrollment("d1", 1)).toBe(false);
+		expect(registry.workspaceEnrollments()).toHaveLength(1);
+		expect((await loadedRegistry(statePath)).workspaceEnrollments()).toHaveLength(1);
+
+		expect(registry.clearWorkspaceEnrollment("d1", 2)).toBe(true);
+		expect(registry.workspaceEnrollments()).toEqual([]);
+		expect((await loadedRegistry(statePath)).workspaceEnrollments()).toEqual([]);
+		// Nothing left to clear.
+		expect(registry.clearWorkspaceEnrollment("d1", 2)).toBe(false);
+	});
+
+	test("markStoreOrphan sets and persists the marker; clearStoreOrphan clears it", async () => {
+		const statePath = tmpStatePath();
+		const registry = await loadedRegistry(statePath);
+		registry.create(baseInit());
+
+		registry.markStoreOrphan("d1", "deleted without verification");
+		expect(registry.storeOrphans()).toEqual({
+			d1: { at: expect.any(Number), reason: "deleted without verification" },
+		});
+		expect((await loadedRegistry(statePath)).storeOrphans()).toEqual(registry.storeOrphans());
+
+		expect(registry.clearStoreOrphan("d1")).toBe(true);
+		expect(registry.storeOrphans()).toEqual({});
+		expect((await loadedRegistry(statePath)).storeOrphans()).toEqual({});
+		// A workspace with no marker is a no-op.
+		expect(registry.clearStoreOrphan("d1")).toBe(false);
+	});
+
+	test("malformed storeOrphans in the state file are rejected on load", async () => {
+		const statePath = tmpStatePath();
+		writeFileSync(
+			statePath,
+			JSON.stringify({ nextId: 1, entries: [], storeOrphans: { w1: { reason: "no at" } } }),
+		);
+		await expect(new Registry(statePath).load()).rejects.toThrow(statePath);
+
+		writeFileSync(
+			statePath,
+			JSON.stringify({ nextId: 1, entries: [], storeOrphans: { w1: null } }),
+		);
+		await expect(new Registry(statePath).load()).rejects.toThrow(statePath);
+
+		// An array is not a markers map; accepting it would silently drop
+		// every marker.
+		writeFileSync(statePath, JSON.stringify({ nextId: 1, entries: [], storeOrphans: [] }));
+		await expect(new Registry(statePath).load()).rejects.toThrow(statePath);
+
+		// Positive control: a well-formed marker still loads.
+		writeFileSync(
+			statePath,
+			JSON.stringify({ nextId: 1, entries: [], storeOrphans: { w1: { at: 5, reason: "r" } } }),
+		);
+		const registry = await loadedRegistry(statePath);
+		expect(registry.storeOrphans()).toEqual({ w1: { at: 5, reason: "r" } });
+	});
+});
+
 describe("registered projects (Phase 2)", () => {
 	/** A real git repo in a fresh tmp dir (addProject validates the .git entry). */
 	async function makeRepo(): Promise<string> {
@@ -447,7 +549,7 @@ describe("registered projects (Phase 2)", () => {
 		);
 
 		registry.remove("d2");
-		expect(() => registry.removeProject(project.projectId)).not.toThrow();
+		registry.removeProject(project.projectId);
 		expect(registry.projects()).toEqual([]);
 		expect(() => registry.removeProject(project.projectId)).toThrow(
 			`unknown project id: ${project.projectId}`,

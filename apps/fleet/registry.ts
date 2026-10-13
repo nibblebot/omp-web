@@ -238,6 +238,12 @@ export class Registry {
 	onProjectsChange: (() => void) | null = null;
 
 	private readonly statePath: string;
+	/**
+	 * Test seam: invoked by the atomic persist after the sibling tmp file is
+	 * written and before the rename, so a test can inject a failed save.
+	 * Production never passes it (undefined = no-op).
+	 */
+	private readonly failBeforeRename: (() => void) | undefined;
 	private entries: RegistryEntry[] = [];
 	private nextId = 1;
 	/** Registered projects in insertion order (public API: projects()). */
@@ -246,8 +252,9 @@ export class Registry {
 	/** Deleted-without-verification markers keyed by workspaceId (P7.5). */
 	private storeOrphanList: Record<string, StoreOrphanMarker> = {};
 
-	constructor(statePath: string) {
+	constructor(statePath: string, failBeforeRename?: () => void) {
 		this.statePath = statePath;
+		this.failBeforeRename = failBeforeRename;
 	}
 
 	/** Missing file → empty registry. Corrupt file → throws with the path in the message. */
@@ -668,6 +675,7 @@ export class Registry {
 		);
 		const tmp = `${this.statePath}.tmp`;
 		writeFileSync(tmp, `${payload}\n`, "utf8");
+		this.failBeforeRename?.();
 		renameSync(tmp, this.statePath);
 	}
 }
