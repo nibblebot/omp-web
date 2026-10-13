@@ -24,6 +24,7 @@ Open dev's printed `ui` URL, not fleet's potentially stale `dist/` UI. Dev-spawn
 ### Checks
 
 ```sh
+bun run check                       # types + lint + format:check + full suite
 bun run check:types                 # tsgo, not tsc
 bun run lint                        # library boundaries + oxlint
 bun run format:check
