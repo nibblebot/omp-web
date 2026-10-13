@@ -3,16 +3,35 @@ import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { checkLibBoundary } from "../check-lib-boundary";
+import { checkLibBoundary, checkWebFeatureBoundary } from "../check-lib-boundary";
 import type { LibBoundaryFinding } from "../check-lib-boundary";
 
 afterAll(cleanupTempDirs);
+
+const checker = fileURLToPath(new URL("../check-lib-boundary.ts", import.meta.url));
 
 type Findings = LibBoundaryFinding[];
 type FixtureOptions = {
 	tsconfig?: Record<string, unknown>;
 	packageJson?: Record<string, unknown>;
 };
+
+/** Stand-in for apps/web/features/manifest.ts; `FEATURES` is the id source the checker reads. */
+function featureManifest(ids: readonly string[]): string {
+	return [
+		"export interface FeatureInfo { id: string }",
+		`export const FEATURES: readonly FeatureInfo[] = [${ids.map((id) => `{ id: ${JSON.stringify(id)} }`).join(", ")}];`,
+	].join("\n");
+}
+
+function runChecker(root: string) {
+	return Bun.spawnSync({
+		cmd: [process.execPath, checker, root],
+		cwd: root,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+}
 
 function writeRepo(files: Record<string, string>, options: FixtureOptions = {}): string {
 	const root = tempDir("lib-boundary-");
@@ -217,6 +236,9 @@ describe("loader calls and require origins", () => {
 		["require", 'const path = "./target"; require(path);'],
 		["require.resolve", 'const path = "./target"; require.resolve(path);'],
 		["module.require", 'const path = "./target"; module.require(path);'],
+		["process.getBuiltinModule", 'const id = "node:module"; process.getBuiltinModule(id);'],
+		["import.meta.resolve", 'const path = "./target"; import.meta.resolve(path);'],
+		["Bun.resolveSync", 'const path = "./target"; Bun.resolveSync(path);'],
 		["escaping local require", 'const load = require; load("./target");'],
 		["exported require", "export const load = require;"],
 		["require passed as argument", "consume(require);"],
@@ -320,6 +342,98 @@ describe("loader calls and require origins", () => {
 		});
 		const finding = findingAt(checkLibBoundary(root).findings, "computed", file);
 		expect(finding.message).toMatch(/createRequire|makeRequire|base|origin/i);
+	});
+
+	// Fixtures intentionally spell module loading dynamically: static imports cannot express the
+	// runtime-selected loader forms the checker must recognise.
+	test.each([
+		[
+			"a require result",
+			['require("node:module").createRequire(import.meta.url)("../../apps/web/entry");'],
+		],
+		[
+			"an aliased require result",
+			[
+				'const load = require("node:module").createRequire(import.meta.url);',
+				'load("../../apps/web/entry");',
+			],
+		],
+		[
+			"a destructured require result",
+			[
+				'const { createRequire } = require("node:module");',
+				"const load = createRequire(import.meta.url);",
+				'load("../../apps/web/entry");',
+			],
+		],
+		[
+			"a process.getBuiltinModule result",
+			[
+				'const load = process.getBuiltinModule("node:module").createRequire(import.meta.url);',
+				'load("../../apps/web/entry");',
+			],
+		],
+		[
+			"an awaited dynamic import",
+			[
+				'const namespace = await import("node:module");',
+				"const load = namespace.createRequire(import.meta.url);",
+				'load("../../apps/web/entry");',
+			],
+		],
+	])("checks a createRequire loader from %s", (_name, lines) => {
+		const file = "lib/alpha/index.ts";
+		const root = writeRepo({
+			[file]: [...lines, "export {};"].join("\n"),
+			"apps/web/entry.ts": "export const value = 1;",
+		});
+		expectBoundary(
+			checkLibBoundary(root).findings,
+			file,
+			"../../apps/web/entry",
+			"apps/web/entry.ts",
+		);
+	});
+
+	test.each([
+		["import.meta.resolve", 'import.meta.resolve("../../apps/web/entry");'],
+		["Bun.resolveSync", 'Bun.resolveSync("../../apps/web/entry", import.meta.dir);'],
+	])("rejects a cross-library path through %s", (_name, source) => {
+		const file = "lib/alpha/index.ts";
+		const root = writeRepo({
+			[file]: `${source}\nexport {};`,
+			"apps/web/entry.ts": "export const value = 1;",
+		});
+		expectBoundary(
+			checkLibBoundary(root).findings,
+			file,
+			"../../apps/web/entry",
+			"apps/web/entry.ts",
+		);
+	});
+
+	test("allows tracked module accessors and resolvers that stay inside lib", () => {
+		const file = "lib/alpha/index.ts";
+		const root = writeRepo({
+			[file]: [
+				'const direct = require("node:module").createRequire(import.meta.url);',
+				'const { createRequire } = require("node:module");',
+				"const destructured = createRequire(import.meta.url);",
+				'const accessor = process.getBuiltinModule("node:module");',
+				"const builtin = accessor.createRequire(import.meta.url);",
+				'const namespace = await import("node:module");',
+				"const dynamic = namespace.createRequire(import.meta.url);",
+				'direct("./target");',
+				'destructured("./target");',
+				'builtin("./target");',
+				'dynamic("./target");',
+				'const resolved = import.meta.resolve("./target");',
+				'const found = Bun.resolveSync("./target", import.meta.dir);',
+				"export { resolved, found };",
+			].join("\n"),
+			"lib/alpha/target.ts": "export const value = 1;",
+		});
+		expect(checkLibBoundary(root)).toEqual({ files: 2, findings: [] });
 	});
 });
 
@@ -431,6 +545,140 @@ describe("resolver aliases and realpath boundaries", () => {
 	});
 });
 
+describe("web feature boundaries", () => {
+	test("rejects a static feature-entry import from core code", () => {
+		const file = "apps/web/App.tsx";
+		const root = writeRepo({
+			"apps/web/features/manifest.ts": featureManifest(["analysis", "review"]),
+			"apps/web/features/analysis.tsx": "export const view = () => 1;",
+			[file]:
+				'import { view } from "./features/analysis";\nexport const App = () => <p>{view()}</p>;',
+		});
+		const finding = findingAt(checkWebFeatureBoundary(root).findings, "feature-boundary", file);
+		expect(finding.message).toContain("analysis");
+		expect(finding.message).toContain('"./features/analysis"');
+		expect(finding.message).toContain("apps/web/features/analysis.tsx");
+		expect(finding.message).toContain("import()");
+		expect(finding.message).toContain("registry.ts");
+		expect(finding.line).toBe(1);
+	});
+
+	test("rejects a static feature-entry re-export from core code", () => {
+		const file = "apps/web/store/index.ts";
+		const root = writeRepo({
+			"apps/web/features/manifest.ts": featureManifest(["analysis"]),
+			"apps/web/features/analysis.tsx": "export const view = 1;",
+			[file]: 'export { view } from "../features/analysis";',
+		});
+		const finding = findingAt(checkWebFeatureBoundary(root).findings, "feature-boundary", file);
+		expect(finding.message).toContain("analysis");
+	});
+
+	test.each([
+		["type import", 'import type { View } from "./features/analysis";\nexport type V = View;'],
+		[
+			"specifier type import",
+			'import { type View } from "./features/analysis";\nexport type V = View;',
+		],
+		["type re-export", 'export type { View } from "./features/analysis";'],
+		["specifier type re-export", 'export { type View } from "./features/analysis";'],
+	])("allows a %s of a feature entry", (_name, source) => {
+		const file = "apps/web/state.ts";
+		const root = writeRepo({
+			"apps/web/features/manifest.ts": featureManifest(["analysis"]),
+			"apps/web/features/analysis.tsx": "export interface View { id: string }",
+			[file]: source,
+		});
+		expect(checkWebFeatureBoundary(root)).toEqual({ files: 1, findings: [] });
+	});
+
+	test("allows the registry's dynamic feature import from core code", () => {
+		const root = writeRepo({
+			"apps/web/features/manifest.ts": featureManifest(["analysis"]),
+			"apps/web/features/analysis.tsx": "export const view = () => 1;",
+			"apps/web/index.tsx": 'export const load = () => import("./features/analysis");',
+		});
+		expect(checkWebFeatureBoundary(root)).toEqual({ files: 1, findings: [] });
+	});
+
+	test("allows core imports of the shared feature modules", () => {
+		const root = writeRepo({
+			"apps/web/features/manifest.ts": featureManifest(["analysis"]),
+			"apps/web/features/registry.ts": "export const activateFeatures = () => Promise.resolve();",
+			"apps/web/features/preferences.ts": "export const preferredFeatureIds = () => [];",
+			"apps/web/index.tsx": [
+				'import { FEATURES } from "./features/manifest";',
+				'import { activateFeatures } from "./features/registry";',
+				'import { preferredFeatureIds } from "./features/preferences";',
+				"export const start = () => activateFeatures(preferredFeatureIds() ?? FEATURES);",
+			].join("\n"),
+		});
+		expect(checkWebFeatureBoundary(root)).toEqual({ files: 1, findings: [] });
+	});
+
+	test("treats only manifest ids as feature entries", () => {
+		const root = writeRepo({
+			"apps/web/features/manifest.ts": featureManifest(["analysis"]),
+			"apps/web/features/legacy.ts": "export const legacy = 1;",
+			"apps/web/legacy.ts": 'import { legacy } from "./features/legacy";\nexport const v = legacy;',
+		});
+		expect(checkWebFeatureBoundary(root)).toEqual({ files: 1, findings: [] });
+	});
+
+	test("covers a new manifest id without hardcoding", () => {
+		const file = "apps/web/panel/panel.ts";
+		const root = writeRepo({
+			"apps/web/features/manifest.ts": featureManifest(["analysis", "quantum"]),
+			"apps/web/features/quantum.ts": "export const quantum = 1;",
+			[file]: 'import { quantum } from "../features/quantum";\nexport const v = quantum;',
+		});
+		const finding = findingAt(checkWebFeatureBoundary(root).findings, "feature-boundary", file);
+		expect(finding.message).toContain("quantum");
+		expect(finding.message).toContain("apps/web/features/quantum.ts");
+	});
+
+	test("scans core source only, ignoring app tests and feature internals", () => {
+		const root = writeRepo({
+			"apps/web/features/manifest.ts": featureManifest(["analysis", "review"]),
+			"apps/web/features/analysis.tsx":
+				'import { review } from "./review";\nexport const v = review;',
+			"apps/web/features/review.tsx": "export const review = 1;",
+			"apps/web/test/analysis.test.ts": 'import { v } from "../features/analysis";',
+			"apps/web/core.ts": "export const core = 1;",
+		});
+		expect(checkWebFeatureBoundary(root)).toEqual({ files: 1, findings: [] });
+	});
+
+	test("reports an unreadable feature manifest instead of throwing", () => {
+		const root = writeRepo({ "apps/web/index.tsx": "export {};" });
+		const finding = findingAt(
+			checkWebFeatureBoundary(root).findings,
+			"source",
+			"apps/web/features/manifest.ts",
+		);
+		expect(finding.message).toContain("manifest");
+	});
+
+	test("reports a manifest whose FEATURES array cannot be read", () => {
+		const root = writeRepo({
+			"apps/web/features/manifest.ts": 'export const FEATURES = buildFeatures(["analysis"]);',
+			"apps/web/App.tsx": 'import "./features/analysis";',
+			"apps/web/features/analysis.tsx": "export {};",
+		});
+		const finding = findingAt(
+			checkWebFeatureBoundary(root).findings,
+			"parse",
+			"apps/web/features/manifest.ts",
+		);
+		expect(finding.message).toContain("FEATURES");
+	});
+
+	test("a repository without apps/web has no findings", () => {
+		const root = writeRepo({ "lib/alpha/index.ts": "export const value = 1;" });
+		expect(checkWebFeatureBoundary(root)).toEqual({ files: 0, findings: [] });
+	});
+});
+
 describe("library boundary CLI", () => {
 	test("exits nonzero and identifies the origin and resolved app target", () => {
 		const file = "lib/alpha/index.ts";
@@ -439,17 +687,44 @@ describe("library boundary CLI", () => {
 			[file]: `import "${specifier}";`,
 			"apps/web/entry.ts": "export {};",
 		});
-		const checker = fileURLToPath(new URL("../check-lib-boundary.ts", import.meta.url));
-		const result = Bun.spawnSync({
-			cmd: [process.execPath, checker, root],
-			cwd: root,
-			stdout: "pipe",
-			stderr: "pipe",
-		});
+		const result = runChecker(root);
 		expect(result.exitCode).toBe(1);
 		const diagnostic = result.stderr.toString();
 		expect(diagnostic).toContain(file);
 		expect(diagnostic).toContain(specifier);
 		expect(diagnostic).toContain("apps/web/entry.ts");
+	});
+
+	test("exits nonzero and identifies the feature entry a core file statically imports", () => {
+		const file = "apps/web/App.tsx";
+		const root = writeRepo({
+			"apps/web/features/manifest.ts": featureManifest(["analysis"]),
+			"apps/web/features/analysis.tsx": "export const view = 1;",
+			[file]: 'import { view } from "./features/analysis";\nexport const App = () => view;',
+		});
+		const result = runChecker(root);
+		expect(result.exitCode).toBe(1);
+		const diagnostic = result.stderr.toString();
+		expect(diagnostic).toContain(`[feature-boundary]`);
+		expect(diagnostic).toContain(file);
+		expect(diagnostic).toContain("apps/web/features/analysis.tsx");
+		expect(result.stdout.toString()).toBe("");
+	});
+
+	test("prints one summary line per phase for a clean repository", () => {
+		const root = writeRepo({
+			"lib/alpha/index.ts": "export const value = 1;",
+			"apps/web/features/manifest.ts": featureManifest(["analysis"]),
+			"apps/web/features/analysis.tsx": "export const view = 1;",
+			"apps/web/App.tsx": "export const App = 1;",
+		});
+		const result = runChecker(root);
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr.toString()).toBe("");
+		const summary = result.stdout.toString();
+		expect(summary).toContain("Library boundary: 1 source files checked");
+		expect(summary).toContain("no outward imports or cross-library cycles.");
+		expect(summary).toContain("Web feature boundary: 1 core files checked");
+		expect(summary).toContain("no static feature-entry imports.");
 	});
 });
