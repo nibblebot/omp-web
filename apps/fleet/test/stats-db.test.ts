@@ -2,26 +2,14 @@
  * StatsDbManagerImpl lifecycle: missing→present pickup, rotation reopen,
  * WAL-fallback temp copy + close cleanup. Unit-level; no server involved.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync } from "node:fs";
 import { join, sep } from "node:path";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { StatsDbManagerImpl } from "../stats-db";
 
-const scratch: string[] = [];
-
-function tmpDir(): string {
-	const d = mkdtempSync(join(tmpdir(), "svm-"));
-	scratch.push(d);
-	return d;
-}
-
-afterEach(() => {
-	for (const d of scratch.splice(0)) {
-		rmSync(d, { recursive: true, force: true });
-	}
-});
+afterAll(cleanupTempDirs);
 
 /** (Re)write a stats.db with one row carrying the marker. */
 function writeDb(path: string, marker: string): void {
@@ -40,7 +28,7 @@ const readMarker = (db: Database): string => {
 
 describe("StatsDbManagerImpl", () => {
 	test("missing stats.db → db() null, path() null, fromCopy() false", () => {
-		const m = new StatsDbManagerImpl(join(tmpDir(), "stats.db"));
+		const m = new StatsDbManagerImpl(join(tempDir("svm-"), "stats.db"));
 		expect(m.db()).toBeNull();
 		expect(m.path()).toBeNull();
 		expect(m.fromCopy()).toBe(false);
@@ -48,7 +36,7 @@ describe("StatsDbManagerImpl", () => {
 	});
 
 	test("missing → present: reprobe picks the db up", () => {
-		const dbPath = join(tmpDir(), "stats.db");
+		const dbPath = join(tempDir("svm-"), "stats.db");
 		const m = new StatsDbManagerImpl(dbPath);
 		expect(m.db()).toBeNull();
 
@@ -63,7 +51,7 @@ describe("StatsDbManagerImpl", () => {
 	});
 
 	test("unchanged file → reprobe is a no-op (same handle)", () => {
-		const dbPath = join(tmpDir(), "stats.db");
+		const dbPath = join(tempDir("svm-"), "stats.db");
 		writeDb(dbPath, "stable");
 		const m = new StatsDbManagerImpl(dbPath);
 		const first = m.db();
@@ -73,7 +61,7 @@ describe("StatsDbManagerImpl", () => {
 	});
 
 	test("rotation (size/mtime change) → new handle with fresh data", () => {
-		const dbPath = join(tmpDir(), "stats.db");
+		const dbPath = join(tempDir("svm-"), "stats.db");
 		writeDb(dbPath, "one");
 		const m = new StatsDbManagerImpl(dbPath);
 		const first = m.db();
@@ -92,7 +80,7 @@ describe("StatsDbManagerImpl", () => {
 	});
 
 	test("fallback: direct open throws → atomic temp copy; close removes it", () => {
-		const dbPath = join(tmpDir(), "stats.db");
+		const dbPath = join(tempDir("svm-"), "stats.db");
 		writeDb(dbPath, "copy-me");
 
 		let tempOpens = 0;
@@ -112,15 +100,15 @@ describe("StatsDbManagerImpl", () => {
 			expect(tempOpens).toBe(1);
 
 			// Atomic copy: exactly the db file, no half-written .tmp remnants.
-			const tempDir = p.slice(0, p.lastIndexOf(sep));
-			expect(existsSync(tempDir)).toBe(true);
-			const files = readdirSync(tempDir);
+			const copyDir = p.slice(0, p.lastIndexOf(sep));
+			expect(existsSync(copyDir)).toBe(true);
+			const files = readdirSync(copyDir);
 			expect(files.includes("stats.db")).toBe(true);
 			expect(files.some((f) => f.endsWith(".tmp"))).toBe(false);
 			expect(readMarker(m.db()!)).toBe("copy-me");
 
 			m.close();
-			expect(existsSync(tempDir)).toBe(false);
+			expect(existsSync(copyDir)).toBe(false);
 			expect(m.db()).toBeNull();
 			expect(m.path()).toBeNull();
 			expect(m.fromCopy()).toBe(false);

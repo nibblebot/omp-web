@@ -1,20 +1,24 @@
 /**
  * Fleet browser-auth route tests (P2.2/P2.3 integration): /auth/login,
  * /auth/session, /auth/logout and the browser-session gate over the shared
- * Bun.serve, exercised over real HTTP like the other server-* suites. The
- * non-loopback peer case boots the fleet on 0.0.0.0 and fetches via the
- * machine's LAN IP (the daemon's R14 token-gate test precedent); it skips
- * with a warning when the host has no non-loopback IPv4 interface.
+ * Bun.serve, exercised over real HTTP like the other server-* suites.
+ *
+ * Non-loopback policy (session/CSRF/origin for a remote client, forwarded
+ * headers only from trusted proxies) is exercised at the gate with an
+ * INJECTED peer address: startFleet has no seam to fake srv.requestIP, so
+ * the gate's peer argument is the injection point (server.ts passes the
+ * same value from srv.requestIP at runtime). No host-dependent LAN-interface
+ * skips.
  *
  * No real omp-session children are spawned.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { rmSync } from "node:fs";
-import os, { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { BrowserAuthStore } from "../browser-auth";
-import { BrowserAuthError, FleetAuthGate, peerIsLoopback } from "../fleet-auth-gate";
+import { FleetAuthGate, peerIsLoopback } from "../fleet-auth-gate";
 import { startFleet, type FleetServer } from "../server";
 import { compileTrustedProxies } from "../trusted-proxy";
 import {
@@ -32,24 +36,6 @@ const sha256Hex = (value: string): string =>
 
 const TOKEN = "op-sekret-9f3a";
 const TOKEN_HASH = sha256Hex(TOKEN);
-
-/** First non-internal IPv4 address (the machine's LAN IP); undefined when none exists. */
-function lanIpv4(): string | undefined {
-	for (const addrs of Object.values(os.networkInterfaces())) {
-		for (const addr of addrs ?? []) {
-			if (addr.family === "IPv4" && !addr.internal) return addr.address;
-		}
-	}
-	return undefined;
-}
-
-/** A likely-free TCP port (probe with an ephemeral listen, then release). */
-function freePort(): number {
-	const probe = Bun.serve({ port: 0, fetch: () => new Response() });
-	const port = probe.port!;
-	probe.stop(true);
-	return port;
-}
 
 interface LoginOutcome {
 	res: Response;
@@ -155,86 +141,6 @@ describe("fleet browser auth", () => {
 		}
 	}, 20_000);
 
-	test("non-loopback peers need a session + CSRF + origin; loopback stays exempt", async () => {
-		const lanIp = lanIpv4();
-		if (!lanIp) {
-			console.warn("no non-loopback IPv4 interface found; skipping non-loopback gate test");
-			return;
-		}
-		await pinSettingsInMemory();
-		const paths = fleetPaths("omp-web-server-lanauth-");
-		// The positive mutation case needs the browser's own origin allowlisted
-		// BEFORE boot, so the LAN test binds a fixed (probed-free) port.
-		const port = freePort();
-		const origin = `http://${lanIp}:${port}`;
-		const server = await startFleet({
-			port,
-			statePath: paths.statePath,
-			configPath: paths.configPath,
-			statsConfig: hermeticStatsConfig(paths.statePath),
-			bind: "0.0.0.0",
-			browserAccessToken: TOKEN,
-			browserOrigin: origin,
-		});
-		const base = `http://${lanIp}:${port}`;
-		try {
-			// Unauthenticated non-loopback peer → 401 on the gated surface.
-			expect((await fetch(`${base}/ctl/sessions`)).status).toBe(401);
-			expect((await fetch(`${base}/events`)).status).toBe(401);
-
-			// The same request via loopback (the CLI path) is admitted.
-			expect((await fetch(`http://127.0.0.1:${port}/ctl/sessions`)).status).toBe(200);
-
-			// Login (public surface) works from the LAN address.
-			const good = await login(port, TOKEN);
-			expect(good.res.status).toBe(200);
-			expect(good.cookie).not.toBeNull();
-			const cookie = good.cookie!;
-
-			// Authenticated mutation WITHOUT X-Omp-Csrf → 403.
-			const noCsrf = await fetch(`${base}/ctl/spawn`, {
-				method: "POST",
-				headers: { "content-type": "application/json", cookie },
-				body: JSON.stringify({}),
-			});
-			expect(noCsrf.status).toBe(403);
-
-			// With CSRF but a hostile origin → 403.
-			const hostile = await fetch(`${base}/ctl/spawn`, {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					cookie,
-					"x-omp-csrf": good.csrfToken!,
-					origin: "https://evil.example.com",
-				},
-				body: JSON.stringify({}),
-			});
-			expect(hostile.status).toBe(403);
-
-			// With CSRF + the allowlisted origin → the gate passes and the
-			// handler answers (400: empty spawn body), proof of admission.
-			const admitted = await fetch(`${base}/ctl/spawn`, {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					cookie,
-					"x-omp-csrf": good.csrfToken!,
-					origin,
-				},
-				body: JSON.stringify({}),
-			});
-			expect(admitted.status).not.toBe(401);
-			expect(admitted.status).not.toBe(403);
-
-			// GET /auth/session over LAN with the cookie works (same-origin
-			// probe path a reloaded tab uses).
-			expect((await fetch(`${base}/auth/session`, { headers: { cookie } })).status).toBe(200);
-		} finally {
-			await server.close().catch(() => {});
-		}
-	}, 20_000);
-
 	test("without a browser token: /auth/session 404 and everything admitted as before", async () => {
 		await pinSettingsInMemory();
 		const paths = fleetPaths("omp-web-server-noauth-");
@@ -268,91 +174,63 @@ describe("fleet browser auth", () => {
 		).rejects.toThrow(/non-loopback/);
 	});
 
-	test("access token is stored hashed, never in plaintext", () => {
-		// The test token above is arbitrary; the config key semantics (flag/env
-		// plaintext → sha-256 digest at load) are exercised end-to-end by the
-		// login tests: the fleet under test authenticates TOKEN, which only
-		// works if the stored comparison value is sha256(TOKEN).
-		expect(sha256Hex(TOKEN)).toMatch(/^[0-9a-f]{64}$/);
-		expect(TOKEN_HASH).not.toBe(TOKEN);
+	test("the persisted auth store keeps the token hashed, never in plaintext", async () => {
+		await pinSettingsInMemory();
+		const paths = fleetPaths("omp-web-server-authhash-");
+		const server = await startFleet({
+			port: 0,
+			statePath: paths.statePath,
+			configPath: paths.configPath,
+			statsConfig: hermeticStatsConfig(paths.statePath),
+			browserAccessToken: TOKEN,
+		});
+		try {
+			// A login persists a session record; the store lives next to the
+			// state file (server.ts: dirname(statePath)/browser-auth.json).
+			expect((await login(server.port, TOKEN)).res.status).toBe(200);
+			const raw = readFileSync(join(dirname(paths.statePath), "browser-auth.json"), "utf8");
+			expect(raw).not.toContain(TOKEN);
+			expect(raw).toContain(TOKEN_HASH);
+		} finally {
+			await server.close().catch(() => {});
+		}
 	});
+});
 
-	test("forwarded headers: forged XFF from an untrusted peer is ignored (401)", async () => {
-		const lanIp = lanIpv4();
-		if (!lanIp) {
-			console.warn("no non-loopback IPv4 interface found; skipping untrusted-peer XFF test");
-			return;
-		}
-		await pinSettingsInMemory();
-		const paths = fleetPaths("omp-web-server-forgedxff-");
-		const port = freePort();
-		const server = await startFleet({
-			port,
-			statePath: paths.statePath,
-			configPath: paths.configPath,
-			statsConfig: hermeticStatsConfig(paths.statePath),
-			bind: "0.0.0.0",
-			browserAccessToken: TOKEN,
-			// NO trusted proxies configured: a direct peer that happens to be
-			// the LAN IP is untrusted, so its X-Forwarded-For claiming a
-			// loopback client must be IGNORED; the effective client stays
-			// the non-loopback LAN peer and a session is required.
-		});
-		const base = `http://${lanIp}:${port}`;
-		try {
-			// A hostile XFF trying to claim a loopback client must NOT admit
-			// the request: 401 (loopback exemption denied), never 200.
-			const forged = await fetch(`${base}/ctl/sessions`, {
-				headers: { "x-forwarded-for": "127.0.0.1" },
-			});
-			expect(forged.status).toBe(401);
-			// Same without the header: still 401 (the header changed nothing).
-			expect((await fetch(`${base}/ctl/sessions`)).status).toBe(401);
-		} finally {
-			await server.close().catch(() => {});
-		}
-	}, 20_000);
+describe("fleet auth gate non-loopback policy (injected peer)", () => {
+	// Deterministic equivalent of the former LAN-interface gate tests: the
+	// gate's peer argument is the seam (server.ts passes srv.requestIP's
+	// address), so the remote-client session + CSRF + origin policy runs
+	// everywhere instead of skipping on hosts without a non-loopback IPv4.
+	const authPath = join(tmpdir(), `gate-nonloop-${process.pid}-auth.json`);
+	afterAll(() => rmSync(authPath, { force: true }));
+	const browserOrigin = "https://ui.example.com";
+	const gate = new FleetAuthGate({
+		enabled: true,
+		loopbackDev: false,
+		store: new BrowserAuthStore(authPath),
+		browserOrigin,
+	});
+	const client = "203.0.113.9";
+	const req = (headers: Record<string, string> = {}): Request =>
+		new Request("http://127.0.0.1/ctl/sessions", { headers });
 
-	test("forwarded headers: trusted proxy peer's XFF first hop is honored", async () => {
-		const lanIp = lanIpv4();
-		if (!lanIp) {
-			console.warn("no non-loopback IPv4 interface found; skipping trusted-proxy XFF test");
-			return;
-		}
-		await pinSettingsInMemory();
-		const paths = fleetPaths("omp-web-server-trustedxff-");
-		// The positive case: the fleet trusts the LAN IP as a proxy, so the
-		// XFF first hop (127.0.0.1, the browser behind the proxy on the same
-		// machine as the proxy's egress) IS honored → loopback exemption.
-		const port = freePort();
-		const server = await startFleet({
-			port,
-			statePath: paths.statePath,
-			configPath: paths.configPath,
-			statsConfig: hermeticStatsConfig(paths.statePath),
-			bind: "0.0.0.0",
-			browserAccessToken: TOKEN,
-			trustedProxy: [lanIp],
-		});
-		const base = `http://${lanIp}:${port}`;
-		try {
-			// Direct LAN peer is now trusted; forwarded loopback client is
-			// exempt (CLI loopback precedent) → admitted without a cookie.
-			const admitted = await fetch(`${base}/ctl/sessions`, {
-				headers: { "x-forwarded-for": "127.0.0.1" },
-			});
-			expect(admitted.status).toBe(200);
-			// But a hostile XFF from the same trusted peer naming a NON-loopback
-			// client still demands a session (never a silent open door): the
-			// forwarded client 203.0.113.7 is not loopback → 401.
-			const remote = await fetch(`${base}/ctl/sessions`, {
-				headers: { "x-forwarded-for": "203.0.113.7" },
-			});
-			expect(remote.status).toBe(401);
-		} finally {
-			await server.close().catch(() => {});
-		}
-	}, 20_000);
+	test("a non-loopback client needs a session; mutations need CSRF and the allowlisted origin", () => {
+		// No cookie → no session: server.ts maps a null authenticate to 401.
+		expect(gate.authenticate(req(), client)).toBeNull();
+		const loginResult = gate.login(TOKEN, TOKEN_HASH);
+		const cookie = loginResult.setCookie.split(";")[0]!;
+		const session = gate.authenticate(req({ cookie }), client);
+		expect(session).not.toBeNull();
+		// A mutation without X-Omp-Csrf is refused (403)...
+		expect(gate.requireCsrf(req({ cookie }), session!)).toBe(false);
+		// ...with it passes, but a hostile Origin is still refused while the
+		// configured allowlisted origin is admitted.
+		const csrf = { cookie, "x-omp-csrf": loginResult.csrfToken };
+		expect(gate.requireCsrf(req(csrf), session!)).toBe(true);
+		expect(gate.checkOrigin(req({ ...csrf, origin: "https://evil.example.com" }))).toBe(false);
+		expect(gate.checkOrigin(req({ ...csrf, origin: browserOrigin }))).toBe(true);
+	});
 });
 
 describe("fleet auth gate forwarded-header resolution", () => {
@@ -384,6 +262,12 @@ describe("fleet auth gate forwarded-header resolution", () => {
 		);
 		// A loopback first hop through a trusted proxy → loopback exemption.
 		expect(gate.authenticate(req({ "x-forwarded-for": "127.0.0.1" }), "203.0.113.9")).toBeNull();
+		// A forwarded NON-loopback first hop from the same trusted peer still
+		// demands a session: a null authenticate is the 401 server.ts emits.
+		const forwarded = req({ "x-forwarded-for": "203.0.113.7" });
+		const forwardedClient = gate.clientAddress(forwarded, "203.0.113.9");
+		expect(forwardedClient).toBe("203.0.113.7");
+		expect(gate.authenticate(forwarded, forwardedClient)).toBeNull();
 	});
 
 	test("forwarded headers are ignored entirely from an untrusted peer", () => {
@@ -394,6 +278,12 @@ describe("fleet auth gate forwarded-header resolution", () => {
 			"198.51.100.7",
 		);
 		expect(gate.clientAddress(req({ "x-forwarded-for": "127.0.0.1" }), null)).toBe("");
+		// The forged loopback claim never buys the exemption: the effective
+		// client is the peer, and the gate still demands a session (401).
+		const forged = req({ "x-forwarded-for": "127.0.0.1" });
+		const forgedClient = gate.clientAddress(forged, "198.51.100.7");
+		expect(peerIsLoopback(forgedClient)).toBe(false);
+		expect(gate.authenticate(forged, forgedClient)).toBeNull();
 		// The host loopback itself is never a trusted proxy by default: a
 		// forwarded header arriving ON the loopback socket is an undeclared
 		// proxy and resolves non-loopback (""), fail closed (see below).
@@ -447,36 +337,23 @@ describe("fleet auth gate forwarded-header resolution", () => {
 	});
 });
 
-describe("fleet auth gate revoke-all and rotation passthroughs", () => {
-	const authPath = join(tmpdir(), `gate-revoke-${process.pid}-auth.json`);
+describe("fleet auth gate rotation passthrough", () => {
+	// Store-level revokeAll/rotation semantics (what dies, what survives a
+	// reload) live in browser-auth.test.ts; the gate only needs to prove it
+	// forwards a rotation to the store.
+	const authPath = join(tmpdir(), `gate-rotate-${process.pid}-auth.json`);
 	afterAll(() => rmSync(authPath, { force: true }));
 	const gate = new FleetAuthGate({
 		enabled: true,
 		loopbackDev: false,
 		store: new BrowserAuthStore(authPath),
 	});
-	const cookieOf = (setCookie: string): string => setCookie.split(";")[0]!;
 
-	test("revokeAll kills every live session; rotation revokes and swaps the hash", () => {
-		const first = gate.login(TOKEN, TOKEN_HASH);
-		const second = gate.login(TOKEN, TOKEN_HASH);
-		const sessionReq = (raw: string): Request =>
-			new Request("http://127.0.0.1/ctl/sessions", { headers: { cookie: raw } });
-		expect(gate.resolveSession(sessionReq(cookieOf(first.setCookie)))).not.toBeNull();
-		expect(gate.resolveSession(sessionReq(cookieOf(second.setCookie)))).not.toBeNull();
-
-		gate.revokeAll();
-		expect(gate.resolveSession(sessionReq(cookieOf(first.setCookie)))).toBeNull();
-		expect(gate.resolveSession(sessionReq(cookieOf(second.setCookie)))).toBeNull();
-
-		// Rotation: all sessions (including a fresh one) die, the old token
-		// stops working, and the new token mints sessions.
-		const fresh = gate.login(TOKEN, TOKEN_HASH);
-		const rotatedHash = sha256Hex("op-sekret-rotated");
-		gate.rotateAccessToken(rotatedHash);
-		expect(gate.resolveSession(sessionReq(cookieOf(fresh.setCookie)))).toBeNull();
-		expect(() => gate.login(TOKEN, TOKEN_HASH)).toThrow(BrowserAuthError);
-		expect(() => gate.login(TOKEN, rotatedHash)).toThrow(/rejected/); // old plaintext vs new hash
-		expect(gate.login("op-sekret-rotated", rotatedHash).expiresAt).toBeGreaterThan(0);
+	test("rotateAccessToken swaps the hash the gate authenticates against", () => {
+		// Adopt the pre-rotation hash first, then rotate: the old plaintext
+		// must stop working (a no-op passthrough would still accept it).
+		gate.login(TOKEN, TOKEN_HASH);
+		gate.rotateAccessToken(sha256Hex("op-sekret-rotated"));
+		expect(() => gate.login(TOKEN, TOKEN_HASH)).toThrow(/rejected/);
 	});
 });

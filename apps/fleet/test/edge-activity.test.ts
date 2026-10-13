@@ -18,14 +18,7 @@ import { FleetEventLog } from "../events";
 import { Registry } from "../registry";
 import { SpawnSupervisor } from "../supervisor";
 import { startCallbackDaemon, type CallbackDaemon } from "./callback-daemon.testkit";
-import {
-	FAKE_CWD,
-	FAKE_STATE,
-	openBrowser,
-	sleep,
-	waitFor,
-	type BrowserSocket,
-} from "./edge.testkit";
+import { FAKE_CWD, FAKE_STATE, openBrowser, waitFor, type BrowserSocket } from "./edge.testkit";
 
 afterAll(cleanupTempDirs);
 
@@ -270,6 +263,9 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 		const s = await setup();
 		try {
 			const { entry, daemon } = await s.addDaemon("gone");
+			// A second, still-registered daemon whose activity change is the
+			// ordered barrier frame (see below).
+			const sentinel = await s.addDaemon("sentinel");
 			const browser = await s.browser();
 			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true));
 			await waitFor(
@@ -278,10 +274,22 @@ describe("edge realtime daemon activity (callback control stream)", () => {
 				"first activity",
 			);
 			s.registry.remove(entry.daemonId);
+			// Stale frames for the removed daemon race the removal; none may
+			// surface. The sentinel's activity change is driven AFTER them on
+			// the same browser stream, so once it arrives every earlier frame
+			// for the removed daemon has been processed and dropped.
 			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false));
 			daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("late"));
-			await sleep(150);
+			sentinel.daemon.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true));
+			await browser.waitForFrame(
+				(f) => f.type === "daemon_activity" && f.daemonId === sentinel.entry.daemonId,
+				"sentinel activity",
+			);
 			expect(activityFrames(browser, entry.daemonId)).toHaveLength(1);
+			expect(activityFrames(browser, entry.daemonId)[0]).toMatchObject({
+				streaming: true,
+				blocked: false,
+			});
 		} finally {
 			await s.teardown();
 		}

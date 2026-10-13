@@ -439,21 +439,69 @@ describe("fleet edge", () => {
 	});
 
 	test("list_daemon_sessions answers a per-daemon sessions frame (asleep daemon included)", async () => {
-		const browser = await openBrowser(server.port);
-		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		await browser.send({
-			type: "list_daemon_sessions",
-			id: "ls1",
-			daemonId: spawnedEntry.daemonId,
-		});
-		const frame = await browser.waitForFrame(
-			(f) => f.type === "daemon_sessions",
-			"daemon_sessions frame",
-		);
-		if (frame.type !== "daemon_sessions") throw new Error("expected daemon_sessions");
-		// The asleep spawned entry answers from disk, so no live process is needed.
-		expect(frame.daemonId).toBe(spawnedEntry.daemonId);
-		expect(Array.isArray(frame.sessions)).toBe(true);
+		// The asleep spawned entry lists from disk, so no live process is
+		// needed; seed one session file in its (temp) session dir and pin the
+		// edge to that dir for the duration of the test.
+		const agentDir = tempDir("omp-web-edge-ls-agent-");
+		const savedEnv = {
+			PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+			OMP_PROFILE: process.env.OMP_PROFILE,
+			PI_PROFILE: process.env.PI_PROFILE,
+		};
+		// listDaemonSessions resolves the agent dir from the SDK's process-level
+		// state (the edge has no per-call seam), so point it at the temp dir for
+		// this test only and restore it exactly afterwards.
+		setAgentDir(agentDir);
+		try {
+			const sessionDir = SessionManager.getDefaultSessionDir(
+				FAKE_CWD,
+				agentDir,
+				new FileSessionStorage(),
+			);
+			const seeded = join(sessionDir, "seeded.jsonl");
+			writeFileSync(
+				seeded,
+				`${JSON.stringify({ type: "session", id: "edge-ls", cwd: FAKE_CWD })}\n`,
+			);
+			const browser = await openBrowser(server.port);
+			await browser.waitForFrame((f) => f.type === "roster", "roster");
+			await browser.send({
+				type: "list_daemon_sessions",
+				id: "ls1",
+				daemonId: spawnedEntry.daemonId,
+			});
+			const frame = await browser.waitForFrame(
+				(f) => f.type === "daemon_sessions" && f.sessions.length === 1,
+				"daemon_sessions frame",
+			);
+			if (frame.type !== "daemon_sessions") throw new Error("expected daemon_sessions");
+			expect(frame.daemonId).toBe(spawnedEntry.daemonId);
+			const [session] = frame.sessions;
+			expect(session).toBeDefined();
+			// The exact SessionListEntry shape listDaemonSessions builds.
+			expect(Object.keys(session!).sort()).toEqual([
+				"cwd",
+				"id",
+				"messageCount",
+				"modifiedAt",
+				"name",
+				"path",
+			]);
+			expect(session!.path).toBe(seeded);
+			expect(session!.id).toBe("edge-ls");
+			expect(session!.cwd).toBe(FAKE_CWD);
+			expect(session!.messageCount).toBe(0);
+			expect(session!.modifiedAt).toBeGreaterThan(0);
+			expect(typeof session!.name).toBe("string");
+			expect(session!.name).not.toBe("");
+			browser.close();
+		} finally {
+			for (const [key, value] of Object.entries(savedEnv)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+			__resetDirsFromEnvForTests();
+		}
 	});
 
 	test("list_daemon_sessions rejects an unknown daemon", async () => {
@@ -905,7 +953,7 @@ describe("fleet edge", () => {
 		}
 	});
 
-	test("aggregated daemons: merge across daemons with same-projectDir preference", async () => {
+	test("aggregated daemons: merged frames are broadcast on update and on browser open", async () => {
 		// A second daemon with a different cwd, enrolled and paired like any remote daemon.
 		const body = await enrollRemote("daemons-b", OTHER_CWD);
 		daemonsBId = body.entry.daemonId;
@@ -919,7 +967,7 @@ describe("fleet edge", () => {
 			5000,
 			"second daemon ready",
 		);
-		// A browser to observe the merged broadcasts.
+		// A browser open BEFORE the rosters arrive observes the update broadcast.
 		const funnel = await openBrowser(server.port);
 		await funnel.waitForFrame((f) => f.type === "roster", "roster");
 		// The first daemon (cwd FAKE_CWD) reports its own roster; the second
@@ -939,52 +987,32 @@ describe("fleet edge", () => {
 				daemonInfo("only-b", OTHER_CWD, { pid: 2223 }),
 			],
 		});
-		const frame = await funnel.waitForFrame(
+		const updated = await funnel.waitForFrame(
 			(f) => f.type === "daemons" && f.daemons.some((d) => d.name === "only-b"),
-			"merged daemons frame",
+			"merged daemons frame on update",
 		);
-		if (frame.type !== "daemons") throw new Error("expected daemons");
-		const byName = new Map(frame.daemons.map((d) => [d.name, d]));
-		expect(byName.get("hub-a")?.pid).toBe(1111);
-		expect(byName.get("hub-b")?.pid).toBe(2221);
-		expect(byName.get("only-b")?.pid).toBe(2223);
-		// Same-projectDir preference: the daemon whose cwd is the projectDir
-		// wins the shared key over the later cross-cwd arrival.
-		expect(byName.get("shared")?.pid).toBe(1112);
-	});
-
-	test("aggregated daemons: merged frame is broadcast on browser open", async () => {
+		if (updated.type !== "daemons") throw new Error("expected daemons");
+		// Cross-daemon merge on the wire: both daemons' entries land in ONE frame.
+		expect(updated.daemons.map((d) => d.name).sort()).toEqual([
+			"hub-a",
+			"hub-b",
+			"only-b",
+			"shared",
+		]);
+		funnel.close();
+		// A browser opened afterwards is primed with the merged cache.
 		daemonsBrowser = await openBrowser(server.port);
-		const frame = await daemonsBrowser.waitForFrame(
+		const primed = await daemonsBrowser.waitForFrame(
 			(f) => f.type === "daemons" && f.daemons.some((d) => d.name === "hub-b"),
 			"merged daemons on open",
 		);
-		if (frame.type !== "daemons") throw new Error("expected daemons");
-		const names = new Set(frame.daemons.map((d) => d.name));
-		expect(names).toEqual(new Set(["hub-a", "hub-b", "shared", "only-b"]));
-	});
-
-	test("aggregated daemons: full-replace per daemon drops disappeared entries", async () => {
-		// The second daemon's next frame drops "only-b"; the merged frame must
-		// lose it while keeping the second daemon's remaining entry and the first's roster.
-		const daemonB = daemonsById.get(daemonsBId);
-		if (!daemonB) throw new Error("second daemon missing");
-		daemonB.send(CALLBACK_CONTROL_STREAM_ID, "frame", {
-			type: "daemons",
-			daemons: [
-				daemonInfo("hub-b", OTHER_CWD, { pid: 2221 }),
-				daemonInfo("shared", FAKE_CWD, { pid: 2222 }),
-			],
-		});
-		const frame = await daemonsBrowser.waitForFrame(
-			(f) => f.type === "daemons" && !f.daemons.some((d) => d.name === "only-b"),
-			"full-replace merged frame",
-		);
-		if (frame.type !== "daemons") throw new Error("expected daemons");
-		const names = new Set(frame.daemons.map((d) => d.name));
-		expect(names.has("hub-b")).toBe(true);
-		expect(names.has("shared")).toBe(true);
-		expect(names.has("only-b")).toBe(false);
+		if (primed.type !== "daemons") throw new Error("expected daemons");
+		expect(primed.daemons.map((d) => d.name).sort()).toEqual([
+			"hub-a",
+			"hub-b",
+			"only-b",
+			"shared",
+		]);
 	});
 
 	test("aggregated daemons: per-daemon frames are stripped from proxy pipes", async () => {
@@ -1019,6 +1047,10 @@ describe("fleet edge", () => {
 	});
 
 	test("aggregated daemons: registry removal evicts the second daemon from the cache", async () => {
+		// Integration, not the pure merge: a registry removal must evict the
+		// daemon's cached roster AND broadcast the shrunken merged frame (the
+		// pure eviction semantics live in daemons-aggregator.test.ts, which
+		// cannot reach the registry -> edge wiring asserted here).
 		expect(server.registry.remove(daemonsBId)).toBe(true);
 		const frame = await daemonsBrowser.waitForFrame(
 			(f) => f.type === "daemons" && !f.daemons.some((d) => d.name === "hub-b"),
@@ -1183,44 +1215,6 @@ describe("fleet edge", () => {
 		expect(
 			browser.frames.some((f) => f.type === "attached" && f.sessionId === body.entry.daemonId),
 		).toBe(false);
-		browser.close();
-	});
-
-	test("replaying a command across a generation change is refused, not re-run", async () => {
-		const body = await enrollRemote("replay-remote");
-		const replayId = body.entry.daemonId;
-		const first = await connectDaemon(replayId, body.enrollment.generation, body.enrollment.token);
-		await waitFor(
-			() => (server.registry.get(replayId)?.status === "ready" ? "ready" : null),
-			5000,
-			"replay remote ready",
-		);
-		const browser = await openBrowser(server.port);
-		await browser.waitForFrame((f) => f.type === "roster", "roster");
-		await attachBrowser(browser, first, replayId);
-		// The daemon receives the call and never answers it.
-		await browser.send({ type: "call", id: "replay-1", method: "prompt", args: ["once"] });
-		await waitFor(
-			() => (commandsWithId(first, "replay-1").length > 0 ? "sent" : null),
-			5000,
-			"replay-1 at first generation",
-		);
-		// The daemon restarts: a new generation is minted, the old pair is dropped.
-		const next = enrollSessionCredential(server.transport, server.registry, replayId);
-		const second = await connectDaemon(replayId, next.generation, next.credential);
-		// The browser re-attaches on the new generation and replays the call.
-		await attachBrowser(browser, second, replayId);
-		await browser.send({ type: "call", id: "replay-1", method: "prompt", args: ["once"] });
-		const refused = await browser.waitForFrame(
-			(f) => f.type === "call_result" && f.id === "replay-1",
-			"refused replay",
-		);
-		if (refused.type !== "call_result") throw new Error("expected call_result");
-		expect(refused.ok).toBe(false);
-		expect(refused.error).toMatch(/daemon restarted before this command was answered/);
-		// The replay never reached the new generation, and the first saw it only once.
-		expect(commandsWithId(second, "replay-1")).toHaveLength(0);
-		expect(commandsWithId(first, "replay-1")).toHaveLength(1);
 		browser.close();
 	});
 
@@ -1420,6 +1414,8 @@ describe("edge pure helpers", () => {
 			registeredAt: now - 200_000,
 			pid: 1234,
 			readyAt: now - 50_000,
+			branch: "feature/x",
+			git: { added: 2, modified: 3, deleted: 1, untracked: 4 },
 		};
 		const roster = toRosterEntry(entry);
 		expect(roster.daemonId).toBe("d1");
@@ -1430,6 +1426,14 @@ describe("edge pure helpers", () => {
 		expect(roster).not.toHaveProperty("endpoint");
 		expect(roster).not.toHaveProperty("registeredAt");
 		expect(roster).not.toHaveProperty("template");
+		// Optional git-state fields serialize when present...
+		expect(roster.branch).toBe("feature/x");
+		expect(roster.git).toEqual({ added: 2, modified: 3, deleted: 1, untracked: 4 });
+		// ...and old entries (pre-git-state, or a stale probe that cleared
+		// them) serialize without the keys at all.
+		const bare = toRosterEntry({ ...entry, branch: undefined, git: undefined });
+		expect(bare).not.toHaveProperty("branch");
+		expect(bare).not.toHaveProperty("git");
 		// An asleep daemon has no live process: the roster must not carry a
 		// pid or an uptime growing since registeredAt for a dead daemon.
 		const asleep = toRosterEntry({ ...entry, readyAt: undefined, status: "asleep" });
@@ -1446,29 +1450,6 @@ describe("edge pure helpers", () => {
 		const neverReady = toRosterEntry({ ...entry, readyAt: undefined, status: "connecting" });
 		expect(neverReady.uptime).toBeGreaterThanOrEqual(199);
 		expect(neverReady.uptime).toBeLessThanOrEqual(201);
-	});
-
-	test("toRosterEntry serializes branch and git when present, omits when absent", () => {
-		const entry: RegistryEntry = {
-			daemonId: "d2",
-			name: "n",
-			cwd: "/srv/repos/acme-wt-feature",
-			project: "acme",
-			labels: [],
-			mode: "spawned",
-			status: "ready",
-			branch: "feature/x",
-			git: { added: 2, modified: 3, deleted: 1, untracked: 4 },
-			registeredAt: Date.now(),
-		};
-		const roster = toRosterEntry(entry);
-		expect(roster.branch).toBe("feature/x");
-		expect(roster.git).toEqual({ added: 2, modified: 3, deleted: 1, untracked: 4 });
-		// Old entries (pre-git-state) never carry the fields; a stale probe
-		// that cleared them must serialize without them too.
-		const bare = toRosterEntry({ ...entry, branch: undefined, git: undefined });
-		expect(bare).not.toHaveProperty("branch");
-		expect(bare).not.toHaveProperty("git");
 	});
 
 	test("toRosterEntry serializes sessionTitle when present, omits when absent", () => {

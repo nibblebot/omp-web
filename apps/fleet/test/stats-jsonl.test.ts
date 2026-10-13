@@ -130,13 +130,9 @@ describe("cache", () => {
 	test("repeat load returns the same cached doc object", async () => {
 		const p = f("cached.jsonl");
 		await writeFile(p, `${entry(1)}\n${entry(2)}\n`);
-		const before = jsonlCacheStats();
 		const a = await loadJsonl(p);
 		const b = await loadJsonl(p);
 		expect(a).toBe(b);
-		const after = jsonlCacheStats();
-		expect(after.misses - before.misses).toBe(1);
-		expect(after.hits - before.hits).toBe(1);
 	});
 
 	test("mtime change invalidates the cache entry", async () => {

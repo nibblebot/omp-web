@@ -179,21 +179,26 @@ async function awaitStreams(daemon: CallbackDaemon, count: number): Promise<stri
 async function awaitCommand(daemon: CallbackDaemon, id: string, count = 1): Promise<void> {
 	await waitFor(
 		() => {
-			const seen = daemon.received().filter((env) => {
-				const payload = env.payload;
-				return (
-					env.kind === "command" &&
-					typeof payload === "object" &&
-					payload !== null &&
-					"id" in payload &&
-					payload.id === id
-				);
-			});
+			const seen = commandsWithId(daemon, id);
 			return seen.length >= count ? true : null;
 		},
 		3000,
 		`command ${id} x${count}`,
 	);
+}
+
+/** Command envelopes a daemon received carrying `id`. */
+function commandsWithId(daemon: CallbackDaemon, id: string): CallbackEnvelope[] {
+	return daemon.received().filter((env) => {
+		const payload = env.payload;
+		return (
+			env.kind === "command" &&
+			typeof payload === "object" &&
+			payload !== null &&
+			"id" in payload &&
+			payload.id === id
+		);
+	});
 }
 
 describe("edge pipe backpressure and replay", () => {
@@ -340,6 +345,9 @@ describe("edge pipe attach and answers over the callback pair", () => {
 			);
 			const refusal = browser.frames.find((f) => f.type === "call_result" && f.id === "r1");
 			expect(refusal).toMatchObject({ ok: false, error: expect.stringContaining("generation 1") });
+			// The first generation saw the call exactly once, and the replay
+			// never reached the new generation.
+			expect(commandsWithId(remote.daemon, "r1")).toHaveLength(1);
 			expect(next.received().some((env) => env.kind === "command")).toBe(false);
 		} finally {
 			await rig.close();

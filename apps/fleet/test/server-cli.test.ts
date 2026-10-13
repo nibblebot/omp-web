@@ -140,7 +140,7 @@ describe("CLI", () => {
 		expect(errors.join("\n")).toContain("omp-web not running. Start it: omp-web");
 	});
 
-	test("usage no longer advertises the removed --fan-out flag (audit #26)", async () => {
+	test("usage documents the prompt and trusted-proxy flags (audit #26)", async () => {
 		const logs: string[] = [];
 		const originalLog = console.log;
 		console.log = (msg?: unknown) => {
@@ -153,7 +153,6 @@ describe("CLI", () => {
 			console.log = originalLog;
 		}
 		const output = logs.join("\n");
-		expect(output).not.toContain("--fan-out");
 		expect(output).toContain("prompt <selector> <text> [--wait <ms>]");
 		// P2.3 trusted-proxy flag is documented with its precedence + the
 		// fail-closed default (forwarded headers from unlisted peers ignored).

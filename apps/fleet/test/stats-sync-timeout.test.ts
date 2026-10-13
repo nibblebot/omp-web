@@ -11,15 +11,19 @@
  *     "stats.db") resolution proves the child env derived from cfg makes the
  *     sync land in the REAL stats.db (never a $HOME-nested copy)
  * The injected-runner paths (200/409/502/503, parse) live in
- * test/sync.test.ts.
+ * stats-sync.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { resolveStatsConfig } from "../stats-config";
 import { createStatsApp, type StatsApp } from "../stats-app";
 import { syncConfig } from "../stats-sync";
+import { getHealth, postSync } from "./stats.testkit";
+
+afterAll(cleanupTempDirs);
 
 const SYNC_ERROR_503 =
 	"omp binary not found. Install omp (`bun install -g @oh-my-pi/pi-coding-agent`) or add it to PATH";
@@ -48,19 +52,8 @@ let app: StatsApp;
 let savedPath: string | undefined;
 let savedTimeoutMs: number;
 
-const postSync = (): Promise<Response | null> =>
-	app.handleFetch(
-		new Request("http://localhost/ctl/stats/sync", { method: "POST" }),
-		new URL("http://localhost/ctl/stats/sync"),
-	);
-const getHealth = (): Promise<Response | null> =>
-	app.handleFetch(
-		new Request("http://localhost/ctl/stats/health"),
-		new URL("http://localhost/ctl/stats/health"),
-	);
-
 beforeAll(() => {
-	tmpDir = mkdtempSync(join(tmpdir(), "sync-timeout-"));
+	tmpDir = tempDir("sync-timeout-");
 	binDir = join(tmpDir, "bin");
 	syncBinDir = join(tmpDir, "syncbin");
 	emptyDir = join(tmpDir, "empty");
@@ -75,7 +68,9 @@ beforeAll(() => {
 	});
 	writeFileSync(join(syncBinDir, "omp"), FAKE_OMP, { mode: 0o755 });
 
-	// stats.db under $HOME (absolute config root → buildSyncEnv case 2).
+	// stats.db under $HOME: buildSyncEnv case 2 (absolute config root) hands the
+	// child a home-relative PI_CONFIG_DIR name, so this root must sit directly
+	// under $HOME and cannot use tempDir() (which roots at os.tmpdir()).
 	homeTmp = mkdtempSync(join(homedir(), ".sync-b-"));
 	const cfg = resolveStatsConfig({
 		PI_CONFIG_DIR: homeTmp,
@@ -93,7 +88,7 @@ afterAll(() => {
 	else process.env.PATH = savedPath;
 	delete process.env.OMP_PIDFILE;
 	syncConfig.timeoutMs = savedTimeoutMs;
-	rmSync(tmpDir, { recursive: true, force: true });
+	// tmpDir is tracked by cleanupTempDirs(); homeTmp sits outside that root.
 	rmSync(homeTmp, { recursive: true, force: true });
 });
 
@@ -104,7 +99,7 @@ describe("POST /ctl/stats/sync: default runner", () => {
 		process.env.PATH = `${binDir}:${savedPath ?? ""}`;
 		process.env.OMP_PIDFILE = pidfile;
 
-		const res = await postSync();
+		const res = await postSync(app);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(504);
 		expect(await res.json()).toEqual({ error: "sync timed out" });
@@ -128,7 +123,7 @@ describe("POST /ctl/stats/sync: default runner", () => {
 
 	test("missing omp binary → 503 with install hint", async () => {
 		process.env.PATH = emptyDir; // nothing named omp here
-		const res = await postSync();
+		const res = await postSync(app);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(503);
 		expect(await res.json()).toEqual({ error: SYNC_ERROR_503 });
@@ -138,7 +133,7 @@ describe("POST /ctl/stats/sync: default runner", () => {
 		syncConfig.timeoutMs = 5000; // generous; the fake omp is a bun script
 		process.env.PATH = `${syncBinDir}:${savedPath ?? ""}`;
 
-		const res = await postSync();
+		const res = await postSync(app);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
@@ -151,7 +146,7 @@ describe("POST /ctl/stats/sync: default runner", () => {
 		expect(typeof body.durationMs).toBe("number");
 
 		// The REAL stats.db gained the row (visible through the post-sync reprobe).
-		const health = await getHealth();
+		const health = await getHealth(app);
 		if (!health) throw new Error("expected response");
 		expect(health.status).toBe(200);
 		const h = (await health.json()) as {

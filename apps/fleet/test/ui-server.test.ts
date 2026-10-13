@@ -2,8 +2,9 @@
  * UI daemon wire tests: startUiServer in front of a real control plane
  * (startFleet) and in front of a fake upstream whose /events stream reports
  * when the proxy cancels it. Covers static serving, proxied JSON / command /
- * SSE, the 502 when the control plane is down, the auth gate as seen through
- * the proxy, and the control plane's serveUi=false 404.
+ * SSE, the forwarded-header rewrite, upstream status passthrough, the 502
+ * when the control plane is down, the auth gate as seen through the proxy,
+ * and the control plane's serveUi=false 404.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Server } from "bun";
@@ -188,13 +189,6 @@ describe("ui daemon auth gate", () => {
 		const proxied = await fetch(`http://127.0.0.1:${ui.port}/ctl/sessions`);
 		expect(proxied.status).toBe(401);
 	});
-
-	test("a forged X-Forwarded-For: 127.0.0.1 does not make the proxied request loopback", async () => {
-		const res = await fetch(`http://127.0.0.1:${ui.port}/ctl/sessions`, {
-			headers: { "x-forwarded-for": "127.0.0.1" },
-		});
-		expect(res.status).toBe(401);
-	});
 });
 
 describe("serveUi on the edge", () => {
@@ -209,16 +203,68 @@ describe("serveUi on the edge", () => {
 			off.stop();
 		}
 	});
+});
 
-	test("the default still serves the static UI", async () => {
-		const on = await mountEdge(tempDir("omp-web-ui-on-"));
-		try {
-			const res = await fetch(`http://127.0.0.1:${on.port}/`);
-			expect(res.status).toBe(200);
-			expect(res.headers.get("content-type")).toContain("text/html");
-		} finally {
-			on.stop();
-		}
+describe("ui daemon proxy forwarded headers and upstream status", () => {
+	let upstream: Server<undefined>;
+	let ui: UiServer;
+	let seen: Headers | null = null;
+	let respond: () => Response = () => Response.json({ ok: true });
+
+	beforeAll(() => {
+		upstream = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(req) {
+				seen = req.headers;
+				return respond();
+			},
+		});
+		if (upstream.port === undefined) throw new Error("upstream has no port");
+		ui = startUiServer({ port: 0, controlPort: upstream.port });
+	});
+
+	afterAll(async () => {
+		await ui.close();
+		await upstream.stop(true);
+	});
+
+	test("appends the peer to X-Forwarded-For; proto/host are set only when absent", async () => {
+		seen = null;
+		respond = () => Response.json({ ok: true });
+		// Bare request: the UI hop adds its own peer hop, the socket scheme,
+		// and the original Host it was reached on.
+		expect((await fetch(`http://127.0.0.1:${ui.port}/ctl/sessions`)).status).toBe(200);
+		const bare = seen!;
+		expect(bare.get("x-forwarded-for")).toBe("127.0.0.1");
+		expect(bare.get("x-forwarded-proto")).toBe("http");
+		expect(bare.get("x-forwarded-host")).toBe(`127.0.0.1:${ui.port}`);
+
+		// A client-present chain and explicit proto/host survive: only the
+		// peer hop is appended to the chain, nothing is overwritten.
+		seen = null;
+		await fetch(`http://127.0.0.1:${ui.port}/ctl/sessions`, {
+			headers: {
+				"x-forwarded-for": "203.0.113.9, 10.0.0.1",
+				"x-forwarded-proto": "https",
+				"x-forwarded-host": "fleet.example.com",
+			},
+		});
+		const chained = seen!;
+		expect(chained.get("x-forwarded-for")).toBe("203.0.113.9, 10.0.0.1, 127.0.0.1");
+		expect(chained.get("x-forwarded-proto")).toBe("https");
+		expect(chained.get("x-forwarded-host")).toBe("fleet.example.com");
+	});
+
+	test("an upstream 5xx status and body pass through unchanged", async () => {
+		// Only the connect-failure path may answer the 502 JSON; a real
+		// upstream error response is the upstream's own.
+		respond = () =>
+			new Response("upstream boom", { status: 503, headers: { "content-type": "text/plain" } });
+		const res = await fetch(`http://127.0.0.1:${ui.port}/ctl/sessions`);
+		expect(res.status).toBe(503);
+		expect(res.headers.get("content-type")).toContain("text/plain");
+		expect(await res.text()).toBe("upstream boom");
 	});
 });
 

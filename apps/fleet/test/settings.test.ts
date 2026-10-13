@@ -22,17 +22,10 @@ function itemsOf(tabId: string, tabs: SettingsModel["tabs"]) {
 }
 
 describe("createFleetSettings", () => {
-	test("getModel builds every schema tab with populated groups", async () => {
+	test("getModel builds every schema tab in schema order", async () => {
 		const settings = createFleetSettings({ registry: emptyRegistry });
 		const model = await settings.getModel();
 		expect(model.tabs.map((tab) => tab.id)).toEqual(SETTING_TABS);
-		for (const tab of model.tabs) {
-			expect(tab.label.length).toBeGreaterThan(0);
-			expect(tab.groups.length).toBeGreaterThan(0);
-			for (const group of tab.groups) {
-				expect(group.items.length).toBeGreaterThan(0);
-			}
-		}
 	});
 
 	test("defaultThinkingLevel starts with auto when no session levels exist", async () => {

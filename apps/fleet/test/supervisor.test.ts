@@ -12,16 +12,7 @@
  */
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import {
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	unlinkSync,
-	writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Server } from "bun";
 import { CALLBACK_TRANSPORT_STREAM_ID } from "#lib/wire/callback-protocol";
@@ -33,18 +24,6 @@ import { Registry, type RegistryEntry } from "../registry";
 import { SpawnSupervisor, type SupervisorDeps } from "../supervisor";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { type CallbackDaemon, startCallbackDaemon } from "./callback-daemon.testkit";
-
-const tmpDirs: string[] = [];
-
-function tmpPath(prefix: string): string {
-	const dir = mkdtempSync(join(tmpdir(), prefix));
-	tmpDirs.push(dir);
-	return dir;
-}
-
-afterAll(() => {
-	for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
-});
 
 afterAll(cleanupTempDirs);
 
@@ -230,7 +209,7 @@ async function makeHarness(
 	opts?: ConstructorParameters<typeof SpawnSupervisor>[3],
 	deps?: Pick<SupervisorDeps, "pairTimeoutMs" | "onEnrolled">,
 ): Promise<Harness> {
-	const statePath = join(tmpPath("omp-session-sup-state-"), "state.json");
+	const statePath = join(tempDir("omp-session-sup-state-"), "state.json");
 	const registry = new Registry(statePath);
 	await registry.load();
 	const transport = new DaemonTransportRegistry();
@@ -273,7 +252,7 @@ async function makeFixture(
 	supOpts?: ConstructorParameters<typeof SpawnSupervisor>[3],
 	deps?: Pick<SupervisorDeps, "pairTimeoutMs" | "onEnrolled">,
 ): Promise<Fixture> {
-	const dir = tmpPath(prefix);
+	const dir = tempDir(prefix);
 	const argsFile = join(dir, "args.txt");
 	const envFile = join(dir, "env.txt");
 	const pidFile = join(dir, "pid.txt");
@@ -345,7 +324,7 @@ const TOKEN_ARG = /^[A-Za-z0-9_-]{43}$/;
 
 describe("SpawnSupervisor", () => {
 	test("spawn tags worktreeOf for a worktree cwd; a main checkout stays untagged", async () => {
-		const { main, wt } = makeWorktreeRepo(tmpPath("omp-session-sup-wt-"));
+		const { main, wt } = makeWorktreeRepo(tempDir("omp-session-sup-wt-"));
 		const fx = await makeFixture("omp-session-sup-wt-child-", {}, { restartMax: 0 });
 
 		const wtEntry = await fx.supervisor.spawn({ cwd: wt });
@@ -355,7 +334,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("backfillWorktrees tags untagged local entries; remote entries are never probed", async () => {
-		const { main, wt } = makeWorktreeRepo(tmpPath("omp-session-sup-backfill-"));
+		const { main, wt } = makeWorktreeRepo(tempDir("omp-session-sup-backfill-"));
 		const { registry, supervisor } = await makeHarness(makeConfig("/nonexistent-child.sh"), {
 			restartMax: 0,
 		});
@@ -689,7 +668,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("quoted cwd/name/labels with metacharacters round-trip as single argv entries", async () => {
-		const projectDir = tmpPath("omp-session-sup-roundtrip-");
+		const projectDir = tempDir("omp-session-sup-roundtrip-");
 		// A REAL directory whose name contains spaces, quotes, $(), backticks,
 		// and a newline, the exact hostile value class the quoting must tame.
 		const weirdCwd = join(projectDir, "dir 'quoted' $(x) `y`\nnewline");
@@ -742,7 +721,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("concurrent respawn() calls launch exactly one child, no orphan", async () => {
-		const projectDir = tmpPath("omp-session-sup-conc-");
+		const projectDir = tempDir("omp-session-sup-conc-");
 		const argsFile = join(projectDir, "args.txt");
 		const pidsFile = join(projectDir, "pids.txt");
 		const script = join(projectDir, "child.sh");
@@ -832,7 +811,7 @@ describe("SpawnSupervisor", () => {
 	}, 20_000);
 
 	test("a pair resets the restart budget: crash, relaunch, pair leaves no restarts consumed", async () => {
-		const crashFlag = join(tmpPath("omp-session-sup-flag-"), "crash.flag");
+		const crashFlag = join(tempDir("omp-session-sup-flag-"), "crash.flag");
 		const fx = await makeFixture(
 			"omp-session-sup-budget-",
 			{ crashFlag },
@@ -977,7 +956,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("stderrTail returns the tail of the session log file, bounded to 64 KiB", async () => {
-		const projectDir = tmpPath("omp-session-sup-stderr-");
+		const projectDir = tempDir("omp-session-sup-stderr-");
 		const script = join(projectDir, "child.sh");
 		writeFileSync(
 			script,
@@ -1063,7 +1042,7 @@ describe("SpawnSupervisor", () => {
 	}
 
 	test("projectTemplates: basename(cwd) picks the template when init.template is absent", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
+		const projectDir = tempDir("omp-session-sup-proj-");
 		const { argsDefault, argsOverride, scriptDefault, scriptOverride } = tierScripts(projectDir);
 		const { registry, supervisor } = await makeHarness(
 			makeTierConfig(scriptDefault, scriptOverride, { [basename(projectDir)]: "other" }),
@@ -1079,7 +1058,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("init.template wins over projectTemplates", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
+		const projectDir = tempDir("omp-session-sup-proj-");
 		const { argsDefault, argsOverride, scriptDefault, scriptOverride } = tierScripts(projectDir);
 		const { registry, supervisor } = await makeHarness(
 			makeTierConfig(scriptDefault, scriptOverride, { [basename(projectDir)]: "other" }),
@@ -1093,7 +1072,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("defaultTemplate applies when the project has no override", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
+		const projectDir = tempDir("omp-session-sup-proj-");
 		const { argsDefault, argsOverride, scriptDefault, scriptOverride } = tierScripts(projectDir);
 		// The override key deliberately does not match this project's basename.
 		const { registry, supervisor } = await makeHarness(
@@ -1108,7 +1087,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("unknown projectTemplates value rejects and creates nothing", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
+		const projectDir = tempDir("omp-session-sup-proj-");
 		const script = writeChildScript(projectDir, join(projectDir, "args.txt"));
 		const { registry, supervisor } = await makeHarness(
 			makeTierConfig(script, script, { [basename(projectDir)]: "nope" }),
@@ -1122,7 +1101,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("resolveTemplateName: explicit → projectTemplates[basename(cwd)] → defaultTemplate; unknown names reject", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
+		const projectDir = tempDir("omp-session-sup-proj-");
 		const script = writeChildScript(projectDir, join(projectDir, "args.txt")); // path only; no child runs
 		const { supervisor } = await makeHarness(
 			makeTierConfig(script, script, { [basename(projectDir)]: "other" }),
@@ -1150,7 +1129,7 @@ describe("SpawnSupervisor", () => {
 	});
 
 	test("respawn of a template-less asleep entry resolves projectTemplates/defaultTemplate (asleep default workspaces are wakeable)", async () => {
-		const projectDir = tmpPath("omp-session-sup-proj-");
+		const projectDir = tempDir("omp-session-sup-proj-");
 		const { argsDefault, argsOverride, scriptDefault, scriptOverride } = tierScripts(projectDir);
 		// The project has a per-repo override; a template-less entry must
 		// resolve it exactly like spawn() would.
@@ -1550,7 +1529,7 @@ describe("git-state polling", () => {
 	});
 
 	test("a vanished tagged worktree fires onWorktreeRemoved and never clears branch/git", async () => {
-		const ghost = join(tmpPath("omp-session-sup-vanished-"), "gone-worktree");
+		const ghost = join(tempDir("omp-session-sup-vanished-"), "gone-worktree");
 		const fired: RegistryEntry[] = [];
 		const { registry, supervisor } = await pollSupervisor({
 			onWorktreeRemoved: (entry) => fired.push(entry),
@@ -1602,10 +1581,10 @@ describe("git-state polling", () => {
 	});
 
 	test("a probe failure with the cwd still present keeps the clear path and never fires onWorktreeRemoved", async () => {
-		// A REAL directory on disk (tmpPath creates it); the fake exec fails,
+		// A REAL directory on disk (tempDir creates it); the fake exec fails,
 		// but existsSync sees the dir present, a transient git failure. There is
 		// no eviction, and branch/git are cleared exactly as before.
-		const cwd = tmpPath("omp-session-sup-present-");
+		const cwd = tempDir("omp-session-sup-present-");
 		const fired: RegistryEntry[] = [];
 		const { registry, supervisor } = await pollSupervisor({
 			onWorktreeRemoved: (entry) => fired.push(entry),
@@ -1655,7 +1634,7 @@ describe("git-state polling", () => {
 	});
 
 	test("a vanished cwd on an UNTAGGED entry never fires onWorktreeRemoved", async () => {
-		const ghost = join(tmpPath("omp-session-sup-untagged-"), "gone");
+		const ghost = join(tempDir("omp-session-sup-untagged-"), "gone");
 		const fired: RegistryEntry[] = [];
 		const { registry, supervisor } = await pollSupervisor({
 			onWorktreeRemoved: (entry) => fired.push(entry),

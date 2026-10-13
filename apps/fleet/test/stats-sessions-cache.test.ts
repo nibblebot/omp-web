@@ -16,13 +16,15 @@
  * health route re-probes per request).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { createStatsApp, type StatsApp } from "../stats-app";
 import type { StatsConfig } from "../stats-config";
 import { SESSIONS_CACHE_TTL_MS, sessionsWalkCounter } from "../stats-sessions";
+import { handleFetch, writeMinimalStatsDb } from "./stats.testkit";
+
+afterAll(cleanupTempDirs);
 
 interface SessionRow {
 	file: string;
@@ -44,7 +46,7 @@ describe("sessions list cache", () => {
 	const jsonlPath = (): string => join(cfg.sessionsDir, "proj", "demo.jsonl");
 
 	beforeAll(() => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-cache-"));
+		tmp = tempDir("omp-cache-");
 		cfg = {
 			configRoot: join(tmp, "config"),
 			statsDbPath: join(tmp, "config", "stats.db"),
@@ -63,20 +65,14 @@ describe("sessions list cache", () => {
 		app = createStatsApp(cfg);
 	});
 
-	afterAll(() => {
-		app.close();
-		rmSync(tmp, { recursive: true, force: true });
-	});
-
-	const get = (path: string): Promise<Response | null> =>
-		app.handleFetch(new Request(`http://localhost${path}`), new URL(`http://localhost${path}`));
+	afterAll(() => app.close());
 
 	const sessionsOf = async (res: Response): Promise<SessionRow[]> =>
 		((await res.json()) as SessionsResponse).sessions;
 
 	test("sequential GETs serve the same list; the disk walk runs once", async () => {
 		const start = sessionsWalkCounter.runs;
-		const res1 = await get("/ctl/stats/sessions");
+		const res1 = await handleFetch(app, "/ctl/stats/sessions");
 		if (!res1) throw new Error("expected response");
 		expect(res1.status).toBe(200);
 		const list1 = await sessionsOf(res1);
@@ -84,7 +80,7 @@ describe("sessions list cache", () => {
 		expect(list1[0]!.file).toBe("proj/demo.jsonl");
 		expect(sessionsWalkCounter.runs).toBe(start + 1); // one walk for the miss
 
-		const res2 = await get("/ctl/stats/sessions");
+		const res2 = await handleFetch(app, "/ctl/stats/sessions");
 		if (!res2) throw new Error("expected response");
 		expect(res2.status).toBe(200);
 		expect(await sessionsOf(res2)).toEqual(list1);
@@ -94,7 +90,7 @@ describe("sessions list cache", () => {
 	test("in-place file growth is stale within TTL, visible after expiry", async () => {
 		// Ensure a fresh cache entry exists before probing staleness.
 		await Bun.sleep(SESSIONS_CACHE_TTL_MS + 150);
-		let res = await get("/ctl/stats/sessions");
+		let res = await handleFetch(app, "/ctl/stats/sessions");
 		if (!res) throw new Error("expected response");
 		let list = await sessionsOf(res);
 		const size0 = list[0]!.size;
@@ -107,7 +103,7 @@ describe("sessions list cache", () => {
 			jsonlPath(),
 			JSON.stringify({ type: "assistant", message: { content: [] } }) + "\n",
 		);
-		res = await get("/ctl/stats/sessions");
+		res = await handleFetch(app, "/ctl/stats/sessions");
 		if (!res) throw new Error("expected response");
 		list = await sessionsOf(res);
 		expect(sessionsWalkCounter.runs).toBe(runsAfterRecompute);
@@ -115,7 +111,7 @@ describe("sessions list cache", () => {
 
 		// After TTL expiry the recompute sees the grown file.
 		await Bun.sleep(SESSIONS_CACHE_TTL_MS + 150);
-		res = await get("/ctl/stats/sessions");
+		res = await handleFetch(app, "/ctl/stats/sessions");
 		if (!res) throw new Error("expected response");
 		list = await sessionsOf(res);
 		expect(sessionsWalkCounter.runs).toBe(runsAfterRecompute + 1);
@@ -124,31 +120,14 @@ describe("sessions list cache", () => {
 
 	test("stats.db swap changes the key → immediate recompute; tool filter stays per-request", async () => {
 		const abs = jsonlPath();
-		const db = new Database(cfg.statsDbPath);
-		db.exec(
-			`CREATE TABLE messages (
-         timestamp INTEGER, stop_reason TEXT, model TEXT,
-         input_tokens INTEGER, output_tokens INTEGER,
-         cache_read_tokens INTEGER, cache_write_tokens INTEGER,
-         cost_total REAL, session_file TEXT)`,
-		);
-		db.exec("CREATE TABLE tool_calls (tool_name TEXT, is_error INTEGER, session_file TEXT)");
-		db.exec("CREATE TABLE user_messages (chars INTEGER, session_file TEXT)");
-		db.query(
-			"INSERT INTO messages (timestamp, stop_reason, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_total, session_file) VALUES (1, 'done', 'gpt-x', 10, 5, 0, 0, 0.5, ?)",
-		).run(abs);
-		db.query(
-			"INSERT INTO tool_calls (tool_name, is_error, session_file) VALUES ('edit', 0, ?)",
-		).run(abs);
-		db.query("INSERT INTO user_messages (chars, session_file) VALUES (42, ?)").run(abs);
-		db.close();
+		writeMinimalStatsDb(cfg.statsDbPath, abs);
 		// The manager opened with no stats.db; a health request (as production
 		// does per-request) reprobes and picks up the newly present file so
 		// db() returns a live handle.
-		await get("/ctl/stats/health");
+		await handleFetch(app, "/ctl/stats/health");
 
 		// Key changed (db stat now in the key) → recompute immediately, no TTL wait.
-		const res = await get("/ctl/stats/sessions");
+		const res = await handleFetch(app, "/ctl/stats/sessions");
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		const list = await sessionsOf(res);
@@ -157,21 +136,16 @@ describe("sessions list cache", () => {
 		expect(list[0]!.turns).toBe(1);
 		expect(list[0]!.toolCalls).toBe(1);
 
-		// Subsequent GET is a cache hit.
+		// Tool filter runs per-request on the cached list (no extra walk); the
+		// plain repeat-GET cache hit is covered by the sequential-GETs test.
 		const runsBefore = sessionsWalkCounter.runs;
-		const res2 = await get("/ctl/stats/sessions");
-		if (!res2) throw new Error("expected response");
-		expect(sessionsWalkCounter.runs).toBe(runsBefore);
-		expect(await sessionsOf(res2)).toEqual(list);
-
-		// Tool filter runs per-request on the cached list (no extra walk).
-		const matching = await get("/ctl/stats/sessions?tool=edit");
+		const matching = await handleFetch(app, "/ctl/stats/sessions?tool=edit");
 		if (!matching) throw new Error("expected response");
 		expect(matching.status).toBe(200);
 		expect(await sessionsOf(matching)).toHaveLength(1);
 		expect(sessionsWalkCounter.runs).toBe(runsBefore);
 
-		const none = await get("/ctl/stats/sessions?tool=nope");
+		const none = await handleFetch(app, "/ctl/stats/sessions?tool=nope");
 		if (!none) throw new Error("expected response");
 		expect(none.status).toBe(200);
 		expect(await sessionsOf(none)).toHaveLength(0);

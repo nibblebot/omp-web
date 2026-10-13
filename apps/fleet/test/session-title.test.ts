@@ -50,15 +50,31 @@ describe("readSessionTitle", () => {
 		await expect(readSessionTitle(path)).resolves.toBeUndefined();
 	});
 
-	test("missing files resolve to undefined (never cached, so reappearing files re-read)", async () => {
+	test("fallback: a corrupt title slot never throws and falls back to the header", async () => {
 		const dir = tempDir("omp-session-title-");
-		const path = join(dir, "gone.jsonl");
+		// Truncated/garbled slot JSON (a partial write): the line no longer
+		// parses, so the reader must fall through to the header title.
+		const truncated = join(dir, "truncated-slot.jsonl");
+		writeFileSync(truncated, `{"type":"title","title":"half\n${headerLine("Header survives")}`);
+		await expect(readSessionTitle(truncated)).resolves.toBe("Header survives");
+		await expect(readSessionInfo(truncated)).resolves.toEqual({
+			title: "Header survives",
+			empty: true,
+		});
 
-		await expect(readSessionTitle(path)).resolves.toBeUndefined();
-		writeFileSync(path, titleLine("Back"));
-		await expect(readSessionTitle(path)).resolves.toBe("Back");
-		unlinkSync(path);
-		await expect(readSessionTitle(path)).resolves.toBeUndefined();
+		// Valid JSON that is not an object: same fallback, no throw.
+		const nonObject = join(dir, "non-object-slot.jsonl");
+		writeFileSync(nonObject, `"not an object"\n${headerLine("Still the header")}`);
+		await expect(readSessionTitle(nonObject)).resolves.toBe("Still the header");
+
+		// A slot object whose title is not a string: str() drops it and the
+		// header supplies the title.
+		const nonString = join(dir, "non-string-title.jsonl");
+		writeFileSync(
+			nonString,
+			`${JSON.stringify({ type: "title", title: 42 })}\n${headerLine("Header wins")}`,
+		);
+		await expect(readSessionTitle(nonString)).resolves.toBe("Header wins");
 	});
 
 	test("cache: same (path, mtime, size) serves the old title without re-reading; a new mtime invalidates", async () => {
@@ -107,13 +123,17 @@ describe("readSessionInfo", () => {
 	const msgLine = (): string =>
 		JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }) + "\n";
 
-	test("missing files are empty with no title (never cached)", async () => {
+	test("missing files are empty with no title (never cached, so reappearing files re-read)", async () => {
 		const dir = tempDir("omp-session-info-");
 		const path = join(dir, "gone.jsonl");
 
+		await expect(readSessionTitle(path)).resolves.toBeUndefined();
 		await expect(readSessionInfo(path)).resolves.toEqual({ title: undefined, empty: true });
 		writeFileSync(path, titleLine("Back"));
 		await expect(readSessionInfo(path)).resolves.toEqual({ title: "Back", empty: true });
+		// Gone again: the miss is not negatively cached either.
+		unlinkSync(path);
+		await expect(readSessionInfo(path)).resolves.toEqual({ title: undefined, empty: true });
 	});
 
 	test("untitled header-only files are empty (new session)", async () => {

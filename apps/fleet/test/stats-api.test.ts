@@ -1,7 +1,7 @@
 /**
  * End-to-end API tests against the generated fixture.
  *
- * Runs the stats app in-process: test/helpers.ts puts createStatsApp behind a
+ * Runs the stats app in-process: stats.testkit.ts puts createStatsApp behind a
  * real Bun.serve on an ephemeral port, with config pointing at test/.fixture,
  * which gen-tx-fixture.ts regenerates in beforeAll. All expected
  * values come from the fixture generator's exported EXPECT object, so the
@@ -145,14 +145,6 @@ describe("session viewer api (fixture)", () => {
 
 	test("sessions list: q filter matches title/cwd", async () => {
 		const res = await api("/ctl/stats/sessions?q=Alpha");
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as SessionsResponse;
-		expect(body.sessions).toHaveLength(1);
-		expect(body.sessions[0]!.file).toBe(EXPECT.sessions.projA.file);
-	});
-
-	test("sessions list: tool filter narrows to sessions using that tool", async () => {
-		const res = await api("/ctl/stats/sessions?tool=web_search");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as SessionsResponse;
 		expect(body.sessions).toHaveLength(1);

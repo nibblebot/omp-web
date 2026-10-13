@@ -9,6 +9,7 @@
  */
 import { join } from "node:path";
 import type { Server } from "bun";
+import { Database } from "bun:sqlite";
 import { createStatsApp, type StatsApp } from "../stats-app";
 
 export const repoRoot = join(import.meta.dir, "..", "..", "..");
@@ -56,4 +57,53 @@ export async function stopServer(): Promise<void> {
 
 export async function api(path: string): Promise<Response> {
 	return fetch(`${baseUrl}${path}`);
+}
+
+/**
+ * Drive a stats app with a constructed request; the URL is derived from the
+ * path. Routes match on method + pathname only, so the origin is irrelevant.
+ */
+export function handleFetch(
+	app: StatsApp,
+	path: string,
+	init?: RequestInit,
+): Promise<Response | null> {
+	const url = `http://localhost${path}`;
+	return app.handleFetch(new Request(url, init), new URL(url));
+}
+
+/** POST /ctl/stats/sync (the sync route reprobes once before responding). */
+export function postSync(app: StatsApp): Promise<Response | null> {
+	return handleFetch(app, "/ctl/stats/sync", { method: "POST" });
+}
+
+/** GET /ctl/stats/health: reprobes stats.db the way production does. */
+export function getHealth(app: StatsApp): Promise<Response | null> {
+	return handleFetch(app, "/ctl/stats/health");
+}
+
+/**
+ * Write the minimal stats.db schema (messages/tool_calls/user_messages) with
+ * one enrichment row per table attributed to `sessionFile`, as the sessions
+ * cache and degradation tests need for the db-backed paths.
+ */
+export function writeMinimalStatsDb(statsDbPath: string, sessionFile: string): void {
+	const db = new Database(statsDbPath);
+	db.exec(
+		`CREATE TABLE messages (
+       timestamp INTEGER, stop_reason TEXT, model TEXT,
+       input_tokens INTEGER, output_tokens INTEGER,
+       cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+       cost_total REAL, session_file TEXT)`,
+	);
+	db.exec("CREATE TABLE tool_calls (tool_name TEXT, is_error INTEGER, session_file TEXT)");
+	db.exec("CREATE TABLE user_messages (chars INTEGER, session_file TEXT)");
+	db.query(
+		"INSERT INTO messages (timestamp, stop_reason, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_total, session_file) VALUES (1, 'done', 'gpt-x', 10, 5, 0, 0, 0.5, ?)",
+	).run(sessionFile);
+	db.query("INSERT INTO tool_calls (tool_name, is_error, session_file) VALUES ('edit', 0, ?)").run(
+		sessionFile,
+	);
+	db.query("INSERT INTO user_messages (chars, session_file) VALUES (42, ?)").run(sessionFile);
+	db.close();
 }

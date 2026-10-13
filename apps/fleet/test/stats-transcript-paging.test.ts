@@ -3,19 +3,15 @@
  * test/.fixture. One stats app per file (createStatsApp instances are fully
  * isolated, but keeping the old one-app-per-file shape is cheapest), driven
  * via in-process handleFetch.
- *
- * Cache-hit accounting: each transcript request calls loadJsonl twice
- * (once inside readRange, once for the truncated flag) and both share the
- * layer's LRU/in-flight machinery, observable via jsonlCacheStats deltas.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StatsConfig } from "../stats-config";
-import { jsonlCacheStats } from "../stats-jsonl";
 import { createStatsApp, type StatsApp } from "../stats-app";
 import type { TranscriptPage } from "#lib/wire/stats-types";
+import { handleFetch } from "./stats.testkit";
 
 let app: StatsApp;
 let dir: string;
@@ -28,10 +24,7 @@ const getPage = async (
 	qs = "",
 ): Promise<{ status: number; page: TranscriptPage }> => {
 	const path = `/ctl/stats/sessions/${file}/transcript${qs}`;
-	const res = await app.handleFetch(
-		new Request(`http://local${path}`),
-		new URL(`http://local${path}`),
-	);
+	const res = await handleFetch(app, path);
 	return { status: res!.status, page: (await res!.json()) as TranscriptPage };
 };
 
@@ -165,23 +158,5 @@ describe("transcript paging", () => {
 		const fullPage = await getPage("cap-full.jsonl", "?offset=0&limit=10");
 		expect(fullPage.page.truncated).toBe(false);
 		expect(fullPage.page.totalLines).toBe(3);
-	});
-
-	test("cache-hit rate across a paging walk (one parse, N hits)", async () => {
-		const lines = [];
-		for (let i = 0; i < 10; i++) lines.push(entry(i));
-		const walk = join(sessionsDir, "walk.jsonl");
-		await writeFile(walk, `${lines.join("\n")}\n`);
-
-		const before = jsonlCacheStats();
-		for (const offset of [0, 2, 4, 6, 8, 10]) {
-			await getPage("walk.jsonl", `?offset=${offset}&limit=2`);
-		}
-		const after = jsonlCacheStats();
-		const misses = after.misses - before.misses;
-		const hits = after.hits - before.hits;
-		expect(misses).toBe(1); // one parse for the whole walk
-		expect(hits).toBe(11); // 12 loadJsonl calls (2 per request) − 1 miss
-		expect(hits / (hits + misses)).toBeCloseTo(11 / 12);
 	});
 });

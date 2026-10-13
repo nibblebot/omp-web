@@ -9,11 +9,14 @@
  * JSONL-only stats).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { createStatsApp, type StatsApp } from "../stats-app";
 import type { StatsConfig } from "../stats-config";
+import { handleFetch } from "./stats.testkit";
+
+afterAll(cleanupTempDirs);
 
 interface ToolStatLike {
 	name: string;
@@ -38,7 +41,7 @@ describe("untimed tool calls (no tool_execution_start marker)", () => {
 	let app: StatsApp;
 
 	beforeAll(() => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-untimed-"));
+		tmp = tempDir("omp-untimed-");
 		const sessionsDir = join(tmp, "agent", "sessions");
 		mkdirSync(join(sessionsDir, "proj"), { recursive: true });
 
@@ -123,17 +126,10 @@ describe("untimed tool calls (no tool_execution_start marker)", () => {
 		app = createStatsApp(cfg);
 	});
 
-	afterAll(() => {
-		app.close();
-		rmSync(tmp, { recursive: true, force: true });
-	});
+	afterAll(() => app.close());
 
 	const getStats = async (): Promise<StatsLike> => {
-		const path = "/ctl/stats/sessions/proj/untimed.jsonl/stats";
-		const res = await app.handleFetch(
-			new Request(`http://localhost${path}`),
-			new URL(`http://localhost${path}`),
-		);
+		const res = await handleFetch(app, "/ctl/stats/sessions/proj/untimed.jsonl/stats");
 		expect(res!.status).toBe(200);
 		return (await res!.json()) as StatsLike;
 	};

@@ -4,22 +4,18 @@
  * can never collide. Bare `bun test` runs every suite in ONE process, and
  * the old module-global registry broke on the second createStatsApp call.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createStatsApp, type StatsApp } from "../stats-app";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+import { createStatsApp } from "../stats-app";
 import type { StatsConfig } from "../stats-config";
+import { handleFetch } from "./stats.testkit";
 
-const scratch: string[] = [];
-
-afterEach(() => {
-	for (const d of scratch.splice(0)) rmSync(d, { recursive: true, force: true });
-});
+afterAll(cleanupTempDirs);
 
 function tmpCfg(overrides: Partial<StatsConfig> = {}): StatsConfig {
-	const root = mkdtempSync(join(tmpdir(), "cap-"));
-	scratch.push(root);
+	const root = tempDir("cap-");
 	return {
 		configRoot: root,
 		statsDbPath: join(root, "stats.db"),
@@ -28,15 +24,10 @@ function tmpCfg(overrides: Partial<StatsConfig> = {}): StatsConfig {
 	};
 }
 
-/** Drive a stats app with a constructed request; url derived from req.url. */
-const call = (app: StatsApp, path: string, init?: RequestInit): Promise<Response | null> =>
-	app.handleFetch(new Request(`http://x${path}`, init), new URL(`http://x${path}`));
-
 describe("createStatsApp multi-instance isolation", () => {
 	test("two apps in one process keep separate registries and config", async () => {
-		const sessionsA = join(mkdtempSync(join(tmpdir(), "cap-a-")), "sessions");
-		const sessionsB = join(mkdtempSync(join(tmpdir(), "cap-b-")), "sessions");
-		scratch.push(sessionsA, sessionsB);
+		const sessionsA = join(tempDir("cap-a-"), "sessions");
+		const sessionsB = join(tempDir("cap-b-"), "sessions");
 		mkdirSync(join(sessionsA, "proj-a"), { recursive: true });
 		mkdirSync(sessionsB, { recursive: true });
 		writeFileSync(
@@ -48,8 +39,8 @@ describe("createStatsApp multi-instance isolation", () => {
 		const appB = createStatsApp(tmpCfg({ sessionsDir: sessionsB }));
 		try {
 			// Health: each app answers with its own cfg.
-			const healthA = await call(appA, "/ctl/stats/health");
-			const healthB = await call(appB, "/ctl/stats/health");
+			const healthA = await handleFetch(appA, "/ctl/stats/health");
+			const healthB = await handleFetch(appB, "/ctl/stats/health");
 			expect(healthA).not.toBeNull();
 			expect(healthB).not.toBeNull();
 			if (!healthA) throw new Error("expected response");
@@ -61,17 +52,17 @@ describe("createStatsApp multi-instance isolation", () => {
 
 			// Transcript handlers close over their own app's cfg: A sees the file,
 			// B must 404 on the same :file param (proves no cross-app wiring).
-			const ta = await call(appA, "/ctl/stats/sessions/proj-a%2Fone.jsonl/transcript");
+			const ta = await handleFetch(appA, "/ctl/stats/sessions/proj-a%2Fone.jsonl/transcript");
 			if (!ta) throw new Error("expected response");
 			expect(ta.status).toBe(200);
 			const body = (await ta.json()) as { entries: unknown[] };
 			expect(body.entries.length).toBeGreaterThanOrEqual(1);
-			const tb = await call(appB, "/ctl/stats/sessions/proj-a%2Fone.jsonl/transcript");
+			const tb = await handleFetch(appB, "/ctl/stats/sessions/proj-a%2Fone.jsonl/transcript");
 			if (!tb) throw new Error("expected response");
 			expect(tb.status).toBe(404);
 
 			// Sessions list reflects each app's own disk.
-			const listRes = await call(appB, "/ctl/stats/sessions");
+			const listRes = await handleFetch(appB, "/ctl/stats/sessions");
 			if (!listRes) throw new Error("expected response");
 			const listB = (await listRes.json()) as { sessions: unknown[] };
 			expect(listB.sessions).toEqual([]);

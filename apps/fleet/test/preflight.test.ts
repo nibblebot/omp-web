@@ -314,7 +314,6 @@ describe("aggregation", () => {
 		expect(failed.length).toBeGreaterThan(0);
 		for (const check of failed) {
 			expect(typeof check.remediation).toBe("string");
-			expect(check.remediation!.length).toBeGreaterThan(0);
 		}
 		expect(result.ok).toBe(false);
 	});

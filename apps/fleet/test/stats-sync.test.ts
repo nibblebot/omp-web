@@ -6,14 +6,13 @@
  * runner, so /ctl/stats/health dbCounts prove the post-sync reprobe picked
  * it up (health is the reprobe-observing surface; the sync route itself
  * reprobes once before responding). The real-spawn paths (timeout kill →
- * 504, ENOENT → 503) live in test/sync-timeout.test.ts, which needs its own
+ * 504, ENOENT → 503) live in stats-sync-timeout.test.ts, which needs its own
  * app without a runner.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { resolveStatsConfig, type StatsConfig } from "../stats-config";
 import { createStatsApp, type StatsApp } from "../stats-app";
 import {
@@ -24,6 +23,9 @@ import {
 	SyncUnavailable,
 } from "../stats-sync";
 import type { SyncRunner } from "../stats-types";
+import { getHealth, postSync } from "./stats.testkit";
+
+afterAll(cleanupTempDirs);
 
 type Mode = "success" | "slow" | "unavailable" | "failed";
 let mode: Mode = "success";
@@ -32,16 +34,6 @@ let tmpDir: string;
 let app: StatsApp;
 
 const statsDbPath = (): string => join(tmpDir, "stats.db");
-const postSync = (): Promise<Response | null> =>
-	app.handleFetch(
-		new Request("http://localhost/ctl/stats/sync", { method: "POST" }),
-		new URL("http://localhost/ctl/stats/sync"),
-	);
-const getHealth = (): Promise<Response | null> =>
-	app.handleFetch(
-		new Request("http://localhost/ctl/stats/health"),
-		new URL("http://localhost/ctl/stats/health"),
-	);
 
 const fakeRunner: SyncRunner = async () => {
 	switch (mode) {
@@ -71,7 +63,7 @@ const fakeRunner: SyncRunner = async () => {
 };
 
 beforeAll(() => {
-	tmpDir = mkdtempSync(join(tmpdir(), "sync-test-"));
+	tmpDir = tempDir("sync-test-");
 	// Minimal stats.db schema (health only runs COUNT(*) per table).
 	const db = new Database(statsDbPath());
 	db.exec(`
@@ -132,16 +124,13 @@ beforeAll(() => {
 	app = createStatsApp({ ...cfg, syncRunner: fakeRunner });
 });
 
-afterAll(() => {
-	app.close();
-	rmSync(tmpDir, { recursive: true, force: true });
-});
+afterAll(() => app.close());
 
 describe("POST /ctl/stats/sync", () => {
 	test("success: 200 outcome shape, and health reflects the synced row", async () => {
 		mode = "success";
 
-		const res = await postSync();
+		const res = await postSync(app);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({
@@ -155,7 +144,7 @@ describe("POST /ctl/stats/sync", () => {
 		// handler's post-success reprobe; if that reprobe were missing, the
 		// app's original handle (opened before the row existed) would still
 		// report 0.
-		const health = await getHealth();
+		const health = await getHealth(app);
 		if (!health) throw new Error("expected response");
 		expect(health.status).toBe(200);
 		const body = (await health.json()) as {
@@ -166,10 +155,10 @@ describe("POST /ctl/stats/sync", () => {
 
 	test("concurrent POST during an in-flight sync → 409", async () => {
 		mode = "slow";
-		const first = postSync();
+		const first = postSync(app);
 		await Bun.sleep(100); // first request is mid-flight now
 
-		const second = await postSync();
+		const second = await postSync(app);
 		if (!second) throw new Error("expected response");
 		expect(second.status).toBe(409);
 		expect(await second.json()).toEqual({ error: "sync already in progress" });
@@ -181,7 +170,7 @@ describe("POST /ctl/stats/sync", () => {
 
 	test("runner throws SyncUnavailable → 503 with install hint", async () => {
 		mode = "unavailable";
-		const res = await postSync();
+		const res = await postSync(app);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(503);
 		expect(await res.json()).toEqual({
@@ -192,7 +181,7 @@ describe("POST /ctl/stats/sync", () => {
 
 	test("runner throws SyncFailed → 502 with stderr detail", async () => {
 		mode = "failed";
-		const res = await postSync();
+		const res = await postSync(app);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(502);
 		expect(await res.json()).toEqual({

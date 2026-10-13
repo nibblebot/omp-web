@@ -13,11 +13,14 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { createStatsApp, type StatsApp } from "../stats-app";
 import type { StatsConfig } from "../stats-config";
+import { handleFetch, writeMinimalStatsDb } from "./stats.testkit";
+
+afterAll(cleanupTempDirs);
 
 interface SessionRow {
 	file: string;
@@ -48,7 +51,7 @@ describe("stats.db degradation", () => {
 	let app: StatsApp;
 
 	beforeAll(() => {
-		tmp = mkdtempSync(join(tmpdir(), "omp-degrad-"));
+		tmp = tempDir("omp-degrad-");
 		const sessionsDir = join(tmp, "agent", "sessions");
 		mkdirSync(join(sessionsDir, "proj"), { recursive: true });
 		writeFileSync(
@@ -70,13 +73,7 @@ describe("stats.db degradation", () => {
 		app = createStatsApp(cfg);
 	});
 
-	afterAll(() => {
-		app.close();
-		rmSync(tmp, { recursive: true, force: true });
-	});
-
-	const get = (path: string): Promise<Response | null> =>
-		app.handleFetch(new Request(`http://localhost${path}`), new URL(`http://localhost${path}`));
+	afterAll(() => app.close());
 
 	const expectDbUnavailable = async (res: Response): Promise<void> => {
 		expect(res.status).toBe(503);
@@ -106,10 +103,10 @@ describe("stats.db degradation", () => {
 	};
 
 	test("missing stats.db → tools 503, sessions 200 with disk-only rows", async () => {
-		const tools = await get("/ctl/stats/tools");
+		const tools = await handleFetch(app, "/ctl/stats/tools");
 		if (!tools) throw new Error("expected response");
 		await expectDbUnavailable(tools);
-		const sessions = await get("/ctl/stats/sessions");
+		const sessions = await handleFetch(app, "/ctl/stats/sessions");
 		if (!sessions) throw new Error("expected response");
 		await expectDegradedSessions(sessions);
 	});
@@ -119,16 +116,17 @@ describe("stats.db degradation", () => {
 			cfg.statsDbPath,
 			"this is definitely not a sqlite database, just garbage bytes\n".repeat(8),
 		);
-		await get("/ctl/stats/health"); // health re-probes stats.db (production reprobe path)
-		const tools = await get("/ctl/stats/tools");
+		// health re-probes stats.db (production reprobe path)
+		await handleFetch(app, "/ctl/stats/health");
+		const tools = await handleFetch(app, "/ctl/stats/tools");
 		if (!tools) throw new Error("expected response");
 		await expectDbUnavailable(tools);
-		const sessions = await get("/ctl/stats/sessions");
+		const sessions = await handleFetch(app, "/ctl/stats/sessions");
 		if (!sessions) throw new Error("expected response");
 		await expectDegradedSessions(sessions);
 		// Tool filter is db-backed; with a broken db it is an explicit 503,
 		// never a false "no sessions use this tool" empty list.
-		const filtered = await get("/ctl/stats/sessions?tool=edit");
+		const filtered = await handleFetch(app, "/ctl/stats/sessions?tool=edit");
 		if (!filtered) throw new Error("expected response");
 		await expectDbUnavailable(filtered);
 	});
@@ -142,14 +140,15 @@ describe("stats.db degradation", () => {
 		db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY)"); // wrong columns, no tool_calls/user_messages
 		db.exec("CREATE TABLE other (x INTEGER)");
 		db.close();
-		await get("/ctl/stats/health"); // health re-probes stats.db (production reprobe path)
-		const tools = await get("/ctl/stats/tools");
+		// health re-probes stats.db (production reprobe path)
+		await handleFetch(app, "/ctl/stats/health");
+		const tools = await handleFetch(app, "/ctl/stats/tools");
 		if (!tools) throw new Error("expected response");
 		await expectDbUnavailable(tools);
-		const sessions = await get("/ctl/stats/sessions");
+		const sessions = await handleFetch(app, "/ctl/stats/sessions");
 		if (!sessions) throw new Error("expected response");
 		await expectDegradedSessions(sessions);
-		const filtered = await get("/ctl/stats/sessions?tool=edit");
+		const filtered = await handleFetch(app, "/ctl/stats/sessions?tool=edit");
 		if (!filtered) throw new Error("expected response");
 		await expectDbUnavailable(filtered);
 	});
@@ -159,27 +158,11 @@ describe("stats.db degradation", () => {
 		// same queries, same merge, full metrics + synced:true.
 		rmSync(cfg.statsDbPath, { force: true });
 		const abs = join(cfg.sessionsDir, "proj", "demo.jsonl");
-		const db = new Database(cfg.statsDbPath);
-		db.exec(
-			`CREATE TABLE messages (
-         timestamp INTEGER, stop_reason TEXT, model TEXT,
-         input_tokens INTEGER, output_tokens INTEGER,
-         cache_read_tokens INTEGER, cache_write_tokens INTEGER,
-         cost_total REAL, session_file TEXT)`,
-		);
-		db.exec("CREATE TABLE tool_calls (tool_name TEXT, is_error INTEGER, session_file TEXT)");
-		db.exec("CREATE TABLE user_messages (chars INTEGER, session_file TEXT)");
-		db.query(
-			"INSERT INTO messages (timestamp, stop_reason, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_total, session_file) VALUES (1, 'done', 'gpt-x', 10, 5, 0, 0, 0.5, ?)",
-		).run(abs);
-		db.query(
-			"INSERT INTO tool_calls (tool_name, is_error, session_file) VALUES ('edit', 0, ?)",
-		).run(abs);
-		db.query("INSERT INTO user_messages (chars, session_file) VALUES (42, ?)").run(abs);
-		db.close();
-		await get("/ctl/stats/health"); // health re-probes stats.db (production reprobe path)
+		writeMinimalStatsDb(cfg.statsDbPath, abs);
+		// health re-probes stats.db (production reprobe path)
+		await handleFetch(app, "/ctl/stats/health");
 
-		const tools = await get("/ctl/stats/tools");
+		const tools = await handleFetch(app, "/ctl/stats/tools");
 		if (!tools) throw new Error("expected response");
 		expect(tools.status).toBe(200);
 		const toolsBody = (await tools.json()) as {
@@ -188,7 +171,7 @@ describe("stats.db degradation", () => {
 		expect(toolsBody.tools).toHaveLength(1);
 		expect(toolsBody.tools[0]).toEqual({ name: "edit", calls: 1, errors: 0, sessions: 1 });
 
-		const sessions = await get("/ctl/stats/sessions");
+		const sessions = await handleFetch(app, "/ctl/stats/sessions");
 		if (!sessions) throw new Error("expected response");
 		expect(sessions.status).toBe(200);
 		const body = (await sessions.json()) as SessionsResponse;
@@ -206,11 +189,11 @@ describe("stats.db degradation", () => {
 		expect(row.userChars).toBe(42);
 
 		// Tool filter happy path: matching tool keeps the session, non-matching gives empty.
-		const matching = await get("/ctl/stats/sessions?tool=edit");
+		const matching = await handleFetch(app, "/ctl/stats/sessions?tool=edit");
 		if (!matching) throw new Error("expected response");
 		expect(matching.status).toBe(200);
 		expect(((await matching.json()) as SessionsResponse).sessions).toHaveLength(1);
-		const none = await get("/ctl/stats/sessions?tool=nope");
+		const none = await handleFetch(app, "/ctl/stats/sessions?tool=nope");
 		if (!none) throw new Error("expected response");
 		expect(none.status).toBe(200);
 		const noneBody = (await none.json()) as SessionsResponse;
@@ -232,7 +215,7 @@ describe("stats.db degradation", () => {
 				].join("\n") + "\n",
 			);
 		}
-		const res = await get("/ctl/stats/sessions");
+		const res = await handleFetch(app, "/ctl/stats/sessions");
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as SessionsResponse;

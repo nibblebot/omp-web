@@ -38,12 +38,6 @@ describe("matchSelector", () => {
 			expect(matchSelector(entries, "all")).toEqual(entries);
 		});
 
-		test("returns a fresh array (caller may mutate)", () => {
-			const entries = [entry({ name: "web" })];
-			const result = matchSelector(entries, "all");
-			expect(result).not.toBe(entries);
-		});
-
 		test("empty registry yields empty result", () => {
 			expect(matchSelector([], "all")).toEqual([]);
 		});

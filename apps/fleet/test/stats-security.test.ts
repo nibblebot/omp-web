@@ -17,6 +17,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { join } from "node:path";
 import { createStatsApp, type StatsApp } from "../stats-app";
 import type { StatsConfig } from "../stats-config";
+import { handleFetch } from "./stats.testkit";
 
 let tmp: string;
 let sessionsDir: string;
@@ -24,8 +25,6 @@ let outsideDir: string;
 let cfg: StatsConfig;
 let app: StatsApp;
 
-const get = (p: string): Promise<Response | null> =>
-	app.handleFetch(new Request(`http://localhost${p}`), new URL(`http://localhost${p}`));
 const enc = (p: string): string => encodeURIComponent(p);
 
 const TITLE_LINE = JSON.stringify({ type: "title", title: "Real Session" });
@@ -77,32 +76,41 @@ afterAll(() => {
 
 describe("symlink escape containment", () => {
 	test("transcript via a FILE symlink pointing outside → 404", async () => {
-		const res = await get(`/ctl/stats/sessions/${enc("proj/escape.jsonl")}/transcript`);
+		const res = await handleFetch(
+			app,
+			`/ctl/stats/sessions/${enc("proj/escape.jsonl")}/transcript`,
+		);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(404);
 		expect(await res.json()).toEqual({ error: "session not found" });
 	});
 
 	test("transcript via a DIR symlink pointing outside → 404", async () => {
-		const res = await get(`/ctl/stats/sessions/${enc("evil/secret.jsonl")}/transcript`);
+		const res = await handleFetch(
+			app,
+			`/ctl/stats/sessions/${enc("evil/secret.jsonl")}/transcript`,
+		);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(404);
 	});
 
 	test("transcript behind a symlinked INTERMEDIATE dir → 404", async () => {
-		const res = await get(`/ctl/stats/sessions/${enc("proj/nested/secret.jsonl")}/transcript`);
+		const res = await handleFetch(
+			app,
+			`/ctl/stats/sessions/${enc("proj/nested/secret.jsonl")}/transcript`,
+		);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(404);
 	});
 
 	test("stats via a symlinked file → 404", async () => {
-		const res = await get(`/ctl/stats/sessions/${enc("proj/escape.jsonl")}/stats`);
+		const res = await handleFetch(app, `/ctl/stats/sessions/${enc("proj/escape.jsonl")}/stats`);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(404);
 	});
 
 	test("transcript on a REAL file still works → 200", async () => {
-		const res = await get(`/ctl/stats/sessions/${enc("proj/real.jsonl")}/transcript`);
+		const res = await handleFetch(app, `/ctl/stats/sessions/${enc("proj/real.jsonl")}/transcript`);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { entries: unknown[]; totalLines: number };
@@ -111,19 +119,22 @@ describe("symlink escape containment", () => {
 	});
 
 	test("stats on a REAL file still works → 200", async () => {
-		const res = await get(`/ctl/stats/sessions/${enc("proj/real.jsonl")}/stats`);
+		const res = await handleFetch(app, `/ctl/stats/sessions/${enc("proj/real.jsonl")}/stats`);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 	});
 
 	test("subagents via a walk-root symlink dir → 404", async () => {
-		const res = await get(`/ctl/stats/sessions/${enc("proj/leakmain.jsonl")}/subagents`);
+		const res = await handleFetch(
+			app,
+			`/ctl/stats/sessions/${enc("proj/leakmain.jsonl")}/subagents`,
+		);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(404);
 	});
 
 	test("subagents walk skips symlinked children escaping the tree", async () => {
-		const res = await get(`/ctl/stats/sessions/${enc("proj/real.jsonl")}/subagents`);
+		const res = await handleFetch(app, `/ctl/stats/sessions/${enc("proj/real.jsonl")}/subagents`);
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { subagents: Array<{ name: string; file: string }> };
@@ -137,32 +148,29 @@ describe("symlink escape containment", () => {
 
 describe("unowned paths", () => {
 	test("GET /api (exact, no trailing slash) → null; the fleet control plane 404s it", async () => {
-		const res = await get("/api");
+		const res = await handleFetch(app, "/api");
 		expect(res).toBeNull();
 	});
 
 	test("GET /api/<unknown> → null too", async () => {
-		const res = await get("/api/definitely-not-a-route");
+		const res = await handleFetch(app, "/api/definitely-not-a-route");
 		expect(res).toBeNull();
 	});
 
 	test("GET /ctl/stats/<unknown> → null (fleet's own 404 takes over)", async () => {
-		const res = await get("/ctl/stats/definitely-not-a-route");
+		const res = await handleFetch(app, "/ctl/stats/definitely-not-a-route");
 		expect(res).toBeNull();
 	});
 
 	test("wrong method on a known stats path → null (fleet 405s)", async () => {
-		const res = await app.handleFetch(
-			new Request("http://localhost/ctl/stats/sessions", { method: "DELETE" }),
-			new URL("http://localhost/ctl/stats/sessions"),
-		);
+		const res = await handleFetch(app, "/ctl/stats/sessions", { method: "DELETE" });
 		expect(res).toBeNull();
 	});
 });
 
 describe("health $HOME redaction", () => {
 	test("statsDbPath and sessionsDir start with ~ when under $HOME", async () => {
-		const res = await get("/ctl/stats/health");
+		const res = await handleFetch(app, "/ctl/stats/health");
 		expect(res).not.toBeNull();
 		if (!res) throw new Error("expected response");
 		expect(res.status).toBe(200);

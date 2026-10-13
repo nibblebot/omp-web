@@ -1,20 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { DEFAULT_LOCAL_TEMPLATE, loadConfig, resolveConfigPath, type FleetConfig } from "../config";
 
-const tmpDirs: string[] = [];
+afterAll(cleanupTempDirs);
 
+/** Tracked scratch dir for one config fixture (removed by cleanupTempDirs). */
 function tmpDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "omp-session-config-"));
-	tmpDirs.push(dir);
-	return dir;
+	return tempDir("omp-session-config-");
 }
-
-afterAll(() => {
-	for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
-});
 
 describe("loadConfig", () => {
 	// Hermetic against the dev-runner override: loadConfig lets
