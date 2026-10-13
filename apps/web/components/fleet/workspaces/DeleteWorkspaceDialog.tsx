@@ -10,7 +10,8 @@ import { Modal } from "../../ui/Modal";
 // the evidence on open, this dialog shows dirty counts and branch merge/push
 // state with an "also delete branch" checkbox (default from server evidence:
 // merged && pushed). A dirty or non-linked worktree is refused outright: no
-// --force in v1.
+// --force in v1. Evidence whose git probe failed (probeFailed) is refused the
+// same way: the state is unproven, so no Delete control, only Cancel.
 //
 // Clone targets use the verified-delete flow: deletion is an explicit
 // operation distinct from ordinary stop and from stopping the current work.
@@ -106,12 +107,16 @@ export const DeleteWorkspaceDialog: Component = () => {
 
 	const dirtyTotal = () => dirtyKinds().reduce((sum, k) => sum + k.n, 0);
 
+	/** Guard evidence whose git probe failed: the state cannot be verified,
+	 *  so deletion is refused outright (fail closed) and only Cancel is offered. */
+	const unproven = () => info()?.probeFailed === true;
+
 	/** Worktree confirm allowed only once evidence is in AND the worktree is
 	 *  linked + clean. Clones have no guard-evidence rung; the fleet's
 	 *  verified-delete gate admits/refuses at submit time. */
 	const worktreeConfirmable = () => {
 		const i = info();
-		return i !== undefined && i.linked && !i.dirty;
+		return i !== undefined && i.linked && !i.dirty && i.probeFailed !== true;
 	};
 
 	const close = () => {
@@ -181,7 +186,8 @@ export const DeleteWorkspaceDialog: Component = () => {
 						</>
 					)}
 				</Show>
-				{/* Worktree variant: guard-evidence flow (unchanged behavior). */}
+				{/* Worktree variant: guard-evidence flow; dirty, non-linked, and
+				    unproven (failed git probe) evidence is refused outright. */}
 				<Show when={target() !== null && !isClone()}>
 					<Show when={info() === undefined}>
 						<p class="danger-confirm-body">checking worktree state…</p>
@@ -212,7 +218,13 @@ export const DeleteWorkspaceDialog: Component = () => {
 							{info()!.reason ? `: ${info()!.reason}` : ""}.
 						</p>
 					</Show>
-					<Show when={info() !== undefined && info()!.linked && !info()!.dirty}>
+					<Show when={info() !== undefined && info()!.linked && !info()!.dirty && unproven()}>
+						<p class="danger-confirm-body">
+							This worktree cannot be verified as safe to delete:{" "}
+							{info()!.reason ?? "worktree git state could not be read; deleting is refused"}.
+						</p>
+					</Show>
+					<Show when={info() !== undefined && info()!.linked && !info()!.dirty && !unproven()}>
 						<p class="danger-confirm-body">
 							Delete the worktree
 							{daemon() ? (
@@ -244,14 +256,18 @@ export const DeleteWorkspaceDialog: Component = () => {
 						<button type="button" onClick={close}>
 							Cancel
 						</button>
-						<button
-							type="button"
-							class="danger-confirm-btn"
-							disabled={!worktreeConfirmable()}
-							onClick={confirmDelete}
-						>
-							Delete worktree
-						</button>
+						{/* Unproven evidence (failed git probe) refuses outright:
+						    no Delete control, only Cancel. */}
+						<Show when={!unproven()}>
+							<button
+								type="button"
+								class="danger-confirm-btn"
+								disabled={!worktreeConfirmable()}
+								onClick={confirmDelete}
+							>
+								Delete worktree
+							</button>
+						</Show>
 					</div>
 				</Show>
 			</Modal>

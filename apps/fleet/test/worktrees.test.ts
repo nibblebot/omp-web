@@ -1,16 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import {
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { RegisteredProject } from "#lib/wire/protocol";
+import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+import type { GitRunner } from "../discovery";
 import { Registry, type RegistryEntry } from "../registry";
 import type { SpawnSupervisor } from "../supervisor";
 import {
@@ -25,21 +18,12 @@ import {
 	slugifyWorktreeName,
 	WorktreeBranchCheckedOutError,
 	WorktreeDirtyError,
+	WorktreeProbeFailedError,
 	WorktreeTargetExistsError,
 	worktreeDeleteInfo,
 } from "../worktrees";
 
-const tmpDirs: string[] = [];
-
-function tmpDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "omp-web-worktrees-"));
-	tmpDirs.push(dir);
-	return dir;
-}
-
-afterAll(() => {
-	for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
-});
+afterAll(cleanupTempDirs);
 
 /** One `git -C <cwd> <args>` invocation (real git; repos are local + hermetic). */
 async function git(
@@ -73,8 +57,8 @@ async function makeRepo(dir: string): Promise<void> {
 
 /** A repo cloned from a local file:// remote, so clone sets origin/HEAD. */
 async function makeClonedRepo(): Promise<{ clone: string }> {
-	const remote = tmpDir();
-	const clone = tmpDir();
+	const remote = tempDir("omp-web-worktrees-");
+	const clone = tempDir("omp-web-worktrees-");
 	await makeRepo(remote);
 	await gitOk(remote, ["clone", "-q", `file://${remote}`, clone]);
 	return { clone };
@@ -139,7 +123,7 @@ describe("slugifyWorktreeName", () => {
 
 describe("managedWorktreePath", () => {
 	test("composes <workspaceDir>/<repo-basename>/<slug(name)>", () => {
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		expect(managedWorktreePath(ws, "/home/u/src/omp-web", "Feature Branch")).toBe(
 			join(ws, "omp-web", "feature-branch"),
 		);
@@ -153,13 +137,13 @@ describe("resolveBaseRef", () => {
 	});
 
 	test("falls back to the local checkout's current branch without a remote", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
 		expect(await resolveBaseRef(repo)).toBe("main");
 	});
 
 	test("falls back to HEAD on a detached checkout", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
 		await gitOk(repo, ["checkout", "-q", "--detach", "HEAD"]);
 		expect(await resolveBaseRef(repo)).toBe("HEAD");
@@ -168,9 +152,9 @@ describe("resolveBaseRef", () => {
 
 describe("createWorktree", () => {
 	test("creates the worktree: slug path, branch, no marker, base ref", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const created = await createWorktree(projectFor(repo), "Feature Branch", { workspaceDir: ws });
 		const target = join(ws, repo.split("/").pop()!, "feature-branch");
 		expect(created.path).toBe(target);
@@ -188,7 +172,7 @@ describe("createWorktree", () => {
 	});
 
 	test("same-basename repos share a parent without markers and reject an occupied target", async () => {
-		const root = tmpDir();
+		const root = tempDir("omp-web-worktrees-");
 		const repoA = join(root, "a", "repo");
 		const repoB = join(root, "b", "repo");
 		for (const repo of [repoA, repoB]) {
@@ -198,7 +182,7 @@ describe("createWorktree", () => {
 			await gitOk(repo, ["add", "."]);
 			await gitOk(repo, ["commit", "-q", "-m", "init"]);
 		}
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const projectA = projectFor(repoA, "a");
 		const projectB = projectFor(repoB, "b");
 		const first = await createWorktree(projectA, "First Feature", { workspaceDir: ws });
@@ -228,9 +212,9 @@ describe("createWorktree", () => {
 	});
 
 	test("refuses when the target path already exists", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		await createWorktree(projectFor(repo), "dup", { workspaceDir: ws });
 		await expect(
 			createWorktree(projectFor(repo), "dup", { workspaceDir: ws }),
@@ -244,9 +228,9 @@ describe("createWorktree", () => {
 	});
 
 	test("refuses an existing branch that is checked out elsewhere", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		// `main` is checked out in the main checkout, so it cannot be attached.
 		await expect(
 			createWorktree(projectFor(repo), "x", { workspaceDir: ws, existingBranch: "main" }),
@@ -254,10 +238,10 @@ describe("createWorktree", () => {
 	});
 
 	test("attaches an existing not-checked-out branch", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
 		await gitOk(repo, ["branch", "feature"]);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const created = await createWorktree(projectFor(repo), "attach-me", {
 			workspaceDir: ws,
 			existingBranch: "feature",
@@ -273,9 +257,9 @@ describe("createWorktree", () => {
 	});
 
 	test("refuses an unknown existing branch", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		await expect(
 			createWorktree(projectFor(repo), "x", { workspaceDir: ws, existingBranch: "nope" }),
 		).rejects.toThrow(/unknown branch: nope/);
@@ -284,9 +268,9 @@ describe("createWorktree", () => {
 
 describe("listUnregisteredWorktrees", () => {
 	test("lists linked worktrees minus registered paths, never the main checkout", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const a = await createWorktree(projectFor(repo), "alpha", { workspaceDir: ws });
 		const b = await createWorktree(projectFor(repo), "beta", { workspaceDir: ws });
 		// Nothing registered: both linked worktrees, main checkout excluded.
@@ -308,18 +292,18 @@ describe("listUnregisteredWorktrees", () => {
 	});
 
 	test("degrades to an empty list when git cannot read the repo", async () => {
-		const notARepo = tmpDir();
+		const notARepo = tempDir("omp-web-worktrees-");
 		expect(await listUnregisteredWorktrees(notARepo, [])).toEqual([]);
 	});
 });
 
 describe("isLinkedWorktreeOf", () => {
 	test("true only for a linked worktree of the given main checkout", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const other = tmpDir();
+		const other = tempDir("omp-web-worktrees-");
 		await makeRepo(other);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const a = await createWorktree(projectFor(repo), "alpha", { workspaceDir: ws });
 		expect(await isLinkedWorktreeOf(a.path, repo)).toBe(true);
 		expect(await isLinkedWorktreeOf(repo, repo)).toBe(false); // main checkout is not a linked worktree
@@ -331,7 +315,7 @@ describe("isLinkedWorktreeOf", () => {
 
 describe("worktreeDeleteInfo", () => {
 	test("a plain directory without repository provenance is not a linked worktree", async () => {
-		const outside = tmpDir();
+		const outside = tempDir("omp-web-worktrees-");
 		expect(await worktreeDeleteInfo(worktreeEntry(outside))).toEqual({
 			linked: false,
 			dirty: false,
@@ -340,9 +324,9 @@ describe("worktreeDeleteInfo", () => {
 	});
 
 	test("clean linked worktree: linked, clean, merged, no upstream", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const a = await createWorktree(projectFor(repo), "clean", { workspaceDir: ws });
 		const info = await worktreeDeleteInfo(worktreeEntry(a.path, repo));
 		expect(info.linked).toBe(true);
@@ -361,9 +345,9 @@ describe("worktreeDeleteInfo", () => {
 	});
 
 	test("dirty worktree reports counts and a refusal reason", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const a = await createWorktree(projectFor(repo), "dirty", { workspaceDir: ws });
 		writeFileSync(join(a.path, "scratch.txt"), "new\n");
 		const info = await worktreeDeleteInfo(worktreeEntry(a.path, repo));
@@ -373,9 +357,34 @@ describe("worktreeDeleteInfo", () => {
 		expect(info.reason).toBe("worktree has uncommitted changes");
 	});
 
+	test("an unreadable git probe reports unproven evidence that refuses deletion", async () => {
+		const repo = tempDir("omp-web-worktrees-");
+		await makeRepo(repo);
+		const ws = tempDir("omp-web-worktrees-");
+		const a = await createWorktree(projectFor(repo), "unproven-info", { workspaceDir: ws });
+		const entry = worktreeEntry(a.path, repo);
+		// Spawn failure / nonzero exit: no git state, so nothing proves cleanliness.
+		const failingProbe: GitRunner = async () => ({
+			exitCode: 128,
+			stdout: "",
+			stderr: "fatal: not a git repository",
+		});
+		expect(await worktreeDeleteInfo(entry, { probeExec: failingProbe })).toEqual({
+			linked: true,
+			dirty: false,
+			probeFailed: true,
+			reason: "worktree git state could not be read; deleting is refused",
+		});
+		// A readable probe reports the same worktree without the marker.
+		const readable = await worktreeDeleteInfo(entry);
+		expect(readable).toMatchObject({ linked: true, dirty: false });
+		expect(readable.probeFailed).toBeUndefined();
+		expect(readable.branch).toBe("unproven-info");
+	});
+
 	test("unmerged branch with unpushed commits reports both", async () => {
 		const { clone } = await makeClonedRepo();
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const a = await createWorktree(projectFor(clone), "feat", { workspaceDir: ws });
 		// A local commit ahead of origin/main, upstream set: unpushed.
 		writeFileSync(join(a.path, "new.txt"), "n\n");
@@ -391,7 +400,7 @@ describe("worktreeDeleteInfo", () => {
 	});
 
 	test("missing path refuses deletion with a not-found reason", async () => {
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const info = await worktreeDeleteInfo(worktreeEntry(join(ws, "repo", "ghost")));
 		expect(info.linked).toBe(false);
 		expect(info.dirty).toBe(false);
@@ -401,9 +410,9 @@ describe("worktreeDeleteInfo", () => {
 
 describe("deleteWorktree", () => {
 	test("removes a clean linked worktree and -d's a merged branch", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const a = await createWorktree(projectFor(repo), "gone", { workspaceDir: ws });
 		const result = await deleteWorktree(worktreeEntry(a.path, repo), {
 			deleteBranch: true,
@@ -417,9 +426,9 @@ describe("deleteWorktree", () => {
 	});
 
 	test("refuses a dirty worktree (no --force), leaving it in place", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const a = await createWorktree(projectFor(repo), "keep", { workspaceDir: ws });
 		writeFileSync(join(a.path, "scratch.txt"), "new\n");
 		await expect(
@@ -429,10 +438,31 @@ describe("deleteWorktree", () => {
 		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(a.path);
 	});
 
-	test("deletes a clean attached linked worktree and refuses remote entries", async () => {
-		const repo = tmpDir();
+	test("an unreadable git probe fails closed: no removal, branch untouched", async () => {
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
+		const a = await createWorktree(projectFor(repo), "unproven", { workspaceDir: ws });
+		const entry = worktreeEntry(a.path, repo);
+		const branchBefore = await gitOk(repo, ["rev-parse", "refs/heads/unproven"]);
+		// Spawn failure / nonzero exit: no git state, so cleanliness is unproven.
+		const failingProbe = async (): Promise<{
+			exitCode: number;
+			stdout: string;
+			stderr: string;
+		}> => ({ exitCode: 128, stdout: "", stderr: "fatal: not a git repository" });
+		const refusal = deleteWorktree(entry, { deleteBranch: true, probeExec: failingProbe });
+		await expect(refusal).rejects.toBeInstanceOf(WorktreeProbeFailedError);
+		await expect(refusal).rejects.toThrow("cleanliness could not be verified");
+		expect(existsSync(a.path)).toBe(true);
+		expect((await git(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(a.path);
+		expect(await gitOk(repo, ["rev-parse", "refs/heads/unproven"])).toBe(branchBefore);
+	});
+
+	test("deletes a clean attached linked worktree and refuses remote entries", async () => {
+		const repo = tempDir("omp-web-worktrees-");
+		await makeRepo(repo);
+		const ws = tempDir("omp-web-worktrees-");
 		const { path } = await createWorktree(projectFor(repo), "attached", { workspaceDir: ws });
 		const remote: RegistryEntry = { ...worktreeEntry(path, repo), mode: "remote" };
 		expect((await worktreeDeleteInfo(remote)).linked).toBe(false);
@@ -447,9 +477,9 @@ describe("deleteWorktree", () => {
 	});
 
 	test("never -D: an unmerged branch survives branch -d", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const a = await createWorktree(projectFor(repo), "unmerged", { workspaceDir: ws });
 		writeFileSync(join(a.path, "new.txt"), "n\n");
 		await gitOk(a.path, ["add", "."]);
@@ -464,18 +494,18 @@ describe("deleteWorktree", () => {
 	});
 
 	test("a missing linked path is refused", async () => {
-		const ghost = join(tmpDir(), "repo", "ghost");
+		const ghost = join(tempDir("omp-web-worktrees-"), "repo", "ghost");
 		await expect(deleteWorktree(worktreeEntry(ghost))).rejects.toThrow(
 			"worktree path does not exist",
 		);
 	});
 
 	test("a registered linked worktree remains deletable after the configured creation root changes", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const registry = new Registry(join(tmpDir(), "state.json"));
+		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
-		const oldRoot = tmpDir();
+		const oldRoot = tempDir("omp-web-worktrees-");
 		const created = await createWorktree(projectFor(repo), "registered", { workspaceDir: oldRoot });
 		const entry = await registerWorktreeEntry(
 			registry,
@@ -483,7 +513,7 @@ describe("deleteWorktree", () => {
 			projectFor(repo),
 			created.path,
 		);
-		const newRoot = tmpDir();
+		const newRoot = tempDir("omp-web-worktrees-");
 		await createWorktree(projectFor(repo), "new-root", { workspaceDir: newRoot });
 		expect((await worktreeDeleteInfo(entry)).linked).toBe(true);
 		await deleteWorktree(entry);
@@ -491,9 +521,9 @@ describe("deleteWorktree", () => {
 	});
 
 	test("the main checkout and a plain directory are not deletable linked worktrees", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		for (const path of [repo, tmpDir()]) {
+		for (const path of [repo, tempDir("omp-web-worktrees-")]) {
 			const entry = worktreeEntry(path, repo);
 			expect(await worktreeDeleteInfo(entry)).toMatchObject({
 				linked: false,
@@ -505,7 +535,7 @@ describe("deleteWorktree", () => {
 	});
 
 	test("a main checkout without source.local is still refused", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
 		const main = worktreeEntry(repo);
 		expect((await worktreeDeleteInfo(main)).linked).toBe(false);
@@ -514,13 +544,15 @@ describe("deleteWorktree", () => {
 	});
 
 	test("symlink substitution cannot authorize removal of another repository's linked worktree", async () => {
-		const repo = join(tmpDir(), "repo");
+		const repo = join(tempDir("omp-web-worktrees-"), "repo");
 		await makeRepo(repo);
-		const externalRepo = join(tmpDir(), "repo");
+		const externalRepo = join(tempDir("omp-web-worktrees-"), "repo");
 		await makeRepo(externalRepo);
-		const created = await createWorktree(projectFor(repo), "original", { workspaceDir: tmpDir() });
+		const created = await createWorktree(projectFor(repo), "original", {
+			workspaceDir: tempDir("omp-web-worktrees-"),
+		});
 		const external = await createWorktree(projectFor(externalRepo), "external", {
-			workspaceDir: tmpDir(),
+			workspaceDir: tempDir("omp-web-worktrees-"),
 		});
 		const entry = worktreeEntry(created.path, repo);
 		await gitOk(repo, ["worktree", "remove", created.path]);
@@ -537,11 +569,13 @@ describe("deleteWorktree", () => {
 	});
 
 	test("a substituted linked worktree from a foreign same-name repository is refused", async () => {
-		const repo = join(tmpDir(), "repo");
-		const foreignRepo = join(tmpDir(), "repo");
+		const repo = join(tempDir("omp-web-worktrees-"), "repo");
+		const foreignRepo = join(tempDir("omp-web-worktrees-"), "repo");
 		await makeRepo(repo);
 		await makeRepo(foreignRepo);
-		const created = await createWorktree(projectFor(repo), "original", { workspaceDir: tmpDir() });
+		const created = await createWorktree(projectFor(repo), "original", {
+			workspaceDir: tempDir("omp-web-worktrees-"),
+		});
 		const entry = worktreeEntry(created.path, repo);
 		await gitOk(repo, ["worktree", "remove", created.path]);
 		await gitOk(foreignRepo, ["worktree", "add", "-b", "substitute", created.path]);
@@ -553,11 +587,11 @@ describe("deleteWorktree", () => {
 
 describe("registerWorktreeEntry", () => {
 	test("start:false registers an asleep spawned entry tagged with the project", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const ws = tmpDir();
+		const ws = tempDir("omp-web-worktrees-");
 		const a = await createWorktree(projectFor(repo), "tagged", { workspaceDir: ws });
-		const registry = new Registry(join(tmpDir(), "state.json"));
+		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
 		const entry = await registerWorktreeEntry(
 			registry,
@@ -578,9 +612,9 @@ describe("registerWorktreeEntry", () => {
 	});
 
 	test("registration records the worktree workspace both asleep and started", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const statePath = join(tmpDir(), "state.json");
+		const statePath = join(tempDir("omp-web-worktrees-"), "state.json");
 		const registry = new Registry(statePath);
 		await registry.load();
 		const supervisor = {
@@ -598,7 +632,7 @@ describe("registerWorktreeEntry", () => {
 		} as unknown as SpawnSupervisor;
 		for (const start of [false, true]) {
 			const created = await createWorktree(projectFor(repo), `registered-${start}`, {
-				workspaceDir: tmpDir(),
+				workspaceDir: tempDir("omp-web-worktrees-"),
 			});
 			const entry = await registerWorktreeEntry(
 				registry,
@@ -626,9 +660,9 @@ describe("registerWorktreeEntry", () => {
 
 describe("registerProjectMainEntry", () => {
 	test("start:false creates an asleep main-checkout entry with the exact field shape", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const registry = new Registry(join(tmpDir(), "state.json"));
+		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
 		const entry = await registerProjectMainEntry(
 			registry,
@@ -655,9 +689,9 @@ describe("registerProjectMainEntry", () => {
 	});
 
 	test("start:false stores template/labels on the asleep entry when given", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const registry = new Registry(join(tmpDir(), "state.json"));
+		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
 		const entry = await registerProjectMainEntry(
 			registry,
@@ -673,9 +707,9 @@ describe("registerProjectMainEntry", () => {
 	});
 
 	test("start:false rejects an unknown explicit template at registration (the entry would be unwakeable)", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const registry = new Registry(join(tmpDir(), "state.json"));
+		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
 		const supervisor = {
 			resolveTemplateName: (_cwd: string, explicit?: string) => {
@@ -693,9 +727,9 @@ describe("registerProjectMainEntry", () => {
 	});
 
 	test("dedup: a pre-existing entry on the same cwd is reused and tagged, never duplicated", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const registry = new Registry(join(tmpDir(), "state.json"));
+		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
 		const existing = registry.create({
 			name: "pre",
@@ -715,9 +749,9 @@ describe("registerProjectMainEntry", () => {
 	});
 
 	test("dedup + start:true on an asleep pre-existing entry respawns it instead of spawning a second row", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const registry = new Registry(join(tmpDir(), "state.json"));
+		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
 		const existing = registry.create({
 			name: "pre",
@@ -743,9 +777,9 @@ describe("registerProjectMainEntry", () => {
 	});
 
 	test("start:true spawns the main checkout with template/labels and tags the fresh entry", async () => {
-		const repo = tmpDir();
+		const repo = tempDir("omp-web-worktrees-");
 		await makeRepo(repo);
-		const registry = new Registry(join(tmpDir(), "state.json"));
+		const registry = new Registry(join(tempDir("omp-web-worktrees-"), "state.json"));
 		await registry.load();
 		let spawnInit: { cwd: string; template?: string; labels?: string[] } | undefined;
 		const supervisor = {

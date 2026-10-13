@@ -47,6 +47,7 @@ import {
 	unlinkSync,
 	writeSync,
 } from "node:fs";
+import type { Stats } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { Subprocess } from "bun";
 
@@ -227,24 +228,102 @@ interface VolumeFile {
 }
 
 /**
+ * Strict directory enumeration for the deletion gate's volume walk.
+ * `absent` is reported separately from every other failure so the gate can
+ * never mistake "cannot read the tree" for "empty tree".
+ */
+type DirEnumeration =
+	| { ok: true; entries: Array<{ name: string; isDirectory(): boolean }> }
+	/** The directory does not exist (ENOENT): absence, not a failure. */
+	| { ok: false; absent: true }
+	/** The path exists (or is unusable) and cannot be enumerated. */
+	| { ok: false; absent: false; reason: string };
+
+/**
+ * Strict path probe for the deletion gate. `existsSync` reports EVERY stat
+ * failure as "absent" (it swallows EACCES/EPERM, ENOTDIR, ELOOP, ...), which
+ * would slide a present-but-unreadable volume root into the absent-volume
+ * path; statSync keeps absence and unreadability apart.
+ */
+type PathProbe =
+	| { ok: true }
+	/** The path does not exist (ENOENT): absence, not a failure. */
+	| { ok: false; absent: true }
+	/** The path cannot be stat'd (ENOTDIR/EACCES/ELOOP/...): unverifiable. */
+	| { ok: false; absent: false; reason: string };
+
+/** errno code carried by a filesystem failure (undefined when it has none). */
+function errorCode(error: unknown): string | undefined {
+	if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+	const code = error.code; // unknown: validated by the typeof below.
+	return typeof code === "string" ? code : undefined;
+}
+
+/**
+ * Probe one path for the deletion gate: only ENOENT is absence. Everything
+ * else means the volume cannot be read, so completeness is unprovable.
+ */
+function statStrict(path: string): PathProbe {
+	try {
+		statSync(path);
+		return { ok: true };
+	} catch (error) {
+		const code = errorCode(error);
+		if (code === "ENOENT") return { ok: false, absent: true };
+		const reason = code ?? (error instanceof Error ? error.message : String(error));
+		return { ok: false, absent: false, reason: `${reason} on ${path}` };
+	}
+}
+
+/**
+ * Enumerate one directory for the deletion gate. ENOENT alone is absence (a
+ * workspace that never opened a session has no session dir, so there is
+ * nothing to compare and completeness is provable); every other failure
+ * (EACCES/EPERM, ENOTDIR, ELOOP, EIO, EMFILE, ...) means the tree cannot be
+ * verified and MUST NOT be read as zero files: an unreadable-but-present
+ * volume is the same provability failure as an absent one.
+ */
+function readDirStrict(dir: string): DirEnumeration {
+	try {
+		return {
+			ok: true,
+			entries: readdirSync(dir, { withFileTypes: true }) as unknown as Array<{
+				name: string;
+				isDirectory(): boolean;
+			}>,
+		};
+	} catch (error) {
+		const code = errorCode(error);
+		if (code === "ENOENT") return { ok: false, absent: true };
+		const reason = code ?? (error instanceof Error ? error.message : String(error));
+		return { ok: false, absent: false, reason: `${reason} reading ${dir}` };
+	}
+}
+
+/**
  * Walk one volume session dir for regular files (no traversal, no symlinks),
- * mirroring the manifest relpath rules, bounded like the export gate.
+ * mirroring the manifest relpath rules, bounded like the export gate. Returns
+ * the refusal reason when a directory in the subtree cannot be enumerated:
+ * the gate must PROVE completeness, so an unreadable subtree is never zero
+ * files. ENOENT is the one benign failure (the dir vanished mid-walk, so it
+ * holds nothing to compare); stat failures stay skipped/lenient, as before.
  */
 function walkSessionDir(
 	sessionDir: string,
 	sessionId: string,
 	state: { files: number; bytes: number },
 	out: VolumeFile[],
-): void {
-	let entries;
-	try {
-		entries = readdirSync(sessionDir, { withFileTypes: true });
-	} catch {
-		return; // Missing/unreadable session dir: nothing to enumerate.
+	relDir = "",
+): string | undefined {
+	const read = readDirStrict(sessionDir);
+	if (!read.ok) {
+		if (read.absent) return undefined;
+		const where = relDir.length === 0 ? sessionId : `${sessionId}/${relDir}`;
+		return `session ${where}: ${read.reason}`;
 	}
-	for (const dent of entries) {
+	for (const dent of read.entries) {
 		const absolute = join(sessionDir, dent.name);
-		let stats: ReturnType<typeof statSync>;
+		let stats: Stats;
 		try {
 			stats = statSync(absolute);
 		} catch {
@@ -252,7 +331,14 @@ function walkSessionDir(
 		}
 		if (stats.isSymbolicLink()) continue; // Reject symlinks (P7.2).
 		if (stats.isDirectory()) {
-			walkSessionDir(absolute, sessionId, state, out);
+			const nested = walkSessionDir(
+				absolute,
+				sessionId,
+				state,
+				out,
+				relDir.length === 0 ? dent.name : `${relDir}/${dent.name}`,
+			);
+			if (nested !== undefined) return nested;
 			continue;
 		}
 		if (!stats.isFile()) continue; // Sockets/fifos are rejected.
@@ -265,18 +351,7 @@ function walkSessionDir(
 		state.bytes += stats.size;
 		out.push({ sessionId, relpath: rel, size: stats.size });
 	}
-}
-
-/** Read one directory's entries (missing/unreadable → []). */
-function listDir(dir: string): Array<{ name: string; isDirectory(): boolean }> {
-	try {
-		return readdirSync(dir, { withFileTypes: true }) as unknown as Array<{
-			name: string;
-			isDirectory(): boolean;
-		}>;
-	} catch {
-		return [];
-	}
+	return undefined;
 }
 
 function relativePosix(fromDir: string, absolute: string): string {
@@ -1311,6 +1386,14 @@ export class WorkspaceLifecycle {
 	 * tree (`.home/agent/sessions`) must be byte-identical to the verified
 	 * store. This is what makes an empty store FAIL deletion when sessions
 	 * actually existed on the volume.
+	 *
+	 * Enumeration is strict at the root too: existence is probed with statSync
+	 * (existsSync reports a present-but-unreadable root as absent) and only
+	 * ENOENT proves there was nothing to compare. Any other failure to read
+	 * the volume root or its session tree (EACCES/EPERM, ENOTDIR, ELOOP, ...)
+	 * refuses the deletion of an ever-started workspace, because an unreadable
+	 * volume is the same provability failure as an absent one — never an
+	 * empty volume.
 	 */
 	async #verifyVolumeAgainstStore(
 		daemonId: string,
@@ -1325,22 +1408,57 @@ export class WorkspaceLifecycle {
 			record?.providerHandle !== undefined ||
 			record?.enrollment !== undefined;
 
-		// The volume is fleet-readable when its root exists.
-		const volumePresent = existsSync(volumeRoot);
+		// Presence is probed strictly: `existsSync` reports a present but
+		// unreadable root as absent (it swallows EACCES/EPERM/ENOTDIR), which
+		// would route an unverifiable volume into the absent-volume path.
+		// Only ENOENT is absence.
+		const root = statStrict(volumeRoot);
+		const volumePresent = root.ok;
 		const files: VolumeFile[] = [];
 		let bounded = true;
-		if (volumePresent && existsSync(sessionsDir)) {
-			const state = { files: 0, bytes: 0 };
-			const rootEntries = listDir(sessionsDir);
-			for (const dir of rootEntries) {
-				if (!dir.isDirectory()) continue;
-				const sid = dir.name;
-				if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sid)) continue;
-				walkSessionDir(join(sessionsDir, sid), sid, state, files);
+		// "Cannot read" is NOT "empty": a volume path the fleet cannot read
+		// must refuse deletion (completeness is unprovable), never silently
+		// compare as zero files.
+		let unreadable: { subject: string; reason: string } | undefined;
+		if (!root.ok && !root.absent) {
+			unreadable = { subject: "volume root", reason: root.reason };
+		}
+		if (root.ok) {
+			const sessions = readDirStrict(sessionsDir);
+			if (sessions.ok) {
+				const state = { files: 0, bytes: 0 };
+				for (const dir of sessions.entries) {
+					if (!dir.isDirectory()) continue;
+					const sid = dir.name;
+					if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sid)) continue;
+					const failure = walkSessionDir(join(sessionsDir, sid), sid, state, files);
+					if (failure !== undefined) {
+						unreadable = { subject: "volume session tree", reason: failure };
+						break;
+					}
+				}
+				if (state.files >= MAX_EXPORT_FILES || state.bytes > MAX_EXPORT_BYTES) {
+					bounded = false;
+				}
+			} else if (!sessions.absent) {
+				// The path exists but cannot be read, so there is no walk to
+				// trust: unreadable, not empty.
+				unreadable = {
+					subject: "volume session tree",
+					reason: `sessions dir: ${sessions.reason}`,
+				};
 			}
-			if (state.files >= MAX_EXPORT_FILES || state.bytes > MAX_EXPORT_BYTES) {
-				bounded = false;
-			}
+		}
+		// An ever-started workspace whose volume cannot be read is refused: the
+		// same provability failure as an absent volume with an empty store,
+		// before the read-only flip, the provider delete, and volume removal.
+		// A never-started clone has nothing to retain and keeps the previous
+		// lenient behavior.
+		if (unreadable !== undefined && everStarted) {
+			return {
+				ok: false,
+				message: `workspace ${daemonId} ${unreadable.subject} cannot be verified (${unreadable.reason}); deletion blocked (an unreadable volume is not an empty one)`,
+			};
 		}
 
 		if (volumePresent && files.length === 0 && everStarted) {

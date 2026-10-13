@@ -875,12 +875,14 @@ export type ServerFrame =
 	| { type: "project_branches"; projectId: string; branches: ProjectBranch[] }
 	// Unicast answer to worktree_delete_info: guard evidence for the delete
 	// confirmation (linked identity, dirty counts, branch merge/push state).
-	// Never carries tokens/endpoints.
+	// Never carries tokens/endpoints. A failed git probe rides as
+	// probeFailed (additive): the state is unproven, so deletion is refused.
 	| {
 			type: "worktree_delete_info";
 			daemonId: string;
 			linked: boolean;
 			dirty: boolean;
+			probeFailed?: boolean;
 			git?: {
 				added: number;
 				modified: number;

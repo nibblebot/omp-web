@@ -38,6 +38,24 @@ export default defineStory({
 			render: () => <DeleteWorkspaceDialog />,
 		},
 		{
+			name: "Unreadable git state refused",
+			seed: () =>
+				seedRosterFleet({
+					deleteWorkspaceTarget: worktreeInfoClean.daemonId,
+					worktreeDeleteInfo: {
+						[worktreeInfoClean.daemonId]: {
+							type: "worktree_delete_info",
+							daemonId: worktreeInfoClean.daemonId,
+							linked: true,
+							dirty: false,
+							probeFailed: true,
+							reason: "worktree git state could not be read; deleting is refused",
+						},
+					},
+				}),
+			render: () => <DeleteWorkspaceDialog />,
+		},
+		{
 			name: "Not a linked worktree refused",
 			seed: () =>
 				seedRosterFleet({

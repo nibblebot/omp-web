@@ -26,7 +26,23 @@
  *     test): a valid local-only source and a valid remote-only (file://)
  *     source both clone successfully and materialize a real volume, while
  *     an invalid source (both members set, or a wrongly typed member) is
- *     refused with a 400 and creates no workspace.
+ *     refused with a 400 and creates no workspace;
+ *  6. the clone-path Git guard (P7.4), one case per condition: a dirty
+ *     tracked file, an untracked file, a stash, commits not preserved on
+ *     origin, and an unusable git state each refuse deletion with the
+ *     checkout, volume, and transcript store retained and no provider
+ *     delete;
+ *  7. the volume/store completeness cross-check, one case per mismatch
+ *     class: a volume session file missing from the store, a size
+ *     (truncation) disagreement, a same-size content rewrite (sha256), a
+ *     session tree beyond the shared file bound, and a not-fleet-readable
+ *     volume on an ever-started workspace (root or session tree) — each
+ *     refuses with the store still writable and nothing deleted, while a
+ *     genuinely empty, never-created, or genuinely removed (ENOENT) volume
+ *     still deletes;
+ *  8. the guards' pass-through: a stopped clone with a clean checkout and a
+ *     fully stored session deletes exactly once, so the refusals above are
+ *     never vacuous.
  *
  * Fixtures reuse fleet/server.testkit's fleetPaths/startTestFleet (real
  * startFleet on ephemeral ports, state under a tracked temp dir). Git
@@ -41,6 +57,9 @@ import {
 	renameSync,
 	readFileSync,
 	readdirSync,
+	rmSync,
+	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -756,3 +775,641 @@ describe("clone source validation over /ctl/clones (P1.3)", () => {
 		);
 	}
 });
+
+// ---------------------------------------------------------------------------
+// Clone-deletion guard coverage (P7.4 Git guard; volume/store cross-check).
+// The worktree suites exercise the worktree path only, so every refusal
+// class below is pinned on a stopped, EVER-STARTED clone (a real provider
+// history, so "no provider delete" is an observable claim and the gate's
+// quiesce path actually runs). Each case is a single injected defect
+// against an otherwise deletion-ready workspace, and the retention contract
+// is shared: roster entry + delete-pending-retry, checkout, volume, and
+// transcript store all retained, store never flipped read-only, provider
+// never sees a delete.
+// ---------------------------------------------------------------------------
+
+interface GuardFixture extends FleetFixture {
+	daemonId: string;
+	checkoutDir: string;
+	volume: { root: string; sessions: string };
+}
+
+/**
+ * Boot a fleet and create a clone that has STARTED once and is now stopped:
+ * everStarted (authorized generation + provider handle) with a proven stop,
+ * so admission and quiesce pass and only the guards under test can refuse.
+ */
+async function bootStoppedClone(name: string): Promise<GuardFixture> {
+	const fixture = await bootFleet({
+		runningWhileLive: false,
+		stopObserved: "stopped",
+		deleteFailures: 0,
+	});
+	const daemonId = await createClone(fixture.server, fixture.repoDir, name);
+	const start = await postJson(fixture.server.port, "/ctl/start", { daemonId });
+	expect(start.status).toBe(200);
+	const stop = await postJson(fixture.server.port, "/ctl/stop", { selector: daemonId });
+	expect(stop.status).toBe(200);
+	const volume = volumePaths(fixture.cloneRoot, daemonId);
+	return { ...fixture, daemonId, checkoutDir: join(volume.root, ".checkout"), volume };
+}
+
+/** Stored main transcript of the seeded session: `logs/<id>/<session>/<session>.jsonl`. */
+function storedSessionPath(logsDir: string, daemonId: string): string {
+	return join(logsDir, daemonId, SESSION_ID, `${SESSION_ID}.jsonl`);
+}
+
+/** Raw `git -C <cwd> <args>` exit code (never throws). */
+async function gitExit(cwd: string, args: string[]): Promise<number> {
+	const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "ignore", stderr: "ignore" });
+	return await proc.exited;
+}
+
+/**
+ * One refused deletion plus the full retention contract: 409, the
+ * caller-visible error is exactly the gate's persisted typed failure (no
+ * generic 500 envelope), the roster entry stays in delete-pending-retry,
+ * the checkout, volume, and transcript store are retained, the store was
+ * never flipped read-only, and the provider never saw a delete.
+ *
+ * `retainedVolumeRoot` defaults to the persisted volume location; the
+ * unreadable/relocated classes pass the location the volume still occupies
+ * (the refusal must retain the bytes where they are). The provider state dir
+ * follows the volume's parent (`join(dirname(volumeRoot), ".provider-state")`,
+ * per the lifecycle's own path rule), so the delete-op assertion stays
+ * meaningful for a relocated volume too.
+ */
+async function expectRefusedWithRetention(
+	fixture: GuardFixture,
+	response: Response,
+	code: "conflict" | "archive_conflict",
+	opts: { retainedVolumeRoot?: string; storedSession?: boolean } = {},
+): Promise<void> {
+	const retainedVolumeRoot = opts.retainedVolumeRoot ?? fixture.volume.root;
+	expect(response.status).toBe(409);
+	const entry = fixture.server.registry.get(fixture.daemonId)!;
+	expect(entry.workspace?.deletion?.state).toBe("delete-pending-retry");
+	expect(entry.workspace?.deletion?.error?.code).toBe(code);
+	const body = (await response.json()) as { error?: string };
+	expect(body.error).toBe(entry.workspace?.deletion?.error?.message);
+	expect(existsSync(join(retainedVolumeRoot, ".checkout"))).toBe(true);
+	expect(existsSync(retainedVolumeRoot)).toBe(true);
+	if (opts.storedSession !== false) {
+		expect(existsSync(storedSessionPath(fixture.logsDir, fixture.daemonId))).toBe(true);
+	}
+	expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.daemonId))).toBe(false);
+	expect(
+		providerOps(dirname(retainedVolumeRoot), fixture.daemonId).filter((op) => op.op === "delete"),
+	).toHaveLength(0);
+	// Still listed: a refusal is retry-able, never a silent roster eviction.
+	expect(fixture.server.registry.list().some((e) => e.daemonId === fixture.daemonId)).toBe(true);
+}
+
+/** Errno thrown for a path, or undefined when it stats cleanly (never suppresses). */
+function pathErrorCode(path: string): string | undefined {
+	try {
+		statSync(path);
+		return undefined;
+	} catch (error) {
+		if (typeof error === "object" && error !== null && "code" in error) {
+			const code = error.code; // unknown: validated below.
+			if (typeof code === "string") return code;
+		}
+		return "unknown";
+	}
+}
+
+describe("clone deletion git guard (P7.4)", () => {
+	test(
+		"a dirty tracked file refuses deletion with the checkout, volume, and store retained",
+		async () => {
+			const fixture = await bootStoppedClone("git-dirty");
+			try {
+				// The store/volume are deletion-ready: only the checkout blocks.
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				const readme = join(fixture.checkoutDir, "readme.md");
+				writeFileSync(readme, "tampered\n");
+				expect(await git(fixture.checkoutDir, ["status", "--porcelain=v1"])).not.toBe("");
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"conflict",
+				);
+				// Retained as-is: the uncommitted edit was not reset or stashed.
+				expect(readFileSync(readme, "utf8")).toBe("tampered\n");
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"an untracked file refuses deletion with the checkout, volume, and store retained",
+		async () => {
+			const fixture = await bootStoppedClone("git-untracked");
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				const stray = join(fixture.checkoutDir, "scratch.md");
+				writeFileSync(stray, "notes\n");
+				expect(await git(fixture.checkoutDir, ["status", "--porcelain=v1"])).toContain(
+					"scratch.md",
+				);
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"conflict",
+				);
+				expect(existsSync(stray)).toBe(true); // never deleted with the volume
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a stash refuses deletion with the checkout, volume, and store retained",
+		async () => {
+			const fixture = await bootStoppedClone("git-stash");
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				writeFileSync(join(fixture.checkoutDir, "readme.md"), "stashed work\n");
+				await git(fixture.checkoutDir, ["stash", "push", "-m", "unpreserved"]);
+				// A clean tree with one stash: the stash alone blocks.
+				expect(await git(fixture.checkoutDir, ["status", "--porcelain=v1"])).toBe("");
+				expect(await git(fixture.checkoutDir, ["stash", "list"])).not.toBe("");
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"conflict",
+				);
+				// The refusal never drops the stash.
+				expect(await git(fixture.checkoutDir, ["stash", "list"])).not.toBe("");
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a commit not preserved on origin refuses deletion with the checkout, volume, and store retained",
+		async () => {
+			const fixture = await bootStoppedClone("git-local-commit");
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				writeFileSync(join(fixture.checkoutDir, "local.md"), "local work\n");
+				await git(fixture.checkoutDir, ["add", "local.md"]);
+				await git(fixture.checkoutDir, ["commit", "-q", "-m", "unpreserved local work"]);
+				expect(await git(fixture.checkoutDir, ["status", "--porcelain=v1"])).toBe("");
+				const unpreserved = async (): Promise<number> =>
+					Number(
+						await git(fixture.checkoutDir, [
+							"rev-list",
+							"--count",
+							"HEAD",
+							"--not",
+							"--remotes=origin",
+						]),
+					);
+				expect(await unpreserved()).toBeGreaterThan(0);
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"conflict",
+				);
+				// The unpreserved commit survives the refusal (nothing pushed
+				// or reset on the caller's behalf).
+				expect(await unpreserved()).toBeGreaterThan(0);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"an unusable git state refuses deletion with the checkout, volume, and store retained",
+		async () => {
+			const fixture = await bootStoppedClone("git-unusable");
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				// `.git` still EXISTS (so the guard cannot skip a never-prepared
+				// clone) but is not a repository: every git read fails, so the
+				// checkout's safety is unknowable and deletion must block.
+				const dotGit = join(fixture.checkoutDir, ".git");
+				rmSync(dotGit, { recursive: true, force: true });
+				writeFileSync(dotGit, "not a git dir\n");
+				expect(existsSync(dotGit)).toBe(true);
+				expect(await gitExit(fixture.checkoutDir, ["status", "--porcelain=v1"])).not.toBe(0);
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"conflict",
+				);
+				// Nothing was repaired or removed: the unusable state is intact.
+				expect(readFileSync(dotGit, "utf8")).toBe("not a git dir\n");
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+});
+
+describe("clone deletion volume/store cross-check", () => {
+	/** The volume's main transcript of the seeded session. */
+	function volumeMain(fixture: GuardFixture): string {
+		return join(fixture.volume.sessions, SESSION_ID, `${SESSION_ID}.jsonl`);
+	}
+
+	test(
+		"a volume session file missing from the store refuses deletion with everything retained",
+		async () => {
+			const fixture = await bootStoppedClone("volume-missing-file");
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				// The store verifies by itself; the volume carries a lineage file
+				// the store never received (logs were not fully streamed).
+				const unstreamed = join(fixture.volume.sessions, SESSION_ID, "extra.jsonl");
+				writeFileSync(unstreamed, '{"type":"message"}\n');
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"archive_conflict",
+				);
+				// The unstreamed bytes are retained, not deleted with the volume.
+				expect(readFileSync(unstreamed, "utf8")).toBe('{"type":"message"}\n');
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a volume file shorter than its stored bytes refuses deletion with everything retained",
+		async () => {
+			const fixture = await bootStoppedClone("volume-truncated");
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				const storedBytes = readFileSync(storedSessionPath(fixture.logsDir, fixture.daemonId));
+				const truncated = storedBytes.subarray(0, storedBytes.length - 8);
+				writeFileSync(volumeMain(fixture), truncated);
+				expect(readFileSync(volumeMain(fixture)).length).toBeLessThan(storedBytes.length);
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"archive_conflict",
+				);
+				// Both sides retained byte-for-byte: nothing rewritten or healed.
+				expect(readFileSync(volumeMain(fixture)).length).toBe(truncated.length);
+				expect(readFileSync(storedSessionPath(fixture.logsDir, fixture.daemonId))).toEqual(
+					storedBytes,
+				);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a same-size content rewrite on the volume refuses deletion with everything retained",
+		async () => {
+			const fixture = await bootStoppedClone("volume-rewritten");
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				const original = readFileSync(volumeMain(fixture), "utf8");
+				const rewritten = original.replace('"text":"hi"', '"text":"yo"');
+				// Same length: only the sha256 comparison can catch this rewrite.
+				expect(Buffer.byteLength(rewritten, "utf8")).toBe(Buffer.byteLength(original, "utf8"));
+				expect(rewritten).not.toBe(original);
+				writeFileSync(volumeMain(fixture), rewritten);
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"archive_conflict",
+				);
+				expect(readFileSync(volumeMain(fixture), "utf8")).toBe(rewritten);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a volume session tree beyond the verification bounds refuses deletion with everything retained",
+		async () => {
+			const fixture = await bootStoppedClone("volume-bounds");
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				// 10k files is the shared export/verify ceiling; the bound check
+				// runs BEFORE any per-file comparison, so this refusal is the
+				// bound (the store itself verifies: one contiguous session).
+				const sessionDir = join(fixture.volume.sessions, SESSION_ID);
+				for (let i = 0; i < 10_000; i++) {
+					writeFileSync(join(sessionDir, `f${String(i).padStart(5, "0")}.jsonl`), "");
+				}
+				expect(readdirSync(sessionDir).length).toBeGreaterThan(10_000);
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"archive_conflict",
+				);
+				// The oversized tree is retained (never partially reaped).
+				expect(readdirSync(sessionDir).length).toBeGreaterThan(10_000);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 30_000 },
+	);
+
+	test(
+		"an ever-started clone whose volume is not fleet-readable refuses deletion with the volume and store retained",
+		async () => {
+			const fixture = await bootStoppedClone("volume-not-readable");
+			try {
+				// A session only the VOLUME holds: nothing was ever streamed, so
+				// the store has no subtree at all (no sessions to compare).
+				mkdirSync(join(fixture.volume.sessions, SESSION_ID), { recursive: true });
+				writeFileSync(
+					join(fixture.volume.sessions, SESSION_ID, `${SESSION_ID}.jsonl`),
+					transcriptJsonl(),
+				);
+				// The volume is not readable at its persisted location (an
+				// unmounted/substituted volume root, exactly what a k8s PVC is
+				// fleet-side): existsSync(volumeRoot) is the fleet-side
+				// readability test, and with no stored sessions to compare, the
+				// workspace's completeness is unprovable — an ever-started
+				// workspace is refused rather than inferred complete.
+				const detached = join(fixture.cloneRoot, `${fixture.daemonId}.detached`);
+				renameSync(fixture.volume.root, detached);
+				expect(existsSync(fixture.volume.root)).toBe(false);
+				// Genuinely removed (ENOENT), NOT unreadable: this must stay on
+				// the absent-volume path, not the strict-probe refusal.
+				expect(pathErrorCode(fixture.volume.root)).toBe("ENOENT");
+				const volumeMainFile = join(
+					detached,
+					".home",
+					"agent",
+					"sessions",
+					SESSION_ID,
+					`${SESSION_ID}.jsonl`,
+				);
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"archive_conflict",
+					{ retainedVolumeRoot: detached, storedSession: false },
+				);
+				// The unstreamed local session survives the refusal.
+				expect(readFileSync(volumeMainFile, "utf8")).toBe(transcriptJsonl());
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"an ever-started clone whose volume root cannot be stat'd refuses deletion with everything retained",
+		async () => {
+			const fixture = await bootStoppedClone("volume-root-unverifiable");
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				// The recorded root is replaced by a symlink that resolves
+				// through a regular file: statSync(volumeRoot) fails with
+				// ENOTDIR (deterministic, no permissions involved), while the
+				// volume's PARENT stays a usable directory so the provider
+				// state dir the gate's quiesce writes to still works.
+				const relocated = join(fixture.cloneRoot, `${fixture.daemonId}.relocated`);
+				renameSync(fixture.volume.root, relocated);
+				const regularFile = join(fixture.cloneRoot, "not-a-directory");
+				writeFileSync(regularFile, "regular file\n");
+				symlinkSync(join(regularFile, "sub"), fixture.volume.root);
+				// The store verified WITH a session, so before the strict probe
+				// this state took the absent-volume path: existsSync cannot see
+				// the ENOTDIR and reported the root as absent.
+				expect(pathErrorCode(fixture.volume.root)).toBe("ENOTDIR");
+				expect(existsSync(fixture.volume.root)).toBe(false);
+				expect(existsSync(storedSessionPath(fixture.logsDir, fixture.daemonId))).toBe(true);
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"archive_conflict",
+					{ retainedVolumeRoot: relocated },
+				);
+				// The relocated volume (checkout + session tree) is untouched;
+				// the provider state dir stayed beside it (the helper's
+				// delete-op check reads it via dirname(retainedVolumeRoot)).
+				expect(providerOps(fixture.cloneRoot, fixture.daemonId).length).toBeGreaterThan(0);
+				expect(existsSync(join(relocated, ".checkout", ".git"))).toBe(true);
+				expect(existsSync(join(relocated, ".home", "agent", "sessions", SESSION_ID))).toBe(true);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"an ever-started clone whose session tree cannot be enumerated refuses deletion with everything retained",
+		async () => {
+			const fixture = await bootStoppedClone("volume-tree-not-enumerable");
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				// Replacing the session root with a regular file is the
+				// permission-independent way to make it unenumerable: the path
+				// exists, `readdirSync` fails (ENOTDIR), and the fleet must not
+				// read that as "no volume sessions to compare".
+				rmSync(fixture.volume.sessions, { recursive: true, force: true });
+				writeFileSync(fixture.volume.sessions, "not a directory\n");
+				expect(() => readdirSync(fixture.volume.sessions)).toThrow();
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"archive_conflict",
+				);
+				// The substituted path is retained: nothing repaired or deleted.
+				expect(readFileSync(fixture.volume.sessions, "utf8")).toBe("not a directory\n");
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"an ever-started clone whose session subtree cannot be enumerated refuses deletion with everything retained",
+		async () => {
+			const fixture = await bootStoppedClone("volume-subtree-not-enumerable");
+			const sessionDir = join(fixture.volume.sessions, SESSION_ID);
+			try {
+				seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+				// A session dir the fleet cannot read (EACCES for this suite's
+				// non-root user; the ENOTDIR case above is the
+				// permission-independent mechanism). The tree still holds the
+				// session bytes, which is exactly why the walk must refuse
+				// instead of reporting zero files.
+				chmodSync(sessionDir, 0o000);
+				expect(() => readdirSync(sessionDir)).toThrow();
+
+				await expectRefusedWithRetention(
+					fixture,
+					await deleteWorkspace(fixture.server.port, fixture.daemonId),
+					"archive_conflict",
+				);
+			} finally {
+				chmodSync(sessionDir, 0o755); // Restore so the retained bytes are assertable (and cleanable).
+				await fixture.server.close();
+			}
+			// Retained: only unreadable to the fleet, never reaped.
+			expect(readFileSync(join(sessionDir, `${SESSION_ID}.jsonl`), "utf8")).toBe(transcriptJsonl());
+		},
+		{ timeout: 20_000 },
+	);
+
+	test(
+		"a never-started clone with an unenumerable session tree still deletes (the refusal is gated on everStarted)",
+		async () => {
+			const fixture = await bootFleet({
+				runningWhileLive: false,
+				stopObserved: "stopped",
+				deleteFailures: 0,
+			});
+			try {
+				const daemonId = await createClone(fixture.server, fixture.repoDir, "never-started");
+				// Same unenumerable tree as the refusal case, but this clone
+				// never ran compute: there is no retained provider history, and
+				// a never-started clone has no volume sessions to lose, so the
+				// deletion proceeds (the strict rule is gated on everStarted).
+				expect(
+					fixture.server.registry.get(daemonId)!.workspace?.authorizedGeneration,
+				).toBeUndefined();
+				expect(fixture.server.registry.get(daemonId)!.workspace?.providerHandle).toBeUndefined();
+				seedSession(fixture.logsDir, fixture.cloneRoot, daemonId, {});
+				const volume = volumePaths(fixture.cloneRoot, daemonId);
+				rmSync(volume.sessions, { recursive: true, force: true });
+				writeFileSync(volume.sessions, "not a directory\n");
+				expect(() => readdirSync(volume.sessions)).toThrow();
+
+				const response = await deleteWorkspace(fixture.server.port, daemonId);
+				expect(response.status).toBe(200);
+				const body = (await response.json()) as { removed?: string; verified?: string[] };
+				expect(body.removed).toBe(daemonId);
+				expect(body.verified).toEqual([SESSION_ID]);
+				expect(fixture.server.registry.get(daemonId)).toBeUndefined();
+				expect(existsSync(volume.root)).toBe(false);
+				// Never started: the provider saw no stop and no delete.
+				expect(providerOps(fixture.cloneRoot, daemonId)).toHaveLength(0);
+				expect(existsSync(storedSessionPath(fixture.logsDir, daemonId))).toBe(true);
+				expect(existsSync(readOnlyMarker(fixture.logsDir, daemonId))).toBe(true);
+			} finally {
+				await fixture.server.close();
+			}
+		},
+		{ timeout: 20_000 },
+	);
+
+	// The refusal above must not be vacuous: the two legitimate "nothing on the
+	// volume to compare" states keep deleting (only ENOENT proves absence).
+	const emptyOrAbsentTree = [
+		{
+			label: "session tree that does not exist (ENOENT)",
+			prepare: (fixture: GuardFixture): void => {
+				rmSync(fixture.volume.sessions, { recursive: true, force: true });
+			},
+		},
+		{
+			label: "session tree that is present but empty",
+			prepare: (fixture: GuardFixture): void => {
+				rmSync(join(fixture.volume.sessions, SESSION_ID, `${SESSION_ID}.jsonl`), { force: true });
+			},
+		},
+		{
+			label: "volume root that does not exist at all",
+			prepare: (fixture: GuardFixture): void => {
+				rmSync(fixture.volume.root, { recursive: true, force: true });
+				// Genuinely absent (ENOENT): the success path is preserved.
+				expect(pathErrorCode(fixture.volume.root)).toBe("ENOENT");
+				expect(existsSync(fixture.volume.root)).toBe(false);
+			},
+		},
+	];
+
+	for (const { label, prepare } of emptyOrAbsentTree) {
+		test(
+			`an ever-started clone with a ${label} still deletes and retains its verified store`,
+			async () => {
+				const fixture = await bootStoppedClone("volume-empty-or-absent");
+				try {
+					seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+					prepare(fixture);
+
+					const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+					expect(response.status).toBe(200);
+					const body = (await response.json()) as { removed?: string; verified?: string[] };
+					expect(body.removed).toBe(fixture.daemonId);
+					expect(body.verified).toEqual([SESSION_ID]);
+					expect(fixture.server.registry.get(fixture.daemonId)).toBeUndefined();
+					expect(existsSync(fixture.volume.root)).toBe(false);
+					// The store is the retained artifact and flipped read-only.
+					expect(existsSync(storedSessionPath(fixture.logsDir, fixture.daemonId))).toBe(true);
+					expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.daemonId))).toBe(true);
+					expect(
+						providerOps(fixture.cloneRoot, fixture.daemonId).filter((op) => op.op === "delete"),
+					).toHaveLength(1);
+				} finally {
+					await fixture.server.close();
+				}
+			},
+			{ timeout: 20_000 },
+		);
+	}
+});
+
+test(
+	"with every guard satisfied a stopped clone deletes exactly once (the refusals above are not vacuous)",
+	async () => {
+		const fixture = await bootStoppedClone("guards-satisfied");
+		try {
+			seedSession(fixture.logsDir, fixture.cloneRoot, fixture.daemonId, {});
+			expect(await git(fixture.checkoutDir, ["status", "--porcelain=v1"])).toBe("");
+
+			const response = await deleteWorkspace(fixture.server.port, fixture.daemonId);
+			expect(response.status).toBe(200);
+			const body = (await response.json()) as { removed?: string; verified?: string[] };
+			expect(body.removed).toBe(fixture.daemonId);
+			expect(body.verified).toEqual([SESSION_ID]);
+			// Identity + volume destroyed exactly once; the verified store is
+			// retained read-only for Retention.
+			expect(fixture.server.registry.get(fixture.daemonId)).toBeUndefined();
+			expect(existsSync(fixture.volume.root)).toBe(false);
+			expect(existsSync(storedSessionPath(fixture.logsDir, fixture.daemonId))).toBe(true);
+			expect(existsSync(readOnlyMarker(fixture.logsDir, fixture.daemonId))).toBe(true);
+			expect(deleteCount(fixture.cloneRoot, fixture.daemonId)).toBe(1);
+			expect(
+				providerOps(fixture.cloneRoot, fixture.daemonId).filter((op) => op.op === "delete"),
+			).toHaveLength(1);
+		} finally {
+			await fixture.server.close();
+		}
+	},
+	{ timeout: 20_000 },
+);

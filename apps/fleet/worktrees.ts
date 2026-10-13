@@ -17,7 +17,9 @@
  * registration/spawn orchestration shared by the /ctl routes and the edge
  * command handlers (registerWorktreeEntry). Deleting a worktree requires a
  * local linked Git worktree of its project (verified independently) and a
- * clean `git status --porcelain` (never --force).
+ * clean `git status --porcelain` (never --force). The cleanliness probe
+ * fails CLOSED: an unreadable git state refuses the delete instead of
+ * proceeding on `git worktree remove` alone.
  */
 
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
@@ -25,6 +27,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 
 import type { ProjectBranch, ProjectEntry, RegisteredProject } from "#lib/wire/protocol";
 import { probeGitState, validateProjectPath } from "./discovery";
+import type { GitRunner } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
 
@@ -394,6 +397,8 @@ export interface WorktreeDeleteInfo {
 	linked: boolean;
 	/** True when git status shows any change (added/modified/deleted/untracked). */
 	dirty: boolean;
+	/** True when git could not be probed: the state is unproven, so deletion is refused. */
+	probeFailed?: boolean;
 	/** Per-file dirty counts (absent when git could not be probed). */
 	git?: {
 		added: number;
@@ -409,16 +414,21 @@ export interface WorktreeDeleteInfo {
 	merged?: boolean;
 	/** True when the branch has commits not in its upstream (false when no upstream). */
 	unpushed?: boolean;
-	/** Why deletion would be refused (not linked / dirty / missing path). */
+	/** Why deletion would be refused (not linked / dirty / missing path / unreadable git state). */
 	reason?: string;
 }
 
 /**
  * Guard evidence for a registered worktree: linked Git worktree identity,
  * dirty counts, and merged/unpushed branch state.
- * The configured creation root is not deletion authority.
+ * An unreadable git probe yields `probeFailed` evidence (nothing proves the
+ * worktree is clean), never a deletable verdict. The configured creation
+ * root is not deletion authority.
  */
-export async function worktreeDeleteInfo(entry: RegistryEntry): Promise<WorktreeDeleteInfo> {
+export async function worktreeDeleteInfo(
+	entry: RegistryEntry,
+	opts: { probeExec?: GitRunner } = {},
+): Promise<WorktreeDeleteInfo> {
 	const path = entry.cwd;
 	if (path === "") return { linked: false, dirty: false, reason: "entry has no worktree path" };
 	if (entry.mode === "remote" || entry.workspace?.kind !== "worktree") {
@@ -436,25 +446,28 @@ export async function worktreeDeleteInfo(entry: RegistryEntry): Promise<Worktree
 	if (mainPath === null || !(await isLinkedWorktreeOf(resolved, mainPath))) {
 		return { linked: false, dirty: false, reason: "path is not a linked Git worktree" };
 	}
-	const state = await probeGitState(resolved);
-	const counts = state?.git;
+	const state = await probeGitState(resolved, { exec: opts.probeExec });
+	if (state === undefined) {
+		// Fail closed: nothing proves the worktree clean (or dirty), so the
+		// evidence is explicitly unproven and the confirm refuses to delete.
+		return {
+			linked: true,
+			dirty: false,
+			probeFailed: true,
+			reason: "worktree git state could not be read; deleting is refused",
+		};
+	}
+	const counts = state.git;
 	const dirty =
-		counts !== undefined &&
-		(counts.added > 0 || counts.modified > 0 || counts.deleted > 0 || counts.untracked > 0);
+		counts.added > 0 || counts.modified > 0 || counts.deleted > 0 || counts.untracked > 0;
 	const info: WorktreeDeleteInfo = { linked: true, dirty };
-	if (state !== undefined) {
-		info.git = { ...state.git };
-		if (state.branch !== undefined) {
-			info.branch = state.branch;
-			const mainPath = await mainRepoOf(resolved);
-			if (mainPath !== null && realpathOf(mainPath) !== resolved) {
-				info.merged = await branchMergedInto(
-					mainPath,
-					state.branch,
-					await resolveBaseRef(mainPath),
-				);
-				info.unpushed = await branchUnpushed(resolved);
-			}
+	info.git = { ...state.git };
+	if (state.branch !== undefined) {
+		info.branch = state.branch;
+		const mainPath = await mainRepoOf(resolved);
+		if (mainPath !== null && realpathOf(mainPath) !== resolved) {
+			info.merged = await branchMergedInto(mainPath, state.branch, await resolveBaseRef(mainPath));
+			info.unpushed = await branchUnpushed(resolved);
 		}
 	}
 	if (dirty) info.reason = "worktree has uncommitted changes";
@@ -495,6 +508,16 @@ export class WorktreeDirtyError extends Error {
 	}
 }
 
+/**
+ * Deletion was refused: `git status` in the worktree could not be read, so a
+ * clean tree cannot be proven. Fails closed (no --force, no removal attempt).
+ */
+export class WorktreeProbeFailedError extends Error {
+	constructor(readonly path: string) {
+		super(`worktree cleanliness could not be verified (git state unreadable): ${path}`);
+	}
+}
+
 /** What deleteWorktree removed. */
 export interface DeleteWorktreeResult {
 	/** The removed worktree path (unchanged when the path was already gone). */
@@ -507,11 +530,16 @@ export interface DeleteWorktreeResult {
 
 /**
  * Remove a local linked Git worktree after its identity and dirty guards,
- * then optionally `git branch -d` (never -D).
+ * then optionally `git branch -d` (never -D). An unreadable git state refuses
+ * the delete (fail closed) instead of removing on identity alone.
+ *
+ * `probeExec` overrides the git runner used for the cleanliness probe ONLY
+ * (tests inject a failing one); the linked-worktree identity check and the
+ * removal itself always use real git.
  */
 export async function deleteWorktree(
 	entry: RegistryEntry,
-	opts: { deleteBranch?: boolean } = {},
+	opts: { deleteBranch?: boolean; probeExec?: GitRunner } = {},
 ): Promise<DeleteWorktreeResult> {
 	const path = entry.cwd;
 	if (path === "" || entry.mode === "remote" || entry.workspace?.kind !== "worktree") {
@@ -525,13 +553,13 @@ export async function deleteWorktree(
 	if (mainPath === null || !(await isLinkedWorktreeOf(resolved, mainPath))) {
 		throw new Error(`path is not a linked Git worktree: ${path}`);
 	}
-	const state = await probeGitState(resolved);
+	const state = await probeGitState(resolved, { exec: opts.probeExec });
+	if (state === undefined) throw new WorktreeProbeFailedError(path);
 	if (
-		state?.git !== undefined &&
-		(state.git.added > 0 ||
-			state.git.modified > 0 ||
-			state.git.deleted > 0 ||
-			state.git.untracked > 0)
+		state.git.added > 0 ||
+		state.git.modified > 0 ||
+		state.git.deleted > 0 ||
+		state.git.untracked > 0
 	) {
 		throw new WorktreeDirtyError(path);
 	}
@@ -542,7 +570,7 @@ export async function deleteWorktree(
 		);
 	}
 	const result: DeleteWorktreeResult = { path: resolved };
-	const branch = state?.branch;
+	const branch = state.branch;
 	if (branch !== undefined) {
 		result.branch = branch;
 		if (opts.deleteBranch) {
