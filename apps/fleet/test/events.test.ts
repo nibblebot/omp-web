@@ -44,4 +44,23 @@ describe("FleetEventLog", () => {
 		log.add("error", "server", "boom");
 		expect(seen).toEqual(["info:ready", "error:boom"]);
 	});
+
+	test("the default constructor caps the ring at the documented 500 entries", () => {
+		const log = new FleetEventLog();
+		for (let i = 0; i < 503; i++) log.add("info", "server", `event ${i}`);
+		const list = log.list();
+		expect(list).toHaveLength(500);
+		expect(list[0]?.message).toBe("event 3");
+		expect(list.at(-1)?.message).toBe("event 502");
+	});
+
+	test("cap 0 keeps no history while still mirroring every entry", () => {
+		const log = new FleetEventLog(0);
+		const seen: string[] = [];
+		log.onEntry = (entry) => seen.push(`${entry.level}:${entry.message}`);
+		const added = log.add("warn", "supervisor", "respawning", "d4");
+		expect(added).toMatchObject({ level: "warn", source: "supervisor", daemonId: "d4" });
+		expect(log.list()).toEqual([]);
+		expect(seen).toEqual(["warn:respawning"]);
+	});
 });

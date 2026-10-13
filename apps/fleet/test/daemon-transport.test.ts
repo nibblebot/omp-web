@@ -27,7 +27,10 @@
  * Timers: these are integration tests over real HTTP/SSE state; fake timers
  * cannot advance Bun's network stack, so the suite follows the repo's
  * poll-until-observable waitFor idiom and bounds every deadline. The slow
- * sink's delay is the deliberate stall under test.
+ * sink's delay is the deliberate stall under test. Deadline sweeps (up
+ * silence, ring idleness, bulk TTL) are driven through the registry's
+ * injectable clock + sweep cadence (clockedRegistry), never by waiting out a
+ * real 30 s / 10 min deadline.
  */
 import { describe, expect, test } from "bun:test";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -39,10 +42,12 @@ import {
 	CALLBACK_UP_PATH,
 	encodeNdjsonLine,
 	parseSseEnvelope,
+	SILENCE_DEADLINE_MS,
 	STREAM_MAX_BYTES,
 	type CallbackEnvelope,
 } from "#lib/wire/callback-protocol";
 import { DaemonTransportRegistry } from "../daemon-transport";
+import { downloadFailureKind } from "../download-policy";
 
 const sleep = (ms: number): Promise<void> => Bun.sleep(ms);
 
@@ -126,6 +131,13 @@ function payloadField(env: CallbackEnvelope, key: "id" | "type"): unknown {
 const pairReady = (env: CallbackEnvelope): boolean => payloadField(env, "type") === "pair_ready";
 const commandId = (env: CallbackEnvelope): unknown => payloadField(env, "id");
 
+/** Narrowed string field read off a parsed JSON body (unknown by contract). */
+function bodyString(body: unknown, key: string): string | undefined {
+	if (body === null || typeof body !== "object") return undefined;
+	const value = Object.entries(body).find(([name]) => name === key)?.[1];
+	return typeof value === "string" ? value : undefined;
+}
+
 /** One controlled daemon upload leg: an open NDJSON POST body. */
 interface UpLeg {
 	/** Push one daemon->fleet envelope; the registry stamps nothing (up seq is the daemon's). */
@@ -182,7 +194,9 @@ function openUp(fixture: Fixture, ws: string, gen: number, connId: string, cred:
 interface DownLeg {
 	/** Envelopes observed on the live stream, in order. */
 	seen(): CallbackEnvelope[];
-	/** Drop the downlink (daemon-side network loss / abort). */
+	/** Abort the socket (real one-sided network loss: the registry's stream
+	 * cancel fires). Cancelling the response body instead would be a no-op
+	 * while the SSE iterator holds the reader lock. */
 	drop(): void;
 	/** Resolves when the registry closes the stream body (teardown), else rejects on deadline. */
 	ended(timeoutMs?: number): Promise<void>;
@@ -196,11 +210,13 @@ async function openDown(
 	cred: string,
 	lastEventId?: number,
 ): Promise<DownLeg> {
+	const ctl = new AbortController();
 	const response = await fetch(`${fixture.url}${CALLBACK_DOWN_PATH}`, {
 		headers: {
 			...wireHeaders(ws, gen, connId, cred),
 			...(lastEventId !== undefined ? { "Last-Event-ID": String(lastEventId) } : {}),
 		},
+		signal: ctl.signal,
 	});
 	if (!response.ok || !response.body) throw new Error(`down dial -> HTTP ${response.status}`);
 	// Bun types the fetch body as ReadableStream<Uint8Array<ArrayBuffer>>;
@@ -293,6 +309,31 @@ function openSlowDown(
 			if (!fixture.registry.pairStatus(ws).paired) {
 				throw new Error(`down dial never paired (${timeoutMs}ms)`);
 			}
+		},
+	};
+}
+
+/** RING_IDLE_MS and BULK_TTL_MS are module-private 10-minute registry
+ * deadlines; the swept tests advance past them explicitly. */
+const SWEEP_TTL_MS = 10 * 60_000;
+
+/** A registry with an injected clock and a fast sweep cadence: advancing
+ * `clock` past a registry deadline and polling for the effect exercises the
+ * sweep (up silence, ring idleness, bulk expiry) with no wall-clock wait.
+ * The default Date.now + 5 s cadence are what production runs. */
+function clockedRegistry(): {
+	registry: DaemonTransportRegistry;
+	advance: (ms: number) => void;
+} {
+	let clock = Date.now();
+	const registry = new DaemonTransportRegistry({
+		now: () => clock,
+		sweepIntervalMs: 25,
+	});
+	return {
+		registry,
+		advance: (ms: number) => {
+			clock += ms;
 		},
 	};
 }
@@ -871,6 +912,215 @@ describe("daemon transport controlled pairs", () => {
 			expect(seqs.at(-1)).toBe(sentSeqs.at(-1));
 			expect(seqs.every((s) => s <= sentSeqs.at(-1)!)).toBe(true);
 			redial.drop();
+		} finally {
+			fixture.stop();
+		}
+	});
+
+	test("an up half silent past SILENCE_DEADLINE_MS is killed and the pair reports down", async () => {
+		const { registry, advance } = clockedRegistry();
+		const fixture = serve(registry);
+		const ws = "ws-silence-deadline";
+		const gen = 1;
+		const connId = randomUUID();
+		const cred = randomBytes(32).toString("hex");
+		registry.enrollWorkspace(ws, gen, cred);
+		try {
+			const up = openUp(fixture, ws, gen, connId, cred);
+			const down = await openDown(fixture, ws, gen, connId, cred);
+			await waitFor(() => down.seen().find(pairReady), 2000, "pair_ready");
+			const paired = registry.pairStatus(ws);
+			expect(paired).toMatchObject({
+				paired: true,
+				connectionId: connId,
+				envelopesReceived: 0,
+				replayDepth: 1, // the pair_ready rides the ring
+			});
+			expect(paired.lastEnvelopeAt).not.toBeNull();
+			expect(typeof paired.lastDownSendAt).toBe("number");
+
+			// One daemon envelope makes the liveness counters non-zero; the
+			// silence kill must take them back to zero (the connection is
+			// gone, not merely quiet).
+			up.push("control", "command", { type: "cmd", id: "before-silence" });
+			await waitFor(
+				() => (registry.pairStatus(ws).envelopesReceived === 1 ? true : undefined),
+				2000,
+				"up envelope counted",
+			);
+
+			// Quiet past the deadline: the sweep kills the upload half AND
+			// reports the pair down. A dead daemon must not keep a live-looking
+			// down half (the roster would stay "ready" and commands would be
+			// accepted into a zombie socket).
+			advance(SILENCE_DEADLINE_MS + 1);
+			await waitFor(
+				() => (registry.pairStatus(ws).paired ? undefined : true),
+				2000,
+				"paired:false after silence",
+			);
+			await waitFor(
+				() => (registry.pairStatus(ws).envelopesReceived === 0 ? true : undefined),
+				2000,
+				"killed up half removed",
+			);
+			const killed = registry.pairStatus(ws);
+			expect(killed.connectionId).toBeNull();
+			expect(killed.lastEnvelopeAt).toBeNull();
+			expect(killed.lastDownSendAt).toBeNull();
+			// The down half was closed on the wire, not left hanging.
+			await down.ended(2000);
+			// The killed upload settles typed, naming the silence deadline.
+			const ended = await up.end();
+			expect(ended.status).toBe(503);
+			expect(ended.body).toMatchObject({ error: "unavailable" });
+			expect(bodyString(ended.body, "message")).toContain("silence deadline");
+			// No live pair: sends fail `unavailable`, never queued offline.
+			await expectUnavailable(
+				registry.sendToDaemon(ws, { streamId: "control", kind: "command", payload: {} }),
+			);
+			// Up silence is not ring idleness: the ring survives for a redial.
+			expect(killed.replayDepth).toBe(1);
+
+			// A silent up half whose down half is ALREADY gone (one-sided
+			// loss, then quiet) must be killed the same way: the sweep tears
+			// nothing down and must not throw on the missing down half.
+			const upOnly = openUp(fixture, ws, gen, connId, cred);
+			upOnly.push("control", "command", { type: "cmd", id: "up-only" });
+			await waitFor(
+				() => (registry.pairStatus(ws).envelopesReceived === 1 ? true : undefined),
+				2000,
+				"up-only envelope counted",
+			);
+			advance(SILENCE_DEADLINE_MS + 1);
+			await waitFor(
+				() => (registry.pairStatus(ws).envelopesReceived === 0 ? true : undefined),
+				2000,
+				"up-only half killed",
+			);
+			const upOnlyEnded = await upOnly.end();
+			expect(upOnlyEnded.status).toBe(503);
+			expect(bodyString(upOnlyEnded.body, "message")).toContain("silence deadline");
+			expect(registry.pairStatus(ws).paired).toBe(false);
+
+			// Same shape at shutdown: close() kills a live up half that never
+			// had a down half without touching a missing one. The half must be
+			// REGISTERED before close() (which clears enrollments).
+			const orphan = openUp(fixture, ws, gen, randomUUID(), cred);
+			orphan.push("control", "command", { type: "cmd", id: "orphan" });
+			await waitFor(
+				() => (registry.pairStatus(ws).envelopesReceived === 1 ? true : undefined),
+				2000,
+				"orphan envelope counted",
+			);
+			registry.close();
+			const orphanEnded = await orphan.end();
+			expect(orphanEnded.status).toBe(503);
+			expect(orphanEnded.body).toMatchObject({ error: "unavailable" });
+		} finally {
+			fixture.stop();
+		}
+	});
+
+	test("an open bulk correlation past BULK_TTL_MS settles failed as expired, the retryable reason", async () => {
+		const { registry, advance } = clockedRegistry();
+		const ws = "ws-bulk-ttl";
+		const cred = randomBytes(32).toString("hex");
+		registry.enrollWorkspace(ws, 1, cred);
+		try {
+			// No upload ever starts: the sweep owns the open correlation's
+			// deadline. `done` never rejects; the settle IS the observable.
+			const expired = registry.createBulkCorrelation(ws, { capture: true });
+			advance(SWEEP_TTL_MS + 1); // past BULK_TTL_MS
+			const result = await expired.done;
+			expect(result.state).toBe("failed");
+			expect(result.error).toBe("bulk correlation expired");
+			expect(result.bytes).toBe(0);
+			expect(result.data).toBeUndefined();
+			// The frozen reason is consumer-visible: download-policy maps an
+			// expired correlation to a retryable browser failure.
+			expect(downloadFailureKind(502, result.error).code).toBe("retryable");
+		} finally {
+			registry.close();
+		}
+	});
+
+	test("an idle replay ring is evicted; a later resume for it is refused rather than silently restarted", async () => {
+		const { registry, advance } = clockedRegistry();
+		const fixture = serve(registry);
+		const ws = "ws-ring-idle";
+		const gen = 1;
+		const connId = randomUUID();
+		const cred = randomBytes(32).toString("hex");
+		registry.enrollWorkspace(ws, gen, cred);
+		try {
+			const up = openUp(fixture, ws, gen, connId, cred);
+			const down = await openDown(fixture, ws, gen, connId, cred);
+			await waitFor(() => down.seen().find(pairReady), 2000, "pair_ready");
+			const cmd = await registry.sendToDaemon(ws, {
+				streamId: "control",
+				kind: "command",
+				payload: { type: "do", id: "pre-evict" },
+			});
+			await waitFor(() => down.seen().find((e) => e.seq === cmd.seq), 2000, "command delivery");
+			expect(registry.pairStatus(ws).replayDepth).toBe(2); // pair_ready + cmd
+
+			// The daemon wedges (up silence): the sweep kills the pair and
+			// closes the down half, and the ring SURVIVES for a resume — only
+			// real idleness evicts it.
+			advance(SILENCE_DEADLINE_MS + 1);
+			await waitFor(
+				() => (registry.pairStatus(ws).paired ? undefined : true),
+				2000,
+				"paired:false after silence",
+			);
+			await waitFor(
+				() => (registry.pairStatus(ws).envelopesReceived === 0 ? true : undefined),
+				2000,
+				"killed up half removed",
+			);
+			expect(registry.pairStatus(ws).lastDownSendAt).toBeNull();
+			await down.ended(2000);
+			expect((await up.end()).status).toBe(503);
+			expect(registry.pairStatus(ws).replayDepth).toBe(2);
+
+			// RING_IDLE_MS with no live down half and no activity: evicted.
+			advance(SWEEP_TTL_MS + 1);
+			await waitFor(
+				() => (registry.pairStatus(ws).replayDepth === 0 ? true : undefined),
+				2000,
+				"ring eviction",
+			);
+
+			// A resume into the evicted ring is REFUSED, not silently answered
+			// with a restarted seq space: the consumer's ack point is gone, and
+			// fresh traffic below it would be deduped away unseen.
+			const resumed = await fetch(`${fixture.url}${CALLBACK_DOWN_PATH}`, {
+				headers: { ...wireHeaders(ws, gen, connId, cred), "Last-Event-ID": String(cmd.seq) },
+			});
+			expect(resumed.status).toBe(400);
+			const resumedBody: unknown = await resumed.json();
+			expect(resumedBody).toMatchObject({ error: "invalid_request" });
+			expect(bodyString(resumedBody, "message")).toContain("Last-Event-ID");
+
+			// A blind redial (the daemon's own dial) works: fresh ring, the
+			// pre-eviction envelopes are NOT replayed, and the seq space
+			// restarts at 1 — exactly why the stale resume above must fail.
+			const up2 = openUp(fixture, ws, gen, connId, cred);
+			const down2 = await openDown(fixture, ws, gen, connId, cred);
+			await waitFor(() => down2.seen().find(pairReady), 2000, "fresh pair_ready");
+			expect(down2.seen().some((e) => commandId(e) === "pre-evict")).toBe(false);
+			const fresh = down2.seen().find(pairReady);
+			expect(fresh?.seq).toBe(1);
+			expect(registry.pairStatus(ws).replayDepth).toBe(1);
+			up2.push("control", "command", { type: "cmd", id: "post-evict" });
+			await waitFor(
+				() => (registry.pairStatus(ws).envelopesReceived === 1 ? true : undefined),
+				2000,
+				"fresh up counted",
+			);
+			down2.drop();
+			expect((await up2.end()).status).toBe(200);
 		} finally {
 			fixture.stop();
 		}
