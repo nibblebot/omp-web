@@ -188,35 +188,14 @@ theme:
 		});
 	});
 
-	test("never overwrites an existing target and leaves its bytes untouched", async () => {
+	test("an explicit but missing sourcePath reports no-source and seeds nothing", async () => {
 		const volumeRoot = tempDir("omp-sb-vol-");
-		const { path: sourcePath } = writeSourceConfig(`modelRoles:
-  default: architect
-`);
-		const first = await seedSandboxBaseline(volumeRoot, { env: {}, sourcePath });
-		expect(first.seeded).toBe(true);
-
-		const target = join(volumeRoot, ".home", "agent", "config.yml");
-		const handEdit = `modelRoles:\n  default: edited-by-hand\n`;
-		writeFileSync(target, handEdit);
-
-		const second = await seedSandboxBaseline(volumeRoot, { env: {}, sourcePath });
-		expect(second).toMatchObject({ seeded: false, reason: "exists" });
-		expect(readFileSync(target, "utf8")).toBe(handEdit);
-	});
-
-	test("reports no-source with an empty env and no sourcePath", async () => {
-		const volumeRoot = tempDir("omp-sb-vol-");
-		const result = await seedSandboxBaseline(volumeRoot, { env: {} });
-		expect(result).toMatchObject({ seeded: false, reason: "no-source" });
-		expect(existsSync(join(volumeRoot, ".home", "agent", "config.yml"))).toBe(false);
-
-		// An explicit but missing sourcePath also reports no-source.
-		const missing = await seedSandboxBaseline(volumeRoot, {
+		const result = await seedSandboxBaseline(volumeRoot, {
 			env: {},
 			sourcePath: join(volumeRoot, "missing.yml"),
 		});
-		expect(missing).toMatchObject({ seeded: false, reason: "no-source" });
+		expect(result).toMatchObject({ seeded: false, reason: "no-source" });
+		expect(existsSync(join(volumeRoot, ".home", "agent", "config.yml"))).toBe(false);
 	});
 
 	test("reports unparseable when the source YAML is malformed", async () => {

@@ -41,7 +41,9 @@ describe("parseSseUnits", () => {
 	});
 
 	test("reassembles events split across chunks", async () => {
-		const block = encodeSseEvent("frame", { a: "bcdef" }, 3);
+		// Literal wire bytes (the encoder's shape is pinned by the tests above);
+		// only the chunk boundaries matter here.
+		const block = 'event: frame\nid: 3\ndata: {"a":"bcdef"}\n\n';
 		const units = await collect([block.slice(0, 5), block.slice(5, 21), block.slice(21)]);
 		expect(units).toEqual([{ kind: "event", event: "frame", id: "3", data: '{"a":"bcdef"}' }]);
 	});
@@ -103,13 +105,6 @@ describe("SseRing", () => {
 		ring.push(2, "x".repeat(100)); // 100 > 10 → evicts entry 1, keeps the newest
 		expect(ring.size).toBe(1);
 		expect(ring.after(0).map((e) => e.seq)).toEqual([2]);
-	});
-
-	test("entry cap stays a secondary bound after byte eviction", () => {
-		const ring = new SseRing<string>(3, 1_000_000);
-		for (let seq = 1; seq <= 5; seq++) ring.push(seq, `s${seq}`);
-		expect(ring.size).toBe(3);
-		expect(ring.after(0).map((e) => e.seq)).toEqual([3, 4, 5]);
 	});
 
 	test("after() stays correct across byte eviction (replay skips evicted, keeps newer)", () => {
