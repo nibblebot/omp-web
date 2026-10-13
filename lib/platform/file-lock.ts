@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 import path from "node:path";
 
@@ -14,6 +15,9 @@ import path from "node:path";
 // of the create sees EEXIST again and re-checks liveness. Both get a lock in
 // the end, but the file may flip between them; callers must tolerate that the
 // lock is only advisory against live holders, which is all this guarantees.
+// Each acquire writes a random owner token, and release() only unlinks a file
+// still carrying its own token, so a broken-then-re-acquired lock survives the
+// original holder's late release.
 // ---------------------------------------------------------------------------
 
 export class LockHeldError extends Error {
@@ -32,7 +36,11 @@ export class LockHeldError extends Error {
 
 export interface FileLock {
 	readonly path: string;
-	/** Unlink the lock file (idempotent; ignores unlink errors). */
+	/**
+	 * Unlink the lock file (idempotent; ignores unlink errors). Only the file
+	 * this instance created is removed: once it was broken as stale and
+	 * re-acquired, release is a no-op for the old holder.
+	 */
 	release(): void;
 }
 
@@ -42,6 +50,8 @@ interface LockFileContents {
 	pid: number;
 	name: string;
 	startedAt: number;
+	/** Random per-acquire owner token; release only unlinks its own file. */
+	token: string;
 }
 
 /**
@@ -51,7 +61,13 @@ interface LockFileContents {
  */
 export function acquireFileLock(lockPath: string, holder: string): FileLock {
 	mkdirSync(path.dirname(lockPath), { recursive: true });
-	const contents: LockFileContents = { pid: process.pid, name: holder, startedAt: Date.now() };
+	const token = randomUUID();
+	const contents: LockFileContents = {
+		pid: process.pid,
+		name: holder,
+		startedAt: Date.now(),
+		token,
+	};
 	const payload = `${JSON.stringify(contents)}\n`;
 	let lastHeld: LockHeldError | null = null;
 
@@ -113,10 +129,19 @@ export function acquireFileLock(lockPath: string, holder: string): FileLock {
 		return {
 			path: lockPath,
 			release(): void {
+				// Never unlink a file we no longer own: another process may have
+				// broken ours as stale and put its own lock in its place.
+				let owner: Partial<LockFileContents>;
+				try {
+					owner = JSON.parse(readFileSync(lockPath, "utf8")) as Partial<LockFileContents>;
+				} catch {
+					return; // Gone or unreadable: nothing of ours is left to remove.
+				}
+				if (owner.token !== token) return;
 				try {
 					unlinkSync(lockPath);
 				} catch {
-					// Already gone (or replaced by a stale-break): fine.
+					// Already gone (raced another unlink): fine.
 				}
 			},
 		};
