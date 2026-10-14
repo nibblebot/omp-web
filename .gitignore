@@ -6,3 +6,4 @@ dist-bundle/
 omp-session-*.html
 apps/fleet/test/.fixture/
 dist-release/
+.kata.local.toml
