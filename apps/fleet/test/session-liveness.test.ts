@@ -82,7 +82,7 @@ describe("sessionLiveness", () => {
 	});
 
 	test("garbage and missing numeric pid session locks prove dead without changing them", () => {
-		for (const contents of ["not-json", "null", '{}', '{"pid":"123","name":"bad-pid"}']) {
+		for (const contents of ["not-json", "null", "{}", '{"pid":"123","name":"bad-pid"}']) {
 			const lastSessionFile = sessionFile();
 			writeFileSync(`${lastSessionFile}.lock`, contents);
 			expect(sessionLiveness(entry({ lastSessionFile, pid: process.pid }))).toBe("dead");
@@ -168,7 +168,7 @@ describe("inspectFileLock", () => {
 	});
 
 	test("garbage and locks without a numeric pid are stale and remain unchanged", () => {
-		for (const contents of ["not-json", "null", '{}', '{"pid":"123","name":"bad-pid"}']) {
+		for (const contents of ["not-json", "null", "{}", '{"pid":"123","name":"bad-pid"}']) {
 			const path = `${sessionFile()}.lock`;
 			writeFileSync(path, contents);
 			expect(inspectFileLock(path).state).toBe("stale");

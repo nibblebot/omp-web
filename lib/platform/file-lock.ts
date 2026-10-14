@@ -78,7 +78,9 @@ export function inspectFileLock(lockPath: string): LockState {
 	try {
 		contents = readFileSync(lockPath, "utf8");
 	} catch (err) {
-		return (err as NodeJS.ErrnoException).code === "ENOENT" ? { state: "free" } : { state: "unknown" };
+		return (err as NodeJS.ErrnoException).code === "ENOENT"
+			? { state: "free" }
+			: { state: "unknown" };
 	}
 	let parsed: Partial<LockFileContents> | null;
 	try {
