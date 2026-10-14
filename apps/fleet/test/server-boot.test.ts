@@ -1,18 +1,18 @@
 /**
  * Boot reconciliation tests for fleet/server.ts ("boot reconciliation (#3)"
- * describe): a fleet booted against a seeded registry downgrades stale
- * non-terminal spawned entries to 'asleep'. An enrolled remote entry persisted
- * 'ready' drops to 'reconnecting' (its daemon redials with the persisted
- * enrollment) and becomes 'asleep' once the redial grace elapses. An
- * unenrolled remote entry has nothing to redial with, so it goes straight to
- * 'asleep'. Intentional stops and terminal errors stay untouched.
+ * describe): dead local sessions become 'asleep' immediately. Enrolled local
+ * sessions with live locks and enrolled remote sessions get 'reconnecting'
+ * until redial grace expires. Unenrolled entries go straight to 'asleep'.
+ * Intentional stops and terminal errors stay untouched.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { Registry } from "../registry";
-import { startFleet, type FleetServer } from "../server";
+import { startFleet } from "../server";
+import type { FleetServer } from "../server";
 import {
 	FAKE_CWD,
 	cleanupTempDirs,
@@ -44,6 +44,28 @@ describe("boot reconciliation (#3)", () => {
 	beforeAll(async () => {
 		({ tmp, statePath, configPath } = fleetPaths());
 		writeFileSync(configPath, JSON.stringify({}));
+		const child = Bun.spawn([process.execPath, "-e", "process.exit(0)"], {
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		expect(await child.exited).toBe(0);
+		const deadPid = child.pid;
+		try {
+			process.kill(deadPid, 0);
+			throw new Error("exited child pid is unexpectedly alive");
+		} catch (err) {
+			expect(err).toHaveProperty("code", "ESRCH");
+		}
+		const liveSessionFile = join(tmp, "live-session.jsonl");
+		const staleSessionFile = join(tmp, "stale-session.jsonl");
+		writeFileSync(
+			`${liveSessionFile}.lock`,
+			JSON.stringify({ pid: process.pid, name: "live-session", startedAt: Date.now() }),
+		);
+		writeFileSync(
+			`${staleSessionFile}.lock`,
+			JSON.stringify({ pid: deadPid, name: "dead-session", startedAt: 0 }),
+		);
 		// Seed the registry exactly as a previous fleet process would have
 		// left it: stale non-terminal statuses (children/sockets died with
 		// that process), an enrolled and an unenrolled remote 'ready' entry,
@@ -59,7 +81,7 @@ describe("boot reconciliation (#3)", () => {
 			template: "test",
 			status: "ready",
 			readyAt: Date.now() - 60_000,
-			pid: 12345,
+			pid: deadPid,
 		});
 		registry.create({
 			name: "stuck-spawning",
@@ -92,6 +114,31 @@ describe("boot reconciliation (#3)", () => {
 			credentialHash: createHash("sha256").update(BOOT_CREDENTIAL).digest("hex"),
 			generation: 1,
 		});
+		for (const fixture of [
+			{ name: "enrolled-live-local", lastSessionFile: liveSessionFile, pid: process.pid },
+			{
+				name: "enrolled-missing-local",
+				lastSessionFile: join(tmp, "missing-session.jsonl"),
+				pid: process.pid,
+			},
+			{ name: "enrolled-stale-local", lastSessionFile: staleSessionFile, pid: process.pid },
+			{ name: "enrolled-dead-pid", pid: deadPid },
+		]) {
+			const local = registry.create({
+				...fixture,
+				cwd: tmp,
+				project: "fake-proj",
+				labels: [],
+				mode: "spawned",
+				template: "test",
+				status: "ready",
+				readyAt: Date.now() - 120_000,
+			});
+			registry.setWorkspaceEnrollment(local.daemonId, {
+				credentialHash: createHash("sha256").update(BOOT_CREDENTIAL).digest("hex"),
+				generation: 1,
+			});
+		}
 		registry.create({
 			name: "unenrolled-ready",
 			cwd: "",
@@ -147,18 +194,56 @@ describe("boot reconciliation (#3)", () => {
 		expect(entry.readyAt).toBeUndefined();
 	});
 
+	test("an enrolled local entry with a live session lock is reconnecting at boot", () => {
+		const entry = server.registry.list().find((e) => e.name === "enrolled-live-local")!;
+		expect(entry.status).toBe("reconnecting");
+		expect(entry.readyAt).toBeUndefined();
+		expect(entry.pid).toBeUndefined();
+	});
+
+	test("an enrolled local entry with a missing session lock goes straight to asleep at boot", () => {
+		const entry = server.registry.list().find((e) => e.name === "enrolled-missing-local")!;
+		expect(entry.status).toBe("asleep");
+		expect(entry.readyAt).toBeUndefined();
+		expect(entry.pid).toBeUndefined();
+	});
+
+	test("an enrolled local entry with a stale dead-pid session lock goes straight to asleep at boot", () => {
+		const entry = server.registry.list().find((e) => e.name === "enrolled-stale-local")!;
+		expect(entry.status).toBe("asleep");
+		expect(entry.readyAt).toBeUndefined();
+		expect(entry.pid).toBeUndefined();
+	});
+
+	test("an enrolled local entry with a dead recorded pid and no session file goes straight to asleep at boot", () => {
+		const entry = server.registry.list().find((e) => e.name === "enrolled-dead-pid")!;
+		expect(entry.status).toBe("asleep");
+		expect(entry.readyAt).toBeUndefined();
+		expect(entry.pid).toBeUndefined();
+	});
+
 	test("an unenrolled remote entry persisted 'ready' goes straight to asleep at boot", () => {
 		const entry = server.registry.list().find((e) => e.name === "unenrolled-ready")!;
 		expect(entry.status).toBe("asleep");
 		expect(entry.readyAt).toBeUndefined();
 	});
 
-	test("an enrolled entry still 'reconnecting' after the redial grace becomes asleep", async () => {
-		const entry = server.registry.list().find((e) => e.name === "enrolled-ready")!;
+	test("an enrolled local entry with a live session lock becomes asleep after the redial grace", async () => {
+		const entry = server.registry.list().find((e) => e.name === "enrolled-live-local")!;
 		await waitFor(
 			() => server.registry.get(entry.daemonId)?.status === "asleep",
 			TEST_REDIAL_GRACE_MS + 2_000,
 			"redial grace expiry",
+		);
+		expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
+	}, 10_000);
+
+	test("an enrolled remote entry becomes asleep after the redial grace", async () => {
+		const entry = server.registry.list().find((e) => e.name === "enrolled-ready")!;
+		await waitFor(
+			() => server.registry.get(entry.daemonId)?.status === "asleep",
+			TEST_REDIAL_GRACE_MS + 2_000,
+			"remote redial grace expiry",
 		);
 		expect(server.registry.get(entry.daemonId)?.status).toBe("asleep");
 	}, 10_000);

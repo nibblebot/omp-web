@@ -54,6 +54,48 @@ interface LockFileContents {
 	token: string;
 }
 
+export type LockState =
+	| { state: "free" }
+	| { state: "held"; holderPid: number; holderName: string }
+	| { state: "stale"; holderPid?: number; holderName?: string }
+	| { state: "unknown" };
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		if (code === "ESRCH") return false;
+		if (code === "EPERM") return true;
+		throw err;
+	}
+}
+
+/** Inspect a pidfile without creating, modifying, or removing it. */
+export function inspectFileLock(lockPath: string): LockState {
+	let contents: string;
+	try {
+		contents = readFileSync(lockPath, "utf8");
+	} catch (err) {
+		return (err as NodeJS.ErrnoException).code === "ENOENT" ? { state: "free" } : { state: "unknown" };
+	}
+	let parsed: Partial<LockFileContents> | null;
+	try {
+		parsed = JSON.parse(contents) as Partial<LockFileContents> | null;
+	} catch {
+		return { state: "stale" };
+	}
+	const holderName = typeof parsed?.name === "string" ? parsed.name : "unknown";
+	if (typeof parsed?.pid !== "number") return { state: "stale", holderName };
+	const holderPid = parsed.pid;
+	return {
+		state: isProcessAlive(holderPid) ? "held" : "stale",
+		holderPid,
+		holderName,
+	};
+}
+
 /**
  * Try to take the lock at `lockPath`, throwing {@link LockHeldError} when a
  * live holder owns it. Stale files (unreadable, garbage, or a pid that is no
@@ -78,33 +120,14 @@ export function acquireFileLock(lockPath: string, holder: string): FileLock {
 		} catch (err) {
 			const code = (err as NodeJS.ErrnoException).code;
 			if (code !== "EEXIST") throw err;
-			// Someone holds (or left) the lock: stale if we cannot read a live
-			// pid out of it, dead if the pid no longer exists, alive otherwise.
-			let holderPid = -1;
-			let holderName = "unknown";
-			try {
-				const parsed = JSON.parse(readFileSync(lockPath, "utf8")) as Partial<LockFileContents>;
-				if (typeof parsed.pid === "number") holderPid = parsed.pid;
-				if (typeof parsed.name === "string") holderName = parsed.name;
-			} catch {
-				// Unreadable/garbage contents: crash leftovers, treat as stale.
+			// The read-only probe shares holder liveness with acquisition.
+			// Unreadable files remain crash leftovers for acquisition.
+			const state = inspectFileLock(lockPath);
+			if (state.state === "held") {
+				throw new LockHeldError(lockPath, state.holderPid, state.holderName);
 			}
-			if (holderPid >= 0) {
-				let alive = true;
-				try {
-					process.kill(holderPid, 0);
-				} catch (killErr) {
-					const killCode = (killErr as NodeJS.ErrnoException).code;
-					if (killCode === "ESRCH") {
-						alive = false; // No such process: the holder is dead.
-					} else if (killCode === "EPERM") {
-						alive = true; // Exists but not ours; still a live holder.
-					} else {
-						throw killErr;
-					}
-				}
-				if (alive) throw new LockHeldError(lockPath, holderPid, holderName);
-				lastHeld = new LockHeldError(lockPath, holderPid, holderName);
+			if (state.state === "stale" && state.holderPid !== undefined) {
+				lastHeld = new LockHeldError(lockPath, state.holderPid, state.holderName ?? "unknown");
 			}
 			// Stale: break it and retry the atomic create.
 			try {

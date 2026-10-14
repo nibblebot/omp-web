@@ -69,6 +69,7 @@ import { isLoopbackHost } from "#lib/platform/hosts";
 import { acquireFileLock, type FileLock } from "#lib/platform/file-lock";
 import type { DeletionGateError, RegistryEntry } from "./registry";
 import { REDIAL_GRACE_MS, Registry } from "./registry";
+import { sessionLiveness } from "./session-liveness";
 import { validateProjectPath } from "./discovery";
 import { matchSelector } from "./selectors";
 import {
@@ -988,12 +989,12 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * Reconcile statuses persisted by a previous fleet process. Sessions outlive
-	 * the control plane and redial it with their enrollment, so an enrolled
-	 * non-clone entry is "reconnecting" until its pair returns (or "asleep" after
-	 * the redial grace). An unenrolled entry has no credential to redial with and
-	 * becomes "asleep". Stale liveness facts (readyAt, pid) are cleared on every
-	 * downgrade. Clone entries are reconciled by the workspace lifecycle.
+	 * Reconcile statuses persisted by a previous fleet process. A local spawned
+	 * session proven dead by its live file lock or recorded pid becomes "asleep"
+	 * immediately, as does an unenrolled entry. Other enrolled non-clone entries
+	 * stay "reconnecting" until their pair returns or the redial grace expires.
+	 * Remote entries are never probed. Inspect liveness before clearing stale
+	 * readyAt and pid facts. Clones are reconciled by the workspace lifecycle.
 	 */
 	#reconcileBootStatuses(): void {
 		for (const entry of this.registry.list()) {
@@ -1001,16 +1002,25 @@ class FleetServerImpl implements FleetServer {
 			const enrolled = entry.workspace?.enrollment !== undefined;
 			if (enrolled) this.#watchPair(entry.daemonId);
 			if (entry.status === "asleep" || entry.status === "error") continue;
-			const target: DaemonStatus = enrolled ? "reconnecting" : "asleep";
+			const verdict = sessionLiveness(entry);
+			const previousStatus = entry.status;
+			const target: DaemonStatus = !enrolled || verdict === "dead" ? "asleep" : "reconnecting";
+			const reason = !enrolled
+				? "not enrolled"
+				: verdict === "dead"
+					? "local session dead"
+					: verdict === "alive"
+						? "local session alive"
+						: "liveness unknown";
 			this.registry.update(entry.daemonId, { readyAt: undefined, pid: undefined });
 			this.registry.setStatus(entry.daemonId, target);
 			this.eventLog.add(
 				"info",
 				"server",
-				`boot reconcile: ${entry.status} → ${target}`,
+				`boot reconcile: ${previousStatus} → ${target} (${reason})`,
 				entry.daemonId,
 			);
-			if (enrolled) this.#armRedialGrace(entry.daemonId);
+			if (target === "reconnecting") this.#armRedialGrace(entry.daemonId);
 		}
 	}
 
