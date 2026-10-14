@@ -417,3 +417,20 @@ export const PaperclipIcon: Component<IconProps> = (props) => (
 		<path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551" />
 	</Svg>
 );
+
+/** Official omp mark, vendored from https://omp.sh/favicon.svg. A brand logo,
+ *  so unlike the Lucide set it keeps its own fill colors instead of
+ *  currentColor. */
+export const OmpLogoIcon: Component<IconProps> = (props) => (
+	<svg class={props.class ? `icon ${props.class}` : "icon"} viewBox="0 0 64 64" aria-hidden="true">
+		<defs>
+			<linearGradient id="omp-logo-gradient" x1="0" y1="0" x2="1" y2="1">
+				<stop offset="0" stop-color="#ed4abf" />
+				<stop offset=".5" stop-color="#9b4dff" />
+				<stop offset="1" stop-color="#5ad8e6" />
+			</linearGradient>
+		</defs>
+		<rect width="64" height="64" rx="12" fill="#0f0a14" />
+		<path fill="url(#omp-logo-gradient)" d="M14 16h36v8H40v32h-8V24h-6v22h-8V24h-4z" />
+	</svg>
+);

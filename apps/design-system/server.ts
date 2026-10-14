@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isInteractiveDesktop, openBrowser } from "#lib/platform/open-browser";
+import { buildInfoDefines } from "../web/build/build-info";
 import { handleFixtureRoute } from "./fixtures/routes";
 import { solidPlugin } from "./solid-plugin";
 import { virtualModulesPlugin } from "./virtual-modules";
@@ -40,8 +41,13 @@ async function build(): Promise<Bundle> {
 		target: "browser",
 		conditions: ["browser", "solid"],
 		plugins: [solidPlugin, virtualModulesPlugin()],
-		// state.ts guards its dev-only `window.__ompState` handle on this.
-		define: { "import.meta.env.DEV": "true", "import.meta.env.BASE_URL": JSON.stringify("/") },
+		// state.ts guards its dev-only `window.__ompState` handle on this; the
+		// build-info stamp feeds the sidebar footer's version lines.
+		define: {
+			"import.meta.env.DEV": "true",
+			"import.meta.env.BASE_URL": JSON.stringify("/"),
+			...buildInfoDefines(join(root, "..", "..")),
+		},
 		sourcemap: "inline",
 		minify: false,
 	});

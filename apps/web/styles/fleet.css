@@ -164,10 +164,32 @@
 .sidebar-foot {
 	flex: none;
 	display: flex;
-	align-items: center;
+	flex-direction: column;
 	gap: var(--space-2);
 	padding: var(--space-3);
 	border-top: 1px solid var(--border);
+}
+.sidebar-foot-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+/* Build identity lines under the footer buttons (SidebarFooter.tsx):
+   omp-web version + git hash, then the upstream omp version. */
+.sidebar-build-line {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+}
+.sidebar-build-name {
+	color: var(--muted);
+}
+.sidebar-build-logo {
+	width: 14px;
+	height: 14px;
+	border-radius: 3px;
 }
 .sidebar-foot .sidebar-icon-btn.active {
 	background: var(--btn);

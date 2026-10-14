@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import solidPlugin from "vite-plugin-solid";
+import { buildInfoDefines } from "./build/build-info.ts";
 import { featureSizes } from "./build/feature-sizes.ts";
 
 // Web root: this config lives at apps/web/vite.config.ts. Root is set
@@ -33,6 +34,8 @@ const allowedHosts =
 export default defineConfig({
 	root: webRoot,
 	plugins: [solidPlugin(), featureSizes()],
+	// Sidebar footer build identity (omp-web version, git hash, omp version).
+	define: buildInfoDefines(join(webRoot, "..", "..")),
 	server: {
 		port: 4713,
 		allowedHosts,

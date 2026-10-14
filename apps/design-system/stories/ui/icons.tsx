@@ -21,6 +21,7 @@ import {
 	LoaderIcon,
 	MenuIcon,
 	MinusIcon,
+	OmpLogoIcon,
 	PanelLeftIcon,
 	PlusIcon,
 	RefreshIcon,
@@ -101,6 +102,7 @@ const ICONS: Record<string, Component<IconProps>> = {
 	WarningIcon,
 	GripVerticalIcon,
 	PaperclipIcon,
+	OmpLogoIcon,
 };
 
 const ICON_FILE = "apps/web/components/ui/icons.tsx";
