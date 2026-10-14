@@ -17,8 +17,10 @@ import { wrapTerminalHooks } from "./browser-ui";
 // ExtensionUIContext (plan §1.7): the dialog subset round-trips over the
 // socket as ui_request/ui_response frames; declarative presentation hooks are adapted.
 // Pending requests live on the owning SessionEntry, target only that
-// session's attached streams, and are rejected when every targeted stream has
-// closed and on session close / server shutdown.
+// session's attached streams (production browsers ride the callback pair, so
+// the target set may be empty), and are rejected when every targeted stream
+// has closed with no callback-pair browser attached, and on session close /
+// server shutdown.
 // ---------------------------------------------------------------------------
 
 let nextUiRequestId = 1;
@@ -46,12 +48,28 @@ function uiRequest(entry: SessionEntry, method: string, params: unknown): Promis
 	return webUiRequest(entry, method, params);
 }
 
-/** The pre-existing web dialog path (one pending request per entry). */
+let callbackBrowserStreamCount: (() => number) | null = null;
+
+/**
+ * Wire (or clear) the callback-pair browser-stream count provider (index.ts
+ * owns the callback pair). Production browsers ride the pair as virtual
+ * streams, invisible to this process's /events consumers, so the local
+ * `streams` set stays empty and browser presence must be asked of the pair.
+ */
+export function setCallbackBrowserStreamCount(fn: (() => number) | null): void {
+	callbackBrowserStreamCount = fn;
+}
+
+/**
+ * True when a browser can answer a dialog for this session: a local /events
+ * consumer attached to the entry, or a live callback-pair browser stream.
+ * The pre-existing web dialog path; one pending request per entry.
+ */
 export function hasBrowserUiClient(entry: SessionEntry): boolean {
 	for (const stream of streams) {
 		if (stream.attached === entry.handle) return true;
 	}
-	return false;
+	return (callbackBrowserStreamCount?.() ?? 0) > 0;
 }
 
 export function webUiRequest(
@@ -64,7 +82,9 @@ export function webUiRequest(
 	for (const stream of streams) {
 		if (stream.attached === entry.handle) targets.add(stream);
 	}
-	if (targets.size === 0)
+	// A callback-only request registers with an empty target set on purpose:
+	// the frame still rides the broadcast mirror to the pair's browsers.
+	if (!hasBrowserUiClient(entry))
 		return Promise.reject(new Error("No connected client to answer the UI request"));
 	const id = `ui${nextUiRequestId++}`;
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
@@ -270,7 +290,8 @@ export function rejectStreamUiRequests(
 ): void {
 	for (const [id, p] of entry.pendingUiRequests) {
 		p.streams.delete(stream);
-		if (p.streams.size === 0) {
+		// A pending request survives while a callback-pair browser is attached.
+		if (p.streams.size === 0 && !hasBrowserUiClient(entry)) {
 			p.reject(new Error(reason));
 			entry.pendingUiRequests.delete(id);
 			broadcastTo(entry.handle, { type: "ui_request_end", id });

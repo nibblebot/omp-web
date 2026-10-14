@@ -50,7 +50,10 @@ function typeOf(payload: unknown): string | undefined {
  * browser-stream frame (invoking onEmittedSeq like the real transport), and
  * records every send. Each prime records one entry in `primes`; its snapshot
  * is `snapshot()` (no frames by default). */
-function makeHarness(snapshot: () => Record<string, unknown>[] = () => []): {
+function makeHarness(
+	snapshot: () => Record<string, unknown>[] = () => [],
+	pairLive: () => boolean = () => true,
+): {
 	control: DaemonControl;
 	sent: Sent[];
 	primes: string[];
@@ -98,7 +101,7 @@ function makeHarness(snapshot: () => Record<string, unknown>[] = () => []): {
 		},
 		bufferedBytes: () => ({ stream: 0, connection: 0 }),
 		send,
-		pairLive: () => true,
+		pairLive,
 		mainSessionFile: null,
 		onShutdown: () => {},
 	};
@@ -316,6 +319,22 @@ describe("daemon-control browser-stream priming", () => {
 			[STREAM, "history"],
 			[STREAM, "history"],
 		]);
+		control.stop();
+	});
+
+	test("browser presence requires a live pair: a dropped pair reports none", () => {
+		let live = true;
+		const { control } = makeHarness(undefined, () => live);
+		openStream(control);
+		expect(control.browserStreamCount()).toBe(1);
+		// A pair drop keeps the stream in the map (it re-primes on the new
+		// pair), but the mirror drops every frame meanwhile: a dialog opened
+		// in that window would never reach a browser, so presence must report
+		// none and let the caller fail fast.
+		live = false;
+		expect(control.browserStreamCount()).toBe(0);
+		live = true;
+		expect(control.browserStreamCount()).toBe(1);
 		control.stop();
 	});
 });

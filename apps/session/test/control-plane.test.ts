@@ -554,3 +554,49 @@ test("a read-only call broadcasts no state; a mutating call does", async () => {
 	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
+
+test("a pair-attached browser with no local /events consumer answers a ui_request", async () => {
+	// Locks the presence check to the callback pair: production browsers ride
+	// the pair as `browser/<connId>` virtual streams and never enter the
+	// daemon's own /events consumer set, so a local-only check rejected every
+	// dialog with "No connected client to answer the UI request" (the
+	// regression users saw in the ask card).
+	const fleet = trackFleet();
+	const child = spawnDaemon(fleet.url, {
+		OMP_SESSION_CONTROL_GRACE: "0",
+		OMP_SESSION_TEST_UI_REQUEST: "1",
+	});
+	await fleet.paired;
+	// Pair only: nothing here opens a local /events stream, so the daemon's
+	// `streams` set stays empty for the whole test.
+	fleet.send("browser/one", "control", { type: "stream_open" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/one")?.type === "state", 1);
+
+	fleet.send("browser/one", "command", { type: "test_ui_request", id: "tui-1" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/one")?.type === "ui_request", 1);
+	// `method` is absent from streamFrame's narrow shape, so the cast reads it
+	// without widening the shared helper.
+	const request = fleet.up
+		.map((e) => streamFrame(e, "browser/one"))
+		.find((f) => f?.type === "ui_request") as { id?: unknown; method?: unknown } | undefined;
+	expect(request?.method).toBe("confirm");
+	const requestId = request?.id;
+	expect(typeof requestId).toBe("string");
+
+	// The reject the local-only check produced must be gone from the wire: the
+	// mirror's only sinks are the control stream and the browser streams.
+	const errors = [CALLBACK_CONTROL_STREAM_ID, "browser/one"]
+		.flatMap((streamId) => fleet.up.map((e) => streamFrame(e, streamId)))
+		.filter((frame) => frame?.type === "error");
+	expect(JSON.stringify(errors)).not.toContain("No connected client to answer the UI request");
+
+	// Answer like the browser: the request settles and rings ui_request_end.
+	fleet.send("browser/one", "command", { type: "ui_response", id: requestId, result: true });
+	await fleet.waitForUp((e) => {
+		const frame = streamFrame(e, "browser/one");
+		return frame?.type === "ui_request_end" && frame.id === requestId;
+	}, 1);
+
+	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
+	expect(await exitWithin(child, 20_000)).toBe(0);
+});

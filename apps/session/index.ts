@@ -68,7 +68,12 @@ import {
 	type SseConsumer,
 } from "./sse-delivery";
 import { clearSubagents } from "./subagent-mirror";
-import { rejectEntryUiRequests, rejectStreamUiRequests, webUiRequest } from "./ui-context";
+import {
+	rejectEntryUiRequests,
+	rejectStreamUiRequests,
+	setCallbackBrowserStreamCount,
+	webUiRequest,
+} from "./ui-context";
 import { callbackError } from "#lib/wire/callback-protocol";
 import type { CallbackEnvelope } from "#lib/wire/callback-protocol";
 import { createDaemonControl, type DaemonControl } from "./daemon-control";
@@ -81,6 +86,7 @@ import {
 } from "./quiesce-evidence";
 import { flushAllWriters } from "./writer-flush";
 import { setOnFrameTap, setOnHistoryTap } from "./sse-delivery";
+import { initSdkTuiGlobals } from "./sdk-tui-globals";
 
 // ---------------------------------------------------------------------------
 // Bootstrap: one shared authStorage/modelRegistry pair (the SDK enforces the
@@ -125,6 +131,8 @@ if (missingCallback.length > 0 && missingCallback.length < callbackPairFields.le
 	);
 	process.exit(1);
 }
+// The web host has no terminal: initialize the SDK's terminal globals before any session exists.
+initSdkTuiGlobals();
 // TUI default global config directory (~/.omp/agent; sdk.ts documents the same).
 const agentDir = getAgentDir();
 const sessionsDir = path.join(agentDir, "sessions");
@@ -1465,6 +1473,9 @@ if (config.callbackUrl !== undefined) {
 			void shutdown();
 		},
 	});
+	// Browser presence for dialog/contribution guards: production browsers ride
+	// the pair as virtual streams, invisible to the local /events consumer set.
+	setCallbackBrowserStreamCount(() => daemonControl?.browserStreamCount() ?? 0);
 	// Register the mirror tap: every broadcast/broadcastAnswer/broadcastTo
 	// frame is forwarded verbatim: to the "control" stream (fleet activity +
 	// fanout correlation) AND every open browser stream (ringed deltas ring

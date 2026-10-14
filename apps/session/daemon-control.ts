@@ -677,6 +677,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		},
 		stop,
 		status,
+		browserStreamCount: () => (deps.pairLive() ? streams.size : 0),
 	};
 }
 
@@ -697,4 +698,11 @@ export interface DaemonControl {
 	abort(): void;
 	stop(): void;
 	status(): DaemonControlStatus;
+	/**
+	 * Live callback-pair browser streams (virtual; not SseConsumers). 0 while
+	 * the pair is down: the streams survive a drop and re-prime on the new
+	 * pair, but the mirror drops every frame meanwhile, so nothing could
+	 * receive a dialog opened in that window.
+	 */
+	browserStreamCount(): number;
 }
