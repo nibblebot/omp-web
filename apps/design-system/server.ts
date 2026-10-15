@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openBrowser } from "#lib/platform/open-browser";
+import { isInteractiveDesktop, openBrowser } from "#lib/platform/open-browser";
 import { handleFixtureRoute } from "./fixtures/routes";
 import { solidPlugin } from "./solid-plugin";
 import { virtualModulesPlugin } from "./virtual-modules";
@@ -13,7 +13,8 @@ import { virtualModulesPlugin } from "./virtual-modules";
  * straight from apps/web; only the page chrome lives here. The bundle is rebuilt
  * on every top-level page load so a refresh shows current sources. Inspector
  * frames (`/?embed=`) reuse the current bundle instead. Startup opens the page
- * in the default browser.
+ * in the default browser only from an interactive local terminal with a display
+ * (`isInteractiveDesktop`), matching `bun run dev` and `omp-web`.
  */
 const root = dirname(fileURLToPath(import.meta.url));
 const VIEWS = {
@@ -112,4 +113,4 @@ const server = Bun.serve({
 
 const url = `http://localhost:${server.port}/`;
 console.log(`design ${viewName}: ${url}`);
-openBrowser(url, `design ${viewName}`);
+if (isInteractiveDesktop()) openBrowser(url, `design ${viewName}`);
