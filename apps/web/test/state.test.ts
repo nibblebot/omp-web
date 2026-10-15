@@ -39,6 +39,7 @@ import {
 	resumeDaemonSession,
 	type SubagentInfo,
 } from "../state";
+import { settingValue } from "../store/settings";
 import {
 	FakeEventSource,
 	attached,
@@ -198,6 +199,7 @@ describe("attached-frame handling", () => {
 		expect(posted.map((c) => (c.type === "call" ? c.method : c.type))).toEqual([
 			"getSettings",
 			"getSubagents",
+			"getSettings", // attach re-pulls the settings model (refreshSettings)
 		]);
 
 		// The switch lands: the old session's calls are rejected and readiness
@@ -213,8 +215,14 @@ describe("attached-frame handling", () => {
 		const calls = posted.filter(
 			(c): c is Extract<ClientCommand, { type: "call" }> => c.type === "call",
 		);
-		expect(calls.map((c) => c.method)).toEqual(["getSettings", "getSubagents", "getSubagents"]);
-		const freshId = calls[2].id;
+		expect(calls.map((c) => c.method)).toEqual([
+			"getSettings",
+			"getSubagents",
+			"getSettings",
+			"getSubagents",
+			"getSettings",
+		]);
+		const freshId = calls[3].id;
 
 		// Stale answers to rejected calls are ignored; the panel stays empty.
 		dispatch(callResult(calls[1].id, [sub("stale")]));
@@ -822,14 +830,14 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		const requests = stubFetch(() => ({ status: 200, body: model }));
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.(); // connected = true so call() posts
-		// Flip to an attached state AFTER the stream opens, so the onopen
-		// auto-attach doesn't muddy the posted list.
+		// Flip to an attached state AFTER the stream opens. onopen's boot refresh
+		// is a GET /ctl/settings, which the assertion below excludes.
 		setState({ currentSessionId: "daemon-a" });
 
 		updateSetting("agent.model", "gpt-5");
 		await settle();
 
-		expect(requests.filter((r) => r.url.startsWith("/ctl"))).toEqual([]); // no /ctl fetch while attached
+		expect(requests.filter((r) => r.url.startsWith("/ctl") && r.method !== "GET")).toEqual([]); // no /ctl write while attached
 		// The /command uplink carries the RPC (recorded by stubFetch, since it
 		// replaced the beforeEach fetch stub that feeds `posted`).
 		const calls = requests
@@ -844,6 +852,68 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		dispatch(callResult(calls[0].id, model));
 		await settle();
 		expect(state.settingsModel).toEqual(model);
+	});
+});
+
+describe("settings_changed revision guard and settingValue()", () => {
+	/** A one-item model whose agent.model value is `value` at `revision`. */
+	function modelAt(revision: number, value: string): SettingsModel {
+		return {
+			revision,
+			target: "current-session",
+			tabs: [
+				{
+					id: "agent",
+					label: "Agent",
+					groups: [
+						{
+							name: "Model",
+							items: [
+								{
+									path: "agent.model",
+									label: "Model",
+									description: "",
+									type: "enum",
+									value,
+									changed: false,
+								},
+							],
+						},
+					],
+				},
+			],
+		};
+	}
+
+	test("an older settings_changed frame is ignored; a newer one applies", () => {
+		// Attached before connect(): the onopen boot refresh is for the fleet
+		// path and must not run here.
+		setState({ currentSessionId: "daemon-a", settingsModel: null });
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		dispatch({ type: "settings_changed", model: modelAt(5, "gpt-5") });
+		expect(state.settingsModel?.revision).toBe(5);
+
+		dispatch({ type: "settings_changed", model: modelAt(4, "gpt-4") });
+		expect(state.settingsModel?.revision).toBe(5);
+		expect(settingValue<string>("agent.model")).toBe("gpt-5");
+
+		dispatch({ type: "settings_changed", model: modelAt(6, "o3") });
+		expect(state.settingsModel?.revision).toBe(6);
+		expect(settingValue<string>("agent.model")).toBe("o3");
+	});
+
+	test("settingValue reads the current model and follows replacements", () => {
+		setState({ currentSessionId: "daemon-a", settingsModel: null });
+		expect(settingValue("agent.model")).toBeUndefined();
+
+		setState({ settingsModel: modelAt(1, "gpt-5") });
+		expect(settingValue<string>("agent.model")).toBe("gpt-5");
+		expect(settingValue("no.such.path")).toBeUndefined();
+
+		setState({ settingsModel: modelAt(2, "o3") });
+		expect(settingValue<string>("agent.model")).toBe("o3");
 	});
 });
 

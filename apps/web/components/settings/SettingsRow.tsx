@@ -50,9 +50,7 @@ export function SettingsRow(props: { item: SettingsItem }) {
 	const [jsonDraft, setJsonDraft] = createSignal("");
 	const [jsonEditing, setJsonEditing] = createSignal(false);
 	const [jsonError, setJsonError] = createSignal("");
-	const [layer, setLayer] = createSignal(
-		item.view?.explicit?.layer === "project" ? "project" : "global",
-	);
+	const [layer, setLayer] = createSignal("global");
 	let draftRevision: number | undefined;
 	const updateSetting = (
 		path: string,
@@ -326,7 +324,6 @@ export function SettingsRow(props: { item: SettingsItem }) {
 						onChange={(e) => setLayer(e.currentTarget.value)}
 					>
 						<option value="global">Global config</option>
-						<option value="project">Project config</option>
 					</select>
 					<button
 						type="button"
@@ -337,9 +334,7 @@ export function SettingsRow(props: { item: SettingsItem }) {
 								? "Remove the explicit override; inherit the next layer"
 								: "No removable explicit override"
 						}
-						onClick={() =>
-							unsetSetting(item.path, state.settingsModel?.revision, item.view?.explicit?.layer)
-						}
+						onClick={() => unsetSetting(item.path, state.settingsModel?.revision)}
 					>
 						Unset override
 					</button>

@@ -18,7 +18,8 @@
  *   POST /ctl/stop     {selector}                  → { stopped: string[] }
  *   POST /ctl/remove   {selector}                  → { removed: string[] }
  *   POST /ctl/prompt   {selector, text, waitMs?}   → PromptResult[] | { submitted: string[] }
- * POST /ctl/settings/set {path, value}           -> SettingsModel (400 bad path/value)
+ *   POST /ctl/settings/set {path, value, expectedRevision?, layer?}   -> SettingsModel (400 bad path/value/layer, 409 stale revision)
+ *   POST /ctl/settings/unset {path, expectedRevision?, layer?}        -> SettingsModel (same errors)
  *   POST /ctl/projects/:id/worktrees               -> create or add-existing worktree -> 201 { entry }
  *   DELETE /ctl/worktrees/:daemonId {deleteBranch?} -> worktree: stop -> remove entry -> git worktree remove
  *                    (clone workspace: verify-at-deletion gate, P7.3/P7.5)
@@ -83,7 +84,13 @@ import type { FanoutDeps } from "./fanout";
 import { fanOut } from "./fanout";
 import { FleetEdge, toRosterEntry } from "./edge";
 import { FleetEventLog, type FleetFacts } from "./events";
-import { createFleetSettings, type FleetSettings, type FleetSettingsOptions } from "./settings";
+import {
+	createFleetSettings,
+	FleetSettingsError,
+	type FleetSettings,
+	type FleetSettingsOptions,
+	type SettingsLayer,
+} from "./settings";
 import { createStatsApp } from "./stats-app";
 import type { StatsConfig } from "./stats-config";
 import { BrowserAuthStore, clearSessionCookie } from "./browser-auth";
@@ -291,6 +298,22 @@ function optionalWaitMs(body: Record<string, unknown>): number | undefined {
 		throw new HttpError(400, "waitMs must be a non-negative number");
 	}
 	return value;
+}
+
+/** `{expectedRevision?, layer?}` for settings writes; semantic checks (stale, project-layer) live in FleetSettings. */
+function settingsWriteGuards(body: Record<string, unknown>): {
+	expectedRevision: number | undefined;
+	layer: SettingsLayer | undefined;
+} {
+	const expectedRevision = body["expectedRevision"];
+	if (expectedRevision !== undefined && typeof expectedRevision !== "number") {
+		throw new HttpError(400, "invalid field: expectedRevision");
+	}
+	const layer = optionalString(body, "layer");
+	if (layer !== undefined && layer !== "global" && layer !== "project") {
+		throw new HttpError(400, "invalid field: layer");
+	}
+	return { expectedRevision, layer };
 }
 
 /** Worktree route patterns (daemon ids / project ids are [^/]+ segments). */
@@ -1221,7 +1244,9 @@ class FleetServerImpl implements FleetServer {
 					case "/ctl/prompt":
 						return await this.#handlePrompt(req);
 					case "/ctl/settings/set":
-						return await this.#handleSettingsSet(req);
+						return await this.#handleSettingsWrite(req, false);
+					case "/ctl/settings/unset":
+						return await this.#handleSettingsWrite(req, true);
 					case "/ctl/logs/purge":
 						// P7.6 explicit manual purge of orphaned (or verified
 						// read-only) workspace logs. Never automatic.
@@ -1725,22 +1750,26 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
-	 * POST /ctl/settings/set {path, value}: coerce + persist one schema
-	 * setting through the unattached fleet settings service and return a
-	 * fresh model. Unknown paths and uncoercible values are client errors
-	 * (400, safe messages from coerceSettingValue); anything else falls
-	 * through to the request-level 500 catch.
+	 * POST /ctl/settings/set {path, value, expectedRevision?, layer?} and
+	 * POST /ctl/settings/unset {path, expectedRevision?, layer?}: coerce +
+	 * persist (or remove) one schema setting through the unattached fleet
+	 * settings service and return a fresh model. Unknown paths, uncoercible
+	 * values and project-layer writes are client errors (400, safe messages);
+	 * a stale expectedRevision is 409; anything else falls through to the
+	 * request-level 500 catch.
 	 */
-	async #handleSettingsSet(req: Request): Promise<Response> {
+	async #handleSettingsWrite(req: Request, unset: boolean): Promise<Response> {
 		const body = await readJson(req);
 		const path = requireString(body, "path");
-		// value is arbitrary JSON (boolean/number/string/array/object);
-		// coercion happens schema-side, so never requireString it.
-		const value = body["value"];
+		const { expectedRevision, layer } = settingsWriteGuards(body);
 		try {
-			return json(await this.fleetSettings.set(path, value));
+			if (unset) return json(await this.fleetSettings.unset(path, expectedRevision, layer));
+			// value is arbitrary JSON (boolean/number/string/array/object);
+			// coercion happens schema-side, so never requireString it.
+			return json(await this.fleetSettings.set(path, body["value"], expectedRevision, layer));
 		} catch (err) {
 			if (err instanceof HttpError) throw err;
+			if (err instanceof FleetSettingsError) throw new HttpError(err.status, err.message);
 			throw new HttpError(400, err instanceof Error ? err.message : String(err));
 		}
 	}

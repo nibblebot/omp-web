@@ -29,7 +29,7 @@
 				var theme = BG[pref]
 					? pref
 					: window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
-						? "light"
+						? "catppuccin-latte"
 						: "dark";
 				document.documentElement.dataset.theme = theme;
 				document.documentElement.style.background = BG[theme];

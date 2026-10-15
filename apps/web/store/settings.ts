@@ -1,4 +1,4 @@
-import type { SettingsModel } from "#lib/wire/protocol";
+import type { SettingsItem, SettingsModel } from "#lib/wire/protocol";
 import { fleetSettingsActive, setState, state } from "../state";
 import { call } from "./transport";
 import { authedFetch } from "./auth";
@@ -41,6 +41,26 @@ export function applySettingsModel(model: SettingsModel): void {
 	)
 		return;
 	setState("settingsModel", model);
+}
+
+let indexedTabs: SettingsModel["tabs"] | undefined;
+let itemIndex = new Map<string, SettingsItem>();
+
+/**
+ * Effective value of a setting from the authoritative model. Undefined until the model loads or for an unknown path.
+ * The path index is rebuilt only when `tabs` is replaced (applySettingsModel is the sole writer); values are read
+ * through the store items, so callers in a tracking scope stay reactive.
+ */
+export function settingValue<T = unknown>(path: string): T | undefined {
+	const tabs = state.settingsModel?.tabs;
+	if (tabs !== indexedTabs) {
+		itemIndex = new Map();
+		for (const tab of tabs ?? [])
+			for (const group of tab.groups)
+				for (const item of group.items) itemIndex.set(item.path, item);
+		indexedTabs = tabs;
+	}
+	return itemIndex.get(path)?.value as T | undefined;
 }
 
 let loadId = 0;

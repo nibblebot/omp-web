@@ -41,6 +41,7 @@ import {
 import { cancelUiRequest } from "./store/modals";
 import { resetPendingProjects, settleProjectBranches, settleProjects } from "./store/projects";
 import { checkSession, subscribeAuth, type AuthStatus, type AuthSnapshot } from "./store/auth";
+import { applySettingsModel, refreshSettings } from "./store/settings";
 import {
 	resetPendingSessionsFiles,
 	settleDaemonSessions,
@@ -960,6 +961,7 @@ export function connect(): void {
 		// pulls getSubagents. On a RECONNECT the edge has no attach
 		// memory, so re-attach to the daemon we were viewing.
 		if (state.currentSessionId) void attachSession(state.currentSessionId).catch(() => {});
+		else refreshSettings(); // boot with no session: the fleet /ctl model backs the panel
 	};
 	source.addEventListener(SSE_EVENT_NAME, (ev) => {
 		armSilenceTimer(); // any downlink activity means the peer is alive
@@ -1020,6 +1022,7 @@ export function connect(): void {
 					setState("subagents", next);
 				})
 				.catch(() => {});
+			refreshSettings();
 			return;
 		}
 		// Stale-frame guard: session-scoped frames for a handle this tab no
@@ -1430,7 +1433,7 @@ export function connect(): void {
 				// Session-scoped broadcast: a fresh model after any setSetting,
 				// so every attached tab's panel stays in sync.
 				const model = (frame as { model: SettingsModel }).model;
-				setState("settingsModel", model);
+				applySettingsModel(model);
 				break;
 			}
 			case "error":

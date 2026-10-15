@@ -296,6 +296,92 @@ describe("fleet control plane", () => {
 		expect(body.error).toContain("missing or invalid field: path");
 	});
 
+	test("POST /ctl/settings/unset removes an override and reports changed=false", async () => {
+		const setRes = await postJson(server.port, "/ctl/settings/set", {
+			path: "compaction.thresholdPercent",
+			value: "50",
+		});
+		expect(setRes.status).toBe(200);
+		const res = await postJson(server.port, "/ctl/settings/unset", {
+			path: "compaction.thresholdPercent",
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			tabs: Array<{
+				id: string;
+				groups: Array<{ items: Array<{ path: string; value: unknown; changed: boolean }> }>;
+			}>;
+		};
+		const item = body.tabs
+			.find((tab) => tab.id === "context")
+			?.groups.flatMap((group) => group.items)
+			.find((item) => item.path === "compaction.thresholdPercent");
+		expect(item?.value).not.toBe(50);
+		expect(item?.changed).toBe(false);
+	});
+
+	test("POST /ctl/settings/set 409s when expectedRevision is stale", async () => {
+		const current = (await (
+			await fetch(`http://127.0.0.1:${server.port}/ctl/settings`)
+		).json()) as { revision?: number };
+		const staleRevision = current.revision ?? 0;
+		// Advance the revision so staleRevision no longer matches.
+		const advance = await postJson(server.port, "/ctl/settings/set", {
+			path: "compaction.thresholdPercent",
+			value: "50",
+		});
+		expect(advance.status).toBe(200);
+		const res = await postJson(server.port, "/ctl/settings/set", {
+			path: "compaction.thresholdPercent",
+			value: "60",
+			expectedRevision: staleRevision,
+		});
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toContain("Settings changed");
+		await postJson(server.port, "/ctl/settings/unset", { path: "compaction.thresholdPercent" });
+	});
+
+	test("POST /ctl/settings/unset 409s when expectedRevision is stale", async () => {
+		const current = (await (
+			await fetch(`http://127.0.0.1:${server.port}/ctl/settings`)
+		).json()) as { revision?: number };
+		const staleRevision = current.revision ?? 0;
+		const advance = await postJson(server.port, "/ctl/settings/set", {
+			path: "compaction.thresholdPercent",
+			value: "50",
+		});
+		expect(advance.status).toBe(200);
+		const res = await postJson(server.port, "/ctl/settings/unset", {
+			path: "compaction.thresholdPercent",
+			expectedRevision: staleRevision,
+		});
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toContain("Settings changed");
+		await postJson(server.port, "/ctl/settings/unset", { path: "compaction.thresholdPercent" });
+	});
+
+	test("POST /ctl/settings/set 400s on a project layer write", async () => {
+		const res = await postJson(server.port, "/ctl/settings/set", {
+			path: "compaction.thresholdPercent",
+			value: "50",
+			layer: "project",
+		});
+		expect(res.status).toBe(400);
+	});
+
+	test("POST /ctl/settings/set 400s on a non-numeric expectedRevision", async () => {
+		const res = await postJson(server.port, "/ctl/settings/set", {
+			path: "compaction.thresholdPercent",
+			value: "50",
+			expectedRevision: "3",
+		});
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error?: string };
+		expect(body.error).toContain("invalid field: expectedRevision");
+	});
+
 	test("POST /ctl/spawn 400s on a nonexistent path", async () => {
 		const res = await postJson(server.port, "/ctl/spawn", { cwd: join(tmp, "does-not-exist") });
 		expect(res.status).toBe(400);

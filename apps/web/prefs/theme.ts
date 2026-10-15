@@ -54,12 +54,12 @@ export function currentThemePreference(): ThemePreference {
 	return THEME_IDS[stored as ThemeId] ? (stored as ThemeId) : "system";
 }
 
-/** The concrete palette currently in effect (preference resolved through the OS when set to "system"). */
+/** The concrete palette currently in effect (preference resolved through the OS when set to "system"; OS light resolves to catppuccin-latte). */
 function resolvedTheme(): ThemeId {
 	const pref = currentThemePreference();
 	return pref === "system"
 		? window.matchMedia("(prefers-color-scheme: light)").matches
-			? "light"
+			? "catppuccin-latte"
 			: "dark"
 		: pref;
 }
@@ -87,6 +87,6 @@ export function initTheme(): void {
 	apply(resolvedTheme(), currentFontSize());
 	window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", (e) => {
 		if (currentThemePreference() === "system")
-			apply(e.matches ? "light" : "dark", currentFontSize());
+			apply(e.matches ? "catppuccin-latte" : "dark", currentFontSize());
 	});
 }

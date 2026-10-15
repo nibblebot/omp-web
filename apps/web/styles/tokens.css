@@ -30,6 +30,7 @@
 	--warning: #facc15;
 	--error: #f87171;
 	--purple: #c084fc;
+	--settings-accent: var(--purple);
 	--success-bg: #14301c;
 	--success-border: #1f5c31;
 	--warning-bg: #2e2712;
