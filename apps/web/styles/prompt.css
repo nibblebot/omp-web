@@ -14,6 +14,42 @@
 	/* Progressive enhancement: native content sizing where supported. */
 	field-sizing: content;
 }
+/* Composer mirror: magic keyword gradients and ghost text render in a layer
+ * behind the textarea. The layer copies the textarea's box so glyphs line up. */
+.prompt-field {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+}
+.prompt-mirror {
+	position: absolute;
+	inset: 0;
+	box-sizing: border-box;
+	pointer-events: none;
+	overflow: hidden;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	border: 1px solid transparent;
+	border-radius: var(--r-lg);
+	padding: var(--space-4) var(--space-5);
+	background: var(--panel);
+	color: var(--text);
+	font: inherit;
+}
+.prompt-field--mirrored textarea {
+	position: relative;
+	background: transparent;
+	color: transparent;
+	caret-color: var(--text);
+}
+.prompt-mirror .magic-kw {
+	color: transparent;
+	background-clip: text;
+	-webkit-background-clip: text;
+}
+.prompt-ghost {
+	color: var(--muted-2);
+}
 .queued-chip {
 	font-family: var(--font-mono);
 	align-self: center;

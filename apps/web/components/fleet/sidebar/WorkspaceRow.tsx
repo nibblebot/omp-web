@@ -33,6 +33,7 @@ import { formatTimeAgo } from "../../../text/time-ago";
 import { ConfirmButton } from "../../ui/ConfirmButton";
 import { KebabMenu } from "../../ui/KebabMenu";
 import { useClickableRow } from "../../ui/PickerRow";
+import { displayTitle } from "../../ui/title-icons";
 import {
 	ChevronRightIcon,
 	FileIcon,
@@ -149,7 +150,7 @@ export const WorkspaceRow: Component<{
 	/** The session-title row text: the last session's title, else "New session"
 	 *  for an empty/new untitled session (probed sessionEmpty), else nothing. */
 	const sessionTitleText = createMemo(
-		() => d().sessionTitle ?? (d().sessionEmpty === true ? "New session" : undefined),
+		() => displayTitle(d().sessionTitle) ?? (d().sessionEmpty === true ? "New session" : undefined),
 	);
 	/** Row ref anchors the dropdown's outside-pointerdown dismissal. */
 	let rowRef!: HTMLDivElement;

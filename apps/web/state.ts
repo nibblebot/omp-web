@@ -22,6 +22,7 @@ import { featurePreferences } from "./features/preferences";
 import { clearUnread, markUnread, pruneUnread } from "./fleet-ui/unread";
 import { scanImages } from "./text/images";
 import type { UsageLike } from "./usage/usage";
+import { promptTimestamp } from "./chat/turn-usage";
 import { advisorNotesOf } from "./store/slices/advisor";
 import {
 	announce,
@@ -30,12 +31,13 @@ import {
 	assistantBlocks,
 	capTail,
 	clearPendingDeltas,
-	extractText,
 	nextChatId,
 	pendingEphemeral,
 	resetChatIds,
 	scheduleFlush,
 	tabsToSpaces,
+	extractText,
+	notifyDesktop,
 	userText,
 } from "./store/chat";
 import { cancelUiRequest } from "./store/modals";
@@ -112,7 +114,7 @@ export type CompactionItem = {
 	errorMessage?: string;
 };
 export type ChatItem =
-	| { kind: "user"; id: number; text: string; images?: ImageArg[] }
+	| { kind: "user"; id: number; text: string; images?: ImageArg[]; timestamp?: number }
 	| {
 			kind: "assistant";
 			id: number;
@@ -120,6 +122,8 @@ export type ChatItem =
 			usage?: UsageLike;
 			ttft?: number;
 			duration?: number;
+			/** Epoch ms the session stamped at message_end; anchors display.showTurnTime. */
+			completedAt?: number;
 	  }
 	| {
 			kind: "tool";
@@ -441,9 +445,8 @@ export const [state, setState] = createStore({
 	// Phase 3: pending server-pushed ExtensionUIContext dialog (ui_request
 	// frame); answered via sendUiResponse/cancelUiRequest.
 	uiRequest: null as { id: string; method: string; params: unknown } | null,
-	// Display toggles (SettingsPanel checkboxes); reveal paces streamed text
-	// (gradual reveal), soften fades the fresh tail. Reveal defaults ON.
-	reveal: true,
+	// Display toggle (SettingsPanel checkbox): soften fades the fresh tail.
+	// Paced reveal is display.smoothStreaming, read via chat/display-prefs.
 	soften: false,
 	error: null as string | null,
 	// Client-side debug ring (Debug panel): one entry per transport lifecycle
@@ -568,14 +571,21 @@ export function loadHistory(messages: AgentMessage[]): void {
 	for (const msg of messages) {
 		if (msg.role === "user") {
 			const images = scanImages(msg.content);
+			const stamp = promptTimestamp(msg);
 			items.push({
 				kind: "user",
 				id: nextChatId(),
 				text: userText(msg.content),
 				...(images.length > 0 ? { images } : {}),
+				...(stamp !== undefined ? { timestamp: stamp } : {}),
 			});
 		} else if (msg.role === "assistant") {
-			const meta = msg as { usage?: UsageLike; ttft?: number; duration?: number };
+			const meta = msg as {
+				usage?: UsageLike;
+				ttft?: number;
+				duration?: number;
+				completedAt?: number;
+			};
 			items.push({
 				kind: "assistant",
 				id: nextChatId(),
@@ -583,6 +593,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 				usage: meta.usage,
 				ttft: meta.ttft,
 				duration: meta.duration,
+				...(meta.completedAt !== undefined ? { completedAt: meta.completedAt } : {}),
 			});
 			for (const c of msg.content) {
 				if (c.type === "toolCall") {
@@ -1417,6 +1428,8 @@ export function connect(): void {
 						cancelUiRequest(state.uiRequest.id);
 					}
 					setState("uiRequest", { id: frame.id, method: frame.method, params: frame.params });
+					// Ask-tool dialogs notify where the SDK does (tools/ask.ts #sendAskNotification).
+					if (frame.method === "askDialog") notifyDesktop("ask", "omp", "Waiting for input");
 				}
 				break;
 			case "ui_request_end":

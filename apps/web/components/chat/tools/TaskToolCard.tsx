@@ -1,6 +1,8 @@
 import { For, Show, type Component } from "solid-js";
 import { state, type ToolItem } from "../../../state";
-import { latestSubagent, SubagentRow } from "../../subagents/SubagentRow";
+import { latestSubagent, SubagentRow, subagentProgress } from "../../subagents/SubagentRow";
+import { settingValue } from "../../../store/settings";
+import { modelBadge } from "../../../subagents/progress";
 import { ToolCardShell } from "./ToolCardShell";
 
 /** task tool: the agent list this tool call spawned, scoped by parentToolCallId
@@ -23,7 +25,16 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 					<For each={subIds()}>
 						{(id) => {
 							const sub = latestSubagent((key) => state.subagents.get(key), id);
-							return <SubagentRow sub={sub()} />;
+							return (
+								<SubagentRow
+									sub={sub()}
+									badge={
+										settingValue<boolean>("task.showResolvedModelBadge") === true
+											? modelBadge(subagentProgress(id))
+											: undefined
+									}
+								/>
+							);
 						}}
 					</For>
 				</div>

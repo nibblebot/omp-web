@@ -1,5 +1,6 @@
 import {
 	createEffect,
+	createMemo,
 	createSignal,
 	For,
 	onCleanup,
@@ -22,16 +23,21 @@ import { expandMentionChips, getModelMentions, MODEL_MENTION_RE } from "../../..
 import { graphGeneration, noteTranscriptReplaced } from "../../../store/graph";
 import {
 	foldedPreview,
+	PASTE_LARGE_MENU_DEFAULT,
 	readFileAsDataUrl,
 	readFileAsText,
 	shouldFoldPaste,
 	validateImage,
 	validateImportFile,
 } from "../../../prompt/paste";
+import { settingValue } from "../../../store/settings";
 import { handleVimKey, VIM_DOC, VimState, type VimMode } from "../../../prompt/vim";
 import { XIcon } from "../../ui/icons";
 import { AutocompletePopup } from "./AutocompletePopup";
 import type { PromptAutocomplete } from "./usePromptAutocomplete";
+import { PromptMirror } from "./PromptMirror";
+import type { GhostText } from "./useGhostText";
+import { magicKeywordSegments } from "../../../prompt/magic-keywords";
 
 interface PromptComposerProps {
 	message: () => string;
@@ -39,6 +45,7 @@ interface PromptComposerProps {
 	images: () => ImageArg[];
 	setImages: Setter<ImageArg[]>;
 	ac: PromptAutocomplete;
+	ghost: GhostText;
 	onKeyDown: (e: KeyboardEvent) => void;
 	setTextareaRef: (el: HTMLTextAreaElement) => void;
 }
@@ -68,6 +75,25 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const [recovery, setRecovery] = createSignal<{ text: string; images: number } | null>(null);
 	const [chipError, setChipError] = createSignal<string | null>(null);
 	const draftKey = () => currentDraftKey();
+	// Magic keyword highlight and ghost text share one mirror behind the textarea.
+	let mirrorEl: HTMLDivElement | undefined;
+	const segments = createMemo(() =>
+		magicKeywordSegments(
+			props.message(),
+			(id) =>
+				settingValue<boolean>("magicKeywords.enabled") !== false &&
+				settingValue<boolean>(`magicKeywords.${id}`) !== false,
+		),
+	);
+	const mirrored = () =>
+		props.ghost.text() !== "" || segments().some((seg) => seg.id !== undefined);
+	const syncMirror = () => {
+		if (mirrorEl) mirrorEl.scrollTop = textarea.scrollTop;
+	};
+	const onCaretMove = () => {
+		props.ac.refreshToken();
+		props.ghost.refreshCaret();
+	};
 
 	// QueueBar dequeue / PromptHistoryPicker picks / graph editorText land here.
 	createEffect(() => {
@@ -161,7 +187,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		}
 		// Large text paste: keep the EXACT payload, fold visually.
 		const text = e.clipboardData?.getData("text/plain") ?? "";
-		if (text && shouldFoldPaste(text)) {
+		if (text && shouldFoldPaste(text, pasteThreshold())) {
 			// Let the paste land, then fold the view (payload untouched).
 			setFolded(true);
 			const { omittedLines, omittedChars } = foldedPreview(text);
@@ -231,10 +257,12 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const onTextareaInput = (e: Event): void => {
 		const el = e.currentTarget as HTMLTextAreaElement;
 		props.setMessage(el.value);
+		props.ac.inlineEmoji(); // `:smile:` -> emoji before the draft is persisted
 		props.ac.setDismissed(false);
 		props.ac.setSelected(0);
 		props.ac.autoGrow();
 		props.ac.refreshToken();
+		props.ghost.refreshCaret();
 		persist(el.value, props.images());
 		// Live `^selector` chip validation (offline mirror; submit expands).
 		if (MODEL_MENTION_RE.test(el.value)) {
@@ -245,7 +273,9 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		}
 	};
 
-	const showFold = () => shouldFoldPaste(props.message()) && folded();
+	const pasteThreshold = () =>
+		settingValue<number>("paste.largeMenuThreshold") ?? PASTE_LARGE_MENU_DEFAULT;
+	const showFold = () => shouldFoldPaste(props.message(), pasteThreshold()) && folded();
 	const preview = () => foldedPreview(props.message()).head;
 
 	return (
@@ -290,7 +320,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 								Raw
 							</button>
 						</Show>
-						<Show when={!folded() && shouldFoldPaste(props.message())}>
+						<Show when={!folded() && shouldFoldPaste(props.message(), pasteThreshold())}>
 							<button type="button" class="queue-pop" onClick={() => setFolded(true)}>
 								Fold
 							</button>
@@ -311,6 +341,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 					<AutocompletePopup
 						items={props.ac.items()}
 						selected={props.ac.selected()}
+						maxVisible={props.ac.maxVisible()}
 						onHover={props.ac.setSelected}
 						onApply={props.ac.apply}
 						listId={listId}
@@ -329,29 +360,41 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 						</button>
 					</div>
 				</Show>
-				<textarea
-					ref={(el) => {
-						textarea = el;
-						props.setTextareaRef(el);
-					}}
-					role="combobox"
-					aria-label="Message the agent"
-					aria-expanded={props.ac.open()}
-					aria-controls={props.ac.open() ? listId : undefined}
-					aria-activedescendant={
-						props.ac.open() ? `${listId}-opt-${props.ac.selected()}` : undefined
-					}
-					aria-autocomplete="list"
-					value={props.message()}
-					onInput={onTextareaInput}
-					onKeyDown={onTextareaKeyDown}
-					onKeyUp={props.ac.refreshToken}
-					onClick={props.ac.refreshToken}
-					onPaste={onPaste}
-					onDrop={onDrop}
-					placeholder="Message the agent… (Enter send, Ctrl+Enter follow-up, / for commands)"
-					rows={3}
-				/>
+				<div class="prompt-field" classList={{ "prompt-field--mirrored": mirrored() }}>
+					<Show when={mirrored()}>
+						<PromptMirror
+							segments={segments()}
+							ghost={props.ghost.text()}
+							ref={(el) => {
+								mirrorEl = el;
+							}}
+						/>
+					</Show>
+					<textarea
+						ref={(el) => {
+							textarea = el;
+							props.setTextareaRef(el);
+						}}
+						role="combobox"
+						aria-label="Message the agent"
+						aria-expanded={props.ac.open()}
+						aria-controls={props.ac.open() ? listId : undefined}
+						aria-activedescendant={
+							props.ac.open() ? `${listId}-opt-${props.ac.selected()}` : undefined
+						}
+						aria-autocomplete="list"
+						value={props.message()}
+						onInput={onTextareaInput}
+						onKeyDown={onTextareaKeyDown}
+						onKeyUp={onCaretMove}
+						onClick={onCaretMove}
+						onScroll={syncMirror}
+						onPaste={onPaste}
+						onDrop={onDrop}
+						placeholder="Message the agent… (Enter send, Ctrl+Enter follow-up, / for commands)"
+						rows={3}
+					/>
+				</div>
 				<div class="prompt-tools">
 					<input
 						ref={fileInput}

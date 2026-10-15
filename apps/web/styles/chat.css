@@ -280,6 +280,40 @@
 		color: var(--muted-2);
 	}
 }
+/* display.shimmer: "kitt" sweeps a narrow scanner band back and forth; "disabled"
+   shows the label static. Reduced motion already stops both via the block above. */
+[data-shimmer="kitt"] .shimmer-text {
+	background-size: 300% 100%;
+	animation: shimmer-scan 1.2s ease-in-out infinite alternate;
+}
+@keyframes shimmer-scan {
+	from {
+		background-position: 100% 0;
+	}
+	to {
+		background-position: 0 0;
+	}
+}
+[data-shimmer="disabled"] .shimmer-text {
+	background: none;
+	-webkit-background-clip: border-box;
+	background-clip: border-box;
+	color: var(--muted-2);
+	animation: none;
+}
+/* Cache-miss divider under an assistant turn (display.cacheMissMarker). */
+.cache-miss-marker {
+	margin: var(--space-2) 0;
+	text-align: center;
+	color: var(--muted-2);
+	font-size: var(--fs-md);
+}
+/* Stand-in for a tool-result image while display.showImages is off. */
+.img-hidden {
+	color: var(--muted-2);
+	font-size: var(--fs-md);
+	font-style: italic;
+}
 .msg-notice {
 	text-align: center;
 	color: var(--muted-2);

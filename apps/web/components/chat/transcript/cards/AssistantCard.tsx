@@ -1,18 +1,35 @@
 import { For, Show, type Component } from "solid-js";
 import type { ChatItem } from "../../../../state";
-import { buildUsageRow, formatUsageRow } from "../../../../usage/usage";
+import {
+	expandThinkingBlocks,
+	hideThinkingBlock,
+	proseOnlyThinking,
+	showTokenUsage,
+} from "../../../../chat/display-prefs";
+import { formatThinkingForDisplay, hasDisplayableThinking } from "../../../../chat/thinking";
+import type { TurnMeta } from "../../../../chat/turn-usage";
+import { formatTokens } from "../../../../usage/context";
+import { buildUsageRow, formatDurationMs, formatUsageRow } from "../../../../usage/usage";
 import { CopyButton } from "../../../ui/CopyButton";
 import { Markdown } from "../../../ui/Markdown";
 
+/** Thinking text as displayed, or null when nothing displayable remains. */
+function thinkingView(text: string): string | null {
+	const formatted = formatThinkingForDisplay(text, proseOnlyThinking());
+	return hasDisplayableThinking(text, formatted) ? formatted : null;
+}
+
 /** Assistant message card. With `thinking` false, thinking blocks are omitted
  *  (consumed by a consolidated run row); a card with no text blocks then
- *  renders nothing. */
+ *  renders nothing. `display.hideThinkingBlock` omits them the same way. */
 export const AssistantCard: Component<{
 	assistant: Extract<ChatItem, { kind: "assistant" }>;
 	thinking: boolean;
+	/** Per-turn display metadata (turn time, cache miss) from buildTurnMeta. */
+	meta?: TurnMeta;
 }> = (props) => {
 	const blocks = () =>
-		props.thinking
+		props.thinking && !hideThinkingBlock()
 			? props.assistant.blocks
 			: props.assistant.blocks.filter((b) => b.kind !== "thinking");
 	const text = () => blocks().filter((b) => b.kind === "text");
@@ -34,23 +51,45 @@ export const AssistantCard: Component<{
 			<For each={blocks()}>
 				{(block) =>
 					block.kind === "thinking" ? (
-						<details class="thinking-block">
-							<summary>thinking</summary>
-							<Markdown src={block.text} />
-						</details>
+						<Show when={thinkingView(block.text)} keyed>
+							{(formatted) => (
+								<details class="thinking-block" open={expandThinkingBlocks()}>
+									<summary>thinking</summary>
+									<Markdown src={formatted} />
+								</details>
+							)}
+						</Show>
 					) : (
 						<Markdown src={block.text} />
 					)
 				}
 			</For>
-			<Show when={props.assistant.usage}>
+			<Show when={props.meta?.cacheMissTokens}>
+				{(tokens) => (
+					<div
+						class="cache-miss-marker"
+						title="The prompt cache went cold this turn; the prefix was re-processed"
+					>
+						⊘ cache miss · {formatTokens(tokens())} tokens
+					</div>
+				)}
+			</Show>
+			<Show when={showTokenUsage() && props.assistant.usage}>
 				{(u) => {
 					const row = buildUsageRow(u(), props.assistant.ttft, props.assistant.duration);
-					return row ? (
+					if (!row) return null;
+					const turn = props.meta?.turnMs;
+					const summary = [
+						turn !== undefined ? `Δ ${formatDurationMs(turn)}` : null,
+						formatUsageRow(row),
+					]
+						.filter((part) => part !== null)
+						.join(" · ");
+					return (
 						<div class="usage-row" title="per-turn usage">
-							{formatUsageRow(row)}
+							{summary}
 						</div>
-					) : null;
+					);
 				}}
 			</Show>
 		</div>

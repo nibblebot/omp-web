@@ -4,6 +4,7 @@ import { fleetSettingsActive, refreshSettings, state } from "../../state";
 import { XIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
 import { FeaturesSettings } from "./FeaturesSettings";
+import { InstalledTab } from "./InstalledTab";
 import { SettingsNav, SettingsSectionPicker } from "./SettingsNav";
 import { SettingsRow } from "./SettingsRow";
 import { WebUiSettings } from "./WebUiSettings";
@@ -42,6 +43,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		const tabs = [
 			{ id: "web-ui", label: "Web UI" },
 			{ id: "features", label: "Features" },
+			{ id: "installed", label: "Installed" },
 		];
 		const m = model();
 		if (m) {
@@ -87,6 +89,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	};
 	const searching = () => query().trim() !== "";
 	const onFeatures = () => activeTabId() === "features";
+	const onInstalled = () => activeTabId() === "installed";
 	const results = () => {
 		const m = model();
 		return m && searching() ? filterSettings(m, query()) : [];
@@ -151,7 +154,10 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 					<Show when={onFeatures() && !searching()}>
 						<FeaturesSettings />
 					</Show>
-					<Show when={model() && !onFeatures()}>
+					<Show when={onInstalled() && !searching()}>
+						<InstalledTab />
+					</Show>
+					<Show when={model() && !onFeatures() && !onInstalled()}>
 						<div class="settings-note">
 							{model()?.target === "future-sessions" || fleetSettingsActive()
 								? "Future sessions: changes save to config.yml. Existing sessions are unchanged."
@@ -159,10 +165,10 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 							Each setting shows whether it applies immediately, to new sessions, or after restart.
 						</div>
 					</Show>
-					<Show when={state.settingsLoading && !model() && !onFeatures()}>
+					<Show when={state.settingsLoading && !model() && !onFeatures() && !onInstalled()}>
 						<div class="settings-note">Loading settings…</div>
 					</Show>
-					<Show when={!state.settingsLoading && !model() && !onFeatures()}>
+					<Show when={!state.settingsLoading && !model() && !onFeatures() && !onInstalled()}>
 						<div class="settings-note">Settings unavailable.</div>
 					</Show>
 					<Show when={searching()}>

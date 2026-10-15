@@ -18,6 +18,7 @@ import {
 	uninstallSkill,
 	updateSkill,
 } from "../../../store/integrations";
+import { setPluginEnabled } from "../../../store/plugins";
 
 export const SkillsDialog: Component<{ onClose: () => void }> = (props) => {
 	const [filter, setFilter] = createSignal("");
@@ -154,7 +155,7 @@ export const SkillsDialog: Component<{ onClose: () => void }> = (props) => {
 											<button
 												type="button"
 												class="settings-control-btn"
-												onClick={() => managePlugin("disable", p.id)}
+												onClick={() => setPluginEnabled(p.id, false)}
 											>
 												disable
 											</button>
@@ -163,7 +164,7 @@ export const SkillsDialog: Component<{ onClose: () => void }> = (props) => {
 										<button
 											type="button"
 											class="settings-control-btn"
-											onClick={() => managePlugin("enable", p.id)}
+											onClick={() => setPluginEnabled(p.id, true)}
 										>
 											enable
 										</button>

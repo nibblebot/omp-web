@@ -1,0 +1,74 @@
+/* Settings > Installed (InstalledTab.tsx, PluginDetail.tsx). Reuses the
+   settings-group, settings-group-title, settings-note, and settings-control-btn
+   classes from settings.css. */
+
+.installed-tab,
+.installed-detail {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+}
+
+.installed-card {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-6);
+	padding: var(--space-5) 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.installed-card-body,
+.installed-detail-head,
+.installed-setting,
+.installed-setting-head {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+.installed-card-name {
+	color: var(--text);
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.installed-card-meta,
+.installed-option-desc {
+	color: var(--muted);
+	font-size: 0.85em;
+}
+
+.installed-card-desc {
+	margin: 0;
+	color: var(--muted-3);
+}
+
+.installed-option {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+}
+
+.installed-option-name {
+	color: var(--text);
+}
+
+.installed-setting {
+	padding: var(--space-4) 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.installed-setting-controls {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+}
+
+.installed-stored {
+	color: var(--muted);
+	font-size: 0.85em;
+}

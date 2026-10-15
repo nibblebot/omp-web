@@ -3,7 +3,13 @@
  * suppression, and fuzzy ranking (exact > startsWith > subsequence).
  */
 
-export type AcToken = { mode: "slash" | "file"; query: string; start: number; end: number };
+/** `emoji` is the `:name` shortcode token (emoji.ts), completed outside `/` and `@` tokens. */
+export type AcToken = {
+	mode: "slash" | "file" | "emoji";
+	query: string;
+	start: number;
+	end: number;
+};
 
 /** Odd count of ``` fences before the caret = inside a code block. */
 export function fenceOpen(text: string): boolean {

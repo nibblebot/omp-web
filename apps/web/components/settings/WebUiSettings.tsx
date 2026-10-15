@@ -31,7 +31,7 @@ import { SettingsRowLayout, SettingsRow } from "./SettingsRow";
  *   (state.sidebarUsage / setSidebarUsage), not a local signal;
  * - server model (refreshSettings/updateSetting): the Images group's
  *   images.* items, rendered through SettingsRow;
- * - session-scoped: the reveal/soften store toggles and the fast-mode /
+ * - session-scoped: the soften store toggle and the fast-mode /
  *   auto-retry RPC calls (hidden under the fleet fallback, mirroring their
  *   main-UI session scope).
  * The shell gates which section renders; the sidebar group filter (null =
@@ -78,21 +78,16 @@ export function WebUiSettings(props: { model: SettingsModel; visibleGroup: strin
 						</div>
 					</SettingsRowLayout>
 					{/* Client-local store toggles (setNotifyEnabled persists to
-					    localStorage as well; reveal/soften are UI prefs). */}
-					<SettingsRowLayout label="desktop notifications">
+					    localStorage as well; soften is a UI pref). */}
+					<SettingsRowLayout
+						label="browser notification permission"
+						description="Grants this browser permission to show OS notifications while the tab is hidden. Which events notify is set by Completion, Error and Ask Notification."
+					>
 						<input
 							type="checkbox"
-							aria-label="desktop notifications"
+							aria-label="browser notification permission"
 							checked={state.notifyEnabled}
 							onChange={(e) => setNotifyEnabled(e.currentTarget.checked)}
-						/>
-					</SettingsRowLayout>
-					<SettingsRowLayout label="reveal queue">
-						<input
-							type="checkbox"
-							aria-label="reveal queue"
-							checked={state.reveal}
-							onChange={(e) => setState("reveal", e.currentTarget.checked)}
 						/>
 					</SettingsRowLayout>
 					<SettingsRowLayout label="soft fade">

@@ -87,6 +87,7 @@
 	--z-autocomplete: 20;
 	--z-overlay: 30;
 	--z-sheet: 40;
+	--z-confirm: 50;
 	--z-lightbox: 100;
 
 	/* Context-breakdown ramp: ordered cool-to-warm hues for the neutral

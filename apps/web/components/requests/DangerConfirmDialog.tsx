@@ -16,7 +16,7 @@ import { Modal } from "../ui/Modal";
 export const DangerConfirmDialog: Component = () => (
 	<Show when={dangerConfirm()} keyed>
 		{(d) => (
-			<Modal title={d.title} onClose={cancelDangerConfirm}>
+			<Modal title={d.title} onClose={cancelDangerConfirm} class="danger-confirm">
 				<p class="danger-confirm-body">{d.body}</p>
 				<div class="ask-actions">
 					<button type="button" onClick={cancelDangerConfirm}>

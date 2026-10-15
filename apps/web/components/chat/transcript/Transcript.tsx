@@ -5,6 +5,15 @@ import { ArrowDownIcon, ExpandIcon } from "../../ui/icons";
 import { CharacterAvatar } from "../../models/CharacterAvatar";
 import { ToolCard, ToolChip } from "../tools/ToolCard";
 import { groupToolRuns, type Run } from "../../../chat/tool-runs";
+import {
+	cacheMissMarker,
+	hideThinkingBlock,
+	hideToolActivity,
+	shimmerMode,
+	showTokenUsage,
+	showTurnTime,
+} from "../../../chat/display-prefs";
+import { buildTurnMeta } from "../../../chat/turn-usage";
 import { useStickyScroll } from "./useStickyScroll";
 import { StreamingBlock } from "./StreamingBlock";
 import { featureTranscriptCard } from "../../../features/registry";
@@ -56,7 +65,8 @@ const TranscriptList: Component = () => {
 		const m = new Map<number, Run>();
 		const consumedIds = new Set<number>();
 		const keys: number[] = [];
-		for (const run of groupToolRuns(state.items)) {
+		// Hidden tool activity folds no runs, so thinking stays on its own card.
+		for (const run of hideToolActivity() ? [] : groupToolRuns(state.items)) {
 			keys.push(run.key);
 			for (const t of run.tools) m.set(t.id, run);
 			for (const id of run.consumedAssistantIds) consumedIds.add(id);
@@ -65,6 +75,14 @@ const TranscriptList: Component = () => {
 		pruneRunOpen(new Set(keys));
 		return { m, consumedIds };
 	});
+	// Per-assistant turn metadata (turn time, cache miss). Computed only for the
+	// toggles that are on, so the items scan is skipped when both are off.
+	const turnMeta = createMemo(() =>
+		buildTurnMeta(state.items, {
+			turnTime: showTokenUsage() && showTurnTime(),
+			cacheMiss: cacheMissMarker(),
+		}),
+	);
 	// The run an item leads (its first member), or null. The consolidated view
 	// renders one row per run on the first member's slot.
 	const leadRun = (item: ToolItem) => {
@@ -115,7 +133,13 @@ const TranscriptList: Component = () => {
 										{(assistant) => (
 											<Show
 												when={state.toolCardsView === "consolidated"}
-												fallback={<AssistantCard assistant={assistant()} thinking />}
+												fallback={
+													<AssistantCard
+														assistant={assistant()}
+														thinking
+														meta={turnMeta().get(assistant().id)}
+													/>
+												}
 											>
 												{/* Consolidated: assistant messages are never folded into a run row;
 								    they always render as cards. Thinking is hidden only when a following
@@ -123,11 +147,12 @@ const TranscriptList: Component = () => {
 												<AssistantCard
 													assistant={assistant()}
 													thinking={!runOf().consumedIds.has(assistant().id)}
+													meta={turnMeta().get(assistant().id)}
 												/>
 											</Show>
 										)}
 									</Match>
-									<Match when={item.kind === "tool" && item}>
+									<Match when={item.kind === "tool" && !hideToolActivity() && item}>
 										{(tool) => (
 											<Show
 												when={state.toolCardsView === "consolidated"}
@@ -171,10 +196,12 @@ const TranscriptList: Component = () => {
 								<For each={state.live.blocks}>
 									{(block) =>
 										block.kind === "thinking" ? (
-											<details class="thinking-block" open>
-												<summary>thinking</summary>
-												<StreamingBlock block={block} />
-											</details>
+											<Show when={!hideThinkingBlock()}>
+												<details class="thinking-block" open>
+													<summary>thinking</summary>
+													<StreamingBlock block={block} proseOnly />
+												</details>
+											</Show>
 										) : (
 											<StreamingBlock block={block} />
 										)
@@ -187,7 +214,7 @@ const TranscriptList: Component = () => {
 			    intent like the TUI working message; the TUI's default phrase
 			    ("Working…") applies until the first intent lands. */}
 						<Show when={state.streaming}>
-							<div class="live-shimmer" aria-hidden="true">
+							<div class="live-shimmer" data-shimmer={shimmerMode()} aria-hidden="true">
 								<span class="shimmer-text">{state.workingIntent ?? "Working…"}</span>
 							</div>
 						</Show>

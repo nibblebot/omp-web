@@ -179,14 +179,11 @@ describe("buildSettingsModel", () => {
 		}
 	});
 
-	test("theme.dark carries the available themes as options", () => {
+	test("theme.dark and theme.light are hidden: the web theme is localStorage-only", () => {
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
-		const themeDark = itemsOf("appearance", model).find((item) => item.path === "theme.dark");
-		expect(themeDark?.type).toBe("submenu");
-		expect(themeDark?.options).toEqual([
-			{ value: "dark", label: "dark" },
-			{ value: "light", label: "light" },
-		]);
+		const appearance = itemsOf("appearance", model).map((item) => item.path);
+		expect(appearance).not.toContain("theme.dark");
+		expect(appearance).not.toContain("theme.light");
 	});
 
 	test("defaultThinkingLevel prepends auto and merges session levels", () => {

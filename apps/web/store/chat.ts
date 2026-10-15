@@ -4,6 +4,8 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { ImageArg } from "#lib/wire/protocol";
 import { scanImages } from "../text/images";
+import { promptTimestamp } from "../chat/turn-usage";
+import { smoothStreaming } from "../chat/display-prefs";
 import type { UsageLike } from "../usage/usage";
 import {
 	setState,
@@ -19,6 +21,14 @@ import { call } from "./transport";
 import { advisorNotesOf } from "./slices/advisor";
 import { flushBtwEphemeral } from "./slices/btw";
 import { applyGoalUpdated } from "./slices/goals";
+import { settingValue } from "./settings";
+import {
+	NOTIFY_SETTING_PATH,
+	notifyKindEnabled,
+	turnCompleted,
+	turnFailure,
+	type NotifyKind,
+} from "./notify";
 
 /**
  * Chat/streaming domain (Phase 3 store facade split). Everything that mutates
@@ -124,13 +134,15 @@ function lastAssistantText(): string {
 }
 
 /**
- * Phase 11: desktop notification, fired only when the tab is hidden and the
- * user opted in with granted permission. Non-secure contexts (typeof
- * Notification === "undefined") and denied/revoked permission are silent
- * no-ops, mirroring the TUI's OSC turn-complete notification.
+ * Desktop notification for one event kind. The SDK setting for that kind
+ * (`completion.notify`, `error.notify`, `ask.notify`) decides whether it
+ * notifies; the local toggle is the browser-permission grant. Fires only while
+ * the tab is hidden. Non-secure contexts (typeof Notification === "undefined")
+ * and denied/revoked permission are silent no-ops.
  */
-function maybeNotify(title: string, body: string): void {
+export function notifyDesktop(kind: NotifyKind, title: string, body: string): void {
 	if (!state.notifyEnabled || !document.hidden) return;
+	if (!notifyKindEnabled(kind, settingValue(NOTIFY_SETTING_PATH[kind]))) return;
 	if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
 	try {
 		new Notification(title, body ? { body } : undefined);
@@ -358,7 +370,7 @@ function flushDeltas(): void {
 	// guaranteed to be comparable (headless BeginFrame can schedule them ahead).
 	const now = performance.now();
 	let budget = Number.POSITIVE_INFINITY;
-	if (state.reveal) {
+	if (smoothStreaming()) {
 		const dt = Math.min(Math.max((now - lastFlushTime) / 1000, 0), 0.1) || 1 / 60;
 		let backlog = 0;
 		for (const d of pendingDeltas.values()) backlog += d.text.length;
@@ -456,6 +468,8 @@ export function assistantBlocks(content: AssistantContent): Block[] {
 function extractWorkingIntent(
 	e: Extract<AgentSessionEvent, { type: "tool_execution_start" }>,
 ): string | undefined {
+	// tools.intentTracing off: the SDK injects no intent (sdk.ts:3958), so no label.
+	if (!(settingValue<boolean>("tools.intentTracing") ?? true)) return undefined;
 	const fromEvent = typeof e.intent === "string" ? e.intent.trim() : "";
 	if (fromEvent) return fromEvent;
 	const args = e.args;
@@ -498,17 +512,29 @@ export function applyEvent(e: AgentSessionEvent): void {
 			// finding #P1: turn ended (streamed text itself is never announced).
 			announceIfReady("agent finished");
 			// Phase 11: desktop notification while the tab is hidden (OSC parity).
-			maybeNotify("Turn complete", truncateHead(lastAssistantText(), 80));
+			if (turnCompleted(e.messages))
+				notifyDesktop("completion", "Turn complete", truncateHead(lastAssistantText(), 80));
+			// Error notification mirrors SDK sendErrorNotification: fired at agent_end, not from the error notice.
+			{
+				const failure = turnFailure(e.messages, {
+					terminal: e.isTerminal !== false,
+					retryPending: state.retryInfo !== null,
+				});
+				if (failure !== undefined)
+					notifyDesktop("error", "Turn stopped with error", truncateHead(failure, 80));
+			}
 			break;
 		case "message_start": {
 			const msg = e.message;
 			if (msg.role === "user") {
 				const images = scanImages(msg.content);
+				const stamp = promptTimestamp(msg);
 				pushItem({
 					kind: "user",
 					id: nextId++,
 					text: userText(msg.content),
 					...(images.length > 0 ? { images } : {}),
+					...(stamp !== undefined ? { timestamp: stamp } : {}),
 				});
 			} else if (msg.role === "assistant") {
 				setState("live", { active: true, blocks: [] });
@@ -553,7 +579,12 @@ export function applyEvent(e: AgentSessionEvent): void {
 				pendingDeltas.clear();
 				// Phase 9: per-turn usage comes from the settled message itself
 				// (AssistantMessage.usage/ttft/duration in the message_end payload).
-				const meta = msg as { usage?: UsageLike; ttft?: number; duration?: number };
+				const meta = msg as {
+					usage?: UsageLike;
+					ttft?: number;
+					duration?: number;
+					completedAt?: number;
+				};
 				pushItem({
 					kind: "assistant",
 					id: nextId++,
@@ -561,6 +592,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 					usage: meta.usage,
 					ttft: meta.ttft,
 					duration: meta.duration,
+					...(meta.completedAt !== undefined ? { completedAt: meta.completedAt } : {}),
 				});
 				setState("live", "active", false);
 			} else {
@@ -629,10 +661,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 		}
 		case "notice":
 			pushItem({ kind: "notice", id: nextId++, level: e.level, message: e.message });
-			// Phase 11: error-level notices (turn failure, failed retry, …) get
-			// a notification too; the TUI surfaces these with an error OSC.
 			if (e.level === "error") {
-				maybeNotify("Turn stopped with error", truncateHead(e.message, 80));
 				// finding #P1: an error notice firing is a status message.
 				announceIfReady(e.message);
 			}

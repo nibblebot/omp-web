@@ -27,6 +27,11 @@
 	align-items: stretch;
 	z-index: var(--z-sheet);
 }
+/* Danger confirm opened from inside a sheet (e.g. plugin trust in Settings):
+   lift its backdrop above the sheet tier so the confirm stays clickable. */
+.modal-backdrop:has(> .modal.danger-confirm) {
+	z-index: var(--z-confirm);
+}
 .modal.sheet {
 	width: min(880px, 100vw);
 	height: 100%;

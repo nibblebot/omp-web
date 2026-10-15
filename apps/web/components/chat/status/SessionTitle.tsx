@@ -1,5 +1,6 @@
 import { createSignal, Show, type Component } from "solid-js";
 import { call, setState, state } from "../../../state";
+import { displayTitle } from "../../ui/title-icons";
 
 /** The session identity is the name (click to rename), pinned to the left edge
  *  directly above the session stream. Chrome and live state stay in
@@ -33,7 +34,8 @@ export const SessionTitle: Component = () => {
 							}
 						}}
 					>
-						{state.sessionName ?? (state.messageCount === 0 ? "New session" : "Untitled session")}
+						{displayTitle(state.sessionName) ??
+							(state.messageCount === 0 ? "New session" : "Untitled session")}
 					</h1>
 				}
 			>

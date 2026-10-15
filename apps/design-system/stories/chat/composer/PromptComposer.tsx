@@ -1,6 +1,7 @@
 import { createSignal, onMount } from "solid-js";
 import type { ImageArg } from "#lib/wire/protocol";
 import { PromptComposer } from "../../../../web/components/chat/composer/PromptComposer";
+import { useGhostText } from "../../../../web/components/chat/composer/useGhostText";
 import { usePromptAutocomplete } from "../../../../web/components/chat/composer/usePromptAutocomplete";
 import {
 	screenDraft,
@@ -25,6 +26,7 @@ function ComposerHarness(props: {
 	const [images, setImages] = createSignal<ImageArg[]>(props.initialImages ?? []);
 	let textarea: HTMLTextAreaElement | undefined;
 	const ac = usePromptAutocomplete(() => textarea, message, setMessage);
+	const ghost = useGhostText(() => textarea, message, setMessage);
 	onMount(() => ac.refreshToken());
 	return (
 		<div class="ds-frame">
@@ -36,6 +38,7 @@ function ComposerHarness(props: {
 						images={images}
 						setImages={setImages}
 						ac={ac}
+						ghost={ghost}
 						onKeyDown={() => {}}
 						setTextareaRef={(el) => {
 							textarea = el;

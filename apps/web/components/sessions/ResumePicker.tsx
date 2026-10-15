@@ -1,6 +1,7 @@
 import { For, Show, createSignal, onMount, type Component } from "solid-js";
 import { Modal } from "../ui/Modal";
 import { PickerRow } from "../ui/PickerRow";
+import { displayTitle } from "../ui/title-icons";
 import {
 	reportImportError,
 	resumeCloneRequest,
@@ -74,7 +75,9 @@ const ResumeCandidateRow: Component<{
 				onClick={() => props.onChoose(candidate())}
 				title={`Resume ${candidate().id}`}
 			>
-				<span class="picker-label">{candidate().title || candidate().id.slice(0, 8)}</span>
+				<span class="picker-label">
+					{displayTitle(candidate().title) || candidate().id.slice(0, 8)}
+				</span>
 				<span class="picker-detail">
 					{candidate().messageCount} msgs · {formatTime(candidate().modifiedMs)} ·{" "}
 					{provenanceNote(candidate())}
@@ -110,7 +113,7 @@ const ForeignSessionRow: Component<{
 			onClick={() => props.onPreview(preview().id)}
 			title={`Preview ${preview().sourceName} session ${preview().id}`}
 		>
-			<span class="picker-label">{preview().title || preview().id.slice(0, 12)}</span>
+			<span class="picker-label">{displayTitle(preview().title) || preview().id.slice(0, 12)}</span>
 			<span class="picker-detail">
 				{preview().sourceName} · {preview().messageCount} msgs · {formatTime(preview().modifiedMs)}
 				{preview().staged ? " · staged upload" : ""}

@@ -1,4 +1,5 @@
 import { createEffect, createMemo, For, type Component } from "solid-js";
+import { formatThinkingForDisplay } from "../../../chat/thinking";
 import { renderMarkdown, splitForStreaming } from "../../../text/markdown";
 import { state, type Block } from "../../../state";
 import { Markdown } from "../../ui/Markdown";
@@ -58,11 +59,17 @@ const StreamingTail: Component<{ text: string }> = (props) => {
 };
 
 /** Live-streaming block: the memoized split renders settled text as frozen
- *  paragraphs and the tail as a softening stream (160ms re-parse on pause). */
-export const StreamingBlock: Component<{ block: Block }> = (props) => {
+ *  paragraphs and the tail as a softening stream (160ms re-parse on pause).
+ *  `proseOnly` formats thinking text the way the TUI does (fenced code elided). */
+export const StreamingBlock: Component<{ block: Block; proseOnly?: boolean }> = (props) => {
 	// splitForStreaming is a full O(n) scan of the block text; memoize it so
 	// each text change pays for the scan once instead of once per split() read.
-	const split = createMemo(() => splitForStreaming(props.block.text, false));
+	const split = createMemo(() =>
+		splitForStreaming(
+			props.proseOnly ? formatThinkingForDisplay(props.block.text, true) : props.block.text,
+			false,
+		),
+	);
 	return (
 		<>
 			<For each={split().complete}>{(segment) => <Markdown src={segment} />}</For>

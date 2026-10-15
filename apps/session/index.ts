@@ -58,7 +58,6 @@ import {
 	notifyEvent,
 	pendingCodeInputs,
 	ringAfter,
-	historyFrames,
 	setOnConsumerDetached,
 	setOnStreamsEmpty,
 	snapshotDeltaSeq,
@@ -86,6 +85,7 @@ import {
 } from "./quiesce-evidence";
 import { flushAllWriters } from "./writer-flush";
 import { setOnFrameTap, setOnHistoryTap } from "./sse-delivery";
+import { settingWriteReloadsHistory, transcriptHistoryFrames } from "./transcript-history";
 import { initSdkTuiGlobals } from "./sdk-tui-globals";
 
 // ---------------------------------------------------------------------------
@@ -298,7 +298,7 @@ function primingFrames(
 			...(entry.session.sessionFile ? { sessionFile: entry.session.sessionFile } : {}),
 		},
 		{ type: "attached", sessionId: BOOT_HANDLE },
-		...historyFrames(entry.session.messages),
+		...transcriptHistoryFrames(entry.session),
 		{
 			type: "state",
 			state: daemonBroker.buildStateSnapshot(entry.session),
@@ -552,12 +552,16 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 								},
 							)
 						: await method(entry, cmd.args ?? [], cmd.streamId);
+				// A settings write that changes the transcript (display.collapseCompacted) resyncs
+				// history like a HISTORY_RELOAD method, so attached transcripts follow the setting.
+				const reloadsHistory =
+					Boolean(HISTORY_RELOAD[cmd.method]) || settingWriteReloadsHistory(cmd.method, cmd.args);
 				// Post-mutation resync is best-effort: the mutation already
 				// succeeded, so a resync failure must not fail the call.
 				const resync = async () => {
 					try {
-						if (HISTORY_RELOAD[cmd.method])
-							await broadcastHistory(entry.handle, historyFrames(entry.session.messages));
+						if (reloadsHistory)
+							await broadcastHistory(entry.handle, transcriptHistoryFrames(entry.session));
 						if (HISTORY_RELOAD[cmd.method] || !READ_ONLY[cmd.method])
 							await daemonBroker.broadcastState(entry);
 					} catch (err) {
@@ -565,7 +569,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 						broadcast({ type: "error", error: `resync failed: ${String(err)}` });
 					}
 				};
-				if (HISTORY_RELOAD[cmd.method]) {
+				if (reloadsHistory) {
 					// Resync BEFORE the call_result: picker success UI (notices,
 					// modal close) must run after the transcript is replaced.
 					await resync();

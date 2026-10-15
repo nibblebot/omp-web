@@ -184,6 +184,62 @@ export interface SettingsModel {
 }
 
 // ---------------------------------------------------------------------------
+// Installed plugins (Settings > Installed). Backed by the SDK plugin manager
+// (~/.omp/plugins/omp-plugins.lock.json): session RPCs when a session is
+// attached, /ctl/plugins/* on the fleet otherwise. A secret setting never
+// carries its value or default: only `set` says whether one is stored.
+// ---------------------------------------------------------------------------
+
+export type PluginSource = "npm" | "link";
+
+export interface PluginSummary {
+	name: string;
+	/** Absent when the package declares no version; never rendered as "undefined". */
+	version?: string;
+	source: PluginSource;
+	enabled: boolean;
+	description?: string;
+}
+
+export interface PluginFeatureRow {
+	name: string;
+	description?: string;
+	/** Effective state: explicit selection when one is stored, else the manifest default. */
+	enabled: boolean;
+	default: boolean;
+}
+
+export type PluginSettingValue = string | number | boolean;
+
+export interface PluginSettingRow {
+	key: string;
+	type: "string" | "number" | "boolean" | "enum";
+	description?: string;
+	secret: boolean;
+	/** Environment variable the plugin falls back to when no value is stored. */
+	env?: string;
+	/** enum only */
+	values?: string[];
+	/** number only */
+	min?: number;
+	max?: number;
+	step?: number;
+	/** Omitted for secrets. */
+	default?: PluginSettingValue;
+	/** Stored value; omitted for secrets and when nothing is stored. */
+	value?: PluginSettingValue;
+	/** A value is stored in the lock file (the only signal a secret exposes). */
+	set: boolean;
+}
+
+export interface PluginDetail extends PluginSummary {
+	features: PluginFeatureRow[];
+	/** True when an explicit feature selection overrides the manifest defaults. */
+	featuresCustomized: boolean;
+	settings: PluginSettingRow[];
+}
+
+// ---------------------------------------------------------------------------
 // omp-session / omp-fleet contract (README.md). OMP_PROTO gates
 // fleet↔omp-session drift (the collab COLLAB_PROTO pattern); bump on any
 // breaking change to the transport or frame shapes.
@@ -471,6 +527,11 @@ export type WebMethodName =
 	// transcript); abortEphemeral cancels the in-flight side turn via its signal.
 	| "runEphemeralTurn"
 	| "abortEphemeral"
+	// Composer ghost text: spelling.autocomplete word suffix and its feedback,
+	// composer.predictions next-message prediction (SDK controller, same gates).
+	| "predictWord"
+	| "predictWordFeedback"
+	| "predictNextMessage"
 	| "getSessionStats"
 	// Settings panel (TUI /settings parity)
 	| "getSettings"
@@ -510,6 +571,11 @@ export type WebMethodName =
 	| "skillUpdate"
 	| "skillUninstall"
 	| "pluginManage"
+	| "listPlugins"
+	| "getPluginConfig"
+	| "setPluginEnabled"
+	| "setPluginFeatures"
+	| "setPluginSetting"
 	| "reloadIntegrations"
 	| "gitStatus"
 	| "gitStage"

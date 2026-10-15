@@ -2,12 +2,20 @@ import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
 import { Settings, type RawSettings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
-	getSettingsForTab,
+	getAllSettingDefs,
 	SETTING_TABS,
 	type SettingDef,
+	type SettingsDisplayEntry,
 	type SettingTab,
 	TAB_METADATA,
 } from "@oh-my-pi/pi-tui/overlays/settings-defs";
+import {
+	ADVANCED_GROUP,
+	ADVANCED_SETTING_PATHS,
+	HIDDEN_SETTING_PATHS,
+	TAB_SECTION_ORDER,
+	WEB_TRUE_CONDITIONS,
+} from "#lib/sdk-settings/settings-layout";
 import type {
 	SettingsGroup,
 	SettingsItem,
@@ -169,9 +177,68 @@ function layerValue(layer: unknown, path: string): unknown {
 	return value;
 }
 
+/**
+ * Settings the web client applies to its own rendering the moment they change
+ * (the transcript, composer, subagent and notification surfaces read them
+ * through settingValue()). The session applies them immediately too, so they
+ * are `live`.
+ */
+export const WEB_RENDER_PATHS: Readonly<Record<string, true>> = {
+	"display.shimmer": true,
+	"display.smoothStreaming": true,
+	"display.hideToolActivity": true,
+	"display.showTokenUsage": true,
+	"display.showTurnTime": true,
+	"display.cacheMissMarker": true,
+	"display.collapseCompacted": true,
+	hideThinkingBlock: true,
+	expandThinkingBlocks: true,
+	proseOnlyThinking: true,
+	"terminal.showImages": true,
+	"tui.renderMermaid": true,
+	"tui.renderSvg": true,
+	"tui.autoGraph": true,
+	"tui.reactions": true,
+	"tui.codexResetFireworks": true,
+	readLineNumbers: true,
+	"read.renderMarkdown": true,
+	"read.toolResultPreview": true,
+	"mcp.renderMarkdownResults": true,
+	"tools.intentTracing": true,
+	"images.questionTimeoutMs": true,
+	"tools.artifactSpillThreshold": true,
+	"tools.artifactTailBytes": true,
+	"tools.artifactHeadBytes": true,
+	"tools.outputMaxColumns": true,
+	"tools.artifactTailLines": true,
+	"tools.artifactMaxBytes": true,
+	"title.generator": true,
+	"title.refreshOnReplan": true,
+	"display.pinnedAgents": true,
+	"display.subagentLivePreview": true,
+	"task.showResolvedModelBadge": true,
+	"title.icons": true,
+	autocompleteMaxVisible: true,
+	"spelling.autocomplete": true,
+	"composer.predictions": true,
+	emojiAutocomplete: true,
+	"paste.largeMenuThreshold": true,
+	"magicKeywords.enabled": true,
+	"magicKeywords.ultrathink": true,
+	"magicKeywords.orchestrate": true,
+	"magicKeywords.workflow": true,
+	"magicKeywords.jevify": true,
+	"completion.notify": true,
+	"error.notify": true,
+	"ask.notify": true,
+	"recap.enabled": true,
+	"recap.idleSeconds": true,
+};
+
 /** Timing is conservative for defaults consumed only when a session is constructed. */
 export function settingEffect(path: string): SettingView["effect"] {
 	if (
+		Object.hasOwn(WEB_RENDER_PATHS, path) ||
 		path === "defaultThinkingLevel" ||
 		path === "memory.backend" ||
 		path.startsWith("sampling.") ||
@@ -278,6 +345,45 @@ function defToItem(
 	}
 }
 
+/**
+ * Wire item for a host row the TUI has no def for (a number or an array with no
+ * choices). Numbers edit as text, which coerceSettingValue accepts in string form;
+ * arrays edit as a JSON list.
+ */
+function entryToItem(
+	entry: SettingsDisplayEntry,
+	ui: NonNullable<SettingsDisplayEntry["ui"]>,
+	options: SettingsModelOptions,
+	global: RawSettings,
+	project: RawSettings,
+): SettingsItem {
+	const view = settingView(
+		entry.path,
+		options.settings ?? Settings.instance,
+		options,
+		global,
+		project,
+	);
+	const base = {
+		path: entry.path,
+		label: ui.label,
+		description: ui.description,
+		value: view.effective,
+		changed: settingChanged(view.effective, entry.defaultValue),
+		view,
+	};
+	return entry.type === "array"
+		? { ...base, type: "list" }
+		: { ...base, type: "text", secret: false };
+}
+
+/** SDK gate for a row. WEB_TRUE_CONDITIONS forces the terminal probes true for the web client. */
+function rowVisible(entry: SettingsDisplayEntry): boolean {
+	const name = entry.ui?.condition;
+	if (name !== undefined && WEB_TRUE_CONDITIONS[entry.path] === name) return true;
+	return entry.condition ? entry.condition() : true;
+}
+
 function buildGroups(
 	tab: SettingTab,
 	session: SettingsSession,
@@ -287,26 +393,35 @@ function buildGroups(
 	global: RawSettings,
 	project: RawSettings,
 ): SettingsGroup[] {
-	// getSettingsForTab orders defs by TAB_GROUPS[tab] (ungrouped first, then
-	// group order), so emitting a heading on group change reproduces the TUI's
-	// section layout; groups that end up with zero visible items never appear.
-	const groups: SettingsGroup[] = [];
-	let current: SettingsGroup | null = null;
-	for (const def of getSettingsForTab(createSettingsHost().entries, tab)) {
-		if (def.condition && !def.condition()) continue;
-		const item = defToItem(def, session, themes, providers, options, global, project);
-		if (!def.group) {
-			if (!current || current.name !== "") {
-				current = { name: "", items: [] };
-				groups.push(current);
-			}
-		} else if (!current || current.name !== def.group) {
-			current = { name: def.group, items: [] };
-			groups.push(current);
-		}
-		current.items.push(item);
+	const defs = new Map<string, SettingDef>(
+		getAllSettingDefs(settingsHost.entries).map((def) => [def.path, def]),
+	);
+	// Visible rows bucketed by section. SDK order is kept inside each section.
+	const buckets = new Map<string, SettingsItem[]>();
+	for (const entry of settingsHost.entries) {
+		const ui = entry.ui;
+		if (!ui || ui.tab !== tab || HIDDEN_SETTING_PATHS[entry.path]) continue;
+		if (!rowVisible(entry)) continue;
+		const def = defs.get(entry.path);
+		const item = def
+			? defToItem(def, session, themes, providers, options, global, project)
+			: entryToItem(entry, ui, options, global, project);
+		const section = ADVANCED_SETTING_PATHS[entry.path] ? ADVANCED_GROUP : (ui.group ?? "");
+		const items = buckets.get(section);
+		if (items) items.push(item);
+		else buckets.set(section, [item]);
 	}
-	return groups;
+	// Ungrouped first, then the manifest's section order, then sections the manifest
+	// does not list (new SDK sections, in SDK order), then Advanced last.
+	const listed = TAB_SECTION_ORDER[tab] ?? [];
+	const named = [...buckets.keys()].filter((name) => name !== ADVANCED_GROUP);
+	const ordered = [
+		...named.filter((name) => name === ""),
+		...listed.filter((name) => buckets.has(name)),
+		...named.filter((name) => name !== "" && !listed.includes(name)),
+		...(buckets.has(ADVANCED_GROUP) ? [ADVANCED_GROUP] : []),
+	];
+	return ordered.map((name) => ({ name, items: buckets.get(name) ?? [] }));
 }
 
 /**

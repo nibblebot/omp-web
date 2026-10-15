@@ -1,7 +1,15 @@
-import { Show } from "solid-js";
+import { createSignal, onCleanup, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import type { Component } from "solid-js";
-import type { SubagentInfo } from "../../state";
+import { state, type SubagentInfo } from "../../state";
+import { getWorkerInfo } from "../../store/subagents";
+import {
+	elapsedLabel,
+	pickProgress,
+	toolPreview,
+	type ModelBadge,
+	type SubagentProgressView,
+} from "../../subagents/progress";
 import { BanIcon, CheckIcon, CircleIcon, LoaderIcon, XIcon, type IconProps } from "../ui/icons";
 
 export const STATUS_ICON: Record<string, Component<IconProps>> = {
@@ -29,6 +37,8 @@ export interface SubagentRowProps {
 	unread?: boolean;
 	/** Model chip text (WorkerRecord model when present; defensive — SubagentInfo has no model field). */
 	model?: string;
+	/** Resolved model badge (task.showResolvedModelBadge): model, thinking level, advisor. */
+	badge?: ModelBadge;
 }
 
 /** Display name: the SDK id is the spawned name ("Anna"; "." nests, "Anna.Bob");
@@ -63,6 +73,15 @@ export const SubagentRow: Component<SubagentRowProps> = (props) => (
 		<Show when={subagentName(props.sub) !== props.sub.agent}>
 			<span class="subagent-type">{props.sub.agent}</span>
 		</Show>
+		<Show when={props.badge}>
+			{(badge) => (
+				<span class="subagent-model" data-advisor={badge().advisor ? "true" : undefined}>
+					{[badge().model, badge().thinking, badge().advisor ? "advisor" : undefined]
+						.filter(Boolean)
+						.join(" · ")}
+				</span>
+			)}
+		</Show>
 		<span class="subagent-desc">{props.sub.description ?? props.sub.task ?? ""}</span>
 		<span class="subagent-status">{props.sub.status}</span>
 		<Show when={props.showMeta}>
@@ -80,3 +99,45 @@ export const SubagentRow: Component<SubagentRowProps> = (props) => (
 		</Show>
 	</div>
 );
+
+/** Live progress for subagent `id` from the worker store; reactive in tracking scopes. */
+export function subagentProgress(id: string): SubagentProgressView | undefined {
+	const info = getWorkerInfo(state.currentSessionId, id);
+	return pickProgress(info && "progress" in info ? info.progress : undefined);
+}
+
+/**
+ * Live tool preview under a running subagent (display.subagentLivePreview): its
+ * current call, else the latest finished one. Ticks each second so the elapsed
+ * marker advances.
+ */
+export const SubagentToolPreview: Component<{ progress: SubagentProgressView | undefined }> = (
+	props,
+) => {
+	const [now, setNow] = createSignal(Date.now());
+	const timer = setInterval(() => setNow(Date.now()), 1000);
+	onCleanup(() => clearInterval(timer));
+	const preview = () => toolPreview(props.progress);
+	return (
+		<Show when={preview()}>
+			{(p) => (
+				<span
+					class="subagent-preview"
+					data-running={String(p().running)}
+					data-error={String(p().isError)}
+				>
+					<Show when={!p().running}>
+						<span class="subagent-preview-last">last</span>
+					</Show>
+					<span class="subagent-preview-tool">{p().tool}</span>
+					<Show when={p().detail}>
+						{(detail) => <span class="subagent-preview-detail">{detail()}</span>}
+					</Show>
+					<Show when={elapsedLabel(p().startedAt, now())}>
+						{(label) => <span class="subagent-preview-elapsed">{label()}</span>}
+					</Show>
+				</span>
+			)}
+		</Show>
+	);
+};

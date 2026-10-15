@@ -10,6 +10,8 @@ export interface AcItem {
 export const AutocompletePopup: Component<{
 	items: AcItem[];
 	selected: number;
+	/** Rows visible before the list scrolls (`autocompleteMaxVisible`). */
+	maxVisible: number;
 	onHover: (index: number) => void;
 	onApply: (item: AcItem) => void;
 	listId: string;
@@ -23,6 +25,16 @@ export const AutocompletePopup: Component<{
 		const sel = props.selected;
 		if (sel !== pointerPick) listEl?.children[sel]?.scrollIntoView({ block: "nearest" });
 		pointerPick = -1;
+	});
+	// Row height is measured from the first row so the cap follows the font and
+	// padding; the CSS max-height stays the fallback while no rows are mounted.
+	createEffect(() => {
+		void props.items;
+		void props.maxVisible;
+		const row = listEl?.children[0] as HTMLElement | undefined;
+		if (!listEl || !row) return;
+		// +2: the 1px top and bottom borders.
+		listEl.style.maxHeight = `${row.offsetHeight * props.maxVisible + 2}px`;
 	});
 	return (
 		<div class="autocomplete" role="listbox" id={props.listId} ref={listEl}>

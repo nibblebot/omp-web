@@ -14,6 +14,7 @@ import { ExtensionUi } from "../../requests/ExtensionUi";
 import { PromptActions } from "./PromptActions";
 import { PromptComposer, expandChipsForSubmit } from "./PromptComposer";
 import { usePromptAutocomplete } from "./usePromptAutocomplete";
+import { useGhostText } from "./useGhostText";
 
 const history = new PromptHistory();
 
@@ -29,6 +30,7 @@ export const PromptBox: Component = () => {
 	const [images, setImages] = createSignal<ImageArg[]>([]);
 	let textarea!: HTMLTextAreaElement;
 	const ac = usePromptAutocomplete(() => textarea, message, setMessage);
+	const ghost = useGhostText(() => textarea, message, setMessage);
 	// Double-Esc on an empty textarea opens the branch picker (TUI parity).
 	let lastEsc = 0;
 
@@ -111,6 +113,13 @@ export const PromptBox: Component = () => {
 				}
 			}
 		}
+		// Tab (popup closed) or ArrowRight accepts a ghost suggestion at the caret end.
+		if ((e.key === "Tab" && !e.shiftKey) || e.key === "ArrowRight") {
+			if (ghost.accept()) {
+				e.preventDefault();
+				return;
+			}
+		}
 		if (e.key === "Escape" && state.streaming) {
 			e.preventDefault();
 			lastEsc = 0;
@@ -176,6 +185,7 @@ export const PromptBox: Component = () => {
 				images={images}
 				setImages={setImages}
 				ac={ac}
+				ghost={ghost}
 				onKeyDown={onKeyDown}
 				setTextareaRef={(el) => {
 					textarea = el;

@@ -11,7 +11,7 @@ import { authedFetch } from "./auth";
 
 /** Server error message from a non-ok /ctl response: the {error} body when
  *  present, else the raw body text, else the HTTP status. */
-async function ctlError(res: Response): Promise<string> {
+export async function ctlError(res: Response): Promise<string> {
 	const body = await res.text().catch(() => "");
 	try {
 		const parsed = JSON.parse(body) as { error?: unknown };

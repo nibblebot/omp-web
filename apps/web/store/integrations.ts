@@ -192,7 +192,7 @@ function skillMutate(method: WebMethodName, args: unknown[]) {
 		})
 		.catch((error) => fail("skills", error));
 }
-function trust(title: string, id: string, run: () => void) {
+export function trust(title: string, id: string, run: () => void) {
 	requestDangerConfirm({
 		title,
 		body: `Only install code you trust. Skills can instruct the agent to run commands; plugins execute with daemon permissions. This can read files or disclose data.\n\nSource: ${id}`,
@@ -210,13 +210,12 @@ export function updateSkill(id: string, scope: IntegrationScope = "profile"): vo
 }
 export const uninstallSkill = (id: string) => skillMutate("skillUninstall", [id]);
 export function managePlugin(
-	action: "install" | "update" | "uninstall" | "enable" | "disable",
+	action: "install" | "update" | "uninstall",
 	id: string,
 	scope: IntegrationScope = "profile",
 ): void {
 	const run = () => skillMutate("pluginManage", [action, id, { trusted: true, scope }]);
-	if (action === "install" || action === "update" || action === "enable")
-		trust("Trust plugin code?", id, run);
+	if (action === "install" || action === "update") trust("Trust plugin code?", id, run);
 	else run();
 }
 export function reloadIntegrations(): void {

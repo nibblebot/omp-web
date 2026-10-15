@@ -20,6 +20,11 @@
  *   POST /ctl/prompt   {selector, text, waitMs?}   → PromptResult[] | { submitted: string[] }
  *   POST /ctl/settings/set {path, value, expectedRevision?, layer?}   -> SettingsModel (400 bad path/value/layer, 409 stale revision)
  *   POST /ctl/settings/unset {path, expectedRevision?, layer?}        -> SettingsModel (same errors)
+ *   GET  /ctl/plugins                                 -> installed plugin summaries
+ *   GET  /ctl/plugins/:name                           -> one plugin's config detail
+ *   POST /ctl/plugins/:name/enabled {enabled}         -> detail after enable/disable
+ *   POST /ctl/plugins/:name/features {features|null}  -> detail after feature selection
+ *   POST /ctl/plugins/:name/setting {key, value|null} -> detail after setting write (null clears)
  *   POST /ctl/projects/:id/worktrees               -> create or add-existing worktree -> 201 { entry }
  *   DELETE /ctl/worktrees/:daemonId {deleteBranch?} -> worktree: stop -> remove entry -> git worktree remove
  *                    (clone workspace: verify-at-deletion gate, P7.3/P7.5)
@@ -91,6 +96,12 @@ import {
 	type FleetSettingsOptions,
 	type SettingsLayer,
 } from "./settings";
+import { createFleetPlugins, type FleetPlugins } from "./plugins";
+import {
+	parseFeatureSelection,
+	PluginConfigError,
+	type PluginStore,
+} from "#lib/plugins/installed-plugins";
 import { createStatsApp } from "./stats-app";
 import type { StatsConfig } from "./stats-config";
 import { BrowserAuthStore, clearSessionCookie } from "./browser-auth";
@@ -322,6 +333,9 @@ const WORKTREE_DELETE_ROUTE = /^\/ctl\/worktrees\/([^/]+)$/;
 const WORKTREE_INFO_ROUTE = /^\/ctl\/worktrees\/([^/]+)\/delete-info$/;
 /** P8.10 resume-onto-fresh-clone: POST /ctl/workspaces/:id/resume-clone. */
 const WORKSPACE_RESUME_CLONE_ROUTE = /^\/ctl\/workspaces\/([^/]+)\/resume-clone$/;
+/** Installed-plugin routes; the name segment is URI-encoded (scoped names contain "/"). */
+const PLUGIN_DETAIL_ROUTE = /^\/ctl\/plugins\/([^/]+)$/;
+const PLUGIN_WRITE_ROUTE = /^\/ctl\/plugins\/([^/]+)\/(enabled|features|setting)$/;
 
 /**
  * Post-verification local clone deletion follows persisted volume provenance,
@@ -446,6 +460,7 @@ class FleetServerImpl implements FleetServer {
 	readonly config: FleetConfig;
 	readonly edge: FleetEdge;
 	readonly fleetSettings: FleetSettings;
+	readonly fleetPlugins: FleetPlugins;
 	readonly eventLog = new FleetEventLog();
 	readonly startedAt: number;
 	readonly fleetFacts: FleetFacts;
@@ -517,6 +532,7 @@ class FleetServerImpl implements FleetServer {
 		statsConfig?: Pick<StatsConfig, "statsDbPath" | "sessionsDir">,
 		serveUi = true,
 		redialGraceMs = REDIAL_GRACE_MS,
+		pluginStore?: () => Promise<PluginStore>,
 	) {
 		this.registry = registry;
 		this.#redialGraceMs = redialGraceMs;
@@ -688,6 +704,7 @@ class FleetServerImpl implements FleetServer {
 		// Settings.init + ModelRegistry, no live session required. Injectable
 		// provider source for tests (must not open the real auth DB).
 		this.fleetSettings = createFleetSettings(settingsOptions);
+		this.fleetPlugins = createFleetPlugins({ openStore: pluginStore });
 		// #3: statuses persisted by a previous fleet process describe dead
 		// children/sockets; map them to a truthful boot state and redial
 		// remote entries BEFORE anything else starts acting on the roster.
@@ -1182,6 +1199,13 @@ class FleetServerImpl implements FleetServer {
 				// Delete-confirmation evidence for one worktree daemon.
 				const infoMatch = WORKTREE_INFO_ROUTE.exec(path);
 				if (infoMatch) return await this.#handleWorktreeDeleteInfo(infoMatch[1]);
+				// Installed-plugin detail: GET /ctl/plugins/:name (name URI-encoded).
+				const pluginMatch = PLUGIN_DETAIL_ROUTE.exec(path);
+				if (pluginMatch) {
+					return await this.#pluginRoute(() =>
+						this.fleetPlugins.get(decodeURIComponent(pluginMatch[1])),
+					);
+				}
 				switch (path) {
 					case "/ctl/sessions":
 						return json(this.registry.list().map(toRosterEntry));
@@ -1199,6 +1223,9 @@ class FleetServerImpl implements FleetServer {
 						);
 						return json({ projects, registered: this.registry.projects() });
 					}
+					case "/ctl/plugins":
+						// Installed-plugin list: unattached fleet, lock-file backed.
+						return await this.#pluginRoute(() => this.fleetPlugins.list());
 					case "/ctl/settings":
 						// Unattached settings model: the fleet service lazily
 						// initializes the process-global Settings singleton +
@@ -1218,6 +1245,11 @@ class FleetServerImpl implements FleetServer {
 				// add-existing ({worktreePath, start?}) for one project.
 				const worktreesMatch = PROJECT_WORKTREES_ROUTE.exec(path);
 				if (worktreesMatch) return await this.#handleCreateOrAddWorktree(req, worktreesMatch[1]);
+				// Installed-plugin writes: POST /ctl/plugins/:name/{enabled|features|setting}.
+				const pluginWriteMatch = PLUGIN_WRITE_ROUTE.exec(path);
+				if (pluginWriteMatch) {
+					return await this.#handlePluginWrite(req, pluginWriteMatch[1], pluginWriteMatch[2]);
+				}
 				switch (path) {
 					case "/ctl/projects":
 						return await this.#handleAddProject(req);
@@ -1775,6 +1807,41 @@ class FleetServerImpl implements FleetServer {
 	}
 
 	/**
+	 * Installed-plugin writes for the unattached fleet (lock-file backed, see
+	 * apps/fleet/plugins.ts). Client errors are 400/404 with safe messages and
+	 * setting values are never echoed. Secret settings carry only `set`, so no
+	 * response can leak a token.
+	 */
+	async #handlePluginWrite(req: Request, rawName: string, action: string): Promise<Response> {
+		const body = await readJson(req);
+		return await this.#pluginRoute(() => {
+			const name = decodeURIComponent(rawName);
+			if (action === "enabled") {
+				const enabled = body["enabled"];
+				if (typeof enabled !== "boolean") throw new HttpError(400, "enabled must be a boolean");
+				return this.fleetPlugins.setEnabled(name, enabled);
+			}
+			if (action === "features") {
+				return this.fleetPlugins.setFeatures(name, parseFeatureSelection(body["features"]));
+			}
+			const key = requireString(body, "key");
+			if (!("value" in body)) throw new HttpError(400, "setting value required (null clears it)");
+			return this.fleetPlugins.setSetting(name, key, body["value"]);
+		});
+	}
+
+	/** Maps plugin-service failures to HTTP: client errors keep their status and message. */
+	async #pluginRoute(run: () => Promise<unknown>): Promise<Response> {
+		try {
+			return json(await run());
+		} catch (err) {
+			if (err instanceof HttpError) throw err;
+			if (err instanceof PluginConfigError) throw new HttpError(err.status, err.message);
+			throw new HttpError(400, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	/**
 	 * POST /ctl/projects/:projectId/worktrees. Two shapes: create-new
 	 * `{ name, baseRef?, existingBranch?, start? }` (git worktree add under
 	 * workspaceDir, lazily creating the workspace root) and add-existing
@@ -2176,6 +2243,8 @@ export async function startFleet(
 		serveUi?: boolean;
 		/** Test seam: redial grace before a session with no pair is marked asleep (default REDIAL_GRACE_MS). */
 		redialGraceMs?: number;
+		/** Test seam: plugin lock store (the real SDK-backed store otherwise). */
+		pluginStore?: () => Promise<PluginStore>;
 	} = {},
 ): Promise<FleetServer> {
 	const configPath = resolveConfigPath(opts.configPath);
@@ -2221,6 +2290,7 @@ export async function startFleet(
 			opts.statsConfig,
 			opts.serveUi,
 			opts.redialGraceMs,
+			opts.pluginStore,
 		);
 	} catch (err) {
 		lock.release();

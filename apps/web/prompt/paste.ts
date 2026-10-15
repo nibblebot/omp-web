@@ -18,10 +18,14 @@ export const MAX_FILE_BYTES = 1_000_000;
 const TEXT_EXT_RE =
 	/\.(txt|md|markdown|json|jsonl|yml|yaml|toml|xml|csv|log|diff|patch|ts|tsx|js|jsx|py|rs|go|sh|css|html)$/i;
 
-/** Should this paste fold visually? Payload untouched; caller shows the
- *  folded view with a raw-paste toggle. */
-export function shouldFoldPaste(text: string): boolean {
-	return text.split("\n").length > PASTE_FOLD_LINES || text.length > PASTE_FOLD_CHARS;
+/** SDK default for `paste.largeMenuThreshold` (lines). */
+export const PASTE_LARGE_MENU_DEFAULT = 100;
+
+/** Should this paste fold visually? Folds at `threshold` lines, matching the TUI
+ *  large-paste menu; 0 disables. Payload untouched; caller shows the folded view
+ *  with a raw-paste toggle. */
+export function shouldFoldPaste(text: string, threshold: number): boolean {
+	return threshold > 0 && text.split("\n").length >= threshold;
 }
 
 /** Folded preview: first N lines + omission marker. Never used for submit —

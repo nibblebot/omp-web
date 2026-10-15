@@ -3,6 +3,7 @@ import { call, listSessions, setState, state } from "../../state";
 import { formatTimeAgo } from "../../text/time-ago";
 import { Modal } from "../ui/Modal";
 import { PickerRow } from "../ui/PickerRow";
+import { displayTitle } from "../ui/title-icons";
 import type { SessionListEntry } from "#lib/wire/protocol";
 
 /**
@@ -111,9 +112,11 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 							class="picker-row session-picker-row"
 							classList={{ active: gateMode() && i() === 0 }}
 							onClick={() => choose(s)}
-							title={`${s.name ?? s.id}\n${s.cwd || "(no cwd)"}\n${new Date(s.modifiedAt).toLocaleString()}`}
+							title={`${displayTitle(s.name) ?? s.id}\n${s.cwd || "(no cwd)"}\n${new Date(s.modifiedAt).toLocaleString()}`}
 						>
-							<span class="picker-label session-picker-name">{s.name ?? s.id.slice(0, 8)}</span>
+							<span class="picker-label session-picker-name">
+								{displayTitle(s.name) ?? s.id.slice(0, 8)}
+							</span>
 							<Show when={s.path === state.sessionFile}>
 								<span class="picker-chip">current</span>
 							</Show>

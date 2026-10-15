@@ -19,6 +19,7 @@ import type { DaemonBroker } from "./daemon-broker";
 import type { SessionEntry } from "./session-entry";
 import { buildSettingsModel, coerceSettingValue } from "#lib/sdk-settings/settings-model";
 import { applySettingSideEffects } from "./settings-effects";
+import { createPluginMethods } from "./plugin-methods";
 import { resolveSessionMainFile, MaterializeSessionError } from "./session-materialize";
 import os from "node:os";
 import { createDownloadMethods } from "./download-manifest";
@@ -71,6 +72,7 @@ import {
 	handoffPreview,
 } from "./compaction-adapter";
 import { createLifecycleMethods } from "./lifecycle-adapter";
+import { createComposerMethods } from "./composer-methods";
 import { createSettingsMethods } from "./settings-methods";
 import { rejectEntryUiRequests } from "./ui-context";
 import { createAnnotationMethods } from "./review-annotations";
@@ -175,6 +177,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		getSessionStats: true,
 		getAvailableModels: true,
 		getSettings: true,
+		listPlugins: true,
+		getPluginConfig: true,
 		getBranchMessages: true,
 		getQueuedMessages: true,
 		getLoginProviders: true,
@@ -184,6 +188,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		dumpLlmRequestToTmpDir: true,
 		fetchUsageReports: true,
 		getContextBreakdown: true,
+		predictWord: true,
+		predictWordFeedback: true,
 	};
 
 	// Readiness gate (R8): before the boot session's provider/model/auth
@@ -195,6 +201,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		followUp: true,
 		abortAndPrompt: true,
 		runEphemeralTurn: true,
+		predictNextMessage: true,
 	};
 
 	// Calls that replace the transcript; every tab resyncs, not just the requester.
@@ -295,6 +302,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		return mainFile;
 	}
 
+	const plugins = createPluginMethods({ cwd: deps.cwd });
 	const METHODS: Partial<
 		Record<
 			WebMethodName,
@@ -735,6 +743,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		...createGitReviewMethods(),
 		...createPlanReviewMethods(),
 		...createTodoMethods(),
+		...createComposerMethods(),
 		...createIntegrationMethods({
 			broadcastState: (entry) => deps.broker.broadcastState(entry),
 			broadcastAvailableCommands: (entry) => deps.broker.broadcastAvailableCommands(entry),
@@ -872,6 +881,11 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		vibeKill: async (entry, a) => killVibeWorker(entry, String(a[0])),
 		vibeKillAll: async (entry) => killAllVibeWorkers(entry),
 		vibeRehydrate: async (entry) => rehydrateVibeWorkers(entry),
+		listPlugins: async (_entry, a) => plugins.listPlugins(a),
+		getPluginConfig: async (_entry, a) => plugins.getPluginConfig(a),
+		setPluginEnabled: async (_entry, a) => plugins.setPluginEnabled(a),
+		setPluginFeatures: async (_entry, a) => plugins.setPluginFeatures(a),
+		setPluginSetting: async (_entry, a) => plugins.setPluginSetting(a),
 	};
 
 	return {

@@ -26,6 +26,7 @@ function Picker(props: { items: AcItem[]; initial: number; listId: string }) {
 				<AutocompletePopup
 					items={props.items}
 					selected={selected()}
+					maxVisible={10}
 					onHover={setSelected}
 					onApply={() => {}}
 					listId={props.listId}
