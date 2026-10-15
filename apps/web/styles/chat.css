@@ -14,18 +14,6 @@
 		opacity: 1;
 	}
 }
-.error-banner {
-	flex-basis: 100%;
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-	gap: var(--space-4);
-	padding: var(--space-3) var(--space-4);
-	border-radius: var(--r-md);
-	background: var(--error-bg);
-	border: 1px solid var(--error-border);
-	color: var(--error-text);
-}
 /* Wrap owns the jump-to-bottom button's positioning context; the scroller
    keeps flex:1 inside it. */
 .chat-transcript-wrap {

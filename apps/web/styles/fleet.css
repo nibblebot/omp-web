@@ -69,7 +69,7 @@
 .sidebar-toggle {
 	position: fixed;
 	top: var(--space-4);
-	left: var(--space-6);
+	left: var(--space-5);
 	z-index: var(--z-overlay);
 	display: flex;
 	align-items: center;

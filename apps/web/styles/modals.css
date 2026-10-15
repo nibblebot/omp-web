@@ -464,21 +464,28 @@ button.picker-row {
 	font-weight: 600;
 }
 
-/* --- Toast stack (Toasts.tsx): fleet/app-scoped ephemeral notifications ---
-   Fixed bottom-right, above modals (--z-overlay + 1); cards match the
-   modal/dialog surfaces (panel / border-strong / shadow-2). Gaps and
-   padding come from the --space-* scale; the dismiss button keeps the
-   global button chrome + :focus-visible ring (base.css) with only
-   geometry overrides here. */
+/* --- Toast stack (Toasts.tsx): app-scoped notifications and errors ---
+   Fixed top-right under the status bar, clear of the composer, above modals
+   (--z-overlay + 1); narrow viewports stretch it to the edge gutters. Cards
+   match the modal/dialog surfaces (panel / border-strong / shadow-2). Gaps
+   and padding come from the --space-* scale; the dismiss button keeps the
+   global button chrome + :focus-visible ring (base.css) with only geometry
+   overrides here. */
 .toast-list {
 	position: fixed;
-	right: var(--space-6);
-	bottom: var(--space-6);
+	top: calc(var(--status-bar-h) + var(--space-3));
+	right: var(--space-5);
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-3);
 	z-index: calc(var(--z-overlay) + 1);
-	max-width: min(420px, calc(100vw - 2 * var(--space-6)));
+	max-width: min(420px, calc(100vw - 2 * var(--space-5)));
+}
+@media (max-width: 720px) {
+	.toast-list {
+		left: var(--space-5);
+		max-width: none;
+	}
 }
 .toast {
 	display: flex;
@@ -492,6 +499,13 @@ button.picker-row {
 	color: var(--text);
 	font-size: var(--fs-base);
 	line-height: 1.4;
+}
+/* --error-bg is a translucent tint: layer it over the opaque panel so the
+   transcript never shows through. */
+.toast-error {
+	background-image: linear-gradient(var(--error-bg), var(--error-bg));
+	border-color: var(--error-border);
+	color: var(--error-text);
 }
 /* Long unbroken paths wrap instead of blowing the card width (a path is
    already left-truncated in the frame handler; this is the final guard). */

@@ -172,7 +172,7 @@ export default defineStory({
 					<p>
 						<span class="ds-chip-plain">{iconRow()}</span>
 					</p>
-					<div class="error-banner">{iconRow()}</div>
+					<div class="toast toast-error">{iconRow()}</div>
 				</div>
 			),
 		},

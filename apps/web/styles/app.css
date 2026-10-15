@@ -6,21 +6,21 @@
 	flex-direction: column;
 	height: 100vh;
 	height: 100dvh;
-	/* Full-viewport shell: the header floats to the edges; only the chat
+	/* Full-viewport shell, flush to the viewport edges: the status bar and
+	   chat-column rows carry their own --space-5 gutter, and only the chat
 	   column (.app-main) is width-constrained and centered. */
-	padding: 0 var(--space-6);
 }
 .status-bar {
 	display: flex;
 	align-items: center;
 	gap: var(--space-5);
-	padding: var(--space-4) 0;
+	padding: var(--space-4) var(--space-5);
 	border-bottom: 1px solid var(--border);
 	/* Single-row height held constant: with no visible segments (roster Chat)
 	   the bar would collapse to padding-only and the sidebar's top edge would
-	   jump when switching Chat/Analysis. 41px = 2x8px padding + 24px segment
-	   buttons + 1px border; wrapping may still grow it. */
-	min-height: 41px;
+	   jump when switching Chat/Analysis. --status-bar-h = 2x8px padding + 24px
+	   segment buttons + 1px border; wrapping may still grow it. */
+	min-height: var(--status-bar-h);
 	box-sizing: border-box;
 	font-size: var(--fs-md);
 	color: var(--muted);
@@ -29,7 +29,7 @@
 /* The floating ☰ toggle owns the top-left corner while a sidebar is closed;
    keep the status-bar content clear of it. */
 .app:has(.sidebar-toggle) .status-bar {
-	padding-left: calc(var(--space-6) + 44px);
+	padding-left: calc(var(--space-5) + 44px);
 }
 .session-header {
 	display: flex;
@@ -177,6 +177,11 @@
 	max-width: 820px;
 	margin: 0 auto;
 	min-width: 0;
+}
+/* Edge gutter for the column's fixed rows. The transcript scroller pads
+   itself (chat.css) so its scrollbar stays on the column edge. */
+.app-main > :is(.session-header, .queue-bar, .background-bars, .session-bar, .prompt-box) {
+	padding-inline: var(--space-5);
 }
 /* No live attached session (daemon stopped/removed or never
    picked): the chat column is replaced by a quiet centered hint. */

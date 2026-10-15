@@ -29,6 +29,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Composer: Up with the caret on the prompt's first line opens a prompt history popover anchored at the prompt's top-left corner and growing up and to the right (newest prompt at the bottom, Up for older, Down past the newest back to the prompt, type to fuzzy-filter, Enter or click inserts). It replaces both inline Up/Down history cycling and the Ctrl+R history search dialog; Ctrl+R is no longer bound.
 - Sidebar: the footer shows the omp-web version and git commit the UI was built from, and below them the upstream omp version with the omp.sh logo.
 - Features: Analysis mode is off by default; enable it in Settings > Features. Only non-default choices were stored, so browsers that had it on now start without it until it is enabled again; a persisted Analysis view or `#/s/…` link falls back to Chat.
+- Layout: the app shell sits flush with the viewport edges; the status bar and chat column rows share one 12px gutter. Errors that used to show as a banner in the status bar now show as a sticky error toast (dismiss or replace by the next error), and the toast stack docks top-right under the status bar (full width on narrow screens) instead of bottom-right over the composer.
 
 ### Fixes
 - Vite: explicit extensions in config imports eliminate native-config compatibility warnings during `bun dev`.

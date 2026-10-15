@@ -80,12 +80,6 @@ export const StatusBar: Component = () => {
 				</StatusSegment>
 			</Show>
 			{!state.connected && <span class="disconnected-pill">disconnected</span>}
-			{state.error && (
-				<div class="error-banner" role="alert">
-					<span>{state.error}</span>
-					<button onClick={() => setState("error", null)}>dismiss</button>
-				</div>
-			)}
 		</header>
 	);
 };
