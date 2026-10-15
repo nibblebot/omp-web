@@ -1,5 +1,4 @@
 import { createSignal, type Accessor } from "solid-js";
-import type { ImageArg } from "#lib/wire/protocol";
 import { loadDraft, saveDraft, type DraftBody, type DraftKey } from "../store/drafts";
 
 /**
@@ -94,22 +93,6 @@ export function readFileAsText(file: Blob): Promise<string> {
 	reader.onerror = () => reject(reader.error ?? new Error("read failed"));
 	reader.readAsText(file);
 	return promise;
-}
-
-export interface ExternalEditDiff {
-	before: string;
-	after: string;
-	attachmentsKept: number;
-}
-
-/** Describe an external-edit import before it replaces the draft:
- *  attachments are preserved separately (never embedded in the text). */
-export function describeExternalImport(
-	before: string,
-	after: string,
-	images: ImageArg[],
-): ExternalEditDiff {
-	return { before, after, attachmentsKept: images.length };
 }
 
 /**

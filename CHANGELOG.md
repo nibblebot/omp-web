@@ -6,7 +6,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Lifecycle: same-session clear, new identity, provider-state fresh, and session-ID-confirmed durable delete with fleet purge acknowledgment; misleading `/drop` alias removed (`/delete` + menu action replace it).
 - Settings: effective value, owning layer, explicit presence, unset eligibility, SDK warnings, and live/next-session/restart effects on every row; typed record/list editing; project layer read-only with config-file guidance.
 - Session graph: searchable ID-anchored tree with same-file navigate vs new-file branch, ask re-answer transaction, and entry-ID branch-from-card (no text-equality lookup).
-- Editor: partitioned drafts with cleared-ring recovery, bounded Vim subset, large-paste folding, file attach validation, and download/export external-edit round-trip.
+- Editor: partitioned drafts with cleared-ring recovery, large-paste folding, and file attach validation. The composer's vim toggle and export/copy/import draft buttons are removed.
 - Models: temporary session-only switch with effort-clamp feedback, preset list/save/apply/delete, and branch-local model-worker chips.
 - Review: daemon-bound Git stage/unstage/hunk/commit with fingerprint gates; versioned plan approval with stale refusal; durable anchored annotations with drift/orphan marking; canonical phased todos with revision conflicts.
 - Workers: searchable hub with live focus/steer, park/revive/resume lifecycle, advisor config/status/transcript, and guided goals/loops plus Vibe director controls.

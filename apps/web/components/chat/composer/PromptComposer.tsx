@@ -25,7 +25,7 @@ import {
 	scheduleDraftSave,
 } from "../../../store/drafts";
 import { expandMentionChips, getModelMentions, MODEL_MENTION_RE } from "../../../store/models";
-import { graphGeneration, noteTranscriptReplaced } from "../../../store/graph";
+import { graphGeneration } from "../../../store/graph";
 import {
 	foldedPreview,
 	PASTE_LARGE_MENU_DEFAULT,
@@ -36,7 +36,6 @@ import {
 	validateImportFile,
 } from "../../../prompt/paste";
 import { settingValue } from "../../../store/settings";
-import { handleVimKey, VIM_DOC, VimState, type VimMode } from "../../../prompt/vim";
 import { PaperclipIcon, XIcon } from "../../ui/icons";
 import { AutocompletePopup } from "./AutocompletePopup";
 import type { PromptAutocomplete } from "./usePromptAutocomplete";
@@ -59,21 +58,15 @@ interface PromptComposerProps {
  * P2 prompt composer (G03 + G18 chips). Owns paste handling (image clips,
  * large-paste fold with exact-payload submit, intentional file input/drop
  * with SDK/model validation), the promptInsert inbox effect, per-partition
- * draft persistence, cleared-draft recovery, optional bounded Vim, and
- * `^model` chip rendering.
+ * draft persistence, cleared-draft recovery, and `^model` chip rendering.
  *
- * Folding is visual only: submit always uses the full text. External edit is
- * download/export + user-selected import/replace with attachment
- * preservation (clipboard fallback; File System Access only on granted
- * handles — see ExternalEditButtons below).
+ * Folding is visual only: submit always uses the full text.
  */
 export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	let textarea!: HTMLTextAreaElement;
 	let fileInput!: HTMLInputElement;
 	// Stable id for the combobox/listbox wiring (aria-controls/activedescendant).
 	const listId = `prompt-ac-${Math.random().toString(36).slice(2, 8)}`;
-	const vim = new VimState();
-	const [vimMode, setVimMode] = createSignal<VimMode | null>(null);
 	const [folded, setFolded] = createSignal(true);
 	const [pasteNote, setPasteNote] = createSignal<string | null>(null);
 	const [pasteError, setPasteError] = createSignal<string | null>(null);
@@ -157,9 +150,6 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 			images: imgs,
 			selectionStart: textarea.selectionStart ?? undefined,
 			selectionEnd: textarea.selectionEnd ?? undefined,
-			...(vimMode()
-				? { editMode: vimMode() === "insert" ? ("insert" as const) : ("normal" as const) }
-				: {}),
 			updatedAt: Date.now(),
 		});
 	};
@@ -243,27 +233,6 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 				props.ac.autoGrow();
 			});
 		}
-	};
-
-	const toggleVim = (): void => {
-		const mode = vim.toggle();
-		setVimMode(mode);
-		if (mode) textarea.focus();
-	};
-
-	const onTextareaKeyDown = (e: KeyboardEvent): void => {
-		// Bounded Vim subset first (IME-safe inside); unclaimed keys fall
-		// through to the host handler (autocomplete/queue/Escape/Up).
-		if (vim.enabled && vim.mode !== "insert") {
-			const r = handleVimKey(vim, e.currentTarget as HTMLTextAreaElement, e);
-			if (r.handled) {
-				e.preventDefault();
-				props.setMessage((e.currentTarget as HTMLTextAreaElement).value);
-				if (r.notice) setPasteNote(r.notice);
-				return;
-			}
-		}
-		props.onKeyDown(e);
 	};
 
 	const onTextareaInput = (e: Event): void => {
@@ -398,7 +367,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							aria-autocomplete="list"
 							value={props.message()}
 							onInput={onTextareaInput}
-							onKeyDown={onTextareaKeyDown}
+							onKeyDown={(e) => props.onKeyDown(e)}
 							onKeyUp={onCaretMove}
 							onClick={onCaretMove}
 							onScroll={syncMirror}
@@ -431,157 +400,8 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 						<PaperclipIcon />
 					</button>
 				</div>
-				<div class="prompt-tools">
-					<button
-						type="button"
-						class="queue-pop"
-						title={
-							vimMode()
-								? `Vim ${vimMode()} — click for plain editor`
-								: "Plain editor — click for bounded Vim"
-						}
-						aria-pressed={vimMode() !== null}
-						onClick={toggleVim}
-					>
-						{vimMode() ? `vim:${vimMode()}` : "vim"}
-					</button>
-					<Show when={vimMode()}>
-						<span
-							class="tool-collapsed-note"
-							title={VIM_DOC.map((d) => `${d.keys}: ${d.what}`).join("\n")}
-						>
-							bounded vim — hover for keys
-						</span>
-					</Show>
-					<ExternalEditButtons
-						getText={props.message}
-						getImages={props.images}
-						setText={props.setMessage}
-					/>
-				</div>
 			</div>
 		</>
-	);
-};
-
-/**
- * External edit as download/export + user-selected import/replace (G03.4).
- * Download writes the draft to a user-chosen file; import reads back a
- * user-SELECTED file, shows the diff size, and replaces on confirm with
- * attachments preserved separately. Clipboard copy/paste is the fallback.
- * File System Access operates only on user-granted handles where supported.
- */
-export const ExternalEditButtons: Component<{
-	getText: () => string;
-	getImages: () => ImageArg[];
-	setText: Setter<string>;
-}> = (props) => {
-	const [diff, setDiff] = createSignal<{ before: number; after: number } | null>(null);
-	let importInput!: HTMLInputElement;
-
-	const download = async (): Promise<void> => {
-		const text = props.getText();
-		// Prefer File System Access on a user-granted handle; fallback to download.
-		const w = window as unknown as {
-			showSaveFilePicker?: (opts: unknown) => Promise<{
-				createWritable: () => Promise<{
-					write: (s: string) => Promise<void>;
-					close: () => Promise<void>;
-				}>;
-			}>;
-		};
-		if (w.showSaveFilePicker) {
-			try {
-				const handle = await w.showSaveFilePicker({
-					suggestedName: "omp-draft.md",
-					types: [{ description: "Markdown", accept: { "text/markdown": [".md"] } }],
-				});
-				const stream = await handle.createWritable();
-				await stream.write(text);
-				await stream.close();
-				return;
-			} catch {
-				// User cancelled or denied: fall through to download.
-			}
-		}
-		const blob = new Blob([text], { type: "text/markdown" });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement("a");
-		a.href = url;
-		a.download = "omp-draft.md";
-		a.click();
-		setTimeout(() => URL.revokeObjectURL(url), 1000);
-	};
-
-	const copyOut = (): void => {
-		const text = props.getText();
-		try {
-			void navigator.clipboard?.writeText(text);
-		} catch {
-			// Clipboard unavailable: user selects manually.
-		}
-	};
-
-	const importSelected = async (f: File): Promise<void> => {
-		const v = validateImportFile(f.name, f.type, f.size);
-		if (!v.ok) return;
-		const after = await readFileAsText(f);
-		const before = props.getText();
-		setDiff({ before: before.length, after: after.length });
-		// Replace on confirm via native confirm-free inline state: the diff
-		// line below shows sizes; a second click confirms.
-		props.setText(after);
-		// Attachments preserved: images untouched.
-		noteTranscriptReplaced();
-	};
-
-	return (
-		<span class="prompt-extedit">
-			<button
-				type="button"
-				class="queue-pop"
-				title="Download draft for external editing"
-				onClick={() => void download()}
-			>
-				export
-			</button>
-			<button
-				type="button"
-				class="queue-pop"
-				title="Copy draft to clipboard (external-edit fallback)"
-				onClick={copyOut}
-			>
-				copy
-			</button>
-			<input
-				ref={importInput}
-				type="file"
-				accept=".md,.txt,.json,.log,.diff,.patch,text/*"
-				hidden
-				aria-hidden="true"
-				tabIndex={-1}
-				onChange={(e) => {
-					const f = e.currentTarget.files?.[0];
-					if (f) void importSelected(f);
-					e.currentTarget.value = "";
-				}}
-			/>
-			<button
-				type="button"
-				class="queue-pop"
-				title="Import an edited file to replace the draft (attachments kept)"
-				onClick={() => importInput.click()}
-			>
-				import
-			</button>
-			<Show when={diff()}>
-				{(d) => (
-					<span class="tool-collapsed-note">
-						replaced {d().before} → {d().after} chars, {props.getImages().length} attachment(s) kept
-					</span>
-				)}
-			</Show>
-		</span>
 	);
 };
 

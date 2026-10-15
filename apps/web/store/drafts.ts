@@ -21,7 +21,6 @@ export interface DraftBody {
 	images: ImageArg[];
 	selectionStart?: number;
 	selectionEnd?: number;
-	editMode?: "insert" | "normal" | "visual";
 	updatedAt: number;
 }
 
@@ -117,9 +116,6 @@ function sanitizeBody(raw: unknown): DraftBody | null {
 		images: kept,
 		...(typeof o.selectionStart === "number" ? { selectionStart: o.selectionStart } : {}),
 		...(typeof o.selectionEnd === "number" ? { selectionEnd: o.selectionEnd } : {}),
-		...(o.editMode === "insert" || o.editMode === "normal" || o.editMode === "visual"
-			? { editMode: o.editMode }
-			: {}),
 		updatedAt: typeof o.updatedAt === "number" ? o.updatedAt : Date.now(),
 	};
 }
