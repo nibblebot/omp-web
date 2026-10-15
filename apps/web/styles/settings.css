@@ -725,14 +725,12 @@
 .features-reload {
 	color: var(--text);
 }
-.feature-controls {
-	display: flex;
-	gap: var(--space-4);
-	align-items: center;
-}
-.feature-status,
+.feature-meta,
 .feature-size {
 	font-size: var(--fs-sm);
 	color: var(--muted-2);
 	font-variant-numeric: tabular-nums;
+}
+.feature-meta {
+	margin: var(--space-2) 0 0;
 }

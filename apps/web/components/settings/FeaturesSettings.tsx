@@ -81,7 +81,7 @@ export function FeaturesSettings(props: { query?: string }) {
 						</div>
 					</Show>
 					<Show when={!sizes.loading && !sizes()}>
-						<div class="settings-note">Sizes are measured in production builds.</div>
+						<div>Sizes are measured in production builds.</div>
 					</Show>
 				</section>
 			</Show>
@@ -89,25 +89,27 @@ export function FeaturesSettings(props: { query?: string }) {
 				<SettingsGroup title="Features">
 					<For each={rows()}>
 						{(f) => (
-							<div class="settings-item feature-row">
-								<div class="settings-item-label">
-									<span>{f.label}</span>
-									<Show when={f.experimental}>
-										<span class="badge">Experimental</span>
-									</Show>
-								</div>
-								<div class="settings-item-desc">{f.description}</div>
-								<div class="settings-item-control feature-controls">
-									<span class="feature-status">
+							<div class="settings-item">
+								<div class="settings-item-text">
+									<div class="settings-item-label">
+										<span>{f.label}</span>
+										<Show when={f.experimental}>
+											<span class="badge">Experimental</span>
+										</Show>
+									</div>
+									<p class="settings-item-desc">{f.description}</p>
+									<p class="feature-meta">
 										{activeFeatureIds().has(f.id) ? "Loaded" : "Not loaded"}
-									</span>
-									<Show when={sizes()}>
-										{(m) => (
-											<Show when={featureOwnSize(m(), f.id)}>
-												{(s) => <span class="feature-size">{formatKilobytes(s().gzip)} gzip</span>}
-											</Show>
-										)}
-									</Show>
+										<Show when={sizes()}>
+											{(m) => (
+												<Show when={featureOwnSize(m(), f.id)}>
+													{(s) => <> · {formatKilobytes(s().gzip)} gzip</>}
+												</Show>
+											)}
+										</Show>
+									</p>
+								</div>
+								<div class="settings-item-control">
 									<SettingToggle
 										label={`Enable ${f.label}`}
 										checked={featurePreferences()[f.id]}
