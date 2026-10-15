@@ -21,12 +21,12 @@ export default [
 			{
 				name: "Sizes, reload pending",
 				description:
-					"Analysis and debug turned off after load: summary shows the after-reload size and the Reload button.",
+					"Analysis turned on and debug turned off after load: summary shows the after-reload size and the Reload button.",
 				seed: () => {
 					featureSizesFixture.available = true;
 					resetFeatureSizes();
 					markFeaturesActive(defaultEnabled);
-					setFeaturePreference("analysis", false);
+					setFeaturePreference("analysis", true);
 					setFeaturePreference("debug", false);
 				},
 				render: () => <FeaturesSettings />,
@@ -39,8 +39,6 @@ export default [
 					featureSizesFixture.available = false;
 					resetFeatureSizes();
 					markFeaturesActive(defaultEnabled);
-					setFeaturePreference("analysis", true);
-					setFeaturePreference("debug", true);
 				},
 				render: () => <FeaturesSettings />,
 			},

@@ -28,6 +28,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Theme: when the OS prefers light, the default theme is catppuccin-latte; the plain light theme stays selectable.
 - Composer: Up with the caret on the prompt's first line opens a prompt history popover anchored at the prompt's top-left corner and growing up and to the right (newest prompt at the bottom, Up for older, Down past the newest back to the prompt, type to fuzzy-filter, Enter or click inserts). It replaces both inline Up/Down history cycling and the Ctrl+R history search dialog; Ctrl+R is no longer bound.
 - Sidebar: the footer shows the omp-web version and git commit the UI was built from, and below them the upstream omp version with the omp.sh logo.
+- Features: Analysis mode is off by default; enable it in Settings > Features. Only non-default choices were stored, so browsers that had it on now start without it until it is enabled again; a persisted Analysis view or `#/s/…` link falls back to Chat.
 
 ### Fixes
 - Vite: explicit extensions in config imports eliminate native-config compatibility warnings during `bun dev`.

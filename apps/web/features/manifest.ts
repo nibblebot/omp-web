@@ -36,7 +36,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		label: "Analysis mode",
 		description: "Transcript browser and session statistics view next to Chat.",
 		experimental: false,
-		defaultEnabled: true,
+		defaultEnabled: false,
 		commands: [],
 		modals: [],
 	},

@@ -1,10 +1,13 @@
 import { ViewSwitch } from "../../../web/components/app/ViewSwitch";
+import { setFeaturePreference } from "../../../web/features/preferences";
 import { defineStory } from "../../registry";
 
 export default defineStory({
 	id: "app-view-switch",
 	title: "ViewSwitch",
 	component: { file: "apps/web/components/app/ViewSwitch.tsx", export: "ViewSwitch" },
+	// Analysis is off by default and the switch renders only while it is on.
+	seed: () => setFeaturePreference("analysis", true),
 	variants: [
 		{
 			name: "Chat view",
