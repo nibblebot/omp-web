@@ -1,5 +1,5 @@
 import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
-import { call, listSessions, setState, state } from "../../state";
+import { call, listSessions, setState, startNewSession, state } from "../../state";
 import { formatTimeAgo } from "../../text/time-ago";
 import { Modal } from "../ui/Modal";
 import { PickerRow } from "../ui/PickerRow";
@@ -34,7 +34,7 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 		if (gateMode() && e.key === "Escape") {
 			e.stopImmediatePropagation();
 			e.preventDefault();
-			startNewSession();
+			chooseNewSession();
 		}
 	};
 
@@ -75,9 +75,9 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	/** Gate-mode Esc/row action: start a fresh session on the attached daemon. */
-	const startNewSession = () => {
+	const chooseNewSession = () => {
 		setState("sessionPickerGate", null);
-		void call("newSession").catch((err) => setError(String(err)));
+		void startNewSession().catch((err) => setError(String(err)));
 		close();
 	};
 
@@ -99,7 +99,7 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 				<Show when={gateMode()}>
 					<PickerRow
 						class="picker-row session-new"
-						onClick={startNewSession}
+						onClick={chooseNewSession}
 						title="Start a fresh session (no history)"
 					>
 						<span class="picker-label session-new-label">New session</span>

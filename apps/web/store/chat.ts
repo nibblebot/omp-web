@@ -746,6 +746,19 @@ export function applyEvent(e: AgentSessionEvent): void {
  */
 export const [promptInsert, setPromptInsert] = createSignal<PromptInsert | null>(null);
 
+/**
+ * Composer focus inbox: a started session publishes here; PromptComposer
+ * consumes and clears (it owns the textarea).
+ */
+export const [promptFocusRequest, setPromptFocusRequest] = createSignal(false);
+
+/** Start a fresh session (/new, New session button, picker gate) and focus the composer once it lands. */
+export function startNewSession(): Promise<void> {
+	return call("newSession").then(() => {
+		setPromptFocusRequest(true);
+	});
+}
+
 /** Phase 7: pop the last queued message back into the prompt (QueueBar ×, Alt+↑). */
 export function dequeueLastQueued(): void {
 	void call("popLastQueuedMessage")

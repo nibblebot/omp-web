@@ -9,6 +9,7 @@ import {
 	pushNotice,
 	resolveBashItem,
 	setState,
+	startNewSession,
 	state,
 	type BashResultLike,
 	type ModalName,
@@ -340,7 +341,7 @@ function openModal(modal: ModalName): (args: string) => void {
 export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	new: (args) => {
 		if (args.trim()) return pushNotice("error", "Usage: /new takes no arguments.");
-		void call("newSession").catch(showError);
+		void startNewSession().catch(showError);
 	},
 	clear: (args) => {
 		if (args.trim()) return pushNotice("error", "Usage: /clear takes no arguments.");

@@ -39,6 +39,7 @@ import {
 	extractText,
 	notifyDesktop,
 	userText,
+	startNewSession,
 } from "./store/chat";
 import { cancelUiRequest } from "./store/modals";
 import { resetPendingProjects, settleProjectBranches, settleProjects } from "./store/projects";
@@ -1132,7 +1133,7 @@ export function connect(): void {
 						setState("modal", "sessions");
 					} else {
 						// Same path /new uses to start a new session.
-						void call("newSession").catch((err) => setState("error", String(err)));
+						void startNewSession().catch((err) => setState("error", String(err)));
 					}
 				}
 				break;
@@ -1529,6 +1530,9 @@ export {
 	dequeueLastQueued,
 	promptInsert,
 	setPromptInsert,
+	promptFocusRequest,
+	setPromptFocusRequest,
+	startNewSession,
 } from "./store/chat";
 export {
 	listSessions,

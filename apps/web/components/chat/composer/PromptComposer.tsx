@@ -10,7 +10,12 @@ import {
 	type Setter,
 } from "solid-js";
 import type { ImageArg } from "#lib/wire/protocol";
-import { promptInsert, setPromptInsert } from "../../../state";
+import {
+	promptFocusRequest,
+	promptInsert,
+	setPromptFocusRequest,
+	setPromptInsert,
+} from "../../../state";
 import {
 	cancelScheduledDraftSave,
 	currentDraftKey,
@@ -107,6 +112,13 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 			textarea.focus();
 			props.ac.autoGrow();
 		});
+	});
+
+	// A started session (/new, New session button, picker gate) hands focus here.
+	createEffect(() => {
+		if (!promptFocusRequest()) return;
+		setPromptFocusRequest(false);
+		requestAnimationFrame(() => textarea.focus());
 	});
 
 	// Restore the partition draft on mount (prior text/image draft restore);
