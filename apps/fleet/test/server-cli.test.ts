@@ -231,7 +231,7 @@ describe("CLI", () => {
 		}
 	});
 
-	test("control serves the API with no UI and rejects --open", async () => {
+	test("control serves the API with no UI", async () => {
 		const cwd = join(import.meta.dir, "..", "..", "..");
 		const controlStatePath = join(tmp, "control-state.json");
 		copyFileSync(statePath, controlStatePath);
@@ -262,18 +262,6 @@ describe("CLI", () => {
 			control.kill("SIGKILL");
 			await control.exited;
 		}
-	});
-
-	test("control rejects --open because it serves no UI", async () => {
-		const child = Bun.spawn(["bun", "apps/fleet/cli.ts", "control", "--port", "0", "--open"], {
-			cwd: join(import.meta.dir, "..", "..", ".."),
-			env: { ...process.env, OMP_FLEET_CONFIG: configPath },
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const errText = await readAll(child.stderr);
-		expect(await child.exited).toBe(1);
-		expect(errText).toContain("omp-web ui --open");
 	});
 
 	test("ui exits 1 with a clear error when its port is taken", async () => {

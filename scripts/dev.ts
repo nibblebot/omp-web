@@ -8,10 +8,11 @@
  *                        serves dist/, not the dev UI. NO session is started. Spawn one from
  *                        the roster UI, or enroll a remote one with `omp-web enroll`.
  *
- *   --open / --no-open   force / disable opening the UI in a browser. Default: open
- *                        on every interactive local run (TTY, no --host, a display
- *                        on Linux). BROWSER=none (vite's
- *                        knob) also disables it. Vite's `o + enter` reopens any time.
+ *   --no-open            do not open the UI in a browser. Otherwise dev opens it only
+ *                        when a person runs it from an interactive local terminal
+ *                        (stdin+stdout TTY, no --host, a display on Linux); agents and
+ *                        scripts never pop tabs. BROWSER=none (vite's knob) also
+ *                        disables it. Vite's `o + enter` reopens any time.
  *
  *   --auth-broker        opt in to an auth broker that clone sandboxes borrow
  *                        credentials from (adopted when one already runs, else
@@ -94,6 +95,7 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { expandTilde, resolveConfigPath } from "../apps/fleet/config";
 import { resolveOmpBinary } from "../apps/fleet/omp-check";
 import { slugifyWorktreeName } from "../apps/fleet/worktrees";
+import { isInteractiveDesktop } from "../lib/platform/open-browser";
 
 const ROOT = join(import.meta.dir, "..");
 /**
@@ -315,7 +317,8 @@ function buildChild(name: string): Child {
 			// cwd, and the repo isn't necessarily it). --control-grace makes
 			// dev sessions die soon after the dev fleet goes away, however it
 			// ends (Ctrl+C, closed terminal, SIGKILL); production keeps the 10m default.
-			cmd: ["bun", "apps/fleet/cli.ts", "--port", String(ports.fleet)],
+			// --no-open: the fleet's own `/` serves the stale dist/ UI; vite opens the dev UI.
+			cmd: ["bun", "apps/fleet/cli.ts", "--port", String(ports.fleet), "--no-open"],
 			env: {
 				// State (and its `.lock`) scoped per worktree under the data home:
 				// parallel worktrees' dev fleets, and the user's real fleet on
@@ -354,8 +357,10 @@ function buildChild(name: string): Child {
 	if (host !== undefined) cmd.push("--host", host);
 	// vite's own --open: once per vite process (not on its in-process
 	// restarts), honors BROWSER/BROWSER_ARGS (BROWSER=none disables), and logs
-	// an open failure instead of exiting.
-	if (shouldOpenUi()) cmd.push("--open");
+	// an open failure instead of exiting. Only for a person at an interactive
+	// local terminal, and never with --host (its browser is usually on
+	// another machine).
+	if (!noOpen && host === undefined && isInteractiveDesktop()) cmd.push("--open");
 	const env: Record<string, string> = {
 		// vite's proxy target for /events + /command + /ctl; the roster UI runs
 		// with HMR, no dist/ build needed.
@@ -367,26 +372,13 @@ function buildChild(name: string): Child {
 	return { name: "vite", cmd, env, stdin: "inherit" };
 }
 
-/**
- * Auto-open policy. `--open` forces, `--no-open` disables. The default opens
- * on every interactive local run: stdin+stdout TTY (agents/scripts running
- * the stack never pop tabs), no --host (its browser is usually on another
- * machine), and a display on Linux.
- */
-function shouldOpenUi(): boolean {
-	if (openMode !== "auto") return openMode === "always";
-	if (process.stdout.isTTY !== true || process.stdin.isTTY !== true) return false;
-	if (host !== undefined) return false;
-	return process.platform !== "linux" || !!process.env.DISPLAY || !!process.env.WAYLAND_DISPLAY;
-}
-
 const args = process.argv.slice(2);
 let host: string | undefined;
 let allowHosts: string | undefined;
 let stateFrom: string | undefined;
 let fresh = false;
 let authBroker = false;
-let openMode: "auto" | "always" | "never" = "auto";
+let noOpen = false;
 for (let i = 0; i < args.length; i++) {
 	const arg = args[i];
 	if (arg === "fleet") {
@@ -425,14 +417,12 @@ for (let i = 0; i < args.length; i++) {
 		fresh = true;
 	} else if (arg === "--auth-broker") {
 		authBroker = true;
-	} else if (arg === "--open") {
-		openMode = "always";
 	} else if (arg === "--no-open") {
-		openMode = "never";
+		noOpen = true;
 	} else {
 		console.error(`unrecognized argument: ${arg}`);
 		console.error(
-			"usage: bun scripts/dev.ts [fleet] [--host [addr]] [--allow-hosts [csv]] [--state-from <path>] [--fresh] [--auth-broker] [--open|--no-open]",
+			"usage: bun scripts/dev.ts [fleet] [--host [addr]] [--allow-hosts [csv]] [--state-from <path>] [--fresh] [--auth-broker] [--no-open]",
 		);
 		process.exit(2);
 	}

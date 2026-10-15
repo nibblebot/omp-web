@@ -26,7 +26,7 @@ describe("classifyCommand", () => {
 		[["preflight"], "fleet"],
 		[["control", "--port", "0"], "fleet"],
 		[["sessions", "--port", "4722"], "fleet"],
-		[["ui", "--control-port", "4722", "--open"], "fleet"],
+		[["ui", "--control-port", "4722", "--no-open"], "fleet"],
 	];
 
 	test("routes argv to its target", () => {
@@ -49,7 +49,7 @@ describe("classifyCommand", () => {
 	test("bare invocations and leading flags route to fleet (omp-web = serve)", () => {
 		expect(classifyCommand([])).toBe("fleet");
 		expect(classifyCommand([""])).toBe("fleet");
-		expect(classifyCommand(["--open"])).toBe("fleet");
+		expect(classifyCommand(["--no-open"])).toBe("fleet");
 		expect(classifyCommand(["--port", "4800"])).toBe("fleet");
 	});
 

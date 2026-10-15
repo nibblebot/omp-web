@@ -1,6 +1,17 @@
 import { spawn } from "node:child_process";
 
 /**
+ * Whether a person launched this process from an interactive terminal on a
+ * machine that can show a browser: stdin and stdout are TTYs (agents,
+ * scripts, and supervisors never qualify), and on Linux a display exists
+ * (an SSH login without forwarding has none). Auto-open gates on this.
+ */
+export function isInteractiveDesktop(): boolean {
+	if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) return false;
+	return process.platform !== "linux" || !!process.env.DISPLAY || !!process.env.WAYLAND_DISPLAY;
+}
+
+/**
  * Open `url` in the default browser: detached, stdio ignored, unref'd. A
  * launcher that cannot be spawned prints one stderr warning prefixed with
  * `label`; the caller goes on serving.

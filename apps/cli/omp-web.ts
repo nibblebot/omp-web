@@ -54,7 +54,7 @@ const FLEET_SUBCOMMANDS: Record<string, true> = {
 export type DispatchTarget = "fleet" | "session" | "update" | "version" | "help" | "usage";
 
 /** Pure argv classification: argv here is process.argv.slice(2). A bare
- *  invocation, or one that starts with a flag (`omp-web --open`), routes to
+ *  invocation, or one that starts with a flag (`omp-web --no-open`), routes to
  *  the fleet CLI, whose bare form runs control plane + UI. */
 export function classifyCommand(argv: string[]): DispatchTarget {
 	const cmd = argv[0];
@@ -88,7 +88,8 @@ const USAGE = `usage: omp-web [options] | omp-web <command> [options]
 options (bare, control, ui):
   --port <n>                   listen port
   --control-port <n>           ui only: control plane to proxy to (default 4722)
-  --open                       bare, ui: open the UI in a browser once ready
+  --no-open                    bare, ui: do not open the UI in a browser; it
+                               opens only from an interactive local terminal
   --verbose                    bare, control: state/config paths and every
                                lifecycle event
 `;

@@ -24,12 +24,12 @@ Because it drives the agent through the SDK instead of the RPC, omp-web has full
 `omp-web` runs the fleet in one process: registry, supervisor, and the web UI, on one port. The split form runs the two halves as separate processes: the control plane alone, and a UI process that serves the web UI and proxies its API calls to the control plane.
 
 ```sh
-omp-web [--port n] [--open]                          # control plane + UI on http://localhost:4722
+omp-web [--port n] [--no-open]                       # control plane + UI on http://localhost:4722
 omp-web control [--port n]                           # split: control plane only, no UI (default 4722)
-omp-web ui [--port n] [--control-port n] [--open]    # split: UI on 4723, proxying to the control plane on 4722
+omp-web ui [--port n] [--control-port n] [--no-open] # split: UI on 4723, proxying to the control plane on 4722
 ```
 
-Everything binds loopback (127.0.0.1) by default; expose the UI port through your own reverse proxy (for example `tailscale serve` or NetBird). `--open` launches the browser at the UI once it is up (not available on `control`). `--port` selects the listen port; `OMP_FLEET_PORT` selects the default control-plane port. Startup prints one line, `omp-web listening on http://localhost:<port> (<N> sessions)` (`omp-web control listening on …` and `omp-web ui listening on … (control :<port>)` for the split form), then only warnings and errors; `--verbose` adds the state and config paths and every lifecycle event.
+Everything binds loopback (127.0.0.1) by default; expose the UI port through your own reverse proxy (for example `tailscale serve` or NetBird). Bare `omp-web` and `omp-web ui` open the UI in your browser once it is up, but only when run from an interactive local terminal (stdin and stdout TTYs, and a display on Linux); scripts, agents, and service managers never open one, and `--no-open` opts out. `--port` selects the listen port; `OMP_FLEET_PORT` selects the default control-plane port. Startup prints one line, `omp-web listening on http://localhost:<port> (<N> sessions)` (`omp-web control listening on …` and `omp-web ui listening on … (control :<port>)` for the split form), then only warnings and errors; `--verbose` adds the state and config paths and every lifecycle event.
 
 Sessions dial out: each session daemon connects to the control plane over the callback pair (an NDJSON upload and an SSE downlink), and the control plane never opens a connection into a session. Sessions behind NAT, in a sandbox, or in a Kubernetes pod with no inbound traffic work the same way. Ctrl+C on `omp-web` or `omp-web control` stops the control plane only; sessions keep running, including a turn in progress, and redial the next control plane with the same credential. Restart the control plane on the same port: a session keeps dialing the address it was given. After a restart, entries show `reconnecting`, then `ready` once their session redials; one that has not redialed within 45 seconds is shown `asleep`. A session with no control plane for 10 minutes (`--control-grace`, or `OMP_SESSION_CONTROL_GRACE`; `0` disables) shuts itself down gracefully, and one whose credential the fleet rejects (revoked, or superseded by a newer generation) shuts down at once. A spawned session that is asleep wakes on attach or prompt, resuming its last transcript; if the previous process is still alive somewhere (for example dialing an old port), the wake fails with "locked by another omp-session" until that process exits or is stopped. `omp-web stop <selector>` asks a session to shut down, terminates a local one, and revokes its credential.
 
@@ -84,7 +84,7 @@ The installer downloads the latest release tarball, verifies its sha256 against 
 omp-web --version
 ```
 
-Run `omp-web --open` to start the fleet and open the UI in your browser (or run `omp-web` and open its printed URL). Register a repository in the UI, start or select a session, and send a prompt. Local sessions use your ordinary SDK credentials.
+Run `omp-web` in a terminal to start the fleet and open the UI in your browser (elsewhere, open its printed URL). Register a repository in the UI, start or select a session, and send a prompt. Local sessions use your ordinary SDK credentials.
 
 ## Self-update
 
@@ -129,7 +129,7 @@ bun install
 bun run dev                # Vite HMR + fleet; open the printed ui URL; no managed auth broker
 ```
 
-Dev auto-opens the browser for interactive graphical local runs; `--open`/`--no-open` override this. Use the printed `ui` URL, not the fleet's potentially stale `dist/` UI. Dev-spawned sessions run with a 2s `--control-grace` (production keeps 10 minutes), so they shut themselves down about 2 seconds after dev stops, however it stops. The dev fleet listens on a stable per-worktree port, so a dev restart within that window lets them redial; if that port is taken it picks a free one and says so, and the surviving sessions then exit at the end of their grace. Restart dev-spawned daemons after server edits (stop them from the UI, or restart dev and wait out the grace); they are not watched.
+Dev opens the browser only when run from an interactive local terminal with a display and without `--host`; `--no-open` disables it. Use the printed `ui` URL, not the fleet's potentially stale `dist/` UI. Dev-spawned sessions run with a 2s `--control-grace` (production keeps 10 minutes), so they shut themselves down about 2 seconds after dev stops, however it stops. The dev fleet listens on a stable per-worktree port, so a dev restart within that window lets them redial; if that port is taken it picks a free one and says so, and the surviving sessions then exit at the end of their grace. Restart dev-spawned daemons after server edits (stop them from the UI, or restart dev and wait out the grace); they are not watched.
 
 Source imports into `lib/` use extensionless `#lib/<path below lib/>`, such as `#lib/wire/protocol`, through root `package.json`'s imports mapping. Keep local imports such as `./helpers` relative. Shared libraries are closed: their repository imports stay inside `lib/`, with no library cycles, enforced by `bun run lint`.
 

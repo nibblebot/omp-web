@@ -10,11 +10,11 @@
  *
  *   omp-web [--port n] [--workspace-dir d] [--bind addr]
  *                     [--browser-access-token t] [--browser-origin o]
- *                     [--trusted-proxy ip-or-cidr]… [--open] [--verbose]
+ *                     [--trusted-proxy ip-or-cidr]… [--no-open] [--verbose]
  *   omp-web control [--port n] [--workspace-dir d] [--bind addr]
  *                     [--browser-access-token t] [--browser-origin o]
  *                     [--trusted-proxy ip-or-cidr]… [--verbose]
- *   omp-web ui [--port n] [--control-port n] [--open]
+ *   omp-web ui [--port n] [--control-port n] [--no-open]
  *   omp-web sessions [--port n]
  *   omp-web projects [--port n]
  *   omp-web profiles [--port n]
@@ -49,7 +49,7 @@
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { LockHeldError } from "#lib/platform/file-lock";
-import { openBrowser } from "#lib/platform/open-browser";
+import { isInteractiveDesktop, openBrowser } from "#lib/platform/open-browser";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
 import { resolveStatePath, startFleet, type FleetServer } from "./server";
 import { runProfilePreflight } from "./preflight";
@@ -98,7 +98,7 @@ interface ParsedArgs {
 const MULTI_FLAGS = new Set(["label", "trusted-proxy"]);
 
 /** Flags that are bare booleans: presence = true (never consume a value); `--flag=true|false` also accepted. */
-const BOOLEAN_FLAGS = new Set(["start", "no-start", "delete-branch", "open", "verbose", "help"]);
+const BOOLEAN_FLAGS = new Set(["start", "no-start", "delete-branch", "no-open", "verbose", "help"]);
 
 function parseArgs(argv: string[]): ParsedArgs {
 	const positionals: string[] = [];
@@ -1096,7 +1096,8 @@ options:
   --port <n>           control plane port (default 4722, env OMP_FLEET_PORT);
                        ui: its listen port (default 4723)
   --control-port <n>   ui: control plane to proxy to (default 4722, env OMP_FLEET_PORT)
-  --open               open the UI in a browser once running (bare, ui)
+  --no-open            bare, ui: do not open the UI in a browser; otherwise it opens
+                       only when run from an interactive local terminal
   --verbose            bare/control: also print state and config paths and every event
   --workspace-dir <d>  Default worktree directory (default ~/.omp-web/workspaces,
                        env OMP_FLEET_WORKSPACE_DIR)
@@ -1129,10 +1130,9 @@ export async function main(argv: string[]): Promise<number> {
 			case "":
 			case "control": {
 				const serveUi = command !== "control";
-				const open = flagBoolean(flags, "open") === true;
-				if (!serveUi && open) {
-					throw new CliError("--open: the control plane serves no UI; use: omp-web ui --open");
-				}
+				// Only a person at an interactive terminal gets a browser tab;
+				// agents, scripts, and supervisors never do.
+				const open = serveUi && flagBoolean(flags, "no-open") !== true && isInteractiveDesktop();
 				return await serveCmd(
 					port,
 					flagString(flags, "workspace-dir"),
@@ -1149,7 +1149,7 @@ export async function main(argv: string[]): Promise<number> {
 				return await uiCmd(
 					portFlag(flags, "port") ?? DEFAULT_UI_PORT,
 					portFlag(flags, "control-port") ?? envPort() ?? DEFAULT_PORT,
-					flagBoolean(flags, "open") === true,
+					flagBoolean(flags, "no-open") !== true && isInteractiveDesktop(),
 				);
 			case "sessions":
 				return await sessionsCmd(port);
