@@ -60,6 +60,8 @@ export interface WebSessionState {
 	/** Configured persistence scope for role edits (settings `modelRoleStorage`). */
 	modelRoleStorage?: ModelRoleStorage;
 	thinkingLevel: ThinkingLevel | undefined;
+	/** True when the configured selector is `auto`; `thinkingLevel` then holds the provisional or per-turn resolved effort. */
+	autoThinking?: boolean;
 	isStreaming: boolean;
 	isCompacting: boolean;
 	steeringMode: "all" | "one-at-a-time";

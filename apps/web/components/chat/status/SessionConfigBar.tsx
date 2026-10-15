@@ -44,9 +44,9 @@ export const SessionConfigBar: Component = () => (
 				e.preventDefault();
 				setState("modal", "thinking");
 			}}
-			title="Click: cycle thinking level · right-click: pick"
+			title={`Click: cycle thinking level · right-click: pick${state.autoThinking && state.thinkingLevel ? ` (auto: ${state.thinkingLevel})` : ""}`}
 		>
-			{state.thinkingLevel ?? "inherit"}
+			{state.autoThinking ? "auto" : (state.thinkingLevel ?? "inherit")}
 		</StatusSegment>
 		<span class="status-spacer" />
 		<ContextSegment />

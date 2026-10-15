@@ -305,6 +305,7 @@ export const [state, setState] = createStore({
 	// first attach), so the empty-state character must not render from it.
 	modelSynced: false,
 	thinkingLevel: undefined as WebSessionState["thinkingLevel"],
+	autoThinking: false,
 	sessionName: undefined as string | undefined,
 	sessionId: "",
 	sessionScope: undefined as WebSessionState["sessionScope"],
@@ -672,6 +673,7 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		modelRoleCatalog: s.modelRoleCatalog,
 		modelRoleStorage: s.modelRoleStorage,
 		thinkingLevel: s.thinkingLevel,
+		autoThinking: s.autoThinking ?? false,
 		streaming: s.isStreaming,
 		compacting: s.isCompacting,
 		steeringMode: s.steeringMode,

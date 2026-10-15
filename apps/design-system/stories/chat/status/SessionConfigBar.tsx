@@ -26,6 +26,12 @@ export default defineStory({
 			render: () => <SessionConfigBar />,
 		},
 		{
+			name: "Auto thinking",
+			description: "Auto selector active; the resolved effort shows in the tooltip.",
+			seed: { autoThinking: true, thinkingLevel: "high" },
+			render: () => <SessionConfigBar />,
+		},
+		{
 			name: "Near context limit",
 			description: "92% of the context window is used; compaction is due soon.",
 			seed: {

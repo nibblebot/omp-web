@@ -148,6 +148,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			}),
 			modelRoleStorage: cfgModelRoleStorage.get(session.settings),
 			thinkingLevel: session.thinkingLevel,
+			autoThinking: session.isAutoThinking,
 			isStreaming: session.isStreaming,
 			isCompacting: session.isCompacting,
 			steeringMode: session.steeringMode,
