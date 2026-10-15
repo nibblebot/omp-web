@@ -22,8 +22,8 @@ export default [
 				),
 			},
 			{
-				name: "Default",
-				description: "No provider limited: the summary reads Default.",
+				name: "No limits set",
+				description: "No provider limited: only the Edit… control shows.",
 				render: () => (
 					<SettingProviderLimits
 						label="Max in-flight requests"

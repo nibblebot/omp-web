@@ -73,13 +73,17 @@ const FeatureList: Component<{ detail: PluginDetail }> = (props) => {
 		<SettingsGroup title="Features">
 			<For each={props.detail.features}>
 				{(feature) => (
-					<label class="installed-option">
-						<input type="checkbox" checked={feature.enabled} onChange={() => toggle(feature)} />
+					<div class="installed-option">
+						<SettingToggle
+							label={feature.name}
+							checked={feature.enabled}
+							onChange={() => toggle(feature)}
+						/>
 						<span class="installed-option-name">{feature.name}</span>
 						<Show when={feature.description}>
 							<span class="installed-option-desc">{feature.description}</span>
 						</Show>
-					</label>
+					</div>
 				)}
 			</For>
 			<Show when={props.detail.featuresCustomized}>
@@ -179,8 +183,16 @@ const SettingControl: Component<{ plugin: string; row: PluginSettingRow }> = (pr
 						value={current() === undefined ? "" : String(current())}
 						onChange={(e) => {
 							const text = e.currentTarget.value;
-							if (text === "") clear();
-							else setPluginSetting(props.plugin, key(), Number(text));
+							if (text === "") {
+								clear();
+								return;
+							}
+							const n = Number(text);
+							if (!Number.isFinite(n)) return;
+							// Manifest bounds only; the server validates too. The input shows the bounded value.
+							const bounded = Math.min(props.row.max ?? n, Math.max(props.row.min ?? n, n));
+							e.currentTarget.value = String(bounded);
+							setPluginSetting(props.plugin, key(), bounded);
 						}}
 					/>
 					<Show when={props.row.value !== undefined}>

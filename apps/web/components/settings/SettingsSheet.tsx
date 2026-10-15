@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Index, onMount, Show, type Component } from "solid-js";
+import { createMemo, createSignal, Index, onMount, Show, type Component } from "solid-js";
 import { filterSettings, type SettingsMatch } from "../../prefs/settings";
 import {
 	changedCountsByTab,
@@ -148,13 +148,15 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 					<Show when={searching()}>
 						<FeaturesSettings query={query()} />
 						<Show when={model()}>
-							<For each={resultGroups()}>
-								{([title, matches]) => (
-									<SettingsGroup title={title}>
-										<Index each={matches}>{(match) => <SettingsRow item={match().item} />}</Index>
+							<Index each={resultGroups()}>
+								{(group) => (
+									<SettingsGroup title={group()[0]}>
+										<Index each={group()[1]}>
+											{(match) => <SettingsRow item={match().item} />}
+										</Index>
 									</SettingsGroup>
 								)}
-							</For>
+							</Index>
 						</Show>
 					</Show>
 					<Show when={!searching() && active()} keyed>

@@ -26,7 +26,7 @@ export default [
 						path="grep.contextBefore"
 						value={2}
 						options={contextLines}
-						onChange={() => undefined}
+						onChange={() => Promise.resolve(true)}
 					/>
 				),
 			},
@@ -38,7 +38,7 @@ export default [
 						label="Startup timeout"
 						path="mcp.startupTimeoutMs"
 						value={30000}
-						onChange={() => undefined}
+						onChange={() => Promise.resolve(true)}
 					/>
 				),
 			},
@@ -49,7 +49,7 @@ export default [
 						label="Temperature"
 						path="model.temperature"
 						value={0.7}
-						onChange={() => undefined}
+						onChange={() => Promise.resolve(true)}
 					/>
 				),
 			},

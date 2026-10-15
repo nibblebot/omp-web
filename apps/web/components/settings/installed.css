@@ -14,9 +14,10 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: var(--space-6);
-	padding: var(--space-5);
+	padding: var(--space-6) var(--space-7);
+	background: var(--settings-fill);
 	border: 1px solid var(--border);
-	border-radius: var(--r-xl);
+	border-radius: var(--r-2xl);
 }
 .installed-card:hover {
 	background: var(--hover);
@@ -34,9 +35,17 @@
 
 .installed-card-name {
 	color: var(--text);
-	font-size: var(--fs-xl);
-	font-weight: 600;
+	font-size: var(--fs-lg);
+	font-weight: 500;
 	overflow-wrap: anywhere;
+}
+.installed-card .settings-control-btn {
+	padding: var(--space-2) var(--space-5);
+	border: 1px solid var(--border);
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font-sans);
+	font-size: var(--fs-md);
 }
 
 .installed-card-meta,

@@ -1,8 +1,8 @@
 import { Show, Switch, Match, type JSX } from "solid-js";
 import { displayOptionValue } from "../../prefs/settings";
-import { asRecord, controlKind, itemOptions } from "../../prefs/setting-controls";
+import { asRecord, controlKind, hasWideSelection, itemOptions } from "../../prefs/setting-controls";
 import { unsetSetting, updateSetting } from "../../store/settings";
-import { InfoIcon } from "../ui/icons";
+import { WarningIcon } from "../ui/icons";
 import { SettingJsonField } from "./controls/SettingJsonField";
 import { SettingOrderedList } from "./controls/SettingOrderedList";
 import { SettingProviderLimits } from "./controls/SettingProviderLimits";
@@ -24,7 +24,7 @@ export function SettingsRowLayout(props: {
 	changed?: boolean;
 	/** Set by project config: the value is read-only here. */
 	setByProject?: boolean;
-	/** Text and secret fields: the control drops below the help text, full width. */
+	/** Text, secret, JSON and ordered-list rows: the control drops below the help text. */
 	stacked?: boolean;
 	children: JSX.Element;
 	reset?: JSX.Element;
@@ -32,28 +32,30 @@ export function SettingsRowLayout(props: {
 	return (
 		<div class="settings-item" classList={{ changed: props.changed, stacked: props.stacked }}>
 			<div class="settings-item-text">
+				<Show when={props.warning}>
+					<WarningIcon class="settings-item-warning-icon" />
+				</Show>
 				<div class="settings-item-label">
 					<Show when={props.changed}>
 						<span class="changed-dot" title="Changed from default" />
 					</Show>
 					<span>{props.label}</span>
 				</div>
-				<Show when={props.description}>
-					<p class="settings-item-desc">{props.description}</p>
-				</Show>
 				<Show when={props.warning}>
 					<p class="settings-item-warning" role="note">
-						<InfoIcon />
-						<span>{props.warning}</span>
+						{props.warning}
 					</p>
+				</Show>
+				<Show when={props.description}>
+					<p class="settings-item-desc">{props.description}</p>
 				</Show>
 				<Show when={props.setByProject}>
 					<p class="settings-item-source">Set by project config</p>
 				</Show>
 			</div>
 			<div class="settings-item-control">
-				{props.children}
 				{props.reset}
+				{props.children}
 			</div>
 		</div>
 	);
@@ -75,9 +77,15 @@ export function SettingsRow(props: { item: SettingsItem }) {
 			warning={item().warning}
 			changed={item().changed}
 			setByProject={setByProject()}
-			stacked={kind() === "text" || kind() === "secret"}
+			stacked={
+				kind() === "text" ||
+				kind() === "secret" ||
+				kind() === "json" ||
+				kind() === "orderedList" ||
+				(kind() === "select" && hasWideSelection(item()))
+			}
 			reset={
-				<Show when={item().changed}>
+				<Show when={item().changed && item().view?.explicit?.layer === "global"}>
 					<button
 						type="button"
 						class="settings-reset"

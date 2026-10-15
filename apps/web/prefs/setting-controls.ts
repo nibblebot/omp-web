@@ -1,4 +1,5 @@
 import type { SettingsItem, SettingsOption } from "#lib/wire/protocol";
+import { displayOptionValue } from "./settings";
 
 /**
  * Control selection and value logic for settings rows. Pure functions over the
@@ -32,6 +33,16 @@ export function numericOptionValue(value: string): number | undefined {
 export function itemOptions(item: SettingsItem): SettingsOption[] {
 	if (item.options) return item.options;
 	return (item.values ?? []).map((value) => ({ value, label: value }));
+}
+
+/** A selected label longer than this makes the select too wide to sit beside its help text. */
+const WIDE_SELECTED_LABEL = 18;
+
+/** Whether the selected option's label is long enough that its row stacks the select below the text. */
+export function hasWideSelection(item: SettingsItem): boolean {
+	const selected = displayOptionValue(item, item.value);
+	const label = itemOptions(item).find((option) => option.value === selected)?.label ?? selected;
+	return label.length > WIDE_SELECTED_LABEL;
 }
 
 /** Which control a row shows. Wire types never change; the choice is derived from type, option shape and value. */
@@ -178,6 +189,18 @@ export function moveSelected(selected: string[], value: string, direction: -1 | 
 	if (from < 0 || to < 0 || to >= selected.length) return selected;
 	const next = [...selected];
 	[next[from], next[to]] = [next[to]!, next[from]!];
+	return next;
+}
+
+/** Move one enabled entry so it lands before the entry at `insertBefore` (an index into the current order; `selected.length` = last). */
+export function reorderSelected(selected: string[], value: string, insertBefore: number): string[] {
+	const from = selected.indexOf(value);
+	if (from < 0) return selected;
+	const next = [...selected];
+	next.splice(from, 1);
+	const to = from < insertBefore ? insertBefore - 1 : insertBefore;
+	if (to === from) return selected;
+	next.splice(to, 0, value);
 	return next;
 }
 

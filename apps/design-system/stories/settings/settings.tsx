@@ -7,14 +7,15 @@ import { SettingToggle } from "../../../web/components/settings/controls/Setting
 import { changedCountsByTab, SETTINGS_TABS } from "../../../web/prefs/settings-tabs";
 import {
 	settingApiKey,
-	settingAutoCompact,
 	settingBashTimeout,
 	settingEditMode,
 	settingEnabledTools,
 	settingEnvRecord,
+	settingExternalThinking,
 	settingProviderLimits,
 	settingSkillPaths,
 	settingThinkingLevel,
+	settingThinkingLevelGlobal,
 	settingsModelCurrentSession,
 	settingsModelSections,
 	settingsWebUiSections,
@@ -130,8 +131,13 @@ export default [
 				render: () => <SettingsRow item={settingThinkingLevel} />,
 			},
 			{
+				name: "Enum: thinking level, explicit global",
+				description: "Changed value written to the global layer; Reset is offered.",
+				render: () => <SettingsRow item={settingThinkingLevelGlobal} />,
+			},
+			{
 				name: "Boolean with warning",
-				render: () => <SettingsRow item={settingAutoCompact} />,
+				render: () => <SettingsRow item={settingExternalThinking} />,
 			},
 			{
 				name: "Submenu: edit mode",
@@ -191,7 +197,7 @@ export default [
 							label="Bash timeout"
 							path="bash.timeoutSec"
 							value={120}
-							onChange={() => undefined}
+							onChange={() => Promise.resolve(true)}
 						/>
 					</SettingsRowLayout>
 				),

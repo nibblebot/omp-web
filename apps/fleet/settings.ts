@@ -111,9 +111,8 @@ export function createFleetSettings(options: FleetSettingsOptions = {}): FleetSe
 		// static for the fleet (no attached session to query).
 		const [models, themes] = await Promise.all([getProviders(), getAvailableThemes()]);
 		const fallbackSession: SettingsSession = {
-			// No live session: no thinking levels (submenuOptions merges the
-			// schema's options behind a leading "auto") and providers come
-			// from the shared ModelRegistry snapshot.
+			// No live session: no session thinking levels, so submenuOptions offers
+			// the schema's declared options (auto, minimal ... max).
 			getAvailableThinkingLevels: () => [],
 			getAvailableModels: () => models,
 		};

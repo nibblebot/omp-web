@@ -776,7 +776,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		});
 		const requests = stubFetch(() => ({ status: 200, body: model }));
 
-		updateSetting("agent.model", "gpt-5");
+		expect(await updateSetting("agent.model", "gpt-5")).toBe(true);
 		await settle();
 
 		expect(requests).toEqual([
@@ -796,7 +796,7 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		});
 		stubFetch(() => ({ status: 400, body: { error: "unknown setting path" } }));
 
-		updateSetting("bogus.path", 1);
+		expect(await updateSetting("bogus.path", 1)).toBe(false);
 		await settle();
 
 		expect(state.error).toBe("unknown setting path");

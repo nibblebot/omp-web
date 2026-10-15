@@ -103,10 +103,10 @@ function writeSetting(
 	unset: boolean,
 	expectedRevision: number | undefined,
 	layer?: string,
-): void {
+): Promise<boolean> {
 	const sessionId = state.currentSessionId;
 	const fleet = fleetSettingsActive();
-	writeQueue = writeQueue
+	const result = writeQueue
 		.then(() => {
 			// Resolved at dispatch: an omitted revision means the latest model, not the one current at the call.
 			const revision = expectedRevision ?? state.settingsModel?.revision;
@@ -135,30 +135,42 @@ function writeSetting(
 					if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
 						applySettingsModel(model);
 					}
+					return true;
 				})
 				.catch((err) => {
 					if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
 						setState("error", String(err));
 					}
+					return false;
 				});
 		})
-		.catch((err) => setState("error", String(err)));
+		.catch((err) => {
+			setState("error", String(err));
+			return false;
+		});
+	writeQueue = result.then(() => undefined);
+	return result;
 }
 
 /**
  * Set an explicit value, including null; validation remains authoritative on the server.
  * Omit expectedRevision to write against the latest model; pass one to detect a stale draft (409).
+ * Resolves true once the returned model is applied, false when the write failed (state.error holds why).
  */
 export function updateSetting(
 	path: string,
 	value: unknown,
 	expectedRevision?: number,
 	layer?: string,
-): void {
-	writeSetting(path, value, false, expectedRevision, layer);
+): Promise<boolean> {
+	return writeSetting(path, value, false, expectedRevision, layer);
 }
 
 /** Remove an explicit override rather than storing null. Omit expectedRevision to write against the latest model. */
-export function unsetSetting(path: string, expectedRevision?: number, layer?: string): void {
-	writeSetting(path, undefined, true, expectedRevision, layer);
+export function unsetSetting(
+	path: string,
+	expectedRevision?: number,
+	layer?: string,
+): Promise<boolean> {
+	return writeSetting(path, undefined, true, expectedRevision, layer);
 }

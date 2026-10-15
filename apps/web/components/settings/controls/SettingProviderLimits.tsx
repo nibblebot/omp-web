@@ -16,7 +16,6 @@ export const SettingProviderLimits: Component<{
 	const [open, setOpen] = createSignal(false);
 	let editButton: HTMLButtonElement | undefined;
 	const limits = () => asRecord(props.value);
-	const setCount = () => props.providers.filter((p) => limits()[p] !== undefined).length;
 
 	return (
 		<span
@@ -31,9 +30,6 @@ export const SettingProviderLimits: Component<{
 				})
 			}
 		>
-			<span class="settings-json-summary">
-				{setCount() === 0 ? "Default" : `${setCount()} set`}
-			</span>
 			<button
 				type="button"
 				class="settings-control-btn"

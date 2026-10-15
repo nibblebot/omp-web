@@ -54,6 +54,7 @@ export const InstalledTab: Component = () => {
 				<Show when={!pluginsLoading() && pluginSummaries().length === 0}>
 					<div class="settings-note">No plugins installed.</div>
 				</Show>
+				<h3 class="settings-group-title">Installed</h3>
 				<For each={pluginSummaries()}>
 					{(plugin) => (
 						<div class="installed-card">

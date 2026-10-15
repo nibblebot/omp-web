@@ -75,6 +75,27 @@ export const InfoIcon: Component<IconProps> = (props) => (
 	</Svg>
 );
 
+/** Warning triangle (⚠), drawn with Lucide's triangle-alert. */
+export const WarningIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+		<path d="M12 9v4" />
+		<path d="M12 17h.01" />
+	</Svg>
+);
+
+/** Drag handle (six dots), drawn with Lucide's grip-vertical. */
+export const GripVerticalIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<circle cx="9" cy="5" r="1" />
+		<circle cx="9" cy="12" r="1" />
+		<circle cx="9" cy="19" r="1" />
+		<circle cx="15" cy="5" r="1" />
+		<circle cx="15" cy="12" r="1" />
+		<circle cx="15" cy="19" r="1" />
+	</Svg>
+);
+
 export const SettingsIcon: Component<IconProps> = (props) => (
 	<Svg class={props.class}>
 		<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />

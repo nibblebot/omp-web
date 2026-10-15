@@ -107,6 +107,16 @@ export const settingThinkingLevel: SettingsItem = {
 	},
 };
 
+/** SettingsItem: changed row whose value is an explicit global write, so Reset is offered. */
+export const settingThinkingLevelGlobal: SettingsItem = {
+	...settingThinkingLevel,
+	view: {
+		...settingThinkingLevel.view!,
+		source: "global",
+		explicit: { value: "high", layer: "global" },
+	},
+};
+
 /** SettingsItem: boolean that the daemon warns about. */
 export const settingAutoCompact: SettingsItem = {
 	path: "compaction.auto",
@@ -122,6 +132,27 @@ export const settingAutoCompact: SettingsItem = {
 		canUnset: false,
 		warnings: ["Disabled by OMP_NO_COMPACT in the daemon environment for this run."],
 		effect: "live",
+	},
+};
+
+/** SettingsItem: boolean with a risk callout (the wire `warning`), as externalThinking ships it. */
+export const settingExternalThinking: SettingsItem = {
+	path: "externalThinking",
+	label: "External Thinking",
+	description:
+		"Private scratchpad; not shown to user. Disables supported GPT, Claude, and Gemini reasoning",
+	type: "boolean",
+	value: false,
+	changed: false,
+	warning:
+		"At your own risk: providers have flagged this request shape as abuse, up to account-level enforcement",
+	view: {
+		path: "externalThinking",
+		effective: false,
+		source: "default",
+		canUnset: false,
+		warnings: [],
+		effect: "next-session",
 	},
 };
 

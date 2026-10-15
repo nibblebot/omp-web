@@ -28,12 +28,15 @@ describe("createFleetSettings", () => {
 		expect(model.tabs.map((tab) => tab.id)).toEqual(SETTING_TABS);
 	});
 
-	test("defaultThinkingLevel starts with auto when no session levels exist", async () => {
+	test("defaultThinkingLevel offers the schema's levels with auto first when no session levels exist", async () => {
 		const settings = createFleetSettings({ registry: emptyRegistry });
 		const model = await settings.getModel();
 		const item = itemsOf("model", model.tabs).find((item) => item.path === "defaultThinkingLevel");
 		expect(item?.type).toBe("submenu");
-		expect(item?.options?.[0]).toEqual({ value: "auto", label: "auto" });
+		expect(item?.options?.[0]?.value).toBe("auto");
+		const values = item?.options?.map((option) => option.value) ?? [];
+		expect(values).toContain("minimal");
+		expect(values).toContain("max");
 	});
 
 	test("providerLimits lists providers from the injected registry, sorted and de-duplicated", async () => {

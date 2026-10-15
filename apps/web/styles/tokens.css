@@ -31,6 +31,19 @@
 	--error: #f87171;
 	--purple: #c084fc;
 	--settings-accent: var(--purple);
+	/* Settings surfaces derived from the active palette, so each theme gets the
+	   same soft neutral look: hairlines, dividers, control fills, off track. */
+	--settings-line: color-mix(in srgb, var(--border) 85%, var(--bg));
+	--settings-divider: color-mix(in srgb, var(--border) 60%, var(--bg));
+	--settings-fill: color-mix(in srgb, var(--border) 42%, var(--bg));
+	--settings-track-off: color-mix(in srgb, var(--border) 70%, var(--bg));
+	--settings-title: var(--text);
+	--settings-desc: color-mix(in srgb, var(--text) 80%, var(--muted));
+	--settings-row-x: 20px;
+	--settings-row-y: 14px;
+	--settings-warning: var(--warning);
+	--settings-mark-bg: #5a8080;
+	--settings-mark-fg: #17222a;
 	--success-bg: #14301c;
 	--success-border: #1f5c31;
 	--warning-bg: #2e2712;
@@ -53,6 +66,7 @@
 	--r-md: 6px;
 	--r-lg: 8px;
 	--r-xl: 10px;
+	--r-2xl: 12px;
 	--r-pill: 999px;
 	--space-1: 2px;
 	--space-2: 4px;
@@ -187,6 +201,8 @@
 	--border: #ccd0da;
 	--border-strong: #9ca0b0;
 	--text: #4c4f69;
+	--settings-title: color-mix(in srgb, var(--text) 55%, #000);
+	--settings-warning: #9c7428;
 	--hover: #e1e5ed;
 	--accent-dim: #dde8fd;
 	--muted: #575a6e;

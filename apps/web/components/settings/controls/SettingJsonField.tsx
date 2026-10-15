@@ -2,11 +2,12 @@ import { createEffect, createSignal, Show, type Component } from "solid-js";
 import { parseJsonDraft } from "../../../prefs/setting-controls";
 
 /**
- * Lists and records edited as JSON. The row shows a count and an "Edit…"
- * button; the editor opens inline below it with Save and Cancel. Opening
- * moves focus into the textarea; while open, Escape cancels (the wrapper
- * listener stops it, and the marked wrapper keeps Modal from closing the
- * sheet); Ctrl/Cmd+Enter saves; Cancel and Save return focus to "Edit…".
+ * Lists and records edited as JSON. The row shows the value as compact JSON in a
+ * pill, truncated to the row width; the pill is the trigger and opens the editor
+ * inline below it with Save and Cancel. Opening moves focus into the textarea;
+ * while open, Escape cancels (the wrapper listener stops it, and the marked
+ * wrapper keeps Modal from closing the sheet); Ctrl/Cmd+Enter saves; Cancel and
+ * Save return focus to the pill.
  */
 export const SettingJsonField: Component<{
 	label: string;
@@ -26,15 +27,7 @@ export const SettingJsonField: Component<{
 		if (editing()) textarea?.focus();
 	});
 
-	const count = () => {
-		const v = props.value;
-		if (Array.isArray(v)) return `${v.length} ${v.length === 1 ? "item" : "items"}`;
-		if (v && typeof v === "object") {
-			const n = Object.keys(v).length;
-			return `${n} ${n === 1 ? "entry" : "entries"}`;
-		}
-		return "None";
-	};
+	const preview = () => JSON.stringify(props.value ?? (props.type === "list" ? [] : {}));
 
 	const open = () => {
 		setDraft(JSON.stringify(props.value ?? (props.type === "list" ? [] : {}), null, 2));
@@ -58,6 +51,7 @@ export const SettingJsonField: Component<{
 	return (
 		<span
 			class="settings-json-field"
+			classList={{ editing: editing() }}
 			data-inline-escape={editing() ? "" : undefined}
 			ref={(el) =>
 				el.addEventListener("keydown", (e) => {
@@ -71,17 +65,17 @@ export const SettingJsonField: Component<{
 				})
 			}
 		>
-			<span class="settings-json-summary">{count()}</span>
 			<button
 				type="button"
-				class="settings-control-btn"
+				class="settings-json-summary"
+				title={preview()}
 				aria-label={`Edit ${props.label}`}
 				aria-expanded={editing()}
 				disabled={props.disabled}
 				ref={(el) => (editButton = el)}
 				onClick={() => (editing() ? close() : open())}
 			>
-				Edit…
+				{preview()}
 			</button>
 			<Show when={editing()}>
 				<span class="settings-json-editor">

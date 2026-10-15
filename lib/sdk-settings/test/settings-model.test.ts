@@ -158,6 +158,14 @@ describe("settingChanged", () => {
 		const shared: unknown[][] = [[1], [2]];
 		expect(settingChanged(shared, shared)).toBe(false);
 	});
+
+	test("records compare structurally; an unset record matches an empty default", () => {
+		expect(settingChanged({}, {})).toBe(false);
+		expect(settingChanged({}, undefined)).toBe(false);
+		expect(settingChanged({ "p3p-sweep": ["x"] }, {})).toBe(true);
+		expect(settingChanged({ a: ["x"] }, { a: ["x"] })).toBe(false);
+		expect(settingChanged({ a: ["x"] }, { a: ["y"] })).toBe(true);
+	});
 });
 
 describe("buildSettingsModel", () => {
@@ -179,6 +187,14 @@ describe("buildSettingsModel", () => {
 		}
 	});
 
+	test("array-valued text defs (contextFiles.extra) edit as lists, not text inputs", () => {
+		const model = buildSettingsModel(fakeSession, []);
+		const item = model.tabs
+			.flatMap((tab) => tab.groups.flatMap((group) => group.items))
+			.find((entry) => entry.path === "contextFiles.extra");
+		expect(item?.type).toBe("list");
+	});
+
 	test("theme.dark and theme.light are hidden: the web theme is localStorage-only", () => {
 		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
 		const appearance = itemsOf("appearance", model).map((item) => item.path);
@@ -194,6 +210,15 @@ describe("buildSettingsModel", () => {
 		const values = item!.options!.map((option) => option.value);
 		expect(values).toContain("low");
 		expect(values).toContain("high");
+	});
+
+	test("defaultThinkingLevel without a live session offers the schema's declared levels, including max", () => {
+		const model = buildSettingsModel({ ...fakeSession, getAvailableThinkingLevels: () => [] }, []);
+		const item = itemsOf("model", model).find((item) => item.path === "defaultThinkingLevel");
+		const values = item!.options!.map((option) => option.value);
+		expect(values[0]).toBe("auto");
+		expect(values).toContain("minimal");
+		expect(values).toContain("max");
 	});
 
 	test("providerLimits providers are sorted and de-duplicated", () => {

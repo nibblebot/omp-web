@@ -24,7 +24,8 @@ export const SettingStepper: Component<{
 	value: unknown;
 	options?: SettingsOption[];
 	disabled?: boolean;
-	onChange: (value: number) => void;
+	/** Resolves true when the write is applied, false when it failed; a failure reverts the step. */
+	onChange: (value: number) => Promise<boolean>;
 }> = (props) => {
 	const stored = (): number | undefined =>
 		typeof props.value === "number" ? props.value : numericOptionValue(String(props.value ?? ""));
@@ -37,9 +38,14 @@ export const SettingStepper: Component<{
 		),
 	);
 	const current = () => pending() ?? stored();
+	// The latest write owns the pending value: an older failure must not undo a newer step.
+	let latestWrite = 0;
 	const write = (value: number) => {
+		const id = ++latestWrite;
 		setPending(value);
-		props.onChange(value);
+		void props.onChange(value).then((ok) => {
+			if (!ok && id === latestWrite) setPending(undefined);
+		});
 	};
 
 	const step = () => {

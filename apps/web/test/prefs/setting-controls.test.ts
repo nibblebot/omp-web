@@ -3,6 +3,7 @@ import type { SettingsItem } from "#lib/wire/protocol";
 import {
 	applyProviderLimit,
 	controlKind,
+	hasWideSelection,
 	moveSelected,
 	numberUnit,
 	numericOptionValue,
@@ -10,6 +11,7 @@ import {
 	orderedRows,
 	parseJsonDraft,
 	parseNumberInput,
+	reorderSelected,
 	stepNumber,
 	toggleSelected,
 } from "../../prefs/setting-controls";
@@ -54,6 +56,15 @@ describe("controlKind", () => {
 			{ value: "1", label: "1" },
 		];
 		expect(controlKind(item("submenu", { options: named }))).toBe("select");
+	});
+
+	test("selects stack only when the selected label is too wide for the help text", () => {
+		const options = [
+			{ value: "any", label: "Any error" },
+			{ value: "heart", label: "Heart (American female)" },
+		];
+		expect(hasWideSelection(item("submenu", { options, value: "any" }))).toBe(false);
+		expect(hasWideSelection(item("submenu", { options, value: "heart" }))).toBe(true);
 	});
 
 	test("text rows pick secret, number, or text from the value", () => {
@@ -171,6 +182,15 @@ describe("ordered list", () => {
 		expect(moveSelected(["a", "b", "c"], "b", 1)).toEqual(["a", "c", "b"]);
 		expect(moveSelected(["a", "b"], "a", -1)).toEqual(["a", "b"]);
 		expect(moveSelected(["a", "b"], "z", 1)).toEqual(["a", "b"]);
+	});
+
+	test("reordering lands the entry before the given index", () => {
+		expect(reorderSelected(["a", "b", "c"], "a", 2)).toEqual(["b", "a", "c"]);
+		expect(reorderSelected(["a", "b", "c"], "c", 0)).toEqual(["c", "a", "b"]);
+		expect(reorderSelected(["a", "b", "c"], "b", 3)).toEqual(["a", "c", "b"]);
+		expect(reorderSelected(["a", "b", "c"], "b", 1)).toEqual(["a", "b", "c"]);
+		expect(reorderSelected(["a", "b", "c"], "b", 2)).toEqual(["a", "b", "c"]);
+		expect(reorderSelected(["a", "b"], "z", 0)).toEqual(["a", "b"]);
 	});
 
 	test("toggling appends when enabling and keeps the others' order when disabling", () => {

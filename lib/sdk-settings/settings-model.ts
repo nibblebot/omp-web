@@ -44,9 +44,16 @@ import type {
  */
 const settingsHost = createSettingsHost();
 
+/** Plain JSON object: not null, not an array. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 /**
  * True when the current value differs from the schema default. Arrays compare
- * length + elementwise (===); everything else uses Object.is.
+ * length + elementwise (===); records compare structurally (an unset record
+ * resolves to a fresh {} that never Object.is-matches its default); everything
+ * else uses Object.is.
  */
 export function settingChanged(current: unknown, defaultValue: unknown): boolean {
 	if (Array.isArray(current) && Array.isArray(defaultValue)) {
@@ -54,6 +61,9 @@ export function settingChanged(current: unknown, defaultValue: unknown): boolean
 			current.length !== defaultValue.length ||
 			current.some((entry, index) => entry !== defaultValue[index])
 		);
+	}
+	if (isPlainRecord(current) && (defaultValue === undefined || isPlainRecord(defaultValue))) {
+		return JSON.stringify(current) !== JSON.stringify(defaultValue ?? {});
 	}
 	return !Object.is(current, defaultValue);
 }
@@ -130,8 +140,9 @@ export function coerceSettingValue(
 
 /**
  * Runtime-injected option lists (mirrors the TUI's #createSubmenu):
- * - defaultThinkingLevel: "auto" first, then the session's live thinking
- *   levels merged with the schema's declared options.
+ * - defaultThinkingLevel: the session's live thinking levels when a session is
+ *   attached (merged with the schema's labels); otherwise the schema's declared
+ *   options (auto, minimal ... max). "auto" is always first.
  * - theme.dark / theme.light: the themes installed on this machine.
  */
 function submenuOptions(
@@ -140,10 +151,17 @@ function submenuOptions(
 	themes: string[],
 ): SettingsOption[] {
 	if (def.path === "defaultThinkingLevel") {
+		const levels = session.getAvailableThinkingLevels();
+		if (levels.length === 0)
+			return def.options.map((o) => ({
+				value: o.value,
+				label: o.label,
+				description: o.description,
+			}));
 		const base = def.options;
 		return [
 			{ value: "auto", label: "auto" },
-			...session.getAvailableThinkingLevels().map((level) => {
+			...levels.map((level) => {
 				const existing = base.find((o) => o.value === level);
 				return existing ?? { value: level, label: level };
 			}),
@@ -325,6 +343,8 @@ function defToItem(
 	const schema = lookup(def.path);
 	if (schema?.type === "record" && def.type !== "providerLimits")
 		return { ...base, type: "record" };
+	// An array-valued TUI text row (contextFiles.extra) edits as a list; a text input would store [].
+	if (def.type === "text" && Array.isArray(def.defaultValue)) return { ...base, type: "list" };
 	switch (def.type) {
 		case "boolean":
 			return { ...base, type: "boolean" };

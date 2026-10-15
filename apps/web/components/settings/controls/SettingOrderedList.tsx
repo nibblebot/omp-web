@@ -1,12 +1,21 @@
-import { For, Show, type Component } from "solid-js";
-import { moveSelected, orderedRows, toggleSelected } from "../../../prefs/setting-controls";
+import { createSignal, For, Show, type Component } from "solid-js";
+import {
+	moveSelected,
+	orderedRows,
+	reorderSelected,
+	toggleSelected,
+} from "../../../prefs/setting-controls";
 import type { SettingsOption } from "#lib/wire/protocol";
-import { ArrowDownIcon, ArrowUpIcon } from "../../ui/icons";
+import { GripVerticalIcon } from "../../ui/icons";
 import { SettingToggle } from "./SettingToggle";
 
+/** A pointer drag in progress: the dragged value, its rank, and the drop slot (an index into the enabled order). */
+type Drag = { value: string; from: number; before: number };
+
 /**
- * Enabled entries in run order with move up and down, then the disabled ones
- * with only a switch. Order matters for the enabled entries, so only they can move.
+ * Enabled entries in run order, each with a drag handle and index, then the
+ * disabled ones with only a switch. Order matters for the enabled entries, so
+ * only they can move: drag the grip, or focus a row and press Alt+↑/↓.
  */
 export const SettingOrderedList: Component<{
 	label: string;
@@ -14,45 +23,117 @@ export const SettingOrderedList: Component<{
 	selected: string[];
 	disabled?: boolean;
 	onChange: (selected: string[]) => void;
-}> = (props) => (
-	<ol class="settings-ordered-list" aria-label={props.label}>
-		<For each={orderedRows(props.options, props.selected)}>
-			{(row) => (
-				<li class="settings-ordered-row" classList={{ off: row.rank === undefined }}>
-					<span class="settings-ordered-rank">{row.rank === undefined ? "" : row.rank + 1}</span>
-					<span class="settings-ordered-name" title={row.option.description}>
-						{row.option.label}
-					</span>
-					<Show when={row.rank !== undefined}>
-						<span class="settings-ordered-move">
-							<button
-								type="button"
-								class="settings-stepper-btn"
-								aria-label={`Move ${row.option.label} up`}
-								disabled={props.disabled || row.rank === 0}
-								onClick={() => props.onChange(moveSelected(props.selected, row.option.value, -1))}
+}> = (props) => {
+	const [drag, setDrag] = createSignal<Drag | null>(null);
+	let list: HTMLOListElement | undefined;
+
+	/** Drop slot for a pointer position: the first enabled row whose midline lies below it. */
+	const dropSlot = (clientY: number): number => {
+		const rows = list?.querySelectorAll<HTMLElement>("li[data-rank]") ?? [];
+		for (let i = 0; i < rows.length; i++) {
+			const box = rows[i]!.getBoundingClientRect();
+			if (clientY < box.top + box.height / 2) return i;
+		}
+		return rows.length;
+	};
+
+	const onGripDown = (e: PointerEvent, value: string, rank: number) => {
+		if (props.disabled || e.button !== 0) return;
+		e.preventDefault();
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+		setDrag({ value, from: rank, before: rank });
+	};
+
+	const onGripMove = (e: PointerEvent) => {
+		const current = drag();
+		if (current) setDrag({ ...current, before: dropSlot(e.clientY) });
+	};
+
+	const onGripUp = () => {
+		const current = drag();
+		setDrag(null);
+		if (!current) return;
+		const next = reorderSelected(props.selected, current.value, current.before);
+		if (next !== props.selected) props.onChange(next);
+	};
+
+	/** Alt+↑/↓ moves the focused enabled row; focus follows it to its new rank once the list re-renders. */
+	const onRowKey = (e: KeyboardEvent, value: string, rank: number) => {
+		if (!e.altKey || props.disabled) return;
+		const direction = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
+		if (direction === 0) return;
+		e.preventDefault();
+		const next = moveSelected(props.selected, value, direction);
+		if (next === props.selected) return;
+		props.onChange(next);
+		const target = rank + direction;
+		requestAnimationFrame(() =>
+			list?.querySelector<HTMLElement>(`li[data-rank="${target}"]`)?.focus(),
+		);
+	};
+
+	return (
+		<ol class="settings-ordered-list" aria-label={props.label} ref={(el) => (list = el)}>
+			<For each={orderedRows(props.options, props.selected)}>
+				{(row) => {
+					const rank = row.rank;
+					const enabled = rank !== undefined;
+					const value = row.option.value;
+					return (
+						<li
+							class="settings-ordered-row"
+							classList={{
+								off: !enabled,
+								dragging: drag()?.value === value,
+								"drop-before": enabled && drag()?.before === rank && drag()?.value !== value,
+								"drop-after":
+									enabled &&
+									rank === props.selected.length - 1 &&
+									drag()?.before === props.selected.length,
+							}}
+							data-rank={rank}
+							tabIndex={enabled && !props.disabled ? 0 : undefined}
+							aria-description={
+								enabled && !props.disabled
+									? "Press Alt+ArrowUp or Alt+ArrowDown to move"
+									: undefined
+							}
+							onKeyDown={(e) => enabled && onRowKey(e, value, rank)}
+						>
+							<Show
+								when={enabled}
+								fallback={<span class="settings-ordered-grip-slot" aria-hidden="true" />}
 							>
-								<ArrowUpIcon />
-							</button>
-							<button
-								type="button"
-								class="settings-stepper-btn"
-								aria-label={`Move ${row.option.label} down`}
-								disabled={props.disabled || row.rank === props.selected.length - 1}
-								onClick={() => props.onChange(moveSelected(props.selected, row.option.value, 1))}
-							>
-								<ArrowDownIcon />
-							</button>
-						</span>
-					</Show>
-					<SettingToggle
-						label={row.option.label}
-						checked={row.rank !== undefined}
-						disabled={props.disabled}
-						onChange={() => props.onChange(toggleSelected(props.selected, row.option.value))}
-					/>
-				</li>
-			)}
-		</For>
-	</ol>
-);
+								<span
+									class="settings-ordered-grip"
+									classList={{ disabled: props.disabled }}
+									aria-hidden="true"
+									title="Drag to reorder, or focus the row and press Alt+↑/↓"
+									onPointerDown={(e) => rank !== undefined && onGripDown(e, value, rank)}
+									onPointerMove={onGripMove}
+									onPointerUp={onGripUp}
+									onPointerCancel={onGripUp}
+								>
+									<GripVerticalIcon />
+								</span>
+							</Show>
+							<span class="settings-ordered-rank">{enabled ? rank + 1 : ""}</span>
+							<span class="settings-ordered-text">
+								<span class="settings-ordered-name">{row.option.label}</span>
+								<Show when={row.option.description}>
+									<span class="settings-ordered-desc">{row.option.description}</span>
+								</Show>
+							</span>
+							<SettingToggle
+								label={row.option.label}
+								checked={enabled}
+								disabled={props.disabled}
+								onChange={() => props.onChange(toggleSelected(props.selected, value))}
+							/>
+						</li>
+					);
+				}}
+			</For>
+		</ol>
+	);
+};
