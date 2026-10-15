@@ -8,6 +8,12 @@
  *                        serves dist/, not the dev UI. NO session is started. Spawn one from
  *                        the roster UI, or enroll a remote one with `omp-web enroll`.
  *
+ *                        `bun run dev` runs `bun install` first (package.json), so
+ *                        dependencies always match the lockfile. With no omp-web
+ *                        config and an interactive terminal, dev makes the same
+ *                        first-run setup offer as bare `omp-web` (omp stack check,
+ *                        data home prompt) before starting anything.
+ *
  *   --no-open            do not open the UI in a browser. Otherwise dev opens it only
  *                        when a person runs it from an interactive local terminal
  *                        (stdin+stdout TTY, no --host, a display on Linux); agents and
@@ -93,25 +99,14 @@ import {
 import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { expandTilde, resolveConfigPath } from "../apps/fleet/config";
+import { offerFirstRunSetup } from "../apps/fleet/first-run";
 import { resolveOmpBinary } from "../apps/fleet/omp-check";
 import { slugifyWorktreeName } from "../apps/fleet/worktrees";
 import { isInteractiveDesktop } from "../lib/platform/open-browser";
 
 const ROOT = join(import.meta.dir, "..");
-/**
- * Per-worktree dev fleet data (state + its pidfile lock), outside the repo:
- * `<data home>/dev-fleets/<slug>-<hash8>/` where slug is the worktree
- * basename and hash8 the sha256 of its realpath. Deterministic per worktree
- * (dev restarts reuse the same fleet), distinct across worktrees. State and
- * clone storage are scoped; the default worktree directory stays shared.
- */
 const WORKTREE_REAL = realpathSync(ROOT);
 const WORKTREE_HASH = createHash("sha256").update(WORKTREE_REAL).digest("hex").slice(0, 8);
-const DEV_FLEET_DIR = join(
-	dirname(resolveConfigPath()),
-	"dev-fleets",
-	`${slugifyWorktreeName(basename(WORKTREE_REAL)) || "worktree"}-${WORKTREE_HASH}`,
-);
 /**
  * Fork-once seed: copy a source fleet-state.json into this worktree's dev
  * fleet dir when the dev state does not exist yet (a fresh fork). The source
@@ -431,6 +426,26 @@ if (fresh && stateFrom !== undefined) {
 	console.error("--fresh and --state-from are mutually exclusive (fresh skips seeding)");
 	process.exit(2);
 }
+
+// First-run setup, the same offer bare `omp-web` makes: the fleet child's
+// stdin is not a TTY, so it would never offer on its own. Runs before vite
+// inherits the terminal. A chosen non-default data home is exported so this
+// run's config lookup, dev fleet dir, and fleet child all follow it.
+const setupConfigPath = await offerFirstRunSetup();
+if (setupConfigPath !== undefined) process.env.OMP_FLEET_CONFIG = setupConfigPath;
+
+/**
+ * Per-worktree dev fleet data (state + its pidfile lock), outside the repo:
+ * `<data home>/dev-fleets/<slug>-<hash8>/` where slug is the worktree
+ * basename and hash8 the sha256 of its realpath. Deterministic per worktree
+ * (dev restarts reuse the same fleet), distinct across worktrees. State and
+ * clone storage are scoped; the default worktree directory stays shared.
+ */
+const DEV_FLEET_DIR = join(
+	dirname(resolveConfigPath()),
+	"dev-fleets",
+	`${slugifyWorktreeName(basename(WORKTREE_REAL)) || "worktree"}-${WORKTREE_HASH}`,
+);
 
 let shuttingDown = false;
 

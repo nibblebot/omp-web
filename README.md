@@ -125,8 +125,7 @@ The web UI's optional features can be turned on or off per browser in **Settings
 ## Develop
 
 ```sh
-bun install
-bun run dev                # Vite HMR + fleet; open the printed ui URL; no managed auth broker
+bun run dev                # bun install, first-run setup if unconfigured, then Vite HMR + fleet; open the printed ui URL
 ```
 
 Dev opens the browser only when run from an interactive local terminal with a display and without `--host`; `--no-open` disables it. Use the printed `ui` URL, not the fleet's potentially stale `dist/` UI. Dev-spawned sessions run with a 2s `--control-grace` (production keeps 10 minutes), so they shut themselves down about 2 seconds after dev stops, however it stops. The dev fleet listens on a stable per-worktree port, so a dev restart within that window lets them redial; if that port is taken it picks a free one and says so, and the surviving sessions then exit at the end of their grace. Restart dev-spawned daemons after server edits (stop them from the UI, or restart dev and wait out the grace); they are not watched.

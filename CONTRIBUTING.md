@@ -21,8 +21,7 @@ Thanks for wanting to help with omp-web! Bug reports, feature ideas, and pull re
 ## First-time setup
 
 ```sh
-bun install        # install dependencies
-bun run dev        # vite (HMR) + fleet; open the printed `ui` URL (stable per worktree)
+bun run dev        # bun install, first-run setup if unconfigured, then vite (HMR) + fleet; open the printed `ui` URL (stable per worktree)
 ```
 
 See `AGENTS.md` for the full engineering map: repo layout, the wire contract, invariants, and verification workflow.

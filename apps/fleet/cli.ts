@@ -46,11 +46,12 @@
  * A refused connection prints NOT_RUNNING_MESSAGE and exits 1.
  */
 
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { LockHeldError } from "#lib/platform/file-lock";
 import { isInteractiveDesktop, openBrowser } from "#lib/platform/open-browser";
-import { expandTilde, loadConfig, resolveConfigPath } from "./config";
+import { loadConfig, resolveConfigPath } from "./config";
+import { offerFirstRunSetup } from "./first-run";
 import { resolveStatePath, startFleet, type FleetServer } from "./server";
 import { runProfilePreflight } from "./preflight";
 import { DEFAULT_UI_PORT, startUiServer, type UiServer } from "./ui-server";
@@ -283,84 +284,6 @@ function isDaemonRow(value: unknown): value is DaemonRow {
 	);
 }
 
-/** Offer the first-run wizard when no config file exists and stdin is a TTY. */
-export function shouldOfferSetup(configExists: boolean, isTty: boolean): boolean {
-	return !configExists && isTty;
-}
-
-/** Absolute data-home/config/workspaces paths (defaults composed + ~ expanded). */
-export function resolveBaseDirs(opts: {
-	dataHome?: string;
-	configPath?: string;
-	workspaceDir?: string;
-}): { dataHome: string; configPath: string; workspaceDir: string } {
-	const dataHome = resolve(expandTilde(opts.dataHome ?? "~/.omp-web"));
-	return {
-		dataHome,
-		configPath:
-			opts.configPath !== undefined
-				? resolve(expandTilde(opts.configPath))
-				: join(dataHome, "config.json"),
-		workspaceDir:
-			opts.workspaceDir !== undefined
-				? resolve(expandTilde(opts.workspaceDir))
-				: join(dataHome, "workspaces"),
-	};
-}
-
-/**
- * Write the fleet config file: `workspaceDir` only, no `roots` key. Unknown
- * keys are tolerated by loadConfig, so future writers stay compatible. This
- * is the ONLY writer of the config file (the first-run offer).
- */
-export function writeConfigFile(configPath: string, workspaceDir: string): void {
-	mkdirSync(dirname(configPath), { recursive: true });
-	writeFileSync(configPath, `${JSON.stringify({ workspaceDir }, null, 2)}\n`, "utf8");
-}
-
-/** Bytes read past the last newline, kept for the next line read. */
-let linePending = "";
-
-/**
- * Write `prompt` to stdout, then read one line from stdin (EOF → ""). Plain
- * line reading (no readline): a TTY in cooked mode delivers line-buffered
- * data, but a single chunk may hold several lines; the remainder is kept in
- * `linePending` for the next read. A fresh readline interface per prompt would
- * hang (readline TTY state does not survive close/recreate on one stream).
- * Only used by the first-run offer, which is strictly TTY-gated.
- */
-export function readLine(prompt: string): Promise<string> {
-	process.stdout.write(prompt);
-	return new Promise<string>((resolve) => {
-		let buffer = linePending;
-		linePending = "";
-		const cleanup = () => {
-			process.stdin.off("data", onData);
-			process.stdin.off("end", onEnd);
-		};
-		const flush = () => {
-			const nl = buffer.indexOf("\n");
-			if (nl < 0) return;
-			linePending = buffer.slice(nl + 1);
-			buffer = buffer.slice(0, nl);
-			cleanup();
-			resolve(buffer);
-		};
-		const onData = (chunk: Buffer) => {
-			buffer += chunk.toString("utf8");
-			flush();
-		};
-		const onEnd = () => {
-			cleanup();
-			resolve(buffer);
-		};
-		// Leftover from a previous read may already hold a full line.
-		flush();
-		process.stdin.on("data", onData);
-		process.stdin.once("end", onEnd);
-	});
-}
-
 async function serveCmd(
 	port: number,
 	workspaceDir: string | undefined,
@@ -373,39 +296,8 @@ async function serveCmd(
 	loop: ServeLoopOptions,
 ): Promise<number> {
 	// First-run auto-offer: no config file + an interactive terminal → verify
-	// the omp stack (installed / provider / default model), then ask whether
-	// to configure omp-web before booting.
-	let offerConfigPath: string | undefined;
-	if (shouldOfferSetup(existsSync(resolveConfigPath()), process.stdin.isTTY === true)) {
-		// The offer only runs on an interactive TTY; non-interactive spawners
-		// (whose stdout is parsed for the banner) never reach it, so its
-		// status lines, prompts, and confirmations can all print to stdout
-		// normally instead of stderr-red.
-		const { checkOmpSetup, ompStatusLines } = await import("./omp-check");
-		const status = await checkOmpSetup();
-		for (const line of ompStatusLines(status)) console.log(line);
-		// One prompt: Enter (or y/yes) accepts the default data home, a path
-		// (with a leading `~` for the home dir) overrides it, `n`/`no` declines
-		// and serves with defaults (no config written).
-		const answer = (
-			await readLine("No omp-web config found. Data home directory [~/.omp-web]: ")
-		).trim();
-		const normalized = answer === "y" || answer === "yes" ? "" : answer;
-		if (normalized !== "n" && normalized !== "no") {
-			const dirs = resolveBaseDirs({
-				dataHome: normalized === "" ? undefined : normalized,
-				workspaceDir,
-			});
-			mkdirSync(dirs.dataHome, { recursive: true });
-			mkdirSync(dirs.workspaceDir, { recursive: true });
-			writeConfigFile(dirs.configPath, dirs.workspaceDir);
-			console.log(`setup: data home configured at ${dirs.dataHome}`);
-			console.log(`setup: config written to ${dirs.configPath}`);
-			// Boot with the freshly written config; a chosen data home may
-			// differ from the default lookup path; state follows the config.
-			offerConfigPath = dirs.configPath;
-		}
-	}
+	// the omp stack, then ask whether to configure omp-web before booting.
+	const offerConfigPath = await offerFirstRunSetup(workspaceDir);
 	// A second fleet on the same state file is a deterministic conflict, not
 	// a retryable failure: report the live holder and exit 77.
 	const server = await startFleet({

@@ -11,8 +11,8 @@ Bun, TypeScript ESM, Solid.js. `omp-session` runs one in-process SDK session per
 ### Dev
 
 ```sh
-bun install
-bun run dev                         # Vite HMR + fleet
+bun install                         # also run by bun run dev
+bun run dev                         # first-run setup if unconfigured, then Vite HMR + fleet
 bun run format                      # oxfmt, TS/TSX only
 bun run design                      # component stories (own Bun server, real apps/web components)
 bun run demo                        # App demo with fixture data (own Bun server)

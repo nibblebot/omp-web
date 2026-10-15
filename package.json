@@ -13,7 +13,7 @@
 		"dist-bundle/"
 	],
 	"scripts": {
-		"dev": "bun scripts/dev.ts fleet",
+		"dev": "bun install && bun scripts/dev.ts fleet",
 		"build": "bun scripts/build-omp-web.ts",
 		"build:web": "vite build --config apps/web/vite.config.ts",
 		"dev:docs": "astro dev --root docs",

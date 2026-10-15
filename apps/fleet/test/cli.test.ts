@@ -1,7 +1,7 @@
 /**
- * Unit tests for pure helpers in fleet/cli.ts (the first-run config offer and
- * its config-file writer). The serve + sessions behavior lives in
- * server-cli.test.ts.
+ * Unit tests for pure helpers in fleet/cli.ts and fleet/first-run.ts (the
+ * first-run config offer and its config-file writer). The serve + sessions
+ * behavior lives in server-cli.test.ts.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -9,7 +9,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { main, resolveBaseDirs, shouldOfferSetup, writeConfigFile } from "../cli";
+import { main } from "../cli";
+import { resolveBaseDirs, shouldOfferSetup, writeConfigFile } from "../first-run";
 
 afterAll(cleanupTempDirs);
 

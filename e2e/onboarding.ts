@@ -563,7 +563,7 @@ try {
 
 	// 4. First-run config: the first-run offer is TTY-gated, so this scripted
 	// walk writes the same file the offer would (data home + workspaceDir
-	// only; apps/fleet/cli.ts writeConfigFile is the one writer).
+	// only; apps/fleet/first-run.ts writeConfigFile is the one writer).
 	console.log("== 4. config ==");
 	mkdirSync(join(dataHome, "workspaces"), { recursive: true });
 	const configPath = join(dataHome, "config.json");
