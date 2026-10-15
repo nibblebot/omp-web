@@ -34,8 +34,6 @@ export interface SettingsTabMeta {
 	label: string;
 	icon: SettingsTabIconName;
 	kind: SettingsTabKind;
-	/** 1-based position in the numbered tab sequence; null for client tabs. */
-	number: number | null;
 	/** One-sentence description shown under the tab heading. */
 	lead: string;
 }
@@ -47,7 +45,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Appearance",
 		icon: "pencil",
 		kind: "sdk",
-		number: 1,
 		lead: "Theme, composer, status line and how the transcript renders.",
 	},
 	{
@@ -55,7 +52,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Model",
 		icon: "crosshair",
 		kind: "sdk",
-		number: 2,
 		lead: "Thinking, sampling, the system prompt, retries and the helper models.",
 	},
 	{
@@ -63,7 +59,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Interaction",
 		icon: "keyboard",
 		kind: "sdk",
-		number: 3,
 		lead: "Input, approvals, notifications, speech and what happens at startup.",
 	},
 	{
@@ -71,7 +66,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Context",
 		icon: "layers",
 		kind: "sdk",
-		number: 4,
 		lead: "What the model sees, and when and how the conversation compacts.",
 	},
 	{
@@ -79,7 +73,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Memory",
 		icon: "memory",
 		kind: "sdk",
-		number: 5,
 		lead: "What omp remembers across sessions and where it keeps it.",
 	},
 	{
@@ -87,7 +80,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Files",
 		icon: "files",
 		kind: "sdk",
-		number: 6,
 		lead: "How files are read, summarized and edited, and the language servers.",
 	},
 	{
@@ -95,7 +87,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Shell",
 		icon: "terminal",
 		kind: "sdk",
-		number: 7,
 		lead: "The bash tool and the eval runtimes.",
 	},
 	{
@@ -103,7 +94,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Tools",
 		icon: "wand",
 		kind: "sdk",
-		number: 8,
 		lead: "Which tools the model has, their limits and the external integrations.",
 	},
 	{
@@ -111,7 +101,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Tasks",
 		icon: "list",
 		kind: "sdk",
-		number: 9,
 		lead: "Modes, subagents, isolation and custom commands.",
 	},
 	{
@@ -119,7 +108,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Providers",
 		icon: "server",
 		kind: "sdk",
-		number: 10,
 		lead: "Services, provider protocols, timeouts and privacy.",
 	},
 	{
@@ -127,7 +115,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Installed",
 		icon: "package",
 		kind: "installed",
-		number: 11,
 		lead: "Plugins installed for you and this project. Configure one to turn it or its features on and off.",
 	},
 	{
@@ -135,7 +122,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Web UI",
 		icon: "monitor",
 		kind: "client",
-		number: null,
 		lead: "Preferences kept in this browser: theme, text size and notifications.",
 	},
 	{
@@ -143,7 +129,6 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 		label: "Features",
 		icon: "flask",
 		kind: "client",
-		number: null,
 		lead: "Optional parts of the web UI that load on demand in this browser.",
 	},
 ];
@@ -165,12 +150,6 @@ export function visibleSettingsTabs(model: SettingsModel | null): SettingsTabMet
 	if (!model) return [...SETTINGS_TABS];
 	const present = new Set(model.tabs.map((tab) => tab.id));
 	return SETTINGS_TABS.filter((tab) => tab.kind !== "sdk" || present.has(tab.id));
-}
-
-/** Hero eyebrow: `NN · Tab`; client tabs read `Client · Tab`. */
-export function tabEyebrow(tab: SettingsTabMeta): string {
-	const number = tab.number === null ? "Client" : String(tab.number).padStart(2, "0");
-	return `${number} · ${tab.label}`;
 }
 
 /** DOM id of a section inside a tab body; the sidebar scrolls to it. */

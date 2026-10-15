@@ -7,7 +7,6 @@ import {
 	settingsTabMeta,
 	tabBadgeCount,
 	settingsSectionId,
-	tabEyebrow,
 	visibleSettingsTabs,
 } from "../../prefs/settings-tabs";
 
@@ -46,16 +45,9 @@ describe("SETTINGS_TABS", () => {
 		expect(DEFAULT_SETTINGS_TAB_ID).toBe("appearance");
 	});
 
-	test("the 10 SDK tabs are numbered 01 to 10 in order, then Installed as 11", () => {
-		const sdk = SETTINGS_TABS.filter((tab) => tab.kind === "sdk");
-		expect(sdk.map((tab) => tab.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-		expect(settingsTabMeta("installed")?.number).toBe(11);
-	});
-
-	test("client tabs sit last and are unnumbered", () => {
+	test("client tabs sit last", () => {
 		const client = SETTINGS_TABS.filter((tab) => tab.kind === "client");
 		expect(client.map((tab) => tab.id)).toEqual(["web-ui", "features"]);
-		expect(client.every((tab) => tab.number === null)).toBe(true);
 	});
 });
 
@@ -85,14 +77,6 @@ describe("visibleSettingsTabs", () => {
 	test("drops SDK tabs the model does not carry but keeps Installed and client tabs", () => {
 		const ids = visibleSettingsTabs(model).map((tab) => tab.id);
 		expect(ids).toEqual(["appearance", "model", "context", "installed", "web-ui", "features"]);
-	});
-});
-
-describe("tabEyebrow", () => {
-	test("numbered tabs read NN · Label, client tabs read Client · Label", () => {
-		expect(tabEyebrow(settingsTabMeta("appearance")!)).toBe("01 · Appearance");
-		expect(tabEyebrow(settingsTabMeta("installed")!)).toBe("11 · Installed");
-		expect(tabEyebrow(settingsTabMeta("web-ui")!)).toBe("Client · Web UI");
 	});
 });
 

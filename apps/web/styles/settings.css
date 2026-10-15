@@ -200,13 +200,6 @@
 	margin-bottom: var(--space-5);
 	border-bottom: 1px solid var(--border);
 }
-.settings-eyebrow {
-	margin: 0 0 var(--space-3);
-	font-family: var(--font-mono);
-	font-size: var(--fs-sm);
-	letter-spacing: var(--ls-micro);
-	color: var(--settings-accent);
-}
 .settings-hero-title {
 	margin: 0;
 	font-size: 1.75rem;

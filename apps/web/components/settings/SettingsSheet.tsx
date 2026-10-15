@@ -5,12 +5,11 @@ import {
 	DEFAULT_SETTINGS_TAB_ID,
 	settingsSectionId,
 	settingsTabMeta,
-	tabEyebrow,
 	visibleSettingsTabs,
 	type SettingsTabMeta,
 } from "../../prefs/settings-tabs";
 import { authSnapshot } from "../../store/auth";
-import { fleetSettingsActive, refreshSettings, state } from "../../state";
+import { refreshSettings, state } from "../../state";
 import { SearchIcon, XIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
 import { FeaturesSettings } from "./FeaturesSettings";
@@ -163,7 +162,6 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 						{(tab) => (
 							<>
 								<header class="settings-hero">
-									<p class="settings-eyebrow">{tabEyebrow(tab)}</p>
 									<h1 class="settings-hero-title">{tab.label}</h1>
 									<p class="settings-lead">{tab.lead}</p>
 								</header>
@@ -186,27 +184,18 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 										}
 									>
 										{(schema) => (
-											<>
-												<div class="settings-note">
-													{model()?.target === "future-sessions" || fleetSettingsActive()
-														? "Future sessions: changes save to config.yml. Existing sessions are unchanged."
-														: "Current session: effective values include session overrides. Global/project config edits also apply to future sessions."}{" "}
-													Each setting shows whether it applies immediately, to new sessions, or
-													after restart.
-												</div>
-												<Index each={schema().groups}>
-													{(group) => (
-														<SettingsGroup
-															title={group().name}
-															id={settingsSectionId(tab.id, group().name)}
-														>
-															<Index each={group().items}>
-																{(item) => <SettingsRow item={item()} />}
-															</Index>
-														</SettingsGroup>
-													)}
-												</Index>
-											</>
+											<Index each={schema().groups}>
+												{(group) => (
+													<SettingsGroup
+														title={group().name}
+														id={settingsSectionId(tab.id, group().name)}
+													>
+														<Index each={group().items}>
+															{(item) => <SettingsRow item={item()} />}
+														</Index>
+													</SettingsGroup>
+												)}
+											</Index>
 										)}
 									</Show>
 								</Show>
