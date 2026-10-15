@@ -1,86 +1,146 @@
-import { createEffect, createSignal, For, onMount, type Component } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	onMount,
+	Show,
+	type Component,
+} from "solid-js";
 import { fuzzyRank } from "../../../prompt/autocomplete";
 import { PromptHistory } from "../../../prompt/history";
 import { setPromptInsert } from "../../../state";
-import { Modal } from "../../ui/Modal";
-import { PickerRow } from "../../ui/PickerRow";
 
 /**
- * Phase 7: Ctrl+R fuzzy search over prompt history (web affordance of the
- * TUI overlay). Enter/click inserts the entry into the PromptBox textarea;
- * Esc closes (Modal owns Esc). Entries are newest-first.
+ * Prompt history popover, anchored to the composer's top-left corner and
+ * growing up and to the right. PromptBox opens it on Up with the caret on the
+ * first line; the composer owns its open state (anchored popover, not a
+ * ModalHost overlay). The newest (or best-matching) entry sits at the bottom,
+ * next to the prompt: Up walks older, Down past the newest returns to the
+ * prompt. Typing fuzzy-filters; Enter/click inserts the entry through the
+ * promptInsert inbox; Esc or focus leaving the popover closes it.
  */
-export const PromptHistoryPicker: Component<{ onClose: () => void }> = (props) => {
+export const PromptHistoryPicker: Component<{
+	/** `restoreFocus`: hand focus back to the prompt (false when focus moved elsewhere). */
+	onClose: (restoreFocus: boolean) => void;
+}> = (props) => {
 	const [query, setQuery] = createSignal("");
 	const [selected, setSelected] = createSignal(0);
-	// Fresh instance per open so entries pushed this session are included
-	// (PromptHistory persists every push to localStorage).
+	// Fresh read per open so entries pushed this session (or in another tab)
+	// are included; PromptHistory persists every push to localStorage.
 	const entries = new PromptHistory().list();
+	const listId = `prompt-history-${Math.random().toString(36).slice(2, 8)}`;
+	let root!: HTMLDivElement;
 	let input!: HTMLInputElement;
+	let listEl: HTMLDivElement | undefined;
+	// Index the pointer last selected: only keyboard moves scroll into view.
+	let pointerPick = -1;
 
-	const filtered = () =>
+	const filtered = createMemo(() =>
 		entries
 			.map((text, index) => ({ text, index, rank: fuzzyRank(query(), text) }))
 			.filter((x): x is { text: string; index: number; rank: number } => x.rank !== null)
-			.sort((a, b) => a.rank - b.rank || a.index - b.index);
+			.sort((a, b) => a.rank - b.rank || a.index - b.index),
+	);
 
 	createEffect(() => {
 		query();
 		setSelected(0);
 	});
+	createEffect(() => {
+		void filtered();
+		const sel = selected();
+		if (sel !== pointerPick) listEl?.children[sel]?.scrollIntoView({ block: "nearest" });
+		pointerPick = -1;
+	});
 
 	const choose = (text: string) => {
 		setPromptInsert({ text });
-		props.onClose();
+		props.onClose(true);
 	};
 
 	const onKeyDown = (e: KeyboardEvent) => {
+		if (e.isComposing) return;
 		const list = filtered();
-		if (e.key === "ArrowDown") {
+		if (e.key === "ArrowUp") {
 			e.preventDefault();
 			setSelected((i) => Math.min(i + 1, list.length - 1));
 			return;
 		}
-		if (e.key === "ArrowUp") {
+		if (e.key === "ArrowDown") {
 			e.preventDefault();
-			setSelected((i) => Math.max(i - 1, 0));
+			if (selected() === 0) props.onClose(true);
+			else setSelected((i) => i - 1);
 			return;
 		}
 		if (e.key === "Enter") {
 			e.preventDefault();
 			const item = list[selected()];
 			if (item) choose(item.text);
+			return;
+		}
+		if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			props.onClose(true);
 		}
 	};
 
 	onMount(() => input.focus());
 
 	return (
-		<Modal title="History search" onClose={props.onClose}>
+		<div
+			ref={root}
+			class="history-popover"
+			role="dialog"
+			aria-label="Prompt history"
+			onFocusOut={(e) => {
+				if (!root.contains(e.relatedTarget as Node | null)) props.onClose(false);
+			}}
+		>
+			<div class="history-popover-list" role="listbox" id={listId} ref={listEl}>
+				<For each={filtered()}>
+					{(item, i) => (
+						<div
+							class="history-popover-row"
+							classList={{ selected: i() === selected() }}
+							id={`${listId}-opt-${i()}`}
+							role="option"
+							aria-selected={i() === selected()}
+							title={item.text}
+							// mousemove, not mouseenter: wheel-scrolling rows under a still
+							// pointer must not steal the keyboard selection.
+							onMouseMove={() => {
+								if (i() === selected()) return;
+								pointerPick = i();
+								setSelected(i());
+							}}
+							onMouseDown={(e) => e.preventDefault() /* keep the search input focused */}
+							onClick={() => choose(item.text)}
+						>
+							{item.text}
+						</div>
+					)}
+				</For>
+				<Show when={filtered().length === 0}>
+					<div class="history-popover-empty">
+						{entries.length === 0 ? "No prompt history yet" : "No matching prompts"}
+					</div>
+				</Show>
+			</div>
 			<input
 				ref={input}
-				class="history-search-input"
+				class="history-popover-input"
+				role="combobox"
 				aria-label="Search prompt history"
+				aria-expanded="true"
+				aria-controls={listId}
+				aria-activedescendant={filtered().length > 0 ? `${listId}-opt-${selected()}` : undefined}
 				placeholder="Search prompt history…"
 				value={query()}
 				onInput={(e) => setQuery(e.currentTarget.value)}
 				onKeyDown={onKeyDown}
 			/>
-			<div class="picker-list">
-				<For each={filtered()}>
-					{(item, i) => (
-						<PickerRow
-							class="picker-row"
-							classList={{ active: i() === selected() }}
-							onClick={() => choose(item.text)}
-							onMouseEnter={() => setSelected(i())}
-						>
-							<span class="picker-detail">{item.text}</span>
-						</PickerRow>
-					)}
-				</For>
-				{filtered().length === 0 && <div class="tool-collapsed-note">no matching history</div>}
-			</div>
-		</Modal>
+		</div>
 	);
 };

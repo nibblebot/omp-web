@@ -9,13 +9,10 @@ const MAX_ENTRIES = 100;
 /**
  * Prompt history ring backed by localStorage. Entries are oldest→newest;
  * consecutive duplicates collapse and the ring caps at MAX_ENTRIES (oldest
- * dropped). Browsing: prev() recalls older entries, next() moves back toward
- * the in-progress draft, which is stashed when browsing starts.
+ * dropped).
  */
 export class PromptHistory {
 	private entries: string[] = [];
-	private cursor: number | null = null;
-	private draft = "";
 
 	constructor(private storage: HistoryStorage = localStorage) {
 		try {
@@ -34,21 +31,14 @@ export class PromptHistory {
 		return this.entries.length;
 	}
 
-	/** Newest-first snapshot of the stored entries (for the Ctrl+R search overlay). */
+	/** Newest-first snapshot of the stored entries (for the prompt history picker). */
 	list(): string[] {
 		return [...this.entries].reverse();
 	}
 
-	get browsing(): boolean {
-		return this.cursor !== null;
-	}
-
 	push(text: string): void {
 		const trimmed = text.trim();
-		if (!trimmed || this.entries[this.entries.length - 1] === trimmed) {
-			this.reset();
-			return;
-		}
+		if (!trimmed || this.entries[this.entries.length - 1] === trimmed) return;
 		this.entries.push(trimmed);
 		if (this.entries.length > MAX_ENTRIES)
 			this.entries.splice(0, this.entries.length - MAX_ENTRIES);
@@ -57,34 +47,5 @@ export class PromptHistory {
 		} catch {
 			// Quota/serialization failure: history is best-effort.
 		}
-		this.reset();
-	}
-
-	/** Recall an older entry; stashes the current draft on first browse. */
-	prev(current: string): string | null {
-		if (this.entries.length === 0) return null;
-		if (this.cursor === null) {
-			this.draft = current;
-			this.cursor = this.entries.length - 1;
-		} else {
-			this.cursor = Math.max(0, this.cursor - 1);
-		}
-		return this.entries[this.cursor] ?? null;
-	}
-
-	/** Move toward newer entries; past the newest restores the stashed draft. */
-	next(): string | null {
-		if (this.cursor === null) return null;
-		if (this.cursor + 1 >= this.entries.length) {
-			this.cursor = null;
-			return this.draft;
-		}
-		this.cursor += 1;
-		return this.entries[this.cursor] ?? null;
-	}
-
-	reset(): void {
-		this.cursor = null;
-		this.draft = "";
 	}
 }

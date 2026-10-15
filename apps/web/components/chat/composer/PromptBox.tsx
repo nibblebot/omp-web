@@ -21,13 +21,13 @@ const history = new PromptHistory();
 /**
  * P2 prompt box (G03). Submit expands `^model` chips, pushes submitted text
  * to history (separate from unsent drafts), and clears the live draft slot.
- * Compatible Up: plain Up browses submitted history ONLY when the caret is
- * on the first line and the composer is not folded/Vim-visual — never
- * stealing caret motion or cleared-draft recovery (explicit Recover action).
+ * Plain Up with the caret on the first line opens the prompt history popover
+ * (PromptHistoryPicker); Up on later lines keeps native caret motion.
  */
 export const PromptBox: Component = () => {
 	const [message, setMessage] = createSignal("");
 	const [images, setImages] = createSignal<ImageArg[]>([]);
+	const [historyOpen, setHistoryOpen] = createSignal(false);
 	let textarea!: HTMLTextAreaElement;
 	const ac = usePromptAutocomplete(() => textarea, message, setMessage);
 	const ghost = useGhostText(() => textarea, message, setMessage);
@@ -49,7 +49,6 @@ export const PromptBox: Component = () => {
 		setMessage("");
 		setImages([]);
 		ac.setToken(null);
-		history.reset();
 		const key = currentDraftKey();
 		cancelScheduledDraftSave(key);
 		removeDraft(key);
@@ -145,33 +144,19 @@ export const PromptBox: Component = () => {
 			return;
 		}
 		const el = e.currentTarget as HTMLTextAreaElement;
-		// Compatible Up: first-line caret + no multiline above + not browsing
-		// a cleared recovery. Multiline caret motion and IME always win.
+		// First-line Up opens the history popover; multiline caret motion and
+		// IME always win, and an empty history leaves Up to the browser.
 		if (
 			e.key === "ArrowUp" &&
 			!e.shiftKey &&
+			!e.ctrlKey &&
+			!e.metaKey &&
 			!el.value.slice(0, el.selectionStart).includes("\n")
 		) {
 			if (e.isComposing || e.keyCode === 229) return;
-			const recalled = history.prev(message());
-			if (recalled !== null) {
-				e.preventDefault();
-				setMessage(recalled);
-				requestAnimationFrame(ac.autoGrow);
-			}
-			return;
-		}
-		if (
-			e.key === "ArrowDown" &&
-			history.browsing &&
-			!el.value.slice(el.selectionEnd).includes("\n")
-		) {
-			const next = history.next();
-			if (next !== null) {
-				e.preventDefault();
-				setMessage(next);
-				requestAnimationFrame(ac.autoGrow);
-			}
+			if (new PromptHistory().size === 0) return;
+			e.preventDefault();
+			setHistoryOpen(true);
 		}
 	};
 
@@ -190,6 +175,8 @@ export const PromptBox: Component = () => {
 				setTextareaRef={(el) => {
 					textarea = el;
 				}}
+				historyOpen={historyOpen}
+				closeHistory={() => setHistoryOpen(false)}
 			/>
 			<PromptActions message={message} images={images} submit={submit} onDiscard={discard} />
 			<ExtensionUi placement="belowEditor" />

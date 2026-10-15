@@ -150,17 +150,6 @@
 .queue-clear:hover {
 	color: var(--error);
 }
-.history-search-input {
-	width: 100%;
-	box-sizing: border-box;
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--r-lg);
-	color: var(--text);
-	padding: var(--space-3) var(--space-4);
-	font: inherit;
-	margin-bottom: var(--space-3);
-}
 .image-tray {
 	display: flex;
 	gap: var(--space-4);
@@ -263,6 +252,78 @@ button.stop:not(:disabled):hover {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+/* Prompt history popover (first-line Up): anchored at the composer's top-left
+ * corner, growing up and to the right. The list is column-reverse so the
+ * newest/best entry (index 0) sits at the bottom next to the search input. */
+.history-popover {
+	position: absolute;
+	bottom: calc(100% + 4px);
+	left: 0;
+	width: min(640px, 100%);
+	display: flex;
+	flex-direction: column;
+	background: var(--panel-2);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-lg);
+	box-shadow: var(--shadow-2);
+	z-index: var(--z-autocomplete);
+	transform-origin: bottom left;
+	animation: history-popover-in var(--dur-base) var(--ease-out);
+}
+@keyframes history-popover-in {
+	from {
+		opacity: 0;
+		transform: scale(0.6);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.history-popover {
+		animation: none;
+	}
+}
+.history-popover-list {
+	display: flex;
+	flex-direction: column-reverse;
+	max-height: min(320px, 50vh);
+	overflow-y: auto;
+	padding: var(--space-2) 0;
+}
+.history-popover-row {
+	padding: var(--space-2) var(--space-4);
+	cursor: pointer;
+	color: var(--text);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	overflow: hidden;
+	flex-shrink: 0;
+	transition: background-color var(--dur-fast) var(--ease-out);
+}
+.history-popover-row.selected {
+	background: var(--hover);
+}
+.history-popover-empty {
+	padding: var(--space-2) var(--space-4);
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}
+.history-popover-input {
+	box-sizing: border-box;
+	width: 100%;
+	background: var(--panel);
+	border: 0;
+	border-top: 1px solid var(--border);
+	border-radius: 0 0 var(--r-lg) var(--r-lg);
+	color: var(--text);
+	padding: var(--space-3) var(--space-4);
+	font: inherit;
+}
+.history-popover-input:focus {
+	outline: none;
 }
 /* P2 composer tools (G03): folded large-paste view, tool row, external-edit
  * cluster. The fold is visual only — submit always uses the full payload. */

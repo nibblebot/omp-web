@@ -43,6 +43,8 @@ function ComposerHarness(props: {
 						setTextareaRef={(el) => {
 							textarea = el;
 						}}
+						historyOpen={() => false}
+						closeHistory={() => {}}
 					/>
 				</div>
 			</div>

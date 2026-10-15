@@ -28,34 +28,8 @@ describe("PromptHistory", () => {
 		const h = new PromptHistory(memStorage());
 		for (let i = 0; i < 105; i++) h.push(`p${i}`);
 		expect(h.size).toBe(100);
-		expect(h.prev("")).toBe("p104");
-	});
-
-	test("prev walks older, next returns to the stashed draft", () => {
-		const h = new PromptHistory(memStorage());
-		h.push("a");
-		h.push("b");
-		expect(h.prev("draft")).toBe("b");
-		expect(h.prev("ignored")).toBe("a");
-		expect(h.prev("ignored")).toBe("a"); // clamps at oldest
-		expect(h.next()).toBe("b");
-		expect(h.next()).toBe("draft"); // past newest restores the draft
-		expect(h.browsing).toBe(false);
-	});
-
-	test("push resets browsing state", () => {
-		const h = new PromptHistory(memStorage());
-		h.push("a");
-		h.prev("x");
-		expect(h.browsing).toBe(true);
-		h.push("b");
-		expect(h.browsing).toBe(false);
-	});
-
-	test("empty history recalls nothing", () => {
-		const h = new PromptHistory(memStorage());
-		expect(h.prev("x")).toBeNull();
-		expect(h.next()).toBeNull();
+		expect(h.list()[0]).toBe("p104");
+		expect(h.list().at(-1)).toBe("p5");
 	});
 
 	test("loads persisted entries and ignores corrupt JSON", () => {

@@ -2,7 +2,6 @@ import { For, Show, createEffect, type Component, type JSX } from "solid-js";
 import { ShortcutsDialog } from "./components/app/ShortcutsDialog";
 import { FleetSignInDialog } from "./components/app/FleetSignInDialog";
 import { Toasts } from "./components/app/Toasts";
-import { PromptHistoryPicker } from "./components/chat/composer/PromptHistoryPicker";
 import { CompactionDialog } from "./components/chat/controls/CompactionDialog";
 import { AddProjectDialog } from "./components/fleet/workspaces/AddProjectDialog";
 import { DeleteWorkspaceDialog } from "./components/fleet/workspaces/DeleteWorkspaceDialog";
@@ -65,7 +64,6 @@ export const ModalHost: Component = () => {
 		settings: () => <SettingsSheet onClose={close} />,
 		sessions: () => <SessionPicker onClose={close} />,
 		branch: () => <SessionGraphDialog onClose={close} />,
-		history: () => <PromptHistoryPicker onClose={close} />,
 		subagents: () => <SubagentsDialog onClose={close} />,
 		login: () => <ProviderLoginDialog onClose={close} />,
 		goal: () => featureModalHost("goal"),

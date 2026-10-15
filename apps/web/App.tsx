@@ -104,13 +104,6 @@ export const App: Component = () => {
 			e.preventDefault();
 			setState("toolsExpanded", (v) => !v);
 		});
-		// Ctrl+R opens history search (suppressed while a modal is open).
-		window.addEventListener("keydown", (e) => {
-			if (e.key.toLowerCase() !== "r" || !e.ctrlKey || e.shiftKey || e.altKey) return;
-			if (state.modal !== null) return;
-			e.preventDefault();
-			setState("modal", "history");
-		});
 	});
 	// Switching Analysis off in Settings hides the mode switch at once, so
 	// leave Analysis immediately rather than strand the user until reload.

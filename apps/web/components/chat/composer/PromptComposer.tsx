@@ -38,6 +38,7 @@ import {
 import { settingValue } from "../../../store/settings";
 import { PaperclipIcon, XIcon } from "../../ui/icons";
 import { AutocompletePopup } from "./AutocompletePopup";
+import { PromptHistoryPicker } from "./PromptHistoryPicker";
 import type { PromptAutocomplete } from "./usePromptAutocomplete";
 import { PromptMirror } from "./PromptMirror";
 import type { GhostText } from "./useGhostText";
@@ -52,6 +53,9 @@ interface PromptComposerProps {
 	ghost: GhostText;
 	onKeyDown: (e: KeyboardEvent) => void;
 	setTextareaRef: (el: HTMLTextAreaElement) => void;
+	/** Prompt history popover open state; PromptBox opens it on first-line Up. */
+	historyOpen: () => boolean;
+	closeHistory: () => void;
 }
 
 /**
@@ -328,6 +332,14 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 						listId={listId}
 					/>
 				)}
+				<Show when={props.historyOpen()}>
+					<PromptHistoryPicker
+						onClose={(restoreFocus) => {
+							props.closeHistory();
+							if (restoreFocus) textarea.focus();
+						}}
+					/>
+				</Show>
 				<Show when={showFold()}>
 					<div
 						class="prompt-fold"
