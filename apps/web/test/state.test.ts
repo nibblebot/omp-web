@@ -12,6 +12,7 @@ import type {
 import { FEATURE_IDS, type FeatureId } from "../features/manifest";
 import { activateFeatures, isFeatureEnabled } from "../features/registry";
 import { pruneUnread, unreadIds } from "../fleet-ui/unread";
+import { rejectPendingCalls } from "../store/transport";
 import {
 	announce,
 	attachSession,
@@ -180,8 +181,13 @@ beforeEach(() => {
 
 // Browser doubles are process-global (see web.testkit.ts) and would otherwise
 // leak into sibling test files run in the same process. Restore them after each
-// test, including test-specific overrides.
-afterEach(restoreBrowserGlobals);
+// test, including test-specific overrides. Unanswered calls (e.g. the boot and
+// attach settings loads) are settled first so their replay timers never fire
+// after `window` is gone.
+afterEach(() => {
+	rejectPendingCalls(new Error("test teardown"));
+	restoreBrowserGlobals();
+});
 
 describe("attached-frame handling", () => {
 	test("daemon switch rejects the old session's calls but the fresh getSubagents pull survives", async () => {
