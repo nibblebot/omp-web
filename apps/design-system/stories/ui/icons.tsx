@@ -48,6 +48,7 @@ import {
 	FlaskIcon,
 	WarningIcon,
 	GripVerticalIcon,
+	PaperclipIcon,
 } from "../../../web/components/ui/icons";
 import { defineStory } from "../../registry";
 
@@ -99,6 +100,7 @@ const ICONS: Record<string, Component<IconProps>> = {
 	FlaskIcon,
 	WarningIcon,
 	GripVerticalIcon,
+	PaperclipIcon,
 };
 
 const ICON_FILE = "apps/web/components/ui/icons.tsx";

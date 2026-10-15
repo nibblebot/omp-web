@@ -37,7 +37,7 @@ import {
 } from "../../../prompt/paste";
 import { settingValue } from "../../../store/settings";
 import { handleVimKey, VIM_DOC, VimState, type VimMode } from "../../../prompt/vim";
-import { XIcon } from "../../ui/icons";
+import { PaperclipIcon, XIcon } from "../../ui/icons";
 import { AutocompletePopup } from "./AutocompletePopup";
 import type { PromptAutocomplete } from "./usePromptAutocomplete";
 import { PromptMirror } from "./PromptMirror";
@@ -372,42 +372,42 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 						</button>
 					</div>
 				</Show>
-				<div class="prompt-field" classList={{ "prompt-field--mirrored": mirrored() }}>
-					<Show when={mirrored()}>
-						<PromptMirror
-							segments={segments()}
-							ghost={props.ghost.text()}
+				<div class="prompt-editor-row">
+					<div class="prompt-field" classList={{ "prompt-field--mirrored": mirrored() }}>
+						<Show when={mirrored()}>
+							<PromptMirror
+								segments={segments()}
+								ghost={props.ghost.text()}
+								ref={(el) => {
+									mirrorEl = el;
+								}}
+							/>
+						</Show>
+						<textarea
 							ref={(el) => {
-								mirrorEl = el;
+								textarea = el;
+								props.setTextareaRef(el);
 							}}
+							role="combobox"
+							aria-label="Message the agent"
+							aria-expanded={props.ac.open()}
+							aria-controls={props.ac.open() ? listId : undefined}
+							aria-activedescendant={
+								props.ac.open() ? `${listId}-opt-${props.ac.selected()}` : undefined
+							}
+							aria-autocomplete="list"
+							value={props.message()}
+							onInput={onTextareaInput}
+							onKeyDown={onTextareaKeyDown}
+							onKeyUp={onCaretMove}
+							onClick={onCaretMove}
+							onScroll={syncMirror}
+							onPaste={onPaste}
+							onDrop={onDrop}
+							placeholder="Message the agent… (Enter send, Ctrl+Enter follow-up, / for commands)"
+							rows={3}
 						/>
-					</Show>
-					<textarea
-						ref={(el) => {
-							textarea = el;
-							props.setTextareaRef(el);
-						}}
-						role="combobox"
-						aria-label="Message the agent"
-						aria-expanded={props.ac.open()}
-						aria-controls={props.ac.open() ? listId : undefined}
-						aria-activedescendant={
-							props.ac.open() ? `${listId}-opt-${props.ac.selected()}` : undefined
-						}
-						aria-autocomplete="list"
-						value={props.message()}
-						onInput={onTextareaInput}
-						onKeyDown={onTextareaKeyDown}
-						onKeyUp={onCaretMove}
-						onClick={onCaretMove}
-						onScroll={syncMirror}
-						onPaste={onPaste}
-						onDrop={onDrop}
-						placeholder="Message the agent… (Enter send, Ctrl+Enter follow-up, / for commands)"
-						rows={3}
-					/>
-				</div>
-				<div class="prompt-tools">
+					</div>
 					<input
 						ref={fileInput}
 						type="file"
@@ -423,12 +423,15 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 					/>
 					<button
 						type="button"
-						class="queue-pop"
+						class="prompt-attach"
 						title="Attach files (images + text, validated)"
+						aria-label="Attach files"
 						onClick={() => fileInput.click()}
 					>
-						attach
+						<PaperclipIcon />
 					</button>
+				</div>
+				<div class="prompt-tools">
 					<button
 						type="button"
 						class="queue-pop"

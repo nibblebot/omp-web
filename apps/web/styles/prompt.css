@@ -20,6 +20,34 @@
 	position: relative;
 	display: flex;
 	flex-direction: column;
+	flex: 1;
+	min-width: 0;
+}
+/* Editor row: the textarea plus the paperclip attach button on its right,
+ * pinned to the bottom edge so it stays put as the editor grows. */
+.prompt-editor-row {
+	display: flex;
+	align-items: flex-end;
+	gap: var(--space-3);
+}
+.prompt-attach {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 32px;
+	min-height: 32px;
+	margin-bottom: var(--space-2);
+	padding: 0;
+	background: none;
+	border: none;
+	border-radius: var(--r-md);
+	color: var(--muted-2);
+	font-size: var(--fs-2xl);
+	cursor: pointer;
+}
+.prompt-attach:hover {
+	color: var(--text);
 }
 .prompt-mirror {
 	position: absolute;
