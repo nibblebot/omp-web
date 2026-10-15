@@ -34,6 +34,18 @@ import {
 	WorktreeIcon,
 	XIcon,
 	type IconProps,
+	SearchIcon,
+	PencilIcon,
+	CrosshairIcon,
+	KeyboardIcon,
+	LayersIcon,
+	DatabaseIcon,
+	WandIcon,
+	ListIcon,
+	ServerIcon,
+	PackageIcon,
+	MonitorIcon,
+	FlaskIcon,
 } from "../../../web/components/ui/icons";
 import { defineStory } from "../../registry";
 
@@ -71,6 +83,18 @@ const ICONS: Record<string, Component<IconProps>> = {
 	TrashIcon,
 	TerminalIcon,
 	BarChart3Icon,
+	SearchIcon,
+	PencilIcon,
+	CrosshairIcon,
+	KeyboardIcon,
+	LayersIcon,
+	DatabaseIcon,
+	WandIcon,
+	ListIcon,
+	ServerIcon,
+	PackageIcon,
+	MonitorIcon,
+	FlaskIcon,
 };
 
 const ICON_FILE = "apps/web/components/ui/icons.tsx";

@@ -3,6 +3,7 @@ import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { ResolvedAnthropicCompat } from "@oh-my-pi/pi-catalog/types";
 import type { AskQuestion, UiRequest } from "../../web/prompt/ask-types";
 import type { SettingsSection } from "../../web/components/settings/SettingsNav";
+import { settingsSectionId } from "../../web/prefs/settings-tabs";
 import type { BtwRecordView } from "../../web/store/btw-history";
 import type { BrowserUiRequest } from "../../web/store/browser-ui";
 import type { DownloadConsent, WebDownloadManifest } from "../../web/store/downloads";
@@ -74,16 +75,17 @@ export const askUiRequest: UiRequest = {
 // Settings modal: tabs, groups, and items across the setting types.
 // ---------------------------------------------------------------------------
 
-/** SettingsSection list: the nav rail entries for SettingsNav and SettingsSectionPicker. */
-export const settingsSections: SettingsSection[] = [
-	{ id: "web-ui", label: "Web UI" },
-	{ id: "model", label: "Model" },
-	{ id: "tools", label: "Tools" },
-	{ id: "context", label: "Context" },
+/** Sidebar sections under the active Model tab: SettingsNav lists them and scrolls to each. */
+export const settingsModelSections: SettingsSection[] = [
+	{ id: settingsSectionId("model", "Defaults"), label: "Defaults" },
+	{ id: settingsSectionId("model", "Providers"), label: "Providers" },
 ];
 
-/** Subsection names SettingsNav lists under the active "Model" section. */
-export const settingsModelSubsections: string[] = ["Defaults", "Providers"];
+/** Sidebar sections under the Web UI tab while signed in. */
+export const settingsWebUiSections: SettingsSection[] = [
+	{ id: settingsSectionId("web-ui", "Interface"), label: "Interface" },
+	{ id: settingsSectionId("web-ui", "Session"), label: "Session" },
+];
 
 /** SettingsItem: enum with provenance, so the row shows effective/explicit/source and the layer picker. */
 export const settingThinkingLevel: SettingsItem = {

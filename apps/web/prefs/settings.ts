@@ -91,11 +91,9 @@ export interface SettingsMatch {
 }
 
 /**
- * Case-insensitive global type-to-search limited to what the panel displays
- * (mirrors the TUI's /settings search): matches item label, item description,
- * group name and item path. The appearance tab only contributes its web
- * "Images" group (images.* items); the rest of that tab is terminal-only and
- * has no home in the panel. Empty/whitespace queries return nothing.
+ * Case-insensitive global type-to-search over every tab's items. Matches item
+ * label, item description, group name and item path; callers group the hits by
+ * tab and section. Empty/whitespace queries return nothing.
  */
 export function filterSettings(model: SettingsModel, query: string): SettingsMatch[] {
 	const q = query.trim().toLowerCase();
@@ -104,7 +102,6 @@ export function filterSettings(model: SettingsModel, query: string): SettingsMat
 	for (const tab of model.tabs) {
 		for (const group of tab.groups) {
 			for (const item of group.items) {
-				if (tab.id === "appearance" && !item.path.startsWith("images.")) continue;
 				const haystack = [item.label, item.description, group.name, item.path]
 					.join("\n")
 					.toLowerCase();
@@ -113,15 +110,4 @@ export function filterSettings(model: SettingsModel, query: string): SettingsMat
 		}
 	}
 	return matches;
-}
-
-/**
- * Web-relevant image-handling items from the appearance tab's "Images" group
- * (images.autoResize, images.blockImages), in schema order. [] when absent.
- */
-export function appearanceWebImages(model: SettingsModel): SettingsItem[] {
-	const appearance = model.tabs.find((tab) => tab.id === "appearance");
-	const images = appearance?.groups.find((group) => group.name === "Images");
-	if (!images) return [];
-	return images.items.filter((item) => item.path.startsWith("images."));
 }

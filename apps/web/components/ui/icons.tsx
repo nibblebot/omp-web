@@ -275,3 +275,118 @@ export const BarChart3Icon: Component<IconProps> = (props) => (
 		<path d="M8 17v-3" />
 	</Svg>
 );
+
+/** Settings search field magnifier, drawn with Lucide's search. */
+export const SearchIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<circle cx="11" cy="11" r="8" />
+		<path d="m21 21-4.3-4.3" />
+	</Svg>
+);
+
+/** Settings tab glyphs, drawn with Lucide's pencil, crosshair, keyboard, layers, database, wand, list, server, package, monitor, flask. */
+export const PencilIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+		<path d="m15 5 4 4" />
+	</Svg>
+);
+
+export const CrosshairIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<circle cx="12" cy="12" r="10" />
+		<path d="M22 12h-4" />
+		<path d="M6 12H2" />
+		<path d="M12 6V2" />
+		<path d="M12 22v-4" />
+	</Svg>
+);
+
+export const KeyboardIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<rect width="20" height="16" x="2" y="4" rx="2" />
+		<path d="M6 8h.001" />
+		<path d="M10 8h.001" />
+		<path d="M14 8h.001" />
+		<path d="M18 8h.001" />
+		<path d="M8 12h.001" />
+		<path d="M12 12h.001" />
+		<path d="M16 12h.001" />
+		<path d="M7 16h10" />
+	</Svg>
+);
+
+export const LayersIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" />
+		<path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" />
+		<path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" />
+	</Svg>
+);
+
+export const DatabaseIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<ellipse cx="12" cy="5" rx="9" ry="3" />
+		<path d="M3 5V19A9 3 0 0 0 21 19V5" />
+		<path d="M3 12A9 3 0 0 0 21 12" />
+	</Svg>
+);
+
+export const WandIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M15 4V2" />
+		<path d="M15 16v-2" />
+		<path d="M8 9h2" />
+		<path d="M20 9h2" />
+		<path d="M17.8 11.8 19 13" />
+		<path d="M15 9h.01" />
+		<path d="M17.8 6.2 19 5" />
+		<path d="m3 21 9-9" />
+		<path d="M12.2 6.2 11 5" />
+	</Svg>
+);
+
+export const ListIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M3 12h.01" />
+		<path d="M3 18h.01" />
+		<path d="M3 6h.01" />
+		<path d="M8 12h13" />
+		<path d="M8 18h13" />
+		<path d="M8 6h13" />
+	</Svg>
+);
+
+export const ServerIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<rect width="20" height="8" x="2" y="2" rx="2" ry="2" />
+		<rect width="20" height="8" x="2" y="14" rx="2" ry="2" />
+		<path d="M6 6h.01" />
+		<path d="M6 18h.01" />
+	</Svg>
+);
+
+export const PackageIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z" />
+		<path d="M12 22V12" />
+		<path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7" />
+		<path d="m7.5 4.27 9 5.15" />
+	</Svg>
+);
+
+export const MonitorIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<rect width="20" height="14" x="2" y="3" rx="2" />
+		<path d="M8 21h8" />
+		<path d="M12 17v4" />
+	</Svg>
+);
+
+export const FlaskIcon: Component<IconProps> = (props) => (
+	<Svg class={props.class}>
+		<path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2" />
+		<path d="M8.5 2h7" />
+		<path d="M7 16h10" />
+	</Svg>
+);

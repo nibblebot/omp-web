@@ -2,6 +2,7 @@ import { SettingsSheet } from "../../../web/components/settings/SettingsSheet";
 import { SettingsRowLayout, SettingsRow } from "../../../web/components/settings/SettingsRow";
 import { SettingsNav, SettingsSectionPicker } from "../../../web/components/settings/SettingsNav";
 import { WebUiSettings } from "../../../web/components/settings/WebUiSettings";
+import { changedCountsByTab, SETTINGS_TABS } from "../../../web/prefs/settings-tabs";
 import {
 	settingApiKey,
 	settingAutoCompact,
@@ -13,8 +14,8 @@ import {
 	settingSkillPaths,
 	settingThinkingLevel,
 	settingsModelCurrentSession,
-	settingsModelSubsections,
-	settingsSections,
+	settingsModelSections,
+	settingsWebUiSections,
 } from "../../fixtures/overlays";
 import { answerCalls } from "../../daemon";
 import { defineStory } from "../../registry";
@@ -60,28 +61,28 @@ export default [
 		component: { file: "apps/web/components/settings/SettingsNav.tsx", export: "SettingsNav" },
 		variants: [
 			{
-				name: "Model section, Defaults group",
+				name: "Model selected, Defaults section",
 				render: () => (
 					<SettingsNav
-						sections={settingsSections}
+						tabs={SETTINGS_TABS}
 						activeTabId="model"
-						subsections={settingsModelSubsections}
-						activeGroup="Defaults"
+						changedCounts={changedCountsByTab(settingsModelCurrentSession)}
+						sections={settingsModelSections}
 						onSelectTab={() => undefined}
-						onSelectGroup={() => undefined}
+						onSelectSection={() => undefined}
 					/>
 				),
 			},
 			{
-				name: "Web UI section",
+				name: "Web UI selected",
 				render: () => (
 					<SettingsNav
-						sections={settingsSections}
+						tabs={SETTINGS_TABS}
 						activeTabId="web-ui"
-						subsections={[]}
-						activeGroup={null}
+						changedCounts={new Map()}
+						sections={settingsWebUiSections}
 						onSelectTab={() => undefined}
-						onSelectGroup={() => undefined}
+						onSelectSection={() => undefined}
 					/>
 				),
 			},
@@ -99,7 +100,7 @@ export default [
 				name: "Model selected",
 				render: () => (
 					<SettingsSectionPicker
-						sections={settingsSections}
+						sections={SETTINGS_TABS}
 						activeTabId="model"
 						onSelectTab={() => undefined}
 					/>
@@ -109,7 +110,7 @@ export default [
 				name: "Web UI selected",
 				render: () => (
 					<SettingsSectionPicker
-						sections={settingsSections}
+						sections={SETTINGS_TABS}
 						activeTabId="web-ui"
 						onSelectTab={() => undefined}
 					/>
@@ -196,12 +197,8 @@ export default [
 		component: { file: "apps/web/components/settings/WebUiSettings.tsx", export: "WebUiSettings" },
 		variants: [
 			{
-				name: "All groups",
-				render: () => <WebUiSettings model={settingsModelCurrentSession} visibleGroup={null} />,
-			},
-			{
-				name: "Images group",
-				render: () => <WebUiSettings model={settingsModelCurrentSession} visibleGroup="Images" />,
+				name: "All sections",
+				render: () => <WebUiSettings />,
 			},
 		],
 	}),

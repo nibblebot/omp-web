@@ -1,127 +1,123 @@
-import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
+import { createMemo, createSignal, For, onMount, Show, type Component } from "solid-js";
 import { filterSettings, type SettingsMatch } from "../../prefs/settings";
+import {
+	changedCountsByTab,
+	DEFAULT_SETTINGS_TAB_ID,
+	settingsSectionId,
+	settingsTabMeta,
+	tabEyebrow,
+	visibleSettingsTabs,
+	type SettingsTabMeta,
+} from "../../prefs/settings-tabs";
+import { authSnapshot } from "../../store/auth";
 import { fleetSettingsActive, refreshSettings, state } from "../../state";
-import { XIcon } from "../ui/icons";
+import { SearchIcon, XIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
 import { FeaturesSettings } from "./FeaturesSettings";
 import { InstalledTab } from "./InstalledTab";
-import { SettingsNav, SettingsSectionPicker } from "./SettingsNav";
+import { SettingsNav, SettingsSectionPicker, type SettingsSection } from "./SettingsNav";
 import { SettingsRow } from "./SettingsRow";
 import { WebUiSettings } from "./WebUiSettings";
 
 /**
- * Full-screen settings panel (TUI /settings parity): sidebar navigation with
- * nested subsections on wide screens (horizontal tab bar fallback on narrow),
- * per-type controls and global type-to-search. Client sections are a "Web UI"
- * section (client-local toggles + web-relevant image handling) and one entry
- * per non-appearance schema tab. Server calls go through refreshSettings / updateSetting;
+ * Full-screen settings panel (TUI /settings parity): a header with search, a
+ * vertical tab sidebar on wide screens (a section picker on narrow), and one
+ * stacked body per tab. Tabs are the SDK tabs (server model), Installed, Web
+ * UI and Features (client-local). Search spans every tab and groups matches
+ * by tab and section. Server calls go through refreshSettings / updateSetting;
  * the returned model is authoritative and settings_changed frames keep this
  * panel (and every other tab) in sync.
  */
 export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	const [query, setQuery] = createSignal("");
-	const [activeTab, setActiveTab] = createSignal<string | null>(null);
-	// Sidebar group filter: a subsection pick scopes the body to one group.
-	const [activeGroup, setActiveGroup] = createSignal<string | null>(null);
-	// Wide layout detection: sidebar navigation + group filtering only apply
-	// on wide terminals; narrow keeps the flat tab bar and unfiltered body.
-	const [wide, setWide] = createSignal(window.matchMedia("(min-width: 721px)").matches);
+	const [activeTab, setActiveTab] = createSignal(DEFAULT_SETTINGS_TAB_ID);
+	let bodyRef: HTMLDivElement | undefined;
 
 	onMount(() => refreshSettings());
-	onMount(() => {
-		const mql = window.matchMedia("(min-width: 721px)");
-		const onChange = (e: MediaQueryListEvent) => setWide(e.matches);
-		mql.addEventListener("change", onChange);
-		onCleanup(() => mql.removeEventListener("change", onChange));
-	});
 
 	const model = () => state.settingsModel;
-	// Client tabs: "Web UI" and "Features" first, then one tab per
-	// non-appearance schema tab (schema order). Without a model only the two
-	// client tabs exist.
-	const clientTabs = () => {
-		const tabs = [
-			{ id: "web-ui", label: "Web UI" },
-			{ id: "features", label: "Features" },
-			{ id: "installed", label: "Installed" },
-		];
-		const m = model();
-		if (m) {
-			for (const tab of m.tabs) {
-				if (tab.id !== "appearance") tabs.push({ id: tab.id, label: tab.label });
-			}
-		}
-		return tabs;
-	};
-	// Keep the pick valid across model refreshes; an unknown or stale id falls
-	// back to "web-ui" (the tab bar only renders under a loaded model, so a
-	// stale pick is harmless).
+	const tabs = () => visibleSettingsTabs(model());
+	const changedCounts = createMemo(() => changedCountsByTab(model()));
+	// A pick that is no longer visible (for example a model refresh dropped
+	// it) falls back to the default tab.
 	const activeTabId = () => {
 		const picked = activeTab();
-		if (picked && clientTabs().some((t) => t.id === picked)) return picked;
-		return "web-ui";
+		return tabs().some((t) => t.id === picked) ? picked : DEFAULT_SETTINGS_TAB_ID;
 	};
-	// The schema tab backing a client tab id; null for client-local tabs.
+	const active = () => settingsTabMeta(activeTabId());
+	// The SDK model tab backing an id; null for client-local tabs.
 	const schemaTab = (id: string) => model()?.tabs.find((t) => t.id === id) ?? null;
-	// Sidebar subsection names for a client tab, in display order; empty group
-	// names are skipped (the TUI/group rendering only shows h3s for named groups).
-	const tabSubsections = (id: string): string[] => {
-		if (id === "web-ui") return ["Interface", "Images"];
-		const tab = schemaTab(id);
-		return tab ? tab.groups.map((g) => g.name).filter(Boolean) : [];
+	// Sidebar sections listed under the active tab: named SDK groups, and for
+	// Web UI the Interface section plus Session while signed in.
+	const sectionsOf = (tab: SettingsTabMeta): SettingsSection[] => {
+		if (tab.kind === "sdk") {
+			const groups = schemaTab(tab.id)?.groups ?? [];
+			return groups
+				.filter((g) => g.name)
+				.map((g) => ({ id: settingsSectionId(tab.id, g.name), label: g.name }));
+		}
+		if (tab.id === "web-ui") {
+			const signedIn = authSnapshot().status === "signedIn";
+			return [
+				{ id: settingsSectionId("web-ui", "Interface"), label: "Interface" },
+				...(signedIn ? [{ id: settingsSectionId("web-ui", "Session"), label: "Session" }] : []),
+			];
+		}
+		return [];
 	};
-	// The sidebar's active subsection, validated against the ACTIVE tab: a
-	// condition-gated group may vanish on model refresh, so an invalid pick
-	// falls back to showing all groups rather than a stale empty body.
-	const effectiveGroup = () => {
-		const picked = activeGroup();
-		return picked !== null && tabSubsections(activeTabId()).includes(picked) ? picked : null;
+	const sections = () => {
+		const tab = active();
+		return tab ? sectionsOf(tab) : [];
 	};
-	// Group filtering only applies on the wide layout; narrow always shows
-	// every group of the active tab.
-	const visibleGroup = () => (wide() ? effectiveGroup() : null);
-	// Navigation (sidebar sections and the narrow tab bar): switching sections
-	// clears the group filter and any in-flight search.
+	// Navigation (sidebar and narrow picker): switching tabs clears any
+	// in-flight search and returns the body to the top.
 	const selectTab = (id: string) => {
 		setActiveTab(id);
-		setActiveGroup(null);
 		setQuery("");
+		bodyRef?.scrollTo({ top: 0 });
+	};
+	// Sidebar section pick: clear the search so the stacked body is shown,
+	// then bring the section into view.
+	const selectSection = (id: string) => {
+		setQuery("");
+		document.getElementById(id)?.scrollIntoView({ block: "start" });
 	};
 	const searching = () => query().trim() !== "";
-	const onFeatures = () => activeTabId() === "features";
-	const onInstalled = () => activeTabId() === "installed";
 	const results = () => {
 		const m = model();
 		return m && searching() ? filterSettings(m, query()) : [];
 	};
-	// Flat matches grouped by CLIENT tab label: appearance-tab matches are the
-	// web Images group and show under "Web UI", the rest under their schema
-	// tab's label.
-	const resultsByTab = () => {
-		const tabs = clientTabs();
-		const byLabel = new Map<string, SettingsMatch[]>();
+	// Matches grouped by tab, then by section. filterSettings returns matches
+	// in tab order, so Map insertion order keeps the tab grouping.
+	const resultGroups = () => {
+		const byTitle = new Map<string, SettingsMatch[]>();
 		for (const match of results()) {
-			const clientId = match.tab.id === "appearance" ? "web-ui" : match.tab.id;
-			const label = tabs.find((t) => t.id === clientId)?.label ?? clientId;
-			const list = byLabel.get(label) ?? [];
+			const title = `${match.tab.label} · ${match.group.name}`;
+			const list = byTitle.get(title) ?? [];
 			list.push(match);
-			byLabel.set(label, list);
+			byTitle.set(title, list);
 		}
-		return [...byLabel.entries()];
+		return [...byTitle.entries()];
 	};
 
 	return (
 		<Modal variant="sheet" class="settings-sheet" ariaLabel="Settings" onClose={props.onClose}>
 			<div class="settings-header">
-				<h2 class="settings-title">Settings</h2>
-				<input
-					class="settings-search"
-					type="text"
-					aria-label="Search settings"
-					placeholder="Search settings…"
-					value={query()}
-					onInput={(e) => setQuery(e.currentTarget.value)}
-				/>
+				<span class="settings-mark" aria-hidden="true">
+					π
+				</span>
+				<h2 class="settings-title">omp settings</h2>
+				<div class="settings-search-field">
+					<SearchIcon class="settings-search-icon" />
+					<input
+						class="settings-search"
+						type="text"
+						aria-label="Search settings"
+						placeholder="Search settings…"
+						value={query()}
+						onInput={(e) => setQuery(e.currentTarget.value)}
+					/>
+				</div>
 				<button
 					type="button"
 					class="settings-close"
@@ -132,83 +128,87 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 				</button>
 			</div>
 			{/* Narrow-layout navigation (CSS-gated to ≤720px): a section
-			    picker instead of the wide layout's nav rail. */}
+			    picker instead of the wide layout's sidebar. */}
 			<SettingsSectionPicker
-				sections={clientTabs()}
+				sections={tabs()}
 				activeTabId={activeTabId()}
 				onSelectTab={selectTab}
 			/>
 			<div class="settings-content">
 				<SettingsNav
-					sections={clientTabs()}
+					tabs={tabs()}
 					activeTabId={activeTabId()}
-					subsections={tabSubsections(activeTabId())}
-					activeGroup={activeGroup()}
+					changedCounts={changedCounts()}
+					sections={sections()}
 					onSelectTab={selectTab}
-					onSelectGroup={(name) => {
-						setActiveGroup(name);
-						setQuery("");
-					}}
+					onSelectSection={selectSection}
 				/>
-				<div class="settings-body">
-					<Show when={onFeatures() && !searching()}>
-						<FeaturesSettings />
-					</Show>
-					<Show when={onInstalled() && !searching()}>
-						<InstalledTab />
-					</Show>
-					<Show when={model() && !onFeatures() && !onInstalled()}>
-						<div class="settings-note">
-							{model()?.target === "future-sessions" || fleetSettingsActive()
-								? "Future sessions: changes save to config.yml. Existing sessions are unchanged."
-								: "Current session: effective values include session overrides. Global/project config edits also apply to future sessions."}{" "}
-							Each setting shows whether it applies immediately, to new sessions, or after restart.
-						</div>
-					</Show>
-					<Show when={state.settingsLoading && !model() && !onFeatures() && !onInstalled()}>
-						<div class="settings-note">Loading settings…</div>
-					</Show>
-					<Show when={!state.settingsLoading && !model() && !onFeatures() && !onInstalled()}>
-						<div class="settings-note">Settings unavailable.</div>
-					</Show>
+				<div class="settings-body" ref={bodyRef}>
 					<Show when={searching()}>
 						<FeaturesSettings query={query()} />
-					</Show>
-					<Show when={searching() && model()}>
-						<For each={resultsByTab()}>
-							{([label, matches]) => (
-								<div class="settings-group">
-									<h3 class="settings-group-title">{label}</h3>
-									<For each={matches}>{(match) => <SettingsRow item={match.item} />}</For>
-								</div>
-							)}
-						</For>
-					</Show>
-					<Show when={!searching() && model()}>
-						<Show when={activeTabId() === "web-ui"}>
-							<WebUiSettings model={model()!} visibleGroup={visibleGroup()} />
+						<Show when={model()}>
+							<For each={resultGroups()}>
+								{([title, matches]) => (
+									<div class="settings-group">
+										<h3 class="settings-group-title">{title}</h3>
+										<For each={matches}>{(match) => <SettingsRow item={match.item} />}</For>
+									</div>
+								)}
+							</For>
 						</Show>
-						<Show when={schemaTab(activeTabId())} keyed>
-							{(tab) => (
-								<>
-									<h3 class="settings-group-title">{tab.label}</h3>
-									<For
-										each={tab.groups.filter(
-											(g) => visibleGroup() === null || g.name === visibleGroup(),
-										)}
-									>
-										{(group) => (
-											<div class="settings-group">
-												<Show when={group.name}>
-													<h3 class="settings-group-title">{group.name}</h3>
-												</Show>
-												<For each={group.items}>{(item) => <SettingsRow item={item} />}</For>
+					</Show>
+					<Show when={!searching() && active()} keyed>
+						{(tab) => (
+							<>
+								<header class="settings-hero">
+									<p class="settings-eyebrow">{tabEyebrow(tab)}</p>
+									<h1 class="settings-hero-title">{tab.label}</h1>
+									<p class="settings-lead">{tab.lead}</p>
+								</header>
+								<Show when={tab.id === "features"}>
+									<FeaturesSettings />
+								</Show>
+								<Show when={tab.id === "installed"}>
+									<InstalledTab />
+								</Show>
+								<Show when={tab.id === "web-ui"}>
+									<WebUiSettings />
+								</Show>
+								<Show when={tab.kind === "sdk"}>
+									<Show
+										when={schemaTab(tab.id)}
+										fallback={
+											<div class="settings-note">
+												{state.settingsLoading ? "Loading settings…" : "Settings unavailable."}
 											</div>
+										}
+										keyed
+									>
+										{(schema) => (
+											<>
+												<div class="settings-note">
+													{model()?.target === "future-sessions" || fleetSettingsActive()
+														? "Future sessions: changes save to config.yml. Existing sessions are unchanged."
+														: "Current session: effective values include session overrides. Global/project config edits also apply to future sessions."}{" "}
+													Each setting shows whether it applies immediately, to new sessions, or
+													after restart.
+												</div>
+												<For each={schema.groups}>
+													{(group) => (
+														<div class="settings-group" id={settingsSectionId(tab.id, group.name)}>
+															<Show when={group.name}>
+																<h3 class="settings-group-title">{group.name}</h3>
+															</Show>
+															<For each={group.items}>{(item) => <SettingsRow item={item} />}</For>
+														</div>
+													)}
+												</For>
+											</>
 										)}
-									</For>
-								</>
-							)}
-						</Show>
+									</Show>
+								</Show>
+							</>
+						)}
 					</Show>
 				</div>
 			</div>

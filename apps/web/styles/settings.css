@@ -14,19 +14,46 @@
 	padding-bottom: calc(var(--space-4) + var(--space-1));
 	border-bottom: 1px solid var(--border);
 }
+.settings-mark {
+	flex: none;
+	display: inline-grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
+	border-radius: var(--r-md);
+	background: var(--accent-dim);
+	color: var(--accent);
+	font-weight: 600;
+	font-size: var(--fs-lg);
+}
 .settings-title {
 	margin: 0;
 	font-size: 1rem;
 	color: var(--muted-3);
 	flex: none;
 }
+.settings-search-field {
+	position: relative;
+	flex: 1;
+	display: flex;
+	align-items: center;
+}
+.settings-search-icon {
+	position: absolute;
+	left: var(--space-4);
+	width: 16px;
+	height: 16px;
+	color: var(--muted);
+	pointer-events: none;
+}
 .settings-search {
 	flex: 1;
+	width: 100%;
 	background: var(--bg-deep);
 	border: 1px solid var(--border);
 	border-radius: var(--r-md);
 	color: var(--text);
-	padding: var(--space-3) var(--space-4);
+	padding: var(--space-3) var(--space-4) var(--space-3) calc(var(--space-4) + 16px + var(--space-3));
 	font: inherit;
 	font-size: var(--fs-md);
 }
@@ -86,6 +113,10 @@
 	min-height: 0;
 }
 .settings-section {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	width: 100%;
 	background: none;
 	border: 1px solid transparent;
 	text-align: left;
@@ -96,17 +127,41 @@
 	border-radius: var(--r-md);
 	cursor: pointer;
 	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
 }
 .settings-section:hover {
 	color: var(--text);
 }
 .settings-section.active {
-	background: var(--accent-dim);
-	border-color: var(--accent-border);
-	color: var(--accent);
-	font-weight: 600;
+	background: var(--btn);
+	color: var(--text);
+	box-shadow: inset 0 -2px 0 var(--settings-accent);
+}
+.settings-nav-icon {
+	flex: none;
+	width: 16px;
+	height: 16px;
+}
+.settings-nav-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.settings-nav-badge {
+	flex: none;
+	min-width: 1.5em;
+	padding: 0 var(--space-3);
+	border-radius: var(--r-pill);
+	text-align: center;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--settings-accent);
+	background: color-mix(in srgb, var(--settings-accent) 16%, transparent);
+}
+.settings-nav-divider {
+	border: 0;
+	border-top: 1px solid var(--border);
+	margin: var(--space-3) var(--space-4);
 }
 .settings-subsection {
 	background: none;
@@ -125,11 +180,6 @@
 .settings-subsection:hover {
 	color: var(--text);
 }
-.settings-subsection.active {
-	background: var(--accent-dim);
-	border-color: var(--accent-border);
-	color: var(--accent);
-}
 @media (max-width: 720px) {
 	.settings-nav {
 		display: none;
@@ -143,12 +193,29 @@
 	overflow-x: hidden;
 	padding: var(--space-3) var(--space-6);
 }
-/* Narrow-layout copy of the fleet fallback notice (the nav rail holding the
-   footnote is hidden at ≤720px); hidden on the wide layout. */
-@media (min-width: 721px) {
-	.settings-note-narrow {
-		display: none;
-	}
+.settings-hero {
+	padding: var(--space-5) 0 var(--space-6);
+	margin-bottom: var(--space-5);
+	border-bottom: 1px solid var(--border);
+}
+.settings-eyebrow {
+	margin: 0 0 var(--space-3);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	letter-spacing: var(--ls-micro);
+	color: var(--settings-accent);
+}
+.settings-hero-title {
+	margin: 0;
+	font-size: 1.75rem;
+	font-weight: 600;
+	line-height: 1.2;
+	color: var(--text);
+}
+.settings-lead {
+	margin: var(--space-4) 0 0;
+	max-width: 64ch;
+	color: var(--muted);
 }
 .settings-nav-footnote {
 	margin-top: auto;
