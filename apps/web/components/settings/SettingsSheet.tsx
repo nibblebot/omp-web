@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onMount, Show, type Component } from "solid-js";
+import { createMemo, createSignal, For, Index, onMount, Show, type Component } from "solid-js";
 import { filterSettings, type SettingsMatch } from "../../prefs/settings";
 import {
 	changedCountsByTab,
@@ -15,6 +15,7 @@ import { SearchIcon, XIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
 import { FeaturesSettings } from "./FeaturesSettings";
 import { InstalledTab } from "./InstalledTab";
+import { SettingsGroup } from "./SettingsGroup";
 import { SettingsNav, SettingsSectionPicker, type SettingsSection } from "./SettingsNav";
 import { SettingsRow } from "./SettingsRow";
 import { WebUiSettings } from "./WebUiSettings";
@@ -149,10 +150,9 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 						<Show when={model()}>
 							<For each={resultGroups()}>
 								{([title, matches]) => (
-									<div class="settings-group">
-										<h3 class="settings-group-title">{title}</h3>
-										<For each={matches}>{(match) => <SettingsRow item={match.item} />}</For>
-									</div>
+									<SettingsGroup title={title}>
+										<Index each={matches}>{(match) => <SettingsRow item={match().item} />}</Index>
+									</SettingsGroup>
 								)}
 							</For>
 						</Show>
@@ -182,7 +182,6 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 												{state.settingsLoading ? "Loading settings…" : "Settings unavailable."}
 											</div>
 										}
-										keyed
 									>
 										{(schema) => (
 											<>
@@ -193,16 +192,18 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 													Each setting shows whether it applies immediately, to new sessions, or
 													after restart.
 												</div>
-												<For each={schema.groups}>
+												<Index each={schema().groups}>
 													{(group) => (
-														<div class="settings-group" id={settingsSectionId(tab.id, group.name)}>
-															<Show when={group.name}>
-																<h3 class="settings-group-title">{group.name}</h3>
-															</Show>
-															<For each={group.items}>{(item) => <SettingsRow item={item} />}</For>
-														</div>
+														<SettingsGroup
+															title={group().name}
+															id={settingsSectionId(tab.id, group().name)}
+														>
+															<Index each={group().items}>
+																{(item) => <SettingsRow item={item()} />}
+															</Index>
+														</SettingsGroup>
 													)}
-												</For>
+												</Index>
 											</>
 										)}
 									</Show>

@@ -289,4 +289,12 @@ describe("buildSettingsModel", () => {
 		expect(hindsightItems.length).toBeGreaterThan(0);
 		lookup("memory.backend")!.unset(Settings.instance);
 	});
+
+	test("the SDK risk note reaches the row as warning", () => {
+		const model = buildSettingsModel(fakeSession, ["dark", "light"]);
+		const external = itemsOf("model", model).find((item) => item.path === "externalThinking");
+		expect(external?.warning).toContain("At your own risk");
+		const plain = itemsOf("model", model).find((item) => item.path === "thinkingLevel");
+		expect(plain?.warning).toBeUndefined();
+	});
 });

@@ -720,9 +720,9 @@ describe("client debug ring (transport observability)", () => {
 describe("fleet settings fallback (no daemon attached)", () => {
 	const model: SettingsModel = { tabs: [] };
 
-	/** Drain the async fetch/.then/.finally chain (each hop is one microtask). */
+	/** Drain the async fetch/.then/.finally chain (each hop is one microtask); the write queue adds a few. */
 	async function settle(): Promise<void> {
-		for (let i = 0; i < 8; i++) await Promise.resolve();
+		for (let i = 0; i < 32; i++) await Promise.resolve();
 	}
 
 	/** Swap globalThis.fetch for a JSON responder; records every request. */
@@ -852,6 +852,35 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		dispatch(callResult(calls[0].id, model));
 		await settle();
 		expect(state.settingsModel).toEqual(model);
+	});
+
+	test("queued writes run one at a time, each sending the revision the previous response produced", async () => {
+		setState({
+			currentSessionId: "",
+			settingsModel: { tabs: [], revision: 7 },
+			settingsLoading: false,
+			error: null,
+		});
+		let nextRevision = 8;
+		const requests = stubFetch(() => ({
+			status: 200,
+			body: { tabs: [], revision: nextRevision++ },
+		}));
+
+		// Both calls land before the first response, the case that used to share revision 7.
+		updateSetting("agent.model", "a");
+		updateSetting("agent.model", "b");
+		for (let i = 0; i < 40; i++) await Promise.resolve();
+
+		const revisions = requests.map((r) => {
+			const body = r.body;
+			return body && typeof body === "object" && "expectedRevision" in body
+				? body.expectedRevision
+				: undefined;
+		});
+		expect(revisions).toEqual([7, 8]);
+		expect(state.settingsModel?.revision).toBe(9);
+		expect(state.error).toBeNull();
 	});
 });
 

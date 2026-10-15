@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SettingsItem, SettingsModel, SettingsTab } from "#lib/wire/protocol";
-import { displayOptionValue, filterSettings, formatItemValue } from "../../prefs/settings";
+import { displayOptionValue, filterSettings } from "../../prefs/settings";
 
 function item(partial: Partial<SettingsItem> & Pick<SettingsItem, "type">): SettingsItem {
 	return {
@@ -34,94 +34,6 @@ describe("displayOptionValue", () => {
 	test("null/undefined render as empty string", () => {
 		expect(displayOptionValue(item({ type: "enum" }), null)).toBe("");
 		expect(displayOptionValue(item({ type: "enum" }), undefined)).toBe("");
-	});
-});
-
-describe("formatItemValue", () => {
-	test("boolean renders true/false", () => {
-		expect(formatItemValue(item({ type: "boolean", value: true }))).toBe("true");
-		expect(formatItemValue(item({ type: "boolean", value: false }))).toBe("false");
-	});
-
-	test("enum shows the raw value", () => {
-		expect(formatItemValue(item({ type: "enum", value: "50" }))).toBe("50");
-	});
-
-	test("submenu shows the option label, falling back to the value", () => {
-		const submenu = item({
-			type: "submenu",
-			value: "a",
-			options: [
-				{ value: "a", label: "Alpha" },
-				{ value: "b", label: "Beta" },
-			],
-		});
-		expect(formatItemValue(submenu)).toBe("Alpha");
-		expect(formatItemValue(item({ type: "submenu", value: "zzz" }))).toBe("zzz");
-	});
-
-	test("submenu compaction -1 resolves the 'default' option label", () => {
-		const submenu = item({
-			type: "submenu",
-			path: "compaction.thresholdPercent",
-			value: -1,
-			options: [{ value: "default", label: "Default" }],
-		});
-		expect(formatItemValue(submenu)).toBe("Default");
-	});
-
-	test("text shows the value, or empty when unset", () => {
-		expect(formatItemValue(item({ type: "text", value: "hello" }))).toBe("hello");
-		expect(formatItemValue(item({ type: "text", value: null }))).toBe("");
-		expect(formatItemValue(item({ type: "text", value: 42 }))).toBe("42");
-	});
-
-	test("secret text masks with dots", () => {
-		expect(formatItemValue(item({ type: "text", secret: true, value: "hunter2" }))).toBe(
-			"••••••••",
-		);
-		expect(formatItemValue(item({ type: "text", secret: true, value: "" }))).toBe("");
-	});
-
-	test("multiselect joins option labels", () => {
-		const multi = item({
-			type: "multiselect",
-			value: ["a", "b"],
-			options: [
-				{ value: "a", label: "Alpha" },
-				{ value: "b", label: "Beta" },
-			],
-		});
-		expect(formatItemValue(multi)).toBe("Alpha, Beta");
-		expect(formatItemValue(item({ type: "multiselect", value: ["x"] }))).toBe("x");
-	});
-
-	test("multiselect empty renders none, or default when ordered", () => {
-		expect(formatItemValue(item({ type: "multiselect", value: [] }))).toBe("none");
-		expect(formatItemValue(item({ type: "multiselect", value: [], ordered: true }))).toBe(
-			"default",
-		);
-	});
-
-	test("ordered multiselect joins with an arrow", () => {
-		const multi = item({
-			type: "multiselect",
-			ordered: true,
-			value: ["a", "b"],
-			options: [
-				{ value: "a", label: "Alpha" },
-				{ value: "b", label: "Beta" },
-			],
-		});
-		expect(formatItemValue(multi)).toBe("Alpha → Beta");
-	});
-
-	test("providerLimits renders Unlimited when empty, sorted entries otherwise", () => {
-		expect(formatItemValue(item({ type: "providerLimits", value: {} }))).toBe("Unlimited");
-		expect(formatItemValue(item({ type: "providerLimits", value: null }))).toBe("Unlimited");
-		expect(formatItemValue(item({ type: "providerLimits", value: { b: 1, a: 2 } }))).toBe(
-			"a: 2, b: 1",
-		);
 	});
 });
 

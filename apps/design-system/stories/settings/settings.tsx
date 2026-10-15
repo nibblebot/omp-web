@@ -2,6 +2,8 @@ import { SettingsSheet } from "../../../web/components/settings/SettingsSheet";
 import { SettingsRowLayout, SettingsRow } from "../../../web/components/settings/SettingsRow";
 import { SettingsNav, SettingsSectionPicker } from "../../../web/components/settings/SettingsNav";
 import { WebUiSettings } from "../../../web/components/settings/WebUiSettings";
+import { SettingStepper } from "../../../web/components/settings/controls/SettingStepper";
+import { SettingToggle } from "../../../web/components/settings/controls/SettingToggle";
 import { changedCountsByTab, SETTINGS_TABS } from "../../../web/prefs/settings-tabs";
 import {
 	settingApiKey,
@@ -173,7 +175,7 @@ export default [
 				name: "Plain",
 				render: () => (
 					<SettingsRowLayout label="Auto-compact">
-						<input type="checkbox" checked disabled />
+						<SettingToggle label="Auto-compact" checked disabled onChange={() => undefined} />
 					</SettingsRowLayout>
 				),
 			},
@@ -185,7 +187,12 @@ export default [
 						description="Seconds before a foreground bash call is cancelled."
 						changed
 					>
-						<input type="number" value="120" disabled />
+						<SettingStepper
+							label="Bash timeout"
+							path="bash.timeoutSec"
+							value={120}
+							onChange={() => undefined}
+						/>
 					</SettingsRowLayout>
 				),
 			},

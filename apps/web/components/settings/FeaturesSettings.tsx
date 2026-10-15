@@ -13,6 +13,8 @@ import {
 	formatKilobytes,
 	loadFeatureSizes,
 } from "../../features/sizes";
+import { SettingsGroup } from "./SettingsGroup";
+import { SettingToggle } from "./controls/SettingToggle";
 
 /**
  * Settings > Features: per-browser feature toggles plus bundle sizes.
@@ -84,8 +86,7 @@ export function FeaturesSettings(props: { query?: string }) {
 				</section>
 			</Show>
 			<Show when={rows().length > 0}>
-				<div class="settings-group">
-					<div class="settings-group-title">Features</div>
+				<SettingsGroup title="Features">
 					<For each={rows()}>
 						{(f) => (
 							<div class="settings-item feature-row">
@@ -107,17 +108,16 @@ export function FeaturesSettings(props: { query?: string }) {
 											</Show>
 										)}
 									</Show>
-									<input
-										type="checkbox"
-										aria-label={`Enable ${f.label}`}
+									<SettingToggle
+										label={`Enable ${f.label}`}
 										checked={featurePreferences()[f.id]}
-										onChange={(e) => setFeaturePreference(f.id, e.currentTarget.checked)}
+										onChange={(checked) => setFeaturePreference(f.id, checked)}
 									/>
 								</div>
 							</div>
 						)}
 					</For>
-				</div>
+				</SettingsGroup>
 			</Show>
 		</div>
 	);

@@ -1,4 +1,4 @@
-import { createSignal, For, Match, Show, Switch, type Component } from "solid-js";
+import { createSignal, For, Index, Match, Show, Switch, type Component } from "solid-js";
 import type { PluginDetail, PluginFeatureRow, PluginSettingRow } from "#lib/wire/protocol";
 import {
 	pluginMetaLine,
@@ -7,6 +7,9 @@ import {
 	setPluginFeatures,
 	setPluginSetting,
 } from "../../store/plugins";
+import { SettingsGroup } from "./SettingsGroup";
+import { SettingSelect } from "./controls/SettingSelect";
+import { SettingToggle } from "./controls/SettingToggle";
 
 /**
  * Configure view for one plugin. Every control writes through the store, which
@@ -49,12 +52,11 @@ const PluginBody: Component<{ detail: PluginDetail }> = (props) => (
 			<FeatureList detail={props.detail} />
 		</Show>
 		<Show when={props.detail.settings.length > 0}>
-			<div class="settings-group">
-				<h3 class="settings-group-title">Settings</h3>
-				<For each={props.detail.settings}>
-					{(row) => <SettingField plugin={props.detail.name} row={row} />}
-				</For>
-			</div>
+			<SettingsGroup title="Settings">
+				<Index each={props.detail.settings}>
+					{(row) => <SettingField plugin={props.detail.name} row={row()} />}
+				</Index>
+			</SettingsGroup>
 		</Show>
 	</>
 );
@@ -68,8 +70,7 @@ const FeatureList: Component<{ detail: PluginDetail }> = (props) => {
 		setPluginFeatures(props.detail.name, selection);
 	};
 	return (
-		<div class="settings-group">
-			<h3 class="settings-group-title">Features</h3>
+		<SettingsGroup title="Features">
 			<For each={props.detail.features}>
 				{(feature) => (
 					<label class="installed-option">
@@ -92,7 +93,7 @@ const FeatureList: Component<{ detail: PluginDetail }> = (props) => {
 					</button>
 				</div>
 			</Show>
-		</div>
+		</SettingsGroup>
 	);
 };
 
@@ -147,25 +148,20 @@ const SettingControl: Component<{ plugin: string; row: PluginSettingRow }> = (pr
 				</div>
 			</Match>
 			<Match when={props.row.type === "boolean"}>
-				<label class="installed-option">
-					<input
-						type="checkbox"
-						checked={current() === true}
-						onChange={(e) => setPluginSetting(props.plugin, key(), e.currentTarget.checked)}
-					/>
-					<span class="installed-option-desc">{current() === true ? "On" : "Off"}</span>
-				</label>
+				<SettingToggle
+					label={key()}
+					checked={current() === true}
+					onChange={(checked) => setPluginSetting(props.plugin, key(), checked)}
+				/>
 			</Match>
 			<Match when={props.row.type === "enum"}>
 				<div class="installed-setting-controls">
-					<select
+					<SettingSelect
+						label={key()}
+						options={(props.row.values ?? []).map((value) => ({ value, label: value }))}
 						value={String(current() ?? "")}
-						onChange={(e) => setPluginSetting(props.plugin, key(), e.currentTarget.value)}
-					>
-						<For each={props.row.values ?? []}>
-							{(option) => <option value={option}>{option}</option>}
-						</For>
-					</select>
+						onChange={(value) => setPluginSetting(props.plugin, key(), value)}
+					/>
 					<Show when={props.row.value !== undefined}>
 						<button type="button" class="settings-control-btn" onClick={clear}>
 							Reset to default

@@ -14,8 +14,12 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: var(--space-6);
-	padding: var(--space-5) 0;
-	border-bottom: 1px solid var(--border);
+	padding: var(--space-5);
+	border: 1px solid var(--border);
+	border-radius: var(--r-xl);
+}
+.installed-card:hover {
+	background: var(--hover);
 }
 
 .installed-card-body,
@@ -30,6 +34,7 @@
 
 .installed-card-name {
 	color: var(--text);
+	font-size: var(--fs-xl);
 	font-weight: 600;
 	overflow-wrap: anywhere;
 }

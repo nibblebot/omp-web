@@ -19,6 +19,9 @@ import {
 	type ThemePreference,
 } from "../../prefs/theme";
 import { SettingsRowLayout } from "./SettingsRow";
+import { SettingsGroup } from "./SettingsGroup";
+import { SettingSelect } from "./controls/SettingSelect";
+import { SettingToggle } from "./controls/SettingToggle";
 
 /**
  * Web UI tab body: the Interface and Session sections, stacked. Two state
@@ -40,16 +43,14 @@ export function WebUiSettings() {
 
 	return (
 		<>
-			<div class="settings-group" id={settingsSectionId("web-ui", "Interface")}>
-				<h3 class="settings-group-title">Interface</h3>
+			<SettingsGroup title="Interface" id={settingsSectionId("web-ui", "Interface")}>
 				<SettingsRowLayout label="theme preference">
-					<select
-						aria-label="theme preference"
+					<SettingSelect
+						label="theme preference"
+						options={THEME_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
 						value={theme()}
-						onChange={(e) => setThemeSignal(setTheme(e.currentTarget.value as ThemePreference))}
-					>
-						<For each={THEME_OPTIONS}>{(o) => <option value={o.id}>{o.label}</option>}</For>
-					</select>
+						onChange={(value) => setThemeSignal(setTheme(value as ThemePreference))}
+					/>
 				</SettingsRowLayout>
 				<SettingsRowLayout label="font size">
 					<div class="settings-font">
@@ -78,27 +79,24 @@ export function WebUiSettings() {
 					label="browser notification permission"
 					description="Grants this browser permission to show OS notifications while the tab is hidden. Which events notify is set by Completion, Error and Ask Notification."
 				>
-					<input
-						type="checkbox"
-						aria-label="browser notification permission"
+					<SettingToggle
+						label="browser notification permission"
 						checked={state.notifyEnabled}
-						onChange={(e) => setNotifyEnabled(e.currentTarget.checked)}
+						onChange={setNotifyEnabled}
 					/>
 				</SettingsRowLayout>
 				<SettingsRowLayout label="soft fade">
-					<input
-						type="checkbox"
-						aria-label="soft fade"
+					<SettingToggle
+						label="soft fade"
 						checked={state.soften}
-						onChange={(e) => setState("soften", e.currentTarget.checked)}
+						onChange={(checked) => setState("soften", checked)}
 					/>
 				</SettingsRowLayout>
 				<SettingsRowLayout label="usage in sidebar">
-					<input
-						type="checkbox"
-						aria-label="usage in sidebar"
+					<SettingToggle
+						label="usage in sidebar"
 						checked={state.sidebarUsage}
-						onChange={(e) => setSidebarUsage(e.currentTarget.checked)}
+						onChange={setSidebarUsage}
 					/>
 				</SettingsRowLayout>
 				{/* Session-RPC rows: no live session under the fleet fallback, so they
@@ -106,26 +104,20 @@ export function WebUiSettings() {
 				    scope. */}
 				<Show when={!fleetSettingsActive()}>
 					<SettingsRowLayout label="fast mode">
-						<input
-							type="checkbox"
-							aria-label="fast mode"
+						<SettingToggle
+							label="fast mode"
 							checked={state.fastModeEnabled}
-							onChange={(e) =>
-								void call("setFastMode", [e.currentTarget.checked]).catch((err) =>
-									setState("error", String(err)),
-								)
+							onChange={(checked) =>
+								void call("setFastMode", [checked]).catch((err) => setState("error", String(err)))
 							}
 						/>
 					</SettingsRowLayout>
 					<SettingsRowLayout label="auto-retry">
-						<input
-							type="checkbox"
-							aria-label="auto-retry"
+						<SettingToggle
+							label="auto-retry"
 							checked={state.autoRetryEnabled}
-							onChange={(e) =>
-								void call("setAutoRetry", [e.currentTarget.checked]).catch((err) =>
-									setState("error", String(err)),
-								)
+							onChange={(checked) =>
+								void call("setAutoRetry", [checked]).catch((err) => setState("error", String(err)))
 							}
 						/>
 					</SettingsRowLayout>
@@ -139,10 +131,9 @@ export function WebUiSettings() {
 						</button>
 					</SettingsRowLayout>
 				</Show>
-			</div>
+			</SettingsGroup>
 			<Show when={authSnapshot().status === "signedIn"}>
-				<div class="settings-group" id={settingsSectionId("web-ui", "Session")}>
-					<h3 class="settings-group-title">Session</h3>
+				<SettingsGroup title="Session" id={settingsSectionId("web-ui", "Session")}>
 					<SettingsRowLayout label="sign out">
 						<button
 							type="button"
@@ -154,7 +145,7 @@ export function WebUiSettings() {
 							sign out
 						</button>
 					</SettingsRowLayout>
-				</div>
+				</SettingsGroup>
 			</Show>
 		</>
 	);

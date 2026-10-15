@@ -149,6 +149,8 @@ export interface SettingsItem {
 	path: string;
 	label: string;
 	description: string;
+	/** Risk note from the SDK (amber callout on the row); absent when the setting carries none. */
+	warning?: string;
 	type: SettingsItemType;
 	/** Raw current value (JSON-safe). */
 	value: unknown;

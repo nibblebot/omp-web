@@ -26,6 +26,8 @@ export const Modal: Component<{
 
 	const onKeyDown = (e: KeyboardEvent) => {
 		if (e.key === "Escape") {
+			// Open inline editors inside the modal (settings JSON, provider limits) take their own Escape.
+			if (e.target instanceof Element && e.target.closest("[data-inline-escape]")) return;
 			e.stopPropagation();
 			props.onClose();
 			return;

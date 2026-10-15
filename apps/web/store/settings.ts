@@ -90,6 +90,13 @@ export function refreshSettings(): void {
 		});
 }
 
+/**
+ * Writes run one at a time. Each waits for the previous response, so the
+ * revision it sends is the one that response produced; rapid control changes
+ * no longer share a stale revision and conflict with each other.
+ */
+let writeQueue: Promise<void> = Promise.resolve();
+
 function writeSetting(
 	path: string,
 	value: unknown,
@@ -99,52 +106,59 @@ function writeSetting(
 ): void {
 	const sessionId = state.currentSessionId;
 	const fleet = fleetSettingsActive();
-	const request = fleet
-		? (state.authStatus !== "disabled" ? authedFetch : fetch)(
-				unset ? "/ctl/settings/unset" : "/ctl/settings/set",
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(
-						unset ? { path, expectedRevision, layer } : { path, value, expectedRevision, layer },
-					),
-				},
-			).then(async (res) => {
-				if (!res.ok) throw await ctlError(res);
-				return (await res.json()) as SettingsModel;
-			})
-		: call(
-				unset ? "unsetSetting" : "setSetting",
-				unset ? [path, expectedRevision, layer] : [path, value, expectedRevision, layer],
-			).then((model) => model as SettingsModel);
-	request
-		.then((model) => {
-			if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
-				applySettingsModel(model);
-			}
+	writeQueue = writeQueue
+		.then(() => {
+			// Resolved at dispatch: an omitted revision means the latest model, not the one current at the call.
+			const revision = expectedRevision ?? state.settingsModel?.revision;
+			const request = fleet
+				? (state.authStatus !== "disabled" ? authedFetch : fetch)(
+						unset ? "/ctl/settings/unset" : "/ctl/settings/set",
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify(
+								unset
+									? { path, expectedRevision: revision, layer }
+									: { path, value, expectedRevision: revision, layer },
+							),
+						},
+					).then(async (res) => {
+						if (!res.ok) throw await ctlError(res);
+						return (await res.json()) as SettingsModel;
+					})
+				: call(
+						unset ? "unsetSetting" : "setSetting",
+						unset ? [path, revision, layer] : [path, value, revision, layer],
+					).then((model) => model as SettingsModel);
+			return request
+				.then((model) => {
+					if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
+						applySettingsModel(model);
+					}
+				})
+				.catch((err) => {
+					if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
+						setState("error", String(err));
+					}
+				});
 		})
-		.catch((err) => {
-			if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
-				setState("error", String(err));
-			}
-		});
+		.catch((err) => setState("error", String(err)));
 }
 
-/** Set an explicit value, including null; validation remains authoritative on the server. */
+/**
+ * Set an explicit value, including null; validation remains authoritative on the server.
+ * Omit expectedRevision to write against the latest model; pass one to detect a stale draft (409).
+ */
 export function updateSetting(
 	path: string,
 	value: unknown,
-	expectedRevision = state.settingsModel?.revision,
+	expectedRevision?: number,
 	layer?: string,
 ): void {
 	writeSetting(path, value, false, expectedRevision, layer);
 }
 
-/** Remove an explicit override rather than storing null. */
-export function unsetSetting(
-	path: string,
-	expectedRevision = state.settingsModel?.revision,
-	layer?: string,
-): void {
+/** Remove an explicit override rather than storing null. Omit expectedRevision to write against the latest model. */
+export function unsetSetting(path: string, expectedRevision?: number, layer?: string): void {
 	writeSetting(path, undefined, true, expectedRevision, layer);
 }
