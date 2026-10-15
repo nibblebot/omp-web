@@ -13,7 +13,7 @@ import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { resolveRoleModelFull } from "@oh-my-pi/pi-coding-agent/session/role-models";
 import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
-import type { WebMethodName } from "#lib/wire/protocol";
+import type { ModelInfo, WebMethodName } from "#lib/wire/protocol";
 import type { CollabSession, Images } from "./collab-session";
 import type { DaemonBroker } from "./daemon-broker";
 import type { SessionEntry } from "./session-entry";
@@ -520,9 +520,20 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			cfgModelTags.set(settings, { ...tags, [role]: { ...tags[role], hidden } });
 			return { role, hidden };
 		},
-		getAvailableModels: async (entry) => {
+		// Project to the wire ModelInfo: full SDK Model rows (compat tables
+		// dominate) run past 2 MiB on a large catalog, over the callback
+		// pair's 1 MiB envelope cap, so the answer would never be delivered.
+		getAvailableModels: async (entry): Promise<ModelInfo[]> => {
 			await entry.session.modelRegistry.awaitBackgroundRefresh();
-			return entry.session.getAvailableModels();
+			return entry.session
+				.getAvailableModels()
+				.map(({ provider, id, contextWindow, reasoning, thinking }) => ({
+					provider,
+					id,
+					contextWindow,
+					reasoning,
+					thinking,
+				}));
 		},
 		setThinkingLevel: async (entry, a) => {
 			entry.session.setThinkingLevel(a[0] as ThinkingLevel);

@@ -12,6 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
 import { cfgModelRoleStorage, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { ENVELOPE_MAX_BYTES } from "#lib/wire/callback-protocol";
 import { createWebMethods } from "../methods";
 import type { SessionEntry } from "../session-entry";
 
@@ -286,5 +287,41 @@ describe("default-role mutations drive the live thinking level", () => {
 		await methodsTable().clearModelRole!(entry, ["default"]);
 		expect(session.model).toEqual(global);
 		expect(session.thinkingLevel).toBe("high");
+	});
+});
+
+describe("getAvailableModels", () => {
+	test("answers with ModelInfo rows that fit one callback envelope on a large catalog", async () => {
+		// Full SDK rows carry per-model compat tables; ~1k of them ran past the
+		// pair's 1 MiB envelope cap, so the answer was rejected and the picker timed out.
+		const catalog = Array.from({ length: 1000 }, (_, i) => ({
+			provider: `p${i % 8}`,
+			id: `model-${i}`,
+			contextWindow: 200_000,
+			reasoning: true,
+			thinking: { mode: "effort", efforts: ["low", "high"] },
+			compat: { notes: "x".repeat(2_000) },
+			cost: { input: 1, output: 2 },
+			baseUrl: "https://example.invalid/v1",
+		}));
+		const entry = {
+			session: {
+				modelRegistry: { awaitBackgroundRefresh: async () => {} },
+				getAvailableModels: () => catalog,
+			},
+		} as unknown as SessionEntry;
+		const result = (await methodsTable().getAvailableModels!(entry, [])) as Array<
+			Record<string, unknown>
+		>;
+		expect(result).toHaveLength(1000);
+		expect(Object.keys(result[0]!).sort()).toEqual([
+			"contextWindow",
+			"id",
+			"provider",
+			"reasoning",
+			"thinking",
+		]);
+		expect(result[0]!.thinking).toEqual(catalog[0]!.thinking);
+		expect(JSON.stringify(result).length).toBeLessThan(ENVELOPE_MAX_BYTES);
 	});
 });
