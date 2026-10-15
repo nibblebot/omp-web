@@ -52,7 +52,7 @@ function stubBroker() {
 
 /** A displayable queue snapshot after delivery or removal. */
 function drainedQueue(): AgentSessionEvent {
-	return { type: "queue_update", steering: [], followUp: [] };
+	return { type: "queue_update", steering: [], followUp: [], liveSteered: 0 };
 }
 
 describe("wireSession queue-staleness regression", () => {

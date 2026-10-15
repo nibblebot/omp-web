@@ -59,7 +59,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Remove the optional benchmark harness, its `bench` command, and local benchmark outputs; ordinary test execution is unchanged.
 - Use direct repository-basename worktree paths without `.omp-web-repo` markers or basename collision detection; existing targets remain rejected.
 - Make development auth broker management opt-in via `bun run dev --auth-broker`; default dev starts only the fleet and Vite and preserves explicitly configured broker environment variables and provider-profile secret references.
-- Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.8.6.
+- Bump all seven imported `@oh-my-pi/*` SDK packages together to unpatched 18.11.0.
 - Fleet lifecycle output: a wake prints two lines (`respawn --resume template=…`, then `ready <endpoint> pid <n>`) instead of seven; the event ring drops the sub-second spawning/connecting/session/resolving ladder steps and the separate endpoint line, a stop is one `stop (exit …)` line, and `bun run dev` no longer doubles the `fleet:` prefix.
 - Migrate live settings to SDK registry handles and provider authentication to the namespaced OAuth login and effective credential-source APIs, preserving settings scope and browser login dialogs.
 - Overlay taxonomy: `Modal` names only the `ui/Modal.tsx` primitive; components carry role suffixes (`*Dialog` centered, `*Sheet` side sheet, `*Lightbox`, `*Picker`, shell-less `*Panel`), with matching CSS class renames. The narrow-viewport sidebar scrim moved from `App.tsx` into `FleetSidebar`. See AGENTS.md.

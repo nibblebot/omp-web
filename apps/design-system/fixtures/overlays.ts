@@ -286,6 +286,7 @@ export const settingsModelCurrentSession: SettingsModel = {
 const firstPartyCompat: ResolvedAnthropicCompat = {
 	officialEndpoint: true,
 	firstPartyProvider: true,
+	honorsClaudeCodeBetaKillSwitch: false,
 	supportsContextManagement: true,
 	supportsServerCompaction: true,
 	supportsOutputEffort: true,
