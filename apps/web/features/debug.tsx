@@ -1,5 +1,4 @@
-import { DebugFooterButton } from "../components/app/debug/DebugFooterButton";
-import { DebugStatusButton } from "../components/app/debug/DebugStatusButton";
+import { DebugButton } from "../components/app/debug/DebugButton";
 import { FleetDebugSheet } from "../components/app/debug/FleetDebugSheet";
 import "./debug.css";
 import type { FeatureModule } from "./registry";
@@ -9,6 +8,5 @@ export default {
 	modals: {
 		debug: (props) => <FleetDebugSheet onClose={props.onClose} />,
 	},
-	statusBar: { debugButton: DebugStatusButton },
-	sidebarFooter: { debugButton: DebugFooterButton },
+	sidebarHeader: { debugButton: DebugButton },
 } satisfies FeatureModule;

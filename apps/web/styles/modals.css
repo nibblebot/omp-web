@@ -14,10 +14,10 @@
 	border: 1px solid var(--border-strong);
 	border-radius: var(--r-xl);
 	box-shadow: var(--shadow-2);
-	padding: var(--space-6);
+	padding: calc(var(--space-6) + env(safe-area-inset-top)) calc(var(--space-6) + env(safe-area-inset-right)) calc(var(--space-6) + env(safe-area-inset-bottom)) calc(var(--space-6) + env(safe-area-inset-left));
 	min-width: min(320px, 92vw);
 	max-width: 640px;
-	max-height: 80vh;
+	max-height: 80dvh;
 	overflow-y: auto;
 }
 /* Sheet variant: full-height side sheet anchored to the right edge; the
@@ -46,7 +46,7 @@
 	flex-direction: column;
 	overflow: hidden;
 }
-@media (max-width: 720px) {
+@media (max-width: 767px) {
 	.modal.sheet {
 		width: 100vw;
 		border-left: none;
@@ -73,17 +73,56 @@
 }
 .modal.lightbox img {
 	display: block;
-	max-width: 92vw;
-	max-height: 92vh;
+	max-width: calc(100vw - 2 * var(--space-6) - env(safe-area-inset-left) - env(safe-area-inset-right));
+	max-height: calc(100dvh - 2 * var(--space-6) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
 	border-radius: var(--r-lg);
 	box-shadow: var(--shadow-2);
 	cursor: default;
 }
 
 .modal-title {
-	margin: 0 0 var(--space-4);
+	margin: 0;
 	font-size: 1rem;
 	color: var(--muted-3);
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* Title row: title (left) and close button (right). Every non-lightbox
+   variant renders it, so the close button is always reachable. */
+.modal-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin-bottom: var(--space-4);
+}
+.modal-close {
+	flex: none;
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	background: none;
+	border: none;
+	border-radius: var(--r-sm);
+	color: var(--muted);
+	font-size: var(--fs-lg);
+}
+.modal-close:hover {
+	color: var(--text);
+}
+/* Lightbox has no title row: the close button floats in the viewport corner,
+   inset by the safe area, over the image. */
+.modal-backdrop.lightbox .modal-close {
+	position: fixed;
+	top: calc(env(safe-area-inset-top) + var(--space-4));
+	right: calc(env(safe-area-inset-right) + var(--space-4));
+	background: var(--panel);
+	border: 1px solid var(--border-strong);
+	color: var(--text);
 }
 /* Danger-confirm dialog (ConfirmDialog.tsx): Alarm Red confirm button. The
    actions row reuses .ask-actions (flex, gap var(--space-4), flex-end);
@@ -129,7 +168,7 @@ button.danger-confirm-btn:not(:disabled):hover {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-1);
-	max-height: 50vh;
+	max-height: 50dvh;
 	overflow-y: auto;
 	padding-bottom: var(--space-3);
 }
@@ -143,6 +182,7 @@ button.danger-confirm-btn:not(:disabled):hover {
 .picker-row {
 	display: flex;
 	gap: var(--space-4);
+	flex-wrap: wrap;
 	padding: var(--space-2) var(--space-4);
 	border: 1px solid transparent;
 	border-radius: var(--r-md);
@@ -286,7 +326,7 @@ button.picker-row {
 	color: var(--text);
 }
 .graph-list {
-	max-height: 44vh;
+	max-height: 44dvh;
 }
 .graph-node.active > .picker-row {
 	background: var(--accent-dim);
@@ -339,7 +379,7 @@ button.picker-row {
 	margin: var(--space-4) 0 var(--space-2);
 }
 .stats-tools {
-	max-height: 30vh;
+	max-height: 30dvh;
 	overflow-y: auto;
 	display: flex;
 	flex-direction: column;
@@ -357,7 +397,7 @@ button.picker-row {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-5);
-	max-height: 60vh;
+	max-height: 60dvh;
 	overflow-y: auto;
 }
 .ask-question {
@@ -465,25 +505,25 @@ button.picker-row {
 }
 
 /* --- Toast stack (Toasts.tsx): app-scoped notifications and errors ---
-   Fixed top-right under the status bar, clear of the composer, above modals
-   (--z-overlay + 1); narrow viewports stretch it to the edge gutters. Cards
+   Fixed top-right, below the main header and the safe area (--z-toast, above
+   sheets); narrow viewports stretch it to the edge gutters. Cards
    match the modal/dialog surfaces (panel / border-strong / shadow-2). Gaps
    and padding come from the --space-* scale; the dismiss button keeps the
    global button chrome + :focus-visible ring (base.css) with only geometry
    overrides here. */
 .toast-list {
 	position: fixed;
-	top: calc(var(--status-bar-h) + var(--space-3));
-	right: var(--space-5);
+	top: calc(env(safe-area-inset-top) + var(--main-header-h) + var(--space-3));
+	right: calc(env(safe-area-inset-right) + var(--space-5));
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-3);
-	z-index: calc(var(--z-overlay) + 1);
+	z-index: var(--z-toast);
 	max-width: min(420px, calc(100vw - 2 * var(--space-5)));
 }
-@media (max-width: 720px) {
+@media (max-width: 767px) {
 	.toast-list {
-		left: var(--space-5);
+		left: calc(env(safe-area-inset-left) + var(--space-5));
 		max-width: none;
 	}
 }
@@ -531,4 +571,32 @@ button.picker-row {
 .toast-dismiss:hover {
 	background: var(--hover);
 	color: var(--text);
+}
+
+/* Touch: 44px hit targets and 16px text inputs. Lives at the end of the file
+   so it wins the equal-specificity overrides above. */
+@media (pointer: coarse) {
+	.modal-close,
+	.toast-dismiss,
+	.picker-row-action,
+	.picker-row-close,
+	.picker-hidden-toggle,
+	.picker-back,
+	.graph-filter,
+	.ask-option,
+	.session-new,
+	.btw-abort,
+	button.picker-row {
+		min-width: 44px;
+		min-height: 44px;
+	}
+	.modal-close,
+	.toast-dismiss {
+		width: 44px;
+		height: 44px;
+	}
+	.picker-filter,
+	.ask-editor {
+		font-size: max(1rem, 16px);
+	}
 }

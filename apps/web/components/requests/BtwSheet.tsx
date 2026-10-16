@@ -30,16 +30,13 @@ export const BtwSheet: Component = () => {
 							</Show>
 						</div>
 						<Show when={b().error}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
-						<div class="btw-footer">
-							<Show when={b().streaming}>
+						<Show when={b().streaming}>
+							<div class="btw-footer">
 								<button type="button" class="btw-abort" onClick={closeBtw}>
 									stop
 								</button>
-							</Show>
-							<button type="button" class="btw-close" onClick={closeBtw}>
-								close
-							</button>
-						</div>
+							</div>
+						</Show>
 					</div>
 				</Modal>
 			)}

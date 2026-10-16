@@ -2,7 +2,7 @@ import { Show } from "solid-js";
 import { setState, state } from "../../../state";
 import { StatusSegment } from "./StatusSegment";
 
-/** Status-bar goal badge; click opens the goal popover. */
+/** Main-header goal badge (goals feature slot); click opens the goal popover. */
 export const GoalBadge = () => (
 	<Show when={state.goal}>
 		{(g) => (

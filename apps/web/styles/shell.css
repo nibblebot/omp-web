@@ -1,0 +1,171 @@
+/* Shell: sidebar header row (SidebarHeader.tsx) and the main pane with its
+   header (MainHeader.tsx), shared by Chat and Analysis. Breakpoints: drawer
+   sidebar below 1024px (fleet.css, tx.css), compact header below 768px, 44px
+   touch targets under pointer: coarse. Part of the global stylesheet;
+   cascade order is set by the @import manifest in src/styles.css. */
+
+/* --- Sidebar header: wordmark, view switch, debug, collapse toggle --- */
+
+.sidebar-header {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-height: var(--main-header-h);
+	box-sizing: border-box;
+	padding: 0 var(--space-3) 0 var(--space-5);
+	border-bottom: 1px solid var(--border);
+}
+.sidebar-wordmark {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--font-mono);
+	font-size: var(--fs-lg);
+	font-weight: 600;
+	color: var(--text);
+	cursor: default;
+}
+.sidebar-header .sidebar-icon-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 28px;
+	min-height: 28px;
+}
+.sidebar-header .sidebar-icon-btn.active {
+	background: var(--btn);
+	color: var(--text);
+}
+
+/* --- Main pane: full-width header over the mode's content --- */
+
+.main-pane {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+.main-pane > .app-main,
+.main-pane > .tx-main {
+	flex: 1 1 auto;
+	min-height: 0;
+}
+.main-header {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-height: var(--main-header-h);
+	box-sizing: border-box;
+	padding: 0 var(--space-3) 0 var(--space-5);
+	border-bottom: 1px solid var(--border);
+	font-size: var(--fs-md);
+	color: var(--muted);
+}
+/* The open toggle sits where the sidebar's collapse toggle was, so pull the
+   row's left gutter in while it shows. */
+.main-header:has(> .main-header-btn:first-child) {
+	padding-left: var(--space-3);
+}
+.main-header-title {
+	flex: 1 1 auto;
+	/* The title shrinks last: badges compact first (below), and the title
+	   keeps a readable minimum before anything clips. */
+	min-width: 4rem;
+	display: flex;
+	align-items: center;
+	overflow: hidden;
+}
+/* Overflow order: the end cluster is flattened into the header row so the
+   goal badge (shrink factor 100, floor 2.5rem) gives way first, the title
+   next (floor 4rem); every other control keeps its size. Below 360px the
+   goal badge hides (/goal still opens it). */
+.main-header-end {
+	display: contents;
+}
+.main-header-end > * {
+	flex: none;
+}
+.main-header-btn {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	background: none;
+	border: none;
+	border-radius: var(--r-md);
+	color: var(--muted);
+	cursor: pointer;
+	font: inherit;
+}
+.main-header-btn:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+.main-header-subagents {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	white-space: nowrap;
+}
+.main-header .disconnected-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.main-header .goal-badge {
+	flex: 0 100 auto;
+	min-width: 2.5rem;
+	max-width: 14rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Compact header: badges drop to icon + count and the goal badge narrows
+   before the title gives up any more room. */
+@media (max-width: 767px) {
+	.main-header {
+		gap: var(--space-2);
+		padding-left: var(--space-4);
+	}
+	.main-header-label {
+		display: none;
+	}
+	.main-header .disconnected-pill {
+		padding: var(--space-1) var(--space-3);
+	}
+	.main-header .goal-badge {
+		max-width: 5rem;
+	}
+}
+@media (max-width: 359px) {
+	.main-header .goal-badge {
+		display: none;
+	}
+}
+
+/* Touch: 44px targets for every header control. */
+@media (pointer: coarse) {
+	.sidebar-header .sidebar-icon-btn,
+	.main-header-btn,
+	.main-header .segment-button {
+		min-width: 44px;
+		min-height: 44px;
+	}
+	.main-header-btn {
+		width: 44px;
+		height: 44px;
+	}
+	.sidebar-header {
+		gap: 0;
+		padding-left: var(--space-4);
+	}
+}

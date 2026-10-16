@@ -36,8 +36,9 @@ import {
 	validateImportFile,
 } from "../../../prompt/paste";
 import { settingValue } from "../../../store/settings";
-import { PaperclipIcon, XIcon } from "../../ui/icons";
+import { ListIcon, PaperclipIcon, XIcon } from "../../ui/icons";
 import { AutocompletePopup } from "./AutocompletePopup";
+import { isCoarsePointer } from "../pointer";
 import { PromptHistoryPicker } from "./PromptHistoryPicker";
 import type { PromptAutocomplete } from "./usePromptAutocomplete";
 import { PromptMirror } from "./PromptMirror";
@@ -56,6 +57,8 @@ interface PromptComposerProps {
 	/** Prompt history popover open state; PromptBox opens it on first-line Up. */
 	historyOpen: () => boolean;
 	closeHistory: () => void;
+	/** Opens the history popover from the touch button (touch has no Up-arrow path). */
+	openHistory: () => void;
 }
 
 /**
@@ -67,6 +70,7 @@ interface PromptComposerProps {
  * Folding is visual only: submit always uses the full text.
  */
 export const PromptComposer: Component<PromptComposerProps> = (props) => {
+	const coarse = isCoarsePointer();
 	let textarea!: HTMLTextAreaElement;
 	let fileInput!: HTMLInputElement;
 	// Stable id for the combobox/listbox wiring (aria-controls/activedescendant).
@@ -385,7 +389,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							onScroll={syncMirror}
 							onPaste={onPaste}
 							onDrop={onDrop}
-							placeholder="Message the agent… (Enter send, Ctrl+Enter follow-up, / for commands)"
+							placeholder="Message the Agent"
 							rows={3}
 						/>
 					</div>
@@ -411,6 +415,17 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 					>
 						<PaperclipIcon />
 					</button>
+					<Show when={coarse}>
+						<button
+							type="button"
+							class="prompt-history-btn"
+							title="Prompt history"
+							aria-label="Prompt history"
+							onClick={props.openHistory}
+						>
+							<ListIcon />
+						</button>
+					</Show>
 				</div>
 			</div>
 		</>

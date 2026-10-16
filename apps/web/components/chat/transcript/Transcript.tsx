@@ -26,8 +26,7 @@ import {
 	UserCommandCard,
 	pruneRunOpen,
 } from "./cards";
-
-const TOOL_CARD_VIEWS = ["expanded", "collapsed", "consolidated"] as const;
+import { TOOL_CARD_VIEWS } from "./TranscriptViewMenu";
 
 /** Empty-transcript state: large character sprite and a one-line greeting.
  *  Held blank until the loaded transcript's state frame lands (modelSynced):

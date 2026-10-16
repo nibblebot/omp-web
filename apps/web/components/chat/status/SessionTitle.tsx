@@ -2,9 +2,9 @@ import { createSignal, Show, type Component } from "solid-js";
 import { call, setState, state } from "../../../state";
 import { displayTitle } from "../../ui/title-icons";
 
-/** The session identity is the name (click to rename), pinned to the left edge
- *  directly above the session stream. Chrome and live state stay in
- *  StatusBar; send configuration sits in SessionConfigBar by the composer. */
+/** The session identity is the name (click to rename). Sits in the MainHeader
+ *  title slot (Shell), shrinking with ellipsis; send configuration sits in
+ *  SessionConfigBar by the composer. */
 export const SessionTitle: Component = () => {
 	const [editingName, setEditingName] = createSignal(false);
 	// Enter commits and closes first, so the trailing blur is a harmless no-op.
@@ -23,7 +23,6 @@ export const SessionTitle: Component = () => {
 				fallback={
 					<h1
 						class="segment segment-button session-name"
-						style={{ margin: "0" }}
 						title="Rename session"
 						tabindex="0"
 						onClick={() => setEditingName(true)}

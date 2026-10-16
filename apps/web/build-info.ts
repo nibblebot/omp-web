@@ -1,5 +1,5 @@
 /**
- * Build identity shown in the sidebar footer. Stamped by `define` from
+ * Build identity shown in the sidebar wordmark tooltip and the debug sheet's Build section. Stamped by `define` from
  * build/build-info.ts (vite.config.ts, design-system server); undeclared
  * under `bun test`, where `typeof` on the missing identifier yields
  * "undefined" without throwing and the field reads as "" (not shown).

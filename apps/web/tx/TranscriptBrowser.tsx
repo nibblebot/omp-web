@@ -1,8 +1,8 @@
-import { Show, createEffect, createResource, createSignal, onCleanup } from "solid-js";
+import { Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
 import { api, encodePathSegments, type Health } from "../store/fleet-api";
-import { ViewSwitch } from "../components/app/ViewSwitch";
-import { XIcon } from "../components/ui/icons";
-import { setTxSidebarVisible, state } from "../state";
+import { MainHeader } from "../components/app/MainHeader";
+import { SidebarHeader } from "../components/app/SidebarHeader";
+import { closeDrawers, setTxSidebarVisible, state } from "../state";
 import { TranscriptDetail } from "./components/TranscriptDetail";
 import { TranscriptList } from "./components/TranscriptList";
 import { StoredSessionList } from "./components/StoredSessionList";
@@ -60,6 +60,8 @@ export function TranscriptBrowser() {
 		window.addEventListener("hashchange", onChange);
 		onCleanup(() => window.removeEventListener("hashchange", onChange));
 	});
+	// Opening a transcript changes the detail pane: a drawer sidebar closes.
+	createEffect(on(route, () => closeDrawers(), { defer: true }));
 
 	/** Bumped after a successful stats sync; keyed resources refetch on change. */
 	const [syncTick, setSyncTick] = createSignal(0);
@@ -101,19 +103,7 @@ export function TranscriptBrowser() {
 	return (
 		<div class="tx-app">
 			<aside class="tx-sidebar" classList={{ open: state.txSidebarVisible }}>
-				{/* Top chrome: Chat/Analysis mode switch flush left, sidebar
-				    close flush right. Mirrors the roster sidebar mode row. */}
-				<div class="tx-sidebar-mode-row">
-					<ViewSwitch />
-					<button
-						class="sidebar-icon-btn"
-						onClick={() => setTxSidebarVisible(false)}
-						title="Close sidebar"
-						aria-label="Close sidebar"
-					>
-						<XIcon />
-					</button>
-				</div>
+				<SidebarHeader onCollapse={() => setTxSidebarVisible(false)} />
 				<TranscriptList
 					selectedFile={file()}
 					onOpen={navigate}
@@ -132,9 +122,9 @@ export function TranscriptBrowser() {
 					syncTick={syncTick}
 				/>
 			</aside>
-			{/* Narrow-viewport drawer: tapping outside the slide-out sidebar
-			    closes it. Same .sidebar-scrim pattern as the roster
-			    (FleetSidebar); CSS shows it only at <=720px. */}
+			{/* Below 1024px the sidebar is a drawer: tapping outside the
+			    slide-out closes it. Same .sidebar-scrim pattern as the roster
+			    (FleetSidebar); CSS shows it only below 1024px. */}
 			<Show when={state.txSidebarVisible}>
 				<button
 					type="button"
@@ -144,22 +134,25 @@ export function TranscriptBrowser() {
 					aria-label="Close sidebar"
 				/>
 			</Show>
-			<main class="tx-main">
-				<HealthBanner health={healthSafe} onSynced={bumpSync} />
-				<Show when={storedRoute()} keyed>
-					{(r) => <StoredSessionPage workspaceId={r.workspaceId} sessionId={r.sessionId} />}
-				</Show>
-				<Show when={file()} keyed>
-					{(f) => <TranscriptDetail file={f} syncTick={syncTick} onSynced={bumpSync} />}
-				</Show>
-				<Show when={!file() && !storedRoute()}>
-					<div class="tx-empty-state">
-						<h2>Transcripts</h2>
-						<p>Browse every omp agent session: analytics, transcripts, and subagents.</p>
-						<p class="muted">Select a session from the sidebar to begin.</p>
-					</div>
-				</Show>
-			</main>
+			<div class="main-pane">
+				<MainHeader />
+				<main class="tx-main">
+					<HealthBanner health={healthSafe} onSynced={bumpSync} />
+					<Show when={storedRoute()} keyed>
+						{(r) => <StoredSessionPage workspaceId={r.workspaceId} sessionId={r.sessionId} />}
+					</Show>
+					<Show when={file()} keyed>
+						{(f) => <TranscriptDetail file={f} syncTick={syncTick} onSynced={bumpSync} />}
+					</Show>
+					<Show when={!file() && !storedRoute()}>
+						<div class="tx-empty-state">
+							<h2>Transcripts</h2>
+							<p>Browse every omp agent session: analytics, transcripts, and subagents.</p>
+							<p class="muted">Select a session from the sidebar to begin.</p>
+						</div>
+					</Show>
+				</main>
+			</div>
 			<ResumeCloneDialog />
 		</div>
 	);

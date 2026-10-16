@@ -27,6 +27,8 @@
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
+	overflow-x: hidden;
+	overscroll-behavior: contain;
 	padding: var(--space-6) var(--space-5) var(--space-4);
 	/* Keep the scrollbar out of the text: overlay scrollbars float over the
 	   box, and the stable gutter stops cards reflowing when the bar appears
@@ -76,6 +78,41 @@
 	/* Matches .chat-transcript side padding so the toggle stays aligned with
 	   the card edges. */
 	padding: var(--space-2) var(--space-5) var(--space-3);
+}
+/* Narrow column or short viewport: the view menu in the main header replaces
+   this toolbar. The menu is hidden wherever the toolbar shows. */
+@media (max-width: 767px) {
+	.stream-toolbar {
+		display: none;
+	}
+}
+@media (min-width: 768px) and (min-height: 600px) {
+	.transcript-view-menu {
+		display: none;
+	}
+}
+/* KebabMenu reveals its trigger on row hover in the sidebar; in the header it
+   is the only route to these toggles, so it always shows. */
+.transcript-view-menu .sidebar-menu-btn {
+	opacity: 1;
+	pointer-events: auto;
+}
+.transcript-view-menu .sidebar-menu {
+	z-index: var(--z-autocomplete);
+}
+/* Short viewports (phone landscape, open keyboard): the composer never
+   shrinks and the transcript keeps a readable minimum; the queue and
+   background bars fold to summary lines (prompt.css, tools.css). */
+@media (max-height: 599px) {
+	.chat-transcript-wrap {
+		min-height: min(120px, 25dvh);
+	}
+	.stream-toolbar {
+		display: none;
+	}
+	.chat-transcript {
+		padding-top: var(--space-4);
+	}
 }
 .stream-cards-toggle {
 	background: none;
@@ -362,7 +399,13 @@ pre {
 .md h6 {
 	font-size: var(--fs-lg);
 }
+.md {
+	overflow-wrap: anywhere;
+}
 .md table {
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
 	font-size: var(--fs-md);
 	border-collapse: collapse;
 }
@@ -370,7 +413,10 @@ pre {
 	font-weight: 600;
 	text-align: left;
 }
+/* The composer never shrinks: on short viewports the transcript and the
+   bars above give way first. */
 .prompt-box {
+	flex: none;
 	border-top: 1px solid var(--border);
 	padding: var(--space-4) 0;
 	display: flex;
@@ -479,4 +525,21 @@ pre {
 .msg-branch-btn:hover {
 	background: var(--hover);
 	color: var(--text);
+}
+/* Touch: no hover, so the per-message toolbar sits in flow under its message
+   with 44px targets. Jump-to-bottom and the cards toggle get touch targets too. */
+@media (pointer: coarse) {
+	.msg-toolbar {
+		position: static;
+		justify-content: flex-end;
+		margin-top: var(--space-2);
+		opacity: 1;
+	}
+	.msg-copy-btn,
+	.msg-branch-btn,
+	.jump-to-bottom,
+	.stream-cards-toggle {
+		min-width: 44px;
+		min-height: 44px;
+	}
 }

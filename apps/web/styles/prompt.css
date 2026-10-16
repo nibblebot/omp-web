@@ -9,7 +9,7 @@
 	color: var(--text);
 	padding: var(--space-4) var(--space-5);
 	font: inherit;
-	max-height: 40vh;
+	max-height: 40dvh;
 	overflow-y: auto;
 	/* Progressive enhancement: native content sizing where supported. */
 	field-sizing: content;
@@ -46,8 +46,26 @@
 	font-size: var(--fs-2xl);
 	cursor: pointer;
 }
-.prompt-attach:hover {
+.prompt-attach:hover,
+.prompt-history-btn:hover {
 	color: var(--text);
+}
+/* Touch-only history trigger (touch has no first-line Up): same chrome as attach. */
+.prompt-history-btn {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 32px;
+	min-height: 32px;
+	margin-bottom: var(--space-2);
+	padding: 0;
+	background: none;
+	border: none;
+	border-radius: var(--r-md);
+	color: var(--muted-2);
+	font-size: var(--fs-2xl);
+	cursor: pointer;
 }
 .prompt-mirror {
 	position: absolute;
@@ -78,18 +96,6 @@
 .prompt-ghost {
 	color: var(--muted-2);
 }
-.queued-chip {
-	font-family: var(--font-mono);
-	align-self: center;
-	background: var(--warning-bg);
-	border: 1px solid var(--warning-border);
-	color: var(--warning);
-	border-radius: var(--r-pill);
-	padding: 1px var(--space-5);
-	font-size: var(--fs-sm);
-	text-transform: uppercase;
-	letter-spacing: var(--ls-micro);
-}
 .queue-bar {
 	display: flex;
 	flex-wrap: wrap;
@@ -110,6 +116,8 @@
 	font-size: var(--fs-sm);
 }
 .queue-kind {
+	flex: none;
+	white-space: nowrap;
 	text-transform: uppercase;
 	letter-spacing: var(--ls-micro);
 	color: var(--muted);
@@ -149,6 +157,46 @@
 }
 .queue-clear:hover {
 	color: var(--error);
+}
+/* Chips flow inline in the bar; the summary toggle only shows on short
+   viewports (below), where the chips fold behind it until tapped. */
+.queue-chips {
+	display: contents;
+}
+.queue-summary {
+	display: none;
+}
+@media (max-height: 599px) {
+	.queue-summary {
+		display: inline-flex;
+		align-items: center;
+		min-height: 24px;
+		padding: 0 var(--space-2);
+		background: none;
+		border: none;
+		color: var(--muted);
+		font-size: var(--fs-sm);
+		text-transform: uppercase;
+		letter-spacing: var(--ls-micro);
+		cursor: pointer;
+	}
+	.queue-summary::after {
+		content: " ▸";
+	}
+	.queue-bar[data-expanded] .queue-summary::after {
+		content: " ▾";
+	}
+	.queue-bar:not([data-expanded]) .queue-chips {
+		display: none;
+	}
+	.queue-bar[data-expanded] .queue-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-3);
+		width: 100%;
+		max-height: 30dvh;
+		overflow-y: auto;
+	}
 }
 .image-tray {
 	display: flex;
@@ -222,7 +270,7 @@ button.stop:not(:disabled):hover {
 	bottom: calc(100% + 4px);
 	left: 0;
 	right: 0;
-	max-height: 300px;
+	max-height: min(300px, 45dvh);
 	overflow-y: auto;
 	background: var(--panel-2);
 	border: 1px solid var(--border-strong);
@@ -285,7 +333,7 @@ button.stop:not(:disabled):hover {
 .history-popover-list {
 	display: flex;
 	flex-direction: column-reverse;
-	max-height: min(320px, 50vh);
+	max-height: min(320px, 40dvh);
 	overflow-y: auto;
 	padding: var(--space-2) 0;
 }
@@ -341,4 +389,35 @@ button.stop:not(:disabled):hover {
 	white-space: pre-wrap;
 	font-size: var(--fs-sm);
 	color: var(--muted-2);
+}
+
+/* Touch: 44px targets and 16px text (no iOS focus zoom) for composer controls. */
+@media (pointer: coarse) {
+	.prompt-box textarea,
+	.prompt-mirror,
+	.history-popover-input {
+		font-size: max(1rem, 16px);
+	}
+	.prompt-attach,
+	.prompt-history-btn,
+	.queue-pop,
+	.queue-clear,
+	.queue-summary,
+	.prompt-actions button,
+	.image-remove {
+		min-width: 44px;
+		min-height: 44px;
+	}
+	.image-remove {
+		width: 44px;
+		height: 44px;
+		top: -18px;
+		right: -18px;
+		padding: 12px;
+	}
+	.autocomplete-row,
+	.history-popover-row {
+		min-height: 44px;
+		align-items: center;
+	}
 }

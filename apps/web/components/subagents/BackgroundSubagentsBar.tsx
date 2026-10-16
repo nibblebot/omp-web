@@ -25,6 +25,7 @@ export const BackgroundSubagentsBar: Component = () => {
 			<div class="background-subagents">
 				<BackgroundBar
 					items={shownIds()}
+					total={activeIds().length}
 					label="Background subagents"
 					onRowClick={() => setState("modal", "subagents")}
 				>

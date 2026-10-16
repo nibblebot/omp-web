@@ -14,7 +14,7 @@ export default {
 			run: goalRouteArgs,
 		},
 	},
-	statusBar: { goalBadge: GoalBadge },
+	mainHeader: { goalBadge: GoalBadge },
 	subagentTabs: [
 		{ id: "goals", label: "Goals & Loops", rank: 2, panel: GoalsAndLoopsTab },
 		{ id: "vibe", label: "Vibe", rank: 3, panel: VibeTab },

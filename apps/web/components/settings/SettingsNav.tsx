@@ -45,7 +45,7 @@ const TAB_ICONS: Record<SettingsTabIconName, Component<IconProps>> = {
 };
 
 /**
- * Narrow-layout navigation (CSS-gated to ≤720px): a section picker select
+ * Narrow-layout navigation (CSS-gated below 768px): a section picker select
  * instead of the wide sidebar. It is a pure view; the shell owns the
  * selected-tab state and passes it down with the change callback.
  */

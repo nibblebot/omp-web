@@ -8,10 +8,10 @@
 	min-height: 0;
 	background: var(--bg);
 }
-.settings-header {
-	display: flex;
-	align-items: center;
+/* The sheet's title row is Modal's .modal-head (mark, title, search, close). */
+.settings-sheet > .modal-head {
 	gap: var(--space-4);
+	margin-bottom: 0;
 	padding-bottom: calc(var(--space-4) + var(--space-1));
 	border-bottom: 1px solid var(--border);
 }
@@ -61,24 +61,12 @@
 .settings-search:focus {
 	border-color: var(--accent-border);
 }
-.settings-close {
-	background: none;
-	border: none;
-	color: var(--muted);
-	font-size: var(--fs-base);
-	line-height: 1;
-	cursor: pointer;
-	padding: var(--space-1) var(--space-3);
-}
-.settings-close:hover {
-	color: var(--text);
-}
 /* Narrow-layout section picker: hidden on the wide layout, where the nav
    rail takes over; mirrors the .settings-select pill styling. */
 .settings-section-picker {
 	display: none;
 }
-@media (max-width: 720px) {
+@media (max-width: 767px) {
 	.settings-section-picker {
 		display: block;
 		padding: var(--space-3) var(--space-6);
@@ -182,7 +170,7 @@
 .settings-subsection:hover {
 	color: var(--text);
 }
-@media (max-width: 720px) {
+@media (max-width: 767px) {
 	.settings-nav {
 		display: none;
 	}
@@ -726,4 +714,10 @@
 }
 .feature-meta {
 	margin: var(--space-2) 0 0;
+}
+/* Touch: 16px search text so iOS does not zoom on focus. */
+@media (pointer: coarse) {
+	.settings-search {
+		font-size: max(1rem, 16px);
+	}
 }

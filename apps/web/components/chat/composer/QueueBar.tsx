@@ -17,10 +17,11 @@ const preview = (text: string): string => {
 /**
  * Phase 7: queued steer/follow-up messages as clickable chips above the
  * prompt. × (or Alt+↑) pops the last message back into the textarea;
- * "clear all" drains the queue. The status-bar count chip stays as-is.
+ * "clear all" drains the queue. On short viewports the chips collapse behind a one-line summary (prompt.css).
  */
 export const QueueBar: Component = () => {
 	const [queue, setQueue] = createSignal<QueuedMessages>(EMPTY);
+	const [expanded, setExpanded] = createSignal(false);
 
 	const refresh = () => {
 		void call("getQueuedMessages")
@@ -61,28 +62,38 @@ export const QueueBar: Component = () => {
 	return (
 		<>
 			<Show when={chips().length > 0}>
-				<div class="queue-bar">
-					<For each={chips()}>
-						{(chip) => (
-							<span class="queue-chip">
-								<span class="queue-kind" classList={{ [chip.kind]: true }}>
-									{chip.kind}
-								</span>
-								<span class="queue-text">{preview(chip.text)}</span>
-								<button
-									class="queue-pop"
-									title="Pop back into the prompt (Alt+↑)"
-									aria-label="Pop back into the prompt (Alt+↑)"
-									onClick={dequeueLastQueued}
-								>
-									<XIcon />
-								</button>
-							</span>
-						)}
-					</For>
-					<button class="queue-clear" onClick={clearAll}>
-						clear all
+				<div class="queue-bar" data-expanded={expanded() ? "" : undefined}>
+					<button
+						type="button"
+						class="queue-summary"
+						aria-expanded={expanded()}
+						onClick={() => setExpanded(!expanded())}
+					>
+						{chips().length} queued
 					</button>
+					<div class="queue-chips">
+						<For each={chips()}>
+							{(chip) => (
+								<span class="queue-chip">
+									<span class="queue-kind" classList={{ [chip.kind]: true }}>
+										{chip.kind}
+									</span>
+									<span class="queue-text">{preview(chip.text)}</span>
+									<button
+										class="queue-pop"
+										title="Pop back into the prompt (Alt+↑)"
+										aria-label="Pop back into the prompt (Alt+↑)"
+										onClick={dequeueLastQueued}
+									>
+										<XIcon />
+									</button>
+								</span>
+							)}
+						</For>
+						<button class="queue-clear" onClick={clearAll}>
+							clear all
+						</button>
+					</div>
 				</div>
 			</Show>
 			<div

@@ -1,5 +1,5 @@
 import type { ClientCommand, SessionListEntry } from "#lib/wire/protocol";
-import { setState, state } from "../state";
+import { SIDEBAR_KEY, TX_SIDEBAR_KEY, setState, state } from "../state";
 import {
 	attachSession,
 	call,
@@ -16,14 +16,8 @@ import {
  * stays in state.ts alongside the mux.
  */
 
-/** localStorage key for the roster sidebar visibility toggle. */
-const SIDEBAR_KEY = "omp.sidebarVisible";
-
 /** localStorage key for the persisted Chat/Analysis top-level view. */
 const VIEW_KEY = "omp.view";
-
-/** localStorage key for the transcripts (Analysis) sidebar visibility toggle. */
-const TX_SIDEBAR_KEY = "omp.txSidebarVisible";
 
 // list_sessions / list_files carry no id on the wire; with a single user,
 // latest-wins correlation is sufficient (a superseded request resolves empty.
@@ -199,14 +193,23 @@ export function listFiles(query: string, limit?: number): Promise<string[]> {
 	return promise;
 }
 
-/** Persisted roster-sidebar visibility (status-bar ☰ + sidebar ×). */
+/**
+ * Roster-sidebar visibility. A docked column persists its choice; a drawer
+ * (viewport below 1024px) is session-only and never written to storage.
+ */
 export function setSidebarVisible(visible: boolean): void {
-	if (typeof localStorage !== "undefined") localStorage.setItem(SIDEBAR_KEY, String(visible));
+	if (!state.drawerViewport && typeof localStorage !== "undefined")
+		localStorage.setItem(SIDEBAR_KEY, String(visible));
 	setState("sidebarVisible", visible);
 }
 
 export function toggleSidebar(): void {
 	setSidebarVisible(!state.sidebarVisible);
+}
+
+/** Closes both sidebar drawers. A no-op when docked, since docked visibility is a choice, not a drawer state. */
+export function closeDrawers(): void {
+	if (state.drawerViewport) setState({ sidebarVisible: false, txSidebarVisible: false });
 }
 
 /**
@@ -215,6 +218,7 @@ export function toggleSidebar(): void {
  * the Chat-button dot (chatUnviewed).
  */
 export function setView(view: "chat" | "analysis"): void {
+	closeDrawers();
 	if (typeof localStorage !== "undefined") localStorage.setItem(VIEW_KEY, view);
 	setState("view", view);
 	if (view === "chat") {
@@ -226,8 +230,9 @@ export function setView(view: "chat" | "analysis"): void {
 	}
 }
 
-/** Persisted transcripts-sidebar visibility (Analysis mode's own toggle). */
+/** Transcripts-sidebar visibility (Analysis mode's own toggle). Persists only when docked. */
 export function setTxSidebarVisible(visible: boolean): void {
-	if (typeof localStorage !== "undefined") localStorage.setItem(TX_SIDEBAR_KEY, String(visible));
+	if (!state.drawerViewport && typeof localStorage !== "undefined")
+		localStorage.setItem(TX_SIDEBAR_KEY, String(visible));
 	setState("txSidebarVisible", visible);
 }

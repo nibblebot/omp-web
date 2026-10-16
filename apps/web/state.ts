@@ -222,8 +222,8 @@ export type ModalName =
  *  delete-worktree confirm dialog (linked identity, dirty counts, branch state). */
 export type WorktreeDeleteInfo = Extract<ServerFrame, { type: "worktree_delete_info" }>;
 
-/** localStorage key for the roster sidebar visibility toggle. */
-const SIDEBAR_KEY = "omp.sidebarVisible";
+/** localStorage key for the roster sidebar visibility toggle (docked viewports only). */
+export const SIDEBAR_KEY = "omp.sidebarVisible";
 
 /** localStorage key for the Phase 11 desktop-notifications toggle. */
 const NOTIFY_KEY = "omp.notifyEnabled";
@@ -234,8 +234,8 @@ const USAGE_SIDEBAR_KEY = "omp.sidebarUsage";
 /** localStorage key for the persisted Chat/Analysis top-level view. */
 const VIEW_KEY = "omp.view";
 
-/** localStorage key for the transcripts (Analysis) sidebar visibility toggle. */
-const TX_SIDEBAR_KEY = "omp.txSidebarVisible";
+/** localStorage key for the transcripts (Analysis) sidebar visibility toggle (docked viewports only). */
+export const TX_SIDEBAR_KEY = "omp.txSidebarVisible";
 
 /**
  * Resolve the initial Chat/Analysis view (exported pure helper, unit-tested
@@ -259,6 +259,16 @@ export function initialView(
 	if (/^#\/?(s|stored)\/.+/.test(hash)) return "analysis";
 	if (persisted === "analysis" || persisted === "transcripts") return "analysis";
 	return "chat";
+}
+
+/** Below 1024px both sidebars are slide-out drawers; at 1024px and up they dock. shell.css mirrors this breakpoint. */
+const drawerMedia = typeof matchMedia !== "undefined" ? matchMedia("(max-width: 1023px)") : null;
+const drawerViewport = drawerMedia?.matches ?? false;
+
+/** Visibility restored for a viewport: drawers always start closed; docked columns keep the persisted choice, open by default. */
+function restoredVisibility(key: string, drawer: boolean): boolean {
+	if (drawer) return false;
+	return typeof localStorage === "undefined" || localStorage.getItem(key) !== "false";
 }
 
 export const [state, setState] = createStore({
@@ -412,20 +422,12 @@ export const [state, setState] = createStore({
 	// Non-null makes the picker render its "New session" top item (Esc =
 	// new session). Cleared by the picker on close/new-session.
 	sessionPickerGate: null as { daemonId: string } | null,
-	sidebarVisible:
-		typeof localStorage !== "undefined"
-			? // First run on a narrow viewport starts closed: the sidebar is a
-				// slide-out overlay there, not a docked column (fleet.css).
-				(localStorage.getItem(SIDEBAR_KEY) ??
-					(typeof matchMedia !== "undefined" && matchMedia("(max-width: 720px)").matches
-						? "false"
-						: "true")) !== "false"
-			: true,
-	// Per-mode sidebar collapse for Analysis (the transcripts sidebar):
-	// persisted mirror of the roster sidebarVisible toggle above, separate
-	// key, same action shape. Defaults open.
-	txSidebarVisible:
-		typeof localStorage !== "undefined" ? localStorage.getItem(TX_SIDEBAR_KEY) !== "false" : true,
+	// Drawer/docked split (see drawerMedia above); drives drawer-only rules in the store.
+	drawerViewport,
+	sidebarVisible: restoredVisibility(SIDEBAR_KEY, drawerViewport),
+	// Per-mode sidebar collapse for Analysis (the transcripts sidebar): same
+	// rule as the roster toggle, separate key.
+	txSidebarVisible: restoredVisibility(TX_SIDEBAR_KEY, drawerViewport),
 	// Top-level view: "chat" (roster sidebar + live conversation) or
 	// "analysis" (transcript sidebar + historical transcripts browser).
 	// Persisted in omp.view with silent migration; a boot-time #/s/<file> hash
@@ -487,6 +489,16 @@ export const [state, setState] = createStore({
 	// Fleet/app-scoped ephemeral notifications (worktree_removed on-disk
 	// eviction toasts); survives session resets like daemonRoster.
 	toasts: [] as { id: number; text: string }[],
+});
+
+// A viewport crossing re-derives sidebar visibility: drawers close, docked
+// columns restore their persisted choice.
+drawerMedia?.addEventListener("change", (event) => {
+	setState({
+		drawerViewport: event.matches,
+		sidebarVisible: restoredVisibility(SIDEBAR_KEY, event.matches),
+		txSidebarVisible: restoredVisibility(TX_SIDEBAR_KEY, event.matches),
+	});
 });
 
 /** Payload delivered into the PromptBox textarea (and image tray) by QueueBar/HistorySearch. */
@@ -1541,6 +1553,7 @@ export {
 	requestDaemonSessions,
 	resumeDaemonSession,
 	setSidebarVisible,
+	closeDrawers,
 	setTxSidebarVisible,
 	setView,
 	toggleSidebar,

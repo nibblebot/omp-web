@@ -17,22 +17,23 @@
 .sidebar:not(.open) {
 	display: none;
 }
-/* Narrow viewports: the sidebar stops participating in .app-body layout and
+/* Below 1024px the sidebar stops participating in .app-body layout and
    becomes a fixed slide-out drawer (layout chrome, not a ModalHost overlay),
-   because docking it would push the chat column off-screen. Closed state
-   slides off-canvas instead of display:none so the transform transition can
-   run. */
+   because docking it would squeeze the chat column. Closed state slides
+   off-canvas instead of display:none so the transform transition can run. */
 .sidebar-scrim {
 	display: none;
 }
-@media (max-width: 720px) {
+@media (max-width: 1023px) {
 	.sidebar {
 		position: fixed;
 		top: 0;
 		bottom: 0;
 		left: 0;
 		z-index: calc(var(--z-overlay) + 1);
-		width: min(var(--sidebar-w), 80vw);
+		width: min(var(--sidebar-w), 85vw);
+		padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
+		box-sizing: border-box;
 		box-shadow: var(--shadow-1);
 		transform: translateX(0);
 		transition:
@@ -58,40 +59,11 @@
 		cursor: default;
 	}
 }
-@media (max-width: 720px) and (prefers-reduced-motion: reduce) {
+@media (max-width: 1023px) and (prefers-reduced-motion: reduce) {
 	.sidebar,
 	.sidebar:not(.open) {
 		transition: none;
 	}
-}
-/* Floating roster toggle: sticky top-left of the viewport. Shown only while
-   the sidebar is closed (the open sidebar carries its own × at its top-right). */
-.sidebar-toggle {
-	position: fixed;
-	top: var(--space-4);
-	left: var(--space-5);
-	z-index: var(--z-overlay);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 36px;
-	height: 36px;
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--r-md);
-	color: var(--muted-2);
-	font-size: var(--fs-lg);
-	line-height: 1;
-	cursor: pointer;
-	box-shadow: var(--shadow-1);
-}
-.sidebar-toggle:hover {
-	color: var(--text);
-	background: var(--hover);
-}
-.sidebar-toggle:focus-visible {
-	outline: var(--focus-ring);
-	outline-offset: 2px;
 }
 .sidebar-icon-btn {
 	flex: none;
@@ -109,18 +81,7 @@
 	background: var(--btn);
 	color: var(--text);
 }
-/* Pinned top chrome of the roster sidebar: the Chat/Analysis mode switch
-   flush left (ViewSwitch.tsx) with the sidebar close button flush right.
-   The close button stays right when the switch is hidden (Analysis off).
-   Sits above the scrolling roster list and the Projects header. */
-.sidebar-mode-row {
-	flex: none;
-	display: flex;
-	align-items: center;
-	justify-content: flex-end;
-	gap: var(--space-2);
-	padding: var(--space-2) var(--space-3) 0;
-}
+/* The sidebar header row (SidebarHeader.tsx) lives in shell.css. */
 /* Chat/Analysis segmented pair: the buttons share the .sidebar-icon-btn
    base so hit targets, radius, and hover stay consistent; the pair reads
    as grouped controls with the active side accented against the muted
@@ -129,8 +90,6 @@
 	display: flex;
 	align-items: center;
 	gap: var(--space-1);
-	/* Flush left; the row's flex-end keeps the close button right. */
-	margin-right: auto;
 }
 .mode-switch .sidebar-icon-btn {
 	position: relative; /* scopes the activity dot to the Chat button */
@@ -161,41 +120,7 @@
 	flex-direction: column;
 	gap: var(--space-1);
 }
-.sidebar-foot {
-	flex: none;
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-2);
-	padding: var(--space-3);
-	border-top: 1px solid var(--border);
-}
-.sidebar-foot-actions {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-}
-/* Build identity lines under the footer buttons (SidebarFooter.tsx):
-   omp-web version + git hash, then the upstream omp version. */
-.sidebar-build-line {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-	font-size: var(--fs-micro);
-	color: var(--muted-2);
-}
-.sidebar-build-name {
-	color: var(--muted);
-}
-.sidebar-build-logo {
-	width: 14px;
-	height: 14px;
-	border-radius: 3px;
-}
-.sidebar-foot .sidebar-icon-btn.active {
-	background: var(--btn);
-	color: var(--text);
-}
-/* Condensed usage panel docked between the roster list and the footer
+/* Condensed usage panel docked at the bottom of the roster sidebar
    (SidebarUsage.tsx, gated by the "usage in sidebar" setting). */
 .sidebar-usage {
 	flex: none;

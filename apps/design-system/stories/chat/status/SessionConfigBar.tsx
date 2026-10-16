@@ -1,3 +1,4 @@
+import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { SessionConfigBar } from "../../../../web/components/chat/status/SessionConfigBar";
 import { screenSessionSeed } from "../../../fixtures/screen";
 import { defineStory } from "../../../registry";
@@ -28,7 +29,7 @@ export default defineStory({
 		{
 			name: "Auto thinking",
 			description: "Auto selector active; the resolved effort shows in the tooltip.",
-			seed: { autoThinking: true, thinkingLevel: "high" },
+			seed: { autoThinking: true, thinkingLevel: "high" as Effort },
 			render: () => <SessionConfigBar />,
 		},
 		{
@@ -37,6 +38,12 @@ export default defineStory({
 			seed: {
 				contextUsage: { tokens: 184_000, contextWindow: 200_000, percent: 92 },
 			},
+			render: () => <SessionConfigBar />,
+		},
+		{
+			name: "Compacting in plan mode",
+			description: "Per-turn badges lead the row while active.",
+			seed: { compacting: true, planModeEnabled: true },
 			render: () => <SessionConfigBar />,
 		},
 	],

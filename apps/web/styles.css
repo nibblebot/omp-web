@@ -9,6 +9,7 @@
 @import "./styles/tokens.css";
 @import "./styles/base.css";
 @import "./styles/app.css";
+@import "./styles/shell.css";
 @import "./styles/chat.css";
 @import "./styles/tools.css";
 @import "./styles/prompt.css";

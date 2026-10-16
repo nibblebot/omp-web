@@ -10,7 +10,7 @@ import {
 } from "../../prefs/settings-tabs";
 import { authSnapshot } from "../../store/auth";
 import { refreshSettings, state } from "../../state";
-import { SearchIcon, XIcon } from "../ui/icons";
+import { SearchIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
 import { FeaturesSettings } from "./FeaturesSettings";
 import { InstalledTab } from "./InstalledTab";
@@ -101,33 +101,32 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	return (
-		<Modal variant="sheet" class="settings-sheet" ariaLabel="Settings" onClose={props.onClose}>
-			<div class="settings-header">
-				<span class="settings-mark" aria-hidden="true">
-					π
-				</span>
-				<h2 class="settings-title">omp settings</h2>
-				<div class="settings-search-field">
-					<SearchIcon class="settings-search-icon" />
-					<input
-						class="settings-search"
-						type="text"
-						aria-label="Search settings"
-						placeholder="Search settings…"
-						value={query()}
-						onInput={(e) => setQuery(e.currentTarget.value)}
-					/>
-				</div>
-				<button
-					type="button"
-					class="settings-close"
-					aria-label="Close settings"
-					onClick={props.onClose}
-				>
-					<XIcon />
-				</button>
-			</div>
-			{/* Narrow-layout navigation (CSS-gated to ≤720px): a section
+		<Modal
+			variant="sheet"
+			class="settings-sheet"
+			ariaLabel="Settings"
+			onClose={props.onClose}
+			header={
+				<>
+					<span class="settings-mark" aria-hidden="true">
+						π
+					</span>
+					<h2 class="settings-title">omp settings</h2>
+					<div class="settings-search-field">
+						<SearchIcon class="settings-search-icon" />
+						<input
+							class="settings-search"
+							type="text"
+							aria-label="Search settings"
+							placeholder="Search settings…"
+							value={query()}
+							onInput={(e) => setQuery(e.currentTarget.value)}
+						/>
+					</div>
+				</>
+			}
+		>
+			{/* Narrow-layout navigation (CSS-gated below 768px): a section
 			    picker instead of the wide layout's sidebar. */}
 			<SettingsSectionPicker
 				sections={tabs()}

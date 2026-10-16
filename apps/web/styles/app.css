@@ -1,40 +1,25 @@
-/* App: app shell, status bar, segments, app-body/app-main. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* App: app shell, segments, app-body/app-main. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 .app {
 	position: relative;
 	display: flex;
 	flex-direction: column;
+	/* --app-h tracks visualViewport.height (shell viewport listener) so the
+	   composer stays above the iOS keyboard, which does not shrink dvh. */
 	height: 100vh;
-	height: 100dvh;
-	/* Full-viewport shell, flush to the viewport edges: the status bar and
-	   chat-column rows carry their own --space-5 gutter, and only the chat
-	   column (.app-main) is width-constrained and centered. */
-}
-.status-bar {
-	display: flex;
-	align-items: center;
-	gap: var(--space-5);
-	padding: var(--space-4) var(--space-5);
-	border-bottom: 1px solid var(--border);
-	/* Single-row height held constant: with no visible segments (roster Chat)
-	   the bar would collapse to padding-only and the sidebar's top edge would
-	   jump when switching Chat/Analysis. --status-bar-h = 2x8px padding + 24px
-	   segment buttons + 1px border; wrapping may still grow it. */
-	min-height: var(--status-bar-h);
+	height: var(--app-h, 100dvh);
+	/* Full-viewport shell, flush to the viewport edges; notched/home-indicator
+	   devices (viewport-fit=cover) keep content inside the safe area. Only the
+	   chat column (.app-main) is width-constrained and centered. */
+	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+		env(safe-area-inset-left);
 	box-sizing: border-box;
-	font-size: var(--fs-md);
-	color: var(--muted);
-	flex-wrap: wrap;
-}
-/* The floating ☰ toggle owns the top-left corner while a sidebar is closed;
-   keep the status-bar content clear of it. */
-.app:has(.sidebar-toggle) .status-bar {
-	padding-left: calc(var(--space-5) + 44px);
 }
 .session-header {
 	display: flex;
 	align-items: center;
-	padding: var(--space-4) 0 var(--space-2);
+	min-width: 0;
+	max-width: 100%;
 }
 .session-bar {
 	display: flex;
@@ -43,11 +28,30 @@
 	gap: var(--space-4);
 	padding: var(--space-4) 0;
 }
+/* Per-turn badges keep their size; the model segment takes the row's slack. */
+.session-bar > .badge {
+	flex: none;
+}
 .model-segment {
 	font-family: var(--font-mono);
-	max-width: 220px;
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+/* Narrow column: one row (badges, model, thinking, ctx). Cost and tokens are
+   dropped here; the ctx segment opens the stats modal instead. */
+@media (max-width: 767px) {
+	.session-bar {
+		flex-wrap: nowrap;
+		gap: var(--space-3);
+	}
+	.session-bar .status-spacer,
+	.session-bar .stats-segment {
+		display: none;
+	}
+	.model-segment {
+		flex: 1 1 0;
+	}
 }
 .disconnected-pill {
 	background: var(--error-border);
@@ -137,7 +141,9 @@
 	flex: 1;
 }
 .session-name {
-	max-width: 200px;
+	margin: 0;
+	min-width: 0;
+	max-width: 100%;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	font-size: var(--fs-base);
@@ -145,6 +151,8 @@
 	color: var(--text);
 }
 .session-name-input {
+	min-width: 0;
+	width: 100%;
 	font-size: var(--fs-base);
 	font-weight: 600;
 }
@@ -180,7 +188,7 @@
 }
 /* Edge gutter for the column's fixed rows. The transcript scroller pads
    itself (chat.css) so its scrollbar stays on the column edge. */
-.app-main > :is(.session-header, .queue-bar, .background-bars, .session-bar, .prompt-box) {
+.app-main > :is(.queue-bar, .background-bars, .session-bar, .prompt-box) {
 	padding-inline: var(--space-5);
 }
 /* No live attached session (daemon stopped/removed or never

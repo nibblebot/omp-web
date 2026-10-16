@@ -1,7 +1,10 @@
 import { Show, type Component } from "solid-js";
+import { planToggle } from "../../../prompt/commands";
 import { formatTokens, getContextUsageLevel } from "../../../usage/context";
 import { call, setState, state } from "../../../state";
 import { ArrowDownIcon, ArrowUpIcon } from "../../ui/icons";
+import { isCoarsePointer } from "../pointer";
+import { RetryBadge } from "./RetryBadge";
 import { StatusSegment } from "./StatusSegment";
 
 const ContextSegment: Component = () => {
@@ -11,14 +14,15 @@ const ContextSegment: Component = () => {
 	return (
 		<Show when={usage()}>
 			{(u) => (
-				<span
-					class="segment context-segment"
-					data-level={level()}
-					title={`${formatTokens(u().tokens)} / ${formatTokens(u().contextWindow)} tokens`}
+				<StatusSegment
+					class="context-segment"
+					dataLevel={level()}
+					title={`${formatTokens(u().tokens)} / ${formatTokens(u().contextWindow)} tokens · session stats`}
+					onClick={() => setState("modal", "stats")}
 				>
 					<span class="context-prefix">ctx </span>
 					{u().percent.toFixed(0)}%
-				</span>
+				</StatusSegment>
 			)}
 		</Show>
 	);
@@ -26,10 +30,23 @@ const ContextSegment: Component = () => {
 
 /** Session-send configuration (model, thinking) plus the session resource
  *  meters (ctx fill, cumulative stats), pinned directly above the composer,
- *  where the send decision happens. Live turn-state (retry, badges) and
- *  global chrome stay in StatusBar. */
+ *  where the send decision happens. Per-turn badges (compacting, retry,
+ *  plan) lead the row and show only while active. */
 export const SessionConfigBar: Component = () => (
 	<div class="session-bar">
+		<Show when={state.compacting}>
+			<span class="segment badge">compacting…</span>
+		</Show>
+		<Show when={state.planModeEnabled}>
+			<StatusSegment
+				class="badge plan-badge"
+				title="Plan mode, click to toggle (/plan)"
+				onClick={planToggle}
+			>
+				plan
+			</StatusSegment>
+		</Show>
+		<RetryBadge />
 		<StatusSegment
 			class="model-segment"
 			onClick={() => setState("modal", "model")}
@@ -39,7 +56,14 @@ export const SessionConfigBar: Component = () => (
 		</StatusSegment>
 		<StatusSegment
 			class="thinking-segment"
-			onClick={() => void call("cycleThinkingLevel").catch((err) => setState("error", String(err)))}
+			onClick={() => {
+				// Touch has no right-click: on coarse pointers a tap opens the picker.
+				if (isCoarsePointer()) {
+					setState("modal", "thinking");
+					return;
+				}
+				void call("cycleThinkingLevel").catch((err) => setState("error", String(err)));
+			}}
 			onContextMenu={(e) => {
 				e.preventDefault();
 				setState("modal", "thinking");

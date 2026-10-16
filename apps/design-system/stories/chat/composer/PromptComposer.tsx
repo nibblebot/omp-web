@@ -45,6 +45,7 @@ function ComposerHarness(props: {
 						}}
 						historyOpen={() => false}
 						closeHistory={() => {}}
+						openHistory={() => {}}
 					/>
 				</div>
 			</div>

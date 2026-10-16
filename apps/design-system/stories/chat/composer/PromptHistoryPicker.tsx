@@ -18,7 +18,7 @@ const anchored = (ctx: VariantContext) => (
 	<div class="ds-frame">
 		<div class="prompt-input" style={{ "margin-top": "380px" }}>
 			<PromptHistoryPicker onClose={ctx.close} />
-			<textarea rows={3} aria-label="Message the agent" placeholder="Message the agent…" />
+			<textarea rows={3} aria-label="Message the agent" placeholder="Message the Agent" />
 		</div>
 	</div>
 );

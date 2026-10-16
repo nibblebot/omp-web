@@ -61,8 +61,9 @@ button:not(:disabled):not(.active):hover {
 	outline-offset: 1px;
 }
 
-/* Touch: hit targets at least 32px tall/wide (WCAG 2.5.8 AA); fine-pointer
-   controls carry the 24px minimum at their base rules. */
+/* Touch: hit targets at least 44px tall/wide (Apple HIG, WCAG 2.5.5); fine-
+   pointer controls carry the 24px minimum at their base rules. Feature files
+   add their own controls in a trailing (pointer: coarse) block. */
 @media (pointer: coarse) {
 	/* Selectors doubled for specificity: the base rules sit later in the
 	   file and would otherwise win the cascade at equal specificity. */
@@ -73,9 +74,16 @@ button:not(:disabled):not(.active):hover {
 	.queue-clear.queue-clear,
 	.msg-copy-btn.msg-copy-btn,
 	.msg-branch-btn.msg-branch-btn,
-	.sidebar-icon-btn.sidebar-icon-btn {
-		min-width: 32px;
-		min-height: 32px;
+	.sidebar-icon-btn.sidebar-icon-btn,
+	.sidebar-menu-btn.sidebar-menu-btn {
+		min-width: 44px;
+		min-height: 44px;
+	}
+	/* Text inputs at 16px: iOS Safari zooms the page on focus below that. */
+	input:not([type="checkbox"], [type="radio"], [type="range"]),
+	textarea,
+	select {
+		font-size: max(1rem, 16px);
 	}
 
 	/* Copy/branch actions stay visible on touch, where there is no hover. */

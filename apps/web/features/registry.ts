@@ -41,10 +41,10 @@ export interface FeatureModule {
 	commands?: Readonly<Record<string, FeatureCommand>>;
 	/** Analysis main view, mounted by App next to Chat. */
 	view?: Component;
-	/** Status bar items, placed by StatusBar. */
-	statusBar?: { goalBadge?: Component; debugButton?: Component };
-	/** Sidebar footer tool buttons. */
-	sidebarFooter?: { debugButton?: Component };
+	/** Main pane header items, placed by MainHeader. */
+	mainHeader?: { goalBadge?: Component };
+	/** Sidebar header tool buttons, placed by SidebarHeader. */
+	sidebarHeader?: { debugButton?: Component };
 	/** Extra tabs in the subagents hub. */
 	subagentTabs?: readonly SubagentTab[];
 	/** Transcript item renderers keyed by ChatItem kind. */
@@ -147,12 +147,12 @@ export function featureOverlays(): Component[] {
 	return allActiveModules().flatMap((mod) => [...(mod.overlays ?? [])]);
 }
 
-export function featureStatusBar(): NonNullable<FeatureModule["statusBar"]>[] {
-	return allActiveModules().flatMap((mod) => (mod.statusBar ? [mod.statusBar] : []));
+export function featureMainHeader(): NonNullable<FeatureModule["mainHeader"]>[] {
+	return allActiveModules().flatMap((mod) => (mod.mainHeader ? [mod.mainHeader] : []));
 }
 
-export function featureSidebarFooter(): NonNullable<FeatureModule["sidebarFooter"]>[] {
-	return allActiveModules().flatMap((mod) => (mod.sidebarFooter ? [mod.sidebarFooter] : []));
+export function featureSidebarHeader(): NonNullable<FeatureModule["sidebarHeader"]>[] {
+	return allActiveModules().flatMap((mod) => (mod.sidebarHeader ? [mod.sidebarHeader] : []));
 }
 
 /** Hub tabs contributed by active features, sorted by rank. */

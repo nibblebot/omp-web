@@ -1,4 +1,4 @@
-/* Goals: status-bar goal badge and the /goal popover (GoalDialog). */
+/* Goals: main-header goal badge and the /goal popover (GoalDialog). */
 .goal-badge {
 	cursor: pointer;
 }

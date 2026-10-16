@@ -1,8 +1,10 @@
 import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
+import { buildInfo } from "../../../build-info";
 import { clientId, state } from "../../../state";
 import { fetchFleetDebug, fmtPair, fmtTime, type FleetDebug } from "../../../fleet-ui/fleet-debug";
 import { formatDaemonUptime } from "../../../fleet-ui/daemon-ui";
 import { Modal } from "../../ui/Modal";
+import { OmpLogoIcon } from "../../ui/icons";
 import { LastFrameClock } from "./LastFrameClock";
 import { DebugLog } from "./DebugLog";
 
@@ -55,6 +57,29 @@ export const FleetDebugSheet: Component<{ onClose: () => void }> = (props) => {
 	return (
 		<Modal title="Debug" variant="sheet" class="debug-sheet" onClose={props.onClose}>
 			<div class="debug-scroll">
+				<section class="debug-section debug-build">
+					<h3 class="debug-section-title">Build</h3>
+					<div class="debug-facts">
+						<div class="debug-fact">
+							<span class="debug-label">omp-web</span>
+							<span class="debug-value" title="omp-web version and commit">
+								{buildInfo.version && `v${buildInfo.version}`}
+								{buildInfo.version && buildInfo.gitHash && " · "}
+								{buildInfo.gitHash}
+							</span>
+						</div>
+						<Show when={buildInfo.ompVersion}>
+							<div class="debug-fact">
+								<span class="debug-label">
+									<OmpLogoIcon class="debug-build-logo" /> omp
+								</span>
+								<span class="debug-value" title="Upstream omp version">
+									v{buildInfo.ompVersion}
+								</span>
+							</div>
+						</Show>
+					</div>
+				</section>
 				<section class="debug-section">
 					<h3 class="debug-section-title">Connection</h3>
 					<div class="debug-facts">

@@ -88,9 +88,9 @@ export function planDispatch(args = ""): {
 		args: [{ enabled: args.trim() ? true : !state.planModeEnabled, planFilePath: "" }],
 	};
 }
-/** Shared /plan entry used by the LOCAL_COMMANDS entry and the status-bar badge. */
+/** Shared /plan entry used by the LOCAL_COMMANDS entry and the session config bar's plan badge. */
 export function planToggle(rawArgs: unknown = ""): void {
-	// The status-bar badge wires onClick={planToggle}, so a MouseEvent can
+	// The plan badge wires onClick={planToggle}, so a MouseEvent can
 	// arrive here; only strings are command args.
 	const args = typeof rawArgs === "string" ? rawArgs : "";
 	const d = planDispatch(args);

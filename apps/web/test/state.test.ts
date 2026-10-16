@@ -17,6 +17,7 @@ import {
 	announce,
 	attachSession,
 	call,
+	closeDrawers,
 	connect,
 	daemonsByProject,
 	hasLiveSession,
@@ -30,6 +31,7 @@ import {
 	sendDeleteWorktree,
 	sendRemoveProject,
 	sendWorktreeDeleteInfo,
+	setSidebarVisible,
 	setState,
 	setTxSidebarVisible,
 	setView,
@@ -1213,6 +1215,30 @@ describe("setView persistence and hash handling", () => {
 		expect(globalThis.localStorage.getItem("omp.view")).toBe("analysis");
 		setTxSidebarVisible(false);
 		expect(globalThis.localStorage.getItem("omp.txSidebarVisible")).toBe("false");
+	});
+
+	test("drawer viewport: sidebar toggles stay session-only and picks close both drawers", () => {
+		installLocalStorageShim();
+		setState({ drawerViewport: true, sidebarVisible: false, txSidebarVisible: false });
+		try {
+			setSidebarVisible(true);
+			setTxSidebarVisible(true);
+			expect(globalThis.localStorage.getItem("omp.sidebarVisible")).toBeNull();
+			expect(globalThis.localStorage.getItem("omp.txSidebarVisible")).toBeNull();
+			closeDrawers();
+			expect(state.sidebarVisible).toBe(false);
+			expect(state.txSidebarVisible).toBe(false);
+		} finally {
+			setState({ drawerViewport: false, sidebarVisible: true, txSidebarVisible: true });
+		}
+	});
+
+	test("docked viewport: closeDrawers leaves the persisted sidebar choice alone", () => {
+		installLocalStorageShim();
+		setSidebarVisible(true);
+		closeDrawers();
+		expect(state.sidebarVisible).toBe(true);
+		expect(globalThis.localStorage.getItem("omp.sidebarVisible")).toBe("true");
 	});
 
 	test("entering chat clears the hash via history.replaceState and the chatUnviewed dot", () => {

@@ -4,6 +4,7 @@ import { defineStory } from "../../registry";
 
 // TranscriptBrowser mounts ResumeCloneDialog itself, and that dialog's open target is
 // module state. Clear it so a resume dialog opened by another story never shows here.
+// The app shows this view only in Analysis, so its MainHeader toggle targets txSidebarVisible.
 export default defineStory({
 	id: "tx-transcript-browser",
 	title: "TranscriptBrowser",
@@ -12,7 +13,7 @@ export default defineStory({
 	variants: [
 		{
 			name: "Sidebar open",
-			seed: { txSidebarVisible: true },
+			seed: { view: "analysis", txSidebarVisible: true },
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
 					<TranscriptBrowser />
@@ -21,7 +22,7 @@ export default defineStory({
 		},
 		{
 			name: "Sidebar collapsed",
-			seed: { txSidebarVisible: false },
+			seed: { view: "analysis", txSidebarVisible: false },
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
 					<TranscriptBrowser />

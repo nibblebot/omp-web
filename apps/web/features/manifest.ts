@@ -88,7 +88,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 	{
 		id: "debug",
 		label: "Debug sheet",
-		description: "Fleet and transport debug log, opened from the status bar.",
+		description: "Build identity, fleet and transport debug log, opened from the sidebar header.",
 		experimental: false,
 		defaultEnabled: true,
 		commands: [],

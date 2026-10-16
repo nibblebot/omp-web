@@ -42,7 +42,7 @@ async function build(): Promise<Bundle> {
 		conditions: ["browser", "solid"],
 		plugins: [solidPlugin, virtualModulesPlugin()],
 		// state.ts guards its dev-only `window.__ompState` handle on this; the
-		// build-info stamp feeds the sidebar footer's version lines.
+		// build-info stamp feeds the sidebar wordmark tooltip and the debug sheet's Build section.
 		define: {
 			"import.meta.env.DEV": "true",
 			"import.meta.env.BASE_URL": JSON.stringify("/"),

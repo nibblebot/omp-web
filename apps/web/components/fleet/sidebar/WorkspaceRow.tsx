@@ -19,6 +19,7 @@ import { unreadIds } from "../../../fleet-ui/unread";
 import {
 	attachSession,
 	call,
+	closeDrawers,
 	openDaemonDetails,
 	removeDaemonById,
 	requestDaemonSessions,
@@ -269,6 +270,9 @@ export const WorkspaceRow: Component<{
 	// that session.
 	const rowClick = () => {
 		if (activating()) return;
+		// A pick changes the main pane: a drawer sidebar gets out of the way now
+		// instead of when the attach lands.
+		closeDrawers();
 		// Clicking the card is a resume action, so close any open dropdown (the
 		// title click stops propagation, so this never fights the trigger).
 		setSessionsOpenId(null);
@@ -709,6 +713,7 @@ const DaemonSessionsDropdown: Component<{
 		if (wasAsleep) setActivatingIds((prev) => new Set(prev).add(id));
 		const pending = resumeDaemonSession(id, path);
 		props.onClose();
+		closeDrawers();
 		if (wasAsleep) {
 			Promise.resolve(pending)
 				.catch(() => {})

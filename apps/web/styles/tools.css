@@ -379,12 +379,16 @@ pre.terminal {
 	white-space: normal;
 	overflow-wrap: anywhere;
 }
-/* Background bars (ui/BackgroundBar.tsx): Card-based strips above the composer. */
+/* Background bars (ui/BackgroundBar.tsx): Card-based strips above the
+   composer, stacked one above the other at every width. */
 .background-bar {
-	flex: 1;
 	min-width: 0;
 	padding: var(--space-3) var(--space-5);
 	animation: background-bar-in 180ms ease-out;
+}
+/* One-line "N <label>" toggle: shown only on short viewports (below). */
+.background-bar-summary {
+	display: none;
 }
 .background-bar-rows {
 	display: flex;
@@ -409,7 +413,6 @@ pre.terminal {
 	flex: 1;
 }
 .background-subagents {
-	flex: 1;
 	min-width: 0;
 	display: flex;
 	flex-direction: column;
@@ -459,8 +462,51 @@ pre.terminal {
 }
 .background-bars {
 	display: flex;
-	gap: var(--space-4);
+	flex-direction: column;
+	gap: var(--space-3);
 	margin-top: var(--space-4);
+}
+.background-bars:empty {
+	display: none;
+}
+/* Short viewports: each bar folds to its summary line until tapped, and an
+   expanded bar scrolls inside a capped height. */
+@media (max-height: 599px) {
+	.background-bars {
+		gap: var(--space-2);
+		margin-top: var(--space-2);
+	}
+	.background-bar {
+		padding: var(--space-1) var(--space-4);
+	}
+	.background-bar-summary {
+		display: flex;
+		align-items: center;
+		width: 100%;
+		min-height: 24px;
+		padding: 0;
+		background: none;
+		border: none;
+		color: var(--muted);
+		font-size: var(--fs-sm);
+		text-align: left;
+		cursor: pointer;
+	}
+	.background-bar-summary::after {
+		content: " ▸";
+		margin-left: var(--space-2);
+	}
+	.background-bar--expanded .background-bar-summary::after {
+		content: " ▾";
+	}
+	.background-bar:not(.background-bar--expanded) .background-bar-rows,
+	.background-subagents:not(:has(.background-bar--expanded)) .background-subagents-toggle {
+		display: none;
+	}
+	.background-bar--expanded .background-bar-rows {
+		max-height: 30dvh;
+		overflow-y: auto;
+	}
 }
 .daemon-glyph[data-state="ready"] {
 	color: var(--success);
@@ -477,13 +523,20 @@ pre.terminal {
 .daemon-glyph[data-state="stopping"] {
 	color: var(--muted-2);
 }
+/* Row priority when narrow: the name keeps a readable minimum, the meta
+   text gives way first, and the actions never shrink or clip. */
 .daemon-name {
+	flex: 0 1 auto;
+	min-width: min(10ch, 40%);
 	color: var(--accent);
 	font-weight: 600;
-	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+.daemon-glyph,
+.daemon-state {
+	flex: none;
 }
 .daemon-state {
 	font-family: var(--font-mono);
@@ -491,11 +544,13 @@ pre.terminal {
 	font-size: var(--fs-sm);
 }
 .daemon-meta {
+	flex: 1 1 0;
 	font-family: var(--font-mono);
 	color: var(--muted);
 	font-size: var(--fs-sm);
 	margin-left: auto;
 	min-width: 0;
+	text-align: right;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -505,9 +560,13 @@ pre.terminal {
 	color: var(--success);
 	font-size: var(--fs-sm);
 	font-variant-numeric: tabular-nums;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 .daemon-actions {
+	flex: none;
 	display: flex;
 	gap: var(--space-2);
 	align-items: center;
@@ -589,4 +648,19 @@ pre.terminal.eval-code {
 	padding: 0 var(--space-4) var(--space-3);
 	color: var(--muted-3);
 	font-size: var(--fs-md);
+}
+
+/* Touch: 44px targets for background-bar controls. */
+@media (pointer: coarse) {
+	.daemon-btn,
+	.background-bar-summary,
+	.background-subagents-toggle,
+	.subagent-controls button {
+		min-width: 44px;
+		min-height: 44px;
+	}
+	.background-bar-row--clickable {
+		min-height: 44px;
+		align-items: center;
+	}
 }

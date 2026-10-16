@@ -177,6 +177,7 @@ export const PromptBox: Component = () => {
 				}}
 				historyOpen={historyOpen}
 				closeHistory={() => setHistoryOpen(false)}
+				openHistory={() => setHistoryOpen(true)}
 			/>
 			<PromptActions message={message} images={images} submit={submit} onDiscard={discard} />
 			<ExtensionUi placement="belowEditor" />

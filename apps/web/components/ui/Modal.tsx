@@ -1,18 +1,23 @@
-import { onCleanup, onMount, type Component, type JSX } from "solid-js";
+import { onCleanup, onMount, Show, type Component, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
+import { XIcon } from "./icons";
 
 // Stable per-instance ids: several modals can be mounted at once (a state.modal
 // picker plus AskDialog/BtwSheet sheets), so a module counter keeps ids unique.
 let modalTitleSeq = 0;
 
 /**
- * Generic overlay: backdrop click and Esc close, Tab cycles within the
- * dialog. Every picker (model, thinking, stats, sessions, branch) reuses it.
+ * Generic overlay: backdrop click, Esc, and a visible close button (the title
+ * row's right edge; a viewport-corner button for the lightbox) close it, Tab
+ * cycles within the dialog. Every picker (model, thinking, stats, sessions,
+ * branch) reuses it.
  */
 export const Modal: Component<{
 	title?: string;
 	/** Screen-reader name when the dialog renders no h2.modal-title. */
 	ariaLabel?: string;
+	/** Custom title-row content (replaces the h2 title; pair with ariaLabel). The close button stays at the row's right edge. */
+	header?: JSX.Element;
 	onClose: () => void;
 	class?: string;
 	/** "sheet": full-height right-anchored side sheet. "lightbox": bare full-size image, no panel chrome. */
@@ -81,11 +86,26 @@ export const Modal: Component<{
 					ref={box}
 					onClick={(e) => e.stopPropagation()}
 				>
-					{props.title && (
-						<h2 class="modal-title" id={titleId}>
-							{props.title}
-						</h2>
-					)}
+					<Show
+						when={props.variant !== "lightbox"}
+						fallback={
+							<button type="button" class="modal-close" aria-label="Close" onClick={props.onClose}>
+								<XIcon />
+							</button>
+						}
+					>
+						<div class="modal-head">
+							{props.header ??
+								(props.title && (
+									<h2 class="modal-title" id={titleId}>
+										{props.title}
+									</h2>
+								))}
+							<button type="button" class="modal-close" aria-label="Close" onClick={props.onClose}>
+								<XIcon />
+							</button>
+						</div>
+					</Show>
 					{props.children}
 				</div>
 			</div>

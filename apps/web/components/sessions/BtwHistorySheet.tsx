@@ -375,17 +375,14 @@ export const BtwHistorySheet: Component<{ onClose: () => void }> = (props) => {
 					</div>
 				</div>
 
-				<div class="btw-footer">
-					<Show when={btwSelectedId() !== null && btwStreaming()[btwSelectedId()!]}>
+				<Show when={btwSelectedId() !== null && btwStreaming()[btwSelectedId()!]}>
+					<div class="btw-footer">
 						<span class="tool-collapsed-note">
 							Closing keeps a running answer alive; reopen to read it. Stopping aborts the work but
 							keeps saved turns.
 						</span>
-					</Show>
-					<button type="button" class="btw-close" onClick={handleClose}>
-						close
-					</button>
-				</div>
+					</div>
+				</Show>
 			</div>
 		</Modal>
 	);

@@ -1,5 +1,4 @@
-import { DebugFooterButton } from "../../../../web/components/app/debug/DebugFooterButton";
-import { DebugStatusButton } from "../../../../web/components/app/debug/DebugStatusButton";
+import { DebugButton } from "../../../../web/components/app/debug/DebugButton";
 import { FleetDebugSheet } from "../../../../web/components/app/debug/FleetDebugSheet";
 import { LastFrameClock } from "../../../../web/components/app/debug/LastFrameClock";
 import { DebugLog } from "../../../../web/components/app/debug/DebugLog";
@@ -85,40 +84,19 @@ export default [
 		],
 	}),
 	defineStory({
-		id: "app-debug-footer-button",
-		title: "DebugFooterButton",
+		id: "app-debug-button",
+		title: "DebugButton",
 		component: {
-			file: "apps/web/components/app/debug/DebugFooterButton.tsx",
-			export: "DebugFooterButton",
+			file: "apps/web/components/app/debug/DebugButton.tsx",
+			export: "DebugButton",
 		},
 		variants: [
-			{ name: "Closed", seed: { modal: null }, render: () => <DebugFooterButton /> },
+			{ name: "Closed", seed: { modal: null }, render: () => <DebugButton /> },
 			{
 				name: "Sheet open",
 				description: "Active while the debug sheet is the open modal.",
 				seed: { modal: "debug" },
-				render: () => <DebugFooterButton />,
-			},
-		],
-	}),
-	defineStory({
-		id: "app-debug-status-button",
-		title: "DebugStatusButton",
-		component: {
-			file: "apps/web/components/app/debug/DebugStatusButton.tsx",
-			export: "DebugStatusButton",
-		},
-		variants: [
-			{
-				name: "Analysis view",
-				seed: { view: "analysis", modal: null },
-				render: () => <DebugStatusButton />,
-			},
-			{
-				name: "Chat view",
-				description: "Renders nothing: the sidebar footer button stands in for it.",
-				seed: { view: "chat", modal: null },
-				render: () => <DebugStatusButton />,
+				render: () => <DebugButton />,
 			},
 		],
 	}),

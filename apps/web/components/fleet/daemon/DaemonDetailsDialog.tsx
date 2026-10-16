@@ -3,7 +3,6 @@ import type { DaemonEntry } from "#lib/wire/protocol";
 import { formatDaemonUptime } from "../../../fleet-ui/daemon-ui";
 import { DaemonLog } from "./DaemonLog";
 import { Modal } from "../../ui/Modal";
-import { XIcon } from "../../ui/icons";
 import type { RosterEntry } from "../sidebar/WorkspaceRow";
 
 // ---------------------------------------------------------------------------
@@ -27,19 +26,17 @@ export const DaemonDetailsDialog: Component<{ daemon: DaemonEntry; onClose: () =
 		d().status === "session" ||
 		d().status === "resolving";
 	return (
-		<Modal class="daemon-detail" ariaLabel={`Daemon ${d().name}`} onClose={props.onClose}>
-			<div class="daemon-detail-header">
-				<span class="daemon-status-dot" data-status={d().status} title={d().status} />
-				<span class="daemon-detail-name">{d().name}</span>
-				<button
-					type="button"
-					class="daemon-detail-close"
-					aria-label="Close daemon details"
-					onClick={props.onClose}
-				>
-					<XIcon />
-				</button>
-			</div>
+		<Modal
+			class="daemon-detail"
+			ariaLabel={`Daemon ${d().name}`}
+			onClose={props.onClose}
+			header={
+				<>
+					<span class="daemon-status-dot" data-status={d().status} title={d().status} />
+					<span class="daemon-detail-name">{d().name}</span>
+				</>
+			}
+		>
 			<div class="daemon-detail-facts">
 				<div class="daemon-detail-fact">
 					<span class="daemon-detail-label">cwd</span>

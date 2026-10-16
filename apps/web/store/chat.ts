@@ -678,7 +678,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 			break;
 		}
 		case "auto_retry_start":
-			// Phase 9: live countdown badge in the status bar; notice stays.
+			// Phase 9: live countdown badge in the session config bar; notice stays.
 			setState("retryInfo", {
 				attempt: e.attempt,
 				maxAttempts: e.maxAttempts,

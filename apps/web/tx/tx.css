@@ -120,8 +120,8 @@
 
 .tx-app {
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
-  /* Fill the fleet .app-body flex row (the status bar owns the outer height). */
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  /* Fill the fleet .app-body flex row. */
   height: 100%;
   min-height: 0;
   flex: 1;
@@ -142,16 +142,9 @@
   display: none;
   grid-area: none;
 }
-/* Top chrome: Chat/Analysis mode switch flush left, sidebar close flush
-   right. Pixel-identical to the roster .sidebar-mode-row (fleet.css) so
-   switching modes never shifts the sidebar chrome. */
-.tx-sidebar-mode-row {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3) 0;
+/* A collapsed docked sidebar leaves no column behind for the main pane. */
+.tx-app:has(> .tx-sidebar:not(.open)) {
+  grid-template-columns: minmax(0, 1fr);
 }
 .sidebar-inner {
   display: flex;
@@ -1496,43 +1489,13 @@
 }
 /* ---------- responsive ---------- */
 
-@media (max-width: 480px) {
+/* Below 1024px the tx sidebar leaves the grid and becomes a fixed slide-out
+   drawer, mirroring the roster .sidebar (fleet.css) exactly so switching
+   modes never moves the sidebar's on-screen geometry (same width, same top
+   edge, same slide transition, same scrim). */
+@media (max-width: 1023px) {
   .tx-app {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-  .tx-app > * {
-    min-width: 0;
-  }
-  .tx-sidebar {
-    border-right: none;
-    border-bottom: 1px solid var(--tx-border);
-    max-height: 45vh;
-    overflow: hidden;
-  }
-  /* Mobile stack: the sidebar occupies its own auto row; when collapsed it
-     must also drop from that row so the detail pane alone fills the grid. */
-  .tx-sidebar:not(.open) {
-    display: none;
-    grid-area: none;
-  }
-  .sidebar-inner {
-    max-height: 45vh;
-  }
-  .tx-main {
-    padding: 12px 14px 32px;
-  }
-}
-/* Narrow viewports: the tx sidebar leaves the grid and becomes a fixed
-   slide-out overlay, mirroring the roster .sidebar (fleet.css) exactly so
-   switching modes never moves the sidebar's on-screen geometry (same width,
-   same top edge, same slide transition, same scrim). Placed after the 480px
-   block so it wins the cascade where they overlap. */
-@media (max-width: 720px) {
-  .tx-app {
-    grid-template-columns: 1fr;
-    /* One row: the overlay sidebar is out of flow, so the detail pane alone
-       fills the grid (the 480px auto row would collapse it). */
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
   .tx-sidebar {
@@ -1541,10 +1504,9 @@
     bottom: 0;
     left: 0;
     z-index: calc(var(--z-overlay) + 1);
-    width: min(var(--sidebar-w), 80vw);
-    max-height: none;
-    border-right: 1px solid var(--border);
-    border-bottom: none;
+    width: min(var(--sidebar-w), 85vw);
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
+    box-sizing: border-box;
     box-shadow: var(--shadow-1);
     transform: translateX(0);
     transition:
@@ -1552,7 +1514,7 @@
       visibility 0s;
   }
   /* Closed slides off-canvas (display kept so the transform transition can
-     run), same as the roster overlay. */
+     run), same as the roster drawer. */
   .tx-sidebar:not(.open) {
     display: flex;
     visibility: hidden;
@@ -1561,11 +1523,13 @@
       transform var(--dur-base) var(--ease-out),
       visibility 0s var(--dur-base);
   }
-  .tx-sidebar .sidebar-inner {
-    max-height: none;
+}
+@media (max-width: 767px) {
+  .tx-main {
+    padding: 12px 14px 32px;
   }
 }
-@media (max-width: 720px) and (prefers-reduced-motion: reduce) {
+@media (max-width: 1023px) and (prefers-reduced-motion: reduce) {
   .tx-sidebar,
   .tx-sidebar:not(.open) {
     transition: none;
