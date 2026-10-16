@@ -15,7 +15,7 @@ import { virtualModulesPlugin } from "./virtual-modules";
  * on every top-level page load so a refresh shows current sources. Inspector
  * frames (`/?embed=`) reuse the current bundle instead. Startup opens the page
  * in the default browser only from an interactive local terminal with a display
- * (`isInteractiveDesktop`), matching `bun run dev` and `omp-web`.
+ * and no agent/CI marker (`isInteractiveDesktop`), matching `bun run dev` and `omp-web`.
  */
 const root = dirname(fileURLToPath(import.meta.url));
 const VIEWS = {
