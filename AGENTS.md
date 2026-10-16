@@ -30,7 +30,7 @@ bun run lint                        # library boundaries + oxlint
 bun run format:check
 bun scripts/test.ts <test-file>     # targeted tests
 bun run test                        # full suite, one worker per file (default)
-bun run test:isolated               # full suite in ONE process: the hermeticity gate
+bun run test:isolated               # full suite in ONE process: the hermeticity gate (releases only)
 bun e2e/onboarding.ts               # offline distribution E2E
 ```
 
@@ -122,7 +122,7 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only). Browser to fleet: `G
 ### Tests
 
 - Run through `scripts/test.ts` from repo root; no live model/API dependency. Do not add retries or suppress failures.
-- `bun run test` (one worker per file) is the default loop; `bun run test:isolated` runs every file in ONE process and is the hermeticity gate (before release, and whenever you add or edit a file that touches globals or module mocks). Test files must stay green under both: install process globals and `mock.module` mocks from a hook and restore them in `afterAll` (each file owns exactly what it changed, and `mock.restore()` does not undo module mocks), hand back shared store state a file mutates, and prefer a query-suffixed fresh import (`./mod.ts?fresh=<tag>`) over relying on module cache state when a module under test keeps its own process-global cache.
+- `bun run test` (one worker per file) is the default loop; `bun run test:isolated` runs every file in ONE process and is the hermeticity gate, run only when preparing a release, never in the everyday loop. Write test files so they would pass under both (the release run checks it): install process globals and `mock.module` mocks from a hook and restore them in `afterAll` (each file owns exactly what it changed, and `mock.restore()` does not undo module mocks), hand back shared store state a file mutates, and prefer a query-suffixed fresh import (`./mod.ts?fresh=<tag>`) over relying on module cache state when a module under test keeps its own process-global cache.
 - Capture full-suite output in a log, not a truncated pipe.
 - Scratch dirs use tracked `tempDir()` from `lib/testkit/temp-dir.testkit.ts`, never raw mkdtemp. Helpers use `*.testkit.ts` to avoid discovery.
 - `apps/session/test/collab-relay.test.ts` intentionally omits `server.stop()`: Bun hangs closing sockets with close codes.
