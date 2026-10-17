@@ -307,7 +307,7 @@ function primingFrames(
 		...transcriptHistoryFrames(entry.session),
 		{
 			type: "state",
-			state: daemonBroker.buildStateSnapshot(entry.session),
+			state: daemonBroker.buildStateSnapshot(entry),
 			stats: entry.session.getSessionStats(),
 		},
 		// A dialog still open must reach a client that attaches after it was sent.
@@ -1346,7 +1346,7 @@ if (config.callbackUrl !== undefined) {
 					if (daemonControl !== null && entry !== null) {
 						daemonControl.publish("control", {
 							type: "state",
-							state: daemonBroker.buildStateSnapshot(entry.session),
+							state: daemonBroker.buildStateSnapshot(entry),
 							stats: entry.session.getSessionStats(),
 						});
 					}

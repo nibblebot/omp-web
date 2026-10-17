@@ -34,6 +34,10 @@ function latest(entry: SessionEntry): Review | null {
 	}
 	return null;
 }
+/** True while the newest persisted plan review awaits an operator decision (drives the web sheet). */
+export function planReviewWaiting(entry: SessionEntry): boolean {
+	return latest(entry)?.status === "waiting";
+}
 async function persist(entry: SessionEntry, review: Review): Promise<void> {
 	entry.session.sessionManager.appendCustomEntry(CUSTOM_TYPE, review);
 	await entry.session.sessionManager.flush();
@@ -167,6 +171,13 @@ export async function handlePlanReviewTurnEnd(
 	});
 }
 
+/** Leaves plan mode: dismisses any waiting review, then clears the SDK plan state. Shared by
+ * the chip exit, New session, and session switch so none of them strands a pending review. */
+export async function exitPlanMode(entry: SessionEntry): Promise<void> {
+	await handlePlanReviewTurnEnd(entry, "operator-cancel");
+	entry.session.setPlanModeState(undefined);
+}
+
 export function createPlanReviewMethods(): Record<
 	string,
 	(entry: SessionEntry, args: unknown[]) => Promise<unknown>
@@ -256,14 +267,24 @@ export function createPlanReviewMethods(): Record<
 				} else {
 					await persist(entry, next);
 					if (decision === "request_changes") {
-						await session.sendCustomMessage(
-							{
-								customType: "plan_review_feedback",
-								content: `Plan changes requested.${next.note ? `\n${next.note}` : ""}`,
-								display: true,
-							},
-							{ triggerTurn: false },
-						);
+						// Not awaited: the revision turn stays open until the model finishes, and the
+						// model's resubmission waits on this serialized action. Awaiting here deadlocks.
+						void session
+							.sendCustomMessage(
+								{
+									customType: "plan_review_feedback",
+									content: `Plan changes requested.${next.note ? `\n${next.note}` : ""}`,
+									display: true,
+								},
+								{ triggerTurn: true },
+							)
+							.catch((error) =>
+								session.emitNotice(
+									"error",
+									error instanceof Error ? error.message : String(error),
+									"plan-review",
+								),
+							);
 					}
 				}
 				return dto(entry, next);
@@ -286,15 +307,18 @@ export function createPlanReviewMethods(): Record<
 			}),
 		planCancel: async (entry, args) => {
 			const request = input(args);
-			return serialized(entry, async () => {
+			// Abort outside the tail: aborting waits for the in-flight turn, whose proposal is queued
+			// behind this action.
+			const next = await serialized(entry, async () => {
 				const review = requireReview(entry, request.reviewId);
 				if (review.status !== "waiting") fail("not_eligible", "Plan is not waiting for review");
 				runtime(entry).stopPending = false;
-				const next: Review = { ...review, status: "dismissed" };
-				await persist(entry, next);
-				await entry.session.abort({ reason: "operator-cancel" });
-				return dto(entry, next);
+				const dismissed: Review = { ...review, status: "dismissed" };
+				await persist(entry, dismissed);
+				return dismissed;
 			});
+			await entry.session.abort({ reason: "operator-cancel" });
+			return dto(entry, next);
 		},
 	};
 }

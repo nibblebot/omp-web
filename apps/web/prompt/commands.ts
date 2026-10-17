@@ -82,11 +82,11 @@ export function handoffArgs(args: string): [string | undefined] {
  */
 export function planDispatch(args = ""): {
 	method: "setPlanModeState";
-	args: [{ enabled: boolean; planFilePath: string }];
+	args: [{ enabled: boolean }];
 } {
 	return {
 		method: "setPlanModeState",
-		args: [{ enabled: args.trim() ? true : !state.planModeEnabled, planFilePath: "" }],
+		args: [{ enabled: args.trim() ? true : !state.planModeEnabled }],
 	};
 }
 /** Shared /plan entry used by the LOCAL_COMMANDS entry and the session config bar's plan badge. */
@@ -98,7 +98,9 @@ export function planToggle(rawArgs: unknown = ""): void {
 	if (args.trim() && !state.planModeEnabled) {
 		pushNotice("info", "Plan mode on. The prompt was entered as the first plan turn.");
 	}
-	void call(d.method, d.args).catch(showError);
+	void call(d.method, d.args)
+		.then(() => (args.trim() ? call("prompt", [args.trim()]) : undefined))
+		.catch(showError);
 }
 
 /**

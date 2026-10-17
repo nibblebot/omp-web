@@ -181,7 +181,7 @@ describe("goal/plan local commands", () => {
 		try {
 			setState("planModeEnabled", false);
 			expect(planDispatch().args[0].enabled).toBe(true);
-			expect(planDispatch().args[0].planFilePath).toBe("");
+			expect(planDispatch().args[0]).toEqual({ enabled: true });
 			// Flip the store and confirm the toggle inverts.
 			setState("planModeEnabled", true);
 			expect(planDispatch().args[0].enabled).toBe(false);

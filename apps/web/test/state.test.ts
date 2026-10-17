@@ -1062,6 +1062,19 @@ describe("state-frame application (model-role picker state)", () => {
 		expect(state.modelRoleStorage).toBe("project");
 	});
 
+	test("a waiting plan review opens the sheet once, on the false-to-true edge only", () => {
+		connect();
+		dispatch(stateFrame({ planReviewPending: true }));
+		expect(state.planReviewPending).toBe(true);
+		expect(state.modal).toBe("plan-review");
+		// The operator dismisses; a re-broadcast of the same pending review must not reopen it.
+		setState("modal", null);
+		dispatch(stateFrame({ planReviewPending: true }));
+		expect(state.modal).toBeNull();
+		dispatch(stateFrame({ planReviewPending: false }));
+		expect(state.planReviewPending).toBe(false);
+	});
+
 	test("a frame without role state clears the prior mirror (session-scoped, unlike the daemon roster)", () => {
 		connect();
 		dispatch(

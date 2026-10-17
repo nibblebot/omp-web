@@ -103,6 +103,8 @@ export const reviewPlan: PlanReviewDto = {
 	reviewId: "plan_rv_12",
 	planFilePath: "/home/joshua/.omp/plans/design-fixtures.md",
 	title: "Design-system fixture modules",
+	content:
+		"# Design-system fixture modules\n\n1. Export one typed fixture per DTO.\n2. Keep stories on the shared seed.\n\n- No live daemon in stories.",
 	contentHash: "h_5e21",
 	version: 3,
 	status: "waiting",
@@ -113,6 +115,8 @@ export const reviewPlanChangesRequested: PlanReviewDto = {
 	reviewId: "plan_rv_11",
 	planFilePath: "/home/joshua/.omp/plans/review-anchors.md",
 	title: "Review anchor migration",
+	content:
+		"# Review anchor migration\n\n1. Move anchors to content hashes.\n2. Orphan removed entries.",
 	contentHash: "h_19ab",
 	version: 2,
 	status: "changes_requested",

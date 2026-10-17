@@ -26,6 +26,7 @@ import type { CollabWireStatus } from "#lib/wire/protocol";
 import type { CollabAgentRef, CollabHostStatus, CollabSessionPort } from "./collab-host";
 import type { SessionConfig } from "./config";
 import type { DaemonBroker } from "./daemon-broker";
+import { installPlanReviewHandler } from "./review-plan";
 import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
 import { broadcast, broadcastTo, notifyEvent } from "./sse-delivery";
 import { cancelEntryUiRequests } from "./ui-context";
@@ -292,6 +293,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		// Feeds the tool UI context; without hasUI the ask tool never registers.
 		result.setToolUIContext(buildUiContext(entry), true);
 		wireSession(entry);
+		installPlanReviewHandler(entry);
 		return entry;
 	}
 

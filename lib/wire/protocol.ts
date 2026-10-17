@@ -93,6 +93,8 @@ export interface WebSessionState {
 	goalModeState: GoalModeState | undefined;
 	/** Plan mode presence (getPlanModeState()?.enabled). */
 	planModeEnabled: boolean;
+	/** A plan review awaits an operator decision (newest persisted review is waiting). */
+	planReviewPending?: boolean;
 	/** Priority-service flag for the active model family (isFastModeEnabled()). */
 	fastModeEnabled: boolean;
 	/** Whether computer use is enabled for the session (settings.get("computer.enabled")). */
@@ -1193,6 +1195,8 @@ export interface GitStatusDto {
 export interface PlanReviewDto {
 	reviewId: string;
 	planFilePath: string;
+	/** Plan markdown under review, so the sheet renders it without reading the file. */
+	content?: string;
 	title: string;
 	contentHash: string;
 	version: number;

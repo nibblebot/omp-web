@@ -173,7 +173,6 @@ export const decidePlan = (
 	options: Record<string, unknown> = {},
 ) => mutatePlan("planDecide", { decision, ...(note ? { note } : {}), ...options });
 export const reopenPlan = () => mutatePlan("planReopen");
-export const cancelPlan = () => mutatePlan("planCancel");
 async function getAnnotations(): Promise<void> {
 	const epoch = state.review.generation;
 	const value = await rpc<ReviewAnnotationDto[]>("annotationList");

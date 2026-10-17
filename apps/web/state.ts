@@ -345,6 +345,7 @@ export const [state, setState] = createStore({
 	// --- Phase 9: modes & usage parity (WebSessionState mirror) ---
 	...createGoalState(),
 	planModeEnabled: false,
+	planReviewPending: false,
 	fastModeEnabled: false,
 	computerToolEnabled: false,
 	inspectImageMode: "auto" as WebSessionState["inspectImageMode"],
@@ -682,6 +683,8 @@ export function loadHistory(messages: AgentMessage[]): void {
 }
 
 function applyState(s: WebSessionState, stats?: SessionStats): void {
+	// Open the review sheet only on the false→true edge, so a re-broadcast does not reopen a dismissed sheet.
+	const reviewOpened = s.planReviewPending === true && !state.planReviewPending;
 	setState({
 		sessionScope: s.sessionScope,
 		capabilities: s.capabilities ?? {},
@@ -709,6 +712,7 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		dumpTools: s.dumpTools ?? [],
 		goalModeState: s.goalModeState,
 		planModeEnabled: s.planModeEnabled,
+		planReviewPending: s.planReviewPending === true,
 		fastModeEnabled: s.fastModeEnabled,
 		computerToolEnabled: s.computerToolEnabled,
 		inspectImageMode: s.inspectImageMode,
@@ -723,6 +727,7 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 	});
 	// No tool is in flight once the turn is idle: settle what a replayed transcript left running.
 	if (!s.isStreaming) settleRunningTools();
+	if (reviewOpened) setState("modal", "plan-review");
 }
 
 // ---------------------------------------------------------------------------

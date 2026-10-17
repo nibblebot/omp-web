@@ -23,6 +23,7 @@ import {
 	type WebSessionState,
 } from "#lib/wire/protocol";
 import type { SessionConfig } from "./config";
+import { planReviewWaiting } from "./review-plan";
 import type { SessionEntry } from "./session-entry";
 import { broadcast, broadcastTo } from "./sse-delivery";
 
@@ -46,7 +47,7 @@ export interface DaemonBrokerDeps {
 }
 
 export interface DaemonBroker {
-	buildStateSnapshot(session: AgentSession): WebSessionState;
+	buildStateSnapshot(entry: SessionEntry): WebSessionState;
 	broadcastState(entry: SessionEntry, withStats?: boolean): Promise<void>;
 	broadcastAvailableCommands(entry: SessionEntry): Promise<void>;
 	daemonInfoWithEndpoint(
@@ -136,7 +137,8 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 		}));
 	}
 
-	function buildStateSnapshot(session: AgentSession): WebSessionState {
+	function buildStateSnapshot(entry: SessionEntry): WebSessionState {
+		const session = entry.session;
 		return {
 			...deps.getWebState?.(session),
 			model: session.model,
@@ -174,6 +176,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			// Phase 9: cheap sync getters, refreshed on every state broadcast.
 			goalModeState: session.getGoalModeState(),
 			planModeEnabled: session.getPlanModeState()?.enabled ?? false,
+			planReviewPending: planReviewWaiting(entry),
 			fastModeEnabled: session.isFastModeEnabled(),
 			// 18.1.9 turned computer use into an eval prelude gated by the
 			// session-scoped `computer.enabled` setting; there is no longer a
@@ -187,7 +190,7 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 
 	async function broadcastState(entry: SessionEntry, withStats = false): Promise<void> {
 		const stats = withStats ? entry.session.getSessionStats() : undefined;
-		broadcastTo(entry.handle, { type: "state", state: buildStateSnapshot(entry.session), stats });
+		broadcastTo(entry.handle, { type: "state", state: buildStateSnapshot(entry), stats });
 	}
 
 	async function broadcastAvailableCommands(entry: SessionEntry): Promise<void> {

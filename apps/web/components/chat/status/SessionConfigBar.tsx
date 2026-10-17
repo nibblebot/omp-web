@@ -40,10 +40,10 @@ export const SessionConfigBar: Component = () => (
 		<Show when={state.planModeEnabled}>
 			<StatusSegment
 				class="badge plan-badge"
-				title="Plan mode, click to toggle (/plan)"
+				title="Plan mode on · click to exit"
 				onClick={planToggle}
 			>
-				plan
+				Plan mode
 			</StatusSegment>
 		</Show>
 		<RetryBadge />

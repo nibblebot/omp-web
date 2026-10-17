@@ -1,6 +1,6 @@
 import { createSignal, onMount, Show, type Component } from "solid-js";
+import { setState } from "../../state";
 import {
-	cancelPlan,
 	decidePlan,
 	planError,
 	planLoading,
@@ -10,13 +10,18 @@ import {
 	reviewAvailable,
 	unavailableReason,
 } from "../../store/review";
+import { Markdown } from "../ui/Markdown";
 
-/** Versioned plan review: approve / request changes / reopen / cancel with stale refusal. */
+/** Plan review sheet: the rendered plan, an optional note, and Approve / Refine / Reject. A
+ * decision that lands closes the sheet; a stale or failed one keeps it open with the error. */
 export const PlanReviewPanel: Component = () => {
 	const [note, setNote] = createSignal("");
 	onMount(() => {
 		if (reviewAvailable("planReview")) void refreshPlan();
 	});
+	const decide = async (decision: "approve" | "request_changes" | "dismiss") => {
+		if (await decidePlan(decision, note().trim() || undefined)) setState("modal", null);
+	};
 	if (!reviewAvailable("planReview"))
 		return <div class="msg-notice">{unavailableReason("planReview")}</div>;
 	return (
@@ -32,30 +37,41 @@ export const PlanReviewPanel: Component = () => {
 							<span class="picker-label">{review.title}</span> v{review.version} · {review.status}
 						</div>
 						<div class="picker-detail">{review.planFilePath}</div>
-						<input
-							class="picker-filter"
-							aria-label="Review note"
-							placeholder="Note (optional)…"
-							value={note()}
-							onInput={(e) => setNote(e.currentTarget.value)}
-						/>
-						<div class="graph-actions">
-							<button type="button" onClick={() => void decidePlan("approve", note() || undefined)}>
-								approve
-							</button>
-							<button
-								type="button"
-								onClick={() => void decidePlan("request_changes", note() || undefined)}
-							>
-								request changes
-							</button>
-							<button type="button" onClick={() => void reopenPlan()}>
-								reopen
-							</button>
-							<button type="button" onClick={() => void cancelPlan()}>
-								cancel
-							</button>
-						</div>
+						<Markdown src={review.content ?? ""} />
+						<Show
+							when={review.status === "waiting"}
+							fallback={
+								<div class="graph-actions">
+									<button type="button" onClick={() => void reopenPlan()}>
+										reopen
+									</button>
+								</div>
+							}
+						>
+							<textarea
+								class="picker-filter"
+								aria-label="Review note"
+								rows={3}
+								placeholder="Note for the agent. Required to refine."
+								value={note()}
+								onInput={(e) => setNote(e.currentTarget.value)}
+							/>
+							<div class="graph-actions">
+								<button type="button" onClick={() => void decide("approve")}>
+									approve
+								</button>
+								<button
+									type="button"
+									disabled={!note().trim()}
+									onClick={() => void decide("request_changes")}
+								>
+									refine
+								</button>
+								<button type="button" onClick={() => void decide("dismiss")}>
+									reject
+								</button>
+							</div>
+						</Show>
 					</div>
 				)}
 			</Show>

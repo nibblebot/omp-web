@@ -6,7 +6,6 @@ import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { cfgModelRoleStorage, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
-import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -77,7 +76,7 @@ import { createSettingsMethods } from "./settings-methods";
 import { cancelEntryUiRequests, rejectEntryUiRequests } from "./ui-context";
 import { createAnnotationMethods } from "./review-annotations";
 import { createGitReviewMethods } from "./review-git";
-import { createPlanReviewMethods } from "./review-plan";
+import { createPlanReviewMethods, exitPlanMode } from "./review-plan";
 import { createTodoMethods } from "./review-todos";
 import { createIntegrationMethods } from "./integrations-methods";
 import {
@@ -251,6 +250,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			// is active; direct/worktree daemons pass real paths and keep
 			// the SDK path semantics unchanged.
 			const target = await resolveSwitchSessionTarget(entry, arg);
+			await exitPlanMode(entry);
 			const ok = await session.switchSession(target);
 			if (ok) {
 				clearSubagents(entry);
@@ -364,7 +364,13 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			entry.session.setGoalModeState(a[0] as GoalModeState | undefined);
 		},
 		setPlanModeState: async (entry, a) => {
-			entry.session.setPlanModeState(a[0] as PlanModeState | undefined);
+			const next = a[0] as { enabled: boolean } | undefined;
+			if (!next?.enabled) return exitPlanMode(entry);
+			// Same path rule as the TUI (#getPlanFilePath): the session's reference path, else the SDK default.
+			entry.session.setPlanModeState({
+				enabled: true,
+				planFilePath: entry.session.getPlanReferencePath() || "local://PLAN.md",
+			});
 		},
 		// Goal runtime owns consent, budgets, and exclusion guards (goal-service).
 		goalCreate: (entry, a) =>

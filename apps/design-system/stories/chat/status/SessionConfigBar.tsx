@@ -46,5 +46,11 @@ export default defineStory({
 			seed: { compacting: true, planModeEnabled: true },
 			render: () => <SessionConfigBar />,
 		},
+		{
+			name: "Plan mode on",
+			description: "The Plan mode chip leads the row; clicking it exits plan mode.",
+			seed: { planModeEnabled: true },
+			render: () => <SessionConfigBar />,
+		},
 	],
 });

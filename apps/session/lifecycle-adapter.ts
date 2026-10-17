@@ -1,6 +1,7 @@
 import { lstat, open, readFile, realpath } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { tryAcquireSessionLease } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { exitPlanMode } from "./review-plan";
 import type { SessionEntry } from "./session-entry";
 import { clearSubagents } from "./subagent-mirror";
 
@@ -160,6 +161,7 @@ export function createLifecycleMethods(deps: LifecycleDeps) {
 				if (parent !== undefined && typeof parent !== "string")
 					throw new Error("Invalid parent session");
 				await stop(entry, true);
+				await exitPlanMode(entry);
 				const ok = await entry.session.newSession(parent ? { parentSession: parent } : undefined);
 				if (ok) await changed(entry);
 				return { cancelled: !ok };
