@@ -26,25 +26,13 @@ export function TranscriptOverview(props: AnalyticsProps) {
 	);
 }
 
-/** Small provenance marker: "live" (fresh JSONL) vs "db" (stats.db) for unsynced sessions. */
-function ProvenanceBadge(props: { src: "live" | "db" }) {
-	return (
-		<span
-			class="prov"
-			title={props.src === "live" ? "computed from the live session JSONL" : "from stats.db"}
-		>
-			{props.src}
-		</span>
-	);
-}
-
 function TranscriptOverviewBody(props: {
 	stats: SessionStats;
 	onPickTool: (name: string) => void;
 }) {
 	const s = () => props.stats;
 
-	/** Unsynced sessions mix fresh JSONL counts with empty stats.db columns; label the halves. */
+	/** Not in stats.db yet: tokens, cost and error figures are unknown, shown as a dash. */
 	const unsynced = () => !s().synced;
 
 	const maxTotalMs = createMemo(() => {
@@ -57,30 +45,13 @@ function TranscriptOverviewBody(props: {
 
 	return (
 		<>
-			<Show when={unsynced()}>
-				<div class="muted small prov-note">
-					Not in stats.db, tool counts and durations are read live from the session JSONL (
-					<span class="prov">live</span>); token, cost, and error figures come from stats.db (
-					<span class="prov">db</span>) and stay empty until the session is synced.
-				</div>
-			</Show>
 			<div class="cards">
 				<div class="tx-card">
-					<div class="label">
-						Tool calls{" "}
-						<Show when={unsynced()}>
-							<ProvenanceBadge src="live" />
-						</Show>
-					</div>
+					<div class="label">Tool calls </div>
 					<div class="value">{formatCompact(s().toolCalls)}</div>
 				</div>
 				<div class="tx-card">
-					<div class="label">
-						Longest call{" "}
-						<Show when={unsynced()}>
-							<ProvenanceBadge src="live" />
-						</Show>
-					</div>
+					<div class="label">Longest call </div>
 					<div
 						class="value"
 						title={longest() ? `${longest()!.toolName} · ${longest()!.toolCallId}` : undefined}
@@ -95,54 +66,29 @@ function TranscriptOverviewBody(props: {
 					</div>
 				</div>
 				<div class="tx-card">
-					<div class="label">
-						Session span{" "}
-						<Show when={unsynced()}>
-							<ProvenanceBadge src="live" />
-						</Show>
-					</div>
+					<div class="label">Session span </div>
 					<div class="value">{formatMs(s().spanMs)}</div>
 				</div>
 				<div class="tx-card">
-					<div class="label">
-						Tokens{" "}
-						<Show when={unsynced()}>
-							<ProvenanceBadge src="db" />
-						</Show>
-					</div>
-					<div class="value">{formatCompact(s().totals.tokens)}</div>
+					<div class="label">Tokens </div>
+					<div class="value">{unsynced() ? "—" : formatCompact(s().totals.tokens)}</div>
 				</div>
 				<div class="tx-card">
-					<div class="label">
-						Cost{" "}
-						<Show when={unsynced()}>
-							<ProvenanceBadge src="db" />
-						</Show>
-					</div>
-					<div class="value">{formatCost(s().totals.cost)}</div>
+					<div class="label">Cost </div>
+					<div class="value">{unsynced() ? "—" : formatCost(s().totals.cost)}</div>
 				</div>
 				<div class="tx-card">
-					<div class="label">
-						Error turns{" "}
-						<Show when={unsynced()}>
-							<ProvenanceBadge src="db" />
-						</Show>
+					<div class="label">Error turns </div>
+					<div classList={{ value: true, "value-err": !unsynced() && s().errors.length > 0 }}>
+						{unsynced() ? "—" : s().errors.length}
 					</div>
-					<div classList={{ value: true, "value-err": s().errors.length > 0 }}>
-						{s().errors.length}
-					</div>
-					<div class="value-note">capped at 100 in stats.db</div>
+					{unsynced() ? null : <div class="value-note">capped at 100 in stats.db</div>}
 				</div>
 			</div>
 
 			<div class="panels">
 				<section class="panel">
-					<h3>
-						Tool breakdown{" "}
-						<Show when={unsynced()}>
-							<ProvenanceBadge src="live" />
-						</Show>
-					</h3>
+					<h3>Tool breakdown </h3>
 					<Show
 						when={s().tools.length > 0}
 						fallback={<div class="muted">No tool calls in this session.</div>}
@@ -206,12 +152,7 @@ function TranscriptOverviewBody(props: {
 				</section>
 
 				<section class="panel">
-					<h3>
-						Latency per turn{" "}
-						<Show when={unsynced()}>
-							<ProvenanceBadge src="db" />
-						</Show>
-					</h3>
+					<h3>Latency per turn </h3>
 					<div class="latency">
 						<div class="latency-item">
 							<span class="latency-label">p50</span>

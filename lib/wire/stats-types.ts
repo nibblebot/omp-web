@@ -103,6 +103,73 @@ export interface SubagentInfo {
 	mtimeMs: number;
 }
 
+/** One time bucket (local calendar day) of the aggregate spend rollup. */
+export interface RollupBucket {
+	/** Bucket start, epoch ms, aligned to the requested UTC offset. */
+	ts: number;
+	cost: number;
+	tokens: number;
+	turns: number;
+	toolCalls: number;
+	errors: number;
+}
+
+/** One named series aligned index-for-index with `StatsRollup.buckets`. */
+export interface RollupSeries {
+	name: string;
+	values: number[];
+}
+
+export interface RollupModel {
+	model: string;
+	provider: string;
+	turns: number;
+	tokens: number;
+	cost: number;
+	errors: number;
+}
+
+export interface RollupTool {
+	name: string;
+	calls: number;
+	errors: number;
+}
+
+export interface RollupProject {
+	/** Project folder name as stored (lossy; display only). */
+	folder: string;
+	sessions: number;
+	tokens: number;
+	cost: number;
+}
+
+/**
+ * GET /ctl/stats/rollup?days=<1..365, default 30>&offset=<minutes east of UTC, default 0>.
+ * Aggregate cost / model / tool figures over time from stats.db; 503 when the DB is unavailable.
+ * `buckets` has exactly `days` entries (oldest first, zero-filled); series align to it.
+ */
+export interface StatsRollup {
+	days: number;
+	/** Window start (start of the oldest bucket), epoch ms. */
+	since: number;
+	buckets: RollupBucket[];
+	/** Cost per bucket for the top models (at most 6, rest folded into "other"). */
+	modelSeries: RollupSeries[];
+	/** Call count per bucket for the top tools (at most 6, rest folded into "other"). */
+	toolSeries: RollupSeries[];
+	models: RollupModel[];
+	tools: RollupTool[];
+	projects: RollupProject[];
+	totals: {
+		sessions: number;
+		turns: number;
+		tokens: number;
+		cost: number;
+		toolCalls: number;
+		errors: number;
+	};
+}
+
 /** GET /ctl/stats/sessions envelope. `total` is the count before the 2000 cap; `truncated` true when the cap cut the list. */
 export interface SessionsResponse {
 	sessions: SessionSummary[];

@@ -75,7 +75,7 @@ describe("groupSessionsByProject", () => {
 		const groups = groupSessionsByProject(list);
 		expect(groups).toHaveLength(1);
 		expect(groups[0]!.key).toBe("proj-x");
-		// Header label stays the folder.
+		// Header label is the folder when there is no cwd.
 		expect(groups[0]!.label).toBe("proj-x");
 		expect(groups[0]!.sessions.map((s) => s.file)).toEqual(["x/one.jsonl", "x/two.jsonl"]);
 	});
@@ -98,8 +98,8 @@ describe("groupSessionsByProject", () => {
 		];
 		const groups = groupSessionsByProject(list);
 		expect(groups.map((g) => g.key)).toEqual(["/w/proj-a", "/w/proj-a-wt1"]);
-		// Both headers carry the folder label for disambiguation.
-		expect(groups.map((g) => g.label)).toEqual(["proj-a", "proj-a"]);
+		// Labels are the cwd project names, so the two worktrees stay distinguishable.
+		expect(groups.map((g) => g.label)).toEqual(["proj-a", "proj-a-wt1"]);
 	});
 
 	test("empty input yields no groups", () => {

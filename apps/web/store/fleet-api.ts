@@ -12,6 +12,7 @@ import type {
 	SessionsResponse,
 	SessionStats,
 	SessionSummary,
+	StatsRollup,
 	StoredFileInfo,
 	StoredSessionDetail,
 	StoredSessionSummary,
@@ -42,6 +43,7 @@ export type {
 	SessionsResponse,
 	SessionStats,
 	SessionSummary,
+	StatsRollup,
 	StoredFileInfo,
 	StoredSessionDetail,
 	StoredSessionSummary,
@@ -155,6 +157,10 @@ export const api = {
 			offset: offset ?? undefined,
 			limit,
 		}),
+
+	/** Aggregate spend, model and tool figures by local day; offset = minutes east of UTC. */
+	rollup: (days: number, offsetMinutes: number) =>
+		fetchJson<StatsRollup>("/ctl/stats/rollup", { days, offset: offsetMinutes }),
 
 	/** Server envelope is { subagents: SubagentInfo[] }; accept a bare array defensively too. */
 	subagents: async (file: string): Promise<SubagentInfo[]> => {

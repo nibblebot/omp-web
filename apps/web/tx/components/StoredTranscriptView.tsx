@@ -13,7 +13,6 @@
  * "unavailable" } } and renders an explicit notice, never a broken link.
  */
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { createVirtualizer } from "@tanstack/solid-virtual";
 import type { RawEntry } from "../../store/fleet-api";
 import { api, ApiError } from "../../store/fleet-api";
 import { createCollapseStore, RowStateCtx } from "./transcript/collapse";
@@ -108,32 +107,6 @@ function StoredTranscriptController(props: StoredTranscriptControllerProps) {
 
 	const rows = createMemo(() => buildDayRows(visible()));
 
-	const virtualizer = createVirtualizer({
-		get count() {
-			return rows().length;
-		},
-		getScrollElement: () => listRef?.closest(".tx-main") ?? null,
-		estimateSize: () => 220,
-		overscan: 10,
-		measureElement: (el) => el.getBoundingClientRect().height,
-	});
-
-	// Remeasure after collapse/expand toggles and filter changes; page
-	// appends leave existing row sizes untouched and measure only newly
-	// mounted rows via their refs.
-	createEffect(() => {
-		store.collapsedIds();
-		store.details();
-		void hideSystem();
-		queueMicrotask(() => {
-			virtualizer.measure();
-			for (const vi of virtualizer.getVirtualItems()) {
-				const el = virtualizer.elementsCache.get(vi.key);
-				if (el) virtualizer.measureElement(el);
-			}
-		});
-	});
-
 	const transcriptVisible = () => {
 		const el = listRef;
 		return el !== undefined && el.getBoundingClientRect().height > 0;
@@ -156,13 +129,6 @@ function StoredTranscriptController(props: StoredTranscriptControllerProps) {
 		if (list && typeof ResizeObserver === "function") {
 			const ro = new ResizeObserver(() => {
 				if (list.getBoundingClientRect().height <= 0) return;
-				queueMicrotask(() => {
-					virtualizer.measure();
-					for (const vi of virtualizer.getVirtualItems()) {
-						const el2 = virtualizer.elementsCache.get(vi.key);
-						if (el2) virtualizer.measureElement(el2);
-					}
-				});
 				maybeLoadMore();
 			});
 			ro.observe(list);
@@ -218,42 +184,19 @@ function StoredTranscriptController(props: StoredTranscriptControllerProps) {
 				</Show>
 
 				<div class="transcript-list" ref={listRef}>
-					<div
-						class="transcript-space"
-						style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}
-					>
-						<For each={virtualizer.getVirtualItems()}>
-							{(vi) => {
-								const row = rows()[vi.index];
-								if (!row) return null;
-								return (
-									<div
-										class="transcript-vrow"
-										data-index={vi.index}
-										data-kind={row.kind}
-										ref={(el) => {
-											if (el) virtualizer.measureElement(el);
-										}}
-										style={{
-											position: "absolute",
-											top: 0,
-											left: 0,
-											width: "100%",
-											transform: `translateY(${vi.start}px)`,
-										}}
-									>
-										{row.kind === "day" ? (
-											<div class="day-sep">
-												<span>{row.label}</span>
-											</div>
-										) : (
-											<TranscriptEntryRow entry={row.entry} pairing={pairing()} />
-										)}
+					<For each={rows()}>
+						{(row) => (
+							<div class="transcript-vrow" data-kind={row.kind}>
+								{row.kind === "day" ? (
+									<div class="day-sep">
+										<span>{row.label}</span>
 									</div>
-								);
-							}}
-						</For>
-					</div>
+								) : (
+									<TranscriptEntryRow entry={row.entry} pairing={pairing()} />
+								)}
+							</div>
+						)}
+					</For>
 					<Show when={loading() && entries().length === 0}>
 						<div class="hint">Loading transcript…</div>
 					</Show>

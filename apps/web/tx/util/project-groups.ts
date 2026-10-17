@@ -1,8 +1,9 @@
+import { projectLabelFromCwd } from "../../store/session-list";
 import type { SessionSummary } from "../../store/fleet-api";
 
 /**
  * Partition a server-returned session list (already most-recent-first) into
- * project groups. Group key: `cwd ?? folder`; header label: `folder`.
+ * project groups. Group key: `cwd ?? folder`; header label: the cwd's project name, else `folder`.
  *
  * Sessions keep the server's per-session order inside their group, so each
  * group stays recent-first. Groups are ordered by their most-recent member:
@@ -25,9 +26,8 @@ export function groupSessionsByProject(
 		const key = s.cwd ?? s.folder;
 		let group = byKey.get(key);
 		if (group === undefined) {
-			// Key falls back to folder, so it is never empty when present;
-			// the label keeps the folder (lossy display name) either way.
-			group = { key, label: s.folder, sessions: [] };
+			// Label is the project name (last cwd segment); folder is the lossy fallback.
+			group = { key, label: s.cwd ? projectLabelFromCwd(s.cwd) : s.folder, sessions: [] };
 			byKey.set(key, group);
 		}
 		group.sessions.push(s);

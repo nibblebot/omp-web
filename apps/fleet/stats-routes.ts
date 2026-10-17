@@ -24,6 +24,7 @@ import {
 	resultText,
 } from "./stats-jsonl";
 import type { AppCtx, Route } from "./stats-types";
+import { rollupRoute } from "./stats-rollup";
 import type {
 	SessionStats,
 	ToolStat,
@@ -474,5 +475,5 @@ function statsRoute(ctx: AppCtx): Route {
 }
 
 export function register(ctx: AppCtx, routes: Route[]): void {
-	routes.push(toolsRoute(ctx), statsRoute(ctx));
+	routes.push(toolsRoute(ctx), statsRoute(ctx), rollupRoute(ctx));
 }

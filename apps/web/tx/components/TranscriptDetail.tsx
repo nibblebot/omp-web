@@ -17,6 +17,12 @@ interface TranscriptDetailProps {
 	file: string;
 	/** bumped after a stats sync so overview data refetches */
 	syncTick: () => number;
+	/** bumped while a turn streams so the open transcript tails */
+	liveTick?: () => number;
+	/** subagent file from the route (`?sub=`); null shows the main transcript */
+	sub: string | null;
+	/** opens (file) or leaves (null) a subagent transcript; the route owns the state */
+	onSub: (sf: string | null) => void;
 }
 
 /**
@@ -29,8 +35,7 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 	const [tab, setTab] = createSignal<Tab>("overview");
 	/** Transcript tool filter; analytics table rows set it, the transcript applies it. */
 	const [toolFilter, setToolFilter] = createSignal<string | null>(null);
-	/** When set, the Transcript tab shows this subagent file's transcript instead. */
-	const [subFile, setSubFile] = createSignal<string | null>(null);
+	const subFile = () => props.sub;
 
 	const transcriptFile = () => subFile() ?? file();
 
@@ -68,7 +73,7 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 	const headSafe = () => (head.error ? null : head());
 
 	const openSubagent = (f: string) => {
-		setSubFile(f);
+		props.onSub(f);
 		setTab("transcript");
 	};
 
@@ -168,10 +173,11 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 				<TranscriptView
 					file={transcriptFile()}
 					isSub={subFile() !== null}
-					onBackToMain={() => setSubFile(null)}
+					onBackToMain={() => props.onSub(null)}
 					tools={toolsForTranscript}
 					toolFilter={toolFilter()}
 					onToolFilter={setToolFilter}
+					liveTick={props.liveTick}
 				/>
 			</section>
 

@@ -1,12 +1,12 @@
 /**
- * TranscriptView: paging controller + tool-call pairing + virtualized row
- * rendering for one session transcript (main session or a subagent's).
+ * TranscriptView: paging controller + tool-call pairing + row rendering for one
+ * session transcript (main session or a subagent's).
  *
  * - Paging: pages of PAGE_SIZE are fetched automatically as the user scrolls
  *   near the end of the loaded window (no load-more button); the viewport is
  *   topped up after each successful load.
- * - Virtualization: only viewport-bound rows exist in the DOM
- *   (@tanstack/solid-virtual, overscan 10, measured variable heights).
+ * - Rendering: every loaded row is plain flow content (no virtualizer). Long
+ *   transcripts stay cheap because .transcript-list rows use content-visibility.
  * - Pairing: tool-call pairing maps are computed once per entries change over
  *   ALL loaded entries (pairing.ts); toolResults pair with their call's
  *   execution start across page boundaries; calls with a start but no result
@@ -16,8 +16,16 @@
  * - Load errors show "Failed to load transcript" + Retry, re-fetching the
  *   current window from inside this controller.
  */
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { createVirtualizer } from "@tanstack/solid-virtual";
+import {
+	For,
+	Show,
+	createEffect,
+	createMemo,
+	createSignal,
+	on,
+	onCleanup,
+	onMount,
+} from "solid-js";
 import type { RawEntry } from "../../../store/fleet-api";
 import { api, type TranscriptPage } from "../../../store/fleet-api";
 import { basename } from "../../util/format";
@@ -45,6 +53,8 @@ export interface TranscriptProps {
 	tools: () => string[];
 	toolFilter: string | null;
 	onToolFilter: (name: string | null) => void;
+	/** Live tick (session running in Chat): refetch the loaded pages. */
+	liveTick?: () => number;
 }
 
 /** ?tool= + hide-system filtering; only the main-session view ever filters. */
@@ -68,8 +78,6 @@ export function filterTranscriptEntries(
 		} else if (isMessage(e) && messageRole(e) === "toolResult") {
 			const id = toolCallIdOf(e);
 			if (id && keptCalls.has(id)) out.push(e);
-		} else {
-			out.push(e);
 		}
 	}
 	return out;
@@ -93,10 +101,8 @@ export type TranscriptRow =
 /**
  * Maps filtered entries to the virtualized row list, inserting a day
  * separator whenever the local calendar day changes between consecutive
- * entries. Separators are ROWS, not entries: they participate in the
- * virtualizer's count/index/measurement (overscan included), but the
- * "N of M entries" progress line keeps counting entries only
- * (visible().length). Entries without a usable timestamp never emit a
+ * entries. Separators are ROWS, not entries; the "N of M entries" progress line keeps
+ * counting entries only. Entries without a usable timestamp never emit a
  * separator and never advance the running day.
  */
 export function buildDayRows(entries: readonly RawEntry[]): TranscriptRow[] {
@@ -123,7 +129,8 @@ export function TranscriptView(props: TranscriptProps) {
 	const [nextOffset, setNextOffset] = createSignal<number | null>(null);
 	const [loading, setLoading] = createSignal(false);
 	const [loadErr, setLoadErr] = createSignal<string | null>(null);
-	const [hideSystem, setHideSystem] = createSignal(false);
+	const [hideSystem, setHideSystem] = createSignal(true);
+	const [find, setFind] = createSignal("");
 	const [lastPage, setLastPage] = createSignal<LastPageMeta | null>(null);
 	const [failedOffset, setFailedOffset] = createSignal<number | null>(null);
 
@@ -173,6 +180,42 @@ export function TranscriptView(props: TranscriptProps) {
 		void loadPage(null);
 	});
 
+	/** Re-fetch every page in order and swap the list in one update (live tail). */
+	const reloadLoaded = async () => {
+		const my = ++seq;
+		setLoading(true);
+		const next: RawEntry[] = [];
+		let offset: number | null = null;
+		let meta: LastPageMeta | null = null;
+		try {
+			do {
+				const page = await api.transcript(props.file, offset, PAGE_SIZE);
+				if (my !== seq) return;
+				next.push(...page.entries);
+				offset = page.nextOffset;
+				meta = { totalLines: page.totalLines };
+			} while (offset !== null);
+		} catch {
+			// Keep the last good render; the next tick retries.
+			if (my === seq) setLoading(false);
+			return;
+		}
+		if (my !== seq) return;
+		setEntries(next);
+		setNextOffset(null);
+		setLastPage(meta);
+		setLoading(false);
+	};
+	createEffect(
+		on(
+			() => props.liveTick?.() ?? 0,
+			() => {
+				if (!props.isSub && !loading()) void reloadLoaded();
+			},
+			{ defer: true },
+		),
+	);
+
 	onCleanup(() => {
 		seq += 1;
 	});
@@ -182,41 +225,24 @@ export function TranscriptView(props: TranscriptProps) {
 		if (props.isSub && props.toolFilter !== null) props.onToolFilter(null);
 	});
 
-	/** Filtered rows: ?tool= + hide-system apply to the main view only. */
-	const visible = createMemo(() =>
-		filterTranscriptEntries(entries(), props.isSub ? null : props.toolFilter, hideSystem()),
+	/** Main-view ?tool= and hide-system filters, then the find box (both views). */
+	const visible = createMemo(() => {
+		const base = filterTranscriptEntries(
+			entries(),
+			props.isSub ? null : props.toolFilter,
+			hideSystem(),
+		);
+		const needle = find().trim().toLowerCase();
+		if (needle === "") return base;
+		return base.filter((e) => JSON.stringify(e).toLowerCase().includes(needle));
+	});
+	/** System entries the hide-system default conceals in the main view. */
+	const hiddenCount = createMemo(() =>
+		hideSystem() && !props.isSub ? entries().filter((e) => !isMessage(e)).length : 0,
 	);
 
-	/** Virtual rows: filtered entries + day-group separators. */
+	/** Rows: filtered entries plus day-group separators. */
 	const rows = createMemo(() => buildDayRows(visible()));
-
-	const virtualizer = createVirtualizer({
-		get count() {
-			return rows().length;
-		},
-		getScrollElement: () => listRef?.closest(".tx-main") ?? null,
-		estimateSize: () => 220,
-		overscan: 10,
-		measureElement: (el) => el.getBoundingClientRect().height,
-	});
-
-	// Remeasure after collapse/expand toggles and filter changes (row heights
-	// vary); page appends leave existing row sizes untouched and measure only
-	// the newly mounted rows via their refs.
-	createEffect(() => {
-		store.collapsedIds();
-		store.details();
-		void props.isSub;
-		void props.toolFilter;
-		void hideSystem();
-		queueMicrotask(() => {
-			virtualizer.measure();
-			for (const vi of virtualizer.getVirtualItems()) {
-				const el = virtualizer.elementsCache.get(vi.key);
-				if (el) virtualizer.measureElement(el);
-			}
-		});
-	});
 
 	/** The transcript may sit in a CSS-hidden tab (TranscriptDetail keeps tabs mounted). */
 	const transcriptVisible = () => {
@@ -237,18 +263,11 @@ export function TranscriptView(props: TranscriptProps) {
 		const el = listRef?.closest(".tx-main");
 		el?.addEventListener("scroll", maybeLoadMore);
 		onCleanup(() => el?.removeEventListener("scroll", maybeLoadMore));
-		// Tab reveal (hidden → visible) re-arms paging + remeasures 0-height rows.
+		// Tab reveal (hidden → visible) re-arms paging.
 		const list = listRef;
 		if (list && typeof ResizeObserver === "function") {
 			const ro = new ResizeObserver(() => {
 				if (list.getBoundingClientRect().height <= 0) return;
-				queueMicrotask(() => {
-					virtualizer.measure();
-					for (const vi of virtualizer.getVirtualItems()) {
-						const el2 = virtualizer.elementsCache.get(vi.key);
-						if (el2) virtualizer.measureElement(el2);
-					}
-				});
 				maybeLoadMore();
 			});
 			ro.observe(list);
@@ -292,6 +311,14 @@ export function TranscriptView(props: TranscriptProps) {
 							</button>
 						</Show>
 					</Show>
+					<input
+						type="search"
+						class="tx-find"
+						aria-label="Find in transcript"
+						placeholder="Find in transcript"
+						value={find()}
+						onInput={(e) => setFind(e.currentTarget.value)}
+					/>
 					<button class="btn btn-small" onClick={store.expandEverything}>
 						expand all
 					</button>
@@ -313,7 +340,16 @@ export function TranscriptView(props: TranscriptProps) {
 						{visible().length} of {progressM()} {progressM() === 1 ? "entry" : "entries"}
 					</span>
 				</div>
-
+				<Show when={hiddenCount() > 0}>
+					<div class="tx-hidden-row">
+						<span>
+							{hiddenCount()} system {hiddenCount() === 1 ? "entry" : "entries"} hidden
+						</span>
+						<button class="btn btn-small" onClick={() => setHideSystem(false)}>
+							show
+						</button>
+					</div>
+				</Show>
 				<Show when={loadErr()}>
 					{(err) => (
 						<div class="tx-error-banner">
@@ -324,49 +360,28 @@ export function TranscriptView(props: TranscriptProps) {
 						</div>
 					)}
 				</Show>
-
 				<div class="transcript-list" ref={listRef}>
-					<div
-						class="transcript-space"
-						style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}
-					>
-						<For each={virtualizer.getVirtualItems()}>
-							{(vi) => {
-								const row = rows()[vi.index];
-								if (!row) return null;
-								return (
-									<div
-										class="transcript-vrow"
-										data-index={vi.index}
-										data-kind={row.kind}
-										ref={(el) => {
-											if (el) virtualizer.measureElement(el);
-										}}
-										style={{
-											position: "absolute",
-											top: 0,
-											left: 0,
-											width: "100%",
-											transform: `translateY(${vi.start}px)`,
-										}}
-									>
-										{row.kind === "day" ? (
-											<div class="day-sep">
-												<span>{row.label}</span>
-											</div>
-										) : (
-											<TranscriptEntryRow entry={row.entry} pairing={pairing()} />
-										)}
+					<For each={rows()}>
+						{(row) => (
+							<div class="transcript-vrow" data-kind={row.kind}>
+								{row.kind === "day" ? (
+									<div class="day-sep">
+										<span>{row.label}</span>
 									</div>
-								);
-							}}
-						</For>
-					</div>
+								) : (
+									<TranscriptEntryRow entry={row.entry} pairing={pairing()} />
+								)}
+							</div>
+						)}
+					</For>
 					<Show when={loading() && entries().length === 0}>
 						<div class="hint">Loading transcript…</div>
 					</Show>
 					<Show when={!loadErr() && entries().length === 0 && !loading()}>
 						<div class="hint">No entries in this session.</div>
+					</Show>
+					<Show when={entries().length > 0 && visible().length === 0}>
+						<div class="hint">No entries match the current filters.</div>
 					</Show>
 					<Show when={loading() && entries().length > 0}>
 						<div class="hint">Loading…</div>

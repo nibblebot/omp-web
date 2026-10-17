@@ -310,9 +310,6 @@
   outline: 2px solid var(--tx-accent);
   outline-offset: -2px;
 }
-.session-row.unsynced {
-  opacity: 0.55;
-}
 .session-row.missing .row-title {
   text-decoration: line-through;
   text-decoration-color: var(--tx-text-faint);
@@ -614,21 +611,6 @@
   color: var(--tx-text-dim);
   font-weight: 400;
   margin-top: 2px;
-}
-.prov {
-  font-size: var(--tx-fs-xs);
-  font-weight: 500;
-  color: var(--tx-text-faint);
-  border: 1px solid var(--tx-border);
-  border-radius: 3px;
-  padding: 0 4px;
-  margin-left: 5px;
-  vertical-align: 1px;
-  white-space: nowrap;
-}
-.prov-note {
-  margin-bottom: 10px;
-  line-height: 1.5;
 }
 .value-err {
   color: var(--tx-err);
@@ -1515,13 +1497,10 @@
     transition: none;
   }
 }
-/* ---------- transcript: virtualized rows + a11y (transcript-scoped) ---------- */
-/* Virtualized list: absolute-positioned rows inside the measured spacer. */
+/* ---------- transcript: rows + a11y (transcript-scoped) ---------- */
+/* Transcript list container: plain flow rows (see .transcript-vrow below). */
 .transcript-list {
   display: block;
-}
-.transcript-vrow {
-  padding-bottom: 10px;
 }
 /* Clickable row headers are <button>s (a11y); keep the old visual row layout. */
 .tx-msg-toggle,
@@ -1844,4 +1823,111 @@ button.stored-file-row.unavailable {
 .resume-ok {
   color: var(--tx-ok);
   font-size: var(--tx-fs-base);
+}
+
+.transcript-list > .transcript-vrow {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
+}
+.tx-find {
+  flex: 1 1 180px;
+  min-width: 140px;
+  max-width: 260px;
+}
+.tx-hidden-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+  color: var(--tx-text-faint);
+  font-size: var(--tx-fs-sm);
+}
+.row-muted {
+  color: var(--tx-text-faint);
+  font-size: var(--tx-fs-sm);
+}
+.spend-panel {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 16px 20px;
+}
+.spend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.spend-head h2 {
+  font-size: var(--tx-fs-xl);
+}
+.spend-range {
+  display: flex;
+  gap: 4px;
+}
+.spend-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin: 0 0 14px;
+}
+.spend-kpi {
+  background: var(--tx-bg-panel);
+  border: 1px solid var(--tx-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.spend-kpi dt {
+  font-size: var(--tx-fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--tx-text-faint);
+}
+.spend-kpi dd {
+  margin: 2px 0 0;
+  font-size: var(--tx-fs-xl);
+  font-weight: 600;
+}
+.spend-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 90px;
+  margin-bottom: 16px;
+}
+.spend-bar {
+  flex: 1 1 0;
+  min-width: 2px;
+  background: var(--tx-accent-dim);
+  border-radius: 2px 2px 0 0;
+}
+.spend-tables {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.spend-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--tx-fs-sm);
+}
+.spend-table th,
+.spend-table td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--tx-border);
+}
+.spend-table th:not(:first-child),
+.spend-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.spend-status {
+  color: var(--tx-text-faint);
+}
+.spend-foot {
+  margin-top: 12px;
+  color: var(--tx-text-faint);
+  font-size: var(--tx-fs-sm);
 }

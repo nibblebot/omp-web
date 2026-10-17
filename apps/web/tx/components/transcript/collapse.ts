@@ -69,6 +69,8 @@ export function createCollapseStore(): CollapseStore {
 			const st = details();
 			const manual = st.manual[key];
 			if (manual !== undefined) return manual;
+			// RAW JSON is opt-in per entry; expand-all opens the formatted content only.
+			if (key.endsWith(":raw")) return false;
 			return st.expandAll ?? false;
 		},
 		setDetailsOpen: (key, open) =>

@@ -219,10 +219,14 @@ function sessionsRoute(ctx: AppCtx): Route {
 				list = list.filter((s) => keep.has(normDbFile(cfg.sessionsDir, s.file)));
 			}
 
-			// 3 (cont). q filter: case-insensitive substring on title OR cwd.
+			// 3 (cont). q filter: case-insensitive substring on title, cwd, id, or project folder.
 			if (q) {
 				list = list.filter(
-					(s) => s.title?.toLowerCase().includes(q) || s.cwd?.toLowerCase().includes(q),
+					(s) =>
+						s.title?.toLowerCase().includes(q) ||
+						s.cwd?.toLowerCase().includes(q) ||
+						s.id?.toLowerCase().includes(q) ||
+						s.folder?.toLowerCase().includes(q),
 				);
 			}
 

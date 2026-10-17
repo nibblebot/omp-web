@@ -8,14 +8,18 @@ import { TranscriptList } from "./components/TranscriptList";
 import { StoredSessionList } from "./components/StoredSessionList";
 import { StoredSessionPage } from "./components/StoredSessionPage";
 import { ResumeCloneDialog } from "./components/ResumeCloneDialog";
+import { SpendPanel } from "./components/SpendPanel";
 import { decodeFileFromHash, formatBytes } from "./util/format";
 type Route =
 	| { view: "list" }
-	| { view: "session"; file: string }
+	| { view: "session"; file: string; sub: string | null }
 	| { view: "stored"; workspaceId: string; sessionId: string };
 
 /** Debounce for stats auto-sync: coalesces bursts of turn ends and session opens. */
 const AUTO_SYNC_DEBOUNCE_MS = 1_500;
+
+/** Live tail: while a turn streams, the open transcript refetches on this cadence. */
+const LIVE_TAIL_INTERVAL_MS = 4_000;
 
 /** Decode a single individually-encoded path segment; null on malformed input. */
 function decodeSegment(encoded: string): string | null {
@@ -26,16 +30,20 @@ function decodeSegment(encoded: string): string | null {
 	}
 }
 
-/** Parse `#/s/<encoded-file>` (segments individually encoded, `/` separators literal). */
+/** Parse `#/s/<encoded-file>[?sub=<encoded-subagent-file>]`; segments individually encoded. */
 function parseHash(): Route {
-	const raw = window.location.hash.replace(/^#\/?/, "");
+	const hash = window.location.hash.replace(/^#\/?/, "");
+	const qAt = hash.indexOf("?");
+	const raw = qAt === -1 ? hash : hash.slice(0, qAt);
 	if (raw === "" || raw === "/") return { view: "list" };
 	const parts = raw.split("/");
 	if (parts[0] === "s") {
 		const encoded = parts.slice(1).join("/");
 		if (encoded === "") return { view: "list" };
 		const file = decodeFileFromHash(encoded);
-		return file !== null ? { view: "session", file } : { view: "list" };
+		if (file === null) return { view: "list" };
+		const sub = qAt === -1 ? null : new URLSearchParams(hash.slice(qAt + 1)).get("sub");
+		return { view: "session", file, sub: sub || null };
 	}
 	// #/stored/<workspaceId>/<sessionId>, each exactly one safe segment.
 	if (parts[0] === "stored") {
@@ -85,6 +93,10 @@ export function TranscriptBrowser() {
 		const r = route();
 		return r.view === "session" ? r.file : null;
 	};
+	const sub = () => {
+		const r = route();
+		return r.view === "session" ? r.sub : null;
+	};
 	/** Stats auto-sync: opening a session or ending a turn refreshes stats.db (debounced). */
 	let autoSyncTimer: number | undefined;
 	const scheduleAutoSync = () => {
@@ -117,18 +129,39 @@ export function TranscriptBrowser() {
 		window.location.hash = `#/s/${encodePathSegments(f)}`;
 	};
 
+	/** Open a subagent transcript inside the current session route (null returns to main). */
+	const navigateSub = (sf: string | null) => {
+		const f = file();
+		if (f === null) return;
+		const base = `#/s/${encodePathSegments(f)}`;
+		window.location.hash = sf === null ? base : `${base}?sub=${encodeURIComponent(sf)}`;
+	};
+
 	const navigateStored = (workspaceId: string, sessionId: string) => {
 		window.location.hash = `#/stored/${encodePathSegments(workspaceId)}/${encodePathSegments(
 			sessionId,
 		)}`;
 	};
 
-	// Missing-file fallback (TranscriptList observes the loaded sessions):
-	// clearing the hash fires hashchange, the route becomes the list, and
-	// nothing stays selected.
-	const handleMissingFile = () => {
+	// Deep-linked file that is gone from disk: say so instead of silently listing.
+	const [missingFile, setMissingFile] = createSignal<string | null>(null);
+	const shownFile = () => {
+		const f = file();
+		return f !== null && f !== missingFile() ? f : null;
+	};
+	const backToSpend = () => {
+		setMissingFile(null);
 		if (window.location.hash !== "") window.location.hash = "";
 	};
+	const handleMissingFile = (f: string) => setMissingFile(f);
+
+	/** Bumped every few seconds while a turn streams so the open transcript tails. */
+	const [liveTick, setLiveTick] = createSignal(0);
+	createEffect(() => {
+		if (!state.streaming) return;
+		const id = window.setInterval(() => setLiveTick((t) => t + 1), LIVE_TAIL_INTERVAL_MS);
+		onCleanup(() => clearInterval(id));
+	});
 
 	return (
 		<div class="tx-app">
@@ -171,15 +204,32 @@ export function TranscriptBrowser() {
 					<Show when={storedRoute()} keyed>
 						{(r) => <StoredSessionPage workspaceId={r.workspaceId} sessionId={r.sessionId} />}
 					</Show>
-					<Show when={file()} keyed>
-						{(f) => <TranscriptDetail file={f} syncTick={syncTick} />}
-					</Show>
-					<Show when={!file() && !storedRoute()}>
+					<Show when={missingFile() !== null && missingFile() === file()}>
 						<div class="tx-empty-state">
-							<h2>Transcripts</h2>
-							<p>Browse every omp agent session: analytics, transcripts, and subagents.</p>
-							<p class="muted">Select a session from the sidebar to begin.</p>
+							<h2>Session not found</h2>
+							<p>
+								This session file is no longer on disk: <code>{file()}</code>
+							</p>
+							<p>
+								<button type="button" class="btn" onClick={backToSpend}>
+									Back to spend overview
+								</button>
+							</p>
 						</div>
+					</Show>
+					<Show when={shownFile()} keyed>
+						{(f) => (
+							<TranscriptDetail
+								file={f}
+								syncTick={syncTick}
+								liveTick={liveTick}
+								sub={sub()}
+								onSub={navigateSub}
+							/>
+						)}
+					</Show>
+					<Show when={file() === null && !storedRoute()}>
+						<SpendPanel health={healthSafe} syncTick={syncTick} />
 					</Show>
 				</main>
 			</div>

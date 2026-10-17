@@ -176,13 +176,13 @@ describe("collapse store", () => {
 		expect(s.ctx.detailsOpen("e1:tc-args:0")).toBe(true); // manual state kept
 	});
 
-	test("expand-all then manual collapse: appends follow expand-all, manual stays closed", () => {
+	test("expand-all opens content rows but keeps raw details closed; manual toggles stick", () => {
 		const s = createCollapseStore();
 		s.expandEverything();
-		s.ctx.setDetailsOpen("e1:raw", false); // user re-collapses one manually
-		// New page arrives:
-		expect(s.ctx.detailsOpen("e2:raw")).toBe(true); // follows expand-all
-		expect(s.ctx.detailsOpen("e1:raw")).toBe(false); // manual toggle NOT clobbered
+		s.ctx.setDetailsOpen("e1", false); // user collapses one content row manually
+		expect(s.ctx.detailsOpen("e2")).toBe(true); // follows expand-all
+		expect(s.ctx.detailsOpen("e1")).toBe(false); // manual toggle NOT clobbered
+		expect(s.ctx.detailsOpen("e2:raw")).toBe(false); // raw stays closed (ANA-09)
 	});
 
 	test("collapse-all closes every details and collapses every card id", () => {
@@ -219,9 +219,9 @@ describe("filterTranscriptEntries", () => {
 		toolResult("r2", "call-read-1", "code"),
 	];
 
-	test("tool filter keeps matching assistant messages, their results, and system rows", () => {
+	test("tool filter drops context rows and keeps matching calls and their results", () => {
 		const out = filterTranscriptEntries(entries, "web_search", false);
-		expect(out.map((e) => e.id)).toEqual(["f1", "a1", "r1"]);
+		expect(out.map((e) => e.id)).toEqual(["a1", "r1"]);
 	});
 
 	test("subagent view passes a null filter, nothing is filtered out", () => {
