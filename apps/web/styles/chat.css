@@ -424,6 +424,14 @@ pre {
 	max-width: 140px;
 	max-height: 110px;
 }
+@media (max-width: 767px) {
+	.img-thumb,
+	.advisor-open,
+	.code-copy-btn {
+		min-width: 44px;
+		min-height: 44px;
+	}
+}
 /* Per-message hover/focus toolbar (user: branch + copy; assistant: copy). */
 .msg-toolbar {
 	position: absolute;

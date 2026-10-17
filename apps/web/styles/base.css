@@ -125,3 +125,8 @@ button:not(:disabled):not(.active):hover {
 summary.card-header {
 	cursor: pointer;
 }
+@media (max-width: 767px) {
+	details > summary {
+		min-height: 44px;
+	}
+}

@@ -155,6 +155,10 @@
 	.main-header .goal-badge-budget {
 		display: none;
 	}
+	.main-header-btn {
+		min-width: 44px;
+		min-height: 44px;
+	}
 }
 @media (max-width: 359px) {
 	.main-header .goal-badge {

@@ -489,4 +489,11 @@ pre.terminal.eval-code {
 		min-height: 44px;
 		align-items: center;
 	}
+	.search-path,
+	.websearch-link {
+		min-height: 44px;
+		max-width: 100%;
+		display: inline-flex;
+		align-items: center;
+	}
 }
