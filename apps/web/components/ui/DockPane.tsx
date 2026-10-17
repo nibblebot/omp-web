@@ -50,8 +50,15 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 		}
 	};
 
+	// Esc inside the pane closes it, unless an inner control already handled it.
+	const onPaneKey = (event: KeyboardEvent) => {
+		if (event.key !== "Escape" || event.defaultPrevented) return;
+		event.preventDefault();
+		props.onClose();
+	};
+
 	return (
-		<aside class="dock-pane" aria-label={props.title}>
+		<aside class="dock-pane" aria-label={props.title} onKeyDown={onPaneKey}>
 			<div
 				class="dock-resizer"
 				role="separator"
