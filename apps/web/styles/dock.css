@@ -1,0 +1,148 @@
+/* Dock pane (components/ui/DockPane.tsx): a right-hand column beside the chat,
+   a flex sibling of .main-pane in .app-body. Its width is --dock-w, set from
+   prefs/dock.ts; the 480px fallback matches DOCK_DEFAULT_WIDTH. Below 768px it
+   covers the whole app instead. */
+.dock-pane {
+	position: relative;
+	display: flex;
+	flex: none;
+	flex-direction: column;
+	width: var(--dock-w, 480px);
+	min-width: 0;
+	min-height: 0;
+	background: var(--panel);
+	border-left: 1px solid var(--border);
+}
+.dock-resizer {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: -4px;
+	width: 8px;
+	cursor: col-resize;
+	touch-action: none;
+	z-index: var(--z-toolbar);
+}
+.dock-resizer:hover,
+.dock-resizer:focus-visible {
+	background: var(--accent-dim);
+}
+.dock-header {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: var(--space-3);
+	padding: var(--space-3) var(--space-5);
+	border-bottom: 1px solid var(--border);
+}
+.dock-title {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+	font-size: var(--fs-sm);
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.dock-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+.dock-back {
+	display: none;
+}
+.dock-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	padding: var(--space-5);
+}
+
+@media (max-width: 768px) {
+	.dock-pane {
+		position: fixed;
+		inset: 0;
+		z-index: var(--z-overlay);
+		width: auto;
+		border-left: 0;
+	}
+	.dock-resizer {
+		display: none;
+	}
+	.dock-back {
+		display: inline-flex;
+	}
+}
+
+/* Git review body (components/review/ReviewPanel.tsx) inside the dock. */
+.review-panel {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+	min-width: 0;
+}
+.review-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+}
+.review-split {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+	gap: var(--space-5);
+	min-width: 0;
+}
+.review-files,
+.review-diff {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	min-width: 0;
+}
+.review-diff h3 {
+	margin: 0;
+	font-size: var(--fs-sm);
+	overflow-wrap: anywhere;
+}
+.review-hunk {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	min-width: 0;
+}
+.review-hunk pre {
+	margin: 0;
+	overflow-x: auto;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+}
+.review-note,
+.review-field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.review-note textarea,
+.review-field textarea {
+	width: 100%;
+	min-height: 4em;
+}
+.review-commit {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	padding-top: var(--space-5);
+	border-top: 1px solid var(--border);
+}
+
+@media (max-width: 768px) {
+	.review-split {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}

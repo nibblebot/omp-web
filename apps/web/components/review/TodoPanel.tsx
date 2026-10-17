@@ -5,8 +5,6 @@ import {
 	importTodos,
 	refreshTodos,
 	reviewAvailable,
-	selectTodo,
-	selectedTodo,
 	setTodoDraft,
 	todoBoard,
 	todoConflict,
@@ -19,6 +17,7 @@ import {
 /** Editable phased todos: same authoritative state, stale-revision conflict refresh. */
 export const TodoPanel: Component = () => {
 	const [error, setError] = createSignal("");
+	const [exported, setExported] = createSignal<string | null>(null);
 	onMount(() => {
 		if (reviewAvailable("todos")) void refreshTodos();
 	});
@@ -37,18 +36,15 @@ export const TodoPanel: Component = () => {
 					<section class="review-todo-phase">
 						<h3>{phase.name ?? `Phase ${pi()}`}</h3>
 						<For each={phase.tasks ?? []}>
-							{(task, ti) => (
+							{(task) => (
 								<div class="review-todo-row">
 									<span class="picker-chip">{task.status}</span>
 									<span class="picker-label">{task.content}</span>
-									<button type="button" onClick={() => selectTodo({ phase: pi(), task: ti() })}>
-										select
-									</button>
 									<button
 										type="button"
 										onClick={() =>
 											void applyTodoOps([
-												{ op: "done", phase: String(pi()), task: String(ti()) },
+												{ op: "done", phase: phase.name ?? "", task: task.content },
 											]).catch((e) => setError(e instanceof Error ? e.message : String(e)))
 										}
 									>
@@ -78,10 +74,27 @@ export const TodoPanel: Component = () => {
 				>
 					import
 				</button>
-				<button type="button" onClick={() => void exportTodos()}>
+				<button
+					type="button"
+					onClick={() =>
+						void exportTodos()
+							.then((result) => setExported(result?.markdown ?? null))
+							.catch((e) => setError(e instanceof Error ? e.message : String(e)))
+					}
+				>
 					export
 				</button>
 				<Show when={error()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
+				<Show when={exported()}>
+					{(markdown) => (
+						<div class="review-todo-export">
+							<textarea readonly aria-label="Exported todo markdown" value={markdown()} />
+							<button type="button" onClick={() => void navigator.clipboard?.writeText(markdown())}>
+								copy
+							</button>
+						</div>
+					)}
+				</Show>
 			</div>
 		</div>
 	);

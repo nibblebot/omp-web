@@ -32,7 +32,10 @@ describe("route parse/format", () => {
 			"#/d//s/x",
 			"#/d/d7/s",
 			"#/d/d7/s/",
-			"#/d/d7/s/x/extra",
+			"#/d/d7/s/x/extra/a/b",
+			"#/d/d7/s/x/Review",
+			"#/d/d7/s/x/review/%E0%A4%A",
+			"#/d/d7/s/x/",
 			"#/d/d7/agent/a1",
 			"#/d/%E0%A4%A/s/x",
 			"#/d/d7/s/%E0%A4%A",
@@ -64,5 +67,24 @@ describe("route parse/format", () => {
 	test("a daemon route with extra segments and no session marker parses to none", () => {
 		expect(parseRoute("#/d/s/x")).toEqual({ kind: "none" });
 		expect(parseRoute("#/d/stored/x")).toEqual({ kind: "none" });
+	});
+
+	test("dock segments round trip with a kind and an optional id", () => {
+		const review: Route = {
+			kind: "session",
+			daemonId: "d7",
+			sessionId: "x",
+			dock: { kind: "review" },
+		};
+		const agent: Route = {
+			kind: "session",
+			daemonId: "d7",
+			sessionId: "x",
+			dock: { kind: "agent", id: "a 1/2" },
+		};
+		expect(formatRoute(review)).toBe("#/d/d7/s/x/review");
+		expect(parseRoute("#/d/d7/s/x/review")).toEqual(review);
+		expect(formatRoute(agent)).toBe("#/d/d7/s/x/agent/a%201%2F2");
+		expect(parseRoute("#/d/d7/s/x/agent/a%201%2F2")).toEqual(agent);
 	});
 });

@@ -4,6 +4,7 @@ import { sendDeleteWorktree, setState, state } from "../../../state";
 import { Modal } from "../../ui/Modal";
 import { reviewAvailable, unavailableReason } from "../../../store/review";
 import { attachForPanel } from "../../../store/roster";
+import { openDock } from "../../../store/dock";
 
 // Delete-workspace confirm (Phase 5 close-out + P8.3): one self-mounting
 // dialog for BOTH workspace kinds, dispatched on the target daemon's kind.
@@ -135,11 +136,11 @@ export const DeleteWorkspaceDialog: Component = () => {
 		const attached = id === state.currentSessionId;
 		close();
 		if (attached) {
-			setState("modal", "git");
+			openDock("review");
 			return;
 		}
 		void attachForPanel(id).then((ok) => {
-			if (ok) setState("modal", "git");
+			if (ok) openDock("review");
 		});
 	};
 

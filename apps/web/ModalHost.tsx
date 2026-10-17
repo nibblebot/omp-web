@@ -72,7 +72,6 @@ export const ModalHost: Component = () => {
 		workspace: () => <AddWorkspaceDialog onClose={close} />,
 		"sign-in": () => <FleetSignInDialog onClose={close} />,
 		integrations: () => featureModalHost("integrations"),
-		git: () => featureModalHost("git"),
 		"plan-review": () => featureModalHost("plan-review"),
 		annotations: () => featureModalHost("annotations"),
 		todos: () => featureModalHost("todos"),

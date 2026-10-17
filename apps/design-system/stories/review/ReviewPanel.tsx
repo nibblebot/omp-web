@@ -1,4 +1,4 @@
-import { GitPanel } from "../../../web/components/review/GitPanel";
+import { ReviewPanel } from "../../../web/components/review/ReviewPanel";
 import { setState } from "../../../web/state";
 import {
 	gitCalls,
@@ -11,19 +11,19 @@ import { answerCalls } from "../../daemon";
 import { defineStory } from "../../registry";
 
 export default defineStory({
-	id: "review-git-panel",
-	title: "GitPanel",
-	component: { file: "apps/web/components/review/GitPanel.tsx", export: "GitPanel" },
+	id: "review-review-panel",
+	title: "ReviewPanel",
+	component: { file: "apps/web/components/review/ReviewPanel.tsx", export: "ReviewPanel" },
 	seed: { capabilities: reviewCapabilities },
 	variants: [
 		{
 			name: "Changes",
 			description:
-				"Untracked, modified, and staged rows on feat/design-fixtures, with a commit message box.",
+				"Untracked, modified, and staged rows on feat/design-fixtures, with a commit message box. Hosted by the git dock.",
 			seed: () => answerCalls(gitCalls()),
 			render: () => (
 				<div class="ds-frame-tall">
-					<GitPanel />
+					<ReviewPanel />
 				</div>
 			),
 		},
@@ -36,7 +36,7 @@ export default defineStory({
 			},
 			render: () => (
 				<div class="ds-frame-tall">
-					<GitPanel />
+					<ReviewPanel />
 				</div>
 			),
 		},
@@ -49,7 +49,7 @@ export default defineStory({
 			},
 			render: () => (
 				<div class="ds-frame-tall">
-					<GitPanel />
+					<ReviewPanel />
 				</div>
 			),
 		},
@@ -60,7 +60,7 @@ export default defineStory({
 			seed: () => answerCalls(gitCalls({ status: reviewGitStatusUnavailable })),
 			render: () => (
 				<div class="ds-frame-tall">
-					<GitPanel />
+					<ReviewPanel />
 				</div>
 			),
 		},
@@ -71,7 +71,7 @@ export default defineStory({
 				answerCalls(gitCalls({ statusError: "index.lock exists; another git process is running" })),
 			render: () => (
 				<div class="ds-frame-tall">
-					<GitPanel />
+					<ReviewPanel />
 				</div>
 			),
 		},
@@ -81,7 +81,7 @@ export default defineStory({
 			seed: () => answerCalls(gitCalls({ pending: true })),
 			render: () => (
 				<div class="ds-frame-tall">
-					<GitPanel />
+					<ReviewPanel />
 				</div>
 			),
 		},

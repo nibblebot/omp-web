@@ -11,6 +11,7 @@
 import { state, setState } from "../state";
 import { spawnResume } from "./projects";
 import { formatRoute, parseRoute, type Route } from "./route";
+import { closeDock, openDock } from "./dock";
 import { requestDaemonSessions, resumeDaemonSession, setView } from "./roster";
 import { pushToast } from "./toasts";
 import { attachSession } from "./transport";
@@ -45,11 +46,15 @@ export function syncRouteToAttached(): void {
 	// state.sessionId is cleared on every daemon switch, so a non-empty value
 	// belongs to the attached daemon.
 	if (state.sessionId === "") return;
-	if (base.kind === "session" && base.sessionId === state.sessionId) return;
-	writeRoute(
-		{ kind: "session", daemonId, sessionId: state.sessionId },
-		base.kind === "daemon" ? "replace" : "push",
-	);
+	const dock = state.dock ?? undefined;
+	const next: Route = {
+		kind: "session",
+		daemonId,
+		sessionId: state.sessionId,
+		...(dock === undefined ? {} : { dock }),
+	};
+	if (base.kind === "session" && formatRoute(base) === formatRoute(next)) return;
+	writeRoute(next, base.kind === "daemon" ? "replace" : "push");
 }
 
 async function attachDaemon(daemonId: string): Promise<void> {
@@ -96,6 +101,10 @@ async function restoreRoute(route: Route): Promise<void> {
 	} finally {
 		restoring--;
 	}
+	// The URL is the source of truth for the dock: a route without one closes it.
+	if (route.kind === "session" && route.dock !== undefined)
+		openDock(route.dock.kind, route.dock.id);
+	else closeDock();
 	syncRouteToAttached();
 }
 

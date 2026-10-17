@@ -15,12 +15,19 @@
 export type Route =
 	| { kind: "none" }
 	| { kind: "daemon"; daemonId: string }
-	| { kind: "session"; daemonId: string; sessionId: string }
+	| { kind: "session"; daemonId: string; sessionId: string; dock?: DockRoute }
 	/** A legacy Analysis hash, carried verbatim (`hash` includes the leading `#`). */
 	| { kind: "analysis"; hash: string };
 
+/** The dock panel the URL names (U18): `kind` picks the panel, `id` an item inside it. */
+export interface DockRoute {
+	kind: string;
+	id?: string;
+}
+
 /** Analysis hashes (`#/s/<file>`, `#/stored/<ws>/<id>`; the leading `/` is optional). */
 const ANALYSIS_HASH = /^#\/?(s|stored)\/.+/;
+const DOCK_KIND = /^[a-z][a-z0-9-]*$/;
 
 function decodeSegment(segment: string): string | null {
 	if (segment === "") return null;
@@ -31,6 +38,16 @@ function decodeSegment(segment: string): string | null {
 	}
 }
 
+/** The dock segment: `<kind>` or `<kind>/<id>`. Null for any other shape. */
+function parseDock(segments: string[]): DockRoute | null {
+	const kind = segments[0] ?? "";
+	if (!DOCK_KIND.test(kind)) return null;
+	if (segments.length === 1) return { kind };
+	if (segments.length !== 2) return null;
+	const id = decodeSegment(segments[1] ?? "");
+	return id === null ? null : { kind, id };
+}
+
 /** Parse a `location.hash` value. Never throws; anything unrecognised is `none`. */
 export function parseRoute(hash: string): Route {
 	if (ANALYSIS_HASH.test(hash)) return { kind: "analysis", hash };
@@ -39,9 +56,12 @@ export function parseRoute(hash: string): Route {
 	const daemonId = decodeSegment(parts[1] ?? "");
 	if (daemonId === null) return { kind: "none" };
 	if (parts.length === 2) return { kind: "daemon", daemonId };
-	if (parts.length === 4 && parts[2] === "s") {
+	if (parts.length >= 4 && parts[2] === "s") {
 		const sessionId = decodeSegment(parts[3]!);
-		if (sessionId !== null) return { kind: "session", daemonId, sessionId };
+		if (sessionId === null) return { kind: "none" };
+		if (parts.length === 4) return { kind: "session", daemonId, sessionId };
+		const dock = parseDock(parts.slice(4));
+		if (dock !== null) return { kind: "session", daemonId, sessionId, dock };
 	}
 	return { kind: "none" };
 }
@@ -53,8 +73,13 @@ export function formatRoute(route: Route): string {
 			return "";
 		case "daemon":
 			return `#/d/${encodeURIComponent(route.daemonId)}`;
-		case "session":
-			return `#/d/${encodeURIComponent(route.daemonId)}/s/${encodeURIComponent(route.sessionId)}`;
+		case "session": {
+			const base = `#/d/${encodeURIComponent(route.daemonId)}/s/${encodeURIComponent(route.sessionId)}`;
+			const dock = route.dock;
+			if (dock === undefined) return base;
+			const id = dock.id === undefined ? "" : `/${encodeURIComponent(dock.id)}`;
+			return `${base}/${encodeURIComponent(dock.kind)}${id}`;
+		}
 		case "analysis":
 			return route.hash;
 	}

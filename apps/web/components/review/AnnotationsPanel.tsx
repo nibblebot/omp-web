@@ -3,14 +3,16 @@ import {
 	annotations,
 	annotationsError,
 	annotationsLoading,
-	composerInsert,
 	composeForComposer,
 	createAnnotation,
+	queuedAnnotationIds,
 	refreshAnnotations,
 	removeAnnotation,
 	reviewAvailable,
+	toggleQueuedAnnotation,
 	unavailableReason,
 } from "../../store/review";
+import { sha256Hex } from "../../text/sha256";
 
 /** Anchored feedback: durable IDs, original anchors, stale marking, composer insert. */
 export const AnnotationsPanel: Component = () => {
@@ -27,21 +29,22 @@ export const AnnotationsPanel: Component = () => {
 				<div class="tool-collapsed-note">loading annotations…</div>
 			</Show>
 			<Show when={annotationsError()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
-			<Show when={composerInsert()}>
-				{(text) => (
-					<div class="tool-collapsed-note">composer insert ready ({text().length} chars)</div>
-				)}
-			</Show>
 			<For each={annotations()} fallback={<p>No annotations</p>}>
 				{(row) => (
 					<div class="review-annotation-row">
 						<span class="picker-chip">{row.status}</span>
+						<Show when={queuedAnnotationIds().includes(row.id)}>
+							<span class="picker-chip">queued with next prompt</span>
+						</Show>
 						<span class="picker-label">{row.note}</span>
 						<span class="picker-meta">
 							{row.source} · rev {row.revision}
 						</span>
 						<button type="button" onClick={() => void composeForComposer("insert", [row.id])}>
 							insert
+						</button>
+						<button type="button" onClick={() => toggleQueuedAnnotation(row.id)}>
+							{queuedAnnotationIds().includes(row.id) ? "cancel send" : "send with next prompt"}
 						</button>
 						<button type="button" onClick={() => void removeAnnotation(row.id)}>
 							remove
@@ -64,7 +67,7 @@ export const AnnotationsPanel: Component = () => {
 						setError("");
 						void createAnnotation({
 							source: "text",
-							anchor: { kind: "text", text: note(), contentHash: "" },
+							anchor: { kind: "text", text: note(), contentHash: sha256Hex(note()) },
 							note: note(),
 						}).catch((e) => setError(e instanceof Error ? e.message : String(e)));
 					}}

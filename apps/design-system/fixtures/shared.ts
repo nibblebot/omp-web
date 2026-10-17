@@ -10,7 +10,7 @@ const TERMINAL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height
 <circle cx="52" cy="15" r="5" fill="#27c93f"/>
 <text x="20" y="58" font-family="monospace" font-size="14" fill="#9aa4b2">$ bun run check:types</text>
 <text x="20" y="80" font-family="monospace" font-size="14" fill="#9aa4b2">$ tsc --noEmit -p apps/web</text>
-<text x="20" y="108" font-family="monospace" font-size="14" fill="#e6edf3">apps/web/components/review/GitPanel.tsx(88,21): error TS2322</text>
+<text x="20" y="108" font-family="monospace" font-size="14" fill="#e6edf3">apps/web/components/review/ReviewPanel.tsx(88,21): error TS2322</text>
 <text x="20" y="128" font-family="monospace" font-size="14" fill="#e6edf3">  Type 'string | undefined' is not assignable to 'string'.</text>
 <text x="20" y="156" font-family="monospace" font-size="14" fill="#7ee787">src/lib/wire/protocol.ts: ok</text>
 <text x="20" y="176" font-family="monospace" font-size="14" fill="#ff7b72">Found 1 error in 1 file.</text>
@@ -117,7 +117,7 @@ Clearing the timer in the settle path removes the leak. A test that resolves the
 
 ## 3. Stale answers after a panel unmounts
 
-\`GitPanel\` and \`TodoPanel\` both start a refresh in \`onMount\`. If the user leaves the panel before the answer arrives, the store still writes the result into the shared signal. The store already tracks a generation counter for composer inserts; the same counter should guard the refresh path.
+\`ReviewPanel\` and \`TodoPanel\` both start a refresh in \`onMount\`. If the user leaves the panel before the answer arrives, the store still writes the result into the shared signal. The store already tracks a generation counter for composer inserts; the same counter should guard the refresh path.
 
 | Path | Writes after unmount | Guarded today |
 | --- | --- | --- |

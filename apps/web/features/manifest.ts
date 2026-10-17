@@ -47,7 +47,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		experimental: true,
 		defaultEnabled: true,
 		commands: ["git", "plan-review", "annotations", "todo"],
-		modals: ["git", "plan-review", "annotations", "todos"],
+		modals: ["plan-review", "annotations", "todos"],
 	},
 	{
 		id: "integrations",

@@ -24,6 +24,7 @@ import {
 	type ModalName,
 } from "../state";
 import { downloadArchive, downloadHtml, downloadRequest, downloadText } from "../store/downloads";
+import { queuedAnnotationIds, withQueuedAnnotations } from "../store/review";
 
 export type InputMode = "enter" | "followup";
 
@@ -603,9 +604,12 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			if (!trimmed && (!images || images.length === 0)) return;
 			// steer on an idle session errors server-side; Enter falls back to prompt.
 			const method = mode === "followup" ? "followUp" : state.streaming ? "steer" : "prompt";
-			void call(method, [trimmed, images && images.length > 0 ? images : undefined]).catch(
-				showError,
-			);
+			const payload = images && images.length > 0 ? images : undefined;
+			if (queuedAnnotationIds().length)
+				void withQueuedAnnotations(trimmed)
+					.then((prompt) => call(method, [prompt, payload]))
+					.catch(showError);
+			else void call(method, [trimmed, payload]).catch(showError);
 		}
 	}
 }

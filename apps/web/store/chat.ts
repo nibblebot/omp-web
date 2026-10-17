@@ -677,9 +677,13 @@ export function applyEvent(e: AgentSessionEvent): void {
 						if (item?.kind === "tool") {
 							item.status = e.isError ? "error" : "done";
 							item.output = capTail(tabsToSpaces(extractText(e.result)), 8000);
-							item.details = (e.result as { details?: unknown } | undefined)?.details;
 							const images = scanImages(e.result);
 							if (images.length > 0) item.images = images;
+							const details =
+								e.result && typeof e.result === "object" && "details" in e.result
+									? e.result.details
+									: undefined;
+							if (details !== undefined) item.details = details;
 						}
 					}),
 				);

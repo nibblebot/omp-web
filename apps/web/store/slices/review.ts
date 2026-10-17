@@ -40,13 +40,12 @@ export interface ReviewState {
 	annotations: ReviewAnnotationDto[];
 	annotationsLoading: boolean;
 	annotationsError: string | null;
-	composerInsert: string | null;
+	queuedAnnotationIds: string[];
 	todoBoard: TodoBoardDto | null;
 	todoLoading: boolean;
 	todoError: string | null;
 	todoConflict: boolean;
 	todoDraft: string;
-	selectedTodo: { phase: number; task: number } | null;
 }
 export function createReviewState(): ReviewState {
 	return {
@@ -63,13 +62,12 @@ export function createReviewState(): ReviewState {
 		annotations: [],
 		annotationsLoading: false,
 		annotationsError: null,
-		composerInsert: null,
+		queuedAnnotationIds: [],
 		todoBoard: null,
 		todoLoading: false,
 		todoError: null,
 		todoConflict: false,
 		todoDraft: "",
-		selectedTodo: null,
 	};
 }
 /** Fresh review state for a session switch; the bumped generation invalidates in-flight RPCs. */

@@ -8,7 +8,7 @@ import type {
 	WebMethodName,
 } from "#lib/wire/protocol";
 import type { GitReviewDiff, TodoReviewOp } from "./slices/review";
-import { state, setState } from "../state";
+import { setPromptInsert, setState, state } from "../state";
 import { call } from "./transport";
 
 export const reviewCaps = (): ServerCapabilities => state.capabilities ?? {};
@@ -31,21 +31,17 @@ export const planError = () => state.review.planError;
 export const annotations = () => state.review.annotations;
 export const annotationsLoading = () => state.review.annotationsLoading;
 export const annotationsError = () => state.review.annotationsError;
-export const composerInsert = () => state.review.composerInsert;
-export const clearComposerInsert = (): void => {
-	setState("review", "composerInsert", null);
+/** Put text into the composer as an unsent insert; PromptComposer appends it to the draft. */
+export const insertIntoComposer = (text: string): void => {
+	setPromptInsert({ text });
 };
 export const todoBoard = () => state.review.todoBoard;
 export const todoLoading = () => state.review.todoLoading;
 export const todoError = () => state.review.todoError;
 export const todoConflict = () => state.review.todoConflict;
 export const todoDraft = () => state.review.todoDraft;
-export const selectedTodo = () => state.review.selectedTodo;
 export const setTodoDraft = (text: string): void => {
 	setState("review", "todoDraft", text);
-};
-export const selectTodo = (selection: { phase: number; task: number } | null): void => {
-	setState("review", "selectedTodo", selection);
 };
 
 // P0 publishes the method vocabulary; capability verdicts, never version checks, authorize calls.
@@ -53,7 +49,7 @@ const rpc = <T>(method: string, args: unknown[] | Record<string, unknown> = {}):
 	call(method as WebMethodName, Array.isArray(args) ? args : [args]) as Promise<T>;
 const message = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
-const stale = (error: unknown): boolean =>
+export const isStaleError = (error: unknown): boolean =>
 	/stale|revision|fingerprint|version|conflict/i.test(message(error));
 async function run<T>(
 	domain: "git" | "plan" | "annotations" | "todo",
@@ -69,7 +65,7 @@ async function run<T>(
 		return await task();
 	} catch (error) {
 		if (epoch !== state.review.generation) return;
-		if (stale(error)) {
+		if (isStaleError(error)) {
 			if (domain === "todo") setState("review", "todoConflict", true);
 			if (onStale) {
 				try {
@@ -121,7 +117,17 @@ async function mutateGit(
 			const epoch = state.review.generation;
 			await rpc(method, { fingerprint: snapshot.indexFingerprint, ...args });
 			if (epoch !== state.review.generation) return;
-			await getGit();
+			// The mutation already landed. A failed status refresh must not read as a
+			// refused change (REV-14), so it is reported on its own.
+			try {
+				await getGit();
+			} catch (refreshError) {
+				setState(
+					"review",
+					"gitError",
+					`Change applied; status refresh failed: ${message(refreshError)}. Refresh to update.`,
+				);
+			}
 			return true;
 		},
 		getGit,
@@ -233,10 +239,36 @@ export const composeForComposer = (
 			"annotationCompose",
 			{ ids, intent, supplemental },
 		);
-		if (epoch === state.review.generation && intent === "insert")
-			setState("review", "composerInsert", result.prompt);
+		if (epoch === state.review.generation && intent === "insert") insertIntoComposer(result.prompt);
 		return result;
 	});
+
+/** Annotations queued to ride along with the next prompt; the annotations panel toggles them. */
+export const queuedAnnotationIds = (): string[] => state.review.queuedAnnotationIds;
+export const toggleQueuedAnnotation = (id: string): void => {
+	const queued = state.review.queuedAnnotationIds;
+	setState(
+		"review",
+		"queuedAnnotationIds",
+		queued.includes(id) ? queued.filter((queuedId) => queuedId !== id) : [...queued, id],
+	);
+};
+
+/**
+ * Compose the queued annotations ahead of the typed text. The queue is cleared only after the
+ * server accepts the composition, so a failed send keeps the queue for a retry or cancel.
+ */
+export const withQueuedAnnotations = async (text: string): Promise<string> => {
+	const ids = [...state.review.queuedAnnotationIds];
+	const result = await rpc<{ prompt: string }>("annotationCompose", { ids, intent: "insert" });
+	setState(
+		"review",
+		"queuedAnnotationIds",
+		state.review.queuedAnnotationIds.filter((id) => !ids.includes(id)),
+	);
+	return [result.prompt, text].filter(Boolean).join("\n\n");
+};
+
 async function getTodos(): Promise<void> {
 	const epoch = state.review.generation;
 	const value = await rpc<TodoBoardDto>("todoGet");

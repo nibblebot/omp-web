@@ -2,6 +2,7 @@ import { createEffect, createSignal, on, onCleanup, onMount, Show, type Componen
 import { Dynamic } from "solid-js/web";
 import { MainHeader } from "./components/app/MainHeader";
 import { NoActiveSessionPane } from "./components/app/NoActiveSessionPane";
+import { DockHost } from "./components/app/DockHost";
 import {
 	PromptBox,
 	QueueBar,
@@ -70,6 +71,7 @@ const ChatMode: Component = () => (
 				</main>
 			</div>
 		</Show>
+		<DockHost />
 	</>
 );
 
@@ -164,6 +166,14 @@ export const App: Component = () => {
 		on([() => state.currentSessionId, () => state.sessionId], () => syncRouteToAttached(), {
 			defer: true,
 		}),
+	);
+	// The dock is part of the URL too: opening or retargeting it rewrites the hash.
+	createEffect(
+		on(
+			() => JSON.stringify(state.dock),
+			() => syncRouteToAttached(),
+			{ defer: true },
+		),
 	);
 	// Tab title names the attached session.
 	createEffect(() => {

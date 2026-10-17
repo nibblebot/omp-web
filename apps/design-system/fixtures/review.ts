@@ -16,7 +16,7 @@ const REPO = "/home/joshua/Repos/omp-web";
 const BASE_SHA = "9c41e2d7a0b3f58c1e6d4a20b7f9e3c5d8a1b2c4";
 const HEAD_SHA = "4f8b0a6e3d2c91f7a5b8e0d4c6a2f1b9e7d3c5a8";
 
-/** GitStatusDto: GitPanel for a worktree with staged, unstaged, and untracked paths. */
+/** GitStatusDto: ReviewPanel for a worktree with staged, unstaged, and untracked paths. */
 export const reviewGitStatus: GitStatusDto = {
 	available: true,
 	cwd: REPO,
@@ -44,7 +44,7 @@ export const reviewGitStatus: GitStatusDto = {
 	},
 };
 
-/** GitStatusDto variant: no repository available, so GitPanel shows the reason row. */
+/** GitStatusDto variant: no repository available, so ReviewPanel shows the reason row. */
 export const reviewGitStatusUnavailable: GitStatusDto = {
 	available: false,
 	reason: "not a git repository",

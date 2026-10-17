@@ -1,5 +1,4 @@
 import { ModalHost } from "../../../web/ModalHost";
-import { setState } from "../../../web/state";
 import { openDownloadConsent } from "../../../web/store/downloads";
 import { openResumePicker } from "../../../web/store/resume";
 import { pushToast } from "../../../web/store/toasts";
@@ -31,13 +30,6 @@ export default defineStory({
 			name: "state.modal: help",
 			description: "A registry modal: `state.modal` names it and ModalHost renders it.",
 			seed: { modal: "help" },
-			render: () => <ModalHost />,
-		},
-		{
-			name: "state.modal: git",
-			description:
-				"A shell-less `*Panel` body: ModalHost wraps GitPanel in a side sheet so Esc, backdrop, and close work.",
-			seed: { modal: "git" },
 			render: () => <ModalHost />,
 		},
 		{

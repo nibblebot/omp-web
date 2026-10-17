@@ -692,8 +692,8 @@ export const todoItemsTool: ToolItem = tool(
 );
 /** TodoToolCard: args with no recognised shape and no live board. */
 export const todoEmptyTool: ToolItem = tool("todo", "done", {}, "");
-/** state.todoPhases patch: the live board wins over the call's own args. */
-export const liveTodoPhases: typeof state.todoPhases = [
+/** Phases as one todo call settled them; the card renders these from the result details. */
+export const settledTodoPhases: typeof state.todoPhases = [
 	{
 		name: "Design system",
 		tasks: [
@@ -708,6 +708,12 @@ export const liveTodoPhases: typeof state.todoPhases = [
 		],
 	},
 ];
+
+/** TodoToolCard: the call's result details carry the board it settled with (REV-06). */
+export const todoSnapshotTool: ToolItem = {
+	...todoArgsTool,
+	details: { op: "done", phases: settledTodoPhases },
+};
 
 // web_search
 const searchArgs = { query: "solid-js createStore reconcile keyed arrays" };

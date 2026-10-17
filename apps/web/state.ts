@@ -1,3 +1,4 @@
+import { readDockWidth } from "./prefs/dock";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AdvisorItem } from "./store/slices/advisor";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
@@ -141,7 +142,7 @@ export type ChatItem =
 			status: ToolStatus;
 			output: string;
 			images?: ImageArg[];
-			/** Structured result details (edit diff, file counts); absent until settled. */
+			/** Settled result details (edit diff, todo phase snapshot, file counts), so the card shows the call as it was; absent until settled. */
 			details?: unknown;
 	  }
 	| BashItem
@@ -218,7 +219,6 @@ export type ModalName =
 	// signedOut, exactly like the store/modals contract wires it).
 	| "sign-in"
 	| "integrations"
-	| "git"
 	| "plan-review"
 	| "annotations"
 	| "todos"
@@ -374,6 +374,10 @@ export const [state, setState] = createStore({
 	authStatus: "unknown" as "unknown" | "signedOut" | "signedIn" | "disabled",
 	authExpiresAt: undefined as number | undefined,
 	modal: null as ModalName | null,
+	// Right-hand dock (U18): which panel is open, null when closed. Written only
+	// through store/dock.ts (openDock/closeDock); the route mirrors it.
+	dock: null as { kind: string; id?: string } | null,
+	dockWidth: readDockWidth(),
 	// Phase 5 + P8.1 modal payloads (components read these; set alongside
 	// modal): which project the Add-workspace modal targets (all tabs).
 	workspaceModalProjectId: null as string | null,

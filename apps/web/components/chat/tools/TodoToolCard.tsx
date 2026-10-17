@@ -8,7 +8,7 @@ import {
 	XIcon,
 	type IconProps,
 } from "../../ui/icons";
-import { state, type ToolItem } from "../../../state";
+import type { ToolItem } from "../../../state";
 import { ToolCardShell } from "./ToolCardShell";
 
 const TODO_ICON: Record<string, Component<IconProps>> = {
@@ -62,11 +62,11 @@ function parsePhases(args: unknown): TodoPhaseShape[] {
 	return [];
 }
 
-/** Todo tool: live state.todoPhases when present, otherwise the tool's own args. */
+/** Todo tool: the phases this call settled with (its result details), else its own args. Never the live list (REV-06). */
 export const TodoToolCard: Component<{ item: ToolItem }> = (props) => {
-	const live = () => state.todoPhases;
+	const snapshot = () => parsePhases(props.item.details);
 	const fallback = () => parsePhases(props.item.args);
-	const phases = () => (live().length > 0 ? live() : fallback());
+	const phases = () => (snapshot().length > 0 ? snapshot() : fallback());
 	return (
 		<ToolCardShell name="todos" class="todo-tool">
 			<div class="todo-body">
