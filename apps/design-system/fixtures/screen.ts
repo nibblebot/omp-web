@@ -1,7 +1,7 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import type { AvailableSlashCommand, ImageArg } from "#lib/wire/protocol";
+import type { AvailableSlashCommand, ImageArg, QueuedMessagesSnapshot } from "#lib/wire/protocol";
 import type {
 	BashItem,
 	Block,
@@ -506,7 +506,9 @@ export const screenQueuedMessages = {
 		"Then add a regression test for fences nested inside list items",
 		"After that, update docs/web-ui.md with the new copy affordance and a screenshot of the fence corner position",
 	],
-} satisfies { steering: string[]; followUp: string[] };
+	liveSteered: 0,
+	paused: [],
+} satisfies QueuedMessagesSnapshot;
 
 /** Queue after a Stop: one steer and one follow-up held, waiting for Resume queue. */
 export const screenPausedQueue = {
