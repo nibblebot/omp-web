@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { SettingsItem, SettingsModel, SettingsTab } from "#lib/wire/protocol";
-import { displayOptionValue, filterSettings } from "../../prefs/settings";
+import {
+	commonSettingGroups,
+	displayOptionValue,
+	effectLabel,
+	filterSettings,
+	filterWebUiSettings,
+	unmetDependency,
+} from "../../prefs/settings";
 
 function item(partial: Partial<SettingsItem> & Pick<SettingsItem, "type">): SettingsItem {
 	return {
@@ -121,5 +128,70 @@ describe("filterSettings", () => {
 		expect(filterSettings(model, "nope")).toEqual([]);
 		expect(filterSettings(model, "")).toEqual([]);
 		expect(filterSettings(model, "   ")).toEqual([]);
+	});
+});
+
+describe("filterWebUiSettings", () => {
+	const attached = { sessionAttached: true, signedIn: true };
+	test("finds browser-local rows by label or keyword", () => {
+		expect(filterWebUiSettings("retry", attached)).toEqual(["auto-retry"]);
+		expect(filterWebUiSettings("DESKTOP", attached)).toEqual(["browser notification permission"]);
+		expect(filterWebUiSettings("   ", attached)).toEqual([]);
+		expect(filterWebUiSettings("nothing matches this", attached)).toEqual([]);
+	});
+	test("offers session and sign-in rows only when the Web UI tab renders them", () => {
+		const none = { sessionAttached: false, signedIn: false };
+		expect(filterWebUiSettings("retry", none)).toEqual([]);
+		expect(filterWebUiSettings("fast", none)).toEqual([]);
+		expect(filterWebUiSettings("sign out", none)).toEqual([]);
+		const signedInOnly = { sessionAttached: false, signedIn: true };
+		expect(filterWebUiSettings("sign out", signedInOnly)).toEqual(["sign out"]);
+	});
+});
+
+describe("commonSettingGroups", () => {
+	test("gathers model items into Common groups in order and drops empty groups", () => {
+		const tab: SettingsTab = {
+			id: "general",
+			label: "General",
+			groups: [
+				{
+					name: "",
+					items: [
+						item({ type: "boolean", path: "steeringMode", label: "Steering" }),
+						item({ type: "boolean", path: "display.showTurnTime", label: "Turn time" }),
+						item({ type: "boolean", path: "ui.unrelated" }),
+					],
+				},
+			],
+		};
+		const groups = commonSettingGroups({ tabs: [tab] });
+		expect(groups.map((group) => group.title)).toEqual(["Chat", "Steering and approvals"]);
+		expect(groups[0].items.map((entry) => entry.path)).toEqual(["display.showTurnTime"]);
+		expect(groups[1].items.map((entry) => entry.path)).toEqual(["steeringMode"]);
+	});
+
+	test("is empty without a model", () => {
+		expect(commonSettingGroups(null)).toEqual([]);
+	});
+});
+
+describe("unmetDependency and effectLabel", () => {
+	test("turn time needs token usage on", () => {
+		const off = () => false;
+		expect(unmetDependency("display.showTurnTime", off)).toBe(
+			"Turn on Show Token Usage to use turn time.",
+		);
+		expect(
+			unmetDependency("display.showTurnTime", (path) => path === "display.showTokenUsage"),
+		).toBeNull();
+		expect(unmetDependency("display.showTokenUsage", off)).toBeNull();
+	});
+
+	test("labels only the non-live effects", () => {
+		expect(effectLabel("next-session")).toBe("Next session");
+		expect(effectLabel("restart")).toBe("Restart");
+		expect(effectLabel("live")).toBeNull();
+		expect(effectLabel(undefined)).toBeNull();
 	});
 });

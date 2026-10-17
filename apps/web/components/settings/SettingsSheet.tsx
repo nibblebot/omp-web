@@ -1,5 +1,5 @@
 import { createMemo, createSignal, Index, onMount, Show, type Component } from "solid-js";
-import { filterSettings, type SettingsMatch } from "../../prefs/settings";
+import { filterSettings, filterWebUiSettings, type SettingsMatch } from "../../prefs/settings";
 import {
 	changedCountsByTab,
 	DEFAULT_SETTINGS_TAB_ID,
@@ -9,21 +9,22 @@ import {
 	type SettingsTabMeta,
 } from "../../prefs/settings-tabs";
 import { authSnapshot } from "../../store/auth";
-import { refreshSettings, setState, state } from "../../state";
+import { fleetSettingsActive, refreshSettings, setState, state } from "../../state";
 import { SearchIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
-import { FeaturesSettings } from "./FeaturesSettings";
+import { CommonSettings } from "./CommonSettings";
+import { FeaturesSettings, searchFeatures } from "./FeaturesSettings";
 import { InstalledTab } from "./InstalledTab";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsNav, SettingsSectionPicker, type SettingsSection } from "./SettingsNav";
-import { SettingsRow } from "./SettingsRow";
+import { SettingsRow, SettingsRowLayout } from "./SettingsRow";
 import { WebUiSettings } from "./WebUiSettings";
 
 /**
  * Full-screen settings panel (TUI /settings parity): a header with search, a
  * vertical tab sidebar on wide screens (a section picker on narrow), and one
- * stacked body per tab. Tabs are the SDK tabs (server model), Installed, Web
- * UI and Features (client-local). Search spans every tab and groups matches
+ * stacked body per tab. Tabs are Common (daily rows), the SDK tabs (server model),
+ * Installed, Web UI and Features (client-local). Search spans every tab and groups matches
  * by tab and section. Server calls go through refreshSettings / updateSetting;
  * the returned model is authoritative and settings_changed frames keep this
  * panel (and every other tab) in sync.
@@ -91,6 +92,29 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		const m = model();
 		return m && searching() ? filterSettings(m, query()) : [];
 	};
+	const webHits = () =>
+		searching()
+			? filterWebUiSettings(query(), {
+					sessionAttached: !fleetSettingsActive(),
+					signedIn: authSnapshot().status === "signedIn",
+				})
+			: [];
+	const featureHits = () => (searching() ? searchFeatures(query()) : []);
+	const noMatches = () =>
+		searching() &&
+		model() !== null &&
+		results().length === 0 &&
+		webHits().length === 0 &&
+		featureHits().length === 0;
+	// While searching, the sidebar highlights the tab that holds the first hit.
+	const navTabId = () => {
+		if (!searching()) return activeTabId();
+		const sdkHit = results()[0]?.tab.id;
+		if (sdkHit) return sdkHit;
+		if (webHits().length > 0) return "web-ui";
+		if (featureHits().length > 0) return "features";
+		return activeTabId();
+	};
 	// Matches grouped by tab, then by section. filterSettings returns matches
 	// in tab order, so Map insertion order keeps the tab grouping.
 	const resultGroups = () => {
@@ -140,7 +164,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 			<div class="settings-content">
 				<SettingsNav
 					tabs={tabs()}
-					activeTabId={activeTabId()}
+					activeTabId={navTabId()}
 					changedCounts={changedCounts()}
 					sections={sections()}
 					onSelectTab={selectTab}
@@ -160,6 +184,31 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 								)}
 							</Index>
 						</Show>
+						<Show when={webHits().length > 0}>
+							<SettingsGroup title="Web UI">
+								<Index each={webHits()}>
+									{(label) => (
+										<SettingsRowLayout label={label()}>
+											<button
+												type="button"
+												class="settings-control-btn"
+												onClick={() => selectTab("web-ui")}
+											>
+												open
+											</button>
+										</SettingsRowLayout>
+									)}
+								</Index>
+							</SettingsGroup>
+						</Show>
+						<Show when={noMatches()}>
+							<div class="settings-note">
+								No settings match "{query().trim()}".{" "}
+								<button type="button" class="settings-control-btn" onClick={() => setQuery("")}>
+									clear search
+								</button>
+							</div>
+						</Show>
 					</Show>
 					<Show when={!searching() && active()} keyed>
 						{(tab) => (
@@ -176,6 +225,9 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 								</Show>
 								<Show when={tab.id === "web-ui"}>
 									<WebUiSettings />
+								</Show>
+								<Show when={tab.kind === "common"}>
+									<CommonSettings />
 								</Show>
 								<Show when={tab.kind === "sdk"}>
 									<Show

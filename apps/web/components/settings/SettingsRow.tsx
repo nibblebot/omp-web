@@ -1,7 +1,7 @@
 import { Show, Switch, Match, type JSX } from "solid-js";
-import { displayOptionValue } from "../../prefs/settings";
+import { displayOptionValue, effectLabel, unmetDependency } from "../../prefs/settings";
 import { asRecord, controlKind, hasWideSelection, itemOptions } from "../../prefs/setting-controls";
-import { unsetSetting, updateSetting } from "../../store/settings";
+import { settingValue, unsetSetting, updateSetting } from "../../store/settings";
 import { WarningIcon } from "../ui/icons";
 import { SettingJsonField } from "./controls/SettingJsonField";
 import { SettingOrderedList } from "./controls/SettingOrderedList";
@@ -24,6 +24,10 @@ export function SettingsRowLayout(props: {
 	changed?: boolean;
 	/** Set by project config: the value is read-only here. */
 	setByProject?: boolean;
+	/** Where the value lives, shown as a badge (for example "omp config" or "This browser"). */
+	scope?: string;
+	/** When a change takes effect; null or omitted shows no badge (live). */
+	effect?: string | null;
 	/** Text, secret, JSON and ordered-list rows: the control drops below the help text. */
 	stacked?: boolean;
 	children: JSX.Element;
@@ -40,6 +44,12 @@ export function SettingsRowLayout(props: {
 						<span class="changed-dot" title="Changed from default" />
 					</Show>
 					<span>{props.label}</span>
+					<Show when={props.scope}>
+						<span class="settings-item-scope">{props.scope}</span>
+					</Show>
+					<Show when={props.effect}>
+						<span class="settings-item-effect">{props.effect}</span>
+					</Show>
 				</div>
 				<Show when={props.warning}>
 					<p class="settings-item-warning" role="note">
@@ -69,14 +79,18 @@ export function SettingsRow(props: { item: SettingsItem }) {
 	const item = () => props.item;
 	const kind = () => controlKind(item());
 	const setByProject = () => item().view?.source === "project";
+	const blocked = () => unmetDependency(item().path, settingValue);
+	const effect = () => effectLabel(item().view?.effect);
 
 	return (
 		<SettingsRowLayout
 			label={item().label}
 			description={item().description}
-			warning={item().warning}
+			warning={blocked() ?? item().warning}
 			changed={item().changed}
 			setByProject={setByProject()}
+			scope="omp config"
+			effect={effect()}
 			stacked={
 				kind() === "text" ||
 				kind() === "secret" ||
@@ -102,7 +116,7 @@ export function SettingsRow(props: { item: SettingsItem }) {
 					<SettingToggle
 						label={item().label}
 						checked={item().value === true}
-						disabled={setByProject()}
+						disabled={setByProject() || blocked() !== null}
 						onChange={(checked) => updateSetting(item().path, checked)}
 					/>
 				</Match>

@@ -179,6 +179,11 @@ export function setNotifyEnabled(enabled: boolean): void {
 	}
 }
 
+/** True when the browser has denied notification permission, so the toggle cannot take effect. */
+export function notificationsBlocked(): boolean {
+	return typeof Notification !== "undefined" && Notification.permission === "denied";
+}
+
 export function pushItem(item: ChatItem): void {
 	setState("items", (items) => [...items, item]);
 }

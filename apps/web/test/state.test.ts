@@ -936,6 +936,30 @@ describe("fleet settings fallback (no daemon attached)", () => {
 		expect(state.settingsModel?.revision).toBe(9);
 		expect(state.error).toBeNull();
 	});
+
+	test("a rejected session write surfaces its message once, without a doubled Error prefix", async () => {
+		setState({
+			currentSessionId: "",
+			settingsModel: null,
+			settingsLoading: false,
+			error: null,
+		});
+		const requests = stubFetch(() => ({ status: 200, body: model }));
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState({ currentSessionId: "daemon-a" });
+
+		updateSetting("display.hideToolActivity", true, 3);
+		await settle();
+		const sent = requests
+			.filter((r) => r.url === "/command")
+			.map((r) => r.body as Extract<ClientCommand, { type: "call" }>);
+		dispatch(
+			callResult(sent.at(-1)!.id, undefined, false, "Settings changed; refresh before editing."),
+		);
+		await settle();
+		expect(state.error).toBe("Settings changed; refresh before editing.");
+	});
 });
 
 describe("settings_changed revision guard and settingValue()", () => {

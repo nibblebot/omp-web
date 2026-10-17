@@ -38,11 +38,12 @@ const model: SettingsModel = {
 };
 
 describe("SETTINGS_TABS", () => {
-	test("ids are unique and Appearance leads the SDK tabs", () => {
+	test("ids are unique, Common opens first and Appearance leads the SDK tabs", () => {
 		const ids = SETTINGS_TABS.map((tab) => tab.id);
 		expect(new Set(ids).size).toBe(ids.length);
-		expect(SETTINGS_TABS[0]?.id).toBe("appearance");
-		expect(DEFAULT_SETTINGS_TAB_ID).toBe("appearance");
+		expect(SETTINGS_TABS[0]?.id).toBe("common");
+		expect(SETTINGS_TABS[1]?.id).toBe("appearance");
+		expect(DEFAULT_SETTINGS_TAB_ID).toBe("common");
 	});
 
 	test("client tabs sit last", () => {
@@ -76,7 +77,15 @@ describe("visibleSettingsTabs", () => {
 
 	test("drops SDK tabs the model does not carry but keeps Installed and client tabs", () => {
 		const ids = visibleSettingsTabs(model).map((tab) => tab.id);
-		expect(ids).toEqual(["appearance", "model", "context", "installed", "web-ui", "features"]);
+		expect(ids).toEqual([
+			"common",
+			"appearance",
+			"model",
+			"context",
+			"installed",
+			"web-ui",
+			"features",
+		]);
 	});
 });
 

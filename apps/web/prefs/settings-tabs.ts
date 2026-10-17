@@ -5,8 +5,9 @@ import type { SettingsModel } from "#lib/wire/protocol";
  * hero and the narrow picker). Pure data plus helpers over the wire model, so
  * it stays unit-testable without the store.
  *
- * Three kinds of tab share one sidebar:
+ * Four kinds of tab share one sidebar:
  * - "sdk": a tab of the settings model; `id` matches `SettingsTab.id`.
+ * - "common": the daily view: SDK rows gathered by commonSettingGroups plus the Web UI section.
  * - "installed": plugins, backed by the plugin store rather than the model.
  * - "client": browser-local preferences (Web UI, Features).
  */
@@ -27,7 +28,7 @@ export type SettingsTabIconName =
 	| "monitor"
 	| "flask";
 
-export type SettingsTabKind = "sdk" | "installed" | "client";
+export type SettingsTabKind = "sdk" | "installed" | "client" | "common";
 
 export interface SettingsTabMeta {
 	id: string;
@@ -38,8 +39,15 @@ export interface SettingsTabMeta {
 	lead: string;
 }
 
-/** Tabs in sidebar order: the 10 SDK tabs, Installed, then the client tabs. */
+/** Tabs in sidebar order: Common, the 10 SDK tabs, Installed, then the client tabs. */
 export const SETTINGS_TABS: SettingsTabMeta[] = [
+	{
+		id: "common",
+		label: "Common",
+		icon: "list",
+		kind: "common",
+		lead: "The settings you change most often. Other tabs hold the rest.",
+	},
 	{
 		id: "appearance",
 		label: "Appearance",
@@ -134,7 +142,7 @@ export const SETTINGS_TABS: SettingsTabMeta[] = [
 ];
 
 /** The tab a fresh sheet opens on. */
-export const DEFAULT_SETTINGS_TAB_ID = "appearance";
+export const DEFAULT_SETTINGS_TAB_ID = "common";
 
 /** Metadata for one tab id; undefined for an unknown id. */
 export function settingsTabMeta(id: string): SettingsTabMeta | undefined {

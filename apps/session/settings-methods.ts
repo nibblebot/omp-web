@@ -28,8 +28,14 @@ export interface SettingsMethods {
 	unsetSetting(entry: SettingsEntry, args: unknown[]): Promise<SettingsModel>;
 }
 
+export interface SettingsMethodsBundle {
+	methods: SettingsMethods;
+	/** Rebroadcast the model after a change made outside these RPCs (session toggles). */
+	publish(entry: SettingsEntry): Promise<SettingsModel>;
+}
+
 /** Settings writes are serialized so a stale client cannot race another browser mutation. */
-export function createSettingsMethods(deps: SettingsMethodsDeps): SettingsMethods {
+export function createSettingsMethods(deps: SettingsMethodsDeps): SettingsMethodsBundle {
 	let pending: Promise<unknown> = Promise.resolve();
 	const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
 		const next = pending.then(operation);
@@ -73,9 +79,17 @@ export function createSettingsMethods(deps: SettingsMethodsDeps): SettingsMethod
 			deps.broadcast(model);
 			return model;
 		});
+	const publish = async (entry: SettingsEntry): Promise<SettingsModel> => {
+		const model = await getSettings(entry);
+		deps.broadcast(model);
+		return model;
+	};
 	return {
-		getSettings,
-		setSetting: (entry, args) => mutate(entry, args, false),
-		unsetSetting: (entry, args) => mutate(entry, args, true),
+		methods: {
+			getSettings,
+			setSetting: (entry, args) => mutate(entry, args, false),
+			unsetSetting: (entry, args) => mutate(entry, args, true),
+		},
+		publish,
 	};
 }

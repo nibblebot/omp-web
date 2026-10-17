@@ -1,6 +1,8 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { settingsSectionId } from "../../prefs/settings-tabs";
 import { authSnapshot, signOut } from "../../store/auth";
+import { settingsErrorText } from "../../store/settings";
+import { notificationsBlocked } from "../../store/chat";
 import {
 	call,
 	fleetSettingsActive,
@@ -23,6 +25,8 @@ import { SettingsGroup } from "./SettingsGroup";
 import { SettingSelect } from "./controls/SettingSelect";
 import { SettingToggle } from "./controls/SettingToggle";
 
+const FAST_MODE_UNSUPPORTED = "Fast mode is not available for the current model.";
+
 /**
  * Web UI tab body: the Interface and Session sections, stacked. Two state
  * sources with intentionally separate update paths (never merged):
@@ -40,11 +44,12 @@ export function WebUiSettings() {
 	// Client-local theme/font-size (localStorage via theme.ts).
 	const [theme, setThemeSignal] = createSignal<ThemePreference>(currentThemePreference());
 	const [fontSize, setFontSize] = createSignal(currentFontSize());
+	const notifyBlocked = notificationsBlocked();
 
 	return (
 		<>
 			<SettingsGroup title="Interface" id={settingsSectionId("web-ui", "Interface")}>
-				<SettingsRowLayout label="theme preference">
+				<SettingsRowLayout label="theme preference" scope="This browser">
 					<SettingSelect
 						label="theme preference"
 						options={THEME_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
@@ -52,7 +57,7 @@ export function WebUiSettings() {
 						onChange={(value) => setThemeSignal(setTheme(value as ThemePreference))}
 					/>
 				</SettingsRowLayout>
-				<SettingsRowLayout label="font size">
+				<SettingsRowLayout label="font size" scope="This browser">
 					<div class="settings-font">
 						<button
 							type="button"
@@ -77,22 +82,29 @@ export function WebUiSettings() {
 				    localStorage as well; soften is a UI pref). */}
 				<SettingsRowLayout
 					label="browser notification permission"
+					scope="This browser"
 					description="Grants this browser permission to show OS notifications while the tab is hidden. Which events notify is set by Completion, Error and Ask Notification."
+					warning={
+						notifyBlocked
+							? "Blocked in this browser. Allow notifications for this site in the browser's site settings to turn this on."
+							: undefined
+					}
 				>
 					<SettingToggle
 						label="browser notification permission"
-						checked={state.notifyEnabled}
+						checked={state.notifyEnabled && !notifyBlocked}
+						disabled={notifyBlocked}
 						onChange={setNotifyEnabled}
 					/>
 				</SettingsRowLayout>
-				<SettingsRowLayout label="soft fade">
+				<SettingsRowLayout label="soft fade" scope="This browser">
 					<SettingToggle
 						label="soft fade"
 						checked={state.soften}
 						onChange={(checked) => setState("soften", checked)}
 					/>
 				</SettingsRowLayout>
-				<SettingsRowLayout label="usage in sidebar">
+				<SettingsRowLayout label="usage in sidebar" scope="This browser">
 					<SettingToggle
 						label="usage in sidebar"
 						checked={state.sidebarUsage}
@@ -103,21 +115,27 @@ export function WebUiSettings() {
 				    would only error. They stay hidden, mirroring their main-UI session
 				    scope. */}
 				<Show when={!fleetSettingsActive()}>
-					<SettingsRowLayout label="fast mode">
+					<SettingsRowLayout label="fast mode" scope="This session">
 						<SettingToggle
 							label="fast mode"
 							checked={state.fastModeEnabled}
 							onChange={(checked) =>
-								void call("setFastMode", [checked]).catch((err) => setState("error", String(err)))
+								void call("setFastMode", [checked])
+									.then((supported) => {
+										if (supported === false) setState("error", FAST_MODE_UNSUPPORTED);
+									})
+									.catch((err) => setState("error", settingsErrorText(err)))
 							}
 						/>
 					</SettingsRowLayout>
-					<SettingsRowLayout label="auto-retry">
+					<SettingsRowLayout label="auto-retry" scope="This session">
 						<SettingToggle
 							label="auto-retry"
 							checked={state.autoRetryEnabled}
 							onChange={(checked) =>
-								void call("setAutoRetry", [checked]).catch((err) => setState("error", String(err)))
+								void call("setAutoRetry", [checked]).catch((err) =>
+									setState("error", settingsErrorText(err)),
+								)
 							}
 						/>
 					</SettingsRowLayout>

@@ -16,6 +16,13 @@ import {
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingToggle } from "./controls/SettingToggle";
 
+/** Feature rows matching a settings-search query; the whole list for an empty query. */
+export function searchFeatures(query: string) {
+	const q = query.trim().toLowerCase();
+	if (q === "") return FEATURES;
+	return FEATURES.filter((f) => `${f.label} ${f.description}`.toLowerCase().includes(q));
+}
+
 /**
  * Settings > Features: per-browser feature toggles plus bundle sizes.
  * Toggles persist to localStorage and take effect on reload. Sizes come
@@ -25,11 +32,7 @@ import { SettingToggle } from "./controls/SettingToggle";
  */
 export function FeaturesSettings(props: { query?: string }) {
 	const [sizes] = createResource(loadFeatureSizes);
-	const rows = createMemo(() => {
-		const q = (props.query ?? "").trim().toLowerCase();
-		if (q === "") return FEATURES;
-		return FEATURES.filter((f) => `${f.label} ${f.description}`.toLowerCase().includes(q));
-	});
+	const rows = createMemo(() => searchFeatures(props.query ?? ""));
 	const loadedLabels = createMemo(() =>
 		FEATURES.filter((f) => activeFeatureIds().has(f.id))
 			.map((f) => f.label)

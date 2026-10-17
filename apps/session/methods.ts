@@ -330,6 +330,11 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		rebuildTranscript: (entry) =>
 			broadcastHistory(entry.handle, transcriptHistoryFrames(entry.session)),
 	});
+	const settingsMethods = createSettingsMethods({
+		settings: deps.settings,
+		getThemes: getAvailableThemes,
+		broadcast: (model) => broadcast({ type: "settings_changed", model }),
+	});
 	const METHODS: Partial<
 		Record<
 			WebMethodName,
@@ -638,12 +643,15 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		},
 		setAutoRetry: async (entry, a) => {
 			entry.session.setAutoRetryEnabled(a[0] as boolean);
+			await settingsMethods.publish(entry);
 		},
 		abortRetry: async (entry) => {
 			entry.session.abortRetry();
 		},
 		setFastMode: async (entry, a) => {
-			entry.session.setFastMode(a[0] as boolean);
+			const supported = entry.session.setFastMode(a[0] as boolean);
+			await settingsMethods.publish(entry);
+			return supported;
 		},
 		// 18.1.9 turned computer use into an eval prelude gated by the
 		// session-scoped `computer.enabled` setting (the SDK's own /computer
@@ -831,11 +839,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			},
 			broadcastAvailableCommands: (entry) => deps.broker.broadcastAvailableCommands(entry),
 		}),
-		...createSettingsMethods({
-			settings: deps.settings,
-			getThemes: getAvailableThemes,
-			broadcast: (model) => broadcast({ type: "settings_changed", model }),
-		}),
+		...settingsMethods.methods,
 		...createAnnotationMethods(),
 		...createGitReviewMethods(),
 		...createPlanReviewMethods(),

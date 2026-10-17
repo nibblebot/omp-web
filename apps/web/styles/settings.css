@@ -254,10 +254,23 @@
 .settings-item-label {
 	display: flex;
 	align-items: center;
+	flex-wrap: wrap;
 	gap: var(--space-3);
 	font-size: var(--fs-2xl);
 	font-weight: 500;
 	color: var(--settings-title);
+}
+.settings-item-scope,
+.settings-item-effect {
+	flex: none;
+	padding: 0 var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	color: var(--muted);
+	font-size: var(--fs-sm);
+	font-weight: 400;
+	line-height: 1.6;
+	white-space: nowrap;
 }
 .settings-item-desc {
 	color: var(--settings-desc);
