@@ -45,7 +45,7 @@ export const CommandPalettePicker: Component<{ onClose: () => void }> = (props) 
 	};
 
 	return (
-		<Modal title="Command palette" onClose={props.onClose}>
+		<Modal title="Command palette" class="command-palette-dialog" onClose={props.onClose}>
 			<input
 				class="picker-filter"
 				type="search"

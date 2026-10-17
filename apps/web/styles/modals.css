@@ -604,6 +604,10 @@ button.picker-row.kbd-active {
 .session-list-dialog {
 	width: min(820px, 94vw);
 }
+/* --- CommandPalettePicker (Ctrl+K): a narrow dialog so it fits phones. --- */
+.command-palette-dialog {
+	width: min(560px, 94vw);
+}
 .session-list-picker {
 	display: flex;
 	flex-direction: column;
