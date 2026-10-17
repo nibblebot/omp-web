@@ -80,7 +80,6 @@ export default [
 							stats={() => sessionStats}
 							error={() => undefined}
 							onPickTool={() => {}}
-							onSynced={() => {}}
 						/>
 					</div>
 				),
@@ -93,7 +92,6 @@ export default [
 							stats={() => quietSessionStats}
 							error={() => undefined}
 							onPickTool={() => {}}
-							onSynced={() => {}}
 						/>
 					</div>
 				),
@@ -106,7 +104,6 @@ export default [
 							stats={() => unsyncedSessionStats}
 							error={() => undefined}
 							onPickTool={() => {}}
-							onSynced={() => {}}
 						/>
 					</div>
 				),
@@ -119,7 +116,6 @@ export default [
 							stats={() => undefined}
 							error={() => new Error("stats.db is locked by another process")}
 							onPickTool={() => {}}
-							onSynced={() => {}}
 						/>
 					</div>
 				),

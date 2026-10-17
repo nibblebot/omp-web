@@ -327,18 +327,24 @@ export const health: Health = {
 	statsDb: "ok",
 	statsDbPath: "/home/joshua/.omp/stats.db",
 	statsDbFromCopy: false,
+	isolated: false,
+	lastSyncedAt: "2026-10-16T14:02:00.000Z",
+	syncing: false,
 	sessionsDir: "/home/joshua/.omp/agent/sessions",
 	sessionsCount: 4,
 	dbCounts: { messages: 1_204, toolCalls: 311, userMessages: 87 },
 	fleetStore: { workspaces: 3, sessions: 4, bytes: 5_890_270 },
 };
 
-/** Health with the stats DB missing: warn banner with a "Sync now" action, no store line. */
+/** Health with the stats DB missing: warn banner, no store line. */
 export const healthMissingDb: Health = {
 	ok: false,
 	statsDb: "missing",
 	statsDbPath: "/home/joshua/.omp/stats.db",
 	statsDbFromCopy: false,
+	isolated: false,
+	lastSyncedAt: null,
+	syncing: false,
 	sessionsDir: "/home/joshua/.omp/agent/sessions",
 	sessionsCount: 214,
 	dbCounts: null,
@@ -350,6 +356,9 @@ export const healthErrorDb: Health = {
 	statsDb: "error",
 	statsDbPath: "/home/joshua/.omp/stats.db",
 	statsDbFromCopy: true,
+	isolated: false,
+	lastSyncedAt: null,
+	syncing: false,
 	sessionsDir: "/home/joshua/.omp/agent/sessions",
 	sessionsCount: 214,
 	dbCounts: null,

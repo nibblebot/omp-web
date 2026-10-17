@@ -1,5 +1,5 @@
 import { Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
-import { api, encodePathSegments, type Health } from "../store/fleet-api";
+import { api, ApiError, encodePathSegments, type Health } from "../store/fleet-api";
 import { MainHeader } from "../components/app/MainHeader";
 import { SidebarHeader } from "../components/app/SidebarHeader";
 import { closeDrawers, setTxSidebarVisible, state } from "../state";
@@ -13,6 +13,9 @@ type Route =
 	| { view: "list" }
 	| { view: "session"; file: string }
 	| { view: "stored"; workspaceId: string; sessionId: string };
+
+/** Debounce for stats auto-sync: coalesces bursts of turn ends and session opens. */
+const AUTO_SYNC_DEBOUNCE_MS = 1_500;
 
 /** Decode a single individually-encoded path segment; null on malformed input. */
 function decodeSegment(encoded: string): string | null {
@@ -82,6 +85,33 @@ export function TranscriptBrowser() {
 		const r = route();
 		return r.view === "session" ? r.file : null;
 	};
+	/** Stats auto-sync: opening a session or ending a turn refreshes stats.db (debounced). */
+	let autoSyncTimer: number | undefined;
+	const scheduleAutoSync = () => {
+		clearTimeout(autoSyncTimer);
+		autoSyncTimer = window.setTimeout(() => {
+			api.sync().then(bumpSync, (e: unknown) => {
+				// 409: a sync already runs on the server and its completion refreshes the views.
+				if (!(e instanceof ApiError && e.status === 409)) console.warn("stats auto-sync failed", e);
+			});
+		}, AUTO_SYNC_DEBOUNCE_MS);
+	};
+	onCleanup(() => clearTimeout(autoSyncTimer));
+	// Opening a session (including a deep link on load) and a turn ending both refresh stats.db.
+	createEffect(
+		on(file, (f) => {
+			if (f !== null) scheduleAutoSync();
+		}),
+	);
+	createEffect(
+		on(
+			() => state.streaming,
+			(now, prev) => {
+				if (prev === true && now === false) scheduleAutoSync();
+			},
+			{ defer: true },
+		),
+	);
 
 	const navigate = (f: string) => {
 		window.location.hash = `#/s/${encodePathSegments(f)}`;
@@ -137,12 +167,12 @@ export function TranscriptBrowser() {
 			<div class="main-pane">
 				<MainHeader />
 				<main class="tx-main">
-					<HealthBanner health={healthSafe} onSynced={bumpSync} />
+					<HealthBanner health={healthSafe} />
 					<Show when={storedRoute()} keyed>
 						{(r) => <StoredSessionPage workspaceId={r.workspaceId} sessionId={r.sessionId} />}
 					</Show>
 					<Show when={file()} keyed>
-						{(f) => <TranscriptDetail file={f} syncTick={syncTick} onSynced={bumpSync} />}
+						{(f) => <TranscriptDetail file={f} syncTick={syncTick} />}
 					</Show>
 					<Show when={!file() && !storedRoute()}>
 						<div class="tx-empty-state">
@@ -158,23 +188,7 @@ export function TranscriptBrowser() {
 	);
 }
 
-function HealthBanner(props: { health: () => Health | undefined; onSynced: () => void }) {
-	const [syncing, setSyncing] = createSignal(false);
-	const [syncError, setSyncError] = createSignal<string | null>(null);
-
-	const runSync = async () => {
-		setSyncing(true);
-		setSyncError(null);
-		try {
-			await api.sync();
-			props.onSynced();
-		} catch (e) {
-			setSyncError(e instanceof Error ? e.message : String(e));
-		} finally {
-			setSyncing(false);
-		}
-	};
-
+function HealthBanner(props: { health: () => Health | undefined }) {
 	return (
 		<Show when={props.health()} fallback={null}>
 			{(h) => {
@@ -214,21 +228,6 @@ function HealthBanner(props: { health: () => Health | undefined; onSynced: () =>
 									<span class="banner-msg">
 										stats.db not found, run <code>omp stats</code> once to build the index
 									</span>
-								</Show>
-								<button
-									type="button"
-									class="btn btn-small"
-									disabled={syncing()}
-									onClick={() => void runSync()}
-								>
-									{syncing() ? "Syncing…" : "Sync now"}
-								</button>
-								<Show when={syncError()}>
-									{(e) => (
-										<span class="banner-error" role="alert">
-											Sync failed: {e()}
-										</span>
-									)}
 								</Show>
 							</div>
 						</Show>

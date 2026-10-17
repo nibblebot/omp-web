@@ -51,7 +51,7 @@ export default [
 				name: "Synced session",
 				render: () => (
 					<TxPane selectedFile={SESSION_FILE_MAIN}>
-						<TranscriptDetail file={SESSION_FILE_MAIN} syncTick={() => 0} onSynced={() => {}} />
+						<TranscriptDetail file={SESSION_FILE_MAIN} syncTick={() => 0} />
 					</TxPane>
 				),
 			},
@@ -59,7 +59,7 @@ export default [
 				name: "Not in stats.db yet",
 				render: () => (
 					<TxPane selectedFile={SESSION_FILE_UNSYNCED}>
-						<TranscriptDetail file={SESSION_FILE_UNSYNCED} syncTick={() => 0} onSynced={() => {}} />
+						<TranscriptDetail file={SESSION_FILE_UNSYNCED} syncTick={() => 0} />
 					</TxPane>
 				),
 			},
@@ -67,7 +67,7 @@ export default [
 				name: "Unreadable session",
 				render: () => (
 					<TxPane selectedFile={SESSION_FILE_BROKEN}>
-						<TranscriptDetail file={SESSION_FILE_BROKEN} syncTick={() => 0} onSynced={() => {}} />
+						<TranscriptDetail file={SESSION_FILE_BROKEN} syncTick={() => 0} />
 					</TxPane>
 				),
 			},

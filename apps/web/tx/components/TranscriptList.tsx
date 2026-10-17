@@ -9,7 +9,14 @@ import {
 	onCleanup,
 } from "solid-js";
 import { api, ApiError, type Health, type SessionSummary } from "../../store/fleet-api";
-import { basename, formatBytes, formatCompact, formatCost, timeAgo } from "../util/format";
+import {
+	basename,
+	formatBytes,
+	formatCompact,
+	formatCost,
+	formatDateTime,
+	timeAgo,
+} from "../util/format";
 import { shouldFallbackMissingFile } from "../util/missing-file";
 import { groupSessionsByProject } from "../util/project-groups";
 
@@ -207,11 +214,11 @@ export function TranscriptList(props: TranscriptListProps) {
 					<button
 						type="button"
 						class="btn btn-small"
-						disabled={syncing()}
+						disabled={syncing() || health()?.syncing === true}
 						onClick={() => void runSync()}
 						title="Run `omp stats --summary` on the server and refresh the stats.db index"
 					>
-						<Show when={syncing()} fallback="Sync now">
+						<Show when={syncing() || health()?.syncing === true} fallback="Sync now">
 							<span class="spin" aria-hidden="true" />
 							Syncing…
 						</Show>
@@ -234,6 +241,14 @@ export function TranscriptList(props: TranscriptListProps) {
 							<div class="foot-line">
 								<span class="foot-label">db</span>
 								<span class={`foot-value db-${h().statsDb}`}>{h().statsDb}</span>
+							</div>
+							<div class="foot-line" title="Last successful stats sync on this server">
+								<span class="foot-label">synced</span>
+								<span class="foot-value">
+									{h().lastSyncedAt === null
+										? "never"
+										: formatDateTime(Date.parse(h().lastSyncedAt ?? ""))}
+								</span>
 							</div>
 							<div class="foot-line">
 								<span class="foot-label">sessions</span>

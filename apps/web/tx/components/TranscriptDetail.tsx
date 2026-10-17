@@ -17,8 +17,6 @@ interface TranscriptDetailProps {
 	file: string;
 	/** bumped after a stats sync so overview data refetches */
 	syncTick: () => number;
-	/** called after a successful stats sync */
-	onSynced: () => void;
 }
 
 /**
@@ -158,7 +156,6 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 						setToolFilter(name);
 						setTab("transcript");
 					}}
-					onSynced={props.onSynced}
 				/>
 			</section>
 

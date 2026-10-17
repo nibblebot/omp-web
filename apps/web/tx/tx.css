@@ -553,28 +553,8 @@
 .tab-pane.hidden {
   display: none;
 }
-/* ---------- analytics header / stats sync ---------- */
+/* ---------- stats sync ---------- */
 
-.analytics-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.sync-status {
-  font-size: var(--tx-fs-base);
-  color: var(--tx-text-dim);
-}
-.sync-status.sync-ok {
-  color: var(--tx-ok);
-}
-.sync-status.sync-error {
-  color: var(--tx-danger);
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
 .spin {
   display: inline-block;
   width: 10px;

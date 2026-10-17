@@ -1,5 +1,5 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
-import { api, type SessionStats } from "../../store/fleet-api";
+import { For, Show, createMemo } from "solid-js";
+import type { SessionStats } from "../../store/fleet-api";
 import { formatCompact, formatCost, formatDateTime, formatMs } from "../util/format";
 
 interface AnalyticsProps {
@@ -7,57 +7,11 @@ interface AnalyticsProps {
 	error: () => Error | undefined;
 	/** Clicking a tool row filters the transcript to that tool. */
 	onPickTool: (name: string) => void;
-	/** Called after a successful stats sync so health/sessions/analytics refetch. */
-	onSynced: () => void;
 }
 
 export function TranscriptOverview(props: AnalyticsProps) {
-	const [syncPhase, setSyncPhase] = createSignal<"idle" | "syncing" | "done" | "error">("idle");
-	const [syncMsg, setSyncMsg] = createSignal("");
-
-	const runSync = async () => {
-		if (syncPhase() === "syncing") return;
-		setSyncPhase("syncing");
-		try {
-			const r = await api.sync();
-			setSyncPhase("done");
-			setSyncMsg(`Synced ${r.processed} entries from ${r.files} files`);
-			props.onSynced();
-		} catch (e) {
-			setSyncPhase("error");
-			setSyncMsg(e instanceof Error ? e.message : String(e));
-		}
-	};
-
 	return (
 		<div class="analytics">
-			<header class="analytics-head">
-				<button
-					type="button"
-					class="btn btn-small"
-					disabled={syncPhase() === "syncing"}
-					onClick={() => void runSync()}
-					title="Run `omp stats --summary` on the server and refresh the stats.db index"
-				>
-					<Show when={syncPhase() === "syncing"} fallback="Sync stats DB">
-						<span class="spin" aria-hidden="true" />
-						Syncing…
-					</Show>
-				</button>
-				<Show when={syncPhase() === "done"}>
-					<span class="sync-status sync-ok" role="status">
-						{syncMsg()}
-					</span>
-				</Show>
-				<Show when={syncPhase() === "error"}>
-					<span class="sync-status sync-error" role="alert">
-						{syncMsg()}
-						<button type="button" class="btn btn-small" onClick={() => setSyncPhase("idle")}>
-							Dismiss
-						</button>
-					</span>
-				</Show>
-			</header>
 			<Show
 				when={props.error()}
 				fallback={
