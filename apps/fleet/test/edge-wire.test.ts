@@ -481,11 +481,13 @@ describe("fleet edge", () => {
 			// The exact SessionListEntry shape listDaemonSessions builds.
 			expect(Object.keys(session!).sort()).toEqual([
 				"cwd",
+				"firstMessage",
 				"id",
 				"messageCount",
 				"modifiedAt",
 				"name",
 				"path",
+				"status",
 			]);
 			expect(session!.path).toBe(seeded);
 			expect(session!.id).toBe("edge-ls");
