@@ -530,7 +530,7 @@ export const advisorOverview: AdvisorOverview = {
 
 export const advisorDisabled: AdvisorOverview = { configured: false, active: false, advisors: [] };
 
-export const advisorStats = { cost: 0.318, tokens: 84032, messages: 12 };
+export const advisorStats = { cost: 0.318, tokens: { total: 84032 }, messages: { total: 12 } };
 
 export const advisorWarnings = [
 	"architect: model gpt-5 has no reasoning budget; using provider default",
@@ -638,9 +638,13 @@ const defaultCalls: CallHandlers = {
 	},
 	subagentSteer: () => ({ ok: true }),
 	subagentAbort: () => ({ ok: true }),
-	advisorGetStatus: (args) => (argRecord(args).stats === true ? advisorStats : advisorOverview),
-	advisorConfigure: (args) =>
-		argRecord(args).probe === true ? advisorWarnings : { enabled: true },
+	advisorGetStatus: (args) => {
+		const section = argRecord(args).section;
+		if (section === "stats") return advisorStats;
+		if (section === "warnings") return { warnings: advisorWarnings };
+		return advisorOverview;
+	},
+	advisorConfigure: () => ({ enabled: true }),
 	advisorTranscript: () => advisorHistoryPage,
 	loopPolicy: () => loopPolicyIdle,
 	loopPreview: () => loopPreviewOk,

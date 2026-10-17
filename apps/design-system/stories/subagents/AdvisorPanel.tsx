@@ -1,6 +1,7 @@
 import { AdvisorPanel } from "../../../web/components/subagents/AdvisorPanel";
 import {
 	advisorDisabled,
+	advisorOverview,
 	advisorStats,
 	advisorWarnings,
 	argRecord,
@@ -28,7 +29,7 @@ export default defineStory({
 			seed: () =>
 				seedSubagents({
 					advisorGetStatus: (args) =>
-						argRecord(args).stats === true ? advisorStats : advisorDisabled,
+						argRecord(args).section === "stats" ? advisorStats : advisorDisabled,
 				}),
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
@@ -38,7 +39,13 @@ export default defineStory({
 		},
 		{
 			name: "Config probe warnings",
-			seed: () => seedSubagents({ advisorConfigure: () => advisorWarnings }),
+			seed: () =>
+				seedSubagents({
+					advisorGetStatus: (args) =>
+						argRecord(args).section === "warnings"
+							? { warnings: advisorWarnings }
+							: advisorOverview,
+				}),
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
 					<AdvisorPanel />

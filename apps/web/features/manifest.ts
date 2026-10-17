@@ -91,7 +91,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		experimental: true,
 		defaultEnabled: true,
 		commands: [],
-		modals: [],
+		modals: ["advisor"],
 		docks: [],
 	},
 	{

@@ -24,8 +24,8 @@ interface AdvisorOverview {
 }
 interface AdvisorStats {
 	cost?: number;
-	tokens?: number;
-	messages?: number;
+	tokens?: { total?: number };
+	messages?: { total?: number };
 	context?: unknown;
 }
 interface AdvisorHistoryPage {
@@ -55,7 +55,7 @@ export const AdvisorPanel: Component = () => {
 		},
 	);
 	const [warnings] = createResource(async (): Promise<string[] | { unavailable: string }> => {
-		const res = await tryCall<unknown>("advisorConfigure", [{ probe: true }]);
+		const res = await tryCall<unknown>("advisorGetStatus", [{ section: "warnings" }]);
 		if (res.data === undefined) return { unavailable: res.unavailable ?? "unknown" };
 		if (Array.isArray(res.data) && res.data.every((entry) => typeof entry === "string"))
 			return res.data;
@@ -67,7 +67,7 @@ export const AdvisorPanel: Component = () => {
 		return [];
 	});
 	const [stats] = createResource(async (): Promise<AdvisorStats | { unavailable: string }> => {
-		const res = await tryCall<AdvisorStats>("advisorGetStatus", [{ stats: true }]);
+		const res = await tryCall<AdvisorStats>("advisorGetStatus", [{ section: "stats" }]);
 		return res.data ?? { unavailable: res.unavailable ?? "unknown" };
 	});
 	const [compact, setCompact] = createSignal(true);
@@ -255,26 +255,9 @@ export const AdvisorPanel: Component = () => {
 			>
 				<div class="goal-meta">
 					<span class="picker-label">stats</span> cost{" "}
-					{(() => {
-						const s = stats();
-						return s !== undefined && typeof s === "object" && "cost" in s
-							? String(s.cost ?? "n/a")
-							: "n/a";
-					})()}{" "}
-					· tokens{" "}
-					{(() => {
-						const s = stats();
-						return s !== undefined && typeof s === "object" && "tokens" in s
-							? String(s.tokens ?? "n/a")
-							: "n/a";
-					})()}{" "}
-					· messages{" "}
-					{(() => {
-						const s = stats();
-						return s !== undefined && typeof s === "object" && "messages" in s
-							? String(s.messages ?? "n/a")
-							: "n/a";
-					})()}
+					{(stats() as AdvisorStats | undefined)?.cost ?? "n/a"} · tokens{" "}
+					{(stats() as AdvisorStats | undefined)?.tokens?.total ?? "n/a"} · messages{" "}
+					{(stats() as AdvisorStats | undefined)?.messages?.total ?? "n/a"}
 				</div>
 			</Show>
 

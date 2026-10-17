@@ -1,16 +1,23 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { createComponent } from "solid-js";
+import { renderToStringAsync } from "solid-js/web";
 import type { ServerFrame } from "#lib/wire/protocol";
+import { AdvisorPanel } from "../../components/subagents/AdvisorPanel";
 import { FEATURE_IDS, type FeatureId } from "../../features/manifest";
-import { activateFeatures, isFeatureEnabled } from "../../features/registry";
+import { activateFeatures, featureModal, isFeatureEnabled } from "../../features/registry";
 import { connect, setState, state } from "../../state";
 import {
 	FakeEventSource,
 	assistantMsg,
 	attached,
 	dispatch,
+	flushMicrotasks,
+	installJsxShim,
 	installTransportStubs,
 	itemCounts,
+	posted,
 	restoreBrowserGlobals,
+	restoreJsxShim,
 	userMsg,
 } from "../web.testkit";
 
@@ -81,5 +88,34 @@ describe("advisor notes render inline (TUI advisor card parity)", () => {
 		dispatch(ev({ type: "message_end", message: advisorMsg }));
 		expect(itemCounts()).toEqual({ advisor: 1 });
 		expect(state.items[0]).toMatchObject({ kind: "advisor", notes });
+	});
+});
+
+describe("advisor sheet modal", () => {
+	test("the Open advisor button's modal resolves to the advisor sheet", () => {
+		expect(featureModal("advisor")).toBeDefined();
+	});
+});
+
+describe("advisor sheet panel wire requests", () => {
+	test("stats and warnings read advisorGetStatus by section, never as probe or stats flags", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("session-a"));
+		installJsxShim();
+		void renderToStringAsync(() => createComponent(AdvisorPanel, {}));
+		try {
+			await flushMicrotasks();
+			const calls = posted.flatMap((c) => (c.type === "call" ? [c] : []));
+			expect(calls).toContainEqual(
+				expect.objectContaining({ method: "advisorGetStatus", args: [{ section: "stats" }] }),
+			);
+			expect(calls).toContainEqual(
+				expect.objectContaining({ method: "advisorGetStatus", args: [{ section: "warnings" }] }),
+			);
+			expect(calls.some((c) => c.method === "advisorConfigure")).toBe(false);
+		} finally {
+			restoreJsxShim();
+		}
 	});
 });
