@@ -88,6 +88,9 @@ const WEB_DESCRIPTIONS: Readonly<Record<string, string>> = {
 	hotkeys: "Show keyboard shortcuts",
 };
 
+/** Argument hints the browser adds where its shape differs from the pinned SDK row. */
+const WEB_HINTS: Readonly<Record<string, string>> = { model: "[model]" };
+
 /** Web-only names with no SDK builtin of their own. */
 const WEB_ONLY: readonly string[] = ["help", "compaction", "annotations"];
 
@@ -238,7 +241,7 @@ export function buildCommandRegistry(input: CommandRegistryInput): CommandEntry[
 			name: b.name,
 			aliases: b.aliases ?? [],
 			description: WEB_DESCRIPTIONS[b.name] ?? b.description,
-			hint: b.hint,
+			hint: b.hint ?? WEB_HINTS[b.name],
 			subcommands: b.subcommands ?? [],
 			group: GROUP_BY_NAME[b.name] ?? "More",
 			refusal: REFUSALS[b.name],
@@ -399,6 +402,7 @@ export interface CommandLiveSource {
 	queuedMessageCount?: number;
 	contextUsage?: { percent: number } | undefined;
 	sessionName?: string | undefined;
+	modelPresets?: { names: string[]; active?: string } | undefined;
 }
 
 const onOff = (v: boolean | undefined): string => (v ? "on" : "off");
@@ -422,6 +426,8 @@ export function commandLiveState(name: string, s: CommandLiveSource): string | u
 		case "compact":
 		case "context":
 			return s.contextUsage ? `${Math.round(s.contextUsage.percent)}% used` : undefined;
+		case "modelpreset":
+			return s.modelPresets?.active;
 		case "rename":
 			return s.sessionName || undefined;
 		default:

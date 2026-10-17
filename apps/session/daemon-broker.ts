@@ -5,6 +5,10 @@ import {
 	getKnownRoleIds,
 	getRoleInfo,
 } from "@oh-my-pi/pi-coding-agent/config/model-roles";
+import {
+	findActiveModelPreset,
+	getModelPresetNames,
+} from "@oh-my-pi/pi-coding-agent/config/model-presets";
 import { resolveModelRoleValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { cfgModelRoleStorage } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import {
@@ -14,6 +18,7 @@ import {
 import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
+import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import {
 	DAEMON_KEY_SEP,
@@ -139,6 +144,9 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 
 	function buildStateSnapshot(entry: SessionEntry): WebSessionState {
 		const session = entry.session;
+		const presetNames = getModelPresetNames(session.settings);
+		const taskOverride = cfgTaskAgentModelOverrides.get(session.settings).task;
+		const taskModel = Array.isArray(taskOverride) ? taskOverride[0] : taskOverride;
 		return {
 			...deps.getWebState?.(session),
 			model: session.model,
@@ -151,6 +159,12 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 			modelRoleStorage: cfgModelRoleStorage.get(session.settings),
 			thinkingLevel: session.thinkingLevel,
 			autoThinking: session.isAutoThinking,
+			thinkingSelectors: session.getAvailableEffortSelectors(),
+			modelPresets:
+				presetNames.length > 0
+					? { names: presetNames, active: findActiveModelPreset(session.settings) }
+					: undefined,
+			taskModel: taskModel || undefined,
 			isStreaming: session.isStreaming,
 			isCompacting: session.isCompacting,
 			steeringMode: session.steeringMode,

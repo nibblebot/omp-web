@@ -9,12 +9,14 @@ import {
 	type SettingsTabMeta,
 } from "../../prefs/settings-tabs";
 import { authSnapshot } from "../../store/auth";
+import { consumeSettingsTab } from "../../store/models";
 import { fleetSettingsActive, refreshSettings, setState, state } from "../../state";
 import { SearchIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
 import { CommonSettings } from "./CommonSettings";
 import { FeaturesSettings, searchFeatures } from "./FeaturesSettings";
 import { InstalledTab } from "./InstalledTab";
+import { ModelRoleTable } from "./ModelRoleTable";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsNav, SettingsSectionPicker, type SettingsSection } from "./SettingsNav";
 import { SettingsRow, SettingsRowLayout } from "./SettingsRow";
@@ -36,7 +38,9 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	let bodyRef: HTMLDivElement | undefined;
 
 	onMount(() => {
-		setState("settingsTab", null);
+		// A deep link (Alt+M, /model) names the tab to open; consume it once.
+		const tab = consumeSettingsTab();
+		if (tab && settingsTabMeta(tab)) setActiveTab(tab);
 		void refreshSettings();
 	});
 
@@ -225,6 +229,9 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 								</Show>
 								<Show when={tab.id === "web-ui"}>
 									<WebUiSettings />
+								</Show>
+								<Show when={tab.id === "model"}>
+									<ModelRoleTable />
 								</Show>
 								<Show when={tab.kind === "common"}>
 									<CommonSettings />

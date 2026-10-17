@@ -1,9 +1,9 @@
 import { Show, type Component } from "solid-js";
 import { planToggle } from "../../../prompt/commands";
+import { cycleModelPreset, openModelPicker, openThinkingPicker } from "../../../store/models";
 import { formatTokens, getContextUsageLevel } from "../../../usage/context";
-import { call, setState, state } from "../../../state";
+import { setState, state } from "../../../state";
 import { ArrowDownIcon, ArrowUpIcon } from "../../ui/icons";
-import { isCoarsePointer } from "../pointer";
 import { RetryBadge } from "./RetryBadge";
 import { StatusSegment } from "./StatusSegment";
 
@@ -38,7 +38,7 @@ const ContextSegment: Component = () => {
 	);
 };
 
-/** Session-send configuration (model, thinking) plus the session resource
+/** Session-send configuration (model, preset, thinking) plus the session resource
  *  meters (ctx fill, cumulative stats), pinned directly above the composer,
  *  where the send decision happens. Per-turn badges (compacting, retry,
  *  plan) lead the row and show only while active. */
@@ -59,26 +59,28 @@ export const SessionConfigBar: Component = () => (
 		<RetryBadge />
 		<StatusSegment
 			class="model-segment"
-			onClick={() => setState("modal", "model")}
-			title="Model roles"
+			onClick={() => openModelPicker()}
+			title="Switch model (Alt+P). Session-only."
 		>
 			{state.model ? `${state.model.provider}/${state.model.id}` : "no model"}
 		</StatusSegment>
+		<Show when={(state.modelPresets?.names.length ?? 0) > 0}>
+			<StatusSegment
+				class="preset-segment"
+				onClick={() => void cycleModelPreset()}
+				title="Cycle model presets (/modelpreset)"
+			>
+				{state.modelPresets?.active ?? "preset"}
+			</StatusSegment>
+		</Show>
 		<StatusSegment
 			class="thinking-segment"
-			onClick={() => {
-				// Touch has no right-click: on coarse pointers a tap opens the picker.
-				if (isCoarsePointer()) {
-					setState("modal", "thinking");
-					return;
-				}
-				void call("cycleThinkingLevel").catch((err) => setState("error", String(err)));
-			}}
+			onClick={() => openThinkingPicker()}
 			onContextMenu={(e) => {
 				e.preventDefault();
-				setState("modal", "thinking");
+				openThinkingPicker();
 			}}
-			title={`Click: cycle thinking level · right-click: pick${state.autoThinking && state.thinkingLevel ? ` (auto: ${state.thinkingLevel})` : ""}`}
+			title="Thinking level (Shift+Tab cycles). Right-click or click to pick."
 		>
 			{state.autoThinking ? "auto" : (state.thinkingLevel ?? "inherit")}
 		</StatusSegment>

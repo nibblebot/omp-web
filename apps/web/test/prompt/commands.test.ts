@@ -232,8 +232,8 @@ describe("P0.2 argument-aware collision routes", () => {
 		expect(resumeDispatch("@claude")).toEqual({ kind: "switch", target: "@claude" });
 	});
 
-	test("/model bare opens picker, selector selects", () => {
-		expect(modelDispatch("")).toEqual({ kind: "picker" });
+	test("/model bare opens settings Model tab, selector selects", () => {
+		expect(modelDispatch("")).toEqual({ kind: "settings" });
 		expect(modelDispatch("anthropic/claude-opus")).toEqual({
 			kind: "select",
 			selector: "anthropic/claude-opus",

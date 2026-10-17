@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionEntry as SdkEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import {
@@ -247,30 +245,6 @@ export function createGraphModelHandlers(deps: {
 			committedAnswers.delete(session);
 			session.resumeAfterAskReanswer();
 			return { resumed: true };
-		},
-		async setModelTemporary(entry: SessionEntry, provider: string, id: string, thinking?: string) {
-			const { session } = entry;
-			let level: ConfiguredThinkingLevel | undefined;
-			if (thinking !== undefined) {
-				if (thinking === "auto") level = "auto";
-				else {
-					const value = Object.values(ThinkingLevel).find((value) => value === thinking);
-					if (value === undefined) throw new Error(`Invalid thinking level: ${thinking}`);
-					level = value;
-				}
-			}
-			await session.modelRegistry.awaitBackgroundRefresh();
-			const model = session
-				.getAvailableModels()
-				.find((model) => model.provider === provider && model.id === id);
-			if (!model) throw new Error(`Model not available: ${provider}/${id}`);
-			await session.setModelTemporary(model, level);
-			const effective = session.configuredThinkingLevel();
-			return {
-				provider,
-				id,
-				clampedThinking: level !== undefined && effective !== level ? effective : undefined,
-			};
 		},
 		getModelPresets(entry: SessionEntry) {
 			return {

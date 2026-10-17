@@ -28,6 +28,7 @@ import {
 	restartDaemonById,
 	toggleToolsExpanded,
 } from "./state";
+import { openModelPicker, openModelSettings } from "./store/models";
 import { initTheme } from "./prefs/theme";
 import { trackViewportHeight } from "./prefs/viewport";
 import { featureView } from "./features/registry";
@@ -135,6 +136,15 @@ export const App: Component = () => {
 			if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
 			e.preventDefault();
 			setState("modal", "subagents");
+		});
+		// Alt+M opens Settings > Model; Alt+P opens the quick model picker.
+		window.addEventListener("keydown", (e) => {
+			if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+			const key = e.key.toLowerCase();
+			if (key !== "m" && key !== "p") return;
+			e.preventDefault();
+			if (key === "m") openModelSettings();
+			else openModelPicker();
 		});
 	});
 	// Drawer sidebars (below 1024px) get out of the way once the main pane

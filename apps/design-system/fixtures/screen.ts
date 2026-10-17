@@ -1,7 +1,7 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import type { AvailableSlashCommand, ImageArg, ModelInfo } from "#lib/wire/protocol";
+import type { AvailableSlashCommand, ImageArg } from "#lib/wire/protocol";
 import type {
 	BashItem,
 	Block,
@@ -61,24 +61,6 @@ export const claude: Model = {
 	compat: sessionModel.compat,
 };
 
-/** ModelInfo list for the model picker in the sidebar and SessionConfigBar. */
-export const screenModelInfos: ModelInfo[] = [
-	{
-		provider: "anthropic",
-		id: "claude-opus-4",
-		contextWindow: 200_000,
-		reasoning: true,
-		thinking: opusThinking,
-	},
-	{
-		provider: "anthropic",
-		id: "claude-sonnet-4",
-		contextWindow: 200_000,
-		reasoning: true,
-		thinking: opusThinking,
-	},
-];
-
 /** AvailableSlashCommand list: remote commands that join the web-local ones in autocomplete. */
 export const screenSlashCommands: AvailableSlashCommand[] = [
 	{
@@ -133,7 +115,6 @@ export const screenSessionSeed: Partial<typeof state> = {
 	connected: true,
 	currentSessionId: SCREEN_DAEMON_ID,
 	...screenSessionView,
-	availableModels: screenModelInfos,
 	availableCommands: screenSlashCommands,
 	daemonRoster: rosterAppDaemons,
 	registeredProjects: rosterProjects,

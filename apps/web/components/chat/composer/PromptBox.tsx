@@ -45,8 +45,7 @@ export const PromptBox: Component = () => {
 		// R8 readiness gate: the send button is disabled and Enter is suppressed
 		// until the server broadcasts `ready` (boot session's gate cleared).
 		if (!isReady()) return;
-		const raw = message();
-		const text = raw.trim();
+		const text = message().trim();
 		const imgs = images();
 		const attached = files().filter((f) => f.text !== undefined);
 		if (!text && imgs.length === 0 && attached.length === 0) return;

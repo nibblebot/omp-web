@@ -1,20 +1,29 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { getAvailableThemes, type Settings } from "@oh-my-pi/pi-coding-agent";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { cfgModelRoleStorage, cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+import {
+	disabledProviderIds,
+	getModelMatchPreferences,
+	resolveCliModel,
+} from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { resolveRoleModelFull } from "@oh-my-pi/pi-coding-agent/session/role-models";
+import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import type {
 	AbortOptions,
+	ModelBrowserEntry,
 	ModelInfo,
+	ModelLockReason,
 	QueuedCommandRef,
 	QueuedMessageRef,
 	QueuedMessagesSnapshot,
@@ -25,8 +34,6 @@ import { removeQueuedCommand } from "./command-queue";
 import type { DaemonBroker } from "./daemon-broker";
 import type { SessionEntry } from "./session-entry";
 import { holdQueuedMessages, resumeHeldQueue, takeQueuedMessage } from "./queue-hold";
-import { buildSettingsModel, coerceSettingValue } from "#lib/sdk-settings/settings-model";
-import { applySettingSideEffects } from "./settings-effects";
 import { createPluginMethods } from "./plugin-methods";
 import { resolveSessionMainFile, MaterializeSessionError } from "./session-materialize";
 import os from "node:os";
@@ -41,7 +48,6 @@ import {
 } from "./advisor-service";
 import {
 	getAdvisorConfiguration,
-	getAdvisorSettings,
 	setAdvisorConfiguration,
 	setAdvisorSettings,
 } from "./advisor-config";
@@ -194,6 +200,8 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	const READ_ONLY: Partial<Record<WebMethodName, true>> = {
 		getSessionStats: true,
 		getAvailableModels: true,
+		getModelBrowser: true,
+		getModelPresets: true,
 		getSettings: true,
 		getSkillsState: true,
 		getMcpState: true,
@@ -671,8 +679,73 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 				}));
 		},
 		setThinkingLevel: async (entry, a) => {
-			entry.session.setThinkingLevel(a[0] as ThinkingLevel);
+			const { session } = entry;
+			const level = a[0] as ConfiguredThinkingLevel;
+			const supported = session.getAvailableEffortSelectors();
+			if (!supported.includes(level)) {
+				const model = session.model
+					? `${session.model.provider}/${session.model.id}`
+					: "the current model";
+				const list = supported.length > 0 ? supported.join(", ") : "none";
+				throw new Error(`Thinking "${level}" is not supported by ${model}. Supported: ${list}.`);
+			}
+			session.setThinkingLevel(level);
 		},
+		switchModel: async (entry, a) => {
+			const { session } = entry;
+			const selector = a[0] as string;
+			await session.modelRegistry.awaitBackgroundRefresh();
+			const scoped = session.scopedModels.map((scopedModel) => scopedModel.model);
+			const resolved = resolveCliModel({
+				cliModel: selector,
+				modelRegistry: session.modelRegistry,
+				availableModels: scoped.length > 0 ? scoped : undefined,
+				settings: session.settings,
+				preferences: getModelMatchPreferences(session.settings),
+			});
+			if (!resolved.model) throw new Error(resolved.error ?? `Unknown model: ${selector}`);
+			await session.setModelTemporary(resolved.model, resolved.thinkingLevel);
+			return {
+				provider: resolved.model.provider,
+				id: resolved.model.id,
+				thinkingLevel: resolved.thinkingLevel,
+			};
+		},
+		getModelBrowser: async (entry): Promise<ModelBrowserEntry[]> => {
+			const { session } = entry;
+			await session.modelRegistry.awaitBackgroundRefresh();
+			const usable = new Set(
+				session.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`),
+			);
+			const disabled = disabledProviderIds(session.settings);
+			return session.modelRegistry.getAll().map(({ provider, id, contextWindow, reasoning }) => {
+				const locked: ModelLockReason | undefined = disabled.has(provider)
+					? "disabled"
+					: usable.has(`${provider}/${id}`)
+						? undefined
+						: "credentials";
+				return {
+					provider,
+					id,
+					contextWindow,
+					reasoning,
+					...(locked ? { locked } : {}),
+				};
+			});
+		},
+		setTaskModel: async (entry, a) => {
+			const { settings } = entry.session;
+			const selector = a[0] as string | null;
+			const next = { ...cfgTaskAgentModelOverrides.get(settings) };
+			if (selector === null) delete next.task;
+			else next.task = selector;
+			cfgTaskAgentModelOverrides.override(settings, next);
+		},
+		getModelPresets: async (entry) => graph.getModelPresets(entry),
+		saveModelPreset: async (entry, a) => graph.saveModelPreset(entry, a[0] as string),
+		applyModelPreset: async (entry, a) => graph.applyModelPreset(entry, a[0] as string),
+		deleteModelPreset: async (entry, a) => graph.deleteModelPreset(entry, a[0] as string),
+		getModelMentions: async (entry) => graph.getModelMentions(entry),
 		cycleThinkingLevel: async (entry) => {
 			const level = entry.session.cycleThinkingLevel();
 			return level ? { level } : null;

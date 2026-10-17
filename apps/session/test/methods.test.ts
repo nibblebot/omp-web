@@ -326,6 +326,71 @@ describe("getAvailableModels", () => {
 	});
 });
 
+describe("setThinkingLevel", () => {
+	test("rejects a level the active model does not offer", async () => {
+		const entry = {
+			session: {
+				model: { provider: "anthropic", id: "haiku" },
+				getAvailableEffortSelectors: () => ["off", "low"],
+				setThinkingLevel: () => {
+					throw new Error("must not apply");
+				},
+			},
+		} as unknown as SessionEntry;
+		await expect(methodsTable().setThinkingLevel!(entry, ["high"])).rejects.toThrow(
+			'Thinking "high" is not supported by anthropic/haiku. Supported: off, low.',
+		);
+	});
+});
+
+describe("getModelBrowser", () => {
+	test("marks models without credentials as locked and leaves usable ones open", async () => {
+		const usable = { provider: "anthropic", id: "opus", contextWindow: 1, reasoning: true };
+		const locked = { provider: "openai", id: "gpt", contextWindow: 1, reasoning: false };
+		const entry = {
+			session: {
+				settings: Settings.isolated(),
+				modelRegistry: {
+					awaitBackgroundRefresh: async () => {},
+					getAll: () => [usable, locked],
+					getAvailable: () => [usable],
+				},
+			},
+		} as unknown as SessionEntry;
+		const rows = (await methodsTable().getModelBrowser!(entry, [])) as Array<
+			Record<string, unknown>
+		>;
+		expect(rows[0]).not.toHaveProperty("locked");
+		expect(rows[1]!.locked).toBe("credentials");
+	});
+
+	test("answers a full registry inside one callback envelope", async () => {
+		// Full SDK rows with compat tables ran past the 1 MiB cap; the browser
+		// projects each row to provider/id/context/reasoning plus a lock code.
+		const registry = Array.from({ length: 5000 }, (_, i) => ({
+			provider: `provider-${i % 40}`,
+			id: `model-with-a-long-identifier-${i}`,
+			contextWindow: 200_000,
+			reasoning: true,
+			thinking: { mode: "effort", efforts: ["low", "high"] },
+			compat: { notes: "x".repeat(2_000) },
+		}));
+		const entry = {
+			session: {
+				settings: Settings.isolated(),
+				modelRegistry: {
+					awaitBackgroundRefresh: async () => {},
+					getAll: () => registry,
+					getAvailable: () => [],
+				},
+			},
+		} as unknown as SessionEntry;
+		const rows = (await methodsTable().getModelBrowser!(entry, [])) as unknown[];
+		expect(rows).toHaveLength(5000);
+		expect(JSON.stringify(rows).length).toBeLessThan(ENVELOPE_MAX_BYTES);
+	});
+});
+
 /** Message-only transcript stub for the graph rows, oldest first on disk. */
 function graphEntry() {
 	const entries = [

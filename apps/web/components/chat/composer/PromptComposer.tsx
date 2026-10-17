@@ -26,8 +26,8 @@ import {
 	recoverClearedDraft,
 	scheduleDraftSave,
 } from "../../../store/drafts";
-import { expandMentionChips, getModelMentions, MODEL_MENTION_RE } from "../../../store/models";
 import { graphGeneration } from "../../../store/graph";
+import { expandMentionChips, getModelMentions, MODEL_MENTION_RE } from "../../../store/models";
 import {
 	ATTACH_ACCEPT,
 	foldedPreview,
@@ -383,7 +383,6 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 					</div>
 				)}
 			</Show>
-			<Show when={chipError()}>{(e) => <div class="tool-collapsed-note">{e()}</div>}</Show>
 			<div class="prompt-input">
 				{props.ac.open() && (
 					<AutocompletePopup

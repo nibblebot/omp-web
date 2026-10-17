@@ -8,7 +8,8 @@
  * `methods.ts`. Absent means unavailable on the wire.
  *
  * Keys deliberately left absent:
- * - modelPresets / temporaryModel / modelMentions: no server implementation found.
+ * - integrations: `getIntegrationsState` and `getSkillsState` are placeholders
+ *   (empty servers, "extraction has not landed").
  * - browserUi: its shape is `BrowserUiCapabilities`, not `Capability`.
  *
  * Git additionally carries a runtime verdict: the review service binds to the
@@ -45,6 +46,9 @@ const REQUIRED_METHODS = {
 	advisor: ["advisorGetStatus", "advisorConfigure", "advisorTranscript"],
 	goals: ["goalCreate", "goalReplace", "goalBudget", "goalPause", "goalResume", "goalDrop"],
 	loops: ["loopPreview", "loopPolicy", "loopStart", "loopPause", "loopCancel", "loopResume"],
+	modelPresets: ["getModelPresets", "saveModelPreset", "applyModelPreset", "deleteModelPreset"],
+	temporaryModel: ["switchModel"],
+	modelMentions: ["getModelMentions"],
 	vibe: [
 		"vibeStatus",
 		"vibeSetMode",

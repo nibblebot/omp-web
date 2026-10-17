@@ -22,6 +22,12 @@ import {
 	type BashResultLike,
 	type ModalName,
 } from "../state";
+import {
+	openModelSettings,
+	runModelPresetCommand,
+	switchSessionModel,
+	type ModelPresetAction,
+} from "../store/models";
 import { humanizeCompactionError } from "../store/compaction-view";
 import { openDock } from "../store/dock";
 import { downloadArchive, downloadHtml, downloadRequest, downloadText } from "../store/downloads";
@@ -196,31 +202,36 @@ function resumeRoute(args: string): void {
 }
 
 /**
- * `/model [selector]`: bare opens the picker; a selector resolves through
- * the SDK's own selector grammar server-side (setModel matches provider/id
- * against live discovery). Never forwards to the agent as text.
+ * `/model [selector]`: bare opens Settings on the Model tab; a selector
+ * switches the session model (session-only, roles unchanged). The selector
+ * grammar, fuzzy matching and `:level` suffix resolve server-side. Never
+ * forwards to the agent as text.
  */
 export function modelDispatch(
 	args: string,
-): { kind: "picker" } | { kind: "select"; selector: string } {
+): { kind: "settings" } | { kind: "select"; selector: string } {
 	const selector = args.trim();
-	return selector ? { kind: "select", selector } : { kind: "picker" };
+	return selector ? { kind: "select", selector } : { kind: "settings" };
 }
 
 function modelRoute(args: string): void {
 	const d = modelDispatch(args);
-	if (d.kind === "picker") {
-		setState("modal", "model");
+	if (d.kind === "settings") openModelSettings();
+	else void switchSessionModel(d.selector);
+}
+
+const MODEL_PRESET_ACTIONS: readonly string[] = ["list", "save", "apply", "delete"];
+
+/** `/modelpreset [list|save|switch|delete] [name]` (`apply` also accepted); bare lists presets. */
+function modelPresetRoute(args: string): void {
+	const words = args.trim() ? args.trim().split(/\s+/) : [];
+	const word = words[0] ?? "list";
+	const action = word === "switch" ? "apply" : word;
+	if (!MODEL_PRESET_ACTIONS.includes(action)) {
+		pushNotice("error", "Usage: /modelpreset [list|save|switch|delete] [name]");
 		return;
 	}
-	const parts = d.selector.split("/");
-	const callArgs = parts.length >= 2 ? [parts[0], parts.slice(1).join("/")] : [d.selector];
-	void call("setModel", callArgs)
-		.then((result) => {
-			const m = result as { provider?: string; id?: string } | null | undefined;
-			if (m?.provider && m?.id) pushNotice("info", `Model set to ${m.provider}/${m.id}.`);
-		})
-		.catch(showError);
+	void runModelPresetCommand(action as ModelPresetAction, words.slice(1).join(" ") || undefined);
 }
 
 /**
@@ -478,6 +489,7 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	},
 	compact: compactRoute,
 	model: modelRoute,
+	modelpreset: modelPresetRoute,
 	live: () =>
 		pushNotice("error", "/live is terminal-only: realtime voice runs in the omp terminal UI."),
 	move: () => refuseWorkspaceRoot("move"),

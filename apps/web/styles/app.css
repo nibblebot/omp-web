@@ -105,6 +105,29 @@
 	font-family: var(--font-mono);
 	color: var(--muted);
 }
+/* Thinking picker ordinal bar: one segment per supported level, filled up to the active one. */
+.thinking-ordinal {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	margin-bottom: var(--space-3);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+}
+.thinking-ordinal-seg {
+	flex: 1;
+	height: 4px;
+	border-radius: var(--r-sm);
+	background: var(--btn);
+}
+.thinking-ordinal-seg.filled {
+	background: var(--accent);
+}
+.thinking-ordinal-text {
+	margin-left: var(--space-2);
+	white-space: nowrap;
+}
 /* Session resource meters (cost/tokens) in machine numbers. */
 .stats-segment {
 	font-family: var(--font-mono);

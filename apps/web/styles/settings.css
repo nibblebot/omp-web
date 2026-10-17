@@ -734,3 +734,42 @@
 		font-size: max(1rem, 16px);
 	}
 }
+
+/* Settings > Model role table (ModelRoleTable). */
+.settings-roles-scroll {
+	overflow-x: auto;
+}
+.settings-roles {
+	width: 100%;
+	border-collapse: collapse;
+}
+.settings-roles caption {
+	text-align: left;
+	font-weight: 600;
+	padding-bottom: var(--space-2);
+}
+.settings-roles th,
+.settings-roles td {
+	text-align: left;
+	vertical-align: middle;
+	padding: var(--space-2) var(--space-3);
+}
+.settings-roles-hidden {
+	opacity: 0.6;
+}
+.settings-roles-name {
+	font-weight: 600;
+}
+.settings-roles-tag {
+	margin-left: var(--space-2);
+	font-size: 0.85em;
+	opacity: 0.75;
+}
+.settings-roles-value {
+	margin-right: var(--space-2);
+}
+.settings-roles-storage {
+	margin: var(--space-2) 0 0;
+	font-size: 0.85em;
+	opacity: 0.75;
+}

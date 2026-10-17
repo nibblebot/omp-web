@@ -1,7 +1,8 @@
+import { createSignal } from "solid-js";
+import type { ModelBrowserEntry } from "#lib/wire/protocol";
 import { call, pushNotice, setState, state } from "../state";
 
-/** Temporary effective model, persisted presets, and read-only branch-local
- * mention mirrors. Optional operations require advertised capabilities. */
+/** Persisted model preset (`config.yml` `modelPresets`). */
 export interface ModelPreset {
 	name: string;
 	modelRoles: Record<string, string>;
@@ -23,205 +24,6 @@ function requireModelCapability(key: "temporaryModel" | "modelPresets" | "modelM
 		throw new Error(capability?.reason ?? `${key} is unavailable on this server.`);
 	}
 }
-
-/**
- * Argument-aware `/model` routing (P0 owns the authoritative command table;
- * this is the P2 semantic helper it can call). Bare `/model` keeps the role
- * wizard; anything else resolves as an explicit selector or subcommand and
- * NEVER falls through to accidental agent input.
- */
-export type ModelRoute =
-	| { kind: "wizard" }
-	| { kind: "temp"; selector: string; thinking?: string }
-	| { kind: "cycle"; backward: boolean }
-	| { kind: "preset"; action: "list" | "save" | "apply" | "delete"; name?: string }
-	| { kind: "error"; message: string };
-
-export function modelRoute(args: string): ModelRoute {
-	const text = args.trim();
-	if (!text) return { kind: "wizard" };
-	const [head, ...rest] = text.split(/\s+/);
-	const tail = rest.join(" ").trim();
-	const lower = head.toLowerCase();
-	if (lower === "cycle" || lower === "next" || lower === "prev" || lower === "previous") {
-		return { kind: "cycle", backward: lower === "prev" || lower === "previous" };
-	}
-	if (lower === "preset" || lower === "presets") {
-		const [action, name] = rest;
-		const a = (action ?? "list").toLowerCase();
-		if (a === "list") return { kind: "preset", action: "list" };
-		if (a === "save" || a === "apply" || a === "delete") {
-			if (!name) return { kind: "error", message: `Usage: /model preset ${a} <name>` };
-			if (!/^[a-zA-Z][\w-]*$/.test(name)) {
-				return {
-					kind: "error",
-					message: `Invalid preset name "${name}": letter, then letters/digits/-/_`,
-				};
-			}
-			return { kind: "preset", action: a, name };
-		}
-		return { kind: "error", message: "Usage: /model preset <list|save|apply|delete> [name]" };
-	}
-	if (lower === "temp" || lower === "temporary" || lower === "use") {
-		if (!tail) return { kind: "error", message: "Usage: /model temp <provider/model[:thinking]>" };
-		const { selector, thinking } = splitThinking(tail);
-		if (!selector.includes("/")) {
-			return {
-				kind: "error",
-				message: `Bad model selector "${tail}": want provider/model[:thinking]`,
-			};
-		}
-		return { kind: "temp", selector, ...(thinking ? { thinking } : {}) };
-	}
-	// Bare selector: provider/model[:thinking] is a temporary switch, NOT a
-	// persisted role edit. Anything else is a precise error, never agent input.
-	if (text.includes("/")) {
-		const { selector, thinking } = splitThinking(text);
-		if (selector.includes("/"))
-			return { kind: "temp", selector, ...(thinking ? { thinking } : {}) };
-	}
-	return {
-		kind: "error",
-		message: `Usage: /model [provider/model[:thinking] | temp <selector> | cycle | preset <list|save|apply|delete>]`,
-	};
-}
-
-function splitThinking(selector: string): { selector: string; thinking?: string } {
-	const idx = selector.lastIndexOf(":");
-	if (idx <= 0) return { selector };
-	return { selector: selector.slice(0, idx), thinking: selector.slice(idx + 1) };
-}
-
-/** Run a parsed /model route. Wizard/cycle/preset errors surface as
- *  notices; temp failures name entitlement/effort-clamp causes. */
-export async function runModelRoute(route: ModelRoute): Promise<void> {
-	switch (route.kind) {
-		case "wizard":
-			setState("modal", "model");
-			return;
-		case "cycle":
-			await cycleModel(route.backward);
-			return;
-		case "temp":
-			await setTemporaryModel(route.selector, route.thinking);
-			return;
-		case "preset":
-			await runPresetRoute(route.action, route.name);
-			return;
-		case "error":
-			pushNotice("error", route.message);
-			return;
-	}
-}
-
-/**
- * Temporary switch: session-only, never writes settings or role values.
- * Shows effort-clamp feedback when the server reports the level was clamped.
- */
-export async function setTemporaryModel(selector: string, thinking?: string): Promise<void> {
-	requireModelCapability("temporaryModel");
-	const slash = selector.indexOf("/");
-	if (slash <= 0)
-		throw new Error(`Bad model selector "${selector}": want provider/model[:thinking]`);
-	const provider = selector.slice(0, slash);
-	const id = selector.slice(slash + 1);
-	if (!provider || !id)
-		throw new Error(`Bad model selector "${selector}": want provider/model[:thinking]`);
-	try {
-		const data = (await call("setModelTemporary", [
-			provider,
-			id,
-			...(thinking ? [thinking] : []),
-		])) as { provider: string; id: string; clampedThinking?: string };
-		pushNotice(
-			"info",
-			`Temporary model: ${data.provider}/${data.id}${data.clampedThinking ? ` (effort clamped to ${data.clampedThinking})` : ""} — roles unchanged`,
-		);
-		return;
-	} catch (err) {
-		pushNotice(
-			"error",
-			`Temporary switch failed: ${err instanceof Error ? err.message : String(err)}`,
-		);
-		throw err;
-	}
-}
-
-/** Cycle the scoped/available model set (temporary, like the TUI): never
- *  rewrites persisted roles. */
-export async function cycleModel(backward = false): Promise<void> {
-	requireModelCapability("temporaryModel");
-	const data = (await call("cycleModel", backward ? ["backward"] : [])) as {
-		model?: { provider: string; id: string };
-		isScoped?: boolean;
-	} | null;
-	if (!data?.model) {
-		pushNotice("info", "Only one model available; nothing to cycle.");
-		return;
-	}
-	pushNotice(
-		"info",
-		`Model: ${data.model.provider}/${data.model.id}${data.isScoped ? " (scoped)" : ""}`,
-	);
-}
-
-async function runPresetRoute(
-	action: "list" | "save" | "apply" | "delete",
-	name?: string,
-): Promise<void> {
-	requireModelCapability("modelPresets");
-	try {
-		if (action === "list") {
-			const data = (await call("getModelPresets", [])) as {
-				names: string[];
-				active?: string;
-			};
-			const names = data.names;
-			pushNotice(
-				"info",
-				names.length === 0
-					? "No saved model presets."
-					: `Presets: ${names.map((n) => (n === data.active ? `${n} (active)` : n)).join(", ")}`,
-			);
-			return;
-		}
-		if (!name) {
-			pushNotice("error", `Usage: /model preset ${action} <name>`);
-			return;
-		}
-		if (action === "save") {
-			const data = (await call("saveModelPreset", [name])) as { message: string };
-			pushNotice("info", data.message);
-			return;
-		}
-		if (action === "apply") {
-			const data = (await call("applyModelPreset", [name])) as {
-				applied: string;
-				warnings: string[];
-			};
-			pushNotice(
-				data.warnings.length ? "warning" : "info",
-				`Applied preset "${data.applied}"${data.warnings.length ? `: ${data.warnings.join("; ")}` : ""}.`,
-			);
-			return;
-		}
-		const data = (await call("deleteModelPreset", [name])) as {
-			result: "deleted" | "project" | "missing";
-		};
-		if (data.result === "missing") pushNotice("warning", `No preset named "${name}".`);
-		else if (data.result === "project") {
-			pushNotice("warning", `Preset "${name}" lives in a project/overlay config; remove it there.`);
-		} else pushNotice("info", `Deleted preset "${name}".`);
-	} catch (err) {
-		pushNotice(
-			"error",
-			`Preset ${action} failed: ${err instanceof Error ? err.message : String(err)}`,
-		);
-		throw err;
-	}
-}
-
-// --- Model-worker chips (branch-local pseudonyms) ---
 
 let mentionCache: ModelMention[] | null = null;
 let mentionCacheGen = -1;
@@ -265,4 +67,262 @@ export function expandTagsForEdit(text: string, mentions: ModelMention[]): strin
 		const m = mentions.find((x) => x.agent === agent);
 		return m ? `^${m.selector}` : tag;
 	});
+}
+
+/** Session-only model switching, Task model override, presets, thinking
+ * picks and Settings > Model role writes. Every action reports its outcome
+ * as a transcript notice; failures carry the server's real error text. */
+
+const RECENT_KEY = "omp-web.recentModels";
+const RECENT_MAX = 8;
+
+function readRecent(): string[] {
+	try {
+		const raw = globalThis.localStorage?.getItem(RECENT_KEY);
+		const parsed: unknown = raw ? JSON.parse(raw) : [];
+		return Array.isArray(parsed)
+			? parsed.filter((s): s is string => typeof s === "string").slice(0, RECENT_MAX)
+			: [];
+	} catch {
+		// Corrupt or unavailable storage: start with no recents.
+		return [];
+	}
+}
+
+const [recent, setRecent] = createSignal<string[]>(readRecent());
+/** Recently switched-to `provider/id` selectors, most recent first. */
+export const recentModels = recent;
+
+/** Replace the recents list (design-system stories seed it). */
+export function seedRecentModels(selectors: string[]): void {
+	setRecent(selectors.slice(0, RECENT_MAX));
+}
+
+function recordRecentModel(selector: string): void {
+	const next = [selector, ...recent().filter((s) => s !== selector)].slice(0, RECENT_MAX);
+	setRecent(next);
+	try {
+		globalThis.localStorage?.setItem(RECENT_KEY, JSON.stringify(next));
+	} catch {
+		// Storage full or disabled: recents survive this page load only.
+	}
+}
+
+function errorText(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
+/** Open the quick model picker; `task` starts it in Task-model mode. */
+export function openModelPicker(task = false): void {
+	setState({ modelPickerTask: task, modal: "model" });
+	void loadModelBrowser();
+}
+
+export function closeModelPicker(): void {
+	setState("modal", null);
+}
+
+export async function loadModelBrowser(): Promise<void> {
+	try {
+		const models = (await call("getModelBrowser", [])) as ModelBrowserEntry[];
+		setState("modelBrowser", models);
+	} catch (err) {
+		setState("modelBrowser", []);
+		pushNotice("error", `Could not load models: ${errorText(err)}`);
+	}
+}
+
+/** Session-only switch to a fuzzy selector (`:level` suffix allowed). Roles
+ * and persisted settings are untouched. */
+export async function switchSessionModel(selector: string): Promise<boolean> {
+	try {
+		const data = (await call("switchModel", [selector])) as {
+			provider: string;
+			id: string;
+			thinkingLevel?: string;
+		};
+		const label = `${data.provider}/${data.id}`;
+		recordRecentModel(label);
+		pushNotice(
+			"info",
+			`Session-only model: ${label}${data.thinkingLevel ? ` (thinking ${data.thinkingLevel})` : ""}. Roles unchanged.`,
+		);
+		return true;
+	} catch (err) {
+		pushNotice("error", `Model switch failed: ${errorText(err)}`);
+		return false;
+	}
+}
+
+/** Session-only Task subagent model override. */
+export async function pickTaskModel(selector: string): Promise<boolean> {
+	try {
+		await call("setTaskModel", [selector]);
+		recordRecentModel(selector);
+		pushNotice("info", `Task subagent model (session-only): ${selector}. Roles unchanged.`);
+		return true;
+	} catch (err) {
+		pushNotice("error", `Task model failed: ${errorText(err)}`);
+		return false;
+	}
+}
+
+export async function clearTaskModel(): Promise<boolean> {
+	try {
+		await call("setTaskModel", [null]);
+		pushNotice("info", "Task subagent model cleared; Task inherits the session model.");
+		return true;
+	} catch (err) {
+		pushNotice("error", `Task model failed: ${errorText(err)}`);
+		return false;
+	}
+}
+
+export async function applyModelPreset(name: string): Promise<boolean> {
+	try {
+		const data = (await call("applyModelPreset", [name])) as {
+			applied: string;
+			warnings: string[];
+		};
+		pushNotice(
+			data.warnings.length ? "warning" : "info",
+			`Applied preset "${data.applied}"${data.warnings.length ? `: ${data.warnings.join("; ")}` : ""}.`,
+		);
+		return true;
+	} catch (err) {
+		pushNotice("error", `Preset apply failed: ${errorText(err)}`);
+		return false;
+	}
+}
+
+/** Step to the next (or previous) configured preset after the active one. */
+export async function cycleModelPreset(backward = false): Promise<boolean> {
+	const names = state.modelPresets?.names ?? [];
+	if (names.length === 0) {
+		pushNotice("info", "No model presets configured.");
+		return false;
+	}
+	const active = state.modelPresets?.active;
+	const at = active ? names.indexOf(active) : -1;
+	const next =
+		at < 0
+			? names[backward ? names.length - 1 : 0]
+			: names[(at + (backward ? -1 : 1) + names.length) % names.length];
+	return applyModelPreset(next ?? names[0]);
+}
+
+export type ModelPresetAction = "list" | "save" | "apply" | "delete";
+
+/** `/modelpreset [list|save|apply|delete] [name]`: every outcome is a notice. */
+export async function runModelPresetCommand(
+	action: ModelPresetAction,
+	name?: string,
+): Promise<void> {
+	try {
+		if (action === "list") {
+			const data = (await call("getModelPresets", [])) as { names: string[]; active?: string };
+			pushNotice(
+				"info",
+				data.names.length === 0
+					? "No saved model presets."
+					: `Presets: ${data.names.map((n) => (n === data.active ? `${n} (active)` : n)).join(", ")}`,
+			);
+			return;
+		}
+		if (!name) {
+			pushNotice("error", `Usage: /modelpreset ${action} <name>`);
+			return;
+		}
+		if (action === "save") {
+			const data = (await call("saveModelPreset", [name])) as { message: string };
+			pushNotice("info", data.message);
+			return;
+		}
+		if (action === "apply") {
+			await applyModelPreset(name);
+			return;
+		}
+		const data = (await call("deleteModelPreset", [name])) as {
+			result: "deleted" | "project" | "missing";
+		};
+		if (data.result === "missing") pushNotice("warning", `No preset named "${name}".`);
+		else if (data.result === "project") {
+			pushNotice("warning", `Preset "${name}" lives in a project/overlay config; remove it there.`);
+		} else pushNotice("info", `Deleted preset "${name}".`);
+	} catch (err) {
+		pushNotice("error", `Preset ${action} failed: ${errorText(err)}`);
+	}
+}
+
+export function openThinkingPicker(): void {
+	setState("modal", "thinking");
+}
+
+export function closeThinkingPicker(): void {
+	setState("modal", null);
+}
+
+/** Set the session thinking level. The server rejects unsupported levels;
+ * nothing is clamped silently. */
+export async function setThinkingSelector(level: string): Promise<boolean> {
+	try {
+		await call("setThinkingLevel", [level]);
+		pushNotice("info", `Thinking: ${level}.`);
+		return true;
+	} catch (err) {
+		pushNotice("error", `Thinking change failed: ${errorText(err)}`);
+		return false;
+	}
+}
+
+/** `/model` bare: open Settings on the Model tab (the role editor). */
+export function openModelSettings(): void {
+	setState({ settingsTab: "model", modal: "settings" });
+}
+
+/** Read and clear the Settings tab requested by `openModelSettings`. */
+export function consumeSettingsTab(): string | null {
+	const tab = state.settingsTab;
+	if (tab !== null) setState("settingsTab", null);
+	return tab;
+}
+
+/** Persist (or clear, when `selector` is undefined) a model role in config.yml. */
+export async function setModelRoleAssignment(
+	role: string,
+	selector: string | undefined,
+	thinking?: string,
+): Promise<boolean> {
+	try {
+		if (selector === undefined) {
+			await call("clearModelRole", [role]);
+			pushNotice("info", `Model role ${role} cleared.`);
+			return true;
+		}
+		const slash = selector.indexOf("/");
+		if (slash <= 0 || slash === selector.length - 1) {
+			throw new Error(`Bad model selector "${selector}": want provider/model`);
+		}
+		await call("setModelRole", [
+			role,
+			selector.slice(0, slash),
+			selector.slice(slash + 1),
+			...(thinking ? [thinking] : []),
+		]);
+		pushNotice("info", `Model role ${role} set to ${selector}${thinking ? `:${thinking}` : ""}.`);
+		return true;
+	} catch (err) {
+		pushNotice("error", `Model role ${role} failed: ${errorText(err)}`);
+		return false;
+	}
+}
+
+export async function setModelRoleHidden(role: string, hidden: boolean): Promise<boolean> {
+	try {
+		await call("setModelRoleHidden", [role, hidden]);
+		return true;
+	} catch (err) {
+		pushNotice("error", `Model role ${role} failed: ${errorText(err)}`);
+		return false;
+	}
 }

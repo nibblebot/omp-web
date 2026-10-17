@@ -205,6 +205,24 @@ button.picker-row {
 	width: 100%;
 	text-align: left;
 }
+/* Locked model rows (no credentials / provider disabled) stay visible but inert. */
+button.picker-row:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+button.picker-row:disabled:hover {
+	background: none;
+}
+/* Roving keyboard highlight over model rows (the search input keeps focus). */
+button.picker-row.kbd-active {
+	background: var(--hover);
+}
+.model-picker-task {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	margin-bottom: var(--space-2);
+}
 .picker-label {
 	color: var(--text);
 	font-size: var(--fs-lg);

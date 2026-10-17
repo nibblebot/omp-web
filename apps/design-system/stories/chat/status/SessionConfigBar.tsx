@@ -28,8 +28,14 @@ export default defineStory({
 		},
 		{
 			name: "Auto thinking",
-			description: "Auto selector active; the resolved effort shows in the tooltip.",
+			description: "Auto selector active; the chip reads auto.",
 			seed: { autoThinking: true, thinkingLevel: "high" as Effort },
+			render: () => <SessionConfigBar />,
+		},
+		{
+			name: "Model presets",
+			description: "Presets saved: the preset chip shows the active one; click cycles.",
+			seed: { modelPresets: { names: ["review-heavy", "fast"], active: "review-heavy" } },
 			render: () => <SessionConfigBar />,
 		},
 		{

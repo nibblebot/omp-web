@@ -111,9 +111,6 @@ export function noteTranscriptReplaced(): void {
 	generation += 1;
 	cachedPage = null;
 	askProbes.clear();
-	// Branch-local chips restore from the journal; drop the mirror so the
-	// next read replays the new lineage (resume/rewind/branch/navigate).
-	invalidateMentions();
 }
 
 export function graphGeneration(): number {

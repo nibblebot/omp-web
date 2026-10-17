@@ -25,6 +25,19 @@ export type InspectImageMode = "auto" | "on" | "off";
 /** Pick of Model the model picker consumes (was the RPC client's ModelInfo). */
 export type ModelInfo = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning" | "thinking">;
 
+/**
+ * Why a model-browser row is unusable: no credentials for its provider, or the
+ * provider is disabled. The web derives the sentence (`lockMessage`); the code
+ * keeps every row small enough for one callback envelope on a full registry.
+ */
+export type ModelLockReason = "credentials" | "disabled";
+
+/** A model-browser row: every registry model, with the reason it cannot be used when it cannot. */
+export type ModelBrowserEntry = Pick<Model, "provider" | "id" | "contextWindow" | "reasoning"> & {
+	/** Absent = usable. */
+	locked?: ModelLockReason;
+};
+
 /** Where a role assignment persists: global config.yml or project .omp/config.yml. */
 export type ModelRoleStorage = "global" | "project";
 
@@ -62,6 +75,12 @@ export interface WebSessionState {
 	thinkingLevel: ThinkingLevel | undefined;
 	/** True when the configured selector is `auto`; `thinkingLevel` then holds the provisional or per-turn resolved effort. */
 	autoThinking?: boolean;
+	/** `session.getAvailableEffortSelectors()` for the active model, in SDK order. Empty or absent = no thinking dial. */
+	thinkingSelectors?: string[];
+	/** Saved model presets; absent when none exist. `active` names the preset matching the live roles. */
+	modelPresets?: { names: string[]; active?: string };
+	/** Effective Task subagent model `provider/id`; absent when Task inherits the session model. */
+	taskModel?: string;
 	isStreaming: boolean;
 	isCompacting: boolean;
 	steeringMode: "all" | "one-at-a-time";
@@ -735,12 +754,14 @@ export type WebMethodName =
 	| "dropImages"
 	| "abortCompaction"
 	| "handoffPreview"
-	| "setModelTemporary"
+	| "switchModel"
+	| "getModelBrowser"
+	| "setTaskModel"
 	| "getModelPresets"
+	| "getModelMentions"
 	| "saveModelPreset"
 	| "applyModelPreset"
 	| "deleteModelPreset"
-	| "getModelMentions"
 	| "getResumeCapabilities"
 	| "resumeResolve"
 	| "resumeList"

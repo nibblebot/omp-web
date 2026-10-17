@@ -4,8 +4,11 @@ import { SettingsNav, SettingsSectionPicker } from "../../../web/components/sett
 import { WebUiSettings } from "../../../web/components/settings/WebUiSettings";
 import { SettingStepper } from "../../../web/components/settings/controls/SettingStepper";
 import { SettingToggle } from "../../../web/components/settings/controls/SettingToggle";
+import { setState } from "../../../web/state";
 import { changedCountsByTab, SETTINGS_TABS } from "../../../web/prefs/settings-tabs";
 import {
+	modelInfos,
+	modelRoleCatalog,
 	settingApiKey,
 	settingBashTimeout,
 	settingEditMode,
@@ -34,7 +37,15 @@ export default [
 			{
 				name: "Session settings",
 				description: "Current-session target, every section populated.",
-				seed: () => answerCalls({ getSettings: () => settingsModelCurrentSession }),
+				seed: () => {
+					answerCalls({
+						getSettings: () => settingsModelCurrentSession,
+						getModelBrowser: () => modelInfos,
+					});
+					setState("modelBrowser", modelInfos);
+					setState("modelRoleCatalog", modelRoleCatalog);
+					setState("thinkingSelectors", ["off", "minimal", "low", "medium", "high", "xhigh"]);
+				},
 				render: (ctx) => <SettingsSheet onClose={ctx.close} />,
 			},
 			{
@@ -128,6 +139,15 @@ export default [
 		variants: [
 			{
 				name: "Enum: thinking level",
+				render: () => <SettingsRow item={settingThinkingLevel} />,
+			},
+			{
+				name: "Enum: thinking level, default role has a suffix",
+				description:
+					"Role default carries :high; the row shows the SET-03 note, the value is unchanged.",
+				seed: () => {
+					setState("modelRoleCatalog", modelRoleCatalog);
+				},
 				render: () => <SettingsRow item={settingThinkingLevel} />,
 			},
 			{

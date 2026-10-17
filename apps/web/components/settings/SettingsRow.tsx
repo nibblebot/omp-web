@@ -2,6 +2,7 @@ import { Show, Switch, Match, type JSX } from "solid-js";
 import { displayOptionValue, effectLabel, unmetDependency } from "../../prefs/settings";
 import { asRecord, controlKind, hasWideSelection, itemOptions } from "../../prefs/setting-controls";
 import { settingValue, unsetSetting, updateSetting } from "../../store/settings";
+import { state } from "../../state";
 import { WarningIcon } from "../ui/icons";
 import { SettingJsonField } from "./controls/SettingJsonField";
 import { SettingOrderedList } from "./controls/SettingOrderedList";
@@ -79,6 +80,14 @@ export function SettingsRow(props: { item: SettingsItem }) {
 	const item = () => props.item;
 	const kind = () => controlKind(item());
 	const setByProject = () => item().view?.source === "project";
+	// SET-03: a default role with a thinking suffix overrides this default for that role.
+	const rowWarning = (): string | undefined => {
+		if (item().path !== "defaultThinkingLevel") return item().warning;
+		const level = state.modelRoleCatalog?.find((entry) => entry.role === "default")?.thinkingLevel;
+		if (!level) return item().warning;
+		const note = `Role default uses ${level} from its :suffix; this setting applies only when the role has no suffix.`;
+		return item().warning ? `${item().warning} ${note}` : note;
+	};
 	const blocked = () => unmetDependency(item().path, settingValue);
 	const effect = () => effectLabel(item().view?.effect);
 
@@ -86,7 +95,7 @@ export function SettingsRow(props: { item: SettingsItem }) {
 		<SettingsRowLayout
 			label={item().label}
 			description={item().description}
-			warning={blocked() ?? item().warning}
+			warning={blocked() ?? rowWarning()}
 			changed={item().changed}
 			setByProject={setByProject()}
 			scope="omp config"

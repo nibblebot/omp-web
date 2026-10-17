@@ -363,7 +363,7 @@ export const sessionModel: Model = {
 	compat: firstPartyCompat,
 };
 
-/** ModelRoleCatalogEntry list: RoleStep rows, with project and global assignments, an unassigned role, and hidden roles. */
+/** ModelRoleCatalogEntry list: role rows with project and global assignments, an unassigned role, and hidden roles. */
 export const modelRoleCatalog: ModelRoleCatalogEntry[] = [
 	{
 		role: "default",
@@ -405,7 +405,7 @@ export const modelRoleCatalog: ModelRoleCatalogEntry[] = [
 	},
 ];
 
-/** ModelInfo list: ModelStep catalog rows across providers, with and without controllable thinking. */
+/** ModelInfo list: catalog rows across providers, with and without controllable thinking. */
 export const modelInfos: ModelInfo[] = [
 	{
 		provider: "anthropic",
@@ -434,19 +434,6 @@ export const modelInfos: ModelInfo[] = [
 		thinking: { mode: "google-level", efforts: ["low", "high"] as Effort[] },
 	},
 	{ provider: "opencode-go", id: "deepseek-v4-flash", contextWindow: 128_000, reasoning: false },
-];
-
-/** ModelPreset list: saved role bundles for ModelPicker. */
-export const modelPresets: ModelPreset[] = [
-	{
-		name: "review-heavy",
-		modelRoles: { default: "anthropic/claude-opus-4-1", smol: "anthropic/claude-haiku-5-5" },
-		defaultThinkingLevel: "high",
-	},
-	{
-		name: "budget",
-		modelRoles: { default: "anthropic/claude-haiku-5-5" },
-	},
 ];
 
 // ---------------------------------------------------------------------------

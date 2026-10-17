@@ -36,6 +36,8 @@ const LOCAL_NAMES = [
 	"rename",
 	"fresh",
 	"delete",
+	"model",
+	"modelpreset",
 ];
 
 function registry(overrides: Partial<CommandRegistryInput> = {}): CommandEntry[] {
@@ -195,12 +197,25 @@ describe("commandLiveState", () => {
 		expect(commandLiveState("queue", { queuedMessageCount: 2 })).toBe("2 queued");
 		expect(commandLiveState("compact", { contextUsage: { percent: 42.4 } })).toBe("42% used");
 		expect(commandLiveState("rename", { sessionName: "Refactor" })).toBe("Refactor");
+		expect(
+			commandLiveState("modelpreset", { modelPresets: { names: ["fast"], active: "fast" } }),
+		).toBe("fast");
 	});
 
 	test("shows nothing when there is no value", () => {
 		expect(commandLiveState("queue", { queuedMessageCount: 0 })).toBeUndefined();
 		expect(commandLiveState("rename", { sessionName: "" })).toBeUndefined();
 		expect(commandLiveState("help", {})).toBeUndefined();
+		expect(commandLiveState("modelpreset", { modelPresets: { names: ["fast"] } })).toBeUndefined();
+	});
+});
+
+describe("model commands", () => {
+	test("/model and /modelpreset are local, grouped under Model, and carry their hints", () => {
+		const byName = new Map(registry().map((c) => [c.name, c]));
+		expect(byName.get("model")).toMatchObject({ kind: "local", group: "Model", hint: "[model]" });
+		expect(byName.get("modelpreset")).toMatchObject({ kind: "local", group: "Model" });
+		expect(byName.get("modelpreset")?.hint).toContain("switch");
 	});
 });
 

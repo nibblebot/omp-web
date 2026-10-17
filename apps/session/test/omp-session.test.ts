@@ -192,14 +192,6 @@ function waitForFrame(
 	return waitFor(() => frames.find((f) => f.type === type) ?? null, timeoutMs, label);
 }
 
-/** Read thinkingLevel out of a wire `state` frame (narrowed via `in`, no unchecked cast). */
-function thinkingLevelOf(frame: Frame): string | undefined {
-	const st = frame.state;
-	if (st && typeof st === "object" && "thinkingLevel" in st)
-		return st.thinkingLevel as string | undefined;
-	return undefined;
-}
-
 function parseContractLine(line: string): StdoutContractLine | null {
 	if (!line.startsWith(OMP_SESSION_PREFIX)) return null;
 	try {
@@ -1262,22 +1254,27 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	const events = await openEvents(base);
 	await waitForFrame(events.frames, "ready", 20_000, "ready frame");
 
-	// Deterministic ringed delta: setThinkingLevel broadcasts a state delta
+	// Deterministic ringed delta: setSessionName broadcasts a state delta
 	// (seq >= SSE_DELTA_SEQ_START), and every later prime's state snapshot
-	// carries its effect (thinkingLevel "high").
-	await postCommand(base, { type: "call", id: "tl1", method: "setThinkingLevel", args: ["high"] });
+	// carries its effect (sessionName "ringed delta"). No model needed.
+	await postCommand(base, {
+		type: "call",
+		id: "sn1",
+		method: "setSessionName",
+		args: ["ringed delta"],
+	});
 	const deltaIdx = await waitFor(
 		() => {
 			const idx = events.ids.findIndex(
 				(id, i) =>
 					id >= SSE_DELTA_SEQ_START &&
 					events.frames[i]?.type === "state" &&
-					thinkingLevelOf(events.frames[i]) === "high",
+					stateSessionName(events.frames[i]) === "ringed delta",
 			);
 			return idx >= 0 ? idx : null;
 		},
 		10_000,
-		"setThinkingLevel state delta",
+		"setSessionName state delta",
 	);
 	const deltaSeq = events.ids[deltaIdx];
 	expect(deltaSeq).toBeGreaterThanOrEqual(SSE_DELTA_SEQ_START);
@@ -1290,7 +1287,7 @@ test("resume with a delta-era Last-Event-ID replays no snapshot-era deltas (find
 	// The overlap, proven: the fresh priming itself carries the delta's effect,
 	// so re-delivering the delta would be a redundant double-apply.
 	const resumedState = await waitForFrame(resumed.frames, "state", 10_000, "resumed state");
-	expect(thinkingLevelOf(resumedState)).toBe("high");
+	expect(stateSessionName(resumedState)).toBe("ringed delta");
 	// The re-primed stream must contain no delta-era frame: the snapshot-era
 	// delta was not replayed and the idle daemon emitted no new deltas during
 	// the prime. The replay (pre-fix) is enqueued synchronously right after
