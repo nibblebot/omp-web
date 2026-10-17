@@ -113,6 +113,40 @@ describe("subagentForest", () => {
 		expect(node?.status).toBe("failed");
 	});
 
+	test("roster-only finished agent keeps its retained usage; unknown usage stays undefined, not 0", () => {
+		const records: Record<string, WorkerRecord> = {
+			[workerKey(SESSION, "done")]: {
+				id: "done",
+				agentId: "done",
+				sessionId: SESSION,
+				displayName: "task",
+				status: "completed",
+				usage: { tokens: 1200, requests: 3, cost: 0.02 },
+				lastActivity: 5,
+				createdAt: 1,
+				revivable: false,
+			} as WorkerRecord,
+			[workerKey(SESSION, "legacy")]: {
+				id: "legacy",
+				agentId: "legacy",
+				sessionId: SESSION,
+				displayName: "task",
+				status: "completed",
+				lastActivity: 5,
+				createdAt: 2,
+				revivable: false,
+			} as WorkerRecord,
+		};
+		setState("workers", { ...createWorkersState(), records, order: Object.keys(records) });
+		const forest = subagentForest();
+		const done = forest.find((node) => node.id === "done");
+		const legacy = forest.find((node) => node.id === "legacy");
+		expect(done?.metrics.tokens).toBe(1200);
+		expect(done?.metrics.cost).toBe(0.02);
+		expect(legacy?.metrics.tokens).toBeUndefined();
+		expect(legacy?.metrics.cost).toBeUndefined();
+	});
+
 	test("a finished roster-only agent measures elapsed to its last activity, not to now", () => {
 		setState("subagents", new Map<string, SubagentInfo>());
 		const key = workerKey(SESSION, "r");

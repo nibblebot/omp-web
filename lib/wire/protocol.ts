@@ -996,6 +996,18 @@ export interface SubagentProgressFields {
 }
 
 /**
+ * Cumulative usage of one subagent, read from its stored transcript. Rides the
+ * `workerList` roster row of an agent that has no live progress snapshot (a finished
+ * agent, or any agent after the session restarted); absent when the transcript carries
+ * no usage. `tokens` uses the same definition as `SubagentProgressFields.tokens`.
+ */
+export interface SubagentUsageFields {
+	tokens: number;
+	requests: number;
+	cost: number;
+}
+
+/**
  * `subagent_progress` payload. The daemon sends at most one per agent per
  * second. The first frame of an agent is full (`task`/`assignment` included);
  * every later frame has `delta: true` and `progress` carries `id` plus only the

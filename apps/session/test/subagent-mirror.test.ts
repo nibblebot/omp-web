@@ -2,7 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readSubagentTranscript } from "../subagent-mirror";
+import type { SessionEntry } from "../session-entry";
+import {
+	clearSubagents,
+	finishedSubagentUsage,
+	handleSubagentLifecycle,
+	handleSubagentProgress,
+	readSubagentTranscript,
+} from "../subagent-mirror";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -71,5 +78,81 @@ describe("bounded worker transcript pages", () => {
 		await expect(readSubagentTranscript(path, 0, 1024)).rejects.toThrow("record exceeds page size");
 		await expect(readSubagentTranscript(`${path}.missing`)).rejects.toThrow("artifact unavailable");
 		await expect(readSubagentTranscript(path, 0, 0)).rejects.toThrow("page size");
+	});
+});
+
+type LifecyclePayload = Parameters<typeof handleSubagentLifecycle>[1];
+type ProgressPayload = Parameters<typeof handleSubagentProgress>[1];
+
+function entryStub(): SessionEntry {
+	return {
+		subagentSnapshots: new Map(),
+		transcriptSessionFilesBySubagentId: new Map(),
+		staleSubagentIds: new Set(),
+		handle: {},
+	} as unknown as SessionEntry;
+}
+
+function lifecycle(status: string): LifecyclePayload {
+	return { id: "a1", index: 0, agent: "task", status, parentToolCallId: "t1" } as LifecyclePayload;
+}
+
+/** Progress frame for the mirror's test agent; only the fields under test are set. */
+function progressFrame(progress: Partial<ProgressPayload["progress"]>): ProgressPayload {
+	return {
+		index: 0,
+		agent: "task",
+		agentSource: "bundled",
+		task: "t",
+		parentToolCallId: "t1",
+		progress,
+	} as ProgressPayload;
+}
+
+describe("finished subagent usage", () => {
+	test("a finished agent keeps its last reported usage after the live snapshot is dropped", () => {
+		const entry = entryStub();
+		handleSubagentLifecycle(entry, lifecycle("started"));
+		handleSubagentProgress(
+			entry,
+			progressFrame({
+				id: "a1",
+				status: "running",
+				recentTools: [],
+				tokens: 1200,
+				requests: 3,
+				cost: 0.02,
+			}),
+		);
+		expect(finishedSubagentUsage(entry, "a1")).toBeUndefined();
+		handleSubagentLifecycle(entry, lifecycle("completed"));
+		expect(entry.subagentSnapshots.has("a1")).toBe(false);
+		expect(finishedSubagentUsage(entry, "a1")).toEqual({ tokens: 1200, requests: 3, cost: 0.02 });
+	});
+
+	test("an agent that never reported usage stays unknown, not zero", () => {
+		const entry = entryStub();
+		handleSubagentLifecycle(entry, lifecycle("started"));
+		handleSubagentLifecycle(entry, lifecycle("completed"));
+		expect(finishedSubagentUsage(entry, "a1")).toBeUndefined();
+	});
+
+	test("clearing the session drops retained usage", () => {
+		const entry = entryStub();
+		handleSubagentLifecycle(entry, lifecycle("started"));
+		handleSubagentProgress(
+			entry,
+			progressFrame({
+				id: "a1",
+				status: "running",
+				recentTools: [],
+				tokens: 5,
+				requests: 1,
+				cost: 0,
+			}),
+		);
+		handleSubagentLifecycle(entry, lifecycle("completed"));
+		clearSubagents(entry);
+		expect(finishedSubagentUsage(entry, "a1")).toBeUndefined();
 	});
 });

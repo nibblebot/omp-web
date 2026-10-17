@@ -5,6 +5,7 @@ import { lastToolOf, metricsOf, normalizeStatus, type UsageFallback } from "./su
 import { call } from "./transport";
 import { pushNotice } from "./chat";
 import { setState, state, type SubagentInfo } from "../state";
+import { sumKnown } from "../subagents/format";
 
 /**
  * Subagents domain (Phase 3 store facade split). The subagent mirror itself
@@ -78,9 +79,9 @@ export interface WorkerRecord {
 	model?: string;
 	progress?: Record<string, unknown>;
 	usage?: {
-		tokens: number;
+		tokens?: number;
 		requests: number;
-		cost: number;
+		cost?: number;
 		contextTokens?: number;
 		contextWindow?: number;
 	};
@@ -125,6 +126,17 @@ function coerceWorkerStatus(value: unknown): WorkerStatus {
 	}
 }
 
+/** Usage the daemon retained for a finished worker; undefined when it reported none. */
+function coerceRosterUsage(value: unknown): WorkerRecord["usage"] {
+	const usage = asRecord(value);
+	if (!usage) return undefined;
+	return {
+		tokens: asNumber(usage.tokens),
+		requests: asNumber(usage.requests) ?? 0,
+		cost: asNumber(usage.cost),
+	};
+}
+
 function coerceWorkerRow(row: unknown, sessionId: string): WorkerRecord | null {
 	const r = asRecord(row);
 	if (!r) return null;
@@ -149,13 +161,13 @@ function coerceWorkerRow(row: unknown, sessionId: string): WorkerRecord | null {
 		progress,
 		usage: progress
 			? {
-					tokens: asNumber(progress.tokens) ?? 0,
+					tokens: asNumber(progress.tokens),
 					requests: asNumber(progress.requests) ?? 0,
-					cost: asNumber(progress.cost) ?? 0,
+					cost: asNumber(progress.cost),
 					contextTokens: asNumber(progress.contextTokens),
 					contextWindow: asNumber(progress.contextWindow),
 				}
-			: undefined,
+			: coerceRosterUsage(r.usage),
 		artifactAvailability:
 			r.hasHistory === false ? "missing" : r.hasHistory === true ? "available" : "unknown",
 		sessionFile,
@@ -311,9 +323,9 @@ export type SubagentStatus = "pending" | "running" | "done" | "failed" | "aborte
 export interface SubagentMetrics {
 	elapsedMs: number;
 	contextPercent?: number;
-	/** input + output + cacheWrite, like the TUI. */
-	tokens: number;
-	cost: number;
+	/** input + output + cacheWrite, like the TUI. Undefined when never reported: render "-", never 0. */
+	tokens?: number;
+	cost?: number;
 }
 
 export interface SubagentNode {
@@ -327,7 +339,7 @@ export interface SubagentNode {
 	endedAt?: number;
 	metrics: SubagentMetrics;
 	/** Self plus descendants. Never context percent. */
-	subtree: { tokens: number; cost: number };
+	subtree: { tokens?: number; cost?: number };
 	lastTool?: string;
 	children: SubagentNode[];
 }
@@ -384,18 +396,18 @@ function resolveStatus(
 	return normalizeStatus(live.status);
 }
 
-function sumSubtree(node: SubagentNode, visited: Set<string>): { tokens: number; cost: number } {
-	let tokens = node.metrics.tokens;
-	let cost = node.metrics.cost;
+function sumSubtree(node: SubagentNode, visited: Set<string>): { tokens?: number; cost?: number } {
+	const tokens = [node.metrics.tokens];
+	const cost = [node.metrics.cost];
 	if (!visited.has(node.id)) {
 		visited.add(node.id);
 		for (const child of node.children) {
 			const sum = sumSubtree(child, visited);
-			tokens += sum.tokens;
-			cost += sum.cost;
+			tokens.push(sum.tokens);
+			cost.push(sum.cost);
 		}
 	}
-	node.subtree = { tokens, cost };
+	node.subtree = { tokens: sumKnown(tokens), cost: sumKnown(cost) };
 	return node.subtree;
 }
 
@@ -436,7 +448,7 @@ function buildForest(): SubagentNode[] {
 			startedAt: info.startedAt,
 			endedAt: info.endedAt,
 			metrics: metricsOf(info, now, fallback),
-			subtree: { tokens: 0, cost: 0 },
+			subtree: {},
 			lastTool: lastToolOf(info),
 			children: [],
 		});
@@ -472,8 +484,8 @@ export function fanoutTotals(toolCallId: string): {
 	count: number;
 	running: number;
 	failed: number;
-	tokens: number;
-	cost: number;
+	tokens?: number;
+	cost?: number;
 	elapsedMs: number;
 } {
 	const nodes = flatten(subagentTree(toolCallId));
@@ -481,12 +493,8 @@ export function fanoutTotals(toolCallId: string): {
 	const starts = nodes.flatMap((node) => (node.startedAt !== undefined ? [node.startedAt] : []));
 	const ends = nodes.map((node) => node.endedAt ?? now);
 	const elapsedMs = starts.length === 0 ? 0 : Math.max(0, Math.max(...ends) - Math.min(...starts));
-	let tokens = 0;
-	let cost = 0;
-	for (const node of nodes) {
-		tokens += node.metrics.tokens;
-		cost += node.metrics.cost;
-	}
+	const tokens = sumKnown(nodes.map((node) => node.metrics.tokens));
+	const cost = sumKnown(nodes.map((node) => node.metrics.cost));
 	return {
 		count: nodes.length,
 		running: nodes.filter((node) => node.status === "running").length,

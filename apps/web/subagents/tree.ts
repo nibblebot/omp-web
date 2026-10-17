@@ -1,12 +1,13 @@
 import type { SubagentNode } from "../store/subagents";
+import { sumKnown } from "./format";
 
 /** Totals across a set of agents (a fan-out, or the whole forest). */
 export interface SubagentTotals {
 	count: number;
 	running: number;
 	failed: number;
-	tokens: number;
-	cost: number;
+	tokens?: number;
+	cost?: number;
 	elapsedMs: number;
 }
 
@@ -40,8 +41,8 @@ export function summarizeSubagentTree(nodes: readonly SubagentNode[]): SubagentT
 		count: all.length,
 		running: all.filter((node) => node.status === "running" || node.status === "pending").length,
 		failed: all.filter((node) => node.status === "failed").length,
-		tokens: all.reduce((sum, node) => sum + node.metrics.tokens, 0),
-		cost: all.reduce((sum, node) => sum + node.metrics.cost, 0),
+		tokens: sumKnown(all.map((node) => node.metrics.tokens)),
+		cost: sumKnown(all.map((node) => node.metrics.cost)),
 		elapsedMs: all.reduce((max, node) => Math.max(max, node.metrics.elapsedMs), 0),
 	};
 }

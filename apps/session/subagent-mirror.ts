@@ -10,7 +10,11 @@ import type {
 	SubagentLifecyclePayload,
 	SubagentProgressPayload,
 } from "@oh-my-pi/pi-coding-agent/task";
-import type { SubagentMessagesResult } from "#lib/wire/protocol";
+import type {
+	SubagentMessagesResult,
+	SubagentProgressFields,
+	SubagentUsageFields,
+} from "#lib/wire/protocol";
 import { createProgressCoalescer, type ProgressCoalescer } from "./subagent-progress";
 import type { SessionEntry } from "./session-entry";
 import { broadcastTo } from "./sse-delivery";
@@ -102,6 +106,7 @@ function hasTranscriptSessionFile(entry: SessionEntry, sessionFile: string): boo
 
 /** Session change drops every tracked subagent; late frames from the old session are stale. */
 export function clearSubagents(entry: SessionEntry): void {
+	finishedUsage.get(entry)?.clear();
 	for (const subagentId of entry.subagentSnapshots.keys()) {
 		addPruned(entry.staleSubagentIds, subagentId, MAX_RETAINED_TRANSCRIPT_REFERENCES);
 	}
@@ -137,8 +142,10 @@ export function handleSubagentLifecycle(
 	if (!existing && payload.status !== "started") return;
 	if (payload.status === "started") {
 		entry.staleSubagentIds.delete(payload.id);
+		finishedUsage.get(entry)?.delete(payload.id);
 	} else {
 		progressOf(entry).flush(payload.id);
+		retainFinishedUsage(entry, payload.id, existing?.progress);
 	}
 	progressOf(entry).drop(payload.id);
 	const sessionFile = payload.sessionFile ?? existing?.sessionFile;
@@ -194,6 +201,41 @@ export function handleSubagentProgress(
 }
 
 const coalescers = new WeakMap<SessionEntry, ProgressCoalescer>();
+
+/** Last known usage of each finished subagent. Lifecycle drops the snapshot that carries it, so the roster reads it here. */
+const finishedUsage = new WeakMap<SessionEntry, Map<string, SubagentUsageFields>>();
+
+function retainFinishedUsage(
+	entry: SessionEntry,
+	id: string,
+	progress: SubagentProgressFields | undefined,
+): void {
+	let usage = finishedUsage.get(entry);
+	if (usage === undefined) {
+		usage = new Map();
+		finishedUsage.set(entry, usage);
+	}
+	usage.delete(id);
+	if (progress?.tokens === undefined) return;
+	usage.set(id, {
+		tokens: progress.tokens,
+		requests: progress.requests ?? 0,
+		cost: progress.cost ?? 0,
+	});
+	while (usage.size > MAX_RETAINED_TRANSCRIPT_REFERENCES) {
+		const oldest = usage.keys().next().value;
+		if (oldest === undefined) break;
+		usage.delete(oldest);
+	}
+}
+
+/** Final usage of a finished subagent; undefined when the agent is live or its usage was never reported. */
+export function finishedSubagentUsage(
+	entry: SessionEntry,
+	id: string,
+): SubagentUsageFields | undefined {
+	return finishedUsage.get(entry)?.get(id);
+}
 
 /** The entry's progress coalescer; its frames are broadcast on the entry's session handle. */
 function progressOf(entry: SessionEntry): ProgressCoalescer {

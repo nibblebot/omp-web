@@ -14,8 +14,8 @@ type Json = Record<string, unknown>;
 
 /** Usage read from the daemon roster when no live progress record exists. */
 export interface UsageFallback {
-	tokens: number;
-	cost: number;
+	tokens?: number;
+	cost?: number;
 	contextTokens?: number;
 	contextWindow?: number;
 }
@@ -177,8 +177,8 @@ export function metricsOf(
 	const p = info.progress;
 	const usage: UsageFallback | undefined = p
 		? {
-				tokens: num(p.tokens) ?? 0,
-				cost: num(p.cost) ?? 0,
+				tokens: num(p.tokens),
+				cost: num(p.cost),
 				contextTokens: num(p.contextTokens),
 				contextWindow: num(p.contextWindow),
 			}
@@ -193,8 +193,8 @@ export function metricsOf(
 			window !== undefined && window > 0 && contextTokens !== undefined
 				? (contextTokens / window) * 100
 				: undefined,
-		tokens: usage?.tokens ?? 0,
-		cost: usage?.cost ?? 0,
+		tokens: usage?.tokens,
+		cost: usage?.cost,
 	};
 }
 
