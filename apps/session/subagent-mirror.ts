@@ -210,13 +210,14 @@ function retainFinishedUsage(
 	id: string,
 	progress: SubagentProgressFields | undefined,
 ): void {
+	// A lifecycle frame without progress (park, revive) must not erase the usage a finish retained.
+	if (progress?.tokens === undefined) return;
 	let usage = finishedUsage.get(entry);
 	if (usage === undefined) {
 		usage = new Map();
 		finishedUsage.set(entry, usage);
 	}
 	usage.delete(id);
-	if (progress?.tokens === undefined) return;
 	usage.set(id, {
 		tokens: progress.tokens,
 		requests: progress.requests ?? 0,

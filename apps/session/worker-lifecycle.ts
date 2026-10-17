@@ -21,6 +21,7 @@ import type { SubagentProgressFields, SubagentUsageFields } from "#lib/wire/prot
 import type { SessionEntry } from "./session-entry";
 import { finishedSubagentUsage } from "./subagent-mirror";
 import { projectProgress } from "./subagent-progress";
+import { transcriptUsage } from "./subagent-transcript-usage";
 
 export type WorkerLifecycleStatus =
 	| "running"
@@ -226,7 +227,11 @@ export async function listWorkers(entry: SessionEntry): Promise<WorkerRecord[]> 
 			assignment: snap?.assignment,
 			description: snap?.description,
 			progress: snap?.progress === undefined ? undefined : projectProgress(snap.progress),
-			usage: snap?.progress === undefined ? finishedSubagentUsage(entry, id) : undefined,
+			usage:
+				snap?.progress !== undefined
+					? undefined
+					: (finishedSubagentUsage(entry, id) ??
+						(sessionFile && hasHistory ? await transcriptUsage(sessionFile) : undefined)),
 			sessionFile,
 			hasHistory,
 			lastActivity: registered?.lastActivity ?? snap?.lastUpdate ?? 0,

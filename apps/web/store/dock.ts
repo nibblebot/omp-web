@@ -10,11 +10,17 @@ import { setState, state } from "../state";
 export function openDock(kind: string, id?: string): void {
 	const current = state.dock;
 	if (current !== null && current.kind === kind && current.id === id) return;
-	setState("dock", id === undefined ? { kind } : { kind, id });
+	setState("dock", { kind, id });
 }
 
 export function closeDock(): void {
 	if (state.dock !== null) setState("dock", null);
+}
+
+/** Back or Esc on the open dock: an agent pane steps back to the agents list; anything else closes. */
+export function backFromDock(): void {
+	if (state.dock?.kind === "agent") openDock("agents");
+	else closeDock();
 }
 
 /** Set and persist the dock width (clamped to the allowed range). */
