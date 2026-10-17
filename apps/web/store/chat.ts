@@ -49,6 +49,23 @@ export function resetChatIds(): void {
 	nextId = 1;
 }
 
+/**
+ * A turn that is not streaming has no tool in flight. A replayed transcript
+ * opens an unanswered tool call as running (its result is written only when the
+ * tool returns), so an idle snapshot settles any such leftover here.
+ */
+export function settleRunningTools(): void {
+	if (!state.items.some((it) => it.kind === "tool" && it.status === "running")) return;
+	setState(
+		"items",
+		produce((items) => {
+			for (const item of items) {
+				if (item.kind === "tool" && item.status === "running") item.status = "done";
+			}
+		}),
+	);
+}
+
 /** Allocate the next transcript item id. */
 export function nextChatId(): number {
 	return nextId++;

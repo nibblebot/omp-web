@@ -34,6 +34,7 @@ import {
 	nextChatId,
 	pendingEphemeral,
 	resetChatIds,
+	settleRunningTools,
 	scheduleFlush,
 	tabsToSpaces,
 	extractText,
@@ -621,7 +622,9 @@ export function loadHistory(messages: AgentMessage[]): void {
 						toolCallId: c.id,
 						name: c.name,
 						args: c.arguments ?? {},
-						status: "done",
+						// No result yet means the call is still in flight (a pending ask, say);
+						// the matching toolResult below settles it.
+						status: "running",
 						output: "",
 					});
 				}
@@ -718,6 +721,8 @@ function applyState(s: WebSessionState, stats?: SessionStats): void {
 		...(s.isStreaming ? {} : { workingIntent: undefined }),
 		...(stats !== undefined ? { stats } : {}),
 	});
+	// No tool is in flight once the turn is idle: settle what a replayed transcript left running.
+	if (!s.isStreaming) settleRunningTools();
 }
 
 // ---------------------------------------------------------------------------

@@ -405,6 +405,50 @@ describe("history: bang-shell and python runs render as settled cards", () => {
 	});
 });
 
+describe("replayed mid-ask transcript (an ask card must not read done while pending)", () => {
+	/** A transcript as the session saves it mid-ask: the call is recorded, its result is not yet. */
+	const pendingAskHistory = (): unknown[] => [
+		userMsg("q"),
+		{
+			role: "assistant",
+			content: [{ type: "toolCall", id: "a1", name: "ask", arguments: { questions: [] } }],
+		},
+	];
+
+	function primeAttached(): void {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("session-a"));
+	}
+
+	test("an ask still awaiting its answer stays running while the turn streams", () => {
+		primeAttached();
+		dispatch({ type: "history", messages: pendingAskHistory() } as ServerFrame);
+		dispatch({ type: "state", state: { isStreaming: true } as unknown as WebSessionState });
+		expect(state.items.find((it) => it.kind === "tool")).toMatchObject({
+			name: "ask",
+			status: "running",
+		});
+	});
+
+	test("a dangling tool call in an idle transcript settles to done", () => {
+		primeAttached();
+		dispatch({ type: "history", messages: pendingAskHistory() } as ServerFrame);
+		dispatch({ type: "state", state: { isStreaming: false } as unknown as WebSessionState });
+		expect(state.items.find((it) => it.kind === "tool")).toMatchObject({ status: "done" });
+	});
+
+	test("an answered ask keeps its recorded result status while the turn streams", () => {
+		primeAttached();
+		dispatch({
+			type: "history",
+			messages: [...pendingAskHistory(), toolResultMsg("a1")],
+		} as ServerFrame);
+		dispatch({ type: "state", state: { isStreaming: true } as unknown as WebSessionState });
+		expect(state.items.find((it) => it.kind === "tool")).toMatchObject({ status: "done" });
+	});
+});
+
 describe("attach correlation (finding #28)", () => {
 	/** The attach command posted by the last attachSession() call. */
 	function lastAttach(): Extract<ClientCommand, { type: "attach" }> {
