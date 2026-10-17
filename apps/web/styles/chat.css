@@ -276,6 +276,12 @@
 	white-space: pre-wrap;
 	margin-top: var(--space-2);
 }
+.msg-notice-reply {
+	text-align: left;
+	margin-left: var(--space-5);
+	padding-left: var(--space-5);
+	border-left: 2px solid var(--border);
+}
 .thinking-block {
 	color: var(--muted);
 	border-left: 2px solid var(--border);

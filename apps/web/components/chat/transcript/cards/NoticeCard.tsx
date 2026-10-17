@@ -6,15 +6,19 @@ const COLLAPSE_LINES = 6;
 const COLLAPSE_CHARS = 400;
 
 /**
- * Notice card. A forwarded command's reply is headed by the command ("/compact → ..."),
- * and a long reply collapses to that header plus its first line.
+ * Notice card. A forwarded command's echo row carries its name; its reply renders
+ * attached under that echo (`msg-notice-reply`) without repeating the name. A long
+ * reply collapses to its first line behind a disclosure.
  */
 export const NoticeCard: Component<{ item: Extract<ChatItem, { kind: "notice" }> }> = (props) => {
 	return (
-		<div class="msg-notice" classList={{ "msg-notice-echo": props.item.level === "echo" }}>
-			<Show when={props.item.command}>
-				{(command) => <span class="msg-notice-command">{command()} → </span>}
-			</Show>
+		<div
+			class="msg-notice"
+			classList={{
+				"msg-notice-echo": props.item.level === "echo",
+				"msg-notice-reply": props.item.command !== undefined,
+			}}
+		>
 			<Show
 				when={
 					props.item.message.length > COLLAPSE_CHARS ||
