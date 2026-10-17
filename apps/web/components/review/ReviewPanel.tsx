@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, on, Show, type Component } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, Show, type Component } from "solid-js";
 import type { GitPathEntry } from "#lib/wire/protocol";
 import type { GitReviewDiff } from "../../store/slices/review";
 import { sha256Hex } from "../../text/sha256";
@@ -42,14 +42,14 @@ export const ReviewPanel: Component = () => {
 	const [noteDraft, setNoteDraft] = createSignal("");
 	// Refresh when the git capability is (or becomes) available: the panel can mount
 	// before the attached session's capabilities land, and a mount-only check then
-	// leaves the panel empty until a manual refresh.
+	// leaves the panel empty until a manual refresh. The memo dedupes by value: state
+	// frames replace the capabilities object, which would re-fire a bare effect and
+	// loop gitStatus calls forever.
+	const gitAvailable = createMemo(() => reviewAvailable("git"));
 	createEffect(
-		on(
-			() => reviewAvailable("git"),
-			(available) => {
-				if (available) void refreshGit();
-			},
-		),
+		on(gitAvailable, (available) => {
+			if (available) void refreshGit();
+		}),
 	);
 	const selected = (rows: GitPathEntry[]) =>
 		rows.filter((row) => gitSelection().includes(row.path)).map((row) => row.path);

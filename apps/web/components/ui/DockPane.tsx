@@ -1,4 +1,5 @@
-import type { Component, JSX } from "solid-js";
+import { onCleanup, onMount, type Component, type JSX } from "solid-js";
+import { focusOrigin, pageFocusFallback, resolveFocusReturn } from "./focus";
 import { XIcon } from "./icons";
 
 export interface DockPaneProps {
@@ -20,8 +21,22 @@ const KEY_STEP = 16;
  * body. Below 768px it covers the whole viewport and offers a Back button.
  */
 export const DockPane: Component<DockPaneProps> = (props) => {
+	let pane!: HTMLElement;
 	let dragStartX = 0;
 	let dragStartWidth = 0;
+	// The element that had focus before the dock opened; restored when it closes.
+	let previousFocus: HTMLElement | null = null;
+
+	onMount(() => {
+		previousFocus = focusOrigin();
+	});
+	onCleanup(() => {
+		// Hand focus back when it is still inside the pane or was lost with it (Esc, Back,
+		// close button). Focus that moved to another control on purpose is left alone.
+		const active = document.activeElement;
+		if (active && active !== document.body && !pane.contains(active)) return;
+		resolveFocusReturn(previousFocus, pageFocusFallback)?.focus();
+	});
 
 	const clamp = (px: number): number =>
 		Math.min(props.maxWidth, Math.max(props.minWidth, Math.round(px)));
@@ -58,7 +73,7 @@ export const DockPane: Component<DockPaneProps> = (props) => {
 	};
 
 	return (
-		<aside class="dock-pane" aria-label={props.title} onKeyDown={onPaneKey}>
+		<aside ref={pane} class="dock-pane" aria-label={props.title} onKeyDown={onPaneKey}>
 			<div
 				class="dock-resizer"
 				role="separator"
