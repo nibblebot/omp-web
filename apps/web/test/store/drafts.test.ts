@@ -15,6 +15,7 @@ import {
 	type DraftKey,
 } from "../../store/drafts";
 import { promptInsert, setPromptInsert } from "../../state";
+import type { TextAttachment } from "../../prompt/attachments";
 import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
 
 // ---------------------------------------------------------------------------
@@ -166,5 +167,67 @@ describe("drafts (discard undo and history recovery)", () => {
 		expect(listClearedDrafts(key).map((b) => b.text)).toEqual(["first"]);
 		setPromptInsert(null);
 		deleteClearedDrafts(key);
+	});
+});
+
+describe("drafts (text-file chips)", () => {
+	const file = (name: string, text: string): TextAttachment => ({
+		id: `att-${name}`,
+		name,
+		size: text.length,
+		text,
+	});
+
+	test("chip-only draft round-trips through discard and undo", () => {
+		const key = freshKey("chip-undo");
+		const draft: DraftBody = {
+			text: "",
+			images: [],
+			files: [file("a.ts", "const a = 1;")],
+			updatedAt: 1_700_000_000_000,
+		};
+		saveDraft(key, draft);
+		clearDraft(key);
+		expect(loadDraft(key)).toBeNull();
+		expect(listClearedDrafts(key)).toHaveLength(1);
+
+		takeClearedDraft(key, draft);
+		expect(promptInsert()).toEqual({ text: "", files: draft.files });
+		expect(listClearedDrafts(key)).toEqual([]);
+		setPromptInsert(null);
+	});
+
+	test("chips survive save and restore; an oversize chip is marked not kept", () => {
+		const key = freshKey("chip-restore");
+		const small = file("a.ts", "A");
+		const big = file("big.txt", "x".repeat(400_001));
+		saveDraft(key, { text: "look", images: [], files: [small, big], updatedAt: 1000 });
+		const restored = loadDraft(key);
+		expect(restored?.files?.[0]).toEqual(small);
+		expect(restored?.files?.[1]?.name).toBe("big.txt");
+		expect(restored?.files?.[1]?.text).toBeUndefined();
+		expect(restored?.files?.[1]?.error).toBe("Not kept with the draft; attach it again.");
+		removeDraft(key);
+	});
+
+	test("undo restores an oversize chip in full from memory, not the stored copy", () => {
+		const key = freshKey("chip-undo-big");
+		const big = file("big.txt", "x".repeat(400_001));
+		const body: DraftBody = { text: "look", images: [], files: [big], updatedAt: 3000 };
+		saveDraft(key, body);
+		clearDraft(key);
+		takeClearedDraft(key, body);
+		expect(promptInsert()?.files?.[0]?.text).toHaveLength(400_001);
+		setPromptInsert(null);
+	});
+
+	test("history recovery restores chips into the composer", () => {
+		const key = freshKey("chip-history");
+		const attached = file("a.ts", "A");
+		saveDraft(key, { text: "see", images: [], files: [attached], updatedAt: 2000 });
+		clearDraft(key);
+		expect(recoverClearedDraft(key)?.files).toEqual([attached]);
+		expect(promptInsert()).toEqual({ text: "see", files: [attached] });
+		setPromptInsert(null);
 	});
 });

@@ -15,6 +15,8 @@ function chipSize(bytes: number): string {
  */
 export const AttachmentChip: Component<{
 	attachment: TextAttachment;
+	/** Kept in memory only: too large or credential-like for the stored draft. */
+	unsaved?: boolean;
 	onRemove: () => void;
 }> = (props) => (
 	<span
@@ -31,6 +33,9 @@ export const AttachmentChip: Component<{
 		<span class="attachment-chip-meta">
 			{props.attachment.error ?? chipSize(props.attachment.size)}
 		</span>
+		<Show when={props.unsaved}>
+			<span class="attachment-chip-meta">not saved with draft</span>
+		</Show>
 		<button
 			type="button"
 			class="attachment-chip-remove"

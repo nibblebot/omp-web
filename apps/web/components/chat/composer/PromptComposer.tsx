@@ -20,6 +20,7 @@ import {
 import {
 	cancelScheduledDraftSave,
 	currentDraftKey,
+	unsavedFileIds,
 	loadDraft,
 	peekClearedDraft,
 	recoverClearedDraft,
@@ -83,9 +84,14 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const [folded, setFolded] = createSignal(true);
 	const [pasteNote, setPasteNote] = createSignal<string | null>(null);
 	const [pasteError, setPasteError] = createSignal<string | null>(null);
-	const [recovery, setRecovery] = createSignal<{ text: string; images: number } | null>(null);
+	const [recovery, setRecovery] = createSignal<{
+		text: string;
+		images: number;
+		files: number;
+	} | null>(null);
 	const [chipError, setChipError] = createSignal<string | null>(null);
 	const draftKey = () => currentDraftKey();
+	const unsaved = createMemo(() => unsavedFileIds(props.files()));
 	// Magic keyword highlight and ghost text share one mirror behind the textarea.
 	let mirrorEl: HTMLDivElement | undefined;
 	const segments = createMemo(() =>
@@ -115,12 +121,14 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		if (insert.text)
 			props.setMessage((prev) => (prev.trim() ? `${prev}\n${insert.text}` : insert.text));
 		if (insert.images?.length) props.setImages((prev) => [...prev, ...insert.images!]);
+		if (insert.files?.length) props.setFiles((prev) => [...prev, ...insert.files!]);
 		requestAnimationFrame(() => {
 			textarea.focus();
 			// Undo/recover of a discarded draft restores the caret into an empty composer.
 			if (insert.selection && pristine)
 				textarea.setSelectionRange(insert.selection.start, insert.selection.end);
 			props.ac.autoGrow();
+			persist(props.message(), props.images(), props.files());
 		});
 	});
 
@@ -135,9 +143,10 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	// restoration never submits.
 	onMount(() => {
 		const saved = loadDraft(draftKey());
-		if (saved && (saved.text || saved.images.length > 0)) {
+		if (saved && (saved.text || saved.images.length > 0 || saved.files?.length)) {
 			props.setMessage(saved.text);
 			if (saved.images.length > 0) props.setImages(saved.images);
+			if (saved.files?.length) props.setFiles(saved.files);
 			if (saved.selectionStart !== undefined) {
 				requestAnimationFrame(() => {
 					try {
@@ -152,8 +161,12 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 			}
 		}
 		const cleared = peekClearedDraft(draftKey());
-		if (cleared && (cleared.text.trim() || cleared.images.length > 0)) {
-			setRecovery({ text: cleared.text.slice(0, 120), images: cleared.images.length });
+		if (cleared && (cleared.text.trim() || cleared.images.length > 0 || cleared.files?.length)) {
+			setRecovery({
+				text: cleared.text.slice(0, 120),
+				images: cleared.images.length,
+				files: cleared.files?.length ?? 0,
+			});
 		}
 	});
 
@@ -161,14 +174,22 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		cancelScheduledDraftSave(draftKey());
 	});
 
-	const persist = (text: string, imgs: ImageArg[]): void => {
+	const persist = (text: string, imgs: ImageArg[], attached: TextAttachment[]): void => {
 		scheduleDraftSave(draftKey(), {
 			text,
 			images: imgs,
+			files: attached,
 			selectionStart: textarea.selectionStart ?? undefined,
 			selectionEnd: textarea.selectionEnd ?? undefined,
 			updatedAt: Date.now(),
 		});
+	};
+
+	// Chips reach the model at send time and never enter the textarea. Every change is
+	// saved with the draft so a reload keeps them.
+	const addFiles = (next: TextAttachment[]): void => {
+		props.setFiles(next);
+		persist(props.message(), props.images(), next);
 	};
 
 	const addImages = (files: Array<{ data: string; mimeType: string }>): void => {
@@ -234,7 +255,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		}
 		// Text files become chips and reach the model at send time; they never enter the textarea.
 		const attachment = await importTextAttachment(f);
-		props.setFiles((prev) => [...prev, attachment]);
+		addFiles([...props.files(), attachment]);
 	};
 
 	// Files dropped on the window land here. Deferred so a drop made while no
@@ -271,7 +292,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		props.ac.autoGrow();
 		props.ac.refreshToken();
 		props.ghost.refreshCaret();
-		persist(el.value, props.images());
+		persist(el.value, props.images(), props.files());
 		// Live `^selector` chip validation (offline mirror; submit expands).
 		if (MODEL_MENTION_RE.test(el.value)) {
 			MODEL_MENTION_RE.lastIndex = 0;
@@ -317,9 +338,8 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 						{(attachment) => (
 							<AttachmentChip
 								attachment={attachment}
-								onRemove={() =>
-									props.setFiles((prev) => prev.filter((x) => x.id !== attachment.id))
-								}
+								unsaved={unsaved().has(attachment.id)}
+								onRemove={() => addFiles(props.files().filter((x) => x.id !== attachment.id))}
 							/>
 						)}
 					</For>
@@ -329,8 +349,9 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 				{(r) => (
 					<div class="queue-bar" role="status">
 						<span class="queue-text">
-							Cleared draft available ({r().text || "(images only)"}
-							{r().images > 0 ? `, ${r().images} image${r().images === 1 ? "" : "s"}` : ""})
+							Cleared draft available ({r().text || "(no text)"}
+							{r().images > 0 ? `, ${r().images} image${r().images === 1 ? "" : "s"}` : ""}
+							{r().files > 0 ? `, ${r().files} file${r().files === 1 ? "" : "s"}` : ""})
 						</span>
 						<button type="button" class="queue-pop" onClick={recoverDraft}>
 							Recover

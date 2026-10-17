@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AdvisorItem } from "./store/slices/advisor";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { UsageReport } from "@oh-my-pi/pi-ai";
+import type { TextAttachment } from "./prompt/attachments";
 import { createStore, reconcile } from "solid-js/store";
 import { OMP_PROTO, SSE_EVENT_NAME, SSE_SILENCE_DEADLINE_MS, daemonsKey } from "#lib/wire/protocol";
 import type {
@@ -523,6 +524,7 @@ drawerMedia?.addEventListener("change", (event) => {
 export interface PromptInsert {
 	text: string;
 	images?: ImageArg[];
+	files?: TextAttachment[];
 	selection?: { start: number; end: number };
 }
 

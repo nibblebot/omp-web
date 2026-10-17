@@ -82,17 +82,19 @@ export const PromptBox: Component = () => {
 
 	/** Explicit destructive clear (toolbar/discard): moves the live text to
 	 *  the bounded cleared ring, then empties the composer. An Undo toast
-	 *  restores the exact draft (text, images, caret) for 10 s. The entry stays
+	 *  restores the exact draft (text, images, chips, caret) for 10 s. The entry stays
 	 *  recoverable from the history picker afterward. */
 	const discard = (): void => {
 		const key = currentDraftKey();
 		cancelScheduledDraftSave(key);
 		const text = message();
 		const imgs = images();
-		if (!text.trim() && imgs.length === 0) return;
+		const chips = files();
+		if (!text.trim() && imgs.length === 0 && chips.length === 0) return;
 		const body: DraftBody = {
 			text,
 			images: imgs,
+			files: chips,
 			selectionStart: textarea.selectionStart,
 			selectionEnd: textarea.selectionEnd,
 			updatedAt: Date.now(),

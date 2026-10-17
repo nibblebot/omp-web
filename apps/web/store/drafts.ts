@@ -1,5 +1,6 @@
 import { setPromptInsert } from "../state";
 import type { ImageArg } from "#lib/wire/protocol";
+import type { TextAttachment } from "../prompt/attachments";
 
 /**
  * P2 draft ownership (G03). Browser-persisted unsent drafts, partitioned by
@@ -19,6 +20,8 @@ import type { ImageArg } from "#lib/wire/protocol";
 export interface DraftBody {
 	text: string;
 	images: ImageArg[];
+	/** Attached text-file chips. The stored copy is budgeted; see `unsavedFileIds`. */
+	files?: TextAttachment[];
 	selectionStart?: number;
 	selectionEnd?: number;
 	updatedAt: number;
@@ -35,6 +38,10 @@ const DRAFT_PREFIX = "omp-web:draft:v2:";
 const CLEARED_PREFIX = "omp-web:draft-cleared:v2:";
 const CLEARED_CAP = 5;
 const QUOTA_WARN_KEY = "omp-web:draft-quota-warned";
+/** Total file text one stored draft keeps; larger chips stay in memory only. */
+const DRAFT_FILES_MAX_CHARS = 400_000;
+const FILE_NOT_KEPT = "Not kept with the draft; attach it again.";
+const SECRET_RE = /sk-ant-|sk-[a-zA-Z0-9]{8,}|xox[bap]-|ghp_|Bearer\s+[A-Za-z0-9._~-]{8,}/;
 
 function storage(): Storage | null {
 	try {
@@ -95,13 +102,65 @@ function isImageArg(v: unknown): v is ImageArg {
 	return o.type === "image" && typeof o.data === "string" && typeof o.mimeType === "string";
 }
 
+/** Ids of the chips the stored draft cannot hold: text over the shared budget, or credential-like. */
+function storableFileIds(files: readonly TextAttachment[]): Set<string> {
+	const kept = new Set<string>();
+	let chars = 0;
+	for (const file of files) {
+		if (file.text === undefined) {
+			kept.add(file.id);
+			continue;
+		}
+		if (SECRET_RE.test(file.text) || chars + file.text.length > DRAFT_FILES_MAX_CHARS) continue;
+		chars += file.text.length;
+		kept.add(file.id);
+	}
+	return kept;
+}
+
+/** Chips that stay in memory only: they are sent and restored by Undo, but a reload loses them.
+ *  The composer marks these chips as not saved. */
+export function unsavedFileIds(files: readonly TextAttachment[]): Set<string> {
+	const kept = storableFileIds(files);
+	return new Set(files.filter((f) => !kept.has(f.id)).map((f) => f.id));
+}
+
+function isTextAttachment(v: unknown): v is TextAttachment {
+	if (!v || typeof v !== "object") return false;
+	const o = v as Record<string, unknown>;
+	return (
+		typeof o.id === "string" &&
+		typeof o.name === "string" &&
+		typeof o.size === "number" &&
+		(o.text === undefined || typeof o.text === "string") &&
+		(o.error === undefined || typeof o.error === "string")
+	);
+}
+
+/** Stored form of the chips. A chip over budget keeps its name and reads as not kept. */
+function sanitizeFiles(raw: unknown): TextAttachment[] {
+	if (!Array.isArray(raw)) return [];
+	const files = raw.filter(isTextAttachment);
+	const kept = storableFileIds(files);
+	return files.map((f) => {
+		const name = f.name.slice(0, 255);
+		if (!kept.has(f.id)) return { id: f.id, name, size: f.size, error: FILE_NOT_KEPT };
+		return {
+			id: f.id,
+			name,
+			size: f.size,
+			...(f.text !== undefined ? { text: f.text } : {}),
+			...(f.error !== undefined ? { error: f.error } : {}),
+		};
+	});
+}
+
 function sanitizeBody(raw: unknown): DraftBody | null {
 	if (!raw || typeof raw !== "object") return null;
 	const o = raw as Record<string, unknown>;
 	if (typeof o.text !== "string") return null;
 	// Never persist credentials-looking blobs or audio payloads.
-	if (/sk-ant-|sk-[a-zA-Z0-9]{8,}|xox[bap]-|ghp_|Bearer\s+[A-Za-z0-9._~-]{8,}/.test(o.text))
-		return null;
+	if (SECRET_RE.test(o.text)) return null;
 	const images = Array.isArray(o.images) ? o.images.filter(isImageArg).slice(0, 8) : [];
 	// Bound image payload (~2.5MB total) so one screenshot storm can't evict everything.
 	let bytes = 0;
@@ -111,9 +170,11 @@ function sanitizeBody(raw: unknown): DraftBody | null {
 		if (bytes > 2_500_000) break;
 		kept.push({ type: "image", data: img.data, mimeType: img.mimeType });
 	}
+	const files = sanitizeFiles(o.files);
 	return {
 		text: o.text.slice(0, 200_000),
 		images: kept,
+		...(files.length > 0 ? { files } : {}),
 		...(typeof o.selectionStart === "number" ? { selectionStart: o.selectionStart } : {}),
 		...(typeof o.selectionEnd === "number" ? { selectionEnd: o.selectionEnd } : {}),
 		updatedAt: typeof o.updatedAt === "number" ? o.updatedAt : Date.now(),
@@ -127,7 +188,7 @@ let quotaWarned = false;
 export function saveDraft(key: DraftKey, body: DraftBody): boolean {
 	const clean = sanitizeBody(body);
 	if (!clean) return false;
-	if (!clean.text.trim() && clean.images.length === 0) {
+	if (!clean.text.trim() && clean.images.length === 0 && !clean.files?.length) {
 		removeRaw(draftKey(key));
 		return true;
 	}
@@ -243,7 +304,7 @@ export function listClearedDrafts(key: DraftKey): DraftBody[] {
 	return readCleared(clearedKey(key)).reverse();
 }
 
-/** Hand a discarded draft back to the composer inbox (text, images, caret) and
+/** Hand a discarded draft back to the composer inbox (text, images, chips, caret) and
  *  drop its ring entry. The entry is matched by `updatedAt` and text, so an
  *  identical older draft is never removed by mistake. Used by the Undo toast
  *  and the history picker. */
@@ -257,6 +318,7 @@ export function takeClearedDraft(key: DraftKey, body: DraftBody): void {
 	setPromptInsert({
 		text: body.text,
 		...(body.images.length > 0 ? { images: body.images } : {}),
+		...(body.files && body.files.length > 0 ? { files: body.files } : {}),
 		...(body.selectionStart !== undefined && body.selectionEnd !== undefined
 			? { selection: { start: body.selectionStart, end: body.selectionEnd } }
 			: {}),
