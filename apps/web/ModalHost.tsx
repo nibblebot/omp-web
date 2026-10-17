@@ -1,5 +1,6 @@
 import { For, Show, createEffect, type Component, type JSX } from "solid-js";
 import { ShortcutsDialog } from "./components/app/ShortcutsDialog";
+import { CommandPalettePicker } from "./components/app/CommandPalettePicker";
 import { FleetSignInDialog } from "./components/app/FleetSignInDialog";
 import { Toasts } from "./components/app/Toasts";
 import { CompactionDialog } from "./components/chat/controls/CompactionDialog";
@@ -60,6 +61,7 @@ export const ModalHost: Component = () => {
 		help: () => <ShortcutsDialog initialTab="commands" onClose={close} />,
 		hotkeys: () => <ShortcutsDialog initialTab="shortcuts" onClose={close} />,
 		model: () => <ModelPicker onClose={close} />,
+		palette: () => <CommandPalettePicker onClose={close} />,
 		thinking: () => <ThinkingLevelPicker onClose={close} />,
 		stats: () => <SessionStatsDialog onClose={close} />,
 		settings: () => <SettingsSheet onClose={close} />,

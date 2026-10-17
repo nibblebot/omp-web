@@ -362,6 +362,17 @@ export function searchResume(query: string): Promise<void> {
 }
 
 /**
+ * Sessions across every project, for the command palette. Unlike `searchResume`
+ * it leaves the picker's query, list and scope alone.
+ */
+export async function searchAllProjectSessions(query: string): Promise<ResumeCandidate[]> {
+	const data = await call("resumeList", [{ query, limit: 200, allProjects: true }]);
+	const root = asRecord(data);
+	const pinned = new Set(asIdList(root !== null ? root.pinnedIds : undefined));
+	return normalizeCandidates(data, pinned);
+}
+
+/**
  * Toggle the "All projects" scope. The choice persists in localStorage and the
  * current query re-runs at once so the list reflects it.
  */

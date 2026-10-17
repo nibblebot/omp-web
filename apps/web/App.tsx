@@ -126,6 +126,12 @@ export const App: Component = () => {
 			e.preventDefault();
 			toggleToolsExpanded();
 		});
+		// Ctrl+K opens the command palette (commands, sessions, settings, models).
+		window.addEventListener("keydown", (e) => {
+			if (e.key.toLowerCase() !== "k" || !e.ctrlKey || e.shiftKey || e.altKey) return;
+			e.preventDefault();
+			setState("modal", "palette");
+		});
 		// Ctrl+, opens Settings; Alt+A opens subagents. Alt+A is skipped while
 		// typing: on some platforms Alt+letter inserts a character.
 		window.addEventListener("keydown", (e) => {

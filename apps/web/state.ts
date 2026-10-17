@@ -241,7 +241,8 @@ export type ModalName =
 	| "todos"
 	| "compaction"
 	| "btw"
-	| "share";
+	| "share"
+	| "palette";
 
 /** Unicast answer to sendWorktreeDeleteInfo: guard evidence for the
  *  delete-worktree confirm dialog (linked identity, dirty counts, branch state). */

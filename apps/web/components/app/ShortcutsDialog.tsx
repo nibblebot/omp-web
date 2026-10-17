@@ -20,6 +20,7 @@ const SHORTCUTS: Array<[string, string]> = [
 	["Esc Esc", "Branch picker (empty prompt)"],
 	["Ctrl+O", "Expand all tool outputs"],
 	["Ctrl+,", "Open Settings"],
+	["Ctrl+K", "Command palette"],
 	["Alt+A", "Open subagents"],
 	["Alt+↑", "Pop last queued message into the prompt"],
 	["-> / => msg", "Queue as steer / follow-up"],
