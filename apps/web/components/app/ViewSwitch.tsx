@@ -21,6 +21,7 @@ export const ViewSwitch: Component = () => (
 				aria-label="Chat"
 			>
 				<TerminalIcon />
+				<span class="mode-switch-label">Chat</span>
 				<Show when={state.chatUnviewed}>
 					<span class="mode-switch-dot" />
 				</Show>
@@ -34,6 +35,7 @@ export const ViewSwitch: Component = () => (
 				aria-label="Analysis"
 			>
 				<BarChart3Icon />
+				<span class="mode-switch-label">Analysis</span>
 			</button>
 		</div>
 	</Show>

@@ -97,7 +97,7 @@ export function TranscriptBrowser() {
 		const r = route();
 		return r.view === "session" ? r.sub : null;
 	};
-	/** Stats auto-sync: opening a session or ending a turn refreshes stats.db (debounced). */
+	/** Stats auto-sync: opening a session or the overview, or ending a turn, refreshes stats.db (debounced). */
 	let autoSyncTimer: number | undefined;
 	const scheduleAutoSync = () => {
 		clearTimeout(autoSyncTimer);
@@ -109,10 +109,10 @@ export function TranscriptBrowser() {
 		}, AUTO_SYNC_DEBOUNCE_MS);
 	};
 	onCleanup(() => clearTimeout(autoSyncTimer));
-	// Opening a session (including a deep link on load) and a turn ending both refresh stats.db.
+	// Opening a session or the spend overview (including on load) and a turn ending both refresh stats.db.
 	createEffect(
-		on(file, (f) => {
-			if (f !== null) scheduleAutoSync();
+		on(file, () => {
+			scheduleAutoSync();
 		}),
 	);
 	createEffect(

@@ -1931,3 +1931,21 @@ button.stored-file-row.unavailable {
   color: var(--tx-text-faint);
   font-size: var(--tx-fs-sm);
 }
+
+.mode-switch {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.mode-switch .sidebar-icon-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	width: auto;
+	padding: 0 6px;
+}
+
+.mode-switch-label {
+	font-size: 12px;
+}
