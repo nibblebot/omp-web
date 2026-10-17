@@ -8,9 +8,14 @@ export default defineStory({
 	tabs: true,
 	variants: [
 		{
-			name: "Keyboard shortcuts",
-			description: "The help modal: every composer and transcript shortcut.",
-			render: (ctx) => <ShortcutsDialog onClose={ctx.close} />,
+			name: "Commands (/help)",
+			description: "The Help modal opened by /help: slash commands, grouped, on the Commands tab.",
+			render: (ctx) => <ShortcutsDialog initialTab="commands" onClose={ctx.close} />,
+		},
+		{
+			name: "Shortcuts (/hotkeys)",
+			description: "The Help modal opened by /hotkeys: keyboard shortcuts on the Shortcuts tab.",
+			render: (ctx) => <ShortcutsDialog initialTab="shortcuts" onClose={ctx.close} />,
 		},
 	],
 });

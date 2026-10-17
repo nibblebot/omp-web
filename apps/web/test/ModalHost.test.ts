@@ -155,6 +155,11 @@ describe("ModalHost", () => {
 		expect(renderHost()).toContain(ShortcutsDialog);
 	});
 
+	test("renders the Help dialog for both /help and /hotkeys", () => {
+		setState("modal", "hotkeys");
+		expect(renderHost()).toContain(ShortcutsDialog);
+	});
+
 	test("renders nothing for a modal owned by a feature that is off", () => {
 		const withoutModal = renderHost();
 		// "goal" belongs to the goals feature, which is not active on this page.

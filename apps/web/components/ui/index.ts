@@ -7,6 +7,8 @@ export { ImageThumbnails } from "./ImageThumbnails";
 export { KebabMenu } from "./KebabMenu";
 export { Markdown } from "./Markdown";
 export { Modal } from "./Modal";
+export { Tabs, tabButtonId, tabPanelId } from "./Tabs";
+export type { TabItem } from "./Tabs";
 export { PickerRow, useClickableRow } from "./PickerRow";
 export type { ClickableRowProps } from "./PickerRow";
 export { moveRovingFocus, rovingTarget, setRovingTabStop } from "./roving";

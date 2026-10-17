@@ -6,6 +6,11 @@ import { RefreshIcon } from "../../ui/icons";
 
 /** One compact limit row: label (+ dimmed window), right-aligned %, thin bar. */
 const UsageRow: Component<{ limit: UsageLimit }> = (props) => {
+	// The window label is dropped when the limit label already names it ("5 Hour limit" + "5 Hour").
+	const windowLabel = () => {
+		const w = props.limit.window?.label;
+		return w && !props.limit.label.toLowerCase().includes(w.toLowerCase()) ? w : undefined;
+	};
 	const pct = () => {
 		const frac = resolveUsedFraction(props.limit);
 		return frac === undefined ? undefined : Math.round(frac * 100);
@@ -14,9 +19,7 @@ const UsageRow: Component<{ limit: UsageLimit }> = (props) => {
 		<div class="sidebar-usage-row">
 			<span class="sidebar-usage-label">
 				{props.limit.label}
-				{props.limit.window?.label && (
-					<span class="sidebar-usage-window">{props.limit.window!.label}</span>
-				)}
+				{windowLabel() && <span class="sidebar-usage-window">{windowLabel()}</span>}
 				{props.limit.status && props.limit.status !== "ok" && (
 					<span class="usage-status" data-status={props.limit.status}>
 						{props.limit.status}
@@ -57,6 +60,7 @@ export const SidebarUsage: Component = () => {
 				<span class="sidebar-usage-title">Usage</span>
 				<button
 					class="sidebar-icon-btn"
+					disabled={state.usageLoading}
 					onClick={() => refreshUsageReports()}
 					title="Refresh usage"
 					aria-label="Refresh usage"

@@ -20,7 +20,8 @@ export default [
 		variants: [
 			{
 				name: "Session totals",
-				description: "Token usage, cost, and the per-category context breakdown.",
+				description:
+					"Overview tab: key figures and details first. Context and Tools are separate tabs.",
 				seed: () =>
 					answerCalls({
 						getSessionStats: () => sessionStatsSummary,
@@ -30,7 +31,8 @@ export default [
 			},
 			{
 				name: "Breakdown unavailable",
-				description: "Totals load; the context breakdown call fails and is omitted.",
+				description:
+					"Totals load; the context breakdown call fails. The Context tab shows a fallback note.",
 				seed: () =>
 					answerCalls({
 						getSessionStats: () => sessionStatsSummary,

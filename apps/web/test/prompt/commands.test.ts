@@ -132,6 +132,15 @@ describe("LOCAL_COMMANDS table", () => {
 		}
 	});
 
+	test("/help and /hotkeys open the Help modal on their own tabs", () => {
+		setState("modal", null);
+		LOCAL_COMMANDS.help?.("");
+		expect(state.modal).toBe("help");
+		LOCAL_COMMANDS.hotkeys?.("");
+		expect(state.modal).toBe("hotkeys");
+		setState("modal", null);
+	});
+
 	test("covers the Phase 8 session-command set", () => {
 		for (const name of ["retry", "fork", "fresh", "handoff", "delete", "dump", "rename"]) {
 			expect(LOCAL_COMMANDS[name]).toBeFunction();

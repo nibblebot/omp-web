@@ -399,6 +399,42 @@ button.picker-row {
 	gap: var(--space-4);
 	align-items: baseline;
 }
+.ui-tabs {
+	display: flex;
+	gap: var(--space-1);
+	overflow-x: auto;
+	border-bottom: 1px solid var(--border);
+	margin-bottom: var(--space-4);
+}
+.ui-tab {
+	flex: none;
+	white-space: nowrap;
+	background: none;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	padding: var(--space-2) var(--space-3);
+	color: var(--muted);
+	cursor: pointer;
+}
+.ui-tab[aria-selected="true"] {
+	color: var(--text);
+	border-bottom-color: var(--accent);
+}
+.stats-figures {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+	gap: var(--space-4);
+	margin: 0 0 var(--space-4);
+}
+.stats-figure dt {
+	color: var(--muted);
+	font-size: var(--fs-sm);
+}
+.stats-figure dd {
+	margin: 0;
+	font-size: var(--fs-xl);
+	font-variant-numeric: tabular-nums;
+}
 
 /* --- Ask dialog (server-pushed ExtensionUIContext ui_request) --- */
 

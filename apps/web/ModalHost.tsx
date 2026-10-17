@@ -55,7 +55,8 @@ export const ModalHost: Component = () => {
 	// makes a modal without a renderer a type error, and object keys are
 	// unique, so a modal can never be mounted twice.
 	const modals = {
-		help: () => <ShortcutsDialog onClose={close} />,
+		help: () => <ShortcutsDialog initialTab="commands" onClose={close} />,
+		hotkeys: () => <ShortcutsDialog initialTab="shortcuts" onClose={close} />,
 		model: () => <ModelPicker onClose={close} />,
 		thinking: () => <ThinkingLevelPicker onClose={close} />,
 		stats: () => <SessionStatsDialog onClose={close} />,

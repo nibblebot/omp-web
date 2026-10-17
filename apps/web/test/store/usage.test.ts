@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ClientCommand } from "#lib/wire/protocol";
-import { call, connect, setState, state } from "../../state";
+import { connect, setState, state } from "../../state";
 import { refreshUsageReports, setSidebarUsage } from "../../state";
 import {
 	FakeEventSource,
@@ -120,10 +120,16 @@ describe("usage store slice", () => {
 		expect(state.usageReports).toBeNull();
 	});
 
-	test("setSidebarUsage persists localStorage and flips the flag", () => {
-		expect(state.sidebarUsage).toBe(false);
+	test("sidebarUsage defaults on and respects a saved false", () => {
+		// Default-on: the FLEET-17 finding is that the panel never showed because it defaulted off.
 		expect(globalThis.localStorage.getItem("omp.sidebarUsage")).toBeNull();
+		expect(state.sidebarUsage).toBe(true);
+		setSidebarUsage(false);
+		expect(globalThis.localStorage.getItem("omp.sidebarUsage")).toBe("false");
+		expect(state.sidebarUsage).toBe(false);
+	});
 
+	test("setSidebarUsage persists localStorage and flips the flag", () => {
 		setSidebarUsage(true);
 		expect(state.sidebarUsage).toBe(true);
 		expect(globalThis.localStorage.getItem("omp.sidebarUsage")).toBe("true");

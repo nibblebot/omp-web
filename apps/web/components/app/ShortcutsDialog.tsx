@@ -1,7 +1,16 @@
-import { For, type Component } from "solid-js";
+import { createSignal, For, Show, type Component } from "solid-js";
 import { currentCommandRegistry } from "../../prompt/commands";
 import { COMMAND_GROUP_ORDER, isAvailable } from "../../prompt/command-registry";
 import { Modal } from "../ui/Modal";
+import { Tabs, tabButtonId, tabPanelId, type TabItem } from "../ui/Tabs";
+
+/** Sections of the Help modal. `/help` opens "commands"; `/hotkeys` opens "shortcuts". */
+export type HelpTab = "commands" | "shortcuts";
+
+const TABS: TabItem<HelpTab>[] = [
+	{ id: "commands", label: "Commands" },
+	{ id: "shortcuts", label: "Shortcuts" },
+];
 
 const SHORTCUTS: Array<[string, string]> = [
 	["Enter", "Send (steers while the agent is streaming)"],
@@ -19,6 +28,8 @@ const SHORTCUTS: Array<[string, string]> = [
 	["@ …", "File mentions (Tab completes)"],
 	["! cmd", "Run shell command, output into context"],
 	["!! cmd", "Run shell command, output local only (dimmed)"],
+	["$ code", "Run Python, output into context"],
+	["$$ code", "Run Python, output local only (dimmed)"],
 ];
 
 /** Commands usable in the browser right now, in display group order. */
@@ -30,42 +41,66 @@ const commandGroups = () => {
 	})).filter((group) => group.entries.length > 0);
 };
 
-/** Keyboard shortcut reference (the "help" modal). */
-export const ShortcutsDialog: Component<{ onClose: () => void }> = (props) => (
-	<Modal title="Shortcuts" onClose={props.onClose}>
-		<table class="shortcuts">
-			<tbody>
-				<For each={SHORTCUTS}>
-					{([key, desc]) => (
-						<tr>
-							<td class="shortcut-key">{key}</td>
-							<td>{desc}</td>
-						</tr>
-					)}
-				</For>
-			</tbody>
-		</table>
-		<For each={commandGroups()}>
-			{(group) => (
-				<section>
-					<h3>{group.group}</h3>
+/**
+ * Help modal: slash-command reference and keyboard shortcuts in two tabs.
+ * `initialTab` is the only difference between `/help` and `/hotkeys`; the
+ * tab is local to each mount, so reopening starts from the requested section.
+ */
+export const ShortcutsDialog: Component<{ initialTab: HelpTab; onClose: () => void }> = (props) => {
+	const [tab, setTab] = createSignal<HelpTab>(props.initialTab);
+	return (
+		<Modal title="Help" onClose={props.onClose}>
+			<Tabs tabs={TABS} value={tab()} onChange={setTab} label="Help sections" idPrefix="help" />
+			<Show when={tab() === "commands"}>
+				<div
+					role="tabpanel"
+					id={tabPanelId("help", "commands")}
+					aria-labelledby={tabButtonId("help", "commands")}
+				>
+					<For each={commandGroups()}>
+						{(group) => (
+							<section>
+								<h3>{group.group}</h3>
+								<table class="shortcuts">
+									<tbody>
+										<For each={group.entries}>
+											{(entry) => (
+												<tr>
+													<td class="shortcut-key">
+														/{entry.name}
+														{entry.hint ? ` ${entry.hint}` : ""}
+													</td>
+													<td>{entry.description}</td>
+												</tr>
+											)}
+										</For>
+									</tbody>
+								</table>
+							</section>
+						)}
+					</For>
+				</div>
+			</Show>
+			<Show when={tab() === "shortcuts"}>
+				<div
+					role="tabpanel"
+					id={tabPanelId("help", "shortcuts")}
+					aria-labelledby={tabButtonId("help", "shortcuts")}
+				>
 					<table class="shortcuts">
 						<tbody>
-							<For each={group.entries}>
-								{(entry) => (
+							<For each={SHORTCUTS}>
+								{([key, desc]) => (
 									<tr>
-										<td class="shortcut-key">
-											/{entry.name}
-											{entry.hint ? ` ${entry.hint}` : ""}
-										</td>
-										<td>{entry.description}</td>
+										<td class="shortcut-key">{key}</td>
+										<td>{desc}</td>
 									</tr>
 								)}
 							</For>
 						</tbody>
 					</table>
-				</section>
-			)}
-		</For>
-	</Modal>
-);
+				</div>
+			</Show>
+		</Modal>
+	);
+};

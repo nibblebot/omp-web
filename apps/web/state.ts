@@ -208,6 +208,7 @@ export function isLiveDaemon(d: DaemonInfo): boolean {
 /** Names of the modals the store can summon; components render on match. */
 export type ModalName =
 	| "help"
+	| "hotkeys"
 	| "model"
 	| "thinking"
 	| "stats"
@@ -502,8 +503,8 @@ export const [state, setState] = createStore({
 	// (persisted toggle; data rides the one-shot fetchUsageReports relay).
 	sidebarUsage:
 		typeof localStorage !== "undefined"
-			? localStorage.getItem(USAGE_SIDEBAR_KEY) === "true"
-			: false,
+			? localStorage.getItem(USAGE_SIDEBAR_KEY) !== "false"
+			: true,
 	// Phase 12: fetchUsageReports mirror; null means never fetched, [] means
 	// fetched but no reporting. Single-flight via usageLoading (refreshUsageReports).
 	usageReports: null as UsageReport[] | null,
