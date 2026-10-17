@@ -4,8 +4,7 @@ import { join, relative, sep } from "node:path";
 /**
  * Bun plugin that compiles Solid JSX. Bun's built-in JSX transform is
  * React-style and cannot produce Solid's DOM templates, so every .tsx/.jsx
- * module (including `solid`-condition package sources such as
- * @tanstack/solid-virtual) goes through Babel instead.
+ * module (including `solid`-condition package sources) goes through Babel instead.
  *
  * Presets run last to first: TypeScript strips types first, then
  * babel-preset-solid rewrites JSX. Same order vite-plugin-solid uses.

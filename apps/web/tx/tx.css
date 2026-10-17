@@ -335,6 +335,13 @@
   white-space: nowrap;
   flex: none;
 }
+.row-prompt {
+  font-size: var(--tx-fs-sm);
+  color: var(--tx-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .row-folder {
   font-size: var(--tx-fs-sm);
   color: var(--tx-text-dim);
@@ -494,6 +501,10 @@
   font-size: var(--tx-fs-sm);
   color: var(--tx-text-faint);
   word-break: break-all;
+}
+.head-title-row .btn {
+  flex: none;
+  margin-left: auto;
 }
 .head-meta {
   display: flex;

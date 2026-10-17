@@ -310,6 +310,7 @@ function TranscriptRow(props: {
 				<span class="row-time">{timeAgo(s().lastTs ?? s().firstTs)}</span>
 			</div>
 			<div class="row-folder">{s().folder}</div>
+			<Show when={s().firstPrompt}>{(p) => <div class="row-prompt">{p()}</div>}</Show>
 			<Show
 				when={s().synced || isStore()}
 				fallback={<div class="row-metrics row-muted">Stats appear after a sync</div>}

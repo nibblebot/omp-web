@@ -1,5 +1,5 @@
 import { Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
-import { api, ApiError, encodePathSegments, type Health } from "../store/fleet-api";
+import { api, ApiError, type Health } from "../store/fleet-api";
 import { MainHeader } from "../components/app/MainHeader";
 import { SidebarHeader } from "../components/app/SidebarHeader";
 import { closeDrawers, setTxSidebarVisible, state } from "../state";
@@ -9,11 +9,8 @@ import { StoredSessionList } from "./components/StoredSessionList";
 import { StoredSessionPage } from "./components/StoredSessionPage";
 import { ResumeCloneDialog } from "./components/ResumeCloneDialog";
 import { SpendPanel } from "./components/SpendPanel";
-import { decodeFileFromHash, formatBytes } from "./util/format";
-type Route =
-	| { view: "list" }
-	| { view: "session"; file: string; sub: string | null }
-	| { view: "stored"; workspaceId: string; sessionId: string };
+import { formatBytes } from "./util/format";
+import { parseTxHash, sessionHash, storedHash, type TxRoute } from "./util/route";
 
 /** Debounce for stats auto-sync: coalesces bursts of turn ends and session opens. */
 const AUTO_SYNC_DEBOUNCE_MS = 1_500;
@@ -21,53 +18,15 @@ const AUTO_SYNC_DEBOUNCE_MS = 1_500;
 /** Live tail: while a turn streams, the open transcript refetches on this cadence. */
 const LIVE_TAIL_INTERVAL_MS = 4_000;
 
-/** Decode a single individually-encoded path segment; null on malformed input. */
-function decodeSegment(encoded: string): string | null {
-	try {
-		return decodeURIComponent(encoded);
-	} catch {
-		return null;
-	}
-}
-
-/** Parse `#/s/<encoded-file>[?sub=<encoded-subagent-file>]`; segments individually encoded. */
-function parseHash(): Route {
-	const hash = window.location.hash.replace(/^#\/?/, "");
-	const qAt = hash.indexOf("?");
-	const raw = qAt === -1 ? hash : hash.slice(0, qAt);
-	if (raw === "" || raw === "/") return { view: "list" };
-	const parts = raw.split("/");
-	if (parts[0] === "s") {
-		const encoded = parts.slice(1).join("/");
-		if (encoded === "") return { view: "list" };
-		const file = decodeFileFromHash(encoded);
-		if (file === null) return { view: "list" };
-		const sub = qAt === -1 ? null : new URLSearchParams(hash.slice(qAt + 1)).get("sub");
-		return { view: "session", file, sub: sub || null };
-	}
-	// #/stored/<workspaceId>/<sessionId>, each exactly one safe segment.
-	if (parts[0] === "stored") {
-		if (parts.length !== 3) return { view: "list" };
-		const wsEncoded = parts[1];
-		const sidEncoded = parts[2];
-		if (wsEncoded === "" || sidEncoded === "") return { view: "list" };
-		const workspaceId = decodeSegment(wsEncoded);
-		const sessionId = decodeSegment(sidEncoded);
-		if (workspaceId === null || sessionId === null) return { view: "list" };
-		return { view: "stored", workspaceId, sessionId };
-	}
-	return { view: "list" };
-}
-
 /**
  * Historical transcripts/stats browser, mounted as the "transcripts" top-level
  * view (src/App.tsx). Keeps its internal hash routing + syncTick pattern.
  */
 export function TranscriptBrowser() {
-	const [route, setRoute] = createSignal<Route>(parseHash());
+	const [route, setRoute] = createSignal<TxRoute>(parseTxHash(window.location.hash));
 
 	createEffect(() => {
-		const onChange = () => setRoute(parseHash());
+		const onChange = () => setRoute(parseTxHash(window.location.hash));
 		window.addEventListener("hashchange", onChange);
 		onCleanup(() => window.removeEventListener("hashchange", onChange));
 	});
@@ -126,21 +85,18 @@ export function TranscriptBrowser() {
 	);
 
 	const navigate = (f: string) => {
-		window.location.hash = `#/s/${encodePathSegments(f)}`;
+		window.location.hash = sessionHash(f, null);
 	};
 
 	/** Open a subagent transcript inside the current session route (null returns to main). */
 	const navigateSub = (sf: string | null) => {
 		const f = file();
 		if (f === null) return;
-		const base = `#/s/${encodePathSegments(f)}`;
-		window.location.hash = sf === null ? base : `${base}?sub=${encodeURIComponent(sf)}`;
+		window.location.hash = sessionHash(f, sf);
 	};
 
 	const navigateStored = (workspaceId: string, sessionId: string) => {
-		window.location.hash = `#/stored/${encodePathSegments(workspaceId)}/${encodePathSegments(
-			sessionId,
-		)}`;
+		window.location.hash = storedHash(workspaceId, sessionId);
 	};
 
 	// Deep-linked file that is gone from disk: say so instead of silently listing.

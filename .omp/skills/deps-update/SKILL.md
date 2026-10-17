@@ -100,7 +100,7 @@ Skip this step on `--in-range-only`. Otherwise take `commands.breaking`, cluster
    |`@typescript/native-preview`|`tsgo` in `bun run check:types` (exact pin)|
    |`vite`, `vite-plugin-solid`|`apps/web/vite.config.ts`, `scripts/dev.ts`, `scripts/build-omp-web.ts`|
    |`astro`, `@astrojs/*`|`docs/astro.config.mjs`, `docs/src/` (`bun run build:docs`)|
-   |`solid-js`, `@tanstack/solid-virtual`, `marked`, `dompurify`, `diff` (+ `@types/diff`)|`apps/web/` runtime (markdown is always `DOMPurify.sanitize(marked.parse(...))`, `apps/web/text/`)|
+   |`solid-js`, `marked`, `dompurify`, `diff` (+ `@types/diff`)|`apps/web/` runtime (markdown is always `DOMPurify.sanitize(marked.parse(...))`, `apps/web/text/`)|
    |`@types/bun`|every `tsconfig.json` type check|
 
    Re-derive this table from the grep if a package is missing from it.

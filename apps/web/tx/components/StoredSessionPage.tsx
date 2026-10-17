@@ -17,6 +17,7 @@ import { formatBytes, formatDateTime, timeAgo } from "../util/format";
 import { StoredTranscriptPane } from "./StoredTranscriptView";
 import { openResumeCloneSession } from "./ResumeCloneDialog";
 import { groupFilesByKind } from "./stored";
+import { storedLoadError } from "../util/stored-error";
 
 const KIND_TITLES: Record<string, string> = {
 	main: "Main session",
@@ -143,14 +144,19 @@ export function StoredSessionPage(props: { workspaceId: string; sessionId: strin
 			</Show>
 
 			<Show when={detailRes.error} keyed>
-				{(err) => (
-					<div class="tx-error-banner">
-						<span>Failed to load this stored session: {String(err)}</span>
-						<button type="button" class="btn btn-small" onClick={() => refetchDetail()}>
-							Retry
-						</button>
-					</div>
-				)}
+				{(err) => {
+					const info = storedLoadError(err, props.sessionId);
+					return (
+						<div class="tx-error-banner" role="alert">
+							<span>{info.title}</span>
+							<Show when={info.retryable}>
+								<button type="button" class="btn btn-small" onClick={() => refetchDetail()}>
+									Retry
+								</button>
+							</Show>
+						</div>
+					);
+				}}
 			</Show>
 			<Show when={detailRes.loading && !detail()}>
 				<div class="hint">Loading stored session…</div>

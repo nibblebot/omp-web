@@ -1,5 +1,6 @@
 import { Show, createResource, createSignal } from "solid-js";
 import { api } from "../../store/fleet-api";
+import { chooseResumeTarget } from "../../store/resume";
 import { basename, folderOf, formatCompact, formatMs } from "../util/format";
 import { TranscriptOverview } from "./TranscriptOverview";
 import { TranscriptView } from "./transcript";
@@ -77,6 +78,19 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 		setTab("transcript");
 	};
 
+	/** Hand the session to Chat via the validated resume path; refusals show in the header. */
+	const [openError, setOpenError] = createSignal<string | null>(null);
+	const openInChat = (id: string) => {
+		setOpenError(null);
+		void chooseResumeTarget(id).then((outcome) => {
+			if (outcome.kind === "missing") {
+				setOpenError(`No session matches ${id} (${outcome.searched} searched).`);
+			} else if (outcome.kind === "refused" || outcome.kind === "unknown") {
+				setOpenError(outcome.message);
+			}
+		});
+	};
+
 	/** APG roving tabindex: arrow keys / Home / End move focus without activating. */
 	const tabRefs: HTMLButtonElement[] = [];
 	const onTabKeyDown = (e: KeyboardEvent) => {
@@ -99,6 +113,13 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 				<div class="head-title-row">
 					<h2>{mainStatsSafe()?.title ?? basename(file())}</h2>
 					<span class="head-file">{file()}</span>
+					<Show when={headSafe()?.id}>
+						{(id) => (
+							<button type="button" class="btn btn-small" onClick={() => openInChat(id())}>
+								Open in Chat
+							</button>
+						)}
+					</Show>
 				</div>
 				<div class="head-meta">
 					<span class="kv">
@@ -128,6 +149,13 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 						<span class="kv err-kv">stats unavailable</span>
 					</Show>
 				</div>
+				<Show when={openError()}>
+					{(msg) => (
+						<div class="tx-error-banner" role="alert">
+							<span>{msg()}</span>
+						</div>
+					)}
+				</Show>
 				<nav class="tabs" role="tablist" aria-label="Transcript views">
 					{TABS.map((t, i) => (
 						<button
