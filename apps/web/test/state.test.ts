@@ -1306,6 +1306,11 @@ describe("initialView (boot view resolution)", () => {
 		expect(initialView("chat", "#/s/abc.jsonl", false)).toBe("chat");
 		expect(initialView("chat", "#/stored/d7/sess-1", false)).toBe("chat");
 	});
+
+	test("a session route (#/d/<daemonId>[/s/<sessionId>]) boots into chat, even over a persisted analysis", () => {
+		expect(initialView("analysis", "#/d/d7", true)).toBe("chat");
+		expect(initialView("analysis", "#/d/d7/s/sess-1", true)).toBe("chat");
+	});
 });
 
 describe("aria-live announcements (finding #P1)", () => {

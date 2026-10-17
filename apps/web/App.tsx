@@ -27,6 +27,8 @@ import { initTheme } from "./prefs/theme";
 import { trackViewportHeight } from "./prefs/viewport";
 import { featureView } from "./features/registry";
 import { featurePreferences } from "./features/preferences";
+import { displayTitle } from "./components/ui/title-icons";
+import { onHashChange, restoreInitialRoute, syncRouteToAttached } from "./store/deep-link";
 // Apply persisted theme/font-size before first render to avoid a dark flash.
 initTheme();
 
@@ -99,6 +101,9 @@ export const App: Component = () => {
 		// modal on signedOut; then probe the session (404 → disabled).
 		initAuth();
 		bootAuth();
+		// Back/Forward and pasted hash links reattach the session the hash names.
+		window.addEventListener("hashchange", onHashChange);
+		onCleanup(() => window.removeEventListener("hashchange", onHashChange));
 		onCleanup(trackViewportHeight());
 		// Ctrl+O toggles all tool cards open/closed (not while typing).
 		window.addEventListener("keydown", (e) => {
@@ -129,6 +134,26 @@ export const App: Component = () => {
 	// leave Analysis immediately rather than strand the user until reload.
 	createEffect(() => {
 		if (state.view === "analysis" && !featurePreferences().analysis) setView("chat");
+	});
+	// The URL mirrors the attached session. The first non-empty roster restores
+	// the hash, so a reload lands back on the same session.
+	createEffect(
+		on(
+			() => state.daemonRoster,
+			(roster) => {
+				if (roster.length > 0) restoreInitialRoute();
+			},
+		),
+	);
+	createEffect(
+		on([() => state.currentSessionId, () => state.sessionId], () => syncRouteToAttached(), {
+			defer: true,
+		}),
+	);
+	// Tab title names the attached session.
+	createEffect(() => {
+		const title = state.currentSessionId === "" ? "" : displayTitle(state.sessionName);
+		document.title = title ? `${title} · omp web` : "omp web";
 	});
 	return (
 		<div class="app">

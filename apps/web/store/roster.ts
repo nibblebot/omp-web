@@ -1,5 +1,6 @@
 import type { ClientCommand, SessionListEntry } from "#lib/wire/protocol";
 import { SIDEBAR_KEY, TX_SIDEBAR_KEY, setState, state } from "../state";
+import { parseRoute } from "./route";
 import {
 	attachSession,
 	call,
@@ -214,17 +215,22 @@ export function closeDrawers(): void {
 
 /**
  * Top-level Chat/Analysis view. Persists omp.view; entering Chat also
- * clears the #/s/<file> deep-link hash (Analysis owns it while active) and
- * the Chat-button dot (chatUnviewed).
+ * clears an Analysis hash (#/s/<file>, #/stored/...; Analysis owns it while
+ * active) and the Chat-button dot (chatUnviewed).
  */
 export function setView(view: "chat" | "analysis"): void {
 	closeDrawers();
 	if (typeof localStorage !== "undefined") localStorage.setItem(VIEW_KEY, view);
 	setState("view", view);
 	if (view === "chat") {
-		// Clear the transcript deep-link hash without firing a hashchange
-		// event; Analysis re-owns the hash on its next selection.
-		if (typeof history !== "undefined" && typeof location !== "undefined")
+		// Clear an Analysis deep-link hash without firing a hashchange event;
+		// Analysis re-owns the hash on its next selection. Session routes
+		// (#/d/...) stay: the URL mirrors the attached session.
+		if (
+			typeof history !== "undefined" &&
+			typeof location !== "undefined" &&
+			parseRoute(location.hash).kind === "analysis"
+		)
 			history.replaceState(null, "", location.pathname + location.search);
 		setState("chatUnviewed", false);
 	}

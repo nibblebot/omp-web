@@ -52,6 +52,7 @@ import {
 	settleSessions,
 } from "./store/roster";
 import { dismissToast, pushToast } from "./store/toasts";
+import { parseRoute } from "./store/route";
 import {
 	attachSession,
 	call,
@@ -253,10 +254,12 @@ export function initialView(
 	analysisEnabled: boolean,
 ): "chat" | "analysis" {
 	if (!analysisEnabled) return "chat";
-	// Live-session deep link (#/s/<file>) and P8.5 fleet-stored deep link
-	// (#/stored/<workspaceId>/<sessionId>) both boot into the Analysis view,
-	// overriding the persisted Chat/Analysis choice.
-	if (/^#\/?(s|stored)\/.+/.test(hash)) return "analysis";
+	// Analysis deep links (#/s/<file>, #/stored/<workspaceId>/<sessionId>) boot
+	// into Analysis; session routes (#/d/<daemonId>[/s/<sessionId>]) boot into
+	// Chat. Both override the persisted Chat/Analysis choice.
+	const route = parseRoute(hash);
+	if (route.kind === "analysis") return "analysis";
+	if (route.kind !== "none") return "chat";
 	if (persisted === "analysis" || persisted === "transcripts") return "analysis";
 	return "chat";
 }
@@ -867,6 +870,8 @@ function resetSessionView(): void {
 	setState("review", resetReviewState(state.review));
 	resetBrowserUiRequests();
 	setState({
+		// Unknown until the new daemon's state frame lands; deep-link URL sync relies on it.
+		sessionId: "",
 		sessionScope: undefined,
 		capabilities: {},
 		integrations: createIntegrationState(),
