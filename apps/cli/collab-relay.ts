@@ -19,11 +19,13 @@
  * `closeRoom()` destroys a room immediately, sending `{"t":"room-closed"}`
  * to every guest first.
  *
- * Host upgrades are privileged: they create rooms, so an optional
- * `authorizeHost` predicate gates them (the daemon wires the R14 bearer
- * gate: loopback exempt, off-loopback needs the token) and `maxRooms` caps
- * the number of rooms. Guests are never gated: they join by E2E room key.
- * New host rooms past the cap are refused with HTTP 503 before the upgrade
+ * Host upgrades create rooms, so `maxRooms` caps their number. The relay has
+ * no authentication of its own: hosts and guests join by E2E room key, and
+ * the relay only sees ciphertext, room ids, connections and frame sizes.
+ * Whoever can reach the port can host a room, so bind it to a trusted
+ * interface (the `omp-web relay` default is loopback) or front it with a
+ * proxy. New host rooms past the cap are refused with HTTP 503 before the
+ * upgrade
  * (re-adoption of an existing live/orphaned room is always allowed, since the
  * host-resume path must not be cut); a `handleOpen` backstop closes 4028 for
  * the narrow race where concurrent new-room hosts all passed the upgrade
@@ -40,12 +42,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import type { BufferSource, Server, ServerWebSocket } from "bun";
 
-/**
- * Per-socket data for every socket served by the omp-web daemon. Only
- * collab relay sockets exist (the agent-driving channel is SSE + POST, and
- * the removed WS transport's "web" variant was never constructed, per audit
- * #18); the type is the relay socket data directly.
- */
+/** Per-socket data for every socket served by the relay. */
 export interface RelaySocketData {
 	roomId: string;
 	role: "host" | "guest";
@@ -64,20 +61,12 @@ export interface RelayOptions {
 	maxRooms?: number;
 	/** How long a room stays alive after its host disconnects. Default 60_000 ms. */
 	orphanTtlMs?: number;
-	/**
-	 * Authorization gate for host-role upgrades. Called before the upgrade;
-	 * when it returns false the upgrade is refused with HTTP 401 (the caller
-	 * responds). Guests are never gated; they join by E2E room key. Absent
-	 * = hosts always allowed.
-	 */
-	authorizeHost?: (req: Request, srv: Server<RelaySocketData>) => boolean;
 }
 
 /**
  * The bun server-side websocket (as handed to Bun.serve's handlers). Note:
  * this is `ServerWebSocket<T>`, NOT the client-side global `WebSocket`; the
- * server socket carries the generic `.data` payload and is what index.ts's
- * `ServerWebSocket<RelaySocketData>` values are assignable to.
+ * server socket carries the generic `.data` payload.
  */
 type RelayWs = ServerWebSocket<RelaySocketData>;
 
@@ -86,9 +75,8 @@ type RelayWs = ServerWebSocket<RelaySocketData>;
  * - `{ handled: true }` means the pathname matched a room and the upgrade
  *   succeeded; the request is fully consumed.
  * - `{ handled: false, status, reason }` means the pathname matched a room
- *   but the upgrade was refused BEFORE the handshake (unauthorized host 401,
- *   room cap 503, or a failed upgrade 400); the caller should respond with
- *   `status`.
+ *   but the upgrade was refused BEFORE the handshake (room cap 503 or a
+ *   failed upgrade 400); the caller should respond with `status`.
  * - `null` means the pathname is not a room path, so web handling should
  *   continue.
  */
@@ -101,7 +89,7 @@ export interface RelayHandle {
 	/**
 	 * Handle a candidate relay room path (/r/<roomId>?role=host|guest). See
 	 * {@link RelayUpgradeResult}. Call before the remaining plain routes
-	 * (/download, 404 fallback).
+	 * (the 404 fallback).
 	 */
 	handleUpgrade(url: URL, srv: Server<RelaySocketData>, req: Request): RelayUpgradeResult;
 	handleOpen(ws: RelayWs): void;
@@ -148,13 +136,11 @@ class CollabRelay implements RelayHandle {
 	readonly #maxGuests: number;
 	readonly #maxRooms: number;
 	readonly #orphanTtlMs: number;
-	readonly #authorizeHost: ((req: Request, srv: Server<RelaySocketData>) => boolean) | undefined;
 
 	constructor(opts?: RelayOptions) {
 		this.#maxGuests = opts?.maxGuests ?? DEFAULT_MAX_GUESTS;
 		this.#maxRooms = opts?.maxRooms ?? DEFAULT_MAX_ROOMS;
 		this.#orphanTtlMs = opts?.orphanTtlMs ?? DEFAULT_ORPHAN_TTL_MS;
-		this.#authorizeHost = opts?.authorizeHost;
 	}
 
 	handleUpgrade(url: URL, srv: Server<RelaySocketData>, req: Request): RelayUpgradeResult {
@@ -165,12 +151,6 @@ class CollabRelay implements RelayHandle {
 		const roomId = match[1];
 
 		if (role === "host") {
-			// Hosts create rooms, so they are gated like the agent-driving
-			// endpoints (R14): loopback exempt, off-loopback peers need the
-			// bearer token. Guests join by E2E room key and are never gated here.
-			if (this.#authorizeHost !== undefined && !this.#authorizeHost(req, srv)) {
-				return { handled: false, status: 401, reason: "Unauthorized" };
-			}
 			// New host rooms are capped. Re-adoption of an existing room
 			// (live or orphaned) is always allowed, since the host-resume path
 			// must not be cut off by the cap.

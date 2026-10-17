@@ -15,6 +15,7 @@
  *   omp-web session [options]         → the omp-session daemon (apps/session/index.ts;
  *                                       the dynamic import IS the daemon; wire
  *                                       API only, no web UI)
+ *   omp-web relay --port <n>          → standalone collab relay (apps/cli/relay.ts)
  *   omp-web update [options]          → self-update from the release channel
  *                                       (apps/cli/update.ts)
  *   omp-web <unknown>                 → usage on stderr, exit 1
@@ -51,7 +52,14 @@ const FLEET_SUBCOMMANDS: Record<string, true> = {
 };
 
 /** Where argv routes the process. */
-export type DispatchTarget = "fleet" | "session" | "update" | "version" | "help" | "usage";
+export type DispatchTarget =
+	| "fleet"
+	| "session"
+	| "relay"
+	| "update"
+	| "version"
+	| "help"
+	| "usage";
 
 /** Pure argv classification: argv here is process.argv.slice(2). A bare
  *  invocation, or one that starts with a flag (`omp-web --no-open`), routes to
@@ -61,6 +69,7 @@ export function classifyCommand(argv: string[]): DispatchTarget {
 	if (cmd === "--version" || cmd === "version") return "version";
 	if (cmd === "--help" || cmd === "-h" || cmd === "help") return "help";
 	if (cmd === "session") return "session";
+	if (cmd === "relay") return "relay";
 	if (cmd === "update") return "update";
 	if (cmd === undefined || cmd === "" || cmd.startsWith("-") || FLEET_SUBCOMMANDS[cmd])
 		return "fleet";
@@ -81,6 +90,7 @@ const USAGE = `usage: omp-web [options] | omp-web <command> [options]
                                fleet control plane (missing arguments print
                                the command's usage)
   session [options]            run one agent session daemon (no web UI)
+  relay --port <n> [options]   run the collab relay that sessions publish rooms to
   update [--check] [--force] [--version x.y.z]
                                self-update from the release channel
   --version | version          print version
@@ -118,6 +128,12 @@ if (import.meta.main) {
 			// plane + UI.
 			const { main } = await import("../fleet/cli");
 			process.exit(await main(argv));
+			break;
+		}
+		case "relay": {
+			// Dynamic like fleet/update: the relay graph loads only when selected.
+			const { main } = await import("./relay");
+			process.exit(await main(argv.slice(1)));
 			break;
 		}
 		case "session": {

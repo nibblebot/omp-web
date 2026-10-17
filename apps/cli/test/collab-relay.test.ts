@@ -1,5 +1,5 @@
 /**
- * Tests for the collab relay (apps/session/collab-relay.ts).
+ * Tests for the collab relay (apps/cli/collab-relay.ts).
  *
  * Spins real Bun.serve instances wired to createRelay() instances and drives
  * them with Bun's client WebSocket (binaryType "arraybuffer"). Every test uses
@@ -212,39 +212,6 @@ describe("collab relay", () => {
 		expect(ev.reason).toBe("room is full");
 
 		expect(relay.roomCount()).toBe(1);
-	});
-
-	test("host upgrades are refused with 401 when the authorizeHost predicate rejects; guests stay open", async () => {
-		// The daemon wires authorizeHost to the R14 gate (loopback exempt,
-		// off-loopback needs the bearer token). Here the predicate models an
-		// off-loopback peer without a token: every host upgrade is refused.
-		const { baseUrl } = startRelayServer({ authorizeHost: () => false });
-		const room = generateRoomId();
-		const httpBase = `http://127.0.0.1:${new URL(baseUrl).port}`;
-
-		// Refused BEFORE the upgrade with a plain 401 (no close code, no
-		// hello window; same convention as /events and /command).
-		const res = await fetch(`${httpBase}/r/${room}?role=host`);
-		expect(res.status).toBe(401);
-
-		// Guests are never gated: they still upgrade and get the ordinary
-		// no-room close instead of a 401.
-		const guest = openRelaySocket(baseUrl, room, "guest");
-		await awaitOpen(guest);
-		const ev = await awaitClose(guest);
-		expect(ev.code).toBe(4004);
-		expect(ev.reason).toBe("no such room");
-	});
-
-	test("host upgrades proceed when the authorizeHost predicate accepts", async () => {
-		// The predicate models a loopback peer (or an off-loopback peer with
-		// a valid token): the upgrade goes through and the room is created.
-		const { relay, baseUrl } = startRelayServer({ authorizeHost: () => true });
-		const room = generateRoomId();
-		const host = openRelaySocket(baseUrl, room, "host");
-		await awaitOpen(host);
-		expect(relay.roomCount()).toBe(1);
-		relay.closeRoom(room);
 	});
 
 	test("new host rooms past maxRooms are refused with 503; re-adoption still works at the cap", async () => {

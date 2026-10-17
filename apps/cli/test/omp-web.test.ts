@@ -40,6 +40,11 @@ describe("classifyCommand", () => {
 		expect(classifyCommand(["session", "--port", "0"])).toBe("session");
 	});
 
+	test("routes relay to the standalone collab relay", () => {
+		expect(classifyCommand(["relay"])).toBe("relay");
+		expect(classifyCommand(["relay", "--port", "4731"])).toBe("relay");
+	});
+
 	test("routes update to its own target", () => {
 		expect(classifyCommand(["update"])).toBe("update");
 		expect(classifyCommand(["update", "--check"])).toBe("update");
