@@ -1,36 +1,18 @@
-// G09 durable BTW history web store (the durable-history upgrade of the
-// ephemeral /btw panel in store/btw.ts, which stays untouched).
+// Saved /btw side questions of the attached session: the list, the selected
+// thread's transcript pages, promotion eligibility, copy, cancel. The live
+// answer (the question being streamed right now) lives in store/btw.ts and
+// `state.btw`; this module owns the saved side only.
 //
-// Client mirror in transient local signals (state.ts untouched: no new keys
-// there, no draft mutation — typing a follow-up never touches the Main prompt
-// draft). Reads `state` (sessionId for draft scoping) and uplinks through the
-// existing `call` relay from ./transport (id-keyed, dedup-safe replays,
-// call_result answers). Server owns all durable agent state; this module owns
-// the normalized mirror; the component owns transient presentation only.
+// Local signals (not in the shared store): view state of the /btw sheet.
+// Uplinks go through `call` from ./transport. The server owns durable state
+// (apps/session/btw-history-adapter.ts). Late answers from a prior attachment
+// are dropped by the scope guard (each settle re-checks state.sessionId).
 //
-// Draft ownership is partitioned by `${sessionId}/${recordId}`: switching
-// sessions never leaks a follow-up draft into another scope, and resnapshots
-// (refresh/search/poll) never clear unsent drafts. Late answers from a prior
-// attachment are dropped by the scope guard (each settle re-checks
-// state.sessionId before applying). Main leaf is never moved client-side:
-// confirmPromoteBtw only reports the server's {cancelled, sessionFile}.
-//
-// WIRING NOTE: the btw feature owns this surface. features/btw.tsx mounts
-// BtwHistorySheet (components/sessions/BtwHistorySheet.tsx) as the "btw-history"
-// modal. rediscoverBtwHistory() must run on attach/ready (new connections re-list
-// saved side sessions); state.ts owns the mux, so the re-list hook lives with the
-// attach settle, not here.
-// Streaming turns poll btwList until the call
-// settles: ephemeral_delta frames for history streamIds are dropped by the
-// state.ts mux guard today (it only routes the ephemeral panel's streamId),
-// so polling is the transport until P0 approves a mux relaxation.
-//
-// PROPOSED wire methods (OMP_PROTO stays 2; additive-only). Each call site
-// casts its name `as WebMethodName` with a P0-TODO comment. P0 canonicalize:
-// the canonical DTOs live in apps/session/btw-history-adapter.ts (BtwRecordPage,
-// BtwTranscriptPage, BtwPromotePreview, BtwPromoteResult + cursor shapes).
-// Capability gating: pre-P0 servers reject with unknown-method and the mirror
-// reports {available:false} with an explicit message instead of failing.
+// Wire args are positional, as apps/session/methods.ts reads them: btwList
+// [{limit}], btwSearch [query, {limit}], btwPage [recordId, afterKey, limit],
+// btwCancel / btwCopy / btwPromotePreview / btwPromote [recordId]. A daemon
+// without these methods rejects with unknown-method; the mirror then reports
+// {available:false} instead of failing.
 
 import { createSignal } from "solid-js";
 import { state } from "../state";
@@ -173,8 +155,38 @@ function normalizePreview(data: unknown, recordId: string): BtwPromotePreviewVie
 	};
 }
 
+function readTranscriptPage(data: unknown): {
+	turns: BtwTranscriptTurnView[];
+	total: number;
+	nextAfter?: string;
+} {
+	const root = asRecord(data);
+	const list = root !== null && Array.isArray(root.turns) ? root.turns : [];
+	const turns: BtwTranscriptTurnView[] = [];
+	for (const item of list) {
+		const turn = normalizeTranscriptTurn(item);
+		if (turn) turns.push(turn);
+	}
+	return {
+		turns,
+		total: root !== null && typeof root.total === "number" ? root.total : turns.length,
+		...(root !== null && typeof root.nextAfter === "string" ? { nextAfter: root.nextAfter } : {}),
+	};
+}
+
+/** The record id from a btwStart / btwFollowUp result (`{record}`), or null. */
+export function btwRecordId(data: unknown): string | null {
+	const record = asRecord(asRecord(data)?.record);
+	return record !== null && typeof record.id === "string" && record.id ? record.id : null;
+}
+
+/** The newest turn of a record: its last follow-up, else the record itself. */
+export function latestBtwTurn(record: BtwRecordView): BtwTurnView {
+	return record.followUps?.at(-1) ?? record;
+}
+
 // ---------------------------------------------------------------------------
-// Mirror signals (local; state.ts untouched).
+// Mirror signals (local; the shared store is untouched).
 // ---------------------------------------------------------------------------
 
 const [btwHistoryAvailable, setBtwHistoryAvailable] = createSignal<boolean | null>(null);
@@ -192,18 +204,9 @@ const [btwTranscript, setBtwTranscript] = createSignal<{
 	nextAfter?: string;
 	loading: boolean;
 }>({ recordId: "", turns: [], total: 0, loading: false });
-/** Follow-up drafts, keyed `${sessionId}/${recordId}`: unsent, scoped, and
- *  never cleared by resnapshots. */
-const [btwDrafts, setBtwDrafts] = createSignal<Record<string, string>>({});
-/** Record ids with a turn streaming from this view (polled until settle). */
-const [btwStreaming, setBtwStreaming] = createSignal<Record<string, true>>({});
 const [btwPreview, setBtwPreview] = createSignal<BtwPromotePreviewView | null>(null);
 const [btwPreviewLoading, setBtwPreviewLoading] = createSignal(false);
 const [btwPromoting, setBtwPromoting] = createSignal(false);
-const [btwPromoteResult, setBtwPromoteResult] = createSignal<{
-	cancelled: boolean;
-	sessionFile?: string;
-} | null>(null);
 
 export {
 	btwHistoryAvailable,
@@ -215,87 +218,77 @@ export {
 	btwSearchQuery,
 	btwSelectedId,
 	btwTranscript,
-	btwDrafts,
-	btwStreaming,
 	btwPreview,
 	btwPreviewLoading,
 	btwPromoting,
-	btwPromoteResult,
 };
-
-/** Draft scope key: session id partitions drafts across Main/focus views. */
-function draftScope(): string {
-	return state.sessionId || "unscoped";
-}
-
-function draftKey(recordId: string): string {
-	return `${draftScope()}/${recordId}`;
-}
-
-/** Read one follow-up draft (empty when never typed). */
-export function btwDraft(recordId: string): string {
-	return btwDrafts()[draftKey(recordId)] ?? "";
-}
-
-/** Store one follow-up draft (scoped, unsent; survives resnapshots). */
-export function setBtwDraft(recordId: string, text: string): void {
-	const key = draftKey(recordId);
-	setBtwDrafts((prev) => {
-		if (text) return { ...prev, [key]: text };
-		const next = { ...prev };
-		delete next[key];
-		return next;
-	});
-}
-
-function clearBtwDraft(recordId: string): void {
-	setBtwDraft(recordId, "");
-}
 
 function markUnavailable(method: string): void {
 	setBtwHistoryAvailable(false);
 	setBtwHistoryError(
-		`BTW history is unavailable: this server does not implement ${method} (proposed for P0). ` +
-			"The ephemeral /btw panel still works; saved history needs a newer daemon.",
+		`Saved side questions are unavailable: this daemon does not implement ${method}. ` +
+			"Restart the session with a matching omp-web version.",
 	);
 }
 
-// Stream ids for history turns live far above the ephemeral panel's sequence
-// (store/btw.ts starts at 1) so the two never collide on ephemeral_delta.
-let nextBtwHistoryStreamId = 1_000_000;
+/** True while the /btw sheet is open: only then does a running turn get polled. */
+let viewOpen = false;
 let btwPollTimer = 0;
+/** Ids that were running at the last list read; a running to settled flip reloads the open thread. */
+let runningIds = new Set<string>();
 
 function stopBtwPoll(): void {
 	if (btwPollTimer !== 0) {
-		window.clearInterval(btwPollTimer);
+		window.clearTimeout(btwPollTimer);
 		btwPollTimer = 0;
 	}
 }
 
-function noteSuperseded(): void {
-	setBtwStreaming({});
+/**
+ * Apply a fresh list. While the sheet is open and a turn is still running,
+ * keep polling; a running to settled flip reloads the open thread. The live
+ * stream of this tab (state.btw) never polls: its settle path refreshes.
+ */
+function applyRecords(records: BtwRecordView[], total: number, scope: string): void {
+	setBtwHistoryRecords(records);
+	setBtwHistoryTotal(total);
+	const selected = btwSelectedId();
+	if (selected !== null && !records.some((record) => record.id === selected)) {
+		setBtwSelectedId(null);
+	}
+	const nowRunning = new Set(
+		records
+			.filter((record) => latestBtwTurn(record).status === "running")
+			.map((record) => record.id),
+	);
+	const settledSelected =
+		selected !== null && runningIds.has(selected) && !nowRunning.has(selected);
+	runningIds = nowRunning;
 	stopBtwPoll();
-	setBtwHistoryLoading(false);
+	if (viewOpen && nowRunning.size > 0 && state.btw === null) {
+		btwPollTimer = window.setTimeout(() => {
+			btwPollTimer = 0;
+			if (state.sessionId === scope && viewOpen) refreshBtwHistory();
+		}, 1500);
+	}
+	if (settledSelected) selectBtwRecord(selected);
 }
 
-/** Re-list the attached session's saved side sessions (rediscovery entry for
- *  attach/ready wiring + view open). Scope-guarded: answers that arrive after
- *  a session switch are dropped, never applied to the new session. */
+/** Re-list the attached session's saved side questions. Scope-guarded: answers
+ *  that arrive after a session switch are dropped, never applied to the new session. */
 export function refreshBtwHistory(): void {
+	if (btwSearchQuery().trim()) {
+		searchBtwHistory(btwSearchQuery());
+		return;
+	}
 	const scope = state.sessionId;
 	setBtwHistoryLoading(true);
-	setBtwHistoryError(null);
-	// Note: btwList is canonical P0 row.
 	void call("btwList", [{ limit: 50 }])
 		.then((data) => {
 			if (state.sessionId !== scope) return;
 			setBtwHistoryAvailable(true);
 			const { records, total } = normalizeRecords(data);
-			setBtwHistoryRecords(records);
-			setBtwHistoryTotal(total);
-			if (btwSelectedId() !== null && !records.some((record) => record.id === btwSelectedId())) {
-				setBtwSelectedId(null);
-			}
+			applyRecords(records, total, scope);
 		})
 		.catch((err) => {
 			if (state.sessionId !== scope || isSessionSwitchSupersession(err)) return;
@@ -307,12 +300,12 @@ export function refreshBtwHistory(): void {
 		});
 }
 
-/** Rediscover saved side sessions on a new connection (attach/ready). The
- *  integrator calls this where the attach settles; it is a re-list, never a
- *  mutation, so calling it twice is harmless. */
+/** The sheet opened: re-list the saved side questions and enable polling. */
 export function rediscoverBtwHistory(): void {
-	setBtwStreaming({});
+	viewOpen = true;
+	runningIds = new Set();
 	stopBtwPoll();
+	setBtwHistoryError(null);
 	refreshBtwHistory();
 }
 
@@ -327,14 +320,12 @@ export function searchBtwHistory(query: string): void {
 	}
 	setBtwHistoryLoading(true);
 	setBtwHistoryError(null);
-	// Note: btwSearch is canonical P0 row.
-	void call("btwSearch", [{ query: needle, limit: 50 }])
+	void call("btwSearch", [needle, { limit: 50 }])
 		.then((data) => {
 			if (state.sessionId !== scope) return;
 			setBtwHistoryAvailable(true);
 			const { records, total } = normalizeRecords(data);
-			setBtwHistoryRecords(records);
-			setBtwHistoryTotal(total);
+			applyRecords(records, total, scope);
 		})
 		.catch((err) => {
 			if (state.sessionId !== scope || isSessionSwitchSupersession(err)) return;
@@ -346,47 +337,31 @@ export function searchBtwHistory(query: string): void {
 		});
 }
 
-/** Select a record and load the first transcript page (stable turn keys). */
+/**
+ * Select a record (null = no saved thread open), load its first transcript
+ * page, and read the promotion eligibility so the Promote action can say why
+ * it is unavailable.
+ */
 export function selectBtwRecord(id: string | null): void {
 	setBtwSelectedId(id);
 	setBtwPreview(null);
-	setBtwPromoteResult(null);
 	if (id === null) {
 		setBtwTranscript({ recordId: "", turns: [], total: 0, loading: false });
 		return;
 	}
 	setBtwTranscript({ recordId: id, turns: [], total: 0, loading: true });
 	const scope = state.sessionId;
-	// Note: btwPage is canonical P0 row.
-	void call("btwPage", [{ recordId: id, limit: 20 }])
+	void call("btwPage", [id, null, 20])
 		.then((data) => {
 			if (state.sessionId !== scope || btwSelectedId() !== id) return;
-			const root = asRecord(data);
-			const list = root !== null && Array.isArray(root.turns) ? root.turns : [];
-			const turns: BtwTranscriptTurnView[] = [];
-			for (const item of list) {
-				const turn = normalizeTranscriptTurn(item);
-				if (turn) turns.push(turn);
-			}
-			setBtwTranscript({
-				recordId: id,
-				turns,
-				total: root !== null && typeof root.total === "number" ? root.total : turns.length,
-				...(root !== null && typeof root.nextAfter === "string"
-					? { nextAfter: root.nextAfter }
-					: {}),
-				loading: false,
-			});
+			setBtwTranscript({ recordId: id, ...readTranscriptPage(data), loading: false });
+			previewPromoteBtw(id);
 		})
 		.catch((err) => {
 			if (state.sessionId !== scope || isSessionSwitchSupersession(err)) return;
-			if (isUnknownMethod(err)) {
-				markUnavailable("btwPage");
-				setBtwTranscript({ recordId: id, turns: [], total: 0, loading: false });
-			} else {
-				setBtwHistoryError(errText(err));
-				setBtwTranscript({ recordId: id, turns: [], total: 0, loading: false });
-			}
+			if (isUnknownMethod(err)) markUnavailable("btwPage");
+			else setBtwHistoryError(errText(err));
+			setBtwTranscript({ recordId: id, turns: [], total: 0, loading: false });
 		});
 }
 
@@ -396,24 +371,19 @@ export function pageBtwTranscript(): void {
 	if (current.loading || current.nextAfter === undefined) return;
 	const scope = state.sessionId;
 	setBtwTranscript({ ...current, loading: true });
-	// Note: btwPage is canonical P0 row.
-	void call("btwPage", [{ recordId: current.recordId, afterKey: current.nextAfter, limit: 20 }])
+	void call("btwPage", [current.recordId, current.nextAfter, 20])
 		.then((data) => {
 			if (state.sessionId !== scope || btwTranscript().recordId !== current.recordId) return;
-			const root = asRecord(data);
-			const list = root !== null && Array.isArray(root.turns) ? root.turns : [];
+			const page = readTranscriptPage(data);
 			const appended = [...current.turns];
-			for (const item of list) {
-				const turn = normalizeTranscriptTurn(item);
-				if (turn && !appended.some((existing) => existing.key === turn.key)) appended.push(turn);
+			for (const turn of page.turns) {
+				if (!appended.some((existing) => existing.key === turn.key)) appended.push(turn);
 			}
 			setBtwTranscript({
 				recordId: current.recordId,
 				turns: appended,
-				total: root !== null && typeof root.total === "number" ? root.total : appended.length,
-				...(root !== null && typeof root.nextAfter === "string"
-					? { nextAfter: root.nextAfter }
-					: {}),
+				total: page.total,
+				...(page.nextAfter !== undefined ? { nextAfter: page.nextAfter } : {}),
 				loading: false,
 			});
 		})
@@ -425,84 +395,23 @@ export function pageBtwTranscript(): void {
 		});
 }
 
-function pollWhileStreaming(scope: string): void {
-	stopBtwPoll();
-	btwPollTimer = window.setInterval(() => {
-		if (state.sessionId !== scope || Object.keys(btwStreaming()).length === 0) {
-			stopBtwPoll();
-			return;
-		}
-		// Note: btwList is canonical P0 row.
-		void call("btwList", [{ limit: 50 }])
-			.then((data) => {
-				if (state.sessionId !== scope) return;
-				const { records, total } = normalizeRecords(data);
-				setBtwHistoryRecords(records);
-				setBtwHistoryTotal(total);
-			})
-			.catch(() => {});
-	}, 1500);
-}
-
-/** Append a follow-up turn to a record (epoch-rotated server-side). The draft
- *  clears only on dispatch; a failed send keeps the text for retry. */
-export function followUpBtw(recordId: string): void {
-	const question = btwDraft(recordId).trim();
-	if (!question || btwStreaming()[recordId]) return;
-	const scope = state.sessionId;
-	setBtwHistoryError(null);
-	setBtwStreaming((prev) => ({ ...prev, [recordId]: true }));
-	pollWhileStreaming(scope);
-	const streamId = nextBtwHistoryStreamId++;
-	// Note: btwFollowUp is canonical P0 row.
-	void call("btwFollowUp", [{ recordId, question }], 0, streamId)
-		.then(() => {
-			if (state.sessionId !== scope) return;
-			clearBtwDraft(recordId);
-			setBtwStreaming((prev) => {
-				const next = { ...prev };
-				delete next[recordId];
-				return next;
-			});
-			if (Object.keys(btwStreaming()).length === 0) stopBtwPoll();
-			if (btwSearchQuery().trim()) searchBtwHistory(btwSearchQuery());
-			else refreshBtwHistory();
-			if (btwSelectedId() === recordId) selectBtwRecord(recordId);
-		})
-		.catch((err) => {
-			if (state.sessionId !== scope || isSessionSwitchSupersession(err)) {
-				if (isSessionSwitchSupersession(err)) noteSuperseded();
-				return;
-			}
-			setBtwStreaming((prev) => {
-				const next = { ...prev };
-				delete next[recordId];
-				return next;
-			});
-			if (Object.keys(btwStreaming()).length === 0) stopBtwPoll();
-			if (isUnknownMethod(err)) markUnavailable("btwFollowUp");
-			else setBtwHistoryError(errText(err));
-		});
-}
-
-/** Copy a record's current answer text (server-resolved; permission-aware
- *  with a fallback notice when the clipboard refuses). */
+/** Copy a record's current answer text (server-resolved; with a notice when the
+ *  clipboard refuses). */
 export function copyBtw(recordId: string): void {
 	setBtwHistoryError(null);
 	setBtwHistoryNotice(null);
-	// Note: btwCopy is canonical P0 row.
-	void call("btwCopy", [{ recordId }])
+	void call("btwCopy", [recordId])
 		.then((data) => {
 			const root = asRecord(data);
 			const text = root !== null && typeof root.text === "string" ? root.text : "";
 			if (!text) {
-				setBtwHistoryNotice("Nothing to copy: this record has no answer text yet.");
+				setBtwHistoryNotice("Nothing to copy: this side question has no answer text yet.");
 				return;
 			}
 			void copyText(text).then((ok) => {
 				setBtwHistoryNotice(
 					ok
-						? "Copied /btw answer to clipboard."
+						? "Copied the answer to the clipboard."
 						: "Copy failed: the clipboard is unavailable here. Select the answer text manually.",
 				);
 			});
@@ -514,17 +423,14 @@ export function copyBtw(recordId: string): void {
 		});
 }
 
-/** Read-only guarded-promotion preview (never mutates, never moves Main). */
-export function previewPromoteBtw(recordId: string): void {
+/** Read-only promotion eligibility (never mutates, never moves the session). */
+function previewPromoteBtw(recordId: string): void {
 	setBtwPreview(null);
-	setBtwPromoteResult(null);
 	setBtwPreviewLoading(true);
-	// Note: btwPromotePreview is canonical P0 row.
-	void call("btwPromotePreview", [{ recordId }])
+	void call("btwPromotePreview", [recordId])
 		.then((data) => {
-			const preview = normalizePreview(data, recordId);
-			if (preview) setBtwPreview(preview);
-			else setBtwHistoryError("Promotion preview came back in an unknown shape.");
+			if (btwSelectedId() !== recordId) return;
+			setBtwPreview(normalizePreview(data, recordId));
 		})
 		.catch((err) => {
 			if (isSessionSwitchSupersession(err)) return;
@@ -534,74 +440,74 @@ export function previewPromoteBtw(recordId: string): void {
 		.finally(() => setBtwPreviewLoading(false));
 }
 
-/** Server-owned promotion only: the client never supplies the assistant
- *  payload (only the recordId) and never moves the Main leaf itself. On
- *  success the result names the new session file for the operator to adopt
- *  through the normal session switch flow. */
-export function confirmPromoteBtw(recordId: string): void {
-	if (btwPromoting()) return;
+/**
+ * Server-owned promotion: the client sends only the record id. On success the
+ * daemon branches this Q/A pair into the session transcript and every tab
+ * resyncs. Resolves true when the transcript changed.
+ */
+export async function promoteBtw(recordId: string): Promise<boolean> {
+	if (btwPromoting()) return false;
 	setBtwPromoting(true);
 	setBtwHistoryError(null);
-	// Note: btwPromote is canonical P0 row.
-	void call("btwPromote", [{ recordId }], 60_000)
-		.then((data) => {
-			const root = asRecord(data);
-			setBtwPromoteResult({
-				cancelled: root !== null && root.cancelled === true,
-				...(root !== null && typeof root.sessionFile === "string"
-					? { sessionFile: root.sessionFile }
-					: {}),
-			});
-			setBtwPreview(null);
-			refreshBtwHistory();
+	try {
+		const data = await call("btwPromote", [recordId], 60_000);
+		if (asRecord(data)?.cancelled === true) {
+			setBtwHistoryNotice("A session hook cancelled the promotion; the transcript is unchanged.");
+			return false;
+		}
+		setBtwHistoryNotice(
+			"Promoted to the transcript: this side question is now part of the session.",
+		);
+		return true;
+	} catch (err) {
+		if (isSessionSwitchSupersession(err)) return false;
+		if (isUnknownMethod(err)) markUnavailable("btwPromote");
+		else setBtwHistoryError(errText(err));
+		return false;
+	} finally {
+		setBtwPromoting(false);
+	}
+}
+
+/** Close the sheet (presentation only): selection and polling stop, saved turns stay. */
+export function closeBtwHistory(): void {
+	viewOpen = false;
+	stopBtwPoll();
+	runningIds = new Set();
+	setBtwSelectedId(null);
+	setBtwPreview(null);
+	setBtwTranscript({ recordId: "", turns: [], total: 0, loading: false });
+}
+
+/**
+ * Abort a running side question (saved turns survive as `cancelled`). With a
+ * record id, that record is cancelled; without one (the live question's id is
+ * not known until it settles), the running record is looked up from the list.
+ */
+export function stopBtwTurn(recordId?: string): void {
+	const scope = state.sessionId;
+	const resolve: Promise<string | undefined> =
+		recordId !== undefined
+			? Promise.resolve(recordId)
+			: call("btwList", [{ limit: 50 }]).then(
+					(data) =>
+						normalizeRecords(data).records.find(
+							(record) => latestBtwTurn(record).status === "running",
+						)?.id,
+				);
+	void resolve
+		.then((id) => (id === undefined ? undefined : call("btwCancel", [id])))
+		.then(() => {
+			if (state.sessionId === scope) refreshBtwHistory();
 		})
 		.catch((err) => {
 			if (isSessionSwitchSupersession(err)) return;
-			if (isUnknownMethod(err)) markUnavailable("btwPromote");
-			else setBtwHistoryError(errText(err));
-		})
-		.finally(() => setBtwPromoting(false));
-}
-
-/**
- * Close the history view (presentation only). A streaming turn keeps running
- * server-side — closing a completed panel is not deletion, and closing during
- * work follows stop behavior without losing saved turns (reopen to read the
- * answer). Distinct from stopBtwTurn, which aborts the work itself.
- */
-export function closeBtwHistory(): void {
-	setBtwSelectedId(null);
-	setBtwPreview(null);
-}
-
-/**
- * Stop a running turn (running-only abort; saved turns survive as
- * `cancelled`). Distinct from closeBtwHistory, which only puts the view away.
- */
-export function stopBtwTurn(recordId: string): void {
-	// Note: btwCancel is canonical P0 row.
-	void call("btwCancel", [{ recordId }])
-		.then(() => {
-			setBtwStreaming((prev) => {
-				const next = { ...prev };
-				delete next[recordId];
-				return next;
-			});
-			if (Object.keys(btwStreaming()).length === 0) stopBtwPoll();
-			if (btwSearchQuery().trim()) searchBtwHistory(btwSearchQuery());
-			else refreshBtwHistory();
-		})
-		.catch((err) => {
-			if (isSessionSwitchSupersession(err)) {
-				noteSuperseded();
-				return;
-			}
 			if (isUnknownMethod(err)) markUnavailable("btwCancel");
 			else setBtwHistoryError(errText(err));
 		});
 }
 
-/** Dismiss the current error/notice (view-local; never touches drafts). */
+/** Dismiss the current error/notice. */
 export function dismissBtwHistoryStatus(): void {
 	setBtwHistoryError(null);
 	setBtwHistoryNotice(null);

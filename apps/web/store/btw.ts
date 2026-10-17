@@ -1,54 +1,62 @@
 import { setState, state } from "../state";
-import { call } from "./transport";
+import { call, isSessionSwitchSupersession } from "./transport";
+import { btwRecordId, refreshBtwHistory, selectBtwRecord } from "./btw-history";
 
 // ---------------------------------------------------------------------------
-// Phase 11: /btw side panel (runEphemeralTurn relay). The panel owns a
-// streamId that routes ephemeral_delta frames and abortEphemeral; nothing
-// here touches the transcript or the main turn. The delta buffer itself
-// (pendingEphemeral) lives in chat.ts; the rAF flush that drains it is
-// shared with the transcript machinery, so the ephemeral frames coalesce in
-// the same loop.
+// /btw side questions. Every question is a saved record (btwStart /
+// btwFollowUp), so it lands in the history, can be followed up, and can be
+// promoted into the transcript. The live answer streams into `state.btw`
+// through ephemeral_delta frames keyed by the streamId sent with the call.
+// Closing the sheet is presentation only: a running question keeps running
+// and shows as running in the history until it settles.
 // ---------------------------------------------------------------------------
-let nextEphemeralStreamId = 1;
+let nextBtwStreamId = 1;
 
-/** Open the /btw panel and (with a question) start a side-channel turn. */
+/** Start a fresh side question (`/btw <question>` or the sheet's input). */
 export function askBtw(question: string): void {
 	const q = question.trim();
-	if (!q) {
-		// Bare /btw: open the panel empty; the hint explains the usage.
-		setState("btw", { question: "", reply: "", streaming: false, streamId: -1 });
-		return;
-	}
-	const streamId = nextEphemeralStreamId++;
-	setState("btw", { question: q, reply: "", streaming: true, streamId });
-	// Long-running side turn: no timeout (0); the panel's stop/close aborts it.
-	void call("runEphemeralTurn", [q], 0, streamId)
+	if (q) runBtwTurn("btwStart", [q], q);
+}
+
+/** Append a follow-up turn to a saved side question. */
+export function followUpBtw(recordId: string, question: string): void {
+	const q = question.trim();
+	if (q) runBtwTurn("btwFollowUp", [recordId, q], q);
+}
+
+function runBtwTurn(method: "btwStart" | "btwFollowUp", args: unknown[], question: string): void {
+	const streamId = nextBtwStreamId++;
+	const scope = state.sessionId;
+	setState("btw", { question, reply: "", streaming: true, streamId });
+	// Long-running side turn: no timeout (0). The daemon settles the record
+	// (complete, cancelled or error) and returns it.
+	void call(method, args, 0, streamId)
 		.then((result) => {
-			const replyText = (result as { replyText?: string } | null)?.replyText ?? "";
-			setState("btw", (prev) =>
-				prev && prev.streamId === streamId ? { ...prev, reply: replyText, streaming: false } : prev,
-			);
+			if (state.sessionId !== scope) return;
+			const owned = state.btw?.streamId === streamId;
+			if (owned) setState("btw", null);
+			refreshBtwHistory();
+			const id = btwRecordId(result);
+			if (owned && id !== null) selectBtwRecord(id);
 		})
 		.catch((err) => {
-			setState("btw", (prev) =>
-				prev && prev.streamId === streamId
-					? { ...prev, streaming: false, error: String(err) }
-					: prev,
-			);
+			if (state.sessionId !== scope || isSessionSwitchSupersession(err)) return;
+			if (state.btw?.streamId === streamId) {
+				setState("btw", (prev) =>
+					prev ? { ...prev, streaming: false, error: String(err) } : prev,
+				);
+			}
+			refreshBtwHistory();
 		});
 }
 
-/** Close the /btw panel; aborts the in-flight side turn server-side. */
-export function closeBtw(): void {
-	const current = state.btw;
-	setState("btw", null);
-	if (current?.streaming && current.streamId >= 0) {
-		void call("abortEphemeral", [], 5_000, current.streamId).catch(() => {});
-	}
+/** Clear a settled live answer (error or reply) from the sheet. */
+export function dismissBtw(): void {
+	if (!state.btw?.streaming) setState("btw", null);
 }
 
-/** `/btw [question]`: bare opens the panel; a question starts a side turn. Surrounding blank lines are trimmed. */
-export function btwDispatch(args: string): { kind: "panel" } | { kind: "ask"; question: string } {
+/** `/btw [question]`: bare opens the sheet; a question starts a side turn. Surrounding blank lines are trimmed. */
+export function btwDispatch(args: string): { kind: "sheet" } | { kind: "ask"; question: string } {
 	const q = args.trim();
-	return q ? { kind: "ask", question: q } : { kind: "panel" };
+	return q ? { kind: "ask", question: q } : { kind: "sheet" };
 }

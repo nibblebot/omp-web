@@ -75,7 +75,7 @@ export const ModalHost: Component = () => {
 		annotations: () => featureModalHost("annotations"),
 		todos: () => featureModalHost("todos"),
 		compaction: () => <CompactionDialog onClose={close} />,
-		"btw-history": () => featureModalHost("btw-history"),
+		btw: () => featureModalHost("btw"),
 	} satisfies Record<ModalName, () => JSX.Element>;
 	return (
 		<>

@@ -1,9 +1,10 @@
 import { ModalHost } from "../../../web/ModalHost";
+import { setState } from "../../../web/state";
 import { openDownloadConsent } from "../../../web/store/downloads";
 import { openResumePicker } from "../../../web/store/resume";
 import { pushToast } from "../../../web/store/toasts";
 import { answerCalls } from "../../daemon";
-import { btwAnswered } from "../../fixtures/dialogs";
+import { answerBtwHistory, btwAnswered } from "../../fixtures/dialogs";
 import {
 	browserUiRequests,
 	downloadManifest,
@@ -48,8 +49,13 @@ export default defineStory({
 		},
 		{
 			name: "/btw side question",
-			description: "`state.btw` holds an answered side question: BtwSheet opens as a sheet.",
-			seed: { btw: btwAnswered },
+			description:
+				'`state.modal` is "btw" with an answered side question: BtwSheet opens as a sheet.',
+			seed: () => {
+				answerBtwHistory();
+				setState("btw", btwAnswered);
+				setState("modal", "btw");
+			},
 			render: () => <ModalHost />,
 		},
 		{

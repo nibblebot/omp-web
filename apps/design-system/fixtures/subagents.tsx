@@ -603,6 +603,7 @@ export const loopPreviewOk = {
 };
 
 interface VibeWorkerFixture {
+	id: string;
 	name: string;
 	cli?: string;
 	state?: string;
@@ -617,10 +618,9 @@ export const vibeDisabled: { enabled: boolean; workers: VibeWorkerFixture[] } = 
 
 export const vibeEnabled = {
 	enabled: true,
-	director: "claude-opus-4-1",
 	workers: [
-		{ name: "api-audit", cli: "claude", state: "running", turns: 4, queued: 1 },
-		{ name: "css-sweep", cli: "codex", state: "idle", turns: 9, queued: 0 },
+		{ id: "vibe_a1", name: "api-audit", cli: "claude", state: "running", turns: 4, queued: 1 },
+		{ id: "vibe_b2", name: "css-sweep", cli: "codex", state: "idle", turns: 9, queued: 0 },
 	] satisfies VibeWorkerFixture[],
 };
 

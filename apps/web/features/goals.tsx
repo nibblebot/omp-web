@@ -1,6 +1,5 @@
 import { GoalDialog } from "../components/chat/controls/GoalDialog";
 import { GoalBadge } from "../components/chat/status/GoalBadge";
-import { GoalsAndLoopsTab, VibeTab } from "../components/subagents/GoalLoopPanel";
 import { goalRouteArgs } from "./goal-dispatch";
 import type { FeatureModule } from "./registry";
 import "./goals.css";
@@ -15,8 +14,4 @@ export default {
 		},
 	},
 	mainHeader: { goalBadge: GoalBadge },
-	subagentTabs: [
-		{ id: "goals", label: "Goals & Loops", rank: 2, panel: GoalsAndLoopsTab },
-		{ id: "vibe", label: "Vibe", rank: 3, panel: VibeTab },
-	],
 } satisfies FeatureModule;

@@ -89,7 +89,7 @@ const WEB_DESCRIPTIONS: Readonly<Record<string, string>> = {
 };
 
 /** Web-only names with no SDK builtin of their own. */
-const WEB_ONLY: readonly string[] = ["help", "compaction", "annotations", "btw-history"];
+const WEB_ONLY: readonly string[] = ["help", "compaction", "annotations"];
 
 /**
  * Local handlers that refuse by design: the session is bound to its project
@@ -175,7 +175,6 @@ const GROUPS: Readonly<Record<CommandGroup, readonly string[]>> = {
 		"plan-review",
 		"annotations",
 		"btw",
-		"btw-history",
 		"jobs",
 		"mcp",
 		"skills",

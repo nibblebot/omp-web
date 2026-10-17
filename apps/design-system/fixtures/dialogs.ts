@@ -6,6 +6,7 @@ import {
 	type CompactionSnapshot,
 	type CompactionState,
 } from "../../web/store/compaction";
+import { answerCalls } from "../daemon";
 import type { GraphNode, GraphPage } from "../../web/store/graph";
 import type { WebSessionState } from "#lib/wire/protocol";
 import type { DebugEntry, state } from "../../web/state";
@@ -239,29 +240,66 @@ export const btwHistoryRecords: BtwRecordView[] = [
 	},
 ];
 
-/** Transcript turns for one record (btwPage answer). */
+/** Transcript turns for one record (btwPage answer): the question, then each follow-up. */
 export function btwTranscriptFor(recordId: string): BtwTranscriptTurnView[] {
-	if (recordId !== "btw_41") return [];
-	return [
-		{
-			key: "btw_41:0",
-			index: 0,
-			question: "What does the Run key point at?",
-			answer: "The id of the first tool item in the run, so it stays stable as later tools append.",
-			status: "complete",
-			createdAt: at(42),
-			updatedAt: at(41),
+	const record = btwHistoryRecords.find((r) => r.id === recordId);
+	if (!record) return [];
+	const first: BtwTranscriptTurnView = {
+		key: `${record.id}:0`,
+		index: 0,
+		question: record.question,
+		answer: record.answer,
+		status: record.status,
+		createdAt: record.createdAt,
+		updatedAt: record.updatedAt,
+		...(record.error ? { error: record.error } : {}),
+	};
+	const followUps = (record.followUps ?? []).map((turn, i): BtwTranscriptTurnView => ({
+		key: `${record.id}:${i + 1}`,
+		index: i + 1,
+		question: turn.question,
+		answer: turn.answer,
+		status: turn.status,
+		createdAt: turn.createdAt,
+		updatedAt: turn.updatedAt,
+		...(turn.error ? { error: turn.error } : {}),
+	}));
+	return [first, ...followUps];
+}
+
+/**
+ * Answers the daemon calls the /btw sheet makes on open and on selection:
+ * the saved list, search, a thread page, and the promote preview (eligible
+ * only for a single complete turn, as the server decides).
+ */
+export function answerBtwHistory(): void {
+	answerCalls({
+		btwList: () => ({ records: btwHistoryRecords, total: btwHistoryRecords.length }),
+		btwSearch: () => ({ records: btwHistoryRecords, total: btwHistoryRecords.length }),
+		btwPage: (args) => {
+			const turns = btwTranscriptFor(String(args[0]));
+			return { turns, total: turns.length };
 		},
-		{
-			key: "btw_41:1",
-			index: 1,
-			question: "Does the id change when a tool retries?",
-			answer: "No. A retry reuses the item id and appends a retry badge.",
-			status: "complete",
-			createdAt: at(40),
-			updatedAt: at(40),
+		btwPromotePreview: (args) => {
+			const recordId = String(args[0]);
+			const record = btwHistoryRecords.find((r) => r.id === recordId);
+			const turns = 1 + (record?.followUps?.length ?? 0);
+			const eligible = turns === 1 && record?.status === "complete";
+			return {
+				recordId,
+				question: record?.question ?? "",
+				leafId: record?.leafId ?? null,
+				sessionId: "sess_09a41c",
+				eligible,
+				reason: eligible
+					? undefined
+					: turns > 1
+						? "multi-turn side conversations remain in BTW history"
+						: "the answer is not ready",
+				turns,
+			};
 		},
-	];
+	});
 }
 
 // ---------------------------------------------------------------------------

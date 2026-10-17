@@ -477,13 +477,18 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			});
 		},
 		// Goal runtime owns consent, budgets, and exclusion guards (goal-service).
-		goalCreate: (entry, a) =>
-			createGoal(entry, {
-				objective: String((a[0] as { objective?: unknown }) ?? a[0] ?? ""),
-				...(typeof a[0] === "object" && a[0] !== null
-					? (a[0] as { tokenBudget?: number; consent?: boolean })
-					: { consent: true }),
-			}),
+		goalCreate: (entry, a) => {
+			const first = a[0];
+			if (typeof first === "object" && first !== null) {
+				const input = first as { objective?: unknown; tokenBudget?: number; consent?: boolean };
+				return createGoal(entry, {
+					objective: String(input.objective ?? ""),
+					tokenBudget: input.tokenBudget,
+					consent: input.consent,
+				});
+			}
+			return createGoal(entry, { objective: String(first ?? ""), consent: true });
+		},
 		goalReplace: (entry, a) =>
 			replaceGoal(entry, {
 				objective: String(a[0] ?? ""),

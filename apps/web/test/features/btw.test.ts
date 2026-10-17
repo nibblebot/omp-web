@@ -24,18 +24,22 @@ describe("btw feature", () => {
 		});
 	});
 
-	test("/btw bare opens panel, question asks", () => {
-		expect(btwDispatch("")).toEqual({ kind: "panel" });
-		expect(btwDispatch("   ")).toEqual({ kind: "panel" });
+	test("/btw bare opens the sheet, question asks", () => {
+		expect(btwDispatch("")).toEqual({ kind: "sheet" });
+		expect(btwDispatch("   ")).toEqual({ kind: "sheet" });
 		expect(btwDispatch("what does this do")).toEqual({
 			kind: "ask",
 			question: "what does this do",
 		});
 	});
 
-	test("bare /btw-history opens the history modal", () => {
+	test("bare /btw opens the btw modal and does not ask", () => {
 		setState("modal", null);
-		featureCommand("btw-history")!.command.run("");
-		expect(state.modal).toBe("btw-history");
+		featureCommand("btw")!.command.run("");
+		expect(state.modal).toBe("btw");
+	});
+
+	test("the btw-history command is gone (single sheet)", () => {
+		expect(featureCommand("btw-history")).toBeUndefined();
 	});
 });

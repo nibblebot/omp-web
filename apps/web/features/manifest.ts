@@ -61,11 +61,12 @@ export const FEATURES: readonly FeatureInfo[] = [
 	{
 		id: "btw",
 		label: "BTW side questions",
-		description: "Ask side questions outside the transcript (/btw) and browse their history.",
+		description:
+			"Ask side questions outside the transcript (/btw) and review, follow up, or promote them.",
 		experimental: true,
 		defaultEnabled: true,
-		commands: ["btw", "btw-history"],
-		modals: ["btw-history"],
+		commands: ["btw"],
+		modals: ["btw"],
 	},
 	{
 		id: "goals",

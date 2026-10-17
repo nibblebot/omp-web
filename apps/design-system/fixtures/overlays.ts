@@ -4,7 +4,6 @@ import type { ResolvedAnthropicCompat } from "@oh-my-pi/pi-catalog/types";
 import type { AskQuestion, UiRequest } from "../../web/prompt/ask-types";
 import type { SettingsSection } from "../../web/components/settings/SettingsNav";
 import { settingsSectionId } from "../../web/prefs/settings-tabs";
-import type { BtwRecordView } from "../../web/store/btw-history";
 import type { BrowserUiRequest } from "../../web/store/browser-ui";
 import type { DownloadConsent, WebDownloadManifest } from "../../web/store/downloads";
 import type { ModelPreset } from "../../web/store/models";
@@ -622,29 +621,6 @@ export const downloadManifest: WebDownloadManifest = {
 // ---------------------------------------------------------------------------
 // BTW side conversations.
 // ---------------------------------------------------------------------------
-
-/** BtwRecordView list: BtwHistorySheet rows, one complete and one interrupted. */
-export const btwRecords: BtwRecordView[] = [
-	{
-		id: "btw_01",
-		leafId: "btw_01_a",
-		question: "What does the Run key point at?",
-		answer: "The id of the first tool item in the run, so it stays stable as later tools append.",
-		status: "complete",
-		createdAt: T0 - 30 * MIN,
-		updatedAt: T0 - 29 * MIN,
-	},
-	{
-		id: "btw_02",
-		leafId: null,
-		question: "Can the review panel run offline?",
-		answer: "",
-		status: "interrupted",
-		createdAt: T0 - 10 * MIN,
-		updatedAt: T0 - 9 * MIN,
-		error: "connection lost mid-answer",
-	},
-];
 
 // ---------------------------------------------------------------------------
 // Browser UI contributions rendered by ExtensionUi.

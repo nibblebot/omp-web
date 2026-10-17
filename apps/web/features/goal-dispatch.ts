@@ -1,57 +1,87 @@
-import { call, setState } from "../state";
+import { pushNotice, setState } from "../state";
+import {
+	dropGoal,
+	parseGoalBudget,
+	pauseGoal,
+	resumeGoal,
+	setGoalBudget,
+	startGoal,
+	validateObjective,
+} from "../store/goals";
+
+export type GoalDispatch =
+	| { kind: "popover" }
+	| { kind: "error"; message: string }
+	| { kind: "start"; objective: string }
+	| { kind: "budget"; tokenBudget: number | undefined }
+	| { kind: "pause" }
+	| { kind: "resume" }
+	| { kind: "drop" };
+
+const BUDGET_USAGE = "usage: /goal budget <tokens|off>";
 
 /**
- * `/goal`. TUI-only in the SDK registry (builtin-modes.ts:376 `goal` carries
- * `handleTui` only, so ACP dispatch falls through to model text). The web
- * host therefore never forwards it: full TUI subcommand grammar below —
- * `set <objective>`, `show` (opens the Goal panel, the browser read surface),
- * `pause`, `resume`, `drop`, `budget <N|off>` (token budget via the goal
- * runtime), bare / `set` without objective / unknown opens the popover.
+ * `/goal` subcommand grammar: `set <objective>` starts the goal and its first
+ * turn; `show` opens the Goal dialog; `pause`, `resume`, `drop`; `budget
+ * <N|off>` sets or clears the token budget. Bare, unknown, or `set` without an
+ * objective opens the dialog. Invalid arguments return an error, never a prompt.
  */
-export function goalDispatch(args: string):
-	| { kind: "popover" }
-	| {
-			kind: "call";
-			method: "goalCreate" | "goalPause" | "goalResume" | "goalDrop";
-			args: unknown[];
-	  } {
+export function goalDispatch(args: string): GoalDispatch {
 	const tokens = args.trim().split(/\s+/).filter(Boolean);
 	if (tokens.length === 0) return { kind: "popover" };
 	const [sub, ...rest] = tokens;
 	switch (sub) {
-		case "set":
+		case "set": {
 			if (rest.length === 0) return { kind: "popover" };
-			return { kind: "call", method: "goalCreate", args: [rest.join(" ")] };
+			const objective = rest.join(" ");
+			const invalid = validateObjective(objective);
+			if (invalid) return { kind: "error", message: `Goal ${invalid}` };
+			return { kind: "start", objective };
+		}
 		case "show":
-			// The Goal panel renders live state; no SDK call needed.
 			return { kind: "popover" };
 		case "pause":
-			if (rest.length > 0) return { kind: "popover" };
-			return { kind: "call", method: "goalPause", args: [] };
+			return rest.length > 0 ? { kind: "popover" } : { kind: "pause" };
 		case "resume":
-			if (rest.length > 0) return { kind: "popover" };
-			return { kind: "call", method: "goalResume", args: [] };
+			return rest.length > 0 ? { kind: "popover" } : { kind: "resume" };
 		case "drop":
-			if (rest.length > 0) return { kind: "popover" };
-			return { kind: "call", method: "goalDrop", args: [] };
-		case "budget":
-			// Token-budget adjustment belongs to the P4 goal service
-			// (goalRuntime.onBudgetMutated); until its wire row lands, route
-			// to the panel instead of dropping the arg or prompting.
-			return { kind: "popover" };
+			return rest.length > 0 ? { kind: "popover" } : { kind: "drop" };
+		case "budget": {
+			if (rest.length !== 1) return { kind: "error", message: BUDGET_USAGE };
+			if (rest[0] === "off") return { kind: "budget", tokenBudget: undefined };
+			const parsed = parseGoalBudget(rest[0]);
+			if ("error" in parsed) return { kind: "error", message: parsed.error };
+			return { kind: "budget", tokenBudget: parsed.tokenBudget };
+		}
 		default:
 			return { kind: "popover" };
 	}
 }
 
-/**
- * `/goal` full TUI grammar: set/show/pause/resume/drop/budget. `show` opens
- * the Goal panel (the browser's read surface for goal details); `budget N`
- * and `budget off` adjust the token budget via the goal runtime; bare,
- * unknown, or `set` without an objective opens the popover. Never prompts.
- */
+/** Route a `/goal` invocation to the store, or open the Goal dialog. */
 export function goalRouteArgs(args: string): void {
 	const d = goalDispatch(args);
-	if (d.kind === "popover") setState("modal", "goal");
-	else void call(d.method, d.args).catch((err: unknown) => setState("error", String(err)));
+	switch (d.kind) {
+		case "popover":
+			setState("modal", "goal");
+			return;
+		case "error":
+			pushNotice("error", d.message);
+			return;
+		case "start":
+			void startGoal(d.objective);
+			return;
+		case "budget":
+			void setGoalBudget(d.tokenBudget);
+			return;
+		case "pause":
+			void pauseGoal();
+			return;
+		case "resume":
+			void resumeGoal();
+			return;
+		case "drop":
+			void dropGoal();
+			return;
+	}
 }

@@ -236,7 +236,7 @@ export type ModalName =
 	| "annotations"
 	| "todos"
 	| "compaction"
-	| "btw-history";
+	| "btw";
 
 /** Unicast answer to sendWorktreeDeleteInfo: guard evidence for the
  *  delete-worktree confirm dialog (linked identity, dirty counts, branch state). */
