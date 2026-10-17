@@ -2,6 +2,14 @@ import type { SessionListEntry } from "#lib/wire/protocol";
 import { call, state, setState } from "../state";
 import { api } from "./fleet-api";
 import { requestDaemonSessions, resumeDaemonSession } from "./roster";
+import {
+	type SessionRow,
+	type SessionStatus,
+	normalizeSessionTitle,
+	projectLabelFromCwd,
+	sessionStatus,
+	validateSessionDelete,
+} from "./session-list";
 
 // ---------------------------------------------------------------------------
 // Local DTOs (P0 moves the canonical shapes into protocol.ts).
@@ -18,8 +26,9 @@ export interface ResumeCandidate {
 	createdMs?: number;
 	modifiedMs: number;
 	messageCount: number;
-	status?: string;
+	status?: SessionStatus;
 	firstMessage?: string;
+	recentText?: string;
 	pinned: boolean;
 	scope: "local" | "global";
 }
@@ -113,8 +122,9 @@ function normalizeCandidate(
 		...(asNumber(r.createdMs) !== undefined ? { createdMs: asNumber(r.createdMs) } : {}),
 		modifiedMs,
 		messageCount: asNumber(r.messageCount) ?? 0,
-		...(asString(r.status) !== undefined ? { status: asString(r.status) } : {}),
+		...(sessionStatus(r.status) !== undefined ? { status: sessionStatus(r.status) } : {}),
 		...(asString(r.firstMessage) !== undefined ? { firstMessage: asString(r.firstMessage) } : {}),
+		...(asString(r.recentText) !== undefined ? { recentText: asString(r.recentText) } : {}),
 		pinned: asBoolean(r.pinned) ?? pinnedIds.has(id),
 		scope: r.scope === "global" ? "global" : "local",
 	};
@@ -162,6 +172,8 @@ export interface ResumeState {
 	candidates: ResumeCandidate[];
 	pinnedIds: string[];
 	query: string;
+	total: number;
+	allProjects: boolean;
 	pickerOpen: boolean;
 	ambiguous: ResumeCandidate[] | null;
 	loading: boolean;
@@ -188,6 +200,8 @@ export function createResumeState(): ResumeState {
 		candidates: [] as ResumeCandidate[],
 		pinnedIds: [] as string[],
 		query: "",
+		total: 0,
+		allProjects: readAllProjects(),
 		pickerOpen: false,
 		ambiguous: null as ResumeCandidate[] | null,
 		loading: false,
@@ -208,6 +222,12 @@ export function createResumeState(): ResumeState {
 			warning: string;
 		} | null,
 	};
+}
+
+/** Persisted "All projects" scope: only a stored "true" widens the list. */
+function readAllProjects(): boolean {
+	if (typeof localStorage === "undefined") return false;
+	return localStorage.getItem("omp.resumeAllProjects") === "true";
 }
 
 // Accessors retain the existing component API while all mirrors live in the
@@ -247,6 +267,8 @@ const [importLoading, setImportLoading] = resumeField("importLoading");
 const [importError, setImportError] = resumeField("importError");
 const [importStagedId, setImportStagedId] = resumeField("importStagedId");
 export const [resumeCloneRequest, setResumeCloneRequest] = resumeField("cloneRequest");
+export const [resumeAllProjects, setAllProjectsFlag] = resumeField("allProjects");
+export const [resumeTotal, setResumeTotal] = resumeField("total");
 
 export {
 	resumeCandidates,
@@ -281,7 +303,7 @@ export function refreshResumeCapabilities(): void {
 				return;
 			}
 			const caps: Record<string, boolean> = {};
-			for (const key of ["resolve", "pins", "foreignImport", "lineage"] as const) {
+			for (const key of ["resolve", "pins", "foreignImport", "lineage", "manage"] as const) {
 				const entry = asRecord(root[key]);
 				const available = entry !== null ? asBoolean(entry.available) : asBoolean(root[key]);
 				caps[key] = available ?? false;
@@ -300,7 +322,7 @@ export function refreshResumeCapabilities(): void {
  * failures are explicit; never emulate capabilities or unverified lineage.
  */
 export function openResumePicker(): void {
-	setResumePickerOpen(true);
+	setState("modal", "sessions");
 	setResumeAmbiguous(null);
 	setResumeNotice(null);
 	setResumeError(null);
@@ -316,15 +338,18 @@ let resumeSearchSequence = 0;
 export function searchResume(query: string): Promise<void> {
 	const sequence = ++resumeSearchSequence;
 	setResumeQuery(query);
+	setResumeAmbiguous(null);
 	setResumeLoading(true);
 	setResumeError(null);
-	return call("resumeList", [{ query, limit: 100 }])
+	const allProjects = resumeAllProjects();
+	return call("resumeList", [{ query, limit: 200, allProjects }])
 		.then((data) => {
 			if (sequence !== resumeSearchSequence) return;
 			const root = asRecord(data);
 			const pinned = new Set(asIdList(root !== null ? root.pinnedIds : undefined));
 			setResumePinnedIds([...pinned]);
 			setResumeCandidates(normalizeCandidates(data, pinned));
+			setResumeTotal(asNumber(root?.total) ?? 0);
 		})
 		.catch((err) => {
 			if (sequence === resumeSearchSequence) setResumeError(errText(err));
@@ -334,11 +359,30 @@ export function searchResume(query: string): Promise<void> {
 		});
 }
 
+/**
+ * Toggle the "All projects" scope. The choice persists in localStorage and the
+ * current query re-runs at once so the list reflects it.
+ */
+export function setResumeAllProjects(on: boolean): Promise<void> {
+	setAllProjectsFlag(on);
+	if (typeof localStorage !== "undefined")
+		localStorage.setItem("omp.resumeAllProjects", String(on));
+	return searchResume(resumeQuery());
+}
+
 /** Close the picker; in-flight work keeps its own deadline, never forced. */
 export function closeResumePicker(): void {
 	setResumePickerOpen(false);
 	setResumeAmbiguous(null);
 	setImportPreview(null);
+}
+
+/** Hand off to the by-id / import dialog (ResumePicker). Closes the list first. */
+export function openResumeImport(): void {
+	setState("sessionPickerGate", null);
+	setState("modal", null);
+	setResumePickerOpen(true);
+	refreshResumeCapabilities();
 }
 
 /**
@@ -407,7 +451,8 @@ export function chooseResumeTarget(arg: string, daemonId?: string): Promise<Resu
 				}
 				if (candidates.length > 1) {
 					setResumeAmbiguous(candidates);
-					setResumePickerOpen(true);
+					setResumePickerOpen(false);
+					setState("modal", "sessions");
 					return { kind: "ambiguous", candidates } as ResumeResolveOutcome;
 				}
 				throw new Error(
@@ -444,7 +489,8 @@ export function chooseResumeTarget(arg: string, daemonId?: string): Promise<Resu
 				const raw = root !== null && Array.isArray(root.candidates) ? root.candidates : [];
 				const candidates = normalizeCandidates(raw, pinned);
 				setResumeAmbiguous(candidates);
-				setResumePickerOpen(true);
+				setResumePickerOpen(false);
+				setState("modal", "sessions");
 				const outcome: ResumeResolveOutcome = { kind: "ambiguous", candidates };
 				return outcome;
 			}
@@ -810,4 +856,95 @@ export function resumeStoredClone(
 /** Request a daemon's last sessions for disambiguating cross-daemon picks. */
 export function requestResumeDaemonSessions(daemonId: string): Promise<SessionListEntry[]> {
 	return requestDaemonSessions(daemonId);
+}
+
+/** Picker rows from the mirrored candidates; `current` marks the attached session. */
+export function sessionRowsFromResume(
+	candidates: readonly ResumeCandidate[],
+	attachedFile: string | undefined,
+): SessionRow[] {
+	return candidates.map((c) => ({
+		id: c.id,
+		file: c.sessionFile,
+		...(c.title !== undefined ? { title: c.title } : {}),
+		cwd: c.cwd,
+		projectLabel: projectLabelFromCwd(c.cwd),
+		...(c.createdMs !== undefined ? { createdMs: c.createdMs } : {}),
+		modifiedMs: c.modifiedMs,
+		messageCount: c.messageCount,
+		...(c.status !== undefined ? { status: c.status } : {}),
+		...(c.firstMessage !== undefined ? { firstMessage: c.firstMessage } : {}),
+		...(c.recentText !== undefined ? { recentText: c.recentText } : {}),
+		pinned: c.pinned,
+		scope: c.scope,
+		current: c.sessionFile === attachedFile,
+	}));
+}
+
+/**
+ * Delete one session the user confirmed. The attached session goes through
+ * `deleteSession` (the daemon replaces it); any other session goes through
+ * `resumeDelete`, which the daemon validates (jail, listing, header id, writer
+ * lease). Client refusals and daemon errors surface as the picker error.
+ */
+export function deleteResumeSession(
+	row: Pick<SessionRow, "id" | "file" | "current">,
+): Promise<boolean> {
+	const check = validateSessionDelete(row, {
+		attachedFile: state.sessionFile ?? null,
+		manageAvailable: resumeCapabilities()?.manage === true,
+	});
+	if (!check.ok) {
+		setResumeError(check.reason);
+		return Promise.resolve(false);
+	}
+	setResumeLoading(true);
+	setResumeError(null);
+	const request = check.current
+		? call("deleteSession")
+		: call("resumeDelete", [{ sessionFile: row.file, sessionId: row.id }]);
+	return request
+		.then(() => {
+			setResumeCandidates((prev) => prev.filter((c) => c.id !== row.id));
+			setResumePinnedIds((prev) => prev.filter((id) => id !== row.id));
+			if (!check.current) setResumeTotal((prev) => Math.max(0, prev - 1));
+			setResumeNotice("Session deleted.");
+			if (check.current) void searchResume(resumeQuery());
+			return true;
+		})
+		.catch((err) => {
+			setResumeError(errText(err));
+			return false;
+		})
+		.finally(() => setResumeLoading(false));
+}
+
+/**
+ * Rename one session. The daemon trims and validates the title and handles the
+ * attached session and every other session alike.
+ */
+export function renameResumeSession(
+	row: Pick<SessionRow, "id" | "file">,
+	rawTitle: string,
+): Promise<boolean> {
+	const title = normalizeSessionTitle(rawTitle);
+	if (title === null) {
+		setResumeError("Session names must be 1 to 200 characters on one line.");
+		return Promise.resolve(false);
+	}
+	setResumeLoading(true);
+	setResumeError(null);
+	return call("resumeRename", [{ sessionFile: row.file, title }])
+		.then((data) => {
+			const saved = asString(asRecord(data)?.title) ?? title;
+			setResumeCandidates((prev) =>
+				prev.map((c) => (c.id === row.id ? { ...c, title: saved } : c)),
+			);
+			return true;
+		})
+		.catch((err) => {
+			setResumeError(errText(err));
+			return false;
+		})
+		.finally(() => setResumeLoading(false));
 }

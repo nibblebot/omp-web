@@ -561,10 +561,18 @@ describe("danger confirm guards (P1 hardening)", () => {
 		expect(dangerConfirm()).toBeNull();
 	});
 
-	test("/delete POSTs deleteSession immediately with no danger confirm shown", async () => {
+	test("/delete requests a danger confirm and POSTs deleteSession only after confirming", async () => {
 		connectTransport();
 		seedItem();
 		dispatchInput("/delete", undefined, "enter");
+		await flushMicrotasks();
+		expect(dangerConfirm()).toMatchObject({
+			title: "Delete this session?",
+			confirmLabel: "Delete session",
+		});
+		expect(postedMethod("deleteSession")).toEqual([]);
+
+		confirmDangerConfirm();
 		await flushMicrotasks();
 		expect(dangerConfirm()).toBeNull();
 		expect(postedMethod("deleteSession").length).toBe(1);

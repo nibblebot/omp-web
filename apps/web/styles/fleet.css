@@ -747,26 +747,6 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	color: var(--muted-2);
 	padding: var(--space-2) var(--space-3);
 }
-/* Each dropdown entry: the friendly name plus a right-aligned relative time;
-   the current session is highlighted like an active picker row. */
-.daemon-session-item {
-	justify-content: space-between;
-	gap: var(--space-3);
-	white-space: nowrap;
-}
-.daemon-session-item.active {
-	background: var(--hover);
-	box-shadow: inset 2px 0 0 var(--accent);
-}
-.daemon-session-item-name {
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.daemon-session-item-time {
-	flex: none;
-	font-size: var(--fs-micro);
-	color: var(--muted-2);
-}
 .sidebar-menu-item {
 	display: flex;
 	align-items: center;
@@ -878,6 +858,22 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .daemon-session-title--clickable:hover,
 .daemon-session-title--clickable:focus-visible {
 	color: var(--text);
+}
+.daemon-sessions-btn {
+	align-self: flex-start;
+	padding: 0 var(--space-2);
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	cursor: pointer;
+}
+.daemon-sessions-btn:hover,
+.daemon-sessions-btn:focus-visible,
+.daemon-sessions-btn[aria-expanded="true"] {
+	color: var(--text);
+	border-color: var(--accent-border);
 }
 .daemon-row-btn {
 	background: none;

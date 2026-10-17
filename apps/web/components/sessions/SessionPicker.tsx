@@ -1,30 +1,43 @@
-import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
-import { call, listSessions, setState, startNewSession, state } from "../../state";
-import { formatTimeAgo } from "../../text/time-ago";
+import { createMemo, createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
+import { setState, startNewSession, state } from "../../state";
+import {
+	chooseResumeTarget,
+	closeResumePicker,
+	deleteResumeSession,
+	openResumeImport,
+	refreshResumeCapabilities,
+	renameResumeSession,
+	resumeAllProjects,
+	resumeAmbiguous,
+	resumeCandidates,
+	resumeCapabilities,
+	resumeError,
+	resumeLoading,
+	resumeNotice,
+	resumeQuery,
+	resumeTotal,
+	searchResume,
+	setResumeAllProjects,
+	sessionRowsFromResume,
+	togglePin,
+} from "../../store/resume";
+import type { SessionRow } from "../../store/session-list";
 import { Modal } from "../ui/Modal";
 import { PickerRow } from "../ui/PickerRow";
-import { displayTitle } from "../ui/title-icons";
-import type { SessionListEntry } from "#lib/wire/protocol";
+import { SessionListPicker } from "./SessionListPicker";
 
 /**
- * Session picker: on-disk session files, click to switchSession.
- *
- * Two paths share this surface:
- * - `/resume` (gate null): plain history list, unchanged behavior.
- * - Onboarding gate (state.sessionPickerGate set): opened by state.ts after
- *   an add-repo/add-worktree attach settles with sessions on disk. The list
- *   renders most-recent-first with the newest session pre-highlighted and a
- *   "New session" top item; Esc selects "New session" (intercepted before
- *   the Modal's Esc-to-close, which still works outside gate mode).
- * The asleep-row wake path never opens this picker (silent --resume).
+ * The one session list: `/resume`, ambiguous `/resume <id>` matches, and the
+ * onboarding gate (state.sessionPickerGate set after an attach with sessions on
+ * disk). Gate mode adds a "New session" top item; Esc selects it. The list itself
+ * is SessionListPicker; this component wires the resume store into it.
  */
 export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
-	const [filter, setFilter] = createSignal("");
-	const [sessions, setSessions] = createSignal<SessionListEntry[]>([]);
 	const [error, setError] = createSignal<string | null>(null);
-
-	const gate = () => state.sessionPickerGate;
-	const gateMode = () => gate() !== null;
+	const gateMode = () => state.sessionPickerGate !== null;
+	const rows = createMemo(() =>
+		sessionRowsFromResume(resumeAmbiguous() ?? resumeCandidates(), state.sessionFile),
+	);
 
 	// Gate-mode Esc = "New session". Registered in onMount BEFORE the Modal's
 	// own capture-phase Esc handler, since the child's onMount runs after the
@@ -41,37 +54,23 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 	onMount(() => {
 		document.addEventListener("keydown", onKeyDown, true);
 		onCleanup(() => document.removeEventListener("keydown", onKeyDown, true));
-		listSessions()
-			.then(setSessions)
-			.catch((err) => setError(String(err)));
+		// Ambiguous matches are already the list; do not replace them with a fresh search.
+		// Every entry path (composer /resume, sidebar, gate) lands here: probe manage/pins caps.
+		refreshResumeCapabilities();
+		if (resumeAmbiguous() === null) void searchResume(resumeQuery());
 	});
-
-	// list_sessions is scoped to the daemon's project, so every row shares one
-	// cwd: filter on the title/id only, and show the cwd in the row tooltip.
-	const filtered = () => {
-		const q = filter().toLowerCase();
-		const list = gateMode()
-			? [...sessions()].sort((a, b) => b.modifiedAt - a.modifiedAt)
-			: sessions();
-		return q ? list.filter((s) => (s.name ?? s.id).toLowerCase().includes(q)) : list;
-	};
 
 	const close = () => {
 		if (gateMode()) setState("sessionPickerGate", null);
+		closeResumePicker();
 		setState("modal", null);
 		props.onClose();
 	};
 
-	const choose = (s: SessionListEntry) => {
-		void call("switchSession", [s.path])
-			.then((result) => {
-				if ((result as { cancelled?: boolean } | null)?.cancelled) {
-					setError("Session switch cancelled by extension");
-					return;
-				}
-				close();
-			})
-			.catch((err) => setError(String(err)));
+	const choose = (row: SessionRow) => {
+		void chooseResumeTarget(row.id).then((outcome) => {
+			if (outcome.kind === "unique") close();
+		});
 	};
 
 	/** Gate-mode Esc/row action: start a fresh session on the attached daemon. */
@@ -84,50 +83,58 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 	return (
 		<Modal
 			title={gateMode() ? "New session or resume" : "Resume session"}
-			class="session-picker"
+			class="session-list-dialog"
 			onClose={close}
 		>
-			<input
-				class="picker-filter"
-				aria-label="Filter sessions"
-				placeholder="Filter sessions…"
-				value={filter()}
-				onInput={(e) => setFilter(e.currentTarget.value)}
+			<Show when={gateMode()}>
+				<PickerRow
+					class="session-new"
+					onClick={chooseNewSession}
+					title="Start a fresh session (no history)"
+				>
+					<span class="picker-label">New session</span>
+					<span class="picker-detail">start fresh, no history</span>
+				</PickerRow>
+			</Show>
+			<Show when={resumeAmbiguous()}>
+				<div class="msg-notice">
+					Several sessions match this search. Choose one below, or{" "}
+					<button type="button" onClick={() => void searchResume(resumeQuery())}>
+						show all matches
+					</button>
+					.
+				</div>
+			</Show>
+			<Show when={error() ?? resumeError()}>
+				{(message) => <div class="msg-notice">{message()}</div>}
+			</Show>
+			<Show when={resumeNotice()}>{(message) => <div class="msg-notice">{message()}</div>}</Show>
+			<SessionListPicker
+				rows={rows()}
+				total={resumeTotal()}
+				query={resumeQuery()}
+				onQuery={(query) => void searchResume(query)}
+				loading={resumeLoading()}
+				allProjects={resumeAllProjects()}
+				onAllProjects={(on) => void setResumeAllProjects(on)}
+				canManage={resumeCapabilities()?.manage === true}
+				emptyText={
+					resumeQuery()
+						? "No sessions match this search."
+						: "No resumable sessions in this project."
+				}
+				onChoose={choose}
+				onTogglePin={(row) => togglePin(row.id)}
+				onRename={renameResumeSession}
+				onDelete={deleteResumeSession}
 			/>
-			<Show when={error()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
-			<div class="picker-list">
-				<Show when={gateMode()}>
-					<PickerRow
-						class="picker-row session-new"
-						onClick={chooseNewSession}
-						title="Start a fresh session (no history)"
-					>
-						<span class="picker-label session-new-label">New session</span>
-						<span class="picker-detail">start fresh, no history</span>
-					</PickerRow>
-				</Show>
-				<For each={filtered()}>
-					{(s, i) => (
-						<PickerRow
-							class="picker-row session-picker-row"
-							classList={{ active: gateMode() && i() === 0 }}
-							onClick={() => choose(s)}
-							title={`${displayTitle(s.name) ?? s.id}\n${s.cwd || "(no cwd)"}\n${new Date(s.modifiedAt).toLocaleString()}`}
-						>
-							<span class="picker-label session-picker-name">
-								{displayTitle(s.name) ?? s.id.slice(0, 8)}
-							</span>
-							<Show when={s.path === state.sessionFile}>
-								<span class="picker-chip">current</span>
-							</Show>
-							<span class="picker-meta">
-								{s.messageCount} {s.messageCount === 1 ? "msg" : "msgs"} ·{" "}
-								{formatTimeAgo(s.modifiedAt)}
-							</span>
-						</PickerRow>
-					)}
-				</For>
-				{filtered().length === 0 && !error() && <div class="tool-collapsed-note">no sessions</div>}
+			<div class="modal-actions">
+				<button type="button" onClick={() => openResumeImport()}>
+					Resume by ID or import…
+				</button>
+				<button type="button" onClick={close}>
+					Close
+				</button>
 			</div>
 		</Modal>
 	);

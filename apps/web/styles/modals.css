@@ -544,25 +544,210 @@ button.picker-row {
 	margin-top: 0;
 }
 
-/* --- SessionPicker (/resume): fixed width so rows don't size the dialog;
-   one-line rows with the title truncating before the right-aligned meta. --- */
-.session-picker {
-	width: min(600px, 92vw);
+/* --- SessionListPicker (resume and session picker): grouped rows beside a
+   preview pane. Picker-scoped class names: tx.css owns the bare .session-row
+   and .session-list selectors, so those names are not reused here. --- */
+.session-list-dialog {
+	width: min(820px, 94vw);
 }
-.session-picker-row {
+.session-list-picker {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-height: 0;
+}
+.session-list-toolbar {
+	display: flex;
 	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--space-2);
 }
-.session-picker-name {
+.session-list-search {
+	flex: 1 1 220px;
 	min-width: 0;
+}
+.session-list-scope {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	font-size: var(--fs-sm);
+	color: var(--muted);
+	white-space: nowrap;
+}
+.session-list-count {
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+}
+.session-list-body {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: var(--space-3);
+	min-height: 0;
+}
+.session-list-rows {
+	min-width: 0;
+	max-height: min(60vh, 520px);
+	overflow-y: auto;
+}
+.session-group-title {
+	padding: var(--space-2) var(--space-1) var(--space-1);
+	font-size: var(--fs-micro);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted-2);
+}
+.picker-session-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-1);
+	border-radius: var(--r-md);
+}
+.picker-session-row.active {
+	background: var(--hover);
+}
+.picker-session-row.current {
+	opacity: 0.7;
+}
+.session-row-main {
+	flex: 1 1 auto;
+	min-width: 0;
+	align-items: center;
+	gap: var(--space-2);
+}
+.session-row-text {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+}
+.session-row-text .picker-label,
+.session-row-sub {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.session-picker-row .picker-chip {
-	flex: none;
+.session-row-pinned .picker-label {
+	font-weight: 600;
 }
-.session-picker-row .picker-meta {
+.session-row-sub {
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+}
+.session-status {
 	flex: none;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--muted-2);
+}
+.session-status-complete {
+	background: var(--success);
+}
+.session-status-pending {
+	background: var(--accent);
+}
+.session-status-interrupted,
+.session-status-aborted {
+	background: var(--warning);
+}
+.session-status-error {
+	background: var(--error);
+}
+.session-pin {
+	flex: none;
+	padding: var(--space-1);
+	background: none;
+	border: none;
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+	cursor: pointer;
+}
+.session-pin[aria-pressed="true"] {
+	color: var(--accent);
+}
+.session-pin:hover,
+.session-pin:focus-visible {
+	color: var(--text);
+}
+.session-preview {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-width: 0;
+	max-height: min(60vh, 520px);
+	padding: var(--space-3);
+	overflow-y: auto;
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+}
+.session-preview-title {
+	margin: 0;
+	font-size: var(--fs-md);
+	overflow-wrap: anywhere;
+}
+.session-preview-prompt {
+	margin: 0;
+	font-size: var(--fs-sm);
+	color: var(--muted);
+}
+.session-preview-meta {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: var(--space-1) var(--space-3);
+	margin: 0;
+	font-size: var(--fs-sm);
+}
+.session-preview-meta dt {
+	color: var(--muted-2);
+}
+.session-preview-meta dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+.session-preview-section h4 {
+	margin: 0 0 var(--space-1);
+	font-size: var(--fs-micro);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted-2);
+}
+.session-preview-text {
+	margin: 0;
+	font-size: var(--fs-sm);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.session-preview-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+.session-rename {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.session-rename-input {
+	width: 100%;
+}
+.session-delete-confirm {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-2);
+	font-size: var(--fs-sm);
+	background: var(--error-bg);
+	border: 1px solid var(--error);
+	border-radius: var(--r-md);
+}
+.session-delete-confirm p {
+	margin: 0;
+}
+@media (max-width: 640px) {
+	.session-list-body {
+		grid-template-columns: minmax(0, 1fr);
+	}
 }
 
 /* --- SessionPicker gate mode ("New session" top item) --- */

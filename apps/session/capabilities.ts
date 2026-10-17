@@ -72,6 +72,8 @@ const REQUIRED_METHODS = {
 		"resumeResolve",
 		"resumeList",
 		"resumePinToggle",
+		"resumeRename",
+		"resumeDelete",
 		"foreignList",
 		"foreignPreview",
 		"foreignImport",

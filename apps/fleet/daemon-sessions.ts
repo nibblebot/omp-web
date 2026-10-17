@@ -140,6 +140,8 @@ export async function listDaemonSessions(
 				cwd: i.cwd,
 				messageCount: i.messageCount,
 				modifiedAt: i.modified.getTime(),
+				firstMessage: i.firstMessage.slice(0, 500),
+				...(i.status !== undefined ? { status: i.status } : {}),
 			}))
 			.sort((a, b) => b.modifiedAt - a.modifiedAt)
 			.slice(0, limit);

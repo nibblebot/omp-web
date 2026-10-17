@@ -17,90 +17,36 @@ import {
 	importPreview,
 	importSource,
 	listForeign,
+	openResumePicker,
 	previewImport,
-	resumeAmbiguous,
-	resumeCandidates,
 	resumeError,
 	resumeLoading,
 	resumeNotice,
-	resumePinnedIds,
-	resumeQuery,
 	resumeUnavailable,
-	searchResume,
 	setForeignSource,
 	stageUpload,
-	togglePin,
 	type ForeignSessionPreview,
-	type ResumeCandidate,
 } from "../../store/resume";
 import { state } from "../../state";
 
 /**
- * G20 resume picker (thin component; the store owns all state).
+ * Resume by ID or import (the second dialog behind the session list). The
+ * list itself is SessionPicker; this dialog resolves an explicit id, prefix,
+ * or authorized path, imports a Claude/Codex transcript, and confirms a
+ * resume onto a fresh clone when the original workspace is gone. The store
+ * owns all state.
  *
- * Sections: search box, pinned-first resume list (pin toggles, provenance
- * badges), ambiguous-choice list, refusal/miss messages, foreign source
- * picker (Claude/Codex) + upload button + preview + size/type errors +
- * provenance note + confirm/cancel, deleted-workspace warning (surfaced via
- * the store's error text from lineageResume) + resume-onto-fresh-clone
- * confirm (delegated to the Analysis stored-history surface, which owns
- * api.resumeClone).
+ * Opened from the list via openResumeImport(); "Back to sessions" returns to
+ * the list. Ambiguous resolves hand off to the list (the store does that).
  *
- * WIRING NOTE: deliberately NOT registered in overlays/index.ts (contract).
- * Mount from App.tsx or a /resume command route; open via openResumePicker().
- *
- * Pin copy: rows say "resume-list pin" — a picker-ordering marker only. It
- * is not a credential/account pin (automatic OAuth session stickiness) and
- * it does not change what the model keeps in context.
+ * Pin copy in the list says "resume-list pin": a picker-ordering marker only.
+ * It is not a credential/account pin and does not change model context.
  */
 
 function formatTime(ms: number): string {
 	if (!ms) return "unknown time";
 	return new Date(ms).toLocaleString();
 }
-
-function provenanceNote(candidate: ResumeCandidate): string {
-	return candidate.scope === "global" ? "other project" : "this project";
-}
-
-const ResumeCandidateRow: Component<{
-	candidate: ResumeCandidate;
-	onChoose: (candidate: ResumeCandidate) => void;
-}> = (props) => {
-	const candidate = () => props.candidate;
-	return (
-		<div class="resume-row">
-			<PickerRow
-				class="picker-row"
-				onClick={() => props.onChoose(candidate())}
-				title={`Resume ${candidate().id}`}
-			>
-				<span class="picker-label">
-					{displayTitle(candidate().title) || candidate().id.slice(0, 8)}
-				</span>
-				<span class="picker-detail">
-					{candidate().messageCount} msgs · {formatTime(candidate().modifiedMs)} ·{" "}
-					{provenanceNote(candidate())}
-					{candidate().status ? ` · ${candidate().status}` : ""}
-				</span>
-			</PickerRow>
-			<button
-				type="button"
-				class="resume-pin"
-				aria-pressed={candidate().pinned}
-				aria-label={`${candidate().pinned ? "Unpin" : "Pin"} resume-list pin for ${candidate().id.slice(0, 8)}`}
-				title={
-					candidate().pinned
-						? "Remove resume-list pin (picker ordering only)"
-						: "Add resume-list pin (picker ordering only — not a credential or context pin)"
-				}
-				onClick={() => togglePin(candidate().id)}
-			>
-				{candidate().pinned ? "★" : "☆"}
-			</button>
-		</div>
-	);
-};
 
 const ForeignSessionRow: Component<{
 	preview: ForeignSessionPreview;
@@ -122,22 +68,15 @@ const ForeignSessionRow: Component<{
 	);
 };
 
-export const ResumePicker: Component<{
-	daemonId?: string;
-	workspaceId?: string;
-	onClose: () => void;
-}> = (props) => {
-	const [query, setQuery] = createSignal(resumeQuery());
+export const ResumePicker: Component<{ onClose: () => void }> = (props) => {
 	const [targetArg, setTargetArg] = createSignal("");
-	const [showImport, setShowImport] = createSignal(false);
-	const [selectedDaemon, setSelectedDaemon] = createSignal(props.daemonId ?? "");
+	const [selectedDaemon, setSelectedDaemon] = createSignal("");
 	const [foreignRoot, setForeignRoot] = createSignal("");
 	const [fallbackCwd, setFallbackCwd] = createSignal("");
 	const [cloneProfile, setCloneProfile] = createSignal("");
 	let fileInput: HTMLInputElement | undefined;
 
 	onMount(() => {
-		void searchResume("");
 		void listForeign(importSource());
 	});
 
@@ -146,10 +85,9 @@ export const ResumePicker: Component<{
 		props.onClose();
 	};
 
-	const choose = (candidate: ResumeCandidate) => {
-		void chooseResumeTarget(candidate.id, selectedDaemon() || undefined).then((outcome) => {
-			if (outcome.kind === "unique") close();
-		});
+	const backToSessions = () => {
+		closeResumePicker();
+		openResumePicker();
 	};
 
 	const resolveTarget = () => {
@@ -185,12 +123,8 @@ export const ResumePicker: Component<{
 			);
 	};
 
-	const ambiguous = () => resumeAmbiguous();
-	const candidates = () => resumeCandidates();
-	const pinnedCount = () => resumePinnedIds().length;
-
 	return (
-		<Modal title="Resume session" onClose={close}>
+		<Modal title="Resume by ID or import" onClose={close}>
 			<div class="resume-picker">
 				<Show when={resumeUnavailable()}>
 					{(message) => <div class="msg-notice">{message()}</div>}
@@ -215,19 +149,6 @@ export const ResumePicker: Component<{
 						</For>
 					</select>
 				</label>
-				<div class="field-row">
-					<input
-						type="text"
-						class="resume-search"
-						placeholder="Search sessions (ID, prefix, title, directory)…"
-						aria-label="Search resumable sessions"
-						value={query()}
-						onInput={(e) => {
-							setQuery(e.currentTarget.value);
-							void searchResume(e.currentTarget.value);
-						}}
-					/>
-				</div>
 
 				<div class="field-row">
 					<input
@@ -246,154 +167,106 @@ export const ResumePicker: Component<{
 					</button>
 				</div>
 
-				<Show when={ambiguous() !== null}>
-					<div class="resume-section-title">Multiple sessions match — choose one:</div>
-					<div class="picker-list">
-						<For each={ambiguous() ?? []}>
-							{(candidate) => <ResumeCandidateRow candidate={candidate} onChoose={choose} />}
-						</For>
-					</div>
-				</Show>
-
-				<div class="resume-section-title">
-					Resumable sessions{pinnedCount() > 0 ? ` (${pinnedCount()} resume-list pinned)` : ""}
+				<div class="resume-section-title">Import a Claude or Codex transcript</div>
+				<div class="field-row" role="radiogroup" aria-label="Foreign session source">
+					<button
+						type="button"
+						aria-pressed={importSource() === "claude"}
+						onClick={() => setForeignSource("claude")}
+					>
+						Claude
+					</button>
+					<button
+						type="button"
+						aria-pressed={importSource() === "codex"}
+						onClick={() => setForeignSource("codex")}
+					>
+						Codex
+					</button>
+					<button type="button" onClick={() => listForeign(importSource())}>
+						Refresh
+					</button>
+					<button type="button" onClick={() => fileInput?.click()}>
+						Upload file…
+					</button>
+					<input
+						ref={(el) => (fileInput = el)}
+						type="file"
+						accept=".jsonl,.json,application/json"
+						class="resume-upload-hidden"
+						aria-label="Upload a Claude or Codex transcript (.jsonl or .json)"
+						onChange={onFileSelected}
+					/>
 				</div>
+				<label class="field-row">
+					Authorized source root (optional)
+					<input
+						value={foreignRoot()}
+						onInput={(event) => setForeignRoot(event.currentTarget.value)}
+						placeholder="Configured fleet-host source directory"
+					/>
+					<button
+						type="button"
+						onClick={() => listForeign(importSource(), foreignRoot() || undefined)}
+					>
+						List authorized root
+					</button>
+				</label>
+				<label class="field-row">
+					Fallback directory when original no longer exists
+					<input
+						value={fallbackCwd()}
+						onInput={(event) => setFallbackCwd(event.currentTarget.value)}
+						placeholder="Attached workspace directory"
+					/>
+				</label>
+				<Show when={importError()}>{(message) => <div class="msg-notice">{message()}</div>}</Show>
 				<Show
-					when={!resumeLoading()}
-					fallback={<div class="tool-collapsed-note">loading sessions…</div>}
+					when={!importLoading()}
+					fallback={<div class="tool-collapsed-note">loading foreign sessions…</div>}
 				>
 					<Show
-						when={candidates().length > 0}
-						fallback={<div class="tool-collapsed-note">no resumable sessions</div>}
+						when={importCandidates().length > 0}
+						fallback={<div class="tool-collapsed-note">no foreign sessions found</div>}
 					>
 						<div class="picker-list">
-							<For each={candidates()}>
-								{(candidate) => <ResumeCandidateRow candidate={candidate} onChoose={choose} />}
+							<For each={importCandidates()}>
+								{(preview) => <ForeignSessionRow preview={preview} onPreview={previewImport} />}
 							</For>
 						</div>
 					</Show>
 				</Show>
-				<div class="resume-pin-legend">
-					★ = resume-list pin (picker ordering only). Not a credential/account pin (automatic OAuth
-					stickiness) and not a context pin (what the model keeps in context).
-				</div>
-
-				<div class="resume-section-title">
-					<button
-						type="button"
-						class="resume-toggle"
-						aria-expanded={showImport()}
-						onClick={() => setShowImport(!showImport())}
-					>
-						{showImport() ? "▾" : "▸"} Import a Claude/Codex transcript
-					</button>
-				</div>
-				<Show when={showImport()}>
-					<div class="field-row" role="radiogroup" aria-label="Foreign session source">
-						<button
-							type="button"
-							aria-pressed={importSource() === "claude"}
-							onClick={() => setForeignSource("claude")}
-						>
-							Claude
-						</button>
-						<button
-							type="button"
-							aria-pressed={importSource() === "codex"}
-							onClick={() => setForeignSource("codex")}
-						>
-							Codex
-						</button>
-						<button type="button" onClick={() => listForeign(importSource())}>
-							Refresh
-						</button>
-						<button type="button" onClick={() => fileInput?.click()}>
-							Upload file…
-						</button>
-						<input
-							ref={(el) => (fileInput = el)}
-							type="file"
-							accept=".jsonl,.json,application/json"
-							class="resume-upload-hidden"
-							aria-label="Upload a Claude or Codex transcript (.jsonl or .json)"
-							onChange={onFileSelected}
-						/>
-					</div>
-					<label class="field-row">
-						Authorized source root (optional)
-						<input
-							value={foreignRoot()}
-							onInput={(event) => setForeignRoot(event.currentTarget.value)}
-							placeholder="Configured fleet-host source directory"
-						/>
-						<button
-							type="button"
-							onClick={() => listForeign(importSource(), foreignRoot() || undefined)}
-						>
-							List authorized root
-						</button>
-					</label>
-					<label class="field-row">
-						Fallback directory when original no longer exists
-						<input
-							value={fallbackCwd()}
-							onInput={(event) => setFallbackCwd(event.currentTarget.value)}
-							placeholder="Attached workspace directory"
-						/>
-					</label>
-					<Show when={importError()}>{(message) => <div class="msg-notice">{message()}</div>}</Show>
-					<Show
-						when={!importLoading()}
-						fallback={<div class="tool-collapsed-note">loading foreign sessions…</div>}
-					>
-						<Show
-							when={importCandidates().length > 0}
-							fallback={<div class="tool-collapsed-note">no foreign sessions found</div>}
-						>
-							<div class="picker-list">
-								<For each={importCandidates()}>
-									{(preview) => <ForeignSessionRow preview={preview} onPreview={previewImport} />}
-								</For>
+				<Show when={importPreview()}>
+					{(preview) => (
+						<div class="resume-import-preview">
+							<div class="resume-section-title">Import preview</div>
+							<div>
+								{preview().title || preview().id} ({preview().sourceName})
 							</div>
-						</Show>
-					</Show>
-					<Show when={importPreview()}>
-						{(preview) => (
-							<div class="resume-import-preview">
-								<div class="resume-section-title">Import preview</div>
-								<div>
-									{preview().title || preview().id} ({preview().sourceName})
-								</div>
-								<div class="picker-detail">
-									{preview().messageCount} msgs · created {formatTime(preview().createdMs)} ·
-									modified {formatTime(preview().modifiedMs)}
-								</div>
-								<div class="picker-detail">{preview().cwd || "(no recorded directory)"}</div>
-								<Show when={preview().firstMessage}>
-									{(first) => <div class="picker-detail">“{first().slice(0, 200)}”</div>}
-								</Show>
-								<div class="resume-provenance-note">
-									Import creates a NEW native session and records {preview().sourceName} provenance
-									(source ID, path, directory). The foreign original is never modified. Uploads are
-									validated (JSON/JSONL, 64 MiB cap, no executables or symlinks) and staged only
-									until import or cancel.
-								</div>
-								<div class="modal-actions">
-									<button type="button" disabled={importLoading()} onClick={confirmImportSelection}>
-										Confirm import
-									</button>
-									<button
-										type="button"
-										onClick={() => {
-											cancelImport();
-										}}
-									>
-										Cancel
-									</button>
-								</div>
+							<div class="picker-detail">
+								{preview().messageCount} msgs · created {formatTime(preview().createdMs)} · modified{" "}
+								{formatTime(preview().modifiedMs)}
 							</div>
-						)}
-					</Show>
+							<div class="picker-detail">{preview().cwd || "(no recorded directory)"}</div>
+							<Show when={preview().firstMessage}>
+								{(first) => <div class="picker-detail">“{first().slice(0, 200)}”</div>}
+							</Show>
+							<div class="resume-provenance-note">
+								Import creates a NEW native session and records {preview().sourceName} provenance
+								(source ID, path, directory). The foreign original is never modified. Uploads are
+								validated (JSON/JSONL, 64 MiB cap, no executables or symlinks) and staged only until
+								import or cancel.
+							</div>
+							<div class="modal-actions">
+								<button type="button" disabled={importLoading()} onClick={confirmImportSelection}>
+									Confirm import
+								</button>
+								<button type="button" onClick={() => cancelImport()}>
+									Cancel
+								</button>
+							</div>
+						</div>
+					)}
 				</Show>
 
 				<Show when={resumeCloneRequest()}>
@@ -432,6 +305,9 @@ export const ResumePicker: Component<{
 				</Show>
 
 				<div class="modal-actions">
+					<button type="button" onClick={backToSessions}>
+						Back to sessions
+					</button>
 					<button type="button" onClick={close}>
 						Close
 					</button>

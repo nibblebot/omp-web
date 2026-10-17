@@ -422,6 +422,32 @@ export class SessionLogTailer {
 		return out;
 	}
 
+	/**
+	 * Fence a deleted session (acknowledged purge): its streams stop tracking
+	 * with no eof marker (the fleet purges its copy on the `session_deleted`
+	 * notice), and its restore/sidecar entries are dropped so a restart cannot
+	 * resurrect it. Other sessions are untouched.
+	 */
+	forgetSession(sessionId: string): void {
+		for (const stream of [...this.#streams.values()]) {
+			if (stream.sessionId !== sessionId) continue;
+			stream.closed = true;
+			stream.eofSent = true;
+			this.#untrack(stream);
+		}
+		for (const [key, session] of this.#sessions) {
+			if (session.sessionId === sessionId) this.#sessions.delete(key);
+		}
+		const prefix = `logs/${sessionId}/`;
+		for (const key of [...this.#restore.keys()]) {
+			if (key.startsWith(prefix)) this.#restore.delete(key);
+		}
+		for (const key of [...this.#sidecarRestore.keys()]) {
+			if (key.startsWith(prefix)) this.#sidecarRestore.delete(key);
+		}
+		this.#scheduleSidecarWrite();
+	}
+
 	status(): LogTailerStatus {
 		const sessions: LogTailerSessionStatus[] = [];
 		for (const session of this.#sessions.values()) {

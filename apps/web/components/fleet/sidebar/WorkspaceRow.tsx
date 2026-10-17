@@ -30,7 +30,8 @@ import {
 	state,
 	stopDaemonById,
 } from "../../../state";
-import { formatTimeAgo } from "../../../text/time-ago";
+import { projectLabelFromCwd, sessionStatus, type SessionRow } from "../../../store/session-list";
+import { SessionPickerRow } from "../../sessions/SessionPickerRow";
 import { ConfirmButton } from "../../ui/ConfirmButton";
 import { KebabMenu } from "../../ui/KebabMenu";
 import { useClickableRow } from "../../ui/PickerRow";
@@ -533,6 +534,19 @@ export const WorkspaceRow: Component<{
 							</div>
 						)}
 					</Show>
+					<Show when={clickable()}>
+						<button
+							type="button"
+							class="daemon-sessions-btn"
+							aria-expanded={sessionsOpen()}
+							onClick={(e) => {
+								e.stopPropagation();
+								sessionTitleClick();
+							}}
+						>
+							Sessions
+						</button>
+					</Show>
 					<Show when={!isWorktree() && !isRoot()}>
 						<div class="daemon-chips">
 							<Show when={isClone()}>
@@ -692,6 +706,7 @@ const DaemonSessionsDropdown: Component<{
 	const [sessions, setSessions] = createSignal<SessionListEntry[]>([]);
 	const [loading, setLoading] = createSignal(true);
 	const [error, setError] = createSignal<string | null>(null);
+	const nowMs = Date.now();
 
 	onMount(() => {
 		requestDaemonSessions(props.daemon.daemonId)
@@ -705,6 +720,26 @@ const DaemonSessionsDropdown: Component<{
 		props.daemon.daemonId === state.currentSessionId
 			? state.sessionFile
 			: props.daemon.lastSessionFile;
+
+	/** Dropdown rows in the shared SessionRow shape; this path carries no pin state. */
+	const rows = (): SessionRow[] =>
+		sessions().map((s) => {
+			const status = sessionStatus(s.status);
+			return {
+				id: s.id,
+				file: s.path,
+				...(s.name ? { title: s.name } : {}),
+				...(s.firstMessage ? { firstMessage: s.firstMessage } : {}),
+				...(status !== undefined ? { status } : {}),
+				cwd: s.cwd,
+				projectLabel: projectLabelFromCwd(s.cwd),
+				modifiedMs: s.modifiedAt,
+				messageCount: s.messageCount,
+				pinned: false,
+				scope: "local",
+				current: s.path === currentFile,
+			};
+		});
 
 	const resume = (path: string) => {
 		const id = props.daemon.daemonId;
@@ -729,7 +764,12 @@ const DaemonSessionsDropdown: Component<{
 	};
 
 	return (
-		<div class="daemon-session-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+		<div
+			class="daemon-session-menu"
+			role="group"
+			aria-label="Sessions in this worktree"
+			onClick={(e) => e.stopPropagation()}
+		>
 			{loading() ? (
 				<div class="daemon-session-note">loading sessions…</div>
 			) : error() !== null ? (
@@ -738,20 +778,18 @@ const DaemonSessionsDropdown: Component<{
 				<div class="daemon-session-note">no sessions yet</div>
 			) : (
 				<>
-					<div class="daemon-session-menu-hint">resume a session</div>
-					<For each={sessions()}>
-						{(s) => (
-							<button
-								type="button"
-								role="menuitem"
-								class="sidebar-menu-item daemon-session-item"
-								classList={{ active: currentFile === s.path }}
-								title={s.cwd}
-								onClick={() => resume(s.path)}
-							>
-								<span class="daemon-session-item-name">{s.name ?? s.id.slice(0, 8)}</span>
-								<span class="daemon-session-item-time">{formatTimeAgo(s.modifiedAt)}</span>
-							</button>
+					<div class="daemon-session-menu-hint">
+						Sessions in this worktree · last 10 · click to resume
+					</div>
+					<For each={rows()}>
+						{(row) => (
+							<SessionPickerRow
+								row={row}
+								active={false}
+								showProject={false}
+								nowMs={nowMs}
+								onChoose={() => resume(row.file)}
+							/>
 						)}
 					</For>
 				</>

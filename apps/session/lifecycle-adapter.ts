@@ -47,7 +47,7 @@ function isMissing(error: unknown): boolean {
 	return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-async function assertAbsent(path: string): Promise<void> {
+export async function assertAbsent(path: string): Promise<void> {
 	try {
 		await lstat(path);
 	} catch (error) {
@@ -57,16 +57,21 @@ async function assertAbsent(path: string): Promise<void> {
 	throw new Error(`Deleted session material still exists: ${path}`);
 }
 
-/** Only a real, managed, matching main journal can be destroyed. No symlink traversal. */
-async function deletionTarget(
-	entry: SessionEntry,
-	sessionsDir: string,
+/**
+ * Shared jail for every destructive session-file operation (delete, rename).
+ * The journal must resolve by realpath under `sessionsRoot`, be a regular
+ * non-symlink `.jsonl`, carry a header id equal to `expectedSessionId`, and
+ * have no unsafe artifact directory. No symlink traversal.
+ */
+export async function validateSessionJournal(
+	sessionsRoot: string,
+	sessionFile: string,
+	expectedSessionId?: string,
 ): Promise<LifecycleDeletionTarget> {
-	const sessionFile = entry.session.sessionFile;
 	if (!sessionFile || !sessionFile.endsWith(".jsonl")) {
 		throw new Error("Durable deletion requires a persisted file-backed session");
 	}
-	const root = await realpath(sessionsDir);
+	const root = await realpath(sessionsRoot);
 	const path = resolve(sessionFile);
 	const canonical = await realpath(path);
 	const rel = relative(root, canonical);
@@ -94,8 +99,12 @@ async function deletionTarget(
 			}
 		})
 		.find((record) => record?.type === "session");
-	if (header?.id !== entry.session.sessionId)
-		throw new Error("Session journal identity does not match the attached session");
+	const sessionId = header?.id;
+	if (
+		typeof sessionId !== "string" ||
+		(expectedSessionId !== undefined && sessionId !== expectedSessionId)
+	)
+		throw new Error("Session journal identity does not match the requested session");
 	const artifactPath = path.slice(0, -6);
 	try {
 		const artifactStat = await lstat(artifactPath);
@@ -104,10 +113,10 @@ async function deletionTarget(
 	} catch (error) {
 		if (!isMissing(error)) throw error;
 	}
-	return { sessionId: entry.session.sessionId, sessionFile: path };
+	return { sessionId, sessionFile: path };
 }
 
-async function syncDirectory(path: string): Promise<void> {
+export async function syncDirectory(path: string): Promise<void> {
 	const dir = await open(path, "r");
 	try {
 		await dir.sync();
@@ -181,7 +190,11 @@ export function createLifecycleMethods(deps: LifecycleDeps) {
 				await deps.mirror?.assertWritable(entry.session.sessionId);
 				await stop(entry, true);
 				await entry.session.sessionManager.flush();
-				const target = await deletionTarget(entry, deps.sessionsDir);
+				const target = await validateSessionJournal(
+					deps.sessionsDir,
+					entry.session.sessionFile ?? "",
+					entry.session.sessionId,
+				);
 				// SDK hooks may cancel only inside newSession(). Never delete first, and never
 				// use drop:true: that path catches deletion failure and logs-and-continues.
 				const ok = await entry.session.newSession();
@@ -192,10 +205,7 @@ export function createLifecycleMethods(deps: LifecycleDeps) {
 					if (!lease) throw new Error("Session is owned by another writer");
 					try {
 						// Revalidate the old file after releasing the SDK's outgoing writer.
-						const oldEntry = {
-							session: { sessionFile: target.sessionFile, sessionId: target.sessionId },
-						} as SessionEntry;
-						await deletionTarget(oldEntry, deps.sessionsDir);
+						await validateSessionJournal(deps.sessionsDir, target.sessionFile, target.sessionId);
 						await entry.session.sessionManager.dropSession(target.sessionFile);
 						await assertAbsent(target.sessionFile);
 						await assertAbsent(target.sessionFile.slice(0, -6));

@@ -20,13 +20,12 @@ import type {
 	McpTestResult,
 	ModelInfo,
 	ModelRoleCatalogEntry,
-	SessionListEntry,
 	SettingsItem,
 	SettingsModel,
 	SkillSummary,
 } from "#lib/wire/protocol";
 
-const T0 = Date.parse("2026-10-09T10:00:00Z");
+export const T0 = Date.parse("2026-10-09T10:00:00Z");
 const MIN = 60_000;
 
 // ---------------------------------------------------------------------------
@@ -465,8 +464,10 @@ export const resumeCandidates: ResumeCandidate[] = [
 		createdMs: T0 - 80 * MIN,
 		modifiedMs: T0 - 2 * MIN,
 		messageCount: 64,
-		status: "idle",
+		status: "complete",
 		firstMessage: "Write the six typed fixture modules for the showcase.",
+		recentText:
+			"Pinned the design-system fixtures; the showcase renders every overlay from typed modules.",
 		pinned: true,
 		scope: "local",
 	},
@@ -482,6 +483,15 @@ export const resumeCandidates: ResumeCandidate[] = [
 		scope: "global",
 	},
 ];
+
+/** resumeList reply for the picker stories: candidates, pins, and the local session dir. */
+export const resumeListReply = {
+	candidates: resumeCandidates,
+	pinnedIds: ["sess_9d2c"],
+	sessionDir: "/home/joshua/.omp/sessions/omp-web",
+	total: resumeCandidates.length,
+	allProjects: false,
+};
 
 /** ForeignSessionPreview list: Claude and Codex sessions offered for import. */
 export const foreignSessionPreviews: ForeignSessionPreview[] = [
@@ -691,41 +701,6 @@ export const browserUiRequestFailed: BrowserUiRequest = {
 // ---------------------------------------------------------------------------
 // Sessions, stats, and MCP results.
 // ---------------------------------------------------------------------------
-
-/** SessionListEntry list: SessionPicker rows, a named session, an unnamed one, and an older session in another repo. */
-export const sessionListEntries: SessionListEntry[] = [
-	{
-		path: "/home/joshua/.omp/sessions/omp-web/2026-10-09T09-40-12.jsonl",
-		id: "sess_09a41c",
-		name: "Bump SDK pins to 18.9",
-		cwd: "/home/joshua/Repos/omp-web",
-		modifiedAt: T0 + 2 * 60 * MIN,
-		messageCount: 39,
-	},
-	{
-		path: "/home/joshua/.omp/sessions/omp-web/2026-10-08T14-10-00.jsonl",
-		id: "sess_7c02be",
-		name: "Fix review anchor offsets",
-		cwd: "/home/joshua/Repos/omp-web",
-		modifiedAt: T0 - 20 * 60 * MIN,
-		messageCount: 87,
-	},
-	{
-		path: "/home/joshua/.omp/sessions/localaction/2026-10-07T16-45-00.jsonl",
-		id: "sess_4e18d3",
-		cwd: "/home/joshua/Repos/localaction",
-		modifiedAt: T0 - 26 * 60 * MIN,
-		messageCount: 6,
-	},
-	{
-		path: "/home/joshua/.omp/sessions/omp-web/2026-10-06T10-02-00.jsonl",
-		id: "sess_b9f210",
-		name: "Tune compaction thresholds",
-		cwd: "/home/joshua/Repos/omp-web",
-		modifiedAt: T0 - 3 * 24 * 60 * MIN,
-		messageCount: 112,
-	},
-];
 
 /** SessionStats: SessionStatsDialog totals for the attached session, with the context window nearly half used. */
 export const sessionStatsSummary: SessionStats = {

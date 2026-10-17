@@ -70,7 +70,7 @@ import {
 	executeShake,
 	handoffPreview,
 } from "./compaction-adapter";
-import { createLifecycleMethods } from "./lifecycle-adapter";
+import { createLifecycleMethods, type LifecycleMirror } from "./lifecycle-adapter";
 import { createComposerMethods } from "./composer-methods";
 import { createSettingsMethods } from "./settings-methods";
 import { cancelEntryUiRequests, rejectEntryUiRequests } from "./ui-context";
@@ -157,6 +157,8 @@ export interface WebMethodsDeps {
 	 * pair is the ONLY way a bare session id can be resolved against the
 	 * fleet store; without it, switchSession keeps its path semantics. */
 	hasCallbackPair: () => boolean;
+	/** Fleet mirror for acknowledged deletion; absent when no callback pair is active. */
+	lifecycleMirror?: LifecycleMirror;
 }
 
 export interface WebMethods {
@@ -761,6 +763,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		...createLifecycleMethods({
 			sessionsDir: deps.sessionsDir,
 			hasCallbackPair: deps.hasCallbackPair,
+			mirror: deps.lifecycleMirror,
 			assertWritable: async (entry) => {
 				if (entry.session.sessionFile == null || !entry.session.sessionFile.endsWith(".jsonl"))
 					throw new Error("Session lifecycle refused: no persisted file-backed session");
@@ -804,8 +807,15 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		}),
 		...Object.fromEntries(
 			Object.entries(
-				createResumeImportHandlers({ cwd: deps.cwd, sessionDir: deps.sessionsDir }),
-			).map(([name, handler]) => [name, (_entry: SessionEntry, args: unknown[]) => handler(args)]),
+				createResumeImportHandlers({
+					cwd: deps.cwd,
+					sessionsRoot: deps.sessionsDir,
+					lifecycleMirror: deps.lifecycleMirror,
+				}),
+			).map(([name, handler]) => [
+				name,
+				(entry: SessionEntry, args: unknown[]) => handler(args, entry),
+			]),
 		),
 		compactionSnapshot: async (entry) => compactionSnapshot(entry.session),
 		compactEx: async (entry, a) => {

@@ -9,7 +9,7 @@ import {
 	browserUiRequests,
 	downloadManifest,
 	foreignSessionPreviews,
-	resumeCandidates,
+	resumeListReply,
 } from "../../fixtures/overlays";
 import { rosterDaemon, rosterFleetState } from "../../fixtures/roster";
 import { chartScreenshot } from "../../fixtures/shared";
@@ -68,10 +68,11 @@ export default defineStory({
 		},
 		{
 			name: "Resume picker",
-			description: "openResumePicker(): ResumePicker lists resumable and importable sessions.",
+			description:
+				"openResumePicker(): ResumePicker resolves a session by id or path and offers Claude/Codex imports.",
 			seed: () => {
 				answerCalls({
-					resumeList: () => ({ candidates: resumeCandidates }),
+					resumeList: () => resumeListReply,
 					foreignList: () => ({ sessions: foreignSessionPreviews }),
 				});
 				openResumePicker();

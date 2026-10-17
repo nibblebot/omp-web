@@ -702,6 +702,8 @@ export type WebMethodName =
 	| "resumeResolve"
 	| "resumeList"
 	| "resumePinToggle"
+	| "resumeRename"
+	| "resumeDelete"
 	| "foreignList"
 	| "foreignPreview"
 	| "foreignImport"
@@ -1096,6 +1098,10 @@ export type SessionListEntry = {
 	cwd: string;
 	modifiedAt: number;
 	messageCount: number;
+	/** First user prompt, capped at 500 chars (picker subtitle). Absent on older daemons. */
+	firstMessage?: string;
+	/** Session outcome for the picker status dot. Absent on older daemons. */
+	status?: "complete" | "interrupted" | "aborted" | "error" | "pending" | "unknown";
 };
 // ---------------------------------------------------------------------------
 // Shared additive contracts (OMP_PROTO 2 frozen).

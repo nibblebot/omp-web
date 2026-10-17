@@ -458,7 +458,14 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 			.catch(showError),
 	delete: (args) => {
 		if (args.trim()) return pushNotice("error", "Usage: /delete takes no arguments.");
-		void call("deleteSession").catch(showError);
+		requestDangerConfirm({
+			title: "Delete this session?",
+			body: "The attached session's transcript and its artifacts are deleted permanently, and the daemon starts a new empty session in its place. This cannot be undone.",
+			confirmLabel: "Delete session",
+			onConfirm: () => {
+				void call("deleteSession").catch(showError);
+			},
+		});
 	},
 	dump: dumpRoute,
 	rename: (args) => {

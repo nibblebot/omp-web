@@ -36,8 +36,13 @@ import {
 	isDownloadBulkCommand,
 	serveDownloadBulk,
 } from "./download-manifest";
-import { FleetCallback, type FleetCallbackStatus } from "./fleet-callback";
+import {
+	CALLBACK_TRANSPORT_STREAM_ID,
+	FleetCallback,
+	type FleetCallbackStatus,
+} from "./fleet-callback";
 import { SessionLogTailer } from "./log-tailer";
+import type { LifecycleMirror } from "./lifecycle-adapter";
 import {
 	MaterializeSessionError,
 	materializeSessionToDir,
@@ -251,6 +256,27 @@ const collabSession = createCollabSession({
 	settings,
 	broker: daemonBroker,
 });
+/** Fleet lifecycle mirror for acknowledged session deletion (no-op unpaired).
+ *  Reads the callback pair and tailer declared below only when a deletion
+ *  runs, long after module init. */
+const lifecycleMirror: LifecycleMirror = {
+	assertWritable: async () => {
+		if (fleetCallback !== null && fleetCallback.status().state !== "ready") {
+			throw new Error("Session lifecycle refused: fleet callback is not ready");
+		}
+	},
+	purge: async (sessionId) => {
+		logTailer?.forgetSession(sessionId);
+		const callback = fleetCallback;
+		if (callback === null) return;
+		const result = callback.send({
+			streamId: CALLBACK_TRANSPORT_STREAM_ID,
+			kind: "control",
+			payload: { type: "session_deleted", sessionId },
+		});
+		if (result !== "sent") throw new Error(`Fleet cleanup notice not accepted (${result})`);
+	},
+};
 const {
 	methods: METHODS,
 	readOnly: READ_ONLY,
@@ -267,6 +293,7 @@ const {
 	sessionsDir,
 	cwd: config.cwd,
 	hasCallbackPair: () => fleetCallback !== null,
+	lifecycleMirror,
 });
 setOnStreamsEmpty(() => daemonBroker.stopDaemonPoll());
 setOnConsumerDetached((stream, reason) => {
@@ -624,6 +651,8 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 						cwd: i.cwd,
 						modifiedAt: i.modified.getTime(),
 						messageCount: i.messageCount,
+						firstMessage: i.firstMessage.slice(0, 500),
+						...(i.status !== undefined ? { status: i.status } : {}),
 					}))
 					.sort((x, y) => y.modifiedAt - x.modifiedAt)
 					.slice(0, 200);

@@ -75,6 +75,14 @@ import { computeDefaultSessionDir } from "@oh-my-pi/pi-coding-agent/session/sess
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { resolveSessionMainFile, sessionTreeExists } from "./session-materialize";
+import type { LifecycleMirror } from "./lifecycle-adapter";
+import {
+	deleteResumeSession,
+	renameResumeSession,
+	ResumeInputError,
+	type ResumeManageDeps,
+} from "./resume-manage";
+import type { SessionEntry } from "./session-entry";
 
 // ---------------------------------------------------------------------------
 // Shared shapes (JSON-safe; Dates are epoch millis, Sets are arrays)
@@ -94,6 +102,8 @@ export interface ResumeCandidate {
 	status?: SessionStatus;
 	/** Capped display snippet (never the full transcript). */
 	firstMessage: string;
+	/** Last <=600 chars of conversation text (preview pane). */
+	recentText?: string;
 	pinned: boolean;
 	scope: "local" | "global";
 }
@@ -146,6 +156,7 @@ function toCandidate(
 	scope: "local" | "global",
 	pinned: ReadonlySet<string>,
 ): ResumeCandidate {
+	const recentText = info.allMessagesText.slice(-600).trim();
 	return {
 		id: info.id,
 		sessionFile: info.path,
@@ -157,10 +168,12 @@ function toCandidate(
 		size: info.size,
 		...(info.status !== undefined ? { status: info.status } : {}),
 		firstMessage: info.firstMessage.slice(0, 500),
+		...(recentText.length > 0 ? { recentText } : {}),
 		pinned: pinned.has(info.id),
 		scope,
 	};
 }
+
 export interface ResumeQuery {
 	cwd: string;
 	sessionDir?: string;
@@ -287,10 +300,13 @@ export async function resolveResumeTarget(
 export interface ListResumeCandidatesOptions {
 	cwd: string;
 	sessionDir?: string;
+	/** Agent sessions root; required to list other projects (`allProjects`). */
+	sessionsRoot?: string;
 	agentDir?: string;
 	pinnedIds?: ReadonlySet<string>;
 	query?: string;
 	limit?: number;
+	allProjects?: boolean;
 }
 
 export interface ResumeListResult {
@@ -298,26 +314,33 @@ export interface ResumeListResult {
 	pinnedIds: string[];
 	sessionDir: string;
 	total: number;
+	allProjects: boolean;
 }
 
 /**
  * Picker listing: empties dropped (pins kept) via `filterSessionsForPicker`,
- * pinned-first via `sortPinnedFirst`, optional ID/prefix/title/cwd search.
- * Provenance: every row is a live local transcript (`scope: "local"`);
- * fleet-stored (read-only/unavailable) rows stay in the store/fleet-api.ts stored
- * surface, which never wakes compute.
+ * pinned-first via `sortPinnedFirst`, optional search over id/prefix, title,
+ * cwd, first prompt, and full conversation text. Without `allProjects` only
+ * this project's directory is listed (`scope: "local"`); with it every project
+ * under the sessions root is listed and other projects' rows are `"global"`.
  */
 export async function listResumeCandidates(
 	options: ListResumeCandidatesOptions,
 ): Promise<ResumeListResult> {
 	const sessionDir = options.sessionDir ?? resolveSessionDir({ cwd: options.cwd });
+	const allProjects = options.allProjects === true;
 	const storage = new FileSessionStorage();
 	const [sessions, pinned] = await Promise.all([
-		listSessions(sessionDir, storage),
+		allProjects
+			? listAllSessions(storage, options.sessionsRoot)
+			: listSessions(sessionDir, storage),
 		options.pinnedIds !== undefined
 			? Promise.resolve(options.pinnedIds)
 			: loadPinnedSessionIds(options.agentDir),
 	]);
+	const localDir = path.resolve(sessionDir);
+	const scopeOf = (s: SessionInfo): "local" | "global" =>
+		allProjects && path.dirname(path.resolve(s.path)) !== localDir ? "global" : "local";
 	const q = (options.query ?? "").trim().toLowerCase();
 	const searched =
 		q.length === 0
@@ -326,7 +349,9 @@ export async function listResumeCandidates(
 					(s) =>
 						matchesResumeArg(s.id, s.path, q) ||
 						(s.title ?? "").toLowerCase().includes(q) ||
-						s.cwd.toLowerCase().includes(q),
+						s.cwd.toLowerCase().includes(q) ||
+						s.firstMessage.toLowerCase().includes(q) ||
+						s.allMessagesText.toLowerCase().includes(q),
 				);
 	const picked = filterSessionsForPicker(searched, pinned);
 	const ordered = sortPinnedFirst(picked, pinned);
@@ -335,10 +360,11 @@ export async function listResumeCandidates(
 		RESUME_LIST_MAX_LIMIT,
 	);
 	return {
-		candidates: ordered.slice(0, limit).map((s) => toCandidate(s, "local", pinned)),
+		candidates: ordered.slice(0, limit).map((s) => toCandidate(s, scopeOf(s), pinned)),
 		pinnedIds: [...pinned],
 		sessionDir,
 		total: ordered.length,
+		allProjects,
 	};
 }
 
@@ -362,10 +388,6 @@ export async function toggleResumePin(
 			: await toggleSessionPin(sessionId, agentDir);
 	const pinnedIds = await loadPinnedSessionIds(agentDir);
 	return { pinned, pinnedIds: [...pinnedIds] };
-}
-
-export class ResumeInputError extends Error {
-	readonly code = "invalid_request" as const;
 }
 
 // ---------------------------------------------------------------------------
@@ -947,6 +969,10 @@ export interface ResumeImportContext extends ResumeQuery {
 	materialize?: ResumeLineageDeps["materialize"];
 	isWorkspaceLive?: ResumeLineageDeps["isWorkspaceLive"];
 	resumeClonePathFor?: ResumeLineageDeps["resumeClonePathFor"];
+	/** Agent sessions root (every project dir); lineage and cross-project listing. */
+	sessionsRoot?: string;
+	/** Fleet mirror for acknowledged deletion; absent on unpaired daemons. */
+	lifecycleMirror?: LifecycleMirror;
 }
 
 function argAt(args: unknown[], index: number): Record<string, unknown> {
@@ -969,10 +995,10 @@ function strField(obj: Record<string, unknown>, key: string): string | undefined
  */
 export function createResumeImportHandlers(
 	ctx: ResumeImportContext,
-): Record<string, (args: unknown[]) => Promise<unknown>> {
+): Record<string, (args: unknown[], entry?: SessionEntry) => Promise<unknown>> {
 	const sessionsDir = resolveSessionDir(ctx);
 	const lineageDeps: ResumeLineageDeps = {
-		sessionsDir,
+		sessionsDir: ctx.sessionsRoot ?? sessionsDir,
 		...(ctx.materialize ? { materialize: ctx.materialize } : {}),
 		...(ctx.isWorkspaceLive ? { isWorkspaceLive: ctx.isWorkspaceLive } : {}),
 		...(ctx.resumeClonePathFor ? { resumeClonePathFor: ctx.resumeClonePathFor } : {}),
@@ -1029,10 +1055,26 @@ export function createResumeImportHandlers(
 		await assertImportableFile(selection.info);
 		return selection;
 	}
+	function manageDeps(entry?: SessionEntry): ResumeManageDeps {
+		if (ctx.sessionsRoot === undefined) {
+			throw new Error("Session management requires the agent sessions root");
+		}
+		return {
+			sessionsRoot: ctx.sessionsRoot,
+			...(entry !== undefined ? { attached: entry } : {}),
+			...(ctx.lifecycleMirror !== undefined ? { mirror: ctx.lifecycleMirror } : {}),
+			unpin: async (sessionId) => {
+				if ((await loadPinnedSessionIds(ctx.agentDir)).has(sessionId)) {
+					await toggleResumePin(sessionId, ctx.agentDir);
+				}
+			},
+		};
+	}
 	return {
 		getResumeCapabilities: async () => ({
 			resolve: { available: true } satisfies ResumeCapability,
 			pins: { available: true } satisfies ResumeCapability,
+			manage: { available: true } satisfies ResumeCapability,
 			foreignImport: { available: true } satisfies ResumeCapability,
 			lineage: (ctx.materialize
 				? { available: true }
@@ -1058,7 +1100,9 @@ export function createResumeImportHandlers(
 			return listResumeCandidates({
 				cwd: ctx.cwd,
 				sessionDir: ctx.sessionDir,
+				sessionsRoot: ctx.sessionsRoot,
 				agentDir: ctx.agentDir,
+				allProjects: obj.allProjects === true,
 				...(query !== undefined ? { query } : {}),
 				...(limit !== undefined ? { limit } : {}),
 			});
@@ -1067,6 +1111,23 @@ export function createResumeImportHandlers(
 			const obj = argAt(args, 0);
 			const sessionId = strField(obj, "sessionId") ?? "";
 			return toggleResumePin(sessionId, ctx.agentDir);
+		},
+		resumeRename: async (args, entry) => {
+			const obj = argAt(args, 0);
+			return renameResumeSession(
+				{ sessionFile: strField(obj, "sessionFile") ?? "", title: strField(obj, "title") ?? "" },
+				manageDeps(entry),
+			);
+		},
+		resumeDelete: async (args, entry) => {
+			const obj = argAt(args, 0);
+			return deleteResumeSession(
+				{
+					sessionFile: strField(obj, "sessionFile") ?? "",
+					sessionId: strField(obj, "sessionId") ?? "",
+				},
+				manageDeps(entry),
+			);
 		},
 		foreignList: async (args) => {
 			const obj = argAt(args, 0);
