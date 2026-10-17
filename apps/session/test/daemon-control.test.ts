@@ -374,16 +374,17 @@ describe("daemon-control browser-stream count (FLEET-05)", () => {
 	});
 });
 
-test("a live backlog past the ring budget mid-prime abandons the prime with one stream_resync", async () => {
-	// Pins the held-overflow trigger: a prime still waiting for outbound room
-	// holds live frames; past RING_MAX_BYTES it is abandoned with stream_resync
-	// and the client re-primes. When live output outruns the prime, this repeats:
-	// the stream_reset + hello_ok cycle.
+test("a live backlog past the ring budget mid-prime re-primes in place with no stream_resync", async () => {
+	// Held-overflow trigger: a prime still waiting for outbound room holds live
+	// frames; past RING_MAX_BYTES the prime restarts in place. The restart's
+	// snapshot covers the superseded deltas, so the client is never reset and no
+	// held frame is replayed.
 	let jammed = true;
+	let builds = 0;
 	const built = Promise.withResolvers<void>();
-	const { control, sent, primes } = makeHarness(
+	const { control, sent, primes, sentCount } = makeHarness(
 		() => {
-			// build() runs only after the prime has set its deferred backlog.
+			builds++;
 			built.resolve();
 			return [{ type: "state", state: {} }];
 		},
@@ -396,14 +397,63 @@ test("a live backlog past the ring budget mid-prime abandons the prime with one 
 	await built.promise;
 	const blob = "x".repeat(1024 * 1024);
 	for (let i = 0; i < 5; i++) control.mirror({ type: "event", event: { i, blob } });
-	const resyncs = sent.filter(
-		(s) => s.streamId === STREAM && s.kind === "control" && typeOf(s.payload) === "stream_resync",
-	);
-	expect(resyncs).toHaveLength(1);
-	// The abandoned prime never writes its snapshot, and nothing re-primes
-	// without the client's reconnect.
+	// The restart is a second prime on the same stream; nothing is reset.
+	expect(primes).toHaveLength(2);
+	expect(
+		sent.some(
+			(s) => s.streamId === STREAM && s.kind === "control" && typeOf(s.payload) === "stream_resync",
+		),
+	).toBe(false);
+	// The superseded prime never wrote its snapshot.
 	expect(sent.some((s) => s.streamId === STREAM && typeOf(s.payload) === "state")).toBe(false);
-	expect(primes).toHaveLength(1);
+	// Release the jam: the restarted prime writes its single snapshot frame.
+	const sentBefore = sent.length;
 	jammed = false;
+	await sentCount(sentBefore + 1);
+	expect(builds).toBe(2);
+	expect(sent.filter((s) => s.streamId === STREAM && typeOf(s.payload) === "state")).toHaveLength(
+		1,
+	);
+	// Superseded held deltas are never replayed after the restarted snapshot.
+	const snapshotAt = sent.findIndex((s) => s.streamId === STREAM && typeOf(s.payload) === "state");
+	expect(
+		sent.slice(snapshotAt + 1).some((s) => s.streamId === STREAM && typeOf(s.payload) === "event"),
+	).toBe(false);
+	control.stop();
+});
+
+test("sustained output with a full-speed client primes without a reset loop", async () => {
+	// Live output keeps arriving while the prime drains. A full-speed client
+	// never overflows the held budget, so the prime completes once and every
+	// live delta lands in order, with no stream_resync.
+	const { control, sent, primes, sentCount } = makeHarness(() => [{ type: "state", state: {} }]);
+	openStream(control);
+	const blob = "x".repeat(1024 * 1024);
+	for (let i = 0; i < 40; i++) {
+		const before = sent.length;
+		control.mirror({ type: "event", event: { i, blob } });
+		await sentCount(before + 1);
+	}
+	// state + 40 live deltas.
+	await sentCount(41);
+	expect(primes).toHaveLength(1);
+	expect(
+		sent.some(
+			(s) => s.streamId === STREAM && s.kind === "control" && typeOf(s.payload) === "stream_resync",
+		),
+	).toBe(false);
+	expect(sent.filter((s) => s.streamId === STREAM && typeOf(s.payload) === "state")).toHaveLength(
+		1,
+	);
+	const eventIndex = (payload: unknown): number => {
+		if (typeof payload !== "object" || payload === null || !("event" in payload)) return -1;
+		const { event } = payload;
+		if (typeof event !== "object" || event === null || !("i" in event)) return -1;
+		return typeof event.i === "number" ? event.i : -1;
+	};
+	const indices = sent
+		.filter((s) => s.streamId === STREAM && typeOf(s.payload) === "event")
+		.map((s) => eventIndex(s.payload));
+	expect(indices).toEqual(Array.from({ length: 40 }, (_, i) => i));
 	control.stop();
 });

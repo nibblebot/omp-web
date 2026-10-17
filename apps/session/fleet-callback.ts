@@ -396,6 +396,8 @@ export class FleetCallback {
 	#reconnects = 0;
 	#renewals = 0;
 	#readyCount = 0;
+	/** Highest seq assigned on any pair. Seq stays monotonic across pair replacements so the fleet floor and the daemon ring share one space. */
+	#seqHigh = 0;
 	#backoffAttempt = 0;
 	#backoffTimer: ReturnType<typeof setTimeout> | null = null;
 	#backoffResolve: ((stopped: boolean) => void) | null = null;
@@ -846,7 +848,7 @@ export class FleetCallback {
 	#newPair(): PairHandle {
 		return {
 			connectionId: crypto.randomUUID(),
-			seq: 0,
+			seq: this.#seqHigh,
 			upBytes: 0,
 			upSettled: Promise.resolve(),
 			downSettled: Promise.resolve(),
@@ -1231,13 +1233,14 @@ export class FleetCallback {
 	}
 
 	#emit(pair: PairHandle, item: PendingItem): CallbackEnvelope {
+		pair.seq = ++this.#seqHigh;
 		return {
 			version: OMP_CALLBACK_PROTO,
 			workspaceId: this.#workspaceId,
 			generation: this.#generation,
 			connectionId: pair.connectionId,
 			streamId: item.streamId,
-			seq: ++pair.seq,
+			seq: pair.seq,
 			kind: item.kind,
 			payload: item.payload,
 			at: Date.now(),

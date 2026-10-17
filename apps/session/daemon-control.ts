@@ -154,7 +154,7 @@ interface BrowserStream {
 	 * frames already reflected in the snapshot are never delivered twice and
 	 * later frames never land before the history they extend.
 	 */
-	deferred: Record<string, unknown>[] | null;
+	deferred: Array<{ frame: Record<string, unknown>; bytes: number }> | null;
 	deferredBytes: number;
 }
 
@@ -317,22 +317,24 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 
 	/**
 	 * Deliver one live frame to a browser stream, or hold it while that
-	 * stream's prime is in flight. A held backlog past the ring budget
-	 * abandons the prime with stream_resync; the client reconnects and
-	 * primes fresh.
+	 * stream's prime is in flight. A held backlog past the ring budget restarts
+	 * the prime in place, which supersedes the held frames (bounded memory).
+	 * Nothing is reset on the client.
 	 */
 	const deliver = (stream: BrowserStream, frame: Record<string, unknown>): void => {
 		if (stream.deferred === null) {
 			emit(stream.streamId, "frame", frame);
 			return;
 		}
-		stream.deferred.push(frame);
-		stream.deferredBytes += JSON.stringify(frame).length;
+		const bytes = JSON.stringify(frame).length;
+		stream.deferred.push({ frame, bytes });
+		stream.deferredBytes += bytes;
 		if (stream.deferredBytes <= RING_MAX_BYTES) return;
-		stream.epoch++;
-		stream.deferred = null;
-		stream.deferredBytes = 0;
-		emit(stream.streamId, "control", { type: "stream_resync" } satisfies StreamResyncControl);
+		// Supersede the backlog: a fresh prime rebuilds the snapshot from current
+		// state, which covers every held delta, so the held frames are dropped rather
+		// than replayed. Its hello_ok replaces the partial burst on this same stream:
+		// no stream_resync and no client reconnect.
+		prime(stream);
 	};
 
 	/**
@@ -349,16 +351,19 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		const run = async (): Promise<void> => {
 			const build = await deps.preparePriming();
 			if (stopped || streams.get(stream.streamId) !== stream || stream.epoch !== epoch) return;
-			const held: Record<string, unknown>[] = [];
+			const held: NonNullable<BrowserStream["deferred"]> = [];
 			stream.deferred = held;
 			for (const frame of build()) {
 				if (!(await waitForRoom(stream, epoch))) return;
 				emit(stream.streamId, "frame", frame);
 			}
-			// `held` keeps growing while this drains; the loop bound re-reads it.
-			for (let i = 0; i < held.length; i++) {
+			// Drained entries leave the backlog and its byte count, so the budget bounds
+			// what is still outstanding, not everything the prime has ever seen.
+			while (held.length > 0) {
 				if (!(await waitForRoom(stream, epoch))) return;
-				emit(stream.streamId, "frame", held[i]!);
+				const entry = held.shift()!;
+				stream.deferredBytes -= entry.bytes;
+				emit(stream.streamId, "frame", entry.frame);
 			}
 			stream.deferred = null;
 			stream.deferredBytes = 0;

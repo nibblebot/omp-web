@@ -1606,8 +1606,8 @@ if (config.callbackUrl !== undefined) {
 	// Once the pair is ready (fleet pair_ready observed) start streaming
 	// session logs over it; tailer start() is sync (initial scan + watcher).
 	void fleetCallback.start().then(() => {
-		logTailer?.start();
 		daemonControl?.onPairChange();
+		logTailer?.start();
 	});
 }
 
