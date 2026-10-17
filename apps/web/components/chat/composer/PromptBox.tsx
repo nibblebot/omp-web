@@ -3,15 +3,7 @@ import { dispatchInput, parseInput, type InputMode } from "../../../prompt/comma
 import { PromptHistory } from "../../../prompt/history";
 import type { ImageArg } from "#lib/wire/protocol";
 import { composeTextAttachments, type TextAttachment } from "../../../prompt/attachments";
-import {
-	dequeueLastQueued,
-	isReady,
-	pushNotice,
-	pushToast,
-	setState,
-	state,
-	stopTurn,
-} from "../../../state";
+import { dequeueLastQueued, isReady, pushNotice, pushToast, state, stopTurn } from "../../../state";
 import {
 	cancelScheduledDraftSave,
 	clearDraft,
@@ -22,6 +14,7 @@ import {
 	takeClearedDraft,
 	type DraftBody,
 } from "../../../store/drafts";
+import { openDock } from "../../../store/dock";
 import { AskBar } from "../../requests/AskBar";
 import { ExtensionUi } from "../../requests/ExtensionUi";
 import { PromptActions } from "./PromptActions";
@@ -181,7 +174,7 @@ export const PromptBox: Component = () => {
 				const now = Date.now();
 				if (now - lastEsc <= 500) {
 					lastEsc = 0;
-					setState("modal", "branch");
+					openDock("tree");
 				} else lastEsc = now;
 			} else lastEsc = 0;
 			return;

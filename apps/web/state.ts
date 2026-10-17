@@ -213,7 +213,6 @@ export type ModalName =
 	| "stats"
 	| "settings"
 	| "sessions"
-	| "branch"
 	| "subagents"
 	| "login"
 	| "goal"

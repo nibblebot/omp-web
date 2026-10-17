@@ -1,15 +1,15 @@
-import { SessionTreeDialog } from "../../../web/components/sessions/SessionTreeDialog";
+import { SessionTreePanel } from "../../../web/components/sessions/SessionTreePanel";
 import { setState } from "../../../web/state";
 import { sessionGraphPage, sessionGraphPageMore } from "../../fixtures/dialogs";
 import { answerCalls } from "../../daemon";
 import { defineStory } from "../../registry";
 
 export default defineStory({
-	id: "sessions-session-tree-dialog",
-	title: "SessionTreeDialog",
+	id: "sessions-session-tree-panel",
+	title: "SessionTreePanel",
 	component: {
-		file: "apps/web/components/sessions/SessionTreeDialog.tsx",
-		export: "SessionTreeDialog",
+		file: "apps/web/components/sessions/SessionTreePanel.tsx",
+		export: "SessionTreePanel",
 	},
 	tabs: true,
 	variants: [
@@ -19,7 +19,7 @@ export default defineStory({
 				setState("capabilities", { graph: { available: true } });
 				answerCalls({ getSessionGraph: () => sessionGraphPage });
 			},
-			render: (ctx) => <SessionTreeDialog onClose={ctx.close} />,
+			render: () => <SessionTreePanel />,
 		},
 		{
 			name: "Paged tree",
@@ -27,7 +27,7 @@ export default defineStory({
 				setState("capabilities", { graph: { available: true } });
 				answerCalls({ getSessionGraph: () => sessionGraphPageMore });
 			},
-			render: (ctx) => <SessionTreeDialog onClose={ctx.close} />,
+			render: () => <SessionTreePanel />,
 		},
 		{
 			name: "Graph unavailable",
@@ -36,7 +36,7 @@ export default defineStory({
 					graph: { available: false, reason: "Upgrade omp to 14.2 to browse the session graph." },
 				});
 			},
-			render: (ctx) => <SessionTreeDialog onClose={ctx.close} />,
+			render: () => <SessionTreePanel />,
 		},
 		{
 			name: "Load failed",
@@ -48,7 +48,7 @@ export default defineStory({
 					},
 				});
 			},
-			render: (ctx) => <SessionTreeDialog onClose={ctx.close} />,
+			render: () => <SessionTreePanel />,
 		},
 	],
 });

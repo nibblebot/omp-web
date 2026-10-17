@@ -1,7 +1,9 @@
 import type { ImageArg } from "#lib/wire/protocol";
-import { call, pushNotice, setPromptInsert, setState, state } from "../state";
+import { createSignal } from "solid-js";
+import { call, pushNotice, setPromptInsert, state } from "../state";
 import type { AskOption, AskQuestion } from "../prompt/ask-types";
 import { stashUnsent } from "./drafts";
+import { openDock } from "./dock";
 import { invalidateMentions } from "./models";
 
 /** Authoritative session tree, keyed by stable entry IDs. Optional graph
@@ -85,22 +87,25 @@ let generation = 0;
 let cachedPage: GraphPage | null = null;
 const askProbes = new Map<string, { revision: string; generation: number }>();
 
-/** Prefilter consumed once by SessionTreePanel on mount when a card has no
- * stable entry ID. Text narrows presentation only; it never selects identity. */
-let branchModalPrefilter: string | null = null;
+/** Filter text seeded into the session tree pane when a card has no stable
+ * entry ID. Text narrows presentation only; it never selects identity. */
+const [treeSeed, setTreeSeed] = createSignal<string | null>(null);
 
-export function armBranchModalPrefilter(text: string): void {
-	branchModalPrefilter = text;
+export { treeSeed };
+
+export function seedTreeFilter(text: string): void {
+	setTreeSeed(text);
 }
 
-export function consumeBranchModalPrefilter(): string | null {
-	const v = branchModalPrefilter;
-	branchModalPrefilter = null;
+/** Take and clear the pending seed; the tree pane applies it to its filter. */
+export function takeTreeSeed(): string | null {
+	const v = treeSeed();
+	if (v !== null) setTreeSeed(null);
 	return v;
 }
 
 /** Called after any transcript-replacing event the browser can observe
- *  (successful branch/navigate, modal mount after reconnect). Clears the
+ *  (successful branch/navigate, tree pane mount after reconnect). Clears the
  *  mirror; the next load fetches the authoritative page. */
 export function noteTranscriptReplaced(): void {
 	generation += 1;
@@ -140,7 +145,7 @@ export async function loadGraph(query: GraphQuery = {}): Promise<GraphPage> {
 }
 
 /** Siblings share a parentId. Only meaningful within the loaded page; the
- *  modal labels it as such instead of claiming full lineage. */
+ *  tree pane labels it as such instead of claiming full lineage. */
 export function siblingsOf(node: GraphNode, nodes: GraphNode[]): GraphNode[] {
 	return nodes.filter(
 		(n) => n.id !== node.id && n.parentId === node.parentId && node.parentId !== null,
@@ -217,7 +222,6 @@ export async function branchFromEntry(entryId: string): Promise<NavigateOutcome>
 	if (!result || result.cancelled) return { kind: "cancelled" };
 	noteTranscriptReplaced();
 	pushNotice("info", `Branched to a new session file at: ${(result.text ?? "").slice(0, 200)}`);
-	setState("modal", null);
 	return { kind: "branched", text: result.text ?? "" };
 }
 
@@ -282,8 +286,8 @@ export async function branchFromCard(opts: {
 		await branchFromEntry(opts.entryId);
 		return;
 	}
-	armBranchModalPrefilter(opts.text.slice(0, 80));
+	seedTreeFilter(opts.text.slice(0, 80));
 	stashUnsent();
-	setState("modal", "branch");
+	openDock("tree");
 	pushNotice("info", "This message has no entry ID — pick the exact node to branch from.");
 }

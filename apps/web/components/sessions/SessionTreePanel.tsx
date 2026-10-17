@@ -1,12 +1,22 @@
-import { createMemo, createSignal, For, onMount, Show, type Component } from "solid-js";
-import { pushNotice, setState } from "../../state";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	on,
+	onMount,
+	Show,
+	type Component,
+} from "solid-js";
+import { pushNotice } from "../../state";
 import { PickerRow } from "../ui/PickerRow";
 import {
 	branchFromEntry,
 	completeAskReanswer,
-	consumeBranchModalPrefilter,
 	loadGraph,
 	navigateToEntry,
+	takeTreeSeed,
+	treeSeed,
 	type GraphFilter,
 	type GraphNode,
 	type GraphPage,
@@ -15,11 +25,11 @@ import { stashUnsent } from "../../store/drafts";
 import type { AskQuestion } from "../../prompt/ask-types";
 
 /**
- * Session tree body, shell-less so a docked pane can re-host it. Mirrors the
+ * Session tree pane body, hosted by the dock (DockHost). Mirrors the
  * TUI tree selector: nodes indented by depth, the active path marked, server
  * filters, Up/Down to move, Enter to navigate, Shift+Enter to navigate with an
  * abandoned-branch summary. Navigate stays in this file; Branch copies to a
- * new file. Esc is owned by the Modal shell that hosts this body.
+ * new file. Selecting a node keeps the pane open and the transcript follows.
  */
 
 const FILTERS: Array<{ value: GraphFilter; label: string }> = [
@@ -93,7 +103,7 @@ export function activePath(nodes: GraphNode[], leafId: string | null): Set<strin
 	return path;
 }
 
-export const SessionTreePanel: Component<{ onClose: () => void }> = (props) => {
+export const SessionTreePanel: Component = () => {
 	const [page, setPage] = createSignal<GraphPage | null>(null);
 	const [error, setError] = createSignal<string | null>(null);
 	const [filter, setFilter] = createSignal("");
@@ -139,10 +149,23 @@ export const SessionTreePanel: Component<{ onClose: () => void }> = (props) => {
 		// Stash the leaving composer's unsent text (Main preserved on focus
 		// changes); navigation restores returned editorText explicitly.
 		stashUnsent();
-		const pre = consumeBranchModalPrefilter();
+		const pre = takeTreeSeed();
 		if (pre) setFilter(pre);
 		refresh();
 	});
+	// A card branch re-seeds the filter even when the pane is already open.
+	createEffect(
+		on(
+			treeSeed,
+			(seed) => {
+				if (seed === null) return;
+				takeTreeSeed();
+				setFilter(seed);
+				refresh();
+			},
+			{ defer: true },
+		),
+	);
 
 	const onFilterInput = (value: string): void => {
 		setFilter(value);
@@ -215,8 +238,7 @@ export const SessionTreePanel: Component<{ onClose: () => void }> = (props) => {
 						? "Navigated (same file) — abandoned branch summarized."
 						: "Navigated (same file) — previous branch preserved.",
 				);
-				setState("modal", null);
-				props.onClose();
+				refresh();
 			})
 			.catch((err) => {
 				setBusyId(null);
@@ -228,7 +250,10 @@ export const SessionTreePanel: Component<{ onClose: () => void }> = (props) => {
 		if (busyId()) return;
 		setBusyId(node.id);
 		void branchFromEntry(node.id)
-			.then(() => setBusyId(null))
+			.then(() => {
+				setBusyId(null);
+				refresh();
+			})
 			.catch((err) => {
 				setBusyId(null);
 				setError(String(err instanceof Error ? err.message : err));
@@ -243,8 +268,7 @@ export const SessionTreePanel: Component<{ onClose: () => void }> = (props) => {
 			.then(() => {
 				setBusyId(null);
 				setAskReopen(null);
-				setState("modal", null);
-				props.onClose();
+				refresh();
 			})
 			.catch((err) => {
 				setBusyId(null);

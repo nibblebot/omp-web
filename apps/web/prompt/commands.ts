@@ -23,6 +23,7 @@ import {
 	type BashResultLike,
 	type ModalName,
 } from "../state";
+import { openDock } from "../store/dock";
 import { downloadArchive, downloadHtml, downloadRequest, downloadText } from "../store/downloads";
 import { queuedAnnotationIds, withQueuedAnnotations } from "../store/review";
 
@@ -393,8 +394,8 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 		void call("clearSession").catch(showError);
 	},
 	resume: resumeRoute,
-	tree: () => setState("modal", "branch"),
-	branch: () => setState("modal", "branch"),
+	tree: () => openDock("tree"),
+	branch: () => openDock("tree"),
 	export: exportRoute,
 	retry: (args) => {
 		if (args.trim()) {

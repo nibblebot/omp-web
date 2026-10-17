@@ -16,7 +16,6 @@ import { DangerConfirmDialog } from "./components/requests/DangerConfirmDialog";
 import { DownloadDialog } from "./components/requests/DownloadDialog";
 import { ResumePicker } from "./components/sessions/ResumePicker";
 import { SessionPicker } from "./components/sessions/SessionPicker";
-import { SessionTreeDialog } from "./components/sessions/SessionTreeDialog";
 import { SettingsSheet } from "./components/settings/SettingsSheet";
 import { SubagentsDialog } from "./components/subagents/SubagentsDialog";
 import { SessionStatsDialog } from "./components/usage/SessionStatsDialog";
@@ -62,7 +61,6 @@ export const ModalHost: Component = () => {
 		stats: () => <SessionStatsDialog onClose={close} />,
 		settings: () => <SettingsSheet onClose={close} />,
 		sessions: () => <SessionPicker onClose={close} />,
-		branch: () => <SessionTreeDialog onClose={close} />,
 		subagents: () => <SubagentsDialog onClose={close} />,
 		login: () => <ProviderLoginDialog onClose={close} />,
 		goal: () => featureModalHost("goal"),

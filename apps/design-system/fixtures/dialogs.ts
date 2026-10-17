@@ -79,7 +79,7 @@ export const askLongQuestions: AskQuestion[] = [
 		question: "Which story groups should be regenerated?",
 		options: [
 			{ label: "requests-ask-bar" },
-			{ label: "sessions-session-tree-dialog" },
+			{ label: "sessions-session-tree-panel" },
 			{ label: "requests-extension-ui" },
 			{ label: "requests-btw-sheet" },
 			{ label: "chat-controls-compaction-dialog" },
@@ -265,7 +265,7 @@ export function btwTranscriptFor(recordId: string): BtwTranscriptTurnView[] {
 }
 
 // ---------------------------------------------------------------------------
-// Session tree (SessionTreeDialog): daemon answer for getSessionGraph.
+// Session tree (SessionTreePanel): daemon answer for getSessionGraph.
 // ---------------------------------------------------------------------------
 
 function node(
@@ -298,7 +298,7 @@ const graphNodes: GraphNode[] = [
 		"n05",
 		"n02",
 		"assistant",
-		"SessionTreeDialog shows the tree when the capability is on",
+		"SessionTreePanel shows the tree when the capability is on",
 		92,
 		1,
 	),
@@ -451,7 +451,7 @@ export const fleetLogEntries: FleetDebug["log"] = [
 export const promptHistoryEntries: string[] = [
 	"Read the overlay components and list their props",
 	"Split the stories by tier and keep fixtures typed",
-	"Why does SessionTreeDialog show the unavailable header?",
+	"Why does SessionTreePanel show the unavailable header?",
 	"Add a variant for the remote compaction refusal",
 	"Run the type check once the overlay stories land",
 	"Explain the call relay used by the design server",

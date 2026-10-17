@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { activePath, depthIndex } from "../../components/sessions/SessionTreePanel";
-import type { GraphNode } from "../../store/graph";
+import { seedTreeFilter, takeTreeSeed, type GraphNode } from "../../store/graph";
 
 function node(id: string, parentId: string | null, type: GraphNode["type"] = "user"): GraphNode {
 	return {
@@ -61,5 +61,13 @@ describe("activePath", () => {
 
 	test("stops at the loaded root when an ancestor is not on the page", () => {
 		expect([...activePath([node("leaf", "gone")], "leaf")]).toEqual(["leaf"]);
+	});
+});
+
+describe("tree seed", () => {
+	test("a seeded filter is taken once and then cleared", () => {
+		seedTreeFilter("fork point");
+		expect(takeTreeSeed()).toBe("fork point");
+		expect(takeTreeSeed()).toBeNull();
 	});
 });
