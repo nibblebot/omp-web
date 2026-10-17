@@ -9,8 +9,17 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	symlinkSync,
+	truncateSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, sep } from "node:path";
 import { writeArchive } from "@oh-my-pi/pi-utils/ar";
 import { ExportError } from "#lib/session-files/archive-manifest";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
@@ -187,6 +196,46 @@ describe("download manifest artifact jails", () => {
 			]),
 		).rejects.toThrow(/Artifact changed before export/);
 		expect(swapped).toBe(true);
+	});
+
+	test("an HTML export is staged under tmpdir, served byte-for-byte, and refused outside the roots", async () => {
+		const sessionsDir = tempDir("omp-download-html-sessions-");
+		const sessionId = "sess-html";
+		const sessionFile = join(sessionsDir, `${sessionId}.jsonl`);
+		writeFileSync(sessionFile, "{}\n");
+		const html = "<!DOCTYPE html><title>exact</title>\n";
+		const staged: string[] = [];
+		const entry = {
+			session: {
+				exportToHtml: async (outputPath: string) => {
+					staged.push(outputPath);
+					writeFileSync(outputPath, html);
+					return outputPath;
+				},
+			},
+		} as unknown as SessionEntry;
+		const tmp = realpathSync(tmpdir());
+		const args = { kind: "html", includeAdvisor: false, includeBtw: false, includeWorkers: false };
+		const methods = createDownloadMethods({
+			manifestDeps: () => liveInputs(sessionId, { sessionsDir, sessionFile }),
+			roots: () => [sessionsDir, tmp],
+		});
+
+		const result = await methods.exportDownload(entry, [args]);
+		expect(staged[0]?.startsWith(tmpdir() + sep)).toBe(true);
+		expect(result.path.startsWith(tmp + sep)).toBe(true);
+		expect(readFileSync(result.path, "utf8")).toBe(html);
+		expect(result.clientFilename).toBe(`session-${sessionId}.html`);
+		unlinkSync(result.path);
+
+		const refused = createDownloadMethods({
+			manifestDeps: () => liveInputs(sessionId, { sessionsDir, sessionFile }),
+			roots: () => [sessionsDir],
+		});
+		await expect(refused.exportDownload(entry, [args])).rejects.toMatchObject({
+			code: "forbidden",
+		});
+		unlinkSync(staged[1]!);
 	});
 
 	test("a symlinked btw scope directory is refused", () => {
