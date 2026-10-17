@@ -2413,6 +2413,8 @@ describe("reportError", () => {
 	test("a failed queue action surfaces the bare error text; a superseded one stays silent", async () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
+		// Queue actions act on an attached session.
+		dispatch(attached("d1"));
 		const chip = { kind: "steer" as const, text: "hi" };
 		const lastCallId = () => (posted.at(-1) as Extract<ClientCommand, { type: "call" }>).id;
 
@@ -2426,7 +2428,7 @@ describe("reportError", () => {
 		const superseded = deleteQueuedMessage(chip);
 		dispatch({ type: "call_result", id: lastCallId(), ok: false, error: "session switched" });
 		await superseded;
-		expect(state.error).not.toBe("session switched");
+		expect(state.error).toBeNull();
 	});
 });
 
