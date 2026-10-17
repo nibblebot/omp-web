@@ -56,10 +56,10 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
  */
 const PRIVATE_USE_GLYPH = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu;
 
-/** Remove private-use glyphs from a setting description; undefined passes through. */
-export function plainDescription(text: string | undefined): string | undefined {
+/** Remove private-use glyphs from a setting description. */
+export function plainDescription(text: string): string {
 	return text
-		?.replace(PRIVATE_USE_GLYPH, "")
+		.replace(PRIVATE_USE_GLYPH, "")
 		.replace(/\(\s*\)/g, "")
 		.replace(/\s{2,}/g, " ")
 		.trim();
@@ -172,7 +172,7 @@ function submenuOptions(
 			return def.options.map((o) => ({
 				value: o.value,
 				label: o.label,
-				description: plainDescription(o.description),
+				description: o.description && plainDescription(o.description),
 			}));
 		const base = def.options;
 		return [
@@ -189,7 +189,7 @@ function submenuOptions(
 	return def.options.map((o) => ({
 		value: o.value,
 		label: o.label,
-		description: plainDescription(o.description),
+		description: o.description && plainDescription(o.description),
 	}));
 }
 

@@ -177,9 +177,8 @@ describe("plainDescription", () => {
 		expect(plainDescription("remains until \uE0A0")).toBe("remains until");
 	});
 
-	test("keeps ordinary text, and passes undefined through", () => {
+	test("keeps ordinary text unchanged", () => {
 		expect(plainDescription("Plain text (kept)")).toBe("Plain text (kept)");
-		expect(plainDescription(undefined)).toBeUndefined();
 	});
 });
 
