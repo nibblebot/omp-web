@@ -1,4 +1,4 @@
-import { createSignal, For, onMount, Show, type Component } from "solid-js";
+import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
 import { createDirPicker } from "../../../fleet-ui/dir-picker";
 import { fetchCtlTemplates, sendAddProject, setState, state } from "../../../state";
 import { fetchRecentRoots } from "../../../store/projects";
@@ -31,9 +31,12 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 	const [start, setStart] = createSignal(true);
 	/** Recent Git roots (null until loaded); registered roots are always offered too. */
 	const [recentRoots, setRecentRoots] = createSignal<string[] | null>(null);
-	const [path, setPath] = createSignal<string | null>(null);
+	const [path, setPath] = createSignal<string | null>(state.addProjectPath);
 	const [pathGit, setPathGit] = createSignal<boolean | null>(null);
 	const picker = createDirPicker();
+	// The dialog opens prefilled from an unowned session's folder (openAddProject);
+	// clear it on any close so a later opener starts clean.
+	onCleanup(() => setState("addProjectPath", null));
 
 	const close = () => {
 		setState("modal", null);
@@ -145,7 +148,11 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 					</datalist>
 					<details class="project-browse">
 						<summary>Browse folders</summary>
-						<DirectoryPicker picker={picker} onSelect={pick} />
+						<DirectoryPicker
+							picker={picker}
+							initialPath={state.addProjectPath ?? undefined}
+							onSelect={pick}
+						/>
 					</details>
 					<Show when={notGit()}>
 						<div class="msg-notice project-path-error">not a git repository</div>

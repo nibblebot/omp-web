@@ -11,9 +11,11 @@
  *   to different methods, and keeps the row when the daemon refuses
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { ClientCommand } from "#lib/wire/protocol";
+import type { ClientCommand, DaemonEntry, RegisteredProject } from "#lib/wire/protocol";
 import { connect, setState, state } from "../../state";
 import {
+	chooseResumeTarget,
+	type ResumeCandidate,
 	createResumeState,
 	deleteResumeSession,
 	renameResumeSession,
@@ -27,6 +29,7 @@ import {
 	setResumeAllProjects,
 	togglePin,
 } from "../../store/resume";
+import { openAddProject } from "../../store/projects";
 import {
 	FakeEventSource,
 	callResult,
@@ -348,5 +351,164 @@ describe("delete", () => {
 		expect(resumeError()).toBe("Session file is not in the session listing");
 		expect(resumeCandidates().map((c) => c.id)).toEqual(["a", "b", "c"]);
 		expect(resumeTotal()).toBe(3);
+	});
+});
+
+describe("owner resolution when resuming", () => {
+	const sessionFile = "/sessions/other/s1.jsonl";
+
+	function daemon(daemonId: string, cwd: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
+		return {
+			daemonId,
+			name: daemonId,
+			cwd,
+			project: daemonId,
+			labels: [],
+			mode: "spawned",
+			status: "asleep",
+			...extra,
+		};
+	}
+
+	function project(projectId: string, path: string): RegisteredProject {
+		return { projectId, path, name: projectId, addedAt: 1 };
+	}
+
+	function resumeRow(id: string, cwd: string): ResumeCandidate {
+		return {
+			id,
+			sessionFile: `/sessions/${id}.jsonl`,
+			cwd,
+			modifiedMs: 1,
+			messageCount: 1,
+			pinned: false,
+			scope: "global",
+		};
+	}
+
+	/** Start a by-id resume; the daemon's resolve answers with one unique session in `cwd`. */
+	function resolveUnique(cwd: string): Promise<unknown> {
+		const pending = chooseResumeTarget("s1");
+		void answer("resumeResolve", {
+			kind: "unique",
+			session: candidate("s1", { cwd, sessionFile, scope: "global" }),
+		});
+		return pending;
+	}
+
+	test("an asleep daemon on the folder wakes with the chosen file and nothing is refused", async () => {
+		setState({
+			daemonRoster: [
+				daemon("d-app", "/work/app", { status: "ready" }),
+				daemon("d-other", "/work/other"),
+			],
+			registeredProjects: [project("p1", "/work/other")],
+		});
+		void resolveUnique("/work/other");
+		await flushMicrotasks();
+		expect(posted.filter((c) => c.type === "spawn_resume")).toEqual([
+			expect.objectContaining({ daemonId: "d-other", sessionFile }),
+		]);
+		expect(resumeError()).toBeNull();
+	});
+
+	test("two daemons on one folder keep the explicit choice and wake nothing", async () => {
+		setState({ daemonRoster: [daemon("d-1", "/work/other"), daemon("d-2", "/work/other")] });
+		await resolveUnique("/work/other");
+		expect(resumeError()).toBe(
+			"Select the owning profile/workspace/directory in the roster before resuming this session.",
+		);
+		expect(posted.filter((c) => c.type === "spawn_resume")).toEqual([]);
+	});
+
+	test("a registered project with no daemon is started, then resumes once its daemon is ready", async () => {
+		setState({
+			daemonRoster: [daemon("d-app", "/work/app", { status: "ready" })],
+			registeredProjects: [project("p1", "/work/other")],
+		});
+		void resolveUnique("/work/other");
+		await flushMicrotasks();
+		expect(resumeError()).toBeNull();
+		expect(posted.filter((c) => c.type === "spawn")).toEqual([
+			expect.objectContaining({ cwd: "/work/other" }),
+		]);
+		expect(posted.filter((c) => c.type === "attach")).toEqual([]);
+
+		dispatch({
+			type: "roster",
+			daemons: [
+				daemon("d-app", "/work/app", { status: "ready" }),
+				daemon("d-new", "/work/other", { status: "spawning" }),
+			],
+		});
+		await flushMicrotasks();
+		expect(posted.filter((c) => c.type === "attach")).toEqual([]);
+
+		dispatch({
+			type: "roster",
+			daemons: [
+				daemon("d-app", "/work/app", { status: "ready" }),
+				daemon("d-new", "/work/other", { status: "ready" }),
+			],
+		});
+		await flushMicrotasks();
+		const attach = posted.filter((c) => c.type === "attach").at(-1);
+		expect(attach).toEqual(expect.objectContaining({ sessionId: "d-new" }));
+		if (attach?.type !== "attach") throw new Error("expected an attach command");
+		dispatch({ type: "attach_result", id: attach.id, ok: true, sessionId: "d-new" });
+		await flushMicrotasks();
+		expect(calls("switchSession").at(-1)?.args).toEqual([sessionFile]);
+	});
+
+	test("a folder no registered project owns is refused with the path, and nothing starts", async () => {
+		setState({
+			daemonRoster: [daemon("d-app", "/work/app", { status: "ready" })],
+			registeredProjects: [project("p1", "/work/app")],
+		});
+		const outcome = chooseResumeTarget("s1");
+		await answer("resumeResolve", {
+			kind: "unique",
+			session: candidate("s1", { cwd: "/work/gone", sessionFile, scope: "global" }),
+		});
+		expect((await outcome).kind).toBe("refused");
+		expect(resumeError()).toBe(
+			"No registered project owns /work/gone. Use Add project to register it before resuming this session.",
+		);
+		const started = posted.filter((c) => ["spawn", "spawn_resume", "attach"].includes(c.type));
+		expect(started).toEqual([]);
+		expect(calls("switchSession")).toEqual([]);
+	});
+
+	test("rows in a folder no registered project owns are blocked with the reason and the path to add", () => {
+		setState({
+			daemonRoster: [daemon("d-app", "/work/app", { status: "ready" })],
+			registeredProjects: [project("p1", "/work/app"), project("p2", "/work/asleep")],
+		});
+		const rows = sessionRowsFromResume(
+			[
+				resumeRow("own", "/work/app"),
+				resumeRow("reg", "/work/asleep"),
+				resumeRow("gone", "/work/gone/"),
+				resumeRow("nocwd", ""),
+			],
+			undefined,
+		);
+		expect(rows.map((r) => [r.id, r.blocked?.addProjectPath ?? null])).toEqual([
+			["own", null],
+			["reg", null],
+			["gone", "/work/gone"],
+			["nocwd", null],
+		]);
+		expect(rows[2]?.blocked?.reason).toBe(
+			"No registered project owns this folder. Add it as a project to resume.",
+		);
+	});
+
+	test("Add project from an unowned session opens the dialog with the folder prefilled", () => {
+		openAddProject("/work/gone");
+		expect(state.modal).toBe("add-project");
+		expect(state.addProjectPath).toBe("/work/gone");
+		openAddProject();
+		expect(state.addProjectPath).toBeNull();
 	});
 });

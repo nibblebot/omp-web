@@ -150,6 +150,36 @@ export function attachForPanel(daemonId: string): Promise<boolean> {
 }
 
 /**
+ * A registered project with no daemon yet: folder → the session file to resume once
+ * the daemon started for that folder is ready. Cleared when that daemon errors.
+ */
+const pendingProjectWakes = new Map<string, string>();
+
+/**
+ * Start a daemon for a registered project's folder, then resume `sessionFile` in it
+ * once it is ready (see settleProjectWakes). The roster mirror shows it spawning.
+ */
+export function spawnProjectSession(cwd: string, sessionFile: string): void {
+	pendingProjectWakes.set(cwd, sessionFile);
+	postCommand({ type: "spawn", id: crypto.randomUUID(), cwd } satisfies ClientCommand).catch(
+		(err: unknown) => {
+			pendingProjectWakes.delete(cwd);
+			setState("error", String(err));
+		},
+	);
+}
+
+/** Resume each pending project wake whose daemon is now ready; called on roster changes. */
+export function settleProjectWakes(): void {
+	for (const [cwd, sessionFile] of pendingProjectWakes) {
+		const daemon = state.daemonRoster.find((d) => d.cwd === cwd);
+		if (daemon?.status === "error") pendingProjectWakes.delete(cwd);
+		if (daemon?.status !== "ready") continue;
+		pendingProjectWakes.delete(cwd);
+		void resumeDaemonSession(daemon.daemonId, sessionFile);
+	}
+}
+/**
  * Switch to `sessionFile`, retrying once when the attach's own supersession
  * swept the first call. The rejection means the daemon JUST became attached
  * (our own pick), so the retry posts to the now-current session and settles

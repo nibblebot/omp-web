@@ -1,13 +1,15 @@
 import type { SessionListEntry } from "#lib/wire/protocol";
 import { call, state, setState } from "../state";
 import { api } from "./fleet-api";
-import { requestDaemonSessions, resumeDaemonSession } from "./roster";
+import { requestDaemonSessions, resumeDaemonSession, spawnProjectSession } from "./roster";
 import {
 	type SessionRow,
 	type SessionStatus,
 	normalizeSessionTitle,
 	projectLabelFromCwd,
+	resolveSessionOwner,
 	sessionStatus,
+	trimTrailingSlashes,
 	validateSessionDelete,
 } from "./session-list";
 
@@ -525,23 +527,41 @@ export function chooseResumeTarget(arg: string, daemonId?: string): Promise<Resu
 
 /**
  * Wake/switch through the existing roster path: an asleep daemon wakes via
- * spawn_resume + attach; a ready one attaches then switchSession. No new
- * attachment mechanism, no parallel session.
+ * spawn_resume + attach; a ready one attaches then switchSession. A folder that
+ * only a registered project owns starts that project's daemon first
+ * (spawnProjectSession). A folder no registered project owns is refused with a
+ * pointer to Add project. No new attachment mechanism, no parallel session.
  */
 async function resumeViaRoster(session: ResumeCandidate, daemonId?: string): Promise<void> {
-	const owners = state.daemonRoster.filter((entry) => entry.cwd === session.cwd);
-	const owner = daemonId
-		? state.daemonRoster.find((entry) => entry.daemonId === daemonId)
-		: owners.length === 1
-			? owners[0]
-			: undefined;
-	if (session.cwd && (!owner || owner.cwd !== session.cwd)) {
-		throw new Error(
-			"Select the owning profile/workspace/directory in the roster before resuming this session.",
-		);
-	}
-	if (owner) {
-		await resumeDaemonSession(owner.daemonId, session.sessionFile);
+	if (daemonId) {
+		const chosen = state.daemonRoster.find((entry) => entry.daemonId === daemonId);
+		if (!chosen || (session.cwd && chosen.cwd !== session.cwd)) {
+			throw new Error(
+				"Select the owning profile/workspace/directory in the roster before resuming this session.",
+			);
+		}
+		await resumeDaemonSession(chosen.daemonId, session.sessionFile);
+	} else if (session.cwd) {
+		const owner = resolveSessionOwner(session.cwd, {
+			roster: state.daemonRoster,
+			projects: state.registeredProjects,
+		});
+		switch (owner.kind) {
+			case "daemon":
+				await resumeDaemonSession(owner.daemonId, session.sessionFile);
+				break;
+			case "project":
+				spawnProjectSession(session.cwd, session.sessionFile);
+				break;
+			case "ambiguous":
+				throw new Error(
+					"Select the owning profile/workspace/directory in the roster before resuming this session.",
+				);
+			case "none":
+				throw new Error(
+					`No registered project owns ${session.cwd}. Use Add project to register it before resuming this session.`,
+				);
+		}
 	} else {
 		const result = await call("switchSession", [session.sessionFile]);
 		if (asRecord(result)?.cancelled === true)
@@ -863,22 +883,40 @@ export function sessionRowsFromResume(
 	candidates: readonly ResumeCandidate[],
 	attachedFile: string | undefined,
 ): SessionRow[] {
-	return candidates.map((c) => ({
-		id: c.id,
-		file: c.sessionFile,
-		...(c.title !== undefined ? { title: c.title } : {}),
-		cwd: c.cwd,
-		projectLabel: projectLabelFromCwd(c.cwd),
-		...(c.createdMs !== undefined ? { createdMs: c.createdMs } : {}),
-		modifiedMs: c.modifiedMs,
-		messageCount: c.messageCount,
-		...(c.status !== undefined ? { status: c.status } : {}),
-		...(c.firstMessage !== undefined ? { firstMessage: c.firstMessage } : {}),
-		...(c.recentText !== undefined ? { recentText: c.recentText } : {}),
-		pinned: c.pinned,
-		scope: c.scope,
-		current: c.sessionFile === attachedFile,
-	}));
+	return candidates.map((c) => {
+		const blocked = unownedFolderBlock(c.cwd);
+		return {
+			id: c.id,
+			file: c.sessionFile,
+			...(c.title !== undefined ? { title: c.title } : {}),
+			cwd: c.cwd,
+			projectLabel: projectLabelFromCwd(c.cwd),
+			...(c.createdMs !== undefined ? { createdMs: c.createdMs } : {}),
+			modifiedMs: c.modifiedMs,
+			messageCount: c.messageCount,
+			...(c.status !== undefined ? { status: c.status } : {}),
+			...(c.firstMessage !== undefined ? { firstMessage: c.firstMessage } : {}),
+			...(c.recentText !== undefined ? { recentText: c.recentText } : {}),
+			pinned: c.pinned,
+			scope: c.scope,
+			current: c.sessionFile === attachedFile,
+			...(blocked ? { blocked } : {}),
+		};
+	});
+}
+
+/** A folder no registered project owns cannot resume until it is added as a project. */
+function unownedFolderBlock(cwd: string): SessionRow["blocked"] | undefined {
+	if (!cwd) return undefined;
+	const owner = resolveSessionOwner(cwd, {
+		roster: state.daemonRoster,
+		projects: state.registeredProjects,
+	});
+	if (owner.kind !== "none") return undefined;
+	return {
+		reason: "No registered project owns this folder. Add it as a project to resume.",
+		addProjectPath: trimTrailingSlashes(cwd),
+	};
 }
 
 /**

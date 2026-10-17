@@ -101,6 +101,12 @@ export function spawnDaemon(cwd: string, template?: string, labels?: string[]): 
 	} satisfies ClientCommand).catch(() => {});
 }
 
+/** Open the Add project dialog, prefilled with `path` (an unowned session's folder). */
+export function openAddProject(path?: string): void {
+	setState("addProjectPath", path ?? null);
+	setState("modal", "add-project");
+}
+
 /** Wake an asleep daemon (spawned → respawn --resume; attached/remote → redial). */
 export function spawnResume(daemonId: string): void {
 	if (!isConnected()) return;

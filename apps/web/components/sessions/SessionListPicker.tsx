@@ -33,6 +33,8 @@ export interface SessionListPickerProps {
 	now?: () => number;
 	emptyText?: string;
 	onChoose: (row: SessionRow) => void;
+	/** Offers Add project on rows no registered project owns (their reason is shown). */
+	onAddProject?: (row: SessionRow) => void;
 	onTogglePin: (row: SessionRow) => void;
 	onRename: (row: SessionRow, title: string) => Promise<boolean>;
 	onDelete: (row: SessionRow) => Promise<boolean>;
@@ -187,6 +189,9 @@ export const SessionListPicker: Component<SessionListPickerProps> = (props) => {
 													nowMs={now()}
 													onActivate={() => activate(row)}
 													onChoose={() => props.onChoose(row)}
+													onAddProject={
+														props.onAddProject ? () => props.onAddProject?.(row) : undefined
+													}
 													onTogglePin={() => props.onTogglePin(row)}
 												/>
 											)}
@@ -266,8 +271,10 @@ export const SessionListPicker: Component<SessionListPickerProps> = (props) => {
 								<button
 									type="button"
 									class="session-resume"
-									disabled={row().current === true}
-									title={row().current ? "This session is already attached." : undefined}
+									disabled={row().current === true || row().blocked !== undefined}
+									title={
+										row().current ? "This session is already attached." : row().blocked?.reason
+									}
 									onClick={() => props.onChoose(row())}
 								>
 									{row().current ? "Current session" : "Resume"}

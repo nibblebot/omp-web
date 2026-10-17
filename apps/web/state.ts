@@ -51,6 +51,7 @@ import {
 	resetPendingSessionsFiles,
 	settleDaemonSessions,
 	settleFiles,
+	settleProjectWakes,
 	settleSessions,
 } from "./store/roster";
 import { dismissToast, pushToast, type ToastAction } from "./store/toasts";
@@ -375,6 +376,9 @@ export const [state, setState] = createStore({
 	// Phase 5 + P8.1 modal payloads (components read these; set alongside
 	// modal): which project the Add-workspace modal targets (all tabs).
 	workspaceModalProjectId: null as string | null,
+	// Folder the Add-project dialog opens prefilled with (an unowned session's
+	// folder); null when opened from elsewhere. Cleared when the dialog closes.
+	addProjectPath: null as string | null,
 	// Search text the Settings sheet opens with (`/settings <query>`); set
 	// alongside modal "settings" on every open, so a bare open passes "".
 	settingsQuery: "" as string,
@@ -1211,6 +1215,7 @@ export function connect(): void {
 				// linked-worktree eligibility). DaemonEntry owns those fields, so they
 				// flow through wholesale with the array.
 				setState("daemonRoster", frame.daemons);
+				settleProjectWakes();
 				// Removed daemons never reuse ids, but don't let the set grow unbounded.
 				pruneUnread(new Set(frame.daemons.map((d) => d.daemonId)));
 				// Same for daemonActivity: drop entries whose id left the roster.
@@ -1286,6 +1291,7 @@ export function connect(): void {
 							: d,
 					),
 				);
+				settleProjectWakes();
 				pushDebug(
 					frame.status === "error" || frame.error !== undefined ? "error" : "info",
 					"roster",

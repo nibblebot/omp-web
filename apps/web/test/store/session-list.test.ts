@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import type { DaemonStatus } from "#lib/wire/protocol";
 import {
 	type SessionRow,
 	formatSessionAge,
 	groupSessions,
 	matchSessionRow,
 	normalizeSessionTitle,
+	resolveSessionOwner,
 	sessionDisplayTitle,
 	sessionStatus,
 	sessionSubtitle,
@@ -168,5 +170,69 @@ describe("sessionStatus and normalizeSessionTitle", () => {
 		expect(normalizeSessionTitle("   ")).toBeNull();
 		expect(normalizeSessionTitle("x".repeat(201))).toBeNull();
 		expect(normalizeSessionTitle("x".repeat(200))).toHaveLength(200);
+	});
+});
+
+describe("resolveSessionOwner", () => {
+	const daemon = (daemonId: string, cwd: string, status: DaemonStatus = "asleep") => ({
+		daemonId,
+		cwd,
+		status,
+	});
+	const project = (projectId: string, path: string) => ({ projectId, path });
+
+	test("a single roster daemon on the cwd owns the session", () => {
+		const owner = resolveSessionOwner("/work/b", {
+			roster: [daemon("d-a", "/work/a", "ready"), daemon("d-b", "/work/b", "ready")],
+			projects: [],
+		});
+		expect(owner).toEqual({ kind: "daemon", daemonId: "d-b" });
+	});
+
+	test("trailing slashes never break a match, but a sibling prefix is not a match", () => {
+		const ctx = { roster: [daemon("d-foo", "/work/foo/")], projects: [] };
+		expect(resolveSessionOwner("/work/foo", ctx)).toEqual({ kind: "daemon", daemonId: "d-foo" });
+		expect(resolveSessionOwner("/work/foobar", ctx)).toEqual({ kind: "none" });
+	});
+
+	test("several daemons on one cwd stay ambiguous: the caller must pick one", () => {
+		const roster = [daemon("d-1", "/work/b"), daemon("d-2", "/work/b", "ready")];
+		expect(resolveSessionOwner("/work/b", { roster, projects: [] })).toEqual({
+			kind: "ambiguous",
+			daemonIds: ["d-1", "d-2"],
+		});
+	});
+
+	test("a registered project with no daemon owns its checkout and the folders under it", () => {
+		const ctx = {
+			roster: [daemon("d-a", "/work/a", "ready")],
+			projects: [project("p1", "/work/b"), project("p2", "/work/b/nested")],
+		};
+		expect(resolveSessionOwner("/work/b", ctx)).toEqual({
+			kind: "project",
+			projectId: "p1",
+			path: "/work/b",
+		});
+		expect(resolveSessionOwner("/work/b/nested/sub", ctx)).toEqual({
+			kind: "project",
+			projectId: "p2",
+			path: "/work/b/nested",
+		});
+	});
+
+	test("a daemon on the folder is preferred over the project that owns it", () => {
+		const owner = resolveSessionOwner("/work/b", {
+			roster: [daemon("d-b", "/work/b")],
+			projects: [project("p1", "/work/b")],
+		});
+		expect(owner).toEqual({ kind: "daemon", daemonId: "d-b" });
+	});
+
+	test("a cwd no daemon or project owns has no owner", () => {
+		const owner = resolveSessionOwner("/work/gone", {
+			roster: [daemon("d-a", "/work/a", "ready")],
+			projects: [project("p1", "/work/b")],
+		});
+		expect(owner).toEqual({ kind: "none" });
 	});
 });

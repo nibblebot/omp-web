@@ -225,6 +225,27 @@ export default [
 					/>
 				),
 			},
+			{
+				name: "Folder not owned by a project",
+				description:
+					"Disabled with the reason; Add project opens the dialog prefilled with the folder.",
+				render: () => (
+					<SessionPickerRow
+						row={{
+							...listRows()[1],
+							blocked: {
+								reason: "No registered project owns this folder. Add it as a project to resume.",
+								addProjectPath: "/home/you/scratch",
+							},
+						}}
+						active={false}
+						showProject
+						nowMs={T0}
+						onChoose={() => pushToast("Resume session")}
+						onAddProject={() => pushToast("Add project")}
+					/>
+				),
+			},
 		],
 	}),
 ];

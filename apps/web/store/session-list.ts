@@ -1,3 +1,4 @@
+import type { DaemonStatus } from "#lib/wire/protocol";
 import { displayTitle } from "../components/ui/title-icons";
 
 // ---------------------------------------------------------------------------
@@ -67,6 +68,60 @@ export interface SessionRow {
 	scope: "local" | "global";
 	/** The session attached to this browser right now. */
 	current?: boolean;
+	/** Set when no registered project owns the folder: the row cannot resume until the folder is added. */
+	blocked?: { reason: string; addProjectPath: string };
+}
+
+/** A roster daemon as owner resolution sees it. */
+export interface SessionOwnerDaemon {
+	daemonId: string;
+	cwd: string;
+	status: DaemonStatus;
+}
+
+/** A registered project as owner resolution sees it. */
+export interface SessionOwnerProject {
+	projectId: string;
+	path: string;
+}
+
+/** Who a session's folder resolves to: a daemon, several (ambiguous), a registered project, or nobody. */
+export type SessionOwner =
+	| { kind: "daemon"; daemonId: string }
+	| { kind: "ambiguous"; daemonIds: string[] }
+	| { kind: "project"; projectId: string; path: string }
+	| { kind: "none" };
+
+export function trimTrailingSlashes(path: string): string {
+	return path.replace(/\/+$/, "");
+}
+
+/**
+ * Resolve the owner of a session folder. A daemon on the exact folder wins; several
+ * daemons on it stay `ambiguous` so the caller keeps the explicit choice. Otherwise the
+ * longest registered project that is the folder or one of its parents owns it (it is
+ * started on resume). A sibling prefix (`/work/foobar` vs `/work/foo`) never matches.
+ */
+export function resolveSessionOwner(
+	cwd: string,
+	ctx: { roster: readonly SessionOwnerDaemon[]; projects: readonly SessionOwnerProject[] },
+): SessionOwner {
+	const folder = trimTrailingSlashes(cwd);
+	if (folder === "") return { kind: "none" };
+	const onFolder = ctx.roster.filter((daemon) => trimTrailingSlashes(daemon.cwd) === folder);
+	const [only] = onFolder;
+	if (only && onFolder.length === 1) return { kind: "daemon", daemonId: only.daemonId };
+	if (onFolder.length > 1)
+		return { kind: "ambiguous", daemonIds: onFolder.map((daemon) => daemon.daemonId) };
+	let owner: SessionOwnerProject | undefined;
+	for (const project of ctx.projects) {
+		const root = trimTrailingSlashes(project.path);
+		if (root === "" || (folder !== root && !folder.startsWith(`${root}/`))) continue;
+		if (!owner || root.length > trimTrailingSlashes(owner.path).length) owner = project;
+	}
+	return owner
+		? { kind: "project", projectId: owner.projectId, path: owner.path }
+		: { kind: "none" };
 }
 
 export type SessionGroupKey = "pinned" | "today" | "earlier";

@@ -669,6 +669,16 @@ button.picker-row {
 .session-pin:focus-visible {
 	color: var(--text);
 }
+.session-row-blocked {
+	font-size: var(--fs-micro);
+	color: var(--warning);
+}
+.session-add-project {
+	flex: none;
+	align-self: center;
+	padding: var(--space-1) var(--space-2);
+	font-size: var(--fs-micro);
+}
 .session-preview {
 	display: flex;
 	flex-direction: column;

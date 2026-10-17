@@ -21,6 +21,8 @@ export const SessionPickerRow: Component<{
 	onActivate?: () => void;
 	onChoose: () => void;
 	onTogglePin?: () => void;
+	/** Opens Add project for a blocked row (no registered project owns its folder). */
+	onAddProject?: () => void;
 }> = (props) => {
 	const statusLabel = () => sessionStatusLabel(props.row.status);
 	return (
@@ -33,7 +35,7 @@ export const SessionPickerRow: Component<{
 				classList={{ "session-row-pinned": props.row.pinned }}
 				onMouseEnter={props.onActivate}
 				onClick={props.onChoose}
-				disabled={props.row.current === true}
+				disabled={props.row.current === true || props.row.blocked !== undefined}
 				title={`${props.row.cwd || "(no directory)"}\n${props.row.id}`}
 			>
 				<span
@@ -46,6 +48,9 @@ export const SessionPickerRow: Component<{
 					<span class="picker-label">{sessionDisplayTitle(props.row)}</span>
 					<Show when={sessionSubtitle(props.row)}>
 						{(subtitle) => <span class="session-row-sub">{subtitle()}</span>}
+					</Show>
+					<Show when={props.row.blocked}>
+						{(blocked) => <span class="session-row-blocked">{blocked().reason}</span>}
 					</Show>
 				</span>
 				<span class="picker-meta">
@@ -71,6 +76,11 @@ export const SessionPickerRow: Component<{
 					onClick={() => props.onTogglePin?.()}
 				>
 					{props.row.pinned ? "★" : "☆"}
+				</button>
+			</Show>
+			<Show when={props.row.blocked !== undefined && props.onAddProject !== undefined}>
+				<button type="button" class="session-add-project" onClick={() => props.onAddProject?.()}>
+					Add project
 				</button>
 			</Show>
 		</div>

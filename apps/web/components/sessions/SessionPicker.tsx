@@ -1,5 +1,6 @@
 import { createMemo, createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
 import { setState, startNewSession, state } from "../../state";
+import { openAddProject } from "../../store/projects";
 import {
 	chooseResumeTarget,
 	closeResumePicker,
@@ -68,9 +69,16 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	const choose = (row: SessionRow) => {
+		if (row.blocked) return;
 		void chooseResumeTarget(row.id).then((outcome) => {
 			if (outcome.kind === "unique") close();
 		});
+	};
+
+	/** A row no registered project owns: close this list and open Add project prefilled. */
+	const addProject = (row: SessionRow) => {
+		closeResumePicker();
+		openAddProject(row.blocked?.addProjectPath);
 	};
 
 	/** Gate-mode Esc/row action: start a fresh session on the attached daemon. */
@@ -124,6 +132,7 @@ export const SessionPicker: Component<{ onClose: () => void }> = (props) => {
 						: "No resumable sessions in this project."
 				}
 				onChoose={choose}
+				onAddProject={addProject}
 				onTogglePin={(row) => togglePin(row.id)}
 				onRename={renameResumeSession}
 				onDelete={deleteResumeSession}
