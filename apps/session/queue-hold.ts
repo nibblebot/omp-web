@@ -1,5 +1,6 @@
 import type { RestoredQueuedMessage } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { QueuedMessageKind, QueuedMessageRef } from "#lib/wire/protocol";
+import type { QueuedCommandState } from "./command-queue";
 
 /**
  * User messages a Stop withdrew from the live queues. They stay here, paused,
@@ -74,4 +75,19 @@ export function takeQueuedMessage(
 		return item.message;
 	}
 	return host.takeQueuedMessage(ref.text, ref.kind === "steer" ? "steering" : "followUp");
+}
+
+/**
+ * Forget everything a Stop held when the session's transcript is replaced (new,
+ * switched, branched): held steers and slash commands belong to the old session
+ * and must never resume into the new one. The command pause is also reset so
+ * commands queued in the new session run normally.
+ */
+export function dropHeldQueue(entry: {
+	pausedQueue: HeldQueuedMessage[];
+	queuedCommands: QueuedCommandState;
+}): void {
+	entry.pausedQueue.length = 0;
+	entry.queuedCommands.commands.length = 0;
+	entry.queuedCommands.paused = false;
 }

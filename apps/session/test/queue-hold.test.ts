@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { createLifecycleMethods } from "../lifecycle-adapter";
 import { createWebMethods } from "../methods";
 import {
 	type HeldQueuedMessage,
@@ -13,6 +14,7 @@ import {
 	resumeHeldQueue,
 	takeQueuedMessage,
 } from "../queue-hold";
+import { installPlanReviewHandler } from "../review-plan";
 import type { SessionEntry } from "../session-entry";
 
 interface FakeQueue {
@@ -263,5 +265,89 @@ describe("Stop preserves the queue (abort row)", () => {
 		await second.methods.abort!(second.entry, [{ keepSubagents: true }]);
 		expect(second.aborts.subagentsAborted).toEqual([]);
 		expect(second.aborts.options).toEqual([{ reason: expect.any(String) }]);
+	});
+});
+
+describe("session replacement drops the held queue", () => {
+	/** A Stop-held queue (steer, follow-up, slash command) on a session that can be replaced. */
+	function heldEntry() {
+		const entry = {
+			session: {
+				sessionFile: "/tmp/fleet-test-sessions/a.jsonl",
+				sessionId: "a",
+				abort: async () => {},
+				waitForIdle: async () => {},
+				isBashRunning: false,
+				isEvalRunning: false,
+				isCompacting: false,
+				sessionManager: { flush: async () => {}, getBranch: () => [] },
+				setPlanModeState: () => {},
+				getEnabledToolNames: () => [],
+				getMountedXdevToolNames: () => [],
+				setPlanProposalHandler: () => {},
+				subscribe: () => () => undefined,
+				markPlanInternalAbortPending: () => undefined,
+				clearPlanInternalAbortPending: () => undefined,
+				emitNotice: () => undefined,
+				newSession: async () => true,
+				switchSession: async () => true,
+				branch: async () => ({ cancelled: false, selectedText: "" }),
+				resetSessionContext: async () => true,
+			},
+			pausedQueue: [
+				{ kind: "steer", message: { text: "s1" } },
+				{ kind: "follow-up", message: { text: "f1" } },
+			],
+			queuedCommands: { commands: ["/add-dir /tmp/x"], paused: true, draining: false },
+			subagentSnapshots: new Map(),
+			transcriptSessionFilesBySubagentId: new Map(),
+			pendingUiRequests: new Map(),
+		} as unknown as SessionEntry;
+		installPlanReviewHandler(entry);
+		return entry;
+	}
+
+	const emptyHold = {
+		pausedQueue: [],
+		queuedCommands: { commands: [], paused: false, draining: false },
+	};
+
+	test("New session clears the held steers, follow-ups, and commands", async () => {
+		const entry = heldEntry();
+		const lifecycle = createLifecycleMethods({
+			sessionsDir: "/tmp/fleet-test-sessions",
+			hasCallbackPair: () => false,
+			assertWritable: async () => {},
+			settleHostWork: async () => {},
+			settleWorkers: async () => {},
+			broadcastAvailableCommands: async () => {},
+		});
+		await lifecycle.newSession!(entry, []);
+		expect(entry).toMatchObject(emptyHold);
+	});
+
+	function webMethods() {
+		return createWebMethods({
+			settings: {} as never,
+			authStorage: {} as never,
+			collab: { stopRoom: async () => {} } as never,
+			broker: { broadcastAvailableCommands: async () => {} } as never,
+			materializeSession: async () => ({ alreadyPresent: true as const }),
+			sessionsDir: "/tmp/fleet-test-sessions",
+			cwd: "/tmp/fleet-test-cwd",
+			hasCallbackPair: () => false,
+		}).methods;
+	}
+
+	test("switch session clears the held queue", async () => {
+		const entry = heldEntry();
+		await webMethods().switchSession!(entry, ["/tmp/fleet-test-sessions/b.jsonl"]);
+		expect(entry).toMatchObject(emptyHold);
+	});
+
+	test("branch clears the held queue", async () => {
+		const entry = heldEntry();
+		await webMethods().branch!(entry, ["entry-1"]);
+		expect(entry).toMatchObject(emptyHold);
 	});
 });

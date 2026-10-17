@@ -33,7 +33,12 @@ import type { CollabSession, Images } from "./collab-session";
 import { removeQueuedCommand } from "./command-queue";
 import type { DaemonBroker } from "./daemon-broker";
 import type { SessionEntry } from "./session-entry";
-import { holdQueuedMessages, resumeHeldQueue, takeQueuedMessage } from "./queue-hold";
+import {
+	dropHeldQueue,
+	holdQueuedMessages,
+	resumeHeldQueue,
+	takeQueuedMessage,
+} from "./queue-hold";
 import { createPluginMethods } from "./plugin-methods";
 import { resolveSessionMainFile, MaterializeSessionError } from "./session-materialize";
 import os from "node:os";
@@ -268,6 +273,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const ok = await session.newSession(arg ? { parentSession: arg } : undefined);
 			if (ok) {
 				clearSubagents(entry);
+				dropHeldQueue(entry);
 				await deps.broker.broadcastAvailableCommands(entry);
 			}
 			return { cancelled: !ok };
@@ -287,6 +293,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 			const ok = await session.switchSession(target);
 			if (ok) {
 				clearSubagents(entry);
+				dropHeldQueue(entry);
 				await deps.broker.broadcastAvailableCommands(entry);
 			}
 			return { cancelled: !ok };
@@ -294,6 +301,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		const result = await session.branch(arg as string);
 		if (!result.cancelled) {
 			clearSubagents(entry);
+			dropHeldQueue(entry);
 			await deps.broker.broadcastAvailableCommands(entry);
 		}
 		return { text: result.selectedText, cancelled: result.cancelled };
