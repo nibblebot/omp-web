@@ -42,6 +42,8 @@ let restoreSharedState: (() => Promise<void>) | undefined;
 
 /** Element types the current host created, in order. */
 const created: unknown[] = [];
+/** Props of each entry in `created`, same index. */
+const createdProps: Record<string, unknown>[] = [];
 const flow = new Set<unknown>();
 let ModalHost: typeof HostModule.ModalHost;
 let ShortcutsDialog: typeof ShortcutsModule.ShortcutsDialog;
@@ -122,6 +124,7 @@ let disposeHost: (() => void) | null = null;
 function renderHost(): unknown[] {
 	disposeHost?.();
 	created.length = 0;
+	createdProps.length = 0;
 	disposeHost = solid.createRoot((dispose) => {
 		solid.createComponent(ModalHost, {});
 		return dispose;
@@ -133,6 +136,7 @@ beforeEach(async () => {
 	installJsxShim({
 		onElement(type, props) {
 			created.push(type);
+			createdProps.push(props);
 			if (typeof type === "function" && flow.has(type)) return undefined;
 			return { value: { type, props } };
 		},
@@ -155,9 +159,13 @@ describe("ModalHost", () => {
 		expect(renderHost()).toContain(ShortcutsDialog);
 	});
 
-	test("renders the Help dialog for both /help and /hotkeys", () => {
+	test("/help opens Commands and /hotkeys opens Shortcuts", () => {
+		setState("modal", "help");
+		renderHost();
+		expect(createdProps[created.indexOf(ShortcutsDialog)]?.initialTab).toBe("commands");
 		setState("modal", "hotkeys");
-		expect(renderHost()).toContain(ShortcutsDialog);
+		renderHost();
+		expect(createdProps[created.indexOf(ShortcutsDialog)]?.initialTab).toBe("shortcuts");
 	});
 
 	test("renders nothing for a modal owned by a feature that is off", () => {
