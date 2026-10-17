@@ -31,10 +31,14 @@ export interface StatsApp {
 
 export function createStatsApp(cfg?: Partial<StatsConfig> & { syncRunner?: SyncRunner }): StatsApp {
 	const defaults = resolveStatsConfig();
+	// Explicit paths are a caller-owned root (isolated stays absent unless given).
+	const usesDefaultPaths = cfg?.statsDbPath === undefined && cfg?.sessionsDir === undefined;
+	const isolated = cfg?.isolated ?? (usesDefaultPaths ? defaults.isolated : undefined);
 	const config: StatsConfig = {
 		configRoot: cfg?.configRoot ?? defaults.configRoot,
 		statsDbPath: cfg?.statsDbPath ?? defaults.statsDbPath,
 		sessionsDir: cfg?.sessionsDir ?? defaults.sessionsDir,
+		...(isolated === undefined ? {} : { isolated }),
 		...(cfg?.stored
 			? {
 					stored: {

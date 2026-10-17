@@ -4,9 +4,15 @@
  * Precedence:
  * - config root: literal $PI_CONFIG_DIR (default ~/.omp), then the active
  *                OMP_PROFILE / PI_PROFILE's profiles/<name> directory
- * - stats DB:    config root/stats.db, or an existing XDG omp[/profiles/<name>] root
+ * - stats DB:    config root/stats.db, or an existing XDG omp[/profiles/<name>] root.
+ *                An overridden $PI_CODING_AGENT_DIR (default profile, no
+ *                $PI_CONFIG_DIR) is an isolated root: <agent dir>/stats.db
  * - sessions:    $PI_CODING_AGENT_DIR/sessions for the default profile,
  *                else the same existing XDG root/sessions, else config root/agent/sessions
+ *
+ * The stats DB and the sessions dir always resolve from the same root, so a
+ * sync never ingests one root's sessions into another root's database, and an
+ * isolated run never reads or writes the shared ~/.omp/stats.db.
  *
  * NOTE: real-world stats.db rows store ABSOLUTE session_file paths
  * (e.g. /home/u/.omp/agent/sessions/<proj>/<file>.jsonl), not the
@@ -17,7 +23,7 @@
  */
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { FleetLogStore } from "./log-store";
 
@@ -41,6 +47,12 @@ export interface StatsConfig {
 	configRoot: string;
 	statsDbPath: string;
 	sessionsDir: string;
+	/**
+	 * True when an overridden agent dir (`PI_CODING_AGENT_DIR`) is its own root:
+	 * the stats DB and sessions live under it, not under the shared config root.
+	 * Absent for callers that pass explicit paths.
+	 */
+	isolated?: boolean;
 	/** P8.6: fleet log store mounted into stats (absent = fleet-local only). */
 	stored?: StoredStatsSource;
 }
@@ -59,6 +71,15 @@ export function resolveStatsConfig(
 			? join(env.XDG_DATA_HOME, "omp", "profiles", profile)
 			: join(env.XDG_DATA_HOME, "omp")
 		: undefined;
+	// An agent dir that differs from the config root's own agent dir is its own
+	// root (sandbox, audit, multi-profile setups). The SDK keeps the stats DB in
+	// the config root, so without this the DB would stay in the shared ~/.omp
+	// while sessions come from the override. An explicit PI_CONFIG_DIR is the
+	// operator naming the config root, so it is respected as given.
+	const isolatedRoot =
+		!profile && !env.PI_CONFIG_DIR && agentDir && resolve(agentDir) !== join(configRoot, "agent")
+			? resolve(agentDir)
+			: undefined;
 	// SDK DirResolver only adopts existing XDG roots and only for its default
 	// agent directory. Named profiles require their own migrated root.
 	const useXdg =
@@ -66,7 +87,7 @@ export function resolveStatsConfig(
 		(!agentDir || agentDir === join(configRoot, "agent")) &&
 		xdgRoot !== undefined &&
 		existsSync(xdgRoot);
-	const dataRoot = useXdg ? xdgRoot : configRoot;
+	const dataRoot = useXdg ? xdgRoot : (isolatedRoot ?? configRoot);
 	const sessionsDir = useXdg
 		? join(dataRoot, "sessions")
 		: join(agentDir || join(configRoot, "agent"), "sessions");
@@ -75,5 +96,6 @@ export function resolveStatsConfig(
 		configRoot,
 		statsDbPath: join(dataRoot, "stats.db"),
 		sessionsDir,
+		isolated: isolatedRoot !== undefined,
 	};
 }

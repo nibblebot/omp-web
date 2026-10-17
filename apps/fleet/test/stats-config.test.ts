@@ -57,7 +57,7 @@ describe("resolveStatsConfig env precedence", () => {
 		expect(cfg.sessionsDir).toBe(join(homedir(), ".omp", "agent", "sessions"));
 	});
 
-	test("a custom agent directory disables XDG redirection for the database too", () => {
+	test("a custom agent directory is an isolated root for the database too", () => {
 		const xdg = tempDir("omp-stats-xdg-custom-");
 		mkdirSync(join(xdg, "omp"));
 		const cfg = resolveStatsConfig({
@@ -65,8 +65,40 @@ describe("resolveStatsConfig env precedence", () => {
 			PI_CODING_AGENT_DIR: "/tmp/piagent",
 			XDG_DATA_HOME: xdg,
 		});
-		expect(cfg.statsDbPath).toBe(join(homedir(), ".omp", "stats.db"));
+		expect(cfg.statsDbPath).toBe(join("/tmp/piagent", "stats.db"));
 		expect(cfg.sessionsDir).toBe("/tmp/piagent/sessions");
+		expect(cfg.isolated).toBe(true);
+	});
+
+	test("PI_CONFIG_DIR alone keeps the database and sessions in the config root", () => {
+		const cfg = resolveStatsConfig({ ...baseEnv(), PI_CONFIG_DIR: "/tmp/picfg" });
+		expect(cfg.statsDbPath).toBe(join("/tmp/picfg", "stats.db"));
+		expect(cfg.sessionsDir).toBe(join("/tmp/picfg", "agent", "sessions"));
+		expect(cfg.isolated).toBe(false);
+	});
+
+	test("PI_CONFIG_DIR plus PI_CODING_AGENT_DIR: the named config root owns the database", () => {
+		const cfg = resolveStatsConfig({
+			...baseEnv(),
+			PI_CONFIG_DIR: "/tmp/picfg",
+			PI_CODING_AGENT_DIR: "/tmp/piagent",
+		});
+		expect(cfg.statsDbPath).toBe(join("/tmp/picfg", "stats.db"));
+		expect(cfg.sessionsDir).toBe("/tmp/piagent/sessions");
+		expect(cfg.isolated).toBe(false);
+	});
+
+	test("the default agent directory is not isolated", () => {
+		const agentDir = join(homedir(), ".omp", "agent");
+		const cfg = resolveStatsConfig({ ...baseEnv(), PI_CODING_AGENT_DIR: agentDir });
+		expect(cfg.statsDbPath).toBe(join(homedir(), ".omp", "stats.db"));
+		expect(cfg.isolated).toBe(false);
+	});
+
+	test("no overrides: the default database, not isolated", () => {
+		const cfg = resolveStatsConfig(baseEnv());
+		expect(cfg.statsDbPath).toBe(join(homedir(), ".omp", "stats.db"));
+		expect(cfg.isolated).toBe(false);
 	});
 
 	test("OMP_PROFILE wins over PI_PROFILE and the custom agent directory", () => {

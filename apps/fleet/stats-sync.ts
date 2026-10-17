@@ -14,10 +14,9 @@
  * this so the harness never needs the real omp binary.
  *
  * omp quirk: pi-utils resolves the stats db as
- * `join(homedir(), PI_CONFIG_DIR, "stats.db")`. PI_CONFIG_DIR is a
- * home-relative NAME, not a literal path. The viewer's config.ts treats
- * statsDbPath as a literal path, so the child env is derived from cfg by
- * buildSyncEnv() (below) to make both sides agree on the same file.
+ * `join(homedir(), PI_CONFIG_DIR, "stats.db")`, and PI_CONFIG_DIR is a
+ * home-relative NAME. The child env is derived from cfg by buildSyncEnv()
+ * (below) so the child and the viewer agree on the same file.
  */
 import { homedir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
@@ -34,17 +33,6 @@ export const syncConfig = {
 
 /** Spawn failed because the omp binary is missing/unrunnable (ENOENT). */
 export class SyncUnavailable extends Error {}
-
-/**
- * The stats.db cannot be reached by omp: it lies outside $HOME, where omp's
- * home-relative config resolution cannot point. Surfaced as 503 with the
- * specific reason (vs. the generic install hint for SyncUnavailable).
- */
-export class SyncConfigError extends SyncUnavailable {
-	constructor(message: string) {
-		super(message);
-	}
-}
 
 /** The omp child exited nonzero. `detail` carries the tail of its stderr. */
 export class SyncFailed extends Error {
@@ -72,26 +60,25 @@ export function parseSummary(output: string): SyncOutcome {
 
 /**
  * Builds the child environment for `omp stats --summary` so the child writes
- * the SAME stats.db the viewer reads.
+ * the SAME stats.db the viewer reads and syncs the SAME sessions.
  *
- * omp resolves the stats db as `join(homedir(), PI_CONFIG_DIR, "stats.db")`,
- * where PI_CONFIG_DIR is a home-relative NAME. Passing the viewer's absolute
- * statsDbPath through as PI_CONFIG_DIR would make omp write under $HOME
- * instead of the real location. Cases:
- *   - default stats.db (`$HOME/.omp/stats.db`): drop PI_CONFIG_DIR and
- *     PI_PROFILE / OMP_PROFILE so omp falls back to its built-in default target
- *   - any other stats.db under $HOME: pass the home-relative NAME of its
- *     directory (and drop both profile vars, which would select a different profile)
- *   - stats.db outside $HOME: omp cannot be pointed at it, so SyncConfigError
- *     is thrown.
- * PI_CODING_AGENT_DIR is always set to the absolute sessions parent (omp
- * honors absolute agent dirs). All other env vars pass through unchanged;
- * PI_CONFIG_DIR / PI_PROFILE / OMP_PROFILE / XDG_DATA_HOME are only overridden
- * to keep the child on the viewer's explicit database and sessions targets.
+ * omp resolves its stats db as `join(homedir(), PI_CONFIG_DIR, "stats.db")`,
+ * where PI_CONFIG_DIR is a home-relative NAME, and its sessions from
+ * PI_CODING_AGENT_DIR. Cases:
+ *   - default stats.db (`$HOME/.omp/stats.db`): drop PI_CONFIG_DIR so omp uses
+ *     its built-in default target
+ *   - any other stats.db under $HOME: pass the home-relative NAME of its directory
+ *   - anywhere else (an isolated agent dir, an XDG root outside $HOME): omp's
+ *     config root is join(HOME, PI_CONFIG_DIR), so HOME is set to the stats
+ *     directory and PI_CONFIG_DIR to "." Writes stay under that directory; the
+ *     real ~/.omp is never touched.
+ * PI_PROFILE / OMP_PROFILE / XDG_DATA_HOME are always dropped (cfg already chose
+ * the target). PI_CODING_AGENT_DIR is always the absolute sessions parent.
  */
 export function buildSyncEnv(cfg: StatsConfig, home: string): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	delete env.OMP_PROFILE;
+	delete env.PI_PROFILE;
 	// The SDK's XDG root takes precedence over PI_CONFIG_DIR when it exists.
 	// cfg already chose the target; never let the child redirect it again.
 	delete env.XDG_DATA_HOME;
@@ -99,14 +86,11 @@ export function buildSyncEnv(cfg: StatsConfig, home: string): NodeJS.ProcessEnv 
 	if (cfg.statsDbPath === join(home, ".omp", "stats.db")) {
 		// Default target, so omp uses its built-in default.
 		delete env.PI_CONFIG_DIR;
-		delete env.PI_PROFILE;
 	} else if (statsDir === home || statsDir.startsWith(home + sep)) {
 		env.PI_CONFIG_DIR = relative(home, statsDir);
-		delete env.PI_PROFILE;
 	} else {
-		throw new SyncConfigError(
-			"stats.db lies outside omp's config root (absolute PI_CONFIG_DIR), omp stats cannot sync it; unset PI_CONFIG_DIR or use a home-relative config name",
-		);
+		env.HOME = statsDir;
+		env.PI_CONFIG_DIR = ".";
 	}
 	env.PI_CODING_AGENT_DIR = dirname(cfg.sessionsDir);
 	return env;
@@ -170,6 +154,14 @@ export async function spawnSync(env: NodeJS.ProcessEnv): Promise<SyncOutcome> {
 /** Single-flight guard, module-scope per process (one app per process). */
 let inflight: Promise<Response> | null = null;
 
+/** ISO time of the last successful sync in this process; null until one lands. */
+let lastSyncedAt: string | null = null;
+
+/** Sync status for GET /ctl/stats/health. */
+export function syncStatus(): { lastSyncedAt: string | null; syncing: boolean } {
+	return { lastSyncedAt, syncing: inflight !== null };
+}
+
 const SYNC_ERROR_503 =
 	"omp binary not found. Install omp (`bun install -g @oh-my-pi/pi-coding-agent`) or add it to PATH";
 
@@ -186,11 +178,11 @@ export function register(ctx: AppCtx, routes: Route[]): void {
 					const runner = ctx.syncRunner ?? (() => spawnSync(buildSyncEnv(ctx.cfg, homedir())));
 					const outcome = await runner(process.env);
 					ctx.dbm.reprobe();
+					lastSyncedAt = new Date().toISOString();
 					const durationMs = Date.now() - started;
 					return json({ ...outcome, durationMs });
 				} catch (err) {
 					console.error("[sync] failed", err instanceof Error ? err.message : String(err));
-					if (err instanceof SyncConfigError) return errorJson(err.message, 503);
 					if (err instanceof SyncUnavailable) return errorJson(SYNC_ERROR_503, 503);
 					if (err instanceof SyncTimedOut) return errorJson("sync timed out", 504);
 					if (err instanceof SyncFailed) {

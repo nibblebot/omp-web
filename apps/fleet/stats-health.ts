@@ -11,6 +11,7 @@ import { sep } from "node:path";
 import { json } from "./stats-http";
 import { countMainSessions } from "./stats-sessions-index";
 import { storeCoverage } from "./stats-store-index";
+import { syncStatus } from "./stats-sync";
 import type { Health } from "#lib/wire/stats-types";
 import type { AppCtx, Route } from "./stats-types";
 
@@ -56,6 +57,7 @@ function healthRoute(ctx: AppCtx): Route {
 				statsDb,
 				statsDbPath: redactHome(ctx.dbm.path() ?? ctx.cfg.statsDbPath),
 				statsDbFromCopy: ctx.dbm.fromCopy(),
+				isolated: ctx.cfg.isolated === true,
 				sessionsDir: redactHome(ctx.cfg.sessionsDir),
 				// Reconciled with GET /ctl/stats/sessions: sessionsCount uses the same
 				// walk the sessions list builds from (walkJsonl + isMainSession), so
@@ -63,6 +65,7 @@ function healthRoute(ctx: AppCtx): Route {
 				// would show; subagent transcripts and DB-only rows are excluded.
 				sessionsCount: countMainSessions(ctx.cfg.sessionsDir),
 				dbCounts,
+				...syncStatus(),
 				// P8.6: fleet-store coverage (excluded from sessionsCount above).
 				...(ctx.cfg.stored ? { fleetStore: storeCoverage(ctx.cfg.stored.store) ?? undefined } : {}),
 			};

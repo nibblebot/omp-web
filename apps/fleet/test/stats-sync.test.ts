@@ -15,13 +15,7 @@ import { join } from "node:path";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 import { resolveStatsConfig, type StatsConfig } from "../stats-config";
 import { createStatsApp, type StatsApp } from "../stats-app";
-import {
-	buildSyncEnv,
-	parseSummary,
-	SyncConfigError,
-	SyncFailed,
-	SyncUnavailable,
-} from "../stats-sync";
+import { buildSyncEnv, parseSummary, SyncFailed, SyncUnavailable } from "../stats-sync";
 import type { SyncRunner } from "../stats-types";
 import { getHealth, postSync } from "./stats.testkit";
 
@@ -246,14 +240,24 @@ describe("buildSyncEnv", () => {
 		}
 	});
 
-	test("stats.db outside $HOME: refuses with SyncConfigError", () => {
-		expect(() => buildSyncEnv(baseCfg("/tmp/xyz/stats.db"), HOME)).toThrow(SyncConfigError);
+	test("stats.db outside $HOME: HOME is the stats directory and PI_CONFIG_DIR is '.'", () => {
+		const savedProfile = process.env.PI_PROFILE;
+		process.env.PI_PROFILE = "stale";
 		try {
-			buildSyncEnv(baseCfg("/tmp/xyz/stats.db"), HOME);
-			throw new Error("should have thrown");
-		} catch (err) {
-			expect(err).toBeInstanceOf(SyncUnavailable);
-			expect((err as Error).message).toContain("outside omp's config root");
+			const isolated: StatsConfig = {
+				configRoot: "/tmp/xyz",
+				statsDbPath: "/tmp/xyz/stats.db",
+				sessionsDir: "/tmp/xyz/sessions",
+				isolated: true,
+			};
+			const out = buildSyncEnv(isolated, HOME);
+			expect(out.HOME).toBe("/tmp/xyz");
+			expect(out.PI_CONFIG_DIR).toBe(".");
+			expect("PI_PROFILE" in out).toBe(false);
+			expect(out.PI_CODING_AGENT_DIR).toBe("/tmp/xyz");
+		} finally {
+			if (savedProfile === undefined) delete process.env.PI_PROFILE;
+			else process.env.PI_PROFILE = savedProfile;
 		}
 	});
 });

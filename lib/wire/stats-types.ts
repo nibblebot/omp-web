@@ -126,6 +126,12 @@ export interface Health {
 	statsDb: "ok" | "missing" | "error";
 	statsDbPath: string;
 	statsDbFromCopy: boolean;
+	/** The stats DB is its own root under a PI_CODING_AGENT_DIR override (not the shared ~/.omp). */
+	isolated: boolean;
+	/** ISO time of the last successful sync in this process; null until one lands. */
+	lastSyncedAt: string | null;
+	/** A sync is running right now. */
+	syncing: boolean;
 	sessionsDir: string;
 	sessionsCount: number;
 	dbCounts: { messages: number; toolCalls: number; userMessages: number } | null;

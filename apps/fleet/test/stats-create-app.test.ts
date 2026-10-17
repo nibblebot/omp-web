@@ -77,3 +77,36 @@ describe("createStatsApp multi-instance isolation", () => {
 		}
 	});
 });
+
+describe("createStatsApp isolated flag", () => {
+	test("default paths inherit isolation; explicit paths leave it absent", async () => {
+		const agentDir = tempDir("cap-agent-");
+		const keys = [
+			"PI_CODING_AGENT_DIR",
+			"PI_CONFIG_DIR",
+			"OMP_PROFILE",
+			"PI_PROFILE",
+			"XDG_DATA_HOME",
+		] as const;
+		const saved = keys.map((k) => [k, process.env[k]] as const);
+		for (const k of keys) delete process.env[k];
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+		try {
+			const defaults = createStatsApp();
+			const explicit = createStatsApp(tmpCfg());
+			const fromDefaults = (await (await handleFetch(defaults, "/ctl/stats/health"))?.json()) as {
+				isolated: boolean;
+			};
+			const fromExplicit = (await (await handleFetch(explicit, "/ctl/stats/health"))?.json()) as {
+				isolated: boolean;
+			};
+			expect(fromDefaults.isolated).toBe(true);
+			expect(fromExplicit.isolated).toBe(false);
+		} finally {
+			for (const [k, v] of saved) {
+				if (v === undefined) delete process.env[k];
+				else process.env[k] = v;
+			}
+		}
+	});
+});
