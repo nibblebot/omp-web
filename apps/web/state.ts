@@ -27,6 +27,7 @@ import type { UsageLike } from "./usage/usage";
 import { promptTimestamp } from "./chat/turn-usage";
 import { compactionItemOf } from "./store/compaction-view";
 import { advisorNotesOf } from "./store/slices/advisor";
+import { noticeAdvisorNotesWhileOff } from "./store/advisor-notice";
 import { COLLAB_OFF, guestPromptOf } from "./store/slices/collab";
 import {
 	announce,
@@ -643,6 +644,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 	const items: ChatItem[] = [];
 	// First tool item per toolCallId (the store's findToolIndex semantics).
 	const toolIndex = new Map<string, number>();
+	let advisorNoteCount = 0;
 	for (const msg of messages) {
 		if (msg.role === "user") {
 			const images = scanImages(msg.content);
@@ -734,11 +736,15 @@ export function loadHistory(messages: AgentMessage[]): void {
 			// Advisor cards render inline like the TUI; other custom/developer
 			// messages stay hidden.
 			const notes = advisorNotesOf(msg);
-			if (notes !== null) items.push({ kind: "advisor", id: nextChatId(), notes });
+			if (notes !== null) {
+				items.push({ kind: "advisor", id: nextChatId(), notes });
+				advisorNoteCount += notes.length;
+			}
 			const guest = guestPromptOf(msg);
 			if (guest !== null) items.push({ kind: "guestPrompt", id: nextChatId(), ...guest });
 		}
 	}
+	noticeAdvisorNotesWhileOff(advisorNoteCount);
 	setState({
 		items,
 		live: { active: false, blocks: [], rev: 0 },

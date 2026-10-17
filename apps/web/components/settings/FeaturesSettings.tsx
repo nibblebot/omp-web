@@ -1,6 +1,7 @@
 import { createMemo, createResource, For, Show } from "solid-js";
 import { FEATURES } from "../../features/manifest";
 import { activeFeatureIds, featurePreferences } from "../../features/preferences";
+import { openModelSettings } from "../../store/models";
 import { setFeatureEnabled } from "../../features/registry";
 import {
 	featureOwnSize,
@@ -71,6 +72,17 @@ export function FeaturesSettings(props: { query?: string }) {
 										</Show>
 									</div>
 									<p class="settings-item-desc">{f.description}</p>
+									<Show when={f.id === "advisor"}>
+										<p>
+											<button
+												type="button"
+												class="settings-control-btn"
+												onClick={openModelSettings}
+											>
+												Open Model settings
+											</button>
+										</p>
+									</Show>
 									<p class="feature-meta">
 										{activeFeatureIds().has(f.id) ? "Loaded" : "Not loaded"}
 										<Show when={sizes()}>

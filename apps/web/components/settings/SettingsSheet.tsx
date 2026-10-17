@@ -1,4 +1,12 @@
-import { createMemo, createSignal, Index, onMount, Show, type Component } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	Index,
+	onMount,
+	Show,
+	type Component,
+} from "solid-js";
 import { filterSettings, filterWebUiSettings, type SettingsMatch } from "../../prefs/settings";
 import {
 	changedCountsByTab,
@@ -42,6 +50,12 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 		const tab = consumeSettingsTab();
 		if (tab && settingsTabMeta(tab)) setActiveTab(tab);
 		void refreshSettings();
+	});
+	// A link inside the open sheet (Features > Advisor) names another tab; follow it.
+	createEffect(() => {
+		if (state.settingsTab === null) return;
+		const tab = consumeSettingsTab();
+		if (tab && settingsTabMeta(tab)) setActiveTab(tab);
 	});
 
 	const model = () => state.settingsModel;

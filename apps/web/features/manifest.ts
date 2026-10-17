@@ -86,8 +86,9 @@ export const FEATURES: readonly FeatureInfo[] = [
 	},
 	{
 		id: "advisor",
-		label: "Advisor",
-		description: "Advisor notes in the transcript and the advisor sheet.",
+		label: "Advisor in the browser",
+		description:
+			"Shows advisor notes and the advisor sheet in this browser. The advisor itself is turned on in Settings > Model > Advisor.",
 		experimental: true,
 		defaultEnabled: true,
 		commands: [],
