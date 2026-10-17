@@ -20,9 +20,9 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 	// of the generic "starting…".
 	const rosterHint = () => {
 		const daemon = state.daemonRoster.find((x) => x.daemonId === state.currentSessionId);
-		if (!daemon) return "no daemon attached, pick one in the sidebar";
-		if (daemon.status === "ready") return "attaching to daemon…";
-		return `daemon ${daemon.status}…`;
+		if (!daemon) return "no workspace attached, pick one in the sidebar";
+		if (daemon.status === "ready") return "attaching to session process…";
+		return `session process ${daemon.status}…`;
 	};
 
 	return (

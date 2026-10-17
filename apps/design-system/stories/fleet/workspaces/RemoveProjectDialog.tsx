@@ -14,12 +14,12 @@ export default defineStory({
 	seed: () => seedRosterFleet(),
 	variants: [
 		{
-			name: "Project with running daemons",
+			name: "Project with running session processes",
 			seed: () => seedRosterFleet({ removeProjectTarget: "proj_localaction" }),
 			render: () => <RemoveProjectDialog />,
 		},
 		{
-			name: "Project with no daemons",
+			name: "Project with no session processes",
 			seed: () => seedRosterFleet({ removeProjectTarget: "proj_nixos_config" }),
 			render: () => <RemoveProjectDialog />,
 		},
@@ -29,7 +29,8 @@ export default defineStory({
 				seedRosterFleet({ removeProjectTarget: "proj_localaction" });
 				// The refusal frame lands after the dialog opens, as the server sends it.
 				setTimeout(
-					() => setState("error", "remove refused: 2 daemons still reference localaction"),
+					() =>
+						setState("error", "remove refused: 2 session processes still reference localaction"),
 					400,
 				);
 			},

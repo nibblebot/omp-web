@@ -1,6 +1,7 @@
 import type { ClientCommand, ProjectBranch, ProjectEntry } from "#lib/wire/protocol";
-import { setState } from "../state";
+import { setState, state } from "../state";
 import { ctlFetch, isConnected, postCommand } from "./transport";
+import { clearUserStopped, markUserStopped } from "./user-stopped";
 
 /**
  * Projects/onboarding domain (Phase 3 store facade split): fleet-edge
@@ -110,6 +111,7 @@ export function openAddProject(path?: string): void {
 /** Wake an asleep daemon (spawned → respawn --resume; attached/remote → redial). */
 export function spawnResume(daemonId: string): void {
 	if (!isConnected()) return;
+	clearUserStopped(daemonId);
 	void postCommand({
 		type: "spawn_resume",
 		id: crypto.randomUUID(),
@@ -117,9 +119,11 @@ export function spawnResume(daemonId: string): void {
 	} satisfies ClientCommand).catch(() => {});
 }
 
-/** Stop a daemon (spawned → terminate child; attached/remote → drop + asleep). */
+/** Stop a daemon (spawned → terminate child; attached/remote → drop + asleep).
+ *  Marked user-stopped so the attached chat keeps its transcript behind the stopped strip. */
 export function stopDaemonById(daemonId: string): void {
 	if (!isConnected()) return;
+	markUserStopped(daemonId);
 	void postCommand({
 		type: "stop",
 		id: crypto.randomUUID(),
@@ -127,9 +131,41 @@ export function stopDaemonById(daemonId: string): void {
 	} satisfies ClientCommand).catch(() => {});
 }
 
+/** Daemons whose restart stop is in flight; each is woken once the roster shows it asleep. */
+const restartAwaitingAsleep = new Set<string>();
+
+/** Restart a session process. A ready one is stopped first (marks it), and its wake
+ *  waits for the roster to show it asleep: the edge refuses a wake while the process
+ *  still reads ready. An asleep one clears the mark and wakes right away. No extra
+ *  attach: the edge answers the attached frame on wake when this is the attached session. */
+export function restartDaemonById(daemonId: string): void {
+	const entry = state.daemonRoster.find((d) => d.daemonId === daemonId);
+	if (entry?.status !== "ready") {
+		spawnResume(daemonId);
+		return;
+	}
+	restartAwaitingAsleep.add(daemonId);
+	stopDaemonById(daemonId);
+}
+
+/** Called on every roster frame: wake each restarting daemon that now reads asleep, and
+ *  forget restarts whose daemon left the roster. */
+export function resumeRestartedDaemons(roster: Array<{ daemonId: string; status: string }>): void {
+	for (const daemonId of restartAwaitingAsleep) {
+		const entry = roster.find((d) => d.daemonId === daemonId);
+		if (entry === undefined) {
+			restartAwaitingAsleep.delete(daemonId);
+		} else if (entry.status === "asleep") {
+			restartAwaitingAsleep.delete(daemonId);
+			spawnResume(daemonId);
+		}
+	}
+}
+
 /** Stop a daemon AND evict it from the fleet roster (registry removal). */
 export function removeDaemonById(daemonId: string): void {
 	if (!isConnected()) return;
+	clearUserStopped(daemonId);
 	void postCommand({
 		type: "remove",
 		id: crypto.randomUUID(),
@@ -178,6 +214,41 @@ export function sendRemoveProject(projectId: string): void {
 		id: crypto.randomUUID(),
 		projectId,
 	} satisfies ClientCommand).catch(() => {});
+}
+
+/** Projects whose referencing session processes are being evicted; each is deregistered
+ *  once the roster no longer lists a non-clone daemon on it. */
+const removalAwaitingRoster = new Set<string>();
+
+/** Stop + evict every session process referencing the project (provider-run clones
+ *  excluded; their lifecycle belongs to the clone flow), then deregister the project.
+ *  The edge refuses `remove_project` while a daemon references it, and it evicts a
+ *  daemon only after that process shuts down, so the project is deregistered on the
+ *  roster frame that drops the last reference (see resumeProjectRemovals). */
+export function removeProjectAndStop(projectId: string): void {
+	if (!isConnected()) return;
+	const referencing = state.daemonRoster.filter(
+		(d) => d.projectId === projectId && d.workspaceKind !== "clone",
+	);
+	if (referencing.length === 0) {
+		sendRemoveProject(projectId);
+		return;
+	}
+	removalAwaitingRoster.add(projectId);
+	for (const d of referencing) removeDaemonById(d.daemonId);
+}
+
+/** Called on every roster frame: deregister each removing project once no non-clone
+ *  daemon on the roster references it. */
+export function resumeProjectRemovals(
+	roster: Array<{ projectId?: string; workspaceKind?: string }>,
+): void {
+	for (const projectId of removalAwaitingRoster) {
+		const referenced = roster.some((d) => d.projectId === projectId && d.workspaceKind !== "clone");
+		if (referenced) continue;
+		removalAwaitingRoster.delete(projectId);
+		sendRemoveProject(projectId);
+	}
 }
 
 /** Create a worktree under workspaceDir (branch = slugified name

@@ -285,7 +285,11 @@ const {
 	hasCallbackPair: () => fleetCallback !== null,
 	lifecycleMirror,
 });
-setOnStreamsEmpty(() => daemonBroker.stopDaemonPoll());
+setOnStreamsEmpty(() => {
+	// Callback-pair browsers are virtual streams outside this set; keep the
+	// daemon roster poll alive while any of them remain.
+	if ((daemonControl?.browserStreamCount() ?? 0) === 0) daemonBroker.stopDaemonPoll();
+});
 setOnConsumerDetached((stream, reason) => {
 	// A UI request dies only when every stream it was shown to is gone.
 	if (bootEntry) rejectStreamUiRequests(bootEntry, stream, reason);
@@ -1522,6 +1526,10 @@ if (config.callbackUrl !== undefined) {
 				`omp-session: control plane requested shutdown${reason !== undefined ? ` (${reason})` : ""}`,
 			);
 			void shutdown();
+		},
+		onBrowserStreamsChange: (count) => {
+			if (count > 0) daemonBroker.startDaemonPoll();
+			else if (streams.size === 0) daemonBroker.stopDaemonPoll();
 		},
 	});
 	// Browser presence for dialog/contribution guards: production browsers ride

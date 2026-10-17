@@ -1,9 +1,10 @@
 import { createMemo, createSignal, For, Show, type Component } from "solid-js";
 import type { DaemonEntry, RegisteredProject } from "#lib/wire/protocol";
+import { projectRollup } from "../../../fleet-ui/workspace-status";
 import { setState, state } from "../../../state";
 import { spawnDaemon } from "../../../store/projects";
 import { KebabMenu } from "../../ui/KebabMenu";
-import { ChevronDownIcon, ChevronRightIcon, PlusIcon, TrashIcon } from "../../ui/icons";
+import { ChevronDownIcon, PlusIcon, TrashIcon } from "../../ui/icons";
 import { WorkspaceRow, menuOpenId, setMenuOpenId } from "./WorkspaceRow";
 
 // ---------------------------------------------------------------------------
@@ -143,15 +144,16 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 		);
 	};
 
-	/** One registered-project group: collapsible header (caret + name, plus a
-	 *  hover-revealed "⋯" menu carrying Delete project), main-checkout row
-	 *  first then worktree rows (daemonsByProject order), and a "+ Add
-	 *  worktree" action. */
+	/** One registered-project group: collapsible header (caret, name, and a
+	 *  roll-up of its workspaces while collapsed; a hover-revealed "⋯" menu
+	 *  carrying Remove project), main-checkout row first then worktree rows
+	 *  (daemonsByProject order), and a "+ Add workspace" action. */
 	const ProjectGroup: Component<{ project: RegisteredProject; daemons: DaemonEntry[] }> = (
 		props,
 	) => {
 		const gkey = `project:${props.project.projectId}`;
 		const open = () => !collapsedGroups().has(gkey);
+		const rollup = () => projectRollup(props.daemons);
 		// Id-scoped read of the shared open-menu signal: the menu closes only
 		// when THIS project's key changes, so other groups' toggles don't
 		// re-render this header.
@@ -180,16 +182,18 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 						<span class="sidebar-group-label" title={props.project.path}>
 							{props.project.name}
 						</span>
+						<Show when={!open() && rollup() !== ""}>
+							<span class="project-rollup">{rollup()}</span>
+						</Show>
 					</button>
 					<Show when={!hasMain()}>
 						<button
 							type="button"
-							class="sidebar-icon-btn project-start"
+							class="project-start-session"
 							title={`Start a session in ${props.project.name}`}
-							aria-label={`Start a session in ${props.project.name}`}
 							onClick={() => spawnDaemon(props.project.path)}
 						>
-							<ChevronRightIcon />
+							Start session
 						</button>
 					</Show>
 					<KebabMenu
@@ -208,7 +212,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 							}}
 						>
 							<TrashIcon />
-							Delete project…
+							Remove project…
 						</button>
 					</KebabMenu>
 				</div>

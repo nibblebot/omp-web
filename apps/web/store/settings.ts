@@ -1,6 +1,7 @@
 import type { SettingsItem, SettingsModel } from "#lib/wire/protocol";
 import { fleetSettingsActive, setState, state } from "../state";
 import { call } from "./transport";
+import { reportError } from "./toasts";
 import { authedFetch } from "./auth";
 
 /**
@@ -88,7 +89,7 @@ export function refreshSettings(): void {
 			}
 		})
 		.catch((err) => {
-			if (id === loadId) setState("error", settingsErrorText(err));
+			if (id === loadId) reportError(err);
 		})
 		.finally(() => {
 			if (id === loadId) setState("settingsLoading", false);
@@ -144,13 +145,13 @@ function writeSetting(
 				})
 				.catch((err) => {
 					if (sessionId === state.currentSessionId && fleet === fleetSettingsActive()) {
-						setState("error", settingsErrorText(err));
+						reportError(err);
 					}
 					return false;
 				});
 		})
 		.catch((err) => {
-			setState("error", settingsErrorText(err));
+			reportError(err);
 			return false;
 		});
 	writeQueue = result.then(() => undefined);

@@ -28,7 +28,7 @@ export const DaemonDetailsDialog: Component<{ daemon: DaemonEntry; onClose: () =
 	return (
 		<Modal
 			class="daemon-detail"
-			ariaLabel={`Daemon ${d().name}`}
+			ariaLabel={`Session process ${d().name}`}
 			onClose={props.onClose}
 			header={
 				<>

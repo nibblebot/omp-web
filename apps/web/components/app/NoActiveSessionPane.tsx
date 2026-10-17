@@ -6,6 +6,6 @@ import type { Component } from "solid-js";
 export const NoActiveSessionPane: Component = () => (
 	<div class="roster-empty-pane">
 		<p class="roster-empty-title">No active session</p>
-		<p class="roster-empty-hint">Pick a daemon from the sidebar to start a session.</p>
+		<p class="roster-empty-hint">Pick a workspace from the sidebar to open its session.</p>
 	</div>
 );

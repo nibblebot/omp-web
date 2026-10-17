@@ -1,15 +1,16 @@
-import { createEffect, createSignal, For, Show, type Component } from "solid-js";
-import { sendRemoveProject, setState, state } from "../../../state";
+import { createEffect, createMemo, createSignal, Show, type Component } from "solid-js";
+import { setState, state } from "../../../state";
+import { removeProjectAndStop } from "../../../store/projects";
 import { Modal } from "../../ui/Modal";
 
 // Remove-project confirm (Phase 5 close-out): deregister a first-class
 // project. It never touches disk. Self-mounts (rendered once from App.tsx
 // like DangerConfirmDialog) and renders nothing while no target is set.
-// A removal refused by the server (any roster entry still references the
-// project) lands as a global error frame naming the blockers; the dialog
-// keeps the referencing-daemon list on screen and stays open so the user
-// can stop/remove them first. A successful removal drops the project from
-// the registry, which closes the dialog.
+// When session processes still reference the project, confirming stops and
+// evicts them first (removeProjectAndStop), then deregisters the project. A
+// refusal the server still sends lands as a global error frame and is shown
+// inline while the dialog stays open. A successful removal drops the project
+// from the registry, which closes the dialog.
 
 export const RemoveProjectDialog: Component = () => {
 	const [refusal, setRefusal] = createSignal<string | null>(null);
@@ -19,8 +20,11 @@ export const RemoveProjectDialog: Component = () => {
 
 	const target = () => state.removeProjectTarget;
 	const project = () => state.registeredProjects.find((p) => p.projectId === target());
-	/** Referencing daemons, which the server names in its refusal as the blockers. */
-	const blockers = () => state.daemonRoster.filter((d) => d.projectId === target());
+	/** Session processes the removal stops: roster entries referencing the
+	 *  project, minus provider-run clones (same filter as removeProjectAndStop). */
+	const referencing = createMemo(() =>
+		state.daemonRoster.filter((d) => d.projectId === target() && d.workspaceKind !== "clone"),
+	);
 
 	createEffect(() => {
 		const id = target();
@@ -52,7 +56,7 @@ export const RemoveProjectDialog: Component = () => {
 		if (id === null) return;
 		errorAtOpen = state.error;
 		setRefusal(null);
-		sendRemoveProject(id);
+		removeProjectAndStop(id);
 	};
 
 	const close = () => {
@@ -64,20 +68,15 @@ export const RemoveProjectDialog: Component = () => {
 			<Modal title="Remove project" onClose={close}>
 				<p class="danger-confirm-body">
 					Remove <span class="worktree-evidence-path">{project()!.name}</span> from the fleet
-					roster? Disk contents stay untouched; this only deregisters the project.
+					roster?
+					<Show
+						when={referencing().length > 0}
+						fallback={" Disk contents stay untouched; this only deregisters the project."}
+					>
+						{" "}
+						These sessions will be stopped and removed from omp-web. Worktree files are kept.
+					</Show>
 				</p>
-				<Show when={blockers().length > 0}>
-					<div class="worktree-blockers">
-						<span class="daemon-detail-label">referenced by</span>
-						<For each={blockers()}>
-							{(d) => (
-								<span class="daemon-chip" title={d.cwd}>
-									{d.name} ({d.status})
-								</span>
-							)}
-						</For>
-					</div>
-				</Show>
 				<Show when={refusal() !== null}>
 					<div class="msg-notice worktree-error">{refusal()}</div>
 				</Show>
@@ -86,7 +85,9 @@ export const RemoveProjectDialog: Component = () => {
 						Cancel
 					</button>
 					<button type="button" class="danger-confirm-btn" onClick={confirmRemove}>
-						Remove project
+						{referencing().length === 0
+							? "Remove project"
+							: `Stop ${referencing().length} ${referencing().length === 1 ? "session" : "sessions"} & remove`}
 					</button>
 				</div>
 			</Modal>

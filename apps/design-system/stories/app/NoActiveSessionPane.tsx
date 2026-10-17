@@ -11,7 +11,8 @@ export default defineStory({
 	variants: [
 		{
 			name: "No live session",
-			description: "Replaces the chat column when the attached daemon is gone or none is picked.",
+			description:
+				"Replaces the chat column when the attached workspace is gone or none is picked.",
 			render: () => (
 				<div class="ds-frame">
 					<main class="app-main">

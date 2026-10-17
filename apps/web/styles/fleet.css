@@ -531,6 +531,65 @@
 .daemon-chip--profile {
 	color: var(--muted-2);
 }
+/* Row status line (FLEET-03): text status chip plus an always-visible
+   Start/Restart action, under the row title. */
+.daemon-status-line {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	min-width: 0;
+}
+.daemon-status-chip {
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	color: var(--muted);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	padding: 0 var(--space-3);
+	white-space: nowrap;
+}
+.daemon-status-chip[data-chip="running"] {
+	color: var(--success);
+	border-color: var(--success-border);
+}
+.daemon-status-chip[data-chip="starting"],
+.daemon-status-chip[data-chip="reconnecting"] {
+	color: var(--warning);
+	border-color: var(--warning-border);
+}
+.daemon-status-chip[data-chip="crashed"] {
+	color: var(--error-text);
+	border-color: var(--error-border);
+}
+.daemon-row-action {
+	font-size: var(--fs-micro);
+	color: var(--accent);
+	background: none;
+	border: 1px solid var(--accent);
+	border-radius: var(--r-pill);
+	padding: 0 var(--space-3);
+	cursor: pointer;
+}
+/* Collapsed-project roll-up beside the project name (FLEET-13). */
+.project-rollup {
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	white-space: nowrap;
+}
+/* Project header Start session: always-visible text action (FLEET-13). */
+.project-start-session {
+	font-size: var(--fs-micro);
+	color: var(--accent);
+	background: none;
+	border: 1px solid var(--accent);
+	border-radius: var(--r-pill);
+	padding: 0 var(--space-3);
+	margin: 0 var(--space-2);
+	cursor: pointer;
+	white-space: nowrap;
+	flex: none;
+}
 /* P8.1: provider lifecycle progress on clone rows (preparation → runtime →
    callback; a failed stage shows its error + Retry in place of the label). */
 .daemon-stage {
@@ -688,8 +747,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
    the menu is open) on fine pointers; always visible on touch via the
    pointer:coarse block near the top of this file. The G4 start-session
    header action (ProjectGroups project group) reveals the same way. */
-.sidebar-menu-btn,
-.project-start {
+.sidebar-menu-btn {
 	opacity: 0;
 	pointer-events: none;
 }
@@ -697,9 +755,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .daemon-row:focus-within .sidebar-menu-btn,
 .project-group:hover .sidebar-menu-btn,
 .project-group:focus-within .sidebar-menu-btn,
-.sidebar-menu-btn[aria-expanded="true"],
-.project-group:hover .project-start,
-.project-group:focus-within .project-start {
+.sidebar-menu-btn[aria-expanded="true"] {
 	opacity: 1;
 	pointer-events: auto;
 }

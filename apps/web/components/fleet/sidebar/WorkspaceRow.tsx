@@ -17,12 +17,19 @@ import type {
 import { sessionActivity, type SessionActivity } from "../../../fleet-ui/session-activity";
 import { unreadIds } from "../../../fleet-ui/unread";
 import {
+	rowAction,
+	sessionChip,
+	workspaceName,
+	type RowActionKind,
+} from "../../../fleet-ui/workspace-status";
+import {
 	attachSession,
 	call,
 	closeDrawers,
 	openDaemonDetails,
 	removeDaemonById,
 	requestDaemonSessions,
+	restartDaemonById,
 	resumeDaemonSession,
 	sendWorktreeDeleteInfo,
 	setState,
@@ -31,6 +38,8 @@ import {
 	stopDaemonById,
 } from "../../../state";
 import { projectLabelFromCwd, sessionStatus, type SessionRow } from "../../../store/session-list";
+import { reportError } from "../../../store/toasts";
+import { isUserStopped } from "../../../store/user-stopped";
 import { SessionPickerRow } from "../../sessions/SessionPickerRow";
 import { ConfirmButton } from "../../ui/ConfirmButton";
 import { KebabMenu } from "../../ui/KebabMenu";
@@ -92,8 +101,8 @@ const ACTIVITY_TITLE: Record<SessionActivity, string> = {
 };
 
 const STATUS_TITLE: Record<DaemonStatus, string> = {
-	spawning: "starting the daemon…",
-	connecting: "connecting to the daemon…",
+	spawning: "starting the session process…",
+	connecting: "connecting to the session process…",
 	session: "session created…",
 	resolving: "resolving provider/model…",
 	ready: "ready, click to attach",
@@ -246,6 +255,14 @@ export const WorkspaceRow: Component<{
 	/** Loading phase: activating but the daemon isn't ready yet. Renders with
 	 *  the pulsing transitional ("resolving") visual vocabulary. */
 	const waking = () => activating() && d().status !== "ready";
+	/** Text status chip and the row's Start/Restart action. Both read the
+	 *  user-stopped mark so a stopped process reads Stopped, not Asleep. */
+	const chip = createMemo(() =>
+		sessionChip(d().status, { waking: activating(), stoppedByUser: isUserStopped(d().daemonId) }),
+	);
+	const action = createMemo(() =>
+		rowAction(d().status, { waking: activating(), stoppedByUser: isUserStopped(d().daemonId) }),
+	);
 	/** Total files with uncommitted changes (nonzero porcelain counts),
 	 *  or 0 when git facts are absent. */
 	const filesChanged = (): number => {
@@ -269,6 +286,25 @@ export const WorkspaceRow: Component<{
 	// resume target, leaving no dead space. The session-title line is the dropdown trigger
 	// (sessionTitleClick below); clicking an open dropdown's own entry resumes
 	// that session.
+	/** Start (asleep) or restart a row's session process, then attach so the
+	 *  pane follows it. The row pulses until the attach settles. */
+	const wakeAndAttach = (id: string, wake: () => void) => {
+		setActivatingIds((prev) => new Set(prev).add(id));
+		wake();
+		attachSession(id)
+			.catch(reportError)
+			.finally(() =>
+				setActivatingIds((prev) => {
+					const next = new Set(prev);
+					next.delete(id);
+					return next;
+				}),
+			);
+	};
+
+	// Clicking the row CARD (anything but the session-title line) attaches a
+	// ready session process; a stopped (asleep) one wakes then attaches. The
+	// session-title line is the dropdown trigger (sessionTitleClick below).
 	const rowClick = () => {
 		if (activating()) return;
 		// A pick changes the main pane: a drawer sidebar gets out of the way now
@@ -282,25 +318,21 @@ export const WorkspaceRow: Component<{
 			// Already the attached session: clicking its card is a no-op (a
 			// redundant attach round-trip would also reset the chat view).
 			if (daemon.daemonId === state.currentSessionId) return;
-			void attachSession(daemon.daemonId).catch((err) => setState("error", String(err)));
+			void attachSession(daemon.daemonId).catch(reportError);
 		} else if (daemon.status === "asleep") {
-			// Wake then attach: the edge wakes first and answers the attach
-			// once the session is ready; send both immediately, the edge
-			// serializes them. Activate the row NOW (active highlight + waking
-			// pulse) rather than when the proxied attached frame lands.
-			const id = daemon.daemonId;
-			setActivatingIds((prev) => new Set(prev).add(id));
-			spawnResume(id);
-			attachSession(id)
-				.catch((err) => setState("error", String(err)))
-				.finally(() =>
-					setActivatingIds((prev) => {
-						const next = new Set(prev);
-						next.delete(id);
-						return next;
-					}),
-				);
+			wakeAndAttach(daemon.daemonId, () => spawnResume(daemon.daemonId));
 		}
+	};
+
+	/** The status-line Start/Restart button. Restart stops and respawns the
+	 *  process; the attached pane keeps its transcript while it restarts. */
+	const runAction = (kind: RowActionKind) => {
+		if (activating()) return;
+		closeDrawers();
+		setSessionsOpenId(null);
+		setMenuOpenId(null);
+		const id = d().daemonId;
+		wakeAndAttach(id, kind === "start" ? () => spawnResume(id) : () => restartDaemonById(id));
 	};
 
 	/** Toggle this row's session dropdown (the session-title line only). */
@@ -390,12 +422,21 @@ export const WorkspaceRow: Component<{
 								if (v) setSessionsOpenId(null);
 							}}
 						>
-							{/* An asleep daemon has no live process, so "Stop" is
-							    meaningless there; Remove covers roster cleanup
-							    (clones delete through the verified gate instead).
-							    Asleep clones get an explicit wake/start item; the
-							    backend routes the same wake command through the
-							    lifecycle service. */}
+							{/* Safe actions first, destructive last. Start and Restart live
+						    on the status line, so they never hide behind this menu.
+						    Stop and Remove keep the two-click confirm inside the menu. */}
+							<button
+								type="button"
+								role="menuitem"
+								class="sidebar-menu-item"
+								onClick={() => {
+									setMenuOpenId(null);
+									openDaemonDetails(d().daemonId);
+								}}
+							>
+								<InfoIcon />
+								Session process details
+							</button>
 							<Show when={isClone() && d().status === "asleep"}>
 								<button
 									type="button"
@@ -415,42 +456,62 @@ export const WorkspaceRow: Component<{
 								<ConfirmButton
 									role="menuitem"
 									class="sidebar-menu-item"
-									label={isClone() ? "Stop workspace" : "Stop daemon"}
+									label={isClone() ? "Stop workspace" : "Stop session process"}
 									confirmLabel="Confirm stop"
 									title={
 										isClone()
 											? "Stops the clone's compute; checkout and session logs are preserved"
-											: "Stops the daemon"
+											: "Stops the session process; the transcript is kept"
 									}
 									onConfirm={() => doStop()}
 								>
 									<StopIcon />
 								</ConfirmButton>
 							</Show>
-							{/* Clones are managed workspaces: removing them from the
-							    roster must never bypass the verified-delete gate, and
-							    ordinary stop and stopping the CURRENT WORK are separate
-							    actions. Stop-current-work needs the live session pipe,
-							    so it exists only for the attached row (the chat Stop
-							    button is its always-visible twin); the delete dialog
-							    tells the operator to stop active work first when the
-							    gate refuses. */}
+							<Show when={isClone() && isAttached()}>
+								<button
+									type="button"
+									role="menuitem"
+									class="sidebar-menu-item"
+									title="Interrupts the running turn; the workspace keeps running"
+									onClick={() => {
+										setMenuOpenId(null);
+										void call("abort").catch(reportError);
+									}}
+								>
+									<StopIcon />
+									Stop current work
+								</button>
+							</Show>
+							<Show when={!isClone()}>
+								<ConfirmButton
+									role="menuitem"
+									class="sidebar-menu-item sidebar-menu-item--danger"
+									label="Remove from omp-web"
+									confirmLabel="Confirm remove"
+									title="Stops the session process and removes it from omp-web; worktree files are preserved"
+									onConfirm={() => doRemove()}
+								>
+									<XIcon />
+								</ConfirmButton>
+							</Show>
+							<Show when={isWorktree() && !isClone() && d().mode !== "remote"}>
+								<button
+									type="button"
+									role="menuitem"
+									class="sidebar-menu-item sidebar-menu-item--danger"
+									title="Stops the session process and removes the worktree (guard checks first)"
+									onClick={() => {
+										setMenuOpenId(null);
+										sendWorktreeDeleteInfo(d().daemonId);
+										setState("deleteWorkspaceTarget", d().daemonId);
+									}}
+								>
+									<TrashIcon />
+									Delete worktree…
+								</button>
+							</Show>
 							<Show when={isClone()}>
-								<Show when={isAttached()}>
-									<button
-										type="button"
-										role="menuitem"
-										class="sidebar-menu-item"
-										title="Interrupts the running turn; the workspace keeps running"
-										onClick={() => {
-											setMenuOpenId(null);
-											void call("abort").catch((err) => setState("error", String(err)));
-										}}
-									>
-										<StopIcon />
-										Stop current work
-									</button>
-								</Show>
 								<button
 									type="button"
 									role="menuitem"
@@ -465,49 +526,33 @@ export const WorkspaceRow: Component<{
 									Delete workspace…
 								</button>
 							</Show>
-							<Show when={!isClone()}>
-								<ConfirmButton
-									role="menuitem"
-									class="sidebar-menu-item"
-									label="Remove from omp-web"
-									confirmLabel="Confirm remove"
-									title="Stops the daemon and removes it from omp-web; worktree files are preserved"
-									onConfirm={() => doRemove()}
-								>
-									<XIcon />
-								</ConfirmButton>
-							</Show>
-							<button
-								type="button"
-								role="menuitem"
-								class="sidebar-menu-item"
-								onClick={() => {
-									setMenuOpenId(null);
-									openDaemonDetails(d().daemonId);
-								}}
-							>
-								<InfoIcon />
-								Daemon details
-							</button>
-							{/* Linked Git worktrees offer disk deletion;
-							    the dialog still requires clean Git evidence. */}
-							<Show when={isWorktree() && !isClone() && d().mode !== "remote"}>
+						</KebabMenu>
+					</div>
+					<div class="daemon-status-line">
+						<span class="daemon-status-chip" data-chip={chip().kind} title={chip().title}>
+							{chip().label}
+						</span>
+						<Show when={action()}>
+							{(a) => (
 								<button
 									type="button"
-									role="menuitem"
-									class="sidebar-menu-item sidebar-menu-item--danger"
-									title="Stops the daemon and removes the worktree (guard checks first)"
-									onClick={() => {
-										setMenuOpenId(null);
-										sendWorktreeDeleteInfo(d().daemonId);
-										setState("deleteWorkspaceTarget", d().daemonId);
+									class="daemon-row-action"
+									data-action={a().kind}
+									title={
+										a().kind === "start"
+											? "Start the session process"
+											: "Restart the session process"
+									}
+									aria-label={`${a().label} ${workspaceName(d())}`}
+									onClick={(e) => {
+										e.stopPropagation();
+										runAction(a().kind);
 									}}
 								>
-									<TrashIcon />
-									Delete worktree…
+									{a().label}
 								</button>
-							</Show>
-						</KebabMenu>
+							)}
+						</Show>
 					</div>
 					{/* Last-session title (probed by the fleet edge from the session
 					    file's JSONL title slot; the worktree row is the motivating

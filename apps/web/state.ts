@@ -46,7 +46,15 @@ import {
 	startNewSession,
 } from "./store/chat";
 import { cancelUiRequest } from "./store/modals";
-import { resetPendingProjects, settleProjectBranches, settleProjects } from "./store/projects";
+import {
+	resetPendingProjects,
+	resumeProjectRemovals,
+	resumeRestartedDaemons,
+	settleProjectBranches,
+	settleProjects,
+} from "./store/projects";
+import { reportError } from "./store/toasts";
+import { clearUserStopped, isUserStopped } from "./store/user-stopped";
 import { checkSession, subscribeAuth, type AuthStatus, type AuthSnapshot } from "./store/auth";
 import { applySettingsModel, refreshSettings } from "./store/settings";
 import {
@@ -897,6 +905,8 @@ export function hasLiveSession(): boolean {
 	if (state.currentSessionId === "") return false;
 	const entry = state.daemonRoster.find((d) => d.daemonId === state.currentSessionId);
 	if (!isDaemonDead(entry)) return true;
+	// A user stop keeps the transcript behind the stopped strip (App.tsx); a removed entry still clears.
+	if (entry !== undefined && isUserStopped(state.currentSessionId)) return true;
 	return pendingAttachTarget() === state.currentSessionId;
 }
 
@@ -950,7 +960,15 @@ function reconcileAttachedSession(): void {
 	const id = state.currentSessionId;
 	if (id === "") return;
 	if (pendingAttachTarget() === id) return;
-	if (!isDaemonDead(state.daemonRoster.find((d) => d.daemonId === id))) return;
+	const entry = state.daemonRoster.find((d) => d.daemonId === id);
+	if (!isDaemonDead(entry)) return;
+	// A removed entry is not a stop: drop its mark and clear the view as before.
+	if (entry === undefined) clearUserStopped(id);
+	// A user stop keeps the transcript behind the stopped strip; only readiness drops.
+	else if (isUserStopped(id)) {
+		setState("readyAt", undefined);
+		return;
+	}
 	setState("currentSessionId", "");
 	setState("readyAt", undefined);
 	resetSessionView();
@@ -1186,7 +1204,7 @@ export function connect(): void {
 						setState("modal", "sessions");
 					} else {
 						// Same path /new uses to start a new session.
-						void startNewSession().catch((err) => setState("error", String(err)));
+						void startNewSession().catch(reportError);
 					}
 				}
 				break;
@@ -1222,6 +1240,8 @@ export function connect(): void {
 				// flow through wholesale with the array.
 				setState("daemonRoster", frame.daemons);
 				settleProjectWakes();
+				resumeRestartedDaemons(frame.daemons);
+				resumeProjectRemovals(frame.daemons);
 				// Removed daemons never reuse ids, but don't let the set grow unbounded.
 				pruneUnread(new Set(frame.daemons.map((d) => d.daemonId)));
 				// Same for daemonActivity: drop entries whose id left the roster.
@@ -1613,10 +1633,12 @@ export {
 	listProjects,
 	listProjectBranches,
 	spawnDaemon,
+	restartDaemonById,
 	spawnResume,
 	stopDaemonById,
 	removeDaemonById,
 	sendAddProject,
+	removeProjectAndStop,
 	sendRemoveProject,
 	sendCreateWorktree,
 	sendCreateClone,
@@ -1633,6 +1655,7 @@ export {
 	sendUiResponse,
 } from "./store/modals";
 export { checkSession, signIn, signOut } from "./store/auth";
+export { isUserStopped } from "./store/user-stopped";
 export { refreshSettings, updateSetting } from "./store/settings";
 export { refreshUsageReports, setSidebarUsage } from "./store/usage";
 export {

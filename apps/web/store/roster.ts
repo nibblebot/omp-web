@@ -8,6 +8,7 @@ import {
 	isSessionSwitchSupersession,
 	postCommand,
 } from "./transport";
+import { reportError } from "./toasts";
 
 /**
  * Fleet-roster domain (Phase 3 store facade split): session/file listing
@@ -107,7 +108,7 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
 		return attachSession(daemonId).then(
 			() => undefined,
 			(err) => {
-				setState("error", String(err));
+				reportError(err);
 			},
 		);
 	}
@@ -121,7 +122,7 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
 			: attachSession(daemonId).then(
 					() => undefined,
 					(err) => {
-						setState("error", String(err));
+						reportError(err);
 					},
 				);
 	// Picking the live file on a ready daemon is a pure attach (no switch).
@@ -190,7 +191,7 @@ function switchSessionRetry(daemonId: string, sessionFile: string): Promise<void
 		.then(() => undefined)
 		.catch((err: unknown) => {
 			if (!isSessionSwitchSupersession(err)) {
-				setState("error", String(err));
+				reportError(err);
 				return undefined;
 			}
 			// The switch was swept by a session switch. Retry only while THIS
@@ -200,7 +201,7 @@ function switchSessionRetry(daemonId: string, sessionFile: string): Promise<void
 			if (state.currentSessionId !== daemonId) return undefined;
 			return call("switchSession", [sessionFile]).then(
 				() => undefined,
-				(err2: unknown) => setState("error", String(err2)),
+				(err2: unknown) => reportError(err2),
 			);
 		});
 }

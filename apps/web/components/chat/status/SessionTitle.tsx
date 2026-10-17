@@ -1,5 +1,7 @@
 import { createSignal, Show, type Component } from "solid-js";
-import { call, setState, state } from "../../../state";
+import { call, state } from "../../../state";
+import { activeWorkspace } from "../../../fleet-ui/workspace-status";
+import { reportError } from "../../../store/toasts";
 import { displayTitle } from "../../ui/title-icons";
 
 /** The session identity is the name (click to rename). Sits in the MainHeader
@@ -12,12 +14,29 @@ export const SessionTitle: Component = () => {
 		const title = el.value.trim();
 		setEditingName(false);
 		if (title && title !== state.sessionName) {
-			void call("setSessionName", [title]).catch((err) => setState("error", String(err)));
+			void call("setSessionName", [title]).catch(reportError);
 		}
 	};
 
 	return (
 		<div class="session-header">
+			<Show
+				when={activeWorkspace(state.daemonRoster, state.registeredProjects, state.currentSessionId)}
+				keyed
+			>
+				{(w) => (
+					<span class="session-crumbs" title={w.cwd}>
+						<span class="session-crumb" title={w.project}>
+							{w.project}
+						</span>
+						<span aria-hidden="true">/</span>
+						<span class="session-crumb" title={w.workspace}>
+							{w.workspace}
+						</span>
+						<span aria-hidden="true">/</span>
+					</span>
+				)}
+			</Show>
 			<Show
 				when={editingName()}
 				fallback={

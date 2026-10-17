@@ -1,4 +1,5 @@
 import { setState } from "../state";
+import { isSessionSwitchSupersession } from "./transport";
 
 /**
  * Fleet/app-scoped ephemeral toast notifications (worktree_removed on-disk
@@ -43,4 +44,13 @@ export function pushToast(text: string, opts: ToastOptions = {}): number {
 /** Remove one toast by id (click-to-dismiss). */
 export function dismissToast(id: number): void {
 	setState("toasts", (prev) => prev.filter((toast) => toast.id !== id));
+}
+
+/** Surface a failed store action on the global error banner, as its message
+ *  text (never an "Error: " prefix). A session switch supersedes in-flight
+ *  calls by design (state.ts rejects them with "session switched"); that is
+ *  control flow, never a user-facing error, so it is dropped. */
+export function reportError(err: unknown): void {
+	if (isSessionSwitchSupersession(err)) return;
+	setState("error", err instanceof Error ? err.message : String(err));
 }

@@ -8,12 +8,12 @@
  * previous session. Filling in a daemon-level entry with its session id, and
  * restoring a route, replace the entry in place.
  */
-import { state, setState } from "../state";
+import { state } from "../state";
 import { spawnResume } from "./projects";
 import { formatRoute, parseRoute, type Route } from "./route";
 import { closeDock, openDock } from "./dock";
 import { requestDaemonSessions, resumeDaemonSession, setView } from "./roster";
-import { pushToast } from "./toasts";
+import { pushToast, reportError } from "./toasts";
 import { attachSession } from "./transport";
 
 /** Route restores in flight. While any runs, the attached session does not write the hash: the restore owns it. */
@@ -62,7 +62,7 @@ async function attachDaemon(daemonId: string): Promise<void> {
 	const entry = state.daemonRoster.find((d) => d.daemonId === daemonId);
 	// Wake then attach, matching the sidebar's click-to-wake path.
 	if (entry?.status === "asleep") spawnResume(daemonId);
-	await attachSession(daemonId).catch((err: unknown) => setState("error", String(err)));
+	await attachSession(daemonId).catch(reportError);
 }
 
 async function attachSessionRoute(daemonId: string, sessionId: string): Promise<void> {

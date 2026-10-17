@@ -23,9 +23,12 @@ import {
 	daemonsByProject,
 	hasLiveSession,
 	initialView,
+	isUserStopped,
 	listProjectBranches,
 	pushNotice,
 	refreshSettings,
+	removeProjectAndStop,
+	restartDaemonById,
 	sendAddExistingWorktree,
 	sendAddProject,
 	sendCreateClone,
@@ -38,6 +41,7 @@ import {
 	setTxSidebarVisible,
 	setView,
 	spawnResume,
+	stopDaemonById,
 	state,
 	updateSetting,
 	requestDaemonSessions,
@@ -45,6 +49,7 @@ import {
 	type SubagentInfo,
 } from "../state";
 import { settingValue } from "../store/settings";
+import { reportError } from "../store/toasts";
 import {
 	FakeEventSource,
 	attached,
@@ -2324,6 +2329,84 @@ describe("attached session reconciliation against roster truth", () => {
 		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "error" })] });
 		expect(state.currentSessionId).toBe("");
 		expect(hasLiveSession()).toBe(false);
+	});
+
+	test("a user stop keeps the attached transcript behind the stopped strip; restart clears the mark", () => {
+		attachAndPrime();
+		stopDaemonById("daemon-a");
+		expect(isUserStopped("daemon-a")).toBe(true);
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+
+		expect(state.currentSessionId).toBe("daemon-a");
+		expect(state.readyAt).toBeUndefined();
+		expect(itemCounts()).toEqual({ user: 1, assistant: 1 });
+		expect(hasLiveSession()).toBe(true);
+
+		restartDaemonById("daemon-a");
+		expect(isUserStopped("daemon-a")).toBe(false);
+	});
+
+	test("restarting a ready process waits for the roster to show it asleep before waking", () => {
+		attachAndPrime();
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
+		restartDaemonById("daemon-a");
+		expect(isUserStopped("daemon-a")).toBe(true);
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "ready" })] });
+		expect(isUserStopped("daemon-a")).toBe(true);
+
+		dispatch({ type: "roster", daemons: [daemon("daemon-a", { status: "asleep" })] });
+		expect(isUserStopped("daemon-a")).toBe(false);
+	});
+
+	test("removing a project with a running process defers remove_project until the roster drops it", () => {
+		attachAndPrime();
+		dispatch({
+			type: "roster",
+			daemons: [daemon("daemon-a", { status: "ready", projectId: "p1" })],
+		});
+		removeProjectAndStop("p1");
+		expect(posted.filter((c) => c.type === "remove_project")).toEqual([]);
+
+		dispatch({
+			type: "roster",
+			daemons: [daemon("daemon-a", { status: "ready", projectId: "p1" })],
+		});
+		expect(posted.filter((c) => c.type === "remove_project")).toEqual([]);
+
+		dispatch({ type: "roster", daemons: [] });
+		expect(posted.filter((c) => c.type === "remove_project")).toEqual([
+			{ type: "remove_project", id: expect.any(String), projectId: "p1" },
+		]);
+	});
+
+	test("a user-stopped attached daemon removed from the roster clears the view and its mark", () => {
+		attachAndPrime();
+		stopDaemonById("daemon-a");
+
+		dispatch({ type: "roster", daemons: [] });
+
+		expect(state.currentSessionId).toBe("");
+		expect(state.items).toEqual([]);
+		expect(hasLiveSession()).toBe(false);
+		expect(isUserStopped("daemon-a")).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Session-switch supersession (FLEET-02): a switch superseded by a newer one
+// must not surface as an error toast; real failures still do.
+// ---------------------------------------------------------------------------
+describe("reportError", () => {
+	test("a superseded session switch stays silent; a real failure surfaces", () => {
+		setState("error", null);
+
+		reportError(new Error("session switched"));
+		expect(state.error).toBeNull();
+
+		reportError(new Error("boom"));
+		expect(state.error).toBe("boom");
 	});
 });
 

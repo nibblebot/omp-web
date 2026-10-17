@@ -53,6 +53,7 @@ function typeOf(payload: unknown): string | undefined {
 function makeHarness(
 	snapshot: () => Record<string, unknown>[] = () => [],
 	pairLive: () => boolean = () => true,
+	onBrowserStreamsChange: (count: number) => void = () => {},
 ): {
 	control: DaemonControl;
 	sent: Sent[];
@@ -104,6 +105,7 @@ function makeHarness(
 		pairLive,
 		mainSessionFile: null,
 		onShutdown: () => {},
+		onBrowserStreamsChange,
 	};
 	const control = createDaemonControl(deps);
 	return { control, sent, primes, sentCount };
@@ -336,5 +338,34 @@ describe("daemon-control browser-stream priming", () => {
 		live = true;
 		expect(control.browserStreamCount()).toBe(1);
 		control.stop();
+	});
+});
+
+describe("daemon-control browser-stream count (FLEET-05)", () => {
+	test("onBrowserStreamsChange reports each browser stream open/close and 0 on stop", () => {
+		const counts: number[] = [];
+		const { control } = makeHarness(undefined, undefined, (count) => counts.push(count));
+		const envelope = (streamId: string, type: "stream_open" | "stream_close"): void =>
+			control.handleEnvelope({
+				version: 1,
+				workspaceId: "w1",
+				generation: 1,
+				connectionId: "conn",
+				streamId,
+				seq: 0,
+				kind: "control",
+				payload: { type },
+				at: Date.now(),
+			} satisfies CallbackEnvelope);
+		envelope("browser/x", "stream_open");
+		expect(counts).toEqual([1]);
+		envelope("browser/y", "stream_open");
+		expect(counts).toEqual([1, 2]);
+		envelope("browser/x", "stream_close");
+		expect(counts).toEqual([1, 2, 1]);
+		envelope("browser/y", "stream_close");
+		expect(counts).toEqual([1, 2, 1, 0]);
+		control.stop();
+		expect(counts).toEqual([1, 2, 1, 0, 0]);
 	});
 });

@@ -47,7 +47,7 @@ const BackgroundDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 				<button
 					class="daemon-btn"
 					type="button"
-					title="Restart daemon"
+					title="Restart session process"
 					disabled={busy()}
 					onClick={() => void act(() => restartDaemon(props.d.projectDir, props.d.name))}
 				>
@@ -56,7 +56,7 @@ const BackgroundDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 				<button
 					class="daemon-btn daemon-btn--kill"
 					type="button"
-					title="Stop daemon"
+					title="Stop session process"
 					disabled={busy()}
 					onClick={() => void act(() => stopDaemon(props.d.projectDir, props.d.name))}
 				>
@@ -73,7 +73,7 @@ export const BackgroundDaemonsBar: Component = () => {
 	const live = () =>
 		[...state.daemons.values()].filter(isLiveDaemon).sort((a, b) => a.startedAt - b.startedAt);
 	return (
-		<BackgroundBar items={live()} label="Background daemons">
+		<BackgroundBar items={live()} label="Background session processes">
 			{(d) => <BackgroundDaemonRow d={d} />}
 		</BackgroundBar>
 	);

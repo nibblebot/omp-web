@@ -29,8 +29,8 @@ export function DaemonLog(props: {
 	};
 	const note = () =>
 		entry()?.status === "error"
-			? "daemon errored, captured log from last run"
-			: "daemon asleep, captured log from last run";
+			? "session process errored, captured log from last run"
+			: "session process asleep, captured log from last run";
 
 	const load = () => {
 		setLoading(true);

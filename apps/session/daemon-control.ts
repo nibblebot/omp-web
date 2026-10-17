@@ -114,6 +114,15 @@ export interface DaemonControlDeps {
 	mainSessionFile: string | null;
 	/** Fleet ShutdownControl: the caller runs the graceful exit once the ack is queued. */
 	onShutdown: (reason: string | undefined) => void;
+	/**
+	 * Notified with the live browser-stream count whenever it changes: after a
+	 * NEW `browser/<connId>` stream opens, after `stream_close` removes one, and
+	 * from `stop()` (always 0). Ring-hit reopens of an existing stream do not
+	 * fire it. Lets the host run work (the daemon roster poll) that must live
+	 * exactly as long as callback-pair browsers do, since these virtual streams
+	 * never join the local SSE consumer set.
+	 */
+	onBrowserStreamsChange?: (count: number) => void;
 }
 
 interface RingEntry {
@@ -376,6 +385,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				deferredBytes: 0,
 			};
 			streams.set(streamId, stream);
+			deps.onBrowserStreamsChange?.(streams.size);
 		}
 		if (lastSeq !== undefined) stream!.lastSeq = lastSeq;
 		const replay = ringAfter(stream!, stream!.lastSeq);
@@ -426,7 +436,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 				ack(envelope.streamId, "stream_open", undefined, true);
 				break;
 			case "stream_close":
-				streams.delete(envelope.streamId);
+				if (streams.delete(envelope.streamId)) deps.onBrowserStreamsChange?.(streams.size);
 				ack(envelope.streamId, "stream_close", undefined, true);
 				break;
 			case "log_ack":
@@ -629,6 +639,7 @@ export function createDaemonControl(deps: DaemonControlDeps): DaemonControl {
 		quiescing = false;
 		admissionBarrier = false;
 		streams.clear();
+		deps.onBrowserStreamsChange?.(0);
 	};
 
 	const status = (): DaemonControlStatus => ({

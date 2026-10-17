@@ -15,7 +15,7 @@ export default defineStory({
 	variants: [
 		{
 			name: "Ready with draft",
-			description: "Send is enabled; the daemon is ready and the composer has text.",
+			description: "Send is enabled; the session process is ready and the composer has text.",
 			render: () => (
 				<PromptActions
 					message={() => draft}
@@ -82,7 +82,7 @@ export default defineStory({
 		},
 		{
 			name: "Disconnected",
-			description: "No live connection to the daemon, so sending is blocked.",
+			description: "No live connection to the session process, so sending is blocked.",
 			seed: { connected: false },
 			render: () => (
 				<PromptActions

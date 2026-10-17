@@ -3,6 +3,7 @@ import { Dynamic } from "solid-js/web";
 import { MainHeader } from "./components/app/MainHeader";
 import { NoActiveSessionPane } from "./components/app/NoActiveSessionPane";
 import { DockHost } from "./components/app/DockHost";
+import { StoppedSessionStrip } from "./components/app/StoppedSessionStrip";
 import {
 	PromptBox,
 	QueueBar,
@@ -20,9 +21,11 @@ import {
 	connect,
 	hasLiveSession,
 	initAuth,
+	isUserStopped,
 	setState,
 	setView,
 	state,
+	restartDaemonById,
 	toggleToolsExpanded,
 } from "./state";
 import { initTheme } from "./prefs/theme";
@@ -59,6 +62,9 @@ const ChatMode: Component = () => (
 						</div>
 						{/* Session-send config bar (per-turn badges, model/thinking/stats), glued to the composer. */}
 						<SessionConfigBar />
+						<Show when={isUserStopped(state.currentSessionId)}>
+							<StoppedSessionStrip onRestart={() => restartDaemonById(state.currentSessionId)} />
+						</Show>
 						<PromptBox />
 					</main>
 				</div>

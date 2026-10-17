@@ -18,6 +18,7 @@ import {
 } from "../state";
 import { isReady } from "./session";
 import { call } from "./transport";
+import { reportError } from "./toasts";
 import { advisorNotesOf } from "./slices/advisor";
 import { flushBtwEphemeral } from "./slices/btw";
 import { applyGoalUpdated } from "./slices/goals";
@@ -800,7 +801,7 @@ export function dequeueLastQueued(): void {
 			const msg = restored as { text: string; images?: ImageArg[] } | undefined;
 			if (msg) setPromptInsert({ text: msg.text, images: msg.images });
 		})
-		.catch((err) => setState("error", String(err)));
+		.catch(reportError);
 }
 
 /**
