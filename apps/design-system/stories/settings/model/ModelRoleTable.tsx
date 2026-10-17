@@ -1,12 +1,19 @@
+import type { ModelBrowserEntry } from "#lib/wire/protocol";
 import { ModelRoleTable } from "../../../../web/components/settings/ModelRoleTable";
 import { setState } from "../../../../web/state";
 import { modelInfos, modelRoleCatalog } from "../../../fixtures/overlays";
 import { defineStory } from "../../../registry";
+import { answerCalls } from "../../../daemon";
 
 const thinkingSelectors = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
+/** The fixture catalog with its second model locked, to show the disabled option and its reason. */
+const lockedBrowser: ModelBrowserEntry[] = modelInfos.map((model, index) =>
+	index === 1 ? { ...model, locked: "credentials" } : model,
+);
+
 const seedRoles = (storage: "global" | "project"): void => {
-	setState("modelBrowser", modelInfos);
+	answerCalls({ getModelBrowser: () => modelInfos });
 	setState("modelRoleCatalog", modelRoleCatalog);
 	setState("modelRoleStorage", storage);
 	setState("thinkingSelectors", thinkingSelectors);
@@ -31,6 +38,15 @@ export default defineStory({
 			name: "Roles, project storage",
 			description: "Same catalog with modelRoleStorage set to project.",
 			seed: () => seedRoles("project"),
+			render: () => <ModelRoleTable />,
+		},
+		{
+			name: "Roles, locked models",
+			description: "Models without credentials are disabled in every role select, with the reason.",
+			seed: () => {
+				seedRoles("global");
+				answerCalls({ getModelBrowser: () => lockedBrowser });
+			},
 			render: () => <ModelRoleTable />,
 		},
 	],

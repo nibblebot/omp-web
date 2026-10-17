@@ -1,7 +1,8 @@
-import { createMemo, createSignal, For, Show, type Component } from "solid-js";
+import { createMemo, createResource, createSignal, For, Show, type Component } from "solid-js";
 import type { ModelBrowserEntry, ModelRoleCatalogEntry } from "#lib/wire/protocol";
 import { state } from "../../state";
-import { setModelRoleAssignment, setModelRoleHidden } from "../../store/models";
+import { loadModelBrowser, setModelRoleAssignment, setModelRoleHidden } from "../../store/models";
+import { lockMessage } from "../../usage/model-search";
 import { ChevronDownIcon } from "../ui/icons";
 
 const selectorOf = (entry: ModelRoleCatalogEntry): string =>
@@ -29,6 +30,10 @@ const groupByProvider = (
 export const ModelRoleTable: Component = () => {
 	const [busy, setBusy] = createSignal<string | undefined>();
 	const groups = createMemo(() => groupByProvider(state.modelBrowser));
+	// Options come from the same getModelBrowser list the quick picker reads. Settings
+	// never opens the picker, so the table loads it itself and waits for it: a select
+	// must never open with only "Clear (inherit)".
+	const [browser] = createResource(loadModelBrowser);
 
 	const run = async (role: string, action: () => Promise<boolean>): Promise<boolean> => {
 		setBusy(role);
@@ -62,7 +67,7 @@ export const ModelRoleTable: Component = () => {
 	};
 
 	return (
-		<Show when={state.modelRoleCatalog?.length}>
+		<Show when={state.modelRoleCatalog?.length && !browser.loading}>
 			<div class="settings-block">
 				<div class="settings-group">
 					<div class="settings-roles-scroll">
@@ -127,7 +132,9 @@ export const ModelRoleTable: Component = () => {
 																					`${model.provider}/${model.id}` === selectorOf(entry)
 																				}
 																			>
-																				{model.id}
+																				{model.locked
+																					? `${model.id} (${lockMessage(model.locked, model.provider)})`
+																					: model.id}
 																			</option>
 																		)}
 																	</For>
