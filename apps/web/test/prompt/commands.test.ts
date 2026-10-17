@@ -781,13 +781,76 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 		expect(posted.some((c) => c.type === "call" && c.method === "queueCommand")).toBe(false);
 	});
 
-	test("a non-queueable forwarded command still runs through prompt while streaming (U10b)", () => {
+	test("a read-only forwarded command still runs through prompt while streaming (jx0b)", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
 		setState("streaming", true);
 		posted.length = 0;
-		dispatchInput("/security status", undefined, "enter");
+		dispatchInput("/dirs", undefined, "enter");
 		expect(promptCalls().length).toBe(1);
 		expect(posted.some((c) => c.type === "call" && c.method === "queueCommand")).toBe(false);
+	});
+});
+
+describe("busy policy dispatch (CMD-08, jx0b)", () => {
+	beforeEach(() => {
+		setState({
+			items: [],
+			streaming: false,
+			availableCommands: [
+				{ name: "skill:lint", source: "skill" },
+				{ name: "fix-bug", source: "file" },
+				{ name: "ext-status", source: "extension" },
+			],
+		});
+	});
+
+	function promptCalls() {
+		return posted.filter((c) => c.type === "call" && c.method === "prompt");
+	}
+
+	test.each(["/skill:lint", "/fix-bug", "/ext-status", "/security status"])(
+		"%s queues instead of running while a turn streams (jx0b)",
+		(text) => {
+			connect();
+			FakeEventSource.instances.at(-1)!.onopen?.();
+			setState("streaming", true);
+			posted.length = 0;
+			dispatchInput(text, undefined, "enter");
+			expect(promptCalls()).toEqual([]);
+			expect(posted).toContainEqual(
+				expect.objectContaining({ type: "call", method: "queueCommand", args: [text] }),
+			);
+		},
+	);
+
+	test("/session delete is refused while a turn streams: no queue, no SDK call (jx0b)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("streaming", true);
+		posted.length = 0;
+		dispatchInput("/session delete", undefined, "enter");
+		expect(promptCalls()).toEqual([]);
+		expect(posted.some((c) => c.type === "call" && c.method === "queueCommand")).toBe(false);
+		expect(state.items.at(-1)).toMatchObject({
+			kind: "notice",
+			level: "info",
+			message: expect.stringContaining("Stop the turn"),
+		});
+	});
+
+	test("/delete is refused while a turn streams: no confirm dialog, no deleteSession (jx0b)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("streaming", true);
+		posted.length = 0;
+		dispatchInput("/delete", undefined, "enter");
+		expect(dangerConfirm()).toBeNull();
+		expect(posted.some((c) => c.type === "call" && c.method === "deleteSession")).toBe(false);
+		expect(state.items.at(-1)).toMatchObject({
+			kind: "notice",
+			level: "info",
+			message: expect.stringContaining("Stop the turn"),
+		});
 	});
 });

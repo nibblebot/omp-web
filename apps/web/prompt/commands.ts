@@ -1,4 +1,5 @@
 import type { ImageArg } from "#lib/wire/protocol";
+import { slashBusyPolicy, type SlashCommandSource } from "#lib/wire/slash-busy";
 import { requestDangerConfirm } from "./danger-confirm";
 import { featureCommand, featureCommandDetails, isFeatureEnabled } from "../features/registry";
 import { featureForCommand } from "../features/manifest";
@@ -102,25 +103,31 @@ export function currentCommandRegistry(): CommandEntry[] {
 }
 
 /**
- * Sends a daemon-run command after echoing it. A builtin cannot start mid-turn
- * (AgentBusyError): say so in a notice, not an SDK toast (CMD-08). A `queueable`
- * builtin the SDK refuses while busy waits in the queue bar instead (U10b).
+ * Sends a daemon-run command after echoing it. While a turn streams, the busy
+ * policy decides (jx0b, CMD-08): read-only builtins run now, `/session delete`
+ * is refused with a notice, and everything else queues as a command chip.
  */
-function forwardSlash(text: string, name: string, queueable = false): void {
+function forwardSlash(
+	text: string,
+	name: string,
+	source: SlashCommandSource | undefined,
+	args: string,
+): void {
 	recordCommandUse(name);
-	if (queueable && state.streaming) {
+	const policy = state.streaming ? slashBusyPolicy({ source, name, args }) : "now";
+	if (policy === "refuse") {
+		pushNotice(
+			"info",
+			`/${name} ${args.trim()} is refused while a turn runs. Stop the turn first, then run it again.`,
+		);
+		return;
+	}
+	if (policy === "queue") {
 		void call("queueCommand", [text]).catch(showError);
 		return;
 	}
 	pushNotice("echo", text);
-	void call("prompt", [text]).catch((err) => {
-		if (String(err).includes("already processing")) {
-			pushNotice(
-				"info",
-				`/${name} did not start: a turn is running. Wait for it to finish or press Esc, then run it again.`,
-			);
-		} else showError(err);
-	});
+	void call("prompt", [text]).catch(showError);
 }
 
 /**
@@ -359,7 +366,7 @@ export function openOrForward(modal: ModalName, name: string): (args: string) =>
 			setState("modal", modal);
 			return;
 		}
-		if (isSdkHandled(name)) forwardSlash(`/${name} ${text}`, name);
+		if (isSdkHandled(name)) forwardSlash(`/${name} ${text}`, name, "builtin", text);
 		else
 			pushNotice(
 				"info",
@@ -463,6 +470,11 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 			.catch((err) => setState("error", humanizeCompactionError(err))),
 	delete: (args) => {
 		if (args.trim()) return pushNotice("error", "Usage: /delete takes no arguments.");
+		if (state.streaming)
+			return pushNotice(
+				"info",
+				"/delete is refused while a turn runs. Stop the turn first, then delete the session.",
+			);
 		requestDangerConfirm({
 			title: "Delete this session?",
 			body: "The attached session's transcript and its artifacts are deleted permanently, and the session process starts a new empty session in its place. This cannot be undone.",
@@ -593,7 +605,7 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			}
 			// Agent-side builtin/skill/extension/file command. Its command_output frames
 			// don't arrive over the SSE/POST transport (documented tradeoff).
-			forwardSlash(trimmed, entry.name, entry.queueWhenBusy === true);
+			forwardSlash(trimmed, entry.name, entry.source, parsed.args);
 			return;
 		}
 		case "queue": {
