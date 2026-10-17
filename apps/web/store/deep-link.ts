@@ -69,7 +69,7 @@ async function attachSessionRoute(daemonId: string, sessionId: string): Promise<
 	if (state.currentSessionId === daemonId && state.sessionId === sessionId) return;
 	const match = (await requestDaemonSessions(daemonId)).find((s) => s.id === sessionId);
 	if (match === undefined) {
-		pushToast("That session is no longer available on this daemon.");
+		pushToast("That session is no longer available in this session process.");
 		writeRoute({ kind: "daemon", daemonId }, "replace");
 		await attachDaemon(daemonId);
 		return;
@@ -89,7 +89,7 @@ async function restoreRoute(route: Route): Promise<void> {
 	if (route.kind === "none" || route.kind === "analysis") return;
 	const { daemonId } = route;
 	if (!state.daemonRoster.some((d) => d.daemonId === daemonId)) {
-		pushToast("That daemon is no longer in the fleet.");
+		pushToast("That session process is no longer in the fleet.");
 		writeRoute({ kind: "none" }, "replace");
 		return;
 	}

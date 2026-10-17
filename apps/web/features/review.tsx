@@ -4,6 +4,7 @@ import { TodoPanel } from "../components/review/TodoPanel";
 import { Modal } from "../components/ui/Modal";
 import { call, pushNotice, setState } from "../state";
 import { openDock } from "../store/dock";
+import { reportError } from "../store/toasts";
 import type { FeatureCommand, FeatureModule } from "./registry";
 import "./review.css";
 
@@ -27,7 +28,7 @@ const todo: FeatureCommand = {
 	detail: "Todo panel (/todo [subcommand])",
 	run(args) {
 		const text = args.trim();
-		if (text) void call("prompt", [`/todo ${text}`]).catch((err) => setState("error", String(err)));
+		if (text) void call("prompt", [`/todo ${text}`]).catch(reportError);
 		else setState("modal", "todos");
 	},
 };

@@ -56,7 +56,7 @@ import {
 	settleProjects,
 } from "./store/projects";
 import { reportError } from "./store/toasts";
-import { clearUserStopped, isUserStopped } from "./store/user-stopped";
+import { clearUserStopped, isUserStopped, reconcileUserStopped } from "./store/user-stopped";
 import { checkSession, subscribeAuth, type AuthStatus, type AuthSnapshot } from "./store/auth";
 import { applySettingsModel, refreshSettings } from "./store/settings";
 import {
@@ -1000,7 +1000,7 @@ function reconcileAttachedSession(): void {
 	pushDebug(
 		"info",
 		"roster",
-		`attached daemon ${id.slice(0, 8)} is gone or asleep; session cleared`,
+		`attached session process ${id.slice(0, 8)} is gone or asleep; session cleared`,
 	);
 }
 
@@ -1287,6 +1287,8 @@ export function connect(): void {
 					}
 					if (dropped) setState("daemonActivity", reconcile(next));
 				}
+				// Persisted user-stop marks are confirmed (or dropped) against the roster first.
+				reconcileUserStopped(frame.daemons);
 				// Roster truth wins over the attached chat: if the daemon we were
 				// attached to vanished or went asleep, drop the session view (the
 				// roster itself is fleet-scoped and survives).
@@ -1294,7 +1296,7 @@ export function connect(): void {
 				pushDebug(
 					"info",
 					"roster",
-					`roster frame: ${frame.daemons.length} daemon${frame.daemons.length === 1 ? "" : "s"}`,
+					`roster frame: ${frame.daemons.length} session process${frame.daemons.length === 1 ? "" : "es"}`,
 				);
 				break;
 			}
@@ -1349,7 +1351,7 @@ export function connect(): void {
 				pushDebug(
 					frame.status === "error" || frame.error !== undefined ? "error" : "info",
 					"roster",
-					`daemon ${frame.daemonId.slice(0, 8)} → ${frame.status}${frame.error !== undefined ? `: ${frame.error}` : ""}`,
+					`session process ${frame.daemonId.slice(0, 8)} → ${frame.status}${frame.error !== undefined ? `: ${frame.error}` : ""}`,
 				);
 				// Same reconcile as the roster frame: the attached daemon just
 				// went asleep/error, so clear the session view (race-guarded).
@@ -1411,7 +1413,7 @@ export function connect(): void {
 				) {
 					pending.resolve({ text: frame.text, cursor: frame.cursor, state: frame.state });
 				} else {
-					pending.reject(new Error(frame.error ?? "daemon logs failed"));
+					pending.reject(new Error(frame.error ?? "session process logs failed"));
 				}
 				break;
 			}
@@ -1421,7 +1423,7 @@ export function connect(): void {
 				pendingDaemonControl.delete(frame.id);
 				clearTimeout(pending.timer);
 				if (frame.ok && frame.daemon) pending.resolve(frame.daemon);
-				else pending.reject(new Error(frame.error ?? "daemon control failed"));
+				else pending.reject(new Error(frame.error ?? "session process control failed"));
 				break;
 			}
 			case "files":
@@ -1579,12 +1581,12 @@ export function connect(): void {
 				if (frame.proto !== OMP_PROTO) {
 					setState(
 						"error",
-						`proto mismatch: daemon speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`,
+						`proto mismatch: session process speaks OMP_PROTO ${String(frame.proto)}, expected ${OMP_PROTO}`,
 					);
 					pushDebug(
 						"error",
 						"transport",
-						`proto mismatch: daemon speaks ${String(frame.proto)}, expected ${OMP_PROTO}`,
+						`proto mismatch: session process speaks ${String(frame.proto)}, expected ${OMP_PROTO}`,
 					);
 					teardownStream(source);
 					return;

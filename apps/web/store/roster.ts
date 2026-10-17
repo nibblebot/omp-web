@@ -142,7 +142,7 @@ export function attachForPanel(daemonId: string): Promise<boolean> {
 		() => true,
 		(err: unknown) => {
 			if (!isSessionSwitchSupersession(err)) {
-				setState("error", String(err));
+				reportError(err);
 				return false;
 			}
 			return state.currentSessionId === daemonId;
@@ -165,7 +165,7 @@ export function spawnProjectSession(cwd: string, sessionFile: string): void {
 	postCommand({ type: "spawn", id: crypto.randomUUID(), cwd } satisfies ClientCommand).catch(
 		(err: unknown) => {
 			pendingProjectWakes.delete(cwd);
-			setState("error", String(err));
+			reportError(err);
 		},
 	);
 }

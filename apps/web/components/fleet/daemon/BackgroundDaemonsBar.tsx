@@ -2,6 +2,7 @@ import { createSignal, Show, type Component } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { daemonsKey, type DaemonInfo } from "#lib/wire/protocol";
 import { isLiveDaemon, restartDaemon, setState, state, stopDaemon } from "../../../state";
+import { reportError } from "../../../store/toasts";
 import { BackgroundBar } from "../../ui/BackgroundBar";
 import { LoaderIcon } from "../../ui/icons";
 import { formatDaemonUptime } from "../../../fleet-ui/daemon-ui";
@@ -25,7 +26,7 @@ const BackgroundDaemonRow: Component<{ d: DaemonInfo }> = (props) => {
 			const info = await fn();
 			setState("daemons", (m) => new Map(m).set(daemonsKey(props.d), info));
 		} catch (err) {
-			setState("error", String(err));
+			reportError(err);
 		} finally {
 			setBusy(false);
 		}

@@ -834,14 +834,14 @@ export function dequeueLastQueued(): void {
 export function stopTurn(keepSubagents = false): Promise<void> {
 	return call("abort", [{ keepSubagents }])
 		.then(() => undefined)
-		.catch((err) => setState("error", String(err)));
+		.catch(reportError);
 }
 
 /** Send the messages a Stop paused, in their original order. */
 export function resumeQueuedMessages(): Promise<void> {
 	return call("resumeQueue")
 		.then(() => undefined)
-		.catch((err) => setState("error", String(err)));
+		.catch(reportError);
 }
 
 /** Remove one queue chip by identity and reload its text into the composer. */
@@ -851,33 +851,33 @@ export function editQueuedMessage(ref: QueuedMessageRef): Promise<void> {
 			const msg = restored as { text: string; images?: ImageArg[] } | undefined;
 			if (msg) setPromptInsert({ text: msg.text, images: msg.images });
 		})
-		.catch((err) => setState("error", String(err)));
+		.catch(reportError);
 }
 
 /** Remove one queue chip by identity. */
 export function deleteQueuedMessage(ref: QueuedMessageRef): Promise<void> {
 	return call("takeQueued", [ref])
 		.then(() => undefined)
-		.catch((err) => setState("error", String(err)));
+		.catch(reportError);
 }
 
 /** Send one queue chip now: a live follow-up is promoted to steer, anything else interrupts the turn. */
 export function runQueuedMessageNow(ref: QueuedMessageRef): Promise<void> {
 	return call("runQueuedNow", [ref])
 		.then(() => undefined)
-		.catch((err) => setState("error", String(err)));
+		.catch(reportError);
 }
 
 /** Remove one queued slash command (matched by index and text) without running it. */
 export function deleteQueuedCommand(ref: QueuedCommandRef): Promise<void> {
 	return call("takeQueuedCommand", [ref])
 		.then(() => undefined)
-		.catch((err) => setState("error", String(err)));
+		.catch(reportError);
 }
 
 /** Run one queued slash command now; it runs even while Stop has paused the queue. */
 export function runQueuedCommandNow(ref: QueuedCommandRef): Promise<void> {
 	return call("runQueuedCommandNow", [ref])
 		.then(() => undefined)
-		.catch((err) => setState("error", String(err)));
+		.catch(reportError);
 }

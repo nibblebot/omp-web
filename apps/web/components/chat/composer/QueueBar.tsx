@@ -12,9 +12,9 @@ import {
 	resumeQueuedMessages,
 	runQueuedCommandNow,
 	runQueuedMessageNow,
-	setState,
 	state,
 } from "../../../state";
+import { reportError } from "../../../store/toasts";
 import { XIcon } from "../../ui/icons";
 
 const EMPTY: QueuedMessagesSnapshot = { steering: [], followUp: [], liveSteered: 0, paused: [] };
@@ -107,9 +107,7 @@ export const QueueBar: Component = () => {
 	};
 
 	const clearAll = () => {
-		void call("clearQueue")
-			.then(refresh)
-			.catch((err) => setState("error", String(err)));
+		void call("clearQueue").then(refresh).catch(reportError);
 	};
 
 	return (

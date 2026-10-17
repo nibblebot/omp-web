@@ -337,7 +337,7 @@ function refuseWorkspaceRoot(op: "move" | "wt"): void {
 	pushNotice(
 		"error",
 		op === "move"
-			? "/move is unavailable for attached fleet sessions: the daemon checkout is immutable while attached. Use the fleet sidebar to manage workspaces."
+			? "/move is unavailable for attached fleet sessions: the session's checkout is immutable while attached. Use the fleet sidebar to manage workspaces."
 			: "/wt is unavailable for attached fleet sessions: worktree creation belongs to the fleet project flow. Use the Add-workspace modal to create a worktree.",
 	);
 }
@@ -465,7 +465,7 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 		if (args.trim()) return pushNotice("error", "Usage: /delete takes no arguments.");
 		requestDangerConfirm({
 			title: "Delete this session?",
-			body: "The attached session's transcript and its artifacts are deleted permanently, and the daemon starts a new empty session in its place. This cannot be undone.",
+			body: "The attached session's transcript and its artifacts are deleted permanently, and the session process starts a new empty session in its place. This cannot be undone.",
 			confirmLabel: "Delete session",
 			onConfirm: () => {
 				void call("deleteSession").catch(showError);

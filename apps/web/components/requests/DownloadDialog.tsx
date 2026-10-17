@@ -114,7 +114,7 @@ export const DownloadDialog: Component = () => {
 							{(consent) => <ConsentBody consent={consent().consent} />}
 						</Match>
 						<Match when={state().phase === "producing"}>
-							<p class="download-status">Producing the export on the daemon…</p>
+							<p class="download-status">Producing the export in the session process…</p>
 						</Match>
 						<Match when={asPhase(state(), "fetching")}>
 							{(fetching) => (

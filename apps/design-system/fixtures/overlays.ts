@@ -131,7 +131,7 @@ export const settingAutoCompact: SettingsItem = {
 		effective: true,
 		source: "default",
 		canUnset: false,
-		warnings: ["Disabled by OMP_NO_COMPACT in the daemon environment for this run."],
+		warnings: ["Disabled by OMP_NO_COMPACT in the session process environment for this run."],
 		effect: "live",
 	},
 };
@@ -186,7 +186,7 @@ export const settingBashTimeout: SettingsItem = {
 export const settingApiKey: SettingsItem = {
 	path: "providers.anthropic.apiKey",
 	label: "Anthropic API key",
-	description: "Stored in the daemon keychain, never sent to the browser.",
+	description: "Stored in the session process keychain, never sent to the browser.",
 	type: "text",
 	value: "sk-ant-redacted",
 	changed: true,

@@ -9,6 +9,7 @@ import type {
 } from "#lib/wire/protocol";
 import type { GitReviewDiff, TodoReviewOp } from "./slices/review";
 import { setPromptInsert, setState, state } from "../state";
+import { requestDangerConfirm } from "../prompt/danger-confirm";
 import { call } from "./transport";
 
 export const reviewCaps = (): ServerCapabilities => state.capabilities ?? {};
@@ -143,6 +144,31 @@ export const stageHunks = (path = fileDiff()?.path, hunkIndices = selectedHunks(
 		: Promise.resolve(undefined);
 export const commitStaged = (text: string) =>
 	text.trim() ? mutateGit("gitCommit", { message: text }) : Promise.resolve(undefined);
+const filesLabel = (count: number): string => `${count} file${count === 1 ? "" : "s"}`;
+/** Ask before staging every worktree change; the stage runs only on confirm. */
+export function requestStageAll(): void {
+	const count = gitStatus()?.unstaged.length ?? 0;
+	requestDangerConfirm({
+		title: "Stage all changes?",
+		body: `${filesLabel(count)} in the worktree will be staged. This does not commit them.`,
+		confirmLabel: `Stage ${filesLabel(count)}`,
+		onConfirm: () => void stagePaths([], true),
+	});
+}
+/** Ask before committing the staged changes; `onCommitted` runs only after a landed commit. */
+export function requestCommit(text: string, onCommitted: () => void): void {
+	const count = gitStatus()?.staged.length ?? 0;
+	const subject = text.trim().split("\n", 1)[0];
+	requestDangerConfirm({
+		title: "Commit staged changes?",
+		body: `${filesLabel(count)} staged will be committed with the message: ${subject}`,
+		confirmLabel: "Commit",
+		onConfirm: () =>
+			void commitStaged(text).then((landed) => {
+				if (landed !== undefined) onCommitted();
+			}),
+	});
+}
 export const loadFileDiff = (path: string, area: GitReviewDiff["area"] = "unstaged") =>
 	run("git", "git", async () => {
 		const epoch = state.review.generation;

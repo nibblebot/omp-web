@@ -7,7 +7,7 @@ import { DirectoryPicker } from "./DirectoryPicker";
 import { OnboardingProgress, useOnboardingPipeline } from "./onboarding";
 
 /** Progress labels, index-aligned with the stage rungs. */
-const STAGES = ["registering project", "spawning daemon", "attaching session"];
+const STAGES = ["registering project", "starting session process", "attaching session"];
 
 /**
  * Add-repo modal (Phase 6): register a first-class project with the fleet by
@@ -96,7 +96,7 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 	const stageNote = () => {
 		const st = stage();
 		if (st.kind === "creating") return "registering the project…";
-		if (st.kind === "spawning") return "starting the daemon…";
+		if (st.kind === "spawning") return "starting the session process…";
 		return "attaching to the session…";
 	};
 

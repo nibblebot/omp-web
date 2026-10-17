@@ -46,7 +46,7 @@ export default defineStory({
 			),
 		},
 		{
-			name: "Daemon predates advisors",
+			name: "Session process predates advisors",
 			description: "The daemon does not know advisorGetStatus, so the panel reports the error.",
 			seed: () =>
 				seedSubagents({

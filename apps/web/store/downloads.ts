@@ -89,7 +89,7 @@ export function closeDownload(): void {
 
 function daemonIdOrThrow(): string {
 	const id = state.currentSessionId;
-	if (!id) throw new Error("No session attached; attach a daemon before downloading.");
+	if (!id) throw new Error("No session attached; attach a session before downloading.");
 	return id;
 }
 
@@ -143,7 +143,7 @@ async function fetchManifest(args: ManifestArgs): Promise<WebDownloadManifest> {
 	// until then the name rides as an opaque string through the typed call relay.
 	const data: unknown = await call("downloadManifest", [args], 30_000);
 	const manifest = asManifest(data);
-	if (!manifest) throw new Error("Download manifest unavailable from this daemon.");
+	if (!manifest) throw new Error("Download manifest unavailable from this session process.");
 	return manifest;
 }
 
@@ -169,7 +169,7 @@ function failureMessage(code: string, fallback: string): string {
 		case "retryable":
 			return "Download transfer went stale before completing. Retry the download.";
 		case "unavailable":
-			return "Download not found on this daemon; it may have been cleaned up.";
+			return "Download not found in this session process; it may have been cleaned up.";
 		default:
 			return fallback;
 	}

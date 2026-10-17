@@ -390,7 +390,7 @@ function registerDaemonPending<T>(
 		DAEMON_TIMEOUT_MS > 0
 			? window.setTimeout(() => {
 					map.delete(id);
-					reject(new Error("daemon command timed out"));
+					reject(new Error("session process command timed out"));
 				}, DAEMON_TIMEOUT_MS)
 			: 0;
 	map.set(id, { resolve, reject, timer });
@@ -526,7 +526,10 @@ export async function fetchDaemonStderr(daemonId: string): Promise<{ text: strin
 	const res = await ctlFetch(
 		`/ctl/sessions/${encodeURIComponent(daemonId)}/stderr`,
 		"fleet control plane unreachable, no fleet server on :4722",
-		(s) => (s === 404 ? "not a spawned daemon, no stderr captured" : `stderr fetch failed (${s})`),
+		(s) =>
+			s === 404
+				? "not a spawned session process, no stderr captured"
+				: `stderr fetch failed (${s})`,
 	);
 	return (await res.json()) as { text: string };
 }

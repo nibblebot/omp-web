@@ -18,7 +18,11 @@ export default defineStory({
 			description:
 				"The first click arms and relabels the button. The second click fires onConfirm. The arm disarms after 4 seconds.",
 			render: () => (
-				<ConfirmButton label="Stop daemon" confirmLabel="Confirm stop" onConfirm={() => undefined}>
+				<ConfirmButton
+					label="Stop session process"
+					confirmLabel="Confirm stop"
+					onConfirm={() => undefined}
+				>
 					<StopIcon />
 				</ConfirmButton>
 			),
@@ -58,7 +62,7 @@ export default defineStory({
 			description: "A disabled button cannot arm.",
 			render: () => (
 				<ConfirmButton
-					label="Stop daemon"
+					label="Stop session process"
 					confirmLabel="Confirm stop"
 					disabled
 					onConfirm={() => undefined}

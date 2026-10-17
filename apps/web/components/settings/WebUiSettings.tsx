@@ -1,7 +1,7 @@
 import { createSignal, Show } from "solid-js";
 import { settingsSectionId } from "../../prefs/settings-tabs";
 import { authSnapshot, signOut } from "../../store/auth";
-import { settingsErrorText } from "../../store/settings";
+import { reportError } from "../../store/toasts";
 import { notificationsBlocked } from "../../store/chat";
 import {
 	call,
@@ -124,7 +124,7 @@ export function WebUiSettings() {
 									.then((supported) => {
 										if (supported === false) setState("error", FAST_MODE_UNSUPPORTED);
 									})
-									.catch((err) => setState("error", settingsErrorText(err)))
+									.catch(reportError)
 							}
 						/>
 					</SettingsRowLayout>
@@ -132,11 +132,7 @@ export function WebUiSettings() {
 						<SettingToggle
 							label="auto-retry"
 							checked={state.autoRetryEnabled}
-							onChange={(checked) =>
-								void call("setAutoRetry", [checked]).catch((err) =>
-									setState("error", settingsErrorText(err)),
-								)
-							}
+							onChange={(checked) => void call("setAutoRetry", [checked]).catch(reportError)}
 						/>
 					</SettingsRowLayout>
 					<SettingsRowLayout label="Login providers…">

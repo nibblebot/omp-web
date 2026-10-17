@@ -3,8 +3,8 @@ import { rosterDaemon } from "../../../fixtures/roster";
 import { seedRosterFleet } from "../../../fixtures/roster-seed";
 import { defineStory } from "../../../registry";
 
-const projectLabels = ["Register project", "Spawn daemon", "Attach session"];
-const worktreeLabels = ["Create worktree", "Spawn daemon", "Attach session"];
+const projectLabels = ["Register project", "Start session process", "Attach session"];
+const worktreeLabels = ["Create worktree", "Start session process", "Attach session"];
 
 export default defineStory({
 	id: "fleet-workspaces-onboarding-progress",
@@ -27,7 +27,7 @@ export default defineStory({
 			),
 		},
 		{
-			name: "Spawning daemon",
+			name: "Starting session process",
 			render: () => (
 				<OnboardingProgress
 					stage={() => ({ kind: "spawning", daemonId: rosterDaemon.starting.daemonId })}

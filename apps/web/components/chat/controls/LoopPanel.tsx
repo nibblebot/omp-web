@@ -146,7 +146,7 @@ export const LoopPanel: Component = () => {
 				<button onClick={() => void refresh()}>refresh scheduler</button>
 				<ConfirmButton
 					label="start loop"
-					confirmLabel="confirm daemon loop"
+					confirmLabel="confirm session loop"
 					disabled={!canStart()}
 					title={
 						goalActive()
@@ -191,8 +191,8 @@ export const LoopPanel: Component = () => {
 				)}
 			</Show>
 			<div class="picker-detail">
-				No infinite default. Conditions run shell commands in the daemon. Pause/cancel prevent
-				future admissions; they do not abort a running turn.
+				No infinite default. Conditions run shell commands in the session process. Pause/cancel
+				prevent future admissions; they do not abort a running turn.
 			</div>
 			<div class="picker-detail">consent gate: nothing runs until you confirm.</div>
 		</div>

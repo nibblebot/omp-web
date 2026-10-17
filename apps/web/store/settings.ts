@@ -10,11 +10,6 @@ import { authedFetch } from "./auth";
  * frames) stays in state.ts alongside the mux.
  */
 
-/** Message for a failed settings write: an Error's text, not its "Error: " prefix. */
-export function settingsErrorText(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
-
 /** Server error message from a non-ok /ctl response: the {error} body when
  *  present, else the raw body text, else the HTTP status. */
 export async function ctlError(res: Response): Promise<string> {

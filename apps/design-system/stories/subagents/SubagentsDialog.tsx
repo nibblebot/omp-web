@@ -47,7 +47,7 @@ export default defineStory({
 				seedSubagents(
 					{
 						workerList: () => {
-							throw new Error("daemon unreachable: workerList timed out");
+							throw new Error("session process unreachable: workerList timed out");
 						},
 					},
 					{ currentSessionId: SESSION_ID },

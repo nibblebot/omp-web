@@ -281,8 +281,9 @@ export const DeleteWorkspaceDialog: Component = () => {
 									at <span class="worktree-evidence-path">{daemon()!.cwd}</span>
 								</>
 							) : null}
-							? This stops the daemon, removes it from the roster, and deletes its files from disk.
-							Session transcripts survive (they live under the agent dir, not the worktree).
+							? This stops the session process, removes it from the roster, and deletes its files
+							from disk. Session transcripts survive (they live under the agent dir, not the
+							worktree).
 						</p>
 						<Show when={info()!.branch}>
 							{(branch) => (

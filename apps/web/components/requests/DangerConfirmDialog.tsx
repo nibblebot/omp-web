@@ -13,13 +13,19 @@ import { Modal } from "../ui/Modal";
 // actions live in src/danger-confirm.ts (no solid-js/web) so pure modules
 // like commands.ts can drive them; this file owns the Portal/rendering only.
 
+// Modal focuses its own box on mount. Focus moves to Cancel, the safe action,
+// after that mount (queued past it), so a stray Enter cannot confirm the danger action.
 export const DangerConfirmDialog: Component = () => (
 	<Show when={dangerConfirm()} keyed>
 		{(d) => (
 			<Modal title={d.title} onClose={cancelDangerConfirm} class="danger-confirm">
 				<p class="danger-confirm-body">{d.body}</p>
 				<div class="ask-actions">
-					<button type="button" onClick={cancelDangerConfirm}>
+					<button
+						type="button"
+						ref={(el) => queueMicrotask(() => el.focus())}
+						onClick={cancelDangerConfirm}
+					>
 						Cancel
 					</button>
 					<button type="button" class="danger-confirm-btn" onClick={confirmDangerConfirm}>

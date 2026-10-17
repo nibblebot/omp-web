@@ -14,6 +14,8 @@ import {
 	isStaleError,
 	loadFileDiff,
 	refreshGit,
+	requestCommit,
+	requestStageAll,
 	reviewAvailable,
 	selectedHunks,
 	stageHunks,
@@ -44,14 +46,6 @@ export const ReviewPanel: Component = () => {
 	const selected = (rows: GitPathEntry[]) =>
 		rows.filter((row) => gitSelection().includes(row.path)).map((row) => row.path);
 	const canStage = () => gitStatus()?.eligible.stage === true;
-	const stageAll = () => {
-		if (!window.confirm("Stage all worktree changes? This does not commit them.")) return;
-		void stagePaths([], true);
-	};
-	const commit = async () => {
-		if (!window.confirm("Commit the staged changes shown above?")) return;
-		if ((await commitStaged(message())) !== undefined) setMessage("");
-	};
 	// The anchor is the hunk's own text, so a later re-diff that changes it is caught as stale.
 	const saveNote = async (hunkText: string) => {
 		const note = noteDraft().trim();
@@ -159,10 +153,10 @@ export const ReviewPanel: Component = () => {
 											disabled={
 												gitLoading() ||
 												!canStage() ||
-												(!all() && !selected(status().unstaged).length)
+												(all() ? !status().unstaged.length : !selected(status().unstaged).length)
 											}
 											onClick={() =>
-												all() ? stageAll() : void stagePaths(selected(status().unstaged))
+												all() ? requestStageAll() : void stagePaths(selected(status().unstaged))
 											}
 										>
 											Stage {all() ? "all" : "selected paths"}
@@ -289,7 +283,7 @@ export const ReviewPanel: Component = () => {
 										!status().staged.length ||
 										!message().trim()
 									}
-									onClick={() => void commit()}
+									onClick={() => requestCommit(message(), () => setMessage(""))}
 								>
 									Commit staged changes
 								</button>

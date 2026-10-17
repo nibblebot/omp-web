@@ -226,7 +226,7 @@ export {
 function markUnavailable(method: string): void {
 	setBtwHistoryAvailable(false);
 	setBtwHistoryError(
-		`Saved side questions are unavailable: this daemon does not implement ${method}. ` +
+		`Saved side questions are unavailable: this session process does not implement ${method}. ` +
 			"Restart the session with a matching omp-web version.",
 	);
 }

@@ -33,9 +33,9 @@ type WorktreeMode = "new" | "branch" | "folder";
 
 /** Progress labels track the operation, including imports within Worktree. */
 const STAGE_LABELS = {
-	worktree: ["creating worktree", "spawning daemon", "attaching session"],
+	worktree: ["creating worktree", "starting session process", "attaching session"],
 	clone: ["preparing workspace", "starting runtime", "attaching session"],
-	existing: ["registering worktree", "spawning daemon", "attaching session"],
+	existing: ["registering worktree", "starting session process", "attaching session"],
 } satisfies Record<Tab | "existing", string[]>;
 
 /** Clone source modes: default project checkout, an explicit local path, or
@@ -331,7 +331,7 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 				: importAtSubmit()
 					? "registering the worktree…"
 					: "creating the worktree…";
-		if (st.kind === "spawning") return "starting the daemon…";
+		if (st.kind === "spawning") return "starting the session process…";
 		return "attaching to the session…";
 	};
 

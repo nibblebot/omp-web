@@ -174,7 +174,7 @@ export const btwStreaming: BtwSheetState = {
 export const btwAnswered: BtwSheetState = {
 	question: "Does the approval queue survive a reconnect?",
 	reply:
-		"Yes. Pending approvals live in the daemon roster, not the browser. On reconnect the client re-reads the queue from the `state` frame, so a card that was open before the drop is still listed.\n\nThe only gap is the 2 s window between the socket closing and the first state frame; the card shows a stale marker during it.",
+		"Yes. Pending approvals live in the session process roster, not the browser. On reconnect the client re-reads the queue from the `state` frame, so a card that was open before the drop is still listed.\n\nThe only gap is the 2 s window between the socket closing and the first state frame; the card shows a stale marker during it.",
 	streaming: false,
 	streamId: 8,
 };
@@ -205,7 +205,7 @@ export const btwHistoryRecords: BtwRecordView[] = [
 		id: "btw_42",
 		leafId: "leaf_122",
 		question: "Can the review panel run offline?",
-		answer: "Only the cached annotations. New comments need the daemon to be reachable.",
+		answer: "Only the cached annotations. New comments need the session process to be reachable.",
 		status: "complete",
 		createdAt: at(18),
 		updatedAt: at(17),
@@ -420,7 +420,12 @@ export function compactionWith(overrides: Partial<CompactionState>): CompactionS
 
 export const debugLogEntries: DebugEntry[] = [
 	{ ts: at(14), level: "info", source: "transport", message: "/events stream opened (seq 0)" },
-	{ ts: at(13), level: "info", source: "roster", message: "daemon d_7f3a registered (omp-web)" },
+	{
+		ts: at(13),
+		level: "info",
+		source: "roster",
+		message: "session process d_7f3a registered (omp-web)",
+	},
 	{ ts: at(9), level: "info", source: "command", message: "prompt accepted (sess_9d2c)" },
 	{ ts: at(6), level: "warn", source: "transport", message: "frame gap: seq 412 to 415" },
 	{
@@ -449,35 +454,35 @@ export const fleetLogEntries: FleetDebug["log"] = [
 		ts: at(22),
 		level: "info",
 		source: "roster",
-		message: "daemon d_7f3a attached",
+		message: "session process d_7f3a attached",
 		daemonId: "d_7f3a",
 	},
 	{
 		ts: at(20),
 		level: "info",
 		source: "roster",
-		message: "daemon d_b201 attached",
+		message: "session process d_b201 attached",
 		daemonId: "d_b201",
 	},
 	{
 		ts: at(11),
 		level: "warn",
 		source: "roster",
-		message: "daemon d_b201 missed a heartbeat",
+		message: "session process d_b201 missed a heartbeat",
 		daemonId: "d_b201",
 	},
 	{
 		ts: at(10),
 		level: "info",
 		source: "roster",
-		message: "daemon d_b201 heartbeat restored",
+		message: "session process d_b201 heartbeat restored",
 		daemonId: "d_b201",
 	},
 	{
 		ts: at(3),
 		level: "error",
 		source: "roster",
-		message: "daemon d_c4e9 refused attach: wrong token",
+		message: "session process d_c4e9 refused attach: wrong token",
 		daemonId: "d_c4e9",
 	},
 ];

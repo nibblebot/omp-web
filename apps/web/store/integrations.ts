@@ -102,7 +102,7 @@ function trustBody(input: McpServerInput, action: string): string {
 		`${action} "${input.name}" (${input.scope} config).`,
 		launchSummary(input),
 		"",
-		"An MCP server can expose tools and instructions to the agent. A local command runs with daemon permissions. Only add servers you trust.",
+		"An MCP server can expose tools and instructions to the agent. A local command runs with session process permissions. Only add servers you trust.",
 	].join("\n");
 }
 
@@ -195,7 +195,7 @@ export function invokeSkill(name: string): void {
 export function trust(title: string, id: string, run: () => void) {
 	requestDangerConfirm({
 		title,
-		body: `Only install code you trust. Skills can instruct the agent to run commands; plugins execute with daemon permissions. This can read files or disclose data.\n\nSource: ${id}`,
+		body: `Only install code you trust. Skills can instruct the agent to run commands; plugins execute with session process permissions. This can read files or disclose data.\n\nSource: ${id}`,
 		confirmLabel: "Trust and continue",
 		onConfirm: run,
 	});

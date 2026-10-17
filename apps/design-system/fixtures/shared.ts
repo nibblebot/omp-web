@@ -87,11 +87,11 @@ export const markdownUntrusted = `Here is the summary you asked for.
 /** Long markdown: several sections, a long fenced block, and a wide table, to test scrolling and wrapping. */
 export const markdownLong = `# Review of the transport retry path
 
-The retry loop in \`apps/web/store/transport.ts\` replays a command on an interval until the daemon answers. This review covers the three places where that loop can leave stale state behind, and the fix for each.
+The retry loop in \`apps/web/store/transport.ts\` replays a command on an interval until the session process answers. This review covers the three places where that loop can leave stale state behind, and the fix for each.
 
 ## 1. Replayed commands after reconnect
 
-A reconnect re-sends every pending command with the same id. The daemon answers each id once, so a replay after a successful answer is harmless, but a replay that races a reconnect can deliver the answer to a handler that was already cleared. The current guard checks the id against the pending map, which is correct, but the map is cleared on \`disconnect\` before the new socket opens.
+A reconnect re-sends every pending command with the same id. The session process answers each id once, so a replay after a successful answer is harmless, but a replay that races a reconnect can deliver the answer to a handler that was already cleared. The current guard checks the id against the pending map, which is correct, but the map is cleared on \`disconnect\` before the new socket opens.
 
 Suggested change: keep the pending map across a reconnect and clear entries only when the matching \`call_result\` arrives or the caller's timeout fires.
 

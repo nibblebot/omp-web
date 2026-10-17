@@ -21,6 +21,7 @@ import {
 	closeDrawers,
 	connect,
 	daemonsByProject,
+	deleteQueuedMessage,
 	hasLiveSession,
 	initialView,
 	isUserStopped,
@@ -2407,6 +2408,25 @@ describe("reportError", () => {
 
 		reportError(new Error("boom"));
 		expect(state.error).toBe("boom");
+	});
+
+	test("a failed queue action surfaces the bare error text; a superseded one stays silent", async () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		const chip = { kind: "steer" as const, text: "hi" };
+		const lastCallId = () => (posted.at(-1) as Extract<ClientCommand, { type: "call" }>).id;
+
+		setState("error", null);
+		const failed = deleteQueuedMessage(chip);
+		dispatch({ type: "call_result", id: lastCallId(), ok: false, error: "queue busy" });
+		await failed;
+		expect(state.error).toBe("queue busy");
+
+		setState("error", null);
+		const superseded = deleteQueuedMessage(chip);
+		dispatch({ type: "call_result", id: lastCallId(), ok: false, error: "session switched" });
+		await superseded;
+		expect(state.error).not.toBe("session switched");
 	});
 });
 

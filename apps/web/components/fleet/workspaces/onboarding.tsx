@@ -77,7 +77,11 @@ export function useOnboardingPipeline(onReady: () => void) {
 		const d = state.daemonRoster.find((x) => x.daemonId === st.daemonId);
 		if (!d) return;
 		if (d.status === "error") {
-			setStage({ kind: "error", stage: "spawning", message: d.error ?? "daemon failed to start" });
+			setStage({
+				kind: "error",
+				stage: "spawning",
+				message: d.error ?? "session process failed to start",
+			});
 			return;
 		}
 		if (d.lifecycleStage === "failed") {
