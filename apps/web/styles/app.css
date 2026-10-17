@@ -153,10 +153,6 @@
 .context-segment {
 	font-family: var(--font-mono);
 }
-.context-group {
-	display: inline-flex;
-	align-items: center;
-}
 .context-segment[data-level="normal"] {
 	color: var(--success);
 }
