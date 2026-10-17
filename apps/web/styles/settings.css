@@ -466,7 +466,7 @@
 	font-size: var(--fs-sm);
 }
 .settings-text-input {
-	width: 260px;
+	width: 28rem;
 	border-color: var(--border);
 	background: transparent;
 }
@@ -669,6 +669,7 @@
 	font-family: var(--font-mono);
 	font-size: var(--fs-sm);
 	cursor: pointer;
+	white-space: nowrap;
 }
 .settings-control-btn:hover {
 	color: var(--text);
@@ -708,16 +709,12 @@
 	font-size: var(--fs-md);
 	color: var(--muted-3);
 }
-.features-summary-line,
-.features-reload {
+.features-summary-line {
 	display: flex;
 	flex-wrap: wrap;
 	gap: var(--space-4);
 	align-items: center;
 	justify-content: space-between;
-}
-.features-reload {
-	color: var(--text);
 }
 .feature-meta,
 .feature-size {

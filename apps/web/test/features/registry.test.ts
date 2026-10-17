@@ -13,8 +13,15 @@ import {
 	featureSubagentTabs,
 	featureView,
 	isFeatureEnabled,
+	setFeatureEnabled,
 } from "../../features/registry";
-import { activeFeatureIds, markFeaturesActive } from "../../features/preferences";
+import {
+	activeFeatureIds,
+	type FeaturePreferences,
+	featurePreferences,
+	markFeaturesActive,
+	setFeaturePreference,
+} from "../../features/preferences";
 import { setState, state } from "../../state";
 import { restoreBrowserGlobals, setBrowserGlobal } from "../web.testkit";
 
@@ -153,5 +160,72 @@ describe("feature registry activation", () => {
 		expect(toast?.text).toContain(FEATURE_BY_ID.goals.label);
 		expect(toast?.text).toContain("could not load");
 		expect(toast?.text).toContain("chunk load failed");
+	});
+});
+
+describe("live feature toggles", () => {
+	let originalPrefs: FeaturePreferences;
+	let originalModal: typeof state.modal;
+	let originalDock: typeof state.dock;
+	let originalView: typeof state.view;
+
+	/** Make the stored choices exactly `ids`: every other feature off. */
+	function setPreferredOnly(ids: readonly FeatureId[]): void {
+		for (const id of FEATURE_IDS) setFeaturePreference(id, ids.includes(id));
+	}
+
+	beforeEach(() => {
+		originalPrefs = { ...featurePreferences() };
+		originalModal = state.modal;
+		originalDock = state.dock;
+		originalView = state.view;
+	});
+
+	afterEach(() => {
+		for (const id of FEATURE_IDS) setFeaturePreference(id, originalPrefs[id]);
+		setState({ modal: originalModal, dock: originalDock, view: originalView });
+	});
+
+	test("a superseded activation resolves null and never overwrites the newer set", async () => {
+		const first = activateFeatures(["analysis"]);
+		const second = activateFeatures([]);
+		expect(await first).toBeNull();
+		expect(await second).toEqual(new Set());
+		expect(isFeatureEnabled("analysis")).toBe(false);
+	});
+
+	test("turning a feature on and off changes its slots, and re-enabling does not re-fetch", async () => {
+		setPreferredOnly([]);
+		await setFeatureEnabled("analysis", true);
+		expect(isFeatureEnabled("analysis")).toBe(true);
+		expect(featureView("analysis")).toBe(AnalysisView);
+		const loaded = analysisFetches;
+		await setFeatureEnabled("analysis", false);
+		expect(isFeatureEnabled("analysis")).toBe(false);
+		expect(featureView("analysis")).toBeUndefined();
+		await setFeatureEnabled("analysis", true);
+		expect(isFeatureEnabled("analysis")).toBe(true);
+		expect(analysisFetches).toBe(loaded);
+	});
+
+	test("turning a feature off closes the modal and view it owned and keeps unrelated ones", async () => {
+		setPreferredOnly(["analysis", "debug"]);
+		await activateFeatures(["analysis", "debug"]);
+		setState({ view: "analysis", modal: "debug" });
+		await setFeatureEnabled("debug", false);
+		expect(state.modal).toBeNull();
+		expect(state.view).toBe("analysis");
+
+		setState("modal", "sign-in");
+		await setFeatureEnabled("analysis", false);
+		expect(state.view).toBe("chat");
+		expect(state.modal).toBe("sign-in");
+	});
+
+	test("turning a feature off closes a dock panel it owned", async () => {
+		setPreferredOnly([]);
+		setState("dock", { kind: "review" });
+		await setFeatureEnabled("review", false);
+		expect(state.dock).toBeNull();
 	});
 });

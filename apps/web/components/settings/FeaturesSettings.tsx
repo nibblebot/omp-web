@@ -1,12 +1,7 @@
 import { createMemo, createResource, For, Show } from "solid-js";
-import { FEATURE_BY_ID, FEATURES } from "../../features/manifest";
-import {
-	activeFeatureIds,
-	featurePreferences,
-	featureReloadPending,
-	preferredFeatureIds,
-	setFeaturePreference,
-} from "../../features/preferences";
+import { FEATURES } from "../../features/manifest";
+import { activeFeatureIds, featurePreferences } from "../../features/preferences";
+import { setFeatureEnabled } from "../../features/registry";
 import {
 	featureOwnSize,
 	featureSizeTotals,
@@ -25,10 +20,11 @@ export function searchFeatures(query: string) {
 
 /**
  * Settings > Features: per-browser feature toggles plus bundle sizes.
- * Toggles persist to localStorage and take effect on reload. Sizes come
- * from the build's feature-sizes.json; dev builds have none, so the panel
- * says so instead of showing numbers. `query` filters the feature rows for
- * settings search; without it the panel shows the bundle summary.
+ * A toggle loads or unloads its feature on this page at once; the attached
+ * session, draft and sheet stay as they are. Sizes come from the build's
+ * feature-sizes.json; dev builds have none, so the panel says so instead of
+ * showing numbers. `query` filters the feature rows for settings search;
+ * without it the panel shows the bundle summary.
  */
 export function FeaturesSettings(props: { query?: string }) {
 	const [sizes] = createResource(loadFeatureSizes);
@@ -38,18 +34,9 @@ export function FeaturesSettings(props: { query?: string }) {
 			.map((f) => f.label)
 			.join(", "),
 	);
-	const pendingLabels = createMemo(() =>
-		preferredFeatureIds()
-			.map((id) => FEATURE_BY_ID[id].label)
-			.join(", "),
-	);
 	const loadedTotals = createMemo(() => {
 		const m = sizes();
 		return m ? featureSizeTotals(m, activeFeatureIds()) : null;
-	});
-	const pendingTotals = createMemo(() => {
-		const m = sizes();
-		return m ? featureSizeTotals(m, preferredFeatureIds()) : null;
 	});
 
 	return (
@@ -65,23 +52,6 @@ export function FeaturesSettings(props: { query?: string }) {
 								</span>
 							</div>
 						)}
-					</Show>
-					<Show when={featureReloadPending()}>
-						<div class="features-reload">
-							<span>
-								After reload: {pendingLabels() || "core only"}
-								<Show when={pendingTotals()}>
-									{(t) => <> · {formatKilobytes(t().gzip)} gzip</>}
-								</Show>
-							</span>
-							<button
-								type="button"
-								class="settings-control-btn"
-								onClick={() => window.location.reload()}
-							>
-								Reload to apply
-							</button>
-						</div>
 					</Show>
 					<Show when={!sizes.loading && !sizes()}>
 						<div>Sizes are measured in production builds.</div>
@@ -116,7 +86,7 @@ export function FeaturesSettings(props: { query?: string }) {
 									<SettingToggle
 										label={`Enable ${f.label}`}
 										checked={featurePreferences()[f.id]}
-										onChange={(checked) => setFeaturePreference(f.id, checked)}
+										onChange={(checked) => void setFeatureEnabled(f.id, checked)}
 									/>
 								</div>
 							</div>

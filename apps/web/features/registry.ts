@@ -1,15 +1,23 @@
 import type { Component } from "solid-js";
-import type { ChatItem, ModalName } from "../state";
+import { type ChatItem, type ModalName, setState, state } from "../state";
 import { pushToast } from "../store/toasts";
+import { closeDock } from "../store/dock";
+import { setView } from "../store/roster";
 import {
 	FEATURE_BY_ID,
 	FEATURE_IDS,
+	FEATURES,
 	featureForCommand,
 	featureForModal,
 	type FeatureId,
 	type FeatureInfo,
 } from "./manifest";
-import { activeFeatureIds, markFeaturesActive } from "./preferences";
+import {
+	activeFeatureIds,
+	markFeaturesActive,
+	preferredFeatureIds,
+	setFeaturePreference,
+} from "./preferences";
 
 /** A slash command owned by a feature; `run` receives the raw argument text. */
 export interface FeatureCommand {
@@ -72,13 +80,23 @@ function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+let activation = 0;
+
 /**
  * Make exactly `ids` the active feature set for this page: load their entry
  * modules in parallel, then record which ones loaded. A feature whose module
  * fails to load stays inactive and raises a toast; the app keeps running.
- * Modules load once per page, so calling this again only changes the set.
+ * Modules load once per page, so calling this again only changes the set,
+ * and turning a feature off is just leaving it out (every slot accessor is
+ * reactive on the active set). Calls can overlap while a toggle is still
+ * loading; only the most recent call records its set, so a slow earlier
+ * load never overwrites a later choice. Resolves to the set recorded, or
+ * null when a newer call superseded this one.
  */
-export async function activateFeatures(ids: readonly FeatureId[]): Promise<void> {
+export async function activateFeatures(
+	ids: readonly FeatureId[],
+): Promise<ReadonlySet<FeatureId> | null> {
+	const call = ++activation;
 	const loaded = await Promise.all(
 		ids.map(async (id) => {
 			if (modules.has(id)) return id;
@@ -96,7 +114,30 @@ export async function activateFeatures(ids: readonly FeatureId[]): Promise<void>
 			}
 		}),
 	);
-	markFeaturesActive(loaded.filter((id): id is FeatureId => id !== null));
+	if (call !== activation) return null;
+	const active = loaded.filter((id): id is FeatureId => id !== null);
+	markFeaturesActive(active);
+	return new Set(active);
+}
+
+/**
+ * Turn one feature on or off without a reload. The choice is persisted, the
+ * feature's slots load or drop out immediately, and any modal, dock panel or
+ * view it owned is closed. The attached session, draft and route are untouched.
+ */
+export async function setFeatureEnabled(id: FeatureId, enabled: boolean): Promise<void> {
+	setFeaturePreference(id, enabled);
+	if ((await activateFeatures(preferredFeatureIds())) !== null) releaseDisabledSurfaces();
+}
+
+/** Close the modal, dock panel and view that a disabled feature owned, so nothing points at it. */
+function releaseDisabledSurfaces(): void {
+	const owner = state.modal === null ? undefined : featureForModal(state.modal);
+	if (owner && !isFeatureEnabled(owner.id)) setState("modal", null);
+	const dock = state.dock?.kind;
+	if (dock !== undefined && FEATURES.some((f) => f.docks.includes(dock) && !isFeatureEnabled(f.id)))
+		closeDock();
+	if (state.view === "analysis" && !isFeatureEnabled("analysis")) setView("chat");
 }
 
 /** True when the feature is active on this page (loaded and not disabled). */

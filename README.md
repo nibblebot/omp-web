@@ -117,7 +117,7 @@ Local **Remove from omp-web** / `omp-web remove` stops and unregisters the daemo
 
 The web UI's optional features can be turned on or off per browser in **Settings > Features**. A feature that is off is never downloaded: its code loads only when it is enabled.
 
-- Choices are stored in this browser's local storage (`omp.features`), not in `config.json`. Changes take effect after **Reload to apply**.
+- Choices are stored in this browser's local storage (`omp.features`), not in `config.json`. A change loads or unloads its feature at once, without a reload; the attached session, draft, and open sheets are kept.
 - The panel shows each feature's size (gzip and raw) and the total you load: the core plus the enabled features. Sizes come from the production build's `feature-sizes.json`; development builds do not produce it and show no sizes.
 - A slash command owned by a disabled feature, such as `/git` under Review, shows a local notice and is never sent to the agent. Enable the feature to use it again.
 - Unknown commands and terminal-only commands, such as `/collab` and `/live`, show a local notice and are never sent to the agent. `/help` (also under the keyboard shortcuts) lists the commands available in the browser.

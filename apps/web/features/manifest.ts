@@ -28,6 +28,8 @@ export interface FeatureInfo {
 	commands: readonly string[];
 	/** Modals owned by this feature; disabled → ModalHost renders nothing. */
 	modals: readonly ModalName[];
+	/** Dock panel kinds owned by this feature; turning it off closes them. */
+	docks: readonly string[];
 }
 
 export const FEATURES: readonly FeatureInfo[] = [
@@ -39,6 +41,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		defaultEnabled: false,
 		commands: [],
 		modals: [],
+		docks: [],
 	},
 	{
 		id: "review",
@@ -48,6 +51,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		defaultEnabled: true,
 		commands: ["git", "plan-review", "annotations", "todo"],
 		modals: ["plan-review", "annotations", "todos"],
+		docks: ["review"],
 	},
 	{
 		id: "integrations",
@@ -57,6 +61,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		defaultEnabled: true,
 		commands: ["mcp", "skills"],
 		modals: ["integrations"],
+		docks: [],
 	},
 	{
 		id: "btw",
@@ -67,6 +72,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		defaultEnabled: true,
 		commands: ["btw"],
 		modals: ["btw"],
+		docks: [],
 	},
 	{
 		id: "goals",
@@ -76,6 +82,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		defaultEnabled: true,
 		commands: ["goal"],
 		modals: ["goal"],
+		docks: [],
 	},
 	{
 		id: "advisor",
@@ -85,6 +92,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		defaultEnabled: true,
 		commands: [],
 		modals: [],
+		docks: [],
 	},
 	{
 		id: "debug",
@@ -94,6 +102,7 @@ export const FEATURES: readonly FeatureInfo[] = [
 		defaultEnabled: true,
 		commands: [],
 		modals: ["debug"],
+		docks: [],
 	},
 ];
 

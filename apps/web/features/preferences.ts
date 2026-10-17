@@ -34,7 +34,7 @@ const [preferences, setPreferences] = createSignal<FeaturePreferences>(
 	),
 );
 
-/** Stored choices (defaults applied). Reactive; changes apply on the next page load. */
+/** Stored choices (defaults applied). Reactive; `setFeatureEnabled` in registry.ts applies a change. */
 export const featurePreferences = preferences;
 
 /** Persist one choice. Only ids that differ from the manifest default are stored. */
@@ -58,20 +58,12 @@ export function preferredFeatureIds(): FeatureId[] {
 const [active, setActive] = createSignal<ReadonlySet<FeatureId>>(new Set());
 
 /**
- * Features whose modules are loaded and wired for this page lifetime. Set
- * once by the registry at boot (entry, design system, tests); toggles in
- * Settings change `featurePreferences` and apply on reload.
+ * Features whose modules are loaded and wired on this page. The registry is
+ * the only writer: `activateFeatures` and `setFeatureEnabled` (registry.ts).
  */
 export const activeFeatureIds = active;
 
 /** Registry-only: record the activated set. */
 export function markFeaturesActive(ids: Iterable<FeatureId>): void {
 	setActive(new Set(ids));
-}
-
-/** True when the stored choices differ from what this page loaded. */
-export function featureReloadPending(): boolean {
-	const prefs = preferences();
-	const loaded = active();
-	return FEATURES.some((f) => prefs[f.id] !== loaded.has(f.id));
 }
