@@ -8,7 +8,6 @@
  * `methods.ts`. Absent means unavailable on the wire.
  *
  * Keys deliberately left absent:
- * - graph: `createGraphModelHandlers` has no caller in methods.ts.
  * - modelPresets / temporaryModel / modelMentions: no server implementation found.
  * - integrations: `getIntegrationsState` and `getSkillsState` are placeholders
  *   (empty servers, "extraction has not landed").
@@ -41,6 +40,7 @@ const REQUIRED_METHODS = {
 		"annotationReanchor",
 		"annotationCompose",
 	],
+	graph: ["getSessionGraph", "navigateTree", "resumeAfterAskReanswer"],
 	planReview: ["planGet", "planDecide", "planReopen", "planCancel"],
 	todos: ["todoGet", "todoApply", "todoImport", "todoExport"],
 	workerLifecycle: ["workerList", "workerPark", "workerRevive", "workerResume"],

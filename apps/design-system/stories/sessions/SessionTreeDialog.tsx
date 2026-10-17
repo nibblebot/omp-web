@@ -1,42 +1,42 @@
-import { SessionGraphDialog } from "../../../web/components/sessions/SessionGraphDialog";
+import { SessionTreeDialog } from "../../../web/components/sessions/SessionTreeDialog";
 import { setState } from "../../../web/state";
 import { sessionGraphPage, sessionGraphPageMore } from "../../fixtures/dialogs";
 import { answerCalls } from "../../daemon";
 import { defineStory } from "../../registry";
 
 export default defineStory({
-	id: "sessions-session-graph-dialog",
-	title: "SessionGraphDialog",
+	id: "sessions-session-tree-dialog",
+	title: "SessionTreeDialog",
 	component: {
-		file: "apps/web/components/sessions/SessionGraphDialog.tsx",
-		export: "SessionGraphDialog",
+		file: "apps/web/components/sessions/SessionTreeDialog.tsx",
+		export: "SessionTreeDialog",
 	},
 	tabs: true,
 	variants: [
 		{
-			name: "Graph with fork points",
+			name: "Tree with fork points",
 			seed: () => {
 				setState("capabilities", { graph: { available: true } });
 				answerCalls({ getSessionGraph: () => sessionGraphPage });
 			},
-			render: (ctx) => <SessionGraphDialog onClose={ctx.close} />,
+			render: (ctx) => <SessionTreeDialog onClose={ctx.close} />,
 		},
 		{
-			name: "Paged graph",
+			name: "Paged tree",
 			seed: () => {
 				setState("capabilities", { graph: { available: true } });
 				answerCalls({ getSessionGraph: () => sessionGraphPageMore });
 			},
-			render: (ctx) => <SessionGraphDialog onClose={ctx.close} />,
+			render: (ctx) => <SessionTreeDialog onClose={ctx.close} />,
 		},
 		{
-			name: "Legacy daemon header",
+			name: "Graph unavailable",
 			seed: () => {
 				setState("capabilities", {
 					graph: { available: false, reason: "Upgrade omp to 14.2 to browse the session graph." },
 				});
 			},
-			render: (ctx) => <SessionGraphDialog onClose={ctx.close} />,
+			render: (ctx) => <SessionTreeDialog onClose={ctx.close} />,
 		},
 		{
 			name: "Load failed",
@@ -48,7 +48,7 @@ export default defineStory({
 					},
 				});
 			},
-			render: (ctx) => <SessionGraphDialog onClose={ctx.close} />,
+			render: (ctx) => <SessionTreeDialog onClose={ctx.close} />,
 		},
 	],
 });

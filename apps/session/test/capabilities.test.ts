@@ -38,6 +38,7 @@ const REQUIRED_CAPABILITY_KEYS = [
 	"btwHistory",
 	"downloads",
 	"git",
+	"graph",
 	"goals",
 	"loops",
 	"planReview",

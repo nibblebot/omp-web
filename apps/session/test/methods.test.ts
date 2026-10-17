@@ -325,3 +325,77 @@ describe("getAvailableModels", () => {
 		expect(JSON.stringify(result).length).toBeLessThan(ENVELOPE_MAX_BYTES);
 	});
 });
+
+/** Message-only transcript stub for the graph rows, oldest first on disk. */
+function graphEntry() {
+	const entries = [
+		{
+			type: "message",
+			id: "u1",
+			parentId: null,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: { role: "user", content: "first question" },
+		},
+		{
+			type: "message",
+			id: "a1",
+			parentId: "u1",
+			timestamp: "2026-01-01T00:00:01.000Z",
+			message: { role: "assistant", content: [{ type: "text", text: "first answer" }] },
+		},
+		{
+			type: "message",
+			id: "u2",
+			parentId: "a1",
+			timestamp: "2026-01-01T00:00:02.000Z",
+			message: { role: "user", content: "second question" },
+		},
+	];
+	const sessionManager = {
+		getEntries: () => entries,
+		getEntry: (id: string) => entries.find((entry) => entry.id === id),
+		getLeafId: () => "u2",
+		getLabel: () => undefined,
+		getHeader: () => undefined,
+	};
+	const session = { sessionId: "sess-graph", sessionManager };
+	return { entry: { handle: "s1", session } as unknown as SessionEntry };
+}
+
+describe("session graph rows", () => {
+	test("getSessionGraph pages the transcript newest first and filters by kind", async () => {
+		const { entry } = graphEntry();
+		const methods = methodsTable();
+		const page = (await methods.getSessionGraph!(entry, [{ limit: 2 }])) as {
+			nodes: Array<{ id: string; type: string }>;
+			hasMore: boolean;
+			nextCursor: string | null;
+		};
+		expect(page.nodes.map((node) => node.id)).toEqual(["u2", "a1"]);
+		expect(page.hasMore).toBe(true);
+		expect(page.nextCursor).toEqual(expect.any(String));
+		const users = (await methods.getSessionGraph!(entry, [{ filter: "user" }])) as {
+			nodes: Array<{ id: string; type: string }>;
+		};
+		expect(users.nodes.map((node) => node.type)).toEqual(["user", "user"]);
+	});
+
+	test("getSessionGraph refuses a cursor that belongs to another filter", async () => {
+		const { entry } = graphEntry();
+		const methods = methodsTable();
+		const page = (await methods.getSessionGraph!(entry, [{ limit: 1 }])) as {
+			nextCursor: string;
+		};
+		await expect(
+			methods.getSessionGraph!(entry, [{ limit: 1, filter: "user", cursor: page.nextCursor }]),
+		).rejects.toThrow("stale or belongs to another query");
+	});
+
+	test("navigateTree refuses a selection whose revision is not the current one", async () => {
+		const { entry } = graphEntry();
+		const methods = methodsTable();
+		await expect(
+			methods.navigateTree!(entry, ["u1", { revision: "not-the-current-revision" }]),
+		).rejects.toThrow("Graph selection is stale; reload and re-pick");
+	});
+});

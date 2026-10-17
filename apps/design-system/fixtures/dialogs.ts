@@ -79,7 +79,7 @@ export const askLongQuestions: AskQuestion[] = [
 		question: "Which story groups should be regenerated?",
 		options: [
 			{ label: "requests-ask-bar" },
-			{ label: "sessions-session-graph-dialog" },
+			{ label: "sessions-session-tree-dialog" },
 			{ label: "requests-extension-ui" },
 			{ label: "requests-btw-sheet" },
 			{ label: "chat-controls-compaction-dialog" },
@@ -265,7 +265,7 @@ export function btwTranscriptFor(recordId: string): BtwTranscriptTurnView[] {
 }
 
 // ---------------------------------------------------------------------------
-// Session graph (SessionGraphDialog): daemon answer for getSessionGraph.
+// Session tree (SessionTreeDialog): daemon answer for getSessionGraph.
 // ---------------------------------------------------------------------------
 
 function node(
@@ -292,13 +292,13 @@ function node(
 const graphNodes: GraphNode[] = [
 	node("n01", null, "user", "Split the overlay stories by tier", 96, 1),
 	node("n02", "n01", "assistant", "Reading the component graph for the overlay group", 95, 2),
-	node("n03", "n02", "tool", "apps/web/components/sessions/SessionGraphDialog.tsx", 94, 0, "read"),
+	node("n03", "n02", "tool", "apps/web/components/sessions/SessionTreePanel.tsx", 94, 0, "read"),
 	node("n04", "n02", "tool", "apps/web/store/graph.ts", 93, 0, "read"),
 	node(
 		"n05",
 		"n02",
 		"assistant",
-		"SessionGraphDialog shows the graph when the capability is on",
+		"SessionTreeDialog shows the tree when the capability is on",
 		92,
 		1,
 	),
@@ -451,7 +451,7 @@ export const fleetLogEntries: FleetDebug["log"] = [
 export const promptHistoryEntries: string[] = [
 	"Read the overlay components and list their props",
 	"Split the stories by tier and keep fixtures typed",
-	"Why does SessionGraphDialog fall back to the legacy header?",
+	"Why does SessionTreeDialog show the unavailable header?",
 	"Add a variant for the remote compaction refusal",
 	"Run the type check once the overlay stories land",
 	"Explain the call relay used by the design server",

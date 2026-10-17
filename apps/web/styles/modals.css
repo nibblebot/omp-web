@@ -303,8 +303,8 @@ button.picker-row {
 .picker-note:empty {
 	margin-top: 0;
 }
-/* P2 session-graph picker (SessionGraphDialog): kind filter chips, per-node detail
- * disclosure, same-file vs new-file actions, ask re-answer form. */
+/* P2 session tree (SessionTreePanel): depth indent, active-path marker, kind
+ * filter chips, per-node detail disclosure, same-file vs new-file actions, ask re-answer form. */
 .graph-filters {
 	display: flex;
 	flex-wrap: wrap;
@@ -331,6 +331,15 @@ button.picker-row {
 .graph-node.active > .picker-row {
 	background: var(--accent-dim);
 	border-color: var(--accent-border);
+}
+.graph-indent {
+	display: inline-block;
+	flex: none;
+}
+.graph-marker {
+	flex: none;
+	width: 1ch;
+	color: var(--accent);
 }
 .graph-detail {
 	display: flex;

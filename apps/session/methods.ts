@@ -82,6 +82,7 @@ import { createTodoMethods } from "./review-todos";
 import { createIntegrationMethods } from "./integrations-methods";
 import {
 	broadcast,
+	broadcastHistory,
 	broadcastTo,
 	clearEphemeralAbort,
 	ephemeralAborts,
@@ -92,6 +93,12 @@ import {
 	readSubagentTranscript,
 	resolveSubagentSessionFile,
 } from "./subagent-mirror";
+import {
+	createGraphModelHandlers,
+	type GraphNavigateOptions,
+	type GraphQuery,
+} from "./graph-model-adapter";
+import { transcriptHistoryFrames } from "./transcript-history";
 
 // ---------------------------------------------------------------------------
 // Model-role picker helpers (TUI model-hub parity).
@@ -303,6 +310,10 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	}
 
 	const plugins = createPluginMethods({ cwd: deps.cwd });
+	const graph = createGraphModelHandlers({
+		rebuildTranscript: (entry) =>
+			broadcastHistory(entry.handle, transcriptHistoryFrames(entry.session)),
+	});
 	const METHODS: Partial<
 		Record<
 			WebMethodName,
@@ -334,6 +345,10 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		// newSession/clearSession/freshSession/deleteSession land via the lifecycle spread below.
 		switchSession: (entry, a) => changeSession(entry, "switchSession", a[0] as string),
 		branch: (entry, a) => changeSession(entry, "branch", a[0] as string),
+		getSessionGraph: async (entry, a) => graph.getSessionGraph(entry, (a[0] ?? {}) as GraphQuery),
+		navigateTree: async (entry, a) =>
+			graph.navigateTree(entry, a[0] as string, (a[1] ?? {}) as GraphNavigateOptions),
+		resumeAfterAskReanswer: async (entry) => graph.resumeAfterAskReanswer(entry),
 		compact: (entry, a) => entry.session.compact(a[0] as string | undefined),
 		retry: (entry) => entry.session.retry(),
 		fork: (entry) => entry.session.fork(),
