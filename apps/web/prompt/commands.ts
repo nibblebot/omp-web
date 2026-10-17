@@ -1,7 +1,16 @@
 import type { ImageArg } from "#lib/wire/protocol";
 import { requestDangerConfirm } from "./danger-confirm";
-import { featureCommand } from "../features/registry";
+import { featureCommand, featureCommandDetails, isFeatureEnabled } from "../features/registry";
 import { featureForCommand } from "../features/manifest";
+import {
+	buildCommandRegistry,
+	findCommand,
+	isSdkHandled,
+	refusalNotice,
+	suggestCommand,
+	unknownCommandNotice,
+	type CommandEntry,
+} from "./command-registry";
 import {
 	addBashItem,
 	call,
@@ -45,7 +54,57 @@ export function parseInput(text: string): ParsedInput {
 }
 
 function showError(err: unknown): void {
-	setState("error", String(err));
+	// The SDK's error class name is noise in a toast (CMD-08).
+	setState("error", String(err).replace(/^\w+Error: /, ""));
+}
+
+const USAGE_KEY = "omp-web:command-usage";
+
+/** Per-browser run counts, the popup's frequency ranking (CMD-06). */
+export function commandUsage(): Map<string, number> {
+	try {
+		const raw = localStorage.getItem(USAGE_KEY);
+		return new Map(Object.entries(raw ? (JSON.parse(raw) as Record<string, number>) : {}));
+	} catch {
+		return new Map();
+	}
+}
+
+function recordCommandUse(name: string): void {
+	const usage = commandUsage();
+	usage.set(name, (usage.get(name) ?? 0) + 1);
+	try {
+		localStorage.setItem(USAGE_KEY, JSON.stringify(Object.fromEntries(usage)));
+	} catch {
+		// Storage full or disabled: ranking falls back to the pinned order.
+	}
+}
+
+/** Every name the composer can run now: local handlers, feature routes, and the daemon's advertised list. */
+export function currentCommandRegistry(): CommandEntry[] {
+	return buildCommandRegistry({
+		localNames: Object.keys(LOCAL_COMMANDS),
+		remote: state.availableCommands,
+		featureOf: (name) => {
+			const f = featureForCommand(name);
+			return f ? { id: f.id, label: f.label, enabled: isFeatureEnabled(f.id) } : undefined;
+		},
+		featureDetails: new Map(featureCommandDetails()),
+	});
+}
+
+/** Sends a daemon-run command after echoing it. A builtin cannot start mid-turn (AgentBusyError): say so in a notice, not an SDK toast (CMD-08). */
+function forwardSlash(text: string, name: string): void {
+	recordCommandUse(name);
+	pushNotice("echo", text);
+	void call("prompt", [text]).catch((err) => {
+		if (String(err).includes("already processing")) {
+			pushNotice(
+				"info",
+				`/${name} did not start: a turn is running. Wait for it to finish or press Esc, then run it again.`,
+			);
+		} else showError(err);
+	});
 }
 
 /**
@@ -280,12 +339,20 @@ function freshSession(): void {
 		.catch(showError);
 }
 
-/** Bare `/name` opens its dialog; arguments follow the SDK's subcommand grammar, so they are forwarded to the agent verbatim. */
+/** Bare `/name` opens its dialog. Arguments reach the agent only for SDK builtins with a headless handler (`/mcp list`); TUI-only ones such as `/skills installed` get a notice (INT-06). */
 export function openOrForward(modal: ModalName, name: string): (args: string) => void {
 	return (args) => {
 		const text = args.trim();
-		if (text) void call("prompt", [`/${name} ${text}`]).catch(showError);
-		else setState("modal", modal);
+		if (!text) {
+			setState("modal", modal);
+			return;
+		}
+		if (isSdkHandled(name)) forwardSlash(`/${name} ${text}`, name);
+		else
+			pushNotice(
+				"info",
+				`/${name} arguments are terminal-only; type /${name} alone to open it in the browser.`,
+			);
 	};
 }
 
@@ -418,6 +485,10 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 	usage: () => setState("modal", "stats"),
 	context: () => setState("modal", "stats"),
 	tools: () => setState("modal", "stats"),
+	settings: (args) => {
+		setState("settingsQuery", args.trim());
+		setState("modal", "settings");
+	},
 	help: () => setState("modal", "help"),
 	hotkeys: () => setState("modal", "help"),
 	exit: () => pushNotice("info", "Session persists, close this browser tab to exit."),
@@ -465,11 +536,13 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 		case "slash": {
 			const handler = LOCAL_COMMANDS[parsed.name];
 			if (handler) {
+				recordCommandUse(parsed.name);
 				handler(parsed.args);
 				return;
 			}
 			const owned = featureCommand(parsed.name);
 			if (owned) {
+				recordCommandUse(parsed.name);
 				owned.command.run(parsed.args);
 				return;
 			}
@@ -481,9 +554,33 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 				);
 				return;
 			}
-			// Agent-side builtin/skill/extension/file commands handle it. Their
-			// command_output frames don't arrive over the SSE/POST transport (documented tradeoff).
-			void call("prompt", [trimmed]).catch(showError);
+			// Names the browser cannot run never reach the model: unknown ones get a
+			// suggestion, terminal-only ones a notice (CMD-07, COL-09).
+			const registry = currentCommandRegistry();
+			const entry = findCommand(registry, parsed.name);
+			if (!entry) {
+				pushNotice(
+					"info",
+					unknownCommandNotice(parsed.name, suggestCommand(registry, parsed.name, commandUsage())),
+				);
+				return;
+			}
+			const refused = refusalNotice(entry);
+			if (refused) {
+				pushNotice("info", refused);
+				return;
+			}
+			if (entry.kind === "local") {
+				const run = LOCAL_COMMANDS[entry.name];
+				if (run) {
+					recordCommandUse(entry.name);
+					run(parsed.args);
+				} else pushNotice("info", `/${entry.name} is not available in the browser.`);
+				return;
+			}
+			// Agent-side builtin/skill/extension/file command. Its command_output frames
+			// don't arrive over the SSE/POST transport (documented tradeoff).
+			forwardSlash(trimmed, entry.name);
 			return;
 		}
 		case "queue": {

@@ -105,9 +105,16 @@ export const PromptBox: Component = () => {
 			if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
 				const sel = list[ac.selected()];
 				const t = ac.token();
-				// Exact match typed out: Enter submits; otherwise it completes.
+				// Exact match typed out: Enter submits. A partial command that takes no
+				// arguments runs in one press (CMD-16); the rest complete first.
 				if (sel && t && sel.label !== `/${t.query}` && sel.label !== `@${t.query}`) {
 					e.preventDefault();
+					if (sel.label.startsWith("/") && !sel.hint) {
+						setMessage(sel.apply.trimEnd());
+						ac.setToken(null);
+						submit("enter");
+						return;
+					}
 					ac.apply(sel);
 					return;
 				}

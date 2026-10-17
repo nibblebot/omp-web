@@ -613,3 +613,99 @@ describe("disabled feature commands", () => {
 		expect(posted.some((c) => c.type === "call" && c.method === "prompt")).toBe(false);
 	});
 });
+
+describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
+	beforeEach(() => {
+		setState({ items: [], streaming: false });
+	});
+
+	function promptCalls() {
+		return posted.filter((c) => c.type === "call" && c.method === "prompt");
+	}
+
+	test("an unknown command is never sent to the model and says so", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		posted.length = 0;
+		dispatchInput("/zzqx", undefined, "enter");
+		expect(promptCalls()).toEqual([]);
+		expect(state.items.at(-1)).toMatchObject({
+			kind: "notice",
+			level: "info",
+			message: "Unknown command /zzqx. Type /help to list commands.",
+		});
+	});
+
+	test("a terminal-only command is not forwarded and gets a notice", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		posted.length = 0;
+		dispatchInput("/collab status", undefined, "enter");
+		expect(promptCalls()).toEqual([]);
+		expect(state.items.at(-1)).toMatchObject({
+			kind: "notice",
+			level: "info",
+			message: expect.stringContaining(
+				"/collab is terminal-only and is not available in the browser.",
+			),
+		});
+	});
+
+	test("/stats is not forwarded and points at /usage", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		posted.length = 0;
+		dispatchInput("/stats", undefined, "enter");
+		expect(promptCalls()).toEqual([]);
+		expect(state.items.at(-1)).toMatchObject({
+			kind: "notice",
+			message: expect.stringContaining("Use /usage"),
+		});
+	});
+
+	test("a forwarded command echoes itself as a notice before it is sent", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		posted.length = 0;
+		dispatchInput("/security status", undefined, "enter");
+		expect(promptCalls().length).toBe(1);
+		expect(state.items.at(-1)).toMatchObject({
+			kind: "notice",
+			level: "echo",
+			message: "/security status",
+		});
+	});
+
+	test("/skills with arguments is never forwarded to the model", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		posted.length = 0;
+		dispatchInput("/skills status", undefined, "enter");
+		expect(promptCalls()).toEqual([]);
+		expect(state.items.at(-1)).toMatchObject({
+			kind: "notice",
+			level: "info",
+			message:
+				"/skills is part of MCP & Skills, which is disabled. Enable it in Settings > Features.",
+		});
+	});
+
+	test("/settings with a query opens the Settings sheet with the search pre-filled", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		posted.length = 0;
+		dispatchInput("/settings  security ", undefined, "enter");
+		expect(state.modal).toBe("settings");
+		expect(state.settingsQuery).toBe("security");
+		expect(promptCalls()).toEqual([]);
+	});
+
+	test("a bare /settings clears a stale search query", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState({ settingsQuery: "stale" });
+		dispatchInput("/settings", undefined, "enter");
+		expect(state.modal).toBe("settings");
+		expect(state.settingsQuery).toBe("");
+	});
+});

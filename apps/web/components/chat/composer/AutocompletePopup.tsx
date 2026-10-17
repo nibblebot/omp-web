@@ -3,6 +3,10 @@ import { createEffect, For, type Component } from "solid-js";
 export interface AcItem {
 	label: string;
 	detail?: string;
+	/** Argument hint shown after the label, e.g. `[soft|remote] [focus]`. */
+	hint?: string;
+	/** Current value of a setting-like command (model id, plan on/off), shown at the row end. */
+	live?: string;
 	apply: string;
 }
 
@@ -59,7 +63,9 @@ export const AutocompletePopup: Component<{
 						}}
 					>
 						<span class="autocomplete-label">{item.label}</span>
+						{item.hint && <span class="autocomplete-hint">{item.hint}</span>}
 						{item.detail && <span class="autocomplete-detail">{item.detail}</span>}
+						{item.live && <span class="autocomplete-live">{item.live}</span>}
 					</div>
 				)}
 			</For>

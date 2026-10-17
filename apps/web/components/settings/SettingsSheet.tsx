@@ -29,7 +29,8 @@ import { WebUiSettings } from "./WebUiSettings";
  * panel (and every other tab) in sync.
  */
 export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
-	const [query, setQuery] = createSignal("");
+	// `/settings <query>` opens with the search pre-filled (state.settingsQuery).
+	const [query, setQuery] = createSignal(state.settingsQuery);
 	const [activeTab, setActiveTab] = createSignal(DEFAULT_SETTINGS_TAB_ID);
 	let bodyRef: HTMLDivElement | undefined;
 

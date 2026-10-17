@@ -371,6 +371,9 @@ export const [state, setState] = createStore({
 	// Phase 5 + P8.1 modal payloads (components read these; set alongside
 	// modal): which project the Add-workspace modal targets (all tabs).
 	workspaceModalProjectId: null as string | null,
+	// Search text the Settings sheet opens with (`/settings <query>`); set
+	// alongside modal "settings" on every open, so a bare open passes "".
+	settingsQuery: "" as string,
 	// daemonId the delete-workspace confirm dialog targets (worktree guard
 	// evidence or clone verified-delete).
 	deleteWorkspaceTarget: null as string | null,

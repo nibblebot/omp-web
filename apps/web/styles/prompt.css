@@ -301,6 +301,16 @@ button.stop:not(:disabled):hover {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.autocomplete-hint,
+.autocomplete-live {
+	color: var(--muted-2);
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	white-space: nowrap;
+}
+.autocomplete-live {
+	margin-left: auto;
+}
 /* Prompt history popover (first-line Up): anchored at the composer's top-left
  * corner, growing up and to the right. The list is column-reverse so the
  * newest/best entry (index 0) sits at the bottom next to the search input. */
@@ -324,6 +334,10 @@ button.stop:not(:disabled):hover {
 		opacity: 0;
 		transform: scale(0.6);
 	}
+}
+.msg-notice-echo {
+	color: var(--accent);
+	font-family: var(--font-mono);
 }
 @media (prefers-reduced-motion: reduce) {
 	.history-popover {

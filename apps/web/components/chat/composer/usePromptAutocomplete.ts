@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, type Accessor, type Setter } from "solid-js";
 import { currentToken, fenceOpen, fuzzyRank, type AcToken } from "../../../prompt/autocomplete";
-import { LOCAL_COMMANDS } from "../../../prompt/commands";
+import { commandUsage, currentCommandRegistry } from "../../../prompt/commands";
 import {
 	emojiInlineReplace,
 	emojiSuggestions,
@@ -9,38 +9,8 @@ import {
 } from "../../../prompt/emoji";
 import { listFiles, state } from "../../../state";
 import { settingValue } from "../../../store/settings";
-import { featureCommandDetails } from "../../../features/registry";
-import { featureForCommand } from "../../../features/manifest";
+import { commandLiveState, rankCommands } from "../../../prompt/command-registry";
 import type { AcItem } from "./AutocompletePopup";
-
-const LOCAL_DETAILS: Record<string, string> = {
-	new: "Start a new session",
-	clear: "Clear context in place, keep session",
-	resume: "Resume a previous session (or /resume <id> to switch directly)",
-	tree: "Branch from an earlier message",
-	branch: "Branch from an earlier message",
-	export: "Export session as HTML (/export [--themes] [path])",
-	retry: "Retry the last failed turn",
-	fork: "Fork this session's history",
-	fresh: "Reset provider state, keep transcript",
-	handoff: "Hand off: compact in place with a summary document",
-	delete: "Delete this session permanently",
-	dump: "Download transcript (/dump [all])",
-	rename: "Rename this session (bare: agent auto-titles)",
-	compact: "Compact session context (/compact [soft|remote|snapcompact] [focus])",
-	model: "Model picker (or /model provider/id)",
-	live: "Unavailable in the browser",
-	move: "Unavailable for attached sessions",
-	wt: "Unavailable for attached sessions",
-	worktree: "Unavailable for attached sessions",
-	queue: "Queue a follow-up message",
-	plan: "Toggle plan mode (/plan [prompt])",
-	compaction: "Context compaction controls",
-	help: "Keyboard shortcuts",
-	hotkeys: "Keyboard shortcuts",
-	exit: "Close this tab",
-	quit: "Close this tab",
-};
 
 /** SDK default for `autocompleteMaxVisible`; the TUI editor clamps to 3..20. */
 const MAX_VISIBLE_DEFAULT = 10;
@@ -150,21 +120,15 @@ export function usePromptAutocomplete(
 				apply: f.includes(" ") ? `@"${f}" ` : `@${f} `,
 			}));
 		}
-		const local = [
-			...Object.keys(LOCAL_COMMANDS).map((name) => ({
-				name,
-				detail: LOCAL_DETAILS[name] ?? "web-local",
-			})),
-			...featureCommandDetails().map(([name, detail]) => ({ name, detail })),
-		];
-		const remote = state.availableCommands
-			.filter((c) => !LOCAL_COMMANDS[c.name] && !featureForCommand(c.name))
-			.map((c) => ({ name: c.name, detail: c.description ?? c.input?.hint ?? "" }));
-		return [...local, ...remote]
-			.map((c) => ({ c, rank: fuzzyRank(t.query, c.name) }))
-			.filter((x): x is { c: { name: string; detail: string }; rank: number } => x.rank !== null)
-			.sort((a, b) => a.rank - b.rank)
-			.map((x) => ({ label: `/${x.c.name}`, detail: x.c.detail, apply: `/${x.c.name} ` }));
+		return rankCommands(currentCommandRegistry(), t.query, commandUsage(), fuzzyRank).map(
+			({ entry }) => ({
+				label: `/${entry.name}`,
+				detail: entry.description,
+				hint: entry.hint,
+				live: commandLiveState(entry.name, state),
+				apply: `/${entry.name} `,
+			}),
+		);
 	});
 
 	const items = (): AcItem[] => rankedItems();

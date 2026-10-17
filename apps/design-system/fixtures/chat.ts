@@ -355,6 +355,7 @@ export const chatNoticeItems: Extract<ChatItem, { kind: "notice" }>[] = [
 	{ kind: "notice", id: 50, level: "info", message: "Session resumed from 2026-10-08T17:12Z." },
 	{ kind: "notice", id: 51, level: "warning", message: "Context is at 84% of the 200k window." },
 	{ kind: "notice", id: 52, level: "error", message: "MCP server 'linear' disconnected." },
+	{ kind: "notice", id: 53, level: "echo", message: "/security status" },
 ];
 
 /** PromptBox / QueueBar: text plus a pasted image chip for a queued follow-up. */
@@ -368,6 +369,12 @@ export const chatAutocompleteItems: AcItem[] = [
 	{ label: "/resume", detail: "Resume a previous session", apply: "/resume " },
 	{ label: "/compact", detail: "Summarize and shrink context", apply: "/compact " },
 	{ label: "/model", detail: "Switch the active model", apply: "/model " },
+	{
+		label: "/security",
+		detail: "Security scans and findings",
+		hint: "<plan|scan|status>",
+		apply: "/security ",
+	},
 	{ label: "/review", detail: "Open the review panel", apply: "/review " },
 ];
 
