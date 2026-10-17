@@ -5,6 +5,7 @@ import { SETTING_TABS } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import {
 	buildSettingsModel,
 	coerceSettingValue,
+	plainDescription,
 	settingChanged,
 	type SettingsSession,
 } from "#lib/sdk-settings/settings-model";
@@ -165,6 +166,20 @@ describe("settingChanged", () => {
 		expect(settingChanged({ "p3p-sweep": ["x"] }, {})).toBe(true);
 		expect(settingChanged({ a: ["x"] }, { a: ["x"] })).toBe(false);
 		expect(settingChanged({ a: ["x"] }, { a: ["y"] })).toBe(true);
+	});
+});
+
+describe("plainDescription", () => {
+	test("drops private-use icon glyphs and the empty parentheses they leave", () => {
+		expect(plainDescription("Waits are abortable (\u{F12B7}) but hold subagents.")).toBe(
+			"Waits are abortable but hold subagents.",
+		);
+		expect(plainDescription("remains until \uE0A0")).toBe("remains until");
+	});
+
+	test("keeps ordinary text, and passes undefined through", () => {
+		expect(plainDescription("Plain text (kept)")).toBe("Plain text (kept)");
+		expect(plainDescription(undefined)).toBeUndefined();
 	});
 });
 

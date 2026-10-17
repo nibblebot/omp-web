@@ -50,6 +50,22 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * SDK descriptions can embed Nerd Font icons from the key-hint theme (the Escape
+ * key glyph, for one). Private-use code points render as tofu in the web UI, so
+ * they are dropped, along with the empty "()" they leave behind.
+ */
+const PRIVATE_USE_GLYPH = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu;
+
+/** Remove private-use glyphs from a setting description; undefined passes through. */
+export function plainDescription(text: string | undefined): string | undefined {
+	return text
+		?.replace(PRIVATE_USE_GLYPH, "")
+		.replace(/\(\s*\)/g, "")
+		.replace(/\s{2,}/g, " ")
+		.trim();
+}
+
+/**
  * True when the current value differs from the schema default. Arrays compare
  * length + elementwise (===); records compare structurally (an unset record
  * resolves to a fresh {} that never Object.is-matches its default); everything
@@ -156,7 +172,7 @@ function submenuOptions(
 			return def.options.map((o) => ({
 				value: o.value,
 				label: o.label,
-				description: o.description,
+				description: plainDescription(o.description),
 			}));
 		const base = def.options;
 		return [
@@ -170,7 +186,11 @@ function submenuOptions(
 	if (def.path === "theme.dark" || def.path === "theme.light") {
 		return themes.map((theme) => ({ value: theme, label: theme }));
 	}
-	return def.options.map((o) => ({ value: o.value, label: o.label, description: o.description }));
+	return def.options.map((o) => ({
+		value: o.value,
+		label: o.label,
+		description: plainDescription(o.description),
+	}));
 }
 
 /** Structural slice of the session the model builder needs. */
@@ -334,7 +354,7 @@ function defToItem(
 	const base = {
 		path: def.path,
 		label: def.label,
-		description: def.description,
+		description: plainDescription(def.description),
 		warning: def.warning,
 		value,
 		changed: settingChanged(value, def.defaultValue),
@@ -388,7 +408,7 @@ function entryToItem(
 	const base = {
 		path: entry.path,
 		label: ui.label,
-		description: ui.description,
+		description: plainDescription(ui.description),
 		warning: ui.warning,
 		value: view.effective,
 		changed: settingChanged(view.effective, entry.defaultValue),
