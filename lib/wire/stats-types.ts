@@ -16,6 +16,8 @@ export interface SessionSummary {
 	title: string | null;
 	id: string | null;
 	cwd: string | null;
+	/** First user prompt (<= 200 chars); absent for fleet-store rows and older servers. */
+	firstPrompt?: string | null;
 	firstTs: number | null;
 	lastTs: number | null;
 	turns: number;

@@ -14,7 +14,7 @@ import { loadJsonl } from "./stats-jsonl";
 import { walkJsonl } from "./stats-sessions-index";
 import { readStoredHead, storeFileKey } from "./stats-store-index";
 import type { AppCtx, Route } from "./stats-types";
-import type { SessionSummary } from "#lib/wire/stats-types";
+import type { RawEntry, SessionSummary } from "#lib/wire/stats-types";
 import { normDbFile, isMainSession, folderOf } from "./stats-paths";
 import type { StatsConfig } from "./stats-config";
 
@@ -114,6 +114,75 @@ interface HeaderInfo {
 	title: string | null;
 	id: string | null;
 	cwd: string | null;
+	/** First user prompt (<= FIRST_PROMPT_MAX chars), shown as the row subtitle. */
+	firstPrompt: string | null;
+	/** Conversation text the `q` filter also searches; never sent to the client. */
+	searchText: string;
+}
+
+const FIRST_PROMPT_MAX = 200;
+/** Per-prompt and total caps for the searchable body text of one session. */
+const SEARCH_PROMPT_MAX = 300;
+const SEARCH_PROMPTS_TOTAL_MAX = 2000;
+const SEARCH_TAIL_MAX = 600;
+
+/** Searchable text per list row, kept off the wire (rows stay small). Keyed by the cached row object. */
+const rowSearchText = new WeakMap<SessionSummary, string>();
+
+/** Plain text of a user/assistant message entry; "" for every other entry. */
+function conversationText(e: RawEntry): { role: "user" | "assistant"; text: string } | null {
+	if (e.type !== "message") return null;
+	const msg = e.message;
+	if (typeof msg !== "object" || msg === null || !("role" in msg)) return null;
+	const role = msg.role;
+	if (role !== "user" && role !== "assistant") return null;
+	const content = "content" in msg ? msg.content : undefined;
+	let text = "";
+	if (typeof content === "string") text = content;
+	else if (Array.isArray(content)) {
+		const parts: string[] = [];
+		for (const part of content) {
+			if (
+				typeof part === "object" &&
+				part !== null &&
+				"type" in part &&
+				part.type === "text" &&
+				"text" in part &&
+				typeof part.text === "string"
+			) {
+				parts.push(part.text);
+			}
+		}
+		text = parts.join("\n");
+	}
+	text = text.trim();
+	return text === "" ? null : { role, text };
+}
+
+/** First user prompt plus the text the body search covers (user prompts, then the conversation tail). */
+function extractConversation(entries: readonly RawEntry[]): {
+	firstPrompt: string | null;
+	searchText: string;
+} {
+	let firstPrompt: string | null = null;
+	const prompts: string[] = [];
+	let promptsLen = 0;
+	let tail = "";
+	for (const e of entries) {
+		const m = conversationText(e);
+		if (m === null) continue;
+		if (m.role === "user") {
+			if (firstPrompt === null) firstPrompt = m.text.slice(0, FIRST_PROMPT_MAX);
+			if (promptsLen < SEARCH_PROMPTS_TOTAL_MAX) {
+				const piece = m.text.slice(0, SEARCH_PROMPT_MAX);
+				prompts.push(piece);
+				promptsLen += piece.length;
+			}
+		}
+		// Rolling tail: only the last SEARCH_TAIL_MAX chars of conversation text survive.
+		tail = `${tail}\n${m.text}`.slice(-SEARCH_TAIL_MAX);
+	}
+	return { firstPrompt, searchText: `${prompts.join("\n")}\n${tail}` };
 }
 
 interface MsgAggRow {
@@ -158,13 +227,14 @@ async function readHead(abs: string, mtimeMs: number, size: number): Promise<Hea
 		headCache.set(key, hit);
 		return hit;
 	}
-	let info: HeaderInfo = { title: null, id: null, cwd: null };
+	let info: HeaderInfo = { title: null, id: null, cwd: null, firstPrompt: null, searchText: "" };
 	const doc = await loadJsonl(abs);
 	if (doc) {
 		const first = doc.entries[0] ?? null;
 		const second = doc.entries[1] ?? null;
 		// Older files may lack the title slot, so the session header can be line 1.
 		const head = first?.type === "session" ? first : second?.type === "session" ? second : null;
+		const convo = extractConversation(doc.entries);
 		info = {
 			title:
 				first?.type === "title"
@@ -174,6 +244,8 @@ async function readHead(abs: string, mtimeMs: number, size: number): Promise<Hea
 						: null,
 			id: head ? str(head.id) : null,
 			cwd: head ? str(head.cwd) : null,
+			firstPrompt: convo.firstPrompt,
+			searchText: convo.searchText,
 		};
 	}
 	headCache.set(key, info);
@@ -182,6 +254,15 @@ async function readHead(abs: string, mtimeMs: number, size: number): Promise<Hea
 		if (oldest !== undefined) headCache.delete(oldest);
 	}
 	return info;
+}
+
+/**
+ * `q` filter (lowercased): substring match on the row's header fields and,
+ * for on-disk sessions, the body text captured at header-read time.
+ */
+function rowMatchesQuery(s: SessionSummary, q: string): boolean {
+	const fields = [s.title, s.cwd, s.id, s.folder, s.firstPrompt, rowSearchText.get(s)];
+	return fields.some((v) => (v ?? "").toLowerCase().includes(q));
 }
 
 function sessionsRoute(ctx: AppCtx): Route {
@@ -221,13 +302,7 @@ function sessionsRoute(ctx: AppCtx): Route {
 
 			// 3 (cont). q filter: case-insensitive substring on title, cwd, id, or project folder.
 			if (q) {
-				list = list.filter(
-					(s) =>
-						s.title?.toLowerCase().includes(q) ||
-						s.cwd?.toLowerCase().includes(q) ||
-						s.id?.toLowerCase().includes(q) ||
-						s.folder?.toLowerCase().includes(q),
-				);
+				list = list.filter((s) => rowMatchesQuery(s, q));
 			}
 
 			// 4. Sort: on-disk sessions by mtimeMs desc, missing sessions by
@@ -268,12 +343,13 @@ async function computeSessionsList(ctx: AppCtx): Promise<SessionSummary[]> {
 			continue;
 		}
 		const h = await readHead(abs, st.mtimeMs, st.size);
-		byAbs.set(abs, {
+		const row: SessionSummary = {
 			file: rel,
 			folder: folderOf(rel),
 			title: h.title,
 			id: h.id,
 			cwd: h.cwd,
+			firstPrompt: h.firstPrompt,
 			firstTs: null,
 			lastTs: null,
 			turns: 0,
@@ -288,7 +364,9 @@ async function computeSessionsList(ctx: AppCtx): Promise<SessionSummary[]> {
 			onDisk: true,
 			size: st.size,
 			mtimeMs: st.mtimeMs,
-		});
+		};
+		rowSearchText.set(row, h.searchText);
+		byAbs.set(abs, row);
 	}
 
 	// 1b. DB-only sessions: files with stats.db rows but missing on disk
