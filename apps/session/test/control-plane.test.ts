@@ -534,20 +534,21 @@ test("a read-only call broadcasts no state; a mutating call does", async () => {
 		args: ["state-probe"],
 	});
 	await fleet.waitForUp((e) => streamFrame(e, "browser/state")?.id === "name-1", 1);
-	// The mutating resync lands after its answer, so wait for it before counting:
-	// anything the read-only call broadcast would have been enqueued before this
-	// frame and is therefore already counted.
+	// The mutating resync lands after its answer (the title listener's frame
+	// lands before it), so wait for both before counting: anything the read-only
+	// call broadcast would have been enqueued before them and is already counted.
 	await fleet.waitForUp(
 		(e) => stateSessionName(streamFrame(e, "browser/state")) === "state-probe",
-		1,
+		2,
 	);
 
-	// Exactly one state frame across both calls, and it belongs to the mutating
-	// one: the read-only row skipped the broadcast.
-	const broadcast = states().at(-1);
-	expect(states()).toHaveLength(before + 1);
-	expect(stateSessionName(broadcast)).toBe("state-probe");
-	expect(frames().indexOf(broadcast!)).toBeGreaterThan(
+	// Every state frame across both calls belongs to the mutating one: the
+	// read-only row skipped the broadcast (one would carry the pre-rename name,
+	// since its answer landed before the rename was sent). The rename yields two:
+	// the SDK title listener's and the post-mutation resync after the answer.
+	const after = states().slice(before);
+	expect(after.map(stateSessionName)).toEqual(["state-probe", "state-probe"]);
+	expect(frames().indexOf(after.at(-1)!)).toBeGreaterThan(
 		frames().findIndex((f) => f.type === "call_result" && f.id === "name-1"),
 	);
 

@@ -44,6 +44,7 @@ omp-web reconciles the single-session browser UX: equivalent browser capability 
 - Composer: the placeholder is just "Message the Agent"; the key hints (Enter send, Ctrl+Enter follow-up, / for commands) no longer crowd the input.
 
 ### Fixes
+- Sessions: an SDK-generated session title (first message or replan) updates the main pane title and browser tab as soon as it is set; it previously appeared in the sidebar row first and reached the main pane only on the next state resync.
 - Sessions: a call the edge refused as `not attached` while a session re-attaches is retried once with the same command ID inside the dedup window, instead of failing. Subagent progress goes out at most once per second per agent as deltas, with `lastTool` replacing the bulk `recentTools` and `recentOutput` fields (additive wire change). A dropped session shows a connection strip under the main header and disables session actions with a tooltip, instead of stacking error toasts, and the sticky error no longer reads `Error: Error:`.
 - Vite: explicit extensions in config imports eliminate native-config compatibility warnings during `bun dev`.
 - Sessions: a browser attached through the callback pair gets the transcript again, on attach and after New session, switch, branch, and every other transcript-replacing call (the pair primed and resynced without `history` frames, so the old transcript stayed on screen and re-attaching showed it empty). History frames are paced against the pair's outbound buffer and bounded to fit one callback envelope.

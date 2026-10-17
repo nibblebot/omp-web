@@ -278,6 +278,13 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 				void deps.broker.broadcastState(entry).catch(() => {});
 			}
 		});
+		// SDK auto-titles (first message, replan) call sessionManager.setSessionName
+		// directly: no session event, no slash-runtime notifyTitleChanged. Without
+		// this the main pane keeps the stale name while the fleet's file probe
+		// already shows the new one in the sidebar.
+		session.sessionManager.onSessionNameChanged(() => {
+			void deps.broker.broadcastState(entry).catch(() => {});
+		});
 		eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, (data) => {
 			handleSubagentLifecycle(entry, data as SubagentLifecyclePayload);
 		});

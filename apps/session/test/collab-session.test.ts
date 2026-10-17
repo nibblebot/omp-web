@@ -13,11 +13,17 @@ import { createCollabSession } from "../collab-session";
 
 type Listener = (event: AgentSessionEvent) => void;
 
-/** Minimal session stub: only the subscribe surface wireSession touches. */
-function fakeSession(): { session: AgentSession; fire: (event: AgentSessionEvent) => void } {
+/** Minimal session stub: the subscribe surface and session manager wireSession touches. */
+function fakeSession(): {
+	session: AgentSession;
+	sessionManager: SessionManager;
+	fire: (event: AgentSessionEvent) => void;
+} {
 	const listeners: Listener[] = [];
+	const sessionManager = SessionManager.inMemory("/tmp");
 	return {
 		session: {
+			sessionManager,
 			subscribe: (listener: Listener) => {
 				listeners.push(listener);
 				return () => {
@@ -26,6 +32,7 @@ function fakeSession(): { session: AgentSession; fire: (event: AgentSessionEvent
 				};
 			},
 		} as unknown as AgentSession,
+		sessionManager,
 		fire: (event) => {
 			for (const l of listeners) l(event);
 		},
@@ -150,6 +157,33 @@ describe("wireSession queue-staleness regression", () => {
 			},
 		});
 		expect(calls.length).toBe(0);
+	});
+});
+
+describe("wireSession title propagation", () => {
+	test("an SDK auto-title broadcasts state so the main pane title follows", async () => {
+		const { broker, calls } = stubBroker();
+		const collab = createCollabSession({
+			config: { idleTimeoutMs: 0 } as never,
+			agentDir: "",
+			authStorage: {} as never,
+			modelRegistry: {} as never,
+			settings: {} as never,
+			broker,
+		});
+		const { session, sessionManager } = fakeSession();
+		collab.wireSession({
+			handle: "s1",
+			cwd: "/tmp",
+			session,
+			eventBus: { on: () => () => {} } as never,
+		} as unknown as SessionEntry);
+
+		// The SDK's first-message auto-title calls setSessionName directly, with
+		// no session event and no slash-runtime notifyTitleChanged.
+		expect(await sessionManager.setSessionName("Generated title", "auto")).toBe(true);
+
+		expect(calls).toEqual([{ withStats: false }]);
 	});
 });
 

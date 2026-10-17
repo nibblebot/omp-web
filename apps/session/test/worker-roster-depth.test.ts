@@ -77,7 +77,11 @@ describe("worker roster depth", () => {
 					getEnabledToolNames: () => [],
 					getMountedXdevToolNames: () => [],
 					setPlanProposalHandler: () => {},
-					sessionManager: { getSessionId: () => "root-session", getCwd: () => dir },
+					sessionManager: {
+						getSessionId: () => "root-session",
+						getCwd: () => dir,
+						onSessionNameChanged: () => () => {},
+					},
 				} as unknown as AgentSession,
 				mcpManager: undefined,
 				setToolUIContext: () => {},
