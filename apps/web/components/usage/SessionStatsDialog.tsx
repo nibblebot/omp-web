@@ -3,6 +3,7 @@ import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { ContextUsageBreakdown } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { formatTokens } from "../../usage/context";
 import { call, setState, state } from "../../state";
+import { reportError } from "../../store/toasts";
 import { Modal } from "../ui/Modal";
 import { Tabs, tabButtonId, tabPanelId } from "../ui/Tabs";
 
@@ -37,7 +38,7 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 	onMount(() => {
 		void call("getSessionStats")
 			.then((stats) => setState("stats", stats as SessionStats))
-			.catch((err) => setState("error", String(err)));
+			.catch(reportError);
 		// Phase 9: /context parity, per-category token breakdown.
 		void call("getContextBreakdown")
 			.then((b) => setBreakdown((b as ContextUsageBreakdown | null) ?? null))
@@ -123,22 +124,14 @@ export const SessionStatsDialog: Component<{ onClose: () => void }> = (props) =>
 						)}
 					</Show>
 					<div class="stats-actions">
-						<button
-							onClick={() =>
-								void call("compact", []).catch((err) => setState("error", String(err)))
-							}
-						>
-							Compact now
-						</button>
+						<button onClick={() => void call("compact", []).catch(reportError)}>Compact now</button>
 						<button onClick={() => setState("modal", "usage")}>usage reports</button>
 						<label class="toggle">
 							<input
 								type="checkbox"
 								checked={state.autoCompactionEnabled}
 								onChange={(e) =>
-									void call("setAutoCompaction", [e.currentTarget.checked]).catch((err) =>
-										setState("error", String(err)),
-									)
+									void call("setAutoCompaction", [e.currentTarget.checked]).catch(reportError)
 								}
 							/>
 							auto-compaction
