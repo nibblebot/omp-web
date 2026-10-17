@@ -9,3 +9,5 @@ export { Markdown } from "./Markdown";
 export { Modal } from "./Modal";
 export { PickerRow, useClickableRow } from "./PickerRow";
 export type { ClickableRowProps } from "./PickerRow";
+export { moveRovingFocus, rovingTarget, setRovingTabStop } from "./roving";
+export type { RovingAxis } from "./roving";

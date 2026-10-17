@@ -328,6 +328,7 @@ export const WorkspaceRow: Component<{
 			<div
 				ref={rowRef}
 				class="sidebar-row daemon-row"
+				data-roster-item
 				classList={{
 					active: isAttached() || activating(),
 					clickable: clickable() && !activating(),

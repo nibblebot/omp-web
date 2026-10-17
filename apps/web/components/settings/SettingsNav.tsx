@@ -1,4 +1,4 @@
-import { For, Show, type Component } from "solid-js";
+import { createEffect, For, on, Show, type Component } from "solid-js";
 import { fleetSettingsActive } from "../../state";
 import {
 	tabBadgeCount,
@@ -21,6 +21,7 @@ import {
 	WandIcon,
 	type IconProps,
 } from "../ui/icons";
+import { moveRovingFocus, setRovingTabStop } from "../ui/roving";
 
 /** A section listed under the active tab: DOM id to scroll to + display label. */
 export interface SettingsSection {
@@ -82,8 +83,36 @@ export function SettingsNav(props: {
 	onSelectTab: (id: string) => void;
 	onSelectSection: (id: string) => void;
 }) {
+	let nav!: HTMLElement;
+	const navItems = () =>
+		Array.from(nav.querySelectorAll<HTMLElement>(".settings-section, .settings-subsection"));
+	// One tab stop for the whole nav (the active tab); arrows, Home and End move.
+	createEffect(
+		on([() => props.activeTabId, () => props.sections], () =>
+			queueMicrotask(() => {
+				const items = navItems();
+				const active = items.findIndex((el) => el.getAttribute("aria-current") === "true");
+				setRovingTabStop(items, Math.max(0, active));
+			}),
+		),
+	);
+	const onNavKeyDown = (e: KeyboardEvent) => {
+		const items = navItems();
+		moveRovingFocus(e, items, items.indexOf(e.target as HTMLElement), "vertical");
+	};
+	const onNavFocusIn = (e: FocusEvent) => {
+		const items = navItems();
+		const index = items.indexOf(e.target as HTMLElement);
+		if (index >= 0) setRovingTabStop(items, index);
+	};
 	return (
-		<nav class="settings-nav" aria-label="Settings sections">
+		<nav
+			ref={nav}
+			class="settings-nav"
+			aria-label="Settings sections"
+			onKeyDown={onNavKeyDown}
+			onFocusIn={onNavFocusIn}
+		>
 			<For each={props.tabs}>
 				{(tab, index) => {
 					const Icon = TAB_ICONS[tab.icon];

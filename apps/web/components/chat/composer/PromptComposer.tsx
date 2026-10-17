@@ -369,6 +369,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							/>
 						</Show>
 						<textarea
+							data-focus-fallback
 							ref={(el) => {
 								textarea = el;
 								props.setTextareaRef(el);

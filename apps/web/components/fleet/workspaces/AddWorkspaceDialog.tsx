@@ -16,6 +16,7 @@ import {
 } from "../../../state";
 import { Modal } from "../../ui/Modal";
 import { PickerRow } from "../../ui/PickerRow";
+import { moveRovingFocus } from "../../ui/roving";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { OnboardingProgress, useOnboardingPipeline } from "./onboarding";
 
@@ -351,9 +352,25 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 				<div class="msg-notice worktree-error">unknown project: reopen from the sidebar</div>
 			</Show>
 			<Show when={!busy() && project() !== null}>
-				<div class="worktree-tabs" role="tablist" aria-label="Workspace mode">
+				<div
+					class="worktree-tabs"
+					role="tablist"
+					aria-label="Workspace mode"
+					onKeyDown={(e) => {
+						const tabs = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
+						const target = moveRovingFocus(
+							e,
+							tabs,
+							tabs.indexOf(e.target as HTMLElement),
+							"horizontal",
+							true,
+						);
+						if (target !== null) tabs[target].click();
+					}}
+				>
 					<button
 						type="button"
+						tabIndex={tab() === "worktree" ? 0 : -1}
 						class="worktree-tab"
 						classList={{ active: tab() === "worktree" }}
 						role="tab"
@@ -367,6 +384,7 @@ export const AddWorkspaceDialog: Component<{ onClose: () => void }> = (props) =>
 					</button>
 					<button
 						type="button"
+						tabIndex={tab() === "clone" ? 0 : -1}
 						class="worktree-tab"
 						classList={{ active: tab() === "clone" }}
 						role="tab"

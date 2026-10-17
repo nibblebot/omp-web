@@ -113,6 +113,20 @@ export const App: Component = () => {
 			e.preventDefault();
 			setState("toolsExpanded", (v) => !v);
 		});
+		// Ctrl+, opens Settings; Alt+A opens subagents. Alt+A is skipped while
+		// typing: on some platforms Alt+letter inserts a character.
+		window.addEventListener("keydown", (e) => {
+			if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === ",") {
+				e.preventDefault();
+				setState("modal", "settings");
+				return;
+			}
+			if (!e.altKey || e.ctrlKey || e.shiftKey || e.key.toLowerCase() !== "a") return;
+			const target = e.target as HTMLElement | null;
+			if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
+			e.preventDefault();
+			setState("modal", "subagents");
+		});
 	});
 	// Drawer sidebars (below 1024px) get out of the way once the main pane
 	// changes (attach, session switch) or any dialog/sheet opens over it.

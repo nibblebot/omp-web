@@ -1,6 +1,7 @@
 import { onCleanup, onMount, Show, type Component, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
 import { XIcon } from "./icons";
+import { focusOrigin, pageFocusFallback, resolveFocusReturn } from "./focus";
 
 // Stable per-instance ids: several modals can be mounted at once (a state.modal
 // picker plus BtwSheet sheets), so a module counter keeps ids unique.
@@ -55,17 +56,17 @@ export const Modal: Component<{
 
 	onMount(() => {
 		document.addEventListener("keydown", onKeyDown, true);
-		previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		previousFocus = focusOrigin();
 		box.focus();
 	});
 	onCleanup(() => {
 		document.removeEventListener("keydown", onKeyDown, true);
-		// Restore focus to the opener only if it survived and focus is still
-		// inside this modal (Esc/backdrop close). If focus moved on its own or
-		// the opener was replaced, leave it where it is.
-		if (previousFocus && previousFocus.isConnected && box.contains(document.activeElement)) {
-			previousFocus.focus();
-		}
+		// Hand focus back when it is still on this dialog or was lost with it
+		// (Esc, backdrop, close button). Focus that moved to another control
+		// on purpose is left alone.
+		const active = document.activeElement;
+		if (active && active !== document.body && !box.contains(active)) return;
+		resolveFocusReturn(previousFocus, pageFocusFallback)?.focus();
 	});
 
 	return (

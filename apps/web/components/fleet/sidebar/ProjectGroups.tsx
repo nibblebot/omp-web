@@ -131,6 +131,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 			<button
 				type="button"
 				class={`sidebar-group${props.class ? ` ${props.class}` : ""}`}
+				data-roster-item
 				aria-expanded={open()}
 				data-open={open() ? "true" : "false"}
 				onClick={() => toggleGroup(props.gkey)}
@@ -170,6 +171,7 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 					<button
 						type="button"
 						class="project-group-toggle"
+						data-roster-item
 						aria-expanded={open()}
 						data-open={open() ? "true" : "false"}
 						onClick={() => toggleGroup(gkey)}

@@ -1,7 +1,8 @@
-import { Show, type Component } from "solid-js";
+import { createEffect, Show, type Component } from "solid-js";
 import { daemonsByProject, setSidebarVisible, setState, state } from "../../../state";
 import { SidebarHeader } from "../../app/SidebarHeader";
 import { PlusIcon } from "../../ui/icons";
+import { moveRovingFocus, setRovingTabStop } from "../../ui/roving";
 import { ProjectGroups } from "./ProjectGroups";
 import { SidebarUsage } from "./SidebarUsage";
 
@@ -27,12 +28,44 @@ export const FleetSidebar: Component = () => {
 	 *  daemon projects included) + one trailing fallback group for entries
 	 *  without a projectId. */
 	const groups = () => daemonsByProject();
+	// Roster rows (`data-roster-item`: project toggles and workspace rows) share
+	// one tab stop; arrows, Home and End move between them (listbox-style).
+	let roster!: HTMLDivElement;
+	let rosterActive = 0;
+	const rosterItems = () => Array.from(roster.querySelectorAll<HTMLElement>("[data-roster-item]"));
+	const syncRosterStop = () => {
+		const items = rosterItems();
+		rosterActive = Math.min(rosterActive, Math.max(items.length - 1, 0));
+		setRovingTabStop(items, rosterActive);
+	};
+	createEffect(() => {
+		groups();
+		queueMicrotask(syncRosterStop);
+	});
+	const onRosterFocusIn = (e: FocusEvent) => {
+		const items = rosterItems();
+		const index = items.indexOf(e.target as HTMLElement);
+		if (index < 0) return;
+		rosterActive = index;
+		setRovingTabStop(items, index);
+	};
+	const onRosterKeyDown = (e: KeyboardEvent) => {
+		if (!(e.target instanceof HTMLElement) || !e.target.hasAttribute("data-roster-item")) return;
+		const items = rosterItems();
+		const target = moveRovingFocus(e, items, items.indexOf(e.target), "vertical");
+		if (target !== null) rosterActive = target;
+	};
 
 	return (
 		<>
 			<aside class="sidebar" classList={{ open: state.sidebarVisible }}>
 				<SidebarHeader onCollapse={() => setSidebarVisible(false)} />
-				<div class="sidebar-list">
+				<div
+					class="sidebar-list"
+					ref={roster}
+					onKeyDown={onRosterKeyDown}
+					onFocusIn={onRosterFocusIn}
+				>
 					{/* Static top-level header: single grouping for the whole roster,
 				    no caret (not collapsible), no indent; carries the add-project
 				    action (top-right). Always rendered so the empty-state hint
