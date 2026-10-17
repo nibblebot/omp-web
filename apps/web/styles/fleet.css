@@ -897,7 +897,9 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 	border: 1px solid var(--border);
 	border-radius: var(--r-md);
 	padding: var(--space-3) var(--space-4);
-	max-height: 200px;
+	max-height: min(50dvh, 360px);
+	min-height: 96px;
+	resize: vertical;
 	overflow-y: auto;
 	white-space: pre-wrap;
 	word-break: break-word;
@@ -1348,4 +1350,69 @@ button.project-group-toggle[data-open="false"] .sidebar-caret {
 .firstrun-cta:hover {
 	background: color-mix(in srgb, var(--accent), var(--bg) 12%);
 	border-color: color-mix(in srgb, var(--accent), var(--bg) 12%);
+}
+
+/* FLEET-16: session process log wrapper with jump-to-latest affordance. */
+.daemon-stderr-wrap {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+.daemon-stderr-jump {
+	align-self: flex-end;
+	font-size: var(--fs-micro);
+}
+
+/* FLEET-19: remote sessions carry a dashed chip and an Add remote entry. */
+.daemon-chip--remote {
+	border-style: dashed;
+}
+.sidebar-remote-add {
+	margin: var(--space-3) var(--space-4);
+	padding: var(--space-3) var(--space-4);
+	border: 1px dashed var(--border-strong);
+	border-radius: var(--r-md);
+	background: transparent;
+	color: var(--muted-3);
+	font-size: var(--fs-micro);
+	text-align: left;
+	cursor: pointer;
+}
+.sidebar-remote-add:hover {
+	color: var(--text);
+	border-color: var(--accent);
+}
+.remote-enroll {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+}
+.remote-enroll-command {
+	margin: 0;
+	padding: var(--space-4);
+	background: var(--bg-deep);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	white-space: pre-wrap;
+	word-break: break-all;
+	font-size: var(--fs-sm);
+	color: var(--text);
+	user-select: all;
+}
+.remote-enroll-status {
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+}
+
+/* FLEET-20: first-run panel actions and status lines. */
+.firstrun-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-3);
+	margin-top: var(--space-3);
+}
+.firstrun-status {
+	font-size: var(--fs-micro);
+	color: var(--muted-2);
+	margin-top: var(--space-2);
 }

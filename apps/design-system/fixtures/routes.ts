@@ -271,6 +271,16 @@ export const fixtureRoutes: FixtureRoute[] = [
 	},
 	{
 		method: "GET",
+		path: "/ctl/omp-setup",
+		respond: () => ({
+			ompInstalled: true,
+			providers: ["anthropic"],
+			defaultModel: "anthropic/claude-sonnet-4",
+			error: null,
+		}),
+	},
+	{
+		method: "GET",
 		path: "/auth/session",
 		respond: () => ({ csrfToken: "design-system-csrf", expiresAt: FIXTURE_NOW + 8 * 3_600_000 }),
 	},

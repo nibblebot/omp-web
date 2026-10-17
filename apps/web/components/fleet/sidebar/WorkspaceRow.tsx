@@ -592,6 +592,14 @@ export const WorkspaceRow: Component<{
 							Sessions
 						</button>
 					</Show>
+					<Show when={d().mode === "remote"}>
+						<span
+							class="daemon-chip daemon-chip--remote"
+							title="remote session host; the fleet never dials it"
+						>
+							remote
+						</span>
+					</Show>
 					<Show when={!isWorktree() && !isRoot()}>
 						<div class="daemon-chips">
 							<Show when={isClone()}>

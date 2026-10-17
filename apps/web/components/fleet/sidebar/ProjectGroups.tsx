@@ -4,8 +4,9 @@ import { projectRollup } from "../../../fleet-ui/workspace-status";
 import { setState, state } from "../../../state";
 import { spawnDaemon } from "../../../store/projects";
 import { KebabMenu } from "../../ui/KebabMenu";
-import { ChevronDownIcon, PlusIcon, TrashIcon } from "../../ui/icons";
+import { ChevronDownIcon, TrashIcon } from "../../ui/icons";
 import { WorkspaceRow, menuOpenId, setMenuOpenId } from "./WorkspaceRow";
+import { FirstRunPanel } from "./FirstRunPanel";
 
 // ---------------------------------------------------------------------------
 // Project-grouped roster rendering: registered projects render as collapsible
@@ -76,29 +77,6 @@ export type ProjectGroupsData = {
 	project: RegisteredProject | null;
 	daemons: DaemonEntry[];
 }[];
-
-/** Phase 4 first-run empty state: replaces the one-line hint while the
- *  fleet has no config file, no registered projects, and no daemons.
- *  Step 1 is the primary add-project action (same modal the PROJECTS
- *  header "+" opens); steps 2-3 are short hints. */
-const FirstRunPanel: Component = () => (
-	<div class="firstrun">
-		<p class="firstrun-title">Welcome to omp-web</p>
-		<ol class="firstrun-steps">
-			<li>
-				<button type="button" class="firstrun-cta" onClick={() => setState("modal", "add-project")}>
-					<PlusIcon />
-					Add your first project
-				</button>
-			</li>
-			<li>
-				Prefer the terminal? Just run <code>omp-web</code>. It offers to configure the data home on
-				first run.
-			</li>
-			<li>Sessions appear here once a project exists.</li>
-		</ol>
-	</div>
-);
 
 export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) => {
 	const [collapsedGroups, setCollapsedGroups] = createSignal<Set<string>>(readCollapsedGroups());
@@ -283,6 +261,13 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 					}
 				</For>
 			</Show>
+			<button
+				type="button"
+				class="sidebar-remote-add"
+				onClick={() => setState("modal", "add-remote")}
+			>
+				Add remote session…
+			</button>
 		</>
 	);
 };

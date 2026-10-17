@@ -70,6 +70,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { DaemonStatus, RegisteredProject, PublicProviderProfile } from "#lib/wire/protocol";
 import type { FleetConfig } from "./config";
 import { expandTilde, loadConfig, resolveConfigPath } from "./config";
+import { checkOmpSetup } from "./omp-check";
 import { toPublicProfile } from "./provider-profile";
 import { isLoopbackHost } from "#lib/platform/hosts";
 import { acquireFileLock, type FileLock } from "#lib/platform/file-lock";
@@ -1213,6 +1214,9 @@ class FleetServerImpl implements FleetServer {
 					case "/ctl/profiles":
 						// P1.3: secret-free provider-profile catalog for CLI/browser.
 						return json(this.cloneApi.profiles());
+					case "/ctl/omp-setup":
+						// Read-only probe for the web first-run panel. Never writes config.
+						return json(await checkOmpSetup());
 					case "/ctl/projects": {
 						// The registered set is the only project source (no root
 						// scanning). Each registered project also contributes its

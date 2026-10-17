@@ -51,6 +51,7 @@ import { dirname, join } from "node:path";
 import { LockHeldError } from "#lib/platform/file-lock";
 import { isInteractiveDesktop, openBrowser } from "#lib/platform/open-browser";
 import { loadConfig, resolveConfigPath } from "./config";
+import { formatSessionHostCommand, readSessionEnrollment } from "#lib/wire/session-host-command";
 import { offerFirstRunSetup } from "./first-run";
 import { resolveStatePath, startFleet, type FleetServer } from "./server";
 import { runProfilePreflight } from "./preflight";
@@ -778,35 +779,16 @@ async function enrollCmd(
 			cwd,
 			callbackUrl: flagString(flags, "callback-url"),
 		}),
-	})) as {
-		entry?: { daemonId?: unknown; name?: unknown };
-		enrollment?: {
-			workspaceId?: unknown;
-			generation?: unknown;
-			token?: unknown;
-			callbackUrl?: unknown;
-		};
-	};
-	const { entry, enrollment } = body;
-	if (
-		entry === undefined ||
-		enrollment === undefined ||
-		typeof enrollment.workspaceId !== "string" ||
-		typeof enrollment.generation !== "number" ||
-		typeof enrollment.token !== "string" ||
-		typeof enrollment.callbackUrl !== "string"
-	) {
+	})) as { entry?: { daemonId?: unknown; name?: unknown } };
+	const { entry } = body;
+	const enrollment = readSessionEnrollment(body);
+	if (entry === undefined || enrollment === undefined) {
 		throw new CliError("unexpected enroll response");
 	}
-	const allowHttp = enrollment.callbackUrl.startsWith("http:") ? " --callback-allow-http" : "";
 	console.log(
 		`enrolled ${String(entry.daemonId)} (${String(entry.name)}); run on the session host:`,
 	);
-	console.log(
-		`OMP_SESSION_CALLBACK_TOKEN=${enrollment.token} omp-web session --cwd ${cwd ?? "."} --port 0` +
-			` --callback-url ${enrollment.callbackUrl} --callback-workspace ${enrollment.workspaceId}` +
-			` --callback-generation ${enrollment.generation}${allowHttp}`,
-	);
+	console.log(formatSessionHostCommand(enrollment, cwd));
 	return 0;
 }
 

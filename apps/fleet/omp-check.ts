@@ -18,17 +18,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
-export interface OmpSetupStatus {
-	/** The omp CLI is on PATH or at the standard ~/.bun/bin location. */
-	ompInstalled: boolean;
-	/** Providers with usable auth (SDK view: storage, config keys, env). */
-	providers: string[];
-	/** The default-role model selector from settings, or null. */
-	defaultModel: string | null;
-	/** Probe failure detail (missing SDK, unreadable config), else null. */
-	error: string | null;
-}
+import type { OmpSetupStatus } from "#lib/wire/protocol";
 
 /** omp CLI resolution: PATH, then the standard bun-global bin dir. */
 export function resolveOmpBinary(): string | null {

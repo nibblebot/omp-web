@@ -229,6 +229,7 @@ export type ModalName =
 	// Phase 5 + P8.1: project/worktree onboarding. The worktree-only modal
 	// became the unified Add-workspace modal (Worktree/Clone/Add existing).
 	| "add-project"
+	| "add-remote"
 	| "workspace"
 	// Browser-auth sign-in surface (P2.4; opened by the auth subscription on
 	// signedOut, exactly like the store/modals contract wires it).

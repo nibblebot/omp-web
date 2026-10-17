@@ -1,5 +1,12 @@
-import type { ClientCommand, ProjectBranch, ProjectEntry } from "#lib/wire/protocol";
+import type {
+	ClientCommand,
+	OmpSetupStatus,
+	ProjectBranch,
+	ProjectEntry,
+} from "#lib/wire/protocol";
+import { readSessionEnrollment, type SessionEnrollment } from "#lib/wire/session-host-command";
 import { setState, state } from "../state";
+import { authedFetch } from "./auth";
 import { ctlFetch, isConnected, postCommand } from "./transport";
 import { clearUserStopped, markUserStopped } from "./user-stopped";
 
@@ -406,4 +413,44 @@ export async function fetchRecentRoots(): Promise<RecentRootsResult> {
 		(s) => `recent roots failed (${s})`,
 	);
 	return (await res.json()) as RecentRootsResult;
+}
+
+// ---------------------------------------------------------------------------
+// Remote session enrollment (FLEET-19) and the omp setup probe (FLEET-20).
+
+/** POST /ctl/enroll: create a remote roster entry and mint its one-time
+ *  callback credential. The token is returned once; the caller shows it in
+ *  the Add remote session dialog and never stores it. */
+export async function enrollRemoteSession(input: {
+	name: string;
+	cwd: string | undefined;
+	labels: string[];
+}): Promise<{ daemonId: string; enrollment: SessionEnrollment }> {
+	const res = await authedFetch("/ctl/enroll", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ name: input.name, labels: input.labels, cwd: input.cwd }),
+	});
+	const body: unknown = await res.json().catch(() => null);
+	if (!res.ok) {
+		const err = (body as { error?: unknown } | null)?.error;
+		throw new Error(typeof err === "string" ? err : `enroll failed (${res.status})`);
+	}
+	const enrollment = readSessionEnrollment(body);
+	const daemonId = (body as { entry?: { daemonId?: unknown } } | null)?.entry?.daemonId;
+	if (enrollment === undefined || typeof daemonId !== "string") {
+		throw new Error("unexpected enroll response");
+	}
+	return { daemonId, enrollment };
+}
+
+/** GET /ctl/omp-setup: read-only omp install, provider-auth, and default-model
+ *  probe for the first-run panel. Never writes fleet config. */
+export async function fetchOmpSetup(): Promise<OmpSetupStatus> {
+	const res = await ctlFetch(
+		"/ctl/omp-setup",
+		"fleet control plane unreachable, no fleet server on :4722",
+		(s) => `omp setup check failed (${s})`,
+	);
+	return (await res.json()) as OmpSetupStatus;
 }

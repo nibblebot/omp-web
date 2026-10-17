@@ -1382,3 +1382,15 @@ export interface TodoBoardDto {
 	revision: string;
 	selected?: { phase: number; task: number };
 }
+
+/** omp CLI, provider-auth, and default-model probe (GET /ctl/omp-setup). */
+export interface OmpSetupStatus {
+	/** The omp CLI is on PATH or at the standard ~/.bun/bin location. */
+	ompInstalled: boolean;
+	/** Providers with usable auth (SDK view: storage, config keys, env). */
+	providers: string[];
+	/** The default-role model selector from settings, or null. */
+	defaultModel: string | null;
+	/** Probe failure detail (missing SDK, unreadable config), else null. */
+	error: string | null;
+}

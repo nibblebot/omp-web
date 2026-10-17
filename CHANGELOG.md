@@ -3,6 +3,7 @@
 omp-web reconciles the single-session browser UX: equivalent browser capability through existing SDK/fleet/transport reuse. Wire stays OMP_PROTO 2 additive-only.
 
 ### Features
+- Fleet: remote sessions show a dashed `remote` chip and an "Add remote session…" entry that enrolls one and shows the exact session-host command with a copy button; the first-run empty state walks through adding a project, provider sign-in (read-only `GET /ctl/omp-setup`), and starting a session; the session process log opens at the newest line with live refresh, copy, and an "errors only" filter.
 - BTW: `/btw` opens one sheet holding the side question, its answer, the saved history (search, thread, copy), and Promote to transcript; `/btw-history` is removed. Side questions are saved as they run, so promote works for them.
 - Lifecycle: same-session clear, new identity, provider-state fresh, and session-ID-confirmed durable delete with fleet purge acknowledgment; misleading `/drop` alias removed (`/delete` + menu action replace it).
 - Settings: effective value, owning layer, explicit presence, unset eligibility, SDK warnings, and live/next-session/restart effects on every row; typed record/list editing; project layer read-only with config-file guidance.
