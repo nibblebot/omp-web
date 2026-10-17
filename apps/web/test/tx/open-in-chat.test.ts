@@ -7,7 +7,10 @@ import { describe, expect, test } from "bun:test";
 import type { ResumeResolveOutcome } from "../../store/resume";
 import { openInChatEffect } from "../../tx/util/open-in-chat";
 
-const candidate = { id: "s1" } as unknown as Extract<ResumeResolveOutcome, { kind: "unique" }>["session"];
+const candidate = { id: "s1" } as unknown as Extract<
+	ResumeResolveOutcome,
+	{ kind: "unique" }
+>["session"];
 
 describe("openInChatEffect", () => {
 	test("unique resume switches to Chat with no banner", () => {

@@ -140,10 +140,12 @@ describe("Stop preserves the queue (abort row)", () => {
 		options: unknown[];
 		subagentsAborted: string[];
 		commandDrains: boolean[];
+		/** How many SDK messages had been re-sent when each command drain ran. */
+		sentAtDrain: number[];
 	}
 
 	function stopEntry(queue: FakeQueue, sent: string[]) {
-		const aborts: Abort = { options: [], subagentsAborted: [], commandDrains: [] };
+		const aborts: Abort = { options: [], subagentsAborted: [], commandDrains: [], sentAtDrain: [] };
 		const session = {
 			clearQueue: () => ({
 				steering: queue.steering.splice(0).map((text) => ({ text })),
@@ -180,6 +182,7 @@ describe("Stop preserves the queue (abort row)", () => {
 			},
 			drainCommands: async (e: SessionEntry) => {
 				aborts.commandDrains.push(e.queuedCommands.paused);
+				aborts.sentAtDrain.push(sent.length);
 			},
 		};
 		const methods = createWebMethods({
@@ -231,6 +234,23 @@ describe("Stop preserves the queue (abort row)", () => {
 		expect(aborts.commandDrains).toEqual([true, false]);
 		const released = (await methods.getQueuedMessages!(entry, [])) as { commandsPaused: boolean };
 		expect(released.commandsPaused).toBe(false);
+	});
+
+	test("Resume queue re-sends held steers and follow-ups before it drains a queued command (U10b)", async () => {
+		const queue: FakeQueue = { steering: ["s1"], followUp: ["f1", "f2"] };
+		const sent: string[] = [];
+		const { entry, aborts, methods } = stopEntry(queue, sent);
+		await methods.abort!(entry, []);
+		await methods.queueCommand!(entry, ["/add-dir /tmp/x"]);
+		await methods.queueCommand!(entry, ["/remove-dir /tmp/y"]);
+		expect(entry.queuedCommands.commands).toEqual(["/add-dir /tmp/x", "/remove-dir /tmp/y"]);
+
+		await methods.resumeQueue!(entry, []);
+		// The last drain (resume) saw all three held messages already re-sent; the
+		// earlier drains ran while Stop still held everything.
+		expect(aborts.sentAtDrain.at(-1)).toBe(3);
+		expect(sent).toEqual(["steer:s1", "follow:f1", "follow:f2"]);
+		expect(entry.queuedCommands.commands).toEqual(["/add-dir /tmp/x", "/remove-dir /tmp/y"]);
 	});
 
 	test("Stop aborts only active subagents, and keepSubagents leaves them running", async () => {

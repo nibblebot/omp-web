@@ -116,3 +116,24 @@ describe("removeQueuedCommand", () => {
 		expect(s.commands).toEqual(["/add-dir a"]);
 	});
 });
+
+describe("queued command behind follow-up turns (U10b)", () => {
+	test("a command waits while follow-up turns run, then runs in order after the last turn ends", async () => {
+		const s = state(["/add-dir a", "/remove-dir b"]);
+		const log: string[] = [];
+		let streaming = true;
+		const host: CommandQueueHost = {
+			isStreaming: () => streaming,
+			run: async (text) => {
+				log.push(text);
+			},
+		};
+		// agent_end of a follow-up turn fires while the next follow-up has already started.
+		await drainQueuedCommands(s, host);
+		expect(log).toEqual([]);
+		streaming = false;
+		await drainQueuedCommands(s, host);
+		expect(log).toEqual(["/add-dir a", "/remove-dir b"]);
+		expect(s.commands).toEqual([]);
+	});
+});

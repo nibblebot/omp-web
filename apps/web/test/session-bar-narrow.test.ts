@@ -47,7 +47,9 @@ describe("composer status row at narrow widths (U05)", () => {
 	});
 
 	test("the thinking chip and cost segment keep their natural width", () => {
-		expect(narrow).toMatch(/\.session-bar > \.thinking-segment,\s*\.session-bar > \.stats-segment\s*\{\s*flex:\s*none;\s*\}/);
+		expect(narrow).toMatch(
+			/\.session-bar > \.thinking-segment,\s*\.session-bar > \.stats-segment\s*\{\s*flex:\s*none;\s*\}/,
+		);
 	});
 
 	test("the ctx text prefix drops so the row fits the column", () => {

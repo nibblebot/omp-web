@@ -71,6 +71,7 @@ function candidate(id: string, overrides: Record<string, unknown> = {}): Record<
 function reset(): void {
 	setState("resume", createResumeState());
 	setState("sessionFile", undefined);
+	setState("currentSessionId", "");
 }
 
 beforeEach(() => {
@@ -357,6 +358,10 @@ describe("delete", () => {
 describe("owner resolution when resuming", () => {
 	const sessionFile = "/sessions/other/s1.jsonl";
 
+	beforeEach(() => {
+		setState("currentSessionId", "d-app");
+	});
+
 	function daemon(daemonId: string, cwd: string, extra: Partial<DaemonEntry> = {}): DaemonEntry {
 		return {
 			daemonId,
@@ -458,6 +463,14 @@ describe("owner resolution when resuming", () => {
 		dispatch({ type: "attach_result", id: attach.id, ok: true, sessionId: "d-new" });
 		await flushMicrotasks();
 		expect(calls("switchSession").at(-1)?.args).toEqual([sessionFile]);
+	});
+
+	test("with no session attached it refuses at once instead of parking the call until it times out (Open in Chat)", async () => {
+		setState("currentSessionId", "");
+		const outcome = await chooseResumeTarget("s1");
+		expect(outcome.kind).toBe("refused");
+		expect(resumeError()).toContain("Open a workspace in Chat first");
+		expect(calls("resumeResolve")).toEqual([]);
 	});
 
 	test("a folder no registered project owns is refused with the path, and nothing starts", async () => {

@@ -28,10 +28,13 @@ export const ThinkingLevelPicker: Component<{ onClose: () => void }> = (props) =
 	};
 
 	onMount(() => {
-		const focusTarget =
-			listEl?.querySelector<HTMLButtonElement>("button[aria-pressed='true']") ??
-			listEl?.querySelector<HTMLButtonElement>("button");
-		focusTarget?.focus();
+		// Modal focuses its own box after this child's onMount runs; defer so the list keeps focus.
+		queueMicrotask(() => {
+			const focusTarget =
+				listEl?.querySelector<HTMLButtonElement>("button[aria-pressed='true']") ??
+				listEl?.querySelector<HTMLButtonElement>("button");
+			focusTarget?.focus();
+		});
 	});
 
 	return (

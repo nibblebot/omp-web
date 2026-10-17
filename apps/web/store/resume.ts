@@ -478,6 +478,14 @@ export function chooseResumeTarget(arg: string, daemonId?: string): Promise<Resu
 				return { kind: "refused", message } as ResumeResolveOutcome;
 			});
 	}
+	// resumeResolve runs inside an attached session. With none attached the edge answers
+	// "not attached" and the call parks until its 30 s deadline, so fail at once with the cause.
+	if (state.currentSessionId === "") {
+		const message =
+			"No workspace is open. Open a workspace in Chat first, then resume this session.";
+		setResumeError(message);
+		return Promise.resolve({ kind: "refused", message });
+	}
 	return call("resumeResolve", [{ arg: trimmed }])
 		.then(async (data) => {
 			const root = asRecord(data);

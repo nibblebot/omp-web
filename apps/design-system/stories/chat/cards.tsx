@@ -145,10 +145,46 @@ const stories: Story[] = [
 			file: "apps/web/components/chat/transcript/cards/NoticeCard.tsx",
 			export: "NoticeCard",
 		},
-		variants: chatNoticeItems.map((item) => ({
-			name: `Level ${item.level}`,
-			render: () => <NoticeCard item={item} />,
-		})),
+		variants: [
+			...chatNoticeItems.map((item) => ({
+				name: `Level ${item.level}`,
+				render: () => <NoticeCard item={item} />,
+			})),
+			{
+				name: "Forwarded command reply",
+				description: "The reply is headed by the command it answers, so it reads as its result.",
+				render: () => (
+					<NoticeCard
+						item={{
+							kind: "notice",
+							id: 54,
+							level: "info",
+							command: "/add-dir",
+							message: "Added /home/joshua/shared to the workspace.",
+						}}
+					/>
+				),
+			},
+			{
+				name: "Long forwarded reply collapses",
+				description:
+					"A reply over 6 lines or 400 characters collapses behind its first line; the command header stays visible.",
+				render: () => (
+					<NoticeCard
+						item={{
+							kind: "notice",
+							id: 55,
+							level: "info",
+							command: "/security",
+							message: Array.from(
+								{ length: 9 },
+								(_, n) => `Scan ${n + 1}: 0 findings in apps/web/module-${n + 1}.ts`,
+							).join("\n"),
+						}}
+					/>
+				),
+			},
+		],
 	}),
 	defineStory({
 		id: "chat-transcript-cards-advisor-card",
