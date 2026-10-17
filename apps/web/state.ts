@@ -93,7 +93,6 @@ import {
 // ---------------------------------------------------------------------------
 export type Block = { kind: "text" | "thinking"; text: string };
 export type ToolStatus = "running" | "done" | "error";
-export type ToolCardsView = "expanded" | "collapsed" | "consolidated";
 export type BashItem = {
 	kind: "bash";
 	id: number;
@@ -140,6 +139,8 @@ export type ChatItem =
 			status: ToolStatus;
 			output: string;
 			images?: ImageArg[];
+			/** Structured result details (edit diff, file counts); absent until settled. */
+			details?: unknown;
 	  }
 	| BashItem
 	| CompactionItem
@@ -389,7 +390,6 @@ export const [state, setState] = createStore({
 	// resetSessionView clears it).
 	lightboxImage: null as ImageArg | null,
 	toolsExpanded: false,
-	toolCardsView: "expanded" as ToolCardsView,
 	// Daemon broker roster (hub/launch long-running processes); project-scoped,
 	// so resetSessionView must NOT clear it.
 	daemons: new Map<string, DaemonInfo>(),
@@ -650,6 +650,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 				item.output = output;
 				item.status = status;
 				if (images.length > 0) item.images = images;
+				item.details = msg.details;
 			} else {
 				toolIndex.set(msg.toolCallId, items.length);
 				items.push({
@@ -661,6 +662,7 @@ export function loadHistory(messages: AgentMessage[]): void {
 					status,
 					output,
 					...(images.length > 0 ? { images } : {}),
+					details: msg.details,
 				});
 			}
 		} else if (msg.role === "bashExecution" || msg.role === "pythonExecution") {
@@ -1566,6 +1568,7 @@ export {
 	argsSummary,
 	truncateHead,
 	setNotifyEnabled,
+	toggleToolsExpanded,
 	pushNotice,
 	pushCompaction,
 	addBashItem,

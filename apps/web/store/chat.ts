@@ -168,6 +168,11 @@ export function notifyDesktop(kind: NotifyKind, title: string, body: string): vo
 	}
 }
 
+/** Ctrl+O and the header kebab: expand or collapse every tool card at once. */
+export function toggleToolsExpanded(): void {
+	setState("toolsExpanded", (v) => !v);
+}
+
 /** Persisted desktop-notifications toggle; requests permission on first enable. */
 export function setNotifyEnabled(enabled: boolean): void {
 	if (typeof localStorage !== "undefined") localStorage.setItem(NOTIFY_KEY, String(enabled));
@@ -672,6 +677,7 @@ export function applyEvent(e: AgentSessionEvent): void {
 						if (item?.kind === "tool") {
 							item.status = e.isError ? "error" : "done";
 							item.output = capTail(tabsToSpaces(extractText(e.result)), 8000);
+							item.details = (e.result as { details?: unknown } | undefined)?.details;
 							const images = scanImages(e.result);
 							if (images.length > 0) item.images = images;
 						}

@@ -1,5 +1,4 @@
 import type { AcItem } from "../../web/components/chat/composer/AutocompletePopup";
-import type { Run } from "../../web/chat/tool-runs";
 import type { UsageLike } from "../../web/usage/usage";
 import type { AdvisorItem } from "../../web/store/slices/advisor";
 import type {
@@ -86,8 +85,8 @@ export const chatEditTool: ToolItem = {
 		path: "apps/web/components/ui/CopyButton.tsx",
 		edits: [
 			{
-				oldText: '\tconst label = copied() ? "copied" : "copy";',
-				newText: '\tconst label = copied() ? "copied" : failed() ? "failed" : "copy";',
+				old_string: '\tconst label = copied() ? "copied" : "copy";',
+				new_string: '\tconst label = copied() ? "copied" : failed() ? "failed" : "copy";',
 			},
 		],
 	},
@@ -196,43 +195,6 @@ export const chatTranscriptItems: ChatItem[] = [
 		images: [screenshot],
 	},
 	chatTaskTool,
-];
-
-/** Consolidated tool runs for ToolRunRow (ToolRunRow.tsx:20). Run.key is the id of the first tool in the run. */
-export const chatRuns: Run[] = [
-	{
-		key: 3,
-		tools: [chatReadTool, chatGrepTool],
-		thinking: [chatThinking],
-		consumedAssistantIds: [2],
-		turnCount: 1,
-		requestCount: 2,
-		errorCount: 0,
-		durationMs: 6400,
-		running: false,
-	},
-	{
-		key: 6,
-		tools: [chatEditTool, chatRunningBashTool],
-		thinking: [],
-		consumedAssistantIds: [5],
-		turnCount: 1,
-		requestCount: 2,
-		errorCount: 0,
-		durationMs: 3180,
-		running: true,
-	},
-	{
-		key: 11,
-		tools: [chatFailedBashTool],
-		thinking: [],
-		consumedAssistantIds: [],
-		turnCount: 0,
-		requestCount: 1,
-		errorCount: 1,
-		durationMs: 0,
-		running: false,
-	},
 ];
 
 // ---------------------------------------------------------------------------

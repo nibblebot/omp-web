@@ -3,10 +3,9 @@ import { AdvisorCard } from "../../../web/components/chat/transcript/cards/Advis
 import { AssistantCard } from "../../../web/components/chat/transcript/cards/AssistantCard";
 import { CompactionCard } from "../../../web/components/chat/transcript/cards/CompactionCard";
 import { NoticeCard } from "../../../web/components/chat/transcript/cards/NoticeCard";
-import { ToolRunRow } from "../../../web/components/chat/transcript/cards/ToolRunRow";
 import { UserCard } from "../../../web/components/chat/transcript/cards/UserCard";
 import { UserCommandCard } from "../../../web/components/chat/transcript/cards/UserCommandCard";
-import { ToolCard, ToolChip } from "../../../web/components/chat/tools/ToolCard";
+import { ToolCard } from "../../../web/components/chat/tools/ToolCard";
 import { StreamingBlock } from "../../../web/components/chat/transcript/StreamingBlock";
 import { StatusSegment } from "../../../web/components/chat/status/StatusSegment";
 import type { ImageArg } from "#lib/wire/protocol";
@@ -23,14 +22,13 @@ import {
 	chatEditTool,
 	chatNoticeItems,
 	chatReadTool,
-	chatRuns,
 	chatRunningBashTool,
 	chatStreamingBlock,
 	chatThinking,
 	chatUserImagesItem,
 	chatUserItem,
 } from "../../fixtures/chat";
-import { genericDoneTool, genericErrorTool } from "../../fixtures/tools";
+import { genericDoneTool } from "../../fixtures/tools";
 import { defineStory } from "../../registry";
 import type { Story } from "../../registry";
 
@@ -171,18 +169,6 @@ const stories: Story[] = [
 		],
 	}),
 	defineStory({
-		id: "chat-transcript-cards-tool-run-row",
-		title: "ToolRunRow",
-		component: {
-			file: "apps/web/components/chat/transcript/cards/ToolRunRow.tsx",
-			export: "ToolRunRow",
-		},
-		variants: chatRuns.map((run) => ({
-			name: `${run.requestCount} tool calls, ${run.turnCount} turns${run.running ? ", running" : ""}`,
-			render: () => <ToolRunRow run={run} />,
-		})),
-	}),
-	defineStory({
 		id: "chat-tools-tool-card",
 		title: "ToolCard",
 		component: { file: "apps/web/components/chat/tools/ToolCard.tsx", export: "ToolCard" },
@@ -195,17 +181,6 @@ const stories: Story[] = [
 				name: "Unknown tool (generic fallback)",
 				render: () => <ToolCard item={genericDoneTool} />,
 			},
-		],
-	}),
-	defineStory({
-		id: "chat-tools-tool-chip",
-		title: "ToolChip",
-		component: { file: "apps/web/components/chat/tools/ToolCard.tsx", export: "ToolChip" },
-		variants: [
-			{ name: "Done", render: () => <ToolChip item={chatReadTool} /> },
-			{ name: "Running", render: () => <ToolChip item={chatRunningBashTool} /> },
-			{ name: "Failed bash", render: () => <ToolChip item={chatFailedBashTool} /> },
-			{ name: "Error from unknown tool", render: () => <ToolChip item={genericErrorTool} /> },
 		],
 	}),
 	defineStory({

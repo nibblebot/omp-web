@@ -1,10 +1,9 @@
 export { AutocompletePopup } from "./composer/AutocompletePopup";
 export type { AcItem } from "./composer/AutocompletePopup";
 export { Transcript } from "./transcript/Transcript";
-export { TranscriptViewMenu } from "./transcript/TranscriptViewMenu";
-export { ToolRunRow, pruneRunOpen } from "./transcript/cards";
+export { ToolCardsMenu } from "./transcript/ToolCardsMenu";
 export { PromptBox } from "./composer/PromptBox";
 export { QueueBar } from "./composer/QueueBar";
 export { SessionConfigBar } from "./status/SessionConfigBar";
 export { SessionTitle } from "./status/SessionTitle";
-export { ToolCard, ToolChip } from "./tools/ToolCard";
+export { ToolCard } from "./tools/ToolCard";

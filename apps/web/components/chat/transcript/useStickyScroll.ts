@@ -34,8 +34,7 @@ const RE_PIN_DISTANCE_PX = 80;
  * Observing the CONTENT element catches every growth source with one
  * mechanism: reveal-paced live text (each rAF flush grows the tail),
  * streamed tool/bash output (in-place item mutations that never change
- * items.length), toolCardsView mode switches (expanded/collapsed/
- * consolidated), Ctrl+O expand-all, consolidated run-row toggles, image
+ * items.length), Ctrl+O and the header expand-all toggle, image
  * decodes, font reflows, StreamingTail's 160ms soften re-parse. Observing the
  * CONTAINER catches viewport resizes (window/sidebar) that change
  * clientHeight without touching content. RO callbacks run after layout,

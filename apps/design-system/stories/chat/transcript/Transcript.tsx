@@ -42,24 +42,6 @@ export default defineStory({
 			),
 		},
 		{
-			name: "Tool cards collapsed",
-			seed: { toolCardsView: "collapsed" },
-			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<Transcript />
-				</div>
-			),
-		},
-		{
-			name: "Tool cards consolidated",
-			seed: { toolCardsView: "consolidated" },
-			render: () => (
-				<div class="ds-frame ds-frame-tall">
-					<Transcript />
-				</div>
-			),
-		},
-		{
 			name: "Empty: model synced",
 			description: "A fresh session: the model's character greets the user.",
 			seed: { items: [], live: idleLive, modelSynced: true },

@@ -113,6 +113,48 @@ pre.terminal {
 	font-size: var(--fs-sm);
 	padding: 1px var(--space-5) 1px var(--space-7);
 }
+.diff-section {
+	container-type: inline-size;
+	container-name: diff;
+}
+.diff-split {
+	display: none;
+	font-family: var(--font-mono);
+	font-size: var(--fs-md);
+	padding: var(--space-2) 0;
+	overflow-x: auto;
+}
+.diff-split-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.diff-split-row > .diff-line {
+	min-width: 0;
+}
+@container diff (min-width: 640px) {
+	.diff-view {
+		display: none;
+	}
+	.diff-split {
+		display: block;
+	}
+}
+.diff-stats {
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	white-space: nowrap;
+}
+.diff-add {
+	color: var(--diff-add-text);
+}
+.diff-del {
+	color: var(--diff-del-text);
+}
+.diff-pending {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+	padding: var(--space-2) var(--space-5);
+}
 .write-view,
 .read-body {
 	font-family: var(--font-mono);

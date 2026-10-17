@@ -1,12 +1,9 @@
-import { createSignal, For, Show, type Component, type JSX } from "solid-js";
+import { createEffect, createSignal, For, on, Show, type Component, type JSX } from "solid-js";
 import { state, type ToolItem } from "../../../state";
 import { Card } from "../../ui/Card";
 
 /** Lines of tool output shown while collapsed; Ctrl+O (toolsExpanded) reveals the rest. */
 export const COLLAPSED_LINES = 20;
-
-/** Lines of a write tool's new-file content shown while collapsed (Ctrl+O reveals the full file). */
-export const WRITE_PREVIEW_LINES = 200;
 
 /** Cards stay expanded while running or when the user toggles Ctrl+O. */
 export const toolExpanded = (item: ToolItem): boolean =>
@@ -28,11 +25,18 @@ interface ToolShellProps {
 
 /** Shared tool card: header (name + status) plus a tool-specific body. */
 export const ToolCardShell: Component<ToolShellProps> = (props) => {
-	// User intent for the <details> toggle. The reactive default (Ctrl+O /
-	// running status) must not re-assert the open attribute after the user
-	// has toggled a card by hand, so once a trusted toggle event fires, the
-	// resulting state wins from then on.
+	// User intent for the <details> toggle. A trusted toggle that differs from
+	// the reactive default is a user click; the browser also fires trusted
+	// toggles for our own open changes (running → done), which match the default
+	// and are ignored. Ctrl+O / the header kebab clears the intent on every card.
 	const [userOpen, setUserOpen] = createSignal<boolean | null>(null);
+	createEffect(
+		on(
+			() => state.toolsExpanded,
+			() => setUserOpen(null),
+			{ defer: true },
+		),
+	);
 	const cardClass = () => (props.class ? `tool-card ${props.class}` : "tool-card");
 	const status = () => (
 		<Show when={props.status}>
@@ -47,7 +51,11 @@ export const ToolCardShell: Component<ToolShellProps> = (props) => {
 			collapsible={props.collapsible}
 			open={userOpen() ?? (state.toolsExpanded || props.status === "running")}
 			onToggle={(e) => {
-				if (e.isTrusted) setUserOpen(e.currentTarget.open);
+				if (
+					e.isTrusted &&
+					e.currentTarget.open !== (state.toolsExpanded || props.status === "running")
+				)
+					setUserOpen(e.currentTarget.open);
 			}}
 			header={
 				<>

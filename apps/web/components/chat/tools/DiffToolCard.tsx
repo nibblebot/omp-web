@@ -1,102 +1,91 @@
-import { For, Show, type Component } from "solid-js";
-import { buildDiffRows } from "../../../text/diff";
-import { type ToolItem } from "../../../state";
-import { GenericToolCard } from "./GenericToolCard";
-import { CollapsibleOutput, ToolCardShell, WRITE_PREVIEW_LINES } from "./ToolCardShell";
+import { createMemo, For, Match, Show, Switch, type Component } from "solid-js";
+import type { DiffRow } from "../../../text/diff";
+import { editPreview, splitRows, type EditPreview } from "../../../text/edit-diff";
+import type { ToolItem } from "../../../state";
+import { CollapsibleOutput, ToolCardShell } from "./ToolCardShell";
 
-interface WriteArgs {
-	path: string;
-	content: string;
-}
-interface EditArgs {
-	path: string;
-	edits: Array<{ oldText: string; newText: string }>;
-}
+/** One diff line, or a collapsed-run marker. `null` is an empty split cell. */
+const DiffLine: Component<{ row: DiffRow | null }> = (props) => (
+	<Show when={props.row} fallback={<div class="diff-line" data-type="blank" />}>
+		{(row) => {
+			const r = row();
+			return r.type === "collapse" ? (
+				<div class="diff-collapse">… {r.count} unchanged lines</div>
+			) : (
+				<div class="diff-line" data-type={r.type}>
+					<span class="diff-sign">{r.type === "add" ? "+" : r.type === "del" ? "-" : " "}</span>
+					{r.text}
+				</div>
+			);
+		}}
+	</Show>
+);
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-	return value && typeof value === "object" && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: null;
-}
-
-function parseWrite(args: unknown): WriteArgs | null {
-	const r = asRecord(args);
-	if (r && typeof r.path === "string" && typeof r.content === "string")
-		return { path: r.path, content: r.content };
-	return null;
-}
-
-function parseEdit(args: unknown): EditArgs | null {
-	const r = asRecord(args);
-	if (!r || typeof r.path !== "string") return null;
-	const isPair = (e: unknown): e is { oldText: string; newText: string } => {
-		const p = asRecord(e);
-		return !!p && typeof p.oldText === "string" && typeof p.newText === "string";
-	};
-	if (Array.isArray(r.edits) && r.edits.length > 0 && r.edits.every(isPair))
-		return { path: r.path, edits: r.edits };
-	if (typeof r.oldText === "string" && typeof r.newText === "string")
-		return { path: r.path, edits: [{ oldText: r.oldText, newText: r.newText }] };
-	return null;
-}
-
-const DiffView: Component<{ oldText: string; newText: string }> = (props) => (
-	<div class="diff-view">
-		<For each={buildDiffRows(props.oldText, props.newText)}>
-			{(row) =>
-				row.type === "collapse" ? (
-					<div class="diff-collapse">… {row.count} unchanged lines</div>
-				) : (
-					<div class="diff-line" data-type={row.type}>
-						<span class="diff-sign">
-							{row.type === "add" ? "+" : row.type === "del" ? "-" : " "}
-						</span>
-						{row.text}
+/** Shows the unified diff (narrow) and the two-column split (wide); CSS picks one by container width. */
+const DiffSection: Component<{ rows: DiffRow[] }> = (props) => (
+	<div class="diff-section">
+		<div class="diff-view">
+			<For each={props.rows}>{(row) => <DiffLine row={row} />}</For>
+		</div>
+		<div class="diff-split">
+			<For each={splitRows(props.rows)}>
+				{(pair) => (
+					<div class="diff-split-row">
+						<DiffLine row={pair.left} />
+						<DiffLine row={pair.right} />
 					</div>
-				)
-			}
-		</For>
+				)}
+			</For>
+		</div>
 	</div>
 );
 
-const WriteView: Component<{ item: ToolItem; content: string }> = (props) => (
-	<div class="write-view">
-		<CollapsibleOutput
-			item={props.item}
-			output={props.content}
-			numbered
-			maxLines={WRITE_PREVIEW_LINES}
-		/>
-	</div>
+const DiffBody: Component<{ preview: EditPreview }> = (props) => (
+	<Show when={props.preview.rows.length > 0} fallback={<div class="diff-pending">no changes</div>}>
+		<DiffSection rows={props.preview.rows} />
+	</Show>
 );
 
-/** edit/write/apply_patch: inline diff for replacements, numbered content for writes. */
+/**
+ * edit, write, apply_patch, patch, hashline: a `+n −m path` summary that
+ * expands to the diff. Never raw args: with no renderable diff yet it shows a
+ * neutral placeholder (streaming) or the tool's text output (settled, errors).
+ */
 export const DiffToolCard: Component<{ item: ToolItem }> = (props) => {
-	const edit = () => parseEdit(props.item.args);
-	const write = () => (props.item.name === "write" ? parseWrite(props.item.args) : null);
-
+	const preview = createMemo(() =>
+		editPreview(props.item.name, props.item.args, props.item.details),
+	);
+	const label = () => {
+		const p = preview();
+		const target = p && p.files > 1 ? `${p.files} files` : p?.path;
+		return target ? `${props.item.name} ${target}` : props.item.name;
+	};
 	return (
-		<Show when={edit() || write()} fallback={<GenericToolCard item={props.item} />}>
-			<ToolCardShell
-				name={
-					<>
-						{props.item.name} {edit()?.path ?? write()?.path}
-					</>
-				}
-				status={props.item.status}
-				class="diff-tool"
-			>
-				<Show when={edit()}>
-					{(e) => (
-						<For each={e().edits}>
-							{(ed: { oldText: string; newText: string }) => (
-								<DiffView oldText={ed.oldText} newText={ed.newText} />
-							)}
-						</For>
+		<ToolCardShell
+			name={label()}
+			status={props.item.status}
+			class="diff-tool"
+			collapsible
+			meta={
+				<Show when={preview()}>
+					{(p) => (
+						<span class="diff-stats">
+							<span class="diff-add">+{p().added}</span>{" "}
+							<span class="diff-del">−{p().removed}</span>
+						</span>
 					)}
 				</Show>
-				<Show when={write()}>{(w) => <WriteView item={props.item} content={w().content} />}</Show>
-			</ToolCardShell>
-		</Show>
+			}
+		>
+			<Switch fallback={<CollapsibleOutput item={props.item} output={props.item.output} />}>
+				<Match when={props.item.status === "error"}>
+					<CollapsibleOutput item={props.item} output={props.item.output} />
+				</Match>
+				<Match when={preview()}>{(p) => <DiffBody preview={p()} />}</Match>
+				<Match when={props.item.status === "running"}>
+					<div class="diff-pending">preparing…</div>
+				</Match>
+			</Switch>
+		</ToolCardShell>
 	);
 };

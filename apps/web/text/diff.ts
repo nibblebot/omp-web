@@ -4,13 +4,16 @@ export type DiffRow =
 	| { type: "add" | "del" | "context"; text: string }
 	| { type: "collapse"; count: number };
 
+/** Terminate a non-empty side so a last line without "\n" still matches its unchanged twin. */
+const withEol = (text: string): string => (text === "" || text.endsWith("\n") ? text : `${text}\n`);
+
 /** Split diff parts into typed lines, dropping the trailing-newline artifact. */
 function toLines(
 	oldText: string,
 	newText: string,
 ): Array<{ type: "add" | "del" | "context"; text: string }> {
 	const lines: Array<{ type: "add" | "del" | "context"; text: string }> = [];
-	for (const part of diffLines(oldText, newText)) {
+	for (const part of diffLines(withEol(oldText), withEol(newText))) {
 		const type = part.added ? "add" : part.removed ? "del" : "context";
 		const split = part.value.split("\n");
 		if (split[split.length - 1] === "") split.pop();

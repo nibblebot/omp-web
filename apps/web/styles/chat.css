@@ -68,36 +68,13 @@
 	background: var(--hover);
 	box-shadow: var(--shadow-2);
 }
-/* Collapse-tool-cards view: toggle above the stream plus compact single-row
-   chips inline in the stream where each tool turn is. */
-.stream-toolbar {
-	display: flex;
-	justify-content: flex-end;
-	align-items: center;
-	gap: var(--space-3);
-	/* Matches .chat-transcript side padding so the toggle stays aligned with
-	   the card edges. */
-	padding: var(--space-2) var(--space-5) var(--space-3);
-}
-/* Narrow column or short viewport: the view menu in the main header replaces
-   this toolbar. The menu is hidden wherever the toolbar shows. */
-@media (max-width: 767px) {
-	.stream-toolbar {
-		display: none;
-	}
-}
-@media (min-width: 768px) and (min-height: 600px) {
-	.transcript-view-menu {
-		display: none;
-	}
-}
 /* KebabMenu reveals its trigger on row hover in the sidebar; in the header it
    is the only route to these toggles, so it always shows. */
-.transcript-view-menu .sidebar-menu-btn {
+.tool-cards-menu .sidebar-menu-btn {
 	opacity: 1;
 	pointer-events: auto;
 }
-.transcript-view-menu .sidebar-menu {
+.tool-cards-menu .sidebar-menu {
 	z-index: var(--z-autocomplete);
 }
 /* Short viewports (phone landscape, open keyboard): the composer never
@@ -107,62 +84,9 @@
 	.chat-transcript-wrap {
 		min-height: min(120px, 25dvh);
 	}
-	.stream-toolbar {
-		display: none;
-	}
 	.chat-transcript {
 		padding-top: var(--space-4);
 	}
-}
-.stream-cards-toggle {
-	background: none;
-	border: 1px solid var(--border);
-	color: var(--muted-2);
-	border-radius: var(--r-pill);
-	padding: var(--space-1) var(--space-4);
-	font: inherit;
-	font-size: var(--fs-sm);
-	cursor: pointer;
-}
-.stream-cards-toggle:hover {
-	color: var(--text);
-	border-color: var(--border-strong);
-}
-.stream-cards-toggle[aria-pressed="true"] {
-	background: var(--accent-dim);
-	border-color: var(--accent-border);
-	color: var(--text);
-}
-.tool-chip {
-	display: flex;
-	align-items: center;
-	gap: var(--space-3);
-	align-self: flex-start;
-	max-width: 100%;
-	min-width: 0;
-	white-space: nowrap;
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--r-pill);
-	padding: var(--space-2) var(--space-4);
-	font-size: var(--fs-sm);
-	color: var(--muted-2);
-}
-.tool-chip .tool-name {
-	color: var(--accent);
-	font-weight: 600;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	flex-shrink: 0;
-}
-.tool-chip .tool-status {
-	flex-shrink: 0;
-}
-.tool-chip-args {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	color: var(--muted-2);
-	min-width: 0;
 }
 
 .run-row {
@@ -537,8 +461,7 @@ pre {
 	}
 	.msg-copy-btn,
 	.msg-branch-btn,
-	.jump-to-bottom,
-	.stream-cards-toggle {
+	.jump-to-bottom {
 		min-width: 44px;
 		min-height: 44px;
 	}

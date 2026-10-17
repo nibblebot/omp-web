@@ -1,5 +1,5 @@
 import { MainHeader } from "../../../web/components/app/MainHeader";
-import { SessionTitle, TranscriptViewMenu } from "../../../web/components/chat";
+import { SessionTitle, ToolCardsMenu } from "../../../web/components/chat";
 import { screenSessionSeed } from "../../fixtures/screen";
 import { subagentMap } from "../../fixtures/session";
 import { defineStory } from "../../registry";
@@ -14,9 +14,7 @@ export default defineStory({
 			name: "Live session",
 			description: "Session title on the left, settings gear rightmost; the sidebar is open.",
 			seed: { connected: true, view: "chat", sidebarVisible: true },
-			render: () => (
-				<MainHeader title={<SessionTitle />} actions={<TranscriptViewMenu />} session />
-			),
+			render: () => <MainHeader title={<SessionTitle />} actions={<ToolCardsMenu />} session />,
 		},
 		{
 			name: "Sidebar closed, goal and subagents",
@@ -28,9 +26,7 @@ export default defineStory({
 				goal: { objective: "Ship the design system showcase" },
 				subagents: subagentMap,
 			},
-			render: () => (
-				<MainHeader title={<SessionTitle />} actions={<TranscriptViewMenu />} session />
-			),
+			render: () => <MainHeader title={<SessionTitle />} actions={<ToolCardsMenu />} session />,
 		},
 		{
 			name: "Disconnected, no session",

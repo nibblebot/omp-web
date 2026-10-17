@@ -20,8 +20,8 @@ function thinkingView(text: string): string | null {
 }
 
 /** Assistant message card. With `thinking` false, thinking blocks are omitted
- *  (consumed by a consolidated run row); a card with no text blocks then
- *  renders nothing. `display.hideThinkingBlock` omits them the same way. */
+ *  and a card with no text blocks then renders nothing. `display.hideThinkingBlock`
+ *  omits them the same way. */
 export const AssistantCard: Component<{
 	assistant: Extract<ChatItem, { kind: "assistant" }>;
 	thinking: boolean;

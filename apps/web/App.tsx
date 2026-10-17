@@ -8,7 +8,7 @@ import {
 	SessionConfigBar,
 	SessionTitle,
 	Transcript,
-	TranscriptViewMenu,
+	ToolCardsMenu,
 } from "./components/chat";
 import { BackgroundDaemonsBar, FleetSidebar } from "./components/fleet";
 import { BackgroundSubagentsBar } from "./components/subagents";
@@ -22,6 +22,7 @@ import {
 	setState,
 	setView,
 	state,
+	toggleToolsExpanded,
 } from "./state";
 import { initTheme } from "./prefs/theme";
 import { trackViewportHeight } from "./prefs/viewport";
@@ -46,7 +47,7 @@ const ChatMode: Component = () => (
 			when={!hasLiveSession()}
 			fallback={
 				<div class="main-pane">
-					<MainHeader title={<SessionTitle />} actions={<TranscriptViewMenu />} session />
+					<MainHeader title={<SessionTitle />} actions={<ToolCardsMenu />} session />
 					<main class="app-main">
 						<Transcript />
 						<QueueBar />
@@ -105,13 +106,11 @@ export const App: Component = () => {
 		window.addEventListener("hashchange", onHashChange);
 		onCleanup(() => window.removeEventListener("hashchange", onHashChange));
 		onCleanup(trackViewportHeight());
-		// Ctrl+O toggles all tool cards open/closed (not while typing).
+		// Ctrl+O toggles all tool cards open/closed, even while the composer has focus.
 		window.addEventListener("keydown", (e) => {
 			if (e.key.toLowerCase() !== "o" || !e.ctrlKey || e.shiftKey || e.altKey) return;
-			const target = e.target as HTMLElement | null;
-			if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
 			e.preventDefault();
-			setState("toolsExpanded", (v) => !v);
+			toggleToolsExpanded();
 		});
 		// Ctrl+, opens Settings; Alt+A opens subagents. Alt+A is skipped while
 		// typing: on some platforms Alt+letter inserts a character.

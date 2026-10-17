@@ -65,15 +65,6 @@ const settingsModel: SettingsModel = {
 							value: true,
 							changed: false,
 						},
-						{
-							path: "display.toolCards",
-							label: "Tool cards",
-							description: "How tool calls are laid out in the chat.",
-							type: "enum",
-							value: "expanded",
-							values: ["expanded", "collapsed", "consolidated"],
-							changed: true,
-						},
 					],
 				},
 				{

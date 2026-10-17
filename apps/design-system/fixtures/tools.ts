@@ -13,26 +13,22 @@ export const editToolItem: ToolItem = {
 	name: "edit",
 	args: {
 		path: "apps/web/components/ui/CopyButton.tsx",
-		edits: [
-			{
-				oldText: [
-					"export const COPY_FEEDBACK_MS = 1200;",
-					"",
-					"export const CopyButton = (props) => {",
-					'\tconst label = copied() ? "copied" : "copy";',
-					"\treturn <button>{label}</button>;",
-					"};",
-				].join("\n"),
-				newText: [
-					"export const COPY_FEEDBACK_MS = 1200;",
-					"",
-					"export const CopyButton = (props) => {",
-					'\tconst label = copied() ? "copied" : failed() ? "failed" : "copy";',
-					"\treturn <button title={props.title}>{label}</button>;",
-					"};",
-				].join("\n"),
-			},
-		],
+		old_string: [
+			"export const COPY_FEEDBACK_MS = 1200;",
+			"",
+			"export const CopyButton = (props) => {",
+			'\tconst label = copied() ? "copied" : "copy";',
+			"\treturn <button>{label}</button>;",
+			"};",
+		].join("\n"),
+		new_string: [
+			"export const COPY_FEEDBACK_MS = 1200;",
+			"",
+			"export const CopyButton = (props) => {",
+			'\tconst label = copied() ? "copied" : failed() ? "failed" : "copy";',
+			"\treturn <button title={props.title}>{label}</button>;",
+			"};",
+		].join("\n"),
 	},
 	output: "Applied 1 edit to apps/web/components/ui/CopyButton.tsx",
 };
@@ -67,7 +63,7 @@ export const runningEditToolItem: ToolItem = {
 	output: "",
 };
 
-/** Malformed args: DiffToolCard falls back to the generic card. */
+/** Malformed args: no diff preview, so the card shows the error output text. */
 export const malformedEditToolItem: ToolItem = {
 	...base,
 	id: 4,
@@ -76,6 +72,46 @@ export const malformedEditToolItem: ToolItem = {
 	args: { path: 42 },
 	status: "error",
 	output: "edit failed: path must be a string",
+};
+
+/** Hashline edit: args carry only the anchored input; the diff comes from details.diff. */
+export const hashlineEditToolItem: ToolItem = {
+	...base,
+	id: 5,
+	toolCallId: "call_edit_hashline_5",
+	name: "edit",
+	args: { path: "apps/web/store/toasts.ts", input: "12ab|export const TOAST_DISMISS_MS = 4000;" },
+	details: {
+		diff: "-12|export const TOAST_DISMISS_MS = 4000;\n+12|export const TOAST_DISMISS_MS = 5000;",
+	},
+	output: "Applied 1 edit to apps/web/store/toasts.ts",
+};
+
+/** Apply-patch edit: the patch text lives in args; the diff comes from details.diff. */
+export const applyPatchToolItem: ToolItem = {
+	...base,
+	id: 6,
+	toolCallId: "call_apply_patch_6",
+	name: "apply_patch",
+	args: {
+		input:
+			"*** Begin Patch\n*** Update File: apps/web/store/toasts.ts\n@@\n-export const TOAST_DISMISS_MS = 4000;\n+export const TOAST_DISMISS_MS = 5000;\n*** End Patch",
+	},
+	details: {
+		diff: "-12|export const TOAST_DISMISS_MS = 4000;\n+12|export const TOAST_DISMISS_MS = 5000;",
+	},
+	output: "Patched apps/web/store/toasts.ts",
+};
+
+/** Streaming edit: args still arriving, so the card shows the pending placeholder. */
+export const streamingEditToolItem: ToolItem = {
+	...base,
+	id: 7,
+	toolCallId: "call_edit_streaming_7",
+	name: "edit",
+	args: { path: "apps/web/components/ui/CopyButton.tsx" },
+	status: "running",
+	output: "",
 };
 
 // ---------------------------------------------------------------------------
@@ -713,16 +749,16 @@ export const multiEditToolItem: ToolItem = tool(
 		path: "apps/web/store/toasts.ts",
 		edits: [
 			{
-				oldText: "export const TOAST_DISMISS_MS = 4000;",
-				newText: "export const TOAST_DISMISS_MS = 5000;",
+				old_string: "export const TOAST_DISMISS_MS = 4000;",
+				new_string: "export const TOAST_DISMISS_MS = 5000;",
 			},
 			{
-				oldText: lines(
+				old_string: lines(
 					"export function dismissToast(id: number) {",
 					'\tsetState("toasts", (t) => t.filter((x) => x.id !== id));',
 					"}",
 				),
-				newText: lines(
+				new_string: lines(
 					"export function dismissToast(id: number) {",
 					"\tif (!state.toasts.some((x) => x.id === id)) return;",
 					'\tsetState("toasts", (t) => t.filter((x) => x.id !== id));',
@@ -733,7 +769,7 @@ export const multiEditToolItem: ToolItem = tool(
 	},
 	"Applied 2 edits to apps/web/store/toasts.ts",
 );
-/** DiffToolCard: write of a 60-line file, long enough to show the numbered preview scroll. */
+/** DiffToolCard: write of a 60-line file; collapsed, it reads as +60 -0. */
 export const longWriteToolItem: ToolItem = tool(
 	"write",
 	"done",
