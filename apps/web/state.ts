@@ -38,6 +38,7 @@ import {
 	tabsToSpaces,
 	extractText,
 	notifyDesktop,
+	pushNotice,
 	userText,
 	startNewSession,
 } from "./store/chat";
@@ -1457,9 +1458,12 @@ export function connect(): void {
 				// AFTER a stale ui_request on resume, so an answered dialog
 				// never reappears as a hanging modal. The frame carries no
 				// method field, so browser_ui contributions always dismiss here
-				// alongside the modal dialog.
+				// alongside the ask dialog.
 				endBrowserUiRequest(frame.id);
-				if (state.uiRequest?.id === frame.id) setState("uiRequest", null);
+				if (state.uiRequest?.id === frame.id) {
+					if (frame.answeredBy) pushNotice("info", `Question answered by ${frame.answeredBy}`);
+					setState("uiRequest", null);
+				}
 				break;
 			case "settings_changed": {
 				// Session-scoped broadcast: a fresh model after any setSetting,

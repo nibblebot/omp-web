@@ -6,7 +6,6 @@ import { pushToast } from "../../../web/store/toasts";
 import { answerCalls } from "../../daemon";
 import { btwAnswered } from "../../fixtures/dialogs";
 import {
-	askUiRequest,
 	browserUiRequests,
 	downloadManifest,
 	foreignSessionPreviews,
@@ -53,12 +52,6 @@ export default defineStory({
 			description:
 				"`state.lightboxImage` set by a thumbnail click: ImageLightbox shows it full size.",
 			seed: { lightboxImage: chartScreenshot },
-			render: () => <ModalHost />,
-		},
-		{
-			name: "Agent ask request",
-			description: "`state.uiRequest` set by an agent ask: AskDialog renders the questions.",
-			seed: () => setState("uiRequest", askUiRequest),
 			render: () => <ModalHost />,
 		},
 		{

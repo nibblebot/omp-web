@@ -11,7 +11,6 @@ import { DaemonDetailsDialog } from "./components/fleet/daemon/DaemonDetailsDial
 import { ProviderLoginDialog } from "./components/models/ProviderLoginDialog";
 import { ModelPicker } from "./components/models/ModelPicker";
 import { ThinkingLevelPicker } from "./components/models/ThinkingLevelPicker";
-import { AskDialog } from "./components/requests/AskDialog";
 import { ExtensionUi } from "./components/requests/ExtensionUi";
 import { DangerConfirmDialog } from "./components/requests/DangerConfirmDialog";
 import { DownloadDialog } from "./components/requests/DownloadDialog";
@@ -92,7 +91,6 @@ export const ModalHost: Component = () => {
 			<Show when={daemonDetails()}>
 				{(daemon) => <DaemonDetailsDialog daemon={daemon()} onClose={closeDaemonDetails} />}
 			</Show>
-			<AskDialog />
 			<For each={featureOverlays()}>{(Overlay) => <Overlay />}</For>
 			<ExtensionUi placement="modal" />
 			<DownloadDialog />

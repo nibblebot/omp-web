@@ -3,7 +3,7 @@ import { Portal } from "solid-js/web";
 import { XIcon } from "./icons";
 
 // Stable per-instance ids: several modals can be mounted at once (a state.modal
-// picker plus AskDialog/BtwSheet sheets), so a module counter keeps ids unique.
+// picker plus BtwSheet sheets), so a module counter keeps ids unique.
 let modalTitleSeq = 0;
 
 /**

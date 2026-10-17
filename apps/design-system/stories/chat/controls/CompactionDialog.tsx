@@ -59,7 +59,7 @@ export default defineStory({
 				setState("compaction", "result", {
 					mode: "soft",
 					summary:
-						"Overlay stories: AskDialog, SessionGraphDialog, and BtwSheet covered. Remaining: DownloadDialog consent phase.",
+						"Overlay stories: SessionGraphDialog and BtwSheet covered. Remaining: DownloadDialog consent phase.",
 					firstKeptEntryId: "n06",
 					tokensBefore: 142_000,
 					tokensAfterEstimate: 58_400,

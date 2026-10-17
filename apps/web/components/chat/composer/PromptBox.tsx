@@ -10,6 +10,7 @@ import {
 	removeDraft,
 	saveDraft,
 } from "../../../store/drafts";
+import { AskBar } from "../../requests/AskBar";
 import { ExtensionUi } from "../../requests/ExtensionUi";
 import { PromptActions } from "./PromptActions";
 import { PromptComposer, expandChipsForSubmit } from "./PromptComposer";
@@ -164,6 +165,7 @@ export const PromptBox: Component = () => {
 		<div class="prompt-box">
 			{/* Extension widget slots around the editor; modal contributions mount in ModalHost. */}
 			<ExtensionUi placement="aboveEditor" />
+			<AskBar />
 			<PromptComposer
 				message={message}
 				setMessage={setMessage}

@@ -466,6 +466,75 @@ button.picker-row {
 	margin-top: var(--space-5);
 }
 
+/* --- AskBar: agent ask docked above the prompt (composer slot, not an overlay) --- */
+.ask-bar {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	margin-bottom: var(--space-3);
+	padding: var(--space-4);
+	border: 1px solid var(--accent-border);
+	border-radius: var(--r-md);
+	background: var(--bg-deep);
+	max-height: 50dvh;
+	overflow-y: auto;
+}
+.ask-bar:focus {
+	outline: none;
+}
+.ask-bar-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-3);
+}
+.ask-bar-title {
+	flex: 1;
+	color: var(--text);
+	font-weight: 600;
+}
+.ask-bar-progress {
+	color: var(--muted-2);
+	font-size: var(--fs-sm);
+}
+.ask-bar-cancel,
+.ask-bar-next {
+	padding: var(--space-1) var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-sm);
+	cursor: pointer;
+}
+.ask-bar-next {
+	border-color: var(--accent-border);
+	color: var(--accent);
+}
+.ask-bar kbd {
+	color: var(--muted-2);
+	font-family: inherit;
+}
+.ask-bar .ask-options {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	max-height: 30dvh;
+	overflow-y: auto;
+}
+.ask-key {
+	flex: none;
+	width: 1em;
+	color: var(--muted-2);
+	font-variant-numeric: tabular-nums;
+}
+.ask-option.cursor {
+	outline: 1px solid var(--accent-border);
+}
+.ask-bar .ask-actions {
+	margin-top: 0;
+}
+
 /* --- SessionPicker (/resume): fixed width so rows don't size the dialog;
    one-line rows with the title truncating before the right-aligned meta. --- */
 .session-picker {

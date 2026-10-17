@@ -51,7 +51,7 @@ export default defineStory({
 		},
 		{
 			name: "Agent asks a question",
-			description: "A pending ask from the agent: ModalHost's AskDialog opens over the screen.",
+			description: "A pending ask from the agent: AskBar docks above the composer.",
 			seed: { uiRequest: askUiRequest },
 			render: () => (
 				<div class="ds-frame ds-frame-tall">

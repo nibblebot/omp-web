@@ -30,7 +30,7 @@ const MIN = 60_000;
 // Ask dialog: the questions a model asks the operator.
 // ---------------------------------------------------------------------------
 
-/** QuestionsForm: single-choice question with a recommended option and per-option previews. */
+/** AskBar: single-choice question with a recommended option and per-option previews. */
 const askScope: AskQuestion = {
 	id: "q_scope",
 	question: "Which surface should the copy button cover?",
@@ -47,7 +47,7 @@ const askScope: AskQuestion = {
 	recommended: 0,
 };
 
-/** QuestionsForm: multi-select question for which checks to run before the commit. */
+/** AskBar: multi-select question for which checks to run before the commit. */
 const askChecks: AskQuestion = {
 	id: "q_checks",
 	question: "Which checks should run before committing?",
@@ -61,7 +61,7 @@ const askChecks: AskQuestion = {
 	multi: true,
 };
 
-/** AskQuestion list: questions in the order QuestionsForm steps through them. */
+/** AskQuestion list: questions in the order AskBar steps through them. */
 export const askQuestions: AskQuestion[] = [askScope, askChecks];
 
 /** UiRequest: the agent's ask tool (method "askDialog"), carrying the two questions above. */

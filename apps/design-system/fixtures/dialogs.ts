@@ -18,7 +18,7 @@ const at = (minutesAgo: number): number => FIXTURE_NOW - minutesAgo * MIN;
 const iso = (minutesAgo: number): string => new Date(at(minutesAgo)).toISOString();
 
 // ---------------------------------------------------------------------------
-// Agent ask dialog (ask tool): the AskDialog routing and the ask-dialog forms.
+// Agent ask (ask tool): the AskBar docked above the prompt, and its fallback methods.
 // ---------------------------------------------------------------------------
 
 const scopeOptions: AskOption[] = [
@@ -78,7 +78,7 @@ export const askLongQuestions: AskQuestion[] = [
 		header: "Files",
 		question: "Which story groups should be regenerated?",
 		options: [
-			{ label: "requests-ask-dialog" },
+			{ label: "requests-ask-bar" },
 			{ label: "sessions-session-graph-dialog" },
 			{ label: "requests-extension-ui" },
 			{ label: "requests-btw-sheet" },
@@ -125,7 +125,7 @@ export const inputParams = {
 export const editorParams = {
 	title: "Edit the handoff note",
 	prefill:
-		"Overlay stories: AskDialog, GoalDialog, and BtwSheet are covered.\nRemaining: DownloadDialog consent phase, ProviderLoginDialog providers.\n",
+		"Overlay stories: GoalDialog and BtwSheet are covered.\nRemaining: DownloadDialog consent phase, ProviderLoginDialog providers.\n",
 };
 
 // ---------------------------------------------------------------------------

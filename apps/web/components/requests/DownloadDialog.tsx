@@ -14,7 +14,7 @@ import { Modal } from "../ui/Modal";
 // the manifest preview, the plaintext/credential warning, consent
 // confirm/cancel, and progress/error/cap display with safe filenames shown.
 // No overlays/index.ts registration: mount DownloadDialog once from App
-// alongside AskDialog/BtwSheet; it renders nothing while no download is
+// alongside BtwSheet; it renders nothing while no download is
 // in flight. Browser filenames shown here are display names, never server
 // paths used as identity.
 
