@@ -296,15 +296,16 @@ export class CollabHostAdapter {
 
 	/**
 	 * Tell every writable guest except `exceptPeer` that someone else answered
-	 * the dialog they just lost; the guest TUI surfaces it as a host message
-	 * (the collab protocol's `ui-request-end` carries no reason).
+	 * the dialog they just lost. The collab protocol's `ui-request-end` carries
+	 * no reason and the guest SDK renders only `error` frames, so the frame
+	 * text is the user-facing message itself.
 	 */
 	announceDialogAnswered(by: string, exceptPeer?: number): void {
 		const socket = this.#socket;
 		if (!socket) return;
 		for (const [peerId, peer] of this.#peers) {
 			if (peer.canWrite && peerId !== exceptPeer) {
-				socket.send({ t: "error", message: `question answered by ${by}` }, peerId);
+				socket.send({ t: "error", message: `Question answered by ${by}` }, peerId);
 			}
 		}
 	}

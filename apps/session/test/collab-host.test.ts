@@ -747,7 +747,7 @@ describe("CollabHostAdapter", () => {
 
 		adapter.announceDialogAnswered(result.by, result.peer);
 		const told = await waitFor(() => other.frames.find((f) => f.t === "error"));
-		expect(told).toEqual({ t: "error", message: "question answered by Answerer" });
+		expect(told).toEqual({ t: "error", message: "Question answered by Answerer" });
 		expect(answerer.frames.some((f) => f.t === "error")).toBe(false);
 	});
 
