@@ -149,6 +149,10 @@ Update wire contracts, producers, consumers, dispatch classification, and behavi
 - Docs: check paths/links.
 - Release: `GATE_COMMANDS` in `scripts/release.ts` is authoritative; includes types, format, web build, full tests, onboarding, followed by packed-artifact installation smoke. Preflight is advisory, not part of orchestration.
 
+## Issues with screenshots
+
+An issue whose body has a `Screenshots:` list (also meta `screenshots`, a JSON array of absolute paths) was filed from a screenshot. Before planning, `read` every listed image; it is the primary statement of the problem. If a file is missing, set `work.attention needs-human` with the missing path rather than guessing.
+
 <!-- BEGIN KATA (managed by `kata init --with-agents`) -->
 Kata is the system of record for intent.
 
