@@ -3,11 +3,15 @@ import { pushNotice } from "../../store/chat";
 import { reportError } from "../../store/toasts";
 import { formatCost, formatDuration, formatTokens } from "../../subagents/format";
 import { getFocusDraft, setFocusDraft } from "../../subagents/worker-scope";
+import { isFeatureEnabled } from "../../features/registry";
 import {
 	abortSubagent,
 	parkSubagent,
 	reviveSubagent,
 	steerSubagent,
+	ensureAnalysisSessionsDir,
+	openAnalysisHash,
+	subagentAnalysisHref,
 	subagentById,
 	agentPaneActions,
 	type AgentPaneAction,
@@ -30,6 +34,10 @@ export const SubagentPanel: Component<{ id?: string }> = (props) => {
 	const [draft, setDraft] = createSignal("");
 
 	createEffect(() => setDraft(getFocusDraft(draftKey())));
+	/** ANA-08 (brnh, km9k): "Open in Analysis" shows only when Analysis is enabled and the transcript is known. */
+	createEffect(() => {
+		if (isFeatureEnabled("analysis")) ensureAnalysisSessionsDir();
+	});
 
 	const run = async (action: () => Promise<unknown>): Promise<void> => {
 		setPending(true);
@@ -68,6 +76,13 @@ export const SubagentPanel: Component<{ id?: string }> = (props) => {
 						<SubagentStatusChip status={agent().status} />
 						<Show when={agent().agentType}>
 							{(type) => <span class="subagent-tree-type">{type()}</span>}
+						</Show>
+						<Show when={subagentAnalysisHref(id(), isFeatureEnabled("analysis"))}>
+							{(href) => (
+								<button type="button" class="btn" onClick={() => openAnalysisHash(href())}>
+									Open in Analysis
+								</button>
+							)}
 						</Show>
 					</header>
 					<dl class="subagent-panel-metrics">

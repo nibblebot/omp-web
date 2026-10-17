@@ -24,8 +24,10 @@ const SONNET = "claude-sonnet-4-5";
 const OPUS = "claude-opus-4-1";
 const GPT = "gpt-5";
 
-const subFile = (id: string): string =>
-	`/home/joshua/.omp/sessions/omp-web/2026-10-09T09-40-12/${id}.jsonl`;
+const SESSIONS_ROOT = "/home/joshua/.omp/agent/sessions";
+/** Parent session file. Sits under the health fixture's sessionsDir so Analysis links resolve. */
+export const PARENT_SESSION_FILE = `${SESSIONS_ROOT}/omp-web/2026-10-09T09-40-12.jsonl`;
+const subFile = (id: string): string => `${SESSIONS_ROOT}/omp-web/2026-10-09T09-40-12/${id}.jsonl`;
 
 type TranscriptMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -918,8 +920,11 @@ export const agentSettingsModel: SettingsModel = {
 /**
  * Seeds the attached session with the agent forest, or an empty session with `empty`.
  * `display` also turns on the live-tool preview and model badge settings the tree row reads.
+ * `analysis` names the parent session file, which the "Open in Analysis" links need.
  */
-export function seedAgentTree(options: { empty?: boolean; display?: boolean } = {}): void {
+export function seedAgentTree(
+	options: { empty?: boolean; display?: boolean; analysis?: boolean } = {},
+): void {
 	const workers = options.empty === true ? [] : agentTreeWorkers;
 	const infos = options.empty === true ? [] : agentTreeInfos;
 	seedSubagents(
@@ -929,6 +934,7 @@ export function seedAgentTree(options: { empty?: boolean; display?: boolean } = 
 			workers: workersStateOf(workers),
 			subagents: subagentMapOf(infos),
 			settingsModel: options.display === true ? agentSettingsModel : null,
+			...(options.analysis === true ? { sessionFile: PARENT_SESSION_FILE } : {}),
 		},
 	);
 }

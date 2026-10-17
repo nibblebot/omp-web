@@ -1,6 +1,7 @@
 import { SubagentPanel } from "../../../web/components/subagents/SubagentPanel";
 import { seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
+import { setFeaturePreference } from "../../../web/features/preferences";
 
 export default defineStory({
 	id: "subagents-panel",
@@ -38,6 +39,20 @@ export default defineStory({
 			render: () => (
 				<div class="ds-frame ds-frame-tall">
 					<SubagentPanel id="4-DocsSweep" />
+				</div>
+			),
+		},
+		{
+			name: "Open in Analysis",
+			description:
+				"Analysis is on and the transcript is known: the header offers Open in Analysis next to the status chip.",
+			seed: () => {
+				setFeaturePreference("analysis", true);
+				seedAgentTree({ display: true, analysis: true });
+			},
+			render: () => (
+				<div class="ds-frame ds-frame-tall">
+					<SubagentPanel id="1-FixtureBuilder" />
 				</div>
 			),
 		},

@@ -5,7 +5,6 @@
  *   #/stored/<encoded-ws>/<encoded-session>   fleet-stored session
  * Parse and format share this module so every link we write parses back to the same route.
  */
-import { encodePathSegments } from "../../store/fleet-api";
 import { decodeFileFromHash } from "./format";
 
 export type TxRoute =
@@ -49,12 +48,6 @@ export function parseTxHash(rawHash: string): TxRoute {
 		return { view: "stored", workspaceId, sessionId };
 	}
 	return { view: "list" };
-}
-
-/** Hash for a session transcript; `sub` opens a subagent transcript inside it (null = main). */
-export function sessionHash(file: string, sub: string | null): string {
-	const base = `#/s/${encodePathSegments(file)}`;
-	return sub === null ? base : `${base}?sub=${encodeURIComponent(sub)}`;
 }
 
 /** Hash for a fleet-stored session. */

@@ -1,10 +1,18 @@
-import { Show, type Component } from "solid-js";
+import { createEffect, Show, type Component } from "solid-js";
 import { settingValue } from "../../store/settings";
-import { getWorkerInfo, type SubagentNode } from "../../store/subagents";
+import { isFeatureEnabled } from "../../features/registry";
+import {
+	ensureAnalysisSessionsDir,
+	getWorkerInfo,
+	openAnalysisHash,
+	subagentAnalysisHref,
+	type SubagentNode,
+} from "../../store/subagents";
 import { state } from "../../state";
 import { formatCost, formatDuration, formatTokens } from "../../subagents/format";
 import { modelBadge, pickProgress } from "../../subagents/progress";
 import { ChevronDownIcon, ChevronRightIcon } from "../ui/icons";
+import { KebabMenu } from "../ui/KebabMenu";
 import { SubagentStatusChip } from "./SubagentStatusChip";
 
 /** The raw progress payload of one agent, narrowed for the model badge. */
@@ -22,6 +30,10 @@ export const SubagentTreeRow: Component<{
 	onOpen: (id: string) => void;
 }> = (props) => {
 	const hasChildren = () => props.node.children.length > 0;
+	/** ANA-08 (brnh, km9k): the kebab offers "Open in Analysis" only when Analysis is on and the transcript is known. */
+	createEffect(() => {
+		if (isFeatureEnabled("analysis")) ensureAnalysisSessionsDir();
+	});
 	const liveTool = () =>
 		settingValue<boolean>("display.subagentLivePreview") === true && props.node.status === "running"
 			? props.node.lastTool
@@ -79,6 +91,16 @@ export const SubagentTreeRow: Component<{
 					</Show>
 				</span>
 			</button>
+			{/* ANA-08 (brnh, km9k): hidden, never disabled, when no Analysis link exists. */}
+			<Show when={subagentAnalysisHref(props.node.id, isFeatureEnabled("analysis"))}>
+				{(href) => (
+					<KebabMenu label={`More actions for ${props.node.label}`}>
+						<button type="button" role="menuitem" onClick={() => openAnalysisHash(href())}>
+							Open in Analysis
+						</button>
+					</KebabMenu>
+				)}
+			</Show>
 		</div>
 	);
 };

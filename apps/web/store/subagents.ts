@@ -1,10 +1,13 @@
+import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 import type { SubagentMessagesResult } from "#lib/wire/protocol";
 import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { lastToolOf, metricsOf, normalizeStatus, type UsageFallback } from "./subagent-frames";
 import { call } from "./transport";
 import { pushNotice } from "./chat";
-import { setState, state, type SubagentInfo } from "../state";
+import { setState, setView, state, type SubagentInfo } from "../state";
+import { api } from "./fleet-api";
+import { subagentAnalysisHash } from "./slices/analysis";
 import { sumKnown } from "../subagents/format";
 
 /**
@@ -252,6 +255,45 @@ export function createWorkersState(): WorkersState {
 /** Tuple encoding avoids collisions between session and worker IDs. */
 export function workerKey(sessionId: string, agentId: string): string {
 	return JSON.stringify([sessionId, agentId]);
+}
+
+/**
+ * Sessions dir (fleet health) that Analysis paths are relative to. Loaded
+ * once, on first need; Analysis links stay hidden until it is known.
+ */
+const [analysisSessionsDir, setAnalysisSessionsDir] = createSignal<string | null>(null);
+let sessionsDirLoading = false;
+
+/** Load the sessions dir (idempotent). Call only while Analysis is enabled. */
+export function ensureAnalysisSessionsDir(): void {
+	if (analysisSessionsDir() !== null || sessionsDirLoading) return;
+	sessionsDirLoading = true;
+	api.health().then(
+		(h) => setAnalysisSessionsDir(h.sessionsDir),
+		() => {
+			sessionsDirLoading = false;
+		},
+	);
+}
+
+/**
+ * Analysis hash that opens one agent's transcript inside the attached
+ * session, or null when the "Open in Analysis" action must be hidden.
+ */
+export function subagentAnalysisHref(id: string, analysisEnabled: boolean): string | null {
+	const record = state.workers.records[workerKey(state.currentSessionId, id)];
+	return subagentAnalysisHash({
+		analysisEnabled,
+		sessionsDir: analysisSessionsDir(),
+		parentFile: state.sessionFile,
+		subagentFile: record?.sessionFile,
+	});
+}
+
+/** Switch to Analysis and point its hash at `hash` (from `subagentAnalysisHref`). */
+export function openAnalysisHash(hash: string): void {
+	setView("analysis");
+	window.location.hash = hash;
 }
 
 /** Snapshots rediscover workers without deleting retained terminal history or unread activity. */

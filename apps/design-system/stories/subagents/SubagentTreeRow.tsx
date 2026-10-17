@@ -1,6 +1,7 @@
 import { SubagentTreeRow } from "../../../web/components/subagents/SubagentTreeRow";
 import { agentNode, seedAgentTree } from "../../fixtures/subagents";
 import { defineStory } from "../../registry";
+import { setFeaturePreference } from "../../../web/features/preferences";
 
 const noop = () => {};
 
@@ -65,6 +66,24 @@ export default defineStory({
 					node={agentNode("2-ReviewPass")}
 					level={1}
 					expanded={true}
+					onToggle={noop}
+					onOpen={noop}
+				/>
+			),
+		},
+		{
+			name: "Open in Analysis",
+			description:
+				"Analysis is on and the transcript is known: the kebab offers Open in Analysis. Rows without an Analysis link show no kebab.",
+			seed: () => {
+				setFeaturePreference("analysis", true);
+				seedAgentTree({ display: true, analysis: true });
+			},
+			render: () => (
+				<SubagentTreeRow
+					node={agentNode("1-FixtureBuilder")}
+					level={0}
+					expanded={false}
 					onToggle={noop}
 					onOpen={noop}
 				/>

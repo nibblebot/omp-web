@@ -10,7 +10,8 @@ import { StoredSessionPage } from "./components/StoredSessionPage";
 import { ResumeCloneDialog } from "./components/ResumeCloneDialog";
 import { SpendPanel } from "./components/SpendPanel";
 import { formatBytes } from "./util/format";
-import { parseTxHash, sessionHash, storedHash, type TxRoute } from "./util/route";
+import { parseTxHash, storedHash, type TxRoute } from "./util/route";
+import { sessionHash } from "../store/slices/analysis";
 
 /** Debounce for stats auto-sync: coalesces bursts of turn ends and session opens. */
 const AUTO_SYNC_DEBOUNCE_MS = 1_500;

@@ -4,7 +4,8 @@
  * malformed hashes falling back to the list.
  */
 import { describe, expect, test } from "bun:test";
-import { parseTxHash, sessionHash, storedHash } from "../../../tx/util/route";
+import { parseTxHash, storedHash } from "../../../tx/util/route";
+import { sessionHash } from "../../../store/slices/analysis";
 
 describe("parseTxHash", () => {
 	test("empty and root hashes are the list", () => {
