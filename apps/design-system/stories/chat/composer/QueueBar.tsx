@@ -10,6 +10,13 @@ import { defineStory } from "../../../registry";
 
 const queuedCount = screenQueuedMessages.steering.length + screenQueuedMessages.followUp.length;
 
+/** 1x1 PNG for queued image chips. */
+const queuedImage = {
+	type: "image" as const,
+	data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+	mimeType: "image/png",
+};
+
 export default defineStory({
 	id: "chat-composer-queue-bar",
 	title: "QueueBar",
@@ -62,6 +69,29 @@ export default defineStory({
 			seed: () => {
 				answerCalls({ getQueuedMessages: () => screenPausedQueue });
 				setState({ streaming: false, queuedMessageCount: 0, pausedQueueCount: 2 });
+			},
+			render: () => (
+				<div class="ds-frame">
+					<QueueBar />
+				</div>
+			),
+		},
+		{
+			name: "Queued images and text files",
+			description:
+				"A queued steer carries a text file and an image; a queued follow-up carries an image. Files show by name, images as thumbnails.",
+			seed: () => {
+				answerCalls({
+					getQueuedMessages: () => ({
+						steering: ['Match the attached spec\n\n<file path="spec.md">\n# Spec\n</file>'],
+						steeringImages: [[queuedImage]],
+						followUp: ["Check this screenshot"],
+						followUpImages: [[queuedImage]],
+						liveSteered: 0,
+						paused: [],
+					}),
+				});
+				setState({ streaming: true, queuedMessageCount: 2 });
 			},
 			render: () => (
 				<div class="ds-frame">

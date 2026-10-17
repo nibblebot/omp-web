@@ -16,6 +16,7 @@ import {
 	type CompactionItem,
 	type PromptInsert,
 } from "../state";
+import { splitTextAttachments } from "../prompt/attachments";
 import { isReady } from "./session";
 import { call } from "./transport";
 import { reportError } from "./toasts";
@@ -817,12 +818,22 @@ function startNewSessionNow(): Promise<void> {
 	});
 }
 
+/** Prompt insert for a restored queued message: text files come back as chips, not inlined `<file>` blocks. */
+function restoredInsert(msg: { text: string; images?: ImageArg[] }): PromptInsert {
+	const { text, files } = splitTextAttachments(msg.text);
+	return {
+		text,
+		...(msg.images && msg.images.length > 0 ? { images: msg.images } : {}),
+		...(files.length > 0 ? { files } : {}),
+	};
+}
+
 /** Pop the last queued message back into the prompt (Alt+↑). Chips use `deleteQueuedMessage` instead. */
 export function dequeueLastQueued(): void {
 	void call("popLastQueuedMessage")
 		.then((restored) => {
 			const msg = restored as { text: string; images?: ImageArg[] } | undefined;
-			if (msg) setPromptInsert({ text: msg.text, images: msg.images });
+			if (msg) setPromptInsert(restoredInsert(msg));
 		})
 		.catch(reportError);
 }
@@ -849,7 +860,7 @@ export function editQueuedMessage(ref: QueuedMessageRef): Promise<void> {
 	return call("takeQueued", [ref])
 		.then((restored) => {
 			const msg = restored as { text: string; images?: ImageArg[] } | undefined;
-			if (msg) setPromptInsert({ text: msg.text, images: msg.images });
+			if (msg) setPromptInsert(restoredInsert(msg));
 		})
 		.catch(reportError);
 }

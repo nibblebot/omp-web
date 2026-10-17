@@ -157,6 +157,8 @@ export interface PausedQueuedMessage {
 	kind: QueuedMessageKind;
 	text: string;
 	imageCount: number;
+	/** The held images themselves, so a paused chip can show thumbnails. */
+	images?: ImageArg[];
 }
 /** Queue snapshot for the composer queue bar. The first `liveSteered` entries of `steering` were already delivered into the running turn and cannot be removed. */
 export interface QueuedMessagesSnapshot {
@@ -164,8 +166,14 @@ export interface QueuedMessagesSnapshot {
 	followUp: string[];
 	liveSteered: number;
 	paused: PausedQueuedMessage[];
+	/** Images for each live steer, index-aligned with `steering` (an empty array when it has none). */
+	steeringImages?: ImageArg[][];
+	/** Images for each live follow-up, index-aligned with `followUp`. */
+	followUpImages?: ImageArg[][];
 	/** Slash commands the SDK rejects while a turn runs; they run in this order at turn end, after the follow-ups. */
 	commands?: string[];
+	/** Images for each queued command, index-aligned with `commands`. */
+	commandImages?: ImageArg[][];
 	/** True after a Stop: queued commands wait for Resume queue instead of running at turn end. */
 	commandsPaused?: boolean;
 }

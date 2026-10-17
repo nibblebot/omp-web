@@ -46,7 +46,7 @@ describe("busy prompt fallback (CMD-08)", () => {
 	test("a slash command refused as busy is queued, not surfaced", async () => {
 		const entry = entryWith(busySession());
 		await collab().fireAndForgetPrompt(entry, "/ratchet", undefined);
-		expect(entry.queuedCommands.commands).toEqual(["/ratchet"]);
+		expect(entry.queuedCommands.commands).toEqual([{ text: "/ratchet" }]);
 	});
 
 	test("queued commands keep their order across two refused prompts", async () => {
@@ -54,14 +54,17 @@ describe("busy prompt fallback (CMD-08)", () => {
 		const deps = collab();
 		await deps.fireAndForgetPrompt(entry, "/force", undefined);
 		await deps.fireAndForgetPrompt(entry, "/add-dir /tmp/x", undefined);
-		expect(entry.queuedCommands.commands).toEqual(["/force", "/add-dir /tmp/x"]);
+		expect(entry.queuedCommands.commands).toEqual([
+			{ text: "/force" },
+			{ text: "/add-dir /tmp/x" },
+		]);
 	});
 
 	test("a paused queue (Stop) still holds the refused command", async () => {
 		const entry = entryWith(busySession());
 		entry.queuedCommands.paused = true;
 		await collab().fireAndForgetPrompt(entry, "/ratchet", undefined);
-		expect(entry.queuedCommands.commands).toEqual(["/ratchet"]);
+		expect(entry.queuedCommands.commands).toEqual([{ text: "/ratchet" }]);
 		expect(entry.queuedCommands.paused).toBe(true);
 	});
 
@@ -77,11 +80,11 @@ describe("busy prompt fallback (CMD-08)", () => {
 		expect(entry.queuedCommands.commands).toEqual([]);
 	});
 
-	test("a busy prompt with attachments is not queued: the queue holds text only", async () => {
+	test("a busy prompt with images queues them with the command", async () => {
 		const entry = entryWith(busySession());
-		const images = [{ type: "image", data: "AAAA", mimeType: "image/png" }];
+		const images = [{ type: "image" as const, data: "AAAA", mimeType: "image/png" }];
 		await collab().fireAndForgetPrompt(entry, "/ratchet", images as never);
-		expect(entry.queuedCommands.commands).toEqual([]);
+		expect(entry.queuedCommands.commands).toEqual([{ text: "/ratchet", images }]);
 	});
 });
 
@@ -102,12 +105,12 @@ describe("drain race: a refused queued command keeps its place (jx0b)", () => {
 			},
 		};
 		const entry = entryWith(fake as unknown as AgentSession);
-		entry.queuedCommands.commands.push("/a", "/b");
+		entry.queuedCommands.commands.push({ text: "/a" }, { text: "/b" });
 		const deps = collab();
 
 		const drain = deps.drainCommands(entry);
 		// While /a's prompt is still in flight, the user queues /c.
-		entry.queuedCommands.commands.push("/c");
+		entry.queuedCommands.commands.push({ text: "/c" });
 		// A user turn starts first (agent_start), then /a is refused as busy.
 		fake.isStreaming = true;
 		for (const listener of listeners) listener({ type: "agent_start" });
@@ -115,7 +118,7 @@ describe("drain race: a refused queued command keeps its place (jx0b)", () => {
 		await drain;
 
 		expect(calls).toEqual(["/a"]);
-		expect(entry.queuedCommands.commands).toEqual(["/a", "/b", "/c"]);
+		expect(entry.queuedCommands.commands).toEqual([{ text: "/a" }, { text: "/b" }, { text: "/c" }]);
 
 		fake.isStreaming = false;
 		await deps.drainCommands(entry);

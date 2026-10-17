@@ -772,6 +772,22 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 		expect(state.items.filter((i) => i.kind === "notice")).toEqual([]);
 	});
 
+	test("a queued builtin keeps its attached images on the queueCommand call", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("streaming", true);
+		posted.length = 0;
+		const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
+		dispatchInput("/add-dir /tmp/extra", [image], "enter");
+		expect(posted).toContainEqual(
+			expect.objectContaining({
+				type: "call",
+				method: "queueCommand",
+				args: ["/add-dir /tmp/extra", [image]],
+			}),
+		);
+	});
+
 	test("an idle /add-dir runs at once through prompt and is not queued (U10b)", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();

@@ -13,14 +13,14 @@ import {
 } from "../command-queue";
 
 function state(commands: string[], paused = false): QueuedCommandState {
-	return { commands: [...commands], paused, draining: false };
+	return { commands: commands.map((text) => ({ text })), paused, draining: false };
 }
 
 function recordingHost(log: string[], streaming = false): CommandQueueHost {
 	return {
 		isStreaming: () => streaming,
-		run: async (text) => {
-			log.push(text);
+		run: async (command) => {
+			log.push(command.text);
 		},
 	};
 }
@@ -40,7 +40,7 @@ describe("drainQueuedCommands", () => {
 		const log: string[] = [];
 		await drainQueuedCommands(s, recordingHost(log, true));
 		expect(log).toEqual([]);
-		expect(s.commands).toEqual(["/add-dir a"]);
+		expect(s.commands).toEqual([{ text: "/add-dir a" }]);
 	});
 
 	test("stays held while paused by Stop, then runs after resume", async () => {
@@ -61,14 +61,14 @@ describe("drainQueuedCommands", () => {
 		let streaming = false;
 		const host: CommandQueueHost = {
 			isStreaming: () => streaming,
-			run: async (text) => {
-				log.push(text);
-				streaming = text === "/add-dir a";
+			run: async (command) => {
+				log.push(command.text);
+				streaming = command.text === "/add-dir a";
 			},
 		};
 		await drainQueuedCommands(s, host);
 		expect(log).toEqual(["/add-dir a"]);
-		expect(s.commands).toEqual(["/remove-dir b"]);
+		expect(s.commands).toEqual([{ text: "/remove-dir b" }]);
 	});
 
 	test("a re-entrant drain returns while one is in progress", async () => {
@@ -77,8 +77,8 @@ describe("drainQueuedCommands", () => {
 		const gate = Promise.withResolvers<void>();
 		const host: CommandQueueHost = {
 			isStreaming: () => false,
-			run: async (text) => {
-				log.push(text);
+			run: async (command) => {
+				log.push(command.text);
 				await gate.promise;
 			},
 		};
@@ -106,14 +106,25 @@ describe("drainQueuedCommands", () => {
 describe("removeQueuedCommand", () => {
 	test("removes the chip at its index when the text matches", () => {
 		const s = state(["/add-dir a", "/remove-dir b"]);
-		expect(removeQueuedCommand(s, 1, "/remove-dir b")).toBe(true);
-		expect(s.commands).toEqual(["/add-dir a"]);
+		expect(removeQueuedCommand(s, 1, "/remove-dir b")).toEqual({ text: "/remove-dir b" });
+		expect(s.commands).toEqual([{ text: "/add-dir a" }]);
 	});
 
 	test("ignores a stale ref whose text no longer matches", () => {
 		const s = state(["/add-dir a"]);
-		expect(removeQueuedCommand(s, 0, "/remove-dir b")).toBe(false);
-		expect(s.commands).toEqual(["/add-dir a"]);
+		expect(removeQueuedCommand(s, 0, "/remove-dir b")).toBeUndefined();
+		expect(s.commands).toEqual([{ text: "/add-dir a" }]);
+	});
+
+	test("returns the removed command with its images", () => {
+		const image = { type: "image", data: "AAAA", mimeType: "image/png" } as const;
+		const s: QueuedCommandState = {
+			commands: [{ text: "/skill:a", images: [image] }],
+			paused: false,
+			draining: false,
+		};
+		expect(removeQueuedCommand(s, 0, "/skill:a")).toEqual({ text: "/skill:a", images: [image] });
+		expect(s.commands).toEqual([]);
 	});
 });
 
@@ -124,8 +135,8 @@ describe("queued command behind follow-up turns (U10b)", () => {
 		let streaming = true;
 		const host: CommandQueueHost = {
 			isStreaming: () => streaming,
-			run: async (text) => {
-				log.push(text);
+			run: async (command) => {
+				log.push(command.text);
 			},
 		};
 		// agent_end of a follow-up turn fires while the next follow-up has already started.

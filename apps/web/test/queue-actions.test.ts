@@ -11,8 +11,11 @@ import {
 	connect,
 	deleteQueuedCommand,
 	deleteQueuedMessage,
+	editQueuedMessage,
 	loadHistory,
+	promptInsert,
 	runQueuedCommandNow,
+	setPromptInsert,
 	setState,
 	state,
 	stopTurn,
@@ -75,6 +78,27 @@ describe("queue chip removal", () => {
 		expect(run?.args).toEqual([ref]);
 		dispatch(callResult(run!.id, undefined));
 		await ran;
+	});
+});
+
+describe("queued edit restores attachments", () => {
+	test("edit moves a steer's text files back to chips and its images into the prompt", async () => {
+		const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
+		const ref: QueuedMessageRef = {
+			kind: "steer",
+			text: 'Match the spec\n\n<file path="spec.md">\n# Spec\n</file>',
+		};
+		const done = editQueuedMessage(ref);
+		await flushMicrotasks();
+		const [cmd] = callsTo("takeQueued");
+		dispatch(callResult(cmd!.id, { text: ref.text, images: [image] }));
+		await done;
+		expect(promptInsert()).toEqual({
+			text: "Match the spec",
+			images: [image],
+			files: [expect.objectContaining({ name: "spec.md", text: "# Spec" })],
+		});
+		setPromptInsert(null);
 	});
 });
 

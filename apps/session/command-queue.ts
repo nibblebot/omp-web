@@ -1,3 +1,11 @@
+import type { ImageContent } from "@oh-my-pi/pi-ai";
+
+/** A slash command waiting to run, with the images it was sent with (jx0b). */
+export interface QueuedCommand {
+	text: string;
+	images?: ImageContent[];
+}
+
 /**
  * Slash commands the SDK rejects while a turn runs (for example `/add-dir`
  * during streaming). They wait here and run in order once the turn ends.
@@ -6,7 +14,7 @@
  * the queue concurrently.
  */
 export interface QueuedCommandState {
-	commands: string[];
+	commands: QueuedCommand[];
 	paused: boolean;
 	draining: boolean;
 }
@@ -14,7 +22,7 @@ export interface QueuedCommandState {
 export interface CommandQueueHost {
 	isStreaming(): boolean;
 	/** Run one command (echo it, then run). Resolves once it has started: a builtin finished or a model turn began. */
-	run(text: string): Promise<void>;
+	run(command: QueuedCommand): Promise<void>;
 }
 
 /**
@@ -30,22 +38,25 @@ export async function drainQueuedCommands(
 	if (state.draining) return;
 	state.draining = true;
 	try {
-		while (state.commands.length > 0 && !state.paused && !host.isStreaming()) {
-			const text = state.commands.shift() as string;
-			await host.run(text);
+		while (!state.paused && !host.isStreaming()) {
+			const command = state.commands.shift();
+			if (!command) return;
+			await host.run(command);
 		}
 	} finally {
 		state.draining = false;
 	}
 }
 
-/** Remove the queued command at `index` when its text still matches the chip. */
+/**
+ * Remove the queued command at `index` when its text still matches the chip,
+ * and return it (with its images) so the caller can run it.
+ */
 export function removeQueuedCommand(
 	state: QueuedCommandState,
 	index: number,
 	text: string,
-): boolean {
-	if (state.commands[index] !== text) return false;
-	state.commands.splice(index, 1);
-	return true;
+): QueuedCommand | undefined {
+	if (state.commands[index]?.text !== text) return undefined;
+	return state.commands.splice(index, 1)[0];
 }

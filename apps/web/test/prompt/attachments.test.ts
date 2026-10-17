@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	composeTextAttachments,
+	splitTextAttachments,
 	importTextAttachment,
 	type TextAttachment,
 } from "../../prompt/attachments";
@@ -75,5 +76,37 @@ describe("composeTextAttachments", () => {
 	test("escapes characters in the path so a file name cannot close the tag", () => {
 		const out = composeTextAttachments("", [ok('a"&<b.ts', "X")]);
 		expect(out).toBe('<file path="a&quot;&amp;&lt;b.ts">\nX\n</file>');
+	});
+});
+
+describe("splitTextAttachments", () => {
+	test("lifts composed file blocks back out and keeps the typed text exact", () => {
+		const files: TextAttachment[] = [
+			{ id: "1", name: 'a"&<b.ts', size: 11, text: "line1\nline2" },
+			{ id: "2", name: "b.md", size: 3, text: "# B" },
+		];
+		const composed = composeTextAttachments("review\n\nthis", files);
+		expect(splitTextAttachments(composed)).toEqual({
+			text: "review\n\nthis",
+			files: [
+				expect.objectContaining({ name: 'a"&<b.ts', text: "line1\nline2", size: 11 }),
+				expect.objectContaining({ name: "b.md", text: "# B", size: 3 }),
+			],
+		});
+	});
+
+	test("restores a message that is only files to an empty text", () => {
+		const composed = composeTextAttachments("", [{ id: "1", name: "a.ts", size: 1, text: "A" }]);
+		expect(splitTextAttachments(composed)).toEqual({
+			text: "",
+			files: [expect.objectContaining({ name: "a.ts", text: "A" })],
+		});
+	});
+
+	test("leaves a message without file blocks untouched", () => {
+		expect(splitTextAttachments("plain <file> text")).toEqual({
+			text: "plain <file> text",
+			files: [],
+		});
 	});
 });

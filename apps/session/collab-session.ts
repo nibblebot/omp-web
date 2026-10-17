@@ -25,8 +25,9 @@ import {
 } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import type { CollabWireStatus } from "#lib/wire/protocol";
+import { oversizedImageNotice } from "#lib/wire/image-limits";
 import type { CollabAgentRef, CollabHostStatus, CollabSessionPort } from "./collab-host";
-import { drainQueuedCommands } from "./command-queue";
+import { type QueuedCommand, drainQueuedCommands } from "./command-queue";
 import type { SessionConfig } from "./config";
 import type { DaemonBroker } from "./daemon-broker";
 import { installPlanReviewHandler } from "./review-plan";
@@ -81,7 +82,7 @@ export interface CollabSession {
 	/** Runs queued slash commands in order; called at turn end and on Resume queue. */
 	drainCommands(entry: SessionEntry): Promise<void>;
 	/** Echoes and runs one queued command now (the caller decides when). */
-	runCommandNow(entry: SessionEntry, text: string): Promise<void>;
+	runCommandNow(entry: SessionEntry, command: QueuedCommand): Promise<void>;
 	/** Test seam: wire a session's event stream to its broadcast/state-resync. */
 	wireSession(entry: SessionEntry): void;
 }
@@ -371,7 +372,7 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		return origin === "queue" ? admitted.promise : turn;
 	}
 
-	/** Queues a prompt the SDK refused as busy (jx0b, CMD-08). A refused queued command returns to the head, so order holds; attachments keep their error. */
+	/** Queues a prompt the SDK refused as busy (jx0b, CMD-08). A refused queued command returns to the head, so order holds. Images queue with their text; an image over the per-image limit is refused with a notice and never queued. */
 	function queueBusyText(
 		entry: SessionEntry,
 		text: string,
@@ -379,9 +380,15 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		err: unknown,
 		origin: PromptOrigin,
 	): boolean {
-		if (!(err instanceof AgentBusyError) || images?.length) return false;
-		if (origin === "queue") entry.queuedCommands.commands.unshift(text);
-		else entry.queuedCommands.commands.push(text);
+		if (!(err instanceof AgentBusyError)) return false;
+		const notice = oversizedImageNotice(images);
+		if (notice) {
+			broadcast({ type: "error", error: notice });
+			return true;
+		}
+		const command: QueuedCommand = { text, images };
+		if (origin === "queue") entry.queuedCommands.commands.unshift(command);
+		else entry.queuedCommands.commands.push(command);
 		void drainCommands(entry);
 		return true;
 	}
@@ -412,18 +419,18 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 		return true;
 	}
 
-	/** Echoes a queued command as it starts, then runs it like a typed prompt; resolves once it is admitted or refused. */
-	async function runCommandNow(entry: SessionEntry, text: string): Promise<void> {
-		broadcastTo(entry.handle, { type: "command_echo", text });
-		if (!(await runBuiltinSlashCommand(entry, text, undefined, "queue")))
-			await fireAndForgetPrompt(entry, text, undefined, "queue");
+	/** Echoes a queued command as it starts, then runs it like a typed prompt with its images; resolves once it is admitted or refused. */
+	async function runCommandNow(entry: SessionEntry, command: QueuedCommand): Promise<void> {
+		broadcastTo(entry.handle, { type: "command_echo", text: command.text });
+		if (!(await runBuiltinSlashCommand(entry, command.text, command.images, "queue")))
+			await fireAndForgetPrompt(entry, command.text, command.images, "queue");
 	}
 
 	/** Runs queued slash commands in order while idle and not paused (see command-queue.ts). */
 	function drainCommands(entry: SessionEntry): Promise<void> {
 		return drainQueuedCommands(entry.queuedCommands, {
 			isStreaming: () => entry.session.isStreaming,
-			run: (text) => runCommandNow(entry, text),
+			run: (command) => runCommandNow(entry, command),
 		})
 			.catch((err) => broadcast({ type: "error", error: String(err) }))
 			.finally(() => {

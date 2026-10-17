@@ -16,6 +16,10 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import {
+	isUserAuthoredQueuedMessage,
+	toRestoredQueuedMessage,
+} from "@oh-my-pi/pi-coding-agent/session/queued-messages";
 import { resolveRoleModelFull } from "@oh-my-pi/pi-coding-agent/session/role-models";
 import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { cfgComputerEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
@@ -29,6 +33,7 @@ import type {
 	QueuedMessagesSnapshot,
 	WebMethodName,
 } from "#lib/wire/protocol";
+import { oversizedImageNotice } from "#lib/wire/image-limits";
 import type { CollabSession, Images } from "./collab-session";
 import { removeQueuedCommand } from "./command-queue";
 import type { DaemonBroker } from "./daemon-broker";
@@ -377,16 +382,29 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		followUp: (entry, a) => entry.session.followUp(a[0] as string, a[1] as Images),
 		getQueuedMessages: async (entry): Promise<QueuedMessagesSnapshot> => {
 			const live = entry.session.getQueuedMessages();
+			// Same filter and order as the SDK's chip texts, so each image list lines up with its chip.
+			const { agent } = entry.session;
+			const steeringImages = [...agent.peekLiveSteeredMessages(), ...agent.peekSteeringQueue()]
+				.filter(isUserAuthoredQueuedMessage)
+				.map((message) => toRestoredQueuedMessage(message).images ?? []);
+			const followUpImages = agent
+				.peekFollowUpQueue()
+				.filter(isUserAuthoredQueuedMessage)
+				.map((message) => toRestoredQueuedMessage(message).images ?? []);
 			return {
 				steering: [...live.steering],
 				followUp: [...live.followUp],
 				liveSteered: live.liveSteered,
+				steeringImages,
+				followUpImages,
 				paused: entry.pausedQueue.map(({ kind, message }) => ({
 					kind,
 					text: message.text,
 					imageCount: message.images?.length ?? 0,
+					images: message.images,
 				})),
-				commands: [...entry.queuedCommands.commands],
+				commands: entry.queuedCommands.commands.map((command) => command.text),
+				commandImages: entry.queuedCommands.commands.map((command) => command.images ?? []),
 				commandsPaused: entry.queuedCommands.paused,
 			};
 		},
@@ -426,7 +444,10 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		takeQueued: async (entry, a) =>
 			takeQueuedMessage(entry.session, entry.pausedQueue, a[0] as QueuedMessageRef),
 		queueCommand: async (entry, a) => {
-			entry.queuedCommands.commands.push(a[0] as string);
+			const images = a[1] as Images;
+			const notice = oversizedImageNotice(images);
+			if (notice) throw new Error(notice);
+			entry.queuedCommands.commands.push({ text: a[0] as string, images });
 			await deps.collab.drainCommands(entry);
 		},
 		takeQueuedCommand: async (entry, a) => {
@@ -436,17 +457,18 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		},
 		runQueuedCommandNow: async (entry, a) => {
 			const ref = a[0] as QueuedCommandRef;
-			if (!removeQueuedCommand(entry.queuedCommands, ref.index, ref.text)) return;
+			const command = removeQueuedCommand(entry.queuedCommands, ref.index, ref.text);
+			if (!command) return;
 			if (!entry.queuedCommands.paused) {
 				// Front of the queue: a running turn's agent_end drains it first.
-				entry.queuedCommands.commands.unshift(ref.text);
+				entry.queuedCommands.commands.unshift(command);
 				if (entry.session.isStreaming) await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
 				await deps.collab.drainCommands(entry);
 				return;
 			}
 			// Stop paused the queue: run this one now and leave the rest for Resume queue.
 			if (entry.session.isStreaming) await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
-			await deps.collab.runCommandNow(entry, ref.text);
+			await deps.collab.runCommandNow(entry, command);
 			void deps.broker.broadcastState(entry).catch(() => {});
 		},
 		runQueuedNow: async (entry, a) => {

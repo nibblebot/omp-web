@@ -112,6 +112,7 @@ function forwardSlash(
 	name: string,
 	source: SlashCommandSource | undefined,
 	args: string,
+	images?: ImageArg[],
 ): void {
 	recordCommandUse(name);
 	const policy = state.streaming ? slashBusyPolicy({ source, name, args }) : "now";
@@ -123,11 +124,19 @@ function forwardSlash(
 		return;
 	}
 	if (policy === "queue") {
-		void call("queueCommand", [text]).catch(showError);
+		void call("queueCommand", commandArgs(text, images)).catch(showError);
 		return;
 	}
 	pushNotice("echo", text);
-	void call("prompt", [text]).catch(showError);
+	void call("prompt", commandArgs(text, images)).catch(showError);
+}
+
+/** Call args for a forwarded command: images ride along only when attached. */
+function commandArgs(
+	text: string,
+	images: ImageArg[] | undefined,
+): [string] | [string, ImageArg[]] {
+	return images && images.length > 0 ? [text, images] : [text];
 }
 
 /**
@@ -605,7 +614,7 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			}
 			// Agent-side builtin/skill/extension/file command. Its command_output frames
 			// don't arrive over the SSE/POST transport (documented tradeoff).
-			forwardSlash(trimmed, entry.name, entry.source, parsed.args);
+			forwardSlash(trimmed, entry.name, entry.source, parsed.args, images);
 			return;
 		}
 		case "queue": {

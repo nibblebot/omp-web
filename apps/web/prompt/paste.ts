@@ -1,5 +1,6 @@
 import { createSignal, type Accessor } from "solid-js";
 import { loadDraft, saveDraft, type DraftBody, type DraftKey } from "../store/drafts";
+import { MAX_IMAGE_BYTES } from "#lib/wire/image-limits";
 
 /**
  * P2 paste/attachment helpers (G03). Pure functions + one composer hook, so
@@ -11,7 +12,6 @@ export const PASTE_FOLD_LINES = 30;
 export const PASTE_FOLD_CHARS = 4000;
 /** Model attachment gate: images must be image/* and bounded (~10MB each). */
 export const IMAGE_MIME_RE = /^image\/(png|jpeg|gif|webp|avif|bmp|svg\+xml)$/;
-export const MAX_IMAGE_BYTES = 10_000_000;
 /** Generic file attachments (external-edit import, drop): text-ish only, bounded. */
 export const MAX_FILE_BYTES = 1_000_000;
 const TEXT_EXTENSIONS = [

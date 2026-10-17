@@ -161,6 +161,11 @@ describe("Stop preserves the queue (abort row)", () => {
 				followUp: [...queue.followUp],
 				liveSteered: 0,
 			}),
+			agent: {
+				peekLiveSteeredMessages: () => [],
+				peekSteeringQueue: () => [],
+				peekFollowUpQueue: () => [],
+			},
 			steer: async (text: string) => {
 				sent.push(`steer:${text}`);
 			},
@@ -245,14 +250,20 @@ describe("Stop preserves the queue (abort row)", () => {
 		await methods.abort!(entry, []);
 		await methods.queueCommand!(entry, ["/add-dir /tmp/x"]);
 		await methods.queueCommand!(entry, ["/remove-dir /tmp/y"]);
-		expect(entry.queuedCommands.commands).toEqual(["/add-dir /tmp/x", "/remove-dir /tmp/y"]);
+		expect(entry.queuedCommands.commands).toEqual([
+			{ text: "/add-dir /tmp/x" },
+			{ text: "/remove-dir /tmp/y" },
+		]);
 
 		await methods.resumeQueue!(entry, []);
 		// The last drain (resume) saw all three held messages already re-sent; the
 		// earlier drains ran while Stop still held everything.
 		expect(aborts.sentAtDrain.at(-1)).toBe(3);
 		expect(sent).toEqual(["steer:s1", "follow:f1", "follow:f2"]);
-		expect(entry.queuedCommands.commands).toEqual(["/add-dir /tmp/x", "/remove-dir /tmp/y"]);
+		expect(entry.queuedCommands.commands).toEqual([
+			{ text: "/add-dir /tmp/x" },
+			{ text: "/remove-dir /tmp/y" },
+		]);
 	});
 
 	test("Stop aborts only active subagents, and keepSubagents leaves them running", async () => {
@@ -298,7 +309,7 @@ describe("session replacement drops the held queue", () => {
 				{ kind: "steer", message: { text: "s1" } },
 				{ kind: "follow-up", message: { text: "f1" } },
 			],
-			queuedCommands: { commands: ["/add-dir /tmp/x"], paused: true, draining: false },
+			queuedCommands: { commands: [{ text: "/add-dir /tmp/x" }], paused: true, draining: false },
 			subagentSnapshots: new Map(),
 			transcriptSessionFilesBySubagentId: new Map(),
 			pendingUiRequests: new Map(),

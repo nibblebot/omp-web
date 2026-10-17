@@ -1,5 +1,6 @@
 import { createEffect, createSignal, For, Show, type Component } from "solid-js";
 import type {
+	ImageArg,
 	QueuedCommandRef,
 	QueuedMessageRef,
 	QueuedMessagesSnapshot,
@@ -15,6 +16,7 @@ import {
 	state,
 } from "../../../state";
 import { reportError } from "../../../store/toasts";
+import { splitTextAttachments } from "../../../prompt/attachments";
 import { XIcon } from "../../ui/icons";
 import { queueTransitionNotice, type QueueExit } from "./queue-notice";
 
@@ -22,7 +24,10 @@ const EMPTY: QueuedMessagesSnapshot = { steering: [], followUp: [], liveSteered:
 
 interface Chip {
 	kind: "steer" | "follow-up" | "command";
+	/** Message text with composed text files removed; the files show by name in `files`. */
 	text: string;
+	files: string[];
+	images: ImageArg[];
 	paused: boolean;
 	/** Undefined for a steer the running turn already consumed: the SDK cannot withdraw it. */
 	ref?: QueuedMessageRef;
@@ -64,30 +69,35 @@ export const QueueBar: Component = () => {
 		else setQueue(EMPTY);
 	});
 
+	/** Chip fields for one queued message; `raw` keeps the composed text that identifies it to the daemon. */
+	const messageChip = (kind: Chip["kind"], raw: string, images: ImageArg[] | undefined) => {
+		const { text, files } = splitTextAttachments(raw);
+		return { kind, text, files: files.map((file) => file.name), images: images ?? [] };
+	};
+
 	const chips = (): Chip[] => {
 		const q = queue();
 		return [
 			...q.paused.map((p, index) => ({
-				kind: p.kind,
-				text: p.text,
+				...messageChip(p.kind, p.text, p.images),
 				paused: true,
 				ref: { kind: p.kind, text: p.text, paused: index },
 			})),
-			...q.steering.map((text, index) => ({
-				kind: "steer" as const,
-				text,
+			...q.steering.map((raw, index) => ({
+				...messageChip("steer", raw, q.steeringImages?.[index]),
 				paused: false,
-				ref: index < q.liveSteered ? undefined : { kind: "steer" as const, text },
+				ref: index < q.liveSteered ? undefined : { kind: "steer" as const, text: raw },
 			})),
-			...q.followUp.map((text) => ({
-				kind: "follow-up" as const,
-				text,
+			...q.followUp.map((raw, index) => ({
+				...messageChip("follow-up", raw, q.followUpImages?.[index]),
 				paused: false,
-				ref: { kind: "follow-up" as const, text },
+				ref: { kind: "follow-up" as const, text: raw },
 			})),
 			...(q.commands ?? []).map((text, index) => ({
 				kind: "command" as const,
 				text,
+				files: [] as string[],
+				images: q.commandImages?.[index] ?? [],
 				paused: q.commandsPaused === true,
 				command: { index, text },
 			})),
@@ -153,6 +163,26 @@ export const QueueBar: Component = () => {
 										{chip.paused ? `paused ${chip.kind}` : chip.kind}
 									</span>
 									<span class="queue-text">{preview(chip.text)}</span>
+									<For each={chip.files}>
+										{(name) => (
+											<span class="queue-file" title={name}>
+												{name}
+											</span>
+										)}
+									</For>
+									<Show when={chip.images.length > 0}>
+										<span class="queue-thumbs">
+											<For each={chip.images}>
+												{(image) => (
+													<img
+														class="queue-thumb"
+														src={`data:${image.mimeType};base64,${image.data}`}
+														alt="Attached image"
+													/>
+												)}
+											</For>
+										</span>
+									</Show>
 									<Show when={chip.ref} keyed>
 										{(ref) => (
 											<>

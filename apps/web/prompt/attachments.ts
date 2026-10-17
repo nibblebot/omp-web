@@ -38,3 +38,26 @@ export function composeTextAttachments(text: string, files: readonly TextAttachm
 	if (blocks.length === 0) return text;
 	return [text, ...blocks].filter((part) => part.length > 0).join("\n\n");
 }
+
+/** Matches one composed `<file>` block with the separator that precedes it. */
+const FILE_BLOCK = /(^|\n\n)<file path="([^"]*)">\n([\s\S]*?)\n<\/file>/g;
+
+/**
+ * Inverse of composeTextAttachments: lifts each `<file>` block out of a queued
+ * message back into a text chip, so an edited message restores its files.
+ */
+export function splitTextAttachments(message: string): { text: string; files: TextAttachment[] } {
+	const files: TextAttachment[] = [];
+	const text = message.replace(FILE_BLOCK, (_match, _sep: string, path: string, body: string) => {
+		nextId += 1;
+		const name = path
+			.replace(/&lt;/g, "<")
+			.replace(/&quot;/g, '"')
+			.replace(/&amp;/g, "&");
+		const size = new TextEncoder().encode(body).length;
+		const id = `att-${Date.now().toString(36)}-${nextId}`;
+		files.push({ id, name, size, text: body });
+		return "";
+	});
+	return { text, files };
+}
