@@ -112,6 +112,56 @@ describe("subagentForest", () => {
 		expect(node?.id).toBe("a");
 		expect(node?.status).toBe("failed");
 	});
+
+	test("a finished roster-only agent measures elapsed to its last activity, not to now", () => {
+		setState("subagents", new Map<string, SubagentInfo>());
+		const key = workerKey(SESSION, "r");
+		setState("workers", {
+			...createWorkersState(),
+			records: {
+				[key]: {
+					id: "r",
+					agentId: "r",
+					sessionId: SESSION,
+					key,
+					displayName: "task",
+					status: "completed",
+					lastActivity: 4_000,
+					createdAt: 1_000,
+					revivable: false,
+				} as WorkerRecord,
+			},
+			order: [key],
+		});
+		const [node] = subagentForest();
+		expect(node?.endedAt).toBe(4_000);
+		expect(node?.metrics.elapsedMs).toBe(3_000);
+	});
+
+	test("a parked roster-only agent is not running, so its elapsed stops at its last activity", () => {
+		setState("subagents", new Map<string, SubagentInfo>());
+		const key = workerKey(SESSION, "p");
+		setState("workers", {
+			...createWorkersState(),
+			records: {
+				[key]: {
+					id: "p",
+					agentId: "p",
+					sessionId: SESSION,
+					key,
+					displayName: "task",
+					status: "parked",
+					lastActivity: 4_000,
+					createdAt: 1_000,
+					revivable: true,
+				} as WorkerRecord,
+			},
+			order: [key],
+		});
+		const [node] = subagentForest();
+		expect(node?.endedAt).toBe(4_000);
+		expect(node?.metrics.elapsedMs).toBe(3_000);
+	});
 });
 
 describe("subagentTree and fanoutTotals", () => {

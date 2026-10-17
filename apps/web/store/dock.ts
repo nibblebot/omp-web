@@ -23,3 +23,10 @@ export function setDockWidth(px: number): void {
 	setState("dockWidth", width);
 	persistDockWidth(width);
 }
+
+/** Alt+A opens the agents dock. Exact "a" key only: Option+A on mac types "å". */
+export function isAgentsShortcut(
+	e: Pick<KeyboardEvent, "key" | "altKey" | "ctrlKey" | "shiftKey">,
+): boolean {
+	return e.altKey && !e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "a";
+}

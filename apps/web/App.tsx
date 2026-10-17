@@ -15,7 +15,7 @@ import {
 } from "./components/chat";
 import { BackgroundDaemonsBar, FleetSidebar } from "./components/fleet";
 import { ModalHost } from "./ModalHost";
-import { openDock } from "./store/dock";
+import { isAgentsShortcut, openDock } from "./store/dock";
 import {
 	bootAuth,
 	closeDrawers,
@@ -131,17 +131,15 @@ export const App: Component = () => {
 			e.preventDefault();
 			setState("modal", "palette");
 		});
-		// Ctrl+, opens Settings; Alt+A opens the agents dock. Alt+A is skipped while
-		// typing: on some platforms Alt+letter inserts a character.
+		// Ctrl+, opens Settings; Alt+A opens the agents dock from anywhere, composer included.
+		// Option+A on mac types "å", so the exact "a" key match already excludes it.
 		window.addEventListener("keydown", (e) => {
 			if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === ",") {
 				e.preventDefault();
 				setState("modal", "settings");
 				return;
 			}
-			if (!e.altKey || e.ctrlKey || e.shiftKey || e.key.toLowerCase() !== "a") return;
-			const target = e.target as HTMLElement | null;
-			if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
+			if (!isAgentsShortcut(e)) return;
 			e.preventDefault();
 			openDock("agents");
 		});

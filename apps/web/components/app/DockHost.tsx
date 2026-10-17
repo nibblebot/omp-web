@@ -33,17 +33,17 @@ export const DockHost: Component = () => {
 			: undefined;
 	};
 	return (
-		<Show when={entry()}>
+		<Show when={entry()} keyed>
 			{(kind) => (
 				<DockPane
-					title={kind().title}
+					title={kind.title}
 					width={state.dockWidth}
 					minWidth={DOCK_MIN_WIDTH}
 					maxWidth={DOCK_MAX_WIDTH}
 					onWidth={setDockWidth}
 					onClose={closeDock}
 				>
-					<Dynamic component={kind().body} id={state.dock?.id} />
+					<Dynamic component={kind.body} id={state.dock?.id} />
 				</DockPane>
 			)}
 		</Show>

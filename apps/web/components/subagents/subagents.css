@@ -260,6 +260,12 @@
 	gap: 8px;
 }
 
+/* KebabMenu's trigger is sidebar-hover-only (fleet.css); the pane header has no hover row to reveal it. */
+.subagent-panel-actions .sidebar-menu-btn {
+	opacity: 1;
+	pointer-events: auto;
+}
+
 .subagent-steer {
 	display: flex;
 	flex-direction: column;

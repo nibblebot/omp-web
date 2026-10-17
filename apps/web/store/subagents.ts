@@ -416,6 +416,11 @@ function buildForest(): SubagentNode[] {
 			startedAt: record.createdAt,
 			parentToolCallId: record.parentToolCallId,
 			progress: record.progress,
+			// Parked is not running: its clock stops at the last activity, like a terminal row.
+			endedAt:
+				isTerminalWorker(record.status) || record.status === "parked"
+					? record.lastActivity
+					: undefined,
 		};
 		infos.set(id, { info, record });
 	}

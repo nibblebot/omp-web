@@ -283,6 +283,8 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			sessionManager: SessionManager.create(sessionCwd),
 			agentRegistry,
 			eventBus,
+			// Nested spawns emit lifecycle/progress to this bus too; sharing the root bus keeps depth >= 2 visible to wireSession.
+			subagentEventBus: eventBus,
 			hasUI: true,
 			// Names unnamed sessions through the SDK's own flow, which honors title.generator (fork|tiny) and PI_NO_TITLE; subagents are excluded by the SDK.
 			autoTitle: true,
