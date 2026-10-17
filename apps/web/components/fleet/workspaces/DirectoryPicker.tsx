@@ -64,7 +64,7 @@ export const DirectoryPicker: Component<{
 				<For each={crumbs()}>
 					{(c, i) => (
 						<>
-							<Show when={i() > 0}>
+							<Show when={i() > 1}>
 								<span class="dirpick-sep">/</span>
 							</Show>
 							<button

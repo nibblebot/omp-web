@@ -1083,6 +1083,9 @@ export type ServerFrame =
 			branch?: string;
 			merged?: boolean;
 			unpushed?: boolean;
+			hasUpstream?: boolean;
+			branchOwned?: boolean;
+			files?: string[];
 			reason?: string;
 	  }
 	| { type: "error"; error: string };

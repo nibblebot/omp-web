@@ -38,6 +38,21 @@ export default defineStory({
 			render: () => <DeleteWorkspaceDialog />,
 		},
 		{
+			name: "Existing branch not pre-checked",
+			seed: () =>
+				seedRosterFleet({
+					deleteWorkspaceTarget: worktreeInfoClean.daemonId,
+					worktreeDeleteInfo: {
+						[worktreeInfoClean.daemonId]: {
+							...worktreeInfoClean,
+							branchOwned: false,
+							hasUpstream: false,
+						},
+					},
+				}),
+			render: () => <DeleteWorkspaceDialog />,
+		},
+		{
 			name: "Unreadable git state refused",
 			seed: () =>
 				seedRosterFleet({

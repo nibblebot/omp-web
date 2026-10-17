@@ -103,6 +103,7 @@ import type { FleetConfig } from "./config";
 import { validateProjectPath } from "./discovery";
 import { serveStaticUi } from "./static-ui";
 import { BrowseError, browseDirectories } from "./fs-browse";
+import { listRecentRoots } from "./recent-roots";
 import { DaemonsAggregator } from "./daemons-aggregator";
 import type { DaemonTransportRegistry, VirtualStreamSink } from "./daemon-transport";
 import {
@@ -427,6 +428,8 @@ export interface EdgeDeps {
 	logStore?: CloneSessionStore;
 	/** Serve the static UI for non-API paths (default true); false = 404 JSON, the split-setup control plane. */
 	serveUi?: boolean;
+	/** Agent sessions dir (`<agent dir>/sessions`) read for recent-root autocomplete; absent = no recent roots. */
+	sessionsDir?: string;
 }
 
 /**
@@ -628,6 +631,7 @@ export class FleetEdge {
 	#keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 	/** False on the split-setup control plane: static paths answer 404 JSON instead of the UI. */
 	readonly #serveUi: boolean;
+	readonly #sessionsDir: string | undefined;
 
 	/** Bound once so close() can unset registry.onChange without clobbering a replacement. */
 	readonly #onRegistryChange = (): void => {
@@ -669,6 +673,7 @@ export class FleetEdge {
 		this.#backpressureBytes = opts?.backpressureBytes ?? SSE_BACKPRESSURE_BYTES;
 		this.#ringBytes = opts?.ringBytes ?? SSE_RING_BYTES;
 		this.#serveUi = deps.serveUi ?? true;
+		this.#sessionsDir = deps.sessionsDir;
 		deps.registry.onChange = this.#onRegistryChange;
 		// Project-set mutations are rare and the frame is re-derivable from
 		// priming, so they broadcast via a dedicated hook, never ringed.
@@ -704,6 +709,14 @@ export class FleetEdge {
 					if (err instanceof BrowseError) return json({ error: err.message }, 400);
 					throw err;
 				}
+			}
+			if (path === "/ctl/fs/recent-roots") {
+				const registered = this.#registry.projects().map((p) => p.path);
+				const roots =
+					this.#sessionsDir === undefined
+						? []
+						: await listRecentRoots({ sessionsDir: this.#sessionsDir, registered });
+				return json({ roots });
 			}
 			const stderrMatch = STDERR_ROUTE.exec(path);
 			if (stderrMatch) {
@@ -1413,6 +1426,7 @@ export class FleetEdge {
 		try {
 			await registerWorktreeEntry(this.#registry, this.#supervisor, project, created.path, {
 				start: opts.start,
+				branchCreated: created.baseRef !== undefined,
 			});
 		} catch (err) {
 			this.#sendError(stream, `spawn failed: ${err instanceof Error ? err.message : String(err)}`);

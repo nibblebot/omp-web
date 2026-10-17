@@ -12,7 +12,8 @@ import type {
 import { FEATURE_IDS, type FeatureId } from "../features/manifest";
 import { activateFeatures, isFeatureEnabled } from "../features/registry";
 import { pruneUnread, unreadIds } from "../fleet-ui/unread";
-import { rejectPendingCalls } from "../store/transport";
+import { rejectPendingAttach, rejectPendingCalls } from "../store/transport";
+import { attachForPanel } from "../store/roster";
 import {
 	announce,
 	attachSession,
@@ -27,6 +28,7 @@ import {
 	refreshSettings,
 	sendAddExistingWorktree,
 	sendAddProject,
+	sendCreateClone,
 	sendCreateWorktree,
 	sendDeleteWorktree,
 	sendRemoveProject,
@@ -1826,6 +1828,21 @@ describe("Phase 5: project/worktree command senders", () => {
 		expect(posted).toEqual([{ type: "add_project", id: expect.any(String), path: "/repos/b" }]);
 	});
 
+	test("the start toggle reaches the three create senders as start:false and arms no session picker", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+
+		sendCreateWorktree("p1", "feature-x", { start: false });
+		sendAddExistingWorktree("p1", "/repos/p1-wt", { start: false });
+		sendCreateClone("p1", "clone-x", { profileId: "prof", start: false });
+		expect(posted).toEqual([
+			expect.objectContaining({ type: "create_worktree", start: false }),
+			expect.objectContaining({ type: "add_worktree", start: false }),
+			expect.objectContaining({ type: "create_clone", start: false }),
+		]);
+		expect(state.pendingSessionPicker).toBeNull();
+	});
+
 	test("sendRemoveProject posts remove_project", () => {
 		connect();
 		FakeEventSource.instances.at(-1)!.onopen?.();
@@ -2537,6 +2554,48 @@ describe("roster session dropdown", () => {
 		// The superseded switch retries ONCE against the now-current daemon.
 		expect(postedOf("call").filter((c) => c.method === "switchSession")).toHaveLength(2);
 		expect(state.error).toBeNull(); // the supersession is never a banner
+	});
+
+	test("attachForPanel opens Open review when the attach lands, or a superseded attach left this daemon current", async () => {
+		setBrowserGlobal(
+			"fetch",
+			(async () =>
+				({
+					ok: true,
+					status: 202,
+					json: async () => ({}),
+					text: async () => "",
+				}) as unknown as Response) as unknown as typeof fetch,
+		);
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("currentSessionId", "d1");
+		const opened = attachForPanel("d9");
+		setState("currentSessionId", "d9");
+		rejectPendingAttach(new Error("session switched"));
+		await expect(opened).resolves.toBe(true);
+		expect(state.error).toBeNull();
+	});
+
+	test("attachForPanel never banners a superseded attach and stays closed once the user moved on", async () => {
+		setBrowserGlobal(
+			"fetch",
+			(async () =>
+				({
+					ok: true,
+					status: 202,
+					json: async () => ({}),
+					text: async () => "",
+				}) as unknown as Response) as unknown as typeof fetch,
+		);
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("currentSessionId", "d1");
+		const opened = attachForPanel("d9");
+		setState("currentSessionId", "d2");
+		rejectPendingAttach(new Error("session switched"));
+		await expect(opened).resolves.toBe(false);
+		expect(state.error).toBeNull();
 	});
 
 	test("resumeDaemonSession on a ready detached daemon attaches first, then switches to the picked session", async () => {

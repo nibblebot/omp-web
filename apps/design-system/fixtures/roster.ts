@@ -569,6 +569,8 @@ export const worktreeInfoClean: WorktreeDeleteInfo = {
 	branch: "fix/review-anchors",
 	merged: true,
 	unpushed: false,
+	branchOwned: true,
+	hasUpstream: true,
 };
 
 /** WorktreeDeleteInfo: dirty worktree, so the dialog refuses and lists the change counts. */
@@ -581,6 +583,15 @@ export const worktreeInfoDirty: WorktreeDeleteInfo = {
 	branch: "feat/design-fixtures",
 	merged: false,
 	unpushed: true,
+	branchOwned: false,
+	files: [
+		"src/fleet/worktrees.ts",
+		"src/web/DeleteWorkspaceDialog.tsx",
+		"src/web/AddWorkspaceDialog.tsx",
+		"docs/ux-audit.txt",
+		"scratch/notes.md",
+		"scratch/fixtures.json",
+	],
 	reason: "commit or stash the changes first",
 };
 

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { basename, join } from "node:path";
 import type { RegisteredProject } from "#lib/wire/protocol";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+import { slugifyWorktreeName } from "#lib/wire/worktree-name";
 import type { GitRunner } from "../discovery";
 import { Registry, type RegistryEntry } from "../registry";
 import type { SpawnSupervisor } from "../supervisor";
@@ -15,7 +16,6 @@ import {
 	registerProjectMainEntry,
 	registerWorktreeEntry,
 	resolveBaseRef,
-	slugifyWorktreeName,
 	WorktreeBranchCheckedOutError,
 	WorktreeDirtyError,
 	WorktreeProbeFailedError,
@@ -68,7 +68,7 @@ function projectFor(repoPath: string, projectId = "p1"): RegisteredProject {
 	return { projectId, path: repoPath, name: repoPath.split("/").pop()!, addedAt: 0 };
 }
 
-function worktreeEntry(path: string, repoPath?: string): RegistryEntry {
+function worktreeEntry(path: string, repoPath?: string, branchCreated?: boolean): RegistryEntry {
 	return {
 		daemonId: "d1",
 		name: basename(path),
@@ -83,6 +83,7 @@ function worktreeEntry(path: string, repoPath?: string): RegistryEntry {
 			projectId: "p1",
 			desiredState: "stopped",
 			...(repoPath !== undefined ? { source: { local: repoPath } } : {}),
+			...(branchCreated !== undefined ? { branchCreatedByOmpWeb: branchCreated } : {}),
 		},
 	};
 }
@@ -342,6 +343,8 @@ describe("worktreeDeleteInfo", () => {
 		expect(info.branch).toBe("clean");
 		expect(info.merged).toBe(true); // no commits: tip is the base's tip
 		expect(info.unpushed).toBe(false); // no upstream: unknown → false
+		expect(info.hasUpstream).toBe(false); // no upstream: remote state unknown
+		expect(info.branchOwned).toBe(false); // registered without the create flag
 	});
 
 	test("dirty worktree reports counts and a refusal reason", async () => {
@@ -354,6 +357,7 @@ describe("worktreeDeleteInfo", () => {
 		expect(info.linked).toBe(true);
 		expect(info.dirty).toBe(true);
 		expect(info.git?.untracked).toBe(1);
+		expect(info.files).toEqual(["scratch.txt"]);
 		expect(info.reason).toBe("worktree has uncommitted changes");
 	});
 
@@ -397,6 +401,25 @@ describe("worktreeDeleteInfo", () => {
 		expect(info.branch).toBe("feat");
 		expect(info.merged).toBe(false); // feat is not reachable from main
 		expect(info.unpushed).toBe(true); // 1 commit ahead of origin/main
+		expect(info.hasUpstream).toBe(true);
+	});
+
+	test("branchOwned is true only for a branch omp-web created", async () => {
+		const repo = tempDir("omp-web-worktrees-");
+		await makeRepo(repo);
+		const ws = tempDir("omp-web-worktrees-");
+		await gitOk(repo, ["branch", "existing"]);
+		const attached = await createWorktree(projectFor(repo), "att", {
+			workspaceDir: ws,
+			existingBranch: "existing",
+		});
+		const created = await createWorktree(projectFor(repo), "own", { workspaceDir: ws });
+		expect((await worktreeDeleteInfo(worktreeEntry(attached.path, repo, false))).branchOwned).toBe(
+			false,
+		);
+		expect((await worktreeDeleteInfo(worktreeEntry(created.path, repo, true))).branchOwned).toBe(
+			true,
+		);
 	});
 
 	test("missing path refuses deletion with a not-found reason", async () => {

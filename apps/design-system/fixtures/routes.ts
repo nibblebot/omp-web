@@ -15,7 +15,7 @@ import {
 	transcriptPage,
 } from "./tx";
 import { FIXTURE_NOW } from "./session";
-import { rosterFsBrowse } from "./roster-routes";
+import { rosterFsBrowse, rosterRecentRoots } from "./roster-routes";
 import { answerCommand, eventsResponse } from "./command-bus";
 
 /**
@@ -287,6 +287,11 @@ export const fixtureRoutes: FixtureRoute[] = [
 		method: "GET",
 		path: "/ctl/fs/browse",
 		respond: ({ query }) => rosterFsBrowse(query.get("path")),
+	},
+	{
+		method: "GET",
+		path: "/ctl/fs/recent-roots",
+		respond: () => rosterRecentRoots,
 	},
 	{
 		method: "POST",

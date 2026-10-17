@@ -130,6 +130,26 @@ export function resumeDaemonSession(daemonId: string, sessionFile: string): Prom
 }
 
 /**
+ * Attach `daemonId` for a panel that opens once the daemon is live (Open
+ * review). Resolves true when the panel should open. A superseded attach is
+ * never an error: when another session took over meanwhile, the attach only
+ * still counts if THIS daemon is now the attached session (the same rule as
+ * switchSessionRetry); otherwise the user has moved on and the panel stays closed.
+ */
+export function attachForPanel(daemonId: string): Promise<boolean> {
+	return attachSession(daemonId).then(
+		() => true,
+		(err: unknown) => {
+			if (!isSessionSwitchSupersession(err)) {
+				setState("error", String(err));
+				return false;
+			}
+			return state.currentSessionId === daemonId;
+		},
+	);
+}
+
+/**
  * Switch to `sessionFile`, retrying once when the attach's own supersession
  * swept the first call. The rejection means the daemon JUST became attached
  * (our own pick), so the retry posts to the now-current session and settles

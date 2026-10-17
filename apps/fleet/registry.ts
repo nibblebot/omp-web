@@ -156,6 +156,8 @@ export interface WorkspaceRecord {
 	deletion?: WorkspaceDeletion;
 	/** Persisted callback enrollment (digest only). Absent = not enrolled. */
 	enrollment?: WorkspaceEnrollment;
+	/** Local worktrees: omp-web created this worktree's branch (`worktree add -b`). Absent = attached to a pre-existing branch. */
+	branchCreatedByOmpWeb?: boolean;
 }
 
 /** A roster entry: DaemonEntry plus fleet-side registration data. */

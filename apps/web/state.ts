@@ -396,6 +396,9 @@ export const [state, setState] = createStore({
 	// Settings model (getSettings/setSetting + settings_changed frames).
 	settingsModel: null as SettingsModel | null,
 	settingsLoading: false,
+	// Settings tab the next settings sheet opens on (set by "Configure providers");
+	// the sheet clears it on mount. Null = the default tab.
+	settingsTab: null as string | null,
 	// Fleet edge roster (roster frame). Patched in place by
 	// daemon_status frames; NOT cleared by resetSessionView (it is
 	// fleet-scoped, not session-scoped). Entries carry projectId

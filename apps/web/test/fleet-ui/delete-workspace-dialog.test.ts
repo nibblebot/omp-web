@@ -51,6 +51,18 @@ const UNPROVEN: WorktreeDeleteInfo = {
 	reason: "worktree git state could not be read; deleting is refused",
 };
 
+const DIRTY: WorktreeDeleteInfo = {
+	type: "worktree_delete_info",
+	daemonId: TARGET,
+	linked: true,
+	dirty: true,
+	branch: "feat/dirty",
+	merged: false,
+	unpushed: false,
+	git: { added: 0, modified: 2, deleted: 0, untracked: 3, linesAdded: 1, linesDeleted: 0 },
+	reason: "commit or stash the changes first",
+};
+
 /** Render the dialog with `evidence` as the target's guard evidence. */
 function renderDialog(evidence: WorktreeDeleteInfo): string {
 	setState({ deleteWorkspaceTarget: TARGET, worktreeDeleteInfo: { [TARGET]: evidence } });
@@ -71,5 +83,34 @@ describe("DeleteWorkspaceDialog guard evidence", () => {
 		expect(html).toContain(UNPROVEN.reason!);
 		expect(html).not.toContain("danger-confirm-btn");
 		expect(html).toContain("Cancel</button>");
+	});
+
+	test("dirty evidence lists the changed files, offers Open review, and keeps Delete disabled", () => {
+		const html = renderDialog({
+			...DIRTY,
+			files: ["src/a.ts", "src/b.ts"],
+			git: { added: 0, modified: 2, deleted: 0, untracked: 3, linesAdded: 1, linesDeleted: 0 },
+		});
+		expect(html).toContain("worktree-dirty-files");
+		expect(html).toContain("src/a.ts");
+		expect(html).toContain("src/b.ts");
+		expect(html).toContain("3 more not listed");
+		expect(html).toContain("Open review</button>");
+		expect(html).toMatch(/<button[^>]*disabled[^>]*>Delete worktree/);
+	});
+
+	test("branch hint names the owner and states only what is known about the remote", () => {
+		const owned = renderDialog({ ...CLEAN, branchOwned: true, hasUpstream: false });
+		expect(owned).toContain("created by omp-web; merged, no upstream");
+		expect(owned).not.toContain("merged and pushed");
+		const pushed = renderDialog({ ...CLEAN, branchOwned: false, hasUpstream: true });
+		expect(pushed).toContain("existing branch; merged and pushed");
+	});
+
+	test("branch deletion is pre-checked only for a branch omp-web created", () => {
+		const owned = renderDialog({ ...CLEAN, branchOwned: true });
+		expect(owned).toMatch(/type="checkbox"[^>]*checked/);
+		const existing = renderDialog({ ...CLEAN, branchOwned: false });
+		expect(existing).not.toMatch(/type="checkbox"[^>]*checked/);
 	});
 });

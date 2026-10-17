@@ -101,7 +101,7 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { expandTilde, resolveConfigPath } from "../apps/fleet/config";
 import { offerFirstRunSetup } from "../apps/fleet/first-run";
 import { resolveOmpBinary } from "../apps/fleet/omp-check";
-import { slugifyWorktreeName } from "../apps/fleet/worktrees";
+import { slugifyWorktreeName } from "../lib/wire/worktree-name";
 import { isInteractiveDesktop } from "../lib/platform/open-browser";
 
 const ROOT = join(import.meta.dir, "..");

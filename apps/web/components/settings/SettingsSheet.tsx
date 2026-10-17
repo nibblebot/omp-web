@@ -9,7 +9,7 @@ import {
 	type SettingsTabMeta,
 } from "../../prefs/settings-tabs";
 import { authSnapshot } from "../../store/auth";
-import { refreshSettings, state } from "../../state";
+import { refreshSettings, setState, state } from "../../state";
 import { SearchIcon } from "../ui/icons";
 import { Modal } from "../ui/Modal";
 import { FeaturesSettings } from "./FeaturesSettings";
@@ -31,10 +31,13 @@ import { WebUiSettings } from "./WebUiSettings";
 export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 	// `/settings <query>` opens with the search pre-filled (state.settingsQuery).
 	const [query, setQuery] = createSignal(state.settingsQuery);
-	const [activeTab, setActiveTab] = createSignal(DEFAULT_SETTINGS_TAB_ID);
+	const [activeTab, setActiveTab] = createSignal(state.settingsTab ?? DEFAULT_SETTINGS_TAB_ID);
 	let bodyRef: HTMLDivElement | undefined;
 
-	onMount(() => refreshSettings());
+	onMount(() => {
+		setState("settingsTab", null);
+		void refreshSettings();
+	});
 
 	const model = () => state.settingsModel;
 	const tabs = () => visibleSettingsTabs(model());

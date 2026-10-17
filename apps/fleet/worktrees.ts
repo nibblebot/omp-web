@@ -26,19 +26,11 @@ import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
 import type { ProjectBranch, ProjectEntry, RegisteredProject } from "#lib/wire/protocol";
+import { slugifyWorktreeName } from "#lib/wire/worktree-name";
 import { probeGitState, validateProjectPath } from "./discovery";
 import type { GitRunner } from "./discovery";
 import type { Registry, RegistryEntry } from "./registry";
 import type { SpawnSupervisor } from "./supervisor";
-
-/** Lowercase a worktree name; runs of non-alphanumerics become `-`, edges trimmed. */
-export function slugifyWorktreeName(name: string): string {
-	const slug = name
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return slug === "" ? "worktree" : slug;
-}
 
 /** Map a repo realpath + worktree name to its managed path under workspaceDir. */
 export function managedWorktreePath(
@@ -414,6 +406,12 @@ export interface WorktreeDeleteInfo {
 	merged?: boolean;
 	/** True when the branch has commits not in its upstream (false when no upstream). */
 	unpushed?: boolean;
+	/** True when the branch tracks an upstream; false means the remote state is unknown, not pushed. */
+	hasUpstream?: boolean;
+	/** True when omp-web created this branch (`worktree add -b`); the delete dialog pre-checks branch deletion only then. */
+	branchOwned?: boolean;
+	/** Changed paths from `git status --porcelain` (first 100; the counts stay exact). Absent when clean. */
+	files?: string[];
 	/** Why deletion would be refused (not linked / dirty / missing path / unreadable git state). */
 	reason?: string;
 }
@@ -462,12 +460,16 @@ export async function worktreeDeleteInfo(
 		counts.added > 0 || counts.modified > 0 || counts.deleted > 0 || counts.untracked > 0;
 	const info: WorktreeDeleteInfo = { linked: true, dirty };
 	info.git = { ...state.git };
+	if (dirty) info.files = await dirtyFiles(resolved, opts.probeExec);
 	if (state.branch !== undefined) {
 		info.branch = state.branch;
+		info.branchOwned = entry.workspace.branchCreatedByOmpWeb === true;
 		const mainPath = await mainRepoOf(resolved);
 		if (mainPath !== null && realpathOf(mainPath) !== resolved) {
 			info.merged = await branchMergedInto(mainPath, state.branch, await resolveBaseRef(mainPath));
-			info.unpushed = await branchUnpushed(resolved);
+			const upstream = await branchUpstream(resolved);
+			info.hasUpstream = upstream.hasUpstream;
+			info.unpushed = upstream.unpushed;
 		}
 	}
 	if (dirty) info.reason = "worktree has uncommitted changes";
@@ -489,16 +491,34 @@ async function branchMergedInto(
 	return false;
 }
 
+/** Changed paths from `git status --porcelain=v1` (first 100; counts are exact elsewhere). */
+async function dirtyFiles(worktreePath: string, exec: GitRunner = runGit): Promise<string[]> {
+	const result = await exec(["status", "--porcelain=v1"], worktreePath).catch(() => null);
+	if (!result || result.exitCode !== 0) return [];
+	return result.stdout
+		.split("\n")
+		.filter((line) => line.length > 3)
+		.map((line) => line.slice(3))
+		.slice(0, 100);
+}
+
 /**
- * True when the worktree's branch has commits not in its upstream
- * (`git rev-list --count @{u}..HEAD`). A branch with NO upstream reports
- * false (the push state is unknown).
+ * Upstream state of the worktree's branch. `hasUpstream` is false when the
+ * branch tracks nothing (remote state unknown, never "pushed"); `unpushed`
+ * counts commits not in `@{u}` and is false without an upstream.
  */
-async function branchUnpushed(worktreePath: string): Promise<boolean> {
+async function branchUpstream(
+	worktreePath: string,
+): Promise<{ hasUpstream: boolean; unpushed: boolean }> {
+	const upstream = await runGit(
+		["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+		worktreePath,
+	);
+	if (upstream.exitCode !== 0) return { hasUpstream: false, unpushed: false };
 	const result = await runGit(["rev-list", "--count", "@{u}..HEAD"], worktreePath);
-	if (result.exitCode !== 0) return false;
+	if (result.exitCode !== 0) return { hasUpstream: true, unpushed: false };
 	const count = Number.parseInt(result.stdout.trim(), 10);
-	return Number.isFinite(count) && count > 0;
+	return { hasUpstream: true, unpushed: Number.isFinite(count) && count > 0 };
 }
 
 /** Deletion was refused: the worktree has uncommitted changes (409-class, no --force in v1). */
@@ -598,7 +618,7 @@ export async function registerWorktreeEntry(
 	supervisor: SpawnSupervisor,
 	project: RegisteredProject,
 	worktreePath: string,
-	opts: { start?: boolean } = {},
+	opts: { start?: boolean; branchCreated?: boolean } = {},
 ): Promise<RegistryEntry> {
 	if (opts.start) {
 		// supervisor.spawn creates the entry (worktreeOf auto-resolved from
@@ -613,6 +633,7 @@ export async function registerWorktreeEntry(
 				projectId: project.projectId,
 				source: { local: project.path },
 				desiredState: "running",
+				branchCreatedByOmpWeb: opts.branchCreated === true,
 			},
 		});
 		return registry.get(entry.daemonId) ?? entry;
@@ -633,6 +654,7 @@ export async function registerWorktreeEntry(
 			projectId: project.projectId,
 			source: { local: project.path },
 			desiredState: "stopped",
+			branchCreatedByOmpWeb: opts.branchCreated === true,
 		},
 		labels: [],
 		mode: "spawned",

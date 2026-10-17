@@ -1,6 +1,7 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import { createDirPicker } from "../../../fleet-ui/dir-picker";
-import { fetchCtlTemplates, sendAddProject, setState } from "../../../state";
+import { fetchCtlTemplates, sendAddProject, setState, state } from "../../../state";
+import { fetchRecentRoots } from "../../../store/projects";
 import { Modal } from "../../ui/Modal";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { OnboardingProgress, useOnboardingPipeline } from "./onboarding";
@@ -10,12 +11,13 @@ const STAGES = ["registering project", "spawning daemon", "attaching session"];
 
 /**
  * Add-repo modal (Phase 6): register a first-class project with the fleet by
- * PICKING A DIRECTORY in the embedded DirectoryPicker, with no freeform path input
+ * typing a path (autocompleted from registered Git roots) or browsing to a
+ * directory in the DirectoryPicker,
  * and no root-scanned discovery list (fleet roots are gone edge-side; the
  * `projects` frame now carries only unregistered worktrees, which belong to
  * the worktree modal). The retired SpawnPicker's template/labels fields live
  * in the collapsed advanced section here. "Start a session now" (default
- * off) spawns a daemon on the main checkout; the modal then tracks the
+ * on) spawns a daemon on the main checkout; the modal then tracks the
  * pipeline (register → spawn → attach) so the session-picker gate can open
  * after attach settles. Submit needs a picked directory whose git bit is not
  * known-false: a known non-git dir shows "not a git repository" and disables
@@ -26,7 +28,9 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 	const [templatesError, setTemplatesError] = createSignal<string | null>(null);
 	const [template, setTemplate] = createSignal("local");
 	const [labels, setLabels] = createSignal("");
-	const [start, setStart] = createSignal(false);
+	const [start, setStart] = createSignal(true);
+	/** Recent Git roots (null until loaded); registered roots are always offered too. */
+	const [recentRoots, setRecentRoots] = createSignal<string[] | null>(null);
 	const [path, setPath] = createSignal<string | null>(null);
 	const [pathGit, setPathGit] = createSignal<boolean | null>(null);
 	const picker = createDirPicker();
@@ -45,6 +49,9 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 				if (list.length > 0 && !list.includes(template())) setTemplate(list[0]);
 			})
 			.catch((err) => setTemplatesError(err instanceof Error ? err.message : String(err)));
+		void fetchRecentRoots()
+			.then((res) => setRecentRoots(res.roots.map((r) => r.path)))
+			.catch(() => setRecentRoots([]));
 	});
 
 	/** DirectoryPicker footer select: record the path plus its git bit as the picker
@@ -108,30 +115,56 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 			</Show>
 			<Show when={!busy()}>
 				<div class="project-form">
-					<div class="picker-group-name">Project directory</div>
-					<DirectoryPicker picker={picker} onSelect={pick} />
-					<Show when={path() !== null}>
-						<div class="dirpick-chosen">Selected: {path()}</div>
-					</Show>
+					<label class="daemon-detail-label" for="project-path">
+						Repository path
+					</label>
+					<input
+						id="project-path"
+						class="picker-filter project-path"
+						list="project-path-options"
+						placeholder="/home/you/src/repo"
+						value={path() ?? ""}
+						onInput={(e) => {
+							setPath(e.currentTarget.value.trim() || null);
+							setPathGit(null);
+						}}
+						autocomplete="off"
+						spellcheck={false}
+					/>
+					<datalist id="project-path-options">
+						<For
+							each={[
+								...new Set([
+									...(recentRoots() ?? []),
+									...state.registeredProjects.map((p) => p.path),
+								]),
+							]}
+						>
+							{(p) => <option value={p} />}
+						</For>
+					</datalist>
+					<details class="project-browse">
+						<summary>Browse folders</summary>
+						<DirectoryPicker picker={picker} onSelect={pick} />
+					</details>
 					<Show when={notGit()}>
 						<div class="msg-notice project-path-error">not a git repository</div>
 					</Show>
 					<details class="project-advanced">
 						<summary>Advanced</summary>
-						<label class="daemon-detail-label" for="project-template">
-							template
-						</label>
-						<select
-							id="project-template"
-							class="project-template"
-							value={template()}
-							onChange={(e) => setTemplate(e.currentTarget.value)}
-						>
-							<Show when={templates().length === 0 && templatesError() === null}>
-								<option value="local">local</option>
-							</Show>
-							<For each={templates()}>{(t) => <option value={t}>{t}</option>}</For>
-						</select>
+						<Show when={templates().length > 1}>
+							<label class="daemon-detail-label" for="project-template">
+								template
+							</label>
+							<select
+								id="project-template"
+								class="project-template"
+								value={template()}
+								onChange={(e) => setTemplate(e.currentTarget.value)}
+							>
+								<For each={templates()}>{(t) => <option value={t}>{t}</option>}</For>
+							</select>
+						</Show>
 						<Show when={templatesError()}>
 							{(err) => <div class="msg-notice project-template-error">{err()}</div>}
 						</Show>
@@ -147,7 +180,7 @@ export const AddProjectDialog: Component<{ onClose: () => void }> = (props) => {
 							spellcheck={false}
 						/>
 					</details>
-					<label class="project-start">
+					<label class="project-start-now">
 						<input
 							type="checkbox"
 							checked={start()}

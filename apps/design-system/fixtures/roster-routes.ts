@@ -1,4 +1,4 @@
-import type { FsBrowseDir, FsBrowseResult } from "../../web/store/projects";
+import type { FsBrowseDir, FsBrowseResult, RecentRootsResult } from "../../web/store/projects";
 
 /**
  * Route answers for the roster stories. Kept apart from roster.ts because
@@ -41,3 +41,11 @@ export function rosterFsBrowse(path: string | null): FsBrowseResult | Response {
 		truncated: false,
 	};
 }
+
+/** Answer for GET /ctl/fs/recent-roots: canned recent Git roots; the registered one is flagged. */
+export const rosterRecentRoots: RecentRootsResult = {
+	roots: [
+		{ path: OMP_WEB, registered: true },
+		{ path: `${HOME}/Repos/scratch`, registered: false },
+	],
+};

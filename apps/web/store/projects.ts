@@ -315,3 +315,18 @@ export async function fetchFsBrowse(path?: string): Promise<FsBrowseResult> {
 	);
 	return (await res.json()) as FsBrowseResult;
 }
+
+/** GET /ctl/fs/recent-roots answer: Git roots of recent omp sessions, newest first, then registered roots. */
+export interface RecentRootsResult {
+	roots: Array<{ path: string; registered: boolean }>;
+}
+
+/** Recent Git roots for the Add-project path autocomplete (read-only fleet route). */
+export async function fetchRecentRoots(): Promise<RecentRootsResult> {
+	const res = await ctlFetch(
+		"/ctl/fs/recent-roots",
+		"fleet control plane unreachable, no fleet server on :4722",
+		(s) => `recent roots failed (${s})`,
+	);
+	return (await res.json()) as RecentRootsResult;
+}

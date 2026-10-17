@@ -2,6 +2,8 @@ import type { DaemonEntry } from "#lib/wire/protocol";
 import { createEffect, createSignal, For, Show, type Component } from "solid-js";
 import { sendDeleteWorktree, setState, state } from "../../../state";
 import { Modal } from "../../ui/Modal";
+import { reviewAvailable, unavailableReason } from "../../../store/review";
+import { attachForPanel } from "../../../store/roster";
 
 // Delete-workspace confirm (Phase 5 close-out + P8.3): one self-mounting
 // dialog for BOTH workspace kinds, dispatched on the target daemon's kind.
@@ -88,10 +90,12 @@ export const DeleteWorkspaceDialog: Component = () => {
 		}
 	});
 
-	/** Evidence-backed checkbox default: delete the branch only when merged
-	 *  and (pushed or no upstream); server refuses `-d` on unmerged anyway. */
+	/** Evidence-backed checkbox default: delete the branch only when omp-web
+	 *  created it (`branchOwned`) and it is merged with nothing unpushed. Branches
+	 *  omp-web did not create stay unchecked; the server refuses `-d` on unmerged. */
 	const effectiveDeleteBranch = () =>
-		deleteBranch() ?? (info()?.merged === true && info()?.unpushed !== true);
+		deleteBranch() ??
+		(info()?.branchOwned === true && info()?.merged === true && info()?.unpushed !== true);
 
 	const dirtyKinds = () => {
 		const g = info()?.git;
@@ -123,6 +127,22 @@ export const DeleteWorkspaceDialog: Component = () => {
 		setState("deleteWorkspaceTarget", null);
 	};
 
+	/** Closes the delete dialog and opens the git review for this worktree.
+	 *  Review reads the active session's repository, so attach it first. */
+	const openReview = () => {
+		const id = target();
+		if (id === null) return;
+		const attached = id === state.currentSessionId;
+		close();
+		if (attached) {
+			setState("modal", "git");
+			return;
+		}
+		void attachForPanel(id).then((ok) => {
+			if (ok) setState("modal", "git");
+		});
+	};
+
 	const confirmDelete = () => {
 		const id = target();
 		if (id === null) return;
@@ -136,10 +156,13 @@ export const DeleteWorkspaceDialog: Component = () => {
 
 	const branchHint = () => {
 		const i = info();
-		if (i?.merged === true && i?.unpushed !== true) return "merged and pushed";
-		if (i?.merged === true) return "merged but unpushed";
-		if (i?.unpushed === false) return "pushed but unmerged";
-		return "unmerged";
+		const owner = i?.branchOwned === true ? "created by omp-web" : "existing branch";
+		if (i?.merged === true) {
+			if (i.unpushed === true) return `${owner}; merged but unpushed`;
+			return `${owner}; ${i.hasUpstream === true ? "merged and pushed" : "merged, no upstream"}`;
+		}
+		if (i?.hasUpstream === true && i.unpushed !== true) return `${owner}; pushed but unmerged`;
+		return `${owner}; unmerged`;
 	};
 
 	return (
@@ -217,6 +240,30 @@ export const DeleteWorkspaceDialog: Component = () => {
 							. Deleting is refused while the worktree is dirty
 							{info()!.reason ? `: ${info()!.reason}` : ""}.
 						</p>
+						<Show when={(info()!.files?.length ?? 0) > 0}>
+							<ul class="worktree-dirty-files" aria-label="Changed files">
+								<For each={info()!.files}>
+									{(path) => (
+										<li>
+											<span class="worktree-evidence-path">{path}</span>
+										</li>
+									)}
+								</For>
+							</ul>
+						</Show>
+						<Show when={dirtyTotal() > (info()!.files?.length ?? 0)}>
+							<p class="worktree-branch-hint">
+								{dirtyTotal() - (info()!.files?.length ?? 0)} more not listed
+							</p>
+						</Show>
+						<div class="ask-actions">
+							<button type="button" disabled={!reviewAvailable("git")} onClick={openReview}>
+								Open review
+							</button>
+						</div>
+						<Show when={!reviewAvailable("git")}>
+							<p class="danger-confirm-body">{unavailableReason("git")}</p>
+						</Show>
 					</Show>
 					<Show when={info() !== undefined && info()!.linked && !info()!.dirty && unproven()}>
 						<p class="danger-confirm-body">

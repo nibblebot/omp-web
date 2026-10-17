@@ -698,6 +698,7 @@ class FleetServerImpl implements FleetServer {
 			logStore: this.logStore ?? undefined,
 			providerProfiles: publicProfileCatalog(config),
 			serveUi,
+			sessionsDir: statsConfig?.sessionsDir,
 		});
 		this.edge = edge;
 		// Unattached settings service (the fleet control plane's /ctl/settings): lazy
@@ -1879,6 +1880,7 @@ class FleetServerImpl implements FleetServer {
 			try {
 				entry = await registerWorktreeEntry(this.registry, this.supervisor, project, created.path, {
 					start,
+					branchCreated: created.baseRef !== undefined,
 				});
 			} catch (err) {
 				throw new HttpError(
