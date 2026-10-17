@@ -122,10 +122,9 @@ export const BtwSheet: Component<{ onClose: () => void }> = (props) => {
 	};
 
 	const promote = (id: string): void => {
-		void promoteBtw(id).then((ok) => {
-			if (ok) selectBtwRecord(id);
-			refreshBtwHistory();
-		});
+		// The promoted pair now belongs to the branched session, so the old
+		// selection is dropped by the refresh instead of re-fetched.
+		void promoteBtw(id).then(() => refreshBtwHistory());
 	};
 
 	const promoteBlockedReason = (): string => {

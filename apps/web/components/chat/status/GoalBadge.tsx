@@ -9,7 +9,7 @@ import { StatusSegment } from "./StatusSegment";
  * marker. Click opens the Goal dialog, the single goals surface.
  */
 export const GoalBadge = () => (
-	<Show when={state.goal}>
+	<Show when={state.goalModeState?.goal}>
 		{(g) => (
 			<StatusSegment
 				class="badge goal-badge"
@@ -18,13 +18,13 @@ export const GoalBadge = () => (
 			>
 				<span class="goal-badge-label">goal:</span>
 				<span class="goal-badge-objective">{g().objective}</span>
-				<Show when={state.goalModeState?.goal?.status === "paused"}>
+				<Show when={g().status === "paused"}>
 					<span class="goal-badge-state">paused</span>
 				</Show>
-				<Show when={state.goalModeState?.goal?.tokenBudget}>
+				<Show when={g().tokenBudget}>
 					{(budget) => (
 						<span class="goal-badge-budget">
-							{formatTokens(state.goalModeState?.goal?.tokensUsed ?? 0)}/{formatTokens(budget())}
+							{formatTokens(g().tokensUsed ?? 0)}/{formatTokens(budget())}
 						</span>
 					)}
 				</Show>

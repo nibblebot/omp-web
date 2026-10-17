@@ -15,7 +15,6 @@ export default defineStory({
 				seedSubagents(
 					{},
 					{
-						goal: { objective: "Ship the subagent design-system stories" },
 						goalModeState: goalActive,
 					},
 				),
@@ -28,7 +27,6 @@ export default defineStory({
 				seedSubagents(
 					{},
 					{
-						goal: { objective: "Migrate the roster filters to the shared picker" },
 						goalModeState: goalPaused,
 					},
 				),
@@ -37,7 +35,7 @@ export default defineStory({
 		{
 			name: "No goal",
 			description: "Renders nothing until a goal is set.",
-			seed: () => seedSubagents({}, { goal: null, goalModeState: undefined }),
+			seed: () => seedSubagents({}, { goalModeState: undefined }),
 			render: () => <GoalBadge />,
 		},
 	],

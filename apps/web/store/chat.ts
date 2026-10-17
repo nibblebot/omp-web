@@ -716,7 +716,6 @@ export function applyEvent(e: AgentSessionEvent): void {
 			// to deriving a minimal active state from the goal payload.
 			const next = applyGoalUpdated(e);
 			setState("goalModeState", next.goalModeState);
-			setState("goal", next.goal);
 			break;
 		}
 		case "auto_retry_start":

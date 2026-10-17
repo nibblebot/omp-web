@@ -1,6 +1,7 @@
 import { MainHeader } from "../../../web/components/app/MainHeader";
 import { SessionTitle, ToolCardsMenu } from "../../../web/components/chat";
 import { screenSessionSeed } from "../../fixtures/screen";
+import { goalActive } from "../../fixtures/subagents";
 import { subagentMap } from "../../fixtures/session";
 import { defineStory } from "../../registry";
 
@@ -23,7 +24,7 @@ export default defineStory({
 				connected: true,
 				view: "chat",
 				sidebarVisible: false,
-				goal: { objective: "Ship the design system showcase" },
+				goalModeState: goalActive,
 				subagents: subagentMap,
 			},
 			render: () => <MainHeader title={<SessionTitle />} actions={<ToolCardsMenu />} session />,
