@@ -73,6 +73,7 @@ import {
 } from "./sse-delivery";
 import { clearSubagents } from "./subagent-mirror";
 import {
+	pendingUiRequestFrames,
 	rejectEntryUiRequests,
 	rejectStreamUiRequests,
 	setCallbackBrowserStreamCount,
@@ -309,6 +310,8 @@ function primingFrames(
 			state: daemonBroker.buildStateSnapshot(entry.session),
 			stats: entry.session.getSessionStats(),
 		},
+		// A dialog still open must reach a client that attaches after it was sent.
+		...pendingUiRequestFrames(entry),
 		// Current collab status, so a client attaching to a live room sees it immediately.
 		{
 			type: "collab_status",

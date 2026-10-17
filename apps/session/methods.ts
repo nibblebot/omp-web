@@ -74,7 +74,7 @@ import {
 import { createLifecycleMethods } from "./lifecycle-adapter";
 import { createComposerMethods } from "./composer-methods";
 import { createSettingsMethods } from "./settings-methods";
-import { rejectEntryUiRequests } from "./ui-context";
+import { cancelEntryUiRequests, rejectEntryUiRequests } from "./ui-context";
 import { createAnnotationMethods } from "./review-annotations";
 import { createGitReviewMethods } from "./review-git";
 import { createPlanReviewMethods } from "./review-plan";
@@ -321,8 +321,13 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		getQueuedMessages: async (entry) => entry.session.getQueuedMessages(),
 		popLastQueuedMessage: async (entry) => entry.session.popLastQueuedMessage(),
 		clearQueue: async (entry) => entry.session.clearQueue(),
-		abort: (entry) => entry.session.abort({ reason: USER_INTERRUPT_LABEL }),
+		abort: (entry) => {
+			// Stop always cancels a pending ask, even when the SDK's signal never reaches it.
+			cancelEntryUiRequests(entry);
+			return entry.session.abort({ reason: USER_INTERRUPT_LABEL });
+		},
 		abortAndPrompt: async (entry, a) => {
+			cancelEntryUiRequests(entry);
 			await entry.session.abort({ reason: USER_INTERRUPT_LABEL });
 			deps.collab.fireAndForgetPrompt(entry, a[0] as string, a[1] as Images);
 		},

@@ -28,6 +28,7 @@ import type { SessionConfig } from "./config";
 import type { DaemonBroker } from "./daemon-broker";
 import { BOOT_HANDLE, type SessionEntry } from "./session-entry";
 import { broadcast, broadcastTo, notifyEvent } from "./sse-delivery";
+import { cancelEntryUiRequests } from "./ui-context";
 import { handleSubagentLifecycle, handleSubagentProgress } from "./subagent-mirror";
 import { buildUiContext } from "./ui-context";
 
@@ -133,7 +134,10 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 					{ streamingBehavior: "steer", queueChipText: text },
 				);
 			},
-			abort: () => session.abort({ reason: USER_INTERRUPT_LABEL }),
+			abort: () => {
+				cancelEntryUiRequests(entry);
+				return session.abort({ reason: USER_INTERRUPT_LABEL });
+			},
 			listAgents: () => {
 				const refs: CollabAgentRef[] = [];
 				// Main lives in the per-session registry; task subagents register in

@@ -676,10 +676,79 @@ describe("CollabHostAdapter", () => {
 
 		guest.socket.send({ t: "ui-response", reqId: req.request.reqId, value: "B" });
 		const result = await promise!;
-		expect(result).toEqual({ kind: "answered", value: "B" });
+		expect(result).toEqual({ kind: "answered", value: "B", by: "Uli", peer: expect.any(Number) });
 		await waitFor(() =>
 			guest.frames.find((f) => f.t === "ui-request-end" && f.reqId === req.request.reqId),
 		);
+	});
+
+	test("an aborted requestGuestUi ends the guest's dialog and settles unavailable", async () => {
+		const guest = await connectGuest(adapter.status!.link, "Uli");
+		guestSockets.push(guest.socket);
+		await waitForWelcome(guest);
+
+		const controller = new AbortController();
+		const promise = adapter.requestGuestUi(
+			{ kind: "select", title: "Pick", options: ["A", "B"] },
+			controller.signal,
+		);
+		const req = await waitFor(() => guest.frames.find((f) => f.t === "ui-request"));
+		if (req.t !== "ui-request") throw new Error("expected ui-request frame");
+
+		controller.abort();
+		expect(await promise!).toEqual({ kind: "unavailable" });
+		await waitFor(() =>
+			guest.frames.find((f) => f.t === "ui-request-end" && f.reqId === req.request.reqId),
+		);
+	});
+
+	test("the last writable guest leaving settles a pending dialog unavailable", async () => {
+		const guest = await connectGuest(adapter.status!.link, "Uli");
+		guestSockets.push(guest.socket);
+		await waitForWelcome(guest);
+
+		const promise = adapter.requestGuestUi({ kind: "select", title: "Pick", options: ["A", "B"] });
+		await waitFor(() => guest.frames.find((f) => f.t === "ui-request"));
+		guest.socket.close();
+		expect(await promise!).toEqual({ kind: "unavailable" });
+	});
+
+	test("a pending dialog survives one of two writable guests leaving", async () => {
+		const leaver = await connectGuest(adapter.status!.link, "Leaver");
+		const stayer = await connectGuest(adapter.status!.link, "Stayer");
+		guestSockets.push(leaver.socket, stayer.socket);
+		await waitForWelcome(leaver);
+		await waitForWelcome(stayer);
+
+		const promise = adapter.requestGuestUi({ kind: "select", title: "Pick", options: ["A", "B"] });
+		await waitFor(() => leaver.frames.find((f) => f.t === "ui-request"));
+		const req = await waitFor(() => stayer.frames.find((f) => f.t === "ui-request"));
+		if (req.t !== "ui-request") throw new Error("expected ui-request frame");
+		leaver.socket.close();
+		await waitFor(() => (adapter.writableGuestCount === 1 ? true : undefined));
+
+		stayer.socket.send({ t: "ui-response", reqId: req.request.reqId, value: "A" });
+		expect(await promise!).toMatchObject({ kind: "answered", value: "A", by: "Stayer" });
+	});
+
+	test("announceDialogAnswered tells every writable guest except the answerer", async () => {
+		const answerer = await connectGuest(adapter.status!.link, "Answerer");
+		const other = await connectGuest(adapter.status!.link, "Other");
+		guestSockets.push(answerer.socket, other.socket);
+		await waitForWelcome(answerer);
+		await waitForWelcome(other);
+
+		const promise = adapter.requestGuestUi({ kind: "select", title: "Pick", options: ["A"] });
+		const req = await waitFor(() => answerer.frames.find((f) => f.t === "ui-request"));
+		if (req.t !== "ui-request") throw new Error("expected ui-request frame");
+		answerer.socket.send({ t: "ui-response", reqId: req.request.reqId, value: "A" });
+		const result = await promise!;
+		if (result.kind !== "answered") throw new Error("expected an answer");
+
+		adapter.announceDialogAnswered(result.by, result.peer);
+		const told = await waitFor(() => other.frames.find((f) => f.t === "error"));
+		expect(told).toEqual({ t: "error", message: "question answered by Answerer" });
+		expect(answerer.frames.some((f) => f.t === "error")).toBe(false);
 	});
 
 	test("stop sends bye then clears status", async () => {

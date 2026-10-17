@@ -825,8 +825,9 @@ export type SessionScopedFrame =
 	// last target stream closed / the session closed). Ringed like ui_request
 	// so a resuming stream replays the end AFTER the stale request (finding
 	// #16) and every other live tab dismisses the dialog. Mirrors the collab
-	// host's ui-request-end.
-	| { type: "ui_request_end"; id: string }
+	// host's ui-request-end. `answeredBy` names the collab participant whose
+	// answer settled the dialog elsewhere (the host or a writable guest).
+	| { type: "ui_request_end"; id: string; answeredBy?: string }
 	// Collab host status for the attached session (start/stop/live/error/off).
 	| { type: "collab_status"; status: CollabWireStatus };
 

@@ -24,7 +24,14 @@ export interface SessionEntry {
 	slashRuntime: SlashCommandRuntime;
 	pendingUiRequests: Map<
 		string,
-		{ streams: Set<SseConsumer>; resolve: (value: unknown) => void; reject: (err: Error) => void }
+		{
+			streams: Set<SseConsumer>;
+			/** The dialog as sent, so a client that attaches later is primed with it. */
+			method?: string;
+			params?: unknown;
+			resolve: (value: unknown) => void;
+			reject: (err: Error) => void;
+		}
 	>;
 	subagentSnapshots: Map<string, SubagentSnapshot>;
 	transcriptSessionFilesBySubagentId: Map<string, string>;

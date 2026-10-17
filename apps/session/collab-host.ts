@@ -174,7 +174,7 @@ export interface CollabSessionPort {
  * it as a cancel.
  */
 export type CollabGuestUiResult =
-	| { kind: "answered"; value: CollabUiResponseValue }
+	| { kind: "answered"; value: CollabUiResponseValue; by: string; peer: number }
 	| { kind: "unavailable" };
 
 /** Web-visible host status; `null` (and `isLive === false`) when not live. */
@@ -238,6 +238,11 @@ export class CollabHostAdapter {
 		};
 	}
 
+	/** The host's own display name (the web user's name in collab dialogs). */
+	get hostName(): string {
+		return this.#opts.hostName;
+	}
+
 	get isLive(): boolean {
 		return this.#live && !this.#stopped && this.#socket !== null;
 	}
@@ -287,6 +292,21 @@ export class CollabHostAdapter {
 		this.#pendingUi.set(reqId, { request: fullRequest, settle });
 		this.#sendWritablePeers({ t: "ui-request", request: fullRequest });
 		return promise;
+	}
+
+	/**
+	 * Tell every writable guest except `exceptPeer` that someone else answered
+	 * the dialog they just lost; the guest TUI surfaces it as a host message
+	 * (the collab protocol's `ui-request-end` carries no reason).
+	 */
+	announceDialogAnswered(by: string, exceptPeer?: number): void {
+		const socket = this.#socket;
+		if (!socket) return;
+		for (const [peerId, peer] of this.#peers) {
+			if (peer.canWrite && peerId !== exceptPeer) {
+				socket.send({ t: "error", message: `question answered by ${by}` }, peerId);
+			}
+		}
 	}
 
 	#hasWritablePeers(): boolean {
@@ -602,7 +622,7 @@ export class CollabHostAdapter {
 			this.#rejectReadOnly("responding to ask", fromPeer);
 			return;
 		}
-		this.#pendingUi.get(reqId)?.settle({ kind: "answered", value });
+		this.#pendingUi.get(reqId)?.settle({ kind: "answered", value, by: peer.name, peer: fromPeer });
 	}
 
 	#handlePrompt(text: string, images: ImageContent[] | undefined, fromPeer: number): void {
@@ -634,6 +654,12 @@ export class CollabHostAdapter {
 		const name = this.#peers.get(peer)?.name;
 		this.#peers.delete(peer);
 		if (name) this.#port.emitNotice("info", `${name} left the collab session`, "collab");
+		// Dialogs are broadcast to every writable guest, so the remaining
+		// answerers already hold them. With none left, settle them unavailable
+		// so the caller re-routes to the web dialog or ends it.
+		if (!this.#hasWritablePeers()) {
+			for (const pending of [...this.#pendingUi.values()]) pending.settle({ kind: "unavailable" });
+		}
 		this.#opts.onStatusChange?.(this.status);
 		this.#scheduleStateBroadcast();
 	}

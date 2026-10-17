@@ -25,7 +25,12 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent";
 import { AskTool } from "@oh-my-pi/pi-coding-agent/tools/ask";
 import { initSdkTuiGlobals } from "../sdk-tui-globals";
-import { buildUiContext, setCallbackBrowserStreamCount } from "../ui-context";
+import {
+	buildUiContext,
+	cancelEntryUiRequests,
+	pendingUiRequestFrames,
+	setCallbackBrowserStreamCount,
+} from "../ui-context";
 import { setOnFrameTap, streams, type SseConsumer } from "../sse-delivery";
 import type { SessionEntry } from "../session-entry";
 
@@ -95,7 +100,11 @@ async function withBrowserPresence(
 ): Promise<void> {
 	capturedAskDialog = undefined;
 	streams.delete(consumer);
-	if (presence.localStream) streams.add(consumer);
+	if (presence.localStream) {
+		// An earlier test's detach nulls `attached`; re-bind it to this file's session.
+		consumer.attached = "s1";
+		streams.add(consumer);
+	}
 	setCallbackBrowserStreamCount(() => presence.callbackBrowsers);
 	setOnFrameTap(answerAskDialogAsBrowser);
 	try {
@@ -214,5 +223,50 @@ describe("ask tool over the daemon's browser UI context", () => {
 			await expect(runAskTool()).rejects.toThrow("No connected client to answer the UI request");
 			expect(entry.pendingUiRequests.size).toBe(0);
 		});
+	});
+
+	test("Stop cancels a pending ask: the dialog ends and the turn does not hang", async () => {
+		await withBrowserPresence({ localStream: true, callbackBrowsers: 0 }, async () => {
+			const opened: string[] = [];
+			const ended: string[] = [];
+			setOnFrameTap((frame) => {
+				if (frame.type === "ui_request" && frame.method === "askDialog") {
+					opened.push(frame.id);
+					// Stop lands while the browser is still deciding; defer past the broadcast.
+					queueMicrotask(() => cancelEntryUiRequests(entry));
+				}
+				if (frame.type === "ui_request_end") ended.push(frame.id);
+			});
+			await expect(runAskTool()).rejects.toThrow(/cancel/i);
+			expect(opened).toHaveLength(1);
+			expect(ended).toEqual(opened);
+			expect(entry.pendingUiRequests.size).toBe(0);
+		});
+	});
+
+	test("priming replays an open ask to a late client but never browser_ui requests", () => {
+		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+		promise.catch(() => {});
+		entry.pendingUiRequests.set("ui900", {
+			streams: new Set<SseConsumer>(),
+			method: "askDialog",
+			params: { questions: [] },
+			resolve,
+			reject,
+		});
+		entry.pendingUiRequests.set("ui901", {
+			streams: new Set<SseConsumer>(),
+			method: "browser_ui",
+			params: {},
+			resolve,
+			reject,
+		});
+		try {
+			expect(pendingUiRequestFrames(entry)).toEqual([
+				{ type: "ui_request", id: "ui900", method: "askDialog", params: { questions: [] } },
+			]);
+		} finally {
+			entry.pendingUiRequests.clear();
+		}
 	});
 });

@@ -3,12 +3,15 @@ import type {
 	ExtensionAskDialogResult,
 	ExtensionAskDialogResultItem,
 	ExtensionUIContext,
+	ExtensionUIDialogOptions,
 } from "@oh-my-pi/pi-coding-agent";
 import type {
 	CollabUiRequestDraft,
 	CollabUiSelectItem,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import type { CollabHostAdapter } from "./collab-host";
+import type { ServerFrame } from "#lib/wire/protocol";
+import { BROWSER_UI_METHOD } from "#lib/wire/browser-ui-contract";
 import type { SessionEntry } from "./session-entry";
 import { broadcastTo, notifyEvent, streams, type SseConsumer } from "./sse-delivery";
 import { wrapTerminalHooks } from "./browser-ui";
@@ -32,20 +35,139 @@ let nextUiRequestId = 1;
  */
 const COLLAB_UI_FALLTHROUGH = Symbol("collab-ui-fallthrough");
 
+/** The web side of a dialog is unreachable (no client attached, or the last one closed). */
+class WebClientGoneError extends Error {}
+
+/** Dialogs in flight per session, so Stop can cancel them without the SDK's signal. */
+const dialogControllers = new WeakMap<SessionEntry, Set<AbortController>>();
+
 /**
- * The ExtensionUIContext dialog subset, answered by a writable collab guest
- * FIRST (mirroring the TUI's collab-host preference in #runGuestDialog); when
- * no writable guest is attached the request falls through to the /events streams.
+ * Cancel every pending dialog of the session: each resolves `undefined` (the
+ * SDK maps that to "cancelled by the user"), its web dialog is dismissed, and
+ * a collab guest's copy is ended. Stop calls this before aborting the turn, so
+ * a pending ask can never outlive the abort.
  */
-function uiRequest(entry: SessionEntry, method: string, params: unknown): Promise<unknown> {
-	const adapter = entry.collab.adapter;
-	if (adapter?.isLive && adapter.writableGuestCount > 0) {
-		return uiRequestViaCollab(entry, method, params).then((value) => {
-			if (value === COLLAB_UI_FALLTHROUGH) return webUiRequest(entry, method, params);
-			return value;
-		});
+export function cancelEntryUiRequests(entry: SessionEntry): void {
+	for (const controller of dialogControllers.get(entry) ?? []) controller.abort();
+}
+
+/**
+ * The ExtensionUIContext dialog subset. With a writable collab guest attached
+ * the dialog goes to the web host AND every writable guest; the first answer
+ * wins and the losers' dialogs close ("answered by <name>"). A dialog also
+ * ends when the SDK's signal aborts or {@link cancelEntryUiRequests} runs.
+ */
+function uiRequest(
+	entry: SessionEntry,
+	method: string,
+	params: unknown,
+	dialogOptions?: ExtensionUIDialogOptions,
+): Promise<unknown> {
+	const controller = new AbortController();
+	const controllers = dialogControllers.get(entry) ?? new Set<AbortController>();
+	dialogControllers.set(entry, controllers);
+	controllers.add(controller);
+	const outer = dialogOptions?.signal;
+	const onOuterAbort = (): void => controller.abort();
+	if (outer?.aborted) controller.abort();
+	else outer?.addEventListener("abort", onOuterAbort, { once: true });
+	return runDialog(entry, method, params, controller.signal).finally(() => {
+		controllers.delete(controller);
+		outer?.removeEventListener("abort", onOuterAbort);
+	});
+}
+
+interface DialogOutcome {
+	value?: unknown;
+	error?: Error;
+	/** Participant whose answer settled the dialog (collab dialogs only). */
+	by?: string;
+	/** Collab peer id of that participant; absent for the web host. */
+	peer?: number;
+}
+
+function runDialog(
+	entry: SessionEntry,
+	method: string,
+	params: unknown,
+	signal: AbortSignal,
+): Promise<unknown> {
+	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+	if (signal.aborted) {
+		resolve(undefined);
+		return promise;
 	}
-	return webUiRequest(entry, method, params);
+	const live = entry.collab.adapter;
+	const adapter = live?.isLive && live.writableGuestCount > 0 ? live : null;
+	const guestAbort = new AbortController();
+	const route: GuestRoute = { signal: guestAbort.signal };
+	let webId: string | undefined;
+	let webActive = false;
+	let guestActive = false;
+	let settled = false;
+
+	const settle = (outcome: DialogOutcome): void => {
+		if (settled) return;
+		settled = true;
+		signal.removeEventListener("abort", onAbort);
+		guestAbort.abort();
+		const answeredBy =
+			outcome.error === undefined && outcome.value !== undefined ? outcome.by : undefined;
+		// The web host's own answer needs no "answered by" frame; a guest win does.
+		if (webId !== undefined)
+			endWebUiRequest(entry, webId, outcome.peer === undefined ? undefined : answeredBy);
+		if (adapter && answeredBy) adapter.announceDialogAnswered(answeredBy, outcome.peer);
+		if (outcome.error) reject(outcome.error);
+		else resolve(outcome.value);
+	};
+	const onAbort = (): void => settle({ value: undefined });
+	signal.addEventListener("abort", onAbort, { once: true });
+
+	const startWeb = (): void => {
+		if (settled) return;
+		webActive = true;
+		webUiRequest(entry, method, params, (id) => {
+			webId = id;
+		}).then(
+			(value) => {
+				webActive = false;
+				settle({ value, by: adapter?.hostName });
+			},
+			(error: Error) => {
+				webActive = false;
+				// A guest may still answer when the web client merely went away.
+				if (error instanceof WebClientGoneError && guestActive) return;
+				settle({ error });
+			},
+		);
+	};
+	const startGuests = (collab: CollabHostAdapter): void => {
+		guestActive = true;
+		uiRequestViaCollab(collab, method, params, route).then(
+			(value) => {
+				guestActive = false;
+				if (value !== COLLAB_UI_FALLTHROUGH) {
+					settle({ value, by: route.answered?.by, peer: route.answered?.peer });
+				} else if (!webActive) {
+					// No writable guest left (or the dialog is not a collab surface):
+					// re-route to the web dialog, which ends the dialog when there is none.
+					startWeb();
+				}
+			},
+			(error: Error) => {
+				guestActive = false;
+				settle({ error });
+			},
+		);
+	};
+
+	if (adapter) {
+		if (hasBrowserUiClient(entry)) startWeb();
+		startGuests(adapter);
+	} else {
+		startWeb();
+	}
+	return promise;
 }
 
 let callbackBrowserStreamCount: (() => number) | null = null;
@@ -85,13 +207,41 @@ export function webUiRequest(
 	// A callback-only request registers with an empty target set on purpose:
 	// the frame still rides the broadcast mirror to the pair's browsers.
 	if (!hasBrowserUiClient(entry))
-		return Promise.reject(new Error("No connected client to answer the UI request"));
+		return Promise.reject(new WebClientGoneError("No connected client to answer the UI request"));
 	const id = `ui${nextUiRequestId++}`;
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-	entry.pendingUiRequests.set(id, { streams: targets, resolve, reject });
+	entry.pendingUiRequests.set(id, { streams: targets, method, params, resolve, reject });
 	onRegistered?.(id);
 	broadcastTo(entry.handle, { type: "ui_request", id, method, params });
 	return promise;
+}
+
+/** End one pending web dialog as cancelled and dismiss it on every client. No-op once settled. */
+function endWebUiRequest(entry: SessionEntry, id: string, answeredBy?: string): void {
+	const pending = entry.pendingUiRequests.get(id);
+	if (!pending) return;
+	entry.pendingUiRequests.delete(id);
+	pending.resolve(undefined);
+	broadcastTo(entry.handle, {
+		type: "ui_request_end",
+		id,
+		...(answeredBy ? { answeredBy } : {}),
+	});
+}
+
+/**
+ * The open dialogs as `ui_request` frames, for priming a client that attaches
+ * (or reloads) while one is pending: live broadcasts are never replayed to a
+ * fresh stream, so without this a reload mid-ask leaves a turn blocked on a
+ * dialog nobody can see.
+ */
+export function pendingUiRequestFrames(entry: SessionEntry): ServerFrame[] {
+	const frames: ServerFrame[] = [];
+	for (const [id, p] of entry.pendingUiRequests) {
+		if (p.method === undefined || p.method === BROWSER_UI_METHOD) continue;
+		frames.push({ type: "ui_request", id, method: p.method, params: p.params });
+	}
+	return frames;
 }
 
 // Params shapes are fixed by buildUiContext's uiRequest call sites below
@@ -145,19 +295,27 @@ function mapUiMethodToCollab(method: string, params: unknown): CollabUiRequestDr
 	}
 }
 
+/** Per-dialog collab routing: the abort that closes the guests' copy, and who answered last. */
+interface GuestRoute {
+	signal: AbortSignal;
+	answered?: { by: string; peer: number };
+}
+
 /**
  * One collab dialog round-trip. Resolves with the guest's value (undefined =
  * genuine guest cancel) or COLLAB_UI_FALLTHROUGH when the collab channel is
- * unavailable.
+ * unavailable (no writable guest, teardown, or the route's signal aborted).
  */
 async function collabAsk(
 	adapter: CollabHostAdapter,
 	draft: CollabUiRequestDraft,
+	route: GuestRoute,
 ): Promise<unknown> {
-	const request = adapter.requestGuestUi(draft);
+	const request = adapter.requestGuestUi(draft, route.signal);
 	if (!request) return COLLAB_UI_FALLTHROUGH;
 	const result = await request;
 	if (result.kind === "unavailable") return COLLAB_UI_FALLTHROUGH;
+	route.answered = { by: result.by, peer: result.peer };
 	return result.value;
 }
 
@@ -170,6 +328,7 @@ async function collabAsk(
 async function askDialogViaCollab(
 	adapter: CollabHostAdapter,
 	questions: ExtensionAskDialogQuestion[],
+	route: GuestRoute,
 ): Promise<unknown> {
 	const results: ExtensionAskDialogResultItem[] = [];
 	for (let index = 0; index < questions.length; index++) {
@@ -184,22 +343,30 @@ async function askDialogViaCollab(
 				const checkedIndices = q.options
 					.map((option, i) => (selected.has(option.label) ? i : -1))
 					.filter((i) => i >= 0);
-				const choice = await collabAsk(adapter, {
-					kind: "select",
-					title: q.question,
-					options: [...baseOptions, "Other (type your own)", "Next →"],
-					selectionMarker: "checkbox",
-					checkedIndices,
-					markableCount: q.options.length,
-				});
+				const choice = await collabAsk(
+					adapter,
+					{
+						kind: "select",
+						title: q.question,
+						options: [...baseOptions, "Other (type your own)", "Next →"],
+						selectionMarker: "checkbox",
+						checkedIndices,
+						markableCount: q.options.length,
+					},
+					route,
+				);
 				if (choice === COLLAB_UI_FALLTHROUGH || choice === undefined) return choice;
 				if (choice === "Next →") break;
 				if (choice === "Other (type your own)") {
-					const input = await collabAsk(adapter, {
-						kind: "editor",
-						title: q.question,
-						prefill: "",
-					});
+					const input = await collabAsk(
+						adapter,
+						{
+							kind: "editor",
+							title: q.question,
+							prefill: "",
+						},
+						route,
+					);
 					if (input === COLLAB_UI_FALLTHROUGH) return input;
 					// Guest cancelled the Other editor: back to the option list.
 					if (input === undefined) continue;
@@ -211,18 +378,26 @@ async function askDialogViaCollab(
 			}
 		} else {
 			while (true) {
-				const choice = await collabAsk(adapter, {
-					kind: "select",
-					title: q.question,
-					options: [...baseOptions, "Other (type your own)"],
-				});
+				const choice = await collabAsk(
+					adapter,
+					{
+						kind: "select",
+						title: q.question,
+						options: [...baseOptions, "Other (type your own)"],
+					},
+					route,
+				);
 				if (choice === COLLAB_UI_FALLTHROUGH || choice === undefined) return choice;
 				if (choice === "Other (type your own)") {
-					const input = await collabAsk(adapter, {
-						kind: "editor",
-						title: q.question,
-						prefill: "",
-					});
+					const input = await collabAsk(
+						adapter,
+						{
+							kind: "editor",
+							title: q.question,
+							prefill: "",
+						},
+						route,
+					);
 					if (input === COLLAB_UI_FALLTHROUGH) return input;
 					// Guest cancelled the Other editor: re-show the option list.
 					if (input === undefined) continue;
@@ -245,22 +420,21 @@ async function askDialogViaCollab(
 	return { kind: "submit", results };
 }
 
-/** Dialog dispatch through a live collab adapter; COLLAB_UI_FALLTHROUGH when unanswerable there. */
+/** Dialog dispatch to the writable guests; COLLAB_UI_FALLTHROUGH when they cannot answer it. */
 async function uiRequestViaCollab(
-	entry: SessionEntry,
+	adapter: CollabHostAdapter,
 	method: string,
 	params: unknown,
+	route: GuestRoute,
 ): Promise<unknown> {
-	const adapter = entry.collab.adapter;
-	if (!adapter?.isLive) return COLLAB_UI_FALLTHROUGH;
 	if (method === "askDialog") {
 		// Shape fixed by buildUiContext's askDialog call site.
 		const p = params as AskDialogParams;
-		return askDialogViaCollab(adapter, p.questions);
+		return askDialogViaCollab(adapter, p.questions, route);
 	}
 	const draft = mapUiMethodToCollab(method, params);
 	if (!draft) return COLLAB_UI_FALLTHROUGH;
-	const value = await collabAsk(adapter, draft);
+	const value = await collabAsk(adapter, draft, route);
 	if (value === COLLAB_UI_FALLTHROUGH) return value;
 	// confirm answers with Yes/No over the wire; the web contract wants a boolean.
 	if (method === "confirm") return value === "Yes";
@@ -292,7 +466,7 @@ export function rejectStreamUiRequests(
 		p.streams.delete(stream);
 		// A pending request survives while a callback-pair browser is attached.
 		if (p.streams.size === 0 && !hasBrowserUiClient(entry)) {
-			p.reject(new Error(reason));
+			p.reject(new WebClientGoneError(reason));
 			entry.pendingUiRequests.delete(id);
 			broadcastTo(entry.handle, { type: "ui_request_end", id });
 		}
@@ -302,16 +476,20 @@ export function rejectStreamUiRequests(
 /** One context per session: dialog requests and notices route to that session's streams. */
 export function buildUiContext(entry: SessionEntry): ExtensionUIContext {
 	return wrapTerminalHooks(entry, {
-		select: (title, options) =>
-			uiRequest(entry, "select", { title, options }) as Promise<string | undefined>,
-		confirm: async (title, message) =>
-			Boolean(await uiRequest(entry, "confirm", { title, message })),
-		input: (title, placeholder) =>
-			uiRequest(entry, "input", { title, placeholder }) as Promise<string | undefined>,
-		editor: (title, prefill) =>
-			uiRequest(entry, "editor", { title, prefill }) as Promise<string | undefined>,
-		askDialog: (questions) =>
-			uiRequest(entry, "askDialog", { questions }) as Promise<ExtensionAskDialogResult | undefined>,
+		select: (title, options, dialogOptions) =>
+			uiRequest(entry, "select", { title, options }, dialogOptions) as Promise<string | undefined>,
+		confirm: async (title, message, dialogOptions) =>
+			Boolean(await uiRequest(entry, "confirm", { title, message }, dialogOptions)),
+		input: (title, placeholder, dialogOptions) =>
+			uiRequest(entry, "input", { title, placeholder }, dialogOptions) as Promise<
+				string | undefined
+			>,
+		editor: (title, prefill, dialogOptions) =>
+			uiRequest(entry, "editor", { title, prefill }, dialogOptions) as Promise<string | undefined>,
+		askDialog: (questions, dialogOptions) =>
+			uiRequest(entry, "askDialog", { questions }, dialogOptions) as Promise<
+				ExtensionAskDialogResult | undefined
+			>,
 		notify: (message, type) => notifyEvent(entry, message, type ?? "info"),
 	});
 }
