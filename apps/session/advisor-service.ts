@@ -8,6 +8,7 @@
 // `<advisory severity>` stream, not in any dump here. Consumers render
 // severity from live events; the history dump below is deliberately raw.
 
+import { resolveAdvisorRoleSelection } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type { SessionEntry } from "./session-entry";
 
 export interface AdvisorListEntry {
@@ -18,6 +19,8 @@ export interface AdvisorListEntry {
 
 export interface AdvisorOverview {
 	configured: boolean;
+	/** True when the `advisor` model role resolves to an available model (the SDK's no_model check). */
+	roleResolvable: boolean;
 	active: boolean;
 	advisors: AdvisorListEntry[];
 }
@@ -83,6 +86,11 @@ export function getAdvisorOverview(entry: SessionEntry): AdvisorOverview {
 	const overview = entry.session.getAdvisorStatusOverview();
 	return {
 		configured: overview.configured === true,
+		roleResolvable:
+			resolveAdvisorRoleSelection(
+				entry.session.settings,
+				entry.session.modelRegistry.getAvailable(),
+			) !== undefined,
 		active: entry.session.isAdvisorActive(),
 		advisors: (overview.advisors ?? []).map((item) => ({
 			name: String(item.name),

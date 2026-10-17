@@ -54,7 +54,7 @@ export interface FeatureModule {
 type Loader = () => Promise<{ default: FeatureModule }>;
 
 /** Every feature entry is reached only through `import()`, so disabled features are never fetched. */
-const LOADERS: Record<FeatureId, Loader> = {
+export const LOADERS: Record<FeatureId, Loader> = {
 	analysis: () => import("./analysis"),
 	review: () => import("./review"),
 	integrations: () => import("./integrations"),

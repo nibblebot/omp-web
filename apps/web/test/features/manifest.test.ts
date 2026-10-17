@@ -7,6 +7,7 @@ import {
 	featureForModal,
 	type FeatureInfo,
 } from "../../features/manifest";
+import { LOADERS } from "../../features/registry";
 
 /**
  * `FEATURES` is the only feature metadata the entry chunk carries: the
@@ -56,5 +57,14 @@ describe("FEATURES manifest", () => {
 
 	test("no ModalName is claimed by two features", () => {
 		expect(claimedBy((f) => f.modals).filter(([, ids]) => ids.length > 1)).toEqual([]);
+	});
+
+	test("every modal a feature module exports is declared in its manifest entry", async () => {
+		for (const feature of FEATURES) {
+			const { default: mod } = await LOADERS[feature.id]();
+			const declared: readonly string[] = feature.modals;
+			const undeclared = Object.keys(mod.modals ?? {}).filter((name) => !declared.includes(name));
+			expect({ feature: feature.id, undeclared }).toEqual({ feature: feature.id, undeclared: [] });
+		}
 	});
 });

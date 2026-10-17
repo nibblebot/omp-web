@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { createComponent } from "solid-js";
+import { Suspense, createComponent } from "solid-js";
 import { renderToStringAsync } from "solid-js/web";
 import type { ServerFrame } from "#lib/wire/protocol";
 import { AdvisorPanel } from "../../components/subagents/AdvisorPanel";
@@ -10,6 +10,7 @@ import {
 	FakeEventSource,
 	assistantMsg,
 	attached,
+	callResult,
 	dispatch,
 	flushMicrotasks,
 	installJsxShim,
@@ -117,5 +118,87 @@ describe("advisor sheet panel wire requests", () => {
 		} finally {
 			restoreJsxShim();
 		}
+	});
+});
+
+describe("advisor sheet actions follow real state", () => {
+	/** Render the panel, answering each advisorGetStatus read it posts; `overview` is the case under test. */
+	async function renderPanel(overview: unknown): Promise<string> {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		dispatch(attached("session-a"));
+		installJsxShim();
+		try {
+			const html = renderToStringAsync(() =>
+				createComponent(Suspense, {
+					get children() {
+						return createComponent(AdvisorPanel, {});
+					},
+				}),
+			);
+			await flushMicrotasks();
+			const answers: Record<string, unknown> = { overview, warnings: [], stats: {} };
+			for (const c of posted) {
+				if (c.type !== "call" || c.method !== "advisorGetStatus") continue;
+				const section = (c.args?.[0] as { section?: string } | undefined)?.section ?? "overview";
+				dispatch(callResult(c.id, answers[section]));
+			}
+			await flushMicrotasks();
+			return await html;
+		} finally {
+			restoreJsxShim();
+		}
+	}
+
+	test("disabled with an advisor role model: Enable is the only action", async () => {
+		const html = await renderPanel({
+			configured: false,
+			active: false,
+			roleResolvable: true,
+			advisors: [],
+		});
+		expect(html).toMatch(/>enable</);
+		expect(html).not.toMatch(/>disable</);
+		expect(html).not.toMatch(/stop advisories/);
+		expect(html).not.toMatch(/Settings (&gt;|>) Model/);
+	});
+
+	test("disabled without an advisor role model: reason and Settings > Model link, no Enable", async () => {
+		const html = await renderPanel({
+			configured: false,
+			active: false,
+			roleResolvable: false,
+			advisors: [],
+		});
+		expect(html).not.toMatch(/>enable</);
+		expect(html).toMatch(/No model is assigned to the advisor role/);
+		expect(html).toMatch(/Settings (&gt;|>) Model/);
+	});
+
+	test("running: Disable and Stop advisories, no Enable", async () => {
+		const html = await renderPanel({
+			configured: true,
+			active: true,
+			roleResolvable: true,
+			advisors: [{ name: "reviewer", status: "running", yielded: false }],
+		});
+		expect(html).not.toMatch(/>enable</);
+		expect(html).toMatch(/>disable</);
+		expect(html).toMatch(/>stop advisories</);
+		expect(html).not.toMatch(/Settings (&gt;|>) Model/);
+	});
+
+	test("enabled without an advisor role model: reason, link and Disable; no Enable or Stop", async () => {
+		const html = await renderPanel({
+			configured: true,
+			active: false,
+			roleResolvable: false,
+			advisors: [{ name: "reviewer", status: "no_model", yielded: false }],
+		});
+		expect(html).not.toMatch(/>enable</);
+		expect(html).not.toMatch(/stop advisories/);
+		expect(html).toMatch(/>disable</);
+		expect(html).toMatch(/No model is assigned to the advisor role/);
+		expect(html).toMatch(/Settings (&gt;|>) Model/);
 	});
 });

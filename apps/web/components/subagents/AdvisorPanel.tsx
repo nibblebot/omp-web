@@ -1,81 +1,90 @@
 import { createResource, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
-import { call, pushNotice } from "../../state";
+import { openModelSettings } from "../../store/models";
+import { pushNotice } from "../../state";
+import {
+	getAdvisorHistory,
+	getAdvisorOverview,
+	getAdvisorStats,
+	getAdvisorWarnings,
+	setAdvisorEnabled,
+	type AdvisorOverview,
+} from "../../store/subagents-advisor";
 import { ConfirmButton } from "../ui/ConfirmButton";
 
 /**
  * Advisor panel: config/status/transcript for the SDK advisor runtime.
- * Read-only by contract — no composer, no input element. All reads go through
- * the wire methods (advisorGetStatus/advisorConfigure/advisorTranscript in
- * lib/wire/protocol.ts) via casted call() — rejection-tolerant:
- * unknown-method answers render as capability-unavailable, never as empty
- * success. Local DTOs below stay JSON-safe and additive.
+ * Read-only by contract — no composer, no input element. Reads and toggles go
+ * through the advisor store. A server that does not implement a method answers
+ * "Unknown method", which renders as capability-unavailable, never as empty
+ * success.
  */
 
-// Local DTOs (proposed to P0; kept JSON-safe and additive).
-interface AdvisorOverviewEntry {
-	name: string;
-	status: string;
-	yielded?: boolean;
-}
-interface AdvisorOverview {
-	configured: boolean;
-	active: boolean;
-	advisors: AdvisorOverviewEntry[];
-}
-interface AdvisorStats {
-	cost?: number;
-	tokens?: { total?: number };
-	messages?: { total?: number };
-	context?: unknown;
-}
-interface AdvisorHistoryPage {
-	text: string;
-	nextCursor?: string | null;
+interface Unavailable {
+	unavailable: string;
 }
 
-async function tryCall<T>(
-	method: string,
-	args: unknown[],
-): Promise<{ data?: T; unavailable?: string }> {
-	try {
-		return { data: (await call(method as never, args)) as T };
-	} catch (err) {
+/** Maps an unknown-method rejection to a capability-unavailable value; other errors rethrow. */
+function orUnavailable<T>(read: Promise<T>): Promise<T | Unavailable> {
+	return read.catch((err: unknown) => {
 		const message = err instanceof Error ? err.message : String(err);
 		if (message.includes("Unknown method")) return { unavailable: message };
 		throw err;
-	}
+	});
+}
+
+function isUnavailable(value: unknown): value is Unavailable {
+	return typeof value === "object" && value !== null && "unavailable" in value;
+}
+
+/**
+ * Which advisor actions the sheet offers. `configured` in the SDK overview is
+ * the enable flag; `roleResolvable` says whether the advisor model role resolves.
+ */
+export function advisorActions(status: {
+	enabled: boolean;
+	running: boolean;
+	roleResolvable: boolean;
+}): { enable: boolean; disable: boolean; stop: boolean; noModel: boolean } {
+	return {
+		enable: !status.enabled && status.roleResolvable,
+		disable: status.enabled,
+		stop: status.running,
+		noModel: !status.roleResolvable,
+	};
 }
 
 /** Advisor is read-only: this component renders no input element by contract. */
 export const AdvisorPanel: Component = () => {
-	const [overview, { refetch: refetchOverview }] = createResource(
-		async (): Promise<AdvisorOverview | { unavailable: string }> => {
-			const res = await tryCall<AdvisorOverview>("advisorGetStatus", []);
-			return res.data ?? { unavailable: res.unavailable ?? "unknown" };
-		},
+	const [overview, { refetch: refetchOverview }] = createResource(() =>
+		orUnavailable(getAdvisorOverview()),
 	);
-	const [warnings] = createResource(async (): Promise<string[] | { unavailable: string }> => {
-		const res = await tryCall<unknown>("advisorGetStatus", [{ section: "warnings" }]);
-		if (res.data === undefined) return { unavailable: res.unavailable ?? "unknown" };
-		if (Array.isArray(res.data) && res.data.every((entry) => typeof entry === "string"))
-			return res.data;
-		if (res.data !== null && typeof res.data === "object" && "warnings" in res.data) {
-			const warnings = res.data.warnings;
-			if (Array.isArray(warnings) && warnings.every((entry) => typeof entry === "string"))
-				return warnings;
-		}
-		return [];
-	});
-	const [stats] = createResource(async (): Promise<AdvisorStats | { unavailable: string }> => {
-		const res = await tryCall<AdvisorStats>("advisorGetStatus", [{ section: "stats" }]);
-		return res.data ?? { unavailable: res.unavailable ?? "unknown" };
-	});
+	const [warnings] = createResource(() =>
+		orUnavailable(getAdvisorWarnings().then((result) => result.warnings)),
+	);
+	const [stats] = createResource(() => orUnavailable(getAdvisorStats()));
 	const [compact, setCompact] = createSignal(true);
-	const [history, setHistory] = createSignal<AdvisorHistoryPage | null>(null);
+	const [history, setHistory] = createSignal<string | null>(null);
 	const [historyError, setHistoryError] = createSignal<string | null>(null);
 	const [loading, setLoading] = createSignal(false);
 	const [toggling, setToggling] = createSignal(false);
 	const [pendingDisable, setPendingDisable] = createSignal(false);
+
+	const loaded = (): AdvisorOverview | undefined => {
+		const o = overview();
+		return o !== undefined && !isUnavailable(o) ? o : undefined;
+	};
+	const unavailableReason = (): string | undefined => {
+		const o = overview();
+		return isUnavailable(o) ? o.unavailable : undefined;
+	};
+	const warningList = (): string[] => {
+		const w = warnings();
+		return Array.isArray(w) ? w : [];
+	};
+	const loadedStats = () => {
+		const s = stats();
+		return s !== undefined && !isUnavailable(s) ? s : undefined;
+	};
 
 	const loadHistory = async (): Promise<void> => {
 		setLoading(true);
@@ -83,19 +92,9 @@ export const AdvisorPanel: Component = () => {
 		try {
 			// Raw dump (compact:false) is the deliberate second click: callers arm
 			// via ConfirmButton before requesting full text.
-			const res = await tryCall<unknown>("advisorTranscript", [{ compact: compact() }]);
-			if (res.data === undefined)
-				setHistoryError(`advisor history unavailable: ${res.unavailable}`);
-			else if (typeof res.data === "string") setHistory({ text: res.data });
-			else if (
-				res.data !== null &&
-				typeof res.data === "object" &&
-				"text" in res.data &&
-				typeof res.data.text === "string"
-			) {
-				const cursor = "nextCursor" in res.data ? res.data.nextCursor : null;
-				setHistory({ text: res.data.text, nextCursor: typeof cursor === "string" ? cursor : null });
-			} else setHistory({ text: JSON.stringify(res.data) });
+			const page = await getAdvisorHistory({ compact: compact() });
+			if (page.available && page.text !== null) setHistory(page.text);
+			else setHistoryError(`advisor history unavailable: ${page.reason ?? "unknown"}`);
 		} catch (err) {
 			setHistoryError(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -106,22 +105,15 @@ export const AdvisorPanel: Component = () => {
 	const setEnabled = async (enabled: boolean): Promise<void> => {
 		setToggling(true);
 		try {
-			const res = await tryCall("advisorConfigure", [{ enabled }]);
-			if (res.data === undefined) {
-				pushNotice(
-					"error",
-					`advisor ${enabled ? "enable" : "disable"} unavailable: ${res.unavailable}`,
-				);
-			} else {
-				pushNotice(
-					"info",
-					enabled
-						? "advisor enabled — live advisories resume"
-						: "advisor disabled — live advisories stop",
-				);
-				setPendingDisable(false);
-				void refetchOverview();
-			}
+			await setAdvisorEnabled(enabled);
+			pushNotice(
+				"info",
+				enabled
+					? "advisor enabled — live advisories resume"
+					: "advisor disabled — live advisories stop",
+			);
+			setPendingDisable(false);
+			void refetchOverview();
 		} catch (err) {
 			pushNotice("error", err instanceof Error ? err.message : String(err));
 		} finally {
@@ -147,79 +139,60 @@ export const AdvisorPanel: Component = () => {
 				<Match when={overview.error}>
 					<div class="msg-notice">{String(overview.error)}</div>
 				</Match>
-				<Match
-					when={(() => {
-						const o = overview();
-						return o !== undefined && typeof o === "object" && "unavailable" in o;
-					})()}
-				>
-					<div class="tool-collapsed-note">
-						advisor status unavailable:{" "}
-						{(() => {
-							const o = overview();
-							return o !== undefined &&
-								typeof o === "object" &&
-								"unavailable" in o &&
-								typeof o.unavailable === "string"
-								? o.unavailable
-								: "unknown";
-						})()}
-					</div>
+				<Match when={unavailableReason()} keyed>
+					{(reason) => <div class="tool-collapsed-note">advisor status unavailable: {reason}</div>}
 				</Match>
-				<Match
-					when={(() => {
-						const o = overview();
-						return o !== undefined && typeof o === "object" && "advisors" in o ? o : undefined;
-					})()}
-					keyed
-				>
-					{(raw) => {
-						if (!("advisors" in raw)) return null;
-						const advisors = raw.advisors;
-						if (!Array.isArray(advisors)) return null;
-						const configured =
-							"configured" in raw && typeof raw.configured === "boolean" ? raw.configured : false;
-						const running = "active" in raw && typeof raw.active === "boolean" ? raw.active : false;
+				<Match when={loaded()} keyed>
+					{(o) => {
+						const actions = advisorActions({
+							enabled: o.configured,
+							running: o.active,
+							roleResolvable: o.roleResolvable,
+						});
 						return (
 							<div class="goal-panel">
 								<div class="goal-meta">
-									<span class="picker-label">advisor</span>{" "}
-									{configured ? "configured" : "not configured"} · {running ? "active" : "idle"}
+									<span class="picker-label">advisor</span> {o.configured ? "enabled" : "disabled"}{" "}
+									· {o.active ? "active" : "idle"}
 								</div>
-								<For each={advisors}>
-									{(entry) => {
-										if (entry === null || typeof entry !== "object") return null;
-										const name =
-											"name" in entry && typeof entry.name === "string" ? entry.name : "advisor";
-										const status =
-											"status" in entry && typeof entry.status === "string"
-												? entry.status
-												: "unknown";
-										const yielded = "yielded" in entry ? entry.yielded : undefined;
-										return (
-											<div class="goal-meta">
-												<span class="picker-label">{name}</span> {status}
-												{typeof yielded === "boolean" && (
-													<span class="picker-detail"> · yielded: {String(yielded)}</span>
-												)}
-											</div>
-										);
-									}}
+								<Show when={actions.noModel}>
+									<div class="msg-notice">
+										No model is assigned to the advisor role.{" "}
+										<button type="button" onClick={() => openModelSettings()}>
+											{"Settings > Model"}
+										</button>
+									</div>
+								</Show>
+								<For each={o.advisors}>
+									{(entry) => (
+										<div class="goal-meta">
+											<span class="picker-label">{entry.name}</span> {entry.status}
+											<span class="picker-detail"> · yielded: {String(entry.yielded)}</span>
+										</div>
+									)}
 								</For>
 								<div class="goal-actions">
-									<button type="button" disabled={toggling()} onClick={() => void setEnabled(true)}>
-										enable
-									</button>
-									<ConfirmButton
-										label={pendingDisable() ? "disable running advisor?" : "disable"}
-										confirmLabel="confirm disable"
-										disabled={toggling()}
-										onConfirm={() => {
-											if (running && !pendingDisable()) setPendingDisable(true);
-											else void setEnabled(false);
-										}}
-									/>
-									<Show when={running}>
+									<Show when={actions.enable}>
+										<button
+											type="button"
+											disabled={toggling()}
+											onClick={() => void setEnabled(true)}
+										>
+											enable
+										</button>
+									</Show>
+									<Show when={actions.disable}>
+										<ConfirmButton
+											label={pendingDisable() ? "disable running advisor?" : "disable"}
+											confirmLabel="confirm disable"
+											disabled={toggling()}
+											onConfirm={() => {
+												if (o.active && !pendingDisable()) setPendingDisable(true);
+												else void setEnabled(false);
+											}}
+										/>
+									</Show>
+									<Show when={actions.stop}>
 										<button type="button" onClick={() => disableRunning(true)}>
 											stop advisories
 										</button>
@@ -231,34 +204,22 @@ export const AdvisorPanel: Component = () => {
 				</Match>
 			</Switch>
 
-			<Show
-				when={(() => {
-					const w = warnings();
-					return Array.isArray(w) && w.length > 0;
-				})()}
-			>
+			<Show when={warningList().length > 0}>
 				<div class="goal-panel">
 					<div class="goal-meta">
 						<span class="picker-label">config warnings</span>
 					</div>
-					<For each={Array.isArray(warnings()) ? (warnings() as string[]) : []}>
-						{(w) => <div class="msg-notice">{w}</div>}
-					</For>
+					<For each={warningList()}>{(w) => <div class="msg-notice">{w}</div>}</For>
 				</div>
 			</Show>
 
-			<Show
-				when={(() => {
-					const s = stats();
-					return s !== undefined && typeof s === "object" && !("unavailable" in s);
-				})()}
-			>
-				<div class="goal-meta">
-					<span class="picker-label">stats</span> cost{" "}
-					{(stats() as AdvisorStats | undefined)?.cost ?? "n/a"} · tokens{" "}
-					{(stats() as AdvisorStats | undefined)?.tokens?.total ?? "n/a"} · messages{" "}
-					{(stats() as AdvisorStats | undefined)?.messages?.total ?? "n/a"}
-				</div>
+			<Show when={loadedStats()} keyed>
+				{(s) => (
+					<div class="goal-meta">
+						<span class="picker-label">stats</span> cost {s.cost} · tokens {s.tokens.total} ·
+						messages {s.messages.total}
+					</div>
+				)}
 			</Show>
 
 			<div class="goal-panel">
@@ -298,9 +259,9 @@ export const AdvisorPanel: Component = () => {
 				</Show>
 				<Show when={historyError()}>{(err) => <div class="msg-notice">{err()}</div>}</Show>
 				<Show when={history()}>
-					{(page) => (
+					{(text) => (
 						<pre class="dim-block" style={{ margin: "0", "white-space": "pre-wrap" }}>
-							{page().text}
+							{text()}
 						</pre>
 					)}
 				</Show>

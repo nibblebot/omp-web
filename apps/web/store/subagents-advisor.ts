@@ -15,13 +15,15 @@ import { asBoolean, asNumber, asRecord, asString } from "./subagents";
 
 export interface AdvisorOverview {
 	configured: boolean;
+	/** The advisor model role resolves to an available model; false means none is assigned. */
+	roleResolvable: boolean;
 	active: boolean;
 	advisors: Array<{ name: string; status: string; yielded: boolean }>;
 }
 
 function coerceAdvisorOverview(data: unknown): AdvisorOverview {
 	const r = asRecord(data);
-	if (r === null) return { configured: false, active: false, advisors: [] };
+	if (r === null) return { configured: false, roleResolvable: false, active: false, advisors: [] };
 	const field = r.advisors;
 	const list = Array.isArray(field) ? field : [];
 	const advisors: AdvisorOverview["advisors"] = [];
@@ -38,6 +40,7 @@ function coerceAdvisorOverview(data: unknown): AdvisorOverview {
 	}
 	return {
 		configured: asBoolean(r.configured) ?? false,
+		roleResolvable: asBoolean(r.roleResolvable) ?? false,
 		active: asBoolean(r.active) ?? false,
 		advisors,
 	};

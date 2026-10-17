@@ -521,6 +521,7 @@ export const goalBudgetLimited = goalState("budget-limited", 150_400, 4180, 150_
 
 export const advisorOverview: AdvisorOverview = {
 	configured: true,
+	roleResolvable: true,
 	active: true,
 	advisors: [
 		{ name: "architect", status: "watching", yielded: false },
@@ -528,7 +529,19 @@ export const advisorOverview: AdvisorOverview = {
 	],
 };
 
-export const advisorDisabled: AdvisorOverview = { configured: false, active: false, advisors: [] };
+export const advisorDisabled: AdvisorOverview = {
+	configured: false,
+	roleResolvable: true,
+	active: false,
+	advisors: [],
+};
+
+export const advisorNoModel: AdvisorOverview = {
+	configured: false,
+	roleResolvable: false,
+	active: false,
+	advisors: [],
+};
 
 export const advisorStats = { cost: 0.318, tokens: { total: 84032 }, messages: { total: 12 } };
 
