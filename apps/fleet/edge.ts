@@ -358,6 +358,8 @@ interface ForwardOrigin {
 	generation: number | null;
 	/** The answer reached the origin: later pipe copies of it are consumed, not fanned out. */
 	delivered: boolean;
+	/** An earlier forward of this id was accepted onto the pair, so the session may have applied the command. */
+	sent: boolean;
 	/** Insertion time, for the TTL sweep (the daemon's dedup window). */
 	at: number;
 }
@@ -2107,7 +2109,10 @@ export class FleetEdge {
 	 * A missing or unpaired channel fails fast BY ID (finding #59: the client
 	 * correlates call() promises only with call_result, so a bare error frame
 	 * would leave the promise hanging until its 30s timeout). No offline
-	 * queue: a failed send answers the same typed not-attached error.
+	 * queue: a failed send answers the same typed not-attached error. The one
+	 * exception: an earlier forward of this id was accepted onto the pair, so
+	 * the session may have applied the command; that answer says the outcome
+	 * is unknown instead of "not attached".
 	 */
 	#forwardCommand(stream: BrowserStream, cmd: Record<string, unknown>): void {
 		const pipe = stream.pipe;
@@ -2119,11 +2124,14 @@ export class FleetEdge {
 		const failNotAttached = (): void => {
 			const commandId = typeof cmd.id === "string" && cmd.id !== "" ? cmd.id : undefined;
 			if (commandId !== undefined) {
+				const sent = this.#forwardOrigins.get(commandId)?.sent === true;
 				this.#sendAnswer(stream, {
 					type: "call_result",
 					id: commandId,
 					ok: false,
-					error: "not attached",
+					error: sent
+						? "connection to the session process was lost; the change may have been applied, refresh to check"
+						: "not attached",
 				});
 			} else {
 				this.#sendError(stream, "not attached");
@@ -2152,11 +2160,17 @@ export class FleetEdge {
 			}
 			return;
 		}
+		const origin =
+			typeof cmd.id === "string" && cmd.id !== "" ? this.#forwardOrigins.get(cmd.id) : undefined;
 		transport
 			.sendToDaemon(pipe.daemonId, {
 				streamId: `browser/${pipe.connId}`,
 				kind: "command",
 				payload: cmd,
+			})
+			.then(() => {
+				// Accepted onto the pair: from here on the session may apply it.
+				if (origin !== undefined) origin.sent = true;
 			})
 			.catch(failNotAttached);
 	}
@@ -2204,6 +2218,7 @@ export class FleetEdge {
 			daemonId,
 			generation,
 			delivered: false,
+			sent: existing?.sent === true,
 			at: now,
 		});
 		// Cap the map by dropping DELIVERED records only: forgetting an

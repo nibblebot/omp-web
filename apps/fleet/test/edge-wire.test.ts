@@ -759,6 +759,55 @@ describe("fleet edge", () => {
 		).toBe(false);
 	});
 
+	test("a replayed call whose first forward reached the session never answers 'not attached' once the pair drops (REV-14)", async () => {
+		// The first POST was written to the session, which may have applied it.
+		// The pair then drops before the answer, and the browser re-POSTs the
+		// same id. "not attached" would read as "not applied"; the outcome is
+		// unknown and the answer must say so.
+		const body = await enrollRemote("late-replay");
+		const id = body.entry.daemonId;
+		// A long redial backoff keeps the pair down while the replay is sent.
+		const daemon = startCallbackDaemon({
+			url: fleetUrl(),
+			workspaceId: id,
+			generation: body.enrollment.generation,
+			token: body.enrollment.token,
+			redialMinMs: 3000,
+			redialMaxMs: 3000,
+		});
+		daemonsById.set(id, daemon);
+		await daemon.waitConnected(10_000);
+		const browser = await openBrowser(server.port);
+		await browser.waitForFrame((f) => f.type === "roster", "roster");
+		await attachBrowser(browser, daemon, id);
+
+		const call = { type: "call", id: "late-stage-1", method: "gitStage", args: [{ paths: ["a"] }] };
+		await browser.send(call);
+		await waitFor(
+			() => (commandsWithId(daemon, "late-stage-1").length > 0 ? "sent" : null),
+			5000,
+			"late-stage-1 at the session",
+		);
+		// The pair drops before the session's answer reaches the fleet.
+		daemon.dropLegs();
+		await waitFor(
+			() => (server.transport.pairStatus(id).paired ? null : "down"),
+			5000,
+			"pair down",
+		);
+		await browser.send(call);
+		const result = await browser.waitForFrame(
+			(f) => f.type === "call_result" && f.id === "late-stage-1",
+			"call_result late-stage-1",
+		);
+		if (result.type !== "call_result") throw new Error("expected call_result");
+		expect(result.ok).toBe(false);
+		expect(result.error).not.toContain("not attached");
+		expect(result.error).toContain("may have been applied");
+		// The replay never re-dispatched: the session saw the command exactly once.
+		expect(commandsWithId(daemon, "late-stage-1")).toHaveLength(1);
+	});
+
 	test("clientId rebind closes the previous live stream and broadcasts the roster exactly once", async () => {
 		const sharedId = crypto.randomUUID();
 		const oldBrowser = new BrowserSocket(server.port, sharedId);
