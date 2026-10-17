@@ -4,9 +4,9 @@
  * the removed-mux-command fallthrough. Spawns apps/session/index.ts as a subprocess on
  * an ephemeral port (OMP_SESSION_PORT=0) with a hermetic tmp cwd; connects over
  * loopback and, wherever the host owns an interface the daemon is reachable on,
- * from that off-loopback address too (the token and relay gates decide from the
- * socket peer address, so only a real peer address exercises their off-loopback
- * half) using the OMP_PROTO 2 transport (GET /events SSE down, POST /command
+ * from that off-loopback address too (the token gate decides from the socket
+ * peer address, so only a real peer address exercises its off-loopback half)
+ * using the OMP_PROTO 2 transport (GET /events SSE down, POST /command
  * up). No external network, no real model calls; the readiness gate is deferred
  * via the OMP_SESSION_TEST_READY_DELAY_MS test hook instead of racing provider
  * discovery.
@@ -18,7 +18,6 @@ import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Subprocess } from "bun";
-import { generateRoomId } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import {
 	COMMAND_DEDUP_ANSWER_CAP,
 	OMP_PROTO,
@@ -637,80 +636,6 @@ test("/download serves only files inside the canonical roots", async () => {
 	expect((await download(missing)).status).toBe(404);
 	expect((await download(path.join(path.dirname(outside), missing))).status).toBe(404);
 
-	await cleanup();
-}, 30_000);
-
-/** Open a relay WS to the daemon; resolves once the socket opens, rejects on error/timeout. */
-function openRelaySocket(url: string, timeoutMs = 10_000): Promise<WebSocket> {
-	const ws = new WebSocket(url);
-	ws.binaryType = "arraybuffer";
-	const { promise, resolve, reject } = Promise.withResolvers<void>();
-	const timer = setTimeout(() => reject(new Error(`timed out opening ${url}`)), timeoutMs);
-	ws.onopen = () => {
-		clearTimeout(timer);
-		resolve();
-	};
-	ws.onerror = () => {
-		clearTimeout(timer);
-		reject(new Error(`websocket failed before open: ${url}`));
-	};
-	return promise.then(() => ws);
-}
-
-test("relay host upgrades are gated like the agent endpoints; guests stay token-free", async () => {
-	const proc = await spawnSession({ args: ["--host", "0.0.0.0", "--token", "sekret"] });
-	running.push(proc);
-	const { port, cleanup } = proc;
-	const offLoopback = (await offLoopbackOrigins(port, "sekret"))[0];
-	const sockets: WebSocket[] = [];
-
-	// Off-loopback peers (one per interface this host can source a connection
-	// from, see offLoopbackOrigins) hit the host gate; the loopback half below
-	// runs on every host.
-	if (offLoopback !== undefined) {
-		const httpBase = offLoopback;
-		const wsBase = offLoopback.replace(/^http/, "ws");
-		const room = generateRoomId();
-
-		// Off-loopback host upgrade without a credential → 401 before the
-		// upgrade (no close code, no hello window).
-		const unauth = await fetch(`${httpBase}/r/${room}?role=host`);
-		expect(unauth.status).toBe(401);
-
-		// Off-loopback host with ?token= → the upgrade succeeds.
-		const host = await openRelaySocket(`${wsBase}/r/${room}?role=host&token=sekret`);
-		sockets.push(host);
-
-		// Guests are deliberately not gated: an off-loopback guest with no token
-		// still upgrades (it then gets the ordinary no-room close).
-		const guest = await openRelaySocket(`${wsBase}/r/${generateRoomId()}?role=guest`);
-		sockets.push(guest);
-	}
-
-	// Loopback host without a token stays exempt, same as /events.
-	const loopHost = await openRelaySocket(`ws://127.0.0.1:${port}/r/${generateRoomId()}?role=host`);
-	sockets.push(loopHost);
-
-	for (const ws of sockets) ws.close();
-	await cleanup();
-}, 30_000);
-
-test("collab room cap from config refuses the N+1th host room", async () => {
-	const proc = await spawnSession({ env: { OMP_SESSION_COLLAB_MAX_ROOMS: "2" } });
-	running.push(proc);
-	const { port, cleanup } = proc;
-	const base = `http://127.0.0.1:${port}`;
-	const wsBase = `ws://127.0.0.1:${port}`;
-
-	const a = await openRelaySocket(`${wsBase}/r/${generateRoomId()}?role=host`);
-	const b = await openRelaySocket(`${wsBase}/r/${generateRoomId()}?role=host`);
-
-	// A third NEW room is refused with 503 before the upgrade.
-	const res = await fetch(`${base}/r/${generateRoomId()}?role=host`);
-	expect(res.status).toBe(503);
-
-	a.close();
-	b.close();
 	await cleanup();
 }, 30_000);
 

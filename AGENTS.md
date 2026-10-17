@@ -47,7 +47,7 @@ bun run install:omp-web             # build, pack, install into ~/.omp-web/insta
 
 | Path | Ownership |
 | --- | --- |
-| `apps/cli/` | Installed entrypoint, update, collab CLI |
+| `apps/cli/` | Installed entrypoint, update, collab CLI, standalone collab relay (`relay.ts`) |
 | `apps/session/` | Session daemon, dispatch, SSE delivery, callback/log mirroring |
 | `apps/fleet/` | Registry, supervision, callback pair (session dial-out), browser edge, control API, stats, clone lifecycle |
 | `apps/web/` | `state.ts` facade, actions in `store/`, feature logic (`chat/`, `prompt/`, `subagents/`, `fleet-ui/`, ...), `ModalHost.tsx`, presentational `components/`, optional feature entries in `features/` (see Frontend invariants) |
@@ -64,7 +64,7 @@ Overlay is the umbrella term, not a suffix: a portaled layer above the app shell
 
 ## The wire contract (OMP_PROTO 2)
 
-Agent transport is HTTP + SSE, not WebSocket (collab-only). Browser to fleet: `GET /events` SSE down, `POST /command` up, ID-keyed commands accepted with `202`, answers via SSE `call_result`. Fleet to session: only the session-initiated callback pair (`OMP_CALLBACK_PROTO 1`, `lib/wire/callback-protocol.ts`): `POST /callback/up` NDJSON, `GET /callback/down` SSE, `POST /callback/bulk/<id>`; browser streams and commands ride it as virtual streams. A session's own `/events` and `/command` listener stays for direct clients; the fleet never uses it. `lib/wire/protocol.ts` owns frame shapes/constants. Fleet stamps session identity.
+Agent transport is HTTP + SSE, not WebSocket (collab-only; room traffic runs on the standalone `omp-web relay`, never on a session). Browser to fleet: `GET /events` SSE down, `POST /command` up, ID-keyed commands accepted with `202`, answers via SSE `call_result`. Fleet to session: only the session-initiated callback pair (`OMP_CALLBACK_PROTO 1`, `lib/wire/callback-protocol.ts`): `POST /callback/up` NDJSON, `GET /callback/down` SSE, `POST /callback/bulk/<id>`; browser streams and commands ride it as virtual streams. A session's own `/events` and `/command` listener stays for direct clients; the fleet never uses it. `lib/wire/protocol.ts` owns frame shapes/constants. Fleet stamps session identity.
 
 ## Invariants & conventions, read before editing
 
@@ -125,7 +125,7 @@ Agent transport is HTTP + SSE, not WebSocket (collab-only). Browser to fleet: `G
 - `bun run test` (one worker per file) is the default loop; `bun run test:isolated` runs every file in ONE process and is the hermeticity gate, run only when preparing a release, never in the everyday loop. Write test files so they would pass under both (the release run checks it): install process globals and `mock.module` mocks from a hook and restore them in `afterAll` (each file owns exactly what it changed, and `mock.restore()` does not undo module mocks), hand back shared store state a file mutates, and prefer a query-suffixed fresh import (`./mod.ts?fresh=<tag>`) over relying on module cache state when a module under test keeps its own process-global cache.
 - Capture full-suite output in a log, not a truncated pipe.
 - Scratch dirs use tracked `tempDir()` from `lib/testkit/temp-dir.testkit.ts`, never raw mkdtemp. Helpers use `*.testkit.ts` to avoid discovery.
-- `apps/session/test/collab-relay.test.ts` intentionally omits `server.stop()`: Bun hangs closing sockets with close codes.
+- `apps/cli/test/collab-relay.test.ts` and `apps/cli/test/relay.test.ts` intentionally omit `server.stop()`: Bun hangs closing sockets with close codes.
 
 ### Style
 

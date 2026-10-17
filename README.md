@@ -165,11 +165,14 @@ omp-web remove <selector>
 omp-web rm-project <project>
 omp-web rm-worktree <daemon-id> [--delete-branch]
 omp-web prompt <selector> <text> [--wait <ms>]
+omp-web relay --port <n> [--hostname h] [--max-guests n] [--max-rooms n]   # run the standalone collab relay
 ```
 
 `stop`, `remove`, and `prompt` selectors accept `all`, an exact daemon ID, `label:k=v` (also `tag:k=v`), `project:name`, or name globs with `*` and `?`; quote globs to prevent shell expansion. Project arguments accept a registered project ID, path/realpath, or basename. Control commands connect to loopback; `--port` or `OMP_FLEET_PORT` selects the fleet port (default 4722). `prompt` to an asleep spawned session wakes it first; a remote session must already be connected.
 
 `prompt` submits without waiting unless `--wait <ms>` supplies a result timeout.
+
+`relay` serves collab rooms on its own port (`ws://<host>:<port>`). A session hosts a room through it when `collab.relayUrl` names that URL; `--port` has no default.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the checks before a pull request and [`AGENTS.md`](AGENTS.md) for the full engineering map.
 

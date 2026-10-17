@@ -26,7 +26,6 @@ import type { SessionEntry } from "./session-entry";
  * connection: it primes on open (hello_ok → attached → …), then receives live
  * deltas (daemon-global seqs ≥ SSE_DELTA_SEQ_START) and unicast answers. It is
  * also the per-connection key for pending code inputs and UI requests.
- * Relay sockets are typed {@link RelaySocketData} and are NEVER added to `streams`.
  */
 export interface SseConsumer {
 	/** Stable identity; keys pending code inputs and ui_request targets. */

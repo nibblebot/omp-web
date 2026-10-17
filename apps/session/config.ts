@@ -47,9 +47,6 @@ export interface SessionConfig {
 	 */
 	uiRequestTestHook: boolean;
 	collabMaxGuests: number;
-	collabMaxRooms: number;
-	collabHostname?: string;
-	collabUrl?: string;
 	/**
 	 * Callback transport (P3.2): fleet callback pair base URL, e.g.
 	 * https://fleet.example.com. HTTPS required; HTTP only with
@@ -233,11 +230,6 @@ export function parseConfig(argv: string[]): SessionConfig {
 		idleCheckMs: Math.max(1, Number(Bun.env.OMP_SESSION_TEST_IDLE_CHECK_MS ?? 15000) || 15000),
 		uiRequestTestHook: Bun.env.OMP_SESSION_TEST_UI_REQUEST === "1",
 		collabMaxGuests: Number(Bun.env.OMP_SESSION_COLLAB_MAX_GUESTS ?? 64),
-		// Floor of 1: the daemon's own collab host must always be able to
-		// create its room (0 would brick collab with no way to opt out).
-		collabMaxRooms: Math.max(1, Number(Bun.env.OMP_SESSION_COLLAB_MAX_ROOMS ?? 256) || 256),
-		collabHostname: Bun.env.OMP_SESSION_COLLAB_HOSTNAME,
-		collabUrl: Bun.env.OMP_SESSION_COLLAB_URL,
 		callbackUrl,
 		callbackWorkspace,
 		callbackGeneration,

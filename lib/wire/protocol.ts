@@ -773,7 +773,8 @@ export type ClientCommand =
 	// (the edge proxies it through; a bare omp-session never receives attach).
 	| { type: "attach"; id: string; sessionId: string }
 	// Collab: start/stop the collab room for the stream's ATTACHED session.
-	| { type: "collab_start"; id: string }
+	// relayUrl overrides collab.relayUrl for this room only (ShareSheet's explicit relay choice).
+	| { type: "collab_start"; id: string; relayUrl?: string }
 	| { type: "collab_stop"; id: string }
 	// Daemon web exposure: per-daemon logs/stop/restart, answered by unicast
 	// daemon_logs_result / daemon_control_result frames.

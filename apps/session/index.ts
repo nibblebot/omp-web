@@ -2,6 +2,11 @@ import { open, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { discoverAuthStorage, ModelRegistry, Settings } from "@oh-my-pi/pi-coding-agent";
+import {
+	cfgCollabAutoStart,
+	cfgCollabDisplayName,
+	cfgCollabRelayUrl,
+} from "@oh-my-pi/pi-coding-agent/collab/settings";
 import { daemonClientForProject } from "@oh-my-pi/pi-coding-agent/launch/client";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
@@ -49,7 +54,7 @@ import {
 	sessionTreeExists,
 } from "./session-materialize";
 import { CollabHostAdapter } from "./collab-host";
-import { createRelay, type RelayHandle, type RelaySocketData } from "./collab-relay";
+import { chooseRelayUrl, decideAutoStart } from "./collab-policy";
 import { createCollabSession } from "./collab-session";
 import { createDaemonBroker } from "./daemon-broker";
 import { buildServerCapabilities } from "./capabilities";
@@ -209,21 +214,6 @@ function isLoopbackIp(address: string | null | undefined): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Collab relay (Slice A): rooms that forward opaque AES-GCM envelopes between
-// a per-session host adapter and real omp TUI guests (`omp join <link>`).
-// Relay sockets are typed {@link RelaySocketData} and are NEVER added to `streams`.
-// ---------------------------------------------------------------------------
-
-const relay: RelayHandle = createRelay({
-	maxGuests: config.collabMaxGuests,
-	maxRooms: config.collabMaxRooms,
-	// Host upgrades create rooms, so they are gated exactly like /events and
-	// /command (R14): loopback exempt; off-loopback peers need the bearer
-	// token. Guests join by E2E room key, deliberately not gated.
-	authorizeHost: (req, srv) => r14Authorized(req, srv),
-});
-
-// ---------------------------------------------------------------------------
 // Extracted-module wiring (Phase 6 audit #7): each split module receives its
 // boot-time deps explicitly: config/settings/authStorage/modelRegistry from
 // the bootstrap above, plus the readiness clock. The delivery module's detach
@@ -342,7 +332,10 @@ function primingFrames(
 		// Current collab status, so a client attaching to a live room sees it immediately.
 		{
 			type: "collab_status",
-			status: collabSession.toWireStatus(entry.collab.adapter?.status ?? null),
+			status:
+				entry.collab.adapter === null && entry.collab.refusal !== null
+					? { state: "error", error: entry.collab.refusal }
+					: collabSession.toWireStatus(entry.collab.adapter?.status ?? null),
 		},
 		...(commands !== null ? [{ type: "available_commands" as const, commands }] : []),
 		// Late attachers get `ready` appended to the priming sequence (R8).
@@ -502,19 +495,45 @@ async function listFiles(query: string, limit: number): Promise<string[]> {
 	return entries.filter((f) => f.toLowerCase().includes(q)).slice(0, limit);
 }
 
+/** Record why collab cannot run for `entry` and tell its clients; late attachers see it in priming. */
+function refuseCollab(entry: SessionEntry, reason: string): void {
+	entry.collab.refusal = reason;
+	broadcastTo(entry.handle, { type: "collab_status", status: { state: "error", error: reason } });
+}
+
+/** Host a room for `entry` through `relayUrl`. Shared by collab_start and collab.autoStart. */
+async function startCollabForEntry(entry: SessionEntry, relayUrl: string): Promise<void> {
+	entry.collab.starting = true;
+	entry.collab.refusal = null;
+	broadcastTo(entry.handle, { type: "collab_status", status: { state: "starting" } });
+	const adapter = new CollabHostAdapter(collabSession.buildCollabPort(entry), {
+		hostName: cfgCollabDisplayName.get(settings).trim() || os.userInfo().username || "web",
+		onStatusChange: (status) =>
+			broadcastTo(entry.handle, {
+				type: "collab_status",
+				status: collabSession.toWireStatus(status),
+			}),
+	});
+	try {
+		await adapter.start(relayUrl);
+		entry.collab.adapter = adapter;
+	} catch (err) {
+		refuseCollab(entry, String(err));
+	} finally {
+		entry.collab.starting = false;
+	}
+}
+
 /**
  * Dispose the boot session and cut every stream off it. Only invoked from
  * shutdown: streams are detached (never closed); pending ui_requests and the
  * pending login code inputs of those streams are rejected.
  */
 async function closeSession(entry: SessionEntry, reason: string): Promise<void> {
-	// Collab teardown before dispose: stop the adapter (guests get a bye) and
-	// destroy the relay room (guests get room-closed + 4001).
+	// Collab teardown before dispose: stop the adapter (guests get a bye).
 	const adapter = entry.collab.adapter;
-	const roomId = adapter?.status?.roomId;
 	entry.collab.adapter = null;
 	if (adapter) await adapter.stop(reason).catch(() => {});
-	if (roomId) relay.closeRoom(roomId);
 	entry.session.beginDispose();
 	await entry.session.dispose().catch(() => {});
 	rejectEntryUiRequests(entry, reason);
@@ -677,32 +696,17 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				if (entry.collab.starting || entry.collab.adapter) {
 					throw new Error("collab already active for this session");
 				}
-				entry.collab.starting = true;
-				broadcastTo(entry.handle, { type: "collab_status", status: { state: "starting" } });
-				const adapter = new CollabHostAdapter(collabSession.buildCollabPort(entry), {
-					hostName: config.collabHostname ?? (os.userInfo().username || "web"),
-					onStatusChange: (status) =>
-						broadcastTo(entry.handle, {
-							type: "collab_status",
-							status: collabSession.toWireStatus(status),
-						}),
-				});
-				try {
-					// Join links advertise collabUrl (or localhost); the host
-					// socket always connects to the local relay so a public
-					// collabUrl never hairpins off-loopback (the R14 host
-					// gate requires a bearer token there, which the adapter
-					// has no way to present).
-					await adapter.start(relayBaseUrl(), `ws://localhost:${server.port}`);
-					entry.collab.adapter = adapter;
-				} catch (err) {
-					broadcastTo(entry.handle, {
-						type: "collab_status",
-						status: { state: "error", error: String(err) },
-					});
-				} finally {
-					entry.collab.starting = false;
+				// An explicit relayUrl (the ShareSheet's choice) wins over collab.relayUrl.
+				// Unset stays undefined: the SDK default relay never applies implicitly.
+				const configuredRelay = settings.isConfigured(cfgCollabRelayUrl)
+					? cfgCollabRelayUrl.get(settings)
+					: undefined;
+				const relay = chooseRelayUrl(configuredRelay, cmd.relayUrl);
+				if (!relay.ok) {
+					refuseCollab(entry, relay.reason);
+					break;
 				}
+				await startCollabForEntry(entry, relay.relayUrl);
 				break;
 			}
 			case "collab_stop": {
@@ -711,11 +715,8 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 				if (entry.collab.starting) throw new Error("collab is starting");
 				const adapter = entry.collab.adapter;
 				if (!adapter) throw new Error("collab is not active");
-				// Capture the room id BEFORE stop clears the adapter status.
-				const roomId = adapter.status?.roomId;
 				entry.collab.adapter = null;
 				await adapter.stop("collab stopped by web user");
-				if (roomId) relay.closeRoom(roomId);
 				broadcastTo(entry.handle, { type: "collab_status", status: { state: "off" } });
 				break;
 			}
@@ -870,7 +871,7 @@ function bearerOk(req: Request): boolean {
  * or ?token=. A missing or wrong credential is a 401 with no hello window
  * and no close codes.
  */
-function r14Authorized(req: Request, srv: Server<RelaySocketData>): boolean {
+function r14Authorized(req: Request, srv: Server<undefined>): boolean {
 	if (isLoopbackIp(srv.requestIP(req)?.address)) return true;
 	if (!config.token) return true;
 	if (bearerHeaderOk(req.headers.get("authorization"), config.token)) return true;
@@ -983,7 +984,7 @@ function acquireSessionLock(file: string | undefined): void {
 // (which may be identical) is locked right after createSession below.
 if (config.resume && path.isAbsolute(config.resume)) acquireSessionLock(config.resume);
 
-const server = Bun.serve<RelaySocketData>({
+const server = Bun.serve({
 	port: config.port,
 	hostname: config.host,
 	// SSE responses are long-lived and quiet between 15s keepalive pings;
@@ -995,16 +996,6 @@ const server = Bun.serve<RelaySocketData>({
 		// so connect-implies-attached holds for streams that race boot.
 		await bootReady;
 		const url = new URL(req.url);
-		// Collab relay rooms (/r/<roomId>?role=host|guest) upgrade here; the
-		// relay returns null for every other pathname so web handling
-		// continues. Host upgrades can be refused before the handshake
-		// (off-loopback without the bearer token → 401; new host room past
-		// the cap → 503). Surface that response.
-		const relayResult = relay.handleUpgrade(url, srv, req);
-		if (relayResult !== null) {
-			if (relayResult.handled) return;
-			return new Response(relayResult.reason, { status: relayResult.status });
-		}
 		// Agent-driving transport (OMP_PROTO 2): GET /events down (SSE),
 		// POST /command up (one ClientCommand per request, 202 accept).
 		if (url.pathname === "/events") {
@@ -1080,21 +1071,6 @@ const server = Bun.serve<RelaySocketData>({
 			"omp-web: this is a session daemon (no web UI). Start the fleet with `omp-web` and open the Web UI URL it prints.\n",
 			{ status: 404, headers: { "content-type": "text/plain; charset=utf-8" } },
 		);
-	},
-	websocket: {
-		// Only collab relay sockets reach these handlers: the agent-driving
-		// channel is SSE (/events) + POST (/command), and every upgraded
-		// socket carries RelaySocketData (audit #18: the old "web" variant
-		// of the union was never constructed).
-		open(ws) {
-			relay.handleOpen(ws);
-		},
-		close(ws) {
-			relay.handleClose(ws);
-		},
-		message(ws, raw) {
-			relay.handleMessage(ws, raw);
-		},
 	},
 });
 
@@ -1284,6 +1260,21 @@ if (config.resume) {
 	} catch (err) {
 		console.error(`omp-session: --resume ${config.resume} failed (${String(err)}); starting fresh`);
 	}
+}
+// collab.autoStart: host the boot session through the relay. Refused with a reason
+// (logged and sent to clients) when no collab.relayUrl is set. Not awaited, so a slow
+// or dead relay cannot hold the daemon's readiness gate.
+const autoDecision = decideAutoStart(
+	cfgCollabAutoStart.get(settings),
+	chooseRelayUrl(
+		settings.isConfigured(cfgCollabRelayUrl) ? cfgCollabRelayUrl.get(settings) : undefined,
+	),
+);
+if (autoDecision.kind === "refuse") {
+	console.error(autoDecision.reason);
+	refuseCollab(bootEntry, autoDecision.reason);
+} else if (autoDecision.kind === "start") {
+	void startCollabForEntry(bootEntry, autoDecision.relayUrl);
 }
 resolveBootReady();
 void bootReadiness(bootEntry);
@@ -1593,11 +1584,6 @@ function idleCheckTick(): void {
 
 lastActivityAt = Date.now();
 if (config.idleTimeoutMs > 0) idleTimer = setInterval(idleCheckTick, config.idleCheckMs);
-
-/** Collab relay base URL: env-overridable, defaults to this server's own port. */
-function relayBaseUrl(): string {
-	return config.collabUrl ?? `ws://localhost:${server.port}`;
-}
 
 /**
  * Wait (bounded) for queued callback envelopes to reach the wire. A dead or

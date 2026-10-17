@@ -381,8 +381,9 @@ async function waitFor<T>(probe: () => T | undefined, timeoutMs = 5000): Promise
  * (`await seal(...)`), and stop()'s teardown socket.close() drops a still-
  * pending seal, so under load the bye can lose the race to the close
  * (documented in collab-host.ts stop() and collab-integration.test.ts;
- * production guarantees guest notification via relay.closeRoom(), which the
- * adapter-level tests here do not wire). The race is decided at stop() time:
+ * production has no guaranteed teardown on this path: the session does not
+ * close rooms on the relay, so a dropped bye falls back to the relay's orphan TTL.
+ * The race is decided at stop() time:
  * the bye either lands within a few macrotasks or never does, so a short
  * bounded wait cleanly separates the cases instead of burning the full
  * waitFor budget on the drop path.

@@ -1,6 +1,6 @@
 /**
  * Slice C integration test: the REAL daemon server wired end-to-end with the
- * collab relay and host adapter.
+ * collab relay (the standalone `omp-web relay` server, run in-process) and host adapter.
  *
  * Spawns apps/session/index.ts as a subprocess (ephemeral port via OMP_SESSION_PORT=0),
  * drives a web client through collab_start → collab_stop, and connects a REAL
@@ -15,7 +15,7 @@
  */
 
 import { afterAll, expect, test } from "bun:test";
-import { cpSync, existsSync, readdirSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +30,7 @@ import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { OMP_SESSION_PREFIX } from "#lib/wire/protocol";
 import { parseSseUnits, SSE_PING_EVENT } from "#lib/wire/sse";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
+import { startRelayServer } from "../../cli/relay";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
 
@@ -192,6 +193,9 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 	tmpDir = await mkdtemp(path.join(os.tmpdir(), "omp-web-collab-it-"));
 	const agentDir = tempDir("omp-session-agent-");
 	seedAgentDir(agentDir);
+	const relay = await startRelayServer({ port: 0 });
+	// The seeded config.yml may lack a trailing newline; start on a fresh line.
+	appendFileSync(path.join(agentDir, "config.yml"), `\ncollab:\n  relayUrl: ${relay.url}\n`);
 	child = Bun.spawn(["bun", "apps/session/index.ts"], {
 		cwd: repoRoot,
 		env: {
@@ -251,7 +255,7 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 	);
 	const link = liveStatus.link as string;
 	expect(link).toContain("/r/");
-	expect(liveStatus.relayUrl).toBe(`ws://localhost:${port}`);
+	expect(liveStatus.relayUrl).toBe(relay.url);
 
 	// Guest: a real CollabSocket with the full (writable) link.
 	const parsed = parseCollabLink(link);
@@ -344,14 +348,12 @@ test("web collab_start → guest join + prompt entry → collab_stop", async () 
 	const details = entry.details as { from?: string } | undefined;
 	expect(details?.from).toBe("integration-guest");
 
-	// Stop collab: the web client receives {state:"off"} and the guest is
-	// torn down (bye + relay room-closed + fatal 4001 close). The adapter's
-	// stop() yields one event-loop turn for the bye's seal to reach the wire
-	// before closing the socket; under heavy parallel load that seal can land
-	// after the close and the bye is dropped (the adapter documents the race).
-	// closeRoom() is authoritative (it ALWAYS sends the TEXT room-closed
-	// control and the fatal close), so the bye is the preferred signal and the
-	// room teardown is the guaranteed one.
+	// Stop collab: the web client receives {state:"off"} and the guest gets the
+	// bye. The adapter's stop() yields one event-loop turn for the bye's seal to
+	// reach the wire before closing the socket; under heavy parallel load that
+	// seal can land after the close and the bye is dropped (the adapter documents
+	// the race). The session no longer closes rooms on the relay directly, so a
+	// dropped bye leaves the guest to the relay's orphan-TTL teardown.
 	webFrames.length = 0;
 	const stopResp = await postCommand(port, { type: "collab_stop", id: crypto.randomUUID() });
 	expect(stopResp.status).toBe(202);

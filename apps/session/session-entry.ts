@@ -39,8 +39,11 @@ export interface SessionEntry {
 	subagentSnapshots: Map<string, SubagentSnapshot>;
 	transcriptSessionFilesBySubagentId: Map<string, string>;
 	staleSubagentIds: Set<string>;
-	/** Collab host state: the live adapter (null when not live) plus the start-in-flight flag. */
-	collab: { adapter: CollabHostAdapter | null; starting: boolean };
+	/**
+	 * Collab host state: the live adapter (null when not live), the start-in-flight flag,
+	 * and the reason collab last could not run (shown to clients until the next start).
+	 */
+	collab: { adapter: CollabHostAdapter | null; starting: boolean; refusal: string | null };
 	/** Fired by the subagent mirror when the roster may have changed (collab agents tap). */
 	onSubagentsChange: (() => void) | null;
 }
