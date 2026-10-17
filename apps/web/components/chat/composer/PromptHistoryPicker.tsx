@@ -23,6 +23,12 @@ interface PickerEntry {
 	discarded?: DraftBody;
 }
 
+/** Label for a discarded draft with no text: names the attachment kinds it held. */
+function discardedKinds(body: DraftBody): string {
+	const kinds = [body.images.length > 0 ? "images" : "", body.files?.length ? "files" : ""];
+	return kinds.filter(Boolean).join(" and ") || "empty";
+}
+
 /**
  * Prompt history popover, anchored to the composer's top-left corner and
  * growing up and to the right. PromptBox opens it on Up with the caret on the
@@ -33,6 +39,7 @@ interface PickerEntry {
  * promptInsert inbox (a discarded draft restores its images and caret and
  * leaves the discard ring); Esc or focus leaving the popover closes it.
  */
+
 export const PromptHistoryPicker: Component<{
 	/** `restoreFocus`: hand focus back to the prompt (false when focus moved elsewhere). */
 	onClose: (restoreFocus: boolean) => void;
@@ -43,7 +50,7 @@ export const PromptHistoryPicker: Component<{
 	// are included; PromptHistory persists every push to localStorage.
 	const entries: PickerEntry[] = [
 		...listClearedDrafts(currentDraftKey()).map((body) => ({
-			text: body.text.trim() ? body.text : "[images only]",
+			text: body.text.trim() ? body.text : `[${discardedKinds(body)} only]`,
 			discarded: body,
 		})),
 		...new PromptHistory().list().map((text) => ({ text })),
