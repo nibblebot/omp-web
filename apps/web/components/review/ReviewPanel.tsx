@@ -1,4 +1,4 @@
-import { createSignal, For, onMount, Show, type Component } from "solid-js";
+import { createEffect, createSignal, For, on, Show, type Component } from "solid-js";
 import type { GitPathEntry } from "#lib/wire/protocol";
 import type { GitReviewDiff } from "../../store/slices/review";
 import { sha256Hex } from "../../text/sha256";
@@ -40,9 +40,17 @@ export const ReviewPanel: Component = () => {
 	const [message, setMessage] = createSignal("");
 	const [noteIndex, setNoteIndex] = createSignal<number | null>(null);
 	const [noteDraft, setNoteDraft] = createSignal("");
-	onMount(() => {
-		if (reviewAvailable("git")) void refreshGit();
-	});
+	// Refresh when the git capability is (or becomes) available: the panel can mount
+	// before the attached session's capabilities land, and a mount-only check then
+	// leaves the panel empty until a manual refresh.
+	createEffect(
+		on(
+			() => reviewAvailable("git"),
+			(available) => {
+				if (available) void refreshGit();
+			},
+		),
+	);
 	const selected = (rows: GitPathEntry[]) =>
 		rows.filter((row) => gitSelection().includes(row.path)).map((row) => row.path);
 	const canStage = () => gitStatus()?.eligible.stage === true;
