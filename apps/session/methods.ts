@@ -197,6 +197,7 @@ export interface WebMethods {
 	readOnly: Partial<Record<WebMethodName, true>>;
 	notReadyGated: Partial<Record<WebMethodName, true>>;
 	historyReload: Partial<Record<WebMethodName, true>>;
+	nameOnly: Partial<Record<WebMethodName, true>>;
 	getInFlightBash(): number;
 	getInFlightPython(): number;
 }
@@ -231,6 +232,14 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		getContextBreakdown: true,
 		predictWord: true,
 		predictWordFeedback: true,
+	};
+
+	// Calls whose only state change is the session name. The SDK name listener
+	// (collab-session.ts wireSession) already broadcasts that change, so these
+	// skip the post-mutation state broadcast and a rename yields one state frame.
+	const NAME_ONLY: Partial<Record<WebMethodName, true>> = {
+		setSessionName: true,
+		resumeRename: true,
 	};
 
 	// Readiness gate (R8): before the boot session's provider/model/auth
@@ -1153,6 +1162,7 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 	return {
 		methods: METHODS,
 		readOnly: READ_ONLY,
+		nameOnly: NAME_ONLY,
 		notReadyGated: NOT_READY_GATED,
 		historyReload: HISTORY_RELOAD,
 		getInFlightBash: () => inFlightBash,

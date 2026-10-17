@@ -534,23 +534,21 @@ test("a read-only call broadcasts no state; a mutating call does", async () => {
 		args: ["state-probe"],
 	});
 	await fleet.waitForUp((e) => streamFrame(e, "browser/state")?.id === "name-1", 1);
-	// The mutating resync lands after its answer (the title listener's frame
-	// lands before it), so wait for both before counting: anything the read-only
-	// call broadcast would have been enqueued before them and is already counted.
-	await fleet.waitForUp(
-		(e) => stateSessionName(streamFrame(e, "browser/state")) === "state-probe",
-		2,
-	);
+	// A trailing read-only round trip: any resync the rename enqueued after its
+	// answer lands before this answer, so the count below would include it.
+	fleet.send("browser/state", "command", {
+		type: "call",
+		id: "stats-2",
+		method: "getSessionStats",
+		args: [],
+	});
+	await fleet.waitForUp((e) => streamFrame(e, "browser/state")?.id === "stats-2", 1);
 
-	// Every state frame across both calls belongs to the mutating one: the
-	// read-only row skipped the broadcast (one would carry the pre-rename name,
-	// since its answer landed before the rename was sent). The rename yields two:
-	// the SDK title listener's and the post-mutation resync after the answer.
-	const after = states().slice(before);
-	expect(after.map(stateSessionName)).toEqual(["state-probe", "state-probe"]);
-	expect(frames().indexOf(after.at(-1)!)).toBeGreaterThan(
-		frames().findIndex((f) => f.type === "call_result" && f.id === "name-1"),
-	);
+	// Exactly one state frame across all three calls, and it carries the rename:
+	// the read-only rows skipped the broadcast, and the SDK name listener's frame
+	// is the rename's only one (setSessionName is NAME_ONLY, so no resync).
+	expect(states()).toHaveLength(before + 1);
+	expect(stateSessionName(states().at(-1))).toBe("state-probe");
 
 	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
 	expect(await exitWithin(child, 20_000)).toBe(0);

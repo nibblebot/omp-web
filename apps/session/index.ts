@@ -274,6 +274,7 @@ const lifecycleMirror: LifecycleMirror = {
 const {
 	methods: METHODS,
 	readOnly: READ_ONLY,
+	nameOnly: NAME_ONLY,
 	notReadyGated: NOT_READY_GATED,
 	historyReload: HISTORY_RELOAD,
 	getInFlightBash,
@@ -636,7 +637,7 @@ async function handleCommand(cmd: ClientCommand): Promise<void> {
 					try {
 						if (reloadsHistory)
 							await broadcastHistory(entry.handle, transcriptHistoryFrames(entry.session));
-						if (HISTORY_RELOAD[cmd.method] || !READ_ONLY[cmd.method])
+						if (HISTORY_RELOAD[cmd.method] || !(READ_ONLY[cmd.method] || NAME_ONLY[cmd.method]))
 							await daemonBroker.broadcastState(entry);
 					} catch (err) {
 						console.error("Post-mutation resync failed:", err);

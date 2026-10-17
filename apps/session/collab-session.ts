@@ -257,7 +257,9 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			// No plugin-state reloader is wired in the web host; re-advertising the
 			// command list is the observable part of the reload.
 			reloadPlugins: () => deps.broker.broadcastAvailableCommands(entry),
-			notifyTitleChanged: () => deps.broker.broadcastState(entry),
+			// No notifyTitleChanged: the SDK calls it after a setSessionName, which the
+			// name listener in wireSession already broadcasts, or beside
+			// notifyConfigChanged (model/preset switch, move), which broadcasts state.
 			notifyConfigChanged: () => deps.broker.broadcastState(entry),
 		};
 	}
@@ -278,10 +280,10 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 				void deps.broker.broadcastState(entry).catch(() => {});
 			}
 		});
-		// SDK auto-titles (first message, replan) call sessionManager.setSessionName
-		// directly: no session event, no slash-runtime notifyTitleChanged. Without
-		// this the main pane keeps the stale name while the fleet's file probe
-		// already shows the new one in the sidebar.
+		// Every session name change (SDK auto-title on first message or replan,
+		// /rename, the setSessionName and resumeRename calls) broadcasts state here:
+		// auto-titles emit no session event, and the name-only calls skip their
+		// post-mutation resync (methods.ts NAME_ONLY) so a rename yields one frame.
 		session.sessionManager.onSessionNameChanged(() => {
 			void deps.broker.broadcastState(entry).catch(() => {});
 		});
