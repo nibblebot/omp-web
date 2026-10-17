@@ -70,23 +70,17 @@
 @media (max-width: 767px) {
 	.sidebar .sidebar-row,
 	.sidebar .daemon-session-title,
-	.sidebar .project-add-worktree,
-	.sidebar .daemon-sessions-btn,
-	.sidebar .daemon-row-action {
+	.sidebar .project-add-worktree {
 		font-size: var(--fs-md);
 	}
 	.sidebar .project-group-toggle,
 	.sidebar .project-add-worktree,
-	.sidebar .daemon-row-action,
-	.sidebar .daemon-sessions-btn,
 	.sidebar .daemon-row-btn,
 	.sidebar .sidebar-remote-add {
 		min-height: 44px;
 	}
-	.sidebar .daemon-session-title--clickable {
-		min-height: 44px;
-		display: flex;
-		align-items: center;
+	.sidebar .daemon-row--switcher {
+		--session-title-height: 44px;
 	}
 	.sidebar .sidebar-icon-btn {
 		width: 44px;
@@ -94,7 +88,6 @@
 	}
 	.sidebar .sidebar-group-label,
 	.sidebar .picker-group-name,
-	.sidebar .daemon-status-chip,
 	.sidebar .sidebar-usage-title,
 	.sidebar .sidebar-usage-empty {
 		font-size: var(--fs-md);
@@ -302,6 +295,14 @@
 	/* Containing block for the row-anchored session dropdown (editorial: no
 	   other absolutely-positioned child depends on it). */
 	position: relative;
+	/* Full sidebar width: bleed over the list's side padding with square
+	   ends and no side borders. The padding absorbs the bleed and the dropped
+	   1px borders, so row content keeps its place on the shared scan lines. */
+	margin-inline: calc(-1 * var(--space-3));
+	border-left: none;
+	border-right: none;
+	border-radius: 0;
+	padding-inline: calc(var(--space-3) + var(--space-3) + 1px);
 }
 .daemon-row.clickable {
 	cursor: pointer;
@@ -317,15 +318,20 @@
 	margin-top: var(--space-2);
 	background: var(--muted-2);
 }
-/* Worktree rows are headed by the name alone: center the dot on the top
-   row (its height is set by the 24px kebab button, not the title line). */
-.daemon-row--worktree .daemon-status-dot {
-	margin-top: var(--space-4);
+/* Roster row status indicator: the dot at the top row's right end, centered
+   in a hover target as tall as the kebab trigger, whose tooltip names the
+   state. */
+.daemon-row-status {
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 24px;
+	cursor: help;
 }
-/* Root rows (a project group's main worktree) share the worktree profile,
-   single-line unless labels/diffstat render, so the dot aligns the same. */
-.daemon-row--root .daemon-status-dot {
-	margin-top: var(--space-4);
+.daemon-row-status .daemon-status-dot {
+	margin-top: 0;
 }
 /* House glyph before a root row's branch title: muted, optically centered
    against the 1em icon box. */
@@ -357,8 +363,8 @@
 	box-shadow: 0 0 6px var(--accent);
 	animation: daemon-dot-pulse 1.2s ease-in-out infinite;
 }
-/* Activity cases repaint the LEFT status dot (single dot, no separate
-   badge): presence of any colored dot means alive. These override the green
+/* Activity cases repaint the status dot (single dot, no separate badge):
+   presence of any colored dot means alive. These override the green
    ready dot; at the same specificity, the later rule in the cascade wins. A
    stopped (asleep) row keeps the plain grey dot (no data-activity), and
    ready+idle keeps green. */
@@ -432,46 +438,6 @@
 }
 .daemon-chip--profile {
 	color: var(--muted-2);
-}
-/* Row status line (FLEET-03): text status chip plus an always-visible
-   Start/Restart action, under the row title. */
-.daemon-status-line {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: var(--space-2);
-	min-width: 0;
-}
-.daemon-status-chip {
-	font-family: var(--font-mono);
-	font-size: var(--fs-micro);
-	color: var(--muted);
-	border: 1px solid var(--border);
-	border-radius: var(--r-pill);
-	padding: 0 var(--space-3);
-	white-space: nowrap;
-}
-.daemon-status-chip[data-chip="running"] {
-	color: var(--success);
-	border-color: var(--success-border);
-}
-.daemon-status-chip[data-chip="starting"],
-.daemon-status-chip[data-chip="reconnecting"] {
-	color: var(--warning);
-	border-color: var(--warning-border);
-}
-.daemon-status-chip[data-chip="crashed"] {
-	color: var(--error-text);
-	border-color: var(--error-border);
-}
-.daemon-row-action {
-	font-size: var(--fs-micro);
-	color: var(--accent);
-	background: none;
-	border: 1px solid var(--accent);
-	border-radius: var(--r-pill);
-	padding: 0 var(--space-3);
-	cursor: pointer;
 }
 /* Collapsed-project roll-up beside the project name (FLEET-13). */
 .project-rollup {
@@ -629,7 +595,7 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 .daemon-row--nested {
 	/* One notch deeper than main rows: the dot sits 6px right of the 12px
 	   scan line, marking the row as a child of its project. */
-	padding-left: calc(var(--space-3) + var(--space-3));
+	padding-left: calc(var(--space-3) + var(--space-3) + var(--space-3) + 1px);
 }
 .daemon-cwd {
 	font-size: var(--fs-micro);
@@ -798,40 +764,88 @@ button.sidebar-group[data-open="false"] .sidebar-caret {
 }
 /* Last-session title under the row's top line (probed by the fleet edge
    from the session file's JSONL title slot): a muted micro line mirroring
-   the cwd meta line, truncated to one line with the full string on the
-   tooltip. */
+   the cwd meta line, wrapping to at most two lines with the full string on
+   the tooltip. */
 .daemon-session-title {
 	font-size: var(--fs-micro);
+	line-height: 1.5;
 	color: var(--muted-2);
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
 	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	overflow-wrap: anywhere;
 }
-/* The session-title line is the row's dropdown trigger; the pointer cursor
-   and hover brightening hint the click-to-open affordance (ready/asleep
-   rows only). Keyboard activation comes from useClickableRow's role=button. */
+/* Ready/asleep rows: the session-title line is a session switcher button,
+   two text rows tall (44px on phones). Its 1.2rem square (18px at the
+   default 15px text size), lightly outlined chevron box sits at the top of a
+   right gutter the row reserves, so the title keeps the full content width;
+   the top line extends into the gutter to keep the status dot in the corner
+   above the box. */
+.daemon-row--switcher {
+	/* Two title rows: fs-micro at line-height 1.5. */
+	--session-title-height: calc(3 * var(--fs-micro));
+	--session-switcher-size: 1.2rem;
+	--session-switcher-gutter: calc(var(--session-switcher-size) + var(--space-3));
+}
+.daemon-row--switcher .sidebar-row-main {
+	padding-right: var(--session-switcher-gutter);
+}
+.daemon-row--switcher .sidebar-row-top {
+	margin-right: calc(-1 * var(--session-switcher-gutter));
+}
 .daemon-session-title--clickable {
-	cursor: pointer;
+	position: relative;
+	display: flex;
+	align-items: flex-start;
+	align-self: stretch;
+	height: var(--session-title-height);
+	overflow: visible;
+	background: none;
+	border: none;
+	border-radius: var(--r-sm);
+	padding: 0 0 0 var(--space-1);
+	margin-left: calc(-1 * var(--space-1));
+	text-align: left;
 }
 .daemon-session-title--clickable:hover,
-.daemon-session-title--clickable:focus-visible {
+.daemon-session-title--clickable:focus-visible,
+.daemon-session-title--clickable[aria-expanded="true"] {
 	color: var(--text);
 }
-.daemon-sessions-btn {
-	align-self: flex-start;
-	padding: 0 var(--space-2);
-	font-size: var(--fs-micro);
-	color: var(--muted-2);
-	background: none;
+.daemon-session-title-text {
+	min-width: 0;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+}
+.daemon-session-chevron-box {
+	position: absolute;
+	top: 0;
+	right: calc(-1 * var(--session-switcher-gutter));
+	width: var(--session-switcher-size);
+	height: var(--session-switcher-size);
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 	border: 1px solid var(--border);
-	border-radius: var(--r-md);
-	cursor: pointer;
+	border-radius: var(--r-sm);
 }
-.daemon-sessions-btn:hover,
-.daemon-sessions-btn:focus-visible,
-.daemon-sessions-btn[aria-expanded="true"] {
-	color: var(--text);
-	border-color: var(--accent-border);
+.daemon-session-title--clickable:hover .daemon-session-chevron-box,
+.daemon-session-title--clickable:focus-visible .daemon-session-chevron-box,
+.daemon-session-title--clickable[aria-expanded="true"] .daemon-session-chevron-box {
+	border-color: var(--border-strong);
+}
+.daemon-session-chevron {
+	width: 75%;
+	height: 75%;
+	transition: transform var(--dur-fast) var(--ease-out);
+}
+.daemon-session-title--clickable[aria-expanded="true"] .daemon-session-chevron {
+	transform: rotate(180deg);
 }
 .daemon-row-btn {
 	background: none;

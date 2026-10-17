@@ -1,10 +1,10 @@
 import type { DaemonEntry, DaemonStatus, RegisteredProject } from "#lib/wire/protocol";
 
 // ---------------------------------------------------------------------------
-// Pure derivations behind the sidebar rows: the text status chip, the always-
-// visible Start/Restart action, the collapsed-project roll-up and the active
-// workspace names shown in the main header. No store reads here, so every
-// state is unit-testable without a fleet.
+// Pure derivations behind the sidebar rows: the process state behind the
+// status dot's tooltip, the kebab's Start/Restart item, the collapsed-project
+// roll-up and the active workspace names shown in the main header. No store
+// reads here, so every state is unit-testable without a fleet.
 // ---------------------------------------------------------------------------
 
 /** Statuses of a session process that is on its way up. */
@@ -63,7 +63,7 @@ export interface ChipContext {
 	stoppedByUser?: boolean;
 }
 
-/** The text status chip for a roster status. */
+/** The process state for a roster status (label + explanatory tooltip). */
 export function sessionChip(status: DaemonStatus, ctx: ChipContext = {}): SessionChip {
 	if (ctx.waking === true && status !== "ready") return CHIPS.starting;
 	switch (status) {
@@ -88,7 +88,7 @@ export interface RowAction {
 }
 
 /**
- * The row's always-visible primary action: a running or crashed process
+ * The row's Start/Restart kebab item: a running or crashed process
  * restarts, a never-started (asleep) one starts, a user-stopped one restarts.
  * In-between states (starting, reconnecting) offer nothing: acting on a
  * process mid-transition races the supervisor.

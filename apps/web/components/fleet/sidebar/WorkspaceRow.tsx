@@ -16,12 +16,7 @@ import type {
 } from "#lib/wire/protocol";
 import { sessionActivity, type SessionActivity } from "../../../fleet-ui/session-activity";
 import { unreadIds } from "../../../fleet-ui/unread";
-import {
-	rowAction,
-	sessionChip,
-	workspaceName,
-	type RowActionKind,
-} from "../../../fleet-ui/workspace-status";
+import { rowAction, sessionChip, type RowActionKind } from "../../../fleet-ui/workspace-status";
 import {
 	attachSession,
 	call,
@@ -49,9 +44,11 @@ import { KebabMenu } from "../../ui/KebabMenu";
 import { useClickableRow } from "../../ui/PickerRow";
 import { displayTitle } from "../../ui/title-icons";
 import {
+	ChevronDownIcon,
 	ChevronRightIcon,
 	FileIcon,
 	InfoIcon,
+	RefreshIcon,
 	RootIcon,
 	StopIcon,
 	TrashIcon,
@@ -59,9 +56,11 @@ import {
 } from "../../ui/icons";
 
 // ---------------------------------------------------------------------------
-// One fleet-roster row: status dot, branch/project chips, git diffstat, and a
-// hover-revealed "⋯" actions menu (details, two-click stop/remove, delete
-// worktree). Ready rows attach on click, asleep rows wake-then-attach.
+// One fleet-roster row: title, status indicator at the top-right corner (its
+// tooltip names the state), branch/project chips, git diffstat, and a
+// hover-revealed "⋯" actions menu (details, Start/Restart, two-click
+// stop/remove, delete worktree). The session-title line with its chevron opens
+// the session dropdown. Ready rows attach on click, asleep rows wake-then-attach.
 // Two distilled profiles exist beside the full one: worktree rows (nested,
 // branch as title) and root rows (a project group's main checkout with a root
 // glyph + branch as title, no project chip or cwd line; the group header
@@ -241,29 +240,29 @@ export const WorkspaceRow: Component<{
 			remote: state.daemonActivity[d().daemonId],
 		}),
 	);
-	/** Only the non-idle activity states repaint the LEFT status dot. Idle
-	 *  keeps the plain status dot (green for a live ready row). */
+	/** Only the non-idle activity states repaint the status dot. Idle keeps
+	 *  the plain status dot (green for a live ready row). */
 	const activityDot = createMemo(() => {
 		const a = activity();
 		return a && a !== "idle" ? a : undefined;
-	});
-	/** Copy for the active dot (undefined when idle; the dot keeps the plain
-	 *  status color then). A separate memo so TS narrows the non-idle value
-	 *  for the ACTIVITY_TITLE index instead of re-calling the getter in JSX. */
-	const activityTitle = createMemo(() => {
-		const a = activityDot();
-		return a ? ACTIVITY_TITLE[a] : undefined;
 	});
 
 	const clickable = () => d().status === "ready" || d().status === "asleep";
 	/** Loading phase: activating but the daemon isn't ready yet. Renders with
 	 *  the pulsing transitional ("resolving") visual vocabulary. */
 	const waking = () => activating() && d().status !== "ready";
-	/** Text status chip and the row's Start/Restart action. Both read the
-	 *  user-stopped mark so a stopped process reads Stopped, not Asleep. */
+	/** Process state behind the status dot's tooltip and the kebab's
+	 *  Start/Restart item. Both read the user-stopped mark so a stopped
+	 *  process reads Stopped, not Asleep. */
 	const chip = createMemo(() =>
 		sessionChip(d().status, { waking: activating(), stoppedByUser: isUserStopped(d().daemonId) }),
 	);
+	/** Status dot label: the process state, plus the activity when non-idle. */
+	const statusLabel = createMemo(() => {
+		const a = activityDot();
+		return a ? `${chip().label}, ${ACTIVITY_TITLE[a]}` : chip().label;
+	});
+
 	const action = createMemo(() =>
 		rowAction(d().status, { waking: activating(), stoppedByUser: isUserStopped(d().daemonId) }),
 	);
@@ -332,7 +331,7 @@ export const WorkspaceRow: Component<{
 		}
 	};
 
-	/** The status-line Start/Restart button. Restart stops and respawns the
+	/** The kebab's Start/Restart item. Restart stops and respawns the
 	 *  process; the attached pane keeps its transcript while it restarts. */
 	const runAction = (kind: RowActionKind) => {
 		if (activating()) return;
@@ -377,6 +376,7 @@ export const WorkspaceRow: Component<{
 					"daemon-row--worktree": isWorktree(),
 					"daemon-row--root": isRoot(),
 					"daemon-row--clone": isClone(),
+					"daemon-row--switcher": clickable(),
 				}}
 				{...useClickableRow(rowClick, clickable())}
 				title={
@@ -387,14 +387,6 @@ export const WorkspaceRow: Component<{
 							: (STATUS_TITLE[d().status] ?? d().status)
 				}
 			>
-				<span
-					class="daemon-status-dot"
-					data-status={waking() ? "resolving" : d().status}
-					data-activity={activityDot()}
-					role="status"
-					aria-label={activityTitle() ?? d().status}
-					title={activityTitle() ?? d().status}
-				/>
 				<div class="sidebar-row-main">
 					<div class="sidebar-row-top">
 						<span
@@ -415,9 +407,10 @@ export const WorkspaceRow: Component<{
 							</Show>
 							{isWorktree() || isRoot() ? (d().branch ?? d().name) : d().name}
 						</span>
-						{/* Row actions collapsed into a "⋯" menu at the top row's
-						    right end: hidden until row hover/focus (always visible on
-						    touch, see the pointer:coarse block in apps/web/styles/base.css). Stop/remove
+						{/* Status indicator at the top-right corner, its tooltip naming
+						    the state. The "⋯" row-actions menu sits just left of it:
+						    hidden until row hover/focus (always visible on touch, see the
+						    pointer:coarse block in apps/web/styles/base.css). Stop/remove
 						    keep the two-click confirm inside the menu; the first click
 						    arms (menu stays open), the second executes and closes. */}
 						<KebabMenu
@@ -430,9 +423,8 @@ export const WorkspaceRow: Component<{
 								if (v) setSessionsOpenId(null);
 							}}
 						>
-							{/* Safe actions first, destructive last. Start and Restart live
-						    on the status line, so they never hide behind this menu.
-						    Stop and Remove keep the two-click confirm inside the menu. */}
+							{/* Safe actions first, destructive last. Stop and Remove keep
+						    the two-click confirm inside the menu. */}
 							<button
 								type="button"
 								role="menuitem"
@@ -445,6 +437,28 @@ export const WorkspaceRow: Component<{
 								<InfoIcon />
 								Session process details
 							</button>
+							{/* Asleep clones start through "Start workspace" below. */}
+							<Show when={isClone() && d().status === "asleep" ? null : action()}>
+								{(a) => (
+									<button
+										type="button"
+										role="menuitem"
+										class="sidebar-menu-item"
+										disabled={paused()}
+										title={
+											paused()
+												? PAUSED_TOOLTIP[connectionState()]
+												: a().kind === "start"
+													? "Starts the session process and attaches to it"
+													: "Stops and respawns the session process; the transcript is kept"
+										}
+										onClick={() => runAction(a().kind)}
+									>
+										{a().kind === "start" ? <ChevronRightIcon /> : <RefreshIcon />}
+										{a().label} {isClone() ? "workspace" : "session process"}
+									</button>
+								)}
+							</Show>
 							<Show when={isClone() && d().status === "asleep"}>
 								<button
 									type="button"
@@ -550,72 +564,54 @@ export const WorkspaceRow: Component<{
 								</button>
 							</Show>
 						</KebabMenu>
-					</div>
-					<div class="daemon-status-line">
-						<span class="daemon-status-chip" data-chip={chip().kind} title={chip().title}>
-							{chip().label}
+						<span
+							class="daemon-row-status"
+							role="status"
+							aria-label={`${statusLabel()}. ${chip().title}`}
+							title={`${statusLabel()}\n${chip().title}`}
+						>
+							<span
+								class="daemon-status-dot"
+								data-status={waking() ? "resolving" : d().status}
+								data-activity={activityDot()}
+							/>
 						</span>
-						<Show when={action()}>
-							{(a) => (
-								<button
-									type="button"
-									class="daemon-row-action"
-									data-action={a().kind}
-									disabled={paused()}
-									title={
-										paused()
-											? PAUSED_TOOLTIP[connectionState()]
-											: a().kind === "start"
-												? "Start the session process"
-												: "Restart the session process"
-									}
-									aria-label={`${a().label} ${workspaceName(d())}`}
-									onClick={(e) => {
-										e.stopPropagation();
-										runAction(a().kind);
-									}}
-								>
-									{a().label}
-								</button>
-							)}
-						</Show>
 					</div>
-					{/* Last-session title (probed by the fleet edge from the session
-					    file's JSONL title slot; the worktree row is the motivating
-					    case). An empty/new session has no title and renders "New
-					    session" instead. The line is also the row's dropdown trigger:
-					    clicking it opens the last-10-sessions resume picker (ready/
-					    asleep rows only). Shows on every profile that carries it; the
-					    line truncates and the tooltip exposes the full string. */}
-					<Show when={sessionTitleText()}>
-						{(title) => (
-							<div
-								class="daemon-session-title"
-								classList={{ "daemon-session-title--clickable": clickable() }}
-								title={clickable() ? `${title()}, click to view sessions` : title()}
-								{...useClickableRow(sessionTitleClick, clickable())}
-								onClick={(e) => {
-									// The card's resume must NOT fire when opening the
-									// dropdown from the title line.
-									e.stopPropagation();
-									if (clickable()) sessionTitleClick();
-								}}
-							>
-								{title()}
-							</div>
-						)}
-					</Show>
-					<Show when={clickable()}>
+					{/* Session switcher: the last session's title (probed by the
+					    fleet edge from the session file's JSONL title slot; "New
+					    session" for an empty one) plus a square chevron box in the
+					    row's right gutter. Clicking it opens the last-10-sessions
+					    resume picker (ready/asleep rows only); other rows show the
+					    bare title. The title wraps to at most two lines and the
+					    tooltip exposes the full string. */}
+					<Show
+						when={clickable()}
+						fallback={
+							<Show when={sessionTitleText()}>
+								{(title) => (
+									<div class="daemon-session-title" title={title()}>
+										{title()}
+									</div>
+								)}
+							</Show>
+						}
+					>
 						<button
 							type="button"
-							class="daemon-sessions-btn"
+							class="daemon-session-title daemon-session-title--clickable"
 							aria-expanded={sessionsOpen()}
+							title={`${sessionTitleText() ?? "Sessions"}, switch session`}
 							onClick={(e) => {
+								// The card's resume must NOT fire when opening the
+								// dropdown from the title line.
 								e.stopPropagation();
 								sessionTitleClick();
 							}}
 						>
-							Sessions
+							<span class="daemon-session-title-text">{sessionTitleText() ?? "Sessions"}</span>
+							<span class="daemon-session-chevron-box">
+								<ChevronDownIcon class="daemon-session-chevron" />
+							</span>
 						</button>
 					</Show>
 					<Show when={d().mode === "remote"}>
