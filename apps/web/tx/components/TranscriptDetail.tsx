@@ -1,6 +1,8 @@
 import { Show, createResource, createSignal } from "solid-js";
 import { api } from "../../store/fleet-api";
+import { setView } from "../../state";
 import { chooseResumeTarget } from "../../store/resume";
+import { openInChatEffect } from "../util/open-in-chat";
 import { basename, folderOf, formatCompact, formatMs } from "../util/format";
 import { TranscriptOverview } from "./TranscriptOverview";
 import { TranscriptView } from "./transcript";
@@ -83,11 +85,9 @@ export function TranscriptDetail(props: TranscriptDetailProps) {
 	const openInChat = (id: string) => {
 		setOpenError(null);
 		void chooseResumeTarget(id).then((outcome) => {
-			if (outcome.kind === "missing") {
-				setOpenError(`No session matches ${id} (${outcome.searched} searched).`);
-			} else if (outcome.kind === "refused" || outcome.kind === "unknown") {
-				setOpenError(outcome.message);
-			}
+			const effect = openInChatEffect(outcome, id);
+			if (effect.view) setView(effect.view);
+			setOpenError(effect.error);
 		});
 	};
 

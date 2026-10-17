@@ -43,14 +43,26 @@
 @media (max-width: 767px) {
 	.session-bar {
 		flex-wrap: nowrap;
-		gap: var(--space-3);
+		gap: var(--space-2);
 	}
 	.session-bar .status-spacer,
-	.session-bar .stats-tokens {
+	.session-bar .stats-tokens,
+	.session-bar .context-prefix {
 		display: none;
 	}
 	.model-segment {
 		flex: 1 1 0;
+	}
+	/* The preset name is user-chosen text: shrink and ellipsize rather than spill into the thinking chip. */
+	.preset-segment {
+		flex: 0 1 auto;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.session-bar > .thinking-segment,
+	.session-bar > .stats-segment {
+		flex: none;
 	}
 }
 /* R8 omp-session readiness: subtle "starting…" hint in the composer while the boot
