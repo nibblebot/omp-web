@@ -114,9 +114,14 @@ export default [
 				name: "Model selected",
 				render: () => (
 					<SettingsSectionPicker
-						sections={SETTINGS_TABS}
+						tabs={SETTINGS_TABS}
 						activeTabId="model"
+						sections={[
+							{ id: "model-roles", label: "Model roles" },
+							{ id: "model-providers", label: "Providers" },
+						]}
 						onSelectTab={() => undefined}
+						onSelectSection={() => undefined}
 					/>
 				),
 			},
@@ -124,9 +129,14 @@ export default [
 				name: "Web UI selected",
 				render: () => (
 					<SettingsSectionPicker
-						sections={SETTINGS_TABS}
+						tabs={SETTINGS_TABS}
 						activeTabId="web-ui"
+						sections={[
+							{ id: "web-interface", label: "Interface" },
+							{ id: "web-session", label: "Session" },
+						]}
 						onSelectTab={() => undefined}
+						onSelectSection={() => undefined}
 					/>
 				),
 			},

@@ -147,7 +147,7 @@
 		display: none;
 	}
 	.main-header .goal-badge {
-		max-width: 5rem;
+		max-width: 9rem;
 	}
 }
 @media (max-width: 359px) {

@@ -65,6 +65,34 @@
 		transition: none;
 	}
 }
+/* Phones: sidebar labels at body size and 44px tap targets for its controls. */
+@media (max-width: 767px) {
+	.sidebar .sidebar-row,
+	.sidebar .daemon-session-title,
+	.sidebar .project-add-worktree,
+	.sidebar .daemon-sessions-btn,
+	.sidebar .daemon-row-action {
+		font-size: var(--fs-md);
+	}
+	.sidebar .project-group-toggle,
+	.sidebar .project-add-worktree,
+	.sidebar .daemon-row-action,
+	.sidebar .daemon-sessions-btn,
+	.sidebar .daemon-row-btn {
+		min-height: 44px;
+	}
+	.sidebar .sidebar-icon-btn {
+		width: 44px;
+		height: 44px;
+	}
+	.sidebar .sidebar-group-label,
+	.sidebar .picker-group-name,
+	.sidebar .daemon-status-chip,
+	.sidebar .sidebar-usage-title,
+	.sidebar .sidebar-usage-empty {
+		font-size: var(--fs-md);
+	}
+}
 .sidebar-icon-btn {
 	flex: none;
 	background: none;

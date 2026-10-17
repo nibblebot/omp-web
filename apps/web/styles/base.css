@@ -64,7 +64,7 @@ button:not(:disabled):not(.active):hover {
 /* Touch: hit targets at least 44px tall/wide (Apple HIG, WCAG 2.5.5); fine-
    pointer controls carry the 24px minimum at their base rules. Feature files
    add their own controls in a trailing (pointer: coarse) block. */
-@media (pointer: coarse) {
+@media (pointer: coarse), (max-width: 767px) {
 	/* Selectors doubled for specificity: the base rules sit later in the
 	   file and would otherwise win the cascade at equal specificity. */
 	.daemon-icon-btn.daemon-icon-btn,

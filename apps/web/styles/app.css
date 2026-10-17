@@ -38,15 +38,15 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-/* Narrow column: one row (badges, model, thinking, ctx). Cost and tokens are
-   dropped here; the ctx segment opens the stats modal instead. */
+/* Narrow column: one row (badges, model, thinking, ctx, cost). Tokens and the
+   spacer drop here; the cost stays and the ctx segment opens the stats modal. */
 @media (max-width: 767px) {
 	.session-bar {
 		flex-wrap: nowrap;
 		gap: var(--space-3);
 	}
 	.session-bar .status-spacer,
-	.session-bar .stats-segment {
+	.session-bar .stats-tokens {
 		display: none;
 	}
 	.model-segment {

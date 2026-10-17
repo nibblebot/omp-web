@@ -161,9 +161,11 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 			{/* Narrow-layout navigation (CSS-gated below 768px): a section
 			    picker instead of the wide layout's sidebar. */}
 			<SettingsSectionPicker
-				sections={tabs()}
+				tabs={tabs()}
 				activeTabId={activeTabId()}
+				sections={sections()}
 				onSelectTab={selectTab}
+				onSelectSection={selectSection}
 			/>
 			<div class="settings-content">
 				<SettingsNav

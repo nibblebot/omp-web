@@ -396,6 +396,8 @@ button.picker-row.kbd-active {
 }
 .stats-actions {
 	display: flex;
+	flex-wrap: wrap;
+	row-gap: var(--space-3);
 	gap: var(--space-5);
 	align-items: center;
 	margin-bottom: var(--space-4);
@@ -919,7 +921,7 @@ button.picker-row.kbd-active {
 
 /* Touch: 44px hit targets and 16px text inputs. Lives at the end of the file
    so it wins the equal-specificity overrides above. */
-@media (pointer: coarse) {
+@media (pointer: coarse), (max-width: 767px) {
 	.modal-close,
 	.toast-dismiss,
 	.picker-row-action,
@@ -937,6 +939,12 @@ button.picker-row.kbd-active {
 	.toast-dismiss {
 		width: 44px;
 		height: 44px;
+	}
+	.stats-actions > button,
+	.stats-actions > .toggle,
+	.compaction-actions > button,
+	.ui-tab {
+		min-height: 44px;
 	}
 	.picker-filter,
 	.ask-editor {

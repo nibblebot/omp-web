@@ -238,6 +238,26 @@
 	gap: var(--space-2);
 }
 
+/* Phones and narrow windows: 44px targets and 16px form text (no iOS zoom),
+   with field labels and buttons no smaller than the rest of the sheet. */
+@media (max-width: 767px) {
+	.integrations-field {
+		font-size: var(--fs-md);
+	}
+	.integrations-field input,
+	.integrations-field select {
+		min-height: 44px;
+		font-size: max(1rem, 16px);
+	}
+	.integrations-field textarea {
+		font-size: max(1rem, 16px);
+	}
+	.integrations-sheet button {
+		min-height: 44px;
+		font-size: var(--fs-md);
+	}
+}
+
 .integrations-plugins {
 	gap: var(--space-5);
 }

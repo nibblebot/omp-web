@@ -46,24 +46,41 @@ const TAB_ICONS: Record<SettingsTabIconName, Component<IconProps>> = {
 };
 
 /**
- * Narrow-layout navigation (CSS-gated below 768px): a section picker select
- * instead of the wide sidebar. It is a pure view; the shell owns the
- * selected-tab state and passes it down with the change callback.
+ * Narrow-layout navigation (CSS-gated below 768px): a tab select and, beneath
+ * it, a section select for the active tab, instead of the wide layout's
+ * sidebar. The section select jumps within the stacked body, so a long tab
+ * such as Model stays reachable without scrolling thousands of pixels. It is
+ * a pure view; the shell owns the selected-tab state and passes it down with
+ * the callbacks.
  */
 export function SettingsSectionPicker(props: {
-	sections: SettingsSection[];
+	tabs: SettingsTabMeta[];
 	activeTabId: string;
+	sections: SettingsSection[];
 	onSelectTab: (id: string) => void;
+	onSelectSection: (id: string) => void;
 }) {
 	return (
 		<nav class="settings-section-picker" aria-label="Settings sections">
 			<select
-				aria-label="Settings section"
+				aria-label="Settings tab"
 				value={props.activeTabId}
 				onChange={(e) => props.onSelectTab(e.currentTarget.value)}
 			>
-				<For each={props.sections}>{(tab) => <option value={tab.id}>{tab.label}</option>}</For>
+				<For each={props.tabs}>{(tab) => <option value={tab.id}>{tab.label}</option>}</For>
 			</select>
+			<Show when={props.sections.length > 0}>
+				<select
+					aria-label="Settings section"
+					value=""
+					onChange={(e) => props.onSelectSection(e.currentTarget.value)}
+				>
+					<option value="" disabled>
+						Jump to section
+					</option>
+					<For each={props.sections}>{(s) => <option value={s.id}>{s.label}</option>}</For>
+				</select>
+			</Show>
 		</nav>
 	);
 }

@@ -93,9 +93,12 @@ export const SessionConfigBar: Component = () => (
 					onClick={() => setState("modal", "stats")}
 					title="Session stats"
 				>
-					${s().cost.toFixed(2)} · <ArrowUpIcon />
-					{formatTokens(s().tokens.input)} <ArrowDownIcon />
-					{formatTokens(s().tokens.output)}
+					${s().cost.toFixed(2)}
+					<span class="stats-tokens">
+						· <ArrowUpIcon />
+						{formatTokens(s().tokens.input)} <ArrowDownIcon />
+						{formatTokens(s().tokens.output)}
+					</span>
 				</StatusSegment>
 			)}
 		</Show>
