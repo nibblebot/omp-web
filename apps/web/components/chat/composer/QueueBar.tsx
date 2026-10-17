@@ -1,10 +1,16 @@
 import { createEffect, createSignal, For, Show, type Component } from "solid-js";
-import type { QueuedMessageRef, QueuedMessagesSnapshot } from "#lib/wire/protocol";
+import type {
+	QueuedCommandRef,
+	QueuedMessageRef,
+	QueuedMessagesSnapshot,
+} from "#lib/wire/protocol";
 import {
 	call,
+	deleteQueuedCommand,
 	deleteQueuedMessage,
 	editQueuedMessage,
 	resumeQueuedMessages,
+	runQueuedCommandNow,
 	runQueuedMessageNow,
 	setState,
 	state,
@@ -14,11 +20,13 @@ import { XIcon } from "../../ui/icons";
 const EMPTY: QueuedMessagesSnapshot = { steering: [], followUp: [], liveSteered: 0, paused: [] };
 
 interface Chip {
-	kind: "steer" | "follow-up";
+	kind: "steer" | "follow-up" | "command";
 	text: string;
 	paused: boolean;
 	/** Undefined for a steer the running turn already consumed: the SDK cannot withdraw it. */
 	ref?: QueuedMessageRef;
+	/** A forwarded slash command queued while busy; removed by index and text (U10b). */
+	command?: QueuedCommandRef;
 }
 
 const preview = (text: string): string => {
@@ -73,6 +81,12 @@ export const QueueBar: Component = () => {
 				paused: false,
 				ref: { kind: "follow-up" as const, text },
 			})),
+			...(q.commands ?? []).map((text, index) => ({
+				kind: "command" as const,
+				text,
+				paused: q.commandsPaused === true,
+				command: { index, text },
+			})),
 		];
 	};
 
@@ -116,7 +130,11 @@ export const QueueBar: Component = () => {
 								<span
 									class="queue-chip"
 									classList={{ paused: chip.paused }}
-									title={chip.ref ? undefined : "Already delivered to the running turn"}
+									title={
+										chip.kind === "steer" && !chip.ref
+											? "Already delivered to the running turn"
+											: undefined
+									}
 								>
 									<span class="queue-kind" classList={{ [chip.kind]: true }}>
 										{chip.paused ? `paused ${chip.kind}` : chip.kind}
@@ -155,10 +173,39 @@ export const QueueBar: Component = () => {
 											</>
 										)}
 									</Show>
+									<Show when={chip.command} keyed>
+										{(ref) => (
+											<>
+												<button
+													type="button"
+													class="queue-action"
+													title="Send now"
+													aria-label="Send queued command now"
+													onClick={() => after(runQueuedCommandNow(ref))}
+												>
+													run now
+												</button>
+												<button
+													type="button"
+													class="queue-pop"
+													title="Delete from the queue"
+													aria-label="Delete queued command"
+													onClick={() => after(deleteQueuedCommand(ref))}
+												>
+													<XIcon />
+												</button>
+											</>
+										)}
+									</Show>
 								</span>
 							)}
 						</For>
-						<Show when={queue().paused.length > 0}>
+						<Show
+							when={
+								queue().paused.length > 0 ||
+								(queue().commandsPaused === true && (queue().commands?.length ?? 0) > 0)
+							}
+						>
 							<button
 								type="button"
 								class="queue-resume"

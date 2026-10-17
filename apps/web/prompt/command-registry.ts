@@ -48,6 +48,8 @@ export interface CommandEntry {
 	notice?: string;
 	/** Owning optional feature; a disabled owner makes the command unavailable. */
 	feature?: CommandFeature;
+	/** Forwarded builtin the SDK refuses mid-turn (AgentBusyError): a busy send queues it instead (U10b). */
+	queueWhenBusy?: true;
 }
 
 export interface CommandRegistryInput {
@@ -202,6 +204,9 @@ const PINNED: readonly string[] = [
 	"effort",
 ];
 
+/** Forwarded builtins the SDK refuses mid-turn; a busy send queues them (U10b, CMD-08). */
+const QUEUE_WHEN_BUSY: Record<string, true> = { "add-dir": true, "remove-dir": true };
+
 const SDK_BY_NAME: Record<string, SdkBuiltin | undefined> = {};
 const ALIAS_TO_NAME: Record<string, string | undefined> = {};
 for (const builtin of SDK_BUILTINS) {
@@ -243,7 +248,7 @@ export function buildCommandRegistry(input: CommandRegistryInput): CommandEntry[
 		if (local.has(b.name) || feature) {
 			add({ ...base, kind: "local" });
 		} else if (isSdkHandled(b.name)) {
-			add({ ...base, kind: "forwarded" });
+			add({ ...base, kind: "forwarded", queueWhenBusy: QUEUE_WHEN_BUSY[b.name] });
 		} else {
 			const hint = TUI_ONLY_HINTS[b.name];
 			const notice = `/${b.name} is terminal-only and is not available in the browser.${hint ? ` ${hint}` : ""}`;

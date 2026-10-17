@@ -94,9 +94,17 @@ export function currentCommandRegistry(): CommandEntry[] {
 	});
 }
 
-/** Sends a daemon-run command after echoing it. A builtin cannot start mid-turn (AgentBusyError): say so in a notice, not an SDK toast (CMD-08). */
-function forwardSlash(text: string, name: string): void {
+/**
+ * Sends a daemon-run command after echoing it. A builtin cannot start mid-turn
+ * (AgentBusyError): say so in a notice, not an SDK toast (CMD-08). A `queueable`
+ * builtin the SDK refuses while busy waits in the queue bar instead (U10b).
+ */
+function forwardSlash(text: string, name: string, queueable = false): void {
 	recordCommandUse(name);
+	if (queueable && state.streaming) {
+		void call("queueCommand", [text]).catch(showError);
+		return;
+	}
 	pushNotice("echo", text);
 	void call("prompt", [text]).catch((err) => {
 		if (String(err).includes("already processing")) {
@@ -588,7 +596,7 @@ export function dispatchInput(text: string, images: ImageArg[] | undefined, mode
 			}
 			// Agent-side builtin/skill/extension/file command. Its command_output frames
 			// don't arrive over the SSE/POST transport (documented tradeoff).
-			forwardSlash(trimmed, entry.name);
+			forwardSlash(trimmed, entry.name, entry.queueWhenBusy === true);
 			return;
 		}
 		case "queue": {

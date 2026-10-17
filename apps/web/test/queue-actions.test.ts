@@ -5,9 +5,18 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { ClientCommand, QueuedMessageRef } from "#lib/wire/protocol";
+import type { ClientCommand, QueuedCommandRef, QueuedMessageRef } from "#lib/wire/protocol";
 import { rejectPendingCalls } from "../store/transport";
-import { connect, deleteQueuedMessage, loadHistory, setState, state, stopTurn } from "../state";
+import {
+	connect,
+	deleteQueuedCommand,
+	deleteQueuedMessage,
+	loadHistory,
+	runQueuedCommandNow,
+	setState,
+	state,
+	stopTurn,
+} from "../state";
 import {
 	FakeEventSource,
 	callResult,
@@ -49,6 +58,23 @@ describe("queue chip removal", () => {
 
 		dispatch(callResult(cmd!.id, { text: "second" }));
 		await done;
+	});
+
+	test("a queued command chip deletes with takeQueuedCommand and runs with runQueuedCommandNow", async () => {
+		const ref: QueuedCommandRef = { index: 0, text: "/add-dir /tmp/x" };
+		const removed = deleteQueuedCommand(ref);
+		await flushMicrotasks();
+		const [take] = callsTo("takeQueuedCommand");
+		expect(take?.args).toEqual([ref]);
+		dispatch(callResult(take!.id, undefined));
+		await removed;
+
+		const ran = runQueuedCommandNow(ref);
+		await flushMicrotasks();
+		const [run] = callsTo("runQueuedCommandNow");
+		expect(run?.args).toEqual([ref]);
+		dispatch(callResult(run!.id, undefined));
+		await ran;
 	});
 });
 

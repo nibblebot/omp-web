@@ -716,4 +716,40 @@ describe("command dispatch routing (CMD-07, CMD-09, COL-09, INT-06)", () => {
 		expect(state.modal).toBe("settings");
 		expect(state.settingsQuery).toBe("");
 	});
+
+	test("a queueable builtin (/add-dir) queues instead of echoing while a turn streams (U10b)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("streaming", true);
+		posted.length = 0;
+		dispatchInput("/add-dir /tmp/extra", undefined, "enter");
+		expect(promptCalls()).toEqual([]);
+		expect(posted).toContainEqual(
+			expect.objectContaining({
+				type: "call",
+				method: "queueCommand",
+				args: ["/add-dir /tmp/extra"],
+			}),
+		);
+		expect(state.items.filter((i) => i.kind === "notice")).toEqual([]);
+	});
+
+	test("an idle /add-dir runs at once through prompt and is not queued (U10b)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		posted.length = 0;
+		dispatchInput("/add-dir /tmp/extra", undefined, "enter");
+		expect(promptCalls().length).toBe(1);
+		expect(posted.some((c) => c.type === "call" && c.method === "queueCommand")).toBe(false);
+	});
+
+	test("a non-queueable forwarded command still runs through prompt while streaming (U10b)", () => {
+		connect();
+		FakeEventSource.instances.at(-1)!.onopen?.();
+		setState("streaming", true);
+		posted.length = 0;
+		dispatchInput("/security status", undefined, "enter");
+		expect(promptCalls().length).toBe(1);
+		expect(posted.some((c) => c.type === "call" && c.method === "queueCommand")).toBe(false);
+	});
 });

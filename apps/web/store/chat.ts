@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { produce } from "solid-js/store";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
-import type { ImageArg, QueuedMessageRef } from "#lib/wire/protocol";
+import type { ImageArg, QueuedCommandRef, QueuedMessageRef } from "#lib/wire/protocol";
 import { scanImages } from "../text/images";
 import { promptTimestamp } from "../chat/turn-usage";
 import { smoothStreaming } from "../chat/display-prefs";
@@ -695,7 +695,14 @@ export function applyEvent(e: AgentSessionEvent): void {
 			break;
 		}
 		case "notice":
-			pushItem({ kind: "notice", id: nextId++, level: e.level, message: e.message });
+			// `command` tags a forwarded command's reply (CMD-09); the SDK notice type lacks it.
+			pushItem({
+				kind: "notice",
+				id: nextId++,
+				level: e.level,
+				message: e.message,
+				command: "command" in e && typeof e.command === "string" ? e.command : undefined,
+			});
 			if (e.level === "error") {
 				// finding #P1: an error notice firing is a status message.
 				announceIfReady(e.message);
@@ -841,6 +848,20 @@ export function deleteQueuedMessage(ref: QueuedMessageRef): Promise<void> {
 /** Send one queue chip now: a live follow-up is promoted to steer, anything else interrupts the turn. */
 export function runQueuedMessageNow(ref: QueuedMessageRef): Promise<void> {
 	return call("runQueuedNow", [ref])
+		.then(() => undefined)
+		.catch((err) => setState("error", String(err)));
+}
+
+/** Remove one queued slash command (matched by index and text) without running it. */
+export function deleteQueuedCommand(ref: QueuedCommandRef): Promise<void> {
+	return call("takeQueuedCommand", [ref])
+		.then(() => undefined)
+		.catch((err) => setState("error", String(err)));
+}
+
+/** Run one queued slash command now; it runs even while Stop has paused the queue. */
+export function runQueuedCommandNow(ref: QueuedCommandRef): Promise<void> {
+	return call("runQueuedCommandNow", [ref])
 		.then(() => undefined)
 		.catch((err) => setState("error", String(err)));
 }

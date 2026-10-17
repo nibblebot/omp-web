@@ -156,7 +156,7 @@ export type ChatItem =
 	| BashItem
 	| CompactionItem
 	| AdvisorItem
-	| { kind: "notice"; id: number; level: string; message: string };
+	| { kind: "notice"; id: number; level: string; message: string; command?: string };
 
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 
@@ -1163,6 +1163,9 @@ export function connect(): void {
 			case "event":
 				applyEvent(frame.event);
 				break;
+			case "command_echo":
+				pushNotice("echo", frame.text);
+				break;
 			case "bash_chunk":
 				appendBashChunk(frame.id, frame.text);
 				break;
@@ -1612,6 +1615,8 @@ export {
 	editQueuedMessage,
 	deleteQueuedMessage,
 	runQueuedMessageNow,
+	deleteQueuedCommand,
+	runQueuedCommandNow,
 	promptInsert,
 	setPromptInsert,
 	promptFocusRequest,
