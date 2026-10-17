@@ -1,8 +1,17 @@
 import { createSignal, type Component } from "solid-js";
-import { dispatchInput, type InputMode } from "../../../prompt/commands";
+import { dispatchInput, parseInput, type InputMode } from "../../../prompt/commands";
 import { PromptHistory } from "../../../prompt/history";
 import type { ImageArg } from "#lib/wire/protocol";
-import { dequeueLastQueued, isReady, pushToast, setState, state, stopTurn } from "../../../state";
+import { composeTextAttachments, type TextAttachment } from "../../../prompt/attachments";
+import {
+	dequeueLastQueued,
+	isReady,
+	pushNotice,
+	pushToast,
+	setState,
+	state,
+	stopTurn,
+} from "../../../state";
 import {
 	cancelScheduledDraftSave,
 	clearDraft,
@@ -31,6 +40,7 @@ const history = new PromptHistory();
 export const PromptBox: Component = () => {
 	const [message, setMessage] = createSignal("");
 	const [images, setImages] = createSignal<ImageArg[]>([]);
+	const [files, setFiles] = createSignal<TextAttachment[]>([]);
 	const [historyOpen, setHistoryOpen] = createSignal(false);
 	let textarea!: HTMLTextAreaElement;
 	const ac = usePromptAutocomplete(() => textarea, message, setMessage);
@@ -45,13 +55,24 @@ export const PromptBox: Component = () => {
 		const raw = message();
 		const text = raw.trim();
 		const imgs = images();
-		if (!text && imgs.length === 0) return;
-		void expandChipsForSubmit(raw.trim()).then((expanded) => {
-			dispatchInput(expanded, imgs, mode);
+		const attached = files().filter((f) => f.text !== undefined);
+		if (!text && imgs.length === 0 && attached.length === 0) return;
+		// Attached text is inlined into the message; a shell or slash command would take it as arguments.
+		const kind = parseInput(text).kind;
+		if (attached.length > 0 && (kind === "bash" || kind === "python" || kind === "slash")) {
+			pushNotice(
+				"error",
+				"Remove the attached files to run this command; files only go with messages.",
+			);
+			return;
+		}
+		void expandChipsForSubmit(text).then((expanded) => {
+			dispatchInput(composeTextAttachments(expanded, attached), imgs, mode);
 		});
 		if (text) history.push(text);
 		setMessage("");
 		setImages([]);
+		setFiles([]);
 		ac.setToken(null);
 		const key = currentDraftKey();
 		cancelScheduledDraftSave(key);
@@ -80,6 +101,7 @@ export const PromptBox: Component = () => {
 		clearDraft(key);
 		setMessage("");
 		setImages([]);
+		setFiles([]);
 		requestAnimationFrame(ac.autoGrow);
 		pushToast("Draft discarded", {
 			durationMs: 10_000,
@@ -196,6 +218,8 @@ export const PromptBox: Component = () => {
 				setMessage={setMessage}
 				images={images}
 				setImages={setImages}
+				files={files}
+				setFiles={setFiles}
 				ac={ac}
 				ghost={ghost}
 				onKeyDown={onKeyDown}
@@ -206,7 +230,13 @@ export const PromptBox: Component = () => {
 				closeHistory={() => setHistoryOpen(false)}
 				openHistory={() => setHistoryOpen(true)}
 			/>
-			<PromptActions message={message} images={images} submit={submit} onDiscard={discard} />
+			<PromptActions
+				message={message}
+				images={images}
+				files={files}
+				submit={submit}
+				onDiscard={discard}
+			/>
 			<ExtensionUi placement="belowEditor" />
 		</div>
 	);

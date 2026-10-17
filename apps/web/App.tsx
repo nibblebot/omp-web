@@ -30,6 +30,7 @@ import { featureView } from "./features/registry";
 import { featurePreferences } from "./features/preferences";
 import { displayTitle } from "./components/ui/title-icons";
 import { onHashChange, restoreInitialRoute, syncRouteToAttached } from "./store/deep-link";
+import { installWindowFileDrop } from "./prompt/file-drop";
 // Apply persisted theme/font-size before first render to avoid a dark flash.
 initTheme();
 
@@ -106,6 +107,7 @@ export const App: Component = () => {
 		window.addEventListener("hashchange", onHashChange);
 		onCleanup(() => window.removeEventListener("hashchange", onHashChange));
 		onCleanup(trackViewportHeight());
+		onCleanup(installWindowFileDrop());
 		// Ctrl+O toggles all tool cards open/closed, even while the composer has focus.
 		window.addEventListener("keydown", (e) => {
 			if (e.key.toLowerCase() !== "o" || !e.ctrlKey || e.shiftKey || e.altKey) return;

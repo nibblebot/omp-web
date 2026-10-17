@@ -1,11 +1,13 @@
 import { Show, type Component } from "solid-js";
 import { dispatchInput, type InputMode } from "../../../prompt/commands";
 import type { ImageArg } from "#lib/wire/protocol";
+import type { TextAttachment } from "../../../prompt/attachments";
 import { isActiveSubagent, isReady, state, stopTurn } from "../../../state";
 
 interface PromptActionsProps {
 	message: () => string;
 	images: () => ImageArg[];
+	files: () => TextAttachment[];
 	submit: (mode: InputMode) => void;
 	/** Explicit destructive clear → bounded cleared ring (Recover in composer). */
 	onDiscard?: () => void;
@@ -28,15 +30,16 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 			<button class="new-session" onClick={() => dispatchInput("/new", undefined, "enter")}>
 				New session
 			</button>
-			{props.onDiscard && (props.message().trim() || props.images().length > 0) && (
-				<button
-					class="queue-clear"
-					title="Discard draft (recoverable via Recover)"
-					onClick={props.onDiscard}
-				>
-					Discard
-				</button>
-			)}
+			{props.onDiscard &&
+				(props.message().trim() || props.images().length > 0 || props.files().length > 0) && (
+					<button
+						class="queue-clear"
+						title="Discard draft (recoverable via Recover)"
+						onClick={props.onDiscard}
+					>
+						Discard
+					</button>
+				)}
 			{state.streaming && (
 				<button
 					class="stop"
@@ -69,7 +72,12 @@ export const PromptActions: Component<PromptActionsProps> = (props) => {
 			<button
 				class="send"
 				onClick={() => props.submit("enter")}
-				disabled={!isReady() || (!props.message().trim() && props.images().length === 0)}
+				disabled={
+					!isReady() ||
+					(!props.message().trim() &&
+						props.images().length === 0 &&
+						!props.files().some((f) => f.text !== undefined))
+				}
 				title={
 					!state.connected
 						? "Not connected"

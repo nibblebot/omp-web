@@ -20,6 +20,7 @@ export default defineStory({
 				<PromptActions
 					message={() => draft}
 					images={() => []}
+					files={() => []}
 					submit={() => {}}
 					onDiscard={() => {}}
 				/>
@@ -32,6 +33,7 @@ export default defineStory({
 				<PromptActions
 					message={() => ""}
 					images={() => []}
+					files={() => []}
 					submit={() => {}}
 					onDiscard={() => {}}
 				/>
@@ -45,6 +47,7 @@ export default defineStory({
 				<PromptActions
 					message={() => "Also cover the empty-language fence case"}
 					images={() => []}
+					files={() => []}
 					submit={() => {}}
 					onDiscard={() => {}}
 				/>
@@ -58,6 +61,7 @@ export default defineStory({
 				<PromptActions
 					message={() => "Also cover the empty-language fence case"}
 					images={() => []}
+					files={() => []}
 					submit={() => {}}
 					onDiscard={() => {}}
 				/>
@@ -70,6 +74,7 @@ export default defineStory({
 				<PromptActions
 					message={() => "Compare this copy button against the mock"}
 					images={() => [screenImage]}
+					files={() => []}
 					submit={() => {}}
 					onDiscard={() => {}}
 				/>
@@ -83,6 +88,7 @@ export default defineStory({
 				<PromptActions
 					message={() => draft}
 					images={() => []}
+					files={() => []}
 					submit={() => {}}
 					onDiscard={() => {}}
 				/>

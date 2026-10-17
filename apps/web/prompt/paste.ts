@@ -14,8 +14,34 @@ export const IMAGE_MIME_RE = /^image\/(png|jpeg|gif|webp|avif|bmp|svg\+xml)$/;
 export const MAX_IMAGE_BYTES = 10_000_000;
 /** Generic file attachments (external-edit import, drop): text-ish only, bounded. */
 export const MAX_FILE_BYTES = 1_000_000;
-const TEXT_EXT_RE =
-	/\.(txt|md|markdown|json|jsonl|yml|yaml|toml|xml|csv|log|diff|patch|ts|tsx|js|jsx|py|rs|go|sh|css|html)$/i;
+const TEXT_EXTENSIONS = [
+	"txt",
+	"md",
+	"markdown",
+	"json",
+	"jsonl",
+	"yml",
+	"yaml",
+	"toml",
+	"xml",
+	"csv",
+	"log",
+	"diff",
+	"patch",
+	"ts",
+	"tsx",
+	"js",
+	"jsx",
+	"py",
+	"rs",
+	"go",
+	"sh",
+	"css",
+	"html",
+];
+const TEXT_EXT_RE = new RegExp(`\\.(${TEXT_EXTENSIONS.join("|")})$`, "i");
+/** `accept` for the attach button: images plus every text type the gate permits. */
+export const ATTACH_ACCEPT = `image/*,${TEXT_EXTENSIONS.map((ext) => `.${ext}`).join(",")}`;
 
 /** SDK default for `paste.largeMenuThreshold` (lines). */
 export const PASTE_LARGE_MENU_DEFAULT = 100;

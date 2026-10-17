@@ -244,6 +244,90 @@
 	font-size: var(--fs-md);
 	line-height: 1;
 }
+.attachment-tray {
+	display: flex;
+	gap: var(--space-3);
+	flex-wrap: wrap;
+}
+.attachment-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	max-width: 100%;
+	padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--panel-2);
+	font-size: var(--fs-sm);
+}
+.attachment-chip--error {
+	border-color: var(--error-border);
+	background: var(--error-bg);
+	color: var(--error-text);
+}
+.attachment-chip-icon {
+	flex: none;
+	width: 14px;
+	height: 14px;
+}
+.attachment-chip-name {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.attachment-chip-meta {
+	color: var(--muted);
+	white-space: nowrap;
+}
+.attachment-chip--error .attachment-chip-meta {
+	color: var(--error-text);
+	white-space: normal;
+}
+.attachment-chip-remove {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	width: 22px;
+	height: 22px;
+	border: 0;
+	border-radius: var(--r-sm);
+	background: transparent;
+	color: inherit;
+	cursor: pointer;
+}
+.attachment-chip-remove:hover {
+	background: var(--btn);
+}
+.attachment-chip-remove:focus-visible {
+	outline: var(--focus-ring);
+	outline-offset: 2px;
+}
+.prompt-error {
+	padding: var(--space-2) var(--space-3);
+	border: 1px solid var(--error-border);
+	border-radius: var(--r-md);
+	background: var(--error-bg);
+	color: var(--error-text);
+	font-size: var(--fs-sm);
+}
+.file-drop-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: var(--z-overlay);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	pointer-events: none;
+	background: color-mix(in srgb, var(--bg) 70%, transparent);
+	border: 2px dashed var(--accent);
+}
+.file-drop-label {
+	padding: var(--space-3) var(--space-5);
+	border-radius: var(--r-md);
+	background: var(--panel);
+	color: var(--accent);
+	font-weight: 600;
+}
 .prompt-actions {
 	display: flex;
 	flex-wrap: wrap;
@@ -451,6 +535,10 @@ button.stop-keep:hover {
 	.queue-summary,
 	.prompt-actions button,
 	.image-remove {
+		min-width: 44px;
+		min-height: 44px;
+	}
+	.attachment-chip-remove {
 		min-width: 44px;
 		min-height: 44px;
 	}

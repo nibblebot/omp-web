@@ -4,6 +4,7 @@ import {
 	createSignal,
 	For,
 	onCleanup,
+	on,
 	onMount,
 	Show,
 	type Component,
@@ -27,16 +28,18 @@ import {
 import { expandMentionChips, getModelMentions, MODEL_MENTION_RE } from "../../../store/models";
 import { graphGeneration } from "../../../store/graph";
 import {
+	ATTACH_ACCEPT,
 	foldedPreview,
 	PASTE_LARGE_MENU_DEFAULT,
 	readFileAsDataUrl,
-	readFileAsText,
 	shouldFoldPaste,
 	validateImage,
-	validateImportFile,
 } from "../../../prompt/paste";
+import { importTextAttachment, type TextAttachment } from "../../../prompt/attachments";
+import { droppedFiles, fileDragDepth, setDroppedFiles } from "../../../prompt/file-drop";
 import { settingValue } from "../../../store/settings";
 import { ListIcon, PaperclipIcon, XIcon } from "../../ui/icons";
+import { AttachmentChip } from "./AttachmentChip";
 import { AutocompletePopup } from "./AutocompletePopup";
 import { isCoarsePointer } from "../pointer";
 import { PromptHistoryPicker } from "./PromptHistoryPicker";
@@ -50,6 +53,8 @@ interface PromptComposerProps {
 	setMessage: Setter<string>;
 	images: () => ImageArg[];
 	setImages: Setter<ImageArg[]>;
+	files: () => TextAttachment[];
+	setFiles: Setter<TextAttachment[]>;
 	ac: PromptAutocomplete;
 	ghost: GhostText;
 	onKeyDown: (e: KeyboardEvent) => void;
@@ -183,6 +188,16 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 	const onPaste = (e: ClipboardEvent): void => {
 		setPasteError(null);
 		const items = [...(e.clipboardData?.items ?? [])];
+		const fileItems = items.filter((it) => it.kind === "file" && !it.type.startsWith("image/"));
+		if (fileItems.length > 0) {
+			// Pasted files attach as chips; the browser must not insert them as text.
+			e.preventDefault();
+			for (const item of fileItems) {
+				const file = item.getAsFile();
+				if (file) void importFile(file);
+			}
+			return;
+		}
 		const imageItems = items.filter((it) => it.type.startsWith("image/"));
 		if (imageItems.length > 0) {
 			e.preventDefault();
@@ -211,30 +226,30 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 		}
 	};
 
-	const onDrop = (e: DragEvent): void => {
-		const files = [...(e.dataTransfer?.files ?? [])];
-		if (files.length === 0) return;
-		// Intentional drop only: files (not stray text) land as attachments.
-		e.preventDefault();
-		for (const f of files) void importFile(f);
-	};
-
 	const importFile = async (f: File): Promise<void> => {
 		if (f.type.startsWith("image/")) {
 			const url = await readFileAsDataUrl(f);
 			addImages([{ data: url.slice(url.indexOf(",") + 1), mimeType: f.type }]);
 			return;
 		}
-		const v = validateImportFile(f.name, f.type, f.size);
-		if (!v.ok) {
-			setPasteError(v.reason ?? "File rejected.");
-			return;
-		}
-		const text = await readFileAsText(f);
-		props.setMessage((prev) => (prev.trim() ? `${prev}\n${text}` : text));
-		setPasteNote(`Imported "${f.name}" as text — attachments preserved separately.`);
-		requestAnimationFrame(() => props.ac.autoGrow());
+		// Text files become chips and reach the model at send time; they never enter the textarea.
+		const attachment = await importTextAttachment(f);
+		props.setFiles((prev) => [...prev, attachment]);
 	};
+
+	// Files dropped on the window land here. Deferred so a drop made while no
+	// composer was mounted is not replayed when one mounts later.
+	createEffect(
+		on(
+			droppedFiles,
+			(dropped) => {
+				if (!dropped) return;
+				setDroppedFiles(null);
+				for (const f of dropped) void importFile(f);
+			},
+			{ defer: true },
+		),
+	);
 
 	const recoverDraft = (): void => {
 		const top = recoverClearedDraft(draftKey());
@@ -273,6 +288,11 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 
 	return (
 		<>
+			<Show when={fileDragDepth() > 0}>
+				<div class="file-drop-overlay" aria-hidden="true">
+					<span class="file-drop-label">Drop files to attach</span>
+				</div>
+			</Show>
 			{props.images().length > 0 && (
 				<div class="image-tray">
 					<For each={props.images()}>
@@ -291,6 +311,20 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 					</For>
 				</div>
 			)}
+			<Show when={props.files().length > 0}>
+				<div class="attachment-tray" role="group" aria-label="Attached files">
+					<For each={props.files()}>
+						{(attachment) => (
+							<AttachmentChip
+								attachment={attachment}
+								onRemove={() =>
+									props.setFiles((prev) => prev.filter((x) => x.id !== attachment.id))
+								}
+							/>
+						)}
+					</For>
+				</div>
+			</Show>
 			<Show when={recovery()}>
 				{(r) => (
 					<div class="queue-bar" role="status">
@@ -323,7 +357,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 			</Show>
 			<Show when={pasteError()}>
 				{(e) => (
-					<div class="msg-notice" role="alert">
+					<div class="prompt-error" role="alert">
 						{e()}
 					</div>
 				)}
@@ -393,7 +427,6 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 							onClick={onCaretMove}
 							onScroll={syncMirror}
 							onPaste={onPaste}
-							onDrop={onDrop}
 							placeholder="Message the Agent"
 							rows={3}
 						/>
@@ -401,7 +434,7 @@ export const PromptComposer: Component<PromptComposerProps> = (props) => {
 					<input
 						ref={fileInput}
 						type="file"
-						accept="image/*,.txt,.md,.json,.jsonl,.log,.diff,.patch"
+						accept={ATTACH_ACCEPT}
 						multiple
 						hidden
 						aria-hidden="true"
