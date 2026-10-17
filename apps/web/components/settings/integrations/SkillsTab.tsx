@@ -1,6 +1,7 @@
 import { createSignal, For, onMount, Show, type Component } from "solid-js";
 import type { SkillSummary } from "#lib/wire/protocol";
 import {
+	invokeSkill,
 	refreshSkills,
 	setSkillEnabled,
 	skills,
@@ -29,12 +30,22 @@ const SkillRow: Component<{ skill: SkillSummary }> = (props) => {
 							<code class="integrations-target">{s().path}</code>
 						</p>
 						<p class="integrations-hint">
-							Invoke with <code>/skill:{s().name}</code> in the composer.
+							Invoke puts <code>/skill:{s().name}</code> in the composer. Add arguments there, then
+							send.
 						</p>
 					</div>
 				</details>
 			</div>
 			<div class="integrations-row-actions">
+				<button
+					type="button"
+					class="settings-control-btn"
+					disabled={!s().enabled}
+					title={s().enabled ? undefined : "Enable this skill to invoke it."}
+					onClick={() => invokeSkill(s().name)}
+				>
+					Invoke
+				</button>
 				<button
 					type="button"
 					class="settings-control-btn"

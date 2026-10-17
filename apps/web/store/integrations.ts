@@ -8,7 +8,7 @@ import type {
 	SkillsState,
 	WebMethodName,
 } from "#lib/wire/protocol";
-import { call, setState, state } from "../state";
+import { call, setPromptInsert, setState, state } from "../state";
 import { requestDangerConfirm } from "../prompt/danger-confirm";
 import { pushToast } from "./toasts";
 import type { IntegrationTab } from "./slices/integrations";
@@ -179,6 +179,16 @@ export function setSkillEnabled(name: string, enabled: boolean): void {
 	void request("setSkillEnabled", [name, enabled])
 		.then(applySkills)
 		.catch((error) => fail("skills", error));
+}
+
+/**
+ * Invoke a skill the way the TUI's `/skill:<name>` does: close the sheet, prefill the composer
+ * with the command and a trailing space (arguments are optional and typed there), and focus it.
+ * Enter then runs it through the normal slash-command path.
+ */
+export function invokeSkill(name: string): void {
+	setState("modal", null);
+	setPromptInsert({ text: `/skill:${name} ` });
 }
 
 /** Trust copy for code-bearing installs; the plugin toggle in the Plugins tab calls it too. */

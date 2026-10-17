@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { activateFeatures, featureCommand } from "../../features/registry";
-import { setState, state } from "../../state";
+import { invokeSkill } from "../../store/integrations";
+import { promptInsert, setState, state } from "../../state";
 
 describe("integrations feature", () => {
 	beforeEach(async () => {
@@ -29,5 +30,12 @@ describe("integrations feature", () => {
 	test("/skills with a terminal-only subcommand does not open the sheet", () => {
 		featureCommand("skills")!.command.run("search pdf");
 		expect(state.modal).toBeNull();
+	});
+
+	test("Invoke closes the sheet and prefills /skill:<name> in the composer", () => {
+		featureCommand("skills")!.command.run("");
+		invokeSkill("pdf-extract");
+		expect(state.modal).toBeNull();
+		expect(promptInsert()).toEqual({ text: "/skill:pdf-extract " });
 	});
 });

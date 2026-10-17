@@ -16,7 +16,6 @@ const mcpState = {
 	projectConfigEnabled: true,
 };
 const skillsState = { skills: skillEntries, warnings: [] };
-const never = () => Promise.withResolvers<unknown>().promise;
 
 export default [
 	defineStory({
@@ -62,7 +61,11 @@ export default [
 			},
 			{
 				name: "MCP loading",
-				seed: () => answerCalls({ getMcpState: never, getSkillsState: () => skillsState }),
+				seed: () =>
+					answerCalls({
+						getMcpState: () => Promise.withResolvers<unknown>().promise,
+						getSkillsState: () => skillsState,
+					}),
 				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
 			},
 			{
@@ -87,7 +90,10 @@ export default [
 			{
 				name: "Skills loading",
 				seed: () => {
-					answerCalls({ getMcpState: () => mcpState, getSkillsState: never });
+					answerCalls({
+						getMcpState: () => mcpState,
+						getSkillsState: () => Promise.withResolvers<unknown>().promise,
+					});
 					setState("integrations", "tab", "skills");
 				},
 				render: (ctx) => <IntegrationsSheet onClose={ctx.close} />,
