@@ -10,6 +10,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+	existsSync,
 	mkdirSync,
 	readFileSync,
 	realpathSync,
@@ -28,6 +29,7 @@ import {
 	btwScopeSegment,
 	buildDownloadManifest,
 	createDownloadMethods,
+	discardAllStagedHtml,
 	type DownloadManifestArgs,
 	type DownloadManifestDeps,
 	resolveDownloadPath,
@@ -226,7 +228,11 @@ describe("download manifest artifact jails", () => {
 		expect(result.path.startsWith(tmp + sep)).toBe(true);
 		expect(readFileSync(result.path, "utf8")).toBe(html);
 		expect(result.clientFilename).toBe(`session-${sessionId}.html`);
-		unlinkSync(result.path);
+		const served = bulkServe(result.path, sessionsDir, "corr-html");
+		await served.run([sessionsDir, tmp]);
+		expect(served.failures).toEqual([]);
+		expect(served.uploaded()).toBe(1);
+		expect(existsSync(result.path)).toBe(false);
 
 		const refused = createDownloadMethods({
 			manifestDeps: () => liveInputs(sessionId, { sessionsDir, sessionFile }),
@@ -235,7 +241,36 @@ describe("download manifest artifact jails", () => {
 		await expect(refused.exportDownload(entry, [args])).rejects.toMatchObject({
 			code: "forbidden",
 		});
-		unlinkSync(staged[1]!);
+		expect(existsSync(staged[1]!)).toBe(false);
+	});
+
+	test("a staged HTML export nobody fetches is swept by the next export, and shutdown clears the rest", async () => {
+		const sessionsDir = tempDir("omp-download-sweep-sessions-");
+		const sessionId = "sess-sweep";
+		const sessionFile = join(sessionsDir, `${sessionId}.jsonl`);
+		writeFileSync(sessionFile, "{}\n");
+		const entry = {
+			session: {
+				exportToHtml: async (outputPath: string) => {
+					writeFileSync(outputPath, "<!DOCTYPE html>\n");
+					return outputPath;
+				},
+			},
+		} as unknown as SessionEntry;
+		const args = { kind: "html", includeAdvisor: false, includeBtw: false, includeWorkers: false };
+		const methods = createDownloadMethods({
+			manifestDeps: () => liveInputs(sessionId, { sessionsDir, sessionFile }),
+			roots: () => [sessionsDir, realpathSync(tmpdir())],
+		});
+
+		const abandoned = await methods.exportDownload(entry, [args]);
+		expect(existsSync(abandoned.path)).toBe(true);
+		const next = await methods.exportDownload(entry, [args]);
+		expect(existsSync(abandoned.path)).toBe(false);
+		expect(existsSync(next.path)).toBe(true);
+
+		discardAllStagedHtml();
+		expect(existsSync(next.path)).toBe(false);
 	});
 
 	test("a symlinked btw scope directory is refused", () => {

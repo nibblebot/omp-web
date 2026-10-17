@@ -365,13 +365,61 @@ export interface DownloadBulkServeDeps {
 }
 
 /**
+ * HTML exports staged under tmpdir for one pending bulk fetch, keyed by the
+ * canonical path the client receives. This daemon owns those files: a fetch
+ * deletes its file once the transfer ends, and leftovers are swept on the next
+ * export and at shutdown.
+ */
+const stagedHtml = new Set<string>();
+/** Staged paths whose transfer is streaming now; sweeps leave them alone. */
+const streamingHtml = new Set<string>();
+
+function discardStagedHtml(path: string): void {
+	stagedHtml.delete(path);
+	try {
+		unlinkSync(path);
+	} catch {
+		// Already gone: a sweep or an earlier fetch removed it.
+	}
+}
+
+/** Delete staged HTML that is not being streamed: abandoned or refused fetches. */
+function sweepStagedHtml(): void {
+	for (const path of stagedHtml) {
+		if (!streamingHtml.has(path)) discardStagedHtml(path);
+	}
+}
+
+/** Shutdown: delete every staged HTML export this daemon still holds. */
+export function discardAllStagedHtml(): void {
+	for (const path of stagedHtml) discardStagedHtml(path);
+}
+
+/**
+ * Serve one `download_bulk` command. A staged HTML export is deleted once its
+ * fetch has ended, whether it streamed, failed, or was refused.
+ */
+export async function serveDownloadBulk(deps: DownloadBulkServeDeps): Promise<void> {
+	const staged = stagedHtml.has(deps.path);
+	if (staged) streamingHtml.add(deps.path);
+	try {
+		await streamDownloadBulk(deps);
+	} finally {
+		if (staged) {
+			streamingHtml.delete(deps.path);
+			discardStagedHtml(deps.path);
+		}
+	}
+}
+
+/**
  * Serve one `download_bulk` callback command: jail-check the path at read
  * time (same rules as HTTP /download), enforce the 64 MiB aggregate cap
  * BEFORE streaming, then upload in 4 MiB parts. Every failure reports via
  * DownloadBulkFailedControl and fails the whole correlation; nothing throws
  * to the caller (the daemon-control dispatch must stay alive).
  */
-export async function serveDownloadBulk(deps: DownloadBulkServeDeps): Promise<void> {
+async function streamDownloadBulk(deps: DownloadBulkServeDeps): Promise<void> {
 	const fail = (code: CallbackErrorCode, message: string): void => {
 		deps.failControl({
 			type: "download_bulk_failed",
@@ -524,6 +572,7 @@ export function createDownloadMethods(deps: DownloadMethodsDeps) {
 		const manifest = buildDownloadManifest(input, args);
 		let path: string;
 		if (kind === "html" || kind === "html-themed") {
+			sweepStagedHtml();
 			// Stage under tmpdir, not the session cwd: the file exists only to be fetched.
 			path = await entry.session.exportToHtml(
 				join(tmpdir(), `omp-session-${randomUUID()}.html`),
@@ -602,12 +651,19 @@ export function createDownloadMethods(deps: DownloadMethodsDeps) {
 				unlinkSync(dumped.path);
 			}
 		}
-		const resolved = resolveDownloadPath(kind, {
-			sessionId: input.sessionId,
-			serverPath: path,
-			roots: deps.roots(entry),
-		});
-		return { path: resolved.serverPath, clientFilename: resolved.clientFilename, manifest };
+		let served: { serverPath: string; clientFilename: string };
+		try {
+			served = resolveDownloadPath(kind, {
+				sessionId: input.sessionId,
+				serverPath: path,
+				roots: deps.roots(entry),
+			});
+		} catch (err) {
+			if (kind === "html" || kind === "html-themed") discardStagedHtml(path);
+			throw err;
+		}
+		if (kind === "html" || kind === "html-themed") stagedHtml.add(served.serverPath);
+		return { path: served.serverPath, clientFilename: served.clientFilename, manifest };
 	};
 	return { downloadManifest, exportDownload, dumpSessionArchive: exportDownload };
 }

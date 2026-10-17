@@ -31,7 +31,11 @@ import { acquireFileLock, LockHeldError } from "#lib/platform/file-lock";
 import type { FileLock } from "#lib/platform/file-lock";
 import { isLoopbackHost } from "#lib/platform/hosts";
 import { parseConfig, type SessionConfig } from "./config";
-import { isDownloadBulkCommand, serveDownloadBulk } from "./download-manifest";
+import {
+	discardAllStagedHtml,
+	isDownloadBulkCommand,
+	serveDownloadBulk,
+} from "./download-manifest";
 import { FleetCallback, type FleetCallbackStatus } from "./fleet-callback";
 import { SessionLogTailer } from "./log-tailer";
 import {
@@ -1608,6 +1612,7 @@ async function shutdown(): Promise<void> {
 	if (fleetCallback !== null) fleetCallback.stop();
 	if (bootEntry) await closeSession(bootEntry, "server shutting down");
 	server.stop();
+	discardAllStagedHtml();
 	// Release session-file locks before the SDK postmortem cleanup runs so a
 	// crash-free exit never leaves a live lock behind.
 	for (const lock of sessionLocks) lock.release();
