@@ -943,7 +943,12 @@ button.picker-row.kbd-active {
 	.stats-actions > button,
 	.stats-actions > .toggle,
 	.compaction-actions > button,
-	.ui-tab {
+	.ui-tab,
+	.dirpick-crumb,
+	.dirpick-select,
+	.dirpick-manual-input,
+	.project-btn,
+	.project-start-now {
 		min-height: 44px;
 	}
 	.picker-filter,

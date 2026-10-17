@@ -149,6 +149,12 @@
 	.main-header .goal-badge {
 		max-width: 9rem;
 	}
+	/* The objective would be clipped to nothing and squeeze the title; the
+	   full text stays in the badge's title tooltip and the goal dialog. */
+	.main-header .goal-badge-objective,
+	.main-header .goal-badge-budget {
+		display: none;
+	}
 }
 @media (max-width: 359px) {
 	.main-header .goal-badge {

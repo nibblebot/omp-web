@@ -23,6 +23,21 @@ export default [
 					</SettingsGroup>
 				),
 			},
+			{
+				name: "Collapsible group (narrow)",
+				description:
+					"Below 768px a collapsible group folds its card behind a 44px header with a caret; wide layouts keep the card open under a plain title.",
+				render: () => (
+					<SettingsGroup title="Agent SDK" id="sdk-model" collapsible>
+						<SettingsRowLayout
+							label="Default model"
+							description="Used for new sessions in this project."
+						>
+							<span>gpt-5</span>
+						</SettingsRowLayout>
+					</SettingsGroup>
+				),
+			},
 		],
 	}),
 ];

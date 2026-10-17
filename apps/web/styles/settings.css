@@ -231,6 +231,53 @@
 	font-weight: 400;
 	color: var(--muted);
 }
+/* Wide layouts: the toggle is plain text, so the title reads as before. */
+.settings-group-toggle {
+	background: none;
+	border: none;
+	padding: 0;
+	color: inherit;
+	font: inherit;
+	text-align: inherit;
+	cursor: default;
+}
+.settings-group-caret {
+	display: none;
+}
+/* Narrow layout: collapsible SDK groups fold behind their header so a long
+   tab is a short list of sections; wide layouts keep every card open. */
+@media (max-width: 767px) {
+	.settings-group-toggle {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+		width: 100%;
+		min-height: 44px;
+		padding: var(--space-2);
+		background: none;
+		border: none;
+		border-radius: var(--r-md);
+		color: inherit;
+		font: inherit;
+		font-size: var(--fs-md);
+		text-align: left;
+		cursor: pointer;
+	}
+	.settings-block[data-collapsible] .settings-group-caret {
+		display: block;
+		width: 16px;
+		height: 16px;
+		flex: none;
+		transition: transform 0.15s ease;
+	}
+	.settings-block[data-open] .settings-group-caret {
+		transform: rotate(180deg);
+	}
+	.settings-block[data-collapsible]:not([data-open]) > .settings-group {
+		display: none;
+	}
+}
 .settings-item {
 	position: relative;
 	display: grid;

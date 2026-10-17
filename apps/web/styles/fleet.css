@@ -30,7 +30,8 @@
 		top: 0;
 		bottom: 0;
 		left: 0;
-		z-index: calc(var(--z-overlay) + 1);
+		/* One tier under the modal backdrop (--z-overlay): a dialog opened over the open drawer covers and dims it. */
+		z-index: calc(var(--z-overlay) - 1);
 		width: min(var(--sidebar-w), 85vw);
 		padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left);
 		box-sizing: border-box;
@@ -52,7 +53,7 @@
 		display: block;
 		position: fixed;
 		inset: 0;
-		z-index: var(--z-overlay);
+		z-index: calc(var(--z-overlay) - 2);
 		background: var(--backdrop);
 		border: none;
 		padding: 0;

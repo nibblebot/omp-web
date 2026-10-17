@@ -253,6 +253,7 @@ export const SettingsSheet: Component<{ onClose: () => void }> = (props) => {
 													<SettingsGroup
 														title={group().name}
 														id={settingsSectionId(tab.id, group().name)}
+														collapsible
 													>
 														<Index each={group().items}>
 															{(item) => <SettingsRow item={item()} />}

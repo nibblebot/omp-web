@@ -1,0 +1,72 @@
+/**
+ * Store tests for the URL-to-session wiring (store/deep-link.ts). A fresh load
+ * on a session hash must reattach that daemon and must not rewrite the URL to
+ * the bare daemon route (that rewrite is what left the pane on "No active
+ * session" and forced a re-pick from the resume list after a reload).
+ */
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { ClientCommand, DaemonEntry } from "#lib/wire/protocol";
+import { connect, setState } from "../../state";
+import { restoreInitialRoute } from "../../store/deep-link";
+import { settleDaemonSessions } from "../../store/roster";
+import {
+	FakeEventSource,
+	dispatch,
+	flushMicrotasks,
+	installLocalStorageShim,
+	installTransportStubs,
+	posted,
+	restoreBrowserGlobals,
+	setBrowserGlobal,
+} from "../web.testkit";
+
+type AttachCommand = Extract<ClientCommand, { type: "attach" }>;
+
+const written: string[] = [];
+
+beforeEach(() => {
+	installTransportStubs();
+	installLocalStorageShim();
+	written.length = 0;
+	setBrowserGlobal("location", {
+		pathname: "/",
+		search: "",
+		hash: "#/d/d1/s/s1",
+	} as Location);
+	setBrowserGlobal("history", {
+		pushState: (_: unknown, __: string, url: string) => written.push(`push ${url}`),
+		replaceState: (_: unknown, __: string, url: string) => written.push(`replace ${url}`),
+	} as unknown as History);
+	connect();
+	FakeEventSource.instances.at(-1)?.onopen?.();
+	setState({
+		modal: null,
+		view: "chat",
+		daemonRoster: [{ daemonId: "d1", status: "ready" } as unknown as DaemonEntry],
+	});
+});
+
+afterEach(() => {
+	restoreBrowserGlobals();
+});
+
+describe("reload on a session hash", () => {
+	test("reattaches the hashed daemon and keeps the session route", async () => {
+		restoreInitialRoute();
+		await flushMicrotasks();
+		const list = posted.find((c) => c.type === "list_daemon_sessions");
+		expect(list).toMatchObject({ daemonId: "d1" });
+
+		settleDaemonSessions("d1", [{ id: "s1", path: "/sessions/app/s1.jsonl" } as never]);
+		await flushMicrotasks();
+		await flushMicrotasks();
+
+		const attach = posted.find((c): c is AttachCommand => c.type === "attach");
+		expect(attach?.sessionId).toBe("d1");
+		if (attach === undefined) throw new Error("no attach command was posted");
+		dispatch({ type: "attach_result", id: attach.id, ok: true, sessionId: "d1" });
+		await flushMicrotasks();
+
+		expect(written.filter((url) => url.endsWith("#/d/d1"))).toEqual([]);
+	});
+});
