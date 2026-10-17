@@ -331,3 +331,37 @@
 		display: none;
 	}
 }
+
+/* Narrow or touch: tree rows, agents search, and the composer counter reach
+   44px; a row's chips and metrics wrap under the name instead of clipping. */
+@media (max-width: 768px), (pointer: coarse) {
+	.subagent-tree-toggle,
+	.subagent-tree-toggle-spacer {
+		width: 44px;
+		height: 44px;
+	}
+	.subagent-tree-open {
+		flex-wrap: wrap;
+		row-gap: 2px;
+		min-height: 44px;
+	}
+	.subagent-tree-name {
+		flex-basis: 6rem;
+	}
+	.subagent-tree-type,
+	.subagent-tree-model,
+	.subagent-tree-live {
+		max-width: 100%;
+	}
+	.subagent-steer textarea {
+		min-height: 44px;
+		font-size: max(1rem, 16px);
+	}
+	.agents-panel-search {
+		min-height: 44px;
+		font-size: max(1rem, 16px);
+	}
+	.running-agents-button {
+		min-height: 44px;
+	}
+}

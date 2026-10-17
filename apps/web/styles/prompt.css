@@ -555,3 +555,16 @@ button.stop-keep:hover {
 		align-items: center;
 	}
 }
+
+/* Narrow (390/360px): composer textarea and buttons reach 44px whatever the pointer. */
+@media (max-width: 767px) {
+	.prompt-box textarea {
+		min-height: 44px;
+	}
+	.prompt-attach,
+	.prompt-history-btn,
+	.prompt-actions button {
+		min-width: 44px;
+		min-height: 44px;
+	}
+}

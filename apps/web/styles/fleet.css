@@ -104,6 +104,7 @@
 @media (max-width: 767px) {
 	.worktree-tab,
 	.workspace-source-mode,
+	.project-template,
 	.worktree-btn,
 	.daemon-row-btn {
 		min-height: 44px;

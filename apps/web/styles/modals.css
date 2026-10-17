@@ -1052,3 +1052,21 @@ button.picker-row.kbd-active {
 	gap: var(--space-2);
 	margin-top: var(--space-3);
 }
+
+/* Narrow (390/360px): AskBar actions and custom answer reach 44px; the crumb
+   separator keeps a 44px-wide target. */
+@media (max-width: 767px) {
+	.ask-bar-cancel,
+	.ask-bar-next,
+	.ask-custom,
+	.picker-filter {
+		min-height: 44px;
+	}
+	.ask-bar-cancel,
+	.ask-bar-next {
+		min-width: 44px;
+	}
+	.dirpick-crumb {
+		min-width: 44px;
+	}
+}

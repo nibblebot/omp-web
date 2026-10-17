@@ -465,3 +465,28 @@ pre.terminal.eval-code {
 		align-items: center;
 	}
 }
+
+/* Narrow (390/360px): tool headers wrap instead of pushing past the page,
+   terminal output scrolls inside its card, and disclosure headers reach 44px. */
+@media (max-width: 767px) {
+	.bash-cmd,
+	.tool-card > div.card-header .tool-name {
+		min-width: 0;
+		max-width: 100%;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.tool-card,
+	.tool-card > div.card-header {
+		min-width: 0;
+		max-width: 100%;
+	}
+	pre.terminal {
+		max-width: 100%;
+		overflow-x: auto;
+	}
+	summary.card-header {
+		min-height: 44px;
+		align-items: center;
+	}
+}
